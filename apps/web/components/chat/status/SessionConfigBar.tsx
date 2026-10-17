@@ -14,15 +14,25 @@ const ContextSegment: Component = () => {
 	return (
 		<Show when={usage()}>
 			{(u) => (
-				<StatusSegment
-					class="context-segment"
-					dataLevel={level()}
-					title={`${formatTokens(u().tokens)} / ${formatTokens(u().contextWindow)} tokens · session stats`}
-					onClick={() => setState("modal", "stats")}
-				>
-					<span class="context-prefix">ctx </span>
-					{u().percent.toFixed(0)}%
-				</StatusSegment>
+				<span class="context-group">
+					<StatusSegment
+						class="context-segment"
+						dataLevel={level()}
+						title={`${formatTokens(u().tokens)} of ${formatTokens(u().contextWindow)} tokens used · session stats`}
+						onClick={() => setState("modal", "stats")}
+					>
+						<span class="context-prefix">ctx </span>
+						{formatTokens(u().tokens)} / {formatTokens(u().contextWindow)}
+					</StatusSegment>
+					<button
+						type="button"
+						class="segment-button context-compact"
+						title="Summarize older messages to free context"
+						onClick={() => setState("modal", "compaction")}
+					>
+						Compact
+					</button>
+				</span>
 			)}
 		</Show>
 	);

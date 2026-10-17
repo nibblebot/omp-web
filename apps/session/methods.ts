@@ -231,13 +231,15 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	};
 
 	// Calls that replace the transcript; every tab resyncs, not just the requester.
-	// Handoff compacts in place; every replacement/rewind resyncs all tabs.
+	// Handoff and manual compaction rewrite the transcript in place; every replacement/rewind resyncs all tabs.
 	const HISTORY_RELOAD: Partial<Record<WebMethodName, true>> = {
 		newSession: true,
 		switchSession: true,
 		branch: true,
 		fork: true,
 		handoff: true,
+		compact: true,
+		compactEx: true,
 		clearSession: true,
 		deleteSession: true,
 		navigateTree: true,

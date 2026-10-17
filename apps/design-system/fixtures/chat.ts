@@ -269,6 +269,7 @@ const compactDone: CompactionItem = {
 	summary:
 		"Kept the CopyButton refactor plan, the failing review test, and the open question about fence languages.",
 	tokensBefore: 171_204,
+	tokensAfter: 22_480,
 	skipped: false,
 	aborted: false,
 	willRetry: false,

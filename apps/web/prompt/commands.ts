@@ -14,7 +14,6 @@ import {
 import {
 	addBashItem,
 	call,
-	pushCompaction,
 	pushNotice,
 	resolveBashItem,
 	setState,
@@ -23,6 +22,7 @@ import {
 	type BashResultLike,
 	type ModalName,
 } from "../state";
+import { humanizeCompactionError } from "../store/compaction-view";
 import { openDock } from "../store/dock";
 import { downloadArchive, downloadHtml, downloadRequest, downloadText } from "../store/downloads";
 import { queuedAnnotationIds, withQueuedAnnotations } from "../store/review";
@@ -257,19 +257,10 @@ function compactRoute(args: string): void {
 		return;
 	}
 	const text = [d.mode, d.instructions].filter((v): v is string => v !== undefined).join(" ");
-	void call("compact", text ? [text] : [])
-		.then((result) => {
-			const r = result as { summary?: string; tokensBefore?: number } | null;
-			pushCompaction({
-				action: "manual",
-				summary: r?.summary,
-				tokensBefore: r?.tokensBefore,
-				skipped: false,
-				aborted: false,
-				willRetry: false,
-			});
-		})
-		.catch(showError);
+	// The marker comes with the transcript resync that compaction triggers (HISTORY_RELOAD).
+	void call("compact", text ? [text] : []).catch((err) =>
+		setState("error", humanizeCompactionError(err)),
+	);
 }
 
 /** `/export [--themes] [path]`: `--themes` carries the web theme; a path is parsed so exportRoute can refuse it. */
@@ -452,20 +443,13 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 			.then((result) => {
 				const r = result as { document?: string; savedPath?: string } | null | undefined;
 				if (r?.document) {
-					pushCompaction({
-						action: "handoff",
-						summary: r.document,
-						skipped: false,
-						aborted: false,
-						willRetry: false,
-					});
 					pushNotice("info", "Handoff complete. Context compacted in place.");
 				} else {
 					pushNotice("info", "Handoff cancelled.");
 				}
 				if (r?.savedPath) pushNotice("info", `Handoff document written to ${r.savedPath}`);
 			})
-			.catch(showError),
+			.catch((err) => setState("error", humanizeCompactionError(err))),
 	delete: (args) => {
 		if (args.trim()) return pushNotice("error", "Usage: /delete takes no arguments.");
 		requestDangerConfirm({

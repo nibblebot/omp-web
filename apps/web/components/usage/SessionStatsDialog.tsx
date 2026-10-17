@@ -124,7 +124,7 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 						)}
 					</Show>
 					<div class="stats-actions">
-						<button onClick={() => void call("compact", []).catch(reportError)}>Compact now</button>
+						<button onClick={() => setState("modal", "compaction")}>Compact…</button>
 						<button onClick={() => setState("modal", "usage")}>usage reports</button>
 						<label class="toggle">
 							<input

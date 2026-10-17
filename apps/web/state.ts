@@ -25,6 +25,7 @@ import { clearUnread, markUnread, pruneUnread } from "./fleet-ui/unread";
 import { scanImages } from "./text/images";
 import type { UsageLike } from "./usage/usage";
 import { promptTimestamp } from "./chat/turn-usage";
+import { compactionItemOf } from "./store/compaction-view";
 import { advisorNotesOf } from "./store/slices/advisor";
 import {
 	announce,
@@ -122,6 +123,10 @@ export type CompactionItem = {
 	action: string;
 	summary?: string;
 	tokensBefore?: number;
+	tokensAfter?: number;
+	method?: string;
+	warning?: string;
+	timestamp?: number;
 	skipped: boolean;
 	aborted: boolean;
 	willRetry: boolean;
@@ -697,6 +702,10 @@ export function loadHistory(messages: AgentMessage[]): void {
 				exitCode: msg.exitCode ?? null,
 				truncated: msg.truncated,
 			});
+		} else if (msg.role === "compactionSummary") {
+			// The settled divider for a compaction boundary (see compaction-view).
+			const card = compactionItemOf(msg);
+			if (card !== null) items.push({ ...card, id: nextChatId() });
 		} else {
 			// Advisor cards render inline like the TUI; other custom/developer
 			// messages stay hidden.

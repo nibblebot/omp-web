@@ -1,4 +1,5 @@
 import { state, setState } from "../state";
+import { humanizeCompactionError } from "./compaction-view";
 import { call, isSessionSwitchSupersession } from "./transport";
 
 export type CompactionModeName = "soft" | "remote" | "snapcompact";
@@ -67,18 +68,19 @@ export interface CompactionState {
 export const COMPACTION_MODE_META = [
 	{
 		name: "soft",
-		description: "Summarize locally with the active model (skip server compaction)",
+		description: "Recommended. Summarizes older messages with the model you are using now.",
 		rejectsFocus: false,
 	},
 	{
 		name: "remote",
 		description:
-			"Try server compaction, then SDK local-summary fallback; unsupported routes refuse before running",
+			"Asks the provider to compact the conversation on its side. Only some providers support this; others fall back to a local summary.",
 		rejectsFocus: false,
 	},
 	{
 		name: "snapcompact",
-		description: "Archive history onto bitmap images the vision model reads back (no LLM call)",
+		description:
+			"Saves older messages as images the model can read back. No summary is written, and focus text is not used.",
 		rejectsFocus: true,
 	},
 ] as const;
@@ -178,7 +180,7 @@ export async function refreshCompactionEligibility(post = false): Promise<void> 
 		computeEligibility();
 	} catch (error) {
 		if (state.compaction !== owner || isSessionSwitchSupersession(error)) return;
-		const reason = error instanceof Error ? error.message : String(error);
+		const reason = humanizeCompactionError(error);
 		const refusal = { eligible: false, reason };
 		setState("compaction", {
 			error: reason,
@@ -230,7 +232,7 @@ export async function startCompaction(): Promise<void> {
 		if (state.compaction !== owner) return;
 		if (!outcome.ok || !outcome.data) {
 			setState("compaction", {
-				error: outcome.error ?? "Compaction returned no result.",
+				error: humanizeCompactionError(outcome.error ?? "Compaction returned no result."),
 				progress: { phase: outcome.failureKind === "cancelled" ? "cancelled" : "error" },
 			});
 		} else {
@@ -239,7 +241,7 @@ export async function startCompaction(): Promise<void> {
 	} catch (error) {
 		if (state.compaction !== owner || isSessionSwitchSupersession(error)) return;
 		setState("compaction", {
-			error: error instanceof Error ? error.message : String(error),
+			error: humanizeCompactionError(error),
 			progress: { phase: "error" },
 		});
 	} finally {
@@ -256,7 +258,7 @@ export async function cancelCompaction(): Promise<void> {
 		await call("abortCompaction", [{ reason: "Compaction cancelled by operator" }], 5_000);
 	} catch (error) {
 		if (state.compaction !== owner || isSessionSwitchSupersession(error)) return;
-		setState("compaction", "error", error instanceof Error ? error.message : String(error));
+		setState("compaction", "error", humanizeCompactionError(error));
 		setState("compaction", "progress", "cancelRequested", false);
 	}
 }
@@ -280,7 +282,7 @@ async function maintain(kind: "shake" | "dropImages", mode?: ShakeModeName): Pro
 		if (!outcome.ok || !outcome.data) {
 			setState("compaction", kind, {
 				phase: outcome.failureKind === "cancelled" ? "cancelled" : "error",
-				error: outcome.error ?? "Maintenance returned no result.",
+				error: humanizeCompactionError(outcome.error ?? "Maintenance returned no result."),
 			});
 		} else {
 			setState("compaction", kind, { ...outcome.data, phase: "done" });
@@ -289,7 +291,7 @@ async function maintain(kind: "shake" | "dropImages", mode?: ShakeModeName): Pro
 		if (state.compaction !== owner || isSessionSwitchSupersession(error)) return;
 		setState("compaction", kind, {
 			phase: "error",
-			error: error instanceof Error ? error.message : String(error),
+			error: humanizeCompactionError(error),
 		});
 	} finally {
 		if (state.compaction === owner) await refreshCompactionEligibility(true);
@@ -310,7 +312,7 @@ export async function toggleAutoCompaction(enabled: boolean): Promise<void> {
 		if (state.compaction === owner) await refreshCompactionEligibility();
 	} catch (error) {
 		if (state.compaction === owner && !isSessionSwitchSupersession(error))
-			setState("compaction", "error", error instanceof Error ? error.message : String(error));
+			setState("compaction", "error", humanizeCompactionError(error));
 	} finally {
 		if (state.compaction === owner) setState("compaction", "autoPending", false);
 	}

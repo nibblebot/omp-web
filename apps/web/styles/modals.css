@@ -922,3 +922,60 @@ button.picker-row {
 		font-size: max(1rem, 16px);
 	}
 }
+
+/* Compaction dialog: one recommended action, Advanced disclosure below. */
+.compaction-controls {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+.compaction-estimates {
+	margin: 0;
+	font-family: var(--font-mono);
+}
+.compaction-focus {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+.compaction-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+}
+.compaction-done {
+	margin: 0;
+	color: var(--success);
+}
+.compaction-advanced {
+	border-top: 1px solid var(--border);
+	padding-top: var(--space-3);
+}
+.compaction-advanced > summary {
+	cursor: pointer;
+	color: var(--muted);
+}
+.compaction-modes {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: var(--space-2) 0;
+	padding: 0;
+	border: none;
+}
+.compaction-mode {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: var(--space-1) var(--space-2);
+	align-items: baseline;
+}
+.compaction-mode > .picker-detail {
+	grid-column: 2;
+}
+.compaction-shake {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin-top: var(--space-3);
+}
