@@ -1,13 +1,25 @@
 import { createEffect, createSignal, For, Show, type Component } from "solid-js";
-import { call, dequeueLastQueued, setState, state } from "../../../state";
+import type { QueuedMessageRef, QueuedMessagesSnapshot } from "#lib/wire/protocol";
+import {
+	call,
+	deleteQueuedMessage,
+	editQueuedMessage,
+	resumeQueuedMessages,
+	runQueuedMessageNow,
+	setState,
+	state,
+} from "../../../state";
 import { XIcon } from "../../ui/icons";
 
-interface QueuedMessages {
-	steering: readonly string[];
-	followUp: readonly string[];
-}
+const EMPTY: QueuedMessagesSnapshot = { steering: [], followUp: [], liveSteered: 0, paused: [] };
 
-const EMPTY: QueuedMessages = { steering: [], followUp: [] };
+interface Chip {
+	kind: "steer" | "follow-up";
+	text: string;
+	paused: boolean;
+	/** Undefined for a steer the running turn already consumed: the SDK cannot withdraw it. */
+	ref?: QueuedMessageRef;
+}
 
 const preview = (text: string): string => {
 	const flat = text.replace(/\s+/g, " ").trim();
@@ -15,33 +27,54 @@ const preview = (text: string): string => {
 };
 
 /**
- * Phase 7: queued steer/follow-up messages as clickable chips above the
- * prompt. × (or Alt+↑) pops the last message back into the textarea;
- * "clear all" drains the queue. On short viewports the chips collapse behind a one-line summary (prompt.css).
+ * Phase 7: queued steer/follow-up messages as chips above the prompt. Each chip
+ * edits into the prompt, runs now, or deletes by identity. A Stop pauses the
+ * queue (paused chips); "Resume queue" sends it in order. "clear all" drains
+ * the queue. On short viewports the chips collapse behind a one-line summary (prompt.css).
  */
 export const QueueBar: Component = () => {
-	const [queue, setQueue] = createSignal<QueuedMessages>(EMPTY);
+	const [queue, setQueue] = createSignal<QueuedMessagesSnapshot>(EMPTY);
 	const [expanded, setExpanded] = createSignal(false);
 
 	const refresh = () => {
 		void call("getQueuedMessages")
-			.then((result) => setQueue(result as QueuedMessages))
+			.then((result) => setQueue(result as QueuedMessagesSnapshot))
 			.catch(() => setQueue(EMPTY));
 	};
 
 	// Refetch whenever the mirrored queue depth changes. The post-mutation
-	// state broadcast refreshes queuedMessageCount after every pop/clear/send,
-	// and agent_end settles streaming. Initial fetch included.
+	// state broadcast refreshes the counts after every send/pop/clear/stop, and
+	// agent_end settles streaming. Actions that reorder without changing a count
+	// call refresh() themselves. Initial fetch included.
 	createEffect(() => {
 		const count = state.queuedMessageCount;
-		if (state.streaming || count > 0) refresh();
+		if (state.streaming || count > 0 || state.pausedQueueCount > 0) refresh();
 		else setQueue(EMPTY);
 	});
 
-	const chips = () => [
-		...queue().steering.map((text) => ({ kind: "steer" as const, text })),
-		...queue().followUp.map((text) => ({ kind: "follow-up" as const, text })),
-	];
+	const chips = (): Chip[] => {
+		const q = queue();
+		return [
+			...q.paused.map((p, index) => ({
+				kind: p.kind,
+				text: p.text,
+				paused: true,
+				ref: { kind: p.kind, text: p.text, paused: index },
+			})),
+			...q.steering.map((text, index) => ({
+				kind: "steer" as const,
+				text,
+				paused: false,
+				ref: index < q.liveSteered ? undefined : { kind: "steer" as const, text },
+			})),
+			...q.followUp.map((text) => ({
+				kind: "follow-up" as const,
+				text,
+				paused: false,
+				ref: { kind: "follow-up" as const, text },
+			})),
+		];
+	};
 
 	// Polite live region announcing queue fills/drains (the interactive chips
 	// themselves stay out of the live region). Transition-gated: a 0→N fill
@@ -55,8 +88,14 @@ export const QueueBar: Component = () => {
 		lastChipCount = n;
 	});
 
+	const after = (pending: Promise<void>) => {
+		void pending.then(refresh);
+	};
+
 	const clearAll = () => {
-		void call("clearQueue").catch((err) => setState("error", String(err)));
+		void call("clearQueue")
+			.then(refresh)
+			.catch((err) => setState("error", String(err)));
 	};
 
 	return (
@@ -74,22 +113,60 @@ export const QueueBar: Component = () => {
 					<div class="queue-chips">
 						<For each={chips()}>
 							{(chip) => (
-								<span class="queue-chip">
+								<span
+									class="queue-chip"
+									classList={{ paused: chip.paused }}
+									title={chip.ref ? undefined : "Already delivered to the running turn"}
+								>
 									<span class="queue-kind" classList={{ [chip.kind]: true }}>
-										{chip.kind}
+										{chip.paused ? `paused ${chip.kind}` : chip.kind}
 									</span>
 									<span class="queue-text">{preview(chip.text)}</span>
-									<button
-										class="queue-pop"
-										title="Pop back into the prompt (Alt+↑)"
-										aria-label="Pop back into the prompt (Alt+↑)"
-										onClick={dequeueLastQueued}
-									>
-										<XIcon />
-									</button>
+									<Show when={chip.ref} keyed>
+										{(ref) => (
+											<>
+												<button
+													type="button"
+													class="queue-action"
+													title="Edit in the prompt"
+													aria-label={`Edit queued ${chip.kind}`}
+													onClick={() => after(editQueuedMessage(ref))}
+												>
+													edit
+												</button>
+												<button
+													type="button"
+													class="queue-action"
+													title="Send now"
+													aria-label={`Send queued ${chip.kind} now`}
+													onClick={() => after(runQueuedMessageNow(ref))}
+												>
+													run now
+												</button>
+												<button
+													type="button"
+													class="queue-pop"
+													title="Delete from the queue"
+													aria-label={`Delete queued ${chip.kind}`}
+													onClick={() => after(deleteQueuedMessage(ref))}
+												>
+													<XIcon />
+												</button>
+											</>
+										)}
+									</Show>
 								</span>
 							)}
 						</For>
+						<Show when={queue().paused.length > 0}>
+							<button
+								type="button"
+								class="queue-resume"
+								onClick={() => after(resumeQueuedMessages())}
+							>
+								Resume queue
+							</button>
+						</Show>
 						<button class="queue-clear" onClick={clearAll}>
 							clear all
 						</button>

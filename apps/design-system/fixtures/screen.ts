@@ -527,6 +527,30 @@ export const screenQueuedMessages = {
 	],
 } satisfies { steering: string[]; followUp: string[] };
 
+/** Queue after a Stop: one steer and one follow-up held, waiting for Resume queue. */
+export const screenPausedQueue = {
+	steering: [],
+	followUp: [],
+	liveSteered: 0,
+	paused: [
+		{
+			kind: "steer",
+			text: "Use the existing COPY_FEEDBACK_MS constant instead of a new timer",
+			imageCount: 0,
+		},
+		{
+			kind: "follow-up",
+			text: "Then add a regression test for fences nested inside list items",
+			imageCount: 0,
+		},
+	],
+} satisfies {
+	steering: string[];
+	followUp: string[];
+	liveSteered: number;
+	paused: Array<{ kind: "steer" | "follow-up"; text: string; imageCount: number }>;
+};
+
 /** A long paste of grep hits that trips the composer's fold threshold. */
 export const screenLongPaste = Array.from(
 	{ length: 24 },

@@ -4,6 +4,7 @@ import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 import type { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import type { CollabHostAdapter } from "./collab-host";
+import type { HeldQueuedMessage } from "./queue-hold";
 import type { SseConsumer } from "./sse-delivery";
 import type { SubagentSnapshot } from "./subagent-mirror";
 
@@ -39,6 +40,8 @@ export interface SessionEntry {
 	subagentSnapshots: Map<string, SubagentSnapshot>;
 	transcriptSessionFilesBySubagentId: Map<string, string>;
 	staleSubagentIds: Set<string>;
+	/** User messages a Stop withdrew from the queue; held until resumed, run, edited, or deleted. */
+	pausedQueue: HeldQueuedMessage[];
 	/**
 	 * Collab host state: the live adapter (null when not live), the start-in-flight flag,
 	 * and the reason collab last could not run (shown to clients until the next start).

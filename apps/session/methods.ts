@@ -12,10 +12,17 @@ import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { resolveRoleModelFull } from "@oh-my-pi/pi-coding-agent/session/role-models";
 import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
-import type { ModelInfo, WebMethodName } from "#lib/wire/protocol";
+import type {
+	AbortOptions,
+	ModelInfo,
+	QueuedMessageRef,
+	QueuedMessagesSnapshot,
+	WebMethodName,
+} from "#lib/wire/protocol";
 import type { CollabSession, Images } from "./collab-session";
 import type { DaemonBroker } from "./daemon-broker";
 import type { SessionEntry } from "./session-entry";
+import { holdQueuedMessages, resumeHeldQueue, takeQueuedMessage } from "./queue-hold";
 import { buildSettingsModel, coerceSettingValue } from "#lib/sdk-settings/settings-model";
 import { applySettingSideEffects } from "./settings-effects";
 import { createPluginMethods } from "./plugin-methods";
@@ -213,6 +220,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		steer: true,
 		followUp: true,
 		abortAndPrompt: true,
+		resumeQueue: true,
+		runQueuedNow: true,
 		runEphemeralTurn: true,
 		predictNextMessage: true,
 	};
@@ -336,18 +345,61 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		},
 		steer: (entry, a) => entry.session.steer(a[0] as string, a[1] as Images),
 		followUp: (entry, a) => entry.session.followUp(a[0] as string, a[1] as Images),
-		getQueuedMessages: async (entry) => entry.session.getQueuedMessages(),
-		popLastQueuedMessage: async (entry) => entry.session.popLastQueuedMessage(),
-		clearQueue: async (entry) => entry.session.clearQueue(),
-		abort: (entry) => {
+		getQueuedMessages: async (entry): Promise<QueuedMessagesSnapshot> => {
+			const live = entry.session.getQueuedMessages();
+			return {
+				steering: [...live.steering],
+				followUp: [...live.followUp],
+				liveSteered: live.liveSteered,
+				paused: entry.pausedQueue.map(({ kind, message }) => ({
+					kind,
+					text: message.text,
+					imageCount: message.images?.length ?? 0,
+				})),
+			};
+		},
+		popLastQueuedMessage: async (entry) =>
+			entry.session.popLastQueuedMessage() ?? entry.pausedQueue.pop()?.message,
+		clearQueue: async (entry) => {
+			entry.pausedQueue.length = 0;
+			return entry.session.clearQueue();
+		},
+		abort: async (entry, a) => {
+			const options = (a[0] ?? {}) as AbortOptions;
 			// Stop always cancels a pending ask, even when the SDK's signal never reaches it.
 			cancelEntryUiRequests(entry);
-			return entry.session.abort({ reason: USER_INTERRUPT_LABEL });
+			holdQueuedMessages(entry.session, entry.pausedQueue);
+			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
+			if (options.keepSubagents) return;
+			for (const [id, snapshot] of entry.subagentSnapshots) {
+				if (snapshot.status === "pending" || snapshot.status === "running") {
+					await deps.collab.abortSubagent(entry, id).catch(() => {});
+				}
+			}
 		},
 		abortAndPrompt: async (entry, a) => {
 			cancelEntryUiRequests(entry);
 			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
 			deps.collab.fireAndForgetPrompt(entry, a[0] as string, a[1] as Images);
+		},
+		resumeQueue: (entry) => resumeHeldQueue(entry.session, entry.pausedQueue),
+		takeQueued: async (entry, a) =>
+			takeQueuedMessage(entry.session, entry.pausedQueue, a[0] as QueuedMessageRef),
+		runQueuedNow: async (entry, a) => {
+			const ref = a[0] as QueuedMessageRef;
+			if (ref.paused === undefined && ref.kind === "follow-up") {
+				entry.session.promoteQueuedMessage(ref.text);
+				return;
+			}
+			const message = takeQueuedMessage(entry.session, entry.pausedQueue, ref);
+			if (!message) return;
+			if (ref.paused !== undefined) {
+				if (entry.session.isStreaming) await entry.session.steer(message.text, message.images);
+				else deps.collab.fireAndForgetPrompt(entry, message.text, message.images);
+				return;
+			}
+			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
+			deps.collab.fireAndForgetPrompt(entry, message.text, message.images);
 		},
 		// newSession/clearSession/freshSession/deleteSession land via the lifecycle spread below.
 		switchSession: (entry, a) => changeSession(entry, "switchSession", a[0] as string),

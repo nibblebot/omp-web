@@ -77,6 +77,8 @@ export interface WebSessionState {
 	autoRetryEnabled: boolean;
 	messageCount: number;
 	queuedMessageCount: number;
+	/** Messages a Stop withdrew from the queue and holds until Resume queue. */
+	pausedQueueCount?: number;
 	todoPhases: TodoPhase[];
 	/** For session dump / export (plain-text parity with /dump). */
 	systemPrompt?: string[];
@@ -126,6 +128,32 @@ export interface SubagentMessagesResult {
 
 /** Image payload accepted by prompt/steer/followUp (structurally compatible with pi-ai's ImageContent). */
 export type ImageArg = { type: "image"; data: string; mimeType: string; detail?: string };
+
+/** Kind of a user-authored queued message: a steer (delivered at the next model call) or a follow-up (after the turn). */
+export type QueuedMessageKind = "steer" | "follow-up";
+/** A queued message a Stop withdrew from the live queues; held until the queue is resumed. */
+export interface PausedQueuedMessage {
+	kind: QueuedMessageKind;
+	text: string;
+	imageCount: number;
+}
+/** Queue snapshot for the composer queue bar. The first `liveSteered` entries of `steering` were already delivered into the running turn and cannot be removed. */
+export interface QueuedMessagesSnapshot {
+	steering: string[];
+	followUp: string[];
+	liveSteered: number;
+	paused: PausedQueuedMessage[];
+}
+/** Identifies one queue chip. `paused` is the index into the held list (omitted for live items); `text` verifies identity. */
+export interface QueuedMessageRef {
+	kind: QueuedMessageKind;
+	text: string;
+	paused?: number;
+}
+/** Options for `abort`. Stop aborts the turn's running subagents unless `keepSubagents` is set. */
+export interface AbortOptions {
+	keepSubagents?: boolean;
+}
 
 // ---------------------------------------------------------------------------
 // Settings panel (TUI /settings parity). The server builds the model from the
@@ -573,6 +601,9 @@ export type WebMethodName =
 	| "steer"
 	| "followUp"
 	| "getQueuedMessages"
+	| "resumeQueue"
+	| "takeQueued"
+	| "runQueuedNow"
 	| "popLastQueuedMessage"
 	| "clearQueue"
 	| "abort"

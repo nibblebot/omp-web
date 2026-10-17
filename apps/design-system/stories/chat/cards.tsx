@@ -87,6 +87,13 @@ const stories: Story[] = [
 				name: "Still streaming",
 				render: () => <AssistantCard assistant={chatAssistantStreamingItem} thinking />,
 			},
+			{
+				name: "Interrupted by Stop",
+				description: "A turn the user stopped ends with an Interrupted footer.",
+				render: () => (
+					<AssistantCard assistant={{ ...chatAssistantItem, interrupted: true }} thinking={false} />
+				),
+			},
 		],
 	}),
 	defineStory({

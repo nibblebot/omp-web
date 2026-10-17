@@ -158,6 +158,23 @@
 .queue-clear:hover {
 	color: var(--error);
 }
+.queue-action,
+.queue-resume {
+	background: none;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	font-size: var(--fs-sm);
+	padding: 0 var(--space-2);
+	min-height: 24px;
+}
+.queue-action:hover,
+.queue-resume:hover {
+	text-decoration: underline;
+}
+.queue-chip.paused {
+	opacity: 0.75;
+}
 /* Chips flow inline in the bar; the summary toggle only shows on short
    viewports (below), where the chips fold behind it until tapped. */
 .queue-chips {
@@ -258,6 +275,12 @@ button.stop {
 }
 button.stop:not(:disabled):hover {
 	background: color-mix(in srgb, var(--stop-bg), var(--error) 15%);
+}
+button.stop-keep {
+	color: var(--muted);
+}
+button.stop-keep:hover {
+	color: var(--text);
 }
 
 /* --- Autocomplete, modal dialogs, bang-shell cards --- */
@@ -415,6 +438,7 @@ button.stop:not(:disabled):hover {
 	.prompt-attach,
 	.prompt-history-btn,
 	.queue-pop,
+	.queue-action,
 	.queue-clear,
 	.queue-summary,
 	.prompt-actions button,

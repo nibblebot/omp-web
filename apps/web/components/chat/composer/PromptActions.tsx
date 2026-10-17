@@ -1,7 +1,7 @@
 import { Show, type Component } from "solid-js";
 import { dispatchInput, type InputMode } from "../../../prompt/commands";
 import type { ImageArg } from "#lib/wire/protocol";
-import { call, isReady, setState, state } from "../../../state";
+import { isActiveSubagent, isReady, state, stopTurn } from "../../../state";
 
 interface PromptActionsProps {
 	message: () => string;
@@ -40,11 +40,21 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 			{state.streaming && (
 				<button
 					class="stop"
-					onClick={() => void call("abort").catch((err) => setState("error", String(err)))}
+					title="Stop the turn and its subagents"
+					onClick={() => void stopTurn()}
 				>
 					Stop
 				</button>
 			)}
+			<Show when={state.streaming && [...state.subagents.values()].some(isActiveSubagent)}>
+				<button
+					class="stop-keep"
+					title="Stop the turn but keep its running subagents"
+					onClick={() => void stopTurn(true)}
+				>
+					Stop, keep subagents
+				</button>
+			</Show>
 			{/* R8: subtle "starting…" pill while the boot session's readiness
 			    gate is clearing (disconnect already has its own pill). Show the
 			    attached session's status instead of the generic phrase. */}

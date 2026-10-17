@@ -33,7 +33,7 @@ export const AssistantCard: Component<{
 			? props.assistant.blocks
 			: props.assistant.blocks.filter((b) => b.kind !== "thinking");
 	const text = () => blocks().filter((b) => b.kind === "text");
-	if (!props.thinking && text().length === 0) return null;
+	if (!props.thinking && text().length === 0 && !props.assistant.interrupted) return null;
 	return (
 		<div class="msg-assistant">
 			<div class="msg-toolbar">
@@ -64,6 +64,11 @@ export const AssistantCard: Component<{
 					)
 				}
 			</For>
+			<Show when={props.assistant.interrupted}>
+				<div class="interrupted-footer" role="status">
+					Interrupted
+				</div>
+			</Show>
 			<Show when={props.meta?.cacheMissTokens}>
 				{(tokens) => (
 					<div

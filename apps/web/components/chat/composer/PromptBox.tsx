@@ -2,7 +2,7 @@ import { createSignal, type Component } from "solid-js";
 import { dispatchInput, type InputMode } from "../../../prompt/commands";
 import { PromptHistory } from "../../../prompt/history";
 import type { ImageArg } from "#lib/wire/protocol";
-import { call, dequeueLastQueued, isReady, setState, state } from "../../../state";
+import { dequeueLastQueued, isReady, setState, state, stopTurn } from "../../../state";
 import {
 	cancelScheduledDraftSave,
 	clearDraft,
@@ -130,7 +130,7 @@ export const PromptBox: Component = () => {
 		if (e.key === "Escape" && state.streaming) {
 			e.preventDefault();
 			lastEsc = 0;
-			void call("abort").catch((err) => setState("error", String(err)));
+			void stopTurn();
 			return;
 		}
 		if (e.key === "Escape") {

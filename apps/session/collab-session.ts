@@ -285,6 +285,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			slashRuntime: undefined!,
 			pendingUiRequests: new Map(),
 			subagentSnapshots: new Map(),
+			pausedQueue: [],
 			transcriptSessionFilesBySubagentId: new Map(),
 			staleSubagentIds: new Set(),
 			collab: { adapter: null, starting: false, refusal: null },

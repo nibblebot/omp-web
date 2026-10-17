@@ -128,6 +128,8 @@ export type ChatItem =
 			duration?: number;
 			/** Epoch ms the session stamped at message_end; anchors display.showTurnTime. */
 			completedAt?: number;
+			/** Stop aborted this turn; the card shows an Interrupted footer. */
+			interrupted?: boolean;
 	  }
 	| {
 			kind: "tool";
@@ -333,6 +335,7 @@ export const [state, setState] = createStore({
 	sessionFile: undefined as string | undefined,
 	contextUsage: undefined as WebSessionState["contextUsage"],
 	queuedMessageCount: 0,
+	pausedQueueCount: 0,
 	messageCount: 0,
 	todoPhases: [] as WebSessionState["todoPhases"],
 	steeringMode: "all" as WebSessionState["steeringMode"],
@@ -606,6 +609,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 				ttft?: number;
 				duration?: number;
 				completedAt?: number;
+				stopReason?: string;
 			};
 			items.push({
 				kind: "assistant",
@@ -615,6 +619,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 				ttft: meta.ttft,
 				duration: meta.duration,
 				...(meta.completedAt !== undefined ? { completedAt: meta.completedAt } : {}),
+				...(meta.stopReason === "aborted" ? { interrupted: true } : {}),
 			});
 			for (const c of msg.content) {
 				if (c.type === "toolCall") {
@@ -709,6 +714,7 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 		autoRetryEnabled: s.autoRetryEnabled,
 		messageCount: s.messageCount,
 		queuedMessageCount: s.queuedMessageCount,
+		pausedQueueCount: s.pausedQueueCount ?? 0,
 		todoPhases: s.todoPhases,
 		contextUsage: s.contextUsage,
 		dumpTools: s.dumpTools ?? [],
@@ -1562,6 +1568,11 @@ export {
 	addBashItem,
 	resolveBashItem,
 	dequeueLastQueued,
+	stopTurn,
+	resumeQueuedMessages,
+	editQueuedMessage,
+	deleteQueuedMessage,
+	runQueuedMessageNow,
 	promptInsert,
 	setPromptInsert,
 	promptFocusRequest,

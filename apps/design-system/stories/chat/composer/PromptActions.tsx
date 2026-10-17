@@ -1,5 +1,5 @@
 import { PromptActions } from "../../../../web/components/chat/composer/PromptActions";
-import { screenImage, screenSessionSeed } from "../../../fixtures/screen";
+import { screenImage, screenSessionSeed, screenSubagentMap } from "../../../fixtures/screen";
 import { defineStory } from "../../../registry";
 
 const draft = "Add a regression test for the copy button on unclosed code fences";
@@ -41,6 +41,19 @@ export default defineStory({
 			name: "Agent busy",
 			description: "While streaming, the composer queues a follow-up instead of sending now.",
 			seed: { streaming: true },
+			render: () => (
+				<PromptActions
+					message={() => "Also cover the empty-language fence case"}
+					images={() => []}
+					submit={() => {}}
+					onDiscard={() => {}}
+				/>
+			),
+		},
+		{
+			name: "Stop with subagents running",
+			description: "A turn with active subagents offers Stop, keep subagents beside Stop.",
+			seed: { streaming: true, subagents: screenSubagentMap },
 			render: () => (
 				<PromptActions
 					message={() => "Also cover the empty-language fence case"}

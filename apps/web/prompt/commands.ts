@@ -479,7 +479,7 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	compaction: openModal("compaction"),
 	queue: (args) => {
 		const msg = args.trim();
-		if (!msg) return;
+		if (!msg) return pushNotice("error", "Usage: /queue <message>");
 		void call("followUp", [msg]).catch(showError);
 	},
 	compact: compactRoute,

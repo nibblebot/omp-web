@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { produce } from "solid-js/store";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
-import type { ImageArg } from "#lib/wire/protocol";
+import type { ImageArg, QueuedMessageRef } from "#lib/wire/protocol";
 import { scanImages } from "../text/images";
 import { promptTimestamp } from "../chat/turn-usage";
 import { smoothStreaming } from "../chat/display-prefs";
@@ -601,6 +601,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 					ttft?: number;
 					duration?: number;
 					completedAt?: number;
+					stopReason?: string;
 				};
 				pushItem({
 					kind: "assistant",
@@ -610,6 +611,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 					ttft: meta.ttft,
 					duration: meta.duration,
 					...(meta.completedAt !== undefined ? { completedAt: meta.completedAt } : {}),
+					...(meta.stopReason === "aborted" ? { interrupted: true } : {}),
 				});
 				setState("live", "active", false);
 			} else {
@@ -776,12 +778,53 @@ export function startNewSession(): Promise<void> {
 	});
 }
 
-/** Phase 7: pop the last queued message back into the prompt (QueueBar ×, Alt+↑). */
+/** Pop the last queued message back into the prompt (Alt+↑). Chips use `deleteQueuedMessage` instead. */
 export function dequeueLastQueued(): void {
 	void call("popLastQueuedMessage")
 		.then((restored) => {
 			const msg = restored as { text: string; images?: ImageArg[] } | undefined;
 			if (msg) setPromptInsert({ text: msg.text, images: msg.images });
 		})
+		.catch((err) => setState("error", String(err)));
+}
+
+/**
+ * Stop the turn (Esc, Stop button). Queued messages pause for Resume queue.
+ * Running subagents stop too unless `keepSubagents` is set.
+ */
+export function stopTurn(keepSubagents = false): Promise<void> {
+	return call("abort", [{ keepSubagents }])
+		.then(() => undefined)
+		.catch((err) => setState("error", String(err)));
+}
+
+/** Send the messages a Stop paused, in their original order. */
+export function resumeQueuedMessages(): Promise<void> {
+	return call("resumeQueue")
+		.then(() => undefined)
+		.catch((err) => setState("error", String(err)));
+}
+
+/** Remove one queue chip by identity and reload its text into the composer. */
+export function editQueuedMessage(ref: QueuedMessageRef): Promise<void> {
+	return call("takeQueued", [ref])
+		.then((restored) => {
+			const msg = restored as { text: string; images?: ImageArg[] } | undefined;
+			if (msg) setPromptInsert({ text: msg.text, images: msg.images });
+		})
+		.catch((err) => setState("error", String(err)));
+}
+
+/** Remove one queue chip by identity. */
+export function deleteQueuedMessage(ref: QueuedMessageRef): Promise<void> {
+	return call("takeQueued", [ref])
+		.then(() => undefined)
+		.catch((err) => setState("error", String(err)));
+}
+
+/** Send one queue chip now: a live follow-up is promoted to steer, anything else interrupts the turn. */
+export function runQueuedMessageNow(ref: QueuedMessageRef): Promise<void> {
+	return call("runQueuedNow", [ref])
+		.then(() => undefined)
 		.catch((err) => setState("error", String(err)));
 }

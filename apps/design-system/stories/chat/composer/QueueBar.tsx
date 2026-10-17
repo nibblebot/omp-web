@@ -1,7 +1,11 @@
 import { QueueBar } from "../../../../web/components/chat/composer/QueueBar";
 import { setState } from "../../../../web/state";
 import { answerCalls } from "../../../daemon";
-import { screenQueuedMessages, screenSessionSeed } from "../../../fixtures/screen";
+import {
+	screenPausedQueue,
+	screenQueuedMessages,
+	screenSessionSeed,
+} from "../../../fixtures/screen";
 import { defineStory } from "../../../registry";
 
 const queuedCount = screenQueuedMessages.steering.length + screenQueuedMessages.followUp.length;
@@ -28,6 +32,20 @@ export default defineStory({
 			seed: () => {
 				answerCalls({ getQueuedMessages: () => screenQueuedMessages });
 				setState({ streaming: true, queuedMessageCount: queuedCount });
+			},
+			render: () => (
+				<div class="ds-frame">
+					<QueueBar />
+				</div>
+			),
+		},
+		{
+			name: "Paused after Stop",
+			description:
+				"Stop held the queue: chips are paused, with Resume queue to send them in order.",
+			seed: () => {
+				answerCalls({ getQueuedMessages: () => screenPausedQueue });
+				setState({ streaming: false, queuedMessageCount: 0, pausedQueueCount: 2 });
 			},
 			render: () => (
 				<div class="ds-frame">

@@ -31,6 +31,14 @@
    Status, modes & usage
    --------------------------------------------------------------------------- */
 
+/* Footer on an assistant turn stopped by Stop/Esc (CORE-16). */
+.interrupted-footer {
+	margin: var(--space-2) 0;
+	color: var(--muted);
+	font-size: var(--fs-sm);
+	font-style: italic;
+}
+
 /* Per-turn usage footer under settled assistant messages. */
 .usage-row {
 	font-family: var(--font-mono);
