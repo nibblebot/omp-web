@@ -38,5 +38,18 @@ export default defineStory({
 			seed: () => seedSubagents({}, { goalModeState: undefined }),
 			render: () => <GoalBadge />,
 		},
+		{
+			name: "Narrow (390px): long objective",
+			description:
+				"Below 768px the objective and budget hide and the badge keeps only its label, so a long goal never pushes the header title. The full objective stays in the tooltip and the Goal dialog. Below 360px the badge hides entirely.",
+			seed: () =>
+				seedSubagents(
+					{},
+					{
+						goalModeState: goalActive,
+					},
+				),
+			render: () => <GoalBadge />,
+		},
 	],
 });

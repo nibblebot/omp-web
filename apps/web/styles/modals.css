@@ -955,6 +955,45 @@ button.picker-row.kbd-active {
 	.ask-editor {
 		font-size: max(1rem, 16px);
 	}
+	/* Every control in a dialog or dock pane reaches 44px on touch widths. */
+	.modal button,
+	.modal input:not([type="checkbox"], [type="radio"]),
+	.modal summary,
+	.dock-pane button {
+		min-height: 44px;
+	}
+	.modal summary {
+		display: flex;
+		align-items: center;
+	}
+	.dock-back,
+	.dock-close {
+		min-width: 44px;
+	}
+	.session-pin {
+		min-width: 44px;
+		min-height: 44px;
+	}
+	.session-list-scope {
+		min-height: 44px;
+		align-items: center;
+	}
+	/* Palette rows: the detail wraps under the label instead of running past the edge. */
+	.command-palette-dialog .picker-meta {
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+	/* Help tables stack key over description instead of running past the dialog edge. */
+	.shortcuts,
+	.shortcuts tbody,
+	.shortcuts tr,
+	.shortcuts td {
+		display: block;
+	}
+	.shortcuts td {
+		padding: var(--space-1) 0;
+		overflow-wrap: anywhere;
+	}
 }
 
 /* Compaction dialog: one recommended action, Advanced disclosure below. */

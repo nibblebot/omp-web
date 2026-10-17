@@ -79,8 +79,14 @@
 	.sidebar .project-add-worktree,
 	.sidebar .daemon-row-action,
 	.sidebar .daemon-sessions-btn,
-	.sidebar .daemon-row-btn {
+	.sidebar .daemon-row-btn,
+	.sidebar .sidebar-remote-add {
 		min-height: 44px;
+	}
+	.sidebar .daemon-session-title--clickable {
+		min-height: 44px;
+		display: flex;
+		align-items: center;
 	}
 	.sidebar .sidebar-icon-btn {
 		width: 44px;
