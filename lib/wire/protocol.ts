@@ -156,9 +156,8 @@ export type QueuedMessageKind = "steer" | "follow-up";
 export interface PausedQueuedMessage {
 	kind: QueuedMessageKind;
 	text: string;
+	/** How many images the held message carries; the bytes come back only from take/pop. */
 	imageCount: number;
-	/** The held images themselves, so a paused chip can show thumbnails. */
-	images?: ImageArg[];
 }
 /** Queue snapshot for the composer queue bar. The first `liveSteered` entries of `steering` were already delivered into the running turn and cannot be removed. */
 export interface QueuedMessagesSnapshot {
@@ -166,14 +165,14 @@ export interface QueuedMessagesSnapshot {
 	followUp: string[];
 	liveSteered: number;
 	paused: PausedQueuedMessage[];
-	/** Images for each live steer, index-aligned with `steering` (an empty array when it has none). */
-	steeringImages?: ImageArg[][];
-	/** Images for each live follow-up, index-aligned with `followUp`. */
-	followUpImages?: ImageArg[][];
+	/** Image count for each live steer, index-aligned with `steering` (0 when it has none). */
+	steeringImageCounts?: number[];
+	/** Image count for each live follow-up, index-aligned with `followUp`. */
+	followUpImageCounts?: number[];
 	/** Slash commands the SDK rejects while a turn runs; they run in this order at turn end, after the follow-ups. */
 	commands?: string[];
-	/** Images for each queued command, index-aligned with `commands`. */
-	commandImages?: ImageArg[][];
+	/** Image count for each queued command, index-aligned with `commands`. */
+	commandImageCounts?: number[];
 	/** True after a Stop: queued commands wait for Resume queue instead of running at turn end. */
 	commandsPaused?: boolean;
 }

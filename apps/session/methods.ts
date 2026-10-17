@@ -382,29 +382,30 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		followUp: (entry, a) => entry.session.followUp(a[0] as string, a[1] as Images),
 		getQueuedMessages: async (entry): Promise<QueuedMessagesSnapshot> => {
 			const live = entry.session.getQueuedMessages();
-			// Same filter and order as the SDK's chip texts, so each image list lines up with its chip.
 			const { agent } = entry.session;
-			const steeringImages = [...agent.peekLiveSteeredMessages(), ...agent.peekSteeringQueue()]
+			// Same filter and order as the SDK's chip texts, so each count lines up with its chip.
+			const steeringImageCounts = [...agent.peekLiveSteeredMessages(), ...agent.peekSteeringQueue()]
 				.filter(isUserAuthoredQueuedMessage)
-				.map((message) => toRestoredQueuedMessage(message).images ?? []);
-			const followUpImages = agent
+				.map((message) => toRestoredQueuedMessage(message).images?.length ?? 0);
+			const followUpImageCounts = agent
 				.peekFollowUpQueue()
 				.filter(isUserAuthoredQueuedMessage)
-				.map((message) => toRestoredQueuedMessage(message).images ?? []);
+				.map((message) => toRestoredQueuedMessage(message).images?.length ?? 0);
 			return {
 				steering: [...live.steering],
 				followUp: [...live.followUp],
 				liveSteered: live.liveSteered,
-				steeringImages,
-				followUpImages,
+				steeringImageCounts,
+				followUpImageCounts,
 				paused: entry.pausedQueue.map(({ kind, message }) => ({
 					kind,
 					text: message.text,
 					imageCount: message.images?.length ?? 0,
-					images: message.images,
 				})),
 				commands: entry.queuedCommands.commands.map((command) => command.text),
-				commandImages: entry.queuedCommands.commands.map((command) => command.images ?? []),
+				commandImageCounts: entry.queuedCommands.commands.map(
+					(command) => command.images?.length ?? 0,
+				),
 				commandsPaused: entry.queuedCommands.paused,
 			};
 		},

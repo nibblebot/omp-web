@@ -10,13 +10,6 @@ import { defineStory } from "../../../registry";
 
 const queuedCount = screenQueuedMessages.steering.length + screenQueuedMessages.followUp.length;
 
-/** 1x1 PNG for queued image chips. */
-const queuedImage = {
-	type: "image" as const,
-	data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-	mimeType: "image/png",
-};
-
 export default defineStory({
 	id: "chat-composer-queue-bar",
 	title: "QueueBar",
@@ -79,14 +72,14 @@ export default defineStory({
 		{
 			name: "Queued images and text files",
 			description:
-				"A queued steer carries a text file and an image; a queued follow-up carries an image. Files show by name, images as thumbnails.",
+				"A queued steer carries a text file and an image; a queued follow-up carries two images. Files show by name, images as a count.",
 			seed: () => {
 				answerCalls({
 					getQueuedMessages: () => ({
 						steering: ['Match the attached spec\n\n<file path="spec.md">\n# Spec\n</file>'],
-						steeringImages: [[queuedImage]],
-						followUp: ["Check this screenshot"],
-						followUpImages: [[queuedImage]],
+						steeringImageCounts: [1],
+						followUp: ["Check these screenshots"],
+						followUpImageCounts: [2],
 						liveSteered: 0,
 						paused: [],
 					}),

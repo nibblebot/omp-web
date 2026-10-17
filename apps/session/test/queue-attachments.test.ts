@@ -120,7 +120,7 @@ describe("busy fallback keeps images", () => {
 });
 
 describe("queueCommand carries images", () => {
-	test("stores the images with the command and exposes them in the snapshot", async () => {
+	test("stores the images with the command; the snapshot carries only counts", async () => {
 		const { session } = fakeSession({ busy: true });
 		const entry = entryWith(session);
 		const methods = methodsFor();
@@ -128,7 +128,9 @@ describe("queueCommand carries images", () => {
 		await methods.queueCommand!(entry, ["/add-dir /tmp/x"]);
 		const snapshot = (await methods.getQueuedMessages!(entry, [])) as QueuedMessagesSnapshot;
 		expect(snapshot.commands).toEqual(["/skill:a", "/add-dir /tmp/x"]);
-		expect(snapshot.commandImages).toEqual([[image], []]);
+		expect(snapshot.commandImageCounts).toEqual([1, 0]);
+		expect(entry.queuedCommands.commands[0]?.images).toEqual([image]);
+		expect(JSON.stringify(snapshot)).not.toContain(image.data);
 	});
 
 	test("an over-limit image is refused with a clear error and nothing is queued", async () => {
@@ -164,7 +166,7 @@ describe("queued images survive Stop, Resume, run now and the drain", () => {
 		await methods.queueCommand!(entry, ["/skill:probe describe", [image, image2]]);
 		const held = (await methods.getQueuedMessages!(entry, [])) as QueuedMessagesSnapshot;
 		expect(held.commandsPaused).toBe(true);
-		expect(held.commandImages).toEqual([[image, image2]]);
+		expect(held.commandImageCounts).toEqual([2]);
 		expect(fake.prompts).toEqual([]);
 
 		fake.state.busy = false;
@@ -200,17 +202,18 @@ describe("queued images survive Stop, Resume, run now and the drain", () => {
 	});
 });
 
-describe("steer, follow-up and paused chips report their images", () => {
-	test("live queue images align with the chip texts; paused items carry theirs", async () => {
-		const userMessage = (text: string, images: unknown[] = []) => ({
-			role: "user",
-			content: [{ type: "text", text }, ...images],
-		});
-		const agent = {
-			peekLiveSteeredMessages: () => [],
-			peekSteeringQueue: () => [userMessage("s1"), userMessage("s2", [image])],
-			peekFollowUpQueue: () => [userMessage("f1", [image, image2])],
-		};
+describe("steer, follow-up and paused chips report image counts only", () => {
+	const userMessage = (text: string, images: unknown[] = []) => ({
+		role: "user",
+		content: [{ type: "text", text }, ...images],
+	});
+	const agent = {
+		peekLiveSteeredMessages: () => [],
+		peekSteeringQueue: () => [userMessage("s1"), userMessage("s2", [image])],
+		peekFollowUpQueue: () => [userMessage("f1", [image, image2])],
+	};
+
+	test("counts align with the chip texts and the snapshot holds no image bytes", async () => {
 		const fake = fakeSession({
 			agent,
 			queued: { steering: ["s1", "s2"], followUp: ["f1"], liveSteered: 0 },
@@ -220,11 +223,43 @@ describe("steer, follow-up and paused chips report their images", () => {
 			kind: "follow-up",
 			message: { text: "held", images: [image2] },
 		});
+		entry.queuedCommands.commands.push({ text: "/skill:a", images: [image, image2] });
 		const snapshot = (await methodsFor().getQueuedMessages!(entry, [])) as QueuedMessagesSnapshot;
-		expect(snapshot.steeringImages).toEqual([[], [image]]);
-		expect(snapshot.followUpImages).toEqual([[image, image2]]);
-		expect(snapshot.paused).toEqual([
-			{ kind: "follow-up", text: "held", imageCount: 1, images: [image2] },
-		]);
+		expect(snapshot.steeringImageCounts).toEqual([0, 1]);
+		expect(snapshot.followUpImageCounts).toEqual([2]);
+		expect(snapshot.commandImageCounts).toEqual([2]);
+		expect(snapshot.paused).toEqual([{ kind: "follow-up", text: "held", imageCount: 1 }]);
+		const wire = JSON.stringify(snapshot);
+		expect(wire).not.toContain('"data"');
+		expect(wire).not.toContain(image.data);
+		expect(wire).not.toContain(image2.data);
+		expect(wire).not.toContain('"images"');
+	});
+
+	test("take and pop hand the removed message back with its images", async () => {
+		const fake = fakeSession({ agent });
+		const session = fake.session as unknown as {
+			takeQueuedMessage: (text: string, queue: string) => unknown;
+			popLastQueuedMessage: () => unknown;
+		};
+		session.takeQueuedMessage = (text) => ({ text, images: [image] });
+		session.popLastQueuedMessage = () => undefined;
+		const entry = entryWith(fake.session);
+		entry.pausedQueue.push(
+			{ kind: "steer", message: { text: "held-steer", images: [image2] } },
+			{ kind: "follow-up", message: { text: "held-follow", images: [image, image2] } },
+		);
+		const methods = methodsFor();
+		expect(await methods.takeQueued!(entry, [{ kind: "follow-up", text: "f1" }])).toEqual({
+			text: "f1",
+			images: [image],
+		});
+		expect(
+			await methods.takeQueued!(entry, [{ kind: "steer", text: "held-steer", paused: 0 }]),
+		).toEqual({ text: "held-steer", images: [image2] });
+		expect(await methods.popLastQueuedMessage!(entry, [])).toEqual({
+			text: "held-follow",
+			images: [image, image2],
+		});
 	});
 });
