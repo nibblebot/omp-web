@@ -4,6 +4,7 @@ import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 import type { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import type { CollabHostAdapter } from "./collab-host";
+import type { QueuedCommandState } from "./command-queue";
 import type { HeldQueuedMessage } from "./queue-hold";
 import type { SseConsumer } from "./sse-delivery";
 import type { SubagentSnapshot } from "./subagent-mirror";
@@ -42,6 +43,10 @@ export interface SessionEntry {
 	staleSubagentIds: Set<string>;
 	/** User messages a Stop withdrew from the queue; held until resumed, run, edited, or deleted. */
 	pausedQueue: HeldQueuedMessage[];
+	/** Slash commands the SDK rejected while a turn ran; they run in order at turn end (see command-queue.ts). */
+	queuedCommands: QueuedCommandState;
+	/** The slash command currently running; its reply notices carry it as `command` (CMD-09). */
+	activeCommand: string | null;
 	/**
 	 * Collab host state: the live adapter (null when not live), the start-in-flight flag,
 	 * and the reason collab last could not run (shown to clients until the next start).

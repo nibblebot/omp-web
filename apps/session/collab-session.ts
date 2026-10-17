@@ -24,6 +24,7 @@ import {
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import type { CollabWireStatus } from "#lib/wire/protocol";
 import type { CollabAgentRef, CollabHostStatus, CollabSessionPort } from "./collab-host";
+import { drainQueuedCommands } from "./command-queue";
 import type { SessionConfig } from "./config";
 import type { DaemonBroker } from "./daemon-broker";
 import { installPlanReviewHandler } from "./review-plan";
@@ -59,6 +60,10 @@ export interface CollabSession {
 	abortSubagent(entry: SessionEntry, agentId: string): Promise<void>;
 	fireAndForgetPrompt(entry: SessionEntry, text: string, images: Images): void;
 	runBuiltinSlashCommand(entry: SessionEntry, text: string, images: Images): Promise<boolean>;
+	/** Runs queued slash commands in order; called at turn end and on Resume queue. */
+	drainCommands(entry: SessionEntry): Promise<void>;
+	/** Echoes and runs one queued command now (the caller decides when). */
+	runCommandNow(entry: SessionEntry, text: string): Promise<void>;
 	/** Test seam: wire a session's event stream to its broadcast/state-resync. */
 	wireSession(entry: SessionEntry): void;
 }
@@ -243,6 +248,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			broadcastTo(entry.handle, { type: "event", event });
 			// Tokens/cost/context/queue counts all change at turn end.
 			if (event.type === "agent_end") void deps.broker.broadcastState(entry, true).catch(() => {});
+			if (event.type === "agent_end") void drainCommands(entry);
 			// SDK queue_update is coalesced to displayable queue transitions.
 			// Unlike message_start, it covers follow-ups, removal/restoration and
 			// dequeue without a visible user message. QueueBar refetches on state.
@@ -286,6 +292,8 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			pendingUiRequests: new Map(),
 			subagentSnapshots: new Map(),
 			pausedQueue: [],
+			queuedCommands: { commands: [], paused: false, draining: false },
+			activeCommand: null,
 			transcriptSessionFilesBySubagentId: new Map(),
 			staleSubagentIds: new Set(),
 			collab: { adapter: null, starting: false, refusal: null },
@@ -313,10 +321,34 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		text: string,
 		images: Images,
 	): Promise<boolean> {
-		const builtinResult = await executeAcpBuiltinSlashCommand(text, entry.slashRuntime);
+		entry.activeCommand = text.startsWith("/") ? `/${text.slice(1).split(/\s/, 1)[0]}` : null;
+		const builtinResult = await executeAcpBuiltinSlashCommand(text, entry.slashRuntime).finally(
+			() => {
+				entry.activeCommand = null;
+			},
+		);
 		if (builtinResult === false) return false;
 		if ("prompt" in builtinResult) fireAndForgetPrompt(entry, builtinResult.prompt, images);
 		return true;
+	}
+
+	/** Echoes a queued command as it starts, then runs it like a typed prompt. */
+	async function runCommandNow(entry: SessionEntry, text: string): Promise<void> {
+		broadcastTo(entry.handle, { type: "command_echo", text });
+		if (!(await runBuiltinSlashCommand(entry, text, undefined)))
+			fireAndForgetPrompt(entry, text, undefined);
+	}
+
+	/** Runs queued slash commands in order while idle and not paused (see command-queue.ts). */
+	function drainCommands(entry: SessionEntry): Promise<void> {
+		return drainQueuedCommands(entry.queuedCommands, {
+			isStreaming: () => entry.session.isStreaming,
+			run: (text) => runCommandNow(entry, text),
+		})
+			.catch((err) => broadcast({ type: "error", error: String(err) }))
+			.finally(() => {
+				void deps.broker.broadcastState(entry).catch(() => {});
+			});
 	}
 
 	/**
@@ -376,6 +408,8 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		abortSubagent,
 		fireAndForgetPrompt,
 		runBuiltinSlashCommand,
+		drainCommands,
+		runCommandNow,
 		wireSession,
 	};
 }

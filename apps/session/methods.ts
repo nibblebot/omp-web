@@ -15,11 +15,13 @@ import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import type {
 	AbortOptions,
 	ModelInfo,
+	QueuedCommandRef,
 	QueuedMessageRef,
 	QueuedMessagesSnapshot,
 	WebMethodName,
 } from "#lib/wire/protocol";
 import type { CollabSession, Images } from "./collab-session";
+import { removeQueuedCommand } from "./command-queue";
 import type { DaemonBroker } from "./daemon-broker";
 import type { SessionEntry } from "./session-entry";
 import { holdQueuedMessages, resumeHeldQueue, takeQueuedMessage } from "./queue-hold";
@@ -222,6 +224,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		abortAndPrompt: true,
 		resumeQueue: true,
 		runQueuedNow: true,
+		queueCommand: true,
+		runQueuedCommandNow: true,
 		runEphemeralTurn: true,
 		predictNextMessage: true,
 	};
@@ -361,12 +365,15 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 					text: message.text,
 					imageCount: message.images?.length ?? 0,
 				})),
+				commands: [...entry.queuedCommands.commands],
+				commandsPaused: entry.queuedCommands.paused,
 			};
 		},
 		popLastQueuedMessage: async (entry) =>
 			entry.session.popLastQueuedMessage() ?? entry.pausedQueue.pop()?.message,
 		clearQueue: async (entry) => {
 			entry.pausedQueue.length = 0;
+			entry.queuedCommands.commands.length = 0;
 			return entry.session.clearQueue();
 		},
 		abort: async (entry, a) => {
@@ -374,6 +381,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			// Stop always cancels a pending ask, even when the SDK's signal never reaches it.
 			cancelEntryUiRequests(entry);
 			holdQueuedMessages(entry.session, entry.pausedQueue);
+			// Stop also holds queued slash commands until Resume queue.
+			entry.queuedCommands.paused = true;
 			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
 			if (options.keepSubagents) return;
 			for (const [id, snapshot] of entry.subagentSnapshots) {
@@ -387,9 +396,38 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
 			deps.collab.fireAndForgetPrompt(entry, a[0] as string, a[1] as Images);
 		},
-		resumeQueue: (entry) => resumeHeldQueue(entry.session, entry.pausedQueue),
+		resumeQueue: async (entry) => {
+			entry.queuedCommands.paused = false;
+			const result = await resumeHeldQueue(entry.session, entry.pausedQueue);
+			await deps.collab.drainCommands(entry);
+			return result;
+		},
 		takeQueued: async (entry, a) =>
 			takeQueuedMessage(entry.session, entry.pausedQueue, a[0] as QueuedMessageRef),
+		queueCommand: async (entry, a) => {
+			entry.queuedCommands.commands.push(a[0] as string);
+			await deps.collab.drainCommands(entry);
+		},
+		takeQueuedCommand: async (entry, a) => {
+			const ref = a[0] as QueuedCommandRef;
+			removeQueuedCommand(entry.queuedCommands, ref.index, ref.text);
+			void deps.broker.broadcastState(entry).catch(() => {});
+		},
+		runQueuedCommandNow: async (entry, a) => {
+			const ref = a[0] as QueuedCommandRef;
+			if (!removeQueuedCommand(entry.queuedCommands, ref.index, ref.text)) return;
+			if (!entry.queuedCommands.paused) {
+				// Front of the queue: a running turn's agent_end drains it first.
+				entry.queuedCommands.commands.unshift(ref.text);
+				if (entry.session.isStreaming) await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
+				await deps.collab.drainCommands(entry);
+				return;
+			}
+			// Stop paused the queue: run this one now and leave the rest for Resume queue.
+			if (entry.session.isStreaming) await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
+			await deps.collab.runCommandNow(entry, ref.text);
+			void deps.broker.broadcastState(entry).catch(() => {});
+		},
 		runQueuedNow: async (entry, a) => {
 			const ref = a[0] as QueuedMessageRef;
 			if (ref.paused === undefined && ref.kind === "follow-up") {

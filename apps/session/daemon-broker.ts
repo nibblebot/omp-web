@@ -163,8 +163,10 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			autoCompactionEnabled: session.autoCompactionEnabled,
 			autoRetryEnabled: session.autoRetryEnabled,
 			messageCount: session.messages.length,
-			queuedMessageCount: session.queuedMessageCount,
-			pausedQueueCount: entry.pausedQueue.length,
+			queuedMessageCount: session.queuedMessageCount + entry.queuedCommands.commands.length,
+			pausedQueueCount:
+				entry.pausedQueue.length +
+				(entry.queuedCommands.paused ? entry.queuedCommands.commands.length : 0),
 			todoPhases: session.getTodoPhases(),
 			systemPrompt: session.systemPrompt,
 			dumpTools: session.agent.state.tools.map((tool) => ({

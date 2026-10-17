@@ -139,10 +139,11 @@ describe("Stop preserves the queue (abort row)", () => {
 	interface Abort {
 		options: unknown[];
 		subagentsAborted: string[];
+		commandDrains: boolean[];
 	}
 
 	function stopEntry(queue: FakeQueue, sent: string[]) {
-		const aborts: Abort = { options: [], subagentsAborted: [] };
+		const aborts: Abort = { options: [], subagentsAborted: [], commandDrains: [] };
 		const session = {
 			clearQueue: () => ({
 				steering: queue.steering.splice(0).map((text) => ({ text })),
@@ -167,10 +168,18 @@ describe("Stop preserves the queue (abort row)", () => {
 			["run", { status: "running" }],
 			["done", { status: "completed" }],
 		]);
-		const entry = { session, pausedQueue: [], subagentSnapshots } as unknown as SessionEntry;
+		const entry = {
+			session,
+			pausedQueue: [],
+			queuedCommands: { commands: [], paused: false, draining: false },
+			subagentSnapshots,
+		} as unknown as SessionEntry;
 		const collab = {
 			abortSubagent: async (_entry: SessionEntry, id: string) => {
 				aborts.subagentsAborted.push(id);
+			},
+			drainCommands: async (e: SessionEntry) => {
+				aborts.commandDrains.push(e.queuedCommands.paused);
 			},
 		};
 		const methods = createWebMethods({
@@ -205,6 +214,23 @@ describe("Stop preserves the queue (abort row)", () => {
 		await methods.resumeQueue!(entry, []);
 		expect(sent).toEqual(["steer:s1", "follow:f1", "follow:f2"]);
 		expect(entry.pausedQueue).toEqual([]);
+	});
+
+	test("Stop holds a queued slash command; Resume queue releases it to the drain", async () => {
+		const queue: FakeQueue = { steering: [], followUp: [] };
+		const { entry, aborts, methods } = stopEntry(queue, []);
+		await methods.abort!(entry, []);
+		await methods.queueCommand!(entry, ["/add-dir /tmp/x"]);
+		const held = (await methods.getQueuedMessages!(entry, [])) as {
+			commands: string[];
+			commandsPaused: boolean;
+		};
+		expect(held).toMatchObject({ commands: ["/add-dir /tmp/x"], commandsPaused: true });
+
+		await methods.resumeQueue!(entry, []);
+		expect(aborts.commandDrains).toEqual([true, false]);
+		const released = (await methods.getQueuedMessages!(entry, [])) as { commandsPaused: boolean };
+		expect(released.commandsPaused).toBe(false);
 	});
 
 	test("Stop aborts only active subagents, and keepSubagents leaves them running", async () => {

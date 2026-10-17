@@ -143,12 +143,21 @@ export interface QueuedMessagesSnapshot {
 	followUp: string[];
 	liveSteered: number;
 	paused: PausedQueuedMessage[];
+	/** Slash commands the SDK rejects while a turn runs; they run in this order at turn end, after the follow-ups. */
+	commands?: string[];
+	/** True after a Stop: queued commands wait for Resume queue instead of running at turn end. */
+	commandsPaused?: boolean;
 }
 /** Identifies one queue chip. `paused` is the index into the held list (omitted for live items); `text` verifies identity. */
 export interface QueuedMessageRef {
 	kind: QueuedMessageKind;
 	text: string;
 	paused?: number;
+}
+/** Identifies one queued slash command chip by its position in the command queue; `text` verifies identity. */
+export interface QueuedCommandRef {
+	index: number;
+	text: string;
 }
 /** Options for `abort`. Stop aborts the turn's running subagents unless `keepSubagents` is set. */
 export interface AbortOptions {
@@ -604,6 +613,9 @@ export type WebMethodName =
 	| "resumeQueue"
 	| "takeQueued"
 	| "runQueuedNow"
+	| "queueCommand"
+	| "takeQueuedCommand"
+	| "runQueuedCommandNow"
 	| "popLastQueuedMessage"
 	| "clearQueue"
 	| "abort"
@@ -931,6 +943,8 @@ export type SessionScopedFrame =
 	// Phase 11: live output of an in-flight /btw side question (id = the
 	// client's btw streamId); broadcast session-scoped like bash_chunk.
 	| { type: "ephemeral_delta"; id: number; text: string }
+	// A queued slash command starts running: its typed text is echoed into the transcript.
+	| { type: "command_echo"; text: string }
 	// Unicast answer to a "call" command.
 	| { type: "call_result"; id: string; ok: boolean; data?: unknown; error?: string }
 	| { type: "available_commands"; commands: AvailableSlashCommand[] }

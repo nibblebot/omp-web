@@ -97,6 +97,7 @@ const RING_DELTAS: Record<string, true> = {
 	bash_chunk: true,
 	python_chunk: true,
 	ephemeral_delta: true,
+	command_echo: true,
 	settings_changed: true,
 	subagent_lifecycle: true,
 	subagent_progress: true,
@@ -406,13 +407,20 @@ export function detachConsumer(stream: SseConsumer, reason: string): void {
 	onConsumerDetached(stream, reason);
 }
 
-/** Surface operator-facing text as the existing notice event frame. */
+/**
+ * Surface operator-facing text as the existing notice event frame. While a
+ * slash command runs, its replies carry the command as `command` (CMD-09).
+ */
 export function notifyEvent(
 	entry: SessionEntry,
 	message: string,
 	level: "info" | "warning" | "error" = "info",
 ): void {
-	broadcastTo(entry.handle, { type: "event", event: { type: "notice", level, message } });
+	const command = entry.activeCommand;
+	broadcastTo(entry.handle, {
+		type: "event",
+		event: { type: "notice", level, message, ...(command ? { command } : {}) },
+	});
 }
 
 // Phase 11: AbortControllers for in-flight runEphemeralTurn calls, keyed by
