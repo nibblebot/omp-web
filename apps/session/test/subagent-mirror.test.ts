@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { SessionEntry } from "../session-entry";
 import {
 	clearSubagents,
+	finishedSubagentMeta,
 	finishedSubagentUsage,
 	handleSubagentLifecycle,
 	handleSubagentProgress,
@@ -154,5 +155,40 @@ describe("finished subagent usage", () => {
 		handleSubagentLifecycle(entry, lifecycle("completed"));
 		clearSubagents(entry);
 		expect(finishedSubagentUsage(entry, "a1")).toBeUndefined();
+	});
+});
+
+describe("finished subagent metadata", () => {
+	test("a finished agent keeps its Task linkage; a restart clears it", () => {
+		const entry = entryStub();
+		handleSubagentLifecycle(entry, lifecycle("started"));
+		handleSubagentProgress(
+			entry,
+			progressFrame({
+				id: "a1",
+				status: "running",
+				recentTools: [],
+				tokens: 1,
+				requests: 1,
+				cost: 0,
+			}),
+		);
+		handleSubagentLifecycle(entry, lifecycle("completed"));
+		expect(entry.subagentSnapshots.has("a1")).toBe(false);
+		expect(finishedSubagentMeta(entry, "a1")).toMatchObject({
+			agent: "task",
+			task: "t",
+			parentToolCallId: "t1",
+		});
+		handleSubagentLifecycle(entry, lifecycle("started"));
+		expect(finishedSubagentMeta(entry, "a1")).toBeUndefined();
+	});
+
+	test("clearing the session drops retained metadata", () => {
+		const entry = entryStub();
+		handleSubagentLifecycle(entry, lifecycle("started"));
+		handleSubagentLifecycle(entry, lifecycle("completed"));
+		clearSubagents(entry);
+		expect(finishedSubagentMeta(entry, "a1")).toBeUndefined();
 	});
 });

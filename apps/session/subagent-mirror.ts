@@ -107,6 +107,7 @@ function hasTranscriptSessionFile(entry: SessionEntry, sessionFile: string): boo
 /** Session change drops every tracked subagent; late frames from the old session are stale. */
 export function clearSubagents(entry: SessionEntry): void {
 	finishedUsage.get(entry)?.clear();
+	finishedMeta.get(entry)?.clear();
 	for (const subagentId of entry.subagentSnapshots.keys()) {
 		addPruned(entry.staleSubagentIds, subagentId, MAX_RETAINED_TRANSCRIPT_REFERENCES);
 	}
@@ -143,9 +144,11 @@ export function handleSubagentLifecycle(
 	if (payload.status === "started") {
 		entry.staleSubagentIds.delete(payload.id);
 		finishedUsage.get(entry)?.delete(payload.id);
+		finishedMeta.get(entry)?.delete(payload.id);
 	} else {
 		progressOf(entry).flush(payload.id);
 		retainFinishedUsage(entry, payload.id, existing?.progress);
+		retainFinishedMeta(entry, payload.id, existing, payload);
 	}
 	progressOf(entry).drop(payload.id);
 	const sessionFile = payload.sessionFile ?? existing?.sessionFile;
@@ -236,6 +239,50 @@ export function finishedSubagentUsage(
 	id: string,
 ): SubagentUsageFields | undefined {
 	return finishedUsage.get(entry)?.get(id);
+}
+
+/** Task metadata of each finished subagent (the lifecycle terminal frame drops the snapshot), so the roster still ties a row to the Task call that spawned it after a reload. */
+export type FinishedSubagentMeta = Pick<
+	SubagentSnapshot,
+	"agent" | "description" | "task" | "assignment" | "parentToolCallId" | "sessionFile"
+>;
+const finishedMeta = new WeakMap<SessionEntry, Map<string, FinishedSubagentMeta>>();
+
+function retainFinishedMeta(
+	entry: SessionEntry,
+	id: string,
+	existing: SubagentSnapshot | undefined,
+	payload: SubagentLifecyclePayload,
+): void {
+	let metas = finishedMeta.get(entry);
+	if (metas === undefined) {
+		metas = new Map();
+		finishedMeta.set(entry, metas);
+	}
+	const prior = metas.get(id);
+	metas.delete(id);
+	metas.set(id, {
+		agent: payload.agent,
+		description: payload.description ?? existing?.description ?? prior?.description,
+		task: existing?.task ?? prior?.task,
+		assignment: existing?.assignment ?? prior?.assignment,
+		parentToolCallId:
+			payload.parentToolCallId ?? existing?.parentToolCallId ?? prior?.parentToolCallId,
+		sessionFile: payload.sessionFile ?? existing?.sessionFile ?? prior?.sessionFile,
+	});
+	while (metas.size > MAX_RETAINED_TRANSCRIPT_REFERENCES) {
+		const oldest = metas.keys().next().value;
+		if (oldest === undefined) break;
+		metas.delete(oldest);
+	}
+}
+
+/** Task metadata of a finished subagent; undefined while the agent is live or was never seen finishing. */
+export function finishedSubagentMeta(
+	entry: SessionEntry,
+	id: string,
+): FinishedSubagentMeta | undefined {
+	return finishedMeta.get(entry)?.get(id);
 }
 
 /** The entry's progress coalescer; its frames are broadcast on the entry's session handle. */

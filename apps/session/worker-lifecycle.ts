@@ -19,7 +19,7 @@ import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createPersistedSubagentReviverFactory } from "@oh-my-pi/pi-coding-agent/task/persisted-revive";
 import type { SubagentProgressFields, SubagentUsageFields } from "#lib/wire/protocol";
 import type { SessionEntry } from "./session-entry";
-import { finishedSubagentUsage } from "./subagent-mirror";
+import { finishedSubagentMeta, finishedSubagentUsage } from "./subagent-mirror";
 import { projectProgress } from "./subagent-progress";
 import { transcriptUsage } from "./subagent-transcript-usage";
 
@@ -216,16 +216,17 @@ export async function listWorkers(entry: SessionEntry): Promise<WorkerRecord[]> 
 						"worker history, persisted contract or workspace is unavailable or nonresumable";
 			}
 		}
+		const meta = finishedSubagentMeta(entry, id);
 		workers.push({
 			id,
 			sessionId: entry.session.sessionManager.getSessionId(),
-			displayName: registered?.displayName ?? snap?.agent ?? id,
+			displayName: registered?.displayName ?? snap?.agent ?? meta?.agent ?? id,
 			status,
 			parentAgentId: registered?.parentId,
-			parentToolCallId: snap?.parentToolCallId,
-			task: snap?.task,
-			assignment: snap?.assignment,
-			description: snap?.description,
+			parentToolCallId: snap?.parentToolCallId ?? meta?.parentToolCallId,
+			task: snap?.task ?? meta?.task,
+			assignment: snap?.assignment ?? meta?.assignment,
+			description: snap?.description ?? meta?.description,
 			progress: snap?.progress === undefined ? undefined : projectProgress(snap.progress),
 			usage:
 				snap?.progress !== undefined
