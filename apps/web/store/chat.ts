@@ -20,9 +20,11 @@ import { isReady } from "./session";
 import { call } from "./transport";
 import { reportError } from "./toasts";
 import { advisorNotesOf } from "./slices/advisor";
+import { collabLive, guestPromptOf } from "./slices/collab";
 import { flushBtwEphemeral } from "./slices/btw";
 import { applyGoalUpdated } from "./slices/goals";
 import { settingValue } from "./settings";
+import { requestDangerConfirm } from "../prompt/danger-confirm";
 import {
 	NOTIFY_SETTING_PATH,
 	notifyKindEnabled,
@@ -629,6 +631,8 @@ export function applyEvent(e: AgentSessionEvent): void {
 				// Advisor cards (steered or preserved) settle as custom messages.
 				const notes = advisorNotesOf(msg);
 				if (notes !== null) pushItem({ kind: "advisor", id: nextId++, notes });
+				const guest = guestPromptOf(msg);
+				if (guest !== null) pushItem({ kind: "guestPrompt", id: nextId++, ...guest });
 			}
 			break;
 		}
@@ -795,6 +799,19 @@ export const [promptFocusRequest, setPromptFocusRequest] = createSignal(false);
 
 /** Start a fresh session (/new, New session button, picker gate) and focus the composer once it lands. */
 export function startNewSession(): Promise<void> {
+	if (!collabLive(state.collabStatus)) return startNewSessionNow();
+	requestDangerConfirm({
+		title: "End the live share?",
+		body: "Starting a new session ends the shared room. Connected guests are disconnected.",
+		confirmLabel: "End share and start new",
+		onConfirm: () => {
+			void startNewSessionNow();
+		},
+	});
+	return Promise.resolve();
+}
+
+function startNewSessionNow(): Promise<void> {
 	return call("newSession").then(() => {
 		setPromptFocusRequest(true);
 	});

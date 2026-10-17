@@ -46,10 +46,12 @@ describe("decideAutoStart", () => {
 		expect(decideAutoStart("view", relay)).toEqual({
 			kind: "start",
 			relayUrl: "ws://127.0.0.1:4731",
+			access: "view",
 		});
 		expect(decideAutoStart("control", relay)).toEqual({
 			kind: "start",
 			relayUrl: "ws://127.0.0.1:4731",
+			access: "control",
 		});
 	});
 

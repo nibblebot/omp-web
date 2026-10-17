@@ -102,8 +102,7 @@ button:not(:disabled):not(.active):hover {
 /* Pill/badge family: shared geometry, per-class tone. */
 .badge,
 .exit-badge,
-.usage-status,
-.sidebar-collab-ro {
+.usage-status {
 	border-radius: var(--r-pill);
 	white-space: nowrap;
 }

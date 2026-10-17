@@ -261,6 +261,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		arg: string | undefined,
 	): Promise<unknown> {
 		const { session } = entry;
+		// A live room hosts this session's transcript; a session change ends it (guests get a bye).
+		await deps.collab.stopRoom(entry, "session changed");
 		if (kind === "newSession") {
 			const ok = await session.newSession(arg ? { parentSession: arg } : undefined);
 			if (ok) {

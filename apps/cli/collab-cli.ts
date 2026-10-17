@@ -154,11 +154,9 @@ async function awaitLiveRoom(
 			if (status.state === "error") throw new Error(`collab_start failed: ${status.error}`);
 		}
 		const error = frames.errors.length > errorBase ? frames.errors.at(-1) : undefined;
-		if (error && !error.includes("collab already active for this session")) {
+		if (error) {
 			throw new Error(`collab_start failed: ${error}`);
 		}
-		// "collab already active": another client started the room. The live
-		// status arrives via the adapter's onStatusChange broadcast, so just wait.
 		await Bun.sleep(50);
 	}
 	throw new Error(`timed out waiting for the collab room (is the daemon on port ${port}?)`);

@@ -6,7 +6,9 @@ import {
 	cfgCollabAutoStart,
 	cfgCollabDisplayName,
 	cfgCollabRelayUrl,
+	cfgCollabWebUrl,
 } from "@oh-my-pi/pi-coding-agent/collab/settings";
+import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { daemonClientForProject } from "@oh-my-pi/pi-coding-agent/launch/client";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
@@ -53,7 +55,7 @@ import {
 	materializeSessionToDir,
 	sessionTreeExists,
 } from "./session-materialize";
-import { CollabHostAdapter } from "./collab-host";
+import { CollabHostAdapter, type CollabAccess } from "./collab-host";
 import { chooseRelayUrl, decideAutoStart } from "./collab-policy";
 import { createCollabSession } from "./collab-session";
 import { createDaemonBroker } from "./daemon-broker";
@@ -506,20 +508,32 @@ function refuseCollab(entry: SessionEntry, reason: string): void {
 }
 
 /** Host a room for `entry` through `relayUrl`. Shared by collab_start and collab.autoStart. */
-async function startCollabForEntry(entry: SessionEntry, relayUrl: string): Promise<void> {
+async function startCollabForEntry(
+	entry: SessionEntry,
+	relayUrl: string,
+	access: CollabAccess,
+): Promise<void> {
 	entry.collab.starting = true;
 	entry.collab.refusal = null;
 	broadcastTo(entry.handle, { type: "collab_status", status: { state: "starting" } });
+	// collab.webUrl names the browser client for a relay; the public relay's web app is the default.
+	const webUrl =
+		cfgCollabWebUrl.get(settings).trim() ||
+		(relayUrl === DEFAULT_RELAY_URL ? "https://my.omp.sh" : undefined);
 	const adapter = new CollabHostAdapter(collabSession.buildCollabPort(entry), {
 		hostName: cfgCollabDisplayName.get(settings).trim() || os.userInfo().username || "web",
-		onStatusChange: (status) =>
+		webUrl,
+		onStatusChange: (status) => {
+			// A room that ends (stop, session switch, relay drop) is no longer this session's adapter.
+			if (status === null && entry.collab.adapter === adapter) entry.collab.adapter = null;
 			broadcastTo(entry.handle, {
 				type: "collab_status",
 				status: collabSession.toWireStatus(status),
-			}),
+			});
+		},
 	});
 	try {
-		await adapter.start(relayUrl);
+		await adapter.start(relayUrl, access);
 		entry.collab.adapter = adapter;
 	} catch (err) {
 		refuseCollab(entry, String(err));
@@ -697,8 +711,15 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 			case "collab_start": {
 				const entry = attachedEntry();
 				if (!entry) throw new Error("Not attached to a session");
+				// Idempotent: a room already starting or live answers with its current status.
 				if (entry.collab.starting || entry.collab.adapter) {
-					throw new Error("collab already active for this session");
+					broadcastTo(entry.handle, {
+						type: "collab_status",
+						status: entry.collab.starting
+							? { state: "starting" }
+							: collabSession.toWireStatus(entry.collab.adapter?.status ?? null),
+					});
+					break;
 				}
 				// An explicit relayUrl (the ShareSheet's choice) wins over collab.relayUrl.
 				// Unset stays undefined: the SDK default relay never applies implicitly.
@@ -710,18 +731,24 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 					refuseCollab(entry, relay.reason);
 					break;
 				}
-				await startCollabForEntry(entry, relay.relayUrl);
+				await startCollabForEntry(entry, relay.relayUrl, cmd.access ?? "control");
 				break;
 			}
 			case "collab_stop": {
 				const entry = attachedEntry();
 				if (!entry) throw new Error("Not attached to a session");
-				if (entry.collab.starting) throw new Error("collab is starting");
 				const adapter = entry.collab.adapter;
-				if (!adapter) throw new Error("collab is not active");
+				// Idempotent: stopping a room that is not live reports where it stands.
+				if (entry.collab.starting || !adapter) {
+					broadcastTo(entry.handle, {
+						type: "collab_status",
+						status: entry.collab.starting ? { state: "starting" } : { state: "off" },
+					});
+					break;
+				}
 				entry.collab.adapter = null;
+				// The adapter's teardown reports `off` through onStatusChange.
 				await adapter.stop("collab stopped by web user");
-				broadcastTo(entry.handle, { type: "collab_status", status: { state: "off" } });
 				break;
 			}
 			case "daemon_logs": {
@@ -1278,7 +1305,7 @@ if (autoDecision.kind === "refuse") {
 	console.error(autoDecision.reason);
 	refuseCollab(bootEntry, autoDecision.reason);
 } else if (autoDecision.kind === "start") {
-	void startCollabForEntry(bootEntry, autoDecision.relayUrl);
+	void startCollabForEntry(bootEntry, autoDecision.relayUrl, autoDecision.access);
 }
 resolveBootReady();
 void bootReadiness(bootEntry);

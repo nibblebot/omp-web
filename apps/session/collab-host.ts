@@ -40,6 +40,7 @@ import {
 	type CollabParticipant,
 	type CollabSessionState,
 	formatCollabLink,
+	formatCollabWebLink,
 	generateRoomId,
 	parseCollabLink,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
@@ -177,19 +178,28 @@ export type CollabGuestUiResult =
 	| { kind: "answered"; value: CollabUiResponseValue; by: string; peer: number }
 	| { kind: "unavailable" };
 
-/** Web-visible host status; `null` (and `isLive === false`) when not live. */
+/** Web-visible host status; `null` (see `onStatusChange`) when the room is not live. */
 export interface CollabHostStatus {
 	state: "live" | "error";
 	error?: string;
+	access: CollabAccess;
 	link: string;
 	viewLink: string;
+	/** Browser deep links; present only when the adapter has a `webUrl`. */
+	browserLink?: string;
+	browserViewLink?: string;
 	relayUrl: string;
 	roomId: string;
 	participants: CollabParticipant[]; // [{name: hostName, role:"host"}, ...guests {name, role:"guest", readOnly?}]
 }
 
+/** `control` rooms mint a write token and advertise both links; `view` rooms advertise only the read link. */
+export type CollabAccess = "view" | "control";
+
 export interface CollabHostAdapterOptions {
 	hostName: string;
+	/** Browser client base for deep links (`collab.webUrl`, or the public relay's web app). Omit when no browser client serves the relay. */
+	webUrl?: string;
 	onStatusChange?: (status: CollabHostStatus | null) => void;
 }
 
@@ -202,6 +212,9 @@ export class CollabHostAdapter {
 	#relayUrl = "";
 	#roomId = "";
 	#writeToken: Uint8Array | null = null;
+	#access: CollabAccess = "control";
+	#browserLink: string | undefined;
+	#browserViewLink: string | undefined;
 	#sessionId = "";
 	/** True once the socket first opened; cleared on teardown. Gates `status`. */
 	#live = false;
@@ -230,12 +243,25 @@ export class CollabHostAdapter {
 		if (!this.#live || !this.#socket) return null;
 		return {
 			state: "live",
+			access: this.#access,
 			link: this.#link,
 			viewLink: this.#viewLink,
+			browserLink: this.#browserLink,
+			browserViewLink: this.#browserViewLink,
 			relayUrl: this.#relayUrl,
 			roomId: this.#roomId,
 			participants: this.participants,
 		};
+	}
+	/** Guests share one roster: a repeated display name gets a numeric suffix so every participant stays distinct. */
+	#uniqueGuestName(base: string, fromPeer: number): string {
+		const taken = new Set<string>([this.#opts.hostName]);
+		for (const [peerId, peer] of this.#peers) {
+			if (peerId !== fromPeer) taken.add(peer.name);
+		}
+		let name = base;
+		for (let n = 2; taken.has(name); n++) name = `${base} (${n})`;
+		return name;
 	}
 
 	/** The host's own display name (the web user's name in collab dialogs). */
@@ -326,15 +352,23 @@ export class CollabHostAdapter {
 	}
 
 	/** Generates room+key+token, connects to the relay; resolves once the socket first opens. Throws on connect failure. */
-	async start(relayUrl: string): Promise<void> {
+	async start(relayUrl: string, access: CollabAccess = "control"): Promise<void> {
 		const rawKey = generateRoomKey();
-		const writeToken = generateWriteToken();
+		const writeToken = access === "control" ? generateWriteToken() : null;
 		const roomId = generateRoomId();
 		this.#writeToken = writeToken;
+		this.#access = access;
 		this.#relayUrl = relayUrl;
 		this.#roomId = roomId;
-		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken);
+		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken ?? undefined);
 		this.#viewLink = formatCollabLink(relayUrl, roomId, rawKey);
+		const webUrl = this.#opts.webUrl;
+		this.#browserLink = webUrl
+			? formatCollabWebLink(relayUrl, roomId, rawKey, writeToken ?? undefined, webUrl)
+			: undefined;
+		this.#browserViewLink = webUrl
+			? formatCollabWebLink(relayUrl, roomId, rawKey, undefined, webUrl)
+			: undefined;
 		const parsed = parseCollabLink(this.#link);
 		if ("error" in parsed) throw new Error(parsed.error);
 		const key = await importRoomKey(rawKey);
@@ -529,7 +563,10 @@ export class CollabHostAdapter {
 			);
 			return;
 		}
-		const cleanName = name.trim().slice(0, 64) || `guest-${fromPeer}`;
+		const cleanName = this.#uniqueGuestName(
+			name.trim().slice(0, 64) || `guest-${fromPeer}`,
+			fromPeer,
+		);
 		const canWrite = this.#verifyWriteToken(writeToken);
 		this.#peers.set(fromPeer, { name: cleanName, canWrite });
 

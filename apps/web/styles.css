@@ -17,6 +17,7 @@
 @import "./styles/modals.css";
 @import "./styles/settings.css";
 @import "./styles/fleet.css";
+@import "./styles/collab.css";
 @import "./styles/usage.css";
 
 /* --- Directory picker (DirectoryPicker.tsx), kept here (not in a domain file)

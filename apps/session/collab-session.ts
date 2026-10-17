@@ -60,6 +60,8 @@ export interface CollabSession {
 	abortSubagent(entry: SessionEntry, agentId: string): Promise<void>;
 	fireAndForgetPrompt(entry: SessionEntry, text: string, images: Images): void;
 	runBuiltinSlashCommand(entry: SessionEntry, text: string, images: Images): Promise<boolean>;
+	/** Ends the entry's live room, if any; guests get a bye. Idempotent. */
+	stopRoom(entry: SessionEntry, reason: string): Promise<void>;
 	/** Runs queued slash commands in order; called at turn end and on Resume queue. */
 	drainCommands(entry: SessionEntry): Promise<void>;
 	/** Echoes and runs one queued command now (the caller decides when). */
@@ -214,6 +216,9 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			state: "live",
 			link: status.link,
 			viewLink: status.viewLink,
+			access: status.access,
+			browserLink: status.browserLink,
+			browserViewLink: status.browserViewLink,
 			relayUrl: status.relayUrl,
 			roomId: status.roomId,
 			participants: status.participants,
@@ -400,6 +405,14 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		await AgentLifecycleManager.global().release(agentId);
 	}
 
+	/** Ends the entry's live room, if any. Clears the slot first so a re-entrant stop is a no-op. */
+	async function stopRoom(entry: SessionEntry, reason: string): Promise<void> {
+		const adapter = entry.collab.adapter;
+		if (!adapter) return;
+		entry.collab.adapter = null;
+		await adapter.stop(reason).catch(() => {});
+	}
+
 	return {
 		createSession,
 		buildCollabPort,
@@ -408,6 +421,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		abortSubagent,
 		fireAndForgetPrompt,
 		runBuiltinSlashCommand,
+		stopRoom,
 		drainCommands,
 		runCommandNow,
 		wireSession,

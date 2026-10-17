@@ -1,0 +1,171 @@
+/* Collab: share sheet (share-*) and guest prompt cards (guest-prompt-*). Part of the global stylesheet; cascade order is set by the @import manifest in styles.css. */
+
+.share-sheet {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+}
+.share-live,
+.share-start,
+.share-optin {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+.share-live-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin: 0;
+	font-weight: 600;
+	color: var(--success);
+}
+.share-live-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--success);
+}
+.share-optin-title {
+	margin: 0;
+	font-weight: 600;
+}
+.share-note,
+.share-disclosure {
+	margin: 0;
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+}
+.share-disclosure {
+	padding: var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	background: var(--bg-deep);
+	color: var(--muted);
+}
+.share-error {
+	margin: 0;
+	color: var(--error);
+}
+.share-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-3);
+}
+.share-btn,
+.share-copy-btn {
+	background: none;
+	border: 1px solid var(--border-strong);
+	color: var(--muted-3);
+	font: inherit;
+	cursor: pointer;
+}
+.share-btn {
+	border-radius: var(--r-pill);
+	padding: var(--space-2) var(--space-4);
+	font-size: var(--fs-micro);
+}
+.share-btn:hover,
+.share-copy-btn:hover {
+	background: var(--btn);
+	color: var(--text);
+	border-color: var(--accent-border);
+}
+.share-stop {
+	align-self: flex-start;
+	color: var(--error);
+}
+.share-link-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	min-width: 0;
+}
+.share-link-label {
+	flex: none;
+	min-width: 9rem;
+	font-size: var(--fs-micro);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	color: var(--muted-2);
+}
+.share-link-input {
+	flex: 1;
+	min-width: 0;
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	background: var(--bg-deep);
+	color: var(--muted);
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+}
+.share-copy-btn {
+	flex: none;
+	border-color: var(--border);
+	border-radius: var(--r-sm);
+	padding: 0 var(--space-3);
+	font-size: var(--fs-micro);
+	color: var(--muted);
+}
+.share-qr {
+	align-self: flex-start;
+	margin: 0;
+	padding: var(--space-3);
+	border-radius: var(--r-sm);
+	background: #fff;
+	color: #000;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	line-height: 1;
+}
+.share-roster {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin: 0;
+	padding: var(--space-2) 0 0;
+	list-style: none;
+	border-top: 1px solid var(--border);
+}
+.share-roster-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+}
+.share-roster-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.share-roster-role {
+	flex: none;
+	padding: 0 var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+}
+
+.guest-prompt {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	max-width: 100%;
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	background: var(--bg-deep);
+}
+.guest-prompt-from {
+	font-size: var(--fs-micro);
+	letter-spacing: var(--ls-micro);
+	text-transform: uppercase;
+	color: var(--muted-2);
+}
+.guest-prompt-text {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}

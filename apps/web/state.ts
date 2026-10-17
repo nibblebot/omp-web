@@ -27,6 +27,7 @@ import type { UsageLike } from "./usage/usage";
 import { promptTimestamp } from "./chat/turn-usage";
 import { compactionItemOf } from "./store/compaction-view";
 import { advisorNotesOf } from "./store/slices/advisor";
+import { COLLAB_OFF, guestPromptOf } from "./store/slices/collab";
 import {
 	announce,
 	appendBashChunk,
@@ -161,6 +162,7 @@ export type ChatItem =
 	| BashItem
 	| CompactionItem
 	| AdvisorItem
+	| { kind: "guestPrompt"; id: number; from: string; text: string }
 	| { kind: "notice"; id: number; level: string; message: string; command?: string };
 
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
@@ -236,7 +238,8 @@ export type ModalName =
 	| "annotations"
 	| "todos"
 	| "compaction"
-	| "btw";
+	| "btw"
+	| "share";
 
 /** Unicast answer to sendWorktreeDeleteInfo: guard evidence for the
  *  delete-worktree confirm dialog (linked identity, dirty counts, branch state). */
@@ -494,6 +497,7 @@ export const [state, setState] = createStore({
 	// Paced reveal is display.smoothStreaming, read via chat/display-prefs.
 	soften: false,
 	error: null as string | null,
+	collabStatus: COLLAB_OFF,
 	// Client-side debug ring (Debug panel): one entry per transport lifecycle
 	// event, capped at DEBUG_RING_CAP (oldest dropped). Mirror of the fleet's
 	// /ctl/debug log for the browser half of the connection loop.
@@ -717,6 +721,8 @@ export function loadHistory(messages: AgentMessage[]): void {
 			// messages stay hidden.
 			const notes = advisorNotesOf(msg);
 			if (notes !== null) items.push({ kind: "advisor", id: nextChatId(), notes });
+			const guest = guestPromptOf(msg);
+			if (guest !== null) items.push({ kind: "guestPrompt", id: nextChatId(), ...guest });
 		}
 	}
 	setState({
@@ -1549,6 +1555,9 @@ export function connect(): void {
 				applySettingsModel(model);
 				break;
 			}
+			case "collab_status":
+				setState("collabStatus", frame.status);
+				break;
 			case "error":
 				// Finding #28: an error frame is a GLOBAL uncorrelated broadcast
 				// (fire-and-forget spawn failures, a lost pipe for ANOTHER

@@ -1,6 +1,7 @@
 import { For, Show, type Component, type JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { featureMainHeader } from "../../features/registry";
+import { openShareSheet } from "../../store/collab";
 import { setSidebarVisible, setState, setTxSidebarVisible, state } from "../../state";
 import { LayersIcon, PanelLeftIcon, SettingsIcon, WarningIcon } from "../ui/icons";
 
@@ -8,7 +9,7 @@ import { LayersIcon, PanelLeftIcon, SettingsIcon, WarningIcon } from "../ui/icon
  * Main pane header, shared by Chat (live session and the no-session pane) and
  * Analysis. Left: the sidebar open toggle (only while the current view's
  * sidebar is closed) and the title slot. Right: the actions slot, the
- * session badges (goal, subagents) when `session` is set, the disconnected
+ * session badges (goal, subagents, share) when `session` is set, the disconnected
  * pill, and the settings gear, always rightmost. Below 768px the badges
  * compact to icons first (shell.css); the title shrinks last.
  */
@@ -53,6 +54,22 @@ export const MainHeader: Component<{
 						<span>{state.subagents.size}</span>
 					</button>
 				</Show>
+				<button
+					type="button"
+					class="segment segment-button main-header-share"
+					onClick={() => openShareSheet()}
+					title={
+						state.collabStatus.state === "live"
+							? "Shared session: open the share sheet"
+							: "Share this session"
+					}
+				>
+					<span class="main-header-label">
+						{state.collabStatus.state === "live"
+							? `Live · ${state.collabStatus.participants.filter((p) => p.role === "guest").length}`
+							: "Share"}
+					</span>
+				</button>
 			</Show>
 			<Show when={!state.connected}>
 				<span class="disconnected-pill" role="status" aria-label="disconnected">

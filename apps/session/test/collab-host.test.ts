@@ -887,3 +887,80 @@ describe("CollabHostAdapter", () => {
 		expect(port.agentCmds).toHaveLength(2);
 	});
 });
+
+describe("CollabHostAdapter access, browser links, and guest names", () => {
+	let relay: StubRelay;
+	let port: FakePort;
+	let adapter: CollabHostAdapter | undefined;
+	const guestSockets: CollabSocket[] = [];
+
+	beforeEach(() => {
+		relay = createStubRelay();
+		port = new FakePort();
+	});
+
+	afterEach(async () => {
+		if (adapter) await adapter.stop("test teardown");
+		adapter = undefined;
+		for (const socket of guestSockets) socket.close();
+		guestSockets.length = 0;
+		relay.dispose();
+	});
+
+	test("view access mints no write token: the read link is the only link", async () => {
+		adapter = new CollabHostAdapter(port, { hostName: "TestHost" });
+		await adapter.start(`ws://127.0.0.1:${relay.server.port}`, "view");
+		const status = adapter.status;
+		if (!status) throw new Error("status null after start");
+		expect(status.access).toBe("view");
+		expect(status.link).toBe(status.viewLink);
+		expect(parseLink(status.link).writeToken).toBeUndefined();
+	});
+
+	test("control access keeps a distinct write link", async () => {
+		adapter = new CollabHostAdapter(port, { hostName: "TestHost" });
+		await adapter.start(`ws://127.0.0.1:${relay.server.port}`, "control");
+		const status = adapter.status;
+		if (!status) throw new Error("status null after start");
+		expect(status.access).toBe("control");
+		expect(status.link).not.toBe(status.viewLink);
+		expect(parseLink(status.link).writeToken).toBeDefined();
+	});
+
+	test("browser links appear only when the adapter has a webUrl", async () => {
+		adapter = new CollabHostAdapter(port, { hostName: "TestHost" });
+		await adapter.start(`ws://127.0.0.1:${relay.server.port}`);
+		expect(adapter.status?.browserLink).toBeUndefined();
+		expect(adapter.status?.browserViewLink).toBeUndefined();
+		await adapter.stop("no webUrl");
+		adapter = undefined;
+
+		adapter = new CollabHostAdapter(port, {
+			hostName: "TestHost",
+			webUrl: "https://web.example.com",
+		});
+		await adapter.start(`ws://127.0.0.1:${relay.server.port}`, "control");
+		const status = adapter.status;
+		if (!status) throw new Error("status null after start");
+		expect(status.browserLink?.startsWith("https://web.example.com")).toBe(true);
+		expect(status.browserViewLink?.startsWith("https://web.example.com")).toBe(true);
+		expect(status.browserViewLink).not.toBe(status.browserLink);
+	});
+
+	test("a repeated guest name gets a numeric suffix, and a guest named like the host is suffixed too", async () => {
+		adapter = new CollabHostAdapter(port, { hostName: "TestHost" });
+		await adapter.start(`ws://127.0.0.1:${relay.server.port}`);
+		const link = adapter.status!.link;
+		const first = await connectGuest(link, "Ann");
+		const second = await connectGuest(link, "Ann");
+		const host = await connectGuest(link, "TestHost");
+		guestSockets.push(first.socket, second.socket, host.socket);
+		await waitForWelcome(first);
+		await waitForWelcome(second);
+		await waitForWelcome(host);
+		await waitFor(() => (adapter!.participantCount === 4 ? true : undefined));
+		expect(adapter.participants.map((p) => p.name).sort()).toEqual(
+			["Ann", "Ann (2)", "TestHost", "TestHost (2)"].sort(),
+		);
+	});
+});

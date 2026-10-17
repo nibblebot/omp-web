@@ -16,7 +16,14 @@ import { buildTurnMeta } from "../../../chat/turn-usage";
 import { useStickyScroll } from "./useStickyScroll";
 import { StreamingBlock } from "./StreamingBlock";
 import { featureTranscriptCard } from "../../../features/registry";
-import { AssistantCard, CompactionCard, NoticeCard, UserCard, UserCommandCard } from "./cards";
+import {
+	AssistantCard,
+	CompactionCard,
+	GuestPromptCard,
+	NoticeCard,
+	UserCard,
+	UserCommandCard,
+} from "./cards";
 
 /** Empty-transcript state: large character sprite and a one-line greeting.
  *  Held blank until the loaded transcript's state frame lands (modelSynced):
@@ -90,6 +97,9 @@ const TranscriptList: Component = () => {
 												{(Card) => <Card item={a()} />}
 											</Show>
 										)}
+									</Match>
+									<Match when={item.kind === "guestPrompt" && item}>
+										{(guest) => <GuestPromptCard item={guest()} />}
 									</Match>
 									<Match when={item.kind === "notice" && item}>
 										{(notice) => <NoticeCard item={notice()} />}

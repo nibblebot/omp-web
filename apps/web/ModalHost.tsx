@@ -18,6 +18,7 @@ import { ResumePicker } from "./components/sessions/ResumePicker";
 import { SessionPicker } from "./components/sessions/SessionPicker";
 import { SettingsSheet } from "./components/settings/SettingsSheet";
 import { SubagentsDialog } from "./components/subagents/SubagentsDialog";
+import { ShareSheet } from "./components/collab/ShareSheet";
 import { SessionStatsDialog } from "./components/usage/SessionStatsDialog";
 import { UsageLimitsDialog } from "./components/usage/UsageLimitsDialog";
 import { ImageLightbox } from "./components/ui/ImageLightbox";
@@ -75,6 +76,7 @@ export const ModalHost: Component = () => {
 		annotations: () => featureModalHost("annotations"),
 		todos: () => featureModalHost("todos"),
 		compaction: () => <CompactionDialog onClose={close} />,
+		share: () => <ShareSheet onClose={close} />,
 		btw: () => featureModalHost("btw"),
 	} satisfies Record<ModalName, () => JSX.Element>;
 	return (

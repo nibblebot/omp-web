@@ -9,7 +9,7 @@ export type RelayChoice = { ok: true; relayUrl: string } | { ok: false; reason: 
 
 export type AutoStartDecision =
 	| { kind: "off" }
-	| { kind: "start"; relayUrl: string }
+	| { kind: "start"; relayUrl: string; access: Exclude<CollabAutoStart, "off"> }
 	| { kind: "refuse"; reason: string };
 
 const NO_RELAY_REASON =
@@ -40,5 +40,5 @@ export function decideAutoStart(autoStart: CollabAutoStart, relay: RelayChoice):
 	if (autoStart === "off") return { kind: "off" };
 	if (!relay.ok)
 		return { kind: "refuse", reason: `collab.autoStart=${autoStart} refused: ${relay.reason}` };
-	return { kind: "start", relayUrl: relay.relayUrl };
+	return { kind: "start", relayUrl: relay.relayUrl, access: autoStart };
 }
