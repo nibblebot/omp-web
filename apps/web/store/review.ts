@@ -169,6 +169,14 @@ export function requestCommit(text: string, onCommitted: () => void): void {
 			}),
 	});
 }
+/**
+ * Esc in a review text field that holds an unsaved draft: claim the key so the
+ * dock (which closes on an unclaimed Esc and discards the panel's local drafts)
+ * stays open. An empty field lets Esc close the dock as usual.
+ */
+export function guardDraftEscape(event: KeyboardEvent, draft: string): void {
+	if (event.key === "Escape" && draft.trim() !== "") event.preventDefault();
+}
 export const loadFileDiff = (path: string, area: GitReviewDiff["area"] = "unstaged") =>
 	run("git", "git", async () => {
 		const epoch = state.review.generation;

@@ -3,13 +3,13 @@ import type { GitPathEntry } from "#lib/wire/protocol";
 import type { GitReviewDiff } from "../../store/slices/review";
 import { sha256Hex } from "../../text/sha256";
 import {
-	commitStaged,
 	createAnnotation,
 	fileDiff,
 	gitError,
 	gitLoading,
 	gitSelection,
 	gitStatus,
+	guardDraftEscape,
 	insertIntoComposer,
 	isStaleError,
 	loadFileDiff,
@@ -239,6 +239,7 @@ export const ReviewPanel: Component = () => {
 																<textarea
 																	value={noteDraft()}
 																	onInput={(e) => setNoteDraft(e.currentTarget.value)}
+																	onKeyDown={(e) => guardDraftEscape(e, noteDraft())}
 																/>
 																<button
 																	type="button"
@@ -277,7 +278,11 @@ export const ReviewPanel: Component = () => {
 							<div class="review-commit">
 								<label class="review-field">
 									Commit message
-									<textarea value={message()} onInput={(e) => setMessage(e.currentTarget.value)} />
+									<textarea
+										value={message()}
+										onInput={(e) => setMessage(e.currentTarget.value)}
+										onKeyDown={(e) => guardDraftEscape(e, message())}
+									/>
 								</label>
 								<p>
 									Commit includes every currently staged change above; it never stages worktree
