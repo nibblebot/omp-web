@@ -31,6 +31,7 @@ import { acquireFileLock, LockHeldError } from "#lib/platform/file-lock";
 import type { FileLock } from "#lib/platform/file-lock";
 import { isLoopbackHost } from "#lib/platform/hosts";
 import { parseConfig, type SessionConfig } from "./config";
+import { isDownloadBulkCommand, serveDownloadBulk } from "./download-manifest";
 import { FleetCallback, type FleetCallbackStatus } from "./fleet-callback";
 import { SessionLogTailer } from "./log-tailer";
 import {
@@ -73,7 +74,7 @@ import {
 	setCallbackBrowserStreamCount,
 	webUiRequest,
 } from "./ui-context";
-import { callbackError } from "#lib/wire/callback-protocol";
+import { CALLBACK_CONTROL_STREAM_ID, callbackError } from "#lib/wire/callback-protocol";
 import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
 import { createDaemonControl, type DaemonControl } from "./daemon-control";
 import {
@@ -1273,6 +1274,25 @@ if (config.callbackUrl !== undefined) {
 				logTailer?.handleControl(envelope.streamId, envelope.payload);
 				return;
 			}
+		}
+		if (envelope.kind === "command" && isDownloadBulkCommand(envelope.payload)) {
+			// Bulk transfers bypass the control broker: they stream on the bulk channel.
+			const command = envelope.payload;
+			const callback = fleetCallback;
+			if (callback === null) return;
+			void canonicalRoots().then((roots) =>
+				serveDownloadBulk({
+					correlationId: command.correlationId,
+					path: command.path,
+					cwd: config.cwd,
+					roots,
+					uploadParts: (input) => callback.requestBulkUploadParts(input),
+					failControl: (payload) => {
+						callbackSend(CALLBACK_CONTROL_STREAM_ID, "control", payload);
+					},
+				}),
+			);
+			return;
 		}
 		daemonControl?.handleEnvelope(envelope);
 	};

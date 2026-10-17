@@ -524,7 +524,11 @@ export function createDownloadMethods(deps: DownloadMethodsDeps) {
 		const manifest = buildDownloadManifest(input, args);
 		let path: string;
 		if (kind === "html" || kind === "html-themed") {
-			path = await entry.session.exportToHtml(undefined, kind === "html-themed");
+			// Stage under tmpdir, not the session cwd: the file exists only to be fetched.
+			path = await entry.session.exportToHtml(
+				join(tmpdir(), `omp-session-${randomUUID()}.html`),
+				kind === "html-themed",
+			);
 		} else if (kind === "text") {
 			const text = entry.session.formatSessionAsText();
 			if (!text) throw new ExportError("unavailable", "The transcript is empty.");

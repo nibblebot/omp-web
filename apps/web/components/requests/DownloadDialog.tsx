@@ -3,16 +3,14 @@ import {
 	closeDownload,
 	confirmDownload,
 	downloadProgress,
-	openDownloadConsent,
 	type DownloadConsent,
 	type DownloadProgress,
-	type WebDownloadKind,
 } from "../../store/downloads";
 import { Modal } from "../ui/Modal";
 
 // G17 download consent + progress dialog (thin Solid component, transient
 // presentation only). The store owns the manifest/consent/progress state;
-// this file renders the kind picker, inclusion checkboxes (advisor/BTW) with
+// this file renders inclusion checkboxes (advisor/BTW) with
 // the manifest preview, the plaintext/credential warning, consent
 // confirm/cancel, and progress/error/cap display with safe filenames shown.
 // No overlays/index.ts registration: mount DownloadDialog once from App
@@ -101,27 +99,6 @@ const ConsentBody: Component<{ consent: DownloadConsent }> = (props) => {
 		</div>
 	);
 };
-
-const KIND_OPTIONS: Array<{ kind: WebDownloadKind; label: string }> = [
-	{ kind: "html", label: "HTML transcript" },
-	{ kind: "html-themed", label: "HTML (themed)" },
-	{ kind: "text", label: "Plain text" },
-	{ kind: "request", label: "LLM request JSON" },
-	{ kind: "archive", label: "Main + worker archive" },
-];
-
-/** Entry view: kind picker that starts the manifest -> consent flow. Render when no download is active. */
-export const DownloadKindPicker: Component = () => (
-	<div class="download-kind-picker">
-		<For each={KIND_OPTIONS}>
-			{(opt) => (
-				<button type="button" onClick={() => void openDownloadConsent(opt.kind)}>
-					{opt.label}
-				</button>
-			)}
-		</For>
-	</div>
-);
 
 export const DownloadDialog: Component = () => {
 	const current = () => downloadProgress();

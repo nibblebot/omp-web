@@ -9,8 +9,7 @@
 // Flow per download: (1) fetch the download manifest first (proposed
 // `downloadManifest` call, P0-wired); (2) open the consent dialog with the
 // manifest's inclusions/warnings/provenance; (3) on confirm, produce the
-// server path via the session dump method (exportHtml / formatSessionAsText-
-// to-tmp / dumpLlmRequestToTmpDir / dumpSessionArchiveToTmpDir) and stream
+// server path via exportDownload (one daemon call per kind; the daemon stages it under its jail) and stream
 // GET /ctl/.../download?path=<serverPath> to a blob -> anchor download with
 // the manifest/clientFilename (browser filenames are never server paths).
 // Streaming uses ReadableStream -> Blob where available with a plain-blob
@@ -212,38 +211,27 @@ function triggerAnchor(url: string, filename: string): void {
 	window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
+/** Stage one file on the daemon via exportDownload; the daemon jails it and names it. */
 async function produceServerPath(
-	kind: WebDownloadKind,
+	kind: Exclude<WebDownloadKind, "text">,
+	consent: DownloadConsent,
 ): Promise<{ serverPath: string; clientFilename: string }> {
-	switch (kind) {
-		case "html": {
-			const out = asExportPath(await call("exportHtml", [undefined, false], 60_000));
-			if (!out) throw new Error("HTML export produced no file.");
-			return { serverPath: out.path, clientFilename: out.clientFilename ?? "session.html" };
-		}
-		case "html-themed": {
-			const out = asExportPath(await call("exportHtml", [undefined, true], 60_000));
-			if (!out) throw new Error("Themed HTML export produced no file.");
-			return { serverPath: out.path, clientFilename: out.clientFilename ?? "session-themed.html" };
-		}
-		case "request": {
-			const out: unknown = await call("dumpLlmRequestToTmpDir", [], 60_000);
-			if (typeof out !== "string" || !out) throw new Error("No LLM request dump available yet.");
-			return { serverPath: out, clientFilename: "session-llm-request.json" };
-		}
-		case "archive": {
-			// Note: canonicalize `dumpSessionArchive` as an additive WebMethodName.
-			const out = asExportPath(await call("dumpSessionArchive", [], 120_000));
-			if (!out) throw new Error("Archive dump produced no file.");
-			return { serverPath: out.path, clientFilename: out.clientFilename ?? "session-archive.zip" };
-		}
-		case "text": {
-			const text: unknown = await call("formatSessionAsText", [], 60_000);
-			if (typeof text !== "string" || !text)
-				throw new Error("Transcript is empty, nothing to download.");
-			return { serverPath: "", clientFilename: "transcript.txt" };
-		}
-	}
+	const out = asExportPath(
+		await call(
+			"exportDownload",
+			[
+				{
+					kind,
+					includeAdvisor: consent.includeAdvisor,
+					includeBtw: consent.includeBtw,
+					includeWorkers: kind === "archive",
+				},
+			],
+			120_000,
+		),
+	);
+	if (!out) throw new Error("Download produced no file.");
+	return { serverPath: out.path, clientFilename: out.clientFilename ?? "session-download" };
 }
 
 /** Fetch one fleet-proxied file and save it; verifies bytes before any success signal. */
@@ -270,7 +258,7 @@ async function fetchProxied(
 	return bytes;
 }
 
-async function runDownload(kind: WebDownloadKind, _consent: DownloadConsent): Promise<void> {
+async function runDownload(kind: WebDownloadKind, consent: DownloadConsent): Promise<void> {
 	const daemonId = daemonIdOrThrow();
 	try {
 		if (kind === "text") {
@@ -285,7 +273,7 @@ async function runDownload(kind: WebDownloadKind, _consent: DownloadConsent): Pr
 			return;
 		}
 		setProgress({ phase: "producing" });
-		const produced = await produceServerPath(kind);
+		const produced = await produceServerPath(kind, consent);
 		const bytes = await fetchProxied(daemonId, produced.serverPath, produced.clientFilename);
 		setProgress({ phase: "done", filename: produced.clientFilename, bytes });
 	} catch (err) {

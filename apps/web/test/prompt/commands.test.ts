@@ -205,7 +205,7 @@ describe("Phase 11 web-plus commands", () => {
 		expect(exportDispatch("themes")).toEqual({ useThemes: false });
 	});
 
-	test("/export honors path alongside --themes", () => {
+	test("/export parses a path that exportRoute refuses (downloads save via the browser)", () => {
 		expect(exportRouteArgs("--themes")).toEqual({ useThemes: true });
 		expect(exportRouteArgs("--themes /tmp/out.html")).toEqual({
 			useThemes: true,
@@ -248,10 +248,11 @@ describe("P0.2 argument-aware collision routes", () => {
 		});
 	});
 
-	test("/dump bare/all/unknown", () => {
+	test("/dump bare/all/request/unknown", () => {
 		expect(dumpDispatch("")).toEqual({ kind: "single" });
 		expect(dumpDispatch("all")).toEqual({ kind: "all" });
 		expect(dumpDispatch("ALL")).toEqual({ kind: "all" });
+		expect(dumpDispatch("request")).toEqual({ kind: "request" });
 		expect(dumpDispatch("everything").kind).toBe("usage");
 	});
 

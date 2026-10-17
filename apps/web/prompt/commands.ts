@@ -14,6 +14,7 @@ import {
 	type BashResultLike,
 	type ModalName,
 } from "../state";
+import { downloadArchive, downloadHtml, downloadRequest, downloadText } from "../store/downloads";
 
 export type InputMode = "enter" | "followup";
 
@@ -200,7 +201,7 @@ function compactRoute(args: string): void {
 		.catch(showError);
 }
 
-/** `/export [--themes] [path]`: `--themes` carries the web theme; a path is honored, not ignored. */
+/** `/export [--themes] [path]`: `--themes` carries the web theme; a path is parsed so exportRoute can refuse it. */
 export function exportRouteArgs(args: string): { useThemes: boolean; path?: string } {
 	const { useThemes } = exportDispatch(args);
 	const rest = args
@@ -212,30 +213,32 @@ export function exportRouteArgs(args: string): { useThemes: boolean; path?: stri
 
 function exportRoute(args: string): void {
 	const { useThemes, path } = exportRouteArgs(args);
-	void call("exportHtml", [path, useThemes])
-		.then((result) => {
-			const filePath = (result as { path?: string } | null)?.path;
-			if (filePath) pushNotice("info", `Exported session HTML to ${filePath}`);
-			else pushNotice("info", "Exported session HTML");
-		})
-		.catch(showError);
+	if (path !== undefined) {
+		pushNotice(
+			"error",
+			"/export saves through your browser, so a server path is not accepted. Use /export [--themes].",
+		);
+		return;
+	}
+	downloadHtml({ themed: useThemes });
 }
 
 /**
- * `/dump [all]`: bare downloads the transcript plus the LLM-request sidecar
- * path; `all` requests the bounded server-side zip. Anything else is a usage
- * error, never a silent bare dump.
+ * `/dump [all|request]`: bare downloads the transcript; `all` downloads the
+ * session archive; `request` downloads the LLM-request JSON. Anything else is
+ * a usage error, never a silent bare dump.
  */
 export function dumpDispatch(
 	args: string,
-): { kind: "single" } | { kind: "all" } | { kind: "usage"; message: string } {
+): { kind: "single" } | { kind: "all" } | { kind: "request" } | { kind: "usage"; message: string } {
 	const verb = args.trim().toLowerCase();
 	if (!verb) return { kind: "single" };
 	if (verb === "all") return { kind: "all" };
+	if (verb === "request") return { kind: "request" };
 	return {
 		kind: "usage",
 		message:
-			"Usage: /dump [all] — bare /dump downloads the transcript; /dump all requests the session archive.",
+			"Usage: /dump [all|request]. Bare /dump downloads the transcript; /dump all downloads the session archive; /dump request downloads the LLM request JSON.",
 	};
 }
 
@@ -245,14 +248,9 @@ function dumpRoute(args: string): void {
 		pushNotice("error", d.message);
 		return;
 	}
-	if (d.kind === "all") {
-		pushNotice(
-			"error",
-			"/dump all is not yet available in the browser: the session archive has no download route. Use bare /dump for the transcript.",
-		);
-		return;
-	}
-	dumpSession();
+	if (d.kind === "all") downloadArchive();
+	else if (d.kind === "request") downloadRequest();
+	else downloadText();
 }
 
 /**
@@ -278,37 +276,6 @@ function freshSession(): void {
 	void call("freshSession")
 		.then(() => pushNotice("info", "Fresh session; provider state reset, transcript kept."))
 		.catch(showError);
-}
-
-/** `/dump`: transcript downloads client-side; the LLM-request JSON is written
- *  to a temp file on the machine running the session daemon, and the notice
- *  names that path. */
-function dumpSession(): void {
-	void (async () => {
-		try {
-			const [text, dumpPath] = await Promise.all([
-				call("formatSessionAsText"),
-				call("dumpLlmRequestToTmpDir"),
-			]);
-			if (typeof text === "string" && text) {
-				const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-				const a = document.createElement("a");
-				a.href = url;
-				a.download = "transcript.txt";
-				a.click();
-				URL.revokeObjectURL(url);
-			} else {
-				pushNotice("info", "Transcript is empty, nothing to download.");
-			}
-			if (typeof dumpPath === "string" && dumpPath) {
-				pushNotice("info", `LLM request dump written to ${dumpPath}`);
-			} else {
-				pushNotice("info", "No LLM request dump available yet.");
-			}
-		} catch (err) {
-			showError(err);
-		}
-	})();
 }
 
 /** Bare `/name` opens its dialog; arguments follow the SDK's subcommand grammar, so they are forwarded to the agent verbatim. */

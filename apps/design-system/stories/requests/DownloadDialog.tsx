@@ -1,7 +1,4 @@
-import {
-	DownloadDialog,
-	DownloadKindPicker,
-} from "../../../web/components/requests/DownloadDialog";
+import { DownloadDialog } from "../../../web/components/requests/DownloadDialog";
 import { openDownloadConsent } from "../../../web/store/downloads";
 import { downloadManifest } from "../../fixtures/overlays";
 import { answerCalls } from "../../daemon";
@@ -52,20 +49,6 @@ export default [
 					void openDownloadConsent("text");
 				},
 				render: () => <DownloadDialog />,
-			},
-		],
-	}),
-	defineStory({
-		id: "requests-download-kind-picker",
-		title: "DownloadKindPicker",
-		component: {
-			file: "apps/web/components/requests/DownloadDialog.tsx",
-			export: "DownloadKindPicker",
-		},
-		variants: [
-			{
-				name: "Choose a format",
-				render: () => <DownloadKindPicker />,
 			},
 		],
 	}),
