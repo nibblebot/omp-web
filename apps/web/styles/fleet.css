@@ -93,6 +93,15 @@
 		font-size: var(--fs-md);
 	}
 }
+/* Phones: Add workspace dialog mode tabs and action buttons reach 44px. */
+@media (max-width: 767px) {
+	.worktree-tab,
+	.workspace-source-mode,
+	.worktree-btn,
+	.daemon-row-btn {
+		min-height: 44px;
+	}
+}
 .sidebar-icon-btn {
 	flex: none;
 	background: none;
