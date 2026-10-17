@@ -1,5 +1,6 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { createAgentSession, type ModelRegistry, type Settings } from "@oh-my-pi/pi-coding-agent";
+import { join } from "node:path";
 import {
 	COLLAB_PROMPT_MESSAGE_TYPE,
 	type CollabPromptDetails,
@@ -33,6 +34,7 @@ import { broadcast, broadcastTo, notifyEvent } from "./sse-delivery";
 import { cancelEntryUiRequests } from "./ui-context";
 import { handleSubagentLifecycle, handleSubagentProgress } from "./subagent-mirror";
 import { buildUiContext } from "./ui-context";
+import { ensureWorkerReviver } from "./worker-lifecycle";
 
 // ---------------------------------------------------------------------------
 // Collab session port (Slice C): the daemon's per-session surface the collab
@@ -307,6 +309,14 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		entry.slashRuntime = buildSlashRuntime(entry);
 		// Feeds the tool UI context; without hasUI the ask tool never registers.
 		result.setToolUIContext(buildUiContext(entry), true);
+		// LSP follows the CLI default (main.ts: sessionOptions.enableLsp ?? true); daemon sessions set no override.
+		ensureWorkerReviver(entry, {
+			authStorage: deps.authStorage,
+			modelRegistry: deps.modelRegistry,
+			settings: deps.settings,
+			enableLsp: true,
+			sessionsDir: join(deps.agentDir, "sessions"),
+		});
 		wireSession(entry);
 		installPlanReviewHandler(entry);
 		return entry;

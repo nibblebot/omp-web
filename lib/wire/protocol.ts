@@ -140,6 +140,8 @@ export interface SubagentMessagesResult {
 	sessionFile: string;
 	fromByte: number;
 	nextByte: number;
+	/** True when more transcript bytes follow `nextByte` (page-forward cursor). */
+	hasMore?: boolean;
 	reset: boolean;
 	entries: FileEntry[];
 	messages: AgentMessage[];
@@ -790,7 +792,6 @@ export type WebMethodName =
 	| "workerList"
 	| "workerPark"
 	| "workerRevive"
-	| "workerResume"
 	| "advisorGetStatus"
 	| "advisorConfigure"
 	| "advisorTranscript"

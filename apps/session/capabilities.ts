@@ -42,7 +42,7 @@ const REQUIRED_METHODS = {
 	graph: ["getSessionGraph", "navigateTree", "resumeAfterAskReanswer"],
 	planReview: ["planGet", "planDecide", "planReopen", "planCancel"],
 	todos: ["todoGet", "todoApply", "todoImport", "todoExport"],
-	workerLifecycle: ["workerList", "workerPark", "workerRevive", "workerResume"],
+	workerLifecycle: ["workerList", "workerPark", "workerRevive"],
 	advisor: ["advisorGetStatus", "advisorConfigure", "advisorTranscript"],
 	goals: ["goalCreate", "goalReplace", "goalBudget", "goalPause", "goalResume", "goalDrop"],
 	loops: ["loopPreview", "loopPolicy", "loopStart", "loopPause", "loopCancel", "loopResume"],

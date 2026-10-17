@@ -17,6 +17,7 @@ import {
 } from "../palette/palette";
 import { commandUsage, currentCommandRegistry, dispatchInput } from "../prompt/commands";
 import { attachSession, hasLiveSession, setState, spawnResume, state } from "../state";
+import { openDock } from "./dock";
 import { setPromptInsert } from "./chat";
 import { openModelPicker, recentModels, switchSessionModel } from "./models";
 import { openAddProject } from "./projects";
@@ -117,6 +118,10 @@ export function runPaletteItem(item: PaletteItem): void {
 		case "open":
 			if (action.target === "add-project") {
 				openAddProject();
+				return;
+			}
+			if (action.target === "subagents") {
+				openDock("agents");
 				return;
 			}
 			if (action.target === "workspace")

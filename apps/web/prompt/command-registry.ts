@@ -117,8 +117,8 @@ const BROWSER_UNSUPPORTED: Readonly<Record<string, true>> = { stats: true, trace
 const TUI_ONLY_HINTS: Readonly<Record<string, string>> = {
 	setup: "Use the Settings button.",
 	copy: "Select text in the transcript and copy it.",
-	agents: "Use the Subagents dialog.",
-	hub: "Use the Subagents dialog.",
+	agents: "Use the Agents dock (Alt+A).",
+	hub: "Use the Agents dock (Alt+A).",
 	debug: "Open the Debug sheet from the sidebar header.",
 	extensions: "Use the MCP and Skills dialogs.",
 	collab: "Start or join collaboration from the terminal.",

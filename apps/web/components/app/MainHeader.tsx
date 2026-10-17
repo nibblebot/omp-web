@@ -1,6 +1,8 @@
 import { For, Show, type Component, type JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { featureMainHeader } from "../../features/registry";
+import { subagentCount } from "../../store/subagents";
+import { openDock } from "../../store/dock";
 import { openShareSheet } from "../../store/collab";
 import { setSidebarVisible, setState, setTxSidebarVisible, state } from "../../state";
 import { LayersIcon, PanelLeftIcon, SettingsIcon } from "../ui/icons";
@@ -41,17 +43,17 @@ export const MainHeader: Component<{
 				<For each={featureMainHeader()}>
 					{(slot) => (slot.goalBadge ? <Dynamic component={slot.goalBadge} /> : null)}
 				</For>
-				<Show when={state.subagents.size > 0}>
+				<Show when={subagentCount() > 0}>
 					<button
 						type="button"
 						class="segment segment-button main-header-subagents"
-						onClick={() => setState("modal", "subagents")}
-						title={`${state.subagents.size} subagents`}
-						aria-label={`${state.subagents.size} subagents`}
+						onClick={() => openDock("agents")}
+						title={`${subagentCount()} subagents`}
+						aria-label={`${subagentCount()} subagents`}
 					>
 						<LayersIcon />
 						<span class="main-header-label">subagents</span>
-						<span>{state.subagents.size}</span>
+						<span>{subagentCount()}</span>
 					</button>
 				</Show>
 				<button

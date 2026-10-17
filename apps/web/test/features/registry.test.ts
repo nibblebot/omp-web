@@ -10,7 +10,6 @@ import {
 	featureCommand,
 	featureModal,
 	featureOverlays,
-	featureSubagentTabs,
 	featureView,
 	isFeatureEnabled,
 	setFeatureEnabled,
@@ -104,7 +103,6 @@ describe("feature registry activation", () => {
 		expect(featureModal("goal")).toBeUndefined();
 		expect(featureCommand("goal")).toBeUndefined();
 		expect(featureOverlays()).toEqual([]);
-		expect(featureSubagentTabs()).toEqual([]);
 		expect(analysisFetches).toBe(0);
 	});
 
@@ -125,14 +123,8 @@ describe("feature registry activation", () => {
 		// already activated goals. Static imports share the page-lifetime cache.
 		const registrySpecifier = `../../features/registry.ts?fresh=${crypto.randomUUID()}`;
 		const isolatedRegistry: typeof Registry = await import(registrySpecifier);
-		const {
-			activateFeatures,
-			featureCommand,
-			featureModal,
-			featureOverlays,
-			featureSubagentTabs,
-			isFeatureEnabled,
-		} = isolatedRegistry;
+		const { activateFeatures, featureCommand, featureModal, featureOverlays, isFeatureEnabled } =
+			isolatedRegistry;
 		await activateFeatures(["analysis"]);
 		// The failure is logged for the console (captured: bun prints it)...
 		const logged: string[] = [];
@@ -152,7 +144,6 @@ describe("feature registry activation", () => {
 		expect(featureModal("goal")).toBeUndefined();
 		expect(featureCommand("goal")).toBeUndefined();
 		expect(featureOverlays()).toEqual([]);
-		expect(featureSubagentTabs()).toEqual([]);
 		// ...and it replaced the active set rather than joining it.
 		expect(isFeatureEnabled("analysis")).toBe(false);
 		// The failure is surfaced with the cause, not swallowed.

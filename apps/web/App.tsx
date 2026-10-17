@@ -14,8 +14,8 @@ import {
 	ToolCardsMenu,
 } from "./components/chat";
 import { BackgroundDaemonsBar, FleetSidebar } from "./components/fleet";
-import { BackgroundSubagentsBar } from "./components/subagents";
 import { ModalHost } from "./ModalHost";
+import { openDock } from "./store/dock";
 import {
 	bootAuth,
 	closeDrawers,
@@ -60,7 +60,6 @@ const ChatMode: Component = () => (
 						<Transcript />
 						<QueueBar />
 						<div class="background-bars">
-							<BackgroundSubagentsBar />
 							<BackgroundDaemonsBar />
 						</div>
 						{/* Session-send config bar (per-turn badges, model/thinking/stats), glued to the composer. */}
@@ -132,7 +131,7 @@ export const App: Component = () => {
 			e.preventDefault();
 			setState("modal", "palette");
 		});
-		// Ctrl+, opens Settings; Alt+A opens subagents. Alt+A is skipped while
+		// Ctrl+, opens Settings; Alt+A opens the agents dock. Alt+A is skipped while
 		// typing: on some platforms Alt+letter inserts a character.
 		window.addEventListener("keydown", (e) => {
 			if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === ",") {
@@ -144,7 +143,7 @@ export const App: Component = () => {
 			const target = e.target as HTMLElement | null;
 			if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
 			e.preventDefault();
-			setState("modal", "subagents");
+			openDock("agents");
 		});
 		// Alt+M opens Settings > Model; Alt+P opens the quick model picker.
 		window.addEventListener("keydown", (e) => {

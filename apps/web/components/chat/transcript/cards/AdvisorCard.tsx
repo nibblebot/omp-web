@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, on, Show, type Component } from "solid-js";
 import type { AdvisorItem } from "../../../../store/slices/advisor";
-import { state } from "../../../../state";
+import { setState, state } from "../../../../state";
 import { Card } from "../../../ui/Card";
 
 /** Notes shown while collapsed; matches the TUI advisor card (COLLAPSED_NOTES). */
@@ -39,6 +39,9 @@ export const AdvisorCard: Component<{ item: AdvisorItem }> = (props) => {
 				<Show when={blockers() > 0}>
 					<span class="advisor-blockers"> · {plural(blockers(), "blocker")}</span>
 				</Show>
+				<button class="advisor-open" onClick={() => setState("modal", "advisor")}>
+					Open advisor
+				</button>
 			</div>
 			<For each={shown()}>
 				{(n) => (

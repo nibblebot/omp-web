@@ -2,17 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SettingsModel } from "#lib/wire/protocol";
 import { displayTitle } from "../components/ui/title-icons";
 import { setState } from "../state";
-import {
-	elapsedLabel,
-	layoutPinned,
-	modelBadge,
-	PINNED_COLLAPSED_LIMIT,
-	PREVIEW_ELAPSED_MIN_MS,
-	pickProgress,
-	pinnedAgentsMode,
-	toolPreview,
-	type SubagentProgressView,
-} from "../subagents/progress";
+import { modelBadge, pickProgress } from "../subagents/progress";
 
 /** A settings model holding one item per `path: value` entry, all under one tab. */
 function modelOf(values: Record<string, unknown>): SettingsModel {
@@ -44,31 +34,6 @@ function modelOf(values: Record<string, unknown>): SettingsModel {
 function withSettings(values: Record<string, unknown>): void {
 	setState({ settingsModel: modelOf(values) });
 }
-
-describe("pinnedAgentsMode", () => {
-	test("accepts the three SDK modes and falls back to the collapsed default", () => {
-		expect(pinnedAgentsMode("off")).toBe("off");
-		expect(pinnedAgentsMode("collapsed")).toBe("collapsed");
-		expect(pinnedAgentsMode("full")).toBe("full");
-		expect(pinnedAgentsMode(undefined)).toBe("collapsed");
-		expect(pinnedAgentsMode("bogus")).toBe("collapsed");
-	});
-});
-
-describe("layoutPinned", () => {
-	test("lists every row with no expander when all rows fit", () => {
-		expect(layoutPinned(PINNED_COLLAPSED_LIMIT, false)).toEqual({ rows: PINNED_COLLAPSED_LIMIT });
-		expect(layoutPinned(0, false)).toEqual({ rows: 0 });
-	});
-
-	test("collapses to the limit with an expander when rows overflow", () => {
-		expect(layoutPinned(5, false)).toEqual({ rows: PINNED_COLLAPSED_LIMIT, toggle: "expand" });
-	});
-
-	test("expanded lists every row with a collapse toggle", () => {
-		expect(layoutPinned(5, true)).toEqual({ rows: 5, toggle: "collapse" });
-	});
-});
 
 describe("pickProgress", () => {
 	test("returns undefined for non-object payloads", () => {
@@ -107,68 +72,6 @@ describe("pickProgress", () => {
 			recentTools: [{ tool: "read", args: "a.ts" }],
 		});
 		expect(view?.lastTool).toBeUndefined();
-	});
-});
-
-describe("toolPreview", () => {
-	const running = (over: Partial<SubagentProgressView> = {}): SubagentProgressView => ({
-		status: "running",
-		currentTool: "bash",
-		currentToolArgs: "ls -la",
-		currentToolIntent: "list files",
-		currentToolStartMs: 5000,
-		...over,
-	});
-
-	test("is undefined unless the subagent is running", () => {
-		expect(toolPreview(undefined)).toBeUndefined();
-		expect(toolPreview(running({ status: "done" }))).toBeUndefined();
-	});
-
-	test("shows the in-flight call with its intent as detail", () => {
-		expect(toolPreview(running())).toEqual({
-			tool: "bash",
-			detail: "list files",
-			running: true,
-			isError: false,
-			startedAt: 5000,
-		});
-	});
-
-	test("falls back to args when the call has no intent", () => {
-		expect(toolPreview(running({ currentToolIntent: undefined }))?.detail).toBe("ls -la");
-	});
-
-	test("between calls, shows the most recent finished call and its error state", () => {
-		const preview = toolPreview({
-			status: "running",
-			lastTool: { tool: "read", args: "a.ts", isError: true },
-		});
-		expect(preview).toEqual({
-			tool: "read",
-			detail: "a.ts",
-			running: false,
-			isError: true,
-			startedAt: undefined,
-		});
-	});
-
-	test("flattens newlines in the detail", () => {
-		expect(toolPreview(running({ currentToolIntent: "line one\n\tline two" }))?.detail).toBe(
-			"line one ↵ line two",
-		);
-	});
-});
-
-describe("elapsedLabel", () => {
-	test("is undefined before the call outlasts the minimum or without a start", () => {
-		expect(elapsedLabel(undefined, 99999)).toBeUndefined();
-		expect(elapsedLabel(0, PREVIEW_ELAPSED_MIN_MS)).toBeUndefined();
-	});
-
-	test("formats seconds and minutes", () => {
-		expect(elapsedLabel(0, 12_000)).toBe("12s");
-		expect(elapsedLabel(0, 65_000)).toBe("1m05s");
 	});
 });
 

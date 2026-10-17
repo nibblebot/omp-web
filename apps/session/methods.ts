@@ -39,7 +39,7 @@ import { resolveSessionMainFile, MaterializeSessionError } from "./session-mater
 import os from "node:os";
 import { createDownloadMethods } from "./download-manifest";
 import { createResumeImportHandlers } from "./resume-import-adapter";
-import { listWorkers, parkWorker, resumeWorker, reviveWorker } from "./worker-lifecycle";
+import { listWorkers, parkWorker, reviveWorker } from "./worker-lifecycle";
 import {
 	getAdvisorOverview,
 	getAdvisorStats,
@@ -1065,7 +1065,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		workerList: async (entry) => ({ workers: await listWorkers(entry) }),
 		workerPark: async (entry, a) => parkWorker(entry, String(a[0])),
 		workerRevive: async (entry, a) => reviveWorker(entry, String(a[0])),
-		workerResume: async (entry, a) => resumeWorker(entry, String(a[0])),
 		advisorGetStatus: async (entry, a) => {
 			const section = (a[0] as { section?: string } | undefined)?.section;
 			if (section === "stats") return getAdvisorStats(entry);

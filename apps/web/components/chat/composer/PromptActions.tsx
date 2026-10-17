@@ -4,6 +4,7 @@ import type { ImageArg } from "#lib/wire/protocol";
 import type { TextAttachment } from "../../../prompt/attachments";
 import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
 import { connectionState, isActiveSubagent, isReady, state, stopTurn } from "../../../state";
+import { RunningAgentsButton } from "./RunningAgentsButton";
 
 interface PromptActionsProps {
 	message: () => string;
@@ -68,6 +69,7 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 					Stop, keep subagents
 				</button>
 			</Show>
+			<RunningAgentsButton />
 			{/* R8: subtle "starting…" pill while the boot session's readiness
 			    gate is clearing (the connection strip covers disconnects). Show the
 			    attached session's status instead of the generic phrase. */}

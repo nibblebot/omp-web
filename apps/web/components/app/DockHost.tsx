@@ -3,6 +3,8 @@ import { Dynamic } from "solid-js/web";
 import { DockPane } from "../ui/DockPane";
 import { ReviewPanel } from "../review/ReviewPanel";
 import { SessionTreePanel } from "../sessions/SessionTreePanel";
+import { AgentsPanel } from "../subagents/AgentsPanel";
+import { SubagentPanel } from "../subagents/SubagentPanel";
 import { applyDockWidth, DOCK_MAX_WIDTH, DOCK_MIN_WIDTH } from "../../prefs/dock";
 import { closeDock, setDockWidth } from "../../store/dock";
 import { state } from "../../state";
@@ -16,6 +18,8 @@ interface DockKind {
 const DOCK_KINDS: Record<string, DockKind> = {
 	review: { title: "Git review", body: ReviewPanel },
 	tree: { title: "Session tree", body: SessionTreePanel },
+	agent: { title: "Agent", body: SubagentPanel },
+	agents: { title: "Agents", body: AgentsPanel },
 };
 
 /** Mounts the open dock panel beside the main pane. Unknown kinds render nothing. */

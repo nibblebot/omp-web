@@ -87,7 +87,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 	{
 		id: "advisor",
 		label: "Advisor",
-		description: "Advisor tab in the subagents hub and advisor notes in the transcript.",
+		description: "Advisor notes in the transcript and the advisor sheet.",
 		experimental: true,
 		defaultEnabled: true,
 		commands: [],

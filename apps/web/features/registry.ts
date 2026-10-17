@@ -26,14 +26,6 @@ export interface FeatureCommand {
 	run(args: string): void;
 }
 
-/** One tab in the subagents hub. Lower `rank` renders first; the core Workers tab is 0. */
-export interface SubagentTab {
-	id: string;
-	label: string;
-	rank: number;
-	panel: Component;
-}
-
 /**
  * Typed extension slots a feature may fill. Core code reads slots only through
  * the accessors below, and only while the feature is active; a feature never
@@ -53,8 +45,6 @@ export interface FeatureModule {
 	mainHeader?: { goalBadge?: Component };
 	/** Sidebar header tool buttons, placed by SidebarHeader. */
 	sidebarHeader?: { debugButton?: Component };
-	/** Extra tabs in the subagents hub. */
-	subagentTabs?: readonly SubagentTab[];
 	/** Transcript item renderers keyed by ChatItem kind. */
 	transcriptCards?: {
 		[K in ChatItem["kind"]]?: Component<{ item: Extract<ChatItem, { kind: K }> }>;
@@ -194,13 +184,6 @@ export function featureMainHeader(): NonNullable<FeatureModule["mainHeader"]>[] 
 
 export function featureSidebarHeader(): NonNullable<FeatureModule["sidebarHeader"]>[] {
 	return allActiveModules().flatMap((mod) => (mod.sidebarHeader ? [mod.sidebarHeader] : []));
-}
-
-/** Hub tabs contributed by active features, sorted by rank. */
-export function featureSubagentTabs(): SubagentTab[] {
-	return allActiveModules()
-		.flatMap((mod) => [...(mod.subagentTabs ?? [])])
-		.sort((a, b) => a.rank - b.rank);
 }
 
 /** Transcript renderer for one item kind from an active feature. */

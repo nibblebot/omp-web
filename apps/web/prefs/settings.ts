@@ -133,7 +133,6 @@ const COMMON_GROUPS: { title: string; paths: string[] }[] = [
 			"display.hideToolActivity",
 			"display.showTokenUsage",
 			"display.showTurnTime",
-			"display.pinnedAgents",
 			"compaction.enabled",
 		],
 	},

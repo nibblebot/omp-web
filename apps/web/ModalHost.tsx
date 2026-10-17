@@ -19,7 +19,6 @@ import { DownloadDialog } from "./components/requests/DownloadDialog";
 import { ResumePicker } from "./components/sessions/ResumePicker";
 import { SessionPicker } from "./components/sessions/SessionPicker";
 import { SettingsSheet } from "./components/settings/SettingsSheet";
-import { SubagentsDialog } from "./components/subagents/SubagentsDialog";
 import { ShareSheet } from "./components/collab/ShareSheet";
 import { SessionStatsDialog } from "./components/usage/SessionStatsDialog";
 import { UsageLimitsDialog } from "./components/usage/UsageLimitsDialog";
@@ -66,7 +65,7 @@ export const ModalHost: Component = () => {
 		stats: () => <SessionStatsDialog onClose={close} />,
 		settings: () => <SettingsSheet onClose={close} />,
 		sessions: () => <SessionPicker onClose={close} />,
-		subagents: () => <SubagentsDialog onClose={close} />,
+		advisor: () => featureModalHost("advisor"),
 		login: () => <ProviderLoginDialog onClose={() => setState("modal", "settings")} />,
 		goal: () => featureModalHost("goal"),
 		usage: () => <UsageLimitsDialog onClose={close} />,

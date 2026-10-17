@@ -1,11 +1,17 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { type JSX, onMount } from "solid-js";
-import type { SubagentMessagesResult } from "#lib/wire/protocol";
+import type { SettingsModel, SubagentMessagesResult } from "#lib/wire/protocol";
 import { type SubagentInfo, setState, type state } from "../../web/state";
 import type { AdvisorOverview } from "../../web/store/subagents-advisor";
-import type { WorkerRecord, WorkerStatus, WorkersState } from "../../web/store/subagents";
-import { workerKey } from "../../web/store/subagents";
+import type {
+	SubagentNode,
+	WorkerRecord,
+	WorkerStatus,
+	WorkersState,
+} from "../../web/store/subagents";
+import { subagentForest, workerKey } from "../../web/store/subagents";
+import { flattenSubagentTree } from "../../web/subagents/tree";
 import { answerCalls, type CallHandlers } from "../daemon";
 
 /** Subagent fixtures for the session `sess_9d2c` on the omp-web repo (base 2026-10-09 10:00 UTC). */
@@ -45,7 +51,6 @@ export interface SubagentFixture extends SubagentInfo {
 	artifactAvailability: "available" | "missing";
 	hasHistory: boolean;
 	revivable: boolean;
-	unread: number;
 }
 
 function usage(input: number, output: number): AssistantMessage["usage"] {
@@ -324,7 +329,6 @@ export const subagentInfos: SubagentFixture[] = [
 		artifactAvailability: "available",
 		hasHistory: true,
 		revivable: false,
-		unread: 0,
 	},
 	{
 		id: "1-FixtureBuilder",
@@ -362,7 +366,6 @@ export const subagentInfos: SubagentFixture[] = [
 		artifactAvailability: "available",
 		hasHistory: true,
 		revivable: false,
-		unread: 2,
 	},
 	{
 		id: "2-ReviewPass",
@@ -382,7 +385,6 @@ export const subagentInfos: SubagentFixture[] = [
 		artifactAvailability: "missing",
 		hasHistory: false,
 		revivable: false,
-		unread: 1,
 	},
 	{
 		id: "3-AdvisorA",
@@ -401,7 +403,6 @@ export const subagentInfos: SubagentFixture[] = [
 		artifactAvailability: "available",
 		hasHistory: true,
 		revivable: false,
-		unread: 0,
 	},
 	{
 		id: "4-DocsSweep",
@@ -421,7 +422,6 @@ export const subagentInfos: SubagentFixture[] = [
 		artifactAvailability: "available",
 		hasHistory: true,
 		revivable: true,
-		unread: 0,
 	},
 	{
 		id: "5-TypesCheck",
@@ -438,7 +438,6 @@ export const subagentInfos: SubagentFixture[] = [
 		artifactAvailability: "available",
 		hasHistory: false,
 		revivable: false,
-		unread: 0,
 	},
 ];
 
@@ -465,7 +464,6 @@ function workerRecord(sub: SubagentFixture): WorkerRecord {
 						contextTokens: sub.contextTokens,
 						contextWindow: sub.contextWindow,
 					},
-		unread: sub.unread,
 		artifactAvailability: sub.artifactAvailability,
 		unavailableReason: sub.unavailableReason,
 		sessionFile: sub.sessionFile ?? null,
@@ -488,9 +486,6 @@ export function workersStateOf(records: WorkerRecord[]): WorkersState {
 	return {
 		records: Object.fromEntries(records.map((record) => [record.key, record])),
 		order: records.map((record) => record.key),
-		activity: {},
-		activityOrder: [],
-		replayGaps: {},
 	};
 }
 
@@ -696,11 +691,6 @@ export function subagentById(id: string): SubagentInfo {
 	return found;
 }
 
-/** Fixture infos for the given ids, in the order given. */
-export function infosFor(...ids: string[]): SubagentInfo[] {
-	return ids.map(subagentById);
-}
-
 /**
  * Installs the subagent call handlers (defaults plus `calls`) and applies `patch` to the store.
  * Variant seeds run after the stage resets the store, so every variant starts from a known state.
@@ -708,4 +698,244 @@ export function infosFor(...ids: string[]): SubagentInfo[] {
 export function seedSubagents(calls: CallHandlers = {}, patch: Partial<typeof state> = {}): void {
 	answerCalls(subagentCalls(calls));
 	setState(patch);
+}
+
+// ---------------------------------------------------------------------------
+// Agent tree: the session forest read by the subagent tree, agents panel,
+// agent pane and running-agents counter. Parent links come from the roster.
+// ---------------------------------------------------------------------------
+
+interface AgentSpec {
+	id: string;
+	parentId?: string;
+	agent: string;
+	description: string;
+	status: WorkerStatus;
+	parentToolCallId: string;
+	startMin?: number;
+	endMin?: number;
+	progress?: Record<string, unknown>;
+}
+
+const SONNET_ID = "anthropic/claude-sonnet-4-5";
+const OPUS_ID = "anthropic/claude-opus-4-1";
+
+/**
+ * Ids reuse the subagent fixtures above so their transcripts load. `1-FixtureBuilder` is a root
+ * with a finished scout, a running advisor, a failed review (which aborted its typecheck child)
+ * and a pending lint pass. `4-DocsSweep` is a parked root.
+ */
+const agentSpecs: AgentSpec[] = [
+	{
+		id: "1-FixtureBuilder",
+		agent: "task",
+		description: "Retry badge on tool cards",
+		status: "running",
+		parentToolCallId: "toolu_01P1",
+		startMin: 2,
+		progress: {
+			tokens: 48_200,
+			cost: 0.412,
+			contextTokens: 82_400,
+			contextWindow: 200_000,
+			durationMs: 548_000,
+			currentTool: "edit",
+			resolvedModelIdentity: SONNET_ID,
+			resolvedThinkingLevel: "high",
+		},
+	},
+	{
+		id: "0-ChatMap",
+		parentId: "1-FixtureBuilder",
+		agent: "explore",
+		description: "Map the chat pipeline",
+		status: "completed",
+		parentToolCallId: "toolu_01P1",
+		startMin: 2.5,
+		endMin: 5,
+		progress: {
+			tokens: 12_400,
+			cost: 0.031,
+			contextTokens: 41_200,
+			contextWindow: 200_000,
+			durationMs: 150_000,
+			resolvedModelIdentity: SONNET_ID,
+		},
+	},
+	{
+		id: "3-AdvisorA",
+		parentId: "1-FixtureBuilder",
+		agent: "advisor",
+		description: "Architecture advisor",
+		status: "running",
+		parentToolCallId: "toolu_01P1",
+		startMin: 3,
+		progress: {
+			tokens: 9_400,
+			cost: 0.052,
+			contextTokens: 31_000,
+			contextWindow: 200_000,
+			durationMs: 420_000,
+			currentTool: "read",
+			resolvedModelIdentity: OPUS_ID,
+			advisor: true,
+		},
+	},
+	{
+		id: "2-ReviewPass",
+		parentId: "1-FixtureBuilder",
+		agent: "review",
+		description: "Review retry badge diff",
+		status: "failed",
+		parentToolCallId: "toolu_01P1",
+		startMin: 5,
+		endMin: 8,
+		progress: {
+			tokens: 21_800,
+			cost: 0.094,
+			contextTokens: 64_000,
+			contextWindow: 200_000,
+			durationMs: 180_000,
+			resolvedModelIdentity: SONNET_ID,
+		},
+	},
+	{
+		id: "5-TypesCheck",
+		parentId: "2-ReviewPass",
+		agent: "task",
+		description: "Typecheck sweep",
+		status: "aborted",
+		parentToolCallId: "toolu_01P1",
+		startMin: 6,
+		endMin: 7.5,
+		progress: { tokens: 3_100, cost: 0.008, durationMs: 90_000 },
+	},
+	{
+		id: "6-LintPass",
+		parentId: "1-FixtureBuilder",
+		agent: "task",
+		description: "Lint changed files",
+		status: "pending",
+		parentToolCallId: "toolu_01P1",
+	},
+	{
+		id: "4-DocsSweep",
+		agent: "task",
+		description: "Docs sweep",
+		status: "parked",
+		parentToolCallId: "toolu_01P4",
+		startMin: 1,
+		endMin: 5,
+		progress: {
+			tokens: 6_400,
+			cost: 0.019,
+			contextTokens: 22_000,
+			contextWindow: 200_000,
+			durationMs: 240_000,
+		},
+	},
+];
+
+function agentInfoOf(spec: AgentSpec, index: number): SubagentInfo {
+	return {
+		id: spec.id,
+		index,
+		agent: spec.agent,
+		description: spec.description,
+		status: spec.status,
+		lastUpdate: at(spec.endMin ?? 11.5),
+		parentToolCallId: spec.parentToolCallId,
+		progress: spec.progress,
+		startedAt: spec.startMin === undefined ? undefined : at(spec.startMin),
+		endedAt: spec.endMin === undefined ? undefined : at(spec.endMin),
+	};
+}
+
+function agentRecordOf(spec: AgentSpec): WorkerRecord {
+	return {
+		id: spec.id,
+		agentId: spec.id,
+		sessionId: SESSION_ID,
+		key: workerKey(SESSION_ID, spec.id),
+		displayName: spec.description,
+		status: spec.status,
+		parentAgentId: spec.parentId,
+		parentToolCallId: spec.parentToolCallId,
+		kind: spec.agent,
+		description: spec.description,
+		progress: spec.progress,
+		artifactAvailability: "available",
+		sessionFile: subFile(spec.id),
+		hasHistory: true,
+		lastActivity: at(spec.endMin ?? 11.5),
+		createdAt: at(spec.startMin ?? 11),
+		adopted: false,
+		revivable: false,
+	};
+}
+
+/** Live subagent mirror entries (`state.subagents`) for the agent tree. */
+export const agentTreeInfos: SubagentInfo[] = agentSpecs.map(agentInfoOf);
+
+/** Roster records for the agent tree; they carry the parent links that nest the rows. */
+export const agentTreeWorkers: WorkerRecord[] = agentSpecs.map(agentRecordOf);
+
+/** Settings the tree row reads: the live tool preview and the resolved-model badge. */
+export const agentSettingsModel: SettingsModel = {
+	revision: 1,
+	target: "current-session",
+	tabs: [
+		{
+			id: "agents",
+			label: "Agents",
+			groups: [
+				{
+					name: "Subagents",
+					items: [
+						{
+							path: "display.subagentLivePreview",
+							label: "Live preview",
+							description: "Show the tool a running agent is using.",
+							type: "boolean",
+							value: true,
+							changed: false,
+						},
+						{
+							path: "task.showResolvedModelBadge",
+							label: "Resolved model badge",
+							description: "Show the model a subagent resolved to.",
+							type: "boolean",
+							value: true,
+							changed: false,
+						},
+					],
+				},
+			],
+		},
+	],
+};
+
+/**
+ * Seeds the attached session with the agent forest, or an empty session with `empty`.
+ * `display` also turns on the live-tool preview and model badge settings the tree row reads.
+ */
+export function seedAgentTree(options: { empty?: boolean; display?: boolean } = {}): void {
+	const workers = options.empty === true ? [] : agentTreeWorkers;
+	const infos = options.empty === true ? [] : agentTreeInfos;
+	seedSubagents(
+		{ workerList: () => workers },
+		{
+			currentSessionId: SESSION_ID,
+			workers: workersStateOf(workers),
+			subagents: subagentMapOf(infos),
+			settingsModel: options.display === true ? agentSettingsModel : null,
+		},
+	);
+}
+
+/** One node of the seeded forest by agent id. Call after `seedAgentTree`. Throws on an unknown id. */
+export function agentNode(id: string): SubagentNode {
+	const found = flattenSubagentTree(subagentForest()).find((node) => node.id === id);
+	if (found === undefined) throw new Error(`unknown agent node ${id}`);
+	return found;
 }

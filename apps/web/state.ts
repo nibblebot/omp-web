@@ -91,7 +91,8 @@ import { createGoalState } from "./store/slices/goals";
 import { createIntegrationState } from "./store/slices/integrations";
 import { createResumeState } from "./store/resume";
 import { createCompactionState } from "./store/compaction";
-import { createWorkersState } from "./store/subagents";
+import { createWorkersState, requestRosterRefresh } from "./store/subagents";
+import { applyLifecycleFrame, applyProgressFrame } from "./store/subagent-frames";
 import {
 	createBrowserUiState,
 	endBrowserUiRequest,
@@ -197,6 +198,10 @@ export interface SubagentInfo {
 	lastUpdate: number;
 	/** toolCallId of the task call that spawned this subagent (SDK payload field). */
 	parentToolCallId?: string;
+	/** Raw SDK AgentProgress record, merged across delta frames (U02 coalescing). */
+	progress?: Record<string, unknown>;
+	startedAt?: number;
+	endedAt?: number;
 }
 
 const ACTIVE_SUBAGENT_STATUSES = new Set(["pending", "started", "running"]);
@@ -222,7 +227,7 @@ export type ModalName =
 	| "stats"
 	| "settings"
 	| "sessions"
-	| "subagents"
+	| "advisor"
 	| "login"
 	| "goal"
 	| "usage"
@@ -1181,6 +1186,9 @@ export function connect(): void {
 					setState("subagents", next);
 				})
 				.catch(() => {});
+			// The worker roster is a separate read model: pull it on attach too, so
+			// parked and idle workers reappear without waiting for a lifecycle frame.
+			requestRosterRefresh();
 			refreshSettings();
 			return;
 		}
@@ -1481,78 +1489,15 @@ export function connect(): void {
 				settleFiles(frame.files);
 				break;
 			case "subagent_lifecycle": {
-				const p = frame.payload as Partial<SubagentInfo> | undefined;
-				if (!p?.id) break;
-				setState("subagents", (prev) => {
-					const next = new Map(prev);
-					const existing = next.get(p.id as string);
-					// Finding #30: progress frames can arrive BEFORE the lifecycle
-					// frame; the progress handler created a `progress-${index}`
-					// placeholder. Migrate it into the real-id entry so the strip
-					// never shows two rows for one subagent, and keep the data the
-					// placeholder accumulated (task, and status when the lifecycle
-					// frame omits it) that this frame doesn't carry.
-					const placeholder = p.index !== undefined ? next.get(`progress-${p.index}`) : undefined;
-					if (placeholder) next.delete(`progress-${p.index}`);
-					next.set(p.id as string, {
-						id: p.id as string,
-						index: p.index ?? existing?.index ?? placeholder?.index ?? -1,
-						agent: p.agent ?? existing?.agent ?? placeholder?.agent ?? "agent",
-						description: p.description ?? existing?.description,
-						task: existing?.task ?? placeholder?.task,
-						status: p.status ?? placeholder?.status ?? "started",
-						lastUpdate: Date.now(),
-						parentToolCallId:
-							p.parentToolCallId ?? existing?.parentToolCallId ?? placeholder?.parentToolCallId,
-					});
-					return next;
-				});
+				const payload = frame.payload;
+				setState("subagents", (prev) => applyLifecycleFrame(prev, payload, Date.now()));
+				// Parked and revivable state lives in the daemon roster: refetch it on lifecycle edges (SUB-10).
+				requestRosterRefresh();
 				break;
 			}
 			case "subagent_progress": {
-				const p = frame.payload as
-					| {
-							index?: number;
-							agent?: string;
-							task?: string;
-							progress?: { id?: string; status?: string; description?: string };
-							parentToolCallId?: string;
-					  }
-					| undefined;
-				if (p?.index === undefined) break;
-				setState("subagents", (prev) => {
-					const next = new Map(prev);
-					// The SDK's AgentProgress carries the subagent id: key on it. `index`
-					// is only unique within one task call, so the index fallback (id-less
-					// payloads) must not cross into another call's subagents.
-					const progressId = typeof p.progress?.id === "string" ? p.progress.id : undefined;
-					const key =
-						progressId ??
-						[...next.keys()].find((k) => {
-							const sub = next.get(k)!;
-							return (
-								sub.index === p.index &&
-								(p.parentToolCallId === undefined ||
-									sub.parentToolCallId === undefined ||
-									sub.parentToolCallId === p.parentToolCallId)
-							);
-						}) ??
-						`progress-${p.index}`;
-					const existing = next.get(key);
-					// Replace, never mutate: rows are keyed by object identity, so an
-					// in-place edit would leave the rendered status/task stale.
-					next.set(key, {
-						id: key,
-						index: existing?.index ?? (p.index as number),
-						agent: p.agent ?? existing?.agent ?? "agent",
-						description: p.progress?.description ?? existing?.description,
-						task: p.task ?? existing?.task,
-						status: p.progress?.status ?? existing?.status ?? "started",
-						lastUpdate: Date.now(),
-						parentToolCallId: p.parentToolCallId ?? existing?.parentToolCallId,
-					});
-					return next;
-				});
+				const payload = frame.payload;
+				setState("subagents", (prev) => applyProgressFrame(prev, payload, Date.now()));
 				break;
 			}
 			case "subagent_event":
