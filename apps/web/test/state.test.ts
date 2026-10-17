@@ -864,6 +864,30 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		expect(state.settingsModel).toBeNull();
 	});
 
+	test("a revision-conflict 409 on /ctl/settings/set refetches the settings model so the next write is current", async () => {
+		setState({
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
+		const requests = stubFetch((url) => {
+			if (url === "/ctl/settings/set") {
+				return { status: 409, body: { error: "Settings changed; refresh before editing." } };
+			}
+			return { status: 200, body: model };
+		});
+
+		expect(await updateSetting("advisor.enabled", true)).toBe(false);
+		await settle();
+
+		expect(requests.map((r) => `${r.method} ${r.url}`)).toEqual([
+			"POST /ctl/settings/set",
+			"GET /ctl/settings",
+		]);
+		expect(state.settingsModel).toBe(model);
+	});
+
 	test("a non-ok /ctl/settings response surfaces the server error and leaves the model null", async () => {
 		setState({
 			currentSessionId: "",

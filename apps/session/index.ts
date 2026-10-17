@@ -1,7 +1,7 @@
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { discoverAuthStorage, ModelRegistry, Settings } from "@oh-my-pi/pi-coding-agent";
+import { discoverAuthStorage, ModelRegistry } from "@oh-my-pi/pi-coding-agent";
 import {
 	cfgCollabAutoStart,
 	cfgCollabDisplayName,
@@ -106,6 +106,7 @@ import { flushAllWriters } from "./writer-flush";
 import { setOnFrameTap, setOnHistoryTap } from "./sse-delivery";
 import { settingWriteReloadsHistory, transcriptHistoryFrames } from "./transcript-history";
 import { initSdkTuiGlobals } from "./sdk-tui-globals";
+import { initSettings } from "./settings-boot";
 
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
@@ -157,7 +158,7 @@ const agentDir = getAgentDir();
 const sessionsDir = path.join(agentDir, "sessions");
 const authStorage = await discoverAuthStorage(agentDir);
 const modelRegistry = new ModelRegistry(authStorage);
-const settings = await Settings.init({ cwd: config.cwd, agentDir });
+const settings = await initSettings({ cwd: config.cwd, agentDir });
 
 /** Set once the boot session's provider/model/auth resolution completes (R8). */
 let readyAt: number | null = null;

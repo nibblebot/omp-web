@@ -42,7 +42,8 @@ export default defineStory({
 		},
 		{
 			name: "Roles, locked models",
-			description: "Models without credentials are disabled in every role select, with the reason.",
+			description:
+				"Models without credentials are disabled in every role's model list, with the reason.",
 			seed: () => {
 				seedRoles("global");
 				answerCalls({ getModelBrowser: () => lockedBrowser });

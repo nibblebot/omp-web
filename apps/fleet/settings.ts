@@ -71,7 +71,10 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 				} catch {
 					// Not yet initialized in this process (no daemon/session
 					// has run): boot the singleton against the agent dir.
-					return Settings.init({ agentDir: getAgentDir() });
+					const settings = await Settings.init({ agentDir: getAgentDir() });
+					// Edits to config.yml made by daemons or by hand must reach this view; the SDK CLI starts the same watch.
+					settings.startWatching();
+					return settings;
 				}
 			})();
 		}

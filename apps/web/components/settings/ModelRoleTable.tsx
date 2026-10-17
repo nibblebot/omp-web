@@ -1,38 +1,26 @@
-import { createMemo, createResource, createSignal, For, Show, type Component } from "solid-js";
-import type { ModelBrowserEntry, ModelRoleCatalogEntry } from "#lib/wire/protocol";
+import { createResource, createSignal, For, Show, type Component } from "solid-js";
+import type { ModelRoleCatalogEntry } from "#lib/wire/protocol";
 import { state } from "../../state";
 import { loadModelBrowser, setModelRoleAssignment, setModelRoleHidden } from "../../store/models";
-import { lockMessage } from "../../usage/model-search";
 import { ChevronDownIcon } from "../ui/icons";
+import { RoleModelPicker } from "./RoleModelPicker";
 
 const selectorOf = (entry: ModelRoleCatalogEntry): string =>
 	entry.provider && entry.id ? `${entry.provider}/${entry.id}` : "";
 
-/** Available models grouped by provider, in first-seen provider order. */
-const groupByProvider = (
-	models: readonly ModelBrowserEntry[],
-): Array<[string, ModelBrowserEntry[]]> => {
-	const groups = new Map<string, ModelBrowserEntry[]>();
-	for (const model of models) {
-		const list = groups.get(model.provider) ?? [];
-		list.push(model);
-		groups.set(model.provider, list);
-	}
-	return [...groups.entries()];
-};
-
 /**
  * Role table for Settings > Model: one row per known role (built-in and
  * custom) with its assigned model, thinking suffix and persistence layer.
- * Each edit goes through the store, which writes config.yml and reports any
- * failure as a notice; a failed select is put back to the stored value.
+ * The model opens the composer's searchable picker inline; the thinking level
+ * stays a select. Each edit goes through the store, which writes config.yml and
+ * reports any failure as a notice.
  */
 export const ModelRoleTable: Component = () => {
 	const [busy, setBusy] = createSignal<string | undefined>();
-	const groups = createMemo(() => groupByProvider(state.modelBrowser));
-	// Options come from the same getModelBrowser list the quick picker reads. Settings
-	// never opens the picker, so the table loads it itself and waits for it: a select
-	// must never open with only "Clear (inherit)".
+	const [openRole, setOpenRole] = createSignal<string | undefined>();
+	// The picker's list comes from the same getModelBrowser list the composer reads.
+	// Settings never opens the composer picker, so the table loads it itself and
+	// waits for it before showing rows.
 	const [browser] = createResource(loadModelBrowser);
 
 	const run = async (role: string, action: () => Promise<boolean>): Promise<boolean> => {
@@ -42,17 +30,6 @@ export const ModelRoleTable: Component = () => {
 		} finally {
 			setBusy(undefined);
 		}
-	};
-
-	const pickModel = async (
-		entry: ModelRoleCatalogEntry,
-		select: HTMLSelectElement,
-	): Promise<void> => {
-		const selector = select.value;
-		const ok = await run(entry.role, () =>
-			setModelRoleAssignment(entry.role, selector || undefined),
-		);
-		if (!ok) select.value = selectorOf(entry);
 	};
 
 	const pickThinking = async (
@@ -96,54 +73,21 @@ export const ModelRoleTable: Component = () => {
 												</Show>
 											</th>
 											<td>
-												<span class="settings-roles-value">
-													{selectorOf(entry) || "inherits default"}
-												</span>
-												<span class="settings-select">
-													<select
-														aria-label={`Model for role ${entry.name}`}
-														disabled={busy() !== undefined}
-														onChange={(e) => void pickModel(entry, e.currentTarget)}
-													>
-														<option value="" selected={!selectorOf(entry)}>
-															Clear (inherit)
-														</option>
-														<Show
-															when={
-																selectorOf(entry) &&
-																!state.modelBrowser.some(
-																	(m) => `${m.provider}/${m.id}` === selectorOf(entry),
-																)
-															}
-														>
-															<option value={selectorOf(entry)} selected>
-																{selectorOf(entry)}
-															</option>
-														</Show>
-														<For each={groups()}>
-															{([provider, models]) => (
-																<optgroup label={provider}>
-																	<For each={models}>
-																		{(model) => (
-																			<option
-																				value={`${model.provider}/${model.id}`}
-																				disabled={model.locked !== undefined}
-																				selected={
-																					`${model.provider}/${model.id}` === selectorOf(entry)
-																				}
-																			>
-																				{model.locked
-																					? `${model.id} (${lockMessage(model.locked, model.provider)})`
-																					: model.id}
-																			</option>
-																		)}
-																	</For>
-																</optgroup>
-															)}
-														</For>
-													</select>
-													<ChevronDownIcon class="settings-select-chevron" />
-												</span>
+												<RoleModelPicker
+													role={entry.role}
+													name={entry.name}
+													selector={selectorOf(entry) || undefined}
+													open={openRole() === entry.role}
+													disabled={busy() !== undefined}
+													onOpen={() => setOpenRole(entry.role)}
+													onClose={() => setOpenRole(undefined)}
+													onPick={(selector) =>
+														run(entry.role, () => setModelRoleAssignment(entry.role, selector))
+													}
+													onClear={() =>
+														run(entry.role, () => setModelRoleAssignment(entry.role, undefined))
+													}
+												/>
 											</td>
 											<td>
 												<span class="settings-roles-value">{entry.thinkingLevel ?? "inherit"}</span>

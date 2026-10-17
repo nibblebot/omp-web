@@ -152,6 +152,8 @@ function writeSetting(
 				.catch((err) => {
 					if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
 						reportError(err);
+						// A rejected write (a revision conflict, for one) leaves this page's model stale; resync so the next write is current.
+						refreshSettings();
 					}
 					return false;
 				});

@@ -19,7 +19,10 @@ export default [
 	defineStory({
 		id: "models-model-picker",
 		title: "ModelPicker",
-		component: { file: "apps/web/components/models/ModelPicker.tsx", export: "ModelPicker" },
+		component: [
+			{ file: "apps/web/components/models/ModelPicker.tsx", export: "ModelPicker" },
+			{ file: "apps/web/components/models/ModelSearchList.tsx", export: "ModelSearchList" },
+		],
 		tabs: true,
 		seed: {
 			currentSessionId: "sess_09a41c",

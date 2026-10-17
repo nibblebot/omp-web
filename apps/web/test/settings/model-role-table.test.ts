@@ -76,7 +76,7 @@ async function renderTable(): Promise<string> {
 	}
 }
 
-describe("Settings > Model role selects", () => {
+describe("Settings > Model role rows", () => {
 	test("the role table loads the model browser the quick picker reads", async () => {
 		await renderTable();
 		expect(posted.filter((c) => c.type === "call" && c.method === "getModelBrowser")).toHaveLength(
@@ -84,13 +84,11 @@ describe("Settings > Model role selects", () => {
 		);
 	});
 
-	test("every role select lists the models; locked ones are disabled with their reason", async () => {
+	test("each role shows its model on a picker button, not a native select of every model", async () => {
 		const html = await renderTable();
-		const advisor = html.slice(html.indexOf('aria-label="Model for role Advisor"'));
-		expect(advisor).toMatch(/<option[^>]*value="opencode-go\/deepseek-v4\.1-flash"/);
-		expect(advisor).toMatch(/<option[^>]*value="moonshot\/kimi-k3"[^>]*disabled[^>]*>/);
-		expect(advisor).toMatch(/<option[^>]*value="openai\/gpt-x"[^>]*disabled[^>]*>/);
-		expect(html.match(/No credentials for moonshot\. Run \/login\./g)).toHaveLength(2);
-		expect(html.match(/is disabled\./g)).toHaveLength(2);
+		expect(html).toContain('aria-label="Model for role Advisor"');
+		expect(html).toContain('aria-label="Model for role Default"');
+		expect(html).not.toContain('<select aria-label="Model for role');
+		expect(html).not.toContain('<option value="moonshot/kimi-k3"');
 	});
 });
