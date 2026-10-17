@@ -2,7 +2,8 @@ import { Show, type Component } from "solid-js";
 import { dispatchInput, type InputMode } from "../../../prompt/commands";
 import type { ImageArg } from "#lib/wire/protocol";
 import type { TextAttachment } from "../../../prompt/attachments";
-import { isActiveSubagent, isReady, state, stopTurn } from "../../../state";
+import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
+import { connectionState, isActiveSubagent, isReady, state, stopTurn } from "../../../state";
 
 interface PromptActionsProps {
 	message: () => string;
@@ -18,6 +19,9 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 	// While the composer is gated (readyAt cleared on session switch, re-armed
 	// by the proxied ready frame), hint the attached session's status instead
 	// of the generic "starting…".
+	const paused = () => connectionState() !== "connected";
+	const pausedTitle = () => (paused() ? PAUSED_TOOLTIP[connectionState()] : undefined);
+
 	const rosterHint = () => {
 		const daemon = state.daemonRoster.find((x) => x.daemonId === state.currentSessionId);
 		if (!daemon) return "no workspace attached, pick one in the sidebar";
@@ -27,7 +31,12 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 
 	return (
 		<div class="prompt-actions">
-			<button class="new-session" onClick={() => dispatchInput("/new", undefined, "enter")}>
+			<button
+				class="new-session"
+				onClick={() => dispatchInput("/new", undefined, "enter")}
+				disabled={paused()}
+				title={pausedTitle()}
+			>
 				New session
 			</button>
 			{props.onDiscard &&
@@ -43,7 +52,8 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 			{state.streaming && (
 				<button
 					class="stop"
-					title="Stop the turn and its subagents"
+					disabled={paused()}
+					title={pausedTitle() ?? "Stop the turn and its subagents"}
 					onClick={() => void stopTurn()}
 				>
 					Stop
@@ -59,7 +69,7 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 				</button>
 			</Show>
 			{/* R8: subtle "starting…" pill while the boot session's readiness
-			    gate is clearing (disconnect already has its own pill). Show the
+			    gate is clearing (the connection strip covers disconnects). Show the
 			    attached session's status instead of the generic phrase. */}
 			<Show when={state.connected && !isReady()}>
 				<span
@@ -73,14 +83,15 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 				class="send"
 				onClick={() => props.submit("enter")}
 				disabled={
+					paused() ||
 					!isReady() ||
 					(!props.message().trim() &&
 						props.images().length === 0 &&
 						!props.files().some((f) => f.text !== undefined))
 				}
 				title={
-					!state.connected
-						? "Not connected"
+					paused()
+						? PAUSED_TOOLTIP[connectionState()]
 						: !isReady()
 							? "The attached session is not ready yet…"
 							: undefined

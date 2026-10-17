@@ -53,15 +53,8 @@
 		flex: 1 1 0;
 	}
 }
-.disconnected-pill {
-	background: var(--error-border);
-	color: var(--error-text);
-	border-radius: var(--r-pill);
-	padding: var(--space-1) var(--space-4);
-	white-space: nowrap;
-}
 /* R8 omp-session readiness: subtle "starting…" hint in the composer while the boot
-   session's gate is still clearing (neutral counterpart to disconnected-pill). */
+   session's gate is still clearing (neutral counterpart to the connection bar). */
 .ready-pill {
 	background: var(--panel);
 	border: 1px solid var(--border);

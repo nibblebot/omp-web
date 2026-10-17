@@ -26,6 +26,7 @@ import {
 	attachSession,
 	call,
 	closeDrawers,
+	connectionState,
 	openDaemonDetails,
 	removeDaemonById,
 	requestDaemonSessions,
@@ -37,8 +38,10 @@ import {
 	state,
 	stopDaemonById,
 } from "../../../state";
+import { formatTimeAgo } from "../../../text/time-ago";
+import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
 import { projectLabelFromCwd, sessionStatus, type SessionRow } from "../../../store/session-list";
-import { reportError } from "../../../store/toasts";
+import { pushToast, reportError } from "../../../store/toasts";
 import { isUserStopped } from "../../../store/user-stopped";
 import { SessionPickerRow } from "../../sessions/SessionPickerRow";
 import { ConfirmButton } from "../../ui/ConfirmButton";
@@ -148,6 +151,7 @@ export const WorkspaceRow: Component<{
 	inProjectGroup?: boolean;
 }> = (props) => {
 	const d = () => props.daemon as RosterEntry;
+	const paused = () => connectionState() !== "connected";
 
 	// Per-row id-scoped reads: the module signals (menuOpenId/activatingIds)
 	// change on ANY row's interaction, so a plain read would re-render every
@@ -314,6 +318,10 @@ export const WorkspaceRow: Component<{
 		// title click stops propagation, so this never fights the trigger).
 		setSessionsOpenId(null);
 		const daemon = d();
+		if (paused()) {
+			pushToast(PAUSED_TOOLTIP[connectionState()]);
+			return;
+		}
 		if (daemon.status === "ready") {
 			// Already the attached session: clicking its card is a no-op (a
 			// redundant attach round-trip would also reset the chat view).
@@ -442,7 +450,12 @@ export const WorkspaceRow: Component<{
 									type="button"
 									role="menuitem"
 									class="sidebar-menu-item"
-									title="Starts the clone workspace (checkout and session logs are preserved)"
+									title={
+										paused()
+											? PAUSED_TOOLTIP[connectionState()]
+											: "Starts the clone workspace (checkout and session logs are preserved)"
+									}
+									disabled={paused()}
 									onClick={() => {
 										setMenuOpenId(null);
 										spawnResume(d().daemonId);
@@ -473,7 +486,12 @@ export const WorkspaceRow: Component<{
 									type="button"
 									role="menuitem"
 									class="sidebar-menu-item"
-									title="Interrupts the running turn; the workspace keeps running"
+									title={
+										paused()
+											? PAUSED_TOOLTIP[connectionState()]
+											: "Interrupts the running turn; the workspace keeps running"
+									}
+									disabled={paused()}
 									onClick={() => {
 										setMenuOpenId(null);
 										void call("abort").catch(reportError);
@@ -516,7 +534,12 @@ export const WorkspaceRow: Component<{
 									type="button"
 									role="menuitem"
 									class="sidebar-menu-item sidebar-menu-item--danger"
-									title="Verified delete: refuses active work, verifies the fleet transcript store, then removes compute, storage, and the checkout"
+									title={
+										paused()
+											? PAUSED_TOOLTIP[connectionState()]
+											: "Verified delete: refuses active work, verifies the fleet transcript store, then removes compute, storage, and the checkout"
+									}
+									disabled={paused()}
 									onClick={() => {
 										setMenuOpenId(null);
 										setState("deleteWorkspaceTarget", d().daemonId);
@@ -538,10 +561,13 @@ export const WorkspaceRow: Component<{
 									type="button"
 									class="daemon-row-action"
 									data-action={a().kind}
+									disabled={paused()}
 									title={
-										a().kind === "start"
-											? "Start the session process"
-											: "Restart the session process"
+										paused()
+											? PAUSED_TOOLTIP[connectionState()]
+											: a().kind === "start"
+												? "Start the session process"
+												: "Restart the session process"
 									}
 									aria-label={`${a().label} ${workspaceName(d())}`}
 									onClick={(e) => {
@@ -654,7 +680,12 @@ export const WorkspaceRow: Component<{
 									<button
 										type="button"
 										class="daemon-stage-retry"
-										title="Retry the workspace start (backend admission applies)"
+										title={
+											paused()
+												? PAUSED_TOOLTIP[connectionState()]
+												: "Retry the workspace start (backend admission applies)"
+										}
+										disabled={paused()}
 										onClick={(e) => {
 											e.stopPropagation();
 											spawnResume(d().daemonId);

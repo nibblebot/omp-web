@@ -3,7 +3,7 @@ import { Dynamic } from "solid-js/web";
 import { featureMainHeader } from "../../features/registry";
 import { openShareSheet } from "../../store/collab";
 import { setSidebarVisible, setState, setTxSidebarVisible, state } from "../../state";
-import { LayersIcon, PanelLeftIcon, SettingsIcon, WarningIcon } from "../ui/icons";
+import { LayersIcon, PanelLeftIcon, SettingsIcon } from "../ui/icons";
 
 /**
  * Main pane header, shared by Chat (live session and the no-session pane) and
@@ -70,12 +70,6 @@ export const MainHeader: Component<{
 							: "Share"}
 					</span>
 				</button>
-			</Show>
-			<Show when={!state.connected}>
-				<span class="disconnected-pill" role="status" aria-label="disconnected">
-					<WarningIcon />
-					<span class="main-header-label">disconnected</span>
-				</span>
 			</Show>
 			<button
 				type="button"

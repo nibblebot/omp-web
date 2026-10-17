@@ -1,5 +1,6 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show, type Component } from "solid-js";
 import { Dynamic } from "solid-js/web";
+import { ConnectionBar } from "./components/app/ConnectionBar";
 import { MainHeader } from "./components/app/MainHeader";
 import { NoActiveSessionPane } from "./components/app/NoActiveSessionPane";
 import { DockHost } from "./components/app/DockHost";
@@ -54,6 +55,7 @@ const ChatMode: Component = () => (
 			fallback={
 				<div class="main-pane">
 					<MainHeader title={<SessionTitle />} actions={<ToolCardsMenu />} session />
+					<ConnectionBar />
 					<main class="app-main">
 						<Transcript />
 						<QueueBar />
@@ -73,6 +75,7 @@ const ChatMode: Component = () => (
 		>
 			<div class="main-pane">
 				<MainHeader />
+				<ConnectionBar />
 				<main class="app-main">
 					<NoActiveSessionPane />
 				</main>

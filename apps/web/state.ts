@@ -79,6 +79,7 @@ import {
 	rejectPendingAttach,
 	rejectPendingCalls,
 	rejectPendingDaemons,
+	retryNotAttachedCalls,
 	setConnected,
 	setTransportToken,
 	settleAttachResult,
@@ -509,6 +510,12 @@ export const [state, setState] = createStore({
 	// Delay (ms) of the next scheduled manual reconnect; 0 = stream open (no
 	// retry pending). Mirrors the module-level backoff ladder for the panel.
 	reconnectDelay: 0,
+	// The attached daemon id whose session process went down (the view was
+	// cleared by reconcileAttachedSession); "" when nothing is down.
+	sessionDownId: "",
+	// True once the attached daemon has stayed "reconnecting" past the grace
+	// window: a routine renewal or brief re-dial never shows the strip.
+	attachedReconnecting: false,
 	// Phase 11: desktop notifications on turn completion while hidden
 	// (persisted toggle; firing is gated on Notification support + permission).
 	notifyEnabled:
@@ -923,6 +930,40 @@ export function isDaemonDead(entry: DaemonEntry | undefined): boolean {
 	return entry === undefined || DEAD_DAEMON_STATUSES.has(entry.status);
 }
 
+/** Transport state for the header strip and the session-bound action gate:
+ *  the /events stream is up (connected); the stream is retrying, or the
+ *  attached daemon is re-dialing (reconnecting); the attached session process
+ *  is gone (offline). Session-bound actions run only when connected. */
+export type ConnectionState = "connected" | "reconnecting" | "offline";
+
+export function connectionState(): ConnectionState {
+	if (!state.connected) return "reconnecting";
+	if (state.sessionDownId !== "") return "offline";
+	if (state.attachedReconnecting) return "reconnecting";
+	return "connected";
+}
+
+/** Re-dials shorter than this never reach the strip: a renewal is routine. */
+const RECONNECT_GRACE_MS = 1500;
+let reconnectGraceTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Track the attached daemon's "reconnecting" status through the grace window. */
+function syncAttachedReconnecting(): void {
+	const current = state.daemonRoster.find((d) => d.daemonId === state.currentSessionId);
+	if (current?.status !== "reconnecting") {
+		clearTimeout(reconnectGraceTimer);
+		reconnectGraceTimer = undefined;
+		if (state.attachedReconnecting) setState("attachedReconnecting", false);
+		return;
+	}
+	if (state.attachedReconnecting || reconnectGraceTimer !== undefined) return;
+	reconnectGraceTimer = setTimeout(() => {
+		reconnectGraceTimer = undefined;
+		const still = state.daemonRoster.find((d) => d.daemonId === state.currentSessionId);
+		if (still?.status === "reconnecting") setState("attachedReconnecting", true);
+	}, RECONNECT_GRACE_MS);
+}
+
 /** True when this tab has a live attached session to render. The attached
  *  roster entry must exist and not be dead; a daemon with an attach in
  *  flight counts as live (the roster lags a wake). */
@@ -982,6 +1023,10 @@ function resetSessionView(): void {
  *  as "asleep" in lagging roster frames right after wake-attach; the entry and
  *  in-flight state are re-checked against the POST-frame roster here. */
 function reconcileAttachedSession(): void {
+	syncAttachedReconnecting();
+	const downId = state.sessionDownId;
+	if (downId !== "" && !isDaemonDead(state.daemonRoster.find((d) => d.daemonId === downId)))
+		setState("sessionDownId", "");
 	const id = state.currentSessionId;
 	if (id === "") return;
 	if (pendingAttachTarget() === id) return;
@@ -994,6 +1039,7 @@ function reconcileAttachedSession(): void {
 		setState("readyAt", undefined);
 		return;
 	}
+	setState("sessionDownId", id);
 	setState("currentSessionId", "");
 	setState("readyAt", undefined);
 	resetSessionView();
@@ -1088,6 +1134,7 @@ export function connect(): void {
 			const prevSessionId = state.currentSessionId;
 			const prevStreaming = state.streaming;
 			setState("currentSessionId", frame.sessionId);
+			setState("sessionDownId", "");
 			if (prevSessionId !== "" && prevSessionId !== frame.sessionId && prevStreaming)
 				markUnread(prevSessionId);
 			clearUnread(frame.sessionId);
@@ -1123,6 +1170,9 @@ export function connect(): void {
 			// Subagent mirror is per-session; pull on EVERY attach (first attach,
 			// switch, roster re-attach after reconnect). Calls are answered only
 			// once attached, so this is the earliest safe point.
+			// Calls parked on "not attached" while the tab was detached go out again
+			// now, under their own ids (see retryNotAttachedCalls in store/transport).
+			retryNotAttachedCalls();
 			void call("getSubagents")
 				.then((subs) => {
 					const next = new Map<string, SubagentInfo>();

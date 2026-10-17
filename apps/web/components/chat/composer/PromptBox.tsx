@@ -3,7 +3,15 @@ import { dispatchInput, parseInput, type InputMode } from "../../../prompt/comma
 import { PromptHistory } from "../../../prompt/history";
 import type { ImageArg } from "#lib/wire/protocol";
 import { composeTextAttachments, type TextAttachment } from "../../../prompt/attachments";
-import { dequeueLastQueued, isReady, pushNotice, pushToast, state, stopTurn } from "../../../state";
+import {
+	connectionState,
+	dequeueLastQueued,
+	isReady,
+	pushNotice,
+	pushToast,
+	state,
+	stopTurn,
+} from "../../../state";
 import {
 	cancelScheduledDraftSave,
 	clearDraft,
@@ -14,6 +22,7 @@ import {
 	takeClearedDraft,
 	type DraftBody,
 } from "../../../store/drafts";
+import { reportError } from "../../../store/toasts";
 import { openDock } from "../../../store/dock";
 import { AskBar } from "../../requests/AskBar";
 import { ExtensionUi } from "../../requests/ExtensionUi";
@@ -43,8 +52,16 @@ export const PromptBox: Component = () => {
 
 	const submit = (mode: InputMode) => {
 		// R8 readiness gate: the send button is disabled and Enter is suppressed
-		// until the server broadcasts `ready` (boot session's gate cleared).
-		if (!isReady()) return;
+		// until the server broadcasts `ready` (boot session's gate cleared), and
+		// while the transport is down (the connection strip explains why).
+		if (connectionState() !== "connected") {
+			reportError(new Error("Message not sent: the connection is down. Retry once it reconnects."));
+			return;
+		}
+		if (!isReady()) {
+			reportError(new Error("Message not sent: the attached session is not ready yet."));
+			return;
+		}
 		const text = message().trim();
 		const imgs = images();
 		const attached = files().filter((f) => f.text !== undefined);

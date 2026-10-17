@@ -244,6 +244,14 @@ export const HEARTBEAT_INTERVAL_MS = 15_000;
 export const SILENCE_DEADLINE_MS = 30_000;
 /** Pair credential renewal interval (5 min). */
 export const PAIR_RENEWAL_MS = 5 * 60_000;
+/**
+ * Up-leg lifetime byte budget (64 MiB). The fleet's Bun.serve counts a
+ * streaming request body against `maxRequestBodySize` (default 128 MiB) for
+ * the WHOLE life of the POST, so the long-lived /callback/up upload dies
+ * (413) once it has carried that many bytes. The daemon renews the pair
+ * voluntarily before then; half the platform default leaves headroom.
+ */
+export const UP_RENEWAL_BYTES = 64 * 1024 * 1024;
 /** Wait for the daemon's pair-ready confirmation (60 s). */
 export const PAIR_READY_TIMEOUT_MS = 60_000;
 /** Wait for a parked/suspended daemon to wake (60 s). */

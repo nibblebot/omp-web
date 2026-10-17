@@ -42,6 +42,7 @@ import {
 	CALLBACK_UP_PATH,
 	encodeNdjsonLine,
 	parseSseEnvelope,
+	CONNECTION_MAX_BYTES,
 	SILENCE_DEADLINE_MS,
 	STREAM_MAX_BYTES,
 	type CallbackEnvelope,
@@ -339,7 +340,7 @@ function clockedRegistry(): {
 }
 
 describe("daemon transport controlled pairs", () => {
-	test("either-half close: up-end alone keeps delivering; a full redial resumes the ring without duplicate acceptance", async () => {
+	test("up-end closes the pair's down leg; a late send fails typed; a full redial resumes the ring", async () => {
 		const fixture = serve(new DaemonTransportRegistry());
 		const ws = "ws-half-close";
 		const gen = 1;
@@ -360,22 +361,27 @@ describe("daemon transport controlled pairs", () => {
 			});
 			await waitFor(() => down.seen().find((e) => e.seq === c1.seq), 2000, "c1 delivery");
 
-			// The daemon ends ONLY its upload leg (clean close). The fleet does
-			// not invalidate: the down delivery path stays live and a new
-			// command still flows at a fresh seq.
-			expect((await up.end()).status).toBe(200);
-			expect(fixture.registry.pairStatus(ws).paired).toBe(true);
+			// A second command rides the down ring before the daemon ends its upload leg.
 			const c2 = await fixture.registry.sendToDaemon(ws, {
 				streamId: "control",
 				kind: "command",
 				payload: { type: "do", id: "c2" },
 			});
 			expect(c2.seq).toBeGreaterThan(c1.seq);
-			await waitFor(
-				() => down.seen().find((e) => e.seq === c2.seq),
-				2000,
-				"c2 delivery after up-end",
-			);
+			await waitFor(() => down.seen().find((e) => e.seq === c2.seq), 2000, "c2 delivery");
+
+			// The daemon ends ONLY its upload leg: a renewal. The fleet closes the
+			// pair's down leg once it has read the whole up leg, so a send after that
+			// fails typed ("unavailable") rather than riding a dead leg.
+			expect((await up.end()).status).toBe(200);
+			expect(fixture.registry.pairStatus(ws).paired).toBe(false);
+			await expect(
+				fixture.registry.sendToDaemon(ws, {
+					streamId: "control",
+					kind: "command",
+					payload: { type: "do", id: "late" },
+				}),
+			).rejects.toMatchObject({ code: "unavailable" });
 
 			// The daemon then loses the DOWN half and redials BOTH halves on
 			// the same connectionId (renewal). The pre-drop commands replay
@@ -400,6 +406,41 @@ describe("daemon transport controlled pairs", () => {
 			expect(c3.seq).toBeGreaterThan(c2.seq);
 			await waitFor(() => down2.seen().find((e) => e.seq === c3.seq), 2000, "c3 delivery");
 			expect((await up2.end()).status).toBe(200);
+		} finally {
+			fixture.stop();
+		}
+	});
+
+	test("a long-lived up leg keeps accepting envelopes past CONNECTION_MAX_BYTES of cumulative traffic", async () => {
+		const fixture = serve(new DaemonTransportRegistry());
+		const ws = "ws-up-lifetime";
+		const gen = 1;
+		const connId = randomUUID();
+		const cred = randomBytes(32).toString("hex");
+		fixture.registry.enrollWorkspace(ws, gen, cred);
+		try {
+			const up = openUp(fixture, ws, gen, connId, cred);
+			const down = await openDown(fixture, ws, gen, connId, cred);
+			await waitFor(() => down.seen().find(pairReady), 2000, "pair_ready");
+			const delivered: CallbackEnvelope[] = [];
+			fixture.registry.attachVirtualStream(ws, "stream/settings", {
+				async deliver(e: CallbackEnvelope): Promise<void> {
+					delivered.push(e);
+				},
+			});
+			// Settings-model-sized answers (~200 KB each), consumed as they arrive:
+			// the cap bounds buffered bytes, never the leg's lifetime total.
+			const frames = Math.ceil((CONNECTION_MAX_BYTES * 1.5) / 200_000);
+			for (let i = 0; i < frames; i++) {
+				up.push("stream/settings", "frame", { type: "call_result", blob: "x".repeat(200_000), i });
+				if (i % 8 === 7)
+					await waitFor(() => (delivered.length > i ? true : undefined), 4000, `frame ${i}`);
+			}
+			await waitFor(() => (delivered.length === frames ? true : undefined), 4000, "all frames");
+			expect(fixture.registry.pairStatus(ws).paired).toBe(true);
+			const ended = await up.end();
+			expect(ended.status).toBe(200);
+			expect(ended.body).toMatchObject({ ok: true, received: frames });
 		} finally {
 			fixture.stop();
 		}

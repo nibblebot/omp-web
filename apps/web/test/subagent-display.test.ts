@@ -77,16 +77,13 @@ describe("pickProgress", () => {
 		expect(pickProgress(null)).toBeUndefined();
 	});
 
-	test("keeps the rendered fields and only the most recent tool", () => {
+	test("keeps the rendered fields and the newest tool only", () => {
 		const view = pickProgress({
 			status: "running",
 			currentTool: "bash",
 			currentToolArgs: "ls",
 			currentToolStartMs: 1000,
-			recentTools: [
-				{ tool: "read", args: "a.ts", isError: true },
-				{ tool: "grep", args: "x" },
-			],
+			lastTool: { tool: "read", args: "a.ts", isError: true },
 			resolvedModel: "anthropic/claude-sonnet-5-5",
 			resolvedThinkingLevel: "high",
 			advisor: true,
@@ -94,11 +91,22 @@ describe("pickProgress", () => {
 		expect(view?.status).toBe("running");
 		expect(view?.currentTool).toBe("bash");
 		expect(view?.currentToolStartMs).toBe(1000);
-		expect(view?.recentTools).toEqual([
-			{ tool: "read", args: "a.ts", intent: undefined, isError: true },
-		]);
+		expect(view?.lastTool).toEqual({
+			tool: "read",
+			args: "a.ts",
+			intent: undefined,
+			isError: true,
+		});
 		expect(view?.resolvedThinkingLevel).toBe("high");
 		expect(view?.advisor).toBe(true);
+	});
+
+	test("ignores a bulk recentTools array the daemon no longer sends", () => {
+		const view = pickProgress({
+			status: "running",
+			recentTools: [{ tool: "read", args: "a.ts" }],
+		});
+		expect(view?.lastTool).toBeUndefined();
 	});
 });
 
@@ -134,7 +142,7 @@ describe("toolPreview", () => {
 	test("between calls, shows the most recent finished call and its error state", () => {
 		const preview = toolPreview({
 			status: "running",
-			recentTools: [{ tool: "read", args: "a.ts", isError: true }],
+			lastTool: { tool: "read", args: "a.ts", isError: true },
 		});
 		expect(preview).toEqual({
 			tool: "read",

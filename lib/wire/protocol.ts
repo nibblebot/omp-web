@@ -452,12 +452,16 @@ export const SSE_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
  * re-dispatched), and a browser recovering a lost answer re-POSTs every 5s for
  * the whole window, so id memory has to cover a window of real traffic rather
  * than a handful of commands: evicting a live id early would let the replay
- * execute the command twice. Recorded answers can be large, so their own cap
- * stays small; an evicted answer degrades a replay to "accepted, no answer"
- * (the caller's deadline settles it) and never to a re-execution.
+ * execute the command twice. Recorded answers are kept under a count cap AND a
+ * byte budget: a browser re-POSTs after 5s, so an answer must survive that
+ * replay window at the burst rate (a settings write answers with the whole
+ * model, so a count alone evicts the answers the replays are waiting for). An
+ * evicted answer degrades a replay to "accepted, no answer" (the caller's
+ * deadline settles it) and never to a re-execution.
  */
 export const COMMAND_DEDUP_WINDOW_MS = 60_000;
-export const COMMAND_DEDUP_ANSWER_CAP = 64;
+export const COMMAND_DEDUP_ANSWER_CAP = 256;
+export const COMMAND_DEDUP_ANSWER_BYTES = 32 * 1024 * 1024;
 export const COMMAND_DEDUP_ID_CAP = 4_096;
 
 /** Prefix of the `OMP_SESSION|` stdout contract lines (R6b). */
@@ -947,6 +951,72 @@ export type CollabWireStatus =
 			maxGuests: number;
 	  }
 	| { state: "error"; error: string };
+
+/** The most recent finished tool call of a subagent (replaces the SDK's `recentTools` bulk). */
+export interface SubagentLastTool {
+	tool: string;
+	args?: string;
+	intent?: string;
+	isError?: boolean;
+}
+
+/**
+ * The slice of the SDK's `AgentProgress` that rides the wire: status, the
+ * current/last tool, per-agent metrics (U04 renders these), and the resolved
+ * model. The SDK's bulk `recentOutput` / `recentTools` arrays never leave the
+ * daemon; `lastTool` is the one entry the web reads.
+ */
+export interface SubagentProgressFields {
+	id: string;
+	status: "pending" | "running" | "completed" | "failed" | "aborted";
+	description?: string;
+	lastIntent?: string;
+	currentTool?: string;
+	currentToolArgs?: string;
+	currentToolIntent?: string;
+	currentToolStartMs?: number;
+	lastTool?: SubagentLastTool;
+	/** Run time so far, ms. */
+	durationMs?: number;
+	toolCount?: number;
+	requests?: number;
+	/** Cumulative input + output + cacheWrite tokens (the SDK's definition; excludes cacheRead). */
+	tokens?: number;
+	contextTokens?: number;
+	contextWindow?: number;
+	/** Cumulative cost in USD. */
+	cost?: number;
+	completionPercent?: number;
+	resolvedModel?: string;
+	resolvedModelIdentity?: string;
+	resolvedThinkingLevel?: string;
+	resolvedModelIsFallback?: boolean;
+	advisor?: boolean;
+}
+
+/**
+ * `subagent_progress` payload. The daemon sends at most one per agent per
+ * second. The first frame of an agent is full (`task`/`assignment` included);
+ * every later frame has `delta: true` and `progress` carries `id` plus only the
+ * fields that changed since the previous frame. An absent field is unchanged;
+ * `null` means the field was cleared. A client merges deltas over the last
+ * state it holds. The `getSubagents` rows carry the merged state as a baseline
+ * for a client that attached mid-run.
+ */
+export type SubagentProgressDelta = { id: string } & {
+	[K in Exclude<keyof SubagentProgressFields, "id">]?: SubagentProgressFields[K] | null;
+};
+
+export interface SubagentProgressFrame {
+	index: number;
+	agent: string;
+	task?: string;
+	assignment?: string;
+	parentToolCallId?: string;
+	sessionFile?: string;
+	delta?: true;
+	progress: SubagentProgressDelta;
+}
 
 /**
  * Session-scoped frames as the server composes them, before broadcastTo

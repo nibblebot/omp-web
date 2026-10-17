@@ -17,8 +17,9 @@ import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createPersistedSubagentReviverFactory } from "@oh-my-pi/pi-coding-agent/task/persisted-revive";
+import type { SubagentProgressFields } from "#lib/wire/protocol";
 import type { SessionEntry } from "./session-entry";
-import type { SubagentSnapshot } from "./subagent-mirror";
+import { projectProgress } from "./subagent-progress";
 
 export type WorkerLifecycleStatus =
 	| "running"
@@ -45,7 +46,7 @@ export interface WorkerRecord {
 	task?: string;
 	assignment?: string;
 	description?: string;
-	progress?: SubagentSnapshot["progress"];
+	progress?: SubagentProgressFields;
 }
 export interface WorkerReviverDeps {
 	authStorage: AuthStorage;
@@ -207,7 +208,7 @@ export async function listWorkers(entry: SessionEntry): Promise<WorkerRecord[]> 
 			task: snap?.task,
 			assignment: snap?.assignment,
 			description: snap?.description,
-			progress: snap?.progress,
+			progress: snap?.progress === undefined ? undefined : projectProgress(snap.progress),
 			sessionFile,
 			hasHistory,
 			lastActivity: registered?.lastActivity ?? snap?.lastUpdate ?? 0,

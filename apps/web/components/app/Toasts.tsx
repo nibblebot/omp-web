@@ -1,12 +1,14 @@
 import { For, Show, type Component } from "solid-js";
-import { dismissToast, setState, state } from "../../state";
+import { connectionState, dismissToast, setState, state } from "../../state";
 import { XIcon } from "../ui/icons";
 
 /**
  * App-scoped notification stack: ephemeral notices from state.toasts
  * (auto-dismissing, role="status") plus the current state.error as a sticky
  * error toast (role="alert") that stays until dismissed or replaced by the
- * next error. Always mounted; reads state reactively and holds no shared
+ * next error. The sticky error is held while the connection strip reports an
+ * outage (ConnectionBar owns that message). Always mounted; reads state
+ * reactively and holds no shared
  * data of its own. Each toast is its own live region, so the container needs
  * no extra aria-live.
  */
@@ -41,7 +43,7 @@ export const Toasts: Component = () => (
 				</div>
 			)}
 		</For>
-		<Show when={state.error}>
+		<Show when={connectionState() === "connected" ? state.error : null}>
 			{(error) => (
 				<div class="toast toast-error" role="alert">
 					<span class="toast-text">{error()}</span>

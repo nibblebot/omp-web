@@ -54,6 +54,10 @@ function makeHarness(
 	snapshot: () => Record<string, unknown>[] = () => [],
 	pairLive: () => boolean = () => true,
 	onBrowserStreamsChange: (count: number) => void = () => {},
+	bufferedBytes: () => { stream: number; connection: number } = () => ({
+		stream: 0,
+		connection: 0,
+	}),
 ): {
 	control: DaemonControl;
 	sent: Sent[];
@@ -100,7 +104,7 @@ function makeHarness(
 			primes.push("prime");
 			return snapshot;
 		},
-		bufferedBytes: () => ({ stream: 0, connection: 0 }),
+		bufferedBytes,
 		send,
 		pairLive,
 		mainSessionFile: null,
@@ -368,4 +372,38 @@ describe("daemon-control browser-stream count (FLEET-05)", () => {
 		control.stop();
 		expect(counts).toEqual([1, 2, 1, 0, 0]);
 	});
+});
+
+test("a live backlog past the ring budget mid-prime abandons the prime with one stream_resync", async () => {
+	// Pins the held-overflow trigger: a prime still waiting for outbound room
+	// holds live frames; past RING_MAX_BYTES it is abandoned with stream_resync
+	// and the client re-primes. When live output outruns the prime, this repeats:
+	// the stream_reset + hello_ok cycle.
+	let jammed = true;
+	const built = Promise.withResolvers<void>();
+	const { control, sent, primes } = makeHarness(
+		() => {
+			// build() runs only after the prime has set its deferred backlog.
+			built.resolve();
+			return [{ type: "state", state: {} }];
+		},
+		() => true,
+		() => {},
+		() =>
+			jammed ? { stream: Number.MAX_SAFE_INTEGER, connection: 0 } : { stream: 0, connection: 0 },
+	);
+	openStream(control);
+	await built.promise;
+	const blob = "x".repeat(1024 * 1024);
+	for (let i = 0; i < 5; i++) control.mirror({ type: "event", event: { i, blob } });
+	const resyncs = sent.filter(
+		(s) => s.streamId === STREAM && s.kind === "control" && typeOf(s.payload) === "stream_resync",
+	);
+	expect(resyncs).toHaveLength(1);
+	// The abandoned prime never writes its snapshot, and nothing re-primes
+	// without the client's reconnect.
+	expect(sent.some((s) => s.streamId === STREAM && typeOf(s.payload) === "state")).toBe(false);
+	expect(primes).toHaveLength(1);
+	jammed = false;
+	control.stop();
 });

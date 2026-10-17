@@ -97,6 +97,9 @@ export function postCommand(cmd: ClientCommand): Promise<void> {
  */
 const CALL_REPLAY_INTERVAL_MS = 5_000;
 
+/** Edge answer for a call it could not forward: no pipe, so no session ran it. */
+const NOT_ATTACHED = "not attached";
+
 /** One pending call: its answer settles it, its own command recovers it. */
 interface PendingCall {
 	resolve: (data: unknown) => void;
@@ -109,6 +112,8 @@ interface PendingCall {
 	cmd: Extract<ClientCommand, { type: "call" }>;
 	/** When the original POST went out: the at-most-once bound for replays. */
 	firstPostAt: number;
+	/** The edge answered NOT_ATTACHED: parked. The replay timer keeps re-POSTing it under the same id; an attach re-sends it at once. */
+	awaitingAttach: boolean;
 }
 
 export const pendingCalls = new Map<string, PendingCall>();
@@ -126,6 +131,17 @@ function clearCallTimers(pending: PendingCall): void {
 export function settleCallResult(frame: Extract<ServerFrame, { type: "call_result" }>): void {
 	const pending = pendingCalls.get(frame.id);
 	if (!pending) return; // unknown id (timed out or stale): ignore
+	// The command never reached a session, so the same id is safe to re-send.
+	// Park the call: its replay timer keeps re-POSTing under the same id (never
+	// past the dedup window), and an attach re-sends it at once.
+	if (
+		!frame.ok &&
+		frame.error === NOT_ATTACHED &&
+		Date.now() - pending.firstPostAt <= COMMAND_DEDUP_WINDOW_MS
+	) {
+		pending.awaitingAttach = true;
+		return;
+	}
 	pendingCalls.delete(frame.id);
 	clearCallTimers(pending);
 	if (frame.ok) pending.resolve(frame.data);
@@ -136,13 +152,22 @@ export function settleCallResult(frame: Extract<ServerFrame, { type: "call_resul
 function scheduleCallReplay(id: string): void {
 	const pending = pendingCalls.get(id);
 	if (!pending) return;
+	// One chain per call: re-arming replaces any timer already armed.
+	clearTimeout(pending.replayTimer);
 	pending.replayTimer = window.setTimeout(() => {
 		const current = pendingCalls.get(id);
 		if (!current) return;
 		current.replayTimer = 0;
 		// At-most-once bound: past the dedup window the daemon no longer
 		// remembers the id, so a re-POST could EXECUTE the command again.
-		if (Date.now() - current.firstPostAt > COMMAND_DEDUP_WINDOW_MS) return;
+		if (Date.now() - current.firstPostAt > COMMAND_DEDUP_WINDOW_MS) {
+			if (current.awaitingAttach) {
+				pendingCalls.delete(id);
+				clearCallTimers(current);
+				current.reject(new Error(NOT_ATTACHED));
+			}
+			return;
+		}
 		// A failed replay is not fatal: the call keeps its own deadline, and
 		// the next tick re-POSTs again (the daemon replays its answer).
 		void postCommand(current.cmd).catch(() => {});
@@ -155,6 +180,32 @@ export function rejectPendingCalls(err: Error): void {
 		clearCallTimers(p);
 		p.reject(err);
 		pendingCalls.delete(id);
+	}
+}
+
+/**
+ * Re-send each call the edge answered NOT_ATTACHED. Runs on every `attached`
+ * frame, so a call parked while the tab was detached goes out again under the
+ * same id (the daemon dedups it and never ran the first copy). A call past
+ * COMMAND_DEDUP_WINDOW_MS fails instead: a re-POST could execute twice.
+ */
+export function retryNotAttachedCalls(): void {
+	for (const [id, pending] of pendingCalls) {
+		if (!pending.awaitingAttach) continue;
+		pending.awaitingAttach = false;
+		if (Date.now() - pending.firstPostAt > COMMAND_DEDUP_WINDOW_MS) {
+			pendingCalls.delete(id);
+			clearCallTimers(pending);
+			pending.reject(new Error(NOT_ATTACHED));
+			continue;
+		}
+		postCommand(pending.cmd).catch((err) => {
+			if (pendingCalls.get(id) !== pending) return;
+			pendingCalls.delete(id);
+			clearCallTimers(pending);
+			pending.reject(err instanceof Error ? err : new Error(String(err)));
+		});
+		scheduleCallReplay(id);
 	}
 }
 
@@ -210,6 +261,7 @@ export function call(
 		replayTimer: 0,
 		cmd,
 		firstPostAt: Date.now(),
+		awaitingAttach: false,
 	});
 	postCommand(cmd).catch((err) => {
 		const pending = pendingCalls.get(id);

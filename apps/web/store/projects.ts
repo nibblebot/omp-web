@@ -9,6 +9,20 @@ import { setState, state } from "../state";
 import { authedFetch } from "./auth";
 import { ctlFetch, isConnected, postCommand } from "./transport";
 import { clearUserStopped, markUserStopped } from "./user-stopped";
+import { pushToast } from "./toasts";
+
+/** A session-bound fleet command is refused while the transport is down. The
+ *  refusal shows as a toast so the click never vanishes silently. */
+function refuseIfDisconnected(): boolean {
+	if (isConnected()) return false;
+	pushToast("Not connected, this action is paused until the connection is back");
+	return true;
+}
+
+/** A command the transport failed to deliver reports instead of being swallowed. */
+function reportCommandFailure(err: unknown): void {
+	pushToast(err instanceof Error ? err.message : String(err));
+}
 
 /**
  * Projects/onboarding domain (Phase 3 store facade split): fleet-edge
@@ -99,14 +113,14 @@ export function listProjectBranches(projectId: string): Promise<ProjectBranch[]>
 /** Spawn a new daemon from a repo/worktree path (validated edge-side; the
  *  resulting entry appears in the roster as it transitions spawning → ready). */
 export function spawnDaemon(cwd: string, template?: string, labels?: string[]): void {
-	if (!isConnected()) return;
+	if (refuseIfDisconnected()) return;
 	void postCommand({
 		type: "spawn",
 		id: crypto.randomUUID(),
 		cwd,
 		...(template !== undefined ? { template } : {}),
 		...(labels !== undefined ? { labels } : {}),
-	} satisfies ClientCommand).catch(() => {});
+	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 /** Open the Add project dialog, prefilled with `path` (an unowned session's folder). */
@@ -117,25 +131,25 @@ export function openAddProject(path?: string): void {
 
 /** Wake an asleep daemon (spawned → respawn --resume; attached/remote → redial). */
 export function spawnResume(daemonId: string): void {
-	if (!isConnected()) return;
+	if (refuseIfDisconnected()) return;
 	clearUserStopped(daemonId);
 	void postCommand({
 		type: "spawn_resume",
 		id: crypto.randomUUID(),
 		daemonId,
-	} satisfies ClientCommand).catch(() => {});
+	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 /** Stop a daemon (spawned → terminate child; attached/remote → drop + asleep).
  *  Marked user-stopped so the attached chat keeps its transcript behind the stopped strip. */
 export function stopDaemonById(daemonId: string): void {
-	if (!isConnected()) return;
+	if (refuseIfDisconnected()) return;
 	markUserStopped(daemonId);
 	void postCommand({
 		type: "stop",
 		id: crypto.randomUUID(),
 		daemonId,
-	} satisfies ClientCommand).catch(() => {});
+	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 /** Daemons whose restart stop is in flight; each is woken once the roster shows it asleep. */
@@ -171,13 +185,13 @@ export function resumeRestartedDaemons(roster: Array<{ daemonId: string; status:
 
 /** Stop a daemon AND evict it from the fleet roster (registry removal). */
 export function removeDaemonById(daemonId: string): void {
-	if (!isConnected()) return;
+	if (refuseIfDisconnected()) return;
 	clearUserStopped(daemonId);
 	void postCommand({
 		type: "remove",
 		id: crypto.randomUUID(),
 		daemonId,
-	} satisfies ClientCommand).catch(() => {});
+	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +214,7 @@ export function sendAddProject(
 	path: string,
 	opts: { start?: boolean; template?: string; labels?: string[] } = {},
 ): void {
-	if (!isConnected()) return;
+	if (refuseIfDisconnected()) return;
 	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	void postCommand({
 		type: "add_project",
@@ -209,18 +223,18 @@ export function sendAddProject(
 		...(opts.start !== undefined ? { start: opts.start } : {}),
 		...(opts.template !== undefined ? { template: opts.template } : {}),
 		...(opts.labels !== undefined ? { labels: opts.labels } : {}),
-	} satisfies ClientCommand).catch(() => {});
+	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 /** Deregister a first-class project; refused edge-side (error frame) while
  *  any daemon references it. */
 export function sendRemoveProject(projectId: string): void {
-	if (!isConnected()) return;
+	if (refuseIfDisconnected()) return;
 	void postCommand({
 		type: "remove_project",
 		id: crypto.randomUUID(),
 		projectId,
-	} satisfies ClientCommand).catch(() => {});
+	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 /** Projects whose referencing session processes are being evicted; each is deregistered
@@ -266,7 +280,7 @@ export function sendCreateWorktree(
 	name: string,
 	opts: { baseRef?: string; existingBranch?: string; start?: boolean } = {},
 ): void {
-	if (!isConnected()) return;
+	if (refuseIfDisconnected()) return;
 	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	void postCommand({
 		type: "create_worktree",
@@ -276,7 +290,7 @@ export function sendCreateWorktree(
 		...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
 		...(opts.existingBranch !== undefined ? { existingBranch: opts.existingBranch } : {}),
 		...(opts.start !== undefined ? { start: opts.start } : {}),
-	} satisfies ClientCommand).catch(() => {});
+	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 /** Create a managed clone workspace of a registered project (P8.1; frozen
@@ -299,7 +313,7 @@ export function sendCreateClone(
 		start?: boolean;
 	},
 ): void {
-	if (!isConnected()) return;
+	if (refuseIfDisconnected()) return;
 	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	void postCommand({
 		type: "create_clone",
@@ -311,7 +325,7 @@ export function sendCreateClone(
 		...(opts.revision !== undefined ? { revision: opts.revision } : {}),
 		...(opts.branch !== undefined ? { branch: opts.branch } : {}),
 		...(opts.start !== undefined ? { start: opts.start } : {}),
-	} satisfies ClientCommand).catch(() => {});
+	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 /** Register an existing discovered worktree of a project and optionally
@@ -321,7 +335,7 @@ export function sendAddExistingWorktree(
 	worktreePath: string,
 	opts: { start?: boolean } = {},
 ): void {
-	if (!isConnected()) return;
+	if (refuseIfDisconnected()) return;
 	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	void postCommand({
 		type: "add_worktree",
@@ -329,31 +343,31 @@ export function sendAddExistingWorktree(
 		projectId,
 		worktreePath,
 		...(opts.start !== undefined ? { start: opts.start } : {}),
-	} satisfies ClientCommand).catch(() => {});
+	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 /** Stop + evict the worktree's daemon and git-remove the linked worktree
  *  (deleteBranch:true also `git branch -d`s it). Clean only; a
  *  refusal surfaces as an error frame. */
 export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: boolean } = {}): void {
-	if (!isConnected()) return;
+	if (refuseIfDisconnected()) return;
 	void postCommand({
 		type: "delete_worktree",
 		id: crypto.randomUUID(),
 		daemonId,
 		...(opts.deleteBranch !== undefined ? { deleteBranch: opts.deleteBranch } : {}),
-	} satisfies ClientCommand).catch(() => {});
+	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 /** Pull guard evidence for the delete-worktree confirm; the answer lands in
  *  state.worktreeDeleteInfo[daemonId] (worktree_delete_info unicast). */
 export function sendWorktreeDeleteInfo(daemonId: string): void {
-	if (!isConnected()) return;
+	if (refuseIfDisconnected()) return;
 	void postCommand({
 		type: "worktree_delete_info",
 		id: crypto.randomUUID(),
 		daemonId,
-	} satisfies ClientCommand).catch(() => {});
+	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 // ---------------------------------------------------------------------------

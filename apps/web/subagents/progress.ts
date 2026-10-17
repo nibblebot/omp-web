@@ -13,7 +13,8 @@ export interface SubagentProgressView {
 	currentToolArgs?: string;
 	currentToolIntent?: string;
 	currentToolStartMs?: number;
-	recentTools?: ReadonlyArray<{ tool: string; args?: string; intent?: string; isError?: boolean }>;
+	/** The newest finished tool call (the daemon's wire projection; no bulk history). */
+	lastTool?: { tool: string; args?: string; intent?: string; isError?: boolean };
 	/** `<provider>/<id>`, suffixed with `:<level>` when the level was set explicitly. */
 	resolvedModel?: string;
 	/** Provider/id including routing, with no thinking suffix. */
@@ -28,23 +29,22 @@ const str = (v: unknown): string | undefined => (typeof v === "string" && v !== 
 export function pickProgress(raw: unknown): SubagentProgressView | undefined {
 	if (typeof raw !== "object" || raw === null) return undefined;
 	const p = raw as Record<string, unknown>;
-	const recent = Array.isArray(p.recentTools)
-		? p.recentTools.slice(0, 1).flatMap((t) => {
-				if (typeof t !== "object" || t === null) return [];
-				const r = t as Record<string, unknown>;
-				const tool = str(r.tool);
-				return tool
-					? [{ tool, args: str(r.args), intent: str(r.intent), isError: r.isError === true }]
-					: [];
-			})
-		: undefined;
+	const last =
+		typeof p.lastTool === "object" && p.lastTool !== null
+			? (p.lastTool as Record<string, unknown>)
+			: undefined;
+	const tool = str(last?.tool);
+	const lastTool =
+		tool === undefined
+			? undefined
+			: { tool, args: str(last?.args), intent: str(last?.intent), isError: last?.isError === true };
 	return {
 		status: str(p.status),
 		currentTool: str(p.currentTool),
 		currentToolArgs: str(p.currentToolArgs),
 		currentToolIntent: str(p.currentToolIntent),
 		currentToolStartMs: typeof p.currentToolStartMs === "number" ? p.currentToolStartMs : undefined,
-		recentTools: recent,
+		lastTool,
 		resolvedModel: str(p.resolvedModel),
 		resolvedModelIdentity: str(p.resolvedModelIdentity),
 		resolvedThinkingLevel: str(p.resolvedThinkingLevel),
@@ -111,7 +111,7 @@ export interface ToolPreview {
 /** The current (or, between calls, most recent) tool call of a running subagent; undefined before its first call. */
 export function toolPreview(progress: SubagentProgressView | undefined): ToolPreview | undefined {
 	if (progress?.status !== "running") return undefined;
-	const recent = progress.recentTools?.[0];
+	const recent = progress.lastTool;
 	const running = progress.currentTool !== undefined;
 	const tool = progress.currentTool ?? recent?.tool;
 	if (!tool) return undefined;

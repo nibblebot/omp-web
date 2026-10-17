@@ -115,10 +115,17 @@
 	gap: var(--space-2);
 	white-space: nowrap;
 }
-.main-header .disconnected-pill {
-	display: inline-flex;
+/* Thin strip under the main header: transport state while not connected.
+   Replaces the old header pill; the sticky error toast collapses into it. */
+.connection-bar {
+	flex: none;
+	display: flex;
 	align-items: center;
 	gap: var(--space-2);
+	padding: var(--space-1) var(--space-4);
+	background: var(--error-bg);
+	border-bottom: 1px solid var(--error-border);
+	color: var(--error-text);
 }
 .main-header .goal-badge {
 	flex: 0 100 auto;
@@ -138,9 +145,6 @@
 	}
 	.main-header-label {
 		display: none;
-	}
-	.main-header .disconnected-pill {
-		padding: var(--space-1) var(--space-3);
 	}
 	.main-header .goal-badge {
 		max-width: 5rem;

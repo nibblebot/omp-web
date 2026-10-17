@@ -18,6 +18,7 @@ import {
 	announce,
 	attachSession,
 	call,
+	connectionState,
 	closeDrawers,
 	connect,
 	daemonsByProject,
@@ -2223,6 +2224,21 @@ describe("attached session reconciliation against roster truth", () => {
 			...extra,
 		};
 	}
+
+	test("a re-dialing attached daemon reaches the strip only after the grace window", () => {
+		vi.useFakeTimers();
+		try {
+			attachAndPrime();
+			dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "reconnecting" })] });
+			expect(connectionState()).toBe("connected");
+			vi.advanceTimersByTime(1_600);
+			expect(connectionState()).toBe("reconnecting");
+			dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
+			expect(connectionState()).toBe("connected");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 
 	/** Connect + attach to a daemon with an empty-transcript prime in place. */
 	function attachAndPrime(): void {

@@ -11,6 +11,7 @@ import type {
 	SubagentProgressPayload,
 } from "@oh-my-pi/pi-coding-agent/task";
 import type { SubagentMessagesResult } from "#lib/wire/protocol";
+import { createProgressCoalescer, type ProgressCoalescer } from "./subagent-progress";
 import type { SessionEntry } from "./session-entry";
 import { broadcastTo } from "./sse-delivery";
 
@@ -109,6 +110,7 @@ export function clearSubagents(entry: SessionEntry): void {
 	}
 	entry.subagentSnapshots.clear();
 	entry.transcriptSessionFilesBySubagentId.clear();
+	progressOf(entry).dropAll();
 	entry.onSubagentsChange?.();
 }
 
@@ -135,7 +137,10 @@ export function handleSubagentLifecycle(
 	if (!existing && payload.status !== "started") return;
 	if (payload.status === "started") {
 		entry.staleSubagentIds.delete(payload.id);
+	} else {
+		progressOf(entry).flush(payload.id);
 	}
+	progressOf(entry).drop(payload.id);
 	const sessionFile = payload.sessionFile ?? existing?.sessionFile;
 	const snapshot: SubagentSnapshot = {
 		id: payload.id,
@@ -185,7 +190,21 @@ export function handleSubagentProgress(
 		parentToolCallId: payload.parentToolCallId ?? existing.parentToolCallId,
 		progress,
 	});
-	broadcastSubagentFrame(entry, "subagent_progress", payload);
+	progressOf(entry).offer(payload);
+}
+
+const coalescers = new WeakMap<SessionEntry, ProgressCoalescer>();
+
+/** The entry's progress coalescer; its frames are broadcast on the entry's session handle. */
+function progressOf(entry: SessionEntry): ProgressCoalescer {
+	let coalescer = coalescers.get(entry);
+	if (coalescer === undefined) {
+		coalescer = createProgressCoalescer({
+			emit: (frame) => broadcastSubagentFrame(entry, "subagent_progress", frame),
+		});
+		coalescers.set(entry, coalescer);
+	}
+	return coalescer;
 }
 
 export function resolveSubagentSessionFile(

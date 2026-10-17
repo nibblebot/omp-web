@@ -23,6 +23,7 @@ import type {
 } from "#lib/wire/protocol";
 import {
 	COMMAND_DEDUP_ANSWER_CAP,
+	COMMAND_DEDUP_ANSWER_BYTES,
 	COMMAND_DEDUP_ID_CAP,
 	COMMAND_DEDUP_WINDOW_MS,
 	OMP_PROTO,
@@ -848,7 +849,12 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 			// error frame here would leave the promise hanging until timeout.
 			// Recorded like any other answer, so a re-POST replay reports the
 			// real dispatch failure instead of a fabricated success.
-			answerCommand(cmd.id, { type: "call_result", id: cmd.id, ok: false, error: String(err) });
+			answerCommand(cmd.id, {
+				type: "call_result",
+				id: cmd.id,
+				ok: false,
+				error: err instanceof Error ? err.message : String(err),
+			});
 		} else {
 			broadcastAnswer({ type: "error", error: String(err) });
 		}
@@ -926,8 +932,20 @@ function r14Authorized(req: Request, srv: Server<undefined>): boolean {
  */
 const commandDedup = new Map<string, number>();
 
-/** Recorded answers by command id, replayed to duplicates (same window as the dedup). */
-const commandAnswers = new Map<string, { frame: ServerFrame; at: number }>();
+/**
+ * Recorded answers by command id, replayed to duplicates (same window as the
+ * dedup). Bounded by count AND approximate serialized bytes (see
+ * COMMAND_DEDUP_ANSWER_BYTES).
+ */
+const commandAnswers = new Map<string, { frame: ServerFrame; at: number; bytes: number }>();
+let commandAnswerBytes = 0;
+
+function forgetAnswer(id: string): void {
+	const entry = commandAnswers.get(id);
+	if (!entry) return;
+	commandAnswerBytes -= entry.bytes;
+	commandAnswers.delete(id);
+}
 
 /** Drop the oldest remembered keys past `cap` (insertion order is age order). */
 function capRemembered<K, V>(map: Map<K, V>, cap: number): void {
@@ -948,10 +966,20 @@ function answerCommand(id: string | undefined, frame: ServerFrame): void {
 	if (typeof id === "string" && id.length > 0) {
 		const now = Date.now();
 		for (const [key, entry] of commandAnswers) {
-			if (now - entry.at > COMMAND_DEDUP_WINDOW_MS) commandAnswers.delete(key);
+			if (now - entry.at > COMMAND_DEDUP_WINDOW_MS) forgetAnswer(key);
 		}
-		commandAnswers.set(id, { frame, at: now });
-		capRemembered(commandAnswers, COMMAND_DEDUP_ANSWER_CAP);
+		forgetAnswer(id);
+		const bytes = JSON.stringify(frame).length;
+		commandAnswers.set(id, { frame, at: now, bytes });
+		commandAnswerBytes += bytes;
+		for (const key of commandAnswers.keys()) {
+			if (
+				commandAnswers.size <= COMMAND_DEDUP_ANSWER_CAP &&
+				commandAnswerBytes <= COMMAND_DEDUP_ANSWER_BYTES
+			)
+				break;
+			forgetAnswer(key);
+		}
 	}
 	broadcastAnswer(frame);
 }

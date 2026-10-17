@@ -15,6 +15,7 @@ import {
 	OMP_CALLBACK_PROTO,
 	PAIR_READY_TIMEOUT_MS,
 	PAIR_RENEWAL_MS,
+	UP_RENEWAL_BYTES,
 	RECONNECT_BACKOFF_MAX_MS,
 	RECONNECT_BACKOFF_MIN_MS,
 	SILENCE_DEADLINE_MS,
@@ -74,6 +75,12 @@ import { isLoopbackHost } from "#lib/platform/hosts";
  *   - Every 5 min the pair is voluntarily renewed (fresh connectionId); down
  *     envelopes are never resumed across a replacement because a fresh
  *     connectionId starts a fresh per-connection seq space.
+ *   - The up POST body counts against the fleet server's request-body limit
+ *     for its whole life (Bun maxRequestBodySize, 128 MiB), so the pair is
+ *     also renewed once the up half has carried UP_RENEWAL_BYTES (64 MiB),
+ *     gracefully (queued bytes drain first; unsent envelopes replay on the
+ *     fresh pair), with no backoff. Sustained load never reaches a drained
+ *     moment, so the renewal cannot wait for one.
  *
  * Outbound envelopes are held in a bounded queue (8 MiB per connection,
  * 4 MiB per virtual stream; the ledger caps). The fleet keeps no offline
@@ -140,6 +147,8 @@ export interface FleetCallbackOptions {
 	silenceMs?: number;
 	/** Pair renewal interval; 0 disables voluntary renewal. */
 	renewalMs?: number;
+	/** Up-leg bytes after which the pair is voluntarily renewed; 0 disables. */
+	upRenewalBytes?: number;
 	readyTimeoutMs?: number;
 	backoffMinMs?: number;
 	backoffMaxMs?: number;
@@ -297,6 +306,12 @@ interface PairHandle {
 	connectionId: string;
 	/** Last assigned up envelope seq (per-connection monotonic). */
 	seq: number;
+	/** Bytes enqueued on this pair's up body (fleet-side lifetime budget). */
+	upBytes: number;
+	/** Settles when the up POST settles (the fleet's end-of-up response or failure). */
+	upSettled: Promise<void>;
+	/** Settles when the down stream ends (the fleet closes it once it has read the up leg). */
+	downSettled: Promise<void>;
 	/** False once torn down / superseded / stopped. */
 	open: boolean;
 	upAbort: AbortController;
@@ -347,6 +362,7 @@ export class FleetCallback {
 	readonly #heartbeatMs: number;
 	readonly #silenceMs: number;
 	readonly #renewalMs: number;
+	readonly #upRenewalBytes: number;
 	readonly #readyTimeoutMs: number;
 	readonly #backoffMinMs: number;
 	readonly #backoffMaxMs: number;
@@ -435,6 +451,7 @@ export class FleetCallback {
 		this.#heartbeatMs = options.heartbeatMs ?? HEARTBEAT_INTERVAL_MS;
 		this.#silenceMs = options.silenceMs ?? SILENCE_DEADLINE_MS;
 		this.#renewalMs = options.renewalMs ?? PAIR_RENEWAL_MS;
+		this.#upRenewalBytes = options.upRenewalBytes ?? UP_RENEWAL_BYTES;
 		this.#readyTimeoutMs = options.readyTimeoutMs ?? PAIR_READY_TIMEOUT_MS;
 		this.#backoffMinMs = options.backoffMinMs ?? RECONNECT_BACKOFF_MIN_MS;
 		this.#backoffMaxMs = options.backoffMaxMs ?? RECONNECT_BACKOFF_MAX_MS;
@@ -770,8 +787,12 @@ export class FleetCallback {
 	 * (the failure was reported; the caller backs off and retries).
 	 */
 	async #establishPair(): Promise<PairHandle | null> {
-		this.#state = "connecting";
-		this.#emitStatus();
+		// A voluntary renewal keeps the state: the callback is still live, and a
+		// connecting flip here would make every renewal look like an outage.
+		if (this.#state !== "ready") {
+			this.#state = "connecting";
+			this.#emitStatus();
+		}
 		const pair = this.#newPair();
 		this.#pair = pair;
 		// Any end while we are still establishing (up settled early, stop(),
@@ -826,6 +847,9 @@ export class FleetCallback {
 		return {
 			connectionId: crypto.randomUUID(),
 			seq: 0,
+			upBytes: 0,
+			upSettled: Promise.resolve(),
+			downSettled: Promise.resolve(),
 			open: true,
 			upAbort: new AbortController(),
 			downAbort: new AbortController(),
@@ -842,8 +866,43 @@ export class FleetCallback {
 	async #livePair(pair: PairHandle): Promise<PairEnd> {
 		this.#armRenewal(pair);
 		const end = await pair.end.promise;
+		if (end.kind === "renewal") await this.#drainUp(pair);
 		this.#teardownPair(pair);
 		return end;
+	}
+
+	/**
+	 * Graceful up end for a renewal: close the body so every queued byte is
+	 * read by the fleet before it answers 200 (end-of-up). Teardown then runs
+	 * only after that answer, so the handover never strands an envelope the
+	 * fleet had not yet read. A fleet that never answers is bounded by the
+	 * silence window; the fallback abort then surfaces as a pair error.
+	 */
+	async #drainUp(pair: PairHandle): Promise<void> {
+		const controller = this.#upController;
+		this.#upController = null;
+		if (controller !== null) {
+			try {
+				controller.close();
+			} catch {
+				// Already closed or errored; the up settle below still resolves.
+			}
+		}
+		const bound = setTimeout(() => pair.upAbort.abort(), this.#silenceMs);
+		try {
+			await pair.upSettled;
+		} finally {
+			clearTimeout(bound);
+		}
+		// The fleet closes the down leg once it has read the whole up leg. Wait for
+		// that end so every command the fleet already wrote on this pair is read
+		// before teardown; a silent leg is bounded the same way.
+		const downBound = setTimeout(() => pair.downAbort.abort(), this.#silenceMs);
+		try {
+			await pair.downSettled;
+		} finally {
+			clearTimeout(downBound);
+		}
 	}
 
 	// ── dialing ───────────────────────────────────────────────────────────────
@@ -871,7 +930,7 @@ export class FleetCallback {
 			body: this.#makeUpBody(pair),
 			duplex: "half",
 		});
-		void fetch(`${this.#base}${CALLBACK_UP_PATH}`, init)
+		pair.upSettled = fetch(`${this.#base}${CALLBACK_UP_PATH}`, init)
 			.then(async (res) => {
 				if (!this.#isCurrent(pair)) {
 					res.body?.cancel().catch(() => {});
@@ -880,6 +939,19 @@ export class FleetCallback {
 				const text = res.ok ? "" : await res.text().catch(() => "");
 				if (res.ok) res.body?.cancel().catch(() => {});
 				const code = res.ok ? "retryable" : refusalCode(res.status, text);
+				if (pair.end.settled) {
+					// Graceful renewal: the fleet answered the drained up leg. A clean 200 is
+					// the expected end; a refusal here is a loss and must be surfaced.
+					if (!res.ok) {
+						this.#reportError(
+							"pair",
+							callbackError(code, `callback up refused during renewal: HTTP ${res.status}`, {
+								detail: text,
+							}),
+						);
+					}
+					return;
+				}
 				this.#finishPair(pair, {
 					kind: "failure",
 					error: callbackError(
@@ -893,6 +965,17 @@ export class FleetCallback {
 			})
 			.catch((cause) => {
 				if (!this.#isCurrent(pair)) return; // intentional teardown abort
+				if (pair.end.settled) {
+					// Renewal drain aborted the up leg (the fleet never answered); surface it.
+					this.#reportError(
+						"pair",
+						callbackError("retryable", "callback up drain aborted", {
+							detail: errMsg(cause),
+							cause,
+						}),
+					);
+					return;
+				}
 				this.#finishPair(pair, {
 					kind: "failure",
 					error: callbackError("retryable", "callback up failed", {
@@ -935,7 +1018,7 @@ export class FleetCallback {
 				return false;
 			}
 			this.#armSilence(pair);
-			void this.#consumeDown(pair, res);
+			pair.downSettled = this.#consumeDown(pair, res);
 			return true;
 		} catch (cause) {
 			if (!this.#isCurrent(pair)) return false;
@@ -1021,7 +1104,11 @@ export class FleetCallback {
 	#pump(): void {
 		const controller = this.#upController;
 		const pair = this.#pair;
-		if (controller === null || pair === null || !pair.open) return;
+		// Hold the backlog until the fleet confirms this pair with pair_ready. The
+		// up POST's headers carry the identity the fleet needs, so ready never waits
+		// on up bytes. Envelopes written to a pair that never becomes ready would be
+		// consumed from the queue and lost with the aborted leg.
+		if (controller === null || pair === null || !pair.open || !pair.readyArrived) return;
 		// Reentrancy guard: controller.enqueue can synchronously trigger the
 		// fetch consumer's read, which fires pull() → #pump() while this loop
 		// is mid-flight. Without the guard both invocations emit the same
@@ -1034,7 +1121,9 @@ export class FleetCallback {
 				const item = this.#pending[this.#pendingHead]!;
 				const emitted = this.#emit(pair, item);
 				const line = encodeNdjsonLine(emitted);
-				controller.enqueue(this.#enc.encode(line));
+				const bytes = this.#enc.encode(line);
+				pair.upBytes += bytes.byteLength;
+				controller.enqueue(bytes);
 				this.#pendingHead++;
 				this.#pendingBytes -= item.bytes;
 				const left = (this.#streamBytes.get(item.streamId) ?? 0) - item.bytes;
@@ -1053,6 +1142,16 @@ export class FleetCallback {
 			}
 		} finally {
 			this.#pumping = false;
+		}
+		// Lifetime up-leg budget (see UP_RENEWAL_BYTES): renew once the up half has
+		// carried its share, whether or not a backlog is queued. Waiting for a
+		// drained moment would let a sustained burst run straight through the
+		// fleet's body cap; unsent items stay in the session queue and go out on
+		// the fresh pair. The renewal itself is graceful (#drainUp): the body
+		// closes after every queued byte and teardown waits for the fleet's
+		// end-of-up answer, so no envelope is stranded behind the abort.
+		if (this.#upRenewalBytes > 0 && pair.upBytes >= this.#upRenewalBytes) {
+			this.#finishPair(pair, { kind: "renewal" });
 		}
 		// Compact the deque occasionally so shift-by-index never degrades.
 		if (this.#pendingHead > 1024 && this.#pendingHead * 2 > this.#pending.length) {
@@ -1211,6 +1310,8 @@ export class FleetCallback {
 		if (pair.readyArrived) return;
 		pair.readyArrived = true;
 		pair.readyWaiter.resolve();
+		// The backlog held for this pair (see #pump) starts flowing now.
+		this.#pump();
 	}
 
 	// ── timers ────────────────────────────────────────────────────────────────

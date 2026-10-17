@@ -15,7 +15,7 @@
  *                                        record boundaries (createNdjsonParser
  *                                        over the raw byte chunks). Bounded:
  *                                        1 MiB per record (validateEnvelope),
- *                                        8 MiB total per connection, seq
+ *                                        no cumulative byte cap (the session renews the pair), seq
  *                                        strictly monotonic (first record
  *                                        seq ≥ 1). The request body is read
  *                                        to completion inside the handler
@@ -694,16 +694,10 @@ export class DaemonTransportRegistry {
 				const { done, value } = await conn.reader.read();
 				if (done) break;
 				conn.lastDataAt = this.#now();
+				// Telemetry only: records are consumed as they arrive, and the parser
+				// bounds the unprocessed remainder to one envelope (ENVELOPE_MAX_BYTES),
+				// so a long-lived upload never buffers toward CONNECTION_MAX_BYTES.
 				conn.bytesIn += value.byteLength;
-				if (conn.bytesIn > CONNECTION_MAX_BYTES) {
-					throw callbackError(
-						"invalid_request",
-						`callback up connection buffered past the ${CONNECTION_MAX_BYTES}-byte connection cap`,
-						{
-							detail: `bytesIn=${conn.bytesIn}`,
-						},
-					);
-				}
 				for (const record of parser.push(value)) this.#acceptUpRecord(conn, record);
 			}
 			for (const record of parser.end()) this.#acceptUpRecord(conn, record);
@@ -713,6 +707,13 @@ export class DaemonTransportRegistry {
 					`callback up connection silent past the ${SILENCE_DEADLINE_MS} ms silence deadline`,
 				);
 			}
+			// Clean end-of-up: the session drained this pair (renewal). Close its down
+			// leg now that the up leg is fully read, so a send the fleet has not yet
+			// written fails typed ("unavailable") rather than riding a leg the session
+			// is about to drop. Bytes already written are read before the close.
+			const down =
+				conn.connectionId === null ? undefined : this.#downConnections.get(conn.connectionId);
+			if (down !== undefined) this.#teardownDown(down);
 			return Response.json({ ok: true, received: conn.envelopes });
 		} catch (error) {
 			if (isCallbackError(error)) return errorResponse(error);

@@ -108,6 +108,7 @@ import {
 	readSubagentTranscript,
 	resolveSubagentSessionFile,
 } from "./subagent-mirror";
+import { projectProgress } from "./subagent-progress";
 import {
 	createGraphModelHandlers,
 	type GraphNavigateOptions,
@@ -911,6 +912,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 					status: snap.status ?? ref?.status,
 					lastUpdate: snap.lastUpdate,
 					sessionFile: snap.sessionFile ?? ref?.sessionFile,
+					progress: snap.progress === undefined ? undefined : projectProgress(snap.progress),
 				};
 			});
 		},
