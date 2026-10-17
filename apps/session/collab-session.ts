@@ -55,14 +55,27 @@ export interface CollabSessionDeps {
 	broker: DaemonBroker;
 }
 
+/** Where a refused prompt goes back to (jx0b): a queued command keeps its place at the head. */
+type PromptOrigin = "queue" | "direct";
+
 export interface CollabSession {
 	createSession(sessionCwd: string): Promise<SessionEntry>;
 	buildCollabPort(entry: SessionEntry): CollabSessionPort;
 	toWireStatus(status: CollabHostStatus | null): CollabWireStatus;
 	liveSubagentSession(entry: SessionEntry, agentId: string, op: "steer" | "abort"): AgentSession;
 	abortSubagent(entry: SessionEntry, agentId: string): Promise<void>;
-	fireAndForgetPrompt(entry: SessionEntry, text: string, images: Images): Promise<void>;
-	runBuiltinSlashCommand(entry: SessionEntry, text: string, images: Images): Promise<boolean>;
+	fireAndForgetPrompt(
+		entry: SessionEntry,
+		text: string,
+		images: Images,
+		origin?: PromptOrigin,
+	): Promise<void>;
+	runBuiltinSlashCommand(
+		entry: SessionEntry,
+		text: string,
+		images: Images,
+		origin?: PromptOrigin,
+	): Promise<boolean>;
 	/** Ends the entry's live room, if any; guests get a bye. Idempotent. */
 	stopRoom(entry: SessionEntry, reason: string): Promise<void>;
 	/** Runs queued slash commands in order; called at turn end and on Resume queue. */
@@ -327,23 +340,48 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 
 	// Fire-and-forget: prompt resolves at turn end, so awaiting it would block
 	// the relay. Failures surface as an error frame; a busy refusal queues instead.
-	async function fireAndForgetPrompt(
+	// A queue-origin prompt resolves once admitted (agent_start) or settled, so the
+	// drain never starts the next command into an admission still in flight.
+	function fireAndForgetPrompt(
 		entry: SessionEntry,
 		text: string,
 		images: Images,
+		origin: PromptOrigin = "direct",
 	): Promise<void> {
-		try {
-			await entry.session.prompt(text, { images });
-		} catch (err) {
-			if (!queueBusyText(entry, text, images, err))
-				broadcast({ type: "error", error: String(err) });
-		}
+		const admitted = Promise.withResolvers<void>();
+		const unsubscribe =
+			origin === "queue"
+				? entry.session.subscribe((event) => {
+						if (event.type !== "agent_start") return;
+						unsubscribe?.();
+						admitted.resolve();
+					})
+				: undefined;
+		const turn = (async () => {
+			try {
+				await entry.session.prompt(text, { images });
+			} catch (err) {
+				if (!queueBusyText(entry, text, images, err, origin))
+					broadcast({ type: "error", error: String(err) });
+			} finally {
+				unsubscribe?.();
+				admitted.resolve();
+			}
+		})();
+		return origin === "queue" ? admitted.promise : turn;
 	}
 
-	/** Queues a prompt the SDK refused as busy (jx0b, CMD-08). The queue holds text only, so attachments keep their error. */
-	function queueBusyText(entry: SessionEntry, text: string, images: Images, err: unknown): boolean {
+	/** Queues a prompt the SDK refused as busy (jx0b, CMD-08). A refused queued command returns to the head, so order holds; attachments keep their error. */
+	function queueBusyText(
+		entry: SessionEntry,
+		text: string,
+		images: Images,
+		err: unknown,
+		origin: PromptOrigin,
+	): boolean {
 		if (!(err instanceof AgentBusyError) || images?.length) return false;
-		entry.queuedCommands.commands.push(text);
+		if (origin === "queue") entry.queuedCommands.commands.unshift(text);
+		else entry.queuedCommands.commands.push(text);
 		void drainCommands(entry);
 		return true;
 	}
@@ -353,11 +391,12 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		entry: SessionEntry,
 		text: string,
 		images: Images,
+		origin: PromptOrigin = "direct",
 	): Promise<boolean> {
 		entry.activeCommand = text.startsWith("/") ? `/${text.slice(1).split(/\s/, 1)[0]}` : null;
 		const builtinResult = await executeAcpBuiltinSlashCommand(text, entry.slashRuntime)
 			.catch((err: unknown) => {
-				if (queueBusyText(entry, text, images, err)) return "queued" as const;
+				if (queueBusyText(entry, text, images, err, origin)) return "queued" as const;
 				throw err;
 			})
 			.finally(() => {
@@ -365,15 +404,19 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			});
 		if (builtinResult === "queued") return true;
 		if (builtinResult === false) return false;
-		if ("prompt" in builtinResult) void fireAndForgetPrompt(entry, builtinResult.prompt, images);
+		if ("prompt" in builtinResult) {
+			const started = fireAndForgetPrompt(entry, builtinResult.prompt, images, origin);
+			if (origin === "queue") await started;
+			else void started;
+		}
 		return true;
 	}
 
-	/** Echoes a queued command as it starts, then runs it like a typed prompt. */
+	/** Echoes a queued command as it starts, then runs it like a typed prompt; resolves once it is admitted or refused. */
 	async function runCommandNow(entry: SessionEntry, text: string): Promise<void> {
 		broadcastTo(entry.handle, { type: "command_echo", text });
-		if (!(await runBuiltinSlashCommand(entry, text, undefined)))
-			void fireAndForgetPrompt(entry, text, undefined);
+		if (!(await runBuiltinSlashCommand(entry, text, undefined, "queue")))
+			await fireAndForgetPrompt(entry, text, undefined, "queue");
 	}
 
 	/** Runs queued slash commands in order while idle and not paused (see command-queue.ts). */

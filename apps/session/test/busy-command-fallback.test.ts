@@ -84,3 +84,42 @@ describe("busy prompt fallback (CMD-08)", () => {
 		expect(entry.queuedCommands.commands).toEqual([]);
 	});
 });
+
+describe("drain race: a refused queued command keeps its place (jx0b)", () => {
+	test("a command refused after the drain saw idle is requeued once, at the head, in order", async () => {
+		const first = Promise.withResolvers<void>();
+		const calls: string[] = [];
+		const listeners = new Set<(event: { type: string }) => void>();
+		const fake = {
+			isStreaming: false,
+			subscribe(listener: (event: { type: string }) => void) {
+				listeners.add(listener);
+				return () => listeners.delete(listener);
+			},
+			prompt(text: string) {
+				calls.push(text);
+				return calls.length === 1 ? first.promise : Promise.resolve();
+			},
+		};
+		const entry = entryWith(fake as unknown as AgentSession);
+		entry.queuedCommands.commands.push("/a", "/b");
+		const deps = collab();
+
+		const drain = deps.drainCommands(entry);
+		// While /a's prompt is still in flight, the user queues /c.
+		entry.queuedCommands.commands.push("/c");
+		// A user turn starts first (agent_start), then /a is refused as busy.
+		fake.isStreaming = true;
+		for (const listener of listeners) listener({ type: "agent_start" });
+		first.reject(new AgentBusyError());
+		await drain;
+
+		expect(calls).toEqual(["/a"]);
+		expect(entry.queuedCommands.commands).toEqual(["/a", "/b", "/c"]);
+
+		fake.isStreaming = false;
+		await deps.drainCommands(entry);
+		expect(calls).toEqual(["/a", "/a", "/b", "/c"]);
+		expect(entry.queuedCommands.commands).toEqual([]);
+	});
+});
