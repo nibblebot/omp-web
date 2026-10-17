@@ -370,7 +370,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			const text = a[0] as string;
 			const images = a[1] as Images;
 			if (await deps.collab.runBuiltinSlashCommand(entry, text, images)) return undefined;
-			deps.collab.fireAndForgetPrompt(entry, text, images);
+			void deps.collab.fireAndForgetPrompt(entry, text, images);
 			return undefined;
 		},
 		steer: (entry, a) => entry.session.steer(a[0] as string, a[1] as Images),
@@ -415,7 +415,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		abortAndPrompt: async (entry, a) => {
 			cancelEntryUiRequests(entry);
 			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
-			deps.collab.fireAndForgetPrompt(entry, a[0] as string, a[1] as Images);
+			void deps.collab.fireAndForgetPrompt(entry, a[0] as string, a[1] as Images);
 		},
 		resumeQueue: async (entry) => {
 			entry.queuedCommands.paused = false;
@@ -459,11 +459,11 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			if (!message) return;
 			if (ref.paused !== undefined) {
 				if (entry.session.isStreaming) await entry.session.steer(message.text, message.images);
-				else deps.collab.fireAndForgetPrompt(entry, message.text, message.images);
+				else void deps.collab.fireAndForgetPrompt(entry, message.text, message.images);
 				return;
 			}
 			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
-			deps.collab.fireAndForgetPrompt(entry, message.text, message.images);
+			void deps.collab.fireAndForgetPrompt(entry, message.text, message.images);
 		},
 		// newSession/clearSession/freshSession/deleteSession land via the lifecycle spread below.
 		switchSession: (entry, a) => changeSession(entry, "switchSession", a[0] as string),

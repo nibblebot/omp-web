@@ -1,3 +1,4 @@
+import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { createAgentSession, type ModelRegistry, type Settings } from "@oh-my-pi/pi-coding-agent";
 import { join } from "node:path";
@@ -60,7 +61,7 @@ export interface CollabSession {
 	toWireStatus(status: CollabHostStatus | null): CollabWireStatus;
 	liveSubagentSession(entry: SessionEntry, agentId: string, op: "steer" | "abort"): AgentSession;
 	abortSubagent(entry: SessionEntry, agentId: string): Promise<void>;
-	fireAndForgetPrompt(entry: SessionEntry, text: string, images: Images): void;
+	fireAndForgetPrompt(entry: SessionEntry, text: string, images: Images): Promise<void>;
 	runBuiltinSlashCommand(entry: SessionEntry, text: string, images: Images): Promise<boolean>;
 	/** Ends the entry's live room, if any; guests get a bye. Idempotent. */
 	stopRoom(entry: SessionEntry, reason: string): Promise<void>;
@@ -325,11 +326,26 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 	}
 
 	// Fire-and-forget: prompt resolves at turn end, so awaiting it would block
-	// the relay. Failures surface as an error frame.
-	function fireAndForgetPrompt(entry: SessionEntry, text: string, images: Images): void {
-		entry.session
-			.prompt(text, { images })
-			.catch((err) => broadcast({ type: "error", error: String(err) }));
+	// the relay. Failures surface as an error frame; a busy refusal queues instead.
+	async function fireAndForgetPrompt(
+		entry: SessionEntry,
+		text: string,
+		images: Images,
+	): Promise<void> {
+		try {
+			await entry.session.prompt(text, { images });
+		} catch (err) {
+			if (!queueBusyText(entry, text, images, err))
+				broadcast({ type: "error", error: String(err) });
+		}
+	}
+
+	/** Queues a prompt the SDK refused as busy (jx0b, CMD-08). The queue holds text only, so attachments keep their error. */
+	function queueBusyText(entry: SessionEntry, text: string, images: Images, err: unknown): boolean {
+		if (!(err instanceof AgentBusyError) || images?.length) return false;
+		entry.queuedCommands.commands.push(text);
+		void drainCommands(entry);
+		return true;
 	}
 
 	/** Runs builtin / commands (/export, /compact, …); returns true when the input was consumed. */
@@ -339,13 +355,17 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		images: Images,
 	): Promise<boolean> {
 		entry.activeCommand = text.startsWith("/") ? `/${text.slice(1).split(/\s/, 1)[0]}` : null;
-		const builtinResult = await executeAcpBuiltinSlashCommand(text, entry.slashRuntime).finally(
-			() => {
+		const builtinResult = await executeAcpBuiltinSlashCommand(text, entry.slashRuntime)
+			.catch((err: unknown) => {
+				if (queueBusyText(entry, text, images, err)) return "queued" as const;
+				throw err;
+			})
+			.finally(() => {
 				entry.activeCommand = null;
-			},
-		);
+			});
+		if (builtinResult === "queued") return true;
 		if (builtinResult === false) return false;
-		if ("prompt" in builtinResult) fireAndForgetPrompt(entry, builtinResult.prompt, images);
+		if ("prompt" in builtinResult) void fireAndForgetPrompt(entry, builtinResult.prompt, images);
 		return true;
 	}
 
@@ -353,7 +373,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 	async function runCommandNow(entry: SessionEntry, text: string): Promise<void> {
 		broadcastTo(entry.handle, { type: "command_echo", text });
 		if (!(await runBuiltinSlashCommand(entry, text, undefined)))
-			fireAndForgetPrompt(entry, text, undefined);
+			void fireAndForgetPrompt(entry, text, undefined);
 	}
 
 	/** Runs queued slash commands in order while idle and not paused (see command-queue.ts). */
