@@ -1,4 +1,4 @@
-import type { SettingsItem, SettingsModel } from "#lib/wire/protocol";
+import type { SettingsItem, SettingsModel, SettingsRevisionAck } from "#lib/wire/protocol";
 import { fleetSettingsActive, setState, state } from "../state";
 import { call } from "./transport";
 import { reportError } from "./toasts";
@@ -24,11 +24,13 @@ export async function ctlError(res: Response): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Settings model (TUI /settings parity). getSettings/setSetting return a
-// fresh authoritative model each time; settings_changed frames keep every
-// tab's settings panel in sync. With no daemon attached the /ctl settings
-// endpoints back the panel instead (config.yml writes apply to new
-// sessions); the session RPC resumes once a session is attached.
+// Settings model (TUI /settings parity). getSettings returns a fresh
+// authoritative model. A session write asks for its revision only (the
+// "revision" reply option): the full model is pushed once on settings_changed
+// to every attached tab, and the write refetches it only if that push is behind
+// the reply. With no daemon attached the /ctl settings endpoints back the panel
+// instead (config.yml writes apply to new sessions); the session RPC resumes
+// once a session is attached.
 // ---------------------------------------------------------------------------
 /** Apply RPC and pushed snapshots without letting older revisions replace newer ones. */
 export function applySettingsModel(model: SettingsModel): void {
@@ -98,6 +100,10 @@ export function refreshSettings(): void {
  */
 let writeQueue: Promise<void> = Promise.resolve();
 
+function isRevisionAck(result: SettingsModel | SettingsRevisionAck): result is SettingsRevisionAck {
+	return !("tabs" in result);
+}
+
 function writeSetting(
 	path: string,
 	value: unknown,
@@ -129,12 +135,17 @@ function writeSetting(
 					})
 				: call(
 						unset ? "unsetSetting" : "setSetting",
-						unset ? [path, revision, layer] : [path, value, revision, layer],
-					).then((model) => model as SettingsModel);
+						unset
+							? [path, revision, layer, "revision"]
+							: [path, value, revision, layer, "revision"],
+					).then((ack) => ack as SettingsRevisionAck);
 			return request
-				.then((model) => {
+				.then((result) => {
 					if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
-						applySettingsModel(model);
+						if (isRevisionAck(result)) {
+							// The daemon emits the pushed model before this reply; if it was lost in transit, refetch.
+							if ((state.settingsModel?.revision ?? -1) < result.revision) refreshSettings();
+						} else applySettingsModel(result);
 					}
 					return true;
 				})

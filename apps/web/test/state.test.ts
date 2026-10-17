@@ -906,13 +906,65 @@ describe("fleet settings fallback (no daemon attached)", () => {
 			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].method).toBe("setSetting");
-		expect(calls[0].args).toEqual(["agent.model", "gpt-5", null, null]);
+		expect(calls[0].args).toEqual(["agent.model", "gpt-5", null, null, "revision"]);
 
 		// Resolve the RPC so no dangling call timer survives the test. The
 		// frame round-trips through JSON, so the model is a clone, not `model`.
 		dispatch(callResult(calls[0].id, model));
 		await settle();
 		expect(state.settingsModel).toEqual(model);
+	});
+
+	test("a revision-reply write applies the pushed model and does not refetch when it arrived", async () => {
+		setState({ currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		const requests = stubFetch(() => ({ status: 200, body: model }));
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState({ currentSessionId: "daemon-a" });
+
+		updateSetting("agent.model", "gpt-5");
+		await settle();
+		const write = requests
+			.filter((r) => r.url === "/command")
+			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>)
+			.find((c) => c.method === "setSetting")!;
+		expect(write.args).toEqual(["agent.model", "gpt-5", null, null, "revision"]);
+
+		const next: SettingsModel = { tabs: [], revision: 12 };
+		dispatch({ type: "settings_changed", model: next });
+		dispatch(callResult(write.id, { revision: 12 }));
+		await settle();
+		expect(state.settingsModel).toEqual(next);
+		const reads = requests
+			.filter((r) => r.url === "/command")
+			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>)
+			.filter((c) => c.method === "getSettings");
+		expect(reads).toEqual([]);
+	});
+
+	test("a revision reply ahead of the pushed model refetches the full model", async () => {
+		setState({ currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		const requests = stubFetch(() => ({ status: 200, body: model }));
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState({ currentSessionId: "daemon-a" });
+
+		updateSetting("agent.model", "gpt-5");
+		await settle();
+		const write = requests
+			.filter((r) => r.url === "/command")
+			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>)
+			.find((c) => c.method === "setSetting")!;
+		dispatch(callResult(write.id, { revision: 13 }));
+		await settle();
+		const read = requests
+			.filter((r) => r.url === "/command")
+			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>)
+			.find((c) => c.method === "getSettings");
+		expect(read).toBeDefined();
+		dispatch(callResult(read!.id, { tabs: [], revision: 13 }));
+		await settle();
+		expect(state.settingsModel?.revision).toBe(13);
 	});
 
 	test("queued writes run one at a time, each sending the revision the previous response produced", async () => {

@@ -5,7 +5,7 @@ import {
 	coerceSettingValue,
 	type SettingsSession,
 } from "#lib/sdk-settings/settings-model";
-import type { SettingsModel } from "#lib/wire/protocol";
+import type { SettingsModel, SettingsRevisionAck } from "#lib/wire/protocol";
 import { applySettingSideEffects, type AgentSessionLike } from "./settings-effects";
 
 export interface SettingsEntry {
@@ -24,8 +24,8 @@ export interface SettingsMethodsDeps {
 
 export interface SettingsMethods {
 	getSettings(entry: SettingsEntry, args: unknown[]): Promise<SettingsModel>;
-	setSetting(entry: SettingsEntry, args: unknown[]): Promise<SettingsModel>;
-	unsetSetting(entry: SettingsEntry, args: unknown[]): Promise<SettingsModel>;
+	setSetting(entry: SettingsEntry, args: unknown[]): Promise<SettingsModel | SettingsRevisionAck>;
+	unsetSetting(entry: SettingsEntry, args: unknown[]): Promise<SettingsModel | SettingsRevisionAck>;
 }
 
 export interface SettingsMethodsBundle {
@@ -62,6 +62,7 @@ export function createSettingsMethods(deps: SettingsMethodsDeps): SettingsMethod
 			if (!setting) throw new Error(`Unknown setting: ${path}`);
 			const revision = args[unset ? 1 : 2];
 			const layer = args[unset ? 2 : 3] ?? "global";
+			const replyWithRevision = args[unset ? 3 : 4] === "revision";
 			if (layer !== "global" && layer !== "project") throw new Error("Invalid settings layer.");
 			assertRevision(revision);
 			if (layer === "project") {
@@ -77,7 +78,7 @@ export function createSettingsMethods(deps: SettingsMethodsDeps): SettingsMethod
 			await applySettingSideEffects(entry.session, path, setting.layered(deps.settings));
 			const model = await getSettings(entry);
 			deps.broadcast(model);
-			return model;
+			return replyWithRevision ? { revision: deps.settings.revision } : model;
 		});
 	const publish = async (entry: SettingsEntry): Promise<SettingsModel> => {
 		const model = await getSettings(entry);

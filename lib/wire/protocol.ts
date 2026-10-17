@@ -247,6 +247,16 @@ export interface SettingsModel {
 	tabs: SettingsTab[];
 }
 
+/**
+ * setSetting/unsetSetting answer when the caller passes the "revision" reply
+ * option as the trailing argument. The full model then travels once, on the
+ * settings_changed broadcast. Callers that omit the option keep receiving the
+ * full SettingsModel.
+ */
+export interface SettingsRevisionAck {
+	revision: number;
+}
+
 // ---------------------------------------------------------------------------
 // Installed plugins (Settings > Installed). Backed by the SDK plugin manager
 // (~/.omp/plugins/omp-plugins.lock.json): session RPCs when a session is

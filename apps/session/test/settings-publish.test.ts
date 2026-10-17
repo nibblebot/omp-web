@@ -35,4 +35,39 @@ describe("settings publish", () => {
 		expect(model.revision).toBe(Settings.instance.revision);
 		expect(model.revision).toBeGreaterThan(before);
 	});
+
+	test("a revision reply answers with the revision and broadcasts the model once", async () => {
+		const sent: SettingsModel[] = [];
+		const bundle = createSettingsMethods({
+			settings: Settings.instance,
+			getThemes: async () => ["dark", "light"],
+			broadcast: (model) => sent.push(model),
+		});
+		const ack = await bundle.methods.setSetting(entry, [
+			"compaction.thresholdPercent",
+			81,
+			undefined,
+			undefined,
+			"revision",
+		]);
+		expect(sent).toHaveLength(1);
+		expect(ack).toEqual({ revision: Settings.instance.revision });
+	});
+
+	test("a write without the reply option keeps answering with the full model", async () => {
+		const sent: SettingsModel[] = [];
+		const bundle = createSettingsMethods({
+			settings: Settings.instance,
+			getThemes: async () => ["dark", "light"],
+			broadcast: (model) => sent.push(model),
+		});
+		const answer = await bundle.methods.setSetting(entry, [
+			"compaction.thresholdPercent",
+			82,
+			undefined,
+			undefined,
+		]);
+		expect(sent).toHaveLength(1);
+		expect(answer).toEqual(sent[0]!);
+	});
 });
