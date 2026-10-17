@@ -1,124 +1,107 @@
-import { McpServersDialog } from "../../../../web/components/settings/integrations/McpServersDialog";
-import { SkillsDialog } from "../../../../web/components/settings/integrations/SkillsDialog";
+import { IntegrationsSheet } from "../../../../web/components/settings/integrations/IntegrationsSheet";
 import { setState } from "../../../../web/state";
 import {
 	mcpInspectionTools,
 	mcpServers,
 	mcpTestFailed,
 	mcpTestPassed,
-	pluginEntries,
 	skillEntries,
 } from "../../../fixtures/overlays";
 import { answerCalls } from "../../../daemon";
 import { defineStory } from "../../../registry";
 
+const mcpState = {
+	servers: mcpServers,
+	paths: { user: "/home/dev/.config/omp/mcp.json", project: "/repo/.omp/mcp.json" },
+	projectConfigEnabled: true,
+};
+const skillsState = { skills: skillEntries, warnings: [] };
+const never = () => Promise.withResolvers<unknown>().promise;
+
 export default [
 	defineStory({
-		id: "settings-integrations-mcp-manager",
-		title: "McpServersDialog",
+		id: "settings-integrations-sheet",
+		title: "IntegrationsSheet",
 		component: {
-			file: "apps/web/components/settings/integrations/McpServersDialog.tsx",
-			export: "McpServersDialog",
+			file: "apps/web/components/settings/integrations/IntegrationsSheet.tsx",
+			export: "IntegrationsSheet",
 		},
 		tabs: true,
 		seed: { currentSessionId: "sess_09a41c" },
 		variants: [
 			{
-				name: "Servers connected",
-				description:
-					"Project and profile servers: one connected, one with an expired token, one disabled.",
-				seed: () => answerCalls({ getMcpState: () => ({ servers: mcpServers }) }),
-				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
+				name: "MCP servers",
+				description: "One connected, one errored with an expired OAuth token, one disabled.",
+				seed: () => answerCalls({ getMcpState: () => mcpState, getSkillsState: () => skillsState }),
+				render: (ctx) => <IntegrationsSheet onClose={ctx.close} />,
 			},
 			{
-				name: "Test passed",
+				name: "MCP test passed",
 				seed: () => {
-					answerCalls({ getMcpState: () => ({ servers: mcpServers }) });
+					answerCalls({ getMcpState: () => mcpState, getSkillsState: () => skillsState });
 					setState("integrations", "mcpTestResult", mcpTestPassed);
 				},
-				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
+				render: (ctx) => <IntegrationsSheet onClose={ctx.close} />,
 			},
 			{
-				name: "Test failed",
+				name: "MCP test failed",
 				seed: () => {
-					answerCalls({ getMcpState: () => ({ servers: mcpServers }) });
+					answerCalls({ getMcpState: () => mcpState, getSkillsState: () => skillsState });
 					setState("integrations", "mcpTestResult", mcpTestFailed);
 				},
-				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
+				render: (ctx) => <IntegrationsSheet onClose={ctx.close} />,
 			},
 			{
-				name: "Inspection result",
+				name: "MCP inspection result",
 				description: "Tool list returned after inspecting a connected server.",
 				seed: () => {
-					answerCalls({ getMcpState: () => ({ servers: mcpServers }) });
+					answerCalls({ getMcpState: () => mcpState, getSkillsState: () => skillsState });
 					setState("integrations", "mcpInspection", mcpInspectionTools);
 				},
-				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
+				render: (ctx) => <IntegrationsSheet onClose={ctx.close} />,
 			},
 			{
-				name: "Loading",
-				seed: () => answerCalls({ getMcpState: () => Promise.withResolvers<unknown>().promise }),
-				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
+				name: "MCP loading",
+				seed: () => answerCalls({ getMcpState: never, getSkillsState: () => skillsState }),
+				render: (ctx) => <IntegrationsSheet onClose={ctx.close} />,
 			},
 			{
-				name: "Load failed",
+				name: "MCP load failed",
 				seed: () =>
 					answerCalls({
 						getMcpState: () =>
 							Promise.reject(new Error("Could not read the MCP inventory from the daemon.")),
+						getSkillsState: () => skillsState,
 					}),
-				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
+				render: (ctx) => <IntegrationsSheet onClose={ctx.close} />,
 			},
-		],
-	}),
-	defineStory({
-		id: "settings-integrations-skills-manager",
-		title: "SkillsDialog",
-		component: {
-			file: "apps/web/components/settings/integrations/SkillsDialog.tsx",
-			export: "SkillsDialog",
-		},
-		tabs: true,
-		variants: [
 			{
-				name: "Skills and plugins",
-				description: "Project skills and a profile plugin, with the Smithery registry reachable.",
-				seed: () =>
+				name: "Skills",
+				description: "Project and user skills, one turned off and hidden from the listing.",
+				seed: () => {
+					answerCalls({ getMcpState: () => mcpState, getSkillsState: () => skillsState });
+					setState("integrations", "tab", "skills");
+				},
+				render: (ctx) => <IntegrationsSheet onClose={ctx.close} />,
+			},
+			{
+				name: "Skills loading",
+				seed: () => {
+					answerCalls({ getMcpState: () => mcpState, getSkillsState: never });
+					setState("integrations", "tab", "skills");
+				},
+				render: (ctx) => <IntegrationsSheet onClose={ctx.close} />,
+			},
+			{
+				name: "Skills load failed",
+				seed: () => {
 					answerCalls({
-						getSkillsState: () => ({
-							skills: skillEntries,
-							plugins: pluginEntries,
-							smitheryAvailable: true,
-						}),
-					}),
-				render: (ctx) => <SkillsDialog onClose={ctx.close} />,
-			},
-			{
-				name: "Smithery unavailable",
-				description: "Installed skills stay visible while registry search is offline.",
-				seed: () =>
-					answerCalls({
-						getSkillsState: () => ({
-							skills: skillEntries,
-							plugins: pluginEntries,
-							smitheryAvailable: false,
-						}),
-					}),
-				render: (ctx) => <SkillsDialog onClose={ctx.close} />,
-			},
-			{
-				name: "Loading",
-				seed: () => answerCalls({ getSkillsState: () => Promise.withResolvers<unknown>().promise }),
-				render: (ctx) => <SkillsDialog onClose={ctx.close} />,
-			},
-			{
-				name: "Load failed",
-				seed: () =>
-					answerCalls({
-						getSkillsState: () =>
-							Promise.reject(new Error("Skill registry index could not be read.")),
-					}),
-				render: (ctx) => <SkillsDialog onClose={ctx.close} />,
+						getMcpState: () => mcpState,
+						getSkillsState: () => Promise.reject(new Error("Skill index could not be read.")),
+					});
+					setState("integrations", "tab", "skills");
+				},
+				render: (ctx) => <IntegrationsSheet onClose={ctx.close} />,
 			},
 		],
 	}),

@@ -1,5 +1,6 @@
 import type { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 import type { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import type { CollabHostAdapter } from "./collab-host";
@@ -19,6 +20,8 @@ export interface SessionEntry {
 	handle: string;
 	cwd: string;
 	session: AgentSession;
+	/** SDK MCP manager for this session; undefined when MCP discovery is not wired. */
+	mcpManager?: MCPManager;
 	agentRegistry: AgentRegistry;
 	eventBus: EventBus;
 	slashRuntime: SlashCommandRuntime;

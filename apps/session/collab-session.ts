@@ -278,6 +278,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			handle: BOOT_HANDLE,
 			cwd: sessionCwd,
 			session: result.session,
+			mcpManager: result.mcpManager,
 			agentRegistry,
 			eventBus,
 			// Assigned right below: the runtime's closures need the entry.

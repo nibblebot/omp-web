@@ -7,7 +7,6 @@ import { settingsSectionId } from "../../web/prefs/settings-tabs";
 import type { BtwRecordView } from "../../web/store/btw-history";
 import type { BrowserUiRequest } from "../../web/store/browser-ui";
 import type { DownloadConsent, WebDownloadManifest } from "../../web/store/downloads";
-import type { McpServerEntry, PluginEntry, SkillEntry } from "../../web/store/slices/integrations";
 import type { ModelPreset } from "../../web/store/models";
 import type { ForeignSessionPreview, ResumeCandidate } from "../../web/store/resume";
 import type { BrowserUiContribution } from "#lib/wire/browser-ui-contract";
@@ -16,11 +15,15 @@ import type {
 	SessionStats,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type {
+	McpInspection,
+	McpServerSummary,
+	McpTestResult,
 	ModelInfo,
 	ModelRoleCatalogEntry,
 	SessionListEntry,
 	SettingsItem,
 	SettingsModel,
+	SkillSummary,
 } from "#lib/wire/protocol";
 
 const T0 = Date.parse("2026-10-09T10:00:00Z");
@@ -511,52 +514,64 @@ export const foreignSessionPreviews: ForeignSessionPreview[] = [
 // Integrations: MCP servers, skills, and plugins.
 // ---------------------------------------------------------------------------
 
-/** McpServerEntry list: McpServersDialog rows, one connected, one errored, one disabled. */
-export const mcpServers: McpServerEntry[] = [
+/** McpServerSummary list: MCP tab rows, one connected, one errored (OAuth), one disabled. */
+export const mcpServers: McpServerSummary[] = [
 	{
 		name: "filesystem",
 		transport: "stdio",
-		enabled: true,
 		status: "connected",
-		error: null,
-		source: "project",
+		enabled: true,
+		scope: "project",
+		writable: true,
+		command: "npx",
+		args: ["-y", "@modelcontextprotocol/server-filesystem", "."],
+		envKeys: [],
+		auth: "none",
+		toolCount: 11,
 	},
 	{
 		name: "linear",
 		transport: "http",
+		status: "disconnected",
 		enabled: true,
-		status: "error",
+		scope: "user",
+		writable: true,
+		url: "https://mcp.linear.app/mcp",
+		headerNames: [],
+		auth: "oauth",
 		error: "401 Unauthorized: token expired",
-		source: "profile",
-	},
-	{ name: "postgres", transport: "stdio", enabled: false, status: "disabled", source: "project" },
-];
-
-/** SkillEntry list: SkillsDialog rows. */
-export const skillEntries: SkillEntry[] = [
-	{
-		id: "pdf-extract",
-		source: "project",
-		version: "1.2.0",
-		enabled: true,
-		description: "Extract text and tables from PDF attachments.",
 	},
 	{
-		id: "changelog",
-		source: "profile",
+		name: "postgres",
+		transport: "stdio",
+		status: "disabled",
 		enabled: false,
-		description: "Draft CHANGELOG entries from commits.",
+		scope: "project",
+		writable: true,
+		command: "uvx",
+		args: ["mcp-server-postgres"],
+		envKeys: ["DATABASE_URL"],
+		auth: "none",
 	},
 ];
 
-/** PluginEntry list: plugin rows in SkillsDialog, extending the skill shape. */
-export const pluginEntries: PluginEntry[] = [
+/** SkillSummary list: Skills tab rows. One enabled, one disabled and hidden from the listing. */
+export const skillEntries: SkillSummary[] = [
 	{
-		id: "github-review",
-		source: "profile",
-		version: "0.9.3",
+		name: "pdf-extract",
+		description: "Extract text and tables from PDF attachments.",
+		source: "OMP (project)",
+		path: "/repo/.omp/skills/pdf-extract/SKILL.md",
 		enabled: true,
-		description: "Post review comments from annotations to a pull request.",
+		hidden: false,
+	},
+	{
+		name: "changelog",
+		description: "Draft CHANGELOG entries from commits.",
+		source: "Agents (user)",
+		path: "/home/dev/.agents/skills/changelog/SKILL.md",
+		enabled: false,
+		hidden: true,
 	},
 ];
 
@@ -747,25 +762,32 @@ export const contextBreakdown: ContextUsageBreakdown = {
 };
 
 /** MCP test result: a successful connection check for the filesystem server. */
-export const mcpTestPassed = {
+export const mcpTestPassed: { server: string; result: McpTestResult } = {
 	server: "filesystem",
-	text: "Connected in 84 ms. 11 tools, 2 resources.",
+	result: {
+		ok: true,
+		detail: "Connected in 84 ms.",
+		tools: ["read_file", "write_file", "list_directory"],
+	},
 };
 
 /** MCP test result: a failed check for the linear server (expired token). */
-export const mcpTestFailed = {
+export const mcpTestFailed: { server: string; result: McpTestResult } = {
 	server: "linear",
-	text: "Error: 401 Unauthorized. The OAuth token has expired.",
+	result: { ok: false, detail: "Error: 401 Unauthorized. The OAuth token has expired.", tools: [] },
 };
 
 /** MCP inspection: the tool list shown after inspecting a connected server. */
-export const mcpInspectionTools = {
+export const mcpInspectionTools: { server: string; inspection: McpInspection } = {
 	server: "filesystem",
-	kind: "tools",
-	text: [
-		"read_file: Read a text file. Args: path (string), offset? (number), limit? (number)",
-		"write_file: Create or overwrite a file. Args: path (string), content (string)",
-		"list_directory: List entries in a directory. Args: path (string)",
-		"search_files: Recursive filename search. Args: root (string), pattern (string)",
-	].join("\n"),
+	inspection: {
+		tools: [
+			{ name: "read_file", description: "Read a text file." },
+			{ name: "write_file", description: "Create or overwrite a file." },
+			{ name: "list_directory", description: "List entries in a directory." },
+			{ name: "search_files", description: "Recursive filename search." },
+		],
+		resources: [],
+		prompts: [],
+	},
 };

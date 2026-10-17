@@ -212,8 +212,7 @@ export type ModalName =
 	// Browser-auth sign-in surface (P2.4; opened by the auth subscription on
 	// signedOut, exactly like the store/modals contract wires it).
 	| "sign-in"
-	| "mcp"
-	| "skills"
+	| "integrations"
 	| "git"
 	| "plan-review"
 	| "annotations"

@@ -1,55 +1,42 @@
-export interface McpServerEntry {
-	name: string;
-	transport?: string;
-	enabled?: boolean;
-	status?: string;
-	error?: string | null;
-	source?: string;
-}
-export interface SkillEntry {
-	id: string;
-	source?: string;
-	version?: string;
-	enabled?: boolean;
-	description?: string;
-}
-export interface PluginEntry extends SkillEntry {}
-export type IntegrationScope = "project" | "profile";
+import type {
+	McpInspection,
+	McpServerSummary,
+	McpTestResult,
+	SkillSummary,
+} from "#lib/wire/protocol";
+
+export type IntegrationTab = "mcp" | "skills" | "plugins";
+
 export interface IntegrationState {
-	mcpServers: McpServerEntry[];
+	tab: IntegrationTab;
+	mcpServers: McpServerSummary[];
+	mcpPaths: { user: string; project: string } | null;
+	mcpProjectConfigEnabled: boolean;
 	mcpLoading: boolean;
 	mcpError: string | null;
-	mcpUnavailable: string | null;
-	mcpTestResult: { server: string; text: string } | null;
-	mcpInspection: { server: string; kind: string; text: string } | null;
+	mcpTestResult: { server: string; result: McpTestResult } | null;
+	mcpInspection: { server: string; inspection: McpInspection } | null;
 	mcpInspecting: boolean;
-	skills: SkillEntry[];
-	plugins: PluginEntry[];
+	skills: SkillSummary[];
+	skillWarnings: string[];
 	skillsLoading: boolean;
 	skillsError: string | null;
-	skillsUnavailable: string | null;
-	skillResults: SkillEntry[];
-	skillSearching: boolean;
-	smitheryAvailable: boolean;
-	reloadStatus: string | null;
 }
+
 export function createIntegrationState(): IntegrationState {
 	return {
-		mcpServers: [] as McpServerEntry[],
+		tab: "mcp" as IntegrationTab,
+		mcpServers: [] as McpServerSummary[],
+		mcpPaths: null as { user: string; project: string } | null,
+		mcpProjectConfigEnabled: false,
 		mcpLoading: false,
 		mcpError: null as string | null,
-		mcpUnavailable: null as string | null,
-		mcpTestResult: null as { server: string; text: string } | null,
-		mcpInspection: null as { server: string; kind: string; text: string } | null,
+		mcpTestResult: null as { server: string; result: McpTestResult } | null,
+		mcpInspection: null as { server: string; inspection: McpInspection } | null,
 		mcpInspecting: false,
-		skills: [] as SkillEntry[],
-		plugins: [] as PluginEntry[],
+		skills: [] as SkillSummary[],
+		skillWarnings: [] as string[],
 		skillsLoading: false,
 		skillsError: null as string | null,
-		skillsUnavailable: null as string | null,
-		skillResults: [] as SkillEntry[],
-		skillSearching: false,
-		smitheryAvailable: false,
-		reloadStatus: null as string | null,
 	};
 }

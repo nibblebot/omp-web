@@ -245,6 +245,94 @@ export interface PluginDetail extends PluginSummary {
 	settings: PluginSettingRow[];
 }
 
+// Integrations sheet (MCP servers, skills). Secret values (env, header values,
+// tokens) never leave the session: summaries carry key names only.
+
+export type McpScope = "project" | "user";
+export type McpTransport = "stdio" | "http" | "sse";
+/** `disabled`: configured but switched off. The rest is live manager state. */
+export type McpConnectionState = "connected" | "connecting" | "disconnected" | "disabled";
+
+export interface McpServerSummary {
+	name: string;
+	transport: McpTransport;
+	status: McpConnectionState;
+	enabled: boolean;
+	/** `discovered`: from a third-party config (Claude, Cursor, a plugin) that the web cannot write. */
+	scope: McpScope | "discovered";
+	/** True when mcpUpdate / mcpRemove can change it (declared in the user or project mcp.json). */
+	writable: boolean;
+	/** Discovered servers: provider label and file. */
+	source?: string;
+	command?: string;
+	args?: string[];
+	/** Names only. */
+	envKeys?: string[];
+	/** http/sse: origin plus path; query and userinfo stripped. */
+	url?: string;
+	/** Names only. */
+	headerNames?: string[];
+	auth: "none" | "oauth" | "token";
+	toolCount?: number;
+	/** Last connection failure. */
+	error?: string;
+}
+
+export interface McpState {
+	servers: McpServerSummary[];
+	paths: { user: string; project: string };
+	/** `mcp.enableProjectConfig`; false means project servers are not started. */
+	projectConfigEnabled: boolean;
+}
+
+/**
+ * mcpAdd / mcpUpdate payload. On mcpUpdate, a `null` value inside `env` or
+ * `headers` keeps that key's stored value; a key omitted from the object is removed.
+ */
+export interface McpServerInput {
+	name: string;
+	scope: McpScope;
+	transport: McpTransport;
+	command?: string;
+	args?: string[];
+	env?: Record<string, string | null>;
+	url?: string;
+	headers?: Record<string, string | null>;
+	/** http/sse bearer token; when set, it replaces the Authorization header with `Bearer <token>`. */
+	token?: string;
+}
+
+export interface McpActionResult {
+	ok: boolean;
+	detail: string;
+}
+
+export interface McpTestResult extends McpActionResult {
+	tools: string[];
+}
+
+export interface McpInspection {
+	tools: Array<{ name: string; description?: string }>;
+	resources: Array<{ uri: string; name?: string; description?: string }>;
+	prompts: Array<{ name: string; description?: string }>;
+}
+
+export interface SkillSummary {
+	name: string;
+	description: string;
+	/** Provider label, e.g. "Agents (user)" or "OMP (project)". */
+	source: string;
+	path: string;
+	enabled: boolean;
+	/** Loaded and invocable but left out of the system prompt listing. */
+	hidden: boolean;
+}
+
+export interface SkillsState {
+	skills: SkillSummary[];
+	warnings: string[];
+}
+
 // ---------------------------------------------------------------------------
 // omp-session / omp-fleet contract (README.md). OMP_PROTO gates
 // fleet↔omp-session drift (the collab COLLAB_PROTO pattern); bump on any
@@ -565,18 +653,12 @@ export type WebMethodName =
 	| "mcpRemove"
 	| "mcpTest"
 	| "mcpReconnect"
-	| "mcpReload"
 	| "mcpEnable"
 	| "mcpDisable"
-	| "mcpOAuthReauth"
 	| "mcpOAuthRevoke"
 	| "mcpInspect"
 	| "getSkillsState"
-	| "skillSearch"
-	| "skillInstall"
-	| "skillUpdate"
-	| "skillUninstall"
-	| "pluginManage"
+	| "setSkillEnabled"
 	| "listPlugins"
 	| "getPluginConfig"
 	| "setPluginEnabled"
@@ -1148,7 +1230,6 @@ export interface ServerCapabilities {
 	loops?: Capability;
 	vibe?: Capability;
 	btwHistory?: Capability;
-	integrations?: Capability;
 	downloads?: Capability;
 	resumeImport?: Capability;
 	[key: string]: Capability | BrowserUiCapabilities | undefined;

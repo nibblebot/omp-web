@@ -56,7 +56,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 		experimental: true,
 		defaultEnabled: true,
 		commands: ["mcp", "skills"],
-		modals: ["mcp", "skills"],
+		modals: ["integrations"],
 	},
 	{
 		id: "btw",

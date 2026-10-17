@@ -1,60 +1,43 @@
-import type { WebMethodName } from "#lib/wire/protocol";
+import type {
+	McpActionResult,
+	McpInspection,
+	McpScope,
+	McpServerInput,
+	McpState,
+	McpTestResult,
+	SkillsState,
+	WebMethodName,
+} from "#lib/wire/protocol";
 import { call, setState, state } from "../state";
 import { requestDangerConfirm } from "../prompt/danger-confirm";
-import { validateOAuthLaunchUrl } from "./integration-oauth";
-import type { IntegrationScope, McpServerEntry, SkillEntry } from "./slices/integrations";
+import { pushToast } from "./toasts";
+import type { IntegrationTab } from "./slices/integrations";
 
 export const mcpServers = () => state.integrations.mcpServers;
+export const mcpPaths = () => state.integrations.mcpPaths;
+export const mcpProjectConfigEnabled = () => state.integrations.mcpProjectConfigEnabled;
 export const mcpLoading = () => state.integrations.mcpLoading;
 export const mcpError = () => state.integrations.mcpError;
-export const mcpUnavailable = () => state.integrations.mcpUnavailable;
 export const mcpTestResult = () => state.integrations.mcpTestResult;
 export const mcpInspection = () => state.integrations.mcpInspection;
 export const mcpInspecting = () => state.integrations.mcpInspecting;
 export const skills = () => state.integrations.skills;
-export const plugins = () => state.integrations.plugins;
+export const skillWarnings = () => state.integrations.skillWarnings;
 export const skillsLoading = () => state.integrations.skillsLoading;
 export const skillsError = () => state.integrations.skillsError;
-export const skillsUnavailable = () => state.integrations.skillsUnavailable;
-export const skillResults = () => state.integrations.skillResults;
-export const skillSearching = () => state.integrations.skillSearching;
-export const smitheryAvailable = () => state.integrations.smitheryAvailable;
-export const reloadStatus = () => state.integrations.reloadStatus;
+export const integrationsTab = () => state.integrations.tab;
 
-function record(value: unknown): Record<string, unknown> {
-	if (!value || typeof value !== "object" || Array.isArray(value))
-		throw new Error("Invalid integration response");
-	return value as Record<string, unknown>;
+/** Switches the sheet's active tab without opening it. */
+export function selectIntegrationsTab(tab: IntegrationTab): void {
+	setState("integrations", "tab", tab);
 }
-function entries(value: unknown): SkillEntry[] {
-	if (!Array.isArray(value)) throw new Error("Invalid integration inventory");
-	return value.map((item) => {
-		const row = record(item);
-		if (typeof row.id !== "string") throw new Error("Integration inventory is missing an ID");
-		return {
-			id: row.id,
-			source: typeof row.source === "string" ? row.source : undefined,
-			version: typeof row.version === "string" ? row.version : undefined,
-			enabled: typeof row.enabled === "boolean" ? row.enabled : undefined,
-			description: typeof row.description === "string" ? row.description : undefined,
-		};
-	});
+
+/** Opens the Integrations sheet on `tab` (used by `/mcp`, `/skills`, and the feature commands). */
+export function openIntegrations(tab: IntegrationTab): void {
+	setState("integrations", "tab", tab);
+	setState("modal", "integrations");
 }
-function servers(value: unknown): McpServerEntry[] {
-	if (!Array.isArray(value)) throw new Error("Invalid MCP inventory");
-	return value.map((item) => {
-		const row = record(item);
-		if (typeof row.name !== "string") throw new Error("MCP inventory is missing a server name");
-		return {
-			name: row.name,
-			transport: typeof row.transport === "string" ? row.transport : undefined,
-			enabled: typeof row.enabled === "boolean" ? row.enabled : undefined,
-			status: typeof row.status === "string" ? row.status : undefined,
-			error: typeof row.error === "string" ? row.error : null,
-			source: typeof row.source === "string" ? row.source : undefined,
-		};
-	});
-}
+
 function fail(area: "mcp" | "skills", error: unknown) {
 	setState(
 		"integrations",
@@ -62,136 +45,143 @@ function fail(area: "mcp" | "skills", error: unknown) {
 		error instanceof Error ? error.message : String(error),
 	);
 }
-async function request(method: WebMethodName, args: unknown[] = []) {
+
+async function request(method: WebMethodName, args: unknown[] = []): Promise<unknown> {
 	const session = state.sessionId;
 	const result = await call(method, args);
 	if (session !== state.sessionId)
 		throw new Error("Session changed during integration operation; refresh the current session.");
 	return result;
 }
+
 export function refreshMcp(): void {
 	setState("integrations", "mcpLoading", true);
-	setState("integrations", "mcpError", null);
 	void request("getMcpState")
-		.then((data) => setState("integrations", "mcpServers", servers(record(data).servers)))
+		.then((data) => {
+			const row = data as McpState;
+			setState("integrations", {
+				mcpServers: row.servers,
+				mcpPaths: row.paths,
+				mcpProjectConfigEnabled: row.projectConfigEnabled,
+			});
+		})
 		.catch((error) => fail("mcp", error))
 		.finally(() => setState("integrations", "mcpLoading", false));
 }
-function mcpMutate(method: WebMethodName, args: unknown[]) {
+
+/** Runs one MCP mutation. The result toast reports success; a failed action surfaces as the panel error. */
+function mcpMutate(method: WebMethodName, args: unknown[]): void {
 	setState("integrations", "mcpError", null);
 	void request(method, args)
-		.then(() => refreshMcp())
-		.catch((error) => fail("mcp", error));
+		.then((data) => {
+			const row = data as McpActionResult;
+			if (row.ok) pushToast(row.detail);
+			else fail("mcp", new Error(row.detail));
+		})
+		.catch((error) => fail("mcp", error))
+		.finally(() => refreshMcp());
 }
-export interface McpAddConfig {
-	name: string;
-	transport: string;
-	url?: string;
-	command?: string;
-	args?: string[];
-	scope: IntegrationScope;
+
+/** Trust copy names what will run (command, args, URL) and env or header keys, never their values. */
+function launchSummary(input: McpServerInput): string {
+	const keys = (map?: Record<string, unknown>) => Object.keys(map ?? {}).join(", ") || "none";
+	if (input.transport === "stdio") {
+		return [
+			`Runs: ${[input.command ?? "", ...(input.args ?? [])].join(" ").trim()}`,
+			`Environment variables (names only): ${keys(input.env)}`,
+		].join("\n");
+	}
+	return [
+		`Connects to: ${input.url ?? ""}`,
+		`Header names (values hidden): ${keys(input.headers)}${input.token ? ", Authorization (bearer token)" : ""}`,
+	].join("\n");
 }
-export function addMcpServer(config: McpAddConfig): void {
+
+function trustBody(input: McpServerInput, action: string): string {
+	return [
+		`${action} "${input.name}" (${input.scope} config).`,
+		launchSummary(input),
+		"",
+		"An MCP server can expose tools and instructions to the agent. A local command runs with daemon permissions. Only add servers you trust.",
+	].join("\n");
+}
+
+export function addMcpServer(input: McpServerInput): void {
 	requestDangerConfirm({
 		title: "Trust MCP server?",
-		body: "This server can expose tools and instructions to the agent. A local command executes with daemon permissions. Only connect sources you trust.",
-		confirmLabel: "Connect",
-		onConfirm: () => mcpMutate("mcpAdd", [{ ...config, trusted: true }]),
+		body: trustBody(input, "Add"),
+		confirmLabel: "Add server",
+		onConfirm: () => mcpMutate("mcpAdd", [input]),
 	});
 }
-export function updateMcpServer(name: string, config: McpAddConfig): void {
+
+export function updateMcpServer(input: McpServerInput): void {
 	requestDangerConfirm({
-		title: "Trust updated MCP server?",
-		body: "Changing this server can execute a new local command or connect new tools with daemon permissions.",
-		confirmLabel: "Update",
-		onConfirm: () => mcpMutate("mcpUpdate", [name, { ...config, trusted: true }]),
+		title: "Trust changed MCP server?",
+		body: trustBody(input, "Save changes to"),
+		confirmLabel: "Save changes",
+		onConfirm: () => mcpMutate("mcpUpdate", [input]),
 	});
 }
-export const removeMcpServer = (name: string) => mcpMutate("mcpRemove", [name]);
+
+export function removeMcpServer(name: string, scope: McpScope): void {
+	requestDangerConfirm({
+		title: "Remove MCP server?",
+		body: `${name} is removed from the ${scope} config file. Its tools leave the agent on the next reload.`,
+		confirmLabel: "Remove",
+		onConfirm: () => mcpMutate("mcpRemove", [name, scope]),
+	});
+}
+
 export const reconnectMcpServer = (name: string) => mcpMutate("mcpReconnect", [name]);
-export const reloadMcpServer = (name?: string) => mcpMutate("mcpReload", name ? [name] : []);
 export const enableMcpServer = (name: string) => mcpMutate("mcpEnable", [name]);
 export const disableMcpServer = (name: string) => mcpMutate("mcpDisable", [name]);
 export const revokeMcpOAuth = (name: string) => mcpMutate("mcpOAuthRevoke", [name]);
+
 export function testMcpServer(name: string): void {
 	setState("integrations", "mcpTestResult", null);
 	void request("mcpTest", [name])
-		.then((data) => {
-			const row = record(data);
-			setState("integrations", "mcpTestResult", {
-				server: name,
-				text: `${row.ok === true ? "Connected" : "Failed"}: ${typeof row.detail === "string" ? row.detail : "No details returned"}`,
-			});
-			refreshMcp();
-		})
+		.then((data) =>
+			setState("integrations", "mcpTestResult", { server: name, result: data as McpTestResult }),
+		)
 		.catch((error) => fail("mcp", error));
 }
-export function inspectMcp(
-	name: string,
-	kind: string,
-	target?: string,
-	args?: Record<string, string>,
-): void {
+
+export function inspectMcp(name: string): void {
 	setState("integrations", "mcpInspecting", true);
-	void request("mcpInspect", [name, kind, target, args])
-		.then((data) => {
-			const row = record(data);
-			if (typeof row.text !== "string") throw new Error("Invalid MCP inspection response");
-			setState("integrations", "mcpInspection", { server: name, kind, text: row.text });
-		})
+	void request("mcpInspect", [name])
+		.then((data) =>
+			setState("integrations", "mcpInspection", {
+				server: name,
+				inspection: data as McpInspection,
+			}),
+		)
 		.catch((error) => fail("mcp", error))
 		.finally(() => setState("integrations", "mcpInspecting", false));
 }
-export function reauthMcpServer(name: string): void {
-	// Reserve the popup in the click handler; opening after an RPC is blocked by browsers.
-	const popup = window.open("about:blank", "_blank");
-	if (!popup) {
-		fail("mcp", new Error("Allow popups to open the OAuth provider, then retry."));
-		return;
-	}
-	popup.opener = null;
-	void request("mcpOAuthReauth", [name])
-		.then((data) => {
-			const row = record(data);
-			popup.location.replace(validateOAuthLaunchUrl(row.url));
-			refreshMcp();
-		})
-		.catch((error) => {
-			popup.close();
-			fail("mcp", error);
-		});
+
+function applySkills(data: unknown): void {
+	const row = data as SkillsState;
+	setState("integrations", { skills: row.skills, skillWarnings: row.warnings });
 }
+
 export function refreshSkills(): void {
 	setState("integrations", "skillsLoading", true);
 	setState("integrations", "skillsError", null);
 	void request("getSkillsState")
-		.then((data) => {
-			const row = record(data);
-			setState("integrations", {
-				skills: entries(row.skills),
-				plugins: entries(row.plugins),
-				smitheryAvailable: row.smitheryAvailable === true,
-			});
-		})
+		.then(applySkills)
 		.catch((error) => fail("skills", error))
 		.finally(() => setState("integrations", "skillsLoading", false));
 }
-export function searchSkills(query: string): void {
-	setState("integrations", "skillSearching", true);
-	void request("skillSearch", [query])
-		.then((data) => setState("integrations", "skillResults", entries(record(data).results)))
-		.catch((error) => fail("skills", error))
-		.finally(() => setState("integrations", "skillSearching", false));
-}
-function skillMutate(method: WebMethodName, args: unknown[]) {
+
+export function setSkillEnabled(name: string, enabled: boolean): void {
 	setState("integrations", "skillsError", null);
-	void request(method, args)
-		.then(() => {
-			refreshSkills();
-			refreshMcp();
-		})
+	void request("setSkillEnabled", [name, enabled])
+		.then(applySkills)
 		.catch((error) => fail("skills", error));
 }
+
+/** Trust copy for code-bearing installs; the plugin toggle in the Plugins tab calls it too. */
 export function trust(title: string, id: string, run: () => void) {
 	requestDangerConfirm({
 		title,
@@ -200,48 +190,19 @@ export function trust(title: string, id: string, run: () => void) {
 		onConfirm: run,
 	});
 }
-export function installSkill(id: string, scope: IntegrationScope = "profile"): void {
-	trust("Install skill?", id, () => skillMutate("skillInstall", [id, { trusted: true, scope }]));
-}
-export function updateSkill(id: string, scope: IntegrationScope = "profile"): void {
-	trust("Trust updated skill?", id, () =>
-		skillMutate("skillUpdate", [id, { trusted: true, scope }]),
-	);
-}
-export const uninstallSkill = (id: string) => skillMutate("skillUninstall", [id]);
-export function managePlugin(
-	action: "install" | "update" | "uninstall",
-	id: string,
-	scope: IntegrationScope = "profile",
-): void {
-	const run = () => skillMutate("pluginManage", [action, id, { trusted: true, scope }]);
-	if (action === "install" || action === "update") trust("Trust plugin code?", id, run);
-	else run();
-}
+
+/** One click, no consent: skills and commands rediscover, MCP servers reconnect. */
 export function reloadIntegrations(): void {
-	requestDangerConfirm({
-		title: "Reload integrations?",
-		body: "Reload tools, instructions, skills, and extensions from disk. If runtime replacement is necessary, it may stop active work and dispose extension UI. Your session identity, transcript, and unsent browser draft must be preserved. The server will refuse unsafe active operations rather than silently restart.",
-		confirmLabel: "Reload",
-		onConfirm: () => {
-			void request("reloadIntegrations", [{ consent: true }])
-				.then((data) => {
-					const row = record(data);
-					if (row.restartRequired === true)
-						throw new Error(
-							typeof row.detail === "string"
-								? row.detail
-								: "Runtime reload unavailable; explicitly restart the session runtime before continuing.",
-						);
-					setState(
-						"integrations",
-						"reloadStatus",
-						typeof row.detail === "string" ? row.detail : "Runtime integrations reloaded.",
-					);
-					refreshSkills();
-					refreshMcp();
-				})
-				.catch((error) => fail("skills", error));
-		},
-	});
+	setState("integrations", "mcpError", null);
+	void request("reloadIntegrations")
+		.then((data) => {
+			const row = data as McpActionResult;
+			if (row.ok) pushToast(row.detail);
+			else fail("mcp", new Error(row.detail));
+		})
+		.catch((error) => fail("mcp", error))
+		.finally(() => {
+			refreshSkills();
+			refreshMcp();
+		});
 }

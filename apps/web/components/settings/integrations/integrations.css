@@ -1,0 +1,243 @@
+/* Integrations sheet (IntegrationsSheet.tsx and its tabs). Reuses picker-filter,
+   msg-notice, tool-collapsed-note, and settings-control-btn from the shared
+   stylesheets. Forms stack on narrow widths and go two-column only when the
+   sheet has room. */
+
+.integrations-sheet {
+	width: min(960px, 100%);
+}
+
+.integrations-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-4);
+	margin-bottom: var(--space-4);
+}
+
+.integrations-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.integrations-tab-button {
+	padding: var(--space-2) var(--space-5);
+	color: var(--muted);
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: var(--r-2xl);
+	cursor: pointer;
+}
+.integrations-tab-button:hover {
+	color: var(--text);
+	background: var(--hover);
+}
+.integrations-tab-button-active {
+	color: var(--text);
+	border-color: var(--border);
+	background: var(--settings-fill);
+}
+
+.integrations-tab {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+	min-width: 0;
+}
+
+.integrations-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+}
+.integrations-toolbar .picker-filter {
+	flex: 1 1 220px;
+	min-width: 0;
+}
+
+.integrations-hint {
+	margin: 0;
+	color: var(--muted);
+	font-size: var(--fs-sm);
+	overflow-wrap: anywhere;
+}
+
+.integrations-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.integrations-row {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	min-width: 0;
+	padding: var(--space-5) var(--space-6);
+	background: var(--settings-fill);
+	border: 1px solid var(--border);
+	border-radius: var(--r-2xl);
+}
+
+.integrations-row-main {
+	min-width: 0;
+}
+
+.integrations-row-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+	min-width: 0;
+}
+
+.integrations-row-name {
+	color: var(--text);
+	font-size: var(--fs-lg);
+	font-weight: 500;
+	overflow-wrap: anywhere;
+}
+
+.integrations-row-detail {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	color: var(--muted);
+	font-size: var(--fs-sm);
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.integrations-row-detail p {
+	margin: 0;
+}
+
+.integrations-target {
+	overflow-wrap: anywhere;
+	word-break: break-all;
+}
+
+.integrations-badge {
+	padding: 0 var(--space-2);
+	color: var(--muted);
+	font-size: var(--fs-micro);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+}
+
+.integrations-dot {
+	width: 8px;
+	height: 8px;
+	flex: none;
+	border-radius: 50%;
+	background: var(--muted);
+}
+.integrations-dot-connected {
+	background: var(--success);
+}
+.integrations-dot-connecting {
+	background: var(--warning);
+}
+
+.integrations-row-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.integrations-result {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-4) var(--space-5);
+	color: var(--text);
+	font-size: var(--fs-sm);
+	background: var(--hover);
+	border-radius: var(--r-xl);
+	overflow-wrap: anywhere;
+}
+
+.integrations-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.integrations-chips li {
+	padding: 0 var(--space-2);
+	color: var(--muted);
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+}
+
+.integrations-form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+	padding: var(--space-5) var(--space-6);
+	background: var(--settings-fill);
+	border: 1px solid var(--border);
+	border-radius: var(--r-2xl);
+}
+
+/* Narrow sheets: one column. Two columns only from 640px up. */
+.integrations-form-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: var(--space-4);
+}
+
+@media (min-width: 640px) {
+	.integrations-form-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+	.integrations-field-wide {
+		grid-column: 1 / -1;
+	}
+}
+
+.integrations-field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	min-width: 0;
+	color: var(--muted);
+	font-size: var(--fs-sm);
+}
+.integrations-field input,
+.integrations-field select,
+.integrations-field textarea {
+	width: 100%;
+	min-width: 0;
+	box-sizing: border-box;
+	color: var(--text);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: var(--space-2) var(--space-3);
+	font: inherit;
+}
+.integrations-field textarea {
+	resize: vertical;
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+}
+
+.integrations-form-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.integrations-plugins {
+	gap: var(--space-5);
+}

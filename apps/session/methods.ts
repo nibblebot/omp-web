@@ -78,7 +78,8 @@ import { createAnnotationMethods } from "./review-annotations";
 import { createGitReviewMethods } from "./review-git";
 import { createPlanReviewMethods, exitPlanMode } from "./review-plan";
 import { createTodoMethods } from "./review-todos";
-import { createIntegrationMethods } from "./integrations-methods";
+import { createMcpMethods } from "./mcp-methods";
+import { createSkillMethods } from "./skill-methods";
 import {
 	broadcast,
 	broadcastHistory,
@@ -183,6 +184,10 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		getSessionStats: true,
 		getAvailableModels: true,
 		getSettings: true,
+		getSkillsState: true,
+		getMcpState: true,
+		mcpTest: true,
+		mcpInspect: true,
 		listPlugins: true,
 		getPluginConfig: true,
 		getBranchMessages: true,
@@ -781,10 +786,12 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		...createPlanReviewMethods(),
 		...createTodoMethods(),
 		...createComposerMethods(),
-		...createIntegrationMethods({
-			broadcastState: (entry) => deps.broker.broadcastState(entry),
+		...createMcpMethods({
 			broadcastAvailableCommands: (entry) => deps.broker.broadcastAvailableCommands(entry),
-		}).methods,
+		}),
+		...createSkillMethods({
+			broadcastAvailableCommands: (entry) => deps.broker.broadcastAvailableCommands(entry),
+		}),
 		...createDownloadMethods({
 			manifestDeps: (entry) => ({
 				sessionId: entry.session.sessionId,
