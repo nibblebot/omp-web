@@ -16,6 +16,7 @@ import {
 } from "../../../state";
 import { reportError } from "../../../store/toasts";
 import { XIcon } from "../../ui/icons";
+import { queueTransitionNotice, type QueueExit } from "./queue-notice";
 
 const EMPTY: QueuedMessagesSnapshot = { steering: [], followUp: [], liveSteered: 0, paused: [] };
 
@@ -44,10 +45,13 @@ export const QueueBar: Component = () => {
 	const [queue, setQueue] = createSignal<QueuedMessagesSnapshot>(EMPTY);
 	const [expanded, setExpanded] = createSignal(false);
 
-	const refresh = () => {
-		void call("getQueuedMessages")
-			.then((result) => setQueue(result as QueuedMessagesSnapshot))
-			.catch(() => setQueue(EMPTY));
+	const refresh = async (): Promise<void> => {
+		try {
+			const result = (await call("getQueuedMessages")) as QueuedMessagesSnapshot;
+			setQueue(result);
+		} catch {
+			setQueue(EMPTY);
+		}
 	};
 
 	// Refetch whenever the mirrored queue depth changes. The post-mutation
@@ -56,7 +60,7 @@ export const QueueBar: Component = () => {
 	// call refresh() themselves. Initial fetch included.
 	createEffect(() => {
 		const count = state.queuedMessageCount;
-		if (state.streaming || count > 0 || state.pausedQueueCount > 0) refresh();
+		if (state.streaming || count > 0 || state.pausedQueueCount > 0) void refresh();
 		else setQueue(EMPTY);
 	});
 
@@ -90,24 +94,35 @@ export const QueueBar: Component = () => {
 		];
 	};
 
-	// Polite live region announcing queue fills/drains (the interactive chips
-	// themselves stay out of the live region). Transition-gated: a 0→N fill
-	// announces "N messages queued", an N→0 drain announces the clear.
+	// Polite live region for queue transitions (chips stay out of it). The notice
+	// names what happened: queued, paused by Stop, delivered by the running turn,
+	// or cleared by clear all. Removing one chip by hand is silent.
 	const [queueNotice, setQueueNotice] = createSignal("");
-	let lastChipCount = 0;
+	let lastCounts = { chips: 0, paused: 0 };
+	// Set by the operator action about to drain the queue; the next transition reads it once.
+	let exit: QueueExit | undefined;
 	createEffect(() => {
-		const n = chips().length;
-		if (n > 0 && lastChipCount === 0) setQueueNotice(`${n} message${n === 1 ? "" : "s"} queued`);
-		else if (n === 0 && lastChipCount > 0) setQueueNotice("Queue cleared");
-		lastChipCount = n;
+		const list = chips();
+		const next = { chips: list.length, paused: list.filter((c) => c.paused).length };
+		const notice = queueTransitionNotice(lastCounts, next, exit);
+		exit = undefined;
+		lastCounts = next;
+		if (notice !== undefined) setQueueNotice(notice);
 	});
 
 	const after = (pending: Promise<void>) => {
+		exit = "removed";
 		void pending.then(refresh);
 	};
 
 	const clearAll = () => {
-		void call("clearQueue").then(refresh).catch(reportError);
+		exit = "cleared";
+		void call("clearQueue")
+			.then(refresh)
+			.catch((error: unknown) => {
+				exit = undefined;
+				reportError(error);
+			});
 	};
 
 	return (
