@@ -504,8 +504,8 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	},
 	help: () => setState("modal", "help"),
 	hotkeys: () => setState("modal", "hotkeys"),
-	exit: () => pushNotice("info", "Session persists, close this browser tab to exit."),
-	quit: () => pushNotice("info", "Session persists, close this browser tab to exit."),
+	exit: () => pushNotice("info", "Close this browser tab; the session persists."),
+	quit: () => pushNotice("info", "Close this browser tab; the session persists."),
 };
 
 /**

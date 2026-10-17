@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import {
 	compactDispatch,
 	dispatchInput,
@@ -32,6 +32,8 @@ import {
 	dangerConfirm,
 } from "../../prompt/danger-confirm";
 import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
+import { FEATURE_IDS, type FeatureId } from "../../features/manifest";
+import { activateFeatures, isFeatureEnabled } from "../../features/registry";
 
 describe("parseInput", () => {
 	test("plain text", () => {
@@ -626,6 +628,33 @@ describe("disabled feature commands", () => {
 		expect(state.items.at(-1)).toMatchObject({
 			kind: "notice",
 			message: "/git is part of Review, which is disabled. Enable it in Settings > Features.",
+		});
+		expect(posted.some((c) => c.type === "call" && c.method === "prompt")).toBe(false);
+	});
+});
+
+describe("feature-owned commands with arguments (INT-06)", () => {
+	let baselineFeatures: FeatureId[] = [];
+	beforeAll(() => {
+		baselineFeatures = FEATURE_IDS.filter(isFeatureEnabled);
+	});
+	afterAll(async () => {
+		await activateFeatures(baselineFeatures);
+	});
+	beforeEach(async () => {
+		setState({ items: [], streaming: false });
+		await activateFeatures(["integrations"]);
+	});
+
+	test("/skills with a subcommand shows a terminal-only notice and is never forwarded", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		posted.length = 0;
+		dispatchInput("/skills status", undefined, "enter");
+		expect(state.items.at(-1)).toMatchObject({
+			kind: "notice",
+			message:
+				'/skills status is terminal-only. Install or update skills with "omp skill status" in a terminal; turn skills on or off in the Integrations sheet.',
 		});
 		expect(posted.some((c) => c.type === "call" && c.method === "prompt")).toBe(false);
 	});
