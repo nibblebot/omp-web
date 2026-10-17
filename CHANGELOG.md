@@ -55,6 +55,11 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - The empty-session character no longer flashes the fallback robot (or the previous session's character) when attaching or starting a new session: the transcript primes before the session's state frame, so the greeting now waits for that state to land before drawing the model's character.
 - Removed the fleet-required notice: the browser no longer replaces the whole shell when its `/events` peer sends `attached`/`hello_ok` before a `roster` frame. The session daemon still serves no web UI.
 - Settings: Reset works with no session attached (`/ctl/settings/unset` had no route), fleet writes honor `expectedRevision` with 409 on a stale revision, and an older `settings_changed` frame no longer replaces a newer model. The settings model loads at boot and on attach, and the rejected project-layer write option is gone; project values show as read-only.
+- Sessions: a session process you stopped stays stopped across reloads in this browser (the sidebar keeps Stopped with Restart), and opening its route no longer wakes it. Restart clears the mark.
+- Fleet: a command whose session process connection drops after it was sent now reports "the change may have been applied, refresh to check" instead of "not attached", so a retried change is not mistaken for a failed one.
+- Copy: user-facing "daemon" text is now "session process" across the fleet dialogs, onboarding, the loop panel, downloads, and command messages.
+- Review: Stage all and Commit confirm in a dialog with Cancel focused, replacing the browser confirm; Stage all is disabled when nothing is unstaged.
+- Errors: failures in chat, roster, queue, review, and settings report through the shared error path, so they show as the same toast everywhere.
 
 
 ### Fixes
