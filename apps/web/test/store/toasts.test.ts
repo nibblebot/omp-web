@@ -70,4 +70,20 @@ describe("toasts (fleet/app-scoped ephemeral notifications)", () => {
 		timers[0].fn();
 		expect(state.toasts).toEqual([]);
 	});
+
+	test("an action toast keeps its action and honors a custom duration", () => {
+		const calls: string[] = [];
+		pushToast("Draft discarded", {
+			durationMs: 10_000,
+			action: { label: "Undo", run: () => calls.push("undo") },
+		});
+		expect(timers[0].ms).toBe(10_000);
+		expect(state.toasts[0].action?.label).toBe("Undo");
+		state.toasts[0].action?.run();
+		expect(calls).toEqual(["undo"]);
+
+		pushToast("plain");
+		expect(state.toasts[1].action).toBeUndefined();
+		expect(timers[1].ms).toBe(TOAST_DISMISS_MS);
+	});
 });

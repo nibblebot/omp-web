@@ -391,6 +391,14 @@ button.stop-keep:hover {
 .history-popover-row.selected {
 	background: var(--hover);
 }
+.history-popover-tag {
+	margin-right: var(--space-3);
+	padding: 0 var(--space-3);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-sm);
+	color: var(--muted);
+	font-size: var(--fs-sm);
+}
 .history-popover-empty {
 	padding: var(--space-2) var(--space-4);
 	color: var(--muted-2);

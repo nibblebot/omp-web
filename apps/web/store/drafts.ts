@@ -194,26 +194,25 @@ export function removeDraft(key: DraftKey): void {
 	removeRaw(draftKey(key));
 }
 
+/** Cleared ring for a partition, oldest first; [] when absent or unreadable. */
+function readCleared(ck: string): DraftBody[] {
+	try {
+		const raw = readRaw(ck);
+		if (!raw) return [];
+		const parsed: unknown = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return [];
+		return parsed.map(sanitizeBody).filter((b): b is DraftBody => b !== null);
+	} catch {
+		return [];
+	}
+}
+
 /** Explicit destructive clear: the current draft moves to the bounded
  *  cleared ring (recoverable), then the live slot is removed. */
 export function clearDraft(key: DraftKey): DraftBody | null {
 	const live = loadDraft(key);
 	const ck = clearedKey(key);
-	let ring: DraftBody[] = [];
-	try {
-		const raw = readRaw(ck);
-		if (raw) {
-			const parsed: unknown = JSON.parse(raw);
-			if (Array.isArray(parsed))
-				ring = parsed.map(sanitizeBody).filter((b): b is DraftBody => b !== null);
-		}
-	} catch {
-		ring = [];
-	}
-	if (live) {
-		ring = [...ring, live].slice(-CLEARED_CAP);
-		writeRaw(ck, JSON.stringify(ring));
-	}
+	if (live) writeRaw(ck, JSON.stringify([...readCleared(ck), live].slice(-CLEARED_CAP)));
 	removeRaw(draftKey(key));
 	return live;
 }
@@ -234,23 +233,34 @@ export function peekClearedDraft(key: DraftKey): DraftBody | null {
 /** Explicit recovery action: pop the newest cleared draft back into the
  *  composer's inbox (unsent) and remove it from the ring. */
 export function recoverClearedDraft(key: DraftKey): DraftBody | null {
-	const ck = clearedKey(key);
-	let ring: DraftBody[] = [];
-	try {
-		const raw = readRaw(ck);
-		if (raw) {
-			const parsed: unknown = JSON.parse(raw);
-			if (Array.isArray(parsed))
-				ring = parsed.map(sanitizeBody).filter((b): b is DraftBody => b !== null);
-		}
-	} catch {
-		return null;
-	}
-	const top = ring.pop() ?? null;
-	if (!top) return null;
-	writeRaw(ck, JSON.stringify(ring));
-	setPromptInsert({ text: top.text, ...(top.images.length > 0 ? { images: top.images } : {}) });
+	const top = readCleared(clearedKey(key)).at(-1) ?? null;
+	if (top) takeClearedDraft(key, top);
 	return top;
+}
+
+/** Discarded drafts for a partition, newest first (history picker source). */
+export function listClearedDrafts(key: DraftKey): DraftBody[] {
+	return readCleared(clearedKey(key)).reverse();
+}
+
+/** Hand a discarded draft back to the composer inbox (text, images, caret) and
+ *  drop its ring entry. The entry is matched by `updatedAt` and text, so an
+ *  identical older draft is never removed by mistake. Used by the Undo toast
+ *  and the history picker. */
+export function takeClearedDraft(key: DraftKey, body: DraftBody): void {
+	const ck = clearedKey(key);
+	const ring = readCleared(ck);
+	const at = ring
+		.map((b) => b.updatedAt === body.updatedAt && b.text === body.text)
+		.lastIndexOf(true);
+	if (at >= 0) writeRaw(ck, JSON.stringify(ring.filter((_, i) => i !== at)));
+	setPromptInsert({
+		text: body.text,
+		...(body.images.length > 0 ? { images: body.images } : {}),
+		...(body.selectionStart !== undefined && body.selectionEnd !== undefined
+			? { selection: { start: body.selectionStart, end: body.selectionEnd } }
+			: {}),
+	});
 }
 
 /** Drop the cleared ring without restoring (retention/deletion control). */

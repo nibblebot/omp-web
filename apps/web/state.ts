@@ -53,7 +53,7 @@ import {
 	settleFiles,
 	settleSessions,
 } from "./store/roster";
-import { dismissToast, pushToast } from "./store/toasts";
+import { dismissToast, pushToast, type ToastAction } from "./store/toasts";
 import { parseRoute } from "./store/route";
 import {
 	attachSession,
@@ -502,7 +502,7 @@ export const [state, setState] = createStore({
 	announcement: "",
 	// Fleet/app-scoped ephemeral notifications (worktree_removed on-disk
 	// eviction toasts); survives session resets like daemonRoster.
-	toasts: [] as { id: number; text: string }[],
+	toasts: [] as { id: number; text: string; action?: ToastAction }[],
 });
 
 // A viewport crossing re-derives sidebar visibility: drawers close, docked
@@ -519,6 +519,7 @@ drawerMedia?.addEventListener("change", (event) => {
 export interface PromptInsert {
 	text: string;
 	images?: ImageArg[];
+	selection?: { start: number; end: number };
 }
 
 /** Result of requestDaemonLogs: tail/head text plus the broker log cursor. */

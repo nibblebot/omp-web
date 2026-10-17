@@ -3,14 +3,18 @@ import {
 	cancelScheduledDraftSave,
 	clearDraft,
 	deleteClearedDrafts,
+	listClearedDrafts,
 	loadDraft,
 	peekClearedDraft,
+	recoverClearedDraft,
 	removeDraft,
 	saveDraft,
 	scheduleDraftSave,
+	takeClearedDraft,
 	type DraftBody,
 	type DraftKey,
 } from "../../store/drafts";
+import { promptInsert, setPromptInsert } from "../../state";
 import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
 
 // ---------------------------------------------------------------------------
@@ -107,5 +111,60 @@ describe("drafts (ghost-draft guards)", () => {
 		await delay(20);
 		expect(loadDraft(key)).toBeNull();
 		expect(peekClearedDraft(key)).toBeNull();
+	});
+});
+
+describe("drafts (discard undo and history recovery)", () => {
+	test("discard then undo restores text, images and caret, and drops the ring entry", () => {
+		const key = freshKey("undo-restore");
+		const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
+		const draft: DraftBody = {
+			text: "keep this",
+			images: [image],
+			selectionStart: 4,
+			selectionEnd: 4,
+			updatedAt: 1_700_000_000_000,
+		};
+		saveDraft(key, draft);
+		clearDraft(key);
+		expect(loadDraft(key)).toBeNull();
+		expect(listClearedDrafts(key)).toHaveLength(1);
+
+		takeClearedDraft(key, draft);
+		expect(promptInsert()).toEqual({
+			text: "keep this",
+			images: [image],
+			selection: { start: 4, end: 4 },
+		});
+		expect(listClearedDrafts(key)).toEqual([]);
+		setPromptInsert(null);
+	});
+
+	test("undo removes only its own ring entry, leaving an identical older discard", () => {
+		const key = freshKey("undo-exact");
+		const older: DraftBody = { text: "same", images: [], updatedAt: 1000 };
+		const newer: DraftBody = { text: "same", images: [], updatedAt: 2000 };
+		saveDraft(key, older);
+		clearDraft(key);
+		saveDraft(key, newer);
+		clearDraft(key);
+
+		takeClearedDraft(key, newer);
+		expect(listClearedDrafts(key).map((b) => b.updatedAt)).toEqual([1000]);
+		setPromptInsert(null);
+	});
+
+	test("discarded drafts list newest first; recover still pops the newest", () => {
+		const key = freshKey("picker-order");
+		saveDraft(key, body("first"));
+		clearDraft(key);
+		saveDraft(key, body("second"));
+		clearDraft(key);
+		expect(listClearedDrafts(key).map((b) => b.text)).toEqual(["second", "first"]);
+
+		expect(recoverClearedDraft(key)?.text).toBe("second");
+		expect(listClearedDrafts(key).map((b) => b.text)).toEqual(["first"]);
+		setPromptInsert(null);
+		deleteClearedDrafts(key);
 	});
 });

@@ -2,13 +2,16 @@ import { createSignal, type Component } from "solid-js";
 import { dispatchInput, type InputMode } from "../../../prompt/commands";
 import { PromptHistory } from "../../../prompt/history";
 import type { ImageArg } from "#lib/wire/protocol";
-import { dequeueLastQueued, isReady, setState, state, stopTurn } from "../../../state";
+import { dequeueLastQueued, isReady, pushToast, setState, state, stopTurn } from "../../../state";
 import {
 	cancelScheduledDraftSave,
 	clearDraft,
 	currentDraftKey,
+	listClearedDrafts,
 	removeDraft,
 	saveDraft,
+	takeClearedDraft,
+	type DraftBody,
 } from "../../../store/drafts";
 import { AskBar } from "../../requests/AskBar";
 import { ExtensionUi } from "../../requests/ExtensionUi";
@@ -57,17 +60,31 @@ export const PromptBox: Component = () => {
 	};
 
 	/** Explicit destructive clear (toolbar/discard): moves the live text to
-	 *  the bounded cleared ring for recovery, then empties the composer. */
+	 *  the bounded cleared ring, then empties the composer. An Undo toast
+	 *  restores the exact draft (text, images, caret) for 10 s. The entry stays
+	 *  recoverable from the history picker afterward. */
 	const discard = (): void => {
-		cancelScheduledDraftSave(currentDraftKey());
+		const key = currentDraftKey();
+		cancelScheduledDraftSave(key);
 		const text = message();
 		const imgs = images();
 		if (!text.trim() && imgs.length === 0) return;
-		saveDraft(currentDraftKey(), { text, images: imgs, updatedAt: Date.now() });
-		clearDraft(currentDraftKey());
+		const body: DraftBody = {
+			text,
+			images: imgs,
+			selectionStart: textarea.selectionStart,
+			selectionEnd: textarea.selectionEnd,
+			updatedAt: Date.now(),
+		};
+		saveDraft(key, body);
+		clearDraft(key);
 		setMessage("");
 		setImages([]);
 		requestAnimationFrame(ac.autoGrow);
+		pushToast("Draft discarded", {
+			durationMs: 10_000,
+			action: { label: "Undo", run: () => takeClearedDraft(key, body) },
+		});
 	};
 
 	const onKeyDown = (e: KeyboardEvent) => {
@@ -153,7 +170,7 @@ export const PromptBox: Component = () => {
 		}
 		const el = e.currentTarget as HTMLTextAreaElement;
 		// First-line Up opens the history popover; multiline caret motion and
-		// IME always win, and an empty history leaves Up to the browser.
+		// IME always win; with no history and no discarded drafts, Up goes to the browser.
 		if (
 			e.key === "ArrowUp" &&
 			!e.shiftKey &&
@@ -162,7 +179,8 @@ export const PromptBox: Component = () => {
 			!el.value.slice(0, el.selectionStart).includes("\n")
 		) {
 			if (e.isComposing || e.keyCode === 229) return;
-			if (new PromptHistory().size === 0) return;
+			if (new PromptHistory().size === 0 && listClearedDrafts(currentDraftKey()).length === 0)
+				return;
 			e.preventDefault();
 			setHistoryOpen(true);
 		}

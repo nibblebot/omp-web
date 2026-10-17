@@ -106,11 +106,15 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		const insert = promptInsert();
 		if (!insert) return;
 		setPromptInsert(null);
+		const pristine = !props.message();
 		if (insert.text)
 			props.setMessage((prev) => (prev.trim() ? `${prev}\n${insert.text}` : insert.text));
 		if (insert.images?.length) props.setImages((prev) => [...prev, ...insert.images!]);
 		requestAnimationFrame(() => {
 			textarea.focus();
+			// Undo/recover of a discarded draft restores the caret into an empty composer.
+			if (insert.selection && pristine)
+				textarea.setSelectionRange(insert.selection.start, insert.selection.end);
 			props.ac.autoGrow();
 		});
 	});

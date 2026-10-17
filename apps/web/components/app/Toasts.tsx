@@ -16,6 +16,20 @@ export const Toasts: Component = () => (
 			{(toast) => (
 				<div class="toast" role="status">
 					<span class="toast-text">{toast.text}</span>
+					<Show when={toast.action}>
+						{(action) => (
+							<button
+								type="button"
+								class="toast-action"
+								onClick={() => {
+									action().run();
+									dismissToast(toast.id);
+								}}
+							>
+								{action().label}
+							</button>
+						)}
+					</Show>
 					<button
 						type="button"
 						class="toast-dismiss"

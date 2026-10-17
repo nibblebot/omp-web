@@ -18,6 +18,20 @@ export default defineStory({
 			),
 		},
 		{
+			name: "With action",
+			description: "Undo toast from discarding a draft; stays for 10 s.",
+			seed: () =>
+				pushToast("Draft discarded", {
+					durationMs: 10_000,
+					action: { label: "Undo", run: () => {} },
+				}),
+			render: () => (
+				<div class="ds-frame">
+					<Toasts />
+				</div>
+			),
+		},
+		{
 			name: "Stacked notices",
 			description: "Several toasts queued by different actions.",
 			seed: () => {

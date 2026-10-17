@@ -1,5 +1,6 @@
 import { PromptHistoryPicker } from "../../../../web/components/chat/composer/PromptHistoryPicker";
 import { promptHistoryEntries, promptHistoryLong } from "../../../fixtures/dialogs";
+import { clearDraft, currentDraftKey, saveDraft } from "../../../../web/store/drafts";
 import { defineStory, type VariantContext } from "../../../registry";
 
 const HISTORY_KEY = "omp-web:history";
@@ -35,6 +36,21 @@ export default defineStory({
 			name: "Recent prompts",
 			description: "Up on the composer's first line: newest prompt at the bottom, selected.",
 			seed: () => seedHistory(promptHistoryEntries),
+			render: anchored,
+		},
+		{
+			name: "Discarded draft",
+			description: "A discarded draft leads the list, tagged Discarded, and restores whole.",
+			seed: () => {
+				const key = currentDraftKey();
+				seedHistory(promptHistoryEntries);
+				saveDraft(key, {
+					text: "Half-written reply about the migration plan",
+					images: [],
+					updatedAt: Date.now(),
+				});
+				clearDraft(key);
+			},
 			render: anchored,
 		},
 		{

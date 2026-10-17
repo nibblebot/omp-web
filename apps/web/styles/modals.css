@@ -817,6 +817,19 @@ button.picker-row {
 	min-width: 0;
 	word-break: break-word;
 }
+.toast-action {
+	flex: 0 0 auto;
+	padding: 0 var(--space-3);
+	border-radius: var(--r-sm);
+	background: transparent;
+	border-color: var(--border-strong);
+	color: var(--text);
+	font-weight: 600;
+	cursor: pointer;
+}
+.toast-action:hover {
+	background: var(--hover);
+}
 .toast-dismiss {
 	flex: 0 0 auto;
 	display: inline-flex;
