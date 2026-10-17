@@ -1,5 +1,6 @@
 import {
 	createEffect,
+	createMemo,
 	createSignal,
 	For,
 	onCleanup,
@@ -9,19 +10,22 @@ import {
 } from "solid-js";
 import { call, sendLoginCode, setState, state } from "../../state";
 import { Modal } from "../ui/Modal";
-
-type LoginProvider = { id: string; name: string; available: boolean; authenticated: boolean };
+import { groupProviders, type LoginProvider } from "./provider-login";
 
 /**
  * Login surface: lists OAuth providers, hands a synchronously opened blank
  * tab the login URL when the relay unicast it (popup-blocker safe), and
- * collects manual codes for providers that prompt for one.
+ * collects manual codes for providers that prompt for one. Signed-in
+ * providers are listed first and re-run the flow as "Re-login"; the filter
+ * matches name or id.
  */
 export const ProviderLoginDialog: Component<{ onClose: () => void }> = (props) => {
 	const [providers, setProviders] = createSignal<LoginProvider[]>([]);
+	const [query, setQuery] = createSignal("");
 	const [error, setError] = createSignal<string | null>(null);
 	const [inFlight, setInFlight] = createSignal<string | null>(null);
 	const [code, setCode] = createSignal("");
+	const groups = createMemo(() => groupProviders(providers(), query()));
 	// Blank tab opened synchronously in the click handler; the loginUrl effect
 	// below navigates it once the relay provides the URL.
 	let loginTab: Window | null = null;
@@ -84,25 +88,42 @@ export const ProviderLoginDialog: Component<{ onClose: () => void }> = (props) =
 		}
 	};
 
+	const row = (p: LoginProvider) => (
+		<div class="picker-row">
+			<span class="picker-label">{p.name}</span>
+			{p.authenticated && <span class="picker-detail">signed in</span>}
+			<button
+				style={{ "margin-left": "auto" }}
+				disabled={!p.available || inFlight() !== null}
+				onClick={() => login(p)}
+			>
+				{inFlight() === p.id ? "Logging in…" : p.authenticated ? "Re-login" : "Login"}
+			</button>
+		</div>
+	);
+
 	return (
 		<Modal title="Login" onClose={props.onClose}>
 			<Show when={error()}>{(msg) => <div class="msg-notice">{msg()}</div>}</Show>
+			<input
+				class="picker-filter"
+				aria-label="Filter providers"
+				placeholder="Filter providers"
+				value={query()}
+				onInput={(e) => setQuery(e.currentTarget.value)}
+			/>
 			<div class="picker-list">
-				<For each={providers()}>
-					{(p) => (
-						<div class="picker-row">
-							<span class="picker-label">{p.name}</span>
-							{p.authenticated && <span class="picker-detail">authenticated</span>}
-							<button
-								style={{ "margin-left": "auto" }}
-								disabled={!p.available || inFlight() !== null}
-								onClick={() => login(p)}
-							>
-								{inFlight() === p.id ? "Logging in…" : "Login"}
-							</button>
-						</div>
-					)}
-				</For>
+				<Show when={groups().signedIn.length > 0}>
+					<div class="picker-group-name">Signed in</div>
+					<For each={groups().signedIn}>{row}</For>
+				</Show>
+				<Show when={groups().available.length > 0}>
+					<div class="picker-group-name">Providers</div>
+					<For each={groups().available}>{row}</For>
+				</Show>
+				<Show when={groups().signedIn.length + groups().available.length === 0}>
+					<div class="picker-detail">No providers match “{query().trim()}”.</div>
+				</Show>
 			</div>
 			<Show when={state.loginUrl}>
 				{(loginUrl) => (

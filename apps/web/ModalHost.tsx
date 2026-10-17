@@ -65,7 +65,7 @@ export const ModalHost: Component = () => {
 		settings: () => <SettingsSheet onClose={close} />,
 		sessions: () => <SessionPicker onClose={close} />,
 		subagents: () => <SubagentsDialog onClose={close} />,
-		login: () => <ProviderLoginDialog onClose={close} />,
+		login: () => <ProviderLoginDialog onClose={() => setState("modal", "settings")} />,
 		goal: () => featureModalHost("goal"),
 		usage: () => <UsageLimitsDialog onClose={close} />,
 		debug: () => featureModalHost("debug"),
