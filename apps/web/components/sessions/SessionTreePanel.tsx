@@ -8,7 +8,7 @@ import {
 	Show,
 	type Component,
 } from "solid-js";
-import { pushNotice } from "../../state";
+import { pushNotice, state } from "../../state";
 import { PickerRow } from "../ui/PickerRow";
 import {
 	branchFromEntry,
@@ -126,7 +126,7 @@ export const SessionTreePanel: Component = () => {
 	const depths = createMemo(() => depthIndex(nodes()));
 	const onPath = createMemo(() => activePath(nodes(), page()?.leafId ?? null));
 
-	const refresh = (opts: { cursor?: string; append?: boolean } = {}): void => {
+	const refresh = (opts: { cursor?: string; append?: boolean; keepError?: boolean } = {}): void => {
 		void loadGraph({
 			filter: kind(),
 			text: filter().trim(),
@@ -140,7 +140,7 @@ export const SessionTreePanel: Component = () => {
 				} else {
 					setPage(p);
 				}
-				setError(null);
+				if (!opts.keepError) setError(null);
 			})
 			.catch((err) => setError(String(err instanceof Error ? err.message : err)));
 	};
@@ -162,6 +162,17 @@ export const SessionTreePanel: Component = () => {
 				takeTreeSeed();
 				setFilter(seed);
 				refresh();
+			},
+			{ defer: true },
+		),
+	);
+	// A finished turn adds entries and changes the page revision; a pane left open would
+	// otherwise keep a stale revision and refuse every navigation.
+	createEffect(
+		on(
+			() => state.streaming,
+			(streaming, was) => {
+				if (was && !streaming) refresh();
 			},
 			{ defer: true },
 		),
@@ -242,7 +253,11 @@ export const SessionTreePanel: Component = () => {
 			})
 			.catch((err) => {
 				setBusyId(null);
-				setError(String(err instanceof Error ? err.message : err));
+				const text = String(err instanceof Error ? err.message : err);
+				setError(text);
+				// A stale selection means the page revision moved on (a turn finished or the
+				// transcript was replaced); reload so the next pick runs against the current tree.
+				if (/stale/i.test(text)) refresh({ keepError: true });
 			});
 	};
 
