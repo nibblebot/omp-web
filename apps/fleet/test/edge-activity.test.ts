@@ -92,7 +92,6 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 					cwd: FAKE_CWD,
 					project: "fake-proj",
 					labels: [],
-					mode: "spawned",
 					status: "ready",
 				});
 				const token = randomBytes(32).toString("hex");

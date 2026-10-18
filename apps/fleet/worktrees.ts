@@ -12,8 +12,8 @@
  * an existing target path; no repository collision detection is performed.
  *
  * The lifecycle half shells out to git ONLY (never fetches, never uses
- * --force / branch -D): resolveBaseRef, createWorktree,
- * listUnregisteredWorktrees, worktreeDeleteInfo, deleteWorktree, and the
+ * --force / branch -D): resolveBaseRef, createWorktree, resolveProjectRoot,
+ * listProjectBranches, worktreeDeleteInfo, deleteWorktree, and the
  * registration/spawn orchestration shared by the /ctl routes and the edge
  * command handlers (registerWorktreeEntry). Deleting a worktree requires a
  * local linked Git worktree of its project (verified independently) and a
@@ -25,10 +25,10 @@
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
-import type { ProjectBranch, ProjectEntry, RegisteredProject } from "#lib/wire/protocol";
+import type { ProjectBranch, RegisteredProject } from "#lib/wire/protocol";
 import { slugifyWorktreeName } from "#lib/wire/worktree-name";
-import { probeGitState, validateProjectPath } from "./discovery";
-import type { GitRunner } from "./discovery";
+import { parseWorktreeList, probeGitState, runGit, validateProjectPath } from "./discovery";
+import type { GitRunner, WorktreeBlock } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
 
@@ -56,65 +56,9 @@ export function isPathUnder(candidate: string, root: string): boolean {
 	return candidate.startsWith(root.endsWith(sep) ? root : root + sep);
 }
 
-// ---------------------------------------------------------------------------
-// Git shelling
-// ---------------------------------------------------------------------------
-
-/** Result of one `git -C <cwd> <args>` invocation. */
-interface GitResult {
-	exitCode: number;
-	stdout: string;
-	stderr: string;
-}
-
-/** `git -C <cwd> <args>` via Bun.spawn. Callers choose args, never a fetch. */
-async function runGit(args: string[], cwd: string): Promise<GitResult> {
-	try {
-		const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
-		const [stdout, stderr] = await Promise.all([
-			Bun.readableStreamToText(proc.stdout),
-			Bun.readableStreamToText(proc.stderr),
-		]);
-		return { exitCode: await proc.exited, stdout, stderr };
-	} catch (err) {
-		return { exitCode: 127, stdout: "", stderr: String(err) };
-	}
-}
-
-/** One parsed worktree block from `git worktree list --porcelain`. */
-interface WorktreeBlock {
-	path?: string;
-	/** Raw branch ref ("refs/heads/x"), "detached", or absent. */
-	branch?: string;
-}
-
-/** Parse porcelain output into per-worktree blocks (blank-line separated). */
-function parseWorktreeList(stdout: string): WorktreeBlock[] {
-	const blocks: WorktreeBlock[] = [];
-	let block: WorktreeBlock | null = null;
-	for (const line of stdout.split("\n")) {
-		if (line === "") {
-			if (block) {
-				blocks.push(block);
-				block = null;
-			}
-			continue;
-		}
-		if (line.startsWith("worktree ")) {
-			if (block) blocks.push(block); // tolerate a missing blank separator
-			block = { path: line.slice("worktree ".length) };
-		} else if (block) {
-			if (line.startsWith("branch ")) block.branch = line.slice("branch ".length);
-			else if (line === "detached") block.branch = "detached";
-		}
-	}
-	if (block) blocks.push(block);
-	return blocks;
-}
-
-/** `branch refs/heads/x` → "x"; `detached`/absent → undefined. */
+/** `refs/heads/x` → "x"; absent (detached or bare) → undefined. */
 function branchOf(raw: string | undefined): string | undefined {
-	if (!raw || raw === "detached") return undefined;
+	if (raw === undefined) return undefined;
 	return raw.startsWith("refs/heads/") ? raw.slice("refs/heads/".length) : raw;
 }
 
@@ -214,15 +158,64 @@ export async function createWorktree(
 	return { path: target, branch: opts.existingBranch };
 }
 
+/** A project's branch listing (the list_project_branches answer). */
+export interface ProjectBranchListing {
+	branches: ProjectBranch[];
+	/** Configured remote names, `origin` first. */
+	remotes: string[];
+	/** Base for a new branch: resolveBaseRef's display name (origin's default, else the current branch). */
+	defaultBase?: string;
+	/** Remote listings only: true when the live `ls-remote` failed and the answer comes from the last fetch. */
+	cached?: boolean;
+}
+
 /**
- * List a registered project's LOCAL branches with their checked-out state,
- * for the add-worktree branch picker. `git for-each-ref refs/heads` yields
- * the short branch names (a zero-commit repo has no refs → `[]`);
- * `git worktree list --porcelain` marks each branch currently checked out
- * in SOME worktree (main checkout or linked) with `checkedOut: true` and
- * that worktree's path. NEVER fetches.
+ * List a registered project's branches for the branch picker. Without
+ * `remote` (this machine): local branches with their checked-out state.
+ * With `remote`: that remote's heads from a read-only `git ls-remote
+ * --symref` (bounded by the runGit timeout); when the remote cannot be
+ * reached, its cached `refs/remotes/<remote>/*` refs with `cached: true`.
+ * The remote name is checked against `git remote` and passed as an argv
+ * element, never shell-interpolated. NEVER fetches.
  */
-export async function listProjectBranches(mainPath: string): Promise<ProjectBranch[]> {
+export async function listProjectBranches(
+	mainPath: string,
+	opts: { remote?: string } = {},
+): Promise<ProjectBranchListing> {
+	const remotes = await listRemotes(mainPath);
+	if (opts.remote === undefined) {
+		return {
+			branches: await localBranches(mainPath),
+			remotes,
+			defaultBase: await resolveBaseRef(mainPath),
+		};
+	}
+	if (!remotes.includes(opts.remote)) throw new Error(`unknown remote: ${opts.remote}`);
+	const live = await liveRemoteHeads(mainPath, opts.remote);
+	const heads = live ?? (await cachedRemoteHeads(mainPath, opts.remote));
+	return {
+		branches: heads.branches.map((name) => ({ name, checkedOut: false })),
+		remotes,
+		defaultBase: heads.defaultBase,
+		...(live === undefined ? { cached: true } : {}),
+	};
+}
+
+/** Configured remote names (`git remote`), `origin` first. */
+async function listRemotes(mainPath: string): Promise<string[]> {
+	const result = await runGit(["remote"], mainPath);
+	if (result.exitCode !== 0) return [];
+	const names = result.stdout
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((name) => name !== "");
+	return names.includes("origin")
+		? ["origin", ...names.filter((name) => name !== "origin")]
+		: names;
+}
+
+/** Local branches with their checked-out state (`for-each-ref refs/heads` + worktree list). */
+async function localBranches(mainPath: string): Promise<ProjectBranch[]> {
 	const refs = await runGit(["for-each-ref", "refs/heads", "--format=%(refname:short)"], mainPath);
 	if (refs.exitCode !== 0) {
 		throw new Error(`cannot list branches: ${refs.stderr.trim() || `git exited ${refs.exitCode}`}`);
@@ -249,67 +242,82 @@ export async function listProjectBranches(mainPath: string): Promise<ProjectBran
 	});
 }
 
+/**
+ * Heads of `remote` from a live, read-only `git ls-remote --symref` (the HEAD
+ * symref names the remote's default branch). Undefined when the remote cannot
+ * be reached (network, auth, timeout): the caller falls back to the cache.
+ */
+async function liveRemoteHeads(
+	mainPath: string,
+	remote: string,
+): Promise<{ branches: string[]; defaultBase?: string } | undefined> {
+	const result = await runGit(["ls-remote", "--symref", remote, "HEAD", "refs/heads/*"], mainPath);
+	if (result.exitCode !== 0) return undefined;
+	const branches: string[] = [];
+	let defaultBase: string | undefined;
+	for (const line of result.stdout.split("\n")) {
+		// `ref: refs/heads/main<TAB>HEAD` (symref) or `<sha><TAB>refs/heads/<name>`.
+		const symref = /^ref: refs\/heads\/(\S+)\tHEAD$/.exec(line);
+		if (symref) {
+			defaultBase = symref[1];
+			continue;
+		}
+		const name = /\trefs\/heads\/(.+)$/.exec(line)?.[1];
+		if (name !== undefined) branches.push(name);
+	}
+	return { branches, defaultBase };
+}
+
+/** Heads from the last fetch: local `refs/remotes/<remote>/*` (the HEAD symref excluded). */
+async function cachedRemoteHeads(
+	mainPath: string,
+	remote: string,
+): Promise<{ branches: string[]; defaultBase?: string }> {
+	const prefix = `refs/remotes/${remote}/`;
+	const refs = await runGit(["for-each-ref", "--format=%(refname)", prefix], mainPath);
+	const branches = refs.stdout
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((ref) => ref.startsWith(prefix))
+		.map((ref) => ref.slice(prefix.length))
+		.filter((name) => name !== "HEAD");
+	const head = await runGit(["symbolic-ref", `${prefix}HEAD`], mainPath);
+	const headRef = head.stdout.trim();
+	const defaultBase =
+		head.exitCode === 0 && headRef.startsWith(prefix) ? headRef.slice(prefix.length) : undefined;
+	return { branches, defaultBase };
+}
+
 // ---------------------------------------------------------------------------
 // Discovery + delete guards
 // ---------------------------------------------------------------------------
 
 /**
- * The project's LINKED worktrees (main checkout excluded) whose realpath is
- * not among `registeredPaths`. Feeds the Add-workspace dialog's
- * existing-worktrees list.
+ * Parsed `git worktree list --porcelain` for the repository containing
+ * `path`, main checkout first; undefined when git cannot tell (not a
+ * repository, git failure). Shared by the sync pass and the resolvers.
  */
-export async function listUnregisteredWorktrees(
-	projectPath: string,
-	registeredPaths: string[],
-): Promise<ProjectEntry[]> {
-	const result = await runGit(["worktree", "list", "--porcelain"], projectPath);
-	if (result.exitCode !== 0) return [];
-	const blocks = parseWorktreeList(result.stdout);
-	const main = blocks[0];
-	if (!main) return [];
-	const registered = new Set(registeredPaths.filter((p) => p !== "").map(realpathOf));
-	const out: ProjectEntry[] = [];
-	for (const block of blocks.slice(1)) {
-		if (!block.path) continue;
-		if (registered.has(realpathOf(block.path))) continue;
-		const branch = branchOf(block.branch);
-		out.push({
-			name: basename(block.path),
-			path: block.path,
-			isWorktree: true,
-			worktreeOf: basename(main.path ?? projectPath),
-			...(branch !== undefined ? { branch } : {}),
-		});
-	}
-	return out;
+export async function listWorktreeBlocks(path: string): Promise<WorktreeBlock[] | undefined> {
+	const result = await runGit(["worktree", "list", "--porcelain"], path);
+	return result.exitCode === 0 ? parseWorktreeList(result.stdout) : undefined;
 }
 
 /**
- * List each registered project's unregistered linked worktrees. Shared by
- * the edge's list_projects answer and GET /ctl/projects so both surfaces
- * list the same rows. Rows are deduped by realpath across projects (a
- * worktree reachable from two registered mains lists once); roster cwds
- * are excluded per project (a daemon on that worktree means it is
- * managed). Per-project git failures degrade to [] like
- * listUnregisteredWorktrees, so a project that stopped being a repo is
- * skipped silently.
+ * Resolve any path inside a project checkout (its main checkout, a linked
+ * worktree, or a subdirectory of either) to the MAIN checkout's realpath:
+ * the project identity registry.addProject stores. Throws a user-facing
+ * Error for a missing path, a non-git path, or a bare repository (it has no
+ * main working tree to register).
  */
-export async function mergeUnregisteredWorktrees(
-	projects: RegisteredProject[],
-	rosterCwds: string[],
-): Promise<ProjectEntry[]> {
-	const out: ProjectEntry[] = [];
-	const seen = new Set(out.map((entry) => realpathOf(entry.path)));
-	for (const project of projects) {
-		const worktrees = await listUnregisteredWorktrees(project.path, rosterCwds);
-		for (const wt of worktrees) {
-			const resolved = realpathOf(wt.path);
-			if (seen.has(resolved)) continue;
-			seen.add(resolved);
-			out.push(wt);
-		}
+export async function resolveProjectRoot(path: string): Promise<string> {
+	const resolved = await validateProjectPath(path);
+	if (resolved === null) throw new Error(`not a directory: ${path}`);
+	const main = (await listWorktreeBlocks(resolved))?.[0];
+	if (main === undefined) throw new Error(`not a git repository: ${path}`);
+	if (main.bare || main.path === undefined) {
+		throw new Error(`bare repository has no main checkout to register: ${path}`);
 	}
-	return out;
+	return realpathOf(main.path);
 }
 
 /**
@@ -344,8 +352,8 @@ export async function isLinkedWorktreeOf(path: string, mainRepoPath: string): Pr
 /**
  * The registered project owning `cwd`: its main checkout, or one of its
  * linked worktrees, or undefined when no registered project matches.
- * Realpath-compared; a bare spawn on an unregistered path stays untagged
- * (the roster's fallback group shows it). Used to stamp projectId on
+ * Realpath-compared; a spawn on an unregistered path stays untagged (the
+ * roster shows only rows with a projectId). Used to stamp projectId on
  * spawns that arrive with just a cwd (the sidebar start action, /ctl/spawn).
  */
 export async function projectIdForCwd(
@@ -360,27 +368,6 @@ export async function projectIdForCwd(
 		if (await isLinkedWorktreeOf(resolved, project.path)) return project.projectId;
 	}
 	return undefined;
-}
-
-/**
- * Validate an add-existing worktree path: an existing directory, a LINKED
- * worktree of `project` (not the main checkout), and not already registered
- * (no roster cwd realpath-equals it). Returns the realpath or throws with a
- * user-safe message.
- */
-export async function validateUnregisteredWorktree(
-	path: string,
-	project: RegisteredProject,
-	registeredCwds: string[],
-): Promise<string> {
-	const resolved = await validateProjectPath(path);
-	if (resolved === null) throw new Error(`not a directory: ${path}`);
-	if (!(await isLinkedWorktreeOf(resolved, project.path))) {
-		throw new Error(`not a linked worktree of ${project.name}: ${path}`);
-	}
-	const registered = new Set(registeredCwds.filter((cwd) => cwd !== "").map(realpathOf));
-	if (registered.has(resolved)) throw new Error(`worktree already registered: ${path}`);
-	return resolved;
 }
 
 /** Guard evidence for the delete confirmation (worktree_delete_info frame). */
@@ -408,8 +395,8 @@ export interface WorktreeDeleteInfo {
 	unpushed?: boolean;
 	/** True when the branch tracks an upstream; false means the remote state is unknown, not pushed. */
 	hasUpstream?: boolean;
-	/** True when omp-web created this branch (`worktree add -b`); the delete dialog pre-checks branch deletion only then. */
-	branchOwned?: boolean;
+	/** Why the worktree's own branch cannot be deleted (protected base branch, or detached HEAD); absent when deletable. */
+	branchDeleteRefused?: string;
 	/** Changed paths from `git status --porcelain` (first 100; the counts stay exact). Absent when clean. */
 	files?: string[];
 	/** Why deletion would be refused (not linked / dirty / missing path / unreadable git state). */
@@ -429,7 +416,7 @@ export async function worktreeDeleteInfo(
 ): Promise<WorktreeDeleteInfo> {
 	const path = entry.cwd;
 	if (path === "") return { linked: false, dirty: false, reason: "entry has no worktree path" };
-	if (entry.mode === "remote" || entry.workspace?.kind !== "worktree") {
+	if (entry.workspace?.kind !== "worktree") {
 		return { linked: false, dirty: false, reason: "not a local linked worktree" };
 	}
 	const resolved = realpathOf(path);
@@ -463,15 +450,13 @@ export async function worktreeDeleteInfo(
 	if (dirty) info.files = await dirtyFiles(resolved, opts.probeExec);
 	if (state.branch !== undefined) {
 		info.branch = state.branch;
-		info.branchOwned = entry.workspace.branchCreatedByOmpWeb === true;
-		const mainPath = await mainRepoOf(resolved);
-		if (mainPath !== null && realpathOf(mainPath) !== resolved) {
-			info.merged = await branchMergedInto(mainPath, state.branch, await resolveBaseRef(mainPath));
-			const upstream = await branchUpstream(resolved);
-			info.hasUpstream = upstream.hasUpstream;
-			info.unpushed = upstream.unpushed;
-		}
+		info.merged = await branchMergedInto(mainPath, state.branch, await resolveBaseRef(mainPath));
+		const upstream = await branchUpstream(resolved);
+		info.hasUpstream = upstream.hasUpstream;
+		info.unpushed = upstream.unpushed;
 	}
+	const refused = await ownBranchRefusal(mainPath, state.branch);
+	if (refused !== undefined) info.branchDeleteRefused = refused;
 	if (dirty) info.reason = "worktree has uncommitted changes";
 	return info;
 }
@@ -540,18 +525,24 @@ export class WorktreeProbeFailedError extends Error {
 
 /** What deleteWorktree removed. */
 export interface DeleteWorktreeResult {
-	/** The removed worktree path (unchanged when the path was already gone). */
+	/** The removed worktree path. */
 	path: string;
-	/** Branch the worktree was on (absent when detached or already gone). */
+	/** Branch the worktree was on (absent when detached). */
 	branch?: string;
-	/** False when a requested branch deletion was refused by `git branch -d`. */
+	/** Set only when a branch was requested: true when `git branch -d` removed it. */
 	branchDeleted?: boolean;
+	/** Why the requested branch was left in place (another branch, protected, detached, or git refused). */
+	branchDeleteRefused?: string;
 }
 
 /**
- * Remove a local linked Git worktree after its identity and dirty guards,
- * then optionally `git branch -d` (never -D). An unreadable git state refuses
- * the delete (fail closed) instead of removing on identity alone.
+ * Remove a local linked Git worktree after its identity and dirty guards.
+ * With `opts.deleteBranch`, the branch step runs ONLY when the branch the
+ * worktree is checked out on (probed here, not remembered) equals that name
+ * and the branch is not protected; otherwise the branch is left in place and
+ * the reason is reported. Branch removal uses `git branch -d` (never -D). An
+ * unreadable git state refuses the delete (fail closed) instead of removing
+ * on identity alone.
  *
  * `probeExec` overrides the git runner used for the cleanliness probe ONLY
  * (tests inject a failing one); the linked-worktree identity check and the
@@ -559,10 +550,10 @@ export interface DeleteWorktreeResult {
  */
 export async function deleteWorktree(
 	entry: RegistryEntry,
-	opts: { deleteBranch?: boolean; probeExec?: GitRunner } = {},
+	opts: { deleteBranch?: string; probeExec?: GitRunner } = {},
 ): Promise<DeleteWorktreeResult> {
 	const path = entry.cwd;
-	if (path === "" || entry.mode === "remote" || entry.workspace?.kind !== "worktree") {
+	if (path === "" || entry.workspace?.kind !== "worktree") {
 		throw new Error(`not a local linked worktree: ${path}`);
 	}
 	const resolved = realpathOf(path);
@@ -591,15 +582,60 @@ export async function deleteWorktree(
 	}
 	const result: DeleteWorktreeResult = { path: resolved };
 	const branch = state.branch;
-	if (branch !== undefined) {
-		result.branch = branch;
-		if (opts.deleteBranch) {
-			// -d only: an unmerged branch is refused by git and left in place.
-			const del = await runGit(["branch", "-d", branch], mainPath);
+	if (branch !== undefined) result.branch = branch;
+	const requested = opts.deleteBranch;
+	if (requested) {
+		const refused = await branchDeleteRefusal(mainPath, branch, requested);
+		if (refused === undefined) {
+			const del = await runGit(["branch", "-d", requested], mainPath);
 			result.branchDeleted = del.exitCode === 0;
+			if (del.exitCode !== 0) {
+				result.branchDeleteRefused = `git refused to delete ${requested}: ${del.stderr.trim() || `git exited ${del.exitCode}`}`;
+			}
+		} else {
+			result.branchDeleted = false;
+			result.branchDeleteRefused = refused;
 		}
 	}
 	return result;
+}
+
+/**
+ * Why `requested` must not be deleted after its worktree is removed
+ * (undefined = deletable). Only the branch the worktree is ON is eligible: a
+ * worktree switched to another branch leaves the requested one in place.
+ */
+async function branchDeleteRefusal(
+	mainPath: string,
+	branch: string | undefined,
+	requested: string,
+): Promise<string | undefined> {
+	if (branch !== requested) {
+		const on = branch ?? "a detached HEAD";
+		return `worktree is on ${on}, not ${requested}; ${requested} was left in place`;
+	}
+	return ownBranchRefusal(mainPath, branch);
+}
+
+/**
+ * Why the worktree's OWN branch must not be deleted (undefined = deletable):
+ * a detached HEAD has no branch, and a protected branch is never deleted.
+ * Protected: resolveBaseRef's branch (origin's default branch when origin HEAD
+ * is set, else the main checkout's branch) and the main checkout's current
+ * branch.
+ */
+async function ownBranchRefusal(
+	mainPath: string,
+	branch: string | undefined,
+): Promise<string | undefined> {
+	if (branch === undefined) return "worktree is on a detached HEAD; there is no branch to delete";
+	const current = await runGit(["symbolic-ref", "--short", "HEAD"], mainPath);
+	const protectedNames = [await resolveBaseRef(mainPath)];
+	if (current.exitCode === 0) protectedNames.push(current.stdout.trim());
+	if (protectedNames.includes(branch)) {
+		return `${branch} is a base branch of this project and is never deleted`;
+	}
+	return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -608,17 +644,18 @@ export async function deleteWorktree(
 
 /**
  * Register a roster entry for an existing worktree path and optionally spawn
- * a daemon on it (start:true). Shared by the /ctl route and the edge command
- * handler. The entry is mode "spawned", tagged with the project's projectId
- * and name; when start:false it is registered asleep (wakeable via
- * spawn_resume; the supervisor only spawns, attach is client-side).
+ * a daemon on it (start:true). Shared by the /ctl route, the edge command
+ * handler, and the sync pass (which adopts worktrees created outside
+ * omp-web). The entry is tagged with the project's projectId and name; when
+ * start:false it is registered asleep (wakeable via spawn_resume; the
+ * supervisor only spawns, attach is client-side).
  */
 export async function registerWorktreeEntry(
 	registry: Registry,
 	supervisor: SpawnSupervisor,
 	project: RegisteredProject,
 	worktreePath: string,
-	opts: { start?: boolean; branchCreated?: boolean } = {},
+	opts: { start?: boolean } = {},
 ): Promise<RegistryEntry> {
 	if (opts.start) {
 		// supervisor.spawn creates the entry (worktreeOf auto-resolved from
@@ -633,7 +670,6 @@ export async function registerWorktreeEntry(
 				projectId: project.projectId,
 				source: { local: project.path },
 				desiredState: "running",
-				branchCreatedByOmpWeb: opts.branchCreated === true,
 			},
 		});
 		return registry.get(entry.daemonId) ?? entry;
@@ -654,24 +690,23 @@ export async function registerWorktreeEntry(
 			projectId: project.projectId,
 			source: { local: project.path },
 			desiredState: "stopped",
-			branchCreatedByOmpWeb: opts.branchCreated === true,
 		},
 		labels: [],
-		mode: "spawned",
 		status: "asleep",
 		template: supervisor.resolveTemplateName(worktreePath),
 	});
 }
 
 /**
- * Register the DEFAULT WORKSPACE of a freshly registered project: a roster
- * entry for the repo's main checkout, mapped to the repo CWD. The main
- * checkout is the repo itself, so this never creates anything under
- * workspaceDir. With opts.start the main checkout is spawned via the
- * supervisor (template/labels passthrough) and the fresh entry is tagged
- * with the projectId; otherwise it is registered asleep (mode "spawned")
- * and wakeable via spawn_resume/attach; a respawn with no lastSessionFile
- * is a fresh start. Shared by the /ctl route and the edge command handler.
+ * Register the DEFAULT WORKSPACE of a registered project: a roster entry for
+ * the repo's main checkout, mapped to the repo CWD. The main checkout is the
+ * repo itself, so this never creates anything under workspaceDir. With
+ * opts.start the main checkout is spawned via the supervisor (template/labels
+ * passthrough) and the fresh entry is tagged with the projectId; otherwise it
+ * is registered asleep (kind "direct") and wakeable via spawn_resume/attach;
+ * a respawn with no lastSessionFile is a fresh start. An existing row for the
+ * checkout (realpath match) is reused. Shared by the /ctl route, the edge
+ * command handler, and the sync pass.
  */
 export async function registerProjectMainEntry(
 	registry: Registry,
@@ -714,7 +749,6 @@ export async function registerProjectMainEntry(
 		project: project.name,
 		projectId: project.projectId,
 		labels: opts.labels ?? [],
-		mode: "spawned",
 		status: "asleep",
 		template: supervisor.resolveTemplateName(project.path, opts.template),
 	});

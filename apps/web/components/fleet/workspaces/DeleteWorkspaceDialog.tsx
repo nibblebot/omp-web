@@ -11,8 +11,9 @@ import { openDock } from "../../../store/dock";
 //
 // Worktree targets keep the guard-evidence flow: the sidebar row asked for
 // the evidence on open, this dialog shows dirty counts and branch merge/push
-// state with an "also delete branch" checkbox (default from server evidence:
-// merged && pushed). A dirty or non-linked worktree is refused outright: no
+// state with an "also delete branch" checkbox (default: merged with nothing unpushed;
+// hidden, with the reason, when the server refuses branch deletion). A dirty or
+// non-linked worktree is refused outright: no
 // --force in v1. Evidence whose git probe failed (probeFailed) is refused the
 // same way: the state is unproven, so no Delete control, only Cancel.
 //
@@ -91,12 +92,17 @@ export const DeleteWorkspaceDialog: Component = () => {
 		}
 	});
 
-	/** Evidence-backed checkbox default: delete the branch only when omp-web
-	 *  created it (`branchOwned`) and it is merged with nothing unpushed. Branches
-	 *  omp-web did not create stay unchecked; the server refuses `-d` on unmerged. */
-	const effectiveDeleteBranch = () =>
-		deleteBranch() ??
-		(info()?.branchOwned === true && info()?.merged === true && info()?.unpushed !== true);
+	/** Branch to delete with the worktree, or undefined to keep it. The checkbox
+	 *  defaults to checked only when the branch is merged with nothing unpushed.
+	 *  The server's `branchDeleteRefused` (protected or detached) always keeps it. */
+	const branchToDelete = (): string | undefined => {
+		const i = info();
+		const branch = i?.branch;
+		if (i === undefined || branch === undefined || i.branchDeleteRefused !== undefined)
+			return undefined;
+		const checked = deleteBranch() ?? (i.merged === true && i.unpushed !== true);
+		return checked ? branch : undefined;
+	};
 
 	const dirtyKinds = () => {
 		const g = info()?.git;
@@ -151,19 +157,19 @@ export const DeleteWorkspaceDialog: Component = () => {
 		// Clone retry baseline: only refusals landing AFTER this submit count.
 		errorAtOpen = state.error;
 		setRefusal(null);
-		sendDeleteWorktree(id, isClone() ? {} : effectiveDeleteBranch() ? { deleteBranch: true } : {});
+		const branch = isClone() ? undefined : branchToDelete();
+		sendDeleteWorktree(id, branch === undefined ? {} : { deleteBranch: branch });
 		if (!isClone()) close();
 	};
 
 	const branchHint = () => {
 		const i = info();
-		const owner = i?.branchOwned === true ? "created by omp-web" : "existing branch";
 		if (i?.merged === true) {
-			if (i.unpushed === true) return `${owner}; merged but unpushed`;
-			return `${owner}; ${i.hasUpstream === true ? "merged and pushed" : "merged, no upstream"}`;
+			if (i.unpushed === true) return "merged but unpushed";
+			return i.hasUpstream === true ? "merged and pushed" : "merged, no upstream";
 		}
-		if (i?.hasUpstream === true && i.unpushed !== true) return `${owner}; pushed but unmerged`;
-		return `${owner}; unmerged`;
+		if (i?.hasUpstream === true && i.unpushed !== true) return "pushed but unmerged";
+		return "unmerged";
 	};
 
 	return (
@@ -287,17 +293,27 @@ export const DeleteWorkspaceDialog: Component = () => {
 						</p>
 						<Show when={info()!.branch}>
 							{(branch) => (
-								<label class="worktree-branch-check">
-									<input
-										type="checkbox"
-										checked={effectiveDeleteBranch()}
-										onChange={(e) => setDeleteBranch(e.currentTarget.checked)}
-									/>
-									<span>
-										Also delete branch <span class="worktree-branch-name">{branch()}</span>
-									</span>
-									<span class="worktree-branch-hint">{branchHint()}</span>
-								</label>
+								<Show
+									when={info()!.branchDeleteRefused === undefined}
+									fallback={
+										<p class="worktree-branch-hint">
+											Branch <span class="worktree-branch-name">{branch()}</span> is kept:{" "}
+											{info()!.branchDeleteRefused}
+										</p>
+									}
+								>
+									<label class="worktree-branch-check">
+										<input
+											type="checkbox"
+											checked={branchToDelete() !== undefined}
+											onChange={(e) => setDeleteBranch(e.currentTarget.checked)}
+										/>
+										<span>
+											Also delete branch <span class="worktree-branch-name">{branch()}</span>
+										</span>
+										<span class="worktree-branch-hint">{branchHint()}</span>
+									</label>
+								</Show>
 							)}
 						</Show>
 					</Show>

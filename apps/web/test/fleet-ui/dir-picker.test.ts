@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { FsBrowseResult } from "../../store/projects";
-import { type BrowseFn, createDirPicker } from "../../fleet-ui/dir-picker";
+import { addTarget, type BrowseFn, createDirPicker, pathCrumbs } from "../../fleet-ui/dir-picker";
 
 function listing(partial: Partial<FsBrowseResult> & Pick<FsBrowseResult, "path">): FsBrowseResult {
 	return { parent: null, dirs: [], truncated: false, ...partial };
@@ -176,5 +176,90 @@ describe("createDirPicker subscribe", () => {
 		unsub();
 		await picker.navigate("/");
 		expect(seen).toBe(at);
+	});
+});
+
+describe("createDirPicker select", () => {
+	test("select records the pick; navigation clears it", async () => {
+		const { browse } = stubBrowse((path) =>
+			Promise.resolve(
+				listing({
+					path: path ?? "/home/u",
+					parent: "/home",
+					dirs: [{ name: "proj", path: "/home/u/proj", hasGit: true }],
+				}),
+			),
+		);
+		const picker = createDirPicker(browse);
+		await picker.navigate("/home/u");
+		expect(picker.state().selected).toBeNull();
+		picker.select("/home/u/proj");
+		expect(picker.state().selected).toBe("/home/u/proj");
+		picker.select(null);
+		expect(picker.state().selected).toBeNull();
+		picker.select("/home/u/proj");
+		await picker.navigate("/home/u/proj", { hasGit: true });
+		expect(picker.state().selected).toBeNull();
+	});
+});
+
+describe("addTarget", () => {
+	const unused = createDirPicker(() => Promise.reject(new Error("unused")));
+
+	test("null before the first load", () => {
+		expect(addTarget(unused.state())).toBeNull();
+	});
+
+	test("the current directory, with its known hasGit, when nothing is selected", async () => {
+		const { browse } = stubBrowse((path) =>
+			Promise.resolve(listing({ path: path ?? "", parent: "/home" })),
+		);
+		const picker = createDirPicker(browse);
+		await picker.navigate("/home/u/proj", { hasGit: true });
+		expect(addTarget(picker.state())).toEqual({ path: "/home/u/proj", hasGit: true });
+	});
+
+	test("the current directory's hasGit is unknown when reached without a listing row", async () => {
+		const { browse } = stubBrowse((path) =>
+			Promise.resolve(listing({ path: path ?? "", parent: "/home" })),
+		);
+		const picker = createDirPicker(browse);
+		await picker.navigate("/home/u");
+		expect(addTarget(picker.state())).toEqual({ path: "/home/u", hasGit: null });
+	});
+
+	test("the selected child wins, carrying its own hasGit", async () => {
+		const { browse } = stubBrowse((path) =>
+			Promise.resolve(
+				listing({
+					path: path ?? "/home/u",
+					parent: "/home",
+					dirs: [
+						{ name: "proj", path: "/home/u/proj", hasGit: true },
+						{ name: "tmp", path: "/home/u/tmp", hasGit: false },
+					],
+				}),
+			),
+		);
+		const picker = createDirPicker(browse);
+		await picker.navigate("/home/u");
+		picker.select("/home/u/tmp");
+		expect(addTarget(picker.state())).toEqual({ path: "/home/u/tmp", hasGit: false });
+	});
+});
+
+describe("pathCrumbs", () => {
+	test("splits a canonical path into cumulative segments", () => {
+		expect(pathCrumbs("/home/u/proj")).toEqual([
+			{ label: "/", path: "/" },
+			{ label: "home", path: "/home" },
+			{ label: "u", path: "/home/u" },
+			{ label: "proj", path: "/home/u/proj" },
+		]);
+	});
+
+	test("root is a single segment; empty path has none", () => {
+		expect(pathCrumbs("/")).toEqual([{ label: "/", path: "/" }]);
+		expect(pathCrumbs("")).toEqual([]);
 	});
 });

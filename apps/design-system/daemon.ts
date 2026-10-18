@@ -4,7 +4,7 @@ import { setConnected, settleCallResult } from "../web/store/transport";
 /**
  * Fake daemon for stories. Components reach the daemon through POST /command:
  * `call()` answers arrive as `call_result` frames on /events, and plain commands
- * (list_sessions, list_projects, ...) settle store waiters from their frames.
+ * (list_sessions, list_project_branches, ...) settle store waiters from their frames.
  * Stories have no /events stream, so this module answers in the page: the real
  * transport and store code run unchanged, only the answers come from story
  * handlers. Anything without a handler falls through to the design server,

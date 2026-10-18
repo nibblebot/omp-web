@@ -48,23 +48,25 @@ import {
 	ChevronRightIcon,
 	FileIcon,
 	InfoIcon,
+	LockIcon,
+	PackageIcon,
 	RefreshIcon,
 	RootIcon,
 	StopIcon,
 	TrashIcon,
+	WorktreeIcon,
 	XIcon,
 } from "../../ui/icons";
 
 // ---------------------------------------------------------------------------
 // One fleet-roster row: title, status indicator at the top-right corner (its
-// tooltip names the state), branch/project chips, git diffstat, and a
-// hover-revealed "⋯" actions menu (details, Start/Restart, two-click
-// stop/remove, delete worktree). The session-title line with its chevron opens
-// the session dropdown. Ready rows attach on click, asleep rows wake-then-attach.
-// Two distilled profiles exist beside the full one: worktree rows (nested,
-// branch as title) and root rows (a project group's main checkout with a root
-// glyph + branch as title, no project chip or cwd line; the group header
-// already names the project and the path lives in the tooltip/details).
+// tooltip names the state), label chips, git diffstat, and a hover-revealed
+// "⋯" actions menu (details, Start/Restart, two-click stop/remove, delete
+// worktree). The session-title line with its chevron opens the session
+// dropdown. Ready rows attach on click, asleep rows wake-then-attach.
+// Each row is one checkout: a kind icon (main checkout, worktree, clone) and the
+// branch (or detached sha) as the primary text. The group header names the
+// project; the full path lives in the hover tooltip.
 // ---------------------------------------------------------------------------
 
 /** Roster entries may carry a template name, the last-session title, and
@@ -75,9 +77,9 @@ export type RosterEntry = DaemonEntry & {
 	template?: string;
 	/** Title of the daemon's last session file (probed by the fleet edge's
 	 *  git-state poll from the lastSessionFile JSONL title slot; absent for
-	 *  remote entries and older edges). */
+	 *  older edges). */
 	sessionTitle?: string;
-	/** Current branch of the session cwd; absent for detached/non-git/remote/unprobed. */
+	/** Current branch of the session cwd; absent for detached/non-git/unprobed. */
 	branch?: string;
 	/** Porcelain file counts, plus numstat line counts when the edge probed
 	 *  them (`git diff --numstat HEAD --`); absent when unknown. */
@@ -148,6 +150,8 @@ export const WorkspaceRow: Component<{
 	 *  the group header carries the project name, so an untagged row here is
 	 *  the main worktree and distills to the root profile. */
 	inProjectGroup?: boolean;
+	/** The project's main checkout is missing on disk: rows cannot start. */
+	projectMissing?: boolean;
 }> = (props) => {
 	const d = () => props.daemon as RosterEntry;
 	const paused = () => connectionState() !== "connected";
@@ -161,11 +165,8 @@ export const WorkspaceRow: Component<{
 	const menuOpen = createMemo(() => menuOpenId() === d().daemonId);
 	/** Whether THIS row's session dropdown is open (module-level open id). */
 	const sessionsOpen = createMemo(() => sessionsOpenId() === d().daemonId);
-	/** The session-title row text: the last session's title, else "New session"
-	 *  for an empty/new untitled session (probed sessionEmpty), else nothing. */
-	const sessionTitleText = createMemo(
-		() => displayTitle(d().sessionTitle) ?? (d().sessionEmpty === true ? "New session" : undefined),
-	);
+	/** The session-title row text: the last session's title, else "no session yet". */
+	const sessionTitleText = createMemo(() => displayTitle(d().sessionTitle) ?? "no session yet");
 	/** Row ref anchors the dropdown's outside-pointerdown dismissal. */
 	let rowRef!: HTMLDivElement;
 	// Dismiss the dropdown on outside pointerdown or Escape (KebabMenu's
@@ -206,6 +207,20 @@ export const WorkspaceRow: Component<{
 	// worktree profile, unindented) and drops the project chip + cwd line.
 	// Clones are siblings of the main checkout, never root rows.
 	const isRoot = () => props.inProjectGroup === true && !isWorktree() && !isClone();
+	/** Project folder missing on disk: the group shows it, rows cannot start. */
+	const blocked = () => props.projectMissing === true;
+	/** Kind text for the left icon's aria-label and tooltip. */
+	const kindLabel = (): string => {
+		if (!isClone()) return isWorktree() ? "worktree" : "main checkout";
+		const profile = d().providerProfileId;
+		return profile !== undefined ? `clone · ${profile}` : "clone";
+	};
+	/** Primary row text: branch, detached sha for detached checkouts, clone name. */
+	const primaryText = (): string => {
+		if (isClone()) return d().name;
+		if (d().detachedAt !== undefined) return `detached @ ${d().detachedAt}`;
+		return d().branch ?? d().name;
+	};
 	/** Non-ready provider lifecycle stage for clone rows, else undefined;
 	 *  Show narrows the child callback to the stage STRING (never `true`). */
 	const activeStage = (): Exclude<LifecycleStage, "ready"> | undefined => {
@@ -247,7 +262,7 @@ export const WorkspaceRow: Component<{
 		return a && a !== "idle" ? a : undefined;
 	});
 
-	const clickable = () => d().status === "ready" || d().status === "asleep";
+	const clickable = () => !blocked() && (d().status === "ready" || d().status === "asleep");
 	/** Loading phase: activating but the daemon isn't ready yet. Renders with
 	 *  the pulsing transitional ("resolving") visual vocabulary. */
 	const waking = () => activating() && d().status !== "ready";
@@ -334,7 +349,7 @@ export const WorkspaceRow: Component<{
 	/** The kebab's Start/Restart item. Restart stops and respawns the
 	 *  process; the attached pane keeps its transcript while it restarts. */
 	const runAction = (kind: RowActionKind) => {
-		if (activating()) return;
+		if (activating() || blocked()) return;
 		closeDrawers();
 		setSessionsOpenId(null);
 		setMenuOpenId(null);
@@ -389,23 +404,34 @@ export const WorkspaceRow: Component<{
 			>
 				<div class="sidebar-row-main">
 					<div class="sidebar-row-top">
-						<span
-							class="sidebar-row-title daemon-row-title"
-							title={
-								isRoot()
-									? `main worktree, ${d().cwd}`
-									: isWorktree()
-										? (d().branch ?? d().name)
-										: d().name
-							}
-						>
-							{/* Root glyph marks the group's main worktree; the title
-						    stays the branch so a main checkout on a feature branch
-						    reads correctly. */}
-							<Show when={isRoot()}>
-								<RootIcon class="daemon-root-icon" />
+						<span class="sidebar-row-title daemon-row-title" title={d().cwd}>
+							<span
+								class="daemon-kind-icon"
+								role="img"
+								aria-label={kindLabel()}
+								title={kindLabel()}
+							>
+								<Show when={isClone()}>
+									<PackageIcon />
+								</Show>
+								<Show when={!isClone() && isWorktree()}>
+									<WorktreeIcon />
+								</Show>
+								<Show when={!isClone() && !isWorktree()}>
+									<RootIcon />
+								</Show>
+							</span>
+							{primaryText()}
+							<Show when={d().worktreeLocked === true}>
+								<span
+									class="daemon-lock-icon"
+									role="img"
+									aria-label="locked worktree"
+									title="locked worktree"
+								>
+									<LockIcon />
+								</span>
 							</Show>
-							{isWorktree() || isRoot() ? (d().branch ?? d().name) : d().name}
 						</span>
 						{/* Status indicator at the top-right corner, its tooltip naming
 						    the state. The "⋯" row-actions menu sits just left of it:
@@ -444,13 +470,15 @@ export const WorkspaceRow: Component<{
 										type="button"
 										role="menuitem"
 										class="sidebar-menu-item"
-										disabled={paused()}
+										disabled={paused() || blocked()}
 										title={
 											paused()
 												? PAUSED_TOOLTIP[connectionState()]
-												: a().kind === "start"
-													? "Starts the session process and attaches to it"
-													: "Stops and respawns the session process; the transcript is kept"
+												: blocked()
+													? "Project folder is missing; this checkout cannot start"
+													: a().kind === "start"
+														? "Starts the session process and attaches to it"
+														: "Stops and respawns the session process; the transcript is kept"
 										}
 										onClick={() => runAction(a().kind)}
 									>
@@ -527,7 +555,7 @@ export const WorkspaceRow: Component<{
 									<XIcon />
 								</ConfirmButton>
 							</Show>
-							<Show when={isWorktree() && !isClone() && d().mode !== "remote"}>
+							<Show when={isWorktree() && !isClone()}>
 								<button
 									type="button"
 									role="menuitem"
@@ -578,29 +606,25 @@ export const WorkspaceRow: Component<{
 						</span>
 					</div>
 					{/* Session switcher: the last session's title (probed by the
-					    fleet edge from the session file's JSONL title slot; "New
-					    session" for an empty one) plus a square chevron box in the
-					    row's right gutter. Clicking it opens the last-10-sessions
+					    fleet edge from the session file's JSONL title slot; "no
+					    session yet" for an untitled one) plus a square chevron box in
+					    the row's right gutter. Clicking it opens the last-10-sessions
 					    resume picker (ready/asleep rows only); other rows show the
 					    bare title. The title wraps to at most two lines and the
 					    tooltip exposes the full string. */}
 					<Show
 						when={clickable()}
 						fallback={
-							<Show when={sessionTitleText()}>
-								{(title) => (
-									<div class="daemon-session-title" title={title()}>
-										{title()}
-									</div>
-								)}
-							</Show>
+							<div class="daemon-session-title" title={sessionTitleText()}>
+								{sessionTitleText()}
+							</div>
 						}
 					>
 						<button
 							type="button"
 							class="daemon-session-title daemon-session-title--clickable"
 							aria-expanded={sessionsOpen()}
-							title={`${sessionTitleText() ?? "Sessions"}, switch session`}
+							title={`${sessionTitleText()}, switch session`}
 							onClick={(e) => {
 								// The card's resume must NOT fire when opening the
 								// dropdown from the title line.
@@ -608,27 +632,14 @@ export const WorkspaceRow: Component<{
 								sessionTitleClick();
 							}}
 						>
-							<span class="daemon-session-title-text">{sessionTitleText() ?? "Sessions"}</span>
+							<span class="daemon-session-title-text">{sessionTitleText()}</span>
 							<span class="daemon-session-chevron-box">
 								<ChevronDownIcon class="daemon-session-chevron" />
 							</span>
 						</button>
 					</Show>
-					<Show when={d().mode === "remote"}>
-						<span
-							class="daemon-chip daemon-chip--remote"
-							title="remote session host; the fleet never dials it"
-						>
-							remote
-						</span>
-					</Show>
-					<Show when={!isWorktree() && !isRoot()}>
+					<Show when={cloneProfile() !== undefined || d().labels.length > 0}>
 						<div class="daemon-chips">
-							<Show when={isClone()}>
-								<span class="daemon-chip daemon-chip--kind" title="Provider-run clone workspace">
-									clone
-								</span>
-							</Show>
 							<Show when={cloneProfile()}>
 								{(p) => (
 									<span
@@ -639,9 +650,6 @@ export const WorkspaceRow: Component<{
 									</span>
 								)}
 							</Show>
-							<span class="daemon-chip" title={d().cwd}>
-								{d().project}
-							</span>
 							<For each={d().labels}>
 								{(l) => (
 									<span class="daemon-chip daemon-chip--label" title={`label ${l}`}>
@@ -649,9 +657,6 @@ export const WorkspaceRow: Component<{
 									</span>
 								)}
 							</For>
-						</div>
-						<div class="daemon-cwd" title={d().cwd}>
-							{d().cwd}
 						</div>
 					</Show>
 					{/* Provider lifecycle progress (P8.1): preparation → runtime →
@@ -696,32 +701,12 @@ export const WorkspaceRow: Component<{
 							</div>
 						)}
 					</Show>
-					{/* Root rows drop the project chip + cwd (the group header and
-					    title tooltip carry them) but keep label chips, since labels are
-					    fleet-selector state the header knows nothing about. */}
-					<Show when={isRoot() && d().labels.length > 0}>
-						<div class="daemon-chips">
-							<For each={d().labels}>
-								{(l) => (
-									<span class="daemon-chip daemon-chip--label" title={`label ${l}`}>
-										{l}
-									</span>
-								)}
-							</For>
-						</div>
-					</Show>
-					{/* Bottom meta row: branch (full-profile rows only; worktree
-					    and root rows already show it as the title) and the diffstat
-					    cluster (changed-file count + numstat +/- line counts when
-					    probed). Row actions live in the "⋯" menu on the top row.
-					    Rendered only when there is git info to show. */}
-					<Show when={(!isWorktree() && !isRoot() && d().branch !== undefined) || hasGitStats()}>
+					{/* Bottom meta row: the diffstat cluster (changed-file count +
+					    numstat +/- line counts when probed). Row actions live in the
+					    "⋯" menu on the top row. Rendered only when there is git info
+					    to show. */}
+					<Show when={hasGitStats()}>
 						<div class="daemon-git">
-							<Show when={!isWorktree() && !isRoot() && d().branch !== undefined}>
-								<span class="daemon-git-branch" title={d().cwd}>
-									{d().branch}
-								</span>
-							</Show>
 							<Show when={filesChanged()}>
 								{(n) => (
 									<span

@@ -15,12 +15,15 @@ import { pruneUnread, unreadIds } from "../fleet-ui/unread";
 import { rejectPendingAttach, rejectPendingCalls } from "../store/transport";
 import { attachForPanel } from "../store/roster";
 import {
+	addProject,
 	announce,
 	attachSession,
 	call,
 	connectionState,
 	closeDrawers,
 	connect,
+	createClone,
+	createWorktree,
 	daemonsByProject,
 	deleteQueuedMessage,
 	hasLiveSession,
@@ -29,15 +32,11 @@ import {
 	listProjectBranches,
 	pushNotice,
 	refreshSettings,
-	removeProjectAndStop,
 	restartDaemonById,
-	sendAddExistingWorktree,
-	sendAddProject,
-	sendCreateClone,
-	sendCreateWorktree,
 	sendDeleteWorktree,
 	sendRemoveProject,
 	sendWorktreeDeleteInfo,
+	syncProjects,
 	setSidebarVisible,
 	setState,
 	setTxSidebarVisible,
@@ -50,6 +49,7 @@ import {
 	resumeDaemonSession,
 	type SubagentInfo,
 } from "../state";
+import { resetPendingProjects } from "../store/projects";
 import { settingValue } from "../store/settings";
 import { reportError } from "../store/toasts";
 import {
@@ -175,7 +175,8 @@ beforeEach(() => {
 		worktreeDeleteInfo: {},
 		pendingSessionPicker: null,
 		sessionPickerGate: null,
-		workspaceModalProjectId: null,
+		newWorkspaceProjectId: null,
+		highlightProjectId: null,
 		deleteWorkspaceTarget: null,
 		removeProjectTarget: null,
 		lightboxImage: null,
@@ -564,7 +565,7 @@ describe("hello_ok proto gate (finding #61)", () => {
 		expect(state.connected).toBe(true);
 		dispatch({ type: "hello_ok", proto: 1, name: "old", cwd: "/x", pid: 1, version: "0.0.0" });
 		expect(state.error).toContain("proto mismatch");
-		expect(state.error).toContain("expected 2");
+		expect(state.error).toContain("expected 3");
 		expect(state.connected).toBe(false);
 		// Fail-closed: the stream is torn down and NO reconnect is scheduled
 		// (a second connect() would create a second FakeEventSource).
@@ -1687,7 +1688,6 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 			cwd: `/repos/${id}`,
 			project: id,
 			labels: [],
-			mode: "spawned",
 			status: "ready",
 			...extra,
 		};
@@ -1767,53 +1767,39 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		});
 
 		const groups = daemonsByProject();
-		expect(groups.map((g) => g.project?.projectId ?? null)).toEqual(["p2", "p1", "p3"]);
+		expect(groups.map((g) => g.project.projectId)).toEqual(["p2", "p1", "p3"]);
 		expect(groups[0].daemons.map((d) => d.daemonId)).toEqual(["b-main"]);
 		// Main-checkout row first, then worktrees, regardless of roster order.
 		expect(groups[1].daemons.map((d) => d.daemonId)).toEqual(["a-main", "a-wt"]);
 		expect(groups[2].daemons).toEqual([]); // zero-daemon project still renders
 	});
 
-	test("daemonsByProject: entries without a registered project fall into one trailing null group in string-grouping order", () => {
+	test("daemonsByProject drops entries without a projectId and orders each group main, worktrees by branch, clones", () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
-
 		dispatch({ type: "registered_projects", projects: [p1] });
 		dispatch({
 			type: "roster",
 			daemons: [
-				// Unregistered: no projectId at all (remote/unregistered).
+				// Unregistered: no projectId, so no group shows it.
 				daemon("zeta-main", { project: "zeta" }),
-				// Orphaned: projectId whose registry entry is gone; must not vanish.
-				daemon("orphan", { project: "orphan", projectId: "gone" }),
-				// A worktree of an unregistered repo: same string group, main first.
-				daemon("zeta-wt", { project: "zeta", worktreeOf: "zeta" }),
-				daemon("alpha", { project: "alpha" }),
-				// Registered daemon: belongs to p1's group, not the fallback.
-				daemon("a-main", { projectId: "p1" }),
+				daemon("clone-b", { projectId: "p1", workspaceKind: "clone", name: "clone-b" }),
+				daemon("wt-zed", { projectId: "p1", worktreeOf: "a", branch: "zed" }),
+				daemon("wt-alpha", { projectId: "p1", worktreeOf: "a", branch: "alpha" }),
+				daemon("a-main", { projectId: "p1", workspaceKind: "direct" }),
+				daemon("clone-a", { projectId: "p1", workspaceKind: "clone", name: "clone-a" }),
 			],
 		});
 
 		const groups = daemonsByProject();
-		expect(groups.map((g) => g.project?.projectId ?? null)).toEqual(["p1", null]);
-		expect(groups[0].daemons.map((d) => d.daemonId)).toEqual(["a-main"]);
-		// Today's string grouping: repo keys sorted via localeCompare, main
-		// checkouts before worktrees within a repo, roster order within each.
-		expect(groups[1].daemons.map((d) => d.daemonId)).toEqual([
-			"alpha",
-			"orphan",
-			"zeta-main",
-			"zeta-wt",
+		expect(groups.map((g) => g.project.projectId)).toEqual(["p1"]);
+		expect(groups[0].daemons.map((d) => d.daemonId)).toEqual([
+			"a-main",
+			"wt-alpha",
+			"wt-zed",
+			"clone-b",
+			"clone-a",
 		]);
-	});
-
-	test("daemonsByProject with no unregistered entries emits no trailing null group", () => {
-		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
-		dispatch({ type: "registered_projects", projects: [p1] });
-		dispatch({ type: "roster", daemons: [daemon("a-main", { projectId: "p1" })] });
-		const groups = daemonsByProject();
-		expect(groups.map((g) => g.project?.projectId ?? null)).toEqual(["p1"]);
 	});
 
 	test("worktree_delete_info answers populate the daemonId-keyed evidence map (fleet-scoped)", () => {
@@ -1868,7 +1854,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		});
 	});
 
-	test("listProjectBranches resolves via a matching project_branches frame; a mismatched projectId frame does not settle it", async () => {
+	test("listProjectBranches resolves via a matching project_branches frame; other projects or remotes do not settle it", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true
 
@@ -1877,34 +1863,54 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 			{ type: "list_project_branches", id: expect.any(String), projectId: "p1" },
 		]);
 
-		// A frame for a different project belongs to a superseded request and
-		// must not settle the pending promise.
+		let settled = false;
+		void branches.then(() => {
+			settled = true;
+		});
+		// Another project's frame and the same project's other-remote frame are not this answer.
+		dispatch({ type: "project_branches", projectId: "p2", branches: [], remotes: [] });
 		dispatch({
 			type: "project_branches",
-			projectId: "p2",
-			branches: [{ name: "other", checkedOut: false }],
+			projectId: "p1",
+			remote: "origin",
+			branches: [],
+			remotes: ["origin"],
 		});
-		let settled = false;
-		void branches.then(
-			() => {
-				settled = true;
-			},
-			() => {
-				settled = true;
-			},
-		);
 		await flushMicrotasks();
 		expect(settled).toBe(false);
 
-		// The matching projectId frame settles it with the branch list.
 		dispatch({
 			type: "project_branches",
 			projectId: "p1",
 			branches: [{ name: "main", checkedOut: true, worktreePath: "/w/main" }],
+			remotes: ["origin"],
+			defaultBase: "main",
 		});
-		await expect(branches).resolves.toEqual([
-			{ name: "main", checkedOut: true, worktreePath: "/w/main" },
+		await expect(branches).resolves.toEqual({
+			branches: [{ name: "main", checkedOut: true, worktreePath: "/w/main" }],
+			remotes: ["origin"],
+			defaultBase: "main",
+		});
+	});
+
+	test("listProjectBranches with a remote posts it and settles from that remote's frame", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		const fromOrigin = listProjectBranches("p1", "origin");
+		expect(posted).toEqual([
+			{ type: "list_project_branches", id: expect.any(String), projectId: "p1", remote: "origin" },
 		]);
+		dispatch({
+			type: "project_branches",
+			projectId: "p1",
+			remote: "origin",
+			branches: [{ name: "feat", checkedOut: false }],
+			remotes: ["origin"],
+		});
+		await expect(fromOrigin).resolves.toMatchObject({
+			branches: [{ name: "feat", checkedOut: false }],
+		});
 	});
 });
 
@@ -1912,41 +1918,68 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 // Phase 5: project/worktree command senders. Each POSTs the exact
 // ClientCommand variant the fleet edge allowlists.
 // ---------------------------------------------------------------------------
+/** Id of the most recent command posted; keyed result frames answer it. */
+function lastCommandId(): string {
+	const cmd = posted.at(-1);
+	if (cmd === undefined) throw new Error("expected a posted command");
+	return cmd.id;
+}
+
 describe("Phase 5: project/worktree command senders", () => {
-	test("sendAddProject posts add_project (path + optional start/template/labels)", () => {
+	test("addProject posts add_project and resolves from add_project_result", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
-		sendAddProject("/repos/a", { start: true, template: "agent", labels: ["x", "y"] });
-		expect(posted).toEqual([
-			{
-				type: "add_project",
-				id: expect.any(String),
-				path: "/repos/a",
-				start: true,
-				template: "agent",
-				labels: ["x", "y"],
-			},
-		]);
-
-		// Bare path: no optional fields on the wire.
-		posted.length = 0;
-		sendAddProject("/repos/b");
-		expect(posted).toEqual([{ type: "add_project", id: expect.any(String), path: "/repos/b" }]);
+		const added = addProject("/repos/a");
+		expect(posted).toEqual([{ type: "add_project", id: expect.any(String), path: "/repos/a" }]);
+		dispatch({
+			type: "add_project_result",
+			id: lastCommandId(),
+			ok: true,
+			projectId: "p1",
+			existing: false,
+		});
+		await expect(added).resolves.toEqual({ projectId: "p1", existing: false });
 	});
 
-	test("the start toggle reaches the three create senders as start:false and arms no session picker", () => {
+	test("addProject reports an already-registered checkout as existing; a refusal rejects with the fleet's message", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
-		sendCreateWorktree("p1", "feature-x", { start: false });
-		sendAddExistingWorktree("p1", "/repos/p1-wt", { start: false });
-		sendCreateClone("p1", "clone-x", { profileId: "prof", start: false });
-		expect(posted).toEqual([
-			expect.objectContaining({ type: "create_worktree", start: false }),
-			expect.objectContaining({ type: "add_worktree", start: false }),
-			expect.objectContaining({ type: "create_clone", start: false }),
-		]);
+		const again = addProject("/repos/a/src");
+		dispatch({
+			type: "add_project_result",
+			id: lastCommandId(),
+			ok: true,
+			projectId: "p1",
+			existing: true,
+		});
+		await expect(again).resolves.toEqual({ projectId: "p1", existing: true });
+
+		const bare = addProject("/repos/bare.git");
+		dispatch({
+			type: "add_project_result",
+			id: lastCommandId(),
+			ok: false,
+			error: "bare repository: add a checkout instead",
+		});
+		await expect(bare).rejects.toThrow("bare repository: add a checkout instead");
+	});
+
+	test("addProject never arms the session picker gate", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		const added = addProject("/repos/a");
+		expect(state.pendingSessionPicker).toBeNull();
+		dispatch({
+			type: "add_project_result",
+			id: lastCommandId(),
+			ok: true,
+			projectId: "p1",
+			existing: false,
+		});
+		await added;
 		expect(state.pendingSessionPicker).toBeNull();
 	});
 
@@ -1957,11 +1990,11 @@ describe("Phase 5: project/worktree command senders", () => {
 		expect(posted).toEqual([{ type: "remove_project", id: expect.any(String), projectId: "p1" }]);
 	});
 
-	test("sendCreateWorktree posts create_worktree with name and optional overrides", () => {
+	test("createWorktree posts create_worktree (start:true) and resolves with the daemonId from workspace_create_result", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
-		sendCreateWorktree("p1", "feature-x", { baseRef: "main", start: true });
+		const created = createWorktree("p1", { name: "feature-x", baseRef: "main" });
 		expect(posted).toEqual([
 			{
 				type: "create_worktree",
@@ -1972,9 +2005,15 @@ describe("Phase 5: project/worktree command senders", () => {
 				start: true,
 			},
 		]);
+		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d7" });
+		await expect(created).resolves.toEqual({ daemonId: "d7" });
+	});
 
-		posted.length = 0;
-		sendCreateWorktree("p1", "feat", { existingBranch: "feat" });
+	test("createWorktree with an existing branch posts existingBranch; a refusal rejects with the fleet's message", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		const existing = createWorktree("p1", { name: "feat", existingBranch: "feat" });
 		expect(posted).toEqual([
 			{
 				type: "create_worktree",
@@ -1982,32 +2021,80 @@ describe("Phase 5: project/worktree command senders", () => {
 				projectId: "p1",
 				name: "feat",
 				existingBranch: "feat",
-			},
-		]);
-	});
-
-	test("sendAddExistingWorktree posts add_worktree with the worktree path", () => {
-		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
-		sendAddExistingWorktree("p1", "/w/feat", { start: true });
-		expect(posted).toEqual([
-			{
-				type: "add_worktree",
-				id: expect.any(String),
-				projectId: "p1",
-				worktreePath: "/w/feat",
 				start: true,
 			},
 		]);
+		dispatch({
+			type: "workspace_create_result",
+			id: lastCommandId(),
+			ok: false,
+			error: "branch feat is already checked out",
+		});
+		await expect(existing).rejects.toThrow("branch feat is already checked out");
 	});
 
-	test("sendDeleteWorktree posts delete_worktree (deleteBranch optional)", () => {
+	test("createClone posts create_clone (start:true) with the remote source and resolves from workspace_create_result", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
-		sendDeleteWorktree("d1", { deleteBranch: true });
+		const cloned = createClone("p1", {
+			name: "clone-x",
+			profileId: "prof",
+			source: { remoteName: "upstream" },
+			branch: "main",
+		});
 		expect(posted).toEqual([
-			{ type: "delete_worktree", id: expect.any(String), daemonId: "d1", deleteBranch: true },
+			{
+				type: "create_clone",
+				id: expect.any(String),
+				projectId: "p1",
+				name: "clone-x",
+				profileId: "prof",
+				source: { remoteName: "upstream" },
+				branch: "main",
+				start: true,
+			},
+		]);
+		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d8" });
+		await expect(cloned).resolves.toEqual({ daemonId: "d8" });
+	});
+
+	test("resetPendingProjects (stream teardown) rejects in-flight add and create waiters with Disconnected", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		const added = addProject("/repos/a");
+		const created = createWorktree("p1", { name: "feat" });
+		resetPendingProjects();
+		await expect(added).rejects.toThrow("Disconnected");
+		await expect(created).rejects.toThrow("Disconnected");
+	});
+
+	test("syncProjects posts sync_projects and coalesces calls within 5s", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		const base = Date.now() + 100_000;
+		const now = vi.spyOn(Date, "now").mockReturnValue(base);
+		try {
+			syncProjects();
+			syncProjects();
+			expect(posted.map((c) => c.type)).toEqual(["sync_projects"]);
+			now.mockReturnValue(base + 5000);
+			syncProjects();
+			expect(posted.map((c) => c.type)).toEqual(["sync_projects", "sync_projects"]);
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	test("sendDeleteWorktree posts delete_worktree (deleteBranch is the branch name, optional)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendDeleteWorktree("d1", { deleteBranch: "feat" });
+		expect(posted).toEqual([
+			{ type: "delete_worktree", id: expect.any(String), daemonId: "d1", deleteBranch: "feat" },
 		]);
 
 		posted.length = 0;
@@ -2022,22 +2109,6 @@ describe("Phase 5: project/worktree command senders", () => {
 		expect(posted).toEqual([
 			{ type: "worktree_delete_info", id: expect.any(String), daemonId: "d1" },
 		]);
-	});
-
-	test("start:false senders leave the gate untouched", () => {
-		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
-
-		sendAddProject("/repos/a", { start: false });
-		sendCreateWorktree("p1", "feat");
-		sendAddExistingWorktree("p1", "/w/feat", { start: false });
-		expect(state.pendingSessionPicker).toBeNull();
-		expect(posted.map((c) => c.type)).toEqual(["add_project", "create_worktree", "add_worktree"]);
-		// start:false rides the wire (explicit opts pass through like spawnDaemon's)
-		// but must NOT arm the gate.
-		expect(posted[0]).toMatchObject({ type: "add_project", start: false });
-		expect(posted[1]).not.toHaveProperty("start");
-		expect(posted[2]).toMatchObject({ type: "add_worktree", start: false });
 	});
 });
 
@@ -2073,7 +2144,9 @@ describe("Phase 5: post-attach session-picker gate", () => {
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
 		// The sender arms the gate (it cannot know the spawned daemon's id).
-		sendAddProject("/repos/a", { start: true });
+		const created = createWorktree("p1", { name: "feat" });
+		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d1" });
+		await expect(created).resolves.toEqual({ daemonId: "d1" });
 		expect(state.pendingSessionPicker).not.toBeNull();
 
 		// The onboarding attach stamps the REAL daemonId.
@@ -2097,7 +2170,9 @@ describe("Phase 5: post-attach session-picker gate", () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
-		sendCreateWorktree("p1", "feat", { start: true });
+		const created = createWorktree("p1", { name: "feat" });
+		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d2" });
+		await created;
 		const attach = attachSession("d2");
 		expect(state.pendingSessionPicker).toBe("d2");
 		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: true, sessionId: "d2" });
@@ -2117,7 +2192,9 @@ describe("Phase 5: post-attach session-picker gate", () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
-		sendAddExistingWorktree("p1", "/w/feat", { start: true });
+		const created = createWorktree("p1", { name: "feat", existingBranch: "feat" });
+		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d3" });
+		await created;
 		const attach = attachSession("d3");
 		expect(state.pendingSessionPicker).toBe("d3");
 		dispatch({
@@ -2131,11 +2208,29 @@ describe("Phase 5: post-attach session-picker gate", () => {
 		expect(postedOf("list_sessions")).toHaveLength(0);
 	});
 
+	test("a refused create disarms the gate before any attach", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		const created = createWorktree("p1", { name: "feat" });
+		expect(state.pendingSessionPicker).not.toBeNull();
+		dispatch({
+			type: "workspace_create_result",
+			id: lastCommandId(),
+			ok: false,
+			error: "disk full",
+		});
+		await expect(created).rejects.toThrow("disk full");
+		expect(state.pendingSessionPicker).toBeNull();
+	});
+
 	test("a superseding attach re-points the gate to the latest daemon (latest-wins)", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
-		sendAddProject("/repos/a", { start: true });
+		const created = createClone("p1", { name: "clone-x", profileId: "prof" });
+		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d0" });
+		await created;
 		attachSession("d1");
 		expect(state.pendingSessionPicker).toBe("d1");
 		// A newer attach supersedes it before the first settles; the gate
@@ -2194,13 +2289,15 @@ describe("Phase 5: post-attach session-picker gate", () => {
 		expect(state.sessionPickerGate).toBeNull();
 	});
 
-	test("a switch to a different daemon disarms the gate; the onboarding daemon's own switch keeps it", () => {
+	test("a switch to a different daemon disarms the gate; the onboarding daemon's own switch keeps it", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 		dispatch(attached("daemon-a")); // already attached elsewhere
 
 		// Onboarding flow: armed, then attached to the new daemon.
-		sendCreateWorktree("p1", "feat", { start: true });
+		const created = createWorktree("p1", { name: "feat" });
+		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d1" });
+		await created;
 		attachSession("d1");
 		expect(state.pendingSessionPicker).toBe("d1");
 
@@ -2295,7 +2392,6 @@ describe("attached session reconciliation against roster truth", () => {
 			cwd: `/repos/${id}`,
 			project: id,
 			labels: [],
-			mode: "spawned",
 			status: "ready",
 			...extra,
 		};
@@ -2453,27 +2549,6 @@ describe("attached session reconciliation against roster truth", () => {
 		expect(isUserStopped("daemon-a")).toBe(false);
 	});
 
-	test("removing a project with a running process defers remove_project until the roster drops it", () => {
-		attachAndPrime();
-		dispatch({
-			type: "roster",
-			daemons: [daemon("daemon-a", { status: "ready", projectId: "p1" })],
-		});
-		removeProjectAndStop("p1");
-		expect(posted.filter((c) => c.type === "remove_project")).toEqual([]);
-
-		dispatch({
-			type: "roster",
-			daemons: [daemon("daemon-a", { status: "ready", projectId: "p1" })],
-		});
-		expect(posted.filter((c) => c.type === "remove_project")).toEqual([]);
-
-		dispatch({ type: "roster", daemons: [] });
-		expect(posted.filter((c) => c.type === "remove_project")).toEqual([
-			{ type: "remove_project", id: expect.any(String), projectId: "p1" },
-		]);
-	});
-
 	test("a user-stopped attached daemon removed from the roster clears the view and its mark", () => {
 		attachAndPrime();
 		stopDaemonById("daemon-a");
@@ -2538,7 +2613,6 @@ describe("unread-dot tracking", () => {
 			cwd: `/repos/${id}`,
 			project: id,
 			labels: [],
-			mode: "spawned",
 			status: "ready",
 			...extra,
 		};
@@ -2618,7 +2692,6 @@ describe("daemon_activity frames", () => {
 			cwd: `/repos/${id}`,
 			project: id,
 			labels: [],
-			mode: "spawned",
 			status: "ready",
 			...extra,
 		};
@@ -2692,7 +2765,6 @@ describe("roster session dropdown", () => {
 			cwd: `/repos/${id}`,
 			project: "x",
 			labels: [],
-			mode: "spawned",
 			status: "ready",
 			...extra,
 		};

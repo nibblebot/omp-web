@@ -20,8 +20,6 @@
  *   omp-web profiles [--port n]
  *   omp-web spawn <path> [--template t] [--name n] [--label k=v]…
  *   omp-web add-repo <path> [--start] [--template t] [--labels k=v,...]
- *   omp-web enroll <name> [--label k=v]… [--cwd dir] [--callback-url url]
- *   omp-web provision <name> [--label k=v]…
  *   omp-web add-clone <project> <name> --profile <id>
  *                        [--local path | --remote url] [--revision rev]
  *                        [--branch b] [--no-start]
@@ -30,8 +28,7 @@
  *   omp-web remove <selector>
  *   omp-web rm-project <selector>
  *   omp-web add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]
- *   omp-web add-worktree <project> --existing <path> [--no-start]
- *   omp-web rm-worktree <daemon-id> [--delete-branch]
+ *   omp-web rm-worktree <daemon-id> [--delete-branch <name>]
  *   omp-web prompt <selector> <text> [--wait <ms>]
  *
  * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722. For `ui`,
@@ -51,7 +48,6 @@ import { dirname, join } from "node:path";
 import { LockHeldError } from "#lib/platform/file-lock";
 import { isInteractiveDesktop, openBrowser } from "#lib/platform/open-browser";
 import { loadConfig, resolveConfigPath } from "./config";
-import { formatSessionHostCommand, readSessionEnrollment } from "#lib/wire/session-host-command";
 import { offerFirstRunSetup } from "./first-run";
 import { resolveStatePath, startFleet, type FleetServer } from "./server";
 import { runProfilePreflight } from "./preflight";
@@ -60,21 +56,21 @@ import { DEFAULT_UI_PORT, startUiServer, type UiServer } from "./ui-server";
 const DEFAULT_PORT = 4722;
 const NOT_RUNNING_MESSAGE = "omp-web not running. Start it: omp-web";
 
-/** Wire shapes the CLI renders (subsets of RegistryEntry / ProjectEntry). */
+/** Wire shapes the CLI renders (subsets of RegistryEntry / RegisteredProject). */
 interface DaemonRow {
 	daemonId: string;
 	name: string;
-	mode: string;
+	projectId?: string;
 	status: string;
 	project: string;
 	cwd?: string;
 	labels?: string[];
 }
 interface ProjectRow {
+	projectId: string;
 	name: string;
 	path: string;
-	branch?: string;
-	worktreeOf?: string;
+	missing?: boolean;
 }
 
 /** Wire shape of GET /ctl/profiles entries (PublicProviderProfile; secret-free). */
@@ -97,16 +93,22 @@ interface ParsedArgs {
 }
 
 /** Flags that repeat and accumulate (each occurrence appends). */
-const MULTI_FLAGS = new Set(["label", "trusted-proxy"]);
+const MULTI_FLAGS: Record<string, true> = { label: true, "trusted-proxy": true };
 
 /** Flags that are bare booleans: presence = true (never consume a value); `--flag=true|false` also accepted. */
-const BOOLEAN_FLAGS = new Set(["start", "no-start", "delete-branch", "no-open", "verbose", "help"]);
+const BOOLEAN_FLAGS: Record<string, true> = {
+	start: true,
+	"no-start": true,
+	"no-open": true,
+	verbose: true,
+	help: true,
+};
 
 function parseArgs(argv: string[]): ParsedArgs {
 	const positionals: string[] = [];
 	const flags = new Map<string, FlagValue>();
 	const put = (name: string, value: string | boolean) => {
-		if (MULTI_FLAGS.has(name)) {
+		if (Object.hasOwn(MULTI_FLAGS, name)) {
 			const existing = flags.get(name);
 			if (Array.isArray(existing)) existing.push(value as string);
 			else flags.set(name, [value as string]);
@@ -120,7 +122,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 			const eq = arg.indexOf("=");
 			const name = eq >= 0 ? arg.slice(2, eq) : arg.slice(2);
 			if (eq >= 0) {
-				if (BOOLEAN_FLAGS.has(name)) {
+				if (Object.hasOwn(BOOLEAN_FLAGS, name)) {
 					const value = arg.slice(eq + 1);
 					if (value !== "true" && value !== "false")
 						throw new CliError(`invalid value for --${name}: ${value}`);
@@ -132,7 +134,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 			}
 			// Bare boolean flags never consume the next argument (`--start /path`
 			// must not eat the path as a value).
-			if (BOOLEAN_FLAGS.has(name)) {
+			if (Object.hasOwn(BOOLEAN_FLAGS, name)) {
 				put(name, true);
 				continue;
 			}
@@ -143,7 +145,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 				// and dropped by flagString/flagNumber. A non-multi flag with
 				// no usable value is a user error, so say so instead of
 				// silently ignoring it. Multi flags keep the legacy leniency.
-				if (MULTI_FLAGS.has(name)) {
+				if (Object.hasOwn(MULTI_FLAGS, name)) {
 					put(name, true);
 				} else if (next === undefined) {
 					throw new CliError(`missing value for --${name}`);
@@ -280,7 +282,6 @@ function isDaemonRow(value: unknown): value is DaemonRow {
 	return (
 		typeof row.daemonId === "string" &&
 		typeof row.name === "string" &&
-		typeof row.mode === "string" &&
 		typeof row.status === "string"
 	);
 }
@@ -428,26 +429,34 @@ async function sessionsCmd(port: number): Promise<number> {
 		.map((entry) => [
 			entry.daemonId,
 			entry.name,
-			entry.mode,
 			entry.status,
 			entry.project,
 			entry.cwd ?? "",
 			(entry.labels ?? []).join(","),
 		]);
-	console.log(renderTable(["id", "name", "mode", "status", "project", "cwd", "labels"], rows));
+	console.log(renderTable(["id", "name", "status", "project", "cwd", "labels"], rows));
 	return 0;
 }
 
 async function projectsCmd(port: number): Promise<number> {
-	const body = (await ctl(port, "/ctl/projects")) as { projects?: unknown; registered?: unknown };
+	const body = (await ctl(port, "/ctl/projects")) as { projects?: unknown };
 	if (!Array.isArray(body.projects)) throw new CliError("unexpected projects response");
+	const roster = await ctl(port, "/ctl/sessions");
+	const worktrees = new Map<string, number>();
+	if (Array.isArray(roster)) {
+		for (const row of roster) {
+			if (!isDaemonRow(row) || row.projectId === undefined) continue;
+			worktrees.set(row.projectId, (worktrees.get(row.projectId) ?? 0) + 1);
+		}
+	}
 	const rows = (body.projects as ProjectRow[]).map((p) => [
+		p.projectId,
 		p.name,
 		p.path,
-		p.branch ?? "",
-		p.worktreeOf ?? "",
+		String(worktrees.get(p.projectId) ?? 0),
+		p.missing === true ? "yes" : "",
 	]);
-	console.log(renderTable(["name", "path", "branch", "worktreeOf"], rows));
+	console.log(renderTable(["id", "name", "path", "worktrees", "missing"], rows));
 	return 0;
 }
 
@@ -539,24 +548,8 @@ async function rmProjectCmd(
 	if (selector === undefined) {
 		throw new CliError("usage: omp-web rm-project <selector> (projectId, realpath, or basename)");
 	}
-	// Resolve the selector client-side against the registered set: exact
-	// projectId, exact realpath (or the selector's own realpath, so a
-	// symlink/relative path still matches), or basename.
-	const body = (await ctl(port, "/ctl/projects")) as {
-		registered?: Array<{ projectId: string; path: string; name: string }>;
-	};
-	if (!Array.isArray(body.registered)) throw new CliError("unexpected projects response");
-	const resolved = realpathOrNull(selector);
-	const match = body.registered.find(
-		(p) =>
-			p.projectId === selector ||
-			p.path === selector ||
-			p.name === selector ||
-			(resolved !== null && p.path === resolved),
-	);
-	if (match === undefined)
-		throw new CliError(`no registered project matches selector: ${selector}`);
-	const out = (await ctl(port, `/ctl/projects/${match.projectId}`, { method: "DELETE" })) as {
+	const projectId = await resolveProjectId(port, selector);
+	const out = (await ctl(port, `/ctl/projects/${projectId}`, { method: "DELETE" })) as {
 		removed?: unknown;
 	};
 	console.log(`removed project ${String(out.removed)}`);
@@ -565,12 +558,10 @@ async function rmProjectCmd(
 
 /** Resolve a project selector (projectId, realpath, or basename) to its id. */
 async function resolveProjectId(port: number, selector: string): Promise<string> {
-	const body = (await ctl(port, "/ctl/projects")) as {
-		registered?: Array<{ projectId: string; path: string; name: string }>;
-	};
-	if (!Array.isArray(body.registered)) throw new CliError("unexpected projects response");
+	const body = (await ctl(port, "/ctl/projects")) as { projects?: unknown };
+	if (!Array.isArray(body.projects)) throw new CliError("unexpected projects response");
 	const resolved = realpathOrNull(selector);
-	const match = body.registered.find(
+	const match = (body.projects as ProjectRow[]).find(
 		(p) =>
 			p.projectId === selector ||
 			p.path === selector ||
@@ -583,10 +574,9 @@ async function resolveProjectId(port: number, selector: string): Promise<string>
 }
 
 /**
- * add-worktree: create-new (`<project> <name>` with optional --base/--branch)
- * or add-existing (`<project> --existing <path>`). start defaults to ON
- * (--no-start disables); the server registers the roster entry and spawns
- * only when start is true.
+ * add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]:
+ * create a git worktree for the project. start defaults to ON (--no-start
+ * disables); the server spawns only when start is true.
  */
 async function addWorktreeCmd(
 	positionals: string[],
@@ -595,11 +585,9 @@ async function addWorktreeCmd(
 ): Promise<number> {
 	const project = positionals[0];
 	const name = positionals[1];
-	const existing = flagString(flags, "existing");
-	if (project === undefined || (name === undefined) === (existing === undefined)) {
+	if (project === undefined || name === undefined) {
 		throw new CliError(
-			"usage: omp-web add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]\n" +
-				"       omp-web add-worktree <project> --existing <path> [--no-start]",
+			"usage: omp-web add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]",
 		);
 	}
 	const projectId = await resolveProjectId(port, project);
@@ -609,23 +597,12 @@ async function addWorktreeCmd(
 	const body = (await ctl(port, `/ctl/projects/${encodeURIComponent(projectId)}/worktrees`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify(
-			existing !== undefined
-				? { worktreePath: existing, start }
-				: { name, baseRef: base, existingBranch: branch, start },
-		),
+		body: JSON.stringify({ name, baseRef: base, existingBranch: branch, start }),
 	})) as { entry?: { daemonId?: string; cwd?: string; status?: string } };
 	const entry = body.entry ?? {};
-	const where = String(entry.cwd ?? existing ?? name);
-	if (existing !== undefined) {
-		console.log(
-			`registered worktree ${where} (${String(entry.daemonId ?? "?")})${start ? `, status ${String(entry.status ?? "?")}` : ", not started"}`,
-		);
-	} else {
-		console.log(
-			`created worktree ${where} (${String(entry.daemonId ?? "?")})${start ? `, status ${String(entry.status ?? "?")}` : ", not started"}`,
-		);
-	}
+	console.log(
+		`created worktree ${String(entry.cwd ?? name)} (${String(entry.daemonId ?? "?")})${start ? `, status ${String(entry.status ?? "?")}` : ", not started"}`,
+	);
 	return 0;
 }
 
@@ -723,7 +700,7 @@ async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
 	return result.ok ? 0 : 1;
 }
 
-/** rm-worktree <daemon-id> [--delete-branch]: stop + evict + git worktree
+/** rm-worktree <daemon-id> [--delete-branch <name>]: stop + evict + git worktree
  *  remove (worktree kind), or the verify-at-deletion gate for clone
  *  workspaces (same DELETE route; the server dispatches by kind). */
 async function rmWorktreeCmd(
@@ -733,12 +710,12 @@ async function rmWorktreeCmd(
 ): Promise<number> {
 	const daemonId = positionals[0];
 	if (daemonId === undefined)
-		throw new CliError("usage: omp-web rm-worktree <daemon-id> [--delete-branch]");
-	const deleteBranch = flagBoolean(flags, "delete-branch");
+		throw new CliError("usage: omp-web rm-worktree <daemon-id> [--delete-branch <name>]");
+	const deleteBranch = flagString(flags, "delete-branch");
 	const body = (await ctl(port, `/ctl/worktrees/${encodeURIComponent(daemonId)}`, {
 		method: "DELETE",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify(deleteBranch === true ? { deleteBranch: true } : {}),
+		body: JSON.stringify(deleteBranch === undefined ? {} : { deleteBranch }),
 	})) as { removed?: unknown; worktree?: { path?: string; branch?: string }; verified?: unknown[] };
 	const wt = body.worktree ?? {};
 	const parts = [
@@ -750,68 +727,6 @@ async function rmWorktreeCmd(
 			? `removed clone workspace daemon ${String(body.removed ?? daemonId)} (verified ${(body.verified as unknown[]).length} session${(body.verified as unknown[]).length === 1 ? "" : "s"})`
 			: `removed worktree daemon ${String(body.removed ?? daemonId)}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`;
 	console.log(removedLabel);
-	return 0;
-}
-
-/**
- * enroll: create a remote roster entry and print the command that starts its
- * session on the remote host. The session dials OUT to the callback URL with
- * the one-time-shown token; the control plane never connects to it.
- */
-async function enrollCmd(
-	positionals: string[],
-	flags: Map<string, FlagValue>,
-	port: number,
-): Promise<number> {
-	const name = positionals[0];
-	if (name === undefined) {
-		throw new CliError(
-			"usage: omp-web enroll <name> [--label k=v]… [--cwd dir] [--callback-url url]",
-		);
-	}
-	const cwd = flagString(flags, "cwd");
-	const body = (await ctl(port, "/ctl/enroll", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			name,
-			labels: labelList(flags),
-			cwd,
-			callbackUrl: flagString(flags, "callback-url"),
-		}),
-	})) as { entry?: { daemonId?: unknown; name?: unknown } };
-	const { entry } = body;
-	const enrollment = readSessionEnrollment(body);
-	if (entry === undefined || enrollment === undefined) {
-		throw new CliError("unexpected enroll response");
-	}
-	console.log(
-		`enrolled ${String(entry.daemonId)} (${String(entry.name)}); run on the session host:`,
-	);
-	console.log(formatSessionHostCommand(enrollment, cwd));
-	return 0;
-}
-
-async function provisionCmd(
-	positionals: string[],
-	flags: Map<string, FlagValue>,
-	port: number,
-): Promise<number> {
-	const name = positionals[0];
-	if (name === undefined) {
-		throw new CliError("usage: omp-web provision <name> [--label k=v]…");
-	}
-	const body = (await ctl(port, "/ctl/provision", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			name,
-			labels: labelList(flags),
-		}),
-	})) as Record<string, unknown>;
-	console.log(
-		`provisioned ${String(body.daemonId)} (${String(body.name)}), status ${String(body.status)}`,
-	);
 	return 0;
 }
 
@@ -943,17 +858,10 @@ commands:
   control                      control plane only; no UI on this port
   ui                           UI daemon: static UI + proxy to the control plane
   sessions                     list sessions
-  projects                     list discovered projects
+  projects                     list registered projects (id, name, path, worktrees, missing)
   profiles                     list provider profiles (secret-free catalog)
   spawn <path> [--template t] [--name n] [--label k=v]…
   add-repo <path> [--start] [--template t] [--labels k=v,...]
-  enroll <name> [--label k=v]… [--cwd dir] [--callback-url url]
-                               remote session: prints the command to run on its host
-  provision <name> [--label k=v]…
-                               enroll, then run OMP_FLEET_SPAWN_HOOK with
-                               OMP_HOOK_NAME, OMP_HOOK_LABELS and the
-                               OMP_SESSION_CALLBACK_* env; the hook must start
-                               \`omp-web session\` with it (exit 0 = success)
   add-clone <project> <name> --profile <id> [--local path | --remote url]
                                [--revision rev] [--branch b] [--no-start]
   start <selector>             ensure a clone workspace is running (wake)
@@ -962,8 +870,7 @@ commands:
   rm-project <selector>
   preflight --profile <id>
   add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]
-  add-worktree <project> --existing <path> [--no-start]
-  rm-worktree <daemon-id> [--delete-branch]
+  rm-worktree <daemon-id> [--delete-branch <name>]
   prompt <selector> <text> [--wait <ms>]
 
 options:
@@ -1035,10 +942,6 @@ export async function main(argv: string[]): Promise<number> {
 				return await spawnCmd(rest, flags, port);
 			case "add-repo":
 				return await addRepoCmd(rest, flags, port);
-			case "enroll":
-				return await enrollCmd(rest, flags, port);
-			case "provision":
-				return await provisionCmd(rest, flags, port);
 			case "add-clone":
 				return await addCloneCmd(rest, flags, port);
 			case "start":

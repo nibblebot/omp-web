@@ -1,7 +1,7 @@
 /**
- * Fleet edge worktree command tests: create_worktree / add_worktree /
- * worktree_delete_info / delete_worktree / list_project_branches /
- * list_projects against a real git repo, on a standalone edge mount.
+ * Fleet edge worktree command tests: create_worktree / worktree_delete_info /
+ * delete_worktree / list_project_branches against a real git repo, on a
+ * standalone edge mount.
  * Worktree entries are non-clone spawned entries: the "local" template
  * idles (`sleep 30`) and never pairs, so the fleet only ever sees the
  * roster and git state, never a session dialed by the fleet.
@@ -93,7 +93,7 @@ describe("edge worktree commands", () => {
 		writeFileSync(join(repoDir, "readme.md"), "hi\n");
 		await gitIn(repoDir, ["add", "."]);
 		await gitIn(repoDir, ["commit", "-q", "-m", "init"]);
-		project = await registry.addProject(repoDir);
+		project = registry.addProject(repoDir).project;
 	});
 
 	afterAll(async () => {
@@ -123,7 +123,6 @@ describe("edge worktree commands", () => {
 		const entry = roster.daemons.find((d) => d.cwd === target)!;
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
-		expect(entry.mode).toBe("spawned");
 		expect(entry.status).toBe("asleep");
 		expect(existsSync(target)).toBe(true);
 		// The roster never leaks tokens/endpoints.
@@ -131,30 +130,12 @@ describe("edge worktree commands", () => {
 		expect(JSON.stringify(roster)).not.toContain("endpoint");
 	});
 
-	test("add_worktree registers a discovered-but-unregistered worktree", async () => {
-		const outside = join(config.workspaceDir, "repo", "raw-wt");
-		await gitIn(repoDir, ["worktree", "add", "-b", "raw-feat", outside]);
-		await browser.send({
-			type: "add_worktree",
-			id: "wt2",
-			projectId: project.projectId,
-			worktreePath: outside,
-		});
-		const roster = asRoster(
-			await browser.waitForFrame(
-				(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === outside),
-				"roster with the added worktree",
-			),
-		);
-		const entry = roster.daemons.find((d) => d.cwd === outside)!;
-		expect(entry.projectId).toBe(project.projectId);
-		expect(entry.worktreeOf).toBe(project.name);
-		expect(entry.status).toBe("asleep");
-	});
-
 	test("delete_worktree removes a clean attached linked worktree", async () => {
 		const outside = join(config.workspaceDir, "repo", "raw-wt");
-		const entry = registry.list().find((e) => e.cwd === outside)!;
+		await gitIn(repoDir, ["worktree", "add", "-b", "raw-feat", outside]);
+		const entry = await registerWorktreeEntry(registry, supervisor, project, outside, {
+			start: false,
+		});
 		await browser.send({
 			type: "worktree_delete_info",
 			id: "attached-info",
@@ -250,7 +231,6 @@ describe("edge worktree commands", () => {
 			cwd: repoDir,
 			project: project.name,
 			labels: [],
-			mode: "spawned",
 			status: "asleep",
 			projectId: project.projectId,
 			workspace: {
@@ -322,7 +302,6 @@ describe("edge worktree commands", () => {
 		);
 		const roster = asRoster(tagged.frame);
 		const entry = roster.daemons.find((d) => d.cwd === target)!;
-		expect(entry.mode).toBe("spawned");
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
 		// Stop the idling child (`sleep 30`) so the suite ends clean.
@@ -337,12 +316,15 @@ describe("edge worktree commands", () => {
 			name: "Conflicting",
 			existingBranch: "main",
 		});
-		const err = await browser.waitForFrame(
-			(f) => f.type === "error" && f.error.includes("already checked out elsewhere"),
+		const answer = await browser.waitForFrame(
+			(f) => f.type === "workspace_create_result" && f.id === "wt9",
 			"checked-out refusal",
 		);
-		if (err.type !== "error") throw new Error("expected error");
-		expect(err.error).toContain("main");
+		if (answer.type !== "workspace_create_result")
+			throw new Error("expected workspace_create_result");
+		expect(answer.ok).toBe(false);
+		expect(answer.error).toContain("already checked out elsewhere");
+		expect(answer.error).toContain("main");
 	});
 
 	test("create_worktree attaches an existingBranch not checked out elsewhere", async () => {
@@ -371,7 +353,6 @@ describe("edge worktree commands", () => {
 			);
 			const entry = roster.daemons.find((d) => d.cwd === target)!;
 			expect(entry.projectId).toBe(project.projectId);
-			expect(entry.mode).toBe("spawned");
 			expect(existsSync(target)).toBe(true);
 			// start:false entries carry no roster branch field; git is the
 			// ground truth that the worktree sits on the attached branch.
@@ -385,12 +366,14 @@ describe("edge worktree commands", () => {
 
 	test("create_worktree with an unknown project errors", async () => {
 		await browser.send({ type: "create_worktree", id: "wt10", projectId: "p999", name: "x" });
-		const err = await browser.waitForFrame(
-			(f) => f.type === "error" && f.error.includes("unknown project"),
+		const answer = await browser.waitForFrame(
+			(f) => f.type === "workspace_create_result" && f.id === "wt10",
 			"unknown project",
 		);
-		if (err.type !== "error") throw new Error("expected error");
-		expect(err.error).toContain("p999");
+		if (answer.type !== "workspace_create_result")
+			throw new Error("expected workspace_create_result");
+		expect(answer.ok).toBe(false);
+		expect(answer.error).toContain("p999");
 	});
 
 	test("list_project_branches answers with branches and checked-out state", async () => {
@@ -414,7 +397,7 @@ describe("edge worktree commands", () => {
 		const add = await gitIn(repo, ["worktree", "add", "-q", "-b", "feature", linked]);
 		expect(add.exitCode).toBe(0);
 		await gitIn(repo, ["branch", "unused"]);
-		const project = await registry.addProject(repo);
+		const { project } = registry.addProject(repo);
 		try {
 			browser = await openBrowser(served.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
@@ -463,49 +446,5 @@ describe("edge worktree commands", () => {
 		);
 		if (err.type !== "error") throw new Error("expected error");
 		expect(err.error).toContain("p999");
-	});
-
-	test("list_projects lists a registered project's not-yet-registered linked worktrees and drops roster cwds", async () => {
-		// A linked worktree of the registered project: only the
-		// registry-backed merge surfaces it (there is no root scanning).
-		const wtPath = join(tmp, "merge-wt");
-		const add = await gitIn(repoDir, ["worktree", "add", "-q", "-b", "merge-branch", wtPath]);
-		expect(add.exitCode).toBe(0);
-		const wtReal = realpathSync(wtPath);
-		const expected = {
-			name: "merge-wt",
-			path: wtReal,
-			isWorktree: true,
-			worktreeOf: project.name,
-			branch: "merge-branch",
-		};
-		try {
-			browser = await openBrowser(served.port);
-			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await browser.send({ type: "list_projects" });
-			const frame = await browser.waitForFrame((f) => f.type === "projects", "projects frame");
-			if (frame.type !== "projects") throw new Error("expected projects");
-			expect(frame.projects).toContainEqual(expected);
-
-			// Registering a daemon on that cwd excludes it from discovery.
-			// Avoid stale projects frames.
-			const entry = await registerWorktreeEntry(registry, supervisor, project, wtReal, {
-				start: false,
-			});
-			try {
-				browser.close();
-				browser = await openBrowser(served.port);
-				await browser.waitForFrame((f) => f.type === "roster", "roster");
-				await browser.send({ type: "list_projects" });
-				const frame2 = await browser.waitForFrame((f) => f.type === "projects", "projects frame");
-				if (frame2.type !== "projects") throw new Error("expected projects");
-				expect(frame2.projects.some((p) => p.path === wtReal)).toBe(false);
-			} finally {
-				registry.remove(entry.daemonId);
-			}
-		} finally {
-			browser.close();
-			await gitIn(repoDir, ["worktree", "remove", "--force", wtReal]);
-		}
 	});
 });

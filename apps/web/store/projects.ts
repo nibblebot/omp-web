@@ -1,12 +1,5 @@
-import type {
-	ClientCommand,
-	OmpSetupStatus,
-	ProjectBranch,
-	ProjectEntry,
-} from "#lib/wire/protocol";
-import { readSessionEnrollment, type SessionEnrollment } from "#lib/wire/session-host-command";
+import type { ClientCommand, OmpSetupStatus, ProjectBranch } from "#lib/wire/protocol";
 import { setState, state } from "../state";
-import { authedFetch } from "./auth";
 import { ctlFetch, isConnected, postCommand } from "./transport";
 import { clearUserStopped, markUserStopped } from "./user-stopped";
 import { pushToast } from "./toasts";
@@ -25,102 +18,97 @@ function reportCommandFailure(err: unknown): void {
 }
 
 /**
- * Projects/onboarding domain (Phase 3 store facade split): fleet-edge
- * project/worktree/daemon senders and their latest-wins pending slots. All
- * fire-and-forget; answers ride the registered_projects / roster /
- * worktree_delete_info broadcasts and error frames. The registered-projects /
- * worktreeDeleteInfo mirrors live in state.ts alongside the mux.
+ * Projects domain (Phase 3 store facade split): fleet-edge project/worktree/
+ * daemon senders. Results arrive as roster / registered_projects /
+ * worktree_delete_info broadcasts and error frames; add_project, create_worktree,
+ * create_clone and list_project_branches answer with unicast frames that settle
+ * the promises below. The registered-projects / worktreeDeleteInfo mirrors live in
+ * state.ts alongside the mux.
  */
 
-// ---------------------------------------------------------------------------
-// Phase 3 fleet edge: fleet command senders. spawn/spawn_resume/
-// stop are fire-and-forget. Results arrive as roster + daemon_status
-// broadcasts (spawn failures surface as an error frame). list_projects is a
-// latest-wins pull like listSessions (the edge answers with one `projects`
-// frame).
-// ---------------------------------------------------------------------------
-let pendingProjects: ((projects: ProjectEntry[]) => void) | null = null;
-
-/** Settle the latest-wins list_projects waiter (mux "projects" frame). */
-export function settleProjects(projects: ProjectEntry[]): void {
-	pendingProjects?.(projects);
-	pendingProjects = null;
+/** Answer of list_project_branches (the project_branches frame minus its project key). */
+export interface ProjectBranchesResult {
+	branches: ProjectBranch[];
+	remotes: string[];
+	defaultBase?: string;
+	cached?: boolean;
+	remote?: string;
 }
 
-/** Latest-wins pull like listProjects, keyed by projectId: the edge answers
- *  list_project_branches with one `project_branches` unicast frame, so a
- *  superseded request is resolved [] immediately (its frame, if it arrives,
- *  carries the OLD projectId and is left pending). */
-let pendingBranches: { projectId: string; resolve: (branches: ProjectBranch[]) => void } | null =
-	null;
+/** In-flight list_project_branches waiters per (projectId, remote). The frame carries no
+ *  command id, so every waiter for the same key settles with its answer. */
+const pendingBranches = new Map<string, Array<Waiter<ProjectBranchesResult>>>();
 
-/** Settle the keyed list_project_branches waiter (mux "project_branches" frame). */
-export function settleProjectBranches(projectId: string, branches: ProjectBranch[]): void {
-	if (pendingBranches && pendingBranches.projectId === projectId) {
-		pendingBranches.resolve(branches);
-		pendingBranches = null;
-	}
+function branchesKey(projectId: string, remote: string | undefined): string {
+	return `${projectId}\u0000${remote ?? ""}`;
 }
 
-/** Resolve both waiters empty (stream teardown in state.ts). */
+/** Settle the list_project_branches waiters (mux "project_branches" frame). */
+export function settleProjectBranches(frame: {
+	projectId: string;
+	remote?: string;
+	branches: ProjectBranch[];
+	remotes: string[];
+	defaultBase?: string;
+	cached?: boolean;
+}): void {
+	const key = branchesKey(frame.projectId, frame.remote);
+	const waiters = pendingBranches.get(key);
+	if (waiters === undefined) return;
+	pendingBranches.delete(key);
+	const result: ProjectBranchesResult = {
+		branches: frame.branches,
+		remotes: frame.remotes,
+		...(frame.defaultBase !== undefined ? { defaultBase: frame.defaultBase } : {}),
+		...(frame.cached !== undefined ? { cached: frame.cached } : {}),
+		...(frame.remote !== undefined ? { remote: frame.remote } : {}),
+	};
+	for (const waiter of waiters) waiter.resolve(result);
+}
+
+/** Reject every in-flight project waiter (stream teardown in state.ts). */
 export function resetPendingProjects(): void {
-	pendingProjects?.([]);
-	pendingProjects = null;
-	pendingBranches?.resolve([]);
-	pendingBranches = null;
+	const err = new Error("Disconnected");
+	for (const waiters of pendingBranches.values()) for (const w of waiters) w.reject(err);
+	pendingBranches.clear();
+	for (const w of pendingAddProject.values()) w.reject(err);
+	pendingAddProject.clear();
+	for (const w of pendingWorkspaceCreate.values()) w.reject(err);
+	pendingWorkspaceCreate.clear();
 }
 
-export function listProjects(): Promise<ProjectEntry[]> {
-	const { promise, resolve, reject } = Promise.withResolvers<ProjectEntry[]>();
+/** List the branches of a registered project: local ones, or those of git remote `remote`
+ *  (the New workspace popover's branch picker; checkedOut local branches cannot be
+ *  checked out again). Answers also carry the project's remote names and default base. */
+export function listProjectBranches(
+	projectId: string,
+	remote?: string,
+): Promise<ProjectBranchesResult> {
+	const { promise, resolve, reject } = Promise.withResolvers<ProjectBranchesResult>();
 	if (!isConnected()) {
 		reject(new Error("Not connected"));
 		return promise;
 	}
-	pendingProjects?.([]);
-	pendingProjects = resolve;
-	postCommand({ type: "list_projects", id: crypto.randomUUID() } satisfies ClientCommand).catch(
-		(err) => {
-			// Latest-wins: only clear the slot if a newer request hasn't claimed it.
-			if (pendingProjects === resolve) pendingProjects = null;
-			reject(err instanceof Error ? err : new Error(String(err)));
-		},
-	);
-	return promise;
-}
-
-/** List the local branches of a registered project (feeds the add-worktree
- *  branch picker; checkedOut branches cannot be checked out again). */
-export function listProjectBranches(projectId: string): Promise<ProjectBranch[]> {
-	const { promise, resolve, reject } = Promise.withResolvers<ProjectBranch[]>();
-	if (!isConnected()) {
-		reject(new Error("Not connected"));
-		return promise;
-	}
-	pendingBranches?.resolve([]);
-	pendingBranches = { projectId, resolve };
+	const key = branchesKey(projectId, remote);
+	const waiter: Waiter<ProjectBranchesResult> = { resolve, reject };
+	const waiters = pendingBranches.get(key);
+	if (waiters === undefined) pendingBranches.set(key, [waiter]);
+	else waiters.push(waiter);
 	postCommand({
 		type: "list_project_branches",
 		id: crypto.randomUUID(),
 		projectId,
+		...(remote !== undefined ? { remote } : {}),
 	} satisfies ClientCommand).catch((err) => {
-		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
-		if (pendingBranches?.resolve === resolve) pendingBranches = null;
+		const list = pendingBranches.get(key);
+		const index = list?.indexOf(waiter) ?? -1;
+		if (list !== undefined && index >= 0) {
+			list.splice(index, 1);
+			if (list.length === 0) pendingBranches.delete(key);
+		}
 		reject(err instanceof Error ? err : new Error(String(err)));
 	});
 	return promise;
-}
-
-/** Spawn a new daemon from a repo/worktree path (validated edge-side; the
- *  resulting entry appears in the roster as it transitions spawning → ready). */
-export function spawnDaemon(cwd: string, template?: string, labels?: string[]): void {
-	if (refuseIfDisconnected()) return;
-	void postCommand({
-		type: "spawn",
-		id: crypto.randomUUID(),
-		cwd,
-		...(template !== undefined ? { template } : {}),
-		...(labels !== undefined ? { labels } : {}),
-	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
 /** Open the Add project dialog, prefilled with `path` (an unowned session's folder). */
@@ -195,39 +183,100 @@ export function removeDaemonById(daemonId: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 5: project/worktree onboarding senders. All fire-and-forget like the
-// senders above; answers ride the registered_projects / roster /
-// worktree_delete_info broadcasts and error frames. A `start: true` sender
-// also ARMS the post-attach session-picker gate: the spawned daemon's id is
-// server-assigned and unknowable here, so the gate is set to a sentinel and
-// requestAttach stamps the real daemonId when the onboarding attach fires.
+// Project/workspace onboarding. add_project / create_worktree / create_clone
+// answer with id-keyed unicast result frames and resolve as promises; the new
+// rows themselves arrive on the roster / registered_projects broadcasts.
 // ---------------------------------------------------------------------------
 
-/** Sentinel value of pendingSessionPicker between a start:true sender and the
- *  attach that follows; never equals a real daemonId. */
-const PICKER_GATE_ARMED = "__picker_gate_armed__";
-
-/** Register a first-class project with the fleet (realpath-keyed, deduped
- *  edge-side). start:true also spawns a daemon on the main checkout and
- *  arms the post-attach picker gate. */
-export function sendAddProject(
-	path: string,
-	opts: { start?: boolean; template?: string; labels?: string[] } = {},
-): void {
-	if (refuseIfDisconnected()) return;
-	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
-	void postCommand({
-		type: "add_project",
-		id: crypto.randomUUID(),
-		path,
-		...(opts.start !== undefined ? { start: opts.start } : {}),
-		...(opts.template !== undefined ? { template: opts.template } : {}),
-		...(opts.labels !== undefined ? { labels: opts.labels } : {}),
-	} satisfies ClientCommand).catch(reportCommandFailure);
+interface Waiter<T> {
+	resolve: (value: T) => void;
+	reject: (err: Error) => void;
 }
 
-/** Deregister a first-class project; refused edge-side (error frame) while
- *  any daemon references it. */
+const pendingAddProject = new Map<string, Waiter<{ projectId: string; existing: boolean }>>();
+const pendingWorkspaceCreate = new Map<string, Waiter<{ daemonId: string }>>();
+
+/** Settle the add_project waiter (mux "add_project_result" frame); unknown ids are ignored. */
+export function settleAddProject(frame: {
+	id: string;
+	ok: boolean;
+	projectId?: string;
+	existing?: boolean;
+	error?: string;
+}): void {
+	const waiter = pendingAddProject.get(frame.id);
+	if (waiter === undefined) return;
+	pendingAddProject.delete(frame.id);
+	if (frame.ok && frame.projectId !== undefined) {
+		waiter.resolve({ projectId: frame.projectId, existing: frame.existing === true });
+	} else {
+		waiter.reject(new Error(frame.error ?? "add project failed"));
+	}
+}
+
+/** Sentinel value of pendingSessionPicker between a start:true sender and the attach
+ *  that follows; never equals a real daemonId. */
+const PICKER_GATE_ARMED = "__picker_gate_armed__";
+
+/** Settle the create_worktree / create_clone waiter (mux "workspace_create_result" frame). */
+export function settleWorkspaceCreate(frame: {
+	id: string;
+	ok: boolean;
+	daemonId?: string;
+	error?: string;
+}): void {
+	const waiter = pendingWorkspaceCreate.get(frame.id);
+	if (waiter === undefined) return;
+	pendingWorkspaceCreate.delete(frame.id);
+	if (frame.ok && frame.daemonId !== undefined) {
+		waiter.resolve({ daemonId: frame.daemonId });
+	} else {
+		disarmPickerGate();
+		waiter.reject(new Error(frame.error ?? "workspace creation failed"));
+	}
+}
+
+/** Drop the picker gate a start:true sender armed, unless an attach already stamped it. */
+function disarmPickerGate(): void {
+	if (state.pendingSessionPicker === PICKER_GATE_ARMED) setState("pendingSessionPicker", null);
+}
+
+/** Send `cmd` and park a waiter under its id until the keyed result frame settles it.
+ *  `armPickerGate` (start:true creates) arms the post-attach session picker: the spawned
+ *  daemon's id is server-assigned, so the gate holds a sentinel until the attach that
+ *  follows stamps the real daemonId (transport.ts requestAttach). */
+function sendKeyed<T>(
+	pending: Map<string, Waiter<T>>,
+	id: string,
+	cmd: ClientCommand,
+	armPickerGate = false,
+): Promise<T> {
+	const { promise, resolve, reject } = Promise.withResolvers<T>();
+	if (!isConnected()) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	if (armPickerGate) setState("pendingSessionPicker", PICKER_GATE_ARMED);
+	pending.set(id, { resolve, reject });
+	postCommand(cmd).catch((err) => {
+		if (!pending.delete(id)) return;
+		disarmPickerGate();
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
+	return promise;
+}
+
+/** Register a project. `path` may be the main checkout, a linked worktree, or a
+ *  subdirectory; the fleet resolves the main checkout. Never spawns. Rejects with the
+ *  fleet's refusal message (bare repo, not a git repo, ...). */
+export function addProject(path: string): Promise<{ projectId: string; existing: boolean }> {
+	const id = crypto.randomUUID();
+	return sendKeyed(pendingAddProject, id, { type: "add_project", id, path });
+}
+
+/** Deregister a project. The fleet stops its running sessions and drops every row
+ *  (transcripts and disk untouched); refused while a clone workspace belongs to it
+ *  (the refusal arrives as an error frame). */
 export function sendRemoveProject(projectId: string): void {
 	if (refuseIfDisconnected()) return;
 	void postCommand({
@@ -237,119 +286,104 @@ export function sendRemoveProject(projectId: string): void {
 	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
-/** Projects whose referencing session processes are being evicted; each is deregistered
- *  once the roster no longer lists a non-clone daemon on it. */
-const removalAwaitingRoster = new Set<string>();
-
-/** Stop + evict every session process referencing the project (provider-run clones
- *  excluded; their lifecycle belongs to the clone flow), then deregister the project.
- *  The edge refuses `remove_project` while a daemon references it, and it evicts a
- *  daemon only after that process shuts down, so the project is deregistered on the
- *  roster frame that drops the last reference (see resumeProjectRemovals). */
-export function removeProjectAndStop(projectId: string): void {
-	if (!isConnected()) return;
-	const referencing = state.daemonRoster.filter(
-		(d) => d.projectId === projectId && d.workspaceKind !== "clone",
+/** Create a worktree workspace (start:true: the fleet spawns a session on it). Resolves
+ *  with the new row's daemonId once the fleet accepted it; rejects with the fleet's reason. */
+export function createWorktree(
+	projectId: string,
+	opts: { name: string; baseRef?: string; existingBranch?: string },
+): Promise<{ daemonId: string }> {
+	const id = crypto.randomUUID();
+	return sendKeyed(
+		pendingWorkspaceCreate,
+		id,
+		{
+			type: "create_worktree",
+			id,
+			projectId,
+			name: opts.name,
+			...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
+			...(opts.existingBranch !== undefined ? { existingBranch: opts.existingBranch } : {}),
+			start: true,
+		},
+		true,
 	);
-	if (referencing.length === 0) {
-		sendRemoveProject(projectId);
-		return;
-	}
-	removalAwaitingRoster.add(projectId);
-	for (const d of referencing) removeDaemonById(d.daemonId);
 }
 
-/** Called on every roster frame: deregister each removing project once no non-clone
- *  daemon on the roster references it. */
-export function resumeProjectRemovals(
-	roster: Array<{ projectId?: string; workspaceKind?: string }>,
-): void {
-	for (const projectId of removalAwaitingRoster) {
-		const referenced = roster.some((d) => d.projectId === projectId && d.workspaceKind !== "clone");
-		if (referenced) continue;
-		removalAwaitingRoster.delete(projectId);
-		sendRemoveProject(projectId);
-	}
-}
-
-/** Create a worktree under workspaceDir (branch = slugified name
- *  unless baseRef/existingBranch override) and optionally spawn a daemon on
- *  it (start:true arms the post-attach picker gate). */
-export function sendCreateWorktree(
+/** Create a provider-managed clone workspace. `source` names one of the project's git
+ *  remotes (resolved fleet-side); omitted = the project's own checkout (kubernetes
+ *  profiles default to the origin URL). Lifecycle stages ride the roster entry. */
+export function createClone(
 	projectId: string,
-	name: string,
-	opts: { baseRef?: string; existingBranch?: string; start?: boolean } = {},
-): void {
-	if (refuseIfDisconnected()) return;
-	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
-	void postCommand({
-		type: "create_worktree",
-		id: crypto.randomUUID(),
-		projectId,
-		name,
-		...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
-		...(opts.existingBranch !== undefined ? { existingBranch: opts.existingBranch } : {}),
-		...(opts.start !== undefined ? { start: opts.start } : {}),
-	} satisfies ClientCommand).catch(reportCommandFailure);
-}
-
-/** Create a managed clone workspace of a registered project (P8.1; frozen
- *  clone-contracts ledger "Browser and CLI workspace creation"). The fleet
- *  lifecycle service prepares the workspace (pin + verify source at
- *  `revision`, independent object store), runs it under the selected
- *  provider profile, and broadcasts preparation/runtime/callback/ready
- *  lifecycle stages on the roster entry. `source` has at most one member:
- *  local path or remote URL; omitted = the registered project's local path.
- *  `start:true` also arms the post-attach picker gate like the worktree
- *  senders above. */
-export function sendCreateClone(
-	projectId: string,
-	name: string,
 	opts: {
+		name: string;
 		profileId: string;
-		source?: { local?: string; remote?: string };
+		source?: { remoteName: string };
 		revision?: string;
 		branch?: string;
-		start?: boolean;
 	},
-): void {
-	if (refuseIfDisconnected()) return;
-	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
-	void postCommand({
-		type: "create_clone",
-		id: crypto.randomUUID(),
-		projectId,
-		name,
-		profileId: opts.profileId,
-		...(opts.source !== undefined ? { source: opts.source } : {}),
-		...(opts.revision !== undefined ? { revision: opts.revision } : {}),
-		...(opts.branch !== undefined ? { branch: opts.branch } : {}),
-		...(opts.start !== undefined ? { start: opts.start } : {}),
-	} satisfies ClientCommand).catch(reportCommandFailure);
+): Promise<{ daemonId: string }> {
+	const id = crypto.randomUUID();
+	return sendKeyed(
+		pendingWorkspaceCreate,
+		id,
+		{
+			type: "create_clone",
+			id,
+			projectId,
+			name: opts.name,
+			profileId: opts.profileId,
+			...(opts.source !== undefined ? { source: opts.source } : {}),
+			...(opts.revision !== undefined ? { revision: opts.revision } : {}),
+			...(opts.branch !== undefined ? { branch: opts.branch } : {}),
+			start: true,
+		},
+		true,
+	);
 }
 
-/** Register an existing discovered worktree of a project and optionally
- *  spawn a daemon on it (start:true arms the post-attach picker gate). */
-export function sendAddExistingWorktree(
-	projectId: string,
-	worktreePath: string,
-	opts: { start?: boolean } = {},
-): void {
-	if (refuseIfDisconnected()) return;
-	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
+/** Last `sync_projects` send; throttles the focus / group-expand triggers. */
+let lastSyncAt = 0;
+const SYNC_MIN_INTERVAL_MS = 5000;
+
+/** Ask the fleet to run one project/worktree sync pass now (window focus, group
+ *  expand). Fire-and-forget, silent when disconnected, throttled to one per 5s. */
+export function syncProjects(): void {
+	if (!isConnected()) return;
+	const now = Date.now();
+	if (now - lastSyncAt < SYNC_MIN_INTERVAL_MS) return;
+	lastSyncAt = now;
 	void postCommand({
-		type: "add_worktree",
+		type: "sync_projects",
 		id: crypto.randomUUID(),
-		projectId,
-		worktreePath,
-		...(opts.start !== undefined ? { start: opts.start } : {}),
-	} satisfies ClientCommand).catch(reportCommandFailure);
+	} satisfies ClientCommand).catch(() => {});
 }
 
-/** Stop + evict the worktree's daemon and git-remove the linked worktree
- *  (deleteBranch:true also `git branch -d`s it). Clean only; a
- *  refusal surfaces as an error frame. */
-export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: boolean } = {}): void {
+/** Open the New workspace popover for a project (owned by the group header "+"). */
+export function openNewWorkspace(projectId: string): void {
+	setState("newWorkspaceProjectId", projectId);
+}
+
+export function closeNewWorkspace(): void {
+	setState("newWorkspaceProjectId", null);
+}
+
+let highlightTimer: number | undefined;
+const HIGHLIGHT_MS = 2000;
+
+/** Scroll to and flash a project group (ProjectGroups); auto-clears. */
+export function highlightProject(projectId: string): void {
+	window.clearTimeout(highlightTimer);
+	setState("highlightProjectId", projectId);
+	highlightTimer = window.setTimeout(() => {
+		highlightTimer = undefined;
+		setState("highlightProjectId", null);
+	}, HIGHLIGHT_MS);
+}
+
+/** Stop + evict the worktree's daemon and git-remove the linked worktree. `deleteBranch`
+ *  names the branch to also delete (the fleet re-checks it is still the checked-out,
+ *  unprotected branch). Clean only; a refusal surfaces as an error frame. */
+export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: string } = {}): void {
 	if (refuseIfDisconnected()) return;
 	void postCommand({
 		type: "delete_worktree",
@@ -371,9 +405,9 @@ export function sendWorktreeDeleteInfo(daemonId: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 6: /ctl/fs/browse, the fleet edge's directory listing behind the
-// onboarding directory pickers (DirectoryPicker). Raw GET like the ctl fetchers in
-// transport.ts, but living here with the onboarding domain.
+// /ctl/fs/browse, the fleet edge's directory listing behind the Add project
+// folder chooser (AddProjectDialog). Raw GET like the ctl fetchers in
+// transport.ts, but living here with the project domain.
 // ---------------------------------------------------------------------------
 
 export interface FsBrowseDir {
@@ -430,36 +464,10 @@ export async function fetchRecentRoots(): Promise<RecentRootsResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Remote session enrollment (FLEET-19) and the omp setup probe (FLEET-20).
-
-/** POST /ctl/enroll: create a remote roster entry and mint its one-time
- *  callback credential. The token is returned once; the caller shows it in
- *  the Add remote session dialog and never stores it. */
-export async function enrollRemoteSession(input: {
-	name: string;
-	cwd: string | undefined;
-	labels: string[];
-}): Promise<{ daemonId: string; enrollment: SessionEnrollment }> {
-	const res = await authedFetch("/ctl/enroll", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ name: input.name, labels: input.labels, cwd: input.cwd }),
-	});
-	const body: unknown = await res.json().catch(() => null);
-	if (!res.ok) {
-		const err = (body as { error?: unknown } | null)?.error;
-		throw new Error(typeof err === "string" ? err : `enroll failed (${res.status})`);
-	}
-	const enrollment = readSessionEnrollment(body);
-	const daemonId = (body as { entry?: { daemonId?: unknown } } | null)?.entry?.daemonId;
-	if (enrollment === undefined || typeof daemonId !== "string") {
-		throw new Error("unexpected enroll response");
-	}
-	return { daemonId, enrollment };
-}
+// The omp setup probe (FLEET-20).
 
 /** GET /ctl/omp-setup: read-only omp install, provider-auth, and default-model
- *  probe for the first-run panel. Never writes fleet config. */
+ *  probe for the empty roster's sign-in prompt. Never writes fleet config. */
 export async function fetchOmpSetup(): Promise<OmpSetupStatus> {
 	const res = await ctlFetch(
 		"/ctl/omp-setup",

@@ -11,11 +11,13 @@ import {
 	createWorktree,
 	deleteWorktree,
 	isLinkedWorktreeOf,
-	listUnregisteredWorktrees,
+	listProjectBranches,
+	listWorktreeBlocks,
 	managedWorktreePath,
 	registerProjectMainEntry,
 	registerWorktreeEntry,
 	resolveBaseRef,
+	resolveProjectRoot,
 	WorktreeBranchCheckedOutError,
 	WorktreeDirtyError,
 	WorktreeProbeFailedError,
@@ -68,14 +70,13 @@ function projectFor(repoPath: string, projectId = "p1"): RegisteredProject {
 	return { projectId, path: repoPath, name: repoPath.split("/").pop()!, addedAt: 0 };
 }
 
-function worktreeEntry(path: string, repoPath?: string, branchCreated?: boolean): RegistryEntry {
+function worktreeEntry(path: string, repoPath?: string): RegistryEntry {
 	return {
 		daemonId: "d1",
 		name: basename(path),
 		cwd: path,
 		project: "repo",
 		labels: [],
-		mode: "spawned",
 		status: "asleep",
 		registeredAt: 0,
 		workspace: {
@@ -83,7 +84,6 @@ function worktreeEntry(path: string, repoPath?: string, branchCreated?: boolean)
 			projectId: "p1",
 			desiredState: "stopped",
 			...(repoPath !== undefined ? { source: { local: repoPath } } : {}),
-			...(branchCreated !== undefined ? { branchCreatedByOmpWeb: branchCreated } : {}),
 		},
 	};
 }
@@ -267,34 +267,84 @@ describe("createWorktree", () => {
 	});
 });
 
-describe("listUnregisteredWorktrees", () => {
-	test("lists linked worktrees minus registered paths, never the main checkout", async () => {
+describe("listWorktreeBlocks", () => {
+	test("lists every worktree block, the main checkout first", async () => {
 		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
 		const ws = tempDir("omp-web-worktrees-");
-		const a = await createWorktree(projectFor(repo), "alpha", { workspaceDir: ws });
-		const b = await createWorktree(projectFor(repo), "beta", { workspaceDir: ws });
-		// Nothing registered: both linked worktrees, main checkout excluded.
-		const all = await listUnregisteredWorktrees(repo, []);
-		expect(all).toHaveLength(2);
-		const paths = all.map((p) => p.path);
-		expect(paths).toContain(a.path);
-		expect(paths).toContain(b.path);
-		expect(paths.some((p) => p === repo)).toBe(false);
-		for (const entry of all) {
-			expect(entry.isWorktree).toBe(true);
-			expect(entry.worktreeOf).toBe(repo.split("/").pop()!);
-			expect(typeof entry.branch).toBe("string");
-		}
-		// One registered: only the other remains.
-		const rest = await listUnregisteredWorktrees(repo, [a.path]);
-		expect(rest).toHaveLength(1);
-		expect(rest[0].path).toBe(b.path);
+		const a = await createWorktree(projectFor(repo), "listed-a", { workspaceDir: ws });
+		const blocks = await listWorktreeBlocks(repo);
+		expect(blocks?.map((block) => block.path)).toEqual([repo, a.path]);
 	});
 
-	test("degrades to an empty list when git cannot read the repo", async () => {
-		const notARepo = tempDir("omp-web-worktrees-");
-		expect(await listUnregisteredWorktrees(notARepo, [])).toEqual([]);
+	test("is undefined when git cannot read the path", async () => {
+		expect(await listWorktreeBlocks(tempDir("omp-web-worktrees-"))).toBeUndefined();
+	});
+});
+
+describe("resolveProjectRoot", () => {
+	test("resolves a main checkout, a linked worktree, and a subdirectory to the main checkout", async () => {
+		const repo = tempDir("omp-web-worktrees-");
+		await makeRepo(repo);
+		const ws = tempDir("omp-web-worktrees-");
+		const linked = await createWorktree(projectFor(repo), "rooted", { workspaceDir: ws });
+		mkdirSync(join(repo, "nested"));
+		expect(await resolveProjectRoot(repo)).toBe(repo);
+		expect(await resolveProjectRoot(linked.path)).toBe(repo);
+		expect(await resolveProjectRoot(join(repo, "nested"))).toBe(repo);
+	});
+
+	test("refuses non-git, missing, and bare paths with a user-facing reason", async () => {
+		const plain = tempDir("omp-web-worktrees-");
+		await expect(resolveProjectRoot(plain)).rejects.toThrow(`not a git repository: ${plain}`);
+		const missing = join(plain, "ghost");
+		await expect(resolveProjectRoot(missing)).rejects.toThrow(`not a directory: ${missing}`);
+		const bareParent = tempDir("omp-web-worktrees-");
+		const bare = join(bareParent, "bare.git");
+		await gitOk(bareParent, ["init", "-q", "--bare", bare]);
+		await expect(resolveProjectRoot(bare)).rejects.toThrow(
+			`bare repository has no main checkout to register: ${bare}`,
+		);
+	});
+});
+
+describe("listProjectBranches", () => {
+	test("reports local branches with checkout state, remotes origin-first, and the default base", async () => {
+		const { clone } = await makeClonedRepo();
+		const ws = tempDir("omp-web-worktrees-");
+		await gitOk(clone, ["branch", "topic"]);
+		const linked = await createWorktree(projectFor(clone), "wt", { workspaceDir: ws });
+		const listing = await listProjectBranches(clone);
+		const byName = new Map(listing.branches.map((branch) => [branch.name, branch]));
+		expect(byName.get("main")?.checkedOut).toBe(true);
+		expect(byName.get("wt")).toMatchObject({ checkedOut: true, worktreePath: linked.path });
+		expect(byName.get("topic")?.checkedOut).toBe(false);
+		expect(listing.remotes).toEqual(["origin"]);
+		expect(listing.defaultBase).toBe("main");
+		expect(listing.cached).toBeUndefined();
+	});
+
+	test("lists a remote's live branches", async () => {
+		const { clone } = await makeClonedRepo();
+		const listing = await listProjectBranches(clone, { remote: "origin" });
+		expect(listing.branches.map((branch) => branch.name)).toContain("main");
+		expect(listing.cached).toBeUndefined();
+	});
+
+	test("falls back to cached remote-tracking branches when the live probe fails", async () => {
+		const { clone } = await makeClonedRepo();
+		const missing = join(tempDir("omp-web-worktrees-"), "gone.git");
+		await gitOk(clone, ["remote", "set-url", "origin", missing]);
+		const listing = await listProjectBranches(clone, { remote: "origin" });
+		expect(listing.cached).toBe(true);
+		expect(listing.branches.map((branch) => branch.name)).toContain("main");
+	});
+
+	test("an unknown remote is refused by name", async () => {
+		const { clone } = await makeClonedRepo();
+		await expect(listProjectBranches(clone, { remote: "nope" })).rejects.toThrow(
+			"unknown remote: nope",
+		);
 	});
 });
 
@@ -344,7 +394,6 @@ describe("worktreeDeleteInfo", () => {
 		expect(info.merged).toBe(true); // no commits: tip is the base's tip
 		expect(info.unpushed).toBe(false); // no upstream: unknown → false
 		expect(info.hasUpstream).toBe(false); // no upstream: remote state unknown
-		expect(info.branchOwned).toBe(false); // registered without the create flag
 	});
 
 	test("dirty worktree reports counts and a refusal reason", async () => {
@@ -404,24 +453,6 @@ describe("worktreeDeleteInfo", () => {
 		expect(info.hasUpstream).toBe(true);
 	});
 
-	test("branchOwned is true only for a branch omp-web created", async () => {
-		const repo = tempDir("omp-web-worktrees-");
-		await makeRepo(repo);
-		const ws = tempDir("omp-web-worktrees-");
-		await gitOk(repo, ["branch", "existing"]);
-		const attached = await createWorktree(projectFor(repo), "att", {
-			workspaceDir: ws,
-			existingBranch: "existing",
-		});
-		const created = await createWorktree(projectFor(repo), "own", { workspaceDir: ws });
-		expect((await worktreeDeleteInfo(worktreeEntry(attached.path, repo, false))).branchOwned).toBe(
-			false,
-		);
-		expect((await worktreeDeleteInfo(worktreeEntry(created.path, repo, true))).branchOwned).toBe(
-			true,
-		);
-	});
-
 	test("missing path refuses deletion with a not-found reason", async () => {
 		const ws = tempDir("omp-web-worktrees-");
 		const info = await worktreeDeleteInfo(worktreeEntry(join(ws, "repo", "ghost")));
@@ -437,9 +468,7 @@ describe("deleteWorktree", () => {
 		await makeRepo(repo);
 		const ws = tempDir("omp-web-worktrees-");
 		const a = await createWorktree(projectFor(repo), "gone", { workspaceDir: ws });
-		const result = await deleteWorktree(worktreeEntry(a.path, repo), {
-			deleteBranch: true,
-		});
+		const result = await deleteWorktree(worktreeEntry(a.path, repo), { deleteBranch: "gone" });
 		expect(result.path).toBe(a.path);
 		expect(result.branch).toBe("gone");
 		expect(result.branchDeleted).toBe(true);
@@ -455,7 +484,7 @@ describe("deleteWorktree", () => {
 		const a = await createWorktree(projectFor(repo), "keep", { workspaceDir: ws });
 		writeFileSync(join(a.path, "scratch.txt"), "new\n");
 		await expect(
-			deleteWorktree(worktreeEntry(a.path, repo), { deleteBranch: true }),
+			deleteWorktree(worktreeEntry(a.path, repo), { deleteBranch: "keep" }),
 		).rejects.toBeInstanceOf(WorktreeDirtyError);
 		expect(existsSync(a.path)).toBe(true);
 		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(a.path);
@@ -474,7 +503,10 @@ describe("deleteWorktree", () => {
 			stdout: string;
 			stderr: string;
 		}> => ({ exitCode: 128, stdout: "", stderr: "fatal: not a git repository" });
-		const refusal = deleteWorktree(entry, { deleteBranch: true, probeExec: failingProbe });
+		const refusal = deleteWorktree(entry, {
+			deleteBranch: "unproven",
+			probeExec: failingProbe,
+		});
 		await expect(refusal).rejects.toBeInstanceOf(WorktreeProbeFailedError);
 		await expect(refusal).rejects.toThrow("cleanliness could not be verified");
 		expect(existsSync(a.path)).toBe(true);
@@ -482,15 +514,11 @@ describe("deleteWorktree", () => {
 		expect(await gitOk(repo, ["rev-parse", "refs/heads/unproven"])).toBe(branchBefore);
 	});
 
-	test("deletes a clean attached linked worktree and refuses remote entries", async () => {
+	test("deletes a clean attached linked worktree", async () => {
 		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
 		const ws = tempDir("omp-web-worktrees-");
 		const { path } = await createWorktree(projectFor(repo), "attached", { workspaceDir: ws });
-		const remote: RegistryEntry = { ...worktreeEntry(path, repo), mode: "remote" };
-		expect((await worktreeDeleteInfo(remote)).linked).toBe(false);
-		await expect(deleteWorktree(remote)).rejects.toThrow("not a local linked worktree");
-		expect(existsSync(path)).toBe(true);
 		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(path);
 		const entry = worktreeEntry(path, repo);
 		expect((await worktreeDeleteInfo(entry)).linked).toBe(true);
@@ -508,7 +536,7 @@ describe("deleteWorktree", () => {
 		await gitOk(a.path, ["add", "."]);
 		await gitOk(a.path, ["commit", "-q", "-m", "unmerged"]);
 		const result = await deleteWorktree(worktreeEntry(a.path, repo), {
-			deleteBranch: true,
+			deleteBranch: "unmerged",
 		});
 		expect(existsSync(a.path)).toBe(false);
 		expect(result.branch).toBe("unmerged");
@@ -557,15 +585,6 @@ describe("deleteWorktree", () => {
 		}
 	});
 
-	test("a main checkout without source.local is still refused", async () => {
-		const repo = tempDir("omp-web-worktrees-");
-		await makeRepo(repo);
-		const main = worktreeEntry(repo);
-		expect((await worktreeDeleteInfo(main)).linked).toBe(false);
-		await expect(deleteWorktree(main)).rejects.toThrow("not a linked Git worktree");
-		expect(existsSync(repo)).toBe(true);
-	});
-
 	test("symlink substitution cannot authorize removal of another repository's linked worktree", async () => {
 		const repo = join(tempDir("omp-web-worktrees-"), "repo");
 		await makeRepo(repo);
@@ -608,8 +627,60 @@ describe("deleteWorktree", () => {
 	});
 });
 
+describe("deleteWorktree branch safety", () => {
+	test("deleteBranch names the probed branch: a worktree switched to another branch keeps it", async () => {
+		const repo = tempDir("omp-web-worktrees-");
+		await makeRepo(repo);
+		const ws = tempDir("omp-web-worktrees-");
+		const a = await createWorktree(projectFor(repo), "feat", { workspaceDir: ws });
+		await gitOk(a.path, ["branch", "other"]);
+		await gitOk(a.path, ["switch", "-q", "other"]);
+		const result = await deleteWorktree(worktreeEntry(a.path, repo), { deleteBranch: "feat" });
+		expect(existsSync(a.path)).toBe(false);
+		expect(result.branch).toBe("other");
+		expect(result.branchDeleted).toBe(false);
+		expect(result.branchDeleteRefused).toBe(
+			"worktree is on other, not feat; feat was left in place",
+		);
+		expect(await gitOk(repo, ["branch", "--list", "other"])).toBe("other");
+		expect(await gitOk(repo, ["branch", "--list", "feat"])).toBe("feat");
+	});
+
+	test("a protected base branch is never deleted, even when the worktree is on it", async () => {
+		const { clone } = await makeClonedRepo();
+		const ws = tempDir("omp-web-worktrees-");
+		await gitOk(clone, ["switch", "-q", "-c", "trunk"]);
+		const a = await createWorktree(projectFor(clone), "base", {
+			workspaceDir: ws,
+			existingBranch: "main",
+		});
+		const result = await deleteWorktree(worktreeEntry(a.path, clone), { deleteBranch: "main" });
+		expect(existsSync(a.path)).toBe(false);
+		expect(result.branchDeleted).toBe(false);
+		expect(result.branchDeleteRefused).toBe(
+			"main is a base branch of this project and is never deleted",
+		);
+		expect(await gitOk(clone, ["branch", "--list", "main"])).toBe("main");
+	});
+
+	test("a detached worktree has no branch to delete", async () => {
+		const repo = tempDir("omp-web-worktrees-");
+		await makeRepo(repo);
+		const ws = tempDir("omp-web-worktrees-");
+		const a = await createWorktree(projectFor(repo), "det", { workspaceDir: ws });
+		await gitOk(a.path, ["checkout", "-q", "--detach"]);
+		const result = await deleteWorktree(worktreeEntry(a.path, repo), { deleteBranch: "det" });
+		expect(existsSync(a.path)).toBe(false);
+		expect(result.branchDeleted).toBe(false);
+		expect(result.branchDeleteRefused).toBe(
+			"worktree is on a detached HEAD, not det; det was left in place",
+		);
+		expect(await gitOk(repo, ["branch", "--list", "det"])).toBe("det");
+	});
+});
+
 describe("registerWorktreeEntry", () => {
-	test("start:false registers an asleep spawned entry tagged with the project", async () => {
+	test("start:false registers an asleep entry tagged with the project", async () => {
 		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
 		const ws = tempDir("omp-web-worktrees-");
@@ -623,7 +694,6 @@ describe("registerWorktreeEntry", () => {
 			a.path,
 			{ start: false },
 		);
-		expect(entry.mode).toBe("spawned");
 		expect(entry.status).toBe("asleep");
 		expect(entry.cwd).toBe(a.path);
 		expect(entry.projectId).toBe("p7");
@@ -649,7 +719,6 @@ describe("registerWorktreeEntry", () => {
 					project: projectFor(repo).name,
 					worktreeOf: projectFor(repo).name,
 					labels: [],
-					mode: "spawned",
 					status: "connecting",
 				}),
 		} as unknown as SpawnSupervisor;
@@ -699,7 +768,6 @@ describe("registerProjectMainEntry", () => {
 			project: repo.split("/").pop(),
 			projectId: "p7",
 			labels: [],
-			mode: "spawned",
 			status: "asleep",
 		});
 		// NO worktreeOf: the main checkout is the repo itself and stays
@@ -759,7 +827,6 @@ describe("registerProjectMainEntry", () => {
 			cwd: repo,
 			project: "pre",
 			labels: [],
-			mode: "spawned",
 			status: "asleep",
 		});
 		expect(existing.projectId).toBeUndefined();
@@ -781,7 +848,6 @@ describe("registerProjectMainEntry", () => {
 			cwd: repo,
 			project: "pre",
 			labels: [],
-			mode: "spawned",
 			status: "asleep",
 			projectId: "p7",
 		});
@@ -813,7 +879,6 @@ describe("registerProjectMainEntry", () => {
 					cwd: init.cwd,
 					project: basename(init.cwd),
 					labels: init.labels ?? [],
-					mode: "spawned",
 					...(init.template !== undefined ? { template: init.template } : {}),
 				});
 			},

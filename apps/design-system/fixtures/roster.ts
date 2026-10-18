@@ -4,7 +4,6 @@ import {
 	type DaemonEntry,
 	type DaemonInfo,
 	type ProjectBranch,
-	type ProjectEntry,
 	type PublicProviderProfile,
 	type RegisteredProject,
 	type SessionListEntry,
@@ -49,42 +48,7 @@ const nixosConfig: RegisteredProject = {
 /** RegisteredProject list: FleetSidebar project sections and AddProjectDialog duplicate checks. */
 export const rosterProjects: RegisteredProject[] = [ompWeb, localaction, nixosConfig];
 
-/** ProjectEntry list: DirectoryPicker and AddWorkspaceDialog discovery rows, including worktrees that point at their parent. */
-export const rosterProjectEntries: ProjectEntry[] = [
-	{ name: "omp-web", path: OMP_WEB, isWorktree: false, branch: "main" },
-	{
-		name: "design-fixtures",
-		path: `${WORKTREES}/design-fixtures`,
-		isWorktree: true,
-		worktreeOf: "omp-web",
-		branch: "feat/design-fixtures",
-	},
-	{
-		name: "tx-pagination",
-		path: `${WORKTREES}/tx-pagination`,
-		isWorktree: true,
-		worktreeOf: "omp-web",
-		branch: "feat/tx-pagination",
-	},
-	{
-		name: "release-0-3",
-		path: `${WORKTREES}/release-0-3`,
-		isWorktree: true,
-		worktreeOf: "omp-web",
-		branch: "release/0.3",
-	},
-	// Detached linked worktree with no local branch: discovery's own row,
-	// offered for adoption when no branch row covers it.
-	{
-		name: "spike-detached",
-		path: `${WORKTREES}/spike-detached`,
-		isWorktree: true,
-		worktreeOf: "omp-web",
-	},
-	{ name: "localaction", path: LOCALACTION, isWorktree: false, branch: "main" },
-];
-
-/** ProjectBranch list: branch picker rows in AddWorkspaceDialog. */
+/** ProjectBranch list: branch rows in the New workspace popover's picker. */
 export const rosterProjectBranches: ProjectBranch[] = [
 	{ name: "main", checkedOut: true, worktreePath: OMP_WEB },
 	{ name: "feat/design-fixtures", checkedOut: true, worktreePath: `${WORKTREES}/design-fixtures` },
@@ -104,7 +68,6 @@ const daemonMain: DaemonEntry = {
 	branch: "main",
 	git: { added: 0, modified: 2, deleted: 0, untracked: 1, linesAdded: 64, linesDeleted: 9 },
 	labels: ["main"],
-	mode: "spawned",
 	status: "ready",
 	lastSessionFile: "/home/joshua/.omp/sessions/omp-web/2026-10-09T08-12-40.jsonl",
 	sessionTitle: "Bump the SDK pins to 18.9",
@@ -126,7 +89,6 @@ const daemonFixtures: DaemonEntry = {
 	branch: "feat/design-fixtures",
 	git: { added: 2, modified: 5, deleted: 0, untracked: 3, linesAdded: 412, linesDeleted: 18 },
 	labels: ["design", "fixtures"],
-	mode: "spawned",
 	status: "ready",
 	lastSessionFile: "/home/joshua/.omp/sessions/omp-web/2026-10-09T09-40-12.jsonl",
 	sessionTitle: "Design-system fixture modules",
@@ -148,7 +110,6 @@ const daemonAsleep: DaemonEntry = {
 	branch: "fix/review-anchors",
 	git: { added: 0, modified: 0, deleted: 0, untracked: 0 },
 	labels: [],
-	mode: "spawned",
 	status: "asleep",
 	lastSessionFile: "/home/joshua/.omp/sessions/omp-web/2026-10-08T16-02-33.jsonl",
 	sessionTitle: "Anchor migration for stale annotations",
@@ -177,7 +138,6 @@ const daemonStarting: DaemonEntry = {
 	worktreeOf: OMP_WEB,
 	branch: "feat/tx-pagination",
 	labels: ["tx"],
-	mode: "spawned",
 	status: "resolving",
 	sessionEmpty: true,
 	workspaceKind: "worktree",
@@ -193,7 +153,6 @@ const daemonClonePreparing: DaemonEntry = {
 	projectId: "proj_omp_web",
 	branch: "main",
 	labels: ["bench"],
-	mode: "spawned",
 	status: "connecting",
 	providerProfileId: "bwrap-default",
 	workspaceKind: "clone",
@@ -209,7 +168,6 @@ const daemonCloneFailed: DaemonEntry = {
 	project: "omp-web",
 	projectId: "proj_omp_web",
 	labels: ["trial"],
-	mode: "spawned",
 	status: "error",
 	error: "workspace lifecycle failed",
 	providerProfileId: "k8s-bench",
@@ -230,7 +188,6 @@ const daemonLocalactionMain: DaemonEntry = {
 	branch: "main",
 	git: { added: 0, modified: 1, deleted: 1, untracked: 0, linesAdded: 12, linesDeleted: 30 },
 	labels: [],
-	mode: "spawned",
 	status: "ready",
 	lastSessionFile: "/home/joshua/.omp/sessions/localaction/2026-10-09T07-55-01.jsonl",
 	sessionTitle: "Cache action checkouts between runs",
@@ -251,7 +208,6 @@ const daemonReconnecting: DaemonEntry = {
 	worktreeOf: LOCALACTION,
 	branch: "feat/job-matrix",
 	labels: ["matrix"],
-	mode: "remote",
 	status: "reconnecting",
 	sessionTitle: "Expand matrix strategies into jobs",
 	error: "socket closed (ECONNRESET); retrying in 4s",
@@ -259,14 +215,14 @@ const daemonReconnecting: DaemonEntry = {
 	desiredState: "running",
 };
 
-/** DaemonEntry: remote daemon that failed to resolve its session (no projectId, so it lands in the fallback group). */
-const daemonRemoteError: DaemonEntry = {
+/** DaemonEntry: daemon whose session file could not be found; an error row with a failed lifecycle stage. */
+const daemonSessionError: DaemonEntry = {
 	daemonId: "dmn_c001",
 	name: "localaction-bench",
 	cwd: "/srv/work/localaction",
-	project: "bench-host",
+	project: "nixos-config",
+	projectId: "proj_nixos_config",
 	labels: ["bench"],
-	mode: "remote",
 	status: "error",
 	error: "session file not found on remote host",
 	sessionEmpty: true,
@@ -275,14 +231,14 @@ const daemonRemoteError: DaemonEntry = {
 	lifecycleError: "bwrap exited with status 1",
 };
 
-/** DaemonEntry: remote daemon that is waiting on an extension dialog (blocked activity). */
-const daemonRemoteBlocked: DaemonEntry = {
+/** DaemonEntry: daemon waiting on an extension dialog (blocked activity). */
+const daemonBlocked: DaemonEntry = {
 	daemonId: "dmn_c002",
 	name: "release-bot",
 	cwd: "/srv/work/release",
-	project: "bench-host",
+	project: "nixos-config",
+	projectId: "proj_nixos_config",
 	labels: ["release"],
-	mode: "remote",
 	status: "ready",
 	sessionTitle: "Cut 0.3 release notes",
 	sessionEmpty: false,
@@ -290,7 +246,7 @@ const daemonRemoteBlocked: DaemonEntry = {
 	uptime: 8 * 60,
 };
 
-/** DaemonEntry list: everything the roster renders, across statuses, modes and workspace kinds. */
+/** DaemonEntry list: everything the roster renders, across statuses and workspace kinds. */
 export const rosterDaemons: DaemonEntry[] = [
 	daemonMain,
 	daemonFixtures,
@@ -301,8 +257,8 @@ export const rosterDaemons: DaemonEntry[] = [
 	daemonCloneFailed,
 	daemonLocalactionMain,
 	daemonReconnecting,
-	daemonRemoteError,
-	daemonRemoteBlocked,
+	daemonSessionError,
+	daemonBlocked,
 ];
 
 /** Individual entries, for stories that show one row or one detail view. */
@@ -316,8 +272,8 @@ export const rosterDaemon = {
 	cloneFailed: daemonCloneFailed,
 	localactionMain: daemonLocalactionMain,
 	reconnecting: daemonReconnecting,
-	remoteError: daemonRemoteError,
-	remoteBlocked: daemonRemoteBlocked,
+	sessionError: daemonSessionError,
+	blocked: daemonBlocked,
 } satisfies Record<string, DaemonEntry>;
 
 /** DaemonEntry: localaction linked worktree, ready and idle; the App view's healthy counterpart of `daemonReconnecting`. */
@@ -331,7 +287,6 @@ const daemonJobMatrix: DaemonEntry = {
 	branch: "feat/job-matrix",
 	git: { added: 1, modified: 3, deleted: 0, untracked: 0, linesAdded: 148, linesDeleted: 22 },
 	labels: ["matrix"],
-	mode: "spawned",
 	status: "ready",
 	lastSessionFile: "/home/joshua/.omp/sessions/localaction/2026-10-09T09-12-48.jsonl",
 	sessionTitle: "Expand matrix strategies into jobs",
@@ -353,7 +308,6 @@ const daemonArtifactPaths: DaemonEntry = {
 	branch: "fix/artifact-paths",
 	git: { added: 0, modified: 0, deleted: 0, untracked: 0 },
 	labels: [],
-	mode: "spawned",
 	status: "asleep",
 	lastSessionFile: "/home/joshua/.omp/sessions/localaction/2026-10-08T14-31-07.jsonl",
 	sessionTitle: "Normalize artifact upload paths on Windows runners",
@@ -371,7 +325,6 @@ const daemonNixosMain: DaemonEntry = {
 	branch: "main",
 	git: { added: 1, modified: 2, deleted: 0, untracked: 0, linesAdded: 57, linesDeleted: 14 },
 	labels: [],
-	mode: "spawned",
 	status: "ready",
 	lastSessionFile: "/home/joshua/.omp/sessions/nixos-config/2026-10-09T08-47-19.jsonl",
 	sessionTitle: "Split home-manager modules per host",
@@ -393,7 +346,6 @@ const daemonFlakeUpdate: DaemonEntry = {
 	branch: "chore/flake-update",
 	git: { added: 0, modified: 1, deleted: 0, untracked: 0, linesAdded: 18, linesDeleted: 18 },
 	labels: [],
-	mode: "spawned",
 	status: "asleep",
 	lastSessionFile: "/home/joshua/.omp/sessions/nixos-config/2026-10-07T19-05-52.jsonl",
 	sessionTitle: "Bump nixpkgs and fix broken overlays",
@@ -413,7 +365,7 @@ export const rosterAppDaemons: DaemonEntry[] = [
 	daemonFlakeUpdate,
 ];
 
-/** ProjectGroupsData: grouped daemons per project for ProjectGroups; main checkouts first, then worktrees and clones; unregistered remotes trail. */
+/** ProjectGroupsData: grouped daemons per project for ProjectGroups; main checkouts first, then worktrees and clones. */
 export const rosterSidebarGroups: ProjectGroupsData = [
 	{
 		project: ompWeb,
@@ -427,8 +379,7 @@ export const rosterSidebarGroups: ProjectGroupsData = [
 		],
 	},
 	{ project: localaction, daemons: [daemonLocalactionMain, daemonReconnecting] },
-	{ project: nixosConfig, daemons: [] },
-	{ project: null, daemons: [daemonRemoteError, daemonRemoteBlocked] },
+	{ project: nixosConfig, daemons: [daemonSessionError, daemonBlocked] },
 ];
 
 /** Supervised process rows for BackgroundDaemonsBar, anchored to `now` since the strip renders `Date.now() - startedAt`. */
@@ -508,7 +459,7 @@ export function rosterDaemonInfos(now: number): DaemonInfo[] {
 	];
 }
 
-/** PublicProviderProfile list: AddWorkspaceDialog provider picker and clone-row profile chips. */
+/** PublicProviderProfile list: NewWorkspacePopover run-on profiles and clone-row profile chips. */
 export const rosterProviderProfiles: PublicProviderProfile[] = [
 	{ id: "bwrap-default", provider: "bwrap", network: "host" },
 	{
@@ -569,7 +520,6 @@ export const worktreeInfoClean: WorktreeDeleteInfo = {
 	branch: "fix/review-anchors",
 	merged: true,
 	unpushed: false,
-	branchOwned: true,
 	hasUpstream: true,
 };
 
@@ -583,11 +533,10 @@ export const worktreeInfoDirty: WorktreeDeleteInfo = {
 	branch: "feat/design-fixtures",
 	merged: false,
 	unpushed: true,
-	branchOwned: false,
 	files: [
 		"src/fleet/worktrees.ts",
 		"src/web/DeleteWorkspaceDialog.tsx",
-		"src/web/AddWorkspaceDialog.tsx",
+		"src/web/NewWorkspacePopover.tsx",
 		"docs/ux-audit.txt",
 		"scratch/notes.md",
 		"scratch/fixtures.json",

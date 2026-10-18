@@ -8,19 +8,21 @@
  *     removes the bytes and clears the storeOrphan marker.
  *
  * The notice is driven over a REAL callback pair (startCallbackDaemon)
- * against an enrollment minted by POST /ctl/enroll (which attaches the
- * fleet's per-workspace log tap): the control envelope rides the HTTP up-leg
- * on the reserved `transport` stream — exactly where the fleet's own
- * `log_ack` controls go — into transport → tap → #onLogEnvelope. No private
- * method is called directly; only the read-only flip the clone delete gate
- * would perform is store-level setup.
+ * against a workspace enrolled BEFORE boot: the boot re-enrollment attaches
+ * the fleet's per-workspace log tap (a runtime enrollment has no tap yet).
+ * The control envelope rides the HTTP up-leg on the reserved `transport`
+ * stream, exactly where the fleet's own `log_ack` controls go: transport,
+ * then tap, then #onLogEnvelope. No private method is called directly; only
+ * the read-only flip the clone delete gate would perform is store-level setup.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CALLBACK_TRANSPORT_STREAM_ID, type CallbackEnvelope } from "#lib/wire/callback-protocol";
 import type { FleetLogStore } from "../log-store";
+import { Registry } from "../registry";
 import type { FleetServer } from "../server";
 import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
 import {
@@ -44,15 +46,56 @@ const MAIN_CONTENT = '{"type":"session","id":"s1"}\n{"type":"message","id":"m1"}
 const SUBAGENT_CONTENT = '{"type":"session","id":"s1-sub"}\n{"type":"message","id":"m2"}\n';
 const SIBLING_CONTENT = '{"type":"session","id":"s2"}\n';
 
+/** Workspaces seeded into the roster before boot, one per test scenario. */
+const SEEDED_WORKSPACES = [
+	"del-purge",
+	"del-readonly",
+	"del-bad-id",
+	"orphan-marked",
+	"orphan-unmarked",
+	"purge-live",
+	"purge-orphan",
+	"purge-readonly",
+];
+
+/** A pre-boot seeded workspace: its roster id and the raw callback credential. */
+interface SeededWorkspace {
+	workspaceId: string;
+	credential: string;
+	generation: number;
+}
+
 describe("fleet log retention routes (P7.6)", () => {
 	let statePath: string;
 	let configPath: string;
 	let server: FleetServer;
 	const daemons: CallbackDaemon[] = [];
 	const unwatch: Array<() => void> = [];
+	const seeded = new Map<string, SeededWorkspace>();
 
 	beforeAll(async () => {
 		({ statePath, configPath } = fleetPaths());
+		// Seed one enrolled roster row per workspace before boot. Boot re-enrolls
+		// every persisted binding (digest + generation) and attaches its log tap.
+		const registry = new Registry(statePath);
+		await registry.load();
+		for (const name of SEEDED_WORKSPACES) {
+			const credential = randomBytes(32).toString("hex");
+			const entry = registry.create({
+				name,
+				cwd: "",
+				project: "",
+				labels: [],
+				status: "asleep",
+			});
+			registry.updateWorkspace(entry.daemonId, { desiredState: "stopped" });
+			registry.setWorkspaceEnrollment(entry.daemonId, {
+				// The transport digests the decoded 32 bytes of the hex credential.
+				credentialHash: createHash("sha256").update(Buffer.from(credential, "hex")).digest("hex"),
+				generation: 1,
+			});
+			seeded.set(name, { workspaceId: entry.daemonId, credential, generation: 1 });
+		}
 		server = await startTestFleet(
 			{ statePath, configPath },
 			{},
@@ -91,35 +134,29 @@ describe("fleet log retention routes (P7.6)", () => {
 	}
 
 	/**
-	 * POST /ctl/enroll (creates the remote roster entry and attaches the
-	 * fleet's log tap), then dial the real callback pair with the minted
-	 * credential. A witness tap is registered AFTER the fleet's (the enroll
-	 * route attaches it before responding) so insertion-ordered tap dispatch
-	 * runs the log tap first: observing an envelope here proves
-	 * #onLogEnvelope already ran it, without sleeping on a negative.
+	 * Dial the real callback pair for a workspace seeded before boot (see
+	 * beforeAll), then register a witness tap AFTER the fleet's boot-attached
+	 * log tap. Tap dispatch is insertion-ordered, so observing an envelope
+	 * here proves #onLogEnvelope already ran it, without sleeping on a negative.
 	 */
 	async function enrollAndPair(name: string): Promise<PairedWorkspace> {
-		const res = await postJson(server.port, "/ctl/enroll", { name });
-		expect(res.status).toBe(201);
-		const body = (await res.json()) as {
-			enrollment: { workspaceId: string; generation: number; token: string };
-		};
-		const enrollment = body.enrollment;
+		const seed = seeded.get(name);
+		if (seed === undefined) throw new Error(`workspace ${name} was not seeded before boot`);
 		const daemon = startCallbackDaemon({
 			url: `http://127.0.0.1:${server.port}`,
-			workspaceId: enrollment.workspaceId,
-			generation: enrollment.generation,
-			token: enrollment.token,
+			workspaceId: seed.workspaceId,
+			generation: seed.generation,
+			token: seed.credential,
 		});
 		daemons.push(daemon);
 		await daemon.waitConnected();
 		const seen: CallbackEnvelope[] = [];
 		unwatch.push(
-			server.transport.onDaemonEnvelope(enrollment.workspaceId, (envelope) => {
+			server.transport.onDaemonEnvelope(seed.workspaceId, (envelope) => {
 				seen.push(envelope);
 			}),
 		);
-		return { workspaceId: enrollment.workspaceId, daemon, seen };
+		return { workspaceId: seed.workspaceId, daemon, seen };
 	}
 
 	/**

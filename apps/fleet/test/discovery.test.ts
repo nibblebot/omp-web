@@ -13,6 +13,7 @@ import { join } from "node:path";
 import {
 	parseGitStatePorcelain,
 	parseNumstat,
+	parseWorktreeList,
 	probeGitState,
 	resolveWorktreeOf,
 	validateProjectPath,
@@ -338,5 +339,73 @@ describe("probeGitState", () => {
 		expect(await probeGitState("/srv/repos/acme", { exec: failing })).toBeUndefined();
 		const garbage = fakeGit({ exitCode: 0, stderr: "", stdout: "not porcelain\n" }, []);
 		expect(await probeGitState("/srv/repos/acme", { exec: garbage })).toBeUndefined();
+	});
+});
+
+describe("parseWorktreeList", () => {
+	test("reads head, branch, detached, locked, and prunable per block", () => {
+		const stdout = [
+			"worktree /srv/repos/acme",
+			"HEAD abc111",
+			"branch refs/heads/main",
+			"",
+			"worktree /srv/wt/locked",
+			"HEAD abc222",
+			"branch refs/heads/feat",
+			"locked waiting on a mount",
+			"",
+			"worktree /srv/wt/detached",
+			"HEAD abc333",
+			"detached",
+			"",
+			"worktree /srv/wt/gone",
+			"HEAD abc444",
+			"detached",
+			"prunable gitdir file points to non-existent location",
+			"",
+		].join("\n");
+		expect(parseWorktreeList(stdout)).toEqual([
+			{
+				path: "/srv/repos/acme",
+				head: "abc111",
+				branch: "refs/heads/main",
+				detached: false,
+				bare: false,
+				locked: false,
+				prunable: false,
+			},
+			{
+				path: "/srv/wt/locked",
+				head: "abc222",
+				branch: "refs/heads/feat",
+				detached: false,
+				bare: false,
+				locked: true,
+				prunable: false,
+			},
+			{
+				path: "/srv/wt/detached",
+				head: "abc333",
+				detached: true,
+				bare: false,
+				locked: false,
+				prunable: false,
+			},
+			{
+				path: "/srv/wt/gone",
+				head: "abc444",
+				detached: true,
+				bare: false,
+				locked: false,
+				prunable: true,
+			},
+		]);
+	});
+
+	test("a bare entry is flagged bare with no branch", () => {
+		const stdout = ["worktree /srv/repos/bare.git", "bare", ""].join("\n");
+		expect(parseWorktreeList(stdout)).toEqual([
+			{ path: "/srv/repos/bare.git", detached: false, bare: true, locked: false, prunable: false },
+		]);
 	});
 });

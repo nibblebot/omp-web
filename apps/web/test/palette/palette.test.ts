@@ -33,7 +33,7 @@ describe("openItems", () => {
 		expect(labelsOut).toContain("Provider login");
 	});
 
-	test("one workspace item per registered project", () => {
+	test("one new-workspace item per registered project", () => {
 		const items = openItems({
 			debugEnabled: false,
 			projects: [
@@ -41,12 +41,10 @@ describe("openItems", () => {
 				{ projectId: "p2", name: "beta" },
 			],
 		});
-		const workspaces = items.filter(
-			(item) => item.action.kind === "open" && item.action.target === "workspace",
-		);
+		const workspaces = items.filter((item) => item.action.kind === "new-workspace");
 		expect(workspaces.map((item) => item.label)).toEqual([
-			"Add workspace: alpha",
-			"Add workspace: beta",
+			"New workspace: alpha",
+			"New workspace: beta",
 		]);
 	});
 });

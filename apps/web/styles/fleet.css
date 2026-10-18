@@ -69,14 +69,11 @@
 /* Phones: sidebar labels at body size and 44px tap targets for its controls. */
 @media (max-width: 767px) {
 	.sidebar .sidebar-row,
-	.sidebar .daemon-session-title,
-	.sidebar .project-add-worktree {
+	.sidebar .daemon-session-title {
 		font-size: var(--fs-md);
 	}
 	.sidebar .project-group-toggle,
-	.sidebar .project-add-worktree,
-	.sidebar .daemon-row-btn,
-	.sidebar .sidebar-remote-add {
+	.sidebar .daemon-row-btn {
 		min-height: 44px;
 	}
 	.sidebar .daemon-row--switcher {
@@ -93,12 +90,11 @@
 		font-size: var(--fs-md);
 	}
 }
-/* Phones: Add workspace dialog mode tabs and action buttons reach 44px. */
+/* Phones: New workspace popover segments and rows reach 44px. */
 @media (max-width: 767px) {
-	.worktree-tab,
+	.new-workspace-segment,
 	.workspace-source-mode,
-	.project-template,
-	.worktree-btn,
+	.new-workspace-row,
 	.daemon-row-btn {
 		min-height: 44px;
 	}
@@ -444,19 +440,6 @@
 	font-size: var(--fs-micro);
 	color: var(--muted-2);
 	white-space: nowrap;
-}
-/* Project header Start session: always-visible text action (FLEET-13). */
-.project-start-session {
-	font-size: var(--fs-micro);
-	color: var(--accent);
-	background: none;
-	border: 1px solid var(--accent);
-	border-radius: var(--r-pill);
-	padding: 0 var(--space-3);
-	margin: 0 var(--space-2);
-	cursor: pointer;
-	white-space: nowrap;
-	flex: none;
 }
 /* P8.1: provider lifecycle progress on clone rows (preparation → runtime →
    callback; a failed stage shows its error + Retry in place of the label). */
@@ -979,278 +962,378 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	color: var(--muted-2);
 	margin-bottom: var(--space-2);
 }
-/* --- Add-repo modal (AddProjectDialog.tsx) --- */
-.project-form {
+/* --- Add-project modal (AddProjectDialog.tsx) --- */
+.add-project-modal {
+	width: min(720px, 94vw);
+	max-width: none;
+}
+.add-project-bar {
 	display: flex;
-	flex-direction: column;
-	gap: var(--space-1);
-	margin-bottom: var(--space-5);
+	align-items: center;
+	gap: var(--space-2);
+	margin-bottom: var(--space-3);
 }
-.project-path {
-	margin-bottom: var(--space-2);
-}
-.project-path-error,
-.project-template-error {
-	margin: var(--space-1) 0 var(--space-2);
-	text-align: left;
-	font-size: var(--fs-sm);
-}
-.project-template {
-	background: var(--bg-deep);
+.add-project-icon-btn,
+.add-project-type-btn {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	background: var(--btn);
 	border: 1px solid var(--border);
 	border-radius: var(--r-sm);
 	color: var(--text);
 	font: inherit;
 	font-size: var(--fs-sm);
-	padding: var(--space-2) var(--space-3);
-	width: 100%;
-}
-/* Collapsed advanced section (template + labels, ex-SpawnPicker). */
-.project-advanced {
-	margin: var(--space-2) 0;
-}
-.project-advanced summary {
+	padding: var(--space-1) var(--space-3);
 	cursor: pointer;
-	color: var(--muted-2);
-	font-size: var(--fs-sm);
-	text-transform: uppercase;
-	letter-spacing: var(--ls-micro);
-	padding: var(--space-2) 0;
 }
-.project-advanced[open] summary {
-	margin-bottom: var(--space-3);
+.add-project-icon-btn:hover:not(:disabled),
+.add-project-type-btn:hover:not(:disabled) {
+	background: var(--hover);
 }
-.project-start,
-.project-start-now {
+.add-project-icon-btn:disabled,
+.add-project-type-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.add-project-path {
+	flex: 1;
+	min-width: 0;
 	display: flex;
 	align-items: center;
-	gap: var(--space-3);
-	margin: var(--space-3) 0 0;
-	color: var(--muted);
+	gap: var(--space-1);
+	overflow-x: auto;
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	padding: var(--space-1) var(--space-3);
+	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
+	white-space: nowrap;
+	cursor: text;
+}
+.add-project-crumb {
+	flex: none;
+	background: none;
+	border: none;
+	border-radius: var(--r-xs);
+	color: var(--muted-3);
+	font: inherit;
+	padding: 0 var(--space-1);
 	cursor: pointer;
 }
-.project-start input,
-.project-start-now input {
-	cursor: pointer;
+.add-project-crumb:hover:not(:disabled) {
+	background: var(--hover);
+	color: var(--text);
 }
-.project-list {
+.add-project-crumb.current {
+	color: var(--text);
+	cursor: default;
+}
+.add-project-sep {
+	color: var(--muted-2);
+}
+.add-project-path-form {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+}
+.add-project-path-input {
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+}
+.add-project-body {
+	display: grid;
+	grid-template-columns: 170px minmax(0, 1fr);
+	gap: var(--space-4);
+	height: 42vh;
+	min-height: 220px;
+}
+.add-project-shortcuts {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-height: 0;
+	overflow-y: auto;
+	border-right: 1px solid var(--border);
+	padding-right: var(--space-3);
+}
+.add-project-shortcut {
+	width: 100%;
+	text-align: left;
+	align-items: center;
+}
+.add-project-shortcut span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.add-project-shortcuts-head {
+	margin-top: var(--space-3);
+	padding: 0 var(--space-2);
+	font-size: var(--fs-micro);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	color: var(--muted-2);
+}
+.add-project-listing {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
-	max-height: 40vh;
-	overflow-y: auto;
-	margin-top: var(--space-2);
+	min-width: 0;
+	min-height: 0;
 }
-.project-row {
-	align-items: center;
+.add-project-list {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-height: 0;
+	overflow-y: auto;
+}
+.add-project-row {
 	width: 100%;
 	text-align: left;
-	cursor: pointer;
+	align-items: center;
 }
-.project-row-name {
+.add-project-row.selected {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+}
+.add-project-up .add-project-name {
+	color: var(--muted-2);
+}
+.add-project-folder {
+	flex: none;
+	font-size: var(--fs-md);
+	color: var(--muted);
+}
+.add-project-name {
 	flex: 1;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.project-row-branch {
-	flex: none;
-}
-.project-row-registered {
+.add-project-git {
 	flex: none;
 	font-size: var(--fs-micro);
+}
+.add-project-status {
+	padding: var(--space-2) var(--space-3);
+	font-size: var(--fs-sm);
 	color: var(--muted-2);
-	font-style: italic;
 }
-.project-actions {
-	display: flex;
-	justify-content: flex-end;
-	margin-top: var(--space-5);
+.msg-notice.add-project-error {
+	margin: 0 0 var(--space-2);
+	text-align: left;
+	font-size: var(--fs-sm);
+	color: var(--error);
 }
-.project-btn {
-	background: var(--accent-dim);
-	border: 1px solid var(--accent-border);
-	border-radius: var(--r-md);
-	color: var(--text);
-	font: inherit;
-	font-weight: 600;
-	padding: var(--space-2) var(--space-6);
-	cursor: pointer;
-}
-.project-btn:hover {
-	background: var(--hover);
-	border-color: var(--accent);
-}
-/* Staged pipeline progress (register → spawn → attach), shared shape. */
-.project-progress,
-.worktree-progress {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-3);
-	padding: var(--space-4) 0;
-}
-.project-progress-step,
-.worktree-progress-step {
+.add-project-footer {
 	display: flex;
 	align-items: center;
-	gap: var(--space-3);
-	color: var(--muted-2);
-	font-size: var(--fs-md);
+	justify-content: space-between;
+	gap: var(--space-4);
+	margin-top: var(--space-4);
+	padding-top: var(--space-3);
+	border-top: 1px solid var(--border);
 }
-.project-progress-step.current,
-.worktree-progress-step.current {
-	color: var(--text);
-	font-weight: 600;
-}
-.project-progress-step.done,
-.worktree-progress-step.done {
-	color: var(--success);
-}
-.project-progress-dot,
-.worktree-progress-dot {
-	width: 8px;
-	height: 8px;
-	flex: none;
-	border-radius: 50%;
-	background: var(--border-strong);
-}
-.project-progress-step.current .project-progress-dot,
-.worktree-progress-step.current .worktree-progress-dot {
-	background: var(--accent);
-	box-shadow: 0 0 6px var(--accent);
-	animation: daemon-dot-pulse 1.2s ease-in-out infinite;
-}
-.project-progress-step.done .project-progress-dot,
-.worktree-progress-step.done .worktree-progress-dot {
-	background: var(--success);
-}
-.project-progress-note,
-.worktree-progress-note {
+.add-project-target {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-width: 0;
 	font-size: var(--fs-sm);
-	font-style: italic;
-	color: var(--muted-2);
 }
-.project-error,
+.add-project-target-path {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--font-mono);
+	color: var(--text);
+}
+@media (max-width: 600px) {
+	.add-project-body {
+		grid-template-columns: minmax(0, 1fr);
+		height: 50vh;
+	}
+	.add-project-shortcuts {
+		flex-direction: row;
+		flex-wrap: wrap;
+		border-right: none;
+		padding-right: 0;
+	}
+}
+/* Error text under the close-out dialog actions (DeleteWorkspaceDialog / RemoveProjectDialog). */
 .worktree-error {
 	margin-bottom: var(--space-4);
 	text-align: left;
 }
-/* --- Add-workspace modal (AddWorkspaceDialog.tsx: Worktree/Clone/Add existing) --- */
-.worktree-tabs {
-	display: flex;
-	gap: var(--space-1);
-	border-bottom: 1px solid var(--border);
-	margin-bottom: var(--space-5);
-}
-.worktree-tab {
-	background: none;
-	border: none;
-	border-bottom: 2px solid transparent;
-	border-radius: 0;
-	font: inherit;
-	font-size: var(--fs-md);
-	color: var(--muted-2);
-	padding: var(--space-3) var(--space-4);
-	cursor: pointer;
-	margin-bottom: -1px;
-}
-.worktree-tab.active {
-	color: var(--text);
-	border-bottom-color: var(--accent);
-}
-.worktree-form {
+/* --- New workspace popover (sidebar/NewWorkspacePopover.tsx), anchored to the project "+" --- */
+.new-workspace {
+	position: fixed;
+	z-index: var(--z-autocomplete);
+	width: 320px;
+	box-sizing: border-box;
 	display: flex;
 	flex-direction: column;
+	gap: var(--space-3);
+	padding: var(--space-4);
+	overflow: hidden;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	box-shadow: var(--shadow-2);
+	color: var(--text);
+	font-size: var(--fs-sm);
+	text-align: left;
+}
+.new-workspace-head {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+	min-width: 0;
+}
+.new-workspace-title {
+	font-weight: 600;
+}
+.new-workspace-project {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--muted-2);
+}
+.new-workspace-field {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+}
+.new-workspace-segments {
+	display: inline-flex;
+	flex-wrap: wrap;
 	gap: var(--space-1);
 }
-.worktree-name {
-	margin-bottom: var(--space-2);
-}
-.worktree-name-error {
-	margin: var(--space-1) 0 var(--space-2);
-	text-align: left;
-	font-size: var(--fs-sm);
-}
-.worktree-advanced {
-	margin: var(--space-2) 0;
-}
-.worktree-advanced summary {
-	cursor: pointer;
-	color: var(--muted-2);
-	font-size: var(--fs-sm);
-	text-transform: uppercase;
-	letter-spacing: var(--ls-micro);
-	padding: var(--space-2) 0;
-}
-.worktree-advanced[open] summary {
-	margin-bottom: var(--space-3);
-}
-.worktree-base,
-.worktree-branch {
-	margin-bottom: var(--space-2);
-}
-.worktree-actions {
-	display: flex;
-	justify-content: flex-end;
-	align-items: center;
-	gap: var(--space-3);
-	margin-top: var(--space-5);
-}
-.worktree-btn {
-	background: var(--accent-dim);
-	border: 1px solid var(--accent-border);
+.new-workspace-segment {
+	background: none;
+	border: 1px solid var(--border);
 	border-radius: var(--r-md);
-	color: var(--text);
+	color: var(--muted-2);
 	font: inherit;
-	font-weight: 600;
-	padding: var(--space-2) var(--space-6);
+	padding: var(--space-1) var(--space-3);
 	cursor: pointer;
 }
-.worktree-btn:hover:not(:disabled) {
+.new-workspace-segment:hover:not(:disabled) {
 	background: var(--hover);
-	border-color: var(--accent);
+	color: var(--text);
 }
-.worktree-btn:disabled {
+.new-workspace-segment[aria-pressed="true"] {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+	color: var(--text);
+}
+.new-workspace-segment:disabled {
 	opacity: 0.5;
 	cursor: default;
 }
-.worktree-list {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-2);
-	max-height: 40vh;
-	overflow-y: auto;
-	margin-top: var(--space-2);
+.new-workspace-remote {
+	max-width: 100%;
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	padding: var(--space-1) var(--space-3);
 }
-.worktree-row {
-	align-items: center;
+.new-workspace-search {
 	width: 100%;
+	box-sizing: border-box;
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	padding: var(--space-2) var(--space-3);
+}
+.new-workspace-list {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-height: 0;
+	overflow-y: auto;
+}
+.new-workspace-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	width: 100%;
+	min-width: 0;
+	background: none;
+	border: 1px solid transparent;
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	padding: var(--space-2) var(--space-3);
 	text-align: left;
 	cursor: pointer;
 }
-.worktree-row-name {
+.new-workspace-row:hover:not(:disabled),
+.new-workspace-row:focus-visible {
+	background: var(--hover);
+}
+.new-workspace-row:disabled {
+	color: var(--muted-2);
+	cursor: default;
+}
+.new-workspace-create {
+	border-color: var(--accent-border);
+}
+.new-workspace-row-name {
 	flex: 1;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.worktree-row-branch {
+.new-workspace-row-meta {
 	flex: none;
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
 }
-/* Existing-branch dropdown (create tab): mirrors .settings-row select.
-   Checked-out branches are <option disabled>, natively greyed and
-   unselectable (git refuses a second checkout). */
-.worktree-branch-select {
-	width: 100%;
-	background: var(--bg-deep);
-	border: 1px solid var(--border);
-	border-radius: var(--r-md);
-	color: var(--text);
-	padding: var(--space-2) var(--space-4);
+.new-workspace-note {
+	margin: 0;
+	font-style: italic;
+	color: var(--muted-2);
+}
+.new-workspace-failure {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-2);
+	font-style: normal;
+	color: var(--error);
+}
+.new-workspace-retry {
+	background: none;
+	border: none;
+	padding: 0;
 	font: inherit;
+	color: var(--text);
+	text-decoration: underline;
+	cursor: pointer;
+}
+.new-workspace-progress {
+	margin: 0;
+	color: var(--muted-2);
+}
+.new-workspace-error {
+	margin: 0;
+	color: var(--error);
 }
 /* --- Close-out dialogs (DeleteWorkspaceDialog / RemoveProjectDialog) --- */
 .worktree-evidence {
@@ -1337,78 +1420,70 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 .project-group-toggle:hover {
 	background: var(--hover);
 }
-.project-add-worktree {
-	display: block;
-	width: calc(100% - var(--space-6));
-	margin: var(--space-1) var(--space-3) var(--space-4);
-	padding: var(--space-2) var(--space-3);
+.project-new-btn {
+	flex: none;
+	width: 24px;
+	height: 24px;
+	margin-right: var(--space-2);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
 	background: none;
-	border: 1px dashed var(--border-strong);
-	border-radius: var(--r-md);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-pill);
 	color: var(--muted-2);
 	font: inherit;
-	font-size: var(--fs-sm);
-	text-align: center;
+	line-height: 1;
 	cursor: pointer;
 }
-.project-add-worktree:hover {
+.project-new-btn:hover:not(:disabled),
+.project-new-btn[aria-expanded="true"] {
 	color: var(--text);
 	border-color: var(--accent-border);
 	background: var(--hover);
 }
-
-/* --- Phase 4: first-run empty state (ProjectGroups FirstRunPanel) --- */
-.firstrun {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-3);
-	padding: var(--space-4) var(--space-3);
-	border: 1px solid var(--border);
-	border-radius: var(--r-md);
-	background: var(--panel);
+.project-new-btn:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
 }
-.firstrun-title {
-	margin: 0;
-	font-family: var(--font-mono);
-	font-size: var(--fs-sm);
-	text-transform: uppercase;
-	letter-spacing: var(--ls-micro);
-	color: var(--text);
-}
-.firstrun-steps {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-2);
-	margin: 0;
-	padding-left: var(--space-5);
-	color: var(--muted-2);
-	font-size: var(--fs-sm);
-	line-height: 1.4;
-}
-.firstrun-steps code {
-	font-family: var(--font-mono);
+.project-missing-chip {
+	flex: none;
 	font-size: var(--fs-micro);
-	background: var(--btn);
-	border-radius: var(--r-sm);
-	padding: 1px var(--space-1);
+	color: var(--warning);
+	border: 1px solid currentColor;
+	border-radius: var(--r-pill);
+	padding: 0 var(--space-2);
 }
-.firstrun-cta {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--space-2);
-	background: var(--accent);
-	border: 1px solid var(--accent);
-	border-radius: var(--r-md);
-	color: var(--bg);
+.project-group--missing > .project-group-toggle .sidebar-group-label {
+	opacity: 0.55;
+}
+.project-group--highlight {
+	animation: project-group-flash 1.2s ease-out 2;
+}
+@keyframes project-group-flash {
+	from {
+		background: var(--accent-dim);
+	}
+	to {
+		background: transparent;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.project-group--highlight {
+		animation: none;
+		outline: 1px solid var(--accent-border);
+	}
+}
+.sidebar-empty-action {
+	margin-top: var(--space-2);
+	background: none;
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-pill);
+	color: var(--accent);
 	font: inherit;
 	font-size: var(--fs-sm);
-	font-weight: 600;
-	padding: var(--space-2) var(--space-3);
+	padding: var(--space-1) var(--space-3);
 	cursor: pointer;
-}
-.firstrun-cta:hover {
-	background: color-mix(in srgb, var(--accent), var(--bg) 12%);
-	border-color: color-mix(in srgb, var(--accent), var(--bg) 12%);
 }
 
 /* FLEET-16: session process log wrapper with jump-to-latest affordance. */
@@ -1420,58 +1495,4 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 .daemon-stderr-jump {
 	align-self: flex-end;
 	font-size: var(--fs-micro);
-}
-
-/* FLEET-19: remote sessions carry a dashed chip and an Add remote entry. */
-.daemon-chip--remote {
-	border-style: dashed;
-}
-.sidebar-remote-add {
-	margin: var(--space-3) var(--space-4);
-	padding: var(--space-3) var(--space-4);
-	border: 1px dashed var(--border-strong);
-	border-radius: var(--r-md);
-	background: transparent;
-	color: var(--muted-3);
-	font-size: var(--fs-micro);
-	text-align: left;
-	cursor: pointer;
-}
-.sidebar-remote-add:hover {
-	color: var(--text);
-	border-color: var(--accent);
-}
-.remote-enroll {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-4);
-}
-.remote-enroll-command {
-	margin: 0;
-	padding: var(--space-4);
-	background: var(--bg-deep);
-	border: 1px solid var(--border);
-	border-radius: var(--r-md);
-	white-space: pre-wrap;
-	word-break: break-all;
-	font-size: var(--fs-sm);
-	color: var(--text);
-	user-select: all;
-}
-.remote-enroll-status {
-	font-size: var(--fs-micro);
-	color: var(--muted-2);
-}
-
-/* FLEET-20: first-run panel actions and status lines. */
-.firstrun-actions {
-	display: flex;
-	flex-wrap: wrap;
-	gap: var(--space-3);
-	margin-top: var(--space-3);
-}
-.firstrun-status {
-	font-size: var(--fs-micro);
-	color: var(--muted-2);
-	margin-top: var(--space-2);
 }

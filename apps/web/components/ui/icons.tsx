@@ -396,6 +396,29 @@ export const PackageIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
+/** Lucide `lock`: a worktree held by `git worktree lock`. */
+export const LockIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+		<path d="M7 11V7a5 5 0 0 1 10 0v4" />
+	</Svg>
+);
+
+/** Lucide `folder`: a directory in the Add project chooser. */
+export const FolderIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+	</Svg>
+);
+
+/** Lucide `house`: the home shortcut in the Add project chooser. */
+export const HomeIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
+		<path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+	</Svg>
+);
+
 export const MonitorIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<rect width="20" height="14" x="2" y="3" rx="2" />

@@ -30,7 +30,6 @@ describe("loadConfig", () => {
 		const config = await loadConfig(join(tmpDir(), "nope.json"));
 		expect(config.templates).toEqual({ local: DEFAULT_LOCAL_TEMPLATE });
 		expect(config.defaultTemplate).toBe("local");
-		expect(config.spawnHook).toBeUndefined();
 		expect(config.workspaceDir).toBe(join(homedir(), ".omp-web", "workspaces"));
 	});
 
@@ -57,7 +56,6 @@ describe("loadConfig", () => {
 			},
 		});
 		expect(config.defaultTemplate).toBe("docker");
-		expect(config.spawnHook).toBeUndefined();
 	});
 
 	test("partial file keeps defaults for the rest", async () => {
@@ -151,23 +149,6 @@ describe("loadConfig", () => {
 		} finally {
 			if (prev === undefined) delete process.env.OMP_FLEET_LOCAL_TEMPLATE;
 			else process.env.OMP_FLEET_LOCAL_TEMPLATE = prev;
-		}
-	});
-
-	test("spawnHook: env OMP_FLEET_SPAWN_HOOK wins over the file", async () => {
-		const file = join(tmpDir(), "config.json");
-		writeFileSync(file, JSON.stringify({ spawnHook: "/cfg/hook.sh" }));
-		const fromFile = await loadConfig(file);
-		expect(fromFile.spawnHook).toBe("/cfg/hook.sh");
-
-		const prev = process.env.OMP_FLEET_SPAWN_HOOK;
-		process.env.OMP_FLEET_SPAWN_HOOK = "/env/hook.sh";
-		try {
-			const fromEnv = await loadConfig(file);
-			expect(fromEnv.spawnHook).toBe("/env/hook.sh");
-		} finally {
-			if (prev === undefined) delete process.env.OMP_FLEET_SPAWN_HOOK;
-			else process.env.OMP_FLEET_SPAWN_HOOK = prev;
 		}
 	});
 

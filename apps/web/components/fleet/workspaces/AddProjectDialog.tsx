@@ -1,213 +1,326 @@
-import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
-import { createDirPicker } from "../../../fleet-ui/dir-picker";
-import { fetchCtlTemplates, sendAddProject, setState, state } from "../../../state";
-import { fetchRecentRoots } from "../../../store/projects";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	on,
+	onCleanup,
+	onMount,
+	Show,
+	type Component,
+} from "solid-js";
+import { addTarget, createDirPicker, pathCrumbs } from "../../../fleet-ui/dir-picker";
+import { setState, state } from "../../../state";
+import { addProject, fetchRecentRoots, highlightProject } from "../../../store/projects";
+import { DialogActions } from "../../ui/DialogActions";
+import { ArrowUpIcon, FolderIcon, HomeIcon } from "../../ui/icons";
 import { Modal } from "../../ui/Modal";
-import { DirectoryPicker } from "./DirectoryPicker";
-import { OnboardingProgress, useOnboardingPipeline } from "./onboarding";
+import { moveRovingFocus, setRovingTabStop } from "../../ui/roving";
 
-/** Progress labels, index-aligned with the stage rungs. */
-const STAGES = ["registering project", "starting session process", "attaching session"];
+/** Folder the chooser opens at: the prefilled path, else the parent of the newest registered project, else home. */
+function openingPath(): string {
+	if (state.addProjectPath) return state.addProjectPath;
+	const newest = [...state.registeredProjects].sort((a, b) => b.addedAt - a.addedAt)[0];
+	if (newest !== undefined) return newest.path.replace(/\/[^/]*\/?$/, "") || "/";
+	return "~";
+}
 
-/**
- * Add-repo modal (Phase 6): register a first-class project with the fleet by
- * typing a path (autocompleted from registered Git roots) or browsing to a
- * directory in the DirectoryPicker,
- * and no root-scanned discovery list (fleet roots are gone edge-side; the
- * `projects` frame now carries only unregistered worktrees, which belong to
- * the worktree modal). The retired SpawnPicker's template/labels fields live
- * in the collapsed advanced section here. "Start a session now" (default
- * on) spawns a daemon on the main checkout; the modal then tracks the
- * pipeline (register → spawn → attach) so the session-picker gate can open
- * after attach settles. Submit needs a picked directory whose git bit is not
- * known-false: a known non-git dir shows "not a git repository" and disables
- * submit (the server stays authoritative when the bit is unknown).
- */
+function basename(path: string): string {
+	return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+/** Folder chooser for adding a project: the main checkout is resolved server-side from the chosen folder. */
 export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
-	const [templates, setTemplates] = createSignal<string[]>([]);
-	const [templatesError, setTemplatesError] = createSignal<string | null>(null);
-	const [template, setTemplate] = createSignal("local");
-	const [labels, setLabels] = createSignal("");
-	const [start, setStart] = createSignal(true);
-	/** Recent Git roots (null until loaded); registered roots are always offered too. */
-	const [recentRoots, setRecentRoots] = createSignal<string[] | null>(null);
-	const [path, setPath] = createSignal<string | null>(state.addProjectPath);
-	const [pathGit, setPathGit] = createSignal<boolean | null>(null);
 	const picker = createDirPicker();
-	// The dialog opens prefilled from an unowned session's folder (openAddProject);
-	// clear it on any close so a later opener starts clean.
-	onCleanup(() => setState("addProjectPath", null));
+	const [snap, setSnap] = createSignal(picker.state());
+	const unsubscribe = picker.subscribe(() => setSnap(picker.state()));
+	const [recent, setRecent] = createSignal<string[]>([]);
+	const [editing, setEditing] = createSignal(false);
+	const [draft, setDraft] = createSignal("");
+	const [busy, setBusy] = createSignal(false);
+	const [submitError, setSubmitError] = createSignal<string | null>(null);
+	let pathInput!: HTMLInputElement;
+	let listEl!: HTMLDivElement;
+
+	const crumbs = createMemo(() => pathCrumbs(snap().currentPath));
+	const target = () => addTarget(snap());
+	const canSubmit = () => {
+		const t = target();
+		return t !== null && t.hasGit !== false && !snap().loading && !busy();
+	};
 
 	const close = () => {
 		setState("modal", null);
 		props.onClose();
 	};
 
-	const { stage, begin, busy, errorInfo } = useOnboardingPipeline(close);
+	onCleanup(unsubscribe);
+	onCleanup(() => setState("addProjectPath", null));
 
 	onMount(() => {
-		void fetchCtlTemplates()
-			.then((list) => {
-				setTemplates(list);
-				if (list.length > 0 && !list.includes(template())) setTemplate(list[0]);
-			})
-			.catch((err) => setTemplatesError(err instanceof Error ? err.message : String(err)));
-		void fetchRecentRoots()
-			.then((res) => setRecentRoots(res.roots.map((r) => r.path)))
-			.catch(() => setRecentRoots([]));
+		void picker.navigate(openingPath());
+		// Recent repos are a shortcut only: when the edge is unreachable the
+		// listing already shows the fleet error, so the shortcut list stays empty.
+		fetchRecentRoots()
+			.then((res) => setRecent(res.roots.filter((r) => !r.registered).map((r) => r.path)))
+			.catch(() => setRecent([]));
 	});
 
-	/** DirectoryPicker footer select: record the path plus its git bit as the picker
-	 *  knows it (set when the dir was reached via a listing row, else null). */
-	const pick = (p: string) => {
-		setPath(p);
-		setPathGit(picker.state().hasGit);
+	// Keep exactly one tab stop in the list: the selected folder, else the first row.
+	createEffect(
+		on(
+			() => snap().dirs,
+			() => {
+				const rows = Array.from(listEl.querySelectorAll<HTMLElement>(".add-project-row"));
+				const active = rows.findIndex((el) => el.getAttribute("aria-pressed") === "true");
+				setRovingTabStop(rows, Math.max(0, active));
+			},
+		),
+	);
+
+	const startEdit = () => {
+		setDraft(snap().currentPath);
+		setEditing(true);
+		queueMicrotask(() => {
+			pathInput.focus();
+			pathInput.select();
+		});
 	};
 
-	/** Known non-git selection: inline hint + disabled submit. An UNKNOWN git
-	 *  bit (manual/breadcrumb/up navigation) does not gate; the edge's
-	 *  validateProjectPath answers an error frame either way. */
-	const notGit = () => path() !== null && pathGit() === false;
-	const canSubmit = () => path() !== null && !notGit();
-
-	const submit = () => {
-		const cwd = path();
-		if (cwd === null || !canSubmit()) return;
-		// Comma-separated k=v list; the edge validates each label's shape and
-		// answers an error frame on a bad one.
-		const parsedLabels = labels()
-			.split(",")
-			.map((l) => l.trim())
-			.filter((l) => l !== "");
-		const wantStart = start();
-		begin(
-			() =>
-				sendAddProject(cwd, {
-					...(wantStart ? { start: true } : {}),
-					template: template(),
-					...(parsedLabels.length > 0 ? { labels: parsedLabels } : {}),
-				}),
-			wantStart,
-			close,
-		);
+	const commitPath = () => {
+		const next = draft().trim();
+		setEditing(false);
+		if (next !== "") void picker.navigate(next);
 	};
 
-	/** Progress note for the active rung. */
-	const stageNote = () => {
-		const st = stage();
-		if (st.kind === "creating") return "registering the project…";
-		if (st.kind === "spawning") return "starting the session process…";
-		return "attaching to the session…";
+	const onListKeyDown = (e: KeyboardEvent) => {
+		if (e.key === "Backspace") {
+			e.preventDefault();
+			void picker.up();
+			return;
+		}
+		const row = e.target instanceof HTMLElement ? e.target : null;
+		if (e.key === "Enter" && row?.dataset.path) {
+			e.preventDefault();
+			void picker.navigate(row.dataset.path, { hasGit: row.dataset.git === "true" });
+			return;
+		}
+		const rows = Array.from(listEl.querySelectorAll<HTMLElement>(".add-project-row"));
+		moveRovingFocus(e, rows, rows.indexOf(row as HTMLElement), "vertical");
+	};
+
+	const submit = async () => {
+		const t = target();
+		if (t === null || !canSubmit()) return;
+		setBusy(true);
+		setSubmitError(null);
+		try {
+			const { projectId } = await addProject(t.path);
+			highlightProject(projectId);
+			close();
+		} catch (err) {
+			setSubmitError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setBusy(false);
+		}
 	};
 
 	return (
-		<Modal title="Add repo" onClose={close}>
-			<Show when={errorInfo()}>
-				{(err) => (
-					<>
-						<div class="msg-notice project-error">
-							Failed while {err().stage}: {err().message}
+		<Modal title="Add project" class="add-project-modal" onClose={close}>
+			<div class="add-project-bar">
+				<button
+					type="button"
+					class="add-project-icon-btn"
+					title="Parent folder"
+					aria-label="Parent folder"
+					disabled={snap().parent === null || snap().loading}
+					onClick={() => void picker.up()}
+				>
+					<ArrowUpIcon />
+				</button>
+				<Show
+					when={editing()}
+					fallback={
+						<div class="add-project-path" title="Click to type a path" onClick={startEdit}>
+							<For each={crumbs()}>
+								{(c, i) => (
+									<>
+										<Show when={i() > 1}>
+											<span class="add-project-sep">/</span>
+										</Show>
+										<button
+											type="button"
+											class="add-project-crumb"
+											classList={{ current: i() === crumbs().length - 1 }}
+											disabled={i() === crumbs().length - 1}
+											onClick={(e) => {
+												e.stopPropagation();
+												void picker.navigate(c.path);
+											}}
+										>
+											{c.label}
+										</button>
+									</>
+								)}
+							</For>
 						</div>
-						<div class="project-actions">
-							<button type="button" class="project-btn" onClick={close}>
-								Close
-							</button>
-						</div>
-					</>
-				)}
-			</Show>
-			<Show when={!busy()}>
-				<div class="project-form">
-					<label class="daemon-detail-label" for="project-path">
-						Repository path
-					</label>
-					<input
-						id="project-path"
-						class="picker-filter project-path"
-						list="project-path-options"
-						placeholder="/home/you/src/repo"
-						value={path() ?? ""}
-						onInput={(e) => {
-							setPath(e.currentTarget.value.trim() || null);
-							setPathGit(null);
+					}
+				>
+					<form
+						class="add-project-path-form"
+						onSubmit={(e) => {
+							e.preventDefault();
+							commitPath();
 						}}
-						autocomplete="off"
-						spellcheck={false}
-					/>
-					<datalist id="project-path-options">
-						<For
-							each={[
-								...new Set([
-									...(recentRoots() ?? []),
-									...state.registeredProjects.map((p) => p.path),
-								]),
-							]}
-						>
-							{(p) => <option value={p} />}
-						</For>
-					</datalist>
-					<details class="project-browse">
-						<summary>Browse folders</summary>
-						<DirectoryPicker
-							picker={picker}
-							initialPath={state.addProjectPath ?? undefined}
-							onSelect={pick}
-						/>
-					</details>
-					<Show when={notGit()}>
-						<div class="msg-notice project-path-error">not a git repository</div>
-					</Show>
-					<details class="project-advanced">
-						<summary>Advanced</summary>
-						<Show when={templates().length > 1}>
-							<label class="daemon-detail-label" for="project-template">
-								template
-							</label>
-							<select
-								id="project-template"
-								class="project-template"
-								value={template()}
-								onChange={(e) => setTemplate(e.currentTarget.value)}
-							>
-								<For each={templates()}>{(t) => <option value={t}>{t}</option>}</For>
-							</select>
-						</Show>
-						<Show when={templatesError()}>
-							{(err) => <div class="msg-notice project-template-error">{err()}</div>}
-						</Show>
-						<label class="daemon-detail-label" for="project-labels">
-							labels
-						</label>
+					>
 						<input
-							id="project-labels"
-							class="picker-filter project-labels"
-							placeholder="tag=api, env=prod"
-							value={labels()}
-							onInput={(e) => setLabels(e.currentTarget.value)}
-							spellcheck={false}
+							ref={pathInput}
+							class="picker-filter add-project-path-input"
+							data-inline-escape
+							aria-label="Folder path"
+							placeholder="/path/to/repo or ~/repo"
+							value={draft()}
+							onInput={(e) => setDraft(e.currentTarget.value)}
+							onKeyDown={(e) => {
+								if (e.key !== "Escape") return;
+								e.stopPropagation();
+								setEditing(false);
+							}}
+							onBlur={() => setEditing(false)}
 						/>
-					</details>
-					<label class="project-start-now">
-						<input
-							type="checkbox"
-							checked={start()}
-							onChange={(e) => setStart(e.currentTarget.checked)}
-						/>
-						Start a session now
-					</label>
-				</div>
-				<div class="project-actions">
+					</form>
+				</Show>
+				<button type="button" class="add-project-type-btn" disabled={editing()} onClick={startEdit}>
+					Type path
+				</button>
+			</div>
+			<div class="add-project-body">
+				<nav class="add-project-shortcuts" aria-label="Shortcuts">
 					<button
 						type="button"
-						class="project-btn"
-						disabled={!canSubmit()}
-						onClick={() => void submit()}
+						class="picker-row add-project-shortcut"
+						onClick={() => void picker.navigate()}
 					>
-						Add repo
+						<HomeIcon class="add-project-folder" />
+						<span>Home</span>
 					</button>
+					<Show when={recent().length > 0}>
+						<div class="add-project-shortcuts-head">Recent repos</div>
+						<For each={recent()}>
+							{(p) => (
+								<button
+									type="button"
+									class="picker-row add-project-shortcut"
+									title={p}
+									onClick={() => void picker.navigate(p, { hasGit: true })}
+								>
+									<FolderIcon class="add-project-folder" />
+									<span>{basename(p)}</span>
+								</button>
+							)}
+						</For>
+					</Show>
+				</nav>
+				<div class="add-project-listing">
+					<Show when={snap().error}>
+						{(err) => (
+							<div class="msg-notice add-project-error" role="alert">
+								{err()}
+							</div>
+						)}
+					</Show>
+					<Show when={snap().loading}>
+						<div class="add-project-status">Loading…</div>
+					</Show>
+					<div
+						class="add-project-list"
+						role="group"
+						aria-label="Folders"
+						ref={listEl}
+						onKeyDown={onListKeyDown}
+					>
+						<Show when={snap().parent}>
+							{(p) => (
+								<button
+									type="button"
+									class="picker-row add-project-row add-project-up"
+									title={p()}
+									onClick={() => void picker.up()}
+								>
+									<span class="add-project-name">..</span>
+								</button>
+							)}
+						</Show>
+						<For each={snap().dirs}>
+							{(d) => (
+								<button
+									type="button"
+									class="picker-row add-project-row"
+									classList={{ selected: d.path === snap().selected }}
+									aria-pressed={d.path === snap().selected ? "true" : "false"}
+									data-path={d.path}
+									data-git={String(d.hasGit)}
+									title={d.path}
+									onClick={() => picker.select(d.path)}
+									onDblClick={() => void picker.navigate(d.path, { hasGit: d.hasGit })}
+								>
+									<FolderIcon class="add-project-folder" />
+									<span class="add-project-name">{d.name}</span>
+									<Show when={d.hasGit}>
+										<span class="picker-chip add-project-git">git</span>
+									</Show>
+								</button>
+							)}
+						</For>
+					</div>
+					<Show
+						when={
+							!snap().loading &&
+							snap().error === null &&
+							snap().currentPath !== "" &&
+							snap().dirs.length === 0
+						}
+					>
+						<div class="add-project-status">No subfolders</div>
+					</Show>
+					<Show when={snap().truncated && !snap().loading}>
+						<div class="tool-collapsed-note">listing truncated, showing first 500 entries</div>
+					</Show>
 				</div>
-			</Show>
-			<OnboardingProgress stage={stage} labels={STAGES} note={stageNote()} prefix="project" />
+			</div>
+			<div class="add-project-footer">
+				<div class="add-project-target">
+					<Show
+						when={target()}
+						fallback={<span class="add-project-status">No folder selected</span>}
+					>
+						{(t) => (
+							<>
+								<span class="add-project-target-path" title={t().path}>
+									{t().path}
+								</span>
+								<Show when={t().hasGit === false}>
+									<span class="msg-notice add-project-error">Not a git repository</span>
+								</Show>
+							</>
+						)}
+					</Show>
+					<Show when={submitError()}>
+						{(err) => (
+							<div class="msg-notice add-project-error" role="alert">
+								{err()}
+							</div>
+						)}
+					</Show>
+				</div>
+				<DialogActions
+					onCancel={close}
+					onPrimary={() => void submit()}
+					primaryLabel="Add project"
+					primaryDisabled={!canSubmit()}
+					busy={busy()}
+				/>
+			</div>
 		</Modal>
 	);
 };

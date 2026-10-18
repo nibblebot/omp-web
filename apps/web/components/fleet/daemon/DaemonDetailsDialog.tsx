@@ -44,10 +44,6 @@ export const DaemonDetailsDialog: Component<{ daemon: DaemonEntry; onClose: () =
 						{d().cwd}
 					</span>
 				</div>
-				<div class="daemon-detail-fact">
-					<span class="daemon-detail-label">mode</span>
-					<span class="daemon-detail-value">{d().mode}</span>
-				</div>
 				<Show when={(d() as RosterEntry).template}>
 					{(name) => (
 						<div class="daemon-detail-fact">

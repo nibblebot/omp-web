@@ -8,7 +8,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { __resetDirsFromEnvForTests, setAgentDir } from "@oh-my-pi/pi-utils";
@@ -39,12 +39,7 @@ import { hermeticStatsConfig } from "./server.testkit";
 afterAll(cleanupTempDirs);
 
 /** Second daemon's cwd, a different projectDir for cross-daemon merge tests. */
-const OTHER_CWD = "/tmp/other-proj";
-
-interface EnrollBody {
-	entry: { daemonId: string };
-	enrollment: { workspaceId: string; generation: number; token: string };
-}
+const OTHER_CWD = join(tempDir("omp-web-edge-other-cwd-"), "other-proj");
 
 function controlType(payload: unknown): string | undefined {
 	return typeof payload === "object" &&
@@ -69,6 +64,35 @@ function controlsOf(daemon: CallbackDaemon, type: string): CallbackEnvelope[] {
 /** Commands a daemon received for one browser command id. */
 function commandsWithId(daemon: CallbackDaemon, id: string): CallbackEnvelope[] {
 	return daemon.received().filter((env) => env.kind === "command" && hasId(env.payload, id));
+}
+
+/** Run git in `cwd`, throwing on failure; a fixed identity keeps commits hermetic. */
+async function git(cwd: string, args: string[]): Promise<void> {
+	const proc = Bun.spawn(
+		[
+			"git",
+			"-c",
+			"user.email=test@example.com",
+			"-c",
+			"user.name=Test",
+			"-c",
+			"commit.gpgsign=false",
+			...args,
+		],
+		{ cwd, stdout: "pipe", stderr: "pipe" },
+	);
+	const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+	if (code !== 0) throw new Error(`git ${args.join(" ")} failed (${code}): ${stderr}`);
+}
+
+/** Wait for the unicast add_project_result answering command `id`. */
+async function awaitAddProjectResult(browser: BrowserSocket, id: string) {
+	const frame = await browser.waitForFrame(
+		(f) => f.type === "add_project_result" && f.id === id,
+		`add_project_result ${id}`,
+	);
+	if (frame.type !== "add_project_result") throw new Error("expected add_project_result");
+	return frame;
 }
 
 describe("fleet edge", () => {
@@ -97,7 +121,7 @@ describe("fleet edge", () => {
 
 	const fleetUrl = () => `http://127.0.0.1:${server.port}`;
 
-	/** Mint a daemon's pair credential through the enroll path and dial it. */
+	/** Mint a daemon's pair credential and dial it. */
 	async function connectDaemon(
 		daemonId: string,
 		generation: number,
@@ -130,14 +154,22 @@ describe("fleet edge", () => {
 		daemonsById.delete(daemonId);
 	}
 
-	async function enrollRemote(name: string, cwd = FAKE_CWD): Promise<EnrollBody> {
-		const res = await fetch(`${fleetUrl()}/ctl/enroll`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ name, cwd }),
+	/** Register an asleep row and mint its pair credential; nothing dials it yet. */
+	function enrollRow(name: string): { daemonId: string; generation: number; token: string } {
+		const entry = server.registry.create({
+			name,
+			cwd: FAKE_CWD,
+			project: basename(FAKE_CWD),
+			labels: [],
+			template: "local",
+			status: "asleep",
 		});
-		expect(res.status).toBe(201);
-		return (await res.json()) as EnrollBody;
+		const { generation, credential } = enrollSessionCredential(
+			server.transport,
+			server.registry,
+			entry.daemonId,
+		);
+		return { daemonId: entry.daemonId, generation, token: credential };
 	}
 
 	/** Wait for the fleet to open a new browser stream on this daemon. */
@@ -210,8 +242,9 @@ describe("fleet edge", () => {
 		mkdirSync(join(browseDir, "child"), { recursive: true });
 		mkdirSync(join(browseDir, "repo", ".git"), { recursive: true });
 		mkdirSync(join(browseDir, ".hidden"), { recursive: true });
-		// Spawned entries run in FAKE_CWD, so it must exist.
+		// Spawned entries run in FAKE_CWD and OTHER_CWD, so both must exist.
 		mkdirSync(FAKE_CWD, { recursive: true });
+		mkdirSync(OTHER_CWD, { recursive: true });
 		// The local template is a sleep loop: spawned children never dial on
 		// their own, the test pairs them through the callback pair.
 		writeFileSync(
@@ -231,7 +264,6 @@ describe("fleet edge", () => {
 			cwd: FAKE_CWD,
 			project: "fake-proj",
 			labels: [],
-			mode: "spawned",
 			template: "local",
 			status: "asleep",
 		});
@@ -241,7 +273,6 @@ describe("fleet edge", () => {
 			cwd: FAKE_CWD,
 			project: "fake-proj",
 			labels: [],
-			mode: "spawned",
 			template: "local",
 			status: "asleep",
 		});
@@ -325,19 +356,21 @@ describe("fleet edge", () => {
 		expect(res.status).toBe(404);
 	});
 
-	test("POST /ctl/enroll registers a remote daemon whose callback pair reaches ready", async () => {
-		const body = await enrollRemote("added");
-		remoteEntry = server.registry.get(body.entry.daemonId)!;
-		expect(remoteEntry.mode).toBe("remote");
-		remoteDaemon = await connectDaemon(
-			body.entry.daemonId,
-			body.enrollment.generation,
-			body.enrollment.token,
-		);
+	test("a spawned row reaches ready once its callback pair dials", async () => {
+		// Spawn is the production path that installs the pair watch; the
+		// beforeAll override dials the child as its callback would.
+		const entry = await server.supervisor.spawn({
+			cwd: FAKE_CWD,
+			name: "added",
+			template: "local",
+			labels: [],
+		});
+		remoteEntry = server.registry.get(entry.daemonId)!;
+		remoteDaemon = daemonsById.get(entry.daemonId)!;
 		await waitFor(
 			() => (server.registry.get(remoteEntry.daemonId)?.status === "ready" ? "ready" : null),
 			5000,
-			"remote daemon ready",
+			"daemon ready",
 		);
 	});
 
@@ -395,7 +428,7 @@ describe("fleet edge", () => {
 		mkdirSync(repoDir, { recursive: true });
 		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
 		expect(await proc.exited).toBe(0);
-		const project = await server.registry.addProject(repoDir);
+		const { project } = server.registry.addProject(repoDir);
 		try {
 			const frame = await browser.waitForFrame(
 				(f) =>
@@ -422,20 +455,63 @@ describe("fleet edge", () => {
 		const res = await fetch(`${fleetUrl()}/command`, {
 			method: "POST",
 			headers: { "content-type": "application/json", "x-omp-client-id": "nobody" },
-			body: JSON.stringify({ type: "list_projects" }),
+			body: JSON.stringify({ type: "sync_projects", id: "x" }),
 		});
 		expect(res.status).toBe(400);
 	});
 
-	test("list_projects answers with a projects frame", async () => {
+	test("add_project registers the main checkout for a linked-worktree path; a second add answers existing", async () => {
+		const mainDir = join(tmp, "edge-add-linked-main");
+		const linkedDir = join(tmp, "edge-add-linked-wt");
+		mkdirSync(mainDir, { recursive: true });
+		await git(mainDir, ["init", "-q", "-b", "main"]);
+		await git(mainDir, ["commit", "-q", "--allow-empty", "-m", "init"]);
+		await git(mainDir, ["worktree", "add", "-q", "-b", "linked", linkedDir]);
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		await browser.send({ type: "list_projects" });
-		const frame = await browser.waitForFrame((f) => f.type === "projects", "projects frame");
-		if (frame.type !== "projects") throw new Error("expected projects");
-		// No root scanning and no registered projects here: the frame is an
-		// empty list (registered projects surface via registered_projects).
-		expect(frame.projects).toEqual([]);
+		let projectId: string | undefined;
+		try {
+			await browser.send({ type: "add_project", id: "ap1", path: linkedDir });
+			const first = await awaitAddProjectResult(browser, "ap1");
+			expect(first.ok).toBe(true);
+			expect(first.existing).toBe(false);
+			projectId = first.projectId;
+			if (projectId === undefined) throw new Error("add_project_result carried no projectId");
+			// The linked worktree resolves to its MAIN checkout: that realpath is
+			// the registered project, never the worktree path.
+			const mainPath = realpathSync(mainDir);
+			const matching = server.registry.projects().filter((p) => p.path === mainPath);
+			expect(matching).toHaveLength(1);
+			expect(matching[0]?.projectId).toBe(projectId);
+			expect(server.registry.projects().some((p) => p.path === realpathSync(linkedDir))).toBe(
+				false,
+			);
+			// The same path again changes nothing and answers the same projectId.
+			await browser.send({ type: "add_project", id: "ap2", path: linkedDir });
+			const second = await awaitAddProjectResult(browser, "ap2");
+			expect(second.ok).toBe(true);
+			expect(second.existing).toBe(true);
+			expect(second.projectId).toBe(projectId);
+			expect(server.registry.projects().filter((p) => p.path === mainPath)).toHaveLength(1);
+			// Let the sync pass register the main and linked rows before cleanup.
+			await waitFor(
+				() =>
+					server.registry.list().filter((e) => e.projectId === projectId).length >= 2
+						? "synced"
+						: null,
+				5000,
+				"sync registered the project's rows",
+			);
+		} finally {
+			browser.close();
+			if (projectId !== undefined) {
+				try {
+					server.registry.removeProject(projectId);
+				} catch {
+					// Already clean.
+				}
+			}
+		}
 	});
 
 	test("list_daemon_sessions answers a per-daemon sessions frame (asleep daemon included)", async () => {
@@ -764,14 +840,14 @@ describe("fleet edge", () => {
 		// The pair then drops before the answer, and the browser re-POSTs the
 		// same id. "not attached" would read as "not applied"; the outcome is
 		// unknown and the answer must say so.
-		const body = await enrollRemote("late-replay");
-		const id = body.entry.daemonId;
+		const row = enrollRow("late-replay");
+		const id = row.daemonId;
 		// A long redial backoff keeps the pair down while the replay is sent.
 		const daemon = startCallbackDaemon({
 			url: fleetUrl(),
 			workspaceId: id,
-			generation: body.enrollment.generation,
-			token: body.enrollment.token,
+			generation: row.generation,
+			token: row.token,
 			redialMinMs: 3000,
 			redialMaxMs: 3000,
 		});
@@ -925,7 +1001,6 @@ describe("fleet edge", () => {
 				cwd: FAKE_CWD,
 				project: "fake-proj",
 				labels: [],
-				mode: "spawned",
 				template: "local",
 				status: "asleep",
 				lastSessionFile: join(sessionDir, "last.jsonl"),
@@ -949,13 +1024,13 @@ describe("fleet edge", () => {
 		}
 	});
 
-	test("GET /ctl/sessions/{id}/stderr returns text for spawned and 404 for remote", async () => {
-		const spawned = await fetch(`${fleetUrl()}/ctl/sessions/${spawnedEntry.daemonId}/stderr`);
-		expect(spawned.status).toBe(200);
-		const body = (await spawned.json()) as { text?: unknown };
-		expect(typeof body.text).toBe("string");
-		const remote = await fetch(`${fleetUrl()}/ctl/sessions/${remoteEntry.daemonId}/stderr`);
-		expect(remote.status).toBe(404);
+	test("GET /ctl/sessions/{id}/stderr returns text for every known row", async () => {
+		for (const daemonId of [spawnedEntry.daemonId, remoteEntry.daemonId]) {
+			const res = await fetch(`${fleetUrl()}/ctl/sessions/${daemonId}/stderr`);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { text?: unknown };
+			expect(typeof body.text).toBe("string");
+		}
 	});
 
 	test("tokens never appear in any roster frame", async () => {
@@ -981,7 +1056,7 @@ describe("fleet edge", () => {
 	});
 
 	test("GET /ctl/debug reports each session's callback pair state without tokens or endpoints", async () => {
-		const pending = await enrollRemote("debug-unpaired");
+		const pending = enrollRow("debug-unpaired");
 		const res = await fetch(`${fleetUrl()}/ctl/debug`);
 		expect(res.status).toBe(200);
 		const text = await res.text();
@@ -994,9 +1069,9 @@ describe("fleet edge", () => {
 		const paired = body.sessions.find((s) => s.daemonId === remoteEntry.daemonId);
 		expect(paired?.pair).toMatchObject({ enrolled: true, paired: true });
 		expect(typeof paired?.pair?.authorizedGeneration).toBe("number");
-		const unpaired = body.sessions.find((s) => s.daemonId === pending.entry.daemonId);
+		const unpaired = body.sessions.find((s) => s.daemonId === pending.daemonId);
 		expect(unpaired?.pair).toMatchObject({ enrolled: true, paired: false });
-		expect(text).not.toContain(pending.enrollment.token);
+		expect(text).not.toContain(pending.token);
 		expect(text).not.toContain(FAKE_TOKEN);
 		for (const session of body.sessions) {
 			expect(session).not.toHaveProperty("token");
@@ -1005,14 +1080,15 @@ describe("fleet edge", () => {
 	});
 
 	test("aggregated daemons: merged frames are broadcast on update and on browser open", async () => {
-		// A second daemon with a different cwd, enrolled and paired like any remote daemon.
-		const body = await enrollRemote("daemons-b", OTHER_CWD);
-		daemonsBId = body.entry.daemonId;
-		const daemonB = await connectDaemon(
-			daemonsBId,
-			body.enrollment.generation,
-			body.enrollment.token,
-		);
+		// A second spawned daemon with a different cwd; the spawn override pairs it.
+		const spawnedB = await server.supervisor.spawn({
+			cwd: OTHER_CWD,
+			name: "daemons-b",
+			template: "local",
+			labels: [],
+		});
+		daemonsBId = spawnedB.daemonId;
+		const daemonB = daemonsById.get(daemonsBId)!;
 		await waitFor(
 			() => (server.registry.get(daemonsBId)?.status === "ready" ? "ready" : null),
 			5000,
@@ -1116,10 +1192,9 @@ describe("fleet edge", () => {
 		dropDaemon(daemonsBId);
 	});
 
-	test("remove evicts a remote daemon and broadcasts a roster without it", async () => {
+	test("remove evicts a daemon and broadcasts a roster without it", async () => {
 		// A fresh entry so the shared remoteEntry fixture stays intact for earlier tests.
-		const body = await enrollRemote("removable");
-		const removableId = body.entry.daemonId;
+		const removableId = enrollRow("removable").daemonId;
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame(
 			(f) => f.type === "roster" && f.daemons.some((d) => d.daemonId === removableId),
@@ -1207,7 +1282,6 @@ describe("fleet edge", () => {
 			cwd: FAKE_CWD,
 			project: "fake-proj",
 			labels: [],
-			mode: "spawned",
 			template: "local",
 			status: "ready",
 			pid: 4321,
@@ -1250,25 +1324,6 @@ describe("fleet edge", () => {
 		}
 	});
 
-	test("attach to an unpaired remote answers the C10 error frame and never attaches", async () => {
-		const body = await enrollRemote("unpaired-remote");
-		const browser = await openBrowser(server.port);
-		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		await browser.send({ type: "attach", sessionId: body.entry.daemonId });
-		const err = await browser.waitForFrame(
-			(f) =>
-				f.type === "error" &&
-				f.error ===
-					"remote session unpaired-remote is not connected; start it on its host (see omp-web enroll)",
-			"C10 unpaired remote error",
-		);
-		expect(err.type).toBe("error");
-		expect(
-			browser.frames.some((f) => f.type === "attached" && f.sessionId === body.entry.daemonId),
-		).toBe(false);
-		browser.close();
-	});
-
 	test("allowlist accepts add_project and remove_project (their own validation errors, not the allowlist rejection)", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
@@ -1292,14 +1347,17 @@ describe("fleet edge", () => {
 		).toHaveLength(0);
 	});
 
-	test("add_project registers a project (broadcast) and dedup answers an error frame naming the existing projectId", async () => {
+	test("add_project registers a project (broadcast, asleep default row) and a non-git path answers ok:false", async () => {
 		const repoDir = join(tmp, "edge-add-project-repo");
 		mkdirSync(repoDir, { recursive: true });
 		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
 		expect(await proc.exited).toBe(0);
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		await browser.send({ type: "add_project", path: repoDir });
+		await browser.send({ type: "add_project", id: "ap-main", path: repoDir });
+		const added = await awaitAddProjectResult(browser, "ap-main");
+		expect(added.ok).toBe(true);
+		expect(added.existing).toBe(false);
 		const frame = await browser.waitForFrame(
 			(f) =>
 				f.type === "registered_projects" &&
@@ -1310,6 +1368,7 @@ describe("fleet edge", () => {
 		const project = frame.projects.find((p) => p.path === realpathSync(repoDir))!;
 		expect(project).toMatchObject({ path: realpathSync(repoDir), name: "edge-add-project-repo" });
 		expect(project.projectId).toMatch(/^p\d+$/);
+		expect(added.projectId).toBe(project.projectId);
 		// The default workspace is auto-registered: a roster broadcast shows the
 		// asleep main-checkout entry, tagged with the project id and with NO
 		// worktreeOf (main checkouts are the repo itself, never a linked worktree).
@@ -1327,110 +1386,112 @@ describe("fleet edge", () => {
 		const main = asRoster(rosterFrame).daemons.find((d) => d.projectId === project.projectId);
 		expect(main).toBeDefined();
 		expect(main!.cwd).toBe(realpathSync(repoDir));
-		expect(main!.mode).toBe("spawned");
 		expect(main!.status).toBe("asleep");
 		expect(main!.worktreeOf).toBeUndefined();
 		expect(main!.lastSessionFile).toBeUndefined();
-		// Dedup: registering the same realpath again answers an error frame
-		// naming the existing projectId.
-		await browser.send({ type: "add_project", path: repoDir });
-		const dup = await browser.waitForFrame(
-			(f) =>
-				f.type === "error" && typeof f.error === "string" && f.error.includes(project.projectId),
-			"add_project dedup error",
-		);
-		if (dup.type !== "error") throw new Error("expected error");
-		expect(dup.error).toContain("already registered");
+		// A path that is not a git checkout answers ok:false with the reason and
+		// registers nothing.
+		const plainDir = join(tmp, "edge-add-project-plain");
+		mkdirSync(plainDir, { recursive: true });
+		await browser.send({ type: "add_project", id: "ap-plain", path: plainDir });
+		const failed = await awaitAddProjectResult(browser, "ap-plain");
+		expect(failed.ok).toBe(false);
+		expect(typeof failed.error).toBe("string");
+		expect(failed.projectId).toBeUndefined();
 		expect(server.registry.projects().filter((p) => p.path === realpathSync(repoDir))).toHaveLength(
 			1,
 		);
-		// The dedup answered an error and registered nothing: the roster
-		// still holds exactly the first add_project's default workspace.
+		expect(server.registry.projects().some((p) => p.path === realpathSync(plainDir))).toBe(false);
+		// The refusal registered nothing: the roster still holds exactly the
+		// first add_project's default workspace.
 		expect(server.registry.list().filter((e) => e.cwd === realpathSync(repoDir))).toHaveLength(1);
 		try {
 			server.registry.removeProject(project.projectId);
 		} catch {
 			// Already clean.
 		}
-	});
-
-	test("add_project with start:true spawns on the project path, passes template/labels, and tags the entry's projectId", async () => {
-		const repoDir = join(tmp, "edge-add-project-spawn-repo");
-		mkdirSync(repoDir, { recursive: true });
-		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
-		expect(await proc.exited).toBe(0);
-		const browser = await openBrowser(server.port);
-		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		const before = spawnInits.length;
-		spawnedByEdge = null; // the wait below must observe the NEW spawn
-		await browser.send({
-			type: "add_project",
-			path: repoDir,
-			start: true,
-			template: "local",
-			labels: ["env=prod"],
-		});
-		// The spawn + projectId tag land asynchronously after the broadcast.
-		const tagged = await waitFor(
-			() => {
-				const project = server.registry.projects().find((p) => p.path === realpathSync(repoDir));
-				const entry = spawnedByEdge ? server.registry.get(spawnedByEdge.daemonId) : undefined;
-				return project && entry && entry.projectId === project.projectId
-					? { project, entry }
-					: null;
-			},
-			5000,
-			"spawned entry tagged with projectId",
-		);
-		expect(spawnInits.length).toBe(before + 1);
-		const init = spawnInits[spawnInits.length - 1];
-		expect(init.cwd).toBe(realpathSync(repoDir));
-		expect(init.template).toBe("local");
-		expect(init.labels).toEqual(["env=prod"]);
-		expect(tagged.entry.cwd).toBe(realpathSync(repoDir));
-		expect(tagged.entry.mode).toBe("spawned");
-		// Cleanup: drop the daemon and its entry.
-		await server.supervisor.prune(tagged.entry.daemonId);
-		dropDaemon(tagged.entry.daemonId);
-		server.registry.remove(tagged.entry.daemonId);
-		server.registry.removeProject(tagged.project.projectId);
 		browser.close();
 	});
 
-	test("remove_project refuses while daemons reference the project and removes once free", async () => {
-		const repoDir = join(tmp, "edge-rm-project-repo");
+	test("remove_project refuses with a clone workspace and stops nothing", async () => {
+		const repoDir = join(tmp, "edge-rm-clone-repo");
 		mkdirSync(repoDir, { recursive: true });
-		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
-		expect(await proc.exited).toBe(0);
-		const project = await server.registry.addProject(repoDir);
-		// A real session file means this entry has transcripts, so
-		// remove_project must block on it.
-		const ref = server.registry.create({
-			name: "ref",
+		await git(repoDir, ["init", "-q"]);
+		const { project } = server.registry.addProject(repoDir);
+		const live = server.registry.create({
+			name: "rm-live",
 			cwd: realpathSync(repoDir),
 			project: project.name,
 			labels: [],
-			mode: "spawned",
 			template: "local",
-			status: "asleep",
-			lastSessionFile: join(tmp, "rm-session.json"),
+			status: "ready",
 			projectId: project.projectId,
 		});
+		const clone = server.registry.create({
+			name: "rm-clone",
+			cwd: join(tmp, "rm-clone-workspace"),
+			project: project.name,
+			labels: [],
+			template: "local",
+			status: "asleep",
+			projectId: project.projectId,
+			workspace: { kind: "clone", projectId: project.projectId, desiredState: "stopped" },
+		});
+		const pruned: string[] = [];
+		const origPrune = server.supervisor.prune.bind(server.supervisor);
+		server.supervisor.prune = async (daemonId: string) => {
+			pruned.push(daemonId);
+			await origPrune(daemonId);
+		};
+		const browser = await openBrowser(server.port);
 		try {
-			const browser = await openBrowser(server.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await browser.send({ type: "remove_project", projectId: project.projectId });
+			await browser.send({ type: "remove_project", id: "rp1", projectId: project.projectId });
 			const err = await browser.waitForFrame(
-				(f) => f.type === "error" && typeof f.error === "string" && f.error.includes(ref.daemonId),
-				"remove_project blocker error",
+				(f) =>
+					f.type === "error" &&
+					typeof f.error === "string" &&
+					f.error.includes(`project ${project.projectId} has clone workspaces:`),
+				"remove_project clone refusal",
 			);
 			if (err.type !== "error") throw new Error("expected error");
-			expect(err.error).toContain("in use by daemons");
+			expect(err.error).toContain(clone.daemonId);
+			// Refused before anything was stopped or dropped.
+			expect(pruned).toEqual([]);
+			expect(server.registry.get(live.daemonId)?.status).toBe("ready");
+			expect(server.registry.get(clone.daemonId)).toBeDefined();
 			expect(server.registry.projects().some((p) => p.projectId === project.projectId)).toBe(true);
-			// Once the referencing daemon is gone, removal succeeds and the
-			// registered_projects broadcast drops the project.
-			server.registry.remove(ref.daemonId);
-			await browser.send({ type: "remove_project", projectId: project.projectId });
+		} finally {
+			server.supervisor.prune = origPrune;
+			browser.close();
+			server.registry.remove(live.daemonId);
+			server.registry.remove(clone.daemonId);
+			try {
+				server.registry.removeProject(project.projectId);
+			} catch {
+				// Already removed.
+			}
+		}
+	});
+
+	test("remove_project drops the project's non-clone rows and broadcasts registered_projects without it", async () => {
+		const repoDir = join(tmp, "edge-rm-project-repo");
+		mkdirSync(repoDir, { recursive: true });
+		await git(repoDir, ["init", "-q"]);
+		const { project } = server.registry.addProject(repoDir);
+		const row = server.registry.create({
+			name: "rm-row",
+			cwd: realpathSync(repoDir),
+			project: project.name,
+			labels: [],
+			template: "local",
+			status: "asleep",
+			projectId: project.projectId,
+		});
+		const browser = await openBrowser(server.port);
+		try {
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "remove_project", id: "rp2", projectId: project.projectId });
 			await browser.waitForFrame(
 				(f) =>
 					f.type === "registered_projects" &&
@@ -1438,9 +1499,10 @@ describe("fleet edge", () => {
 				"registered_projects after remove",
 			);
 			expect(server.registry.projects().some((p) => p.projectId === project.projectId)).toBe(false);
-			browser.close();
+			expect(server.registry.get(row.daemonId)).toBeUndefined();
 		} finally {
-			server.registry.remove(ref.daemonId);
+			browser.close();
+			server.registry.remove(row.daemonId);
 			try {
 				server.registry.removeProject(project.projectId);
 			} catch {
@@ -1459,7 +1521,6 @@ describe("edge pure helpers", () => {
 			cwd: "/x",
 			project: "x",
 			labels: ["a=b"],
-			mode: "spawned",
 			status: "ready",
 			template: "local",
 			registeredAt: now - 200_000,
@@ -1510,7 +1571,6 @@ describe("edge pure helpers", () => {
 			cwd: "/srv/repos/acme-wt-feature",
 			project: "acme",
 			labels: [],
-			mode: "spawned",
 			status: "ready",
 			sessionTitle: "Fix the fleet sidebar",
 			registeredAt: Date.now(),
@@ -1528,7 +1588,6 @@ describe("edge pure helpers", () => {
 			cwd: "/srv/repos/acme-wt-feature",
 			project: "acme",
 			labels: [],
-			mode: "spawned",
 			status: "ready",
 			registeredAt: Date.now(),
 		};
@@ -1546,7 +1605,6 @@ describe("edge pure helpers", () => {
 			cwd: "/some/root/repo/feature",
 			project: "x",
 			labels: [],
-			mode: "spawned",
 			status: "asleep",
 			registeredAt: Date.now(),
 		};
@@ -1558,7 +1616,9 @@ describe("edge pure helpers", () => {
 		const entry = toRosterEntry({ ...base, workspace });
 		expect(entry).not.toHaveProperty("managed");
 		expect(entry).not.toHaveProperty("workspace");
-		expect(toRosterEntry({ ...base, mode: "remote", workspace })).not.toHaveProperty("managed");
+		expect(
+			toRosterEntry({ ...base, workspace: { ...workspace, kind: "clone" } }),
+		).not.toHaveProperty("managed");
 	});
 
 	test("shouldDropFrame guards the cap boundary", () => {

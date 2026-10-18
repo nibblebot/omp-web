@@ -20,7 +20,7 @@ import { attachSession, hasLiveSession, setState, spawnResume, state } from "../
 import { openDock } from "./dock";
 import { setPromptInsert } from "./chat";
 import { openModelPicker, recentModels, switchSessionModel } from "./models";
-import { openAddProject } from "./projects";
+import { openAddProject, openNewWorkspace } from "./projects";
 import { chooseResumeTarget, searchAllProjectSessions, sessionRowsFromResume } from "./resume";
 import { reportError } from "./toasts";
 
@@ -124,9 +124,10 @@ export function runPaletteItem(item: PaletteItem): void {
 				openDock("agents");
 				return;
 			}
-			if (action.target === "workspace")
-				setState("workspaceModalProjectId", action.projectId ?? null);
 			setState("modal", action.target);
+			return;
+		case "new-workspace":
+			openNewWorkspace(action.projectId);
 			return;
 	}
 }

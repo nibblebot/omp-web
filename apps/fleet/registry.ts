@@ -1,6 +1,6 @@
 /**
  * Daemon registry for the omp-fleet: the persistent, insertion-ordered
- * roster of daemons (spawned and remote) with monotonic `dN` id
+ * roster of daemons with monotonic `dN` id
  * allocation that survives restarts, plus the first-class registered
  * `projects[]` (realpath-keyed, `pN` ids) that project groups hang off.
  *
@@ -17,7 +17,15 @@
  * broadcasts).
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	realpathSync,
+	renameSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type {
 	DaemonEntry,
@@ -26,7 +34,7 @@ import type {
 	RegisteredProject,
 	WorkspaceKind,
 } from "#lib/wire/protocol";
-import { validateProjectPath } from "./discovery";
+import { expandTilde } from "./config";
 
 /**
  * How long an enrolled session may stay unpaired after a control-plane boot
@@ -156,8 +164,6 @@ export interface WorkspaceRecord {
 	deletion?: WorkspaceDeletion;
 	/** Persisted callback enrollment (digest only). Absent = not enrolled. */
 	enrollment?: WorkspaceEnrollment;
-	/** Local worktrees: omp-web created this worktree's branch (`worktree add -b`). Absent = attached to a pre-existing branch. */
-	branchCreatedByOmpWeb?: boolean;
 }
 
 /** A roster entry: DaemonEntry plus fleet-side registration data. */
@@ -207,12 +213,11 @@ interface RegistryFile {
 
 /**
  * Legacy-inference base workspace record for entries persisted before P1.
- * Contract rule: managed or worktreeOf → "worktree"; every other mode
- * (spawned without worktreeOf, remote) → "direct". desiredState
- * is "running": a legacy entry is a live roster row. projectId comes from
- * the entry's registered-project link ("" when absent, e.g. remote
- * entries). In-memory only: load() stamps it and the entry's next mutation
- * persists it; no rewrite at boot.
+ * Contract rule: managed or worktreeOf → "worktree"; every other entry
+ * (spawned without worktreeOf) → "direct". desiredState is "running": a
+ * legacy entry is a live roster row. projectId comes from the entry's
+ * registered-project link ("" when absent). In-memory only: load() stamps
+ * it and the entry's next mutation persists it; no rewrite at boot.
  * `managed` is the legacy persisted roster flag, read here only to infer
  * the kind of entries written before workspace records existed.
  */
@@ -225,6 +230,16 @@ function inferWorkspaceRecord(
 		projectId: entry.projectId ?? "",
 		desiredState: "running",
 	};
+}
+
+/** Realpath of `p` when it is an existing directory, else null (sync twin of validateProjectPath). */
+function realpathIfDirectory(p: string): string | null {
+	try {
+		const resolved = realpathSync(expandTilde(p));
+		return statSync(resolved).isDirectory() ? resolved : null;
+	} catch {
+		return null;
+	}
 }
 
 export class Registry {
@@ -285,7 +300,13 @@ export class Registry {
 		// records existed get an in-memory record here; it persists on the
 		// entry's next mutation, never at boot.
 		for (const entry of this.entries) {
+			// Retired keys (`mode` on entries, `branchCreatedByOmpWeb` on records)
+			// are dropped silently: every entry is spawned now and branch deletion
+			// is guarded by the probed branch.
+			Reflect.deleteProperty(entry, "mode");
 			if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
+			if (entry.workspace !== undefined)
+				Reflect.deleteProperty(entry.workspace, "branchCreatedByOmpWeb");
 		}
 
 		// Tolerant read: files written before projects existed lack the keys.
@@ -553,22 +574,23 @@ export class Registry {
 	}
 
 	/**
-	 * Register a project. Validates that `path` is an existing directory
-	 * containing a git repo (realpath-normalized via validateProjectPath;
-	 * symlinked paths alias the same project), dedups on realpath equality
-	 * returning the EXISTING project, and persists atomically + fires
-	 * onChange. Throws when the path is not a directory or not a git repo.
+	 * Register a project by its MAIN checkout path (callers resolve a linked
+	 * worktree/subdirectory through `resolveProjectRoot` first). Validates
+	 * that `mainPath` is an existing directory with a `.git` entry
+	 * (realpath-normalized; symlinked paths alias the same project). A path
+	 * already registered returns the EXISTING project with `existing: true`
+	 * and changes nothing. Otherwise persists atomically and fires onChange +
+	 * onProjectsChange. Throws on invalid input (not a directory / not a git
+	 * repository).
 	 */
-	async addProject(path: string): Promise<RegisteredProject> {
-		const resolved = await validateProjectPath(path);
-		if (resolved === null) throw new Error(`not a directory: ${path}`);
-		// Same .git dir-or-file heuristic discovery's scan uses: a main
-		// checkout has a .git directory, a linked worktree a .git file.
+	addProject(mainPath: string): { project: RegisteredProject; existing: boolean } {
+		const resolved = realpathIfDirectory(mainPath);
+		if (resolved === null) throw new Error(`not a directory: ${mainPath}`);
 		if (!existsSync(join(resolved, ".git"))) {
-			throw new Error(`not a git repository: ${path}`);
+			throw new Error(`not a git repository: ${mainPath}`);
 		}
 		const existing = this.projectList.find((project) => project.path === resolved);
-		if (existing !== undefined) return existing;
+		if (existing !== undefined) return { project: existing, existing: true };
 		const project: RegisteredProject = {
 			projectId: `p${this.nextProjectId++}`,
 			path: resolved,
@@ -578,51 +600,51 @@ export class Registry {
 		this.projectList.push(project);
 		this.#mutated();
 		this.onProjectsChange?.();
-		return project;
+		return { project, existing: false };
 	}
 
 	/**
-	 * Remove a registered project. Referencing roster entries that are NOT
-	 * provably-empty placeholders block removal; the error names their
-	 * daemon ids (callers surface the blockers); never touches disk.
-	 * A placeholder is the auto-registered default workspace of a project
-	 * that never started: mode "spawned", status "asleep", no lastSessionFile,
-	 * no endpoint, so the roster row is their only state. Placeholders are
-	 * implicitly dropped with the project, no two-step removal needed.
-	 * Unknown ids also throw.
+	 * Remove a registered project and every NON-CLONE row that belongs to it
+	 * (main checkout, linked worktrees, and any never-started placeholder
+	 * alike: rows are a derived view of git state, so dropping them touches
+	 * no disk and no transcript). The CALLER stops running rows first
+	 * (shutdown/stop + forgetPair); this method only edits the registry.
+	 * Clone workspaces own provider-managed volumes that must go through the
+	 * verified deletion gate (P7.3/P7.5), so any clone of the project refuses
+	 * the whole removal with `project <id> has clone workspaces: <ids>`
+	 * (nothing is removed on refusal). Unknown ids also throw. Returns the
+	 * removed daemon ids.
 	 */
-	removeProject(projectId: string): void {
+	removeProject(projectId: string): string[] {
 		const index = this.projectList.findIndex((project) => project.projectId === projectId);
 		if (index === -1) throw new Error(`unknown project id: ${projectId}`);
-		// Partition referencing entries: real blockers (anything that ever
-		// ran, is spawning/ready/error, or is remote) refuse the
-		// removal wholesale; placeholders are dropped in the same mutation
-		// as the project (and only then; a refused removal leaves them).
-		// A placeholder is a never-started DEFAULT workspace only: spawned
-		// and asleep, with no lastSessionFile. A clone workspace is
-		// NEVER a placeholder: its cwd is a managed volume under the fleet
-		// workspaceDir with preparation/provider state, so it must block
-		// project removal until it is deleted through the verified gate
-		// (P7.3/P7.5); silently dropping it would orphan the volume and
-		// bypass the gate.
-		const isPlaceholder = (entry: RegistryEntry): boolean =>
-			entry.workspace?.kind !== "clone" &&
-			entry.mode === "spawned" &&
-			entry.status === "asleep" &&
-			entry.lastSessionFile === undefined;
-		const blockers = this.entries.filter(
-			(entry) => entry.projectId === projectId && !isPlaceholder(entry),
-		);
-		if (blockers.length > 0) {
+		const owned = this.entries.filter((entry) => entry.projectId === projectId);
+		const clones = owned.filter((entry) => entry.workspace?.kind === "clone");
+		if (clones.length > 0) {
 			throw new Error(
-				`project ${projectId} in use by daemons: ${blockers.map((entry) => entry.daemonId).join(", ")}`,
+				`project ${projectId} has clone workspaces: ${clones.map((entry) => entry.daemonId).join(", ")}`,
 			);
 		}
-		for (let i = this.entries.length - 1; i >= 0; i--) {
-			const entry = this.entries[i];
-			if (entry.projectId === projectId && isPlaceholder(entry)) this.entries.splice(i, 1);
-		}
+		const removed = owned.map((entry) => entry.daemonId);
+		this.entries = this.entries.filter((entry) => entry.projectId !== projectId);
 		this.projectList.splice(index, 1);
+		this.#mutated();
+		this.onProjectsChange?.();
+		return removed;
+	}
+
+	/**
+	 * Set or clear `RegisteredProject.missing` (the sync pass found the main
+	 * checkout gone or no longer a repo). The flag is persisted with the
+	 * project so a restart does not flash a missing project as healthy until
+	 * the first pass. No-op (no persist, no broadcast) when unchanged or the
+	 * project is unknown.
+	 */
+	setProjectMissing(projectId: string, missing: boolean): void {
+		const project = this.projectList.find((p) => p.projectId === projectId);
+		if (project === undefined || (project.missing === true) === missing) return;
+		if (missing) project.missing = true;
+		else Reflect.deleteProperty(project, "missing");
 		this.#mutated();
 		this.onProjectsChange?.();
 	}

@@ -318,6 +318,9 @@ async function bootFleet(profile: "bwrap" | "k8s" = "bwrap"): Promise<Booted> {
 	const cloneRoot = join(dirname(paths.statePath), "clones");
 	const repoDir = join(paths.tmp, "repo");
 	await makeRepo(repoDir);
+	// Kubernetes clones with an omitted source default to the origin URL; a
+	// local path keeps the fixture hermetic.
+	if (profile === "k8s") await git(repoDir, ["remote", "add", "origin", repoDir]);
 	const provider = writeFakeProvider(join(paths.tmp, "provider"));
 	const providerProfiles =
 		profile === "bwrap"
@@ -341,7 +344,7 @@ async function bootFleet(profile: "bwrap" | "k8s" = "bwrap"): Promise<Booted> {
 }
 
 async function createClone(server: FleetServer, repoDir: string, name: string): Promise<string> {
-	const project = await server.registry.addProject(repoDir);
+	const { project } = server.registry.addProject(repoDir);
 	const res = await postJson(server.port, "/ctl/clones", {
 		projectId: project.projectId,
 		name,

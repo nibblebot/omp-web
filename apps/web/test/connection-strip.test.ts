@@ -32,7 +32,6 @@ function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
 		cwd: `/repos/${id}`,
 		project: id,
 		labels: [],
-		mode: "spawned",
 		status: "ready",
 		...extra,
 	};

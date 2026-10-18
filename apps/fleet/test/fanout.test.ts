@@ -10,7 +10,7 @@
  * agent_end only, unrelated frames ignored), per-daemon serialization of
  * concurrent fan-outs, fanOut's order preservation across mixed outcomes, and
  * the wake path: spawned asleep entries respawn and wait for the pair,
- * unpaired remote entries fail with a typed error.
+ * unpaired entries fail with a typed error.
  */
 
 import { randomBytes } from "node:crypto";
@@ -34,7 +34,7 @@ interface Fixture {
 	transport: DaemonTransportRegistry;
 	/** daemonIds the stubbed supervisor.respawn was asked to wake, in order. */
 	respawned: string[];
-	/** Register a spawned or remote entry in the registry. */
+	/** Register a spawned entry in the registry. */
 	create(overrides?: Partial<CreateInit>): RegistryEntry;
 	/** Enroll the entry and start its daemon dialing out (does not wait for the pair). */
 	dial(entry: RegistryEntry): CallbackDaemon;
@@ -117,7 +117,6 @@ function startFixture(): Fixture {
 				cwd: "/srv/proj",
 				project: "proj",
 				labels: [],
-				mode: "spawned",
 				status: "ready",
 				...overrides,
 			});
@@ -339,25 +338,6 @@ describe("promptEntry", () => {
 		expect(result).toEqual({ daemonId: entry.daemonId, ok: false, error: "launch refused" });
 	});
 
-	test("a remote entry that is not paired fails as not connected, without a respawn", async () => {
-		const fx = startFixture();
-		const entry = fx.create({ mode: "remote", name: "far-host", status: "asleep" });
-		const result = await promptEntry(fx.deps, entry, "hi", 500);
-		expect(result.ok).toBe(false);
-		expect(result.error).toContain("remote session far-host is not connected");
-		expect(fx.respawned).toEqual([]);
-	});
-
-	test("a paired remote entry is prompted over its pair", async () => {
-		const fx = startFixture();
-		const entry = fx.create({ mode: "remote", name: "far-host" });
-		const daemon = await pair(fx, entry);
-		const result = promptEntry(fx.deps, entry, "hi", 5000);
-		const call = await nthPrompt(daemon, 0);
-		answerTurn(daemon, call.id, "From afar");
-		expect(await result).toEqual({ daemonId: entry.daemonId, ok: true, text: "From afar" });
-	});
-
 	test("without a callback transport the prompt fails with a typed error", async () => {
 		const fx = startFixture();
 		const entry = fx.create();
@@ -370,13 +350,12 @@ describe("promptEntry", () => {
 });
 
 describe("fanOut", () => {
-	test("preserves entry order across mixed ok/error outcomes for paired, asleep, and unpaired entries", async () => {
+	test("preserves entry order across mixed ok/error outcomes for paired and asleep entries", async () => {
 		const fx = startFixture();
 		const paired = fx.create({ name: "paired" });
 		const asleep = fx.create({ name: "asleep", status: "asleep" });
-		const remote = fx.create({ name: "far-host", mode: "remote", status: "asleep" });
 		const pairedDaemon = await pair(fx, paired);
-		const results = fanOut(fx.deps, [paired, asleep, remote], "hi", 5000);
+		const results = fanOut(fx.deps, [paired, asleep], "hi", 5000);
 
 		const pairedCall = await nthPrompt(pairedDaemon, 0);
 		frame(pairedDaemon, {
@@ -390,15 +369,9 @@ describe("fanOut", () => {
 		answerTurn(asleepDaemon, asleepCall.id, "Second ok");
 
 		const settled = await results;
-		expect(settled.map((r) => r.daemonId)).toEqual([
-			paired.daemonId,
-			asleep.daemonId,
-			remote.daemonId,
-		]);
+		expect(settled.map((r) => r.daemonId)).toEqual([paired.daemonId, asleep.daemonId]);
 		expect(settled[0]).toEqual({ daemonId: paired.daemonId, ok: false, error: "first failed" });
 		expect(settled[1]).toEqual({ daemonId: asleep.daemonId, ok: true, text: "Second ok" });
-		expect(settled[2]?.ok).toBe(false);
-		expect(settled[2]?.error).toContain("is not connected");
 		expect(fx.respawned).toEqual([asleep.daemonId]);
 	});
 });

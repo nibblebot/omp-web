@@ -39,29 +39,61 @@ export interface GitOptions {
 	exec?: GitRunner;
 }
 
-/** Default git runner: `git -C <cwd> <args>` via Bun.spawn. */
-async function runGit(args: string[], cwd: string): Promise<GitResult> {
+/** Per-call budget for one git subprocess: a hung repo (stale lock, network mount) fails the call instead of stalling a sync pass. */
+export const GIT_TIMEOUT_MS = 10_000;
+
+/** Exit code reported for a git call killed by the timeout (coreutils `timeout` convention). */
+const GIT_TIMEOUT_EXIT = 124;
+
+/**
+ * Default git runner: `git --no-optional-locks -C <cwd> <args>` via Bun.spawn.
+ * `--no-optional-locks` keeps read-only probes from taking the index lock a
+ * user's concurrent git command needs. A call exceeding GIT_TIMEOUT_MS is
+ * killed and reported as a failed call.
+ */
+export async function runGit(args: string[], cwd: string): Promise<GitResult> {
 	try {
-		const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
-		const [stdout, stderr] = await Promise.all([
-			Bun.readableStreamToText(proc.stdout),
-			Bun.readableStreamToText(proc.stderr),
-		]);
-		return { exitCode: await proc.exited, stdout, stderr };
+		const proc = Bun.spawn(["git", "--no-optional-locks", "-C", cwd, ...args], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			proc.kill();
+		}, GIT_TIMEOUT_MS);
+		try {
+			const [stdout, stderr] = await Promise.all([
+				Bun.readableStreamToText(proc.stdout),
+				Bun.readableStreamToText(proc.stderr),
+			]);
+			const exitCode = await proc.exited;
+			return { exitCode: timedOut ? GIT_TIMEOUT_EXIT : (exitCode ?? 127), stdout, stderr };
+		} finally {
+			clearTimeout(timer);
+		}
 	} catch (err) {
 		return { exitCode: 127, stdout: "", stderr: String(err) };
 	}
 }
 
 /** One parsed worktree block from `git worktree list --porcelain`. */
-interface WorktreeBlock {
+export interface WorktreeBlock {
 	path?: string;
-	/** Raw branch ref ("refs/heads/x"), "detached", or absent. */
+	/** Full HEAD sha (absent for a bare entry without commits). */
+	head?: string;
+	/** Branch ref ("refs/heads/x"); absent when detached or bare. */
 	branch?: string;
+	detached: boolean;
+	bare: boolean;
+	/** A `locked` line is present (the optional reason is not kept). */
+	locked: boolean;
+	/** A `prunable` line is present: git reports the checkout directory as gone. */
+	prunable: boolean;
 }
 
-/** Parse porcelain output into per-worktree blocks (blank-line separated). */
-function parseWorktreeList(stdout: string): WorktreeBlock[] {
+/** Parse `git worktree list --porcelain` output into per-worktree blocks (blank-line separated). */
+export function parseWorktreeList(stdout: string): WorktreeBlock[] {
 	const blocks: WorktreeBlock[] = [];
 	let block: WorktreeBlock | null = null;
 	for (const line of stdout.split("\n")) {
@@ -74,10 +106,20 @@ function parseWorktreeList(stdout: string): WorktreeBlock[] {
 		}
 		if (line.startsWith("worktree ")) {
 			if (block) blocks.push(block); // tolerate a missing blank separator
-			block = { path: line.slice("worktree ".length) };
+			block = {
+				path: line.slice("worktree ".length),
+				detached: false,
+				bare: false,
+				locked: false,
+				prunable: false,
+			};
 		} else if (block) {
-			if (line.startsWith("branch ")) block.branch = line.slice("branch ".length);
-			else if (line === "detached") block.branch = "detached";
+			if (line.startsWith("HEAD ")) block.head = line.slice("HEAD ".length);
+			else if (line.startsWith("branch ")) block.branch = line.slice("branch ".length);
+			else if (line === "detached") block.detached = true;
+			else if (line === "bare") block.bare = true;
+			else if (line === "locked" || line.startsWith("locked ")) block.locked = true;
+			else if (line === "prunable" || line.startsWith("prunable ")) block.prunable = true;
 		}
 	}
 	if (block) blocks.push(block);
@@ -119,6 +161,8 @@ export async function resolveWorktreeOf(
 export interface GitState {
 	/** Current branch; undefined when detached (or absent from the header). */
 	branch?: string;
+	/** Short sha of HEAD when detached; absent on a branch or when the sha probe failed. */
+	detachedAt?: string;
 	/** Dirty-state file counts (all-zero for a clean repo). */
 	git: {
 		added: number;
@@ -208,7 +252,8 @@ export function parseNumstat(stdout: string): { linesAdded: number; linesDeleted
  * success a best-effort `git diff --numstat HEAD --` run is merged into
  * `git`: a failed numstat run (spawn error, nonzero exit, e.g. a fresh
  * repo without commits) leaves the line fields absent, never 0-by-default,
- * never fails the whole probe.
+ * never fails the whole probe. A detached HEAD also reports its short sha
+ * as `detachedAt` (best-effort, like numstat).
  */
 export async function probeGitState(
 	cwd: string,
@@ -217,9 +262,15 @@ export async function probeGitState(
 	const exec = options?.exec ?? runGit;
 	const result = await exec(["status", "--porcelain=v1", "--branch"], cwd).catch(() => null);
 	if (!result || result.exitCode !== 0) return undefined;
-	const state = parseGitStatePorcelain(result.stdout);
-	if (state === undefined) return undefined;
+	const parsed = parseGitStatePorcelain(result.stdout);
+	if (parsed === undefined) return undefined;
 	const numstat = await exec(["diff", "--numstat", "HEAD", "--"], cwd).catch(() => null);
-	if (!numstat || numstat.exitCode !== 0) return state;
-	return { ...state, git: { ...state.git, ...parseNumstat(numstat.stdout) } };
+	const withLines =
+		numstat && numstat.exitCode === 0
+			? { ...parsed, git: { ...parsed.git, ...parseNumstat(numstat.stdout) } }
+			: parsed;
+	if (withLines.branch !== undefined) return withLines;
+	const head = await exec(["rev-parse", "--short", "HEAD"], cwd).catch(() => null);
+	const detachedAt = head?.exitCode === 0 ? head.stdout.trim() : "";
+	return detachedAt === "" ? withLines : { ...withLines, detachedAt };
 }

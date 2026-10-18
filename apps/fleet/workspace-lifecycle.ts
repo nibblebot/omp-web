@@ -52,9 +52,10 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { Subprocess } from "bun";
 
 import { ENROLLMENT_KEY_BYTES } from "#lib/wire/callback-protocol";
-import type { LifecycleStage } from "#lib/wire/protocol";
+import type { LifecycleStage, RegisteredProject } from "#lib/wire/protocol";
 import type { Registry, RegistryEntry, WorkspaceRecord, DeletionGateError } from "./registry";
 import type { FleetConfig } from "./config";
+import type { ProviderProfile } from "./provider-profile";
 import type { DaemonTransportRegistry } from "./daemon-transport";
 import type { FleetLogStore } from "./log-store";
 import type { FleetEventLog } from "./events";
@@ -116,8 +117,12 @@ export interface CloneCreateInput {
 	projectId: string;
 	name: string;
 	profileId: string;
-	/** Exactly one member when given; absent = the registered project's local path. */
-	source?: { local?: string; remote?: string };
+	/**
+	 * Exactly one member when given; absent = the registered project's local
+	 * path (kubernetes: its origin URL at the main checkout HEAD). `remoteName`
+	 * names one of the project's git remotes and is resolved fleet-side.
+	 */
+	source?: { local?: string; remote?: string; remoteName?: string };
 	/** Clone pin vocabulary (never baseRef). */
 	revision?: string;
 	branch?: string;
@@ -363,6 +368,59 @@ function relativePosix(fromDir: string, absolute: string): string {
 	return rel;
 }
 
+/** Clone source as the provider receives it (exactly one member). */
+type CloneSource = { local?: string; remote?: string };
+
+/** `git remote get-url <name>` in a repo; undefined when the remote is not configured. */
+async function remoteUrlOf(repoPath: string, remoteName: string): Promise<string | undefined> {
+	const result = await runGit(["remote", "get-url", remoteName], repoPath);
+	const url = result.stdout.trim();
+	return result.exitCode === 0 && url !== "" ? url : undefined;
+}
+
+/**
+ * Resolve a clone's source. Explicit members win (`remoteName` is looked up
+ * among the project's git remotes). An omitted source is the project's local
+ * path for host-side providers; kubernetes cannot read fleet-host paths, so it
+ * defaults to the project's `origin` URL at the main checkout HEAD commit
+ * (`defaultRevision`, used when the request names no revision). Refuses with
+ * the reason when origin or HEAD cannot be read.
+ */
+async function resolveCloneSource(
+	project: RegisteredProject,
+	provider: ProviderProfile["provider"],
+	members: { local?: string; remote?: string; remoteName?: string },
+): Promise<{ source: CloneSource; defaultRevision?: string }> {
+	if (members.local !== undefined) return { source: { local: resolve(members.local) } };
+	if (members.remote !== undefined) return { source: { remote: members.remote } };
+	if (members.remoteName !== undefined) {
+		const url = await remoteUrlOf(project.path, members.remoteName);
+		if (url === undefined) {
+			throw new CloneLifecycleError(
+				"unavailable",
+				`git remote "${members.remoteName}" is not configured in ${project.path}`,
+			);
+		}
+		return { source: { remote: url } };
+	}
+	if (provider !== "kubernetes") return { source: { local: resolve(project.path) } };
+	const origin = await remoteUrlOf(project.path, "origin");
+	if (origin === undefined) {
+		throw new CloneLifecycleError(
+			"unavailable",
+			`kubernetes clones default to the project's origin remote, but ${project.path} has no origin remote; pass source.remote or source.remoteName`,
+		);
+	}
+	const head = await runGit(["rev-parse", "--verify", "HEAD^{commit}"], project.path);
+	if (head.exitCode !== 0) {
+		throw new CloneLifecycleError(
+			"unavailable",
+			`kubernetes clones default to the main checkout HEAD commit, but ${project.path} has no commit at HEAD`,
+		);
+	}
+	return { source: { remote: origin }, defaultRevision: head.stdout.trim() };
+}
+
 // ---------------------------------------------------------------------------
 // The lifecycle service
 // ---------------------------------------------------------------------------
@@ -430,14 +488,19 @@ export class WorkspaceLifecycle {
 		}
 		const sourceLocal = rawSource?.local;
 		const sourceRemote = rawSource?.remote;
+		const sourceRemoteName = rawSource?.remoteName;
+		const sourceMembers = [sourceLocal, sourceRemote, sourceRemoteName].filter(
+			(member) => member !== undefined,
+		);
 		if (
-			(sourceLocal !== undefined && sourceRemote !== undefined) ||
+			sourceMembers.length > 1 ||
 			(sourceLocal !== undefined && typeof sourceLocal !== "string") ||
-			(sourceRemote !== undefined && typeof sourceRemote !== "string")
+			(sourceRemote !== undefined && typeof sourceRemote !== "string") ||
+			(sourceRemoteName !== undefined && typeof sourceRemoteName !== "string")
 		) {
 			throw new CloneLifecycleError(
 				"invalid_request",
-				"source must carry exactly one of local (string path) or remote (string URL)",
+				"source must carry exactly one of local (string path), remote (string URL), or remoteName (string git remote name)",
 			);
 		}
 		if (
@@ -465,15 +528,15 @@ export class WorkspaceLifecycle {
 			);
 		}
 
-		// Exactly-one source: an omitted source defaults to the registered
-		// project's own local path (frozen contract).
-		const source: { local?: string; remote?: string } =
-			sourceLocal !== undefined || sourceRemote !== undefined
-				? {
-						...(sourceLocal !== undefined ? { local: resolve(sourceLocal) } : {}),
-						...(sourceRemote !== undefined ? { remote: sourceRemote } : {}),
-					}
-				: { local: resolve(project.path) };
+		// Exactly one source; an omitted source resolves per provider
+		// (resolveCloneSource: kubernetes defaults to origin at HEAD).
+		const resolved = await resolveCloneSource(project, profile.provider, {
+			local: sourceLocal,
+			remote: sourceRemote,
+			remoteName: sourceRemoteName,
+		});
+		const source = resolved.source;
+		const revision = input.revision ?? resolved.defaultRevision;
 		const start = input.start ?? false;
 		const branch = input.branch ?? deriveWorkspaceBranch(name);
 
@@ -484,7 +547,6 @@ export class WorkspaceLifecycle {
 			project: project.name,
 			projectId,
 			labels: [],
-			mode: "spawned",
 			status: "asleep",
 		});
 		const daemonId = created.daemonId;
@@ -519,7 +581,7 @@ export class WorkspaceLifecycle {
 		// and feeds the persisted pin into the volume prep below.
 		let pinnedRevision: string | undefined;
 		try {
-			pinnedRevision = await resolveWorkspacePin(source, input.revision, {
+			pinnedRevision = await resolveWorkspacePin(source, revision, {
 				// The clone root is created lazily and may not exist yet on a
 				// fresh fleet; the registered project path always exists.
 				cwd: project.path,

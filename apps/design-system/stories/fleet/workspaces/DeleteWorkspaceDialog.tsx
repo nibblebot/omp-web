@@ -45,7 +45,6 @@ export default defineStory({
 					worktreeDeleteInfo: {
 						[worktreeInfoClean.daemonId]: {
 							...worktreeInfoClean,
-							branchOwned: false,
 							hasUpstream: false,
 						},
 					},

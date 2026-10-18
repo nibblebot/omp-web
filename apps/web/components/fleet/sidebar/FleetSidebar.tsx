@@ -1,5 +1,6 @@
-import { createEffect, Show, type Component } from "solid-js";
+import { createEffect, onCleanup, Show, type Component } from "solid-js";
 import { daemonsByProject, setSidebarVisible, setState, state } from "../../../state";
+import { syncProjects } from "../../../store/projects";
 import { SidebarHeader } from "../../app/SidebarHeader";
 import { PlusIcon } from "../../ui/icons";
 import { moveRovingFocus, setRovingTabStop } from "../../ui/roving";
@@ -12,21 +13,19 @@ import { SidebarUsage } from "./SidebarUsage";
 // derives the project-first group list (daemonsByProject) and composes the
 // group rendering (ProjectGroups) under the shared SidebarHeader (wordmark,
 // view switch, debug, collapse toggle).
-// Registered projects group their daemons as the main-checkout row first, then
-// worktrees; each group carries "+ Add worktree" and a remove-project action.
-// Entries WITHOUT a projectId (remote/unregistered) fall back to string-grouping
-// in one trailing group. The header "+" opens the Add-repo modal (the retired
-// SpawnPicker's template/labels fields live in its advanced section). Row
-// interactions live in WorkspaceRow/DaemonDetailsDialog; collapse state persists per
-// project in localStorage (ProjectGroups). Below 1024px the sidebar is a
+// Each registered project is one group: its rows are the checkouts (main checkout,
+// worktrees, clones). The group header carries a "+" (New workspace popover) and a
+// remove-project action. Rows without a registered projectId are not shown. The
+// roster's header "+" opens the Add project dialog. Row interactions live in
+// WorkspaceRow/DaemonDetailsDialog; collapse state persists per project in
+// localStorage (ProjectGroups). The registry re-syncs on window focus (throttled).
+// Below 1024px the sidebar is a
 // layout drawer, not a ModalHost overlay: it owns its .sidebar-scrim (tap
 // outside closes), shown only by CSS.
 // ---------------------------------------------------------------------------
 
 export const FleetSidebar: Component = () => {
-	/** Project-first grouping: registered projects in registry order (zero-
-	 *  daemon projects included) + one trailing fallback group for entries
-	 *  without a projectId. */
+	/** One group per registered project, in registry order (zero-daemon projects included). */
 	const groups = () => daemonsByProject();
 	// Roster rows (`data-roster-item`: project toggles and workspace rows) share
 	// one tab stop; arrows, Home and End move between them (listbox-style).
@@ -55,6 +54,10 @@ export const FleetSidebar: Component = () => {
 		const target = moveRovingFocus(e, items, items.indexOf(e.target), "vertical");
 		if (target !== null) rosterActive = target;
 	};
+
+	// Re-sync the project registry when the window regains focus (the store throttles).
+	window.addEventListener("focus", syncProjects);
+	onCleanup(() => window.removeEventListener("focus", syncProjects));
 
 	return (
 		<>

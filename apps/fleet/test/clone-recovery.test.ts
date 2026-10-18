@@ -167,7 +167,7 @@ async function bootFleet(
 
 /** Create a clone (no start), returning its daemonId. */
 async function createClone(server: FleetServer, repoDir: string, name: string): Promise<string> {
-	const project = await server.registry.addProject(repoDir);
+	const { project } = server.registry.addProject(repoDir);
 	const res = await postJson(server.port, "/ctl/clones", {
 		projectId: project.projectId,
 		name,

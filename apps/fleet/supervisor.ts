@@ -27,12 +27,12 @@
  * close() stops the git poll and the supervisor's timers only: children keep
  * running and their enrollments persist, so sessions outlive the control plane.
  *
- * Git-state polling (startGitStatePolling) keeps every local registry
- * entry's branch + dirty counts fresh for the roster; remote entries are
- * never probed with local git (their cwd is on another host). The same poll
- * derives the entry's last-session-file title (sessionTitle) for the roster
- * and never probes remote entries for it either (their session files live
- * on another host).
+ * Sync (startGitStatePolling, syncNow) keeps the registry in step with git.
+ * Per project it registers missing rows (main checkout and linked worktrees),
+ * reconciles project.missing and each worktree's lock flag. Per row it keeps
+ * branch, dirty counts, the detached short sha, and the last-session-file
+ * title fresh for the roster. Running rows are probed every tick; asleep rows
+ * every 60s.
  */
 
 import { randomBytes } from "node:crypto";
@@ -44,7 +44,7 @@ import {
 	ENROLLMENT_KEY_BYTES,
 	type ShutdownControl,
 } from "#lib/wire/callback-protocol";
-import { OMP_SESSION_EXIT_SESSION_LOCKED } from "#lib/wire/protocol";
+import { OMP_SESSION_EXIT_SESSION_LOCKED, type RegisteredProject } from "#lib/wire/protocol";
 import type { FleetConfig, SpawnTemplate } from "./config";
 import { fillTemplate, shellQuote } from "./spawn-parse";
 import type { DaemonTransportRegistry } from "./daemon-transport";
@@ -52,6 +52,12 @@ import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
 import type { GitRunner } from "./discovery";
 import { readSessionInfo } from "./session-title";
 import type { Registry, RegistryEntry } from "./registry";
+import {
+	listWorktreeBlocks,
+	realpathOf,
+	registerProjectMainEntry,
+	registerWorktreeEntry,
+} from "./worktrees";
 import type { FleetLogLevel } from "./events";
 
 type Child = Subprocess<"ignore", number, number>;
@@ -105,7 +111,8 @@ const STOP_SIGTERM_GRACE_MS = 5_000;
 const RESPAWN_KILL_GRACE_MS = 2_000;
 const RESTART_BACKOFF_MIN_MS = 1_000;
 const RESTART_BACKOFF_MAX_MS = 30_000;
-const DEFAULT_GIT_STATE_POLL_MS = 10_000;
+const DEFAULT_SYNC_INTERVAL_MS = 10_000;
+const ASLEEP_SYNC_INTERVAL_MS = 60_000;
 const LOCKED_REASON_FALLBACK =
 	"session file is locked by another omp-session; close it there and retry";
 
@@ -262,10 +269,16 @@ export class SpawnSupervisor {
 	#backoffMinMs: number;
 	#backoffMaxMs: number;
 	#children = new Map<string, ChildState>();
-	/** Git-state poll timer (startGitStatePolling); cleared by close(). */
+	/** Sync timer (startGitStatePolling); cleared by close(). */
 	#gitStateTimer: ReturnType<typeof setInterval> | null = null;
 	/** Exec injected via startGitStatePolling (tests); undefined = real git. */
 	#gitExec: GitRunner | undefined;
+	/** The running sync pass; requests that arrive while it runs coalesce. */
+	#syncing: Promise<void> | null = null;
+	/** A sync request arrived mid-pass: exactly one follow-up pass runs. */
+	#syncQueued = false;
+	/** Last probe time per daemonId; asleep rows wait ASLEEP_SYNC_INTERVAL_MS. */
+	#lastProbeAt = new Map<string, number>();
 	/** Lifecycle-event hook (server.ts wires it to the fleet event ring). */
 	#onEvent: ((level: FleetLogLevel, message: string, daemonId?: string) => void) | undefined;
 	/**
@@ -354,7 +367,6 @@ export class SpawnSupervisor {
 			project,
 			...(worktreeOf !== undefined ? { worktreeOf } : {}),
 			labels: init.labels ?? [],
-			mode: "spawned",
 			template: templateName,
 		});
 		this.#launch(entry, template, { resume: false });
@@ -372,9 +384,6 @@ export class SpawnSupervisor {
 	 */
 	async respawn(entry: RegistryEntry, opts?: { resumeFile?: string }): Promise<void> {
 		const current = this.#registry.get(entry.daemonId) ?? entry;
-		if (current.mode !== "spawned") {
-			throw new Error(`daemon ${current.daemonId} is not spawned (mode ${current.mode})`);
-		}
 		// Fallback for template-less entries (registered asleep, or state
 		// files written before entries stored the resolved name): resolve the
 		// same name spawn() would for the cwd.
@@ -504,13 +513,12 @@ export class SpawnSupervisor {
 
 	/**
 	 * Backfill worktreeOf on local entries registered before spawn-time
-	 * tagging existed (fired once at server start). Remote entries name paths
-	 * on ANOTHER host, so never probe those with local git. An unresolvable cwd
+	 * tagging existed (fired once at server start). An unresolvable cwd
 	 * leaves the entry untouched; entries removed mid-scan are skipped.
 	 */
 	async backfillWorktrees(): Promise<void> {
 		for (const entry of this.#registry.list()) {
-			if (entry.mode === "remote" || entry.worktreeOf !== undefined || entry.cwd === "") continue;
+			if (entry.worktreeOf !== undefined || entry.cwd === "") continue;
 			const worktreeOf = await resolveWorktreeOf(entry.cwd);
 			if (worktreeOf !== undefined && this.#registry.get(entry.daemonId)) {
 				this.#registry.update(entry.daemonId, { worktreeOf });
@@ -519,23 +527,31 @@ export class SpawnSupervisor {
 	}
 
 	/**
-	 * Start polling git state (branch + dirty counts) for every local
-	 * registry entry: one immediate pass, then one pass every `intervalMs`
-	 * (default 10s). Remote entries are NEVER probed; their cwd lives on
-	 * another host (same rule as backfillWorktrees). A pass updates the
-	 * registry only when the probed state actually differs from the entry's
-	 * current branch/git; every update broadcasts the roster via
-	 * registry.onChange, and a probe failure clears previously-set fields
-	 * only. The injected `exec` keeps tests hermetic. Idempotent: a second
-	 * call while polling is ignored so passes never stack. `close()` stops
-	 * the timer.
+	 * Start the sync timer: one immediate pass, then one per `intervalMs`
+	 * (default 10s). Each tick calls syncNow(); rows whose cadence has not
+	 * elapsed are skipped (asleep rows every 60s). Idempotent: a second call
+	 * while the timer runs is ignored so passes never stack. `close()` stops
+	 * the timer. The injected `exec` keeps tests hermetic.
 	 */
 	startGitStatePolling(opts?: { intervalMs?: number; exec?: GitRunner }): void {
 		if (this.#gitStateTimer) return;
 		this.#gitExec = opts?.exec;
-		const intervalMs = opts?.intervalMs ?? DEFAULT_GIT_STATE_POLL_MS;
-		void this.#pollGitState();
-		this.#gitStateTimer = setInterval(() => void this.#pollGitState(), intervalMs);
+		const intervalMs = opts?.intervalMs ?? DEFAULT_SYNC_INTERVAL_MS;
+		this.syncNow();
+		this.#gitStateTimer = setInterval(() => this.syncNow(), intervalMs);
+	}
+
+	/**
+	 * Run one sync pass now (sync_projects calls this). Requests that arrive
+	 * while a pass runs coalesce into exactly one follow-up pass: passes never
+	 * overlap.
+	 */
+	syncNow(): void {
+		if (this.#syncing) {
+			this.#syncQueued = true;
+			return;
+		}
+		this.#syncing = this.#runSyncPasses();
 	}
 
 	/**
@@ -550,11 +566,80 @@ export class SpawnSupervisor {
 		void this.#probeEntry(entry);
 	}
 
-	/** One poll pass: every local entry, in registry order. */
-	async #pollGitState(): Promise<void> {
+	/**
+	 * Run passes until no sync request is pending. A failing pass is reported
+	 * as an error event; it never stops the timer or leaves the sync flag set.
+	 */
+	async #runSyncPasses(): Promise<void> {
+		try {
+			do {
+				this.#syncQueued = false;
+				await this.#syncPass().catch((err: unknown) =>
+					this.#onEvent?.("error", `sync failed: ${(err as Error).message}`),
+				);
+			} while (this.#syncQueued);
+		} finally {
+			this.#syncing = null;
+		}
+	}
+
+	/**
+	 * One pass: reconcile every project (its rows and project.missing), then
+	 * probe every row whose cadence is due. Forgets probe times of removed rows.
+	 */
+	async #syncPass(): Promise<void> {
+		for (const project of this.#registry.projects()) {
+			await this.#syncProject(project);
+		}
+		const now = Date.now();
 		for (const entry of this.#registry.list()) {
+			if (!this.#probeDue(entry, now)) continue;
+			this.#lastProbeAt.set(entry.daemonId, now);
 			await this.#probeEntry(entry);
 		}
+		for (const daemonId of this.#lastProbeAt.keys()) {
+			if (!this.#registry.get(daemonId)) this.#lastProbeAt.delete(daemonId);
+		}
+	}
+
+	/**
+	 * Reconcile one project against its main checkout's worktree list. A
+	 * missing, bare, or unreadable main checkout marks the project missing and
+	 * is never removed. Otherwise the main row is ensured and every linked
+	 * worktree without a row is registered asleep (prunable checkouts are
+	 * skipped). Each linked row mirrors git's lock flag.
+	 */
+	async #syncProject(project: RegisteredProject): Promise<void> {
+		const blocks = await listWorktreeBlocks(project.path);
+		const main = blocks?.[0];
+		const missing = main === undefined || main.bare === true;
+		this.#registry.setProjectMissing(project.projectId, missing);
+		if (blocks === undefined || missing) return;
+		await registerProjectMainEntry(this.#registry, this, project, {});
+		for (const block of blocks.slice(1)) {
+			if (block.path === undefined || block.prunable) continue;
+			const resolved = realpathOf(block.path);
+			const known = this.#registry
+				.list()
+				.find((entry) => entry.cwd !== "" && realpathOf(entry.cwd) === resolved);
+			const row =
+				known ??
+				(await registerWorktreeEntry(this.#registry, this, project, block.path, { start: false }));
+			const locked = block.locked ? true : undefined;
+			if (row.worktreeLocked !== locked) {
+				this.#registry.update(row.daemonId, { worktreeLocked: locked });
+			}
+		}
+	}
+
+	/**
+	 * A row is due when it has never been probed, when it is not asleep (live
+	 * rows are probed on every pass), or when its asleep interval has elapsed.
+	 */
+	#probeDue(entry: RegistryEntry, now: number): boolean {
+		const last = this.#lastProbeAt.get(entry.daemonId);
+		if (last === undefined || entry.status !== "asleep") return true;
+		return now - last >= ASLEEP_SYNC_INTERVAL_MS;
 	}
 
 	/**
@@ -563,7 +648,7 @@ export class SpawnSupervisor {
 	 * an actual branch/git change.
 	 */
 	async #probeEntry(entry: RegistryEntry): Promise<void> {
-		if (entry.mode === "remote" || entry.cwd === "") return;
+		if (entry.cwd === "") return;
 		const result = await probeGit(entry.cwd, { exec: this.#gitExec });
 		const current = this.#registry.get(entry.daemonId);
 		if (!current) return; // removed while probing
@@ -580,13 +665,29 @@ export class SpawnSupervisor {
 			}
 			// Clear stale fields only when previously set, so a never-probed
 			// entry doesn't churn the registry with a no-op broadcast.
-			if (current.branch !== undefined || current.git !== undefined) {
-				this.#registry.update(current.daemonId, { branch: undefined, git: undefined });
+			if (
+				current.branch !== undefined ||
+				current.git !== undefined ||
+				current.detachedAt !== undefined
+			) {
+				this.#registry.update(current.daemonId, {
+					branch: undefined,
+					git: undefined,
+					detachedAt: undefined,
+				});
 			}
 			return;
 		}
-		if (current.branch !== result.branch || !sameGitState(current.git, result.git)) {
-			this.#registry.update(current.daemonId, { branch: result.branch, git: result.git });
+		if (
+			current.branch !== result.branch ||
+			current.detachedAt !== result.detachedAt ||
+			!sameGitState(current.git, result.git)
+		) {
+			this.#registry.update(current.daemonId, {
+				branch: result.branch,
+				git: result.git,
+				detachedAt: result.detachedAt,
+			});
 		}
 		await this.#probeSessionInfo(this.#registry.get(entry.daemonId) ?? entry);
 	}
@@ -594,18 +695,16 @@ export class SpawnSupervisor {
 	/**
 	 * Probe one entry's last-session-file title and emptiness (a new/empty
 	 * session renders "New session" in the roster) and reconcile the
-	 * registry. Remote entries are never probed (their session files live on
-	 * another host) and neither are entries without a lastSessionFile, the same
-	 * rule as the git probe's empty-cwd skip. One registry.update happens
-	 * only when title OR empty actually differs (a no-change keeps the
-	 * registry quiet: no onChange, no roster broadcast); a file that became
-	 * unreadable/untitled clears a previously-set title. sessionEmpty only
-	 * carries meaning for untitled files; a titled session is never labeled
+	 * registry. Entries with an empty cwd or no lastSessionFile are skipped.
+	 * One registry.update happens only when title OR empty actually differs
+	 * (a no-change keeps the registry quiet: no onChange, no roster broadcast);
+	 * a file that became unreadable/untitled clears a previously-set title.
+	 * sessionEmpty only carries meaning for untitled files; a titled session is never labeled
 	 * "New session", so a title appearing clears a stale empty flag in the
 	 * same update. The reader never throws.
 	 */
 	async #probeSessionInfo(entry: RegistryEntry): Promise<void> {
-		if (entry.mode === "remote" || entry.cwd === "" || !entry.lastSessionFile) return;
+		if (entry.cwd === "" || !entry.lastSessionFile) return;
 		const { title, empty } = await readSessionInfo(entry.lastSessionFile);
 		const current = this.#registry.get(entry.daemonId);
 		if (!current) return; // removed while probing

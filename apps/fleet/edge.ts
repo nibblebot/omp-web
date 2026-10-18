@@ -26,8 +26,8 @@
  *     202 {commandId} on accept, answers ride /events only. Commands are
  *     routed to a browser by the X-Omp-Client-Id header (the browser binds
  *     its stream at /events open with ?client=<id>); a missing or unknown
- *     id is a 400. Fleet-level commands (list_projects / spawn /
- *     spawn_resume / stop / remove / attach) are handled here;
+ *     id is a 400. Fleet-level commands (add_project / sync_projects /
+ *     spawn / spawn_resume / stop / remove / attach) are handled here;
  *     attached-session commands (call / login_code / ui_response /
  *     collab_* / daemon_* / list_*) ride the daemon's callback pair. Anything
  *     outside the browser-command allowlist is rejected with an error
@@ -86,7 +86,6 @@ import {
 	type DaemonEntry,
 	type DaemonInfo,
 	type PublicProviderProfile,
-	type RegisteredProject,
 	type ServerFrame,
 	type SessionScopedFrame,
 } from "#lib/wire/protocol";
@@ -118,14 +117,11 @@ import {
 	createWorktree,
 	deleteWorktree,
 	listProjectBranches,
-	mergeUnregisteredWorktrees,
 	projectIdForCwd,
 	realpathOf,
-	registerProjectMainEntry,
 	registerWorktreeEntry,
-	validateUnregisteredWorktree,
+	resolveProjectRoot,
 	worktreeDeleteInfo,
-	type CreateWorktreeResult,
 } from "./worktrees";
 
 /** Reclaim grace for a disconnected browser's ring (Last-Event-ID resume window). */
@@ -194,8 +190,8 @@ const UNKNOWN_COMMAND_MESSAGE = "fleet edge: use spawn/stop/roster";
  */
 const BROWSER_COMMAND_LIST = [
 	// Handled at the edge.
-	"list_projects",
 	"list_project_branches",
+	"sync_projects",
 	"list_daemon_sessions",
 	"spawn",
 	"spawn_resume",
@@ -208,7 +204,6 @@ const BROWSER_COMMAND_LIST = [
 	"attach",
 	// Worktree lifecycle (Phase 4): create/add/delete + delete-info evidence.
 	"create_worktree",
-	"add_worktree",
 	"delete_worktree",
 	"worktree_delete_info",
 	// Forwarded to the attached daemon's POST /command.
@@ -402,8 +397,11 @@ export interface CreateCloneInput {
 	projectId: string;
 	name: string;
 	profileId: string;
-	/** Exactly one member when given; omitted = the registered project's local path. */
-	source?: { local?: string; remote?: string };
+	/**
+	 * Exactly one member when given; omitted = the project's own path (host-side
+	 * providers) or its origin URL (kubernetes).
+	 */
+	source?: { local?: string; remote?: string; remoteName?: string };
 	revision?: string;
 	branch?: string;
 	start?: boolean;
@@ -540,7 +538,6 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 		cwd: entry.cwd,
 		project: entry.project,
 		labels: [...entry.labels],
-		mode: entry.mode,
 		status: entry.status,
 		// An asleep daemon has no live process: omit the uptime rather than let
 		// the registeredAt fallback show a growing uptime for a dead daemon.
@@ -556,6 +553,8 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 	if (entry.worktreeOf !== undefined) roster.worktreeOf = entry.worktreeOf;
 	if (entry.projectId !== undefined) roster.projectId = entry.projectId;
 	if (entry.branch !== undefined) roster.branch = entry.branch;
+	if (entry.detachedAt !== undefined) roster.detachedAt = entry.detachedAt;
+	if (entry.worktreeLocked === true) roster.worktreeLocked = true;
 	if (entry.git !== undefined) roster.git = { ...entry.git };
 	if (entry.lastSessionFile !== undefined) roster.lastSessionFile = entry.lastSessionFile;
 	if (entry.sessionTitle !== undefined) roster.sessionTitle = entry.sessionTitle;
@@ -984,6 +983,7 @@ export class FleetEdge {
 		}
 		const cmd = raw as Record<string, unknown>;
 		const type = cmd.type as string;
+		const id = typeof cmd.id === "string" ? cmd.id : "";
 		// Phase 6: the mux-era commands and detach are gone from
 		// ClientCommand. Any type outside the browser allowlist, whether a
 		// stale client's removed command or plain garbage, is rejected here
@@ -993,9 +993,6 @@ export class FleetEdge {
 			return json({ commandId: cmd.id }, 202);
 		}
 		switch (type) {
-			case "list_projects":
-				void this.#handleListProjects(stream);
-				break;
 			case "list_daemon_sessions": {
 				const daemonId =
 					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
@@ -1013,9 +1010,13 @@ export class FleetEdge {
 					this.#sendError(stream, "list_project_branches: missing projectId");
 					break;
 				}
-				void this.#handleListProjectBranches(stream, projectId);
+				const remote = typeof cmd.remote === "string" && cmd.remote !== "" ? cmd.remote : undefined;
+				void this.#handleListProjectBranches(stream, projectId, remote);
 				break;
 			}
+			case "sync_projects":
+				this.#supervisor.syncNow();
+				break;
 			case "spawn": {
 				const cwd = typeof cmd.cwd === "string" && cmd.cwd !== "" ? cmd.cwd : undefined;
 				if (cwd === undefined) {
@@ -1074,17 +1075,7 @@ export class FleetEdge {
 					this.#sendError(stream, "add_project: missing path");
 					break;
 				}
-				const start = cmd.start === true;
-				const template =
-					typeof cmd.template === "string" && cmd.template !== "" ? cmd.template : undefined;
-				let labels: string[] | undefined;
-				try {
-					labels = parseSpawnLabels(cmd.labels);
-				} catch (err) {
-					this.#sendError(stream, err instanceof Error ? err.message : String(err));
-					break;
-				}
-				void this.#handleAddProject(stream, path, start, template, labels);
+				void this.#handleAddProject(stream, id, path);
 				break;
 			}
 			case "remove_project": {
@@ -1100,7 +1091,7 @@ export class FleetEdge {
 			case "create_clone": {
 				// Frozen contract (docs/clone-contracts.md): projectId/name/
 				// profileId required; source (when given) has exactly one of
-				// local/remote; revision/branch/start optional.
+				// local/remote/remoteName; revision/branch/start optional.
 				const projectId =
 					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
 				if (projectId === undefined) {
@@ -1119,7 +1110,7 @@ export class FleetEdge {
 					break;
 				}
 				const sourceRaw = cmd.source;
-				let source: { local?: string; remote?: string } | undefined;
+				let source: CreateCloneInput["source"];
 				if (sourceRaw !== undefined) {
 					if (typeof sourceRaw !== "object" || sourceRaw === null || Array.isArray(sourceRaw)) {
 						this.#sendError(stream, "create_clone: source must be an object");
@@ -1128,21 +1119,23 @@ export class FleetEdge {
 					// Exactly one non-empty member. Read through a checked
 					// narrowing: absent/empty members are treated as unset.
 					const sourceFields = sourceRaw as Record<string, unknown>;
-					const hasLocal = typeof sourceFields.local === "string" && sourceFields.local !== "";
-					const hasRemote = typeof sourceFields.remote === "string" && sourceFields.remote !== "";
-					if (hasLocal === hasRemote) {
-						this.#sendError(stream, "create_clone: source must set exactly one of local or remote");
+					const given = (["local", "remote", "remoteName"] as const)
+						.map((key) => [key, sourceFields[key]] as const)
+						.filter(([, value]) => typeof value === "string" && value !== "");
+					if (given.length !== 1) {
+						this.#sendError(
+							stream,
+							"create_clone: source must set exactly one of local, remote, or remoteName",
+						);
 						break;
 					}
-					source = hasLocal
-						? { local: sourceFields.local as string }
-						: { remote: sourceFields.remote as string };
+					source = Object.fromEntries(given) as CreateCloneInput["source"];
 				}
 				const revision =
 					typeof cmd.revision === "string" && cmd.revision !== "" ? cmd.revision : undefined;
 				const branch = typeof cmd.branch === "string" && cmd.branch !== "" ? cmd.branch : undefined;
 				const start = cmd.start === true ? true : undefined;
-				void this.#handleCreateClone(stream, {
+				void this.#handleCreateClone(stream, id, {
 					projectId,
 					name,
 					profileId,
@@ -1172,30 +1165,11 @@ export class FleetEdge {
 						? cmd.existingBranch
 						: undefined;
 				const start = cmd.start === true ? true : undefined;
-				void this.#handleCreateWorktree(stream, projectId, name, {
+				void this.#handleCreateWorktree(stream, id, projectId, name, {
 					baseRef,
 					existingBranch,
 					start,
 				});
-				break;
-			}
-			case "add_worktree": {
-				const projectId =
-					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
-				if (projectId === undefined) {
-					this.#sendError(stream, "add_worktree: missing projectId");
-					break;
-				}
-				const worktreePath =
-					typeof cmd.worktreePath === "string" && cmd.worktreePath !== ""
-						? cmd.worktreePath
-						: undefined;
-				if (worktreePath === undefined) {
-					this.#sendError(stream, "add_worktree: missing worktreePath");
-					break;
-				}
-				const start = cmd.start === true ? true : undefined;
-				void this.#handleAddWorktree(stream, projectId, worktreePath, start);
 				break;
 			}
 			case "delete_worktree": {
@@ -1205,7 +1179,14 @@ export class FleetEdge {
 					this.#sendError(stream, "delete_worktree: missing daemonId");
 					break;
 				}
-				const deleteBranch = cmd.deleteBranch === true ? true : undefined;
+				if (cmd.deleteBranch !== undefined && typeof cmd.deleteBranch !== "string") {
+					this.#sendError(stream, "delete_worktree: deleteBranch must be a branch name");
+					break;
+				}
+				const deleteBranch =
+					typeof cmd.deleteBranch === "string" && cmd.deleteBranch !== ""
+						? cmd.deleteBranch
+						: undefined;
 				void this.#handleDeleteWorktree(stream, daemonId, deleteBranch);
 				break;
 			}
@@ -1243,21 +1224,6 @@ export class FleetEdge {
 	// Commands
 	// ---------------------------------------------------------------------
 
-	async #handleListProjects(stream: BrowserStream): Promise<void> {
-		try {
-			// No root scanning: projects are the registered set's unregistered
-			// linked worktrees (roster cwds excluded). The registered mains ride
-			// the separate registered_projects frame.
-			const projects = await mergeUnregisteredWorktrees(
-				this.#registry.projects(),
-				this.#registry.list().map((entry) => entry.cwd),
-			);
-			this.#sendAnswer(stream, { type: "projects", projects });
-		} catch (err) {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
-		}
-	}
-
 	/**
 	 * Answer a roster-dropdown request: the last sessions of one daemon's
 	 * worktree, newest-first (the edge lists from disk, so asleep/never-started
@@ -1285,18 +1251,32 @@ export class FleetEdge {
 	}
 
 	/**
-	 * list_project_branches: unicast answer with the registered project's
-	 * local branches + checked-out state, for the add-worktree branch picker.
+	 * list_project_branches: unicast project_branches answer for the New
+	 * workspace branch picker. Without `remote` the project's local branches;
+	 * with it, that git remote's branches (ls-remote, falling back to cached
+	 * refs and reported as `cached`).
 	 */
-	async #handleListProjectBranches(stream: BrowserStream, projectId: string): Promise<void> {
+	async #handleListProjectBranches(
+		stream: BrowserStream,
+		projectId: string,
+		remote: string | undefined,
+	): Promise<void> {
 		const project = this.#registry.projects().find((p) => p.projectId === projectId);
 		if (!project) {
 			this.#sendError(stream, `unknown project: ${projectId}`);
 			return;
 		}
 		try {
-			const branches = await listProjectBranches(project.path);
-			this.#sendAnswer(stream, { type: "project_branches", projectId, branches });
+			const listed = await listProjectBranches(
+				project.path,
+				remote === undefined ? undefined : { remote },
+			);
+			this.#sendAnswer(stream, {
+				type: "project_branches",
+				projectId,
+				...(remote !== undefined ? { remote } : {}),
+				...listed,
+			});
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
@@ -1328,65 +1308,59 @@ export class FleetEdge {
 	}
 
 	/**
-	 * add_project: register the project's realpath (registry.addProject
-	 * validates + dedups). A dedup answers an error frame naming the
-	 * existing projectId. The project's default workspace is registered via
-	 * registerProjectMainEntry: a roster entry for the repo's main checkout
-	 * mapped to the repo CWD, never a linked worktree. With start:true the
-	 * main checkout is spawned (template/labels passthrough) and the fresh
-	 * entry is tagged with the projectId; without it the entry is created
-	 * asleep (wakeable via spawn_resume/attach). Success surfaces via the
-	 * registered_projects + roster broadcasts, never a unicast.
+	 * add_project: register the main checkout behind `path` (a main checkout,
+	 * a linked worktree, or a subdirectory; resolveProjectRoot refuses bare and
+	 * non-git paths). Registration never spawns: a sync pass then adds the
+	 * project's asleep rows. Answered by add_project_result: the projectId, with
+	 * `existing: true` when that checkout was already registered.
 	 */
-	async #handleAddProject(
-		stream: BrowserStream,
-		path: string,
-		start: boolean,
-		template: string | undefined,
-		labels: string[] | undefined,
-	): Promise<void> {
+	async #handleAddProject(stream: BrowserStream, id: string, path: string): Promise<void> {
 		try {
-			const before = this.#registry.projects();
-			let project: RegisteredProject;
-			try {
-				project = await this.#registry.addProject(path);
-			} catch (err) {
-				this.#sendError(stream, err instanceof Error ? err.message : String(err));
-				return;
-			}
-			if (before.some((p) => p.projectId === project.projectId)) {
-				// Dedup: the realpath is already registered.
-				this.#sendError(stream, `project already registered: ${project.projectId}`);
-				return;
-			}
-			try {
-				await registerProjectMainEntry(this.#registry, this.#supervisor, project, {
-					start,
-					template,
-					labels,
-				});
-			} catch (err) {
-				// The project stays registered; the error names the stage.
-				this.#sendError(
-					stream,
-					`project ${project.projectId} registered, spawn failed: ${err instanceof Error ? err.message : String(err)}`,
-				);
-				return;
-			}
+			const { project, existing } = this.#registry.addProject(await resolveProjectRoot(path));
+			this.#supervisor.syncNow();
+			this.#sendAnswer(stream, {
+				type: "add_project_result",
+				id,
+				ok: true,
+				projectId: project.projectId,
+				existing,
+			});
 		} catch (err) {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+			this.#sendAnswer(stream, {
+				type: "add_project_result",
+				id,
+				ok: false,
+				error: err instanceof Error ? err.message : String(err),
+			});
 		}
 	}
 
 	/**
-	 * remove_project: deregister a project (never touches disk); the
-	 * never-started default workspace (a provably-empty roster placeholder)
-	 * is dropped with it. While any REAL roster entry (something that ever
-	 * ran or is remote/attached) references it, registry.removeProject
-	 * throws and the error frame names the blocking daemon ids.
+	 * remove_project: deregister a project and drop all of its rows. Running
+	 * rows are shut down and their pair revoked (transcripts kept, disk
+	 * untouched). Refused while a clone workspace still belongs to it; the
+	 * refusal is checked before any row is stopped.
 	 */
 	async #handleRemoveProject(stream: BrowserStream, projectId: string): Promise<void> {
 		try {
+			const rows = this.#registry.list().filter((entry) => entry.projectId === projectId);
+			const cloneIds = rows
+				.filter((entry) => entry.workspace?.kind === "clone")
+				.map((entry) => entry.daemonId);
+			if (cloneIds.length > 0) {
+				this.#sendError(
+					stream,
+					`project ${projectId} has clone workspaces: ${cloneIds.join(", ")}`,
+				);
+				return;
+			}
+			for (const row of rows) {
+				if (row.status === "asleep") continue;
+				for (const s of this.#browsers) {
+					if (s.pipe?.daemonId === row.daemonId) this.#closePipe(s);
+				}
+				await this.#supervisor.prune(row.daemonId);
+			}
 			this.#registry.removeProject(projectId);
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
@@ -1397,44 +1371,66 @@ export class FleetEdge {
 	 * create_worktree: git worktree add under workspaceDir for a registered
 	 * project (branch = slugified name; existingBranch attaches instead).
 	 * With start:true the worktree is spawned (registerWorktreeEntry).
-	 * Progress rides the roster/daemon_status broadcasts; the supervisor
-	 * only spawns, attach/session-picker are client-side. Staged: a failure
-	 * names the stage and leaves prior stages intact (a created-but-
-	 * unspawned worktree shows up in discovery / the Add-existing tab).
+	 * Progress rides the roster/daemon_status broadcasts; the answer is the
+	 * unicast workspace_create_result. Staged: a failure names the stage and
+	 * leaves prior stages intact (a created-but-unregistered worktree is
+	 * picked up by the next project sync).
 	 */
 	async #handleCreateWorktree(
 		stream: BrowserStream,
+		id: string,
 		projectId: string,
 		name: string,
 		opts: { baseRef?: string; existingBranch?: string; start?: boolean },
 	): Promise<void> {
 		const project = this.#registry.projects().find((p) => p.projectId === projectId);
 		if (!project) {
-			this.#sendError(stream, `unknown project: ${projectId}`);
+			this.#answerWorkspaceCreate(stream, id, { error: `unknown project: ${projectId}` });
 			return;
 		}
-		let created: CreateWorktreeResult;
+		let worktreePath: string;
 		try {
-			created = await createWorktree(project, name, {
-				workspaceDir: this.#config.workspaceDir,
-				baseRef: opts.baseRef,
-				existingBranch: opts.existingBranch,
-			});
+			worktreePath = (
+				await createWorktree(project, name, {
+					workspaceDir: this.#config.workspaceDir,
+					baseRef: opts.baseRef,
+					existingBranch: opts.existingBranch,
+				})
+			).path;
 		} catch (err) {
-			this.#sendError(
-				stream,
-				`create worktree failed: ${err instanceof Error ? err.message : String(err)}`,
+			this.#answerWorkspaceCreate(stream, id, {
+				error: `create worktree failed: ${err instanceof Error ? err.message : String(err)}`,
+			});
+			return;
+		}
+		try {
+			const entry = await registerWorktreeEntry(
+				this.#registry,
+				this.#supervisor,
+				project,
+				worktreePath,
+				{ start: opts.start },
 			);
-			return;
-		}
-		try {
-			await registerWorktreeEntry(this.#registry, this.#supervisor, project, created.path, {
-				start: opts.start,
-				branchCreated: created.baseRef !== undefined,
-			});
+			this.#answerWorkspaceCreate(stream, id, { daemonId: entry.daemonId });
 		} catch (err) {
-			this.#sendError(stream, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+			this.#answerWorkspaceCreate(stream, id, {
+				error: `register worktree failed: ${err instanceof Error ? err.message : String(err)}`,
+			});
 		}
+	}
+
+	/** Unicast workspace_create_result: the new row's daemonId, or the failure text. */
+	#answerWorkspaceCreate(
+		stream: BrowserStream,
+		id: string,
+		outcome: { daemonId: string } | { error: string },
+	): void {
+		this.#sendAnswer(
+			stream,
+			"daemonId" in outcome
+				? { type: "workspace_create_result", id, ok: true, daemonId: outcome.daemonId }
+				: { type: "workspace_create_result", id, ok: false, error: outcome.error },
+		);
 	}
 
 	/**
@@ -1444,54 +1440,23 @@ export class FleetEdge {
 	 * roster entry ride the roster/daemon_status/lifecycleStage broadcasts;
 	 * with start:true the lifecycle also ensures the provider compute and
 	 * callback pair, so the client's attach follows the same wake path as any
-	 * stopped clone. Typed failures surface as an error frame with a
-	 * user-safe message.
+	 * stopped clone. The unicast answer carries the new row's daemonId.
 	 */
-	async #handleCreateClone(stream: BrowserStream, input: CreateCloneInput): Promise<void> {
-		if (!this.#lifecycle) {
-			this.#sendError(stream, "create_clone is unavailable: no lifecycle service wired");
-			return;
-		}
-		try {
-			await this.#lifecycle.createClone(input);
-		} catch (err) {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
-		}
-	}
-
-	/**
-	 * add_worktree: register a discovered-but-unregistered linked worktree of
-	 * the project (validated via validateUnregisteredWorktree) and optionally
-	 * spawn a daemon on it (start:true).
-	 */
-	async #handleAddWorktree(
+	async #handleCreateClone(
 		stream: BrowserStream,
-		projectId: string,
-		worktreePath: string,
-		start: boolean | undefined,
+		id: string,
+		input: CreateCloneInput,
 	): Promise<void> {
-		const project = this.#registry.projects().find((p) => p.projectId === projectId);
-		if (!project) {
-			this.#sendError(stream, `unknown project: ${projectId}`);
-			return;
-		}
-		let resolved: string;
 		try {
-			resolved = await validateUnregisteredWorktree(
-				worktreePath,
-				project,
-				this.#registry.list().map((e) => e.cwd),
-			);
+			if (!this.#lifecycle) {
+				throw new Error("create_clone is unavailable: no lifecycle service wired");
+			}
+			const entry = await this.#lifecycle.createClone(input);
+			this.#answerWorkspaceCreate(stream, id, { daemonId: entry.daemonId });
 		} catch (err) {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
-			return;
-		}
-		try {
-			await registerWorktreeEntry(this.#registry, this.#supervisor, project, resolved, {
-				start,
+			this.#answerWorkspaceCreate(stream, id, {
+				error: err instanceof Error ? err.message : String(err),
 			});
-		} catch (err) {
-			this.#sendError(stream, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -1504,7 +1469,7 @@ export class FleetEdge {
 	async #handleDeleteWorktree(
 		stream: BrowserStream,
 		daemonId: string,
-		deleteBranch: boolean | undefined,
+		deleteBranch: string | undefined,
 	): Promise<void> {
 		try {
 			const entry = this.#registry.get(daemonId);
@@ -1541,8 +1506,8 @@ export class FleetEdge {
 			for (const s of this.#browsers) {
 				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
 			}
-			// Stop + evict: the supervisor sends ShutdownControl, kills an own
-			// child, and revokes the enrollment (removal-time cleanup, #24).
+			// Stop + evict: the supervisor sends ShutdownControl and kills an
+			// own child, so no process outlives the removal.
 			await this.#supervisor.prune(daemonId);
 			// The roster broadcast rides registry.onChange.
 			this.#registry.remove(daemonId);
@@ -1780,9 +1745,8 @@ export class FleetEdge {
 	 * Bring a daemon's callback pair up before an attach or prompt. Every
 	 * daemon dials the fleet, so the fleet only ever waits on the pair; it
 	 * never dials. A paired daemon returns at once. A reconnecting daemon
-	 * gets REDIAL_GRACE_MS to redial on its own. An asleep spawned daemon is
-	 * respawned (--resume) and waited on for PAIR_TIMEOUT_MS. A remote daemon
-	 * that is not paired cannot be woken here: its host must start it.
+	 * gets REDIAL_GRACE_MS to redial on its own. An asleep daemon is
+	 * respawned (--resume) and waited on for PAIR_TIMEOUT_MS.
 	 * Clone-kind entries go through the lifecycle ensure (provider compute +
 	 * enrollment) instead; their pair readiness rides the transport's
 	 * onPairChange and is never awaited here. Serialized per daemon: a second
@@ -1820,11 +1784,6 @@ export class FleetEdge {
 			// window before deciding it needs a respawn.
 			if (entry.status === "reconnecting" && (await this.#awaitPair(daemonId, REDIAL_GRACE_MS)))
 				return;
-			if (entry.mode !== "spawned") {
-				throw new Error(
-					`remote session ${entry.name} is not connected; start it on its host (see omp-web enroll)`,
-				);
-			}
 			if (entry.status !== "connecting") {
 				await this.#supervisor.respawn(
 					entry,
@@ -2634,7 +2593,7 @@ export class FleetEdge {
 	/** GET /ctl/sessions/{id}/stderr: 404 for unknown/non-spawned entries. */
 	#handleStderr(daemonId: string): Response {
 		const entry = this.#registry.get(daemonId);
-		if (!entry || entry.mode !== "spawned") {
+		if (!entry) {
 			return json({ error: "not found" }, 404);
 		}
 		return json({ text: this.#supervisor.stderrTail(daemonId) });
@@ -2701,7 +2660,6 @@ export class FleetEdge {
 				daemonId: entry.daemonId,
 				name: entry.name,
 				status: entry.status,
-				mode: entry.mode,
 				registeredAt: entry.registeredAt,
 				uptimeSec: Math.max(0, Math.floor((Date.now() - uptimeBase) / 1000)),
 				pair: {

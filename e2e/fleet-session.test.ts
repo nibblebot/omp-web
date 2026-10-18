@@ -11,22 +11,19 @@
  * runs the child detached, and appends its output to
  * <state dir>/session-logs/<daemonId>.log.
  *
- * Scenarios (serial, one shared fleet; scenario 5 closes and re-opens it):
+ * Scenarios (serial, one shared fleet; scenario 4 closes and re-opens it):
  *  1. spawn three daemons; all reach ready once their pair forms; prompt each.
  *  2. SIGKILL one child: the supervisor relaunches it under a NEW enrollment
  *     generation; the old generation's credential is revoked (a redial with it
  *     is refused with 401/409).
- *  3. POST /ctl/enroll for an externally launched omp-session (mode "remote"):
- *     it goes ready, answers a prompt, and POST /ctl/stop shuts it down over
- *     the pair (asleep, enrollment released).
- *  4. idle auto-exit → asleep (enrollment released); a prompt wakes it: the
+ *  3. idle auto-exit → asleep (enrollment released); a prompt wakes it: the
  *     fanout respawns it under a new enrollment generation.
- *  5. closing the fleet does NOT kill sessions: the daemon keeps running; a new
+ *  4. closing the fleet does NOT kill sessions: the daemon keeps running; a new
  *     fleet on the same state/config/port re-enrolls the persisted digest at
  *     boot, the SAME process re-pairs and the entry returns to ready with no
  *     respawn, and a prompt still reaches it.
- *  6. POST /ctl/stop on that daemon makes the process exit and the entry asleep.
- *  7. a prompt on that stopped daemon wakes it: the respawn carries --resume <lastSessionFile>.
+ *  5. POST /ctl/stop on that daemon makes the process exit and the entry asleep.
+ *  6. a prompt on that stopped daemon wakes it: the respawn carries --resume <lastSessionFile>.
  *
  * Model determinism: every daemon runs with a fresh, empty PI_CODING_AGENT_DIR
  * and PI_AUTH_NO_BORROW=1, so no model is selectable and no live model or API
@@ -99,11 +96,6 @@ interface PromptResultWire {
 
 interface StopResponse {
 	stopped: string[];
-}
-
-interface EnrollResponse {
-	entry: DaemonEntry;
-	enrollment: { workspaceId: string; generation: number; token: string; callbackUrl: string };
 }
 
 interface StateFile {
@@ -190,8 +182,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 	let d3!: DaemonEntry;
 	let d4!: DaemonEntry;
 	let survivor!: DaemonEntry;
-	let ext: Subprocess | undefined;
-	/** Every daemon pid observed (spawn responses, /proc sweeps, the external launch). */
+	/** Every daemon pid observed (spawn responses, /proc sweeps). */
 	const trackedPids = new Set<number>();
 	/** Prompts issued through the control plane (all settle ok:false, no live model). */
 	let promptCount = 0;
@@ -333,13 +324,6 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		// Close the fleet FIRST so no supervisor restart races the kills below.
 		// close() deliberately leaves sessions running, so they are reaped here.
 		if (server !== undefined) await server.close();
-		if (ext !== undefined) {
-			try {
-				ext.kill("SIGKILL");
-			} catch {
-				// already gone
-			}
-		}
 		if (tmp === undefined) return;
 		// Tracked pids plus a /proc sweep for any session naming this suite's tmp
 		// root. A tracked pid is killed only while its command line still names
@@ -384,7 +368,6 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		d1 = (await r1.json()) as DaemonEntry;
 		d2 = (await r2.json()) as DaemonEntry;
 		d3 = (await r3.json()) as DaemonEntry;
-		expect(d1.mode).toBe("spawned");
 		expect(d1.labels).toEqual(["env=integration"]);
 		for (const entry of [d1, d2, d3]) {
 			if (entry.pid !== undefined) trackedPids.add(entry.pid);
@@ -491,82 +474,6 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		}
 	}, 120_000);
 
-	test("enroll an externally launched omp-session via /ctl/enroll; it goes ready, answers a prompt, and stops over the pair", async () => {
-		const res = await postJson("/ctl/enroll", {
-			name: "ext-drive",
-			labels: ["origin=external"],
-			cwd: projDirs[1],
-		});
-		expect(res.status).toBe(201);
-		const body = (await res.json()) as EnrollResponse;
-		const extEntry = body.entry;
-		expect(extEntry.mode).toBe("remote");
-		expect(body.enrollment.workspaceId).toBe(extEntry.daemonId);
-		expect(body.enrollment.token).toMatch(/^[0-9a-f]{64}$/);
-		expect(body.enrollment.callbackUrl).toBe(base());
-		// Launch exactly as the enroll flow prints it: token in env, the rest as flags.
-		const env: Record<string, string> = {};
-		for (const [key, value] of Object.entries(process.env)) {
-			if (value === undefined) continue;
-			if (PROVIDER_ENV_KEYS.includes(key)) continue;
-			if (key.startsWith("OMP_SESSION_") || key.startsWith("OMP_FLEET_")) continue;
-			env[key] = value;
-		}
-		env.PI_CODING_AGENT_DIR = join(tmp, "agent-ext-drive");
-		env.PI_AUTH_NO_BORROW = "1";
-		env.OMP_SESSION_CALLBACK_TOKEN = body.enrollment.token;
-		const logFd = openSync(join(tmp, "ext-drive.log"), "a");
-		try {
-			ext = Bun.spawn(
-				[
-					"bun",
-					SESSION_ENTRY,
-					"--cwd",
-					projDirs[1],
-					"--port",
-					"0",
-					"--name",
-					"ext-drive",
-					"--callback-url",
-					body.enrollment.callbackUrl,
-					"--callback-workspace",
-					body.enrollment.workspaceId,
-					"--callback-generation",
-					String(body.enrollment.generation),
-					"--callback-allow-http",
-				],
-				{ env, stdin: "ignore", stdout: logFd, stderr: logFd },
-			);
-		} finally {
-			closeSync(logFd);
-		}
-		trackedPids.add(ext.pid);
-		const ready = await waitForEntry(
-			extEntry.daemonId,
-			(e) => e.status === "ready",
-			60_000,
-			"become ready",
-		);
-		expect(ready.cwd).toBe(projDirs[1]);
-		expect(getPersistedEntry(extEntry.daemonId).workspace?.enrollment?.generation).toBe(
-			body.enrollment.generation,
-		);
-		// The call round-trips to the daemon; the no-model turn settles ok:false.
-		const result = await ctlPrompt(extEntry.daemonId);
-		expect(result.ok).toBe(false);
-		expect(result.error).toBeTruthy();
-		// Stop over the pair: the fleet asks the session to shut down and revokes it.
-		const stop = await postJson("/ctl/stop", { selector: extEntry.daemonId });
-		expect(stop.status).toBe(200);
-		const stopBody = (await stop.json()) as StopResponse;
-		expect(stopBody.stopped).toEqual([extEntry.daemonId]);
-		const exitCode = await Promise.race([ext.exited, sleep(30_000).then(() => "timeout" as const)]);
-		expect(exitCode).not.toBe("timeout");
-		const asleep = await getEntry(extEntry.daemonId);
-		expect(asleep?.status).toBe("asleep");
-		expect(getPersistedEntry(extEntry.daemonId).workspace?.enrollment).toBeUndefined();
-	}, 120_000);
-
 	test("short-idle daemon: idle exit → asleep (enrollment released)", async () => {
 		const res = await postJson("/ctl/spawn", {
 			cwd: projDirs[2],
@@ -667,8 +574,8 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		expect(result.ok).toBe(false);
 		expect(result.error).toBeTruthy();
 		expect(daemonProc("d-survivor").pid).toBe(proc.pid);
-		// Accounting: six prompts across the suite, all settled ok:false.
-		expect(promptCount).toBe(6);
+		// Accounting: five prompts across the suite, all settled ok:false.
+		expect(promptCount).toBe(5);
 	}, 150_000);
 
 	test("POST /ctl/stop makes the daemon exit and the entry asleep", async () => {
@@ -704,7 +611,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		const result = await promise;
 		expect(result.ok).toBe(false);
 		expect(result.error).toBeTruthy();
-		// Accounting: this is the seventh prompt across the suite.
-		expect(promptCount).toBe(7);
+		// Accounting: this is the sixth prompt across the suite.
+		expect(promptCount).toBe(6);
 	}, 120_000);
 });

@@ -31,8 +31,8 @@ export default defineStory({
 			),
 		},
 		{
-			name: "Remote error",
-			render: () => <DaemonLog daemonId={rosterDaemon.remoteError.daemonId} />,
+			name: "Session error",
+			render: () => <DaemonLog daemonId={rosterDaemon.sessionError.daemonId} />,
 		},
 	],
 });

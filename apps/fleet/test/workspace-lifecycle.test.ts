@@ -297,7 +297,7 @@ async function bootFleet(
 
 /** Create a clone of the registered repo, returning its daemonId. */
 async function createClone(server: FleetServer, repoDir: string, name: string): Promise<string> {
-	const project = await server.registry.addProject(repoDir);
+	const { project } = server.registry.addProject(repoDir);
 	const res = await postJson(server.port, "/ctl/clones", {
 		projectId: project.projectId,
 		name,
@@ -623,7 +623,7 @@ test(
 			deleteFailures: 0,
 		});
 		try {
-			const project = await server.registry.addProject(repoDir);
+			const { project } = server.registry.addProject(repoDir);
 			const response = await postJson(server.port, "/ctl/clones", {
 				projectId: project.projectId,
 				name: "private-clone",
@@ -689,7 +689,7 @@ describe("clone source validation over /ctl/clones (P1.3)", () => {
 					deleteFailures: 0,
 				});
 				try {
-					const project = await server.registry.addProject(repoDir);
+					const { project } = server.registry.addProject(repoDir);
 					const source =
 						kind === "local"
 							? { local: relative(process.cwd(), repoDir) }
@@ -747,7 +747,7 @@ describe("clone source validation over /ctl/clones (P1.3)", () => {
 					deleteFailures: 0,
 				});
 				try {
-					const project = await server.registry.addProject(repoDir);
+					const { project } = server.registry.addProject(repoDir);
 					const before = server.registry.list().length;
 					const res = await postJson(server.port, "/ctl/clones", {
 						projectId: project.projectId,
@@ -774,6 +774,101 @@ describe("clone source validation over /ctl/clones (P1.3)", () => {
 			{ timeout: 20_000 },
 		);
 	}
+});
+
+describe("clone source remoteName over /ctl/clones", () => {
+	test("a configured remote name resolves fleet-side and clones successfully", async () => {
+		const { server, cloneRoot, repoDir } = await bootFleet({
+			runningWhileLive: false,
+			stopObserved: "stopped",
+			deleteFailures: 0,
+		});
+		try {
+			const { project } = server.registry.addProject(repoDir);
+			await git(repoDir, ["remote", "add", "upstream", `file://${repoDir}`]);
+			const res = await postJson(server.port, "/ctl/clones", {
+				projectId: project.projectId,
+				name: "clone-remote-name",
+				profileId: "local",
+				source: { remoteName: "upstream" },
+				start: false,
+			});
+			expect(res.status).toBe(201);
+			const body = (await res.json()) as { entry: { daemonId: string } };
+			const checkout = join(cloneRoot, body.entry.daemonId, ".checkout");
+			expect(existsSync(join(checkout, "readme.md"))).toBe(true);
+		} finally {
+			await server.close();
+		}
+	}, 20_000);
+
+	test("an unconfigured remote name is refused with 503 and creates no workspace", async () => {
+		const { server, repoDir } = await bootFleet({
+			runningWhileLive: false,
+			stopObserved: "stopped",
+			deleteFailures: 0,
+		});
+		try {
+			const { project } = server.registry.addProject(repoDir);
+			const before = server.registry.list().length;
+			const res = await postJson(server.port, "/ctl/clones", {
+				projectId: project.projectId,
+				name: "clone-missing-remote",
+				profileId: "local",
+				source: { remoteName: "nowhere" },
+				start: false,
+			});
+			expect(res.status).toBe(503);
+			expect(server.registry.list()).toHaveLength(before);
+		} finally {
+			await server.close();
+		}
+	}, 20_000);
+
+	test("a kubernetes profile with no source refuses when the project has no origin remote", async () => {
+		const paths = fleetPaths("omp-workspace-lifecycle-kube-");
+		const workspaceDir = join(paths.tmp, "workspaces");
+		const repoDir = join(paths.tmp, "repo");
+		await makeRepo(repoDir);
+		const fakeProvider = writeFakeProvider(join(paths.tmp, "provider"), {
+			runningWhileLive: false,
+			stopObserved: "stopped",
+			deleteFailures: 0,
+		});
+		const server = await startTestFleet(
+			{ statePath: paths.statePath, configPath: paths.configPath },
+			{
+				workspaceDir,
+				providerProfiles: {
+					kube: {
+						id: "kube",
+						provider: "kubernetes",
+						executable: fakeProvider,
+						tools: [],
+						image: "img",
+						namespace: "ns",
+						context: "ctx",
+					},
+				},
+			},
+			{ workspaceDir },
+		);
+		try {
+			const { project } = server.registry.addProject(repoDir);
+			const before = server.registry.list().length;
+			const res = await postJson(server.port, "/ctl/clones", {
+				projectId: project.projectId,
+				name: "clone-kube-no-origin",
+				profileId: "kube",
+				start: false,
+			});
+			expect(res.status).toBe(503);
+			expect(await res.text()).toContain("has no origin remote");
+			expect(server.registry.list()).toHaveLength(before);
+		} finally {
+			await server.close();
+		}
+	}, 20_000);
 });
 
 // ---------------------------------------------------------------------------

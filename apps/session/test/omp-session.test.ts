@@ -810,7 +810,7 @@ test("removed mux commands fall through to the unknown-command error; read-only 
 
 	// Fleet-edge commands are rejected on a bare omp-session.
 	await postCommand(base, { type: "spawn", cwd: "/tmp", id: "m7" });
-	await postCommand(base, { type: "list_projects", id: "m8" });
+	await postCommand(base, { type: "stop", daemonId: "d1", id: "m8" });
 	await waitFor(
 		() =>
 			events.frames.filter((f) => f.type === "error" && f.error === "fleet-only command").length >=

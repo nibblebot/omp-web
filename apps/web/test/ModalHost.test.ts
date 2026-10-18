@@ -109,7 +109,6 @@ function daemon(id: string): DaemonEntry {
 		cwd: `/repos/${id}`,
 		project: id,
 		labels: [],
-		mode: "spawned",
 		status: "ready",
 	};
 }

@@ -706,7 +706,6 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 			case "spawn":
 			case "spawn_resume":
 			case "stop":
-			case "list_projects":
 				// Fleet-edge commands on a bare omp-session (the registry lives
 				// in omp-fleet, Phase 3).
 				broadcastAnswer({ type: "error", error: "fleet-only command" });

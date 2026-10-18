@@ -90,18 +90,44 @@ export default defineStory({
 			),
 		},
 		{
-			name: "Remote error",
+			name: "Session error",
 			render: () => (
 				<div class="sidebar-list">
-					<WorkspaceRow daemon={rosterDaemon.remoteError} />
+					<WorkspaceRow daemon={rosterDaemon.sessionError} />
 				</div>
 			),
 		},
 		{
-			name: "Remote blocked",
+			name: "Blocked",
 			render: () => (
 				<div class="sidebar-list">
-					<WorkspaceRow daemon={rosterDaemon.remoteBlocked} />
+					<WorkspaceRow daemon={rosterDaemon.blocked} />
+				</div>
+			),
+		},
+		{
+			name: "Detached worktree",
+			render: () => (
+				<div class="sidebar-list">
+					<WorkspaceRow
+						daemon={{ ...rosterDaemon.worktree, branch: undefined, detachedAt: "3f9c2a1" }}
+					/>
+				</div>
+			),
+		},
+		{
+			name: "Locked worktree",
+			render: () => (
+				<div class="sidebar-list">
+					<WorkspaceRow daemon={{ ...rosterDaemon.worktree, worktreeLocked: true }} />
+				</div>
+			),
+		},
+		{
+			name: "Project missing",
+			render: () => (
+				<div class="sidebar-list">
+					<WorkspaceRow daemon={rosterDaemon.localactionMain} projectMissing />
 				</div>
 			),
 		},

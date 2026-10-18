@@ -1,16 +1,14 @@
-import { createEffect, createMemo, createSignal, Show, type Component } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show, type Component } from "solid-js";
 import { setState, state } from "../../../state";
-import { removeProjectAndStop } from "../../../store/projects";
+import { sendRemoveProject } from "../../../store/projects";
 import { Modal } from "../../ui/Modal";
 
-// Remove-project confirm (Phase 5 close-out): deregister a first-class
-// project. It never touches disk. Self-mounts (rendered once from App.tsx
-// like DangerConfirmDialog) and renders nothing while no target is set.
-// When session processes still reference the project, confirming stops and
-// evicts them first (removeProjectAndStop), then deregisters the project. A
-// refusal the server still sends lands as a global error frame and is shown
-// inline while the dialog stays open. A successful removal drops the project
-// from the registry, which closes the dialog.
+// Remove-project confirm: deregister a project. The fleet stops the project's
+// running sessions and drops all of its rows (transcripts kept, disk never
+// touched); a project that still owns clone workspaces is refused. Self-mounts
+// and renders nothing while no target is set. A refusal lands as a global
+// error frame and is shown inline while the dialog stays open. A successful
+// removal drops the project from the registry, which closes the dialog.
 
 export const RemoveProjectDialog: Component = () => {
 	const [refusal, setRefusal] = createSignal<string | null>(null);
@@ -20,10 +18,12 @@ export const RemoveProjectDialog: Component = () => {
 
 	const target = () => state.removeProjectTarget;
 	const project = () => state.registeredProjects.find((p) => p.projectId === target());
-	/** Session processes the removal stops: roster entries referencing the
-	 *  project, minus provider-run clones (same filter as removeProjectAndStop). */
-	const referencing = createMemo(() =>
-		state.daemonRoster.filter((d) => d.projectId === target() && d.workspaceKind !== "clone"),
+	/** Running session processes the removal stops (asleep rows are just dropped;
+	 *  clones block the removal instead). */
+	const running = createMemo(() =>
+		state.daemonRoster.filter(
+			(d) => d.projectId === target() && d.workspaceKind !== "clone" && d.status !== "asleep",
+		),
 	);
 
 	createEffect(() => {
@@ -56,7 +56,7 @@ export const RemoveProjectDialog: Component = () => {
 		if (id === null) return;
 		errorAtOpen = state.error;
 		setRefusal(null);
-		removeProjectAndStop(id);
+		sendRemoveProject(id);
 	};
 
 	const close = () => {
@@ -67,16 +67,21 @@ export const RemoveProjectDialog: Component = () => {
 		<Show when={target() !== null && project() !== undefined}>
 			<Modal title="Remove project" onClose={close}>
 				<p class="danger-confirm-body">
-					Remove <span class="worktree-evidence-path">{project()!.name}</span> from the fleet
-					roster?
-					<Show
-						when={referencing().length > 0}
-						fallback={" Disk contents stay untouched; this only deregisters the project."}
-					>
-						{" "}
-						These sessions will be stopped and removed from omp-web. Worktree files are kept.
-					</Show>
+					Remove <span class="worktree-evidence-path">{project()!.name}</span> and its workspace
+					rows from omp-web? Files on disk and session transcripts are kept.
+					<Show when={running().length > 0}> These sessions will be stopped:</Show>
 				</p>
+				<Show when={running().length > 0}>
+					<ul class="worktree-dirty-files" aria-label="Sessions that will stop">
+						<For each={running()}>
+							{(d) => (
+								<li>
+									<span class="worktree-evidence-path">{d.branch ?? d.name}</span>
+								</li>
+							)}
+						</For>
+					</ul>
+				</Show>
 				<Show when={refusal() !== null}>
 					<div class="msg-notice worktree-error">{refusal()}</div>
 				</Show>
@@ -85,9 +90,9 @@ export const RemoveProjectDialog: Component = () => {
 						Cancel
 					</button>
 					<button type="button" class="danger-confirm-btn" onClick={confirmRemove}>
-						{referencing().length === 0
+						{running().length === 0
 							? "Remove project"
-							: `Stop ${referencing().length} ${referencing().length === 1 ? "session" : "sessions"} & remove`}
+							: `Stop ${running().length} ${running().length === 1 ? "session" : "sessions"} & remove`}
 					</button>
 				</div>
 			</Modal>

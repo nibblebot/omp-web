@@ -424,7 +424,11 @@ export interface SkillsState {
 // ready).
 // ---------------------------------------------------------------------------
 
-export const OMP_PROTO = 2;
+/** 3: project/worktree redesign. Remote enrollment and `DaemonEntry.mode` are
+ *  gone, `delete_worktree.deleteBranch` names the branch, the discovery
+ *  `list_projects`/`projects` pair and `add_worktree` are removed, and
+ *  project/workspace creation answers with id-keyed result frames. */
+export const OMP_PROTO = 3;
 
 // --- SSE framing constants (shared by the daemon and the fleet) ---
 
@@ -520,9 +524,8 @@ export type DaemonStatus =
 	| "reconnecting"
 	| "error";
 
-// --- Clone workspace identity (P1, additive): workspace/daemon lifecycle
-// facts the fleet edge surfaces on the roster. OMP_PROTO stays 2; these are
-// optional DaemonEntry additions, never shape changes.
+// --- Clone workspace identity: workspace/daemon lifecycle facts the fleet
+// edge surfaces on the roster (optional DaemonEntry fields).
 
 /** How a workspace's checkout was produced (clone-contracts ledger). */
 export type WorkspaceKind = "worktree" | "clone" | "direct";
@@ -564,12 +567,16 @@ export interface DaemonEntry {
 	worktreeOf?: string;
 	/**
 	 * The registered project this daemon belongs to (source: fleet edge
-	 * roster; absent for remote entries, whose string `project` grouping is
-	 * kept). Older edges omit it.
+	 * roster). Absent only for a CLI spawn outside every registered project;
+	 * the web sidebar does not show such rows.
 	 */
 	projectId?: string;
-	/** Current git branch of the session cwd for local entries (source: fleet edge roster; older edges omit it). */
+	/** Current git branch of the session cwd (source: fleet edge roster); absent when detached or unprobed. */
 	branch?: string;
+	/** Short commit of a detached HEAD (source: fleet edge roster); present only when detached. */
+	detachedAt?: string;
+	/** True when `git worktree lock` holds this linked worktree (source: fleet sync). */
+	worktreeLocked?: boolean;
 	/** git dirty-state file counts (source: fleet edge roster; older edges omit them). */
 	git?: {
 		added: number;
@@ -580,15 +587,13 @@ export interface DaemonEntry {
 		linesDeleted?: number;
 	};
 	labels: string[];
-	mode: "spawned" | "remote";
 	status: DaemonStatus;
 	lastSessionFile?: string;
 	/** Title of the daemon's last session file (source: fleet edge roster, probed from the
-	 *  lastSessionFile JSONL title slot; older edges omit it; never probed for remote entries). */
+	 *  lastSessionFile JSONL title slot). */
 	sessionTitle?: string;
 	/** True when the daemon's current/last session file has no messages (a new/empty
-	 *  session); fleet-probed like sessionTitle; older edges omit it; never probed for
-	 *  remote entries. */
+	 *  session); fleet-probed like sessionTitle. */
 	sessionEmpty?: boolean;
 	readyAt?: number;
 	uptime?: number;
@@ -607,20 +612,11 @@ export interface DaemonEntry {
 	lifecycleError?: string;
 }
 
-/** One discovered project for the spawn picker (projects frame). */
-export interface ProjectEntry {
-	name: string;
-	path: string;
-	isWorktree: boolean;
-	worktreeOf?: string;
-	branch?: string;
-}
-
-/** One local branch of a registered project (project_branches frame). */
+/** One local branch of a registered project, or one branch of a project remote (project_branches frame). */
 export interface ProjectBranch {
-	/** Short branch name (refs/heads/ stripped). */
+	/** Short branch name (refs/heads/ stripped, or the remote's head name). */
 	name: string;
-	/** True when checked out in some worktree; git refuses a second checkout. */
+	/** True when checked out in some local worktree; git refuses a second checkout. Always false for remote listings. */
 	checkedOut: boolean;
 	/** Where it is checked out (main checkout or linked worktree), when checkedOut. */
 	worktreePath?: string;
@@ -631,7 +627,7 @@ export interface ProjectBranch {
  * frame). Projects are realpath-keyed, deduped on registration, and persist
  * in the fleet state file; `path` is always the realpath of the main
  * checkout and `name` its basename. Local daemons carry the matching
- * `projectId` on the roster; remote entries never do.
+ * `projectId` on the roster.
  */
 export interface RegisteredProject {
 	projectId: string;
@@ -641,6 +637,8 @@ export interface RegisteredProject {
 	name: string;
 	/** Epoch ms of registration. */
 	addedAt: number;
+	/** True when the main checkout no longer exists or is no longer a git repo (fleet sync). Its rows cannot start. */
+	missing?: boolean;
 }
 
 /**
@@ -888,23 +886,19 @@ export type ClientCommand =
 	| { type: "list_daemon_sessions"; id: string; daemonId: string }
 	// Stop the daemon AND evict it from the roster (registry removal).
 	| { type: "remove"; id: string; daemonId: string }
-	// First-class project registration (add_project registers the realpath,
-	// deduped, and optionally spawns a daemon on the main checkout with
-	// template/labels passthrough; answers ride the registered_projects /
-	// roster broadcasts + error frames).
-	| {
-			type: "add_project";
-			id: string;
-			path: string;
-			start?: boolean;
-			template?: string;
-			labels?: string[];
-	  }
-	// Deregister a project; refused (error frame) while any daemon references it.
+	// Register a project. `path` may be the main checkout, a linked worktree,
+	// or a subdirectory: the fleet registers the main checkout (bare repos
+	// and non-git paths are refused). Registration never spawns; the fleet
+	// sync adds one asleep row per checkout. Answered by add_project_result.
+	| { type: "add_project"; id: string; path: string }
+	// Deregister a project and drop all of its rows (running sessions are
+	// stopped, transcripts kept, disk untouched). Refused while a clone
+	// workspace still belongs to it.
 	| { type: "remove_project"; id: string; projectId: string }
-	// Worktree lifecycle (projectId from the registered_projects frame).
-	// start:true also spawns a daemon on the worktree; progress rides the
-	// roster/daemon_status broadcasts.
+	// Worktree creation (projectId from the registered_projects frame):
+	// a new branch from baseRef, or an existing local branch. start:true also
+	// spawns a daemon on the worktree; progress rides the roster/daemon_status
+	// broadcasts. Answered by workspace_create_result.
 	| {
 			type: "create_worktree";
 			id: string;
@@ -914,35 +908,41 @@ export type ClientCommand =
 			existingBranch?: string;
 			start?: boolean;
 	  }
-	| { type: "add_worktree"; id: string; projectId: string; worktreePath: string; start?: boolean }
-	// Clone workspace creation (frozen contract, docs/clone-contracts.md
-	// "Browser and CLI workspace creation"): an independent provider-managed
-	// clone of a registered project. A supplied `source` carries exactly one
-	// of local/remote; an omitted source uses the registered project's own
-	// path. `revision` is the clone pin vocabulary (worktrees keep
-	// `baseRef`); the resolved commit persists as pinnedRevision.
+	// Clone workspace creation: an independent provider-managed clone of a
+	// registered project. `source` carries at most one of local (fleet-host
+	// path), remote (URL), or remoteName (a git remote of the project,
+	// resolved fleet-side so URLs never reach the browser); omitted = the
+	// project's own path for host-side providers, its `origin` URL for
+	// kubernetes. `revision` is the clone pin vocabulary (worktrees keep
+	// `baseRef`); the resolved commit persists as pinnedRevision. Answered
+	// by workspace_create_result.
 	| {
 			type: "create_clone";
 			id: string;
 			projectId: string;
 			name: string;
 			profileId: string;
-			source?: { local?: string; remote?: string };
+			source?: { local?: string; remote?: string; remoteName?: string };
 			revision?: string;
 			branch?: string;
 			start?: boolean;
 	  }
 	// Stop the daemon, evict it from the roster, and remove the linked
-	// worktree (clean only; deleteBranch: true also `git branch -d`s).
-	| { type: "delete_worktree"; id: string; daemonId: string; deleteBranch?: boolean }
+	// worktree (clean only). deleteBranch names the branch to `git branch -d`;
+	// it is deleted only when it is still the worktree's checked-out branch
+	// and not protected (default/base branch, main checkout's branch).
+	| { type: "delete_worktree"; id: string; daemonId: string; deleteBranch?: string }
 	// Guard evidence for the delete confirmation (linked/dirty/branch state);
 	// answered by the unicast worktree_delete_info frame.
 	| { type: "worktree_delete_info"; id: string; daemonId: string }
-	| { type: "list_projects"; id: string }
-	// Branch picker for the add-worktree flow: local branches of a
-	// registered project with checked-out state; answered by the unicast
-	// project_branches frame.
-	| { type: "list_project_branches"; id: string; projectId: string };
+	// Branch picker for the New workspace popover: local branches of a
+	// registered project (remote omitted), or the branches of one of its git
+	// remotes via `git ls-remote` (falls back to cached refs). Answered by
+	// the unicast project_branches frame.
+	| { type: "list_project_branches"; id: string; projectId: string; remote?: string }
+	// Run one worktree/project sync pass now (tab focus, group expand).
+	// Fire-and-forget; results ride the roster/registered_projects broadcasts.
+	| { type: "sync_projects"; id: string };
 
 // ---------------------------------------------------------------------------
 // Collab (TUI-mux): per-session collab host status, pushed to attached
@@ -1196,10 +1196,32 @@ export type ServerFrame =
 	// just daemonId + display name + the vanished path. Never sent for
 	// UI-initiated delete_worktree/remove.
 	| { type: "worktree_removed"; daemonId: string; name: string; path: string }
-	// Unicast answer to list_projects.
-	| { type: "projects"; projects: ProjectEntry[] }
-	// Unicast answer to list_project_branches (fleet-scoped, like projects).
-	| { type: "project_branches"; projectId: string; branches: ProjectBranch[] }
+	// Unicast answer to add_project. `existing`: the resolved main checkout
+	// was already registered (nothing changed).
+	| {
+			type: "add_project_result";
+			id: string;
+			ok: boolean;
+			projectId?: string;
+			existing?: boolean;
+			error?: string;
+	  }
+	// Unicast answer to create_worktree / create_clone: the new row's id, or
+	// the failure. Runtime progress rides the roster/daemon_status broadcasts.
+	| { type: "workspace_create_result"; id: string; ok: boolean; daemonId?: string; error?: string }
+	// Unicast answer to list_project_branches. `remotes` lists the project's
+	// git remote names (origin first). `defaultBase` is the base a new branch
+	// starts from (local: resolveBaseRef; remote: the remote's HEAD branch).
+	// `cached`: ls-remote failed and the list comes from refs/remotes.
+	| {
+			type: "project_branches";
+			projectId: string;
+			remote?: string;
+			branches: ProjectBranch[];
+			remotes: string[];
+			defaultBase?: string;
+			cached?: boolean;
+	  }
 	// Unicast answer to worktree_delete_info: guard evidence for the delete
 	// confirmation (linked identity, dirty counts, branch merge/push state).
 	// Never carries tokens/endpoints. A failed git probe rides as
@@ -1222,7 +1244,8 @@ export type ServerFrame =
 			merged?: boolean;
 			unpushed?: boolean;
 			hasUpstream?: boolean;
-			branchOwned?: boolean;
+			/** Why branch deletion is unavailable (protected or detached); absent when allowed. */
+			branchDeleteRefused?: string;
 			files?: string[];
 			reason?: string;
 	  }

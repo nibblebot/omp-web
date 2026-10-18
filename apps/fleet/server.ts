@@ -7,14 +7,12 @@
  * persistent Registry, the callback transport and the SpawnSupervisor:
  *
  *   GET  /ctl/sessions {…}                         → DaemonEntry[]
- *   GET  /ctl/projects {…}                         → { projects: ProjectEntry[], registered: RegisteredProject[] }
- *   POST /ctl/projects {path, start?, template?, labels?} → 201 { project, entry? } | 409 { error, project }
+ *   GET  /ctl/projects {…}                         → { projects: RegisteredProject[] }
+ *   POST /ctl/projects {path, start?, template?, labels?} → 201 { project, entry? } | 200 { project, existing: true }
  *   DELETE /ctl/projects/:projectId                → 200 { removed } | 409 { error }
  *   GET  /ctl/settings                             -> SettingsModel
  *   GET  /ctl/worktrees/:daemonId/delete-info      -> worktree_delete_info payload
  *   POST /ctl/spawn    {cwd, template?, name?, labels?} -> DaemonEntry
- *   POST /ctl/enroll  {name, labels?, cwd?, callbackUrl?} → 201 {entry, enrollment}
- *   POST /ctl/provision {name, labels?}            → DaemonEntry (spawn hook)
  *   POST /ctl/stop     {selector}                  → { stopped: string[] }
  *   POST /ctl/remove   {selector}                  → { removed: string[] }
  *   POST /ctl/prompt   {selector, text, waitMs?}   → PromptResult[] | { submitted: string[] }
@@ -25,8 +23,8 @@
  *   POST /ctl/plugins/:name/enabled {enabled}         -> detail after enable/disable
  *   POST /ctl/plugins/:name/features {features|null}  -> detail after feature selection
  *   POST /ctl/plugins/:name/setting {key, value|null} -> detail after setting write (null clears)
- *   POST /ctl/projects/:id/worktrees               -> create or add-existing worktree -> 201 { entry }
- *   DELETE /ctl/worktrees/:daemonId {deleteBranch?} -> worktree: stop -> remove entry -> git worktree remove
+ *   POST /ctl/projects/:id/worktrees {name, baseRef?, existingBranch?, start?} -> 201 { entry }
+ *   DELETE /ctl/worktrees/:daemonId {deleteBranch?: string} -> worktree: stop -> remove entry -> git worktree remove
  *                    (clone workspace: verify-at-deletion gate, P7.3/P7.5)
  *   GET  /ctl/logs/orphans                         -> orphaned log-store subtrees (P7.6)
  *   POST /ctl/logs/purge {workspaceId}             -> explicit manual purge (P7.6)
@@ -48,26 +46,19 @@
  * gated by browser auth: the DaemonTransportRegistry authenticates it with
  * the workspace enrollment credentials (P3.3, mounted first for that prefix).
  *
- * /ctl/provision runs config.spawnHook via `sh -c` with env OMP_HOOK_NAME /
- * OMP_HOOK_LABELS plus the OMP_SESSION_CALLBACK_* enrollment vars and a 60s
- * deadline. Exit 0 registers an enrolled remote entry; the hook starts the
- * session on its host. 400 when no hook is configured; 502 on hook failure
- * (the entry is removed).
- *
  * Errors: 400 invalid JSON / validation failure, 404 empty selector match,
  * 405 wrong method, 500 {error} on anything else. `waitMs` absent on
  * /ctl/prompt dispatches fire-and-forget: each match gets the prompt in the
  * background and the route returns { submitted } without awaiting the turn.
  *
  * Sessions dial the control plane over the callback pair; the fleet never
- * dials a session. Spawned children are supervised here, remote sessions are
- * enrolled and started by the operator on their host (`omp-web enroll`).
+ * dials a session. Spawned children are supervised here.
  */
 
 import type { Server } from "bun";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { DaemonStatus, RegisteredProject, PublicProviderProfile } from "#lib/wire/protocol";
+import type { DaemonStatus, PublicProviderProfile } from "#lib/wire/protocol";
 import type { FleetConfig } from "./config";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { checkOmpSetup } from "./omp-check";
@@ -79,12 +70,7 @@ import { REDIAL_GRACE_MS, Registry } from "./registry";
 import { sessionLiveness } from "./session-liveness";
 import { validateProjectPath } from "./discovery";
 import { matchSelector } from "./selectors";
-import {
-	SpawnSupervisor,
-	enrollSessionCredential,
-	releaseSessionCredential,
-	withCallbackEnv,
-} from "./supervisor";
+import { SpawnSupervisor } from "./supervisor";
 import { realpathOf } from "./worktrees";
 import type { FanoutDeps } from "./fanout";
 import { fanOut } from "./fanout";
@@ -133,11 +119,10 @@ import { materializeMissingSessionFiles, WakeMaterializeError } from "./wake-mat
 import {
 	createWorktree,
 	deleteWorktree,
-	mergeUnregisteredWorktrees,
+	resolveProjectRoot,
 	projectIdForCwd,
 	registerProjectMainEntry,
 	registerWorktreeEntry,
-	validateUnregisteredWorktree,
 	worktreeDeleteInfo,
 	WorktreeDirtyError,
 	WorktreeTargetExistsError,
@@ -375,83 +360,6 @@ class LocalCloneResourceDeleter implements WorkspaceResourceDeleter {
 		// init marker live under it. Remove it as a unit.
 		rmSync(realCwd, { recursive: true, force: true });
 	}
-}
-
-/** Default spawn-hook deadline (contract: 60s). */
-const HOOK_TIMEOUT_MS = 60_000;
-
-function sleep(ms: number): Promise<void> {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	setTimeout(resolve, ms);
-	return promise;
-}
-
-function readAllText(stream: ReadableStream<Uint8Array>): Promise<string> {
-	const reader = stream.getReader();
-	const decoder = new TextDecoder();
-	const pump = async (): Promise<string> => {
-		let buffer = "";
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
-		}
-		return buffer;
-	};
-	return pump().catch(() => "");
-}
-
-/**
- * Run `config.spawnHook` via `sh -c` with the provision env and a deadline.
- * The child is SIGKILLed on timeout. Exit 0 is success; a non-zero exit or
- * a timeout rejects with a 502 {@link HttpError} (stderr's last line in the
- * message on a non-zero exit).
- */
-export async function runSpawnHook(
-	hook: string,
-	env: Record<string, string>,
-	timeoutMs: number = HOOK_TIMEOUT_MS,
-): Promise<void> {
-	const child = Bun.spawn(["sh", "-c", hook], {
-		env: { ...process.env, ...env },
-		stdout: "ignore",
-		stderr: "pipe",
-	});
-	const stderr = readAllText(child.stderr);
-	const timedOut = await Promise.race([
-		child.exited.then(() => false),
-		sleep(timeoutMs).then(() => true),
-	]);
-	if (timedOut) {
-		child.kill("SIGKILL");
-		await child.exited.catch(() => {
-			// The exit promise may reject if the process was never reaped; ignore.
-		});
-		throw new HttpError(502, `spawn hook timed out after ${Math.round(timeoutMs / 1000)}s`);
-	}
-	const err = await stderr;
-	if (child.exitCode !== 0) {
-		const detail = err.trim().split("\n").at(-1);
-		throw new HttpError(502, `spawn hook exited ${child.exitCode}${detail ? `: ${detail}` : ""}`);
-	}
-}
-
-/**
- * Validate a session callback URL: https, or http only on a loopback host
- * (the daemon refuses any other plaintext URL). 400 otherwise.
- */
-function requireCallbackUrl(raw: string): string {
-	let url: URL;
-	try {
-		url = new URL(raw);
-	} catch {
-		throw new HttpError(400, `invalid callback URL: ${raw}`);
-	}
-	const loopbackHttp = url.protocol === "http:" && isLoopbackHost(url.hostname);
-	if (url.protocol !== "https:" && !loopbackHttp) {
-		throw new HttpError(400, `callback URL must be https (or http on loopback): ${raw}`);
-	}
-	return raw;
 }
 
 class FleetServerImpl implements FleetServer {
@@ -1217,17 +1125,9 @@ class FleetServerImpl implements FleetServer {
 					case "/ctl/omp-setup":
 						// Read-only probe for the web first-run panel. Never writes config.
 						return json(await checkOmpSetup());
-					case "/ctl/projects": {
-						// The registered set is the only project source (no root
-						// scanning). Each registered project also contributes its
-						// unregistered linked worktrees (deduped by realpath,
-						// roster cwds excluded).
-						const projects = await mergeUnregisteredWorktrees(
-							this.registry.projects(),
-							this.registry.list().map((entry) => entry.cwd),
-						);
-						return json({ projects, registered: this.registry.projects() });
-					}
+					case "/ctl/projects":
+						// The registered set is the only project source (no root scanning).
+						return json({ projects: this.registry.projects() });
 					case "/ctl/plugins":
 						// Installed-plugin list: unattached fleet, lock-file backed.
 						return await this.#pluginRoute(() => this.fleetPlugins.list());
@@ -1246,10 +1146,9 @@ class FleetServerImpl implements FleetServer {
 				}
 			}
 			if (req.method === "POST") {
-				// Create-new ({name, baseRef?, existingBranch?, start?}) or
-				// add-existing ({worktreePath, start?}) for one project.
+				// Create a worktree: {name, baseRef?, existingBranch?, start?}.
 				const worktreesMatch = PROJECT_WORKTREES_ROUTE.exec(path);
-				if (worktreesMatch) return await this.#handleCreateOrAddWorktree(req, worktreesMatch[1]);
+				if (worktreesMatch) return await this.#handleCreateWorktree(req, worktreesMatch[1]);
 				// Installed-plugin writes: POST /ctl/plugins/:name/{enabled|features|setting}.
 				const pluginWriteMatch = PLUGIN_WRITE_ROUTE.exec(path);
 				if (pluginWriteMatch) {
@@ -1265,10 +1164,6 @@ class FleetServerImpl implements FleetServer {
 						return await this.#handleCreateClone(req);
 					case "/ctl/spawn":
 						return await this.#handleSpawn(req);
-					case "/ctl/enroll":
-						return await this.#handleEnroll(req);
-					case "/ctl/provision":
-						return await this.#handleProvision(req);
 					// P6.1 clone lifecycle: ensure-running / wake for a
 					// provider-managed clone workspace (P8 UI rides later).
 					case "/ctl/start":
@@ -1431,7 +1326,7 @@ class FleetServerImpl implements FleetServer {
 			profileId: typeof body["profileId"] === "string" ? body["profileId"] : "",
 			source:
 				typeof body["source"] === "object" && body["source"] !== null
-					? (body["source"] as { local?: string; remote?: string })
+					? (body["source"] as CloneCreateInput["source"])
 					: undefined,
 			revision: typeof body["revision"] === "string" ? body["revision"] : undefined,
 			branch: typeof body["branch"] === "string" ? body["branch"] : undefined,
@@ -1479,20 +1374,15 @@ class FleetServerImpl implements FleetServer {
 
 	/**
 	 * POST /ctl/projects { path, start?, template?, labels? }: register the
-	 * project's realpath (registry.addProject validates + realpath-normalizes
-	 * and dedups). A path that is not an existing directory or git repo is
-	 * the registry's validation error surfaced as 400; a realpath that is
-	 * already registered dedups to the EXISTING project → 409 carrying it.
-	 * The project's default workspace is registered via
-	 * registerProjectMainEntry: a roster entry for the repo's main checkout
-	 * mapped to the repo CWD, never a linked worktree.
-	 *   - start:true → the main checkout is spawned (template/labels
-	 *     passthrough) and the fresh entry is tagged + returned as `entry`;
-	 *   - otherwise → the entry is created asleep (surfacing purely via the
-	 *     roster broadcast, wakeable via spawn_resume/attach).
+	 * main checkout behind `path`. resolveProjectRoot accepts a main checkout,
+	 * a linked worktree or a subdirectory; bare and non-git paths answer 400
+	 * with the reason. A checkout that is already registered answers
+	 * 200 { project, existing: true } and changes nothing. A new project
+	 * answers 201 { project, entry? }: its main-checkout roster entry comes
+	 * from registerProjectMainEntry, spawned only when start is true
+	 * (template/labels passthrough, returned as `entry`) and asleep otherwise.
 	 * Staged: registration happens first, so a failed spawn reports 500
 	 * (stage named in the message) but the project stays registered.
-	 * Returns 201 { project, entry? }.
 	 */
 	async #handleAddProject(req: Request): Promise<Response> {
 		const body = await readJson(req);
@@ -1503,25 +1393,20 @@ class FleetServerImpl implements FleetServer {
 		if (labels !== undefined && labels.some((label) => label.includes("\0"))) {
 			throw new HttpError(400, "labels must not contain NUL");
 		}
-		const before = this.registry.projects();
-		let project: RegisteredProject;
+		let mainPath: string;
 		try {
-			project = await this.registry.addProject(path);
+			mainPath = await resolveProjectRoot(path);
 		} catch (err) {
-			// Validation failure (missing dir / not a git repo) → 400.
 			throw new HttpError(400, err instanceof Error ? err.message : String(err));
 		}
-		if (before.some((p) => p.projectId === project.projectId)) {
-			return json({ error: `project already registered: ${project.projectId}`, project }, 409);
-		}
+		const { project, existing } = this.registry.addProject(mainPath);
+		if (existing) return json({ project, existing: true });
 		try {
 			const entry = await registerProjectMainEntry(this.registry, this.supervisor, project, {
 				start,
 				template,
 				labels,
 			});
-			// `entry` only when spawned: an asleep default workspace surfaces
-			// purely via the roster broadcast.
 			return json({ project, ...(start && entry ? { entry: toRosterEntry(entry) } : {}) }, 201);
 		} catch (err) {
 			// The project stays registered; the 500 names the stage.
@@ -1534,103 +1419,31 @@ class FleetServerImpl implements FleetServer {
 
 	/**
 	 * DELETE /ctl/projects/:projectId: deregister a project (never touches
-	 * disk); the never-started default workspace (a provably-empty roster
-	 * placeholder) is dropped with it. 409 when real roster entries still
-	 * reference it; the message names the blocking daemon ids
-	 * (registry.removeProject). Unknown ids → 404.
+	 * disk). A project with clone workspaces is refused with 409 naming them,
+	 * before anything is stopped. Otherwise each running row is stopped (its
+	 * pair closed, supervisor state pruned) and every row of the project is
+	 * dropped; transcripts stay on disk. Unknown ids → 404.
 	 */
 	async #handleRemoveProject(projectId: string): Promise<Response> {
-		try {
-			this.registry.removeProject(projectId);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			if (message.startsWith("unknown project id")) throw new HttpError(404, message);
-			throw new HttpError(409, message);
+		if (!this.registry.projects().some((p) => p.projectId === projectId)) {
+			throw new HttpError(404, `unknown project id: ${projectId}`);
 		}
+		const rows = this.registry.list().filter((entry) => entry.projectId === projectId);
+		const cloneIds = rows
+			.filter((entry) => entry.workspace?.kind === "clone")
+			.map((entry) => entry.daemonId);
+		if (cloneIds.length > 0) {
+			throw new HttpError(409, `project ${projectId} has clone workspaces: ${cloneIds.join(", ")}`);
+		}
+		for (const entry of rows) {
+			if (entry.status !== "asleep") {
+				await this.supervisor.prune(entry.daemonId);
+				this.#forgetPair(entry.daemonId);
+			}
+			this.#markStoreOrphanIfStored(entry);
+		}
+		this.registry.removeProject(projectId);
 		return json({ removed: projectId });
-	}
-
-	/**
-	 * POST /ctl/enroll { name, labels?, cwd?, callbackUrl? }: create a remote
-	 * roster entry and mint its callback credential. The token is returned
-	 * once; the session host runs `omp-web session` with it and dials the
-	 * callback URL. 201 with the public roster projection and the enrollment.
-	 */
-	async #handleEnroll(req: Request): Promise<Response> {
-		const body = await readJson(req);
-		const name = requireString(body, "name");
-		const labels = optionalLabels(body);
-		const cwd = optionalString(body, "cwd");
-		const callbackUrl = requireCallbackUrl(
-			optionalString(body, "callbackUrl") ?? this.#callbackUrl(),
-		);
-		const entry = this.registry.create({
-			name,
-			cwd: cwd ?? "",
-			project: cwd ? basename(cwd) : "",
-			labels: labels ?? [],
-			mode: "remote",
-			status: "connecting",
-		});
-		const enrollment = enrollSessionCredential(this.transport, this.registry, entry.daemonId);
-		this.#watchPair(entry.daemonId);
-		this.#attachLogStoreTap(entry.daemonId);
-		this.eventLog.add("info", "server", `enrolled ${entry.name} (${callbackUrl})`, entry.daemonId);
-		return json(
-			{
-				entry: toRosterEntry(entry),
-				enrollment: {
-					workspaceId: entry.daemonId,
-					generation: enrollment.generation,
-					token: enrollment.credential,
-					callbackUrl,
-				},
-			},
-			201,
-		);
-	}
-
-	/**
-	 * POST /ctl/provision { name, labels? }: create an enrolled remote entry
-	 * and run `config.spawnHook` via `sh -c` with the provision env
-	 * (OMP_HOOK_NAME / OMP_HOOK_LABELS plus the callback vars). Hook exit 0
-	 * is success; any failure removes the entry and revokes its credential.
-	 * 400 when no hook is configured; 502 on hook failure or timeout.
-	 */
-	async #handleProvision(req: Request): Promise<Response> {
-		const hook = this.config.spawnHook;
-		if (hook === undefined || hook === "") {
-			throw new HttpError(400, "no spawn hook configured");
-		}
-		const callbackUrl = requireCallbackUrl(this.#callbackUrl());
-		const body = await readJson(req);
-		const name = requireString(body, "name");
-		const labels = optionalLabels(body);
-		const entry = this.registry.create({
-			name,
-			cwd: "",
-			project: "",
-			labels: labels ?? [],
-			mode: "remote",
-			status: "connecting",
-		});
-		const enrollment = enrollSessionCredential(this.transport, this.registry, entry.daemonId);
-		this.#watchPair(entry.daemonId);
-		this.#attachLogStoreTap(entry.daemonId);
-		const env = withCallbackEnv(
-			{ OMP_HOOK_NAME: name, OMP_HOOK_LABELS: (labels ?? []).join(",") },
-			{ url: callbackUrl, daemonId: entry.daemonId, enrollment },
-		);
-		try {
-			await runSpawnHook(hook, env);
-		} catch (err) {
-			releaseSessionCredential(this.transport, this.registry, entry.daemonId);
-			this.#forgetPair(entry.daemonId);
-			this.registry.remove(entry.daemonId);
-			throw err;
-		}
-		this.eventLog.add("info", "server", `provisioned ${entry.name} (spawn hook)`, entry.daemonId);
-		return json(toRosterEntry(entry));
 	}
 
 	async #handleStop(req: Request): Promise<Response> {
@@ -1645,13 +1458,8 @@ class FleetServerImpl implements FleetServer {
 				// the single lifecycle owner (desiredState stopped, status
 				// asleep, enrollment revoked). Never the legacy paths.
 				await this.lifecycle.stopClone(entry.daemonId);
-			} else if (entry.mode === "spawned") {
-				await this.supervisor.stop(entry.daemonId);
 			} else {
-				// Remote entries have no child: stop shuts the session down over
-				// the pair if live, then revokes the enrollment.
 				await this.supervisor.stop(entry.daemonId);
-				this.eventLog.add("info", "server", `stopped (${entry.mode})`, entry.daemonId);
 			}
 			stopped.push(entry.daemonId);
 		}
@@ -1663,7 +1471,8 @@ class FleetServerImpl implements FleetServer {
 	 * between git-state poll ticks (git worktree remove run outside the
 	 * fleet). Mirror #handleRemove's eviction: prune/drop + registry.remove
 	 * (the roster broadcast rides registry.onChange automatically), then
-	 * announce ONE worktree_removed toast. Never fired for UI-initiated
+	 * announce ONE worktree_removed toast when the row had a session. Never fired
+	 * for UI-initiated
 	 * delete_worktree/remove paths, which evict directly and must not toast.
 	 */
 	async #onWorktreeVanished(entry: RegistryEntry): Promise<void> {
@@ -1693,11 +1502,15 @@ class FleetServerImpl implements FleetServer {
 			// but this hook can only fire during git-state polling, which
 			// starts after the edge assignment, so optional chaining guards any
 			// earlier synchronous trigger regardless.
-			this.edge?.announceWorktreeRemoved({
-				daemonId: entry.daemonId,
-				name: entry.name,
-				cwd: entry.cwd,
-			});
+			// A row that never ran has no transcript to lose, so its eviction
+			// stays silent; only a row with a session gets the toast.
+			if (entry.lastSessionFile !== undefined) {
+				this.edge?.announceWorktreeRemoved({
+					daemonId: entry.daemonId,
+					name: entry.name,
+					cwd: entry.cwd,
+				});
+			}
 		} finally {
 			this.#evictingWorktrees.delete(entry.daemonId);
 		}
@@ -1847,81 +1660,46 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * POST /ctl/projects/:projectId/worktrees. Two shapes: create-new
-	 * `{ name, baseRef?, existingBranch?, start? }` (git worktree add under
-	 * workspaceDir, lazily creating the workspace root) and add-existing
-	 * `{ worktreePath, start? }` (a discovered-but-unregistered linked
-	 * worktree of the project). Both register a roster entry (mode
-	 * "spawned", projectId + worktreeOf tagged) and spawn a daemon only when
-	 * `start` is true. Staged: a failure at any stage names the stage and
-	 * leaves prior stages intact (a created-but-unspawned worktree shows up
-	 * in discovery / the Add-existing tab).
+	 * POST /ctl/projects/:projectId/worktrees { name, baseRef?, existingBranch?, start? }:
+	 * git worktree add under workspaceDir (lazily creating the workspace root),
+	 * then the roster row (projectId + worktreeOf tagged), spawned only when
+	 * start is true. Returns 201 { entry }. Staged: a failure names its stage;
+	 * a created worktree that never gets a row still surfaces via the git-state sync.
 	 */
-	async #handleCreateOrAddWorktree(req: Request, projectId: string): Promise<Response> {
+	async #handleCreateWorktree(req: Request, projectId: string): Promise<Response> {
 		const body = await readJson(req);
 		const project = this.registry.projects().find((p) => p.projectId === projectId);
 		if (!project) throw new HttpError(404, `unknown project: ${projectId}`);
-		const worktreePath = optionalString(body, "worktreePath");
+		const name = requireString(body, "name");
 		const start = optionalBoolean(body, "start");
-		if (worktreePath === undefined) {
-			// Create-new.
-			const name = requireString(body, "name");
-			let created: CreateWorktreeResult;
-			try {
-				created = await createWorktree(project, name, {
-					workspaceDir: this.config.workspaceDir,
-					baseRef: optionalString(body, "baseRef"),
-					existingBranch: optionalString(body, "existingBranch"),
-				});
-			} catch (err) {
-				const status = err instanceof WorktreeTargetExistsError ? 409 : 400;
-				throw new HttpError(
-					status,
-					`create worktree failed: ${err instanceof Error ? err.message : String(err)}`,
-				);
-			}
-			let entry: RegistryEntry;
-			try {
-				entry = await registerWorktreeEntry(this.registry, this.supervisor, project, created.path, {
-					start,
-					branchCreated: created.baseRef !== undefined,
-				});
-			} catch (err) {
-				throw new HttpError(
-					500,
-					`spawn failed: ${err instanceof Error ? err.message : String(err)}`,
-				);
-			}
-			this.eventLog.add(
-				"info",
-				"server",
-				`worktree created ${created.path} (${created.branch})`,
-				entry.daemonId,
-			);
-			return json({ entry: toRosterEntry(entry) }, 201);
-		}
-		// Add-existing: validate it is an unregistered linked worktree of the project.
-		let resolved: string;
+		let created: CreateWorktreeResult;
 		try {
-			resolved = await validateUnregisteredWorktree(
-				worktreePath,
-				project,
-				this.registry.list().map((e) => e.cwd),
-			);
+			created = await createWorktree(project, name, {
+				workspaceDir: this.config.workspaceDir,
+				baseRef: optionalString(body, "baseRef"),
+				existingBranch: optionalString(body, "existingBranch"),
+			});
 		} catch (err) {
-			const status =
-				err instanceof Error && err.message.startsWith("worktree already registered") ? 409 : 400;
-			throw new HttpError(status, err instanceof Error ? err.message : String(err));
+			const status = err instanceof WorktreeTargetExistsError ? 409 : 400;
+			throw new HttpError(
+				status,
+				`create worktree failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
 		}
 		let entry: RegistryEntry;
 		try {
-			entry = await registerWorktreeEntry(this.registry, this.supervisor, project, resolved, {
+			entry = await registerWorktreeEntry(this.registry, this.supervisor, project, created.path, {
 				start,
 			});
 		} catch (err) {
 			throw new HttpError(500, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
-		this.eventLog.add("info", "server", `worktree registered ${resolved}`, entry.daemonId);
+		this.eventLog.add(
+			"info",
+			"server",
+			`worktree created ${created.path} (${created.branch})`,
+			entry.daemonId,
+		);
 		return json({ entry: toRosterEntry(entry) }, 201);
 	}
 
@@ -2178,7 +1956,7 @@ class FleetServerImpl implements FleetServer {
 	 * the current default creation directory has no role in deletion.
 	 */
 	async #handleDeleteWorktree(req: Request, daemonId: string): Promise<Response> {
-		// The body is optional (`{ deleteBranch?: boolean }`); a bodyless
+		// The body is optional (`{ deleteBranch?: string }`); a bodyless
 		// DELETE must not 400.
 		const raw = await req.text();
 		let body: Record<string, unknown>;
@@ -2194,7 +1972,7 @@ class FleetServerImpl implements FleetServer {
 				throw new HttpError(400, "request body must be a JSON object");
 			}
 		}
-		const deleteBranch = optionalBoolean(body, "deleteBranch");
+		const deleteBranch = optionalString(body, "deleteBranch");
 		const entry = this.registry.get(daemonId);
 		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
 		const path = entry.cwd ?? "";

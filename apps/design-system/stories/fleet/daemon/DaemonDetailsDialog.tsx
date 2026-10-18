@@ -32,9 +32,9 @@ export default defineStory({
 			),
 		},
 		{
-			name: "Remote error",
+			name: "Session error",
 			render: (ctx) => (
-				<DaemonDetailsDialog daemon={rosterDaemon.remoteError} onClose={ctx.close} />
+				<DaemonDetailsDialog daemon={rosterDaemon.sessionError} onClose={ctx.close} />
 			),
 		},
 	],

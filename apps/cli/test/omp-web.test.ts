@@ -13,8 +13,6 @@ describe("classifyCommand", () => {
 		[["profiles"], "fleet"],
 		[["spawn"], "fleet"],
 		[["add-repo"], "fleet"],
-		[["enroll"], "fleet"],
-		[["provision"], "fleet"],
 		[["add-clone"], "fleet"],
 		[["start"], "fleet"],
 		[["stop"], "fleet"],

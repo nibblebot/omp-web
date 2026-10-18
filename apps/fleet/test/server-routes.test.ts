@@ -1,8 +1,7 @@
 /**
  * Control-plane route tests for fleet/server.ts ("fleet control plane"
  * describe): the /ctl/* routes exercised over loopback HTTP against a real
- * fleet server (see server.testkit). No omp-session children are spawned, and
- * enrolled entries are never paired here.
+ * fleet server (see server.testkit). No omp-session children are spawned.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -60,33 +59,24 @@ describe("fleet control plane", () => {
 		expect(body).toHaveLength(0);
 	});
 
-	test("GET /ctl/projects returns registered projects and their unregistered worktrees", async () => {
-		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/projects`);
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as { projects?: unknown; registered?: unknown };
-		expect(Array.isArray(body.projects)).toBe(true);
-		expect(body.projects).toHaveLength(0);
-		expect(Array.isArray(body.registered)).toBe(true);
-		expect(body.registered).toHaveLength(0);
-
-		// A registered project (real git repo) appears in `registered`;
-		// `projects` stays empty; it lists only unregistered linked
-		// worktrees now that root scanning is gone.
+	test("GET /ctl/projects returns {projects: RegisteredProject[]} with registered checkouts", async () => {
 		const repoDir = join(tmp, "registered-repo");
 		mkdirSync(repoDir, { recursive: true });
 		await gitInit(repoDir);
-		const project = await server.registry.addProject(repoDir);
+		const added = await postJson(server.port, "/ctl/projects", { path: repoDir });
+		expect(added.status).toBe(201);
+		const addedBody = (await added.json()) as { project: { projectId: string } };
 		try {
-			const merged = (await (
-				await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)
-			).json()) as {
-				projects: unknown[];
-				registered: Array<{ projectId: string }>;
-			};
-			expect(merged.registered).toHaveLength(1);
-			expect(merged.registered[0].projectId).toBe(project.projectId);
+			const res = await fetch(`http://127.0.0.1:${server.port}/ctl/projects`);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { projects?: unknown };
+			expect(Object.keys(body)).toEqual(["projects"]);
+			expect(Array.isArray(body.projects)).toBe(true);
+			const projects = body.projects as Array<{ projectId: string; path: string }>;
+			const found = projects.find((p) => p.projectId === addedBody.project.projectId);
+			expect(found?.path).toBe(realpathSync(repoDir));
 		} finally {
-			server.registry.removeProject(project.projectId);
+			server.registry.removeProject(addedBody.project.projectId);
 		}
 	});
 
@@ -118,14 +108,13 @@ describe("fleet control plane", () => {
 			project: basename(repoDir),
 			projectId: body.project!.projectId,
 			labels: [],
-			mode: "spawned",
 			status: "asleep",
 		});
 		// The registered project shows up in GET /ctl/projects.
 		const merged = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as {
-			registered: Array<{ projectId: string }>;
+			projects: Array<{ projectId: string }>;
 		};
-		expect(merged.registered.some((p) => p.projectId === body.project!.projectId)).toBe(true);
+		expect(merged.projects.some((p) => p.projectId === body.project!.projectId)).toBe(true);
 		// Cleanup: the never-started default workspace is a provably-empty
 		// placeholder, so the DELETE drops it with the project: a straight 200,
 		// not the 409 a real referencing daemon gets.
@@ -136,7 +125,7 @@ describe("fleet control plane", () => {
 		expect(del.status).toBe(200);
 	});
 
-	test("POST /ctl/projects dedupes an already-registered realpath to 409 with the existing project", async () => {
+	test("POST /ctl/projects on an already-registered checkout answers 200 existing:true and does not spawn", async () => {
 		const repoDir = join(tmp, "ctl-dedup-repo");
 		mkdirSync(repoDir, { recursive: true });
 		await gitInit(repoDir);
@@ -144,20 +133,20 @@ describe("fleet control plane", () => {
 		expect(first.status).toBe(201);
 		const firstBody = (await first.json()) as { project: { projectId: string } };
 		try {
-			// Same realpath again (also via a trailing-slash variant): dedup → 409 + project.
+			const rosterBefore = server.registry.list().length;
 			const dup = await postJson(server.port, "/ctl/projects", { path: repoDir });
-			expect(dup.status).toBe(409);
-			const dupBody = (await dup.json()) as { error?: string; project?: { projectId?: string } };
-			expect(dupBody.error).toContain("already registered");
-			expect(dupBody.error).toContain(firstBody.project.projectId);
+			expect(dup.status).toBe(200);
+			const dupBody = (await dup.json()) as {
+				existing?: boolean;
+				project?: { projectId?: string };
+			};
+			expect(dupBody.existing).toBe(true);
 			expect(dupBody.project?.projectId).toBe(firstBody.project.projectId);
-			// One registration only.
 			expect(
 				server.registry.projects().filter((p) => p.path === realpathSync(repoDir)),
 			).toHaveLength(1);
-			// The deduped POST creates NO second default workspace: the roster
-			// still holds exactly the first POST's main-checkout entry.
-			expect(server.registry.list().filter((e) => e.cwd === realpathSync(repoDir))).toHaveLength(1);
+			// No spawn: the deduped POST adds no roster entry.
+			expect(server.registry.list()).toHaveLength(rosterBefore);
 		} finally {
 			server.registry.removeProject(firstBody.project.projectId);
 		}
@@ -172,57 +161,68 @@ describe("fleet control plane", () => {
 		expect(body.error).toContain("not a git repository");
 	});
 
-	test("DELETE /ctl/projects/:id 409s naming daemons that still reference the project", async () => {
-		const repoDir = join(tmp, "ctl-blocked-repo");
+	test("DELETE /ctl/projects/:id removes the project and its non-clone rows", async () => {
+		const repoDir = join(tmp, "ctl-cascade-repo");
 		mkdirSync(repoDir, { recursive: true });
 		await gitInit(repoDir);
 		const res = await postJson(server.port, "/ctl/projects", { path: repoDir });
 		expect(res.status).toBe(201);
 		const body = (await res.json()) as { project: { projectId: string } };
-		// A daemon referencing the project blocks removal (no cascade). This
-		// entry is NOT a provably-empty placeholder: a real session file
-		// means it has transcripts, so it must block.
-		const ref = server.registry.create({
-			name: "ref",
+		const projectId = body.project.projectId;
+		const row = server.registry.create({
+			name: "row",
 			cwd: realpathSync(repoDir),
 			project: basename(repoDir),
 			labels: [],
-			mode: "spawned",
 			template: "test",
 			status: "asleep",
-			lastSessionFile: join(tmp, "ref-session.json"),
-			projectId: body.project.projectId,
+			projectId,
+		});
+		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/projects/${projectId}`, {
+			method: "DELETE",
+		});
+		expect(del.status).toBe(200);
+		const delBody = (await del.json()) as { removed?: unknown };
+		expect(delBody.removed).toBe(projectId);
+		expect(server.registry.projects().some((p) => p.projectId === projectId)).toBe(false);
+		expect(server.registry.get(row.daemonId)).toBeUndefined();
+	});
+
+	test("DELETE /ctl/projects/:id 409s naming clone workspaces and changes nothing", async () => {
+		const repoDir = join(tmp, "ctl-clone-blocked-repo");
+		mkdirSync(repoDir, { recursive: true });
+		await gitInit(repoDir);
+		const res = await postJson(server.port, "/ctl/projects", { path: repoDir });
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { project: { projectId: string } };
+		const projectId = body.project.projectId;
+		const clone = server.registry.create({
+			name: "clone",
+			cwd: realpathSync(repoDir),
+			project: basename(repoDir),
+			labels: [],
+			template: "test",
+			status: "asleep",
+			projectId,
+			workspace: { kind: "clone", projectId, desiredState: "stopped" },
 		});
 		try {
-			const del = await fetch(
-				`http://127.0.0.1:${server.port}/ctl/projects/${body.project.projectId}`,
-				{ method: "DELETE" },
-			);
+			const del = await fetch(`http://127.0.0.1:${server.port}/ctl/projects/${projectId}`, {
+				method: "DELETE",
+			});
 			expect(del.status).toBe(409);
 			const delBody = (await del.json()) as { error?: string };
-			expect(delBody.error).toContain("in use by daemons");
-			expect(delBody.error).toContain(ref.daemonId);
-			expect(server.registry.projects().some((p) => p.projectId === body.project.projectId)).toBe(
-				true,
+			expect(delBody.error).toContain(
+				`project ${projectId} has clone workspaces: ${clone.daemonId}`,
 			);
-			// Once the daemon is gone, removal succeeds.
-			server.registry.remove(ref.daemonId);
-			const ok = await fetch(
-				`http://127.0.0.1:${server.port}/ctl/projects/${body.project.projectId}`,
-				{ method: "DELETE" },
-			);
-			expect(ok.status).toBe(200);
-			const okBody = (await ok.json()) as { removed?: unknown };
-			expect(okBody.removed).toBe(body.project.projectId);
-			expect(server.registry.projects().some((p) => p.projectId === body.project.projectId)).toBe(
-				false,
-			);
+			expect(server.registry.projects().some((p) => p.projectId === projectId)).toBe(true);
+			expect(server.registry.get(clone.daemonId)).toBeDefined();
 		} finally {
-			server.registry.remove(ref.daemonId);
+			server.registry.remove(clone.daemonId);
 			try {
-				server.registry.removeProject(body.project.projectId);
+				server.registry.removeProject(projectId);
 			} catch {
-				// Already removed by the happy path above.
+				// Already removed.
 			}
 		}
 	});
@@ -404,13 +404,6 @@ describe("fleet control plane", () => {
 		expect(bodyLabels.error).toContain("NUL");
 	});
 
-	test("POST /ctl/provision 400s when no spawnHook is configured", async () => {
-		const res = await postJson(server.port, "/ctl/provision", { name: "sandbox" });
-		expect(res.status).toBe(400);
-		const body = (await res.json()) as { error?: string };
-		expect(body.error).toContain("spawn hook");
-	});
-
 	test("POST /ctl/add is gone (404)", async () => {
 		const res = await postJson(server.port, "/ctl/add", {
 			name: "gone",
@@ -420,49 +413,20 @@ describe("fleet control plane", () => {
 		expect(res.status).toBe(404);
 	});
 
-	test("POST /ctl/enroll 400s on invalid JSON", async () => {
-		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/enroll`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: "{not json",
-		});
-		expect(res.status).toBe(400);
-	});
-
-	test("POST /ctl/enroll 400s on a non-loopback http callback URL", async () => {
-		const res = await postJson(server.port, "/ctl/enroll", {
-			name: "remote-http",
-			callbackUrl: "http://example.com:9000",
-		});
-		expect(res.status).toBe(400);
-		const body = (await res.json()) as { error?: string };
-		expect(body.error).toContain("callback URL must be https");
-	});
-
-	test("POST /ctl/enroll 201 returns the roster entry and a callback enrollment; the entry carries no credential", async () => {
-		const res = await postJson(server.port, "/ctl/enroll", {
+	test("registry.create adds a connecting row that GET /ctl/sessions reports", () => {
+		entry = server.registry.create({
 			name: "enrolled",
+			cwd: join(tmp, "spawn-cwd"),
+			project: "fake-proj",
 			labels: ["env=test"],
+			template: "test",
+			status: "connecting",
 		});
-		expect(res.status).toBe(201);
-		const body = (await res.json()) as {
-			entry: RegistryEntry;
-			enrollment: { workspaceId: string; generation: number; token: string; callbackUrl: string };
-		};
-		expect(body.entry.mode).toBe("remote");
-		expect(body.entry.name).toBe("enrolled");
-		expect(body.entry.labels).toEqual(["env=test"]);
-		expect(body.entry.status).toBe("connecting");
-		expect(body.entry).not.toHaveProperty("token");
-		expect(body.entry).not.toHaveProperty("workspace");
-		expect(body.enrollment.workspaceId).toBe(body.entry.daemonId);
-		expect(body.enrollment.generation).toBe(1);
-		expect(body.enrollment.token).toMatch(/^[0-9a-f]{64}$/);
-		expect(body.enrollment.callbackUrl).toMatch(/^http:\/\/.+:\d+$/);
-		entry = body.entry;
+		expect(entry.labels).toEqual(["env=test"]);
+		expect(entry.status).toBe("connecting");
 	});
 
-	test("sessions list reflects the registry after enroll", async () => {
+	test("GET /ctl/sessions lists the registered row", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as RegistryEntry[];
@@ -497,24 +461,8 @@ describe("fleet control plane", () => {
 		expect(found?.status).toBe("connecting");
 		expect(found?.registeredAt).toBe(server.registry.get(entry.daemonId)?.registeredAt);
 		expect(found?.uptimeSec).toBeGreaterThanOrEqual(0);
-		expect(found?.pair).toMatchObject({ enrolled: true, paired: false });
-		// The log holds the lifecycle trail for this daemon (enrollment landed in the ring).
-		const log = body.log as Array<{
-			source?: string;
-			daemonId?: string;
-			level?: string;
-			message?: string;
-		}>;
-		expect(Array.isArray(log)).toBe(true);
-		expect(log.length).toBeGreaterThan(0);
-		expect(
-			log.some(
-				(event) =>
-					event.source === "server" &&
-					event.daemonId === entry.daemonId &&
-					event.message?.startsWith(`enrolled ${entry.name} (`) === true,
-			),
-		).toBe(true);
+		expect(found?.pair).toMatchObject({ enrolled: false, paired: false });
+		expect(Array.isArray(body.log)).toBe(true);
 	});
 
 	test("POST /ctl/prompt with an unknown selector 404s", async () => {
@@ -527,7 +475,7 @@ describe("fleet control plane", () => {
 		expect(res.status).toBe(404);
 	});
 
-	test("POST /ctl/stop marks a remote entry asleep", async () => {
+	test("POST /ctl/stop marks a registered entry asleep", async () => {
 		const res = await postJson(server.port, "/ctl/stop", { selector: entry.daemonId });
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { stopped?: unknown };
@@ -540,10 +488,15 @@ describe("fleet control plane", () => {
 		expect(res.status).toBe(404);
 	});
 
-	test("POST /ctl/remove evicts an enrolled remote entry from the registry", async () => {
-		const res = await postJson(server.port, "/ctl/enroll", { name: "removable" });
-		expect(res.status).toBe(201);
-		const added = ((await res.json()) as { entry: RegistryEntry }).entry;
+	test("POST /ctl/remove evicts a registry entry", async () => {
+		const added = server.registry.create({
+			name: "removable",
+			cwd: join(tmp, "spawn-cwd"),
+			project: "fake-proj",
+			labels: [],
+			template: "test",
+			status: "asleep",
+		});
 		const del = await postJson(server.port, "/ctl/remove", { selector: added.daemonId });
 		expect(del.status).toBe(200);
 		const body = (await del.json()) as { removed?: unknown };

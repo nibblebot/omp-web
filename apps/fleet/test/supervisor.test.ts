@@ -12,7 +12,7 @@
  */
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Server } from "bun";
 import { CALLBACK_TRANSPORT_STREAM_ID } from "#lib/wire/callback-protocol";
@@ -333,7 +333,7 @@ describe("SpawnSupervisor", () => {
 		expect(mainEntry.worktreeOf).toBeUndefined();
 	});
 
-	test("backfillWorktrees tags untagged local entries; remote entries are never probed", async () => {
+	test("backfillWorktrees tags untagged local entries and leaves the main checkout untagged", async () => {
 		const { main, wt } = makeWorktreeRepo(tempDir("omp-session-sup-backfill-"));
 		const { registry, supervisor } = await makeHarness(makeConfig("/nonexistent-child.sh"), {
 			restartMax: 0,
@@ -343,30 +343,18 @@ describe("SpawnSupervisor", () => {
 			cwd: wt,
 			project: basename(wt),
 			labels: [],
-			mode: "spawned",
 			template: "test",
-		});
-		// A remote entry pointing at a local worktree path must stay untagged:
-		// its cwd lives on another host.
-		const remote = registry.create({
-			name: "r",
-			cwd: wt,
-			project: "r",
-			labels: [],
-			mode: "remote",
 		});
 		const mainEntry = registry.create({
 			name: "m",
 			cwd: main,
 			project: "main-repo",
 			labels: [],
-			mode: "spawned",
 			template: "test",
 		});
 
 		await supervisor.backfillWorktrees();
 		expect(registry.get(spawned.daemonId)!.worktreeOf).toBe("main-repo");
-		expect(registry.get(remote.daemonId)!.worktreeOf).toBeUndefined();
 		expect(registry.get(mainEntry.daemonId)!.worktreeOf).toBeUndefined();
 	});
 
@@ -380,7 +368,6 @@ describe("SpawnSupervisor", () => {
 		);
 
 		const entry = await fx.supervisor.spawn({ cwd: fx.dir, labels: ["env=prod"] });
-		expect(entry.mode).toBe("spawned");
 		expect(entry.project).toBe(basename(fx.dir));
 		const env = await waitForEnv(fx.envFile, 1);
 		expect(env.OMP_SESSION_CALLBACK_URL).toBe(fx.callbackUrl);
@@ -635,7 +622,6 @@ describe("SpawnSupervisor", () => {
 			cwd: fx.dir,
 			project: "placeholder",
 			labels: [],
-			mode: "spawned",
 			status: "asleep",
 		});
 		expect(entry.template).toBeUndefined();
@@ -1144,7 +1130,6 @@ describe("SpawnSupervisor", () => {
 			cwd: projectDir,
 			project: basename(projectDir),
 			labels: [],
-			mode: "spawned",
 			status: "asleep",
 		});
 		expect(asleep.template).toBeUndefined();
@@ -1167,31 +1152,20 @@ describe("git-state polling", () => {
 		return makeHarness(makeConfig("/nonexistent-child.sh"), { restartMax: 0, ...(opts ?? {}) });
 	}
 
-	test("probes local entries only on change; remote and empty-cwd entries are never probed", async () => {
+	test("probes local entries only on change; empty-cwd entries are never probed", async () => {
 		const { registry, supervisor } = await pollSupervisor();
 		const local = registry.create({
 			name: "l",
 			cwd: "/srv/repos/acme",
 			project: "acme",
 			labels: [],
-			mode: "spawned",
 			template: "test",
-		});
-		// Same cwd as the local entry: if the poll ever probed the remote
-		// entry the fake exec would see its cwd too.
-		registry.create({
-			name: "r",
-			cwd: "/srv/repos/acme",
-			project: "acme",
-			labels: [],
-			mode: "remote",
 		});
 		registry.create({
 			name: "e",
 			cwd: "",
 			project: "",
 			labels: [],
-			mode: "remote",
 		});
 		let onChange = 0;
 		registry.onChange = () => {
@@ -1220,7 +1194,7 @@ describe("git-state polling", () => {
 			branch: "main",
 			git: { added: 0, modified: 0, deleted: 0, untracked: 1, linesAdded: 10, linesDeleted: 2 },
 		});
-		// Remote + empty-cwd entries are never probed with local git.
+		// Empty-cwd entries are never probed with local git.
 		expect(calls.length).toBeGreaterThanOrEqual(4);
 		for (const call of calls) {
 			expect(call.cwd).toBe("/srv/repos/acme");
@@ -1232,7 +1206,6 @@ describe("git-state polling", () => {
 		}
 		expect(registry.get("d2")?.worktreeOf).toBeUndefined();
 		expect(registry.get("d2")?.git).toBeUndefined();
-		expect(registry.get("d3")?.git).toBeUndefined();
 	});
 
 	test("a changed state updates the registry and persists to disk", async () => {
@@ -1245,7 +1218,6 @@ describe("git-state polling", () => {
 			cwd: "/srv/repos/acme",
 			project: "acme",
 			labels: [],
-			mode: "spawned",
 			template: "test",
 		});
 		let onChange = 0;
@@ -1333,7 +1305,6 @@ describe("git-state polling", () => {
 			cwd: "/srv/repos/acme",
 			project: "acme",
 			labels: [],
-			mode: "spawned",
 			template: "test",
 			lastSessionFile: sessionFile,
 		});
@@ -1396,7 +1367,6 @@ describe("git-state polling", () => {
 			cwd: "/srv/repos/acme",
 			project: "acme",
 			labels: [],
-			mode: "spawned",
 			template: "test",
 			lastSessionFile: sessionFile,
 		});
@@ -1454,7 +1424,6 @@ describe("git-state polling", () => {
 			cwd: "/srv/repos/acme",
 			project: "acme",
 			labels: [],
-			mode: "spawned",
 			template: "test",
 		});
 		let onChange = 0;
@@ -1543,7 +1512,6 @@ describe("git-state polling", () => {
 			cwd: ghost,
 			project: "acme",
 			labels: [],
-			mode: "spawned",
 			template: "test",
 			worktreeOf: "acme",
 			branch: "main",
@@ -1565,7 +1533,6 @@ describe("git-state polling", () => {
 			name: "wt",
 			cwd: ghost,
 			worktreeOf: "acme",
-			mode: "spawned",
 		});
 		// Detection only: the supervisor itself never removes the entry, and
 		// the hook path returned BEFORE the branch/git clearing.
@@ -1594,7 +1561,6 @@ describe("git-state polling", () => {
 			cwd,
 			project: "acme",
 			labels: [],
-			mode: "spawned",
 			template: "test",
 			worktreeOf: "acme",
 		});
@@ -1646,7 +1612,6 @@ describe("git-state polling", () => {
 			cwd: ghost,
 			project: "acme",
 			labels: [],
-			mode: "spawned",
 			template: "test",
 		});
 		const { exec, calls } = fakeGitPhases([
@@ -1661,5 +1626,141 @@ describe("git-state polling", () => {
 		await waitFor(() => (calls.length >= startedAt + 2 ? "ticks" : null), 5000, "poll ticks");
 		expect(fired).toHaveLength(0);
 		expect(registry.list().length).toBe(1); // still registered
+	});
+});
+
+describe("project sync", () => {
+	/** Supervisor whose child would fail: sync tests never spawn. */
+	function syncHarness(): Promise<Harness> {
+		return makeHarness(makeConfig("/nonexistent-child.sh"), { restartMax: 0 });
+	}
+	const okStatus: GitResult = { exitCode: 0, stderr: "", stdout: "## main\n" };
+	const noDiff: GitResult = { exitCode: 0, stderr: "", stdout: "" };
+
+	test("a pass registers the main checkout and each linked worktree", async () => {
+		const { main, wt } = makeWorktreeRepo(tempDir("omp-session-sync-register-"));
+		const { registry, supervisor } = await syncHarness();
+		const { project } = registry.addProject(main);
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+
+		await waitFor(() => (registry.list().length === 2 ? true : null), 5000, "sync registration");
+		const mainRow = registry.list().find((e) => e.worktreeOf === undefined)!;
+		const linked = registry.list().find((e) => e.worktreeOf !== undefined)!;
+		expect(mainRow).toMatchObject({ projectId: project.projectId, workspace: { kind: "direct" } });
+		expect(linked).toMatchObject({
+			cwd: wt,
+			projectId: project.projectId,
+			worktreeOf: project.name,
+			status: "asleep",
+			workspace: { kind: "worktree", projectId: project.projectId },
+		});
+	});
+
+	test("prunable linked worktrees are skipped", async () => {
+		const { main, wt } = makeWorktreeRepo(tempDir("omp-session-sync-prunable-"));
+		rmSync(wt, { recursive: true, force: true });
+		const { registry, supervisor } = await syncHarness();
+		registry.addProject(main);
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+
+		// The main row's probe runs after the registration step of the same pass.
+		await waitFor(
+			() => (registry.list().some((e) => e.branch === "main") ? true : null),
+			5000,
+			"pass done",
+		);
+		expect(registry.list()).toHaveLength(1);
+		expect(registry.list()[0]!.cwd).toBe(main);
+	});
+
+	test("a locked linked worktree mirrors worktreeLocked onto its row", async () => {
+		const { main, wt } = makeWorktreeRepo(tempDir("omp-session-sync-locked-"));
+		gitSync(["worktree", "lock", wt], main);
+		const { registry, supervisor } = await syncHarness();
+		registry.addProject(main);
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+
+		await waitFor(
+			() =>
+				registry.list().some((e) => e.worktreeOf !== undefined && e.worktreeLocked === true)
+					? true
+					: null,
+			5000,
+			"locked row",
+		);
+	});
+
+	test("a missing main checkout marks the project missing and keeps it registered", async () => {
+		const { main } = makeWorktreeRepo(tempDir("omp-session-sync-missing-"));
+		const { registry, supervisor } = await syncHarness();
+		registry.addProject(main);
+		rmSync(main, { recursive: true, force: true });
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+
+		await waitFor(
+			() => (registry.projects()[0]?.missing === true ? true : null),
+			5000,
+			"missing flag",
+		);
+		expect(registry.projects()).toHaveLength(1);
+	});
+
+	test("syncNow coalesces requests that arrive during a pass into one follow-up pass", async () => {
+		const dir = tempDir("omp-session-sync-coalesce-");
+		const { registry, supervisor } = await syncHarness();
+		registry.create({ name: "r", cwd: dir, project: "r", labels: [], status: "ready" });
+		const { exec, calls } = fakeGitPhases([[okStatus, noDiff]]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+		supervisor.syncNow();
+		supervisor.syncNow();
+
+		// One probe is two git calls: the first pass plus exactly one follow-up.
+		await waitFor(() => (calls.length >= 4 ? true : null), 5000, "two passes");
+		await sleep(100);
+		expect(calls).toHaveLength(4);
+	});
+
+	test("passes never overlap: git calls from one pass finish before the next pass starts", async () => {
+		const dir = tempDir("omp-session-sync-overlap-");
+		const { registry, supervisor } = await syncHarness();
+		registry.create({ name: "o", cwd: dir, project: "o", labels: [], status: "ready" });
+		let inFlight = 0;
+		let maxInFlight = 0;
+		const calls: string[] = [];
+		const exec: GitRunner = async (args) => {
+			inFlight += 1;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			calls.push(args[0] ?? "");
+			await sleep(40);
+			inFlight -= 1;
+			return args[0] === "status" ? okStatus : noDiff;
+		};
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+		supervisor.syncNow();
+		supervisor.syncNow();
+		await waitFor(() => (calls.length >= 4 ? true : null), 5000, "two passes");
+		await sleep(100);
+		expect(maxInFlight).toBe(1);
+		expect(calls).toHaveLength(4);
+	});
+
+	test("asleep rows are probed at most once per 60s; live rows on every pass", async () => {
+		const asleepDir = tempDir("omp-session-sync-asleep-");
+		const liveDir = tempDir("omp-session-sync-live-");
+		const { registry, supervisor } = await syncHarness();
+		registry.create({ name: "a", cwd: asleepDir, project: "a", labels: [], status: "asleep" });
+		registry.create({ name: "l", cwd: liveDir, project: "l", labels: [], status: "ready" });
+		const { exec, calls } = fakeGitPhases([[okStatus, noDiff]]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+		await waitFor(() => (calls.length === 4 ? true : null), 5000, "first pass");
+
+		supervisor.syncNow();
+		await waitFor(() => (calls.length === 6 ? true : null), 5000, "second pass");
+		expect(calls.filter((c) => c.cwd === asleepDir)).toHaveLength(2);
+		expect(calls.filter((c) => c.cwd === liveDir)).toHaveLength(4);
 	});
 });

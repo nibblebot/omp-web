@@ -4,7 +4,6 @@ import type { RegistryEntry } from "./registry";
 
 /** Prove local session liveness without dialing a session or changing its lock. */
 export function sessionLiveness(entry: RegistryEntry): "alive" | "dead" | "unknown" {
-	if (entry.mode === "remote") return "unknown";
 	if (entry.lastSessionFile && isAbsolute(entry.lastSessionFile)) {
 		// A freshly spawned, still-unpaired session can retain an older run's
 		// lastSessionFile and read as dead until it pairs. The pair listener

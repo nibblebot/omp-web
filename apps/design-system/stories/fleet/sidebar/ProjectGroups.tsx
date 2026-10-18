@@ -13,10 +13,24 @@ export default defineStory({
 	seed: () => seedRosterFleet(),
 	variants: [
 		{
-			name: "Projects with worktrees and remotes",
+			name: "Projects with worktrees and clones",
 			render: () => (
 				<div class="sidebar-list">
 					<ProjectGroups groups={rosterSidebarGroups} />
+				</div>
+			),
+		},
+		{
+			name: "Missing project",
+			render: () => (
+				<div class="sidebar-list">
+					<ProjectGroups
+						groups={rosterSidebarGroups.map((group) =>
+							group.project.name === "localaction"
+								? { ...group, project: { ...group.project, missing: true } }
+								: group,
+						)}
+					/>
 				</div>
 			),
 		},

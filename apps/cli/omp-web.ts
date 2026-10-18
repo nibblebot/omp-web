@@ -8,7 +8,7 @@
  * Routes:
  *
  *   omp-web [options] | omp-web control|ui|sessions|projects|profiles|spawn|
- *           add-repo|enroll|provision|add-clone|start|stop|remove|rm-project|
+ *           add-repo|add-clone|start|stop|remove|rm-project|
  *           add-worktree|rm-worktree|prompt|preflight
  *                                     → fleet control-plane CLI (apps/fleet/cli.ts;
  *                                       bare = control plane + UI)
@@ -38,8 +38,6 @@ const FLEET_SUBCOMMANDS: Record<string, true> = {
 	profiles: true,
 	spawn: true,
 	"add-repo": true,
-	enroll: true,
-	provision: true,
 	"add-clone": true,
 	start: true,
 	stop: true,
@@ -83,9 +81,9 @@ const USAGE = `usage: omp-web [options] | omp-web <command> [options]
   control                      control plane only, no UI (default port 4722)
   ui                           UI daemon: static UI + proxy to the control plane
                                (default port 4723)
-  sessions | projects          list roster entries / unregistered worktrees
+  sessions | projects          list sessions / registered projects
   profiles                     list provider profiles
-  spawn | add-repo | enroll | provision | add-clone | start | stop | remove
+  spawn | add-repo | add-clone | start | stop | remove
   rm-project | add-worktree | rm-worktree | prompt | preflight
                                fleet control plane (missing arguments print
                                the command's usage)

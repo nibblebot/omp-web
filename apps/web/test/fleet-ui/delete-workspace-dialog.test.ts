@@ -99,18 +99,29 @@ describe("DeleteWorkspaceDialog guard evidence", () => {
 		expect(html).toMatch(/<button[^>]*disabled[^>]*>Delete worktree/);
 	});
 
-	test("branch hint names the owner and states only what is known about the remote", () => {
-		const owned = renderDialog({ ...CLEAN, branchOwned: true, hasUpstream: false });
-		expect(owned).toContain("created by omp-web; merged, no upstream");
-		expect(owned).not.toContain("merged and pushed");
-		const pushed = renderDialog({ ...CLEAN, branchOwned: false, hasUpstream: true });
-		expect(pushed).toContain("existing branch; merged and pushed");
+	test("branch hint states only what is known about the branch", () => {
+		const noUpstream = renderDialog({ ...CLEAN, hasUpstream: false });
+		expect(noUpstream).toContain("merged, no upstream");
+		expect(noUpstream).not.toContain("merged and pushed");
+		const pushed = renderDialog({ ...CLEAN, hasUpstream: true });
+		expect(pushed).toContain("merged and pushed");
+		const unpushed = renderDialog({ ...CLEAN, hasUpstream: true, unpushed: true });
+		expect(unpushed).toContain("merged but unpushed");
 	});
 
-	test("branch deletion is pre-checked only for a branch omp-web created", () => {
-		const owned = renderDialog({ ...CLEAN, branchOwned: true });
-		expect(owned).toMatch(/type="checkbox"[^>]*checked/);
-		const existing = renderDialog({ ...CLEAN, branchOwned: false });
-		expect(existing).not.toMatch(/type="checkbox"[^>]*checked/);
+	test("branch deletion is pre-checked only when merged with nothing unpushed", () => {
+		const merged = renderDialog(CLEAN);
+		expect(merged).toMatch(/type="checkbox"[^>]*checked/);
+		const unmerged = renderDialog({ ...CLEAN, merged: false });
+		expect(unmerged).not.toMatch(/type="checkbox"[^>]*checked/);
+		const unpushed = renderDialog({ ...CLEAN, unpushed: true });
+		expect(unpushed).not.toMatch(/type="checkbox"[^>]*checked/);
+	});
+
+	test("a refused branch hides the checkbox and shows the reason", () => {
+		const html = renderDialog({ ...CLEAN, branchDeleteRefused: "protected branch" });
+		expect(html).not.toContain('type="checkbox"');
+		expect(html).toContain("is kept:");
+		expect(html).toContain("protected branch");
 	});
 });

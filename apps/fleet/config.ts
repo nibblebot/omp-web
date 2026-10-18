@@ -5,8 +5,7 @@
  * Resolution order: an explicit `path` argument wins, then env
  * `OMP_FLEET_CONFIG`, then the default location. A missing file yields
  * defaults; the file is shallow-merged over the defaults and unknown fields
- * are tolerated. `OMP_FLEET_SPAWN_HOOK` overrides the config file's
- * `spawnHook`; `OMP_FLEET_LOCAL_TEMPLATE` replaces the `local` template's
+ * are tolerated. `OMP_FLEET_LOCAL_TEMPLATE` replaces the `local` template's
  * command outright (dev runners point it at the source entry when the
  * production binary isn't built). `workspaceDir` (default directory for new
  * worktrees) resolves flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR`
@@ -41,8 +40,6 @@ export interface FleetConfig {
 	 * consulted by supervisor.spawn when no explicit template is given.
 	 */
 	projectTemplates?: Record<string, string>;
-	/** Env `OMP_FLEET_SPAWN_HOOK` wins over the config file value. */
-	spawnHook?: string;
 	/**
 	 * Default creation destination for local worktrees (created lazily, never
 	 * at boot), not an ownership boundary. Flag `--workspace-dir` >
@@ -152,15 +149,10 @@ export async function loadConfig(
 	if (localCommand !== undefined && localCommand !== "") {
 		config.templates = { ...config.templates, local: { command: localCommand } };
 	}
-	// Env `OMP_FLEET_SPAWN_HOOK` / `OMP_FLEET_WORKSPACE_DIR` win over the
-	// config-file value AND over defaults, applied here in loadConfig, not
-	// inside mergeConfig, so the overrides also hold when NO config file
-	// exists (mergeConfig is skipped on the defaultConfig path). Explicit
-	// CLI flags still beat env below.
-	const envHook = process.env.OMP_FLEET_SPAWN_HOOK;
-	if (envHook !== undefined && envHook !== "") {
-		config.spawnHook = envHook;
-	}
+	// Env `OMP_FLEET_WORKSPACE_DIR` wins over the config-file value AND over
+	// defaults, applied here in loadConfig, not inside mergeConfig, so the
+	// override also holds when NO config file exists (mergeConfig is skipped
+	// on the defaultConfig path). Explicit CLI flags still beat env below.
 	const envWorkspaceDir = process.env.OMP_FLEET_WORKSPACE_DIR;
 	if (envWorkspaceDir !== undefined && envWorkspaceDir !== "") {
 		config.workspaceDir = expandTilde(envWorkspaceDir);
@@ -276,9 +268,6 @@ function mergeConfig(raw: unknown): FleetConfig {
 			}
 			config.providerProfiles = profiles;
 		}
-	}
-	if (typeof file.spawnHook === "string") {
-		config.spawnHook = expandTilde(file.spawnHook);
 	}
 	// Config-file workspaceDir key (env and the --workspace-dir flag are
 	// applied in loadConfig, after this merge, so they also win when no

@@ -46,7 +46,6 @@ describe("CLI", () => {
 			cwd: FAKE_CWD,
 			project: "fake-proj",
 			labels: ["env=test"],
-			mode: "remote",
 			status: "asleep",
 		});
 		server = await startFleet({
@@ -78,47 +77,6 @@ describe("CLI", () => {
 		expect(output).toContain(seeded.daemonId);
 		expect(output).toContain("cli-smoke");
 		expect(output).toContain("env=test");
-	});
-
-	test("main(['enroll']) registers a remote entry and prints the session command", async () => {
-		const { code, logs } = await captureMain([
-			"enroll",
-			"edge-box",
-			"--label",
-			"env=prod",
-			"--cwd",
-			"/srv/app",
-			"--callback-url",
-			"https://fleet.example/callback",
-			"--port",
-			String(server.port),
-		]);
-		expect(code).toBe(0);
-		const entry = server.registry.list().find((e) => e.name === "edge-box");
-		expect(entry?.mode).toBe("remote");
-		expect(entry?.labels).toEqual(["env=prod"]);
-		const daemonId = entry?.daemonId;
-		const generation = entry?.workspace?.enrollment?.generation;
-		expect(logs[0]).toBe(`enrolled ${daemonId} (edge-box); run on the session host:`);
-		const token = /^OMP_SESSION_CALLBACK_TOKEN=([0-9a-f]{64}) /.exec(logs[1] ?? "")?.[1];
-		expect(token).toBeDefined();
-		expect(logs[1]).toBe(
-			`OMP_SESSION_CALLBACK_TOKEN=${token} omp-web session --cwd /srv/app --port 0 --callback-url https://fleet.example/callback --callback-workspace ${daemonId} --callback-generation ${generation}`,
-		);
-	});
-
-	test("enroll over a loopback http callback URL adds --callback-allow-http", async () => {
-		const { code, logs } = await captureMain([
-			"enroll",
-			"local-box",
-			"--callback-url",
-			"http://127.0.0.1:4722/callback",
-			"--port",
-			String(server.port),
-		]);
-		expect(code).toBe(0);
-		expect(logs[1]).toMatch(/ --callback-allow-http$/);
-		expect(logs[1]).toContain("--cwd . --port 0");
 	});
 
 	test("main with a refused connection exits 1 with the not-running message", async () => {
@@ -340,18 +298,4 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
 		buffer += decoder.decode(value, { stream: true });
 	}
 	return buffer;
-}
-
-/** Run `main` with console.log captured; returns the exit code and each printed line. */
-async function captureMain(argv: string[]): Promise<{ code: number; logs: string[] }> {
-	const logs: string[] = [];
-	const originalLog = console.log;
-	console.log = (msg?: unknown) => {
-		logs.push(String(msg));
-	};
-	try {
-		return { code: await main(argv), logs };
-	} finally {
-		console.log = originalLog;
-	}
 }

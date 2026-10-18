@@ -13,7 +13,25 @@ export default defineStory({
 	seed: () => seedRosterFleet({ modal: "add-project" }),
 	variants: [
 		{
-			name: "Register a repo",
+			name: "Browse repos",
+			render: (ctx) => <AddProjectDialog onClose={ctx.close} />,
+		},
+		{
+			name: "Prefilled path",
+			seed: () =>
+				seedRosterFleet({ modal: "add-project", addProjectPath: "/home/joshua/Repos/omp-web" }),
+			render: (ctx) => <AddProjectDialog onClose={ctx.close} />,
+		},
+		{
+			name: "Empty folder",
+			seed: () =>
+				seedRosterFleet({ modal: "add-project", addProjectPath: "/home/joshua/Repos/empty" }),
+			render: (ctx) => <AddProjectDialog onClose={ctx.close} />,
+		},
+		{
+			name: "Unknown path",
+			seed: () =>
+				seedRosterFleet({ modal: "add-project", addProjectPath: "/home/joshua/Repos/missing" }),
 			render: (ctx) => <AddProjectDialog onClose={ctx.close} />,
 		},
 	],

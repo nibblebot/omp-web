@@ -37,7 +37,6 @@ export type PaletteOpenTarget =
 	| "subagents"
 	| "debug"
 	| "add-project"
-	| "workspace"
 	| "sign-in"
 	| "login";
 
@@ -51,7 +50,9 @@ export type PaletteAction =
 	| { kind: "setting"; tabId: string; query?: string }
 	| { kind: "model"; selector: string }
 	| { kind: "model-picker" }
-	| { kind: "open"; target: PaletteOpenTarget; projectId?: string };
+	| { kind: "open"; target: PaletteOpenTarget }
+	/** Open the New workspace popover for a project's header; ProjectGroups mounts it. */
+	| { kind: "new-workspace"; projectId: string };
 
 export interface PaletteItem {
 	/** Stable across sessions: the recents list stores it. */
@@ -212,19 +213,15 @@ function openItem(
 	label: string,
 	detail: string,
 	keywords: readonly string[],
-	extra: { hint?: string; projectId?: string; id?: string } = {},
+	extra: { hint?: string } = {},
 ): PaletteItem {
 	return {
-		id: extra.id ?? `open:${target}`,
+		id: `open:${target}`,
 		group: "Open",
 		label,
 		detail,
 		...(extra.hint === undefined ? {} : { hint: extra.hint }),
-		action: {
-			kind: "open",
-			target,
-			...(extra.projectId === undefined ? {} : { projectId: extra.projectId }),
-		},
+		action: { kind: "open", target },
 		keywords,
 	};
 }
@@ -261,15 +258,14 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 		]),
 	);
 	for (const project of context.projects)
-		items.push(
-			openItem(
-				"workspace",
-				context.projects.length === 1 ? "Add workspace" : `Add workspace: ${project.name}`,
-				`Worktree, clone, or existing checkout of ${project.name}`,
-				["worktree", "clone", "branch", project.name],
-				{ projectId: project.projectId, id: `open:workspace:${project.projectId}` },
-			),
-		);
+		items.push({
+			id: `new-workspace:${project.projectId}`,
+			group: "Open",
+			label: context.projects.length === 1 ? "New workspace" : `New workspace: ${project.name}`,
+			detail: `Worktree, clone, or checkout in ${project.name}`,
+			action: { kind: "new-workspace", projectId: project.projectId },
+			keywords: ["worktree", "clone", "branch", "session", project.name],
+		});
 	items.push(openItem("sign-in", "Sign in", "Sign in to this fleet", ["auth", "token", "login"]));
 	items.push(
 		openItem("login", "Provider login", "Log in to a model provider", [

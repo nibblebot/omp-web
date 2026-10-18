@@ -32,7 +32,6 @@ function entry(overrides: Partial<RegistryEntry> = {}): RegistryEntry {
 		cwd: "/tmp/local-project",
 		project: "local-project",
 		labels: [],
-		mode: "spawned",
 		status: "ready",
 		registeredAt: 1,
 		...overrides,
@@ -50,17 +49,6 @@ function writeLock(file: string, pid: number): string {
 }
 
 describe("sessionLiveness", () => {
-	test("remote sessions remain unknown even with local lock or dead pid evidence", () => {
-		const live = sessionFile();
-		writeLock(live, process.pid);
-		const missing = sessionFile();
-		for (const lastSessionFile of [live, missing]) {
-			expect(sessionLiveness(entry({ mode: "remote", lastSessionFile, pid: deadPid }))).toBe(
-				"unknown",
-			);
-		}
-	});
-
 	test("a held local session lock proves alive despite a dead recorded pid", () => {
 		const lastSessionFile = sessionFile();
 		const contents = writeLock(lastSessionFile, process.pid);

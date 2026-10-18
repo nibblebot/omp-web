@@ -62,7 +62,7 @@ Component names say what the user sees, one name per concept, no abbreviations; 
 
 Overlay is the umbrella term, not a suffix: a portaled layer above the app shell whose open state lives in the store. Every overlay renders through `Modal` (blocking: `aria-modal`, focus trap, Esc, backdrop, focus restore) except non-blocking `Toasts`. Not overlays: layout drawers (the narrow-viewport sidebar slide-out and its `.sidebar-scrim`, owned by the sidebar component) and anchored popovers (`KebabMenu`, `AutocompletePopup`, owned by their trigger).
 
-## The wire contract (OMP_PROTO 2)
+## The wire contract (OMP_PROTO 3)
 
 Agent transport is HTTP + SSE, not WebSocket (collab-only; room traffic runs on the standalone `omp-web relay`, never on a session). Browser to fleet: `GET /events` SSE down, `POST /command` up, ID-keyed commands accepted with `202`, answers via SSE `call_result`. Fleet to session: only the session-initiated callback pair (`OMP_CALLBACK_PROTO 1`, `lib/wire/callback-protocol.ts`): `POST /callback/up` NDJSON, `GET /callback/down` SSE, `POST /callback/bulk/<id>`; browser streams and commands ride it as virtual streams. A session's own `/events` and `/command` listener stays for direct clients; the fleet never uses it. `lib/wire/protocol.ts` owns frame shapes/constants. Fleet stamps session identity.
 
@@ -89,15 +89,16 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only; room traffic runs on 
 
 - Keep static fleet loading SDK-free; exceptional SDK access uses lazy imports.
 - Mint a fresh callback credential and generation per spawn/restart; revoke the previous generation first. The fleet stores only credential digests. Never expose tokens, private workspace records, enrollment digests, or secret values in roster/debug/public profiles; debug snapshots must not expose daemon endpoints.
-- Sessions outlive the control plane: fleet `close()` never kills sessions or revokes enrollments; persisted enrollments re-enroll at boot so sessions redial with their original credential. Status of every non-clone entry comes from pair state, except boot reconciliation marks a local spawned session asleep immediately when its live file lock or recorded pid proves it dead. Remote entries are never probed. Live or unknown enrolled sessions remain reconnecting with redial grace. `stop`/`remove` send the `shutdown` control and revoke.
+- Sessions outlive the control plane: fleet `close()` never kills sessions or revokes enrollments; persisted enrollments re-enroll at boot so sessions redial with their original credential. Status of every non-clone entry comes from pair state, except boot reconciliation marks a local spawned session asleep immediately when its live file lock or recorded pid proves it dead. Live or unknown enrolled sessions remain reconnecting with redial grace. `stop`/`remove` send the `shutdown` control and revoke. There is no operator-enrolled remote session: off-host compute is a provider-run clone.
 - Answers go only to the originating browser. Disconnects and origin-map caps must not discard outstanding replay protection. Reject replays when the daemon's generation or credentials change.
 - Fleet/session files use exclusive lifetime locks. Session-lock exit 77 must not restart; fail waiting attaches and return the entry to asleep.
 - Registry writes are atomic; project/daemon IDs are monotonic, never reused. Validate explicit resume files against the owning worktree's listing, never arbitrary paths.
 - Worktree deletion requires a local linked Git worktree of the owning project and a clean tree. No force; branch deletion uses `git branch -d`, never `-D`. Transcripts survive worktree deletion.
+- Registered projects own their rows: the git-state sync registers every linked worktree of a project as an asleep row and marks a project `missing` when its main checkout is gone; it never auto-removes a project or its main-checkout row. Git probes use `--no-optional-locks`, a per-probe timeout, and never overlap. Removing a project stops and drops its rows (transcripts kept, disk untouched); clones block it. Branch deletion names the branch and runs only while it is still checked out there and is not the default/base or main-checkout branch.
 - Clone operations go through `workspace-lifecycle.ts`, never handler self-fetches. Persist retry-sensitive state before provider steps; prove predecessor termination before replacement, never PID-only.
 - Clone stop preserves checkout/logs. Deletion requires proven stop, Git guards, transcript-store verification against the volume, and read-only protection before provider/volume removal. No force bypass; transcripts are not source backup.
 - Resume restores the requested durable session or fails explicitly, never silently boots fresh or substitutes upstream source. A spawned session respawns with `--resume <lastSessionFile>`; the edge records `lastSessionFile` from the `state` frame every session publishes on its control stream at each pair-up. Stored-history reads never wake compute; retention/purge is explicit, not automatic GC.
-- The fleet never dials a session: every session, local or remote, connects out over the callback pair. Remote entries are never locally Git-probed. Sandboxes never mount operator agent state.
+- The fleet never dials a session: every session connects out over the callback pair. Sandboxes never mount operator agent state.
 - Template substitutions require caller shell escaping. Config loading stays read-only; preserve the TTY-only first-run writer.
 
 ### Frontend (`apps/web/`)

@@ -1,7 +1,7 @@
 /**
  * Boot reconciliation tests for fleet/server.ts ("boot reconciliation (#3)"
  * describe): dead local sessions become 'asleep' immediately. Enrolled local
- * sessions with live locks and enrolled remote sessions get 'reconnecting'
+ * sessions with live locks and enrolled sessions get 'reconnecting'
  * until redial grace expires. Unenrolled entries go straight to 'asleep'.
  * Intentional stops and terminal errors stay untouched.
  */
@@ -68,7 +68,7 @@ describe("boot reconciliation (#3)", () => {
 		);
 		// Seed the registry exactly as a previous fleet process would have
 		// left it: stale non-terminal statuses (children/sockets died with
-		// that process), an enrolled and an unenrolled remote 'ready' entry,
+		// that process), an enrolled and an unenrolled 'ready' entry,
 		// an intentional stop, and a real error.
 		const registry = new Registry(statePath);
 		await registry.load();
@@ -77,7 +77,6 @@ describe("boot reconciliation (#3)", () => {
 			cwd: FAKE_CWD,
 			project: "fake-proj",
 			labels: [],
-			mode: "spawned",
 			template: "test",
 			status: "ready",
 			readyAt: Date.now() - 60_000,
@@ -88,7 +87,6 @@ describe("boot reconciliation (#3)", () => {
 			cwd: FAKE_CWD,
 			project: "fake-proj",
 			labels: [],
-			mode: "spawned",
 			template: "test",
 			status: "spawning",
 		});
@@ -97,7 +95,6 @@ describe("boot reconciliation (#3)", () => {
 			cwd: FAKE_CWD,
 			project: "fake-proj",
 			labels: [],
-			mode: "spawned",
 			template: "test",
 			status: "connecting",
 		});
@@ -106,7 +103,6 @@ describe("boot reconciliation (#3)", () => {
 			cwd: "",
 			project: "",
 			labels: [],
-			mode: "remote",
 			status: "ready",
 			readyAt: Date.now() - 120_000,
 		});
@@ -129,7 +125,6 @@ describe("boot reconciliation (#3)", () => {
 				cwd: tmp,
 				project: "fake-proj",
 				labels: [],
-				mode: "spawned",
 				template: "test",
 				status: "ready",
 				readyAt: Date.now() - 120_000,
@@ -144,7 +139,6 @@ describe("boot reconciliation (#3)", () => {
 			cwd: "",
 			project: "",
 			labels: [],
-			mode: "remote",
 			status: "ready",
 			readyAt: Date.now() - 120_000,
 		});
@@ -153,7 +147,6 @@ describe("boot reconciliation (#3)", () => {
 			cwd: "",
 			project: "",
 			labels: [],
-			mode: "remote",
 			status: "asleep",
 		});
 		registry.create({
@@ -161,7 +154,6 @@ describe("boot reconciliation (#3)", () => {
 			cwd: "",
 			project: "",
 			labels: [],
-			mode: "remote",
 			status: "error",
 			error: "daemon rejected the credential",
 		});
@@ -188,7 +180,7 @@ describe("boot reconciliation (#3)", () => {
 		expect(entries.find((e) => e.name === "stale-connecting")!.status).toBe("asleep");
 	});
 
-	test("an enrolled remote entry persisted 'ready' is reconnecting at boot, with stale readyAt cleared", () => {
+	test("an enrolled entry persisted 'ready' is reconnecting at boot, with stale readyAt cleared", () => {
 		const entry = server.registry.list().find((e) => e.name === "enrolled-ready")!;
 		expect(entry.status).toBe("reconnecting");
 		expect(entry.readyAt).toBeUndefined();
@@ -222,7 +214,7 @@ describe("boot reconciliation (#3)", () => {
 		expect(entry.pid).toBeUndefined();
 	});
 
-	test("an unenrolled remote entry persisted 'ready' goes straight to asleep at boot", () => {
+	test("an unenrolled entry persisted 'ready' goes straight to asleep at boot", () => {
 		const entry = server.registry.list().find((e) => e.name === "unenrolled-ready")!;
 		expect(entry.status).toBe("asleep");
 		expect(entry.readyAt).toBeUndefined();
@@ -238,12 +230,12 @@ describe("boot reconciliation (#3)", () => {
 		expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
 	}, 10_000);
 
-	test("an enrolled remote entry becomes asleep after the redial grace", async () => {
+	test("an enrolled entry becomes asleep after the redial grace", async () => {
 		const entry = server.registry.list().find((e) => e.name === "enrolled-ready")!;
 		await waitFor(
 			() => server.registry.get(entry.daemonId)?.status === "asleep",
 			TEST_REDIAL_GRACE_MS + 2_000,
-			"remote redial grace expiry",
+			"redial grace expiry",
 		);
 		expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
 	}, 10_000);

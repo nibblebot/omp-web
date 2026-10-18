@@ -110,7 +110,6 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 		};
 		spawned.push(body.entry.daemonId);
 		expect(body.project.path).toBe(repoReal);
-		expect(body.entry.mode).toBe("spawned");
 		expect(body.entry.cwd).toBe(repoReal);
 		expect(body.entry.projectId).toBe(body.project.projectId);
 		expect(body.entry.labels).toEqual(["env=prod"]);

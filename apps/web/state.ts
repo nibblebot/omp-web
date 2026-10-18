@@ -51,10 +51,10 @@ import {
 import { cancelUiRequest } from "./store/modals";
 import {
 	resetPendingProjects,
-	resumeProjectRemovals,
 	resumeRestartedDaemons,
+	settleAddProject,
 	settleProjectBranches,
-	settleProjects,
+	settleWorkspaceCreate,
 } from "./store/projects";
 import { reportError } from "./store/toasts";
 import { clearUserStopped, isUserStopped, reconcileUserStopped } from "./store/user-stopped";
@@ -233,11 +233,8 @@ export type ModalName =
 	| "goal"
 	| "usage"
 	| "debug"
-	// Phase 5 + P8.1: project/worktree onboarding. The worktree-only modal
-	// became the unified Add-workspace modal (Worktree/Clone/Add existing).
+	// Phase 5: project onboarding. Opens the Add project folder chooser.
 	| "add-project"
-	| "add-remote"
-	| "workspace"
 	// Browser-auth sign-in surface (P2.4; opened by the auth subscription on
 	// signedOut, exactly like the store/modals contract wires it).
 	| "sign-in"
@@ -409,9 +406,12 @@ export const [state, setState] = createStore({
 	// through store/dock.ts (openDock/closeDock); the route mirrors it.
 	dock: null as { kind: string; id?: string } | null,
 	dockWidth: readDockWidth(),
-	// Phase 5 + P8.1 modal payloads (components read these; set alongside
-	// modal): which project the Add-workspace modal targets (all tabs).
-	workspaceModalProjectId: null as string | null,
+	// Project whose New workspace popover is open (anchored to its group "+").
+	// Set by openNewWorkspace/closeNewWorkspace; the palette uses the same calls.
+	newWorkspaceProjectId: null as string | null,
+	// Project group the sidebar scrolls to and flashes after an add; cleared
+	// ~2s later by highlightProject.
+	highlightProjectId: null as string | null,
 	// Folder the Add-project dialog opens prefilled with (an unowned session's
 	// folder); null when opened from elsewhere. Cleared when the dialog closes.
 	addProjectPath: null as string | null,
@@ -460,8 +460,7 @@ export const [state, setState] = createStore({
 	providerProfiles: [] as PublicProviderProfile[],
 	// Phase 4: resolved fleet config path from the registered_projects frame
 	// (null = defaults, no config file). Fleet-scoped like the projects
-	// above; it survives session resets. Together with an empty project
-	// registry and empty daemon roster it is the roster's first-run signal.
+	// above; it survives session resets.
 	fleetConfigPath: null as string | null,
 	// Phase 5: delete-worktree guard evidence (worktree_delete_info unicast),
 	// keyed by daemonId.
@@ -879,55 +878,37 @@ export function fleetSettingsActive(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 5: project-first sidebar grouping. Registered projects render in
-// registry order (including zero-daemon projects), each followed by its
-// daemons (main-checkout rows first, then worktrees; roster order within
-// each partition). Entries with no matching registered project (remote /
-// unregistered, or a projectId whose registry entry is gone) fall into one
-// trailing { project: null } group in today's string-grouping order
-// (`worktreeOf ?? project`, localeCompare, main checkouts first).
+// Project-first sidebar grouping. Registered projects render in registry
+// order (including zero-row projects). Each project's rows are ordered: the
+// main checkout first, then worktrees by branch name, then clones (roster
+// order breaks ties). Rows without a registered projectId are not shown.
 // ---------------------------------------------------------------------------
 
-export function daemonsByProject(): {
-	project: RegisteredProject | null;
-	daemons: DaemonEntry[];
-}[] {
-	const groups: { project: RegisteredProject | null; daemons: DaemonEntry[] }[] =
-		state.registeredProjects.map((project) => ({
-			project,
-			daemons: [],
-		}));
+/** Sort rank of a checkout row: main checkout, worktree, then clone. */
+function checkoutRank(d: DaemonEntry): number {
+	if (d.workspaceKind === "clone") return 2;
+	if (d.workspaceKind === "worktree" || d.worktreeOf !== undefined) return 1;
+	return 0;
+}
+
+export function daemonsByProject(): { project: RegisteredProject; daemons: DaemonEntry[] }[] {
+	const groups = state.registeredProjects.map((project) => ({
+		project,
+		daemons: [] as DaemonEntry[],
+	}));
 	const byProjectId = new Map(state.registeredProjects.map((p, i) => [p.projectId, i]));
-	const unregistered: DaemonEntry[] = [];
 	for (const d of state.daemonRoster) {
 		const index = d.projectId !== undefined ? byProjectId.get(d.projectId) : undefined;
-		if (index === undefined) unregistered.push(d);
-		else groups[index].daemons.push(d);
+		if (index !== undefined) groups[index].daemons.push(d);
 	}
 	for (const g of groups) {
-		const all = g.daemons;
-		g.daemons = [
-			...all.filter((d) => d.worktreeOf === undefined),
-			...all.filter((d) => d.worktreeOf !== undefined),
-		];
+		g.daemons.sort((a, b) => {
+			const rank = checkoutRank(a) - checkoutRank(b);
+			if (rank !== 0) return rank;
+			if (checkoutRank(a) === 1) return (a.branch ?? "").localeCompare(b.branch ?? "");
+			return 0;
+		});
 	}
-	// Trailing fallback group: replicate the retired sidebar's string grouping.
-	const byRepo = new Map<string, DaemonEntry[]>();
-	for (const d of unregistered) {
-		const key = d.worktreeOf ?? d.project;
-		const list = byRepo.get(key);
-		if (list) list.push(d);
-		else byRepo.set(key, [d]);
-	}
-	const fallback: DaemonEntry[] = [];
-	for (const key of [...byRepo.keys()].sort((a, b) => a.localeCompare(b))) {
-		const all = byRepo.get(key)!;
-		fallback.push(
-			...all.filter((d) => d.worktreeOf === undefined),
-			...all.filter((d) => d.worktreeOf !== undefined),
-		);
-	}
-	if (fallback.length > 0) groups.push({ project: null, daemons: fallback });
 	return groups;
 }
 
@@ -1334,7 +1315,6 @@ export function connect(): void {
 				setState("daemonRoster", frame.daemons);
 				settleProjectWakes();
 				resumeRestartedDaemons(frame.daemons);
-				resumeProjectRemovals(frame.daemons);
 				// Removed daemons never reuse ids, but don't let the set grow unbounded.
 				pruneUnread(new Set(frame.daemons.map((d) => d.daemonId)));
 				// Same for daemonActivity: drop entries whose id left the roster.
@@ -1423,14 +1403,16 @@ export function connect(): void {
 				reconcileAttachedSession();
 				break;
 			}
-			case "projects":
-				settleProjects(frame.projects);
+			case "add_project_result":
+				settleAddProject(frame);
+				break;
+			case "workspace_create_result":
+				settleWorkspaceCreate(frame);
 				break;
 			case "project_branches":
-				// Unicast answer to list_project_branches (fleet-scoped like
-				// projects). A frame whose projectId doesn't match the pending
-				// request belongs to a superseded one; leave it pending.
-				settleProjectBranches(frame.projectId, frame.branches);
+				// Unicast answer to list_project_branches. Settled latest-wins by
+				// projectId and remote (the frame carries no command id).
+				settleProjectBranches(frame);
 				break;
 			case "registered_projects":
 				// Phase 5: first-class project registry broadcast (fleet-scoped
@@ -1442,8 +1424,7 @@ export function connect(): void {
 				setState("providerProfiles", frame.providerProfiles ?? []);
 				// Phase 4: the resolved fleet config path rides the same frame
 				// (additive; older edges omit it, so missing = null). Also
-				// fleet-scoped: resetSessionView must not wipe it (it is the
-				// first-run signal until a config file exists).
+				// fleet-scoped: resetSessionView must not wipe it.
 				setState("fleetConfigPath", frame.configPath ?? null);
 				break;
 			case "worktree_delete_info":
@@ -1667,19 +1648,19 @@ export {
 	toggleSidebar,
 } from "./store/roster";
 export {
-	listProjects,
 	listProjectBranches,
-	spawnDaemon,
 	restartDaemonById,
 	spawnResume,
 	stopDaemonById,
 	removeDaemonById,
-	sendAddProject,
-	removeProjectAndStop,
+	addProject,
 	sendRemoveProject,
-	sendCreateWorktree,
-	sendCreateClone,
-	sendAddExistingWorktree,
+	createWorktree,
+	createClone,
+	syncProjects,
+	openNewWorkspace,
+	closeNewWorkspace,
+	highlightProject,
 	sendDeleteWorktree,
 	sendWorktreeDeleteInfo,
 } from "./store/projects";

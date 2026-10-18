@@ -5,10 +5,8 @@ import { FleetSignInDialog } from "./components/app/FleetSignInDialog";
 import { Toasts } from "./components/app/Toasts";
 import { CompactionDialog } from "./components/chat/controls/CompactionDialog";
 import { AddProjectDialog } from "./components/fleet/workspaces/AddProjectDialog";
-import { AddRemoteDialog } from "./components/fleet/workspaces/AddRemoteDialog";
 import { DeleteWorkspaceDialog } from "./components/fleet/workspaces/DeleteWorkspaceDialog";
 import { RemoveProjectDialog } from "./components/fleet/workspaces/RemoveProjectDialog";
-import { AddWorkspaceDialog } from "./components/fleet/workspaces/AddWorkspaceDialog";
 import { DaemonDetailsDialog } from "./components/fleet/daemon/DaemonDetailsDialog";
 import { ProviderLoginDialog } from "./components/models/ProviderLoginDialog";
 import { ModelPicker } from "./components/models/ModelPicker";
@@ -71,8 +69,6 @@ export const ModalHost: Component = () => {
 		usage: () => <UsageLimitsDialog onClose={close} />,
 		debug: () => featureModalHost("debug"),
 		"add-project": () => <AddProjectDialog onClose={close} />,
-		"add-remote": () => <AddRemoteDialog onClose={close} />,
-		workspace: () => <AddWorkspaceDialog onClose={close} />,
 		"sign-in": () => <FleetSignInDialog onClose={close} />,
 		integrations: () => featureModalHost("integrations"),
 		"plan-review": () => featureModalHost("plan-review"),

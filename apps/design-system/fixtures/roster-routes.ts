@@ -19,12 +19,15 @@ const fsTree: Record<string, FsBrowseDir[]> = {
 		{ name: "omp-web-worktrees", path: `${HOME}/Repos/omp-web-worktrees`, hasGit: false },
 		{ name: "localaction", path: `${HOME}/Repos/localaction`, hasGit: true },
 		{ name: "nixos-config", path: `${HOME}/Repos/nixos-config`, hasGit: true },
+		{ name: "empty", path: `${HOME}/Repos/empty`, hasGit: false },
 	],
 	[OMP_WEB]: [
 		{ name: "apps", path: `${OMP_WEB}/apps`, hasGit: false },
 		{ name: "lib", path: `${OMP_WEB}/lib`, hasGit: false },
 		{ name: "docs", path: `${OMP_WEB}/docs`, hasGit: false },
 	],
+	[`${HOME}/Repos/empty`]: [],
+	[`${HOME}/Documents`]: [],
 };
 
 /** Answer for GET /ctl/fs/browse: a canned listing, or the edge's 400 reason for an unknown path. */

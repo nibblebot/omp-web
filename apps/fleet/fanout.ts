@@ -118,11 +118,9 @@ export async function promptEntry(
 /**
  * Bring a session's callback pair up before a prompt. A paired session
  * returns at once. A clone rides the lifecycle ensure (provider compute +
- * enrollment). A spawned session that is asleep or errored is respawned
+ * enrollment). A session that is asleep or errored is respawned
  * (--resume); one already connecting or reconnecting is only waited on, since
- * it dials on its own. A remote session that is not dialing cannot be woken
- * from here: its host must start it. The pair wait is bounded by
- * PAIR_TIMEOUT_MS.
+ * it dials on its own. The pair wait is bounded by PAIR_TIMEOUT_MS.
  */
 async function wakeSession(
 	deps: FanoutDeps,
@@ -136,13 +134,7 @@ async function wakeSession(
 		await deps.lifecycle.ensureCloneRunning(daemonId);
 	} else {
 		const dialing = entry.status === "connecting" || entry.status === "reconnecting";
-		if (!dialing && entry.mode === "spawned") {
-			await deps.supervisor.respawn(entry);
-		} else if (!dialing) {
-			throw new Error(
-				`remote session ${entry.name} is not connected; start it on its host (see omp-web enroll)`,
-			);
-		}
+		if (!dialing) await deps.supervisor.respawn(entry);
 	}
 	await waitForPair(transport, daemonId, PAIR_TIMEOUT_MS);
 }

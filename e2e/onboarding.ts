@@ -22,8 +22,8 @@
  *   4. first-run config written to ~/.omp-web/config.json (the first-run offer's
  *      TTY-gated write, done directly here, workspaceDir only)
  *   5. BARE `omp-web` from an arbitrary cwd (control plane + UI): banner line 1
- *      intact + real embedded UI, then the repo registered + linked worktree
- *      adopted over the loopback /ctl API (the UI picker's path)
+ *      intact + real embedded UI, then the repo registered over the loopback
+ *      /ctl API and its linked worktree auto-detected as a roster row
  *   6. spawn a session on the registered project (fleet local template now spawns
  *      `omp-web session`; PATH must include $BUN_INSTALL/bin); assert it reaches
  *      ready and its cwd matches the project
@@ -636,33 +636,25 @@ try {
 		JSON.stringify(addBody),
 	);
 	const projectId = addBody.project?.projectId ?? "";
-	// Adopt the linked worktree (the API the setup wizard used to call).
-	const adoptRes = await fetch(`http://127.0.0.1:${OMP_PORT}/ctl/projects/${projectId}/worktrees`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ worktreePath: wtDir, start: false }),
-	});
+	// The fleet sync detects the linked worktree and registers it as a row.
+	const wtDeadline = Date.now() + 30_000;
+	let wtRow: { cwd?: string; projectId?: string; status?: string } | undefined;
+	while (Date.now() < wtDeadline && wtRow === undefined) {
+		const s = await fetchJson(`http://127.0.0.1:${OMP_PORT}/ctl/sessions`);
+		wtRow = ((s.body as { cwd?: string; projectId?: string }[]) ?? []).find((e) => e.cwd === wtDir);
+		if (wtRow === undefined) await sleep(500);
+	}
 	check(
-		"linked worktree adopted via /ctl/projects/:id/worktrees",
-		adoptRes.status === 201,
-		await adoptRes.text(),
+		"linked worktree auto-detected as an asleep row of the project",
+		wtRow?.projectId === projectId && wtRow?.status === "asleep",
+		JSON.stringify(wtRow),
 	);
 	const projects = await fetchJson(`http://127.0.0.1:${OMP_PORT}/ctl/projects`);
-	const projectsBody = projects.body as {
-		projects: { path: string }[];
-		registered: { projectId: string; path: string }[];
-	};
+	const projectsBody = projects.body as { projects: { projectId: string; path: string }[] };
 	check(
 		"registered project visible via /ctl/projects",
-		Array.isArray(projectsBody?.registered) &&
-			projectsBody.registered.some((p) => p.path === repoDir),
+		Array.isArray(projectsBody?.projects) && projectsBody.projects.some((p) => p.path === repoDir),
 		JSON.stringify(projectsBody),
-	);
-	const adopted = projectsBody?.projects ?? [];
-	check(
-		"adopted worktree gone from the unregistered list",
-		!adopted.some((p: { path: string }) => p.path === wtDir),
-		JSON.stringify(adopted),
 	);
 
 	// 6. spawn a session on the registered project
@@ -694,7 +686,7 @@ try {
 	// The spawn route stamps projectId (apps/fleet/worktrees.ts projectIdForCwd) so
 	// the roster groups the daemon under the registered project.
 	const projectEntry = sessions.find((e) => e.daemonId === daemonId);
-	const p1 = projectsBody?.registered?.[0];
+	const p1 = projectsBody?.projects?.[0];
 	check(
 		"daemon tagged with the registered projectId",
 		projectEntry?.projectId === p1?.projectId,

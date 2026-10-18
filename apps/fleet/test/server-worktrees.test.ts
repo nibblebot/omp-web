@@ -1,12 +1,12 @@
 /**
  * Worktree lifecycle route tests for fleet/server.ts ("worktree lifecycle
- * routes" describe): create/add-existing/delete routes over loopback HTTP
- * against a real git repo, the delete-info guard evidence, and the CLI
- * add-worktree/rm-worktree commands driving the same routes.
+ * routes" describe): create/delete routes over loopback HTTP against a real
+ * git repo, the delete-info guard evidence, and the CLI add-worktree/rm-worktree
+ * commands driving the same routes.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { RegisteredProject } from "#lib/wire/protocol";
 import { main } from "../cli";
@@ -76,7 +76,7 @@ describe("worktree lifecycle routes", () => {
 			{ templates: { local: { command: "sleep 30" } }, defaultTemplate: "local" },
 			{ workspaceDir },
 		);
-		project = await server.registry.addProject(repoDir);
+		project = server.registry.addProject(repoDir).project;
 	});
 
 	afterAll(async () => {
@@ -92,7 +92,6 @@ describe("worktree lifecycle routes", () => {
 		const entry = body.entry!;
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
-		expect(entry.mode).toBe("spawned");
 		expect(entry.status).toBe("asleep");
 		expect(entry).not.toHaveProperty("workspace");
 		const target = join(workspaceDir, project.name, "feature-branch");
@@ -115,7 +114,6 @@ describe("worktree lifecycle routes", () => {
 		const entry = body.entry!;
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
-		expect(entry.mode).toBe("spawned");
 		const target = join(workspaceDir, project.name, "started");
 		expect(entry.cwd).toBe(target);
 		expect(existsSync(target)).toBe(true);
@@ -138,54 +136,49 @@ describe("worktree lifecycle routes", () => {
 		await server.supervisor.stop(entry.daemonId);
 	});
 
-	test("POST add-existing registers a discovered-but-unregistered worktree (start:false)", async () => {
-		// A linked worktree created out-of-band with raw git, exactly what
-		// discovery's Add-existing tab would list.
-		const outside = join(tmp, "raw-worktree");
-		const add = await gitIn(repoDir, ["worktree", "add", "-b", "raw-feat", outside]);
-		expect(add.exitCode).toBe(0);
-		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
-			worktreePath: outside,
-		});
-		expect(res.status).toBe(201);
-		const body = (await res.json()) as { entry?: RegistryEntry };
-		const entry = body.entry!;
-		expect(entry.cwd).toBe(outside);
-		expect(entry.projectId).toBe(project.projectId);
-		expect(entry.worktreeOf).toBe(project.name);
-		expect(entry.mode).toBe("spawned");
-		expect(entry.status).toBe("asleep");
-		expect(entry).not.toHaveProperty("workspace");
-	});
-
 	test("GET /ctl/sessions exposes linked worktrees without private provenance", async () => {
+		// A linked worktree created out-of-band with raw git: project sync
+		// registers it as an asleep row (there is no add-existing route).
+		const rawPath = join(tmp, "raw-worktree");
+		expect((await gitIn(repoDir, ["worktree", "add", "-b", "raw-feat", rawPath])).exitCode).toBe(0);
+		// Await the registry change that sync's new row produces (no polling).
+		const registrySettled = new Promise<void>((resolve) => {
+			const prev = server.registry.onChange;
+			server.registry.onChange = () => {
+				prev?.();
+				if (!server.registry.list().some((e) => e.cwd === rawPath)) return;
+				server.registry.onChange = prev;
+				resolve();
+			};
+		});
+		server.supervisor.syncNow();
+		await registrySettled;
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
 		expect(res.status).toBe(200);
 		const entries: RegistryEntry[] = await res.json();
 		const created = entries.find(
 			(entry) => entry.cwd === join(workspaceDir, project.name, "feature-branch"),
 		);
-		const registered = entries.find((entry) => entry.cwd === join(tmp, "raw-worktree"));
+		const registered = entries.find((entry) => entry.cwd === rawPath);
 		expect(created).toBeDefined();
 		expect(registered).toBeDefined();
 		for (const entry of [created, registered]) {
 			expect(entry).not.toHaveProperty("workspace");
 		}
+		if (registered) server.registry.remove(registered.daemonId);
+		await gitIn(repoDir, ["worktree", "remove", "--force", rawPath]);
 	});
 
-	test("a clean registered linked worktree inside workspaceDir can be deleted from disk", async () => {
-		const target = join(workspaceDir, project.name, "adopted-inside");
-		expect(
-			(await gitIn(repoDir, ["worktree", "add", "-b", "adopted-inside", target])).exitCode,
-		).toBe(0);
-		const adopted = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
-			worktreePath: target,
+	test("a clean created linked worktree inside workspaceDir can be deleted from disk", async () => {
+		const created = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			name: "Adopted Inside",
 		});
-		expect(adopted.status).toBe(201);
-		const body = await adopted.json();
-		expect(typeof body.entry.daemonId).toBe("string");
-		expect(body.entry.cwd).toBe(target);
-		const entry = server.registry.get(body.entry.daemonId)!;
+		expect(created.status).toBe(201);
+		// Unchecked: the create 201 body is `{entry: RegistryEntry}` by route contract.
+		const createdBody = (await created.json()) as { entry: RegistryEntry };
+		const entry = createdBody.entry;
+		const target = entry.cwd;
+		expect(existsSync(target)).toBe(true);
 		const info = await fetch(
 			`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}/delete-info`,
 		);
@@ -203,18 +196,14 @@ describe("worktree lifecycle routes", () => {
 	});
 
 	test("POST /ctl/remove forgets a dirty registered worktree without deleting its files or Git registration", async () => {
-		const target = join(workspaceDir, project.name, "registered-dirty");
-		expect(
-			(await gitIn(repoDir, ["worktree", "add", "-b", "registered-dirty", target])).exitCode,
-		).toBe(0);
-		const adopted = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
-			worktreePath: target,
+		const created = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			name: "Registered Dirty",
 		});
-		expect(adopted.status).toBe(201);
-		const body = await adopted.json();
-		expect(typeof body.entry.daemonId).toBe("string");
-		expect(body.entry.cwd).toBe(target);
-		const entry = server.registry.get(body.entry.daemonId)!;
+		expect(created.status).toBe(201);
+		// Unchecked: the create 201 body is `{entry: RegistryEntry}` by route contract.
+		const createdBody = (await created.json()) as { entry: RegistryEntry };
+		const entry = createdBody.entry;
+		const target = entry.cwd;
 		writeFileSync(join(target, "readme.md"), "user edits\n");
 		writeFileSync(join(target, "scratch.txt"), "untracked user work\n");
 		const removed = await postJson(server.port, "/ctl/remove", { selector: entry.daemonId });
@@ -225,31 +214,6 @@ describe("worktree lifecycle routes", () => {
 		expect(readFileSync(join(target, "scratch.txt"), "utf8")).toBe("untracked user work\n");
 		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).toContain(target);
 		expect((await gitIn(target, ["status", "--porcelain"])).stdout).toContain("scratch.txt");
-	});
-
-	test("POST add-existing refuses the main checkout and non-worktree paths", async () => {
-		const main = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
-			worktreePath: repoDir,
-		});
-		expect(main.status).toBe(400);
-		const mainBody = (await main.json()) as { error?: string };
-		expect(mainBody.error).toContain("not a linked worktree");
-		const notRepo = join(tmp, "not-a-repo");
-		mkdirSync(notRepo, { recursive: true });
-		const plain = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
-			worktreePath: notRepo,
-		});
-		expect(plain.status).toBe(400);
-	});
-
-	test("POST add-existing refuses an already-registered worktree (409)", async () => {
-		const outside = join(tmp, "raw-worktree");
-		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
-			worktreePath: outside,
-		});
-		expect(res.status).toBe(409);
-		const body = (await res.json()) as { error?: string };
-		expect(body.error).toContain("already registered");
 	});
 
 	test("POST create 404s on an unknown project and 409s on a duplicate target", async () => {
@@ -328,7 +292,6 @@ describe("worktree lifecycle routes", () => {
 			projectId: project.projectId,
 			worktreeOf: project.name,
 			labels: [],
-			mode: "spawned",
 			status: "asleep",
 		});
 		const sessions = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
@@ -353,24 +316,47 @@ describe("worktree lifecycle routes", () => {
 		);
 	});
 
-	test("DELETE with deleteBranch:true also removes the merged branch (-d only)", async () => {
+	test("DELETE with deleteBranch naming the merged branch also removes it (-d only)", async () => {
 		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
 			name: "Branchy",
 		});
 		expect(res.status).toBe(201);
-		const entry = ((await res.json()) as { entry: RegistryEntry }).entry;
+		// Unchecked: the create 201 body is `{entry: RegistryEntry}` by route contract.
+		const created = (await res.json()) as { entry: RegistryEntry };
+		const entry = created.entry;
 		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, {
 			method: "DELETE",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ deleteBranch: true }),
+			body: JSON.stringify({ deleteBranch: "branchy" }),
 		});
 		expect(del.status).toBe(200);
+		// Unchecked: the DELETE 200 body is `{worktree}` by route contract (fields asserted below).
 		const delBody = (await del.json()) as {
 			worktree?: { branch?: string; branchDeleted?: boolean };
 		};
 		expect(delBody.worktree?.branch).toBe("branchy");
 		expect(delBody.worktree?.branchDeleted).toBe(true);
 		expect((await gitIn(repoDir, ["branch", "--list", "branchy"])).stdout.trim()).toBe("");
+	});
+
+	test("DELETE with a boolean deleteBranch answers 400 and removes nothing", async () => {
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			name: "Boolean Branch",
+		});
+		expect(res.status).toBe(201);
+		// Unchecked: the create 201 body is `{entry: RegistryEntry}` by route contract.
+		const created = (await res.json()) as { entry: RegistryEntry };
+		const entry = created.entry;
+		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, {
+			method: "DELETE",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ deleteBranch: true }),
+		});
+		expect(del.status).toBe(400);
+		expect(server.registry.get(entry.daemonId)).toBeDefined();
+		await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, {
+			method: "DELETE",
+		});
 	});
 
 	test("DELETE on an unknown daemon 404s", async () => {
@@ -388,7 +374,7 @@ describe("worktree lifecycle routes", () => {
 		let restarted: FleetServer | undefined;
 		try {
 			restarted = await startTestFleet(paths, config, { workspaceDir: originalWorkspaceDir });
-			const registered = await restarted.registry.addProject(repoDir);
+			const { project: registered } = restarted.registry.addProject(repoDir);
 			const created = await postJson(
 				restarted.port,
 				`/ctl/projects/${registered.projectId}/worktrees`,
@@ -449,35 +435,6 @@ describe("worktree lifecycle routes", () => {
 		expect(existsSync(join(workspaceDir, project.name, "cli-branch"))).toBe(true);
 	});
 
-	test("CLI add-worktree --existing registers a discovered worktree", async () => {
-		const outside = join(tmp, "cli-existing");
-		await gitIn(repoDir, ["worktree", "add", "-b", "cli-feat", outside]);
-		const logs: string[] = [];
-		const originalLog = console.log;
-		console.log = (msg?: unknown) => {
-			logs.push(String(msg));
-		};
-		let code: number;
-		try {
-			code = await main([
-				"add-worktree",
-				project.projectId,
-				"--existing",
-				outside,
-				"--no-start",
-				"--port",
-				String(server.port),
-			]);
-		} finally {
-			console.log = originalLog;
-		}
-		expect(code).toBe(0);
-		expect(logs.join("\n")).toContain("registered worktree");
-		expect(
-			server.registry.list().some((e) => e.cwd === outside && e.projectId === project.projectId),
-		).toBe(true);
-	});
-
 	test("CLI rm-worktree deletes via the route (--delete-branch removes the merged branch)", async () => {
 		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
 			name: "Rm Me",
@@ -497,6 +454,7 @@ describe("worktree lifecycle routes", () => {
 				"rm-worktree",
 				entry.daemonId,
 				"--delete-branch",
+				"rm-me",
 				"--port",
 				String(server.port),
 			]);
@@ -511,58 +469,6 @@ describe("worktree lifecycle routes", () => {
 		expect((await gitIn(repoDir, ["branch", "--list", "rm-me"])).stdout.trim()).toBe("");
 	});
 
-	test("GET /ctl/projects merges a registered project's unregistered linked worktrees and drops roster cwds", async () => {
-		// A linked worktree reachable ONLY via the registered project (no
-		// root scanning exists): the registry-backed merge must surface it.
-		const wtPath = join(tmp, "ctl-merge-wt");
-		const add = await gitIn(repoDir, ["worktree", "add", "-q", "-b", "merge-feat", wtPath]);
-		expect(add.exitCode).toBe(0);
-		const wtReal = realpathSync(wtPath);
-		let entry: RegistryEntry | undefined;
-		try {
-			const merged = (await (
-				await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)
-			).json()) as {
-				projects: Array<{
-					name: string;
-					path: string;
-					isWorktree: boolean;
-					worktreeOf?: string;
-					branch?: string;
-				}>;
-			};
-			expect(merged.projects).toContainEqual({
-				name: "ctl-merge-wt",
-				path: wtReal,
-				isWorktree: true,
-				worktreeOf: project.name,
-				branch: "merge-feat",
-			});
-
-			// A roster entry for that cwd marks it registered → the row
-			// disappears from the projects array.
-			entry = server.registry.create({
-				name: "ctl-merge-wt",
-				cwd: wtReal,
-				project: "ctl-merge-wt",
-				projectId: project.projectId,
-				worktreeOf: project.name,
-				labels: [],
-				mode: "spawned",
-				status: "asleep",
-			});
-			const merged2 = (await (
-				await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)
-			).json()) as {
-				projects: Array<{ path: string }>;
-			};
-			expect(merged2.projects.some((p) => p.path === wtReal)).toBe(false);
-		} finally {
-			if (entry) server.registry.remove(entry.daemonId);
-			await gitIn(repoDir, ["worktree", "remove", "--force", wtReal]);
-		}
-	});
-
 	test(
 		"a worktree removed on disk is poll-evicted and announces exactly one worktree_removed frame",
 		async () => {
@@ -573,6 +479,13 @@ describe("worktree lifecycle routes", () => {
 			const entry = ((await res.json()) as { entry: RegistryEntry }).entry;
 			expect(entry.worktreeOf).toBe(project.name);
 			expect(existsSync(entry.cwd)).toBe(true);
+			// The row carries a session file, so the eviction announces the toast.
+			const sessionFile = join(tmp, "vanishing-session.jsonl");
+			writeFileSync(
+				sessionFile,
+				`${JSON.stringify({ type: "session", id: "s1", cwd: entry.cwd })}\n`,
+			);
+			server.registry.update(entry.daemonId, { lastSessionFile: sessionFile });
 
 			// Browser stream open BEFORE the dir vanishes (the toast must land).
 			const browser = await openBrowser(server.port);
@@ -627,6 +540,31 @@ describe("worktree lifecycle routes", () => {
 			);
 			expect(uiBrowser.frames.filter((f) => f.type === "worktree_removed")).toHaveLength(0);
 			uiBrowser.close();
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a vanished linked row with no session file is evicted without a worktree_removed frame",
+		async () => {
+			const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+				name: "Never Started",
+			});
+			expect(res.status).toBe(201);
+			// Unchecked: the create 201 body is `{entry: RegistryEntry}` by route contract.
+			const created = (await res.json()) as { entry: RegistryEntry };
+			const entry = created.entry;
+			expect(entry.lastSessionFile).toBeUndefined();
+			const browser = await openBrowser(server.port);
+			rmSync(entry.cwd, { recursive: true, force: true });
+			await browser.waitForFrame(
+				(f) => f.type === "roster" && !f.daemons.some((d) => d.daemonId === entry.daemonId),
+				"roster without vanished entry",
+				15_000,
+			);
+			expect(server.registry.get(entry.daemonId)).toBeUndefined();
+			expect(browser.frames.filter((f) => f.type === "worktree_removed")).toHaveLength(0);
+			browser.close();
 		},
 		{ timeout: 20_000 },
 	);

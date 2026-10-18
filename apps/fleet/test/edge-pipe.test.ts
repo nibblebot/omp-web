@@ -112,7 +112,6 @@ async function connectRemote(rig: Rig, name: string): Promise<Remote> {
 		cwd: `/${name}`,
 		project: name,
 		labels: [],
-		mode: "remote",
 		status: "connecting",
 	});
 	const token = randomBytes(32).toString("hex");
@@ -221,7 +220,6 @@ describe("edge pipe backpressure and replay", () => {
 				cwd: "/x1",
 				project: "x1",
 				labels: [],
-				mode: "remote",
 				status: "connecting",
 			});
 			await browser.waitForFrame(
