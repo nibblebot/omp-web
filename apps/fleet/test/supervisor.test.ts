@@ -636,6 +636,29 @@ describe("SpawnSupervisor", () => {
 		expect(env.OMP_SESSION_CALLBACK_WORKSPACE).toBe(entry.daemonId);
 	});
 
+	test("spawn with reuse wakes the checkout's existing row; a plain spawn adds a session", async () => {
+		// Regression: the sync registers every checkout as an asleep row, and the
+		// fleet's create-and-start path used to add a second row for it.
+		const fx = await makeFixture("omp-session-sup-reuse-", {}, { restartMax: 2 });
+		const asleep = fx.registry.create({
+			name: "checkout",
+			cwd: fx.dir,
+			project: "checkout",
+			labels: [],
+			status: "asleep",
+		});
+
+		const reused = await fx.supervisor.spawn({ cwd: fx.dir, reuse: true });
+		expect(reused.daemonId).toBe(asleep.daemonId);
+		expect(fx.registry.list()).toHaveLength(1);
+		await waitForLaunches(fx.argsFile, 1); // the asleep row was woken
+
+		// Several sessions per folder stay a deliberate CLI capability.
+		const extra = await fx.supervisor.spawn({ cwd: fx.dir });
+		expect(extra.daemonId).not.toBe(asleep.daemonId);
+		expect(fx.registry.list()).toHaveLength(2);
+	});
+
 	test("spawn shell-quotes label/name values, a $(touch) payload stays inert", async () => {
 		const fx = await makeFixture("omp-session-sup-quote-", {}, { restartMax: 2 });
 

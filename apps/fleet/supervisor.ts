@@ -350,17 +350,43 @@ export class SpawnSupervisor {
 	 * A cwd inside a linked git worktree is tagged with the owning repo's
 	 * name (worktreeOf) so the roster can group it; a main checkout or an
 	 * unresolvable cwd stays untagged.
+	 *
+	 * `reuse`: the fleet's own create/start paths pass it so a row the sync
+	 * registered for this checkout meanwhile is woken instead of duplicated
+	 * (an asleep or errored row respawns; a live one is returned as is).
+	 * Without it a spawn always adds a row: several sessions per folder stay a
+	 * deliberate CLI/`/ctl/spawn` capability.
 	 */
 	async spawn(init: {
 		cwd: string;
 		template?: string;
 		name?: string;
 		labels?: string[];
+		reuse?: boolean;
 	}): Promise<RegistryEntry> {
 		const project = basename(init.cwd);
 		const templateName = this.resolveTemplateName(init.cwd, init.template);
 		const template = this.#config.templates[templateName];
 		const worktreeOf = await resolveWorktreeOf(init.cwd);
+		if (init.reuse) {
+			// After the last await: the sync's own lookup + create is synchronous,
+			// so no row can slip in between this lookup and the create below.
+			const resolved = realpathOf(init.cwd);
+			const existing = this.#registry
+				.list()
+				.find(
+					(entry) =>
+						entry.cwd !== "" &&
+						entry.workspace?.kind !== "clone" &&
+						realpathOf(entry.cwd) === resolved,
+				);
+			if (existing !== undefined) {
+				if (existing.status === "asleep" || existing.status === "error") {
+					await this.respawn(existing);
+				}
+				return this.#registry.get(existing.daemonId) ?? existing;
+			}
+		}
 		const entry = this.#registry.create({
 			name: init.name ?? project,
 			cwd: init.cwd,

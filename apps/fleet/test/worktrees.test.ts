@@ -123,9 +123,9 @@ describe("slugifyWorktreeName", () => {
 });
 
 describe("worktreeBranchName", () => {
-	test("keeps case and `/`, dashes other runs", () => {
+	test("keeps `/`, lowercases, dashes other runs", () => {
 		expect(worktreeBranchName("feat/login x")).toBe("feat/login-x");
-		expect(worktreeBranchName("Feature Branch")).toBe("Feature-Branch");
+		expect(worktreeBranchName("Feature Branch")).toBe("feature-branch");
 	});
 
 	test("drops components and suffixes git refuses", () => {
@@ -175,18 +175,18 @@ describe("createWorktree", () => {
 		await makeRepo(repo);
 		const ws = tempDir("omp-web-worktrees-");
 		const created = await createWorktree(projectFor(repo), "feat/Login fix", { workspaceDir: ws });
-		// Folder is the slug; the branch keeps `/` and case.
+		// Folder is the slug; the branch keeps `/`.
 		const target = join(ws, repo.split("/").pop()!, "feat-login-fix");
 		expect(created.path).toBe(target);
-		expect(created.branch).toBe("feat/Login-fix");
+		expect(created.branch).toBe("feat/login-fix");
 		expect(created.baseRef).toBe("main");
 		expect(existsSync(target)).toBe(true);
 		expect(existsSync(join(ws, basename(repo), ".omp-web-repo"))).toBe(false);
 		// git agrees: the worktree is listed and the branch exists at base's commit.
 		const list = (await git(repo, ["worktree", "list", "--porcelain"])).stdout;
 		expect(list).toContain(`worktree ${target}`);
-		expect(list).toContain("branch refs/heads/feat/Login-fix");
-		expect(await gitOk(repo, ["rev-parse", "--verify", "refs/heads/feat/Login-fix"])).toBe(
+		expect(list).toContain("branch refs/heads/feat/login-fix");
+		expect(await gitOk(repo, ["rev-parse", "--verify", "refs/heads/feat/login-fix"])).toBe(
 			await gitOk(repo, ["rev-parse", "refs/heads/main"]),
 		);
 	});
@@ -889,9 +889,16 @@ describe("registerProjectMainEntry", () => {
 		await makeRepo(repo);
 		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
 		await registry.load();
-		let spawnInit: { cwd: string; template?: string; labels?: string[] } | undefined;
+		let spawnInit:
+			| { cwd: string; template?: string; labels?: string[]; reuse?: boolean }
+			| undefined;
 		const supervisor = {
-			spawn: async (init: { cwd: string; template?: string; labels?: string[] }) => {
+			spawn: async (init: {
+				cwd: string;
+				template?: string;
+				labels?: string[];
+				reuse?: boolean;
+			}) => {
 				spawnInit = init;
 				return registry.create({
 					name: basename(init.cwd),
@@ -907,7 +914,12 @@ describe("registerProjectMainEntry", () => {
 			template: "local",
 			labels: ["env=prod"],
 		});
-		expect(spawnInit).toEqual({ cwd: repo, template: "local", labels: ["env=prod"] });
+		expect(spawnInit).toEqual({
+			cwd: repo,
+			template: "local",
+			labels: ["env=prod"],
+			reuse: true,
+		});
 		expect(entry.projectId).toBe("p7");
 		expect(registry.get(entry.daemonId)?.projectId).toBe("p7");
 		expect(registry.list()).toHaveLength(1);

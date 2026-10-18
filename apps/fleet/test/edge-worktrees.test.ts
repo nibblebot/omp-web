@@ -182,7 +182,7 @@ describe("edge worktree commands", () => {
 		if (frame.type !== "worktree_delete_info") throw new Error("expected worktree_delete_info");
 		expect(frame.linked).toBe(true);
 		expect(frame.dirty).toBe(false);
-		expect(frame.branch).toBe("My-Branch");
+		expect(frame.branch).toBe("my-branch");
 		expect(frame.merged).toBe(true);
 		expect(frame.unpushed).toBe(false);
 		expect(JSON.stringify(frame)).not.toContain("token");

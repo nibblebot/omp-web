@@ -663,7 +663,7 @@ export async function registerWorktreeEntry(
 	if (opts.start) {
 		// supervisor.spawn creates the entry (worktreeOf auto-resolved from
 		// git) and launches the child; tag the project id right after.
-		const entry = await supervisor.spawn({ cwd: worktreePath });
+		const entry = await supervisor.spawn({ cwd: worktreePath, reuse: true });
 		registry.update(entry.daemonId, {
 			projectId: project.projectId,
 			worktreeOf: project.name,
@@ -737,6 +737,7 @@ export async function registerProjectMainEntry(
 			cwd: project.path,
 			template: opts.template,
 			labels: opts.labels,
+			reuse: true,
 		});
 		registry.update(entry.daemonId, { projectId: project.projectId });
 		return registry.get(entry.daemonId) ?? entry;

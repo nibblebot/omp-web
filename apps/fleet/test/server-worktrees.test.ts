@@ -101,7 +101,7 @@ describe("worktree lifecycle routes", () => {
 		// git agrees: the worktree is listed with the slug branch.
 		const list = await gitIn(repoDir, ["worktree", "list", "--porcelain"]);
 		expect(list.stdout).toContain(target);
-		expect(list.stdout).toContain("branch refs/heads/Feature-Branch");
+		expect(list.stdout).toContain("branch refs/heads/feature-branch");
 	});
 
 	test("POST create with start:true also spawns a daemon on the worktree", async () => {
@@ -327,16 +327,16 @@ describe("worktree lifecycle routes", () => {
 		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, {
 			method: "DELETE",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ deleteBranch: "Branchy" }),
+			body: JSON.stringify({ deleteBranch: "branchy" }),
 		});
 		expect(del.status).toBe(200);
 		// Unchecked: the DELETE 200 body is `{worktree}` by route contract (fields asserted below).
 		const delBody = (await del.json()) as {
 			worktree?: { branch?: string; branchDeleted?: boolean };
 		};
-		expect(delBody.worktree?.branch).toBe("Branchy");
+		expect(delBody.worktree?.branch).toBe("branchy");
 		expect(delBody.worktree?.branchDeleted).toBe(true);
-		expect((await gitIn(repoDir, ["branch", "--list", "Branchy"])).stdout.trim()).toBe("");
+		expect((await gitIn(repoDir, ["branch", "--list", "branchy"])).stdout.trim()).toBe("");
 	});
 
 	test("DELETE with a boolean deleteBranch answers 400 and removes nothing", async () => {
