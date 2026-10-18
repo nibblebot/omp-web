@@ -26,7 +26,7 @@ import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
 import type { ProjectBranch, RegisteredProject } from "#lib/wire/protocol";
-import { slugifyWorktreeName } from "#lib/wire/worktree-name";
+import { slugifyWorktreeName, worktreeBranchName } from "#lib/wire/worktree-name";
 import { parseWorktreeList, probeGitState, runGit, validateProjectPath } from "./discovery";
 import type { GitRunner, WorktreeBlock } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
@@ -102,7 +102,7 @@ export class WorktreeBranchCheckedOutError extends Error {
 export interface CreateWorktreeResult {
 	/** Managed path of the new worktree (under workspaceDir). */
 	path: string;
-	/** Branch the worktree is on (created slug or attached existing branch). */
+	/** Branch the worktree is on (created from the typed name, or the attached existing branch). */
 	branch: string;
 	/** The base ref the branch was created from (absent for existing-branch attach). */
 	baseRef?: string;
@@ -144,16 +144,19 @@ export async function createWorktree(
 				`git worktree add failed: ${add.stderr.trim() || `git exited ${add.exitCode}`}`,
 			);
 	} else {
+		const branch = worktreeBranchName(name);
+		const valid = await runGit(["check-ref-format", "--branch", branch], project.path);
+		if (valid.exitCode !== 0) throw new Error(`invalid branch name: ${branch}`);
 		const baseRef =
 			opts.baseRef !== undefined && opts.baseRef !== ""
 				? opts.baseRef
 				: await resolveBaseRef(project.path);
-		const add = await runGit(["worktree", "add", "-b", slug, target, baseRef], project.path);
+		const add = await runGit(["worktree", "add", "-b", branch, target, baseRef], project.path);
 		if (add.exitCode !== 0)
 			throw new Error(
 				`git worktree add failed: ${add.stderr.trim() || `git exited ${add.exitCode}`}`,
 			);
-		return { path: target, branch: slug, baseRef };
+		return { path: target, branch, baseRef };
 	}
 	return { path: target, branch: opts.existingBranch };
 }

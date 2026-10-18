@@ -1421,26 +1421,11 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 	background: var(--hover);
 }
 .project-new-btn {
-	flex: none;
-	width: 24px;
-	height: 24px;
-	margin-right: var(--space-2);
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	background: none;
-	border: 1px solid var(--border-strong);
-	border-radius: var(--r-pill);
-	color: var(--muted-2);
-	font: inherit;
-	line-height: 1;
-	cursor: pointer;
+	margin-right: var(--space-1);
 }
-.project-new-btn:hover:not(:disabled),
 .project-new-btn[aria-expanded="true"] {
+	background: var(--btn);
 	color: var(--text);
-	border-color: var(--accent-border);
-	background: var(--hover);
 }
 .project-new-btn:disabled {
 	opacity: 0.4;

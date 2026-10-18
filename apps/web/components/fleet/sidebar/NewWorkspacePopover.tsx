@@ -13,7 +13,7 @@ import {
 } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { ProjectBranch } from "#lib/wire/protocol";
-import { slugifyWorktreeName } from "#lib/wire/worktree-name";
+import { slugifyWorktreeName, worktreeBranchName } from "#lib/wire/worktree-name";
 import {
 	currentWorkspaceCreationPrefs,
 	rememberWorkspaceCreationPrefs,
@@ -139,8 +139,10 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 	const [text, setText] = createSignal("");
 	const query = () => text().trim();
 	const slug = () => slugifyWorktreeName(query());
+	/** The branch the fleet will create for the typed name (same function server-side). */
+	const newBranch = () => worktreeBranchName(query());
 	const createAvailable = createMemo(
-		() => query() !== "" && !(listing()?.branches ?? []).some((b) => b.name === query()),
+		() => query() !== "" && !(listing()?.branches ?? []).some((b) => b.name === newBranch()),
 	);
 
 	const shownBranches = (): ProjectBranch[] => {
@@ -151,7 +153,7 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 
 	const createMeta = (): string => {
 		if (!cloning()) {
-			const head = `worktree ${slug() || "needs a letter or digit"}`;
+			const head = `folder ${slug() || "needs a letter or digit"}`;
 			const base = listing()?.defaultBase;
 			return base === undefined ? head : `${head} · from ${base}`;
 		}
@@ -256,7 +258,7 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 				name: slugifyWorktreeName(name),
 				profileId: p.id,
 				source: cloneSource(),
-				branch: name,
+				branch: newBranch(),
 			},
 			"Creating clone",
 		);
@@ -316,9 +318,11 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 			items[0]?.focus();
 			return;
 		}
+		// Enter in the field only acts on a typed name (the Create branch row);
+		// an existing branch needs an explicit pick (arrow down, then Enter).
 		if (e.key === "Enter") {
 			e.preventDefault();
-			rowItems()[0]?.click();
+			if (createAvailable() && canPick() && slug() !== "") void pickNew();
 		}
 	};
 
@@ -492,7 +496,7 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 								disabled={!canPick() || slug() === ""}
 								onClick={() => void pickNew()}
 							>
-								<span class="new-workspace-row-name">{`Create branch "${query()}"`}</span>
+								<span class="new-workspace-row-name">{`Create branch "${newBranch()}"`}</span>
 								<span class="new-workspace-row-meta">{createMeta()}</span>
 							</PickerRow>
 						</Show>

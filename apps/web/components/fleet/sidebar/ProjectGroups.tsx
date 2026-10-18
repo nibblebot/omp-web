@@ -18,7 +18,7 @@ import {
 	syncProjects,
 } from "../../../store/projects";
 import { KebabMenu } from "../../ui/KebabMenu";
-import { ChevronDownIcon, TrashIcon } from "../../ui/icons";
+import { ChevronDownIcon, PlusIcon, TrashIcon } from "../../ui/icons";
 import { NewWorkspacePopover } from "./NewWorkspacePopover";
 import { WorkspaceRow, menuOpenId, setMenuOpenId } from "./WorkspaceRow";
 
@@ -168,7 +168,7 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 					<button
 						ref={setPlusEl}
 						type="button"
-						class="project-new-btn"
+						class="sidebar-icon-btn project-new-btn"
 						aria-label={`New workspace in ${props.project.name}`}
 						aria-expanded={popoverOpen()}
 						title={
@@ -179,7 +179,7 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 						disabled={missing()}
 						onClick={onPlus}
 					>
-						+
+						<PlusIcon />
 					</button>
 					<KebabMenu
 						label={`Project actions for ${props.project.name}`}

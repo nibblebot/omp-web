@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import { basename, join } from "node:path";
 import type { RegisteredProject } from "#lib/wire/protocol";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { slugifyWorktreeName } from "#lib/wire/worktree-name";
+import { slugifyWorktreeName, worktreeBranchName } from "#lib/wire/worktree-name";
 import type { GitRunner } from "../discovery";
 import { Registry, type RegistryEntry } from "../registry";
 import type { SpawnSupervisor } from "../supervisor";
@@ -122,6 +122,24 @@ describe("slugifyWorktreeName", () => {
 	});
 });
 
+describe("worktreeBranchName", () => {
+	test("keeps case and `/`, dashes other runs", () => {
+		expect(worktreeBranchName("feat/login x")).toBe("feat/login-x");
+		expect(worktreeBranchName("Feature Branch")).toBe("Feature-Branch");
+	});
+
+	test("drops components and suffixes git refuses", () => {
+		expect(worktreeBranchName("a//b")).toBe("a/b");
+		expect(worktreeBranchName(".hidden/x.lock")).toBe("hidden/x");
+		expect(worktreeBranchName("x..y")).toBe("x.y");
+		expect(worktreeBranchName("feat/ ok ")).toBe("feat/ok");
+	});
+
+	test("falls back to the folder slug when nothing usable remains", () => {
+		expect(worktreeBranchName("///")).toBe("worktree");
+	});
+});
+
 describe("managedWorktreePath", () => {
 	test("composes <workspaceDir>/<repo-basename>/<slug(name)>", () => {
 		const ws = tempDir("omp-web-worktrees-");
@@ -156,18 +174,19 @@ describe("createWorktree", () => {
 		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
 		const ws = tempDir("omp-web-worktrees-");
-		const created = await createWorktree(projectFor(repo), "Feature Branch", { workspaceDir: ws });
-		const target = join(ws, repo.split("/").pop()!, "feature-branch");
+		const created = await createWorktree(projectFor(repo), "feat/Login fix", { workspaceDir: ws });
+		// Folder is the slug; the branch keeps `/` and case.
+		const target = join(ws, repo.split("/").pop()!, "feat-login-fix");
 		expect(created.path).toBe(target);
-		expect(created.branch).toBe("feature-branch");
+		expect(created.branch).toBe("feat/Login-fix");
 		expect(created.baseRef).toBe("main");
 		expect(existsSync(target)).toBe(true);
 		expect(existsSync(join(ws, basename(repo), ".omp-web-repo"))).toBe(false);
 		// git agrees: the worktree is listed and the branch exists at base's commit.
 		const list = (await git(repo, ["worktree", "list", "--porcelain"])).stdout;
 		expect(list).toContain(`worktree ${target}`);
-		expect(list).toContain("branch refs/heads/feature-branch");
-		expect(await gitOk(repo, ["rev-parse", "--verify", "refs/heads/feature-branch"])).toBe(
+		expect(list).toContain("branch refs/heads/feat/Login-fix");
+		expect(await gitOk(repo, ["rev-parse", "--verify", "refs/heads/feat/Login-fix"])).toBe(
 			await gitOk(repo, ["rev-parse", "refs/heads/main"]),
 		);
 	});
