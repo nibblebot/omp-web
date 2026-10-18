@@ -357,14 +357,6 @@ button.send:not(:disabled):hover {
 	background: color-mix(in srgb, var(--accent), var(--bg) 12%);
 	border-color: color-mix(in srgb, var(--accent), var(--bg) 12%);
 }
-button.new-session {
-	background: transparent;
-	border-color: var(--border-strong);
-	color: var(--muted);
-}
-button.new-session:not(:disabled):hover {
-	color: var(--text);
-}
 button.stop {
 	background: var(--stop-bg);
 	border-color: var(--error-border);

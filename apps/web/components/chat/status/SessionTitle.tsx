@@ -1,12 +1,15 @@
 import { createSignal, Show, type Component } from "solid-js";
-import { call, state } from "../../../state";
+import { call, connectionState, state } from "../../../state";
 import { activeWorkspace } from "../../../fleet-ui/workspace-status";
+import { dispatchInput } from "../../../prompt/commands";
 import { reportError } from "../../../store/toasts";
+import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
+import { PlusIcon } from "../../ui/icons";
 import { displayTitle } from "../../ui/title-icons";
 
-/** The session identity is the name (click to rename). Sits in the MainHeader
- *  title slot (Shell), shrinking with ellipsis; send configuration sits in
- *  SessionConfigBar by the composer. */
+/** The session identity is the name (click to rename), followed by the New
+ *  session (+) button. Sits in the MainHeader title slot (Shell), shrinking
+ *  with ellipsis; send configuration sits in SessionConfigBar by the composer. */
 export const SessionTitle: Component = () => {
 	const [editingName, setEditingName] = createSignal(false);
 	// Enter commits and closes first, so the trailing blur is a harmless no-op.
@@ -74,6 +77,16 @@ export const SessionTitle: Component = () => {
 					onBlur={() => setEditingName(false)}
 				/>
 			</Show>
+			<button
+				type="button"
+				class="main-header-btn session-new-btn"
+				onClick={() => dispatchInput("/new", undefined, "enter")}
+				disabled={connectionState() !== "connected"}
+				title={PAUSED_TOOLTIP[connectionState()] || "New session"}
+				aria-label="New session"
+			>
+				<PlusIcon />
+			</button>
 		</div>
 	);
 };

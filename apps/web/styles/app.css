@@ -212,6 +212,10 @@
 	font-size: var(--fs-base);
 	font-weight: 600;
 }
+/* New session (+) right after the title; the title keeps the shrink. */
+.session-new-btn {
+	margin-left: var(--space-1);
+}
 
 .segment-button.active {
 	background: var(--accent-dim);

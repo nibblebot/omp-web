@@ -1,5 +1,5 @@
 import { Show, type Component } from "solid-js";
-import { dispatchInput, type InputMode } from "../../../prompt/commands";
+import type { InputMode } from "../../../prompt/commands";
 import type { ImageArg } from "#lib/wire/protocol";
 import type { TextAttachment } from "../../../prompt/attachments";
 import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
@@ -15,7 +15,7 @@ interface PromptActionsProps {
 	onDiscard?: () => void;
 }
 
-/** Send/queue/abort row under the composer: New session, Stop, ready pill, Send. */
+/** Send/queue/abort row under the composer: Discard, Stop, ready pill, Send. */
 export const PromptActions: Component<PromptActionsProps> = (props) => {
 	// While the composer is gated (readyAt cleared on session switch, re-armed
 	// by the proxied ready frame), hint the attached session's status instead
@@ -32,14 +32,6 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 
 	return (
 		<div class="prompt-actions">
-			<button
-				class="new-session"
-				onClick={() => dispatchInput("/new", undefined, "enter")}
-				disabled={paused()}
-				title={pausedTitle()}
-			>
-				New session
-			</button>
 			{props.onDiscard &&
 				(props.message().trim() || props.images().length > 0 || props.files().length > 0) && (
 					<button
