@@ -1421,7 +1421,7 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 	background: var(--hover);
 }
 .project-new-btn {
-	margin-right: var(--space-1);
+	margin-left: var(--space-1);
 }
 .project-new-btn[aria-expanded="true"] {
 	background: var(--btn);

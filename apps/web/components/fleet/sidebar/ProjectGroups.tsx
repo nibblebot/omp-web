@@ -165,22 +165,6 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 							<span class="project-rollup">{rollup()}</span>
 						</Show>
 					</button>
-					<button
-						ref={setPlusEl}
-						type="button"
-						class="sidebar-icon-btn project-new-btn"
-						aria-label={`New workspace in ${props.project.name}`}
-						aria-expanded={popoverOpen()}
-						title={
-							missing()
-								? "Project folder is missing; no workspace can start"
-								: `New workspace in ${props.project.name}`
-						}
-						disabled={missing()}
-						onClick={onPlus}
-					>
-						<PlusIcon />
-					</button>
 					<KebabMenu
 						label={`Project actions for ${props.project.name}`}
 						open={menuOpen()}
@@ -200,6 +184,22 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 							Remove project…
 						</button>
 					</KebabMenu>
+					<button
+						ref={setPlusEl}
+						type="button"
+						class="sidebar-icon-btn project-new-btn"
+						aria-label={`New workspace in ${props.project.name}`}
+						aria-expanded={popoverOpen()}
+						title={
+							missing()
+								? "Project folder is missing; no workspace can start"
+								: `New workspace in ${props.project.name}`
+						}
+						disabled={missing()}
+						onClick={onPlus}
+					>
+						<PlusIcon />
+					</button>
 				</div>
 				<Show when={popoverOpen() ? plusEl() : undefined}>
 					{(anchor) => (
