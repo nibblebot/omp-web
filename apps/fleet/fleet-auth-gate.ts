@@ -11,8 +11,9 @@
  *   - Client-address resolution (P2.3 trusted proxies): the direct socket
  *     peer is the default client. X-Forwarded-For / X-Forwarded-Proto are
  *     honored ONLY when the direct peer matches the configured
- *     trustedProxies list (IP/CIDR literals); then the FIRST XFF hop is the
- *     client address and XFP may mark the request forwarded-over-https.
+ *     trustedProxies list (IP/CIDR literals); then the client is the
+ *     rightmost X-Forwarded-For hop that is not itself a trusted proxy,
+ *     and XFP may mark the request forwarded-over-https.
  *     Forwarded headers from any untrusted peer are ignored entirely,
  *     never trusted by default, and hostile values can never admit a
  *     loopback exemption or the origin allowlist (fail closed). XFP has no
@@ -169,17 +170,26 @@ export class FleetAuthGate {
 	// --- protected-surface gate (peer-aware) ----------------------------------
 
 	/** Effective client address for this request: the direct socket peer,
-	 *  replaced by the FIRST X-Forwarded-For hop only when the direct peer
-	 *  matches the configured trusted proxies. Forwarded headers from any
-	 *  other peer are ignored entirely (never trusted by default; hostile
-	 *  values cannot spoof a client, a loopback exemption, or the origin
-	 *  allowlist). A loopback peer that nevertheless carries forwarded
-	 *  headers is an UNDECLARED proxy: only a proxy adds XFF/XFP/XFH, and
-	 *  handing it the loopback exemption would admit every remote client it
-	 *  fronts. Such a peer resolves as "" (non-loopback → a session is
-	 *  required), failing closed until the operator lists the proxy in the
-	 *  trustedProxies config. Direct loopback clients (CLI, local UI) never
-	 *  send forwarded headers and keep the exemption. */
+	 *  replaced by a resolved X-Forwarded-For hop only when the direct peer
+	 *  matches the configured trusted proxies. The header is read right to
+	 *  left: each trusted proxy appends the address it saw, so hops to the
+	 *  left of the first untrusted address are client-controlled and never
+	 *  consulted. The first hop from the right that is not itself a trusted
+	 *  proxy is the client; a header made only of trusted proxies resolves
+	 *  to the peer. An empty hop resolves as "" (fail closed). A loopback
+	 *  result with a non-loopback socket peer also resolves as "": the
+	 *  loopback exemption belongs to the socket peer alone, so a spoofed or
+	 *  proxy-observed 127.0.0.1 hop never buys it. Forwarded headers from
+	 *  any other peer are ignored entirely (never trusted by default;
+	 *  hostile values cannot spoof a client, a loopback exemption, or the
+	 *  origin allowlist). A loopback peer that nevertheless carries
+	 *  forwarded headers while not listed is an UNDECLARED proxy: only a
+	 *  proxy adds XFF/XFP/XFH, and handing it the loopback exemption would
+	 *  admit every remote client it fronts. Such a peer resolves as ""
+	 *  (non-loopback → a session is required), failing closed until the
+	 *  operator lists the proxy in the trustedProxies config. Direct
+	 *  loopback clients (CLI, local UI) never send forwarded headers and
+	 *  keep the exemption. */
 	clientAddress(req: Request, remoteAddress: string | null | undefined): string {
 		const peer = remoteAddress ?? "";
 		if (!isTrustedProxy(peer, this.#trustedProxies)) {
@@ -194,15 +204,15 @@ export class FleetAuthGate {
 			return peer;
 		}
 		const xff = req.headers.get("x-forwarded-for");
-		if (xff !== null) {
-			// The FIRST hop is the original client (every later hop was added
-			// by a proxy). A peer that is trusted enough to forward headers is
-			// trusted to place that hop first; later hops are attacker
-			// controlled and never consulted.
-			const first = xff.split(",")[0]?.trim() ?? "";
-			if (first !== "") return first;
+		if (xff === null) return peer;
+		const hops = xff.split(",");
+		for (let i = hops.length - 1; i >= 0; i--) {
+			const hop = hops[i]!.trim();
+			if (hop === "") return "";
+			if (isTrustedProxy(hop, this.#trustedProxies)) continue;
+			return peerIsLoopback(hop) && !peerIsLoopback(peer) ? "" : hop;
 		}
-		return remoteAddress ?? "";
+		return peer;
 	}
 
 	/** Parsed request scheme: the socket's own, replaced by X-Forwarded-Proto
@@ -223,9 +233,9 @@ export class FleetAuthGate {
 
 	/** Non-loopback clients must hold a live session when auth is enabled;
 	 *  loopback clients (and the disabled state) are admitted with null.
-	 *  Callers pass the EFFECTIVE client address (clientAddress, the XFF
-	 *  first hop when the peer is trusted); authenticate never re-reads
-	 *  forwarded headers itself. */
+	 *  Callers pass the EFFECTIVE client address (clientAddress: the
+	 *  rightmost untrusted XFF hop when the peer is trusted);
+	 *  authenticate never re-reads forwarded headers itself. */
 	authenticate(req: Request, effectiveClient: string): AuthenticatedSession | null {
 		if (!this.enabled) return null;
 		if (peerIsLoopback(effectiveClient)) return null; // CLI loopback precedent

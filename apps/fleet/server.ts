@@ -1125,8 +1125,9 @@ class FleetServerImpl implements FleetServer {
 		// header and an allowed Origin. Loopback clients (CLI + local UI
 		// dev) are exempt; the R14 precedent, so fleet/cli.ts keeps
 		// working. The client is the socket peer unless the peer is a
-		// configured trusted proxy, whose X-Forwarded-For first hop wins
-		// (P2.3); forwarded headers from any untrusted peer are ignored, so
+		// configured trusted proxy, whose X-Forwarded-For client hop (the
+		// rightmost untrusted one) wins (P2.3); forwarded headers from any
+		// untrusted peer are ignored, so
 		// a non-loopback deployment behind an unlisted proxy still requires
 		// a session.
 		if (this.authGate !== null) {

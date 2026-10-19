@@ -81,7 +81,10 @@ export interface FleetConfig {
 	 * are ignored entirely (fail closed, never trusted by default). Flag
 	 * `--trusted-proxy` (repeatable, each occurrence comma-splittable) >
 	 * env `OMP_FLEET_TRUSTED_PROXY` (csv) > config-file `trustedProxies`
-	 * key. Malformed literals are a hard load error.
+	 * key. A listed proxy MUST append the peer it saw to X-Forwarded-For
+	 * (or replace the header); the client is the rightmost untrusted hop,
+	 * so a proxy that only passes a client-supplied header through lets
+	 * the client pick its address. Malformed literals are a hard load error.
 	 */
 	trustedProxies?: string[];
 	/**

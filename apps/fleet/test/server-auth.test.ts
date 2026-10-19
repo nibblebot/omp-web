@@ -252,7 +252,7 @@ describe("fleet auth gate forwarded-header resolution", () => {
 	const req = (headers: Record<string, string> = {}): Request =>
 		new Request("http://127.0.0.1/ctl/sessions", { headers });
 
-	test("XFF first hop is honored from a trusted proxy peer", () => {
+	test("XFF client hop is resolved from a trusted proxy peer", () => {
 		expect(
 			gate.clientAddress(req({ "x-forwarded-for": "10.1.2.3, 203.0.113.9" }), "203.0.113.9"),
 		).toBe("10.1.2.3");
@@ -260,13 +260,16 @@ describe("fleet auth gate forwarded-header resolution", () => {
 		expect(gate.clientAddress(req({ "x-forwarded-for": "10.1.2.3" }), "2001:db8::5")).toBe(
 			"10.1.2.3",
 		);
-		// A loopback first hop through a trusted proxy → loopback exemption.
-		expect(gate.authenticate(req({ "x-forwarded-for": "127.0.0.1" }), "203.0.113.9")).toBeNull();
-		// A forwarded NON-loopback first hop from the same trusted peer still
+		// A loopback hop from a trusted proxy is not the client when the socket
+		// peer is remote: the resolved client is never loopback.
+		const loopbackHop = gate.clientAddress(req({ "x-forwarded-for": "127.0.0.1" }), "203.0.113.9");
+		expect(peerIsLoopback(loopbackHop)).toBe(false);
+		expect(gate.authenticate(req({ "x-forwarded-for": "127.0.0.1" }), loopbackHop)).toBeNull();
+		// A forwarded NON-loopback client hop from the same trusted peer still
 		// demands a session: a null authenticate is the 401 server.ts emits.
-		const forwarded = req({ "x-forwarded-for": "203.0.113.7" });
+		const forwarded = req({ "x-forwarded-for": "198.51.100.7" });
 		const forwardedClient = gate.clientAddress(forwarded, "203.0.113.9");
-		expect(forwardedClient).toBe("203.0.113.7");
+		expect(forwardedClient).toBe("198.51.100.7");
 		expect(gate.authenticate(forwarded, forwardedClient)).toBeNull();
 	});
 
@@ -311,10 +314,11 @@ describe("fleet auth gate forwarded-header resolution", () => {
 				noProxyGate.clientAddress(req({ "x-forwarded-host": "app.example" }), "127.0.0.1"),
 			),
 		).toBe(false);
-		// The configured trusted proxy still resolves the XFF first hop.
+		// A loopback hop through a trusted proxy with a remote socket peer never
+		// resolves as loopback: the exemption belongs to the socket peer alone.
 		expect(
 			peerIsLoopback(gate.clientAddress(req({ "x-forwarded-for": "127.0.0.1" }), "203.0.113.9")),
-		).toBe(true);
+		).toBe(false);
 	});
 
 	test("X-Forwarded-Proto is honored only from a trusted proxy peer", () => {
@@ -334,6 +338,33 @@ describe("fleet auth gate forwarded-header resolution", () => {
 		expect(noProxyGate.clientAddress(req({ "x-forwarded-for": "127.0.0.1" }), "203.0.113.9")).toBe(
 			"203.0.113.9",
 		);
+	});
+
+	test("appended loopback hops never resolve as loopback; the client is the rightmost untrusted hop", () => {
+		const chain = new FleetAuthGate({
+			enabled: true,
+			loopbackDev: false,
+			store,
+			trustedProxies: compileTrustedProxies(["10.0.0.0/8", "203.0.113.0/24"]).rules,
+		});
+		// A proxy appends the peer it saw after a client-supplied leftmost hop.
+		expect(
+			chain.clientAddress(req({ "x-forwarded-for": "127.0.0.1, 198.51.100.7" }), "10.0.0.5"),
+		).toBe("198.51.100.7");
+		// Multi-proxy chain: trusted hops on the right are skipped; the spoofed
+		// leftmost loopback hop is never consulted.
+		expect(
+			chain.clientAddress(
+				req({ "x-forwarded-for": "127.0.0.1, 198.51.100.7, 10.0.0.2" }),
+				"203.0.113.9",
+			),
+		).toBe("198.51.100.7");
+		// A header made only of trusted hops resolves to the peer.
+		expect(
+			chain.clientAddress(req({ "x-forwarded-for": "10.0.0.2, 203.0.113.9" }), "10.0.0.5"),
+		).toBe("10.0.0.5");
+		// An empty hop fails closed.
+		expect(chain.clientAddress(req({ "x-forwarded-for": "198.51.100.7, " }), "10.0.0.5")).toBe("");
 	});
 });
 
