@@ -384,7 +384,8 @@ export async function serveLoop(server: FleetServer, opts: ServeLoopOptions): Pr
 async function uiCmd(port: number, controlPort: number, open: boolean): Promise<number> {
 	let ui: UiServer;
 	try {
-		ui = startUiServer({ port, controlPort });
+		const { browserOrigin } = await loadConfig(resolveConfigPath());
+		ui = startUiServer({ port, controlPort, browserOrigin });
 	} catch (err) {
 		const code = (err as { code?: unknown } | null)?.code;
 		const message = err instanceof Error ? err.message : String(err);

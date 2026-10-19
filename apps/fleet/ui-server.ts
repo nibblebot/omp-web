@@ -18,8 +18,14 @@
  * which the web client maps to its fleet-unreachable notice.
  *
  * Always binds 127.0.0.1; external exposure is the operator's reverse proxy.
+ *
+ * The proxy strips the browser's Host, so the control plane cannot see it. The
+ * guard (browser-guard.ts) therefore refuses a foreign Host, Origin, or
+ * Sec-Fetch-Site here, before proxying (FEDGE-02). `browserOrigin` is the
+ * configured public origin admitted alongside loopback.
  */
 
+import { browserRequestAllowed } from "./browser-guard";
 import { serveStaticUi } from "./static-ui";
 
 export const DEFAULT_UI_PORT = 4723;
@@ -46,7 +52,11 @@ const HOP_BY_HOP: Record<string, true> = {
 	upgrade: true,
 };
 
-export function startUiServer(opts: { port?: number; controlPort: number }): UiServer {
+export function startUiServer(opts: {
+	port?: number;
+	controlPort: number;
+	browserOrigin?: string;
+}): UiServer {
 	const { controlPort } = opts;
 	const server = Bun.serve({
 		hostname: LOOPBACK,
@@ -54,7 +64,7 @@ export function startUiServer(opts: { port?: number; controlPort: number }): UiS
 		// SSE responses are long-lived and quiet between keepalive pings;
 		// Bun's default idle timeout would kill them.
 		idleTimeout: 0,
-		fetch: (req, srv) => route(req, srv.requestIP(req)?.address, controlPort),
+		fetch: (req, srv) => route(req, srv.requestIP(req)?.address, controlPort, opts.browserOrigin),
 	});
 	return {
 		port: server.port!,
@@ -67,9 +77,13 @@ async function route(
 	req: Request,
 	peer: string | undefined,
 	controlPort: number,
+	browserOrigin: string | undefined,
 ): Promise<Response> {
 	const path = new URL(req.url).pathname;
 	if (!PROXIED_PATH.test(path)) return serveStaticUi(path);
+	if (!browserRequestAllowed(req, browserOrigin)) {
+		return Response.json({ error: "forbidden" }, { status: 403 });
+	}
 	return proxy(req, peer, controlPort);
 }
 

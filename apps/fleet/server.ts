@@ -94,6 +94,7 @@ import {
 import { createStatsApp } from "./stats-app";
 import type { StatsConfig } from "./stats-config";
 import { BrowserAuthStore, clearSessionCookie } from "./browser-auth";
+import { browserRequestAllowed, isJsonRequest } from "./browser-guard";
 import { DaemonTransportRegistry } from "./daemon-transport";
 import { FleetAuthGate, isLoopbackBind, peerIsLoopback, BrowserAuthError } from "./fleet-auth-gate";
 import { compileTrustedProxies } from "./trusted-proxy";
@@ -248,6 +249,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 async function readJson(req: Request): Promise<Record<string, unknown>> {
+	if (!isJsonRequest(req)) throw new HttpError(415, "request body must be application/json");
 	let raw: unknown;
 	try {
 		raw = await req.json();
@@ -428,6 +430,8 @@ class FleetServerImpl implements FleetServer {
 	 *  store adopts it on first login; the login route verifies against it).
 	 *  Empty when auth is disabled (never used). */
 	readonly #expectedTokenHash: string;
+	/** Configured browser origin (config.browserOrigin), admitted by the loopback browser guard. */
+	readonly #browserOrigin: string | undefined;
 
 	/**
 	 * daemonIds mid-eviction for a poll-detected, vanished worktree. The
@@ -547,6 +551,7 @@ class FleetServerImpl implements FleetServer {
 		// exception, never inferred for a public bind).
 		const loopbackDev = isLoopbackBind(config.bind);
 		this.#expectedTokenHash = config.browserAccessTokenHash ?? "";
+		this.#browserOrigin = config.browserOrigin;
 		const authEnabled = config.browserAccessTokenHash !== undefined;
 		// Compiled trusted-proxy rules for the gate. loadConfig already
 		// rejects malformed literals, but config objects constructed directly
@@ -1112,6 +1117,12 @@ class FleetServerImpl implements FleetServer {
 		if (path0.startsWith("/callback")) {
 			const transportHandled = await this.transport.handleFetch(req);
 			if (transportHandled !== null) return transportHandled;
+		}
+		// Loopback peers skip browser auth below, so a request a browser sent on a
+		// page's behalf (foreign Host, Origin, or Sec-Fetch-Site) is refused here,
+		// before any route runs (FEDGE-02). Header-less CLI calls pass.
+		if (peerIsLoopback(remoteAddress) && !browserRequestAllowed(req, this.#browserOrigin)) {
+			return json({ error: "forbidden" }, 403);
 		}
 		// Browser auth: /auth/* is public (the login/session/logout surface),
 		// mounted BEFORE the browser-session gate so the client can always

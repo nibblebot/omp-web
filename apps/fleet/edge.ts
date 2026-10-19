@@ -100,6 +100,7 @@ import {
 import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
 import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
 import type { FleetConfig } from "./config";
+import { isJsonRequest } from "./browser-guard";
 import { validateProjectPath } from "./discovery";
 import { serveStaticUi } from "./static-ui";
 import { BrowseError, browseDirectories } from "./fs-browse";
@@ -996,6 +997,7 @@ export class FleetEdge {
 		if (!stream) {
 			return json({ error: "unknown client or not connected" }, 400);
 		}
+		if (!isJsonRequest(req)) return json({ error: "request body must be application/json" }, 415);
 		let raw: unknown;
 		try {
 			raw = await req.json();
