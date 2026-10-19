@@ -412,9 +412,10 @@ export interface SkillsState {
 /** Bump on any breaking frame change.
  *  3: project/worktree redesign (remote enrollment, `DaemonEntry.mode`,
  *  `list_projects`/`projects`, `add_worktree` removed).
- *  4: infra remediation (kata kfg5): streaming, state, and command-size
- *  changes from the fleet/session/wire audit; see CHANGELOG.md
- *  "Infra remediation". */
+ *  4: infra remediation (kata kfg5): per-block streaming deltas, slimmer
+ *  `state` (no system prompt, tool schemas, or queue/inspect modes),
+ *  `roster_delta`, `getToolSchemas`, uncalled methods removed, and the
+ *  32 MiB command cap; see CHANGELOG.md "Infra remediation". */
 export const OMP_PROTO = 4;
 
 // --- SSE framing constants (shared by the daemon and the fleet) ---
