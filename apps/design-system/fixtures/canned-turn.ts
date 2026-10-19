@@ -1,11 +1,5 @@
-import type {
-	AssistantMessage,
-	AssistantMessageEvent,
-	ToolCall,
-	ToolResultMessage,
-	UserMessage,
-} from "@oh-my-pi/pi-ai";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
+import type { AssistantMessage, ToolCall, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai";
+import type { WireAssistantMessageEvent, WireSessionEvent } from "#lib/wire/protocol";
 import { claude } from "./screen";
 
 /**
@@ -19,7 +13,7 @@ import { claude } from "./screen";
 /** One event and when it fires, in ms after the prompt is accepted. */
 export interface CannedStep {
 	at: number;
-	event: AgentSessionEvent;
+	event: WireSessionEvent;
 }
 
 /** Delay between streamed text chunks; three words every 60ms reads like a live model. */
@@ -108,7 +102,7 @@ function usage(
 export function cannedTurn(prompt: string, run: number, now: number): CannedStep[] {
 	const steps: CannedStep[] = [];
 	let at = 0;
-	const emit = (event: AgentSessionEvent, delay = 0): void => {
+	const emit = (event: WireSessionEvent, delay = 0): void => {
 		at += delay;
 		steps.push({ at, event });
 	};
@@ -122,21 +116,21 @@ export function cannedTurn(prompt: string, run: number, now: number): CannedStep
 	/** Streams one assistant message: start, per-block deltas, then the settled message. */
 	const streamMessage = (message: AssistantMessage, ttft: number): void => {
 		const partial: AssistantMessage = { ...message, content: [] };
-		const update = (assistantMessageEvent: AssistantMessageEvent, delay: number): void =>
-			emit({ type: "message_update", message: partial, assistantMessageEvent }, delay);
+		const update = (assistantMessageEvent: WireAssistantMessageEvent, delay: number): void =>
+			emit({ type: "message_update", assistantMessageEvent }, delay);
 		emit({ type: "message_start", message: partial }, 120);
 		let delay = ttft;
 		message.content.forEach((block, contentIndex) => {
 			if (block.type === "thinking" || block.type === "text") {
 				const kind = block.type;
 				const body = kind === "thinking" ? block.thinking : block.text;
-				update({ type: `${kind}_start`, contentIndex, partial }, delay);
+				update({ type: `${kind}_start`, contentIndex }, delay);
 				for (const delta of chunks(body))
-					update({ type: `${kind}_delta`, contentIndex, delta, partial }, CHUNK_MS);
-				update({ type: `${kind}_end`, contentIndex, content: body, partial }, CHUNK_MS);
+					update({ type: `${kind}_delta`, contentIndex, delta }, CHUNK_MS);
+				update({ type: `${kind}_end`, contentIndex }, CHUNK_MS);
 			} else if (block.type === "toolCall") {
-				update({ type: "toolcall_start", contentIndex, partial }, delay);
-				update({ type: "toolcall_end", contentIndex, toolCall: block, partial }, 180);
+				update({ type: "toolcall_start", contentIndex }, delay);
+				update({ type: "toolcall_end", contentIndex }, 180);
 			}
 			delay = CHUNK_MS;
 		});

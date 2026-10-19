@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
+import type { WireSessionEvent } from "#lib/wire/protocol";
 import { applyEvent, setState, state } from "../web/state";
 import { answerCalls } from "./daemon";
 import { type CannedStep, cannedTurn } from "./fixtures/canned-turn";
@@ -101,7 +101,7 @@ function play(run: Run, step: CannedStep): void {
 }
 
 /** Keep what abort needs: open tools and the streamed assistant content so far. */
-function track(run: Run, event: AgentSessionEvent): void {
+function track(run: Run, event: WireSessionEvent): void {
 	switch (event.type) {
 		case "tool_execution_start":
 			run.openTools.set(event.toolCallId, event.toolName);

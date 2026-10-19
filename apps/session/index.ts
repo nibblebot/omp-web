@@ -105,7 +105,7 @@ import {
 	verifyLineageStructure,
 } from "./quiesce-evidence";
 import { flushAllWriters } from "./writer-flush";
-import { setOnFrameTap, setOnHistoryTap } from "./sse-delivery";
+import { setOnFrameTap, setOnHistoryTap, streamingPrimeFrames } from "./sse-delivery";
 import { settingWriteReloadsHistory, transcriptHistoryFrames } from "./transcript-history";
 import { initSdkTuiGlobals } from "./sdk-tui-globals";
 import { initSettings } from "./settings-boot";
@@ -319,6 +319,7 @@ function primingFrames(
 		},
 		{ type: "attached", sessionId: BOOT_HANDLE },
 		...transcriptHistoryFrames(entry.session),
+		...streamingPrimeFrames(entry),
 		{
 			type: "state",
 			state: daemonBroker.buildStateSnapshot(entry),

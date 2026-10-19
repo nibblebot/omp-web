@@ -1,5 +1,5 @@
 import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type { AssistantMessageEvent, Model, ToolExample } from "@oh-my-pi/pi-ai";
 import type { ContextUsage } from "@oh-my-pi/pi-coding-agent";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
@@ -1063,6 +1063,39 @@ export interface SubagentProgressFrame {
 }
 
 /**
+ * Streaming sub-event of a wire `message_update`: an append keyed by content
+ * block. A text/thinking delta carries only its block index and the appended
+ * text; every other sub-event (block start/end, tool-call progress, done,
+ * error) is a bare marker. The cumulative `partial` message, the settled block
+ * text and the tool call payload never ride a per-token frame: the committed
+ * message arrives once, on `message_end` (and in history for late joiners).
+ */
+export type WireAssistantMessageEvent =
+	| { type: "text_delta" | "thinking_delta"; contentIndex: number; delta: string }
+	| {
+			type: Exclude<
+				AssistantMessageEvent["type"],
+				"text_delta" | "thinking_delta" | WireTurnMarker
+			>;
+			contentIndex: number;
+	  }
+	| { type: WireTurnMarker };
+
+/** Sub-events that belong to the whole message, not a content block. */
+type WireTurnMarker = "start" | "done" | "error";
+
+/** `message_update` as it crosses the wire (assistant messages only). */
+export interface WireMessageUpdate {
+	type: "message_update";
+	assistantMessageEvent: WireAssistantMessageEvent;
+}
+
+/** SDK session event as shipped in an `event` frame: `message_update` slimmed to a delta. */
+export type WireSessionEvent =
+	| Exclude<AgentSessionEvent, { type: "message_update" }>
+	| WireMessageUpdate;
+
+/**
  * Session-scoped frames as the server composes them, before broadcastTo
  * stamps the session handle. On the wire they always carry sessionId.
  */
@@ -1073,7 +1106,7 @@ export type SessionScopedFrame =
 	// client accumulates until the `final` chunk completes the series.
 	| { type: "history"; messages: AgentMessage[]; final?: boolean }
 	| { type: "state"; state: WebSessionState; stats?: SessionStats }
-	| { type: "event"; event: AgentSessionEvent }
+	| { type: "event"; event: WireSessionEvent }
 	// Live output of an in-flight bash/python call (streamId = the client's
 	// bash-item id); broadcast session-scoped so every tab stays consistent.
 	| { type: "bash_chunk"; id: number; text: string }

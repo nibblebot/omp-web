@@ -2,7 +2,12 @@ import { createSignal } from "solid-js";
 import { produce } from "solid-js/store";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
-import type { ImageArg, QueuedCommandRef, QueuedMessageRef } from "#lib/wire/protocol";
+import type {
+	ImageArg,
+	QueuedCommandRef,
+	QueuedMessageRef,
+	WireSessionEvent,
+} from "#lib/wire/protocol";
 import { scanImages } from "../text/images";
 import { promptTimestamp } from "../chat/turn-usage";
 import { smoothStreaming } from "../chat/display-prefs";
@@ -493,6 +498,17 @@ export function assistantBlocks(content: AssistantContent): Block[] {
 	return blocks;
 }
 
+/** Live blocks for a message seeded mid-stream, keyed by contentIndex (deltas address blocks by index). */
+function liveBlocks(content: AssistantContent): Block[] {
+	const blocks: Block[] = [];
+	content.forEach((c, index) => {
+		if (c.type === "text") blocks[index] = { kind: "text", text: tabsToSpaces(c.text) };
+		else if (c.type === "thinking")
+			blocks[index] = { kind: "thinking", text: tabsToSpaces(c.thinking) };
+	});
+	return blocks;
+}
+
 /** Working-label intent from a tool_execution_start event, TUI priority:
  *  the loop's resolved `intent` first, then the harness-injected `i` arg
  *  (INTENT_FIELD in pi-wire, kept a literal because pi-wire isn't a client
@@ -512,7 +528,7 @@ function extractWorkingIntent(
 	return undefined;
 }
 
-export function applyEvent(e: AgentSessionEvent): void {
+export function applyEvent(e: WireSessionEvent): void {
 	switch (e.type) {
 		case "agent_start":
 			setState("streaming", true);
@@ -569,7 +585,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 					...(stamp !== undefined ? { timestamp: stamp } : {}),
 				});
 			} else if (msg.role === "assistant") {
-				setState("live", { active: true, blocks: [] });
+				setState("live", { active: true, blocks: liveBlocks(msg.content) });
 				// blocks was replaced wholesale (identity change): bump rev so
 				// scroll/pin trackers re-check even though no text was written.
 				bumpLiveRev();
@@ -577,7 +593,6 @@ export function applyEvent(e: AgentSessionEvent): void {
 			break;
 		}
 		case "message_update": {
-			if (e.message.role !== "assistant") break;
 			const ev = e.assistantMessageEvent;
 			switch (ev.type) {
 				case "text_start":

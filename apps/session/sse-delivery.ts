@@ -1,4 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import { ENVELOPE_MAX_BYTES } from "#lib/wire/callback-protocol";
 import {
 	SSE_BACKPRESSURE_BYTES,
@@ -9,6 +11,7 @@ import {
 	SSE_RING_BYTES,
 	type ServerFrame,
 	type SessionScopedFrame,
+	type WireSessionEvent,
 } from "#lib/wire/protocol";
 import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "#lib/wire/sse";
 import type { SessionEntry } from "./session-entry";
@@ -346,6 +349,57 @@ export function broadcastAnswer(frame: ServerFrame): void {
 	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
 	for (const stream of streams) enqueueTo(stream, block);
 	tapFrame(frame);
+}
+
+/**
+ * The in-progress assistant message per session. Deltas carry no snapshot, so a
+ * late joiner is primed with this one message, not one copy per token.
+ */
+const streamingAssistant = new WeakMap<SessionEntry, AssistantMessage>();
+
+/** Track the in-progress assistant message from the raw SDK events (before slimming). */
+export function trackStreamingAssistant(entry: SessionEntry, event: AgentSessionEvent): void {
+	if (event.type === "message_start" || event.type === "message_update") {
+		if (event.message.role === "assistant") streamingAssistant.set(entry, event.message);
+	} else if (event.type === "message_end" || event.type === "agent_end") {
+		streamingAssistant.delete(entry);
+	}
+}
+
+/** Priming for a late joiner: the in-progress assistant message, when one is streaming. */
+export function streamingPrimeFrames(
+	entry: SessionEntry,
+): Array<{ type: "event"; event: WireSessionEvent }> {
+	const message = streamingAssistant.get(entry);
+	return message === undefined
+		? []
+		: [{ type: "event", event: { type: "message_start", message } }];
+}
+
+/**
+ * SDK session event to its wire form. The SDK's `message_update` carries the
+ * cumulative assistant message twice (`message` and `assistantMessageEvent.partial`),
+ * so shipping it verbatim costs O(n^2) bytes per reply across the SSE ring, the
+ * control mirror and every browser stream. On the wire it is a delta keyed by
+ * content block (see WireAssistantMessageEvent); the full message goes out once,
+ * on `message_end`. Every other event is forwarded untouched.
+ */
+export function toWireEvent(event: AgentSessionEvent): WireSessionEvent {
+	if (event.type !== "message_update") return event;
+	const sub = event.assistantMessageEvent;
+	if (sub.type === "text_delta" || sub.type === "thinking_delta") {
+		return {
+			type: "message_update",
+			assistantMessageEvent: { type: sub.type, contentIndex: sub.contentIndex, delta: sub.delta },
+		};
+	}
+	if (sub.type === "start" || sub.type === "done" || sub.type === "error") {
+		return { type: "message_update", assistantMessageEvent: { type: sub.type } };
+	}
+	return {
+		type: "message_update",
+		assistantMessageEvent: { type: sub.type, contentIndex: sub.contentIndex },
+	};
 }
 
 /**

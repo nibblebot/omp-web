@@ -72,6 +72,7 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only; room traffic runs on 
 
 - Changes are additive-only unless the version is bumped with both gates: `OMP_PROTO` (frames) is gated in `apps/fleet/edge.ts` (daemon `hello_ok`) and `apps/web/state.ts`; `OMP_CALLBACK_PROTO` (the callback pair) is gated in `lib/wire/callback-protocol.ts`, shared by `apps/fleet/daemon-transport.ts` and `apps/session/fleet-callback.ts`.
 - Preserve byte-bounded history, chunk accumulation, and replay/backpressure semantics. `stream_reset` ends a stream, not the daemon. Do not clip messages merely because they exceed the frame batch target.
+- `message_update` on the session wire is a delta keyed by content block (`WireAssistantMessageEvent`), never the cumulative message. The full message goes out on `message_end`; a late joiner is primed with the in-progress message (`streamingPrimeFrames`). `toWireEvent` in `apps/session/sse-delivery.ts` is the only SDK-to-wire slimming point. Collab peer frames (`collab-host.ts`) keep the SDK shape because the SDK guest reads the full `message`.
 - Command retries reuse the same ID within the dedup window. Duplicates replay answers, never re-dispatch; replay across daemon process changes must fail, never execute again.
 
 ### Server

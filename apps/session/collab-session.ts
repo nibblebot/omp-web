@@ -32,7 +32,13 @@ import type { SessionConfig } from "./config";
 import type { DaemonBroker } from "./daemon-broker";
 import { installPlanReviewHandler } from "./review-plan";
 import { BOOT_HANDLE, type SessionEntry } from "./session-entry";
-import { broadcast, broadcastTo, notifyEvent } from "./sse-delivery";
+import {
+	broadcast,
+	broadcastTo,
+	notifyEvent,
+	toWireEvent,
+	trackStreamingAssistant,
+} from "./sse-delivery";
 import { cancelEntryUiRequests } from "./ui-context";
 import { handleSubagentLifecycle, handleSubagentProgress } from "./subagent-mirror";
 import { buildUiContext } from "./ui-context";
@@ -269,7 +275,8 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		// session.subscribe covers the entire AgentSessionEvent union, the same
 		// frames the RPC child emitted onSessionEvent.
 		session.subscribe((event) => {
-			broadcastTo(entry.handle, { type: "event", event });
+			trackStreamingAssistant(entry, event);
+			broadcastTo(entry.handle, { type: "event", event: toWireEvent(event) });
 			// Tokens/cost/context/queue counts all change at turn end.
 			if (event.type === "agent_end") void deps.broker.broadcastState(entry, true).catch(() => {});
 			if (event.type === "agent_end") void drainCommands(entry);
