@@ -58,6 +58,7 @@ function makeHarness(
 		stream: 0,
 		connection: 0,
 	}),
+	recordSent = true,
 ): {
 	control: DaemonControl;
 	sent: Sent[];
@@ -75,7 +76,7 @@ function makeHarness(
 			seq = ++wireSeq;
 			onEmittedSeq(seq);
 		}
-		sent.push({ streamId, kind, payload, seq });
+		if (recordSent) sent.push({ streamId, kind, payload, seq });
 		for (const waiter of waiters) if (sent.length >= waiter.count) waiter.resolve();
 		return "sent";
 	};
@@ -456,4 +457,52 @@ test("sustained output with a full-speed client primes without a reset loop", as
 		.map((s) => eventIndex(s.payload));
 	expect(indices).toEqual(Array.from({ length: 40 }, (_, i) => i));
 	control.stop();
+});
+
+describe("daemon-control replay ring releases evicted frames (WIRE-18)", () => {
+	test("frames evicted from the replay ring become unreachable", async () => {
+		const { control } = makeHarness(undefined, undefined, undefined, undefined, false);
+		openStream(control);
+		const refs: WeakRef<object>[] = [];
+		const mirrorBlob = (): void => {
+			const frame = { type: "state", state: { blob: "x".repeat(1024 * 1024) } };
+			refs.push(new WeakRef(frame));
+			control.mirror(frame);
+		};
+		for (let i = 0; i < 40; i++) mirrorBlob();
+		const { ringEntries } = control.status().streams[0]!;
+		// 4 MiB budget over ~1 MiB frames: only the newest few stay ringed.
+		expect(ringEntries).toBeLessThan(5);
+		// Drain microtasks so WeakRef targets created in this job can be collected.
+		await new Promise<void>((resolve) => queueMicrotask(resolve));
+		Bun.gc(true);
+		const retained = refs.filter((ref) => ref.deref() !== undefined).length;
+		expect(retained).toBe(ringEntries);
+		control.stop();
+	});
+
+	test("the ring compacts past its cap and a floor at the frontier replays exactly the retained tail", () => {
+		const { control, sent, primes } = makeHarness();
+		openStream(control);
+		for (let i = 0; i < 22_000; i++) control.mirror({ type: "state", state: { i } });
+		const seqs = ringedSeqs(sent);
+		expect(seqs).toHaveLength(22_000);
+		expect(control.status().streams[0]!.ringEntries).toBe(10_000);
+		const stateIndex = (payload: unknown): number => {
+			if (typeof payload !== "object" || payload === null || !("state" in payload)) return -1;
+			const { state } = payload;
+			if (typeof state !== "object" || state === null || !("i" in state)) return -1;
+			return typeof state.i === "number" ? state.i : -1;
+		};
+		// The 12,000 oldest deltas were evicted; the frontier is the newest of them.
+		const before = sent.length;
+		openStream(control, seqs[11_999]!);
+		expect(primes).toHaveLength(1); // ring HIT: no re-prime
+		const replayed = sent
+			.slice(before)
+			.filter((s) => s.kind === "frame" && typeOf(s.payload) === "state")
+			.map((s) => stateIndex(s.payload));
+		expect(replayed).toEqual(Array.from({ length: 10_000 }, (_, k) => k + 12_000));
+		control.stop();
+	});
 });

@@ -135,7 +135,8 @@ interface RingEntry {
 interface BrowserStream {
 	streamId: string;
 	lastSeq: number;
-	entries: RingEntry[];
+	/** Slots before `head` are evicted and cleared to `undefined` so their frames can be collected. */
+	entries: Array<RingEntry | undefined>;
 	head: number;
 	bytes: number;
 	/**
@@ -247,12 +248,18 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 							stream.entries.length - stream.head > 1
 						) {
 							const dropped = stream.entries[stream.head]!;
+							stream.entries[stream.head] = undefined;
 							stream.bytes -= dropped.bytes;
 							stream.head++;
 							// The frontier is the highest evicted wire seq: a
 							// reconnect floor BELOW it needs entries the ring
 							// no longer holds (ring MISS).
 							if (dropped.seq > stream.evictedSeq) stream.evictedSeq = dropped.seq;
+						}
+						// Reclaim the dead prefix once it dominates the backing array.
+						if (stream.head > 1024 && stream.head * 2 > stream.entries.length) {
+							stream.entries = stream.entries.slice(stream.head);
+							stream.head = 0;
 						}
 					}
 				: undefined,
