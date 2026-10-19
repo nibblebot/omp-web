@@ -186,9 +186,6 @@ export const WAKE_TIMEOUT_MS = 60_000;
 /** Reconnect backoff ramp, jittered (1 s → 30 s). */
 export const RECONNECT_BACKOFF_MIN_MS = 1_000;
 export const RECONNECT_BACKOFF_MAX_MS = 30_000;
-/** Command dedup window: same command id within a workspace (60 s / 64 entries). */
-export const DEDUP_WINDOW_MS = 60_000;
-export const DEDUP_WINDOW_ENTRIES = 64;
 /** Bulk transfer cap for POST /callback/bulk/<correlationId> (64 MiB). */
 export const BULK_MAX_BYTES = 64 * 1024 * 1024;
 /** Callback enrollment credential width (256-bit, hashed fleet-side). */
@@ -216,6 +213,7 @@ export const CALLBACK_ERROR_CODES = [
 	"archive_conflict",
 	"provider_failed",
 	"retryable",
+	"payload_too_large",
 ] as const;
 export type CallbackErrorCode = (typeof CALLBACK_ERROR_CODES)[number];
 
@@ -233,7 +231,11 @@ export const CALLBACK_ERROR_HTTP_STATUS: Record<CallbackErrorCode, number> = {
 	archive_conflict: 409,
 	provider_failed: 500,
 	retryable: 503,
+	payload_too_large: 413,
 };
+
+/** Request header a session sets on POST /callback/up when it reassembles chunked commands ("1"). */
+export const CALLBACK_CHUNKS_HEADER = "x-omp-callback-chunks";
 
 /** Typed protocol error carrying a ledger error code. */
 export class CallbackError extends Error {
@@ -376,12 +378,15 @@ function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
 	return out;
 }
 
-/** Incremental NDJSON parser over raw HTTP chunks. */
+/** One NDJSON outcome: a complete record, or one bad record dropped (the stream resynchronizes after it). */
+export type NdjsonItem = { record: string } | { dropped: CallbackError };
+
+/** Incremental NDJSON parser over raw HTTP chunks. Never throws on a bad record. */
 export interface NdjsonParser {
-	/** Feed one HTTP chunk; returns every record completed by it (may be empty). */
-	push(chunk: Uint8Array | string): string[];
+	/** Feed one HTTP chunk; returns every record and dropped record it completes, in stream order. */
+	push(chunk: Uint8Array | string): NdjsonItem[];
 	/** Flush at end-of-body; a trailing non-blank record without a newline is legal. */
-	end(): string[];
+	end(): NdjsonItem[];
 	/** Bytes buffered since the last record boundary (bounded by the record cap). */
 	readonly bufferedBytes: number;
 }
@@ -391,13 +396,17 @@ export interface NdjsonParser {
  * Bytes accumulate until a newline and only complete records are decoded, so
  * HTTP chunk boundaries are not message boundaries and multi-byte UTF-8
  * sequences split across chunks stay intact (0x0a can never occur inside a
- * UTF-8 multi-byte sequence). A record longer than `maxRecordBytes` (default
- * ENVELOPE_MAX_BYTES) or invalid UTF-8 throws CallbackError("invalid_request").
+ * UTF-8 multi-byte sequence). A bad record (over `maxRecordBytes`, default
+ * ENVELOPE_MAX_BYTES, or invalid UTF-8) is returned as a `dropped` item and
+ * the stream resynchronizes at the next newline. An over-cap record is dropped
+ * as soon as the cap is crossed; its remaining bytes are discarded unbuffered.
  * Blank lines are skipped; a trailing CR is tolerated.
  */
 export function createNdjsonParser(opts?: { maxRecordBytes?: number }): NdjsonParser {
 	const maxRecordBytes = opts?.maxRecordBytes ?? ENVELOPE_MAX_BYTES;
 	let pending: Uint8Array = new Uint8Array(0);
+	// Set once an over-cap record was dropped: its bytes are discarded up to the next newline.
+	let discarding = false;
 
 	const overSize = (length: number): CallbackError =>
 		new CallbackError(
@@ -405,21 +414,23 @@ export function createNdjsonParser(opts?: { maxRecordBytes?: number }): NdjsonPa
 			`invalid ndjson stream: record is ${length} bytes, over the ${maxRecordBytes}-byte record limit`,
 		);
 
-	const decodeRecord = (): string | undefined => {
-		if (pending.length === 0) return undefined;
+	// Close the buffered record at a newline or end-of-body.
+	const closeRecord = (): NdjsonItem | undefined => {
 		let line = pending;
-		if (line[line.length - 1] === 0x0d) line = line.subarray(0, line.length - 1);
 		pending = new Uint8Array(0);
+		if (line[line.length - 1] === 0x0d) line = line.subarray(0, line.length - 1);
 		if (line.length === 0) return undefined;
-		if (line.length > maxRecordBytes) throw overSize(line.length);
+		if (line.length > maxRecordBytes) return { dropped: overSize(line.length) };
 		try {
-			return utf8Strict.decode(line);
+			return { record: utf8Strict.decode(line) };
 		} catch (cause) {
-			throw new CallbackError(
-				"invalid_request",
-				"invalid ndjson stream: record is not valid UTF-8",
-				{ cause },
-			);
+			return {
+				dropped: new CallbackError(
+					"invalid_request",
+					"invalid ndjson stream: record is not valid UTF-8",
+					{ cause },
+				),
+			};
 		}
 	};
 
@@ -429,25 +440,37 @@ export function createNdjsonParser(opts?: { maxRecordBytes?: number }): NdjsonPa
 		},
 		push(chunk) {
 			const bytes = typeof chunk === "string" ? utf8.encode(chunk) : chunk;
-			const out: string[] = [];
+			const out: NdjsonItem[] = [];
 			let start = 0;
 			for (;;) {
 				const nl = bytes.indexOf(0x0a, start);
 				if (nl === -1) break;
-				pending = concatBytes(pending, bytes.subarray(start, nl));
-				const record = decodeRecord();
-				if (record !== undefined) out.push(record);
+				if (discarding) {
+					discarding = false;
+				} else {
+					pending = concatBytes(pending, bytes.subarray(start, nl));
+					const item = closeRecord();
+					if (item !== undefined) out.push(item);
+				}
 				start = nl + 1;
 			}
-			if (start < bytes.length) {
+			if (start < bytes.length && !discarding) {
 				pending = concatBytes(pending, bytes.subarray(start));
-				if (pending.length > maxRecordBytes) throw overSize(pending.length);
+				if (pending.length > maxRecordBytes) {
+					out.push({ dropped: overSize(pending.length) });
+					pending = new Uint8Array(0);
+					discarding = true;
+				}
 			}
 			return out;
 		},
 		end() {
-			const record = decodeRecord();
-			return record === undefined ? [] : [record];
+			if (discarding) {
+				discarding = false;
+				return [];
+			}
+			const item = closeRecord();
+			return item === undefined ? [] : [item];
 		},
 	};
 }
@@ -467,22 +490,37 @@ export function encodeSseEnvelope(envelope: CallbackEnvelope): string {
  * Comments and the transport `ping` keepalive are consumed silently;
  * observable liveness comes from `heartbeat` envelopes (15 s cadence vs the
  * 30 s silence deadline). Malformed event data throws
- * CallbackError("invalid_request"). The event name mirrors the envelope kind
- * by convention but only the data is validated.
+ * CallbackError("invalid_request") unless `onRecordError` is given: then the
+ * bad event is reported and skipped (SSE event boundaries stay intact), so one
+ * malformed envelope fails only itself. The event name mirrors the envelope
+ * kind by convention but only the data is validated.
  */
 export async function* parseSseEnvelope(
 	body: ReadableStream<Uint8Array>,
+	opts?: { onRecordError?: (error: CallbackError) => void },
 ): AsyncGenerator<CallbackEnvelope> {
 	for await (const unit of parseSseUnits(body)) {
 		if (unit.kind !== "event" || unit.event === SSE_PING_EVENT) continue;
-		let value: unknown;
+		let envelope: CallbackEnvelope;
 		try {
-			value = JSON.parse(unit.data);
-		} catch (cause) {
-			throw new CallbackError("invalid_request", "sse event data is not valid JSON", { cause });
+			envelope = parseEventEnvelope(unit.data);
+		} catch (error) {
+			if (opts?.onRecordError === undefined) throw error;
+			opts.onRecordError(error as CallbackError);
+			continue;
 		}
-		yield validateEnvelope(value);
+		yield envelope;
 	}
+}
+
+function parseEventEnvelope(data: string): CallbackEnvelope {
+	let value: unknown;
+	try {
+		value = JSON.parse(data);
+	} catch (cause) {
+		throw new CallbackError("invalid_request", "sse event data is not valid JSON", { cause });
+	}
+	return validateEnvelope(value);
 }
 
 /** Payload of a control envelope carrying one slice of an oversized payload. */
@@ -674,103 +712,4 @@ export function reassembleChunks(
 			{ cause },
 		);
 	}
-}
-
-/**
- * Outcome of a dedup-gated command submission (ledger: "Dedup: command id
- * within workspace, existing 60 s / 64-entry window").
- *
- * - "accepted": the id was fresh; the caller may submit it. The window
- *   records a pending entry until confirmAccepted is called.
- * - "not_submitted": duplicate of a prior submission already confirmed
- *   accepted: safe to skip; do not resend.
- * - "unknown": duplicate of a prior submission whose daemon acceptance was
- *   never confirmed (e.g. the connection died mid-flight): the caller must
- *   not assume either acceptance or loss.
- */
-export type CommandSubmitOutcome = "not_submitted" | "accepted" | "unknown";
-
-/**
- * Command-identity dedup window. Identity is the (workspaceId, commandId)
- * pair exactly; payloads are never fingerprinted, and a fresh id is always
- * "accepted" even if its payload matches an earlier different-id command.
- */
-export interface DedupWindow {
-	submit(workspaceId: string, commandId: string, now?: number): CommandSubmitOutcome;
-	/** Mark a submission accepted by the daemon; duplicates within the window then report "not_submitted". Returns whether the entry existed. */
-	confirmAccepted(workspaceId: string, commandId: string): boolean;
-	/** Unrecord a submission that never left (transport failed before submit); a retry then reports "accepted" again. Returns whether an entry existed. */
-	release(workspaceId: string, commandId: string): boolean;
-	/** Live (unexpired) entry count for a workspace. */
-	size(workspaceId: string, now?: number): number;
-}
-
-/**
- * Per-workspace command dedup window: DEDUP_WINDOW_MS since first sight, at
- * most DEDUP_WINDOW_ENTRIES ids per workspace (oldest evicted first).
- * Entries expire from first submission regardless of confirmation.
- */
-export function createDedupWindow(opts?: { windowMs?: number; capacity?: number }): DedupWindow {
-	const windowMs = opts?.windowMs ?? DEDUP_WINDOW_MS;
-	const capacity = opts?.capacity ?? DEDUP_WINDOW_ENTRIES;
-	interface Entry {
-		at: number;
-		accepted: boolean;
-	}
-	interface Bucket {
-		order: string[];
-		entries: Map<string, Entry>;
-	}
-	const workspaces = new Map<string, Bucket>();
-
-	const evictExpired = (bucket: Bucket, now: number): void => {
-		for (;;) {
-			const oldest = bucket.order[0];
-			if (oldest === undefined) break;
-			const entry = bucket.entries.get(oldest);
-			if (entry && now - entry.at < windowMs) break;
-			bucket.order.shift();
-			bucket.entries.delete(oldest);
-		}
-	};
-
-	return {
-		submit(workspaceId, commandId, now = Date.now()) {
-			let bucket = workspaces.get(workspaceId);
-			if (!bucket) {
-				bucket = { order: [], entries: new Map() };
-				workspaces.set(workspaceId, bucket);
-			}
-			evictExpired(bucket, now);
-			const existing = bucket.entries.get(commandId);
-			if (existing) return existing.accepted ? "not_submitted" : "unknown";
-			bucket.entries.set(commandId, { at: now, accepted: false });
-			bucket.order.push(commandId);
-			while (bucket.order.length > capacity) {
-				const oldest = bucket.order.shift();
-				if (oldest !== undefined) bucket.entries.delete(oldest);
-			}
-			return "accepted";
-		},
-		confirmAccepted(workspaceId, commandId) {
-			const entry = workspaces.get(workspaceId)?.entries.get(commandId);
-			if (!entry) return false;
-			entry.accepted = true;
-			return true;
-		},
-		release(workspaceId, commandId) {
-			const bucket = workspaces.get(workspaceId);
-			if (!bucket?.entries.has(commandId)) return false;
-			bucket.entries.delete(commandId);
-			const at = bucket.order.indexOf(commandId);
-			if (at !== -1) bucket.order.splice(at, 1);
-			return true;
-		},
-		size(workspaceId, now = Date.now()) {
-			const bucket = workspaces.get(workspaceId);
-			if (!bucket) return 0;
-			evictExpired(bucket, now);
-			return bucket.entries.size;
-		},
-	};
 }

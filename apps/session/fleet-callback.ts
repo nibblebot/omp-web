@@ -4,6 +4,7 @@ import {
 	BULK_MAX_BYTES,
 	BULK_PART_HEADER,
 	CALLBACK_BULK_PATH_PREFIX,
+	CALLBACK_CHUNKS_HEADER,
 	CALLBACK_DOWN_PATH,
 	CALLBACK_PAIR_READY_TYPE,
 	CALLBACK_CONTROL_STREAM_ID,
@@ -23,12 +24,16 @@ import {
 	CallbackError,
 	callbackError,
 	encodeNdjsonLine,
+	isChunkPayload,
+	reassembleChunks,
 	parseSseEnvelope,
 	validateEnvelope,
 	type CallbackEnvelope,
 	type CallbackErrorCode,
 	type CallbackKind,
+	type ChunkEnvelopePayload,
 } from "#lib/wire/callback-protocol";
+import { MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
 import {
 	parseMaterializeRecord,
 	type MaterializeRecord,
@@ -237,6 +242,7 @@ function isCallbackErrorCode(value: string): value is CallbackErrorCode {
 		case "archive_conflict":
 		case "provider_failed":
 		case "retryable":
+		case "payload_too_large":
 			return true;
 		default:
 			return false;
@@ -981,7 +987,7 @@ export class FleetCallback {
 	#launchUp(pair: PairHandle): void {
 		const init = this.#fetchInit(pair.upAbort.signal, {
 			method: "POST",
-			headers: this.#identityHeaders(pair),
+			headers: { ...this.#identityHeaders(pair), [CALLBACK_CHUNKS_HEADER]: "1" },
 			body: this.#makeUpBody(pair),
 			duplex: "half",
 		});
@@ -1307,8 +1313,12 @@ export class FleetCallback {
 	// ── down half: SSE reader ─────────────────────────────────────────────────
 
 	async #consumeDown(pair: PairHandle, res: Response): Promise<void> {
+		// Chunked commands in flight on this down stream, keyed by chunkId.
+		const pending = new Map<string, CallbackEnvelope[]>();
 		try {
-			for await (const envelope of parseSseEnvelope(res.body!)) {
+			const onRecordError = (error: CallbackError): void =>
+				this.#events?.onError?.(error, { phase: "down" });
+			for await (const envelope of parseSseEnvelope(res.body!, { onRecordError })) {
 				if (!this.#isCurrent(pair)) return;
 				this.#resetSilence(pair);
 				if (envelope.connectionId !== pair.connectionId) {
@@ -1320,31 +1330,12 @@ export class FleetCallback {
 					});
 					return;
 				}
-				if (envelope.kind === "control" && isPairReadyEnvelope(envelope)) {
-					this.#markReady(pair, envelope);
-					continue; // transport control, not user traffic
+				if (envelope.kind === "control" && isChunkPayload(envelope.payload)) {
+					const command = this.#reassembleDown(pending, envelope, envelope.payload);
+					if (command !== undefined) this.#deliverDown(pair, command);
+					continue;
 				}
-				if (envelope.kind === "heartbeat") continue; // liveness only
-				this.#received++;
-				if (envelope.kind === "control") {
-					const onControl = this.#events?.onControl;
-					if (onControl) {
-						try {
-							onControl(envelope);
-						} catch {
-							// Listener failures never break the transport.
-						}
-					}
-					continue; // control traffic does not hit the raw frame path
-				}
-				const onEnvelope = this.#events?.onEnvelope;
-				if (onEnvelope) {
-					try {
-						onEnvelope(envelope);
-					} catch {
-						// Listener failures never break the transport.
-					}
-				}
+				this.#deliverDown(pair, envelope);
 			}
 			if (this.#isCurrent(pair)) {
 				this.#finishPair(pair, {
@@ -1363,6 +1354,65 @@ export class FleetCallback {
 						? cause
 						: callbackError("retryable", "callback down stream failed", { cause }),
 			});
+		}
+	}
+
+	/** Hand one validated down envelope to the session: readiness, liveness, control, raw frames. */
+	#deliverDown(pair: PairHandle, envelope: CallbackEnvelope): void {
+		if (envelope.kind === "control" && isPairReadyEnvelope(envelope)) {
+			this.#markReady(pair, envelope);
+			return; // transport control, not user traffic
+		}
+		if (envelope.kind === "heartbeat") return; // liveness only
+		this.#received++;
+		if (envelope.kind === "control") {
+			const onControl = this.#events?.onControl;
+			if (onControl) {
+				try {
+					onControl(envelope);
+				} catch {
+					// Listener failures never break the transport.
+				}
+			}
+			return; // control traffic does not hit the raw frame path
+		}
+		const onEnvelope = this.#events?.onEnvelope;
+		if (onEnvelope) {
+			try {
+				onEnvelope(envelope);
+			} catch {
+				// Listener failures never break the transport.
+			}
+		}
+	}
+
+	/**
+	 * Collect one slice of a chunked command. Returns the rebuilt command once
+	 * every slice of its chunkId has arrived. A group that fails to reassemble
+	 * is reported and dropped; the pair stays up.
+	 */
+	#reassembleDown(
+		pending: Map<string, CallbackEnvelope[]>,
+		slice: CallbackEnvelope,
+		chunk: ChunkEnvelopePayload,
+	): CallbackEnvelope | undefined {
+		const group = [...(pending.get(chunk.chunkId) ?? []), slice];
+		if (group.length < chunk.total) {
+			pending.set(chunk.chunkId, group);
+			return undefined;
+		}
+		pending.delete(chunk.chunkId);
+		try {
+			const payload = reassembleChunks(group, { streamMaxBytes: MAX_COMMAND_BYTES });
+			return { ...group[0], kind: "command", payload };
+		} catch (cause) {
+			this.#events?.onError?.(
+				cause instanceof CallbackError
+					? cause
+					: callbackError("invalid_request", "chunked command failed to reassemble", { cause }),
+				{ phase: "down" },
+			);
+			return undefined;
 		}
 	}
 

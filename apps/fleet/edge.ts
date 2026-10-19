@@ -97,7 +97,7 @@ import {
 	SSE_PING_EVENT,
 	SseRing,
 } from "#lib/wire/sse";
-import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
+import { CALLBACK_CONTROL_STREAM_ID, CallbackError } from "#lib/wire/callback-protocol";
 import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
 import type { FleetConfig } from "./config";
 import { isJsonRequest } from "./browser-guard";
@@ -2125,7 +2125,12 @@ export class FleetEdge {
 		// correlates call() promises only with call_result, so a bare error
 		// frame would leave the promise hanging until its 30s timeout. A
 		// malformed id-less command keeps the legacy global error frame.
-		const failNotAttached = (): void => {
+		const failNotAttached = (cause?: unknown): void => {
+			// An oversize command is refused by name; it never reached the session.
+			const refused =
+				cause instanceof CallbackError && cause.code === "payload_too_large"
+					? cause.message
+					: undefined;
 			const commandId = typeof cmd.id === "string" && cmd.id !== "" ? cmd.id : undefined;
 			if (commandId !== undefined) {
 				const sent = this.#forwardOrigins.get(commandId)?.sent === true;
@@ -2133,12 +2138,14 @@ export class FleetEdge {
 					type: "call_result",
 					id: commandId,
 					ok: false,
-					error: sent
-						? "connection to the session process was lost; the change may have been applied, refresh to check"
-						: "not attached",
+					error:
+						refused ??
+						(sent
+							? "connection to the session process was lost; the change may have been applied, refresh to check"
+							: "not attached"),
 				});
 			} else {
-				this.#sendError(stream, "not attached");
+				this.#sendError(stream, refused ?? "not attached");
 			}
 		};
 		if (!pipe || !transport) {

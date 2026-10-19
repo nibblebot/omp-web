@@ -97,6 +97,7 @@ import { join } from "node:path";
 import {
 	BULK_MAX_BYTES,
 	CALLBACK_BULK_PATH_PREFIX,
+	CALLBACK_CHUNKS_HEADER,
 	CALLBACK_CONTROL_STREAM_ID,
 	CALLBACK_DOWN_PATH,
 	CALLBACK_ERROR_HTTP_STATUS,
@@ -114,12 +115,16 @@ import {
 	CONNECTION_MAX_BYTES,
 	HEARTBEAT_INTERVAL_MS,
 	isCallbackError,
+	type NdjsonItem,
+	needsSplit,
+	planOversizeSplit,
 	REPLAY_RING_ENTRIES,
 	SILENCE_DEADLINE_MS,
 	STREAM_MAX_BYTES,
 	type CallbackKind,
 	validateEnvelope,
 } from "#lib/wire/callback-protocol";
+import { commandBytes, commandTooLargeMessage, MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
 import type { FleetLogStore } from "./log-store";
 import {
 	MATERIALIZE_REQUEST_MAX_BYTES,
@@ -140,6 +145,8 @@ import { SseRing } from "#lib/wire/sse";
 const REPLAY_RING_BYTES = 8 * 1024 * 1024;
 /** Rings with no live connection and no activity for this long are dropped. */
 const RING_IDLE_MS = 10 * 60_000;
+/** A chunked command waits this long for the daemon to drain the down stream before the connection is dropped. */
+const DOWN_ROOM_STALL_MS = 30_000;
 /** Open bulk correlations with no payload progress for this long expire as failed; settled ones are reaped. */
 const BULK_IDLE_MS = 60_000;
 /** Capture (download) correlations open at once; each buffers up to BULK_MAX_BYTES, so this bounds fleet heap. */
@@ -236,6 +243,10 @@ interface UpConnection {
 	silenceKilled: boolean;
 	reader: ReadableStreamDefaultReader<Uint8Array> | null;
 	pairAnnounced: boolean;
+	/** The session advertised chunk reassembly on its up POST (CALLBACK_CHUNKS_HEADER). */
+	chunks: boolean;
+	/** Bad records dropped on this upload (each logged; the upload stays up). */
+	droppedRecords: number;
 }
 
 interface RingRecord {
@@ -261,6 +272,8 @@ interface DownConnection {
 	heartbeatTimer: ReturnType<typeof setInterval> | null;
 	closed: boolean;
 	pairAnnounced: boolean;
+	/** Chunked senders parked until the reader drains (the down source's pull wakes them). */
+	roomWaiters: Array<() => void>;
 	/** Registration time: a leg no up half joins by the silence deadline is half-open (FEDGE-14). */
 	openedAt: number;
 }
@@ -384,14 +397,23 @@ export class DaemonTransportRegistry {
 	readonly #sweepTimer: Timer;
 	/** Registry clock for every timestamp and sweep comparison. */
 	readonly #now: () => number;
+	/** Sink for dropped up-leg records (one line each); defaults to console.warn. */
+	readonly #onDroppedRecord: (message: string) => void;
 
 	/**
 	 * `now` and `sweepIntervalMs` exist so the sweep deadlines (up silence,
 	 * ring idleness, bulk expiry) are testable without wall-clock waits;
 	 * production passes neither and uses the module constants + Date.now.
 	 */
-	constructor(opts: { now?: () => number; sweepIntervalMs?: number } = {}) {
+	constructor(
+		opts: {
+			now?: () => number;
+			sweepIntervalMs?: number;
+			onDroppedRecord?: (message: string) => void;
+		} = {},
+	) {
 		this.#now = opts.now ?? Date.now;
+		this.#onDroppedRecord = opts.onDroppedRecord ?? ((message) => console.warn(message));
 		const sweepMs = opts.sweepIntervalMs ?? SWEEP_INTERVAL_MS;
 		this.#sweepTimer = setInterval(() => this.#sweep(), sweepMs);
 		unrefTimer(this.#sweepTimer);
@@ -678,6 +700,8 @@ export class DaemonTransportRegistry {
 			silenceKilled: false,
 			reader: null,
 			pairAnnounced: false,
+			chunks: req.headers.get(CALLBACK_CHUNKS_HEADER) === "1",
+			droppedRecords: 0,
 		};
 		this.#upConnections.add(conn);
 		// Header-borne connectionId: the up half may complete the pair (down
@@ -698,9 +722,9 @@ export class DaemonTransportRegistry {
 				// bounds the unprocessed remainder to one envelope (ENVELOPE_MAX_BYTES),
 				// so a long-lived upload never buffers toward CONNECTION_MAX_BYTES.
 				conn.bytesIn += value.byteLength;
-				for (const record of parser.push(value)) this.#acceptUpRecord(conn, record);
+				for (const item of parser.push(value)) this.#consumeUpItem(conn, item);
 			}
-			for (const record of parser.end()) this.#acceptUpRecord(conn, record);
+			for (const item of parser.end()) this.#consumeUpItem(conn, item);
 			if (conn.silenceKilled) {
 				throw callbackError(
 					"unavailable",
@@ -729,14 +753,42 @@ export class DaemonTransportRegistry {
 		}
 	}
 
-	#acceptUpRecord(conn: UpConnection, record: string): void {
+	/** One up-leg parser outcome. A bad record is dropped and logged; the upload continues. */
+	#consumeUpItem(conn: UpConnection, item: NdjsonItem): void {
+		if ("dropped" in item) {
+			this.#dropUpRecord(conn, item.dropped);
+			return;
+		}
 		let value: unknown;
 		try {
-			value = JSON.parse(record);
+			value = JSON.parse(item.record);
 		} catch (cause) {
-			throw callbackError("invalid_request", "callback record is not valid JSON", { cause });
+			this.#dropUpRecord(
+				conn,
+				callbackError("invalid_request", "callback record is not valid JSON", { cause }),
+			);
+			return;
 		}
-		const envelope = validateEnvelope(value);
+		let envelope: CallbackEnvelope;
+		try {
+			envelope = validateEnvelope(value);
+		} catch (error) {
+			if (!isCallbackError(error)) throw error;
+			this.#dropUpRecord(conn, error);
+			return;
+		}
+		this.#acceptUpEnvelope(conn, envelope);
+	}
+
+	#dropUpRecord(conn: UpConnection, error: CallbackError): void {
+		conn.droppedRecords += 1;
+		this.#onDroppedRecord(
+			`callback up ${conn.workspaceId}@${conn.generation}: dropped record: ${error.message}`,
+		);
+	}
+
+	/** Identity, pair, and seq violations still end the upload: they are not bad bytes. */
+	#acceptUpEnvelope(conn: UpConnection, envelope: CallbackEnvelope): void {
 		if (envelope.workspaceId !== conn.workspaceId || envelope.generation !== conn.generation) {
 			throw callbackError(
 				"forbidden",
@@ -840,6 +892,7 @@ export class DaemonTransportRegistry {
 			heartbeatTimer: null,
 			closed: false,
 			pairAnnounced: false,
+			roomWaiters: [],
 			openedAt: this.#now(),
 		};
 		const body = new ReadableStream<Uint8Array>(
@@ -849,6 +902,10 @@ export class DaemonTransportRegistry {
 				},
 				cancel: () => {
 					this.#teardownDown(conn);
+				},
+				pull: () => {
+					// The reader drained queued bytes: wake a chunked send waiting for room.
+					for (const wake of conn.roomWaiters.splice(0)) wake();
 				},
 			},
 			// Byte-counted queuing strategy (finding: a default chunk-counted
@@ -925,9 +982,90 @@ export class DaemonTransportRegistry {
 				},
 			);
 		}
+		// Probe the envelope as #sendDownEnvelope will build it: one over the wire
+		// cap is sliced (commands to a chunk-capable session) or refused.
+		const probe = this.#downEnvelope(conn, draft, conn.record.nextSeq + 1);
+		if (needsSplit(probe)) return this.#sendOversize(conn, probe);
 		const envelope = this.#sendDownEnvelope(conn, draft);
 		await conn.sendChain;
 		return envelope;
+	}
+
+	/** Oversize down envelope. A command to a session that advertised
+	 * CALLBACK_CHUNKS_HEADER goes out as ordered slices, each sent once the down
+	 * stream has room for it, so the byte budget never trips. Anything else fails
+	 * only this call, with payload_too_large; the pair stays up. */
+	async #sendOversize(conn: DownConnection, probe: CallbackEnvelope): Promise<CallbackEnvelope> {
+		const chunked = probe.kind === "command" && this.#chunkCapable(conn.connectionId);
+		const bytes = commandBytes(probe.payload);
+		if (!chunked || bytes > MAX_COMMAND_BYTES) {
+			const limit = chunked ? MAX_COMMAND_BYTES : ENVELOPE_MAX_BYTES;
+			throw callbackError("payload_too_large", commandTooLargeMessage(bytes, limit));
+		}
+		let envelope: CallbackEnvelope | undefined;
+		for (const slice of planOversizeSplit(probe).envelopes) {
+			await conn.sendChain;
+			await this.#awaitDownRoom(conn, ENVELOPE_MAX_BYTES);
+			envelope = this.#sendDownEnvelope(conn, {
+				streamId: slice.streamId,
+				kind: slice.kind,
+				payload: slice.payload,
+				at: slice.at,
+			});
+		}
+		await conn.sendChain;
+		if (envelope === undefined) {
+			throw callbackError("invalid_request", "oversize command split into no slices");
+		}
+		return envelope;
+	}
+
+	/** True when an open up half of this pair advertised chunk reassembly. */
+	#chunkCapable(connectionId: string): boolean {
+		for (const up of this.#upConnections) {
+			if (up.connectionId === connectionId && up.chunks) return true;
+		}
+		return false;
+	}
+
+	/** Resolves once the down stream can take `bytes` more. A reader that stops
+	 * draining past DOWN_ROOM_STALL_MS is dropped like any stalled reader. */
+	async #awaitDownRoom(conn: DownConnection, bytes: number): Promise<void> {
+		while (!conn.closed && (conn.controller.desiredSize ?? 0) < bytes) {
+			const room = Promise.withResolvers<"room" | "stalled">();
+			const stall = setTimeout(() => room.resolve("stalled"), DOWN_ROOM_STALL_MS);
+			unrefTimer(stall);
+			conn.roomWaiters.push(() => room.resolve("room"));
+			const outcome = await room.promise;
+			clearTimeout(stall);
+			if (outcome === "stalled") {
+				this.#teardownDown(conn);
+				throw callbackError(
+					"unavailable",
+					`callback down stream for ${conn.connectionId} stopped draining`,
+				);
+			}
+		}
+		if (conn.closed) {
+			throw callbackError(
+				"unavailable",
+				`callback down stream for ${conn.connectionId} closed mid-command`,
+			);
+		}
+	}
+
+	#downEnvelope(conn: DownConnection, draft: CallbackEnvelopeInput, seq: number): CallbackEnvelope {
+		return {
+			version: 1,
+			workspaceId: conn.workspaceId,
+			generation: conn.generation,
+			connectionId: conn.connectionId,
+			streamId: draft.streamId,
+			seq,
+			kind: draft.kind,
+			payload: draft.payload,
+			at: draft.at ?? this.#now(),
+		};
 	}
 
 	#liveDownFor(workspaceId: string): DownConnection | null {
@@ -941,17 +1079,7 @@ export class DaemonTransportRegistry {
 	#sendDownEnvelope(conn: DownConnection, draft: CallbackEnvelopeInput): CallbackEnvelope {
 		const record = conn.record;
 		record.nextSeq += 1;
-		const envelope: CallbackEnvelope = {
-			version: 1,
-			workspaceId: conn.workspaceId,
-			generation: conn.generation,
-			connectionId: conn.connectionId,
-			streamId: draft.streamId,
-			seq: record.nextSeq,
-			kind: draft.kind,
-			payload: draft.payload,
-			at: draft.at ?? this.#now(),
-		};
+		const envelope = this.#downEnvelope(conn, draft, record.nextSeq);
 		const block = encodeSseEnvelope(envelope);
 		record.ring.push(envelope.seq, block);
 		record.lastActiveAt = this.#now();
@@ -984,6 +1112,7 @@ export class DaemonTransportRegistry {
 	#teardownDown(conn: DownConnection): void {
 		if (conn.closed) return;
 		conn.closed = true;
+		for (const wake of conn.roomWaiters.splice(0)) wake();
 		if (conn.heartbeatTimer !== null) clearInterval(conn.heartbeatTimer);
 		if (this.#downConnections.get(conn.connectionId) === conn)
 			this.#downConnections.delete(conn.connectionId);

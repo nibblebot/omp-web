@@ -1,4 +1,5 @@
 import { COMMAND_DEDUP_WINDOW_MS } from "#lib/wire/protocol";
+import { commandBytes, commandTooLargeMessage, MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
 import type { ClientCommand, DaemonInfo, ServerFrame, WebMethodName } from "#lib/wire/protocol";
 import type { DaemonLogsResult, DebugEntry, DebugLevel } from "../state";
 import { setState, state } from "../state";
@@ -58,6 +59,10 @@ export const clientId = crypto.randomUUID();
  * caller's pending promise settles instead of hanging until timeout.
  */
 export function postCommand(cmd: ClientCommand): Promise<void> {
+	const bytes = commandBytes(cmd);
+	if (bytes > MAX_COMMAND_BYTES) {
+		return Promise.reject(new Error(commandTooLargeMessage(bytes, MAX_COMMAND_BYTES)));
+	}
 	// Browser auth (P2.4): with a server-side session (signedIn/signedOut/
 	// unknown) the /command uplink rides authedFetch; the session cookie is
 	// the credential and a 401 transitions to signedOut (sign-in modal). When
