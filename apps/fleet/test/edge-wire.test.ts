@@ -1272,6 +1272,35 @@ describe("fleet edge", () => {
 		browser.close();
 	});
 
+	test("aggregated daemons: an unchanged roster is not re-broadcast to browsers", async () => {
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "daemons", "primed daemons frame");
+		const baseline = browser.frames.filter((f) => f.type === "daemons").length;
+		const withX = [
+			daemonInfo("hub-a", FAKE_CWD, { pid: 1111 }),
+			daemonInfo("shared", FAKE_CWD, { pid: 1112 }),
+			daemonInfo("hub-c", FAKE_CWD, { pid: 1113 }),
+			daemonInfo("hub-x", FAKE_CWD, { pid: 1114 }),
+		];
+		remoteDaemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", { type: "daemons", daemons: withX });
+		await browser.waitForFrame(
+			(f) => f.type === "daemons" && f.daemons.some((d) => d.name === "hub-x"),
+			"roster with hub-x",
+		);
+		// An identical re-delivery (the control tap and any browser pipe both carry it), then a real change.
+		remoteDaemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", { type: "daemons", daemons: withX });
+		remoteDaemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+			type: "daemons",
+			daemons: [...withX, daemonInfo("hub-y", FAKE_CWD, { pid: 1115 })],
+		});
+		await browser.waitForFrame(
+			(f) => f.type === "daemons" && f.daemons.some((d) => d.name === "hub-y"),
+			"roster with hub-y",
+		);
+		expect(browser.frames.filter((f) => f.type === "daemons").length - baseline).toBe(2);
+		browser.close();
+	});
+
 	test("aggregated daemons: registry removal evicts the second daemon from the cache", async () => {
 		// Integration, not the pure merge: a registry removal must evict the
 		// daemon's cached roster AND broadcast the shrunken merged frame (the

@@ -652,6 +652,8 @@ export class FleetEdge {
 	readonly #refusedResumes = new Map<string, string>();
 	/** Cached broker rosters per daemonId, merged into the broadcast daemons frame. */
 	readonly #daemonsAggregator = new DaemonsAggregator();
+	/** Serialized merged roster last broadcast, so an unchanged roster is not re-sent. */
+	#lastDaemonsRoster: string | undefined;
 	/** Control-socket taps per daemonId (unsubscribe fns), reconciled on registry change. */
 	readonly #daemonTaps = new Map<string, () => void>();
 	/** Per-daemon realtime activity, derived in the control-socket tap (browser-gated). */
@@ -2623,9 +2625,14 @@ export class FleetEdge {
 		this.#broadcastDaemons();
 	}
 
-	/** Broadcast ONE merged {type:"daemons"} frame to every edge stream. */
+	/** Broadcast ONE merged {type:"daemons"} frame to every edge stream when the roster changed. */
 	#broadcastDaemons(): void {
-		this.#broadcast({ type: "daemons", daemons: this.#daemonsAggregator.merge() });
+		const daemons = this.#daemonsAggregator.merge();
+		// Every control tap and browser pipe re-delivers the same roster; only a change is worth a ringed frame.
+		const serialized = JSON.stringify(daemons);
+		if (serialized === this.#lastDaemonsRoster) return;
+		this.#lastDaemonsRoster = serialized;
+		this.#broadcast({ type: "daemons", daemons });
 	}
 
 	// ---------------------------------------------------------------------
