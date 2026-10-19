@@ -1,5 +1,7 @@
 import type { ClientCommand, SessionListEntry } from "#lib/wire/protocol";
 import { SIDEBAR_KEY, TX_SIDEBAR_KEY, setState, state } from "../state";
+import { startNewSession } from "./chat";
+import { spawnResume } from "./projects";
 import { parseRoute } from "./route";
 import {
 	attachSession,
@@ -7,6 +9,7 @@ import {
 	isConnected,
 	isSessionSwitchSupersession,
 	postCommand,
+	untilAttachedFrame,
 } from "./transport";
 import { reportError } from "./toasts";
 
@@ -128,6 +131,32 @@ export function resumeDaemonSession(daemonId: string, sessionFile: string): Prom
 	// Picking the live file on a ready daemon is a pure attach (no switch).
 	if (sessionFile === currentFile) return attach;
 	return attach.then(() => switchSessionRetry(daemonId, sessionFile));
+}
+
+/**
+ * Start a fresh session in a daemon's worktree (the roster row's "+" under
+ * its session switcher). Asleep daemons wake first (respawn --resume
+ * lastSessionFile, as a row click does); the daemon attaches when it is not
+ * already the live attached session; then, once the attached frame installs
+ * it, the session runs the same newSession path /new uses (collab-share
+ * confirm included). Never retried: a duplicate would start two sessions.
+ * When the user moves to another session meanwhile, the attempt is dropped
+ * silently, never banners.
+ */
+export async function startDaemonNewSession(daemonId: string): Promise<void> {
+	const asleep = state.daemonRoster.find((d) => d.daemonId === daemonId)?.status === "asleep";
+	if (asleep) spawnResume(daemonId);
+	if (asleep || state.currentSessionId !== daemonId) {
+		try {
+			// A superseded attach resolves with whichever session is current.
+			if ((await attachSession(daemonId)) !== daemonId) return;
+		} catch (err) {
+			reportError(err);
+			return;
+		}
+	}
+	if (!(await untilAttachedFrame(daemonId))) return;
+	await startNewSession().catch(reportError);
 }
 
 /**

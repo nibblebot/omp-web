@@ -47,6 +47,7 @@ import {
 	updateSetting,
 	requestDaemonSessions,
 	resumeDaemonSession,
+	startDaemonNewSession,
 	type SubagentInfo,
 } from "../state";
 import { resetPendingProjects } from "../store/projects";
@@ -2777,6 +2778,9 @@ describe("roster session dropdown", () => {
 		return posted.filter((c): c is Extract<ClientCommand, { type: T }> => c.type === type);
 	}
 
+	/** newSession calls as posted, oldest first. */
+	const newSessionCalls = () => postedOf("call").filter((c) => c.method === "newSession");
+
 	const se = (id: string): SessionListEntry => ({
 		path: `/sessions/${id}.jsonl`,
 		id,
@@ -2926,6 +2930,63 @@ describe("roster session dropdown", () => {
 		resumeDaemonSession("d9", "/sessions/current.jsonl");
 		expect(postedOf("attach")).toHaveLength(1);
 		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
+	});
+
+	test("startDaemonNewSession wakes an asleep daemon, attaches, then starts a new session", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+
+		const started = startDaemonNewSession("d9");
+		// Wakes on its last session (no explicit file), then attaches.
+		expect(postedOf("spawn_resume")).toEqual([
+			{ type: "spawn_resume", id: expect.any(String), daemonId: "d9" },
+		]);
+		expect(postedOf("attach")).toHaveLength(1);
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		await flushMicrotasks();
+		// The proxied attached frame trails attach_result and would sweep a call
+		// posted now after the daemon ran it: newSession waits for the frame.
+		expect(newSessionCalls()).toHaveLength(0);
+		dispatch(attached("d9"));
+		await flushMicrotasks();
+		expect(newSessionCalls()).toHaveLength(1);
+		dispatch({ type: "call_result", id: newSessionCalls()[0].id, ok: true, data: null });
+		await started;
+		expect(newSessionCalls()).toHaveLength(1);
+		expect(state.error).toBeNull();
+	});
+
+	test("startDaemonNewSession drops the new session when another session gets attached first", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("currentSessionId", "d1");
+		setState("daemonRoster", [rosterDaemon("d9", { status: "ready" })]);
+
+		const started = startDaemonNewSession("d9");
+		expect(postedOf("spawn_resume")).toHaveLength(0);
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		await flushMicrotasks();
+		// The user picked d2 before d9's attached frame landed.
+		dispatch(attached("d2"));
+		await started;
+		// Never a new session on the daemon the user switched to, never a banner.
+		expect(newSessionCalls()).toHaveLength(0);
+		expect(state.error).toBeNull();
+	});
+
+	test("startDaemonNewSession on the attached ready daemon starts at once", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("currentSessionId", "d9");
+		setState("daemonRoster", [rosterDaemon("d9", { status: "ready" })]);
+
+		void startDaemonNewSession("d9");
+		await flushMicrotasks();
+		expect(postedOf("attach")).toHaveLength(0);
+		expect(newSessionCalls()).toHaveLength(1);
 	});
 });
 

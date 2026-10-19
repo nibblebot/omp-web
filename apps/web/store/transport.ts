@@ -349,13 +349,47 @@ export function pendingAttachTarget(): string | null {
 	return pendingAttach?.sessionId ?? null;
 }
 
-/** Reject the in-flight attach waiter (stream teardown in state.ts). */
+/** Reject the in-flight attach waiter (stream teardown in state.ts); the
+ *  attached-frame waiters give up too. */
 export function rejectPendingAttach(err: Error): void {
 	if (pendingAttach) {
 		clearTimeout(pendingAttach.timer);
 		pendingAttach.reject(err);
 		pendingAttach = null;
 	}
+	settleAttachedFrame("");
+}
+
+/** Waiters for the proxied `attached` frame (see untilAttachedFrame). */
+const attachedFrameWaiters = new Set<(sessionId: string) => void>();
+
+/**
+ * Resolves true once `daemonId` is the attached session. The attach_result
+ * answer can land before the proxied `attached` frame, and a call posted in
+ * that gap is swept by the frame's "session switched" rejection after the
+ * daemon already ran it; a non-idempotent call (newSession) waits here
+ * instead of retrying. Resolves false when an `attached` frame for another
+ * session lands first, the stream tears down, or DAEMON_TIMEOUT_MS passes.
+ */
+export function untilAttachedFrame(daemonId: string): Promise<boolean> {
+	if (state.currentSessionId === daemonId) return Promise.resolve(true);
+	const { promise, resolve } = Promise.withResolvers<boolean>();
+	const settle = (sessionId: string) => {
+		attachedFrameWaiters.delete(settle);
+		clearTimeout(timer);
+		resolve(sessionId !== "" && sessionId === daemonId);
+	};
+	const timer = window.setTimeout(() => settle(""), DAEMON_TIMEOUT_MS);
+	attachedFrameWaiters.add(settle);
+	return promise;
+}
+
+/** Settle every attached-frame waiter with the session the frame installed
+ *  ("" = stream teardown). Called by state.ts's `attached` handler after it
+ *  updates currentSessionId. */
+export function settleAttachedFrame(sessionId: string): void {
+	// Each waiter deletes only itself, which Set iteration tolerates.
+	for (const settle of attachedFrameWaiters) settle(sessionId);
 }
 
 /**

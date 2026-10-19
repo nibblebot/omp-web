@@ -30,6 +30,7 @@ import {
 	sendWorktreeDeleteInfo,
 	setState,
 	spawnResume,
+	startDaemonNewSession,
 	state,
 	stopDaemonById,
 } from "../../../state";
@@ -50,6 +51,7 @@ import {
 	InfoIcon,
 	LockIcon,
 	PackageIcon,
+	PlusIcon,
 	RefreshIcon,
 	RootIcon,
 	StopIcon,
@@ -368,6 +370,28 @@ export const WorkspaceRow: Component<{
 		setSessionsOpenId(sessionsOpenId() === daemon.daemonId ? null : daemon.daemonId);
 	};
 
+	/** The "+" under the session chevron: start a fresh session in this
+	 *  worktree (asleep rows wake first). The row pulses until it settles. */
+	const newSessionClick = () => {
+		if (activating()) return;
+		if (paused()) {
+			pushToast(PAUSED_TOOLTIP[connectionState()]);
+			return;
+		}
+		closeDrawers();
+		setSessionsOpenId(null);
+		setMenuOpenId(null);
+		const id = d().daemonId;
+		setActivatingIds((prev) => new Set(prev).add(id));
+		void startDaemonNewSession(id).finally(() =>
+			setActivatingIds((prev) => {
+				const next = new Set(prev);
+				next.delete(id);
+				return next;
+			}),
+		);
+	};
+
 	const doStop = () => {
 		stopDaemonById(d().daemonId);
 		setMenuOpenId(null);
@@ -611,7 +635,8 @@ export const WorkspaceRow: Component<{
 					    the row's right gutter. Clicking it opens the last-10-sessions
 					    resume picker (ready/asleep rows only); other rows show the
 					    bare title. The title wraps to at most two lines and the
-					    tooltip exposes the full string. */}
+					    tooltip exposes the full string. A "+" box under the chevron
+					    starts a fresh session in this worktree. */}
 					<Show
 						when={clickable()}
 						fallback={
@@ -620,23 +645,38 @@ export const WorkspaceRow: Component<{
 							</div>
 						}
 					>
-						<button
-							type="button"
-							class="daemon-session-title daemon-session-title--clickable"
-							aria-expanded={sessionsOpen()}
-							title={`${sessionTitleText()}, switch session`}
-							onClick={(e) => {
-								// The card's resume must NOT fire when opening the
-								// dropdown from the title line.
-								e.stopPropagation();
-								sessionTitleClick();
-							}}
-						>
-							<span class="daemon-session-title-text">{sessionTitleText()}</span>
-							<span class="daemon-session-chevron-box">
-								<ChevronDownIcon class="daemon-session-chevron" />
-							</span>
-						</button>
+						<div class="daemon-session-switcher">
+							<button
+								type="button"
+								class="daemon-session-title daemon-session-title--clickable"
+								aria-expanded={sessionsOpen()}
+								title={`${sessionTitleText()}, switch session`}
+								onClick={(e) => {
+									// The card's resume must NOT fire when opening the
+									// dropdown from the title line.
+									e.stopPropagation();
+									sessionTitleClick();
+								}}
+							>
+								<span class="daemon-session-title-text">{sessionTitleText()}</span>
+								<span class="daemon-session-chevron-box">
+									<ChevronDownIcon class="daemon-session-chevron" />
+								</span>
+							</button>
+							<button
+								type="button"
+								class="daemon-session-new"
+								aria-label="New session in this worktree"
+								title="New session in this worktree"
+								onClick={(e) => {
+									// The card's resume must NOT fire as well.
+									e.stopPropagation();
+									newSessionClick();
+								}}
+							>
+								<PlusIcon class="daemon-session-new-icon" />
+							</button>
+						</div>
 					</Show>
 					<Show when={cloneProfile() !== undefined || d().labels.length > 0}>
 						<div class="daemon-chips">

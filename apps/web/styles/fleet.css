@@ -788,7 +788,8 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
    default 15px text size), lightly outlined chevron box sits at the top of a
    right gutter the row reserves, so the title keeps the full content width;
    the top line extends into the gutter to keep the status dot in the corner
-   above the box. */
+   above the box. A matching "+" box (new session) sits under the chevron;
+   the switcher wrapper is tall enough to hold both boxes. */
 .daemon-row--switcher {
 	/* Two title rows: fs-micro at line-height 1.5. */
 	--session-title-height: calc(3 * var(--fs-micro));
@@ -800,6 +801,12 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 }
 .daemon-row--switcher .sidebar-row-top {
 	margin-right: calc(-1 * var(--session-switcher-gutter));
+}
+.daemon-session-switcher {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	min-height: calc(2 * var(--session-switcher-size) + var(--space-2));
 }
 .daemon-session-title--clickable {
 	position: relative;
@@ -853,6 +860,32 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 }
 .daemon-session-title--clickable[aria-expanded="true"] .daemon-session-chevron {
 	transform: rotate(180deg);
+}
+.daemon-session-new {
+	position: absolute;
+	top: calc(var(--session-switcher-size) + var(--space-2));
+	right: calc(-1 * var(--session-switcher-gutter));
+	width: var(--session-switcher-size);
+	height: var(--session-switcher-size);
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	color: var(--muted-2);
+	cursor: pointer;
+}
+.daemon-session-new:hover,
+.daemon-session-new:focus-visible {
+	color: var(--text);
+	border-color: var(--border-strong);
+}
+.daemon-session-new-icon {
+	width: 75%;
+	height: 75%;
 }
 .daemon-row-btn {
 	background: none;

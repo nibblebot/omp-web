@@ -81,6 +81,7 @@ import {
 	rejectPendingCalls,
 	rejectPendingDaemons,
 	retryNotAttachedCalls,
+	settleAttachedFrame,
 	setConnected,
 	setTransportToken,
 	settleAttachResult,
@@ -1177,6 +1178,8 @@ export function connect(): void {
 			// parked and idle workers reappear without waiting for a lifecycle frame.
 			requestRosterRefresh();
 			refreshSettings();
+			// Waiters for this frame (untilAttachedFrame) post after the sweep above.
+			settleAttachedFrame(frame.sessionId);
 			return;
 		}
 		// Stale-frame guard: session-scoped frames for a handle this tab no
@@ -1643,6 +1646,7 @@ export {
 	resumeDaemonSession,
 	setSidebarVisible,
 	closeDrawers,
+	startDaemonNewSession,
 	setTxSidebarVisible,
 	setView,
 	toggleSidebar,
