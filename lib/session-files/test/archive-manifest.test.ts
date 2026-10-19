@@ -6,7 +6,7 @@
  * content-addressed id itself.
  *
  * The path predicate is the highest-risk export here: it is the only thing
- * standing between a hostile store/wire relpath and the export, quiesce and
+ * standing between a hostile store/wire relpath and the export and
  * wake paths that join it onto a sessions dir. Assertions pin the frozen
  * acceptance/rejection decisions, the ledger error code
  * (`invalid_request`) and the path a typed error carries; error wording is

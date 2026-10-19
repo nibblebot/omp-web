@@ -90,20 +90,7 @@ function makeHarness(
 		return promise;
 	};
 	const deps: DaemonControlDeps = {
-		getEntry: () => undefined,
 		handleCommand: async () => undefined,
-		flushWriters: async () => ({
-			ok: true,
-			descendants: [],
-			advisors: "inactive",
-		}),
-		finalizeTailer: async () => ({}),
-		waitForAckedBoundary: async () => {},
-		verifyLineage: async () => ({
-			manifestFiles: [],
-			provenance: { workspaceId: "w1", workspaceName: "w", resolvedCommit: "", generatedAt: 0 },
-		}),
-		collectGitEvidence: async () => ({ ok: true }),
 		preparePriming: async () => {
 			primes.push("prime");
 			return snapshot;
@@ -111,7 +98,6 @@ function makeHarness(
 		bufferedBytes,
 		send,
 		pairLive,
-		mainSessionFile: null,
 		onShutdown: () => {},
 		onBrowserStreamsChange,
 		streamConfirmMs,

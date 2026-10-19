@@ -98,17 +98,9 @@ import {
 	setCallbackBrowserStreamCount,
 	webUiRequest,
 } from "./ui-context";
-import { CALLBACK_CONTROL_STREAM_ID, callbackError } from "#lib/wire/callback-protocol";
+import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
 import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
 import { createDaemonControl, type DaemonControl } from "./daemon-control";
-import {
-	boundaryAcked,
-	collectGitEvidence,
-	enumerateLineageManifest,
-	finalizeTailerBoundary,
-	verifyLineageStructure,
-} from "./quiesce-evidence";
-import { flushAllWriters } from "./writer-flush";
 import { setOnFrameTap, setOnHistoryTap, streamingPrimeFrames } from "./sse-delivery";
 import { settingWriteReloadsHistory, transcriptHistoryFrames } from "./transcript-history";
 import { initSdkTuiGlobals } from "./sdk-tui-globals";
@@ -1082,21 +1074,6 @@ const server = Bun.serve({
 				if (answer !== undefined) broadcastAnswer(answer.frame);
 				return Response.json({ commandId: cmd.id }, { status: 202 });
 			}
-			// Quiesce admission barrier (P7.3): once deletion quiesce begins,
-			// every new command is rejected with an explicit typed failure,
-			// never silently dropped, never queued past the gate.
-			if (daemonControl !== null && daemonControl.status().admissionBarrier) {
-				return Response.json(
-					{
-						commandId: cmd.id,
-						error: {
-							code: "writer_active",
-							message: "command rejected: quiesce admission barrier",
-						},
-					},
-					{ status: 409 },
-				);
-			}
 			// Fire-and-forget accept: answers ride the /events stream only.
 			void handleCommand(cmd).catch((err) => console.error("command dispatch failed:", err));
 			return Response.json({ commandId: cmd.id }, { status: 202 });
@@ -1234,8 +1211,8 @@ const SHUTDOWN_DEADLINE_MS = 20_000;
 /** No-control-plane shutdown timer (C4): armed while no callback pair is ready. */
 let controlGraceTimer: Timer | undefined;
 /**
- * Callback control broker (P3.3/P3.5/P4.5): per-browser virtual streams,
- * command routing, control mirror, and the quiesce state machine. Created
+ * Callback control broker (P3.3/P3.5): per-browser virtual streams,
+ * command routing, and control mirror. Created
  * only when the callback pair exists; null otherwise.
  */
 let daemonControl: DaemonControl | null = null;
@@ -1361,9 +1338,9 @@ void bootReadiness(bootEntry);
 // ---------------------------------------------------------------------------
 if (config.callbackUrl !== undefined) {
 	// Down-traffic router: log controls (log_ack/log_gap) apply to the
-	// tailer; stream_open/close, quiesce_begin and every kind:"command"
-	// envelope go to the control broker. Reads the mutable bindings at
-	// invocation (constructed before FleetCallback below).
+	// tailer; stream_open/close and every kind:"command" envelope go to
+	// the control broker. Reads the mutable bindings at invocation
+	// (constructed before FleetCallback below).
 	const routeDown = (envelope: CallbackEnvelope): void => {
 		if (envelope.kind === "control") {
 			const payload = envelope.payload;
@@ -1479,16 +1456,12 @@ if (config.callbackUrl !== undefined) {
 			);
 		}
 	}
-	// Control broker (P3.3/P3.5/P4.5): mounted after the tailer so log
-	// controls are routed first; broker handles stream_open/close, quiesce,
-	// and command dispatch over the pair. Command answers flow through the
+	// Control broker (P3.3/P3.5): mounted after the tailer so log
+	// controls are routed first; broker handles stream_open/close and
+	// command dispatch over the pair. Command answers flow through the
 	// broadcast mirror (the frame tap), so handleCommand resolves undefined
 	// and the tap forwards the answer frames.
 	daemonControl = createDaemonControl({
-		getEntry: () =>
-			bootEntry === null
-				? undefined
-				: { disposeQuiesce: () => closeSession(bootEntry!, "quiesce") },
 		handleCommand: async (command: unknown) => {
 			const cmd = parseClientCommand(command);
 			markActivity();
@@ -1501,76 +1474,6 @@ if (config.callbackUrl !== undefined) {
 			}
 			await handleCommand(cmd);
 			return undefined; // Answers flow through the broadcast mirror tap.
-		},
-		flushWriters: () =>
-			flushAllWriters({
-				entry: bootEntry!,
-				registry: bootEntry!.agentRegistry,
-			}),
-		finalizeTailer: async () => {
-			if (!config.logMirror) return {};
-			if (logTailer === null) {
-				throw callbackError("unavailable", "log tailer unavailable for quiesce");
-			}
-			return finalizeTailerBoundary(logTailer);
-		},
-		waitForAckedBoundary: async (boundary, timeoutMs) => {
-			const deadline = Date.now() + timeoutMs;
-			const { promise, resolve, reject } = Promise.withResolvers<void>();
-			const poll = (): void => {
-				const acked = logTailer?.ackedOffsets() ?? new Map<string, number>();
-				if (boundaryAcked(boundary, acked)) {
-					resolve();
-					return;
-				}
-				if (Date.now() > deadline) {
-					reject(
-						callbackError(
-							"retryable",
-							"timed out waiting for fleet log_acks to cover the flush boundary",
-						),
-					);
-					return;
-				}
-				setTimeout(poll, 200);
-			};
-			poll();
-			return promise;
-		},
-		verifyLineage: async () => {
-			verifyLineageStructure(sessionsDir);
-			const files = enumerateLineageManifest(sessionsDir);
-			let resolvedCommit = "";
-			try {
-				const proc = Bun.spawn(["git", "-C", config.cwd, "rev-parse", "HEAD"], {
-					stdout: "pipe",
-					stderr: "pipe",
-				});
-				resolvedCommit = new TextDecoder()
-					.decode(await new Response(proc.stdout).arrayBuffer())
-					.trim();
-			} catch {
-				resolvedCommit = "";
-			}
-			return {
-				manifestFiles: files,
-				provenance: {
-					workspaceId: config.callbackWorkspace!,
-					workspaceName: config.name,
-					resolvedCommit,
-					generatedAt: Date.now(),
-				},
-			};
-		},
-		collectGitEvidence: async () => {
-			const result = await collectGitEvidence(config.cwd);
-			if (!result.ok) {
-				return {
-					ok: false,
-					error: { code: result.error!.code, message: result.error!.message },
-				};
-			}
-			return { ok: true, git: result.evidence };
 		},
 		preparePriming: async () => {
 			const entry = bootEntry;
@@ -1587,7 +1490,6 @@ if (config.callbackUrl !== undefined) {
 			fleetCallback?.bufferedBytes(streamId) ?? { stream: 0, connection: 0 },
 		send: callbackSend,
 		pairLive: () => fleetCallback !== null && fleetCallback.status().state === "ready",
-		mainSessionFile: null,
 		onShutdown: (reason) => {
 			console.error(
 				`omp-session: control plane requested shutdown${reason !== undefined ? ` (${reason})` : ""}`,

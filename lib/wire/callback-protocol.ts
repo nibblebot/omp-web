@@ -145,13 +145,6 @@ export interface LogGapControl {
 	streamId?: string;
 }
 
-/** fleet→daemon, kind "control", streamId "transport": begin quiesce for the delete gate. */
-export interface QuiesceBeginControl {
-	type: "quiesce_begin";
-	requestId: string;
-	timeoutMs?: number;
-}
-
 /** fleet→daemon, kind "control", streamId "transport": graceful shutdown; the daemon acks, then exits 0. */
 export interface ShutdownControl {
 	type: "shutdown";
@@ -164,71 +157,7 @@ export type DownControl =
 	| StreamCloseControl
 	| LogAckControl
 	| LogGapControl
-	| QuiesceBeginControl
 	| ShutdownControl;
-
-/** Final per-stream flush boundary: the fleet store must reach exactly these offsets. */
-export type FlushBoundary = Record<string, { offset: number; generation: number; eof: true }>;
-
-/** Outcome of one captured writer's explicit flush at quiesce. */
-export interface QuiesceWriterEntry {
-	id: string;
-	kind: "main" | "sub" | "advisor";
-	sessionFile: string | null;
-	/**
-	 * flushed = SessionManager.flush() resolved without a latched failure;
-	 * parked/disposed = the SDK had already released the writer before
-	 * quiesce (flush state not re-checkable; covered by structural
-	 * verification of the on-disk file).
-	 */
-	state: "flushed" | "parked" | "disposed";
-}
-
-/** Daemon-collected Git evidence for the verify-at-deletion guard (P7.4). */
-export interface CloneGitEvidence {
-	/** "unknown" blocks deletion; any probe failure lands here with unknownReason. */
-	status: "clean" | "dirty" | "unknown";
-	unknownReason?: string;
-	head?: string;
-	branch?: string | null;
-	dirty?: { added: number; modified: number; deleted: number; untracked: number };
-	stashes?: number;
-	/** The configured remote (clone origin); null when none exists. */
-	remote?: { name: string; url: string } | null;
-	/** Local branch/tag tips + whether each is preserved on the configured remote. */
-	refs?: Array<{ name: string; tip: string; preserved: boolean }>;
-}
-
-/** daemon→fleet, kind "control", streamId "transport": the quiesce outcome. */
-export interface QuiesceResultControl {
-	type: "quiesce_result";
-	requestId: string;
-	ok: boolean;
-	/** Present on ok:true. */
-	boundary?: FlushBoundary;
-	/**
-	 * Manifest file entries (lib/session-files/archive-manifest.ts ManifestFile[]),
-	 * computed from the agent dir. projectId/source are registry facts the
-	 * fleet fills before any exportId hashing.
-	 */
-	manifestFiles?: unknown[];
-	/** Provenance the daemon can prove; projectId/source are registry facts the fleet fills. */
-	provenance?: {
-		workspaceId: string;
-		workspaceName: string;
-		resolvedCommit: string;
-		generatedAt: number;
-	};
-	writers?: {
-		main: "flushed";
-		descendants: QuiesceWriterEntry[];
-		advisors: "caught_up" | "inactive";
-		note?: string;
-	};
-	git?: CloneGitEvidence;
-	/** Present on ok:false. */
-	error?: { code: CallbackErrorCode; message: string; path?: string };
-}
 
 /** Serialized envelope cap: one NDJSON record / one SSE data payload (1 MiB). */
 export const ENVELOPE_MAX_BYTES = 1024 * 1024;

@@ -1,40 +1,23 @@
-import {
-	closeSync,
-	lstatSync,
-	openSync,
-	readSync,
-	readdirSync,
-	realpathSync,
-	statSync,
-} from "node:fs";
 import path from "node:path";
 import { ExportError, type ManifestFileKind } from "./archive-manifest";
 
 // ---------------------------------------------------------------------------
-// Workspace session-tree planning + structural verification
+// Workspace session-tree lineage + structural verification
 // (lib/session-files/export-sessions.ts).
 //
 // Post-09-05-amendment role (docs/clone-contracts.md, docs/clone-plan.md P4.4-P4.6,
 // P7.1-P7.2): the sealed export/archive-copy pipeline is DEAD. This module
-// keeps only what the verify-at-deletion gate and the daemon's own quiesce
-// path need:
+// keeps only the lineage classification and the structural JSONL checker that
+// the verify-at-deletion gate (apps/fleet/verify-store.ts) and the archive
+// manifest need:
 //
-// - planSessionExport walks the canonical workspace session directory
-//   (`<workspaceRoot>/.home/agent/sessions` by default) and returns the full
-//   declared set with lineage, WITHOUT copying anything: main JSONL at depth
-//   1 (`<sessionId>.jsonl`) or depth 2 (`<proj>/<sessionId>.jsonl`); artifact
-//   subtrees `<sessionId>/` / `<proj>/<sessionId>/` carrying subagent
-//   transcripts, advisor recorders (`__advisor*.jsonl`), and metadata blobs.
-//   Traversal is bounded (10k files / 16 GiB) and guarded on every entry:
-//   symlinks, non-regular files, and realpath escapes are rejected; auth/
-//   config/unrelated content is excluded, never walked.
-// - verifyJsonlStructure is the load-bearing flush-evidence predicate (P0.3
-//   finding): title slot + session header + newline-terminated entries with a
-//   header id matching the session id, and NO partial tail; anything that
-//   resembles the SDK's "persistence is indeterminate" condition is a hard
-//   blocker. It tolerates no recovery; quiesced writers plus this structural
-//   read is the ONLY supported flush acknowledgment (force-kill/process exit
-//   is never evidence).
+// - classifyLineageEntry, isMainRelpath, and owningMainRel map a
+//   store-relative path to its owning main session and kind.
+// - createJsonlStructureChecker is the streaming structural predicate: title
+//   slot + session header + newline-terminated entries with a header id
+//   matching the session id, and NO partial tail. Anything that resembles the
+//   SDK's "persistence is indeterminate" condition is a hard blocker. It
+//   tolerates no recovery.
 //
 // All thrown errors are {@link ExportError} with a ledger code
 // (`invalid_request` for unsafe paths/types, `unavailable` for I/O and
@@ -47,7 +30,6 @@ export const ADVISOR_TRANSCRIPT_STEM = "__advisor";
 /** Hard bounds from clone-plan P4.6 ("bound export traversal and transfer"). */
 export const MAX_EXPORT_FILES = 10_000;
 export const MAX_EXPORT_BYTES = 16 * 1024 * 1024 * 1024; // 16 GiB
-const READ_BUFFER_BYTES = 256 * 1024;
 
 function isJsonlName(name: string): boolean {
 	return name.endsWith(JSONL_SUFFIX);
@@ -111,7 +93,7 @@ function parseLine(line: string): unknown {
 const STRUCTURE_CONTEXT = "session structural verification";
 
 /**
- * Incremental form of the structural JSONL predicate (see verifyJsonlStructure).
+ * Incremental form of the structural JSONL predicate.
  * Feed the file's bytes in order through `push`, then call `finish` once. It
  * throws the same ledger `unavailable` ExportErrors, in the same line order, as
  * the whole-file check, so a caller that streams a file while hashing it gets
@@ -230,33 +212,6 @@ export function createJsonlStructureChecker(absolutePath: string): JsonlStructur
 	};
 }
 
-/**
- * Structural read verification of one declared JSONL (P0.3 finding,
- * load-bearing); see createJsonlStructureChecker for the rules. Throws ledger
- * `unavailable`/`conflict` ExportErrors; never recovers.
- */
-export function verifyJsonlStructure(absolutePath: string, sessionId: string): void {
-	const checker = createJsonlStructureChecker(absolutePath);
-	const fd = openSync(absolutePath, "r");
-	try {
-		const buffer = Buffer.alloc(READ_BUFFER_BYTES);
-		for (;;) {
-			const read = readSync(fd, buffer, 0, buffer.length, null);
-			if (read <= 0) break;
-			checker.push(buffer.subarray(0, read));
-		}
-	} finally {
-		closeSync(fd);
-	}
-	checker.finish();
-}
-
-function isWithinReal(realPath: string, realRoot: string): boolean {
-	if (realPath === realRoot) return true;
-	const prefix = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
-	return realPath.startsWith(prefix);
-}
-
 // ---------------------------------------------------------------------------
 // Lineage classification (shared rule)
 // ---------------------------------------------------------------------------
@@ -352,157 +307,4 @@ export interface SessionExportPlan {
 	files: SessionLineageEntry[];
 	/** relToSessions → sessionId for every main session. */
 	mainSessions: Map<string, string>;
-}
-
-/**
- * Enumerate the export set under the sessions root, applying the traversal
- * guards uniformly to every entry: symlinks rejected, non-regular files
- * rejected, realpath must stay inside the real sessions root. Only declared
- * main `*.jsonl` files and their artifact-dir subtrees are in scope; auth/
- * config/unrelated content (stray files, dirs without a matching main) is
- * excluded, never walked. Enforces the 10k-file and 16GiB bounds.
- *
- * This function is shared by the daemon's quiesce path and the fleet-store
- * verification gate; it never copies or stages anything.
- */
-export function planSessionExport(sessionsDir: string): SessionExportPlan {
-	const rootReal = realpathSync(sessionsDir);
-	const files: SessionLineageEntry[] = [];
-	const mainSessions = new Map<string, string>();
-	let totalBytes = 0;
-	let count = 0;
-
-	const checkContained = (real: string, relToSessions: string): void => {
-		if (!isWithinReal(real, rootReal)) {
-			throw new ExportError(
-				"invalid_request",
-				`path escapes session directory: ${relToSessions}`,
-				relToSessions,
-			);
-		}
-	};
-	const addFile = (entry: SessionLineageEntry): void => {
-		if (count >= MAX_EXPORT_FILES) {
-			throw new ExportError(
-				"invalid_request",
-				`export exceeds ${MAX_EXPORT_FILES} files`,
-				entry.relToSessions,
-			);
-		}
-		totalBytes += statSync(path.join(sessionsDir, entry.relToSessions)).size;
-		if (totalBytes > MAX_EXPORT_BYTES) {
-			throw new ExportError(
-				"invalid_request",
-				`export exceeds ${MAX_EXPORT_BYTES} bytes total`,
-				entry.relToSessions,
-			);
-		}
-		count += 1;
-		files.push(entry);
-	};
-	const inspectEntry = (absolute: string, relToSessions: string): "dir" | "file" | "exclude" => {
-		if (relToSessions === "" || relToSessions.startsWith("..") || path.isAbsolute(relToSessions)) {
-			throw new ExportError(
-				"invalid_request",
-				`unsafe relative path: ${relToSessions}`,
-				relToSessions,
-			);
-		}
-		const info = lstatSync(absolute);
-		if (info.isSymbolicLink()) {
-			throw new ExportError("invalid_request", `symlink rejected: ${relToSessions}`, relToSessions);
-		}
-		if (!info.isFile() && !info.isDirectory()) {
-			throw new ExportError(
-				"invalid_request",
-				`non-regular file rejected: ${relToSessions}`,
-				relToSessions,
-			);
-		}
-		checkContained(realpathSync(absolute), relToSessions);
-		return info.isDirectory() ? "dir" : "file";
-	};
-
-	// First pass: root-level main session JSONL files, and remember every
-	// root-level directory (potential artifact dir or project dir).
-	const rootEntries = readdirSync(sessionsDir, { withFileTypes: true });
-	const rootDirs = new Set<string>();
-	for (const entry of rootEntries) {
-		const absolute = path.join(sessionsDir, entry.name);
-		const rel = path.relative(sessionsDir, absolute);
-		const type = inspectEntry(absolute, rel);
-		if (type === "dir") {
-			rootDirs.add(entry.name);
-			continue;
-		}
-		if (!isMainSessionName(entry.name)) {
-			// Stray/root-level non-session file: unrelated content, excluded.
-			continue;
-		}
-		const sessionId = entry.name.slice(0, -JSONL_SUFFIX.length);
-		mainSessions.set(rel, sessionId);
-		addFile({ relToSessions: rel, kind: "main", sessionId });
-	}
-
-	// Second pass: artifact dirs of declared mains. Depth-1: `<main>/` for a
-	// root main; depth-2: `<proj>/<main>/` (and `<proj>/<main>.jsonl` mains).
-	const stack: Array<{ dirAbs: string; mainRel: string }> = [];
-	for (const dirName of rootDirs) {
-		const rootMain = `${dirName}${JSONL_SUFFIX}`;
-		if (mainSessions.has(rootMain)) {
-			stack.push({ dirAbs: path.join(sessionsDir, dirName), mainRel: rootMain });
-			continue;
-		}
-		// Project dir: its child JSONLs may be depth-2 mains. readdir order is
-		// arbitrary, so every child is validated and every main declared FIRST;
-		// only then can a `<proj>/<main>/` artifact dir be resolved (a dir is
-		// an artifact dir only when its sibling main has been declared).
-		const dirAbs = path.join(sessionsDir, dirName);
-		const children = readdirSync(dirAbs, { withFileTypes: true }).map((child) => {
-			const childAbs = path.join(dirAbs, child.name);
-			const childRel = path.relative(sessionsDir, childAbs);
-			return {
-				name: child.name,
-				abs: childAbs,
-				rel: childRel,
-				type: inspectEntry(childAbs, childRel),
-			};
-		});
-		for (const child of children) {
-			if (child.type !== "file" || !isMainSessionName(child.name)) continue;
-			const sessionId = sessionIdOfMain(child.rel);
-			mainSessions.set(child.rel, sessionId);
-			addFile({ relToSessions: child.rel, kind: "main", sessionId });
-		}
-		for (const child of children) {
-			if (child.type !== "dir" || !mainSessions.has(`${child.rel}${JSONL_SUFFIX}`)) continue;
-			stack.push({ dirAbs: child.abs, mainRel: `${child.rel}${JSONL_SUFFIX}` });
-		}
-	}
-	const mains = new Set(mainSessions.keys());
-	while (stack.length > 0) {
-		const { dirAbs, mainRel } = stack.pop()!;
-		for (const child of readdirSync(dirAbs, { withFileTypes: true })) {
-			const childAbs = path.join(dirAbs, child.name);
-			const childRel = path.relative(sessionsDir, childAbs);
-			const type = inspectEntry(childAbs, childRel);
-			if (type === "dir") {
-				stack.push({ dirAbs: childAbs, mainRel });
-				continue;
-			}
-			const classified = classifyLineageEntry(childRel, mains);
-			addFile({
-				relToSessions: childRel,
-				kind: classified.kind,
-				sessionId: classified.sessionId,
-				...(classified.parentPath !== undefined ? { parentPath: classified.parentPath } : {}),
-			});
-		}
-	}
-
-	return { files, mainSessions };
-}
-
-function isMainSessionName(name: string): boolean {
-	return isJsonlName(name) && !isAdvisorTranscriptName(name);
 }

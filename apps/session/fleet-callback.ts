@@ -169,8 +169,8 @@ export interface FleetCallbackEvents {
 	onEnvelope?: (envelope: CallbackEnvelope) => void;
 	/**
 	 * Down control envelopes (kind "control" on the transport or a browser
-	 * stream): stream_open/stream_close on `browser/<connId>` streams,
-	 * log_ack/log_gap/quiesce_begin on the transport stream. Distinct from
+	 * stream_open/stream_close on `browser/<connId>` streams, and
+	 * log_ack/log_gap on the transport stream. Distinct from
 	 * onEnvelope so the transport's own control traffic is routed without
 	 * touching the raw frame forwarding path.
 	 */

@@ -1,5 +1,4 @@
 import {
-	callbackError,
 	CONNECTION_MAX_BYTES,
 	ENVELOPE_MAX_BYTES,
 	HEARTBEAT_INTERVAL_MS,
@@ -13,16 +12,13 @@ import type {
 import type {
 	CommandAckPayload,
 	ControlAckPayload,
-	FlushBoundary,
-	QuiesceWriterEntry,
 	StreamResyncControl,
 } from "#lib/wire/callback-protocol";
-import type { WriterFlushResult } from "./writer-flush";
 import { isRingedDeltaType } from "./sse-delivery";
 
 /**
- * Daemon control broker: virtual streams + quiesce over the callback pair
- * (P3.3/P3.5/P4.5/P6/P7; Transport/Lifecycle 2026-09-06 contracts).
+ * Daemon control broker: virtual streams over the callback pair
+ * (P3.3/P3.5/P6; Transport/Lifecycle 2026-09-06 contracts).
  *
  * The daemon dials the callback pair; the fleet manages per-browser virtual
  * streams and down-half controls. This module owns the daemon half:
@@ -49,14 +45,6 @@ import { isRingedDeltaType } from "./sse-delivery";
  *   broadcasts is mirrored as a kind:"frame" envelope on streamId "control"
  *   (payload verbatim) while the pair lives, so the fleet derives activity +
  *   fanout correlation exactly like the direct control-socket tap.
- * - Quiesce (P4.5/P7.3): transport-stream {type:"quiesce_begin", requestId}
- *   raises the admission barrier (every new command is rejected with an
- *   explicit writer_active ack), runs the fail-closed writer gate, explicitly
- *   flushes every reachable SessionManager, disposes the session cascade,
- *   finalizes the tailer (torn tails verbatim + per-stream eof) and WAITS for
- *   the fleet's log_acks to cover the final flush boundary, structurally
- *   verifies every declared JSONL, collects Git evidence with writers
- *   stopped, then answers {type:"quiesce_result"} on the transport stream.
  *
  * Every control received is acknowledged kind:"ack" on the same stream with
  * the original type + requestId and ok:true/false; nothing is silently
@@ -65,38 +53,9 @@ import { isRingedDeltaType } from "./sse-delivery";
 
 // ── deps ───────────────────────────────────────────────────────────────────
 
-export interface LineageVerification {
-	manifestFiles: unknown[];
-	provenance: {
-		workspaceId: string;
-		workspaceName: string;
-		resolvedCommit: string;
-		generatedAt: number;
-	};
-}
-
-export interface GitEvidenceResult {
-	ok: boolean;
-	git?: unknown;
-	error?: { code: string; message: string };
-}
-
-/** Outcome of the explicit all-writer flush at quiesce. */
 export interface DaemonControlDeps {
-	/** Resolve the attached session entry; undefined before boot / after close. */
-	getEntry: () => { disposeQuiesce(): Promise<void> } | undefined;
 	/** Mounted command dispatch; returns the answer payload or undefined. */
 	handleCommand: (command: unknown) => Promise<unknown>;
-	/** Explicit flush of every reachable writer (main + descendants + advisors). */
-	flushWriters: () => Promise<WriterFlushResult>;
-	/** Finalize the tailer: torn tails verbatim + per-stream eof; returns the final flush boundary. */
-	finalizeTailer: () => Promise<FlushBoundary>;
-	/** Wait until fleet log_acks cover every stream of `boundary`; throws on timeout. */
-	waitForAckedBoundary: (boundary: FlushBoundary, timeoutMs: number) => Promise<void>;
-	/** Structural verification of every declared JSONL + manifest files/provenance. */
-	verifyLineage: () => Promise<LineageVerification>;
-	/** Git evidence with writers stopped; must fail closed on any probe failure. */
-	collectGitEvidence: () => Promise<GitEvidenceResult>;
 	/**
 	 * Async half of a browser-stream prime (anything that must be awaited, such
 	 * as building the slash-command list). Resolves to the synchronous half,
@@ -115,7 +74,6 @@ export interface DaemonControlDeps {
 	bufferedBytes: (streamId: string) => { stream: number; connection: number };
 	/** Live callback pair present. */
 	pairLive: () => boolean;
-	mainSessionFile: string | null;
 	/** Fleet ShutdownControl: the caller runs the graceful exit once the ack is queued. */
 	onShutdown: (reason: string | undefined) => void;
 	/**
@@ -177,16 +135,12 @@ interface BrowserStream {
 }
 
 export interface DaemonControlStatus {
-	quiescing: boolean;
-	admissionBarrier: boolean;
 	streams: Array<{ streamId: string; lastSeq: number; ringEntries: number; ringBytes: number }>;
-	lastQuiesce: { requestId: string; ok: boolean; at: number; error?: string } | null;
 }
 
 /** Per-browser replay ring: 10k entries / 4 MiB, byte-first eviction. */
 const RING_CAP = 10_000;
 const RING_MAX_BYTES = 4 * 1024 * 1024;
-const QUIESCE_DEFAULT_TIMEOUT_MS = 30_000;
 /**
  * Paced sends (priming, history resync) wait until the pair's outbound buffer
  * can take one maximal envelope plus this margin, so concurrent live frames
@@ -223,9 +177,6 @@ function ledgerCode(value: unknown): CallbackErrorCode {
 
 export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	const streams = new Map<string, BrowserStream>();
-	let quiescing = false;
-	let admissionBarrier = false;
-	let lastQuiesce: DaemonControlStatus["lastQuiesce"] = null;
 	let stopped = false;
 	/** connectionId of the callback pair the fleet is currently driving. */
 	let livePairId: string | null = null;
@@ -488,12 +439,6 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 				// before this broker); acknowledge receipt only.
 				ack(envelope.streamId, type, undefined, true);
 				break;
-			case "quiesce_begin":
-				beginQuiesce(
-					requestId,
-					typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined,
-				);
-				break;
 			case "shutdown":
 				ack(envelope.streamId, "shutdown", undefined, true);
 				deps.onShutdown(typeof payload.reason === "string" ? payload.reason : undefined);
@@ -518,18 +463,6 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			const receipt: CommandAckPayload = { type: "command_ack", id };
 			emit(envelope.streamId, "ack", receipt);
 		}
-		if (admissionBarrier) {
-			// Receipt above, then the explicit typed rejection.
-			ack(
-				envelope.streamId,
-				"command_ack",
-				undefined,
-				false,
-				"writer_active",
-				"command rejected: quiesce admission barrier",
-			);
-			return;
-		}
 		deps
 			.handleCommand(command)
 			.then((answer) => {
@@ -544,105 +477,6 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 				});
 				console.error(`omp-session: callback command failed: ${message}`);
 			});
-	};
-
-	const beginQuiesce = (requestId: string | undefined, timeoutMs: number | undefined): void => {
-		if (requestId === undefined) {
-			ack(
-				"transport",
-				"quiesce_begin",
-				undefined,
-				false,
-				"invalid_request",
-				"quiesce_begin requires requestId",
-			);
-			return;
-		}
-		if (quiescing) {
-			ack(
-				"transport",
-				"quiesce_begin",
-				requestId,
-				false,
-				"conflict",
-				"quiesce already in progress",
-			);
-			return;
-		}
-		quiescing = true;
-		admissionBarrier = true;
-		ack("transport", "quiesce_begin", requestId, true);
-		const timeout = timeoutMs ?? QUIESCE_DEFAULT_TIMEOUT_MS;
-		void runQuiesce(requestId, timeout);
-	};
-
-	const runQuiesce = async (requestId: string, timeoutMs: number): Promise<void> => {
-		let ok = true;
-		let failure: { code: string; message: string } | null = null;
-		let result: {
-			boundary?: FlushBoundary;
-			manifestFiles?: unknown[];
-			provenance?: LineageVerification["provenance"];
-			writers?: {
-				main: "flushed";
-				descendants: QuiesceWriterEntry[];
-				advisors: "caught_up" | "inactive";
-				note?: string;
-			};
-			git?: unknown;
-		} = {};
-		try {
-			const entry = deps.getEntry();
-			if (entry === undefined) {
-				throw callbackError("writer_active", "no attached session to quiesce");
-			}
-			// 1. Explicit flush of every reachable writer BEFORE dispose.
-			const flush = await deps.flushWriters();
-			if (!flush.ok) {
-				throw callbackError("unavailable", flush.error ?? "writer flush failed");
-			}
-			// 2. Dispose cascade.
-			await entry.disposeQuiesce();
-			// 3. Tailer finalize: torn tails verbatim + per-stream eof, then
-			//    wait for fleet durability (log_acks) over the final boundary.
-			const boundary = await deps.finalizeTailer();
-			await deps.waitForAckedBoundary(boundary, timeoutMs);
-			// 4. Structural verification + manifest (writers stopped).
-			const lineage = await deps.verifyLineage();
-			// 5. Git evidence with writers stopped (fail closed on any probe failure).
-			const git = await deps.collectGitEvidence();
-			if (!git.ok) {
-				throw callbackError("conflict", git.error?.message ?? "git evidence unavailable");
-			}
-			result = {
-				boundary,
-				manifestFiles: lineage.manifestFiles,
-				provenance: lineage.provenance,
-				writers: {
-					main: "flushed",
-					descendants: flush.descendants,
-					advisors: flush.advisors,
-					...(flush.note !== undefined ? { note: flush.note } : {}),
-				},
-				git: git.git,
-			};
-		} catch (cause) {
-			ok = false;
-			const err = cause instanceof Error ? cause : new Error(String(cause));
-			failure = {
-				code: ledgerCode(isObject(cause) ? cause.code : undefined),
-				message: err.message,
-			};
-		}
-		emit("transport", "control", {
-			type: "quiesce_result",
-			requestId,
-			ok,
-			...(ok ? result : { error: failure }),
-		});
-		lastQuiesce = { requestId, ok, at: Date.now(), ...(ok ? {} : { error: failure?.message }) };
-		quiescing = false;
-		admissionBarrier = false; // Resume normal operation on any outcome.
 	};
 
 	const mirror = (frame: Record<string, unknown>): void => {
@@ -680,22 +514,17 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	const stop = (): void => {
 		stopped = true;
 		clearTimeout(orphanSweep);
-		quiescing = false;
-		admissionBarrier = false;
 		streams.clear();
 		deps.onBrowserStreamsChange?.(0);
 	};
 
 	const status = (): DaemonControlStatus => ({
-		quiescing,
-		admissionBarrier,
 		streams: [...streams.values()].map((s) => ({
 			streamId: s.streamId,
 			lastSeq: s.lastSeq,
 			ringEntries: s.entries.length - s.head,
 			ringBytes: s.bytes,
 		})),
-		lastQuiesce,
 	});
 
 	/** Drop every browser stream the live pair did not re-open (SXP-03). */
@@ -737,12 +566,6 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		mirror,
 		publishHistory,
 		publish: (streamId, frame) => emit(streamId, "frame", frame),
-		beginQuiesce,
-		abort: () => {
-			if (!quiescing) return;
-			quiescing = false;
-			admissionBarrier = false;
-		},
 		stop,
 		status,
 		browserStreamCount: () => (deps.pairLive() ? streams.size : 0),
@@ -758,10 +581,6 @@ export interface DaemonControl {
 	publishHistory(frames: Record<string, unknown>[]): Promise<void>;
 	/** Publish a frame directly to one stream; ringed deltas ring on browser streams. */
 	publish(streamId: string, frame: Record<string, unknown>): void;
-	/** Begin quiesce (transport control). */
-	beginQuiesce(requestId: string, timeoutMs?: number): void;
-	/** Abort an in-flight quiesce (pair teardown/shutdown). */
-	abort(): void;
 	stop(): void;
 	status(): DaemonControlStatus;
 	/**

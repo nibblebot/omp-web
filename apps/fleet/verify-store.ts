@@ -9,7 +9,6 @@ import {
 	type ManifestProvenance,
 	computeExportId,
 	isNormalizedPosixRelativePath,
-	validateManifest,
 } from "#lib/session-files/archive-manifest";
 import {
 	JSONL_SUFFIX,
@@ -124,16 +123,6 @@ export interface VerifyWorkspaceLogsOptions {
 		/** The workspace's resolved commit (fleet WorkspaceRecord.pinnedRevision). */
 		resolvedCommit?: string;
 	};
-	/**
-	 * The daemon's quiesce manifest (P4.5 quiesce_result control envelope).
-	 * When supplied, the gate ALSO proves the fleet store matches it exactly:
-	 * every declared file present in the store with equal size/sha256/kind/
-	 * sessionId/parentPath, and no store file outside the declared set, on
-	 * top of the offset-contiguity/structural checks. `generatedAt` is
-	 * excluded from equality; `provenance.workspaceId` must equal
-	 * `workspaceId` (a drifted manifest is a conflict).
-	 */
-	expectedManifest?: ArchiveManifest;
 }
 
 /** Workspace-level reserved store files (sidecar name, read-only marker). */
@@ -704,54 +693,6 @@ export async function verifyWorkspaceLogs(opts: VerifyWorkspaceLogsOptions): Pro
 		verified.push(result.session);
 		expectedFiles.push(...buildSessionManifestFiles(sessionId, result.hashed));
 	}
-	const workspaceIdForCompare = workspaceId;
-	if (opts.expectedManifest !== undefined) {
-		let expected: ArchiveManifest;
-		try {
-			expected = validateManifest(opts.expectedManifest);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			return fail("invalid_request", `expectedManifest is malformed: ${message}`);
-		}
-		if (expected.provenance.workspaceId !== workspaceIdForCompare) {
-			return fail(
-				"conflict",
-				`expectedManifest targets workspace ${expected.provenance.workspaceId}, verifying ${workspaceIdForCompare}`,
-			);
-		}
-		const expectedByPath = new Map(expected.files.map((file) => [file.path, file]));
-		const storeByPath = new Map(expectedFiles.map((file) => [file.path, file]));
-		// Complete declared set: every expected file present and identical.
-		for (const [relpath, expectedFile] of expectedByPath) {
-			const storeFile = storeByPath.get(relpath);
-			if (storeFile === undefined) {
-				return fail(
-					"conflict",
-					`expected manifest file missing from the store: ${relpath}`,
-					relpath,
-				);
-			}
-			const mismatch = manifestFileMismatch(expectedFile, storeFile);
-			if (mismatch !== undefined) {
-				return fail(
-					"conflict",
-					`stored ${relpath} does not match the expected manifest: ${mismatch}`,
-					relpath,
-				);
-			}
-		}
-		// No undeclared store files: the store holds exactly the declared set.
-		for (const relpath of storeByPath.keys()) {
-			if (!expectedByPath.has(relpath)) {
-				return fail(
-					"conflict",
-					`store holds a file the expected manifest does not declare: ${relpath}`,
-					relpath,
-				);
-			}
-		}
-		return { ok: true, sessions: verified, manifest: expected };
-	}
 	if (opts.registry !== undefined) {
 		const provenance: ManifestProvenance = {
 			projectId: opts.registry.projectId ?? "",
@@ -773,22 +714,4 @@ export async function verifyWorkspaceLogs(opts: VerifyWorkspaceLogsOptions): Pro
 		return { ok: true, sessions: verified, manifest, exportId: computeExportId(idInput) };
 	}
 	return { ok: true, sessions: verified };
-}
-
-/**
- * First field where `stored` disagrees with `expected`, or undefined when
- * they match field-for-field (undefined parentPath === absent). generatedAt
- * lives in provenance and is handled by the caller.
- */
-function manifestFileMismatch(expected: ManifestFile, stored: ManifestFile): string | undefined {
-	if (stored.size !== expected.size) return `size ${stored.size}, expected ${expected.size}`;
-	if (stored.sha256 !== expected.sha256) return "sha256 mismatch";
-	if (stored.kind !== expected.kind) return `kind ${stored.kind}, expected ${expected.kind}`;
-	if (stored.sessionId !== expected.sessionId) {
-		return `sessionId ${stored.sessionId}, expected ${expected.sessionId}`;
-	}
-	if ((stored.parentPath ?? undefined) !== (expected.parentPath ?? undefined)) {
-		return `parentPath ${stored.parentPath ?? "(none)"}, expected ${expected.parentPath ?? "(none)"}`;
-	}
-	return undefined;
 }

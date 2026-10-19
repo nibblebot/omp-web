@@ -357,64 +357,6 @@ export class SessionLogTailer {
 	}
 
 	/**
-	 * Quiesce finalize (P4.5/P7.3): freeze discovery (stop the scan tick and
-	 * watcher), mark every tracked stream closed so a subsequent drain
-	 * releases any held-back torn tail VERBATIM (closed JSONL streams stream
-	 * raw bytes to EOF, exactly like the SDK loader tolerates them) and emits
-	 * the per-stream eof marker at the final offset. Returns the final flush
-	 * boundary keyed by streamId, the offsets the fleet store must reach
-	 * before the delete gate passes. Never throws: streams that fail to emit
-	 * land in status().lastError and their boundary entry is omitted, which
-	 * the caller treats as an explicit failure.
-	 */
-	finalizeForQuiesce(): Map<string, { offset: number; generation: number; eof: boolean }> {
-		this.#running = false; // No further discovery or debounced sidecar writes.
-		if (this.#sidecarTimer !== null) {
-			clearTimeout(this.#sidecarTimer);
-			this.#sidecarTimer = null;
-		}
-		clearTimeout(this.#tick);
-		this.#tick = undefined;
-		if (this.#watcher !== null) {
-			try {
-				this.#watcher.close();
-			} catch {
-				// Watcher already gone, nothing to clean up.
-			}
-			this.#watcher = null;
-		}
-		const boundary = new Map<string, { offset: number; generation: number; eof: boolean }>();
-		for (const stream of [...this.#streams.values()]) {
-			if (stream.closed && stream.eofSent) {
-				boundary.set(stream.streamId, {
-					offset: stream.sentOffset,
-					generation: stream.generation,
-					eof: true,
-				});
-				continue;
-			}
-			stream.closed = true;
-			this.#drain(stream); // Releases the torn tail verbatim to EOF + eof marker.
-			boundary.set(stream.streamId, {
-				offset: stream.sentOffset,
-				generation: stream.generation,
-				eof: stream.eofSent,
-			});
-		}
-		// Sidecar: the final boundary is the restart resume point if the
-		// daemon dies before the fleet store confirms it.
-		this.#writeSidecar();
-		return boundary;
-	}
-
-	/** Current acked offset per stream (fleet durability watermarks). */
-	ackedOffsets(): Map<string, number> {
-		const out = new Map<string, number>();
-		for (const stream of this.#streams.values()) out.set(stream.streamId, stream.lastAcked);
-		return out;
-	}
-
-	/**
 	 * Fence a deleted session (acknowledged purge): its streams stop tracking
 	 * with no eof marker (the fleet purges its copy on the `session_deleted`
 	 * notice), and its restore/sidecar entries are dropped so a restart cannot
