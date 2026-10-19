@@ -1,31 +1,27 @@
-import {
-	SSE_BACKPRESSURE_BYTES,
-	SSE_KEEPALIVE_MS,
-	SSE_RING_CAP,
-	SSE_SILENCE_DEADLINE_MS,
-} from "./protocol";
+import { SSE_BACKPRESSURE_BYTES, SSE_KEEPALIVE_MS, SSE_SILENCE_DEADLINE_MS } from "./protocol";
 import { encodeSseEvent, parseSseUnits, SSE_PING_EVENT } from "./sse";
 
 /**
  * Callback transport protocol (OMP_CALLBACK_PROTO = 1), separately versioned
- * from OMP_PROTO. Encoding, parsing, and policy frozen by
- * docs/clone-contracts.md ("Callback transport" and "Typed errors").
+ * from OMP_PROTO (2). This module is the single source of truth for the
+ * envelope shape, route paths, and parsing rules shared by the fleet and the
+ * daemon callback client.
  *
- * Pure module: no I/O, no ambient state beyond the explicit parser/dedup
- * objects this file creates. Shared by the fleet (server routes, edge) and
- * the daemon's callback client.
+ * Pure module: no I/O, no ambient state beyond the explicit parser this file
+ * creates. Shared by the fleet (server routes, edge) and the daemon's
+ * callback client.
  *
  * Up:   daemon-initiated long-lived POST /callback/up, body
  *       application/x-ndjson UTF-8 envelopes, one record <= 1 MiB,
  *       incremental parsing, HTTP chunk boundaries are not message
  *       boundaries.
  * Down: daemon-initiated long-lived GET /callback/down, SSE response,
- *       same envelope version, Last-Event-ID resume.
+ *       same envelope version. Each pair mints a fresh connectionId and the
+ *       down stream is never resumed: the fleet ignores Last-Event-ID.
  * Bulk: daemon-initiated POST /callback/bulk/<correlationId>, 64 MiB cap;
  *       completion is never archive acceptance.
  *
- * An HTTP 200 on the POST is transport receipt only; an `ack` envelope
- * confirms command receipt at the daemon boundary; neither is command
+ * An HTTP 200 on the POST is transport receipt only; it is NOT command
  * execution acceptance (that remains the daemon's 202/call_result
  * semantics).
  */
@@ -42,8 +38,7 @@ export const CALLBACK_BULK_PATH_PREFIX = "/callback/bulk/";
  * byte-for-byte; carried here so neither lane invents a variant:
  *
  * - CALLBACK_TRANSPORT_STREAM_ID: streamId the fleet uses for its own
- *   envelopes (pair_ready, heartbeats); rides the replay ring so a resuming
- *   redial re-delivers them.
+ *   envelopes (pair_ready, heartbeats).
  * - CALLBACK_CONTROL_STREAM_ID: streamId the daemon uses for its transport
  *   heartbeats on the up stream.
  * - CALLBACK_PAIR_READY_TYPE: payload.type of the single control envelope
@@ -56,6 +51,7 @@ export const CALLBACK_PAIR_READY_TYPE = "pair_ready";
 
 /** streamId prefix of per-browser virtual streams: `browser/<connId>`. */
 export const CALLBACK_BROWSER_STREAM_PREFIX = "browser/";
+
 /**
  * Bulk multi-part upload headers (daemon → fleet, POST /callback/bulk/<id>).
  * Parts are 0-based, strictly sequential, no gaps/overlaps; the final part
@@ -81,27 +77,6 @@ export const BULK_FINAL_HEADER = "x-omp-bulk-final";
  */
 export interface StreamResyncControl {
 	type: "stream_resync";
-}
-
-/** daemon→fleet, kind "ack", on the command's own stream: receipt only. */
-export interface CommandAckPayload {
-	type: "command_ack";
-	/** The ClientCommand id received; deduped re-submits are acked, not re-dispatched. */
-	id?: string;
-}
-
-/**
- * Generic control ack discipline: every control the daemon receives is
- * answered with kind "ack" on the same stream carrying the original control's
- * identity and either ok:true or an explicit typed failure. Nothing is
- * silently discarded.
- */
-export interface ControlAckPayload {
-	/** The control's {type, requestId?} identity, echoed. */
-	type: string;
-	requestId?: string;
-	ok: boolean;
-	error?: { code: CallbackErrorCode; message: string };
 }
 
 /**
@@ -136,8 +111,6 @@ export const ENVELOPE_MAX_BYTES = 1024 * 1024;
 export const CONNECTION_MAX_BYTES = 8 * 1024 * 1024;
 /** Per-virtual-stream buffered cap (4 MiB); also bounds reassembled chunks. */
 export const STREAM_MAX_BYTES = SSE_BACKPRESSURE_BYTES;
-/** Replay ring entries kept for Last-Event-ID resume (10k). */
-export const REPLAY_RING_ENTRIES = SSE_RING_CAP;
 /** Daemon heartbeat cadence on the down stream (15 s). */
 export const HEARTBEAT_INTERVAL_MS = SSE_KEEPALIVE_MS;
 /** Down-stream silence deadline (30 s): no envelope by then = dead pair. */
@@ -163,7 +136,7 @@ export const BULK_MAX_BYTES = 64 * 1024 * 1024;
 export const ENROLLMENT_KEY_BYTES = 32;
 
 /** Envelope kinds; the event name on the down stream mirrors the kind. */
-export const CALLBACK_KINDS = ["frame", "command", "control", "ack", "heartbeat"] as const;
+export const CALLBACK_KINDS = ["frame", "command", "control", "heartbeat"] as const;
 export type CallbackKind = (typeof CALLBACK_KINDS)[number];
 
 /**
@@ -491,8 +464,8 @@ export function createNdjsonParser(opts?: { maxRecordBytes?: number }): NdjsonPa
 
 /**
  * Encode one envelope as a complete SSE event block on the down stream:
- * event name is the envelope kind, id is the envelope seq (Last-Event-ID
- * resume), data is the canonical JSON. Reuses lib/wire/sse.ts conventions.
+ * event name is the envelope kind, id is the envelope seq, data is the
+ * canonical JSON. Reuses lib/wire/sse.ts conventions.
  */
 export function encodeSseEnvelope(envelope: CallbackEnvelope): string {
 	return encodeSseEvent(envelope.kind, envelope, envelope.seq);

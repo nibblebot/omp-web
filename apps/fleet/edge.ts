@@ -1434,9 +1434,8 @@ export class FleetEdge {
 
 	/** Route one callback envelope from a browser's clone stream: frame
 	 * envelopes forward verbatim (daemon priming + deltas); stream_resync
-	 * controls surface as a stream_reset so the client re-primes; ack /
-	 * command / heartbeat are ignored (receipt-only, wrong-direction, or
-	 * transport liveness). */
+	 * controls surface as a stream_reset so the client re-primes; command /
+	 * heartbeat are ignored (wrong-direction or transport liveness). */
 	#onCallbackEnvelope(
 		stream: BrowserStream,
 		pipe: CallbackPipeState,

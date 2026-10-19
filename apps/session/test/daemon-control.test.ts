@@ -177,7 +177,7 @@ describe("daemon-control stream_open replay (P3.10)", () => {
 		openStream(control, 1025);
 		expect(primes.length).toBe(1); // NO new prime (ring hit)
 		const replayed = sent.slice(beforeReopen);
-		expect(replayed.length).toBe(2); // stream_open ack + replayed delta
+		expect(replayed.length).toBe(1); // the replayed delta
 		const replayFrames = replayed.filter((s) => s.kind === "frame");
 		expect(replayFrames.length).toBe(1);
 		expect(replayFrames[0]!.payload).toEqual({ type: "state", state: { streaming: true } });
@@ -192,9 +192,9 @@ describe("daemon-control stream_open replay (P3.10)", () => {
 		// Reconnect fully caught up (floor == the only delta's seq).
 		openStream(control, 1025);
 		expect(primes.length).toBe(1); // no re-prime (pre-fix this re-primed)
-		// Only the stream_open ack was added, no replayed delta, no prime.
+		// Nothing was added: no replayed delta, no prime.
 		const added = sent.slice(sentBeforeReopen);
-		expect(added.length).toBe(1); // the ack
+		expect(added.length).toBe(0);
 		expect(added.filter((s) => s.kind === "frame")).toHaveLength(0);
 		control.stop();
 	});
@@ -237,7 +237,7 @@ describe("daemon-control stream_open replay (P3.10)", () => {
 		openStream(control, 1026); // floor above the frontier: HIT, replay 1027
 		expect(primes.length).toBe(before); // no re-prime
 		const added = sent.slice(sentBeforeReopen);
-		// Exactly the replayed event frame + the stream_open ack, no prime.
+		// Exactly the replayed event frame, no prime.
 		expect(added.filter((s) => s.kind === "frame")).toHaveLength(1);
 		expect(typeOf(added.find((s) => s.kind === "frame")!.payload)).toBe("event");
 		control.stop();
@@ -392,8 +392,8 @@ describe("daemon-control browser-stream priming", () => {
 		});
 		control = harness.control;
 		openStream(control);
-		// stream_open ack + the event's control-stream mirror + 4 priming frames + the held event.
-		await harness.sentCount(7);
+		// the event's control-stream mirror + 4 priming frames + the held event.
+		await harness.sentCount(6);
 		const browserFrames = harness.sent
 			.filter((s) => s.streamId === STREAM && s.kind === "frame")
 			.map((s) => typeOf(s.payload));
@@ -626,7 +626,7 @@ describe("daemon-control paced priming waits on drain (SXP-16)", () => {
 		// The buffer empties and the pair signals the drain: the prime emits every frame.
 		queued = 0;
 		wake();
-		await harness.sentCount(3); // stream_open ack + hello_ok + attached
+		await harness.sentCount(2); // hello_ok + attached
 		expect(harness.sent.filter((s) => s.kind === "frame").map((s) => typeOf(s.payload))).toEqual([
 			"hello_ok",
 			"attached",

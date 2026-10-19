@@ -30,17 +30,11 @@
  *                                        write-only, so up silence is the
  *                                        only dead-daemon signal the fleet
  *                                        has.
- *   GET  /callback/down                  Long-lived SSE downlink. Per-
- *                                        connection 10k-entry replay ring
- *                                        (byte-budgeted like every other
- *                                        ring); Last-Event-ID resumes by the
- *                                        registry-assigned down seq (starts
- *                                        at 1); a resume past the seqs the
- *                                        current ring record issued (evicted
- *                                        after RING_IDLE_MS / fleet restart)
- *                                        is refused typed, never answered
- *                                        with a restarted seq space. 15 s
- *                                        heartbeat envelopes.
+ *   GET  /callback/down                  Long-lived SSE downlink. Each connection
+ *                                        has its own down seq space (starts at 1,
+ *                                        strictly monotonic). Last-Event-ID is
+ *                                        ignored: a redial starts live, never
+ *                                        replayed. 15 s heartbeat envelopes.
  *   POST /callback/bulk/<correlationId>  Daemon-initiated bounded bulk
  *                                        transfer (64 MiB cap) correlated to
  *                                        a fleet-issued id from
@@ -52,8 +46,7 @@
  * Pair establishment: once both halves for a connectionId are live, the
  * fleet emits ONE control envelope on the down half (streamId "transport",
  * payload {type:"pair_ready", connectionId, generation}); a daemon resolves
- * start() on it (PAIR_READY_TIMEOUT_MS deadline). It rides the replay ring,
- * so a resuming redial re-delivers it; idempotent by connectionId. All
+ * start() on it (PAIR_READY_TIMEOUT_MS deadline); idempotent by connectionId.
  * transport-generated envelopes (pair_ready, heartbeats) carry streamId
  * "transport" so they pass validateEnvelope on the daemon side.
  *
@@ -114,9 +107,7 @@ import {
 	needsSplit,
 	planOversizeSplit,
 	OMP_CALLBACK_PROTO,
-	REPLAY_RING_ENTRIES,
 	SILENCE_DEADLINE_MS,
-	type CallbackKind,
 	validateEnvelope,
 } from "#lib/wire/callback-protocol";
 import { commandBytes, commandTooLargeMessage, MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
@@ -128,18 +119,16 @@ import {
 	parseMaterializeRequest,
 	planMaterializeFiles,
 } from "#lib/session-files/wake-materialize";
-import { SSE_RING_BYTES } from "#lib/wire/protocol";
-import { SseRing } from "#lib/wire/sse";
 
-/** Rings with no live connection and no activity for this long are dropped. */
-const RING_IDLE_MS = 10 * 60_000;
+/** Down seq records with no live connection and no activity for this long are dropped. */
+const SEQ_RECORD_IDLE_MS = 10 * 60_000;
 /** A chunked command waits this long for the daemon to drain the down stream before the connection is dropped. */
 const DOWN_ROOM_STALL_MS = 30_000;
 /** Open bulk correlations with no payload progress for this long expire as failed; settled ones are reaped. */
 const BULK_IDLE_MS = 60_000;
 /** Capture (download) correlations open at once; each buffers up to BULK_MAX_BYTES, so this bounds fleet heap. */
 const BULK_CAPTURE_MAX_OPEN = 2;
-/** Registry sweep cadence: up-connection silence, ring idleness, bulk expiry. */
+/** Registry sweep cadence: up-connection silence, seq record idleness, bulk expiry. */
 const SWEEP_INTERVAL_MS = 5_000;
 /** Revoked enrollments are kept this long (diagnostics) before the sweep drops them. */
 const ENROLLMENT_REVOKED_RETENTION_MS = 10 * 60_000;
@@ -171,17 +160,6 @@ function digestEqual(a: Uint8Array, b: Uint8Array): boolean {
 
 const enrollmentKey = (workspaceId: string, generation: number): string =>
 	`${workspaceId}\u0000${generation}`;
-
-function parseLastEventId(raw: string | null): number {
-	if (raw === null || raw === "") return 0;
-	const value = Number(raw);
-	if (!Number.isSafeInteger(value) || value < 0) {
-		throw callbackError("invalid_request", `malformed Last-Event-ID ${JSON.stringify(raw)}`, {
-			detail: "expected a non-negative integer seq",
-		});
-	}
-	return value;
-}
 
 /** Typed-error JSON body {error, message, detail?} at the frozen status. */
 function errorResponse(error: CallbackError): Response {
@@ -235,11 +213,10 @@ interface UpConnection {
 	droppedRecords: number;
 }
 
-interface RingRecord {
+interface SeqRecord {
 	connectionId: string;
 	workspaceId: string;
 	generation: number;
-	ring: SseRing<string>;
 	/** Fleet-assigned down-side seq; strictly monotonic per connectionId. */
 	nextSeq: number;
 	lastActiveAt: number;
@@ -249,7 +226,7 @@ interface DownConnection {
 	connectionId: string;
 	workspaceId: string;
 	generation: number;
-	record: RingRecord;
+	record: SeqRecord;
 	encoder: TextEncoder;
 	controller: ReadableStreamDefaultController<Uint8Array>;
 	/** Serializes wire writes so envelope order is preserved. */
@@ -295,8 +272,6 @@ export interface PairStatus {
 	authorizedGeneration: number | null;
 	paired: boolean;
 	connectionId: string | null;
-	/** Most recent pair's replay ring depth (Last-Event-ID resume supply). */
-	replayDepth: number;
 	lastEnvelopeAt: number | null;
 	lastDownSendAt: number | null;
 	envelopesReceived: number;
@@ -337,7 +312,7 @@ export class DaemonTransportRegistry {
 	readonly #authorizedMax = new Map<string, number>();
 	readonly #upConnections = new Set<UpConnection>();
 	readonly #downConnections = new Map<string, DownConnection>();
-	readonly #rings = new Map<string, RingRecord>();
+	readonly #seqRecords = new Map<string, SeqRecord>();
 	readonly #virtualStreams = new Map<string, Map<string, VirtualStreamSink>>();
 	readonly #taps = new Map<string, Set<(envelope: CallbackEnvelope) => void>>();
 	readonly #bulk = new Map<string, BulkRecord>();
@@ -356,7 +331,7 @@ export class DaemonTransportRegistry {
 
 	/**
 	 * `now` and `sweepIntervalMs` exist so the sweep deadlines (up silence,
-	 * ring idleness, bulk expiry) are testable without wall-clock waits;
+	 * seq record idleness, bulk expiry) are testable without wall-clock waits;
 	 * production passes neither and uses the module constants + Date.now.
 	 */
 	constructor(
@@ -812,28 +787,11 @@ export class DaemonTransportRegistry {
 
 	// --- down: GET /callback/down -------------------------------------------------
 
-	/** Long-lived SSE downlink with 10k-entry replay ring and 15 s heartbeats. */
+	/** Long-lived SSE downlink with 15 s heartbeats; Last-Event-ID is ignored. */
 	#handleDown(req: Request): Response {
 		const auth = this.#authenticate(req, { requireConnectionId: true });
-		const lastEventId = parseLastEventId(req.headers.get("last-event-id"));
 		const connectionId = auth.connectionId as string;
-		const record = this.#ringFor(connectionId, auth.workspaceId, auth.generation);
-		// A resume the ring cannot service — its record was evicted after
-		// RING_IDLE_MS, or the fleet restarted and lost it — is REFUSED. The
-		// ring's seq space restarts at 1 with a fresh record, so answering
-		// silently would publish live traffic under seqs a deduping consumer
-		// (seq is the envelope identity) already consumed, losing it without
-		// a trace. The typed refusal is actionable: redial blind.
-		if (lastEventId > record.nextSeq) {
-			throw callbackError(
-				"invalid_request",
-				`Last-Event-ID ${lastEventId} is past the ${record.nextSeq} seqs issued on connection ${connectionId}`,
-				{
-					detail:
-						"the replay ring no longer covers this resume point; redial without Last-Event-ID",
-				},
-			);
-		}
+		const record = this.#seqRecordFor(connectionId, auth.workspaceId, auth.generation);
 		const replaced = this.#downConnections.get(connectionId);
 		if (replaced) this.#teardownDown(replaced);
 		const encoder = new TextEncoder();
@@ -877,12 +835,6 @@ export class DaemonTransportRegistry {
 				size: (chunk) => (chunk as Uint8Array).byteLength,
 			},
 		);
-		// Replay BEFORE live registration; sendToDaemon only sees live
-		// connections and there is no await between the two, so a fresh
-		// command can never interleave into the replay window.
-		for (const entry of record.ring.after(lastEventId)) {
-			conn.controller.enqueue(encoder.encode(entry.value));
-		}
 		this.#downConnections.set(connectionId, conn);
 		conn.heartbeatTimer = setInterval(() => {
 			if (!conn.closed) {
@@ -901,8 +853,8 @@ export class DaemonTransportRegistry {
 		});
 	}
 
-	#ringFor(connectionId: string, workspaceId: string, generation: number): RingRecord {
-		const existing = this.#rings.get(connectionId);
+	#seqRecordFor(connectionId: string, workspaceId: string, generation: number): SeqRecord {
+		const existing = this.#seqRecords.get(connectionId);
 		if (existing) {
 			if (existing.workspaceId !== workspaceId) {
 				throw callbackError(
@@ -913,20 +865,20 @@ export class DaemonTransportRegistry {
 			existing.generation = generation;
 			return existing;
 		}
-		const record: RingRecord = {
+		const record: SeqRecord = {
 			connectionId,
 			workspaceId,
 			generation,
-			ring: new SseRing<string>(REPLAY_RING_ENTRIES, SSE_RING_BYTES),
+
 			nextSeq: 0,
 			lastActiveAt: this.#now(),
 		};
-		this.#rings.set(connectionId, record);
+		this.#seqRecords.set(connectionId, record);
 		return record;
 	}
 
 	/** Fleet → daemon envelope. Returns the registry-stamped envelope (down
-	 * seq assigned, rung for Last-Event-ID resume) once the write is queued.
+	 * seq assigned) once the write is queued.
 	 * No live pair: throws `unavailable`; never queues offline work. */
 	async sendToDaemon(workspaceId: string, draft: CallbackEnvelopeInput): Promise<CallbackEnvelope> {
 		const conn = this.#liveDownFor(workspaceId);
@@ -1038,7 +990,6 @@ export class DaemonTransportRegistry {
 		record.nextSeq += 1;
 		const envelope = this.#downEnvelope(conn, draft, record.nextSeq);
 		const block = encodeSseEnvelope(envelope);
-		record.ring.push(envelope.seq, block);
 		record.lastActiveAt = this.#now();
 		conn.sendChain = conn.sendChain.then(() => {
 			if (conn.closed) return;
@@ -1057,9 +1008,8 @@ export class DaemonTransportRegistry {
 		// Byte-counted strategy (#handleDown): desiredSize = highWaterMark −
 		// buffered, so a stalled reader that lets buffered bytes exceed the
 		// frozen per-connection cap (CONNECTION_MAX_BYTES) drives desiredSize
-		// below zero: the genuine drop-and-resume signal. The ring survives;
-		// the daemon redials with Last-Event-ID when it notices the closed
-		// stream.
+		// below zero: the genuine drop-and-resume signal. The daemon redials
+		// on a fresh pair when it notices the closed stream.
 		const desired = conn.controller.desiredSize;
 		if (desired !== null && desired < 0) {
 			this.#teardownDown(conn);
@@ -1516,20 +1466,13 @@ export class DaemonTransportRegistry {
 			if (lastEnvelopeAt === null || conn.lastDataAt > lastEnvelopeAt)
 				lastEnvelopeAt = conn.lastDataAt;
 		}
-		let ring: RingRecord | null = down?.record ?? null;
-		if (!ring) {
-			for (const record of this.#rings.values()) {
-				if (record.workspaceId !== workspaceId) continue;
-				if (!ring || record.lastActiveAt > ring.lastActiveAt) ring = record;
-			}
-		}
+
 		return {
 			workspaceId,
 			enrolled: authorizedGeneration !== null,
 			authorizedGeneration,
 			paired: down !== null,
 			connectionId: down?.connectionId ?? null,
-			replayDepth: ring?.ring.size ?? 0,
 			lastEnvelopeAt,
 			lastDownSendAt: down?.lastSendAt ?? null,
 			envelopesReceived,
@@ -1549,9 +1492,9 @@ export class DaemonTransportRegistry {
 				this.#teardownDown(conn);
 			}
 		}
-		for (const [connectionId, record] of this.#rings) {
+		for (const [connectionId, record] of this.#seqRecords) {
 			if (this.#downConnections.has(connectionId)) continue;
-			if (now - record.lastActiveAt > RING_IDLE_MS) this.#rings.delete(connectionId);
+			if (now - record.lastActiveAt > SEQ_RECORD_IDLE_MS) this.#seqRecords.delete(connectionId);
 		}
 		for (const [correlationId, record] of this.#bulk) {
 			if (now - record.touchedAt <= BULK_IDLE_MS) continue;
@@ -1573,7 +1516,7 @@ export class DaemonTransportRegistry {
 		// The up half is the fleet's ONLY liveness evidence for a daemon (the
 		// down half is write-only), so killing it ends the pair: leaving the
 		// down half live would report a dead daemon as paired (roster
-		// "ready") and keep accepting commands into a zombie socket. The ring
+		// "ready") and keep accepting commands into a zombie socket. The seq record
 		// survives for a redial, exactly as after any other pair teardown.
 		// A down half already torn down (or never dialed) has nothing to close.
 		const down =
@@ -1582,7 +1525,7 @@ export class DaemonTransportRegistry {
 	}
 
 	/** Tear everything down (fleet shutdown / tests). Open bulk correlations
-	 * settle failed; live pairs close; rings and enrollments are cleared. */
+	 * settle failed; live pairs close; seq records and enrollments are cleared. */
 	close(): void {
 		clearInterval(this.#sweepTimer);
 		for (const conn of [...this.#upConnections]) this.#killUp(conn);
@@ -1590,7 +1533,7 @@ export class DaemonTransportRegistry {
 		for (const record of this.#bulk.values())
 			this.#failBulk(record, record.bytes, "transport closed");
 		this.#upConnections.clear();
-		this.#rings.clear();
+		this.#seqRecords.clear();
 		this.#bulk.clear();
 		this.#virtualStreams.clear();
 		this.#taps.clear();

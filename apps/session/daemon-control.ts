@@ -5,16 +5,8 @@ import {
 	HEARTBEAT_INTERVAL_MS,
 	STREAM_MAX_BYTES,
 } from "#lib/wire/callback-protocol";
-import type {
-	CallbackEnvelope,
-	CallbackErrorCode,
-	CallbackKind,
-} from "#lib/wire/callback-protocol";
-import type {
-	CommandAckPayload,
-	ControlAckPayload,
-	StreamResyncControl,
-} from "#lib/wire/callback-protocol";
+import type { CallbackEnvelope, CallbackKind } from "#lib/wire/callback-protocol";
+import type { StreamResyncControl } from "#lib/wire/callback-protocol";
 import { isRingedDeltaType } from "./sse-delivery";
 
 /**
@@ -38,18 +30,16 @@ import { isRingedDeltaType } from "./sse-delivery";
  *   an orphan (its stream_close was lost) and is dropped after a grace window
  *   (SXP-02, SXP-03).
  * - Command routing: kind:"command" payloads on a browser/control stream are
- *   acked (command_ack receipt) then dispatched through the mounted
- *   handleCommand; answers (call_result/unicast) flow as frames on the same
- *   stream. Dedup is the daemon's existing 60 s / 64-entry window; a
- *   duplicate is acked but not re-dispatched.
+ *   dispatched through the mounted handleCommand; answers (call_result/unicast)
+ *   flow as frames on the same stream. Re-submitted command ids are deduped by
+ *   the session's command handler (index.ts), not by this broker.
  * - Control mirror: every session-scoped frame the direct /events path
  *   broadcasts is mirrored as a kind:"frame" envelope on streamId "control"
  *   (payload verbatim) while the pair lives, so the fleet derives activity +
  *   fanout correlation exactly like the direct control-socket tap.
  *
- * Every control received is acknowledged kind:"ack" on the same stream with
- * the original type + requestId and ok:true/false; nothing is silently
- * discarded.
+ * Controls are not acknowledged on the wire. An unknown control type is logged
+ * to stderr and otherwise ignored.
  */
 
 // ── deps ───────────────────────────────────────────────────────────────────
@@ -77,7 +67,7 @@ export interface DaemonControlDeps {
 	onDrain: (listener: () => void) => () => void;
 	/** Live callback pair present. */
 	pairLive: () => boolean;
-	/** Fleet ShutdownControl: the caller runs the graceful exit once the ack is queued. */
+	/** Fleet ShutdownControl: the caller runs the graceful exit. */
 	onShutdown: (reason: string | undefined) => void;
 	/**
 	 * Notified with the live browser-stream count whenever it changes: after a
@@ -155,28 +145,6 @@ function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Code-string narrowing to the ledger vocabulary (acks carry typed codes). */
-function ledgerCode(value: unknown): CallbackErrorCode {
-	const code = typeof value === "string" ? value : "retryable";
-	switch (code) {
-		case "invalid_request":
-		case "invalid_identity":
-		case "unauthorized":
-		case "forbidden":
-		case "unavailable":
-		case "conflict":
-		case "generation_obsolete":
-		case "writer_active":
-		case "archive_pending":
-		case "archive_conflict":
-		case "provider_failed":
-		case "retryable":
-			return code;
-		default:
-			return "retryable";
-	}
-}
-
 export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	const streams = new Map<string, BrowserStream>();
 	let stopped = false;
@@ -241,30 +209,6 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			const resync: StreamResyncControl = { type: "stream_resync" };
 			deps.send(streamId, "control", resync);
 		}
-	};
-
-	const ack = (
-		streamId: string,
-		controlType: string,
-		requestId: string | undefined,
-		ok: boolean,
-		code?: string,
-		message?: string,
-	): void => {
-		const payload: ControlAckPayload = {
-			type: controlType,
-			...(requestId !== undefined ? { requestId } : {}),
-			ok,
-			...(ok
-				? {}
-				: {
-						error: {
-							code: ledgerCode(code ?? "retryable"),
-							message: message ?? `${controlType} failed`,
-						},
-					}),
-		};
-		emit(streamId, "ack", payload);
 	};
 
 	const ringAfter = (stream: BrowserStream, after: number): RingEntry[] => {
@@ -431,36 +375,24 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		if (!isObject(envelope.payload)) return;
 		const payload = envelope.payload;
 		const type = typeof payload.type === "string" ? payload.type : "";
-		const requestId = typeof payload.requestId === "string" ? payload.requestId : undefined;
 		const lastSeq = typeof payload.lastSeq === "number" ? payload.lastSeq : undefined;
 		switch (type) {
 			case "stream_open":
 				openStream(envelope.streamId, lastSeq);
-				ack(envelope.streamId, "stream_open", undefined, true);
 				break;
 			case "stream_close":
 				if (streams.delete(envelope.streamId)) deps.onBrowserStreamsChange?.(streams.size);
-				ack(envelope.streamId, "stream_close", undefined, true);
 				break;
 			case "log_ack":
 			case "log_gap":
 				// Log controls belong to the log tailer (mounted by index.ts
-				// before this broker); acknowledge receipt only.
-				ack(envelope.streamId, type, undefined, true);
+				// before this broker); nothing to do here.
 				break;
 			case "shutdown":
-				ack(envelope.streamId, "shutdown", undefined, true);
 				deps.onShutdown(typeof payload.reason === "string" ? payload.reason : undefined);
 				break;
 			default:
-				ack(
-					envelope.streamId,
-					type,
-					requestId,
-					false,
-					"invalid_request",
-					`unknown control type "${type}"`,
-				);
+				console.error(`omp-session: unknown callback control "${type}"`);
 				break;
 		}
 	};
@@ -468,10 +400,6 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	const handleCommand = (envelope: CallbackEnvelope): void => {
 		const command = envelope.payload;
 		const id = isObject(command) && typeof command.id === "string" ? command.id : undefined;
-		if (id !== undefined) {
-			const receipt: CommandAckPayload = { type: "command_ack", id };
-			emit(envelope.streamId, "ack", receipt);
-		}
 		deps
 			.handleCommand(command)
 			.then((answer) => {

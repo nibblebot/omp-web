@@ -1,7 +1,7 @@
 /**
  * Fleet-side callback transport (P3.3) controlled-peer regressions over the
  * REAL DaemonTransportRegistry: either-half close vs pair observation,
- * reconnect/renewal resume inside the replay ring without duplicate
+ * reconnect/renewal continuity (seq never reset, no replay), no duplicate
  * acceptance, stale/revoked-generation rejection, bounded + isolated virtual
  * streams, bounded down delivery, and bulk multi-part sequencing. Every
  * scenario drives the actual registry over real loopback HTTP with controlled
@@ -13,22 +13,21 @@
  * - #handleUp reads the POST body to completion, so the up Response is the
  *   END-of-up signal; tests hold a ReadableStream body open and close it to
  *   end a leg.
- * - The fleet re-delivers pair_ready on every (up/down) establishment, and a
- *   redial replays ring entries at their ORIGINAL down seqs, so a resumed
- *   consumer dedups by (connectionId, seq); a command is never re-accepted
- *   under a fresh seq.
+ * - The fleet re-delivers pair_ready on every (up/down) establishment. A redial
+ *   on the same connectionId never replays earlier envelopes: seqs continue, so
+ *   a consumer dedups by (connectionId, seq) and a command is never re-accepted.
  * - A daemon-side drop of either leg is NOT observed as pair loss: the fleet
  *   keeps the surviving half live and expects the daemon to redial the lost
- *   half on the same connectionId (the ring then replays the gap). paired:
- *   false is reserved for registry-internal teardown (revocation, the
- *   down-stream byte cap, or close()); ending the UP half alone leaves the
- *   down delivery path live.
+ *   half on the same connectionId; that redial continues the seq space and
+ *   replays nothing. paired: false is reserved for registry-internal teardown
+ *   (revocation, the down-stream byte cap, or close()); ending the UP half
+ *   alone leaves the down delivery path live.
  *
  * Timers: these are integration tests over real HTTP/SSE state; fake timers
  * cannot advance Bun's network stack, so the suite follows the repo's
  * poll-until-observable waitFor idiom and bounds every deadline. The slow
  * sink's delay is the deliberate stall under test. Deadline sweeps (up
- * silence, ring idleness, bulk TTL) are driven through the registry's
+ * silence, seq record idleness, bulk TTL) are driven through the registry's
  * injectable clock + sweep cadence (clockedRegistry), never by waiting out a
  * real 30 s / 10 min deadline.
  */
@@ -207,14 +206,10 @@ async function openDown(
 	gen: number,
 	connId: string,
 	cred: string,
-	lastEventId?: number,
 ): Promise<DownLeg> {
 	const ctl = new AbortController();
 	const response = await fetch(`${fixture.url}${CALLBACK_DOWN_PATH}`, {
-		headers: {
-			...wireHeaders(ws, gen, connId, cred),
-			...(lastEventId !== undefined ? { "Last-Event-ID": String(lastEventId) } : {}),
-		},
+		headers: wireHeaders(ws, gen, connId, cred),
 		signal: ctl.signal,
 	});
 	if (!response.ok || !response.body) throw new Error(`down dial -> HTTP ${response.status}`);
@@ -313,13 +308,13 @@ function openSlowDown(
 	};
 }
 
-/** RING_IDLE_MS and BULK_IDLE_MS are module-private registry deadlines; the
+/** SEQ_RECORD_IDLE_MS and BULK_IDLE_MS are module-private registry deadlines; the
  * swept tests advance past them explicitly. */
 const SWEEP_TTL_MS = 10 * 60_000;
 
 /** A registry with an injected clock and a fast sweep cadence: advancing
  * `clock` past a registry deadline and polling for the effect exercises the
- * sweep (up silence, ring idleness, bulk expiry) with no wall-clock wait.
+ * sweep (up silence, seq record idleness, bulk expiry) with no wall-clock wait.
  * The default Date.now + 5 s cadence are what production runs. */
 function clockedRegistry(): {
 	registry: DaemonTransportRegistry;
@@ -339,7 +334,7 @@ function clockedRegistry(): {
 }
 
 describe("daemon transport controlled pairs", () => {
-	test("up-end closes the pair's down leg; a late send fails typed; a full redial resumes the ring", async () => {
+	test("up-end closes the pair's down leg; a late send fails typed; a full redial continues the seq space", async () => {
 		const fixture = serve(new DaemonTransportRegistry());
 		const ws = "ws-half-close";
 		const gen = 1;
@@ -352,7 +347,7 @@ describe("daemon transport controlled pairs", () => {
 			await waitFor(() => down.seen().find(pairReady), 2000, "pair_ready");
 			expect(fixture.registry.pairStatus(ws).paired).toBe(true);
 
-			// A fleet command lands on the down ring.
+			// A fleet command lands on the down leg.
 			const c1 = await fixture.registry.sendToDaemon(ws, {
 				streamId: "control",
 				kind: "command",
@@ -360,7 +355,7 @@ describe("daemon transport controlled pairs", () => {
 			});
 			await waitFor(() => down.seen().find((e) => e.seq === c1.seq), 2000, "c1 delivery");
 
-			// A second command rides the down ring before the daemon ends its upload leg.
+			// A second command rides the down leg before the daemon ends its upload leg.
 			const c2 = await fixture.registry.sendToDaemon(ws, {
 				streamId: "control",
 				kind: "command",
@@ -383,20 +378,14 @@ describe("daemon transport controlled pairs", () => {
 			).rejects.toMatchObject({ code: "unavailable" });
 
 			// The daemon then loses the DOWN half and redials BOTH halves on
-			// the same connectionId (renewal). The pre-drop commands replay
-			// at their ORIGINAL seqs; each exactly once, never re-rung under
-			// a fresh identity.
+			// the same connectionId. Nothing is replayed: c1 and c2 were already
+			// delivered on the dropped leg, and the seq space keeps counting up.
 			down.drop();
 			const up2 = openUp(fixture, ws, gen, connId, cred);
 			const down2 = await openDown(fixture, ws, gen, connId, cred);
 			await waitFor(() => down2.seen().find(pairReady), 2000, "pair_ready after redial");
 			expect(fixture.registry.pairStatus(ws).paired).toBe(true);
-			const c1Replay = down2.seen().filter((e) => commandId(e) === "c1");
-			const c2Replay = down2.seen().filter((e) => commandId(e) === "c2");
-			expect(c1Replay).toHaveLength(1);
-			expect(c2Replay).toHaveLength(1);
-			expect(c1Replay[0].seq).toBe(c1.seq);
-			expect(c2Replay[0].seq).toBe(c2.seq);
+			expect(down2.seen().some((e) => commandId(e) === "c1" || commandId(e) === "c2")).toBe(false);
 			const c3 = await fixture.registry.sendToDaemon(ws, {
 				streamId: "control",
 				kind: "command",
@@ -445,7 +434,7 @@ describe("daemon transport controlled pairs", () => {
 		}
 	});
 
-	test("a down-half-only redial recovers on the same up leg and replays at original seqs without duplicate acceptance", async () => {
+	test("a down-half-only redial keeps the up leg live and replays nothing", async () => {
 		const fixture = serve(new DaemonTransportRegistry());
 		const ws = "ws-down-half";
 		const gen = 1;
@@ -464,16 +453,13 @@ describe("daemon transport controlled pairs", () => {
 			await waitFor(() => down.seen().find((e) => e.seq === c1.seq), 2000, "c1 delivery");
 
 			// One-sided network loss: only the down link dies; the upload leg
-			// survives untouched. The daemon redials ONLY the down link; the
-			// still-live up leg re-announces the pair and the ring replays
-			// the unacked command at its original seq exactly once.
+			// survives untouched. The daemon redials ONLY the down link on the
+			// same connectionId; nothing is replayed.
 			down.drop();
 			const down2 = await openDown(fixture, ws, gen, connId, cred);
 			await waitFor(() => down2.seen().find(pairReady), 2000, "pair_ready after down redial");
 			expect(fixture.registry.pairStatus(ws).paired).toBe(true);
-			const c1Replay = down2.seen().filter((e) => commandId(e) === "c1");
-			expect(c1Replay).toHaveLength(1);
-			expect(c1Replay[0].seq).toBe(c1.seq);
+			expect(down2.seen().some((e) => commandId(e) === "c1")).toBe(false);
 			const c2 = await fixture.registry.sendToDaemon(ws, {
 				streamId: "control",
 				kind: "command",
@@ -491,9 +477,9 @@ describe("daemon transport controlled pairs", () => {
 		}
 	});
 
-	test("redial replays the full ring at original seqs; a Last-Event-ID resume skips only the acked prefix", async () => {
+	test("a same-connection down redial replays nothing and continues the seq space", async () => {
 		const fixture = serve(new DaemonTransportRegistry());
-		const ws = "ws-replay";
+		const ws = "ws-redial";
 		const gen = 1;
 		const connId = randomUUID();
 		const cred = randomBytes(32).toString("hex");
@@ -509,33 +495,64 @@ describe("daemon transport controlled pairs", () => {
 			});
 			await waitFor(() => first.seen().find((e) => e.seq === a.seq), 2000, "a delivery");
 
-			// Loss without a resume point: the daemon redials blind (no
-			// Last-Event-ID) and the WHOLE ring replays; command `a` returns
-			// under its original seq, the identity a deduping consumer keys on.
+			// The down half drops and redials on the same connectionId. Nothing is
+			// replayed: `a` was already delivered, and the redial's seqs continue past it.
 			first.drop();
-			const blind = await openDown(fixture, ws, gen, connId, cred);
-			await waitFor(
-				() => blind.seen().find((e) => commandId(e) === "a"),
-				2000,
-				"blind replay of a",
-			);
-			const blindReplay = blind.seen().filter((e) => commandId(e) === "a");
-			expect(blindReplay).toHaveLength(1);
-			expect(blindReplay[0].seq).toBe(a.seq);
-
-			// Acknowledged resume: Last-Event-ID = a.seq skips the acked
-			// prefix entirely; `a` is not re-delivered, later traffic is.
-			const acked = await openDown(fixture, ws, gen, connId, cred, a.seq);
-			await waitFor(() => acked.seen().find(pairReady), 2000, "pair_ready on acked resume");
+			const redial = await openDown(fixture, ws, gen, connId, cred);
+			await waitFor(() => redial.seen().find(pairReady), 2000, "pair_ready on redial");
+			expect(redial.seen().some((e) => commandId(e) === "a")).toBe(false);
 			const b = await fixture.registry.sendToDaemon(ws, {
 				streamId: "control",
 				kind: "command",
 				payload: { type: "do", id: "b" },
 			});
-			await waitFor(() => acked.seen().find((e) => e.seq === b.seq), 2000, "b delivery");
-			expect(acked.seen().some((e) => commandId(e) === "a")).toBe(false);
-			expect(acked.seen().some((e) => commandId(e) === "b")).toBe(true);
+			await waitFor(() => redial.seen().find((e) => e.seq === b.seq), 2000, "b delivery");
+			expect(b.seq).toBeGreaterThan(a.seq);
+			expect(redial.seen().some((e) => commandId(e) === "b")).toBe(true);
 			expect((await up.end()).status).toBe(200);
+		} finally {
+			fixture.stop();
+		}
+	});
+
+	test("an old-session ack envelope is dropped as an unknown kind, never forwarded, and leaves the pair live", async () => {
+		const dropped: string[] = [];
+		const fixture = serve(new DaemonTransportRegistry({ onDroppedRecord: (m) => dropped.push(m) }));
+		const ws = "ws-legacy-ack";
+		const gen = 1;
+		const connId = randomUUID();
+		const cred = randomBytes(32).toString("hex");
+		fixture.registry.enrollWorkspace(ws, gen, cred);
+		const tapped: string[] = [];
+		const sunk: string[] = [];
+		fixture.registry.onDaemonEnvelope(ws, (e) => tapped.push(e.kind));
+		fixture.registry.attachVirtualStream(ws, "control", {
+			deliver: (e) => {
+				sunk.push(e.kind);
+			},
+		});
+		try {
+			// A pre-wqd2 session sends `ack` on the up leg as its command receipt. The
+			// fleet no longer knows the kind: the record is dropped with a warning, and
+			// the upload and pair stay up.
+			const up = openUp(fixture, ws, gen, connId, cred);
+			const down = await openDown(fixture, ws, gen, connId, cred);
+			await waitFor(() => down.seen().find(pairReady), 2000, "pair_ready");
+			up.push("control", "ack" as CallbackEnvelope["kind"], { type: "command_ack", id: "legacy" });
+			// A following envelope on the same ordered up leg proves the dropped ack did not stall it.
+			up.push("control", "command", { type: "cmd", id: "probe" });
+			await waitFor(() => (sunk.includes("command") ? true : undefined), 2000, "probe sunk");
+			expect(fixture.registry.pairStatus(ws).paired).toBe(true);
+			const cmd = await fixture.registry.sendToDaemon(ws, {
+				streamId: "control",
+				kind: "command",
+				payload: { type: "do", id: "after-ack" },
+			});
+			await waitFor(() => down.seen().find((e) => e.seq === cmd.seq), 2000, "command after ack");
+			expect((await up.end()).status).toBe(200);
+			expect(tapped).toEqual(["command"]);
+			expect(dropped).toHaveLength(1);
+			expect(sunk).toEqual(["command"]);
 		} finally {
 			fixture.stop();
 		}
@@ -944,7 +961,7 @@ describe("daemon transport controlled pairs", () => {
 		}
 	});
 
-	test("a stalled down reader trips the bounded drop-and-resume teardown; the surviving ring replays without loss or duplication", async () => {
+	test("a stalled down reader trips the bounded drop-and-resume teardown; a redial replays nothing and continues the seq space", async () => {
 		const fixture = serve(new DaemonTransportRegistry());
 		const ws = "ws-down-bound";
 		const gen = 1;
@@ -955,8 +972,7 @@ describe("daemon transport controlled pairs", () => {
 			// A daemon whose downlink cannot keep up with the fleet: the
 			// registry must bound the buffered bytes and tear the connection
 			// down (drop-and-resume) rather than grow without limit. The up
-			// half joins the down so the pair is real; the ring and down
-			// delivery are the subject.
+			// half joins the down so the pair is real; down delivery is the subject.
 			const up = openUp(fixture, ws, gen, connId, cred);
 			const stalled = await openSlowDown(fixture, ws, gen, connId, cred);
 			await stalled.ready();
@@ -997,30 +1013,19 @@ describe("daemon transport controlled pairs", () => {
 				}),
 			);
 
-			// The replay ring survived the teardown AND stayed byte-bounded:
-			// head entries were evicted, so the depth is below the send count.
-			const ringDepth = fixture.registry.pairStatus(ws).replayDepth;
-			expect(ringDepth).toBeGreaterThan(0);
-			expect(ringDepth).toBeLessThan(sentSeqs.length);
-
-			// Redial: the daemon resumes (blind, it read nothing past the
-			// pair_ready). Replay is strictly ascending, duplicate-free, and
-			// ends at the last sent seq; no loss past the resume point, no
-			// duplicated ring entries.
+			// Redial on the same connection: nothing from the dropped pair is
+			// replayed, and the redialed envelopes continue the seq space past the
+			// last sent seq, strictly ascending.
+			const up2 = openUp(fixture, ws, gen, connId, cred);
 			const redial = await openDown(fixture, ws, gen, connId, cred);
-			await waitFor(
-				() => redial.seen().find((e) => e.seq === sentSeqs.at(-1)),
-				3000,
-				"redial replays the newest envelope",
-			);
-			const replayed = redial.seen();
-			expect(replayed.length).toBeGreaterThan(0);
-			const seqs = replayed.map((e) => e.seq);
+			await waitFor(() => redial.seen().find(pairReady), 3000, "redial pair_ready");
+			const seqs = redial.seen().map((e) => e.seq);
+			expect(seqs.length).toBeGreaterThan(0);
 			for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
-			expect(new Set(seqs).size).toBe(seqs.length);
-			expect(seqs.at(-1)).toBe(sentSeqs.at(-1));
-			expect(seqs.every((s) => s <= sentSeqs.at(-1)!)).toBe(true);
+			expect(seqs[0]).toBeGreaterThan(sentSeqs.at(-1)!);
+			expect(seqs.some((s) => sentSeqs.includes(s))).toBe(false);
 			redial.drop();
+			await up2.end();
 		} finally {
 			fixture.stop();
 		}
@@ -1043,7 +1048,6 @@ describe("daemon transport controlled pairs", () => {
 				paired: true,
 				connectionId: connId,
 				envelopesReceived: 0,
-				replayDepth: 1, // the pair_ready rides the ring
 			});
 			expect(paired.lastEnvelopeAt).not.toBeNull();
 			expect(typeof paired.lastDownSendAt).toBe("number");
@@ -1088,8 +1092,6 @@ describe("daemon transport controlled pairs", () => {
 			await expectUnavailable(
 				registry.sendToDaemon(ws, { streamId: "control", kind: "command", payload: {} }),
 			);
-			// Up silence is not ring idleness: the ring survives for a redial.
-			expect(killed.replayDepth).toBe(1);
 
 			// A silent up half whose down half is ALREADY gone (one-sided
 			// loss, then quiet) must be killed the same way: the sweep tears
@@ -1195,10 +1197,10 @@ describe("daemon transport controlled pairs", () => {
 		}
 	});
 
-	test("an idle replay ring is evicted; a later resume for it is refused rather than silently restarted", async () => {
+	test("an idle pair kill keeps the seq record for a later redial, which continues the seq space and replays nothing", async () => {
 		const { registry, advance } = clockedRegistry();
 		const fixture = serve(registry);
-		const ws = "ws-ring-idle";
+		const ws = "ws-seq-idle";
 		const gen = 1;
 		const connId = randomUUID();
 		const cred = randomBytes(32).toString("hex");
@@ -1210,67 +1212,27 @@ describe("daemon transport controlled pairs", () => {
 			const cmd = await registry.sendToDaemon(ws, {
 				streamId: "control",
 				kind: "command",
-				payload: { type: "do", id: "pre-evict" },
+				payload: { type: "do", id: "pre-kill" },
 			});
-			await waitFor(() => down.seen().find((e) => e.seq === cmd.seq), 2000, "command delivery");
-			expect(registry.pairStatus(ws).replayDepth).toBe(2); // pair_ready + cmd
+			await waitFor(() => down.seen().find((e) => e.seq === cmd.seq), 2000, "pre-kill delivery");
 
-			// The daemon wedges (up silence): the sweep kills the pair and
-			// closes the down half, and the ring SURVIVES for a resume — only
-			// real idleness evicts it.
-			advance(SILENCE_DEADLINE_MS + 1);
-			await waitFor(
-				() => (registry.pairStatus(ws).paired ? undefined : true),
-				2000,
-				"paired:false after silence",
-			);
-			await waitFor(
-				() => (registry.pairStatus(ws).envelopesReceived === 0 ? true : undefined),
-				2000,
-				"killed up half removed",
-			);
-			expect(registry.pairStatus(ws).lastDownSendAt).toBeNull();
-			await down.ended(2000);
-			expect((await up.end()).status).toBe(503);
-			expect(registry.pairStatus(ws).replayDepth).toBe(2);
-
-			// RING_IDLE_MS with no live down half and no activity: evicted.
+			// Idle past SEQ_RECORD_IDLE_MS: one sweep pass kills the silent pair. The
+			// kill stamps the seq record's last activity, so the record survives the
+			// pass and a later redial continues the seq space.
 			advance(SWEEP_TTL_MS + 1);
-			await waitFor(
-				() => (registry.pairStatus(ws).replayDepth === 0 ? true : undefined),
-				2000,
-				"ring eviction",
-			);
+			await waitFor(() => (registry.pairStatus(ws).paired ? undefined : true), 2000, "pair killed");
+			await down.ended(2000);
+			await up.end();
 
-			// A resume into the evicted ring is REFUSED, not silently answered
-			// with a restarted seq space: the consumer's ack point is gone, and
-			// fresh traffic below it would be deduped away unseen.
-			const resumed = await fetch(`${fixture.url}${CALLBACK_DOWN_PATH}`, {
-				headers: { ...wireHeaders(ws, gen, connId, cred), "Last-Event-ID": String(cmd.seq) },
-			});
-			expect(resumed.status).toBe(400);
-			const resumedBody: unknown = await resumed.json();
-			expect(resumedBody).toMatchObject({ error: "invalid_request" });
-			expect(bodyString(resumedBody, "message")).toContain("Last-Event-ID");
-
-			// A blind redial (the daemon's own dial) works: fresh ring, the
-			// pre-eviction envelopes are NOT replayed, and the seq space
-			// restarts at 1 — exactly why the stale resume above must fail.
+			// A blind redial: pre-kill envelopes are NOT replayed, and pair_ready
+			// follows the last sent seq.
 			const up2 = openUp(fixture, ws, gen, connId, cred);
 			const down2 = await openDown(fixture, ws, gen, connId, cred);
 			await waitFor(() => down2.seen().find(pairReady), 2000, "fresh pair_ready");
-			expect(down2.seen().some((e) => commandId(e) === "pre-evict")).toBe(false);
-			const fresh = down2.seen().find(pairReady);
-			expect(fresh?.seq).toBe(1);
-			expect(registry.pairStatus(ws).replayDepth).toBe(1);
-			up2.push("control", "command", { type: "cmd", id: "post-evict" });
-			await waitFor(
-				() => (registry.pairStatus(ws).envelopesReceived === 1 ? true : undefined),
-				2000,
-				"fresh up counted",
-			);
+			expect(down2.seen().some((e) => commandId(e) === "pre-kill")).toBe(false);
+			expect(down2.seen().find(pairReady)?.seq).toBe(cmd.seq + 1);
 			down2.drop();
-			expect((await up2.end()).status).toBe(200);
+			await up2.end();
 		} finally {
 			fixture.stop();
 		}
