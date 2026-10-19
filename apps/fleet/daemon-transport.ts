@@ -109,6 +109,7 @@ import {
 	createNdjsonParser,
 	encodeSseEnvelope,
 	ENROLLMENT_KEY_BYTES,
+	ENVELOPE_MAX_BYTES,
 	CONNECTION_MAX_BYTES,
 	HEARTBEAT_INTERVAL_MS,
 	isCallbackError,

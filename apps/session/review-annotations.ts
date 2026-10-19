@@ -258,48 +258,12 @@ export function createAnnotationMethods(): Record<
 				object(args[0]) as unknown as Parameters<typeof createReviewAnnotation>[1],
 			);
 		},
-		annotationUpdate: async (entry, args) => {
-			const input = object(args[0]);
-			const record = current(entry, input);
-			if (typeof input.note !== "string" || !input.note.trim())
-				throw new Error("Annotation note is required");
-			record.annotation.note = input.note;
-			record.annotation.revision++;
-			persist(entry, record);
-			return display(entry, record);
-		},
 		annotationRemove: async (entry, args) => {
 			const record = current(entry, object(args[0]));
 			record.removed = true;
 			record.annotation.revision++;
 			persist(entry, record);
 			return { removed: true };
-		},
-		annotationReanchor: async (entry, args) => {
-			const input = object(args[0]);
-			const record = current(entry, input);
-			const anchor = validateAnchor(input.anchor);
-			const live = await readAnchor(entry, anchor);
-			if (!live)
-				throw refusal(
-					"not_eligible",
-					"New anchor is unavailable; refresh and select existing content",
-				);
-			const hash = anchor.kind === "entry" ? anchor.anchor.revision : anchor.contentHash;
-			if (live.drift || reviewContentHash(live.content) !== hash)
-				throw refusal("stale", "New anchor already changed; refresh before reanchoring");
-			const rawDiff =
-				anchor.kind === "diff"
-					? await git(entry, ["diff", anchor.base, anchor.head, "--", anchor.path])
-					: undefined;
-			// Recheck CAS after asynchronous content access.
-			current(entry, input);
-			record.annotation.anchor = anchor;
-			record.annotation.revision++;
-			record.content = live.content;
-			record.rawDiff = rawDiff;
-			persist(entry, record);
-			return display(entry, record);
 		},
 		annotationCompose: async (entry, args) => {
 			const input = object(args[0]);

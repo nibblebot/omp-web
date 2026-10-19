@@ -115,34 +115,6 @@ describe("durable review annotations", () => {
 		expect(listed.find((item) => item.id === created.id)?.anchor).toEqual(created.anchor);
 	});
 
-	test("stale note revisions refuse overwrite and explicit reanchor requires current content", async () => {
-		const { entry, methods } = await fixture();
-		const anchor = { kind: "text", text: "quoted", contentHash: reviewContentHash("quoted") };
-		const created = (await methods.annotationCreate(entry, [
-			{ source: "text", anchor, note: "First" },
-		])) as ReviewAnnotationDto;
-		const updated = (await methods.annotationUpdate(entry, [
-			{ id: created.id, revision: created.revision, note: "Newer" },
-		])) as ReviewAnnotationDto;
-		await expect(
-			methods.annotationUpdate(entry, [
-				{ id: created.id, revision: created.revision, note: "Overwrite" },
-			]),
-		).rejects.toMatchObject({ code: "stale" });
-		await expect(
-			methods.annotationReanchor(entry, [
-				{
-					id: updated.id,
-					revision: updated.revision,
-					anchor: { kind: "text", text: "new", contentHash: reviewContentHash("old") },
-				},
-			]),
-		).rejects.toMatchObject({ code: "stale" });
-		expect(((await methods.annotationList(entry, [])) as ReviewAnnotationDto[])[0].note).toBe(
-			"Newer",
-		);
-	});
-
 	test("default insert returns frozen feedback only; submit is explicit and GitHub is refused", async () => {
 		const { cwd, entry, prompts, methods } = await fixture();
 		await Bun.write(join(cwd, "file.txt"), "original\n");
