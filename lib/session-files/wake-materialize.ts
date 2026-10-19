@@ -434,6 +434,9 @@ function storedFileSha256(
  * (files already fully sent are skipped; the straddled file re-emits its
  * `file` record and resumes at `cursor.offset`). The daemon reassembles by
  * relpath+offset and verifies the sha256 after each file completes.
+ * A record is admitted only while the terminal `end` record that would close
+ * the transfer right after it still fits, so the stream always ends with an
+ * explicit `end` and the consumer always learns whether more remains.
  */
 export function* emitMaterializeTransfer(
 	plan: MaterializeFilePlan,
@@ -443,16 +446,37 @@ export function* emitMaterializeTransfer(
 	workspaceId?: string,
 ): Generator<string, void, undefined> {
 	let budget = maxBytes;
-	// Encodes a record and charges it to the budget; undefined when it does not fit.
-	const admit = (record: MaterializeRecord): string | undefined => {
+	const byteLength = (record: MaterializeRecord): number =>
+		Buffer.byteLength(encodeMaterializeRecord(record), "utf8");
+	// Upper bound on the terminal record at any stop point: `end {more:false}`,
+	// or `end {more:true, cursor}` for any plan path at any offset.
+	const terminalReserve = plan.files.reduce(
+		(max, file) =>
+			Math.max(
+				max,
+				byteLength({
+					type: "end",
+					more: true,
+					cursor: { path: file.relpath, offset: Number.MAX_SAFE_INTEGER },
+				}),
+			),
+		byteLength({ type: "end", more: false }),
+	);
+	// Bytes of the `end {more:true}` that stops the transfer exactly at `offset` in `relpath`.
+	const stopReserve = (relpath: string, offset: number): number =>
+		byteLength({ type: "end", more: true, cursor: { path: relpath, offset } });
+	// Encodes a record and charges it to the budget, admitting it only while
+	// `reserve` bytes remain for the terminal record that would follow it.
+	const admit = (record: MaterializeRecord, reserve: number): string | undefined => {
 		const line = encodeMaterializeRecord(record);
 		const bytes = Buffer.byteLength(line, "utf8");
-		if (budget - bytes < 0) return undefined;
+		if (budget - bytes - reserve < 0) return undefined;
 		budget -= bytes;
 		return line;
 	};
-	const endMore = (at: MaterializeCursor): string => {
-		const line = admit({ type: "end", more: true, cursor: at });
+	// Terminal records draw on the room the previous admission reserved, so they always fit.
+	const endRecord = (record: MaterializeEndRecord): string => {
+		const line = admit(record, 0);
 		if (line === undefined) {
 			throw callbackError(
 				"invalid_request",
@@ -462,11 +486,14 @@ export function* emitMaterializeTransfer(
 		return line;
 	};
 
-	const leadLine = admit({
-		type: "session",
-		workspaceId: workspaceId ?? plan.rootDir.split("/").slice(-2, -1)[0] ?? "unknown",
-		sessionId,
-	});
+	const leadLine = admit(
+		{
+			type: "session",
+			workspaceId: workspaceId ?? plan.rootDir.split("/").slice(-2, -1)[0] ?? "unknown",
+			sessionId,
+		},
+		terminalReserve,
+	);
 	if (leadLine === undefined)
 		throw callbackError(
 			"invalid_request",
@@ -489,39 +516,50 @@ export function* emitMaterializeTransfer(
 				);
 			}
 			const sha256 = storedFileSha256(file.absolutePath, fd, stats, file.relpath);
-			const fileLine = admit({
-				type: "file",
-				relpath: file.relpath,
-				size,
-				sha256,
-				kind: file.kind,
-				offset: resume,
-			});
+			// Mid-file, the transfer may stop at `resume`; after a whole file, the next record opens a later file.
+			const fileLine = admit(
+				{
+					type: "file",
+					relpath: file.relpath,
+					size,
+					sha256,
+					kind: file.kind,
+					offset: resume,
+				},
+				resume < size ? stopReserve(file.relpath, resume) : terminalReserve,
+			);
 			if (fileLine === undefined) {
-				yield endMore({ path: file.relpath, offset: resume });
+				yield endRecord({
+					type: "end",
+					more: true,
+					cursor: { path: file.relpath, offset: resume },
+				});
 				return;
 			}
 			yield fileLine;
 			let offset = resume;
 			while (offset < size) {
 				const take = Math.min(MATERIALIZE_CHUNK_RAW_BYTES, size - offset);
-				const chunkLine = admit({
-					type: "chunk",
-					relpath: file.relpath,
-					offset,
-					data: readStoredRange(fd, offset, take, file.relpath).toString("base64"),
-				});
+				const next = offset + take;
+				const chunkLine = admit(
+					{
+						type: "chunk",
+						relpath: file.relpath,
+						offset,
+						data: readStoredRange(fd, offset, take, file.relpath).toString("base64"),
+					},
+					next < size ? stopReserve(file.relpath, next) : terminalReserve,
+				);
 				if (chunkLine === undefined) {
-					yield endMore({ path: file.relpath, offset });
+					yield endRecord({ type: "end", more: true, cursor: { path: file.relpath, offset } });
 					return;
 				}
 				yield chunkLine;
-				offset += take;
+				offset = next;
 			}
 		} finally {
 			closeSync(fd);
 		}
 	}
-	const endLine = admit({ type: "end", more: false });
-	if (endLine !== undefined) yield endLine;
+	yield endRecord({ type: "end", more: false });
 }

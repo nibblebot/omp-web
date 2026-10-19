@@ -227,6 +227,7 @@ function applyTransfer(
 	}
 
 	let more = false;
+	let sawEnd = false;
 	let endCursor: { path: string; offset: number } | undefined;
 	const committedRelpaths: string[] = [];
 	let bytesReceived = 0;
@@ -254,6 +255,7 @@ function applyTransfer(
 					break;
 				}
 				case "end": {
+					sawEnd = true;
 					more = record.more;
 					endCursor = record.cursor;
 					break;
@@ -266,6 +268,8 @@ function applyTransfer(
 			? new MaterializeSessionError("unavailable", error.message)
 			: new MaterializeSessionError("unavailable", String(error));
 	}
+
+	if (!sawEnd) throw invalid("materialization transfer ended without an end record");
 
 	// Commit every pending file that reached its declared size.
 	for (const [relpath, file] of [...pending]) {

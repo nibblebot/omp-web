@@ -471,6 +471,36 @@ describe("emitMaterializeTransfer", () => {
 		expect(Buffer.concat([firstHalf, secondHalf]).equals(payload)).toBe(true);
 	});
 
+	test("a last data record that fills the budget still ends with an end record", () => {
+		const size = MATERIALIZE_CHUNK_RAW_BYTES * 2;
+		const payload = Buffer.alloc(size, "z");
+		const root = storeSubtree(WORKSPACE_ID, SESSION_ID, { "proj/big.jsonl": payload });
+		const plan = planMaterializeFiles(root);
+		const full = emitTransfer(plan, SESSION_ID);
+		expect(full.lines).toHaveLength(5); // lead, file, chunk, chunk, end
+
+		// Budget = exactly the data records: the closing `end {more:false}` has no room.
+		const budget = full.lines
+			.slice(0, 4)
+			.reduce((total, line) => total + Buffer.byteLength(line, "utf8"), 0);
+		const split = emitTransfer(plan, SESSION_ID, undefined, budget);
+		// The consumer must always learn whether more remains: the last chunk is
+		// deferred to the next transfer instead of leaving the stream unterminated.
+		expect(split.records.at(-1)).toEqual({
+			type: "end",
+			more: true,
+			cursor: { path: "proj/big.jsonl", offset: MATERIALIZE_CHUNK_RAW_BYTES },
+		});
+		const emitted = split.lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8"), 0);
+		expect(emitted).toBeLessThanOrEqual(budget);
+
+		const resumed = emitTransfer(plan, SESSION_ID, {
+			path: "proj/big.jsonl",
+			offset: MATERIALIZE_CHUNK_RAW_BYTES,
+		});
+		expect(resumed.records.at(-1)).toEqual({ type: "end", more: false });
+	});
+
 	test("skips files already fully sent and resumes inside the cursor's file", () => {
 		const root = storeSubtree(WORKSPACE_ID, SESSION_ID, {
 			"a-first.jsonl": "aaaa\n",
