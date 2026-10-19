@@ -52,6 +52,7 @@ import {
 	writeJsonAtomic,
 } from "#lib/runtime/provider-callback-env";
 import { defaultDenyRoots, defaultRuntimeLaunch, type RuntimeLaunch } from "./runtime-launch";
+import { SessionLog, PROVIDER_DAEMON_LOG, pumpToSessionLog } from "./session-log";
 
 /** The provider's own pidfile record (superset of the shared identity shape). */
 interface LaunchRecord {
@@ -425,38 +426,39 @@ async function runSupervisor(stateDir: string): Promise<number> {
 		return 1;
 	}
 
-	// stdin is always a pipe: the payload is written, then closed (EOF when there
-	// is no pair). The daemon reads it only when started with --fleet-stdin.
+	// Child stdout and stderr go to one daemon.log in the state dir, capped per
+	// SessionLog. stdin is always a pipe: the payload is written, then closed (EOF
+	// when there is no pair). The daemon reads it only when started with --fleet-stdin.
+	const logPath = join(stateDir, PROVIDER_DAEMON_LOG);
+	let log: SessionLog;
+	try {
+		log = new SessionLog(logPath);
+	} catch (cause) {
+		const message = `cannot open ${PROVIDER_DAEMON_LOG}: ${String(cause)}`;
+		console.error(`bwrap-provider: supervise: ${message}`);
+		recordSuperviseError(stateDir, message);
+		return 1;
+	}
 	const proc = Bun.spawn(built.argv, {
 		env: built.env,
-		stdio: ["pipe", "ignore", "pipe"],
+		stdio: ["pipe", "pipe", "pipe"],
 	});
 	if (fleetStdin !== undefined) proc.stdin.write(fleetStdin);
 	proc.stdin.end();
 
-	// Bounded stderr capture (human log, never parsed): keep the last chunk
-	// so an early bwrap death surfaces the REAL reason (e.g. "Can't find
-	// source path ..."), not a bare exit code. Capped at 4 KiB.
+	// Child output is pumped into the log, and failure details are read back from
+	// it for this run only (a previous run's output is never reported). Failure
+	// paths wait a bounded time for the pumps: a grandchild holding a pipe must
+	// not stall the failure record.
 	const STDERR_CAPTURE_BYTES = 4096;
-	let stderrTail = "";
-	const stderrReader = (async () => {
-		const reader = proc.stderr.getReader();
-		try {
-			for (;;) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				if (value !== undefined) {
-					stderrTail = (stderrTail + Buffer.from(value).toString("utf8")).slice(
-						-STDERR_CAPTURE_BYTES,
-					);
-				}
-			}
-		} catch {
-			// Reader closed by process death; the tail is best-effort.
-		}
-	})();
-	const recordBwrapFailure = (message: string): void => {
-		const detail = stderrTail.trim();
+	const LOG_DRAIN_MS = 1_000;
+	const pumps = Promise.all([
+		pumpToSessionLog(proc.stdout, log),
+		pumpToSessionLog(proc.stderr, log),
+	]);
+	const recordBwrapFailure = async (message: string): Promise<void> => {
+		await Promise.race([pumps, new Promise<void>((r) => setTimeout(r, LOG_DRAIN_MS))]);
+		const detail = log.tailOfRun(STDERR_CAPTURE_BYTES);
 		recordSuperviseError(stateDir, detail.length > 0 ? `${message}: ${detail}` : message);
 	};
 
@@ -473,17 +475,15 @@ async function runSupervisor(stateDir: string): Promise<number> {
 		if (code !== null) {
 			const message = `bwrap exited (rc ${code}) before the sandbox command appeared`;
 			console.error(`bwrap-provider: supervise: ${message}`);
-			recordBwrapFailure(message);
-			void stderrReader;
+			await recordBwrapFailure(message);
 			return code ?? 1;
 		}
 	}
 	if (inner === null) {
 		const message = "sandbox command never appeared";
 		console.error(`bwrap-provider: supervise: ${message}`);
-		recordBwrapFailure(message);
+		await recordBwrapFailure(message);
 		proc.kill();
-		void stderrReader;
 		return 1;
 	}
 
@@ -491,7 +491,7 @@ async function runSupervisor(stateDir: string): Promise<number> {
 	if (identity === null) {
 		const message = "cannot read identity of sandbox command";
 		console.error(`bwrap-provider: supervise: ${message}`);
-		recordBwrapFailure(message);
+		await recordBwrapFailure(message);
 		proc.kill();
 		return 1;
 	}
@@ -503,15 +503,15 @@ async function runSupervisor(stateDir: string): Promise<number> {
 		startedAt: spec.startedAt,
 	});
 
-	// Hold the sandbox: bwrap exits when the sandbox command exits. Drain
-	// the bounded stderr reader to completion so a POST-appearance death
-	// (the sandbox command started, then died, e.g. a port collision or a
-	// runtime crash) is recorded with its real rc AND stderr tail, not lost
-	// with the dropped reader. supervise.err is the actionable record either
-	// way; the pidfile stays in place so inspect reports "stopped".
+	// Hold the sandbox: bwrap exits when the sandbox command exits. Drain the log
+	// pumps to completion so a POST-appearance death (the sandbox command started,
+	// then died, e.g. a port collision or a runtime crash) is recorded with its real
+	// rc AND output tail. supervise.err is the actionable record either way; the
+	// pidfile stays in place so inspect reports "stopped".
 	const code = await proc.exited;
-	await stderrReader;
-	const detail = stderrTail.trim();
+	await pumps;
+	const detail = log.tailOfRun(STDERR_CAPTURE_BYTES);
+	log.close();
 	const message = `sandbox exited (rc ${code})`;
 	if (detail.length > 0) {
 		console.error(`bwrap-provider: supervise: ${message}: ${detail}`);

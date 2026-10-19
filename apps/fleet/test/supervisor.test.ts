@@ -14,7 +14,7 @@
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { Server } from "bun";
 import { CALLBACK_TRANSPORT_STREAM_ID } from "#lib/wire/callback-protocol";
 import {
@@ -1096,7 +1096,7 @@ describe("SpawnSupervisor", () => {
 		expect(tail.endsWith("tail-marker\n")).toBe(true);
 	});
 
-	test("prune drops the per-daemon child state after stop; the log file and a revoked enrollment remain consistent", async () => {
+	test("prune drops the per-daemon child state and deletes its session log", async () => {
 		const fx = await makeFixture(
 			"omp-session-sup-prune-",
 			{ stderrLines: ["prune-boom"] },
@@ -1109,17 +1109,48 @@ describe("SpawnSupervisor", () => {
 			5000,
 			"child log",
 		);
+		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.daemonId}.log`);
+		writeFileSync(`${logPath}.1`, "rotated\n");
 		expect(fx.supervisor.snapshot()[entry.daemonId]).toBeDefined();
 
 		await fx.supervisor.prune(entry.daemonId);
 		expect(fx.registry.get(entry.daemonId)?.status).toBe("asleep");
 		expect(fx.supervisor.snapshot()[entry.daemonId]).toBeUndefined();
 		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
-		// The log lives on disk, so it outlasts the supervisor's child state.
-		expect(fx.supervisor.stderrTail(entry.daemonId)).toContain("prune-boom");
+		// Prune deletes the session log and its rotated generation.
+		expect(fx.supervisor.stderrTail(entry.daemonId)).toBe("");
+		expect(existsSync(logPath)).toBe(false);
+		expect(existsSync(`${logPath}.1`)).toBe(false);
 		// The child stays dead; no restart fires from the pruned state.
 		await sleep(100);
 		expect(readLines(fx.argsFile)).toHaveLength(1);
+	});
+
+	test("respawn rotates an over-cap session log to <daemonId>.log.1", async () => {
+		const fx = await makeFixture(
+			"omp-session-sup-rotate-",
+			{ stderrLines: ["rotate-boom"] },
+			{ restartMax: 2 },
+		);
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		await waitFor(
+			() => (fx.supervisor.stderrTail(entry.daemonId).includes("rotate-boom") ? "logged" : null),
+			5000,
+			"child log",
+		);
+		await fx.supervisor.stop(entry.daemonId);
+		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.daemonId}.log`);
+		const oversized = "x".repeat(1024 * 1024 + 1);
+		writeFileSync(logPath, oversized);
+		await fx.supervisor.respawn(fx.registry.get(entry.daemonId) ?? entry);
+		expect(readFileSync(`${logPath}.1`, "utf8")).toBe(oversized);
+		const relaunched = await waitFor(
+			() => (fx.supervisor.stderrTail(entry.daemonId).includes("rotate-boom") ? "relogged" : null),
+			5000,
+			"relaunch log",
+		);
+		expect(relaunched).toBe("relogged");
+		await fx.supervisor.stop(entry.daemonId);
 	});
 
 	test("unknown template rejects and creates nothing", async () => {

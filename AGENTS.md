@@ -77,7 +77,7 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only; room traffic runs on 
 
 ### Server
 
-- Daemon stdout is reserved for `OMP_SESSION|` contract lines (informational for whoever launched it; the fleet does not parse it); logs go to stderr. Spawned sessions' stdout/stderr land in `<state dir>/session-logs/<daemonId>.log`.
+- Daemon stdout is reserved for `OMP_SESSION|` contract lines (informational for whoever launched it; the fleet does not parse it); logs go to stderr. Spawned sessions' stdout/stderr land in `<state dir>/session-logs/<daemonId>.log`, rotated to `.log.1` above 1 MiB (see `apps/fleet/session-log.ts`); provider-managed clones write combined output to `<clone state dir>/daemon.log` under the same cap.
 - Preserve `methods.ts` classification: read-only calls skip mutation broadcasts, history reloads resync before answers, prompts are readiness-gated.
 - Loopback auth exemption does not extend off-loopback: binding without a token fails startup; wrong credentials return 401.
 - Callback transport requires workspace/generation identity and HTTPS, except explicitly allowed loopback HTTP. Configured proxies must be http/https, never silently ignored.

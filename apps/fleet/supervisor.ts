@@ -7,8 +7,11 @@
  * fresh callback credential for the next generation (enrollSessionCredential),
  * fills the spawn template, and runs it via `sh -c` as a detached child (its
  * own process group, so a terminal Ctrl+C never reaches sessions). Child
- * stdout and stderr are appended to `<state dir>/session-logs/<daemonId>.log`;
- * stderrTail() reads the last 64 KiB of that file. The entry is "connecting"
+ * stdout and stderr are appended to `<state dir>/session-logs/<daemonId>.log`.
+ * Each launch first rotates a log above 1 MiB to `<daemonId>.log.1` (one
+ * generation kept): one run is uncapped, but restarts bound the disk use.
+ * prune() deletes both files. stderrTail() reads the last 64 KiB of the log
+ * (a provider-managed clone reads its daemon.log). The entry is "connecting"
  * until its pair appears; no pair within PAIR_TIMEOUT_MS → status error and
  * the child is killed.
  *
@@ -38,7 +41,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Subprocess } from "bun";
 import {
@@ -56,6 +59,12 @@ import { fillTemplate, shellQuote } from "./spawn-parse";
 import type { DaemonTransportRegistry } from "./daemon-transport";
 import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
 import type { GitRunner, GitState } from "./discovery";
+import {
+	PROVIDER_DAEMON_LOG,
+	readSessionLogTail,
+	removeSessionLog,
+	rotateSessionLog,
+} from "./session-log";
 import { cloneCheckoutDir } from "./workspace-lifecycle";
 import { readSessionInfo } from "./session-title";
 import type { Registry, RegistryEntry } from "./registry";
@@ -550,6 +559,7 @@ export class SpawnSupervisor {
 		await this.stop(daemonId);
 		this.#children.get(daemonId)?.pairUnsub?.();
 		this.#children.delete(daemonId);
+		removeSessionLog(this.#logPath(daemonId));
 		this.#onEvent?.("info", "prune", daemonId);
 	}
 
@@ -570,21 +580,17 @@ export class SpawnSupervisor {
 	/**
 	 * The child's log (stdout and stderr, appended per launch): the last 64 KiB
 	 * as text, empty when the child never logged. Read from the file, so it
-	 * survives a fleet restart.
+	 * survives a fleet restart. A provider-managed clone logs to its own
+	 * daemon.log instead.
 	 */
 	stderrTail(daemonId: string): string {
-		const path = this.#logPath(daemonId);
-		if (!existsSync(path)) return "";
-		const size = statSync(path).size;
-		const start = Math.max(0, size - STDERR_TAIL_BYTES);
-		const buffer = Buffer.alloc(size - start);
-		const fd = openSync(path, "r");
-		try {
-			readSync(fd, buffer, 0, buffer.length, start);
-		} finally {
-			closeSync(fd);
-		}
-		return buffer.toString("utf8");
+		const local = readSessionLogTail(this.#logPath(daemonId), STDERR_TAIL_BYTES);
+		const entry = this.#registry.get(daemonId);
+		if (local !== "" || entry?.workspace === undefined || entry.cwd === undefined) return local;
+		// Mirrors the provider's clone layout (workspace-lifecycle #clonePaths):
+		// state dir = <dirname(clone root)>/.provider-state/<daemonId>.
+		const stateDir = join(dirname(entry.cwd), ".provider-state", daemonId);
+		return readSessionLogTail(join(stateDir, PROVIDER_DAEMON_LOG), STDERR_TAIL_BYTES);
 	}
 
 	/**
@@ -932,6 +938,7 @@ export class SpawnSupervisor {
 		);
 		const logPath = this.#logPath(daemonId);
 		mkdirSync(dirname(logPath), { recursive: true });
+		rotateSessionLog(logPath);
 		const logFd = openSync(logPath, "a");
 		let child: Child;
 		try {

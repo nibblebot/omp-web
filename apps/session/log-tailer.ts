@@ -118,8 +118,10 @@ export interface LogTailerOptions {
 export const LOG_CHUNK_MAX_BYTES = 512 * 1024;
 /** Per-session unacked window; overflow rewinds to the acked offset and re-streams. */
 export const SESSION_RING_MAX_BYTES = 4 * 1024 * 1024;
-/** Backup rescan/tick cadence; watch events drive the sub-second live path. */
-const SCAN_INTERVAL_MS = 1_000;
+/** Backup rescan/drain cadence in polling-only mode (no working watcher). */
+const POLL_INTERVAL_MS = 1_000;
+/** Backup rescan cadence while the recursive watcher is healthy; watch events drive the live path. */
+const WATCHED_BACKUP_INTERVAL_MS = 15_000;
 /**
  * Ack-watermark persistence (P3.7 daemon half): an ack is fleet-side
  * durability, so a daemon restart resumes each lineage stream from its last
@@ -214,7 +216,7 @@ export class SessionLogTailer {
 	/** Last assigned generation per relpath: keeps the counter rising across drops. */
 	readonly #assignedGen = new Map<string, number>();
 	#watcher: FSWatcher | null = null;
-	#tick: ReturnType<typeof setTimeout> | null = null;
+	#tick: ReturnType<typeof setTimeout> | undefined = undefined;
 	/** Pending debounced ack-sidecar flush (see ACK_PERSIST_DEBOUNCE_MS). */
 	#sidecarTimer: ReturnType<typeof setTimeout> | null = null;
 	#scanScheduled = false;
@@ -332,13 +334,7 @@ export class SessionLogTailer {
 		this.#scan();
 		this.#drainAll();
 		this.#installWatcher();
-		this.#tick = setInterval(() => {
-			this.#safe(() => {
-				this.#scan();
-				this.#drainAll();
-			}, "tick scan failed");
-		}, SCAN_INTERVAL_MS);
-		this.#tick.unref?.();
+		this.#armTick();
 	}
 
 	stop(): void {
@@ -348,10 +344,8 @@ export class SessionLogTailer {
 			this.#sidecarTimer = null;
 		}
 		this.#writeSidecar(); // Final flush: graceful stop never loses acks.
-		if (this.#tick !== null) {
-			clearInterval(this.#tick);
-			this.#tick = null;
-		}
+		clearTimeout(this.#tick);
+		this.#tick = undefined;
 		if (this.#watcher !== null) {
 			try {
 				this.#watcher.close();
@@ -379,10 +373,8 @@ export class SessionLogTailer {
 			clearTimeout(this.#sidecarTimer);
 			this.#sidecarTimer = null;
 		}
-		if (this.#tick !== null) {
-			clearInterval(this.#tick);
-			this.#tick = null;
-		}
+		clearTimeout(this.#tick);
+		this.#tick = undefined;
 		if (this.#watcher !== null) {
 			try {
 				this.#watcher.close();
@@ -578,6 +570,7 @@ export class SessionLogTailer {
 			this.#watcher.on("error", () => {
 				this.#pollingOnly = true;
 				this.#closeWatcher();
+				if (this.#running) this.#armTick(); // Drop to the 1 s cadence now.
 			});
 			this.#pollingOnly = false;
 		} catch {
@@ -585,6 +578,24 @@ export class SessionLogTailer {
 			this.#pollingOnly = true;
 			this.#watcher = null;
 		}
+	}
+
+	/** (Re)arm the backup tick: 1 s when polling-only, slow when the watcher is healthy. */
+	#armTick(): void {
+		clearTimeout(this.#tick);
+		this.#tick = setTimeout(
+			() => {
+				this.#tick = undefined;
+				if (!this.#running) return;
+				this.#safe(() => {
+					this.#scan();
+					this.#drainAll();
+				}, "tick scan failed");
+				if (this.#running) this.#armTick();
+			},
+			this.#pollingOnly ? POLL_INTERVAL_MS : WATCHED_BACKUP_INTERVAL_MS,
+		);
+		this.#tick.unref?.();
 	}
 
 	#closeWatcher(): void {
@@ -866,6 +877,8 @@ export class SessionLogTailer {
 		stream.watermarkIno = stream.ino;
 
 		if (stream.closed && stream.eofSent) return;
+		// Nothing new and no pending closure: skip the open and read buffer.
+		if (!stream.closed && stream.sentOffset === stream.size) return;
 
 		let fd: number | undefined;
 		try {
