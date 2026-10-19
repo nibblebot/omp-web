@@ -100,4 +100,25 @@ describe("streamed deltas (slim message_update frames)", () => {
 		await tick();
 		expect(state.live.blocks[0]?.text).toBe("Hello, world");
 	});
+
+	test("an unknown sub-event type is ignored and leaves the live blocks untouched", async () => {
+		setState("settingsModel", {
+			tabs: [
+				{ id: "display", groups: [{ items: [{ path: "display.smoothStreaming", value: false }] }] },
+			],
+		} as never);
+		applyEvent({
+			type: "message_start",
+			message: { role: "assistant", content: [{ type: "text", text: "Hi" }] },
+		} as unknown as WireSessionEvent);
+		await tick();
+		const before = state.live.blocks[0];
+		applyEvent({
+			type: "message_update",
+			assistantMessageEvent: { type: "future_sub_event", contentIndex: 0 },
+		} as unknown as WireSessionEvent);
+		await tick();
+		expect(state.live.blocks[0]).toBe(before);
+		expect(state.live.blocks[0]?.text).toBe("Hi");
+	});
 });
