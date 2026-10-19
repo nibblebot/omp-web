@@ -351,6 +351,19 @@ test("a credential the fleet rejects shuts the session down without waiting for 
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });
 
+test("a credential the fleet rejects exits 0 even while postmortem teardown is still running", async () => {
+	// The rejected start() promise is expected on a stop-before-ready. It must not
+	// surface as an unhandled rejection, which postmortem would turn into exit 1 when
+	// the shutdown's async teardown is still running at that moment.
+	const fleet = trackFleet({ refuse: REFUSALS.unauthorized });
+	const child = spawnDaemon(fleet.url, {
+		OMP_SESSION_CONTROL_GRACE: "10m",
+		BUN_OPTIONS: `--preload=${repoRoot}apps/session/test/teardown-probe.preload.ts`,
+		OMP_SESSION_TEST_TEARDOWN: "slow",
+	});
+	expect(await exitWithin(child, 20_000)).toBe(0);
+}, 30_000);
+
 test("a fleet generation_obsolete shuts the session down without waiting for the grace period", async () => {
 	// The fleet announces a superseded generation with HTTP 409 and a typed
 	// body (apps/fleet/test/daemon-transport.test.ts). Like a rejected

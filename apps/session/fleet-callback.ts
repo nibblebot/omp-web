@@ -19,6 +19,7 @@ import {
 	RECONNECT_BACKOFF_MIN_MS,
 	SILENCE_DEADLINE_MS,
 	STREAM_MAX_BYTES,
+	WAKE_TIMEOUT_MS,
 	CallbackError,
 	callbackError,
 	encodeNdjsonLine,
@@ -146,6 +147,8 @@ export interface FleetCallbackOptions {
 	/** Up-leg bytes after which the pair is voluntarily renewed; 0 disables. */
 	upRenewalBytes?: number;
 	readyTimeoutMs?: number;
+	/** Deadline for one bulk-channel request (materialize or upload part); past it the caller gets a retryable error. */
+	bulkTimeoutMs?: number;
 	backoffMinMs?: number;
 	backoffMaxMs?: number;
 	connectionBufferBytes?: number;
@@ -397,6 +400,11 @@ export class FleetCallback {
 	#backoffResolve: ((stopped: boolean) => void) | null = null;
 	#reconnectAt: number | null = null;
 	#lastError: { code: CallbackErrorCode; message: string; at: number } | null = null;
+	/** Aborts every in-flight bulk request (materialize, upload part) on stop(). */
+	#bulkAbort = new AbortController();
+	#bulkTimeoutMs: number;
+	/** Set by drain(): the supervisor ends the pair without dialing a replacement. */
+	#draining = false;
 
 	constructor(options: FleetCallbackOptions, events?: FleetCallbackEvents) {
 		let url: URL;
@@ -448,6 +456,7 @@ export class FleetCallback {
 		this.#silenceMs = options.silenceMs ?? SILENCE_DEADLINE_MS;
 		this.#upRenewalBytes = options.upRenewalBytes ?? UP_RENEWAL_BYTES;
 		this.#readyTimeoutMs = options.readyTimeoutMs ?? PAIR_READY_TIMEOUT_MS;
+		this.#bulkTimeoutMs = options.bulkTimeoutMs ?? WAKE_TIMEOUT_MS;
 		this.#backoffMinMs = options.backoffMinMs ?? RECONNECT_BACKOFF_MIN_MS;
 		this.#backoffMaxMs = options.backoffMaxMs ?? RECONNECT_BACKOFF_MAX_MS;
 		this.#connectionBufferBytes = options.connectionBufferBytes ?? CONNECTION_MAX_BYTES;
@@ -482,6 +491,7 @@ export class FleetCallback {
 	stop(): void {
 		if (this.#stopped) return;
 		this.#stopped = true;
+		this.#bulkAbort.abort();
 		this.#state = "stopped";
 		this.#cancelBackoff();
 		if (this.#pair) this.#teardownPair(this.#pair);
@@ -494,16 +504,48 @@ export class FleetCallback {
 	}
 
 	/**
+	 * Shutdown drain. Waits up to `timeoutMs` for every queued envelope to be
+	 * written into the up leg, then ends the pair the graceful way (the renewal
+	 * path): the fleet reads the whole up body before it answers, and the
+	 * supervisor dials no replacement. Then waits up to `timeoutMs` more for both
+	 * halves to settle. Never throws; a pair that is not ready has nothing to
+	 * hand off and returns at once.
+	 */
+	async drain(timeoutMs: number): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		while (
+			this.#state === "ready" &&
+			this.#pendingHead < this.#pending.length &&
+			Date.now() < deadline
+		) {
+			await new Promise<void>((resolve) => setTimeout(resolve, 10));
+		}
+		const pair = this.#pair;
+		if (this.#stopped || pair === null || !pair.open || this.#state !== "ready") return;
+		this.#draining = true;
+		this.#finishPair(pair, { kind: "renewal" });
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const bound = new Promise<void>((resolve) => {
+			timer = setTimeout(resolve, timeoutMs);
+		});
+		try {
+			await Promise.race([Promise.all([pair.upSettled, pair.downSettled]), bound]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	/**
 	 * Queue one envelope for the up half. Identity (workspaceId/generation/
 	 * connectionId), seq, and at are stamped at emit, so envelopes queued
 	 * while a pair is down replay on the fresh pair (the fleet keeps no
 	 * offline queue). Returns "sent" when accepted into the bounded queue,
 	 * "dropped" when a buffer cap is hit (counted + retryable onError),
 	 * "rejected" when the envelope is invalid or over the 1 MiB cap
-	 * (invalid_request onError), or "stopped" when not started / stopped.
+	 * (invalid_request onError), or "stopped" when not started, stopped, or draining.
 	 */
 	send(input: CallbackSendInput): CallbackSendResult {
-		if (!this.#started || this.#stopped) return "stopped";
+		if (!this.#started || this.#stopped || this.#draining) return "stopped";
 		return this.#enqueue({
 			streamId: input.streamId,
 			kind: input.kind,
@@ -533,19 +575,22 @@ export class FleetCallback {
 			...this.#identityHeaders(pair),
 			"content-type": "application/json",
 		};
-		const init: RequestInit = {
-			method: "POST",
-			headers,
-			body: JSON.stringify(request),
-		};
-		if (this.#proxy !== undefined) (init as RequestInit & { proxy?: string }).proxy = this.#proxy;
+		const init = this.#fetchInit(
+			AbortSignal.any([this.#bulkAbort.signal, AbortSignal.timeout(this.#bulkTimeoutMs)]),
+			{ method: "POST", headers, body: JSON.stringify(request) },
+		);
 		let res: Response;
 		try {
 			res = await fetch(`${this.#base}${CALLBACK_BULK_PATH_PREFIX}${correlationId}`, init);
 		} catch (cause) {
 			throw callbackError("retryable", "materialization request failed", { cause });
 		}
-		const text = await res.text();
+		let text: string;
+		try {
+			text = await res.text();
+		} catch (cause) {
+			throw callbackError("retryable", "materialization response failed", { cause });
+		}
 		if (res.status === 200) {
 			const lines = text.split("\n").filter((line) => line.trim() !== "");
 			const records: MaterializeRecord[] = [];
@@ -643,7 +688,11 @@ export class FleetCallback {
 				[BULK_PART_HEADER]: String(part),
 				...(part === partCount - 1 ? { [BULK_FINAL_HEADER]: "1" } : {}),
 			};
-			const init: RequestInit = this.#fetchInit(new AbortController(), {
+			const signal = AbortSignal.any([
+				this.#bulkAbort.signal,
+				AbortSignal.timeout(this.#bulkTimeoutMs),
+			]);
+			const init: RequestInit = this.#fetchInit(signal, {
 				method: "POST",
 				headers,
 				// BodyInit under the DOM lib rejects plain Uint8Array; a
@@ -753,6 +802,7 @@ export class FleetCallback {
 				}
 				if (end.kind === "renewal") {
 					this.#renewals++;
+					if (this.#draining) break; // shutdown drain: no replacement pair
 					continue; // voluntary: fresh pair, no backoff
 				}
 				this.#reconnects++;
@@ -921,7 +971,7 @@ export class FleetCallback {
 	 * reading, or the connection died).
 	 */
 	#launchUp(pair: PairHandle): void {
-		const init = this.#fetchInit(pair.upAbort, {
+		const init = this.#fetchInit(pair.upAbort.signal, {
 			method: "POST",
 			headers: this.#identityHeaders(pair),
 			body: this.#makeUpBody(pair),
@@ -989,7 +1039,7 @@ export class FleetCallback {
 		try {
 			const res = await this.#fetchWithDeadline(
 				`${this.#base}${CALLBACK_DOWN_PATH}`,
-				this.#fetchInit(pair.downAbort, { method: "GET", headers }),
+				this.#fetchInit(pair.downAbort.signal, { method: "GET", headers }),
 				pair.downAbort,
 				deadline,
 			);
@@ -1063,8 +1113,8 @@ export class FleetCallback {
 		}
 	}
 
-	#fetchInit(abort: AbortController, extra: Record<string, unknown>): RequestInit {
-		const init: RequestInit = { ...extra, signal: abort.signal };
+	#fetchInit(signal: AbortSignal, extra: Record<string, unknown>): RequestInit {
+		const init: RequestInit = { ...extra, signal };
 		if (this.#proxy !== undefined) (init as RequestInit & { proxy?: string }).proxy = this.#proxy;
 		return init;
 	}

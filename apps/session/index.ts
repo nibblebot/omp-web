@@ -1230,6 +1230,11 @@ let fleetCallback: FleetCallback | null = null;
 let logTailer: SessionLogTailer | null = null;
 /** Bounded wait at shutdown for queued callback envelopes (the ShutdownControl ack) to reach the wire. */
 const CALLBACK_DRAIN_MS = 1_000;
+// Hard ceiling on a graceful shutdown: the callback drain (CALLBACK_DRAIN_MS,
+// twice at most), the postmortem cleanup (its own 10 s deadline), and
+// closeSession must all fit inside it. A step that never settles cannot keep
+// the daemon alive past this point.
+const SHUTDOWN_DEADLINE_MS = 20_000;
 /** No-control-plane shutdown timer (C4): armed while no callback pair is ready. */
 let controlGraceTimer: Timer | undefined;
 /**
@@ -1616,9 +1621,16 @@ if (config.callbackUrl !== undefined) {
 	});
 	// Once the pair is ready (fleet pair_ready observed) start streaming
 	// session logs over it; tailer start() is sync (initial scan + watcher).
-	void fleetCallback.start().then(() => {
-		logTailer?.start();
-	});
+	void fleetCallback.start().then(
+		() => {
+			logTailer?.start();
+		},
+		() => {
+			// stop() or supervisor exit before readiness. Both are already reported
+			// through onError/onRejected, so the rejection is handled here; left
+			// unhandled it would exit the daemon with status 1 during teardown.
+		},
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -1658,20 +1670,6 @@ function idleCheckTick(): void {
 lastActivityAt = Date.now();
 if (config.idleTimeoutMs > 0) idleTimer = setInterval(idleCheckTick, config.idleCheckMs);
 
-/**
- * Wait (bounded) for queued callback envelopes to reach the wire. A dead or
- * stopped pair never drains, so the wait is capped at CALLBACK_DRAIN_MS.
- */
-async function drainCallback(): Promise<void> {
-	const deadline = Date.now() + CALLBACK_DRAIN_MS;
-	for (;;) {
-		const status = fleetCallback?.status();
-		if (status === undefined || status.state === "stopped" || status.pendingEnvelopes === 0) return;
-		if (Date.now() >= deadline) return;
-		await Bun.sleep(20);
-	}
-}
-
 /** Arm the no-control-plane shutdown timer (C4). No-op when disabled or already armed. */
 function armControlGrace(): void {
 	if (controlGraceTimer !== undefined || config.controlGraceMs <= 0 || shuttingDown) return;
@@ -1690,27 +1688,36 @@ function clearControlGrace(): void {
 // Graceful shutdown: dispose the boot session via closeSession (beginDispose
 // is the sync admission barrier; dispose is idempotent), then exit with
 // exitCode (0 for a signal; a refused --resume passes its failure code).
+
 async function shutdown(exitCode = 0): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
-	if (idleTimer) clearInterval(idleTimer);
-	clearControlGrace();
-	// Stop the log tailer and control broker first so nothing new queues, then
-	// give queued envelopes (the ShutdownControl ack, final frames) a bounded
-	// window to reach the wire before the pair closes.
-	if (logTailer !== null) logTailer.stop();
-	if (daemonControl !== null) daemonControl.stop();
-	await drainCallback();
-	if (fleetCallback !== null) fleetCallback.stop();
-	if (bootEntry) await closeSession(bootEntry, "server shutting down");
-	server.stop();
-	discardAllStagedExports();
-	discardAllStagedUploads();
-	// Release session-file locks before the SDK postmortem cleanup runs so a
-	// crash-free exit never leaves a live lock behind.
-	for (const lock of sessionLocks) lock.release();
-	// Run the SDK's registered postmortem cleanup callbacks (browser/pty/MCP
-	// teardown etc.) without exiting; the exit is ours below.
-	await postmortemCleanup().catch(() => {});
-	process.exit(exitCode);
+	setTimeout(() => process.exit(exitCode), SHUTDOWN_DEADLINE_MS);
+	try {
+		clearInterval(idleTimer);
+		clearControlGrace();
+		// Stop the log tailer and control broker first so nothing new queues, then
+		// give queued envelopes (the ShutdownControl ack, final frames) a bounded
+		// window to reach the wire before the pair closes.
+		if (logTailer !== null) logTailer.stop();
+		if (daemonControl !== null) daemonControl.stop();
+		if (fleetCallback !== null) await fleetCallback.drain(CALLBACK_DRAIN_MS);
+		if (fleetCallback !== null) fleetCallback.stop();
+		if (bootEntry) await closeSession(bootEntry, "server shutting down");
+		server.stop();
+		discardAllStagedExports();
+		discardAllStagedUploads();
+		// Release session-file locks before the SDK postmortem cleanup runs so a
+		// crash-free exit never leaves a live lock behind.
+		for (const lock of sessionLocks) lock.release();
+		// Run the SDK's registered postmortem cleanup callbacks (browser/pty/MCP
+		// teardown etc.) without exiting; the exit is ours below.
+		await postmortemCleanup().catch(() => {});
+	} catch (cause) {
+		console.error(
+			`omp-session: shutdown step failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+		);
+	} finally {
+		process.exit(exitCode);
+	}
 }
