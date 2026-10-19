@@ -25,7 +25,6 @@ function info(name: string, projectDir: string, overrides: Partial<DaemonInfo> =
 		createdAt: 1,
 		startedAt: 1,
 		restartCount: 0,
-		outputBytes: 0,
 		persist: false,
 		detached: false,
 		...overrides,

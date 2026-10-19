@@ -23,7 +23,9 @@ import {
 	WAKE_TIMEOUT_MS,
 	CallbackError,
 	callbackError,
+	codeFromHttpStatus,
 	encodeNdjsonLine,
+	isCallbackErrorCode,
 	isChunkPayload,
 	reassembleChunks,
 	parseSseEnvelope,
@@ -227,28 +229,6 @@ export interface MaterializeResult {
 	records: MaterializeRecord[];
 }
 
-/** True when `value` names a frozen callback error code. */
-function isCallbackErrorCode(value: string): value is CallbackErrorCode {
-	switch (value) {
-		case "invalid_request":
-		case "invalid_identity":
-		case "unauthorized":
-		case "forbidden":
-		case "unavailable":
-		case "conflict":
-		case "generation_obsolete":
-		case "writer_active":
-		case "archive_pending":
-		case "archive_conflict":
-		case "provider_failed":
-		case "retryable":
-		case "payload_too_large":
-			return true;
-		default:
-			return false;
-	}
-}
-
 interface Deferred<T> {
 	promise: Promise<T>;
 	resolve: (value: T) => void;
@@ -331,26 +311,30 @@ interface PairHandle {
 	readyArrived: boolean;
 }
 
-const HTTP_ERROR_CODE: Record<number, CallbackErrorCode> = {
-	400: "invalid_request",
-	401: "unauthorized",
-	403: "forbidden",
-	404: "invalid_identity",
-	409: "conflict",
-	410: "generation_obsolete",
-	429: "retryable",
-	503: "unavailable",
-};
-
-/** Refusal code of a non-2xx fleet response: the typed body's `error` when it names a frozen code, else the HTTP status. */
-function refusalCode(status: number, text: string): CallbackErrorCode {
+/**
+ * Typed refusal of a non-2xx fleet response: the body's `error`, `message`, and
+ * `detail` when present. The code falls back to the HTTP status when the body
+ * carries no frozen error code.
+ */
+function parseRefusal(
+	status: number,
+	text: string,
+): { code: CallbackErrorCode; message: string | undefined; detail: string | undefined } {
+	let body: { error?: unknown; message?: unknown; detail?: unknown } | null = null;
 	try {
-		const body = JSON.parse(text) as { error?: unknown };
-		if (typeof body.error === "string" && isCallbackErrorCode(body.error)) return body.error;
+		body = JSON.parse(text) as { error?: unknown; message?: unknown; detail?: unknown } | null;
 	} catch {
 		// Non-JSON body: fall through to the HTTP-status mapping.
 	}
-	return HTTP_ERROR_CODE[status] ?? "retryable";
+	const error = body?.error;
+	const message = body?.message;
+	const detail = body?.detail;
+	return {
+		code:
+			typeof error === "string" && isCallbackErrorCode(error) ? error : codeFromHttpStatus(status),
+		message: typeof message === "string" && message.length > 0 ? message : undefined,
+		detail: typeof detail === "string" ? detail : undefined,
+	};
 }
 
 function errMsg(cause: unknown): string {
@@ -621,22 +605,9 @@ export class FleetCallback {
 		// status mapping. A missing stored session surfaces as `unavailable`
 		// (HTTP 503 via the frozen status map); the daemon reports it typed
 		// and the caller decides.
-		let errorBody: { error?: unknown; message?: unknown; detail?: unknown } = {};
-		try {
-			errorBody = JSON.parse(text) as { error?: unknown; message?: unknown; detail?: unknown };
-		} catch {
-			// Non-JSON error body: fall through to the HTTP-status mapping.
-		}
-		const code =
-			typeof errorBody.error === "string" && isCallbackErrorCode(errorBody.error)
-				? errorBody.error
-				: (HTTP_ERROR_CODE[res.status] ?? "retryable");
-		const message =
-			typeof errorBody.message === "string" && errorBody.message.length > 0
-				? errorBody.message
-				: `materialization refused: HTTP ${res.status}`;
-		throw callbackError(code, message, {
-			...(typeof errorBody.detail === "string" ? { detail: errorBody.detail } : {}),
+		const { code, message, detail } = parseRefusal(res.status, text);
+		throw callbackError(code, message ?? `materialization refused: HTTP ${res.status}`, {
+			...(detail !== undefined ? { detail } : {}),
 		});
 	}
 
@@ -720,23 +691,14 @@ export class FleetCallback {
 			}
 			const text = await res.text().catch(() => "");
 			if (!res.ok) {
-				let errorBody: { error?: unknown; message?: unknown; detail?: unknown } = {};
-				try {
-					errorBody = JSON.parse(text) as { error?: unknown; message?: unknown; detail?: unknown };
-				} catch {
-					// Non-JSON error body: fall through to the HTTP-status mapping.
-				}
-				const code =
-					typeof errorBody.error === "string" && isCallbackErrorCode(errorBody.error)
-						? errorBody.error
-						: (HTTP_ERROR_CODE[res.status] ?? "retryable");
-				const message =
-					typeof errorBody.message === "string" && errorBody.message.length > 0
-						? errorBody.message
-						: `bulk upload part ${part} refused: HTTP ${res.status}`;
-				throw callbackError(code, message, {
-					detail: `part ${part} of ${partCount} for correlation ${input.correlationId}`,
-				});
+				const { code, message } = parseRefusal(res.status, text);
+				throw callbackError(
+					code,
+					message ?? `bulk upload part ${part} refused: HTTP ${res.status}`,
+					{
+						detail: `part ${part} of ${partCount} for correlation ${input.correlationId}`,
+					},
+				);
 			}
 		}
 	}
@@ -999,7 +961,7 @@ export class FleetCallback {
 				}
 				const text = res.ok ? "" : await res.text().catch(() => "");
 				if (res.ok) res.body?.cancel().catch(() => {});
-				const code = res.ok ? "retryable" : refusalCode(res.status, text);
+				const code = res.ok ? "retryable" : parseRefusal(res.status, text).code;
 				if (pair.end.settled) {
 					// Graceful renewal: the fleet answered the drained up leg. A clean 200 is
 					// the expected end; a refusal here is a loss and must be surfaced.
@@ -1066,7 +1028,7 @@ export class FleetCallback {
 				this.#reportError(
 					"down",
 					callbackError(
-						refusalCode(res.status, bodyText),
+						parseRefusal(res.status, bodyText).code,
 						`callback down refused: HTTP ${res.status}`,
 						{ detail: bodyText.length > 0 ? bodyText.slice(0, 300) : undefined },
 					),

@@ -122,8 +122,8 @@ describe("buildModelRoleCatalog", () => {
 });
 
 describe("createDaemonRosterGate", () => {
-	const roster = (outputBytes: number): DaemonInfo[] => [
-		{ name: "dev", projectDir: "/p", state: "running", outputBytes } as unknown as DaemonInfo,
+	const roster = (restartCount: number): DaemonInfo[] => [
+		{ name: "dev", projectDir: "/p", state: "running", restartCount } as unknown as DaemonInfo,
 	];
 
 	test("sends the first roster and suppresses an identical one inside the heartbeat", () => {

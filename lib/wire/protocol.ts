@@ -398,7 +398,7 @@ export interface SkillsState {
 // fleet↔omp-session drift (the collab COLLAB_PROTO pattern); bump on any
 // breaking change to the transport or frame shapes.
 //
-// Transport (OMP_PROTO 2): no WebSockets on the agent-driving path. Client →
+// Transport: no WebSockets on the agent-driving path. Client →
 // server commands are POST /command bodies (one ClientCommand per request,
 // answered 202); server → client frames are SSE events on GET /events
 // (event: frame, id: <seq>, data: <JSON ServerFrame>). Auth is HTTP-level
@@ -1076,7 +1076,7 @@ export type SessionScopedFrame =
 	| { type: "available_commands"; commands: AvailableSlashCommand[] }
 	// Settings panel: fresh model after a setSetting mutation (TUI /settings parity).
 	| { type: "settings_changed"; model: SettingsModel }
-	| { type: "subagent_lifecycle" | "subagent_progress" | "subagent_event"; payload: unknown }
+	| { type: "subagent_lifecycle" | "subagent_progress"; payload: unknown }
 	// Server-driven ExtensionUIContext dialog; the client answers with ui_response.
 	| { type: "ui_request"; id: string; method: string; params: unknown }
 	// The dialog above settled (answered via ui_response, or rejected when its
@@ -1128,7 +1128,7 @@ export type ServerFrame =
 	| { type: "daemon_control_result"; id: string; ok: boolean; daemon?: DaemonInfo; error?: string }
 	// Unicast answer to attach (fleet edge): settles the client's pending
 	// attach by command id. Success carries the daemonId as sessionId;
-	// failure carries the error. Added OMP_PROTO 2 additively; an older edge
+	// failure carries the error. Added additively; an older edge
 	// that ignores the attach id never sends this frame, and the client's
 	// pending-map timeout backstops it.
 	| { type: "attach_result"; id: string; ok: boolean; sessionId?: string; error?: string }
@@ -1271,9 +1271,7 @@ export type DaemonInfo = {
 	readyHost?: string;
 	exitedAt?: number;
 	exitCode?: number;
-	exitReason?: string;
 	restartCount: number;
-	outputBytes: number;
 	owner?: string;
 	persist: boolean;
 	detached: boolean;
@@ -1306,7 +1304,7 @@ export type SessionListEntry = {
 	status?: "complete" | "interrupted" | "aborted" | "error" | "pending" | "unknown";
 };
 // ---------------------------------------------------------------------------
-// Shared additive contracts (OMP_PROTO 2 frozen).
+// Shared additive contracts.
 // Everything below is additive: optional fields, new method names gated by
 // server-advertised Capability, new frames. No required shape, enum, ID, or
 // seq semantics above changes. Consumers MUST gate on Capability.availability
@@ -1330,31 +1328,6 @@ export interface EntryAnchor {
 	entryId: string;
 	revision: string;
 }
-
-/** C03: stable key for one live worker agent inside a session. */
-export interface WorkerKey {
-	sessionId: string;
-	agentId: string;
-}
-
-/**
- * C04: cursor/revision paging contract for graph/transcript children. Opaque
- * cursor; the server rejects stale scope/revision instead of serving overlap.
- */
-export interface PageCursor {
-	cursor?: string | null;
-	revision: string;
-}
-
-/**
- * C05: which durable draft owns an unsent composer buffer. Main is preserved
- * across focus changes; the server owns durable agent state, the store owns
- * normalized mirrors, components own transient presentation only.
- */
-export type DraftScope =
-	| { kind: "main"; sessionId: string; branchId?: string }
-	| { kind: "worker"; sessionId: string; agentId: string }
-	| { kind: "side"; sessionId: string; sideSessionId: string };
 
 /**
  * Settings effective-value provenance. `layer` is the owning store layer;

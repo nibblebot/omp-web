@@ -45,7 +45,7 @@ import {
 import type { Stats } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
-import { ENROLLMENT_KEY_BYTES } from "#lib/wire/callback-protocol";
+import { ENROLLMENT_KEY_BYTES, type CallbackErrorCode } from "#lib/wire/callback-protocol";
 import type { LifecycleStage, RegisteredProject } from "#lib/wire/protocol";
 import type { Registry, RegistryEntry, WorkspaceRecord, DeletionGateError } from "./registry";
 import type { FleetConfig } from "./config";
@@ -86,19 +86,7 @@ export function cloneCheckoutDir(volumeRoot: string): string {
 // ---------------------------------------------------------------------------
 
 /** Error codes this service raises; the frozen ledger vocabulary. */
-export type CloneLifecycleErrorCode =
-	| "invalid_request"
-	| "invalid_identity"
-	| "unauthorized"
-	| "forbidden"
-	| "unavailable"
-	| "conflict"
-	| "generation_obsolete"
-	| "writer_active"
-	| "archive_pending"
-	| "archive_conflict"
-	| "provider_failed"
-	| "retryable";
+export type CloneLifecycleErrorCode = CallbackErrorCode;
 
 /** Typed lifecycle failure; `message` is caller-safe (roster/HTTP/edge). */
 export class CloneLifecycleError extends Error {

@@ -12,7 +12,6 @@ function daemon(state: string): DaemonInfo {
 		createdAt: 0,
 		startedAt: 0,
 		restartCount: 0,
-		outputBytes: 0,
 		persist: false,
 		detached: false,
 	};

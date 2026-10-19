@@ -1038,7 +1038,7 @@ const server =
 					// so connect-implies-attached holds for streams that race boot.
 					await bootReady;
 					const url = new URL(req.url);
-					// Agent-driving transport (OMP_PROTO 2): GET /events down (SSE),
+					// Agent-driving transport: GET /events down (SSE),
 					// POST /command up (one ClientCommand per request, 202 accept).
 					if (url.pathname === "/events") {
 						if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });

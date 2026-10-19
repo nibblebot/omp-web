@@ -20,7 +20,7 @@ import type {
 	StoredWorkspaceProvenance,
 	StoredWorkspaceSummary,
 	StoredWorkspacesResponse,
-	SubagentInfo,
+	SubagentFileInfo,
 	SyncResult,
 	ToolStat,
 	TranscriptPage,
@@ -50,7 +50,7 @@ export type {
 	StoredWorkspaceProvenance,
 	StoredWorkspaceSummary,
 	StoredWorkspacesResponse,
-	SubagentInfo,
+	SubagentFileInfo,
 	SyncResult,
 	ToolStat,
 	TranscriptPage,
@@ -161,11 +161,11 @@ export const api = {
 	rollup: (days: number, offsetMinutes: number) =>
 		fetchJson<StatsRollup>("/ctl/stats/rollup", { days, offset: offsetMinutes }),
 
-	/** Server envelope is { subagents: SubagentInfo[] }; accept a bare array defensively too. */
-	subagents: async (file: string): Promise<SubagentInfo[]> => {
+	/** Server envelope is { subagents: SubagentFileInfo[] }; accept a bare array defensively too. */
+	subagents: async (file: string): Promise<SubagentFileInfo[]> => {
 		const data = (await fetchJson<unknown>(
 			`/ctl/stats/sessions/${encodePathSegments(file)}/subagents`,
-		)) as SubagentInfo[] | { subagents?: SubagentInfo[] };
+		)) as SubagentFileInfo[] | { subagents?: SubagentFileInfo[] };
 		return Array.isArray(data) ? data : (data.subagents ?? []);
 	},
 

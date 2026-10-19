@@ -116,6 +116,7 @@ import {
 	type NdjsonItem,
 	needsSplit,
 	planOversizeSplit,
+	OMP_CALLBACK_PROTO,
 	REPLAY_RING_ENTRIES,
 	SILENCE_DEADLINE_MS,
 	STREAM_MAX_BYTES,
@@ -130,15 +131,9 @@ import {
 	parseMaterializeRequest,
 	planMaterializeFiles,
 } from "#lib/session-files/wake-materialize";
+import { SSE_RING_BYTES } from "#lib/wire/protocol";
 import { SseRing } from "#lib/wire/sse";
 
-/**
- * Byte budget for one down replay ring. The ledger bounds the ring at
- * REPLAY_RING_ENTRIES (10k); this mirrors the shared SSE ring convention as
- * the memory-safety secondary bound (a few 1 MiB frames must not balloon a
- * single ring).
- */
-const REPLAY_RING_BYTES = 8 * 1024 * 1024;
 /** Rings with no live connection and no activity for this long are dropped. */
 const RING_IDLE_MS = 10 * 60_000;
 /** A chunked command waits this long for the daemon to drain the down stream before the connection is dropped. */
@@ -965,7 +960,7 @@ export class DaemonTransportRegistry {
 			connectionId,
 			workspaceId,
 			generation,
-			ring: new SseRing<string>(REPLAY_RING_ENTRIES, REPLAY_RING_BYTES),
+			ring: new SseRing<string>(REPLAY_RING_ENTRIES, SSE_RING_BYTES),
 			nextSeq: 0,
 			lastActiveAt: this.#now(),
 		};
@@ -1061,7 +1056,7 @@ export class DaemonTransportRegistry {
 
 	#downEnvelope(conn: DownConnection, draft: CallbackEnvelopeInput, seq: number): CallbackEnvelope {
 		return {
-			version: 1,
+			version: OMP_CALLBACK_PROTO,
 			workspaceId: conn.workspaceId,
 			generation: conn.generation,
 			connectionId: conn.connectionId,

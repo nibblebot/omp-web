@@ -1,7 +1,7 @@
 import { SSE_RING_BYTES } from "./protocol";
 
 /**
- * Shared SSE helpers for the OMP_PROTO 2 transport (POST /command up,
+ * Shared SSE helpers for the agent-driving transport (POST /command up,
  * GET /events down). Used by the daemon (session/), the fleet edge and daemon
  * transport, and the test fakes. The browser uses native EventSource
  * instead (it cannot set headers, and loopback is exempt).

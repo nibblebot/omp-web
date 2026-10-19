@@ -1,8 +1,15 @@
+import {
+	SSE_BACKPRESSURE_BYTES,
+	SSE_KEEPALIVE_MS,
+	SSE_RING_CAP,
+	SSE_SILENCE_DEADLINE_MS,
+} from "./protocol";
 import { encodeSseEvent, parseSseUnits, SSE_PING_EVENT } from "./sse";
 
 /**
  * Callback transport protocol (OMP_CALLBACK_PROTO = 1), separately versioned
- * from OMP_PROTO (2). Encoding, parsing, and policy are specified here.
+ * from OMP_PROTO. Encoding, parsing, and policy frozen by
+ * docs/clone-contracts.md ("Callback transport" and "Typed errors").
  *
  * Pure module: no I/O, no ambient state beyond the explicit parser/dedup
  * objects this file creates. Shared by the fleet (server routes, edge) and
@@ -66,18 +73,6 @@ export const BULK_FINAL_HEADER = "x-omp-bulk-final";
 // envelope kinds. Frozen with the Transport and Lifecycle lanes (2026-09-06).
 // ---------------------------------------------------------------------------
 
-/** fleet→daemon, kind "control", streamId `browser/<connId>`: a browser attached. */
-export interface StreamOpenControl {
-	type: "stream_open";
-	/** Last envelope seq the edge consumed on this stream; absent = fresh prime. */
-	lastSeq?: number;
-}
-
-/** fleet→daemon, kind "control", streamId `browser/<connId>`: the browser detached. */
-export interface StreamCloseControl {
-	type: "stream_close";
-}
-
 /**
  * daemon→fleet, kind "control", on the affected stream: the daemon could not
  * honor replay (ring underflow, foreign connection, or an outbound buffer
@@ -129,47 +124,24 @@ export interface DownloadBulkFailedControl {
 	error: { code: CallbackErrorCode; message: string };
 }
 
-/** fleet→daemon log controls on the down half (ledger "Session log streaming"). */
-export interface LogAckControl {
-	type: "log_ack";
-	/** Durable (fsynced) append offset per streamId; may batch several streams. */
-	offsets: Record<string, number>;
-}
-export interface LogGapControl {
-	type: "log_gap";
-	/** Repair request: re-stream bytes [from, to) of the named stream. */
-	from: number;
-	to: number;
-	/** Affected stream; required when the control rides the reserved transport stream. */
-	streamId?: string;
-}
-
 /** fleet→daemon, kind "control", streamId "transport": graceful shutdown; the daemon acks, then exits 0. */
 export interface ShutdownControl {
 	type: "shutdown";
 	reason?: string;
 }
 
-/** Every fleet→daemon control payload on the down half. */
-export type DownControl =
-	| StreamOpenControl
-	| StreamCloseControl
-	| LogAckControl
-	| LogGapControl
-	| ShutdownControl;
-
 /** Serialized envelope cap: one NDJSON record / one SSE data payload (1 MiB). */
 export const ENVELOPE_MAX_BYTES = 1024 * 1024;
 /** Per-connection buffered-envelope cap across all streams (8 MiB). */
 export const CONNECTION_MAX_BYTES = 8 * 1024 * 1024;
 /** Per-virtual-stream buffered cap (4 MiB); also bounds reassembled chunks. */
-export const STREAM_MAX_BYTES = 4 * 1024 * 1024;
+export const STREAM_MAX_BYTES = SSE_BACKPRESSURE_BYTES;
 /** Replay ring entries kept for Last-Event-ID resume (10k). */
-export const REPLAY_RING_ENTRIES = 10_000;
+export const REPLAY_RING_ENTRIES = SSE_RING_CAP;
 /** Daemon heartbeat cadence on the down stream (15 s). */
-export const HEARTBEAT_INTERVAL_MS = 15_000;
+export const HEARTBEAT_INTERVAL_MS = SSE_KEEPALIVE_MS;
 /** Down-stream silence deadline (30 s): no envelope by then = dead pair. */
-export const SILENCE_DEADLINE_MS = 30_000;
+export const SILENCE_DEADLINE_MS = SSE_SILENCE_DEADLINE_MS;
 /**
  * Up-leg lifetime byte budget (64 MiB). The fleet's Bun.serve counts a
  * streaming request body against `maxRequestBodySize` (default 128 MiB) for
@@ -233,6 +205,32 @@ export const CALLBACK_ERROR_HTTP_STATUS: Record<CallbackErrorCode, number> = {
 	payload_too_large: 413,
 };
 
+/** True when `value` names a frozen callback error code. */
+export function isCallbackErrorCode(value: string): value is CallbackErrorCode {
+	return (CALLBACK_ERROR_CODES as readonly string[]).includes(value);
+}
+
+/**
+ * Ledger code a refusal with no typed `error` body stands for, keyed by HTTP
+ * status. Shared statuses take the ledger's canonical code; 404/410 predate
+ * typed refusals and have no ledger code of their own.
+ */
+const UNTYPED_REFUSAL_CODE: Record<number, CallbackErrorCode> = {
+	400: "invalid_request",
+	401: "unauthorized",
+	403: "forbidden",
+	404: "invalid_identity",
+	409: "conflict",
+	410: "generation_obsolete",
+	429: "retryable",
+	503: "unavailable",
+};
+
+/** Ledger code for a non-2xx response without a typed body; unknown statuses are retryable. */
+export function codeFromHttpStatus(status: number): CallbackErrorCode {
+	return UNTYPED_REFUSAL_CODE[status] ?? "retryable";
+}
+
 /** Request header a session sets on POST /callback/up when it reassembles chunked commands ("1"). */
 export const CALLBACK_CHUNKS_HEADER = "x-omp-callback-chunks";
 
@@ -268,7 +266,7 @@ export function isCallbackError(value: unknown): value is CallbackError {
 
 /** One callback-transport envelope (ledger "Callback transport"). */
 export interface CallbackEnvelope {
-	version: 1;
+	version: typeof OMP_CALLBACK_PROTO;
 	workspaceId: string;
 	/** authorizedGeneration of the workspace; obsolete generations are rejected fleet-side (`generation_obsolete`). */
 	generation: number;
@@ -355,17 +353,6 @@ export function validateEnvelope(value: unknown, opts?: ValidateEnvelopeOptions)
 /** Encode one envelope as a complete NDJSON record (trailing newline included). */
 export function encodeNdjsonLine(envelope: CallbackEnvelope): string {
 	return `${JSON.stringify(envelope)}\n`;
-}
-
-/** Parse one NDJSON record / SSE data payload into a validated envelope. */
-export function decodeEnvelope(line: string): CallbackEnvelope {
-	let value: unknown;
-	try {
-		value = JSON.parse(line);
-	} catch (cause) {
-		throw new CallbackError("invalid_request", "callback envelope is not valid JSON", { cause });
-	}
-	return validateEnvelope(value);
 }
 
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {

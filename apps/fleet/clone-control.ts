@@ -27,6 +27,7 @@
  */
 
 import type { Registry } from "./registry";
+import { CALLBACK_ERROR_HTTP_STATUS } from "#lib/wire/callback-protocol";
 import type { PublicProviderProfile } from "#lib/wire/protocol";
 import type { ProviderProfile } from "#lib/runtime/provider-protocol";
 import { toPublicProfile } from "./provider-profile";
@@ -56,29 +57,9 @@ function json(data: unknown, status = 200): Response {
 	});
 }
 
-/** Map a lifecycle failure onto the HTTP status the CLI/UI expects. */
+/** Map a lifecycle failure onto the HTTP status the CLI/UI expects: the callback error table. */
 export function lifecycleStatus(code: CloneLifecycleError["code"]): number {
-	switch (code) {
-		case "invalid_request":
-		case "invalid_identity":
-			return 400;
-		case "unauthorized":
-			return 401;
-		case "forbidden":
-			return 403;
-		case "conflict":
-		case "writer_active":
-		case "archive_pending":
-		case "archive_conflict":
-			return 409;
-		case "unavailable":
-		case "retryable":
-			return 503;
-		case "provider_failed":
-			return 500;
-		default:
-			return 500;
-	}
+	return CALLBACK_ERROR_HTTP_STATUS[code];
 }
 
 /**

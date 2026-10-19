@@ -45,6 +45,7 @@ import type {
 	RegisteredProject,
 	WorkspaceKind,
 } from "#lib/wire/protocol";
+import type { CallbackErrorCode } from "#lib/wire/callback-protocol";
 import { expandTilde } from "./config";
 
 /**
@@ -75,19 +76,7 @@ export type { WorkspaceKind, DesiredState };
 /**
  * Deletion-gate error codes: the frozen ledger vocabulary.
  */
-export type DeletionErrorCode =
-	| "invalid_request"
-	| "invalid_identity"
-	| "unauthorized"
-	| "forbidden"
-	| "unavailable"
-	| "conflict"
-	| "generation_obsolete"
-	| "writer_active"
-	| "archive_pending"
-	| "archive_conflict"
-	| "provider_failed"
-	| "retryable";
+export type DeletionErrorCode = CallbackErrorCode;
 
 /** Typed deletion-gate failure persisted on the workspace record. */
 export interface DeletionGateError {

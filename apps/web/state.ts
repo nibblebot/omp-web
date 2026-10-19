@@ -1496,9 +1496,6 @@ export function connect(): void {
 				setState("subagents", (prev) => applyProgressFrame(prev, payload, Date.now()));
 				break;
 			}
-			case "subagent_event":
-				// Raw subagent session events: not subscribed ("progress" level only).
-				break;
 			case "login_url":
 				// No window.open here: async WS frames lack user activation and the
 				// popup would be blocked. LoginPanel owns the tab handoff.

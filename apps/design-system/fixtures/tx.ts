@@ -7,7 +7,7 @@ import type {
 	StoredSessionDetail,
 	StoredSessionSummary,
 	StoredWorkspaceSummary,
-	SubagentInfo,
+	SubagentFileInfo,
 	SyncResult,
 	TranscriptPage,
 } from "#lib/wire/stats-types";
@@ -300,7 +300,7 @@ export function statsFor(file: string): SessionStats | null {
 	return { ...sessionStats, file };
 }
 
-export const subagentFiles: SubagentInfo[] = [
+export const subagentFiles: SubagentFileInfo[] = [
 	{
 		file: SUBAGENT_FILE_SCOUT,
 		name: "0-DesignScout.jsonl",
@@ -316,7 +316,7 @@ export const subagentFiles: SubagentInfo[] = [
 ];
 
 /** Subagent list for one session file; null when it cannot be read. */
-export function subagentsFor(file: string): SubagentInfo[] | null {
+export function subagentsFor(file: string): SubagentFileInfo[] | null {
 	if (file === SESSION_FILE_BROKEN) return null;
 	if (file === SESSION_FILE_MAIN) return subagentFiles;
 	return [];

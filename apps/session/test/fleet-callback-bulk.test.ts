@@ -15,8 +15,8 @@ import {
 	CALLBACK_UP_PATH,
 	CallbackError,
 	type CallbackEnvelope,
-	decodeEnvelope,
 	encodeSseEnvelope,
+	validateEnvelope,
 } from "#lib/wire/callback-protocol";
 import { FleetCallback } from "../fleet-callback";
 
@@ -93,7 +93,7 @@ function startFakeFleet(): FakeFleet {
 						while (nl !== -1) {
 							const line = pending.slice(0, nl);
 							pending = pending.slice(nl + 1);
-							if (line.trim() !== "") fleet.received.push(decodeEnvelope(line));
+							if (line.trim() !== "") fleet.received.push(validateEnvelope(JSON.parse(line)));
 							nl = pending.indexOf("\n");
 						}
 					}

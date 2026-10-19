@@ -97,7 +97,11 @@ import {
 	SSE_PING_EVENT,
 	SseRing,
 } from "#lib/wire/sse";
-import { CALLBACK_CONTROL_STREAM_ID, CallbackError } from "#lib/wire/callback-protocol";
+import {
+	CALLBACK_BROWSER_STREAM_PREFIX,
+	CALLBACK_CONTROL_STREAM_ID,
+	CallbackError,
+} from "#lib/wire/callback-protocol";
 import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
 import type { FleetConfig } from "./config";
 import { isJsonRequest } from "./browser-guard";
@@ -196,8 +200,8 @@ const UNKNOWN_COMMAND_MESSAGE = "fleet edge: use spawn/stop/roster";
 /**
  * Browser-command allowlist, checked on the RAW parsed frame before any
  * dispatch: edge-handled commands plus the ClientCommand variants forwarded
- * to the attached daemon. `hello` is gone from the protocol (OMP_PROTO 2:
- * daemon auth is HTTP-level, the bearer header). Anything else is rejected
+ * to the attached daemon. `hello` is gone from the protocol (daemon auth is
+ * HTTP-level, the bearer header). Anything else is rejected
  * with UNKNOWN_COMMAND_MESSAGE. Typed against ClientCommand so a removed
  * variant stops compiling instead of silently broadening the allowlist.
  */
@@ -267,7 +271,6 @@ const SESSION_SCOPED_FRAME_LIST = [
 	"settings_changed",
 	"subagent_lifecycle",
 	"subagent_progress",
-	"subagent_event",
 	"ui_request",
 	// Finding #16: the dialog's settle marker rides the session scope like the
 	// request, so a daemon switch guard applies the same way.
@@ -308,7 +311,6 @@ const EDGE_RING_DELTAS: Record<string, true> = {
 	settings_changed: true,
 	subagent_lifecycle: true,
 	subagent_progress: true,
-	subagent_event: true,
 	ui_request: true,
 	// Finding #16: the dialog's settle marker is ringed like the request, so
 	// a resume replays request → end (dismissed), never a stale dialog.
@@ -1906,7 +1908,7 @@ export class FleetEdge {
 			return;
 		}
 		const connId = randomUUID();
-		const streamId = `browser/${connId}`;
+		const streamId = `${CALLBACK_BROWSER_STREAM_PREFIX}${connId}`;
 		const pipe: CallbackPipeState = {
 			daemonId,
 			connId,
@@ -1968,7 +1970,7 @@ export class FleetEdge {
 		}
 		transport
 			.sendToDaemon(pipe.daemonId, {
-				streamId: `browser/${pipe.connId}`,
+				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
 				kind: "control",
 				payload: {
 					type: "stream_open",
@@ -2000,7 +2002,7 @@ export class FleetEdge {
 					// The daemon dropped frames on ITS outbound buffer and pushes a
 					// fresh snapshot after this marker; mirror the callback pipe's
 					// stream_reset so the client re-primes (never a silent gap).
-					this.#sendDelta(stream, { type: "stream_reset" });
+					this.#sendDelta(stream, { type: "stream_reset", reason: "daemon_resync" });
 				}
 			}
 			return;
@@ -2097,7 +2099,7 @@ export class FleetEdge {
 		// authority, and the daemon GCs orphan streams itself.
 		this.#transport
 			?.sendToDaemon(pipe.daemonId, {
-				streamId: `browser/${pipe.connId}`,
+				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
 				kind: "control",
 				payload: { type: "stream_close" },
 			})
@@ -2175,7 +2177,7 @@ export class FleetEdge {
 			typeof cmd.id === "string" && cmd.id !== "" ? this.#forwardOrigins.get(cmd.id) : undefined;
 		transport
 			.sendToDaemon(pipe.daemonId, {
-				streamId: `browser/${pipe.connId}`,
+				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
 				kind: "command",
 				payload: cmd,
 			})

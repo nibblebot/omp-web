@@ -17,7 +17,7 @@ import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "#lib/wire/sse";
 import type { SessionEntry } from "./session-entry";
 
 // ---------------------------------------------------------------------------
-// SSE delivery (OMP_PROTO 2). Live deltas carry daemon-global seqs
+// SSE delivery. Live deltas carry daemon-global seqs
 // (≥ SSE_DELTA_SEQ_START) and are kept in a bounded ring so a reconnecting
 // stream can resume from its Last-Event-ID. Priming frames and unicast
 // answers are NOT ringed: priming is always re-derived fresh on open, and a
@@ -25,7 +25,7 @@ import type { SessionEntry } from "./session-entry";
 // ---------------------------------------------------------------------------
 
 /**
- * One live GET /events consumer (OMP_PROTO 2 transport). Each stream is a
+ * One live GET /events consumer (agent-driving transport). Each stream is a
  * connection: it primes on open (hello_ok → attached → …), then receives live
  * deltas (daemon-global seqs ≥ SSE_DELTA_SEQ_START) and unicast answers. It is
  * also the per-connection key for pending code inputs and UI requests.
@@ -121,9 +121,6 @@ const RING_DELTAS: Record<string, true> = {
 	settings_changed: true,
 	subagent_lifecycle: true,
 	subagent_progress: true,
-	// #18: subagent_event is NOT ringed; the subagent mirror broadcasts only
-	// lifecycle/progress frames (see the mirror comment below); the raw event
-	// channel was never relayed, so the frame type never reaches broadcastTo.
 	ui_request: true,
 	// Finding #16: a settled dialog must invalidate the ringed ui_request it
 	// answers, so a resume replays request → end (dismissed), never a stale

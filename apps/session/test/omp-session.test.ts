@@ -6,7 +6,7 @@
  * loopback and, wherever the host owns an interface the daemon is reachable on,
  * from that off-loopback address too (the token gate decides from the socket
  * peer address, so only a real peer address exercises its off-loopback half)
- * using the OMP_PROTO 2 transport (GET /events SSE down, POST /command
+ * using the agent-driving transport (GET /events SSE down, POST /command
  * up). No external network, no real model calls; the readiness gate is deferred
  * via the OMP_SESSION_TEST_READY_DELAY_MS test hook instead of racing provider
  * discovery.

@@ -96,7 +96,7 @@ export interface ToolGlobal {
 	sessions: number;
 }
 
-export interface SubagentInfo {
+export interface SubagentFileInfo {
 	/** relative path from sessionsDir */
 	file: string;
 	/** basename, e.g. "NoteFootprintAudit.jsonl" or "__advisor.jsonl" */

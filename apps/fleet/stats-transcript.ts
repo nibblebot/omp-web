@@ -17,7 +17,7 @@ import { decodeFileParam, toRel } from "./stats-paths";
 import { loadJsonl, readRange } from "./stats-jsonl";
 import { sessionsRootReal, isInsideRoot, resolveContained } from "./stats-session-paths";
 import type { AppCtx, Route } from "./stats-types";
-import type { SubagentInfo, TranscriptPage } from "#lib/wire/stats-types";
+import type { SubagentFileInfo, TranscriptPage } from "#lib/wire/stats-types";
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 500;
@@ -77,7 +77,7 @@ const subagentsRoute = (cfg: AppCtx["cfg"]): Route => ({
 
 		const dirRel = rel.slice(0, rel.length - ".jsonl".length);
 		const dirAbs = join(cfg.sessionsDir, dirRel);
-		const subagents: SubagentInfo[] = [];
+		const subagents: SubagentFileInfo[] = [];
 		if (existsSync(dirAbs)) {
 			try {
 				// The walk root itself must stay inside sessionsDir (it could be a

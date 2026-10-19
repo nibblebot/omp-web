@@ -8,7 +8,7 @@
  * snapshot-chunks, a guest prompt landing as a custom_message entry frame,
  * and the stop flow (guest `bye` + web {state:"off"}).
  *
- * The web channel is OMP_PROTO 2 (GET /events SSE down, POST /command up);
+ * The web channel is the agent-driving transport (GET /events SSE down, POST /command up);
  * the guest's relay socket is the collab protocol and stays WebSocket.
  * The subprocess is killed with SIGTERM at the end; the in-process server is
  * NEVER stopped from the test (the daemon subprocess would exit the whole test run).

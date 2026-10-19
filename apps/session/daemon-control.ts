@@ -1,4 +1,5 @@
 import {
+	CALLBACK_BROWSER_STREAM_PREFIX,
 	CONNECTION_MAX_BYTES,
 	ENVELOPE_MAX_BYTES,
 	HEARTBEAT_INTERVAL_MS,
@@ -194,7 +195,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	 * send on a browser stream flips stream_resync, no silent gap ever.
 	 */
 	const emit = (streamId: string, kind: CallbackKind, payload: unknown, record = true): void => {
-		const isBrowser = streamId.startsWith("browser/");
+		const isBrowser = streamId.startsWith(CALLBACK_BROWSER_STREAM_PREFIX);
 		const stream = isBrowser ? streams.get(streamId) : undefined;
 		const isDelta =
 			kind === "frame" &&
@@ -360,7 +361,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	};
 
 	const openStream = (streamId: string, lastSeq?: number): void => {
-		if (stopped || !streamId.startsWith("browser/")) return;
+		if (stopped || !streamId.startsWith(CALLBACK_BROWSER_STREAM_PREFIX)) return;
 		let stream = streams.get(streamId);
 		const newStream = stream === undefined;
 		if (newStream) {
