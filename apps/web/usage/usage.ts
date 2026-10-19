@@ -1,4 +1,4 @@
-import type { UsageLimit } from "@oh-my-pi/pi-ai";
+import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import { formatTokens } from "./context";
 
 /**
@@ -110,4 +110,59 @@ export function resolveUsedFraction(limit: UsageLimit): number | undefined {
 	if (typeof a.remaining === "number" && typeof a.limit === "number" && a.limit > 0)
 		return 1 - a.remaining / a.limit;
 	return undefined;
+}
+
+/** Brand whose logo marks a provider account in the sidebar usage panel. */
+export type UsageBrand = "anthropic" | "openai" | "opencode";
+
+/**
+ * Logo brand for a usage provider id: `anthropic`, the `openai*` family
+ * (`openai-codex`), and the `opencode*` family (`opencode-go`). Undefined for
+ * any other provider, which renders a lettered fallback.
+ */
+export function usageBrand(provider: string): UsageBrand | undefined {
+	if (provider === "anthropic") return "anthropic";
+	if (provider === "openai" || provider.startsWith("openai-")) return "openai";
+	if (provider === "opencode" || provider.startsWith("opencode-")) return "opencode";
+	return undefined;
+}
+
+const MINUTE_MS = 60_000;
+
+/**
+ * Time left until a window resets, floored, two units at most: "3d 4h",
+ * "1h 35m", "12m", "<1m"; "now" once the reset time has passed (the report is
+ * older than the window).
+ */
+export function formatTimeRemaining(resetsAt: number, nowMs: number): string {
+	const left = resetsAt - nowMs;
+	if (left <= 0) return "now";
+	const minutes = Math.floor(left / MINUTE_MS);
+	if (minutes < 1) return "<1m";
+	const d = Math.floor(minutes / 1440);
+	const h = Math.floor((minutes % 1440) / 60);
+	const m = minutes % 60;
+	if (d > 0) return `${d}d ${h}h`;
+	if (h > 0) return `${h}h ${m}m`;
+	return `${m}m`;
+}
+
+/** Hover text for one account: provider id plus the account email or id when reported. */
+export function usageAccountTitle(report: UsageReport): string {
+	const meta = report.metadata ?? {};
+	const who = [meta.email, meta.accountId].find(
+		(v): v is string => typeof v === "string" && v !== "",
+	);
+	return who ? `${report.provider} · ${who}` : report.provider;
+}
+
+/** Hover text for one limit bar: its label, percent used, and local reset time. */
+export function usageLimitTitle(limit: UsageLimit): string {
+	const frac = resolveUsedFraction(limit);
+	const parts = [limit.label];
+	if (frac !== undefined) parts.push(`${Math.round(frac * 100)}% used`);
+	const resetsAt = limit.window?.resetsAt;
+	if (resetsAt !== undefined)
+		parts.push(`${limit.window?.resetLabel ?? "resets"} ${new Date(resetsAt).toLocaleString()}`);
+	return parts.join(" · ");
 }

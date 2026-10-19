@@ -6,6 +6,8 @@ import {
 	formatTokensPerSec,
 	formatUnitAmount,
 	formatUsageRow,
+	formatTimeRemaining,
+	usageBrand,
 	type UsageLike,
 } from "../../usage/usage";
 
@@ -104,6 +106,36 @@ describe("formatUnitAmount", () => {
 	test("missing values render as a dash", () => {
 		expect(formatUnitAmount({ unit: "tokens" })).toBe("-");
 		expect(formatUnitAmount({ used: 10, unit: "usd" })).toBe("10");
+	});
+});
+
+describe("formatTimeRemaining", () => {
+	const now = Date.parse("2026-10-09T10:00:00Z");
+	const MIN = 60_000;
+
+	test("floors to the two largest units", () => {
+		expect(formatTimeRemaining(now + 3 * 1440 * MIN + 4 * 60 * MIN + 59 * MIN, now)).toBe("3d 4h");
+		expect(formatTimeRemaining(now + 95 * MIN + 59_000, now)).toBe("1h 35m");
+		expect(formatTimeRemaining(now + 60 * MIN, now)).toBe("1h 0m");
+		expect(formatTimeRemaining(now + 1440 * MIN, now)).toBe("1d 0h");
+		expect(formatTimeRemaining(now + 59 * MIN + 59_000, now)).toBe("59m");
+	});
+
+	test("under a minute and past resets", () => {
+		expect(formatTimeRemaining(now + 59_999, now)).toBe("<1m");
+		expect(formatTimeRemaining(now, now)).toBe("now");
+		expect(formatTimeRemaining(now - 5 * MIN, now)).toBe("now");
+	});
+});
+
+describe("usageBrand", () => {
+	test("maps provider families to logos, others to none", () => {
+		expect(usageBrand("anthropic")).toBe("anthropic");
+		expect(usageBrand("openai-codex")).toBe("openai");
+		expect(usageBrand("openai")).toBe("openai");
+		expect(usageBrand("opencode-go")).toBe("opencode");
+		expect(usageBrand("openrouter")).toBeUndefined();
+		expect(usageBrand("github-copilot")).toBeUndefined();
 	});
 });
 

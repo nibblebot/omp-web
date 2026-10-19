@@ -53,6 +53,9 @@ import {
 	WarningIcon,
 	GripVerticalIcon,
 	PaperclipIcon,
+	AnthropicLogoIcon,
+	OpenAILogoIcon,
+	OpenCodeLogoIcon,
 } from "../../../web/components/ui/icons";
 import { defineStory } from "../../registry";
 
@@ -109,6 +112,9 @@ const ICONS: Record<string, Component<IconProps>> = {
 	GripVerticalIcon,
 	PaperclipIcon,
 	OmpLogoIcon,
+	AnthropicLogoIcon,
+	OpenAILogoIcon,
+	OpenCodeLogoIcon,
 };
 
 const ICON_FILE = "apps/web/components/ui/icons.tsx";

@@ -182,34 +182,45 @@
 	color: var(--muted);
 	font-size: var(--fs-micro);
 }
-.sidebar-usage-provider {
-	color: var(--muted);
+/* One provider account: a fixed-size logo (the height of a three-bar stack,
+   whatever the account's bar count), then a grid whose rows are a bar and the
+   time left in its window. The bar stack starts at the logo's top edge. */
+.sidebar-usage-account {
+	--usage-row: 6px;
+	--usage-gap: var(--space-3);
+	display: flex;
+	align-items: flex-start;
+	gap: var(--space-4);
+	margin-top: var(--space-4);
 	font-size: var(--fs-micro);
-	margin-top: var(--space-1);
 }
-.sidebar-usage-row {
-	display: grid;
-	grid-template-columns: 1fr auto;
-	align-items: center;
-	column-gap: var(--space-3);
-	row-gap: var(--space-1);
-	font-size: var(--fs-micro);
-}
-.sidebar-usage-label {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.sidebar-usage-window {
-	color: var(--muted);
-}
-.sidebar-usage-pct {
-	color: var(--muted);
+.sidebar-usage-logo {
 	flex: none;
+	width: calc(3 * var(--usage-row) + 2 * var(--usage-gap));
+	height: calc(3 * var(--usage-row) + 2 * var(--usage-gap));
+	color: var(--text);
+}
+.sidebar-usage-logo--initial {
+	display: grid;
+	place-items: center;
+	border-radius: var(--r-xs);
+	background: var(--panel-2);
+	color: var(--muted);
+	font-size: calc(2 * var(--usage-row) + 2 * var(--usage-gap));
+	line-height: 1;
+}
+.sidebar-usage-bars {
+	flex: 1;
+	min-width: 0;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(3.5em, auto);
+	grid-auto-rows: var(--usage-row);
+	align-items: center;
+	column-gap: var(--space-4);
+	row-gap: var(--usage-gap);
 }
 .sidebar-usage-bar {
-	grid-column: 1 / -1;
-	height: 3px;
+	height: 100%;
 	border-radius: var(--r-xs);
 	background: var(--border);
 	overflow: hidden;
@@ -218,6 +229,19 @@
 	height: 100%;
 	background: var(--accent);
 	border-radius: var(--r-xs);
+}
+.sidebar-usage-bar[data-status="warning"] .sidebar-usage-bar-fill {
+	background: var(--warning);
+}
+.sidebar-usage-bar[data-status="exhausted"] .sidebar-usage-bar-fill {
+	background: var(--error);
+}
+.sidebar-usage-reset {
+	color: var(--muted);
+	line-height: var(--usage-row);
+	text-align: right;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
 }
 .sidebar-row {
 	display: flex;

@@ -471,41 +471,118 @@ export const rosterProviderProfiles: PublicProviderProfile[] = [
 	},
 ];
 
-/** UsageReport list: SidebarUsage limit rows, with a warning and an exhausted window. */
+/** Reset times count from page load, so the sidebar's time-left labels read as live countdowns. */
+const USAGE_NOW = Date.now();
+
+/** UsageReport list: one Anthropic, OpenAI Codex, and OpenCode Go account each, with a warning and an exhausted window. */
 export const rosterUsageReports: UsageReport[] = [
 	{
 		provider: "anthropic",
-		fetchedAt: T0,
+		fetchedAt: USAGE_NOW,
 		limits: [
 			{
 				id: "anthropic:5h",
-				label: "Session",
-				scope: { provider: "anthropic", windowId: "5h" },
-				window: { id: "5h", label: "5h", durationMs: 5 * 60 * MIN, resetsAt: T0 + 95 * MIN },
+				label: "Claude 5 Hour",
+				scope: { provider: "anthropic", windowId: "5h", shared: true },
+				window: {
+					id: "5h",
+					label: "5 Hour",
+					durationMs: 5 * 60 * MIN,
+					resetsAt: USAGE_NOW + 95 * MIN,
+				},
 				amount: { unit: "percent", usedFraction: 0.63 },
 				status: "ok",
 			},
 			{
 				id: "anthropic:7d",
-				label: "Weekly",
-				scope: { provider: "anthropic", windowId: "7d" },
-				window: { id: "7d", label: "7d", durationMs: 7 * DAY, resetsAt: T0 + 3 * DAY },
+				label: "Claude 7 Day",
+				scope: { provider: "anthropic", windowId: "7d", shared: true },
+				window: {
+					id: "7d",
+					label: "7 Day",
+					durationMs: 7 * DAY,
+					resetsAt: USAGE_NOW + 3 * DAY + 4 * 60 * MIN,
+				},
 				amount: { unit: "percent", usedFraction: 0.82 },
 				status: "warning",
+			},
+			{
+				id: "anthropic:7d:fable",
+				label: "Claude 7 Day (Fable)",
+				scope: { provider: "anthropic", windowId: "7d", tier: "fable" },
+				window: {
+					id: "7d",
+					label: "7 Day",
+					durationMs: 7 * DAY,
+					resetsAt: USAGE_NOW + 3 * DAY + 4 * 60 * MIN,
+				},
+				amount: { unit: "percent", usedFraction: 0.27 },
+				status: "ok",
+			},
+		],
+		metadata: { email: "joshua@example.com" },
+	},
+	{
+		provider: "openai-codex",
+		fetchedAt: USAGE_NOW,
+		limits: [
+			{
+				id: "codex:5h",
+				label: "Codex 5 Hour",
+				scope: { provider: "openai-codex", windowId: "5h", shared: true },
+				window: {
+					id: "5h",
+					label: "5 Hour",
+					durationMs: 5 * 60 * MIN,
+					resetsAt: USAGE_NOW + 40 * MIN,
+				},
+				amount: { unit: "requests", used: 150, limit: 150 },
+				status: "exhausted",
+			},
+			{
+				id: "codex:7d",
+				label: "Codex 7 Day",
+				scope: { provider: "openai-codex", windowId: "7d", shared: true },
+				window: {
+					id: "7d",
+					label: "7 Day",
+					durationMs: 7 * DAY,
+					resetsAt: USAGE_NOW + 5 * DAY + 11 * 60 * MIN,
+				},
+				amount: { unit: "percent", usedFraction: 0.46 },
+				status: "ok",
 			},
 		],
 	},
 	{
-		provider: "openai-codex",
-		fetchedAt: T0,
+		provider: "opencode-go",
+		fetchedAt: USAGE_NOW,
 		limits: [
 			{
-				id: "codex:5h",
-				label: "Codex",
-				scope: { provider: "openai-codex", windowId: "5h" },
-				window: { id: "5h", label: "5h", durationMs: 5 * 60 * MIN, resetsAt: T0 + 40 * MIN },
-				amount: { unit: "requests", used: 150, limit: 150 },
-				status: "exhausted",
+				id: "rolling-5h",
+				label: "Rolling 5 Hour",
+				scope: { provider: "opencode-go", windowId: "5h", shared: true },
+				window: {
+					id: "5h",
+					label: "5 Hour",
+					durationMs: 5 * 60 * MIN,
+					resetsAt: USAGE_NOW + 3 * 60 * MIN + 12 * MIN,
+				},
+				amount: { unit: "percent", usedFraction: 0.12 },
+				status: "ok",
+			},
+			{
+				id: "weekly",
+				label: "Weekly",
+				scope: { provider: "opencode-go", windowId: "7d", shared: true },
+				window: {
+					id: "7d",
+					label: "7 Day",
+					durationMs: 7 * DAY,
+					resetsAt: USAGE_NOW + 6 * DAY + 2 * 60 * MIN,
+				},
+				amount: { unit: "percent", usedFraction: 0.35 },
+				status: "ok",
 			},
 		],
 	},
