@@ -419,6 +419,36 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 	);
 
 	test(
+		"concurrent starts on one stopped clone serialize: one generation, both succeed",
+		async () => {
+			const { server, repoDir } = await bootFleet({
+				runningWhileLive: true,
+				stopObserved: "stopped",
+				deleteFailures: 0,
+			});
+			try {
+				const daemonId = await createClone(server, repoDir, "concurrent-start");
+				const [a, b] = await Promise.all([
+					postJson(server.port, "/ctl/start", { daemonId }),
+					postJson(server.port, "/ctl/start", { daemonId }),
+				]);
+				expect(a.status).toBe(200);
+				expect(b.status).toBe(200);
+				// Unserialized, both starts computed generation 1 and both
+				// enrolled; the loser's enrollment was then revoked. Serialized,
+				// the second start reattaches to the first generation.
+				const entry = server.registry.get(daemonId)!;
+				expect(entry.workspace?.authorizedGeneration).toBe(1);
+				expect(entry.workspace?.enrollment?.generation).toBe(1);
+				expect(entry.workspace?.desiredState).toBe("running");
+			} finally {
+				await server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
 		"parallel deletes serialize: exactly one destroy, the loser refused",
 		async () => {
 			const { server, cloneRoot, repoDir } = await bootFleet({

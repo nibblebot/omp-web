@@ -22,9 +22,12 @@
  *
  * Fill-missing-only rule: the store may LAG the volume (a stop can leave an
  * unacknowledged tail on the volume that never streamed). This helper never
- * overwrites an existing local file; the volume is the fresher truth and
- * the daemon's tailer re-streams any local tail once booted. Only truly
- * cold/missing files are filled from the store.
+ * overwrites a local file at least as long as the store copy; the volume is
+ * the fresher truth and the daemon's tailer re-streams any local tail once
+ * booted. A cold file, or a local file shorter than the store copy (a
+ * truncated fill), is (re)filled from the store, atomically: the copy goes to
+ * `<target>.part` and is renamed into place, so a crash mid-copy never leaves
+ * a truncated transcript at the final path.
  *
  * Safety: every relpath is validated with the frozen manifest predicate
  * (isNormalizedPosixRelativePath: no `..`, no absolute, no `.` segments)
@@ -37,7 +40,8 @@
  * or hostile relpaths. No new error names.
  */
 
-import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
+import { copyFile, mkdir, rename, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { isNormalizedPosixRelativePath } from "#lib/session-files/archive-manifest";
 import { isPathUnder } from "./worktrees";
@@ -68,7 +72,8 @@ export interface WakeMaterializeStore {
 		}>;
 		mainRelpath?: string;
 	} | null;
-	readStored(workspaceId: string, sessionId: string, relpath: string): Buffer | null;
+	/** Absolute store path of one stored file, or null when absent/unsafe. */
+	storedFilePath(workspaceId: string, sessionId: string, relpath: string): string | null;
 	listStoredSessions?(workspaceId: string): Array<{ sessionId: string; mtimeMs: number }>;
 }
 
@@ -110,17 +115,17 @@ export interface MaterializeSessionOutcome {
 
 /**
  * Fill cold/missing stored lineage files of one session into the volume
- * sessions dir. Never overwrites an existing local file. Returns the write
- * counts and whether the main file is present. Throws WakeMaterializeError
- * for an unknown session (`unavailable`) or a hostile stored relpath
- * (`invalid_request`, aborting the fill).
+ * sessions dir. Returns the write counts and whether the main file is
+ * present. Rejects with WakeMaterializeError for an unknown session
+ * (`unavailable`) or a hostile stored relpath (`invalid_request`, aborting
+ * the fill).
  */
-export function materializeMissingSessionFiles(opts: {
+export async function materializeMissingSessionFiles(opts: {
 	store: WakeMaterializeStore;
 	workspaceId: string;
 	sessionId: string;
 	sessionsDir: string;
-}): MaterializeSessionOutcome {
+}): Promise<MaterializeSessionOutcome> {
 	const { store, workspaceId, sessionId, sessionsDir } = opts;
 	assertSessionId(workspaceId);
 	assertSessionId(sessionId);
@@ -132,7 +137,7 @@ export function materializeMissingSessionFiles(opts: {
 			`no stored transcripts for session ${sessionId} in workspace ${workspaceId}`,
 		);
 	}
-	mkdirSync(sessionsDir, { recursive: true });
+	await mkdir(sessionsDir, { recursive: true });
 
 	let written = 0;
 	let bytes = 0;
@@ -146,13 +151,28 @@ export function materializeMissingSessionFiles(opts: {
 		if (!isPathUnder(target, sessionsDir)) {
 			throw invalid(`stored relpath escapes the sessions dir: ${relpath}`, relpath);
 		}
-		if (localFileExists(sessionsDir, relpath)) continue; // Never clobber the volume.
-		const data = store.readStored(workspaceId, sessionId, relpath);
-		if (data === null) continue; // Vanished between lineage and read.
-		mkdirSync(dirname(target), { recursive: true });
-		writeFileSync(target, data);
+		const source = store.storedFilePath(workspaceId, sessionId, relpath);
+		if (source === null) continue; // Vanished between lineage and read.
+		const sourceSize = statSync(source, { throwIfNoEntry: false })?.size ?? 0;
+		if (sourceSize === 0) continue;
+		const local = statSync(target, { throwIfNoEntry: false });
+		if (local?.isFile() && local.size >= sourceSize) continue; // Warm: never clobber.
+		const part = `${target}.part`;
+		await mkdir(dirname(target), { recursive: true });
+		await rm(part, { force: true }); // Debris of an interrupted fill.
+		try {
+			await copyFile(source, part);
+			await rename(part, target);
+		} catch (err) {
+			await rm(part, { force: true });
+			throw new WakeMaterializeError(
+				"unavailable",
+				`cannot write ${relpath} into the volume: ${err instanceof Error ? err.message : String(err)}`,
+				relpath,
+			);
+		}
 		written += 1;
-		bytes += data.length;
+		bytes += sourceSize;
 	}
 
 	const mainPresent =

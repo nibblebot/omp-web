@@ -439,11 +439,27 @@ export class WorkspaceLifecycle {
 	readonly #deps: WorkspaceLifecycleDeps;
 	/** Workspaces with a verified delete gate in flight (serializes DELETEs). */
 	readonly #deleting = new Set<string>();
+	/** Per-daemon FIFO tails: lifecycle ops on one clone run strictly in order. */
+	readonly #queues = new Map<string, Promise<void>>();
 	/** Bounded pair-readiness watchers (setTimeout id per workspace). */
 	readonly #pairWatchers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	constructor(deps: WorkspaceLifecycleDeps) {
 		this.#deps = deps;
+	}
+
+	/** Runs `fn` after every earlier lifecycle op queued for this daemon. */
+	#serialized<T>(daemonId: string, fn: () => Promise<T>): Promise<T> {
+		const run = (this.#queues.get(daemonId) ?? Promise.resolve()).then(fn);
+		const tail = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		this.#queues.set(daemonId, tail);
+		void tail.then(() => {
+			if (this.#queues.get(daemonId) === tail) this.#queues.delete(daemonId);
+		});
+		return run;
 	}
 
 	// ------------------------------------------------------------------
@@ -706,6 +722,10 @@ export class WorkspaceLifecycle {
 	 * exists nowhere is a typed `unavailable`, never a silent fresh boot.
 	 */
 	async ensureCloneRunning(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void> {
+		await this.#serialized(daemonId, () => this.#ensureRunning(daemonId, opts));
+	}
+
+	async #ensureRunning(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void> {
 		const entry = this.#requireClone(daemonId, "start");
 		if (entry.workspace?.deletion?.state !== undefined) {
 			throw new CloneLifecycleError(
@@ -719,6 +739,10 @@ export class WorkspaceLifecycle {
 	/** Stop: proof-bearing provider stop, desiredState stopped, enrollment
 	 *  revoked. Preserves checkout + session logs (never deletes). */
 	async stopClone(daemonId: string): Promise<void> {
+		await this.#serialized(daemonId, () => this.#stopClone(daemonId));
+	}
+
+	async #stopClone(daemonId: string): Promise<void> {
 		const entry = this.#requireClone(daemonId, "stop");
 		const record = entry.workspace;
 		if (record?.deletion?.state !== undefined) {
@@ -793,75 +817,82 @@ export class WorkspaceLifecycle {
 	async reconcile(): Promise<void> {
 		for (const entry of this.#deps.registry.list()) {
 			if (entry.workspace?.kind !== "clone") continue;
-			const record = entry.workspace;
-			// A persisted "deleting" state describes an in-flight gate of a
-			// previous fleet process; nothing is running now, so it
-			// reconciles to delete-pending-retry (retry by deleting again).
-			if (record.deletion?.state === "deleting") {
-				this.#deps.registry.setWorkspaceDeletion(entry.daemonId, {
-					state: "delete-pending-retry",
-					requestedAt: record.deletion.requestedAt,
-					error: {
-						code: "retryable",
-						message: "deletion was interrupted before verification completed; retry the delete",
-					},
-				});
-				continue;
-			}
-			if (record.providerHandle === undefined && record.authorizedGeneration === undefined) {
-				continue; // Never started; nothing to inspect or reattach.
-			}
-			const desired = record.desiredState;
-			let response: ProviderOkResponse;
+			await this.#serialized(entry.daemonId, () => this.#reconcileOne(entry.daemonId));
+		}
+	}
+
+	/** One clone's boot reconcile; runs under its per-daemon queue. */
+	async #reconcileOne(daemonId: string): Promise<void> {
+		const entry = this.#deps.registry.get(daemonId);
+		if (entry?.workspace?.kind !== "clone") return;
+		const record = entry.workspace;
+		// A persisted "deleting" state describes an in-flight gate of a
+		// previous fleet process; nothing is running now, so it
+		// reconciles to delete-pending-retry (retry by deleting again).
+		if (record.deletion?.state === "deleting") {
+			this.#deps.registry.setWorkspaceDeletion(entry.daemonId, {
+				state: "delete-pending-retry",
+				requestedAt: record.deletion.requestedAt,
+				error: {
+					code: "retryable",
+					message: "deletion was interrupted before verification completed; retry the delete",
+				},
+			});
+			return;
+		}
+		if (record.providerHandle === undefined && record.authorizedGeneration === undefined) {
+			return; // Never started; nothing to inspect or reattach.
+		}
+		const desired = record.desiredState;
+		let response: ProviderOkResponse;
+		try {
+			// #runCloneOp throws a typed CloneLifecycleError on provider
+			// failure; an ok response here is a trustworthy observation.
+			response = await this.#runCloneOp(entry.daemonId, "inspect", this.#handleOf(entry));
+		} catch (err) {
+			this.#log(
+				"warn",
+				`clone boot reconcile: inspect failed for ${entry.daemonId}: ${err instanceof Error ? err.message : String(err)}`,
+				entry.daemonId,
+			);
+			return;
+		}
+		if (response.observed === "running") {
+			// Reattach: same generation, refresh handle, surface liveness.
+			this.#deps.registry.updateWorkspace(entry.daemonId, { providerHandle: response.handle });
+			this.#deps.registry.setStatus(entry.daemonId, "ready");
+			this.#setStage(entry.daemonId, "ready");
+			this.#log(
+				"info",
+				`clone boot reconcile: ${entry.daemonId} reattached (running)`,
+				entry.daemonId,
+			);
+			return;
+		}
+		// stopped | missing: desired state decides.
+		if (desired === "running") {
 			try {
-				// #runCloneOp throws a typed CloneLifecycleError on provider
-				// failure; an ok response here is a trustworthy observation.
-				response = await this.#runCloneOp(entry.daemonId, "inspect", this.#handleOf(entry));
+				await this.#ensure(this.#deps.registry.get(entry.daemonId) ?? entry, {
+					firstStart: false,
+				});
+				this.#log(
+					"info",
+					`clone boot reconcile: ${entry.daemonId} recreated (${response.observed} → ensure-running)`,
+					entry.daemonId,
+				);
 			} catch (err) {
 				this.#log(
 					"warn",
-					`clone boot reconcile: inspect failed for ${entry.daemonId}: ${err instanceof Error ? err.message : String(err)}`,
-					entry.daemonId,
-				);
-				continue;
-			}
-			if (response.observed === "running") {
-				// Reattach: same generation, refresh handle, surface liveness.
-				this.#deps.registry.updateWorkspace(entry.daemonId, { providerHandle: response.handle });
-				this.#deps.registry.setStatus(entry.daemonId, "ready");
-				this.#setStage(entry.daemonId, "ready");
-				this.#log(
-					"info",
-					`clone boot reconcile: ${entry.daemonId} reattached (running)`,
-					entry.daemonId,
-				);
-				continue;
-			}
-			// stopped | missing: desired state decides.
-			if (desired === "running") {
-				try {
-					await this.#ensure(this.#deps.registry.get(entry.daemonId) ?? entry, {
-						firstStart: false,
-					});
-					this.#log(
-						"info",
-						`clone boot reconcile: ${entry.daemonId} recreated (${response.observed} → ensure-running)`,
-						entry.daemonId,
-					);
-				} catch (err) {
-					this.#log(
-						"warn",
-						`clone boot reconcile: ensure-running failed for ${entry.daemonId}: ${err instanceof Error ? err.message : String(err)}`,
-						entry.daemonId,
-					);
-				}
-			} else {
-				this.#log(
-					"info",
-					`clone boot reconcile: ${entry.daemonId} left ${response.observed} (desired stopped)`,
+					`clone boot reconcile: ensure-running failed for ${entry.daemonId}: ${err instanceof Error ? err.message : String(err)}`,
 					entry.daemonId,
 				);
 			}
+		} else {
+			this.#log(
+				"info",
+				`clone boot reconcile: ${entry.daemonId} left ${response.observed} (desired stopped)`,
+				entry.daemonId,
+			);
 		}
 	}
 
@@ -1083,9 +1114,18 @@ export class WorkspaceLifecycle {
 				`deletion already in progress for workspace ${daemonId}`,
 			);
 		}
+		this.#deleting.add(daemonId);
+		try {
+			return await this.#serialized(daemonId, () => this.#deleteAdmitted(daemonId));
+		} finally {
+			this.#deleting.delete(daemonId);
+		}
+	}
 
+	/** Admission + gate for one clone, run under its per-daemon queue. */
+	async #deleteAdmitted(daemonId: string): Promise<{ removed: string; verified: string[] }> {
 		// Reconcile a persisted "deleting" from a crashed previous fleet.
-		let entry = this.#deps.registry.get(daemonId) ?? entry0;
+		let entry = this.#require(daemonId);
 		const previous = entry.workspace?.deletion;
 		if (previous?.state === "deleting") {
 			this.#deps.registry.setWorkspaceDeletion(daemonId, {
@@ -1116,12 +1156,7 @@ export class WorkspaceLifecycle {
 			);
 		}
 
-		this.#deleting.add(daemonId);
-		try {
-			return await this.#gate(daemonId);
-		} finally {
-			this.#deleting.delete(daemonId);
-		}
+		return await this.#gate(daemonId);
 	}
 
 	/** The gate body (runs under the #deleting serialization). */
@@ -1770,7 +1805,7 @@ export class WorkspaceLifecycle {
 
 		if (store !== null) {
 			try {
-				materializeMissingSessionFiles({
+				await materializeMissingSessionFiles({
 					store,
 					workspaceId: daemonId,
 					sessionId: target,

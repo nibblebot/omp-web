@@ -1959,7 +1959,7 @@ class FleetServerImpl implements FleetServer {
 		const sessionsDir = join(volumeRoot, ".home", "agent", "sessions");
 		let materialized = 0;
 		try {
-			const outcome = materializeMissingSessionFiles({
+			const outcome = await materializeMissingSessionFiles({
 				store,
 				workspaceId,
 				sessionId,

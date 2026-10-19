@@ -104,7 +104,7 @@ function seedStore(rootDir: string, extra = ""): FleetLogStore {
 // ---------------------------------------------------------------------------
 
 describe("fleet/wake-materialize", () => {
-	test("fill-missing-only: writes cold files, NEVER clobbers newer volume bytes", () => {
+	test("fill-missing-only: writes cold files, NEVER clobbers newer volume bytes", async () => {
 		const rootDir = join(fleetPaths("omp-wake-fill-").tmp, "logs");
 		const store = seedStore(rootDir);
 		const volume = join(rootDir, "..", "volume", ".home", "agent", "sessions");
@@ -115,7 +115,7 @@ describe("fleet/wake-materialize", () => {
 			'{"type":"message","message":{"role":"user","content":"newer tail"}}\n';
 		writeFileSync(join(volume, MAIN_RELPATH), newer);
 
-		const out = materializeMissingSessionFiles({
+		const out = await materializeMissingSessionFiles({
 			store,
 			workspaceId: WS,
 			sessionId: SESSION,
@@ -127,13 +127,13 @@ describe("fleet/wake-materialize", () => {
 		expect(out.written).toBe(0);
 	});
 
-	test("cold volume: fills the stored main from the store", () => {
+	test("cold volume: fills the stored main from the store", async () => {
 		const paths = fleetPaths("omp-wake-cold-");
 		const store = seedStore(join(paths.tmp, "logs"));
 		const volume = join(paths.tmp, "volume", ".home", "agent", "sessions");
 		mkdirSync(volume, { recursive: true });
 
-		const out = materializeMissingSessionFiles({
+		const out = await materializeMissingSessionFiles({
 			store,
 			workspaceId: WS,
 			sessionId: SESSION,
@@ -144,7 +144,28 @@ describe("fleet/wake-materialize", () => {
 		expect(readFileSync(join(volume, MAIN_RELPATH), "utf8")).toBe(sessionBody(SESSION));
 	});
 
-	test("hostile stored relpath aborts typed invalid_request", () => {
+	test("truncated local main is re-filled atomically; no .part debris remains", async () => {
+		const paths = fleetPaths("omp-wake-truncated-");
+		const store = seedStore(join(paths.tmp, "logs"));
+		const volume = join(paths.tmp, "volume", ".home", "agent", "sessions");
+		mkdirSync(volume, { recursive: true });
+		// A pre-atomic fill that died mid-write leaves a truncated main at the
+		// final path plus `.part` debris; the fill must replace both correctly.
+		writeFileSync(join(volume, MAIN_RELPATH), sessionBody(SESSION).slice(0, 10));
+		writeFileSync(join(volume, `${MAIN_RELPATH}.part`), "stale debris");
+
+		const out = await materializeMissingSessionFiles({
+			store,
+			workspaceId: WS,
+			sessionId: SESSION,
+			sessionsDir: volume,
+		});
+		expect(out.written).toBe(1);
+		expect(readFileSync(join(volume, MAIN_RELPATH), "utf8")).toBe(sessionBody(SESSION));
+		expect(existsSync(join(volume, `${MAIN_RELPATH}.part`))).toBe(false);
+	});
+
+	test("hostile stored relpath aborts typed invalid_request", async () => {
 		const paths = fleetPaths("omp-wake-hostile-");
 		const rootDir = join(paths.tmp, "logs");
 		const store = new FleetLogStore({ rootDir });
@@ -165,51 +186,35 @@ describe("fleet/wake-materialize", () => {
 							mainRelpath: MAIN_RELPATH,
 						}
 					: null,
-			readStored: (w: string, s: string, rel: string) =>
-				Buffer.from(rel === MAIN_RELPATH ? sessionBody(SESSION) : "pwn", "utf8"),
+			storedFilePath: (w: string, s: string, rel: string) => store.storedFilePath(w, s, rel),
 		};
 		const volume = join(paths.tmp, "volume", "sessions");
 		mkdirSync(volume, { recursive: true });
-		expect(() =>
-			materializeMissingSessionFiles({
-				store: hostile,
-				workspaceId: WS,
-				sessionId: SESSION,
-				sessionsDir: volume,
-			}),
-		).toThrow(WakeMaterializeError);
-		try {
-			materializeMissingSessionFiles({
-				store: hostile,
-				workspaceId: WS,
-				sessionId: SESSION,
-				sessionsDir: volume,
-			});
-		} catch (err) {
-			expect(err).toBeInstanceOf(WakeMaterializeError);
-			expect((err as WakeMaterializeError).code).toBe("invalid_request");
-		}
+		const hostileFill = materializeMissingSessionFiles({
+			store: hostile,
+			workspaceId: WS,
+			sessionId: SESSION,
+			sessionsDir: volume,
+		});
+		await expect(hostileFill).rejects.toBeInstanceOf(WakeMaterializeError);
+		await expect(hostileFill).rejects.toMatchObject({ code: "invalid_request" });
 		// The escape file never landed.
 		expect(existsSync(join(volume, "..", "escape.jsonl"))).toBe(false);
 	});
 
-	test("unknown session → typed unavailable", () => {
+	test("unknown session → typed unavailable", async () => {
 		const paths = fleetPaths("omp-wake-missing-");
 		const store = new FleetLogStore({ rootDir: join(paths.tmp, "logs") });
 		const volume = join(paths.tmp, "sessions");
 		mkdirSync(volume, { recursive: true });
-		try {
+		await expect(
 			materializeMissingSessionFiles({
 				store,
 				workspaceId: WS,
 				sessionId: "nope",
 				sessionsDir: volume,
-			});
-			throw new Error("expected WakeMaterializeError");
-		} catch (err) {
-			expect(err).toBeInstanceOf(WakeMaterializeError);
-			expect((err as WakeMaterializeError).code).toBe("unavailable");
-		}
+			}),
+		).rejects.toMatchObject({ code: "unavailable" });
 	});
 
 	test("resolveMainSessionFile finds depth-1 and depth-2 mains; pickNewest union", () => {
