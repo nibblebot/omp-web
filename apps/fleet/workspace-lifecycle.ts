@@ -18,8 +18,8 @@
  * - Every destructive transition runs the verify-at-deletion gate
  *   (admission → quiesce with proven stop → Git guard → store verification
  *   against the workspace volume's own session tree → read-only flip →
- *   provider deletion → volume deletion → roster removal). `removeClone`
- *   routes through the SAME gate; no kind-blind roster eviction can bypass
+ *   provider deletion → volume deletion → roster removal). `deleteClone`
+ *   is the only clone-removal path; no kind-blind roster eviction can bypass
  *   it.
  * - Stop preserves checkout and session logs; only the verified gate
  *   deletes. Idle handling stays fleet-owned (P6.4): this service never
@@ -352,7 +352,7 @@ async function resolveCloneSource(
 
 /**
  * Clone workspace lifecycle owner. Conforms to Transport's `EdgeLifecycleHooks`
- * (createClone / ensureCloneRunning / stopClone / deleteClone / removeClone);
+ * (createClone / ensureCloneRunning / stopClone / deleteClone);
  * richer method returns are assignable to the void-hook signatures.
  */
 export class WorkspaceLifecycle {
@@ -706,15 +706,9 @@ export class WorkspaceLifecycle {
 		);
 	}
 
-	/** Verified deletion (P7.3/P7.5). `removeClone` is an alias: clone
-	 *  removal NEVER bypasses the gate. Returns the verified session list. */
+	/** Verified deletion (P7.3/P7.5): the only clone-removal path. Returns the verified session list. */
 	async deleteClone(daemonId: string): Promise<{ removed: string; verified: string[] }> {
 		return await this.#deleteGate(daemonId);
-	}
-
-	/** Clone-safe remove: routes through the SAME verified gate. */
-	async removeClone(daemonId: string): Promise<void> {
-		await this.#deleteGate(daemonId);
 	}
 
 	// ------------------------------------------------------------------
@@ -996,8 +990,8 @@ export class WorkspaceLifecycle {
 	// ------------------------------------------------------------------
 
 	/**
-	 * P7.3/P7.5 ordered gate for clone workspaces (shared by deleteClone and
-	 * removeClone, removal cannot bypass it):
+	 * P7.3/P7.5 ordered gate for clone workspaces (behind deleteClone, the sole
+	 * clone-removal path; removal cannot bypass it):
 	 *   1. serialize concurrent DELETEs + reconcile a persisted "deleting"
 	 *      from a previous fleet process to delete-pending-retry;
 	 *   2. admission: refuse while compute is live or its pair is live

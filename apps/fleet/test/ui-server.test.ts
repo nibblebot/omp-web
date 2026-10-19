@@ -18,7 +18,7 @@ import { Registry } from "../registry";
 import type { FleetServer } from "../server";
 import { SpawnSupervisor } from "../supervisor";
 import { startUiServer, type UiServer } from "../ui-server";
-import { cleanupTempDirs, serveEdge, testEviction } from "./edge.testkit";
+import { cleanupTempDirs, serveEdge, testEviction, testWaker } from "./edge.testkit";
 import { fleetPaths, startTestFleet, waitFor } from "./server.testkit";
 
 afterAll(cleanupTempDirs);
@@ -62,6 +62,7 @@ async function mountEdge(tmp: string, serveUi?: boolean) {
 		registry,
 		supervisor,
 		eviction: testEviction(registry, supervisor),
+		waker: testWaker(registry, supervisor, undefined),
 		config,
 		eventLog: new FleetEventLog(),
 		fleet: { port: 0, startedAt: Date.now(), statePath, configPath: null, bind: "127.0.0.1" },

@@ -23,6 +23,7 @@ import { DaemonTransportRegistry } from "../daemon-transport";
 import { fanOut, promptEntry, type FanoutDeps } from "../fanout";
 import { Registry, type RegistryEntry } from "../registry";
 import { SpawnSupervisor } from "../supervisor";
+import { SessionWaker } from "../session-waker";
 import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
 import { sleep, waitFor } from "./edge.testkit";
 
@@ -32,6 +33,8 @@ interface Fixture {
 	deps: FanoutDeps;
 	registry: Registry;
 	transport: DaemonTransportRegistry;
+	/** The stubbed supervisor the fixture's waker respawns through (tests may override respawn). */
+	supervisor: SpawnSupervisor;
 	/** daemonIds the stubbed supervisor.respawn was asked to wake, in order. */
 	respawned: string[];
 	/** Register a spawned entry in the registry. */
@@ -107,9 +110,14 @@ function startFixture(): Fixture {
 		await server.stop(true);
 	});
 	return {
-		deps: { registry, supervisor, transport },
+		deps: {
+			registry,
+			transport,
+			waker: new SessionWaker({ registry, supervisor, transport }),
+		},
 		registry,
 		transport,
+		supervisor,
 		respawned,
 		create(overrides = {}) {
 			return registry.create({
@@ -330,7 +338,7 @@ describe("promptEntry", () => {
 
 	test("a respawn that fails reports its error without sending a prompt", async () => {
 		const fx = startFixture();
-		fx.deps.supervisor.respawn = async () => {
+		fx.supervisor.respawn = async () => {
 			throw new Error("launch refused");
 		};
 		const entry = fx.create({ status: "asleep" });
@@ -341,7 +349,7 @@ describe("promptEntry", () => {
 	test("without a callback transport the prompt fails with a typed error", async () => {
 		const fx = startFixture();
 		const entry = fx.create();
-		const deps: FanoutDeps = { registry: fx.registry, supervisor: fx.deps.supervisor };
+		const deps: FanoutDeps = { registry: fx.registry, waker: fx.deps.waker };
 		const result = await promptEntry(deps, entry, "hi", 500);
 		expect(result.ok).toBe(false);
 		expect(typeof result.error).toBe("string");

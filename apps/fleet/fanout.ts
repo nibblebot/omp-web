@@ -1,9 +1,9 @@
 /**
  * Fan-out prompt correlation (R9).
  *
- * promptEntry: wake the session if its callback pair is down (spawned asleep
- * or errored → supervisor.respawn with --resume; clone → lifecycle ensure),
- * wait for the pair, send a fire-and-forget
+ * promptEntry: wake the session if its callback pair is down (the shared
+ * SessionWaker: a stuck reconnecting/ready row is respawned after the redial
+ * grace; clone → lifecycle ensure), wait for the pair, send a fire-and-forget
  * `{type:"call", method:"prompt"}` over the pair's control stream, and
  * correlate the daemon's frames:
  *
@@ -38,7 +38,7 @@ import { randomUUID } from "node:crypto";
 import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
 import type { ClientCommand, ServerFrame } from "#lib/wire/protocol";
 import type { Registry, RegistryEntry } from "./registry";
-import { PAIR_TIMEOUT_MS, type SpawnSupervisor } from "./supervisor";
+import type { SessionWaker } from "./session-waker";
 
 export interface PromptResult {
 	daemonId: string;
@@ -66,18 +66,12 @@ export interface FanoutTransport {
 	): () => void;
 }
 
-export interface FanoutCloneLifecycle {
-	/** Resolves at provider-running + enrollment persisted; safe for wake. */
-	ensureCloneRunning(daemonId: string): Promise<void>;
-}
-
 export interface FanoutDeps {
 	registry: Registry;
-	supervisor: SpawnSupervisor;
 	/** Callback transport: every session's pair carries prompts and answers. */
 	transport?: FanoutTransport;
-	/** Clone lifecycle service: wake clones before prompting them. */
-	lifecycle?: FanoutCloneLifecycle;
+	/** Session wake: brings the pair up before a prompt (clones included). */
+	waker: SessionWaker;
 }
 
 const DEFAULT_WAIT_MS = 120_000;
@@ -116,32 +110,6 @@ export async function promptEntry(
 }
 
 /**
- * Bring a session's callback pair up before a prompt. A paired session
- * returns at once. A clone rides the lifecycle ensure (provider compute +
- * enrollment). A session that is asleep or errored is respawned
- * (--resume); one already connecting, reconnecting, or ready but just
- * unpaired (inside PAIR_LOSS_GRACE_MS) is only waited on, since it dials on
- * its own. The pair wait is bounded by PAIR_TIMEOUT_MS.
- */
-async function wakeSession(
-	deps: FanoutDeps,
-	transport: FanoutTransport,
-	entry: RegistryEntry,
-): Promise<void> {
-	const daemonId = entry.daemonId;
-	if (transport.pairStatus(daemonId).paired) return;
-	if (entry.workspace?.kind === "clone") {
-		if (!deps.lifecycle) throw new Error("clone prompt is unavailable: no lifecycle service");
-		await deps.lifecycle.ensureCloneRunning(daemonId);
-	} else {
-		const dialing =
-			entry.status === "connecting" || entry.status === "reconnecting" || entry.status === "ready";
-		if (!dialing) await deps.supervisor.respawn(entry);
-	}
-	await waitForPair(transport, daemonId, PAIR_TIMEOUT_MS);
-}
-
-/**
  * Prompt one session over its callback pair: wake it when the pair is down,
  * then send kind:"command" on the transport control stream and correlate the
  * frames the daemon mirrors there (P3.4). No offline queue and no blind
@@ -160,7 +128,8 @@ async function promptSession(
 		return { daemonId, ok: false, error: "prompt is unavailable: no callback transport" };
 	}
 	try {
-		await wakeSession(deps, transport, entry);
+		await deps.waker.wake(entry);
+		await deps.waker.waitForPair(daemonId);
 	} catch (err) {
 		return { daemonId, ok: false, error: (err as Error).message };
 	}
@@ -184,29 +153,6 @@ async function promptSession(
 		return { daemonId, ok: false, error: "daemon not connected" };
 	}
 	return await correlation.promise;
-}
-
-/** Wait for the workspace's callback pair to come up (bounded by waitMs). */
-function waitForPair(transport: FanoutTransport, daemonId: string, waitMs: number): Promise<void> {
-	const { promise, resolve, reject } = Promise.withResolvers<void>();
-	const timer = setTimeout(() => {
-		unsubscribe();
-		reject(new Error(`callback pair for ${daemonId} not ready within ${waitMs} ms`));
-	}, waitMs);
-	const unsubscribe = transport.onPairChange(daemonId, (status) => {
-		if (!status.paired) return;
-		clearTimeout(timer);
-		unsubscribe();
-		resolve();
-	});
-	// Check once after subscribing; the pair may have come up between the
-	// ensure resolution and the subscription above.
-	if (transport.pairStatus(daemonId).paired) {
-		clearTimeout(timer);
-		unsubscribe();
-		resolve();
-	}
-	return promise;
 }
 
 export async function fanOut(

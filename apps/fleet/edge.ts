@@ -38,9 +38,9 @@
  *     from the session itself. The edge stamps the daemonId as sessionId on
  *     every session-scoped frame and on `attached` (omp-session no longer
  *     sends one). Every daemon dials the fleet, so the edge never dials: an
- *     asleep spawned daemon is respawned
- *     and waited on for PAIR_TIMEOUT_MS, a reconnecting daemon, or a ready one
- *     that just lost its pair, gets REDIAL_GRACE_MS to redial, and an unpaired
+ *     asleep spawned daemon is woken through the shared SessionWaker
+ *     (session-waker.ts: respawn and pair wait, with a redial grace for a
+ *     reconnecting or ready-but-unpaired daemon), and an unpaired
  *     remote daemon is refused.
  *     A pair replacement re-primes the stream from zero. A dropped pair ends
  *     the browser's stream with the "daemon connection lost" error frame.
@@ -105,7 +105,6 @@ import {
 import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
 import type { FleetConfig } from "./config";
 import { isJsonRequest } from "./browser-guard";
-import { validateProjectPath } from "./discovery";
 import { serveStaticUi } from "./static-ui";
 import { BrowseError, browseDirectories } from "./fs-browse";
 import { listRecentRoots } from "./recent-roots";
@@ -120,24 +119,14 @@ import {
 	listDaemonSessions,
 	type CloneSessionStore,
 } from "./daemon-sessions";
-import {
-	REDIAL_GRACE_MS,
-	type Registry,
-	type RegistryChange,
-	type RegistryEntry,
-} from "./registry";
-import { PAIR_TIMEOUT_MS, type SpawnSupervisor } from "./supervisor";
+import { type Registry, type RegistryChange, type RegistryEntry } from "./registry";
+import type { SpawnSupervisor } from "./supervisor";
+import type { SessionWaker } from "./session-waker";
+import { EDGE_COMMAND_FIELDS, readEdgeArgs, type EdgeArgs } from "./edge-commands";
+import { FleetOperations, OperationError } from "./operations";
+import type { CloneCreateInput } from "./workspace-lifecycle";
 import type { FleetEventLog, FleetFacts } from "./events";
-import {
-	createWorktree,
-	deleteWorktree,
-	listProjectBranches,
-	projectIdForCwd,
-	realpathOf,
-	registerWorktreeEntry,
-	resolveProjectRoot,
-	worktreeDeleteInfo,
-} from "./worktrees";
+import { listProjectBranches, realpathOf } from "./worktrees";
 
 /** Reclaim grace for a disconnected browser's ring (Last-Event-ID resume window). */
 const CLIENT_RECLAIM_MS = 60_000;
@@ -165,25 +154,6 @@ interface DaemonActivity {
 
 /** Encode SSE blocks once per edge (the queue strategy sizes in bytes). */
 const SSE_ENCODER = new TextEncoder();
-
-/** k=v labels accepted on spawn (contract: `^[^=]+=.*$`). */
-const LABEL_RE = /^[^=]+=.*$/;
-
-/**
- * Validate a spawn command's `labels` field: undefined (absent) passes, an
- * array of k=v strings passes, anything else throws with a user-safe message
- * (the caller answers an error frame).
- */
-function parseSpawnLabels(value: unknown): string[] | undefined {
-	if (value === undefined) return undefined;
-	if (
-		!Array.isArray(value) ||
-		!value.every((label) => typeof label === "string" && LABEL_RE.test(label))
-	) {
-		throw new Error("spawn: labels must be an array of k=v strings");
-	}
-	return value as string[];
-}
 
 const STDERR_ROUTE = /^\/ctl\/sessions\/([^/]+)\/stderr$/;
 /** Fleet-proxied session-file download (P3.4): files ride the callback bulk channel. */
@@ -394,11 +364,11 @@ export interface EdgeEvictionHooks {
  * admission, and the verify-at-deletion gate cannot be bypassed from the
  * browser surface. All methods throw typed errors whose messages are safe
  * to surface in an error frame. Implemented by fleet/workspace-lifecycle.ts
- * (structural conformance: the edge holds no import on it).
+ * (structural conformance: the edge holds no runtime import on it).
  */
 export interface EdgeLifecycleHooks {
 	/** Create + optionally start a clone workspace (P1/P8.1); the roster broadcast carries the result. */
-	createClone(input: CreateCloneInput): Promise<RegistryEntry>;
+	createClone(input: CloneCreateInput): Promise<RegistryEntry>;
 	/**
 	 * Start + wake: resolves once the provider confirms compute running and
 	 * enrollment is persisted; pair readiness rides the lifecycleStage roster
@@ -414,24 +384,7 @@ export interface EdgeLifecycleHooks {
 	/** Ordinary stop: proof-bearing provider stop, desiredState stopped, data retained. */
 	stopClone(daemonId: string): Promise<void>;
 	/** Verified delete (P7 gate): refuses active work, verifies the fleet store, then deletes provider resources. */
-	deleteClone(daemonId: string): Promise<{ verified: string[] }>;
-	/** Clone-safe roster remove: routes through the SAME verified gate as deleteClone. */
-	removeClone(daemonId: string): Promise<void>;
-}
-
-/** Frozen create_clone command payload (docs/clone-contracts.md, "Browser and CLI workspace creation"). */
-export interface CreateCloneInput {
-	projectId: string;
-	name: string;
-	profileId: string;
-	/**
-	 * Exactly one member when given; omitted = the project's own path (host-side
-	 * providers) or its origin URL (kubernetes).
-	 */
-	source?: { local?: string; remote?: string; remoteName?: string };
-	revision?: string;
-	branch?: string;
-	start?: boolean;
+	deleteClone(daemonId: string): Promise<{ removed: string; verified: string[] }>;
 }
 
 /** The live machinery the edge coordinates. */
@@ -453,6 +406,8 @@ export interface EdgeDeps {
 	lifecycle?: EdgeLifecycleHooks;
 	/** Non-clone row eviction (FLC-22). Required: the server owns pair/log-tap/orphan cleanup. */
 	eviction: EdgeEvictionHooks;
+	/** Session wake (FLC-23): brings a session's callback pair up before an attach or prompt. Required; the server owns it. */
+	waker: SessionWaker;
 	/** Boot-static secret-free provider catalog (P1.3), published on registered_projects. Omitted entirely when not configured. */
 	providerProfiles?: PublicProviderProfile[];
 	/** Fleet transcript store (P3.8) for clone session listing/resume membership. Absent = clone rows list no sessions. */
@@ -622,10 +577,74 @@ export class FleetEdge {
 	readonly #fleet: FleetFacts;
 	/** Callback transport (P3): clone attach/commands/downloads ride it; undefined = clone rows answer typed unavailability. */
 	readonly #transport: DaemonTransportRegistry | undefined;
-	/** Clone lifecycle service (P6/P7): every clone mutation goes through it, never a kind-blind edge path. */
-	readonly #lifecycle: EdgeLifecycleHooks | undefined;
-	/** Non-clone row eviction (FLC-22): every removal of a roster row goes through it. */
-	readonly #eviction: EdgeEvictionHooks;
+	/** Session wake (FLC-23): one rule set shared with fan-out prompts, so every wake follows it. */
+	readonly #waker: SessionWaker;
+	/** Shared clone/worktree/project mutations (operations.ts): the same calls the control API makes. */
+	readonly #ops: FleetOperations;
+	/** Browser-command runners, keyed like EDGE_COMMAND_FIELDS; each receives the validated args. */
+	readonly #runners: Record<string, (stream: BrowserStream, id: string, args: EdgeArgs) => void> = {
+		list_daemon_sessions: (stream, _id, a) =>
+			void this.#handleListDaemonSessions(stream, a.daemonId as string),
+		list_project_branches: (stream, _id, a) =>
+			void this.#handleListProjectBranches(
+				stream,
+				a.projectId as string,
+				a.remote as string | undefined,
+			),
+		sync_projects: () => this.#supervisor.syncNow(),
+		spawn: (stream, _id, a) =>
+			void this.#runOperation(stream, () =>
+				this.#ops.spawn({
+					cwd: a.cwd as string,
+					template: a.template as string | undefined,
+					labels: a.labels as string[] | undefined,
+				}),
+			),
+		spawn_resume: (stream, _id, a) =>
+			void this.#handleSpawnResume(stream, a.daemonId as string, a.sessionFile as string | undefined),
+		stop: (stream, _id, a) =>
+			void this.#runOperation(stream, () => this.#ops.stop(a.daemonId as string)),
+		remove: (stream, _id, a) =>
+			void this.#runOperation(stream, () => this.#ops.remove(a.daemonId as string)),
+		add_project: (stream, id, a) => void this.#handleAddProject(stream, id, a.path as string),
+		remove_project: (stream, _id, a) =>
+			void this.#runOperation(stream, () => this.#ops.removeProject(a.projectId as string)),
+		create_clone: (stream, id, a) =>
+			void this.#runWorkspaceCreate(stream, id, () =>
+				this.#ops.createClone({
+					projectId: a.projectId as string,
+					name: a.name as string,
+					profileId: a.profileId as string,
+					source: a.source as CloneCreateInput["source"],
+					revision: a.revision as string | undefined,
+					branch: a.branch as string | undefined,
+					start: a.start as boolean | undefined,
+				}),
+			),
+		create_worktree: (stream, id, a) =>
+			void this.#runWorkspaceCreate(stream, id, () =>
+				this.#ops.createWorktree(a.projectId as string, {
+					name: a.name as string,
+					baseRef: a.baseRef as string | undefined,
+					existingBranch: a.existingBranch as string | undefined,
+					start: a.start as boolean | undefined,
+				}),
+			),
+		delete_worktree: (stream, _id, a) =>
+			void this.#runOperation(stream, () =>
+				this.#ops.deleteWorkspace(a.daemonId as string, {
+					deleteBranch: a.deleteBranch as string | undefined,
+				}),
+			),
+		worktree_delete_info: (stream, _id, a) =>
+			void this.#runOperation(stream, async () => {
+				const daemonId = a.daemonId as string;
+				const info = await this.#ops.worktreeDeleteInfo(daemonId);
+				this.#sendAnswer(stream, { type: "worktree_delete_info", daemonId, ...info });
+			}),
+		attach: (stream, id, a) =>
+			void this.#handleAttach(stream, a.sessionId as string, id !== "" ? id : undefined),
+	};
 	/** Boot-static secret-free provider catalog, published on registered_projects (P1.3). */
 	readonly #providerProfiles: PublicProviderProfile[] | undefined;
 	/** Fleet transcript store for clone session listing/resume membership (P3.8). */
@@ -647,8 +666,6 @@ export class FleetEdge {
 	 * out. Entries expire with the daemon's own dedup window.
 	 */
 	readonly #forwardOrigins = new Map<string, ForwardOrigin>();
-	/** daemonIds mid-wake (respawn/redial); serializes spawn_resume + attach. */
-	readonly #waking = new Set<string>();
 	/**
 	 * In-flight spawn_resume work per daemonId, registered synchronously before
 	 * its first await so a concurrently arriving attach can await the pick
@@ -678,12 +695,6 @@ export class FleetEdge {
 
 	/** Bound once so close() can unset registry.onChange without clobbering a replacement. */
 	readonly #onRegistryChange = (change: RegistryChange): void => {
-		// A wake ends when the daemon's status leaves "asleep" (spawn_resume's
-		// respawn resolves before the fresh child starts dialing, so clearing
-		// here, not in #wake, keeps back-to-back attach from double-respawning).
-		for (const daemonId of this.#waking) {
-			if (this.#registry.get(daemonId)?.status !== "asleep") this.#waking.delete(daemonId);
-		}
 		// New daemons get a daemons-frame tap; removed ones lose it and their
 		// cached rosters are evicted (broadcast so browsers drop the entries).
 		this.#reconcileDaemonTaps();
@@ -710,8 +721,22 @@ export class FleetEdge {
 		this.#eventLog = deps.eventLog;
 		this.#fleet = deps.fleet;
 		this.#transport = deps.transport;
-		this.#lifecycle = deps.lifecycle;
-		this.#eviction = deps.eviction;
+		this.#waker = deps.waker;
+		this.#ops = new FleetOperations({
+			registry: deps.registry,
+			supervisor: deps.supervisor,
+			config: deps.config,
+			eventLog: deps.eventLog,
+			lifecycle: deps.lifecycle,
+			eviction: deps.eviction,
+		});
+		// A detached daemon's browser pipes drop before its row is stopped,
+		// removed or deleted (FleetOperations.onDetach).
+		this.#ops.onDetach((daemonId) => {
+			for (const s of this.#browsers) {
+				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
+			}
+		});
 		this.#providerProfiles = deps.providerProfiles;
 		this.#logStore = deps.logStore;
 		this.#backpressureBytes = opts?.backpressureBytes ?? SSE_BACKPRESSURE_BYTES;
@@ -1034,230 +1059,17 @@ export class FleetEdge {
 			this.#sendError(stream, UNKNOWN_COMMAND_MESSAGE);
 			return json({ commandId: cmd.id }, 202);
 		}
-		switch (type) {
-			case "list_daemon_sessions": {
-				const daemonId =
-					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
-				if (daemonId === undefined) {
-					this.#sendError(stream, "list_daemon_sessions: missing daemonId");
-					break;
-				}
-				void this.#handleListDaemonSessions(stream, daemonId);
-				break;
+		const fields = EDGE_COMMAND_FIELDS[type];
+		if (fields !== undefined) {
+			try {
+				const args = readEdgeArgs(type, fields, cmd);
+				this.#runners[type]?.(stream, id, args);
+			} catch (err) {
+				if (!(err instanceof OperationError)) throw err;
+				this.#sendError(stream, err.message);
 			}
-			case "list_project_branches": {
-				const projectId =
-					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
-				if (projectId === undefined) {
-					this.#sendError(stream, "list_project_branches: missing projectId");
-					break;
-				}
-				const remote = typeof cmd.remote === "string" && cmd.remote !== "" ? cmd.remote : undefined;
-				void this.#handleListProjectBranches(stream, projectId, remote);
-				break;
-			}
-			case "sync_projects":
-				this.#supervisor.syncNow();
-				break;
-			case "spawn": {
-				const cwd = typeof cmd.cwd === "string" && cmd.cwd !== "" ? cmd.cwd : undefined;
-				if (cwd === undefined) {
-					this.#sendError(stream, "spawn: missing cwd");
-					break;
-				}
-				const template =
-					typeof cmd.template === "string" && cmd.template !== "" ? cmd.template : undefined;
-				let labels: string[] | undefined;
-				try {
-					labels = parseSpawnLabels(cmd.labels);
-				} catch (err) {
-					this.#sendError(stream, err instanceof Error ? err.message : String(err));
-					break;
-				}
-				void this.#handleSpawn(stream, cwd, template, labels);
-				break;
-			}
-			case "spawn_resume": {
-				const daemonId =
-					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
-				if (daemonId === undefined) {
-					this.#sendError(stream, "spawn_resume: missing daemonId");
-					break;
-				}
-				const sessionFile =
-					typeof cmd.sessionFile === "string" && cmd.sessionFile !== ""
-						? cmd.sessionFile
-						: undefined;
-				void this.#handleSpawnResume(stream, daemonId, sessionFile);
-				break;
-			}
-			case "stop": {
-				const daemonId =
-					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
-				if (daemonId === undefined) {
-					this.#sendError(stream, "stop: missing daemonId");
-					break;
-				}
-				void this.#handleStop(stream, daemonId);
-				break;
-			}
-			case "remove": {
-				const daemonId =
-					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
-				if (daemonId === undefined) {
-					this.#sendError(stream, "remove: missing daemonId");
-					break;
-				}
-				void this.#handleRemove(stream, daemonId);
-				break;
-			}
-			case "add_project": {
-				const path = typeof cmd.path === "string" && cmd.path !== "" ? cmd.path : undefined;
-				if (path === undefined) {
-					this.#sendError(stream, "add_project: missing path");
-					break;
-				}
-				void this.#handleAddProject(stream, id, path);
-				break;
-			}
-			case "remove_project": {
-				const projectId =
-					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
-				if (projectId === undefined) {
-					this.#sendError(stream, "remove_project: missing projectId");
-					break;
-				}
-				void this.#handleRemoveProject(stream, projectId);
-				break;
-			}
-			case "create_clone": {
-				// Frozen contract (docs/clone-contracts.md): projectId/name/
-				// profileId required; source (when given) has exactly one of
-				// local/remote/remoteName; revision/branch/start optional.
-				const projectId =
-					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
-				if (projectId === undefined) {
-					this.#sendError(stream, "create_clone: missing projectId");
-					break;
-				}
-				const name = typeof cmd.name === "string" && cmd.name !== "" ? cmd.name : undefined;
-				if (name === undefined) {
-					this.#sendError(stream, "create_clone: missing name");
-					break;
-				}
-				const profileId =
-					typeof cmd.profileId === "string" && cmd.profileId !== "" ? cmd.profileId : undefined;
-				if (profileId === undefined) {
-					this.#sendError(stream, "create_clone: missing profileId");
-					break;
-				}
-				const sourceRaw = cmd.source;
-				let source: CreateCloneInput["source"];
-				if (sourceRaw !== undefined) {
-					if (typeof sourceRaw !== "object" || sourceRaw === null || Array.isArray(sourceRaw)) {
-						this.#sendError(stream, "create_clone: source must be an object");
-						break;
-					}
-					// Exactly one non-empty member. Read through a checked
-					// narrowing: absent/empty members are treated as unset.
-					const sourceFields = sourceRaw as Record<string, unknown>;
-					const given = (["local", "remote", "remoteName"] as const)
-						.map((key) => [key, sourceFields[key]] as const)
-						.filter(([, value]) => typeof value === "string" && value !== "");
-					if (given.length !== 1) {
-						this.#sendError(
-							stream,
-							"create_clone: source must set exactly one of local, remote, or remoteName",
-						);
-						break;
-					}
-					source = Object.fromEntries(given) as CreateCloneInput["source"];
-				}
-				const revision =
-					typeof cmd.revision === "string" && cmd.revision !== "" ? cmd.revision : undefined;
-				const branch = typeof cmd.branch === "string" && cmd.branch !== "" ? cmd.branch : undefined;
-				const start = cmd.start === true ? true : undefined;
-				void this.#handleCreateClone(stream, id, {
-					projectId,
-					name,
-					profileId,
-					...(source !== undefined ? { source } : {}),
-					...(revision !== undefined ? { revision } : {}),
-					...(branch !== undefined ? { branch } : {}),
-					...(start !== undefined ? { start } : {}),
-				});
-				break;
-			}
-			case "create_worktree": {
-				const projectId =
-					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
-				if (projectId === undefined) {
-					this.#sendError(stream, "create_worktree: missing projectId");
-					break;
-				}
-				const name = typeof cmd.name === "string" && cmd.name !== "" ? cmd.name : undefined;
-				if (name === undefined) {
-					this.#sendError(stream, "create_worktree: missing name");
-					break;
-				}
-				const baseRef =
-					typeof cmd.baseRef === "string" && cmd.baseRef !== "" ? cmd.baseRef : undefined;
-				const existingBranch =
-					typeof cmd.existingBranch === "string" && cmd.existingBranch !== ""
-						? cmd.existingBranch
-						: undefined;
-				const start = cmd.start === true ? true : undefined;
-				void this.#handleCreateWorktree(stream, id, projectId, name, {
-					baseRef,
-					existingBranch,
-					start,
-				});
-				break;
-			}
-			case "delete_worktree": {
-				const daemonId =
-					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
-				if (daemonId === undefined) {
-					this.#sendError(stream, "delete_worktree: missing daemonId");
-					break;
-				}
-				if (cmd.deleteBranch !== undefined && typeof cmd.deleteBranch !== "string") {
-					this.#sendError(stream, "delete_worktree: deleteBranch must be a branch name");
-					break;
-				}
-				const deleteBranch =
-					typeof cmd.deleteBranch === "string" && cmd.deleteBranch !== ""
-						? cmd.deleteBranch
-						: undefined;
-				void this.#handleDeleteWorktree(stream, daemonId, deleteBranch);
-				break;
-			}
-			case "worktree_delete_info": {
-				const daemonId =
-					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
-				if (daemonId === undefined) {
-					this.#sendError(stream, "worktree_delete_info: missing daemonId");
-					break;
-				}
-				void this.#handleWorktreeDeleteInfo(stream, daemonId);
-				break;
-			}
-			case "attach": {
-				const daemonId =
-					typeof cmd.sessionId === "string" && cmd.sessionId !== "" ? cmd.sessionId : undefined;
-				if (daemonId === undefined) {
-					this.#sendError(stream, "attach: missing sessionId");
-					break;
-				}
-				// The command id keys the attach_result answer (finding #28); a
-				// malformed client without one falls back to the legacy error frame.
-				const commandId = typeof cmd.id === "string" && cmd.id !== "" ? cmd.id : undefined;
-				void this.#handleAttach(stream, daemonId, commandId);
-				break;
-			}
-			default:
-				this.#forwardCommand(stream, cmd);
-				break;
+		} else {
+			this.#forwardCommand(stream, cmd);
 		}
 		return json({ commandId: cmd.id }, 202);
 	}
@@ -1324,42 +1136,39 @@ export class FleetEdge {
 		}
 	}
 
-	async #handleSpawn(
-		stream: BrowserStream,
-		cwd: string,
-		template: string | undefined,
-		labels: string[] | undefined,
-	): Promise<void> {
+	/** Run one shared operation for a browser command; a refusal or failure answers an error frame. */
+	async #runOperation(stream: BrowserStream, run: () => Promise<unknown>): Promise<void> {
 		try {
-			const resolved = await validateProjectPath(cwd);
-			if (resolved === null) {
-				this.#sendError(stream, `not a directory: ${cwd}`);
-				return;
-			}
-			// Progress surfaces via roster/daemon_status broadcasts. A cwd
-			// belonging to a registered project (main checkout or a linked
-			// worktree) is tagged with that projectId so the roster groups the
-			// daemon under the project; unregistered paths stay untagged
-			// (fallback group).
-			const entry = await this.#supervisor.spawn({ cwd: resolved, template, labels });
-			const projectId = await projectIdForCwd(this.#registry.projects(), resolved);
-			if (projectId !== undefined) this.#registry.update(entry.daemonId, { projectId });
+			await run();
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
 	}
 
+	/** Run one workspace create for `id`: workspace_create_result carries the new daemonId or the refusal text. */
+	async #runWorkspaceCreate(
+		stream: BrowserStream,
+		id: string,
+		run: () => Promise<RegistryEntry>,
+	): Promise<void> {
+		try {
+			const entry = await run();
+			this.#answerWorkspaceCreate(stream, id, { daemonId: entry.daemonId });
+		} catch (err) {
+			this.#answerWorkspaceCreate(stream, id, {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
 	/**
-	 * add_project: register the main checkout behind `path` (a main checkout,
-	 * a linked worktree, or a subdirectory; resolveProjectRoot refuses bare and
-	 * non-git paths). Registration never spawns: a sync pass then adds the
-	 * project's asleep rows. Answered by add_project_result: the projectId, with
-	 * `existing: true` when that checkout was already registered.
+	 * add_project: register the main checkout behind `path` through the shared
+	 * operation (never spawns). Answered by add_project_result: the projectId,
+	 * with `existing: true` when that checkout was already registered.
 	 */
 	async #handleAddProject(stream: BrowserStream, id: string, path: string): Promise<void> {
 		try {
-			const { project, existing } = this.#registry.addProject(await resolveProjectRoot(path));
-			this.#supervisor.syncNow();
+			const { project, existing } = await this.#ops.addProject({ path });
 			this.#sendAnswer(stream, {
 				type: "add_project_result",
 				id,
@@ -1377,88 +1186,6 @@ export class FleetEdge {
 		}
 	}
 
-	/**
-	 * remove_project: deregister a project and drop all of its rows. Running
-	 * rows are shut down and their pair revoked (transcripts kept, disk
-	 * untouched). Refused while a clone workspace still belongs to it; the
-	 * refusal is checked before any row is stopped.
-	 */
-	async #handleRemoveProject(stream: BrowserStream, projectId: string): Promise<void> {
-		try {
-			const rows = this.#registry.list().filter((entry) => entry.projectId === projectId);
-			const cloneIds = rows
-				.filter((entry) => entry.workspace?.kind === "clone")
-				.map((entry) => entry.daemonId);
-			if (cloneIds.length > 0) {
-				this.#sendError(
-					stream,
-					`project ${projectId} has clone workspaces: ${cloneIds.join(", ")}`,
-				);
-				return;
-			}
-			for (const row of rows) {
-				for (const s of this.#browsers) {
-					if (s.pipe?.daemonId === row.daemonId) this.#closePipe(s);
-				}
-			}
-			await this.#eviction.evictProject(projectId);
-		} catch (err) {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
-		}
-	}
-
-	/**
-	 * create_worktree: git worktree add under workspaceDir for a registered
-	 * project (branch = slugified name; existingBranch attaches instead).
-	 * With start:true the worktree is spawned (registerWorktreeEntry).
-	 * Progress rides the roster/daemon_status broadcasts; the answer is the
-	 * unicast workspace_create_result. Staged: a failure names the stage and
-	 * leaves prior stages intact (a created-but-unregistered worktree is
-	 * picked up by the next project sync).
-	 */
-	async #handleCreateWorktree(
-		stream: BrowserStream,
-		id: string,
-		projectId: string,
-		name: string,
-		opts: { baseRef?: string; existingBranch?: string; start?: boolean },
-	): Promise<void> {
-		const project = this.#registry.projects().find((p) => p.projectId === projectId);
-		if (!project) {
-			this.#answerWorkspaceCreate(stream, id, { error: `unknown project: ${projectId}` });
-			return;
-		}
-		let worktreePath: string;
-		try {
-			worktreePath = (
-				await createWorktree(project, name, {
-					workspaceDir: this.#config.workspaceDir,
-					baseRef: opts.baseRef,
-					existingBranch: opts.existingBranch,
-				})
-			).path;
-		} catch (err) {
-			this.#answerWorkspaceCreate(stream, id, {
-				error: `create worktree failed: ${err instanceof Error ? err.message : String(err)}`,
-			});
-			return;
-		}
-		try {
-			const entry = await registerWorktreeEntry(
-				this.#registry,
-				this.#supervisor,
-				project,
-				worktreePath,
-				{ start: opts.start },
-			);
-			this.#answerWorkspaceCreate(stream, id, { daemonId: entry.daemonId });
-		} catch (err) {
-			this.#answerWorkspaceCreate(stream, id, {
-				error: `register worktree failed: ${err instanceof Error ? err.message : String(err)}`,
-			});
-		}
-	}
-
 	/** Unicast workspace_create_result: the new row's daemonId, or the failure text. */
 	#answerWorkspaceCreate(
 		stream: BrowserStream,
@@ -1471,117 +1198,6 @@ export class FleetEdge {
 				? { type: "workspace_create_result", id, ok: true, daemonId: outcome.daemonId }
 				: { type: "workspace_create_result", id, ok: false, error: outcome.error },
 		);
-	}
-
-	/**
-	 * create_clone: delegate entirely to the injected lifecycle service (the
-	 * SAME create the POST /ctl/clones control-plane route uses, no HTTP
-	 * self-proxy, no second lifecycle implementation). Progress + the new
-	 * roster entry ride the roster/daemon_status/lifecycleStage broadcasts;
-	 * with start:true the lifecycle also ensures the provider compute and
-	 * callback pair, so the client's attach follows the same wake path as any
-	 * stopped clone. The unicast answer carries the new row's daemonId.
-	 */
-	async #handleCreateClone(
-		stream: BrowserStream,
-		id: string,
-		input: CreateCloneInput,
-	): Promise<void> {
-		try {
-			if (!this.#lifecycle) {
-				throw new Error("create_clone is unavailable: no lifecycle service wired");
-			}
-			const entry = await this.#lifecycle.createClone(input);
-			this.#answerWorkspaceCreate(stream, id, { daemonId: entry.daemonId });
-		} catch (err) {
-			this.#answerWorkspaceCreate(stream, id, {
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-	}
-
-	/**
-	 * delete_worktree: stop the daemon, evict it from the roster, then git
-	 * worktree remove (linked + clean only; optional `git branch -d`). The
-	 * guards run BEFORE any mutation, so a refusal leaves the daemon and
-	 * roster untouched.
-	 */
-	async #handleDeleteWorktree(
-		stream: BrowserStream,
-		daemonId: string,
-		deleteBranch: string | undefined,
-	): Promise<void> {
-		try {
-			const entry = this.#registry.get(daemonId);
-			if (!entry) {
-				this.#sendError(stream, `unknown daemon: ${daemonId}`);
-				return;
-			}
-			if (entry.workspace?.kind === "clone") {
-				// Clone delete is the lifecycle's verified P7 gate (admission,
-				// quiesce, store verification, read-only flip, provider
-				// deletion); NEVER the git-worktree guards below: they reason
-				// about a fleet-local cwd that a clone volume does not have.
-				if (!this.#lifecycle) {
-					this.#sendError(stream, "clone delete is unavailable: no lifecycle service wired");
-					return;
-				}
-				await this.#lifecycle.deleteClone(daemonId);
-				for (const s of this.#browsers) {
-					if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
-				}
-				return;
-			}
-			const path = entry.cwd ?? "";
-			const info = await worktreeDeleteInfo(entry);
-			if (!info.linked) {
-				this.#sendError(stream, info.reason ?? `not a linked worktree: ${path}`);
-				return;
-			}
-			if (info.dirty) {
-				this.#sendError(stream, info.reason ?? `worktree has uncommitted changes: ${path}`);
-				return;
-			}
-			// A browser attached to the removed daemon must not keep a live pipe.
-			for (const s of this.#browsers) {
-				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
-			}
-			// Stop + evict only once the guarded removal succeeded (FLC-21): a
-			// refused delete leaves the row registered, asleep.
-			await this.#eviction.evictRow(daemonId, async () => {
-				await deleteWorktree(entry, { deleteBranch });
-			});
-		} catch (err) {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
-		}
-	}
-
-	/**
-	 * worktree_delete_info: answer with the unicast guard-evidence frame
-	 * (linked/dirty/branch merge+push state) for the delete confirmation.
-	 */
-	async #handleWorktreeDeleteInfo(stream: BrowserStream, daemonId: string): Promise<void> {
-		try {
-			const entry = this.#registry.get(daemonId);
-			if (!entry) {
-				this.#sendError(stream, `unknown daemon: ${daemonId}`);
-				return;
-			}
-			if (entry.workspace?.kind === "clone") {
-				// Clone guard evidence is the lifecycleStage/lifecycleError on
-				// the roster entry (the fleet-private WorkspaceDeletion state
-				// never crosses this boundary), not git-worktree guard facts.
-				this.#sendError(
-					stream,
-					"clone deletion guard evidence rides lifecycleStage/lifecycleError",
-				);
-				return;
-			}
-			const info = await worktreeDeleteInfo(entry);
-			this.#sendAnswer(stream, { type: "worktree_delete_info", daemonId, ...info });
-		} catch (err) {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
-		}
 	}
 
 	async #handleSpawnResume(
@@ -1648,86 +1264,7 @@ export class FleetEdge {
 				resumeFile = sessionFile;
 			}
 		}
-		await this.#wake(entry, resumeFile);
-	}
-
-	async #handleStop(stream: BrowserStream, daemonId: string): Promise<void> {
-		try {
-			const entry = this.#registry.get(daemonId);
-			if (!entry) {
-				this.#sendError(stream, `unknown daemon: ${daemonId}`);
-				return;
-			}
-			if (entry.workspace?.kind === "clone") {
-				// Clone stop is the lifecycle's proof-bearing provider stop;
-				// NEVER the supervisor paths (they do not manage
-				// provider compute). Channel teardown happens first so no
-				// browser keeps a callback stream against a stopping daemon.
-				for (const s of this.#browsers) {
-					if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
-				}
-				if (!this.#lifecycle) {
-					this.#sendError(stream, "clone stop is unavailable: no lifecycle service wired");
-					return;
-				}
-				await this.#lifecycle.stopClone(daemonId);
-				return;
-			}
-			// A browser attached to the stopped daemon must not keep a live pipe:
-			// the stopped pair would surface a phantom "daemon connection lost"
-			// error (mirrors #handleRemove).
-			for (const s of this.#browsers) {
-				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
-			}
-			try {
-				// The supervisor sends ShutdownControl when paired, kills an own
-				// child, and revokes the enrollment; it leaves the entry asleep.
-				await this.#supervisor.stop(daemonId);
-			} catch (err) {
-				// Error-safe stop: a failed terminate must not leave the entry
-				// "ready" forever; the daemon is being stopped regardless, so
-				// flip the status before surfacing the error.
-				this.#registry.setStatus(daemonId, "asleep");
-				throw err;
-			}
-		} catch (err) {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
-		}
-	}
-
-	async #handleRemove(stream: BrowserStream, daemonId: string): Promise<void> {
-		try {
-			const entry = this.#registry.get(daemonId);
-			if (!entry) {
-				this.#sendError(stream, `unknown daemon: ${daemonId}`);
-				return;
-			}
-			if (entry.workspace?.kind === "clone") {
-				// Clone remove routes through the SAME verified deletion gate
-				// as delete (P7), never registry.remove: dropping the roster
-				// identity without verification would orphan or lose the
-				// volume/store silently. Browsers detach only AFTER the gate
-				// passes, so a gate refusal keeps live attachments intact.
-				if (!this.#lifecycle) {
-					this.#sendError(stream, "clone remove is unavailable: no lifecycle service wired");
-					return;
-				}
-				await this.#lifecycle.removeClone(daemonId);
-				for (const s of this.#browsers) {
-					if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
-				}
-				return;
-			}
-			// A browser attached to the removed daemon must not keep a live pipe.
-			for (const s of this.#browsers) {
-				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
-			}
-			// Removal leaves no process or credential behind: stop, drop the pair
-			// state, and remove the row through the server's eviction hook.
-			await this.#eviction.evictRow(daemonId, async () => {});
-		} catch (err) {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
-		}
+		await this.#waker.wake(entry, { resumeFile });
 	}
 
 	async #handleAttach(
@@ -1758,9 +1295,9 @@ export class FleetEdge {
 				this.#sendAttachOutcome(stream, commandId, { error: refused });
 				return;
 			}
-			// #wake resolves once the daemon's callback pair is up (or it
+			// #waker.wake resolves once the daemon's callback pair is up (or it
 			// throws the reason it cannot be); #openPipe then primes the stream.
-			await this.#wake(entry);
+			await this.#waker.wake(entry);
 		} catch (err) {
 			this.#sendAttachOutcome(stream, commandId, {
 				error: err instanceof Error ? err.message : String(err),
@@ -1782,74 +1319,6 @@ export class FleetEdge {
 	// ---------------------------------------------------------------------
 
 	/**
-	 * Bring a daemon's callback pair up before an attach or prompt. Every
-	 * daemon dials the fleet, so the fleet only ever waits on the pair; it
-	 * never dials. A paired daemon returns at once. A reconnecting daemon, or a
-	 * ready one that just lost its pair, gets REDIAL_GRACE_MS to redial on its
-	 * own. An asleep daemon is
-	 * respawned (--resume) and waited on for PAIR_TIMEOUT_MS.
-	 * Clone-kind entries go through the lifecycle ensure (provider compute +
-	 * enrollment) instead; their pair readiness rides the transport's
-	 * onPairChange and is never awaited here. Serialized per daemon: a second
-	 * wake while the first is in flight awaits the same pair, never respawning
-	 * twice.
-	 */
-	async #wake(entry: RegistryEntry, resumeFile?: string): Promise<void> {
-		const daemonId = entry.daemonId;
-		if (entry.workspace?.kind === "clone") {
-			if (this.#transport?.pairStatus(daemonId).paired === true) return;
-			if (this.#lifecycle === undefined || this.#transport === undefined) {
-				throw new Error("clone wake is unavailable: no lifecycle/transport wired");
-			}
-			if (this.#waking.has(daemonId)) return;
-			this.#waking.add(daemonId);
-			try {
-				await this.#lifecycle.ensureCloneRunning(
-					daemonId,
-					resumeFile && resumeFile.trim() !== "" ? { resumeSessionId: resumeFile } : undefined,
-				);
-			} finally {
-				// Clone wakes settle on resolve; ensureCloneRunning is
-				// idempotent, so a back-to-back wake is safe either way.
-				this.#waking.delete(daemonId);
-			}
-			return;
-		}
-		const transport = this.#transport;
-		if (transport === undefined) throw new Error("session wake is unavailable: no transport wired");
-		if (transport.pairStatus(daemonId).paired) return;
-		if (this.#waking.has(daemonId)) return;
-		this.#waking.add(daemonId);
-		try {
-			// A reconnecting session, or a ready one that just lost its pair
-			// (inside PAIR_LOSS_GRACE_MS), is redialing on its own: give it the
-			// grace window before deciding it needs a respawn.
-			if (
-				(entry.status === "reconnecting" || entry.status === "ready") &&
-				(await this.#awaitPair(daemonId, REDIAL_GRACE_MS))
-			)
-				return;
-			// The status may have changed during the wait; respect the live value.
-			const status = this.#registry.get(daemonId)?.status ?? entry.status;
-			if (status !== "connecting") {
-				await this.#supervisor.respawn(
-					entry,
-					resumeFile && resumeFile.trim() !== "" ? { resumeFile } : undefined,
-				);
-			}
-			if (!(await this.#awaitPair(daemonId, PAIR_TIMEOUT_MS))) {
-				throw new Error(`session ${entry.name} did not connect within ${PAIR_TIMEOUT_MS / 1000}s`);
-			}
-		} catch (err) {
-			// A failed wake drops the guard so a later wake can retry. A
-			// successful one keeps it until #onRegistryChange sees the status
-			// leave "asleep", so a back-to-back wake cannot respawn twice.
-			this.#waking.delete(daemonId);
-			throw err;
-		}
-	}
-
-	/**
 	 * Open this browser's dedicated session channel and answer the attach:
 	 * bind a callback virtual stream ("browser/<connId>") on the session's
 	 * pair. The daemon primes and replays per stream, and the edge re-sends
@@ -1863,29 +1332,6 @@ export class FleetEdge {
 		// stream nobody will close.
 		if (!this.#browsers.has(stream)) return;
 		this.#openCallbackPipe(stream, entry, commandId);
-	}
-
-	/**
-	 * Resolve true once the session's pair is up, false after timeoutMs. The
-	 * pair subscription is released on either outcome.
-	 */
-	#awaitPair(daemonId: string, timeoutMs: number): Promise<boolean> {
-		const transport = this.#transport;
-		if (transport === undefined) return Promise.resolve(false);
-		if (transport.pairStatus(daemonId).paired) return Promise.resolve(true);
-		const { promise, resolve } = Promise.withResolvers<boolean>();
-		let unsubscribe: () => void = () => {};
-		const timer = setTimeout(() => {
-			unsubscribe();
-			resolve(false);
-		}, timeoutMs);
-		unsubscribe = transport.onPairChange(daemonId, (status) => {
-			if (!status.paired) return;
-			clearTimeout(timer);
-			unsubscribe();
-			resolve(true);
-		});
-		return promise;
 	}
 
 	/**

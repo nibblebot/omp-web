@@ -15,6 +15,7 @@ import type { EdgeEvictionHooks, FleetEdge } from "../edge";
 import type { DaemonTransportRegistry } from "../daemon-transport";
 import type { Registry } from "../registry";
 import type { SpawnSupervisor } from "../supervisor";
+import { SessionWaker } from "../session-waker";
 
 export { cleanupTempDirs };
 
@@ -306,4 +307,16 @@ export function testEviction(registry: Registry, supervisor: SpawnSupervisor): E
 			registry.removeProject(projectId);
 		},
 	};
+}
+
+/**
+ * Session waker for edge tests: the server's wiring without a clone lifecycle
+ * (edge rigs drive non-clone rows through the real callback transport).
+ */
+export function testWaker(
+	registry: Registry,
+	supervisor: SpawnSupervisor,
+	transport: DaemonTransportRegistry | undefined,
+): SessionWaker {
+	return new SessionWaker({ registry, supervisor, transport });
 }

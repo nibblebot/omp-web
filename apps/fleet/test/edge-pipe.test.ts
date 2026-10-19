@@ -29,6 +29,7 @@ import {
 	serveEdge,
 	sleep,
 	testEviction,
+	testWaker,
 	waitFor,
 } from "./edge.testkit";
 
@@ -75,6 +76,7 @@ async function startRig(
 			registry,
 			supervisor,
 			eviction: testEviction(registry, supervisor),
+			waker: testWaker(registry, supervisor, transport),
 			config: CONFIG,
 			eventLog: new FleetEventLog(),
 			transport,

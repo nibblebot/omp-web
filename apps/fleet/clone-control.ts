@@ -31,13 +31,7 @@ import { CALLBACK_ERROR_HTTP_STATUS } from "#lib/wire/callback-protocol";
 import type { PublicProviderProfile } from "#lib/wire/protocol";
 import type { ProviderProfile } from "#lib/runtime/provider-protocol";
 import { toPublicProfile } from "./provider-profile";
-import {
-	CloneLifecycleError,
-	type WorkspaceLifecycle,
-	type CloneCreateInput,
-} from "./workspace-lifecycle";
-import type { FleetEventLog } from "./events";
-import { toRosterEntry } from "./edge";
+import { CloneLifecycleError, type WorkspaceLifecycle } from "./workspace-lifecycle";
 
 /** curl/HTTP error with a message safe to return to the caller. */
 export class CloneHttpError extends Error {
@@ -70,7 +64,6 @@ export function lifecycleStatus(code: CloneLifecycleError["code"]): number {
 export class CloneControlApi {
 	readonly #lifecycle: WorkspaceLifecycle;
 	readonly #registry: Registry;
-	readonly #eventLog: FleetEventLog;
 	/** Boot-static profile catalog (secret-free projection). */
 	readonly #publicProfiles: Record<string, PublicProviderProfile>;
 
@@ -78,11 +71,9 @@ export class CloneControlApi {
 		lifecycle: WorkspaceLifecycle;
 		registry: Registry;
 		config: { providerProfiles?: Record<string, ProviderProfile> };
-		eventLog: FleetEventLog;
 	}) {
 		this.#lifecycle = deps.lifecycle;
 		this.#registry = deps.registry;
-		this.#eventLog = deps.eventLog;
 		const profiles: Record<string, PublicProviderProfile> = {};
 		if (deps.config.providerProfiles !== undefined) {
 			for (const profile of Object.values(deps.config.providerProfiles)) {
@@ -95,13 +86,6 @@ export class CloneControlApi {
 	/** GET /ctl/profiles → { profiles: PublicProviderProfile[] } (secret-free). */
 	profiles(): { profiles: PublicProviderProfile[] } {
 		return { profiles: Object.values(this.#publicProfiles) };
-	}
-
-	/** POST /ctl/clones (frozen contract). Returns 201 {entry: DaemonEntry}. */
-	async createClone(body: CloneCreateInput): Promise<Response> {
-		const entry = await this.#lifecycle.createClone(body);
-		this.#eventLog.add("info", "server", `clone created ${entry.daemonId}`, entry.daemonId);
-		return json({ entry: toRosterEntry(entry) }, 201);
 	}
 
 	/** POST /ctl/start|wake {daemonId}: clone-only ensure-running. */

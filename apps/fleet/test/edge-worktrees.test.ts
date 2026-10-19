@@ -18,7 +18,14 @@ import { FleetEventLog } from "../events";
 import { Registry } from "../registry";
 import { SpawnSupervisor } from "../supervisor";
 import { managedWorktreePath, registerWorktreeEntry } from "../worktrees";
-import { openBrowser, serveEdge, testEviction, waitFor, type BrowserSocket } from "./edge.testkit";
+import {
+	openBrowser,
+	serveEdge,
+	testEviction,
+	testWaker,
+	waitFor,
+	type BrowserSocket,
+} from "./edge.testkit";
 
 afterAll(cleanupTempDirs);
 
@@ -81,6 +88,7 @@ describe("edge worktree commands", () => {
 			registry,
 			supervisor,
 			eviction: testEviction(registry, supervisor),
+			waker: testWaker(registry, supervisor, transport),
 			config,
 			eventLog: new FleetEventLog(),
 			transport,

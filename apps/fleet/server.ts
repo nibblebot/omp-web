@@ -67,9 +67,9 @@ import { acquireFileLock, type FileLock } from "#lib/platform/file-lock";
 import type { DeletionGateError, RegistryEntry } from "./registry";
 import { PAIR_LOSS_GRACE_MS, REDIAL_GRACE_MS, Registry } from "./registry";
 import { sessionLiveness } from "./session-liveness";
-import { validateProjectPath } from "./discovery";
 import { matchSelector } from "./selectors";
 import { SpawnSupervisor } from "./supervisor";
+import { SessionWaker } from "./session-waker";
 import { realpathOf } from "./worktrees";
 import type { FanoutDeps } from "./fanout";
 import { fanOut } from "./fanout";
@@ -107,28 +107,12 @@ import type {
 	ProviderRequest,
 	ProviderResponse,
 } from "#lib/runtime/provider-protocol";
-import {
-	CloneLifecycleError,
-	type CloneCreateInput,
-	WorkspaceLifecycle,
-} from "./workspace-lifecycle";
+import { CloneLifecycleError, WorkspaceLifecycle } from "./workspace-lifecycle";
 import { CloneControlApi, lifecycleStatus } from "./clone-control";
-import {
-	createWorktree,
-	deleteWorktree,
-	resolveProjectRoot,
-	projectIdForCwd,
-	registerProjectMainEntry,
-	registerWorktreeEntry,
-	worktreeDeleteInfo,
-	WorktreeDirtyError,
-	WorktreeTargetExistsError,
-	type CreateWorktreeResult,
-	type DeleteWorktreeResult,
-} from "./worktrees";
+import { FleetOperations, OperationError, parseCloneSource } from "./operations";
 
 export const DEFAULT_PORT = 4722;
-// P3.8 fleet log-store ack batching (docs/clone-contracts.md "Session log
+// P3.8 fleet log-store ack batching ("Session log
 // streaming"): log_ack controls ride the reserved transport stream once per
 // batch. Batches flush when the accumulated-chunk budget is hit or the
 // time budget elapses, whichever comes first; a high-churn session acking
@@ -360,6 +344,8 @@ class FleetServerImpl implements FleetServer {
 	readonly supervisor: SpawnSupervisor;
 	readonly config: FleetConfig;
 	readonly edge: FleetEdge;
+	readonly #waker: SessionWaker;
+	readonly #ops: FleetOperations;
 	readonly fleetSettings: FleetSettings;
 	readonly fleetPlugins: FleetPlugins;
 	readonly fleetUsage: FleetUsage;
@@ -595,7 +581,28 @@ class FleetServerImpl implements FleetServer {
 			lifecycle: this.lifecycle,
 			registry,
 			config: { providerProfiles: config.providerProfiles },
+		});
+		// One session waker per fleet (FLC-23): the edge and fan-out prompts share
+		// its rule set. Built after the supervisor, transport and lifecycle exist.
+		this.#waker = new SessionWaker({
+			registry,
+			supervisor: this.supervisor,
+			transport: this.transport,
+			lifecycle: this.lifecycle,
+			redialGraceMs: this.#redialGraceMs,
+		});
+		// Shared roster/workspace mutations (operations.ts): the control API
+		// here and the edge command table call the same methods.
+		this.#ops = new FleetOperations({
+			registry,
+			supervisor: this.supervisor,
+			config,
 			eventLog: this.eventLog,
+			lifecycle: this.lifecycle,
+			eviction: {
+				evictRow: (daemonId, removal) => this.#evictRow(daemonId, removal),
+				evictProject: (projectId) => this.#evictProject(projectId),
+			},
 		});
 		// Historical transcripts/stats API (P8.6): per-instance, constructed
 		// with the log store (fleetStore coverage) once the store loads in the
@@ -608,6 +615,7 @@ class FleetServerImpl implements FleetServer {
 			fleet: this.fleetFacts,
 			transport: this.transport,
 			lifecycle: this.lifecycle,
+			waker: this.#waker,
 			eviction: {
 				evictRow: (daemonId, removal) => this.#evictRow(daemonId, removal),
 				evictProject: (projectId) => this.#evictProject(projectId),
@@ -728,7 +736,7 @@ class FleetServerImpl implements FleetServer {
 		if (errors.length > 0) throw errors[0];
 	}
 
-	// --- fleet log store (P3.8; docs/clone-contracts.md "Fleet log store") ---
+	// --- fleet log store (P3.8) ---
 
 	/**
 	 * Per-workspace log-frame tap: durability-append daemon log chunks and
@@ -1080,14 +1088,13 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	#fanoutDeps(): FanoutDeps {
-		// P6.1 fanout trigger: prompt/wake for clones goes through the same
-		// lifecycle owner; spawned and remote entries wake via the supervisor
-		// and the callback pair (transport).
+		// P6.1 fanout trigger: every prompt wakes its session through the shared
+		// SessionWaker (clones via the lifecycle owner; spawned and remote entries
+		// via the supervisor and the callback pair).
 		return {
 			registry: this.registry,
-			supervisor: this.supervisor,
 			transport: this.transport,
-			lifecycle: this.lifecycle,
+			waker: this.#waker,
 		};
 	}
 
@@ -1356,62 +1363,53 @@ class FleetServerImpl implements FleetServer {
 				return json({ error: "not found" }, 404);
 		}
 	}
-	/** P2.2/P2.3: parse + validate the create_clone payload, then delegate
-	 *  entirely to the lifecycle service (the SAME create the edge uses).
-	 *  Never performs HTTP self-fetch; no duplicate lifecycle exists. */
+	/** P2.2/P2.3: presence-check the create_clone payload, then the shared create (the SAME create the edge uses). */
 	async #handleCreateClone(req: Request): Promise<Response> {
 		const body = await readJson(req);
-		// Shape-check the payload as CloneCreateInput (the frozen contract).
-		const input: CloneCreateInput = {
-			projectId: typeof body["projectId"] === "string" ? body["projectId"] : "",
-			name: typeof body["name"] === "string" ? body["name"] : "",
-			profileId: typeof body["profileId"] === "string" ? body["profileId"] : "",
-			source:
-				typeof body["source"] === "object" && body["source"] !== null
-					? (body["source"] as CloneCreateInput["source"])
-					: undefined,
-			revision: typeof body["revision"] === "string" ? body["revision"] : undefined,
-			branch: typeof body["branch"] === "string" ? body["branch"] : undefined,
-			start: typeof body["start"] === "boolean" ? body["start"] : undefined,
-		};
+		const raw = body["source"];
+		const entry = await this.#operate(() =>
+			this.#ops.createClone({
+				projectId: typeof body["projectId"] === "string" ? body["projectId"] : "",
+				name: typeof body["name"] === "string" ? body["name"] : "",
+				profileId: typeof body["profileId"] === "string" ? body["profileId"] : "",
+				source: raw === undefined || raw === null ? undefined : parseCloneSource(raw),
+				revision: typeof body["revision"] === "string" ? body["revision"] : undefined,
+				branch: typeof body["branch"] === "string" ? body["branch"] : undefined,
+				start: typeof body["start"] === "boolean" ? body["start"] : undefined,
+			}),
+		);
+		return json({ entry: toRosterEntry(entry) }, 201);
+	}
+
+	/**
+	 * Run one shared operation (operations.ts) and map its refusals to HTTP:
+	 * an OperationError keeps its status, a lifecycle refusal maps through
+	 * lifecycleStatus. Anything else is unexpected and propagates.
+	 */
+	async #operate<T>(run: () => Promise<T>): Promise<T> {
 		try {
-			return await this.cloneApi.createClone(input);
+			return await run();
 		} catch (err) {
-			if (err instanceof HttpError) throw err;
+			if (err instanceof OperationError) throw new HttpError(err.status, err.message);
 			if (err instanceof CloneLifecycleError) {
 				throw new HttpError(lifecycleStatus(err.code), err.message);
 			}
-			throw new HttpError(
-				500,
-				`clone creation failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
+			throw err;
 		}
 	}
 
 	async #handleSpawn(req: Request): Promise<Response> {
 		const body = await readJson(req);
 		const cwd = requireString(body, "cwd");
-		const template = optionalString(body, "template");
-		const name = optionalString(body, "name");
-		const labels = optionalLabels(body);
-		// NUL cannot exist in a shell command string; reject it at the
-		// boundary. (Quoting in supervisor #launch is the real injection
-		// defense; this only keeps NUL out of the wire/state.)
-		if (name !== undefined && name.includes("\0")) {
-			throw new HttpError(400, "invalid field: name must not contain NUL");
-		}
-		if (labels !== undefined && labels.some((label) => label.includes("\0"))) {
-			throw new HttpError(400, "labels must not contain NUL");
-		}
-		const resolved = await validateProjectPath(cwd);
-		if (resolved === null) throw new HttpError(400, `not a directory: ${cwd}`);
-		const entry = await this.supervisor.spawn({ cwd: resolved, template, name, labels });
-		// A cwd belonging to a registered project (main checkout or a linked
-		// worktree) tags the entry with that projectId so the roster groups it
-		// under the project. Unregistered paths stay untagged (fallback group).
-		const projectId = await projectIdForCwd(this.registry.projects(), resolved);
-		if (projectId !== undefined) this.registry.update(entry.daemonId, { projectId });
-		return json(toRosterEntry(this.registry.get(entry.daemonId) ?? entry));
+		const entry = await this.#operate(() =>
+			this.#ops.spawn({
+				cwd,
+				template: optionalString(body, "template"),
+				name: optionalString(body, "name"),
+				labels: optionalLabels(body),
+			}),
+		);
+		return json(toRosterEntry(entry));
 	}
 
 	/**
@@ -1432,31 +1430,15 @@ class FleetServerImpl implements FleetServer {
 		const start = optionalBoolean(body, "start") ?? false;
 		const template = optionalString(body, "template");
 		const labels = optionalLabels(body);
-		if (labels !== undefined && labels.some((label) => label.includes("\0"))) {
-			throw new HttpError(400, "labels must not contain NUL");
-		}
-		let mainPath: string;
-		try {
-			mainPath = await resolveProjectRoot(path);
-		} catch (err) {
-			throw new HttpError(400, err instanceof Error ? err.message : String(err));
-		}
-		const { project, existing } = this.registry.addProject(mainPath);
-		if (existing) return json({ project, existing: true });
-		try {
-			const entry = await registerProjectMainEntry(this.registry, this.supervisor, project, {
-				start,
-				template,
-				labels,
-			});
-			return json({ project, ...(start && entry ? { entry: toRosterEntry(entry) } : {}) }, 201);
-		} catch (err) {
-			// The project stays registered; the 500 names the stage.
-			throw new HttpError(
-				500,
-				`project ${project.projectId} registered, spawn failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
+		const result = await this.#operate(() => this.#ops.addProject({ path, start, template, labels }));
+		if (result.existing) return json({ project: result.project, existing: true });
+		return json(
+			{
+				project: result.project,
+				...(start && result.entry ? { entry: toRosterEntry(result.entry) } : {}),
+			},
+			201,
+		);
 	}
 
 	/**
@@ -1467,17 +1449,7 @@ class FleetServerImpl implements FleetServer {
 	 * dropped; transcripts stay on disk. Unknown ids → 404.
 	 */
 	async #handleRemoveProject(projectId: string): Promise<Response> {
-		if (!this.registry.projects().some((p) => p.projectId === projectId)) {
-			throw new HttpError(404, `unknown project id: ${projectId}`);
-		}
-		const rows = this.registry.list().filter((entry) => entry.projectId === projectId);
-		const cloneIds = rows
-			.filter((entry) => entry.workspace?.kind === "clone")
-			.map((entry) => entry.daemonId);
-		if (cloneIds.length > 0) {
-			throw new HttpError(409, `project ${projectId} has clone workspaces: ${cloneIds.join(", ")}`);
-		}
-		await this.#evictProject(projectId);
+		await this.#operate(() => this.#ops.removeProject(projectId));
 		return json({ removed: projectId });
 	}
 
@@ -1488,14 +1460,7 @@ class FleetServerImpl implements FleetServer {
 		if (matches.length === 0) throw new HttpError(404, `no daemon matches selector: ${selector}`);
 		const stopped: string[] = [];
 		for (const entry of matches) {
-			if (entry.workspace?.kind === "clone") {
-				// P6.5: provider-owned clone; proof-bearing provider stop via
-				// the single lifecycle owner (desiredState stopped, status
-				// asleep, enrollment revoked). Never the legacy paths.
-				await this.lifecycle.stopClone(entry.daemonId);
-			} else {
-				await this.supervisor.stop(entry.daemonId);
-			}
+			await this.#operate(() => this.#ops.stop(entry.daemonId));
 			stopped.push(entry.daemonId);
 		}
 		return json({ stopped });
@@ -1609,29 +1574,12 @@ class FleetServerImpl implements FleetServer {
 		const matches = matchSelector(this.registry.list(), selector);
 		if (matches.length === 0) throw new HttpError(404, `no daemon matches selector: ${selector}`);
 		const removed: string[] = [];
-		let verified: string[] = [];
+		const verified: string[] = [];
 		for (const entry of matches) {
-			if (entry.workspace?.kind === "clone") {
-				// P7.5: clone-safe remove MUST route through the SAME verified
-				// gate as DELETE; no kind-blind roster eviction can bypass
-				// it. The lifecycle owner runs the whole gate (admission →
-				// quiesce → Git guard → store verification → read-only flip →
-				// provider deletion → volume deletion → roster removal).
-				try {
-					const result = await this.lifecycle.deleteClone(entry.daemonId);
-					verified.push(...result.verified);
-				} catch (err) {
-					if (err instanceof CloneLifecycleError) {
-						throw new HttpError(lifecycleStatus(err.code), err.message);
-					}
-					throw err;
-				}
-			} else {
-				// Legacy direct/worktree eviction: stop, drop the pair state, and
-				// remove the row in one place (#evictRow).
-				await this.#evictRow(entry.daemonId, async () => {});
-			}
-			this.eventLog.add("info", "server", "removed", entry.daemonId);
+			// A clone takes the verified delete gate; anything else is evicted
+			// through the single path (#evictRow). Both run in the shared operation.
+			const result = await this.#operate(() => this.#ops.remove(entry.daemonId));
+			verified.push(...result.verified);
 			removed.push(entry.daemonId);
 		}
 		return json({ removed, ...(verified.length > 0 ? { verified } : {}) });
@@ -1725,37 +1673,14 @@ class FleetServerImpl implements FleetServer {
 	 */
 	async #handleCreateWorktree(req: Request, projectId: string): Promise<Response> {
 		const body = await readJson(req);
-		const project = this.registry.projects().find((p) => p.projectId === projectId);
-		if (!project) throw new HttpError(404, `unknown project: ${projectId}`);
 		const name = requireString(body, "name");
-		const start = optionalBoolean(body, "start");
-		let created: CreateWorktreeResult;
-		try {
-			created = await createWorktree(project, name, {
-				workspaceDir: this.config.workspaceDir,
+		const entry = await this.#operate(() =>
+			this.#ops.createWorktree(projectId, {
+				name,
 				baseRef: optionalString(body, "baseRef"),
 				existingBranch: optionalString(body, "existingBranch"),
-			});
-		} catch (err) {
-			const status = err instanceof WorktreeTargetExistsError ? 409 : 400;
-			throw new HttpError(
-				status,
-				`create worktree failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-		let entry: RegistryEntry;
-		try {
-			entry = await registerWorktreeEntry(this.registry, this.supervisor, project, created.path, {
-				start,
-			});
-		} catch (err) {
-			throw new HttpError(500, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
-		}
-		this.eventLog.add(
-			"info",
-			"server",
-			`worktree created ${created.path} (${created.branch})`,
-			entry.daemonId,
+				start: optionalBoolean(body, "start"),
+			}),
 		);
 		return json({ entry: toRosterEntry(entry) }, 201);
 	}
@@ -1765,38 +1690,23 @@ class FleetServerImpl implements FleetServer {
 	 * delete confirmation (worktree_delete_info payload). Never deletes.
 	 */
 	async #handleWorktreeDeleteInfo(daemonId: string): Promise<Response> {
-		const entry = this.registry.get(daemonId);
-		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
-		const info = await worktreeDeleteInfo(entry);
+		const info = await this.#operate(() => this.#ops.worktreeDeleteInfo(daemonId));
 		return json({ daemonId, ...info });
 	}
 
 	/**
-	 * DELETE /ctl/worktrees/:daemonId. Routes by workspace kind:
-	 *   - kind "clone" → the verify-at-deletion gate (P7.3/P7.5);
-	 *   - everything else (worktree/direct/legacy) → the unchanged legacy
-	 *     worktree delete path (stop → evict → git worktree remove).
+	 * DELETE /ctl/worktrees/:daemonId {deleteBranch?}. A clone runs the shared
+	 * verify-at-deletion gate; any other workspace is a worktree removal whose
+	 * guards (403 not linked / 409 dirty, never --force) run before any
+	 * mutation. The body is optional and applies to worktrees only.
 	 */
 	async #handleDeleteWorkspace(req: Request, daemonId: string): Promise<Response> {
-		const entry = this.registry.get(daemonId);
-		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
-		if (entry.workspace?.kind === "clone") {
-			// P7.3/P7.5: the clone verify-at-deletion gate lives in the ONE
-			// lifecycle owner (admission → quiesce with proven stop → Git
-			// guard → store verification against the volume → read-only
-			// flip → provider deletion → volume deletion → roster removal).
-			// The worktree/direct path below is unchanged.
-			try {
-				const result = await this.lifecycle.deleteClone(daemonId);
-				return json(result);
-			} catch (err) {
-				if (err instanceof CloneLifecycleError) {
-					throw new HttpError(lifecycleStatus(err.code), err.message);
-				}
-				throw err;
-			}
+		const raw = await req.text();
+		if (this.registry.get(daemonId)?.workspace?.kind === "clone") {
+			return json(await this.#operate(() => this.#ops.deleteWorkspace(daemonId)));
 		}
-		return await this.#handleDeleteWorktree(req, daemonId);
+		const deleteBranch = this.#parseDeleteBody(raw);
+		return json(await this.#operate(() => this.#ops.deleteWorkspace(daemonId, { deleteBranch })));
 	}
 
 	/**
@@ -1841,59 +1751,19 @@ class FleetServerImpl implements FleetServer {
 		return json({ purged: workspaceId, sessions: result.sessions });
 	}
 
-	/**
-	 * DELETE /ctl/worktrees/:daemonId {deleteBranch?}: stop the daemon,
-	 * evict it from the roster, then git-remove the local linked worktree
-	 * (and optionally `git branch -d` it). Linked-worktree identity and dirty
-	 * guards run BEFORE any mutation: a refusal (403 not linked / 409 dirty;
-	 * never --force) leaves the roster and daemon untouched.
-	 * Session transcripts live under the agent dir, never inside the worktree;
-	 * the current default creation directory has no role in deletion.
-	 */
-	async #handleDeleteWorktree(req: Request, daemonId: string): Promise<Response> {
-		// The body is optional (`{ deleteBranch?: string }`); a bodyless
-		// DELETE must not 400.
-		const raw = await req.text();
-		let body: Record<string, unknown>;
-		if (raw.trim() === "") {
-			body = {};
-		} else {
-			try {
-				body = JSON.parse(raw);
-			} catch {
-				throw new HttpError(400, "invalid JSON body");
-			}
-			if (typeof body !== "object" || body === null || Array.isArray(body)) {
-				throw new HttpError(400, "request body must be a JSON object");
-			}
-		}
-		const deleteBranch = optionalString(body, "deleteBranch");
-		const entry = this.registry.get(daemonId);
-		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
-		const path = entry.cwd ?? "";
-		const info = await worktreeDeleteInfo(entry);
-		if (!info.linked) throw new HttpError(403, info.reason ?? `not a linked worktree: ${path}`);
-		if (info.dirty)
-			throw new HttpError(409, info.reason ?? `worktree has uncommitted changes: ${path}`);
-		// Stop, run the guarded git removal, and evict the row only once it
-		// succeeded: a refused delete leaves the row registered (asleep, FLC-21).
-		let deleted: DeleteWorktreeResult;
+	/** The optional DELETE body (`{ deleteBranch?: string }`): empty means none; anything else must be a JSON object. */
+	#parseDeleteBody(raw: string): string | undefined {
+		if (raw.trim() === "") return undefined;
+		let body: unknown;
 		try {
-			deleted = await this.#evictRow(daemonId, () => deleteWorktree(entry, { deleteBranch }));
-		} catch (err) {
-			if (err instanceof WorktreeDirtyError) throw new HttpError(409, err.message);
-			throw new HttpError(
-				500,
-				`delete worktree failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
+			body = JSON.parse(raw);
+		} catch {
+			throw new HttpError(400, "invalid JSON body");
 		}
-		this.eventLog.add(
-			"info",
-			"server",
-			`worktree deleted ${deleted.path}${deleted.branch !== undefined ? ` (${deleted.branch})` : ""}`,
-			daemonId,
-		);
-		return json({ removed: daemonId, worktree: deleted });
+		if (typeof body !== "object" || body === null || Array.isArray(body)) {
+			throw new HttpError(400, "request body must be a JSON object");
+		}
+		return optionalString(body as Record<string, unknown>, "deleteBranch");
 	}
 }
 

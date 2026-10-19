@@ -23,6 +23,7 @@ import {
 	FAKE_STATE,
 	openBrowser,
 	testEviction,
+	testWaker,
 	waitFor,
 	type BrowserSocket,
 } from "./edge.testkit";
@@ -71,6 +72,7 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 			registry,
 			supervisor,
 			eviction: testEviction(registry, supervisor),
+			waker: testWaker(registry, supervisor, transport),
 			config,
 			eventLog: new FleetEventLog(),
 			transport,
