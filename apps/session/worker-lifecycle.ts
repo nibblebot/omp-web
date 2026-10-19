@@ -164,84 +164,86 @@ export async function listWorkers(entry: SessionEntry): Promise<WorkerRecord[]> 
 		...entry.transcriptSessionFilesBySubagentId.keys(),
 	]);
 	for (const ref of entry.agentRegistry.list()) if (ownsRef(entry, ref)) ids.add(ref.id);
-	const workers: WorkerRecord[] = [];
-	for (const id of ids) {
-		if (id === MAIN_AGENT_ID) continue;
-		const registered = workerRef(entry, id);
-		if (registered && !ownsRef(entry, registered)) continue;
-		const snap = entry.subagentSnapshots.get(id);
-		const sessionFile =
-			registered?.sessionFile ??
-			entry.transcriptSessionFilesBySubagentId.get(id) ??
-			snap?.sessionFile ??
-			null;
-		if (sessionFile && (!root || !sessionFileBelongsToRoot(sessionFile, root))) continue;
-		let hasHistory = false;
-		if (sessionFile) {
-			try {
-				hasHistory = (await stat(sessionFile)).isFile();
-			} catch {
-				/* Missing history stays read-only. */
-			}
-		}
-		// A finished worker stays parkable and revivable. Once the lifecycle has moved it (idle or parked),
-		// the live registry state wins; a finished snapshot only stands in for a stale running ref.
-		const finished = snap?.status === "completed" || snap?.status === "failed";
-		const status = mapStatus(
-			registered?.status === "aborted"
-				? "aborted"
-				: finished && (!registered || registered.status === "running")
-					? snap.status
-					: (registered?.status ?? snap?.status),
-		);
-		const manager = AgentLifecycleManager.global();
-		let revivable = false;
-		let unavailableReason: string | undefined =
-			sessionFile && !hasHistory ? "worker history is missing or inaccessible" : undefined;
-		if (status === "parked") {
-			const factory = revivers.get(entry);
-			if (!hasHistory) unavailableReason = "worker history is missing or inaccessible";
-			// An adopted worker revives through its own reviver; the persisted factory is the cold path.
-			else if (manager && registered && manager.has(id, registered)) revivable = true;
-			else if (!manager || !factory || !registered)
-				unavailableReason = "worker revival dependencies are unavailable";
-			else {
+	const rows = await Promise.all(
+		[...ids].map(async (id): Promise<WorkerRecord | undefined> => {
+			if (id === MAIN_AGENT_ID) return undefined;
+			const registered = workerRef(entry, id);
+			if (registered && !ownsRef(entry, registered)) return undefined;
+			const snap = entry.subagentSnapshots.get(id);
+			const sessionFile =
+				registered?.sessionFile ??
+				entry.transcriptSessionFilesBySubagentId.get(id) ??
+				snap?.sessionFile ??
+				null;
+			if (sessionFile && (!root || !sessionFileBelongsToRoot(sessionFile, root))) return undefined;
+			let hasHistory = false;
+			if (sessionFile) {
 				try {
-					revivable = !!(await factory(registered));
+					hasHistory = (await stat(sessionFile)).isFile();
 				} catch {
-					/* Fail closed on inaccessible artifacts. */
+					/* Missing history stays read-only. */
 				}
-				if (!revivable)
-					unavailableReason =
-						"worker history, persisted contract or workspace is unavailable or nonresumable";
 			}
-		}
-		const meta = finishedSubagentMeta(entry, id);
-		workers.push({
-			id,
-			sessionId: entry.session.sessionManager.getSessionId(),
-			displayName: registered?.displayName ?? snap?.agent ?? meta?.agent ?? id,
-			status,
-			parentAgentId: registered?.parentId,
-			parentToolCallId: snap?.parentToolCallId ?? meta?.parentToolCallId,
-			task: snap?.task ?? meta?.task,
-			assignment: snap?.assignment ?? meta?.assignment,
-			description: snap?.description ?? meta?.description,
-			progress: snap?.progress === undefined ? undefined : projectProgress(snap.progress),
-			usage:
-				snap?.progress !== undefined
-					? undefined
-					: (finishedSubagentUsage(entry, id) ??
-						(sessionFile && hasHistory ? await transcriptUsage(sessionFile) : undefined)),
-			sessionFile,
-			hasHistory,
-			lastActivity: registered?.lastActivity ?? snap?.lastUpdate ?? 0,
-			createdAt: registered?.createdAt ?? snap?.lastUpdate ?? 0,
-			adopted: !!registered && !!manager?.has(id, registered),
-			revivable,
-			unavailableReason,
-		});
-	}
+			// A finished worker stays parkable and revivable. Once the lifecycle has moved it (idle or parked),
+			// the live registry state wins; a finished snapshot only stands in for a stale running ref.
+			const finished = snap?.status === "completed" || snap?.status === "failed";
+			const status = mapStatus(
+				registered?.status === "aborted"
+					? "aborted"
+					: finished && (!registered || registered.status === "running")
+						? snap.status
+						: (registered?.status ?? snap?.status),
+			);
+			const manager = AgentLifecycleManager.global();
+			let revivable = false;
+			let unavailableReason: string | undefined =
+				sessionFile && !hasHistory ? "worker history is missing or inaccessible" : undefined;
+			if (status === "parked") {
+				const factory = revivers.get(entry);
+				if (!hasHistory) unavailableReason = "worker history is missing or inaccessible";
+				// An adopted worker revives through its own reviver; the persisted factory is the cold path.
+				else if (manager && registered && manager.has(id, registered)) revivable = true;
+				else if (!manager || !factory || !registered)
+					unavailableReason = "worker revival dependencies are unavailable";
+				else {
+					try {
+						revivable = !!(await factory(registered));
+					} catch {
+						/* Fail closed on inaccessible artifacts. */
+					}
+					if (!revivable)
+						unavailableReason =
+							"worker history, persisted contract or workspace is unavailable or nonresumable";
+				}
+			}
+			const meta = finishedSubagentMeta(entry, id);
+			return {
+				id,
+				sessionId: entry.session.sessionManager.getSessionId(),
+				displayName: registered?.displayName ?? snap?.agent ?? meta?.agent ?? id,
+				status,
+				parentAgentId: registered?.parentId,
+				parentToolCallId: snap?.parentToolCallId ?? meta?.parentToolCallId,
+				task: snap?.task ?? meta?.task,
+				assignment: snap?.assignment ?? meta?.assignment,
+				description: snap?.description ?? meta?.description,
+				progress: snap?.progress === undefined ? undefined : projectProgress(snap.progress),
+				usage:
+					snap?.progress !== undefined
+						? undefined
+						: (finishedSubagentUsage(entry, id) ??
+							(sessionFile && hasHistory ? await transcriptUsage(sessionFile) : undefined)),
+				sessionFile,
+				hasHistory,
+				lastActivity: registered?.lastActivity ?? snap?.lastUpdate ?? 0,
+				createdAt: registered?.createdAt ?? snap?.lastUpdate ?? 0,
+				adopted: !!registered && !!manager?.has(id, registered),
+				revivable,
+				unavailableReason,
+			};
+		}),
+	);
+	const workers = rows.filter((row): row is WorkerRecord => row !== undefined);
 	workers.sort((a, b) => rank[a.status] - rank[b.status] || b.lastActivity - a.lastActivity);
 	return workers;
 }

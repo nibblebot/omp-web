@@ -11,82 +11,43 @@
  * /ctl/stats. Unstreamed remote history is simply absent: no row, no
  * completeness claim.
  *
- * Layering: imports only ./log-store, ../stats/*, shared/stats-types.ts,
- * node builtins. Never server/ or src/.
+ * Layering: imports only ./log-store, ./session-head, node builtins.
+ * Never server/ or src/.
  */
 import type { FleetLogStore, StoredSessionInfo } from "./log-store";
-import type { RawEntry } from "#lib/wire/stats-types";
-import { parseLine } from "./stats-jsonl";
+import { statSync } from "node:fs";
+import { parseSessionHead, SESSION_HEAD_BYTES } from "./session-head";
+import type { SessionHead } from "./session-head";
 
 /** One stored main file's head facts, read from the stored bytes. */
-export interface StoredHead {
-	title: string | null;
-	cwd: string | null;
-	id: string | null;
-	firstTs: number | null;
-	lastTs: number | null;
+export interface StoredHead extends SessionHead {
+	/** Full stored file size, not the parsed prefix. */
 	bytes: number;
 }
 
-/** Read the stored main file's head (title slot + session header + firstTs). */
+/** Read the stored main file's head (title, cwd, id, first/last timestamps). */
 export function readStoredHead(
 	store: FleetLogStore,
 	wsId: string,
 	sessionId: string,
 	relpath: string,
 ): StoredHead | null {
-	const bytes = store.readStored(wsId, sessionId, relpath);
-	if (bytes === null) return null;
-	let text: string;
+	const prefix = store.readStoredPrefix(wsId, sessionId, relpath, SESSION_HEAD_BYTES);
+	const file = store.storedFilePath(wsId, sessionId, relpath);
+	if (prefix === null || file === null) return null;
 	try {
-		text = bytes.subarray(0, Math.min(bytes.length, 64 * 1024)).toString("utf8");
+		return { ...parseSessionHead(prefix.toString("utf8")), bytes: statSync(file).size };
 	} catch {
 		return null;
 	}
-	const lines = text.split("\n").slice(0, 4);
-	const entries: RawEntry[] = [];
-	for (const line of lines) {
-		const e = parseLine(line);
-		if (e) entries.push(e);
-	}
-	const first = entries[0];
-	const second = entries[1];
-	const head = first?.type === "session" ? first : second?.type === "session" ? second : undefined;
-	const title =
-		first?.type === "title" && typeof first.title === "string"
-			? first.title
-			: head && typeof head.title === "string"
-				? head.title
-				: null;
-	const cwd = head && typeof head.cwd === "string" ? head.cwd : null;
-	const id = head && typeof head.id === "string" ? head.id : null;
-	let firstTs: number | null = null;
-	let lastTs: number | null = null;
-	for (const e of entries) {
-		if (typeof e.timestamp === "number") {
-			if (firstTs === null) firstTs = e.timestamp;
-			lastTs = e.timestamp;
-		}
-	}
-	return { title, cwd, id, firstTs, lastTs, bytes: bytes.length };
 }
 
-/** Count of stored main files per session kind, aggregated across a store. */
+/** Session, workspace, and byte totals of the loaded store (O(1), no disk). */
 export function storeCoverage(
 	store: FleetLogStore | null,
 ): { workspaces: number; sessions: number; bytes: number } | null {
 	if (store === null) return null;
-	let workspaces = 0;
-	let sessions = 0;
-	let bytes = 0;
-	for (const ws of store.listStoredWorkspaces()) {
-		workspaces += 1;
-		for (const s of ws.sessions) {
-			sessions += 1;
-			bytes += s.bytes;
-		}
-	}
-	return { workspaces, sessions, bytes };
+	return store.coverage();
 }
 
 /** File key for a store-only summary row (display only, never a stats :file). */

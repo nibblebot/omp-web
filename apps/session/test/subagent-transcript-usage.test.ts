@@ -53,3 +53,22 @@ describe("transcriptUsage", () => {
 		).toBeUndefined();
 	});
 });
+
+describe("transcriptUsage memo", () => {
+	test("an unchanged transcript is not scanned again; a rewritten one is", async () => {
+		const file = transcript([assistant({ totalTokens: 40 })]);
+		let scans = 0;
+		const scan = async () => {
+			scans += 1;
+			return { tokens: 40, requests: 1, cost: 0 };
+		};
+
+		expect(await transcriptUsage(file, scan)).toEqual({ tokens: 40, requests: 1, cost: 0 });
+		expect(await transcriptUsage(file, scan)).toEqual({ tokens: 40, requests: 1, cost: 0 });
+		expect(scans).toBe(1);
+
+		writeFileSync(file, `${assistant({ totalTokens: 40 })}\n${assistant({ totalTokens: 40 })}\n`);
+		expect(await transcriptUsage(file, scan)).toEqual({ tokens: 40, requests: 1, cost: 0 });
+		expect(scans).toBe(2);
+	});
+});

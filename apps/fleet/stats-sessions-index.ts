@@ -1,11 +1,9 @@
 /**
- * Session-directory indexing shared by /ctl/stats/sessions and
- * /ctl/stats/health. One walk definition so the health counter can never
- * drift from the list.
+ * Session-directory walk for /ctl/stats/sessions. The list cache builds its
+ * rows from this walk; /ctl/stats/health reads its count from that cache.
  */
 import { readdirSync } from "node:fs";
-import { join, relative } from "node:path";
-import { isMainSession } from "./stats-paths";
+import { join } from "node:path";
 
 /** All *.jsonl files under dir, absolute paths (unreadable dirs skipped). */
 export function walkJsonl(dir: string): string[] {
@@ -26,9 +24,4 @@ export function walkJsonl(dir: string): string[] {
 		}
 	}
 	return out;
-}
-
-/** Number of main-agent sessions on disk (same walk the sessions list uses). */
-export function countMainSessions(dir: string): number {
-	return walkJsonl(dir).filter((abs) => isMainSession(relative(dir, abs))).length;
 }

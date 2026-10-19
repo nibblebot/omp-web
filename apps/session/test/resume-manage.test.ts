@@ -6,7 +6,7 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { listAllSessions } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import {
@@ -222,6 +222,27 @@ describe("resume-manage rename", () => {
 		expect(result).toEqual({ renamed: true, sessionId: id, title: "Picker title" });
 		const listed = (await listAllSessions(new FileSessionStorage(), root)).find((s) => s.id === id);
 		expect(listed?.title).toBe("Picker title");
+	});
+
+	test("a journal outside the one-level project layout is refused and kept", async () => {
+		const root = tempDir("omp-manage-layout-");
+		const id = crypto.randomUUID();
+		const nested = join(root, "project", "nested");
+		mkdirSync(nested, { recursive: true });
+		const file = join(nested, `${id}.jsonl`);
+		writeFileSync(
+			file,
+			`${JSON.stringify({ type: "session", version: 3, id, cwd: nested, timestamp: new Date().toISOString() })}\n`,
+		);
+		const before = readFileSync(file, "utf8");
+
+		await expect(
+			renameResumeSession(
+				{ sessionFile: file, title: "Nested" },
+				{ sessionsRoot: root, unpin: async () => {} },
+			),
+		).rejects.toThrow(/not in the session listing/);
+		expect(readFileSync(file, "utf8")).toBe(before);
 	});
 });
 

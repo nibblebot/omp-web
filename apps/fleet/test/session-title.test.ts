@@ -50,6 +50,13 @@ describe("readSessionTitle", () => {
 		await expect(readSessionTitle(path)).resolves.toBeUndefined();
 	});
 
+	test("an empty title slot falls back to the session-header title", async () => {
+		const dir = tempDir("omp-session-title-");
+		const path = join(dir, "empty-slot.jsonl");
+		writeFileSync(path, titleLine("") + headerLine("Header title"));
+		await expect(readSessionTitle(path)).resolves.toBe("Header title");
+	});
+
 	test("fallback: a corrupt title slot never throws and falls back to the header", async () => {
 		const dir = tempDir("omp-session-title-");
 		// Truncated/garbled slot JSON (a partial write): the line no longer

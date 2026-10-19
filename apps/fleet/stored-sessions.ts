@@ -34,6 +34,11 @@ import type {
 	RawEntry,
 } from "#lib/wire/stats-types";
 import { parseLine } from "./stats-jsonl";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { ByteLru } from "#lib/platform/byte-lru";
+import type { ByteLruLimits } from "#lib/platform/byte-lru";
+import { parseSessionHead, SESSION_HEAD_BYTES } from "./session-head";
+import type { SessionHead } from "./session-head";
 
 // ---------------------------------------------------------------------------
 // Provenance projection (secret-free)
@@ -135,20 +140,13 @@ function typedError(
 // Wire-row assembly
 // ---------------------------------------------------------------------------
 
-function publicProvenanceOf(
-	deps: StoredAppDeps,
-	workspaceId: string,
-): PublicProvenance | undefined {
-	return provenanceFor(deps, workspaceId);
-}
-
 /** readOnly is a workspace-level property; thread it onto each session row. */
 function summaryRow(
 	deps: StoredAppDeps,
 	s: StoredSessionInfo,
 	readOnly: boolean,
 ): StoredSessionSummary {
-	const provenance = publicProvenanceOf(deps, s.workspaceId);
+	const provenance = provenanceFor(deps, s.workspaceId);
 	return {
 		workspaceId: s.workspaceId,
 		sessionId: s.sessionId,
@@ -178,7 +176,7 @@ function workspaceRow(
 	sessions: StoredSessionInfo[],
 	readOnly: boolean,
 ): StoredWorkspaceSummary {
-	const provenance = publicProvenanceOf(deps, workspaceId);
+	const provenance = provenanceFor(deps, workspaceId);
 	const orphaned = provenance === undefined;
 	return {
 		workspaceId,
@@ -215,58 +213,15 @@ function detailRow(
 // Display enrichment from stored JSONL heads (title/cwd/timestamps)
 // ---------------------------------------------------------------------------
 
-/** Title slot (line 1) + session header (line 2) of a stored JSONL file. */
+/** Head facts (title, session header, first/last timestamps) of a stored JSONL file. */
 function headOf(
 	store: FleetLogStore,
 	workspaceId: string,
 	sessionId: string,
 	relpath: string,
-): {
-	title: string | null;
-	cwd: string | null;
-	id: string | null;
-	firstTs: number | null;
-	lastTs: number | null;
-} | null {
-	const bytes = store.readStored(workspaceId, sessionId, relpath);
-	if (bytes === null) return null;
-	// The fixed 256 B title slot precedes the header; read up to the first
-	// few newline-terminated records without parsing the whole file.
-	let text: string;
-	try {
-		text = bytes.subarray(0, Math.min(bytes.length, 64 * 1024)).toString("utf8");
-	} catch {
-		return null;
-	}
-	const lines = text.split("\n").slice(0, 4);
-	const entries: RawEntry[] = [];
-	for (const line of lines) {
-		const e = parseLine(line);
-		if (e) entries.push(e);
-	}
-	const first = entries[0];
-	const second = entries[1];
-	const head = first?.type === "session" ? first : second?.type === "session" ? second : undefined;
-	const title =
-		first?.type === "title" && typeof first.title === "string"
-			? first.title
-			: head && typeof head.title === "string"
-				? head.title
-				: null;
-	const cwd = head && typeof head.cwd === "string" ? head.cwd : null;
-	const id = head && typeof head.id === "string" ? head.id : null;
-	let firstTs: number | null = null;
-	let lastTs: number | null = null;
-	for (const e of entries) {
-		if (typeof e.timestamp === "number") {
-			if (firstTs === null) firstTs = e.timestamp;
-			lastTs = e.timestamp;
-		}
-	}
-	if (id !== null && id !== sessionId) {
-		// Header id mismatch: still a real stored file; surface the head.
-	}
-	return { title, cwd, id, firstTs, lastTs };
+): SessionHead | null {
+	const prefix = store.readStoredPrefix(workspaceId, sessionId, relpath, SESSION_HEAD_BYTES);
+	return prefix === null ? null : parseSessionHead(prefix.toString("utf8"));
 }
 
 // ---------------------------------------------------------------------------
@@ -323,11 +278,16 @@ function transcriptRoute(deps: StoredAppDeps): Route {
 			if (format !== "parsed") {
 				return typedError("invalid_request", "invalid format (parsed|raw)", 400);
 			}
-			// Bounded parse: never buffer or parse more than the cap; the
-			// prefix is line-truncated at the cap so `truncated` is honest.
-			const bytes = store.readStoredPrefix(workspaceId, sessionId, relpath, MAX_PARSE_BYTES);
-			if (bytes === null) return unavailableFile(relpath);
-			return parsedTranscript(bytes, url, MAX_PARSE_BYTES);
+			// Windowed parse: only this page's lines are read and parsed.
+			const transcriptFile = store.storedFilePath(workspaceId, sessionId, relpath);
+			const size = transcriptFile === null ? 0 : storedFileSize(transcriptFile);
+			if (transcriptFile === null || size === 0) return unavailableFile(relpath);
+			try {
+				return parsedTranscript(transcriptFile, size, url);
+			} catch {
+				// The file was removed or rewritten between stat and read.
+				return unavailableFile(relpath);
+			}
 		},
 	};
 }
@@ -335,48 +295,165 @@ function transcriptRoute(deps: StoredAppDeps): Route {
 const unavailableFile = (relpath: string): Response =>
 	typedError("unavailable", `stored file ${relpath} is unavailable (missing on disk)`, 404);
 
-/** Parse cap for one stored transcript (mirrors the stats jsonl convention). */
-const MAX_PARSE_BYTES = 256 * 1024 * 1024;
+/** Raw lines per sparse index checkpoint; a page seeks to the nearest one at or below its start. */
+const LINE_INDEX_STRIDE = 1000;
+/** Bytes of returned lines one page may read; the page ends at the next line boundary past this. */
+const PAGE_BYTE_BUDGET = 4 * 1024 * 1024;
+/** Streaming chunk size for the newline scan and page reads. */
+const SCAN_CHUNK_BYTES = 64 * 1024;
+
+/** Byte offsets of every LINE_INDEX_STRIDE-th raw line of one stored file version. */
+interface LineIndex {
+	totalLines: number;
+	/** starts[k] is the byte offset of raw line k * LINE_INDEX_STRIDE. */
+	starts: number[];
+}
+
+/** One page of raw lines; `nextLine` is the cursor of the next page, or null at EOF. */
+interface PageRead {
+	lines: string[];
+	nextLine: number | null;
+	truncated: boolean;
+}
+
+const LINE_INDEX_CACHE_LIMITS: ByteLruLimits = {
+	maxBytes: 4 * 1024 * 1024,
+	maxEntryBytes: 1024 * 1024,
+};
+const lineIndexCache = new ByteLru<LineIndex>(LINE_INDEX_CACHE_LIMITS);
+
+/** Size of a stored regular file; 0 when missing (treated as unavailable). */
+function storedFileSize(file: string): number {
+	try {
+		const st = statSync(file);
+		return st.isFile() ? st.size : 0;
+	} catch {
+		return 0;
+	}
+}
+
+/** One streaming newline scan (no JSON parse) that records a checkpoint every stride. */
+function buildLineIndex(file: string, size: number): LineIndex {
+	const starts = [0];
+	let newlines = 0;
+	let endsWithNewline = false;
+	const fd = openSync(file, "r");
+	try {
+		const buf = Buffer.alloc(SCAN_CHUNK_BYTES);
+		let pos = 0;
+		while (pos < size) {
+			const n = readSync(fd, buf, 0, Math.min(buf.length, size - pos), pos);
+			if (n <= 0) break;
+			for (let i = 0; i < n; i++) {
+				if (buf[i] !== 0x0a) continue;
+				newlines += 1;
+				if (newlines % LINE_INDEX_STRIDE === 0 && pos + i + 1 < size) starts.push(pos + i + 1);
+			}
+			endsWithNewline = buf[n - 1] === 0x0a;
+			pos += n;
+		}
+	} finally {
+		closeSync(fd);
+	}
+	return { totalLines: newlines + (endsWithNewline ? 0 : 1), starts };
+}
+
+/** Sparse line index for one (path, size) version, built once and cached. */
+function lineIndexOf(file: string, size: number): LineIndex {
+	const key = `${file}\0${size}`;
+	const cached = lineIndexCache.get(key);
+	if (cached !== undefined) return cached;
+	const index = buildLineIndex(file, size);
+	lineIndexCache.set(key, index, 8 * index.starts.length + 64);
+	return index;
+}
 
 /**
- * Paginated parsed view of a stored JSONL file's bytes. `readBytes` is the
- * cap the prefix was read at; when the real file is larger, the page is
- * marked truncated and the line count is "as parsed", which the UI reports
- * honestly instead of a wrong total.
+ * Reads raw lines [startLine, startLine + limit): seeks to the nearest
+ * checkpoint and scans forward in chunks. Lines before startLine are skipped
+ * without copying; the page ends early at a line boundary once
+ * PAGE_BYTE_BUDGET bytes of returned lines are collected.
  */
-async function parsedTranscript(bytes: Buffer, url: URL, readBytes: number): Promise<Response> {
+function readLinePage(
+	file: string,
+	size: number,
+	index: LineIndex,
+	startLine: number,
+	limit: number,
+): PageRead {
+	const checkpoint = Math.floor(startLine / LINE_INDEX_STRIDE);
+	const lines: string[] = [];
+	let lineNo = checkpoint * LINE_INDEX_STRIDE;
+	let collectedBytes = 0;
+	let partial: Buffer[] = [];
+	let full = false;
+	const fd = openSync(file, "r");
+	try {
+		const buf = Buffer.alloc(SCAN_CHUNK_BYTES);
+		let pos = index.starts[checkpoint]!;
+		while (!full && pos < size) {
+			const n = readSync(fd, buf, 0, Math.min(buf.length, size - pos), pos);
+			if (n <= 0) break;
+			let segStart = 0;
+			for (let i = 0; i < n && !full; i++) {
+				if (buf[i] !== 0x0a) continue;
+				const seg = buf.subarray(segStart, i);
+				segStart = i + 1;
+				if (lineNo >= startLine) {
+					const text = partial.length === 0 ? seg : Buffer.concat([...partial, seg]);
+					lines.push(text.toString("utf8"));
+					collectedBytes += text.length;
+					full = lines.length >= limit || collectedBytes >= PAGE_BYTE_BUDGET;
+				}
+				partial = [];
+				lineNo += 1;
+			}
+			if (!full && lineNo >= startLine && segStart < n) {
+				partial.push(Buffer.from(buf.subarray(segStart, n)));
+			}
+			pos += n;
+		}
+		if (!full && partial.length > 0 && lineNo >= startLine) {
+			lines.push(Buffer.concat(partial).toString("utf8"));
+			lineNo += 1;
+		}
+	} finally {
+		closeSync(fd);
+	}
+	const nextLine = lineNo < index.totalLines ? lineNo : null;
+	return { lines, nextLine, truncated: full && lines.length < limit && nextLine !== null };
+}
+
+/**
+ * Paginated parsed view of a stored JSONL file. Offsets are raw line indexes
+ * (the same cursor as /ctl/stats), so a page reads and parses only its own
+ * window. `truncated` marks a page that ended at PAGE_BYTE_BUDGET before its
+ * line limit; `nextOffset` continues from there.
+ */
+function parsedTranscript(file: string, size: number, url: URL): Response {
 	const rawOffset = url.searchParams.get("offset");
 	const rawLimit = url.searchParams.get("limit");
 	const offset = rawOffset === null ? 0 : Number.parseInt(rawOffset, 10);
 	const limit = rawLimit === null ? 200 : Number.parseInt(rawLimit, 10);
 	const startLine = Number.isFinite(offset) && offset >= 0 ? offset : 0;
 	const pageLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 500) : 200;
-	const text = bytes.toString("utf8");
-	const rawLines = text.split("\n");
-	// A trailing newline must not count as an extra empty line.
-	const totalLines = text.endsWith("\n") ? rawLines.length - 1 : rawLines.length;
+	const index = lineIndexOf(file, size);
+	const page: PageRead =
+		startLine < index.totalLines
+			? readLinePage(file, size, index, startLine, pageLimit)
+			: { lines: [], nextLine: null, truncated: false };
 	const entries: RawEntry[] = [];
-	const lineIndex: number[] = [];
-	let lineNo = 0;
-	for (const line of rawLines) {
+	for (const line of page.lines) {
 		const e = parseLine(line);
-		if (e) {
-			entries.push(e);
-			lineIndex.push(lineNo);
-		}
-		lineNo += 1;
+		if (e) entries.push(e);
 	}
-	const truncated = text.length >= readBytes && !text.endsWith("\n");
-	const pageStart = startLine;
-	const pageEnd = Math.min(pageStart + pageLimit, entries.length);
-	const page = entries.slice(pageStart, pageEnd);
 	const body: TranscriptPage = {
-		entries: page,
-		nextOffset: pageEnd < entries.length ? pageEnd : null,
-		offset: pageStart,
+		entries,
+		nextOffset: page.nextLine,
+		offset: startLine,
 		limit: pageLimit,
-		totalLines,
-		truncated,
+		totalLines: index.totalLines,
+		truncated: page.truncated,
 	};
 	return json(body);
 }

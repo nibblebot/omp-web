@@ -1,4 +1,4 @@
-import { lstat, open, readFile, realpath } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { tryAcquireSessionLease } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { getAutonomyAdapter } from "./autonomy-adapter";
@@ -59,6 +59,42 @@ export async function assertAbsent(path: string): Promise<void> {
 	throw new Error(`Deleted session material still exists: ${path}`);
 }
 
+/** The header is line 1-2; reading more than this prefix never changes the answer. */
+const JOURNAL_HEADER_PREFIX_BYTES = 16 * 1024;
+
+interface JournalHeaderRecord {
+	type?: string;
+	id?: string;
+}
+
+/** First `type: "session"` record within the journal prefix; the tail is never read or parsed. */
+async function readJournalHeader(path: string): Promise<JournalHeaderRecord | undefined> {
+	const handle = await open(path, "r");
+	let prefix: string;
+	let truncated: boolean;
+	try {
+		const buffer = Buffer.allocUnsafe(JOURNAL_HEADER_PREFIX_BYTES);
+		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+		prefix = buffer.toString("utf8", 0, bytesRead);
+		truncated = bytesRead === buffer.length;
+	} finally {
+		await handle.close();
+	}
+	const lines = prefix.split("\n");
+	// A full prefix may end mid-line; that fragment is not a record.
+	if (truncated) lines.pop();
+	for (const line of lines) {
+		let record: JournalHeaderRecord | null;
+		try {
+			record = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (record?.type === "session") return record;
+	}
+	return undefined;
+}
+
 /**
  * Shared jail for every destructive session-file operation (delete, rename).
  * The journal must resolve by realpath under `sessionsRoot`, be a regular
@@ -90,17 +126,7 @@ export async function validateSessionJournal(
 	}
 	const stat = await lstat(path);
 	if (!stat.isFile()) throw new Error("Session deletion requires a regular main journal");
-	const content = await readFile(path, "utf8");
-	const header = content
-		.split("\n")
-		.map((line) => {
-			try {
-				return JSON.parse(line) as { type?: string; id?: string };
-			} catch {
-				return null;
-			}
-		})
-		.find((record) => record?.type === "session");
+	const header = await readJournalHeader(path);
 	const sessionId = header?.id;
 	if (
 		typeof sessionId !== "string" ||

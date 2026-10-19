@@ -7,7 +7,6 @@
 
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import { listAllSessions } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	FileSessionStorage,
@@ -55,12 +54,11 @@ export function normalizeResumeTitle(raw: string): string {
 }
 
 async function assertListed(sessionsRoot: string, canonicalFile: string): Promise<void> {
-	const sessions = await listAllSessions(new FileSessionStorage(), sessionsRoot);
-	for (const session of sessions) {
-		const listed = await realpath(session.path).catch(() => null);
-		if (listed === canonicalFile) return;
-	}
-	throw new Error("Session file is not in the session listing");
+	// The listing is `<root>/<project>/<name>.jsonl` with no hidden entries. The jail already
+	// proved containment, so checking that layout is enough and avoids scanning every session.
+	const rel = path.relative(await realpath(sessionsRoot), canonicalFile);
+	if (!/^[^./\\][^/\\]*[/\\][^./\\][^/\\]*\.jsonl$/.test(rel))
+		throw new Error("Session file is not in the session listing");
 }
 
 export async function renameResumeSession(

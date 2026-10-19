@@ -14,6 +14,7 @@ import type { Database } from "bun:sqlite";
 import { json, errorJson } from "./stats-http";
 import { decodeFileParam, normDbFile, toAbs } from "./stats-paths";
 import { resolveContained } from "./stats-session-paths";
+import { readSessionTitle } from "./session-title";
 import {
 	loadJsonl,
 	entryTs,
@@ -337,29 +338,13 @@ async function jsonlPass(abs: string): Promise<JsonlPass> {
 	}
 
 	return {
-		title: await readTitle(abs),
+		title: (await readSessionTitle(abs)) ?? null,
 		spanMs: firstTs != null && lastTs != null ? lastTs - firstTs : null,
 		turns,
 		toolCalls,
 		tools,
 		longestCall,
 	};
-}
-
-/**
- * Title slot (line 1) → session header (line 2), read from the shared JSONL
- * layer's head. Scans the first four RAW lines (lineIndex < 4, corrupt lines
- * skipped) so behavior matches the old first-4KB-of-head scan.
- */
-async function readTitle(abs: string): Promise<string | null> {
-	const doc = await loadJsonl(abs);
-	if (!doc) return null;
-	for (let i = 0; i < doc.entries.length && doc.lineIndex[i]! < 4; i++) {
-		const e = doc.entries[i]!;
-		if (e.type === "title" && typeof e.title === "string" && e.title !== "") return e.title;
-		if (e.type === "session" && typeof e.title === "string" && e.title !== "") return e.title;
-	}
-	return null;
 }
 
 /** True when a toolResult entry carries an error flag (message-level or content block). */

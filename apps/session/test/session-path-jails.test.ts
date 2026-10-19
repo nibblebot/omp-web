@@ -12,7 +12,11 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { createLifecycleMethods, type LifecycleDeps } from "../lifecycle-adapter";
+import {
+	createLifecycleMethods,
+	type LifecycleDeps,
+	validateSessionJournal,
+} from "../lifecycle-adapter";
 import { resolveResumeTarget } from "../resume-import-adapter";
 import type { SessionEntry } from "../session-entry";
 
@@ -147,6 +151,56 @@ describe("lifecycle-adapter deletion jails", () => {
 		const { entry } = deletionEntry(plain, crypto.randomUUID());
 
 		await expect(lifecycleMethods(sessionsDir).deleteSession(entry, [])).rejects.toThrow(
+			/journal identity does not match/,
+		);
+	});
+});
+
+describe("validateSessionJournal header prefix", () => {
+	test("a header after a non-session line still validates when the tail is huge and malformed", async () => {
+		const root = tempDir("omp-jail-header-tail-");
+		const id = crypto.randomUUID();
+		const file = join(root, `${id}.jsonl`);
+		const message = JSON.stringify({ type: "message", id: "m0" });
+		const header = JSON.stringify({
+			type: "session",
+			version: 3,
+			id,
+			cwd: root,
+			timestamp: new Date().toISOString(),
+		});
+		writeFileSync(file, `${message}\n${header}\nnot json ${"x".repeat(2 * 1024 * 1024)}\n`);
+
+		expect(await validateSessionJournal(root, file, id)).toEqual({
+			sessionId: id,
+			sessionFile: file,
+		});
+	});
+
+	test("a journal without a session header fails identity", async () => {
+		const root = tempDir("omp-jail-header-bad-");
+		const file = join(root, "bad.jsonl");
+		writeFileSync(file, `${JSON.stringify({ type: "message", id: "m0" })}\n`);
+
+		await expect(validateSessionJournal(root, file)).rejects.toThrow(
+			/journal identity does not match/,
+		);
+	});
+
+	test("a session header past the 16 KiB prefix is not searched for", async () => {
+		const root = tempDir("omp-jail-header-far-");
+		const id = crypto.randomUUID();
+		const file = join(root, `${id}.jsonl`);
+		const header = JSON.stringify({
+			type: "session",
+			version: 3,
+			id,
+			cwd: root,
+			timestamp: new Date().toISOString(),
+		});
+		writeFileSync(file, `${"x".repeat(20 * 1024)}\n${header}\n`);
+
+		await expect(validateSessionJournal(root, file, id)).rejects.toThrow(
 			/journal identity does not match/,
 		);
 	});

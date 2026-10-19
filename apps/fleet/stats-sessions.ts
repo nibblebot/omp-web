@@ -7,13 +7,16 @@
  * client can mark them missing (PLAN §6). Files on disk that were never
  * synced appear with zeroed metrics and synced:false.
  */
-import { statSync, readdirSync } from "node:fs";
-import { relative, join } from "node:path";
+import { readdirSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
+import { join, relative } from "node:path";
 import { json, errorJson } from "./stats-http";
 import { loadJsonl } from "./stats-jsonl";
 import { walkJsonl } from "./stats-sessions-index";
 import { readStoredHead, storeFileKey } from "./stats-store-index";
+import { SESSION_HEAD_BYTES, parseSessionHead } from "./session-head";
 import type { AppCtx, Route } from "./stats-types";
+import type { SessionHead } from "./session-head";
 import type { RawEntry, SessionSummary } from "#lib/wire/stats-types";
 import { ByteLru } from "#lib/platform/byte-lru";
 import { normDbFile, isMainSession, folderOf } from "./stats-paths";
@@ -22,18 +25,17 @@ import type { StatsConfig } from "./stats-config";
 const MAX_SESSIONS = 2000;
 
 // ---------------------------------------------------------------------------
-// Sessions list cache (2026-08 audit Phase 3).
+// Sessions list cache (2026-08 audit Phase 3; FPS-08).
 //
-// The computed list (disk walk + stats.db enrichment) is cached under a key
-// of (recursive sessions-tree dir stats, stats.db mtimeMs+size when the file
-// exists). File adds/removes anywhere invalidate the key immediately via the
-// containing dir's stat; an existing transcript GROWING in place changes no
-// dir stat, so without a TTL the row size/mtime columns would go stale
-// indefinitely. The TTL bounds that staleness. Entries are capped at 2
-// (current + previous key) so dir churn cannot grow the cache without bound.
+// The computed list (disk walk + stats.db enrichment) is served from memory
+// while the key is unchanged and within SESSIONS_CACHE_TTL_MS. The key is the
+// sessions dir tree (one stat per directory, no file stats) plus the stats.db
+// stat, so adds, removes, and stats.db swaps show on the next request. In-place
+// file growth changes no dir stat and appears when the TTL expires. Entries are
+// capped at 2 (current + previous key) so key churn cannot grow the cache.
 // ---------------------------------------------------------------------------
 
-/** Staleness bound for in-place transcript growth (dir stat unchanged). */
+/** Staleness bound for in-place file growth; adds and removes are caught by the tree key. */
 export const SESSIONS_CACHE_TTL_MS = 3000;
 
 const SESSIONS_CACHE_MAX_ENTRIES = 2;
@@ -48,14 +50,26 @@ const sessionsListCache = new Map<string, ListCacheEntry>();
 /** Test instrumentation: counts real disk-walk executions (cache hits skip). */
 export const sessionsWalkCounter = { runs: 0 };
 
+/** `mtimeMs:size` of a file, or "none" when it does not exist. */
+export function fileStatKey(path: string): string {
+	try {
+		const st = statSync(path);
+		return `${st.mtimeMs}:${st.size}`;
+	} catch {
+		return "none";
+	}
+}
+
 /**
- * Recursive directory-stat signature: every directory's (mtimeMs, size) in
- * the tree. Detects file adds/removes/renames anywhere (the containing
- * dir's stat changes). The root dir's own mtime does NOT move when a
- * subdirectory gains files, which a flat "sessionsDir mtime" key would
- * miss. In-place file GROWTH changes no dir stat, so that case stays
- * bounded by the TTL.
+ * Cache key: every directory stat under the sessions tree plus the stats.db
+ * stat. A session added or removed changes a dir stat, so it appears on the
+ * next request. In-place file growth changes no dir stat and is bounded by the TTL.
  */
+function sessionsListKey(cfg: StatsConfig): string {
+	return `${sessionsTreeStat(cfg.sessionsDir)}|${fileStatKey(cfg.statsDbPath)}`;
+}
+
+/** Stat of each directory under root (directories only, never files): "path:mtime:size" joined. */
 function sessionsTreeStat(root: string): string {
 	const parts: string[] = [];
 	const stack = [root];
@@ -65,7 +79,7 @@ function sessionsTreeStat(root: string): string {
 			const st = statSync(d);
 			parts.push(`${d}:${st.mtimeMs}:${st.size}`);
 		} catch {
-			continue; // Unreadable dir; the walk yields nothing for it either.
+			continue;
 		}
 		let entries;
 		try {
@@ -73,24 +87,9 @@ function sessionsTreeStat(root: string): string {
 		} catch {
 			continue;
 		}
-		for (const e of entries) {
-			if (e.isDirectory()) stack.push(join(d, e.name));
-		}
+		for (const e of entries) if (e.isDirectory()) stack.push(join(d, e.name));
 	}
 	return parts.sort().join("|");
-}
-
-/** Cache key: sessions-tree dir stats + stats.db stat when the file exists. */
-function sessionsListKey(cfg: StatsConfig): string {
-	const dirStat = sessionsTreeStat(cfg.sessionsDir);
-	let dbStat = "none";
-	try {
-		const st = statSync(cfg.statsDbPath);
-		dbStat = `${st.mtimeMs}:${st.size}`;
-	} catch {
-		// No stats.db yet.
-	}
-	return `${dirStat}|${dbStat}`;
 }
 
 function cacheSessionsList(key: string, rows: SessionSummary[]): void {
@@ -101,7 +100,7 @@ function cacheSessionsList(key: string, rows: SessionSummary[]): void {
 	sessionsListCache.set(key, { expiresAt: Date.now() + SESSIONS_CACHE_TTL_MS, rows });
 }
 
-/** Full list from cache; computes + stores on key change or TTL expiry. */
+/** Full list from cache; recomputes on key change, miss, or TTL expiry. */
 async function cachedSessionsList(ctx: AppCtx): Promise<SessionSummary[]> {
 	const key = sessionsListKey(ctx.cfg);
 	const hit = sessionsListCache.get(key);
@@ -109,6 +108,11 @@ async function cachedSessionsList(ctx: AppCtx): Promise<SessionSummary[]> {
 	const rows = await computeSessionsList(ctx);
 	cacheSessionsList(key, rows);
 	return rows;
+}
+
+/** On-disk main sessions in the list: the /ctl/stats/health sessionsCount. */
+export async function countOnDiskSessions(ctx: AppCtx): Promise<number> {
+	return (await cachedSessionsList(ctx)).filter((s) => s.onDisk).length;
 }
 
 interface HeaderInfo {
@@ -221,39 +225,43 @@ const headCache = new ByteLru<HeaderInfo>({
 	maxEntryBytes: HEAD_CACHE_MAX_ENTRY_BYTES,
 });
 
-const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
+const EMPTY_HEAD: SessionHead = { title: null, cwd: null, id: null, firstTs: null, lastTs: null };
+
+/** Title, cwd and id from the first SESSION_HEAD_BYTES of a transcript; empty when unreadable. */
+async function readSessionHead(abs: string): Promise<SessionHead> {
+	try {
+		const fh = await open(abs, "r");
+		try {
+			const buf = Buffer.alloc(SESSION_HEAD_BYTES);
+			const { bytesRead } = await fh.read(buf, 0, SESSION_HEAD_BYTES, 0);
+			return parseSessionHead(buf.toString("utf8", 0, bytesRead));
+		} finally {
+			await fh.close();
+		}
+	} catch {
+		return EMPTY_HEAD;
+	}
+}
 
 /**
- * Title slot (line 1: {"type":"title",…}) + session header
- * (line 2: {"type":"session",…,"title"?,"id","cwd"}), read from the shared
- * JSONL layer's first parsed entries. Prefer the title-slot title, fall back
- * to the header title, else null. Byte-bounded by HEAD_CACHE_MAX_BYTES.
+ * Header facts plus conversation text for one session file. Title, cwd and id
+ * come from a bounded head read; the full doc is parsed only for the first
+ * prompt and search text (FPS-06). Byte-bounded by HEAD_CACHE_MAX_BYTES.
  */
 async function readHead(abs: string, mtimeMs: number, size: number): Promise<HeaderInfo> {
 	const key = `${abs}\u0000${mtimeMs}\u0000${size}`;
 	const hit = headCache.get(key);
 	if (hit) return hit;
-	let info: HeaderInfo = { title: null, id: null, cwd: null, firstPrompt: null, searchText: "" };
+	const head = await readSessionHead(abs);
 	const doc = await loadJsonl(abs);
-	if (doc) {
-		const first = doc.entries[0] ?? null;
-		const second = doc.entries[1] ?? null;
-		// Older files may lack the title slot, so the session header can be line 1.
-		const head = first?.type === "session" ? first : second?.type === "session" ? second : null;
-		const convo = extractConversation(doc.entries);
-		info = {
-			title:
-				first?.type === "title"
-					? (str(first.title) ?? (head ? str(head.title) : null))
-					: head
-						? str(head.title)
-						: null,
-			id: head ? str(head.id) : null,
-			cwd: head ? str(head.cwd) : null,
-			firstPrompt: convo.firstPrompt,
-			searchText: convo.searchText,
-		};
-	}
+	const convo = doc ? extractConversation(doc.entries) : { firstPrompt: null, searchText: "" };
+	const info: HeaderInfo = {
+		title: head.title || null,
+		id: head.id || null,
+		cwd: head.cwd || null,
+		firstPrompt: convo.firstPrompt,
+		searchText: convo.searchText,
+	};
 	const cost =
 		abs.length +
 		info.searchText.length +

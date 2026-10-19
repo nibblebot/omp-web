@@ -45,7 +45,7 @@ import {
 	writeSync,
 } from "node:fs";
 import type { Dirent } from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { dirname, join } from "node:path";
 
 /** Log chunk frame payload streamed by the daemon (frozen contract shape). */
 export interface LogChunk {
@@ -189,7 +189,7 @@ export interface StoredSessionInfo {
 	missingAssets: number;
 	/** Main-session relpath, when one exists (`<sessionId>.jsonl` or `<proj>/<sessionId>.jsonl`). */
 	mainRelpath?: string;
-	/** Latest file mtime under the session subtree (recursive), or 0. */
+	/** Newest durable write: last acked append in this process, or the newest file mtime at load. */
 	mtimeMs: number;
 }
 
@@ -245,11 +245,26 @@ function fsyncFile(path: string): void {
 	}
 }
 
+/** One stream's durable state; `present` is whether its file exists on disk. */
 interface StreamState {
 	generation: number;
 	ackedOffset: number;
 	eof: boolean;
+	present: boolean;
 }
+
+/** One file as the listing summaries see it, before lineage sorting. */
+interface RawStoredFile {
+	relpath: string;
+	bytes: number;
+	ackedBytes: number;
+	eof: boolean;
+	kind: StoredFileKind;
+	status: StoredFileStatus;
+}
+
+/** `dirMtimeMs` sentinel: the session dir has not been compared against disk yet. */
+const UNSCANNED = -2;
 
 /** A deferred append awaiting commit(); `prev` is the stream state restored on failure. */
 interface PendingFile {
@@ -258,12 +273,22 @@ interface PendingFile {
 	prev: StreamState | undefined;
 	created: boolean;
 }
-
 interface SessionState {
 	workspaceId: string;
 	sessionId: string;
 	dir: string;
 	streams: Map<string, StreamState>;
+	/** Newest acked append in this process, hydrated from the newest file mtime at load. */
+	lastAppendMs: number;
+	/** Files on disk that no stream covers, as of the last disk scan. */
+	unindexed: RawStoredFile[];
+	/** Session dir mtime recorded after our last own write or the last disk scan. */
+	dirMtimeMs: number;
+	/** Memoized listing summary; null when the session has no files. */
+	info: StoredSessionInfo | null;
+	/** This session's contribution to the store totals. */
+	bytes: number;
+	counted: boolean;
 }
 
 function assertSafeComponent(value: string, field: string): void {
@@ -421,13 +446,135 @@ function assertSafeComponentOrNull(value: string): boolean {
 	}
 }
 
-function fileSize(path: string): number | undefined {
+/** Regular-file size and mtime. */
+interface DiskFile {
+	size: number;
+	mtimeMs: number;
+}
+
+/** Regular-file stat, or undefined when the path is absent or not a file. */
+function statFile(path: string): DiskFile | undefined {
 	try {
 		const stats = statSync(path);
-		return stats.isFile() ? stats.size : undefined;
+		return stats.isFile() ? { size: stats.size, mtimeMs: stats.mtimeMs } : undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Newest mtime across one session dir and every subdirectory under it. A
+ * file created anywhere in the tree bumps its parent dir's mtime, so this
+ * stamp changes exactly when a listing could change. Directories only: the
+ * walk costs one readdir per directory, not per file.
+ */
+function treeMtimeOf(dir: string): number {
+	let newest = -1;
+	const visit = (path: string): void => {
+		let stats;
+		try {
+			stats = statSync(path);
+		} catch {
+			return;
+		}
+		if (!stats.isDirectory()) return;
+		newest = Math.max(newest, stats.mtimeMs);
+		let entries: Dirent[];
+		try {
+			entries = readdirSync(path, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) if (entry.isDirectory()) visit(join(path, entry.name));
+	};
+	visit(dir);
+	return newest;
+}
+
+/**
+ * Every regular file under one session dir (relpath -> size and mtime),
+ * excluding the sidecar and tmp files. Read-only; unreadable entries are skipped.
+ */
+function walkSessionFiles(dir: string): Map<string, DiskFile> {
+	const out = new Map<string, DiskFile>();
+	const visit = (prefix: string): void => {
+		let entries: Dirent[];
+		try {
+			entries = readdirSync(prefix ? join(dir, prefix) : dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			if (entry.name === INDEX_NAME || entry.name.endsWith(TMP_SUFFIX)) continue;
+			const relpath = prefix ? `${prefix}/${entry.name}` : entry.name;
+			let st;
+			try {
+				st = lstatSync(join(dir, relpath));
+			} catch {
+				continue;
+			}
+			if (st.isDirectory()) visit(relpath);
+			else if (st.isFile()) out.set(relpath, { size: st.size, mtimeMs: st.mtimeMs });
+		}
+	};
+	visit("");
+	return out;
+}
+
+/** Rows for disk files that no in-memory stream covers: never acked, eof unknown. */
+function unindexedRows(
+	sessionId: string,
+	onDisk: ReadonlyMap<string, DiskFile>,
+	streams: ReadonlyMap<string, StreamState> | undefined,
+): RawStoredFile[] {
+	const rows: RawStoredFile[] = [];
+	for (const [relpath, file] of onDisk) {
+		if (streams?.has(relpath)) continue;
+		rows.push({
+			relpath,
+			bytes: file.size,
+			ackedBytes: 0,
+			eof: false,
+			kind: classifyStoredRelpath(sessionId, relpath),
+			status: file.size > 0 ? "stored" : "missing",
+		});
+	}
+	return rows;
+}
+
+/** Lineage-ordered listing summary of one session, or null when it has no files. */
+function summarizeStoredSession(
+	workspaceId: string,
+	sessionId: string,
+	raw: readonly RawStoredFile[],
+	mtimeMs: number,
+): StoredSessionInfo | null {
+	if (raw.length === 0) return null;
+	const mainRels = raw.filter((f) => f.kind === "main").map((f) => f.relpath);
+	const files: StoredFileInfo[] = raw.map((f) => ({
+		relpath: f.relpath,
+		kind: f.kind,
+		...(f.kind !== "main" ? { parentPath: parentMainOf(mainRels, f.relpath) } : {}),
+		bytes: f.bytes,
+		ackedBytes: f.ackedBytes,
+		eof: f.eof,
+		status: f.status,
+	}));
+	const sorted = sortLineage(files);
+	const bytes = sorted.reduce((sum, f) => sum + f.bytes, 0);
+	const ackedBytes = sorted.reduce((sum, f) => (f.ackedBytes > 0 ? sum + f.ackedBytes : sum), 0);
+	const missingAssets = sorted.filter((f) => f.status === "missing").length;
+	const main = sorted.find((f) => f.kind === "main");
+	return {
+		workspaceId,
+		sessionId,
+		files: sorted,
+		bytes,
+		ackedBytes,
+		missingAssets,
+		...(main ? { mainRelpath: main.relpath } : {}),
+		mtimeMs,
+	};
 }
 
 /** Best-effort directory fsync; some filesystems refuse directory fds. */
@@ -541,7 +688,7 @@ function walkTree(dir: string, visit: (path: string, entry: Dirent) => void): vo
 function treeBytes(dir: string): number {
 	let total = 0;
 	walkTree(dir, (path, entry) => {
-		if (entry.isFile()) total += fileSize(path) ?? 0;
+		if (entry.isFile()) total += statFile(path)?.size ?? 0;
 	});
 	return total;
 }
@@ -558,6 +705,11 @@ export class FleetLogStore {
 
 	#sessions = new Map<string, Map<string, SessionState>>();
 	#readOnly = new Set<string>();
+	/** Store-wide totals kept current by #settle and #release; coverage reads these in O(1). */
+	#totalBytes = 0;
+	#totalSessions = 0;
+	/** Counted sessions per workspace; a workspace counts while it has one. */
+	readonly #sessionsPerWs = new Map<string, number>();
 	/** Workspace -> (file path -> pending deferred append), drained by commit(). */
 	#pending = new Map<string, Map<string, PendingFile>>();
 
@@ -631,6 +783,7 @@ export class FleetLogStore {
 			for (const entry of pending.values()) {
 				if (entry.prev === undefined) entry.session.streams.delete(entry.relpath);
 				else entry.session.streams.set(entry.relpath, { ...entry.prev });
+				this.#settle(entry.session);
 			}
 			throw error;
 		}
@@ -656,72 +809,79 @@ export class FleetLogStore {
 		const session = this.#ensureSession(workspaceId, sessionId);
 		const file = join(session.dir, cleanRelpath);
 
-		let stream = session.streams.get(cleanRelpath);
-		// Pre-mutation copy: the rollback target if this apply is deferred.
-		const before = stream === undefined ? undefined : { ...stream };
-		if (!stream) {
-			stream = { generation: chunk.generation, ackedOffset: 0, eof: false };
-			session.streams.set(cleanRelpath, stream);
-		} else if (chunk.generation < stream.generation) {
-			// Older generation: bytes of a dead file identity, dropped.
-			return { status: "obsolete" };
-		} else if (chunk.generation > stream.generation) {
-			// Atomic daemon-side rewrite replaced the file: stored bytes are
-			// stale. Truncate and resync from 0 under the new generation.
-			if (existsSync(file)) truncateFile(file, 0);
-			stream.generation = chunk.generation;
-			stream.ackedOffset = 0;
-			stream.eof = false;
-			if (defer) this.#markPending(workspaceId, session, cleanRelpath, file, before, false);
-			else this.#persistIndex(session);
-		}
-
-		// The live file is authoritative for the durable length; heals any
-		// drift exactly like recovery does.
-		let diskSize = 0;
-		let existed = false;
 		try {
-			const stats = statSync(file);
-			if (stats.isFile()) {
-				diskSize = stats.size;
-				existed = true;
+			let stream = session.streams.get(cleanRelpath);
+			// Pre-mutation copy: the rollback target if this apply is deferred.
+			const before = stream === undefined ? undefined : { ...stream };
+			if (!stream) {
+				stream = { generation: chunk.generation, ackedOffset: 0, eof: false, present: false };
+				session.streams.set(cleanRelpath, stream);
+			} else if (chunk.generation < stream.generation) {
+				// Older generation: bytes of a dead file identity, dropped.
+				return { status: "obsolete" };
+			} else if (chunk.generation > stream.generation) {
+				// Atomic daemon-side rewrite replaced the file: stored bytes are
+				// stale. Truncate and resync from 0 under the new generation.
+				if (existsSync(file)) truncateFile(file, 0);
+				stream.generation = chunk.generation;
+				stream.ackedOffset = 0;
+				stream.eof = false;
+				if (defer) this.#markPending(workspaceId, session, cleanRelpath, file, before, false);
+				else this.#persistIndex(session);
 			}
-		} catch {
-			// Not created yet.
-		}
-		if (existed && diskSize !== stream.ackedOffset) stream.ackedOffset = diskSize;
 
-		if (chunk.offset > stream.ackedOffset) {
-			return { status: "gap", from: stream.ackedOffset, to: chunk.offset };
-		}
-		if (chunk.offset < stream.ackedOffset) {
-			// Post-reconnect resend of a chunk whose start lies below the durable
-			// offset. Bytes up to the acked offset are already on disk and are
-			// ignored; recovery can heal the file forward past the daemon's last
-			// ack (torn tail cut to the last newline), so a chunk may extend past
-			// ackedOffset. Same generation means the same file identity, so the
-			// suffix is exactly the file's continuation and is appended.
-			const skip = stream.ackedOffset - chunk.offset;
-			if (bytes.length <= skip) return { status: "duplicate" };
-			bytes = Buffer.from(bytes.subarray(skip));
-		}
-
-		if (bytes.length > 0 || !existed) {
-			if (!existed) mkdirSync(dirname(file), { recursive: true });
-			const fd = openSync(file, "a");
+			// The live file is authoritative for the durable length; heals any
+			// drift exactly like recovery does.
+			let diskSize = 0;
+			let existed = false;
 			try {
-				if (bytes.length > 0) writeAllSync(fd, bytes);
-				if (!defer) fsyncSync(fd);
-			} finally {
-				closeSync(fd);
+				const stats = statSync(file);
+				if (stats.isFile()) {
+					diskSize = stats.size;
+					existed = true;
+				}
+			} catch {
+				// Not created yet.
 			}
-			if (!existed && !defer) fsyncDir(dirname(file));
+			if (existed && diskSize !== stream.ackedOffset) stream.ackedOffset = diskSize;
+			stream.present = existed;
+
+			if (chunk.offset > stream.ackedOffset) {
+				return { status: "gap", from: stream.ackedOffset, to: chunk.offset };
+			}
+			if (chunk.offset < stream.ackedOffset) {
+				// Post-reconnect resend of a chunk whose start lies below the durable
+				// offset. Bytes up to the acked offset are already on disk and are
+				// ignored; recovery can heal the file forward past the daemon's last
+				// ack (torn tail cut to the last newline), so a chunk may extend past
+				// ackedOffset. Same generation means the same file identity, so the
+				// suffix is exactly the file's continuation and is appended.
+				const skip = stream.ackedOffset - chunk.offset;
+				if (bytes.length <= skip) return { status: "duplicate" };
+				bytes = Buffer.from(bytes.subarray(skip));
+			}
+
+			if (bytes.length > 0 || !existed) {
+				if (!existed) mkdirSync(dirname(file), { recursive: true });
+				const fd = openSync(file, "a");
+				try {
+					if (bytes.length > 0) writeAllSync(fd, bytes);
+					if (!defer) fsyncSync(fd);
+				} finally {
+					closeSync(fd);
+				}
+				if (!existed && !defer) fsyncDir(dirname(file));
+			}
+			if (bytes.length > 0) session.lastAppendMs = Date.now();
+			stream.present = true;
+			stream.ackedOffset = chunkEnd;
+			stream.eof = chunk.eof;
+			if (defer) this.#markPending(workspaceId, session, cleanRelpath, file, before, !existed);
+			else this.#persistIndex(session);
+			return { status: "acked", offset: stream.ackedOffset };
+		} finally {
+			this.#settle(session);
 		}
-		stream.ackedOffset = chunkEnd;
-		stream.eof = chunk.eof;
-		if (defer) this.#markPending(workspaceId, session, cleanRelpath, file, before, !existed);
-		else this.#persistIndex(session);
-		return { status: "acked", offset: stream.ackedOffset };
 	}
 
 	#markPending(
@@ -800,7 +960,15 @@ export class FleetLogStore {
 			rmSync(dir, { recursive: true, force: true });
 			fsyncDir(join(this.rootDir, workspaceId));
 		}
-		this.#sessions.get(workspaceId)?.delete(sessionId);
+		const pending = this.#pending.get(workspaceId);
+		for (const [file, entry] of pending ?? []) {
+			if (entry.session.sessionId === sessionId) pending?.delete(file);
+		}
+		const session = this.#sessions.get(workspaceId)?.get(sessionId);
+		if (session) {
+			this.#release(session);
+			this.#sessions.get(workspaceId)?.delete(sessionId);
+		}
 		return existed;
 	}
 
@@ -819,6 +987,8 @@ export class FleetLogStore {
 			rmSync(wsDir, { recursive: true, force: true });
 			fsyncDir(this.rootDir);
 		}
+		for (const session of this.#sessions.get(workspaceId)?.values() ?? []) this.#release(session);
+		this.#pending.delete(workspaceId);
 		this.#sessions.delete(workspaceId);
 		this.#readOnly.delete(workspaceId);
 		return { sessions };
@@ -982,146 +1152,34 @@ export class FleetLogStore {
 	storedLineage(workspaceId: string, sessionId: string): StoredSessionInfo | null {
 		const dir = this.storedSessionDir(workspaceId, sessionId);
 		if (dir === null) return null;
-		// In-memory stream state when the store loaded this session; disk walk
-		// covers everything else. Deliberately NO #restoreSession here: restore
-		// repairs/adopts/rewrites the index; this is the read-only surface.
-		const streams = this.#sessions.get(workspaceId)?.get(sessionId)?.streams;
-		const raw: Array<{
-			relpath: string;
-			bytes: number;
-			ackedBytes: number;
-			eof: boolean;
-			kind: StoredFileKind;
-			status: StoredFileStatus;
-		}> = [];
-		const indexed = new Set<string>();
-		const mainRels: string[] = [];
-
-		const push = (
-			relpath: string,
-			bytes: number,
-			ackedBytes: number,
-			eof: boolean,
-			kind: StoredFileKind,
-			status: StoredFileStatus,
-		): void => {
-			if (kind === "main") mainRels.push(relpath);
-			raw.push({ relpath, bytes, ackedBytes, eof, kind, status });
-		};
-
+		// Read-only disk walk: every file is reconciled against disk at call
+		// time. Deliberately NO #restoreSession here: restore repairs, adopts,
+		// and rewrites the index; this is the read-only surface.
+		const session = this.#sessions.get(workspaceId)?.get(sessionId);
+		const streams = session?.streams;
+		const onDisk = walkSessionFiles(dir);
+		const raw: RawStoredFile[] = [];
 		// Indexed entries first (authoritative: stream state, eof, ackedBytes).
 		if (streams !== undefined) {
-			for (const relpath of [...streams.keys()].sort()) {
-				const stream = streams.get(relpath)!;
-				const abs = join(dir, relpath);
-				let size = 0;
-				let onDisk = false;
-				try {
-					const st = statSync(abs);
-					if (st.isFile()) {
-						size = st.size;
-						onDisk = true;
-					}
-				} catch {
-					// Missing on disk; the indexed entry stays visible as "missing".
-				}
-				indexed.add(relpath);
-				push(
+			for (const [relpath, stream] of streams) {
+				const file = onDisk.get(relpath);
+				raw.push({
 					relpath,
-					size,
-					stream.ackedOffset,
-					stream.eof,
-					classifyStoredRelpath(sessionId, relpath),
-					onDisk ? "stored" : "missing",
-				);
+					bytes: file?.size ?? 0,
+					ackedBytes: stream.ackedOffset,
+					eof: stream.eof,
+					kind: classifyStoredRelpath(sessionId, relpath),
+					status: file ? "stored" : "missing",
+				});
 			}
 		}
-
 		// Files on disk with no in-memory index entry (unloaded store, or a
 		// crash between append and index). Read-only listing shows them; it
 		// never adopts or repairs.
-		this.#collectStoredFiles(dir, "", sessionId, indexed, push);
-
-		if (raw.length === 0) return null;
-		const fileInfo: StoredFileInfo[] = raw.map((f) => ({
-			relpath: f.relpath,
-			kind: f.kind,
-			...(f.kind !== "main" ? { parentPath: parentMainOf(mainRels, f.relpath) } : {}),
-			bytes: f.bytes,
-			ackedBytes: f.ackedBytes,
-			eof: f.eof,
-			status: f.status,
-		}));
-		const sorted = sortLineage(fileInfo);
-		const bytes = sorted.reduce((sum, f) => sum + f.bytes, 0);
-		const ackedBytes = sorted.reduce((sum, f) => (f.ackedBytes > 0 ? sum + f.ackedBytes : sum), 0);
-		const missingAssets = sorted.filter((f) => f.status === "missing").length;
-		const main = sorted.find((f) => f.kind === "main");
-		let mtimeMs = 0;
-		try {
-			const st = statSync(dir);
-			if (st.isDirectory()) mtimeMs = st.mtimeMs;
-		} catch {
-			// Directory vanished between the guard and now.
-		}
-		return {
-			workspaceId,
-			sessionId,
-			files: sorted,
-			bytes,
-			ackedBytes,
-			missingAssets,
-			...(main ? { mainRelpath: main.relpath } : {}),
-			mtimeMs,
-		};
-	}
-
-	/** Recursive file walk of the session dir, excluding the sidecar and tmp files. */
-	#collectStoredFiles(
-		dir: string,
-		prefix: string,
-		sessionId: string,
-		indexed: ReadonlySet<string>,
-		push: (
-			relpath: string,
-			bytes: number,
-			ackedBytes: number,
-			eof: boolean,
-			kind: StoredFileKind,
-			status: StoredFileStatus,
-		) => void,
-	): void {
-		const abs = prefix ? join(dir, prefix) : dir;
-		let entries: Dirent[];
-		try {
-			entries = readdirSync(abs, { withFileTypes: true });
-		} catch {
-			return;
-		}
-		for (const entry of entries) {
-			if (entry.name === INDEX_NAME || entry.name.endsWith(TMP_SUFFIX)) continue;
-			const relpath = prefix ? `${prefix}/${entry.name}` : entry.name;
-			const fileAbs = join(dir, relpath);
-			let st;
-			try {
-				st = lstatSync(fileAbs);
-			} catch {
-				continue;
-			}
-			if (st.isDirectory()) {
-				this.#collectStoredFiles(dir, relpath, sessionId, indexed, push);
-				continue;
-			}
-			if (!st.isFile() || indexed.has(relpath)) continue;
-			push(
-				relpath,
-				st.size,
-				0,
-				false,
-				classifyStoredRelpath(sessionId, relpath),
-				st.size > 0 ? "stored" : "missing",
-			);
-		}
+		raw.push(...unindexedRows(sessionId, onDisk, streams));
+		let newest = 0;
+		for (const file of onDisk.values()) newest = Math.max(newest, file.mtimeMs);
+		return summarizeStoredSession(workspaceId, sessionId, raw, session?.lastAppendMs ?? newest);
 	}
 
 	/**
@@ -1132,11 +1190,14 @@ export class FleetLogStore {
 		if (!assertSafeComponentOrNull(workspaceId)) return [];
 		const wsDir = join(this.rootDir, workspaceId);
 		if (!isDirectory(wsDir)) return [];
+		const bySession = this.#sessions.get(workspaceId);
 		const out: StoredSessionInfo[] = [];
 		for (const child of readdirSync(wsDir, { withFileTypes: true })) {
 			if (!child.isDirectory()) continue;
 			if (!assertSafeComponentOrNull(child.name)) continue;
-			const info = this.storedLineage(workspaceId, child.name);
+			// Loaded sessions answer from their summary; unloaded ones read disk.
+			const session = bySession?.get(child.name);
+			const info = session ? this.#summaryOf(session) : this.storedLineage(workspaceId, child.name);
 			if (info !== null) out.push(info);
 		}
 		return out.sort((a, b) => (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0));
@@ -1165,6 +1226,15 @@ export class FleetLogStore {
 		return out.sort((a, b) =>
 			a.workspaceId < b.workspaceId ? -1 : a.workspaceId > b.workspaceId ? 1 : 0,
 		);
+	}
+
+	/** Session, workspace, and byte totals of the loaded store (O(1), no disk). */
+	coverage(): { workspaces: number; sessions: number; bytes: number } {
+		return {
+			workspaces: this.#sessionsPerWs.size,
+			sessions: this.#totalSessions,
+			bytes: this.#totalBytes,
+		};
 	}
 
 	#restore(): void {
@@ -1247,6 +1317,7 @@ export class FleetLogStore {
 			}
 		}
 
+		let lastAppendMs = 0;
 		const streams = new Map<string, StreamState>();
 		const seen = new Set<string>();
 		if (index) {
@@ -1265,9 +1336,13 @@ export class FleetLogStore {
 					ackedOffset:
 						Number.isInteger(entry?.ackedOffset) && entry.ackedOffset >= 0 ? entry.ackedOffset : 0,
 					eof: entry?.eof === true,
+					present: false,
 				};
 				const file = join(dir, clean);
-				const size = fileSize(file);
+				const stat = statFile(file);
+				const size = stat?.size;
+				if (stat) lastAppendMs = Math.max(lastAppendMs, stat.mtimeMs);
+				state.present = stat !== undefined;
 				if (size === undefined) {
 					if (state.ackedOffset !== 0) {
 						record({ relpath: clean, kind: "file_missing_reset", from: state.ackedOffset, to: 0 });
@@ -1313,23 +1388,38 @@ export class FleetLogStore {
 				if (!entry.isFile()) continue;
 				if (relpath === INDEX_NAME || relpath.endsWith(TMP_SUFFIX) || seen.has(relpath)) continue;
 				const file = join(dir, relpath);
-				const size = fileSize(file) ?? 0;
+				const stat = statFile(file);
+				const size = stat?.size ?? 0;
+				if (stat) lastAppendMs = Math.max(lastAppendMs, stat.mtimeMs);
 				const trusted = size > 0 ? reconcileTail(file, size, 0) : 0;
 				if (trusted !== size) truncateFile(file, trusted);
-				streams.set(relpath, { generation: 1, ackedOffset: trusted, eof: false });
+				streams.set(relpath, { generation: 1, ackedOffset: trusted, eof: false, present: true });
 				record({ relpath, kind: "adopted_unindexed_file", from: size, to: trusted });
 			}
 		};
 		adopt("");
 
-		const state: SessionState = { workspaceId, sessionId, dir, streams };
+		const state: SessionState = {
+			workspaceId,
+			sessionId,
+			dir,
+			streams,
+			lastAppendMs,
+			unindexed: [],
+			dirMtimeMs: UNSCANNED,
+			info: null,
+			bytes: 0,
+			counted: false,
+		};
 		let bySession = this.#sessions.get(workspaceId);
 		if (!bySession) {
 			bySession = new Map();
 			this.#sessions.set(workspaceId, bySession);
 		}
 		bySession.set(sessionId, state);
+		this.#settle(state);
 		if (dirty) this.#persistIndex(state);
+		else state.dirMtimeMs = treeMtimeOf(dir);
 		return state;
 	}
 
@@ -1343,7 +1433,18 @@ export class FleetLogStore {
 				this.loadReport.repairs.push({ workspaceId: ws, sessionId: sid, ...repair });
 			});
 		}
-		const state: SessionState = { workspaceId, sessionId, dir, streams: new Map() };
+		const state: SessionState = {
+			workspaceId,
+			sessionId,
+			dir,
+			streams: new Map(),
+			lastAppendMs: 0,
+			unindexed: [],
+			dirMtimeMs: UNSCANNED,
+			info: null,
+			bytes: 0,
+			counted: false,
+		};
 		let bySession = this.#sessions.get(workspaceId);
 		if (!bySession) {
 			bySession = new Map();
@@ -1351,6 +1452,75 @@ export class FleetLogStore {
 		}
 		bySession.set(sessionId, state);
 		return state;
+	}
+
+	/**
+	 * Listing summary of a loaded session. The only disk access is a stamp of
+	 * the session's directory tree: a changed stamp means an outside writer
+	 * touched it, and only then is the tree walked again.
+	 */
+	#summaryOf(session: SessionState): StoredSessionInfo | null {
+		if (treeMtimeOf(session.dir) !== session.dirMtimeMs) this.#scanDisk(session);
+		return session.info;
+	}
+
+	/** Reconciles a loaded session with disk: stream presence and uncovered files. */
+	#scanDisk(session: SessionState): void {
+		const onDisk = walkSessionFiles(session.dir);
+		for (const [relpath, stream] of session.streams) stream.present = onDisk.has(relpath);
+		session.unindexed = unindexedRows(session.sessionId, onDisk, session.streams);
+		session.dirMtimeMs = treeMtimeOf(session.dir);
+		this.#settle(session);
+	}
+
+	/** Rebuilds the memoized summary from in-memory state and moves the store totals with it. */
+	#settle(session: SessionState): void {
+		session.info = this.#buildInfo(session);
+		const bytes = session.info?.bytes ?? 0;
+		this.#totalBytes += bytes - session.bytes;
+		session.bytes = bytes;
+		const counted = session.info !== null;
+		if (counted !== session.counted) {
+			session.counted = counted;
+			this.#count(session.workspaceId, counted ? 1 : -1);
+		}
+	}
+
+	/** Drops a purged session from the store totals. */
+	#release(session: SessionState): void {
+		this.#totalBytes -= session.bytes;
+		if (session.counted) this.#count(session.workspaceId, -1);
+	}
+
+	/** Moves one counted session in or out of the totals and its workspace's count. */
+	#count(workspaceId: string, step: 1 | -1): void {
+		this.#totalSessions += step;
+		const perWs = (this.#sessionsPerWs.get(workspaceId) ?? 0) + step;
+		if (perWs === 0) this.#sessionsPerWs.delete(workspaceId);
+		else this.#sessionsPerWs.set(workspaceId, perWs);
+	}
+
+	/** Listing summary from in-memory stream state; no disk access beyond the dir check. */
+	#buildInfo(session: SessionState): StoredSessionInfo | null {
+		if (!isDirectory(session.dir)) return null;
+		const raw: RawStoredFile[] = [];
+		for (const [relpath, stream] of session.streams) {
+			raw.push({
+				relpath,
+				bytes: stream.present ? stream.ackedOffset : 0,
+				ackedBytes: stream.ackedOffset,
+				eof: stream.eof,
+				kind: classifyStoredRelpath(session.sessionId, relpath),
+				status: stream.present ? "stored" : "missing",
+			});
+		}
+		raw.push(...session.unindexed);
+		return summarizeStoredSession(
+			session.workspaceId,
+			session.sessionId,
+			raw,
+			session.lastAppendMs,
+		);
 	}
 
 	/**
@@ -1385,5 +1555,6 @@ export class FleetLogStore {
 		}
 		renameSync(tmp, target);
 		fsyncDir(session.dir);
+		session.dirMtimeMs = treeMtimeOf(session.dir);
 	}
 }

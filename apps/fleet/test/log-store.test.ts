@@ -30,8 +30,10 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	truncateSync,
 	unlinkSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -860,6 +862,54 @@ describe("FleetLogStore load repair sweep", () => {
 			Buffer.from(sub, "utf8"),
 		);
 		expect(FleetLogStore.load(rootDir).loadReport.repairs).toEqual([]);
+	});
+});
+
+describe("FleetLogStore session summaries, mtime, and coverage", () => {
+	test("mtimeMs is the last acked append while live and the newest file mtime after reload", () => {
+		const rootDir = tempDir("omp-logstore-mtime-");
+		const store = new FleetLogStore({ rootDir });
+		const l1 = recordLine("main", 1);
+		ingestAcked(store, MAIN_RELPATH, chunkAt(0, 1, l1));
+		const before = Date.now();
+		const l2 = recordLine("main", 2);
+		ingestAcked(store, MAIN_RELPATH, chunkAt(l1.length, 1, l2));
+		expect(store.listStoredSessions(WORKSPACE)[0]!.mtimeMs).toBeGreaterThanOrEqual(before);
+
+		// Reload has no append clock: the session's mtime is its newest file's mtime.
+		const file = storedFile(rootDir, MAIN_RELPATH);
+		const past = new Date("2001-09-09T00:00:00Z");
+		utimesSync(file, past, past);
+		const reloaded = FleetLogStore.load(rootDir);
+		expect(reloaded.listStoredSessions(WORKSPACE)[0]!.mtimeMs).toBe(statSync(file).mtimeMs);
+	});
+
+	test("coverage and listings stay in step with ingest, purge, and reload", () => {
+		const rootDir = tempDir("omp-logstore-coverage-");
+		const store = new FleetLogStore({ rootDir });
+		const main = recordLine("main", 1) + recordLine("main", 2);
+		const sub = recordLine("sub", 1);
+		ingestAcked(store, MAIN_RELPATH, chunkAt(0, 1, main));
+		ingestAcked(store, SUBAGENT_RELPATH, chunkAt(0, 1, sub));
+		const total = Buffer.byteLength(main + sub, "utf8");
+		expect(store.coverage()).toEqual({ workspaces: 1, sessions: 1, bytes: total });
+		expect(FleetLogStore.load(rootDir).coverage()).toEqual({
+			workspaces: 1,
+			sessions: 1,
+			bytes: total,
+		});
+		const [session] = store.listStoredSessions(WORKSPACE);
+		expect(session).toMatchObject({ bytes: total, ackedBytes: total, mainRelpath: MAIN_RELPATH });
+		expect(session!.files).toHaveLength(2);
+
+		expect(store.purgeSession(WORKSPACE, SESSION)).toBe(true);
+		expect(store.coverage()).toEqual({ workspaces: 0, sessions: 0, bytes: 0 });
+		expect(store.listStoredSessions(WORKSPACE)).toEqual([]);
+		expect(FleetLogStore.load(rootDir).coverage()).toEqual({
+			workspaces: 0,
+			sessions: 0,
+			bytes: 0,
+		});
 	});
 });
 

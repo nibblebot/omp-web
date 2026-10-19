@@ -36,6 +36,8 @@ import {
 	type ProvenanceLike,
 	type StoredApp,
 } from "../stored-sessions";
+import { readStoredHead } from "../stats-store-index";
+import { SESSION_HEAD_BYTES } from "../session-head";
 import { fleetPaths, startTestFleet } from "./server.testkit";
 import type { FleetServer } from "../server";
 
@@ -761,5 +763,128 @@ describe("stored-history reads never wake compute", () => {
 		} finally {
 			await server.close();
 		}
+	});
+});
+
+describe("stored transcript windowed paging", () => {
+	const WS = "ws-window";
+	const SESS = "sess-window";
+	const SESS_BIG = "sess-big";
+	const TOTAL = 2600;
+	const CORRUPT = "corrupt-not-json";
+	const CORRUPT_AT = 1500;
+	/** Raw lines of the fixture (one corrupt); the final line has no trailing newline. */
+	const rawLines = Array.from({ length: TOTAL }, (_, i) =>
+		i === CORRUPT_AT ? CORRUPT : JSON.stringify({ type: "message", id: `w${i}`, timestamp: i }),
+	);
+	/** What a full parse yields for raw lines [from, from + count): corrupt lines are skipped. */
+	const expectedEntries = (from: number, count: number): unknown[] =>
+		rawLines
+			.slice(from, from + count)
+			.filter((text) => text !== CORRUPT)
+			.map((text) => JSON.parse(text));
+	/** Five 1.2 MB lines: a page must stop after four, under the 4 MiB budget. */
+	const bigLines = Array.from({ length: 5 }, (_, i) =>
+		JSON.stringify({ type: "message", id: `big${i}`, pad: "x".repeat(1_200_000) }),
+	);
+
+	type TranscriptPage = {
+		offset: number;
+		totalLines: number;
+		nextOffset: number | null;
+		truncated: boolean;
+		entries: unknown[];
+	};
+
+	let windowApp: StoredApp;
+	beforeAll(() => {
+		const seeded = new FleetLogStore({ rootDir: tempDir("omp-stored-window-") });
+		const main = seeded.ingest(WS, SESS, `${SESS}.jsonl`, chunkAt(0, rawLines.join("\n"), true));
+		expect(main.status).toBe("acked");
+		const big = seeded.ingest(
+			WS,
+			SESS_BIG,
+			`${SESS_BIG}.jsonl`,
+			chunkAt(0, `${bigLines.join("\n")}\n`, true),
+		);
+		expect(big.status).toBe("acked");
+		windowApp = createStoredApp({
+			store: seeded,
+			provenance: (workspaceId) => PROVENANCE[workspaceId],
+		});
+	});
+
+	const pageAt = async (session: string, query: string): Promise<TranscriptPage> => {
+		const path = `/ctl/stored/sessions/${WS}/${session}/transcript?${query}`;
+		const res = await windowApp.handleFetch(
+			new Request(`http://localhost${path}`),
+			new URL(`http://localhost${path}`),
+		);
+		expect(res!.status).toBe(200);
+		return (await res!.json()) as TranscriptPage;
+	};
+
+	test("paging by offset returns the same entries as a full parse", async () => {
+		const walked: unknown[] = [];
+		let offset: number | null = 0;
+		while (offset !== null) {
+			const page = await pageAt(SESS, `offset=${offset}&limit=500`);
+			expect(page).toMatchObject({ offset, totalLines: TOTAL });
+			expect(page.entries).toEqual(expectedEntries(offset, 500));
+			walked.push(...page.entries);
+			offset = page.nextOffset;
+		}
+		expect(walked).toEqual(expectedEntries(0, TOTAL));
+	});
+
+	test("windows straddling index checkpoints and corrupt lines match the full parse", async () => {
+		const windows = [
+			{ from: 999, count: 3 },
+			{ from: 1000, count: 1 },
+			{ from: 1499, count: 3 },
+			{ from: 1998, count: 5 },
+			{ from: 2599, count: 4 },
+		];
+		for (const { from, count } of windows) {
+			const page = await pageAt(SESS, `offset=${from}&limit=${count}`);
+			expect(page.entries).toEqual(expectedEntries(from, count));
+			expect(page.nextOffset).toBe(from + count < TOTAL ? from + count : null);
+		}
+		const past = await pageAt(SESS, `offset=${TOTAL}&limit=10`);
+		expect(past).toMatchObject({ entries: [], nextOffset: null, totalLines: TOTAL });
+	});
+
+	test("a page stops at the byte budget and the next page resumes from nextOffset", async () => {
+		const parsed = bigLines.map((text) => JSON.parse(text));
+		const first = await pageAt(SESS_BIG, "offset=0&limit=500");
+		expect(first).toMatchObject({ offset: 0, totalLines: 5, nextOffset: 4, truncated: true });
+		expect(first.entries).toEqual(parsed.slice(0, 4));
+		const rest = await pageAt(SESS_BIG, "offset=4&limit=500");
+		expect(rest).toMatchObject({ offset: 4, totalLines: 5, nextOffset: null, truncated: false });
+		expect(rest.entries).toEqual(parsed.slice(4));
+	});
+});
+
+describe("stored head reads stay bounded", () => {
+	test("readStoredHead parses only the head but reports the full stored size", () => {
+		const body = Array.from({ length: 3000 }, (_, i) =>
+			line({ type: "message", id: `m${i}`, timestamp: i }),
+		).join("");
+		const content = line({ type: "session", id: "sess-head", cwd: "/srv/head" }) + body;
+		expect(utf8(content)).toBeGreaterThan(SESSION_HEAD_BYTES);
+		const seeded = new FleetLogStore({ rootDir: tempDir("omp-stored-head-") });
+		const result = seeded.ingest(
+			WS_LIVE,
+			"sess-head",
+			"sess-head.jsonl",
+			chunkAt(0, content, true),
+		);
+		expect(result.status).toBe("acked");
+		expect(readStoredHead(seeded, WS_LIVE, "sess-head", "sess-head.jsonl")).toMatchObject({
+			id: "sess-head",
+			cwd: "/srv/head",
+			bytes: utf8(content),
+		});
+		expect(readStoredHead(seeded, WS_LIVE, "sess-absent", "sess-absent.jsonl")).toBeNull();
 	});
 });

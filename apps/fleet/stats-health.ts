@@ -9,7 +9,7 @@
 import { homedir } from "node:os";
 import { sep } from "node:path";
 import { json } from "./stats-http";
-import { countMainSessions } from "./stats-sessions-index";
+import { countOnDiskSessions, fileStatKey } from "./stats-sessions";
 import { storeCoverage } from "./stats-store-index";
 import { syncStatus } from "./stats-sync";
 import type { Health } from "#lib/wire/stats-types";
@@ -23,11 +23,14 @@ function redactHome(p: string): string {
 	return p;
 }
 
+/** COUNT(*) memo: recomputed only when stats.db or its WAL changes (FPS-08). */
+let dbCountsMemo: { key: string; counts: NonNullable<Health["dbCounts"]> } | null = null;
+
 function healthRoute(ctx: AppCtx): Route {
 	return {
 		method: "GET",
 		pattern: /^\/ctl\/stats\/health$/,
-		handler: () => {
+		handler: async () => {
 			// Re-stat stats.db so health reflects rotations/appearances since the
 			// last probe (request-driven, no interval timer).
 			ctx.dbm.reprobe();
@@ -36,18 +39,25 @@ function healthRoute(ctx: AppCtx): Route {
 			let dbCounts: Health["dbCounts"] = null;
 			if (db) {
 				statsDb = "ok";
+				const path = ctx.dbm.path() ?? ctx.cfg.statsDbPath;
+				const key = `${path}|${fileStatKey(path)}|${fileStatKey(`${path}-wal`)}`;
 				try {
-					// COUNT(*) always returns one row with a scalar `c` column.
-					const q = (sql: string): number => {
-						const row = db.query(sql).get();
-						if (row !== null && typeof row === "object" && "c" in row) return row.c as number;
-						return 0;
-					};
-					dbCounts = {
-						messages: q("SELECT COUNT(*) c FROM messages"),
-						toolCalls: q("SELECT COUNT(*) c FROM tool_calls"),
-						userMessages: q("SELECT COUNT(*) c FROM user_messages"),
-					};
+					if (dbCountsMemo?.key === key) {
+						dbCounts = dbCountsMemo.counts;
+					} else {
+						// COUNT(*) always returns one row with a scalar `c` column.
+						const q = (sql: string): number => {
+							const row = db.query(sql).get();
+							if (row !== null && typeof row === "object" && "c" in row) return row.c as number;
+							return 0;
+						};
+						dbCounts = {
+							messages: q("SELECT COUNT(*) c FROM messages"),
+							toolCalls: q("SELECT COUNT(*) c FROM tool_calls"),
+							userMessages: q("SELECT COUNT(*) c FROM user_messages"),
+						};
+						dbCountsMemo = { key, counts: dbCounts };
+					}
 				} catch {
 					statsDb = "error";
 				}
@@ -59,11 +69,10 @@ function healthRoute(ctx: AppCtx): Route {
 				statsDbFromCopy: ctx.dbm.fromCopy(),
 				isolated: ctx.cfg.isolated === true,
 				sessionsDir: redactHome(ctx.cfg.sessionsDir),
-				// Reconciled with GET /ctl/stats/sessions: sessionsCount uses the same
-				// walk the sessions list builds from (walkJsonl + isMainSession), so
-				// it always equals the number of on-disk MAIN sessions that list
-				// would show; subagent transcripts and DB-only rows are excluded.
-				sessionsCount: countMainSessions(ctx.cfg.sessionsDir),
+				// Reconciled with GET /ctl/stats/sessions: sessionsCount is read from the
+				// same cached list, so it equals the on-disk MAIN sessions that list
+				// shows; subagent transcripts and DB-only rows are excluded.
+				sessionsCount: await countOnDiskSessions(ctx),
 				dbCounts,
 				...syncStatus(),
 				// P8.6: fleet-store coverage (excluded from sessionsCount above).
