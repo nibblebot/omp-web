@@ -39,8 +39,9 @@
  *     every session-scoped frame and on `attached` (omp-session no longer
  *     sends one). Every daemon dials the fleet, so the edge never dials: an
  *     asleep spawned daemon is respawned
- *     and waited on for PAIR_TIMEOUT_MS, a reconnecting daemon gets
- *     REDIAL_GRACE_MS to redial, and an unpaired remote daemon is refused.
+ *     and waited on for PAIR_TIMEOUT_MS, a reconnecting daemon, or a ready one
+ *     that just lost its pair, gets REDIAL_GRACE_MS to redial, and an unpaired
+ *     remote daemon is refused.
  *     A pair replacement re-primes the stream from zero. A dropped pair ends
  *     the browser's stream with the "daemon connection lost" error frame.
  *     Attach is answered with an id-keyed attach_result frame (finding #28)
@@ -1744,8 +1745,9 @@ export class FleetEdge {
 	/**
 	 * Bring a daemon's callback pair up before an attach or prompt. Every
 	 * daemon dials the fleet, so the fleet only ever waits on the pair; it
-	 * never dials. A paired daemon returns at once. A reconnecting daemon
-	 * gets REDIAL_GRACE_MS to redial on its own. An asleep daemon is
+	 * never dials. A paired daemon returns at once. A reconnecting daemon, or a
+	 * ready one that just lost its pair, gets REDIAL_GRACE_MS to redial on its
+	 * own. An asleep daemon is
 	 * respawned (--resume) and waited on for PAIR_TIMEOUT_MS.
 	 * Clone-kind entries go through the lifecycle ensure (provider compute +
 	 * enrollment) instead; their pair readiness rides the transport's
@@ -1780,11 +1782,17 @@ export class FleetEdge {
 		if (this.#waking.has(daemonId)) return;
 		this.#waking.add(daemonId);
 		try {
-			// A reconnecting session is redialing on its own: give it the grace
-			// window before deciding it needs a respawn.
-			if (entry.status === "reconnecting" && (await this.#awaitPair(daemonId, REDIAL_GRACE_MS)))
+			// A reconnecting session, or a ready one that just lost its pair
+			// (inside PAIR_LOSS_GRACE_MS), is redialing on its own: give it the
+			// grace window before deciding it needs a respawn.
+			if (
+				(entry.status === "reconnecting" || entry.status === "ready") &&
+				(await this.#awaitPair(daemonId, REDIAL_GRACE_MS))
+			)
 				return;
-			if (entry.status !== "connecting") {
+			// The status may have changed during the wait; respect the live value.
+			const status = this.#registry.get(daemonId)?.status ?? entry.status;
+			if (status !== "connecting") {
 				await this.#supervisor.respawn(
 					entry,
 					resumeFile && resumeFile.trim() !== "" ? { resumeFile } : undefined,

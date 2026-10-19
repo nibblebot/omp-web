@@ -119,8 +119,9 @@ export async function promptEntry(
  * Bring a session's callback pair up before a prompt. A paired session
  * returns at once. A clone rides the lifecycle ensure (provider compute +
  * enrollment). A session that is asleep or errored is respawned
- * (--resume); one already connecting or reconnecting is only waited on, since
- * it dials on its own. The pair wait is bounded by PAIR_TIMEOUT_MS.
+ * (--resume); one already connecting, reconnecting, or ready but just
+ * unpaired (inside PAIR_LOSS_GRACE_MS) is only waited on, since it dials on
+ * its own. The pair wait is bounded by PAIR_TIMEOUT_MS.
  */
 async function wakeSession(
 	deps: FanoutDeps,
@@ -133,7 +134,8 @@ async function wakeSession(
 		if (!deps.lifecycle) throw new Error("clone prompt is unavailable: no lifecycle service");
 		await deps.lifecycle.ensureCloneRunning(daemonId);
 	} else {
-		const dialing = entry.status === "connecting" || entry.status === "reconnecting";
+		const dialing =
+			entry.status === "connecting" || entry.status === "reconnecting" || entry.status === "ready";
 		if (!dialing) await deps.supervisor.respawn(entry);
 	}
 	await waitForPair(transport, daemonId, PAIR_TIMEOUT_MS);
@@ -189,7 +191,7 @@ function waitForPair(transport: FanoutTransport, daemonId: string, waitMs: numbe
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	const timer = setTimeout(() => {
 		unsubscribe();
-		reject(new Error(`clone ${daemonId} callback pair not ready within ${waitMs} ms`));
+		reject(new Error(`callback pair for ${daemonId} not ready within ${waitMs} ms`));
 	}, waitMs);
 	const unsubscribe = transport.onPairChange(daemonId, (status) => {
 		if (!status.paired) return;

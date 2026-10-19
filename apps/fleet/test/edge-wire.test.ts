@@ -1630,3 +1630,117 @@ describe("edge pure helpers", () => {
 		expect(shouldDropFrame(1025, 1024)).toBe(true);
 	});
 });
+
+describe("pair-loss grace", () => {
+	const PAIR_LOSS_GRACE_MS = 400;
+	const tmp = tempDir("omp-web-pair-grace-");
+	const statePath = join(tmp, "state.json");
+	const configPath = join(tmp, "config.json");
+	const daemons: CallbackDaemon[] = [];
+	let server: FleetServer;
+
+	const fleetUrl = () => `http://127.0.0.1:${server.port}`;
+
+	/** Did the fleet log a reconnecting transition for this daemon? */
+	const reconnectingLogged = (daemonId: string): boolean =>
+		server.eventLog.list().some((e) => e.daemonId === daemonId && e.message === "reconnecting");
+
+	/**
+	 * Spawn a row (the production path that installs the pair watch), then play
+	 * the child's callback dial with a fixed redial delay and wait for ready.
+	 */
+	async function pairRow(
+		name: string,
+		redialMs: number,
+	): Promise<{ daemonId: string; daemon: CallbackDaemon }> {
+		const entry = await server.supervisor.spawn({
+			cwd: FAKE_CWD,
+			name,
+			template: "local",
+			labels: [],
+		});
+		const { generation, credential } = enrollSessionCredential(
+			server.transport,
+			server.registry,
+			entry.daemonId,
+		);
+		const daemon = startCallbackDaemon({
+			url: fleetUrl(),
+			workspaceId: entry.daemonId,
+			generation,
+			token: credential,
+			redialMinMs: redialMs,
+			redialMaxMs: redialMs,
+		});
+		daemons.push(daemon);
+		await daemon.waitConnected(10_000);
+		await waitFor(
+			() => (server.registry.get(entry.daemonId)?.status === "ready" ? true : null),
+			5000,
+			`${name} ready`,
+		);
+		return { daemonId: entry.daemonId, daemon };
+	}
+
+	// Same dev-runner hermeticity as the suite above: a shell that ran
+	// `bun run dev` carries OMP_FLEET_LOCAL_TEMPLATE, which would replace the
+	// sleep-loop `local` template with a real session launch.
+	let savedLocalTemplate: string | undefined;
+	beforeAll(async () => {
+		savedLocalTemplate = process.env.OMP_FLEET_LOCAL_TEMPLATE;
+		delete process.env.OMP_FLEET_LOCAL_TEMPLATE;
+		mkdirSync(FAKE_CWD, { recursive: true });
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				templates: {
+					local: { command: ": {fleet}; while :; do sleep 0.05; done" },
+				},
+				defaultTemplate: "local",
+			}),
+		);
+		server = await startFleet({
+			port: 0,
+			statePath,
+			configPath,
+			statsConfig: hermeticStatsConfig(statePath),
+			pairLossGraceMs: PAIR_LOSS_GRACE_MS,
+		});
+	});
+
+	afterAll(async () => {
+		for (const daemon of daemons) daemon.stop();
+		await server.close();
+		if (savedLocalTemplate !== undefined) process.env.OMP_FLEET_LOCAL_TEMPLATE = savedLocalTemplate;
+	});
+
+	test("a pair drop that re-pairs inside the grace never shows reconnecting", async () => {
+		const { daemonId, daemon } = await pairRow("grace-blip", 25);
+		daemon.dropLegs();
+		await waitFor(
+			() => (server.transport.pairStatus(daemonId).paired ? null : true),
+			2000,
+			"pair down",
+		);
+		await waitFor(
+			() => (server.transport.pairStatus(daemonId).paired ? true : null),
+			5000,
+			"pair back",
+		);
+		await sleep(PAIR_LOSS_GRACE_MS * 3);
+		expect(server.registry.get(daemonId)?.status).toBe("ready");
+		expect(reconnectingLogged(daemonId)).toBe(false);
+	});
+
+	test("a pair drop that outlasts the grace shows reconnecting", async () => {
+		const { daemonId, daemon } = await pairRow("grace-outage", 60_000);
+		daemon.dropLegs();
+		await waitFor(
+			() => (server.registry.get(daemonId)?.status === "reconnecting" ? true : null),
+			PAIR_LOSS_GRACE_MS + 3000,
+			"reconnecting after grace",
+		);
+		expect(server.transport.pairStatus(daemonId).paired).toBe(false);
+		expect(reconnectingLogged(daemonId)).toBe(true);
+	});
+});

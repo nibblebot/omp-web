@@ -207,7 +207,6 @@ describe("FleetCallback up-leg lifetime budget", () => {
 			token: TOKEN,
 			allowHttp: true,
 			upRenewalBytes: RENEWAL_BYTES,
-			renewalMs: 0,
 		});
 		callbacks.push(callback);
 
@@ -254,7 +253,6 @@ describe("FleetCallback up-leg lifetime budget", () => {
 			token: TOKEN,
 			allowHttp: true,
 			upRenewalBytes: RENEWAL_BYTES,
-			renewalMs: 0,
 		});
 		callbacks.push(callback);
 
@@ -300,7 +298,6 @@ describe("FleetCallback up-leg lifetime budget", () => {
 			token: TOKEN,
 			allowHttp: true,
 			upRenewalBytes: RENEWAL_BYTES,
-			renewalMs: 0,
 		});
 		callbacks.push(callback);
 

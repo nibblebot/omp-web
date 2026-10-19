@@ -14,7 +14,6 @@ import {
 	HEARTBEAT_INTERVAL_MS,
 	OMP_CALLBACK_PROTO,
 	PAIR_READY_TIMEOUT_MS,
-	PAIR_RENEWAL_MS,
 	UP_RENEWAL_BYTES,
 	RECONNECT_BACKOFF_MAX_MS,
 	RECONNECT_BACKOFF_MIN_MS,
@@ -72,12 +71,11 @@ import { isLoopbackHost } from "#lib/platform/hosts";
  *   - The fleet emits 15 s `heartbeat` envelopes (streamId "transport") that
  *     keep the 30 s down silence deadline alive; the daemon mirrors 15 s
  *     heartbeats up (streamId "control") while idle.
- *   - Every 5 min the pair is voluntarily renewed (fresh connectionId); down
- *     envelopes are never resumed across a replacement because a fresh
+ *   - Down envelopes are never resumed across a replacement: a fresh
  *     connectionId starts a fresh per-connection seq space.
  *   - The up POST body counts against the fleet server's request-body limit
  *     for its whole life (Bun maxRequestBodySize, 128 MiB), so the pair is
- *     also renewed once the up half has carried UP_RENEWAL_BYTES (64 MiB),
+ *     renewed once the up half has carried UP_RENEWAL_BYTES (64 MiB),
  *     gracefully (queued bytes drain first; unsent envelopes replay on the
  *     fresh pair), with no backoff. Sustained load never reaches a drained
  *     moment, so the renewal cannot wait for one.
@@ -145,8 +143,6 @@ export interface FleetCallbackOptions {
 	// shrink them to observe cadence deterministically.
 	heartbeatMs?: number;
 	silenceMs?: number;
-	/** Pair renewal interval; 0 disables voluntary renewal. */
-	renewalMs?: number;
 	/** Up-leg bytes after which the pair is voluntarily renewed; 0 disables. */
 	upRenewalBytes?: number;
 	readyTimeoutMs?: number;
@@ -319,7 +315,6 @@ interface PairHandle {
 	heartbeatTimer: ReturnType<typeof setInterval> | null;
 	silenceTimer: ReturnType<typeof setTimeout> | null;
 	stallTimer: ReturnType<typeof setTimeout> | null;
-	renewalTimer: ReturnType<typeof setTimeout> | null;
 	/** Resolved exactly once, by finishPair (failure/renewal) or teardown (stopped). */
 	end: Deferred<PairEnd>;
 	/** Resolved when the fleet's pair_ready envelope arrives for this pair. */
@@ -361,7 +356,6 @@ export class FleetCallback {
 	readonly #proxy: string | undefined;
 	readonly #heartbeatMs: number;
 	readonly #silenceMs: number;
-	readonly #renewalMs: number;
 	readonly #upRenewalBytes: number;
 	readonly #readyTimeoutMs: number;
 	readonly #backoffMinMs: number;
@@ -452,7 +446,6 @@ export class FleetCallback {
 		this.#proxy = options.proxy;
 		this.#heartbeatMs = options.heartbeatMs ?? HEARTBEAT_INTERVAL_MS;
 		this.#silenceMs = options.silenceMs ?? SILENCE_DEADLINE_MS;
-		this.#renewalMs = options.renewalMs ?? PAIR_RENEWAL_MS;
 		this.#upRenewalBytes = options.upRenewalBytes ?? UP_RENEWAL_BYTES;
 		this.#readyTimeoutMs = options.readyTimeoutMs ?? PAIR_READY_TIMEOUT_MS;
 		this.#backoffMinMs = options.backoffMinMs ?? RECONNECT_BACKOFF_MIN_MS;
@@ -858,7 +851,6 @@ export class FleetCallback {
 			heartbeatTimer: null,
 			silenceTimer: null,
 			stallTimer: null,
-			renewalTimer: null,
 			end: deferred<PairEnd>(),
 			readyWaiter: deferred<void>(),
 			readyArrived: false,
@@ -866,7 +858,6 @@ export class FleetCallback {
 	}
 
 	async #livePair(pair: PairHandle): Promise<PairEnd> {
-		this.#armRenewal(pair);
 		const end = await pair.end.promise;
 		if (end.kind === "renewal") await this.#drainUp(pair);
 		this.#teardownPair(pair);
@@ -1379,15 +1370,6 @@ export class FleetCallback {
 		pair.silenceTimer = null;
 	}
 
-	#armRenewal(pair: PairHandle): void {
-		if (this.#renewalMs <= 0 || pair.renewalTimer !== null) return;
-		pair.renewalTimer = setTimeout(() => {
-			pair.renewalTimer = null;
-			if (!this.#isCurrent(pair)) return;
-			this.#finishPair(pair, { kind: "renewal" });
-		}, this.#renewalMs);
-	}
-
 	#clearPairTimers(pair: PairHandle): void {
 		if (pair.heartbeatTimer !== null) {
 			clearInterval(pair.heartbeatTimer);
@@ -1395,10 +1377,6 @@ export class FleetCallback {
 		}
 		this.#clearSilence(pair);
 		this.#clearStall(pair);
-		if (pair.renewalTimer !== null) {
-			clearTimeout(pair.renewalTimer);
-			pair.renewalTimer = null;
-		}
 	}
 
 	// ── pair teardown / finish ────────────────────────────────────────────────

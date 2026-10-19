@@ -242,8 +242,6 @@ export const REPLAY_RING_ENTRIES = 10_000;
 export const HEARTBEAT_INTERVAL_MS = 15_000;
 /** Down-stream silence deadline (30 s): no envelope by then = dead pair. */
 export const SILENCE_DEADLINE_MS = 30_000;
-/** Pair credential renewal interval (5 min). */
-export const PAIR_RENEWAL_MS = 5 * 60_000;
 /**
  * Up-leg lifetime byte budget (64 MiB). The fleet's Bun.serve counts a
  * streaming request body against `maxRequestBodySize` (default 128 MiB) for

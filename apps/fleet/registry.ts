@@ -44,6 +44,14 @@ import { expandTilde } from "./config";
 export const REDIAL_GRACE_MS = 45_000;
 
 /**
+ * How long a ready session may stay unpaired before it is shown
+ * "reconnecting". A voluntary byte renewal or a brief re-dial re-pairs well
+ * inside this window, so the roster does not flicker; a drop that outlasts it
+ * is a real outage.
+ */
+export const PAIR_LOSS_GRACE_MS = 5_000;
+
+/**
  * Workspace identity unions, re-exported for fleet/registry consumers. The
  * canonical definitions live in shared/protocol.ts, the shared leaf that
  * already feeds DaemonEntry/RegisteredProject to this file. Defining them

@@ -66,7 +66,7 @@ import { toPublicProfile } from "./provider-profile";
 import { isLoopbackHost } from "#lib/platform/hosts";
 import { acquireFileLock, type FileLock } from "#lib/platform/file-lock";
 import type { DeletionGateError, RegistryEntry } from "./registry";
-import { REDIAL_GRACE_MS, Registry } from "./registry";
+import { PAIR_LOSS_GRACE_MS, REDIAL_GRACE_MS, Registry } from "./registry";
 import { sessionLiveness } from "./session-liveness";
 import { validateProjectPath } from "./discovery";
 import { matchSelector } from "./selectors";
@@ -407,6 +407,9 @@ class FleetServerImpl implements FleetServer {
 	/** Boot redial grace timers for enrolled sessions; cleared on pair or close(). */
 	readonly #redialTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	readonly #redialGraceMs: number;
+	/** Pair-loss grace timers for ready non-clone entries; cleared on re-pair, entry removal, or close(). */
+	readonly #pairLossTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	readonly #pairLossGraceMs: number;
 	/** Historical transcripts/stats API (P8.6): per-instance stats app,
 	 *  constructed in the constructor so it can receive the log store when it
 	 *  loads; closed in close(). */
@@ -442,9 +445,11 @@ class FleetServerImpl implements FleetServer {
 		serveUi = true,
 		redialGraceMs = REDIAL_GRACE_MS,
 		pluginStore?: () => Promise<PluginStore>,
+		pairLossGraceMs = PAIR_LOSS_GRACE_MS,
 	) {
 		this.registry = registry;
 		this.#redialGraceMs = redialGraceMs;
+		this.#pairLossGraceMs = pairLossGraceMs;
 		this.config = config;
 		this.lock = lock;
 		this.cloneRoot = join(dirname(facts.statePath), "clones");
@@ -671,6 +676,8 @@ class FleetServerImpl implements FleetServer {
 		this.#pairWatches.clear();
 		for (const timer of this.#redialTimers.values()) clearTimeout(timer);
 		this.#redialTimers.clear();
+		for (const timer of this.#pairLossTimers.values()) clearTimeout(timer);
+		this.#pairLossTimers.clear();
 		this.#closeLogStoreWiring();
 		try {
 			this.transport.close();
@@ -883,24 +890,28 @@ class FleetServerImpl implements FleetServer {
 		this.#logTaps.get(daemonId)?.();
 		this.#logTaps.delete(daemonId);
 		this.#clearRedialGrace(daemonId);
+		this.#clearPairLossGrace(daemonId);
 	}
 
 	/**
-	 * Pair transitions drive the status of non-clone entries: a paired session
-	 * is "ready"; a session that loses its pair while ready is "reconnecting".
-	 * Connecting/asleep/error belong to the supervisor, so pair loss in those
-	 * states changes nothing here.
+	 * Pair transitions drive the status of non-clone entries. A paired session
+	 * is "ready". A ready session that loses its pair stays "ready" for
+	 * PAIR_LOSS_GRACE_MS: a voluntary byte renewal or brief re-dial re-pairs
+	 * inside that window with no status flicker. Only a drop that outlasts the
+	 * grace becomes "reconnecting". Connecting/asleep/error belong to the
+	 * supervisor, so pair loss in those states changes nothing here.
 	 */
 	#onPairChange(daemonId: string, paired: boolean): void {
 		const entry = this.registry.get(daemonId);
 		if (entry === undefined || entry.workspace?.kind === "clone") return;
 		if (paired) {
 			this.#clearRedialGrace(daemonId);
+			this.#clearPairLossGrace(daemonId);
 			if (entry.status === "ready") return;
 			this.registry.update(daemonId, { readyAt: Date.now() });
 			this.#setDaemonStatus(daemonId, "ready");
-		} else if (entry.status === "ready") {
-			this.#setDaemonStatus(daemonId, "reconnecting");
+		} else if (entry.status === "ready" && !this.#pairLossTimers.has(daemonId)) {
+			this.#armPairLossGrace(daemonId);
 		}
 	}
 
@@ -936,6 +947,25 @@ class FleetServerImpl implements FleetServer {
 		if (timer === undefined) return;
 		clearTimeout(timer);
 		this.#redialTimers.delete(daemonId);
+	}
+
+	/** Pair-loss grace: a ready session still unpaired at the deadline is shown reconnecting. */
+	#armPairLossGrace(daemonId: string): void {
+		const timer = setTimeout(() => {
+			this.#pairLossTimers.delete(daemonId);
+			const entry = this.registry.get(daemonId);
+			if (entry?.status !== "ready") return;
+			if (this.transport.pairStatus(daemonId).paired) return;
+			this.#setDaemonStatus(daemonId, "reconnecting");
+		}, this.#pairLossGraceMs);
+		this.#pairLossTimers.set(daemonId, timer);
+	}
+
+	#clearPairLossGrace(daemonId: string): void {
+		const timer = this.#pairLossTimers.get(daemonId);
+		if (timer === undefined) return;
+		clearTimeout(timer);
+		this.#pairLossTimers.delete(daemonId);
 	}
 
 	/**
@@ -2029,6 +2059,8 @@ export async function startFleet(
 		redialGraceMs?: number;
 		/** Test seam: plugin lock store (the real SDK-backed store otherwise). */
 		pluginStore?: () => Promise<PluginStore>;
+		/** Test seam: pair-loss grace before a ready session that lost its pair is shown reconnecting (default PAIR_LOSS_GRACE_MS). */
+		pairLossGraceMs?: number;
 	} = {},
 ): Promise<FleetServer> {
 	const configPath = resolveConfigPath(opts.configPath);
@@ -2075,6 +2107,7 @@ export async function startFleet(
 			opts.serveUi,
 			opts.redialGraceMs,
 			opts.pluginStore,
+			opts.pairLossGraceMs,
 		);
 	} catch (err) {
 		lock.release();
