@@ -54,6 +54,19 @@ describe("browserRequestAllowed", () => {
 	test("fails closed on an unparseable configured browser origin", () => {
 		expect(browserRequestAllowed(req({}), "not a url")).toBe(false);
 	});
+
+	test("admits a dev-proxied LAN page only once its Host and Origin are the loopback fleet", () => {
+		const lanOrigin = "http://192.168.1.20:4713";
+		expect(
+			browserRequestAllowed(req({ host: "192.168.1.20:4713", origin: lanOrigin }), undefined),
+		).toBe(false);
+		expect(
+			browserRequestAllowed(
+				req({ host: "localhost:4722", origin: "http://localhost:4722" }),
+				undefined,
+			),
+		).toBe(true);
+	});
 });
 
 describe("isJsonRequest", () => {

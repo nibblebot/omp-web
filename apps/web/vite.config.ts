@@ -1,9 +1,11 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+import type { ProxyOptions } from "vite";
 import solidPlugin from "vite-plugin-solid";
 import { buildInfoDefines } from "./build/build-info.ts";
 import { featureSizes } from "./build/feature-sizes.ts";
+import { fleetOrigin } from "./dev-proxy.ts";
 
 // Web root: this config lives at apps/web/vite.config.ts. Root is set
 // explicitly (vite defaults root to the invoking cwd, not the config dir),
@@ -31,6 +33,23 @@ const allowedHosts =
 					.map((h) => h.trim())
 					.filter((h) => h.length > 0);
 
+// Proxy target options for one fleet route. changeOrigin sends the fleet a
+// loopback Host, which its browser guard admits; the configure hook
+// re-presents same-origin requests (a LAN browser's page) as the loopback
+// origin. See fleetOrigin for the decision and why cross-site stays refused.
+function fleetProxy(): ProxyOptions {
+	return {
+		target: `http://localhost:${fleetPort}`,
+		changeOrigin: true,
+		configure: (proxy) => {
+			proxy.on("proxyReq", (proxyReq, req) => {
+				const origin = fleetOrigin(req.headers.host, req.headers.origin, fleetPort);
+				if (origin !== undefined) proxyReq.setHeader("origin", origin);
+			});
+		},
+	};
+}
+
 export default defineConfig({
 	root: webRoot,
 	plugins: [solidPlugin(), featureSizes()],
@@ -42,16 +61,13 @@ export default defineConfig({
 		proxy: {
 			// /events is a long-lived SSE stream: http-proxy pipes it through (no ws: true);
 			// X-Accel-Buffering asks intermediaries not to buffer the response.
-			"/events": {
-				target: `http://localhost:${fleetPort}`,
-				headers: { "X-Accel-Buffering": "no" },
-			},
-			"/command": { target: `http://localhost:${fleetPort}` },
+			"/events": { ...fleetProxy(), headers: { "X-Accel-Buffering": "no" } },
+			"/command": fleetProxy(),
 			// Fleet control plane: same edge port.
-			"/ctl": { target: `http://localhost:${fleetPort}` },
+			"/ctl": fleetProxy(),
 			// Browser-auth surface (P2.4): same-origin sign-in must reach the
 			// fleet under HMR too, or the login modal can never work in dev.
-			"/auth": { target: `http://localhost:${fleetPort}` },
+			"/auth": fleetProxy(),
 		},
 	},
 	build: {

@@ -14,7 +14,7 @@
  *   omp-web control [--port n] [--workspace-dir d] [--bind addr]
  *                     [--browser-access-token t] [--browser-origin o]
  *                     [--trusted-proxy ip-or-cidr]… [--verbose]
- *   omp-web ui [--port n] [--control-port n] [--no-open]
+ *   omp-web ui [--port n] [--control-port n] [--browser-origin o] [--no-open]
  *   omp-web sessions [--port n]
  *   omp-web projects [--port n]
  *   omp-web profiles [--port n]
@@ -39,7 +39,9 @@
  * Bind address / browser auth: `--bind`, `--browser-access-token`,
  * `--browser-origin`, and `--trusted-proxy` flags, else OMP_FLEET_BIND /
  * OMP_FLEET_BROWSER_TOKEN / OMP_FLEET_BROWSER_ORIGIN / (OMP_FLEET_TRUSTED_PROXY
- * csv), else the config-file keys (see fleet/config.ts).
+ * csv), else the config-file keys (see fleet/config.ts). `ui` and the control
+ * plane both read the browser origin: set the same value on each (flag, env,
+ * or config) when a reverse proxy serves the UI on a public origin.
  * A refused connection prints NOT_RUNNING_MESSAGE and exits 1.
  */
 
@@ -374,11 +376,16 @@ export async function serveLoop(server: FleetServer, opts: ServeLoopOptions): Pr
  * plane) in the foreground until SIGINT/SIGTERM. `port` is the UI listen
  * port; `controlPort` is where the control plane listens.
  */
-async function uiCmd(port: number, controlPort: number, open: boolean): Promise<number> {
+async function uiCmd(
+	port: number,
+	controlPort: number,
+	open: boolean,
+	browserOrigin?: string,
+): Promise<number> {
 	let ui: UiServer;
 	try {
-		const { browserOrigin } = await loadConfig(resolveConfigPath());
-		ui = startUiServer({ port, controlPort, browserOrigin });
+		const config = await loadConfig(resolveConfigPath(), { browserOrigin });
+		ui = startUiServer({ port, controlPort, browserOrigin: config.browserOrigin });
 	} catch (err) {
 		const code = (err as { code?: unknown } | null)?.code;
 		const message = err instanceof Error ? err.message : String(err);
@@ -881,8 +888,10 @@ options:
   --browser-access-token <t>
                        browser-auth operator token; stored only as its
                        sha-256 digest (env OMP_FLEET_BROWSER_TOKEN)
-  --browser-origin <o> browser origin admitted for mutations alongside the
-                       loopback-dev exception (env OMP_FLEET_BROWSER_ORIGIN)
+  --browser-origin <o> public origin browsers use when a reverse proxy serves the
+                       UI: the proxy must set it, or the fleet refuses its
+                       mutations. The ui command reads it too, so set the same value on
+                       both (env OMP_FLEET_BROWSER_ORIGIN, config browserOrigin)
   --trusted-proxy <ip-or-cidr>
                        trusted reverse proxy whose X-Forwarded-For / -Proto
                        headers are honored (repeatable; env
@@ -925,6 +934,7 @@ export async function main(argv: string[]): Promise<number> {
 					portFlag(flags, "port") ?? DEFAULT_UI_PORT,
 					portFlag(flags, "control-port") ?? envPort() ?? DEFAULT_PORT,
 					flagBoolean(flags, "no-open") !== true && isInteractiveDesktop(),
+					flagString(flags, "browser-origin"),
 				);
 			case "sessions":
 				return await sessionsCmd(port);
