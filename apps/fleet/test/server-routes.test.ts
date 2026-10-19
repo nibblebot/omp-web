@@ -405,6 +405,14 @@ describe("fleet control plane", () => {
 		expect(bodyLabels.error).toContain("NUL");
 	});
 
+	test("POST /ctl/spawn 400s when a label is not k=v (same rule as the edge)", async () => {
+		const cwd = join(tmp, "spawn-cwd");
+		const res = await postJson(server.port, "/ctl/spawn", { cwd, labels: ["k=v", "bare"] });
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error?: string };
+		expect(body.error).toBe("labels must be an array of k=v strings");
+	});
+
 	test("POST /ctl/add is gone (404)", async () => {
 		const res = await postJson(server.port, "/ctl/add", {
 			name: "gone",
