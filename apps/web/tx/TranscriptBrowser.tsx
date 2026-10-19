@@ -7,7 +7,6 @@ import { TranscriptDetail } from "./components/TranscriptDetail";
 import { TranscriptList } from "./components/TranscriptList";
 import { StoredSessionList } from "./components/StoredSessionList";
 import { StoredSessionPage } from "./components/StoredSessionPage";
-import { ResumeCloneDialog } from "./components/ResumeCloneDialog";
 import { SpendPanel } from "./components/SpendPanel";
 import { formatBytes } from "./util/format";
 import { parseTxHash, storedHash, type TxRoute } from "./util/route";
@@ -190,7 +189,6 @@ export function TranscriptBrowser() {
 					</Show>
 				</main>
 			</div>
-			<ResumeCloneDialog />
 		</div>
 	);
 }

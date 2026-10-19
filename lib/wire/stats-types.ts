@@ -270,8 +270,6 @@ export interface StoredWorkspaceSummary {
 	orphaned: boolean;
 	viewOnly: boolean;
 	provenance?: StoredWorkspaceProvenance;
-	/** Present only on orphaned workspaces: the ONLY resume affordance. */
-	resumeClonePath?: string;
 }
 
 /** GET /ctl/stored/sessions row (files omitted; fetch the detail for them). */

@@ -8,8 +8,6 @@
  * Coverage labels: every row carries the "fleet-stored" chip; an orphaned
  * workspace is additionally labeled "deleted workspace: view only". These
  * rows are read-only browsing, NEVER an inline Resume / wake affordance.
- * The ONLY resume action lives on orphaned workspaces via their server-issued
- * resumeClonePath, opening the confirm dialog (ResumeCloneDialog).
  */
 import { Show, For, createResource, createSignal } from "solid-js";
 import {
@@ -19,7 +17,6 @@ import {
 	type StoredWorkspaceSummary,
 } from "../../store/fleet-api";
 import { formatBytes, formatCompact, timeAgo } from "../util/format";
-import { openResumeClone } from "./ResumeCloneDialog";
 import { kindsSummary, provenanceLabel } from "./stored";
 
 interface StoredListProps {
@@ -194,18 +191,6 @@ function StoredWorkspaceRow(props: {
 					</Show>
 				</div>
 			</button>
-			{/* Orphaned workspaces carry the ONLY resume affordance (the server
-			    issues resumeClonePath only for them); fleet-stored browsing never
-			    offers inline Resume. A sibling row keeps the head button atomic;
-			    the dialog picks which session to resume. */}
-			<Show when={w().orphaned && w().resumeClonePath !== undefined}>
-				<div class="stored-resume-row">
-					<span class="row-folder">deleted workspace</span>
-					<button type="button" class="btn btn-small" onClick={() => openResumeClone(w())}>
-						Resume onto fresh clone
-					</button>
-				</div>
-			</Show>
 			<Show when={expanded()}>
 				<div class="stored-sessions">
 					<Show

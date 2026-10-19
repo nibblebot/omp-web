@@ -25,7 +25,6 @@ import type {
 	ToolStat,
 	TranscriptPage,
 } from "#lib/wire/stats-types";
-import { authedFetch } from "./auth";
 
 /** Encode each `/`-separated path segment, keeping the separators literal;
  *  used for API `:file` URL params and hash routes alike. */
@@ -238,48 +237,5 @@ export const api = {
 			throw new ApiError(message, res.status, code);
 		}
 		return res.text();
-	},
-
-	/**
-	 * Resume-onto-fresh-clone (orphaned/deleted workspaces ONLY, the ONLY
-	 * resume affordance; fleet-stored browsing never offers inline Resume).
-	 * A mutation: authedFetch adds the session CSRF header and handles 401.
-	 * `resumePath` is the workspace summary's resumeClonePath, server-issued.
-	 */
-	resumeClone: async (
-		resumePath: string,
-		sessionId: string,
-		profileId?: string,
-	): Promise<Record<string, unknown>> => {
-		const res = await authedFetch(resumePath, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(profileId !== undefined ? { sessionId, profileId } : { sessionId }),
-		});
-		if (!res.ok) {
-			let message = `HTTP ${res.status}`;
-			let code: string | null = null;
-			try {
-				const body: unknown = await res.json();
-				const parsed = errorMessageFromBody(body);
-				if (parsed !== null) {
-					message = parsed.message;
-					code = parsed.code ?? null;
-				}
-			} catch {
-				// non-JSON error body: keep the status line
-			}
-			throw new ApiError(message, res.status, code);
-		}
-		try {
-			const body: unknown = await res.json();
-			if (typeof body === "object" && body !== null && !Array.isArray(body)) {
-				return body as Record<string, unknown>;
-			}
-			return {};
-		} catch {
-			// 2xx with no JSON body (e.g. 204): nothing to parse.
-			return {};
-		}
 	},
 };

@@ -186,7 +186,6 @@ function workspaceRow(
 		orphaned,
 		viewOnly: true,
 		...(provenance ? { provenance } : {}),
-		...(orphaned ? { resumeClonePath: `/ctl/workspaces/${workspaceId}/resume-clone` } : {}),
 	};
 }
 

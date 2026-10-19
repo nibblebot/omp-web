@@ -14,9 +14,8 @@
 // the manifest/clientFilename (browser filenames are never server paths).
 // Streaming uses ReadableStream -> Blob where available with a plain-blob
 // fallback; no success toast fires without verified bytes + manifest.
-// Failures surface through the typed downloadFailure mapping (see
-// apps/fleet/download-policy.ts): traversal/cross-workspace -> forbidden,
-// stale/disconnect -> retryable/unavailable, 64 MiB cap -> explicit cap
+// Failures surface through the client-side errorCodeOf mapping below: 401/403
+// -> unauthorized/forbidden, stale/disconnect -> retryable/unavailable, 64 MiB cap -> explicit cap
 // message. Text downloads offer clipboard copy with permission handling.
 // Stored lineage uses the read-only store/fleet-api.ts stored* routes and never wakes
 // compute; missing blobs render explicit unavailable.

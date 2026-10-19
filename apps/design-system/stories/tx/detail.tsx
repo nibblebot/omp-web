@@ -1,9 +1,4 @@
 import { StoredSessionPage } from "../../../web/tx/components/StoredSessionPage";
-import {
-	ResumeCloneDialog,
-	openResumeClone,
-	openResumeCloneSession,
-} from "../../../web/tx/components/ResumeCloneDialog";
 import { StoredTranscriptPane } from "../../../web/tx/components/StoredTranscriptView";
 import { TranscriptDetail } from "../../../web/tx/components/TranscriptDetail";
 import type { StoredFileInfo, StoredSessionDetail } from "#lib/wire/stats-types";
@@ -12,7 +7,6 @@ import {
 	SESSION_FILE_MAIN,
 	SESSION_FILE_UNSYNCED,
 	storedSessionDetail,
-	storedWorkspaces,
 } from "../../fixtures/tx";
 import { TxPane } from "./views";
 import { defineStory } from "../../registry";
@@ -29,13 +23,6 @@ function fileOf(detail: StoredSessionDetail, kind: StoredFileInfo["kind"]): Stor
 	const file = detail.files.find((f) => f.kind === kind);
 	if (!file) throw new Error(`session ${detail.sessionId} has no ${kind} file`);
 	return file;
-}
-
-/** Stored workspace row for the resume dialog; throws if the fixture lacks it. */
-function workspace(id: string): (typeof storedWorkspaces)[number] {
-	const found = storedWorkspaces.find((w) => w.workspaceId === id);
-	if (!found) throw new Error(`no stored workspace ${id}`);
-	return found;
 }
 
 const liveMain = detailFor("ws-omp-web", "a1b2c3d4");
@@ -185,38 +172,6 @@ export default [
 						/>
 					</TxPane>
 				),
-			},
-		],
-	}),
-	defineStory({
-		id: "tx-resume-clone-dialog",
-		title: "ResumeCloneDialog",
-		component: {
-			file: "apps/web/tx/components/ResumeCloneDialog.tsx",
-			export: "ResumeCloneDialog",
-		},
-		tabs: true,
-		seed: {
-			providerProfiles: [
-				{ id: "github-readonly", provider: "bwrap", network: "isolated" },
-				{ id: "fleet-k8s", provider: "kubernetes", storageClassName: "fast-ssd" },
-			],
-		},
-		variants: [
-			{
-				name: "Orphaned clone, pick a session",
-				seed: () => openResumeClone(workspace("ws-orphaned")),
-				render: () => <ResumeCloneDialog />,
-			},
-			{
-				name: "Session preselected from detail",
-				seed: () => openResumeCloneSession(workspace("ws-orphaned"), "0a1b2c3d"),
-				render: () => <ResumeCloneDialog />,
-			},
-			{
-				name: "Benchmark clone",
-				seed: () => openResumeClone(workspace("ws-bench-old")),
-				render: () => <ResumeCloneDialog />,
 			},
 		],
 	}),

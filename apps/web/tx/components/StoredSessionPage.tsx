@@ -6,16 +6,11 @@
  * (parsed, via the shared TranscriptPage rendering) or, via the raw toggle,
  * the byte-identical JSONL. A file with status "missing" is rendered as an
  * explicit UNAVAILABLE, never a clickable download/transcript link.
- *
- * The resume-onto-fresh-clone action appears ONLY when the workspace summary
- * carries resumeClonePath (orphaned/deleted workspaces), never for
- * fleet-stored browsing otherwise.
  */
 import { Show, createEffect, createResource, createSignal, For } from "solid-js";
 import { api, type StoredFileInfo } from "../../store/fleet-api";
 import { formatBytes, formatDateTime, timeAgo } from "../util/format";
 import { StoredTranscriptPane } from "./StoredTranscriptView";
-import { openResumeCloneSession } from "./ResumeCloneDialog";
 import { groupFilesByKind } from "./stored";
 import { storedLoadError } from "../util/stored-error";
 
@@ -125,19 +120,12 @@ export function StoredSessionPage(props: { workspaceId: string; sessionId: strin
 				</div>
 			</header>
 
-			{/* Orphaned (deleted) workspace: the ONLY resume affordance. */}
+			{/* Orphaned (deleted) workspace: view-only banner. */}
 			<Show when={workspace()} keyed>
 				{(ws) => (
-					<Show when={ws.orphaned === true && ws.resumeClonePath !== undefined}>
+					<Show when={ws.orphaned === true}>
 						<div class="stored-orphan-banner">
 							<span>This workspace was deleted; sessions are stored view-only.</span>
-							<button
-								type="button"
-								class="btn btn-small"
-								onClick={() => openResumeCloneSession(ws, props.sessionId)}
-							>
-								Resume onto fresh clone
-							</button>
 						</div>
 					</Show>
 				)}

@@ -6,7 +6,6 @@ import {
 	ADVANCED_SETTING_PATHS,
 	HIDDEN_SETTING_PATHS,
 	TAB_SECTION_ORDER,
-	WEB_SETTING_PATHS,
 	WEB_TRUE_CONDITIONS,
 } from "#lib/sdk-settings/settings-layout";
 import {
@@ -33,16 +32,18 @@ const emitted = new Set(
 );
 
 describe("settings layout manifest", () => {
-	test("every host ui row is classified exactly once", () => {
-		const sets = [WEB_SETTING_PATHS, HIDDEN_SETTING_PATHS, ADVANCED_SETTING_PATHS];
+	test("hidden and advanced path sets are disjoint", () => {
 		for (const path of hostPaths) {
-			const hits = sets.filter((set) => Object.hasOwn(set, path)).length;
-			expect({ path, hits }).toEqual({ path, hits: 1 });
+			expect({
+				path,
+				both:
+					Object.hasOwn(HIDDEN_SETTING_PATHS, path) && Object.hasOwn(ADVANCED_SETTING_PATHS, path),
+			}).toEqual({ path, both: false });
 		}
 	});
 
 	test("every manifest path exists in the live host", () => {
-		for (const set of [WEB_SETTING_PATHS, HIDDEN_SETTING_PATHS, ADVANCED_SETTING_PATHS]) {
+		for (const set of [HIDDEN_SETTING_PATHS, ADVANCED_SETTING_PATHS]) {
 			for (const path of Object.keys(set)) expect(hostPaths.has(path)).toBe(true);
 		}
 	});

@@ -1146,7 +1146,6 @@ export const storedWorkspaces: StoredWorkspaceSummary[] = [
 			pinnedRevision: "9f2c1ab",
 			sourceKind: "remote",
 		},
-		resumeClonePath: "/ctl/stored/workspaces/ws-orphaned/resume",
 	},
 	{
 		workspaceId: "ws-bench-old",
@@ -1162,7 +1161,6 @@ export const storedWorkspaces: StoredWorkspaceSummary[] = [
 			pinnedRevision: "41d07e2",
 			sourceKind: "local",
 		},
-		resumeClonePath: "/ctl/stored/workspaces/ws-bench-old/resume",
 	},
 ];
 

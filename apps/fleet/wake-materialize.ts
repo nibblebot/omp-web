@@ -8,8 +8,8 @@
  * BEFORE the daemon spawns with the resume hint. This is the fleet-local
  * (bwrap) counterpart of the daemon-side bulk materialization
  * (server/session-materialize.ts, which rides the callback pair and covers
- * LIVE daemons); it also powers resume-onto-fresh-clone for deleted
- * workspaces (fleet/server.ts #handleResumeClone) on a fresh volume.
+ * LIVE daemons); it also backs the lifecycle wake of a clone onto a fresh
+ * volume (workspace-lifecycle.ts).
  *
  * Layout contract (mirrors server/log-tailer.ts discovery and
  * runtime/export-sessions.ts): the fleet store mirrors the agent sessions
@@ -32,7 +32,7 @@
  * Safety: every relpath is validated with the frozen manifest predicate
  * (isNormalizedPosixRelativePath: no `..`, no absolute, no `.` segments)
  * and the resolved target must stay inside the sessions dir (isPathUnder,
- * the fleet-side convention shared with the resume-clone route) before any
+ * the fleet-side convention) before any
  * file is opened. A hostile stored relpath aborts the whole fill.
  *
  * Typed failures reuse the frozen vocabulary only: `unavailable` when the

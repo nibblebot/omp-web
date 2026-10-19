@@ -204,7 +204,6 @@ describe("stored route dispatch", () => {
 			readOnly: false,
 			orphaned: true,
 			viewOnly: true,
-			resumeClonePath: `/ctl/workspaces/${WS_ORPHAN}/resume-clone`,
 		});
 
 		// Verified (read-only) workspace: the flip is threaded onto the row;
@@ -730,11 +729,10 @@ describe("stored-history reads never wake compute", () => {
 			expect(workspaces.status).toBe(200);
 			const wsBody = (await workspaces.json()) as StoredWorkspacesResponse;
 			expect(wsBody.workspaces).toHaveLength(1);
-			// Orphaned: the row carries the resume LINK as its only affordance.
+			// Orphaned: the row is flagged; no resume affordance is offered.
 			expect(wsBody.workspaces[0]).toMatchObject({
 				workspaceId: STORED_ONLY,
 				orphaned: true,
-				resumeClonePath: `/ctl/workspaces/${STORED_ONLY}/resume-clone`,
 			});
 
 			const sessions = await fetch(`${base}/sessions?workspaceId=${STORED_ONLY}`);

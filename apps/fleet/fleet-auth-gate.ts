@@ -30,8 +30,6 @@
  *     session (authenticate) unless the client is loopback; mutations
  *     additionally require requireCsrf + checkOrigin (allowlist = the
  *     configured public browser origin + the loopback-dev exception).
- *     revokeAll()/rotateAccessToken() are store passthroughs for gated
- *     mutation mounts (POST /ctl/auth/revoke-all, /ctl/auth/rotate-token).
  *   - /callback/* NEVER rides this gate: the transport registry
  *     authenticates those routes with the workspace enrollment credentials.
  *
@@ -136,20 +134,6 @@ export class FleetAuthGate {
 	/** POST /auth/logout: revoke the session named by the cookie. */
 	logout(sessionId: string): void {
 		this.#store.logout(sessionId);
-	}
-
-	/** Revokes every live browser session (all devices re-login). Mount as a
-	 *  mutation (e.g. POST /ctl/auth/revoke-all) so it inherits the
-	 *  session + CSRF + origin gate; never a bare /auth route. */
-	revokeAll(): void {
-		this.#store.revokeAll();
-	}
-
-	/** Operator access-token rotation: revokes every session (absolute
-	 *  lifetimes end at rotation, nothing slides) and adopts the new
-	 *  expected sha-256 hash. Mount as a gated mutation. */
-	rotateAccessToken(newTokenHash: string): void {
-		this.#store.rotateAccessToken(newTokenHash);
 	}
 
 	/** GET /auth/session: resolve the request's cookie to a live session.

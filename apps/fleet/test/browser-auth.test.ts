@@ -2,9 +2,9 @@
  * Unit tests for the browser session store (P2.1): opaque 256-bit session
  * cookies, hashed credentials at rest, HttpOnly Secure SameSite=Lax cookie
  * construction with the explicit loopback-dev Secure exception, absolute
- * 30-day expiry that never slides, and logout / revoke-all / access-token
- * rotation (including the configuredTokenHash boot rotation) invalidating
- * exactly the right sessions, with revocation surviving a reload.
+ * 30-day expiry that never slides, and logout plus the configuredTokenHash boot
+ * rotation invalidating exactly the right sessions, with revocation surviving a
+ * reload.
  *
  * The peer-aware gate policy (forwarded headers, CSRF/origin over real HTTP)
  * lives in fleet/server-auth.test.ts; this file tests the store alone.
@@ -178,7 +178,8 @@ describe("persistence across reload", () => {
 		const first = new BrowserAuthStore(path);
 		const a = first.login(TOKEN_A, HASH_A);
 		const b = first.login(TOKEN_A, HASH_A);
-		first.revokeAll();
+		first.logout(a.sessionId);
+		first.logout(b.sessionId);
 
 		const second = new BrowserAuthStore(path);
 		expect(second.authenticate(cookieRequest(cookieSegment(a.setCookie)))).toBeNull();
@@ -198,7 +199,7 @@ describe("persistence across reload", () => {
 	});
 });
 
-describe("logout, revoke-all, rotation", () => {
+describe("logout", () => {
 	test("logout revokes exactly the named session", () => {
 		const store = new BrowserAuthStore(storePath("logout"));
 		const a = store.login(TOKEN_A, HASH_A);
@@ -206,31 +207,6 @@ describe("logout, revoke-all, rotation", () => {
 		store.logout(a.sessionId);
 		expect(store.authenticate(cookieRequest(cookieSegment(a.setCookie)))).toBeNull();
 		expect(store.authenticate(cookieRequest(cookieSegment(b.setCookie)))).not.toBeNull();
-	});
-
-	test("revoke-all kills every session; a fresh login starts clean", () => {
-		const store = new BrowserAuthStore(storePath("revokeall"));
-		const a = store.login(TOKEN_A, HASH_A);
-		const b = store.login(TOKEN_A, HASH_A);
-		store.revokeAll();
-		expect(store.authenticate(cookieRequest(cookieSegment(a.setCookie)))).toBeNull();
-		expect(store.authenticate(cookieRequest(cookieSegment(b.setCookie)))).toBeNull();
-		const c = store.login(TOKEN_A, HASH_A);
-		expect(store.authenticate(cookieRequest(cookieSegment(c.setCookie)))).not.toBeNull();
-	});
-
-	test("rotateAccessToken revokes every session and swaps the expected hash", () => {
-		const store = new BrowserAuthStore(storePath("rotate"), {
-			configuredTokenHash: HASH_A,
-		});
-		const before = store.login(TOKEN_A, HASH_A);
-		const segment = cookieSegment(before.setCookie);
-		expect(() => store.rotateAccessToken("not-a-hash")).toThrow(BrowserAuthError);
-
-		store.rotateAccessToken(HASH_B);
-		expect(store.authenticate(cookieRequest(segment))).toBeNull(); // old session dead
-		expect(() => store.login(TOKEN_A, HASH_B)).toThrow(BrowserAuthError); // old token dead
-		expect(store.login(TOKEN_B, HASH_B).expiresAt).toBeGreaterThan(0); // new token mints
 	});
 });
 

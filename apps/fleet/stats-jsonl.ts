@@ -58,8 +58,6 @@ function docCacheLimits(): ByteLruLimits {
 
 const docCache = new ByteLru<JsonlDoc>(docCacheLimits);
 const inflight = new Map<string, Promise<JsonlDoc | null>>();
-let cacheHits = 0;
-let cacheMisses = 0;
 
 export interface JsonlDoc {
 	/** Parsed entries only; corrupt lines are skipped. */
@@ -70,11 +68,6 @@ export interface JsonlDoc {
 	totalLines: number;
 	/** True when the file exceeded the byte cap and was parsed only up to it. */
 	truncated: boolean;
-}
-
-/** Diagnostics: cache hits/misses since module load (hits include in-flight joins). */
-export function jsonlCacheStats(): { hits: number; misses: number } {
-	return { hits: cacheHits, misses: cacheMisses };
 }
 
 function cacheKey(abs: string, mtimeMs: number, size: number): string {
@@ -107,15 +100,12 @@ export async function loadJsonl(abs: string): Promise<JsonlDoc | null> {
 	const key = cacheKey(abs, st.mtimeMs, st.size);
 	const cached = docCache.get(key);
 	if (cached) {
-		cacheHits++;
 		return cached;
 	}
 	const pending = inflight.get(key);
 	if (pending) {
-		cacheHits++;
 		return pending;
 	}
-	cacheMisses++;
 	const p = parseDoc(abs, st)
 		.then((doc) => {
 			docCache.set(key, doc, st.size * HEAP_FACTOR);

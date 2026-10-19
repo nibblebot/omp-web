@@ -48,7 +48,6 @@ import {
 	type CallbackEnvelope,
 } from "#lib/wire/callback-protocol";
 import { DaemonTransportRegistry } from "../daemon-transport";
-import { downloadFailureKind } from "../download-policy";
 
 const sleep = (ms: number): Promise<void> => Bun.sleep(ms);
 
@@ -1216,9 +1215,6 @@ describe("daemon transport controlled pairs", () => {
 			expect(result.error).toBe("bulk correlation expired");
 			expect(result.bytes).toBe(0);
 			expect(result.chunks).toBeUndefined();
-			// The frozen reason is consumer-visible: download-policy maps an
-			// expired correlation to a retryable browser failure.
-			expect(downloadFailureKind(502, result.error).code).toBe("retryable");
 		} finally {
 			registry.close();
 		}

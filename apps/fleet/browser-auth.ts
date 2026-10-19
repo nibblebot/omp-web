@@ -9,9 +9,9 @@
  * sha256(accessToken), plus the raw csrfToken, which the server re-serves to
  * an authenticated browser after a restart (its ban is client-side:
  * localStorage/URL only, not the 0600 server state file). Expiry is absolute
- * (createdAt + 30 days, never slid); logout/revoke-all/rotation end sessions
- * immediately without sliding anything, and an operator token rotation (a new
- * configuredTokenHash at construction) revokes every session.
+ * (createdAt + 30 days, never slid); logout ends a session immediately without
+ * sliding anything, and an operator token rotation (a new configuredTokenHash
+ * at construction) revokes every session.
  */
 
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -120,8 +120,8 @@ function sessionCookie(sessionId: string, loopbackDev: boolean, expiresAt: numbe
 	return parts.join("; ");
 }
 
-/** Set-Cookie value that clears the omp_session cookie (logout, revoke-all
- *  and rotation responses). The Secure flag MUST mirror the session cookie's
+/** Set-Cookie value that clears the omp_session cookie (the logout response).
+ *  The Secure flag MUST mirror the session cookie's
  *  own boot decision (loopbackDev), or an https-only cookie would survive
  *  the clear on an http loopback response. */
 export function clearSessionCookie(loopbackDev: boolean): string {
@@ -291,29 +291,6 @@ export class BrowserAuthStore {
 		const record = this.#sessions.get(sha256Hex(sessionId));
 		if (record === undefined || record.revoked === true) return;
 		record.revoked = true;
-		this.#save();
-	}
-
-	/** Revokes every live session (all devices re-login). */
-	revokeAll(): void {
-		let changed = false;
-		for (const record of this.#sessions.values()) {
-			if (record.revoked !== true) {
-				record.revoked = true;
-				changed = true;
-			}
-		}
-		if (changed) this.#save();
-	}
-
-	/** Revokes all sessions, then swaps the expected access-token hash. */
-	rotateAccessToken(newTokenHash: string): void {
-		const normalized = newTokenHash.toLowerCase();
-		if (!SHA256_HEX.test(normalized)) {
-			throw new BrowserAuthError("invalid_request", "newTokenHash must be a sha-256 hex digest");
-		}
-		for (const record of this.#sessions.values()) record.revoked = true;
-		this.#expectedTokenHash = normalized;
 		this.#save();
 	}
 

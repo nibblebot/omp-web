@@ -517,11 +517,9 @@ export class Registry {
 
 	/**
 	 * Capture source + pinnedRevision from the workspace record about to be
-	 * removed (P8.10: resume-onto-fresh-clone for orphaned clone
-	 * workspaces). Returns undefined when the entry is gone or has no usable
-	 * provenance. Exactly-one-source and pinnedRevision validity are
-	 * enforced by the resume-clone route, not here; this only mirrors what
-	 * the record carried at removal time.
+	 * removed (orphan provenance, shown on stored-session listings). Returns
+	 * undefined when the entry is gone or has no usable provenance. Validity is
+	 * not checked here; this only mirrors what the record carried at removal.
 	 */
 	#captureOrphanProvenance(
 		workspaceId: string,

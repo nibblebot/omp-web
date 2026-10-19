@@ -25,10 +25,6 @@
  *   original; `fallbackCwd` move when the recorded cwd is missing).
  * - session/session-paths.ts: `computeDefaultSessionDir` (canonical
  *   cwd-derived dir, same derivation the daemon's list_sessions uses).
- * - ./session-materialize.ts: `sessionTreeExists` /
- *   `resolveSessionMainFile` (warm verify) — cold fill runs through the
- *   injected callback-pair materializer (same seam methods.ts uses), never a
- *   parallel attachment path.
  *
  * SECURITY: ID/prefix/allowed-host-paths only. Path-shaped args are
  * realpath-jailed to the session dir and must resolve to a KNOWN session
@@ -76,7 +72,6 @@ import {
 import { computeDefaultSessionDir } from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { resolveSessionMainFile, sessionTreeExists } from "./session-materialize";
 import type { LifecycleMirror } from "./lifecycle-adapter";
 import {
 	deleteResumeSession,
@@ -872,130 +867,13 @@ export async function importUploadedForeignSession(
 }
 
 // ---------------------------------------------------------------------------
-// Lineage-aware resume (verified materialization only)
-// ---------------------------------------------------------------------------
-
-/** Copy shown wherever a deleted-workspace resume is offered. */
-export const DELETED_WORKSPACE_UNCOMMITTED_WARNING =
-	"The original workspace was deleted. Uncommitted files are unrecoverable — " +
-	"only the stored transcript can resume, onto a fresh clone at the pinned commit.";
-
-export type ResumeLineageResult =
-	| { kind: "ready"; sessionFile: string; warmed: boolean; files?: number; bytes?: number }
-	| {
-			kind: "refused";
-			reason: "deleted-workspace" | "unavailable" | "invalid_request";
-			message: string;
-			resumeClonePath?: string;
-			warning?: string;
-	  };
-
-export interface ResumeLineageDeps {
-	sessionsDir: string;
-	/** Cold fill via the daemon's callback pair (methods.ts materializeSession). */
-	materialize?: (
-		sessionId: string,
-	) => Promise<{ files: number; bytes: number } | { alreadyPresent: true }>;
-	/** Fleet registry liveness probe (injected so this module never imports fleet). */
-	isWorkspaceLive?: (workspaceId: string) => boolean;
-	resumeClonePathFor?: (workspaceId: string) => string | null;
-}
-
-/**
- * Verify-then-resume: warm trees resolve via `resolveSessionMainFile`;
- * cold trees materialize via the callback pair and re-verify (a transfer
- * that yields no main file is `unavailable`, never a silent fresh start).
- * Deleted workspaces refuse with the explicit resume-onto-fresh-clone path
- * (the fleet resume-clone route owns that mutation) plus the uncommitted-
- * file warning. Read-only stored browsing never reaches here, so it can
- * never wake compute through this path.
- */
-export async function resumeWithLineage(
-	sessionId: string,
-	options: { workspaceId?: string; materializeIfCold?: boolean },
-	deps: ResumeLineageDeps,
-): Promise<ResumeLineageResult> {
-	if (!SESSION_ID_RE.test(sessionId)) {
-		return {
-			kind: "refused",
-			reason: "invalid_request",
-			message: `unsafe sessionId: ${sessionId}`,
-		};
-	}
-	if (options.workspaceId !== undefined && deps.isWorkspaceLive === undefined) {
-		return {
-			kind: "refused",
-			reason: "unavailable",
-			message: "workspace liveness probe is unavailable",
-		};
-	}
-	if (
-		options.workspaceId !== undefined &&
-		deps.isWorkspaceLive !== undefined &&
-		!deps.isWorkspaceLive(options.workspaceId)
-	) {
-		const resumeClonePath = deps.resumeClonePathFor?.(options.workspaceId) ?? undefined;
-		return {
-			kind: "refused",
-			reason: "deleted-workspace",
-			message: `workspace ${options.workspaceId} is deleted; resume onto a fresh clone instead`,
-			...(resumeClonePath !== undefined ? { resumeClonePath } : {}),
-			warning: DELETED_WORKSPACE_UNCOMMITTED_WARNING,
-		};
-	}
-	if (sessionTreeExists(deps.sessionsDir, sessionId)) {
-		const mainFile = resolveSessionMainFile(deps.sessionsDir, sessionId);
-		if (mainFile !== null) return { kind: "ready", sessionFile: mainFile, warmed: true };
-		return {
-			kind: "refused",
-			reason: "unavailable",
-			message: `session ${sessionId} has local artifacts but no main transcript`,
-		};
-	}
-	if (options.materializeIfCold === false || deps.materialize === undefined) {
-		return {
-			kind: "refused",
-			reason: "unavailable",
-			message: `session ${sessionId} is not materialized on this workspace (no callback pair active)`,
-		};
-	}
-	let outcome: { files: number; bytes: number } | { alreadyPresent: true };
-	try {
-		outcome = await deps.materialize(sessionId);
-	} catch (err) {
-		return {
-			kind: "refused",
-			reason: "unavailable",
-			message: `materialization failed: ${err instanceof Error ? err.message : String(err)}`,
-		};
-	}
-	const mainFile = resolveSessionMainFile(deps.sessionsDir, sessionId);
-	if (mainFile === null) {
-		return {
-			kind: "refused",
-			reason: "unavailable",
-			message: `session ${sessionId} has no transcript on this workspace or in the fleet store`,
-		};
-	}
-	return {
-		kind: "ready",
-		sessionFile: mainFile,
-		warmed: "alreadyPresent" in outcome,
-		...("files" in outcome ? { files: outcome.files, bytes: outcome.bytes } : {}),
-	};
-}
-
-// ---------------------------------------------------------------------------
 // P0 method binder (single integration point; no methods.ts edits here)
 // ---------------------------------------------------------------------------
 
 export interface ResumeImportContext extends ResumeQuery {
 	/** Extra daemon-configured data roots, scoped by foreign source. */
 	authorizedForeignRoots?: Partial<Record<ForeignSessionSource, readonly string[]>>;
-	materialize?: ResumeLineageDeps["materialize"];
-	isWorkspaceLive?: ResumeLineageDeps["isWorkspaceLive"];
-	resumeClonePathFor?: ResumeLineageDeps["resumeClonePathFor"];
-	/** Agent sessions root (every project dir); lineage and cross-project listing. */
+	/** Agent sessions root (every project dir); cross-project listing. */
 	sessionsRoot?: string;
 	/** Fleet mirror for acknowledged deletion; absent on unpaired daemons. */
 	lifecycleMirror?: LifecycleMirror;
@@ -1028,13 +906,6 @@ export type ResumeImportHandlers = Record<
  * transport here).
  */
 export function createResumeImportHandlers(ctx: ResumeImportContext): ResumeImportHandlers {
-	const sessionsDir = resolveSessionDir(ctx);
-	const lineageDeps: ResumeLineageDeps = {
-		sessionsDir: ctx.sessionsRoot ?? sessionsDir,
-		...(ctx.materialize ? { materialize: ctx.materialize } : {}),
-		...(ctx.isWorkspaceLive ? { isWorkspaceLive: ctx.isWorkspaceLive } : {}),
-		...(ctx.resumeClonePathFor ? { resumeClonePathFor: ctx.resumeClonePathFor } : {}),
-	};
 	// Staged uploads awaiting confirm/cancel (stagedId -> upload + createdAt).
 	const staged = new Map<string, StagedForeignUploadRecord>();
 	// Stages still writing hold a slot and bytes until they land or fail.
@@ -1153,12 +1024,6 @@ export function createResumeImportHandlers(ctx: ResumeImportContext): ResumeImpo
 			pins: { available: true } satisfies ResumeCapability,
 			manage: { available: true } satisfies ResumeCapability,
 			foreignImport: { available: true } satisfies ResumeCapability,
-			lineage: (ctx.materialize
-				? { available: true }
-				: {
-						available: true,
-						reason: "cold sessions unavailable: no callback pair active",
-					}) satisfies ResumeCapability,
 		}),
 		resumeResolve: async (args) => {
 			const obj = argAt(args, 0);
@@ -1303,21 +1168,6 @@ export function createResumeImportHandlers(ctx: ResumeImportContext): ResumeImpo
 				await rm(uploadDirectory(pending), { recursive: true, force: true }).catch(() => {});
 			}
 			return { cancelled: true };
-		},
-		lineageResume: async (args) => {
-			const obj = argAt(args, 0);
-			const sessionId = strField(obj, "sessionId") ?? "";
-			const workspaceId = strField(obj, "workspaceId");
-			const materializeIfCold =
-				typeof obj.materializeIfCold === "boolean" ? obj.materializeIfCold : undefined;
-			return resumeWithLineage(
-				sessionId,
-				{
-					...(workspaceId !== undefined ? { workspaceId } : {}),
-					...(materializeIfCold !== undefined ? { materializeIfCold } : {}),
-				},
-				lineageDeps,
-			);
 		},
 	};
 }

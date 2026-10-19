@@ -482,7 +482,6 @@ describe("READ_ONLY classification", () => {
 		goalPause: true,
 		goalReplace: true,
 		goalResume: true,
-		lineageResume: true,
 		login: true,
 		loopCancel: true,
 		loopPause: true,

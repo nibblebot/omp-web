@@ -29,8 +29,6 @@
  *                    (clone workspace: verify-at-deletion gate, P7.3/P7.5)
  *   GET  /ctl/logs/orphans                         -> orphaned log-store subtrees (P7.6)
  *   POST /ctl/logs/purge {workspaceId}             -> explicit manual purge (P7.6)
- *   POST /ctl/workspaces/:id/resume-clone {sessionId, profileId?} -> fresh clone
- *                    at the pinned commit + transcript materialization + resume (P8.10)
  *
  * Browser auth (P2.2/P2.3, optional): when an operator access token is
  * configured (OMP_FLEET_BROWSER_TOKEN / --browser-access-token /
@@ -102,7 +100,6 @@ import { CALLBACK_TRANSPORT_STREAM_ID, type CallbackEnvelope } from "#lib/wire/c
 import { FleetLogStore, LogStoreError, type LogChunk, type LogIngestResult } from "./log-store";
 import { createStoredApp, type StoredApp } from "./stored-sessions";
 import { verifyWorkspaceLogs, type VerifyResult } from "./verify-store";
-import { prepareWorkspace } from "#lib/runtime/prepare-workspace";
 import { runProviderOp } from "#lib/runtime/provider-exec";
 import type {
 	ProviderHandle,
@@ -110,15 +107,12 @@ import type {
 	ProviderRequest,
 	ProviderResponse,
 } from "#lib/runtime/provider-protocol";
-import { ENROLLMENT_KEY_BYTES } from "#lib/wire/callback-protocol";
-import { createHash, randomBytes } from "node:crypto";
 import {
 	CloneLifecycleError,
 	type CloneCreateInput,
 	WorkspaceLifecycle,
 } from "./workspace-lifecycle";
 import { CloneControlApi, lifecycleStatus } from "./clone-control";
-import { materializeMissingSessionFiles, WakeMaterializeError } from "./wake-materialize";
 import {
 	createWorktree,
 	deleteWorktree,
@@ -153,26 +147,6 @@ const LOG_ACK_BATCH_MAX = 64;
 export interface WorkspaceResourceDeleter {
 	/** Delete the provider volume for a verified workspace; throws to leave remainingResources recorded. */
 	deleteWorkspaceResources(workspaceId: string, entry: RegistryEntry): Promise<void>;
-}
-
-/**
- * Resume-onto-fresh-clone provider hook (P8.10). P5 providers implement
- * spawn; the DEFAULT fleet has NO clone provider yet, so the hook is absent
- * and the resume-clone route fails typed `unavailable` (never a fake spawn).
- */
-export interface CloneResumeSpawner {
-	/**
-	 * Spawn the daemon for a freshly provisioned clone volume at
-	 * `workspaceRoot` with a callback pair to the fleet, resuming
-	 * `sessionId`. `volumeRoot` is the prepared workspace volume (contains
-	 * `.checkout/`, `.home/`, `.omp-workspace-init.json`).
-	 */
-	spawnCloneResume(opts: {
-		workspaceId: string;
-		generation: number;
-		volumeRoot: string;
-		sessionId: string;
-	}): Promise<{ endpoint?: string }>;
 }
 
 /**
@@ -337,8 +311,6 @@ function settingsWriteGuards(body: Record<string, unknown>): {
 const PROJECT_WORKTREES_ROUTE = /^\/ctl\/projects\/([^/]+)\/worktrees$/;
 const WORKTREE_DELETE_ROUTE = /^\/ctl\/worktrees\/([^/]+)$/;
 const WORKTREE_INFO_ROUTE = /^\/ctl\/worktrees\/([^/]+)\/delete-info$/;
-/** P8.10 resume-onto-fresh-clone: POST /ctl/workspaces/:id/resume-clone. */
-const WORKSPACE_RESUME_CLONE_ROUTE = /^\/ctl\/workspaces\/([^/]+)\/resume-clone$/;
 /** Installed-plugin routes; the name segment is URI-encoded (scoped names contain "/"). */
 const PLUGIN_DETAIL_ROUTE = /^\/ctl\/plugins\/([^/]+)$/;
 const PLUGIN_WRITE_ROUTE = /^\/ctl\/plugins\/([^/]+)\/(enabled|features|setting)$/;
@@ -406,9 +378,6 @@ class FleetServerImpl implements FleetServer {
 	/** P7.5 post-verification provider/storage deletion hook. The default
 	 *  removes a local clone's volume; P5 providers inject their own. */
 	readonly resourceDeleter: WorkspaceResourceDeleter;
-	/** P8.10 resume-onto-fresh-clone provider spawner; absent = the route
-	 *  fails typed `unavailable` (P5 providers inject their own). */
-	readonly cloneResumeSpawner: CloneResumeSpawner | null;
 	/** P6/P7 clone lifecycle owner (single create/ensure/stop/delete authority). */
 	readonly lifecycle: WorkspaceLifecycle;
 	/** P1/P8 clones control API (route layer over the lifecycle service). */
@@ -463,7 +432,6 @@ class FleetServerImpl implements FleetServer {
 		lock: FileLock,
 		settingsOptions?: FleetSettingsOptions,
 		resourceDeleter?: WorkspaceResourceDeleter,
-		cloneResumeSpawner?: CloneResumeSpawner | null,
 		statsConfig?: Pick<StatsConfig, "statsDbPath" | "sessionsDir">,
 		serveUi = true,
 		redialGraceMs = REDIAL_GRACE_MS,
@@ -478,7 +446,6 @@ class FleetServerImpl implements FleetServer {
 		this.lock = lock;
 		this.cloneRoot = join(dirname(facts.statePath), "clones");
 		this.resourceDeleter = resourceDeleter ?? new LocalCloneResourceDeleter();
-		this.cloneResumeSpawner = cloneResumeSpawner ?? null;
 		this.startedAt = Date.now();
 		this.fleetFacts = {
 			port: 0,
@@ -1287,45 +1254,8 @@ class FleetServerImpl implements FleetServer {
 						// P7.6 explicit manual purge of orphaned (or verified
 						// read-only) workspace logs. Never automatic.
 						return await this.#handleLogPurge(req);
-					case "/ctl/auth/revoke-all":
-						// P2.2 browser-session lifecycle: revoke every session,
-						// then clear the cookie. Mutations inherit the
-						// session + CSRF + origin gate (GET-only would be
-						// a no-op; this is a mutation).
-						if (this.authGate === null) break;
-						this.authGate.revokeAll();
-						return new Response(JSON.stringify({ ok: true }), {
-							headers: {
-								"content-type": "application/json",
-								"set-cookie": clearSessionCookie(isLoopbackBind(this.config.bind)),
-							},
-						});
-					case "/ctl/auth/rotate-token": {
-						// P2.2: rotate the operator access token (hash in,
-						// sessions revoked, cookie cleared).
-						if (this.authGate === null) break;
-						const authBody = await readJson(req);
-						const accessToken =
-							typeof authBody.accessToken === "string" ? authBody.accessToken : "";
-						if (accessToken === "") {
-							throw new HttpError(400, "missing or invalid field: accessToken");
-						}
-						const hash = createHash("sha256").update(accessToken, "utf8").digest("hex");
-						this.authGate.rotateAccessToken(hash);
-						return new Response(JSON.stringify({ ok: true }), {
-							headers: {
-								"content-type": "application/json",
-								"set-cookie": clearSessionCookie(isLoopbackBind(this.config.bind)),
-							},
-						});
-					}
-					default: {
-						const resumeCloneMatch = WORKSPACE_RESUME_CLONE_ROUTE.exec(path);
-						if (resumeCloneMatch) {
-							return await this.#handleResumeClone(req, resumeCloneMatch[1]);
-						}
+					default:
 						return json({ error: "not found" }, 404);
-					}
 				}
 			}
 			if (req.method === "DELETE") {
@@ -1906,168 +1836,6 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * POST /ctl/workspaces/:id/resume-clone (P8.10): the explicit
-	 * "resume onto fresh clone" action for an ORPHANED (deleted-workspace)
-	 * session. Resolves the workspace's clone provenance, source +
-	 * pinnedRevision, retained on the store-orphan marker at removal,
-	 * provisions a fresh volume at the pinned commit via
-	 * runtime/prepare-workspace.ts (which NEVER substitutes an upstream
-	 * commit: an unresolvable source/pin is a typed failure), materializes
-	 * the requested session's stored transcripts into the volume's agent
-	 * sessions dir, then spawns the daemon with callback flags + --resume
-	 * via the injected provider hook.
-	 *
-	 * Typed failures reuse the frozen vocabulary: 400 `invalid_request` for
-	 * a live workspace or malformed input, 404 when no orphaned session/
-	 * provenance exists, 409 when the store has no transcripts for the
-	 * session, and 503 `unavailable` when the clone source/pin is
-	 * unresolvable, the log store is absent, or no clone provider hook
-	 * exists (P5-blocked, never a fake spawn).
-	 */
-	async #handleResumeClone(req: Request, workspaceId: string): Promise<Response> {
-		const body = await readJson(req);
-		const sessionId = requireString(body, "sessionId");
-		if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sessionId)) {
-			throw new HttpError(400, `invalid field: sessionId (${sessionId})`);
-		}
-		const optionalProfileId = optionalString(body, "profileId");
-
-		const store = this.logStore;
-		if (store === null) throw new HttpError(503, "fleet log store unavailable");
-
-		// The workspace must be GONE (orphaned). A live workspace wakes via
-		// the daemon's own materialize path, never this route.
-		const liveEntry = this.registry.get(workspaceId);
-		if (liveEntry !== undefined) {
-			throw new HttpError(
-				409,
-				`workspace ${workspaceId} is still registered; resume-onto-fresh-clone applies only to deleted workspaces`,
-			);
-		}
-		const orphan = this.registry.storeOrphans()[workspaceId];
-		const provenance = orphan?.provenance;
-		const source = provenance?.source;
-		const pinnedRevision = provenance?.pinnedRevision;
-		const sourceOk =
-			source !== undefined && (source.local !== undefined || source.remote !== undefined);
-		if (
-			orphan === undefined ||
-			!sourceOk ||
-			typeof pinnedRevision !== "string" ||
-			pinnedRevision.length === 0
-		) {
-			throw new HttpError(
-				404,
-				`no resumable clone provenance for workspace ${workspaceId} (the source or pinned commit was not retained)`,
-			);
-		}
-
-		// The requested session must have stored transcripts (the fleet store
-		// is the only source, never upstream substitution). Validated store
-		// path API, never raw path construction.
-		if (store.storedSessionDir(workspaceId, sessionId) === null) {
-			throw new HttpError(
-				409,
-				`no stored transcripts for session ${sessionId} in workspace ${workspaceId}`,
-			);
-		}
-
-		// P5 gate: without a clone provider the spawn cannot happen. Fail
-		// typed `unavailable` rather than faking a spawn.
-		const spawner = this.cloneResumeSpawner;
-		if (spawner === null) {
-			throw new HttpError(
-				503,
-				"resume-onto-fresh-clone is unavailable: no clone provider is configured (P5)",
-			);
-		}
-
-		// Provision the fresh volume at the pinned commit. prepareWorkspace
-		// enforces the pin: an unresolvable source/commit is a typed
-		// failure, never a silent upstream substitution.
-		const volumeRoot = join(this.cloneRoot, workspaceId);
-		let prepared;
-		try {
-			prepared = await prepareWorkspace({
-				workspaceId,
-				workspaceRoot: volumeRoot,
-				source,
-				revision: pinnedRevision,
-			});
-		} catch (err) {
-			throw new HttpError(
-				503,
-				`clone preparation failed for workspace ${workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-
-		// Materialize the requested session's transcripts into the fresh
-		// volume's agent sessions dir (`.home/agent/sessions`), exactly the
-		// tree the daemon's tailer will stream. Use the store directly: the
-		// fresh daemon has no callback pair YET (the pair is established at
-		// spawn below), so materialization is a fleet-local copy.
-		// (The daemon-side /callback/bulk materialize path covers LIVE
-		// workspaces; resume-onto-fresh-clone materializes fleet-side before
-		// the daemon exists.) The fill is fill-missing-only (the fresh
-		// volume has nothing, so every stored file is written) and validates
-		// relpaths with the frozen manifest predicate + isPathUnder.
-		const sessionsDir = join(volumeRoot, ".home", "agent", "sessions");
-		let materialized = 0;
-		try {
-			const outcome = await materializeMissingSessionFiles({
-				store,
-				workspaceId,
-				sessionId,
-				sessionsDir,
-			});
-			materialized = outcome.written;
-		} catch (err) {
-			if (err instanceof HttpError) throw err;
-			if (err instanceof WakeMaterializeError) {
-				const message = `transcript materialization failed for session ${sessionId}: ${err.message}`;
-				if (err.code === "unavailable") {
-					throw new HttpError(409, message);
-				}
-				throw new HttpError(500, message);
-			}
-			throw new HttpError(
-				500,
-				`transcript materialization failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-		if (materialized === 0) {
-			throw new HttpError(
-				409,
-				`no stored transcripts for session ${sessionId} in workspace ${workspaceId}`,
-			);
-		}
-
-		// Spawn the daemon (callback pair + --resume). The provider hook
-		// owns the daemon launch; a failure is a typed provider failure.
-		try {
-			await spawner.spawnCloneResume({
-				workspaceId,
-				generation: 1,
-				volumeRoot,
-				sessionId,
-			});
-		} catch (err) {
-			throw new HttpError(
-				503,
-				`daemon spawn failed for workspace ${workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-		void optionalProfileId;
-		return json({
-			resumed: workspaceId,
-			sessionId,
-			provisioned: true,
-			materializedFiles: materialized,
-			checkoutDir: prepared.checkoutDir,
-		});
-	}
-
-	/**
 	 * DELETE /ctl/worktrees/:daemonId {deleteBranch?}: stop the daemon,
 	 * evict it from the roster, then git-remove the local linked worktree
 	 * (and optionally `git branch -d` it). Linked-worktree identity and dirty
@@ -2190,7 +1958,6 @@ export async function startFleet(
 			lock,
 			opts.settings,
 			undefined,
-			null,
 			opts.statsConfig,
 			opts.serveUi,
 			opts.redialGraceMs,

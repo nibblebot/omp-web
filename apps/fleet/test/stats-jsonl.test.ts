@@ -3,16 +3,12 @@
  * LRU cache invalidation (mtime/size), in-flight dedup, LRU bound, and the
  * byte-cap truncation path. All fixtures live in a throwaway tmpdir;
  * test/.fixture is never touched.
- *
- * Read counting: loadJsonl increments `misses` exactly once per new parse
- * and `hits` for every read avoided (cached doc or in-flight join), so the
- * cache-hit/read-share behavior is asserted through jsonlCacheStats deltas.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { jsonlCacheStats, loadJsonl, readRange } from "../stats-jsonl";
+import { type JsonlDoc, loadJsonl, readRange } from "../stats-jsonl";
 
 let dir: string;
 const f = (name: string): string => join(dir, name);
@@ -169,36 +165,22 @@ describe("cache", () => {
 		}
 		const size = (await stat(paths[0]!)).size;
 		process.env.PI_JSONL_CACHE_MAX_BYTES = String(100 * size * 4); // 4 = HEAP_FACTOR
-		const before = jsonlCacheStats();
-		for (let i = 0; i < 100; i++) await loadJsonl(paths[i]!); // fills the budget
-		await loadJsonl(paths[0]!); // recency refresh → file 0 is now newest
+		const docs: (JsonlDoc | null)[] = [];
+		for (let i = 0; i < 100; i++) docs.push(await loadJsonl(paths[i]!)); // fills the budget
+		expect(await loadJsonl(paths[0]!)).toBe(docs[0]!); // recency refresh → file 0 is now newest
 		await loadJsonl(paths[100]!); // 101st file overflows → evicts oldest = file 1
-		const after101 = jsonlCacheStats();
-		expect(after101.misses - before.misses).toBe(101); // 100 + the 101st file
-		expect(after101.hits - before.hits).toBe(1); // the refresh of file 0
-
-		const m0 = jsonlCacheStats();
-		await loadJsonl(paths[0]!); // still cached (refreshed before eviction)
-		const after0 = jsonlCacheStats();
-		expect(after0.misses - m0.misses).toBe(0);
-		expect(after0.hits - m0.hits).toBe(1);
-
-		const m1 = jsonlCacheStats();
-		await loadJsonl(paths[1]!); // evicted → re-parsed
-		const after1 = jsonlCacheStats();
-		expect(after1.misses - m1.misses).toBe(1);
+		expect(await loadJsonl(paths[0]!)).toBe(docs[0]!); // still cached (refreshed before eviction)
+		expect(await loadJsonl(paths[1]!)).not.toBe(docs[1]!); // evicted → re-parsed
 	});
 
 	test("a doc costing more than the byte budget is parsed for the caller but never retained", async () => {
 		const p = f("oversize.jsonl");
 		await writeFile(p, `${entry(1)}\n`);
 		process.env.PI_JSONL_CACHE_MAX_BYTES = "1";
-		const before = jsonlCacheStats();
-		expect(await loadJsonl(p)).not.toBeNull();
-		expect(await loadJsonl(p)).not.toBeNull();
-		const after = jsonlCacheStats();
-		expect(after.misses - before.misses).toBe(2); // never retained, so no hit
-		expect(after.hits - before.hits).toBe(0);
+		const first = await loadJsonl(p);
+		const second = await loadJsonl(p);
+		expect(first).not.toBeNull();
+		expect(second).not.toBe(first); // never retained, so the second call re-parses
 	});
 
 	test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
@@ -208,12 +190,8 @@ describe("cache", () => {
 			await writeFile(p, `${entry(1)}\n`);
 			await chmod(p, 0o000);
 			try {
-				const before = jsonlCacheStats();
 				expect(await loadJsonl(p)).toBeNull();
 				expect(await loadJsonl(p)).toBeNull();
-				const after = jsonlCacheStats();
-				expect(after.misses - before.misses).toBe(2); // retried, not joined to a dead read
-				expect(after.hits - before.hits).toBe(0);
 			} finally {
 				await chmod(p, 0o644);
 			}
@@ -225,13 +203,9 @@ describe("in-flight dedup", () => {
 	test("concurrent loadJsonl calls share one parse", async () => {
 		const p = f("dedup.jsonl");
 		await writeFile(p, `${entry(1)}\n${entry(2)}\n`);
-		const before = jsonlCacheStats();
 		const [a, b] = await Promise.all([loadJsonl(p), loadJsonl(p)]);
 		expect(a).not.toBeNull();
 		expect(a).toBe(b); // same promise → same doc object
-		const after = jsonlCacheStats();
-		expect(after.misses - before.misses).toBe(1); // one read for two callers
-		expect(after.hits - before.hits).toBe(1); // second call joined the in-flight read
 	});
 });
 

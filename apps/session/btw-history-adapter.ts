@@ -25,8 +25,7 @@
 // publishes the canonical names/shapes into protocol.ts and adds one row per
 // method to the METHODS dispatch in apps/session/methods.ts delegating to
 // `serviceFor(entry.session)`; no other server file changes are needed. The
-// web mirror lives in apps/web/store/btw-history.ts; the fleet discovery
-// helper lives in apps/fleet/btw-lineage.ts.
+// web mirror lives in apps/web/store/btw-history.ts.
 //
 // Secrets/tokens never appear in DTOs/logs here. stdout stays reserved for
 // OMP_SESSION| lines; log via stderr only.

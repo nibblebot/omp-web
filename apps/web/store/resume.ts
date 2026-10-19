@@ -1,6 +1,5 @@
 import type { SessionListEntry } from "#lib/wire/protocol";
 import { call, state, setState } from "../state";
-import { api } from "./fleet-api";
 import { requestDaemonSessions, resumeDaemonSession, spawnProjectSession } from "./roster";
 import {
 	type SessionRow,
@@ -182,12 +181,6 @@ export interface ResumeState {
 	importLoading: boolean;
 	importError: string | null;
 	importStagedId: string | null;
-	cloneRequest: {
-		workspaceId: string;
-		sessionId: string;
-		resumeClonePath: string;
-		warning: string;
-	} | null;
 }
 
 export function createResumeState(): ResumeState {
@@ -210,12 +203,6 @@ export function createResumeState(): ResumeState {
 		importLoading: false,
 		importError: null as string | null,
 		importStagedId: null as string | null,
-		cloneRequest: null as {
-			workspaceId: string;
-			sessionId: string;
-			resumeClonePath: string;
-			warning: string;
-		} | null,
 	};
 }
 
@@ -261,7 +248,6 @@ const [importPreview, setImportPreview] = resumeField("importPreview");
 const [importLoading, setImportLoading] = resumeField("importLoading");
 const [importError, setImportError] = resumeField("importError");
 const [importStagedId, setImportStagedId] = resumeField("importStagedId");
-export const [resumeCloneRequest, setResumeCloneRequest] = resumeField("cloneRequest");
 export const [resumeAllProjects, setAllProjectsFlag] = resumeField("allProjects");
 export const [resumeTotal, setResumeTotal] = resumeField("total");
 
@@ -298,7 +284,7 @@ export function refreshResumeCapabilities(): void {
 				return;
 			}
 			const caps: Record<string, boolean> = {};
-			for (const key of ["resolve", "pins", "foreignImport", "lineage", "manage"] as const) {
+			for (const key of ["resolve", "pins", "foreignImport", "manage"] as const) {
 				const entry = asRecord(root[key]);
 				const available = entry !== null ? asBoolean(entry.available) : asBoolean(root[key]);
 				caps[key] = available ?? false;
@@ -767,116 +753,6 @@ export function stageUpload(
 		})
 		.catch((err) => setImportError(errText(err)))
 		.finally(() => setImportLoading(false));
-}
-
-// ---------------------------------------------------------------------------
-// Lineage-aware resume (deleted-workspace -> resume-onto-fresh-clone)
-// ---------------------------------------------------------------------------
-
-/**
- * Resume with verified materialization. Warm sessions resolve directly;
- * cold ones materialize via the daemon's callback pair (the server refuses
- * `unavailable` when no pair is active). Deleted workspaces NEVER resume
- * here — the caller gets the explicit resume-onto-fresh-clone path plus the
- * uncommitted-file warning, and the fleet resume-clone route owns the
- * mutation. Stored browsing never calls this, so it never wakes compute.
- */
-export function resumeWithLineage(
-	sessionId: string,
-	options?: { workspaceId?: string; daemonId?: string },
-): Promise<void> {
-	if (!sessionId) {
-		setResumeError("resumeWithLineage requires a sessionId");
-		return Promise.resolve();
-	}
-	setResumeLoading(true);
-	setResumeError(null);
-	const workspaceId = options?.workspaceId;
-	return call("lineageResume", [
-		workspaceId !== undefined ? { sessionId, workspaceId } : { sessionId },
-	])
-		.then(async (data) => {
-			const root = asRecord(data);
-			if (root?.kind === "ready") {
-				const sessionFile = asString(root.sessionFile);
-				if (!sessionFile) {
-					setResumeError("The server returned a ready lineage result without a session file.");
-					return;
-				}
-				await resumeViaRoster(
-					{
-						id: sessionId,
-						sessionFile,
-						cwd: "",
-						modifiedMs: 0,
-						messageCount: 0,
-						pinned: false,
-						scope: "local",
-					},
-					options?.daemonId,
-				);
-				return;
-			}
-			const reason = asString(root?.reason) ?? "unavailable";
-			const message = asString(root?.message) ?? "Lineage resume was refused.";
-			const resumeClonePath = asString(root?.resumeClonePath);
-			const warning = asString(root?.warning);
-			if (reason === "deleted-workspace") {
-				if (workspaceId && resumeClonePath) {
-					setResumeCloneRequest({
-						workspaceId,
-						sessionId,
-						resumeClonePath,
-						warning:
-							warning ??
-							"Uncommitted files are unrecoverable — transcript only, onto a fresh clone at the pinned commit.",
-					});
-					setResumePickerOpen(true);
-				}
-				setResumeError(message);
-				return;
-			}
-			setResumeError(message);
-		})
-		.catch((err) => setResumeError(errText(err)))
-		.finally(() => setResumeLoading(false));
-}
-
-/**
- * Orphaned-only resume-onto-fresh-clone (deleted workspaces ONLY — the ONLY
- * resume affordance for stored history; fleet-stored browsing never offers
- * inline Resume). Reuses the existing api.resumeClone (POST
- * /ctl/workspaces/:id/resume-clone, server-issued resumeClonePath). Shows
- * the explicit uncommitted-file warning before issuing the mutation.
- */
-export function resumeStoredClone(
-	workspaceId: string,
-	sessionId: string,
-	resumeClonePath: string,
-	profileId?: string,
-): Promise<Record<string, unknown> | null> {
-	if (!resumeClonePath) {
-		setResumeError("resumeStoredClone requires the server-issued resumeClonePath");
-		return Promise.resolve(null);
-	}
-	setResumeLoading(true);
-	setResumeError(null);
-	setResumeNotice(
-		"Resuming onto a fresh clone at the pinned commit. " +
-			"Uncommitted files from the deleted workspace are unrecoverable — transcript only.",
-	);
-	return api
-		.resumeClone(resumeClonePath, sessionId, profileId)
-		.then((result) => {
-			setResumeCloneRequest(null);
-			setResumeNotice(`Resume-onto-fresh-clone started for workspace ${workspaceId}.`);
-			return result;
-		})
-		.catch((err) => {
-			setResumeError(errText(err));
-			return null;
-		})
-		.finally(() => setResumeLoading(false));
 }
 
 /** Request a daemon's last sessions for disambiguating cross-daemon picks. */

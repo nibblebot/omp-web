@@ -4,9 +4,6 @@ import { PickerRow } from "../ui/PickerRow";
 import { displayTitle } from "../ui/title-icons";
 import {
 	reportImportError,
-	resumeCloneRequest,
-	setResumeCloneRequest,
-	resumeStoredClone,
 	cancelImport,
 	chooseResumeTarget,
 	closeResumePicker,
@@ -20,7 +17,6 @@ import {
 	openResumePicker,
 	previewImport,
 	resumeError,
-	resumeLoading,
 	resumeNotice,
 	resumeUnavailable,
 	setForeignSource,
@@ -32,8 +28,7 @@ import { state } from "../../state";
 /**
  * Resume by ID or import (the second dialog behind the session list). The
  * list itself is SessionPicker; this dialog resolves an explicit id, prefix,
- * or authorized path, imports a Claude/Codex transcript, and confirms a
- * resume onto a fresh clone when the original workspace is gone. The store
+ * or authorized path, and imports a Claude/Codex transcript. The store
  * owns all state.
  *
  * Opened from the list via openResumeImport(); "Back to sessions" returns to
@@ -73,7 +68,6 @@ export const ResumePicker: Component<{ onClose: () => void }> = (props) => {
 	const [selectedDaemon, setSelectedDaemon] = createSignal("");
 	const [foreignRoot, setForeignRoot] = createSignal("");
 	const [fallbackCwd, setFallbackCwd] = createSignal("");
-	const [cloneProfile, setCloneProfile] = createSignal("");
 	let fileInput: HTMLInputElement | undefined;
 
 	onMount(() => {
@@ -265,41 +259,6 @@ export const ResumePicker: Component<{ onClose: () => void }> = (props) => {
 									Cancel
 								</button>
 							</div>
-						</div>
-					)}
-				</Show>
-
-				<Show when={resumeCloneRequest()}>
-					{(request) => (
-						<div class="resume-deleted-warning">
-							<p>{request().warning}</p>
-							<label>
-								Provider profile (optional)
-								<input
-									value={cloneProfile()}
-									onInput={(event) => setCloneProfile(event.currentTarget.value)}
-								/>
-							</label>
-							<button
-								type="button"
-								disabled={resumeLoading()}
-								onClick={() => {
-									const target = request();
-									void resumeStoredClone(
-										target.workspaceId,
-										target.sessionId,
-										target.resumeClonePath,
-										cloneProfile() || undefined,
-									).then((result) => {
-										if (result) close();
-									});
-								}}
-							>
-								Confirm resume onto fresh clone
-							</button>
-							<button type="button" onClick={() => setResumeCloneRequest(null)}>
-								Cancel
-							</button>
 						</div>
 					)}
 				</Show>

@@ -47,7 +47,7 @@ bun run install:omp-web             # build, pack, install into ~/.omp-web/insta
 
 | Path | Ownership |
 | --- | --- |
-| `apps/cli/` | Installed entrypoint, update, collab CLI, standalone collab relay (`relay.ts`) |
+| `apps/cli/` | Installed entrypoint, update, standalone collab relay (`relay.ts`) |
 | `apps/session/` | Session daemon, dispatch, SSE delivery, callback/log mirroring |
 | `apps/fleet/` | Registry, supervision, callback pair (session dial-out), browser edge, control API, stats, clone lifecycle |
 | `apps/web/` | `state.ts` facade, actions in `store/`, feature logic (`chat/`, `prompt/`, `subagents/`, `fleet-ui/`, ...), `ModalHost.tsx`, presentational `components/`, optional feature entries in `features/` (see Frontend invariants) |

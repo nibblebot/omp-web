@@ -464,24 +464,3 @@ describe("fleet auth gate forwarded-header resolution", () => {
 		expect(chain.clientAddress(req({ "x-forwarded-for": "198.51.100.7, " }), "10.0.0.5")).toBe("");
 	});
 });
-
-describe("fleet auth gate rotation passthrough", () => {
-	// Store-level revokeAll/rotation semantics (what dies, what survives a
-	// reload) live in browser-auth.test.ts; the gate only needs to prove it
-	// forwards a rotation to the store.
-	const authPath = join(tmpdir(), `gate-rotate-${process.pid}-auth.json`);
-	afterAll(() => rmSync(authPath, { force: true }));
-	const gate = new FleetAuthGate({
-		enabled: true,
-		loopbackDev: false,
-		store: new BrowserAuthStore(authPath),
-	});
-
-	test("rotateAccessToken swaps the hash the gate authenticates against", () => {
-		// Adopt the pre-rotation hash first, then rotate: the old plaintext
-		// must stop working (a no-op passthrough would still accept it).
-		gate.login(TOKEN, TOKEN_HASH, "127.0.0.1");
-		gate.rotateAccessToken(sha256Hex("op-sekret-rotated"));
-		expect(() => gate.login(TOKEN, TOKEN_HASH, "127.0.0.1")).toThrow(/rejected/);
-	});
-});

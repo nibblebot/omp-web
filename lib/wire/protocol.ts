@@ -775,7 +775,6 @@ export type WebMethodName =
 	| "foreignImport"
 	| "foreignUploadStage"
 	| "foreignUploadCancel"
-	| "lineageResume"
 	| "btwList"
 	| "btwSearch"
 	| "btwPage"

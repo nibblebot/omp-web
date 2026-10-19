@@ -240,7 +240,7 @@ describe("fleet/wake-materialize", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4-6: lifecycle wake resume + resume-clone route (fleet boot, fake provider)
+// 4-6: lifecycle wake resume (fleet boot, fake provider)
 // ---------------------------------------------------------------------------
 
 /** One `git -C <cwd> <args>` invocation (throws on failure). */
@@ -448,69 +448,4 @@ describe("clone wake resume (P8.9)", () => {
 		},
 		{ timeout: 20_000 },
 	);
-});
-
-describe("resume-onto-fresh-clone route (P8.10)", () => {
-	test("live workspace → 409 (applies only to deleted workspaces)", async () => {
-		const { server, repoDir } = await bootFleet();
-		try {
-			const daemonId = await createClone(server, repoDir, "live-rc");
-			const res = await postJson(server.port, `/ctl/workspaces/${daemonId}/resume-clone`, {
-				sessionId: SESSION,
-			});
-			expect(res.status).toBe(409);
-			const body = (await res.json()) as { error?: string };
-			expect(body.error ?? "").toContain("still registered");
-		} finally {
-			await server.close();
-		}
-	});
-
-	test("deleted workspace with no provenance → 404", async () => {
-		const { server, repoDir } = await bootFleet();
-		try {
-			const daemonId = await createClone(server, repoDir, "gone-rc");
-			// Evict without a store subtree and without an orphan marker:
-			// no provenance → the route cannot resume.
-			server.registry.remove(daemonId);
-			const res = await postJson(server.port, `/ctl/workspaces/${daemonId}/resume-clone`, {
-				sessionId: SESSION,
-			});
-			expect(res.status).toBe(404);
-		} finally {
-			await server.close();
-		}
-	});
-
-	test("deleted workspace with provenance but no provider hook → 503 typed (P5 gate)", async () => {
-		const { server, repoDir } = await bootFleet();
-		try {
-			const daemonId = await createClone(server, repoDir, "orphan-rc");
-			// Seed the store subtree for this workspace, then mark the orphan
-			// WITH provenance (the registry captures source + pinnedRevision
-			// from the still-present record at mark time) and evict.
-			const storeRoot = join(server.fleetFacts.statePath, "..", "logs");
-			const store = new FleetLogStore({ rootDir: storeRoot });
-			ingestAcked(
-				store,
-				daemonId,
-				SESSION,
-				MAIN_RELPATH,
-				chunkAt(0, 1, sessionBody(SESSION), true),
-			);
-			server.registry.markStoreOrphan(daemonId, "test orphan");
-			server.registry.remove(daemonId);
-
-			const res = await postJson(server.port, `/ctl/workspaces/${daemonId}/resume-clone`, {
-				sessionId: SESSION,
-			});
-			// With no cloneResumeSpawner wired the route fails typed 503
-			// (P5), never a fake spawn.
-			expect(res.status).toBe(503);
-			const body = (await res.json()) as { error?: string };
-			expect(body.error ?? "").toContain("no clone provider is configured");
-		} finally {
-			await server.close();
-		}
-	});
 });
