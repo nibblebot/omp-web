@@ -3,7 +3,7 @@ import { encodeSseEvent, parseSseUnits, SSE_PING_EVENT } from "./sse";
 
 /**
  * Callback transport protocol (OMP_CALLBACK_PROTO = 1), separately versioned
- * from OMP_PROTO (2). This module is the single source of truth for the
+ * from OMP_PROTO. This module is the single source of truth for the
  * envelope shape, route paths, and parsing rules shared by the fleet and the
  * daemon callback client.
  *
