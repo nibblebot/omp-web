@@ -9,6 +9,9 @@
 
 import { isLoopbackIp } from "./fleet-auth-gate";
 
+/** Idle window for /auth/* requests on both listeners; SSE keeps Bun's idleTimeout 0 (FEDGE-11). */
+export const PRE_AUTH_IDLE_TIMEOUT_S = 10;
+
 /** True for the name `localhost` or a loopback IP (IPv6 literals arrive bracketed). */
 function isLoopbackHostname(hostname: string): boolean {
 	const bare = hostname.replace(/^\[(.*)\]$/, "$1");

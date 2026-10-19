@@ -44,6 +44,7 @@
 import { createHash } from "node:crypto";
 import { isLoopbackHost } from "#lib/platform/hosts";
 import { isTrustedProxy, type ProxyRule } from "./trusted-proxy";
+import { LoginThrottle } from "./login-throttle";
 import {
 	BrowserAuthStore,
 	BrowserAuthError,
@@ -83,6 +84,8 @@ export class FleetAuthGate {
 	/** Compiled trusted-proxy rules (gate construction); empty = forwarded
 	 *  headers are never honored. */
 	readonly #trustedProxies: readonly ProxyRule[];
+	/** Failed-login backoff, keyed by resolved client address (FEDGE-11). */
+	readonly #loginThrottle = new LoginThrottle();
 
 	constructor(opts: {
 		enabled: boolean;
@@ -107,9 +110,27 @@ export class FleetAuthGate {
 	// --- public /auth surface (raw store; never peer-gated) -------------------
 
 	/** POST /auth/login: verify the presented access token against the stored
-	 *  expected hash and mint a session. Throws BrowserAuthError. */
-	login(accessToken: string, expectedTokenHash: string): LoginResult {
-		return this.#store.login(accessToken, expectedTokenHash);
+	 *  expected hash and mint a session. Throws BrowserAuthError; a client
+	 *  in a failure lockout (FEDGE-11) gets code "rate_limited" before the
+	 *  token is checked. */
+	login(accessToken: string, expectedTokenHash: string, client: string): LoginResult {
+		const waitMs = this.#loginThrottle.retryAfterMs(client);
+		if (waitMs > 0) {
+			throw new BrowserAuthError(
+				"rate_limited",
+				`too many failed sign-ins; retry in ${Math.ceil(waitMs / 1000)}s`,
+			);
+		}
+		try {
+			const login = this.#store.login(accessToken, expectedTokenHash);
+			this.#loginThrottle.recordSuccess(client);
+			return login;
+		} catch (err) {
+			if (err instanceof BrowserAuthError && err.code === "unauthorized") {
+				this.#loginThrottle.recordFailure(client);
+			}
+			throw err;
+		}
 	}
 
 	/** POST /auth/logout: revoke the session named by the cookie. */

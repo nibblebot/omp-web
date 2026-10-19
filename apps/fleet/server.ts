@@ -1,8 +1,8 @@
 /**
  * omp-fleet headless control plane (Phase 2).
  *
- * A loopback-only HTTP JSON API (default port 4722, env OMP_FLEET_PORT,
- * opts.port wins; 0 = ephemeral) on a shared Bun.serve; Phase 3 adds the
+ * A loopback-only HTTP JSON API (default port 4722; opts.port wins;
+ * 0 = ephemeral) on a shared Bun.serve; Phase 3 adds the
  * browser SSE edge (/events + /command) on the same server. Wires the
  * persistent Registry, the callback transport and the SpawnSupervisor:
  *
@@ -94,7 +94,7 @@ import {
 import { createStatsApp } from "./stats-app";
 import type { StatsConfig } from "./stats-config";
 import { BrowserAuthStore, clearSessionCookie } from "./browser-auth";
-import { browserRequestAllowed, isJsonRequest } from "./browser-guard";
+import { browserRequestAllowed, isJsonRequest, PRE_AUTH_IDLE_TIMEOUT_S } from "./browser-guard";
 import { DaemonTransportRegistry } from "./daemon-transport";
 import { FleetAuthGate, isLoopbackBind, peerIsLoopback, BrowserAuthError } from "./fleet-auth-gate";
 import { compileTrustedProxies } from "./trusted-proxy";
@@ -133,7 +133,7 @@ import {
 	type DeleteWorktreeResult,
 } from "./worktrees";
 
-const DEFAULT_PORT = 4722;
+export const DEFAULT_PORT = 4722;
 // P3.8 fleet log-store ack batching (docs/clone-contracts.md "Session log
 // streaming"): log_ack controls ride the reserved transport stream once per
 // batch. Batches flush when the accumulated-chunk budget is hit or the
@@ -221,16 +221,6 @@ export function resolveStatePath(explicit?: string, configPath?: string): string
 	return resolve(join(dirname(configPath ?? resolveConfigPath()), "fleet-state.json"));
 }
 
-function resolvePort(explicit?: number): number {
-	if (explicit !== undefined) return explicit;
-	const env = process.env.OMP_FLEET_PORT;
-	if (env !== undefined && env !== "") {
-		const n = Number(env);
-		if (Number.isFinite(n)) return n;
-	}
-	return DEFAULT_PORT;
-}
-
 /** An error whose message is safe to return to the caller (400/404/…). */
 class HttpError extends Error {
 	constructor(
@@ -248,12 +238,37 @@ function json(data: unknown, status = 200): Response {
 	});
 }
 
-async function readJson(req: Request): Promise<Record<string, unknown>> {
+/** Pre-auth bodies (POST /auth/login) are one token and a few bytes. */
+const PRE_AUTH_BODY_MAX_BYTES = 4 * 1024;
+
+/** Reads at most `maxBytes` of body, refusing before buffering more (FEDGE-11). */
+async function readBodyText(req: Request, maxBytes: number): Promise<string> {
+	const declared = Number(req.headers.get("content-length") ?? 0);
+	if (declared > maxBytes) throw new HttpError(413, "request body too large");
+	if (req.body === null) return "";
+	const reader = req.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		total += value.byteLength;
+		if (total > maxBytes) {
+			await reader.cancel();
+			throw new HttpError(413, "request body too large");
+		}
+		chunks.push(value);
+	}
+	return Buffer.concat(chunks).toString("utf8");
+}
+
+async function readJson(req: Request, maxBytes?: number): Promise<Record<string, unknown>> {
 	if (!isJsonRequest(req)) throw new HttpError(415, "request body must be application/json");
 	let raw: unknown;
 	try {
-		raw = await req.json();
-	} catch {
+		raw = maxBytes === undefined ? await req.json() : JSON.parse(await readBodyText(req, maxBytes));
+	} catch (err) {
+		if (err instanceof HttpError) throw err;
 		throw new HttpError(400, "invalid JSON body");
 	}
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -660,7 +675,13 @@ class FleetServerImpl implements FleetServer {
 			// SSE responses are long-lived and quiet between 15s keepalive
 			// pings; Bun's default 10s fetch idleTimeout would kill them.
 			idleTimeout: 0,
-			fetch: (req, srv) => this.#fetch(req, srv.requestIP(req)?.address),
+			fetch: (req, srv) => {
+				// Pre-auth routes read a small body and get a bounded idle window
+				// (FEDGE-11); SSE stays on idleTimeout 0.
+				if (new URL(req.url).pathname.startsWith("/auth/"))
+					srv.timeout(req, PRE_AUTH_IDLE_TIMEOUT_S);
+				return this.#fetch(req, srv.requestIP(req)?.address);
+			},
 		});
 		this.port = this.#server.port!;
 		this.fleetFacts.port = this.port;
@@ -1128,7 +1149,7 @@ class FleetServerImpl implements FleetServer {
 		// mounted BEFORE the browser-session gate so the client can always
 		// probe. Disabled (no token configured) → the session route still
 		// answers 404 and everything below behaves exactly as before.
-		if (path0.startsWith("/auth/")) return await this.#handleAuth(req);
+		if (path0.startsWith("/auth/")) return await this.#handleAuth(req, remoteAddress);
 		// Everything remaining is protected when browser auth is enabled:
 		// the edge's browser routes (/events, /command, /ctl/*, static) AND
 		// the control-plane /ctl/* routes. Non-loopback clients must hold a
@@ -1334,7 +1355,7 @@ class FleetServerImpl implements FleetServer {
 		}
 	};
 
-	async #handleAuth(req: Request): Promise<Response> {
+	async #handleAuth(req: Request, remoteAddress: string | null | undefined): Promise<Response> {
 		// /auth/* is PUBLIC by design (it IS the login surface); mounted
 		// before the browser-session gate. With auth disabled every /auth/*
 		// route answers 404 so clients probe the disabled state.
@@ -1346,9 +1367,9 @@ class FleetServerImpl implements FleetServer {
 			case "POST /auth/login": {
 				let body: Record<string, unknown>;
 				try {
-					body = await readJson(req);
+					body = await readJson(req, PRE_AUTH_BODY_MAX_BYTES);
 				} catch (err) {
-					if (err instanceof HttpError) return json({ error: err.message }, 400);
+					if (err instanceof HttpError) return json({ error: err.message }, err.status);
 					throw err;
 				}
 				const accessToken = typeof body.accessToken === "string" ? body.accessToken : "";
@@ -1356,7 +1377,8 @@ class FleetServerImpl implements FleetServer {
 					return json({ error: "missing or invalid field: accessToken" }, 400);
 				}
 				try {
-					const login = gate.login(accessToken, this.#expectedTokenHash);
+					const client = gate.clientAddress(req, remoteAddress);
+					const login = gate.login(accessToken, this.#expectedTokenHash, client);
 					return new Response(
 						JSON.stringify(gate.sessionBody(login.sessionId, login.csrfToken, login.expiresAt)),
 						{
@@ -1369,7 +1391,8 @@ class FleetServerImpl implements FleetServer {
 					);
 				} catch (err) {
 					if (err instanceof BrowserAuthError) {
-						const status = err.code === "unauthorized" ? 401 : 400;
+						const status =
+							err.code === "unauthorized" ? 401 : err.code === "rate_limited" ? 429 : 400;
 						return json({ error: { code: err.code, message: err.message } }, status);
 					}
 					throw err;
@@ -2158,7 +2181,7 @@ export async function startFleet(
 		return new FleetServerImpl(
 			registry,
 			config,
-			resolvePort(opts.port),
+			opts.port ?? DEFAULT_PORT,
 			{
 				statePath,
 				// Null when no config file exists at the resolved location (defaults apply).

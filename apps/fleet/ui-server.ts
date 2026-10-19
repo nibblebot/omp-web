@@ -25,7 +25,7 @@
  * configured public origin admitted alongside loopback.
  */
 
-import { browserRequestAllowed } from "./browser-guard";
+import { browserRequestAllowed, PRE_AUTH_IDLE_TIMEOUT_S } from "./browser-guard";
 import { serveStaticUi } from "./static-ui";
 
 export const DEFAULT_UI_PORT = 4723;
@@ -64,7 +64,11 @@ export function startUiServer(opts: {
 		// SSE responses are long-lived and quiet between keepalive pings;
 		// Bun's default idle timeout would kill them.
 		idleTimeout: 0,
-		fetch: (req, srv) => route(req, srv.requestIP(req)?.address, controlPort, opts.browserOrigin),
+		fetch: (req, srv) => {
+			// /auth/* gets the pre-auth idle window (FEDGE-11); SSE stays on idleTimeout 0.
+			if (new URL(req.url).pathname.startsWith("/auth/")) srv.timeout(req, PRE_AUTH_IDLE_TIMEOUT_S);
+			return route(req, srv.requestIP(req)?.address, controlPort, opts.browserOrigin);
+		},
 	});
 	return {
 		port: server.port!,

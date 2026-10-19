@@ -195,6 +195,103 @@ describe("fleet browser auth", () => {
 			await server.close().catch(() => {});
 		}
 	});
+
+	test("repeated wrong tokens lock the client out with 429, even for the right token", async () => {
+		await pinSettingsInMemory();
+		const paths = fleetPaths("omp-web-server-throttle-");
+		const server = await startFleet({
+			port: 0,
+			statePath: paths.statePath,
+			configPath: paths.configPath,
+			statsConfig: hermeticStatsConfig(paths.statePath),
+			browserAccessToken: TOKEN,
+		});
+		try {
+			// The first five wrong tokens are free; the sixth opens a one-second lock.
+			for (let i = 0; i < 6; i++) {
+				expect((await login(server.port, "nope")).res.status).toBe(401);
+			}
+			const locked = await postJson(server.port, "/auth/login", { accessToken: TOKEN });
+			expect(locked.status).toBe(429);
+			expect(locked.headers.get("set-cookie")).toBeNull();
+			const lockedBody: unknown = await locked.json();
+			expect(lockedBody).toMatchObject({
+				error: {
+					code: "rate_limited",
+					message: expect.stringContaining("too many failed sign-ins"),
+				},
+			});
+		} finally {
+			await server.close().catch(() => {});
+		}
+	}, 20_000);
+
+	test("a successful sign-in clears the failure count", async () => {
+		await pinSettingsInMemory();
+		const paths = fleetPaths("omp-web-server-throttle-reset-");
+		const server = await startFleet({
+			port: 0,
+			statePath: paths.statePath,
+			configPath: paths.configPath,
+			statsConfig: hermeticStatsConfig(paths.statePath),
+			browserAccessToken: TOKEN,
+		});
+		try {
+			for (let i = 0; i < 5; i++) {
+				expect((await login(server.port, "nope")).res.status).toBe(401);
+			}
+			expect((await login(server.port, TOKEN)).res.status).toBe(200);
+			// The count restarted at zero, so five more wrong tokens are still free.
+			for (let i = 0; i < 5; i++) {
+				expect((await login(server.port, "nope")).res.status).toBe(401);
+			}
+		} finally {
+			await server.close().catch(() => {});
+		}
+	}, 20_000);
+
+	test("pre-auth login bodies are capped at 4 KiB; non-JSON is 415 (FEDGE-11)", async () => {
+		await pinSettingsInMemory();
+		const paths = fleetPaths("omp-web-server-body-cap-");
+		const server = await startFleet({
+			port: 0,
+			statePath: paths.statePath,
+			configPath: paths.configPath,
+			statsConfig: hermeticStatsConfig(paths.statePath),
+			browserAccessToken: TOKEN,
+		});
+		try {
+			const url = `http://127.0.0.1:${server.port}/auth/login`;
+			const text = await fetch(url, {
+				method: "POST",
+				headers: { "content-type": "text/plain" },
+				body: "accessToken=nope",
+			});
+			expect(text.status).toBe(415);
+			const oversize = JSON.stringify({ accessToken: "x".repeat(8 * 1024) });
+			// Declared length over the cap is refused before the body is read.
+			const declared = await fetch(url, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: oversize,
+			});
+			expect(declared.status).toBe(413);
+			// Chunked (no content-length): the read is cut off once it passes the cap.
+			const chunked = await fetch(url, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: new ReadableStream({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode(oversize));
+						controller.close();
+					},
+				}),
+			});
+			expect(chunked.status).toBe(413);
+		} finally {
+			await server.close().catch(() => {});
+		}
+	}, 20_000);
 });
 
 describe("fleet auth gate non-loopback policy (injected peer)", () => {
@@ -218,7 +315,7 @@ describe("fleet auth gate non-loopback policy (injected peer)", () => {
 	test("a non-loopback client needs a session; mutations need CSRF and the allowlisted origin", () => {
 		// No cookie → no session: server.ts maps a null authenticate to 401.
 		expect(gate.authenticate(req(), client)).toBeNull();
-		const loginResult = gate.login(TOKEN, TOKEN_HASH);
+		const loginResult = gate.login(TOKEN, TOKEN_HASH, client);
 		const cookie = loginResult.setCookie.split(";")[0]!;
 		const session = gate.authenticate(req({ cookie }), client);
 		expect(session).not.toBeNull();
@@ -383,8 +480,8 @@ describe("fleet auth gate rotation passthrough", () => {
 	test("rotateAccessToken swaps the hash the gate authenticates against", () => {
 		// Adopt the pre-rotation hash first, then rotate: the old plaintext
 		// must stop working (a no-op passthrough would still accept it).
-		gate.login(TOKEN, TOKEN_HASH);
+		gate.login(TOKEN, TOKEN_HASH, "127.0.0.1");
 		gate.rotateAccessToken(sha256Hex("op-sekret-rotated"));
-		expect(() => gate.login(TOKEN, TOKEN_HASH)).toThrow(/rejected/);
+		expect(() => gate.login(TOKEN, TOKEN_HASH, "127.0.0.1")).toThrow(/rejected/);
 	});
 });

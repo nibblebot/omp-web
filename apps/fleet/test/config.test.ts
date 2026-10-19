@@ -204,6 +204,18 @@ describe("loadConfig", () => {
 		}
 	});
 
+	test("trustedProxies: env applies with no config file present (FPS-14)", async () => {
+		const prev = process.env.OMP_FLEET_TRUSTED_PROXY;
+		process.env.OMP_FLEET_TRUSTED_PROXY = "10.0.0.1, 10.0.1.0/24";
+		try {
+			const config = await loadConfig(join(tmpDir(), "missing.json"));
+			expect(config.trustedProxies).toEqual(["10.0.0.1", "10.0.1.0/24"]);
+		} finally {
+			if (prev === undefined) delete process.env.OMP_FLEET_TRUSTED_PROXY;
+			else process.env.OMP_FLEET_TRUSTED_PROXY = prev;
+		}
+	});
+
 	test("trustedProxies: flag occurrences are comma-splittable", async () => {
 		const config = await loadConfig(join(tmpDir(), "missing.json"), {
 			trustedProxy: ["10.0.0.1, 10.0.1.0/24", "203.0.113.9"],

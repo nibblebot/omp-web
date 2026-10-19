@@ -25,10 +25,10 @@ export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** The same lifetime in seconds, for the cookie Max-Age attribute. */
 const SESSION_TTL_SECONDS = SESSION_TTL_MS / 1000;
 
-/** Rejects a login or a misconfigured hash; maps to 401/400 by the caller. */
+/** Rejects a login or a misconfigured hash; maps to 401/429/400 by the caller. */
 export class BrowserAuthError extends Error {
 	constructor(
-		readonly code: "unauthorized" | "invalid_request" | "unavailable",
+		readonly code: "unauthorized" | "rate_limited" | "invalid_request" | "unavailable",
 		message: string,
 	) {
 		super(message);

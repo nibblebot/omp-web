@@ -49,11 +49,10 @@ import { LockHeldError } from "#lib/platform/file-lock";
 import { isInteractiveDesktop, openBrowser } from "#lib/platform/open-browser";
 import { loadConfig, resolveConfigPath } from "./config";
 import { offerFirstRunSetup } from "./first-run";
-import { resolveStatePath, startFleet, type FleetServer } from "./server";
+import { DEFAULT_PORT, resolveStatePath, startFleet, type FleetServer } from "./server";
 import { runProfilePreflight } from "./preflight";
 import { DEFAULT_UI_PORT, startUiServer, type UiServer } from "./ui-server";
 
-const DEFAULT_PORT = 4722;
 const NOT_RUNNING_MESSAGE = "omp-web not running. Start it: omp-web";
 
 /** Wire shapes the CLI renders (subsets of RegistryEntry / RegisteredProject). */
@@ -142,17 +141,11 @@ function parseArgs(argv: string[]): ParsedArgs {
 			if (next === undefined || next.startsWith("-")) {
 				// #26: a missing value, or a value that looks like a flag
 				// (e.g. --wait -1), was silently converted to a boolean true
-				// and dropped by flagString/flagNumber. A non-multi flag with
-				// no usable value is a user error, so say so instead of
-				// silently ignoring it. Multi flags keep the legacy leniency.
-				if (Object.hasOwn(MULTI_FLAGS, name)) {
-					put(name, true);
-				} else if (next === undefined) {
-					throw new CliError(`missing value for --${name}`);
-				} else {
-					throw new CliError(`invalid value for --${name}: ${next}`);
-				}
-				continue;
+				// and dropped by flagString/flagNumber. Multi flags included:
+				// a bare --trusted-proxy must never reach the security path
+				// as a boolean (FPS-19).
+				if (next === undefined) throw new CliError(`missing value for --${name}`);
+				throw new CliError(`invalid value for --${name}: ${next}`);
 			}
 			put(name, next);
 			i++;

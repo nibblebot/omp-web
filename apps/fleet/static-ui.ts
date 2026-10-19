@@ -34,6 +34,14 @@ export async function serveStaticUi(pathname: string): Promise<Response> {
 	if (embedded) {
 		return new Response(Bun.file(embedded));
 	}
+	// A missing asset (a path with a file extension) is a 404, never the HTML
+	// shell: a stale hashed bundle reference must fail visibly (FEDGE-19).
+	if (/\.[A-Za-z0-9]+$/.test(pathname)) {
+		return new Response("not found", {
+			status: 404,
+			headers: { "content-type": "text/plain; charset=utf-8" },
+		});
+	}
 	return new Response(PLACEHOLDER_HTML, {
 		status: 200,
 		headers: { "content-type": "text/html; charset=utf-8" },

@@ -196,8 +196,8 @@ export async function loadConfig(
 	if (flagDir !== undefined && flagDir !== "") {
 		config.workspaceDir = expandTilde(flagDir);
 	}
-	// Bind: explicit flag (`opts.bind`) > env `OMP_FLEET_BIND` > config-file `bind`
-	// (mergeConfig already applied env+file to the default).
+	// Bind: explicit flag (`opts.bind`) > env `OMP_FLEET_BIND` > config-file
+	// `bind` (mergeConfig already applied the file).
 	const flagBind = opts?.bind;
 	const envBind = process.env.OMP_FLEET_BIND;
 	if (flagBind !== undefined && flagBind !== "") {
@@ -224,20 +224,19 @@ export async function loadConfig(
 	} else if (envOrigin !== undefined && envOrigin !== "") {
 		config.browserOrigin = envOrigin;
 	}
-	// Trusted proxies: explicit flag (repeatable, csv per occurrence) > env
+	// Trusted proxies: flag (repeatable, csv per occurrence) > env
 	// `OMP_FLEET_TRUSTED_PROXY` (csv) > config-file `trustedProxies`
-	// (mergeConfig applied env+file already). Unresolvable literals are a
-	// hard config error. A typo'd proxy must never be silently dropped
-	// into a fail-open-less forwarding decision (and invalid entries never
-	// match, so a drop would strand real proxies behind TLS silently).
-	const flagProxies = opts?.trustedProxy;
-	if (flagProxies !== undefined && flagProxies.length > 0) {
-		// String entries only: the CLI's legacy multi-flag leniency can push a
-		// bare boolean when a value was missing. A security flag must never
-		// crash the load (it degrades to "no trusted proxies", fail closed).
-		config.trustedProxies = flagProxies
-			.filter((entry): entry is string => typeof entry === "string")
-			.flatMap((entry) => splitTrustedProxyCsv(entry));
+	// (mergeConfig applied the file). Env is read here, not in mergeConfig,
+	// so it also holds when NO config file exists (FPS-14).
+	// String entries only: a bare boolean from the CLI must never crash the load.
+	const flagProxies = (opts?.trustedProxy ?? [])
+		.filter((entry): entry is string => typeof entry === "string")
+		.flatMap((entry) => splitTrustedProxyCsv(entry));
+	const envProxies = process.env.OMP_FLEET_TRUSTED_PROXY;
+	if (flagProxies.length > 0) {
+		config.trustedProxies = flagProxies;
+	} else if (envProxies !== undefined && envProxies !== "") {
+		config.trustedProxies = splitTrustedProxyCsv(envProxies);
 	}
 	const configured = config.trustedProxies ?? [];
 	const invalid = configured.filter((entry) => parseProxyRule(entry) === null);
@@ -310,12 +309,8 @@ function mergeConfig(raw: unknown): FleetConfig {
 	if (typeof file.workspaceDir === "string") {
 		config.workspaceDir = expandTilde(file.workspaceDir);
 	}
-	// Bind: env `OMP_FLEET_BIND` > config-file `bind` (a CLI flag beats both
-	// in loadConfig after this merge).
-	const envBind = process.env.OMP_FLEET_BIND;
-	if (envBind !== undefined && envBind !== "") {
-		config.bind = envBind;
-	} else if (typeof file.bind === "string" && file.bind !== "") {
+	// Bind: config-file `bind` (env and a CLI flag beat it in loadConfig after this merge).
+	if (typeof file.bind === "string" && file.bind !== "") {
 		config.bind = file.bind;
 	}
 	// Browser-auth operator credential from the config file: must already be
@@ -339,13 +334,10 @@ function mergeConfig(raw: unknown): FleetConfig {
 	if (typeof file.browserOrigin === "string" && file.browserOrigin !== "") {
 		config.browserOrigin = file.browserOrigin;
 	}
-	// Trusted proxies: env `OMP_FLEET_TRUSTED_PROXY` (csv) > config-file
-	// `trustedProxies` key (a CLI flag beats both in loadConfig after this
-	// merge). Literal validity is checked once precedence resolves.
-	const envTrustedProxies = process.env.OMP_FLEET_TRUSTED_PROXY;
-	if (envTrustedProxies !== undefined && envTrustedProxies !== "") {
-		config.trustedProxies = splitTrustedProxyCsv(envTrustedProxies);
-	} else if (isStringList(file.trustedProxies)) {
+	// Trusted proxies: config-file `trustedProxies` key (env and the CLI flag
+	// beat it in loadConfig after this merge). Literal validity is checked once
+	// precedence resolves.
+	if (isStringList(file.trustedProxies)) {
 		config.trustedProxies = file.trustedProxies
 			.map((entry) => entry.trim())
 			.filter((entry) => entry !== "");

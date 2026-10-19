@@ -90,6 +90,13 @@ describe("ui daemon proxy", () => {
 		expect(res.headers.get("content-type")).toContain("text/html");
 	});
 
+	test("a missing hashed asset is 404 text, not the HTML shell (FEDGE-19)", async () => {
+		const res = await fetch(`http://127.0.0.1:${ui.port}/assets/missing-0f3c9a.js`);
+		expect(res.status).toBe(404);
+		expect(res.headers.get("content-type")).toContain("text/plain");
+		expect((await fetch(`http://127.0.0.1:${ui.port}/`)).status).toBe(200);
+	});
+
 	test("proxies /ctl JSON with the control plane's status and body", async () => {
 		const via = await fetch(`http://127.0.0.1:${ui.port}/ctl/sessions`);
 		const direct = await fetch(`http://127.0.0.1:${fleet.port}/ctl/sessions`);

@@ -78,3 +78,21 @@ describe("removed add verb", () => {
 		expect(errors[0]).toBe("unknown command: add");
 	});
 });
+
+describe("multi-flag values", () => {
+	test("a bare --trusted-proxy is a usage error, never a boolean (FPS-19)", async () => {
+		const errors: string[] = [];
+		const originalError = console.error;
+		console.error = (msg?: unknown) => {
+			errors.push(String(msg));
+		};
+		let code: number;
+		try {
+			code = await main(["sessions", "--trusted-proxy"]);
+		} finally {
+			console.error = originalError;
+		}
+		expect(code).toBe(1);
+		expect(errors[0]).toBe("missing value for --trusted-proxy");
+	});
+});
