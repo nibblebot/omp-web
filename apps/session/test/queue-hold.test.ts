@@ -4,9 +4,7 @@
  * by identity, and "Resume queue" sends the held messages in order.
  */
 
-import { describe, expect, test } from "bun:test";
-import { createLifecycleMethods } from "../lifecycle-adapter";
-import { createWebMethods } from "../methods";
+import { describe, expect, mock, test } from "bun:test";
 import {
 	type HeldQueuedMessage,
 	holdQueuedMessages,
@@ -16,6 +14,22 @@ import {
 } from "../queue-hold";
 import { installPlanReviewHandler } from "../review-plan";
 import type { SessionEntry } from "../session-entry";
+
+// The SDK goal controller needs a real AgentSession. The abort and transcript-change rows
+// reach it through the autonomy adapter, so it is replaced here. The dynamic imports must
+// follow the mock registration.
+mock.module("@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal", () => ({
+	RpcGoalController: class {
+		constructor(_session: unknown) {}
+		async reconcile(): Promise<void> {}
+		observe(): void {}
+		stopForHostAbort(): void {}
+		async beginSessionChange(): Promise<void> {}
+		async endSessionChange(_options?: { detachedRun?: boolean }): Promise<void> {}
+	},
+}));
+const { createLifecycleMethods } = await import("../lifecycle-adapter");
+const { createWebMethods } = await import("../methods");
 
 interface FakeQueue {
 	steering: string[];
@@ -153,6 +167,13 @@ describe("Stop preserves the queue (abort row)", () => {
 				steering: queue.steering.splice(0).map((text) => ({ text })),
 				followUp: queue.followUp.splice(0).map((text) => ({ text })),
 			}),
+			sessionManager: {
+				getSessionId: () => "a",
+				getBranch: () => [],
+				appendCustomEntry: () => {},
+				flush: async () => {},
+			},
+			subscribe: () => () => undefined,
 			abort: async (options: unknown) => {
 				aborts.options.push(options);
 			},
@@ -285,7 +306,12 @@ describe("session replacement drops the held queue", () => {
 				isBashRunning: false,
 				isEvalRunning: false,
 				isCompacting: false,
-				sessionManager: { flush: async () => {}, getBranch: () => [] },
+				sessionManager: {
+					getSessionId: () => "a",
+					getBranch: () => [],
+					appendCustomEntry: () => {},
+					flush: async () => {},
+				},
 				setPlanModeState: () => {},
 				getEnabledToolNames: () => [],
 				getMountedXdevToolNames: () => [],

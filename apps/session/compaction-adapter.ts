@@ -237,7 +237,6 @@ export interface ExecuteCompactionArgs {
 	mode: CompactMode;
 	/** Focus instructions; rejected without an SDK round trip when the grammar rejects focus. */
 	instructions?: string;
-	signal?: AbortSignal;
 }
 
 export interface ShapedCompactionResult {
@@ -283,21 +282,8 @@ export async function executeCompaction(
 			failureKind: "invalid_request",
 		};
 	}
-	if (args.signal?.aborted) {
-		return { ok: false, error: "compaction cancelled", failureKind: "cancelled" };
-	}
 	const gate = eligibilityFor(def.name, sessionEligibilityContext(session));
 	if (!gate.eligible) return { ok: false, error: gate.reason, failureKind: "unavailable" };
-	// CompactOptions carries no signal: bridge an operator abort onto the
-	// SDK's abortCompaction path (manual + automatic + handoff maintenance).
-	const onAbort = () => {
-		try {
-			session.abortCompaction(args.signal?.reason ?? "compaction cancelled by operator");
-		} catch {
-			// Abort is best-effort; the run's own error path reports the outcome.
-		}
-	};
-	args.signal?.addEventListener("abort", onAbort, { once: true });
 	const interruptedTurn = session.isStreaming;
 	try {
 		const options: CompactOptions = { mode: def.name };
@@ -324,8 +310,6 @@ export async function executeCompaction(
 	} catch (err) {
 		const classified = classifyCompactionError(err);
 		return { ok: false, ...classified };
-	} finally {
-		args.signal?.removeEventListener("abort", onAbort);
 	}
 }
 
@@ -343,7 +327,6 @@ const SHAKE_MODES: readonly ShakeMode[] = ["elide", "images", "thinking"];
 export async function executeShake(
 	session: AgentSession,
 	mode: ShakeMode,
-	signal?: AbortSignal,
 ): Promise<CompactionOutcome<ShapedShakeResult>> {
 	if (!SHAKE_MODES.includes(mode)) {
 		return {
@@ -359,10 +342,9 @@ export async function executeShake(
 			failureKind: "unavailable",
 		};
 	}
-	if (signal?.aborted) return { ok: false, error: "Shake cancelled.", failureKind: "cancelled" };
 	const before = sampleContextTokens(session);
 	try {
-		const result = await session.shake(mode, signal ? { signal } : {});
+		const result = await session.shake(mode);
 		return {
 			ok: true,
 			data: {

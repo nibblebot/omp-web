@@ -283,11 +283,14 @@ function compactRoute(args: string): void {
 		pushNotice("error", d.message);
 		return;
 	}
-	const text = [d.mode, d.instructions].filter((v): v is string => v !== undefined).join(" ");
 	// The marker comes with the transcript resync that compaction triggers (HISTORY_RELOAD).
-	void call("compact", text ? [text] : []).catch((err) =>
-		setState("error", humanizeCompactionError(err)),
-	);
+	void call("compactEx", [{ mode: d.mode, instructions: d.instructions }])
+		.then((outcome) => {
+			const { ok, error } = outcome as { ok: boolean; error?: string };
+			if (!ok)
+				setState("error", humanizeCompactionError(error ?? "Compaction returned no result."));
+		})
+		.catch((err) => setState("error", humanizeCompactionError(err)));
 }
 
 /** `/export [--themes] [path]`: `--themes` carries the web theme; a path is parsed so exportRoute can refuse it. */

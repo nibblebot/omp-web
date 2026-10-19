@@ -266,12 +266,11 @@ async function readState(entry: SessionEntry): Promise<McpState> {
 	};
 }
 
-/** Rediscovers and reconnects every server, then rebinds MCP tools. Mirrors the TUI reload. */
-async function reloadServers(entry: SessionEntry): Promise<McpActionResult> {
-	const manager = requireManager(entry);
-	await manager.disconnectAll();
-	// Clear prompt commands before rediscovery so removed servers leave no stale `/server:prompt` entries.
-	entry.session.setMCPPromptCommands([]);
+/** Discovers servers with the session's filters and returns their connection errors. */
+async function discoverServers(
+	entry: SessionEntry,
+	manager: MCPManager,
+): Promise<Map<string, string>> {
 	// External edits to mcp.json otherwise keep a stale command or env after reload.
 	clearFsCache();
 	const result = await manager.discoverAndConnect({
@@ -282,11 +281,47 @@ async function reloadServers(entry: SessionEntry): Promise<McpActionResult> {
 			.some((definition) => definition.name === "browser"),
 		extensionRoots: entry.session.effectiveExtensionRoots,
 	});
-	discoveryErrors.set(manager, result.errors);
+	return result.errors;
+}
+
+/** Disconnects and rediscovers every server, then rebinds MCP tools. Used by `reloadIntegrations`. */
+async function reloadServers(entry: SessionEntry): Promise<McpActionResult> {
+	const manager = requireManager(entry);
+	await manager.disconnectAll();
+	// Clear prompt commands before rediscovery so removed servers leave no stale `/server:prompt` entries.
+	entry.session.setMCPPromptCommands([]);
+	const errors = await discoverServers(entry, manager);
+	discoveryErrors.set(manager, errors);
 	await entry.session.refreshMCPTools(manager.getTools());
-	const failed = result.errors.size;
+	const failed = errors.size;
 	return {
 		ok: failed === 0,
+		detail:
+			failed === 0 ? "MCP servers reloaded" : `MCP servers reloaded, ${failed} failed to connect`,
+	};
+}
+
+/**
+ * Applies one server's change without touching the others: drops that server's live
+ * connection and prompt commands, then rediscovers. The SDK skips servers it already
+ * owns, so unrelated connections and their tools stay up.
+ */
+async function reloadServer(entry: SessionEntry, name: string): Promise<McpActionResult> {
+	const manager = requireManager(entry);
+	await manager.disconnectServer(name);
+	entry.session.setMCPPromptCommands(
+		entry.session.mcpPromptCommands.filter(
+			(command) => !command.command.name.startsWith(`${name}:`),
+		),
+	);
+	const errors = new Map(discoveryErrors.get(manager));
+	errors.delete(name);
+	for (const [server, detail] of await discoverServers(entry, manager)) errors.set(server, detail);
+	discoveryErrors.set(manager, errors);
+	await entry.session.refreshMCPTools(manager.getTools());
+	const failed = errors.size;
+	return {
+		ok: !errors.has(name),
 		detail:
 			failed === 0 ? "MCP servers reloaded" : `MCP servers reloaded, ${failed} failed to connect`,
 	};
@@ -330,7 +365,7 @@ export function createMcpMethods(deps: McpMethodsDeps): Record<McpMethodName, Ha
 		const config = buildConfig(input);
 		assertValid(input.name, config);
 		await addMCPServer(paths(entry.cwd)[input.scope], input.name, config);
-		return reloadServers(entry);
+		return reloadServer(entry, input.name);
 	});
 
 	const update = mutating(async (entry, args) => {
@@ -341,7 +376,7 @@ export function createMcpMethods(deps: McpMethodsDeps): Record<McpMethodName, Ha
 		const config = buildConfig(input, prev);
 		assertValid(input.name, config);
 		await updateMCPServer(file, input.name, config);
-		return reloadServers(entry);
+		return reloadServer(entry, input.name);
 	});
 
 	const remove = mutating(async (entry, args) => {
@@ -352,7 +387,7 @@ export function createMcpMethods(deps: McpMethodsDeps): Record<McpMethodName, Ha
 			throw new Error(`${name} is not declared in the ${scope} config`);
 		}
 		await removeMCPServer(file, name);
-		return reloadServers(entry);
+		return reloadServer(entry, name);
 	});
 
 	const setEnabled = (enabled: boolean) =>
@@ -361,7 +396,7 @@ export function createMcpMethods(deps: McpMethodsDeps): Record<McpMethodName, Ha
 			if (!(await hasServer(entry, name))) throw new Error(`Unknown MCP server: ${name}`);
 			const p = paths(entry.cwd);
 			await setMcpServerEnabled({ userPath: p.user, projectPath: p.project, name, enabled });
-			return reloadServers(entry);
+			return reloadServer(entry, name);
 		});
 
 	const reconnect = mutating(async (entry, args): Promise<McpActionResult> => {
@@ -391,7 +426,7 @@ export function createMcpMethods(deps: McpMethodsDeps): Record<McpMethodName, Ha
 			entry.session.modelRegistry.authStorage,
 			[...mcpOAuthCredentialIdsForServerUrl(url), config.auth?.credentialId],
 		);
-		if (removed) await reloadServers(entry);
+		if (removed) await reloadServer(entry, name);
 		return {
 			ok: true,
 			detail: removed

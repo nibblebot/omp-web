@@ -62,6 +62,7 @@ import {
 	setAdvisorSettings,
 } from "./advisor-config";
 import { readAdvisorHistory } from "./advisor-history";
+import { getAutonomyAdapter } from "./autonomy-adapter";
 import {
 	cancelLoop,
 	createGoal,
@@ -286,15 +287,16 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	};
 
 	// Calls that replace the transcript; every tab resyncs, not just the requester.
-	// Handoff and manual compaction rewrite the transcript in place; every replacement/rewind resyncs all tabs.
+	// Handoff, compaction, shake, and image drops rewrite the transcript in place; every rewrite resyncs all tabs.
 	const HISTORY_RELOAD: Partial<Record<WebMethodName, true>> = {
 		newSession: true,
 		switchSession: true,
 		branch: true,
 		fork: true,
 		handoff: true,
-		compact: true,
 		compactEx: true,
+		shake: true,
+		dropImages: true,
 		clearSession: true,
 		deleteSession: true,
 		navigateTree: true,
@@ -307,9 +309,24 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		kind: "newSession" | "switchSession" | "branch",
 		arg: string | undefined,
 	): Promise<unknown> {
-		const { session } = entry;
 		// A live room hosts this session's transcript; a session change ends it (guests get a bye).
 		await deps.collab.stopRoom(entry, "session changed");
+		const autonomy = getAutonomyAdapter(entry);
+		await autonomy.beginSessionChange();
+		try {
+			return await swapTranscript(entry, kind, arg);
+		} finally {
+			// The SDK contract: new and switch stop the running agent; branch navigation does not.
+			await autonomy.endSessionChange({ detachedRun: kind !== "branch" });
+		}
+	}
+
+	async function swapTranscript(
+		entry: SessionEntry,
+		kind: "newSession" | "switchSession" | "branch",
+		arg: string | undefined,
+	): Promise<unknown> {
+		const { session } = entry;
 		if (kind === "newSession") {
 			const ok = await session.newSession(arg ? { parentSession: arg } : undefined);
 			if (ok) {
@@ -458,6 +475,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			holdQueuedMessages(entry.session, entry.pausedQueue);
 			// Stop also holds queued slash commands until Resume queue.
 			entry.queuedCommands.paused = true;
+			getAutonomyAdapter(entry).stopForHostAbort();
 			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
 			for (const [id, snapshot] of entry.subagentSnapshots) {
 				if (snapshot.status === "pending" || snapshot.status === "running") {
@@ -467,6 +485,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		},
 		abortAndPrompt: async (entry, a) => {
 			cancelEntryUiRequests(entry);
+			getAutonomyAdapter(entry).stopForHostAbort();
 			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
 			void deps.collab.fireAndForgetPrompt(entry, a[0] as string, a[1] as Images);
 		},
@@ -529,7 +548,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		navigateTree: async (entry, a) =>
 			graph.navigateTree(entry, a[0] as string, (a[1] ?? {}) as GraphNavigateOptions),
 		resumeAfterAskReanswer: async (entry) => graph.resumeAfterAskReanswer(entry),
-		compact: (entry, a) => entry.session.compact(a[0] as string | undefined),
 		retry: (entry) => entry.session.retry(),
 		fork: (entry) => entry.session.fork(),
 		handoff: (entry, a) => entry.session.handoff(a[0] as string | undefined),

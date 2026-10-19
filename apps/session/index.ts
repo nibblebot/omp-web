@@ -37,6 +37,7 @@ import {
 	type StdoutContractLine,
 } from "#lib/wire/protocol";
 import { encodeSseEvent } from "#lib/wire/sse";
+import { parseClientCommand } from "#lib/wire/client-command";
 import { acquireFileLock, LockHeldError } from "#lib/platform/file-lock";
 import type { FileLock } from "#lib/platform/file-lock";
 import { isLoopbackHost } from "#lib/platform/hosts";
@@ -59,6 +60,7 @@ import {
 	materializeSessionToDir,
 	sessionTreeExists,
 } from "./session-materialize";
+import { getAutonomyAdapter } from "./autonomy-adapter";
 import { CollabHostAdapter, type CollabAccess } from "./collab-host";
 import { chooseRelayUrl, decideAutoStart } from "./collab-policy";
 import { createCollabSession } from "./collab-session";
@@ -78,6 +80,7 @@ import {
 	ephemeralAborts,
 	notifyEvent,
 	pendingCodeInputs,
+	rejectOwnedCodeInputs,
 	ringAfter,
 	setOnConsumerDetached,
 	setOnStreamsEmpty,
@@ -545,19 +548,11 @@ async function closeSession(entry: SessionEntry, reason: string): Promise<void> 
 	const adapter = entry.collab.adapter;
 	entry.collab.adapter = null;
 	if (adapter) await adapter.stop(reason).catch(() => {});
+	getAutonomyAdapter(entry).dispose();
 	entry.session.beginDispose();
 	await entry.session.dispose().catch(() => {});
 	rejectEntryUiRequests(entry, reason);
-	for (const [id, p] of pendingCodeInputs) {
-		let attachedHere = false;
-		for (const stream of p.streams) {
-			if (stream.attached === entry.handle) attachedHere = true;
-		}
-		if (attachedHere) {
-			p.reject(new Error(reason));
-			pendingCodeInputs.delete(id);
-		}
-	}
+	rejectOwnedCodeInputs(entry.handle, reason);
 	for (const stream of streams) {
 		if (stream.attached === entry.handle) stream.attached = null;
 	}
@@ -600,8 +595,9 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				// Readiness gate (R8): prompt-family methods are rejected until
 				// the boot session's provider/model/auth resolution completes.
 				// The wire error is the literal string "not_ready".
-				if (readyAt === null && NOT_READY_GATED[cmd.method]) throw "not_ready";
-				const method = METHODS[cmd.method];
+				if (readyAt === null && Object.hasOwn(NOT_READY_GATED, cmd.method)) throw "not_ready";
+				// Own-property lookup: an inherited name (`constructor`, `toString`) is not a method.
+				const method = Object.hasOwn(METHODS, cmd.method) ? METHODS[cmd.method] : undefined;
 				if (!method) throw new Error(`Unknown method: ${cmd.method}`);
 				const data =
 					cmd.method === "login"
@@ -1072,9 +1068,9 @@ const server = Bun.serve({
 			markActivity();
 			let cmd: ClientCommand;
 			try {
-				cmd = JSON.parse(await req.text()) as ClientCommand;
+				cmd = parseClientCommand(JSON.parse(await req.text()));
 			} catch {
-				return new Response("Malformed JSON", { status: 400 });
+				return new Response("Malformed command", { status: 400 });
 			}
 			// Idempotent accept: a duplicate id is 202 without a re-dispatch.
 			// When the original already answered, the recorded answer is
@@ -1494,7 +1490,7 @@ if (config.callbackUrl !== undefined) {
 				? undefined
 				: { disposeQuiesce: () => closeSession(bootEntry!, "quiesce") },
 		handleCommand: async (command: unknown) => {
-			const cmd = command as ClientCommand;
+			const cmd = parseClientCommand(command);
 			markActivity();
 			// Same idempotency window as POST /command: a duplicate id replays the
 			// recorded answer and is never re-dispatched.

@@ -47,14 +47,29 @@ export interface SseConsumer {
 export const streams = new Set<SseConsumer>();
 
 /**
- * Pending login code inputs, keyed per connection (the streams live at
- * dispatch time) and rejected on login settle, on every owning stream
- * closing, on the attached session's close, and on shutdown.
+ * Pending login code inputs, keyed per connection. `owner` is the session
+ * handle whose login opened the prompt; `streams` are the dispatch-time /events
+ * consumers, empty when the browser rides the callback pair. Rejected on login
+ * settle, on every owning stream closing, on the owning session's close, and on shutdown.
  */
 export const pendingCodeInputs = new Map<
 	string,
-	{ streams: Set<SseConsumer>; resolve: (code: string) => void; reject: (err: Error) => void }
+	{
+		owner: string;
+		streams: Set<SseConsumer>;
+		resolve: (code: string) => void;
+		reject: (err: Error) => void;
+	}
 >();
+
+/** Reject and drop every pending code input the session `owner` opened (session close). */
+export function rejectOwnedCodeInputs(owner: string, reason: string): void {
+	for (const [id, p] of pendingCodeInputs) {
+		if (p.owner !== owner) continue;
+		p.reject(new Error(reason));
+		pendingCodeInputs.delete(id);
+	}
+}
 
 const ring = new SseRing<string>(SSE_RING_CAP, SSE_RING_BYTES);
 let nextDeltaSeq = SSE_DELTA_SEQ_START;

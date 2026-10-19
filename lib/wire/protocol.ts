@@ -675,7 +675,6 @@ export type WebMethodName =
 	| "abort"
 	| "abortAndPrompt"
 	| "newSession"
-	| "compact"
 	| "retry"
 	| "fork"
 	| "freshSession"

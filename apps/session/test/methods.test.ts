@@ -475,6 +475,54 @@ describe("session graph rows", () => {
 	});
 });
 
+describe("transcript-rewriting rows", () => {
+	// One table set for both rows: the rewrite classification and the compaction gate.
+	const tables = createWebMethods({
+		settings: {} as never,
+		authStorage: {} as never,
+		collab: {} as never,
+		broker: {} as never,
+		materializeSession: async () => ({ alreadyPresent: true as const }),
+		sessionsDir: "/tmp/fleet-test-sessions",
+		cwd: "/tmp/fleet-test-cwd",
+		hasCallbackPair: () => false,
+	});
+
+	test("every row that rewrites the transcript resyncs history (HISTORY_RELOAD)", () => {
+		// The browser only follows a rewrite through the history resync, so each
+		// rewriting row must be in the table: shake and dropImages were not.
+		for (const name of ["compactEx", "shake", "dropImages", "handoff", "clearSession"] as const) {
+			expect(tables.historyReload[name]).toBe(true);
+		}
+	});
+
+	test("compact is not a second compaction path; compactEx refuses while no model is selected", async () => {
+		// The raw `compact` row bypassed the eligibility gate that compactEx and
+		// the Compact… dialog enforce. Only the gated compactEx remains.
+		const compacts: unknown[] = [];
+		const session = {
+			settings: Settings.isolated(),
+			model: undefined,
+			isStreaming: false,
+			hasPostPromptWork: false,
+			isCompacting: false,
+			compact: async (...args: unknown[]) => {
+				compacts.push(args);
+				return {};
+			},
+		};
+		const entry = { session } as unknown as SessionEntry;
+		expect(Object.hasOwn(tables.methods, "compact")).toBe(false);
+		const outcome = (await tables.methods.compactEx!(entry, [{ mode: "soft" }])) as {
+			ok: boolean;
+			failureKind?: string;
+		};
+		expect(outcome.ok).toBe(false);
+		expect(outcome.failureKind).toBe("unavailable");
+		expect(compacts).toEqual([]);
+	});
+});
+
 function btwEntry(artifactsDir: string | null): SessionEntry {
 	const sessionManager = { getArtifactsDir: () => artifactsDir };
 	const session = { sessionId: "sess-btw", sessionManager };

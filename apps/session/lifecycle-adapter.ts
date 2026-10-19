@@ -1,6 +1,7 @@
 import { lstat, open, readFile, realpath } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { tryAcquireSessionLease } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { getAutonomyAdapter } from "./autonomy-adapter";
 import { dropHeldQueue } from "./queue-hold";
 import { exitPlanMode } from "./review-plan";
 import type { SessionEntry } from "./session-entry";
@@ -156,11 +157,28 @@ export function createLifecycleMethods(deps: LifecycleDeps) {
 		dropHeldQueue(entry);
 		await deps.broadcastAvailableCommands(entry);
 	}
+
+	/** Brackets an SDK call that changes the transcript with the autonomy goal hooks (SDK contract). */
+	async function bracketTranscript<T>(
+		entry: SessionEntry,
+		detachedRun: boolean,
+		run: () => Promise<T>,
+	): Promise<T> {
+		const autonomy = getAutonomyAdapter(entry);
+		await autonomy.beginSessionChange();
+		try {
+			return await run();
+		} finally {
+			await autonomy.endSessionChange({ detachedRun });
+		}
+	}
 	return {
 		clearSession: (entry: SessionEntry, _args: unknown[] = []) =>
 			exclusive(entry, async () => {
 				await stop(entry, true);
-				const result = await entry.session.resetSessionContext();
+				const result = await bracketTranscript(entry, false, () =>
+					entry.session.resetSessionContext(),
+				);
 				if (!result) throw new Error("Session context reset was refused by the SDK");
 				await entry.session.sessionManager.flush();
 				await changed(entry);
@@ -173,7 +191,9 @@ export function createLifecycleMethods(deps: LifecycleDeps) {
 					throw new Error("Invalid parent session");
 				await stop(entry, true);
 				await exitPlanMode(entry);
-				const ok = await entry.session.newSession(parent ? { parentSession: parent } : undefined);
+				const ok = await bracketTranscript(entry, true, () =>
+					entry.session.newSession(parent ? { parentSession: parent } : undefined),
+				);
 				if (ok) await changed(entry);
 				return { cancelled: !ok };
 			}),
@@ -199,7 +219,7 @@ export function createLifecycleMethods(deps: LifecycleDeps) {
 				);
 				// SDK hooks may cancel only inside newSession(). Never delete first, and never
 				// use drop:true: that path catches deletion failure and logs-and-continues.
-				const ok = await entry.session.newSession();
+				const ok = await bracketTranscript(entry, true, () => entry.session.newSession());
 				if (!ok) return { cancelled: true, deleted: false, sessionId: target.sessionId };
 				let localDeleted = false;
 				try {

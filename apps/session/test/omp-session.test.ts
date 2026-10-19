@@ -884,6 +884,40 @@ test("POST /command dedups by id within the window and replays the recorded answ
 	await cleanup();
 }, 30_000);
 
+test("POST /command rejects non-command bodies and never dispatches inherited names", async () => {
+	const proc = await spawnSession({});
+	running.push(proc);
+	const { port, cleanup } = proc;
+	const base = `http://127.0.0.1:${port}`;
+	const events = await openEvents(base);
+	await waitForFrame(events.frames, "attached", 10_000, "attached frame");
+	// Shape errors are a 400 before any dispatch. A bare `null` used to pass
+	// JSON.parse and crash on `cmd.id`; `{}`-like bodies reached the switch.
+	for (const body of ["null", "42", '"text"', "[]", '{"type":"call"}', '{"id":"x"}']) {
+		const res = await fetch(commandUrlFor(base), {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body,
+		});
+		expect(res.status).toBe(400);
+	}
+	// `constructor` is an inherited property of every object. Pre-fix the
+	// METHODS lookup found Object itself and answered ok with the session.
+	const inherited = { type: "call", id: "proto-name", method: "constructor", args: [] };
+	expect((await postCommand(base, inherited)).status).toBe(202);
+	await waitFor(
+		() =>
+			events.frames.some((f) => f.type === "call_result" && f.id === "proto-name") ? true : null,
+		10_000,
+		"call_result for proto-name",
+	);
+	const answer = events.frames.find((f) => f.type === "call_result" && f.id === "proto-name");
+	expect(answer?.ok).toBe(false);
+	expect(String(answer?.error)).toContain("Unknown method");
+	events.close();
+	await cleanup();
+}, 30_000);
+
 test("a >4 MiB transcript primes as chunked history; the stream stays attached (no backpressure kill)", async () => {
 	// Fixture: a resumed session whose serialized transcript exceeds the 4 MiB
 	// SSE backpressure cap (real transcripts cross it via base64 image data

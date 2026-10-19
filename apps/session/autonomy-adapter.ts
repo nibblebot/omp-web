@@ -52,31 +52,35 @@ export function getAutonomyAdapter(entry: SessionEntry) {
 export function createAutonomyAdapter(entry: SessionEntry): AutonomyAdapter {
 	const session = entry.session;
 	const goal = new RpcGoalController(session);
-	let loop: LoopSnapshot = { status: "inactive", iteration: 0 };
+	let loop: LoopSnapshot = recoverLoop();
 	let generation = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let conditionAbort: AbortController | undefined;
 	let disposed = false;
 	let transcriptId = session.sessionManager.getSessionId();
-	const recovered = [...session.sessionManager.getBranch()]
-		.reverse()
-		.find((record) => record.type === "custom" && record.customType === "web-autonomy-loop");
-	if (recovered?.type === "custom") {
-		const data = recovered.data as Partial<LoopSnapshot> | undefined;
-		if (
-			data &&
-			(data.status === "running" || data.status === "paused") &&
-			typeof data.iteration === "number" &&
-			typeof data.prompt === "string"
-		) {
-			loop = {
-				...data,
-				status: "paused",
-				iteration: data.iteration,
-				nextRunAt: undefined,
-				stopReason: "Daemon restarted; explicit resume required",
-			};
+	/** A loop the transcript recorded as running or paused resumes only by explicit operator action. */
+	function recoverLoop(): LoopSnapshot {
+		const recovered = [...session.sessionManager.getBranch()]
+			.reverse()
+			.find((record) => record.type === "custom" && record.customType === "web-autonomy-loop");
+		if (recovered?.type === "custom") {
+			const data = recovered.data as Partial<LoopSnapshot> | undefined;
+			if (
+				data &&
+				(data.status === "running" || data.status === "paused") &&
+				typeof data.iteration === "number" &&
+				typeof data.prompt === "string"
+			) {
+				return {
+					...data,
+					status: "paused",
+					iteration: data.iteration,
+					nextRunAt: undefined,
+					stopReason: "Daemon restarted; explicit resume required",
+				};
+			}
 		}
+		return { status: "inactive", iteration: 0 };
 	}
 	const ready = goal.reconcile();
 	function snapshot(): LoopSnapshot {
@@ -255,7 +259,15 @@ export function createAutonomyAdapter(entry: SessionEntry): AutonomyAdapter {
 			if (loop.status === "running") stop("Session changing", "paused");
 			await goal.beginSessionChange();
 		},
-		endSessionChange: (options?: { detachedRun?: boolean }) => goal.endSessionChange(options),
+		async endSessionChange(options?: { detachedRun?: boolean }) {
+			// Adopt the target transcript's loop only when the change actually switched it.
+			const nextId = session.sessionManager.getSessionId();
+			if (nextId !== transcriptId) {
+				transcriptId = nextId;
+				loop = recoverLoop();
+			}
+			await goal.endSessionChange(options);
+		},
 		dispose() {
 			disposed = true;
 			cancelPending();

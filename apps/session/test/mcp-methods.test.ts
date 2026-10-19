@@ -95,3 +95,54 @@ describe("session mcp methods: getMcpState", () => {
 		expect(state.projectConfigEnabled).toBe(false);
 	});
 });
+
+function makeLiveEntry(cwd: string, initiallyLive: string[]) {
+	const live = new Set(initiallyLive);
+	const calls = { disconnectAll: 0, disconnected: [] as string[], discovered: 0 };
+	const manager = {
+		getAllServerNames: () => [...live],
+		getTools: () => [],
+		disconnectAll: async () => {
+			calls.disconnectAll++;
+			live.clear();
+		},
+		disconnectServer: async (name: string) => {
+			calls.disconnected.push(name);
+			live.delete(name);
+		},
+		discoverAndConnect: async () => {
+			calls.discovered++;
+			return { errors: new Map<string, string>() };
+		},
+	};
+	const base = makeEntry(cwd, true);
+	const entry = {
+		...base,
+		mcpManager: manager,
+		session: { ...base.session, setMCPPromptCommands: () => {}, mcpPromptCommands: [] },
+	} as unknown as SessionEntry;
+	return { entry, calls, live };
+}
+
+describe("session mcp methods: per-server reloads", () => {
+	test("adding a server disconnects no live server and never reconnects all", async () => {
+		const cwd = makeProject({});
+		const { entry, calls, live } = makeLiveEntry(cwd, ["alpha"]);
+		await createMcpMethods(deps).mcpAdd(entry, [
+			{ name: "beta", scope: "project", transport: "stdio", command: "node", args: [] },
+		]);
+		expect(calls.disconnectAll).toBe(0);
+		expect(calls.disconnected).not.toContain("alpha");
+		expect([...live]).toEqual(["alpha"]);
+		expect(calls.discovered).toBe(1);
+	});
+
+	test("removing a server disconnects only that server", async () => {
+		const cwd = makeProject({ beta: { command: "node", args: [] } });
+		const { entry, calls, live } = makeLiveEntry(cwd, ["alpha", "beta"]);
+		await createMcpMethods(deps).mcpRemove(entry, ["beta", "project"]);
+		expect(calls.disconnectAll).toBe(0);
+		expect(calls.disconnected).toEqual(["beta"]);
+		expect([...live]).toEqual(["alpha"]);
+	});
+});

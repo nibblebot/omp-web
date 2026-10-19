@@ -2,6 +2,7 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { SessionEntry } from "./session-entry";
 import { broadcastAnswer, notifyEvent, pendingCodeInputs, streams } from "./sse-delivery";
+import { hasBrowserUiClient } from "./ui-context";
 
 let nextLoginRequestId = 1;
 
@@ -37,12 +38,19 @@ export async function loginWithCallbacks(
 						),
 					);
 				}
-				if (![...promptStreams].some((stream) => streams.has(stream))) {
+				// Production browsers ride the callback pair (no local /events stream), so ask the
+				// same question dialogs ask: is a browser attached to this session?
+				if (!hasBrowserUiClient(entry)) {
 					return Promise.reject(new Error("login streams closed"));
 				}
 				const requestId = `lr${nextLoginRequestId++}`;
 				const { promise, resolve, reject } = Promise.withResolvers<string>();
-				pendingCodeInputs.set(requestId, { streams: promptStreams, resolve, reject });
+				pendingCodeInputs.set(requestId, {
+					owner: entry.handle,
+					streams: promptStreams,
+					resolve,
+					reject,
+				});
 				broadcastAnswer({
 					type: "login_code_request",
 					requestId,

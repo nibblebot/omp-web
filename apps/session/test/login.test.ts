@@ -11,7 +11,14 @@ import type { ServerFrame } from "#lib/wire/protocol";
 import { loginWithCallbacks } from "../login";
 import { createWebMethods } from "../methods";
 import type { SessionEntry } from "../session-entry";
-import { detachConsumer, pendingCodeInputs, streams, type SseConsumer } from "../sse-delivery";
+import {
+	detachConsumer,
+	pendingCodeInputs,
+	rejectOwnedCodeInputs,
+	streams,
+	type SseConsumer,
+} from "../sse-delivery";
+import { setCallbackBrowserStreamCount } from "../ui-context";
 
 afterAll(cleanupTempDirs);
 
@@ -50,6 +57,7 @@ beforeEach(async () => {
 
 afterEach(() => {
 	detachConsumer(consumer, "test cleanup");
+	setCallbackBrowserStreamCount(null);
 	unregisterOAuthProvider(PROVIDER);
 	store.close();
 });
@@ -155,6 +163,32 @@ describe("namespaced OAuth login through production SSE dialogs", () => {
 		expect(pendingCodeInputs.size).toBe(0);
 		expect(auth.credentials.has(CREDENTIAL_PROVIDER)).toBe(false);
 		expect(refreshes).toBe(0);
+	});
+
+	test("a callback-pair browser keeps the code prompt open; only the owning session's close rejects it", async () => {
+		// Production browsers ride the callback pair: no local /events stream is attached.
+		setCallbackBrowserStreamCount(() => 1);
+		streams.delete(consumer);
+		provider(async (callbacks) => {
+			callbacks.onAuth({ url: "https://example.invalid/auth" });
+			await callbacks.onPrompt({ message: "Code" });
+			return {
+				access: "must-not-be-stored",
+				refresh: "must-not-be-stored",
+				expires: Date.now() + 60_000,
+			};
+		});
+		const result = loginWithCallbacks(entry, PROVIDER, auth, async () => {
+			throw new Error("must not refresh");
+		});
+		const rejected = result.catch((error: unknown) => error);
+		expect(pendingCodeInputs.size).toBe(1);
+		rejectOwnedCodeInputs("other-session", "other session closed");
+		expect(pendingCodeInputs.size).toBe(1);
+		rejectOwnedCodeInputs(entry.handle, "session closed");
+		expect(await rejected).toMatchObject({ message: "session closed" });
+		expect(pendingCodeInputs.size).toBe(0);
+		expect(auth.credentials.has(CREDENTIAL_PROVIDER)).toBe(false);
 	});
 
 	test.each([false, true])(

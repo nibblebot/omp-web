@@ -130,7 +130,18 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 						)}
 					</Show>
 					<div class="stats-actions">
-						<button onClick={() => void call("compact", []).catch(reportError)}>Compact now</button>
+						<button
+							onClick={() =>
+								void call("compactEx", [{ mode: "soft" }])
+									.then((o) => {
+										const outcome = o as { ok: boolean; error?: string };
+										if (!outcome.ok) reportError(outcome.error ?? "Compaction returned no result.");
+									})
+									.catch(reportError)
+							}
+						>
+							Compact now
+						</button>
 						<button onClick={() => setState("modal", "compaction")}>Compact…</button>
 						<button onClick={() => setState("modal", "usage")}>usage reports</button>
 						<label class="toggle">

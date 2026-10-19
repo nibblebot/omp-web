@@ -4,15 +4,28 @@
  * now and the drain, and reaches the SDK prompt with the command. An image over
  * the existing per-image limit is refused with a notice, never queued or dropped.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { MAX_IMAGE_BYTES } from "#lib/wire/image-limits";
 import type { QueuedMessagesSnapshot, ServerFrame } from "#lib/wire/protocol";
 import { createCollabSession } from "../collab-session";
-import { createWebMethods } from "../methods";
 import type { SessionEntry } from "../session-entry";
 import { setOnFrameTap } from "../sse-delivery";
+
+// The SDK goal controller needs a real AgentSession. The abort row reaches it through the
+// autonomy adapter, so it is replaced here. The dynamic import must follow the mock.
+mock.module("@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal", () => ({
+	RpcGoalController: class {
+		constructor(_session: unknown) {}
+		async reconcile(): Promise<void> {}
+		observe(): void {}
+		stopForHostAbort(): void {}
+		async beginSessionChange(): Promise<void> {}
+		async endSessionChange(_options?: { detachedRun?: boolean }): Promise<void> {}
+	},
+}));
+const { createWebMethods } = await import("../methods");
 
 const image = { type: "image", data: "AAAA", mimeType: "image/png" } as const;
 const image2 = { type: "image", data: "BBBB", mimeType: "image/jpeg" } as const;
@@ -52,6 +65,12 @@ function fakeSession(
 			if (state.busy) throw new AgentBusyError();
 		},
 		clearQueue: () => ({ steering: [], followUp: [] }),
+		sessionManager: {
+			getSessionId: () => "s1",
+			getBranch: () => [],
+			appendCustomEntry: () => {},
+			flush: async () => {},
+		},
 		abort: async () => {},
 		getQueuedMessages: () => options.queued ?? { steering: [], followUp: [], liveSteered: 0 },
 		agent: options.agent ?? {
