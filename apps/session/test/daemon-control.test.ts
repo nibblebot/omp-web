@@ -564,6 +564,7 @@ describe("daemon-control replay ring releases evicted frames (WIRE-18)", () => {
 		const { control } = makeHarness(undefined, undefined, undefined, undefined, false);
 		openStream(control);
 		const refs: WeakRef<object>[] = [];
+		// Frames are built in a helper so the test body holds no direct reference to them.
 		const mirrorBlob = (): void => {
 			const frame = { type: "state", state: { blob: "x".repeat(1024 * 1024) } };
 			refs.push(new WeakRef(frame));
@@ -573,11 +574,17 @@ describe("daemon-control replay ring releases evicted frames (WIRE-18)", () => {
 		const { ringEntries } = control.status().streams[0]!;
 		// 4 MiB budget over ~1 MiB frames: only the newest few stay ringed.
 		expect(ringEntries).toBeLessThan(5);
-		// Drain microtasks so WeakRef targets created in this job can be collected.
-		await new Promise<void>((resolve) => queueMicrotask(resolve));
-		Bun.gc(true);
-		const retained = refs.filter((ref) => ref.deref() !== undefined).length;
-		expect(retained).toBe(ringEntries);
+		// WeakRef targets created in this job only become collectable after it ends.
+		for (let i = 0; i < 3; i++) {
+			await new Promise<void>((resolve) => queueMicrotask(resolve));
+			Bun.gc(true);
+		}
+		// The collector scans the stack conservatively, so the single most recently
+		// evicted frame may still be pinned by a stale slot. Every older evicted frame
+		// must be gone; an entries array that kept them would hold all of them alive.
+		const evicted = refs.slice(0, refs.length - ringEntries - 1);
+		expect(evicted.length).toBeGreaterThan(30);
+		expect(evicted.filter((ref) => ref.deref() !== undefined)).toHaveLength(0);
 		control.stop();
 	});
 
