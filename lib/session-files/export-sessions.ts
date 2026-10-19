@@ -107,177 +107,148 @@ function parseLine(line: string): unknown {
 	return JSON.parse(line) as unknown;
 }
 
-/** A physical line: text sans `\n`, plus whether it was newline-terminated. */
-interface JsonlLine {
-	text: string;
-	terminated: boolean;
+/** Context tag on every structural-verification error. */
+const STRUCTURE_CONTEXT = "session structural verification";
+
+/**
+ * Incremental form of the structural JSONL predicate (see verifyJsonlStructure).
+ * Feed the file's bytes in order through `push`, then call `finish` once. It
+ * throws the same ledger `unavailable` ExportErrors, in the same line order, as
+ * the whole-file check, so a caller that streams a file while hashing it gets
+ * the identical verdict without a second read.
+ */
+export interface JsonlStructureChecker {
+	push(chunk: Uint8Array): void;
+	finish(): void;
 }
 
-function parseJsonlLines(content: string): JsonlLine[] {
-	const lines: JsonlLine[] = [];
-	let start = 0;
-	for (let index = 0; index < content.length; index++) {
-		if (content.charCodeAt(index) !== 10) continue;
-		lines.push({ text: content.slice(start, index), terminated: true });
-		start = index + 1;
-	}
-	if (start < content.length) {
-		lines.push({ text: content.slice(start), terminated: false });
-	}
-	return lines;
+/**
+ * Structural checker for one declared JSONL: title slot (or header, for legacy
+ * files without a slot) on line 1, then a session header line, then
+ * newline-terminated entries. Every line must be complete JSON and the file
+ * must not end in a partial record. Never recovers.
+ */
+export function createJsonlStructureChecker(absolutePath: string): JsonlStructureChecker {
+	const unavailable = (message: string): ExportError =>
+		asUnavailable(new Error(message), STRUCTURE_CONTEXT, absolutePath);
+	const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+	// Text after the last newline; an unterminated tail is a line only at finish().
+	let partial = "";
+	let lineCount = 0;
+	// first: expecting the title slot or a legacy header; title: expecting the
+	// header after a title slot; entries: header accepted, entries follow.
+	let phase: "first" | "title" | "entries" = "first";
+
+	const consume = (text: string, terminated: boolean): void => {
+		lineCount += 1;
+		if (phase === "entries") {
+			if (text.length === 0 || !terminated) {
+				throw unavailable(`incomplete entry on line ${lineCount} (truncated tail)`);
+			}
+			try {
+				parseLine(text);
+			} catch {
+				throw unavailable(`malformed entry on line ${lineCount}`);
+			}
+			return;
+		}
+		let header: Record<string, unknown>;
+		if (phase === "first") {
+			if (isPersistenceIndeterminateFingerprint(text)) {
+				throw unavailable("session persistence indeterminate artifact: hard blocker");
+			}
+			if (!terminated) throw unavailable("file ends inside the first record");
+			let first: unknown;
+			try {
+				first = parseLine(text);
+			} catch {
+				throw unavailable("first line is not valid JSON");
+			}
+			if (isRecord(first) && titleSlotLineShape(first)) {
+				// Modern layout: the session header is line 2 (even a fresh session
+				// carries header + title slot).
+				phase = "title";
+				return;
+			}
+			if (!isRecord(first) || !headerLineShape(first)) {
+				throw unavailable("first line is neither a title slot nor a session header");
+			}
+			// Legacy layout: no title slot; the header is the first line.
+			header = first;
+		} else {
+			if (!terminated) throw unavailable("file ends before the session header");
+			let parsed: unknown;
+			try {
+				parsed = parseLine(text);
+			} catch {
+				throw unavailable("header line is not valid JSON");
+			}
+			if (!isRecord(parsed) || !headerLineShape(parsed)) {
+				throw unavailable("line after title slot is not a session header");
+			}
+			header = parsed;
+		}
+		if (typeof header.id !== "string" || header.id === "") {
+			throw unavailable("session header has no id");
+		}
+		// NOTE: the header id is a minted session UUID that does NOT equal the
+		// filename stem: the SDK names main files `<timestamp>_<id>.jsonl` and
+		// fork files `<agentId>.jsonl`, so filename↔header-id equality is NOT an
+		// invariant and is never asserted here. Lineage identity comes from the
+		// file's path (which session dir / artifact subtree it lives under), not
+		// from the header.
+		phase = "entries";
+	};
+
+	return {
+		push(chunk: Uint8Array): void {
+			const text = decoder.decode(chunk, { stream: true });
+			let start = 0;
+			let newline = text.indexOf("\n");
+			while (newline !== -1) {
+				consume(partial + text.slice(start, newline), true);
+				partial = "";
+				start = newline + 1;
+				newline = text.indexOf("\n", start);
+			}
+			partial += text.slice(start);
+		},
+		finish(): void {
+			partial += decoder.decode();
+			if (partial.length > 0) {
+				const tail = partial;
+				partial = "";
+				consume(tail, false);
+			}
+			if (lineCount === 0) {
+				throw unavailable("empty JSONL file");
+			}
+			if (phase === "title") {
+				throw unavailable("file ends before the session header");
+			}
+		},
+	};
 }
 
 /**
  * Structural read verification of one declared JSONL (P0.3 finding,
- * load-bearing): title slot (or header, for legacy files without a slot) on
- * line 1, then a session header line, then newline-terminated entries. Every
- * line must be complete JSON and the file must not end in a partial record.
- * Throws ledger `unavailable`/`conflict` ExportErrors; never recovers.
+ * load-bearing); see createJsonlStructureChecker for the rules. Throws ledger
+ * `unavailable`/`conflict` ExportErrors; never recovers.
  */
 export function verifyJsonlStructure(absolutePath: string, sessionId: string): void {
-	const lines = parseJsonlLines(readFileText(absolutePath));
-	if (lines.length === 0) {
-		throw asUnavailable(
-			new Error("empty JSONL file"),
-			"session structural verification",
-			absolutePath,
-		);
-	}
-	const fingerprint = lines[0]?.text ?? "";
-	if (isPersistenceIndeterminateFingerprint(fingerprint)) {
-		throw asUnavailable(
-			new Error("session persistence indeterminate artifact: hard blocker"),
-			"session structural verification",
-			absolutePath,
-		);
-	}
-
-	// A partial first line cannot be a well-formed session/title record.
-	if (!(lines[0]?.terminated ?? false)) {
-		throw asUnavailable(
-			new Error("file ends inside the first record"),
-			"session structural verification",
-			absolutePath,
-		);
-	}
-
-	// Track which line is the session header. A modern file puts the title slot
-	// on line 1 and the header on line 2; a legacy file starts with the header.
-	let headerIndex = -1;
-	let current = 0;
-	let first: unknown;
+	const checker = createJsonlStructureChecker(absolutePath);
+	const fd = openSync(absolutePath, "r");
 	try {
-		first = parseLine(lines[current]?.text ?? "");
-	} catch {
-		throw asUnavailable(
-			new Error("first line is not valid JSON"),
-			"session structural verification",
-			absolutePath,
-		);
-	}
-	if (isRecord(first) && titleSlotLineShape(first)) {
-		// Modern layout: title slot on line 1, session header on line 2 (even
-		// a fresh session with no entries yet carries header + title slot).
-		current = 1;
-		if (current >= lines.length || !(lines[current]?.terminated ?? false)) {
-			throw asUnavailable(
-				new Error("file ends before the session header"),
-				"session structural verification",
-				absolutePath,
-			);
-		}
-		let header: unknown;
-		try {
-			header = parseLine(lines[current]?.text ?? "");
-		} catch {
-			throw asUnavailable(
-				new Error("header line is not valid JSON"),
-				"session structural verification",
-				absolutePath,
-			);
-		}
-		if (!isRecord(header) || !headerLineShape(header)) {
-			throw asUnavailable(
-				new Error("line after title slot is not a session header"),
-				"session structural verification",
-				absolutePath,
-			);
-		}
-		headerIndex = current;
-		current += 1;
-	} else if (isRecord(first) && headerLineShape(first)) {
-		// Legacy layout: no title slot; the header is the first line.
-		headerIndex = 0;
-		current = 1;
-	} else {
-		throw asUnavailable(
-			new Error("first line is neither a title slot nor a session header"),
-			"session structural verification",
-			absolutePath,
-		);
-	}
-
-	const header = parseLine(lines[headerIndex]?.text ?? "");
-	if (headerIndex < 0 || !isRecord(header) || !headerLineShape(header)) {
-		throw asUnavailable(
-			new Error("missing session header"),
-			"session structural verification",
-			absolutePath,
-		);
-	}
-	if (typeof header.id !== "string" || header.id === "") {
-		throw asUnavailable(
-			new Error("session header has no id"),
-			"session structural verification",
-			absolutePath,
-		);
-	}
-	// NOTE: the header id is a minted session UUID that does NOT equal the
-	// filename stem: the SDK names main files `<timestamp>_<id>.jsonl` and
-	// fork files `<agentId>.jsonl`, so filename↔header-id equality is NOT an
-	// invariant and is never asserted here. Lineage identity comes from the
-	// file's path (which session dir / artifact subtree it lives under), not
-	// from the header.
-
-	// Remaining lines are entries; each must be complete JSON on a
-	// newline-terminated line. A partial (unterminated) tail fails: a
-	// truncated file is exactly what this check exists to catch.
-	for (let index = current; index < lines.length; index++) {
-		const line = lines[index] ?? { text: "", terminated: false };
-		if (line.text.length === 0 || !line.terminated) {
-			throw asUnavailable(
-				new Error(`incomplete entry on line ${index + 1} (truncated tail)`),
-				"session structural verification",
-				absolutePath,
-			);
-		}
-		try {
-			parseLine(line.text);
-		} catch {
-			throw asUnavailable(
-				new Error(`malformed entry on line ${index + 1}`),
-				"session structural verification",
-				absolutePath,
-			);
-		}
-	}
-}
-
-/** Read a UTF-8 text file's bytes as a string (whole-file; bounded by size checks upstream). */
-function readFileText(filePath: string): string {
-	const fd = openSync(filePath, "r");
-	try {
-		const chunks: Buffer[] = [];
 		const buffer = Buffer.alloc(READ_BUFFER_BYTES);
 		for (;;) {
 			const read = readSync(fd, buffer, 0, buffer.length, null);
 			if (read <= 0) break;
-			chunks.push(Buffer.from(buffer.subarray(0, read)));
+			checker.push(buffer.subarray(0, read));
 		}
-		return Buffer.concat(chunks).toString("utf8");
 	} finally {
 		closeSync(fd);
 	}
+	checker.finish();
 }
 
 function isWithinReal(realPath: string, realRoot: string): boolean {

@@ -5,8 +5,17 @@
  * No live daemons, no filesystem root scanning (removed with `roots`).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import {
+	chmod,
+	mkdtemp,
+	mkdir,
+	readFile,
+	realpath,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +28,7 @@ import {
 	validateProjectPath,
 } from "../discovery";
 import type { GitResult, GitRunner } from "../discovery";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 /** `git worktree list --porcelain` for acme: main + feature worktree + detached worktree. */
 const PORCELAIN_FIXTURE = [
@@ -426,4 +436,81 @@ describe("parseWorktreeList", () => {
 			{ path: "/srv/repos/bare.git", detached: false, bare: true, locked: false, prunable: false },
 		]);
 	});
+});
+
+describe("runGit deadline", () => {
+	afterAll(cleanupTempDirs);
+
+	/** Absolute path of the module the child process imports. */
+	const DISCOVERY_MODULE = new URL("../discovery.ts", import.meta.url).pathname;
+
+	/**
+	 * Runs runGit in a child Bun process whose startup PATH puts a fake `git`
+	 * (a POSIX shell script running `body`) first. Bun resolves executables from
+	 * the PATH present at process start, so the fake cannot be installed in-process.
+	 */
+	async function runGitWithFakeGit(
+		body: string,
+		timeoutMs: number,
+	): Promise<{ exitCode: number; elapsedMs: number }> {
+		const fakeBin = tempDir("discovery-fake-git-");
+		const script = join(fakeBin, "git");
+		await writeFile(script, `#!/bin/sh\n${body}\n`);
+		await chmod(script, 0o755);
+		const cwd = tempDir("discovery-git-cwd-");
+		const resultFile = join(tempDir("discovery-git-result-"), "result.json");
+		// The child reports through a file and exits explicitly: a grandchild that
+		// keeps the abandoned git pipes open would otherwise hold the child alive.
+		const child = `import { runGit } from ${JSON.stringify(DISCOVERY_MODULE)};
+(async () => {
+const started = Date.now();
+const result = await runGit(["status"], ${JSON.stringify(cwd)}, { timeoutMs: ${timeoutMs} });
+await Bun.write(${JSON.stringify(resultFile)}, JSON.stringify({ exitCode: result.exitCode, elapsedMs: Date.now() - started }));
+process.exit(0);
+})();`;
+		const proc = Bun.spawn([process.execPath, "-e", child], {
+			env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}` },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+		if (exitCode !== 0) throw new Error(`runGit child exited ${exitCode}: ${stderr}`);
+		return JSON.parse(await readFile(resultFile, "utf8"));
+	}
+
+	function processAlive(pid: number): boolean {
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	test("kills a hung git at the deadline", async () => {
+		const pidFile = join(tempDir("discovery-git-pid-"), "pid");
+		const { exitCode, elapsedMs } = await runGitWithFakeGit(
+			`echo $$ > '${pidFile}'\nexec sleep 30`,
+			1_000,
+		);
+		expect(elapsedMs).toBeLessThan(5_000);
+		expect(exitCode).toBe(124);
+		const pid = Number((await readFile(pidFile, "utf8")).trim());
+		expect(processAlive(pid)).toBe(false);
+	}, 20_000);
+
+	test("does not stall on a grandchild that holds git's output pipes", async () => {
+		const grandPidFile = join(tempDir("discovery-git-pid-"), "grandchild");
+		try {
+			const { exitCode, elapsedMs } = await runGitWithFakeGit(
+				`sleep 30 &\necho $! > '${grandPidFile}'\nexit 0`,
+				1_000,
+			);
+			expect(elapsedMs).toBeLessThan(5_000);
+			expect(exitCode).toBe(124);
+		} finally {
+			const pid = Number((await readFile(grandPidFile, "utf8").catch(() => "")).trim());
+			if (pid > 0 && processAlive(pid)) process.kill(pid, "SIGKILL");
+		}
+	}, 20_000);
 });

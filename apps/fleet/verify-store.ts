@@ -1,13 +1,6 @@
 import { createHash } from "node:crypto";
-import {
-	closeSync,
-	lstatSync,
-	openSync,
-	readSync,
-	readdirSync,
-	readFileSync,
-	realpathSync,
-} from "node:fs";
+import type { Stats } from "node:fs";
+import { lstat, open, readFile, readdir, realpath } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import {
 	ExportError,
@@ -23,8 +16,8 @@ import {
 	MAX_EXPORT_BYTES,
 	MAX_EXPORT_FILES,
 	classifyLineageEntry,
+	createJsonlStructureChecker,
 	isMainRelpath,
-	verifyJsonlStructure,
 } from "#lib/session-files/export-sessions";
 
 // ---------------------------------------------------------------------------
@@ -206,6 +199,16 @@ function toPosixRelpath(sessionDir: string, absolute: string): string {
 	return relative(sessionDir, absolute).split(sep).join("/");
 }
 
+/** lstat that maps a missing entry (ENOENT) to undefined; other errors throw. */
+async function lstatIfExists(absolute: string): Promise<Stats | undefined> {
+	try {
+		return await lstat(absolute);
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
 /** A data file discovered under a session dir (sidecar excluded). */
 interface SessionDataFile {
 	absolute: string;
@@ -228,16 +231,33 @@ interface SessionIndex {
 type IndexRead = SessionIndex | VerifyResult;
 type TreeWalk = SessionTree | VerifyResult;
 
+/** One declared file after the verification pass: its digest feeds the manifest. */
+interface HashedFile {
+	relpath: string;
+	size: number;
+	sha256: string;
+}
+
+/** A verified session plus the digests its single pass computed. */
+interface HashedSession {
+	session: VerifiedSession;
+	hashed: HashedFile[];
+}
+
 /**
  * Parse and shape-validate the session sidecar against the frozen
  * LogStoreIndex shape. Unknown top-level or per-stream fields are rejected
  * (a gap marker or drifted schema is exactly an inconsistent index).
  */
-function readSessionIndex(sessionDir: string, workspaceId: string, sessionId: string): IndexRead {
+async function readSessionIndex(
+	sessionDir: string,
+	workspaceId: string,
+	sessionId: string,
+): Promise<IndexRead> {
 	const indexPath = join(sessionDir, INDEX_NAME);
 	let info;
 	try {
-		info = lstatSync(indexPath, { throwIfNoEntry: false });
+		info = await lstatIfExists(indexPath);
 	} catch (error) {
 		return fail(
 			"unavailable",
@@ -257,7 +277,7 @@ function readSessionIndex(sessionDir: string, workspaceId: string, sessionId: st
 
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(readFileSync(indexPath, "utf8"));
+		parsed = JSON.parse(await readFile(indexPath, "utf8"));
 	} catch (error) {
 		return fail(
 			"conflict",
@@ -350,12 +370,13 @@ function readSessionIndex(sessionDir: string, workspaceId: string, sessionId: st
  * enforcing the workspace-wide traversal bounds. Session-root store internals
  * (the index.json sidecar and stale *.tmp rewrite leftovers) are skipped;
  * nested `.tmp` names are never legitimate lineage and fail relpath safety.
+ * Every entry is lstat'd, never stat'd, so no symlink is followed: with the
+ * logs root resolved once by the caller, every walked path is inside the store.
  */
-function walkSessionTree(
+async function walkSessionTree(
 	sessionDir: string,
-	sessionReal: string,
 	bounds: { files: number; bytes: number },
-): TreeWalk {
+): Promise<TreeWalk> {
 	const files = new Map<string, SessionDataFile>();
 	const dirs = new Set<string>();
 	const stack: string[] = [sessionDir];
@@ -363,7 +384,7 @@ function walkSessionTree(
 		const current = stack.pop()!;
 		let entries;
 		try {
-			entries = readdirSync(current, { withFileTypes: true });
+			entries = await readdir(current, { withFileTypes: true });
 		} catch (error) {
 			return fail(
 				"unavailable",
@@ -375,7 +396,7 @@ function walkSessionTree(
 			const absolute = join(current, entry.name);
 			let info;
 			try {
-				info = lstatSync(absolute, { throwIfNoEntry: false });
+				info = await lstatIfExists(absolute);
 			} catch (error) {
 				return fail(
 					"unavailable",
@@ -402,19 +423,6 @@ function walkSessionTree(
 			if (!isSafeStreamRelpath(relpath)) {
 				return fail("conflict", `unsafe stored path: ${relpath}`, relpath);
 			}
-			let real: string;
-			try {
-				real = realpathSync(absolute);
-			} catch (error) {
-				return fail(
-					"unavailable",
-					`cannot resolve ${relpath}: ${(error as Error).message}`,
-					relpath,
-				);
-			}
-			if (real !== sessionReal && !real.startsWith(`${sessionReal}/`)) {
-				return fail("conflict", `path escapes session directory: ${relpath}`, relpath);
-			}
 			bounds.files += 1;
 			if (bounds.files > MAX_FILES) {
 				return fail("unavailable", `verification exceeds ${MAX_FILES} files`, relpath);
@@ -431,23 +439,25 @@ function walkSessionTree(
 
 /**
  * Reconcile the sidecar against the walked tree (offset-contiguity, complete
- * declared set, no unindexed files) and run the retained structural JSONL
- * verification on every declared `.jsonl`. Returns the session inventory.
+ * declared set, no unindexed files). In one streamed pass per declared file,
+ * the bytes feed both the sha256 digest and, for `.jsonl`, the structural
+ * checker. Returns the session inventory plus the digests the manifest is
+ * built from, so nothing is read twice.
  */
-function verifySession(
+async function verifySession(
 	sessionDir: string,
-	sessionReal: string,
 	workspaceId: string,
 	sessionId: string,
 	bounds: { files: number; bytes: number },
-): VerifiedSession | VerifyResult {
-	const indexRead = readSessionIndex(sessionDir, workspaceId, sessionId);
+): Promise<HashedSession | VerifyResult> {
+	const indexRead = await readSessionIndex(sessionDir, workspaceId, sessionId);
 	if (!("streams" in indexRead)) return indexRead;
 	const { streams } = indexRead;
-	const treeWalk = walkSessionTree(sessionDir, sessionReal, bounds);
+	const treeWalk = await walkSessionTree(sessionDir, bounds);
 	if (!("files" in treeWalk)) return treeWalk;
 	const { files, dirs } = treeWalk;
 
+	const hashed: HashedFile[] = [];
 	let bytes = 0;
 	for (const [relpath, entry] of streams) {
 		if (!isSafeStreamRelpath(relpath)) {
@@ -471,29 +481,42 @@ function verifySession(
 				relpath,
 			);
 		}
-		if (relpath.endsWith(JSONL_SUFFIX)) {
-			// Each lineage file is its own SDK session with its own header id
-			// (subagent/advisor transcripts carry their own ids inside the
-			// main's artifact dir). Expected id = the file's basename stem.
-			const base = relpath.slice(relpath.lastIndexOf("/") + 1);
-			const stem = base.slice(0, -JSONL_SUFFIX.length);
-			try {
-				verifyJsonlStructure(dataFile.absolute, stem);
-			} catch (error) {
-				if (error instanceof ExportError) {
-					return fail(
-						error.code === "unavailable" ? "unavailable" : "conflict",
-						`session ${sessionId}: ${error.message}`,
-						relpath,
-					);
-				}
+		const hash = createHash("sha256");
+		// Each lineage file is its own SDK session with its own header id
+		// (subagent/advisor transcripts carry their own ids inside the main's
+		// artifact dir), so the structural check takes no expected id.
+		const checker = relpath.endsWith(JSONL_SUFFIX)
+			? createJsonlStructureChecker(dataFile.absolute)
+			: undefined;
+		let read: number;
+		try {
+			read = await streamFileChunks(dataFile.absolute, (chunk) => {
+				hash.update(chunk);
+				checker?.push(chunk);
+			});
+			checker?.finish();
+		} catch (error) {
+			if (error instanceof ExportError) {
 				return fail(
-					"unavailable",
-					`session ${sessionId}: structural verification failed: ${(error as Error).message}`,
+					error.code === "unavailable" ? "unavailable" : "conflict",
+					`session ${sessionId}: ${error.message}`,
 					relpath,
 				);
 			}
+			return fail(
+				"unavailable",
+				`session ${sessionId}: cannot read ${relpath}: ${(error as Error).message}`,
+				relpath,
+			);
 		}
+		if (read !== dataFile.size) {
+			return fail(
+				"unavailable",
+				`stream ${relpath} of session ${sessionId} changed during verification`,
+				relpath,
+			);
+		}
+		hashed.push({ relpath, size: dataFile.size, sha256: hash.digest("hex") });
 		bytes += dataFile.size;
 	}
 	// Files on disk without an index entry: a crash between the append fsync
@@ -507,11 +530,12 @@ function verifySession(
 			);
 		}
 	}
-	return { sessionId, files: streams.size, bytes };
+	return { session: { sessionId, files: streams.size, bytes }, hashed };
 }
 
 /**
- * Build the manifest entry list for one session from its verified tree.
+ * Build the manifest entry list for one session from the digests its verified
+ * pass produced (no second read).
  *
  * Kind classification and lineage parentPath follow the shared rule
  * (export-sessions.classifyLineageEntry) applied to the store's relpaths:
@@ -519,81 +543,57 @@ function verifySession(
  * (the daemon streams one session id per subtree); mains at depth 1
  * (`<sessionId>.jsonl`), artifacts nested below. Entries are sorted by
  * relpath for deterministic export ids.
- *
- * Hashing each file streams it once in bounded chunks under the same
- * 10k-file / 16 GiB budget the walk already enforced (the manifest only
- * covers files the gate verified; a mid-hash fs failure surfaces typed).
  */
-async function buildSessionManifestFiles(
-	sessionDir: string,
-	verified: VerifiedSession,
-): Promise<ManifestFile[]> {
-	const walked = walkSessionTree(sessionDir, sessionDir, { files: 0, bytes: 0 });
-	if (!("files" in walked)) {
-		// Only store hazards can fail the walk (walkSessionTree returns typed
-		// failures, never an ok result); surface typed, never fabricate a
-		// manifest over a tree that failed re-verification.
-		if (walked.ok) {
-			throw new ExportError("unavailable", "session tree walk returned an unexpected result");
-		}
-		throw new ExportError(walked.code, walked.message, walked.path);
-	}
-	const files = walked.files;
-	// The store's session dir is the lineage tree of ONE session key
-	// (verified.sessionId). The daemon names the main file `<sessionId>.jsonl`
-	// at depth 1 (root) or `<proj>/<sessionId>.jsonl` at depth 2 (project),
-	// so the key's main relpath is the file whose basename is
-	// `<sessionId>.jsonl` and whose depth is ≤ 2.
-	const ordered = [...files.keys()].sort();
+function buildSessionManifestFiles(sessionId: string, hashed: HashedFile[]): ManifestFile[] {
+	const ordered = [...hashed].sort((a, b) => (a.relpath < b.relpath ? -1 : 1));
 	const mainRels = new Set<string>();
-	for (const relpath of ordered) {
-		if (isMainRelpath(relpath, verified.sessionId)) mainRels.add(relpath);
+	for (const file of ordered) {
+		if (isMainRelpath(file.relpath, sessionId)) mainRels.add(file.relpath);
 	}
-	const manifestFiles: ManifestFile[] = [];
-	for (const relpath of ordered) {
-		const entry = files.get(relpath)!;
-		let sha256: string;
-		try {
-			sha256 = await sha256File(entry.absolute);
-		} catch (error) {
-			throw new ExportError(
-				"unavailable",
-				`cannot hash ${relpath} of session ${verified.sessionId}: ${(error as Error).message}`,
-			);
-		}
-		const classified = classifyLineageEntry(relpath, mainRels);
-		const file: ManifestFile = {
-			path: relpath,
-			size: entry.size,
-			sha256,
+	return ordered.map((file) => {
+		const classified = classifyLineageEntry(file.relpath, mainRels);
+		const manifestFile: ManifestFile = {
+			path: file.relpath,
+			size: file.size,
+			sha256: file.sha256,
 			kind: classified.kind,
 			sessionId: classified.sessionId,
 		};
-		if (classified.parentPath !== undefined) file.parentPath = classified.parentPath;
-		manifestFiles.push(file);
-	}
-	return manifestFiles;
+		if (classified.parentPath !== undefined) manifestFile.parentPath = classified.parentPath;
+		return manifestFile;
+	});
 }
 
 /**
- * sha256 of a file streamed in fixed-size chunks (never whole-file buffered),
- * mirroring the export pipeline's copyFileHashed read loop. Caller maps
- * failures (incl. mid-read ENOENT on a vanished file) onto the verify error
- * vocabulary.
+ * Stream a file through `visit` in bounded chunks (never whole-file buffered).
+ * `visit` receives a view into one reused buffer, so it must consume the chunk
+ * synchronously. Resolves to the total bytes read; rejects on any fs failure
+ * (callers map it onto the verify error vocabulary).
  */
-function sha256File(absolute: string): string {
-	const hash = createHash("sha256");
-	const fd = openSync(absolute, "r");
-	const buffer = Buffer.alloc(HASH_BUFFER_BYTES);
+async function streamFileChunks(
+	absolute: string,
+	visit: (chunk: Uint8Array) => void,
+): Promise<number> {
+	const handle = await open(absolute, "r");
 	try {
+		const buffer = Buffer.alloc(HASH_BUFFER_BYTES);
+		let total = 0;
 		for (;;) {
-			const read = readSync(fd, buffer, 0, buffer.length, null);
-			if (read <= 0) break;
-			hash.update(buffer.subarray(0, read));
+			const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+			if (bytesRead <= 0) break;
+			visit(buffer.subarray(0, bytesRead));
+			total += bytesRead;
 		}
+		return total;
 	} finally {
-		closeSync(fd);
+		await handle.close();
 	}
+}
+
+/** sha256 hex of a file, streamed in bounded chunks. Rejects on fs failure. */
+export async function sha256OfFile(absolute: string): Promise<string> {
+	const hash = createHash("sha256");
+	await streamFileChunks(absolute, (chunk) => hash.update(chunk));
 	return hash.digest("hex");
 }
 
@@ -618,11 +618,23 @@ export async function verifyWorkspaceLogs(opts: VerifyWorkspaceLogsOptions): Pro
 	if (!isSafeId(workspaceId)) {
 		return fail("invalid_request", `workspaceId is not a safe component: ${workspaceId}`);
 	}
-	const workspaceDir = join(logsRoot, workspaceId);
+	// Resolve the logs root once: every path below is built from the real root,
+	// so a symlinked root is followed here and nowhere else. A missing root has
+	// nothing streamed.
+	let logsReal: string;
+	try {
+		logsReal = await realpath(logsRoot);
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+			return { ok: true, sessions: [] };
+		}
+		return fail("unavailable", `cannot resolve logs root: ${(error as Error).message}`, logsRoot);
+	}
+	const workspaceDir = join(logsReal, workspaceId);
 
 	let wsInfo;
 	try {
-		wsInfo = lstatSync(workspaceDir, { throwIfNoEntry: false });
+		wsInfo = await lstatIfExists(workspaceDir);
 	} catch (error) {
 		return fail(
 			"unavailable",
@@ -642,7 +654,7 @@ export async function verifyWorkspaceLogs(opts: VerifyWorkspaceLogsOptions): Pro
 
 	let entries;
 	try {
-		entries = readdirSync(workspaceDir, { withFileTypes: true });
+		entries = await readdir(workspaceDir, { withFileTypes: true });
 	} catch (error) {
 		return fail(
 			"unavailable",
@@ -665,13 +677,14 @@ export async function verifyWorkspaceLogs(opts: VerifyWorkspaceLogsOptions): Pro
 	}
 	sessionIds.sort();
 
+	const expectedFiles: ManifestFile[] = [];
 	const bounds = { files: 0, bytes: 0 };
 	const verified: VerifiedSession[] = [];
 	for (const sessionId of sessionIds) {
 		const sessionDir = join(workspaceDir, sessionId);
 		let sessionInfo;
 		try {
-			sessionInfo = lstatSync(sessionDir, { throwIfNoEntry: false });
+			sessionInfo = await lstatIfExists(sessionDir);
 		} catch (error) {
 			return fail(
 				"unavailable",
@@ -686,25 +699,10 @@ export async function verifyWorkspaceLogs(opts: VerifyWorkspaceLogsOptions): Pro
 		if (!sessionInfo.isDirectory()) {
 			return fail("conflict", `session path is not a directory: ${sessionId}`, sessionId);
 		}
-		let sessionReal: string;
-		try {
-			sessionReal = realpathSync(sessionDir);
-		} catch (error) {
-			return fail(
-				"unavailable",
-				`cannot resolve session ${sessionId}: ${(error as Error).message}`,
-				sessionId,
-			);
-		}
-		const result = verifySession(sessionDir, sessionReal, workspaceId, sessionId, bounds);
-		if (!("sessionId" in result)) return result;
-		verified.push(result);
-	}
-	const expectedFiles: ManifestFile[] = [];
-	for (const session of verified) {
-		expectedFiles.push(
-			...(await buildSessionManifestFiles(join(workspaceDir, session.sessionId), session)),
-		);
+		const result = await verifySession(sessionDir, workspaceId, sessionId, bounds);
+		if (!("session" in result)) return result;
+		verified.push(result.session);
+		expectedFiles.push(...buildSessionManifestFiles(sessionId, result.hashed));
 	}
 	const workspaceIdForCompare = workspaceId;
 	if (opts.expectedManifest !== undefined) {

@@ -45,35 +45,57 @@ export const GIT_TIMEOUT_MS = 10_000;
 /** Exit code reported for a git call killed by the timeout (coreutils `timeout` convention). */
 const GIT_TIMEOUT_EXIT = 124;
 
+export interface RunGitOptions {
+	/** Deadline for the whole call; the child is SIGKILLed when it passes. Defaults to GIT_TIMEOUT_MS. */
+	timeoutMs?: number;
+}
+
 /**
  * Default git runner: `git --no-optional-locks -C <cwd> <args>` via Bun.spawn.
  * `--no-optional-locks` keeps read-only probes from taking the index lock a
- * user's concurrent git command needs. A call exceeding GIT_TIMEOUT_MS is
- * killed and reported as a failed call.
+ * user's concurrent git command needs. A call still running at its deadline
+ * is SIGKILLed and reported as exit 124. Its output pipes are abandoned, not
+ * drained, so a grandchild that holds them open cannot stall the caller.
  */
-export async function runGit(args: string[], cwd: string): Promise<GitResult> {
+export async function runGit(
+	args: string[],
+	cwd: string,
+	opts: RunGitOptions = {},
+): Promise<GitResult> {
+	const timeoutMs = opts.timeoutMs ?? GIT_TIMEOUT_MS;
+	let cancelDeadline = (): void => {};
 	try {
 		const proc = Bun.spawn(["git", "--no-optional-locks", "-C", cwd, ...args], {
 			stdout: "pipe",
 			stderr: "pipe",
 		});
-		let timedOut = false;
-		const timer = setTimeout(() => {
-			timedOut = true;
-			proc.kill();
-		}, GIT_TIMEOUT_MS);
-		try {
-			const [stdout, stderr] = await Promise.all([
-				Bun.readableStreamToText(proc.stdout),
-				Bun.readableStreamToText(proc.stderr),
-			]);
-			const exitCode = await proc.exited;
-			return { exitCode: timedOut ? GIT_TIMEOUT_EXIT : (exitCode ?? 127), stdout, stderr };
-		} finally {
-			clearTimeout(timer);
+		const finished = Promise.all([
+			Bun.readableStreamToText(proc.stdout),
+			Bun.readableStreamToText(proc.stderr),
+			proc.exited,
+		]);
+		// A read abandoned at the deadline may fail later; that must not surface as an unhandled rejection.
+		finished.catch(() => undefined);
+		const deadline = new Promise<null>((resolve) => {
+			const timer = setTimeout(() => resolve(null), timeoutMs);
+			cancelDeadline = () => clearTimeout(timer);
+		});
+		const settled = await Promise.race([finished, deadline]);
+		if (settled === null) {
+			proc.kill("SIGKILL");
+			await proc.exited;
+			return {
+				exitCode: GIT_TIMEOUT_EXIT,
+				stdout: "",
+				stderr: `git timed out after ${timeoutMs}ms`,
+			};
 		}
+		const [stdout, stderr, exitCode] = settled;
+		return { exitCode: exitCode ?? 127, stdout, stderr };
 	} catch (err) {
 		return { exitCode: 127, stdout: "", stderr: String(err) };
+	} finally {
+		cancelDeadline();
 	}
 }
 

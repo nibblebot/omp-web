@@ -130,6 +130,53 @@ describe("verifyWorkspaceLogs deletion gate", () => {
 		});
 	});
 
+	test("authorizes a complete lineage reached through a symlinked logs root", async () => {
+		const { rootDir, store } = freshStore();
+		writeCompleteLineage(store);
+		const linkRoot = join(tempDir("verify-store-link-"), "logs");
+		symlinkSync(rootDir, linkRoot);
+		const registry = {
+			projectId: "proj-1",
+			workspaceName: "Demo workspace",
+			resolvedCommit: "abc123",
+		};
+		const direct = await verifyWorkspaceLogs({
+			logsRoot: rootDir,
+			workspaceId: WORKSPACE_ID,
+			registry,
+		});
+		const viaLink = await verifyWorkspaceLogs({
+			logsRoot: linkRoot,
+			workspaceId: WORKSPACE_ID,
+			registry,
+		});
+		expect(direct.ok).toBe(true);
+		if (!direct.ok || !viaLink.ok) throw new Error("symlinked logs root was refused");
+		expect(viaLink.sessions).toEqual(direct.sessions);
+		expect(viaLink.exportId).toBe(direct.exportId);
+		expect(direct.manifest).toBeDefined();
+		expect(viaLink.manifest?.files).toEqual(direct.manifest?.files);
+	});
+
+	test("hashes a main file spanning several read chunks in one pass", async () => {
+		const { rootDir, store } = freshStore();
+		const filler = `{"type":"message","id":"mX","role":"user","content":[{"type":"text","text":"${"x".repeat(4096)}"}]}\n`;
+		const main = `${TITLE_SLOT}{"type":"session","id":"main-session-uuid","cwd":"/srv/proj"}\n${filler.repeat(200)}`;
+		store.ingest(WORKSPACE_ID, SESSION_ID, MAIN_RELPATH, fullChunk(main));
+		const result = await verifyWorkspaceLogs({
+			logsRoot: rootDir,
+			workspaceId: WORKSPACE_ID,
+			registry: { projectId: "proj-1", workspaceName: "Demo workspace", resolvedCommit: "abc123" },
+		});
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("unreachable");
+		const mainBytes = Buffer.from(main, "utf8");
+		expect(result.sessions).toEqual([{ sessionId: SESSION_ID, files: 1, bytes: mainBytes.length }]);
+		const mainManifest = result.manifest?.files.find((file) => file.path === MAIN_RELPATH);
+		expect(mainManifest?.sha256).toBe(createHash("sha256").update(mainBytes).digest("hex"));
+		expect(mainManifest?.size).toBe(mainBytes.length);
+	});
+
 	test("refuses an incomplete declared stream with a torn partial tail", async () => {
 		const { rootDir, store } = freshStore();
 		const partial = MAIN_CONTENT.slice(0, MAIN_CONTENT.length - 2);

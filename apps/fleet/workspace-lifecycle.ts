@@ -34,7 +34,7 @@
  * the callback base URL); this module has no HTTP surface of its own.
  */
 
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
 	closeSync,
 	existsSync,
@@ -48,7 +48,6 @@ import {
 } from "node:fs";
 import type { Stats } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { Subprocess } from "bun";
 
 import { ENROLLMENT_KEY_BYTES } from "#lib/wire/callback-protocol";
 import type { LifecycleStage, RegisteredProject } from "#lib/wire/protocol";
@@ -68,7 +67,8 @@ import {
 	prepareWorkspace,
 	resolveWorkspacePin,
 } from "#lib/runtime/prepare-workspace";
-import { verifyWorkspaceLogs } from "./verify-store";
+import { runGit } from "./discovery";
+import { sha256OfFile, verifyWorkspaceLogs } from "./verify-store";
 import { MAX_EXPORT_BYTES, MAX_EXPORT_FILES } from "#lib/session-files/export-sessions";
 import {
 	WakeMaterializeError,
@@ -161,73 +161,8 @@ export interface WorkspaceLifecycleDeps {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-function sleep(ms: number): Promise<void> {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	setTimeout(resolve, ms);
-	return promise;
-}
-
-/** One `git -C <cwd> <args>` invocation via explicit argv, never a shell. */
-async function runGit(
-	args: string[],
-	cwd: string,
-	opts?: { timeoutMs?: number },
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-	const child = Bun.spawn(["git", "-C", cwd, ...args], {
-		stdout: "pipe",
-		stderr: "pipe",
-	}) as Subprocess & {
-		stdout: ReadableStream<Uint8Array<ArrayBufferLike>>;
-		stderr: ReadableStream<Uint8Array<ArrayBufferLike>>;
-	};
-	const read = async (stream: ReadableStream<Uint8Array<ArrayBufferLike>>): Promise<string> => {
-		const reader = stream.getReader();
-		const decoder = new TextDecoder();
-		let out = "";
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			out += decoder.decode(value as Buffer, { stream: true });
-		}
-		return out;
-	};
-	const [stdout, stderr] = await Promise.all([read(child.stdout), read(child.stderr)]);
-	const timedOut = await Promise.race([
-		child.exited.then(() => false),
-		sleep(opts?.timeoutMs ?? 15_000).then(() => true),
-	]);
-	if (timedOut) {
-		child.kill("SIGKILL");
-		await child.exited.catch(() => {
-			// Exit may reject if the child was never reaped; ignore.
-		});
-		return { exitCode: 124, stdout, stderr: `${stderr}\ngit timed out` };
-	}
-	await child.exited.catch(() => {
-		// Handled below through exitCode.
-	});
-	return { exitCode: child.exitCode ?? 1, stdout, stderr };
-}
-
-/** sha256 hex of a file read via a bounded chunk stream. */
-async function sha256File(absolute: string): Promise<string> {
-	const hash = createHash("sha256");
-	const file = Bun.file(absolute);
-	const stream = file.stream();
-	const reader = stream.getReader();
-	const chunk = new Uint8Array(256 * 1024);
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		let offset = 0;
-		while (offset < value.length) {
-			const take = Math.min(chunk.length, value.length - offset);
-			hash.update(value.subarray(offset, offset + take));
-			offset += take;
-		}
-	}
-	return hash.digest("hex");
-}
+/** Budget for the clone-deletion `git fetch origin`; a slow or offline remote falls through to cached refs. */
+const GIT_FETCH_TIMEOUT_MS = 15_000;
 
 /** One volume file the completeness cross-check compares against the store. */
 interface VolumeFile {
@@ -1465,8 +1400,8 @@ export class WorkspaceLifecycle {
 		// best-effort (offline is fine; the count below is conservative
 		// against the last known refs), then count commits not reachable
 		// from any origin ref.
-		await runGit(["fetch", "--quiet", "--no-tags", "origin"], checkoutDir).catch(() => {
-			// Offline: fall through to the last known remote-tracking refs.
+		await runGit(["fetch", "--quiet", "--no-tags", "origin"], checkoutDir, {
+			timeoutMs: GIT_FETCH_TIMEOUT_MS,
 		});
 		const unpushed = await runGit(
 			["rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
@@ -1622,7 +1557,7 @@ export class WorkspaceLifecycle {
 				};
 			}
 			const absolute = join(volumeRoot, ".home", "agent", "sessions", file.sessionId, file.relpath);
-			const sha = await sha256File(absolute);
+			const sha = await sha256OfFile(absolute);
 			if (sha !== side.sha256) {
 				return {
 					ok: false,
