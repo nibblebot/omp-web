@@ -24,7 +24,6 @@ import { resolveRoleModelFull } from "@oh-my-pi/pi-coding-agent/session/role-mod
 import { cfgTaskAgentModelOverrides } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import type {
-	AbortOptions,
 	ModelBrowserEntry,
 	ModelInfo,
 	ModelLockReason,
@@ -425,15 +424,13 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			entry.queuedCommands.commands.length = 0;
 			return entry.session.clearQueue();
 		},
-		abort: async (entry, a) => {
-			const options = (a[0] ?? {}) as AbortOptions;
+		abort: async (entry) => {
 			// Stop always cancels a pending ask, even when the SDK's signal never reaches it.
 			cancelEntryUiRequests(entry);
 			holdQueuedMessages(entry.session, entry.pausedQueue);
 			// Stop also holds queued slash commands until Resume queue.
 			entry.queuedCommands.paused = true;
 			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
-			if (options.keepSubagents) return;
 			for (const [id, snapshot] of entry.subagentSnapshots) {
 				if (snapshot.status === "pending" || snapshot.status === "running") {
 					await deps.collab.abortSubagent(entry, id).catch(() => {});

@@ -1,7 +1,7 @@
 /**
- * Regression tests for the Stop + queue client actions (hs2p): a chip removes
- * the clicked message by identity, Stop can keep subagents running, and an
- * aborted turn reloads with its Interrupted marker.
+ * Regression tests for the queue client actions (hs2p): a chip removes the
+ * clicked message by identity, and an aborted turn reloads with its
+ * Interrupted marker.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -18,7 +18,6 @@ import {
 	setPromptInsert,
 	setState,
 	state,
-	stopTurn,
 } from "../state";
 import {
 	FakeEventSource,
@@ -99,17 +98,6 @@ describe("queued edit restores attachments", () => {
 			files: [expect.objectContaining({ name: "spec.md", text: "# Spec" })],
 		});
 		setPromptInsert(null);
-	});
-});
-
-describe("Stop", () => {
-	test("stopTurn() aborts and asks the server to stop subagents too", async () => {
-		const done = stopTurn();
-		await flushMicrotasks();
-		const [cmd] = callsTo("abort");
-		expect(cmd?.args).toEqual([]);
-		dispatch(callResult(cmd!.id, undefined));
-		await done;
 	});
 });
 

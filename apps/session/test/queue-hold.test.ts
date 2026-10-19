@@ -266,16 +266,10 @@ describe("Stop preserves the queue (abort row)", () => {
 		]);
 	});
 
-	test("Stop aborts only active subagents, and keepSubagents leaves them running", async () => {
-		const queue: FakeQueue = { steering: [], followUp: [] };
-		const first = stopEntry(queue, []);
-		await first.methods.abort!(first.entry, []);
-		expect(first.aborts.subagentsAborted).toEqual(["run"]);
-
-		const second = stopEntry(queue, []);
-		await second.methods.abort!(second.entry, [{ keepSubagents: true }]);
-		expect(second.aborts.subagentsAborted).toEqual([]);
-		expect(second.aborts.options).toEqual([{ reason: expect.any(String) }]);
+	test("Stop aborts only active subagents", async () => {
+		const { entry, methods, aborts } = stopEntry({ steering: [], followUp: [] }, []);
+		await methods.abort!(entry, []);
+		expect(aborts.subagentsAborted).toEqual(["run"]);
 	});
 });
 

@@ -194,10 +194,6 @@ export interface QueuedCommandRef {
 	index: number;
 	text: string;
 }
-/** Options for `abort`. Stop aborts the turn's running subagents unless `keepSubagents` is set. */
-export interface AbortOptions {
-	keepSubagents?: boolean;
-}
 
 // ---------------------------------------------------------------------------
 // Settings panel (TUI /settings parity). The server builds the model from the

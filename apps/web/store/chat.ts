@@ -842,10 +842,8 @@ export function dequeueLastQueued(): void {
 		.catch(reportError);
 }
 
-/**
- * Stop the turn (Esc, Stop button). Queued messages pause for Resume queue.
- * Running subagents stop too: `abort` sends no args, so the server default applies.
- */
+/** Stop the turn (Esc, Stop button) and its running subagents. Queued
+ *  messages pause for Resume queue. */
 export function stopTurn(): Promise<void> {
 	return call("abort")
 		.then(() => undefined)
