@@ -30,7 +30,7 @@
  * (or no pair exists daemon-side). No new error names.
  */
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { isNormalizedPosixRelativePath, type ManifestFileKind } from "./archive-manifest";
 import { BULK_MAX_BYTES, callbackError } from "#lib/wire/callback-protocol";
@@ -367,6 +367,64 @@ function isAdvisorName(relpath: string): boolean {
 	return base === "__advisor.jsonl" || (base.startsWith("__advisor.") && base.endsWith(".jsonl"));
 }
 
+/** Memoized sha256 per stored file, bounded so a long-lived fleet cannot grow it without limit. */
+const STORED_SHA_CACHE_MAX_ENTRIES = 512;
+const STORED_SHA_RACY_WINDOW_MS = 2_000;
+const storedShaCache = new Map<string, { identity: string; sha256: string }>();
+
+function openStoredFile(absolutePath: string, relpath: string): number {
+	try {
+		return openSync(absolutePath, "r");
+	} catch {
+		throw callbackError("unavailable", `materialize read failed for ${relpath}`);
+	}
+}
+
+function readStoredRange(fd: number, offset: number, length: number, relpath: string): Buffer {
+	const buf = Buffer.allocUnsafe(length);
+	if (readSync(fd, buf, 0, length, offset) !== length) {
+		throw callbackError("unavailable", `materialize read failed for ${relpath}`);
+	}
+	return buf;
+}
+
+/**
+ * sha256 of a whole stored file, streamed through bounded reads. The result
+ * is memoized per path and fstat identity (size, mtime, ctime, inode), so a
+ * resumed or repeated transfer of an unchanged file never re-hashes it.
+ */
+function storedFileSha256(
+	absolutePath: string,
+	fd: number,
+	stats: { size: bigint; mtimeNs: bigint; ctimeNs: bigint; ino: bigint },
+	relpath: string,
+): string {
+	const identity = `${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}:${stats.ino}`;
+	const cached = storedShaCache.get(absolutePath);
+	if (cached?.identity === identity) return cached.sha256;
+	const hash = createHash("sha256");
+	const size = Number(stats.size);
+	const buf = Buffer.allocUnsafe(Math.min(MATERIALIZE_CHUNK_RAW_BYTES, size));
+	for (let pos = 0; pos < size;) {
+		const n = readSync(fd, buf, 0, Math.min(buf.length, size - pos), pos);
+		if (n === 0) throw callbackError("unavailable", `materialize read failed for ${relpath}`);
+		hash.update(buf.subarray(0, n));
+		pos += n;
+	}
+	const sha256 = hash.digest("hex");
+	// A file modified this recently can be rewritten within the same filesystem
+	// timestamp tick, leaving its identity unchanged, so only settled files are memoized.
+	if (Number(stats.mtimeNs / 1_000_000n) < Date.now() - STORED_SHA_RACY_WINDOW_MS) {
+		storedShaCache.delete(absolutePath);
+		storedShaCache.set(absolutePath, { identity, sha256 });
+		if (storedShaCache.size > STORED_SHA_CACHE_MAX_ENTRIES) {
+			const oldest = storedShaCache.keys().next().value;
+			if (oldest !== undefined) storedShaCache.delete(oldest);
+		}
+	}
+	return sha256;
+}
+
 /**
  * Emit one transfer's NDJSON records for a plan, honoring the request cursor
  * and the byte budget. Returns the serialized records for one correlation.
@@ -418,39 +476,41 @@ export function emitMaterializeTransfer(
 	for (const file of plan.files) {
 		if (cursor !== undefined && file.relpath < cursor.path) continue; // fully sent earlier
 		const resume = cursor !== undefined && file.relpath === cursor.path ? cursor.offset : 0;
-		if (resume > file.size) {
-			throw callbackError(
-				"invalid_request",
-				`materialize cursor offset ${resume} exceeds the size of ${file.relpath}`,
-			);
-		}
-		let full: Buffer;
+		const fd = openStoredFile(file.absolutePath, file.relpath);
 		try {
-			full = readFileSync(file.absolutePath);
-		} catch {
-			throw callbackError("unavailable", `materialize read failed for ${file.relpath}`);
-		}
-		const sha256 = createHash("sha256").update(full).digest("hex");
-		const fileRecord: MaterializeFileRecord = {
-			type: "file",
-			relpath: file.relpath,
-			size: file.size,
-			sha256,
-			kind: file.kind,
-			offset: resume,
-		};
-		if (!push(fileRecord)) return endMore({ path: file.relpath, offset: resume });
-		let offset = resume;
-		while (offset < full.length) {
-			const take = Math.min(MATERIALIZE_CHUNK_RAW_BYTES, full.length - offset);
-			const chunk: MaterializeChunkRecord = {
-				type: "chunk",
+			// Serve exactly the bytes hashed: size and identity come from the open fd.
+			const stats = fstatSync(fd, { bigint: true });
+			const size = Number(stats.size);
+			if (resume > size) {
+				throw callbackError(
+					"invalid_request",
+					`materialize cursor offset ${resume} exceeds the size of ${file.relpath}`,
+				);
+			}
+			const sha256 = storedFileSha256(file.absolutePath, fd, stats, file.relpath);
+			const fileRecord: MaterializeFileRecord = {
+				type: "file",
 				relpath: file.relpath,
-				offset,
-				data: full.subarray(offset, offset + take).toString("base64"),
+				size,
+				sha256,
+				kind: file.kind,
+				offset: resume,
 			};
-			if (!push(chunk)) return endMore({ path: file.relpath, offset });
-			offset += take;
+			if (!push(fileRecord)) return endMore({ path: file.relpath, offset: resume });
+			let offset = resume;
+			while (offset < size) {
+				const take = Math.min(MATERIALIZE_CHUNK_RAW_BYTES, size - offset);
+				const chunk: MaterializeChunkRecord = {
+					type: "chunk",
+					relpath: file.relpath,
+					offset,
+					data: readStoredRange(fd, offset, take, file.relpath).toString("base64"),
+				};
+				if (!push(chunk)) return endMore({ path: file.relpath, offset });
+				offset += take;
+			}
+		} finally {
+			closeSync(fd);
 		}
 	}
 	push({ type: "end", more: false });

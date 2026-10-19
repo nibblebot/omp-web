@@ -531,4 +531,29 @@ describe("emitMaterializeTransfer", () => {
 		const error = protocolFailure(() => emitMaterializeTransfer(plan, SESSION_ID, undefined));
 		expect(error.code).toBe("unavailable");
 	});
+
+	test("a same-size rewrite right after a transfer is not served a stale digest", () => {
+		const root = storeSubtree(WORKSPACE_ID, SESSION_ID, { [`${SESSION_ID}.jsonl`]: "aaaa" });
+		const first = emitTransfer(planMaterializeFiles(root), SESSION_ID).records;
+		expect(recordsOfType(first, "file")[0]?.sha256).toBe(sha256(Buffer.from("aaaa")));
+		// Same byte length, rewritten right away: the memo must not serve the old digest.
+		writeFileSync(join(root, `${SESSION_ID}.jsonl`), "bbbb");
+		const second = emitTransfer(planMaterializeFiles(root), SESSION_ID).records;
+		expect(recordsOfType(second, "file")[0]?.sha256).toBe(sha256(Buffer.from("bbbb")));
+	});
+
+	test("a resumed transfer streams only the cursor tail under the whole-file digest", () => {
+		const bytes = Buffer.from("0123456789");
+		const root = storeSubtree(WORKSPACE_ID, SESSION_ID, { [`${SESSION_ID}.jsonl`]: bytes });
+		const cursor = { path: `${SESSION_ID}.jsonl`, offset: 4 };
+		const { records } = emitTransfer(planMaterializeFiles(root), SESSION_ID, cursor);
+		expect(recordsOfType(records, "file")[0]).toMatchObject({
+			size: 10,
+			offset: 4,
+			sha256: sha256(bytes),
+		});
+		const chunks = recordsOfType(records, "chunk");
+		expect(chunks[0]?.offset).toBe(4);
+		expect(Buffer.from(chunks.map((c) => c.data).join(""), "base64").toString()).toBe("456789");
+	});
 });
