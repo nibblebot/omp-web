@@ -294,6 +294,9 @@ describe("worktree lifecycle routes", () => {
 		expect(del.status).toBe(409);
 		const delBody = (await del.json()) as { error?: string };
 		expect(delBody.error).toContain("uncommitted changes");
+		// The guard runs before any mutation: the row and the dirty files survive.
+		expect(server.registry.get(entry.daemonId)).toBeDefined();
+		expect(existsSync(join(entry.cwd, "scratch.txt"))).toBe(true);
 	});
 
 	test("DELETE that git refuses (locked) answers 500 and keeps the row and the worktree (FLC-21)", async () => {

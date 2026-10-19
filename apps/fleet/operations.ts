@@ -22,7 +22,8 @@ import type { CloneCreateInput } from "./workspace-lifecycle";
 import type { FleetConfig } from "./config";
 import { validateProjectPath } from "./discovery";
 import type { FleetEventLog } from "./events";
-import type { RegisteredProject, Registry, RegistryEntry } from "./registry";
+import type { Registry, RegistryEntry } from "./registry";
+import type { RegisteredProject } from "#lib/wire/protocol";
 import type { SpawnSupervisor } from "./supervisor";
 import {
 	createWorktree,

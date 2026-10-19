@@ -1430,7 +1430,9 @@ class FleetServerImpl implements FleetServer {
 		const start = optionalBoolean(body, "start") ?? false;
 		const template = optionalString(body, "template");
 		const labels = optionalLabels(body);
-		const result = await this.#operate(() => this.#ops.addProject({ path, start, template, labels }));
+		const result = await this.#operate(() =>
+			this.#ops.addProject({ path, start, template, labels }),
+		);
 		if (result.existing) return json({ project: result.project, existing: true });
 		return json(
 			{

@@ -41,7 +41,8 @@ const labels: FieldRule = (_key, value) => {
 };
 
 /** Absent, or the exactly-one-member clone source. */
-const source: FieldRule = (_key, value) => (value === undefined ? undefined : parseCloneSource(value));
+const source: FieldRule = (_key, value) =>
+	value === undefined ? undefined : parseCloneSource(value);
 
 /** Absent or empty = unset; a present non-string is refused. */
 const deleteBranch: FieldRule = (_key, value) => {
@@ -105,7 +106,8 @@ export function readEdgeArgs(
 			if (value !== undefined) args[key] = value;
 		}
 	} catch (err) {
-		if (err instanceof OperationError) throw new OperationError(err.status, `${command}: ${err.message}`);
+		if (err instanceof OperationError)
+			throw new OperationError(err.status, `${command}: ${err.message}`);
 		throw err;
 	}
 	return args;

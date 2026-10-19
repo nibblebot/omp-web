@@ -135,7 +135,17 @@ describe("fleet control plane", () => {
 		const firstBody = (await first.json()) as { project: { projectId: string } };
 		try {
 			const rosterBefore = server.registry.list().length;
+			// Drift (jgc5): an existing checkout still syncs, as the edge's add_project does.
+			const supervisor = server.supervisor;
+			const realSync = supervisor.syncNow;
+			let syncs = 0;
+			supervisor.syncNow = (...args: Parameters<typeof realSync>) => {
+				syncs++;
+				return realSync.apply(supervisor, args);
+			};
 			const dup = await postJson(server.port, "/ctl/projects", { path: repoDir });
+			supervisor.syncNow = realSync;
+			expect(syncs).toBe(1);
 			expect(dup.status).toBe(200);
 			const dupBody = (await dup.json()) as {
 				existing?: boolean;

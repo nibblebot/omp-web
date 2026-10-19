@@ -1608,7 +1608,7 @@ describe("fleet edge", () => {
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		await browser.send({ type: "remove_project", id: "rp-unknown", projectId: "no-such-project" });
 		const err = await browser.waitForFrame(
-			(f) => f.type === "error" && f.error === "remove_project: unknown project id: no-such-project",
+			(f) => f.type === "error" && f.error === "unknown project id: no-such-project",
 			"remove_project unknown id",
 		);
 		expect(err.type).toBe("error");

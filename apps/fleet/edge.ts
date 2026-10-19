@@ -601,7 +601,11 @@ export class FleetEdge {
 				}),
 			),
 		spawn_resume: (stream, _id, a) =>
-			void this.#handleSpawnResume(stream, a.daemonId as string, a.sessionFile as string | undefined),
+			void this.#handleSpawnResume(
+				stream,
+				a.daemonId as string,
+				a.sessionFile as string | undefined,
+			),
 		stop: (stream, _id, a) =>
 			void this.#runOperation(stream, () => this.#ops.stop(a.daemonId as string)),
 		remove: (stream, _id, a) =>

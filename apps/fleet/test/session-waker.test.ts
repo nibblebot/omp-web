@@ -163,7 +163,10 @@ function answerTurn(daemon: CallbackDaemon, callId: string, text: string): void 
 	frame(daemon, {
 		type: "event",
 		sessionId: "s1",
-		event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text }] } },
+		event: {
+			type: "message_end",
+			message: { role: "assistant", content: [{ type: "text", text }] },
+		},
 	});
 	frame(daemon, { type: "event", sessionId: "s1", event: { type: "agent_end", messages: [] } });
 }
