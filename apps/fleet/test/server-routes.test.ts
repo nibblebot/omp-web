@@ -7,6 +7,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, realpathSync } from "node:fs";
 import { basename, join } from "node:path";
+import type { UsageReport } from "@oh-my-pi/pi-ai";
 import type { RegistryEntry } from "../registry";
 import type { FleetServer } from "../server";
 import {
@@ -507,5 +508,50 @@ describe("fleet control plane", () => {
 	test("unknown route 404s", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/nope`);
 		expect(res.status).toBe(404);
+	});
+});
+
+describe("GET /ctl/usage", () => {
+	let usageServer: FleetServer;
+	// Swapped per test; the injected source never touches the real auth DB.
+	let source: () => Promise<UsageReport[] | null> = async () => [];
+
+	beforeAll(async () => {
+		const { statePath, configPath } = fleetPaths();
+		usageServer = await startTestFleet(
+			{ statePath, configPath },
+			{},
+			{ usage: { source: () => source() } },
+		);
+	});
+
+	afterAll(async () => {
+		if (usageServer !== undefined) await usageServer.close();
+	});
+
+	test("returns the usage reports as a JSON array", async () => {
+		const report = { provider: "anthropic", fetchedAt: 1, limits: [] } as UsageReport;
+		source = async () => [report];
+		const res = await fetch(`http://127.0.0.1:${usageServer.port}/ctl/usage`);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual([report]);
+	});
+
+	test("a null source (no usage support) answers an empty array", async () => {
+		source = async () => null;
+		const res = await fetch(`http://127.0.0.1:${usageServer.port}/ctl/usage`);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual([]);
+	});
+
+	test("a failing source answers 502 without echoing the provider error", async () => {
+		source = async () => {
+			throw new Error("401 from https://api.example/usage?key=sk-secret");
+		};
+		const res = await fetch(`http://127.0.0.1:${usageServer.port}/ctl/usage`);
+		expect(res.status).toBe(502);
+		const body = await res.text();
+		expect(body).not.toContain("sk-secret");
+		expect(JSON.parse(body)).toEqual({ error: "Usage unavailable (see the fleet log)" });
 	});
 });

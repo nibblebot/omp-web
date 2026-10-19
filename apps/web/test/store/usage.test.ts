@@ -1,20 +1,35 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { ClientCommand } from "#lib/wire/protocol";
 import { connect, setState, state } from "../../state";
 import { refreshUsageReports, setSidebarUsage } from "../../state";
 import {
-	FakeEventSource,
-	callResult,
-	dispatch,
-	flushMicrotasks,
 	installLocalStorageShim,
 	installTransportStubs,
-	posted,
 	restoreBrowserGlobals,
+	setBrowserGlobal,
 } from "../web.testkit";
 
-function calls(): Extract<ClientCommand, { type: "call" }>[] {
-	return posted.filter((c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call");
+type RecordedFetch = { url: string; method: string };
+
+/** Swap globalThis.fetch for a JSON responder; records every request URL and method. */
+function stubFetch(respond: (url: string) => { status: number; body: unknown }): RecordedFetch[] {
+	const requests: RecordedFetch[] = [];
+	setBrowserGlobal("fetch", (async (input: unknown, init?: RequestInit) => {
+		const url = String(input);
+		requests.push({ url, method: init?.method ?? "GET" });
+		const { status, body } = respond(url);
+		return {
+			ok: status >= 200 && status < 300,
+			status,
+			json: async () => body,
+			text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+		} as unknown as Response;
+	}) as unknown as typeof fetch);
+	return requests;
+}
+
+/** Drain the fetch -> json -> finally chain (each hop is one microtask). */
+async function settle(): Promise<void> {
+	for (let i = 0; i < 32; i++) await Promise.resolve();
 }
 
 function reportsFixture() {
@@ -65,6 +80,7 @@ beforeEach(() => {
 		usageReports: null,
 		usageLoading: false,
 		usageError: null,
+		authStatus: "disabled",
 	});
 });
 
@@ -73,52 +89,62 @@ beforeEach(() => {
 afterEach(restoreBrowserGlobals);
 
 describe("usage store slice", () => {
-	test("refreshUsageReports populates usageReports on success", async () => {
-		connect();
-		const es = FakeEventSource.instances.at(-1);
-		expect(es).toBeDefined();
-		es!.onopen?.();
+	test("before the SSE stream opens, refreshUsageReports GETs /ctl/usage and fills the mirror", async () => {
+		connect(); // EventSource exists but onopen never fires: the page-load window
+		const requests = stubFetch(() => ({ status: 200, body: reportsFixture() }));
 
 		refreshUsageReports();
 		expect(state.usageLoading).toBe(true);
+		await settle();
 
-		const [cmd] = calls();
-		expect(cmd?.method).toBe("fetchUsageReports");
-		dispatch(callResult(cmd.id, reportsFixture()));
-
-		await flushMicrotasks();
+		// Exactly one GET; nothing went to POST /command.
+		expect(requests).toEqual([{ url: "/ctl/usage", method: "GET" }]);
+		expect(state.connected).toBe(false);
 		expect(state.usageLoading).toBe(false);
 		expect(state.usageError).toBeNull();
 		expect(state.usageReports).toEqual(reportsFixture());
 	});
 
-	test("a second refresh while loading issues no second POST /command", async () => {
-		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+	test("a second refresh while loading issues no second GET", async () => {
+		const requests = stubFetch(() => ({ status: 200, body: reportsFixture() }));
 
 		refreshUsageReports();
 		refreshUsageReports();
 		refreshUsageReports();
-
-		expect(calls().filter((c) => c.method === "fetchUsageReports")).toHaveLength(1);
-		expect(calls()).toHaveLength(1);
 		expect(state.usageLoading).toBe(true);
+		await settle();
+		expect(requests.filter((r) => r.url === "/ctl/usage")).toHaveLength(1);
+
+		// Once settled, a user-action refresh fetches again.
+		refreshUsageReports();
+		await settle();
+		expect(requests).toHaveLength(2);
 	});
 
-	test("a rejection routes to usageError and clears loading", async () => {
-		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+	test("a non-ok response routes its {error} message to usageError and clears loading", async () => {
+		const requests = stubFetch(() => ({
+			status: 503,
+			body: { error: "Usage endpoint returned 503" },
+		}));
 
 		refreshUsageReports();
-		const [cmd] = calls();
-		dispatch(callResult(cmd.id, null, false, "relay exploded"));
+		await settle();
 
-		await flushMicrotasks();
+		expect(requests).toEqual([{ url: "/ctl/usage", method: "GET" }]);
 		expect(state.usageLoading).toBe(false);
-		// transport's mux rejects with `new Error(frame.error)`; refreshUsageReports
-		// mirrors String(err), so the "Error: " prefix is expected.
-		expect(state.usageError).toBe("Error: relay exploded");
+		expect(state.usageError).toBe("Usage endpoint returned 503");
 		expect(state.usageReports).toBeNull();
+	});
+
+	test("a successful refresh clears a previous usageError; a null body means []", async () => {
+		setState("usageError", "Usage endpoint returned 503");
+		stubFetch(() => ({ status: 200, body: null }));
+
+		refreshUsageReports();
+		await settle();
+
+		expect(state.usageError).toBeNull();
+		expect(state.usageReports).toEqual([]);
 	});
 
 	test("sidebarUsage defaults on and respects a saved false", () => {

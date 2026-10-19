@@ -11,6 +11,7 @@
  *   POST /ctl/projects {path, start?, template?, labels?} → 201 { project, entry? } | 200 { project, existing: true }
  *   DELETE /ctl/projects/:projectId                → 200 { removed } | 409 { error }
  *   GET  /ctl/settings                             -> SettingsModel
+ *   GET  /ctl/usage                               -> UsageReport[] (502 { error } on failure)
  *   GET  /ctl/worktrees/:daemonId/delete-info      -> worktree_delete_info payload
  *   POST /ctl/spawn    {cwd, template?, name?, labels?} -> DaemonEntry
  *   POST /ctl/stop     {selector}                  → { stopped: string[] }
@@ -84,6 +85,7 @@ import {
 	type SettingsLayer,
 } from "./settings";
 import { createFleetPlugins, type FleetPlugins } from "./plugins";
+import { createFleetUsage, type FleetUsage, type FleetUsageOptions } from "./usage";
 import {
 	parseFeatureSelection,
 	PluginConfigError,
@@ -370,6 +372,7 @@ class FleetServerImpl implements FleetServer {
 	readonly edge: FleetEdge;
 	readonly fleetSettings: FleetSettings;
 	readonly fleetPlugins: FleetPlugins;
+	readonly fleetUsage: FleetUsage;
 	readonly eventLog = new FleetEventLog();
 	readonly startedAt: number;
 	readonly fleetFacts: FleetFacts;
@@ -446,6 +449,7 @@ class FleetServerImpl implements FleetServer {
 		redialGraceMs = REDIAL_GRACE_MS,
 		pluginStore?: () => Promise<PluginStore>,
 		pairLossGraceMs = PAIR_LOSS_GRACE_MS,
+		usageOptions?: FleetUsageOptions,
 	) {
 		this.registry = registry;
 		this.#redialGraceMs = redialGraceMs;
@@ -620,6 +624,9 @@ class FleetServerImpl implements FleetServer {
 		// provider source for tests (must not open the real auth DB).
 		this.fleetSettings = createFleetSettings(settingsOptions);
 		this.fleetPlugins = createFleetPlugins({ openStore: pluginStore });
+		// Unattached usage service (the fleet control plane's /ctl/usage): provider
+		// account usage from the SDK auth storage, no session. Injectable source for tests.
+		this.fleetUsage = createFleetUsage(usageOptions);
 		// #3: statuses persisted by a previous fleet process describe dead
 		// children/sockets; map them to a truthful boot state and redial
 		// remote entries BEFORE anything else starts acting on the roster.
@@ -1166,6 +1173,15 @@ class FleetServerImpl implements FleetServer {
 						// initializes the process-global Settings singleton +
 						// ModelRegistry, no session.
 						return json(await this.fleetSettings.getModel());
+					case "/ctl/usage":
+						// Provider account usage: unattached fleet, auth-storage backed, no session.
+						try {
+							return json(await this.fleetUsage.getReports());
+						} catch (err) {
+							// Provider errors can echo request details; the detail goes to the fleet log only.
+							console.error("fleet: usage reports failed", err);
+							return json({ error: "Usage unavailable (see the fleet log)" }, 502);
+						}
 					case "/ctl/logs/orphans":
 						// P7.6: log-store subtrees with no live roster identity
 						// (deleted-without-verification workspaces), never
@@ -2061,6 +2077,8 @@ export async function startFleet(
 		pluginStore?: () => Promise<PluginStore>;
 		/** Test seam: pair-loss grace before a ready session that lost its pair is shown reconnecting (default PAIR_LOSS_GRACE_MS). */
 		pairLossGraceMs?: number;
+		/** Test seam: usage source (the SDK auth storage otherwise). */
+		usage?: FleetUsageOptions;
 	} = {},
 ): Promise<FleetServer> {
 	const configPath = resolveConfigPath(opts.configPath);
@@ -2108,6 +2126,7 @@ export async function startFleet(
 			opts.redialGraceMs,
 			opts.pluginStore,
 			opts.pairLossGraceMs,
+			opts.usage,
 		);
 	} catch (err) {
 		lock.release();

@@ -41,7 +41,7 @@ const UsageRow: Component<{ limit: UsageLimit }> = (props) => {
  * Condensed roster-sidebar mirror of the UsageLimitsDialog panel (Phase 9 /usage
  * parity): per-provider limit rows as label + percent over a thin utilization
  * bar, docked at the bottom of the sidebar when the "usage in sidebar" setting is
- * on. Shares the modal's one-shot fetchUsageReports relay through the usage
+ * on. Shares the modal's one-shot GET /ctl/usage fetch through the usage
  * store slice; it is never polled, and refresh is manual (header button) or a
  * first mount that finds nothing fetched yet. Amount strings, notes and reset
  * timestamps stay modal-only; non-ok limit statuses render the shared

@@ -9,7 +9,8 @@ import { setConnected, settleCallResult } from "../web/store/transport";
  * transport and store code run unchanged, only the answers come from story
  * handlers. Anything without a handler falls through to the design server,
  * which serves the App screen's SSE stream and its command bus
- * (fixtures/command-bus.ts).
+ * (fixtures/command-bus.ts), and answers control-plane fetches from
+ * fixtures/routes.ts unless a story overrides the route (`answerRoutes`).
  *
  * `applySeeds` calls `resetDaemon()` before every story/variant seed, so
  * handlers and the connected flag never leak from one story into the next.
@@ -18,17 +19,23 @@ export type CallHandler = (args: unknown[]) => unknown;
 export type CallHandlers = Partial<Record<WebMethodName, CallHandler>>;
 export type CommandHandler = (cmd: ClientCommand) => void;
 export type CommandHandlers = Partial<Record<ClientCommand["type"], CommandHandler>>;
+/** A Response is sent as is; any other value is sent as a 200 JSON body. A throw answers 500 `{error}`. */
+export type RouteHandler = () => unknown;
+/** Keyed by `"<METHOD> <pathname>"`, e.g. `"GET /ctl/usage"`. */
+export type RouteHandlers = Record<string, RouteHandler>;
 
 const ANSWER_DELAY_MS = 120;
 /** Retries reuse the command id; answer each id once, like the daemon's dedup window. */
 const answeredIds = new Set<string>();
 let calls: CallHandlers = {};
 let commands: CommandHandlers = {};
+let routes: RouteHandlers = {};
 
 /** Forget every handler and mark the transport disconnected (the pristine state). */
 export function resetDaemon(): void {
 	calls = {};
 	commands = {};
+	routes = {};
 	setConnected(false);
 }
 
@@ -42,6 +49,26 @@ export function answerCalls(next: CallHandlers): void {
 export function answerCommands(next: CommandHandlers): void {
 	commands = next;
 	setConnected(true);
+}
+
+/** Answer these control-plane fetches in the page instead of the design server's fixture routes. */
+export function answerRoutes(next: RouteHandlers): void {
+	routes = next;
+}
+
+async function answerRoute(handler: RouteHandler): Promise<Response> {
+	const delay = Promise.withResolvers<void>();
+	setTimeout(delay.resolve, ANSWER_DELAY_MS);
+	await delay.promise;
+	try {
+		const data = await handler();
+		return data instanceof Response ? data : Response.json(data);
+	} catch (err) {
+		return Response.json(
+			{ error: err instanceof Error ? err.message : String(err) },
+			{ status: 500 },
+		);
+	}
 }
 
 function answerCall(cmd: Extract<ClientCommand, { type: "call" }>, handler: CallHandler): void {
@@ -62,6 +89,11 @@ export function installDaemon(): void {
 	const answering = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
 		const body = init?.body;
 		const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+		const method = (
+			init?.method ?? (input instanceof Request ? input.method : "GET")
+		).toUpperCase();
+		const routeHandler = routes[`${method} ${url.pathname}`];
+		if (routeHandler) return answerRoute(routeHandler);
 		if (url.pathname !== "/command" || typeof body !== "string") return nativeFetch(input, init);
 		const cmd = JSON.parse(body) as ClientCommand;
 		const callHandler = cmd.type === "call" ? calls[cmd.method] : undefined;

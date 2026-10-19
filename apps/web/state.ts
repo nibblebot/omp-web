@@ -529,12 +529,12 @@ export const [state, setState] = createStore({
 			? localStorage.getItem(NOTIFY_KEY) === "true"
 			: false,
 	// Phase 12: condensed usage panel pinned above the roster footer buttons
-	// (persisted toggle; data rides the one-shot fetchUsageReports relay).
+	// (persisted toggle; data comes from the fleet GET /ctl/usage via refreshUsageReports).
 	sidebarUsage:
 		typeof localStorage !== "undefined"
 			? localStorage.getItem(USAGE_SIDEBAR_KEY) !== "false"
 			: true,
-	// Phase 12: fetchUsageReports mirror; null means never fetched, [] means
+	// Phase 12: GET /ctl/usage mirror; null means never fetched, [] means
 	// fetched but no reporting. Single-flight via usageLoading (refreshUsageReports).
 	usageReports: null as UsageReport[] | null,
 	usageLoading: false as boolean,

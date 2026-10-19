@@ -16,6 +16,7 @@ import {
 } from "./tx";
 import { FIXTURE_NOW } from "./session";
 import { rosterFsBrowse, rosterRecentRoots } from "./roster-routes";
+import { rosterUsageReports } from "./roster";
 import { answerCommand, eventsResponse } from "./command-bus";
 
 /**
@@ -311,6 +312,8 @@ export const fixtureRoutes: FixtureRoute[] = [
 		respond: () =>
 			featureSizesFixture.available ? featureSizes : unavailable("No feature sizes in this build."),
 	},
+	// --- store/usage.ts: fleet usage reports (stories vary it with answerRoutes) ---
+	{ method: "GET", path: "/ctl/usage", respond: () => rosterUsageReports },
 ];
 
 function compile(path: string): { regex: RegExp; names: string[] } {

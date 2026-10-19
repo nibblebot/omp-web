@@ -2,7 +2,7 @@ import { SessionStatsDialog } from "../../../web/components/usage/SessionStatsDi
 import { UsageLimitsDialog } from "../../../web/components/usage/UsageLimitsDialog";
 import { contextBreakdown, sessionStatsSummary } from "../../fixtures/overlays";
 import { rosterUsageReports } from "../../fixtures/roster";
-import { answerCalls } from "../../daemon";
+import { answerCalls, answerRoutes } from "../../daemon";
 import { defineStory } from "../../registry";
 
 const pending = () => Promise.withResolvers<unknown>().promise;
@@ -65,30 +65,26 @@ export default [
 			{
 				name: "Provider windows",
 				description: "Rate-limit windows per provider with reset times.",
-				seed: () =>
-					answerCalls({
-						fetchUsageReports: () => rosterUsageReports,
-					}),
+				seed: () => answerRoutes({ "GET /ctl/usage": () => rosterUsageReports }),
 				render: (ctx) => <UsageLimitsDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Loading",
-				seed: () => answerCalls({ fetchUsageReports: pending }),
+				seed: () => answerRoutes({ "GET /ctl/usage": pending }),
 				render: (ctx) => <UsageLimitsDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Fetch failed",
 				seed: () =>
-					answerCalls({
-						fetchUsageReports: () => {
-							throw new Error("Usage endpoint returned 503");
-						},
+					answerRoutes({
+						"GET /ctl/usage": () =>
+							Response.json({ error: "Usage endpoint returned 503" }, { status: 503 }),
 					}),
 				render: (ctx) => <UsageLimitsDialog onClose={ctx.close} />,
 			},
 			{
 				name: "No reports",
-				seed: () => answerCalls({ fetchUsageReports: () => [] }),
+				seed: () => answerRoutes({ "GET /ctl/usage": () => [] }),
 				render: (ctx) => <UsageLimitsDialog onClose={ctx.close} />,
 			},
 		],

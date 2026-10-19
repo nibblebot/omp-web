@@ -11,7 +11,7 @@
  * persists coerced values without live session side effects.
  */
 
-import type { Settings } from "@oh-my-pi/pi-coding-agent";
+import { ensureModelRegistry, ensureSettings } from "./sdk-singletons";
 import type { SettingsModel } from "#lib/wire/protocol";
 import type { SettingsSession } from "#lib/sdk-settings/settings-model";
 
@@ -52,46 +52,17 @@ export interface FleetSettingsOptions {
 }
 
 export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSettings {
-	// Lazy shared singletons: Settings.init is process-global (idempotent,
-	// whoever initialized first wins, so an in-memory test instance is used
-	// and nothing touches disk) and the ModelRegistry is expensive, so both
-	// are created once and shared by concurrent callers.
-	let settingsInit: Promise<Settings> | null = null;
+	// Lazy shared singletons: Settings.init is process-global and the
+	// ModelRegistry is expensive, so both are created once and shared by
+	// concurrent callers (and by the usage service).
 	let providers: Promise<ReadonlyArray<{ provider: string }>> | null = null;
-
-	const ensureSettings = (): Promise<Settings> => {
-		if (settingsInit === null) {
-			settingsInit = (async () => {
-				const [{ Settings }, { getAgentDir }] = await Promise.all([
-					import("@oh-my-pi/pi-coding-agent"),
-					import("@oh-my-pi/pi-utils"),
-				]);
-				try {
-					return Settings.instance;
-				} catch {
-					// Not yet initialized in this process (no daemon/session
-					// has run): boot the singleton against the agent dir.
-					const settings = await Settings.init({ agentDir: getAgentDir() });
-					// Edits to config.yml made by daemons or by hand must reach this view; the SDK CLI starts the same watch.
-					settings.startWatching();
-					return settings;
-				}
-			})();
-		}
-		return settingsInit;
-	};
 
 	const getProviders = (): Promise<ReadonlyArray<{ provider: string }>> => {
 		if (providers === null) {
 			providers = (async () => {
 				try {
 					if (options.registry) return await options.registry();
-					const [{ discoverAuthStorage, ModelRegistry }, { getAgentDir }] = await Promise.all([
-						import("@oh-my-pi/pi-coding-agent"),
-						import("@oh-my-pi/pi-utils"),
-					]);
-					const authStorage = await discoverAuthStorage(getAgentDir());
-					const registry = new ModelRegistry(authStorage);
+					const { registry } = await ensureModelRegistry();
 					await registry.awaitBackgroundRefresh();
 					return registry.getAvailable();
 				} catch {

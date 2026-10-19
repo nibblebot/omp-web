@@ -45,8 +45,8 @@ const LimitRow: Component<{ limit: UsageLimit }> = (props) => {
 
 /**
  * Phase 9: /usage parity, per-provider limits with 5h/7d windows, utilization
- * bars, status and notes. Data comes from the READ_ONLY fetchUsageReports
- * relay row; providers without reporting resolve to the empty state.
+ * bars, status and notes. Data comes from the fleet GET /ctl/usage (via the
+ * usage store slice); providers without reporting resolve to the empty state.
  */
 export const UsageLimitsDialog: Component<{ onClose: () => void }> = (props) => {
 	onMount(() => refreshUsageReports());
