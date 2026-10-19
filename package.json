@@ -25,7 +25,7 @@
 		"format": "oxfmt",
 		"format:check": "oxfmt --check",
 		"test": "bun scripts/test.ts",
-		"test:isolated": "bun test",
+		"test:isolated": "bun scripts/test.ts --isolated",
 		"design": "bun apps/design-system/server.ts stories",
 		"demo": "bun apps/design-system/server.ts demo"
 	},

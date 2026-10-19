@@ -10,6 +10,15 @@
  * (unique package/core pairs) and fall back to the logical count where
  * /proc/cpuinfo is unavailable (non-Linux).
  *
+ * `--isolated` drops `--parallel` so every file runs in ONE process (the
+ * release hermeticity gate, `bun run test:isolated`).
+ *
+ * Inherited `OMP_SESSION_*` variables are stripped: a shell inside an
+ * omp-web session carries that session's callback pair
+ * (`OMP_SESSION_CALLBACK_*`), and every daemon a test spawns with
+ * `...process.env` would otherwise dial the live fleet as that session.
+ * Tests set the session variables they need explicitly.
+ *
  * Extra CLI args are forwarded to `bun test` (`bun scripts/test.ts --bail 1`).
  */
 import { readFileSync } from "node:fs";
@@ -36,19 +45,26 @@ function physicalCores(): number {
 	return availableParallelism();
 }
 
-const workers = Math.max(1, physicalCores());
+const args = process.argv.slice(2);
+const isolated = args.includes("--isolated");
+const forwarded = args.filter((arg) => arg !== "--isolated");
+const env: Record<string, string> = {};
+for (const [key, value] of Object.entries(process.env)) {
+	if (value !== undefined && !key.startsWith("OMP_SESSION_")) env[key] = value;
+}
 const child = Bun.spawn(
 	[
 		"bun",
 		"test",
-		`--parallel=${workers}`,
+		...(isolated ? [] : [`--parallel=${Math.max(1, physicalCores())}`]),
 		"--timeout",
 		"15000",
 		"--retry",
 		"0",
-		...process.argv.slice(2),
+		...forwarded,
 	],
 	{
+		env,
 		stdio: ["inherit", "inherit", "inherit"],
 	},
 );
