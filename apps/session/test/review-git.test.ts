@@ -3,11 +3,13 @@ import { chmod, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git } from "@oh-my-pi/pi-natives/vcs";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { RepoAdapter, RepoStaleError } from "../review-git";
 
 const roots: string[] = [];
 afterEach(async () => {
 	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+	cleanupTempDirs();
 });
 
 // Native VCS discovery has no init API. Construct an empty repository rather
@@ -156,5 +158,24 @@ describe("repository review mutations", () => {
 		await rm(hook);
 		await adapter.commitSelected(message, after.indexFingerprint);
 		expect((await adapter.snapshot()).head?.subject).toBe(message);
+	});
+
+	test("untracked fingerprint is stat-based: same-size rewrite with restored mtime keeps it, size change moves it", async () => {
+		const { cwd, write, adapter } = await fixture();
+		const file = join(cwd, "untracked.txt");
+		const mtimeRef = join(tempDir("omp-review-git-stamp-"), "mtime");
+		const touchFrom = async (target: string, ref: string) => {
+			const proc = Bun.spawn(["touch", "-r", ref, target]);
+			if ((await proc.exited) !== 0) throw new Error(`touch -r ${ref} ${target} failed`);
+		};
+		await write("untracked.txt", "aaaa\n");
+		await Bun.write(mtimeRef, "");
+		await touchFrom(mtimeRef, file);
+		const before = (await adapter.snapshot()).worktreeFingerprint;
+		await write("untracked.txt", "bbbb\n");
+		await touchFrom(file, mtimeRef);
+		expect((await adapter.snapshot()).worktreeFingerprint).toBe(before);
+		await write("untracked.txt", "bbbbbb\n");
+		expect((await adapter.snapshot()).worktreeFingerprint).not.toBe(before);
 	});
 });

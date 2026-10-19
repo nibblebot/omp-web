@@ -45,6 +45,7 @@ import {
 	parseCollabLink,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
+import type { SerializedReplication } from "@oh-my-pi/pi-coding-agent/collab/replication-shrink";
 import {
 	serializeReplicatedEntry,
 	serializeReplicatedEvent,
@@ -563,6 +564,12 @@ export class CollabHostAdapter {
 			);
 			return;
 		}
+		if (this.#peers.has(fromPeer)) {
+			// A repeated hello would re-send the snapshot, re-announce the join and
+			// re-broadcast state; the guest already holds its replica.
+			this.#socket?.send({ t: "error", message: "already joined this collab session" }, fromPeer);
+			return;
+		}
 		const cleanName = this.#uniqueGuestName(
 			name.trim().slice(0, 64) || `guest-${fromPeer}`,
 			fromPeer,
@@ -575,16 +582,10 @@ export class CollabHostAdapter {
 		// queue behind the snapshot on the same socket and the guest can't
 		// observe a gap between the snapshot fragment and live traffic.
 		const snapshot = this.#port.snapshot();
-		if (JSON.stringify(snapshot).length > WELCOME_IMAGE_STRIP_THRESHOLD) {
-			let stripped = 0;
-			for (const entry of snapshot.entries) {
-				if (entry.type === "message") stripped += stripImagesFromMessage(entry.message);
-			}
-			console.info("collab welcome exceeded size threshold; stripped images", { stripped });
-		}
 		const entries = snapshot.entries.filter(isWireSessionEntry);
 		const socket = this.#socket;
 		if (!socket) return;
+		const serialized = this.#serializeJoinEntries(entries);
 		socket.send(
 			{
 				t: "welcome",
@@ -597,7 +598,7 @@ export class CollabHostAdapter {
 			},
 			fromPeer,
 		);
-		this.#sendSnapshotChunks(entries, fromPeer);
+		this.#sendSnapshotChunks(serialized, fromPeer);
 		if (canWrite) {
 			for (const pending of this.#pendingUi.values()) {
 				socket.send({ t: "ui-request", request: pending.request }, fromPeer);
@@ -613,38 +614,58 @@ export class CollabHostAdapter {
 	}
 
 	/**
-	 * Slice {@link entries} into byte-bounded `snapshot-chunk` frames targeted
-	 * at {@link fromPeer}. Each entry is first run through
+	 * Serialize the join snapshot's entries once, each through
 	 * {@link serializeReplicatedEntry} so a single oversized tool-result entry
 	 * cannot ship as an oversized chunk that trips the relay's per-frame
-	 * `maxPayloadLength`. Every batch carries at least one entry, and the last
-	 * batch is tagged `final: true` so the guest can finalize the replica. An
-	 * empty snapshot still emits one `final` chunk so the guest never blocks
-	 * on a missing terminator.
+	 * `maxPayloadLength`. The shrunk JSON is the size the join is measured
+	 * against. Past {@link WELCOME_IMAGE_STRIP_THRESHOLD}, images are stripped
+	 * from the (already copied) entries and the entries are serialized again.
 	 */
-	#sendSnapshotChunks(entries: (SessionEntry & WireSessionEntry)[], fromPeer: number): void {
+	#serializeJoinEntries(
+		entries: (SessionEntry & WireSessionEntry)[],
+	): SerializedReplication<SessionEntry & WireSessionEntry>[] {
+		const first = entries.map((entry) => serializeReplicatedEntry(entry));
+		const totalLength = first.reduce((sum, item) => sum + item.json.length, 0);
+		if (totalLength <= WELCOME_IMAGE_STRIP_THRESHOLD) return first;
+		let stripped = 0;
+		const restripped = entries.map((entry) => {
+			if (entry.type === "message") stripped += stripImagesFromMessage(entry.message);
+			return serializeReplicatedEntry(entry);
+		});
+		console.info("collab welcome exceeded size threshold; stripped images", { stripped });
+		return restripped;
+	}
+
+	/**
+	 * Slice pre-serialized join entries into byte-bounded `snapshot-chunk` frames
+	 * targeted at {@link fromPeer}. Every batch carries at least one entry, and the
+	 * last batch is tagged `final: true` so the guest can finalize the replica. An
+	 * empty snapshot still emits one `final` chunk so the guest never blocks on a
+	 * missing terminator.
+	 */
+	#sendSnapshotChunks(
+		serialized: SerializedReplication<SessionEntry & WireSessionEntry>[],
+		fromPeer: number,
+	): void {
 		const socket = this.#socket;
 		if (!socket) return;
-		if (entries.length === 0) {
+		if (serialized.length === 0) {
 			socket.send({ t: "snapshot-chunk", entries: [], final: true }, fromPeer);
 			return;
 		}
 		let i = 0;
-		while (i < entries.length) {
+		while (i < serialized.length) {
 			const batch: (SessionEntry & WireSessionEntry)[] = [];
 			let batchBytes = 0;
-			while (i < entries.length) {
-				const entry = entries[i];
-				if (!entry) break;
-				const bounded = serializeReplicatedEntry(entry);
-				const shrunk = bounded.value;
-				const entryBytes = bounded.json.length;
-				if (batch.length > 0 && batchBytes + entryBytes > SNAPSHOT_CHUNK_BYTES) break;
-				batch.push(shrunk);
-				batchBytes += entryBytes;
+			while (i < serialized.length) {
+				const item = serialized[i];
+				if (!item) break;
+				if (batch.length > 0 && batchBytes + item.json.length > SNAPSHOT_CHUNK_BYTES) break;
+				batch.push(item.value);
+				batchBytes += item.json.length;
 				i++;
 			}
-			socket.send({ t: "snapshot-chunk", entries: batch, final: i >= entries.length }, fromPeer);
+			socket.send({ t: "snapshot-chunk", entries: batch, final: i >= serialized.length }, fromPeer);
 		}
 	}
 

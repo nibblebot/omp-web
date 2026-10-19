@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Stats } from "node:fs";
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -87,6 +88,124 @@ function provenanceOf(messages: readonly unknown[], advisor: string): AdvisorHis
 	return result;
 }
 
+interface AdvisorTranscriptFile {
+	name: string;
+	path: string;
+	stat: Stats;
+}
+
+interface DurableAdvisorRender {
+	fingerprint: string;
+	text: string;
+	sections: number;
+	provenance: AdvisorHistoryProvenance[];
+	warnings: string[];
+	derived?: { sourceId: string; bytes: Buffer };
+}
+
+// Durable renders are keyed by session, transcript root, and format. Any change
+// to advisor file names, sizes, mtimes, or inodes invalidates the entry.
+const DURABLE_RENDER_CACHE_LIMIT = 8;
+const durableRenders = new Map<string, DurableAdvisorRender>();
+
+async function statAdvisorTranscripts(root: string): Promise<AdvisorTranscriptFile[]> {
+	const names = (await readdir(root, { withFileTypes: true }))
+		.filter((file) => file.isFile() && isAdvisorTranscriptName(file.name))
+		.map((file) => file.name)
+		.sort((a, b) => a.localeCompare(b));
+	const files: AdvisorTranscriptFile[] = [];
+	for (const name of names) {
+		const path = join(root, name);
+		const stat = await lstat(path);
+		if (stat.isFile() && !stat.isSymbolicLink()) files.push({ name, path, stat });
+	}
+	return files;
+}
+
+async function renderDurableAdvisors(
+	files: readonly AdvisorTranscriptFile[],
+	compact: boolean,
+	fingerprint: string,
+): Promise<DurableAdvisorRender> {
+	const sections: string[] = [];
+	const provenance: AdvisorHistoryProvenance[] = [];
+	const warnings: string[] = [];
+	for (const file of files) {
+		let validHeader: boolean | undefined;
+		let malformed = false;
+		const messages: AgentMessage[] = [];
+		await visitEntriesFromFileStream(
+			file.path,
+			(value) => {
+				const record = object(value);
+				if (validHeader === undefined) {
+					validHeader = record?.type === "session" && typeof record.id === "string";
+					return;
+				}
+				if (!validHeader || record?.type !== "message") return;
+				const message = object(record.message);
+				if (message && ["assistant", "user", "toolResult"].includes(String(message.role)))
+					messages.push(message as unknown as AgentMessage);
+			},
+			{
+				maxBytes: file.stat.size,
+				throwIfMissing: true,
+				onMalformedRecord: () => {
+					malformed = true;
+				},
+			},
+		);
+		if (!validHeader) {
+			warnings.push("An invalid advisor transcript header was skipped.");
+			continue;
+		}
+		if (malformed)
+			warnings.push(
+				"Malformed or incomplete advisor JSONL records were skipped by the SDK reader.",
+			);
+		const advisor =
+			file.name === ADVISOR_TRANSCRIPT_FILENAME
+				? "default"
+				: file.name.slice("__advisor.".length, -".jsonl".length);
+		const rendered = compact
+			? formatSessionHistoryMarkdown(messages)
+			: formatSessionDumpText({ messages });
+		sections.push(`### Advisor: ${advisor}\n\n${rendered}`);
+		if (provenance.length <= MAX_PROVENANCE) provenance.push(...provenanceOf(messages, advisor));
+	}
+	return {
+		fingerprint,
+		text: sections.join("\n\n"),
+		sections: sections.length,
+		provenance,
+		warnings,
+	};
+}
+
+function rememberDurableRender(key: string, render: DurableAdvisorRender): DurableAdvisorRender {
+	durableRenders.delete(key);
+	durableRenders.set(key, render);
+	if (durableRenders.size > DURABLE_RENDER_CACHE_LIMIT) {
+		const oldest = durableRenders.keys().next().value;
+		if (oldest !== undefined) durableRenders.delete(oldest);
+	}
+	return render;
+}
+
+function deriveTranscriptDigest(
+	sessionId: string,
+	sessionFile: string,
+	source: AdvisorHistoryDto["source"],
+	compact: boolean,
+	text: string,
+): { sourceId: string; bytes: Buffer } {
+	const sourceId = createHash("sha256")
+		.update(`${sessionId}\0${sessionFile}\0${source}\0${compact}\0`)
+		.update(text)
+		.digest("hex");
+	return { sourceId, bytes: Buffer.from(text, "utf8") };
+}
+
 /**
  * Read the actual SDK transcript. Offsets address the UTF-8 SDK-rendered text,
  * not JSONL bytes. Default output is a bounded compact page, never a raw dump.
@@ -123,6 +242,7 @@ export async function readAdvisorHistory(
 	const sessionFile = entry.session.sessionManager.getSessionFile();
 	const sessionId = entry.session.sessionManager.getSessionId();
 	let text: string | null = null;
+	let durable: DurableAdvisorRender | null = null;
 	let provenance: AdvisorHistoryProvenance[] = [];
 	const warnings = [SENSITIVE_WARNING];
 	try {
@@ -147,59 +267,24 @@ export async function readAdvisorHistory(
 			if (!rootStat) return unavailable("no persisted advisor transcript");
 			if (!rootStat.isDirectory() || rootStat.isSymbolicLink())
 				return unavailable("advisor artifact root is not an owned directory");
-			const files = (await readdir(root, { withFileTypes: true }))
-				.filter((file) => file.isFile() && isAdvisorTranscriptName(file.name))
-				.sort((a, b) => a.name.localeCompare(b.name));
-			const sections: string[] = [];
-			for (const file of files) {
-				const path = join(root, file.name);
-				const stat = await lstat(path);
-				if (!stat.isFile() || stat.isSymbolicLink()) continue;
-				let validHeader: boolean | undefined;
-				let malformed = false;
-				const messages: AgentMessage[] = [];
-				await visitEntriesFromFileStream(
-					path,
-					(value) => {
-						const record = object(value);
-						if (validHeader === undefined) {
-							validHeader = record?.type === "session" && typeof record.id === "string";
-							return;
-						}
-						if (!validHeader || record?.type !== "message") return;
-						const message = object(record.message);
-						if (message && ["assistant", "user", "toolResult"].includes(String(message.role)))
-							messages.push(message as unknown as AgentMessage);
-					},
-					{
-						maxBytes: stat.size,
-						throwIfMissing: true,
-						onMalformedRecord: () => {
-							malformed = true;
-						},
-					},
-				);
-				if (!validHeader) {
-					warnings.push("An invalid advisor transcript header was skipped.");
-					continue;
-				}
-				if (malformed)
-					warnings.push(
-						"Malformed or incomplete advisor JSONL records were skipped by the SDK reader.",
-					);
-				const advisor =
-					file.name === ADVISOR_TRANSCRIPT_FILENAME
-						? "default"
-						: file.name.slice("__advisor.".length, -".jsonl".length);
-				const rendered = compact
-					? formatSessionHistoryMarkdown(messages)
-					: formatSessionDumpText({ messages });
-				sections.push(`### Advisor: ${advisor}\n\n${rendered}`);
-				if (provenance.length <= MAX_PROVENANCE)
-					provenance.push(...provenanceOf(messages, advisor));
-			}
-			if (sections.length === 0) return unavailable("no persisted advisor transcript");
-			text = sections.join("\n\n");
+			const files = await statAdvisorTranscripts(root);
+			const fingerprint = files
+				.map((file) => `${file.name}\0${file.stat.size}\0${file.stat.mtimeMs}\0${file.stat.ino}`)
+				.join("\n");
+			const cacheKey = `${sessionId}\0${sessionFile}\0${compact}`;
+			const cached = durableRenders.get(cacheKey);
+			const render =
+				cached?.fingerprint === fingerprint
+					? cached
+					: rememberDurableRender(
+							cacheKey,
+							await renderDurableAdvisors(files, compact, fingerprint),
+						);
+			if (render.sections === 0) return unavailable("no persisted advisor transcript");
+			durable = render;
+			text = render.text;
+			provenance = render.provenance;
+			warnings.push(...render.warnings);
 			if (!compact)
 				warnings.push(
 					"Durable recorder files contain finalized messages only; original system prompt, tool inventory, and configuration are not persisted by the recorder.",
@@ -214,13 +299,12 @@ export async function readAdvisorHistory(
 		entry.session.sessionManager.getSessionId() !== sessionId
 	)
 		return unavailable("advisor history target changed; restart paging");
-	const sourceId = createHash("sha256")
-		.update(`${sessionId}\0${sessionFile ?? ""}\0${source}\0${compact}\0`)
-		.update(text)
-		.digest("hex");
+	const derived =
+		durable?.derived ?? deriveTranscriptDigest(sessionId, sessionFile ?? "", source, compact, text);
+	if (durable) durable.derived = derived;
+	const { sourceId, bytes } = derived;
 	if (opts.sourceId !== undefined && opts.sourceId !== sourceId)
 		return unavailable("advisor history changed; restart paging");
-	const bytes = Buffer.from(text, "utf8");
 	let start = Math.min(opts.fromByte ?? 0, bytes.length);
 	// A foreign cursor inside a code point skips to the next complete character.
 	while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++;

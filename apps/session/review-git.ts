@@ -152,13 +152,8 @@ function vcsMessage(error: unknown): string {
 	return error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
 }
 
-/** Never follow a repository symlink when reading worktree bytes. */
-async function worktreeBytes(
-	root: string,
-	path: string,
-	consume: (chunk: Uint8Array) => void,
-	maxBytes = Number.MAX_SAFE_INTEGER,
-): Promise<boolean> {
+/** Resolve a repo-relative worktree path, refusing escapes and symlinked parents. */
+async function worktreeTarget(root: string, path: string): Promise<string> {
 	const jail = await realpath(root);
 	const target = resolve(jail, path);
 	const inside = relative(jail, target);
@@ -170,6 +165,24 @@ async function worktreeBytes(
 		if ((await lstat(parent)).isSymbolicLink())
 			throw new RepoNotEligibleError("refusing worktree path through a symlink");
 	}
+	return target;
+}
+/** Stat identity (size, mtime, inode) for an untracked path; reads no content. */
+async function worktreeStamp(root: string, path: string): Promise<string> {
+	const target = await worktreeTarget(root, path);
+	const stat = await lstat(target, { bigint: true });
+	if (stat.isSymbolicLink()) return `link:${await readlink(target)}`;
+	if (!stat.isFile()) throw new RepoNotEligibleError("review requires a regular file or symlink");
+	return `${stat.size}:${stat.mtimeNs}:${stat.ino}`;
+}
+/** Never follow a repository symlink when reading worktree bytes. */
+async function worktreeBytes(
+	root: string,
+	path: string,
+	consume: (chunk: Uint8Array) => void,
+	maxBytes = Number.MAX_SAFE_INTEGER,
+): Promise<boolean> {
+	const target = await worktreeTarget(root, path);
 	const stat = await lstat(target);
 	if (stat.isSymbolicLink()) {
 		const bytes = Buffer.from(await readlink(target));
@@ -320,11 +333,9 @@ export class RepoAdapter {
 		}
 		for (const entry of unstaged.filter((file) => file.kind === "untracked")) {
 			RepoAdapter.checkPath(entry.path);
-			hash.update("\0untracked\0").update(entry.path).update("\0");
-			await worktreeBytes(repo.info().repoRoot, entry.path, (chunk) => {
-				hash.update(chunk);
-			});
-			hash.update("\0end\0");
+			// Stat identity, not content: cost stays per-file, independent of untracked bytes.
+			const stamp = await worktreeStamp(repo.info().repoRoot, entry.path);
+			hash.update("\0untracked\0").update(entry.path).update("\0").update(stamp).update("\0end\0");
 		}
 		const fingerprint = hash.digest("hex");
 		return {

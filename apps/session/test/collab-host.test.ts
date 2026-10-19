@@ -513,6 +513,28 @@ describe("CollabHostAdapter", () => {
 		]);
 	});
 
+	test("repeated hello from a joined peer is rejected: no second snapshot, welcome or join notice", async () => {
+		const guest = await connectGuest(adapter.status!.link, "Alice");
+		guestSockets.push(guest.socket);
+		await waitForWelcome(guest);
+		await waitFor(() => guest.frames.some((f) => f.t === "snapshot-chunk" && f.final));
+		const joinsBefore = port.notices.filter((n) =>
+			n.message.includes("joined the collab session"),
+		).length;
+
+		guest.socket.send({ t: "hello", proto: COLLAB_PROTO, name: "Alice" });
+		await waitFor(() =>
+			guest.frames.find((f) => f.t === "error" && f.message.includes("already joined")),
+		);
+
+		expect(guest.frames.filter((f) => f.t === "welcome")).toHaveLength(1);
+		expect(guest.frames.filter((f) => f.t === "snapshot-chunk" && f.final)).toHaveLength(1);
+		expect(
+			port.notices.filter((n) => n.message.includes("joined the collab session")),
+		).toHaveLength(joinsBefore);
+		expect(adapter.participantCount).toBe(2);
+	});
+
 	test("guest prompt routes to port.promptFromGuest with (text, images, name)", async () => {
 		const guest = await connectGuest(adapter.status!.link, "Bob");
 		guestSockets.push(guest.socket);

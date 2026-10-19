@@ -81,8 +81,28 @@ function records(entry: SessionEntry): Map<string, StoredAnnotation> {
 	}
 	return result;
 }
+const GIT_TIMEOUT_MS = 10_000;
 async function git(entry: SessionEntry, args: string[]): Promise<string> {
-	return (await run("git", args, { cwd: entry.cwd, maxBuffer: 16 * 1024 * 1024 })).stdout;
+	return (
+		await run("git", ["--no-optional-locks", ...args], {
+			cwd: entry.cwd,
+			maxBuffer: 16 * 1024 * 1024,
+			timeout: GIT_TIMEOUT_MS,
+		})
+	).stdout;
+}
+/** Memoizes git probes within one listing: HEAD and shared base/head refs run once. */
+function memoGit(entry: SessionEntry): (args: string[]) => Promise<string> {
+	const memo = new Map<string, Promise<string>>();
+	return (args) => {
+		const key = args.join("\0");
+		let out = memo.get(key);
+		if (!out) {
+			out = git(entry, args);
+			memo.set(key, out);
+		}
+		return out;
+	};
 }
 function messageText(message: unknown): string {
 	const data = object(message);
@@ -100,6 +120,7 @@ function messageText(message: unknown): string {
 async function readAnchor(
 	entry: SessionEntry,
 	anchor: ReviewAnchor,
+	read: GitRead = (args) => git(entry, args),
 ): Promise<{ content: string; drift: boolean } | null> {
 	if (anchor.kind === "text") return { content: anchor.text, drift: false };
 	if (anchor.kind === "entry") {
@@ -115,16 +136,16 @@ async function readAnchor(
 	let drift = false;
 	try {
 		if (anchor.kind === "diff") {
-			const base = (await git(entry, ["rev-parse", "--verify", `${anchor.base}^{commit}`])).trim();
-			const head = (await git(entry, ["rev-parse", "--verify", `${anchor.head}^{commit}`])).trim();
-			const liveHead = (await git(entry, ["rev-parse", "HEAD"])).trim();
+			const base = (await read(["rev-parse", "--verify", `${anchor.base}^{commit}`])).trim();
+			const head = (await read(["rev-parse", "--verify", `${anchor.head}^{commit}`])).trim();
+			const liveHead = (await read(["rev-parse", "HEAD"])).trim();
 			drift =
 				head !== liveHead ||
 				(anchor.base.length === 40 && base !== anchor.base) ||
 				(anchor.head.length === 40 && head !== anchor.head);
 			content =
 				anchor.side === "old"
-					? await git(entry, ["show", `${base}:${anchor.path}`])
+					? await read(["show", `${base}:${anchor.path}`])
 					: await readFile(resolve(entry.cwd, anchor.path), "utf8");
 		} else {
 			const path = anchor.path.startsWith("local://")
@@ -141,11 +162,13 @@ async function readAnchor(
 	if (anchor.start > lines.length || anchor.end > lines.length) return null;
 	return { content: lines.slice(anchor.start - 1, anchor.end).join("\n"), drift };
 }
+type GitRead = (args: string[]) => Promise<string>;
 async function display(
 	entry: SessionEntry,
 	record: StoredAnnotation,
+	read: GitRead = (args) => git(entry, args),
 ): Promise<ReviewAnnotationDto> {
-	const live = await readAnchor(entry, record.annotation.anchor);
+	const live = await readAnchor(entry, record.annotation.anchor, read);
 	const anchor = record.annotation.anchor;
 	const hash = anchor.kind === "entry" ? anchor.anchor.revision : anchor.contentHash;
 	return {
@@ -161,11 +184,15 @@ export async function listReviewAnnotations(
 	entry: SessionEntry,
 	source?: ReviewAnnotationDto["source"],
 ): Promise<ReviewAnnotationDto[]> {
-	return Promise.all(
-		[...records(entry).values()]
-			.filter((record) => !record.removed && (!source || record.annotation.source === source))
-			.map((record) => display(entry, record)),
-	);
+	// Sequential on purpose: diff anchors shell out to git, and fanning out would
+	// spawn one git process per annotation at once.
+	const read = memoGit(entry);
+	const out: ReviewAnnotationDto[] = [];
+	for (const record of [...records(entry).values()].filter(
+		(record) => !record.removed && (!source || record.annotation.source === source),
+	))
+		out.push(await display(entry, record, read));
+	return out;
 }
 function persist(entry: SessionEntry, record: StoredAnnotation): void {
 	entry.session.sessionManager.appendCustomEntry(

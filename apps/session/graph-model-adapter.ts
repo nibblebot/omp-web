@@ -52,7 +52,13 @@ export type GraphNavigateOptions = NonNullable<Parameters<AgentSession["navigate
 	revision?: string;
 };
 
-/** Revision includes content and labels, not only append count or current leaf. */
+/**
+ * Revision includes content and labels, not only append count or current leaf.
+ * Cheap invariants (length, last id, leaf) are unsound: SDK `rewriteEntries()`
+ * (session-maintenance, turn-recovery) mutates entries in place, and the only
+ * correct counter (`#bodyRevision`) has no public getter. Hashing every entry
+ * stays the correct choice until the SDK exposes one.
+ */
 export function graphRevision(
 	sessionId: string,
 	leafId: string | null,

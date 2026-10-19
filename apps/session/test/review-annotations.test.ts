@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rename, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import type { ReviewAnnotationDto } from "#lib/wire/protocol";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { SessionEntry } from "../session-entry";
-import { createAnnotationMethods, reviewContentHash } from "../review-annotations";
+import {
+	createAnnotationMethods,
+	listReviewAnnotations,
+	reviewContentHash,
+} from "../review-annotations";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -171,5 +176,72 @@ describe("durable review annotations", () => {
 		expect(prompts).toHaveLength(0);
 		await methods.annotationCompose(entry, [{ ids: [created.id], intent: "submit" }]);
 		expect(prompts).toHaveLength(1);
+	});
+});
+
+describe("annotation git probes", () => {
+	afterEach(() => cleanupTempDirs());
+	test("diff anchors in one listing share git probes, run serially, and disable optional locks", async () => {
+		const repo = tempDir("omp-review-annotation-repo-");
+		const shims = tempDir("omp-review-annotation-shim-");
+		const realGit = Bun.which("git");
+		if (!realGit) throw new Error("git is required");
+		const identity = ["-c", "user.name=omp-test", "-c", "user.email=omp-test@example.invalid"];
+		const git = async (args: string[]): Promise<string> => {
+			const proc = Bun.spawn([realGit, ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+			const out = await new Response(proc.stdout).text();
+			if ((await proc.exited) !== 0) throw new Error(`git ${args.join(" ")} failed`);
+			return out.trim();
+		};
+		await git(["init", "-q"]);
+		await git([...identity, "commit", "-q", "--allow-empty", "-m", "base"]);
+		await Bun.write(join(repo, "file.txt"), "one\ntwo\n");
+		await git(["add", "file.txt"]);
+		await git([...identity, "commit", "-q", "-m", "head"]);
+		const base = await git(["rev-parse", "HEAD~1"]);
+		const head = await git(["rev-parse", "HEAD"]);
+		const branch: Array<Record<string, unknown>> = [];
+		const session = {
+			sessionManager: {
+				getBranch: () => branch,
+				getSessionId: () => "annotation-session",
+				appendCustomEntry(customType: string, data: unknown) {
+					const id = `entry-${branch.length}`;
+					branch.push({ type: "custom", id, customType, data: structuredClone(data) });
+					return id;
+				},
+			},
+		};
+		const entry = { cwd: repo, session } as unknown as SessionEntry;
+		const methods = createAnnotationMethods();
+		const anchor = {
+			kind: "diff",
+			repositoryId: "repo",
+			base,
+			head,
+			side: "new",
+			path: "file.txt",
+			start: 1,
+			end: 1,
+			contentHash: reviewContentHash("one"),
+		} as const;
+		for (let i = 0; i < 3; i++)
+			await methods.annotationCreate(entry, [{ source: "diff", anchor, note: `note ${i}` }]);
+		const log = join(shims, "calls.log");
+		const shim = join(shims, "git");
+		await Bun.write(shim, `#!/bin/sh\necho "$*" >> "${log}"\nexec "${realGit}" "$@"\n`);
+		await chmod(shim, 0o755);
+		const previousPath = process.env.PATH;
+		process.env.PATH = `${shims}${delimiter}${previousPath ?? ""}`;
+		let listed: ReviewAnnotationDto[];
+		try {
+			listed = await listReviewAnnotations(entry);
+		} finally {
+			process.env.PATH = previousPath;
+		}
+		const calls = (await Bun.file(log).text()).trim().split("\n");
+		expect(listed.map((item) => item.status)).toEqual(["current", "current", "current"]);
+		expect(calls.every((call) => call.startsWith("--no-optional-locks "))).toBe(true);
+		expect(calls).toHaveLength(3);
 	});
 });
