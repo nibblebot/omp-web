@@ -363,6 +363,18 @@ interface ForwardOrigin {
 }
 
 /**
+ * Single eviction path for non-clone roster rows (FLC-22). Implemented by the
+ * server (fleet/server.ts #evictRow / #evictProject), which owns the pair
+ * watch, log tap, and store-orphan marker that a row removal must also clear.
+ * `evictRow` stops the session, runs `removal`, and drops the row only once
+ * `removal` resolves; a rejecting `removal` leaves the row registered (FLC-21).
+ */
+export interface EdgeEvictionHooks {
+	evictRow<T>(daemonId: string, removal: () => Promise<T>): Promise<T>;
+	evictProject(projectId: string): Promise<void>;
+}
+
+/**
  * Clone lifecycle service injected into the edge (P6/P7 boundary). The edge
  * NEVER stops/removes/deletes a clone workspace through the supervisor,
  * git worktree guards, or registry.remove directly: every clone
@@ -427,6 +439,8 @@ export interface EdgeDeps {
 	transport?: DaemonTransportRegistry;
 	/** Clone lifecycle service (create/start/wake/stop/remove/delete). Absent = clone commands answer typed unavailability. */
 	lifecycle?: EdgeLifecycleHooks;
+	/** Non-clone row eviction (FLC-22). Required: the server owns pair/log-tap/orphan cleanup. */
+	eviction: EdgeEvictionHooks;
 	/** Boot-static secret-free provider catalog (P1.3), published on registered_projects. Omitted entirely when not configured. */
 	providerProfiles?: PublicProviderProfile[];
 	/** Fleet transcript store (P3.8) for clone session listing/resume membership. Absent = clone rows list no sessions. */
@@ -598,6 +612,8 @@ export class FleetEdge {
 	readonly #transport: DaemonTransportRegistry | undefined;
 	/** Clone lifecycle service (P6/P7): every clone mutation goes through it, never a kind-blind edge path. */
 	readonly #lifecycle: EdgeLifecycleHooks | undefined;
+	/** Non-clone row eviction (FLC-22): every removal of a roster row goes through it. */
+	readonly #eviction: EdgeEvictionHooks;
 	/** Boot-static secret-free provider catalog, published on registered_projects (P1.3). */
 	readonly #providerProfiles: PublicProviderProfile[] | undefined;
 	/** Fleet transcript store for clone session listing/resume membership (P3.8). */
@@ -681,6 +697,7 @@ export class FleetEdge {
 		this.#fleet = deps.fleet;
 		this.#transport = deps.transport;
 		this.#lifecycle = deps.lifecycle;
+		this.#eviction = deps.eviction;
 		this.#providerProfiles = deps.providerProfiles;
 		this.#logStore = deps.logStore;
 		this.#backpressureBytes = opts?.backpressureBytes ?? SSE_BACKPRESSURE_BYTES;
@@ -1365,13 +1382,11 @@ export class FleetEdge {
 				return;
 			}
 			for (const row of rows) {
-				if (row.status === "asleep") continue;
 				for (const s of this.#browsers) {
 					if (s.pipe?.daemonId === row.daemonId) this.#closePipe(s);
 				}
-				await this.#supervisor.prune(row.daemonId);
 			}
-			this.#registry.removeProject(projectId);
+			await this.#eviction.evictProject(projectId);
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
@@ -1516,12 +1531,11 @@ export class FleetEdge {
 			for (const s of this.#browsers) {
 				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
 			}
-			// Stop + evict: the supervisor sends ShutdownControl and kills an
-			// own child, so no process outlives the removal.
-			await this.#supervisor.prune(daemonId);
-			// The roster broadcast rides registry.onChange.
-			this.#registry.remove(daemonId);
-			await deleteWorktree(entry, { deleteBranch });
+			// Stop + evict only once the guarded removal succeeded (FLC-21): a
+			// refused delete leaves the row registered, asleep.
+			await this.#eviction.evictRow(daemonId, async () => {
+				await deleteWorktree(entry, { deleteBranch });
+			});
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
@@ -1693,12 +1707,9 @@ export class FleetEdge {
 			for (const s of this.#browsers) {
 				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
 			}
-			// Removal leaves no process or credential behind: the supervisor
-			// sends ShutdownControl when paired, kills an own child, and revokes
-			// the enrollment before the roster entry goes.
-			await this.#supervisor.prune(daemonId);
-			// The entry is gone; the roster broadcast rides registry.onChange.
-			this.#registry.remove(daemonId);
+			// Removal leaves no process or credential behind: stop, drop the pair
+			// state, and remove the row through the server's eviction hook.
+			await this.#eviction.evictRow(daemonId, async () => {});
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}

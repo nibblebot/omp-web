@@ -129,6 +129,7 @@ import {
 	WorktreeDirtyError,
 	WorktreeTargetExistsError,
 	type CreateWorktreeResult,
+	type DeleteWorktreeResult,
 } from "./worktrees";
 
 const DEFAULT_PORT = 4722;
@@ -613,6 +614,10 @@ class FleetServerImpl implements FleetServer {
 			fleet: this.fleetFacts,
 			transport: this.transport,
 			lifecycle: this.lifecycle,
+			eviction: {
+				evictRow: (daemonId, removal) => this.#evictRow(daemonId, removal),
+				evictProject: (projectId) => this.#evictProject(projectId),
+			},
 			logStore: this.logStore ?? undefined,
 			providerProfiles: publicProfileCatalog(config),
 			serveUi,
@@ -1481,14 +1486,7 @@ class FleetServerImpl implements FleetServer {
 		if (cloneIds.length > 0) {
 			throw new HttpError(409, `project ${projectId} has clone workspaces: ${cloneIds.join(", ")}`);
 		}
-		for (const entry of rows) {
-			if (entry.status !== "asleep") {
-				await this.supervisor.prune(entry.daemonId);
-				this.#forgetPair(entry.daemonId);
-			}
-			this.#markStoreOrphanIfStored(entry);
-		}
-		this.registry.removeProject(projectId);
+		await this.#evictProject(projectId);
 		return json({ removed: projectId });
 	}
 
@@ -1534,10 +1532,7 @@ class FleetServerImpl implements FleetServer {
 		if (!this.registry.get(entry.daemonId)) return;
 		this.#evictingWorktrees.add(entry.daemonId);
 		try {
-			await this.supervisor.prune(entry.daemonId);
-			this.#forgetPair(entry.daemonId);
-			this.#markStoreOrphanIfStored(entry);
-			this.registry.remove(entry.daemonId);
+			await this.#evictRow(entry.daemonId, async () => {});
 			this.eventLog.add(
 				"info",
 				"server",
@@ -1588,6 +1583,35 @@ class FleetServerImpl implements FleetServer {
 		);
 	}
 
+	/**
+	 * The single eviction of a non-clone roster row (FLC-21/FLC-22). Stops the
+	 * session (supervisor prune), then runs `removal`. Only once it resolves are
+	 * the pair watch and log tap forgotten, the store-orphan marker persisted,
+	 * and the row dropped. A rejecting `removal` leaves the row registered
+	 * (asleep) with its resume state, and rejects with its error.
+	 */
+	async #evictRow<T>(daemonId: string, removal: () => Promise<T>): Promise<T> {
+		const entry = this.registry.get(daemonId);
+		if (entry === undefined) throw new Error(`unknown daemon: ${daemonId}`);
+		await this.supervisor.prune(daemonId);
+		const result = await removal();
+		this.#forgetPair(daemonId);
+		this.#markStoreOrphanIfStored(entry);
+		this.registry.remove(daemonId);
+		return result;
+	}
+
+	/** Stops each running row of a project, drops its pair state and orphan marker, then deregisters the project. Clone rows are refused by the caller. */
+	async #evictProject(projectId: string): Promise<void> {
+		for (const entry of this.registry.list()) {
+			if (entry.projectId !== projectId) continue;
+			if (entry.status !== "asleep") await this.supervisor.prune(entry.daemonId);
+			this.#forgetPair(entry.daemonId);
+			this.#markStoreOrphanIfStored(entry);
+		}
+		this.registry.removeProject(projectId);
+	}
+
 	async #handleRemove(req: Request): Promise<Response> {
 		const body = await readJson(req);
 		const selector = requireString(body, "selector");
@@ -1612,13 +1636,9 @@ class FleetServerImpl implements FleetServer {
 					throw err;
 				}
 			} else {
-				// Legacy direct/worktree eviction: prune drops the per-daemon
-				// supervisor state and revokes the enrollment, so a removed
-				// daemon leaks nothing.
-				await this.supervisor.prune(entry.daemonId);
-				this.#forgetPair(entry.daemonId);
-				this.#markStoreOrphanIfStored(entry);
-				this.registry.remove(entry.daemonId);
+				// Legacy direct/worktree eviction: stop, drop the pair state, and
+				// remove the row in one place (#evictRow).
+				await this.#evictRow(entry.daemonId, async () => {});
 			}
 			this.eventLog.add("info", "server", "removed", entry.daemonId);
 			removed.push(entry.daemonId);
@@ -2026,16 +2046,11 @@ class FleetServerImpl implements FleetServer {
 		if (!info.linked) throw new HttpError(403, info.reason ?? `not a linked worktree: ${path}`);
 		if (info.dirty)
 			throw new HttpError(409, info.reason ?? `worktree has uncommitted changes: ${path}`);
-		// Stop + evict (removal-time cleanup: #24 prune drops supervisor state).
-		if (entry.workspace?.kind !== "clone") {
-			await this.supervisor.prune(daemonId);
-			this.#forgetPair(daemonId);
-		}
-		this.registry.remove(daemonId);
-		// Git removal; the guards are re-asserted inside (race backstop).
-		let deleted: Awaited<ReturnType<typeof deleteWorktree>>;
+		// Stop, run the guarded git removal, and evict the row only once it
+		// succeeded: a refused delete leaves the row registered (asleep, FLC-21).
+		let deleted: DeleteWorktreeResult;
 		try {
-			deleted = await deleteWorktree(entry, { deleteBranch });
+			deleted = await this.#evictRow(daemonId, () => deleteWorktree(entry, { deleteBranch }));
 		} catch (err) {
 			if (err instanceof WorktreeDirtyError) throw new HttpError(409, err.message);
 			throw new HttpError(

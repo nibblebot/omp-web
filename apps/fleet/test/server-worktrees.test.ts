@@ -279,6 +279,32 @@ describe("worktree lifecycle routes", () => {
 		expect(delBody.error).toContain("uncommitted changes");
 	});
 
+	test("DELETE that git refuses (locked) answers 500 and keeps the row and the worktree (FLC-21)", async () => {
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			name: "Locked",
+		});
+		expect(res.status).toBe(201);
+		const created = (await res.json()) as { entry: RegistryEntry };
+		const entry = created.entry;
+		// A lock passes the pre-check but makes `git worktree remove` refuse,
+		// the removal that runs after the stop.
+		expect((await gitIn(repoDir, ["worktree", "lock", entry.cwd])).exitCode).toBe(0);
+		try {
+			const del = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, {
+				method: "DELETE",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({}),
+			});
+			expect(del.status).toBe(500);
+			const delBody = (await del.json()) as { error?: string };
+			expect(delBody.error).toContain("locked");
+			expect(server.registry.get(entry.daemonId)).toMatchObject({ status: "asleep" });
+			expect(existsSync(entry.cwd)).toBe(true);
+		} finally {
+			await gitIn(repoDir, ["worktree", "unlock", entry.cwd]);
+		}
+	});
+
 	test("a legacy entry without a source checkout resolves its repository from Git and deletes", async () => {
 		const target = join(workspaceDir, project.name, "legacy-unsourced");
 		expect(

@@ -11,8 +11,10 @@ import { SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "#lib/wire/protocol";
 import type { DaemonEntry, DaemonInfo, ServerFrame } from "#lib/wire/protocol";
 import { parseSseUnits } from "#lib/wire/sse";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import type { FleetEdge } from "../edge";
+import type { EdgeEvictionHooks, FleetEdge } from "../edge";
 import type { DaemonTransportRegistry } from "../daemon-transport";
+import type { Registry } from "../registry";
+import type { SpawnSupervisor } from "../supervisor";
 
 export { cleanupTempDirs };
 
@@ -287,4 +289,28 @@ export function eventMessage(frame: ServerFrame & { type: "event" }): string | u
 export function asRoster(frame: ServerFrame): { type: "roster"; daemons: DaemonEntry[] } {
 	if (frame.type !== "roster") throw new Error("expected roster frame");
 	return frame;
+}
+
+/**
+ * Eviction hooks for edge tests: the server's #evictRow/#evictProject minus
+ * its pair/log-tap/orphan bookkeeping (covered by the server suites). Prune
+ * first, run the removal, then drop the row, as the server does.
+ */
+export function testEviction(registry: Registry, supervisor: SpawnSupervisor): EdgeEvictionHooks {
+	return {
+		async evictRow(daemonId, removal) {
+			await supervisor.prune(daemonId);
+			const result = await removal();
+			registry.remove(daemonId);
+			return result;
+		},
+		async evictProject(projectId) {
+			for (const entry of registry.list()) {
+				if (entry.projectId === projectId && entry.status !== "asleep") {
+					await supervisor.prune(entry.daemonId);
+				}
+			}
+			registry.removeProject(projectId);
+		},
+	};
 }

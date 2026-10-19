@@ -18,7 +18,14 @@ import { FleetEventLog } from "../events";
 import { Registry } from "../registry";
 import { SpawnSupervisor } from "../supervisor";
 import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
-import { FAKE_CWD, FAKE_STATE, openBrowser, waitFor, type BrowserSocket } from "./edge.testkit";
+import {
+	FAKE_CWD,
+	FAKE_STATE,
+	openBrowser,
+	testEviction,
+	waitFor,
+	type BrowserSocket,
+} from "./edge.testkit";
 
 afterAll(cleanupTempDirs);
 
@@ -63,6 +70,7 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 		const edge = new FleetEdge({
 			registry,
 			supervisor,
+			eviction: testEviction(registry, supervisor),
 			config,
 			eventLog: new FleetEventLog(),
 			transport,

@@ -28,6 +28,7 @@ import {
 	openBrowser,
 	serveEdge,
 	sleep,
+	testEviction,
 	waitFor,
 } from "./edge.testkit";
 
@@ -73,6 +74,7 @@ async function startRig(
 		{
 			registry,
 			supervisor,
+			eviction: testEviction(registry, supervisor),
 			config: CONFIG,
 			eventLog: new FleetEventLog(),
 			transport,

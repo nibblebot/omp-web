@@ -18,7 +18,14 @@ import { FleetEventLog } from "../events";
 import { Registry } from "../registry";
 import { SpawnSupervisor } from "../supervisor";
 import { managedWorktreePath, registerWorktreeEntry } from "../worktrees";
-import { asRoster, openBrowser, serveEdge, waitFor, type BrowserSocket } from "./edge.testkit";
+import {
+	asRoster,
+	openBrowser,
+	serveEdge,
+	testEviction,
+	waitFor,
+	type BrowserSocket,
+} from "./edge.testkit";
 
 afterAll(cleanupTempDirs);
 
@@ -67,6 +74,7 @@ describe("edge worktree commands", () => {
 		edge = new FleetEdge({
 			registry,
 			supervisor,
+			eviction: testEviction(registry, supervisor),
 			config,
 			eventLog: new FleetEventLog(),
 			transport,
@@ -278,6 +286,37 @@ describe("edge worktree commands", () => {
 		expect(err.error).toContain("uncommitted changes");
 		expect(registry.get(entry.daemonId)).toBeDefined();
 		expect(existsSync(target)).toBe(true);
+	});
+
+	test("delete_worktree that git refuses (locked) keeps the row and the worktree (FLC-21)", async () => {
+		const target = managedWorktreePath(config.workspaceDir, project.path, "Locked");
+		await browser.send({
+			type: "create_worktree",
+			id: "wt-locked-1",
+			projectId: project.projectId,
+			name: "Locked",
+		});
+		const roster = asRoster(
+			await browser.waitForFrame(
+				(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === target),
+				"roster with the locked worktree",
+			),
+		);
+		const entry = roster.daemons.find((d) => d.cwd === target)!;
+		// A lock passes the pre-check (clean linked worktree) but makes
+		// `git worktree remove` refuse, the removal that runs after the stop.
+		expect((await gitIn(repoDir, ["worktree", "lock", target])).exitCode).toBe(0);
+		try {
+			await browser.send({ type: "delete_worktree", id: "wt-locked-2", daemonId: entry.daemonId });
+			await browser.waitForFrame(
+				(f) => f.type === "error" && f.error.includes("locked"),
+				"git refusal of the locked worktree",
+			);
+			expect(registry.get(entry.daemonId)).toMatchObject({ status: "asleep" });
+			expect(existsSync(target)).toBe(true);
+		} finally {
+			await gitIn(repoDir, ["worktree", "unlock", target]);
+		}
 	});
 
 	test("create_worktree with start:true spawns a daemon on the worktree (project-tagged)", async () => {
