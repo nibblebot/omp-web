@@ -1603,6 +1603,17 @@ describe("fleet edge", () => {
 		}
 	});
 
+	test("remove_project with an unknown projectId answers the shared 404 message", async () => {
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		await browser.send({ type: "remove_project", id: "rp-unknown", projectId: "no-such-project" });
+		const err = await browser.waitForFrame(
+			(f) => f.type === "error" && f.error === "remove_project: unknown project id: no-such-project",
+			"remove_project unknown id",
+		);
+		expect(err.type).toBe("error");
+	});
+
 	test("remove_project drops the project's non-clone rows and broadcasts registered_projects without it", async () => {
 		const repoDir = join(tmp, "edge-rm-project-repo");
 		mkdirSync(repoDir, { recursive: true });
