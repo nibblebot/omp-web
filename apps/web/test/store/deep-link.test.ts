@@ -11,6 +11,7 @@ import { restoreInitialRoute } from "../../store/deep-link";
 import { settleDaemonSessions } from "../../store/roster";
 import {
 	FakeEventSource,
+	callResult,
 	dispatch,
 	flushMicrotasks,
 	installLocalStorageShim,
@@ -23,6 +24,18 @@ import {
 type AttachCommand = Extract<ClientCommand, { type: "attach" }>;
 
 const written: string[] = [];
+
+/** Yield microtasks until a matching command is posted. Bounded; no timers. */
+async function untilPosted(
+	match: (c: (typeof posted)[number]) => boolean,
+): Promise<(typeof posted)[number]> {
+	for (let i = 0; i < 50; i++) {
+		const hit = posted.find(match);
+		if (hit !== undefined) return hit;
+		await flushMicrotasks();
+	}
+	throw new Error("expected command was not posted");
+}
 
 beforeEach(() => {
 	installTransportStubs();
@@ -66,6 +79,15 @@ describe("reload on a session hash", () => {
 		if (attach === undefined) throw new Error("no attach command was posted");
 		dispatch({ type: "attach_result", id: attach.id, ok: true, sessionId: "d1" });
 		await flushMicrotasks();
+		// Attaching the session file re-attaches the daemon: answer that second attach too.
+		const second = await untilPosted((c) => c.type === "attach" && c.id !== attach.id);
+		if (second.type !== "attach") throw new Error("second attach was not an attach");
+		dispatch({ type: "attach_result", id: second.id, ok: true, sessionId: "d1" });
+		const sw = await untilPosted((c) => c.type === "call" && c.method === "switchSession");
+		if (sw.type !== "call") throw new Error("switchSession was not a call");
+		dispatch(callResult(sw.id, undefined));
+		// Drain the restore chain before afterEach restores location.
+		for (let i = 0; i < 10; i++) await flushMicrotasks();
 
 		expect(written.filter((url) => url.endsWith("#/d/d1"))).toEqual([]);
 	});

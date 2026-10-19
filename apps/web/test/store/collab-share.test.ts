@@ -23,6 +23,8 @@ import {
 } from "../../store/collab";
 import {
 	FakeEventSource,
+	callResult,
+	dispatch,
 	flushMicrotasks,
 	installLocalStorageShim,
 	installTransportStubs,
@@ -74,6 +76,13 @@ function collabCommands(): ClientCommand[] {
 
 function newSessionCalls(): number {
 	return posted.filter((c) => c.type === "call" && c.method === "newSession").length;
+}
+
+/** Answer the posted newSession call so its promise settles inside the test. */
+function answerNewSession(): void {
+	const pending = posted.find((c) => c.type === "call" && c.method === "newSession");
+	if (pending?.type !== "call") throw new Error("newSession was not posted");
+	dispatch(callResult(pending.id, undefined));
 }
 
 beforeEach(() => {
@@ -134,6 +143,8 @@ describe("New session while a room is live", () => {
 		confirmDangerConfirm();
 		await flushMicrotasks();
 		expect(newSessionCalls()).toBe(1);
+		answerNewSession();
+		await flushMicrotasks();
 	});
 
 	test("cancelling keeps the room and starts nothing", async () => {
@@ -145,10 +156,12 @@ describe("New session while a room is live", () => {
 	});
 
 	test("without a live room it starts at once", async () => {
-		void startNewSession();
+		const started = startNewSession();
 		await flushMicrotasks();
 		expect(dangerConfirm()).toBeNull();
 		expect(newSessionCalls()).toBe(1);
+		answerNewSession();
+		await started;
 	});
 });
 

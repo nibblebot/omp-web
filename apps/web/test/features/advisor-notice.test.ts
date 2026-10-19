@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { ServerFrame } from "#lib/wire/protocol";
 import { FEATURE_IDS, type FeatureId } from "../../features/manifest";
-import { featurePreferences } from "../../features/preferences";
+import { featurePreferences, setFeaturePreference } from "../../features/preferences";
 import { activateFeatures, isFeatureEnabled } from "../../features/registry";
 import { connect, setState, state } from "../../state";
 import {
@@ -62,7 +62,7 @@ function notices(): { text: string; action?: { label: string; run: () => void } 
 }
 
 describe("advisor notes while the browser feature is off", () => {
-	test("live notes raise one notice per session; its action enables the feature", () => {
+	test("live notes raise one notice per session; its action enables the feature", async () => {
 		primed("session-notice-live");
 		live(advisorMsg(2));
 		live(advisorMsg(1));
@@ -73,6 +73,10 @@ describe("advisor notes while the browser feature is off", () => {
 		expect(action?.label).toBe("Show advisor in the browser");
 		action?.run();
 		expect(featurePreferences().advisor).toBe(true);
+		// run() starts an activation nothing awaits; reset the choice and settle the active set here,
+		// so the feature cannot switch on during a later test. Superseding activation drops the stale one.
+		setFeaturePreference("advisor", false);
+		await activateFeatures([]);
 	});
 
 	test("a second session gets its own notice", () => {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as transport from "../../store/transport";
 import {
 	cancelDangerConfirm,
@@ -8,10 +8,16 @@ import {
 
 // The transport is mocked per test; the store module is imported after the mock so it binds to it.
 let handler: (method: string, args: unknown) => Promise<unknown> = async () => undefined;
+const originalTransport = { ...transport };
 mock.module("../../store/transport", () => ({
-	...transport,
+	...originalTransport,
 	call: (method: string, args: unknown) => handler(method, args),
 }));
+
+afterAll(() => {
+	// mock.restore() leaves module mocks installed; reinstall the real exports for later files.
+	mock.module("../../store/transport", () => originalTransport);
+});
 
 // Dynamic imports: the transport mock must be registered before the store module binds to it.
 const review = await import("../../store/review");
