@@ -241,6 +241,23 @@ describe("worktree lifecycle routes", () => {
 		expect(missing.status).toBe(404);
 	});
 
+	test("GET /ctl/worktrees/:id/delete-info 400s for a clone workspace (same as the edge)", async () => {
+		const clone = server.registry.create({
+			name: "clone-info",
+			cwd: join(workspaceDir, "clone-info"),
+			project: project.name,
+			labels: [],
+			template: "test",
+			status: "asleep",
+			projectId: project.projectId,
+			workspace: { kind: "clone", projectId: project.projectId, desiredState: "stopped" },
+		});
+		const res = await fetch(
+			`http://127.0.0.1:${server.port}/ctl/worktrees/${clone.daemonId}/delete-info`,
+		);
+		expect(res.status).toBe(400);
+	});
+
 	test("DELETE /ctl/worktrees/:id stops, evicts, and git-removes the worktree", async () => {
 		const target = join(workspaceDir, project.name, "feature-branch");
 		const entry = server.registry.list().find((e) => e.cwd === target)!;
