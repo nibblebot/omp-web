@@ -269,9 +269,10 @@ async function expectUnavailable(p: Promise<unknown>): Promise<void> {
  * bytes and tear the connection down (drop-and-resume) rather than grow
  * without limit.
  *
- * A down-only dial registers the connection immediately (pairStatus().paired
- * goes true) but writes no envelope until a heartbeat or a send, so
- * readiness is observed via pairStatus, not wire data. The reader drains one
+ * The down leg is a pair only once an up half joins (FEDGE-14), so the
+ * caller must hold an up leg for the same connection open. Readiness is
+ * observed via pairStatus().paired, not wire data: the down leg writes no
+ * envelope until pair_ready, a heartbeat, or a send. The reader drains one
  * chunk per tick: slow enough that a flood crosses the 8 MiB per-connection
  * buffer bound, fast enough that the socket is never idle-killed. */
 function openSlowDown(
@@ -647,18 +648,12 @@ describe("daemon transport controlled pairs", () => {
 			});
 			expect(wrongCred2.status).toBe(401);
 
-			// The current generation still works on both legs. The up leg
-			// answers 200 directly; the down leg is a long-lived SSE stream
-			// whose fetch only resolves once data flows (a down-only dial
-			// writes nothing until a heartbeat), so its acceptance is
-			// observed via the registry pairing the connection.
-			const okUp = await fetch(`${fixture.url}${CALLBACK_UP_PATH}`, {
-				method: "POST",
-				headers: wireHeaders(ws, 2, randomUUID(), cred2),
-				body: "",
-			});
-			expect(okUp.status).toBe(200);
+			// The current generation still works on both legs. The up leg is
+			// held open so the down dial joins a real pair; the down fetch is a
+			// long-lived SSE stream that only resolves once data flows, so its
+			// acceptance is observed via the registry pairing the connection.
 			const okConn = randomUUID();
+			const okUp = openUp(fixture, ws, 2, okConn, cred2);
 			const okDownFetch = fetch(`${fixture.url}${CALLBACK_DOWN_PATH}`, {
 				headers: wireHeaders(ws, 2, okConn, cred2),
 			});
@@ -669,6 +664,7 @@ describe("daemon transport controlled pairs", () => {
 				"gen-2 down dial paired",
 			);
 			expect(fixture.registry.pairStatus(ws).connectionId).toBe(okConn);
+			expect((await okUp.end()).status).toBe(200);
 			okDownFetch.then((res) => res.body?.cancel().catch(() => {})).catch(() => {});
 		} finally {
 			fixture.stop();
@@ -889,8 +885,10 @@ describe("daemon transport controlled pairs", () => {
 		try {
 			// A daemon whose downlink cannot keep up with the fleet: the
 			// registry must bound the buffered bytes and tear the connection
-			// down (drop-and-resume) rather than grow without limit. No up
-			// leg; the ring and down delivery are the subject.
+			// down (drop-and-resume) rather than grow without limit. The up
+			// half joins the down so the pair is real; the ring and down
+			// delivery are the subject.
+			const up = openUp(fixture, ws, gen, connId, cred);
 			const stalled = await openSlowDown(fixture, ws, gen, connId, cred);
 			await stalled.ready();
 			expect(fixture.registry.pairStatus(ws).paired).toBe(true);
@@ -919,6 +917,7 @@ describe("daemon transport controlled pairs", () => {
 				6000,
 				"drop-and-resume teardown",
 			);
+			await up.end();
 			expect(sentSeqs.length).toBeGreaterThan(0);
 			// Nothing further is accepted while unpaired.
 			await expectUnavailable(
@@ -1058,6 +1057,50 @@ describe("daemon transport controlled pairs", () => {
 			const orphanEnded = await orphan.end();
 			expect(orphanEnded.status).toBe(503);
 			expect(orphanEnded.body).toMatchObject({ error: "unavailable" });
+		} finally {
+			fixture.stop();
+		}
+	});
+
+	test("a down-only dial no up half ever joins is not a pair and is torn down past the deadline (FEDGE-14)", async () => {
+		const { registry, advance } = clockedRegistry();
+		const fixture = serve(registry);
+		const ws = "ws-down-only";
+		const gen = 1;
+		const connId = randomUUID();
+		const cred = randomBytes(32).toString("hex");
+		registry.enrollWorkspace(ws, gen, cred);
+		try {
+			// Only the down half dials: the leg is half-open. Its fetch only
+			// resolves once bytes flow (a down-only dial writes nothing until a
+			// heartbeat), so the leg is observed through its body. It must not
+			// report a pair, and the sweep must end it once the silence deadline
+			// passes. Each poll advances the fake clock past that deadline, so the
+			// test holds whether or not the dial has registered yet.
+			const dial = fetch(`${fixture.url}${CALLBACK_DOWN_PATH}`, {
+				headers: wireHeaders(ws, gen, connId, cred),
+			});
+			let closed = false;
+			dial
+				.then((res) => res.text())
+				.then(
+					() => {
+						closed = true;
+					},
+					() => {
+						closed = true;
+					},
+				);
+			expect(registry.pairStatus(ws)).toMatchObject({ paired: false, connectionId: null });
+			await waitFor(
+				() => {
+					advance(SILENCE_DEADLINE_MS + 1);
+					return closed ? true : undefined;
+				},
+				5000,
+				"half-open down leg torn down",
+			);
+			expect(registry.pairStatus(ws).connectionId).toBeNull();
 		} finally {
 			fixture.stop();
 		}

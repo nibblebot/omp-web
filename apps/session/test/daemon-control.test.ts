@@ -19,13 +19,15 @@
  * stream_resync + ring clear + full re-prime (never a partial tail). A
  * floor at or above the frontier replays retained entries newer than it
  * (HIT). A caught-up HIT replays nothing and does NOT re-prime. Only a
- * brand-new stream primes fresh. A pair replacement clears every stream's
- * ring (per-connection seq spaces restart) and re-primes it fresh.
+ * brand-new stream primes fresh. A stream_open without lastSeq (the fleet's
+ * re-open on a new pair, which has no replay floor) clears the ring, resyncs
+ * the browser, and re-primes it fresh. A stream the fleet does not re-open on
+ * a new pair is an orphan and is dropped.
  *
  * Pure unit: createDaemonControl with a stub deps whose send() assigns
  * synthetic wire seqs (like the real transport) and records every emit.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, vi } from "bun:test";
 import { createDaemonControl, type DaemonControl, type DaemonControlDeps } from "../daemon-control";
 import type { CallbackEnvelope, CallbackKind } from "#lib/wire/callback-protocol";
 
@@ -59,6 +61,7 @@ function makeHarness(
 		connection: 0,
 	}),
 	recordSent = true,
+	streamConfirmMs?: number,
 ): {
 	control: DaemonControl;
 	sent: Sent[];
@@ -111,6 +114,7 @@ function makeHarness(
 		mainSessionFile: null,
 		onShutdown: () => {},
 		onBrowserStreamsChange,
+		streamConfirmMs,
 	};
 	const control = createDaemonControl(deps);
 	return { control, sent, primes, sentCount };
@@ -143,6 +147,19 @@ function emitPrimeFrame(control: DaemonControl): void {
 
 const ringedSeqs = (sent: Sent[], streamId = STREAM): number[] =>
 	sent.filter((s) => s.streamId === streamId && s.seq !== null).map((s) => s.seq as number);
+
+const resyncSent = (sent: Sent[], from: number): boolean =>
+	sent
+		.slice(from)
+		.some(
+			(s) =>
+				s.streamId === STREAM &&
+				s.kind === "control" &&
+				typeof s.payload === "object" &&
+				s.payload !== null &&
+				"type" in s.payload &&
+				s.payload.type === "stream_resync",
+		);
 
 describe("daemon-control stream_open replay (P3.10)", () => {
 	test("a fresh stream primes; subsequent ringed deltas ring with wire seqs", () => {
@@ -258,33 +275,116 @@ describe("daemon-control stream_open replay (P3.10)", () => {
 		control.stop();
 	});
 
-	test("pair replacement clears the ring and re-primes every stream fresh", () => {
+	test("a stream_open without lastSeq on an existing stream resyncs and re-primes (pair replacement)", () => {
 		const { control, sent, primes } = makeHarness();
 		openStream(control); // prime (1)
 		emitState(control); // wire 1025, ringed
 		emitState(control); // wire 1026, ringed
 		expect(primes.length).toBe(1);
-		// Pair replacement: the per-connection seq space restarts, so the old
-		// ring (seqs 1025/1026 of the dead pair) must be cleared and the
-		// stream re-primed, never replayed into the new seq space.
-		control.onPairChange();
-		expect(primes.length).toBe(2); // re-primed
-		const st = control.status().streams[0]!;
-		expect(st.ringEntries).toBe(0); // ring cleared
-		expect(st.lastSeq).toBe(0); // seq floor reset
-		expect(st.ringBytes).toBe(0);
-		// New-pair live deltas ring afresh from the reset state.
+		// Pair replacement: the edge re-sends stream_open with no lastSeq (the
+		// new pair has no replay floor for this stream). The dead pair's ring
+		// must be cleared, the browser resynced, and the stream re-primed
+		// fresh, never replayed into the new pair.
 		const sentBefore = sent.length;
+		openStream(control);
+		expect(primes.length).toBe(2);
+		expect(resyncSent(sent, sentBefore)).toBe(true);
+		const st = control.status().streams[0]!;
+		expect(st.ringEntries).toBe(0);
+		expect(st.ringBytes).toBe(0);
+		// New-pair live deltas ring afresh.
+		const sentBeforeDelta = sent.length;
 		emitState(control); // wire 1027 on the new pair
-		const newRinged = sent.slice(sentBefore).filter((s) => s.kind === "frame" && s.seq !== null);
+		const newRinged = sent
+			.slice(sentBeforeDelta)
+			.filter((s) => s.kind === "frame" && s.seq !== null);
 		expect(newRinged.length).toBe(1);
-		// A reconnect floor at the reset seq is a caught-up HIT (no replay of
-		// dead-pair entries, no re-prime).
+		// A reconnect floor at the newest seq is a caught-up HIT (no re-prime).
 		const sentBeforeReopen = sent.length;
 		openStream(control, 1027);
-		expect(primes.length).toBe(2); // no new prime
+		expect(primes.length).toBe(2);
 		expect(sent.slice(sentBeforeReopen).filter((s) => s.kind === "frame")).toHaveLength(0);
 		control.stop();
+	});
+
+	test("frames lost while the pair was down are recovered by the re-open that follows", () => {
+		let live = true;
+		const { control, sent, primes } = makeHarness(undefined, () => live);
+		openStream(control); // prime (1)
+		live = false;
+		emitState(control); // dropped: the pair is down
+		live = true;
+		const sentBefore = sent.length;
+		openStream(control); // fleet re-opens on the new pair, no lastSeq
+		expect(primes.length).toBe(2);
+		expect(resyncSent(sent, sentBefore)).toBe(true);
+		control.stop();
+	});
+});
+
+describe("daemon-control browser-stream orphan GC (SXP-03)", () => {
+	const open = (control: DaemonControl, streamId: string, connectionId: string): void => {
+		control.handleEnvelope({
+			version: 1,
+			workspaceId: "w1",
+			generation: 1,
+			connectionId,
+			streamId,
+			seq: 0,
+			kind: "control",
+			payload: { type: "stream_open" },
+			at: Date.now(),
+		} satisfies CallbackEnvelope);
+	};
+
+	test("a browser stream the fleet does not re-open on a new pair is dropped", () => {
+		vi.useFakeTimers();
+		try {
+			const counts: number[] = [];
+			const { control } = makeHarness(
+				undefined,
+				() => true,
+				(n) => counts.push(n),
+				undefined,
+				true,
+				20,
+			);
+			open(control, "browser/gone", "pairA");
+			open(control, "browser/live", "pairA");
+			expect(control.browserStreamCount()).toBe(2);
+			open(control, "browser/live", "pairB"); // new pair: only the live browser re-opens
+			vi.advanceTimersByTime(20);
+			expect(control.status().streams.map((s) => s.streamId)).toEqual(["browser/live"]);
+			expect(counts.at(-1)).toBe(1);
+			control.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("an orphan the fleet re-opens later is re-created and primed fresh", () => {
+		vi.useFakeTimers();
+		try {
+			const { control, primes } = makeHarness(
+				undefined,
+				() => true,
+				() => {},
+				undefined,
+				true,
+				20,
+			);
+			open(control, "browser/gone", "pairA");
+			open(control, "browser/live", "pairB");
+			vi.advanceTimersByTime(20); // browser/gone dropped
+			expect(control.status().streams.map((s) => s.streamId)).toEqual(["browser/live"]);
+			const primedBefore = primes.length;
+			open(control, "browser/gone", "pairB"); // the browser is still alive
+			expect(primes.length).toBe(primedBefore + 1);
+			expect(control.browserStreamCount()).toBe(2);
+			control.stop();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

@@ -2,6 +2,7 @@ import {
 	callbackError,
 	CONNECTION_MAX_BYTES,
 	ENVELOPE_MAX_BYTES,
+	HEARTBEAT_INTERVAL_MS,
 	STREAM_MAX_BYTES,
 } from "#lib/wire/callback-protocol";
 import type {
@@ -32,10 +33,13 @@ import { isRingedDeltaType } from "./sse-delivery";
  *   ring's eviction frontier (ring MISS) flips stream_resync followed
  *   by a full re-prime burst, never a silent partial replay; a caught-up
  *   floor replays nothing and does not re-prime. An outbound buffer drop
- *   also flips stream_resync. stream_close drops the stream. Each pair
- *   replacement (onPairChange) clears every still-open stream's ring, the
- *   per-connection wire seq space restarts, and re-primes it fresh
- *   instead of streaming into the void.
+ *   also flips stream_resync. stream_close drops the stream. A pair
+ *   replacement arrives as a stream_open with no lastSeq (the fleet's re-open
+ *   on the new pair): the stream's ring is cleared, the per-connection wire
+ *   seq space restarts, and it is re-primed fresh instead of streaming into
+ *   the void. A browser stream the fleet does not re-open on the new pair is
+ *   an orphan (its stream_close was lost) and is dropped after a grace window
+ *   (SXP-02, SXP-03).
  * - Command routing: kind:"command" payloads on a browser/control stream are
  *   acked (command_ack receipt) then dispatched through the mounted
  *   handleCommand; answers (call_result/unicast) flow as frames on the same
@@ -123,6 +127,13 @@ export interface DaemonControlDeps {
 	 * never join the local SSE consumer set.
 	 */
 	onBrowserStreamsChange?: (count: number) => void;
+	/**
+	 * Grace window after a new callback pair's first envelope before browser
+	 * streams the fleet did not re-open on that pair are dropped (SXP-03).
+	 * Defaults to two heartbeat intervals: a live pipe's stream_open lands
+	 * well inside one.
+	 */
+	streamConfirmMs?: number;
 }
 
 interface RingEntry {
@@ -157,6 +168,12 @@ interface BrowserStream {
 	 */
 	deferred: Array<{ frame: Record<string, unknown>; bytes: number }> | null;
 	deferredBytes: number;
+	/**
+	 * connectionId of the callback pair that last sent this stream an envelope.
+	 * A stream whose pairId is not the live pair was not re-opened by the
+	 * fleet on the current pair, so it is an orphan (SXP-03).
+	 */
+	pairId: string | null;
 }
 
 export interface DaemonControlStatus {
@@ -210,6 +227,9 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	let admissionBarrier = false;
 	let lastQuiesce: DaemonControlStatus["lastQuiesce"] = null;
 	let stopped = false;
+	/** connectionId of the callback pair the fleet is currently driving. */
+	let livePairId: string | null = null;
+	let orphanSweep: Timer | undefined;
 
 	/**
 	 * Emit one envelope. On a browser stream, ringed-delta kind:"frame"
@@ -395,6 +415,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 				epoch: 0,
 				deferred: null,
 				deferredBytes: 0,
+				pairId: null,
 			};
 			streams.set(streamId, stream);
 			deps.onBrowserStreamsChange?.(streams.size);
@@ -407,7 +428,17 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		// resync + full re-prime (P3.10: only a miss re-primes). A floor at
 		// or above the frontier (the client consumed every evicted entry) is
 		// a HIT below. A brand-new stream has no frontier and primes below.
-		if (!newStream && stream!.lastSeq > 0 && stream!.lastSeq < stream!.evictedSeq) {
+		// A stream_open with NO lastSeq on an existing stream is the fleet's
+		// re-open after a pair replacement: the edge omits lastSeq on a fresh
+		// pair (its floor belongs to the old pair), so this stream's ring and
+		// floor describe a dead seq space. Resync and re-prime (SXP-02). An
+		// edge pipe that delivered nothing also omits lastSeq; the resync and
+		// prime are still correct there. Wire seqs stay monotonic across pairs,
+		// so the floor itself is not reset.
+		if (
+			!newStream &&
+			(lastSeq === undefined || (stream!.lastSeq > 0 && stream!.lastSeq < stream!.evictedSeq))
+		) {
 			emit(streamId, "control", { type: "stream_resync" } satisfies StreamResyncControl);
 			// The retained tail is stale: its content is superseded by the
 			// fresh prime's snapshots, and replaying it later would double-
@@ -648,6 +679,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 
 	const stop = (): void => {
 		stopped = true;
+		clearTimeout(orphanSweep);
 		quiescing = false;
 		admissionBarrier = false;
 		streams.clear();
@@ -666,28 +698,41 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		lastQuiesce,
 	});
 
+	/** Drop every browser stream the live pair did not re-open (SXP-03). */
+	const dropOrphans = (): void => {
+		if (stopped) return;
+		let dropped = false;
+		for (const [streamId, stream] of streams) {
+			if (stream.pairId === livePairId) continue;
+			streams.delete(streamId);
+			dropped = true;
+		}
+		if (dropped) deps.onBrowserStreamsChange?.(streams.size);
+	};
+	const armOrphanSweep = (): void => {
+		clearTimeout(orphanSweep);
+		orphanSweep = setTimeout(
+			() => {
+				orphanSweep = undefined;
+				dropOrphans();
+			},
+			deps.streamConfirmMs ?? 2 * HEARTBEAT_INTERVAL_MS,
+		);
+	};
+
 	return {
 		handleEnvelope: (envelope) => {
+			// A new connectionId is a new callback pair: its wire seq space
+			// restarts and every live pipe re-opens its streams on it, so a
+			// stream that stays silent past the grace window is an orphan.
+			if (envelope.connectionId !== livePairId) {
+				livePairId = envelope.connectionId;
+				armOrphanSweep();
+			}
 			if (envelope.kind === "command") handleCommand(envelope);
 			else if (envelope.kind === "control") handleControl(envelope);
-		},
-		// The callback pair was replaced: every connection's per-stream wire
-		// seq space RESTARTS (new connectionId). Retained ring entries carry
-		// seqs from the dead pair; replaying them on the fresh pair would
-		// deliver frames whose seqs mean nothing in the new space (new-pair
-		// emits reuse the same numbers). Clear each stream's ring and
-		// re-prime fresh; the edge replays its OWN browser ring
-		// independently, so the browser loses nothing the edge had ringed.
-		onPairChange: () => {
-			if (stopped) return;
-			for (const stream of streams.values()) {
-				stream.entries = [];
-				stream.head = 0;
-				stream.bytes = 0;
-				stream.evictedSeq = 0;
-				stream.lastSeq = 0;
-				prime(stream);
-			}
+			const stream = streams.get(envelope.streamId);
+			if (stream) stream.pairId = envelope.connectionId;
 		},
 		mirror,
 		publishHistory,
@@ -707,8 +752,6 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 export interface DaemonControl {
 	/** Route one down-half envelope (kind command/control) to its handler. */
 	handleEnvelope(envelope: CallbackEnvelope): void;
-	/** Pair replaced: re-announce every still-open browser stream. */
-	onPairChange(): void;
 	/** Mirror a session-scoped frame onto streamId "control" + browser streams (verbatim payload). */
 	mirror(frame: Record<string, unknown>): void;
 	/** Paced history resync onto every browser stream (never the control stream). */

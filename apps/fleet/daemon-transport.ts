@@ -269,6 +269,8 @@ interface DownConnection {
 	heartbeatTimer: ReturnType<typeof setInterval> | null;
 	closed: boolean;
 	pairAnnounced: boolean;
+	/** Registration time: a leg no up half joins by the silence deadline is half-open (FEDGE-14). */
+	openedAt: number;
 }
 
 interface VirtualStream {
@@ -837,6 +839,7 @@ export class DaemonTransportRegistry {
 			heartbeatTimer: null,
 			closed: false,
 			pairAnnounced: false,
+			openedAt: this.#now(),
 		};
 		const body = new ReadableStream<Uint8Array>(
 			{
@@ -929,7 +932,7 @@ export class DaemonTransportRegistry {
 	#liveDownFor(workspaceId: string): DownConnection | null {
 		let found: DownConnection | null = null;
 		for (const conn of this.#downConnections.values()) {
-			if (conn.workspaceId === workspaceId) found = conn; // most recent pair wins
+			if (conn.workspaceId === workspaceId && conn.pairAnnounced) found = conn; // most recent pair wins
 		}
 		return found;
 	}
@@ -1463,7 +1466,8 @@ export class DaemonTransportRegistry {
 		const authorizedGeneration = this.#maxEnrolledGeneration(workspaceId);
 		let down: DownConnection | null = null;
 		for (const conn of this.#downConnections.values()) {
-			if (conn.workspaceId === workspaceId) down = conn;
+			// FEDGE-14: only a leg its up half joined is a pair; a down-only dial is not.
+			if (conn.workspaceId === workspaceId && conn.pairAnnounced) down = conn;
 		}
 		let upBytesIn = 0;
 		let envelopesReceived = 0;
@@ -1507,6 +1511,13 @@ export class DaemonTransportRegistry {
 		const now = this.#now();
 		for (const conn of [...this.#upConnections]) {
 			if (now - conn.lastDataAt > SILENCE_DEADLINE_MS) this.#killUp(conn);
+		}
+		// FEDGE-14: a down leg no up half joined by the silence deadline is
+		// half-open. It was never a pair, so the fleet closes it.
+		for (const conn of [...this.#downConnections.values()]) {
+			if (!conn.pairAnnounced && now - conn.openedAt > SILENCE_DEADLINE_MS) {
+				this.#teardownDown(conn);
+			}
 		}
 		for (const [connectionId, record] of this.#rings) {
 			if (this.#downConnections.has(connectionId)) continue;
