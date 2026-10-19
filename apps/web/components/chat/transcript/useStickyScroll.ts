@@ -55,7 +55,7 @@ export function useStickyScroll(): {
 	let pinned = true;
 	let rePinRaf = 0;
 	const [jumpVisible, setJumpVisible] = createSignal(false);
-	// Mirror pin state into the store: agent_end (src/store/chat.ts) reads
+	// Mirror pin state into the store: agent_end (apps/web/store/chat.ts) reads
 	// chatPinned to decide whether the finished answer was viewed (unviewed →
 	// the roster's yellow unreviewed dot), and every re-pin clears the flag.
 	// The local var stays for the synchronous reads inside the handlers.

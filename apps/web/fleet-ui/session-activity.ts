@@ -24,7 +24,7 @@ import type { DaemonStatus } from "#lib/wire/protocol";
  *
  * "unreviewed" is ATTACHED-only and view-gated: set when a turn ends while
  * the transcript is scrolled away from the live edge (`chatPinned` false →
- * `answerUnviewed` true in src/store/chat.ts), cleared when the user
+ * `answerUnviewed` true in apps/web/store/chat.ts), cleared when the user
  * scrolls back to the bottom, sends a prompt, or switches session. An
  * attached session being viewed is never unreviewed; a detached row has no
  * live chat and never reports it. (Earlier versions derived it from the
@@ -42,7 +42,7 @@ import type { DaemonStatus } from "#lib/wire/protocol";
  *
  * Remote live truth beats the unread latch: a daemon streaming right now
  * shows the spinner even if previously marked unread; the light-blue dot
- * appears when it finishes (see the daemon_activity handler in src/state.ts,
+ * appears when it finishes (see the daemon_activity handler in apps/web/state.ts,
  * which marks unread on the observed true→false flip for a detached daemon).
  *
  * Rendering maps blocked → red dot, in_progress → spinning green,

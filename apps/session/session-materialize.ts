@@ -1,5 +1,5 @@
 /**
- * Daemon-side wake materialization (P8.9; docs/clone-contracts.md "Wake").
+ * Daemon-side wake materialization (P8.9).
  * When a session transcript is cold or missing in the agent dir and a fleet
  * callback pair is active, the daemon requests the stored lineage bytes from
  * the fleet log store over the bulk channel and writes them into the agent
@@ -34,13 +34,11 @@
  * gaps); `retryable` passes through for transport hiccups. No new error
  * names.
  */
-import { createHash } from "node:crypto";
 import {
 	closeSync,
 	fsyncSync,
 	mkdirSync,
 	openSync,
-	readSync,
 	readdirSync,
 	renameSync,
 	rmSync,
@@ -52,6 +50,7 @@ import {
 	isNormalizedPosixRelativePath,
 	type ManifestFileKind,
 } from "#lib/session-files/archive-manifest";
+import { sha256FileSync } from "#lib/session-files/file-sha256";
 import type {
 	MaterializeChunkRecord,
 	MaterializeRecord,
@@ -95,7 +94,6 @@ interface PendingFile {
 }
 
 const TEMP_PREFIX = ".omp-materialize-";
-const HASH_BUFFER_BYTES = 256 * 1024;
 
 function invalid(message: string, relpath?: string): MaterializeSessionError {
 	return new MaterializeSessionError("invalid_request", message, relpath);
@@ -339,25 +337,6 @@ function commitPendingFile(file: PendingFile): void {
 	}
 	renameSync(file.tempPath, file.targetPath);
 	fsyncDir(dirname(file.targetPath));
-}
-
-/** Streaming sync sha256 over a file (bounded memory). */
-function sha256FileSync(absolutePath: string): string {
-	const hash = createHash("sha256");
-	const fd = openSync(absolutePath, "r");
-	const buffer = Buffer.alloc(HASH_BUFFER_BYTES);
-	try {
-		let offset = 0;
-		for (;;) {
-			const read = readSync(fd, buffer, 0, buffer.length, offset);
-			if (read <= 0) break;
-			hash.update(buffer.subarray(0, read));
-			offset += read;
-		}
-	} finally {
-		closeSync(fd);
-	}
-	return hash.digest("hex");
 }
 
 /** Resolve the deepest existing ancestor of `dir` as a real absolute path. */

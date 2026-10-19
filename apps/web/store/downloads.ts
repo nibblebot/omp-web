@@ -6,8 +6,8 @@
 // the proxy, and NEVER puts tokens in URLs (cookie session + the existing
 // gate carry auth; the fleet holds the daemon bearer server-side).
 //
-// Flow per download: (1) fetch the download manifest first (proposed
-// `downloadManifest` call, P0-wired); (2) open the consent dialog with the
+// Flow per download: (1) fetch the download manifest first (`downloadManifest`
+// call); (2) open the consent dialog with the
 // manifest's inclusions/warnings/provenance; (3) on confirm, produce the
 // server path via exportDownload (one daemon call per kind; the daemon stages it under its jail) and stream
 // GET /ctl/.../download?path=<serverPath> to a blob -> anchor download with
@@ -19,15 +19,6 @@
 // message. Text downloads offer clipboard copy with permission handling.
 // Stored lineage uses the read-only store/fleet-api.ts stored* routes and never wakes
 // compute; missing blobs render explicit unavailable.
-//
-// PROPOSED wire for P0 (OMP_PROTO stays 2, additive-only):
-//   downloadManifest({ includeAdvisor, includeBtw, includeWorkers })
-//     -> DownloadManifestResult (see apps/session/download-manifest.ts);
-//     each call below casts the method name `as WebMethodName` with a
-//     P0-TODO comment until P0 canonicalizes it.
-// WIRING NOTE: this module is intentionally NOT registered in state.ts or
-// overlays/index.ts. To mount, render DownloadDialog from
-// components/requests/DownloadDialog.tsx and call its openDownload() entry.
 
 import { createSignal } from "solid-js";
 import { state } from "../state";
@@ -35,7 +26,7 @@ import { authedFetch } from "./auth";
 import { call } from "./transport";
 import { pushToast } from "./toasts";
 
-/** Additive download kinds (mirrors the daemon DownloadKind; P0 canonicalizes the enum). */
+/** Additive download kinds (mirrors the daemon DownloadKind). */
 export type WebDownloadKind = "html" | "html-themed" | "text" | "request" | "archive";
 
 /** Consent dialog data: inclusions, warnings, provenance from the manifest. */
@@ -49,7 +40,7 @@ export interface DownloadConsent {
 	workerCount: number;
 }
 
-/** Manifest row shape the proposed `downloadManifest` call answers (P0 DTO). */
+/** Manifest row shape the `downloadManifest` call answers. */
 export interface WebDownloadManifest {
 	files: Array<{ name: string; kind: string; sessionId?: string; bytes?: number }>;
 	advisorIncluded: boolean;
@@ -94,7 +85,7 @@ interface ManifestArgs {
 	includeWorkers: boolean;
 }
 
-/** Server export answer: { path, clientFilename? } (P0 DTO: ExportHtmlWithManifest / DumpArchiveWithManifest). */
+/** Server export answer: { path, clientFilename? } from the export methods. */
 interface ExportPathResult {
 	path: string;
 	clientFilename?: string;
@@ -134,8 +125,6 @@ function failureCodeOf(err: unknown): string {
 }
 
 async function fetchManifest(args: ManifestArgs): Promise<WebDownloadManifest> {
-	// Note: canonicalize `downloadManifest` as an additive WebMethodName;
-	// until then the name rides as an opaque string through the typed call relay.
 	const data: unknown = await call("downloadManifest", [args], 30_000);
 	const manifest = asManifest(data);
 	if (!manifest) throw new Error("Download manifest unavailable from this session process.");

@@ -56,7 +56,7 @@ export function validateProfiles(raw: unknown): ProfileValidationResult {
 }
 
 // The secret-free capability view is a WIRE type: single-sourced in
-// shared/protocol.ts (frozen contract) so browser/CLI consumers import it
+// lib/wire/protocol.ts (frozen contract) so browser/CLI consumers import it
 // from the shared protocol module, never from this fleet-private leaf.
 import type { PublicProviderProfile } from "#lib/wire/protocol";
 import type { ProviderProfile } from "#lib/runtime/provider-protocol";

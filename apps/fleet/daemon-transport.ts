@@ -1,9 +1,8 @@
 /**
- * Fleet-side callback transport (clone-plan P3.3): the fleet half of the
- * OMP_CALLBACK_PROTO 1 outbound callback pair. Contracts:
- * docs/clone-contracts.md "Callback transport" / "Typed errors"; wire
- * vocabulary from shared/callback-protocol.ts. Daemons dial OUT to the
- * fleet; the fleet never dials in, and there is NO durable offline command
+ * Fleet-side callback transport: the fleet half of the OMP_CALLBACK_PROTO 1
+ * outbound callback pair. Wire vocabulary comes from lib/wire/callback-protocol.ts.
+ * Daemons dial OUT to the fleet; the fleet never dials in, and there is NO
+ * durable offline command
  * queue: sendToDaemon with no live pair fails `unavailable`, never buffers.
  *
  * Routes (mounted by handleFetch; identity rides HEADERS ONLY; the URL
@@ -104,14 +103,12 @@ import {
 	CALLBACK_PAIR_READY_TYPE,
 	CALLBACK_UP_PATH,
 	CALLBACK_TRANSPORT_STREAM_ID,
-	CALLBACK_KINDS,
 	type CallbackEnvelope,
 	type CallbackError,
 	callbackError,
 	createNdjsonParser,
 	encodeSseEnvelope,
 	ENROLLMENT_KEY_BYTES,
-	ENVELOPE_MAX_BYTES,
 	CONNECTION_MAX_BYTES,
 	HEARTBEAT_INTERVAL_MS,
 	isCallbackError,
@@ -121,7 +118,6 @@ import {
 	REPLAY_RING_ENTRIES,
 	SILENCE_DEADLINE_MS,
 	STREAM_MAX_BYTES,
-	type CallbackKind,
 	validateEnvelope,
 } from "#lib/wire/callback-protocol";
 import { commandBytes, commandTooLargeMessage, MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
@@ -132,7 +128,6 @@ import {
 	emitMaterializeTransfer,
 	parseMaterializeRequest,
 	planMaterializeFiles,
-	type MaterializeRequest,
 } from "#lib/session-files/wake-materialize";
 import { SseRing } from "#lib/wire/sse";
 
@@ -153,6 +148,8 @@ const BULK_IDLE_MS = 60_000;
 const BULK_CAPTURE_MAX_OPEN = 2;
 /** Registry sweep cadence: up-connection silence, ring idleness, bulk expiry. */
 const SWEEP_INTERVAL_MS = 5_000;
+/** Revoked enrollments are kept this long (diagnostics) before the sweep drops them. */
+const ENROLLMENT_REVOKED_RETENTION_MS = 10 * 60_000;
 
 const utf8ByteLength = new TextEncoder();
 
@@ -229,6 +226,8 @@ interface Enrollment {
 	credentialHash: Uint8Array;
 	createdAt: number;
 	revoked: boolean;
+	/** Set on revoke; the sweep prunes the record after the retention window. */
+	revokedAt?: number;
 }
 
 interface UpConnection {
@@ -380,6 +379,8 @@ export type CallbackEnvelopeInput = Partial<CallbackEnvelope> &
 
 export class DaemonTransportRegistry {
 	readonly #enrollments = new Map<string, Enrollment>();
+	/** Highest non-revoked enrolled generation per workspace; kept in step with #enrollments. */
+	readonly #authorizedMax = new Map<string, number>();
 	readonly #upConnections = new Set<UpConnection>();
 	readonly #downConnections = new Map<string, DownConnection>();
 	readonly #rings = new Map<string, RingRecord>();
@@ -468,6 +469,8 @@ export class DaemonTransportRegistry {
 			createdAt: this.#now(),
 			revoked: false,
 		});
+		const max = this.#authorizedMax.get(workspaceId);
+		if (max === undefined || generation > max) this.#authorizedMax.set(workspaceId, generation);
 		return Buffer.from(digest).toString("hex");
 	}
 
@@ -514,6 +517,8 @@ export class DaemonTransportRegistry {
 			createdAt: this.#now(),
 			revoked: false,
 		});
+		const max = this.#authorizedMax.get(workspaceId);
+		if (max === undefined || generation > max) this.#authorizedMax.set(workspaceId, generation);
 	}
 
 	/** Revoke one generation (or all generations of the workspace). Live
@@ -523,7 +528,15 @@ export class DaemonTransportRegistry {
 			if (record.workspaceId !== workspaceId) continue;
 			if (generation !== undefined && record.generation !== generation) continue;
 			record.revoked = true;
+			record.revokedAt = this.#now();
 		}
+		let max: number | null = null;
+		for (const record of this.#enrollments.values()) {
+			if (record.workspaceId !== workspaceId || record.revoked) continue;
+			if (max === null || record.generation > max) max = record.generation;
+		}
+		if (max === null) this.#authorizedMax.delete(workspaceId);
+		else this.#authorizedMax.set(workspaceId, max);
 		const inScope = (conn: UpConnection | DownConnection): boolean =>
 			generation === undefined ? true : conn.generation === generation;
 		for (const conn of [...this.#upConnections]) {
@@ -532,15 +545,6 @@ export class DaemonTransportRegistry {
 		for (const conn of [...this.#downConnections.values()]) {
 			if (conn.workspaceId === workspaceId && inScope(conn)) this.#teardownDown(conn);
 		}
-	}
-
-	#maxEnrolledGeneration(workspaceId: string): number | null {
-		let max: number | null = null;
-		for (const record of this.#enrollments.values()) {
-			if (record.workspaceId !== workspaceId || record.revoked) continue;
-			if (max === null || record.generation > max) max = record.generation;
-		}
-		return max;
 	}
 
 	/** Workspaces with at least one non-revoked enrolled generation. */
@@ -566,7 +570,7 @@ export class DaemonTransportRegistry {
 		}
 		// Verified but superseded: the actionable 409 lets a stale daemon die
 		// with a reason instead of retrying forever.
-		const maxGeneration = this.#maxEnrolledGeneration(workspaceId);
+		const maxGeneration = this.#authorizedMax.get(workspaceId) ?? null;
 		if (maxGeneration !== null && generation < maxGeneration) {
 			throw callbackError(
 				"generation_obsolete",
@@ -1457,7 +1461,7 @@ export class DaemonTransportRegistry {
 	 * `unavailable`, never an approximation. One transfer is bounded by
 	 * MATERIALIZE_TRANSFER_MAX_BYTES; larger transcripts split across
 	 * sequential correlation ids via the `end` cursor (see
-	 * shared/wake-materialize.ts emitMaterializeTransfer). The daemon's own
+	 * lib/session-files/wake-materialize.ts emitMaterializeTransfer). The daemon's own
 	 * verifier (size + sha256, carried per file) is the acceptance check.
 	 */
 	async #maybeHandleMaterialize(req: Request): Promise<Response | null> {
@@ -1646,7 +1650,7 @@ export class DaemonTransportRegistry {
 
 	/** Point-in-time pair/stream/enrollment view for the fleet edge. */
 	pairStatus(workspaceId: string): PairStatus {
-		const authorizedGeneration = this.#maxEnrolledGeneration(workspaceId);
+		const authorizedGeneration = this.#authorizedMax.get(workspaceId) ?? null;
 		let down: DownConnection | null = null;
 		for (const conn of this.#downConnections.values()) {
 			// FEDGE-14: only a leg its up half joined is a pair; a down-only dial is not.
@@ -1711,6 +1715,17 @@ export class DaemonTransportRegistry {
 			if (record.state === "open") this.#failBulk(record, record.bytes, "bulk correlation expired");
 			else this.#bulk.delete(correlationId);
 		}
+		for (const [key, record] of this.#enrollments) {
+			if (
+				record.revokedAt !== undefined &&
+				now - record.revokedAt > ENROLLMENT_REVOKED_RETENTION_MS
+			)
+				this.#enrollments.delete(key);
+		}
+		// Only idle pumps are dropped; a running drain loop holds its state.
+		for (const [workspaceId, state] of this.#pumps) {
+			if (!state.running) this.#pumps.delete(workspaceId);
+		}
 	}
 
 	#killUp(conn: UpConnection): void {
@@ -1742,5 +1757,6 @@ export class DaemonTransportRegistry {
 		this.#taps.clear();
 		this.#pumps.clear();
 		this.#enrollments.clear();
+		this.#authorizedMax.clear();
 	}
 }

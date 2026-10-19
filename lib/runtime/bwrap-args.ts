@@ -122,16 +122,6 @@ export interface BwrapArgsOutput {
 	env: Record<string, string>;
 }
 
-/** Env keys that never enter the sandbox even when the operator exported them. */
-export const ENV_DENY_KEYS: readonly string[] = [
-	"SSH_AUTH_SOCK",
-	"SSH_AGENT_PID",
-	"OMP_FLEET_CONFIG",
-	"OMP_FLEET_STATE",
-	"XDG_RUNTIME_DIR",
-	"DBUS_SESSION_BUS_ADDRESS",
-];
-
 /**
  * Callback-pair env keys (the fleet's `OMP_SESSION_CALLBACK_*` handoff). They
  * NEVER enter a sandbox environment: the provider converts them into the
@@ -166,7 +156,7 @@ export const ENV_ALLOW_KEYS: readonly string[] = [
 	"NO_COLOR",
 	"OMP_SESSION",
 	// P8.9 wake-resume: fleet-written absolute main-session path; the daemon
-	// resumes it at boot (server/config.ts reads OMP_SESSION_RESUME). Rides
+	// resumes it at boot (apps/session/config.ts reads OMP_SESSION_RESUME). Rides
 	// the callback-env handoff, never the ambient environment.
 	"OMP_SESSION_RESUME",
 	"OMP_WORKSPACE_ID",

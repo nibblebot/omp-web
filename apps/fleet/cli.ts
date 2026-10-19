@@ -664,7 +664,7 @@ async function addCloneCmd(
 /**
  * preflight --profile <id>: local (no control-plane RPC) production-profile
  * preflight (P5.6). Loads the config file exactly like the server does (env
- * OMP_FLEET_CONFIG honored), runs the runtime/preflight battery against the
+ * OMP_FLEET_CONFIG honored), runs the apps/fleet/preflight.ts battery against the
  * profile, prints one line per check with remediation on failures, and
  * exits non-zero when any check fails. Additive: profile configs are
  * optional, so a fleet with none is untouched.
@@ -686,9 +686,8 @@ async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
 	const result = await runProfilePreflight(profile, {
 		workspaceRoot: join(dataHome, "clones"),
 		logsRoot: join(dataHome, "logs"),
-		// The bwrap provider is not yet wired into a live fleet in this
-		// lane (P6); a callback URL is only reachability-class-checked once
-		// the fleet has one to pass.
+		// A callback URL is only reachability-class-checked once the fleet
+		// has one to pass.
 	});
 	const lines: string[] = [`profile ${profile.id}: ${result.ok ? "ready" : "NOT ready"}`];
 	for (const check of result.checks) {

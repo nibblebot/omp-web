@@ -2,8 +2,7 @@ import { encodeSseEvent, parseSseUnits, SSE_PING_EVENT } from "./sse";
 
 /**
  * Callback transport protocol (OMP_CALLBACK_PROTO = 1), separately versioned
- * from OMP_PROTO (2). Encoding, parsing, and policy frozen by
- * docs/clone-contracts.md ("Callback transport" and "Typed errors").
+ * from OMP_PROTO (2). Encoding, parsing, and policy are specified here.
  *
  * Pure module: no I/O, no ambient state beyond the explicit parser/dedup
  * objects this file creates. Shared by the fleet (server routes, edge) and

@@ -134,7 +134,7 @@ export const stageHunks = (path = fileDiff()?.path, hunkIndices = selectedHunks(
 	path && hunkIndices.length && fileDiff() && !fileDiff()?.truncated
 		? mutateGit("gitStageHunks", { path, hunkIndices, fingerprint: fileDiff()!.fingerprint })
 		: Promise.resolve(undefined);
-export const commitStaged = (text: string) =>
+const commitStaged = (text: string) =>
 	text.trim() ? mutateGit("gitCommit", { message: text }) : Promise.resolve(undefined);
 const filesLabel = (count: number): string => `${count} file${count === 1 ? "" : "s"}`;
 /** Ask before staging every worktree change; the stage runs only on confirm. */
@@ -228,29 +228,11 @@ export const createAnnotation = (input: {
 	anchor: ReviewAnchor;
 	note: string;
 }) => mutateAnnotation("annotationCreate", input);
-export function updateAnnotation(
-	id: string,
-	note: string,
-	revision = annotations().find((row) => row.id === id)?.revision,
-) {
-	return revision === undefined
-		? Promise.resolve(undefined)
-		: mutateAnnotation("annotationUpdate", { id, note, revision });
-}
 export function removeAnnotation(id: string) {
 	const item = annotations().find((row) => row.id === id);
 	return item
 		? mutateAnnotation("annotationRemove", { id, revision: item.revision })
 		: Promise.resolve(undefined);
-}
-export function reanchorAnnotation(
-	id: string,
-	anchor: ReviewAnchor,
-	revision = annotations().find((row) => row.id === id)?.revision,
-) {
-	return revision === undefined
-		? Promise.resolve(undefined)
-		: mutateAnnotation("annotationReanchor", { id, anchor, revision });
 }
 export const composeForComposer = (
 	intent: "insert" | "submit" | "github" = "insert",

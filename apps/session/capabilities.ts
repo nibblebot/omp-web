@@ -13,7 +13,6 @@
  */
 
 import { git } from "@oh-my-pi/pi-natives/vcs";
-import type { ServerCapabilities } from "#lib/wire/protocol";
 import type { Capability } from "#lib/wire/browser-ui-contract";
 
 /** Opens the repository bound to `cwd`, or null when none is discoverable. */

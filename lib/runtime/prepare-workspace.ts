@@ -3,8 +3,7 @@
  * exactly once, clones it into `.checkout/` with an independent object store,
  * and verifies the completed checkout before recording the init marker.
  *
- * Layout per the frozen contract (docs/clone-contracts.md, "Preparation
- * layout"):
+ * Layout per the frozen contract:
  *
  * - `.omp-workspace-init.json`: the pin (workspaceId, source, resolvedCommit,
  *   branch) is persisted BEFORE the clone so retries reuse the same commit and
@@ -56,7 +55,7 @@ export interface WorkspacePin {
 	branch: string;
 }
 
-/** Verified initialization marker (docs/clone-contracts.md "Preparation layout"). */
+/** Verified initialization marker. */
 export interface WorkspaceInitMarker extends WorkspacePin {
 	initializedAt: number;
 	prepVersion: number;

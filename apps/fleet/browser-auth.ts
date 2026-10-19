@@ -137,7 +137,7 @@ export function clearSessionCookie(loopbackDev: boolean): string {
 	return parts.join("; ");
 }
 
-function readCookie(req: Request, name: string): string | null {
+export function readCookie(req: Request, name: string): string | null {
 	const header = req.headers.get("cookie");
 	if (header === null) return null;
 	for (const part of header.split(";")) {

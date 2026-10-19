@@ -3,8 +3,8 @@
  * (historical sessions, per-session analytics, transcripts, subagents,
  * sync + health), mounted by fleet/server.ts under /ctl/stats.
  *
- * Layering: this module (and everything under fleet/stats) imports only
- * shared/stats-types.ts, bun/node builtins, and ./, never server/ or src/.
+ * Layering: this module (and the rest of the stats API) imports only
+ * lib/wire/stats-types.ts, bun/node builtins, and ./.
  *
  * createStatsApp returns a fetch handler that answers /ctl/stats paths and
  * returns null for everything else (fleet's own control-plane routing owns

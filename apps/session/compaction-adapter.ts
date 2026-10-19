@@ -1,15 +1,8 @@
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { CompactOptions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type {
-	CompactMode,
-	ParsedCompactArgs,
-} from "@oh-my-pi/pi-coding-agent/session/compact-modes";
-import {
-	COMPACT_MODES,
-	findCompactMode,
-	parseCompactArgs,
-} from "@oh-my-pi/pi-coding-agent/session/compact-modes";
+import type { CompactMode } from "@oh-my-pi/pi-coding-agent/session/compact-modes";
+import { findCompactMode } from "@oh-my-pi/pi-coding-agent/session/compact-modes";
 import type { ShakeMode, ShakeResult } from "@oh-my-pi/pi-coding-agent/session/shake-types";
 import { formatShakeSummary } from "@oh-my-pi/pi-coding-agent/session/shake-types";
 import { cfgCompaction } from "@oh-my-pi/pi-coding-agent/session/context-settings";
@@ -26,35 +19,6 @@ import {
  * It reuses the installed SDK 18.11.0 behavior (compact-modes grammar,
  * CompactOptions, shake types) instead of reimplementing it.
  */
-
-// ---------------------------------------------------------------------------
-// Parse + mode metadata (SDK reuse)
-// ---------------------------------------------------------------------------
-
-/** Parsed operator input: an optional mode plus optional focus instructions. */
-export type CompactionInput = Pick<ParsedCompactArgs, "mode" | "instructions">;
-
-/**
- * Parse raw operator text with the SDK grammar. Returns either the parsed
- * input or `{ error }` (e.g. snapcompact with trailing focus text, which the
- * SDK rejects because snapcompact archives history without an LLM summary).
- */
-export function parseCompactionInput(raw: string): CompactionInput | { error: string } {
-	return parseCompactArgs(raw);
-}
-
-/** Presentation metadata for the three explicit modes, sourced from the SDK table. */
-export interface CompactionModeMeta {
-	name: CompactMode;
-	description: string;
-	rejectsFocus: boolean;
-}
-
-export const COMPACTION_MODES: readonly CompactionModeMeta[] = COMPACT_MODES.map((mode) => ({
-	name: mode.name,
-	description: mode.description,
-	rejectsFocus: mode.rejectsFocus ?? false,
-}));
 
 // ---------------------------------------------------------------------------
 // Eligibility (explicit refuse, never silent fallback)

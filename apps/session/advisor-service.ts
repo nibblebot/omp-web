@@ -58,13 +58,6 @@ export interface AdvisorStatsDto {
 	advisors: AdvisorStatEntry[];
 }
 
-export interface AdvisorHistoryDto {
-	available: boolean;
-	text: string | null;
-	compact: boolean;
-	reason?: string;
-}
-
 function num(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -152,40 +145,6 @@ export function getAdvisorStats(entry: SessionEntry): AdvisorStatsDto {
 	}
 }
 
-export function getAdvisorCost(entry: SessionEntry): { cost: number; subscription: boolean } {
-	const cost = entry.session.getAdvisorCost();
-	const using =
-		typeof entry.session.isAdvisorUsingSubscription === "function"
-			? entry.session.isAdvisorUsingSubscription()
-			: false;
-	return { cost, subscription: using };
-}
-
 export function getAdvisorWarnings(entry: SessionEntry): { warnings: string[] } {
 	return { warnings: [...entry.session.getAdvisorConfigWarnings()] };
-}
-
-/**
- * Raw advisor transcript dump. `fromByte` pages the TEXT (utf8 byte offset);
- * `nextByte` = byte length of the full text, so callers page with
- * `fromByte = nextByte-of-previous-slice - skipped`. Returns `available: true`
- * with empty text at/past the end.
- */
-export function getAdvisorHistory(
-	entry: SessionEntry,
-	opts?: { compact?: boolean; fromByte?: number },
-): AdvisorHistoryDto & { nextByte?: number } {
-	const compact = opts?.compact ?? false;
-	const text = entry.session.formatAdvisorHistoryAsText({ compact });
-	if (text === null) {
-		return { available: false, text: null, compact, reason: "no active advisor transcript" };
-	}
-	const totalBytes = Buffer.byteLength(text, "utf8");
-	const fromByte = opts?.fromByte ?? 0;
-	if (fromByte >= totalBytes) {
-		return { available: true, text: "", compact, reason: "end", nextByte: totalBytes };
-	}
-	const start = Math.max(0, Math.trunc(fromByte));
-	const sliced = Buffer.from(text, "utf8").subarray(start).toString("utf8");
-	return { available: true, text: sliced, compact, nextByte: totalBytes };
 }

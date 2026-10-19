@@ -9,17 +9,16 @@
  *     request is admitted; /auth/session still answers 404 so clients probe
  *     the disabled state and behave exactly as before this integration.
  *   - Client-address resolution (P2.3 trusted proxies): the direct socket
- *     peer is the default client. X-Forwarded-For / X-Forwarded-Proto are
- *     honored ONLY when the direct peer matches the configured
- *     trustedProxies list (IP/CIDR literals); then the client is the
- *     rightmost X-Forwarded-For hop that is not itself a trusted proxy,
- *     and XFP may mark the request forwarded-over-https.
+ *     peer is the default client. X-Forwarded-For is honored ONLY when the
+ *     direct peer matches the configured trustedProxies list (IP/CIDR
+ *     literals); then the client is the rightmost X-Forwarded-For hop that
+ *     is not itself a trusted proxy.
  *     Forwarded headers from any untrusted peer are ignored entirely,
  *     never trusted by default, and hostile values can never admit a
- *     loopback exemption or the origin allowlist (fail closed). XFP has no
- *     consumer past resolution: checkOrigin compares the PRESENTED absolute
- *     origin against the allowlist, and the cookie Secure flag is a boot
- *     decision (loopbackDev), never per-request header state.
+ *     loopback exemption or the origin allowlist (fail closed). The gate
+ *     never reads X-Forwarded-Proto: checkOrigin compares the PRESENTED
+ *     absolute origin against the allowlist, and the cookie Secure flag is a
+ *     boot decision (loopbackDev), never per-request header state.
  *   - Loopback-client requests (the fleet/cli.ts control-plane precedent,
  *     R14) are exempt from the browser-session check; they carry no cookie.
  *     A loopback peer that DOES carry forwarded headers is an undeclared
@@ -47,6 +46,7 @@ import {
 	BrowserAuthStore,
 	BrowserAuthError,
 	OMP_SESSION_COOKIE,
+	readCookie,
 	type AuthenticatedSession,
 	type LoginResult,
 } from "./browser-auth";
@@ -149,14 +149,7 @@ export class FleetAuthGate {
 	/** Raw value of the omp_session cookie (login/logout need the raw id to
 	 *  mint/revoke; resolveSession is the read path). */
 	sessionCookie(req: Request): string | null {
-		const header = req.headers.get("cookie");
-		if (header === null) return null;
-		for (const part of header.split(";")) {
-			const eq = part.indexOf("=");
-			if (eq === -1) continue;
-			if (part.slice(0, eq).trim() === OMP_SESSION_COOKIE) return part.slice(eq + 1).trim();
-		}
-		return null;
+		return readCookie(req, OMP_SESSION_COOKIE);
 	}
 
 	/** sha-256 hex of a raw session id: the wire's sessionIdHash (public, it
@@ -166,7 +159,7 @@ export class FleetAuthGate {
 	}
 
 	/** The { sessionIdHash, csrfToken, expiresAt } body of the login/session
-	 *  answers (src/store/auth.ts caches csrfToken for mutation headers and
+	 *  answers (apps/web/store/auth.ts caches csrfToken for mutation headers and
 	 *  reads expiresAt for the UI). */
 	sessionBody(sessionId: string, csrfToken: string, expiresAt: number): Record<string, unknown> {
 		return { sessionIdHash: this.sessionIdHash(sessionId), csrfToken, expiresAt };
@@ -220,22 +213,6 @@ export class FleetAuthGate {
 		return peer;
 	}
 
-	/** Parsed request scheme: the socket's own, replaced by X-Forwarded-Proto
-	 *  only when the direct peer is a trusted proxy (forwarded values from
-	 *  untrusted peers are ignored). Unknown/empty → "http" (a proxy that
-	 *  forwards https must say so; nothing trusts an absent header). */
-	clientProto(req: Request, remoteAddress: string | null | undefined): string {
-		if (!isTrustedProxy(remoteAddress, this.#trustedProxies)) {
-			return requestUrlProto(req);
-		}
-		const xfp = req.headers.get("x-forwarded-proto");
-		if (xfp !== null && xfp !== "") {
-			const first = xfp.split(",")[0]?.trim().toLowerCase() ?? "";
-			if (first === "https" || first === "http") return first;
-		}
-		return requestUrlProto(req);
-	}
-
 	/** Non-loopback clients must hold a live session when auth is enabled;
 	 *  loopback clients (and the disabled state) are admitted with null.
 	 *  Callers pass the EFFECTIVE client address (clientAddress: the
@@ -271,17 +248,6 @@ export function isLoopbackIp(address: string | null | undefined): boolean {
 
 export function peerIsLoopback(address: string | null | undefined): boolean {
 	return isLoopbackIp(address);
-}
-
-/** Scheme the request actually arrived on (the socket's own; Bun reports
- *  http:// on its plain listen, including a TLS-terminating proxy's
- *  loopback side). */
-function requestUrlProto(req: Request): string {
-	try {
-		return new URL(req.url).protocol.replace(/:$/, "").toLowerCase();
-	} catch {
-		return "http";
-	}
 }
 
 export { BrowserAuthError };

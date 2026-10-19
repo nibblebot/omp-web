@@ -15,9 +15,6 @@ import type { Capability } from "./browser-ui-contract";
 // The server no longer spawns the RPC child, so the protocol owns these.
 // ---------------------------------------------------------------------------
 
-/** Pick of Model the model picker consumes (was the RPC client's ModelInfo). */
-export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
-
 /**
  * Why a model-browser row is unusable: no credentials for its provider, or the
  * provider is disabled. The web derives the sentence (`lockMessage`); the code
@@ -531,11 +528,11 @@ export type DesiredState = "running" | "stopped";
 export type LifecycleStage = "preparation" | "runtime" | "callback" | "ready" | "failed";
 
 /**
- * Secret-free capability view of a fleet provider profile (frozen contract,
- * docs/clone-contracts.md "Browser and CLI workspace creation"). Safe to
+ * Secret-free capability view of a fleet provider profile (frozen contract).
+ * Safe to
  * cross trust boundaries: never carries the executable, image/namespace
  * details, or secret reference VALUES, only their names. Lifted from
- * fleet/provider-profile.ts (which re-exports this type) so browser/CLI
+ * apps/fleet/provider-profile.ts (which re-exports this type) so browser/CLI
  * consumers import the single wire source from lib/wire/protocol.ts.
  */
 export interface PublicProviderProfile {
@@ -653,7 +650,6 @@ export type WebMethodName =
 	| "popLastQueuedMessage"
 	| "clearQueue"
 	| "abort"
-	| "abortAndPrompt"
 	| "newSession"
 	| "retry"
 	| "fork"

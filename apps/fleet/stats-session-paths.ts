@@ -1,7 +1,7 @@
 /**
  * Symlink-escape containment for :file route handlers.
  *
- * Lexical sanitization (src/paths.ts decodeFileParam/toAbs) rejects `..`
+ * Lexical sanitization (decodeFileParam/toAbs) rejects `..`
  * traversal, but a symlink, whether the final component or an intermediate
  * directory, can still point outside sessionsDir. Every handler that
  * opens a session file by route param must verify that the RESOLVED

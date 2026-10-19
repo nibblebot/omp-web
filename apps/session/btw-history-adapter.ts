@@ -19,14 +19,6 @@
 //     deletion; closing during work follows stop behavior without losing saved
 //     turns), flush-before-lifecycle-move, rediscover on new connections.
 //
-// WIRING NOTE (for the integrator / P0): this module owns no transport. Each
-// server method below maps 1:1 onto a PROPOSED additive wire method
-// (OMP_PROTO stays 2; see the PROPOSED WIRE DTOs block at the bottom). P0
-// publishes the canonical names/shapes into protocol.ts and adds one row per
-// method to the METHODS dispatch in apps/session/methods.ts delegating to
-// `serviceFor(entry.session)`; no other server file changes are needed. The
-// web mirror lives in apps/web/store/btw-history.ts.
-//
 // Secrets/tokens never appear in DTOs/logs here. stdout stays reserved for
 // OMP_SESSION| lines; log via stderr only.
 
@@ -229,20 +221,10 @@ export class BtwHistoryService {
 	readonly #active = new Map<string, ActiveTurn>();
 	#branchInFlight = false;
 	#starting = false;
-	#transitionCount = 0;
 
 	constructor(store: BtwHistoryStore, sessionId: string) {
 		this.#store = store;
 		this.#sessionId = sessionId;
-	}
-
-	/** Scope key this service was opened for (the owning session id). */
-	get scopeSessionId(): string {
-		return this.#sessionId;
-	}
-
-	get store(): BtwHistoryStore {
-		return this.#store;
 	}
 
 	/** Stable id-paged record list, newest first (the store snapshot order). */
@@ -320,12 +302,7 @@ export class BtwHistoryService {
 		const trimmed = question.trim();
 		if (!trimmed) throw new Error("BTW question must not be empty.");
 		if (options.signal?.aborted) throw new Error("BTW turn aborted before it started.");
-		if (
-			this.#starting ||
-			this.#branchInFlight ||
-			this.#transitionCount > 0 ||
-			this.#active.size > 0
-		) {
+		if (this.#starting || this.#branchInFlight || this.#active.size > 0) {
 			throw new Error("A /btw action is in progress. Please wait.");
 		}
 		const manager = session.sessionManager;
@@ -428,17 +405,6 @@ export class BtwHistoryService {
 		}
 	}
 
-	/** Follow-up appends a turn to an existing record (same epoch-rotation
-	 * and lease rules as a fresh start). */
-	followUpBtw(
-		session: AgentSession,
-		recordId: string,
-		question: string,
-		options: BtwTurnOptions = {},
-	): Promise<BtwHistoryRecord> {
-		return this.startBtwTurn(session, question, { ...options, recordId });
-	}
-
 	/**
 	 * Cancel a running turn: abort the ephemeral signal (running-only) and
 	 * checkpoint `cancelled`. Saved turns are preserved; resolving a stopped
@@ -476,7 +442,7 @@ export class BtwHistoryService {
 		if (!record) return { ...base, eligible: false, reason: `BTW record not found: ${recordId}` };
 		const fail = (reason: string): BtwPromotePreview => ({ ...base, eligible: false, reason });
 		if (this.#branchInFlight) return fail("a branch is already in progress");
-		if (this.#starting || this.#transitionCount > 0 || this.#active.size > 0) {
+		if (this.#starting || this.#active.size > 0) {
 			return fail("a BTW action is still in progress");
 		}
 		// Single-turn shape only: promotion carries one Q/A pair and must not
@@ -543,12 +509,7 @@ export class BtwHistoryService {
 		if (!preview.eligible) {
 			throw new Error(`Cannot branch /btw: ${preview.reason ?? "the answer is not ready"}`);
 		}
-		if (
-			this.#branchInFlight ||
-			this.#starting ||
-			this.#transitionCount > 0 ||
-			this.#active.size > 0
-		) {
+		if (this.#branchInFlight || this.#starting || this.#active.size > 0) {
 			throw new Error("Cannot branch /btw: another BTW action is in progress.");
 		}
 		const record = this.findRecord(recordId)!;
@@ -581,32 +542,6 @@ export class BtwHistoryService {
 		}
 	}
 
-	async flush(): Promise<void> {
-		await this.#store.flush();
-	}
-
-	/**
-	 * Flush-before-lifecycle-move (mirrors BtwController.withSessionMove):
-	 * refuses the move while a turn streams or a branch is in flight, drains
-	 * pending history writes first, and runs the move only when the store is
-	 * durable. Never steals a live writer's lease.
-	 */
-	async withSessionMove(operation: () => Promise<boolean>): Promise<boolean> {
-		if (this.#starting || this.#active.size > 0) {
-			throw new Error("Wait for the current /btw answer to settle before moving.");
-		}
-		if (this.#branchInFlight) {
-			throw new Error("/btw branch is in progress.");
-		}
-		this.#transitionCount++;
-		try {
-			await this.#store.flush();
-			return await operation();
-		} finally {
-			this.#transitionCount--;
-		}
-	}
-
 	/**
 	 * Checkpoint the latest turn of `recordId` only when it is still running
 	 * (view-only recovery rule: an already-terminal record — cancelled by a
@@ -636,7 +571,7 @@ export class BtwHistoryService {
  * id (workers share the artifact root). Recovery maps running -> interrupted
  * as a view; only turns this service starts are ever checkpointed back.
  */
-export async function openBtwHistory(
+async function openBtwHistory(
 	artifactsDir: string | undefined,
 	sessionId: string,
 ): Promise<BtwHistoryService> {
@@ -675,57 +610,3 @@ export async function serviceFor(session: AgentSession): Promise<BtwHistoryServi
 		throw error;
 	}
 }
-
-// ---------------------------------------------------------------------------
-// PROPOSED WIRE DTOs (for P0; OMP_PROTO stays 2, additive-only). Method
-// names are registered in methods.ts; a server error surfaces as an ordinary
-// failure in the web mirror. Stable ids + cursor
-// paging throughout; never list indexes, message text, or filenames as
-// identity. Side-turn deltas reuse the existing ephemeral_delta SSE frames
-// (streamId = the call's streamId); answers settle via call_result with the
-// standard duplicate-command-result replay.
-//   btwList { afterId?: string, limit?: number } -> BtwRecordPage
-//     reason: durable-history list for the attached session scope.
-//   btwSearch { query: string, afterId?: string, limit?: number } -> BtwRecordPage
-//     reason: search across question/answer (incl. follow-ups).
-//   btwPage { recordId: string, afterKey?: string, limit?: number } -> BtwTranscriptPage
-//     reason: paged transcript of one record (stable turn keys).
-//   btwStart { question: string } -> { record: BtwHistoryRecord }
-//     reason: fresh side turn (deltas stream as ephemeral_delta).
-//   btwFollowUp { recordId: string, question: string } -> { record: BtwHistoryRecord }
-//     reason: append a follow-up turn (epoch-rotated conversationKey).
-//   btwCancel { recordId: string } -> { record: BtwHistoryRecord }
-//     reason: running-only abort; saved turns survive.
-//   btwCopy { recordId: string } -> { text?: string }
-//     reason: server-resolved copy text (absent = nothing to copy).
-//   btwPromotePreview { recordId: string } -> BtwPromotePreview
-//     reason: guarded-promotion eligibility without mutation.
-//   btwPromote { recordId: string } -> BtwPromoteResult
-//     reason: server-owned branchFromBtw; client never supplies the assistant
-//       payload (only the recordId; the assistant message is server-held).
-//
-// PROPOSED METHODS DISPATCH (apps/session/methods.ts, one row each; entry =
-// SessionEntry, streamId routes deltas via broadcastTo ephemeral_delta):
-//   btwList: async (entry, a) => (await serviceFor(entry.session)).listBtwRecords(a[0] as BtwPageCursor|undefined)
-//   btwSearch: async (entry, a) => (await serviceFor(entry.session)).listBtwSearch(
-//     String(a[0] ?? ""), a[1] as BtwPageCursor|undefined)
-//   btwPage: async (entry, a) => (await serviceFor(entry.session)).pageBtwTurns(
-//     String(a[0]), a[1] as string|undefined, a[2] as number|undefined)
-//   btwStart/btwFollowUp: async (entry, a, streamId) => {
-//     const service = await serviceFor(entry.session);
-//     const record = await service.startBtwTurn(entry.session, String(a[0] ?? ""), {
-//       ...(a[1] !== undefined ? { recordId: String(a[1]) } : {}),
-//       onDelta: (text) => { if (streamId !== undefined)
-//         broadcastTo(entry.handle, { type: "ephemeral_delta", id: streamId, text }); },
-//     });
-//     return { record };
-//   }
-//   btwCancel: async (entry, a) => ({ record: await (await serviceFor(entry.session)).cancelBtwTurn(String(a[0])) })
-//   btwCopy: async (entry, a) => ({ text: (await serviceFor(entry.session)).copyBtwText(String(a[0])) ?? null })
-//   btwPromotePreview: async (entry, a) => (await serviceFor(entry.session)).previewPromoteBtw(
-//     entry.session, entry.session.sessionManager, String(a[0]))
-//   btwPromote: async (entry, a) => (await serviceFor(entry.session)).promoteBtwToBranch(
-//     entry.session, entry.session.sessionManager, String(a[0]))
-// readOnly: btwList, btwSearch, btwPage, btwCopy, btwPromotePreview (never
-//   mutate); notReadyGated: btwStart, btwFollowUp (need a live model).
-// ---------------------------------------------------------------------------

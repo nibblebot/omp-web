@@ -42,8 +42,8 @@ import {
 import { isLoopbackHost } from "#lib/platform/hosts";
 
 /**
- * Callback transport, daemon half (P3.2; docs/clone-contracts.md "Callback
- * transport"). The daemon dials OUT to the fleet and keeps one long-lived
+ * Callback transport, daemon half (P3.2). The daemon dials OUT to the fleet and
+ * keeps one long-lived
  * pair of connections per workspace+generation:
  *
  *   up:   POST /callback/up    NDJSON streaming writer (incremental enqueue)

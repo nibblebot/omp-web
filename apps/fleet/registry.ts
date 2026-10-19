@@ -64,7 +64,7 @@ export const PAIR_LOSS_GRACE_MS = 5_000;
 
 /**
  * Workspace identity unions, re-exported for fleet/registry consumers. The
- * canonical definitions live in shared/protocol.ts, the shared leaf that
+ * canonical definitions live in lib/wire/protocol.ts, the shared leaf that
  * already feeds DaemonEntry/RegisteredProject to this file. Defining them
  * here instead would make the wire types (or this file's importers) depend
  * on a fleet-internal module; re-exporting keeps one source and the
@@ -73,8 +73,7 @@ export const PAIR_LOSS_GRACE_MS = 5_000;
 export type { WorkspaceKind, DesiredState };
 
 /**
- * Deletion-gate error codes: the frozen ledger vocabulary
- * (docs/clone-contracts.md "Typed errors").
+ * Deletion-gate error codes: the frozen ledger vocabulary.
  */
 export type DeletionErrorCode =
 	| "invalid_request"

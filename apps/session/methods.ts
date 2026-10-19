@@ -6,7 +6,6 @@ import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { getAvailableThemes, type Settings } from "@oh-my-pi/pi-coding-agent";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { cfgModelRoleStorage, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import {
 	disabledProviderIds,
 	getModelMatchPreferences,
@@ -458,12 +457,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 					await deps.collab.abortSubagent(entry, id).catch(() => {});
 				}
 			}
-		},
-		abortAndPrompt: async (entry, a) => {
-			cancelEntryUiRequests(entry);
-			getAutonomyAdapter(entry).stopForHostAbort();
-			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
-			void deps.collab.fireAndForgetPrompt(entry, a[0] as string, a[1] as Images);
 		},
 		resumeQueue: async (entry) => {
 			entry.queuedCommands.paused = false;

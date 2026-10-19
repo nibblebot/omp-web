@@ -6,7 +6,6 @@ import type { SettingsSection } from "../../web/components/settings/SettingsNav"
 import { settingsSectionId } from "../../web/prefs/settings-tabs";
 import type { BrowserUiRequest } from "../../web/store/browser-ui";
 import type { DownloadConsent, WebDownloadManifest } from "../../web/store/downloads";
-import type { ModelPreset } from "../../web/store/models";
 import type { ForeignSessionPreview, ResumeCandidate } from "../../web/store/resume";
 import type { BrowserUiContribution } from "#lib/wire/browser-ui-contract";
 import type {
@@ -17,7 +16,6 @@ import type {
 	McpInspection,
 	McpServerSummary,
 	McpTestResult,
-	ModelInfo,
 	ModelRoleCatalogEntry,
 	SettingsItem,
 	SettingsModel,
@@ -404,6 +402,8 @@ export const modelRoleCatalog: ModelRoleCatalogEntry[] = [
 		source: "global",
 	},
 ];
+
+type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
 
 /** ModelInfo list: catalog rows across providers, with and without controllable thinking. */
 export const modelInfos: ModelInfo[] = [

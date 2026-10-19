@@ -1,8 +1,8 @@
 /**
  * Read-only SQLite access to omp's stats.db (bun:sqlite) with rotation-aware
- * reprobing. Implements the StatsDbManager contract from fleet/stats/types.ts.
+ * Implements the StatsDbManager contract from the stats API types.
  *
- * Never writes. WAL caveat (PLAN.md §4.1): stats.db runs in WAL mode; a
+ * Never writes. WAL caveat: stats.db runs in WAL mode; a
  * readonly open needs -wal/-shm sidecars. If open fails with
  * SQLITE_READONLY_CANTINIT (missing -shm after a crash), fall back to
  * copying db + wal + shm to a temp dir and opening the copy. Copies are

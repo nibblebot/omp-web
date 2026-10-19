@@ -137,38 +137,6 @@ export function disposeBrowserUi(
 	pending.reject(new Error(reason));
 	broadcastTo(entry.handle, { type: "ui_request_end", id: record.requestId });
 }
-/** Dispose every live contribution of one session entry (session close / teardown). */
-export function disposeEntryBrowserUi(
-	entry: SessionEntry,
-	reason = "browser_ui contributions disposed with the session",
-): void {
-	const actives = activeByEntry.get(entry);
-	if (!actives) return;
-	for (const record of actives.values()) {
-		disposeBrowserUi(entry, record.contribution.owner, record.contribution.id, reason);
-	}
-}
-
-export interface BrowserUiContributionSummary {
-	id: string;
-	kind: BrowserUiCapability;
-	owner: string;
-	title: string;
-	requestId: string;
-}
-
-/** Live-contribution mirror for the integrations dispatch rows (capability responses, diagnostics). */
-export function listBrowserUiContributions(entry: SessionEntry): BrowserUiContributionSummary[] {
-	const actives = activeByEntry.get(entry);
-	if (!actives) return [];
-	return [...actives.values()].map((record) => ({
-		id: record.contribution.id,
-		kind: record.contribution.kind,
-		owner: record.contribution.owner,
-		title: record.contribution.title,
-		requestId: record.requestId,
-	}));
-}
 
 // ---------------------------------------------------------------------------
 // Migration adapter: terminal hooks -> browser contributions.

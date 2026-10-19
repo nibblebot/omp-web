@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * bwrap sandbox provider (P5.2): implements the frozen provider operation
- * protocol (docs/clone-contracts.md, "Provider operation protocol") for
+ * protocol for
  * clone workspaces on a bwrap-capable Linux host.
  *
  * Invocation: `<executable> ensure-running|inspect|stop|delete` with exactly

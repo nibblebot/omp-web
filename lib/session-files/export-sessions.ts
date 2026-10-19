@@ -5,8 +5,8 @@ import { ExportError, type ManifestFileKind } from "./archive-manifest";
 // Workspace session-tree lineage + structural verification
 // (lib/session-files/export-sessions.ts).
 //
-// Post-09-05-amendment role (docs/clone-contracts.md, docs/clone-plan.md P4.4-P4.6,
-// P7.1-P7.2): the sealed export/archive-copy pipeline is DEAD. This module
+// Role after the 09-05 amendment (P4.4-P4.6, P7.1-P7.2): the sealed
+// export/archive-copy pipeline is DEAD. This module
 // keeps only the lineage classification and the structural JSONL checker that
 // the verify-at-deletion gate (apps/fleet/verify-store.ts) and the archive
 // manifest need:
@@ -40,14 +40,6 @@ export function isAdvisorTranscriptName(name: string): boolean {
 		name === `${ADVISOR_TRANSCRIPT_STEM}.jsonl` ||
 		(name.startsWith(`${ADVISOR_TRANSCRIPT_STEM}.`) && name.endsWith(JSONL_SUFFIX))
 	);
-}
-
-/**
- * Type guard: an unknown error that is already an {@link ExportError} (imported
- * type-only, so compare by shape/name at runtime).
- */
-export function isExportErrorShape(error: unknown): error is ExportError {
-	return error instanceof Error && (error as { name?: string }).name === "ExportError";
 }
 
 /**
@@ -236,7 +228,7 @@ export interface SessionLineageEntry {
  * `sessionId`: `<sessionId>.jsonl` at depth 1 (root main) or
  * `<proj>/<sessionId>.jsonl` at depth 2 (project main), per the frozen
  * log-stream identity (`logs/<sessionId>/<relpath>`, relpath
- * sessions-root-relative verbatim: docs/clone-contracts.md, Main's ruling).
+ * sessions-root-relative verbatim (Main's ruling).
  */
 export function isMainRelpath(relpath: string, sessionId: string): boolean {
 	const segments = relpath.split("/");
@@ -293,18 +285,4 @@ export function classifyLineageEntry(
 			? "subagent"
 			: "metadata";
 	return { kind, sessionId: sessionIdOfMain(parentRel), parentPath: parentRel };
-}
-
-// ---------------------------------------------------------------------------
-// Session tree planning
-// ---------------------------------------------------------------------------
-
-/** The export plan: every main session JSONL plus the files inside its artifact
- *  subtree, classified by kind, in the SDK layout (`<main>.jsonl` ↔ `<main>/`,
- *  or `<proj>/<main>.jsonl` ↔ `<proj>/<main>/`). */
-export interface SessionExportPlan {
-	/** Ordered by discovery; consumers sort for determinism. */
-	files: SessionLineageEntry[];
-	/** relToSessions → sessionId for every main session. */
-	mainSessions: Map<string, string>;
 }

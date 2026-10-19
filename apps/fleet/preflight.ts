@@ -20,7 +20,7 @@
  *    message (the same denylist the argv builder enforces at request time,
  *    P5.5);
  *  - k8s-only fields (storage class/size, image, namespace, secretRefs) are
- *    reported as NOT-YET-SUPPORTED (P5.3) rather than failed: on the bwrap
+ *    reported as informational rows rather than failed: on the bwrap
  *    provider they are inert, and preflight must distinguish an inert
  *    declaration from an unsafe promise.
  *
@@ -48,8 +48,8 @@ import { defaultDenyRoots, defaultRuntimeLaunch } from "./runtime-launch";
 // ---------------------------------------------------------------------------
 
 /** One preflight check outcome. `remediation` is present exactly when the
- *  check failed and an operator action can fix it (not-yet-supported k8s
- *  rows are `ok: true` and carry the P5.3 status in `detail`). */
+ *  check failed and an operator action can fix it (inert k8s-field rows
+ *  are `ok: true` and carry their note in `detail`). */
 export interface PreflightCheck {
 	name: string;
 	ok: boolean;
@@ -97,14 +97,9 @@ function errMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
-/** Runtime entry default mirrors the provider's launch resolution. */
-export function defaultRuntimeEntry(): string {
-	return defaultRuntimeLaunch(process.env).entry;
-}
-
 /** Runtime binary default mirrors the provider (bun runs the provider, so
  *  execPath is it). */
-export function defaultRuntimeBin(): string {
+function defaultRuntimeBin(): string {
 	return defaultRuntimeLaunch(process.env).bin;
 }
 
@@ -656,9 +651,6 @@ async function checkKubernetesProvider(
 /** k8s-only fields on a non-kubernetes profile: informational only. */
 function checkStrayK8sFields(profile: ProviderProfile): PreflightCheck {
 	const parts: string[] = [];
-	if (profile.provider !== "kubernetes" && profile.provider !== "bwrap") {
-		parts.push(`provider "${profile.provider}"`);
-	}
 	if (profile.image !== undefined) parts.push(`image "${profile.image}"`);
 	if (profile.namespace !== undefined) parts.push(`namespace "${profile.namespace}"`);
 	if (profile.context !== undefined) parts.push(`context "${profile.context}"`);
@@ -675,7 +667,7 @@ function checkStrayK8sFields(profile: ProviderProfile): PreflightCheck {
 	return {
 		name: "k8s-fields",
 		ok: true,
-		detail: `configured but not yet supported on ${profile.provider} (P5.3): ${parts.join("; ")}`,
+		detail: `k8s-only field(s) ignored on ${profile.provider}: ${parts.join("; ")}`,
 	};
 }
 

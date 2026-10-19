@@ -1,6 +1,5 @@
 /**
- * Fleet-side wake materialization (P8.9/P8.10; docs/clone-contracts.md
- * "Wake" and "Fleet log store").
+ * Fleet-side wake materialization (P8.9/P8.10).
  *
  * When a clone workspace wakes and the resume-target session's transcript
  * is cold or missing in the volume agent dir, the FLEET fills the missing
@@ -11,8 +10,8 @@
  * LIVE daemons); it also backs the lifecycle wake of a clone onto a fresh
  * volume (workspace-lifecycle.ts).
  *
- * Layout contract (mirrors server/log-tailer.ts discovery and
- * runtime/export-sessions.ts): the fleet store mirrors the agent sessions
+ * Layout contract (mirrors apps/session/log-tailer.ts discovery and
+ * lib/session-files/export-sessions.ts): the fleet store mirrors the agent sessions
  * root byte-for-byte under logs/<workspaceId>/<sessionId>/<relpath>, where
  * <sessionId> is the slash-free lineage key (main-file stem) and <relpath>
  * is POSIX-relative to the sessions root verbatim (main at depth 1

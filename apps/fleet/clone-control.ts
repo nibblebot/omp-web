@@ -1,6 +1,5 @@
 /**
- * Clone-workspace HTTP control surface (clone-plan P1/P6/P7/P8; frozen
- * contract docs/clone-contracts.md "Browser and CLI workspace creation").
+ * Clone-workspace HTTP control surface (clone-plan P1/P6/P7/P8).
  *
  * A thin route layer over the single fleet-internal lifecycle service
  * (fleet/workspace-lifecycle.ts): the CLI and the browser edge share the

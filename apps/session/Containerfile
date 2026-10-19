@@ -9,7 +9,7 @@
 # Runtime contract (frozen, see apps/fleet/kubernetes-provider.ts and
 # apps/fleet/workspace-lifecycle.ts):
 #   - /workspace holds the per-workspace PVC volume. Layout matches the
-#     fleet-local volume (docs/clone-contracts.md "Preparation layout"):
+#     fleet-local volume:
 #     .omp-workspace-init.json, .checkout/, .home/.
 #   - The daemon is started by entrypoint.sh, which execs the SAME runtime
 #     entry the bwrap provider runs fleet-side (apps/session/index.ts) so

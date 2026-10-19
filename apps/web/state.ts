@@ -105,7 +105,7 @@ import {
 // ---------------------------------------------------------------------------
 // Shared model vocabulary (types stay here so the store init and every
 // caller keep importing them from "../state"). The ~50 exported ACTIONS live
-// in src/store/<domain>.ts and are re-exported at the bottom of this file, so
+// in apps/web/store/<domain>.ts and are re-exported at the bottom of this file, so
 // call sites are byte-identical.
 // ---------------------------------------------------------------------------
 export type Block = { kind: "text" | "thinking"; text: string };
@@ -269,7 +269,7 @@ export const TX_SIDEBAR_KEY = "omp.txSidebarVisible";
 
 /**
  * Resolve the initial Chat/Analysis view (exported pure helper, unit-tested
- * in src/state.test.ts). A #/s/<file> hash deep-links into Analysis at that
+ * in apps/web/test/state.test.ts). A #/s/<file> hash deep-links into Analysis at that
  * transcript regardless of the persisted value; otherwise the persisted
  * value migrates silently to the current vocabulary (legacy "work" maps to
  * "chat", legacy "transcripts" maps to "analysis"), with anything unknown or
@@ -324,11 +324,11 @@ export const [state, setState] = createStore({
 	// bottom); the hook keeps it in sync from its pin mutations.
 	chatPinned: true,
 	// A turn ENDED while the transcript was scrolled away from the live edge
-	// (agent_end, src/store/chat.ts). The finished answer sits below the
+	// (agent_end, apps/web/store/chat.ts). The finished answer sits below the
 	// viewport, unviewed. Cleared when the user re-pins (scrolls to the
 	// bottom / jump button), when a new turn starts, or on session switch
 	// (all in useStickyScroll / applyEvent). Feeds the attached roster row's
-	// yellow "unreviewed" dot (src/fleet-ui/session-activity.ts).
+	// yellow "unreviewed" dot (apps/web/fleet-ui/session-activity.ts).
 	answerUnviewed: false,
 	// TUI-parity dynamic working label (interactive-mode's setWorkingMessage):
 	// the latest tool-call intent ("Reading config files…"), undefined = the
@@ -391,7 +391,7 @@ export const [state, setState] = createStore({
 	stats: null as SessionStats | null,
 	subagents: new Map<string, SubagentInfo>(),
 	connected: false,
-	// Browser-auth state (P2.4): mirrored from src/store/auth.ts by
+	// Browser-auth state (P2.4): mirrored from apps/web/store/auth.ts by
 	// subscribeAuth. "unknown" until the first session probe; "disabled"
 	// (fleet/daemon without browser auth) behaves exactly as before this
 	// integration. signedOut opens the sign-in modal.
@@ -487,7 +487,7 @@ export const [state, setState] = createStore({
 		featurePreferences().analysis,
 	),
 	// Chat-button activity dot: a turn ENDED while the tab was in Analysis
-	// (agent_end in src/store/chat.ts for the attached session, detached
+	// (agent_end in apps/web/store/chat.ts for the attached session, detached
 	// daemon_activity flips in the /events handler below). Ephemeral like
 	// answerUnviewed; cleared only by setView("chat").
 	chatUnviewed: false,
@@ -1619,7 +1619,7 @@ export function connect(): void {
 // Facade (Phase 3 store facade split): every action the original state.ts
 // exported is re-exported here so call sites (components, tests) keep
 // importing from "../state" byte-identical. Types and the store stay defined
-// above; the actions live in src/store/<domain>.ts.
+// above; the actions live in apps/web/store/<domain>.ts.
 // ---------------------------------------------------------------------------
 export { isReady } from "./store/session";
 export {

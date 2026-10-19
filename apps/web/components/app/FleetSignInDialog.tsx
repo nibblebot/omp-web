@@ -6,7 +6,7 @@ import { DialogActions } from "../ui/DialogActions";
 /**
  * Sign-in surface for fleet browser auth (ledger "Browser auth"). The access
  * token lives ONLY in this component's signal and is posted exactly once to
- * POST /auth/login (src/store/auth.ts signIn); the server answers with the
+ * POST /auth/login (apps/web/store/auth.ts signIn); the server answers with the
  * HttpOnly `omp_session` cookie and the client keeps just the in-memory CSRF
  * token. Deliberately NO token persistence anywhere: not in
  * localStorage/sessionStorage, not in the URL.

@@ -2,7 +2,7 @@ import path from "node:path";
 import { isLoopbackHost } from "#lib/platform/hosts";
 
 /**
- * omp-session config surface (docs/src/content/docs/reference/environment.md). Flags map 1:1 to
+ * omp-session config surface. Flags map 1:1 to
  * env vars (`OMP_SESSION_*` only).
  */
 
@@ -139,7 +139,7 @@ export function parseConfig(argv: string[], fleet?: FleetStdinPayload): SessionC
 		flag("idle-timeout") ?? Bun.env.OMP_SESSION_IDLE_TIMEOUT ?? "30m",
 	);
 
-	// Callback transport (P3.2, docs/clone-contracts.md "Callback transport"). The pair arrives only
+	// Callback transport (P3.2). The pair arrives only
 	// in the fleet's `--fleet-stdin` payload. HTTPS always; HTTP only with the payload's allowHttp for
 	// a loopback host; an explicit proxy must be http/https, never silently ignored, never fallen back
 	// from.

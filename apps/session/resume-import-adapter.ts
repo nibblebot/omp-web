@@ -3,7 +3,7 @@
  *
  * OWNERSHIP: this module is the ONLY place that composes the SDK resume /
  * pins / foreign-import surface for browser-driven resume. Daemon method
- * wiring (P0) calls {@link createResumeImportHandlers}; the fleet edge,
+ * wiring in methods.ts calls {@link createResumeImportHandlers}; the fleet edge,
  * protocol, state and web prompt command table are NEVER touched here.
  *
  * SDK reuse (installed @oh-my-pi/pi-coding-agent 18.11.0; revalidate on bump):
@@ -483,28 +483,9 @@ function storeFor(source: ForeignSessionSource, root?: string): ForeignSessionSt
 }
 
 /**
- * List foreign sessions from the default source location or an authorized
- * fleet-host root. Metadata only (the SDK list() reads a bounded prefix when
- * indexed metadata is absent) — never a full-transcript load.
- */
-export async function listForeignSessions(
-	source: ForeignSessionSource,
-	options?: { authorizedRoot?: string },
-): Promise<ForeignSessionPreview[]> {
-	assertSource(source);
-	const root =
-		options?.authorizedRoot !== undefined
-			? await resolveAuthorizedRoot(options.authorizedRoot)
-			: undefined;
-	const store = storeFor(source, root);
-	const infos = await store.list();
-	return infos.map(foreignPreviewOf);
-}
-
-/**
  * Preview one foreign session: title/cwd/created/modified/messageCount/
- * firstMessage with NO full-transcript load. `info` may be a preview round-
- * tripped from listForeignSessions (path/cwd are display only here).
+ * firstMessage with NO full-transcript load. `info` may be an earlier preview
+ * (path/cwd are display only here).
  */
 export function previewForeignSession(
 	store: ForeignSessionStore,
@@ -867,7 +848,7 @@ export async function importUploadedForeignSession(
 }
 
 // ---------------------------------------------------------------------------
-// P0 method binder (single integration point; no methods.ts edits here)
+// Method binder (single integration point; methods.ts is the only caller)
 // ---------------------------------------------------------------------------
 
 export interface ResumeImportContext extends ResumeQuery {
@@ -899,7 +880,7 @@ export type ResumeImportHandlers = Record<
 >;
 
 /**
- * Build the daemon `call` handlers P0 publishes. Each handler takes the raw
+ * Build the daemon `call` handlers methods.ts publishes. Each handler takes the raw
  * `args` array and returns JSON-safe values; throws carry typed
  * invalid_request/unavailable messages to the caller (duplicate call ids
  * replay the recorded answer via the existing dedup window — no new

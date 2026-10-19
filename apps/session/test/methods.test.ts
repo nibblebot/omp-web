@@ -447,7 +447,6 @@ describe("READ_ONLY classification", () => {
 	// other method must be classified read-only so a call does not trigger a state resync.
 	const MUTATING: Record<string, true> = {
 		abort: true,
-		abortAndPrompt: true,
 		abortBash: true,
 		abortCompaction: true,
 		abortEval: true,

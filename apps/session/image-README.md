@@ -74,5 +74,4 @@ the callback enrollment arrives as pod env. Kubernetes pods share the host
 kernel with the rest of the cluster: container isolation is not a
 kernel-level confidentiality boundary, and a pod can read its own
 environment, so the profile namespace and its Secrets must be scoped
-accordingly. See the security section in [`docs/architecture.md`](../../docs/architecture.md)
-and the frozen contracts in [`docs/clone-contracts.md`](../../docs/clone-contracts.md).
+accordingly.

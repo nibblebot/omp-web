@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 // ---------------------------------------------------------------------------
 // Archive export manifest (`manifest.v1.json`).
 //
-// Frozen by docs/clone-contracts.md ("Export manifest"): POSIX-relative
+// Entries are POSIX-relative
 // normalized paths, no `..`, no absolute, regular files only; entries carry
 // path/size/sha256/kind/sessionId/parentPath; provenance carries projectId/
 // workspaceId/workspaceName/source/resolvedCommit/generatedAt. The exportId is
@@ -11,8 +11,7 @@ import { createHash } from "node:crypto";
 // identical retries are idempotent and conflicting exports collide without a
 // timestamp tiebreak.
 //
-// Typed error codes are the frozen ledger vocabulary (docs/clone-contracts.md
-// "Typed errors"); everything archive/export related throws ExportError.
+// Typed error codes are fixed; everything archive/export related throws ExportError.
 // ---------------------------------------------------------------------------
 
 export type ManifestFileKind = "main" | "subagent" | "advisor" | "metadata";
@@ -47,7 +46,7 @@ export interface ArchiveManifest {
 	files: ManifestFile[];
 }
 
-/** Code set frozen in docs/clone-contracts.md "Typed errors". */
+/** Typed export error codes. */
 export type ExportErrorCode =
 	| "invalid_request"
 	| "invalid_identity"
@@ -75,9 +74,6 @@ export class ExportError extends Error {
 	}
 }
 
-const FILE_KINDS: readonly ManifestFileKind[] = ["main", "subagent", "advisor", "metadata"];
-const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-
 /**
  * True for a normalized POSIX-relative path: non-empty, not absolute, no
  * drive/UNC prefixes, and segments are neither empty nor `.` nor `..`
@@ -90,146 +86,6 @@ export function isNormalizedPosixRelativePath(value: string): boolean {
 		if (segment === "" || segment === "." || segment === "..") return false;
 	}
 	return true;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireString(record: Record<string, unknown>, field: string, where: string): string {
-	const value = record[field];
-	if (typeof value !== "string" || value === "") {
-		throw new ExportError("invalid_request", `${where}: ${field} must be a non-empty string`);
-	}
-	return value;
-}
-
-function optionalString(
-	record: Record<string, unknown>,
-	field: string,
-	where: string,
-): string | undefined {
-	const value = record[field];
-	if (value === undefined) return undefined;
-	if (typeof value !== "string" || value === "") {
-		throw new ExportError(
-			"invalid_request",
-			`${where}: ${field} must be a non-empty string when present`,
-		);
-	}
-	return value;
-}
-
-function validateProvenance(value: unknown): ManifestProvenance {
-	if (!isPlainObject(value)) {
-		throw new ExportError("invalid_request", "provenance must be an object");
-	}
-	const provenance: ManifestProvenance = {
-		projectId: requireString(value, "projectId", "provenance"),
-		workspaceId: requireString(value, "workspaceId", "provenance"),
-		workspaceName: requireString(value, "workspaceName", "provenance"),
-		resolvedCommit: requireString(value, "resolvedCommit", "provenance"),
-		generatedAt: requireString(value, "generatedAt", "provenance"),
-	};
-	const source = value.source;
-	if (source !== undefined) {
-		if (!isPlainObject(source)) {
-			throw new ExportError("invalid_request", "provenance.source must be an object when present");
-		}
-		provenance.source = {
-			local: optionalString(source, "local", "provenance.source"),
-			remote: optionalString(source, "remote", "provenance.source"),
-		};
-	}
-	return provenance;
-}
-
-function validateFile(value: unknown, index: number): ManifestFile {
-	const where = `files[${index}]`;
-	if (!isPlainObject(value)) {
-		throw new ExportError("invalid_request", `${where} must be an object`);
-	}
-	const filePath = requireString(value, "path", where);
-	if (!isNormalizedPosixRelativePath(filePath)) {
-		throw new ExportError(
-			"invalid_request",
-			`${where}: path must be a normalized POSIX-relative path`,
-			filePath,
-		);
-	}
-	const size = value.size;
-	if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
-		throw new ExportError(
-			"invalid_request",
-			`${where}: size must be a non-negative integer`,
-			filePath,
-		);
-	}
-	const sha256 = value.sha256;
-	if (typeof sha256 !== "string" || !SHA256_PATTERN.test(sha256)) {
-		throw new ExportError(
-			"invalid_request",
-			`${where}: sha256 must be 64 lowercase hex chars`,
-			filePath,
-		);
-	}
-	const kind = value.kind;
-	if (typeof kind !== "string" || !FILE_KINDS.includes(kind as ManifestFileKind)) {
-		throw new ExportError(
-			"invalid_request",
-			`${where}: kind must be one of ${FILE_KINDS.join("|")}`,
-			filePath,
-		);
-	}
-	const file: ManifestFile = {
-		path: filePath,
-		size,
-		sha256,
-		kind: kind as ManifestFileKind,
-		sessionId: requireString(value, "sessionId", where),
-	};
-	const parentPath = optionalString(value, "parentPath", where);
-	if (parentPath !== undefined) {
-		if (!isNormalizedPosixRelativePath(parentPath)) {
-			throw new ExportError(
-				"invalid_request",
-				`${where}: parentPath must be a normalized POSIX-relative path`,
-				filePath,
-			);
-		}
-		file.parentPath = parentPath;
-	}
-	return file;
-}
-
-/**
- * Validate an unknown decoded manifest against the frozen v1 shape and return
- * it typed. Throws {@link ExportError} with code `invalid_request` on any
- * violation (missing fields, non-normalized/absolute/`..` paths, duplicate
- * paths, unknown kinds, malformed hashes).
- */
-export function validateManifest(manifest: unknown): ArchiveManifest {
-	if (!isPlainObject(manifest)) {
-		throw new ExportError("invalid_request", "manifest must be an object");
-	}
-	const validated: ArchiveManifest = {
-		provenance: validateProvenance(manifest.provenance),
-		files: [],
-	};
-	const files = manifest.files;
-	if (!Array.isArray(files)) {
-		throw new ExportError("invalid_request", "files must be an array");
-	}
-	const seen = new Set<string>();
-	for (let index = 0; index < files.length; index++) {
-		const file = validateFile(files[index], index);
-		if (seen.has(file.path)) {
-			throw new ExportError("invalid_request", `duplicate manifest path: ${file.path}`, file.path);
-		}
-		seen.add(file.path);
-		validated.files.push(file);
-	}
-	return validated;
 }
 
 /**

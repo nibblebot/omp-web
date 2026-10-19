@@ -1,5 +1,5 @@
 /**
- * Stats config resolution (fleet/stats). Resolved once at startup.
+ * Stats config resolution (stats API). Resolved once at startup.
  *
  * Precedence:
  * - config root: literal $PI_CONFIG_DIR (default ~/.omp), then the active
@@ -17,7 +17,7 @@
  * NOTE: real-world stats.db rows store ABSOLUTE session_file paths
  * (e.g. /home/u/.omp/agent/sessions/<proj>/<file>.jsonl), not the
  * relative paths the DB schema comment implies. Everything is normalized
- * through fleet/stats/paths.ts.
+ * through the stats path helpers.
  *
  * The fleet control plane owns the listen port, so no port/host here.
  */

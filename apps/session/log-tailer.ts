@@ -15,8 +15,8 @@ import type { CallbackErrorCode } from "#lib/wire/callback-protocol";
 import type { CallbackSendResult } from "./fleet-callback";
 
 /**
- * Continuous session-log tailer, daemon half (P3.7; docs/clone-contracts.md
- * "Session log streaming"). Tails the full session lineage subtree of an
+ * Continuous session-log tailer, daemon half (P3.7). Tails the full session
+ * lineage subtree of an
  * agent sessions dir: main session JSONL, subagent/advisor recorders,
  * metadata JSONL and blobs, and streams raw bytes to the fleet as `frame`
  * envelopes on one virtual stream per lineage file, streamId
@@ -34,7 +34,7 @@ import type { CallbackSendResult } from "./fleet-callback";
  * New files appearing mid-run are picked up by fs.watch (recursive) or the
  * periodic rescan.
  *
- * Wire contract (frozen, docs/clone-contracts.md "Session log streaming"):
+ * Wire contract (frozen):
  * - LogChunk payload `{offset, generation, data(base64), eof}`; `kind` stays
  *   `frame`; eof=true only on the final chunk of a closed session file.
  * - Fleet→daemon control on the down half: `{type:"log_ack", offsets}` (an
@@ -74,7 +74,7 @@ import type { CallbackSendResult } from "./fleet-callback";
  * a ledger error code; constructor validation throws before start only.
  */
 
-/** Frozen LogChunk frame payload (docs/clone-contracts.md "Session log streaming"). */
+/** Frozen LogChunk frame payload. */
 export interface LogChunk {
 	/** Byte offset of this chunk in the file at `generation`. */
 	offset: number;

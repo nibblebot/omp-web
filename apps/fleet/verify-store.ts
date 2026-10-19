@@ -20,17 +20,16 @@ import {
 } from "#lib/session-files/export-sessions";
 
 // ---------------------------------------------------------------------------
-// Verify-at-deletion gate (P7.1/P7.2 core): runtime/verify-store.ts.
+// Verify-at-deletion gate (P7.1/P7.2 core).
 //
-// Frozen contract (docs/clone-contracts.md "Fleet log store"/"Typed errors";
-// docs/clone-design.md "Workspace deletion: verify-at-deletion contract"):
+// Result of verifyWorkspaceLogs:
 //
 //   verifyWorkspaceLogs({ logsRoot, workspaceId }) →
 //     { ok: true; sessions: VerifiedSession[] }
 //   | { ok: false; code: <ledger error>; message: string; path?: string }
 //
 // P4.5 (additive): when `registry` provenance is supplied, the success arm
-// additionally carries `manifest` (ArchiveManifest per shared/archive-manifest
+// additionally carries `manifest` (ArchiveManifest per lib/session-files/archive-manifest.ts
 // schema: every verified file's path/size/sha256/kind/sessionId/parentPath,
 // plus projectId/workspaceId/workspaceName/source/resolvedCommit/generatedAt
 // provenance from the registry record) and `exportId` (content-addressed via
@@ -577,13 +576,6 @@ async function streamFileChunks(
 	} finally {
 		await handle.close();
 	}
-}
-
-/** sha256 hex of a file, streamed in bounded chunks. Rejects on fs failure. */
-export async function sha256OfFile(absolute: string): Promise<string> {
-	const hash = createHash("sha256");
-	await streamFileChunks(absolute, (chunk) => hash.update(chunk));
-	return hash.digest("hex");
 }
 
 /**

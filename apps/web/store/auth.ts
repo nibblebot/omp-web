@@ -1,7 +1,7 @@
 /**
  * Browser auth domain (P2.4 store facade): opaque 256-bit session cookie
- * (`omp_session`, HttpOnly + Secure + SameSite=Lax, 30-day absolute expiry;
- * ledger "Browser auth" in docs/clone-contracts.md). The access token lives
+ * (`omp_session`, HttpOnly + Secure + SameSite=Lax, 30-day absolute expiry).
+ * The access token lives
  * ONLY for the duration of a signIn() call: it is posted once to
  * POST /auth/login and dropped. The client persists NOTHING: no
  * localStorage/sessionStorage, no tokens in the URL; the browser keeps only

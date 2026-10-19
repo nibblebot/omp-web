@@ -446,7 +446,7 @@ function sanitizeKeptNode(dotPath: string, value: unknown): unknown {
  * unreadable override resolves to null with no fallthrough). Otherwise the
  * first existing `config.yml` or `config.yaml` under `$PI_CODING_AGENT_DIR`,
  * then `$XDG_DATA_HOME/omp/agent`, then `~/.omp/agent` (the operator home
- * from `env.HOME`, mirroring the agent-dir convention in fleet/stats).
+ * from `env.HOME`, mirroring the agent-dir convention in the stats API).
  * `HOME` unset means the home location is skipped; the function only ever
  * consults the env record handed to it.
  */

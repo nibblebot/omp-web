@@ -2,48 +2,15 @@
 // execute SDK-created tools, retaining their real ToolSession and permissions.
 
 import { validateToolArguments } from "@oh-my-pi/pi-ai";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { VIBE_CLI_AGENT, VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 import type { VibeParentSession } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 import type {
 	VibeCli,
-	VibeScreenSnapshot,
-	VibeSessionState,
 	VibeToolDetails,
 	VibeSendOutcome,
 	VibeKillOutcome,
 } from "@oh-my-pi/pi-tui/tools/vibe";
 import type { SessionEntry } from "./session-entry";
-
-export interface VibeWorkerDto {
-	id: string;
-	cli: VibeCli;
-	state: VibeSessionState;
-	model?: string;
-	turns: number;
-	queued: number;
-	lastActivity?: string;
-	lastActivityAt: number;
-	killed?: boolean;
-	outputTail?: string[];
-	trace?: string[];
-}
-
-function toDto(screen: VibeScreenSnapshot): VibeWorkerDto {
-	return {
-		id: screen.id,
-		cli: screen.cli,
-		state: screen.state,
-		model: screen.model,
-		turns: screen.turns,
-		queued: screen.queued,
-		lastActivity: screen.lastActivity,
-		lastActivityAt: screen.lastActivityAt,
-		killed: screen.killed,
-		outputTail: [...screen.outputTail],
-		trace: [...screen.trace],
-	};
-}
 
 // Minimal VibeParentSession over the live AgentSession: owner scope (ownerId +
 // parentSessionId + resolved parent file) plus persistence/rehydration access.
@@ -169,24 +136,6 @@ async function exitDirector(entry: SessionEntry): Promise<number> {
 	});
 	directorState(entry).previousTools = undefined;
 	return killed;
-}
-
-/**
- * Live screen snapshots for the TV-wall read model. Never throws: when the
- * scope cannot be resolved (no stable parent session id yet), returns the
- * empty roster with a reason.
- */
-export async function listVibeWorkers(
-	entry: SessionEntry,
-): Promise<{ enabled: boolean; workers: VibeWorkerDto[]; reason?: string }> {
-	const enabled = getVibeState(entry).enabled;
-	try {
-		const toolSession = parentSession(entry) as unknown as ToolSession;
-		const screens = VibeSessionRegistry.global().screens(toolSession, undefined);
-		return { enabled, workers: screens.map(toDto) };
-	} catch {
-		return { enabled, workers: [], reason: "vibe registry requires tool context" };
-	}
 }
 
 async function executeVibeTool(

@@ -5,7 +5,7 @@
  * daemonId (full-replace, not union) and merges it across daemons into the
  * single {type:"daemons"} frame browsers see.
  *
- * The client keys entries by daemonsKey (shared/protocol.ts:
+ * The client keys entries by daemonsKey (lib/wire/protocol.ts:
  * `${projectDir}\u0000${name}`); daemon names are unique per projectDir and
  * two omp-sessions can share a projectDir. When several daemons report the
  * same key, the entry from the daemon whose cwd equals the entry's projectDir

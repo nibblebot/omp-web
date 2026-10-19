@@ -1,5 +1,5 @@
 /**
- * Wire contracts for the read-only transcripts/stats API (fleet/stats).
+ * Wire contracts for the read-only transcripts/stats API.
  * Server (apps/fleet/stats-*.ts) implements; client (apps/web/store/fleet-api.ts) consumes.
  * Leaf module: no in-repo imports. Ported from the standalone
  * omp-transcripts.theme "session-viewer" app.
@@ -221,8 +221,8 @@ export interface SyncResult {
 }
 
 // ---------------------------------------------------------------------------
-// Fleet log-store read surface (P8.5). Server: fleet/log-store.ts + fleet/
-// stored-sessions.ts. Client: src/tx reads these through /ctl/stored.
+// Fleet log-store read surface (P8.5). Server: apps/fleet/log-store.ts +
+// apps/fleet/stored-sessions.ts. Client: apps/web/store/fleet-api.ts reads these through /ctl/stored.
 // Browsing is fleet-owned and read-only and never wakes compute.
 // ---------------------------------------------------------------------------
 

@@ -3,8 +3,8 @@
  * pure disk read over FleetLogStore: never touches a daemon, the SDK, or
  * compute, so browsing fleet-stored history can never wake a workspace.
  *
- * Layering: imports only fleet/log-store.ts, shared/stats-types.ts, node
- * builtins and ./: never server/ or src/. Reuses the stats app's route
+ * Layering: imports only fleet/log-store.ts, lib/wire/stats-types.ts, node
+ * builtins and ./. Reuses the stats app's route
  * registry convention (Route + dispatchRequest + json) so the fleet control
  * plane can mount it with one line beside /ctl/stats.
  *

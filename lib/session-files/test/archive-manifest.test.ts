@@ -1,9 +1,8 @@
 /**
  * Direct coverage for the frozen archive-manifest contract
  * (lib/session-files/archive-manifest.ts): the shared POSIX-relative path
- * predicate every clone/export/wake guard delegates to, the v1 manifest
- * validator, the canonical-JSON form the exportId hashes, and the
- * content-addressed id itself.
+ * predicate every clone/export/wake guard delegates to, the canonical-JSON
+ * form the exportId hashes, and the content-addressed id itself.
  *
  * The path predicate is the highest-risk export here: it is the only thing
  * standing between a hostile store/wire relpath and the export and
@@ -16,11 +15,10 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
-	ExportError,
+	type ArchiveManifest,
 	canonicalJson,
 	computeExportId,
 	isNormalizedPosixRelativePath,
-	validateManifest,
 } from "#lib/session-files/archive-manifest";
 
 const SHA_A = "a".repeat(64);
@@ -69,17 +67,6 @@ function reorder(value: unknown): unknown {
 	if (value === null || typeof value !== "object") return value;
 	const entries = Object.entries(value as Record<string, unknown>).reverse();
 	return Object.fromEntries(entries.map(([key, entry]) => [key, reorder(entry)]));
-}
-
-/** Run `fn`, require an {@link ExportError}, and return it for code/path assertions. */
-function exportFailure(fn: () => unknown): ExportError {
-	try {
-		fn();
-	} catch (error) {
-		if (error instanceof ExportError) return error;
-		throw error;
-	}
-	throw new Error("expected an ExportError, but the call succeeded");
 }
 
 describe("isNormalizedPosixRelativePath", () => {
@@ -141,173 +128,6 @@ describe("isNormalizedPosixRelativePath", () => {
 	});
 });
 
-describe("validateManifest", () => {
-	test("accepts a fully populated manifest and preserves every declared field", () => {
-		const fixture = manifestWith((manifest) => {
-			manifest.provenance.source = {
-				local: "/srv/repos/demo",
-				remote: "git@example.com:acme/demo.git",
-			};
-		});
-		const validated: unknown = validateManifest(fixture);
-		expect(validated).toEqual(fixture);
-	});
-
-	test("omits provenance.source when the manifest declares none, and parentPath on mains", () => {
-		const result = validateManifest(baseManifest());
-		expect("source" in result.provenance).toBe(false);
-		expect(result.provenance.workspaceId).toBe("ws-1");
-		expect(result.files).toHaveLength(2);
-		expect("parentPath" in result.files[0]).toBe(false);
-		expect(result.files[1].parentPath).toBe(MAIN_PATH);
-		expect(result.files.map((file) => file.kind)).toEqual(["main", "subagent"]);
-	});
-
-	test("rejects non-object manifests without a path", () => {
-		for (const value of [null, undefined, [], "manifest", 7, true]) {
-			const error = exportFailure(() => validateManifest(value));
-			expect(error.code).toBe("invalid_request");
-			expect(error.path).toBeUndefined();
-		}
-	});
-
-	test("rejects a missing or non-array files list", () => {
-		for (const files of [undefined, null, {}, "files", 2]) {
-			const fixture = manifestWith((manifest) => {
-				manifest.files = files as unknown as Array<Record<string, unknown>>;
-			});
-			expect(exportFailure(() => validateManifest(fixture)).code).toBe("invalid_request");
-		}
-	});
-
-	test("rejects required provenance fields that are missing or empty", () => {
-		const fields = ["projectId", "workspaceId", "workspaceName", "resolvedCommit", "generatedAt"];
-		for (const field of fields) {
-			const missing = manifestWith((manifest) => {
-				delete manifest.provenance[field];
-			});
-			expect(exportFailure(() => validateManifest(missing)).code).toBe("invalid_request");
-			const empty = manifestWith((manifest) => {
-				manifest.provenance[field] = "";
-			});
-			expect(exportFailure(() => validateManifest(empty)).code).toBe("invalid_request");
-		}
-	});
-
-	test("rejects a malformed provenance.source", () => {
-		for (const source of ["git", 7, [], { local: "" }, { remote: 42 }, { local: 1 }]) {
-			const fixture = manifestWith((manifest) => {
-				manifest.provenance.source = source;
-			});
-			expect(exportFailure(() => validateManifest(fixture)).code).toBe("invalid_request");
-		}
-	});
-
-	test("rejects entries whose path is not a normalized POSIX-relative path", () => {
-		const unsafe = [
-			"/abs.jsonl",
-			"../escape.jsonl",
-			"a//b.jsonl",
-			"a/./b.jsonl",
-			"a/",
-			"a\\b.jsonl",
-		];
-		for (const path of unsafe) {
-			const fixture = manifestWith((manifest) => {
-				manifest.files[0].path = path;
-			});
-			const error = exportFailure(() => validateManifest(fixture));
-			expect({ path, code: error.code, reported: error.path }).toEqual({
-				path,
-				code: "invalid_request",
-				reported: path,
-			});
-		}
-		// An empty path fails the non-empty-string rule, so it carries no path.
-		const empty = manifestWith((manifest) => {
-			manifest.files[0].path = "";
-		});
-		expect(exportFailure(() => validateManifest(empty)).code).toBe("invalid_request");
-	});
-
-	test("rejects duplicate declared paths", () => {
-		const fixture = manifestWith((manifest) => {
-			manifest.files[1].path = MAIN_PATH;
-		});
-		const error = exportFailure(() => validateManifest(fixture));
-		expect({ code: error.code, path: error.path }).toEqual({
-			code: "invalid_request",
-			path: MAIN_PATH,
-		});
-	});
-
-	test("rejects a size that is not a non-negative safe integer", () => {
-		const sizes = [
-			-1,
-			-0.5,
-			1.5,
-			Number.NaN,
-			Number.POSITIVE_INFINITY,
-			2 ** 53,
-			"12",
-			null,
-			undefined,
-		];
-		for (const size of sizes) {
-			const fixture = manifestWith((manifest) => {
-				manifest.files[0].size = size;
-			});
-			expect(exportFailure(() => validateManifest(fixture)).code).toBe("invalid_request");
-		}
-	});
-
-	test("rejects a sha256 that is not 64 lowercase hex chars", () => {
-		const hashes = ["A".repeat(64), "a".repeat(63), "a".repeat(65), "g".repeat(64), 42, undefined];
-		for (const sha256 of hashes) {
-			const fixture = manifestWith((manifest) => {
-				manifest.files[0].sha256 = sha256;
-			});
-			expect(exportFailure(() => validateManifest(fixture)).code).toBe("invalid_request");
-		}
-	});
-
-	test("rejects an unknown or missing file kind", () => {
-		for (const kind of ["transcript", "MAIN", "", 1, null, undefined]) {
-			const fixture = manifestWith((manifest) => {
-				manifest.files[0].kind = kind;
-			});
-			expect(exportFailure(() => validateManifest(fixture)).code).toBe("invalid_request");
-		}
-	});
-
-	test("rejects a missing or empty sessionId", () => {
-		for (const sessionId of ["", 7, null, undefined]) {
-			const fixture = manifestWith((manifest) => {
-				manifest.files[0].sessionId = sessionId;
-			});
-			expect(exportFailure(() => validateManifest(fixture)).code).toBe("invalid_request");
-		}
-	});
-
-	test("rejects non-object file entries", () => {
-		for (const entry of [null, 42, "file", []]) {
-			const fixture = manifestWith((manifest) => {
-				manifest.files[0] = entry as unknown as Record<string, unknown>;
-			});
-			expect(exportFailure(() => validateManifest(fixture)).code).toBe("invalid_request");
-		}
-	});
-
-	test("rejects a parentPath that is not a normalized POSIX-relative path", () => {
-		for (const parentPath of ["/abs.jsonl", "../x.jsonl", "a//b.jsonl", "a/", "a\\b.jsonl", ""]) {
-			const fixture = manifestWith((manifest) => {
-				manifest.files[1].parentPath = parentPath;
-			});
-			expect(exportFailure(() => validateManifest(fixture)).code).toBe("invalid_request");
-		}
-	});
-});
-
 describe("canonicalJson", () => {
 	test("sorts object keys recursively so insertion order never changes the bytes", () => {
 		const a = { b: 1, a: { d: 4, c: [3, 1] } };
@@ -328,15 +148,15 @@ describe("canonicalJson", () => {
 	});
 
 	test("is stable for the same manifest content regardless of key order", () => {
-		const plain = validateManifest(baseManifest());
-		const shuffled = validateManifest(reorder(baseManifest()));
+		const plain = baseManifest() as unknown as ArchiveManifest;
+		const shuffled = reorder(baseManifest()) as ArchiveManifest;
 		expect(canonicalJson(shuffled)).toBe(canonicalJson(plain));
 	});
 });
 
 describe("computeExportId", () => {
 	test("is content-addressed as ws_<workspaceId>_<sha256(canonical manifest)[:16]>", () => {
-		const manifest = validateManifest(baseManifest());
+		const manifest = baseManifest() as unknown as ArchiveManifest;
 		const digest = createHash("sha256").update(canonicalJson(manifest)).digest("hex");
 		const exportId = computeExportId(manifest);
 		expect(exportId).toBe(`ws_ws-1_${digest.slice(0, 16)}`);
@@ -344,8 +164,8 @@ describe("computeExportId", () => {
 	});
 
 	test("is idempotent for identical retries regardless of key order", () => {
-		const plain = validateManifest(baseManifest());
-		const shuffled = validateManifest(reorder(baseManifest()));
+		const plain = baseManifest() as unknown as ArchiveManifest;
+		const shuffled = reorder(baseManifest()) as ArchiveManifest;
 		expect(computeExportId(shuffled)).toBe(computeExportId(plain));
 	});
 
@@ -363,9 +183,9 @@ describe("computeExportId", () => {
 			["generatedAt", (manifest) => (manifest.provenance.generatedAt = "2026-09-07T00:00:00.000Z")],
 			["projectId", (manifest) => (manifest.provenance.projectId = "proj-2")],
 		];
-		const base = computeExportId(validateManifest(baseManifest()));
+		const base = computeExportId(baseManifest() as unknown as ArchiveManifest);
 		for (const [label, mutate] of mutations) {
-			const mutated = computeExportId(validateManifest(manifestWith(mutate)));
+			const mutated = computeExportId(manifestWith(mutate) as unknown as ArchiveManifest);
 			const observed = {
 				label,
 				differs: mutated !== base,
@@ -376,13 +196,11 @@ describe("computeExportId", () => {
 	});
 
 	test("namespaces by workspace id: identical file sets never collide across workspaces", () => {
-		const base = computeExportId(validateManifest(baseManifest()));
+		const base = computeExportId(baseManifest() as unknown as ArchiveManifest);
 		const other = computeExportId(
-			validateManifest(
-				manifestWith((manifest) => {
-					manifest.provenance.workspaceId = "ws-2";
-				}),
-			),
+			manifestWith((manifest) => {
+				manifest.provenance.workspaceId = "ws-2";
+			}) as unknown as ArchiveManifest,
 		);
 		// The workspace id is both the id prefix and part of the hashed
 		// provenance, so the digest differs too.

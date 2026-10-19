@@ -1,6 +1,6 @@
 /**
- * Wake materialization wire contract (docs/clone-contracts.md "Wake",
- * P8.9/P8.10). A cold or missing session transcript is materialized from the
+ * Wake materialization wire contract (P8.9/P8.10).
+ * A cold or missing session transcript is materialized from the
  * fleet log store into the daemon's agent dir BEFORE the existing resume path
  * runs. The transfer rides the bulk channel: the daemon initiates
  * `POST /callback/bulk/<correlationId>` with a small JSON
@@ -18,7 +18,7 @@
  * `<session>/…` for session-root artifacts. The daemon writes each received
  * file to `<agentDir>/sessions/<relpath>`, recreating the owning project dir
  * on demand, so the store subtree maps 1:1 onto the tailer's sessionKey
- * layout (server/log-tailer.ts). Materialization therefore restores exactly
+ * layout (apps/session/log-tailer.ts). Materialization therefore restores exactly
  * the tree the tailer streams.
  *
  * Identity and credentials travel in the usual callback request headers; the

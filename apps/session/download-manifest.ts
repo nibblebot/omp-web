@@ -9,7 +9,7 @@
 //
 // Reuses, never reinvents:
 // - SDK dumps: `exportToHtml`, `formatSessionAsText`, `dumpLlmRequestToTmpDir`,
-//   `dumpSessionArchiveToTmpDir` (run by the P0-wired session methods; this
+//   `dumpSessionArchiveToTmpDir` (run by the session methods; this
 //   module only authorizes + names their outputs).
 // - Scoped lineage rules: `isAdvisorTranscriptName` (lib/session-files/
 //   export-sessions.ts) for advisor detection; the `__advisor*.jsonl` vs
@@ -23,12 +23,6 @@
 //   by the `download_bulk` path check): realpath both sides, tmpdir + cwd +
 //   process.cwd() + session-file dir; 403 on escape, 404 on missing.
 //
-// PROPOSED wire for P0 (OMP_PROTO stays 2, additive-only; P0 publishes to
-// lib/wire/protocol.ts + apps/session/methods.ts, this module is the impl):
-//   downloadManifest(args: DownloadManifestArgs) -> DownloadManifestResult
-//     read-only row: buildDownloadManifest() below; never wakes compute.
-//   DownloadKind enum: "html" | "html-themed" | "text" | "request" | "archive".
-//   Capability advertisement: Capability{available, reason} per daemon.
 
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -56,10 +50,10 @@ import { BULK_MAX_BYTES } from "#lib/wire/callback-protocol";
 import type { CallbackErrorCode, DownloadBulkFailedControl } from "#lib/wire/callback-protocol";
 import type { SessionEntry } from "./session-entry";
 
-/** Additive download kinds (proposed DownloadKind enum for P0). */
+/** Additive download kinds. */
 export type DownloadKind = "html" | "html-themed" | "text" | "request" | "archive";
 
-/** Proposed DownloadManifestArgs DTO for P0. */
+/** DownloadManifestArgs DTO. */
 export interface DownloadManifestArgs {
 	includeAdvisor: boolean;
 	includeBtw: boolean;
@@ -77,7 +71,7 @@ export interface DownloadManifestFile {
 	bytes?: number;
 }
 
-/** Proposed DownloadManifestResult DTO for P0. */
+/** DownloadManifestResult DTO. */
 export interface DownloadManifestResult {
 	files: DownloadManifestFile[];
 	advisorIncluded: boolean;

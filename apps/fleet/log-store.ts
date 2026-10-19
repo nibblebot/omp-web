@@ -1,7 +1,5 @@
 // Fleet log store (P3.8): durable, append-only mirror of the session lineage
-// logs that daemons continuously stream over the callback pair. Contracts are
-// frozen in docs/clone-contracts.md under "Session log streaming", "Fleet log
-// store" and "Retention":
+// logs that daemons continuously stream over the callback pair. Contracts are summarized below:
 //   - Layout under the fleet state dir: logs/<workspaceId>/<sessionId>/<relpath>
 //     holds raw bytes, byte-identical to the streamed lineage file.
 //   - Per-session sidecar index.json (atomic tmp -> rename -> parent fsync) is
@@ -151,8 +149,8 @@ export interface LogOrphan {
 
 /**
  * Lineage role of one stored file, mirroring the frozen export-manifest
- * classification (shared/archive-manifest.ts ManifestFileKind) over the
- * streamed relpath layout (server/log-tailer.ts: relpath is POSIX-relative
+ * classification (lib/session-files/archive-manifest.ts ManifestFileKind) over the
+ * streamed relpath layout (apps/session/log-tailer.ts: relpath is POSIX-relative
  * to the SDK sessions dir).
  */
 export type StoredFileKind = "main" | "subagent" | "advisor" | "metadata";
@@ -390,7 +388,7 @@ export function classifyStoredRelpath(sessionId: string, relpath: string): Store
 	return "metadata";
 }
 
-/** Advisor transcript name stem, mirroring runtime/export-sessions.ts. */
+/** Advisor transcript name stem, mirroring lib/session-files/export-sessions.ts. */
 const ADVISOR_STEM = "__advisor";
 
 /** Main-first + depth-then-name ordering for a stored session's files. */

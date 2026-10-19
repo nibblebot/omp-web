@@ -418,18 +418,6 @@ describe("fleet auth gate forwarded-header resolution", () => {
 		).toBe(false);
 	});
 
-	test("X-Forwarded-Proto is honored only from a trusted proxy peer", () => {
-		// Untrusted peer's XFP is ignored → the socket scheme (http) wins.
-		expect(noProxyGate.clientProto(req({ "x-forwarded-proto": "https" }), "198.51.100.7")).toBe(
-			"http",
-		);
-		// Trusted peer's XFP is honored; garbage/unknown values fall back.
-		expect(gate.clientProto(req({ "x-forwarded-proto": "https" }), "203.0.113.9")).toBe("https");
-		expect(gate.clientProto(req({ "x-forwarded-proto": "ftp, https" }), "203.0.113.9")).toBe(
-			"http",
-		);
-	});
-
 	test("trusted proxy list itself is never trusted by default", () => {
 		// No rules → forwarded headers never shape the client (fail closed).
 		expect(noProxyGate.clientAddress(req({ "x-forwarded-for": "127.0.0.1" }), "203.0.113.9")).toBe(

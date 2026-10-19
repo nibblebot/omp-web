@@ -2,8 +2,7 @@
  * Provider operation protocol (OMP_PROVIDER_PROTO = 1); the frozen contract
  * for fleet-side clone-workspace sandbox providers (P5.1). Encoding, request
  * shape, response shape, identity/supervision rules and the error vocabulary
- * are fixed by docs/clone-contracts.md ("Provider operation protocol (frozen
- * contract)") and supersede the earlier "Provider executable contract" draft.
+ * are fixed here and supersede the earlier "Provider executable contract" draft.
  *
  * Invocation: the fleet runs `<executable> <op>` with exactly one JSON
  * request on stdin and exactly one JSON response on stdout; stderr is a
@@ -64,7 +63,7 @@ export type ProviderHandle = string;
 
 /**
  * Typed error vocabulary for provider operations, reusing the frozen ledger
- * vocabulary (docs/clone-contracts.md "Typed errors").
+ * vocabulary.
  */
 export const PROVIDER_ERROR_CODES = [
 	"invalid_request",

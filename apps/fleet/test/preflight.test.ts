@@ -276,7 +276,7 @@ describe("k8s rows are real requirement checks on kubernetes profiles", () => {
 		const k8s = result.checks.find((c) => c.name === "k8s-fields");
 		expect(k8s).toBeDefined();
 		expect(k8s!.ok).toBe(true);
-		expect(k8s!.detail).toContain("not yet supported");
+		expect(k8s!.detail).toContain("k8s-only field(s) ignored on bwrap");
 	});
 
 	test("bwrap profile with no k8s fields reports none", async () => {

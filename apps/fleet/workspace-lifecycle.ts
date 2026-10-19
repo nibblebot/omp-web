@@ -6,10 +6,6 @@
  * /ctl/worktrees/:id) and the browser edge's command dispatch (Transport's
  * `EdgeLifecycleHooks`, this class conforms to it structurally).
  *
- * Frozen contracts: docs/clone-contracts.md ("Browser and CLI workspace
- * creation", "Provider operation protocol", "Fleet log store", "Retention",
- * "Wake", "Typed errors") and docs/clone-plan.md P6/P7.
- *
  * Ownership rules this service enforces:
  * - One lifecycle implementation. HTTP handlers and edge commands call
  *   here; nothing self-fetches /ctl/* and no second clone lifecycle exists.
@@ -68,7 +64,8 @@ import {
 	resolveWorkspacePin,
 } from "#lib/runtime/prepare-workspace";
 import { runGit } from "./discovery";
-import { sha256OfFile, verifyWorkspaceLogs } from "./verify-store";
+import { sha256OfFile } from "#lib/session-files/file-sha256";
+import { verifyWorkspaceLogs } from "./verify-store";
 import { MAX_EXPORT_BYTES, MAX_EXPORT_FILES } from "#lib/session-files/export-sessions";
 import {
 	WakeMaterializeError,
@@ -1651,7 +1648,7 @@ export class WorkspaceLifecycle {
 		// + branch (Runtime contract): the k8s provider initializes its PVC
 		// in-pod at the persisted pin from these, never resolves itself;
 		// bwrap ignores them (fleet-side prepared). Additive per
-		// shared/provider-protocol.ts ProviderRequest.
+		// lib/runtime/provider-protocol.ts ProviderRequest.
 		const request = {
 			op,
 			workspaceId: daemonId,

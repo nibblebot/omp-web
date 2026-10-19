@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Kubernetes provider (P5.3): implements the frozen provider operation
- * protocol (docs/clone-contracts.md, "Provider operation protocol") for
+ * protocol for
  * clone workspaces on an operator-prepared Kubernetes API.
  *
  * Invocation: `<executable> ensure-running|inspect|stop|delete` with exactly
@@ -1485,7 +1485,7 @@ async function opDelete(rawRequest: ProviderRequest, deps: OpDeps): Promise<Prov
  * skipped silently). Nothing is installed, created, or mutated: the only
  * API traffic is reads plus `auth can-i` access reviews.
  *
- * Wired into runtime/preflight.ts by the Runtime owner; exported here so
+ * Wired into apps/fleet/preflight.ts by the Runtime owner; exported here so
  * the wiring is one function call.
  */
 export async function preflightKubernetesProfile(
