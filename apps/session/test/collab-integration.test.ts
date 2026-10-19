@@ -349,11 +349,9 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 	expect(details?.from).toBe("integration-guest");
 
 	// Stop collab: the web client receives {state:"off"} and the guest gets the
-	// bye. The adapter's stop() yields one event-loop turn for the bye's seal to
-	// reach the wire before closing the socket; under heavy parallel load that
-	// seal can land after the close and the bye is dropped (the adapter documents
-	// the race). The session no longer closes rooms on the relay directly, so a
-	// dropped bye leaves the guest to the relay's orphan-TTL teardown.
+	// bye. The adapter's stop() awaits the bye's seal (CollabSocket.flush) before
+	// closing the socket, so the bye is always on the wire ahead of the close.
+	// The teardown branch below remains for a relay-initiated room close.
 	webFrames.length = 0;
 	const stopResp = await postCommand(port, { type: "collab_stop", id: crypto.randomUUID() });
 	expect(stopResp.status).toBe(202);

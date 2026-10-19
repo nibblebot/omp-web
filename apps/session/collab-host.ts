@@ -449,13 +449,13 @@ export class CollabHostAdapter {
 	/** Sends {t:"bye",reason} then tears down (unsubscribe, clear taps/timers, settle pending ui, close socket, status → null). */
 	async stop(reason: string): Promise<void> {
 		if (this.#stopped) return;
-		this.#socket?.send({ t: "bye", reason });
-		// CollabSocket seals sends on an internal async chain; teardown's
-		// socket.close() marks the socket closed and drops still-pending seals,
-		// so yield one event-loop turn for the bye to reach the wire first.
-		const { promise, resolve } = Promise.withResolvers<void>();
-		setTimeout(resolve, 0);
-		await promise;
+		const socket = this.#socket;
+		socket?.send({ t: "bye", reason });
+		// teardown's socket.close() drops seals still pending on the async chain,
+		// and a dropped bye leaves the guest to the relay's orphan TTL (60s). Wait
+		// until the bye is sealed; close() then writes the prepared envelope ahead
+		// of the close frame.
+		await socket?.flush();
 		await this.#teardown();
 	}
 
