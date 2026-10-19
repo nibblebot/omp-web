@@ -2,7 +2,7 @@ import { Show, type Component } from "solid-js";
 import { planToggle } from "../../../prompt/commands";
 import { cycleModelPreset, openModelPicker, openThinkingPicker } from "../../../store/models";
 import { formatTokens, getContextUsageLevel } from "../../../usage/context";
-import { setState, state } from "../../../state";
+import { isReady, setState, state } from "../../../state";
 import { ArrowDownIcon, ArrowUpIcon } from "../../ui/icons";
 import { RetryBadge } from "./RetryBadge";
 import { StatusSegment } from "./StatusSegment";
@@ -28,12 +28,30 @@ const ContextSegment: Component = () => {
 	);
 };
 
+/** Roster-derived status for the attached session while the composer is gated. */
+const rosterHint = (): string => {
+	const daemon = state.daemonRoster.find((x) => x.daemonId === state.currentSessionId);
+	if (!daemon) return "no workspace attached, pick one in the sidebar";
+	if (daemon.status === "ready") return "attaching to session process…";
+	return `session process ${daemon.status}…`;
+};
+
 /** Session-send configuration (model, preset, thinking) plus the session resource
- *  meters (ctx fill, cumulative stats), pinned directly above the composer,
- *  where the send decision happens. Per-turn badges (compacting, retry,
- *  plan) lead the row and show only while active. */
+ *  meters (ctx fill, cumulative stats), attached directly below the composer
+ *  as its bottom row. Per-turn badges (starting, compacting, retry, plan) lead
+ *  the row and show only while active. */
 export const SessionConfigBar: Component = () => (
 	<div class="session-bar">
+		{/* Boot readiness gate pill (the connection strip covers disconnects):
+		    show the attached session's status instead of a generic phrase. */}
+		<Show when={state.connected && !isReady()}>
+			<span
+				class="segment badge ready-pill"
+				title="The attached session is still starting (or reconnecting)…"
+			>
+				{rosterHint()}
+			</span>
+		</Show>
 		<Show when={state.compacting}>
 			<span class="segment badge">compacting…</span>
 		</Show>

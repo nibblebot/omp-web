@@ -1,5 +1,7 @@
 import { PromptActions } from "../../../../web/components/chat/composer/PromptActions";
-import { screenImage, screenSessionSeed, screenSubagentMap } from "../../../fixtures/screen";
+import { setState } from "../../../../web/state";
+import { screenImage, screenSessionSeed } from "../../../fixtures/screen";
+import { seedAgentTree } from "../../../fixtures/subagents";
 import { defineStory } from "../../../registry";
 
 const draft = "Add a regression test for the copy button on unclosed code fences";
@@ -17,31 +19,20 @@ export default defineStory({
 			name: "Ready with draft",
 			description: "Send is enabled; the session process is ready and the composer has text.",
 			render: () => (
-				<PromptActions
-					message={() => draft}
-					images={() => []}
-					files={() => []}
-					submit={() => {}}
-					onDiscard={() => {}}
-				/>
+				<PromptActions message={() => draft} images={() => []} files={() => []} submit={() => {}} />
 			),
 		},
 		{
 			name: "Empty composer",
 			description: "Send stays disabled until there is something to send.",
 			render: () => (
-				<PromptActions
-					message={() => ""}
-					images={() => []}
-					files={() => []}
-					submit={() => {}}
-					onDiscard={() => {}}
-				/>
+				<PromptActions message={() => ""} images={() => []} files={() => []} submit={() => {}} />
 			),
 		},
 		{
 			name: "Agent busy",
-			description: "While streaming, the composer queues a follow-up instead of sending now.",
+			description:
+				"While streaming, Stop and Steer sit beside the composer; Steer queues a follow-up.",
 			seed: { streaming: true },
 			render: () => (
 				<PromptActions
@@ -49,21 +40,22 @@ export default defineStory({
 					images={() => []}
 					files={() => []}
 					submit={() => {}}
-					onDiscard={() => {}}
 				/>
 			),
 		},
 		{
-			name: "Stop with subagents running",
-			description: "A turn with active subagents offers Stop, keep subagents beside Stop.",
-			seed: { streaming: true, subagents: screenSubagentMap },
+			name: "Streaming with subagents",
+			description: "Running subagents add the bot counter ahead of Stop and Steer.",
+			seed: () => {
+				seedAgentTree();
+				setState("streaming", true);
+			},
 			render: () => (
 				<PromptActions
 					message={() => "Also cover the empty-language fence case"}
 					images={() => []}
 					files={() => []}
 					submit={() => {}}
-					onDiscard={() => {}}
 				/>
 			),
 		},
@@ -76,7 +68,6 @@ export default defineStory({
 					images={() => [screenImage]}
 					files={() => []}
 					submit={() => {}}
-					onDiscard={() => {}}
 				/>
 			),
 		},
@@ -85,13 +76,7 @@ export default defineStory({
 			description: "No live connection to the session process, so sending is blocked.",
 			seed: { connected: false },
 			render: () => (
-				<PromptActions
-					message={() => draft}
-					images={() => []}
-					files={() => []}
-					submit={() => {}}
-					onDiscard={() => {}}
-				/>
+				<PromptActions message={() => draft} images={() => []} files={() => []} submit={() => {}} />
 			),
 		},
 	],

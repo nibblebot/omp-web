@@ -1,18 +1,22 @@
 import { Show, type Component } from "solid-js";
 import { openDock } from "../../../store/dock";
 import { runningSubagentCount } from "../../../store/subagents";
+import { BotIcon } from "../../ui/icons";
 
-/** Composer counter for running agents; opens the agents dock. Hidden when none run. */
+/** Composer icon button: robot glyph plus the running-agent count; opens the agents dock.
+ *  Hidden when none run. */
 export const RunningAgentsButton: Component = () => (
 	<Show when={runningSubagentCount() > 0}>
 		<button
 			type="button"
 			class="running-agents-button"
+			aria-label={`${runningSubagentCount()} running subagents, open agents panel`}
 			aria-keyshortcuts="Alt+A"
-			title="Open agents (Alt+A)"
+			title="Running subagents (Alt+A)"
 			onClick={() => openDock("agents")}
 		>
-			<span class="running-agents-count">{runningSubagentCount()}</span> running
+			<BotIcon />
+			<span class="running-agents-count">{runningSubagentCount()}</span>
 		</button>
 	</Show>
 );

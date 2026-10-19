@@ -57,6 +57,7 @@ import {
 	AnthropicLogoIcon,
 	OpenAILogoIcon,
 	OpenCodeLogoIcon,
+	BotIcon,
 } from "../../../web/components/ui/icons";
 import { defineStory } from "../../registry";
 
@@ -112,6 +113,7 @@ const ICONS: Record<string, Component<IconProps>> = {
 	WarningIcon,
 	GripVerticalIcon,
 	PaperclipIcon,
+	BotIcon,
 	OmpLogoIcon,
 	AnthropicLogoIcon,
 	OpenAILogoIcon,

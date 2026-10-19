@@ -317,18 +317,18 @@
 .running-agents-button {
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
-	padding: 2px 10px;
+	gap: 4px;
+	padding: 0 6px;
 	border: 1px solid var(--accent-dim);
-	border-radius: 999px;
 	background: transparent;
 	color: var(--accent);
 	font: inherit;
-	font-size: 12px;
+	font-size: var(--fs-2xl);
 	cursor: pointer;
 }
 
 .running-agents-count {
+	font-size: var(--fs-sm);
 	font-weight: 700;
 	font-variant-numeric: tabular-nums;
 }

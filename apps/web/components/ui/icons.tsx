@@ -441,6 +441,18 @@ export const PaperclipIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
+/** Running-subagents glyph in the composer actions, drawn with Lucide's bot. */
+export const BotIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M12 8V4H8" />
+		<rect width="16" height="12" x="4" y="8" rx="2" />
+		<path d="M2 14h2" />
+		<path d="M20 14h2" />
+		<path d="M15 13v2" />
+		<path d="M9 13v2" />
+	</Svg>
+);
+
 /** Official omp mark, vendored from https://omp.sh/favicon.svg. A brand logo,
  *  so unlike the Lucide set it keeps its own fill colors instead of
  *  currentColor. */

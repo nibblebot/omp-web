@@ -26,7 +26,7 @@
 	flex-wrap: wrap;
 	align-items: center;
 	gap: var(--space-4);
-	padding: var(--space-4) 0;
+	padding: 0 0 var(--space-4);
 }
 /* Per-turn badges keep their size; the model segment takes the row's slack. */
 .session-bar > .badge {
@@ -65,8 +65,8 @@
 		flex: none;
 	}
 }
-/* R8 omp-session readiness: subtle "starting…" hint in the composer while the boot
-   session's gate is still clearing (neutral counterpart to the connection bar). */
+/* R8 omp-session readiness: subtle "starting…" hint on the session bar under the
+   composer while the boot session's gate is still clearing (neutral counterpart to the connection bar). */
 .ready-pill {
 	background: var(--panel);
 	border: 1px solid var(--border);

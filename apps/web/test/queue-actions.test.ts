@@ -107,16 +107,7 @@ describe("Stop", () => {
 		const done = stopTurn();
 		await flushMicrotasks();
 		const [cmd] = callsTo("abort");
-		expect(cmd?.args).toEqual([{ keepSubagents: false }]);
-		dispatch(callResult(cmd!.id, undefined));
-		await done;
-	});
-
-	test("stopTurn(true) aborts the turn but keeps subagents running", async () => {
-		const done = stopTurn(true);
-		await flushMicrotasks();
-		const [cmd] = callsTo("abort");
-		expect(cmd?.args).toEqual([{ keepSubagents: true }]);
+		expect(cmd?.args).toEqual([]);
 		dispatch(callResult(cmd!.id, undefined));
 		await done;
 	});

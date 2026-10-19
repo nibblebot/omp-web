@@ -58,5 +58,11 @@ export default defineStory({
 			seed: { planModeEnabled: true },
 			render: () => <SessionConfigBar />,
 		},
+		{
+			name: "Session still starting",
+			description: "The attached session has not reported ready; the bar shows its starting hint.",
+			seed: { readyAt: undefined },
+			render: () => <SessionConfigBar />,
+		},
 	],
 });

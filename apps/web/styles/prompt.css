@@ -23,8 +23,8 @@
 	flex: 1;
 	min-width: 0;
 }
-/* Editor row: the textarea plus the paperclip attach button on its right,
- * pinned to the bottom edge so it stays put as the editor grows. */
+/* Editor row: the textarea, then the paperclip attach button and the action
+ * icons, pinned to the bottom edge so they stay put as the editor grows. */
 .prompt-editor-row {
 	display: flex;
 	align-items: flex-end;
@@ -46,26 +46,8 @@
 	font-size: var(--fs-2xl);
 	cursor: pointer;
 }
-.prompt-attach:hover,
-.prompt-history-btn:hover {
+.prompt-attach:hover {
 	color: var(--text);
-}
-/* Touch-only history trigger (touch has no first-line Up): same chrome as attach. */
-.prompt-history-btn {
-	flex: none;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	min-width: 32px;
-	min-height: 32px;
-	margin-bottom: var(--space-2);
-	padding: 0;
-	background: none;
-	border: none;
-	border-radius: var(--r-md);
-	color: var(--muted-2);
-	font-size: var(--fs-2xl);
-	cursor: pointer;
 }
 .prompt-mirror {
 	position: absolute;
@@ -342,33 +324,40 @@
 }
 .prompt-actions {
 	display: flex;
-	flex-wrap: wrap;
-	justify-content: flex-end;
-	gap: var(--space-4);
+	align-items: flex-end;
+	gap: var(--space-2);
 }
-
+.prompt-actions button {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 32px;
+	min-height: 32px;
+	margin-bottom: var(--space-2);
+	border-radius: var(--r-md);
+	cursor: pointer;
+}
 button.send {
+	padding: 0;
+	font-size: var(--fs-2xl);
 	background: var(--accent);
 	border-color: var(--accent);
 	color: var(--bg);
-	font-weight: 600;
 }
 button.send:not(:disabled):hover {
 	background: color-mix(in srgb, var(--accent), var(--bg) 12%);
 	border-color: color-mix(in srgb, var(--accent), var(--bg) 12%);
 }
 button.stop {
+	padding: 0;
+	font-size: var(--fs-2xl);
 	background: var(--stop-bg);
 	border-color: var(--error-border);
+	color: var(--error);
 }
 button.stop:not(:disabled):hover {
 	background: color-mix(in srgb, var(--stop-bg), var(--error) 15%);
-}
-button.stop-keep {
-	color: var(--muted);
-}
-button.stop-keep:hover {
-	color: var(--text);
 }
 
 /* --- Autocomplete, modal dialogs, bang-shell cards --- */
@@ -532,7 +521,6 @@ button.stop-keep:hover {
 		font-size: max(1rem, 16px);
 	}
 	.prompt-attach,
-	.prompt-history-btn,
 	.queue-pop,
 	.queue-action,
 	.queue-clear,
@@ -566,7 +554,6 @@ button.stop-keep:hover {
 		min-height: 44px;
 	}
 	.prompt-attach,
-	.prompt-history-btn,
 	.prompt-actions button {
 		min-width: 44px;
 		min-height: 44px;

@@ -8,7 +8,7 @@ import type { TextAttachment } from "../prompt/attachments";
  * and concurrent tabs/sessions never clobber each other.
  *
  * - Unsent drafts only: submitted history stays in prompt/history.ts.
- * - Cleared drafts go to a BOUNDED recovery ring (explicit restore action).
+ * - Drafts are live only: sending removes the stored slot.
  * - Attachments ride alongside text; raw audio/credentials are never stored.
  * - Quota failure warns instead of silently discarding.
  *
@@ -35,8 +35,8 @@ export interface DraftKey {
 }
 
 const DRAFT_PREFIX = "omp-web:draft:v2:";
-const CLEARED_PREFIX = "omp-web:draft-cleared:v2:";
-const CLEARED_CAP = 5;
+/** Retired cleared-draft ring keys; only used to sweep them from storage. */
+const LEGACY_CLEARED_PREFIX = "omp-web:draft-cleared:v2:";
 const QUOTA_WARN_KEY = "omp-web:draft-quota-warned";
 /** Total file text one stored draft keeps; larger chips stay in memory only. */
 const DRAFT_FILES_MAX_CHARS = 400_000;
@@ -92,8 +92,22 @@ export function draftKey(k: DraftKey): string {
 	return `${DRAFT_PREFIX}${k.origin}¦${k.sessionId}¦${k.branchId}¦${k.agentId}`;
 }
 
-function clearedKey(k: DraftKey): string {
-	return `${CLEARED_PREFIX}${k.origin}¦${k.sessionId}¦${k.branchId}¦${k.agentId}`;
+/** Remove stored keys of the retired cleared-draft ring (they can hold images
+ *  and eat the quota live drafts need). Runs on each draft load, not per
+ *  keystroke; the in-memory fallback never outlives a page, so it holds none. */
+function dropLegacyClearedRings(): void {
+	const s = storage();
+	if (!s) return;
+	try {
+		const stale: string[] = [];
+		for (let i = 0; i < s.length; i++) {
+			const k = s.key(i);
+			if (k?.startsWith(LEGACY_CLEARED_PREFIX)) stale.push(k);
+		}
+		for (const k of stale) s.removeItem(k);
+	} catch {
+		// Best-effort.
+	}
 }
 
 function isImageArg(v: unknown): v is ImageArg {
@@ -206,8 +220,11 @@ export function saveDraft(key: DraftKey, body: DraftBody): boolean {
 	return true;
 }
 
-/** Load the unsent draft for a partition; null when none (or rejected). */
+/** Load the unsent draft for a partition; null when none (or rejected). Also
+ *  drops the retired cleared-draft rings, which can hold images and would
+ *  otherwise keep eating the quota live drafts need. */
 export function loadDraft(key: DraftKey): DraftBody | null {
+	dropLegacyClearedRings();
 	const raw = readRaw(draftKey(key));
 	if (!raw) return null;
 	try {
@@ -218,8 +235,8 @@ export function loadDraft(key: DraftKey): DraftBody | null {
 }
 
 /** Pending debounced saves, keyed by the `draftKey(key)` slot string. Owned
- *  here (not in the composer) so the submit/discard paths can cancel a save
- *  that closed over pre-send text before it refills the live slot. */
+ *  here (not in the composer) so the submit path can cancel a save that
+ *  closed over pre-send text before it refills the live slot. */
 const pendingTimers = new Map<string, number>();
 
 /** Debounced `saveDraft`: cancels any prior pending save for the same slot,
@@ -248,86 +265,10 @@ export function cancelScheduledDraftSave(key: DraftKey): void {
 	}
 }
 
-/** Delete the live slot without touching the cleared ring (sent, not
- *  discarded: no recovery entry). Pair with `cancelScheduledDraftSave` on
- *  the submit path. */
+/** Delete the live slot (sent: nothing is kept). Pair with
+ *  `cancelScheduledDraftSave` on the submit path. */
 export function removeDraft(key: DraftKey): void {
 	removeRaw(draftKey(key));
-}
-
-/** Cleared ring for a partition, oldest first; [] when absent or unreadable. */
-function readCleared(ck: string): DraftBody[] {
-	try {
-		const raw = readRaw(ck);
-		if (!raw) return [];
-		const parsed: unknown = JSON.parse(raw);
-		if (!Array.isArray(parsed)) return [];
-		return parsed.map(sanitizeBody).filter((b): b is DraftBody => b !== null);
-	} catch {
-		return [];
-	}
-}
-
-/** Explicit destructive clear: the current draft moves to the bounded
- *  cleared ring (recoverable), then the live slot is removed. */
-export function clearDraft(key: DraftKey): DraftBody | null {
-	const live = loadDraft(key);
-	const ck = clearedKey(key);
-	if (live) writeRaw(ck, JSON.stringify([...readCleared(ck), live].slice(-CLEARED_CAP)));
-	removeRaw(draftKey(key));
-	return live;
-}
-
-/** Most recently cleared draft in this partition, if any. */
-export function peekClearedDraft(key: DraftKey): DraftBody | null {
-	try {
-		const raw = readRaw(clearedKey(key));
-		if (!raw) return null;
-		const parsed: unknown = JSON.parse(raw);
-		if (!Array.isArray(parsed) || parsed.length === 0) return null;
-		return sanitizeBody(parsed[parsed.length - 1]) ?? null;
-	} catch {
-		return null;
-	}
-}
-
-/** Explicit recovery action: pop the newest cleared draft back into the
- *  composer's inbox (unsent) and remove it from the ring. */
-export function recoverClearedDraft(key: DraftKey): DraftBody | null {
-	const top = readCleared(clearedKey(key)).at(-1) ?? null;
-	if (top) takeClearedDraft(key, top);
-	return top;
-}
-
-/** Discarded drafts for a partition, newest first (history picker source). */
-export function listClearedDrafts(key: DraftKey): DraftBody[] {
-	return readCleared(clearedKey(key)).reverse();
-}
-
-/** Hand a discarded draft back to the composer inbox (text, images, chips, caret) and
- *  drop its ring entry. The entry is matched by `updatedAt` and text, so an
- *  identical older draft is never removed by mistake. Used by the Undo toast
- *  and the history picker. */
-export function takeClearedDraft(key: DraftKey, body: DraftBody): void {
-	const ck = clearedKey(key);
-	const ring = readCleared(ck);
-	const at = ring
-		.map((b) => b.updatedAt === body.updatedAt && b.text === body.text)
-		.lastIndexOf(true);
-	if (at >= 0) writeRaw(ck, JSON.stringify(ring.filter((_, i) => i !== at)));
-	setPromptInsert({
-		text: body.text,
-		...(body.images.length > 0 ? { images: body.images } : {}),
-		...(body.files && body.files.length > 0 ? { files: body.files } : {}),
-		...(body.selectionStart !== undefined && body.selectionEnd !== undefined
-			? { selection: { start: body.selectionStart, end: body.selectionEnd } }
-			: {}),
-	});
-}
-
-/** Drop the cleared ring without restoring (retention/deletion control). */
-export function deleteClearedDrafts(key: DraftKey): void {
-	removeRaw(clearedKey(key));
 }
 
 /** Partition changed (session/branch/agent/focus switch): stash the leaving

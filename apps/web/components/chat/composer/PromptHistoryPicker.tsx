@@ -10,23 +10,10 @@ import {
 import { fuzzyRank } from "../../../prompt/autocomplete";
 import { PromptHistory } from "../../../prompt/history";
 import { setPromptInsert } from "../../../state";
-import {
-	currentDraftKey,
-	listClearedDrafts,
-	takeClearedDraft,
-	type DraftBody,
-} from "../../../store/drafts";
 
-/** A picker row: a history string, or a discarded draft (restored whole). */
+/** A picker row: one prompt history string. */
 interface PickerEntry {
 	text: string;
-	discarded?: DraftBody;
-}
-
-/** Label for a discarded draft with no text: names the attachment kinds it held. */
-function discardedKinds(body: DraftBody): string {
-	const kinds = [body.images.length > 0 ? "images" : "", body.files?.length ? "files" : ""];
-	return kinds.filter(Boolean).join(" and ") || "empty";
 }
 
 /**
@@ -36,8 +23,7 @@ function discardedKinds(body: DraftBody): string {
  * ModalHost overlay). The newest (or best-matching) entry sits at the bottom,
  * next to the prompt: Up walks older, Down past the newest returns to the
  * prompt. Typing fuzzy-filters; Enter/click inserts the entry through the
- * promptInsert inbox (a discarded draft restores its images and caret and
- * leaves the discard ring); Esc or focus leaving the popover closes it.
+ * promptInsert inbox; Esc or focus leaving the popover closes it.
  */
 
 export const PromptHistoryPicker: Component<{
@@ -48,13 +34,7 @@ export const PromptHistoryPicker: Component<{
 	const [selected, setSelected] = createSignal(0);
 	// Fresh read per open so entries pushed this session (or in another tab)
 	// are included; PromptHistory persists every push to localStorage.
-	const entries: PickerEntry[] = [
-		...listClearedDrafts(currentDraftKey()).map((body) => ({
-			text: body.text.trim() ? body.text : `[${discardedKinds(body)} only]`,
-			discarded: body,
-		})),
-		...new PromptHistory().list().map((text) => ({ text })),
-	];
+	const entries: PickerEntry[] = new PromptHistory().list().map((text) => ({ text }));
 	const listId = `prompt-history-${Math.random().toString(36).slice(2, 8)}`;
 	let root!: HTMLDivElement;
 	let input!: HTMLInputElement;
@@ -81,8 +61,7 @@ export const PromptHistoryPicker: Component<{
 	});
 
 	const choose = (item: PickerEntry) => {
-		if (item.discarded) takeClearedDraft(currentDraftKey(), item.discarded);
-		else setPromptInsert({ text: item.text });
+		setPromptInsert({ text: item.text });
 		props.onClose(true);
 	};
 
@@ -145,9 +124,6 @@ export const PromptHistoryPicker: Component<{
 							onMouseDown={(e) => e.preventDefault() /* keep the search input focused */}
 							onClick={() => choose(item)}
 						>
-							<Show when={item.discarded}>
-								<span class="history-popover-tag">Discarded</span>
-							</Show>
 							{item.text}
 						</div>
 					)}

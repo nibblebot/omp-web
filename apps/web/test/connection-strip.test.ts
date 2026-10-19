@@ -94,7 +94,7 @@ describe("killed attached session process", () => {
 		expect(strip).not.toContain("connection-bar");
 		expect(title).not.toMatch(/<button[^>]*disabled[^>]*aria-label="New session"/);
 		expect(title).toMatch(/<button[^>]*aria-label="New session"/);
-		expect(actions).not.toMatch(/<button[^>]*disabled[^>]*>Send</);
+		expect(actions).not.toMatch(/<button(?=[^>]*aria-label="Send")(?=[^>]*\bdisabled)/);
 	});
 
 	test.each(["asleep", "error"] as const)(
@@ -110,7 +110,7 @@ describe("killed attached session process", () => {
 			expect(strip).toContain("connection-bar");
 			expect(strip).toContain('data-state="offline"');
 			expect(title).toMatch(/<button[^>]*disabled[^>]*aria-label="New session"/);
-			expect(actions).toMatch(/<button[^>]*disabled[^>]*>Send</);
+			expect(actions).toMatch(/<button(?=[^>]*aria-label="Send")(?=[^>]*\bdisabled)/);
 		},
 	);
 

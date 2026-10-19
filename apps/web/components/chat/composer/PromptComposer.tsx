@@ -8,6 +8,7 @@ import {
 	onMount,
 	Show,
 	type Component,
+	type JSX,
 	type Setter,
 } from "solid-js";
 import type { ImageArg } from "#lib/wire/protocol";
@@ -22,8 +23,6 @@ import {
 	currentDraftKey,
 	unsavedFileIds,
 	loadDraft,
-	peekClearedDraft,
-	recoverClearedDraft,
 	scheduleDraftSave,
 } from "../../../store/drafts";
 import { graphGeneration } from "../../../store/graph";
@@ -39,10 +38,9 @@ import {
 import { importTextAttachment, type TextAttachment } from "../../../prompt/attachments";
 import { droppedFiles, fileDragDepth, setDroppedFiles } from "../../../prompt/file-drop";
 import { settingValue } from "../../../store/settings";
-import { ListIcon, PaperclipIcon, XIcon } from "../../ui/icons";
+import { PaperclipIcon, XIcon } from "../../ui/icons";
 import { AttachmentChip } from "./AttachmentChip";
 import { AutocompletePopup } from "./AutocompletePopup";
-import { isCoarsePointer } from "../pointer";
 import { PromptHistoryPicker } from "./PromptHistoryPicker";
 import type { PromptAutocomplete } from "./usePromptAutocomplete";
 import { PromptMirror } from "./PromptMirror";
@@ -63,20 +61,19 @@ interface PromptComposerProps {
 	/** Prompt history popover open state; PromptBox opens it on first-line Up. */
 	historyOpen: () => boolean;
 	closeHistory: () => void;
-	/** Opens the history popover from the touch button (touch has no Up-arrow path). */
-	openHistory: () => void;
+	/** Icon buttons rendered at the end of the textarea row (PromptActions). */
+	actions?: JSX.Element;
 }
 
 /**
  * P2 prompt composer (G03 + G18 chips). Owns paste handling (image clips,
  * large-paste fold with exact-payload submit, intentional file input/drop
  * with SDK/model validation), the promptInsert inbox effect, per-partition
- * draft persistence, cleared-draft recovery, and `^model` chip rendering.
+ * draft persistence, and `^model` chip rendering.
  *
  * Folding is visual only: submit always uses the full text.
  */
 export const PromptComposer: Component<PromptComposerProps> = (props) => {
-	const coarse = isCoarsePointer();
 	let textarea!: HTMLTextAreaElement;
 	let fileInput!: HTMLInputElement;
 	// Stable id for the combobox/listbox wiring (aria-controls/activedescendant).
@@ -84,11 +81,6 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const [folded, setFolded] = createSignal(true);
 	const [pasteNote, setPasteNote] = createSignal<string | null>(null);
 	const [pasteError, setPasteError] = createSignal<string | null>(null);
-	const [recovery, setRecovery] = createSignal<{
-		text: string;
-		images: number;
-		files: number;
-	} | null>(null);
 	const [chipError, setChipError] = createSignal<string | null>(null);
 	const draftKey = () => currentDraftKey();
 	const unsaved = createMemo(() => unsavedFileIds(props.files()));
@@ -124,7 +116,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		if (insert.files?.length) props.setFiles((prev) => [...prev, ...insert.files!]);
 		requestAnimationFrame(() => {
 			textarea.focus();
-			// Undo/recover of a discarded draft restores the caret into an empty composer.
+			// A history pick into an empty composer restores the saved caret.
 			if (insert.selection && pristine)
 				textarea.setSelectionRange(insert.selection.start, insert.selection.end);
 			props.ac.autoGrow();
@@ -159,14 +151,6 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 					}
 				});
 			}
-		}
-		const cleared = peekClearedDraft(draftKey());
-		if (cleared && (cleared.text.trim() || cleared.images.length > 0 || cleared.files?.length)) {
-			setRecovery({
-				text: cleared.text.slice(0, 120),
-				images: cleared.images.length,
-				files: cleared.files?.length ?? 0,
-			});
 		}
 	});
 
@@ -272,17 +256,6 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		),
 	);
 
-	const recoverDraft = (): void => {
-		const top = recoverClearedDraft(draftKey());
-		if (top) {
-			setRecovery(null);
-			requestAnimationFrame(() => {
-				textarea.focus();
-				props.ac.autoGrow();
-			});
-		}
-	};
-
 	const onTextareaInput = (e: Event): void => {
 		const el = e.currentTarget as HTMLTextAreaElement;
 		props.setMessage(el.value);
@@ -344,20 +317,6 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 						)}
 					</For>
 				</div>
-			</Show>
-			<Show when={recovery()}>
-				{(r) => (
-					<div class="queue-bar" role="status">
-						<span class="queue-text">
-							Cleared draft available ({r().text || "(no text)"}
-							{r().images > 0 ? `, ${r().images} image${r().images === 1 ? "" : "s"}` : ""}
-							{r().files > 0 ? `, ${r().files} file${r().files === 1 ? "" : "s"}` : ""})
-						</span>
-						<button type="button" class="queue-pop" onClick={recoverDraft}>
-							Recover
-						</button>
-					</div>
-				)}
 			</Show>
 			<Show when={pasteNote()}>
 				{(n) => (
@@ -473,17 +432,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 					>
 						<PaperclipIcon />
 					</button>
-					<Show when={coarse}>
-						<button
-							type="button"
-							class="prompt-history-btn"
-							title="Prompt history"
-							aria-label="Prompt history"
-							onClick={props.openHistory}
-						>
-							<ListIcon />
-						</button>
-					</Show>
+					{props.actions}
 				</div>
 			</div>
 		</>

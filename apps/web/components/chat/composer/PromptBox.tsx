@@ -8,20 +8,10 @@ import {
 	dequeueLastQueued,
 	isReady,
 	pushNotice,
-	pushToast,
 	state,
 	stopTurn,
 } from "../../../state";
-import {
-	cancelScheduledDraftSave,
-	clearDraft,
-	currentDraftKey,
-	listClearedDrafts,
-	removeDraft,
-	saveDraft,
-	takeClearedDraft,
-	type DraftBody,
-} from "../../../store/drafts";
+import { cancelScheduledDraftSave, currentDraftKey, removeDraft } from "../../../store/drafts";
 import { reportError } from "../../../store/toasts";
 import { openDock } from "../../../store/dock";
 import { AskBar } from "../../requests/AskBar";
@@ -87,37 +77,6 @@ export const PromptBox: Component = () => {
 		cancelScheduledDraftSave(key);
 		removeDraft(key);
 		requestAnimationFrame(ac.autoGrow);
-	};
-
-	/** Explicit destructive clear (toolbar/discard): moves the live text to
-	 *  the bounded cleared ring, then empties the composer. An Undo toast
-	 *  restores the exact draft (text, images, chips, caret) for 10 s. The entry stays
-	 *  recoverable from the history picker afterward. */
-	const discard = (): void => {
-		const key = currentDraftKey();
-		cancelScheduledDraftSave(key);
-		const text = message();
-		const imgs = images();
-		const chips = files();
-		if (!text.trim() && imgs.length === 0 && chips.length === 0) return;
-		const body: DraftBody = {
-			text,
-			images: imgs,
-			files: chips,
-			selectionStart: textarea.selectionStart,
-			selectionEnd: textarea.selectionEnd,
-			updatedAt: Date.now(),
-		};
-		saveDraft(key, body);
-		clearDraft(key);
-		setMessage("");
-		setImages([]);
-		setFiles([]);
-		requestAnimationFrame(ac.autoGrow);
-		pushToast("Draft discarded", {
-			durationMs: 10_000,
-			action: { label: "Undo", run: () => takeClearedDraft(key, body) },
-		});
 	};
 
 	const onKeyDown = (e: KeyboardEvent) => {
@@ -203,7 +162,7 @@ export const PromptBox: Component = () => {
 		}
 		const el = e.currentTarget as HTMLTextAreaElement;
 		// First-line Up opens the history popover; multiline caret motion and
-		// IME always win; with no history and no discarded drafts, Up goes to the browser.
+		// IME always win; with no history, Up goes to the browser.
 		if (
 			e.key === "ArrowUp" &&
 			!e.shiftKey &&
@@ -212,8 +171,7 @@ export const PromptBox: Component = () => {
 			!el.value.slice(0, el.selectionStart).includes("\n")
 		) {
 			if (e.isComposing || e.keyCode === 229) return;
-			if (new PromptHistory().size === 0 && listClearedDrafts(currentDraftKey()).length === 0)
-				return;
+			if (new PromptHistory().size === 0) return;
 			e.preventDefault();
 			setHistoryOpen(true);
 		}
@@ -239,14 +197,7 @@ export const PromptBox: Component = () => {
 				}}
 				historyOpen={historyOpen}
 				closeHistory={() => setHistoryOpen(false)}
-				openHistory={() => setHistoryOpen(true)}
-			/>
-			<PromptActions
-				message={message}
-				images={images}
-				files={files}
-				submit={submit}
-				onDiscard={discard}
+				actions={<PromptActions message={message} images={images} files={files} submit={submit} />}
 			/>
 			<ExtensionUi placement="belowEditor" />
 		</div>

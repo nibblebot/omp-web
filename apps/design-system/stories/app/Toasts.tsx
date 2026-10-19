@@ -19,9 +19,9 @@ export default defineStory({
 		},
 		{
 			name: "With action",
-			description: "Undo toast from discarding a draft; stays for 10 s.",
+			description: "Undo toast for a destructive action; stays for 10 s.",
 			seed: () =>
-				pushToast("Draft discarded", {
+				pushToast("Prompt cleared", {
 					durationMs: 10_000,
 					action: { label: "Undo", run: () => {} },
 				}),

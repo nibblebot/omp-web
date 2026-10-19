@@ -1,20 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	cancelScheduledDraftSave,
-	clearDraft,
-	deleteClearedDrafts,
-	listClearedDrafts,
 	loadDraft,
-	peekClearedDraft,
-	recoverClearedDraft,
 	removeDraft,
 	saveDraft,
 	scheduleDraftSave,
-	takeClearedDraft,
 	type DraftBody,
 	type DraftKey,
 } from "../../store/drafts";
-import { promptInsert, setPromptInsert } from "../../state";
 import type { TextAttachment } from "../../prompt/attachments";
 import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
 
@@ -60,7 +53,6 @@ afterEach(() => {
 	for (const key of usedKeys) {
 		cancelScheduledDraftSave(key);
 		removeDraft(key);
-		deleteClearedDrafts(key);
 	}
 	usedKeys.length = 0;
 	restoreBrowserGlobals();
@@ -90,14 +82,11 @@ describe("drafts (ghost-draft guards)", () => {
 		expect(loadDraft(key)).toBeNull();
 	});
 
-	test("removeDraft clears the live slot but preserves the cleared ring", () => {
-		const key = freshKey("remove-keeps-ring");
-		saveDraft(key, body("discarded v1"));
-		clearDraft(key);
-		saveDraft(key, body("live v2"));
+	test("removeDraft clears the live slot", () => {
+		const key = freshKey("remove-live");
+		saveDraft(key, body("live v1"));
 		removeDraft(key);
 		expect(loadDraft(key)).toBeNull();
-		expect(peekClearedDraft(key)?.text).toBe("discarded v1");
 	});
 
 	test("submit simulation: cancel + remove beats the pending pre-send save", async () => {
@@ -105,68 +94,32 @@ describe("drafts (ghost-draft guards)", () => {
 		saveDraft(key, body("sent prompt"));
 		// Keystrokes armed a debounced save closing over the pre-send text.
 		scheduleDraftSave(key, body("sent prompt"), 5);
-		// Submit path: cancel the pending save, delete the live slot (sent,
-		// not discarded: no ring entry).
+		// Submit path: cancel the pending save, then delete the live slot.
 		cancelScheduledDraftSave(key);
 		removeDraft(key);
 		await delay(20);
 		expect(loadDraft(key)).toBeNull();
-		expect(peekClearedDraft(key)).toBeNull();
 	});
 });
 
-describe("drafts (discard undo and history recovery)", () => {
-	test("discard then undo restores text, images and caret, and drops the ring entry", () => {
-		const key = freshKey("undo-restore");
-		const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
-		const draft: DraftBody = {
-			text: "keep this",
-			images: [image],
-			selectionStart: 4,
-			selectionEnd: 4,
-			updatedAt: 1_700_000_000_000,
-		};
-		saveDraft(key, draft);
-		clearDraft(key);
-		expect(loadDraft(key)).toBeNull();
-		expect(listClearedDrafts(key)).toHaveLength(1);
-
-		takeClearedDraft(key, draft);
-		expect(promptInsert()).toEqual({
-			text: "keep this",
-			images: [image],
-			selection: { start: 4, end: 4 },
-		});
-		expect(listClearedDrafts(key)).toEqual([]);
-		setPromptInsert(null);
-	});
-
-	test("undo removes only its own ring entry, leaving an identical older discard", () => {
-		const key = freshKey("undo-exact");
-		const older: DraftBody = { text: "same", images: [], updatedAt: 1000 };
-		const newer: DraftBody = { text: "same", images: [], updatedAt: 2000 };
-		saveDraft(key, older);
-		clearDraft(key);
-		saveDraft(key, newer);
-		clearDraft(key);
-
-		takeClearedDraft(key, newer);
-		expect(listClearedDrafts(key).map((b) => b.updatedAt)).toEqual([1000]);
-		setPromptInsert(null);
-	});
-
-	test("discarded drafts list newest first; recover still pops the newest", () => {
-		const key = freshKey("picker-order");
-		saveDraft(key, body("first"));
-		clearDraft(key);
-		saveDraft(key, body("second"));
-		clearDraft(key);
-		expect(listClearedDrafts(key).map((b) => b.text)).toEqual(["second", "first"]);
-
-		expect(recoverClearedDraft(key)?.text).toBe("second");
-		expect(listClearedDrafts(key).map((b) => b.text)).toEqual(["first"]);
-		setPromptInsert(null);
-		deleteClearedDrafts(key);
+describe("drafts (retired cleared rings)", () => {
+	test("loadDraft sweeps stored cleared-ring keys and keeps the live draft", () => {
+		const stored = new Map<string, string>();
+		setBrowserGlobal("localStorage", {
+			get length() {
+				return stored.size;
+			},
+			key: (i: number) => [...stored.keys()][i] ?? null,
+			getItem: (k: string) => stored.get(k) ?? null,
+			setItem: (k: string, v: string) => void stored.set(k, v),
+			removeItem: (k: string) => void stored.delete(k),
+		} as unknown as Storage);
+		const key = freshKey("legacy-sweep");
+		const legacy = "omp-web:draft-cleared:v2:test¦legacy-sweep¦main¦main";
+		stored.set(legacy, JSON.stringify([body("old ring entry")]));
+		saveDraft(key, body("live"));
+		expect(loadDraft(key)?.text).toBe("live");
+		expect(stored.has(legacy)).toBe(false);
 	});
 });
 
@@ -176,25 +129,6 @@ describe("drafts (text-file chips)", () => {
 		name,
 		size: text.length,
 		text,
-	});
-
-	test("chip-only draft round-trips through discard and undo", () => {
-		const key = freshKey("chip-undo");
-		const draft: DraftBody = {
-			text: "",
-			images: [],
-			files: [file("a.ts", "const a = 1;")],
-			updatedAt: 1_700_000_000_000,
-		};
-		saveDraft(key, draft);
-		clearDraft(key);
-		expect(loadDraft(key)).toBeNull();
-		expect(listClearedDrafts(key)).toHaveLength(1);
-
-		takeClearedDraft(key, draft);
-		expect(promptInsert()).toEqual({ text: "", files: draft.files });
-		expect(listClearedDrafts(key)).toEqual([]);
-		setPromptInsert(null);
 	});
 
 	test("chips survive save and restore; an oversize chip is marked not kept", () => {
@@ -208,26 +142,5 @@ describe("drafts (text-file chips)", () => {
 		expect(restored?.files?.[1]?.text).toBeUndefined();
 		expect(restored?.files?.[1]?.error).toBe("Not kept with the draft; attach it again.");
 		removeDraft(key);
-	});
-
-	test("undo restores an oversize chip in full from memory, not the stored copy", () => {
-		const key = freshKey("chip-undo-big");
-		const big = file("big.txt", "x".repeat(400_001));
-		const body: DraftBody = { text: "look", images: [], files: [big], updatedAt: 3000 };
-		saveDraft(key, body);
-		clearDraft(key);
-		takeClearedDraft(key, body);
-		expect(promptInsert()?.files?.[0]?.text).toHaveLength(400_001);
-		setPromptInsert(null);
-	});
-
-	test("history recovery restores chips into the composer", () => {
-		const key = freshKey("chip-history");
-		const attached = file("a.ts", "A");
-		saveDraft(key, { text: "see", images: [], files: [attached], updatedAt: 2000 });
-		clearDraft(key);
-		expect(recoverClearedDraft(key)?.files).toEqual([attached]);
-		expect(promptInsert()).toEqual({ text: "see", files: [attached] });
-		setPromptInsert(null);
 	});
 });
