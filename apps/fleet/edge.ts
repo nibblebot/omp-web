@@ -130,6 +130,8 @@ const CLIENT_RECLAIM_MS = 60_000;
 
 /** Roster-dropdown listing size: the last N sessions of a daemon's worktree. */
 const DROPDOWN_SESSION_LIMIT = 10;
+/** Picked-session membership: the whole worktree listing, never the dropdown page. */
+const RESUME_MEMBERSHIP_LIMIT = Number.POSITIVE_INFINITY;
 
 /**
  * Per-daemon realtime activity, derived by the edge from the raw tapped
@@ -1554,64 +1556,56 @@ export class FleetEdge {
 		// Registered BEFORE the first await: the roster UI fires the attach
 		// back-to-back, and an attach that did not wait for this validation
 		// would wake the daemon on lastSessionFile and silently drop the pick.
-		const run = this.#runSpawnResume(stream, daemonId, sessionFile);
+		const run = this.#runSpawnResume(daemonId, sessionFile).catch((err: unknown) => {
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+			// A refused pick must fail the attach that follows, never let it wake
+			// on lastSessionFile. A wake without a pick has no such target.
+			if (sessionFile !== undefined) throw err;
+		});
 		this.#pendingResumes.set(daemonId, run);
 		try {
 			await run;
+		} catch {
+			// Already reported on this stream; the attach rethrows it to its own.
 		} finally {
 			if (this.#pendingResumes.get(daemonId) === run) this.#pendingResumes.delete(daemonId);
 		}
 	}
 
-	/** The validation + wake body of spawn_resume (see #handleSpawnResume). */
-	async #runSpawnResume(
-		stream: BrowserStream,
-		daemonId: string,
-		sessionFile?: string,
-	): Promise<void> {
-		try {
-			const entry = this.#registry.get(daemonId);
-			if (!entry) {
-				this.#sendError(stream, `unknown daemon: ${daemonId}`);
-				return;
-			}
-			if (entry.status !== "asleep") {
-				this.#sendError(stream, `daemon ${daemonId} is not asleep (status ${entry.status})`);
-				return;
-			}
-			// A dropdown-picked session must belong to this worktree's session
-			// listing; never let an arbitrary path/id reach resume. Clones
-			// validate against the fleet store's sessionId (the store key is
-			// the SDK session id, P8.4), never a fleet-local cwd.
-			let resumeFile: string | undefined;
-			if (sessionFile !== undefined) {
-				if (entry.workspace?.kind === "clone") {
-					const listed = await listCloneDaemonSessions(
-						this.#logStore,
-						daemonId,
-						DROPDOWN_SESSION_LIMIT,
-					);
-					const ok = listed.some((s) => s.id === sessionFile || s.path === sessionFile);
-					if (!ok) {
-						this.#sendError(stream, `session not in this clone's fleet store: ${sessionFile}`);
-						return;
-					}
-					resumeFile = sessionFile;
-				} else {
-					const listed = await listDaemonSessions(entry.cwd ?? "", DROPDOWN_SESSION_LIMIT);
-					const resolved = realpathOf(sessionFile);
-					const ok = listed.some((s) => realpathOf(s.path) === resolved);
-					if (!ok) {
-						this.#sendError(stream, `session file not in this worktree: ${sessionFile}`);
-						return;
-					}
-					resumeFile = sessionFile;
-				}
-			}
-			await this.#wake(entry, resumeFile);
-		} catch (err) {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+	/**
+	 * The validation + wake body of spawn_resume (see #handleSpawnResume).
+	 * Rejects with the refusal or wake failure reason.
+	 */
+	async #runSpawnResume(daemonId: string, sessionFile?: string): Promise<void> {
+		const entry = this.#registry.get(daemonId);
+		if (!entry) throw new Error(`unknown daemon: ${daemonId}`);
+		if (entry.status !== "asleep") {
+			throw new Error(`daemon ${daemonId} is not asleep (status ${entry.status})`);
 		}
+		// A dropdown-picked session must belong to this worktree's session
+		// listing; never let an arbitrary path/id reach resume. Clones
+		// validate against the fleet store's sessionId (the store key is
+		// the SDK session id, P8.4), never a fleet-local cwd.
+		let resumeFile: string | undefined;
+		if (sessionFile !== undefined) {
+			if (entry.workspace?.kind === "clone") {
+				const listed = await listCloneDaemonSessions(
+					this.#logStore,
+					daemonId,
+					RESUME_MEMBERSHIP_LIMIT,
+				);
+				const ok = listed.some((s) => s.id === sessionFile || s.path === sessionFile);
+				if (!ok) throw new Error(`session not in this clone's fleet store: ${sessionFile}`);
+				resumeFile = sessionFile;
+			} else {
+				const listed = await listDaemonSessions(entry.cwd ?? "", RESUME_MEMBERSHIP_LIMIT);
+				const resolved = realpathOf(sessionFile);
+				const ok = listed.some((s) => realpathOf(s.path) === resolved);
+				if (!ok) throw new Error(`session file not in this worktree: ${sessionFile}`);
+				resumeFile = sessionFile;
+			}
+		}
+		await this.#wake(entry, resumeFile);
 	}
 
 	async #handleStop(stream: BrowserStream, daemonId: string): Promise<void> {
@@ -1709,11 +1703,11 @@ export class FleetEdge {
 		this.#closePipe(stream);
 		try {
 			// A back-to-back spawn_resume may still be validating its picked
-			// session; wait for it (its own rejection is already reported to
-			// its stream) so this wake does not respawn on lastSessionFile
-			// first. The entry is re-read after the wait: registry entries are
-			// REPLACED on update, so a pre-wait object can carry a stale status.
-			await this.#pendingResumes.get(daemonId)?.catch(() => {});
+			// session. Await it: a refused or failed pick rejects here and fails
+			// this attach instead of waking on lastSessionFile. The entry is
+			// re-read after the wait: registry entries are REPLACED on update,
+			// so a pre-wait object can carry a stale status.
+			await this.#pendingResumes.get(daemonId);
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
 				this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });

@@ -7,7 +7,7 @@
  * stay together here.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
@@ -1013,6 +1013,84 @@ describe("fleet edge", () => {
 			// Exactly one respawn, and on the PICKED file rather than lastSessionFile.
 			expect(resumeFiles).toEqual([picked]);
 			expect(server.registry.get(entry.daemonId)?.status).toBe("ready");
+			dropDaemon(entry.daemonId);
+		} finally {
+			server.supervisor.respawn = origRespawn;
+			for (const [key, value] of Object.entries(savedEnv)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+			__resetDirsFromEnvForTests();
+		}
+	});
+
+	test("resuming the OLDEST of 12 sessions resumes that session; a refused pick fails the attach", async () => {
+		// The picker lists up to 200 sessions but spawn_resume used to validate
+		// against the 10 newest: an older pick was refused, then the attach woke
+		// the daemon on lastSessionFile (a different session).
+		const agentDir = tempDir("omp-web-edge-agentdir-");
+		const savedEnv = {
+			PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+			OMP_PROFILE: process.env.OMP_PROFILE,
+			PI_PROFILE: process.env.PI_PROFILE,
+		};
+		setAgentDir(agentDir);
+		const origRespawn = server.supervisor.respawn;
+		const resumeFiles: Array<string | undefined> = [];
+		server.supervisor.respawn = async (e: RegistryEntry, opts?: { resumeFile?: string }) => {
+			resumeFiles.push(opts?.resumeFile);
+			await origRespawn.call(server.supervisor, e, opts);
+		};
+		try {
+			const sessionDir = SessionManager.getDefaultSessionDir(
+				FAKE_CWD,
+				agentDir,
+				new FileSessionStorage(),
+			);
+			const now = Date.now();
+			const files: string[] = [];
+			for (let i = 0; i < 12; i++) {
+				const file = join(sessionDir, `old-${i}.jsonl`);
+				writeFileSync(
+					file,
+					`${JSON.stringify({ type: "session", id: `old-${i}`, cwd: FAKE_CWD })}\n`,
+				);
+				// old-0 is the oldest, old-11 the newest: old-0 is outside the 10 newest.
+				const when = new Date(now - (12 - i) * 60_000);
+				utimesSync(file, when, when);
+				files.push(file);
+			}
+			const entry = server.registry.create({
+				name: "spawned-oldest",
+				cwd: FAKE_CWD,
+				project: "fake-proj",
+				labels: [],
+				template: "local",
+				status: "asleep",
+				lastSessionFile: files[11],
+			});
+			const browser = await openBrowser(server.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			// A refused pick fails the attach that follows; it must not wake lastSessionFile.
+			await browser.send({
+				type: "spawn_resume",
+				daemonId: entry.daemonId,
+				sessionFile: "/etc/passwd",
+			});
+			await browser.send({ type: "attach", id: "at-refused", sessionId: entry.daemonId });
+			const failed = await browser.waitForFrame(
+				(f) => f.type === "attach_result" && f.id === "at-refused",
+				"refused attach result",
+			);
+			expect(failed).toMatchObject({ ok: false });
+			expect(JSON.stringify(failed)).toContain("not in this worktree");
+			expect(resumeFiles).toEqual([]);
+			expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
+			// The oldest session is a valid pick: it resumes exactly that file.
+			await browser.send({ type: "spawn_resume", daemonId: entry.daemonId, sessionFile: files[0] });
+			await browser.send({ type: "attach", id: "at-oldest", sessionId: entry.daemonId });
+			await primeAttach(browser, entry.daemonId);
+			expect(resumeFiles).toEqual([files[0]]);
 			dropDaemon(entry.daemonId);
 		} finally {
 			server.supervisor.respawn = origRespawn;
