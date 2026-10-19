@@ -7,8 +7,6 @@ import {
 	planReview,
 	refreshPlan,
 	reopenPlan,
-	reviewAvailable,
-	unavailableReason,
 } from "../../store/review";
 import { Markdown } from "../ui/Markdown";
 
@@ -16,14 +14,10 @@ import { Markdown } from "../ui/Markdown";
  * decision that lands closes the sheet; a stale or failed one keeps it open with the error. */
 export const PlanReviewPanel: Component = () => {
 	const [note, setNote] = createSignal("");
-	onMount(() => {
-		if (reviewAvailable("planReview")) void refreshPlan();
-	});
+	onMount(() => void refreshPlan());
 	const decide = async (decision: "approve" | "request_changes" | "dismiss") => {
 		if (await decidePlan(decision, note().trim() || undefined)) setState("modal", null);
 	};
-	if (!reviewAvailable("planReview"))
-		return <div class="msg-notice">{unavailableReason("planReview")}</div>;
 	return (
 		<div class="review-plan">
 			<Show when={planLoading()}>

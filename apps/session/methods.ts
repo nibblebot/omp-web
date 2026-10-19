@@ -12,7 +12,6 @@ import {
 	getModelMatchPreferences,
 	resolveCliModel,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -23,10 +22,8 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/queued-messages";
 import { resolveRoleModelFull } from "@oh-my-pi/pi-coding-agent/session/role-models";
 import { cfgTaskAgentModelOverrides } from "@oh-my-pi/pi-coding-agent/task/settings";
-import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import type {
 	ModelBrowserEntry,
-	ModelInfo,
 	ModelLockReason,
 	QueuedCommandRef,
 	QueuedMessageRef,
@@ -56,11 +53,6 @@ import {
 	getAdvisorWarnings,
 	setAdvisorEnabled,
 } from "./advisor-service";
-import {
-	getAdvisorConfiguration,
-	setAdvisorConfiguration,
-	setAdvisorSettings,
-} from "./advisor-config";
 import { readAdvisorHistory } from "./advisor-history";
 import { getAutonomyAdapter } from "./autonomy-adapter";
 import {
@@ -94,7 +86,6 @@ import {
 	executeCompaction,
 	executeDropImages,
 	executeShake,
-	handoffPreview,
 } from "./compaction-adapter";
 import { createLifecycleMethods, type LifecycleMirror } from "./lifecycle-adapter";
 import { createComposerMethods } from "./composer-methods";
@@ -106,14 +97,7 @@ import { createPlanReviewMethods, exitPlanMode } from "./review-plan";
 import { createTodoMethods } from "./review-todos";
 import { createMcpMethods } from "./mcp-methods";
 import { createSkillMethods } from "./skill-methods";
-import {
-	broadcast,
-	broadcastHistory,
-	broadcastTo,
-	clearEphemeralAbort,
-	ephemeralAborts,
-	setEphemeralAbort,
-} from "./sse-delivery";
+import { broadcast, broadcastHistory, broadcastTo } from "./sse-delivery";
 import {
 	clearSubagents,
 	readSubagentTranscript,
@@ -212,7 +196,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	// Read-only calls skip the post-mutation state broadcast.
 	const READ_ONLY: Partial<Record<WebMethodName, true>> = {
 		getSessionStats: true,
-		getAvailableModels: true,
 		getModelBrowser: true,
 		getModelPresets: true,
 		getSettings: true,
@@ -222,14 +205,11 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		mcpInspect: true,
 		listPlugins: true,
 		getPluginConfig: true,
-		getBranchMessages: true,
 		getQueuedMessages: true,
 		getLoginProviders: true,
 		getSubagents: true,
 		getSubagentMessages: true,
 		formatSessionAsText: true,
-		dumpLlmRequestToTmpDir: true,
-		fetchUsageReports: true,
 		getContextBreakdown: true,
 		annotationList: true,
 		todoGet: true,
@@ -237,7 +217,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		getSessionGraph: true,
 		getModelMentions: true,
 		compactionSnapshot: true,
-		handoffPreview: true,
 		btwList: true,
 		btwSearch: true,
 		btwPage: true,
@@ -256,7 +235,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		foreignPreview: true,
 		gitStatus: true,
 		gitFileDiff: true,
-		gitUnstagedPatch: true,
 		getToolSchemas: true,
 		predictWord: true,
 		predictWordFeedback: true,
@@ -277,12 +255,10 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		prompt: true,
 		steer: true,
 		followUp: true,
-		abortAndPrompt: true,
 		resumeQueue: true,
 		runQueuedNow: true,
 		queueCommand: true,
 		runQueuedCommandNow: true,
-		runEphemeralTurn: true,
 		predictNextMessage: true,
 	};
 
@@ -552,15 +528,9 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		fork: (entry) => entry.session.fork(),
 		handoff: (entry, a) => entry.session.handoff(a[0] as string | undefined),
 		setSessionName: (entry, a) => entry.session.setSessionName(a[0] as string, "user"),
-		setInterruptMode: async (entry, a) => {
-			entry.session.setInterruptMode(a[0] as "immediate" | "wait");
-		},
 		// Phase 9 (SDK 18.2.6): /goal and /plan are NOT ACP-intercepted server-side, so
 		// goal/plan control drives the SDK directly. The post-mutation state
 		// broadcast re-reads getGoalModeState()/getPlanModeState()?.enabled.
-		setGoalModeState: async (entry, a) => {
-			entry.session.setGoalModeState(a[0] as GoalModeState | undefined);
-		},
 		setPlanModeState: async (entry, a) => {
 			const next = a[0] as { enabled: boolean } | undefined;
 			if (!next?.enabled) return exitPlanMode(entry);
@@ -599,27 +569,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			),
 		goalDrop: (entry) => dropGoal(entry),
 		formatSessionAsText: async (entry) => entry.session.formatSessionAsText(),
-		// Dump lands in os.tmpdir(), already inside the /download realpath jail.
-		dumpLlmRequestToTmpDir: (entry) => entry.session.dumpLlmRequestToTmpDir(),
-		setModel: async (entry, a) => {
-			const { session } = entry;
-			const [provider, modelId] = [a[0] as string, a[1] as string];
-			let model = session
-				.getAvailableModels()
-				.find((m) => m.provider === provider && m.id === modelId);
-			if (!model) {
-				// Cold start: discovery-backed providers populate seconds after
-				// session ready; wait for in-flight discovery before giving up.
-				await session.modelRegistry.awaitBackgroundRefresh();
-				model = session
-					.getAvailableModels()
-					.find((m) => m.provider === provider && m.id === modelId);
-			}
-			if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
-			await session.setModel(model);
-			return model;
-		},
-		cycleModel: async (entry) => (await entry.session.cycleModel()) ?? null,
 		// Model-roles picker (TUI model-hub parity). All three are mutations:
 		// none sit in READ_ONLY (the post-mutation broadcast refreshes state,
 		// incl. the catalog) and, like setModel, none are readiness-gated or
@@ -749,21 +698,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			cfgModelTags.set(settings, { ...tags, [role]: { ...tags[role], hidden } });
 			return { role, hidden };
 		},
-		// Project to the wire ModelInfo: full SDK Model rows (compat tables
-		// dominate) run past 2 MiB on a large catalog, over the callback
-		// pair's 1 MiB envelope cap, so the answer would never be delivered.
-		getAvailableModels: async (entry): Promise<ModelInfo[]> => {
-			await entry.session.modelRegistry.awaitBackgroundRefresh();
-			return entry.session
-				.getAvailableModels()
-				.map(({ provider, id, contextWindow, reasoning, thinking }) => ({
-					provider,
-					id,
-					contextWindow,
-					reasoning,
-					thinking,
-				}));
-		},
 		setThinkingLevel: async (entry, a) => {
 			const { session } = entry;
 			const level = a[0] as ConfiguredThinkingLevel;
@@ -832,16 +766,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		applyModelPreset: async (entry, a) => graph.applyModelPreset(entry, a[0] as string),
 		deleteModelPreset: async (entry, a) => graph.deleteModelPreset(entry, a[0] as string),
 		getModelMentions: async (entry) => graph.getModelMentions(entry),
-		cycleThinkingLevel: async (entry) => {
-			const level = entry.session.cycleThinkingLevel();
-			return level ? { level } : null;
-		},
-		setSteeringMode: async (entry, a) => {
-			entry.session.setSteeringMode(a[0] as "all" | "one-at-a-time");
-		},
-		setFollowUpMode: async (entry, a) => {
-			entry.session.setFollowUpMode(a[0] as "all" | "one-at-a-time");
-		},
 		setAutoCompaction: async (entry, a) => {
 			entry.session.setAutoCompactionEnabled(a[0] as boolean);
 		},
@@ -849,51 +773,12 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			entry.session.setAutoRetryEnabled(a[0] as boolean);
 			await settingsMethods.publish(entry);
 		},
-		abortRetry: async (entry) => {
-			entry.session.abortRetry();
-		},
 		setFastMode: async (entry, a) => {
 			const supported = entry.session.setFastMode(a[0] as boolean);
 			await settingsMethods.publish(entry);
 			return supported;
 		},
-		// 18.1.9 turned computer use into an eval prelude gated by the
-		// session-scoped `computer.enabled` setting (the SDK's own /computer
-		// toggle), so this drives that override and rebuilds the prompt. The
-		// availability guard mirrors applyComputerUseToggle (builtin-modes.ts):
-		// the prelude only exists while the eval tool is active, so enabling it
-		// without one must revert and refuse rather than answer a success that
-		// nothing applied.
-		setComputerToolEnabled: async (entry, a) => {
-			const { session } = entry;
-			const enabled = a[0] === true;
-			const previous = cfgComputerEnabled.get(session.settings);
-			cfgComputerEnabled.override(session.settings, enabled);
-			if (
-				enabled &&
-				!session.getEvalPreludes().some((definition) => definition.name === "computer")
-			) {
-				cfgComputerEnabled.override(session.settings, previous);
-				throw new Error("computer use is unavailable in this session");
-			}
-			try {
-				await session.refreshBaseSystemPrompt();
-			} catch (error) {
-				cfgComputerEnabled.override(session.settings, previous);
-				throw error;
-			}
-		},
-		// 18.1.9 removed the inspect_image tool (`read <image>?q=` owns image
-		// questions), so there is no session-scoped vision mode left to set. The
-		// wire method stays (OMP_PROTO 2 is frozen) and fails loudly rather than
-		// reporting a success nothing applied.
-		setInspectImageMode: () => {
-			throw new Error(
-				"setInspectImageMode is unsupported: @oh-my-pi/pi-coding-agent 18.1.9 removed the inspect_image tool",
-			);
-		},
-		// READ_ONLY rows: usage reports, context breakdown, tool schemas (skip the state broadcast).
-		fetchUsageReports: (entry) => entry.session.fetchUsageReports(),
+		// READ_ONLY rows: context breakdown and tool schemas (skip the state broadcast).
 		getContextBreakdown: async (entry) => entry.session.getContextBreakdown(),
 		getToolSchemas: async (entry) =>
 			entry.session.agent.state.tools.map((tool) => ({
@@ -942,42 +827,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		abortEval: async (entry) => {
 			entry.session.abortEval();
 		},
-		// Phase 11: /btw side question. runEphemeralTurn never touches the
-		// transcript; onTextDelta relays as session-scoped ephemeral_delta frames
-		// (streamId = the client's btw panel id), and the call resolves with the
-		// final replyText. A per-streamId AbortController backs abortEphemeral.
-		runEphemeralTurn: (entry, a, streamId) => {
-			const controller = new AbortController();
-			if (streamId !== undefined) setEphemeralAbort(entry, streamId, controller);
-			return entry.session
-				.runEphemeralTurn({
-					promptText: String(a[0] ?? ""),
-					signal: controller.signal,
-					onTextDelta: (chunk) => {
-						if (streamId !== undefined)
-							broadcastTo(entry.handle, { type: "ephemeral_delta", id: streamId, text: chunk });
-					},
-				})
-				.then(
-					(result) => {
-						if (streamId !== undefined) clearEphemeralAbort(entry, streamId);
-						return { replyText: result.replyText };
-					},
-					(err) => {
-						if (streamId !== undefined) clearEphemeralAbort(entry, streamId);
-						throw err;
-					},
-				);
-		},
-		abortEphemeral: async (entry, _a, streamId) => {
-			if (streamId === undefined) return;
-			ephemeralAborts.get(entry)?.get(streamId)?.abort();
-		},
 		getSessionStats: async (entry) => entry.session.getSessionStats(),
-		exportHtml: async (entry, a) => ({
-			path: await entry.session.exportToHtml(a[0] ? String(a[0]) : undefined, a[1] === true),
-		}),
-		getBranchMessages: async (entry) => entry.session.getUserMessagesForBranching(),
 		getLoginProviders: async () =>
 			getOAuthProviders().map((provider) => ({
 				id: provider.id,
@@ -1025,13 +875,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		subagentAbort: async (entry, a) => {
 			await deps.collab.abortSubagent(entry, a[0] as string);
 		},
-		// P8.9 wake: materialize a cold/missing session's stored lineage from
-		// the fleet log store into the agent sessions dir, then return so the
-		// caller can resume. Rows that need the fleet pair + agent dir are
-		// injected by apps/session/index.ts after boot (this row is a proxy for the
-		// real implementation, see apps/session/session-materialize.ts).
-		materializeSession: (entry, a) =>
-			deps.materializeSession(entry, a[0] as { sessionId?: string }),
 		...createLifecycleMethods({
 			sessionsDir: deps.sessionsDir,
 			hasCallbackPair: deps.hasCallbackPair,
@@ -1042,7 +885,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			},
 			settleHostWork: async (entry) => {
 				rejectEntryUiRequests(entry, "session lifecycle boundary");
-				for (const controller of ephemeralAborts.get(entry)?.values() ?? []) controller.abort();
 			},
 			settleWorkers: async (entry) => {
 				for (const id of entry.subagentSnapshots.keys()) {
@@ -1103,10 +945,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			const reason = (a[0] as { reason?: unknown } | undefined)?.reason;
 			return abortCompactionRun(entry.session, reason);
 		},
-		handoffPreview: async (entry, a) => {
-			const focus = (a[0] as { focus?: unknown } | undefined)?.focus;
-			return handoffPreview(entry.session, typeof focus === "string" ? focus : undefined);
-		},
 		btwList: async (entry, a) => (await serviceFor(entry.session)).listBtwRecords(a[0] as never),
 		btwSearch: async (entry, a) =>
 			(await serviceFor(entry.session)).listBtwSearch(String(a[0] ?? ""), a[1] as never),
@@ -1158,18 +996,13 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			const section = (a[0] as { section?: string } | undefined)?.section;
 			if (section === "stats") return getAdvisorStats(entry);
 			if (section === "warnings") return getAdvisorWarnings(entry);
-			if (section === "configuration") return getAdvisorConfiguration(entry, "project");
 			return getAdvisorOverview(entry);
 		},
 		advisorConfigure: async (entry, a) => {
-			const input = (a[0] ?? {}) as { enabled?: boolean; scope?: string; document?: unknown };
-			if (typeof input.enabled === "boolean") return setAdvisorEnabled(entry, input.enabled);
-			if (input.document !== undefined)
-				return setAdvisorConfiguration(entry, {
-					scope: input.scope === "user" ? "user" : "project",
-					document: input.document,
-				} as never);
-			return setAdvisorSettings(entry, input as never);
+			const enabled = (a[0] as { enabled?: unknown } | undefined)?.enabled;
+			if (typeof enabled !== "boolean")
+				throw new Error("advisorConfigure requires { enabled: boolean }");
+			return setAdvisorEnabled(entry, enabled);
 		},
 		advisorTranscript: async (entry, a) => readAdvisorHistory(entry, (a[0] ?? {}) as never),
 		loopPreview: async (_entry, a) => previewLoop(String(a[0] ?? "")),

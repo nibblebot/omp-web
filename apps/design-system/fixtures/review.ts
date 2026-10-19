@@ -3,7 +3,6 @@ import type {
 	GitStatusDto,
 	PlanReviewDto,
 	ReviewAnnotationDto,
-	ServerCapabilities,
 	TodoBoardDto,
 } from "#lib/wire/protocol";
 import type { GitReviewDiff, TodoReviewOp } from "../../web/store/slices/review";
@@ -354,7 +353,6 @@ export function planCalls(options: PlanCallOptions = {}): CallHandlers {
 		},
 		planDecide: (args) => setStatus(args, DECISION_STATUS[String(argsOf(args).decision)]),
 		planReopen: (args) => setStatus(args, "waiting"),
-		planCancel: (args) => setStatus(args, "dismissed"),
 	};
 }
 
@@ -460,11 +458,3 @@ export function todoCalls(options: TodoCallOptions = {}): CallHandlers {
 		}),
 	};
 }
-
-/** Capabilities that enable the four review panels; seed with `capabilities: reviewCapabilities`. */
-export const reviewCapabilities: ServerCapabilities = {
-	git: { available: true },
-	planReview: { available: true },
-	review: { available: true },
-	todos: { available: true },
-};

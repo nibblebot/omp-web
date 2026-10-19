@@ -492,25 +492,6 @@ export function notifyEvent(
 	});
 }
 
-// Phase 11: AbortControllers for in-flight runEphemeralTurn calls, keyed by
-// (session, streamId). abortEphemeral cancels via the SDK signal; it is the
-// same side-channel pattern bash/python use, but those have dedicated SDK aborters.
-export const ephemeralAborts = new Map<SessionEntry, Map<number, AbortController>>();
-
-export function setEphemeralAbort(
-	entry: SessionEntry,
-	streamId: number,
-	controller: AbortController,
-): void {
-	let byStream = ephemeralAborts.get(entry);
-	if (!byStream) ephemeralAborts.set(entry, (byStream = new Map()));
-	byStream.set(streamId, controller);
-}
-
-export function clearEphemeralAbort(entry: SessionEntry, streamId: number): void {
-	ephemeralAborts.get(entry)?.delete(streamId);
-}
-
 // Keepalive: a named ping event block (SSE_PING_BLOCK, deliberately no id
 // field, so it never advances a consumer's resume counter) on every open
 // /events stream every SSE_KEEPALIVE_MS; consumers treat >

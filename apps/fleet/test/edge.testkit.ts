@@ -49,9 +49,6 @@ export const FAKE_STATE = {
 	thinkingLevel: undefined,
 	isStreaming: false,
 	isCompacting: false,
-	steeringMode: "all",
-	followUpMode: "all",
-	interruptMode: "immediate",
 	sessionFile: FAKE_SESSION_FILE,
 	sessionId: "s1",
 	readyAt: Date.now(),
@@ -66,7 +63,6 @@ export const FAKE_STATE = {
 	planModeEnabled: false,
 	fastModeEnabled: false,
 	computerToolEnabled: false,
-	inspectImageMode: "disabled",
 };
 
 export function sleep(ms: number): Promise<void> {

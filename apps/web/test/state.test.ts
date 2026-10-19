@@ -1116,9 +1116,6 @@ describe("state-frame application (model-role picker state)", () => {
 			thinkingLevel: undefined,
 			isStreaming: false,
 			isCompacting: false,
-			steeringMode: "all",
-			followUpMode: "all",
-			interruptMode: "immediate",
 			sessionId: "sess-1",
 			autoCompactionEnabled: false,
 			autoRetryEnabled: true,
@@ -1129,7 +1126,6 @@ describe("state-frame application (model-role picker state)", () => {
 			planModeEnabled: false,
 			fastModeEnabled: false,
 			computerToolEnabled: false,
-			inspectImageMode: "auto",
 			...(extra ?? {}),
 		};
 		return { type: "state", state: base };

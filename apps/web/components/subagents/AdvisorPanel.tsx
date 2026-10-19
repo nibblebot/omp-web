@@ -7,34 +7,14 @@ import {
 	getAdvisorStats,
 	getAdvisorWarnings,
 	setAdvisorEnabled,
-	type AdvisorOverview,
 } from "../../store/subagents-advisor";
 import { ConfirmButton } from "../ui/ConfirmButton";
 
 /**
  * Advisor panel: config/status/transcript for the SDK advisor runtime.
  * Read-only by contract — no composer, no input element. Reads and toggles go
- * through the advisor store. A server that does not implement a method answers
- * "Unknown method", which renders as capability-unavailable, never as empty
- * success.
+ * through the advisor store.
  */
-
-interface Unavailable {
-	unavailable: string;
-}
-
-/** Maps an unknown-method rejection to a capability-unavailable value; other errors rethrow. */
-function orUnavailable<T>(read: Promise<T>): Promise<T | Unavailable> {
-	return read.catch((err: unknown) => {
-		const message = err instanceof Error ? err.message : String(err);
-		if (message.includes("Unknown method")) return { unavailable: message };
-		throw err;
-	});
-}
-
-function isUnavailable(value: unknown): value is Unavailable {
-	return typeof value === "object" && value !== null && "unavailable" in value;
-}
 
 /**
  * Which advisor actions the sheet offers. `configured` in the SDK overview is
@@ -55,13 +35,9 @@ export function advisorActions(status: {
 
 /** Advisor is read-only: this component renders no input element by contract. */
 export const AdvisorPanel: Component = () => {
-	const [overview, { refetch: refetchOverview }] = createResource(() =>
-		orUnavailable(getAdvisorOverview()),
-	);
-	const [warnings] = createResource(() =>
-		orUnavailable(getAdvisorWarnings().then((result) => result.warnings)),
-	);
-	const [stats] = createResource(() => orUnavailable(getAdvisorStats()));
+	const [overview, { refetch: refetchOverview }] = createResource(() => getAdvisorOverview());
+	const [warnings] = createResource(() => getAdvisorWarnings().then((result) => result.warnings));
+	const [stats] = createResource(() => getAdvisorStats());
 	const [compact, setCompact] = createSignal(true);
 	const [history, setHistory] = createSignal<string | null>(null);
 	const [historyError, setHistoryError] = createSignal<string | null>(null);
@@ -69,22 +45,7 @@ export const AdvisorPanel: Component = () => {
 	const [toggling, setToggling] = createSignal(false);
 	const [pendingDisable, setPendingDisable] = createSignal(false);
 
-	const loaded = (): AdvisorOverview | undefined => {
-		const o = overview();
-		return o !== undefined && !isUnavailable(o) ? o : undefined;
-	};
-	const unavailableReason = (): string | undefined => {
-		const o = overview();
-		return isUnavailable(o) ? o.unavailable : undefined;
-	};
-	const warningList = (): string[] => {
-		const w = warnings();
-		return Array.isArray(w) ? w : [];
-	};
-	const loadedStats = () => {
-		const s = stats();
-		return s !== undefined && !isUnavailable(s) ? s : undefined;
-	};
+	const warningList = (): string[] => warnings() ?? [];
 
 	const loadHistory = async (): Promise<void> => {
 		setLoading(true);
@@ -139,10 +100,7 @@ export const AdvisorPanel: Component = () => {
 				<Match when={overview.error}>
 					<div class="msg-notice">{String(overview.error)}</div>
 				</Match>
-				<Match when={unavailableReason()} keyed>
-					{(reason) => <div class="tool-collapsed-note">advisor status unavailable: {reason}</div>}
-				</Match>
-				<Match when={loaded()} keyed>
+				<Match when={overview()} keyed>
 					{(o) => {
 						const actions = advisorActions({
 							enabled: o.configured,
@@ -213,7 +171,7 @@ export const AdvisorPanel: Component = () => {
 				</div>
 			</Show>
 
-			<Show when={loadedStats()} keyed>
+			<Show when={stats()} keyed>
 				{(s) => (
 					<div class="goal-meta">
 						<span class="picker-label">stats</span> cost {s.cost} · tokens {s.tokens.total} ·

@@ -65,7 +65,7 @@ import { CollabHostAdapter, type CollabAccess } from "./collab-host";
 import { chooseRelayUrl, decideAutoStart } from "./collab-policy";
 import { createCollabSession } from "./collab-session";
 import { createDaemonBroker } from "./daemon-broker";
-import { buildServerCapabilities } from "./capabilities";
+import { gitCapability } from "./capabilities";
 import { createWebMethods } from "./methods";
 import { BOOT_HANDLE, type SessionEntry } from "./session-entry";
 import { loginWithCallbacks } from "./login";
@@ -77,7 +77,6 @@ import {
 	detachConsumer,
 	enqueuePaced,
 	enqueueTo,
-	ephemeralAborts,
 	notifyEvent,
 	pendingCodeInputs,
 	rejectOwnedCodeInputs,
@@ -215,10 +214,7 @@ const daemonBroker = createDaemonBroker({
 	config,
 	getReadyAt: () => readyAt,
 	getWebState: (session) => ({
-		capabilities: buildServerCapabilities({
-			methods: METHODS,
-			cwd: session.sessionManager.getCwd(),
-		}),
+		capabilities: { git: gitCapability(session.sessionManager.getCwd()) },
 		sessionScope: {
 			workspaceId: attachmentWorkspace,
 			sessionId: session.sessionId,
@@ -1547,7 +1543,6 @@ function isIdleSuppressed(): boolean {
 		if (bootEntry.session.isStreaming) return true;
 		if (bootEntry.session.queuedMessageCount > 0) return true;
 		if (bootEntry.pendingUiRequests.size > 0) return true;
-		if (ephemeralAborts.get(bootEntry)?.size) return true;
 		if (bootEntry.collab.adapter?.isLive || bootEntry.collab.starting) return true;
 	}
 	return false;

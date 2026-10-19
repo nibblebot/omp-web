@@ -182,9 +182,6 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			taskModel: taskModel || undefined,
 			isStreaming: session.isStreaming,
 			isCompacting: session.isCompacting,
-			steeringMode: session.steeringMode,
-			followUpMode: session.followUpMode,
-			interruptMode: session.interruptMode,
 			sessionFile: session.sessionFile,
 			...(session.sessionManager.isSessionOnDisk() ? { sessionPersisted: true as const } : {}),
 			sessionId: session.sessionId,
@@ -208,9 +205,6 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			// session-scoped `computer.enabled` setting; there is no longer a
 			// top-level `computer` tool to query.
 			computerToolEnabled: cfgComputerEnabled.get(session.settings),
-			// 18.1.9 removed the inspect_image tool (`read <image>?q=` owns image
-			// questions), so the legacy mode is reported as never-registered.
-			inspectImageMode: "off",
 		};
 	}
 

@@ -18,13 +18,6 @@ export interface ModelMention {
 /** `^selector` tokens in composer text (shared TUI regex semantics). */
 export const MODEL_MENTION_RE = /(^|\s)\^([^\s^]+)(?=\s|$)/g;
 
-function requireModelCapability(key: "temporaryModel" | "modelPresets" | "modelMentions"): void {
-	const capability = state.capabilities?.[key];
-	if (capability?.available !== true) {
-		throw new Error(capability?.reason ?? `${key} is unavailable on this server.`);
-	}
-}
-
 let mentionCache: ModelMention[] | null = null;
 let mentionCacheGen = -1;
 
@@ -34,7 +27,6 @@ let mentionCacheGen = -1;
  *  generation when known so resume/rewind invalidates the mirror; -1
  *  bypasses the generation check. */
 export async function getModelMentions(graphGen = -1): Promise<ModelMention[]> {
-	requireModelCapability("modelMentions");
 	if (mentionCache && (graphGen < 0 || mentionCacheGen === graphGen)) return mentionCache;
 	const data = (await call("getModelMentions", [])) as { mentions: ModelMention[] };
 	mentionCache = data.mentions;
@@ -54,9 +46,6 @@ export function invalidateMentions(): void {
 export async function expandMentionChips(
 	text: string,
 ): Promise<{ text: string; mentions: ModelMention[] }> {
-	if (state.capabilities?.modelMentions?.available !== true) {
-		return { text, mentions: [] };
-	}
 	return { text, mentions: await getModelMentions() };
 }
 

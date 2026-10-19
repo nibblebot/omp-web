@@ -7,6 +7,8 @@ import {
 	fileDiff,
 	gitError,
 	gitLoading,
+	gitReviewAvailable,
+	gitReviewUnavailableReason,
 	gitSelection,
 	gitStatus,
 	guardDraftEscape,
@@ -16,13 +18,11 @@ import {
 	refreshGit,
 	requestCommit,
 	requestStageAll,
-	reviewAvailable,
 	selectedHunks,
 	stageHunks,
 	stagePaths,
 	toggleGitPath,
 	toggleHunk,
-	unavailableReason,
 	unstagePaths,
 } from "../../store/review";
 
@@ -45,7 +45,7 @@ export const ReviewPanel: Component = () => {
 	// leaves the panel empty until a manual refresh. The memo dedupes by value: state
 	// frames replace the capabilities object, which would re-fire a bare effect and
 	// loop gitStatus calls forever.
-	const gitAvailable = createMemo(() => reviewAvailable("git"));
+	const gitAvailable = createMemo(() => gitReviewAvailable());
 	createEffect(
 		on(gitAvailable, (available) => {
 			if (available) void refreshGit();
@@ -117,7 +117,7 @@ export const ReviewPanel: Component = () => {
 	);
 	return (
 		<section class="review-panel" aria-label="Git review">
-			<Show when={reviewAvailable("git")} fallback={<p>{unavailableReason("git")}</p>}>
+			<Show when={gitReviewAvailable()} fallback={<p>{gitReviewUnavailableReason()}</p>}>
 				<div class="review-actions">
 					<button type="button" disabled={gitLoading()} onClick={() => void refreshGit()}>
 						Refresh repository

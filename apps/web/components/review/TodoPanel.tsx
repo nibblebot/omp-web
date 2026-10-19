@@ -4,24 +4,19 @@ import {
 	exportTodos,
 	importTodos,
 	refreshTodos,
-	reviewAvailable,
 	setTodoDraft,
 	todoBoard,
 	todoConflict,
 	todoDraft,
 	todoError,
 	todoLoading,
-	unavailableReason,
 } from "../../store/review";
 
 /** Editable phased todos: same authoritative state, stale-revision conflict refresh. */
 export const TodoPanel: Component = () => {
 	const [error, setError] = createSignal("");
 	const [exported, setExported] = createSignal<string | null>(null);
-	onMount(() => {
-		if (reviewAvailable("todos")) void refreshTodos();
-	});
-	if (!reviewAvailable("todos")) return <div class="msg-notice">{unavailableReason("todos")}</div>;
+	onMount(() => void refreshTodos());
 	return (
 		<div class="review-todos">
 			<Show when={todoLoading()}>

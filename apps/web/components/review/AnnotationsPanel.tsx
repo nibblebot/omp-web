@@ -8,9 +8,7 @@ import {
 	queuedAnnotationIds,
 	refreshAnnotations,
 	removeAnnotation,
-	reviewAvailable,
 	toggleQueuedAnnotation,
-	unavailableReason,
 } from "../../store/review";
 import { sha256Hex } from "../../text/sha256";
 
@@ -18,11 +16,7 @@ import { sha256Hex } from "../../text/sha256";
 export const AnnotationsPanel: Component = () => {
 	const [note, setNote] = createSignal("");
 	const [error, setError] = createSignal("");
-	onMount(() => {
-		if (reviewAvailable("review")) void refreshAnnotations();
-	});
-	if (!reviewAvailable("review"))
-		return <div class="msg-notice">{unavailableReason("review")}</div>;
+	onMount(() => void refreshAnnotations());
 	return (
 		<div class="review-annotations">
 			<Show when={annotationsLoading()}>

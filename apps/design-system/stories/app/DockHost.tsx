@@ -1,7 +1,6 @@
 import { DockHost } from "../../../web/components/app/DockHost";
 import { answerCalls } from "../../daemon";
 import { sessionGraphPage } from "../../fixtures/dialogs";
-import { setState } from "../../../web/state";
 import { openDock } from "../../../web/store/dock";
 import { defineStory } from "../../registry";
 
@@ -26,7 +25,6 @@ export default defineStory({
 			description: "The tree kind mounts the session tree pane in the dock.",
 			seed: () => {
 				openDock("tree");
-				setState("capabilities", { graph: { available: true } });
 				answerCalls({ getSessionGraph: () => sessionGraphPage });
 			},
 			render: () => <DockHost />,

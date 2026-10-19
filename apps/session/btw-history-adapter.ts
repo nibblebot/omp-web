@@ -678,17 +678,13 @@ export async function serviceFor(session: AgentSession): Promise<BtwHistoryServi
 }
 
 // ---------------------------------------------------------------------------
-// PROPOSED WIRE DTOs (for P0; OMP_PROTO stays 2, additive-only). Each call
-// site casts its name `as WebMethodName` with a P0-TODO comment. All methods
-// are Capability-gated: pre-P0 servers reject with unknown-method and the web
-// mirror reports {available:false} instead of failing. Stable ids + cursor
+// PROPOSED WIRE DTOs (for P0; OMP_PROTO stays 2, additive-only). Method
+// names are registered in methods.ts; a server error surfaces as an ordinary
+// failure in the web mirror. Stable ids + cursor
 // paging throughout; never list indexes, message text, or filenames as
 // identity. Side-turn deltas reuse the existing ephemeral_delta SSE frames
 // (streamId = the call's streamId); answers settle via call_result with the
 // standard duplicate-command-result replay.
-//   btwCapabilities {} -> { available: boolean, reason?: string }
-//     reason: server-advertised gate for the whole slice (replaces
-//       unknown-method sniffing once published).
 //   btwList { afterId?: string, limit?: number } -> BtwRecordPage
 //     reason: durable-history list for the attached session scope.
 //   btwSearch { query: string, afterId?: string, limit?: number } -> BtwRecordPage
@@ -731,7 +727,6 @@ export async function serviceFor(session: AgentSession): Promise<BtwHistoryServi
 //     entry.session, entry.session.sessionManager, String(a[0]))
 //   btwPromote: async (entry, a) => (await serviceFor(entry.session)).promoteBtwToBranch(
 //     entry.session, entry.session.sessionManager, String(a[0]))
-//   btwCapabilities: async () => ({ available: true })
 // readOnly: btwList, btwSearch, btwPage, btwCopy, btwPromotePreview (never
 //   mutate); notReadyGated: btwStart, btwFollowUp (need a live model).
 // ---------------------------------------------------------------------------

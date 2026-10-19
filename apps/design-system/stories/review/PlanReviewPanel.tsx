@@ -1,5 +1,5 @@
 import { PlanReviewPanel } from "../../../web/components/review/PlanReviewPanel";
-import { planCalls, reviewCapabilities, reviewPlanChangesRequested } from "../../fixtures/review";
+import { planCalls, reviewPlanChangesRequested } from "../../fixtures/review";
 import { answerCalls } from "../../daemon";
 import { defineStory } from "../../registry";
 
@@ -7,7 +7,6 @@ export default defineStory({
 	id: "review-plan-review-panel",
 	title: "PlanReviewPanel",
 	component: { file: "apps/web/components/review/PlanReviewPanel.tsx", export: "PlanReviewPanel" },
-	seed: { capabilities: reviewCapabilities },
 	variants: [
 		{
 			name: "Waiting for review",

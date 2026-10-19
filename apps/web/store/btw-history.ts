@@ -10,9 +10,7 @@
 //
 // Wire args are positional, as apps/session/methods.ts reads them: btwList
 // [{limit}], btwSearch [query, {limit}], btwPage [recordId, afterKey, limit],
-// btwCancel / btwCopy / btwPromotePreview / btwPromote [recordId]. A daemon
-// without these methods rejects with unknown-method; the mirror then reports
-// {available:false} instead of failing.
+// btwCancel / btwCopy / btwPromotePreview / btwPromote [recordId].
 
 import { createSignal } from "solid-js";
 import { state } from "../state";
@@ -65,14 +63,6 @@ const TURN_STATUSES: ReadonlyArray<BtwTurnStatus> = [
 
 function errText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
-}
-
-/** True when the daemon rejects the call because the method itself does not
- *  exist (pre-P0 server): the slice is unavailable, not broken. */
-function isUnknownMethod(err: unknown): boolean {
-	return /unknown method|no such method|method not found|unknown call|not implemented/i.test(
-		errText(err),
-	);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -189,7 +179,6 @@ export function latestBtwTurn(record: BtwRecordView): BtwTurnView {
 // Mirror signals (local; the shared store is untouched).
 // ---------------------------------------------------------------------------
 
-const [btwHistoryAvailable, setBtwHistoryAvailable] = createSignal<boolean | null>(null);
 const [btwHistoryRecords, setBtwHistoryRecords] = createSignal<BtwRecordView[]>([]);
 const [btwHistoryTotal, setBtwHistoryTotal] = createSignal(0);
 const [btwHistoryLoading, setBtwHistoryLoading] = createSignal(false);
@@ -209,7 +198,6 @@ const [btwPreviewLoading, setBtwPreviewLoading] = createSignal(false);
 const [btwPromoting, setBtwPromoting] = createSignal(false);
 
 export {
-	btwHistoryAvailable,
 	btwHistoryRecords,
 	btwHistoryTotal,
 	btwHistoryLoading,
@@ -222,14 +210,6 @@ export {
 	btwPreviewLoading,
 	btwPromoting,
 };
-
-function markUnavailable(method: string): void {
-	setBtwHistoryAvailable(false);
-	setBtwHistoryError(
-		`Saved side questions are unavailable: this session process does not implement ${method}. ` +
-			"Restart the session with a matching omp-web version.",
-	);
-}
 
 /** True while the /btw sheet is open: only then does a running turn get polled. */
 let viewOpen = false;
@@ -286,14 +266,12 @@ export function refreshBtwHistory(): void {
 	void call("btwList", [{ limit: 50 }])
 		.then((data) => {
 			if (state.sessionId !== scope) return;
-			setBtwHistoryAvailable(true);
 			const { records, total } = normalizeRecords(data);
 			applyRecords(records, total, scope);
 		})
 		.catch((err) => {
 			if (state.sessionId !== scope || isSessionSwitchSupersession(err)) return;
-			if (isUnknownMethod(err)) markUnavailable("btwList");
-			else setBtwHistoryError(errText(err));
+			setBtwHistoryError(errText(err));
 		})
 		.finally(() => {
 			if (state.sessionId === scope) setBtwHistoryLoading(false);
@@ -323,14 +301,12 @@ export function searchBtwHistory(query: string): void {
 	void call("btwSearch", [needle, { limit: 50 }])
 		.then((data) => {
 			if (state.sessionId !== scope) return;
-			setBtwHistoryAvailable(true);
 			const { records, total } = normalizeRecords(data);
 			applyRecords(records, total, scope);
 		})
 		.catch((err) => {
 			if (state.sessionId !== scope || isSessionSwitchSupersession(err)) return;
-			if (isUnknownMethod(err)) markUnavailable("btwSearch");
-			else setBtwHistoryError(errText(err));
+			setBtwHistoryError(errText(err));
 		})
 		.finally(() => {
 			if (state.sessionId === scope) setBtwHistoryLoading(false);
@@ -359,8 +335,7 @@ export function selectBtwRecord(id: string | null): void {
 		})
 		.catch((err) => {
 			if (state.sessionId !== scope || isSessionSwitchSupersession(err)) return;
-			if (isUnknownMethod(err)) markUnavailable("btwPage");
-			else setBtwHistoryError(errText(err));
+			setBtwHistoryError(errText(err));
 			setBtwTranscript({ recordId: id, turns: [], total: 0, loading: false });
 		});
 }
@@ -389,8 +364,7 @@ export function pageBtwTranscript(): void {
 		})
 		.catch((err) => {
 			if (state.sessionId !== scope || isSessionSwitchSupersession(err)) return;
-			if (isUnknownMethod(err)) markUnavailable("btwPage");
-			else setBtwHistoryError(errText(err));
+			setBtwHistoryError(errText(err));
 			setBtwTranscript({ ...current, loading: false });
 		});
 }
@@ -418,8 +392,7 @@ export function copyBtw(recordId: string): void {
 		})
 		.catch((err) => {
 			if (isSessionSwitchSupersession(err)) return;
-			if (isUnknownMethod(err)) markUnavailable("btwCopy");
-			else setBtwHistoryError(errText(err));
+			setBtwHistoryError(errText(err));
 		});
 }
 
@@ -434,8 +407,7 @@ function previewPromoteBtw(recordId: string): void {
 		})
 		.catch((err) => {
 			if (isSessionSwitchSupersession(err)) return;
-			if (isUnknownMethod(err)) markUnavailable("btwPromotePreview");
-			else setBtwHistoryError(errText(err));
+			setBtwHistoryError(errText(err));
 		})
 		.finally(() => setBtwPreviewLoading(false));
 }
@@ -461,8 +433,7 @@ export async function promoteBtw(recordId: string): Promise<boolean> {
 		return true;
 	} catch (err) {
 		if (isSessionSwitchSupersession(err)) return false;
-		if (isUnknownMethod(err)) markUnavailable("btwPromote");
-		else setBtwHistoryError(errText(err));
+		setBtwHistoryError(errText(err));
 		return false;
 	} finally {
 		setBtwPromoting(false);
@@ -502,8 +473,7 @@ export function stopBtwTurn(recordId?: string): void {
 		})
 		.catch((err) => {
 			if (isSessionSwitchSupersession(err)) return;
-			if (isUnknownMethod(err)) markUnavailable("btwCancel");
-			else setBtwHistoryError(errText(err));
+			setBtwHistoryError(errText(err));
 		});
 }
 

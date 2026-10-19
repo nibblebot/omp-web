@@ -2,7 +2,7 @@ import type { DaemonEntry } from "#lib/wire/protocol";
 import { createEffect, createSignal, For, Show, type Component } from "solid-js";
 import { sendDeleteWorktree, setState, state } from "../../../state";
 import { Modal } from "../../ui/Modal";
-import { reviewAvailable, unavailableReason } from "../../../store/review";
+import { gitReviewAvailable, gitReviewUnavailableReason } from "../../../store/review";
 import { attachForPanel } from "../../../store/roster";
 import { openDock } from "../../../store/dock";
 
@@ -264,12 +264,12 @@ export const DeleteWorkspaceDialog: Component = () => {
 							</p>
 						</Show>
 						<div class="ask-actions">
-							<button type="button" disabled={!reviewAvailable("git")} onClick={openReview}>
+							<button type="button" disabled={!gitReviewAvailable()} onClick={openReview}>
 								Open review
 							</button>
 						</div>
-						<Show when={!reviewAvailable("git")}>
-							<p class="danger-confirm-body">{unavailableReason("git")}</p>
+						<Show when={!gitReviewAvailable()}>
+							<p class="danger-confirm-body">{gitReviewUnavailableReason()}</p>
 						</Show>
 					</Show>
 					<Show when={info() !== undefined && info()!.linked && !info()!.dirty && unproven()}>

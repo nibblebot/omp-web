@@ -1,5 +1,5 @@
 import { TodoPanel } from "../../../web/components/review/TodoPanel";
-import { reviewCapabilities, todoCalls } from "../../fixtures/review";
+import { todoCalls } from "../../fixtures/review";
 import { answerCalls } from "../../daemon";
 import { defineStory } from "../../registry";
 
@@ -7,7 +7,6 @@ export default defineStory({
 	id: "review-todo-panel",
 	title: "TodoPanel",
 	component: { file: "apps/web/components/review/TodoPanel.tsx", export: "TodoPanel" },
-	seed: { capabilities: reviewCapabilities },
 	variants: [
 		{
 			name: "Board",

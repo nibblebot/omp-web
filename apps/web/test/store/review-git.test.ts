@@ -31,7 +31,7 @@ const snapshot = {
 };
 
 beforeEach(() => {
-	review.setReviewCaps({ git: { available: true } } as never);
+	setState("capabilities", { git: { available: true } } as never);
 	setState("review", "gitStatus", snapshot as never);
 	setState("review", "gitError", null);
 });

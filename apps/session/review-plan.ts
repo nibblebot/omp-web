@@ -305,20 +305,5 @@ export function createPlanReviewMethods(): Record<
 				await persist(entry, next);
 				return dto(entry, next);
 			}),
-		planCancel: async (entry, args) => {
-			const request = input(args);
-			// Abort outside the tail: aborting waits for the in-flight turn, whose proposal is queued
-			// behind this action.
-			const next = await serialized(entry, async () => {
-				const review = requireReview(entry, request.reviewId);
-				if (review.status !== "waiting") fail("not_eligible", "Plan is not waiting for review");
-				runtime(entry).stopPending = false;
-				const dismissed: Review = { ...review, status: "dismissed" };
-				await persist(entry, dismissed);
-				return dismissed;
-			});
-			await entry.session.abort({ reason: "operator-cancel" });
-			return dto(entry, next);
-		},
 	};
 }

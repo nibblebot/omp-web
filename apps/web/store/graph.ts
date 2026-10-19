@@ -1,13 +1,12 @@
 import type { ImageArg } from "#lib/wire/protocol";
 import { createSignal } from "solid-js";
-import { call, pushNotice, setPromptInsert, state } from "../state";
+import { call, pushNotice, setPromptInsert } from "../state";
 import type { AskOption, AskQuestion } from "../prompt/ask-types";
 import { stashUnsent } from "./drafts";
 import { openDock } from "./dock";
 import { invalidateMentions } from "./models";
 
-/** Authoritative session tree, keyed by stable entry IDs. Optional graph
- * operations require the server's advertised capability. */
+/** Authoritative session tree, keyed by stable entry IDs. */
 
 /**
  * Browser-side graph vocabulary. Wire `GraphNode.type` (P0-owned) uses
@@ -117,16 +116,8 @@ export function graphGeneration(): number {
 	return generation;
 }
 
-function requireGraph(): void {
-	const capability = state.capabilities?.graph;
-	if (capability?.available !== true) {
-		throw new Error(capability?.reason ?? "Session graph is unavailable on this server.");
-	}
-}
-
 /** Load an authoritative page with server-side filtering and paging. */
 export async function loadGraph(query: GraphQuery = {}): Promise<GraphPage> {
-	requireGraph();
 	const gen = generation;
 	const data = (await call("getSessionGraph", [
 		{
@@ -164,7 +155,6 @@ export async function navigateToEntry(
 	opts: { summarize?: boolean; customInstructions?: string } = {},
 	pageRevision?: string,
 ): Promise<NavigateOutcome> {
-	requireGraph();
 	const revision = pageRevision ?? cachedPage?.revision;
 	if (!revision) throw new Error("Load the session graph before navigating.");
 	if (pageRevision !== undefined && cachedPage && pageRevision !== cachedPage.revision) {
@@ -229,7 +219,6 @@ export async function completeAskReanswer(
 	questions: AskQuestion[],
 	answers: Array<{ selected: string[]; custom: string }>,
 ): Promise<void> {
-	requireGraph();
 	const probe = askProbes.get(targetId);
 	if (!probe || probe.generation !== generation) {
 		throw new Error("Ask re-answer is stale; reopen the question from the session graph.");

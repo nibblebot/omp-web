@@ -68,20 +68,5 @@ export default defineStory({
 				</div>
 			),
 		},
-		{
-			name: "Session process predates advisors",
-			description: "The daemon does not know advisorGetStatus, so the panel reports the error.",
-			seed: () =>
-				seedSubagents({
-					advisorGetStatus: () => {
-						throw new Error("Unknown method advisorGetStatus");
-					},
-				}),
-			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<AdvisorPanel />
-				</div>
-			),
-		},
 	],
 });

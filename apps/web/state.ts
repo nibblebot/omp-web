@@ -371,9 +371,6 @@ export const [state, setState] = createStore({
 	pausedQueueCount: 0,
 	messageCount: 0,
 	todoPhases: [] as WebSessionState["todoPhases"],
-	steeringMode: "all" as WebSessionState["steeringMode"],
-	followUpMode: "all" as WebSessionState["followUpMode"],
-	interruptMode: "immediate" as WebSessionState["interruptMode"],
 	autoCompactionEnabled: true,
 	autoRetryEnabled: true,
 	// --- Phase 9: modes & usage parity (WebSessionState mirror) ---
@@ -382,7 +379,6 @@ export const [state, setState] = createStore({
 	planReviewPending: false,
 	fastModeEnabled: false,
 	computerToolEnabled: false,
-	inspectImageMode: "auto" as WebSessionState["inspectImageMode"],
 	// Live auto-retry countdown (auto_retry_start/auto_retry_end events).
 	retryInfo: null as {
 		attempt: number;
@@ -771,9 +767,6 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 		taskModel: s.taskModel,
 		streaming: s.isStreaming,
 		compacting: s.isCompacting,
-		steeringMode: s.steeringMode,
-		followUpMode: s.followUpMode,
-		interruptMode: s.interruptMode,
 		sessionFile: s.sessionFile,
 		sessionId: s.sessionId,
 		sessionName: s.sessionName,
@@ -789,7 +782,6 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 		planReviewPending: s.planReviewPending === true,
 		fastModeEnabled: s.fastModeEnabled,
 		computerToolEnabled: s.computerToolEnabled,
-		inspectImageMode: s.inspectImageMode,
 		// R8: state snapshots carry readyAt once the gate clears. Only apply it
 		// when present so a pre-gate snapshot can't clobber a `ready` broadcast.
 		...(s.readyAt !== undefined ? { readyAt: s.readyAt } : {}),

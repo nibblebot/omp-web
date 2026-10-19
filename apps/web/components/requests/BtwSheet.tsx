@@ -2,7 +2,6 @@ import { For, Show, createSignal, onCleanup, onMount, type Component } from "sol
 import { state } from "../../state";
 import { askBtw, dismissBtw, followUpBtw } from "../../store/btw";
 import {
-	btwHistoryAvailable,
 	btwHistoryError,
 	btwHistoryLoading,
 	btwHistoryNotice,
@@ -169,13 +168,7 @@ export const BtwSheet: Component<{ onClose: () => void }> = (props) => {
 								</button>
 							)}
 						</For>
-						<Show
-							when={
-								btwHistoryAvailable() !== false &&
-								!btwHistoryLoading() &&
-								btwHistoryRecords().length === 0
-							}
-						>
+						<Show when={!btwHistoryLoading() && btwHistoryRecords().length === 0}>
 							<div class="tool-collapsed-note">No saved side questions yet.</div>
 						</Show>
 					</aside>

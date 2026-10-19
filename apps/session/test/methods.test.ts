@@ -1,11 +1,7 @@
 /**
- * Unit tests for the SDK-drift-sensitive rows of the web methods table
- * (apps/session/methods.ts). These rows are the ones 18.x rewrote: computer use is
- * an eval prelude gated by the session-scoped `computer.enabled` setting, and
- * the inspect_image tool is gone. A real daemon covers the reachable wire
- * behavior (apps/session/test/omp-session.test.ts); the branches that depend on session
- * internals (no active prelude, a failing prompt rebuild) are driven here with
- * a stub session so the parity logic is asserted directly.
+ * Unit tests for the web methods table (apps/session/methods.ts): model-role
+ * registry scope and cancellation, default-role mutations that drive the live
+ * thinking level, and setThinkingLevel validation.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -13,7 +9,6 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
 import { cfgModelRoleStorage, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
-import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { ENVELOPE_MAX_BYTES } from "#lib/wire/callback-protocol";
 import type { DownloadManifestResult } from "../download-manifest";
 import { createWebMethods } from "../methods";
@@ -21,35 +16,6 @@ import type { SessionEntry } from "../session-entry";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 afterAll(cleanupTempDirs);
-
-interface StubSession {
-	settings: Settings;
-	getEvalPreludes: () => ReadonlyArray<{ name: string }>;
-	refreshBaseSystemPrompt: () => Promise<void>;
-}
-
-/** A session stub recording the override writes and prompt rebuilds it saw. */
-function stubEntry(opts: { preludes?: ReadonlyArray<{ name: string }>; refreshError?: Error }): {
-	entry: SessionEntry;
-	overrides: Array<boolean>;
-	refreshes: () => number;
-} {
-	const settings = Settings.isolated();
-	let refreshes = 0;
-	const session: StubSession = {
-		settings,
-		getEvalPreludes: () => opts.preludes ?? [],
-		refreshBaseSystemPrompt: async () => {
-			refreshes++;
-			if (opts.refreshError) throw opts.refreshError;
-		},
-	};
-	return {
-		entry: { session } as unknown as SessionEntry,
-		overrides: [],
-		refreshes: () => refreshes,
-	};
-}
 
 function webMethods() {
 	return createWebMethods({
@@ -68,61 +34,6 @@ function webMethods() {
 function methodsTable() {
 	return webMethods().methods;
 }
-
-describe("computer/inspect_image rows after the 18.x drift", () => {
-	test("enabling without an active computer prelude reverts the override and refuses", async () => {
-		// Parity with the SDK's own /computer toggle (applyComputerUseToggle):
-		// the prelude only exists while the eval tool is active, so a session
-		// without one must not be left believing computer use is on.
-		const { entry, refreshes } = stubEntry({ preludes: [] });
-		const methods = methodsTable();
-		await expect(methods.setComputerToolEnabled!(entry, [true])).rejects.toThrow(
-			"unavailable in this session",
-		);
-		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
-		expect(refreshes()).toBe(0);
-	});
-
-	test("enabling with an active prelude keeps the override and rebuilds the prompt", async () => {
-		const { entry, refreshes } = stubEntry({ preludes: [{ name: "computer" }] });
-		const methods = methodsTable();
-		await methods.setComputerToolEnabled!(entry, [true]);
-		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(true);
-		expect(refreshes()).toBe(1);
-	});
-
-	test("a failed prompt rebuild rolls the override back", async () => {
-		// A distinct branch from the missing-prelude refusal above: the override
-		// is already applied when the rebuild throws, so the catch must restore
-		// the previous value before rethrowing.
-		const { entry } = stubEntry({
-			preludes: [{ name: "computer" }],
-			refreshError: new Error("prompt rebuild exploded"),
-		});
-		const methods = methodsTable();
-		await expect(methods.setComputerToolEnabled!(entry, [true])).rejects.toThrow(
-			"prompt rebuild exploded",
-		);
-		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
-	});
-
-	test("disabling needs no prelude and still rebuilds the prompt", async () => {
-		const { entry, refreshes } = stubEntry({ preludes: [] });
-		const methods = methodsTable();
-		await methods.setComputerToolEnabled!(entry, [false]);
-		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
-		expect(refreshes()).toBe(1);
-	});
-
-	test("setInspectImageMode is a loud tombstone, never a silent success", () => {
-		const { entry, refreshes } = stubEntry({ preludes: [{ name: "computer" }] });
-		const methods = methodsTable();
-		// The row throws synchronously; the dispatch core turns that into an
-		// ok:false call_result (asserted over the wire in omp-session.test.ts).
-		expect(() => methods.setInspectImageMode!(entry, ["auto"])).toThrow("inspect_image");
-		expect(refreshes()).toBe(0);
-	});
-});
 
 describe("model-role registry settings preserve scope and cancellation", () => {
 	test("a cancelled default-model switch never overwrites a project assignment", async () => {
@@ -297,42 +208,6 @@ describe("default-role mutations drive the live thinking level", () => {
 		await methodsTable().clearModelRole!(entry, ["default"]);
 		expect(session.model).toEqual(global);
 		expect(session.thinkingLevel).toBe("high");
-	});
-});
-
-describe("getAvailableModels", () => {
-	test("answers with ModelInfo rows that fit one callback envelope on a large catalog", async () => {
-		// Full SDK rows carry per-model compat tables; ~1k of them ran past the
-		// pair's 1 MiB envelope cap, so the answer was rejected and the picker timed out.
-		const catalog = Array.from({ length: 1000 }, (_, i) => ({
-			provider: `p${i % 8}`,
-			id: `model-${i}`,
-			contextWindow: 200_000,
-			reasoning: true,
-			thinking: { mode: "effort", efforts: ["low", "high"] },
-			compat: { notes: "x".repeat(2_000) },
-			cost: { input: 1, output: 2 },
-			baseUrl: "https://example.invalid/v1",
-		}));
-		const entry = {
-			session: {
-				modelRegistry: { awaitBackgroundRefresh: async () => {} },
-				getAvailableModels: () => catalog,
-			},
-		} as unknown as SessionEntry;
-		const result = (await methodsTable().getAvailableModels!(entry, [])) as Array<
-			Record<string, unknown>
-		>;
-		expect(result).toHaveLength(1000);
-		expect(Object.keys(result[0]!).sort()).toEqual([
-			"contextWindow",
-			"id",
-			"provider",
-			"reasoning",
-			"thinking",
-		]);
-		expect(result[0]!.thinking).toEqual(catalog[0]!.thinking);
-		expect(JSON.stringify(result).length).toBeLessThan(ENVELOPE_MAX_BYTES);
 	});
 });
 
@@ -575,9 +450,7 @@ describe("READ_ONLY classification", () => {
 		abortAndPrompt: true,
 		abortBash: true,
 		abortCompaction: true,
-		abortEphemeral: true,
 		abortEval: true,
-		abortRetry: true,
 		advisorConfigure: true,
 		annotationCompose: true,
 		annotationCreate: true,
@@ -591,13 +464,9 @@ describe("READ_ONLY classification", () => {
 		btwStart: true,
 		clearModelRole: true,
 		clearQueue: true,
-		cycleModel: true,
-		cycleThinkingLevel: true,
 		deleteModelPreset: true,
 		dropImages: true,
-		dumpSessionArchive: true,
 		exportDownload: true,
-		exportHtml: true,
 		followUp: true,
 		foreignImport: true,
 		foreignUploadCancel: true,
@@ -619,7 +488,6 @@ describe("READ_ONLY classification", () => {
 		loopPause: true,
 		loopResume: true,
 		loopStart: true,
-		materializeSession: true,
 		mcpAdd: true,
 		mcpDisable: true,
 		mcpEnable: true,
@@ -627,7 +495,6 @@ describe("READ_ONLY classification", () => {
 		mcpReconnect: true,
 		mcpRemove: true,
 		mcpUpdate: true,
-		planCancel: true,
 		planDecide: true,
 		planGet: true,
 		planReopen: true,
@@ -641,19 +508,12 @@ describe("READ_ONLY classification", () => {
 		resumePinToggle: true,
 		resumeQueue: true,
 		retry: true,
-		runEphemeralTurn: true,
 		runQueuedCommandNow: true,
 		runQueuedNow: true,
 		saveModelPreset: true,
 		setAutoCompaction: true,
 		setAutoRetry: true,
-		setComputerToolEnabled: true,
 		setFastMode: true,
-		setFollowUpMode: true,
-		setGoalModeState: true,
-		setInspectImageMode: true,
-		setInterruptMode: true,
-		setModel: true,
 		setModelRole: true,
 		setModelRoleHidden: true,
 		setPlanModeState: true,
@@ -662,7 +522,6 @@ describe("READ_ONLY classification", () => {
 		setPluginSetting: true,
 		setSetting: true,
 		setSkillEnabled: true,
-		setSteeringMode: true,
 		setTaskModel: true,
 		setThinkingLevel: true,
 		shake: true,

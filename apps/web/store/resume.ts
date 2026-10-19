@@ -73,13 +73,6 @@ function errText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
-/** Pre-P0 server: the method itself does not exist — fall back, never hang. */
-function isUnknownMethod(err: unknown): boolean {
-	return /unknown method|no such method|method not found|unknown call|not implemented/i.test(
-		errText(err),
-	);
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
@@ -295,7 +288,7 @@ export {
 // Resume actions
 // ---------------------------------------------------------------------------
 
-/** Capability probe: unknown-method servers degrade to the legacy surface. */
+/** Capability probe: the server's resume-surface verdicts (manage, pins, ...). */
 export function refreshResumeCapabilities(): void {
 	void call("getResumeCapabilities")
 		.then((data) => {
@@ -421,9 +414,7 @@ export function togglePin(sessionId: string): void {
 			}
 		})
 		.catch((err) => {
-			setResumeError(
-				isUnknownMethod(err) ? "Resume-list pins are unavailable on this server." : errText(err),
-			);
+			setResumeError(errText(err));
 		});
 }
 
@@ -605,7 +596,7 @@ export function setForeignSource(source: "claude" | "codex"): void {
 
 /**
  * List foreign sessions (metadata only; authorized fleet-host roots or the
- * default source location). Unknown-method servers report unavailable.
+ * default source location).
  */
 export function listForeign(source: "claude" | "codex", root?: string): Promise<void> {
 	setImportLoading(true);
@@ -624,11 +615,7 @@ export function listForeign(source: "claude" | "codex", root?: string): Promise<
 			setImportCandidates(out);
 		})
 		.catch((err) => {
-			setImportError(
-				isUnknownMethod(err)
-					? `Foreign import from ${source} is unavailable on this server.`
-					: errText(err),
-			);
+			setImportError(errText(err));
 		})
 		.finally(() => setImportLoading(false));
 }

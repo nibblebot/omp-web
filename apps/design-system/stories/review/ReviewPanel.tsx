@@ -2,7 +2,6 @@ import { ReviewPanel } from "../../../web/components/review/ReviewPanel";
 import { setState } from "../../../web/state";
 import {
 	gitCalls,
-	reviewCapabilities,
 	reviewGitDiff,
 	reviewGitDiffBinary,
 	reviewGitStatusUnavailable,
@@ -14,7 +13,7 @@ export default defineStory({
 	id: "review-review-panel",
 	title: "ReviewPanel",
 	component: { file: "apps/web/components/review/ReviewPanel.tsx", export: "ReviewPanel" },
-	seed: { capabilities: reviewCapabilities },
+	seed: { capabilities: { git: { available: true } } },
 	variants: [
 		{
 			name: "Changes",

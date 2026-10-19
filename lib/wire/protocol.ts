@@ -7,20 +7,13 @@ import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { FileEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import type { AvailableSlashCommandSource } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools";
+import type { Capability } from "./browser-ui-contract";
 
 // ---------------------------------------------------------------------------
 // Local copies of the RPC wire types (structurally verbatim from the
 // @oh-my-pi/pi-coding-agent@17.1.8 RPC mode's protocol type definitions).
 // The server no longer spawns the RPC child, so the protocol owns these.
 // ---------------------------------------------------------------------------
-
-/**
- * Vision-delegation mode for the legacy `inspect_image` tool (verbatim
- * 17.1.8 union). The SDK removed that tool in 18.1.9 (`read <image>?q=` owns
- * image questions now), so the wire field stays frozen while the server
- * reports the tool's never-registered state.
- */
-export type InspectImageMode = "auto" | "on" | "off";
 
 /** Pick of Model the model picker consumes (was the RPC client's ModelInfo). */
 export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
@@ -83,9 +76,6 @@ export interface WebSessionState {
 	taskModel?: string;
 	isStreaming: boolean;
 	isCompacting: boolean;
-	steeringMode: "all" | "one-at-a-time";
-	followUpMode: "all" | "one-at-a-time";
-	interruptMode: "immediate" | "wait";
 	sessionFile?: string;
 	/**
 	 * True once the SDK has materialized `sessionFile` on disk. The SDK writes the
@@ -119,11 +109,6 @@ export interface WebSessionState {
 	fastModeEnabled: boolean;
 	/** Whether computer use is enabled for the session (settings.get("computer.enabled")). */
 	computerToolEnabled: boolean;
-	/**
-	 * Effective inspect_image mode. The SDK removed that tool in 18.1.9, so the
-	 * server reports "off" (never registered); the wire field stays frozen.
-	 */
-	inspectImageMode: InspectImageMode;
 }
 
 /** One tool of the live session as `getToolSchemas` answers it (never part of `state`). */
@@ -680,44 +665,27 @@ export type WebMethodName =
 	| "freshSession"
 	| "handoff"
 	| "setSessionName"
-	| "setInterruptMode"
 	// Phase 9 (17.1.8): goal/plan modes are NOT ACP-intercepted; /goal and
 	// /plan fall through to the model. Control relays via these SDK rows.
-	| "setGoalModeState"
 	| "setPlanModeState"
 	| "goalCreate"
 	| "goalPause"
 	| "goalResume"
 	| "goalDrop"
 	| "formatSessionAsText"
-	| "dumpLlmRequestToTmpDir"
-	| "setModel"
 	| "setModelRole"
 	| "clearModelRole"
 	| "setModelRoleHidden"
-	| "cycleModel"
-	| "getAvailableModels"
 	| "setThinkingLevel"
-	| "cycleThinkingLevel"
-	| "setSteeringMode"
-	| "setFollowUpMode"
 	| "setAutoCompaction"
 	| "setAutoRetry"
-	| "abortRetry"
 	| "setFastMode"
-	| "setComputerToolEnabled"
-	| "setInspectImageMode"
-	| "fetchUsageReports"
 	| "getContextBreakdown"
 	| "getToolSchemas"
 	| "bash"
 	| "abortBash"
 	| "python"
 	| "abortEval"
-	// Phase 11: /btw side-channel Q&A (runEphemeralTurn never touches the
-	// transcript); abortEphemeral cancels the in-flight side turn via its signal.
-	| "runEphemeralTurn"
-	| "abortEphemeral"
 	// Composer ghost text: spelling.autocomplete word suffix and its feedback,
 	// composer.predictions next-message prediction (SDK controller, same gates).
 	| "predictWord"
@@ -778,7 +746,6 @@ export type WebMethodName =
 	| "planGet"
 	| "planDecide"
 	| "planReopen"
-	| "planCancel"
 	| "todoGet"
 	| "todoApply"
 	| "todoImport"
@@ -1355,16 +1322,6 @@ export type SessionListEntry = {
 // ---------------------------------------------------------------------------
 
 /**
- * C02: server-advertised availability for one optional capability. The
- * server owns the verdict; the browser never guesses from OMP_PROTO or SDK
- * version. `reason` is a short human-readable why-unavailable string.
- */
-export interface Capability {
-	available: boolean;
-	reason?: string;
-}
-
-/**
  * C03: stable scope binding every mutation to a workspace/session/attachment
  * generation. IDs are opaque server strings; the browser never uses message
  * text, list index, or filename display strings as identity.
@@ -1446,42 +1403,12 @@ export type ReviewAnchor =
 	| { kind: "text"; text: string; contentHash: string };
 
 /**
- * C06: browser extension capability contract stub (G12/P0-C06). The server
- * advertises which extension UI surfaces have a real browser renderer.
- * Terminal-only presentation never gains browser execution authority: an
- * unadvertised surface MUST surface an explicit unsupported diagnostic with
- * safe cancellation, never simulated success or indefinite wait.
- */
-export type BrowserUiCapability = "dialogs" | "editor" | "widget" | "actions";
-
-/** Server-advertised browser-extension UI support, keyed by capability. */
-export type BrowserUiCapabilities = Partial<Record<BrowserUiCapability, Capability>>;
-
-/**
- * C02/C06: additive capability map carried on the attach priming / state
- * snapshots as they grow. Each key is a consumer-domain capability name;
- * unknown keys MUST be ignored by older browsers. Absent map or absent key
- * means unavailable (never guess from version).
+ * C02: server-advertised capability map carried on the attach priming and state
+ * frames. Only verdicts the daemon computes at runtime appear here. Absent map or
+ * absent key means unavailable (never guess from version); unknown keys are ignored.
  */
 export interface ServerCapabilities {
-	browserUi?: BrowserUiCapabilities;
-	graph?: Capability;
-	review?: Capability;
-	planReview?: Capability;
-	todos?: Capability;
 	git?: Capability;
-	workerLifecycle?: Capability;
-	modelPresets?: Capability;
-	temporaryModel?: Capability;
-	modelMentions?: Capability;
-	advisor?: Capability;
-	goals?: Capability;
-	loops?: Capability;
-	vibe?: Capability;
-	btwHistory?: Capability;
-	downloads?: Capability;
-	resumeImport?: Capability;
-	[key: string]: Capability | BrowserUiCapabilities | undefined;
 }
 
 // ---------------------------------------------------------------------------

@@ -68,23 +68,6 @@ const CAPABILITIES: Record<BrowserUiCapability, Capability> = {
 	},
 };
 
-export interface BrowserUiCapabilitiesSnapshot {
-	version: number;
-	maxPayloadBytes: number;
-	capabilities: Record<BrowserUiCapability, Capability>;
-}
-
-/** Capability gate for the browser host. Returns fresh copies (callers cannot mutate the table). */
-export function getBrowserUiCapabilities(): BrowserUiCapabilitiesSnapshot {
-	const capabilities = {} as Record<BrowserUiCapability, Capability>;
-	for (const name of CAPABILITY_NAMES) capabilities[name] = { ...CAPABILITIES[name] };
-	return {
-		version: BROWSER_UI_VERSION,
-		maxPayloadBytes: MAX_BROWSER_UI_PAYLOAD_BYTES,
-		capabilities,
-	};
-}
-
 /** Type guard for the closed capability union (undeclared strings fail). */
 export function isBrowserUiCapability(value: unknown): value is BrowserUiCapability {
 	return typeof value === "string" && (CAPABILITY_NAMES as readonly string[]).includes(value);

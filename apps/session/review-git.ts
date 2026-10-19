@@ -651,16 +651,6 @@ export class RepoAdapter {
 		}
 	}
 
-	/** Raw unstaged patch for hunk validation / revision compare (bounded). */
-	async unstagedPatch(maxBytes = 1024 * 1024): Promise<{ patch: string; truncated: boolean }> {
-		const repo = this.repo();
-		const patch = await repo.diffText({}, null).catch((error: unknown) => {
-			throw new Error(`git diff failed: ${vcsMessage(error)}`);
-		});
-		if (patch.length > maxBytes) return { patch: patch.slice(0, maxBytes), truncated: true };
-		return { patch, truncated: false };
-	}
-
 	toDto(snap: RepoSnapshot): GitStatusDto {
 		return {
 			available: snap.available,
@@ -750,6 +740,5 @@ export function createGitReviewMethods(): Record<
 			const area = input.area === "staged" || input.area === "commit" ? input.area : "unstaged";
 			return adapter(entry).fileDiff(String(input.path ?? ""), area);
 		},
-		gitUnstagedPatch: async (entry) => adapter(entry).unstagedPatch(),
 	};
 }

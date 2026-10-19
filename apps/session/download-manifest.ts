@@ -27,12 +27,6 @@
 // lib/wire/protocol.ts + apps/session/methods.ts, this module is the impl):
 //   downloadManifest(args: DownloadManifestArgs) -> DownloadManifestResult
 //     read-only row: buildDownloadManifest() below; never wakes compute.
-//   dumpSessionArchive() -> DumpArchiveWithManifest
-//     { path, files, subagentCount, subagentError?, clientFilename } row
-//     wiring entry.session.dumpSessionArchiveToTmpDir() + resolveDownloadPath.
-//   exportHtml([outputPath?, useUserThemes?]) -> ExportHtmlWithManifest
-//     existing row's { path } extended with clientFilename from
-//     resolveDownloadPath("html"|"html-themed", ...).
 //   DownloadKind enum: "html" | "html-themed" | "text" | "request" | "archive".
 //   Capability advertisement: Capability{available, reason} per daemon.
 
@@ -662,5 +656,5 @@ export function createDownloadMethods(deps: DownloadMethodsDeps) {
 			throw err;
 		}
 	};
-	return { downloadManifest, exportDownload, dumpSessionArchive: exportDownload };
+	return { downloadManifest, exportDownload };
 }

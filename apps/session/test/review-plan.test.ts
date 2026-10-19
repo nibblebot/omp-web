@@ -179,18 +179,6 @@ describe("plan decisions while the model works", () => {
 		expect(planReviewWaiting(entry)).toBe(true);
 	});
 
-	test("cancel answers while the aborted turn's resubmission is in flight", async () => {
-		const { runtime, entry, methods, propose, current } = await fixture();
-		await propose();
-		const review = await current();
-		// Aborting waits for the in-flight turn, which is still submitting its plan.
-		hooks(entry).abort = async () => {
-			await runtime.proposal!("Ship it, again");
-		};
-		const next = (await methods.planCancel!(entry, [{ reviewId: review.reviewId }])) as Dto;
-		expect(next.status).toBe("dismissed");
-	});
-
 	test("a failing revision turn surfaces as a notice instead of failing the decision", async () => {
 		const { runtime, entry, methods, propose, current } = await fixture();
 		const noticed = Promise.withResolvers<string>();

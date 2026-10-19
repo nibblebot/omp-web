@@ -224,14 +224,14 @@ describe("pins", () => {
 		expect(resumePinnedIds()).toEqual([]);
 	});
 
-	test("a server without pins reports it and leaves the mirror unchanged", async () => {
+	test("a rejected pin toggle surfaces the server error and leaves the mirror unchanged", async () => {
 		const loaded = searchResume("");
 		await answer("resumeList", { candidates: [candidate("a")], total: 1 });
 		await loaded;
 
 		togglePin("a");
-		await answer("resumePinToggle", undefined, false, "Unknown method: resumePinToggle");
-		expect(resumeError()).toBe("Resume-list pins are unavailable on this server.");
+		await answer("resumePinToggle", undefined, false, "resume pins file is read-only");
+		expect(resumeError()).toBe("resume pins file is read-only");
 		expect(resumeCandidates().map((c) => c.pinned)).toEqual([false]);
 	});
 });

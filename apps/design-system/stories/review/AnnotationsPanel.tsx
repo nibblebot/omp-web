@@ -1,5 +1,5 @@
 import { AnnotationsPanel } from "../../../web/components/review/AnnotationsPanel";
-import { annotationCalls, reviewCapabilities } from "../../fixtures/review";
+import { annotationCalls } from "../../fixtures/review";
 import { answerCalls } from "../../daemon";
 import { defineStory } from "../../registry";
 
@@ -10,7 +10,6 @@ export default defineStory({
 		file: "apps/web/components/review/AnnotationsPanel.tsx",
 		export: "AnnotationsPanel",
 	},
-	seed: { capabilities: reviewCapabilities },
 	variants: [
 		{
 			name: "Annotations",

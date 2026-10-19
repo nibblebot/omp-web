@@ -26,10 +26,6 @@
 //     -> DownloadManifestResult (see apps/session/download-manifest.ts);
 //     each call below casts the method name `as WebMethodName` with a
 //     P0-TODO comment until P0 canonicalizes it.
-//   dumpSessionArchive() -> DumpArchiveWithManifest
-//     { path, files, subagentCount, subagentError?, clientFilename }.
-//   exportHtml([outputPath?, useUserThemes?]) -> ExportHtmlWithManifest
-//     existing { path } plus clientFilename.
 // WIRING NOTE: this module is intentionally NOT registered in state.ts or
 // overlays/index.ts. To mount, render DownloadDialog from
 // components/requests/DownloadDialog.tsx and call its openDownload() entry.

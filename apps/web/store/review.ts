@@ -3,7 +3,6 @@ import type {
 	PlanReviewDto,
 	ReviewAnchor,
 	ReviewAnnotationDto,
-	ServerCapabilities,
 	TodoBoardDto,
 	WebMethodName,
 } from "#lib/wire/protocol";
@@ -12,14 +11,9 @@ import { setPromptInsert, setState, state } from "../state";
 import { requestDangerConfirm } from "../prompt/danger-confirm";
 import { call } from "./transport";
 
-export const reviewCaps = (): ServerCapabilities => state.capabilities ?? {};
-export const setReviewCaps = (caps: ServerCapabilities): void => {
-	setState("capabilities", caps);
-};
-export const reviewAvailable = (key: "git" | "planReview" | "review" | "todos"): boolean =>
-	reviewCaps()[key]?.available === true;
-export const unavailableReason = (key: "git" | "planReview" | "review" | "todos"): string =>
-	reviewCaps()[key]?.reason ?? "This server does not advertise this capability.";
+export const gitReviewAvailable = (): boolean => state.capabilities?.git?.available === true;
+export const gitReviewUnavailableReason = (): string =>
+	state.capabilities?.git?.reason ?? "This server does not advertise git review.";
 export const gitStatus = () => state.review.gitStatus;
 export const gitLoading = () => state.review.gitLoading;
 export const gitError = () => state.review.gitError;
@@ -45,7 +39,7 @@ export const setTodoDraft = (text: string): void => {
 	setState("review", "todoDraft", text);
 };
 
-// P0 publishes the method vocabulary; capability verdicts, never version checks, authorize calls.
+// Methods dispatch by name; only the git verdict gates calls, never version checks.
 const rpc = <T>(method: string, args: unknown[] | Record<string, unknown> = {}): Promise<T> =>
 	call(method as WebMethodName, Array.isArray(args) ? args : [args]) as Promise<T>;
 const message = (error: unknown): string =>
@@ -54,11 +48,10 @@ export const isStaleError = (error: unknown): boolean =>
 	/stale|revision|fingerprint|version|conflict/i.test(message(error));
 async function run<T>(
 	domain: "git" | "plan" | "annotations" | "todo",
-	capability: "git" | "planReview" | "review" | "todos",
 	task: () => Promise<T>,
 	onStale?: () => Promise<unknown>,
 ): Promise<T | undefined> {
-	if (!reviewAvailable(capability) || state.review[`${domain}Loading`]) return;
+	if ((domain === "git" && !gitReviewAvailable()) || state.review[`${domain}Loading`]) return;
 	const epoch = state.review.generation;
 	setState("review", `${domain}Loading`, true);
 	setState("review", `${domain}Error`, null);
@@ -94,7 +87,7 @@ async function getGit(): Promise<void> {
 		setState("review", "selectedHunks", []);
 	}
 }
-export const refreshGit = () => run("git", "git", getGit);
+export const refreshGit = () => run("git", getGit);
 export function toggleGitPath(path: string): void {
 	setState("review", "gitSelection", (values) =>
 		values.includes(path) ? values.filter((value) => value !== path) : [...values, path],
@@ -112,7 +105,6 @@ async function mutateGit(
 	const snapshot = gitStatus();
 	if (!snapshot) return;
 	return run(
-		"git",
 		"git",
 		async () => {
 			const epoch = state.review.generation;
@@ -178,7 +170,7 @@ export function guardDraftEscape(event: KeyboardEvent, draft: string): void {
 	if (event.key === "Escape" && draft.trim() !== "") event.preventDefault();
 }
 export const loadFileDiff = (path: string, area: GitReviewDiff["area"] = "unstaged") =>
-	run("git", "git", async () => {
+	run("git", async () => {
 		const epoch = state.review.generation;
 		const result = await rpc<Omit<GitReviewDiff, "path" | "area">>("gitFileDiff", { path, area });
 		if (epoch !== state.review.generation) return;
@@ -190,13 +182,12 @@ async function getPlan(): Promise<void> {
 	const value = await rpc<PlanReviewDto | null>("planGet");
 	if (epoch === state.review.generation) setState("review", "planReview", value);
 }
-export const refreshPlan = () => run("plan", "planReview", getPlan);
+export const refreshPlan = () => run("plan", getPlan);
 async function mutatePlan(method: string, extra: Record<string, unknown> = {}) {
 	const snapshot = planReview();
 	if (!snapshot) return;
 	return run(
 		"plan",
-		"planReview",
 		async () => {
 			const epoch = state.review.generation;
 			await rpc(method, { reviewId: snapshot.reviewId, version: snapshot.version, ...extra });
@@ -218,11 +209,10 @@ async function getAnnotations(): Promise<void> {
 	const value = await rpc<ReviewAnnotationDto[]>("annotationList");
 	if (epoch === state.review.generation) setState("review", "annotations", value);
 }
-export const refreshAnnotations = () => run("annotations", "review", getAnnotations);
+export const refreshAnnotations = () => run("annotations", getAnnotations);
 async function mutateAnnotation(method: string, args: Record<string, unknown>) {
 	return run(
 		"annotations",
-		"review",
 		async () => {
 			const epoch = state.review.generation;
 			await rpc(method, args);
@@ -267,7 +257,7 @@ export const composeForComposer = (
 	ids: string[] = annotations().map((row) => row.id),
 	supplemental?: string,
 ) =>
-	run("annotations", "review", async () => {
+	run("annotations", async () => {
 		const epoch = state.review.generation;
 		const result = await rpc<{ intent: string; prompt: string; submitted: boolean }>(
 			"annotationCompose",
@@ -308,13 +298,12 @@ async function getTodos(): Promise<void> {
 	const value = await rpc<TodoBoardDto>("todoGet");
 	if (epoch === state.review.generation) setState("review", "todoBoard", value);
 }
-export const refreshTodos = () => run("todo", "todos", getTodos);
+export const refreshTodos = () => run("todo", getTodos);
 async function mutateTodos(method: string, args: Record<string, unknown>) {
 	const snapshot = todoBoard();
 	if (!snapshot) return;
 	return run(
 		"todo",
-		"todos",
 		async () => {
 			const epoch = state.review.generation;
 			const result = await rpc<{ errors?: string[] }>(method, {
@@ -333,5 +322,4 @@ async function mutateTodos(method: string, args: Record<string, unknown>) {
 export const applyTodoOps = (ops: TodoReviewOp[]) => mutateTodos("todoApply", { ops });
 export const importTodos = (markdown: string, confirmed = false) =>
 	confirmed ? mutateTodos("todoImport", { markdown, confirmed }) : Promise.resolve(undefined);
-export const exportTodos = () =>
-	run("todo", "todos", () => rpc<{ markdown: string }>("todoExport"));
+export const exportTodos = () => run("todo", () => rpc<{ markdown: string }>("todoExport"));
