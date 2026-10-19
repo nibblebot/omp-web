@@ -19,13 +19,23 @@
 
 import type { Stats } from "node:fs";
 import { open, stat } from "node:fs/promises";
+import { ByteLru } from "#lib/platform/byte-lru";
 
 /** Head chunk: the title slot is 256 B and the header line is small; a few
  *  KB covers both with slack, never pulling the transcript body. */
 const HEAD_BYTES = 8 * 1024;
 
-const HEAD_CACHE_MAX = 100;
-const headCache = new Map<string, { title: string | undefined; empty: boolean }>();
+/**
+ * Head results are a few hundred bytes each, so the budget is in bytes: a
+ * count cap (the old 100 entries) thrashed on any poll touching more files
+ * than the cap, re-reading every head on every pass.
+ */
+const HEAD_CACHE_MAX_BYTES = 8 * 1024 * 1024;
+const HEAD_CACHE_MAX_ENTRY_BYTES = 64 * 1024;
+const headCache = new ByteLru<{ title: string | undefined; empty: boolean }>({
+	maxBytes: HEAD_CACHE_MAX_BYTES,
+	maxEntryBytes: HEAD_CACHE_MAX_ENTRY_BYTES,
+});
 
 function cacheKey(abs: string, mtimeMs: number, size: number): string {
 	return `${abs}\u0000${mtimeMs}\u0000${size}`;
@@ -77,17 +87,14 @@ function hasMessageMarker(chunk: string): boolean {
 	return false;
 }
 
-/** Cache a parsed result under (path, mtime, size), evicting LRU. */
+/** Cache a parsed result under (path, mtime, size); cost is path + title length + fixed overhead. */
 function cacheResult(
 	st: Stats,
 	abs: string,
 	value: { title: string | undefined; empty: boolean },
 ): void {
-	headCache.set(cacheKey(abs, st.mtimeMs, st.size), value);
-	if (headCache.size > HEAD_CACHE_MAX) {
-		const oldest = headCache.keys().next().value;
-		if (oldest !== undefined) headCache.delete(oldest);
-	}
+	const cost = abs.length + (value.title?.length ?? 0) + 64;
+	headCache.set(cacheKey(abs, st.mtimeMs, st.size), value, cost);
 }
 
 /**
@@ -112,11 +119,7 @@ export async function readSessionInfo(path: string): Promise<{
 	if (!st.isFile()) return { title: undefined, empty: true };
 	const key = cacheKey(path, st.mtimeMs, st.size);
 	const hit = headCache.get(key);
-	if (hit !== undefined) {
-		headCache.delete(key); // refresh LRU recency
-		headCache.set(key, hit);
-		return hit;
-	}
+	if (hit !== undefined) return hit;
 	let chunk: string;
 	try {
 		const fh = await open(path, "r");

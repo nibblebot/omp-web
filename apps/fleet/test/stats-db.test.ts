@@ -117,4 +117,31 @@ describe("StatsDbManagerImpl", () => {
 			m.close();
 		}
 	});
+
+	test("FPS-21: after a direct open fails, a rotation reprobe copies without retrying the direct open", () => {
+		const dbPath = join(tempDir("svm-"), "stats.db");
+		writeDb(dbPath, "one");
+		const directAttempts: string[] = [];
+		const m = new StatsDbManagerImpl(dbPath, (p) => {
+			if (p === dbPath) {
+				directAttempts.push(p);
+				throw new Error("simulated SQLITE_READONLY_CANTINIT");
+			}
+			const db = new Database(p, { readonly: true });
+			db.exec("PRAGMA query_only = ON");
+			return db;
+		});
+		try {
+			expect(m.fromCopy()).toBe(true);
+			expect(directAttempts).toHaveLength(1);
+
+			writeDb(dbPath, "two-two-two-two-two"); // rotate the target
+			m.reprobe();
+			expect(m.fromCopy()).toBe(true);
+			expect(readMarker(m.db()!)).toBe("two-two-two-two-two"); // copy is still fresh
+			expect(directAttempts).toHaveLength(1); // no repeated failing direct open
+		} finally {
+			m.close();
+		}
+	});
 });

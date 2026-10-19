@@ -39,6 +39,8 @@ export class StatsDbManagerImpl implements StatsDbManager {
 	#handle: Database | null = null;
 	#path: string | null = null;
 	#fromCopy = false;
+	/** true once a direct open failed for the current target; later opens copy first */
+	#directOpenFailed = false;
 	#tempDir: string | null = null;
 	/** last observed stat of the target (null = missing at last probe) */
 	#stat: DbStat | null = null;
@@ -76,6 +78,7 @@ export class StatsDbManagerImpl implements StatsDbManager {
 			// (and any temp copy) before reopening.
 			this.#dispose();
 		}
+		if (!stat) this.#directOpenFailed = false; // gone: a file that returns gets a direct open first
 		if (stat) this.#open(stat);
 		this.#stat = stat; // null when missing, so a later probe sees missing→present
 	}
@@ -118,19 +121,24 @@ export class StatsDbManagerImpl implements StatsDbManager {
 	}
 
 	#open(stat: DbStat): void {
-		// Direct readonly open.
-		try {
-			const db = this.#openDb(this.#target);
-			this.#handle = db;
-			this.#path = this.#target;
-			this.#fromCopy = false;
-			this.#stat = stat;
-			return;
-		} catch (err) {
-			console.error("[stats-db] open failed; trying WAL fallback", {
-				path: this.#target,
-				error: err,
-			});
+		// Direct readonly open. Once it has failed for this target it is skipped:
+		// each sync reprobes, and repeating the failing open and its error log
+		// before every copy added cost for no benefit (FPS-21).
+		if (!this.#directOpenFailed) {
+			try {
+				const db = this.#openDb(this.#target);
+				this.#handle = db;
+				this.#path = this.#target;
+				this.#fromCopy = false;
+				this.#stat = stat;
+				return;
+			} catch (err) {
+				this.#directOpenFailed = true;
+				console.error("[stats-db] open failed; trying WAL fallback", {
+					path: this.#target,
+					error: err,
+				});
+			}
 		}
 		// WAL fallback: copy db + sidecars into a fresh temp dir, then open the
 		// copy. Each sidecar is copied to a temp name and renamed into place so

@@ -16,7 +16,7 @@
  * health route re-probes per request).
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { createStatsApp, type StatsApp } from "../stats-app";
@@ -151,4 +151,50 @@ describe("sessions list cache", () => {
 		expect(await sessionsOf(none)).toHaveLength(0);
 		expect(sessionsWalkCounter.runs).toBe(runsBefore);
 	});
+});
+
+describe("sessions list keeps per-file heads cached across recomputes (FPS-06)", () => {
+	test("a recompute after a directory change serves unchanged files from cache past the old 100-entry cap", async () => {
+		const root = tempDir("omp-cache-heads-");
+		const cfg2: StatsConfig = {
+			configRoot: join(root, "config"),
+			statsDbPath: join(root, "config", "stats.db"),
+			sessionsDir: join(root, "agent", "sessions"),
+		};
+		const proj = join(cfg2.sessionsDir, "proj");
+		mkdirSync(proj, { recursive: true });
+		mkdirSync(cfg2.configRoot, { recursive: true });
+		// Title slot padded to a fixed 256 bytes so same-length rewrites keep the file size.
+		const body = (title: string): string =>
+			JSON.stringify({ type: "title", title }).padEnd(256, " ") +
+			"\n" +
+			JSON.stringify({ type: "session", id: "s", cwd: "/tmp" }) +
+			"\n";
+		for (let i = 0; i < 150; i++) writeFileSync(join(proj, `s-${i}.jsonl`), body(`T${i}`));
+
+		const app2 = createStatsApp(cfg2);
+		const listOf = async (): Promise<Array<SessionRow & { title: string | null }>> => {
+			const res = await handleFetch(app2, "/ctl/stats/sessions");
+			if (!res) throw new Error("expected response");
+			const parsed: { sessions: Array<SessionRow & { title: string | null }> } = await res.json();
+			return parsed.sessions;
+		};
+		try {
+			expect(await listOf()).toHaveLength(150); // one sweep fills every head
+
+			// Same size and original mtime: only a cached head can still report T0.
+			const p0 = join(proj, "s-0.jsonl");
+			const st = statSync(p0);
+			writeFileSync(p0, body("X0"));
+			utimesSync(p0, st.atimeMs / 1000, st.mtimeMs / 1000);
+			// A new file changes the directory stat, forcing a recompute of the list.
+			writeFileSync(join(proj, "s-new.jsonl"), body("New"));
+
+			const list = await listOf();
+			expect(list).toHaveLength(151); // proves the recompute ran
+			expect(list.find((s) => s.file === "proj/s-0.jsonl")?.title).toBe("T0");
+		} finally {
+			await app2.close();
+		}
+	}, 30000);
 });

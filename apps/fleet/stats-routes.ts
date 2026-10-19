@@ -32,6 +32,7 @@ import type {
 	RawEntry,
 	LongestCall,
 } from "#lib/wire/stats-types";
+import { ByteLru } from "#lib/platform/byte-lru";
 
 // ---------------------------------------------------------------------------
 // GET /ctl/stats/tools returns a global tool breakdown across all sessions.
@@ -219,25 +220,24 @@ interface JsonlPass {
 	longestCall: LongestCall | null;
 }
 
-const JSONL_CACHE_MAX = 100;
-const jsonlCache = new Map<string, { mtimeMs: number; size: number; result: JsonlPass }>();
+/** Estimated retained bytes per cached pass: fixed overhead plus one slot per tool. */
+const PASS_BASE_BYTES = 512;
+const PASS_TOOL_BYTES = 256;
+const JSONL_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const jsonlCache = new ByteLru<{ mtimeMs: number; size: number; result: JsonlPass }>({
+	maxBytes: JSONL_CACHE_MAX_BYTES,
+	maxEntryBytes: JSONL_CACHE_MAX_BYTES,
+});
 
 /** Run the JSONL pass, caching by (mtimeMs, size). Returns null when the file is missing/unreadable. */
 async function cachedJsonlPass(abs: string): Promise<JsonlPass | null> {
 	try {
 		const st = statSync(abs);
 		const hit = jsonlCache.get(abs);
-		if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
-			jsonlCache.delete(abs); // refresh recency
-			jsonlCache.set(abs, hit);
-			return hit.result;
-		}
+		if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.result;
 		const result = await jsonlPass(abs);
-		jsonlCache.set(abs, { mtimeMs: st.mtimeMs, size: st.size, result });
-		if (jsonlCache.size > JSONL_CACHE_MAX) {
-			const oldest = jsonlCache.keys().next().value;
-			if (oldest !== undefined) jsonlCache.delete(oldest);
-		}
+		const cost = PASS_BASE_BYTES + result.tools.size * PASS_TOOL_BYTES;
+		jsonlCache.set(abs, { mtimeMs: st.mtimeMs, size: st.size, result }, cost);
 		return result;
 	} catch {
 		return null;

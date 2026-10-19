@@ -9,7 +9,7 @@
  * cache-hit/read-share behavior is asserted through jsonlCacheStats deltas.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { jsonlCacheStats, loadJsonl, readRange } from "../stats-jsonl";
@@ -28,6 +28,7 @@ afterAll(async () => {
 
 afterEach(() => {
 	delete process.env.PI_MAX_JSONL_BYTES;
+	delete process.env.PI_JSONL_CACHE_MAX_BYTES;
 });
 
 describe("loadJsonl line handling", () => {
@@ -158,17 +159,20 @@ describe("cache", () => {
 		expect(d2!.totalLines).toBe(3);
 	});
 
-	test("LRU bound: 101st file evicts the oldest; recency refresh protects hot files", async () => {
+	test("byte bound: the overflowing file evicts the least recent; recency refresh protects hot files", async () => {
+		// Fixed-width payloads make every file cost the same, so the budget holds exactly 100.
 		const paths: string[] = [];
 		for (let i = 0; i <= 100; i++) {
 			const p = f(`lru-${i}.jsonl`);
-			await writeFile(p, `${entry(i)}\n`);
+			await writeFile(p, `${JSON.stringify({ type: "message", n: String(i).padStart(3, "0") })}\n`);
 			paths.push(p);
 		}
+		const size = (await stat(paths[0]!)).size;
+		process.env.PI_JSONL_CACHE_MAX_BYTES = String(100 * size * 4); // 4 = HEAP_FACTOR
 		const before = jsonlCacheStats();
-		for (let i = 0; i < 100; i++) await loadJsonl(paths[i]!); // fills the cache
+		for (let i = 0; i < 100; i++) await loadJsonl(paths[i]!); // fills the budget
 		await loadJsonl(paths[0]!); // recency refresh → file 0 is now newest
-		await loadJsonl(paths[100]!); // 101st distinct → evicts oldest = file 1
+		await loadJsonl(paths[100]!); // 101st file overflows → evicts oldest = file 1
 		const after101 = jsonlCacheStats();
 		expect(after101.misses - before.misses).toBe(101); // 100 + the 101st file
 		expect(after101.hits - before.hits).toBe(1); // the refresh of file 0
@@ -183,6 +187,18 @@ describe("cache", () => {
 		await loadJsonl(paths[1]!); // evicted → re-parsed
 		const after1 = jsonlCacheStats();
 		expect(after1.misses - m1.misses).toBe(1);
+	});
+
+	test("a doc costing more than the byte budget is parsed for the caller but never retained", async () => {
+		const p = f("oversize.jsonl");
+		await writeFile(p, `${entry(1)}\n`);
+		process.env.PI_JSONL_CACHE_MAX_BYTES = "1";
+		const before = jsonlCacheStats();
+		expect(await loadJsonl(p)).not.toBeNull();
+		expect(await loadJsonl(p)).not.toBeNull();
+		const after = jsonlCacheStats();
+		expect(after.misses - before.misses).toBe(2); // never retained, so no hit
+		expect(after.hits - before.hits).toBe(0);
 	});
 
 	test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(

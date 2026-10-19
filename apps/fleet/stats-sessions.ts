@@ -15,6 +15,7 @@ import { walkJsonl } from "./stats-sessions-index";
 import { readStoredHead, storeFileKey } from "./stats-store-index";
 import type { AppCtx, Route } from "./stats-types";
 import type { RawEntry, SessionSummary } from "#lib/wire/stats-types";
+import { ByteLru } from "#lib/platform/byte-lru";
 import { normDbFile, isMainSession, folderOf } from "./stats-paths";
 import type { StatsConfig } from "./stats-config";
 
@@ -207,9 +208,18 @@ interface UserRow {
 	chars: number | null;
 }
 
-/** Header extraction cache keyed by (abs, mtimeMs, size), cheap across requests. */
-const headCache = new Map<string, HeaderInfo>();
-const HEAD_CACHE_MAX = 100;
+/**
+ * Header extraction cache keyed by (abs, mtimeMs, size). Byte-bounded so a
+ * list recompute after one file changes re-parses only that file, not every
+ * session beyond a count cap (FPS-06: a 100-entry cap over 3000 sessions
+ * re-parsed the whole store on every list pass).
+ */
+const HEAD_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const HEAD_CACHE_MAX_ENTRY_BYTES = 8 * 1024 * 1024;
+const headCache = new ByteLru<HeaderInfo>({
+	maxBytes: HEAD_CACHE_MAX_BYTES,
+	maxEntryBytes: HEAD_CACHE_MAX_ENTRY_BYTES,
+});
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
 
@@ -217,16 +227,12 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.length > 
  * Title slot (line 1: {"type":"title",…}) + session header
  * (line 2: {"type":"session",…,"title"?,"id","cwd"}), read from the shared
  * JSONL layer's first parsed entries. Prefer the title-slot title, fall back
- * to the header title, else null. LRU-bounded by HEAD_CACHE_MAX.
+ * to the header title, else null. Byte-bounded by HEAD_CACHE_MAX_BYTES.
  */
 async function readHead(abs: string, mtimeMs: number, size: number): Promise<HeaderInfo> {
 	const key = `${abs}\u0000${mtimeMs}\u0000${size}`;
 	const hit = headCache.get(key);
-	if (hit) {
-		headCache.delete(key); // refresh recency
-		headCache.set(key, hit);
-		return hit;
-	}
+	if (hit) return hit;
 	let info: HeaderInfo = { title: null, id: null, cwd: null, firstPrompt: null, searchText: "" };
 	const doc = await loadJsonl(abs);
 	if (doc) {
@@ -248,11 +254,15 @@ async function readHead(abs: string, mtimeMs: number, size: number): Promise<Hea
 			searchText: convo.searchText,
 		};
 	}
-	headCache.set(key, info);
-	if (headCache.size > HEAD_CACHE_MAX) {
-		const oldest = headCache.keys().next().value;
-		if (oldest !== undefined) headCache.delete(oldest);
-	}
+	const cost =
+		abs.length +
+		info.searchText.length +
+		(info.title?.length ?? 0) +
+		(info.firstPrompt?.length ?? 0) +
+		(info.cwd?.length ?? 0) +
+		(info.id?.length ?? 0) +
+		128;
+	headCache.set(key, info, cost);
 	return info;
 }
 

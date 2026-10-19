@@ -175,4 +175,20 @@ describe("readSessionInfo", () => {
 
 		await expect(readSessionInfo(path)).resolves.toEqual({ title: undefined, empty: false });
 	}, 5000);
+
+	test("a sweep wider than the old 100-entry cap keeps earlier heads cached (FLC-17)", async () => {
+		const dir = tempDir("omp-session-sweep-");
+		const paths: string[] = [];
+		for (let i = 0; i < 150; i++) {
+			const p = join(dir, `s-${i}.jsonl`);
+			writeFileSync(p, titleLine(`T${i}`) + headerLine());
+			paths.push(p);
+		}
+		for (const p of paths) await readSessionInfo(p); // one sweep fills the cache
+		// Same size, original mtime: only a cache hit can still report the old title.
+		const st = statSync(paths[0]!);
+		writeFileSync(paths[0]!, titleLine("X0") + headerLine());
+		utimesSync(paths[0]!, st.atimeMs / 1000, st.mtimeMs / 1000);
+		await expect(readSessionInfo(paths[0]!)).resolves.toEqual({ title: "T0", empty: true });
+	});
 });

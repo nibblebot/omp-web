@@ -4,9 +4,9 @@
  * Session files can be huge (11 MB+), truncated by crashes, or contain
  * corrupt trailing lines. Every parse is defensive.
  *
- * ONE shared parse per (abs, mtimeMs, size): an LRU cache (max 100 docs)
- * plus in-flight dedup, so concurrent callers for the same file share a
- * single read + parse. Corrupt lines are skipped in `entries` but never
+ * ONE shared parse per (abs, mtimeMs, size): a byte-bounded LRU (see
+ * DOC_CACHE_MAX_BYTES) plus in-flight dedup, so concurrent callers for the
+ * same file share a single read + parse. Corrupt lines are skipped in `entries` but never
  * shift paging: `lineIndex[i]` holds the raw 0-based JSONL line number of
  * `entries[i]`, and `readRange` pages over RAW line windows
  * [offset, offset+limit). A corrupt line inside the window only yields a
@@ -24,6 +24,8 @@
 import { open, readFile, stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import type { RawEntry } from "#lib/wire/stats-types";
+import { ByteLru } from "#lib/platform/byte-lru";
+import type { ByteLruLimits } from "#lib/platform/byte-lru";
 
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 
@@ -36,8 +38,25 @@ function maxJsonlBytes(): number {
 	return Number.isFinite(v) && v > 0 ? Math.floor(v) : MAX_JSONL_BYTES;
 }
 
-const CACHE_MAX = 100;
-const docCache = new Map<string, JsonlDoc>();
+/**
+ * Byte budget for parsed docs. Cost is the file size times HEAP_FACTOR (parsed
+ * JSON objects retain several times their text size), so the budget tracks
+ * heap rather than entry count. A doc above the per-entry cap is parsed for
+ * the caller but never retained. PI_JSONL_CACHE_MAX_BYTES (estimated heap
+ * bytes) overrides the total budget at call time as a test seam.
+ */
+const HEAP_FACTOR = 4;
+const MB = 1024 * 1024;
+const DOC_CACHE_MAX_BYTES = 64 * MB; // budget in estimated heap bytes (file size x HEAP_FACTOR)
+const DOC_CACHE_MAX_ENTRY_BYTES = 64 * MB;
+
+function docCacheLimits(): ByteLruLimits {
+	const v = Number(process.env.PI_JSONL_CACHE_MAX_BYTES);
+	const maxBytes = Number.isFinite(v) && v > 0 ? Math.floor(v) : DOC_CACHE_MAX_BYTES;
+	return { maxBytes, maxEntryBytes: Math.min(DOC_CACHE_MAX_ENTRY_BYTES, maxBytes) };
+}
+
+const docCache = new ByteLru<JsonlDoc>(docCacheLimits);
 const inflight = new Map<string, Promise<JsonlDoc | null>>();
 let cacheHits = 0;
 let cacheMisses = 0;
@@ -89,8 +108,6 @@ export async function loadJsonl(abs: string): Promise<JsonlDoc | null> {
 	const cached = docCache.get(key);
 	if (cached) {
 		cacheHits++;
-		docCache.delete(key); // refresh LRU recency
-		docCache.set(key, cached);
 		return cached;
 	}
 	const pending = inflight.get(key);
@@ -101,11 +118,7 @@ export async function loadJsonl(abs: string): Promise<JsonlDoc | null> {
 	cacheMisses++;
 	const p = parseDoc(abs, st)
 		.then((doc) => {
-			docCache.set(key, doc);
-			if (docCache.size > CACHE_MAX) {
-				const oldest = docCache.keys().next().value;
-				if (oldest !== undefined) docCache.delete(oldest);
-			}
+			docCache.set(key, doc, st.size * HEAP_FACTOR);
 			return doc;
 		})
 		.catch(() => null) // unreadable, so do not cache; the next call retries
