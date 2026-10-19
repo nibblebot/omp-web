@@ -427,11 +427,13 @@ export interface SkillsState {
 // ready).
 // ---------------------------------------------------------------------------
 
-/** 3: project/worktree redesign. Remote enrollment and `DaemonEntry.mode` are
- *  gone, `delete_worktree.deleteBranch` names the branch, the discovery
- *  `list_projects`/`projects` pair and `add_worktree` are removed, and
- *  project/workspace creation answers with id-keyed result frames. */
-export const OMP_PROTO = 3;
+/** Bump on any breaking frame change.
+ *  3: project/worktree redesign (remote enrollment, `DaemonEntry.mode`,
+ *  `list_projects`/`projects`, `add_worktree` removed).
+ *  4: infra remediation (kata kfg5): streaming, state, and command-size
+ *  changes from the fleet/session/wire audit; see CHANGELOG.md
+ *  "Infra remediation". */
+export const OMP_PROTO = 4;
 
 // --- SSE framing constants (shared by the daemon and the fleet) ---
 

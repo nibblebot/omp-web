@@ -566,7 +566,7 @@ describe("hello_ok proto gate (finding #61)", () => {
 		expect(state.connected).toBe(true);
 		dispatch({ type: "hello_ok", proto: 1, name: "old", cwd: "/x", pid: 1, version: "0.0.0" });
 		expect(state.error).toContain("proto mismatch");
-		expect(state.error).toContain("expected 3");
+		expect(state.error).toContain("expected 4");
 		expect(state.connected).toBe(false);
 		// Fail-closed: the stream is torn down and NO reconnect is scheduled
 		// (a second connect() would create a second FakeEventSource).

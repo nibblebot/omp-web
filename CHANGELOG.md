@@ -1,6 +1,9 @@
 ## Unreleased
 
-omp-web reconciles the single-session browser UX: equivalent browser capability through existing SDK/fleet/transport reuse. Wire is OMP_PROTO 3: a mismatched web, fleet, and session refuse each other.
+omp-web reconciles the single-session browser UX: equivalent browser capability through existing SDK/fleet/transport reuse. Wire is OMP_PROTO 4: a mismatched web, fleet, and session refuse each other.
+
+### Infra remediation (kfg5)
+Fleet, session, and wire fixes from the infra audit (`kfg5`). Wire is OMP_PROTO 4; sessions started by an older omp-web are refused at hello and must be restarted.
 
 ### Features
 - Projects sidebar: projects are the top level and every checkout of a project is a row under it. The fleet detects worktrees itself (`git worktree list`, including ones made in a terminal, detached and locked ones) and keeps them in sync; a project whose main checkout disappears is marked missing. Rows show a kind icon (main checkout, worktree, clone), the branch, the last session title, and git stats. The empty state points at the Projects "+" and offers provider sign-in when none is configured; the first-run panel, the "Other" group, and "Add remote session…" are gone. The session process log opens at the newest line with live refresh, copy, and an "errors only" filter.
