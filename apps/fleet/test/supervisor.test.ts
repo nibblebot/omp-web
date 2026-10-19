@@ -137,8 +137,10 @@ interface ChildScriptOpts {
 	stderrLines?: string[];
 	/** Exit immediately with this code instead of idling. */
 	exitCode?: number;
-	/** The idle loop exits 1 (once, removing the flag) when this file appears. */
+	/** The idle loop exits (once, removing the flag) when this file appears. */
 	crashFlag?: string;
+	/** The exit code the idle loop uses when crashFlag fires (default 1). */
+	crashExitCode?: number;
 }
 
 /**
@@ -168,7 +170,7 @@ function writeChildScript(dir: string, argsFile: string, opts: ChildScriptOpts =
 		// until the running `sleep` returns, so every teardown costs one tick
 		// per child; 0.05 keeps the child alive while making teardown ~instant.
 		const crash = opts.crashFlag
-			? `if [ -e '${opts.crashFlag}' ]; then rm -f '${opts.crashFlag}'; exit 1; fi; `
+			? `if [ -e '${opts.crashFlag}' ]; then rm -f '${opts.crashFlag}'; exit ${opts.crashExitCode ?? 1}; fi; `
 			: "";
 		lines.push(`while :; do ${crash}sleep 0.05; done`);
 	}
@@ -725,6 +727,28 @@ describe("SpawnSupervisor", () => {
 		expect(fx.registry.list()).toHaveLength(2);
 	});
 
+	test("respawn of an adopted row whose session still holds its lock refuses to launch a second child", async () => {
+		// An adopted row has no child handle: the held lock stands in for a live
+		// session this supervisor did not launch.
+		const lastSessionFile = join(tempDir("omp-session-sup-adopt-"), "session.jsonl");
+		writeFileSync(
+			`${lastSessionFile}.lock`,
+			`${JSON.stringify({ pid: process.pid, name: "adopted-holder", startedAt: 0 })}\n`,
+		);
+		const fx = await makeFixture("omp-session-sup-adopt-", {}, { restartMax: 2 });
+		const adopted = fx.registry.create({
+			name: "adopted",
+			cwd: fx.dir,
+			project: "adopted",
+			labels: [],
+			status: "reconnecting",
+			lastSessionFile,
+		});
+
+		await expect(fx.supervisor.respawn(adopted)).rejects.toThrow("still holds its lock");
+		expect(existsSync(fx.argsFile)).toBe(false);
+	}, 20_000);
+
 	test("spawn shell-quotes label/name values, a $(touch) payload stays inert", async () => {
 		const fx = await makeFixture("omp-session-sup-quote-", {}, { restartMax: 2 });
 
@@ -884,28 +908,113 @@ describe("SpawnSupervisor", () => {
 		expect(readLines(fx.argsFile)).toHaveLength(6);
 	}, 20_000);
 
-	test("a pair resets the restart budget: crash, relaunch, pair leaves no restarts consumed", async () => {
+	test("a pair that holds the stable window refills the restart budget", async () => {
 		const crashFlag = join(tempDir("omp-session-sup-flag-"), "crash.flag");
 		const fx = await makeFixture(
 			"omp-session-sup-budget-",
 			{ crashFlag },
-			{ restartMax: 1, backoffMinMs: 20, backoffMaxMs: 50 },
+			{ restartMax: 1, backoffMinMs: 20, backoffMaxMs: 50, stablePairMs: 200 },
 		);
 
 		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
 		const pair1 = await waitForPayload(fx.payloadFile, 1);
 		await pairDaemon(fx, pair1);
 
-		// The paired child crashes; its restart is generation 2.
+		// The paired child crashes once; its restart is generation 2 and pairs.
 		writeFileSync(crashFlag, "");
 		const pair2 = await waitForPayload(fx.payloadFile, 2);
 		await pairDaemon(fx, pair2);
 		await waitFor(
 			() => (fx.supervisor.snapshot()[entry.daemonId]?.restarts === 0 ? "reset" : null),
 			5000,
-			"restart budget reset by the pair",
+			"stable pair refilled the restart budget",
 		);
 		expect(fx.registry.get(entry.daemonId)?.status).not.toBe("error");
+	}, 20_000);
+
+	test("a pair-then-crash loop exhausts the restart budget and errors", async () => {
+		const crashFlag = join(tempDir("omp-session-sup-flag-"), "crash.flag");
+		// The default stable window (60s) never elapses here, so each pair leaves its restart spent.
+		const fx = await makeFixture(
+			"omp-session-sup-loop-",
+			{ crashFlag },
+			{ restartMax: 2, backoffMinMs: 20, backoffMaxMs: 50 },
+		);
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		for (const generation of [1, 2, 3]) {
+			const pair = await waitForPayload(fx.payloadFile, generation);
+			await pairDaemon(fx, pair);
+			// The paired child crashes on its next tick.
+			writeFileSync(crashFlag, "");
+		}
+		const failed = await waitFor(
+			() => {
+				const current = fx.registry.get(entry.daemonId);
+				return current?.status === "error" ? current : null;
+			},
+			10_000,
+			"error status",
+		);
+		expect(failed.error).toContain("exited");
+		// Initial launch + 2 restarts; the 3rd crash exhausts the budget.
+		expect(readLines(fx.argsFile)).toHaveLength(3);
+	}, 20_000);
+
+	test("a restart whose log cannot open fails the entry instead of throwing from the timer", async () => {
+		const crashFlag = join(tempDir("omp-session-sup-logrestart-"), "crash.flag");
+		const fx = await makeFixture(
+			"omp-session-sup-logrestart-",
+			{ crashFlag },
+			{ restartMax: 3, backoffMinMs: 20, backoffMaxMs: 50 },
+		);
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		await pairDaemon(fx, await waitForPayload(fx.payloadFile, 1));
+		// Replace the entry's log file with a directory: the restart cannot open it.
+		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.daemonId}.log`);
+		rmSync(logPath);
+		mkdirSync(logPath);
+		writeFileSync(crashFlag, "");
+
+		const failed = await waitFor(
+			() => {
+				const current = fx.registry.get(entry.daemonId);
+				return current?.status === "error" ? current : null;
+			},
+			10_000,
+			"error status after a failed restart",
+		);
+		expect(failed.error).toContain("restart failed");
+		expect(failed.error).toContain("EISDIR");
+	}, 20_000);
+
+	test("an exit whose handling throws fails the entry instead of stalling it", async () => {
+		const crashFlag = join(tempDir("omp-session-sup-logexit-"), "crash.flag");
+		const fx = await makeFixture(
+			"omp-session-sup-logexit-",
+			{ crashFlag, crashExitCode: OMP_SESSION_EXIT_SESSION_LOCKED },
+			{ restartMax: 3, backoffMinMs: 20, backoffMaxMs: 50 },
+		);
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		await pairDaemon(fx, await waitForPayload(fx.payloadFile, 1));
+		// The exit reason reads the log tail, which now throws (EISDIR).
+		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.daemonId}.log`);
+		rmSync(logPath);
+		mkdirSync(logPath);
+		writeFileSync(crashFlag, "");
+
+		const failed = await waitFor(
+			() => {
+				const current = fx.registry.get(entry.daemonId);
+				return current?.status === "error" ? current : null;
+			},
+			10_000,
+			"error status after a throwing exit",
+		);
+		expect(failed.error).toContain("exit handling failed");
+		expect(failed.error).toContain("EISDIR");
 	}, 20_000);
 
 	test("exit 77 (session locked) never restarts: the entry sleeps carrying the child's last log line", async () => {

@@ -22,8 +22,9 @@
  * deterministic, so no restart; the entry goes "asleep" carrying the child's
  * last log line as its reason. Any other unexpected exit restarts with a FRESH
  * credential, bounded
- * backoff 1s→30s jittered, at most restartMax (default 5) restarts between
- * pair-ups, then status "error". respawn()/stop() are the intentional paths:
+ * backoff 1s→30s jittered, at most restartMax (default 5) restarts, then status
+ * "error". The budget refills only after a pair holds for STABLE_PAIR_MS, so a
+ * pair-then-crash loop still exhausts it. respawn()/stop() are the intentional paths:
  * respawn uses `{resume} = "--resume <lastSessionFile>"` when the session has
  * one (R3); stop() asks a paired session to shut down (ShutdownControl),
  * SIGTERMs its group, escalates to SIGKILL after 5s, revokes the credential,
@@ -59,6 +60,7 @@ import { fillTemplate, shellQuote } from "./spawn-parse";
 import type { DaemonTransportRegistry } from "./daemon-transport";
 import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
 import type { GitRunner, GitState } from "./discovery";
+import { sessionLiveness } from "./session-liveness";
 import {
 	PROVIDER_DAEMON_LOG,
 	readSessionLogTail,
@@ -107,6 +109,8 @@ interface ChildState {
 	restartTimer: ReturnType<typeof setTimeout> | null;
 	/** Armed per launch: a pair must appear within the pair timeout. */
 	pairTimer: ReturnType<typeof setTimeout> | null;
+	/** Armed when a pair lands: the restart budget refills only if the pair holds for STABLE_PAIR_MS. */
+	stableTimer: Timer | null;
 	/** Unsubscribe from the transport's pair-change feed (set once, at ensure time). */
 	pairUnsub: (() => void) | null;
 	stopping: boolean;
@@ -121,10 +125,13 @@ interface ChildState {
 
 /** Exported so tests and the launch path share one pair-timeout budget. */
 export const PAIR_TIMEOUT_MS = 60_000;
+/** A pair must hold this long before its restarts are forgiven; a pair-then-crash loop still exhausts restartMax. */
+const STABLE_PAIR_MS = 60_000;
 const DEFAULT_RESTART_MAX = 5;
 const STDERR_TAIL_BYTES = 64 * 1024;
 const STOP_SIGTERM_GRACE_MS = 5_000;
 const RESPAWN_KILL_GRACE_MS = 2_000;
+const RESPAWN_LOCK_POLL_MS = 100;
 const RESTART_BACKOFF_MIN_MS = 1_000;
 const RESTART_BACKOFF_MAX_MS = 30_000;
 const DEFAULT_SYNC_INTERVAL_MS = 10_000;
@@ -323,6 +330,7 @@ export class SpawnSupervisor {
 	#deps: SupervisorDeps;
 	#pairTimeoutMs: number;
 	#restartMax: number;
+	#stablePairMs: number;
 	#backoffMinMs: number;
 	#backoffMaxMs: number;
 	#children = new Map<string, ChildState>();
@@ -356,6 +364,8 @@ export class SpawnSupervisor {
 		deps: SupervisorDeps,
 		opts?: {
 			restartMax?: number;
+			/** How long a pair must hold before the restart budget refills (tests shorten it). */
+			stablePairMs?: number;
 			backoffMinMs?: number;
 			backoffMaxMs?: number;
 			/** Fired on spawn/pair/exit/stop/respawn/prune lifecycle transitions. */
@@ -375,6 +385,7 @@ export class SpawnSupervisor {
 		this.#deps = deps;
 		this.#pairTimeoutMs = deps.pairTimeoutMs ?? PAIR_TIMEOUT_MS;
 		this.#restartMax = opts?.restartMax ?? DEFAULT_RESTART_MAX;
+		this.#stablePairMs = opts?.stablePairMs ?? STABLE_PAIR_MS;
 		this.#backoffMinMs = opts?.backoffMinMs ?? RESTART_BACKOFF_MIN_MS;
 		this.#backoffMaxMs = opts?.backoffMaxMs ?? RESTART_BACKOFF_MAX_MS;
 		this.#onEvent = opts?.onEvent;
@@ -503,6 +514,10 @@ export class SpawnSupervisor {
 			clearTimeout(state.restartTimer);
 			state.restartTimer = null;
 		}
+		// An adopted row has no child handle here, so its previous process may still
+		// hold the session lock. Launching now would race that process for the lock
+		// (the loser exits 77), so wait for the release or refuse.
+		if (!state.child) await this.#awaitLockRelease(current);
 		state.stopping = false;
 		state.manualRespawn = true;
 		// Replace the child; the old child's death is expected (manualRespawn),
@@ -516,6 +531,25 @@ export class SpawnSupervisor {
 			resume: true,
 			resumeFile,
 		});
+	}
+
+	/**
+	 * Adopted-row respawn: a session this supervisor never launched may still hold
+	 * its lock. Ask it to shut down and wait up to RESPAWN_KILL_GRACE_MS for the
+	 * lock to free; throw when it still holds it. A dead or unknown session passes.
+	 */
+	async #awaitLockRelease(entry: RegistryEntry): Promise<void> {
+		if (sessionLiveness(entry) !== "alive") return;
+		await requestSessionShutdown(this.#deps.transport, entry.daemonId, "respawn");
+		const deadline = Date.now() + RESPAWN_KILL_GRACE_MS;
+		while (sessionLiveness(entry) === "alive") {
+			if (Date.now() >= deadline) {
+				throw new Error(`session ${entry.name} still holds its lock; respawn refused`);
+			}
+			const { promise, resolve } = Promise.withResolvers<void>();
+			setTimeout(resolve, RESPAWN_LOCK_POLL_MS);
+			await promise;
+		}
 	}
 
 	/**
@@ -855,6 +889,10 @@ export class SpawnSupervisor {
 			clearTimeout(state.pairTimer);
 			state.pairTimer = null;
 		}
+		if (state.stableTimer) {
+			clearTimeout(state.stableTimer);
+			state.stableTimer = null;
+		}
 	}
 
 	#ensure(daemonId: string): ChildState {
@@ -866,21 +904,29 @@ export class SpawnSupervisor {
 				restarts: 0,
 				restartTimer: null,
 				pairTimer: null,
+				stableTimer: null,
 				pairUnsub: null,
 				stopping: false,
 				manualRespawn: false,
 				respawnInFlight: null,
 				exitHandled: false,
 			};
-			// A paired child is healthy: its restart budget resets, so restartMax
-			// bounds crash LOOPS, not lifetime restarts.
+			// A pair that holds for STABLE_PAIR_MS refills the restart budget, so
+			// restartMax bounds crash LOOPS (pair, crash, pair, crash), not lifetime restarts.
 			created.pairUnsub = this.#deps.transport.onPairChange(daemonId, (status) => {
+				if (created.stableTimer) {
+					clearTimeout(created.stableTimer);
+					created.stableTimer = null;
+				}
 				if (!status.paired) return;
 				if (created.pairTimer) {
 					clearTimeout(created.pairTimer);
 					created.pairTimer = null;
 				}
-				created.restarts = 0;
+				created.stableTimer = setTimeout(() => {
+					created.stableTimer = null;
+					created.restarts = 0;
+				}, this.#stablePairMs);
 			});
 			this.#children.set(daemonId, created);
 			state = created;
@@ -992,11 +1038,19 @@ export class SpawnSupervisor {
 					clearTimeout(state.pairTimer);
 					state.pairTimer = null;
 				}
+				if (state.stableTimer) {
+					clearTimeout(state.stableTimer);
+					state.stableTimer = null;
+				}
 				this.#onChildExit(state, exitCode, child.signalCode ?? null);
 			})
-			.catch(() => {
-				// The exit promise should always resolve; a rejection is surfaced
-				// nowhere meaningful, so the child stays unreaped.
+			.catch((err: unknown) => {
+				// #onChildExit threw (e.g. the log tail could not be read): the entry would
+				// otherwise keep its last status with no restart and no reason.
+				releaseSessionCredential(this.#deps.transport, this.#registry, daemonId);
+				const message = `exit handling failed: ${(err as Error).message}`;
+				this.#registry.setStatus(daemonId, "error", message);
+				this.#onEvent?.("error", message, daemonId);
 			});
 	}
 
@@ -1090,7 +1144,14 @@ export class SpawnSupervisor {
 				);
 				return;
 			}
-			this.#launch(current, template, { resume: true });
+			try {
+				this.#launch(current, template, { resume: true });
+			} catch (err) {
+				releaseSessionCredential(this.#deps.transport, this.#registry, state.daemonId);
+				const message = `restart failed: ${(err as Error).message}`;
+				this.#registry.setStatus(state.daemonId, "error", message);
+				this.#onEvent?.("error", message, state.daemonId);
+			}
 		}, delay);
 		this.#onEvent?.(
 			"warn",

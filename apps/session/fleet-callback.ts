@@ -728,7 +728,6 @@ export class FleetCallback {
 					if (stopped) break;
 					continue;
 				}
-				this.#backoffAttempt = 0;
 				this.#state = "ready";
 				this.#readyAt = Date.now();
 				this.#readyCount++;
@@ -747,6 +746,11 @@ export class FleetCallback {
 				this.#emitStatus();
 				const end = await this.#livePair(pair);
 				if (end.kind === "stopped" || this.#stopped) break;
+				// Only a pair that stayed up a full heartbeat interval proves the fleet is
+				// healthy; one that ends sooner keeps growing the backoff.
+				if (this.#readyAt !== null && Date.now() - this.#readyAt > this.#heartbeatMs) {
+					this.#backoffAttempt = 0;
+				}
 				if (end.kind === "renewal") {
 					this.#renewals++;
 					continue; // voluntary: fresh pair, no backoff

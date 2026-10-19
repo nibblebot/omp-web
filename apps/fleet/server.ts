@@ -962,8 +962,9 @@ class FleetServerImpl implements FleetServer {
 		);
 	}
 
-	/** Boot grace: an enrolled session that has not redialed by the deadline is shown asleep. */
+	/** Redial grace: a reconnecting enrolled session not re-paired by the deadline is shown asleep. Armed at boot and on every pair-loss transition to reconnecting. */
 	#armRedialGrace(daemonId: string): void {
+		this.#clearRedialGrace(daemonId);
 		const timer = setTimeout(() => {
 			this.#redialTimers.delete(daemonId);
 			if (this.registry.get(daemonId)?.status !== "reconnecting") return;
@@ -987,6 +988,7 @@ class FleetServerImpl implements FleetServer {
 			if (entry?.status !== "ready") return;
 			if (this.transport.pairStatus(daemonId).paired) return;
 			this.#setDaemonStatus(daemonId, "reconnecting");
+			this.#armRedialGrace(daemonId);
 		}, this.#pairLossGraceMs);
 		this.#pairLossTimers.set(daemonId, timer);
 	}

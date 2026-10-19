@@ -339,3 +339,37 @@ describe("FleetCallback up-leg lifetime budget", () => {
 		expect(status.drops).toBe(0);
 	});
 });
+
+describe("FleetCallback redial backoff", () => {
+	test("a pair that dies before a heartbeat interval keeps growing the redial backoff", async () => {
+		// Regression: the attempt counter reset at every ready, so a fleet that accepts
+		// a pair and ends it redialed at ~1 Hz. The fake fleet sends pair_ready and then
+		// nothing; silenceMs ends each pair long before heartbeatMs, so the third
+		// redial must back off from attempt 2 (≥ 2 s), not attempt 0 (≤ 1.5 s).
+		const fleet = startFakeFleet();
+		fleets.push(fleet);
+		const callback = new FleetCallback({
+			url: fleet.url,
+			workspaceId: WORKSPACE,
+			generation: GENERATION,
+			token: TOKEN,
+			allowHttp: true,
+			heartbeatMs: 60_000,
+			silenceMs: 150,
+			backoffMinMs: 1_000,
+			backoffMaxMs: 30_000,
+		});
+		callbacks.push(callback);
+
+		await callback.start();
+		const deadline = Date.now() + 15_000;
+		while (callback.status().reconnects < 3) {
+			if (Date.now() > deadline) throw new Error("no third redial within 15 s");
+			await Bun.sleep(10);
+		}
+
+		const status = callback.status();
+		expect(status.reconnectAt).not.toBeNull();
+		expect(status.reconnectAt! - Date.now()).toBeGreaterThan(1_500);
+	}, 20_000);
+});
