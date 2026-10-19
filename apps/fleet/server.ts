@@ -482,6 +482,13 @@ class FleetServerImpl implements FleetServer {
 				`fleet: log store unavailable at ${join(dirname(facts.statePath), "logs")}: ${err instanceof Error ? err.message : String(err)}`,
 			);
 		}
+		if (logStore !== null && logStore.loadReport.repairs.length > 0) {
+			this.eventLog.add(
+				"warn",
+				"server",
+				`log store repaired ${logStore.loadReport.repairs.length} drifted stream(s) at boot`,
+			);
+		}
 		this.logStore = logStore;
 		// P8.5/P8.6 stored-sessions + stats store coverage: BOTH consume the
 		// same secret-free provenance resolver over live registry records
@@ -778,7 +785,7 @@ class FleetServerImpl implements FleetServer {
 		if (relpath.length === 0) return;
 		let result: LogIngestResult;
 		try {
-			result = store.ingest(workspaceId, sessionId, relpath, envelope.payload as LogChunk);
+			result = store.ingestDeferred(workspaceId, sessionId, relpath, envelope.payload as LogChunk);
 		} catch (err) {
 			// Read-only (verified), invalid ids/paths, or a malformed chunk:
 			// the workspace's verified state wins; nothing to ack. A truly
@@ -852,6 +859,17 @@ class FleetServerImpl implements FleetServer {
 		const pending = this.#logAckChunks.get(workspaceId);
 		if (pending === undefined || pending.size === 0) return;
 		this.#logAckChunks.delete(workspaceId);
+		// An ack names only durable offsets: group-commit the deferred appends
+		// first. On failure the batch is dropped and the store rolled the
+		// streams back, so the daemon's resend (or a log_gap) heals them.
+		try {
+			this.logStore?.commit(workspaceId);
+		} catch (err) {
+			console.error(
+				`fleet: log commit failed for ${workspaceId}; acks dropped: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			return;
+		}
 		const offsets: Record<string, number> = {};
 		for (const [streamId, offset] of pending) offsets[streamId] = offset;
 		void this.transport

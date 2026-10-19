@@ -29,6 +29,7 @@ import {
 	mkdirSync,
 	readdirSync,
 	readFileSync,
+	rmSync,
 	truncateSync,
 	unlinkSync,
 	writeFileSync,
@@ -859,5 +860,108 @@ describe("FleetLogStore load repair sweep", () => {
 			Buffer.from(sub, "utf8"),
 		);
 		expect(FleetLogStore.load(rootDir).loadReport.repairs).toEqual([]);
+	});
+});
+
+describe("FleetLogStore kx3w: payload decode and deferred group commit", () => {
+	test("accepts a canonical base64 chunk well above 8 MiB and replays it byte-identically", () => {
+		const rootDir = tempDir("omp-logstore-bigchunk-");
+		const unit = recordLine("big", 1);
+		const content = unit.repeat(Math.ceil((10 * 1024 * 1024) / unit.length));
+		const store = new FleetLogStore({ rootDir });
+		const offset = ingestAcked(store, MAIN_RELPATH, chunkAt(0, 1, content));
+		expect(offset).toBe(Buffer.byteLength(content, "utf8"));
+		expect(FleetLogStore.load(rootDir).loadReport.repairs).toEqual([]);
+		expectBuffersEqual(
+			FleetLogStore.load(rootDir).readStored(WORKSPACE, SESSION, MAIN_RELPATH),
+			Buffer.from(content, "utf8"),
+		);
+	});
+
+	test("rejects payloads that are not canonical base64", () => {
+		const rootDir = tempDir("omp-logstore-badb64-");
+		const store = new FleetLogStore({ rootDir });
+		for (const data of ["QUJD=", "QUJ", "QU!D", "QUJDRA==QUJD"]) {
+			expectLogStoreError(
+				() =>
+					store.ingest(WORKSPACE, SESSION, MAIN_RELPATH, {
+						offset: 0,
+						generation: 1,
+						data,
+						eof: false,
+					}),
+				"invalid_chunk",
+			);
+		}
+	});
+
+	test("deferred appends are acked only once commit() makes them durable; reload then needs no repair", () => {
+		const rootDir = tempDir("omp-logstore-deferred-");
+		const l1 = recordLine("main", 1);
+		const l2 = recordLine("main", 2);
+		const store = new FleetLogStore({ rootDir });
+		const d1 = store.ingestDeferred(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(0, 1, l1));
+		const d2 = store.ingestDeferred(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(l1.length, 1, l2));
+		expect(d1).toEqual({ status: "acked", offset: l1.length });
+		expect(d2).toEqual({ status: "acked", offset: l1.length + l2.length });
+		store.commit(WORKSPACE);
+
+		const reloaded = FleetLogStore.load(rootDir);
+		expect(reloaded.loadReport.repairs).toEqual([]);
+		expectBuffersEqual(
+			reloaded.readStored(WORKSPACE, SESSION, MAIN_RELPATH),
+			Buffer.from(l1 + l2, "utf8"),
+		);
+		const l3 = recordLine("main", 3);
+		expect(ingestAcked(reloaded, MAIN_RELPATH, chunkAt(l1.length + l2.length, 1, l3))).toBe(
+			l1.length + l2.length + l3.length,
+		);
+	});
+
+	test("an uncommitted deferred append survives a crash without losing bytes or continuity", () => {
+		const rootDir = tempDir("omp-logstore-uncommitted-");
+		const l1 = recordLine("main", 1);
+		const l2 = recordLine("main", 2);
+		const store = new FleetLogStore({ rootDir });
+		store.ingest(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(0, 1, l1));
+		store.ingestDeferred(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(l1.length, 1, l2));
+		// No commit(): the process "crashes" here. Reload sees the appended bytes
+		// (file length is authoritative) and resumes at the appended offset.
+		const reloaded = FleetLogStore.load(rootDir);
+		expectBuffersEqual(
+			reloaded.readStored(WORKSPACE, SESSION, MAIN_RELPATH),
+			Buffer.from(l1 + l2, "utf8"),
+		);
+		const l3 = recordLine("main", 3);
+		expect(ingestAcked(reloaded, MAIN_RELPATH, chunkAt(l1.length + l2.length, 1, l3))).toBe(
+			l1.length + l2.length + l3.length,
+		);
+	});
+
+	test("a failed commit() rolls back the pending ack; the daemon resend is re-acked after recovery", () => {
+		const rootDir = tempDir("omp-logstore-commitfail-");
+		const l1 = recordLine("main", 1);
+		const l2 = recordLine("main", 2);
+		const store = new FleetLogStore({ rootDir });
+		store.ingestDeferred(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(0, 1, l1));
+		// Block the index rewrite so commit() fails at the temp-file step.
+		const blocker = join(rootDir, WORKSPACE, SESSION, "index.json.tmp");
+		mkdirSync(blocker, { recursive: true });
+		expect(() => store.commit(WORKSPACE)).toThrow();
+
+		// The daemon never got an ack for l1, so it resends from 0 once the
+		// store recovers; the resend is not reported as durable until commit().
+		rmSync(blocker, { recursive: true, force: true });
+		const resend = store.ingestDeferred(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(0, 1, l1));
+		expect(resend).toEqual({ status: "duplicate" });
+		const next = store.ingestDeferred(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(l1.length, 1, l2));
+		expect(next).toEqual({ status: "acked", offset: l1.length + l2.length });
+		store.commit(WORKSPACE);
+		const reloaded = FleetLogStore.load(rootDir);
+		expect(reloaded.loadReport.repairs).toEqual([]);
+		expectBuffersEqual(
+			reloaded.readStored(WORKSPACE, SESSION, MAIN_RELPATH),
+			Buffer.from(l1 + l2, "utf8"),
+		);
 	});
 });

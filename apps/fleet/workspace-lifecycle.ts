@@ -1260,6 +1260,8 @@ export class WorkspaceLifecycle {
 		}
 
 		const record = registry.get(daemonId)?.workspace;
+		// Deferred appends are acked only after commit(); verify reads the index.
+		logStore.commit(daemonId);
 		const verify = await verifyWorkspaceLogs({
 			logsRoot: logStore.rootDir,
 			workspaceId: daemonId,

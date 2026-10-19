@@ -5,9 +5,12 @@
 //   - Layout under the fleet state dir: logs/<workspaceId>/<sessionId>/<relpath>
 //     holds raw bytes, byte-identical to the streamed lineage file.
 //   - Per-session sidecar index.json (atomic tmp -> rename -> parent fsync) is
-//     updated in the same critical section as the append.
-//   - fsync-before-ack: ingest() only returns after the appended bytes and the
-//     index are durable, so the returned offset is the ackable/resume point.
+//     a recovery hint; file length is the authority for offsets.
+//   - Durable-before-ack: ingest() fsyncs the bytes and rewrites the index before
+//     it returns "acked". ingestDeferred() only appends and records the stream as
+//     pending; commit(workspaceId) fsyncs pending files, the directories of new
+//     files, and rewrites the touched indexes. The server acks a deferred chunk
+//     only after commit() returns; a failed commit rolls the stream state back.
 //   - Offset continuity: offset == durable length appends; greater yields a gap
 //     result (log_gap repair); lower is a post-reconnect resend and is dropped.
 //   - Generations: per-file identity counter. An older generation is dropped;
@@ -19,9 +22,10 @@
 //     caller-supplied live workspace set. No garbage collection, no timers;
 //     verified data is never deleted internally.
 //
-// Everything here runs on synchronous fs calls: a single ingest is one
-// critical section by construction (Node/Bun executes sync code without
-// interleaving), which is what "same critical section" requires.
+// Everything here runs on synchronous fs calls, so ingest() is one critical
+// section by construction (Node/Bun executes sync code without interleaving).
+// ingestDeferred() appends in that section and leaves the fsync and index
+// rewrite to commit(), which the server calls once per ack batch.
 
 import {
 	closeSync,
@@ -216,12 +220,43 @@ const RESERVED_NAMES: Record<string, true> = {
 	[READONLY_MARKER]: true,
 };
 
-const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+/**
+ * Decodes a chunk payload, rejecting anything that is not canonical base64
+ * (length, alphabet, padding). Checked by round-trip, so there is no size cap.
+ */
+function decodeChunkData(data: string): Buffer {
+	if (data.length % 4 !== 0) {
+		throw new LogStoreError("invalid_chunk", "chunk.data must be a base64 string");
+	}
+	const bytes = Buffer.from(data, "base64");
+	if (bytes.toString("base64") !== data) {
+		throw new LogStoreError("invalid_chunk", "chunk.data must be a base64 string");
+	}
+	return bytes;
+}
+
+/** fsyncs an existing file by path (commit path; the append fd is already closed). */
+function fsyncFile(path: string): void {
+	const fd = openSync(path, "r");
+	try {
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
+}
 
 interface StreamState {
 	generation: number;
 	ackedOffset: number;
 	eof: boolean;
+}
+
+/** A deferred append awaiting commit(); `prev` is the stream state restored on failure. */
+interface PendingFile {
+	session: SessionState;
+	relpath: string;
+	prev: StreamState | undefined;
+	created: boolean;
 }
 
 interface SessionState {
@@ -296,7 +331,7 @@ function assertChunkShape(chunk: LogChunk): void {
 	if (typeof chunk.eof !== "boolean") {
 		throw new LogStoreError("invalid_chunk", "chunk.eof must be a boolean");
 	}
-	if (typeof chunk.data !== "string" || (chunk.data.length > 0 && !BASE64_RE.test(chunk.data))) {
+	if (typeof chunk.data !== "string") {
 		throw new LogStoreError("invalid_chunk", "chunk.data must be a base64 string");
 	}
 }
@@ -523,6 +558,8 @@ export class FleetLogStore {
 
 	#sessions = new Map<string, Map<string, SessionState>>();
 	#readOnly = new Set<string>();
+	/** Workspace -> (file path -> pending deferred append), drained by commit(). */
+	#pending = new Map<string, Map<string, PendingFile>>();
 
 	constructor(options: { rootDir: string }) {
 		this.rootDir = options.rootDir;
@@ -542,15 +579,69 @@ export class FleetLogStore {
 
 	/**
 	 * Applies one streamed log chunk and returns the ackable durable offset on
-	 * success. Throws LogStoreError for unsafe paths/ids, malformed chunks, and
-	 * read-only workspaces; continuity and generation mismatches are results,
-	 * not throws, because they map to log_gap / silence on the wire.
+	 * success. Durable on return: the bytes are fsynced and the index rewritten
+	 * before this resolves. Throws LogStoreError for unsafe paths/ids, malformed
+	 * chunks, and read-only workspaces; continuity and generation mismatches are
+	 * results, not throws, because they map to log_gap / silence on the wire.
 	 */
 	ingest(
 		workspaceId: string,
 		sessionId: string,
 		relpath: string,
 		chunk: LogChunk,
+	): LogIngestResult {
+		return this.#apply(workspaceId, sessionId, relpath, chunk, false);
+	}
+
+	/**
+	 * ingest() without the fsync or index rewrite: the append lands in the file
+	 * and the stream is recorded as pending. The result is NOT durable until
+	 * commit(workspaceId) returns, so a caller must not ack before then.
+	 */
+	ingestDeferred(
+		workspaceId: string,
+		sessionId: string,
+		relpath: string,
+		chunk: LogChunk,
+	): LogIngestResult {
+		return this.#apply(workspaceId, sessionId, relpath, chunk, true);
+	}
+
+	/**
+	 * Makes every pending ingestDeferred() append for the workspace durable:
+	 * fsyncs each touched file (and the directory of each new file), then
+	 * rewrites each touched session index. On failure the in-memory stream
+	 * state of the pending appends is rolled back, so the daemon's resend is
+	 * re-applied, and the error is rethrown. No-op when nothing is pending.
+	 */
+	commit(workspaceId: string): void {
+		assertSafeComponent(workspaceId, "workspaceId");
+		const pending = this.#pending.get(workspaceId);
+		if (pending === undefined) return;
+		this.#pending.delete(workspaceId);
+		try {
+			const sessions = new Set<SessionState>();
+			for (const [file, entry] of pending) {
+				if (existsSync(file)) fsyncFile(file);
+				if (entry.created) fsyncDir(dirname(file));
+				sessions.add(entry.session);
+			}
+			for (const session of sessions) this.#persistIndex(session);
+		} catch (error) {
+			for (const entry of pending.values()) {
+				if (entry.prev === undefined) entry.session.streams.delete(entry.relpath);
+				else entry.session.streams.set(entry.relpath, { ...entry.prev });
+			}
+			throw error;
+		}
+	}
+
+	#apply(
+		workspaceId: string,
+		sessionId: string,
+		relpath: string,
+		chunk: LogChunk,
+		defer: boolean,
 	): LogIngestResult {
 		assertSafeComponent(workspaceId, "workspaceId");
 		assertSafeComponent(sessionId, "sessionId");
@@ -559,13 +650,15 @@ export class FleetLogStore {
 		if (this.isReadOnly(workspaceId)) {
 			throw new LogStoreError("read_only", `log store for workspace ${workspaceId} is read-only`);
 		}
-		let bytes = Buffer.from(chunk.data, "base64");
+		let bytes = decodeChunkData(chunk.data);
 		// Durable end of this chunk regardless of re-send splicing below.
 		const chunkEnd = chunk.offset + bytes.length;
 		const session = this.#ensureSession(workspaceId, sessionId);
 		const file = join(session.dir, cleanRelpath);
 
 		let stream = session.streams.get(cleanRelpath);
+		// Pre-mutation copy: the rollback target if this apply is deferred.
+		const before = stream === undefined ? undefined : { ...stream };
 		if (!stream) {
 			stream = { generation: chunk.generation, ackedOffset: 0, eof: false };
 			session.streams.set(cleanRelpath, stream);
@@ -579,7 +672,8 @@ export class FleetLogStore {
 			stream.generation = chunk.generation;
 			stream.ackedOffset = 0;
 			stream.eof = false;
-			this.#persistIndex(session);
+			if (defer) this.#markPending(workspaceId, session, cleanRelpath, file, before, false);
+			else this.#persistIndex(session);
 		}
 
 		// The live file is authoritative for the durable length; heals any
@@ -617,16 +711,38 @@ export class FleetLogStore {
 			const fd = openSync(file, "a");
 			try {
 				if (bytes.length > 0) writeAllSync(fd, bytes);
-				fsyncSync(fd);
+				if (!defer) fsyncSync(fd);
 			} finally {
 				closeSync(fd);
 			}
-			if (!existed) fsyncDir(dirname(file));
+			if (!existed && !defer) fsyncDir(dirname(file));
 		}
 		stream.ackedOffset = chunkEnd;
 		stream.eof = chunk.eof;
-		this.#persistIndex(session);
+		if (defer) this.#markPending(workspaceId, session, cleanRelpath, file, before, !existed);
+		else this.#persistIndex(session);
 		return { status: "acked", offset: stream.ackedOffset };
+	}
+
+	#markPending(
+		workspaceId: string,
+		session: SessionState,
+		relpath: string,
+		file: string,
+		prev: StreamState | undefined,
+		created: boolean,
+	): void {
+		let pending = this.#pending.get(workspaceId);
+		if (pending === undefined) {
+			pending = new Map();
+			this.#pending.set(workspaceId, pending);
+		}
+		const entry = pending.get(file);
+		if (entry === undefined) {
+			pending.set(file, { session, relpath, prev, created });
+		} else if (created) {
+			entry.created = true;
+		}
 	}
 
 	/**
@@ -636,6 +752,7 @@ export class FleetLogStore {
 	markWorkspaceReadOnly(workspaceId: string): void {
 		assertSafeComponent(workspaceId, "workspaceId");
 		if (this.#readOnly.has(workspaceId)) return;
+		this.commit(workspaceId);
 		const wsDir = join(this.rootDir, workspaceId);
 		mkdirSync(wsDir, { recursive: true });
 		const marker = JSON.stringify({ version: 1, workspaceId, markedAt: Date.now() });
@@ -1237,8 +1354,8 @@ export class FleetLogStore {
 	}
 
 	/**
-	 * Atomically rewrites the session index inside the ingest critical section:
-	 * temp file + fsync, rename, parent dir fsync.
+	 * Atomically rewrites the session index: temp file + fsync, rename, parent
+	 * dir fsync. Called by ingest() and commit().
 	 */
 	#persistIndex(session: SessionState): void {
 		mkdirSync(session.dir, { recursive: true });
