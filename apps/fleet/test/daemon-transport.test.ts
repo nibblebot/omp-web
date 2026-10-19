@@ -315,8 +315,8 @@ function openSlowDown(
 	};
 }
 
-/** RING_IDLE_MS and BULK_TTL_MS are module-private 10-minute registry
- * deadlines; the swept tests advance past them explicitly. */
+/** RING_IDLE_MS and BULK_IDLE_MS are module-private registry deadlines; the
+ * swept tests advance past them explicitly. */
 const SWEEP_TTL_MS = 10 * 60_000;
 
 /** A registry with an injected clock and a fast sweep cadence: advancing
@@ -710,7 +710,7 @@ describe("daemon transport controlled pairs", () => {
 			const goodResult = await good.done;
 			expect(goodResult.state).toBe("received");
 			expect(goodResult.bytes).toBe(11);
-			expect(Buffer.from(goodResult.data as Uint8Array).toString("utf8")).toBe("hello world");
+			expect(Buffer.concat(goodResult.chunks ?? []).toString("utf8")).toBe("hello world");
 
 			// Reuse of a settled correlation is refused (single-use ids).
 			const reuse = await postPart(bulkUrl(good), H, 2, true, "again");
@@ -725,7 +725,7 @@ describe("daemon transport controlled pairs", () => {
 			expect(h2.status).toBe(409);
 			const holeResult = await hole.done;
 			expect(holeResult.state).toBe("failed");
-			expect(holeResult.data).toBeUndefined();
+			expect(holeResult.chunks).toBeUndefined();
 
 			// An out-of-order FIRST part (1 on a fresh correlation) is
 			// rejected the same way; no corrupt prefix is ever buffered.
@@ -734,7 +734,7 @@ describe("daemon transport controlled pairs", () => {
 			expect(o1.status).toBe(409);
 			const oooResult = await ooo.done;
 			expect(oooResult.state).toBe("failed");
-			expect(oooResult.data).toBeUndefined();
+			expect(oooResult.chunks).toBeUndefined();
 
 			// A part-less POST is the implicit single-shot transfer.
 			const single = fixture.registry.createBulkCorrelation(ws, { capture: true });
@@ -742,7 +742,7 @@ describe("daemon transport controlled pairs", () => {
 			expect(s0.status).toBe(200);
 			const singleResult = await single.done;
 			expect(singleResult.state).toBe("received");
-			expect(Buffer.from(singleResult.data as Uint8Array).toString("utf8")).toBe("single-shot");
+			expect(Buffer.concat(singleResult.chunks ?? []).toString("utf8")).toBe("single-shot");
 
 			// Correlations are workspace-scoped: a foreign workspace's upload
 			// is rejected (400 unknown correlation) and leaves the record
@@ -764,9 +764,104 @@ describe("daemon transport controlled pairs", () => {
 			const foreignResult = await foreign.done;
 			expect(foreignResult.state).toBe("received");
 			expect(foreignResult.bytes).toBe(5);
-			expect(Buffer.from(foreignResult.data as Uint8Array).toString("utf8")).toBe("legit");
+			expect(Buffer.concat(foreignResult.chunks ?? []).toString("utf8")).toBe("legit");
 		} finally {
 			fixture.stop();
+		}
+	});
+
+	test("a daemon download_bulk_failed control fails its own capture correlation at once; a foreign workspace's id is ignored", async () => {
+		const fixture = serve(new DaemonTransportRegistry());
+		const ws = "ws-bulk-failed";
+		const wsOther = "ws-bulk-failed-other";
+		const cred = randomBytes(32).toString("hex");
+		fixture.registry.enrollWorkspace(ws, 1, cred);
+		fixture.registry.enrollWorkspace(wsOther, 1, cred);
+		try {
+			const mine = fixture.registry.createBulkCorrelation(ws, { capture: true });
+			const theirs = fixture.registry.createBulkCorrelation(wsOther, { capture: true });
+			let theirsSettled = false;
+			void theirs.done.then(() => {
+				theirsSettled = true;
+			});
+			const up = openUp(fixture, ws, 1, randomUUID(), cred);
+			up.push("control", "control", {
+				type: "download_bulk_failed",
+				correlationId: theirs.correlationId,
+				error: { code: "unavailable", message: "not yours" },
+			});
+			up.push("control", "control", {
+				type: "download_bulk_failed",
+				correlationId: mine.correlationId,
+				error: { code: "unavailable", message: "file vanished mid-transfer" },
+			});
+			const result = await mine.done;
+			expect(result.state).toBe("failed");
+			expect(result.error).toBe("file vanished mid-transfer");
+			expect(result.chunks).toBeUndefined();
+			// Envelopes dispatch in order, so the foreign report was handled before this one.
+			expect(theirsSettled).toBe(false);
+			theirs.cancel("test cleanup");
+			expect((await theirs.done).error).toBe("test cleanup");
+			expect((await up.end()).status).toBe(200);
+		} finally {
+			fixture.stop();
+		}
+	});
+
+	test("cancel settles a capture correlation failed with its reason; a late part is refused and a second cancel changes nothing", async () => {
+		const fixture = serve(new DaemonTransportRegistry());
+		const ws = "ws-bulk-cancel";
+		const cred = randomBytes(32).toString("hex");
+		fixture.registry.enrollWorkspace(ws, 1, cred);
+		try {
+			const H = wireHeaders(ws, 1, randomUUID(), cred);
+			const urlOf = (corr: { correlationId: string }): string =>
+				`${fixture.url}${CALLBACK_BULK_PATH_PREFIX}${corr.correlationId}`;
+			const corr = fixture.registry.createBulkCorrelation(ws, { capture: true });
+			const first = await fetch(urlOf(corr), {
+				method: "POST",
+				headers: { ...H, [BULK_PART_HEADER]: "0", [BULK_FINAL_HEADER]: "0" },
+				body: "partial",
+			});
+			expect(first.status).toBe(200);
+			corr.cancel("download request aborted");
+			const result = await corr.done;
+			expect(result.state).toBe("failed");
+			expect(result.error).toBe("download request aborted");
+			expect(result.chunks).toBeUndefined();
+			const late = await fetch(urlOf(corr), {
+				method: "POST",
+				headers: { ...H, [BULK_PART_HEADER]: "1", [BULK_FINAL_HEADER]: "1" },
+				body: "late",
+			});
+			expect(late.status).toBe(409);
+			corr.cancel("second cancel");
+			expect((await corr.done).error).toBe("download request aborted");
+		} finally {
+			fixture.stop();
+		}
+	});
+
+	test("capture downloads are capped at BULK_CAPTURE_MAX_OPEN open transfers; settling one frees its slot, and plain bulk is uncapped", async () => {
+		const registry = new DaemonTransportRegistry();
+		const ws = "ws-bulk-cap";
+		try {
+			const a = registry.createBulkCorrelation(ws, { capture: true });
+			const b = registry.createBulkCorrelation(ws, { capture: true });
+			expect(() => registry.createBulkCorrelation(ws, { capture: true })).toThrow(
+				"too many concurrent downloads (limit 2)",
+			);
+			const plain = registry.createBulkCorrelation(ws);
+			a.cancel("freed");
+			expect((await a.done).state).toBe("failed");
+			const c = registry.createBulkCorrelation(ws, { capture: true });
+			b.cancel("cleanup");
+			c.cancel("cleanup");
+			plain.cancel("cleanup");
+			await Promise.all([b.done, c.done, plain.done]);
+		} finally {
+			registry.close();
 		}
 	});
 
@@ -1106,7 +1201,7 @@ describe("daemon transport controlled pairs", () => {
 		}
 	});
 
-	test("an open bulk correlation past BULK_TTL_MS settles failed as expired, the retryable reason", async () => {
+	test("an open bulk correlation idle past BULK_IDLE_MS settles failed as expired, the retryable reason", async () => {
 		const { registry, advance } = clockedRegistry();
 		const ws = "ws-bulk-ttl";
 		const cred = randomBytes(32).toString("hex");
@@ -1115,12 +1210,12 @@ describe("daemon transport controlled pairs", () => {
 			// No upload ever starts: the sweep owns the open correlation's
 			// deadline. `done` never rejects; the settle IS the observable.
 			const expired = registry.createBulkCorrelation(ws, { capture: true });
-			advance(SWEEP_TTL_MS + 1); // past BULK_TTL_MS
+			advance(SWEEP_TTL_MS + 1); // past BULK_IDLE_MS
 			const result = await expired.done;
 			expect(result.state).toBe("failed");
 			expect(result.error).toBe("bulk correlation expired");
 			expect(result.bytes).toBe(0);
-			expect(result.data).toBeUndefined();
+			expect(result.chunks).toBeUndefined();
 			// The frozen reason is consumer-visible: download-policy maps an
 			// expired correlation to a retryable browser failure.
 			expect(downloadFailureKind(502, result.error).code).toBe("retryable");

@@ -29,7 +29,7 @@ import {
 	btwScopeSegment,
 	buildDownloadManifest,
 	createDownloadMethods,
-	discardAllStagedHtml,
+	discardAllStagedExports,
 	type DownloadManifestArgs,
 	type DownloadManifestDeps,
 	resolveDownloadPath,
@@ -52,9 +52,6 @@ function liveInputs(
 ): DownloadManifestDeps {
 	return {
 		sessionId,
-		sessionsDir: opts.sessionsDir,
-		subagentSessionFiles: new Map(),
-		subagentSnapshots: new Map(),
 		...(opts.sessionFile !== undefined ? { sessionFile: opts.sessionFile } : {}),
 		...(opts.artifactsDir !== undefined ? { artifactsDir: opts.artifactsDir } : {}),
 	};
@@ -244,16 +241,55 @@ describe("download manifest artifact jails", () => {
 		expect(existsSync(staged[1]!)).toBe(false);
 	});
 
-	test("a staged HTML export nobody fetches is swept by the next export, and shutdown clears the rest", async () => {
-		const sessionsDir = tempDir("omp-download-sweep-sessions-");
-		const sessionId = "sess-sweep";
+	test("a staged export whose transfer fails mid-upload is deleted and reports download_bulk_failed", async () => {
+		const sessionsDir = tempDir("omp-download-abort-sessions-");
+		const sessionId = "sess-abort";
 		const sessionFile = join(sessionsDir, `${sessionId}.jsonl`);
 		writeFileSync(sessionFile, "{}\n");
 		const entry = {
 			session: {
+				formatSessionAsText: () => "transcript\n",
+			},
+		} as unknown as SessionEntry;
+		const tmp = realpathSync(tmpdir());
+		const args = { kind: "text", includeAdvisor: false, includeBtw: false, includeWorkers: false };
+		const methods = createDownloadMethods({
+			manifestDeps: () => liveInputs(sessionId, { sessionsDir, sessionFile }),
+			roots: () => [sessionsDir, tmp],
+		});
+		const result = await methods.exportDownload(entry, [args]);
+		const failures: DownloadBulkFailedControl[] = [];
+		await serveDownloadBulk({
+			correlationId: "corr-abort",
+			path: result.path,
+			cwd: sessionsDir,
+			roots: [sessionsDir, tmp],
+			// A late or dropped part: the fleet cancelled, so the upload throws.
+			uploadParts: async () => {
+				throw new Error("requester went away");
+			},
+			failControl: (payload) => failures.push(payload),
+		});
+		expect(failures).toHaveLength(1);
+		expect(failures[0]).toMatchObject({
+			type: "download_bulk_failed",
+			correlationId: "corr-abort",
+		});
+		expect(existsSync(result.path)).toBe(false);
+	});
+
+	test("an HTML export that fails after staging removes its partial file", async () => {
+		const sessionsDir = tempDir("omp-download-export-fail-sessions-");
+		const sessionId = "sess-export-fail";
+		const sessionFile = join(sessionsDir, `${sessionId}.jsonl`);
+		writeFileSync(sessionFile, "{}\n");
+		const staged: string[] = [];
+		const entry = {
+			session: {
 				exportToHtml: async (outputPath: string) => {
-					writeFileSync(outputPath, "<!DOCTYPE html>\n");
-					return outputPath;
+					staged.push(outputPath);
+					writeFileSync(outputPath, "<!DOCTYPE html>");
+					throw new Error("disk full");
 				},
 			},
 		} as unknown as SessionEntry;
@@ -262,15 +298,72 @@ describe("download manifest artifact jails", () => {
 			manifestDeps: () => liveInputs(sessionId, { sessionsDir, sessionFile }),
 			roots: () => [sessionsDir, realpathSync(tmpdir())],
 		});
+		await expect(methods.exportDownload(entry, [args])).rejects.toThrow("disk full");
+		expect(staged).toHaveLength(1);
+		expect(existsSync(staged[0]!)).toBe(false);
+	});
 
-		const abandoned = await methods.exportDownload(entry, [args]);
-		expect(existsSync(abandoned.path)).toBe(true);
-		const next = await methods.exportDownload(entry, [args]);
-		expect(existsSync(abandoned.path)).toBe(false);
+	test("every staged export kind is deleted after its fetch, swept by the next export, and shutdown clears the rest", async () => {
+		const sessionsDir = tempDir("omp-download-sweep-sessions-");
+		const requestDir = tempDir("omp-download-sweep-request-");
+		const sessionId = "sess-sweep";
+		const sessionFile = join(sessionsDir, `${sessionId}.jsonl`);
+		writeFileSync(sessionFile, "{}\n");
+		const requestFile = join(requestDir, "llm-request.json");
+		writeFileSync(requestFile, "{}");
+		const entry = {
+			session: {
+				formatSessionAsText: () => "transcript\n",
+				dumpLlmRequestToTmpDir: async () => requestFile,
+			},
+		} as unknown as SessionEntry;
+		const methods = createDownloadMethods({
+			manifestDeps: () => liveInputs(sessionId, { sessionsDir, sessionFile }),
+			roots: () => [sessionsDir, realpathSync(tmpdir())],
+		});
+		const flags = { includeAdvisor: false, includeBtw: false, includeWorkers: false };
+
+		const text = await methods.exportDownload(entry, [{ ...flags, kind: "text" }]);
+		expect(existsSync(text.path)).toBe(true);
+		// Nobody fetched the text: the request export's sweep removes it.
+		const request = await methods.exportDownload(entry, [{ ...flags, kind: "request" }]);
+		expect(existsSync(text.path)).toBe(false);
+		expect(existsSync(request.path)).toBe(true);
+
+		const served = bulkServe(request.path, sessionsDir, "corr-request");
+		await served.run([sessionsDir, realpathSync(tmpdir())]);
+		expect(served.failures).toEqual([]);
+		expect(served.uploaded()).toBe(1);
+		expect(existsSync(request.path)).toBe(false);
+
+		const next = await methods.exportDownload(entry, [{ ...flags, kind: "text" }]);
 		expect(existsSync(next.path)).toBe(true);
-
-		discardAllStagedHtml();
+		discardAllStagedExports();
 		expect(existsSync(next.path)).toBe(false);
+	});
+
+	test("a staged export refused by the roots is deleted instead of left in tmpdir", async () => {
+		const sessionsDir = tempDir("omp-download-refused-sessions-");
+		const requestDir = tempDir("omp-download-refused-request-");
+		const sessionId = "sess-refused";
+		const sessionFile = join(sessionsDir, `${sessionId}.jsonl`);
+		writeFileSync(sessionFile, "{}\n");
+		const requestFile = join(requestDir, "llm-request.json");
+		writeFileSync(requestFile, "{}");
+		const entry = {
+			session: { dumpLlmRequestToTmpDir: async () => requestFile },
+		} as unknown as SessionEntry;
+		const methods = createDownloadMethods({
+			manifestDeps: () => liveInputs(sessionId, { sessionsDir, sessionFile }),
+			roots: () => [sessionsDir],
+		});
+
+		await expect(
+			methods.exportDownload(entry, [
+				{ kind: "request", includeAdvisor: false, includeBtw: false, includeWorkers: false },
+			]),
+		).rejects.toMatchObject({ code: "forbidden" });
+		expect(existsSync(requestFile)).toBe(false);
 	});
 
 	test("a symlinked btw scope directory is refused", () => {

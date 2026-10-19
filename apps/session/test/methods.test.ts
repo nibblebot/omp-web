@@ -8,13 +8,19 @@
  * a stub session so the parity logic is asserted directly.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
 import { cfgModelRoleStorage, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { ENVELOPE_MAX_BYTES } from "#lib/wire/callback-protocol";
+import type { DownloadManifestResult } from "../download-manifest";
 import { createWebMethods } from "../methods";
 import type { SessionEntry } from "../session-entry";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+
+afterAll(cleanupTempDirs);
 
 interface StubSession {
 	settings: Settings;
@@ -466,6 +472,50 @@ describe("session graph rows", () => {
 		await expect(
 			methods.navigateTree!(entry, ["u1", { revision: "not-the-current-revision" }]),
 		).rejects.toThrow("Graph selection is stale; reload and re-pick");
+	});
+});
+
+function btwEntry(artifactsDir: string | null): SessionEntry {
+	const sessionManager = { getArtifactsDir: () => artifactsDir };
+	const session = { sessionId: "sess-btw", sessionManager };
+	return { handle: "s1", session } as unknown as SessionEntry;
+}
+
+describe("download manifest BTW history", () => {
+	test("BTW records under the session's artifacts dir are listed and marked included", async () => {
+		const artifactsDir = tempDir("omp-methods-btw-artifacts-");
+		const scopeDir = join(artifactsDir, "btw-history", "sessions", "sess-btw");
+		mkdirSync(scopeDir, { recursive: true });
+		writeFileSync(join(scopeDir, "rec.json"), "{}");
+		const manifest = (await methodsTable().downloadManifest!(btwEntry(artifactsDir), [
+			{ includeAdvisor: false, includeBtw: true, includeWorkers: false },
+		])) as DownloadManifestResult;
+		expect(manifest).toMatchObject({ btwIncluded: true });
+		expect(manifest.files).toContainEqual(
+			expect.objectContaining({ name: "btw-history/rec.json", kind: "btw" }),
+		);
+		expect(manifest.warnings).not.toContain(
+			"BTW history location is unavailable; no BTW history can be included.",
+		);
+	});
+
+	test("a session with no artifacts dir omits BTW with a warning instead of failing", async () => {
+		const manifest = (await methodsTable().downloadManifest!(btwEntry(null), [
+			{ includeAdvisor: false, includeBtw: true, includeWorkers: false },
+		])) as DownloadManifestResult;
+		expect(manifest).toMatchObject({ btwIncluded: false });
+		expect(manifest.warnings).toContain(
+			"BTW history location is unavailable; no BTW history can be included.",
+		);
+	});
+
+	test("an artifacts dir with no BTW scope directory lists nothing and does not throw", async () => {
+		const artifactsDir = tempDir("omp-methods-btw-empty-");
+		const manifest = (await methodsTable().downloadManifest!(btwEntry(artifactsDir), [
+			{ includeAdvisor: false, includeBtw: true, includeWorkers: false },
+		])) as DownloadManifestResult;
+		expect(manifest).toMatchObject({ btwIncluded: false });
+		expect(manifest.files.filter((file) => file.kind === "btw")).toEqual([]);
 	});
 });
 

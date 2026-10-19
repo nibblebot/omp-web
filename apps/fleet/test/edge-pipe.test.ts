@@ -549,4 +549,68 @@ describe("edge pipe session file over the callback pair", () => {
 			await rig.close();
 		}
 	});
+
+	test("GET /ctl/sessions/{id}/download is 503 while two downloads are open, and is refused with the cap reason", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "dl-cap");
+			const first = rig.transport.createBulkCorrelation(remote.daemonId, { capture: true });
+			const second = rig.transport.createBulkCorrelation(remote.daemonId, { capture: true });
+			const url = `http://127.0.0.1:${rig.port}/ctl/sessions/${remote.daemonId}/download?path=a.txt`;
+			const refused = await fetch(url);
+			expect(refused.status).toBe(503);
+			expect(await refused.json()).toEqual({
+				error: "download unavailable: too many concurrent downloads (limit 2)",
+			});
+			first.cancel("freed");
+			expect((await first.done).state).toBe("failed");
+			second.cancel("cleanup");
+			await second.done;
+		} finally {
+			await rig.close();
+		}
+	});
+
+	test("a browser that aborts a download frees its capture slot at once", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "dl-abort");
+			const url = `http://127.0.0.1:${rig.port}/ctl/sessions/${remote.daemonId}/download?path=a.txt`;
+			const downloadCommands = (): number =>
+				remote.daemon.received().filter((env) => {
+					const payload = env.payload;
+					return (
+						env.kind === "command" &&
+						typeof payload === "object" &&
+						payload !== null &&
+						"type" in payload &&
+						payload.type === "download_bulk"
+					);
+				}).length;
+			const first = new AbortController();
+			const second = new AbortController();
+			const firstFetch = fetch(url, { signal: first.signal }).catch((err: unknown) => err);
+			const secondFetch = fetch(url, { signal: second.signal }).catch((err: unknown) => err);
+			await waitFor(() => (downloadCommands() >= 2 ? true : null), 3000, "two download commands");
+			first.abort();
+			expect(await firstFetch).not.toBeInstanceOf(Response);
+			// Both slots stay held until the edge sees the abort; then a probe capture fits.
+			await waitFor(
+				() => {
+					try {
+						rig.transport.createBulkCorrelation(remote.daemonId, { capture: true }).cancel("probe");
+						return true;
+					} catch {
+						return null;
+					}
+				},
+				3000,
+				"aborted download releases its capture slot",
+			);
+			second.abort();
+			expect(await secondFetch).not.toBeInstanceOf(Response);
+		} finally {
+			await rig.close();
+		}
+	});
 });

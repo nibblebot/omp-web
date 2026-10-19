@@ -42,10 +42,11 @@ import type { FileLock } from "#lib/platform/file-lock";
 import { isLoopbackHost } from "#lib/platform/hosts";
 import { parseConfig, parseFleetStdin, type SessionConfig } from "./config";
 import {
-	discardAllStagedHtml,
+	discardAllStagedExports,
 	isDownloadBulkCommand,
 	serveDownloadBulk,
 } from "./download-manifest";
+import { discardAllStagedUploads } from "./resume-import-adapter";
 import {
 	CALLBACK_TRANSPORT_STREAM_ID,
 	FleetCallback,
@@ -1703,7 +1704,8 @@ async function shutdown(exitCode = 0): Promise<void> {
 	if (fleetCallback !== null) fleetCallback.stop();
 	if (bootEntry) await closeSession(bootEntry, "server shutting down");
 	server.stop();
-	discardAllStagedHtml();
+	discardAllStagedExports();
+	discardAllStagedUploads();
 	// Release session-file locks before the SDK postmortem cleanup runs so a
 	// crash-free exit never leaves a live lock behind.
 	for (const lock of sessionLocks) lock.release();

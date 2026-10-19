@@ -168,7 +168,7 @@ export function safeDownloadHeaders(
 //      import { downloadFailureKind, enforceBulkCap, overBulkCapMessage, safeDownloadHeaders } from "./download-policy";
 // 2. In the clone branch: replace the ad-hoc `content-disposition` header
 //    object with `safeDownloadHeaders(name)`; call `enforceBulkCap(
-//    result.data.byteLength)` before constructing the Response; map the
+//    result.bytes)` before constructing the Response; map the
 //    failure branch through `downloadFailureKind(502, result.error)` so the
 //    JSON body carries `{ error: { code, message } }` instead of a bare string.
 // 3. In the direct/worktree branch: map `!upstream.ok` through

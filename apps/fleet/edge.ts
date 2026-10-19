@@ -106,7 +106,11 @@ import { serveStaticUi } from "./static-ui";
 import { BrowseError, browseDirectories } from "./fs-browse";
 import { listRecentRoots } from "./recent-roots";
 import { DaemonsAggregator } from "./daemons-aggregator";
-import type { DaemonTransportRegistry, VirtualStreamSink } from "./daemon-transport";
+import type {
+	BulkCorrelation,
+	DaemonTransportRegistry,
+	VirtualStreamSink,
+} from "./daemon-transport";
 import {
 	listCloneDaemonSessions,
 	listDaemonSessions,
@@ -2657,8 +2661,8 @@ export class FleetEdge {
 	 * streams the file back over POST /callback/bulk (multi-part under the 64
 	 * MiB aggregate cap). Rides the server-level auth gate (BrowserAuth) and
 	 * never touches the fleet's own filesystem. Unknown daemon → 404; missing
-	 * transport → 503; no live pair → 503; a failed or capped transfer → 502
-	 * with the typed reason.
+	 * transport → 503; no live pair or too many concurrent downloads → 503; a
+	 * failed transfer (daemon-reported, cancelled, expired) → 502 with the reason.
 	 */
 	async #handleDownload(req: Request, daemonId: string): Promise<Response> {
 		if (!this.#registry.get(daemonId)) return json({ error: "not found" }, 404);
@@ -2670,29 +2674,55 @@ export class FleetEdge {
 		if (!transport) {
 			return json({ error: "download unavailable: no callback transport wired" }, 503);
 		}
-		const correlation = transport.createBulkCorrelation(daemonId, { capture: true });
+		let correlation: BulkCorrelation;
 		try {
-			await transport.sendToDaemon(daemonId, {
-				streamId: CALLBACK_CONTROL_STREAM_ID,
-				kind: "command",
-				payload: { type: "download_bulk", correlationId: correlation.correlationId, path },
+			correlation = transport.createBulkCorrelation(daemonId, { capture: true });
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : "bulk transport busy";
+			return json({ error: `download unavailable: ${reason}` }, 503);
+		}
+		// A browser that goes away, or a daemon that never took the command,
+		// fails the transfer now instead of holding its buffered parts until expiry.
+		const onAbort = (): void => correlation.cancel("download request aborted");
+		req.signal.addEventListener("abort", onAbort, { once: true });
+		try {
+			try {
+				await transport.sendToDaemon(daemonId, {
+					streamId: CALLBACK_CONTROL_STREAM_ID,
+					kind: "command",
+					payload: { type: "download_bulk", correlationId: correlation.correlationId, path },
+				});
+			} catch {
+				correlation.cancel("download command not delivered");
+				return json({ error: `download unavailable: ${daemonId} has no live callback pair` }, 503);
+			}
+			const result = await correlation.done;
+			if (result.state !== "received" || result.chunks === undefined) {
+				return json({ error: `download failed: ${result.error ?? "transfer aborted"}` }, 502);
+			}
+			// Stream the parts as received: no reassembly, so the payload is held once.
+			const { chunks } = result;
+			let next = 0;
+			const body = new ReadableStream<Uint8Array>({
+				pull(controller) {
+					const chunk = chunks[next];
+					next += 1;
+					if (chunk === undefined) controller.close();
+					else controller.enqueue(chunk);
+				},
 			});
-		} catch {
-			return json({ error: `download unavailable: ${daemonId} has no live callback pair` }, 503);
+			const name = path.split("/").pop() ?? "download";
+			return new Response(body, {
+				status: 200,
+				headers: {
+					"content-type": "application/octet-stream",
+					"content-disposition": `attachment; filename="${name.replace(/["\r\n]/g, "_")}"`,
+					"content-length": String(result.bytes),
+				},
+			});
+		} finally {
+			req.signal.removeEventListener("abort", onAbort);
 		}
-		const result = await correlation.done;
-		if (result.state !== "received" || result.data === undefined) {
-			return json({ error: `download failed: ${result.error ?? "transfer aborted"}` }, 502);
-		}
-		const name = path.split("/").pop() ?? "download";
-		return new Response(result.data, {
-			status: 200,
-			headers: {
-				"content-type": "application/octet-stream",
-				"content-disposition": `attachment; filename="${name.replace(/["\r\n]/g, "_")}"`,
-				"content-length": String(result.data.byteLength),
-			},
-		});
 	}
 
 	/**

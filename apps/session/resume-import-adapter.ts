@@ -34,7 +34,8 @@
  * realpath-jailed to the session dir and must resolve to a KNOWN session
  * file — recoverable files are never invented. Upload bytes are size/type
  * validated (JSONL-ish, 64 MiB cap, executables/symlinks rejected) and
- * staged to a private temp file that is removed after import. Secrets and
+ * staged to a private temp file that is removed after import, cancel, the
+ * 10-minute TTL, or daemon shutdown. Secrets and
  * tokens never appear in DTOs. No stdout writes (OMP_SESSION| reserved).
  *
  * Wire handlers use the existing call_result transport. Foreign roots are
@@ -43,6 +44,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -795,6 +797,30 @@ function uploadDirectory(upload: StagedForeignUpload): string {
 		: path.dirname(path.dirname(upload.stagedPath));
 }
 
+/** Staged uploads awaiting confirm/cancel: at most this many at once. */
+const FOREIGN_STAGE_MAX_ENTRIES = 2;
+const FOREIGN_STAGE_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
+/** A staged upload never confirmed or cancelled is swept after this long. */
+const FOREIGN_STAGE_TTL_MS = 10 * 60 * 1000;
+/** Largest base64 text a valid upload can be; checked before decoding. */
+const MAX_UPLOAD_BASE64_LENGTH = Math.ceil(FOREIGN_UPLOAD_MAX_BYTES / 3) * 4;
+type StagedForeignUploadRecord = StagedForeignUpload & { createdAt: number };
+
+/** Staging dirs this process still holds; {@link discardAllStagedUploads} empties it. */
+const liveStagingDirs = new Set<string>();
+
+/** Shutdown: delete every staged upload dir this process still holds. */
+export function discardAllStagedUploads(): void {
+	for (const dir of liveStagingDirs) {
+		try {
+			rmSync(dir, { recursive: true, force: true });
+		} catch {
+			// Best effort: shutdown must not fail on one undeletable dir.
+		}
+	}
+	liveStagingDirs.clear();
+}
+
 async function importStagedUpload(
 	upload: StagedForeignUpload,
 	options?: { sessionDir?: string; fallbackCwd?: string },
@@ -973,6 +999,8 @@ export interface ResumeImportContext extends ResumeQuery {
 	sessionsRoot?: string;
 	/** Fleet mirror for acknowledged deletion; absent on unpaired daemons. */
 	lifecycleMirror?: LifecycleMirror;
+	/** Clock for staged-upload expiry; tests inject it, the daemon uses Date.now. */
+	now?: () => number;
 }
 
 function argAt(args: unknown[], index: number): Record<string, unknown> {
@@ -986,6 +1014,12 @@ function strField(obj: Record<string, unknown>, key: string): string | undefined
 	return typeof v === "string" ? v : undefined;
 }
 
+/** Named `call` handler table returned by {@link createResumeImportHandlers}. */
+export type ResumeImportHandlers = Record<
+	string,
+	(args: unknown[], entry?: SessionEntry) => Promise<unknown>
+>;
+
 /**
  * Build the daemon `call` handlers P0 publishes. Each handler takes the raw
  * `args` array and returns JSON-safe values; throws carry typed
@@ -993,9 +1027,7 @@ function strField(obj: Record<string, unknown>, key: string): string | undefined
  * replay the recorded answer via the existing dedup window — no new
  * transport here).
  */
-export function createResumeImportHandlers(
-	ctx: ResumeImportContext,
-): Record<string, (args: unknown[], entry?: SessionEntry) => Promise<unknown>> {
+export function createResumeImportHandlers(ctx: ResumeImportContext): ResumeImportHandlers {
 	const sessionsDir = resolveSessionDir(ctx);
 	const lineageDeps: ResumeLineageDeps = {
 		sessionsDir: ctx.sessionsRoot ?? sessionsDir,
@@ -1003,8 +1035,12 @@ export function createResumeImportHandlers(
 		...(ctx.isWorkspaceLive ? { isWorkspaceLive: ctx.isWorkspaceLive } : {}),
 		...(ctx.resumeClonePathFor ? { resumeClonePathFor: ctx.resumeClonePathFor } : {}),
 	};
-	// Staged uploads awaiting confirm/cancel (stagedId -> StagedForeignUpload).
-	const staged = new Map<string, StagedForeignUpload>();
+	// Staged uploads awaiting confirm/cancel (stagedId -> upload + createdAt).
+	const staged = new Map<string, StagedForeignUploadRecord>();
+	// Stages still writing hold a slot and bytes until they land or fail.
+	let stagingCount = 0;
+	let stagingBytes = 0;
+	const now = ctx.now ?? (() => Date.now());
 	const selections = new Map<
 		ForeignSessionSource,
 		Map<string, { store: ForeignSessionStore; info: ForeignSessionInfo }>
@@ -1054,6 +1090,47 @@ export function createResumeImportHandlers(
 		if (!selection) throw new ForeignImportError("unavailable", `foreign session not found: ${id}`);
 		await assertImportableFile(selection.info);
 		return selection;
+	}
+	/** Forget a staged upload; the caller removes its dir. */
+	function dropStaged(id: string): StagedForeignUploadRecord | undefined {
+		const upload = staged.get(id);
+		if (upload === undefined) return undefined;
+		staged.delete(id);
+		liveStagingDirs.delete(uploadDirectory(upload));
+		return upload;
+	}
+	/** Remove uploads past their TTL or whose dir was discarded at shutdown. */
+	async function sweepStaged(): Promise<void> {
+		const at = now();
+		for (const [id, upload] of staged) {
+			const live = upload.createdAt + FOREIGN_STAGE_TTL_MS > at;
+			if (live && liveStagingDirs.has(uploadDirectory(upload))) continue;
+			dropStaged(id);
+			await rm(uploadDirectory(upload), { recursive: true, force: true }).catch(() => {});
+		}
+	}
+	/** Claim a stage slot and its bytes before writing; the returned fn frees them. */
+	function reserveStage(size: number): () => void {
+		let heldBytes = stagingBytes;
+		for (const upload of staged.values()) heldBytes += upload.size;
+		if (staged.size + stagingCount >= FOREIGN_STAGE_MAX_ENTRIES) {
+			throw new ForeignImportError(
+				"unavailable",
+				`too many staged uploads (limit ${FOREIGN_STAGE_MAX_ENTRIES}); import or cancel one first`,
+			);
+		}
+		if (heldBytes + size > FOREIGN_STAGE_MAX_TOTAL_BYTES) {
+			throw new ForeignImportError(
+				"unavailable",
+				`staged uploads exceed the ${FOREIGN_STAGE_MAX_TOTAL_BYTES / 1024 / 1024} MiB cap; import or cancel one first`,
+			);
+		}
+		stagingCount += 1;
+		stagingBytes += size;
+		return () => {
+			stagingCount -= 1;
+			stagingBytes -= size;
+		};
 	}
 	function manageDeps(entry?: SessionEntry): ResumeManageDeps {
 		if (ctx.sessionsRoot === undefined) {
@@ -1144,6 +1221,7 @@ export function createResumeImportHandlers(
 			const source = strField(obj, "source") ?? "";
 			assertSource(source);
 			const id = strField(obj, "id") ?? "";
+			await sweepStaged();
 			const upload = staged.get(id);
 			if (upload?.source === source) {
 				await assertImportableFile({ ...upload.info, path: upload.stagedPath });
@@ -1158,15 +1236,16 @@ export function createResumeImportHandlers(
 			assertSource(source);
 			const id = strField(obj, "id") ?? "";
 			const fallbackCwd = strField(obj, "fallbackCwd");
+			await sweepStaged();
 			const pending = staged.get(id);
 			if (pending && pending.source === source) {
+				dropStaged(id);
 				try {
 					return await importStagedUpload(pending, {
 						sessionDir: ctx.sessionDir,
 						...(fallbackCwd !== undefined ? { fallbackCwd } : {}),
 					});
 				} finally {
-					staged.delete(id);
 					await rm(uploadDirectory(pending), { recursive: true, force: true }).catch(() => {});
 				}
 			}
@@ -1182,6 +1261,13 @@ export function createResumeImportHandlers(
 			assertSource(source);
 			const filename = strField(obj, "filename") ?? "upload.jsonl";
 			const bytesBase64 = strField(obj, "bytesBase64") ?? "";
+			// Refuse oversize input before decoding it into a second, larger buffer.
+			if (bytesBase64.length > MAX_UPLOAD_BASE64_LENGTH) {
+				throw new ForeignImportError(
+					"invalid_request",
+					`uploaded file exceeds the ${FOREIGN_UPLOAD_MAX_BYTES / 1024 / 1024} MiB import cap`,
+				);
+			}
 			let data: Uint8Array;
 			try {
 				data = Buffer.from(bytesBase64, "base64");
@@ -1191,23 +1277,29 @@ export function createResumeImportHandlers(
 			if (data.length === 0 && bytesBase64.length > 0) {
 				throw new ForeignImportError("invalid_request", "upload bytes are not valid base64");
 			}
-			const upload = await stageForeignUpload(source, data, filename);
-			staged.set(upload.stagedId, upload);
-			return {
-				stagedId: upload.stagedId,
-				preview: {
-					...foreignPreviewOf(upload.info),
-					id: upload.stagedId,
-					staged: true,
-				} satisfies ForeignSessionPreview,
-			};
+			await sweepStaged();
+			const release = reserveStage(data.length);
+			try {
+				const upload = await stageForeignUpload(source, data, filename);
+				liveStagingDirs.add(uploadDirectory(upload));
+				staged.set(upload.stagedId, { ...upload, createdAt: now() });
+				return {
+					stagedId: upload.stagedId,
+					preview: {
+						...foreignPreviewOf(upload.info),
+						id: upload.stagedId,
+						staged: true,
+					} satisfies ForeignSessionPreview,
+				};
+			} finally {
+				release();
+			}
 		},
 		foreignUploadCancel: async (args) => {
 			const obj = argAt(args, 0);
 			const stagedId = strField(obj, "stagedId") ?? "";
-			const pending = staged.get(stagedId);
+			const pending = dropStaged(stagedId);
 			if (pending) {
-				staged.delete(stagedId);
 				await rm(uploadDirectory(pending), { recursive: true, force: true }).catch(() => {});
 			}
 			return { cancelled: true };

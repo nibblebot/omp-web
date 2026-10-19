@@ -109,14 +109,8 @@ export interface DownloadManifestDeps {
 	sessionId: string;
 	/** Live main session file, when known (provenance only, never identity). */
 	sessionFile?: string;
-	/** Agent sessions root for the artifact-subtree scan. */
-	sessionsDir: string;
 	/** Task artifacts root for the btw-history scan; undefined = unknown (warn + omit). */
 	artifactsDir?: string;
-	/** Live worker transcript map (entry.transcriptSessionFilesBySubagentId). */
-	subagentSessionFiles: ReadonlyMap<string, string>;
-	/** Worker roster mirror (entry.subagentSnapshots sessionFile fallback). */
-	subagentSnapshots: ReadonlyMap<string, { sessionFile?: string }>;
 }
 
 /** Scope-segment rule mirroring the SDK's btw-history `historyDirectory`. */
@@ -192,9 +186,9 @@ function inspectDownloadFiles(
 		}
 	}
 	if (args.includeBtw && deps.artifactsDir) {
-		const root = realpathSync(deps.artifactsDir);
-		const dir = join(root, "btw-history", "sessions", btwScopeSegment(deps.sessionId));
 		try {
+			const root = realpathSync(deps.artifactsDir);
+			const dir = join(root, "btw-history", "sessions", btwScopeSegment(deps.sessionId));
 			if (!insideRoots(realpathSync(dir), [root]) || lstatSync(dir).isSymbolicLink())
 				throw new ExportError("forbidden", "BTW history escapes its authorized root.");
 			for (const item of readdirSync(dir, { withFileTypes: true })) {
@@ -365,17 +359,17 @@ export interface DownloadBulkServeDeps {
 }
 
 /**
- * HTML exports staged under tmpdir for one pending bulk fetch, keyed by the
- * canonical path the client receives. This daemon owns those files: a fetch
- * deletes its file once the transfer ends, and leftovers are swept on the next
- * export and at shutdown.
+ * Export files staged under tmpdir for one pending bulk fetch (html,
+ * html-themed, text, request, archive), keyed by the canonical path the client
+ * receives. This daemon owns those files: a fetch deletes its file once the
+ * transfer ends, and leftovers are swept on the next export and at shutdown.
  */
-const stagedHtml = new Set<string>();
+const stagedExports = new Set<string>();
 /** Staged paths whose transfer is streaming now; sweeps leave them alone. */
-const streamingHtml = new Set<string>();
+const streamingExports = new Set<string>();
 
-function discardStagedHtml(path: string): void {
-	stagedHtml.delete(path);
+function discardStagedExport(path: string): void {
+	stagedExports.delete(path);
 	try {
 		unlinkSync(path);
 	} catch {
@@ -383,31 +377,31 @@ function discardStagedHtml(path: string): void {
 	}
 }
 
-/** Delete staged HTML that is not being streamed: abandoned or refused fetches. */
-function sweepStagedHtml(): void {
-	for (const path of stagedHtml) {
-		if (!streamingHtml.has(path)) discardStagedHtml(path);
+/** Delete staged exports that are not being streamed: abandoned or refused fetches. */
+function sweepStagedExports(): void {
+	for (const path of stagedExports) {
+		if (!streamingExports.has(path)) discardStagedExport(path);
 	}
 }
 
-/** Shutdown: delete every staged HTML export this daemon still holds. */
-export function discardAllStagedHtml(): void {
-	for (const path of stagedHtml) discardStagedHtml(path);
+/** Shutdown: delete every staged export this daemon still holds. */
+export function discardAllStagedExports(): void {
+	for (const path of stagedExports) discardStagedExport(path);
 }
 
 /**
- * Serve one `download_bulk` command. A staged HTML export is deleted once its
+ * Serve one `download_bulk` command. A staged export is deleted once its
  * fetch has ended, whether it streamed, failed, or was refused.
  */
 export async function serveDownloadBulk(deps: DownloadBulkServeDeps): Promise<void> {
-	const staged = stagedHtml.has(deps.path);
-	if (staged) streamingHtml.add(deps.path);
+	const staged = stagedExports.has(deps.path);
+	if (staged) streamingExports.add(deps.path);
 	try {
 		await streamDownloadBulk(deps);
 	} finally {
 		if (staged) {
-			streamingHtml.delete(deps.path);
-			discardStagedHtml(deps.path);
+			streamingExports.delete(deps.path);
+			discardStagedExport(deps.path);
 		}
 	}
 }
@@ -568,102 +562,105 @@ export function createDownloadMethods(deps: DownloadMethodsDeps) {
 	const exportDownload = async (entry: SessionEntry, a: unknown[]) => {
 		const args = downloadArgs(a[0]);
 		const kind = args.kind!;
+		// Every export is staged for one fetch: drop leftovers of earlier abandoned ones.
+		sweepStagedExports();
 		const input = deps.manifestDeps(entry);
 		const manifest = buildDownloadManifest(input, args);
-		let path: string;
-		if (kind === "html" || kind === "html-themed") {
-			sweepStagedHtml();
-			// Stage under tmpdir, not the session cwd: the file exists only to be fetched.
-			path = await entry.session.exportToHtml(
-				join(tmpdir(), `omp-session-${randomUUID()}.html`),
-				kind === "html-themed",
-			);
-		} else if (kind === "text") {
-			const text = entry.session.formatSessionAsText();
-			if (!text) throw new ExportError("unavailable", "The transcript is empty.");
-			path = join(tmpdir(), `omp-text-${randomUUID()}.txt`);
-			await Bun.write(path, text);
-		} else if (kind === "request") {
-			const dumped = await entry.session.dumpLlmRequestToTmpDir();
-			if (!dumped) throw new ExportError("unavailable", "No request context is available.");
-			path = dumped;
-		} else {
-			// Inspect first, before the SDK discovers any worker paths.
-			const inspected = inspectDownloadFiles(input, args);
-			const dumped = await entry.session.dumpSessionArchiveToTmpDir();
-			if (!dumped) throw new ExportError("unavailable", "The session archive is empty.");
-			if (dumped.subagentError) {
-				unlinkSync(dumped.path);
-				throw new ExportError(
-					"unavailable",
-					"Worker transcript discovery failed; archive coverage cannot be verified.",
-				);
-			}
-			try {
-				const archive = await openArchive(dumped.path);
-				const members: Array<readonly [string, ArchiveMemberContent]> = [];
-				const outputFiles: DownloadManifestFile[] = [];
-				let total = 0;
-				for (const name of dumped.files) {
-					if (name.startsWith("subagents/") && !args.includeWorkers) continue;
-					if (name.startsWith("/") || name.split("/").includes(".."))
-						throw new ExportError("forbidden", "Unsafe archive member.");
-					const bytes = (await archive.readFile(name)).bytes;
-					total += bytes.byteLength;
-					if (total > BULK_MAX_BYTES)
-						throw new ExportError("unavailable", "Archive exceeds the 64 MiB aggregate cap.");
-					members.push([name, bytes]);
-					outputFiles.push({
-						name,
-						kind: name.startsWith("subagents/")
-							? "subagent"
-							: name === "session.md"
-								? "main"
-								: "metadata",
-						bytes: bytes.byteLength,
-						sessionId: input.sessionId,
-					});
-				}
-				for (const item of inspected) {
-					if (item.file.kind !== "advisor" && item.file.kind !== "btw") continue;
-					// Recheck realpath/type/roots immediately before reading.
-					const st = lstatSync(item.path);
-					if (!st.isFile() || st.isSymbolicLink())
-						throw new ExportError("forbidden", "Artifact changed before export.");
-					resolveDownloadPath("archive", {
-						sessionId: input.sessionId,
-						serverPath: item.path,
-						roots: deps.roots(entry),
-					});
-					total += st.size;
-					if (total > BULK_MAX_BYTES)
-						throw new ExportError("unavailable", "Archive exceeds the 64 MiB aggregate cap.");
-					const name = item.file.kind === "advisor" ? `advisors/${item.file.name}` : item.file.name;
-					members.push([name, Bun.file(item.path)]);
-					outputFiles.push({ ...item.file, name, bytes: st.size });
-				}
-				manifest.files = outputFiles;
-				manifest.workerCount = outputFiles.filter((file) => file.kind === "subagent").length;
-				members.push(["download-manifest.json", JSON.stringify(manifest, null, 2)]);
-				path = join(tmpdir(), `omp-download-${randomUUID()}.zip`);
-				await writeArchive(path, "zip", members);
-			} finally {
-				unlinkSync(dumped.path);
-			}
-		}
-		let served: { serverPath: string; clientFilename: string };
+		// Set as soon as this daemon owns a file, so any later failure removes it.
+		let path: string | undefined;
 		try {
-			served = resolveDownloadPath(kind, {
+			if (kind === "html" || kind === "html-themed") {
+				// Stage under tmpdir, not the session cwd: the file exists only to be fetched.
+				const target = join(tmpdir(), `omp-session-${randomUUID()}.html`);
+				// Recorded before the export runs, so a failed export still removes its partial file.
+				path = target;
+				path = await entry.session.exportToHtml(target, kind === "html-themed");
+			} else if (kind === "text") {
+				const text = entry.session.formatSessionAsText();
+				if (!text) throw new ExportError("unavailable", "The transcript is empty.");
+				path = join(tmpdir(), `omp-text-${randomUUID()}.txt`);
+				await Bun.write(path, text);
+			} else if (kind === "request") {
+				// The SDK writes this file directly under tmpdir (no dedicated directory).
+				const dumped = await entry.session.dumpLlmRequestToTmpDir();
+				if (!dumped) throw new ExportError("unavailable", "No request context is available.");
+				path = dumped;
+			} else {
+				// Inspect first, before the SDK discovers any worker paths.
+				const inspected = inspectDownloadFiles(input, args);
+				const dumped = await entry.session.dumpSessionArchiveToTmpDir();
+				if (!dumped) throw new ExportError("unavailable", "The session archive is empty.");
+				if (dumped.subagentError) {
+					unlinkSync(dumped.path);
+					throw new ExportError(
+						"unavailable",
+						"Worker transcript discovery failed; archive coverage cannot be verified.",
+					);
+				}
+				try {
+					const archive = await openArchive(dumped.path);
+					const members: Array<readonly [string, ArchiveMemberContent]> = [];
+					const outputFiles: DownloadManifestFile[] = [];
+					let total = 0;
+					for (const name of dumped.files) {
+						if (name.startsWith("subagents/") && !args.includeWorkers) continue;
+						if (name.startsWith("/") || name.split("/").includes(".."))
+							throw new ExportError("forbidden", "Unsafe archive member.");
+						const bytes = (await archive.readFile(name)).bytes;
+						total += bytes.byteLength;
+						if (total > BULK_MAX_BYTES)
+							throw new ExportError("unavailable", "Archive exceeds the 64 MiB aggregate cap.");
+						members.push([name, bytes]);
+						outputFiles.push({
+							name,
+							kind: name.startsWith("subagents/")
+								? "subagent"
+								: name === "session.md"
+									? "main"
+									: "metadata",
+							bytes: bytes.byteLength,
+							sessionId: input.sessionId,
+						});
+					}
+					for (const item of inspected) {
+						if (item.file.kind !== "advisor" && item.file.kind !== "btw") continue;
+						// Recheck realpath/type/roots immediately before reading.
+						const st = lstatSync(item.path);
+						if (!st.isFile() || st.isSymbolicLink())
+							throw new ExportError("forbidden", "Artifact changed before export.");
+						resolveDownloadPath("archive", {
+							sessionId: input.sessionId,
+							serverPath: item.path,
+							roots: deps.roots(entry),
+						});
+						total += st.size;
+						if (total > BULK_MAX_BYTES)
+							throw new ExportError("unavailable", "Archive exceeds the 64 MiB aggregate cap.");
+						const name =
+							item.file.kind === "advisor" ? `advisors/${item.file.name}` : item.file.name;
+						members.push([name, Bun.file(item.path)]);
+						outputFiles.push({ ...item.file, name, bytes: st.size });
+					}
+					manifest.files = outputFiles;
+					manifest.workerCount = outputFiles.filter((file) => file.kind === "subagent").length;
+					members.push(["download-manifest.json", JSON.stringify(manifest, null, 2)]);
+					path = join(tmpdir(), `omp-download-${randomUUID()}.zip`);
+					await writeArchive(path, "zip", members);
+				} finally {
+					unlinkSync(dumped.path);
+				}
+			}
+			const served = resolveDownloadPath(kind, {
 				sessionId: input.sessionId,
 				serverPath: path,
 				roots: deps.roots(entry),
 			});
+			stagedExports.add(served.serverPath);
+			return { path: served.serverPath, clientFilename: served.clientFilename, manifest };
 		} catch (err) {
-			if (kind === "html" || kind === "html-themed") discardStagedHtml(path);
+			if (path !== undefined) discardStagedExport(path);
 			throw err;
 		}
-		if (kind === "html" || kind === "html-themed") stagedHtml.add(served.serverPath);
-		return { path: served.serverPath, clientFilename: served.clientFilename, manifest };
 	};
 	return { downloadManifest, exportDownload, dumpSessionArchive: exportDownload };
 }

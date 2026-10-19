@@ -97,6 +97,7 @@ import { join } from "node:path";
 import {
 	BULK_MAX_BYTES,
 	CALLBACK_BULK_PATH_PREFIX,
+	CALLBACK_CONTROL_STREAM_ID,
 	CALLBACK_DOWN_PATH,
 	CALLBACK_ERROR_HTTP_STATUS,
 	CALLBACK_PAIR_READY_TYPE,
@@ -139,8 +140,10 @@ import { SseRing } from "#lib/wire/sse";
 const REPLAY_RING_BYTES = 8 * 1024 * 1024;
 /** Rings with no live connection and no activity for this long are dropped. */
 const RING_IDLE_MS = 10 * 60_000;
-/** Open bulk correlations older than this expire as failed; settled ones are reaped. */
-const BULK_TTL_MS = 10 * 60_000;
+/** Open bulk correlations with no payload progress for this long expire as failed; settled ones are reaped. */
+const BULK_IDLE_MS = 60_000;
+/** Capture (download) correlations open at once; each buffers up to BULK_MAX_BYTES, so this bounds fleet heap. */
+const BULK_CAPTURE_MAX_OPEN = 2;
 /** Registry sweep cadence: up-connection silence, ring idleness, bulk expiry. */
 const SWEEP_INTERVAL_MS = 5_000;
 
@@ -148,17 +151,6 @@ const utf8ByteLength = new TextEncoder();
 
 function envelopeBytes(envelope: CallbackEnvelope): number {
 	return utf8ByteLength.encode(JSON.stringify(envelope)).length;
-}
-
-/** Assemble a capture correlation's buffered parts (total bounded by BULK_MAX_BYTES). */
-function concatBuffers(chunks: readonly Uint8Array[], totalBytes: number): Uint8Array<ArrayBuffer> {
-	const out = new Uint8Array(totalBytes);
-	let offset = 0;
-	for (const chunk of chunks) {
-		out.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	return out;
 }
 
 /** Canonical 32-byte credential. Accepts 64-char hex, base64/base64url of
@@ -294,13 +286,16 @@ interface PumpState {
 interface BulkRecord {
 	correlationId: string;
 	workspaceId: string;
-	createdAt: number;
+	/** Last payload progress (creation, each part, each consumed chunk); idle expiry keys off it. */
+	touchedAt: number;
 	state: "open" | "received" | "failed";
 	/** Aggregate bytes across every part of the transfer. */
 	bytes: number;
 	/** Capture correlations buffer the payload for the fleet requester (downloads). */
 	capture: boolean;
 	chunks: Uint8Array[];
+	/** Upload reader in flight; cancelled when the transfer fails so the POST unwinds. */
+	reader: ReadableStreamDefaultReader<Uint8Array> | null;
 	/** Next expected x-omp-bulk-part number (0-based, strictly sequential). */
 	nextPart: number;
 	resolve: (result: BulkResult) => void;
@@ -343,10 +338,13 @@ export interface PairStatus {
 }
 
 /** Registry-issued bulk transfer handle. `done` never rejects: a failed
- * upload (cap exceeded, aborted, expired) settles as state "failed". */
+ * upload (cap exceeded, aborted, expired, cancelled, daemon-reported)
+ * settles as state "failed". */
 export interface BulkCorrelation {
 	correlationId: string;
 	done: Promise<BulkResult>;
+	/** Fail the transfer (requester gave up); a no-op once it has settled. */
+	cancel(reason: string): void;
 }
 
 export interface BulkResult {
@@ -357,8 +355,8 @@ export interface BulkResult {
 	/** Aggregate bytes across all parts of the transfer. */
 	bytes: number;
 	error?: string;
-	/** Buffered payload, present only on received capture correlations. */
-	data?: Uint8Array<ArrayBuffer>;
+	/** Buffered payload chunks in arrival order, present only on received capture correlations. */
+	chunks?: Uint8Array[];
 }
 
 /** sendToDaemon input: streamId/kind/payload required; version, workspaceId,
@@ -770,6 +768,9 @@ export class DaemonTransportRegistry {
 
 	#dispatchUpEnvelope(conn: UpConnection, envelope: CallbackEnvelope): void {
 		if (envelope.kind === "heartbeat") return; // transport liveness only
+		if (envelope.kind === "control" && envelope.streamId === CALLBACK_CONTROL_STREAM_ID) {
+			this.#applyDownloadBulkFailed(conn.workspaceId, envelope.payload);
+		}
 		for (const tap of this.#taps.get(conn.workspaceId) ?? []) {
 			try {
 				tap(envelope);
@@ -1143,13 +1144,27 @@ export class DaemonTransportRegistry {
 	// --- bulk: POST /callback/bulk/<correlationId> ---------------------------------
 
 	/** Issue a workspace-scoped correlation id for one daemon-initiated bulk
-	 * transfer (single- or multi-part; unused correlations expire as failed).
-	 * `capture: true` (fleet download requests) buffers the received payload
-	 * into the BulkResult so the fleet can serve it; aggregate bytes stay
-	 * capped at BULK_MAX_BYTES either way. */
+	 * transfer (single- or multi-part; unused or stalled correlations expire as
+	 * failed). `capture: true` (fleet download requests) keeps the received
+	 * parts so the fleet can serve them without reassembling a second copy;
+	 * aggregate bytes stay capped at BULK_MAX_BYTES either way. Throws
+	 * `retryable` while BULK_CAPTURE_MAX_OPEN capture transfers are open. */
 	createBulkCorrelation(workspaceId: string, opts?: { capture?: boolean }): BulkCorrelation {
 		if (!workspaceId)
 			throw callbackError("invalid_request", "createBulkCorrelation requires a workspaceId");
+		const capture = opts?.capture === true;
+		if (capture) {
+			let open = 0;
+			for (const existing of this.#bulk.values()) {
+				if (existing.capture && existing.state === "open") open += 1;
+			}
+			if (open >= BULK_CAPTURE_MAX_OPEN) {
+				throw callbackError(
+					"retryable",
+					`too many concurrent downloads (limit ${BULK_CAPTURE_MAX_OPEN})`,
+				);
+			}
+		}
 		const correlationId = randomUUID();
 		let resolve!: (result: BulkResult) => void;
 		const done = new Promise<BulkResult>((res) => {
@@ -1158,15 +1173,23 @@ export class DaemonTransportRegistry {
 		this.#bulk.set(correlationId, {
 			correlationId,
 			workspaceId,
-			createdAt: this.#now(),
+			touchedAt: this.#now(),
 			state: "open",
 			bytes: 0,
-			capture: opts?.capture === true,
+			capture,
 			chunks: [],
+			reader: null,
 			nextPart: 0,
 			resolve,
 		});
-		return { correlationId, done };
+		return {
+			correlationId,
+			done,
+			cancel: (reason) => {
+				const record = this.#bulk.get(correlationId);
+				if (record) this.#failBulk(record, record.bytes, reason);
+			},
+		};
 	}
 
 	async #handleBulk(req: Request, correlationId: string): Promise<Response> {
@@ -1213,11 +1236,12 @@ export class DaemonTransportRegistry {
 			isFinal = finalRaw === "1" || finalRaw === "true";
 		}
 		let partBytes = 0;
+		const reader = req.body.getReader();
+		record.reader = reader;
 		try {
-			const reader = req.body.getReader();
 			for (;;) {
 				const { done, value } = await reader.read();
-				if (done) break;
+				if (done || record.state !== "open") break;
 				partBytes += value.byteLength;
 				if (record.bytes + partBytes > BULK_MAX_BYTES) {
 					void reader.cancel().catch(() => {});
@@ -1231,12 +1255,21 @@ export class DaemonTransportRegistry {
 						`bulk upload exceeds the ${BULK_MAX_BYTES}-byte aggregate cap`,
 					);
 				}
+				record.touchedAt = this.#now();
 				if (record.capture) record.chunks.push(value);
+			}
+			if (record.state !== "open") {
+				throw callbackError(
+					"conflict",
+					`bulk correlation ${correlationId} is already ${record.state}`,
+				);
 			}
 		} catch (error) {
 			if (isCallbackError(error)) throw error;
 			this.#failBulk(record, record.bytes + partBytes, "bulk upload aborted");
 			throw callbackError("unavailable", "bulk upload connection aborted", { cause: error });
+		} finally {
+			record.reader = null;
 		}
 		record.bytes += partBytes;
 		record.nextPart += 1;
@@ -1257,7 +1290,7 @@ export class DaemonTransportRegistry {
 			bytes: record.bytes,
 		};
 		if (record.capture) {
-			result.data = concatBuffers(record.chunks, record.bytes);
+			result.chunks = record.chunks;
 			record.chunks = [];
 		}
 		record.resolve(result);
@@ -1401,6 +1434,8 @@ export class DaemonTransportRegistry {
 	#failBulk(record: BulkRecord, bytes: number, error: string): void {
 		if (record.state !== "open") return;
 		record.state = "failed";
+		record.chunks = [];
+		void record.reader?.cancel().catch(() => {});
 		record.bytes = bytes;
 		record.resolve({
 			correlationId: record.correlationId,
@@ -1409,6 +1444,25 @@ export class DaemonTransportRegistry {
 			bytes,
 			error,
 		});
+	}
+
+	/** Daemon-reported transfer failure (download_bulk_failed control): fail that
+	 * correlation now rather than waiting for the idle expiry. */
+	#applyDownloadBulkFailed(workspaceId: string, payload: unknown): void {
+		if (typeof payload !== "object" || payload === null) return;
+		if (!("type" in payload) || payload.type !== "download_bulk_failed") return;
+		if (!("correlationId" in payload) || typeof payload.correlationId !== "string") return;
+		const record = this.#bulk.get(payload.correlationId);
+		if (!record || record.workspaceId !== workspaceId) return;
+		const message =
+			"error" in payload &&
+			typeof payload.error === "object" &&
+			payload.error !== null &&
+			"message" in payload.error &&
+			typeof payload.error.message === "string"
+				? payload.error.message.slice(0, 500)
+				: "";
+		this.#failBulk(record, record.bytes, message || "the daemon reported a failed transfer");
 	}
 
 	// --- observation ---------------------------------------------------------------
@@ -1524,7 +1578,7 @@ export class DaemonTransportRegistry {
 			if (now - record.lastActiveAt > RING_IDLE_MS) this.#rings.delete(connectionId);
 		}
 		for (const [correlationId, record] of this.#bulk) {
-			if (now - record.createdAt <= BULK_TTL_MS) continue;
+			if (now - record.touchedAt <= BULK_IDLE_MS) continue;
 			if (record.state === "open") this.#failBulk(record, record.bytes, "bulk correlation expired");
 			else this.#bulk.delete(correlationId);
 		}
