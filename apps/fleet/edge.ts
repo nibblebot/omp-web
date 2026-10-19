@@ -92,6 +92,7 @@ import {
 } from "#lib/wire/protocol";
 import {
 	encodeSseEvent,
+	encodeSseEventData,
 	parseSseUnits,
 	SSE_PING_BLOCK,
 	SSE_PING_EVENT,
@@ -980,7 +981,11 @@ export class FleetEdge {
 					// the ring; anything below means priming carries full state.
 					const last = lastEventId === null ? NaN : Number(lastEventId);
 					if (Number.isFinite(last) && last >= SSE_DELTA_SEQ_START) {
-						for (const { value } of client.ring.after(last)) this.#enqueue(stream, value);
+						for (const { value } of client.ring.after(last)) {
+							// Dropped mid-replay: the rest would be encoded and discarded.
+							if (!this.#browsers.has(stream)) break;
+							this.#enqueue(stream, value);
+						}
 					}
 				},
 				cancel: () => {
@@ -1343,8 +1348,8 @@ export class FleetEdge {
 	 * ("browser/<connId>"). The daemon primes + replays per stream: the edge
 	 * sends stream_open on bind and after every pair replacement, then
 	 * forwards the daemon's frame envelopes verbatim (priming included) to
-	 * this browser. Slow browsers are dropped (drop-and-resume: the
-	 * transport's 4 MiB stream queue bound fires the sink's onBackpressure).
+	 * this browser. Slow browsers are dropped by #enqueue's byte cap
+	 * (drop-and-resume: the ring and Last-Event-ID resume close the gap).
 	 * A torn-down pair surfaces as the terminal "daemon connection lost"
 	 * error frame; the edge never redials.
 	 */
@@ -1385,12 +1390,6 @@ export class FleetEdge {
 			deliver: (envelope) => {
 				if (stream.pipe !== pipe || pipe.closed) return;
 				this.#onCallbackEnvelope(stream, pipe, envelope);
-			},
-			onBackpressure: () => {
-				// Transport dropped an envelope on this stream's full 4 MiB
-				// queue: drop-and-resume. The ring + the
-				// client's Last-Event-ID resume close the gap.
-				if (stream.pipe === pipe && !pipe.closed) this.#dropBrowser(stream);
 			},
 		};
 		transport.attachVirtualStream(daemonId, streamId, sink);
@@ -1733,12 +1732,15 @@ export class FleetEdge {
 	/** Enqueue one pre-encoded block; past the backpressure cap the stream is terminated (drop-and-resume). */
 	#enqueue(stream: BrowserStream, block: string): void {
 		try {
-			if (shouldDropFrame(this.#bufferedBytes(stream) + block.length, this.#backpressureBytes)) {
+			const chunk = SSE_ENCODER.encode(block);
+			if (
+				shouldDropFrame(this.#bufferedBytes(stream) + chunk.byteLength, this.#backpressureBytes)
+			) {
 				this.#dropBrowser(stream);
 				return;
 			}
-			stream.unreadEstimate += block.length;
-			stream.controller.enqueue(SSE_ENCODER.encode(block));
+			stream.unreadEstimate += chunk.byteLength;
+			stream.controller.enqueue(chunk);
 		} catch {
 			// Stream already closed/cancelled: dropped (removal happens on cancel/drop).
 		}
@@ -1771,9 +1773,9 @@ export class FleetEdge {
 	 * unicast answers) but leaves no ring entry; the frame must be
 	 * re-derivable from the next open's priming.
 	 */
-	#broadcastTo(client: BrowserClient, frame: ServerFrame, ring = true): void {
+	#broadcastTo(client: BrowserClient, json: string, ring = true): void {
 		const seq = client.nextSeq++;
-		const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
+		const block = encodeSseEventData(SSE_EVENT_NAME, json, seq);
 		if (ring) client.ring.push(seq, block);
 		if (client.stream) this.#enqueue(client.stream, block);
 	}
@@ -1823,9 +1825,11 @@ export class FleetEdge {
 	 */
 	#broadcast(frame: ServerFrame, opts?: { ring?: boolean }): void {
 		const ring = opts?.ring ?? true;
-		for (const stream of this.#browsers) this.#broadcastTo(stream.client, frame, ring);
+		// Serialize once: every consumer frames the same JSON (only `id` varies).
+		const json = JSON.stringify(frame);
+		for (const stream of this.#browsers) this.#broadcastTo(stream.client, json, ring);
 		for (const client of this.#clients.values()) {
-			if (client.stream === null) this.#broadcastTo(client, frame, ring);
+			if (client.stream === null) this.#broadcastTo(client, json, ring);
 		}
 	}
 

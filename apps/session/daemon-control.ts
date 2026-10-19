@@ -209,7 +209,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			payload,
 			ringFrame
 				? (seq) => {
-						const bytes = JSON.stringify(payload).length;
+						const bytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
 						stream.entries.push({ seq, kind, payload, bytes });
 						stream.bytes += bytes;
 						// The client has been sent this delta: keep the floor at
@@ -313,7 +313,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			emit(stream.streamId, "frame", frame);
 			return;
 		}
-		const bytes = JSON.stringify(frame).length;
+		const bytes = Buffer.byteLength(JSON.stringify(frame), "utf8");
 		stream.deferred.push({ frame, bytes });
 		stream.deferredBytes += bytes;
 		if (stream.deferredBytes <= RING_MAX_BYTES) return;

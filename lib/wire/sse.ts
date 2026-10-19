@@ -32,19 +32,35 @@ export const SSE_PING_BLOCK = "event: ping\ndata: {}\n\n";
 
 /** Encode one payload (a ServerFrame) as a complete SSE event block. */
 export function encodeSseEvent(eventName: string, payload: unknown, seq: number): string {
-	return `event: ${eventName}\nid: ${seq}\ndata: ${JSON.stringify(payload)}\n\n`;
+	return encodeSseEventData(eventName, JSON.stringify(payload), seq);
 }
+
+/**
+ * Encode an SSE event block whose data is already serialized JSON. Lets a
+ * fan-out serialize a frame once and frame it per consumer (only `id` varies).
+ */
+export function encodeSseEventData(eventName: string, json: string, seq: number): string {
+	return `event: ${eventName}\nid: ${seq}\ndata: ${json}\n\n`;
+}
+
+/** Longest SSE line (UTF-16 code units) buffered without a newline before the stream fails. */
+export const SSE_MAX_LINE_CHARS = 16 * 1024 * 1024;
 
 /**
  * Async-iterate SSE units from a fetch Response body. Handles partial chunk
  * boundaries, CRLF, and multi-line data (joined with "\n" per the SSE spec).
  * Comment lines yield `{ kind: "comment" }` so callers can feed a silence
- * deadline. Ends when the body ends; throws if the reader errors.
+ * deadline. Ends when the body ends; throws if the reader errors or a single
+ * line exceeds SSE_MAX_LINE_CHARS code units (the stream is not resynchronized).
+ * Only the newly arrived text is scanned for line breaks, and a partial line
+ * is joined once when it closes, so a long event costs linear time.
  */
 export async function* parseSseUnits(body: ReadableStream<Uint8Array>): AsyncGenerator<SseUnit> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
-	let buffer = "";
+	// Pieces of the current partial line, joined once when its newline arrives.
+	let partial: string[] = [];
+	let partialLength = 0;
 	let event = "";
 	let id: string | undefined;
 	let dataLines: string[] = [];
@@ -72,17 +88,33 @@ export async function* parseSseUnits(body: ReadableStream<Uint8Array>): AsyncGen
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
-			let newline: number;
-			while ((newline = buffer.indexOf("\n")) !== -1) {
-				const unit = processLine(buffer.slice(0, newline));
-				buffer = buffer.slice(newline + 1);
+			const text = decoder.decode(value, { stream: true });
+			let start = 0;
+			let newline = text.indexOf("\n");
+			while (newline !== -1) {
+				partial.push(text.slice(start, newline));
+				const unit = processLine(partial.join(""));
+				partial = [];
+				partialLength = 0;
 				if (unit) yield unit;
+				start = newline + 1;
+				newline = text.indexOf("\n", start);
+			}
+			if (start < text.length) {
+				partial.push(text.slice(start));
+				partialLength += text.length - start;
+				if (partialLength > SSE_MAX_LINE_CHARS) {
+					throw new Error(
+						`invalid sse stream: line is over ${SSE_MAX_LINE_CHARS} code units without a newline`,
+					);
+				}
 			}
 		}
-		buffer += decoder.decode();
-		if (buffer !== "") {
-			const unit = processLine(buffer);
+		const rest = decoder.decode();
+		if (rest !== "") partial.push(rest);
+		const line = partial.join("");
+		if (line !== "") {
+			const unit = processLine(line);
 			if (unit) yield unit;
 		}
 		const tail = dispatch();
@@ -101,10 +133,8 @@ export async function* parseSseUnits(body: ReadableStream<Uint8Array>): AsyncGen
  * SSE_RING_BYTES) evicts from the head so a few multi-megabyte deltas cannot
  * balloon memory even far below `cap` (finding #5); the entry cap remains as
  * a secondary bound for many-small-delta bursts. Sizes are the stored
- * values' string lengths in UTF-16 code units. For ASCII-heavy payloads
- * (base64 image blocks, the unbounded-memory culprit) that overestimates
- * UTF-8 wire bytes ~2×, the conservative direction; a single entry larger
- * than the whole budget still lands (the newest delta is the one a resuming
+ * values' UTF-8 byte lengths, which is what the budget protects. A single
+ * entry larger than the whole budget still lands (the newest delta is the one
  * consumer needs most, and `cap` still bounds the count). Eviction is from
  * the head only, so `after()` stays correct: a resumed consumer simply sees
  * older entries missing, which callers treat as re-derivable (drop-and-
@@ -125,13 +155,13 @@ export class SseRing<T = unknown> {
 		return this.#entries.length;
 	}
 
-	/** Total byte estimate of the ringed values (string lengths; 0 for non-strings). */
+	/** Total UTF-8 byte size of the ringed string values (0 for non-strings). */
 	get bytes(): number {
 		return this.#bytes;
 	}
 
 	push(seq: number, value: T): void {
-		const bytes = typeof value === "string" ? value.length : 0;
+		const bytes = typeof value === "string" ? Buffer.byteLength(value, "utf8") : 0;
 		this.#entries.push({ seq, value, bytes });
 		this.#bytes += bytes;
 		// Byte budget first: evict from the head while over budget. The

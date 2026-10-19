@@ -933,7 +933,7 @@ function answerCommand(id: string | undefined, frame: ServerFrame): void {
 			if (now - entry.at > COMMAND_DEDUP_WINDOW_MS) forgetAnswer(key);
 		}
 		forgetAnswer(id);
-		const bytes = JSON.stringify(frame).length;
+		const bytes = Buffer.byteLength(JSON.stringify(frame), "utf8");
 		commandAnswers.set(id, { frame, at: now, bytes });
 		commandAnswerBytes += bytes;
 		for (const key of commandAnswers.keys()) {

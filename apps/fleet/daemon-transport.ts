@@ -72,14 +72,11 @@
  *
  * Virtual streams: a daemon envelope carries the logical streamId of its
  * consumer (one per browser/control client). attachVirtualStream binds a
- * sink per (workspaceId, streamId); queues are bounded at 4 MiB with an
- * explicit onBackpressure signal (excess drops oldest-frame-first and is
- * counted in pairStatus). The drain is fair: command/control/ack envelopes
- * ALWAYS dequeue before frame envelopes, and frames rotate round-robin
- * across streams, so a multi-MiB history transfer can never starve
- * command/control traffic or other clients. An envelope for a streamId with
- * no attached sink is dropped by design (bounded transport); the fleet
- * edge attaches sinks before letting traffic flow.
+ * sink per (workspaceId, streamId). Each envelope is handed to its sink as it
+ * arrives: there is no queue and no drain, so the sink owns its own flow
+ * control. An envelope for a streamId with no attached sink is dropped by
+ * design (bounded transport); the fleet edge attaches sinks before letting
+ * traffic flow.
  *
  * Main (fleet/server.ts) mounts this as the first responder for the
  * /callback prefix:
@@ -119,7 +116,7 @@ import {
 	OMP_CALLBACK_PROTO,
 	REPLAY_RING_ENTRIES,
 	SILENCE_DEADLINE_MS,
-	STREAM_MAX_BYTES,
+	type CallbackKind,
 	validateEnvelope,
 } from "#lib/wire/callback-protocol";
 import { commandBytes, commandTooLargeMessage, MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
@@ -146,12 +143,6 @@ const BULK_CAPTURE_MAX_OPEN = 2;
 const SWEEP_INTERVAL_MS = 5_000;
 /** Revoked enrollments are kept this long (diagnostics) before the sweep drops them. */
 const ENROLLMENT_REVOKED_RETENTION_MS = 10 * 60_000;
-
-const utf8ByteLength = new TextEncoder();
-
-function envelopeBytes(envelope: CallbackEnvelope): number {
-	return utf8ByteLength.encode(JSON.stringify(envelope)).length;
-}
 
 /** Canonical 32-byte credential. Accepts 64-char hex, base64/base64url of
  * exactly 32 bytes, or raw bytes. Anything else throws (callers map that to
@@ -273,24 +264,6 @@ interface DownConnection {
 	openedAt: number;
 }
 
-interface VirtualStream {
-	workspaceId: string;
-	streamId: string;
-	sink: VirtualStreamSink;
-	/** command/control/ack: always drained before any frame. */
-	high: CallbackEnvelope[];
-	/** frame: exactly one per stream per round-robin rotation. */
-	low: CallbackEnvelope[];
-	bytes: number;
-	dropped: number;
-}
-
-interface PumpState {
-	running: boolean;
-	pending: boolean;
-	cursor: number;
-}
-
 interface BulkRecord {
 	correlationId: string;
 	workspaceId: string;
@@ -309,24 +282,10 @@ interface BulkRecord {
 	resolve: (result: BulkResult) => void;
 }
 
-/** Consumer of one virtual stream. deliver is awaited by the registry; a
- * slow sink parks only its own workspace's pump, never the transport. */
+/** Consumer of one virtual stream. The registry hands each envelope to
+ * deliver as it arrives; a sink that needs flow control owns it. */
 export interface VirtualStreamSink {
 	deliver(envelope: CallbackEnvelope): void | Promise<void>;
-	/** Fired synchronously when the 4 MiB queue bound drops an envelope. */
-	onBackpressure?(info: {
-		workspaceId: string;
-		streamId: string;
-		queuedBytes: number;
-		dropped: number;
-	}): void;
-}
-
-export interface VirtualStreamStatus {
-	streamId: string;
-	queued: number;
-	queuedBytes: number;
-	dropped: number;
 }
 
 export interface PairStatus {
@@ -342,7 +301,6 @@ export interface PairStatus {
 	lastDownSendAt: number | null;
 	envelopesReceived: number;
 	upBytesIn: number;
-	streams: VirtualStreamStatus[];
 }
 
 /** Registry-issued bulk transfer handle. `done` never rejects: a failed
@@ -380,9 +338,8 @@ export class DaemonTransportRegistry {
 	readonly #upConnections = new Set<UpConnection>();
 	readonly #downConnections = new Map<string, DownConnection>();
 	readonly #rings = new Map<string, RingRecord>();
-	readonly #virtualStreams = new Map<string, Map<string, VirtualStream>>();
+	readonly #virtualStreams = new Map<string, Map<string, VirtualStreamSink>>();
 	readonly #taps = new Map<string, Set<(envelope: CallbackEnvelope) => void>>();
-	readonly #pumps = new Map<string, PumpState>();
 	readonly #bulk = new Map<string, BulkRecord>();
 	/** Pair-ready/teardown observers per workspace (edge stream_open re-sends). */
 	readonly #pairListeners = new Map<string, Set<(status: PairStatus) => void>>();
@@ -830,9 +787,9 @@ export class DaemonTransportRegistry {
 				// a fleet tap must never break the transport
 			}
 		}
-		const stream = this.#virtualStreams.get(conn.workspaceId)?.get(envelope.streamId);
-		if (stream) this.#enqueueVirtual(stream, envelope);
+		const sink = this.#virtualStreams.get(conn.workspaceId)?.get(envelope.streamId);
 		// No sink for this streamId: dropped by design (bounded transport).
+		if (sink) void this.#deliverVirtual(sink, envelope);
 	}
 
 	/** Emit the single pair_ready control once BOTH halves of a connectionId
@@ -1127,8 +1084,7 @@ export class DaemonTransportRegistry {
 
 	// --- virtual streams ---------------------------------------------------------
 
-	/** Bind the consumer sink for (workspaceId, streamId). Rebinding an
-	 * existing stream keeps its queued envelopes. */
+	/** Bind the consumer sink for (workspaceId, streamId). Rebinding replaces the sink. */
 	attachVirtualStream(workspaceId: string, streamId: string, sink: VirtualStreamSink): void {
 		if (!workspaceId || !streamId) {
 			throw callbackError(
@@ -1141,130 +1097,22 @@ export class DaemonTransportRegistry {
 			streams = new Map();
 			this.#virtualStreams.set(workspaceId, streams);
 		}
-		const existing = streams.get(streamId);
-		if (existing) {
-			existing.sink = sink;
-			return;
-		}
-		streams.set(streamId, { workspaceId, streamId, sink, high: [], low: [], bytes: 0, dropped: 0 });
+		streams.set(streamId, sink);
 	}
 
-	/** Unbind a sink; queued envelopes for the stream are dropped (the
-	 * consumer is gone by definition). */
+	/** Unbind a sink; later envelopes for the stream are dropped (the consumer
+	 * is gone by definition). */
 	detachVirtualStream(workspaceId: string, streamId: string): void {
 		const streams = this.#virtualStreams.get(workspaceId);
 		if (!streams?.delete(streamId)) return;
 		if (streams.size === 0) this.#virtualStreams.delete(workspaceId);
 	}
 
-	#enqueueVirtual(stream: VirtualStream, envelope: CallbackEnvelope): void {
-		const size = envelopeBytes(envelope);
-		let dropped = false;
-		// Bound: 4 MiB per stream. Room-making order drops the oldest FRAME
-		// first, then the oldest high-priority envelope; bounded memory wins,
-		// and every drop fires the backpressure signal + pairStatus counter.
-		while (
-			stream.bytes + size > STREAM_MAX_BYTES &&
-			(stream.low.length > 0 || stream.high.length > 0)
-		) {
-			const queue = stream.low.length > 0 ? stream.low : stream.high;
-			stream.bytes -= envelopeBytes(queue.shift() as CallbackEnvelope);
-			stream.dropped += 1;
-			dropped = true;
-		}
-		if (stream.bytes + size > STREAM_MAX_BYTES) {
-			// A single envelope larger than the whole budget cannot fit even
-			// in empty queues (up records are ≤ 1 MiB; kept as a hard bound).
-			stream.dropped += 1;
-			dropped = true;
-		} else {
-			(envelope.kind === "frame" ? stream.low : stream.high).push(envelope);
-			stream.bytes += size;
-		}
-		if (dropped) this.#signalBackpressure(stream);
-		this.#schedulePump(stream.workspaceId);
-	}
-
-	#signalBackpressure(stream: VirtualStream): void {
+	/** Hand one envelope straight to its sink. There is no queue: a sink error
+	 * never fails the up leg. */
+	async #deliverVirtual(sink: VirtualStreamSink, envelope: CallbackEnvelope): Promise<void> {
 		try {
-			stream.sink.onBackpressure?.({
-				workspaceId: stream.workspaceId,
-				streamId: stream.streamId,
-				queuedBytes: stream.bytes,
-				dropped: stream.dropped,
-			});
-		} catch {
-			// sink callbacks must never break the transport
-		}
-	}
-
-	#schedulePump(workspaceId: string): void {
-		let state = this.#pumps.get(workspaceId);
-		if (!state) {
-			state = { running: false, pending: false, cursor: 0 };
-			this.#pumps.set(workspaceId, state);
-		}
-		if (state.running) {
-			state.pending = true;
-			return;
-		}
-		state.running = true;
-		void this.#drainLoop(workspaceId, state);
-	}
-
-	/**
-	 * The drain is where starvation is prevented. Phase 1 drains EVERY
-	 * command/control/ack envelope (round-robin across streams, so one
-	 * stream's control flood cannot starve another's); phase 2 delivers
-	 * exactly ONE frame per stream per rotation, then re-checks phase 1; a
-	 * control arriving mid-drain preempts the remaining frames. A slow sink
-	 * parks only its own workspace's pump.
-	 */
-	async #drainLoop(workspaceId: string, state: PumpState): Promise<void> {
-		try {
-			for (;;) {
-				state.pending = false;
-				const streams = [...(this.#virtualStreams.get(workspaceId)?.values() ?? [])];
-				if (streams.length === 0) break;
-				let worked = false;
-				for (;;) {
-					let deliveredHigh = false;
-					for (let i = 0; i < streams.length; i++) {
-						const stream = streams[(state.cursor + i) % streams.length];
-						const envelope = stream.high.shift();
-						if (!envelope) continue;
-						deliveredHigh = true;
-						worked = true;
-						stream.bytes -= envelopeBytes(envelope);
-						await this.#deliverVirtual(workspaceId, stream, envelope);
-					}
-					if (!deliveredHigh) break;
-				}
-				for (let i = 0; i < streams.length; i++) {
-					const stream = streams[(state.cursor + i) % streams.length];
-					const envelope = stream.low.shift();
-					if (!envelope) continue;
-					worked = true;
-					stream.bytes -= envelopeBytes(envelope);
-					await this.#deliverVirtual(workspaceId, stream, envelope);
-				}
-				state.cursor = (state.cursor + 1) % streams.length;
-				if (!worked && !state.pending) break;
-			}
-		} finally {
-			state.running = false;
-			if (state.pending) this.#schedulePump(workspaceId);
-		}
-	}
-
-	async #deliverVirtual(
-		workspaceId: string,
-		stream: VirtualStream,
-		envelope: CallbackEnvelope,
-	): Promise<void> {
-		if (this.#virtualStreams.get(workspaceId)?.get(stream.streamId) !== stream) return; // detached mid-drain
-		try {
-			await stream.sink.deliver(envelope);
+			await sink.deliver(envelope);
 		} catch {
 			// sink errors never kill the transport
 		}
@@ -1496,28 +1344,34 @@ export class DaemonTransportRegistry {
 			);
 		}
 
+		const transfer = emitMaterializeTransfer(
+			plan,
+			request.sessionId,
+			request.cursor,
+			MATERIALIZE_TRANSFER_MAX_BYTES,
+			auth.workspaceId,
+		);
+		// One record per pull: the body is produced as the daemon reads it, so
+		// a slow reader holds at most one encoded record and the file fd stays
+		// open only while the transfer is in flight (cancel closes it).
+		// The fleet-issued bulk record never exists for this correlation (the
+		// daemon minted it), so there is no record to settle; the HTTP 200 with
+		// the full NDJSON body IS the transport receipt.
 		const body = new ReadableStream<Uint8Array>({
-			start: (controller) => {
+			pull: (controller) => {
 				try {
-					const lines = emitMaterializeTransfer(
-						plan,
-						request.sessionId,
-						request.cursor,
-						MATERIALIZE_TRANSFER_MAX_BYTES,
-						auth.workspaceId,
-					);
-					for (const line of lines) {
-						controller.enqueue(Buffer.from(line, "utf8"));
+					const next = transfer.next();
+					if (next.done) {
+						controller.close();
+						return;
 					}
-					// The fleet-issued bulk record never exists for this
-					// correlation (the daemon minted it), so there is no
-					// record to settle; the HTTP 200 with the full NDJSON
-					// body IS the transport receipt.
+					controller.enqueue(Buffer.from(next.value, "utf8"));
 				} catch (error) {
 					controller.error(error instanceof Error ? error : new Error(String(error)));
-				} finally {
-					controller.close();
 				}
+			},
+			cancel: () => {
+				transfer.return(undefined);
 			},
 		});
 		return new Response(body, {
@@ -1644,7 +1498,7 @@ export class DaemonTransportRegistry {
 		}
 	}
 
-	/** Point-in-time pair/stream/enrollment view for the fleet edge. */
+	/** Point-in-time pair/enrollment view for the fleet edge. */
 	pairStatus(workspaceId: string): PairStatus {
 		const authorizedGeneration = this.#authorizedMax.get(workspaceId) ?? null;
 		let down: DownConnection | null = null;
@@ -1669,12 +1523,6 @@ export class DaemonTransportRegistry {
 				if (!ring || record.lastActiveAt > ring.lastActiveAt) ring = record;
 			}
 		}
-		const streams = [...(this.#virtualStreams.get(workspaceId)?.values() ?? [])].map((stream) => ({
-			streamId: stream.streamId,
-			queued: stream.high.length + stream.low.length,
-			queuedBytes: stream.bytes,
-			dropped: stream.dropped,
-		}));
 		return {
 			workspaceId,
 			enrolled: authorizedGeneration !== null,
@@ -1686,7 +1534,6 @@ export class DaemonTransportRegistry {
 			lastDownSendAt: down?.lastSendAt ?? null,
 			envelopesReceived,
 			upBytesIn,
-			streams,
 		};
 	}
 
@@ -1718,10 +1565,6 @@ export class DaemonTransportRegistry {
 			)
 				this.#enrollments.delete(key);
 		}
-		// Only idle pumps are dropped; a running drain loop holds its state.
-		for (const [workspaceId, state] of this.#pumps) {
-			if (!state.running) this.#pumps.delete(workspaceId);
-		}
 	}
 
 	#killUp(conn: UpConnection): void {
@@ -1751,7 +1594,6 @@ export class DaemonTransportRegistry {
 		this.#bulk.clear();
 		this.#virtualStreams.clear();
 		this.#taps.clear();
-		this.#pumps.clear();
 		this.#enrollments.clear();
 		this.#authorizedMax.clear();
 	}

@@ -435,43 +435,44 @@ function storedFileSha256(
  * `file` record and resumes at `cursor.offset`). The daemon reassembles by
  * relpath+offset and verifies the sha256 after each file completes.
  */
-export function emitMaterializeTransfer(
+export function* emitMaterializeTransfer(
 	plan: MaterializeFilePlan,
 	sessionId: string,
 	cursor: MaterializeCursor | undefined,
 	maxBytes: number = MATERIALIZE_TRANSFER_MAX_BYTES,
 	workspaceId?: string,
-): string[] {
-	const records: string[] = [];
+): Generator<string, void, undefined> {
 	let budget = maxBytes;
-	const push = (record: MaterializeRecord): boolean => {
+	// Encodes a record and charges it to the budget; undefined when it does not fit.
+	const admit = (record: MaterializeRecord): string | undefined => {
 		const line = encodeMaterializeRecord(record);
 		const bytes = Buffer.byteLength(line, "utf8");
-		if (budget - bytes < 0) return false;
+		if (budget - bytes < 0) return undefined;
 		budget -= bytes;
-		records.push(line);
-		return true;
+		return line;
 	};
-	const endMore = (at: MaterializeCursor): string[] => {
-		if (!push({ type: "end", more: true, cursor: at })) {
+	const endMore = (at: MaterializeCursor): string => {
+		const line = admit({ type: "end", more: true, cursor: at });
+		if (line === undefined) {
 			throw callbackError(
 				"invalid_request",
 				"materialize transfer budget too small for an end record",
 			);
 		}
-		return records;
+		return line;
 	};
 
-	const lead: MaterializeRecord = {
+	const leadLine = admit({
 		type: "session",
 		workspaceId: workspaceId ?? plan.rootDir.split("/").slice(-2, -1)[0] ?? "unknown",
 		sessionId,
-	};
-	if (!push(lead))
+	});
+	if (leadLine === undefined)
 		throw callbackError(
 			"invalid_request",
 			"materialize transfer budget too small for the lead record",
 		);
+	yield leadLine;
 
 	for (const file of plan.files) {
 		if (cursor !== undefined && file.relpath < cursor.path) continue; // fully sent earlier
@@ -488,31 +489,39 @@ export function emitMaterializeTransfer(
 				);
 			}
 			const sha256 = storedFileSha256(file.absolutePath, fd, stats, file.relpath);
-			const fileRecord: MaterializeFileRecord = {
+			const fileLine = admit({
 				type: "file",
 				relpath: file.relpath,
 				size,
 				sha256,
 				kind: file.kind,
 				offset: resume,
-			};
-			if (!push(fileRecord)) return endMore({ path: file.relpath, offset: resume });
+			});
+			if (fileLine === undefined) {
+				yield endMore({ path: file.relpath, offset: resume });
+				return;
+			}
+			yield fileLine;
 			let offset = resume;
 			while (offset < size) {
 				const take = Math.min(MATERIALIZE_CHUNK_RAW_BYTES, size - offset);
-				const chunk: MaterializeChunkRecord = {
+				const chunkLine = admit({
 					type: "chunk",
 					relpath: file.relpath,
 					offset,
 					data: readStoredRange(fd, offset, take, file.relpath).toString("base64"),
-				};
-				if (!push(chunk)) return endMore({ path: file.relpath, offset });
+				});
+				if (chunkLine === undefined) {
+					yield endMore({ path: file.relpath, offset });
+					return;
+				}
+				yield chunkLine;
 				offset += take;
 			}
 		} finally {
 			closeSync(fd);
 		}
 	}
-	push({ type: "end", more: false });
-	return records;
+	const endLine = admit({ type: "end", more: false });
+	if (endLine !== undefined) yield endLine;
 }

@@ -44,7 +44,6 @@ import {
 	parseSseEnvelope,
 	CONNECTION_MAX_BYTES,
 	SILENCE_DEADLINE_MS,
-	STREAM_MAX_BYTES,
 	type CallbackEnvelope,
 } from "#lib/wire/callback-protocol";
 import { DaemonTransportRegistry } from "../daemon-transport";
@@ -864,7 +863,7 @@ describe("daemon transport controlled pairs", () => {
 		}
 	});
 
-	test("slow virtual stream is bounded at the per-stream cap with drops, while controls and a sibling workspace stay unstarved", async () => {
+	test("a stalled virtual sink holds only its own promise: each envelope is handed to its sink on arrival, so controls, sibling streams, and a sibling workspace are never queued behind it", async () => {
 		const fixture = serve(new DaemonTransportRegistry());
 		const wsSlow = "ws-slow-sink";
 		const wsOther = "ws-other-sink";
@@ -872,27 +871,24 @@ describe("daemon transport controlled pairs", () => {
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(wsSlow, gen, cred);
 		fixture.registry.enrollWorkspace(wsOther, gen, cred);
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
 		try {
-			// Workspace 1: slow sink under a fat frame flood.
 			const ws1Conn = randomUUID();
 			const up1 = openUp(fixture, wsSlow, gen, ws1Conn, cred);
 			const down1 = await openDown(fixture, wsSlow, gen, ws1Conn, cred);
 			await waitFor(() => down1.seen().find(pairReady), 2000, "pair_ready wsSlow");
 
 			const slowDelivered: CallbackEnvelope[] = [];
-			const backpressures: Array<{ dropped: number; queuedBytes: number }> = [];
-			const slow = {
+			fixture.registry.attachVirtualStream(wsSlow, "stream/slow", {
 				async deliver(e: CallbackEnvelope): Promise<void> {
 					slowDelivered.push(e);
-					// Deliberately slower than the arrival rate so the queue
-					// saturates: a real stall needs real time.
-					await sleep(100);
+					// Stalled until released: the transport must not wait on it.
+					await gate;
 				},
-				onBackpressure(info: { dropped: number; queuedBytes: number }): void {
-					backpressures.push(info);
-				},
-			};
-			fixture.registry.attachVirtualStream(wsSlow, "stream/slow", slow);
+			});
 			const fastDelivered: CallbackEnvelope[] = [];
 			fixture.registry.attachVirtualStream(wsSlow, "stream/fast", {
 				async deliver(e: CallbackEnvelope): Promise<void> {
@@ -906,42 +902,24 @@ describe("daemon transport controlled pairs", () => {
 				},
 			});
 
-			// 40 x ~190KB frames (~7.6 MiB on the wire, under the 8 MiB up
-			// connection cap) against a 4 MiB per-stream bound.
+			// 40 x ~190KB frames (~7.6 MiB on the wire, under the 8 MiB up connection cap).
 			for (let i = 0; i < 40; i++) {
 				up1.push("stream/slow", "frame", { type: "history", blob: "x".repeat(190_000), i });
 			}
-			// The pump saturates the slow stream's queue and must drop.
-			await waitFor(
-				() => (backpressures.length > 0 ? backpressures[0] : undefined),
-				4000,
-				"backpressure",
-			);
-			const saturated = fixture.registry.pairStatus(wsSlow);
-			const slowStatus = saturated.streams.find((s) => s.streamId === "stream/slow");
-			expect(slowStatus).toBeDefined();
-			expect(slowStatus!.queuedBytes).toBeLessThanOrEqual(STREAM_MAX_BYTES);
-			expect(slowStatus!.dropped).toBeGreaterThan(0);
-			expect(slowStatus!.queued + slowDelivered.length).toBeLessThan(40);
-
-			// Commands that arrive while the queue is pinned are still
-			// drained (control always precedes frames); nothing is starved.
+			up1.push("stream/fast", "frame", { type: "fast", i: 0 });
 			for (let i = 0; i < 8; i++) {
 				up1.push("control", "command", { type: "cmd", id: `c${i}` });
 			}
 			await waitFor(
-				() => (ctlDelivered.length === 8 ? true : undefined),
-				3000,
-				"all 8 commands delivered",
+				() =>
+					slowDelivered.length === 40 && fastDelivered.length === 1 && ctlDelivered.length === 8
+						? true
+						: undefined,
+				4000,
+				"every envelope handed to its sink on arrival",
 			);
-			// Sibling stream in the same workspace: untouched by the flood.
-			const fastStatus = saturated.streams.find((s) => s.streamId === "stream/fast");
-			expect(fastStatus?.queuedBytes ?? 0).toBe(0);
-			expect(fastStatus?.dropped ?? 0).toBe(0);
-			expect(fastDelivered.length).toBe(0);
 
-			// Workspace 2: its own pair + pump must not wait on workspace 1's
-			// parked sink. Attach after ws1's flood so any delay would show.
+			// Sibling workspace: its own pair and sink, unaffected by ws1's stall.
 			const ws2Conn = randomUUID();
 			const up2 = openUp(fixture, wsOther, gen, ws2Conn, cred);
 			const down2 = await openDown(fixture, wsOther, gen, ws2Conn, cred);
@@ -958,13 +936,10 @@ describe("daemon transport controlled pairs", () => {
 				2000,
 				"wsOther command while wsSlow sink is parked",
 			);
-			const otherStatus = fixture.registry
-				.pairStatus(wsOther)
-				.streams.find((s) => s.streamId === "control");
-			expect(otherStatus?.queued ?? 0).toBe(0);
 			expect((await up1.end()).status).toBe(200);
 			expect((await up2.end()).status).toBe(200);
 		} finally {
+			release();
 			fixture.stop();
 		}
 	});

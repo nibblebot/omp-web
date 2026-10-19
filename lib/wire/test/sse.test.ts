@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	encodeSseEvent,
 	parseSseUnits,
+	SSE_MAX_LINE_CHARS,
 	SSE_PING_BLOCK,
 	SseRing,
 	type SseUnit,
@@ -121,5 +122,34 @@ describe("SseRing", () => {
 		expect(ring.after(2).map((e) => e.seq)).toEqual([3, 4]);
 		expect(ring.after(3).map((e) => e.seq)).toEqual([4]);
 		expect(ring.after(4)).toEqual([]);
+	});
+});
+
+describe("parseSseUnits limits", () => {
+	test("reassembles a 1 MB data line delivered in 1 KB chunks", async () => {
+		const data = "x".repeat(1_000_000);
+		const block = encodeSseEvent("frame", data, 1);
+		const chunks: string[] = [];
+		for (let offset = 0; offset < block.length; offset += 1024) {
+			chunks.push(block.slice(offset, offset + 1024));
+		}
+		const units = await collect(chunks);
+		expect(units).toEqual([{ kind: "event", event: "frame", id: "1", data: JSON.stringify(data) }]);
+	});
+
+	test("fails the stream when one line exceeds SSE_MAX_LINE_CHARS without a newline", async () => {
+		const oversize = "x".repeat(SSE_MAX_LINE_CHARS + 1);
+		await expect(collect(["data: ", oversize])).rejects.toThrow(/without a newline/);
+	});
+});
+
+describe("SseRing UTF-8 byte budget", () => {
+	test("counts UTF-8 bytes, not UTF-16 code units", () => {
+		// "é" is one code unit but two UTF-8 bytes: ten of them are 20 bytes.
+		const ring = new SseRing<string>(100, 30);
+		ring.push(1, "é".repeat(10)); // 20 bytes
+		ring.push(2, "é".repeat(10)); // 40 > 30 → evict entry 1
+		expect(ring.bytes).toBe(20);
+		expect(ring.after(0).map((e) => e.seq)).toEqual([2]);
 	});
 });

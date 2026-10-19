@@ -149,12 +149,13 @@ function bufferedBytes(stream: SseConsumer): number {
 /** Enqueue one pre-encoded block; past the backpressure cap the stream is terminated (drop-and-resume). */
 export function enqueueTo(stream: SseConsumer, block: string): void {
 	try {
-		if (bufferedBytes(stream) + block.length > SSE_BACKPRESSURE_BYTES) {
+		const chunk = sseEncoder.encode(block);
+		if (bufferedBytes(stream) + chunk.byteLength > SSE_BACKPRESSURE_BYTES) {
 			terminateStream(stream, "backpressure");
 			return;
 		}
-		stream.unreadEstimate += block.length;
-		stream.controller.enqueue(sseEncoder.encode(block));
+		stream.unreadEstimate += chunk.byteLength;
+		stream.controller.enqueue(chunk);
 	} catch {
 		// Stream already closed/cancelled: dropped (removal happens on cancel/terminate).
 	}
@@ -206,7 +207,8 @@ export function terminateStream(stream: SseConsumer, reason: string): void {
  * keepalive/delta termination) ends the wait.
  */
 export async function enqueuePaced(stream: SseConsumer, block: string): Promise<void> {
-	while (bufferedBytes(stream) + block.length > SSE_BACKPRESSURE_BYTES - PRIMING_QUEUE_MARGIN) {
+	const size = Buffer.byteLength(block, "utf8");
+	while (bufferedBytes(stream) + size > SSE_BACKPRESSURE_BYTES - PRIMING_QUEUE_MARGIN) {
 		if (!streams.has(stream)) return; // consumer detached/cancelled
 		await new Promise<void>((resolve) => {
 			stream.drainWaiter = resolve;

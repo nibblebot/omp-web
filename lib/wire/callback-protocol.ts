@@ -287,12 +287,18 @@ const utf8Strict = new TextDecoder("utf-8", { fatal: true });
 
 /** Serialized byte length of a value's canonical JSON form. */
 function canonicalBytes(value: unknown): number {
-	return utf8.encode(JSON.stringify(value)).length;
+	return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
 export interface ValidateEnvelopeOptions {
 	/** Serialized-size cap; defaults to ENVELOPE_MAX_BYTES. */
 	maxBytes?: number;
+	/**
+	 * Canonical JSON byte length, when the caller already serialized the value
+	 * (skips a second JSON.stringify). Must equal the UTF-8 length of
+	 * JSON.stringify(value).
+	 */
+	bytes?: number;
 }
 
 /**
@@ -335,15 +341,17 @@ export function validateEnvelope(value: unknown, opts?: ValidateEnvelopeOptions)
 	}
 	if (env.payload === undefined) fail("payload is required");
 	const maxBytes = opts?.maxBytes ?? ENVELOPE_MAX_BYTES;
-	let bytes: number;
-	try {
-		bytes = canonicalBytes(value);
-	} catch (cause) {
-		throw new CallbackError(
-			"invalid_request",
-			"invalid callback envelope: payload is not JSON-serializable",
-			{ cause },
-		);
+	let bytes = opts?.bytes;
+	if (bytes === undefined) {
+		try {
+			bytes = canonicalBytes(value);
+		} catch (cause) {
+			throw new CallbackError(
+				"invalid_request",
+				"invalid callback envelope: payload is not JSON-serializable",
+				{ cause },
+			);
+		}
 	}
 	if (bytes > maxBytes)
 		fail(`serialized envelope is ${bytes} bytes, over the ${maxBytes}-byte limit`);
@@ -355,12 +363,26 @@ export function encodeNdjsonLine(envelope: CallbackEnvelope): string {
 	return `${JSON.stringify(envelope)}\n`;
 }
 
-function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
-	if (a.length === 0) return b.slice();
-	if (b.length === 0) return a;
-	const out = new Uint8Array(a.length + b.length);
-	out.set(a, 0);
-	out.set(b, a.length);
+/** Parse one NDJSON record / SSE data payload into a validated envelope. */
+export function decodeEnvelope(line: string): CallbackEnvelope {
+	let value: unknown;
+	try {
+		value = JSON.parse(line);
+	} catch (cause) {
+		throw new CallbackError("invalid_request", "callback envelope is not valid JSON", { cause });
+	}
+	return validateEnvelope(value);
+}
+
+/** Concatenate record pieces into one buffer; a single piece is returned as-is. */
+function joinBytes(parts: Uint8Array[], total: number): Uint8Array {
+	if (parts.length === 1) return parts[0]!;
+	const out = new Uint8Array(total);
+	let offset = 0;
+	for (const part of parts) {
+		out.set(part, offset);
+		offset += part.length;
+	}
 	return out;
 }
 
@@ -390,7 +412,9 @@ export interface NdjsonParser {
  */
 export function createNdjsonParser(opts?: { maxRecordBytes?: number }): NdjsonParser {
 	const maxRecordBytes = opts?.maxRecordBytes ?? ENVELOPE_MAX_BYTES;
-	let pending: Uint8Array = new Uint8Array(0);
+	// Pieces of the current partial record, joined once when its record closes.
+	let parts: Uint8Array[] = [];
+	let pendingBytes = 0;
 	// Set once an over-cap record was dropped: its bytes are discarded up to the next newline.
 	let discarding = false;
 
@@ -402,8 +426,9 @@ export function createNdjsonParser(opts?: { maxRecordBytes?: number }): NdjsonPa
 
 	// Close the buffered record at a newline or end-of-body.
 	const closeRecord = (): NdjsonItem | undefined => {
-		let line = pending;
-		pending = new Uint8Array(0);
+		let line = joinBytes(parts, pendingBytes);
+		parts = [];
+		pendingBytes = 0;
 		if (line[line.length - 1] === 0x0d) line = line.subarray(0, line.length - 1);
 		if (line.length === 0) return undefined;
 		if (line.length > maxRecordBytes) return { dropped: overSize(line.length) };
@@ -422,7 +447,7 @@ export function createNdjsonParser(opts?: { maxRecordBytes?: number }): NdjsonPa
 
 	return {
 		get bufferedBytes(): number {
-			return pending.length;
+			return pendingBytes;
 		},
 		push(chunk) {
 			const bytes = typeof chunk === "string" ? utf8.encode(chunk) : chunk;
@@ -434,17 +459,20 @@ export function createNdjsonParser(opts?: { maxRecordBytes?: number }): NdjsonPa
 				if (discarding) {
 					discarding = false;
 				} else {
-					pending = concatBytes(pending, bytes.subarray(start, nl));
+					parts.push(bytes.slice(start, nl));
+					pendingBytes += nl - start;
 					const item = closeRecord();
 					if (item !== undefined) out.push(item);
 				}
 				start = nl + 1;
 			}
 			if (start < bytes.length && !discarding) {
-				pending = concatBytes(pending, bytes.subarray(start));
-				if (pending.length > maxRecordBytes) {
-					out.push({ dropped: overSize(pending.length) });
-					pending = new Uint8Array(0);
+				parts.push(bytes.slice(start));
+				pendingBytes += bytes.length - start;
+				if (pendingBytes > maxRecordBytes) {
+					out.push({ dropped: overSize(pendingBytes) });
+					parts = [];
+					pendingBytes = 0;
 					discarding = true;
 				}
 			}

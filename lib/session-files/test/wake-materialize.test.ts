@@ -86,7 +86,7 @@ function emitTransfer(
 	maxBytes?: number,
 	workspaceId?: string,
 ): { lines: string[]; records: MaterializeRecord[] } {
-	const lines = emitMaterializeTransfer(plan, sessionId, cursor, maxBytes, workspaceId);
+	const lines = [...emitMaterializeTransfer(plan, sessionId, cursor, maxBytes, workspaceId)];
 	return { lines, records: lines.map((line) => parseMaterializeRecord(JSON.parse(line))) };
 }
 
@@ -498,16 +498,18 @@ describe("emitMaterializeTransfer", () => {
 	test("refuses a cursor offset beyond the declared file size", () => {
 		const root = storeSubtree(WORKSPACE_ID, SESSION_ID, { "a-first.jsonl": "aaaa\n" });
 		const plan = planMaterializeFiles(root);
-		const error = protocolFailure(() =>
-			emitMaterializeTransfer(plan, SESSION_ID, { path: "a-first.jsonl", offset: 6 }),
-		);
+		const error = protocolFailure(() => [
+			...emitMaterializeTransfer(plan, SESSION_ID, { path: "a-first.jsonl", offset: 6 }),
+		]);
 		expect(error.code).toBe("invalid_request");
 	});
 
 	test("refuses a budget too small for the lead record or a continuation record", () => {
 		const root = storeSubtree(WORKSPACE_ID, SESSION_ID, { [`${SESSION_ID}.jsonl`]: "main\n" });
 		const plan = planMaterializeFiles(root);
-		const noLead = protocolFailure(() => emitMaterializeTransfer(plan, SESSION_ID, undefined, 1));
+		const noLead = protocolFailure(() => [
+			...emitMaterializeTransfer(plan, SESSION_ID, undefined, 1),
+		]);
 		expect(noLead.code).toBe("invalid_request");
 		const leadBytes = Buffer.byteLength(
 			encodeMaterializeRecord({
@@ -517,9 +519,9 @@ describe("emitMaterializeTransfer", () => {
 			}),
 			"utf8",
 		);
-		const noRoom = protocolFailure(() =>
-			emitMaterializeTransfer(plan, SESSION_ID, undefined, leadBytes + 1),
-		);
+		const noRoom = protocolFailure(() => [
+			...emitMaterializeTransfer(plan, SESSION_ID, undefined, leadBytes + 1),
+		]);
 		expect(noRoom.code).toBe("invalid_request");
 	});
 
@@ -528,7 +530,20 @@ describe("emitMaterializeTransfer", () => {
 		const plan = planMaterializeFiles(root);
 		rmSync(join(root, "gone.jsonl"));
 
-		const error = protocolFailure(() => emitMaterializeTransfer(plan, SESSION_ID, undefined));
+		const error = protocolFailure(() => [...emitMaterializeTransfer(plan, SESSION_ID, undefined)]);
+		expect(error.code).toBe("unavailable");
+	});
+
+	test("reads stored files only as the caller pulls records", () => {
+		const root = storeSubtree(WORKSPACE_ID, SESSION_ID, { "gone.jsonl": "gone\n" });
+		const plan = planMaterializeFiles(root);
+		const transfer = emitMaterializeTransfer(plan, SESSION_ID, undefined);
+		rmSync(join(root, "gone.jsonl"));
+		// The lead record needs no stored file, so the first pull succeeds even
+		// though the file is gone; the file is only touched on the second pull.
+		const lead = parseMaterializeRecord(JSON.parse(transfer.next().value as string));
+		expect(lead.type).toBe("session");
+		const error = protocolFailure(() => transfer.next());
 		expect(error.code).toBe("unavailable");
 	});
 

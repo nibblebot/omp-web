@@ -1222,8 +1222,9 @@ export class FleetCallback {
 		};
 		let bytes: number;
 		try {
-			validateEnvelope(candidate, { maxBytes: this.#maxEnvelopeBytes });
-			bytes = this.#enc.encode(JSON.stringify(candidate)).length;
+			const json = JSON.stringify(candidate);
+			bytes = Buffer.byteLength(json, "utf8");
+			validateEnvelope(candidate, { maxBytes: this.#maxEnvelopeBytes, bytes });
 		} catch (cause) {
 			if (item.internal) return "rejected"; // transport keepalive cannot be invalid
 			const err =
