@@ -16,6 +16,7 @@ import { SSE_EVENT_NAME } from "#lib/wire/protocol";
 import { type Component, createComponent } from "solid-js";
 import { ssrElement } from "solid-js/web";
 import { state } from "../state";
+import { pendingCalls } from "../store/transport";
 
 type SseHandler = (ev: { data: string; lastEventId?: string }) => void;
 
@@ -157,6 +158,19 @@ export function setBrowserGlobal<K extends BrowserGlobal>(
 /** Restore only the globals installed by this harness; safe to call repeatedly. */
 export function restoreBrowserGlobals(): void {
 	restoreGlobals(browserGlobals);
+	dropPendingCalls();
+}
+
+/**
+ * Forget calls a test left unanswered. Their replay and deadline timers would
+ * otherwise fire inside a sibling test file; the promises stay pending, unsettled.
+ */
+function dropPendingCalls(): void {
+	for (const pending of pendingCalls.values()) {
+		clearTimeout(pending.timer);
+		clearTimeout(pending.replayTimer);
+	}
+	pendingCalls.clear();
 }
 
 type JsxOptions = {
