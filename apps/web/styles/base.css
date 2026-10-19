@@ -36,6 +36,14 @@ body {
 	flex: none;
 	vertical-align: -0.125em;
 }
+/* omp-web brand mark (OmpWebLogoIcon): tile and base band follow the app
+ * theme, which sets color-scheme on :root, not the OS. */
+.omp-web-logo-tile {
+	fill: light-dark(#fbf3e6, #2a1f1a);
+}
+.omp-web-logo-base {
+	fill: light-dark(#4a3226, #f3e6d2);
+}
 
 button {
 	background: var(--btn);

@@ -19,14 +19,24 @@
 .sidebar-wordmark {
 	flex: 1 1 auto;
 	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
 	font-family: var(--font-mono);
 	font-size: var(--fs-lg);
 	font-weight: 600;
 	color: var(--text);
 	cursor: default;
+}
+.sidebar-wordmark .icon {
+	width: 18px;
+	height: 18px;
+}
+.sidebar-wordmark-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .sidebar-header .sidebar-icon-btn {
 	display: inline-flex;

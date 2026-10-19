@@ -22,6 +22,7 @@ import {
 	MenuIcon,
 	MinusIcon,
 	OmpLogoIcon,
+	OmpWebLogoIcon,
 	PanelLeftIcon,
 	PlusIcon,
 	RefreshIcon,
@@ -115,6 +116,7 @@ const ICONS: Record<string, Component<IconProps>> = {
 	AnthropicLogoIcon,
 	OpenAILogoIcon,
 	OpenCodeLogoIcon,
+	OmpWebLogoIcon,
 };
 
 const ICON_FILE = "apps/web/components/ui/icons.tsx";

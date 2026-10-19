@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <clipPath id="wave-crest-dark-tile"><rect width="64" height="64" rx="14"/></clipPath>
+    <path id="wave-crest-dark-crest" d="M-4 44C12 44 20 33 24 25C30 11 44 4 54 12C63 20 58 35 42 38C52 33 54 27 49 23C43 18 36 23 33 32C29 43 20 53 -4 59Z"/>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#2a1f1a"/>
+  <g clip-path="url(#wave-crest-dark-tile)">
+    <circle cx="14" cy="16" r="7.5" fill="#f2b84b"/>
+    <use href="#wave-crest-dark-crest" x="-8" y="21" fill="#f3e6d2"/>
+    <use href="#wave-crest-dark-crest" x="-4" y="10.5" fill="#ec8a2f"/>
+    <use href="#wave-crest-dark-crest" fill="#c4552d"/>
+  </g>
+</svg>

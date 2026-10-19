@@ -3,7 +3,7 @@
  *  their surrounding text/status color; the base .icon rule (src/styles/base.css)
  *  sizes them to 1em, and a `class` prop layers site-specific overrides
  *  (e.g. .daemon-worktree-icon). */
-import type { Component, JSX } from "solid-js";
+import { createUniqueId, type Component, type JSX } from "solid-js";
 
 export type IconProps = { class?: string };
 
@@ -502,3 +502,34 @@ export const OpenCodeLogoIcon: Component<IconProps> = (props) => (
 		/>
 	</svg>
 );
+
+/** The omp-web brand mark (wave-crest: amber sun over three curling crests on
+ *  a rounded tile). A brand logo, so it keeps its own colors instead of
+ *  currentColor; only the tile and base band switch with the app theme, via
+ *  light-dark() in base.css. The clip-path id is per instance because the
+ *  icon can render several times on one page. */
+export const OmpWebLogoIcon: Component<IconProps> = (props) => {
+	const clipId = `omp-web-logo-clip-${createUniqueId()}`;
+	const crest =
+		"M-4 44C12 44 20 33 24 25C30 11 44 4 54 12C63 20 58 35 42 38C52 33 54 27 49 23C43 18 36 23 33 32C29 43 20 53 -4 59Z";
+	return (
+		<svg
+			class={props.class ? `icon ${props.class}` : "icon"}
+			viewBox="0 0 64 64"
+			aria-hidden="true"
+		>
+			<defs>
+				<clipPath id={clipId}>
+					<rect width="64" height="64" rx="14" />
+				</clipPath>
+			</defs>
+			<rect class="omp-web-logo-tile" width="64" height="64" rx="14" />
+			<g clip-path={`url(#${clipId})`}>
+				<circle cx="14" cy="16" r="7.5" fill="#f2b84b" />
+				<path class="omp-web-logo-base" transform="translate(-8 21)" d={crest} />
+				<path transform="translate(-4 10.5)" fill="#ec8a2f" d={crest} />
+				<path fill="#c4552d" d={crest} />
+			</g>
+		</svg>
+	);
+};

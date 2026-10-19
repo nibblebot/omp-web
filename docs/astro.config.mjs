@@ -23,6 +23,13 @@ export default defineConfig({
 		starlight({
 			title: "omp-web",
 			description: "Web sessions and fleet management for Oh My Pi.",
+			// Marks live in `src/assets` so Astro hashes them; `favicon` is a
+			// root-relative path into `public/` and Starlight prepends `base`.
+			logo: {
+				light: "./src/assets/logo-light.svg",
+				dark: "./src/assets/logo-dark.svg",
+			},
+			favicon: "/favicon.svg",
 			editLink: {
 				baseUrl: "https://github.com/nibblebot/omp-web/edit/docs/docs/",
 			},
