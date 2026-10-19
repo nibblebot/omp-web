@@ -3,7 +3,7 @@
 omp-web reconciles the single-session browser UX: equivalent browser capability through existing SDK/fleet/transport reuse. Wire is OMP_PROTO 4: a mismatched web, fleet, and session refuse each other.
 
 ### Infra remediation (kfg5)
-Fleet, session, and wire fixes from the infra audit (`kfg5`). Wire is OMP_PROTO 4; sessions started by an older omp-web are refused at hello and must be restarted. OMP_PROTO 4 removes uncalled session methods and state fields as well as adding frames (see the protocol note in `lib/wire/protocol.ts`).
+Fleet, session, and wire fixes from the infra audit (`kfg5`). Wire is OMP_PROTO 4; sessions started by an older omp-web are refused at hello and must be restarted. OMP_PROTO 4 removes uncalled session methods and state fields as well as adding frames (see the protocol note in `lib/wire/protocol.ts`). A fleet behind a trusted proxy requires the proxy to append the client to `X-Forwarded-For`; see the README.
 
 #### Security
 - Behind a trusted proxy the fleet resolves the client from `X-Forwarded-For` right to left, skipping trusted hops, so a client-supplied `X-Forwarded-For: 127.0.0.1` no longer earns the loopback auth exemption (`ebmq`).
