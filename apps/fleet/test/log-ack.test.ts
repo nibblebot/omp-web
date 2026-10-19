@@ -64,6 +64,7 @@ describe("fleet log_ack durability (kx3w)", () => {
 			});
 			seeded.set(name, { workspaceId: entry.daemonId, credential, generation: 1 });
 		}
+		registry.flush();
 		server = await startTestFleet(
 			{ statePath, configPath },
 			{},

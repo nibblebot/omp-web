@@ -48,6 +48,7 @@ describe("CLI", () => {
 			labels: ["env=test"],
 			status: "asleep",
 		});
+		registry.flush();
 		server = await startFleet({
 			port: 0,
 			statePath,
@@ -156,6 +157,7 @@ describe("CLI", () => {
 		// a second fleet on the SAME path now fails loudly (that is the lock's
 		// contract). Serve reads a copy of the seeded state instead, so the
 		// e2e flow (serve boots + sessions lists the seeded roster) still runs.
+		server.registry.flush();
 		const serveStatePath = join(tmp, "serve-state.json");
 		copyFileSync(statePath, serveStatePath);
 		const serve = Bun.spawn(["bun", "apps/fleet/cli.ts", "--port", "0"], {
@@ -191,6 +193,7 @@ describe("CLI", () => {
 
 	test("control serves the API with no UI", async () => {
 		const cwd = join(import.meta.dir, "..", "..", "..");
+		server.registry.flush();
 		const controlStatePath = join(tmp, "control-state.json");
 		copyFileSync(statePath, controlStatePath);
 		const env = { ...process.env, OMP_FLEET_STATE: controlStatePath, OMP_FLEET_CONFIG: configPath };

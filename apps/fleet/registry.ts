@@ -1,25 +1,36 @@
 /**
  * Daemon registry for the omp-fleet: the persistent, insertion-ordered
- * roster of daemons with monotonic `dN` id
- * allocation that survives restarts, plus the first-class registered
- * `projects[]` (realpath-keyed, `pN` ids) that project groups hang off.
+ * roster of daemons with monotonic `dN` id allocation that survives
+ * restarts, plus the first-class registered `projects[]` (realpath-keyed,
+ * `pN` ids) that project groups hang off.
  *
  * State is a JSON file
  * `{ "nextId": number, "entries": RegistryEntry[], "projects"?: RegisteredProject[], "nextProjectId"?: number }`;
  * the path is injectable for tests; the fleet server resolves
- * `OMP_FLEET_STATE` / `~/.omp-web/fleet-state.json` and passes it
- * in. Files written before projects existed lack the two new keys and load
- * fine (projects start empty, the counter at 1). Every mutation is persisted
- * atomically (write a sibling tmp file, then rename over the real one)
- * before the mutation returns, and fires `onChange` (set by the edge server
- * for roster broadcasts); project-set mutations additionally fire
- * `onProjectsChange` (set by the edge server for registered_projects
- * broadcasts).
+ * `OMP_FLEET_STATE` / `~/.omp-web/fleet-state.json` and passes it in. Files
+ * written before projects existed lack the two new keys and load fine
+ * (projects start empty, the counter at 1).
+ *
+ * Mutations apply in memory at once and fire `onChange` with the roster rows
+ * they changed (the edge server broadcasts that delta); project-set mutations
+ * also fire `onProjectsChange`. Writes are coalesced: each mutation arms one
+ * write, so a burst shares it. Volatile-only updates (status, pid, git and
+ * title facts, all re-derived at boot) wait longer. `flush()` writes now; the
+ * fleet server calls it on close and on process exit.
+ *
+ * A write is durable and atomic: the new state goes to a sibling tmp file that
+ * is fsynced; the current state file is first copied to `<state>.bak`; the tmp
+ * file is renamed over the state file; the directory is fsynced. `load()` falls
+ * back to the `.bak` when the state file is unreadable or malformed.
  */
 
 import {
+	closeSync,
+	copyFileSync,
 	existsSync,
+	fsyncSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
 	realpathSync,
 	renameSync,
@@ -226,6 +237,38 @@ interface RegistryFile {
 	storeOrphans?: Record<string, StoreOrphanMarker>;
 }
 
+/** Roster rows one mutation changed: the source of the roster_delta broadcast. */
+export interface RegistryChange {
+	/** Rows created or changed, as they now stand in the registry. */
+	upserted: RegistryEntry[];
+	/** daemonIds removed from the registry. */
+	removed: string[];
+}
+
+/** A parsed and validated state file, ready to install. */
+interface LoadedState {
+	entries: RegistryEntry[];
+	nextId: number;
+	projects: RegisteredProject[];
+	nextProjectId: number;
+	storeOrphans: Record<string, StoreOrphanMarker>;
+}
+
+/** Delay before a volatile-only mutation reaches disk. Durable mutations write on the next timer tick. */
+const VOLATILE_PERSIST_DELAY_MS = 200;
+
+/** Entry fields a mutation may touch without a durable write: boot reconcile and the git/session probes re-derive them. */
+const VOLATILE_ENTRY_KEYS: Record<string, true> = {
+	status: true,
+	error: true,
+	pid: true,
+	readyAt: true,
+	branch: true,
+	git: true,
+	sessionTitle: true,
+	sessionEmpty: true,
+};
+
 /**
  * Legacy-inference base workspace record for entries persisted before P1.
  * Contract rule: managed or worktreeOf → "worktree"; every other entry
@@ -257,9 +300,22 @@ function realpathIfDirectory(p: string): string | null {
 	}
 }
 
+/** fsync a file or directory by path (the durability half of the rename-based write). */
+function fsyncPath(path: string): void {
+	const fd = openSync(path, "r");
+	try {
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
+}
+
 export class Registry {
-	/** Fired after every mutation (not on load); set by the edge server for roster broadcasts. */
-	onChange: (() => void) | null = null;
+	/**
+	 * Fired after every mutation (not on load) with the roster rows it changed;
+	 * set by the edge server for roster_delta broadcasts.
+	 */
+	onChange: ((change: RegistryChange) => void) | null = null;
 	/**
 	 * Fired after PROJECT-set mutations only (addProject/removeProject), not
 	 * daemon mutations; set by the edge server for registered_projects
@@ -283,93 +339,79 @@ export class Registry {
 	private nextProjectId = 1;
 	/** Deleted-without-verification markers keyed by workspaceId (P7.5). */
 	private storeOrphanList: Record<string, StoreOrphanMarker> = {};
+	/** Pending coalesced write, armed by #schedule and cleared by flush(). */
+	#flushTimer: ReturnType<typeof setTimeout> | null = null;
+	#flushDue = 0;
+	/** True when the in-memory state is newer than the last successful write. */
+	#dirty = false;
+	/**
+	 * False for the first write after a fallback load: the state file is then
+	 * the corrupt one, so the good `.bak` must not be overwritten by it.
+	 */
+	#rotateBackup = true;
+	/** True while the process exit hook is armed (exists only while a write is pending). */
+	#exitHooked = false;
+	/** Writes a pending state when the process exits without close() (process.exit skips timers). */
+	readonly #onExit = (): void => {
+		try {
+			this.flush();
+		} catch (err) {
+			console.error(`fleet: registry write failed at ${this.statePath}: ${(err as Error).message}`);
+		}
+	};
 
 	constructor(statePath: string, failBeforeRename?: () => void) {
 		this.statePath = statePath;
 		this.failBeforeRename = failBeforeRename;
 	}
 
-	/** Missing file → empty registry. Corrupt file → throws with the path in the message. */
+	/**
+	 * Missing file → empty registry. Unreadable or malformed state file → the
+	 * `.bak` kept by the last write (logged; rewritten by the next write). When
+	 * the `.bak` is unusable too, throws with the path in the message.
+	 */
 	async load(): Promise<void> {
 		if (!existsSync(this.statePath)) {
-			this.entries = [];
-			this.nextId = 1;
-			this.projectList = [];
-			this.nextProjectId = 1;
-			this.storeOrphanList = {};
+			this.#install({ entries: [], nextId: 1, projects: [], nextProjectId: 1, storeOrphans: {} });
 			return;
 		}
-		const file = this.#readFile();
-		let maxIndex = 0;
-		for (const entry of file.entries) {
-			if (typeof entry !== "object" || entry === null || typeof entry.daemonId !== "string") {
-				throw new Error(`registry state corrupt at ${this.statePath}: entry missing daemonId`);
-			}
-			const n = Number.parseInt(entry.daemonId.slice(1), 10);
-			if (Number.isFinite(n) && n > maxIndex) maxIndex = n;
-		}
-		this.entries = [...file.entries];
-		// Never reuse ids: floor the counter above the highest id on disk.
-		this.nextId = Math.max(file.nextId, maxIndex + 1);
-		// Lazy workspace migration (P1): entries persisted before workspace
-		// records existed get an in-memory record here; it persists on the
-		// entry's next mutation, never at boot.
-		for (const entry of this.entries) {
-			// Retired keys (`mode` on entries, `branchCreatedByOmpWeb` on records)
-			// are dropped silently: every entry is spawned now and branch deletion
-			// is guarded by the probed branch.
-			Reflect.deleteProperty(entry, "mode");
-			if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
-			if (entry.workspace !== undefined)
-				Reflect.deleteProperty(entry.workspace, "branchCreatedByOmpWeb");
-		}
-
-		// Tolerant read: files written before projects existed lack the keys.
-		const projects = file.projects ?? [];
-		if (!Array.isArray(projects) || projects.some((p) => typeof p?.projectId !== "string")) {
-			throw new Error(
-				`registry state corrupt at ${this.statePath}: projects entry missing projectId`,
+		let state: LoadedState;
+		try {
+			state = this.#parseFile(this.statePath);
+		} catch (err) {
+			const backup = `${this.statePath}.bak`;
+			if (!existsSync(backup)) throw err;
+			state = this.#parseFile(backup);
+			console.error(
+				`fleet: ${(err as Error).message}; restored the last good registry state from ${backup}`,
 			);
+			this.#rotateBackup = false;
+			this.#schedule(0);
 		}
-		let maxProjectIndex = 0;
-		for (const project of projects) {
-			const n = Number.parseInt(project.projectId.slice(1), 10);
-			if (Number.isFinite(n) && n > maxProjectIndex) maxProjectIndex = n;
-		}
-		this.projectList = [...projects];
-		// Same never-reuse rule as dN ids. Non-number garbage falls back to 1
-		// (missing key = 1), then the max-index floor applies.
-		const rawNextProjectId = typeof file.nextProjectId === "number" ? file.nextProjectId : 1;
-		this.nextProjectId = Math.max(rawNextProjectId, maxProjectIndex + 1);
-		// Tolerant read of deletion-without-verification markers (absent in
-		// files written before P7.5). Entries whose workspace record claims a
-		// non-verified deletion also reconcile to the orphan list on their
-		// next mutation (never at boot, matching the P1 lazy-migration rule).
-		this.storeOrphanList = {};
-		if (file.storeOrphans !== undefined) {
-			if (
-				typeof file.storeOrphans !== "object" ||
-				file.storeOrphans === null ||
-				Array.isArray(file.storeOrphans)
-			) {
-				throw new Error(
-					`registry state corrupt at ${this.statePath}: storeOrphans must be an object`,
-				);
-			}
-			for (const [workspaceId, marker] of Object.entries(file.storeOrphans)) {
-				if (marker === null || typeof marker !== "object" || typeof marker.at !== "number") {
-					throw new Error(
-						`registry state corrupt at ${this.statePath}: storeOrphans entry ${workspaceId} missing at`,
-					);
-				}
-				this.storeOrphanList[workspaceId] = marker;
-			}
-		}
+		this.#install(state);
 	}
 
-	/** Atomic persist (tmp + rename). Mutations persist internally; this is the public API. */
-	async save(): Promise<void> {
+	#install(state: LoadedState): void {
+		this.entries = state.entries;
+		this.nextId = state.nextId;
+		this.projectList = state.projects;
+		this.nextProjectId = state.nextProjectId;
+		this.storeOrphanList = state.storeOrphans;
+	}
+
+	/** Write the pending state now. No-op when nothing changed. Throws on an I/O failure (the state stays pending). */
+	flush(): void {
+		if (!this.#dirty) return;
+		if (this.#flushTimer !== null) {
+			clearTimeout(this.#flushTimer);
+			this.#flushTimer = null;
+		}
 		this.#persist();
+		this.#dirty = false;
+		if (this.#exitHooked) {
+			process.off("exit", this.#onExit);
+			this.#exitHooked = false;
+		}
 	}
 
 	/** Insertion order. */
@@ -395,7 +437,7 @@ export class Registry {
 		// produce (load() inference covers files written before P1).
 		if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
 		this.entries.push(entry);
-		this.#mutated();
+		this.#mutated({ upserted: [entry], removed: [] }, true);
 		return entry;
 	}
 
@@ -403,7 +445,10 @@ export class Registry {
 		const index = this.#indexOf(daemonId);
 		const entry = { ...this.entries[index], ...patch };
 		this.entries[index] = entry;
-		this.#mutated();
+		this.#mutated(
+			{ upserted: [entry], removed: [] },
+			Object.keys(patch).some((key) => !Object.hasOwn(VOLATILE_ENTRY_KEYS, key)),
+		);
 		return entry;
 	}
 
@@ -414,7 +459,7 @@ export class Registry {
 	setWorkspace(daemonId: string, record: WorkspaceRecord): RegistryEntry {
 		const entry = this.#require(daemonId);
 		entry.workspace = record;
-		this.#mutated();
+		this.#mutated({ upserted: [entry], removed: [] }, true);
 		return entry;
 	}
 
@@ -428,7 +473,7 @@ export class Registry {
 	updateWorkspace(daemonId: string, patch: Partial<WorkspaceRecord>): RegistryEntry {
 		const entry = this.#require(daemonId);
 		entry.workspace = { ...(entry.workspace ?? inferWorkspaceRecord(entry)), ...patch };
-		this.#mutated();
+		this.#mutated({ upserted: [entry], removed: [] }, true);
 		return entry;
 	}
 
@@ -442,7 +487,7 @@ export class Registry {
 		const entry = this.#require(daemonId);
 		const workspace = entry.workspace ?? inferWorkspaceRecord(entry);
 		entry.workspace = { ...workspace, deletion };
-		this.#mutated();
+		this.#mutated({ upserted: [entry], removed: [] }, true);
 		return entry;
 	}
 
@@ -457,7 +502,7 @@ export class Registry {
 		const entry = this.#require(daemonId);
 		const workspace = entry.workspace ?? inferWorkspaceRecord(entry);
 		entry.workspace = { ...workspace, enrollment };
-		this.#mutated();
+		this.#mutated({ upserted: [entry], removed: [] }, true);
 		return entry;
 	}
 
@@ -477,7 +522,7 @@ export class Registry {
 		const next = { ...workspace };
 		delete next.enrollment;
 		entry.workspace = next;
-		this.#mutated();
+		this.#mutated({ upserted: [entry], removed: [] }, true);
 		return true;
 	}
 
@@ -512,7 +557,7 @@ export class Registry {
 			...(reason ? { reason } : {}),
 			...(this.#captureOrphanProvenance(workspaceId) ?? {}),
 		};
-		this.#mutated();
+		this.#mutated({ upserted: [], removed: [] }, true);
 	}
 
 	/**
@@ -542,7 +587,7 @@ export class Registry {
 	clearStoreOrphan(workspaceId: string): boolean {
 		if (!(workspaceId in this.storeOrphanList)) return false;
 		delete this.storeOrphanList[workspaceId];
-		this.#mutated();
+		this.#mutated({ upserted: [], removed: [] }, true);
 		return true;
 	}
 
@@ -570,14 +615,14 @@ export class Registry {
 			delete entry.pid;
 			delete entry.readyAt;
 		}
-		this.#mutated();
+		this.#mutated({ upserted: [entry], removed: [] }, false);
 	}
 
 	remove(daemonId: string): boolean {
 		const index = this.entries.findIndex((entry) => entry.daemonId === daemonId);
 		if (index === -1) return false;
 		this.entries.splice(index, 1);
-		this.#mutated();
+		this.#mutated({ upserted: [], removed: [daemonId] }, true);
 		return true;
 	}
 
@@ -611,7 +656,7 @@ export class Registry {
 			addedAt: Date.now(),
 		};
 		this.projectList.push(project);
-		this.#mutated();
+		this.#mutated({ upserted: [], removed: [] }, true);
 		this.onProjectsChange?.();
 		return { project, existing: false };
 	}
@@ -641,7 +686,7 @@ export class Registry {
 		const removed = owned.map((entry) => entry.daemonId);
 		this.entries = this.entries.filter((entry) => entry.projectId !== projectId);
 		this.projectList.splice(index, 1);
-		this.#mutated();
+		this.#mutated({ upserted: [], removed }, true);
 		this.onProjectsChange?.();
 		return removed;
 	}
@@ -658,25 +703,92 @@ export class Registry {
 		if (project === undefined || (project.missing === true) === missing) return;
 		if (missing) project.missing = true;
 		else Reflect.deleteProperty(project, "missing");
-		this.#mutated();
+		this.#mutated({ upserted: [], removed: [] }, true);
 		this.onProjectsChange?.();
 	}
 
-	#readFile(): RegistryFile {
+	/**
+	 * Read and validate one state file (the state file or its `.bak`). Throws
+	 * with the path in the message when it is unreadable or malformed.
+	 */
+	#parseFile(path: string): LoadedState {
 		let parsed: unknown;
 		try {
-			parsed = JSON.parse(readFileSync(this.statePath, "utf8"));
+			parsed = JSON.parse(readFileSync(path, "utf8"));
 		} catch (err) {
-			throw new Error(`registry state corrupt at ${this.statePath}: ${(err as Error).message}`);
+			throw new Error(`registry state corrupt at ${path}: ${(err as Error).message}`);
 		}
 		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-			throw new Error(`registry state corrupt at ${this.statePath}: expected an object`);
+			throw new Error(`registry state corrupt at ${path}: expected an object`);
 		}
 		const file = parsed as Partial<RegistryFile>;
 		if (typeof file.nextId !== "number" || !Array.isArray(file.entries)) {
-			throw new Error(`registry state corrupt at ${this.statePath}: missing nextId or entries`);
+			throw new Error(`registry state corrupt at ${path}: missing nextId or entries`);
 		}
-		return file as RegistryFile;
+		let maxIndex = 0;
+		for (const entry of file.entries) {
+			if (typeof entry !== "object" || entry === null || typeof entry.daemonId !== "string") {
+				throw new Error(`registry state corrupt at ${path}: entry missing daemonId`);
+			}
+			const n = Number.parseInt(entry.daemonId.slice(1), 10);
+			if (Number.isFinite(n) && n > maxIndex) maxIndex = n;
+		}
+		const entries = [...file.entries];
+		// Lazy workspace migration (P1): entries persisted before workspace
+		// records existed get an in-memory record here; it persists on the
+		// entry's next mutation, never at boot.
+		for (const entry of entries) {
+			// Retired keys (`mode` on entries, `branchCreatedByOmpWeb` on records)
+			// are dropped silently: every entry is spawned now and branch deletion
+			// is guarded by the probed branch.
+			Reflect.deleteProperty(entry, "mode");
+			if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
+			if (entry.workspace !== undefined)
+				Reflect.deleteProperty(entry.workspace, "branchCreatedByOmpWeb");
+		}
+		// Tolerant read: files written before projects existed lack the keys.
+		const projects = file.projects ?? [];
+		if (!Array.isArray(projects) || projects.some((p) => typeof p?.projectId !== "string")) {
+			throw new Error(`registry state corrupt at ${path}: projects entry missing projectId`);
+		}
+		let maxProjectIndex = 0;
+		for (const project of projects) {
+			const n = Number.parseInt(project.projectId.slice(1), 10);
+			if (Number.isFinite(n) && n > maxProjectIndex) maxProjectIndex = n;
+		}
+		// Same never-reuse rule as dN ids. Non-number garbage falls back to 1
+		// (missing key = 1), then the max-index floor applies.
+		const rawNextProjectId = typeof file.nextProjectId === "number" ? file.nextProjectId : 1;
+		// Tolerant read of deletion-without-verification markers (absent in
+		// files written before P7.5). Entries whose workspace record claims a
+		// non-verified deletion also reconcile to the orphan list on their
+		// next mutation (never at boot, matching the P1 lazy-migration rule).
+		const storeOrphans: Record<string, StoreOrphanMarker> = {};
+		if (file.storeOrphans !== undefined) {
+			if (
+				typeof file.storeOrphans !== "object" ||
+				file.storeOrphans === null ||
+				Array.isArray(file.storeOrphans)
+			) {
+				throw new Error(`registry state corrupt at ${path}: storeOrphans must be an object`);
+			}
+			for (const [workspaceId, marker] of Object.entries(file.storeOrphans)) {
+				if (marker === null || typeof marker !== "object" || typeof marker.at !== "number") {
+					throw new Error(
+						`registry state corrupt at ${path}: storeOrphans entry ${workspaceId} missing at`,
+					);
+				}
+				storeOrphans[workspaceId] = marker;
+			}
+		}
+		return {
+			entries,
+			// Never reuse ids: floor the counter above the highest id on disk.
+			nextId: Math.max(file.nextId, maxIndex + 1),
+			projects: [...projects],
+			nextProjectId: Math.max(rawNextProjectId, maxProjectIndex + 1),
+			storeOrphans,
+		};
 	}
 
 	#indexOf(daemonId: string): number {
@@ -689,10 +801,46 @@ export class Registry {
 		return this.entries[this.#indexOf(daemonId)];
 	}
 
-	/** Persist atomically, then notify. Called after every mutation. */
-	#mutated(): void {
-		this.#persist();
-		this.onChange?.();
+	/** Write any pending state now and stop the coalesced-write timer. The fleet server calls it on close. */
+	close(): void {
+		this.flush();
+	}
+
+	/**
+	 * Notify after a mutation: arm its write and fire onChange with the rows it
+	 * touched. A durable change writes on the next timer tick; a volatile-only
+	 * one waits VOLATILE_PERSIST_DELAY_MS so bursts of status and git updates
+	 * share one write.
+	 */
+	#mutated(change: RegistryChange, durable: boolean): void {
+		this.#schedule(durable ? 0 : VOLATILE_PERSIST_DELAY_MS);
+		this.onChange?.(change);
+	}
+
+	/** Arm the coalesced write, or pull an armed one earlier. */
+	#schedule(delayMs: number): void {
+		this.#dirty = true;
+		if (!this.#exitHooked) {
+			this.#exitHooked = true;
+			process.once("exit", this.#onExit);
+		}
+		const due = Date.now() + delayMs;
+		if (this.#flushTimer !== null) {
+			if (due >= this.#flushDue) return;
+			clearTimeout(this.#flushTimer);
+		}
+		this.#flushDue = due;
+		this.#flushTimer = setTimeout(() => {
+			this.#flushTimer = null;
+			try {
+				this.flush();
+			} catch (err) {
+				// The state stays pending: the next mutation or close() retries.
+				console.error(
+					`fleet: registry write failed at ${this.statePath}: ${(err as Error).message}`,
+				);
+			}
+		}, delayMs);
 	}
 
 	#persist(): void {
@@ -711,8 +859,19 @@ export class Registry {
 			2,
 		);
 		const tmp = `${this.statePath}.tmp`;
+		const backup = `${this.statePath}.bak`;
 		writeFileSync(tmp, `${payload}\n`, "utf8");
+		fsyncPath(tmp);
 		this.failBeforeRename?.();
+		// Keep the state being replaced as the fallback copy (written through a
+		// sibling tmp file, so .bak is always a complete file).
+		if (this.#rotateBackup && existsSync(this.statePath)) {
+			copyFileSync(this.statePath, `${backup}.tmp`);
+			fsyncPath(`${backup}.tmp`);
+			renameSync(`${backup}.tmp`, backup);
+		}
+		this.#rotateBackup = true;
 		renameSync(tmp, this.statePath);
+		fsyncPath(dirname(this.statePath));
 	}
 }

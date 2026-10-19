@@ -2434,6 +2434,26 @@ describe("attached session reconciliation against roster truth", () => {
 		expect(hasLiveSession()).toBe(false);
 	});
 
+	test("a roster_delta marking the attached daemon asleep clears the session view (roster survives)", () => {
+		attachAndPrime();
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(state.readyAt).toBe(123);
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
+
+		dispatch({
+			type: "roster_delta",
+			upserted: [daemon("daemon-a", { status: "asleep" })],
+			removed: [],
+		});
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.readyAt).toBeUndefined();
+		expect(state.items).toEqual([]);
+		// Fleet-scoped roster data survives the session clear.
+		expect(state.daemonRoster.map((d) => d.daemonId)).toEqual(["daemon-a"]);
+		expect(hasLiveSession()).toBe(false);
+	});
+
 	test("a roster frame keeping the attached daemon ready does NOT clear", () => {
 		attachAndPrime();
 
@@ -2556,6 +2576,67 @@ describe("attached session reconciliation against roster truth", () => {
 		expect(state.items).toEqual([]);
 		expect(hasLiveSession()).toBe(false);
 		expect(isUserStopped("daemon-a")).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// roster_delta: the edge sends the full roster once on open and then only the
+// rows each registry mutation changed. A delta patches state.daemonRoster in
+// place (by daemonId), appends new rows, and drops removed ids.
+// ---------------------------------------------------------------------------
+describe("roster_delta frames", () => {
+	/** Minimal roster entry; status/extra fields ride along. */
+	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: id,
+			labels: [],
+			status: "ready",
+			...extra,
+		};
+	}
+
+	const rosterIds = (): string[] => state.daemonRoster.map((d) => d.daemonId);
+
+	/** Open the stream and seed the roster with daemons A and B. */
+	function seedAB(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({ type: "roster", daemons: [daemon("a"), daemon("b")] });
+		expect(rosterIds()).toEqual(["a", "b"]);
+	}
+
+	test("an upserted row patches its entry in place and keeps the order and the other rows", () => {
+		seedAB();
+
+		dispatch({
+			type: "roster_delta",
+			upserted: [daemon("a", { status: "asleep" })],
+			removed: [],
+		});
+
+		expect(rosterIds()).toEqual(["a", "b"]);
+		expect(state.daemonRoster[0]?.status).toBe("asleep");
+		expect(state.daemonRoster[1]?.status).toBe("ready");
+	});
+
+	test("an upserted row with a new id is appended after the existing rows", () => {
+		seedAB();
+
+		dispatch({ type: "roster_delta", upserted: [daemon("c")], removed: [] });
+
+		expect(rosterIds()).toEqual(["a", "b", "c"]);
+	});
+
+	test("a removed id drops its row and leaves the others", () => {
+		seedAB();
+
+		dispatch({ type: "roster_delta", upserted: [], removed: ["b"] });
+
+		expect(rosterIds()).toEqual(["a"]);
+		expect(state.daemonRoster[0]?.status).toBe("ready");
 	});
 });
 

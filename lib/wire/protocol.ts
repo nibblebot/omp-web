@@ -1168,6 +1168,10 @@ export type ServerFrame =
 	// --- Fleet edge (omp-fleet → browser; a bare omp-session never sends these) ---
 	// Global broadcast + unicast answer; the fleet sidebar's source.
 	| { type: "roster"; daemons: DaemonEntry[] }
+	// Row-level roster change from one registry mutation: changed rows (appended
+	// when new, replaced in place otherwise) and removed daemonIds. Ringed like
+	// `roster`; the full roster still rides each stream's priming frame.
+	| { type: "roster_delta"; upserted: DaemonEntry[]; removed: string[] }
 	| { type: "daemon_status"; daemonId: string; status: DaemonStatus; error?: string }
 	// Edge-generated, fleet-scoped realtime activity for a ready daemon
 	// (streaming / dialog-blocked). Derived by the fleet edge from the tapped

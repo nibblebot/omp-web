@@ -6,7 +6,7 @@
  *
  *   - GET /events is the browser SSE downlink. Every open stream gets an
  *     immediate roster + merged-daemons + registered-projects priming
- *     (edge-local seqs 1..k, k < SSE_DELTA_SEQ_START); live `roster` /
+ *     (edge-local seqs 1..k, k < SSE_DELTA_SEQ_START); live `roster_delta` /
  *     `daemon_status` / `daemons` / `registered_projects` broadcasts and
  *     proxied daemon frames follow as SSE events with
  *     edge-local monotonic seqs from SSE_DELTA_SEQ_START, kept in a
@@ -116,7 +116,12 @@ import {
 	listDaemonSessions,
 	type CloneSessionStore,
 } from "./daemon-sessions";
-import { REDIAL_GRACE_MS, type Registry, type RegistryEntry } from "./registry";
+import {
+	REDIAL_GRACE_MS,
+	type Registry,
+	type RegistryChange,
+	type RegistryEntry,
+} from "./registry";
 import { PAIR_TIMEOUT_MS, type SpawnSupervisor } from "./supervisor";
 import type { FleetEventLog, FleetFacts } from "./events";
 import {
@@ -670,7 +675,7 @@ export class FleetEdge {
 	readonly #sessionsDir: string | undefined;
 
 	/** Bound once so close() can unset registry.onChange without clobbering a replacement. */
-	readonly #onRegistryChange = (): void => {
+	readonly #onRegistryChange = (change: RegistryChange): void => {
 		// A wake ends when the daemon's status leaves "asleep" (spawn_resume's
 		// respawn resolves before the fresh child starts dialing, so clearing
 		// here, not in #wake, keeps back-to-back attach from double-respawning).
@@ -680,7 +685,7 @@ export class FleetEdge {
 		// New daemons get a daemons-frame tap; removed ones lose it and their
 		// cached rosters are evicted (broadcast so browsers drop the entries).
 		this.#reconcileDaemonTaps();
-		this.#broadcastRoster();
+		this.#broadcastRosterDelta(change);
 	};
 
 	/** Project-set mutations only; the frame is re-derivable from priming, so it is never ringed. */
@@ -2365,10 +2370,13 @@ export class FleetEdge {
 		}
 	}
 
-	#broadcastRoster(): void {
+	/** Broadcast the roster rows one registry mutation changed. Full rosters ride priming only. */
+	#broadcastRosterDelta(change: RegistryChange): void {
+		if (change.upserted.length === 0 && change.removed.length === 0) return;
 		this.#broadcast({
-			type: "roster",
-			daemons: this.#registry.list().map((entry) => toRosterEntry(entry)),
+			type: "roster_delta",
+			upserted: change.upserted.map((entry) => toRosterEntry(entry)),
+			removed: change.removed,
 		});
 	}
 

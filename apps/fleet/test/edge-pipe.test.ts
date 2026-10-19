@@ -225,7 +225,7 @@ describe("edge pipe backpressure and replay", () => {
 				status: "connecting",
 			});
 			await browser.waitForFrame(
-				(f) => f.type === "roster" && f.daemons.some((d) => d.daemonId === x1.daemonId),
+				(f) => f.type === "roster_delta" && f.upserted.some((d) => d.daemonId === x1.daemonId),
 				"first delta roster",
 			);
 			// Overflow: a synchronous burst of roster broadcasts (constant-size
@@ -241,12 +241,12 @@ describe("edge pipe backpressure and replay", () => {
 			// the final burst roster, not only the fresh priming.
 			const replayed = await browser.waitForEvent(
 				(ev) =>
-					ev.frame.type === "roster" &&
-					ev.frame.daemons.some((d) => d.daemonId === x1.daemonId && d.labels.includes("v=40")) &&
+					ev.frame.type === "roster_delta" &&
+					ev.frame.upserted.some((d) => d.daemonId === x1.daemonId && d.labels.includes("v=40")) &&
 					ev.id >= SSE_DELTA_SEQ_START,
-				"replayed final roster",
+				"replayed final roster delta",
 			);
-			expect(replayed.frame.type).toBe("roster");
+			expect(replayed.frame.type).toBe("roster_delta");
 		} finally {
 			await rig.close();
 		}

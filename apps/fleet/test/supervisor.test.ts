@@ -1531,6 +1531,7 @@ describe("git-state polling", () => {
 		expect(onChange).toBe(2);
 		// The polled fields persist (registry persists every update) and
 		// reload cleanly (old state files without them load too).
+		registry.flush();
 		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
 		expect(onDisk.entries[0]).toMatchObject({
 			branch: "main",
@@ -1601,6 +1602,7 @@ describe("git-state polling", () => {
 		);
 		expect(onChange).toBe(2); // no churn on unchanged titles
 		// The title persists with the other entry fields.
+		registry.flush();
 		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
 		expect(onDisk.entries[0].sessionTitle).toBe("The dashboard title");
 
@@ -1655,6 +1657,7 @@ describe("git-state polling", () => {
 		// broadcasts total (branch fill + the empty flag), with no title churn.
 		expect(registry.get(local.daemonId)?.sessionTitle).toBeUndefined();
 		expect(onChange).toBe(2);
+		registry.flush();
 		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
 		expect(onDisk.entries[0].sessionEmpty).toBe(true);
 

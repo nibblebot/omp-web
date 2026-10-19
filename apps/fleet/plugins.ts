@@ -27,7 +27,7 @@ export interface FleetPlugins {
 	setSetting(name: string, key: string, value: unknown): Promise<PluginDetail>;
 }
 
-export interface FleetPluginsOptions {
+interface FleetPluginsOptions {
 	/** Plugin store source, injectable for tests (must not touch the real lock file). */
 	openStore?: () => Promise<PluginStore>;
 }

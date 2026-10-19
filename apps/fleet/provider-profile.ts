@@ -10,7 +10,7 @@
  */
 
 /** One dropped (or wholly malformed) profile entry, with an actionable reason. */
-export interface ProfileError {
+interface ProfileError {
 	/** Shape problems are `invalid_request`; id/key mismatches are `invalid_identity`. */
 	code: "invalid_request" | "invalid_identity";
 	/** Human-readable, actionable reason the profile was rejected. */

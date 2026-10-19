@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { RegisteredProject } from "#lib/wire/protocol";
+import type { DaemonEntry, RegisteredProject, ServerFrame } from "#lib/wire/protocol";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
 import { DaemonTransportRegistry } from "../daemon-transport";
@@ -18,16 +18,22 @@ import { FleetEventLog } from "../events";
 import { Registry } from "../registry";
 import { SpawnSupervisor } from "../supervisor";
 import { managedWorktreePath, registerWorktreeEntry } from "../worktrees";
-import {
-	asRoster,
-	openBrowser,
-	serveEdge,
-	testEviction,
-	waitFor,
-	type BrowserSocket,
-} from "./edge.testkit";
+import { openBrowser, serveEdge, testEviction, waitFor, type BrowserSocket } from "./edge.testkit";
 
 afterAll(cleanupTempDirs);
+
+/** A roster broadcast: the priming `roster`, or a mutation's `roster_delta`. */
+const isRosterFrame = (f: ServerFrame): boolean => f.type === "roster" || f.type === "roster_delta";
+/** Rows a post-mutation broadcast carries: a delta's upserted rows, or a full roster's daemons. */
+function rowsOf(f: ServerFrame): DaemonEntry[] {
+	if (f.type === "roster_delta") return f.upserted;
+	return f.type === "roster" ? f.daemons : [];
+}
+/** True when a roster broadcast drops the daemon: a delta removing it, or a full roster without it. */
+function dropsRow(f: ServerFrame, daemonId: string): boolean {
+	if (f.type === "roster_delta") return f.removed.includes(daemonId);
+	return f.type === "roster" && !f.daemons.some((d) => d.daemonId === daemonId);
+}
 
 describe("edge worktree commands", () => {
 	let tmp: string;
@@ -122,20 +128,18 @@ describe("edge worktree commands", () => {
 			projectId: project.projectId,
 			name: "My Branch",
 		});
-		const roster = asRoster(
-			await browser.waitForFrame(
-				(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === target),
-				"roster with the new worktree",
-			),
+		const created = await browser.waitForFrame(
+			(f) => isRosterFrame(f) && rowsOf(f).some((d) => d.cwd === target),
+			"roster with the new worktree",
 		);
-		const entry = roster.daemons.find((d) => d.cwd === target)!;
+		const entry = rowsOf(created).find((d) => d.cwd === target)!;
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
 		expect(entry.status).toBe("asleep");
 		expect(existsSync(target)).toBe(true);
 		// The roster never leaks tokens/endpoints.
-		expect(JSON.stringify(roster)).not.toContain("token");
-		expect(JSON.stringify(roster)).not.toContain("endpoint");
+		expect(JSON.stringify(created)).not.toContain("token");
+		expect(JSON.stringify(created)).not.toContain("endpoint");
 	});
 
 	test("delete_worktree removes a clean attached linked worktree", async () => {
@@ -157,7 +161,7 @@ describe("edge worktree commands", () => {
 		expect(info.linked).toBe(true);
 		expect(info.dirty).toBe(false);
 		// Floor: only roster frames NEWER than the last one seen so far count.
-		const rosters = browser.events.filter((ev) => ev.frame.type === "roster");
+		const rosters = browser.events.filter((ev) => isRosterFrame(ev.frame));
 		const floorId = rosters.length > 0 ? rosters[rosters.length - 1].id : 0;
 		await browser.send({
 			type: "delete_worktree",
@@ -165,10 +169,7 @@ describe("edge worktree commands", () => {
 			daemonId: entry.daemonId,
 		});
 		await browser.waitForEvent(
-			(ev) =>
-				ev.id > floorId &&
-				ev.frame.type === "roster" &&
-				!ev.frame.daemons.some((d) => d.daemonId === entry.daemonId),
+			(ev) => ev.id > floorId && dropsRow(ev.frame, entry.daemonId),
 			"roster without the attached worktree",
 		);
 		expect(registry.get(entry.daemonId)).toBeUndefined();
@@ -209,17 +210,14 @@ describe("edge worktree commands", () => {
 		const entry = registry.list().find((e) => e.cwd === target)!;
 		// Floor: only roster frames NEWER than the last one seen so far count.
 		// The priming roster (pre-entry) must not satisfy the "gone" predicate.
-		const rosters = browser.events.filter((ev) => ev.frame.type === "roster");
+		const rosters = browser.events.filter((ev) => isRosterFrame(ev.frame));
 		const floorId = rosters.length > 0 ? rosters[rosters.length - 1].id : 0;
 		const originalRoot = config.workspaceDir;
 		config.workspaceDir = join(tmp, "replacement-workspaces");
 		try {
 			await browser.send({ type: "delete_worktree", id: "wt5", daemonId: entry.daemonId });
 			await browser.waitForEvent(
-				(ev) =>
-					ev.id > floorId &&
-					ev.frame.type === "roster" &&
-					!ev.frame.daemons.some((d) => d.daemonId === entry.daemonId),
+				(ev) => ev.id > floorId && dropsRow(ev.frame, entry.daemonId),
 				"roster without the deleted worktree",
 			);
 			expect(registry.get(entry.daemonId)).toBeUndefined();
@@ -269,13 +267,11 @@ describe("edge worktree commands", () => {
 			projectId: project.projectId,
 			name: "Dirty",
 		});
-		const roster = asRoster(
-			await browser.waitForFrame(
-				(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === target),
-				"roster with the dirty worktree",
-			),
+		const created = await browser.waitForFrame(
+			(f) => isRosterFrame(f) && rowsOf(f).some((d) => d.cwd === target),
+			"roster with the dirty worktree",
 		);
-		const entry = roster.daemons.find((d) => d.cwd === target)!;
+		const entry = rowsOf(created).find((d) => d.cwd === target)!;
 		writeFileSync(join(entry.cwd, "scratch.txt"), "x\n");
 		await browser.send({ type: "delete_worktree", id: "wt7", daemonId: entry.daemonId });
 		const err = await browser.waitForFrame(
@@ -296,13 +292,11 @@ describe("edge worktree commands", () => {
 			projectId: project.projectId,
 			name: "Locked",
 		});
-		const roster = asRoster(
-			await browser.waitForFrame(
-				(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === target),
-				"roster with the locked worktree",
-			),
+		const created = await browser.waitForFrame(
+			(f) => isRosterFrame(f) && rowsOf(f).some((d) => d.cwd === target),
+			"roster with the locked worktree",
 		);
-		const entry = roster.daemons.find((d) => d.cwd === target)!;
+		const entry = rowsOf(created).find((d) => d.cwd === target)!;
 		// A lock passes the pre-check (clean linked worktree) but makes
 		// `git worktree remove` refuse, the removal that runs after the stop.
 		expect((await gitIn(repoDir, ["worktree", "lock", target])).exitCode).toBe(0);
@@ -323,7 +317,7 @@ describe("edge worktree commands", () => {
 		const target = managedWorktreePath(config.workspaceDir, project.path, "Started");
 		// The spawn's own create broadcast precedes the projectId tag; wait
 		// for a NEWER roster that carries the tag.
-		const rosters = browser.events.filter((ev) => ev.frame.type === "roster");
+		const rosters = browser.events.filter((ev) => isRosterFrame(ev.frame));
 		const floorId = rosters.length > 0 ? rosters[rosters.length - 1].id : 0;
 		await browser.send({
 			type: "create_worktree",
@@ -335,12 +329,11 @@ describe("edge worktree commands", () => {
 		const tagged = await browser.waitForEvent(
 			(ev) =>
 				ev.id > floorId &&
-				ev.frame.type === "roster" &&
-				ev.frame.daemons.some((d) => d.cwd === target && d.projectId === project.projectId),
+				isRosterFrame(ev.frame) &&
+				rowsOf(ev.frame).some((d) => d.cwd === target && d.projectId === project.projectId),
 			"roster with the spawned worktree",
 		);
-		const roster = asRoster(tagged.frame);
-		const entry = roster.daemons.find((d) => d.cwd === target)!;
+		const entry = rowsOf(tagged.frame).find((d) => d.cwd === target)!;
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
 		// Stop the idling child (`sleep 30`) so the suite ends clean.
@@ -384,13 +377,11 @@ describe("edge worktree commands", () => {
 				name: "From Branch",
 				existingBranch: "feature2",
 			});
-			const roster = asRoster(
-				await local.waitForFrame(
-					(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === target),
-					"roster with the existing-branch worktree",
-				),
+			const created = await local.waitForFrame(
+				(f) => isRosterFrame(f) && rowsOf(f).some((d) => d.cwd === target),
+				"roster with the existing-branch worktree",
 			);
-			const entry = roster.daemons.find((d) => d.cwd === target)!;
+			const entry = rowsOf(created).find((d) => d.cwd === target)!;
 			expect(entry.projectId).toBe(project.projectId);
 			expect(existsSync(target)).toBe(true);
 			// start:false entries carry no roster branch field; git is the

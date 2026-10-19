@@ -758,6 +758,7 @@ describe("registerWorktreeEntry", () => {
 				desiredState: start ? "running" : "stopped",
 				source: { local: repo },
 			});
+			registry.flush();
 			const reloaded = new Registry(statePath);
 			await reloaded.load();
 			expect(reloaded.get(entry.daemonId)?.workspace).toMatchObject({

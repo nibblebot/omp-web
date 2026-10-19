@@ -34,7 +34,7 @@ export interface GitResult {
  */
 export type GitRunner = (args: string[], cwd: string) => Promise<GitResult>;
 
-export interface GitOptions {
+interface GitOptions {
 	/** Override the git invocation (tests); defaults to a real `git` spawn. */
 	exec?: GitRunner;
 }

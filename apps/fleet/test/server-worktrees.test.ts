@@ -144,8 +144,8 @@ describe("worktree lifecycle routes", () => {
 		// Await the registry change that sync's new row produces (no polling).
 		const registrySettled = new Promise<void>((resolve) => {
 			const prev = server.registry.onChange;
-			server.registry.onChange = () => {
-				prev?.();
+			server.registry.onChange = (change) => {
+				prev?.(change);
 				if (!server.registry.list().some((e) => e.cwd === rawPath)) return;
 				server.registry.onChange = prev;
 				resolve();
@@ -541,7 +541,9 @@ describe("worktree lifecycle routes", () => {
 			// Evicted from the roster (the broadcast dropped the entry first).
 			expect(server.registry.get(entry.daemonId)).toBeUndefined();
 			const roster = browser.frames.find(
-				(f) => f.type === "roster" && !f.daemons.some((d) => d.daemonId === entry.daemonId),
+				(f) =>
+					(f.type === "roster_delta" && f.removed.includes(entry.daemonId)) ||
+					(f.type === "roster" && !f.daemons.some((d) => d.daemonId === entry.daemonId)),
 			);
 			expect(roster).toBeDefined();
 			// Exactly one toast per eviction: the entry is gone, so later polls
@@ -564,7 +566,9 @@ describe("worktree lifecycle routes", () => {
 			// The route evicts synchronously; wait for its roster broadcast,
 			// then pin that no toast rode along.
 			await uiBrowser.waitForFrame(
-				(f) => f.type === "roster" && !f.daemons.some((d) => d.daemonId === uiEntry.daemonId),
+				(f) =>
+					(f.type === "roster_delta" && f.removed.includes(uiEntry.daemonId)) ||
+					(f.type === "roster" && !f.daemons.some((d) => d.daemonId === uiEntry.daemonId)),
 				"roster without UI-deleted entry",
 			);
 			expect(uiBrowser.frames.filter((f) => f.type === "worktree_removed")).toHaveLength(0);
@@ -587,7 +591,9 @@ describe("worktree lifecycle routes", () => {
 			const browser = await openBrowser(server.port);
 			rmSync(entry.cwd, { recursive: true, force: true });
 			await browser.waitForFrame(
-				(f) => f.type === "roster" && !f.daemons.some((d) => d.daemonId === entry.daemonId),
+				(f) =>
+					(f.type === "roster_delta" && f.removed.includes(entry.daemonId)) ||
+					(f.type === "roster" && !f.daemons.some((d) => d.daemonId === entry.daemonId)),
 				"roster without vanished entry",
 				15_000,
 			);

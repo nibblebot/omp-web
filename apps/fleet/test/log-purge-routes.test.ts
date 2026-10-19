@@ -96,6 +96,7 @@ describe("fleet log retention routes (P7.6)", () => {
 			});
 			seeded.set(name, { workspaceId: entry.daemonId, credential, generation: 1 });
 		}
+		registry.flush();
 		server = await startTestFleet(
 			{ statePath, configPath },
 			{},

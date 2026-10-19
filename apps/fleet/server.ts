@@ -716,6 +716,12 @@ class FleetServerImpl implements FleetServer {
 		} catch (err) {
 			errors.push(err);
 		}
+		// Write the coalesced registry state once the supervisor has stopped mutating it.
+		try {
+			this.registry.close();
+		} catch (err) {
+			errors.push(err);
+		}
 		// Release the state lock last: another fleet may start on this state
 		// path once everything above is torn down. release() never throws.
 		this.lock.release();

@@ -135,7 +135,7 @@ export interface CloneCreateInput {
 }
 
 /** External wiring the fleet server injects (nothing HTTP here). */
-export interface WorkspaceLifecycleDeps {
+interface WorkspaceLifecycleDeps {
 	registry: Registry;
 	config: Pick<FleetConfig, "providerProfiles">;
 	/** Private volume allocation root beside this fleet's selected state file. */

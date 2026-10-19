@@ -276,6 +276,7 @@ describe("fleet edge", () => {
 			template: "local",
 			status: "asleep",
 		});
+		registry.flush();
 		server = await startFleet({
 			port: 0,
 			statePath,
@@ -398,15 +399,14 @@ describe("fleet edge", () => {
 				expect(typeof d.uptime).toBe("number");
 			}
 		}
-		// A registry mutation broadcasts a fresh roster to every edge stream.
+		// A registry mutation broadcasts a roster_delta to every edge stream.
 		server.registry.update(remoteEntry.daemonId, { labels: ["env=test"] });
-		const second = asRoster(
-			await browser.waitForFrame(
-				(f) => f.type === "roster" && JSON.stringify(f).includes("env=test"),
-				"roster broadcast",
-			),
+		const second = await browser.waitForFrame(
+			(f) => f.type === "roster_delta" && JSON.stringify(f).includes("env=test"),
+			"roster broadcast",
 		);
-		const changed = second.daemons.find((d) => d.daemonId === remoteEntry.daemonId);
+		if (second.type !== "roster_delta") throw new Error("expected roster_delta frame");
+		const changed = second.upserted.find((d) => d.daemonId === remoteEntry.daemonId);
 		expect(changed?.labels).toContain("env=test");
 		expect(JSON.stringify(second)).not.toContain(FAKE_TOKEN);
 	});
@@ -910,17 +910,19 @@ describe("fleet edge", () => {
 			"old pipe closed after rebind",
 		);
 
-		// A broadcast after the rebind reaches the new stream EXACTLY once.
+		// A broadcast after the rebind reaches the new stream EXACTLY once. A
+		// registry mutation broadcasts a roster_delta (the full roster rides
+		// priming only), so count exactly those.
 		const oldFramesAtEnd = oldBrowser.frames.length;
 		const seenBefore = newBrowser.frames.length;
 		server.registry.update(remoteEntry.daemonId, {});
 		await waitFor(
-			() => newBrowser.frames.slice(seenBefore).find((f) => f.type === "roster") ?? null,
+			() => newBrowser.frames.slice(seenBefore).find((f) => f.type === "roster_delta") ?? null,
 			5000,
 			"roster broadcast after rebind",
 		);
 		await sleep(200);
-		const dups = newBrowser.frames.slice(seenBefore).filter((f) => f.type === "roster");
+		const dups = newBrowser.frames.slice(seenBefore).filter((f) => f.type === "roster_delta");
 		expect(dups).toHaveLength(1);
 		// The old stream is dead: it received nothing after its teardown.
 		expect(oldBrowser.frames.length).toBe(oldFramesAtEnd);
@@ -1320,7 +1322,7 @@ describe("fleet edge", () => {
 		dropDaemon(daemonsBId);
 	});
 
-	test("remove evicts a daemon and broadcasts a roster without it", async () => {
+	test("remove evicts a daemon and broadcasts a roster_delta that removes it", async () => {
 		// A fresh entry so the shared remoteEntry fixture stays intact for earlier tests.
 		const removableId = enrollRow("removable").daemonId;
 		const browser = await openBrowser(server.port);
@@ -1329,13 +1331,12 @@ describe("fleet edge", () => {
 			"roster with removable",
 		);
 		await browser.send({ type: "remove", daemonId: removableId });
-		const roster = asRoster(
-			await browser.waitForFrame(
-				(f) => f.type === "roster" && !f.daemons.some((d) => d.daemonId === removableId),
-				"roster without removable",
-			),
+		const delta = await browser.waitForFrame(
+			(f) => f.type === "roster_delta" && f.removed.includes(removableId),
+			"roster delta removing removable",
 		);
-		expect(roster.daemons.some((d) => d.daemonId === removableId)).toBe(false);
+		if (delta.type !== "roster_delta") throw new Error("expected roster_delta frame");
+		expect(delta.removed).toContain(removableId);
 		expect(server.registry.get(removableId)).toBeUndefined();
 	});
 
@@ -1371,14 +1372,14 @@ describe("fleet edge", () => {
 		const streamId = await attachBrowser(browser, daemon, id);
 
 		await browser.send({ type: "stop", daemonId: id });
-		const roster = asRoster(
-			await browser.waitForFrame(
-				(f) =>
-					f.type === "roster" && f.daemons.some((d) => d.daemonId === id && d.status === "asleep"),
-				"asleep roster",
-			),
+		const delta = await browser.waitForFrame(
+			(f) =>
+				f.type === "roster_delta" &&
+				f.upserted.some((d) => d.daemonId === id && d.status === "asleep"),
+			"asleep roster delta",
 		);
-		const entry = roster.daemons.find((d) => d.daemonId === id)!;
+		if (delta.type !== "roster_delta") throw new Error("expected roster_delta frame");
+		const entry = delta.upserted.find((d) => d.daemonId === id)!;
 		expect(entry.status).toBe("asleep");
 		expect(entry.pid).toBeUndefined();
 		expect(entry.uptime).toBeUndefined();
@@ -1430,15 +1431,14 @@ describe("fleet edge", () => {
 			expect(error.type).toBe("error");
 			// The entry must not stay "ready" forever: the status flip happens
 			// even on terminate failure, and the broadcast carries no pid/uptime.
-			const roster = asRoster(
-				await browser.waitForFrame(
-					(f) =>
-						f.type === "roster" &&
-						f.daemons.some((d) => d.daemonId === stopMe2.daemonId && d.status === "asleep"),
-					"asleep roster after failed stop",
-				),
+			const delta = await browser.waitForFrame(
+				(f) =>
+					f.type === "roster_delta" &&
+					f.upserted.some((d) => d.daemonId === stopMe2.daemonId && d.status === "asleep"),
+				"asleep roster delta after failed stop",
 			);
-			const entry = roster.daemons.find((d) => d.daemonId === stopMe2.daemonId)!;
+			if (delta.type !== "roster_delta") throw new Error("expected roster_delta frame");
+			const entry = delta.upserted.find((d) => d.daemonId === stopMe2.daemonId)!;
 			expect(entry.status).toBe("asleep");
 			expect(entry.pid).toBeUndefined();
 			expect(entry.uptime).toBeUndefined();
@@ -1502,16 +1502,17 @@ describe("fleet edge", () => {
 		// worktreeOf (main checkouts are the repo itself, never a linked worktree).
 		const rosterFrame = await browser.waitForFrame(
 			(f) =>
-				f.type === "roster" &&
-				f.daemons.some(
+				f.type === "roster_delta" &&
+				f.upserted.some(
 					(d) =>
 						d.projectId === project.projectId &&
 						d.cwd === realpathSync(repoDir) &&
 						d.status === "asleep",
 				),
-			"roster broadcast with default workspace",
+			"roster delta with default workspace",
 		);
-		const main = asRoster(rosterFrame).daemons.find((d) => d.projectId === project.projectId);
+		if (rosterFrame.type !== "roster_delta") throw new Error("expected roster_delta frame");
+		const main = rosterFrame.upserted.find((d) => d.projectId === project.projectId);
 		expect(main).toBeDefined();
 		expect(main!.cwd).toBe(realpathSync(repoDir));
 		expect(main!.status).toBe("asleep");

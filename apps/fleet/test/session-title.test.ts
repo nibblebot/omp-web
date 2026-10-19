@@ -1,5 +1,5 @@
 /**
- * readSessionTitle tests: title-slot extraction, header fallback, untitled
+ * Session title tests: title-slot extraction, header fallback, untitled
  * and missing files, the (path, mtimeMs, size) cache, and head-bounded reads
  * on gigantic files. Uses only real files in tempDir(), no fixtures.
  */
@@ -8,7 +8,11 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { readSessionInfo, readSessionTitle } from "../session-title";
+import { readSessionInfo } from "../session-title";
+
+/** Title of a session file: the title slot, else the header title, else undefined. */
+const titleOf = async (path: string): Promise<string | undefined> =>
+	(await readSessionInfo(path)).title;
 
 afterAll(cleanupTempDirs);
 
@@ -23,13 +27,13 @@ const headerLine = (title?: string): string =>
 	JSON.stringify({ type: "session", id: "s1", cwd: "/tmp/proj", ...(title ? { title } : {}) }) +
 	"\n";
 
-describe("readSessionTitle", () => {
+describe("session title", () => {
 	test("title comes from the 256-byte title slot when present", async () => {
 		const dir = tempDir("omp-session-title-");
 		const path = join(dir, "a.jsonl");
 		writeFileSync(path, titleLine("Slot wins") + headerLine("Header loses"));
 
-		await expect(readSessionTitle(path)).resolves.toBe("Slot wins");
+		await expect(titleOf(path)).resolves.toBe("Slot wins");
 	});
 
 	test("falls back to the session-header title when the file has no title slot", async () => {
@@ -38,7 +42,7 @@ describe("readSessionTitle", () => {
 		// Older files: the session header is line 0.
 		writeFileSync(path, headerLine("Header title"));
 
-		await expect(readSessionTitle(path)).resolves.toBe("Header title");
+		await expect(titleOf(path)).resolves.toBe("Header title");
 	});
 
 	test("untitled files resolve to undefined", async () => {
@@ -47,14 +51,14 @@ describe("readSessionTitle", () => {
 		// Title slot without a title; header without a title either.
 		writeFileSync(path, titleLine("") + headerLine());
 
-		await expect(readSessionTitle(path)).resolves.toBeUndefined();
+		await expect(titleOf(path)).resolves.toBeUndefined();
 	});
 
 	test("an empty title slot falls back to the session-header title", async () => {
 		const dir = tempDir("omp-session-title-");
 		const path = join(dir, "empty-slot.jsonl");
 		writeFileSync(path, titleLine("") + headerLine("Header title"));
-		await expect(readSessionTitle(path)).resolves.toBe("Header title");
+		await expect(titleOf(path)).resolves.toBe("Header title");
 	});
 
 	test("fallback: a corrupt title slot never throws and falls back to the header", async () => {
@@ -63,7 +67,7 @@ describe("readSessionTitle", () => {
 		// parses, so the reader must fall through to the header title.
 		const truncated = join(dir, "truncated-slot.jsonl");
 		writeFileSync(truncated, `{"type":"title","title":"half\n${headerLine("Header survives")}`);
-		await expect(readSessionTitle(truncated)).resolves.toBe("Header survives");
+		await expect(titleOf(truncated)).resolves.toBe("Header survives");
 		await expect(readSessionInfo(truncated)).resolves.toEqual({
 			title: "Header survives",
 			empty: true,
@@ -72,7 +76,7 @@ describe("readSessionTitle", () => {
 		// Valid JSON that is not an object: same fallback, no throw.
 		const nonObject = join(dir, "non-object-slot.jsonl");
 		writeFileSync(nonObject, `"not an object"\n${headerLine("Still the header")}`);
-		await expect(readSessionTitle(nonObject)).resolves.toBe("Still the header");
+		await expect(titleOf(nonObject)).resolves.toBe("Still the header");
 
 		// A slot object whose title is not a string: str() drops it and the
 		// header supplies the title.
@@ -81,7 +85,7 @@ describe("readSessionTitle", () => {
 			nonString,
 			`${JSON.stringify({ type: "title", title: 42 })}\n${headerLine("Header wins")}`,
 		);
-		await expect(readSessionTitle(nonString)).resolves.toBe("Header wins");
+		await expect(titleOf(nonString)).resolves.toBe("Header wins");
 	});
 
 	test("cache: same (path, mtime, size) serves the old title without re-reading; a new mtime invalidates", async () => {
@@ -91,7 +95,7 @@ describe("readSessionTitle", () => {
 		const second = titleLine("Second") + headerLine(); // same byte length
 		writeFileSync(path, first);
 
-		await expect(readSessionTitle(path)).resolves.toBe("First");
+		await expect(titleOf(path)).resolves.toBe("First");
 
 		// Overwrite with DIFFERENT content of the same size, then restore the
 		// original mtime exactly (float seconds keep stat's sub-ms mtimeMs).
@@ -102,7 +106,7 @@ describe("readSessionTitle", () => {
 
 		// Same (path, mtimeMs, size) key → the cached first read is served,
 		// proving unchanged files are never re-parsed on the poll loop.
-		await expect(readSessionTitle(path)).resolves.toBe("First");
+		await expect(titleOf(path)).resolves.toBe("First");
 
 		// A real modification bumps the mtime: the stale entry is bypassed
 		// and the new title is read from disk. writeFileSync alone can land
@@ -112,7 +116,7 @@ describe("readSessionTitle", () => {
 		writeFileSync(path, second);
 		const bumped = (original.mtimeMs + 5_000) / 1000;
 		utimesSync(path, bumped, bumped);
-		await expect(readSessionTitle(path)).resolves.toBe("Second");
+		await expect(titleOf(path)).resolves.toBe("Second");
 	});
 
 	test("head-bounded: a huge file with a 5MB third line still yields the head title", async () => {
@@ -122,7 +126,7 @@ describe("readSessionTitle", () => {
 		// whole transcript; the reader must only touch the head chunk.
 		writeFileSync(path, titleLine("Huge") + headerLine() + "x".repeat(5 * 1024 * 1024) + "\n");
 
-		await expect(readSessionTitle(path)).resolves.toBe("Huge");
+		await expect(titleOf(path)).resolves.toBe("Huge");
 	}, 5000);
 });
 
@@ -134,7 +138,7 @@ describe("readSessionInfo", () => {
 		const dir = tempDir("omp-session-info-");
 		const path = join(dir, "gone.jsonl");
 
-		await expect(readSessionTitle(path)).resolves.toBeUndefined();
+		await expect(titleOf(path)).resolves.toBeUndefined();
 		await expect(readSessionInfo(path)).resolves.toEqual({ title: undefined, empty: true });
 		writeFileSync(path, titleLine("Back"));
 		await expect(readSessionInfo(path)).resolves.toEqual({ title: "Back", empty: true });

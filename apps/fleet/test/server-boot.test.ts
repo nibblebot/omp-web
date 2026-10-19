@@ -157,6 +157,7 @@ describe("boot reconciliation (#3)", () => {
 			status: "error",
 			error: "daemon rejected the credential",
 		});
+		registry.flush();
 		server = await startFleet({
 			port: 0,
 			statePath,

@@ -120,11 +120,14 @@ export function answerCommand(body: unknown): Response | null {
 		// Local only: the roster changes, no process is touched. The broadcast
 		// drives the web's own reconcile (a stopped or removed attached
 		// daemon clears the chat column), as the edge's registry change does.
-		roster =
-			cmd.type === "stop"
-				? roster.map((d) => (d.daemonId === daemonId ? asleep(d) : d))
-				: roster.filter((d) => d.daemonId !== daemonId);
-		publish({ type: "roster", daemons: roster });
+		if (cmd.type === "stop") {
+			roster = roster.map((d) => (d.daemonId === daemonId ? asleep(d) : d));
+			const row = roster.find((d) => d.daemonId === daemonId);
+			publish({ type: "roster_delta", upserted: row ? [row] : [], removed: [] });
+		} else {
+			roster = roster.filter((d) => d.daemonId !== daemonId);
+			publish({ type: "roster_delta", upserted: [], removed: [daemonId] });
+		}
 		return accepted();
 	}
 	if (cmd.type === "attach") {

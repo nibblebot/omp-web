@@ -189,7 +189,7 @@ export interface KubeExecResult {
 }
 
 /** One kubectl invocation: explicit argv, optional stdin manifest. */
-export type KubeExec = (argv: readonly string[], input?: string) => Promise<KubeExecResult>;
+type KubeExec = (argv: readonly string[], input?: string) => Promise<KubeExecResult>;
 
 /** Resolve after `ms` milliseconds (withResolvers; no executor nesting). */
 function delay(ms: number): Promise<void> {
@@ -675,7 +675,7 @@ function identityAnnotations(
 }
 
 /** The per-workspace persistent claim (retained across stop/replacement). */
-export function buildPvcManifest(
+function buildPvcManifest(
 	cfg: KubernetesConfig,
 	profileId: string,
 	workspaceId: string,

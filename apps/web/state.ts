@@ -4,7 +4,7 @@ import type { AdvisorItem } from "./store/slices/advisor";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { UsageReport } from "@oh-my-pi/pi-ai";
 import type { TextAttachment } from "./prompt/attachments";
-import { createStore, reconcile } from "solid-js/store";
+import { createStore, reconcile, unwrap } from "solid-js/store";
 import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "#lib/wire/protocol";
 import type {
 	AvailableSlashCommand,
@@ -875,6 +875,18 @@ export function fleetSettingsActive(): boolean {
 // order breaks ties). Rows without a registered projectId are not shown.
 // ---------------------------------------------------------------------------
 
+/** The roster after one row-level delta: removed rows dropped, upserted rows replaced in place or appended in arrival order. */
+function mergeRosterDelta(delta: { upserted: DaemonEntry[]; removed: string[] }): DaemonEntry[] {
+	const removed = new Set(delta.removed);
+	const next = unwrap(state.daemonRoster).filter((d) => !removed.has(d.daemonId));
+	for (const row of delta.upserted) {
+		const at = next.findIndex((d) => d.daemonId === row.daemonId);
+		if (at === -1) next.push(row);
+		else next[at] = row;
+	}
+	return next;
+}
+
 /** Sort rank of a checkout row: main checkout, worktree, then clone. */
 function checkoutRank(d: DaemonEntry): number {
 	if (d.workspaceKind === "clone") return 2;
@@ -1288,12 +1300,16 @@ export function connect(): void {
 					),
 				);
 				break;
-			case "roster": {
+			case "roster":
+			case "roster_delta": {
+				// A delta patches the current roster; the reconciliation below runs on
+				// the full list either way, so both frames settle identically.
+				const daemons = frame.type === "roster" ? frame.daemons : mergeRosterDelta(frame);
 				// finding #P1: diff the replacement roster against what we had.
 				// First sighting is boot priming (silent); later transitions to
 				// ready/error announce.
 				const rosterBefore = state.daemonRoster;
-				for (const entry of frame.daemons) {
+				for (const entry of daemons) {
 					announceDaemonStatus(
 						rosterBefore.find((d) => d.daemonId === entry.daemonId),
 						entry.name,
@@ -1305,17 +1321,17 @@ export function connect(): void {
 				// Phase 5: entries carry projectId (project-first grouping and
 				// linked-worktree eligibility). DaemonEntry owns those fields, so they
 				// flow through wholesale with the array.
-				setState("daemonRoster", frame.daemons);
+				setState("daemonRoster", daemons);
 				settleProjectWakes();
-				resumeRestartedDaemons(frame.daemons);
+				resumeRestartedDaemons(daemons);
 				// Removed daemons never reuse ids, but don't let the set grow unbounded.
-				pruneUnread(new Set(frame.daemons.map((d) => d.daemonId)));
+				pruneUnread(new Set(daemons.map((d) => d.daemonId)));
 				// Same for daemonActivity: drop entries whose id left the roster.
 				// setState MERGES plain-object values, so a shrunken record would
 				// never delete keys. Reconcile diffs to the pruned record instead.
 				// Skip it when nothing dropped (no useless store notification).
 				{
-					const kept = new Set(frame.daemons.map((d) => d.daemonId));
+					const kept = new Set(daemons.map((d) => d.daemonId));
 					const current = state.daemonActivity;
 					let dropped = false;
 					const next: Record<string, { streaming: boolean; blocked: boolean }> = {};
@@ -1326,7 +1342,7 @@ export function connect(): void {
 					if (dropped) setState("daemonActivity", reconcile(next));
 				}
 				// Persisted user-stop marks are confirmed (or dropped) against the roster first.
-				reconcileUserStopped(frame.daemons);
+				reconcileUserStopped(daemons);
 				// Roster truth wins over the attached chat: if the daemon we were
 				// attached to vanished or went asleep, drop the session view (the
 				// roster itself is fleet-scoped and survives).
@@ -1334,7 +1350,7 @@ export function connect(): void {
 				pushDebug(
 					"info",
 					"roster",
-					`roster frame: ${frame.daemons.length} session process${frame.daemons.length === 1 ? "" : "es"}`,
+					`roster frame: ${daemons.length} session process${daemons.length === 1 ? "" : "es"}`,
 				);
 				break;
 			}
