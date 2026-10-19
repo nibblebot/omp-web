@@ -13,9 +13,7 @@ export interface SessionConfig {
 	port: number;
 	/** Bind address; anything non-loopback requires --token. */
 	host: string;
-	/** Reported verbatim as the "advertise" field of the OMP_SESSION| listening line; does not affect the bind. */
-	advertise?: string;
-	/** Bearer token (R14). Off-loopback peers must present it (header, ?token=, or hello frame). */
+	/** Bearer token (R14). Off-loopback peers must present it in the Authorization header. */
 	token?: string;
 	/**
 	 * Session file to switchSession() into at boot (R3); a failed restore exits
@@ -32,8 +30,6 @@ export interface SessionConfig {
 	idleTimeoutMs: number;
 	/** Registry display name (defaults to the cwd basename). */
 	name: string;
-	/** Selector labels for fleet fan-out (R9). */
-	labels: string[];
 	/**
 	 * Internal test hook (OMP_SESSION_TEST_READY_DELAY_MS): hold the readiness gate
 	 * open N ms after the background model refresh resolves, so tests can
@@ -112,7 +108,7 @@ export function parseDuration(raw: string): number {
  * human-readable message on invalid input; the caller prints it to stderr and exits 1.
  */
 export function parseConfig(argv: string[], fleet?: FleetStdinPayload): SessionConfig {
-	// Repeated flags collect (--label k=v --label a=b); scalar flags take the first value.
+	// Repeated flags collect; scalar flags take the first value.
 	const flags = new Map<string, string[]>();
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
@@ -142,14 +138,6 @@ export function parseConfig(argv: string[], fleet?: FleetStdinPayload): SessionC
 	const idleTimeoutMs = parseDuration(
 		flag("idle-timeout") ?? Bun.env.OMP_SESSION_IDLE_TIMEOUT ?? "30m",
 	);
-
-	const labels = [
-		...(flags.get("label") ?? []),
-		...(Bun.env.OMP_SESSION_LABELS ?? "")
-			.split(",")
-			.map((s) => s.trim())
-			.filter((s) => s.length > 0),
-	];
 
 	// Callback transport (P3.2, docs/clone-contracts.md "Callback transport"). The pair arrives only
 	// in the fleet's `--fleet-stdin` payload. HTTPS always; HTTP only with the payload's allowHttp for
@@ -217,13 +205,11 @@ export function parseConfig(argv: string[], fleet?: FleetStdinPayload): SessionC
 		cwd,
 		port,
 		host,
-		advertise: flag("advertise") ?? Bun.env.OMP_SESSION_ADVERTISE,
 		token: flag("token") ?? fleet?.token,
 		resume: flag("resume") ?? Bun.env.OMP_SESSION_RESUME,
 		resumeStrict: flag("resume") !== undefined && !flags.has("resume-unwritten"),
 		idleTimeoutMs,
 		name: flag("name") ?? Bun.env.OMP_SESSION_NAME ?? path.basename(cwd),
-		labels,
 		readyDeferMs: Math.max(0, Number(Bun.env.OMP_SESSION_TEST_READY_DELAY_MS ?? 0) || 0),
 		idleCheckMs: Math.max(1, Number(Bun.env.OMP_SESSION_TEST_IDLE_CHECK_MS ?? 15000) || 15000),
 		uiRequestTestHook: Bun.env.OMP_SESSION_TEST_UI_REQUEST === "1",

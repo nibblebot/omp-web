@@ -19,8 +19,8 @@
 //   from `historyDirectory` (pi-coding-agent/src/session/btw-history.ts).
 // - Callback wire: `DownloadBulkCommand` / `DownloadBulkFailedControl` and
 //   the frozen 64 MiB `BULK_MAX_BYTES` (lib/wire/callback-protocol.ts).
-// - Daemon `/download` jail semantics (apps/session/index.ts
-//   `canonicalRoots`/`isInside`): realpath both sides, tmpdir + cwd +
+// - Download jail semantics (`canonicalRoots` in apps/session/index.ts, applied
+//   by the `download_bulk` path check): realpath both sides, tmpdir + cwd +
 //   process.cwd() + session-file dir; 403 on escape, 404 on missing.
 //
 // PROPOSED wire for P0 (OMP_PROTO stays 2, additive-only; P0 publishes to
@@ -340,7 +340,7 @@ export interface DownloadBulkServeDeps {
 	correlationId: string;
 	/** Opaque server path from the fleet (validated against the jail here, at read time). */
 	path: string;
-	/** Daemon cwd for relative-path resolution (mirrors /download: cwd, then process.cwd()). */
+	/** Daemon cwd for relative-path resolution (mirrors the download jail: cwd, then process.cwd()). */
 	cwd: string;
 	/** Canonical (realpath) authorized roots from the daemon's canonicalRoots(). */
 	roots: readonly string[];
@@ -402,7 +402,7 @@ export async function serveDownloadBulk(deps: DownloadBulkServeDeps): Promise<vo
 
 /**
  * Serve one `download_bulk` callback command: jail-check the path at read
- * time (same rules as HTTP /download), enforce the 64 MiB aggregate cap
+ * time (same rules as the download jail), enforce the 64 MiB aggregate cap
  * BEFORE streaming, then upload in 4 MiB parts. Every failure reports via
  * DownloadBulkFailedControl and fails the whole correlation; nothing throws
  * to the caller (the daemon-control dispatch must stay alive).

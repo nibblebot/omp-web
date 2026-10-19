@@ -1,4 +1,4 @@
-import { open, readdir, realpath, stat } from "node:fs/promises";
+import { open, readdir, realpath } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -88,6 +88,7 @@ import {
 	streams,
 	terminateStream,
 	type SseConsumer,
+	wakeDrainWaiter,
 } from "./sse-delivery";
 import { clearSubagents } from "./subagent-mirror";
 import {
@@ -442,6 +443,10 @@ async function openEventsResponse(req: Request): Promise<Response> {
 				void primeConsumer(c, entry, commands, lastEventId).catch((err) => {
 					console.error("Failed to prime /events stream:", err);
 				});
+			},
+			// The queue dropped below the high-water mark: a priming wait may resume.
+			pull: () => {
+				if (consumer) wakeDrainWaiter(consumer);
 			},
 			cancel: () => {
 				// Detach only: sessions outlive streams.
@@ -836,11 +841,11 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 	}
 }
 
-// /download streams a server-side file (used by /export). The only trust
-// boundary on this unauthenticated server: the canonical (realpath) target
-// must live inside the system temp dir, the agent cwd (where bare-filename
-// exports land), or a live session file's directory. Canonicalizing both
-// sides closes symlink escapes that a lexical prefix check would miss.
+// Roots for download_bulk (fleet-initiated session-file transfers). The only
+// trust boundary on that channel: the canonical (realpath) target must live
+// inside the system temp dir, the agent cwd (where bare-filename exports
+// land), or a live session file's directory. Canonicalizing both sides closes
+// symlink escapes that a lexical prefix check would miss.
 async function canonicalRoots(): Promise<string[]> {
 	const roots = [os.tmpdir(), config.cwd, process.cwd()];
 	const sessionFile = bootEntry?.session.sessionFile;
@@ -852,42 +857,26 @@ async function canonicalRoots(): Promise<string[]> {
 	return out;
 }
 
-function isInside(resolved: string, roots: string[]): boolean {
-	return roots.some((root) => {
-		const rel = path.relative(root, resolved);
-		return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-	});
-}
-
 /**
  * Authorization header check: the scheme is case-insensitive (`bearer`/
- * `Bearer`), but the token value is compared EXACTLY, consistent with the
- * ?token= query path (regression: the whole header used to be lowercased,
- * accepting wrong-case tokens).
+ * `Bearer`), but the token value is compared EXACTLY (regression: the whole
+ * header used to be lowercased, accepting wrong-case tokens).
  */
 function bearerHeaderOk(header: string | null, token: string): boolean {
 	if (header === null) return false;
 	return header.slice(0, 7).toLowerCase() === "bearer " && header.slice(7) === token;
 }
 
-/** Bearer check for plain-HTTP paths (/download): Authorization header or ?token=. */
-function bearerOk(req: Request): boolean {
-	const header = req.headers.get("authorization");
-	if (bearerHeaderOk(header, config.token!)) return true;
-	return new URL(req.url).searchParams.get("token") === config.token;
-}
-
 /**
- * R14 gate for the agent-driving endpoints (/events, /command): loopback is
- * exempt; off-loopback peers need the bearer token via Authorization header
- * or ?token=. A missing or wrong credential is a 401 with no hello window
- * and no close codes.
+ * R14 gate for the agent-driving endpoints (/events, /command) and every
+ * other route: loopback is exempt; off-loopback peers need the bearer token
+ * via the Authorization header. A missing or wrong credential is a 401 with
+ * no hello window and no close codes.
  */
 function r14Authorized(req: Request, srv: Server<undefined>): boolean {
 	if (isLoopbackIp(srv.requestIP(req)?.address)) return true;
 	if (!config.token) return true;
-	if (bearerHeaderOk(req.headers.get("authorization"), config.token)) return true;
-	return new URL(req.url).searchParams.get("token") === config.token;
+	return bearerHeaderOk(req.headers.get("authorization"), config.token);
 }
 
 /**
@@ -1032,96 +1021,83 @@ if (
 // (which may be identical) is locked right after createSession below.
 if (config.resume && path.isAbsolute(config.resume)) acquireSessionLock(config.resume);
 
-const server = Bun.serve({
-	port: config.port,
-	hostname: config.host,
-	// SSE responses are long-lived and quiet between 15s keepalive pings;
-	// Bun's default 10s fetch idleTimeout would kill them mid-stream.
-	idleTimeout: 0,
-	async fetch(req, srv) {
-		// Boot gate: the OMP_SESSION| listening line prints before the boot session
-		// exists; the first requests (and /events opens) wait for registration
-		// so connect-implies-attached holds for streams that race boot.
-		await bootReady;
-		const url = new URL(req.url);
-		// Agent-driving transport (OMP_PROTO 2): GET /events down (SSE),
-		// POST /command up (one ClientCommand per request, 202 accept).
-		if (url.pathname === "/events") {
-			if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });
-			return openEventsResponse(req);
-		}
-		if (url.pathname === "/command") {
-			if (req.method !== "POST") return new Response("Not found", { status: 404 });
-			if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });
-			markActivity();
-			let cmd: ClientCommand;
-			try {
-				cmd = parseClientCommand(JSON.parse(await req.text()));
-			} catch {
-				return new Response("Malformed command", { status: 400 });
-			}
-			// Idempotent accept: a duplicate id is 202 without a re-dispatch.
-			// When the original already answered, the recorded answer is
-			// replayed (the duplicate is the client recovering a lost one); a
-			// duplicate that arrives while the original is still in flight is
-			// a silent accept, since that answer is still coming.
-			if (commandSeenRecently(cmd.id)) {
-				const answer = commandAnswers.get(cmd.id);
-				if (answer !== undefined) broadcastAnswer(answer.frame);
-				return Response.json({ commandId: cmd.id }, { status: 202 });
-			}
-			// Fire-and-forget accept: answers ride the /events stream only.
-			void handleCommand(cmd).catch((err) => console.error("command dispatch failed:", err));
-			return Response.json({ commandId: cmd.id }, { status: 202 });
-		}
-		// /download: off-loopback requests require the token too when one is
-		// set (Authorization header or ?token=; downloads are plain fetch).
-		const loopback = isLoopbackIp(srv.requestIP(req)?.address);
-		if (!loopback && config.token && !bearerOk(req))
-			return new Response("Unauthorized", { status: 401 });
-		if (url.pathname === "/download") {
-			const requested = url.searchParams.get("path");
-			if (!requested) return new Response("Missing path", { status: 400 });
-			// Relative export paths are written by the agent into its cwd (or the
-			// server's process cwd when the session dir lives there); absolute
-			// paths are used as-is.
-			const resolved = path.isAbsolute(requested) ? requested : path.resolve(config.cwd, requested);
-			let canonical = await realpath(resolved).catch(() => null);
-			if (!canonical && !path.isAbsolute(requested)) {
-				canonical = await realpath(path.resolve(process.cwd(), requested)).catch(() => null);
-			}
-			if (!canonical) return new Response("Not found", { status: 404 });
-			const fileStat = await stat(canonical).catch(() => null);
-			if (!fileStat?.isFile()) return new Response("Not found", { status: 404 });
-			if (!isInside(canonical, await canonicalRoots()))
-				return new Response("Forbidden", { status: 403 });
-			return new Response(Bun.file(canonical));
-		}
-		// No static or HTML route: the daemon serves the wire API only, so
-		// everything else (including "/") points at the fleet, the only
-		// web UI server.
-		return new Response(
-			"omp-web: this is a session daemon (no web UI). Start the fleet with `omp-web` and open the Web UI URL it prints.\n",
-			{ status: 404, headers: { "content-type": "text/plain; charset=utf-8" } },
-		);
-	},
-});
+// A fleet-managed session (--fleet-stdin, so callbackUrl is set) binds no
+// listener: the fleet reaches it only over the callback pair. A bare daemon
+// binds the direct listener.
+const server =
+	config.callbackUrl === undefined
+		? Bun.serve({
+				port: config.port,
+				hostname: config.host,
+				// SSE responses are long-lived and quiet between 15s keepalive pings;
+				// Bun's default 10s fetch idleTimeout would kill them mid-stream.
+				idleTimeout: 0,
+				async fetch(req, srv) {
+					// Boot gate: the OMP_SESSION| listening line prints before the boot session
+					// exists; the first requests (and /events opens) wait for registration
+					// so connect-implies-attached holds for streams that race boot.
+					await bootReady;
+					const url = new URL(req.url);
+					// Agent-driving transport (OMP_PROTO 2): GET /events down (SSE),
+					// POST /command up (one ClientCommand per request, 202 accept).
+					if (url.pathname === "/events") {
+						if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });
+						return openEventsResponse(req);
+					}
+					if (url.pathname === "/command") {
+						if (req.method !== "POST") return new Response("Not found", { status: 404 });
+						if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });
+						markActivity();
+						let cmd: ClientCommand;
+						try {
+							cmd = parseClientCommand(JSON.parse(await req.text()));
+						} catch {
+							return new Response("Malformed command", { status: 400 });
+						}
+						// Idempotent accept: a duplicate id is 202 without a re-dispatch.
+						// When the original already answered, the recorded answer is
+						// replayed (the duplicate is the client recovering a lost one); a
+						// duplicate that arrives while the original is still in flight is
+						// a silent accept, since that answer is still coming.
+						if (commandSeenRecently(cmd.id)) {
+							const answer = commandAnswers.get(cmd.id);
+							if (answer !== undefined) broadcastAnswer(answer.frame);
+							return Response.json({ commandId: cmd.id }, { status: 202 });
+						}
+						// Fire-and-forget accept: answers ride the /events stream only.
+						void handleCommand(cmd).catch((err) => console.error("command dispatch failed:", err));
+						return Response.json({ commandId: cmd.id }, { status: 202 });
+					}
+					// Off-loopback peers need the bearer header on every non-wire route too,
+					// so a tokened daemon answers no unauthenticated peer, not even its 404.
+					if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });
+					// No static or HTML route: the daemon serves the wire API only, so
+					// everything else (including "/") points at the fleet, the only
+					// web UI server.
+					return new Response(
+						"omp-web: this is a session daemon (no web UI). Start the fleet with `omp-web` and open the Web UI URL it prints.\n",
+						{ status: 404, headers: { "content-type": "text/plain; charset=utf-8" } },
+					);
+				},
+			})
+		: null;
 
 // ---------------------------------------------------------------------------
 // R6b: the OMP_SESSION| listening contract line goes to STDOUT immediately after
-// bind, BEFORE session creation. The fleet does not parse it; it is informational
-// for whoever launched the daemon (session output lands in session-logs/). Human logs go to stderr.
+// bind, BEFORE session creation. Only a session with a direct listener prints it
+// (a fleet-managed session binds none). The fleet does not parse it; it is
+// informational for whoever launched the daemon. Human logs go to stderr.
 // ---------------------------------------------------------------------------
 
-const listeningLine: StdoutContractLine = {
-	event: "listening",
-	bind: config.host,
-	port: server.port!,
-	url: `ws://${config.host}:${server.port}`,
-};
-if (config.advertise) listeningLine.advertise = config.advertise;
-console.log(`${OMP_SESSION_PREFIX}${JSON.stringify(listeningLine)}`);
-console.error(`omp-session listening on http://localhost:${server.port}`);
+if (server !== null) {
+	const listeningLine: StdoutContractLine = {
+		event: "listening",
+		bind: config.host,
+		port: server.port!,
+	};
+	console.log(`${OMP_SESSION_PREFIX}${JSON.stringify(listeningLine)}`);
+	console.error(`omp-session listening on http://localhost:${server.port}`);
+}
 
 // pi-utils' postmortem installs its own SIGINT/SIGTERM/SIGHUP handlers at
 // import time (run SDK cleanup, then exitProcess(130/143/129)); they preempt
@@ -1484,6 +1460,7 @@ if (config.callbackUrl !== undefined) {
 		},
 		bufferedBytes: (streamId) =>
 			fleetCallback?.bufferedBytes(streamId) ?? { stream: 0, connection: 0 },
+		onDrain: (listener) => fleetCallback?.onDrain(listener) ?? (() => {}),
 		send: callbackSend,
 		pairLive: () => fleetCallback !== null && fleetCallback.status().state === "ready",
 		onShutdown: (reason) => {
@@ -1597,7 +1574,7 @@ async function shutdown(exitCode = 0): Promise<void> {
 		if (fleetCallback !== null) await fleetCallback.drain(CALLBACK_DRAIN_MS);
 		if (fleetCallback !== null) fleetCallback.stop();
 		if (bootEntry) await closeSession(bootEntry, "server shutting down");
-		server.stop();
+		server?.stop();
 		discardAllStagedExports();
 		discardAllStagedUploads();
 		// Release session-file locks before the SDK postmortem cleanup runs so a

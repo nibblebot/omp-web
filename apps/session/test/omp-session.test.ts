@@ -14,7 +14,7 @@
 
 import { afterAll, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Subprocess } from "bun";
@@ -59,10 +59,9 @@ function stateSessionName(frame: Frame): string | undefined {
 	return typeof state.sessionName === "string" ? state.sessionName : undefined;
 }
 
-/** The daemon's /events URL for an origin (optionally carrying ?token=). */
+/** The daemon's /events URL for an origin. */
 function eventsUrlFor(baseUrl: string): string {
-	const [origin, query] = baseUrl.split("?");
-	return query === undefined ? `${origin}/events` : `${origin}/events?${query}`;
+	return `${baseUrl}/events`;
 }
 
 /**
@@ -121,10 +120,9 @@ function openEvents(
 	return promise;
 }
 
-/** The daemon's /command URL for an origin (optionally carrying ?token=). */
+/** The daemon's /command URL for an origin. */
 function commandUrlFor(baseUrl: string): string {
-	const [origin, query] = baseUrl.split("?");
-	return query === undefined ? `${origin}/command` : `${origin}/command?${query}`;
+	return `${baseUrl}/command`;
 }
 
 /**
@@ -347,7 +345,8 @@ async function offLoopbackOrigins(port: number, token: string): Promise<string[]
 	const origins: string[] = [];
 	for (const ip of nonLoopbackIpv4s()) {
 		const origin = `http://${ip}:${port}`;
-		const reachable = await fetch(`${origin}/?token=${token}`, {
+		const reachable = await fetch(`${origin}/`, {
+			headers: { authorization: `Bearer ${token}` },
 			signal: AbortSignal.timeout(3_000),
 		})
 			.then(async (res) => {
@@ -533,115 +532,30 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 		expect(headerCmd.status).toBe(202);
 		expect((await headerCmd.json()).commandId).toBe("c-h1");
 
-		// ?token= query → same bearer, query form.
-		const queryStream = await openEvents(`${base}?token=sekret`);
-		const queryHello = await waitForFrame(queryStream.frames, "hello_ok", 10_000, "query hello_ok");
-		expect(queryHello.proto).toBe(OMP_PROTO);
-		const queryCmd = await postCommand(`${base}?token=sekret`, {
-			type: "call",
-			id: "c-q1",
-			method: "getSettings",
-			args: [],
-		});
-		expect(queryCmd.status).toBe(202);
-
 		// The non-wire routes stay gated off-loopback, and the daemon serves no
 		// HTML: an authenticated "/" is the plain-text 404 pointing at the fleet.
 		const unauthRoot = await fetch(`${base}/`);
 		expect(unauthRoot.status).toBe(401);
-		const authedRoot = await fetch(`${base}/?token=sekret`);
+		const authedRoot = await fetch(`${base}/`, { headers: { authorization: "Bearer sekret" } });
 		expect(authedRoot.status).toBe(404);
 		expect(authedRoot.headers.get("content-type")).toContain("text/plain");
 		expect(await authedRoot.text()).toContain("this is a session daemon (no web UI)");
 
-		// /download: the token gate rejects off-loopback peers BEFORE path
-		// validation (a missing path would otherwise be a 400); authenticated
-		// requests still stream a real file from the daemon cwd, and only miss
-		// with a 404 when the path does not resolve.
-		const unauthDownload = await fetch(`${base}/download`);
-		expect(unauthDownload.status).toBe(401);
-		await writeFile(path.join(tmp, "export.txt"), "download-me\n");
-		const authedDownload = await fetch(
-			`${base}/download?path=${encodeURIComponent("export.txt")}&token=sekret`,
-		);
-		expect(authedDownload.status).toBe(200);
-		expect(await authedDownload.text()).toBe("download-me\n");
-		const missingDownload = await fetch(
-			`${base}/download?path=${encodeURIComponent("nope.txt")}&token=sekret`,
-		);
-		expect(missingDownload.status).toBe(404);
-
 		headerStream.close();
-		queryStream.close();
 	}
 
 	loopback.close();
 	await cleanup();
 }, 30_000);
 
-/**
- * The /download jail is the only trust boundary on that route: the canonical
- * (realpath) target must live inside tmpdir, the session cwd, or the daemon's
- * process cwd. Escapes are refused with 403 while a path that does not resolve
- * stays a 404, because existence is decided before the jail. Requests are sent
- * from loopback (which the token gate exempts) with no credential, so these
- * statuses are the jail's: a wrongly gated route would answer 401 instead.
- */
-test("/download serves only files inside the canonical roots", async () => {
-	const proc = await spawnSession({ args: ["--host", "0.0.0.0", "--token", "sekret"] });
-	running.push(proc);
-	const { tmp, port, cleanup } = proc;
-	const base = `http://127.0.0.1:${port}`;
-	const download = (requested: string): Promise<Response> =>
-		fetch(`${base}/download?path=${encodeURIComponent(requested)}`);
-
-	// An export written into the session cwd is served.
-	await writeFile(path.join(tmp, "export.txt"), "download-me\n");
-	const inside = await download("export.txt");
-	expect(inside.status).toBe(200);
-	expect(await inside.text()).toBe("download-me\n");
-
-	// A real file outside every root is the escape target: the bun binary
-	// running this suite (the guard lines fail loudly rather than let the jail
-	// assertions below degrade into 200s if the host ever nests it under a root).
-	const outside = await realpath(process.execPath);
-	expect(outside.startsWith(os.tmpdir())).toBe(false);
-	expect(outside.startsWith(repoRoot)).toBe(false);
-
-	// A symlink inside the cwd pointing outside every root is an escape: both
-	// sides are canonicalized, so the target decides (a lexical prefix check
-	// would have called the link itself "inside").
-	await symlink(outside, path.join(tmp, "escape-link"));
-	expect((await download("escape-link")).status).toBe(403);
-
-	// A relative path climbing out of the cwd (and out of tmpdir) is refused.
-	const climbing = path.relative(tmp, outside);
-	expect(climbing.startsWith("..")).toBe(true);
-	expect((await download(climbing)).status).toBe(403);
-
-	// An absolute path outside the roots is refused.
-	expect((await download(outside)).status).toBe(403);
-
-	// A path that does not resolve is a 404, not a 403: the relative miss, and
-	// an absolute miss outside the roots (which a jail-first check would call
-	// a 403).
-	const missing = `missing-${crypto.randomUUID()}.txt`;
-	expect((await download(missing)).status).toBe(404);
-	expect((await download(path.join(path.dirname(outside), missing))).status).toBe(404);
-
-	await cleanup();
-}, 30_000);
-
 test("OMP_SESSION| listening line is the first stdout line and parses as StdoutContractLine", async () => {
-	const proc = await spawnSession({ args: ["--advertise", "myhost:9999"] });
+	const proc = await spawnSession({});
 	running.push(proc);
 	const parsed = parseContractLine(proc.firstLine);
 	if (!parsed) throw new Error(`first stdout line is not an OMP_SESSION| line: ${proc.firstLine}`);
 	if (parsed.event !== "listening") throw new Error(`expected listening line, got ${parsed.event}`);
 	expect(parsed.bind).toBe("127.0.0.1");
 	expect(parsed.port).toBe(proc.port);
-	expect(parsed.url).toBe(`ws://127.0.0.1:${proc.port}`);
-	expect(parsed.advertise).toBe("myhost:9999");
 	await proc.cleanup();
 }, 30_000);
 

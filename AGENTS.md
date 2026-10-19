@@ -64,7 +64,7 @@ Overlay is the umbrella term, not a suffix: a portaled layer above the app shell
 
 ## The wire contract (OMP_PROTO 4)
 
-Agent transport is HTTP + SSE, not WebSocket (collab-only; room traffic runs on the standalone `omp-web relay`, never on a session). Browser to fleet: `GET /events` SSE down, `POST /command` up, ID-keyed commands accepted with `202`, answers via SSE `call_result`. Fleet to session: only the session-initiated callback pair (`OMP_CALLBACK_PROTO 1`, `lib/wire/callback-protocol.ts`): `POST /callback/up` NDJSON, `GET /callback/down` SSE, `POST /callback/bulk/<id>`; browser streams and commands ride it as virtual streams. A session's own `/events` and `/command` listener stays for direct clients; the fleet never uses it. `lib/wire/protocol.ts` owns frame shapes/constants. Fleet stamps session identity.
+Agent transport is HTTP + SSE, not WebSocket (collab-only; room traffic runs on the standalone `omp-web relay`, never on a session). Browser to fleet: `GET /events` SSE down, `POST /command` up, ID-keyed commands accepted with `202`, answers via SSE `call_result`. Fleet to session: only the session-initiated callback pair (`OMP_CALLBACK_PROTO 1`, `lib/wire/callback-protocol.ts`): `POST /callback/up` NDJSON, `GET /callback/down` SSE, `POST /callback/bulk/<id>`; browser streams and commands ride it as virtual streams. A standalone session's own `/events` and `/command` listener serves direct clients; a fleet-managed session (`--fleet-stdin`) binds no listener and the fleet never uses one. `lib/wire/protocol.ts` owns frame shapes/constants. Fleet stamps session identity.
 
 ## Invariants & conventions, read before editing
 

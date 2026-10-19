@@ -277,7 +277,11 @@ function trackFleet(options: { refuse?: FakeRefusal } = {}): FakeFleet {
 	return fleet;
 }
 
-function spawnDaemon(callbackUrl: string, extra: Record<string, string> = {}): Subprocess {
+function spawnDaemon(
+	callbackUrl: string,
+	extra: Record<string, string> = {},
+	stdout: "ignore" | "pipe" = "ignore",
+): Subprocess {
 	// The callback pair travels on stdin (--fleet-stdin), never the environment. Ambient fleet
 	// secrets are filtered out of the base env so a developer's shell cannot leak them in.
 	const child = Bun.spawn(["bun", "apps/session/index.ts", "--fleet-stdin"], {
@@ -296,7 +300,7 @@ function spawnDaemon(callbackUrl: string, extra: Record<string, string> = {}): S
 			...extra,
 		},
 		stdin: "pipe",
-		stdout: "ignore",
+		stdout,
 		stderr: "ignore",
 	});
 	child.stdin.write(
@@ -343,6 +347,13 @@ test("a session with no reachable control plane exits after the grace period", a
 	const started = Date.now();
 	expect(await exitWithin(child, 30_000)).toBe(0);
 	expect(Date.now() - started).toBeGreaterThanOrEqual(1500);
+});
+
+test("a fleet-managed session binds no listener and prints no listening line", async () => {
+	const child = spawnDaemon(closedPortUrl(), { OMP_SESSION_CONTROL_GRACE: "2s" }, "pipe");
+	const stdout = await new Response(child.stdout as ReadableStream<Uint8Array>).text();
+	expect(await exitWithin(child, 30_000)).toBe(0);
+	expect(stdout).not.toContain("OMP_SESSION|");
 });
 
 test("a credential the fleet rejects shuts the session down without waiting for the grace period", async () => {

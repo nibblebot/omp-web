@@ -113,7 +113,7 @@ export interface ControlAckPayload {
 /**
  * fleet→daemon, kind "command", streamId "control": stream a server-side file
  * to the fleet as multi-part raw bytes under the given bulk correlation. Same
- * realpath jail + authorization rules as HTTP /download; failures are reported
+ * realpath jail + authorization rules as the session's canonicalRoots; failures are reported
  * via DownloadBulkFailedControl and the fleet fails the whole correlation.
  */
 export interface DownloadBulkCommand {

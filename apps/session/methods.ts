@@ -569,6 +569,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			),
 		goalDrop: (entry) => dropGoal(entry),
 		formatSessionAsText: async (entry) => entry.session.formatSessionAsText(),
+
 		// Model-roles picker (TUI model-hub parity). All three are mutations:
 		// none sit in READ_ONLY (the post-mutation broadcast refreshes state,
 		// incl. the catalog) and, like setModel, none are readiness-gated or

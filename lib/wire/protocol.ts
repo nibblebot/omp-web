@@ -405,8 +405,8 @@ export interface SkillsState {
 // server commands are POST /command bodies (one ClientCommand per request,
 // answered 202); server → client frames are SSE events on GET /events
 // (event: frame, id: <seq>, data: <JSON ServerFrame>). Auth is HTTP-level
-// (R14): loopback exempt, off-loopback bearer via Authorization header or
-// ?token=; a wrong credential is a 401, not a close code. hello_ok is the
+// (R14): loopback exempt, off-loopback bearer via the Authorization header; a
+// wrong credential is a 401, not a close code. hello_ok is the
 // FIRST event on every stream open (daemon identity), followed by the attach
 // priming (attached → history → state → collab_status → available_commands →
 // ready).
@@ -498,19 +498,14 @@ export const OMP_SESSION_EXIT_SESSION_LOCKED = 77;
 export const OMP_SESSION_EXIT_RESUME_FAILED = 78;
 
 /**
- * The `OMP_SESSION|` stdout contract lines (R6b). omp-session prints
- * `listening` immediately after bind, before session creation; a remote
- * wrapper MAY print `endpoint` when the reachable address differs from the
- * bind. The line is informational for whoever launched the daemon (the
- * terminal, a supervisor, or the session log); the fleet does not parse it.
- *
- * NOTE: the advertised `url` is ws-shaped (`ws://host:port`) for legacy
- * reasons; OMP_PROTO 2 is plain HTTP SSE. Consumers must never treat it as a
- * WebSocket endpoint.
+ * The `OMP_SESSION|` stdout contract line (R6b). A session that binds its
+ * direct listener prints `listening` immediately after bind, before session
+ * creation. A fleet-managed session (started with `--fleet-stdin`) binds no
+ * listener and prints no listening line. The line is informational for whoever
+ * launched the daemon (the terminal, a supervisor, or the session log); the
+ * fleet does not parse it.
  */
-export type StdoutContractLine =
-	| { event: "listening"; bind: string; port: number; url: string; advertise?: string }
-	| { event: "endpoint"; url: string };
+export type StdoutContractLine = { event: "listening"; bind: string; port: number };
 
 /** Daemon lifecycle as surfaced by omp-fleet (daemon_status frame). */
 export type DaemonStatus =

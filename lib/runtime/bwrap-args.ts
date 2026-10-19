@@ -165,8 +165,6 @@ export const ENV_ALLOW_KEYS: readonly string[] = [
 	"TZ",
 	"NO_COLOR",
 	"OMP_SESSION",
-	"OMP_SESSION_LISTEN",
-	"OMP_SESSION_ENDPOINT",
 	// P8.9 wake-resume: fleet-written absolute main-session path; the daemon
 	// resumes it at boot (server/config.ts reads OMP_SESSION_RESUME). Rides
 	// the callback-env handoff, never the ambient environment.

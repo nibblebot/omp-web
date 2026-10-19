@@ -41,6 +41,8 @@ export interface SseConsumer {
 	 * Reset once a reader becomes visible and desiredSize reports the truth.
 	 */
 	unreadEstimate: number;
+	/** Resolves the priming wait in enqueuePaced; set only while that wait is parked. */
+	drainWaiter?: () => void;
 }
 
 /** Every live /events stream. The daemon boot (index.ts) adds/removes consumers and reads the size. */
@@ -209,9 +211,23 @@ export function terminateStream(stream: SseConsumer, reason: string): void {
 export async function enqueuePaced(stream: SseConsumer, block: string): Promise<void> {
 	while (bufferedBytes(stream) + block.length > SSE_BACKPRESSURE_BYTES - PRIMING_QUEUE_MARGIN) {
 		if (!streams.has(stream)) return; // consumer detached/cancelled
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => {
+			stream.drainWaiter = resolve;
+		});
 	}
 	enqueueTo(stream, block);
+}
+
+/**
+ * Resume a priming wait parked in enqueuePaced. Called from the stream's pull
+ * (the consumer read, so the queue has room) and from detachConsumer (so a
+ * parked wait ends). A no-op when nothing is parked.
+ */
+export function wakeDrainWaiter(stream: SseConsumer): void {
+	const resolve = stream.drainWaiter;
+	if (resolve === undefined) return;
+	stream.drainWaiter = undefined;
+	resolve();
 }
 
 /**
@@ -467,6 +483,7 @@ export function detachConsumer(stream: SseConsumer, reason: string): void {
 		stopKeepalive();
 	}
 	stream.attached = null;
+	wakeDrainWaiter(stream);
 	for (const [id, p] of pendingCodeInputs) {
 		if (p.streams.delete(stream) && p.streams.size === 0) {
 			p.reject(new Error(reason));

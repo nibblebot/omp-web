@@ -62,6 +62,7 @@ function makeHarness(
 	}),
 	recordSent = true,
 	streamConfirmMs?: number,
+	onDrain: (listener: () => void) => () => void = () => () => {},
 ): {
 	control: DaemonControl;
 	sent: Sent[];
@@ -96,6 +97,7 @@ function makeHarness(
 			return snapshot;
 		},
 		bufferedBytes,
+		onDrain,
 		send,
 		pairLive,
 		onShutdown: () => {},
@@ -597,5 +599,38 @@ describe("daemon-control replay ring releases evicted frames (WIRE-18)", () => {
 			.map((s) => stateIndex(s.payload));
 		expect(replayed).toEqual(Array.from({ length: 10_000 }, (_, k) => k + 12_000));
 		control.stop();
+	});
+});
+
+describe("daemon-control paced priming waits on drain (SXP-16)", () => {
+	test("a paced prime parks on the pair's drain and resumes when it fires", async () => {
+		let queued = Number.MAX_SAFE_INTEGER; // no room: every priming frame waits
+		const subscribed = Promise.withResolvers<void>();
+		let wake = (): void => {};
+		const harness = makeHarness(
+			() => [{ type: "hello_ok" }, { type: "attached", sessionId: "s1" }],
+			() => true,
+			undefined,
+			() => ({ stream: queued, connection: queued }),
+			true,
+			undefined,
+			(listener) => {
+				wake = listener;
+				subscribed.resolve();
+				return () => {};
+			},
+		);
+		openStream(harness.control);
+		await subscribed.promise;
+		expect(harness.sent.filter((s) => s.kind === "frame")).toHaveLength(0);
+		// The buffer empties and the pair signals the drain: the prime emits every frame.
+		queued = 0;
+		wake();
+		await harness.sentCount(3); // stream_open ack + hello_ok + attached
+		expect(harness.sent.filter((s) => s.kind === "frame").map((s) => typeOf(s.payload))).toEqual([
+			"hello_ok",
+			"attached",
+		]);
+		harness.control.stop();
 	});
 });

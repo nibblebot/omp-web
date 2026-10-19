@@ -740,6 +740,14 @@ export class FleetCallback {
 		return { stream: this.#streamBytes.get(streamId) ?? 0, connection: this.#pendingBytes };
 	}
 
+	/** Subscribe to outbound drain: called after each pump pass that sent bytes. Returns the unsubscribe. */
+	onDrain(listener: () => void): () => void {
+		this.#drainListeners.add(listener);
+		return () => {
+			this.#drainListeners.delete(listener);
+		};
+	}
+
 	status(): FleetCallbackStatus {
 		const pair = this.#pair;
 		const lastError = this.#lastError;
@@ -1147,6 +1155,8 @@ export class FleetCallback {
 	}
 
 	#pumping = false;
+	/** Subscribers to outbound drain (see onDrain). */
+	readonly #drainListeners = new Set<() => void>();
 
 	#pump(): void {
 		const controller = this.#upController;
@@ -1190,6 +1200,8 @@ export class FleetCallback {
 		} finally {
 			this.#pumping = false;
 		}
+		// Snapshot: a listener that re-registers must wait for the next drain, not run again now.
+		if (progressed) for (const listener of Array.from(this.#drainListeners)) listener();
 		// Lifetime up-leg budget (see UP_RENEWAL_BYTES): renew once the up half has
 		// carried its share, whether or not a backlog is queued. Waiting for a
 		// drained moment would let a sustained burst run straight through the

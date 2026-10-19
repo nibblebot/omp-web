@@ -72,6 +72,8 @@ export interface DaemonControlDeps {
 	) => unknown;
 	/** Bytes queued on the pair's outbound buffer for one stream and the whole connection. */
 	bufferedBytes: (streamId: string) => { stream: number; connection: number };
+	/** Subscribe to the pair's outbound drain; returns the unsubscribe. Paced sends wait on it. */
+	onDrain: (listener: () => void) => () => void;
 	/** Live callback pair present. */
 	pairLive: () => boolean;
 	/** Fleet ShutdownControl: the caller runs the graceful exit once the ack is queued. */
@@ -147,7 +149,6 @@ const RING_MAX_BYTES = 4 * 1024 * 1024;
  * still fit and a large transcript never trips the buffer's drop.
  */
 const PACE_MARGIN_BYTES = 256 * 1024;
-const PACE_POLL_MS = 10;
 
 function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -289,7 +290,14 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 				queued.connection + ENVELOPE_MAX_BYTES + PACE_MARGIN_BYTES <= CONNECTION_MAX_BYTES
 			)
 				return true;
-			await Bun.sleep(PACE_POLL_MS);
+			// Sleep until the pair drains: a pump pass that sent bytes wakes this
+			// one-shot listener, then the room check runs again.
+			await new Promise<void>((resolve) => {
+				const off = deps.onDrain(() => {
+					off();
+					resolve();
+				});
+			});
 		}
 	};
 
