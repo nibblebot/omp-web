@@ -221,11 +221,11 @@ describe("loadConfig", () => {
 		).rejects.toThrow(/10\.0\.0\.0\/33/);
 	});
 
-	test("corrupt or malformed config falls back to defaults", async () => {
+	test("an unparsable explicit config fails the load; a malformed shape falls back to defaults", async () => {
 		const dir = tmpDir();
 		writeFileSync(join(dir, "bad-json.json"), "{ nope");
-		expect(await loadConfig(join(dir, "bad-json.json"))).toEqual(
-			await loadConfig(join(dir, "missing.json")),
+		await expect(loadConfig(join(dir, "bad-json.json"))).rejects.toThrow(
+			`fleet: config: unparsable ${join(dir, "bad-json.json")}`,
 		);
 
 		writeFileSync(join(dir, "bad-shape.json"), JSON.stringify({ roots: "nope", templates: 42 }));
@@ -240,6 +240,20 @@ describe("loadConfig", () => {
 			JSON.stringify({ trustedProxies: { "203.0.113.9": true } }),
 		);
 		expect((await loadConfig(join(dir, "bad-proxy.json"))).trustedProxies).toBeUndefined();
+	});
+
+	test("an unparsable OMP_FLEET_CONFIG fails the load", async () => {
+		const dir = tmpDir();
+		const file = join(dir, "env-bad.json");
+		writeFileSync(file, "{ nope");
+		const prev = process.env.OMP_FLEET_CONFIG;
+		process.env.OMP_FLEET_CONFIG = file;
+		try {
+			await expect(loadConfig()).rejects.toThrow(`fleet: config: unparsable ${file}`);
+		} finally {
+			if (prev === undefined) delete process.env.OMP_FLEET_CONFIG;
+			else process.env.OMP_FLEET_CONFIG = prev;
+		}
 	});
 });
 

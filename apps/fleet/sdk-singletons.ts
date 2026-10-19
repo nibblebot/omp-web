@@ -18,11 +18,12 @@ let modelRegistryInit: Promise<SdkModelRegistry> | null = null;
 /**
  * The process-global Settings singleton. Settings.init is process-global and
  * idempotent (whoever initializes first wins), so an in-memory test instance
- * is used when present and nothing touches disk.
+ * is used when present and nothing touches disk. Concurrent callers share one
+ * in-flight init; a failed init is not cached, so the next caller retries.
  */
 export function ensureSettings(): Promise<Settings> {
 	if (settingsInit === null) {
-		settingsInit = (async () => {
+		const init = (async () => {
 			const [{ Settings }, { getAgentDir }] = await Promise.all([
 				import("@oh-my-pi/pi-coding-agent"),
 				import("@oh-my-pi/pi-utils"),
@@ -38,6 +39,10 @@ export function ensureSettings(): Promise<Settings> {
 				return settings;
 			}
 		})();
+		settingsInit = init;
+		init.catch(() => {
+			if (settingsInit === init) settingsInit = null;
+		});
 	}
 	return settingsInit;
 }

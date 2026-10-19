@@ -63,6 +63,54 @@ describe("createFleetSettings", () => {
 		expect(item?.providers).toEqual([]);
 	});
 
+	test("a failed provider read is not cached: the next settings request retries", async () => {
+		let calls = 0;
+		const settings = createFleetSettings({
+			registry: async () => {
+				calls += 1;
+				if (calls === 1) throw new Error("registry not ready");
+				return [{ provider: "openai" }];
+			},
+		});
+		const first = await settings.getModel();
+		expect(
+			itemsOf("providers", first.tabs).find((item) => item.type === "providerLimits")?.providers,
+		).toEqual([]);
+		const second = await settings.getModel();
+		expect(
+			itemsOf("providers", second.tabs).find((item) => item.type === "providerLimits")?.providers,
+		).toEqual(["openai"]);
+		expect(calls).toBe(2);
+	});
+
+	test("a successful provider list is reused within providerCacheMs", async () => {
+		let calls = 0;
+		const settings = createFleetSettings({
+			providerCacheMs: 60_000,
+			registry: async () => {
+				calls += 1;
+				return [{ provider: "anthropic" }];
+			},
+		});
+		await settings.getModel();
+		await settings.getModel();
+		expect(calls).toBe(1);
+	});
+
+	test("a successful provider list is re-read once providerCacheMs has elapsed", async () => {
+		let providers = ["anthropic"];
+		const settings = createFleetSettings({
+			providerCacheMs: 0,
+			registry: async () => providers.map((provider) => ({ provider })),
+		});
+		await settings.getModel();
+		providers = ["anthropic", "openai"];
+		const model = await settings.getModel();
+		expect(
+			itemsOf("providers", model.tabs).find((item) => item.type === "providerLimits")?.providers,
+		).toEqual(["anthropic", "openai"]);
+	});
+
 	test("set coerces and persists into the Settings singleton, returning a fresh model", async () => {
 		const settings = createFleetSettings({ registry: emptyRegistry });
 		const model = await settings.set("compaction.thresholdPercent", "50");

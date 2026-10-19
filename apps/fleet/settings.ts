@@ -49,30 +49,47 @@ export interface FleetSettingsOptions {
 	 * empty provider list; the settings request never fails because of it.
 	 */
 	registry?: () => Promise<ReadonlyArray<{ provider: string }>>;
+	/** How long a successful provider list is reused, in milliseconds. Failures are never reused. */
+	providerCacheMs?: number;
 }
+
+/** Default reuse window for a successful provider list (logins show up within a minute). */
+const PROVIDER_CACHE_MS = 60_000;
 
 export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSettings {
 	// Lazy shared singletons: Settings.init is process-global and the
 	// ModelRegistry is expensive, so both are created once and shared by
-	// concurrent callers (and by the usage service).
+	// concurrent callers (and by the usage service). The provider list is
+	// reused for a short window; a failed read is dropped at once so the next
+	// request retries instead of serving an empty list forever.
+	const providerCacheMs = options.providerCacheMs ?? PROVIDER_CACHE_MS;
 	let providers: Promise<ReadonlyArray<{ provider: string }>> | null = null;
+	let providersExpireAt = 0;
 
-	const getProviders = (): Promise<ReadonlyArray<{ provider: string }>> => {
-		if (providers === null) {
-			providers = (async () => {
-				try {
-					if (options.registry) return await options.registry();
-					const { registry } = await ensureModelRegistry();
-					await registry.awaitBackgroundRefresh();
-					return registry.getAvailable();
-				} catch {
-					// No auth storage / discovery failure: degrade to an
-					// empty provider list rather than failing the request.
-					return [];
-				}
-			})();
+	async function loadProviders(): Promise<ReadonlyArray<{ provider: string }>> {
+		if (options.registry) return options.registry();
+		const { registry } = await ensureModelRegistry();
+		await registry.awaitBackgroundRefresh();
+		return registry.getAvailable();
+	}
+
+	const getProviders = async (): Promise<ReadonlyArray<{ provider: string }>> => {
+		let load = providers;
+		if (load === null || Date.now() >= providersExpireAt) {
+			load = loadProviders();
+			providers = load;
+			providersExpireAt = Date.now() + providerCacheMs;
+			load.catch(() => {
+				if (providers === load) providers = null;
+			});
 		}
-		return providers;
+		try {
+			return await load;
+		} catch {
+			// No auth storage / discovery failure: degrade to an empty provider
+			// list for this response rather than failing the request.
+			return [];
+		}
 	};
 
 	async function getModel(): Promise<SettingsModel> {

@@ -2700,6 +2700,7 @@ export class FleetEdge {
 				uptimeSec: Math.max(0, Math.floor((Date.now() - this.#fleet.startedAt) / 1000)),
 				statePath: this.#fleet.statePath,
 				configPath: this.#fleet.configPath,
+				configError: this.#config.loadError ?? null,
 			},
 			sessions,
 			log: this.#eventLog.list(),

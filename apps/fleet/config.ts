@@ -47,6 +47,11 @@ export interface FleetConfig {
 	 */
 	workspaceDir: string;
 	/**
+	 * Set when the default-location config file exists but does not parse: the
+	 * defaults are in use and this holds the reason (shown at /ctl/debug).
+	 */
+	loadError?: string;
+	/**
 	 * Address the control plane + browser edge bind. Flag `--bind` > env
 	 * `OMP_FLEET_BIND` > config-file `bind` key > `127.0.0.1` (the historic
 	 * loopback-only default). A non-loopback bind without browser browser
@@ -133,19 +138,28 @@ export async function loadConfig(
 	},
 ): Promise<FleetConfig> {
 	const file = resolveConfigPath(path);
+	// A config the operator named (argument or OMP_FLEET_CONFIG) must load: an
+	// unparsable file there is a startup error, never silent defaults.
+	const explicit = path !== undefined || (process.env.OMP_FLEET_CONFIG ?? "") !== "";
 	let config: FleetConfig;
+	let loadError: string | undefined;
 	if (!existsSync(file)) {
 		config = defaultConfig();
 	} else {
 		let raw: unknown;
 		try {
 			raw = JSON.parse(readFileSync(file, "utf8"));
-		} catch {
-			// Unreadable or corrupt config falls back to defaults.
+		} catch (error) {
+			const reason = `${file}: ${error instanceof Error ? error.message : String(error)}`;
+			if (explicit) throw new Error(`fleet: config: unparsable ${reason}`);
+			// The default-location file is corrupt: boot on defaults, but log it and surface it at /ctl/debug.
+			console.error(`fleet: config: unparsable ${reason}; using defaults`);
+			loadError = reason;
 			raw = undefined;
 		}
 		config = raw === undefined ? defaultConfig() : mergeConfig(raw);
 	}
+	if (loadError !== undefined) config.loadError = loadError;
 	// Env wins over every file source (the dev runner sets this so sidebar
 	// spawns run the source entry, not the unbuilt production binary).
 	const localCommand = process.env.OMP_FLEET_LOCAL_TEMPLATE;
@@ -179,8 +193,8 @@ export async function loadConfig(
 	if (flagDir !== undefined && flagDir !== "") {
 		config.workspaceDir = expandTilde(flagDir);
 	}
-	// Bind: explicit flag (`opts.bind`) > env `OMP_FLEET_BIND` > config-file
-	// `bind` (mergeConfig already applied env+file to the default).
+	// Bind: explicit flag (`opts.bind`) > env `OMP_FLEET_BIND` > config-file `bind`
+	// (mergeConfig already applied env+file to the default).
 	const flagBind = opts?.bind;
 	const envBind = process.env.OMP_FLEET_BIND;
 	if (flagBind !== undefined && flagBind !== "") {
