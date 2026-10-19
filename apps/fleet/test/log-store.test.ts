@@ -8,7 +8,7 @@
  * orphan retention/manual purge.
  *
  * Everything runs against the REAL FleetLogStore over real disk files in a
- * per-suite tempDir (shared/testkit tempDir/cleanupTempDirs, top-level
+ * per-suite tempDir (lib/testkit/temp-dir.testkit tempDir/cleanupTempDirs, top-level
  * afterAll registered here): every "reload" is a fresh FleetLogStore.load()
  * over the same rootDir: never a mock fs and never a reused in-memory
  * instance. Assertions are observable contract only: durable bytes returned

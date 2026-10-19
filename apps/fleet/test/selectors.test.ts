@@ -2,7 +2,7 @@
  * Tests for fleet selector resolution (fleet/selectors.ts).
  *
  * Pure and hermetic: entries are constructed inline against the DaemonEntry
- * shape from shared/protocol.ts (plus the RegistryEntry-only `registeredAt`
+ * shape from lib/wire/protocol.ts (plus the RegistryEntry-only `registeredAt`
  * field) instead of importing ./registry, so this suite runs standalone
  * before the registry slice lands.
  */

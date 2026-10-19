@@ -69,7 +69,7 @@ export interface FleetPaths {
 
 /**
  * Fresh tmp/state/config paths inside a tracked temp dir (see tempDir in
- * ../shared/testkit). Replaces the original suites' raw mkdtempSync describe
+ * lib/testkit/temp-dir.testkit). Replaces the original suites' raw mkdtempSync describe
  * dirs, which never got rmSync'd. Entry test files register
  * `afterAll(cleanupTempDirs)` at their top level; each bun test file runs in
  * its own process, so one registration per file removes its own dirs.

@@ -13,7 +13,7 @@
 //   browser with no isolation boundary, so code never crosses it.
 // - Transport stays minimal: ONE ui_request method ("browser_ui") over the
 //   existing POST /command + SSE ui_request/ui_response/ui_request_end path.
-//   No new transport, no new bus (OMP_PROTO stays 2; additive-only wire).
+//   No new transport, no new bus (no OMP_PROTO bump; additive-only wire).
 // - Lifecycle is owner-scoped: same (owner, id) supersedes; dispose rings
 //   ui_request_end; ui_response with an undefined result cancels (existing
 //   index.ts semantics); scoping is per SessionEntry object (plus its

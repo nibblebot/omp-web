@@ -7,7 +7,7 @@
  * compute.
  *
  * Everything runs against a REAL FleetLogStore over a per-suite tempDir
- * (shared/testkit tempDir/cleanupTempDirs, afterAll registered here) seeded
+ * (lib/testkit/temp-dir.testkit tempDir/cleanupTempDirs, afterAll registered here) seeded
  * through the real ingest critical section; the app is driven in-process
  * (dispatchRequest, no HTTP server) exactly like the stats app tests. The
  * final suite boots a real fleet (server.testkit startTestFleet) over a
