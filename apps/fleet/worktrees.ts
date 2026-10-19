@@ -41,13 +41,22 @@ export function managedWorktreePath(
 	return join(workspaceDir, basename(repoRealpath), slugifyWorktreeName(worktreeName));
 }
 
-/** Realpath of `p` (missing paths keep their normalized form). */
-export function realpathOf(p: string): string {
+/**
+ * Realpath of `p` (missing paths keep their normalized form). `memo`, when
+ * given, caches results for one caller's pass so each path resolves once; a
+ * fresh memo per pass, since the filesystem may change between passes.
+ */
+export function realpathOf(p: string, memo?: Map<string, string>): string {
+	const cached = memo?.get(p);
+	if (cached !== undefined) return cached;
+	let resolved: string;
 	try {
-		return realpathSync(p);
+		resolved = realpathSync(p);
 	} catch {
-		return resolve(p);
+		resolved = resolve(p);
 	}
+	memo?.set(p, resolved);
+	return resolved;
 }
 
 /** True when `candidate` equals `root` or is strictly under it (segment-safe). */
@@ -715,11 +724,13 @@ export async function registerProjectMainEntry(
 	registry: Registry,
 	supervisor: SpawnSupervisor,
 	project: RegisteredProject,
-	opts: { start?: boolean; template?: string; labels?: string[] },
+	opts: { start?: boolean; template?: string; labels?: string[]; realpaths?: Map<string, string> },
 ): Promise<RegistryEntry> {
 	// Dedup: an entry already mapped to this repo's realpath IS the default
 	// workspace; reuse it, never create a second row for the same checkout.
-	const existing = registry.list().find((entry) => realpathOf(entry.cwd) === project.path);
+	const existing = registry
+		.list()
+		.find((entry) => realpathOf(entry.cwd, opts.realpaths) === project.path);
 	if (existing !== undefined) {
 		if (existing.projectId === undefined) {
 			registry.update(existing.daemonId, { projectId: project.projectId });

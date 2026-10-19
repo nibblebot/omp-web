@@ -79,6 +79,11 @@ import {
 import type { ArchiveManifest } from "#lib/session-files/archive-manifest";
 import { isNormalizedPosixRelativePath } from "#lib/session-files/archive-manifest";
 
+/** A clone volume's git checkout. The volume root itself is not a repo. */
+export function cloneCheckoutDir(volumeRoot: string): string {
+	return join(volumeRoot, ".checkout");
+}
+
 // ---------------------------------------------------------------------------
 // Typed errors (frozen ledger vocabulary; message text is safe to surface)
 // ---------------------------------------------------------------------------
@@ -1633,7 +1638,7 @@ export class WorkspaceLifecycle {
 		}
 		return {
 			volumeRoot,
-			checkoutDir: join(volumeRoot, ".checkout"),
+			checkoutDir: cloneCheckoutDir(volumeRoot),
 			homeDir: join(volumeRoot, ".home"),
 			stateDir: join(dirname(volumeRoot), ".provider-state", entry.daemonId),
 		};

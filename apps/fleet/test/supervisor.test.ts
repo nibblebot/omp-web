@@ -302,17 +302,23 @@ interface GitCall {
 }
 
 /**
- * Fake git answering each POLL PASS from `phases`: one pass is a full
- * probeGitState, a status run then a numstat run, so each element is the
- * pair [statusResult, numstatResult] and the LAST pass repeats. Records
- * every call so tests can pin the exact git args and cwds.
+ * Fake git answering each POLL PASS from `phases`, indexed by status run: a
+ * pass is a status run, then a numstat run only when that status is dirty.
+ * Each element is [statusResult, numstatResult]; the LAST pass repeats.
+ * Records every call so tests can pin the exact git args and cwds.
  */
 function fakeGitPhases(phases: [GitResult, GitResult][]): { exec: GitRunner; calls: GitCall[] } {
 	const calls: GitCall[] = [];
+	let statusRuns = 0;
+	let pass = phases[0]!;
 	const exec: GitRunner = async (args, cwd) => {
-		const pass = phases[Math.min(Math.floor(calls.length / 2), phases.length - 1)];
 		calls.push({ args, cwd });
-		return args[0] === "status" ? pass[0] : pass[1];
+		if (args[0] === "status") {
+			pass = phases[Math.min(statusRuns, phases.length - 1)]!;
+			statusRuns += 1;
+			return pass[0];
+		}
+		return pass[1];
 	};
 	return { exec, calls };
 }
@@ -1835,10 +1841,11 @@ describe("project sync", () => {
 		supervisor.syncNow();
 		supervisor.syncNow();
 
-		// One probe is two git calls: the first pass plus exactly one follow-up.
-		await waitFor(() => (calls.length >= 4 ? true : null), 5000, "two passes");
+		// One probe is one git call (clean status: no numstat): the first pass
+		// plus exactly one follow-up.
+		await waitFor(() => (calls.length >= 2 ? true : null), 5000, "two passes");
 		await sleep(100);
-		expect(calls).toHaveLength(4);
+		expect(calls).toHaveLength(2);
 	});
 
 	test("passes never overlap: git calls from one pass finish before the next pass starts", async () => {
@@ -1859,10 +1866,10 @@ describe("project sync", () => {
 		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
 		supervisor.syncNow();
 		supervisor.syncNow();
-		await waitFor(() => (calls.length >= 4 ? true : null), 5000, "two passes");
+		await waitFor(() => (calls.length >= 2 ? true : null), 5000, "two passes");
 		await sleep(100);
 		expect(maxInFlight).toBe(1);
-		expect(calls).toHaveLength(4);
+		expect(calls).toHaveLength(2);
 	});
 
 	test("asleep rows are probed at most once per 60s; live rows on every pass", async () => {
@@ -1873,11 +1880,159 @@ describe("project sync", () => {
 		registry.create({ name: "l", cwd: liveDir, project: "l", labels: [], status: "ready" });
 		const { exec, calls } = fakeGitPhases([[okStatus, noDiff]]);
 		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
-		await waitFor(() => (calls.length === 4 ? true : null), 5000, "first pass");
+		await waitFor(() => (calls.length === 2 ? true : null), 5000, "first pass");
 
 		supervisor.syncNow();
-		await waitFor(() => (calls.length === 6 ? true : null), 5000, "second pass");
-		expect(calls.filter((c) => c.cwd === asleepDir)).toHaveLength(2);
-		expect(calls.filter((c) => c.cwd === liveDir)).toHaveLength(4);
+		await waitFor(() => (calls.length >= 3 ? true : null), 5000, "second pass");
+		await sleep(100);
+		expect(calls.filter((c) => c.cwd === asleepDir)).toHaveLength(1);
+		expect(calls.filter((c) => c.cwd === liveDir)).toHaveLength(2);
+	});
+});
+
+describe("git-state probe: failure isolation, clone checkout, bounded concurrency", () => {
+	const okStatus: GitResult = { exitCode: 0, stderr: "", stdout: "## main\n" };
+	const titleLine = (title: string): string => {
+		const json = JSON.stringify({ type: "title", title });
+		if (json.length > 256) throw new Error("test title too long for the slot");
+		return json.padEnd(256, " ") + "\n";
+	};
+
+	test("the title probe still runs when the git probe fails", async () => {
+		const { registry, supervisor } = await makeHarness(makeConfig("/nonexistent-child.sh"), {
+			restartMax: 0,
+		});
+		const dir = tempDir("omp-session-sup-title-nongit-");
+		const sessionFile = join(dir, "session.jsonl");
+		writeFileSync(
+			sessionFile,
+			titleLine("Survives git failure") +
+				JSON.stringify({ type: "session", id: "s1", cwd: dir }) +
+				"\n",
+		);
+		const row = registry.create({
+			name: "t",
+			cwd: dir,
+			project: "t",
+			labels: [],
+			status: "ready",
+			lastSessionFile: sessionFile,
+		});
+		const failing: GitRunner = async () => ({ exitCode: 128, stderr: "not a repo", stdout: "" });
+		supervisor.startGitStatePolling({ exec: failing, intervalMs: 60_000 });
+		await waitFor(
+			() => (registry.get(row.daemonId)?.sessionTitle === "Survives git failure" ? true : null),
+			5000,
+			"title filled despite git failure",
+		);
+	});
+
+	test("a clone row probes its checkout (the repo), not the volume root", async () => {
+		const volume = tempDir("omp-session-sup-clone-volume-");
+		const checkout = join(volume, ".checkout");
+		mkdirSync(join(checkout, ".git"), { recursive: true });
+		const { registry, supervisor } = await makeHarness(makeConfig("/nonexistent-child.sh"), {
+			restartMax: 0,
+		});
+		const row = registry.create({
+			name: "c",
+			cwd: volume,
+			project: "c",
+			labels: [],
+			status: "ready",
+			workspace: { kind: "clone", projectId: "p1", desiredState: "running" },
+		});
+		const calls: GitCall[] = [];
+		const exec: GitRunner = async (args, cwd) => {
+			calls.push({ args, cwd });
+			return okStatus;
+		};
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+		await waitFor(
+			() => (registry.get(row.daemonId)?.branch === "main" ? true : null),
+			5000,
+			"clone branch",
+		);
+		expect(calls.length).toBeGreaterThan(0);
+		expect(calls.every((c) => c.cwd === checkout)).toBe(true);
+	});
+
+	test("a clone whose checkout has no .git yet spawns no git probe", async () => {
+		const volume = tempDir("omp-session-sup-clone-empty-");
+		const { registry, supervisor } = await makeHarness(makeConfig("/nonexistent-child.sh"), {
+			restartMax: 0,
+		});
+		const row = registry.create({
+			name: "e",
+			cwd: volume,
+			project: "e",
+			labels: [],
+			status: "ready",
+			workspace: { kind: "clone", projectId: "p1", desiredState: "running" },
+		});
+		const calls: GitCall[] = [];
+		const exec: GitRunner = async (args, cwd) => {
+			calls.push({ args, cwd });
+			return okStatus;
+		};
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+		await sleep(200);
+		expect(calls).toHaveLength(0);
+		expect(registry.get(row.daemonId)?.branch).toBeUndefined();
+	});
+
+	test("a sync pass probes rows concurrently, bounded at 4 in flight", async () => {
+		const { registry, supervisor } = await makeHarness(makeConfig("/nonexistent-child.sh"), {
+			restartMax: 0,
+		});
+		for (let i = 0; i < 6; i++) {
+			const dir = tempDir(`omp-session-sup-conc-${i}-`);
+			registry.create({ name: `c${i}`, cwd: dir, project: `c${i}`, labels: [], status: "ready" });
+		}
+		let inFlight = 0;
+		let maxInFlight = 0;
+		const exec: GitRunner = async () => {
+			inFlight += 1;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			await sleep(40);
+			inFlight -= 1;
+			return okStatus;
+		};
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+		await waitFor(
+			() => (registry.list().every((e) => e.branch === "main") ? true : null),
+			5000,
+			"all rows probed",
+		);
+		expect(maxInFlight).toBeGreaterThan(1);
+		expect(maxInFlight).toBeLessThanOrEqual(4);
+	});
+
+	test("a spawn-time probe and a sync pass of the same row share one run", async () => {
+		const dir = tempDir("omp-session-sup-singleflight-");
+		const { registry, supervisor } = await makeHarness(makeConfig("/nonexistent-child.sh"), {
+			restartMax: 0,
+		});
+		const row = registry.create({ name: "s", cwd: dir, project: "s", labels: [], status: "ready" });
+		const inFlightByCwd = new Map<string, number>();
+		let maxSameRow = 0;
+		const exec: GitRunner = async (_args, cwd) => {
+			const n = (inFlightByCwd.get(cwd) ?? 0) + 1;
+			inFlightByCwd.set(cwd, n);
+			maxSameRow = Math.max(maxSameRow, n);
+			await sleep(40);
+			inFlightByCwd.set(cwd, (inFlightByCwd.get(cwd) ?? 1) - 1);
+			return okStatus;
+		};
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+		supervisor.probeGitState(row.daemonId);
+		supervisor.syncNow();
+		await waitFor(
+			() => (registry.get(row.daemonId)?.branch === "main" ? true : null),
+			5000,
+			"row probed",
+		);
+		await sleep(100);
+		expect(maxSameRow).toBe(1);
 	});
 });

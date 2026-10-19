@@ -299,15 +299,33 @@ describe("probeGitState", () => {
 		const calls: GitCall[] = [];
 		const exec = fakeGitByArg(
 			{
-				status: { exitCode: 0, stderr: "", stdout: "## main\n" },
+				status: { exitCode: 0, stderr: "", stdout: "## main\n?? new.txt\n" },
 				diff: { exitCode: 0, stderr: "", stdout: numstatOut },
 			},
 			calls,
 		);
 		expect(await probeGitState("/srv/repos/acme", { exec })).toEqual({
 			branch: "main",
-			git: { added: 0, modified: 0, deleted: 0, untracked: 0, linesAdded: 5, linesDeleted: 5 },
+			git: { added: 0, modified: 0, deleted: 0, untracked: 1, linesAdded: 5, linesDeleted: 5 },
 		});
+	});
+
+	test("a clean status reports zero line counts without a numstat run", async () => {
+		const calls: GitCall[] = [];
+		const exec = fakeGitByArg(
+			{
+				status: { exitCode: 0, stderr: "", stdout: "## main\n" },
+				diff: { exitCode: 0, stderr: "", stdout: "3\t1\ta.ts\n" },
+			},
+			calls,
+		);
+		expect(await probeGitState("/srv/repos/acme", { exec })).toEqual({
+			branch: "main",
+			git: { added: 0, modified: 0, deleted: 0, untracked: 0, linesAdded: 0, linesDeleted: 0 },
+		});
+		expect(calls).toEqual([
+			{ args: ["status", "--porcelain=v1", "--branch"], cwd: "/srv/repos/acme" },
+		]);
 	});
 
 	test("a failed numstat run still returns the parsed status state with no line fields", async () => {

@@ -55,7 +55,8 @@ import type { FleetConfig, SpawnTemplate } from "./config";
 import { fillTemplate, shellQuote } from "./spawn-parse";
 import type { DaemonTransportRegistry } from "./daemon-transport";
 import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
-import type { GitRunner } from "./discovery";
+import type { GitRunner, GitState } from "./discovery";
+import { cloneCheckoutDir } from "./workspace-lifecycle";
 import { readSessionInfo } from "./session-title";
 import type { Registry, RegistryEntry } from "./registry";
 import {
@@ -119,12 +120,40 @@ const RESTART_BACKOFF_MIN_MS = 1_000;
 const RESTART_BACKOFF_MAX_MS = 30_000;
 const DEFAULT_SYNC_INTERVAL_MS = 10_000;
 const ASLEEP_SYNC_INTERVAL_MS = 60_000;
+/** Max git probes in flight during one sync pass (rows probe in parallel). */
+const SYNC_PROBE_CONCURRENCY = 4;
 const DETERMINISTIC_EXIT_FALLBACK = "session refused to run and will not be retried";
 
 /** Jittered exponential backoff: base = min(max, min·2^attempt), ±50%. */
 function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
 	const base = Math.min(maxMs, minMs * 2 ** attempt);
 	return Math.round(base * (0.5 + Math.random()));
+}
+
+/**
+ * Run `fn` over `items` with at most `limit` in flight. Resolves only after
+ * every item settled, so a pass never leaves probes running into the next
+ * one; rethrows the first failure once everything settled.
+ */
+async function forEachLimit<T>(
+	items: readonly T[],
+	limit: number,
+	fn: (item: T) => Promise<void>,
+): Promise<void> {
+	let next = 0;
+	let failure: { error: unknown } | undefined;
+	const worker = async (): Promise<void> => {
+		while (next < items.length) {
+			const item = items[next++];
+			try {
+				await fn(item);
+			} catch (error) {
+				failure ??= { error };
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+	if (failure) throw failure.error;
 }
 
 /** Field-wise git-counts compare: undefined (never probed) differs from any counts object. */
@@ -298,6 +327,8 @@ export class SpawnSupervisor {
 	#syncQueued = false;
 	/** Last probe time per daemonId; asleep rows wait ASLEEP_SYNC_INTERVAL_MS. */
 	#lastProbeAt = new Map<string, number>();
+	/** In-flight probe per daemonId: a sync pass and a spawn-time probe share one run. */
+	#probing = new Map<string, Promise<void>>();
 	/** Lifecycle-event hook (server.ts wires it to the fleet event ring). */
 	#onEvent: ((level: FleetLogLevel, message: string, daemonId?: string) => void) | undefined;
 	/**
@@ -633,15 +664,16 @@ export class SpawnSupervisor {
 	 * probe every row whose cadence is due. Forgets probe times of removed rows.
 	 */
 	async #syncPass(): Promise<void> {
+		// One realpath memo for the whole pass: projects and rows resolve each
+		// distinct path once instead of once per row per project.
+		const realpaths = new Map<string, string>();
 		for (const project of this.#registry.projects()) {
-			await this.#syncProject(project);
+			await this.#syncProject(project, realpaths);
 		}
 		const now = Date.now();
-		for (const entry of this.#registry.list()) {
-			if (!this.#probeDue(entry, now)) continue;
-			this.#lastProbeAt.set(entry.daemonId, now);
-			await this.#probeEntry(entry);
-		}
+		const due = this.#registry.list().filter((entry) => this.#probeDue(entry, now));
+		for (const entry of due) this.#lastProbeAt.set(entry.daemonId, now);
+		await forEachLimit(due, SYNC_PROBE_CONCURRENCY, (entry) => this.#probeEntry(entry));
 		for (const daemonId of this.#lastProbeAt.keys()) {
 			if (!this.#registry.get(daemonId)) this.#lastProbeAt.delete(daemonId);
 		}
@@ -654,19 +686,19 @@ export class SpawnSupervisor {
 	 * worktree without a row is registered asleep (prunable checkouts are
 	 * skipped). Each linked row mirrors git's lock flag.
 	 */
-	async #syncProject(project: RegisteredProject): Promise<void> {
+	async #syncProject(project: RegisteredProject, realpaths: Map<string, string>): Promise<void> {
 		const blocks = await listWorktreeBlocks(project.path);
 		const main = blocks?.[0];
 		const missing = main === undefined || main.bare === true;
 		this.#registry.setProjectMissing(project.projectId, missing);
 		if (blocks === undefined || missing) return;
-		await registerProjectMainEntry(this.#registry, this, project, {});
+		await registerProjectMainEntry(this.#registry, this, project, { realpaths });
 		for (const block of blocks.slice(1)) {
 			if (block.path === undefined || block.prunable) continue;
-			const resolved = realpathOf(block.path);
+			const resolved = realpathOf(block.path, realpaths);
 			const known = this.#registry
 				.list()
-				.find((entry) => entry.cwd !== "" && realpathOf(entry.cwd) === resolved);
+				.find((entry) => entry.cwd !== "" && realpathOf(entry.cwd, realpaths) === resolved);
 			const row =
 				known ??
 				(await registerWorktreeEntry(this.#registry, this, project, block.path, { start: false }));
@@ -688,13 +720,26 @@ export class SpawnSupervisor {
 	}
 
 	/**
-	 * Probe one entry and reconcile the registry. The entry is re-read after
-	 * the probe so a removal mid-probe is skipped; an update happens only on
-	 * an actual branch/git change.
+	 * Probe one row (git state, then its session title) and reconcile the
+	 * registry. Single-flight per row: a sync pass and a spawn-time probe of the
+	 * same row share one run.
 	 */
-	async #probeEntry(entry: RegistryEntry): Promise<void> {
-		if (entry.cwd === "") return;
-		const result = await probeGit(entry.cwd, { exec: this.#gitExec });
+	#probeEntry(entry: RegistryEntry): Promise<void> {
+		if (entry.cwd === "") return Promise.resolve();
+		const inflight = this.#probing.get(entry.daemonId);
+		if (inflight) return inflight;
+		const run = this.#probeRow(entry).finally(() => this.#probing.delete(entry.daemonId));
+		this.#probing.set(entry.daemonId, run);
+		return run;
+	}
+
+	/**
+	 * The entry is re-read after the probe so a removal mid-probe is skipped;
+	 * an update happens only on an actual branch/git change. The title probe
+	 * runs whatever the git result: a git failure must not hide a title change.
+	 */
+	async #probeRow(entry: RegistryEntry): Promise<void> {
+		const result = await this.#probeGitOf(entry);
 		const current = this.#registry.get(entry.daemonId);
 		if (!current) return; // removed while probing
 		if (result === undefined) {
@@ -721,9 +766,7 @@ export class SpawnSupervisor {
 					detachedAt: undefined,
 				});
 			}
-			return;
-		}
-		if (
+		} else if (
 			current.branch !== result.branch ||
 			current.detachedAt !== result.detachedAt ||
 			!sameGitState(current.git, result.git)
@@ -735,6 +778,20 @@ export class SpawnSupervisor {
 			});
 		}
 		await this.#probeSessionInfo(this.#registry.get(entry.daemonId) ?? entry);
+	}
+
+	/**
+	 * Git state of one row's repo, or undefined (probe failed, or no repo yet).
+	 * A clone row's cwd is its volume root, which is not a repo: its repo is the
+	 * checkout under it. A clone whose checkout has no `.git` yet spawns nothing.
+	 */
+	async #probeGitOf(entry: RegistryEntry): Promise<GitState | undefined> {
+		if (entry.workspace?.kind !== "clone") {
+			return probeGit(entry.cwd, { exec: this.#gitExec });
+		}
+		const checkout = cloneCheckoutDir(entry.cwd);
+		if (!existsSync(join(checkout, ".git"))) return undefined;
+		return probeGit(checkout, { exec: this.#gitExec });
 	}
 
 	/**

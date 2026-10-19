@@ -250,10 +250,11 @@ export function parseNumstat(stdout: string): { linesAdded: number; linesDeleted
  * failure, nonzero exit, or unparseable output; the caller (supervisor
  * git-state polling) treats that as "no state", never as a clean repo. On
  * success a best-effort `git diff --numstat HEAD --` run is merged into
- * `git`: a failed numstat run (spawn error, nonzero exit, e.g. a fresh
- * repo without commits) leaves the line fields absent, never 0-by-default,
- * never fails the whole probe. A detached HEAD also reports its short sha
- * as `detachedAt` (best-effort, like numstat).
+ * `git`, but only when the status shows a change: a clean status has no
+ * line delta, so it reports 0/0 without spawning. A failed numstat run (spawn
+ * error, nonzero exit, e.g. a fresh repo without commits) leaves the line
+ * fields absent, never 0-by-default, never fails the whole probe. A detached
+ * HEAD also reports its short sha as `detachedAt` (best-effort, like numstat).
  */
 export async function probeGitState(
 	cwd: string,
@@ -264,11 +265,17 @@ export async function probeGitState(
 	if (!result || result.exitCode !== 0) return undefined;
 	const parsed = parseGitStatePorcelain(result.stdout);
 	if (parsed === undefined) return undefined;
-	const numstat = await exec(["diff", "--numstat", "HEAD", "--"], cwd).catch(() => null);
-	const withLines =
-		numstat && numstat.exitCode === 0
-			? { ...parsed, git: { ...parsed.git, ...parseNumstat(numstat.stdout) } }
-			: parsed;
+	const dirty =
+		parsed.git.added + parsed.git.modified + parsed.git.deleted + parsed.git.untracked > 0;
+	let withLines = parsed;
+	if (!dirty) {
+		withLines = { ...parsed, git: { ...parsed.git, linesAdded: 0, linesDeleted: 0 } };
+	} else {
+		const numstat = await exec(["diff", "--numstat", "HEAD", "--"], cwd).catch(() => null);
+		if (numstat && numstat.exitCode === 0) {
+			withLines = { ...parsed, git: { ...parsed.git, ...parseNumstat(numstat.stdout) } };
+		}
+	}
 	if (withLines.branch !== undefined) return withLines;
 	const head = await exec(["rev-parse", "--short", "HEAD"], cwd).catch(() => null);
 	const detachedAt = head?.exitCode === 0 ? head.stdout.trim() : "";
