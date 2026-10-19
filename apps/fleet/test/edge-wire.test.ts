@@ -929,21 +929,31 @@ describe("fleet edge", () => {
 	});
 
 	test("attach to an asleep spawned daemon respawns it, waits for the pair, then pipes", async () => {
+		// Its own asleep entry: spawnedEntry carries a refused pick from the
+		// test above, and a refused pick blocks any attach that would wake it.
+		const fresh = server.registry.create({
+			name: "spawned-fresh",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			template: "local",
+			status: "asleep",
+		});
 		const browserC = await openBrowser(server.port);
 		await browserC.waitForFrame((f) => f.type === "roster", "roster");
 		const respawnsBefore = respawns;
-		const daemon = daemonsById.get(spawnedEntry.daemonId);
+		const daemon = daemonsById.get(fresh.daemonId);
 		// Nothing has paired this entry yet: the daemon is created by the respawn.
 		expect(daemon).toBeUndefined();
-		await browserC.send({ type: "attach", sessionId: spawnedEntry.daemonId });
-		await primeAttach(browserC, spawnedEntry.daemonId);
+		await browserC.send({ type: "attach", sessionId: fresh.daemonId });
+		await primeAttach(browserC, fresh.daemonId);
 		expect(respawns).toBe(respawnsBefore + 1);
-		expect(server.registry.get(spawnedEntry.daemonId)?.status).toBe("ready");
-		const paired = daemonsById.get(spawnedEntry.daemonId);
+		expect(server.registry.get(fresh.daemonId)?.status).toBe("ready");
+		const paired = daemonsById.get(fresh.daemonId);
 		if (!paired) throw new Error("spawned daemon did not pair");
 		await awaitNewStream(paired, 0);
 		await browserC.waitForFrame(
-			(f) => f.type === "history" && f.sessionId === spawnedEntry.daemonId,
+			(f) => f.type === "history" && f.sessionId === fresh.daemonId,
 			"history C",
 		);
 		browserC.close();
@@ -1084,6 +1094,17 @@ describe("fleet edge", () => {
 			);
 			expect(failed).toMatchObject({ ok: false });
 			expect(JSON.stringify(failed)).toContain("not in this worktree");
+			expect(resumeFiles).toEqual([]);
+			expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
+			// A second attach after the refused pick must fail the same way: it
+			// must not wake the daemon on lastSessionFile.
+			await browser.send({ type: "attach", id: "at-refused-again", sessionId: entry.daemonId });
+			const again = await browser.waitForFrame(
+				(f) => f.type === "attach_result" && f.id === "at-refused-again",
+				"second refused attach result",
+			);
+			expect(again).toMatchObject({ ok: false });
+			expect(JSON.stringify(again)).toContain("not in this worktree");
 			expect(resumeFiles).toEqual([]);
 			expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
 			// The oldest session is a valid pick: it resumes exactly that file.

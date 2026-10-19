@@ -627,6 +627,13 @@ export class FleetEdge {
 	 * validation instead of racing past it and waking on lastSessionFile.
 	 */
 	readonly #pendingResumes = new Map<string, Promise<void>>();
+	/**
+	 * Reason the last picked spawn_resume for a daemonId was refused or failed.
+	 * Set on refusal, cleared on a successful pick or an explicit no-pick
+	 * spawn_resume. While set, an attach that would wake the daemon fails with
+	 * this reason instead of waking on lastSessionFile.
+	 */
+	readonly #refusedResumes = new Map<string, string>();
 	/** Cached broker rosters per daemonId, merged into the broadcast daemons frame. */
 	readonly #daemonsAggregator = new DaemonsAggregator();
 	/** Control-socket taps per daemonId (unsubscribe fns), reconciled on registry change. */
@@ -1553,20 +1560,27 @@ export class FleetEdge {
 		daemonId: string,
 		sessionFile?: string,
 	): Promise<void> {
+		// An explicit no-pick request supersedes an earlier refusal.
+		if (sessionFile === undefined) this.#refusedResumes.delete(daemonId);
 		// Registered BEFORE the first await: the roster UI fires the attach
 		// back-to-back, and an attach that did not wait for this validation
 		// would wake the daemon on lastSessionFile and silently drop the pick.
-		const run = this.#runSpawnResume(daemonId, sessionFile).catch((err: unknown) => {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
-			// A refused pick must fail the attach that follows, never let it wake
-			// on lastSessionFile. A wake without a pick has no such target.
-			if (sessionFile !== undefined) throw err;
-		});
+		const run = this.#runSpawnResume(daemonId, sessionFile).then(
+			() => {
+				if (sessionFile !== undefined) this.#refusedResumes.delete(daemonId);
+			},
+			(err: unknown) => {
+				const reason = err instanceof Error ? err.message : String(err);
+				this.#sendError(stream, reason);
+				// Recorded so the attach that follows, and any later attach before a
+				// successful pick or a no-pick request, fails with this reason. A wake
+				// without a pick has no target to protect, so it is not recorded.
+				if (sessionFile !== undefined) this.#refusedResumes.set(daemonId, reason);
+			},
+		);
 		this.#pendingResumes.set(daemonId, run);
 		try {
 			await run;
-		} catch {
-			// Already reported on this stream; the attach rethrows it to its own.
 		} finally {
 			if (this.#pendingResumes.get(daemonId) === run) this.#pendingResumes.delete(daemonId);
 		}
@@ -1703,14 +1717,19 @@ export class FleetEdge {
 		this.#closePipe(stream);
 		try {
 			// A back-to-back spawn_resume may still be validating its picked
-			// session. Await it: a refused or failed pick rejects here and fails
-			// this attach instead of waking on lastSessionFile. The entry is
-			// re-read after the wait: registry entries are REPLACED on update,
-			// so a pre-wait object can carry a stale status.
+			// session. Await it, then re-read the entry: registry entries are
+			// REPLACED on update, so a pre-wait object can carry a stale status.
 			await this.#pendingResumes.get(daemonId);
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
 				this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });
+				return;
+			}
+			// A refused or failed pick is recorded in #refusedResumes: waking now
+			// would resume lastSessionFile, not the session the user picked.
+			const refused = this.#refusedResumes.get(daemonId);
+			if (refused !== undefined && entry.status === "asleep") {
+				this.#sendAttachOutcome(stream, commandId, { error: refused });
 				return;
 			}
 			// #wake resolves once the daemon's callback pair is up (or it
