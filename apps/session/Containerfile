@@ -16,7 +16,8 @@
 #     behavior matches across providers.
 #   - No secret material is baked in: model/tool credentials arrive as
 #     secretKeyRef env (profile.secretRefs) and the fleet callback
-#     enrollment arrives as pod env from callback-env.json. Kubernetes
+#     enrollment arrives as pod env from callback-env.json and is handed to
+#     the daemon on stdin (--fleet-stdin). Kubernetes
 #     credentials (service-account tokens) are not mounted.
 #   - The container is unprivileged: read-only rootfs, no capabilities,
 #     runAsUser 10001, /workspace + /tmp writable. The PVC is chowned to

@@ -21,6 +21,7 @@ import type { Subprocess } from "bun";
 import {
 	COMMAND_DEDUP_ANSWER_CAP,
 	OMP_PROTO,
+	OMP_SESSION_EXIT_RESUME_FAILED,
 	OMP_SESSION_EXIT_SESSION_LOCKED,
 	OMP_SESSION_PREFIX,
 	SSE_DELTA_SEQ_START,
@@ -917,9 +918,8 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 
 		// The daemon's project dir is spawn-bound and the transcript records its
 		// own cwd in the session header: 18.2.6 refuses a resume whose recorded
-		// cwd differs from the daemon's (switchSession returns false, logged on
-		// stderr, and the daemon starts fresh with an EMPTY history), so the
-		// fixture's dir becomes the session cwd.
+		// cwd differs from the daemon's, so the daemon exits 78 instead of
+		// booting fresh. The fixture's dir becomes the session cwd.
 		const proc = await spawnSession({
 			args: ["--resume", fixture],
 			env: { OMP_SESSION_CWD: bigDir },
@@ -985,11 +985,12 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 	}
 }, 60_000);
 
-test("--resume of a transcript recorded under another cwd names both cwds in the refusal", async () => {
+test("--resume of a transcript recorded under another cwd exits 78 and names both cwds, never booting fresh", async () => {
 	// 18.2.6 refuses a switch whose recorded cwd differs from the daemon's
 	// project dir (SESSION_CWD_CHANGE_REJECTED → switchSession false). The
 	// daemon's own project dir is spawn-bound, so this is unfixable from the
-	// resume flag alone: the message has to say which two cwds disagree.
+	// resume flag alone: the message has to say which two cwds disagree, and
+	// the daemon has to refuse rather than start an empty session in its place.
 	const foreignDir = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-foreign-"));
 	try {
 		const fixture = path.join(foreignDir, "foreign.jsonl");
@@ -1012,20 +1013,15 @@ test("--resume of a transcript recorded under another cwd names both cwds in the
 				}),
 			].join("\n") + "\n",
 		);
-		// spawnSession's project dir is its own hermetic tmp, so the resume is
-		// cross-cwd by construction.
-		const proc = await spawnSession({ args: ["--resume", fixture] });
-		running.push(proc);
-		const stderr = await waitFor(
-			() =>
-				proc.stderrTail().includes("session switch returned false") ? proc.stderrTail() : null,
-			10_000,
-			"refused-resume message",
-		);
-		expect(stderr).toContain(`--resume ${fixture}: session switch returned false`);
-		expect(stderr).toContain(`the session was recorded under ${foreignDir}`);
-		expect(stderr).toMatch(/this daemon runs \/tmp\/omp-session-test-[^)]+/);
-		await proc.cleanup();
+		// spawnRefusedSession's project dir is its own hermetic tmp, so the
+		// resume is cross-cwd by construction. The refusal follows bind (the
+		// switch needs the SDK session), so the listening line has printed.
+		const refused = await spawnRefusedSession({ args: ["--resume", fixture] });
+		expect(refused.exitCode).toBe(OMP_SESSION_EXIT_RESUME_FAILED);
+		expect(refused.stderr).toContain(`--resume ${fixture}: session switch returned false`);
+		expect(refused.stderr).toContain(`the session was recorded under ${foreignDir}`);
+		expect(refused.stderr).toMatch(/this daemon runs \/tmp\/omp-session-test-[^)]+/);
+		expect(refused.stderr).toContain("refusing to start fresh");
 	} finally {
 		await rm(foreignDir, { recursive: true, force: true });
 	}
@@ -1400,7 +1396,7 @@ async function expectExitCode(
 test("a second omp-session on the same --resume file refuses before bind with the locked-session exit", async () => {
 	const { dir, fixture } = await writeResumeFixture();
 	try {
-		const a = await spawnSession({ args: ["--resume", fixture] });
+		const a = await spawnSession({ args: ["--resume", fixture], env: { OMP_SESSION_CWD: dir } });
 		running.push(a);
 		const base = `http://127.0.0.1:${a.port}`;
 		const events = await openEvents(base);
@@ -1430,10 +1426,47 @@ test("a second omp-session on the same --resume file refuses before bind with th
 	}
 }, 60_000);
 
+test("--resume of a missing absolute file exits 78 before bind and never creates it", async () => {
+	const { dir } = await writeResumeFixture();
+	const missing = path.join(dir, "gone.jsonl");
+	try {
+		const refused = await spawnRefusedSession({ args: ["--resume", missing] });
+		expect(refused.exitCode).toBe(OMP_SESSION_EXIT_RESUME_FAILED);
+		expect(refused.stdout).not.toContain(OMP_SESSION_PREFIX);
+		expect(refused.stderr).toContain(`omp-session: --resume ${missing}: session file not found`);
+		expect(existsSync(`${missing}.lock`)).toBe(false);
+		expect(existsSync(missing)).toBe(false);
+	} finally {
+		await rm(dir, { recursive: true, force: true }).catch(() => {});
+	}
+}, 60_000);
+
+test("--resume-unwritten adopts a missing absolute file as the not-yet-written session at that path", async () => {
+	const { dir } = await writeResumeFixture();
+	const unwritten = path.join(dir, "unwritten.jsonl");
+	try {
+		const proc = await spawnSession({
+			args: ["--resume", unwritten, "--resume-unwritten"],
+			env: { OMP_SESSION_CWD: dir },
+		});
+		running.push(proc);
+		const events = await openEvents(`http://127.0.0.1:${proc.port}`);
+		try {
+			const hello = await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
+			expect(hello.sessionFile).toBe(unwritten);
+		} finally {
+			events.close();
+		}
+		await proc.cleanup();
+	} finally {
+		await rm(dir, { recursive: true, force: true }).catch(() => {});
+	}
+}, 60_000);
+
 test("a crashed omp-session's stale lock is broken: the same --resume starts again", async () => {
 	const { dir, fixture } = await writeResumeFixture();
 	try {
-		const a = await spawnSession({ args: ["--resume", fixture] });
+		const a = await spawnSession({ args: ["--resume", fixture], env: { OMP_SESSION_CWD: dir } });
 		running.push(a);
 		const base = `http://127.0.0.1:${a.port}`;
 		const events = await openEvents(base);
@@ -1448,7 +1481,7 @@ test("a crashed omp-session's stale lock is broken: the same --resume starts aga
 		expect(existsSync(`${fixture}.lock`)).toBe(true);
 
 		// The stale lock must be broken: B boots on the same file.
-		const b = await spawnSession({ args: ["--resume", fixture] });
+		const b = await spawnSession({ args: ["--resume", fixture], env: { OMP_SESSION_CWD: dir } });
 		running.push(b);
 		const bBase = `http://127.0.0.1:${b.port}`;
 		const bEvents = await openEvents(bBase);

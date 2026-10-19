@@ -1,13 +1,14 @@
 /**
  * SpawnSupervisor tests. A FAKE child script (sh) stands in for omp-session:
- * it appends its argv (the template-filled token / labels / resume args) and
- * its callback credential to files the test reads, optionally logs to
- * stderr, then exits or idles. A real DaemonTransportRegistry served over
- * loopback HTTP receives the dial; tests that need a live pair start the
- * callback-daemon testkit with the credential the child was launched with.
- * Covers spawn (generation, child env, no secret on the entry), pair timeout,
+ * it appends its argv (the template-filled --fleet-stdin / labels / resume
+ * args) to a file and captures the fleet stdin payload (the callback pair)
+ * to another, optionally logs to stderr, then exits or idles. A real
+ * DaemonTransportRegistry served over loopback HTTP receives the dial; tests
+ * that need a live pair start the callback-daemon testkit with the pair the
+ * child was launched with. Covers spawn (generation, stdin payload, no secret
+ * on the entry or in argv/env), pair timeout,
  * respawn (generation bump, --resume), stop (ShutdownControl, revoke,
- * asleep), close (children and enrollments survive), exit policy (77, 0,
+ * asleep), close (children and enrollments survive), exit policy (77, 78, 0,
  * bounded restarts, pair resets the budget), stderrTail, and git-state polling.
  */
 
@@ -16,7 +17,10 @@ import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync 
 import { basename, join } from "node:path";
 import type { Server } from "bun";
 import { CALLBACK_TRANSPORT_STREAM_ID } from "#lib/wire/callback-protocol";
-import { OMP_SESSION_EXIT_SESSION_LOCKED } from "#lib/wire/protocol";
+import {
+	OMP_SESSION_EXIT_RESUME_FAILED,
+	OMP_SESSION_EXIT_SESSION_LOCKED,
+} from "#lib/wire/protocol";
 import type { FleetConfig } from "../config";
 import { DaemonTransportRegistry } from "../daemon-transport";
 import type { GitResult, GitRunner } from "../discovery";
@@ -94,28 +98,42 @@ function waitForPid(file: string): Promise<number> {
 	);
 }
 
-/** The OMP_SESSION_* environment the latest launch dumped, once it is at `generation`. */
-function waitForEnv(file: string, generation: number): Promise<Record<string, string>> {
+/** The stdin payload the supervisor hands a `--fleet-stdin` child; one JSON object per launch. */
+interface FleetPayload {
+	v: number;
+	callback: {
+		url: string;
+		workspace: string;
+		generation: number;
+		token: string;
+		allowHttp?: true;
+		proxy?: string;
+	};
+	token?: string;
+}
+
+/** The callback pair of the launch at `generation`, once its stdin payload is captured. */
+function waitForPayload(file: string, generation: number): Promise<FleetPayload["callback"]> {
 	return waitFor(
 		() => {
 			if (!existsSync(file)) return null;
-			const env: Record<string, string> = {};
-			for (const line of readFileSync(file, "utf8").split("\n")) {
-				const eq = line.indexOf("=");
-				if (eq > 0) env[line.slice(0, eq)] = line.slice(eq + 1);
-			}
-			return env.OMP_SESSION_CALLBACK_GENERATION === String(generation) ? env : null;
+			// Complete lines only: the child's `echo` terminates each payload.
+			const payloads = readFileSync(file, "utf8").split("\n").slice(0, -1);
+			const pair = payloads
+				.map((line) => JSON.parse(line) as FleetPayload)
+				.find((p) => p.callback.generation === generation);
+			return pair?.callback ?? null;
 		},
 		5000,
-		`launch env at generation ${generation}`,
+		`launch payload at generation ${generation}`,
 	);
 }
 
 interface ChildScriptOpts {
 	envFile?: string;
 	pidFile?: string;
-	/** Appends "<generation> <credential>" per launch. */
-	launchesFile?: string;
+	/** Captures the stdin payload, one JSON line per launch. */
+	payloadFile?: string;
 	stderrLines?: string[];
 	/** Exit immediately with this code instead of idling. */
 	exitCode?: number;
@@ -124,22 +142,21 @@ interface ChildScriptOpts {
 }
 
 /**
- * Write a fake child script. It appends "$@" (the template-filled token /
+ * Write a fake child script. It captures its stdin (the fleet payload) to
+ * payloadFile first, appends "$@" (the template-filled --fleet-stdin /
  * labels / resume args) to argsFile, optionally dumps its OMP_SESSION_*
- * environment, records its pid and launches, prints stderr lines, then
- * either exits with `exitCode` or idles.
+ * environment, records its pid, prints stderr lines, then either exits with
+ * `exitCode` or idles.
  */
 function writeChildScript(dir: string, argsFile: string, opts: ChildScriptOpts = {}): string {
 	const script = join(dir, "child.sh");
-	const lines = ["#!/bin/sh", 'trap "exit 0" TERM INT', `echo "$@" >> '${argsFile}'`];
+	const lines = ["#!/bin/sh", 'trap "exit 0" TERM INT'];
+	// cat ends at the supervisor's stdin EOF; the echo terminates the JSON line.
+	if (opts.payloadFile) lines.push(`{ cat; echo; } >> '${opts.payloadFile}'`);
+	lines.push(`echo "$@" >> '${argsFile}'`);
 	if (opts.envFile) {
 		lines.push(
 			`env | grep '^OMP_SESSION_' | sort > '${opts.envFile}.tmp' && mv '${opts.envFile}.tmp' '${opts.envFile}'`,
-		);
-	}
-	if (opts.launchesFile) {
-		lines.push(
-			`echo "$OMP_SESSION_CALLBACK_GENERATION $OMP_SESSION_CALLBACK_TOKEN" >> '${opts.launchesFile}'`,
 		);
 	}
 	if (opts.pidFile) lines.push(`echo $$ > '${opts.pidFile}'`);
@@ -159,10 +176,10 @@ function writeChildScript(dir: string, argsFile: string, opts: ChildScriptOpts =
 	return script;
 }
 
-/** Spawn template that fills {token} {labels} {resume} as argv for the fake child. */
+/** Spawn template that fills {fleet} {labels} {resume} as argv for the fake child. */
 function makeConfig(script: string): FleetConfig {
 	return {
-		templates: { test: { command: `sh ${script} {token} {labels} {resume}` } },
+		templates: { test: { command: `sh ${script} {fleet} {labels} {resume}` } },
 		defaultTemplate: "test",
 		workspaceDir: "/tmp/fleet-test-ws",
 		bind: "127.0.0.1",
@@ -177,8 +194,8 @@ function makeTierConfig(
 ): FleetConfig {
 	return {
 		templates: {
-			test: { command: `sh ${scriptDefault} {token} {labels} {resume}` },
-			other: { command: `sh ${scriptOverride} {token} {labels} {resume}` },
+			test: { command: `sh ${scriptDefault} {fleet} {labels} {resume}` },
+			other: { command: `sh ${scriptOverride} {fleet} {labels} {resume}` },
 		},
 		defaultTemplate: "test",
 		workspaceDir: "/tmp/fleet-test-ws",
@@ -194,7 +211,7 @@ interface Harness {
 	statePath: string;
 	/** The base URL the callback daemon testkit dials (no /callback suffix). */
 	base: string;
-	/** The value children receive as OMP_SESSION_CALLBACK_URL. */
+	/** The callback URL the child receives in its stdin payload. */
 	callbackUrl: string;
 }
 
@@ -242,7 +259,7 @@ interface Fixture extends Harness {
 	argsFile: string;
 	envFile: string;
 	pidFile: string;
-	launchesFile: string;
+	payloadFile: string;
 }
 
 /** A harness whose template runs the standard fake child (writeChildScript) in a fresh dir. */
@@ -256,19 +273,22 @@ async function makeFixture(
 	const argsFile = join(dir, "args.txt");
 	const envFile = join(dir, "env.txt");
 	const pidFile = join(dir, "pid.txt");
-	const launchesFile = join(dir, "launches.txt");
-	const script = writeChildScript(dir, argsFile, { envFile, pidFile, launchesFile, ...child });
+	const payloadFile = join(dir, "payload.txt");
+	const script = writeChildScript(dir, argsFile, { envFile, pidFile, payloadFile, ...child });
 	const harness = await makeHarness(makeConfig(script), supOpts, deps);
-	return { ...harness, dir, argsFile, envFile, pidFile, launchesFile };
+	return { ...harness, dir, argsFile, envFile, pidFile, payloadFile };
 }
 
-/** Start the daemon half of the pair with the credential the child was launched with; waits for the pair. */
-async function pairDaemon(harness: Harness, env: Record<string, string>): Promise<CallbackDaemon> {
+/** Start the daemon half of the pair with the callback pair the child received on stdin; waits for the pair. */
+async function pairDaemon(
+	harness: Harness,
+	pair: FleetPayload["callback"],
+): Promise<CallbackDaemon> {
 	const daemon = startCallbackDaemon({
 		url: harness.base,
-		workspaceId: env.OMP_SESSION_CALLBACK_WORKSPACE,
-		generation: Number(env.OMP_SESSION_CALLBACK_GENERATION),
-		token: env.OMP_SESSION_CALLBACK_TOKEN,
+		workspaceId: pair.workspace,
+		generation: pair.generation,
+		token: pair.token,
 	});
 	cleanups.push(() => daemon.stop());
 	await daemon.waitConnected(5000);
@@ -320,8 +340,6 @@ function makeWorktreeRepo(dir: string): { main: string; wt: string } {
 	return { main, wt };
 }
 
-const TOKEN_ARG = /^[A-Za-z0-9_-]{43}$/;
-
 describe("SpawnSupervisor", () => {
 	test("spawn tags worktreeOf for a worktree cwd; a main checkout stays untagged", async () => {
 		const { main, wt } = makeWorktreeRepo(tempDir("omp-session-sup-wt-"));
@@ -358,7 +376,7 @@ describe("SpawnSupervisor", () => {
 		expect(registry.get(mainEntry.daemonId)!.worktreeOf).toBeUndefined();
 	});
 
-	test("spawn enrolls generation 1 and launches the child with the callback env; the entry holds no secret", async () => {
+	test("spawn enrolls generation 1 and launches the child with a stdin payload; the entry holds no secret", async () => {
 		const enrolled: string[] = [];
 		const fx = await makeFixture(
 			"omp-session-sup-env-",
@@ -369,13 +387,21 @@ describe("SpawnSupervisor", () => {
 
 		const entry = await fx.supervisor.spawn({ cwd: fx.dir, labels: ["env=prod"] });
 		expect(entry.project).toBe(basename(fx.dir));
-		const env = await waitForEnv(fx.envFile, 1);
-		expect(env.OMP_SESSION_CALLBACK_URL).toBe(fx.callbackUrl);
-		expect(env.OMP_SESSION_CALLBACK_WORKSPACE).toBe(entry.daemonId);
-		expect(env.OMP_SESSION_CALLBACK_GENERATION).toBe("1");
-		expect(env.OMP_SESSION_CALLBACK_TOKEN).toMatch(/^[0-9a-f]{64}$/);
-		expect(env.OMP_SESSION_CALLBACK_ALLOW_HTTP).toBe("1"); // loopback http callback
-		expect(env.OMP_SESSION_LOG_MIRROR).toBe("0");
+		const pair = await waitForPayload(fx.payloadFile, 1);
+		expect(pair.url).toBe(fx.callbackUrl);
+		expect(pair.workspace).toBe(entry.daemonId);
+		expect(pair.generation).toBe(1);
+		expect(pair.token).toMatch(/^[0-9a-f]{64}$/);
+		expect(pair.allowHttp).toBe(true); // loopback http callback
+		// The pair travels only on stdin: the env dump has the non-secret knob and no callback/token vars.
+		const envDump = await waitFor(
+			() => (existsSync(fx.envFile) ? readFileSync(fx.envFile, "utf8") : null),
+			5000,
+			"env dump",
+		);
+		expect(envDump).toContain("OMP_SESSION_LOG_MIRROR=0");
+		expect(envDump).not.toMatch(/OMP_SESSION_CALLBACK_/);
+		expect(envDump).not.toMatch(/OMP_SESSION_TOKEN=/);
 		expect(enrolled).toEqual([entry.daemonId]);
 
 		const current = fx.registry.get(entry.daemonId)!;
@@ -383,9 +409,9 @@ describe("SpawnSupervisor", () => {
 		expect(current.pid).toBeTypeOf("number");
 		// The registry keeps only the credential's digest, never the credential.
 		expect(current).not.toHaveProperty("token");
-		expect(JSON.stringify(current)).not.toContain(env.OMP_SESSION_CALLBACK_TOKEN);
+		expect(JSON.stringify(current)).not.toContain(pair.token);
 		expect(current.workspace?.enrollment?.generation).toBe(1);
-		expect(current.workspace?.enrollment?.credentialHash).not.toBe(env.OMP_SESSION_CALLBACK_TOKEN);
+		expect(current.workspace?.enrollment?.credentialHash).not.toBe(pair.token);
 		expect(current.workspace?.authorizedGeneration).toBe(1);
 		expect(fx.transport.pairStatus(entry.daemonId)).toMatchObject({
 			enrolled: true,
@@ -394,14 +420,16 @@ describe("SpawnSupervisor", () => {
 		});
 		const [line] = await waitForLaunches(fx.argsFile, 1);
 		expect(line).toContain("--label env=prod");
+		expect(line).toContain("--fleet-stdin");
+		expect(line).not.toContain(pair.token); // the credential never reaches argv
 	});
 
 	test("a daemon dialing with the child's credential pairs with the transport", async () => {
 		const fx = await makeFixture("omp-session-sup-pair-", {}, { restartMax: 2 });
 
 		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
-		const env = await waitForEnv(fx.envFile, 1);
-		const daemon = await pairDaemon(fx, env);
+		const pair = await waitForPayload(fx.payloadFile, 1);
+		const daemon = await pairDaemon(fx, pair);
 
 		expect(daemon.connected()).toBe(true);
 		expect(fx.transport.pairStatus(entry.daemonId)).toMatchObject({
@@ -442,7 +470,7 @@ describe("SpawnSupervisor", () => {
 		const fx = await makeFixture("omp-session-sup-snap-", {}, { restartMax: 2 });
 
 		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
-		await waitForEnv(fx.envFile, 1);
+		await waitForPayload(fx.payloadFile, 1);
 		const snap = fx.supervisor.snapshot()[entry.daemonId];
 		expect(snap).toBeDefined();
 		expect(snap?.restarts).toBe(0);
@@ -519,9 +547,9 @@ describe("SpawnSupervisor", () => {
 		);
 
 		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
-		await waitForEnv(fx.envFile, 1);
+		await waitForPayload(fx.payloadFile, 1);
 		await fx.supervisor.respawn(fx.registry.get(entry.daemonId)!);
-		await waitForEnv(fx.envFile, 2);
+		await waitForPayload(fx.payloadFile, 2);
 		await fx.supervisor.prune(entry.daemonId);
 		await waitFor(
 			() =>
@@ -552,19 +580,19 @@ describe("SpawnSupervisor", () => {
 		const fx = await makeFixture("omp-session-sup-regen-", {}, { restartMax: 2 });
 
 		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
-		const env1 = await waitForEnv(fx.envFile, 1);
-		const first = await pairDaemon(fx, env1);
+		const pair1 = await waitForPayload(fx.payloadFile, 1);
+		const first = await pairDaemon(fx, pair1);
 
 		await fx.supervisor.respawn(fx.registry.get(entry.daemonId)!);
-		const env2 = await waitForEnv(fx.envFile, 2);
-		expect(env2.OMP_SESSION_CALLBACK_WORKSPACE).toBe(entry.daemonId);
-		expect(env2.OMP_SESSION_CALLBACK_TOKEN).toMatch(/^[0-9a-f]{64}$/);
-		expect(env2.OMP_SESSION_CALLBACK_TOKEN).not.toBe(env1.OMP_SESSION_CALLBACK_TOKEN);
+		const pair2 = await waitForPayload(fx.payloadFile, 2);
+		expect(pair2.workspace).toBe(entry.daemonId);
+		expect(pair2.token).toMatch(/^[0-9a-f]{64}$/);
+		expect(pair2.token).not.toBe(pair1.token);
 		// Enrolling generation 2 revoked generation 1: the old pair is refused on redial.
 		await waitFor(() => first.rejection(), 5000, "generation 1 rejection");
 		expect(first.connected()).toBe(false);
 
-		await pairDaemon(fx, env2);
+		await pairDaemon(fx, pair2);
 		expect(fx.transport.pairStatus(entry.daemonId)).toMatchObject({
 			enrolled: true,
 			authorizedGeneration: 2,
@@ -585,10 +613,13 @@ describe("SpawnSupervisor", () => {
 		await fx.supervisor.respawn(fx.registry.get(entry.daemonId)!);
 		const lines = await waitForLaunches(fx.argsFile, 2);
 		expect(lines).toHaveLength(2);
-		expect(lines[0]).toMatch(TOKEN_ARG); // first spawn: no resume, bare token
+		expect(lines[0]).toBe("--fleet-stdin"); // first spawn: no resume, bare fleet flag
 		expect(lines[1]).toContain("--resume /srv/proj/sess.jsonl"); // R3 resume rule
-		expect(lines[1]?.split(" ")[0]).toMatch(TOKEN_ARG);
-		expect(lines[1]?.split(" ")[0]).not.toBe(lines[0]);
+		expect(lines[1]?.split(" ")[0]).toBe("--fleet-stdin");
+		const pair1 = await waitForPayload(fx.payloadFile, 1);
+		const pair2 = await waitForPayload(fx.payloadFile, 2);
+		expect(pair2.token).toMatch(/^[0-9a-f]{64}$/);
+		expect(pair2.token).not.toBe(pair1.token);
 	});
 
 	test("respawn with an explicit resumeFile resumes THAT file, not lastSessionFile", async () => {
@@ -608,6 +639,35 @@ describe("SpawnSupervisor", () => {
 		expect(lines).toHaveLength(2);
 		expect(lines[1]).toContain("--resume /chosen/other-session.jsonl");
 		expect(lines[1]).not.toContain("/srv/proj/sess.jsonl");
+		expect(lines[1]).not.toContain("--resume-unwritten");
+	});
+
+	test("respawn of a lastSessionFile the fleet never saw persisted resumes leniently (--resume-unwritten)", async () => {
+		const fx = await makeFixture("omp-session-sup-unknown-", {}, { restartMax: 2 });
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		await waitForLaunches(fx.argsFile, 1);
+		fx.registry.update(entry.daemonId, { lastSessionFile: "/srv/proj/sess.jsonl" });
+
+		await fx.supervisor.respawn(fx.registry.get(entry.daemonId)!);
+		const lines = await waitForLaunches(fx.argsFile, 2);
+		expect(lines[1]).toContain("--resume /srv/proj/sess.jsonl --resume-unwritten");
+	});
+
+	test("respawn of a lastSessionFile the daemon reported persisted resumes strictly (plain --resume)", async () => {
+		const fx = await makeFixture("omp-session-sup-persisted-", {}, { restartMax: 2 });
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		await waitForLaunches(fx.argsFile, 1);
+		fx.registry.update(entry.daemonId, {
+			lastSessionFile: "/srv/proj/sess.jsonl",
+			lastSessionPersisted: true,
+		});
+
+		await fx.supervisor.respawn(fx.registry.get(entry.daemonId)!);
+		const lines = await waitForLaunches(fx.argsFile, 2);
+		expect(lines[1]).toContain("--resume /srv/proj/sess.jsonl");
+		expect(lines[1]).not.toContain("--resume-unwritten");
 	});
 
 	test("respawn of a template-less asleep entry falls back to spawn's resolution and heals the entry", async () => {
@@ -630,10 +690,10 @@ describe("SpawnSupervisor", () => {
 		const lines = await waitForLaunches(fx.argsFile, 1);
 		expect(fx.registry.get(entry.daemonId)?.template).toBe("test"); // healed with the resolved name
 		expect(lines).toHaveLength(1);
-		expect(lines[0]).toMatch(TOKEN_ARG); // no lastSessionFile → fresh start, no --resume
+		expect(lines[0]).toBe("--fleet-stdin"); // no lastSessionFile → fresh start, no --resume
 		expect(lines[0]).not.toContain("--resume");
-		const env = await waitForEnv(fx.envFile, 1);
-		expect(env.OMP_SESSION_CALLBACK_WORKSPACE).toBe(entry.daemonId);
+		const pair = await waitForPayload(fx.payloadFile, 1);
+		expect(pair.workspace).toBe(entry.daemonId);
 	});
 
 	test("spawn with reuse wakes the checkout's existing row; a plain spawn adds a session", async () => {
@@ -696,7 +756,7 @@ describe("SpawnSupervisor", () => {
 		const config: FleetConfig = {
 			templates: {
 				test: {
-					command: `sh ${script} --cwd {cwd} --token {token} --name {name} {labels} {resume}`,
+					command: `sh ${script} --cwd {cwd} {fleet} --name {name} {labels} {resume}`,
 				},
 			},
 			defaultTemplate: "test",
@@ -720,12 +780,11 @@ describe("SpawnSupervisor", () => {
 		const args = readFileSync(argsFile, "utf8").split("\0").slice(0, -1);
 		expect(args[0]).toBe("--cwd");
 		expect(args[1]).toBe(weirdCwd);
-		expect(args[2]).toBe("--token");
-		expect(args[3]).toMatch(TOKEN_ARG);
-		expect(args[4]).toBe("--name");
-		expect(args[5]).toBe(trickyName);
-		expect(args[6]).toBe("--label");
-		expect(args[7]).toBe(`k=$(touch ${pwn})`);
+		expect(args[2]).toBe("--fleet-stdin");
+		expect(args[3]).toBe("--name");
+		expect(args[4]).toBe(trickyName);
+		expect(args[5]).toBe("--label");
+		expect(args[6]).toBe(`k=$(touch ${pwn})`);
 		expect(existsSync(pwn)).toBe(false);
 	});
 
@@ -788,10 +847,10 @@ describe("SpawnSupervisor", () => {
 			"error status",
 		);
 		expect(failed.error).toContain("exited");
-		const launches = readLines(fx.launchesFile).map((line) => line.split(" "));
-		expect(launches).toHaveLength(2);
-		expect(launches.map(([generation]) => generation)).toEqual(["1", "2"]);
-		expect(launches[0]?.[1]).not.toBe(launches[1]?.[1]); // fresh credential across attempts
+		const payloads = readLines(fx.payloadFile).map((line) => JSON.parse(line) as FleetPayload);
+		expect(payloads).toHaveLength(2);
+		expect(payloads.map((p) => p.callback.generation)).toEqual([1, 2]);
+		expect(payloads[0]?.callback.token).not.toBe(payloads[1]?.callback.token); // fresh credential across attempts
 		expect(readLines(fx.argsFile)).toHaveLength(2);
 		// The exhausted entry holds no live credential; the generation stays monotonic.
 		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
@@ -828,13 +887,13 @@ describe("SpawnSupervisor", () => {
 		);
 
 		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
-		const env1 = await waitForEnv(fx.envFile, 1);
-		await pairDaemon(fx, env1);
+		const pair1 = await waitForPayload(fx.payloadFile, 1);
+		await pairDaemon(fx, pair1);
 
 		// The paired child crashes; its restart is generation 2.
 		writeFileSync(crashFlag, "");
-		const env2 = await waitForEnv(fx.envFile, 2);
-		await pairDaemon(fx, env2);
+		const pair2 = await waitForPayload(fx.payloadFile, 2);
+		await pairDaemon(fx, pair2);
 		await waitFor(
 			() => (fx.supervisor.snapshot()[entry.daemonId]?.restarts === 0 ? "reset" : null),
 			5000,
@@ -880,6 +939,41 @@ describe("SpawnSupervisor", () => {
 		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
 	}, 20_000);
 
+	test("exit 78 (resume failed) never restarts: the entry sleeps carrying the child's last log line", async () => {
+		const reason =
+			"--resume /srv/proj/s.jsonl: session switch returned false; refusing to start fresh";
+		const events: Array<{ level: string; message: string }> = [];
+		const fx = await makeFixture(
+			"omp-session-sup-resume-failed-",
+			{
+				stderrLines: ["booting", `omp-session: ${reason}`],
+				exitCode: OMP_SESSION_EXIT_RESUME_FAILED,
+			},
+			{
+				restartMax: 5,
+				backoffMinMs: 20,
+				backoffMaxMs: 50,
+				onEvent: (level, message) => events.push({ level, message }),
+			},
+		);
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		const asleep = await waitFor(
+			() => {
+				const current = fx.registry.get(entry.daemonId);
+				return current?.status === "asleep" ? current : null;
+			},
+			10_000,
+			"asleep status",
+		);
+		expect(asleep.error).toBe(reason);
+		expect(events.some((e) => e.level === "error" && e.message === reason)).toBe(true);
+		expect(events.some((e) => /restart \d+\//.test(e.message))).toBe(false);
+		await sleep(150);
+		expect(readLines(fx.argsFile)).toHaveLength(1);
+		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+	}, 20_000);
+
 	test("a clean exit 0 puts the entry asleep without a restart", async () => {
 		const fx = await makeFixture(
 			"omp-session-sup-clean-",
@@ -902,9 +996,9 @@ describe("SpawnSupervisor", () => {
 		const fx = await makeFixture("omp-session-sup-stop-", {}, { restartMax: 2 });
 
 		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
-		const env = await waitForEnv(fx.envFile, 1);
+		const pair = await waitForPayload(fx.payloadFile, 1);
 		const pid = await waitForPid(fx.pidFile);
-		const daemon = await pairDaemon(fx, env);
+		const daemon = await pairDaemon(fx, pair);
 
 		await fx.supervisor.stop(entry.daemonId);
 
@@ -945,9 +1039,9 @@ describe("SpawnSupervisor", () => {
 		const fx = await makeFixture("omp-session-sup-close-", {}, { restartMax: 2 });
 
 		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
-		const env = await waitForEnv(fx.envFile, 1);
+		const pair = await waitForPayload(fx.payloadFile, 1);
 		const pid = await waitForPid(fx.pidFile);
-		const daemon = await pairDaemon(fx, env);
+		const daemon = await pairDaemon(fx, pair);
 
 		fx.supervisor.close();
 		await sleep(150);
@@ -1061,7 +1155,7 @@ describe("SpawnSupervisor", () => {
 		const entry = await supervisor.spawn({ cwd: projectDir });
 		const [line] = await waitForLaunches(argsOverride, 1);
 		expect(registry.get(entry.daemonId)?.template).toBe("other");
-		expect(line).toMatch(TOKEN_ARG);
+		expect(line).toBe("--fleet-stdin");
 		// The default-template child must never have launched.
 		expect(existsSync(argsDefault)).toBe(false);
 	});

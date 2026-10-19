@@ -88,13 +88,16 @@ export interface FleetConfig {
 }
 
 /**
- * Default local spawn template. `{labels}` expands to repeated `--label k=v`
- * args (empty string when no labels); `{resume}` expands to
- * `--resume <lastSessionFile>` when the daemon has one (empty otherwise);
- * the other placeholders are filled from the registry entry at spawn time.
+ * Default local spawn template. `{fleet}` expands to `--fleet-stdin`: the fleet writes the
+ * daemon's callback pair and listener token to its stdin, never to argv or env. `{labels}`
+ * expands to repeated `--label k=v` args (empty string when no labels). `{resume}` expands to
+ * `--resume <lastSessionFile>` when the daemon's file was persisted, else
+ * `--resume <lastSessionFile> --resume-unwritten` (a never-prompted session's path may not exist
+ * yet); empty when the daemon has none. The other placeholders are filled from the registry
+ * entry at spawn time.
  */
 export const DEFAULT_LOCAL_TEMPLATE: SpawnTemplate = {
-	command: "omp-web session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
+	command: "omp-web session --cwd {cwd} --port 0 {fleet} --name {name} {labels} {resume}",
 };
 
 /** Default worktree creation directory under the consolidated home data dir. */
@@ -148,6 +151,21 @@ export async function loadConfig(
 	const localCommand = process.env.OMP_FLEET_LOCAL_TEMPLATE;
 	if (localCommand !== undefined && localCommand !== "") {
 		config.templates = { ...config.templates, local: { command: localCommand } };
+	}
+	// Every template hands its daemon the callback pair and listener token on stdin (`{fleet}`):
+	// a `{token}` placeholder would put the listener token in argv, visible to every local user,
+	// and a template without `{fleet}` would start a daemon that never pairs.
+	for (const [name, template] of Object.entries(config.templates)) {
+		if (template.command.includes("{token}")) {
+			throw new Error(
+				`fleet template "${name}" uses {token}; replace \`--token {token}\` with {fleet} (the token travels on --fleet-stdin)`,
+			);
+		}
+		if (!template.command.includes("{fleet}")) {
+			throw new Error(
+				`fleet template "${name}" lacks {fleet}; add {fleet} (expands to --fleet-stdin) so the daemon reads its callback pair from stdin`,
+			);
+		}
 	}
 	// Env `OMP_FLEET_WORKSPACE_DIR` wins over the config-file value AND over
 	// defaults, applied here in loadConfig, not inside mergeConfig, so the

@@ -6,8 +6,8 @@
  * configured spawn templates (bun apps/session/index.ts). Every daemon dials
  * OUT to the fleet's callback pair (/callback/up, /callback/down); the fleet
  * never dials a daemon. The supervisor enrolls each launch (workspaceId ===
- * daemonId, generation bumps per launch, credential in
- * OMP_SESSION_CALLBACK_TOKEN, digest persisted in entry.workspace.enrollment),
+ * daemonId, generation bumps per launch, credential on the --fleet-stdin payload,
+ * digest persisted in entry.workspace.enrollment),
  * runs the child detached, and appends its output to
  * <state dir>/session-logs/<daemonId>.log.
  *
@@ -52,6 +52,7 @@ import {
 	openSync,
 	readdirSync,
 	readFileSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -80,9 +81,11 @@ const PROVIDER_ENV_SCRUB = PROVIDER_ENV_SCRUB_STR === "" ? "" : `env ${PROVIDER_
 
 /**
  * Built in beforeAll because the paths derive from the suite tmp dir. {name}
- * and {labels}/{resume} expand per daemon in the fleet templates. The callback
- * credential rides the child environment (set by the supervisor), not the
- * template.
+ * and {labels}/{resume} expand per daemon in the fleet templates. {fleet} expands
+ * to --fleet-stdin: the supervisor writes the callback pair and listener token to
+ * the child's stdin. Each template tees that payload to handoff-{name}.json (0600,
+ * suite tmp dir) so the suite can read the enrolled credential without it ever
+ * entering the daemon's environment or argv.
  */
 let LOCAL_TEMPLATE = "";
 let SHORTIDLE_TEMPLATE = "";
@@ -277,10 +280,10 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		// Hermetic per-daemon agent dir ({name} expands per daemon): no auth and
 		// no model cache, so no model is selectable and every prompt times out.
 		const hermeticEnv = `${PROVIDER_ENV_SCRUB}PI_CODING_AGENT_DIR=${join(tmp, "agent-{name}")} PI_AUTH_NO_BORROW=1`;
-		LOCAL_TEMPLATE = `${hermeticEnv} bun ${SESSION_ENTRY} --cwd {cwd} --port 0 --name {name} {labels} {resume}`;
+		LOCAL_TEMPLATE = `umask 077; tee ${join(tmp, "handoff-{name}.json")} | ${hermeticEnv} bun ${SESSION_ENTRY} --cwd {cwd} --port 0 {fleet} --name {name} {labels} {resume}`;
 		// Short-idle variant pins the test-only idle-check knob (500ms tick) so the
 		// idle lifecycle runs in seconds.
-		SHORTIDLE_TEMPLATE = `OMP_SESSION_TEST_IDLE_CHECK_MS=500 ${hermeticEnv} bun ${SESSION_ENTRY} --cwd {cwd} --port 0 --name {name} --idle-timeout 2s {labels} {resume}`;
+		SHORTIDLE_TEMPLATE = `umask 077; tee ${join(tmp, "handoff-{name}.json")} | OMP_SESSION_TEST_IDLE_CHECK_MS=500 ${hermeticEnv} bun ${SESSION_ENTRY} --cwd {cwd} --port 0 {fleet} --name {name} --idle-timeout 2s {labels} {resume}`;
 		const projectsRoot = join(tmp, "projects");
 		projDirs = [
 			join(projectsRoot, "proj-a"),
@@ -420,12 +423,22 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		const before = (await getEntry(d2.daemonId))!;
 		const enrollmentBefore = getPersistedEntry(d2.daemonId).workspace!.enrollment!;
 		const oldProc = daemonProc("d-two");
-		// The credential the old child dialed with, read from its environment.
-		const oldToken = readFileSync(`/proc/${oldProc.pid}/environ`, "utf8")
-			.split("\0")
-			.find((e) => e.startsWith("OMP_SESSION_CALLBACK_TOKEN="))
-			?.slice("OMP_SESSION_CALLBACK_TOKEN=".length);
+		// The credential the old child dialed with, from the tee'd --fleet-stdin payload
+		// (0600, suite tmp dir). The daemon's environment and argv must not carry it.
+		const handoffFile = join(tmp, "handoff-d-two.json");
+		expect(statSync(handoffFile).mode & 0o777).toBe(0o600);
+		const handoff = JSON.parse(readFileSync(handoffFile, "utf8")) as {
+			callback: { token: string };
+		};
+		const oldToken = handoff.callback.token;
 		expect(oldToken).toMatch(/^[0-9a-f]{64}$/);
+		const oldEnviron = readFileSync(`/proc/${oldProc.pid}/environ`, "utf8").split("\0");
+		expect(
+			oldEnviron.some(
+				(e) => e.startsWith("OMP_SESSION_CALLBACK_") || e.startsWith("OMP_SESSION_TOKEN="),
+			),
+		).toBe(false);
+		expect(readFileSync(`/proc/${oldProc.pid}/cmdline`, "utf8")).not.toContain(oldToken);
 		process.kill(oldProc.pid, "SIGKILL");
 		// The relaunch enrolls a new generation and returns to ready once its pair forms.
 		await waitUntil(

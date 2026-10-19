@@ -1,4 +1,5 @@
 import { open, readdir, realpath, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { discoverAuthStorage, ModelRegistry } from "@oh-my-pi/pi-coding-agent";
@@ -27,6 +28,7 @@ import {
 	COMMAND_DEDUP_ID_CAP,
 	COMMAND_DEDUP_WINDOW_MS,
 	OMP_PROTO,
+	OMP_SESSION_EXIT_RESUME_FAILED,
 	OMP_SESSION_EXIT_SESSION_LOCKED,
 	OMP_SESSION_PREFIX,
 	SSE_BACKPRESSURE_BYTES,
@@ -38,7 +40,7 @@ import { encodeSseEvent } from "#lib/wire/sse";
 import { acquireFileLock, LockHeldError } from "#lib/platform/file-lock";
 import type { FileLock } from "#lib/platform/file-lock";
 import { isLoopbackHost } from "#lib/platform/hosts";
-import { parseConfig, type SessionConfig } from "./config";
+import { parseConfig, parseFleetStdin, type SessionConfig } from "./config";
 import {
 	discardAllStagedHtml,
 	isDownloadBulkCommand,
@@ -120,7 +122,12 @@ import { initSettings } from "./settings-boot";
 
 let config: SessionConfig;
 try {
-	config = parseConfig(process.argv.slice(2));
+	const argv = process.argv.slice(2);
+	// The fleet hands the callback pair and listener token over stdin, never env or argv.
+	const fleet = argv.includes("--fleet-stdin")
+		? parseFleetStdin(await Bun.stdin.text())
+		: undefined;
+	config = parseConfig(argv, fleet);
 } catch (err) {
 	console.error(`omp-session: ${String(err)}`);
 	process.exit(1);
@@ -128,26 +135,7 @@ try {
 // Non-loopback bind without a token is a startup hard error (R14).
 if (!isLoopbackHost(config.host) && !config.token) {
 	console.error(
-		`omp-session: refusing to bind non-loopback address "${config.host}" without a token; pass --token or set OMP_SESSION_TOKEN`,
-	);
-	process.exit(1);
-}
-// Callback transport (P3.2): the flags that define a callback pair must
-// arrive together; a partial set is a visible startup error, never a silent
-// partial pair (a pair without its enrollment credential would dial and
-// 401 forever; a URL without a workspace binds nothing). callbackProxy and
-// callbackAllowHttp are optional refinements of an already-complete pair.
-const callbackPairFields = [
-	["callbackUrl", config.callbackUrl !== undefined],
-	["callbackWorkspace", config.callbackWorkspace !== undefined],
-	["callbackGeneration", config.callbackGeneration !== undefined],
-	["callbackToken", config.callbackToken !== undefined],
-] as const;
-const missingCallback = callbackPairFields.filter(([, present]) => !present).map(([name]) => name);
-if (missingCallback.length > 0 && missingCallback.length < callbackPairFields.length) {
-	console.error(
-		"omp-session: callback transport flags must be provided together",
-		`missing: ${missingCallback.join(", ")}`,
+		`omp-session: refusing to bind non-loopback address "${config.host}" without a token; pass --token or supply it in the --fleet-stdin payload`,
 	);
 	process.exit(1);
 }
@@ -1037,6 +1025,20 @@ function acquireSessionLock(file: string | undefined): void {
 	}
 }
 
+// A strict --resume names a transcript that must already exist. A missing one is
+// refused here, before the lock and before bind, so no listening line prints and
+// no .lock is left behind. --resume-unwritten opts into adopting the path instead
+// (a never-prompted session keeps its identity). Only the flag is strict; the
+// OMP_SESSION_RESUME env fallback stays lenient.
+if (
+	config.resumeStrict &&
+	config.resume &&
+	path.isAbsolute(config.resume) &&
+	!existsSync(config.resume)
+) {
+	console.error(`omp-session: --resume ${config.resume}: session file not found`);
+	process.exit(OMP_SESSION_EXIT_RESUME_FAILED);
+}
 // Lock the --resume session file BEFORE bind, so a second omp-session
 // pointed at the same file exits before printing its listening line: a
 // spawner never resolves an endpoint (or dials) for a daemon that cannot
@@ -1307,19 +1309,25 @@ bootSession.session.sessionManager.onPersistenceNotice((notice) => {
 	});
 });
 if (config.resume) {
+	const resumeFile = config.resume;
+	let failure: string | undefined;
 	try {
-		const ok = await bootEntry.session.switchSession(config.resume);
-		if (ok) {
-			clearSubagents(bootEntry);
-			await daemonBroker.broadcastAvailableCommands(bootEntry);
-		} else {
-			console.error(
-				`omp-session: --resume ${config.resume}: session switch returned false; starting fresh${await resumeCwdNote(config.resume, config.cwd)}`,
-			);
+		if (!(await bootEntry.session.switchSession(resumeFile))) {
+			failure = "session switch returned false";
 		}
 	} catch (err) {
-		console.error(`omp-session: --resume ${config.resume} failed (${String(err)}); starting fresh`);
+		failure = `session switch threw (${String(err)})`;
 	}
+	if (failure !== undefined) {
+		// Refuse rather than boot fresh: the fleet sees exit 78 (deterministic,
+		// no retry) and no state frame, because the callback pair starts later.
+		console.error(
+			`omp-session: --resume ${resumeFile}: ${failure}; refusing to start fresh${await resumeCwdNote(resumeFile, config.cwd)}`,
+		);
+		await shutdown(OMP_SESSION_EXIT_RESUME_FAILED);
+	}
+	clearSubagents(bootEntry);
+	await daemonBroker.broadcastAvailableCommands(bootEntry);
 }
 // collab.autoStart: host the boot session through the relay. Refused with a reason
 // (logged and sent to clients) when no collab.relayUrl is set. Not awaited, so a slow
@@ -1679,8 +1687,9 @@ function clearControlGrace(): void {
 }
 
 // Graceful shutdown: dispose the boot session via closeSession (beginDispose
-// is the sync admission barrier; dispose is idempotent), then exit.
-async function shutdown(): Promise<void> {
+// is the sync admission barrier; dispose is idempotent), then exit with
+// exitCode (0 for a signal; a refused --resume passes its failure code).
+async function shutdown(exitCode = 0): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	if (idleTimer) clearInterval(idleTimer);
@@ -1701,5 +1710,5 @@ async function shutdown(): Promise<void> {
 	// Run the SDK's registered postmortem cleanup callbacks (browser/pty/MCP
 	// teardown etc.) without exiting; the exit is ours below.
 	await postmortemCleanup().catch(() => {});
-	process.exit(0);
+	process.exit(exitCode);
 }

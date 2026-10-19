@@ -133,7 +133,23 @@ export const ENV_DENY_KEYS: readonly string[] = [
 ];
 
 /**
- * Env keys a sandboxed omp-session needs (callback flags, locale). This is
+ * Callback-pair env keys (the fleet's `OMP_SESSION_CALLBACK_*` handoff). They
+ * NEVER enter a sandbox environment: the provider converts them into the
+ * daemon's `--fleet-stdin` payload (lib/runtime/fleet-stdin.ts), so the daemon
+ * process never carries them in its env. Providers also gate their handoff
+ * files on this list.
+ */
+export const FLEET_CALLBACK_ENV_KEYS: readonly string[] = [
+	"OMP_SESSION_CALLBACK_URL",
+	"OMP_SESSION_CALLBACK_WORKSPACE",
+	"OMP_SESSION_CALLBACK_GENERATION",
+	"OMP_SESSION_CALLBACK_TOKEN",
+	"OMP_SESSION_CALLBACK_PROXY",
+	"OMP_SESSION_CALLBACK_ALLOW_HTTP",
+];
+
+/**
+ * Env keys a sandboxed omp-session needs (locale, session selection). This is
  * the ONLY ambient-env passthrough: anything absent here cannot enter the
  * sandbox from the operator environment. Credential-shaped keys
  * (PI_AUTH_*, PI_PROFILE, PI_CONFIG_DIR) were intentionally REMOVED; they
@@ -151,12 +167,6 @@ export const ENV_ALLOW_KEYS: readonly string[] = [
 	"OMP_SESSION",
 	"OMP_SESSION_LISTEN",
 	"OMP_SESSION_ENDPOINT",
-	"OMP_SESSION_CALLBACK_URL",
-	"OMP_SESSION_CALLBACK_WORKSPACE",
-	"OMP_SESSION_CALLBACK_GENERATION",
-	"OMP_SESSION_CALLBACK_TOKEN",
-	"OMP_SESSION_CALLBACK_PROXY",
-	"OMP_SESSION_CALLBACK_ALLOW_HTTP",
 	// P8.9 wake-resume: fleet-written absolute main-session path; the daemon
 	// resumes it at boot (server/config.ts reads OMP_SESSION_RESUME). Rides
 	// the callback-env handoff, never the ambient environment.
@@ -173,15 +183,9 @@ export const ENV_ALLOW_KEYS: readonly string[] = [
 /** Keys with a fixed sandbox meaning that a secretRef may never override. */
 export const RESERVED_SECRET_ENV_KEYS: readonly string[] = [
 	...ENV_ALLOW_KEYS,
-	// Env-name shape guard is applied on top; these are the callback/user
-	// credential keys that must only ever enter via `callback-env.json` or
+	// Callback keys must only ever enter via `callback-env.json` (provider) or
 	// explicit secretRefs (see provider), never via the request JSON.
-	"OMP_SESSION_CALLBACK_URL",
-	"OMP_SESSION_CALLBACK_WORKSPACE",
-	"OMP_SESSION_CALLBACK_GENERATION",
-	"OMP_SESSION_CALLBACK_TOKEN",
-	"OMP_SESSION_CALLBACK_PROXY",
-	"OMP_SESSION_CALLBACK_ALLOW_HTTP",
+	...FLEET_CALLBACK_ENV_KEYS,
 ];
 
 const DEFAULT_PATH = "/run/current-system/sw/bin:/usr/bin:/bin";

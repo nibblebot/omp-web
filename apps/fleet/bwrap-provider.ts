@@ -53,7 +53,8 @@ import {
 } from "#lib/runtime/provider-protocol";
 import type { ProviderErrorCode } from "#lib/runtime/provider-protocol";
 import { acquireFileLock } from "#lib/platform/file-lock";
-import { ENV_ALLOW_KEYS, buildBwrapArgv } from "#lib/runtime/bwrap-args";
+import { FLEET_CALLBACK_ENV_KEYS, buildBwrapArgv } from "#lib/runtime/bwrap-args";
+import { buildFleetStdinPayload } from "#lib/runtime/fleet-stdin";
 import { defaultDenyRoots, defaultRuntimeLaunch, type RuntimeLaunch } from "./runtime-launch";
 
 /** The provider's own pidfile record (superset of the shared identity shape). */
@@ -236,32 +237,29 @@ async function waitForLiveRecord(
 // Callback enrollment handoff (fleet-written, provider-read)
 // ---------------------------------------------------------------------------
 
-/** Env key prefix the fleet may hand over for the sandbox callback pair. */
-const CALLBACK_ENV_PREFIX = "OMP_SESSION_CALLBACK_";
-/** P8.9 wake-resume: a fleet-written absolute main-session path (not under
- *  the CALLBACK_ prefix, but allowlisted and daemon-consumed at boot). */
+/** P8.9 wake-resume: a fleet-written absolute main-session path (not a
+ *  callback key, but allowlisted and daemon-consumed at boot). */
 const RESUME_ENV_KEY = "OMP_SESSION_RESUME";
 
 function isCallbackEnvKey(key: string): boolean {
-	// The callback pair's enrollment keys OR the wake-resume hint, both gated
-	// by ENV_ALLOW_KEYS membership so nothing outside the allowlist can ride
-	// the handoff file (P5.5).
-	return (
-		key === RESUME_ENV_KEY || (key.startsWith(CALLBACK_ENV_PREFIX) && ENV_ALLOW_KEYS.includes(key))
-	);
+	// The callback pair's enrollment keys OR the wake-resume hint, both from a
+	// closed list so nothing outside it can ride the handoff file (P5.5).
+	return key === RESUME_ENV_KEY || FLEET_CALLBACK_ENV_KEYS.includes(key);
 }
 
 /**
  * Read the fleet's callback enrollment handoff (`<stateDir>/callback-env.json`,
- * written 0600 before ensure-running). Returns the env entries to inject into
- * the sandbox, or null when the file is absent (a spawn without callback
- * flags is still allowed, stop-only management must not break).
+ * written 0600 before ensure-running). Returns the callback pair as the
+ * `OMP_SESSION_CALLBACK_*` env shape (converted to the daemon's `--fleet-stdin`
+ * payload at spawn), or null when the file is absent (a spawn without a pair is
+ * still allowed, stop-only management must not break).
  *
- * Strictness (P5.5): only known `OMP_SESSION_CALLBACK_*` keys pass; values
- * are bounded non-empty strings; the file's workspaceId and generation must
- * equal the request's: a new generation must never start under a stale
- * enrollment. Corrupt files throw `unavailable` (the fleet rewrites and
- * retries); identity mismatches throw `conflict`.
+ * Strictness (P5.5): only known callback keys pass and the pair must be whole
+ * (buildFleetStdinPayload validates it); values are bounded non-empty strings;
+ * the file's workspaceId and generation must equal the request's: a new
+ * generation must never start under a stale enrollment. Corrupt files throw
+ * `unavailable` (the fleet rewrites and retries); identity mismatches throw
+ * `conflict`.
  */
 function readCallbackEnv(
 	stateDir: string,
@@ -337,6 +335,17 @@ function readCallbackEnv(
 			throw ProviderProtocolError.unavailable(`${CALLBACK_ENV_FILE}.env.${key} exceeds 4096 bytes`);
 		}
 		env[key] = entry;
+	}
+	// A partial pair must never reach the daemon: validate the whole pair here.
+	if (FLEET_CALLBACK_ENV_KEYS.some((key) => env[key] !== undefined)) {
+		try {
+			buildFleetStdinPayload(env);
+		} catch (cause) {
+			throw ProviderProtocolError.unavailable(
+				`${CALLBACK_ENV_FILE} callback pair is incomplete or invalid`,
+				{ cause },
+			);
+		}
 	}
 	return env;
 }
@@ -488,7 +497,8 @@ function spawnSupervisor(
 		callbackEnv,
 		secretEnvKeys: Object.keys(secretEnv),
 	};
-	writeFileSync(join(stateDir, SUPERVISE_FILE), `${JSON.stringify(spec)}\n`);
+	// Carries the callback token and workspace token: owner-only.
+	writeFileSync(join(stateDir, SUPERVISE_FILE), `${JSON.stringify(spec)}\n`, { mode: 0o600 });
 	const providerScript = process.argv[1];
 	if (providerScript === undefined || providerScript === "") {
 		throw new Error("cannot resolve the provider script path for the supervisor");
@@ -509,6 +519,15 @@ function recordSuperviseError(stateDir: string, message: string): void {
 	}
 }
 
+/**
+ * The daemon's `--fleet-stdin` payload for a handed-over callback pair, or
+ * undefined when the handoff carries no pair (the daemon then gets no flag).
+ */
+function fleetStdinFor(callbackEnv: Record<string, string>): string | undefined {
+	if (!FLEET_CALLBACK_ENV_KEYS.some((key) => callbackEnv[key] !== undefined)) return undefined;
+	return buildFleetStdinPayload(callbackEnv);
+}
+
 /** Supervisor entry: owns the sandbox until it exits; writes the pidfile. */
 async function runSupervisor(stateDir: string): Promise<number> {
 	let spec: SuperviseSpec;
@@ -523,7 +542,11 @@ async function runSupervisor(stateDir: string): Promise<number> {
 	const { request } = spec;
 
 	let built;
+	let fleetStdin: string | undefined;
 	try {
+		// The callback pair reaches the daemon over stdin (--fleet-stdin), never
+		// its environment. No pair means no flag, and the daemon never reads stdin.
+		fleetStdin = fleetStdinFor(spec.callbackEnv);
 		built = buildBwrapArgv({
 			workspaceDir: request.workspaceDir,
 			homeDir: request.homeDir,
@@ -531,11 +554,12 @@ async function runSupervisor(stateDir: string): Promise<number> {
 			workspaceToken: spec.workspaceToken,
 			runtimeEntry: spec.runtimeEntry,
 			runtimeBin: spec.runtimeBin,
-			runtimeArgs: spec.runtimeArgs,
+			runtimeArgs:
+				fleetStdin === undefined ? spec.runtimeArgs : [...spec.runtimeArgs, "--fleet-stdin"],
 			bwrapBin: spec.bwrapBin,
 			denyRoots: defaultDenyRoots(process.env),
-			// The fleet-written callback enrollment rides only the env
-			// allowlist path, never the request JSON (P5.5).
+			// The handoff env carries OMP_SESSION_RESUME (allowlisted). The callback
+			// pair is not allowlisted, so it never enters the sandbox environment.
 			env: { ...process.env, ...spec.callbackEnv },
 			// The provider's secret refs resolved to concrete values (only
 			// key names ride the sidecar; values live in this process env).
@@ -549,10 +573,14 @@ async function runSupervisor(stateDir: string): Promise<number> {
 		return 1;
 	}
 
+	// stdin is always a pipe: the payload is written, then closed (EOF when there
+	// is no pair). The daemon reads it only when started with --fleet-stdin.
 	const proc = Bun.spawn(built.argv, {
 		env: built.env,
-		stdio: ["ignore", "ignore", "pipe"],
+		stdio: ["pipe", "ignore", "pipe"],
 	});
+	if (fleetStdin !== undefined) proc.stdin.write(fleetStdin);
+	proc.stdin.end();
 
 	// Bounded stderr capture (human log, never parsed): keep the last chunk
 	// so an early bwrap death surfaces the REAL reason (e.g. "Can't find

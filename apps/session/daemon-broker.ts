@@ -171,6 +171,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			followUpMode: session.followUpMode,
 			interruptMode: session.interruptMode,
 			sessionFile: session.sessionFile,
+			...(session.sessionManager.isSessionOnDisk() ? { sessionPersisted: true as const } : {}),
 			sessionId: session.sessionId,
 			readyAt: deps.getReadyAt() ?? undefined,
 			sessionName: session.sessionName,

@@ -516,4 +516,35 @@ describe("edge pipe session file over the callback pair", () => {
 			await rig.close();
 		}
 	});
+
+	test("a state frame's sessionPersisted marks the session file known persisted, and a changed file clears the mark", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "session-persisted");
+			remote.daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+				type: "state",
+				state: { sessionFile: "/sessions/kept.jsonl", sessionPersisted: true },
+			});
+			await waitFor(
+				() => (rig.registry.get(remote.daemonId)?.lastSessionPersisted === true ? true : null),
+				3000,
+				"lastSessionPersisted kept",
+			);
+			remote.daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+				type: "state",
+				state: { sessionFile: "/sessions/other.jsonl" },
+			});
+			await waitFor(
+				() =>
+					rig.registry.get(remote.daemonId)?.lastSessionFile === "/sessions/other.jsonl"
+						? true
+						: null,
+				3000,
+				"lastSessionFile other",
+			);
+			expect(rig.registry.get(remote.daemonId)?.lastSessionPersisted).toBeUndefined();
+		} finally {
+			await rig.close();
+		}
+	});
 });

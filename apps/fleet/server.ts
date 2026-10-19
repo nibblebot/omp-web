@@ -1034,7 +1034,7 @@ class FleetServerImpl implements FleetServer {
 	#callbackUrl(): string {
 		// Explicit operator override wins; otherwise derive from the fleet's
 		// own bind+port (loopback http for a loopback bind, which the daemon
-		// accepts under OMP_SESSION_CALLBACK_ALLOW_HTTP=1).
+		// accepts when its --fleet-stdin payload sets callback.allowHttp).
 		const explicit = process.env.OMP_FLEET_CALLBACK_URL;
 		if (explicit !== undefined && explicit !== "") return explicit.replace(/\/+$/, "");
 		return `http://${this.config.bind}:${this.port}`;

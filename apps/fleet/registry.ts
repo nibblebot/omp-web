@@ -184,6 +184,13 @@ export interface RegistryEntry extends DaemonEntry {
 	/** True when the daemon's last session file has no messages (new/empty session);
 	 *  set alongside sessionTitle by the supervisor's git-state polling probe. */
 	sessionEmpty?: boolean;
+	/**
+	 * True once the daemon reported (`state.sessionPersisted`) that `lastSessionFile`
+	 * is on disk. Absent means unknown or not yet written: a relaunch then adopts the
+	 * path (`--resume-unwritten`) instead of failing strictly. Reset whenever
+	 * lastSessionFile changes.
+	 */
+	lastSessionPersisted?: true;
 	/** Spawned entries: the template name they were spawned from. */
 	template?: string;
 	registeredAt: number;

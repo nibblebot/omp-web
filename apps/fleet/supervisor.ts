@@ -14,9 +14,11 @@
  *
  * Exit policy: exit 0 (a session that shut itself down, e.g. its control
  * grace expired) → "asleep", no restart. Exit OMP_SESSION_EXIT_SESSION_LOCKED
- * (the session file is open in another omp-session): deterministic, so no
- * restart; the entry goes "asleep" carrying the child's last log line as its
- * reason. Any other unexpected exit restarts with a FRESH credential, bounded
+ * (the session file is open in another omp-session) or
+ * OMP_SESSION_EXIT_RESUME_FAILED (its --resume session cannot be restored):
+ * deterministic, so no restart; the entry goes "asleep" carrying the child's
+ * last log line as its reason. Any other unexpected exit restarts with a FRESH
+ * credential, bounded
  * backoff 1s→30s jittered, at most restartMax (default 5) restarts between
  * pair-ups, then status "error". respawn()/stop() are the intentional paths:
  * respawn uses `{resume} = "--resume <lastSessionFile>"` when the session has
@@ -44,7 +46,11 @@ import {
 	ENROLLMENT_KEY_BYTES,
 	type ShutdownControl,
 } from "#lib/wire/callback-protocol";
-import { OMP_SESSION_EXIT_SESSION_LOCKED, type RegisteredProject } from "#lib/wire/protocol";
+import {
+	OMP_SESSION_EXIT_RESUME_FAILED,
+	OMP_SESSION_EXIT_SESSION_LOCKED,
+	type RegisteredProject,
+} from "#lib/wire/protocol";
 import type { FleetConfig, SpawnTemplate } from "./config";
 import { fillTemplate, shellQuote } from "./spawn-parse";
 import type { DaemonTransportRegistry } from "./daemon-transport";
@@ -60,7 +66,7 @@ import {
 } from "./worktrees";
 import type { FleetLogLevel } from "./events";
 
-type Child = Subprocess<"ignore", number, number>;
+type Child = Subprocess<"pipe", number, number>;
 
 /** A session's callback credential for one generation (the raw token is handed to the child once). */
 export interface SessionEnrollment {
@@ -113,8 +119,7 @@ const RESTART_BACKOFF_MIN_MS = 1_000;
 const RESTART_BACKOFF_MAX_MS = 30_000;
 const DEFAULT_SYNC_INTERVAL_MS = 10_000;
 const ASLEEP_SYNC_INTERVAL_MS = 60_000;
-const LOCKED_REASON_FALLBACK =
-	"session file is locked by another omp-session; close it there and retry";
+const DETERMINISTIC_EXIT_FALLBACK = "session refused to run and will not be retried";
 
 /** Jittered exponential backoff: base = min(max, min·2^attempt), ±50%. */
 function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
@@ -228,25 +233,39 @@ export async function requestSessionShutdown(
 }
 
 /**
- * The child's environment with the callback-pair vars (C5). Inherited
- * OMP_SESSION_CALLBACK_* values are stripped first so an ambient fleet
- * environment can never leak into a child's callback target. ALLOW_HTTP is
- * set only for an http callback URL (loopback http; the daemon refuses
- * anything else).
+ * The `--fleet-stdin` payload for one child: the daemon's only source of its callback pair and
+ * listener token, so neither reaches its argv or environment. `allowHttp` is set only for an http
+ * callback URL (the daemon honors it for loopback hosts only).
  */
-export function withCallbackEnv(
-	base: Record<string, string | undefined>,
+export function fleetStdinPayload(
 	callback: { url: string; daemonId: string; enrollment: SessionEnrollment },
-): Record<string, string> {
+	listenerToken: string,
+): string {
+	const httpCallback = new URL(callback.url).protocol === "http:";
+	return JSON.stringify({
+		v: 1,
+		callback: {
+			url: callback.url,
+			workspace: callback.daemonId,
+			generation: callback.enrollment.generation,
+			token: callback.enrollment.credential,
+			...(httpCallback ? { allowHttp: true } : {}),
+		},
+		token: listenerToken,
+	});
+}
+
+/**
+ * The child's inherited environment with the fleet's own secrets removed: an ambient
+ * OMP_SESSION_CALLBACK_* or OMP_SESSION_TOKEN never reaches a child.
+ */
+function inheritedChildEnv(base: Record<string, string | undefined>): Record<string, string> {
 	const env: Record<string, string> = {};
 	for (const [key, value] of Object.entries(base)) {
-		if (value !== undefined && !key.startsWith("OMP_SESSION_CALLBACK_")) env[key] = value;
+		if (value === undefined) continue;
+		if (key.startsWith("OMP_SESSION_CALLBACK_") || key === "OMP_SESSION_TOKEN") continue;
+		env[key] = value;
 	}
-	env.OMP_SESSION_CALLBACK_URL = callback.url;
-	env.OMP_SESSION_CALLBACK_WORKSPACE = callback.daemonId;
-	env.OMP_SESSION_CALLBACK_GENERATION = String(callback.enrollment.generation);
-	env.OMP_SESSION_CALLBACK_TOKEN = callback.enrollment.credential;
-	if (new URL(callback.url).protocol === "http:") env.OMP_SESSION_CALLBACK_ALLOW_HTTP = "1";
 	return env;
 }
 
@@ -833,32 +852,41 @@ export class SpawnSupervisor {
 		// validates it belongs to the worktree before it ever gets here).
 		const resumeFile =
 			opts.resumeFile && opts.resumeFile.trim() !== "" ? opts.resumeFile : entry.lastSessionFile;
-		const resumeArg = opts.resume && resumeFile ? `--resume ${shellQuote(resumeFile)}` : "";
+		// Strict unless the file is known unwritten: an explicit pick, or a file the daemon
+		// reported persisted, must exist (a missing one exits 78). Otherwise a never-prompted
+		// session's recorded path may not exist yet, so the daemon adopts it (identity kept).
+		const resumeStrict =
+			(opts.resumeFile !== undefined && opts.resumeFile.trim() !== "") ||
+			entry.lastSessionPersisted === true;
+		const resumeArg =
+			opts.resume && resumeFile
+				? `--resume ${shellQuote(resumeFile)}${resumeStrict ? "" : " --resume-unwritten"}`
+				: "";
 		const command = fillTemplate(template.command, {
 			cwd: shellQuote(entry.cwd),
-			token: shellQuote(token),
+			fleet: "--fleet-stdin",
 			name: shellQuote(entry.name),
 			labels: labelsArg,
 			resume: resumeArg,
 		});
+		const stdinPayload = fleetStdinPayload(
+			{ url: this.#deps.callbackUrl(), daemonId, enrollment },
+			token,
+		);
 		const logPath = this.#logPath(daemonId);
 		mkdirSync(dirname(logPath), { recursive: true });
 		const logFd = openSync(logPath, "a");
 		let child: Child;
 		try {
 			// Detached: its own session and process group, so a terminal
-			// Ctrl+C never reaches the child; stdin is closed.
+			// Ctrl+C never reaches the child; stdin carries the --fleet-stdin payload (written below).
 			child = Bun.spawn(["sh", "-c", command], {
-				stdin: "ignore",
+				stdin: "pipe",
 				stdout: logFd,
 				stderr: logFd,
 				detached: true,
 				env: {
-					...withCallbackEnv(process.env, {
-						url: this.#deps.callbackUrl(),
-						daemonId,
-						enrollment,
-					}),
+					...inheritedChildEnv(process.env),
 					OMP_SESSION_LOG_MIRROR: "0",
 				},
 			});
@@ -870,6 +898,14 @@ export class SpawnSupervisor {
 		} finally {
 			// The child holds its own copy of the descriptor.
 			closeSync(logFd);
+		}
+		// The daemon reads its callback pair and listener token from stdin to EOF. A write racing the
+		// child's exit is not ours to report: the exit handler records that outcome.
+		try {
+			child.stdin.write(stdinPayload);
+			child.stdin.end();
+		} catch {
+			// The child exited before reading its payload.
 		}
 		state.child = child;
 		// One line per launch: spawn vs respawn (resume) and the template.
@@ -939,10 +975,14 @@ export class SpawnSupervisor {
 			this.#onEvent?.("info", `${exit} (clone workspace; provider-managed)`, state.daemonId);
 			return;
 		}
-		if (exitCode === OMP_SESSION_EXIT_SESSION_LOCKED) {
-			// Deterministic: another omp-session holds the session file. Dormant
+		if (
+			exitCode === OMP_SESSION_EXIT_SESSION_LOCKED ||
+			exitCode === OMP_SESSION_EXIT_RESUME_FAILED
+		) {
+			// Deterministic refusals: another omp-session holds the session file
+			// (77), or --resume names a session that cannot be restored (78). Dormant
 			// (no restart), with the child's last log line as the reason.
-			const reason = this.#lockReason(state.daemonId);
+			const reason = this.#deterministicExitReason(state.daemonId);
 			releaseSessionCredential(this.#deps.transport, this.#registry, state.daemonId);
 			this.#registry.setStatus(state.daemonId, "asleep", reason);
 			this.#onEvent?.("error", reason, state.daemonId);
@@ -995,14 +1035,14 @@ export class SpawnSupervisor {
 		);
 	}
 
-	/** The child's last non-empty log line (its lock reason), without the omp-session prefix. */
-	#lockReason(daemonId: string): string {
+	/** The child's last non-empty log line (its refusal reason), without the omp-session prefix. */
+	#deterministicExitReason(daemonId: string): string {
 		const lastLine = this.stderrTail(daemonId)
 			.split("\n")
 			.map((line) => line.trim())
 			.filter((line) => line !== "")
 			.at(-1);
-		return lastLine?.replace(/^omp-session: /, "") ?? LOCKED_REASON_FALLBACK;
+		return lastLine?.replace(/^omp-session: /, "") ?? DETERMINISTIC_EXIT_FALLBACK;
 	}
 
 	/** SIGTERM, then SIGKILL after graceMs; resolves once the child has exited. */

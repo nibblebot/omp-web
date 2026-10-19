@@ -40,7 +40,7 @@ describe("loadConfig", () => {
 			JSON.stringify({
 				templates: {
 					docker: {
-						command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name}",
+						command: "omp-session --cwd {cwd} --port 0 {fleet} --name {name}",
 						host: "docker.local",
 					},
 				},
@@ -51,7 +51,7 @@ describe("loadConfig", () => {
 		const config = await loadConfig(file);
 		expect(config.templates).toEqual({
 			docker: {
-				command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name}",
+				command: "omp-session --cwd {cwd} --port 0 {fleet} --name {name}",
 				host: "docker.local",
 			},
 		});
@@ -127,18 +127,20 @@ describe("loadConfig", () => {
 		writeFileSync(
 			file,
 			JSON.stringify({
-				templates: { docker: { command: "docker run omp-session {cwd}", host: "docker.local" } },
+				templates: {
+					docker: { command: "docker run omp-session {cwd} {fleet}", host: "docker.local" },
+				},
 			}),
 		);
 		const prev = process.env.OMP_FLEET_LOCAL_TEMPLATE;
-		process.env.OMP_FLEET_LOCAL_TEMPLATE = "bun /repo/server/index.ts --cwd {cwd} --port 0";
+		process.env.OMP_FLEET_LOCAL_TEMPLATE = "bun /repo/server/index.ts --cwd {cwd} --port 0 {fleet}";
 		try {
-			const expected = { command: "bun /repo/server/index.ts --cwd {cwd} --port 0" };
+			const expected = { command: "bun /repo/server/index.ts --cwd {cwd} --port 0 {fleet}" };
 
 			// Wins over the file's templates (and survives `local` being absent there).
 			const fromFile = await loadConfig(file);
 			expect(fromFile.templates).toEqual({
-				docker: { command: "docker run omp-session {cwd}", host: "docker.local" },
+				docker: { command: "docker run omp-session {cwd} {fleet}", host: "docker.local" },
 				local: expected,
 			});
 			expect(fromFile.defaultTemplate).toBe("local");
@@ -321,9 +323,32 @@ describe("workspaceDir", () => {
 describe("DEFAULT_LOCAL_TEMPLATE", () => {
 	test("matches the contract command string", () => {
 		expect(DEFAULT_LOCAL_TEMPLATE).toEqual({
-			command:
-				"omp-web session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
+			command: "omp-web session --cwd {cwd} --port 0 {fleet} --name {name} {labels} {resume}",
 		});
+	});
+});
+
+describe("fleet template handoff", () => {
+	test("rejects a {token} placeholder (argv would expose the listener token)", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(
+			file,
+			JSON.stringify({
+				templates: { legacy: { command: "omp-session --token {token} --name {name} {fleet}" } },
+			}),
+		);
+		await expect(loadConfig(file)).rejects.toThrow("replace `--token {token}` with {fleet}");
+	});
+
+	test("rejects a template without {fleet} (the daemon would never pair)", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(
+			file,
+			JSON.stringify({
+				templates: { bare: { command: "omp-session --cwd {cwd} --name {name}" } },
+			}),
+		);
+		await expect(loadConfig(file)).rejects.toThrow('template "bare" lacks {fleet}');
 	});
 });
 

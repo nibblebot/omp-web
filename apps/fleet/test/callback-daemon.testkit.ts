@@ -24,11 +24,11 @@ import {
 } from "#lib/wire/callback-protocol";
 
 export interface CallbackDaemonOpts {
-	/** Fleet callback base URL, no /callback suffix (the C5 OMP_SESSION_CALLBACK_URL). */
+	/** Fleet callback base URL, no /callback suffix (the --fleet-stdin callback.url). */
 	url: string;
 	workspaceId: string;
 	generation: number;
-	/** 64-hex enrollment credential (the C5 OMP_SESSION_CALLBACK_TOKEN). */
+	/** 64-hex enrollment credential (the --fleet-stdin callback.token). */
 	token: string;
 	connectionId?: string;
 	/** Initial redial backoff (doubles to redialMaxMs). Defaults 25ms / 250ms. */

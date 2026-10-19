@@ -65,11 +65,13 @@
  *   `<secretName>/<key>`, injected as native `secretKeyRef` env. Secrets
  *   must pre-exist; they are verified by preflight, never created.
  * - callback enrollment: the fleet-written `<stateDir>/callback-env.json`
- *   handoff (same contract as bwrap-provider) is injected as pod env. The
- *   enrollment token is generation-scoped and readable by anyone with pod
- *   get permission in the operator-approved namespace, the same exposure
- *   class as bwrap's process environment; the namespace must be scoped
- *   accordingly (P5.5 RBAC is operator-owned).
+ *   handoff (same contract as bwrap-provider) is injected as pod env. A pod
+ *   has no stdin, so apps/session/entrypoint.sh converts that env into the
+ *   daemon's `--fleet-stdin` payload and unsets it before exec: the daemon
+ *   process never carries it in its environment. The pod spec still exposes
+ *   the token to anyone with pod get permission in the operator-approved
+ *   namespace; the namespace must be scoped accordingly (P5.5 RBAC is
+ *   operator-owned).
  * - in-pod preparation: the fleet resolves the pin and passes it through
  *   the additive request fields `source.remote`/`revision`/`branch`; the
  *   provider injects them as OMP_PREP_* env and the image entrypoint
@@ -99,7 +101,8 @@ import {
 } from "#lib/runtime/provider-protocol";
 import type { ProviderErrorCode } from "#lib/runtime/provider-protocol";
 import { acquireFileLock } from "#lib/platform/file-lock";
-import { ENV_ALLOW_KEYS } from "#lib/runtime/bwrap-args";
+import { FLEET_CALLBACK_ENV_KEYS } from "#lib/runtime/bwrap-args";
+import { buildFleetStdinPayload } from "#lib/runtime/fleet-stdin";
 import type { PreflightCheck, PreflightResult } from "./preflight";
 
 // ---------------------------------------------------------------------------
@@ -134,8 +137,7 @@ const STATE_LOCK_HOLDER = "kubernetes-provider";
 /** Fleet-written callback enrollment handoff (0600), read before a create. */
 const CALLBACK_ENV_FILE = "callback-env.json";
 const CALLBACK_ENV_VERSION = 1;
-const CALLBACK_ENV_PREFIX = "OMP_SESSION_CALLBACK_";
-/** P8.9 wake-resume hint; allowlisted so a bwrap-shaped handoff never surprises us. */
+/** P8.9 wake-resume hint; rides the same handoff, daemon-consumed at boot. */
 const RESUME_ENV_KEY = "OMP_SESSION_RESUME";
 
 /** In-pod workspace volume layout (frozen "Preparation layout"). */
@@ -493,9 +495,9 @@ function writeRecord(stateDir: string, record: KubernetesLaunchRecord): void {
 // ---------------------------------------------------------------------------
 
 function isCallbackEnvKey(key: string): boolean {
-	return (
-		key === RESUME_ENV_KEY || (key.startsWith(CALLBACK_ENV_PREFIX) && ENV_ALLOW_KEYS.includes(key))
-	);
+	// The callback pair's enrollment keys OR the wake-resume hint, both from a
+	// closed list so nothing outside it can ride the handoff file (P5.5).
+	return key === RESUME_ENV_KEY || FLEET_CALLBACK_ENV_KEYS.includes(key);
 }
 
 /**
@@ -577,6 +579,17 @@ function readCallbackEnv(
 			throw ProviderProtocolError.unavailable(`${CALLBACK_ENV_FILE}.env.${key} exceeds 4096 bytes`);
 		}
 		env[key] = entry;
+	}
+	// A partial pair must never reach the pod: validate the whole pair here.
+	if (FLEET_CALLBACK_ENV_KEYS.some((key) => env[key] !== undefined)) {
+		try {
+			buildFleetStdinPayload(env);
+		} catch (cause) {
+			throw ProviderProtocolError.unavailable(
+				`${CALLBACK_ENV_FILE} callback pair is incomplete or invalid`,
+				{ cause },
+			);
+		}
 	}
 	return env;
 }

@@ -2447,13 +2447,23 @@ export class FleetEdge {
 						this.#setActivity(entry.daemonId, { streaming: frame.state?.isStreaming === true });
 						// The session file the daemon is on is what respawn resumes
 						// (`--resume <lastSessionFile>`); record it whenever it changes.
-						const sessionFile = (frame.state as { sessionFile?: unknown } | undefined)?.sessionFile;
-						if (
-							typeof sessionFile === "string" &&
-							sessionFile !== "" &&
-							this.#registry.get(entry.daemonId)?.lastSessionFile !== sessionFile
-						) {
-							this.#registry.update(entry.daemonId, { lastSessionFile: sessionFile });
+						// lastSessionPersisted is the daemon's report that the SDK has
+						// written that file: sticky for it, reset when the file changes.
+						const state = frame.state as
+							| { sessionFile?: unknown; sessionPersisted?: unknown }
+							| undefined;
+						const sessionFile = state?.sessionFile;
+						if (typeof sessionFile === "string" && sessionFile !== "") {
+							const current = this.#registry.get(entry.daemonId);
+							const persisted = state?.sessionPersisted === true;
+							if (current?.lastSessionFile !== sessionFile) {
+								this.#registry.update(entry.daemonId, {
+									lastSessionFile: sessionFile,
+									lastSessionPersisted: persisted ? true : undefined,
+								});
+							} else if (persisted && current?.lastSessionPersisted !== true) {
+								this.#registry.update(entry.daemonId, { lastSessionPersisted: true });
+							}
 						}
 						break;
 					}

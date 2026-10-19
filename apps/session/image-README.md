@@ -26,13 +26,17 @@ imports; flattening either directory breaks runtime resolution.
 
 `apps/session/entrypoint.sh` (tini PID 1) runs preparation exactly once per
 PVC, only when the verified marker is absent, via
-`apps/session/prepare-inpod.ts`, then execs the session daemon.
+`apps/session/prepare-inpod.ts`, then execs the session daemon. The fleet
+callback pair arrives as pod env (a pod has no stdin); the entrypoint converts
+it through `apps/session/fleet-stdin-inpod.ts` into the daemon's `--fleet-stdin`
+payload on stdin and unsets the env first, so the daemon never carries it.
 
 ## Files
 
 - `Containerfile`: two-stage build (lockfile-pinned deps → lean runtime).
 - `entrypoint.sh`: new-workspace preparation gate + daemon exec.
 - `prepare-inpod.ts`: in-pod wrapper over `lib/runtime/prepare-workspace.ts`.
+- `fleet-stdin-inpod.ts`: converts the pod's callback pair into the daemon's `--fleet-stdin` payload.
 
 ## Build prerequisites (reported by provider preflight, never auto-provisioned)
 

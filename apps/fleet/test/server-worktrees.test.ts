@@ -73,7 +73,7 @@ describe("worktree lifecycle routes", () => {
 		// real omp-session; the route tests stop the child themselves.
 		server = await startTestFleet(
 			{ statePath, configPath },
-			{ templates: { local: { command: "sleep 30" } }, defaultTemplate: "local" },
+			{ templates: { local: { command: ": {fleet}; sleep 30" } }, defaultTemplate: "local" },
 			{ workspaceDir },
 		);
 		project = server.registry.addProject(repoDir).project;
@@ -370,7 +370,10 @@ describe("worktree lifecycle routes", () => {
 		const paths = fleetPaths("omp-web-linked-restart-");
 		const originalWorkspaceDir = join(paths.tmp, "original-workspaces");
 		const changedWorkspaceDir = join(paths.tmp, "changed-workspaces");
-		const config = { templates: { local: { command: "sleep 30" } }, defaultTemplate: "local" };
+		const config = {
+			templates: { local: { command: ": {fleet}; sleep 30" } },
+			defaultTemplate: "local",
+		};
 		let restarted: FleetServer | undefined;
 		try {
 			restarted = await startTestFleet(paths, config, { workspaceDir: originalWorkspaceDir });

@@ -87,6 +87,13 @@ export interface WebSessionState {
 	followUpMode: "all" | "one-at-a-time";
 	interruptMode: "immediate" | "wait";
 	sessionFile?: string;
+	/**
+	 * True once the SDK has materialized `sessionFile` on disk. The SDK writes the
+	 * transcript lazily (first assistant message), so a fresh session's recorded
+	 * path may lead nowhere; the fleet uses this to tell a never-prompted session
+	 * (relaunch adopts the unwritten path) from a persisted one (relaunch is strict).
+	 */
+	sessionPersisted?: true;
 	sessionId: string;
 	/** Set once the omp-session readiness gate clears (R8): SDK session live + provider/model/auth resolved. */
 	readyAt?: number;
@@ -497,6 +504,15 @@ export const OMP_SESSION_PREFIX = "OMP_SESSION|";
  * and the holder. Same value as the fleet's own state-lock conflict exit.
  */
 export const OMP_SESSION_EXIT_SESSION_LOCKED = 77;
+
+/**
+ * omp-session exit code when `--resume <file>` names a durable session the
+ * daemon cannot restore (file missing, unreadable, or recorded under another
+ * cwd). Deterministic: a spawner must not retry it, and the daemon never boots
+ * a fresh session in its place; the last stderr line names the file and the
+ * reason.
+ */
+export const OMP_SESSION_EXIT_RESUME_FAILED = 78;
 
 /**
  * The `OMP_SESSION|` stdout contract lines (R6b). omp-session prints

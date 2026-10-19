@@ -1,9 +1,11 @@
 /**
  * Spawn tests for fleet/server.ts ("POST /ctl/projects with start:true" and
- * POST /ctl/spawn). The spawn template records the child's callback env to a
- * file and sleeps. The test reads the credential from that file and dials the
- * fleet with the callback test daemon, the way a real session would, so an
- * entry reaches "ready" through the pair path. No real omp process runs.
+ * POST /ctl/spawn). The spawn template carries `{fleet}` (`--fleet-stdin`): the
+ * fleet writes one JSON payload (callback pair plus listener token) to the child's
+ * stdin. The fake child appends that payload to a file, records its env, and
+ * sleeps. The test parses the payload and dials the fleet with the callback test
+ * daemon, the way a real session would, so an entry reaches "ready" through the
+ * pair path. No real omp process runs.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -31,16 +33,19 @@ afterAll(cleanupTempDirs);
 // parallel test-file loader (importers sporadically see its bindings in TDZ).
 await pinSettingsInMemory();
 
-const TOKEN_LINE = /^OMP_SESSION_CALLBACK_TOKEN=[0-9a-f]{64}$/m;
-
-function recordedEnv(file: string): Record<string, string> {
-	const env: Record<string, string> = {};
-	for (const line of readFileSync(file, "utf8").split("\n")) {
-		const eq = line.indexOf("=");
-		if (eq > 0) env[line.slice(0, eq)] = line.slice(eq + 1);
-	}
-	return env;
-}
+/** The `--fleet-stdin` payload the supervisor writes to the child's stdin. */
+type FleetPayload = {
+	v: 1;
+	callback: {
+		url: string;
+		workspace: string;
+		generation: number;
+		token: string;
+		allowHttp?: true;
+		proxy?: string;
+	};
+	token?: string;
+};
 
 describe("spawn with start:true and POST /ctl/spawn", () => {
 	let tmp: string;
@@ -49,6 +54,7 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 	let server: FleetServer;
 	let repoReal: string;
 	let envFile: string;
+	let payloadFile: string;
 	const spawned: string[] = [];
 	const daemons: CallbackDaemon[] = [];
 
@@ -59,10 +65,17 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 		await gitInit(repoDir);
 		repoReal = realpathSync(repoDir);
 		envFile = join(tmp, "child-env.txt");
+		payloadFile = join(tmp, "child-payload.txt");
 		server = await startTestFleet(
 			{ statePath, configPath },
 			{
-				templates: { test: { command: `env > '${envFile}'; sleep 30` } },
+				templates: {
+					test: {
+						// `:` swallows the expanded `--fleet-stdin`. The env dump is renamed into
+						// place so a reader never sees it half written.
+						command: `: {fleet}; { cat; echo; } >> '${payloadFile}'; env > '${envFile}.tmp' && mv '${envFile}.tmp' '${envFile}'; sleep 30`,
+					},
+				},
 				defaultTemplate: "test",
 			},
 			{ settings: { registry: async () => [] } },
@@ -75,24 +88,28 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 		if (server !== undefined) await server.close();
 	});
 
-	// Stand in for the spawned session: wait for its recorded callback env,
-	// then dial the fleet with that credential and wait for the pair.
-	async function dialAsSession(): Promise<CallbackDaemon> {
+	// Stand in for the spawned session: wait for the child's recorded stdin
+	// payload, then dial the fleet with its callback pair and wait for the pair.
+	async function dialAsSession(): Promise<FleetPayload> {
 		await waitFor(
-			() => existsSync(envFile) && TOKEN_LINE.test(readFileSync(envFile, "utf8")),
+			() =>
+				existsSync(envFile) &&
+				existsSync(payloadFile) &&
+				readFileSync(payloadFile, "utf8").endsWith("\n"),
 			5000,
-			"child callback env recorded",
+			"child payload and env recorded",
 		);
-		const env = recordedEnv(envFile);
+		const lastLine = readFileSync(payloadFile, "utf8").trim().split("\n").at(-1)!;
+		const payload = JSON.parse(lastLine) as FleetPayload;
 		const daemon = startCallbackDaemon({
-			url: env.OMP_SESSION_CALLBACK_URL,
-			workspaceId: env.OMP_SESSION_CALLBACK_WORKSPACE,
-			generation: Number(env.OMP_SESSION_CALLBACK_GENERATION),
-			token: env.OMP_SESSION_CALLBACK_TOKEN,
+			url: payload.callback.url,
+			workspaceId: payload.callback.workspace,
+			generation: payload.callback.generation,
+			token: payload.callback.token,
 		});
 		daemons.push(daemon);
 		await daemon.waitConnected(5000);
-		return daemon;
+		return payload;
 	}
 
 	test("start:true spawns on the project path, tags the entry's projectId, and reaches ready", async () => {
@@ -114,8 +131,16 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 		expect(body.entry.projectId).toBe(body.project.projectId);
 		expect(body.entry.labels).toEqual(["env=prod"]);
 
-		await dialAsSession();
-		expect(recordedEnv(envFile).OMP_SESSION_CALLBACK_WORKSPACE).toBe(body.entry.daemonId);
+		const payload = await dialAsSession();
+		expect(payload.v).toBe(1);
+		expect(payload.callback.workspace).toBe(body.entry.daemonId);
+		expect(typeof payload.callback.generation).toBe("number");
+		expect(payload.callback.token).toMatch(/^[0-9a-f]{64}$/);
+		// The pair and listener token travel on stdin only: never in the child's env.
+		const childEnv = readFileSync(envFile, "utf8");
+		expect(childEnv).toMatch(/^OMP_SESSION_LOG_MIRROR=0$/m);
+		expect(childEnv).not.toMatch(/OMP_SESSION_CALLBACK_/);
+		expect(childEnv).not.toMatch(/OMP_SESSION_TOKEN=/);
 		await waitFor(
 			() => server.registry.get(body.entry.daemonId)?.status === "ready",
 			5000,

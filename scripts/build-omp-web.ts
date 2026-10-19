@@ -42,7 +42,13 @@ const PROVIDER_SOURCES: Record<string, string> = {
 	"kubernetes-provider.js": join(ROOT, "apps", "fleet", "kubernetes-provider.ts"),
 };
 /** Session-runtime image definition, copied explicitly (flat sources, README.md name). */
-const IMAGE_FILES = ["Containerfile", "entrypoint.sh", "prepare-inpod.ts", "image-README.md"];
+const IMAGE_FILES = [
+	"Containerfile",
+	"entrypoint.sh",
+	"prepare-inpod.ts",
+	"fleet-stdin-inpod.ts",
+	"image-README.md",
+];
 const IMAGE_SRC = join(ROOT, "apps", "session");
 const IMAGE_DST = join(ROOT, "dist-bundle", "image");
 

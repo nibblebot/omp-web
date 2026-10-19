@@ -278,26 +278,40 @@ function trackFleet(options: { refuse?: FakeRefusal } = {}): FakeFleet {
 }
 
 function spawnDaemon(callbackUrl: string, extra: Record<string, string> = {}): Subprocess {
-	const child = Bun.spawn(["bun", "apps/session/index.ts"], {
+	// The callback pair travels on stdin (--fleet-stdin), never the environment. Ambient fleet
+	// secrets are filtered out of the base env so a developer's shell cannot leak them in.
+	const child = Bun.spawn(["bun", "apps/session/index.ts", "--fleet-stdin"], {
 		cwd: repoRoot,
 		env: {
-			...process.env,
+			...Object.fromEntries(
+				Object.entries(process.env).filter(
+					([key]) => !key.startsWith("OMP_SESSION_CALLBACK_") && key !== "OMP_SESSION_TOKEN",
+				),
+			),
 			OMP_SESSION_PORT: "0",
 			OMP_SESSION_CWD: tempDir("omp-session-cp-cwd-"),
 			PI_NO_TITLE: "1",
 			PI_CODING_AGENT_DIR: tempDir("omp-session-cp-agent-"),
-			OMP_SESSION_CALLBACK_URL: callbackUrl,
-			OMP_SESSION_CALLBACK_WORKSPACE: WORKSPACE,
-			OMP_SESSION_CALLBACK_GENERATION: String(GENERATION),
-			OMP_SESSION_CALLBACK_TOKEN: TOKEN,
-			OMP_SESSION_CALLBACK_ALLOW_HTTP: "1",
 			OMP_SESSION_LOG_MIRROR: "0",
 			...extra,
 		},
-		stdin: "ignore",
+		stdin: "pipe",
 		stdout: "ignore",
 		stderr: "ignore",
 	});
+	child.stdin.write(
+		JSON.stringify({
+			v: 1,
+			callback: {
+				url: callbackUrl,
+				workspace: WORKSPACE,
+				generation: GENERATION,
+				token: TOKEN,
+				allowHttp: true,
+			},
+		}),
+	);
+	child.stdin.end();
 	running.push(child);
 	return child;
 }
@@ -467,6 +481,28 @@ test("browser streams prime the transcript and get the history resync after newS
 	// The fleet's control mirror never carries the transcript.
 	expect(frames(CALLBACK_CONTROL_STREAM_ID).some((f) => f.type === "history")).toBe(false);
 
+	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});
+
+test("agent subprocesses do not inherit the daemon's callback pair", async () => {
+	const fleet = trackFleet();
+	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
+	await fleet.paired;
+	const dump = `${tempDir("omp-session-cp-env-")}/env.txt`;
+	fleet.send("browser/env", "control", { type: "stream_open" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/env")?.type === "state", 1);
+	fleet.send("browser/env", "command", {
+		type: "call",
+		id: "env-1",
+		method: "bash",
+		args: [`env > ${dump}`, false],
+	});
+	await fleet.waitForUp((e) => streamFrame(e, "browser/env")?.id === "env-1", 1);
+	const dumped = await Bun.file(dump).text();
+	expect(dumped).toMatch(/^PATH=/m);
+	expect(dumped).not.toMatch(/^OMP_SESSION_CALLBACK_/m);
+	expect(dumped).not.toMatch(/^OMP_SESSION_TOKEN=/m);
 	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });

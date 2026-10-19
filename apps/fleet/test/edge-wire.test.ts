@@ -251,7 +251,7 @@ describe("fleet edge", () => {
 			configPath,
 			JSON.stringify({
 				templates: {
-					local: { command: "while :; do sleep 0.05; done" },
+					local: { command: ": {fleet}; while :; do sleep 0.05; done" },
 				},
 				defaultTemplate: "local",
 			}),

@@ -15,6 +15,7 @@ import { join } from "node:path";
 import type { ProviderProfile } from "#lib/runtime/provider-protocol";
 import {
 	DeniedBindError,
+	FLEET_CALLBACK_ENV_KEYS,
 	assertAllowedSource,
 	assertWorkspaceVolume,
 	buildBwrapArgv,
@@ -419,7 +420,7 @@ describe("buildBwrapArgv", () => {
 		expect(env.OMP_PROVIDER_PROTO).toBe("1");
 	});
 
-	test("OMP_SESSION_CALLBACK_* enrollment keys pass the allowlist", () => {
+	test("OMP_SESSION_CALLBACK_* enrollment keys never enter the sandbox env", () => {
 		const ws = tempDir("bwrap-ws-");
 		const home = tempDir("bwrap-home-");
 		const profile = baseProfile([]);
@@ -440,12 +441,9 @@ describe("buildBwrapArgv", () => {
 				OMP_SESSION_CALLBACK_ALLOW_HTTP: "1",
 			},
 		});
-		expect(env.OMP_SESSION_CALLBACK_URL).toBe("https://fleet.example/callback/up");
-		expect(env.OMP_SESSION_CALLBACK_WORKSPACE).toBe("d1");
-		expect(env.OMP_SESSION_CALLBACK_GENERATION).toBe("3");
-		expect(env.OMP_SESSION_CALLBACK_TOKEN).toBe("secret-256-bit-enrollment");
-		expect(env.OMP_SESSION_CALLBACK_PROXY).toBe("http://proxy:3128");
-		expect(env.OMP_SESSION_CALLBACK_ALLOW_HTTP).toBe("1");
+		// The pair travels via `--fleet-stdin`, never the daemon environment.
+		for (const key of FLEET_CALLBACK_ENV_KEYS) expect(env[key]).toBeUndefined();
+		expect(Object.values(env)).not.toContain("secret-256-bit-enrollment");
 	});
 
 	test("stale non-SESSION callback keys never pass the allowlist", () => {

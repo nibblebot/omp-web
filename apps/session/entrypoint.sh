@@ -18,7 +18,9 @@
 # PVC skips preparation and goes straight to the daemon. A pod that starts
 # on a claim already holding the marker never re-clones and never re-resolves
 # the pin (retry/replacement safety). The fleet's callback enrollment rides
-# OMP_SESSION_CALLBACK_* pod env; daemon stdout/stderr go to the pod log.
+# OMP_SESSION_CALLBACK_* pod env and is handed to the daemon on stdin
+# (--fleet-stdin), never kept in its environment; daemon stdout/stderr go to
+# the pod log.
 set -eu
 
 if [ -z "${OMP_WORKSPACE_ROOT:-}" ]; then
@@ -29,6 +31,20 @@ if [ -z "${OMP_WORKSPACE_ID:-}" ] || [ -z "${OMP_WORKSPACE_GENERATION:-}" ]; the
 	echo "entrypoint: OMP_WORKSPACE_ID and OMP_WORKSPACE_GENERATION are required" >&2
 	exit 1
 fi
+
+# The fleet's callback pair arrives as pod env (a pod has no stdin). Convert it
+# to the daemon's --fleet-stdin payload and remove it from this environment
+# before any other step runs, so neither workspace prep nor the daemon carries
+# it. The helper prints nothing when the pod has no pair (the daemon then gets
+# no --fleet-stdin flag); it exits 1 on a partial or invalid pair.
+fleet_stdin="$(bun /opt/omp-web/apps/session/fleet-stdin-inpod.ts)"
+fleet_flag=""
+if [ -n "$fleet_stdin" ]; then
+	fleet_flag="--fleet-stdin"
+fi
+unset OMP_SESSION_CALLBACK_URL OMP_SESSION_CALLBACK_WORKSPACE \
+	OMP_SESSION_CALLBACK_GENERATION OMP_SESSION_CALLBACK_TOKEN \
+	OMP_SESSION_CALLBACK_ALLOW_HTTP OMP_SESSION_CALLBACK_PROXY
 
 : "${OMP_PREP_SOURCE_REMOTE:-}"
 
@@ -60,4 +76,6 @@ fi
 # checks. (Kubernetes identity is pod/API-based, not pid/cmdline-based; the
 # token flag keeps the two providers' runtime entry contract identical.)
 exec /opt/omp-web/node_modules/.bin/bun /opt/omp-web/apps/session/index.ts \
-	--omp-workspace-token="$OMP_WORKSPACE_TOKEN"
+	--omp-workspace-token="$OMP_WORKSPACE_TOKEN" $fleet_flag <<EOF
+$fleet_stdin
+EOF
