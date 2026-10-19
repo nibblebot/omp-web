@@ -3,7 +3,8 @@ import { Settings, settings } from "@oh-my-pi/pi-coding-agent";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { cfgModelRoles, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { buildModelRoleCatalog } from "../daemon-broker";
+import { buildModelRoleCatalog, createDaemonRosterGate } from "../daemon-broker";
+import type { DaemonInfo } from "#lib/wire/protocol";
 
 // The catalog builder reads/writes the shared Settings singleton (role
 // values, sources, tags). Initialize it in-memory so tests touch no disk.
@@ -117,5 +118,36 @@ describe("buildModelRoleCatalog", () => {
 			id: "gpt-4o",
 			source: "default",
 		});
+	});
+});
+
+describe("createDaemonRosterGate", () => {
+	const roster = (outputBytes: number): DaemonInfo[] => [
+		{ name: "dev", projectDir: "/p", state: "running", outputBytes } as unknown as DaemonInfo,
+	];
+
+	test("sends the first roster and suppresses an identical one inside the heartbeat", () => {
+		const gate = createDaemonRosterGate(30_000);
+		expect(gate(roster(1), 0)).toBe(true);
+		expect(gate(roster(1), 3_000)).toBe(false);
+	});
+
+	test("sends a changed roster immediately", () => {
+		const gate = createDaemonRosterGate(30_000);
+		gate(roster(1), 0);
+		expect(gate(roster(2), 3_000)).toBe(true);
+	});
+
+	test("re-sends an unchanged roster once the heartbeat elapses", () => {
+		const gate = createDaemonRosterGate(30_000);
+		gate(roster(1), 0);
+		expect(gate(roster(1), 30_000)).toBe(true);
+	});
+
+	test("sends an empty roster on transition, then suppresses repeats", () => {
+		const gate = createDaemonRosterGate(30_000);
+		gate(roster(1), 0);
+		expect(gate([], 3_000)).toBe(true);
+		expect(gate([], 6_000)).toBe(false);
 	});
 });

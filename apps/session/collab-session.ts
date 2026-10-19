@@ -444,13 +444,18 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 
 	/** Runs queued slash commands in order while idle and not paused (see command-queue.ts). */
 	function drainCommands(entry: SessionEntry): Promise<void> {
+		let ran = false;
 		return drainQueuedCommands(entry.queuedCommands, {
 			isStreaming: () => entry.session.isStreaming,
-			run: (command) => runCommandNow(entry, command),
+			run: (command) => {
+				ran = true;
+				return runCommandNow(entry, command);
+			},
 		})
 			.catch((err) => broadcast({ type: "error", error: String(err) }))
 			.finally(() => {
-				void deps.broker.broadcastState(entry).catch(() => {});
+				// Only a dequeue changes the queue; an empty drain leaves the state as the turn-end frame sent it.
+				if (ran) void deps.broker.broadcastState(entry).catch(() => {});
 			});
 	}
 

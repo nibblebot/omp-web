@@ -1,6 +1,7 @@
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { ContextUsageBreakdown } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
+import type { ToolSchemaInfo } from "#lib/wire/protocol";
 import { formatTokens } from "../../usage/context";
 import { call, setState, state } from "../../state";
 import { reportError } from "../../store/toasts";
@@ -33,6 +34,7 @@ const ContextBreakdownSegment: Component<{
 /** Session stats, opened by `/usage`, `/context`, `/tools`, and the session status bar. */
 export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) => {
 	const [breakdown, setBreakdown] = createSignal<ContextUsageBreakdown | null>(null);
+	const [tools, setTools] = createSignal<ToolSchemaInfo[]>([]);
 	const [tab, setTab] = createSignal<StatsTab>("overview");
 
 	onMount(() => {
@@ -43,6 +45,10 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 		void call("getContextBreakdown")
 			.then((b) => setBreakdown((b as ContextUsageBreakdown | null) ?? null))
 			.catch(() => setBreakdown(null));
+		// The tool list is not part of the broadcast state; fetch it when the dialog opens.
+		void call("getToolSchemas")
+			.then((t) => setTools(t as ToolSchemaInfo[]))
+			.catch(() => setTools([]));
 	});
 
 	return (
@@ -51,7 +57,7 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 				tabs={[
 					{ id: "overview", label: "Overview" },
 					{ id: "context", label: "Context" },
-					{ id: "tools", label: `Tools (${state.dumpTools?.length ?? 0})` },
+					{ id: "tools", label: `Tools (${tools().length})` },
 				]}
 				value={tab()}
 				onChange={setTab}
@@ -238,11 +244,11 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 					aria-labelledby={tabButtonId("stats", "tools")}
 				>
 					<Show
-						when={(state.dumpTools?.length ?? 0) > 0}
+						when={tools().length > 0}
 						fallback={<p class="picker-note">No tools reported for this session.</p>}
 					>
 						<div class="stats-tools">
-							<For each={state.dumpTools}>
+							<For each={tools()}>
 								{(t) => (
 									<div class="stats-tool">
 										<span class="picker-label">{t.name}</span>

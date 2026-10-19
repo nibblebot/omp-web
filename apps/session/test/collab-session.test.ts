@@ -160,6 +160,34 @@ describe("wireSession queue-staleness regression", () => {
 	});
 });
 
+describe("turn-end state broadcasts", () => {
+	test("an idle turn end broadcasts one state frame, not a second from an empty command drain", async () => {
+		const { broker, calls } = stubBroker();
+		const collab = createCollabSession({
+			config: { idleTimeoutMs: 0 } as never,
+			agentDir: "",
+			authStorage: {} as never,
+			modelRegistry: {} as never,
+			settings: {} as never,
+			broker,
+		});
+		const { session, fire } = fakeSession();
+		collab.wireSession({
+			handle: "s1",
+			cwd: "/tmp",
+			session,
+			eventBus: { on: () => () => {} } as never,
+			queuedCommands: { commands: [], paused: false, draining: false },
+		} as unknown as SessionEntry);
+
+		fire({ type: "agent_end", messages: [] } as unknown as AgentSessionEvent);
+		// The command drain is a promise chain with no timer: flush its microtasks.
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+
+		expect(calls).toEqual([{ withStats: true }]);
+	});
+});
+
 describe("wireSession title propagation", () => {
 	test("an SDK auto-title broadcasts state so the main pane title follows", async () => {
 		const { broker, calls } = stubBroker();

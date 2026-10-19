@@ -1,5 +1,4 @@
 import type { Model } from "@oh-my-pi/pi-ai";
-import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import {
 	MODEL_ROLE_IDS,
 	getKnownRoleIds,
@@ -36,11 +35,27 @@ import { broadcast, broadcastTo } from "./sse-delivery";
 // Session state snapshots + the omp hub daemon-broker polling/control client:
 // `state` frames (prime + post-mutation) are built from live session getters;
 // the daemons roster is polled from the bound project's broker every
-// DAEMON_POLL_MS and re-broadcast unconditionally (a change-gate would strand
-// clients that connect between broadcasts; the roster is small and the tick
-// cadence is 3s, so unconditional re-broadcast self-heals late joins and
-// dropped frames). The poll runs only while at least one stream is live.
+// DAEMON_POLL_MS and broadcast only when its serialized form changes, or on a
+// DAEMON_HEARTBEAT_MS heartbeat, so late joiners and dropped frames converge.
+// The poll runs only while at least one stream is live.
 // ---------------------------------------------------------------------------
+
+/**
+ * Change gate for the daemons roster. Returns true when the roster must be
+ * sent: its serialized form differs from the last sent roster, or the
+ * heartbeat has elapsed since it was last sent. `now` is injected for tests.
+ */
+export function createDaemonRosterGate(
+	heartbeatMs: number,
+): (roster: DaemonInfo[], now: number) => boolean {
+	let last: { serialized: string; sentAt: number } | undefined;
+	return (roster, now) => {
+		const serialized = JSON.stringify(roster);
+		if (last && last.serialized === serialized && now - last.sentAt < heartbeatMs) return false;
+		last = { serialized, sentAt: now };
+		return true;
+	};
+}
 
 export interface DaemonBrokerDeps {
 	/** Bound project root: the daemon-poll target and roster scoping. */
@@ -183,13 +198,6 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 				entry.pausedQueue.length +
 				(entry.queuedCommands.paused ? entry.queuedCommands.commands.length : 0),
 			todoPhases: session.getTodoPhases(),
-			systemPrompt: session.systemPrompt,
-			dumpTools: session.agent.state.tools.map((tool) => ({
-				name: tool.name,
-				description: tool.description,
-				parameters: toolWireSchema(tool),
-				examples: tool.examples,
-			})),
 			contextUsage: session.getContextUsage(),
 			// Phase 9: cheap sync getters, refreshed on every state broadcast.
 			goalModeState: session.getGoalModeState(),
@@ -219,6 +227,8 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 	}
 
 	const DAEMON_POLL_MS = 3000;
+	const DAEMON_HEARTBEAT_MS = 30_000;
+	const rosterGate = createDaemonRosterGate(DAEMON_HEARTBEAT_MS);
 	let daemonPoll: ReturnType<typeof setInterval> | undefined;
 
 	function daemonInfo(projectDir: string, snap: DaemonSnapshot): DaemonInfo {
@@ -291,12 +301,9 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 	}
 
 	/**
-	 * Poll the daemon broker for the bound cwd and broadcast the roster every
-	 * tick. A change-gate would strand clients that connect between broadcasts
-	 * (or miss one frame): the roster is small (~2.5 KB) and the tick cadence is
-	 * 3s, so re-broadcasting unconditionally self-heals late joins and dropped
-	 * frames. On broker failure the empty roster is broadcast, and the next
-	 * successful tick restores the real one.
+	 * Poll the daemon broker for the bound cwd and broadcast the roster when it
+	 * changes, or on the heartbeat (see createDaemonRosterGate). A broker failure
+	 * yields an empty roster, which is broadcast once on transition, not every tick.
 	 */
 	async function refreshDaemons(): Promise<void> {
 		const dir = deps.config.cwd;
@@ -307,12 +314,14 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			// Daemon names are unique per project dir only; key by
 			// projectDir+name so same-named daemons in different projects both
 			// reach the roster (the web client uses the same identity).
-			if (result.op === "list")
-				for (const snap of result.daemons)
-					merged.set(
-						daemonsKey({ projectDir: dir, name: snap.name }),
-						await daemonInfoWithEndpoint(client, dir, snap),
-					);
+			if (result.op === "list") {
+				// Describe calls run concurrently; insertion keeps the broker's order.
+				const infos = await Promise.all(
+					result.daemons.map((snap) => daemonInfoWithEndpoint(client, dir, snap)),
+				);
+				for (const info of infos)
+					merged.set(daemonsKey({ projectDir: dir, name: info.name }), info);
+			}
 		} catch {
 			// Broker unreachable (not started / shut down): empty roster.
 		}
@@ -323,7 +332,8 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 		for (const key of [...readyEndpointCache.keys()]) {
 			if (!dirPrefixes.some((prefix) => key.startsWith(prefix))) readyEndpointCache.delete(key);
 		}
-		broadcast({ type: "daemons", daemons: [...merged.values()] });
+		const roster = [...merged.values()];
+		if (rosterGate(roster, Date.now())) broadcast({ type: "daemons", daemons: roster });
 	}
 
 	function startDaemonPoll(): void {

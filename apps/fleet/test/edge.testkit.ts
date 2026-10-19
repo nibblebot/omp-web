@@ -61,8 +61,6 @@ export const FAKE_STATE = {
 	messageCount: 0,
 	queuedMessageCount: 0,
 	todoPhases: [],
-	systemPrompt: undefined,
-	dumpTools: undefined,
 	contextUsage: undefined,
 	goalModeState: undefined,
 	planModeEnabled: false,

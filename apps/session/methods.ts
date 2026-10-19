@@ -1,5 +1,6 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { getAvailableThemes, type Settings } from "@oh-my-pi/pi-coding-agent";
@@ -229,6 +230,33 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		dumpLlmRequestToTmpDir: true,
 		fetchUsageReports: true,
 		getContextBreakdown: true,
+		annotationList: true,
+		todoGet: true,
+		todoExport: true,
+		getSessionGraph: true,
+		getModelMentions: true,
+		compactionSnapshot: true,
+		handoffPreview: true,
+		btwList: true,
+		btwSearch: true,
+		btwPage: true,
+		btwCopy: true,
+		btwPromotePreview: true,
+		advisorGetStatus: true,
+		advisorTranscript: true,
+		loopPreview: true,
+		loopPolicy: true,
+		vibeStatus: true,
+		downloadManifest: true,
+		getResumeCapabilities: true,
+		resumeResolve: true,
+		resumeList: true,
+		foreignList: true,
+		foreignPreview: true,
+		gitStatus: true,
+		gitFileDiff: true,
+		gitUnstagedPatch: true,
+		getToolSchemas: true,
 		predictWord: true,
 		predictWordFeedback: true,
 	};
@@ -846,9 +874,16 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 				"setInspectImageMode is unsupported: @oh-my-pi/pi-coding-agent 18.1.9 removed the inspect_image tool",
 			);
 		},
-		// READ_ONLY rows: usage reports + context breakdown (skip the state broadcast).
+		// READ_ONLY rows: usage reports, context breakdown, tool schemas (skip the state broadcast).
 		fetchUsageReports: (entry) => entry.session.fetchUsageReports(),
 		getContextBreakdown: async (entry) => entry.session.getContextBreakdown(),
+		getToolSchemas: async (entry) =>
+			entry.session.agent.state.tools.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				parameters: toolWireSchema(tool),
+				examples: tool.examples,
+			})),
 		// Phase 10: onChunk relays live output as session-scoped chunk frames
 		// (streamId = the client's bash-item id). `!!`/`$$` dimmed variants are
 		// excluded from the agent's context, matching the TUI semantic.

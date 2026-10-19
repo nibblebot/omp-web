@@ -106,14 +106,6 @@ export interface WebSessionState {
 	/** Messages a Stop withdrew from the queue and holds until Resume queue. */
 	pausedQueueCount?: number;
 	todoPhases: TodoPhase[];
-	/** For session dump / export (plain-text parity with /dump). */
-	systemPrompt?: string[];
-	dumpTools?: Array<{
-		name: string;
-		description: string;
-		parameters: unknown;
-		examples?: readonly ToolExample[];
-	}>;
 	/** Current context window usage. */
 	contextUsage?: ContextUsage;
 	// --- Phase 9: modes & usage parity (cheap sync getters, refreshed every broadcast) ---
@@ -132,6 +124,14 @@ export interface WebSessionState {
 	 * server reports "off" (never registered); the wire field stays frozen.
 	 */
 	inspectImageMode: InspectImageMode;
+}
+
+/** One tool of the live session as `getToolSchemas` answers it (never part of `state`). */
+export interface ToolSchemaInfo {
+	name: string;
+	description: string;
+	parameters: unknown;
+	examples?: readonly ToolExample[];
 }
 
 export interface AvailableSlashCommand {
@@ -710,6 +710,7 @@ export type WebMethodName =
 	| "setInspectImageMode"
 	| "fetchUsageReports"
 	| "getContextBreakdown"
+	| "getToolSchemas"
 	| "bash"
 	| "abortBash"
 	| "python"

@@ -45,7 +45,7 @@ function stubEntry(opts: { preludes?: ReadonlyArray<{ name: string }>; refreshEr
 	};
 }
 
-function methodsTable() {
+function webMethods() {
 	return createWebMethods({
 		settings: {} as never,
 		authStorage: {} as never,
@@ -56,7 +56,11 @@ function methodsTable() {
 		sessionsDir: "/tmp/fleet-test-sessions",
 		cwd: "/tmp/fleet-test-cwd",
 		hasCallbackPair: () => false,
-	}).methods;
+	});
+}
+
+function methodsTable() {
+	return webMethods().methods;
 }
 
 describe("computer/inspect_image rows after the 18.x drift", () => {
@@ -462,5 +466,157 @@ describe("session graph rows", () => {
 		await expect(
 			methods.navigateTree!(entry, ["u1", { revision: "not-the-current-revision" }]),
 		).rejects.toThrow("Graph selection is stale; reload and re-pick");
+	});
+});
+
+describe("READ_ONLY classification", () => {
+	// Methods that change session state, write to disk, or start model work. Every
+	// other method must be classified read-only so a call does not trigger a state resync.
+	const MUTATING: Record<string, true> = {
+		abort: true,
+		abortAndPrompt: true,
+		abortBash: true,
+		abortCompaction: true,
+		abortEphemeral: true,
+		abortEval: true,
+		abortRetry: true,
+		advisorConfigure: true,
+		annotationCompose: true,
+		annotationCreate: true,
+		annotationReanchor: true,
+		annotationRemove: true,
+		annotationUpdate: true,
+		applyModelPreset: true,
+		bash: true,
+		btwCancel: true,
+		btwFollowUp: true,
+		btwStart: true,
+		clearModelRole: true,
+		clearQueue: true,
+		cycleModel: true,
+		cycleThinkingLevel: true,
+		deleteModelPreset: true,
+		dropImages: true,
+		dumpSessionArchive: true,
+		exportDownload: true,
+		exportHtml: true,
+		followUp: true,
+		foreignImport: true,
+		foreignUploadCancel: true,
+		foreignUploadStage: true,
+		freshSession: true,
+		gitCommit: true,
+		gitStage: true,
+		gitStageHunks: true,
+		gitUnstage: true,
+		goalBudget: true,
+		goalCreate: true,
+		goalDrop: true,
+		goalPause: true,
+		goalReplace: true,
+		goalResume: true,
+		lineageResume: true,
+		login: true,
+		loopCancel: true,
+		loopPause: true,
+		loopResume: true,
+		loopStart: true,
+		materializeSession: true,
+		mcpAdd: true,
+		mcpDisable: true,
+		mcpEnable: true,
+		mcpOAuthRevoke: true,
+		mcpReconnect: true,
+		mcpRemove: true,
+		mcpUpdate: true,
+		planCancel: true,
+		planDecide: true,
+		planGet: true,
+		planReopen: true,
+		popLastQueuedMessage: true,
+		predictNextMessage: true,
+		prompt: true,
+		python: true,
+		queueCommand: true,
+		reloadIntegrations: true,
+		resumeDelete: true,
+		resumePinToggle: true,
+		resumeQueue: true,
+		retry: true,
+		runEphemeralTurn: true,
+		runQueuedCommandNow: true,
+		runQueuedNow: true,
+		saveModelPreset: true,
+		setAutoCompaction: true,
+		setAutoRetry: true,
+		setComputerToolEnabled: true,
+		setFastMode: true,
+		setFollowUpMode: true,
+		setGoalModeState: true,
+		setInspectImageMode: true,
+		setInterruptMode: true,
+		setModel: true,
+		setModelRole: true,
+		setModelRoleHidden: true,
+		setPlanModeState: true,
+		setPluginEnabled: true,
+		setPluginFeatures: true,
+		setPluginSetting: true,
+		setSetting: true,
+		setSkillEnabled: true,
+		setSteeringMode: true,
+		setTaskModel: true,
+		setThinkingLevel: true,
+		shake: true,
+		steer: true,
+		subagentAbort: true,
+		subagentSteer: true,
+		switchModel: true,
+		takeQueued: true,
+		takeQueuedCommand: true,
+		todoApply: true,
+		todoImport: true,
+		unsetSetting: true,
+		vibeKill: true,
+		vibeKillAll: true,
+		vibeRehydrate: true,
+		vibeSend: true,
+		vibeSetMode: true,
+		vibeSpawn: true,
+		vibeWait: true,
+		workerList: true,
+		workerPark: true,
+		workerRevive: true,
+	};
+
+	test("every method is classified read-only, name-only, history-reload, or mutating", () => {
+		const web = webMethods();
+		const unclassified = Object.keys(web.methods).filter(
+			(name) =>
+				!(name in web.readOnly) &&
+				!(name in web.nameOnly) &&
+				!(name in web.historyReload) &&
+				!(name in MUTATING),
+		);
+		expect(unclassified).toEqual([]);
+	});
+
+	test("READ_ONLY and the mutating list name real methods, never the same one", () => {
+		const web = webMethods();
+		expect(Object.keys(web.readOnly).filter((name) => !(name in web.methods))).toEqual([]);
+		expect(Object.keys(MUTATING).filter((name) => !(name in web.methods))).toEqual([]);
+		expect(Object.keys(MUTATING).filter((name) => name in web.readOnly)).toEqual([]);
+	});
+
+	test("getToolSchemas answers the live tool list on demand", async () => {
+		const tools = [
+			{ name: "read", description: "Read a file", parameters: { type: "object", properties: {} } },
+		];
+		const entry = { session: { agent: { state: { tools } } } } as unknown as SessionEntry;
+		const result = (await methodsTable().getToolSchemas!(entry, [])) as Array<{
+			name: string;
+			description: string;
+		}>;
+		expect(result.map((t) => [t.name, t.description])).toEqual([["read", "Read a file"]]);
 	});
 });

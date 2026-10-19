@@ -26,6 +26,7 @@ export default [
 					answerCalls({
 						getSessionStats: () => sessionStatsSummary,
 						getContextBreakdown: () => contextBreakdown,
+						getToolSchemas: () => [],
 					}),
 				render: (ctx) => <SessionStatsDialog onClose={ctx.close} />,
 			},
@@ -39,6 +40,7 @@ export default [
 						getContextBreakdown: () => {
 							throw new Error("context breakdown unavailable");
 						},
+						getToolSchemas: () => [],
 					}),
 				render: (ctx) => <SessionStatsDialog onClose={ctx.close} />,
 			},
@@ -48,6 +50,7 @@ export default [
 					answerCalls({
 						getSessionStats: pending,
 						getContextBreakdown: pending,
+						getToolSchemas: pending,
 					}),
 				render: (ctx) => <SessionStatsDialog onClose={ctx.close} />,
 			},

@@ -376,7 +376,6 @@ export const [state, setState] = createStore({
 	interruptMode: "immediate" as WebSessionState["interruptMode"],
 	autoCompactionEnabled: true,
 	autoRetryEnabled: true,
-	dumpTools: [] as NonNullable<WebSessionState["dumpTools"]>,
 	// --- Phase 9: modes & usage parity (WebSessionState mirror) ---
 	...createGoalState(),
 	planModeEnabled: false,
@@ -785,7 +784,6 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 		pausedQueueCount: s.pausedQueueCount ?? 0,
 		todoPhases: s.todoPhases,
 		contextUsage: s.contextUsage,
-		dumpTools: s.dumpTools ?? [],
 		goalModeState: s.goalModeState,
 		planModeEnabled: s.planModeEnabled,
 		planReviewPending: s.planReviewPending === true,
