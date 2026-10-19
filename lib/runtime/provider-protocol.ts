@@ -76,8 +76,8 @@ export const PROVIDER_ERROR_CODES = [
 export type ProviderErrorCode = (typeof PROVIDER_ERROR_CODES)[number];
 
 /**
- * A provider profile, structurally the fleet config's ProviderProfile
- * (fleet/provider-profile.ts, P1.3) minus the config-file editing concern.
+ * A provider profile: one `providerProfiles` entry of the fleet config file.
+ * fleet/provider-profile.ts validates it and owns the config-file concern.
  * `secretRefs` holds external secret reference NAMES only; values never
  * leave the config file and never appear in requests.
  */

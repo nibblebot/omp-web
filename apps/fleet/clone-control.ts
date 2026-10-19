@@ -29,7 +29,7 @@
 
 import type { Registry } from "./registry";
 import type { PublicProviderProfile } from "#lib/wire/protocol";
-import type { ProviderProfile } from "./provider-profile";
+import type { ProviderProfile } from "#lib/runtime/provider-protocol";
 import { toPublicProfile } from "./provider-profile";
 import {
 	CloneLifecycleError,

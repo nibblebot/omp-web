@@ -41,7 +41,6 @@ import {
 	mkdirSync,
 	openSync,
 	readdirSync,
-	readFileSync,
 	rmSync,
 	statSync,
 	unlinkSync,
@@ -55,7 +54,8 @@ import { ENROLLMENT_KEY_BYTES } from "#lib/wire/callback-protocol";
 import type { LifecycleStage, RegisteredProject } from "#lib/wire/protocol";
 import type { Registry, RegistryEntry, WorkspaceRecord, DeletionGateError } from "./registry";
 import type { FleetConfig } from "./config";
-import type { ProviderProfile } from "./provider-profile";
+import type { ProviderProfile } from "#lib/runtime/provider-protocol";
+import { readCallbackEnv } from "#lib/runtime/provider-callback-env";
 import type { DaemonTransportRegistry } from "./daemon-transport";
 import type { FleetLogStore } from "./log-store";
 import type { FleetEventLog } from "./events";
@@ -1880,23 +1880,18 @@ export class WorkspaceLifecycle {
 	 */
 	#persistedCallbackToken(entry: RegistryEntry, generation: number): string {
 		const { stateDir } = this.#clonePaths(entry);
-		const raw = readFileSync(join(stateDir, "callback-env.json"), "utf8");
-		const value = JSON.parse(raw) as {
-			version?: unknown;
-			generation?: unknown;
-			env?: Record<string, unknown>;
-		};
-		if (
-			value?.version !== 1 ||
-			value.generation !== generation ||
-			typeof value.env?.OMP_SESSION_CALLBACK_TOKEN !== "string" ||
-			value.env.OMP_SESSION_CALLBACK_TOKEN.length === 0
-		) {
+		const token = readCallbackEnv(
+			"fleet",
+			stateDir,
+			entry.daemonId,
+			generation,
+		)?.OMP_SESSION_CALLBACK_TOKEN;
+		if (token === undefined || token.length === 0) {
 			throw new Error(
 				`cannot recover callback token for ${entry.daemonId} generation ${generation} from the persisted state file`,
 			);
 		}
-		return value.env.OMP_SESSION_CALLBACK_TOKEN;
+		return token;
 	}
 
 	// ------------------------------------------------------------------

@@ -21,7 +21,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ProviderProfile } from "./provider-profile";
+import type { ProviderProfile } from "#lib/runtime/provider-protocol";
 import { validateProfiles } from "./provider-profile";
 import { parseProxyRule } from "./trusted-proxy";
 

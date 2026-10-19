@@ -9,36 +9,6 @@
  * secret references appear as names only, never values.
  */
 
-/** A provider profile, keyed by `id` in the config file's `providerProfiles` map. */
-export interface ProviderProfile {
-	/** Profile id; always the map key the profile is stored under. */
-	id: string;
-	provider: "bwrap" | "kubernetes";
-	/** Provider executable path (absolute, on PATH, or `~`-prefixed). */
-	executable: string;
-	/** Runtime tools this profile permits/requires. */
-	tools: string[];
-	/** Optional resource limits (e.g. `cpu: "500m"`, `memory: "512Mi"`). */
-	resources?: { cpu?: string; memory?: string };
-	/** Optional storage (k8s StorageClass name / PVC size). */
-	storage?: { class?: string; size?: string };
-	/** Secret name → external secret reference. Values never leave the daemon. */
-	secretRefs?: Record<string, string>;
-	/** Container image (kubernetes profiles). */
-	image?: string;
-	/** Target namespace (kubernetes profiles). */
-	namespace?: string;
-	/** Kubernetes only: operator-explicit kubeconfig context (never the ambient current-context). */
-	context?: string;
-	/**
-	 * Sandbox network mode (bwrap profiles): "host" shares the host network
-	 * namespace: dev profiles reach the fleet's loopback callback URL, and
-	 * "isolated" (absent = default) keeps the fresh netns and requires an
-	 * HTTPS callback URL routable from inside. Additive; never inferred.
-	 */
-	network?: "host" | "isolated";
-}
-
 /** One dropped (or wholly malformed) profile entry, with an actionable reason. */
 export interface ProfileError {
 	/** Shape problems are `invalid_request`; id/key mismatches are `invalid_identity`. */
@@ -88,10 +58,8 @@ export function validateProfiles(raw: unknown): ProfileValidationResult {
 // The secret-free capability view is a WIRE type: single-sourced in
 // shared/protocol.ts (frozen contract) so browser/CLI consumers import it
 // from the shared protocol module, never from this fleet-private leaf.
-// Imported AND re-exported so it is bound locally (toPublicProfile below
-// annotates with it) while fleet-local importers keep the same name.
 import type { PublicProviderProfile } from "#lib/wire/protocol";
-export type { PublicProviderProfile };
+import type { ProviderProfile } from "#lib/runtime/provider-protocol";
 
 /**
  * Derive the public capability view: drops the executable, secret reference
