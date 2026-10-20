@@ -480,6 +480,20 @@ export class Registry {
 	}
 
 	/**
+	 * Drops the deletion state (a refused delete the operator abandoned by
+	 * starting the workspace again) and persists. Throws on an unknown id.
+	 */
+	clearWorkspaceDeletion(daemonId: string): RegistryEntry {
+		const entry = this.#require(daemonId);
+		if (entry.workspace?.deletion === undefined) return entry;
+		const next = { ...entry.workspace };
+		delete next.deletion;
+		entry.workspace = next;
+		this.#mutated({ upserted: [entry], removed: [] }, true);
+		return entry;
+	}
+
+	/**
 	 * Replaces the persisted callback-enrollment binding on the workspace
 	 * record and persists. The binding carries ONLY the SHA-256 hex digest
 	 * of the credential (never the raw credential) so a fleet restart can

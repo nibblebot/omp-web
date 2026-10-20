@@ -4,7 +4,7 @@
  * protocol for
  * clone workspaces on an operator-prepared Kubernetes API.
  *
- * Invocation: `<executable> ensure-running|inspect|stop|delete` with exactly
+ * Invocation: `<executable> ensure-running|inspect|stop|delete|list-sessions` with exactly
  * one JSON request on stdin and one JSON response on stdout; exit 0 when a
  * response was produced (the `ok` flag classifies the outcome). stderr is a
  * human log the fleet never parses.
@@ -45,6 +45,13 @@
  *   is still present), verifies the claim's ownership labels before
  *   removing it, a foreign claim on the deterministic name is never
  *   deleted, and then removes the provider stateDir.
+ * - `list-sessions` proves the session files a volume holds without a
+ *   writer (deletion's volume-completeness proof for a volume the fleet
+ *   cannot read). It refuses while the workspace pod exists, then runs a
+ *   short-lived helper pod `<pod>-ls` (restartPolicy Never, claim mounted
+ *   read-only, image's own `find`, fleet-owned labels), reads its log, and
+ *   always deletes it. A missing claim is an empty inventory. Uses only
+ *   pods get|create|delete plus `get pods/log`.
  *
  * Restart rediscovery: pod/PVC names are deterministic from workspaceId
  * (DNS-1123 sanitize + 8-char sha256 suffix), so after a fleet or provider
@@ -96,8 +103,10 @@ import {
 	type KubernetesProfile,
 	type ProviderRequest,
 	type ProviderResponse,
+	type ProviderSessionFile,
 } from "#lib/runtime/provider-protocol";
 import { acquireFileLock } from "#lib/platform/file-lock";
+import { MAX_EXPORT_BYTES, MAX_EXPORT_FILES } from "#lib/session-files/export-sessions";
 import {
 	err,
 	ok,
@@ -152,6 +161,7 @@ const KUBE_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
 const ENSURE_WAIT_MS_DEFAULT = 120_000;
 const STOP_WAIT_MS_DEFAULT = 60_000;
 const DELETE_WAIT_MS_DEFAULT = 60_000;
+const LIST_WAIT_MS_DEFAULT = 120_000;
 const POLL_INTERVAL_MS = 500;
 
 function envMs(name: string, fallback: number): number {
@@ -908,6 +918,7 @@ interface OpDeps {
 	ensureWaitMs: number;
 	stopWaitMs: number;
 	deleteWaitMs: number;
+	listWaitMs: number;
 }
 
 function defaultDeps(): OpDeps {
@@ -917,6 +928,7 @@ function defaultDeps(): OpDeps {
 		ensureWaitMs: envMs("OMP_KUBE_ENSURE_WAIT_MS", ENSURE_WAIT_MS_DEFAULT),
 		stopWaitMs: envMs("OMP_KUBE_STOP_WAIT_MS", STOP_WAIT_MS_DEFAULT),
 		deleteWaitMs: envMs("OMP_KUBE_DELETE_WAIT_MS", DELETE_WAIT_MS_DEFAULT),
+		listWaitMs: envMs("OMP_KUBE_LIST_WAIT_MS", LIST_WAIT_MS_DEFAULT),
 	};
 }
 
@@ -1472,6 +1484,310 @@ async function opDelete(rawRequest: ProviderRequest, deps: OpDeps): Promise<Prov
 }
 
 // ---------------------------------------------------------------------------
+// list-sessions: the session inventory of a volume the fleet cannot read
+// ---------------------------------------------------------------------------
+
+/** Last line the helper prints; its absence means the listing did not finish. */
+const LIST_SESSIONS_END = "OMP_LIST_SESSIONS_END";
+
+/**
+ * Inventory script run by the helper pod: one `<size>\t<relative path>` line
+ * per regular file under the agent sessions dir (symlinks are not followed
+ * and not listed), then the end marker. A missing sessions dir is an empty
+ * inventory; any enumeration failure exits non-zero before the marker, so a
+ * partial listing can never pass for a complete one.
+ */
+const LIST_SESSIONS_SCRIPT = [
+	`d=${POD_HOME_DIR}/agent/sessions`,
+	'if [ -e "$d" ] || [ -L "$d" ]; then',
+	'  [ -d "$d" ] || { echo "sessions path is not a directory" >&2; exit 3; }',
+	"  find -H \"$d\" -type f -printf '%s\\t%P\\n' || exit 4",
+	"fi",
+	`echo ${LIST_SESSIONS_END}`,
+].join("\n");
+
+/** Response budget for the inventory: stays well under the 1 MiB protocol cap. */
+const LIST_SESSIONS_RESPONSE_BUDGET = 768 * 1024;
+
+/** Per-entry JSON overhead allowance (`{"path":"","size":N},`). */
+const LIST_SESSIONS_ENTRY_OVERHEAD = 40;
+
+/**
+ * The short-lived inventory pod: mounts the workspace claim READ-ONLY, runs
+ * {@link LIST_SESSIONS_SCRIPT} with the session image's own `sh` + `find`
+ * (entrypoint overridden: no preparation, no daemon, no callback env, no
+ * secrets), restartPolicy Never, same hardened security context as the
+ * workspace pod. Labeled and annotated as fleet-owned so the provider only
+ * ever touches helpers it created.
+ */
+export function buildListPodManifest(
+	cfg: KubernetesConfig,
+	request: ProviderRequest,
+): Record<string, unknown> {
+	const { workspaceId, generation } = request;
+	const claim = baseNameFor(workspaceId);
+	const resources: Record<string, unknown> = {};
+	if (cfg.resources?.cpu !== undefined || cfg.resources?.memory !== undefined) {
+		const quantities: Record<string, string> = {};
+		if (cfg.resources.cpu !== undefined) quantities.cpu = cfg.resources.cpu;
+		if (cfg.resources.memory !== undefined) quantities.memory = cfg.resources.memory;
+		resources.requests = quantities;
+		resources.limits = quantities;
+	}
+	return {
+		apiVersion: "v1",
+		kind: "Pod",
+		metadata: {
+			name: `${claim}-ls`,
+			namespace: cfg.namespace,
+			labels: identityLabels(workspaceId, request.profile.id, generation),
+			annotations: {
+				[ANN_WORKSPACE_ID]: workspaceId,
+				[ANN_PROFILE_ID]: request.profile.id,
+			},
+		},
+		spec: {
+			restartPolicy: "Never",
+			automountServiceAccountToken: false,
+			enableServiceLinks: false,
+			terminationGracePeriodSeconds: 0,
+			securityContext: {
+				runAsNonRoot: true,
+				runAsUser: POD_UID,
+				runAsGroup: POD_UID,
+				seccompProfile: { type: "RuntimeDefault" },
+			},
+			containers: [
+				{
+					name: "list",
+					image: cfg.image,
+					imagePullPolicy: "IfNotPresent",
+					command: ["/bin/sh", "-c", LIST_SESSIONS_SCRIPT],
+					resources,
+					securityContext: {
+						runAsNonRoot: true,
+						runAsUser: POD_UID,
+						runAsGroup: POD_UID,
+						allowPrivilegeEscalation: false,
+						readOnlyRootFilesystem: true,
+						capabilities: { drop: ["ALL"] },
+					},
+					volumeMounts: [{ name: "workspace", mountPath: POD_WORKSPACE_ROOT, readOnly: true }],
+				},
+			],
+			volumes: [{ name: "workspace", persistentVolumeClaim: { claimName: claim, readOnly: true } }],
+		},
+	};
+}
+
+/**
+ * Parse the helper's log into a bounded inventory, or a reason it cannot be
+ * trusted. Entries beyond the shared export bounds (file count, bytes) or the
+ * response budget are dropped and flip `complete` to false; a missing end
+ * marker or a malformed line is a failure, never a shorter listing.
+ */
+function parseListSessionsLog(
+	log: string,
+): { sessions: ProviderSessionFile[]; complete: boolean } | { error: string } {
+	const sessions: ProviderSessionFile[] = [];
+	let complete = true;
+	let bytes = 0;
+	let budget = 0;
+	let ended = false;
+	for (const line of log.split("\n")) {
+		if (line === "") continue;
+		if (ended) return { error: `unexpected output after the end marker: ${line.slice(0, 80)}` };
+		if (line === LIST_SESSIONS_END) {
+			ended = true;
+			continue;
+		}
+		const match = /^(\d+)\t(.+)$/.exec(line);
+		if (match === null) return { error: `unparseable inventory line: ${line.slice(0, 80)}` };
+		const size = Number(match[1]);
+		if (!Number.isSafeInteger(size)) return { error: `unparseable inventory size: ${match[1]}` };
+		const path = match[2];
+		const cost = Buffer.byteLength(path) + LIST_SESSIONS_ENTRY_OVERHEAD;
+		if (
+			sessions.length >= MAX_EXPORT_FILES ||
+			bytes + size > MAX_EXPORT_BYTES ||
+			budget + cost > LIST_SESSIONS_RESPONSE_BUDGET
+		) {
+			complete = false;
+			continue;
+		}
+		sessions.push({ path, size });
+		bytes += size;
+		budget += cost;
+	}
+	if (!ended) return { error: "the listing did not finish (no end marker)" };
+	return { sessions, complete };
+}
+
+/**
+ * list-sessions: prove what session files the workspace volume holds without
+ * a writer. Requires the workspace pod to be gone (a live writer makes any
+ * inventory non-final; the fleet stops first), then runs a read-only helper
+ * pod over the claim, reads its log, and always removes the helper. A claim
+ * that does not exist holds nothing (empty, complete inventory). The helper's
+ * log read needs `get pods/log` (preflight checks it).
+ */
+async function opListSessions(
+	rawRequest: ProviderRequest,
+	deps: OpDeps,
+): Promise<ProviderResponse> {
+	const request = rawRequest as KubernetesProviderRequest;
+	const { stateDir, workspaceId, generation } = request;
+
+	let cfg: KubernetesConfig;
+	try {
+		cfg = resolveConfig(request, deps.env);
+	} catch (cause) {
+		if (cause instanceof ProviderProtocolError) {
+			return err(
+				cause.code === "timeout" ? "internal" : cause.code,
+				cause.message,
+				cause.retryable,
+			);
+		}
+		return err("invalid_request", String(cause), false);
+	}
+	const podName = baseNameFor(workspaceId);
+	const helperName = `${podName}-ls`;
+	const handle = handleFor(cfg.namespace, workspaceId, generation);
+
+	mkdirSync(stateDir, { recursive: true });
+	let lock;
+	try {
+		lock = acquireFileLock(join(stateDir, "lock"), STATE_LOCK_HOLDER);
+	} catch {
+		return err("conflict", "another provider instance holds the workspace lock", true);
+	}
+
+	try {
+		try {
+			const pod = await kubeGet(deps.exec, cfg, "pod", podName);
+			if (pod !== null) {
+				if (!ownedByWorkspace(podMeta(pod), workspaceId)) {
+					return err(
+						"conflict",
+						`pod ${cfg.namespace}/${podName} is not owned by this workspace; refusing to list its volume`,
+						false,
+					);
+				}
+				return err(
+					"conflict",
+					`pod ${podName} still exists (${podPhase(pod)}); stop the workspace before listing its sessions`,
+					true,
+				);
+			}
+			const pvc = await kubeGet(deps.exec, cfg, "persistentvolumeclaim", podName);
+			if (pvc === null) return ok(handle, "missing", { sessions: [], complete: true });
+			if (!ownedByWorkspace(pvcMeta(pvc), workspaceId)) {
+				return err(
+					"conflict",
+					`claim ${cfg.namespace}/${podName} is not owned by this workspace; refusing to list a foreign claim`,
+					false,
+				);
+			}
+			// A helper left by an interrupted earlier call is ours to remove.
+			const stale = await kubeGet(deps.exec, cfg, "pod", helperName);
+			if (stale !== null) {
+				if (!ownedByWorkspace(podMeta(stale), workspaceId)) {
+					return err(
+						"conflict",
+						`pod ${cfg.namespace}/${helperName} is not owned by this workspace; refusing to reuse its name`,
+						false,
+					);
+				}
+				await kubeDelete(deps.exec, cfg, "pod", helperName, `pod ${helperName}`);
+				if (!(await waitGone(deps.exec, cfg, "pod", helperName, deps.stopWaitMs))) {
+					return err(
+						"conflict",
+						`stale inventory pod ${helperName} did not disappear in time`,
+						true,
+					);
+				}
+			}
+		} catch (cause) {
+			return kubeFailure(cause, "list-sessions");
+		}
+
+		let result: ProviderResponse;
+		try {
+			await kubeCreate(
+				deps.exec,
+				cfg,
+				buildListPodManifest(cfg, request),
+				`inventory pod ${helperName}`,
+			);
+			result = await readListPod(deps, cfg, helperName, handle);
+		} catch (cause) {
+			result = kubeFailure(cause, "list-sessions");
+		}
+
+		// The helper holds the claim; it must be gone before anything else
+		// (stop, delete, a replacement writer) touches the volume.
+		try {
+			await kubeDelete(deps.exec, cfg, "pod", helperName, `pod ${helperName}`);
+			if (!(await waitGone(deps.exec, cfg, "pod", helperName, deps.stopWaitMs))) {
+				return err("conflict", `inventory pod ${helperName} did not disappear in time`, true);
+			}
+		} catch (cause) {
+			return kubeFailure(cause, "list-sessions");
+		}
+		return result;
+	} finally {
+		lock.release();
+	}
+}
+
+/** Wait for the helper to finish, read its log, and turn it into the response. */
+async function readListPod(
+	deps: OpDeps,
+	cfg: KubernetesConfig,
+	helperName: string,
+	handle: string,
+): Promise<ProviderResponse> {
+	let last: Record<string, unknown> | null = null;
+	const finished = await pollUntil(deps.listWaitMs, async () => {
+		last = await kubeGet(deps.exec, cfg, "pod", helperName);
+		if (last === null) return false;
+		const phase = podPhase(last);
+		return phase === "Succeeded" || phase === "Failed";
+	});
+	if (!finished) {
+		const reason = last === null ? null : podContainerReason(last);
+		const remediation =
+			reason !== null && /ImagePull|ErrImage/i.test(reason)
+				? `image ${cfg.image} cannot be pulled (${reason}); make the session-runtime image available to the cluster`
+				: `inventory pod ${helperName} did not finish within ${deps.listWaitMs}ms (${last === null ? "Missing" : podPhase(last)}${reason === null ? "" : `: ${reason}`})`;
+		return err("unavailable", remediation, true);
+	}
+	const phase = last === null ? "Missing" : podPhase(last);
+	const logs = await deps.exec(
+		kubeArgs(cfg, ["logs", helperName, "-n", cfg.namespace, "-c", "list"]),
+	);
+	if (logs.code !== 0) {
+		throw new KubeCallError(
+			`kubectl logs ${helperName} failed: ${logs.stderr.trim() || `exit ${logs.code}`}`,
+			logs,
+		);
+	}
+	if (phase !== "Succeeded") {
+		return err(
+			"unavailable",
+			`inventory pod ${helperName} failed (${phase}): ${logs.stdout.trim().slice(-300) || "no output"}`,
+			false,
+		);
+	}
+	const parsed = parseListSessionsLog(logs.stdout);
+	if ("error" in parsed) {
+		return err("unavailable", `inventory pod ${helperName}: ${parsed.error}`, false);
+	}
+	return ok(handle, "stopped", { sessions: parsed.sessions, complete: parsed.complete });
+}
+
+// ---------------------------------------------------------------------------
 // Preflight (P5.6): actionable, no installs, no object creation
 // ---------------------------------------------------------------------------
 
@@ -1607,6 +1923,7 @@ export async function preflightKubernetesProfile(
 			["get", "persistentvolumeclaims"],
 			["create", "persistentvolumeclaims"],
 			["delete", "persistentvolumeclaims"],
+			["get", "pods/log"],
 		] as const) {
 			const result = await exec([
 				...base,
@@ -1757,6 +2074,7 @@ const OPS: Record<
 	inspect: opInspect,
 	stop: opStop,
 	delete: opDelete,
+	"list-sessions": opListSessions,
 };
 
 /** Exported for offline contract tests; the fleet entry is main() below. */
@@ -1771,7 +2089,7 @@ async function main(): Promise<number> {
 	const argv = process.argv.slice(2);
 	if (argv.length !== 1 || !(OPS as Record<string, unknown>)[argv[0]]) {
 		process.stderr.write(
-			`kubernetes-provider: expected <ensure-running|inspect|stop|delete> with one JSON request on stdin, got argv ${argv.join(" ")}\n`,
+			`kubernetes-provider: expected <ensure-running|inspect|stop|delete|list-sessions> with one JSON request on stdin, got argv ${argv.join(" ")}\n`,
 		);
 		return 1;
 	}

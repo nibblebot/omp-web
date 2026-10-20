@@ -41,7 +41,8 @@ payload on stdin and unsets the env first, so the daemon never carries it.
 ## Build prerequisites (reported by provider preflight, never auto-provisioned)
 
 - Operator-approved context with a reachable API and namespace-scoped RBAC for
-  `get|create|delete` on `pods` and `persistentvolumeclaims`.
+  `get|create|delete` on `pods` and `persistentvolumeclaims`, plus `get` on `pods/log`
+  (the deletion gate's read-only session-inventory helper pod).
 - The session-runtime image built above and pullable in the profile namespace
   (`imagePullSecrets` are namespace-scoped and operator-managed).
 - A StorageClass (or cluster default) providing `ReadWriteOnce` volumes.

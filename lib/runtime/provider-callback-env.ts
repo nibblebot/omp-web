@@ -15,6 +15,7 @@ import {
 	parseProviderRequest,
 	type ProviderErrorCode,
 	type ProviderObserved,
+	type ProviderOkResponse,
 	type ProviderRequest,
 	type ProviderResponse,
 } from "./provider-protocol";
@@ -137,7 +138,7 @@ export function readCallbackEnv(
 export function ok(
 	handle: string,
 	observed: ProviderObserved,
-	extra?: { pid?: number; startedAt?: number },
+	extra?: Pick<ProviderOkResponse, "pid" | "startedAt" | "sessions" | "complete">,
 ): ProviderResponse {
 	return { ok: true, handle, observed, ...extra };
 }

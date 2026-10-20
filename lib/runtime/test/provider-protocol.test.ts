@@ -1,11 +1,13 @@
 /**
  * Provider request profile validation (`parseProfile`): per-kind key
- * allowlists, a field owned by another kind is a typed `invalid_request`.
+ * allowlists, a field owned by another kind is a typed `invalid_request`;
+ * and `list-sessions` response parsing.
  */
 import { describe, expect, test } from "bun:test";
 import {
 	ProviderProtocolError,
 	parseProviderRequest,
+	parseProviderResponse,
 	type ProviderRequest,
 } from "#lib/runtime/provider-protocol";
 
@@ -74,5 +76,43 @@ describe("request profile per kind", () => {
 	test("a bwrap profile still requires tools", () => {
 		const { tools: _tools, ...noTools } = bwrap;
 		expect(rejection(noTools).message).toContain("tools must be an array");
+	});
+});
+
+const ENVELOPE = { ok: true, handle: "h", observed: "stopped" };
+
+describe("list-sessions response", () => {
+	test("carries a bounded session inventory and its completeness flag", () => {
+		const parsed = parseProviderResponse(
+			JSON.stringify({
+				...ENVELOPE,
+				sessions: [{ path: "s1/s1.jsonl", size: 12 }],
+				complete: true,
+			}),
+		);
+		expect(parsed).toMatchObject({
+			ok: true,
+			sessions: [{ path: "s1/s1.jsonl", size: 12 }],
+			complete: true,
+		});
+	});
+
+	test("an ok response without an inventory carries neither field", () => {
+		const parsed = parseProviderResponse(JSON.stringify(ENVELOPE));
+		expect(parsed.ok && "sessions" in parsed).toBe(false);
+		expect(parsed.ok && "complete" in parsed).toBe(false);
+	});
+
+	test.each([
+		["a non-array inventory", { sessions: "s1/s1.jsonl" }],
+		["a negative size", { sessions: [{ path: "s1/a", size: -1 }] }],
+		["a fractional size", { sessions: [{ path: "s1/a", size: 1.5 }] }],
+		["an empty path", { sessions: [{ path: "", size: 1 }] }],
+		["an unknown entry key", { sessions: [{ path: "s1/a", size: 1, sha256: "x" }] }],
+		["a non-boolean complete flag", { sessions: [], complete: "yes" }],
+	])("rejects %s", (_label, extra) => {
+		expect(() => parseProviderResponse(JSON.stringify({ ...ENVELOPE, ...extra }))).toThrow(
+			/provider response/,
+		);
 	});
 });

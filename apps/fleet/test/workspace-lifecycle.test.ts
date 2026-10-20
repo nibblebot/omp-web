@@ -144,6 +144,12 @@ interface ProviderScenario {
 	stopObserved: "stopped" | "running";
 	/** delete failures: consecutive "delete" requests to fail before succeeding. */
 	deleteFailures: number;
+	/**
+	 * list-sessions answer for a volume the fleet cannot read. Absent = the
+	 * provider does not know the op (a typed invalid_request, as a real
+	 * provider without it answers).
+	 */
+	listSessions?: { files: { path: string; size: number }[]; complete?: boolean };
 }
 
 /**
@@ -182,6 +188,10 @@ if (op === "ensure-running") {
   writeFileSync(countFile, String(attempt));
   if (attempt <= scenario.deleteFailures) console.log(err("unavailable", "provider storage busy; delete failed"));
   else console.log(ok("missing"));
+} else if (op === "list-sessions") {
+  const listed = scenario.listSessions;
+  if (listed === undefined) console.log(err("invalid_request", "unknown op list-sessions"));
+  else console.log(JSON.stringify({ ok: true, handle: req.handle ?? "h", observed: "stopped", sessions: listed.files, complete: listed.complete ?? true }));
 } else {
   console.log(ok("missing"));
 }
@@ -529,10 +539,11 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				// The provider never saw a delete (the gate stopped at the
 				// verification step).
 				expect(providerOps(cloneRoot, daemonId).filter((o) => o.op === "delete")).toHaveLength(0);
-				// A start remains blocked too: the workspace is quarantined by
-				// the pending-retry state until a delete retry succeeds.
+				// A refusal that ran nothing destructive does not strand the
+				// row: Start abandons the pending delete.
 				const wake = await postJson(server.port, "/ctl/start", { daemonId });
-				expect(wake.status).toBe(409); // archive_pending maps to 409
+				expect(wake.status).toBe(200);
+				expect(server.registry.get(daemonId)?.workspace?.deletion).toBeUndefined();
 			} finally {
 				await server.close();
 			}
@@ -607,6 +618,9 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				expect(existsSync(readOnlyMarker(logsDir, daemonId))).toBe(true);
 				expect(existsSync(join(cloneRoot, daemonId))).toBe(true);
 				expect(deleteCount(cloneRoot, daemonId)).toBe(1); // exactly ONE failed attempt
+				// Past the read-only flip the row stays quarantined: Start is refused.
+				const blockedStart = await postJson(server.port, "/ctl/start", { daemonId });
+				expect(blockedStart.status).toBe(409);
 
 				// FLEET RESTART on the same state, then the RETRY: the retry
 				// must complete the interrupted destroy exactly once.
@@ -972,11 +986,15 @@ interface GuardFixture extends FleetFixture {
  * everStarted (authorized generation + provider handle) with a proven stop,
  * so admission and quiesce pass and only the guards under test can refuse.
  */
-async function bootStoppedClone(name: string): Promise<GuardFixture> {
+async function bootStoppedClone(
+	name: string,
+	listSessions?: ProviderScenario["listSessions"],
+): Promise<GuardFixture> {
 	const fixture = await bootFleet({
 		runningWhileLive: false,
 		stopObserved: "stopped",
 		deleteFailures: 0,
+		...(listSessions !== undefined ? { listSessions } : {}),
 	});
 	const daemonId = await createClone(fixture.server, fixture.repoDir, name);
 	const start = await postJson(fixture.server.port, "/ctl/start", { daemonId });
@@ -1530,7 +1548,7 @@ describe("clone deletion volume/store cross-check", () => {
 		test(
 			`an ever-started clone with a ${label} still deletes and retains its verified store`,
 			async () => {
-				const fixture = await bootStoppedClone("volume-empty-or-absent");
+				const fixture = await bootStoppedClone("volume-empty-or-absent", { files: [] });
 				try {
 					seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
 					prepare(fixture);
@@ -1555,6 +1573,164 @@ describe("clone deletion volume/store cross-check", () => {
 			{ timeout: 20_000 },
 		);
 	}
+});
+
+describe("clone deletion of a volume the fleet cannot read (provider session inventory)", () => {
+	/** Make the volume invisible fleet-side, as a kubernetes claim always is. */
+	function detachVolume(fixture: GuardFixture): string {
+		const detached = join(fixture.cloneRoot, `${fixture.daemonId}.detached`);
+		renameSync(fixture.volume.root, detached);
+		return detached;
+	}
+
+	const mainPath = `${SESSION_ID}/${SESSION_ID}.jsonl`;
+
+	test(
+		"a clone whose provider proves an empty volume deletes with an empty store (never wrote a transcript)",
+		async () => {
+			const fixture = await bootStoppedClone("k8s-no-transcript", { files: [] });
+			try {
+				detachVolume(fixture);
+				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				expect(response.status).toBe(200);
+				const body = (await response.json()) as { removed?: string; verified?: string[] };
+				expect(body.removed).toBe(fixture.daemonId);
+				expect(body.verified).toEqual([]);
+				expect(fixture.server.registry.get(fixture.daemonId)).toBeUndefined();
+				const ops = providerOps(fixture.cloneRoot, fixture.daemonId).map((o) => o.op);
+				expect(ops).toContain("list-sessions");
+				expect(ops.filter((op) => op === "delete")).toHaveLength(1);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"an inventory whose files the verified store holds deletes and retains the store",
+		async () => {
+			const size = Buffer.byteLength(transcriptJsonl(), "utf8");
+			const fixture = await bootStoppedClone("k8s-matched", { files: [{ path: mainPath, size }] });
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				detachVolume(fixture);
+				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				expect(response.status).toBe(200);
+				const body = (await response.json()) as { removed?: string; verified?: string[] };
+				expect(body.verified).toEqual([SESSION_ID]);
+				expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.daemonId))).toBe(true);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a volume session the store never received refuses deletion, retains everything, and leaves the row startable",
+		async () => {
+			const fixture = await bootStoppedClone("k8s-unmatched", {
+				files: [{ path: mainPath, size: 64 }],
+			});
+			try {
+				const detached = detachVolume(fixture);
+				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const refusal = response.clone();
+				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
+					retainedVolumeRoot: detached,
+					storedSession: false,
+				});
+				const body = (await refusal.json()) as { error?: string };
+				expect(body.error).toContain(`session ${SESSION_ID} file ${SESSION_ID}.jsonl (64 bytes)`);
+				expect(body.error).toContain("missing from the fleet store");
+
+				// Retry delete is still available (and still refused for the same reason).
+				const retry = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				expect(retry.status).toBe(409);
+
+				// Nothing destructive ran, so Start abandons the pending delete.
+				const start = await postJson(fixture.server.port, "/ctl/start", {
+					daemonId: fixture.daemonId,
+				});
+				expect(start.status).toBe(200);
+				expect(fixture.server.registry.get(fixture.daemonId)?.workspace?.deletion).toBeUndefined();
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 30_000 },
+	);
+
+	test(
+		"a store file shorter than the volume's file refuses deletion",
+		async () => {
+			const size = Buffer.byteLength(transcriptJsonl(), "utf8");
+			const fixture = await bootStoppedClone("k8s-short-store", {
+				files: [{ path: mainPath, size: size + 10 }],
+			});
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				const detached = detachVolume(fixture);
+				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const refusal = response.clone();
+				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
+					retainedVolumeRoot: detached,
+				});
+				const body = (await refusal.json()) as { error?: string };
+				expect(body.error).toContain(`truncated in the fleet store (${size}/${size + 10} bytes)`);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a truncated inventory refuses deletion",
+		async () => {
+			const fixture = await bootStoppedClone("k8s-truncated-inventory", {
+				files: [],
+				complete: false,
+			});
+			try {
+				const detached = detachVolume(fixture);
+				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const refusal = response.clone();
+				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
+					retainedVolumeRoot: detached,
+					storedSession: false,
+				});
+				const body = (await refusal.json()) as { error?: string };
+				expect(body.error).toContain("exceeds verification bounds");
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a provider that does not know list-sessions fails safe: deletion is refused",
+		async () => {
+			const fixture = await bootStoppedClone("k8s-unsupported-op");
+			try {
+				const detached = detachVolume(fixture);
+				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const refusal = response.clone();
+				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
+					retainedVolumeRoot: detached,
+					storedSession: false,
+				});
+				const body = (await refusal.json()) as { error?: string };
+				expect(body.error).toContain("could not list its sessions");
+				expect(body.error).toContain("invalid_request");
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
 });
 
 test(

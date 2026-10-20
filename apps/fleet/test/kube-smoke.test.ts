@@ -39,6 +39,8 @@ interface FakePod {
 	annotations: Record<string, string>;
 	startTime?: string;
 	containerReason?: string | null;
+	/** Phase a Pending pod settles into (default Running). */
+	settlesTo?: string;
 }
 
 interface FakePvc {
@@ -57,6 +59,12 @@ class FakeCluster {
 	secrets = new Map<string, { data: Record<string, string> }>();
 	rbac = new Set<string>();
 	reachable = true;
+	/** Phase the inventory helper pod settles into after creation. */
+	helperPhase: "Succeeded" | "Failed" = "Succeeded";
+	/** What `kubectl logs` returns for the helper. */
+	sessionLog = "";
+	/** Every inventory helper manifest the provider created. */
+	helperManifests: Record<string, unknown>[] = [];
 	context = "real-ctx";
 	clientVersion = true;
 }
@@ -111,6 +119,8 @@ function fakeExec(argv: readonly string[], input?: string): Promise<KubeExecResu
 			if (cluster.reachable) return json({ serverVersion: { gitVersion: "v1.29.0" } });
 			return err(1, "The connection to the server localhost:8080 was refused");
 		}
+
+		if (verb === "logs") return { code: 0, stdout: cluster.sessionLog, stderr: "" };
 
 		const kind = rest[0] as string | undefined;
 		let name = rest[1] as string | undefined;
@@ -183,7 +193,7 @@ function fakeExec(argv: readonly string[], input?: string): Promise<KubeExecResu
 				// it, so faked timers would stall the op under test.
 				setTimeout(() => {
 					const cur = cluster.pods.get(name as string);
-					if (cur !== undefined && cur.phase === "Pending") cur.phase = "Running";
+					if (cur !== undefined && cur.phase === "Pending") cur.phase = cur.settlesTo ?? "Running";
 				}, 30);
 			}
 			const status: Record<string, unknown> = { phase: pod.phase };
@@ -219,7 +229,10 @@ function fakeExec(argv: readonly string[], input?: string): Promise<KubeExecResu
 					labels: manifest.metadata.labels,
 					annotations: manifest.metadata.annotations,
 					startTime: new Date().toISOString(),
+					// Inventory helpers run to completion instead of staying Running.
+					...(podName.endsWith("-ls") ? { settlesTo: cluster.helperPhase } : {}),
 				});
+				if (podName.endsWith("-ls")) cluster.helperManifests.push(manifest);
 				return json({ ...manifest, metadata: { ...manifest.metadata, uid } });
 			}
 			if (manifest.kind === "PersistentVolumeClaim") {
@@ -309,6 +322,7 @@ for (const verb of ["get", "create", "delete"]) {
 		cluster.rbac.add(`${verb}:${resource}:omp-clones`);
 	}
 }
+cluster.rbac.add("get:pods/log:omp-clones");
 
 const env: Record<string, string> = {
 	OMP_KUBE_BIN: "kubectl",
@@ -496,6 +510,95 @@ describe("case F: stop retains the PVC and proves the pod gone", () => {
 	});
 });
 
+describe("case F2: list-sessions proves the volume inventory with a read-only helper pod", () => {
+	const END = "OMP_LIST_SESSIONS_END";
+
+	test("F2a inventory is parsed and the helper is read-only, owned, and removed", async () => {
+		cluster.sessionLog = `123\ts1/s1.jsonl\n45\ts1/sub/a.jsonl\n${END}\n`;
+		const listed = expectOk(await runOp(req("list-sessions"), { exec: fakeExec, env }));
+		expect(listed.sessions).toEqual([
+			{ path: "s1/s1.jsonl", size: 123 },
+			{ path: "s1/sub/a.jsonl", size: 45 },
+		]);
+		expect(listed.complete).toBe(true);
+		expect(cluster.pods.size, [...cluster.pods.keys()].join(",")).toBe(0);
+		const manifest = cluster.helperManifests.at(-1) as {
+			metadata: {
+				name: string;
+				labels: Record<string, string>;
+				annotations: Record<string, string>;
+			};
+			spec: {
+				restartPolicy: string;
+				volumes: { persistentVolumeClaim: { claimName: string; readOnly: boolean } }[];
+				containers: { volumeMounts: { readOnly: boolean }[]; command: string[] }[];
+			};
+		};
+		expect(manifest.metadata.name).toBe(`${d1Claim}-ls`);
+		expect(manifest.metadata.labels[LABEL_MANAGED]).toBe("omp-web");
+		expect(manifest.metadata.annotations[ANN_WORKSPACE_ID]).toBe("d1");
+		expect(manifest.spec.restartPolicy).toBe("Never");
+		expect(manifest.spec.volumes[0]?.persistentVolumeClaim).toEqual({
+			claimName: d1Claim,
+			readOnly: true,
+		});
+		expect(manifest.spec.containers[0]?.volumeMounts[0]?.readOnly).toBe(true);
+		expect(manifest.spec.containers[0]?.command.at(-1)).toContain(
+			"/workspace/.home/agent/sessions",
+		);
+	});
+
+	test("F2b an empty sessions dir is an empty complete inventory", async () => {
+		cluster.sessionLog = `${END}\n`;
+		const listed = expectOk(await runOp(req("list-sessions"), { exec: fakeExec, env }));
+		expect(listed.sessions).toEqual([]);
+		expect(listed.complete).toBe(true);
+	});
+
+	test("F2c a listing without the end marker is a failure, not a shorter inventory", async () => {
+		cluster.sessionLog = "123\ts1/s1.jsonl\n";
+		const listed = expectError(await runOp(req("list-sessions"), { exec: fakeExec, env }));
+		expect(listed.error.code).toBe("unavailable");
+		expect(listed.error.message).toMatch(/no end marker/);
+		expect(cluster.pods.size).toBe(0);
+	});
+
+	test("F2d a malformed line is a failure", async () => {
+		cluster.sessionLog = `not-a-size\ts1/s1.jsonl\n${END}\n`;
+		const listed = expectError(await runOp(req("list-sessions"), { exec: fakeExec, env }));
+		expect(listed.error.code).toBe("unavailable");
+		expect(listed.error.message).toMatch(/unparseable/);
+	});
+
+	test("F2e a helper that fails is a failure and is still removed", async () => {
+		cluster.helperPhase = "Failed";
+		cluster.sessionLog = "find: permission denied\n";
+		const listed = expectError(await runOp(req("list-sessions"), { exec: fakeExec, env }));
+		cluster.helperPhase = "Succeeded";
+		expect(listed.error.code).toBe("unavailable");
+		expect(listed.error.message).toMatch(/failed \(Failed\)/);
+		expect(cluster.pods.size).toBe(0);
+	});
+
+	test("F2f an inventory beyond the file bound is truncated and flagged incomplete", async () => {
+		const lines: string[] = [];
+		for (let i = 0; i < 10_001; i++) lines.push(`1\ts1/f${i}.jsonl`);
+		cluster.sessionLog = `${lines.join("\n")}\n${END}\n`;
+		const listed = expectOk(await runOp(req("list-sessions"), { exec: fakeExec, env }));
+		expect(listed.sessions?.length).toBe(10_000);
+		expect(listed.complete).toBe(false);
+	});
+
+	test("F2g a workspace with no claim has an empty complete inventory", async () => {
+		const listed = expectOk(
+			await runOp(req("list-sessions", { workspaceId: "d9" }), { exec: fakeExec, env }),
+		);
+		expect(listed.observed).toBe("missing");
+		expect(listed.sessions).toEqual([]);
+		expect(listed.complete).toBe(true);
+	});
+});
+
 describe("case G: replacement ensure reuses the PVC, new pod, single claim", () => {
 	test("G replacement ensure -> running", async () => {
 		const resp = expectOk(await runOp(req("ensure-running"), { exec: fakeExec, env }));
@@ -532,6 +635,17 @@ describe("case I: stop generation 2 against a gen-1 pod", () => {
 			await runOp(req("stop", { generation: 2 }), { exec: fakeExec, env }),
 		);
 		expect(stopGen2.error.code).toBe("conflict");
+	});
+});
+
+describe("case I2: list-sessions refuses while the workspace pod exists", () => {
+	test("I2 live pod -> conflict (retryable), no helper created", async () => {
+		const before = cluster.helperManifests.length;
+		const listed = expectError(await runOp(req("list-sessions"), { exec: fakeExec, env }));
+		expect(listed.error.code).toBe("conflict");
+		expect(listed.error.retryable).toBe(true);
+		expect(listed.error.message).toMatch(/stop the workspace/);
+		expect(cluster.helperManifests.length).toBe(before);
 	});
 });
 

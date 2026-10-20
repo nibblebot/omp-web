@@ -275,6 +275,9 @@ function readDirStrict(dir: string): DirEnumeration {
 	}
 }
 
+/** A session directory name under the agent sessions dir (the volume walk and provider inventories select by it). */
+const SESSION_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 /**
  * Walk one volume session dir for regular files (no traversal, no symlinks),
  * mirroring the manifest relpath rules, bounded like the export gate. Returns
@@ -721,12 +724,25 @@ export class WorkspaceLifecycle {
 	}
 
 	async #ensureRunning(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void> {
-		const entry = this.#requireClone(daemonId, "start");
-		if (entry.workspace?.deletion?.state !== undefined) {
-			throw new CloneLifecycleError(
-				entry.workspace.deletion.state === "delete-pending-retry" ? "archive_pending" : "conflict",
-				`workspace ${daemonId} is being deleted (${entry.workspace.deletion.state}); cannot start`,
-			);
+		let entry = this.#requireClone(daemonId, "start");
+		const deletion = entry.workspace?.deletion;
+		if (deletion !== undefined) {
+			// A refused delete that ran no destructive step (no read-only store
+			// flip, no provider/volume removal) left the workspace intact:
+			// starting it abandons the pending delete instead of stranding the
+			// row. Anything past the flip stays quarantined until the delete
+			// retry completes.
+			const destructive =
+				deletion.remainingResources !== undefined ||
+				this.#deps.logStore?.isReadOnly(daemonId) === true;
+			if (deletion.state !== "delete-pending-retry" || destructive) {
+				throw new CloneLifecycleError(
+					deletion.state === "delete-pending-retry" ? "archive_pending" : "conflict",
+					`workspace ${daemonId} is being deleted (${deletion.state}); cannot start`,
+				);
+			}
+			this.#deps.registry.clearWorkspaceDeletion(daemonId);
+			entry = this.#deps.registry.get(daemonId) ?? entry;
 		}
 		await this.#ensure(entry, { firstStart: false, resumeSessionId: opts?.resumeSessionId });
 	}
@@ -1684,7 +1700,7 @@ export class WorkspaceLifecycle {
 				for (const dir of sessions.entries) {
 					if (!dir.isDirectory()) continue;
 					const sid = dir.name;
-					if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sid)) continue;
+					if (!SESSION_DIR_NAME.test(sid)) continue;
 					const failure = walkSessionDir(join(sessionsDir, sid), sid, state, files);
 					if (failure !== undefined) {
 						unreadable = { subject: "volume session tree", reason: failure };
@@ -1722,18 +1738,11 @@ export class WorkspaceLifecycle {
 			// sessions:[]). Nothing to cross-check.
 		}
 		if (!volumePresent) {
-			if (everStarted && storeManifest === undefined) {
-				// Store verified (storeManifest is present only on ok:true
-				// with provenance), if the store really has zero sessions
-				// AND we cannot read the volume, completeness is unprovable.
-				// (storeManifest undefined on a non-ok result is handled by
-				// the caller; here it means ok + no manifest is impossible.)
-				return {
-					ok: false,
-					message: `cannot verify store completeness for ${daemonId}: volume is not fleet-readable and the store has no sessions to compare`,
-				};
-			}
-			return { ok: true }; // k8s volume with verified stored sessions, or never started.
+			// A volume the fleet cannot read (a kubernetes claim, or a removed
+			// volume): the provider proves its session inventory. A
+			// never-started workspace has no volume sessions to lose.
+			if (!everStarted) return { ok: true };
+			return await this.#verifyProviderInventory(daemonId, storeManifest);
 		}
 		if (!bounded) {
 			return {
@@ -1777,6 +1786,74 @@ export class WorkspaceLifecycle {
 				return {
 					ok: false,
 					message: `workspace ${daemonId} session ${file.sessionId} file ${file.relpath} differs from its stored bytes; deletion blocked (rewrite not re-streamed)`,
+				};
+			}
+		}
+		return { ok: true };
+	}
+
+	/**
+	 * Completeness proof for a volume the fleet cannot read: the provider
+	 * lists the session files the volume holds (stopped compute, bounded like
+	 * the fleet-visible walk) and every one must already be in the verified
+	 * store with at least its size. Sessions are not hashed (the fleet cannot
+	 * read the bytes), so a same-size rewrite is not caught here; truncation
+	 * and unstreamed files are. An empty inventory proves there is nothing to
+	 * lose, whatever the store holds. A provider that fails, is truncated, or
+	 * does not implement `list-sessions` (rejected as `invalid_request`, or an
+	 * ok response without an inventory) proves nothing: deletion is refused.
+	 */
+	async #verifyProviderInventory(
+		daemonId: string,
+		storeManifest: ArchiveManifest | undefined,
+	): Promise<{ ok: true } | { ok: false; message: string }> {
+		const unverifiable = (reason: string): { ok: false; message: string } => ({
+			ok: false,
+			message: `cannot verify store completeness for ${daemonId}: volume is not fleet-readable and ${reason}`,
+		});
+		let inventory: ProviderOkResponse;
+		try {
+			inventory = await this.#runCloneOp(
+				daemonId,
+				"list-sessions",
+				this.#handleOf(this.#require(daemonId)),
+			);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return unverifiable(`the provider could not list its sessions (${reason})`);
+		}
+		if (inventory.sessions === undefined) {
+			return unverifiable("the provider returned no session inventory (list-sessions unsupported)");
+		}
+		if (inventory.complete !== true) {
+			return {
+				ok: false,
+				message: `session tree for ${daemonId} exceeds verification bounds (${MAX_EXPORT_FILES} files / ${MAX_EXPORT_BYTES} bytes); deletion blocked`,
+			};
+		}
+		const stored = new Map<string, number>();
+		for (const file of storeManifest?.files ?? []) {
+			stored.set(`${file.sessionId}/${file.path}`, file.size);
+		}
+		// Same file selection as the fleet-visible walk: files inside a
+		// session directory with a normalized relative path.
+		for (const file of inventory.sessions) {
+			const slash = file.path.indexOf("/");
+			if (slash <= 0) continue;
+			const sessionId = file.path.slice(0, slash);
+			const relpath = file.path.slice(slash + 1);
+			if (!SESSION_DIR_NAME.test(sessionId) || !isNormalizedPosixRelativePath(relpath)) continue;
+			const storedSize = stored.get(file.path);
+			if (storedSize === undefined) {
+				return {
+					ok: false,
+					message: `workspace ${daemonId} session ${sessionId} file ${relpath} (${file.size} bytes) is on its volume but missing from the fleet store; deletion blocked (logs were not fully streamed)`,
+				};
+			}
+			if (storedSize < file.size) {
+				return {
+					ok: false,
+					message: `workspace ${daemonId} session ${sessionId} file ${relpath} is truncated in the fleet store (${storedSize}/${file.size} bytes); deletion blocked`,
 				};
 			}
 		}
@@ -1853,7 +1930,7 @@ export class WorkspaceLifecycle {
 	 */
 	async #runCloneOp(
 		daemonId: string,
-		op: "ensure-running" | "inspect" | "stop" | "delete",
+		op: "ensure-running" | "inspect" | "stop" | "delete" | "list-sessions",
 		handle: string | undefined,
 		generationOverride?: number,
 	): Promise<ProviderOkResponse> {

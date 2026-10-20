@@ -618,6 +618,20 @@ async function opDelete(request: ProviderRequest): Promise<ProviderResponse> {
 	return ok(handle, "missing");
 }
 
+/**
+ * list-sessions is the kubernetes provider's proof of a volume the fleet
+ * cannot read. A bwrap volume lives on the fleet host, so the fleet walks its
+ * session tree itself and never asks; an ask is rejected like any op the
+ * provider does not implement.
+ */
+function opListSessions(): ProviderResponse {
+	return err(
+		"invalid_request",
+		"list-sessions is not supported by bwrap profiles: the workspace volume is fleet-visible",
+		false,
+	);
+}
+
 // ---------------------------------------------------------------------------
 // Protocol entry
 // ---------------------------------------------------------------------------
@@ -630,6 +644,7 @@ const OPS: Record<
 	inspect: opInspect,
 	stop: opStop,
 	delete: opDelete,
+	"list-sessions": opListSessions,
 };
 
 async function main(): Promise<number> {

@@ -37,7 +37,13 @@ export const OMP_PROVIDER_PROTO = 1;
 export const PROVIDER_JSON_MAX_BYTES = 1024 * 1024;
 
 /** Operation kinds; the fleet invokes the executable with one of these. */
-export const PROVIDER_OPS = ["ensure-running", "inspect", "stop", "delete"] as const;
+export const PROVIDER_OPS = [
+	"ensure-running",
+	"inspect",
+	"stop",
+	"delete",
+	"list-sessions",
+] as const;
 export type ProviderOp = (typeof PROVIDER_OPS)[number];
 
 /** Lifecycle observation the provider reports for a workspace. */
@@ -553,7 +559,16 @@ export function parseProviderRequest(raw: string, opts?: ValidateProviderOptions
 // ---------------------------------------------------------------------------
 
 /** Provider response envelope keys (unknown keys rejected, see below). */
-const PROVIDER_OK_KEYS = ["ok", "handle", "observed", "pid", "startedAt"] as const;
+const PROVIDER_OK_KEYS = [
+	"ok",
+	"handle",
+	"observed",
+	"pid",
+	"startedAt",
+	"sessions",
+	"complete",
+] as const;
+const PROVIDER_SESSION_FILE_KEYS = ["path", "size"] as const;
 const PROVIDER_ERROR_KEYS = ["ok", "error"] as const;
 const PROVIDER_ERROR_OBJECT_KEYS = ["code", "message", "retryable"] as const;
 
@@ -572,6 +587,29 @@ export interface ProviderOkResponse {
 	pid?: number;
 	/** Epoch ms when a live process was last (re)started. */
 	startedAt?: number;
+	/**
+	 * `list-sessions` only: every session file on the workspace volume
+	 * (regular files under the agent sessions dir, symlinks excluded).
+	 */
+	sessions?: ProviderSessionFile[];
+	/**
+	 * `list-sessions` only: true when `sessions` is the whole inventory.
+	 * False means the volume exceeds the export bounds (file count, bytes,
+	 * or response size) and `sessions` is a truncated prefix; the fleet
+	 * refuses to treat a truncated inventory as proof of anything.
+	 */
+	complete?: boolean;
+}
+
+/**
+ * One session file on a workspace volume, as a `list-sessions` response
+ * reports it: `path` is relative to the agent sessions dir
+ * (`<sessionId>/<file under the session>`, POSIX separators), `size` is the
+ * byte length.
+ */
+export interface ProviderSessionFile {
+	path: string;
+	size: number;
 }
 
 /** Typed failure envelope: the invocation succeeded, the operation failed. */
@@ -598,6 +636,27 @@ function requireStringField(value: Record<string, unknown>, field: string, where
 	return v;
 }
 
+function parseSessionFiles(value: unknown): ProviderSessionFile[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) {
+		throw ProviderProtocolError.invalidRequest("provider response: sessions must be an array");
+	}
+	return value.map((item, index) => {
+		const where = `provider response.sessions[${index}]`;
+		if (!isPlainRecord(item)) {
+			throw ProviderProtocolError.invalidRequest(`${where}: expected an object`);
+		}
+		rejectUnknownKeys(item, PROVIDER_SESSION_FILE_KEYS, where);
+		const size = item["size"];
+		if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
+			throw ProviderProtocolError.invalidRequest(
+				`${where}.size must be a non-negative safe integer`,
+			);
+		}
+		return { path: requireStringField(item, "path", where), size };
+	});
+}
+
 function parseOkResponse(value: Record<string, unknown>): ProviderOkResponse {
 	const observed = value["observed"];
 	if (observed !== "running" && observed !== "stopped" && observed !== "missing") {
@@ -620,13 +679,23 @@ function parseOkResponse(value: Record<string, unknown>): ProviderOkResponse {
 			"provider response: startedAt must be a non-negative number",
 		);
 	}
-	return {
+	const response: ProviderOkResponse = {
 		ok: true,
 		handle: requireStringField(value, "handle", "provider response"),
 		observed,
 		pid,
 		startedAt,
 	};
+	const sessions = parseSessionFiles(value["sessions"]);
+	if (sessions !== undefined) response.sessions = sessions;
+	const complete = value["complete"];
+	if (complete !== undefined) {
+		if (typeof complete !== "boolean") {
+			throw ProviderProtocolError.invalidRequest("provider response: complete must be a boolean");
+		}
+		response.complete = complete;
+	}
+	return response;
 }
 
 function parseErrorResponse(value: Record<string, unknown>): ProviderErrorResponse {
