@@ -21,7 +21,10 @@
 import type { Subprocess } from "bun";
 import type {
 	ProviderErrorCode,
+	ProviderErrorResponse,
+	ProviderOkResponse,
 	ProviderOp,
+	ProviderPreflightResponse,
 	ProviderRequest,
 	ProviderResponse,
 } from "./provider-protocol";
@@ -145,7 +148,21 @@ async function collectPipe(
  *   still produced a valid `ok:false` envelope.
  *
  * Request validation failures throw `invalid_request` before any spawn.
+ *
+ * The success envelope must match the op: `preflight` returns
+ * `{ok:true, checks}`, every other op `{ok:true, handle, observed, ...}`; a
+ * mismatch throws `internal` (the overloads type the two shapes apart).
  */
+export async function runProviderOp(
+	executable: string,
+	request: ProviderRequest & { op: "preflight" },
+	opts?: RunProviderOpOptions,
+): Promise<ProviderPreflightResponse | ProviderErrorResponse>;
+export async function runProviderOp(
+	executable: string,
+	request: ProviderRequest & { op: Exclude<ProviderOp, "preflight"> },
+	opts?: RunProviderOpOptions,
+): Promise<ProviderOkResponse | ProviderErrorResponse>;
 export async function runProviderOp(
 	executable: string,
 	request: ProviderRequest,
@@ -322,8 +339,9 @@ export async function runProviderOp(
 			}
 		}
 
+		let response: ProviderResponse;
 		try {
-			return parseProviderResponse(stdout);
+			response = parseProviderResponse(stdout);
 		} catch (err) {
 			throw new ProviderOpError({
 				code: "internal",
@@ -336,6 +354,18 @@ export async function runProviderOp(
 				cause: err,
 			});
 		}
+		if (response.ok && "checks" in response !== (validated.op === "preflight")) {
+			throw new ProviderOpError({
+				code: "internal",
+				message: `provider ${executable} returned a ${"checks" in response ? "preflight" : "lifecycle"} response to ${validated.op}`,
+				executable,
+				op: validated.op,
+				exitCode: 0,
+				stdout,
+				stderr,
+			});
+		}
+		return response;
 	} catch (err) {
 		// Unknown failures (pipe read errors, rejections): never leak a raw
 		// error while a child may still be alive.

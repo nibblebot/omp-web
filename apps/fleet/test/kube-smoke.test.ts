@@ -15,6 +15,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import type {
+	PreflightCheck,
 	ProviderErrorResponse,
 	ProviderOkResponse,
 	KubernetesProfile,
@@ -24,7 +25,6 @@ import type {
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { KubeExecResult } from "../kubernetes-provider";
 import { buildPodManifest, preflightKubernetesProfile, runOp } from "../kubernetes-provider";
-import type { PreflightCheck } from "../preflight";
 
 afterAll(cleanupTempDirs);
 
@@ -350,7 +350,8 @@ let d1Pod = "";
  */
 function expectOk(resp: ProviderResponse): ProviderOkResponse {
 	expect(resp.ok, JSON.stringify(resp)).toBe(true);
-	if (!resp.ok) throw new Error(`expected ok envelope: ${JSON.stringify(resp)}`);
+	if (!resp.ok || "checks" in resp)
+		throw new Error(`expected ok envelope: ${JSON.stringify(resp)}`);
 	return resp;
 }
 
@@ -391,7 +392,9 @@ describe("case A: fresh ensure creates PVC + pod, waits for Running", () => {
 	test("A3 handle grammar", () => {
 		const fresh = freshEnsure;
 		expect(fresh?.ok, JSON.stringify(fresh)).toBe(true);
-		if (fresh?.ok !== true) throw new Error(`no ok envelope from case A: ${JSON.stringify(fresh)}`);
+		if (fresh?.ok !== true || !("handle" in fresh)) {
+			throw new Error(`no ok envelope from case A: ${JSON.stringify(fresh)}`);
+		}
 		expect(fresh.handle, JSON.stringify(fresh)).toMatch(/^k8s:omp-clones\/omp-ws-d1-[a-z0-9]+:g1$/);
 	});
 
@@ -790,28 +793,43 @@ describe("case P: inspect after teardown", () => {
 // ---------------------------------------------------------------------------
 
 describe("case Q: preflight", () => {
+	/** Run the provider's preflight and return its rows (the library entry the op dispatches to). */
+	const preflight = (profile: KubernetesProfile, opEnv: Record<string, string | undefined> = env) =>
+		preflightKubernetesProfile(profile, { exec: fakeExec, env: opEnv });
+	const failingNames = (checks: PreflightCheck[]) =>
+		JSON.stringify(checks.filter((c) => !c.ok).map((c) => c.name));
+
 	test("Q0 preflight all ok", async () => {
-		const allOk = await preflightKubernetesProfile(PROFILE, {
-			exec: fakeExec,
-			env,
-		});
-		const failing: PreflightCheck[] = allOk.checks.filter((c) => !c.ok);
-		expect(allOk.ok, JSON.stringify(failing.map((c) => ({ name: c.name, detail: c.detail })))).toBe(
-			true,
+		const checks = await preflight(PROFILE);
+		const failing = checks.filter((c) => !c.ok);
+		expect(
+			failing.length,
+			JSON.stringify(failing.map((c) => ({ name: c.name, detail: c.detail }))),
+		).toBe(0);
+	});
+
+	test("Q0b the preflight op answers {ok:true, checks} with the same rows", async () => {
+		const response = await runOp(req("preflight"), { exec: fakeExec, env });
+		expect(response.ok, JSON.stringify(response)).toBe(true);
+		if (!response.ok || !("checks" in response)) {
+			throw new Error(`expected a preflight envelope: ${JSON.stringify(response)}`);
+		}
+		expect(response.checks.map((c) => c.name)).toEqual(
+			(await preflight(PROFILE)).map((c) => c.name),
 		);
+		expect(Object.keys(response).sort()).toEqual(["checks", "ok"]);
 	});
 
 	test("Q1 preflight no context", async () => {
-		const noCtxP = await preflightKubernetesProfile(
+		const checks = await preflight(
 			{ ...PROFILE, context: undefined },
 			{
-				exec: fakeExec,
-				env: { ...env, OMP_KUBE_CONTEXT: undefined },
+				...env,
+				OMP_KUBE_CONTEXT: undefined,
 			},
 		);
-		const ctxCheck = noCtxP.checks.find((c) => c.name === "kube-context");
+		const ctxCheck = checks.find((c) => c.name === "kube-context");
 		expect(ctxCheck, JSON.stringify(ctxCheck)).toBeDefined();
-		expect(noCtxP.ok, JSON.stringify(ctxCheck)).toBe(false);
 		expect(ctxCheck!.ok).toBe(false);
 		expect(ctxCheck!.remediation ?? "").toMatch(/context/);
 	});
@@ -819,15 +837,10 @@ describe("case Q: preflight", () => {
 	test("Q2 preflight API down", async () => {
 		cluster.reachable = false;
 		try {
-			const apiDown = await preflightKubernetesProfile(PROFILE, {
-				exec: fakeExec,
-				env,
-			});
-			const failingNames = apiDown.checks.filter((c) => !c.ok).map((c) => c.name);
-			expect(apiDown.ok, JSON.stringify(failingNames)).toBe(false);
+			const checks = await preflight(PROFILE);
 			expect(
-				apiDown.checks.some((c) => c.name === "kube-api" && !c.ok),
-				JSON.stringify(failingNames),
+				checks.some((c) => c.name === "kube-api" && !c.ok && (c.remediation ?? "") !== ""),
+				failingNames(checks),
 			).toBe(true);
 		} finally {
 			cluster.reachable = true;
@@ -837,20 +850,15 @@ describe("case Q: preflight", () => {
 	test("Q3 preflight RBAC gap", async () => {
 		cluster.rbac.delete("create:persistentvolumeclaims:omp-clones");
 		try {
-			const noRbac = await preflightKubernetesProfile(PROFILE, {
-				exec: fakeExec,
-				env,
-			});
-			const failingNames = noRbac.checks.filter((c) => !c.ok).map((c) => c.name);
-			expect(noRbac.ok, JSON.stringify(failingNames)).toBe(false);
+			const checks = await preflight(PROFILE);
 			expect(
-				noRbac.checks.some(
+				checks.some(
 					(c) =>
 						c.name === "kube-rbac-create-persistentvolumeclaims" &&
 						!c.ok &&
 						/Role/.test(c.remediation ?? ""),
 				),
-				JSON.stringify(failingNames),
+				failingNames(checks),
 			).toBe(true);
 		} finally {
 			cluster.rbac.add("create:persistentvolumeclaims:omp-clones");
@@ -860,20 +868,15 @@ describe("case Q: preflight", () => {
 	test("Q4 preflight secret missing", async () => {
 		cluster.secrets.delete("omp-model-secret");
 		try {
-			const noSecret = await preflightKubernetesProfile(PROFILE, {
-				exec: fakeExec,
-				env,
-			});
-			const failingNames = noSecret.checks.filter((c) => !c.ok).map((c) => c.name);
-			expect(noSecret.ok, JSON.stringify(failingNames)).toBe(false);
+			const checks = await preflight(PROFILE);
 			expect(
-				noSecret.checks.some(
+				checks.some(
 					(c) =>
 						c.name === "kube-secret-OMP_MODEL_KEY" &&
 						!c.ok &&
 						/create secret/.test(c.remediation ?? ""),
 				),
-				JSON.stringify(failingNames),
+				failingNames(checks),
 			).toBe(true);
 		} finally {
 			cluster.secrets.set("omp-model-secret", { data: { key: "c2VjcmV0LXZhbHVl" } });
@@ -883,15 +886,10 @@ describe("case Q: preflight", () => {
 	test("Q5 preflight storageclass missing", async () => {
 		cluster.storageClasses.delete("standard");
 		try {
-			const noSc = await preflightKubernetesProfile(PROFILE, {
-				exec: fakeExec,
-				env,
-			});
-			const failingNames = noSc.checks.filter((c) => !c.ok).map((c) => c.name);
-			expect(noSc.ok, JSON.stringify(failingNames)).toBe(false);
+			const checks = await preflight(PROFILE);
 			expect(
-				noSc.checks.some((c) => c.name === "kube-storageclass" && !c.ok),
-				JSON.stringify(failingNames),
+				checks.some((c) => c.name === "kube-storageclass" && !c.ok),
+				failingNames(checks),
 			).toBe(true);
 		} finally {
 			cluster.storageClasses.add("standard");
@@ -901,15 +899,10 @@ describe("case Q: preflight", () => {
 	test("Q6 preflight namespace missing", async () => {
 		cluster.namespaces.delete("omp-clones");
 		try {
-			const noNs = await preflightKubernetesProfile(PROFILE, {
-				exec: fakeExec,
-				env,
-			});
-			const failingNames = noNs.checks.filter((c) => !c.ok).map((c) => c.name);
-			expect(noNs.ok, JSON.stringify(failingNames)).toBe(false);
+			const checks = await preflight(PROFILE);
 			expect(
-				noNs.checks.some((c) => c.name === "kube-namespace" && !c.ok),
-				JSON.stringify(failingNames),
+				checks.some((c) => c.name === "kube-namespace" && !c.ok),
+				failingNames(checks),
 			).toBe(true);
 		} finally {
 			cluster.namespaces.add("omp-clones");

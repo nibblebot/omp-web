@@ -665,9 +665,10 @@ async function addCloneCmd(
  * preflight --profile <id>: local (no control-plane RPC) production-profile
  * preflight (P5.6). Loads the config file exactly like the server does (env
  * OMP_FLEET_CONFIG honored), runs the apps/fleet/preflight.ts battery against the
- * profile, prints one line per check with remediation on failures, and
- * exits non-zero when any check fails. Additive: profile configs are
- * optional, so a fleet with none is untouched.
+ * profile (the fleet's host rows plus the rows the provider executable
+ * reports through its `preflight` op), prints one line per check with
+ * remediation on failures, and exits non-zero when any check fails.
+ * Additive: profile configs are optional, so a fleet with none is untouched.
  */
 async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
 	const profileId = flagString(flags, "profile");

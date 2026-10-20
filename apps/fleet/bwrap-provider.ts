@@ -4,7 +4,7 @@
  * protocol for
  * clone workspaces on a bwrap-capable Linux host.
  *
- * Invocation: `<executable> ensure-running|inspect|stop|delete` with exactly
+ * Invocation: `<executable> ensure-running|inspect|stop|delete|preflight` with exactly
  * one JSON request on stdin and one JSON response on stdout; exit 0 when a
  * response was produced (the `ok` flag classifies the outcome). stderr is a
  * human log the fleet never parses. The provider also has a private
@@ -52,6 +52,7 @@ import {
 	serveProviderRequest,
 	writeJsonAtomic,
 } from "#lib/runtime/provider-callback-env";
+import { preflightBwrapProfile } from "./bwrap-preflight";
 import {
 	BWRAP_PID_FILE,
 	findTokenPid,
@@ -618,6 +619,16 @@ async function opDelete(request: ProviderRequest): Promise<ProviderResponse> {
 	return ok(handle, "missing");
 }
 
+/** The `preflight` op: bwrap-owned host checks; `workspaceDir` carries the fleet workspace root. */
+async function opPreflight(request: ProviderRequest): Promise<ProviderResponse> {
+	return {
+		ok: true,
+		checks: await preflightBwrapProfile(bwrapProfileOf(request), {
+			workspaceRoot: request.workspaceDir,
+		}),
+	};
+}
+
 /**
  * list-sessions is the kubernetes provider's proof of a volume the fleet
  * cannot read. A bwrap volume lives on the fleet host, so the fleet walks its
@@ -644,6 +655,7 @@ const OPS: Record<
 	inspect: opInspect,
 	stop: opStop,
 	delete: opDelete,
+	preflight: opPreflight,
 	"list-sessions": opListSessions,
 };
 

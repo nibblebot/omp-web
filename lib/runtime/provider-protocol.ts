@@ -12,6 +12,20 @@
  * failed, classified by code, not by exit status). A non-zero exit with no
  * parseable response means the provider itself failed to operate.
  *
+ * `preflight` is the one op that is not about a workspace: the provider
+ * reports the environment checks it owns (binary/namespace/RBAC/...) for the
+ * request's profile as `PreflightCheck[]`. The request shape is unchanged
+ * (no per-op relaxation of the required fields); the fleet sends a fixed
+ * placeholder identity built by `buildPreflightRequest` (workspaceId
+ * "preflight", generation 1) and carries the fleet's workspace volume root in
+ * `workspaceDir` (also used for `homeDir`/`stateDir`). A provider handles
+ * preflight read-only: it never creates, writes, or removes anything at those
+ * paths. The success envelope is `{ok:true, checks}` (no handle/observed);
+ * `runProviderOp` rejects a lifecycle response to preflight and a preflight
+ * response to any other op. No `OMP_PROVIDER_PROTO` bump: a provider that
+ * predates the op rejects it as `invalid_request` (or exits non-zero), which
+ * the fleet reports as a failing check, never as success.
+ *
  * Safety rules enforced here (P5.5 never negotiable):
  * - No secrets travel in requests. Profiles reference secrets by name only
  *   (`secretRefs` values must be external secret references, never
@@ -43,8 +57,22 @@ export const PROVIDER_OPS = [
 	"stop",
 	"delete",
 	"list-sessions",
+	"preflight",
 ] as const;
 export type ProviderOp = (typeof PROVIDER_OPS)[number];
+
+/**
+ * One environment check a provider (or the fleet) reports. `remediation` is
+ * present on failure when an operator action can fix it.
+ */
+export interface PreflightCheck {
+	name: string;
+	ok: boolean;
+	/** Human detail: what was probed and what came back. */
+	detail: string;
+	/** Actionable fix, present on failure. */
+	remediation?: string;
+}
 
 /** Lifecycle observation the provider reports for a workspace. */
 export type ProviderObserved = "running" | "stopped" | "missing";
@@ -286,6 +314,26 @@ export interface ProviderRequest {
 	revision?: string;
 	/** The workspace branch created at the pin. */
 	branch?: string;
+}
+
+/**
+ * The `preflight` request for a profile: placeholder workspace identity, with
+ * the fleet workspace volume root in `workspaceDir`/`homeDir`/`stateDir` (a
+ * provider only reads it; see the header).
+ */
+export function buildPreflightRequest(
+	profile: ProviderProfile,
+	workspaceRoot: string,
+): ProviderRequest & { op: "preflight" } {
+	return {
+		op: "preflight",
+		workspaceId: "preflight",
+		generation: 1,
+		workspaceDir: workspaceRoot,
+		homeDir: workspaceRoot,
+		profile,
+		stateDir: workspaceRoot,
+	};
 }
 
 interface ValidateProviderOptions {
@@ -569,6 +617,8 @@ const PROVIDER_OK_KEYS = [
 	"complete",
 ] as const;
 const PROVIDER_SESSION_FILE_KEYS = ["path", "size"] as const;
+const PROVIDER_PREFLIGHT_OK_KEYS = ["ok", "checks"] as const;
+const PREFLIGHT_CHECK_KEYS = ["name", "ok", "detail", "remediation"] as const;
 const PROVIDER_ERROR_KEYS = ["ok", "error"] as const;
 const PROVIDER_ERROR_OBJECT_KEYS = ["code", "message", "retryable"] as const;
 
@@ -612,6 +662,12 @@ export interface ProviderSessionFile {
 	size: number;
 }
 
+/** Successful `preflight` envelope: the provider's environment checks. */
+export interface ProviderPreflightResponse {
+	ok: true;
+	checks: PreflightCheck[];
+}
+
 /** Typed failure envelope: the invocation succeeded, the operation failed. */
 export interface ProviderErrorResponse {
 	ok: false;
@@ -624,7 +680,10 @@ export interface ProviderErrorResponse {
 }
 
 /** One provider operation response (frozen contract). */
-export type ProviderResponse = ProviderOkResponse | ProviderErrorResponse;
+export type ProviderResponse =
+	| ProviderOkResponse
+	| ProviderPreflightResponse
+	| ProviderErrorResponse;
 
 function requireStringField(value: Record<string, unknown>, field: string, where: string): string {
 	const v = value[field];
@@ -698,6 +757,45 @@ function parseOkResponse(value: Record<string, unknown>): ProviderOkResponse {
 	return response;
 }
 
+function parsePreflightResponse(value: Record<string, unknown>): ProviderPreflightResponse {
+	const raw = value["checks"];
+	if (!Array.isArray(raw)) {
+		throw ProviderProtocolError.invalidRequest("provider response: checks must be an array");
+	}
+	const checks = raw.map((entry, index): PreflightCheck => {
+		const where = `provider response.checks[${index}]`;
+		if (!isPlainRecord(entry)) {
+			throw ProviderProtocolError.invalidRequest(`provider response: ${where} must be an object`);
+		}
+		rejectUnknownKeys(entry, PREFLIGHT_CHECK_KEYS, where);
+		if (typeof entry["ok"] !== "boolean") {
+			throw ProviderProtocolError.invalidRequest(
+				`provider response: ${where}.ok must be a boolean`,
+			);
+		}
+		const check: PreflightCheck = {
+			name: requireStringField(entry, "name", where),
+			ok: entry["ok"],
+			detail: requireStringField(entry, "detail", where),
+		};
+		const remediation = entry["remediation"];
+		if (remediation !== undefined) {
+			if (
+				typeof remediation !== "string" ||
+				remediation.length === 0 ||
+				remediation.includes("\0")
+			) {
+				throw ProviderProtocolError.invalidRequest(
+					`provider response: ${where}.remediation must be a non-empty string`,
+				);
+			}
+			check.remediation = remediation;
+		}
+		return check;
+	});
+	return { ok: true, checks };
+}
+
 function parseErrorResponse(value: Record<string, unknown>): ProviderErrorResponse {
 	const error = value["error"];
 	if (!isPlainRecord(error)) {
@@ -742,11 +840,17 @@ export function parseProviderResponse(
 	if (!isPlainRecord(value)) {
 		throw ProviderProtocolError.invalidRequest("provider response: expected an object");
 	}
+	const preflight = value["ok"] === true && "checks" in value;
 	rejectUnknownKeys(
 		value,
-		value["ok"] === true ? PROVIDER_OK_KEYS : PROVIDER_ERROR_KEYS,
+		value["ok"] === true
+			? preflight
+				? PROVIDER_PREFLIGHT_OK_KEYS
+				: PROVIDER_OK_KEYS
+			: PROVIDER_ERROR_KEYS,
 		"provider response",
 	);
+	if (preflight) return parsePreflightResponse(value);
 	if (value["ok"] === true) return parseOkResponse(value);
 	if (value["ok"] === false) return parseErrorResponse(value);
 	throw ProviderProtocolError.invalidRequest("provider response: ok must be true or false");

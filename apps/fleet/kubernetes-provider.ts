@@ -101,6 +101,7 @@ import { join } from "node:path";
 import {
 	ProviderProtocolError,
 	type KubernetesProfile,
+	type PreflightCheck,
 	type ProviderRequest,
 	type ProviderResponse,
 	type ProviderSessionFile,
@@ -114,7 +115,6 @@ import {
 	serveProviderRequest,
 	writeJsonAtomic,
 } from "#lib/runtime/provider-callback-env";
-import type { PreflightCheck, PreflightResult } from "./preflight";
 
 // ---------------------------------------------------------------------------
 // Request/profile extensions (landing in lib/runtime/provider-protocol.ts)
@@ -1798,13 +1798,13 @@ async function readListPod(
  * skipped silently). Nothing is installed, created, or mutated: the only
  * API traffic is reads plus `auth can-i` access reviews.
  *
- * Wired into apps/fleet/preflight.ts by the Runtime owner; exported here so
- * the wiring is one function call.
+ * Served by the `preflight` provider op (opPreflight) and exported for the
+ * offline smoke tests.
  */
 export async function preflightKubernetesProfile(
 	profile: KubernetesProfile,
 	opts?: { exec?: KubeExec; env?: Record<string, string | undefined> },
-): Promise<PreflightResult> {
+): Promise<PreflightCheck[]> {
 	const exec = opts?.exec ?? defaultKubeExec;
 	const env = opts?.env ?? process.env;
 	const checks: PreflightCheck[] = [];
@@ -2054,11 +2054,20 @@ export async function preflightKubernetesProfile(
 		});
 	}
 
+	return checks;
+}
+
+/** The `preflight` op: the profile's live kubernetes checks as `{ok:true, checks}`. */
+async function opPreflight(request: ProviderRequest, deps: OpDeps): Promise<ProviderResponse> {
+	const profile = request.profile;
+	if (profile.provider !== "kubernetes") {
+		throw ProviderProtocolError.invalidRequest(
+			`profile ${profile.id} is a ${profile.provider} profile, not kubernetes`,
+		);
+	}
 	return {
-		ok: checks.every((check) => check.ok),
-		profileId: profile.id,
-		provider: "kubernetes",
-		checks,
+		ok: true,
+		checks: await preflightKubernetesProfile(profile, { exec: deps.exec, env: deps.env }),
 	};
 }
 
@@ -2074,6 +2083,7 @@ const OPS: Record<
 	inspect: opInspect,
 	stop: opStop,
 	delete: opDelete,
+	preflight: opPreflight,
 	"list-sessions": opListSessions,
 };
 
@@ -2089,7 +2099,7 @@ async function main(): Promise<number> {
 	const argv = process.argv.slice(2);
 	if (argv.length !== 1 || !(OPS as Record<string, unknown>)[argv[0]]) {
 		process.stderr.write(
-			`kubernetes-provider: expected <ensure-running|inspect|stop|delete|list-sessions> with one JSON request on stdin, got argv ${argv.join(" ")}\n`,
+			`kubernetes-provider: expected <ensure-running|inspect|stop|delete|preflight|list-sessions> with one JSON request on stdin, got argv ${argv.join(" ")}\n`,
 		);
 		return 1;
 	}

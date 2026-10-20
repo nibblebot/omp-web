@@ -3,25 +3,20 @@
  * provider profile BEFORE its first use, so a broken or unsafe profile fails
  * here with an actionable message instead of at launch time.
  *
- * Scope (frozen by the P5.6 lane contract):
- *  - bwrap binary present + version + user namespaces usable (probe
- *    `bwrap --ro-bind / / echo`, the same mount/namespace shape the real
- *    sandbox uses, trivially);
+ * The fleet owns the host-generic rows:
  *  - profile executable present + executable bit;
- *  - runtime entry (the sandboxed omp-session entry) + runtime binary (bun)
- *    resolvable;
  *  - callback URL reachability CLASS-CHECK (DNS + TCP only; no bytes are
  *    ever written, so no credential or request can leak) when configured;
  *  - durable state dirs writable (workspace root + logs root; a missing dir
  *    passes when its parent is writable; those dirs are created lazily on
  *    demand, so a preflight must not require them to pre-exist);
- *  - profile tools: absolute, existing, and outside every forbidden root:
- *    a profile requesting a denied bind fails HERE with an actionable
- *    message (the same denylist the argv builder enforces at request time,
- *    P5.5);
- *  - per-kind profile fields (tools/network on bwrap; image/namespace/context
- *    on kubernetes) are validated at config load, so a foreign field never
- *    reaches preflight; storage is shared and inert on bwrap.
+ *  - secretRefs shape/resolvability.
+ *
+ * Each provider owns the rows about its own environment (bwrap binary and
+ * user namespaces, runtime entry, tools, denied binds; kubernetes API,
+ * namespace, RBAC, StorageClass, Secrets, image). The fleet obtains them by
+ * invoking the provider executable's `preflight` op and merges them, so this
+ * module has no per-kind branch.
  *
  * Every check that can fail carries an actionable remediation string. No
  * check installs tools, creates clusters, or fabricates credentials. All
@@ -33,35 +28,22 @@
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { connect } from "node:net";
 import { lookup } from "node:dns/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
+import { runProviderOp } from "#lib/runtime/provider-exec";
 import {
 	PROVIDER_CAPABILITIES,
-	type BwrapProfile,
+	buildPreflightRequest,
+	type PreflightCheck,
 	type ProviderKind,
 	type ProviderProfile,
 } from "#lib/runtime/provider-protocol";
-import {
-	DeniedBindError,
-	assertAllowedSource,
-	assertWorkspaceVolume,
-} from "#lib/runtime/bwrap-args";
-import { defaultDenyRoots, defaultRuntimeLaunch } from "./runtime-launch";
+
+/** Wall-clock budget for the provider's preflight op: a kubernetes preflight runs one kubectl call per check. */
+const PROVIDER_PREFLIGHT_TIMEOUT_MS = 120_000;
 
 // ---------------------------------------------------------------------------
 // Typed report
 // ---------------------------------------------------------------------------
-
-/** One preflight check outcome. `remediation` is present exactly when the
- *  check failed and an operator action can fix it (inert k8s-field rows
- *  are `ok: true` and carry their note in `detail`). */
-export interface PreflightCheck {
-	name: string;
-	ok: boolean;
-	/** Human detail: what was probed and what came back. */
-	detail: string;
-	/** Actionable fix, present on failure. */
-	remediation?: string;
-}
 
 /** Whole-profile preflight report (typed, serializable). */
 export interface PreflightResult {
@@ -77,19 +59,15 @@ export interface PreflightContext {
 	workspaceRoot: string;
 	/** Fleet logs root (durable streamed-lineage store). */
 	logsRoot: string;
-	/** Runtime entry the sandbox runs; provider default when omitted. */
-	runtimeEntry?: string;
-	/** Runtime binary (bun); provider default (process.execPath) when omitted. */
-	runtimeBin?: string;
-	/** bwrap binary; provider default ("bwrap" on PATH) when omitted. */
-	bwrapBin?: string;
 	/**
 	 * Callback URL to class-check (DNS + TCP only, never a request). When
 	 * omitted the callback check reports "not configured" and passes.
 	 */
 	callbackUrl?: string;
-	/** Operator environment for deny-root derivation; defaults to process.env. */
+	/** Operator environment for secretRefs resolution; defaults to process.env. */
 	env?: Record<string, string | undefined>;
+	/** Wall-clock budget for the provider's preflight op; defaults to PROVIDER_PREFLIGHT_TIMEOUT_MS. */
+	providerTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,12 +77,6 @@ export interface PreflightContext {
 /** Human message for an unexpected thrown value (several call sites). */
 function errMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
-}
-
-/** Runtime binary default mirrors the provider (bun runs the provider, so
- *  execPath is it). */
-function defaultRuntimeBin(): string {
-	return defaultRuntimeLaunch(process.env).bin;
 }
 
 /** True when the file exists and carries at least one execute bit. */
@@ -122,12 +94,6 @@ function resolveToolPath(tool: string): string | null {
 	if (tool.length === 0) return null;
 	if (isAbsolute(tool)) return existsSync(tool) ? tool : null;
 	return Bun.which(tool);
-}
-
-/** bwrap path used for probes: absolute directly, else PATH resolution. */
-function resolveBwrap(ctx: PreflightContext): string {
-	const bwrapBin = ctx.bwrapBin ?? "bwrap";
-	return isAbsolute(bwrapBin) ? bwrapBin : (Bun.which(bwrapBin) ?? bwrapBin);
 }
 
 /**
@@ -203,81 +169,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<
 // Individual checks
 // ---------------------------------------------------------------------------
 
-async function checkBwrapBinary(ctx: PreflightContext): Promise<PreflightCheck> {
-	const resolved = resolveBwrap(ctx);
-	if (!existsSync(resolved)) {
-		return {
-			name: "bwrap-binary",
-			ok: false,
-			detail: `bwrap not found at ${resolved}`,
-			remediation:
-				`install bubblewrap so bwrap is on PATH (e.g. \`nix profile install nixpkgs#bubblewrap\`), ` +
-				`or point the provider at an installed binary via OMP_BWRAP_BIN`,
-		};
-	}
-	let version = "";
-	try {
-		const proc = Bun.spawn([resolved, "--version"], { stdout: "pipe", stderr: "pipe" });
-		const [code, stdout, stderr] = await Promise.all([
-			proc.exited,
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-		]);
-		version = `${stdout}${stderr}`.trim().split("\n")[0] ?? "";
-		if ((code ?? 1) !== 0) {
-			return {
-				name: "bwrap-binary",
-				ok: false,
-				detail: `bwrap --version exited ${String(code)}: ${version}`,
-				remediation: `the bwrap binary at ${resolved} does not run; reinstall bubblewrap`,
-			};
-		}
-	} catch (err) {
-		return {
-			name: "bwrap-binary",
-			ok: false,
-			detail: `cannot run bwrap --version: ${errMessage(err)}`,
-			remediation: `fix the bwrap binary at ${resolved} (permissions/loader) or reinstall bubblewrap`,
-		};
-	}
-	return { name: "bwrap-binary", ok: true, detail: `bwrap ${version} at ${resolved}` };
-}
-
-async function checkBwrapUserns(ctx: PreflightContext): Promise<PreflightCheck> {
-	const resolved = resolveBwrap(ctx);
-	// Same namespace/mount shape as the real sandbox (ro-bind / then exec a
-	// trivial command); exit 0 proves userns + mount + exec all work.
-	const argv = [resolved, "--ro-bind", "/", "/", "--", "echo", "preflight-userns-ok"];
-	try {
-		const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
-		const [code, stdout, stderr] = await Promise.all([
-			proc.exited,
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-		]);
-		const detail = `${stdout}${stderr}`.trim().split("\n").slice(0, 3).join(" ");
-		if ((code ?? 1) !== 0) {
-			return {
-				name: "bwrap-userns",
-				ok: false,
-				detail: `sandbox probe failed (rc ${String(code)}): ${detail || "no output"}`,
-				remediation:
-					`user namespaces appear unavailable; enable unprivileged user namespaces ` +
-					`(kernel.unprivileged_userns_clone=1 / AppArmor profile permitting bwrap) or run the fleet ` +
-					`under a user-namespace-capable service`,
-			};
-		}
-		return { name: "bwrap-userns", ok: true, detail: `sandbox probe ran (${argv.join(" ")})` };
-	} catch (err) {
-		return {
-			name: "bwrap-userns",
-			ok: false,
-			detail: `sandbox probe could not run: ${errMessage(err)}`,
-			remediation: `cannot spawn ${resolved}; fix its permissions/loader or reinstall bubblewrap`,
-		};
-	}
-}
-
 async function checkExecutable(profile: ProviderProfile): Promise<PreflightCheck> {
 	const exe = resolveToolPath(profile.executable);
 	if (exe === null) {
@@ -301,44 +192,44 @@ async function checkExecutable(profile: ProviderProfile): Promise<PreflightCheck
 	return { name: "profile-executable", ok: true, detail: exe };
 }
 
-async function checkRuntimeEntry(ctx: PreflightContext): Promise<PreflightCheck> {
-	const launch = defaultRuntimeLaunch(process.env);
-	const entry = resolve(ctx.runtimeEntry ?? launch.entry);
-	if (!existsSync(entry)) {
-		return {
-			name: "runtime-entry",
-			ok: false,
-			detail: `runtime entry not found: ${entry}`,
-			remediation:
-				`the sandbox runs the repo's apps/session/index.ts (dev) or the installed cli.js ` +
-				`(bundle). Set OMP_RUNTIME_ENTRY to the built session runtime entry, or ` +
-				`rebuild/install omp-web`,
-		};
+/** Rows the provider owns: its `preflight` op, run through the shared provider executor. */
+async function checkProviderRows(
+	profile: ProviderProfile,
+	ctx: PreflightContext,
+): Promise<PreflightCheck[]> {
+	const failing = (detail: string, remediation: string): PreflightCheck[] => [
+		{ name: "provider-preflight", ok: false, detail, remediation },
+	];
+	try {
+		const response = await runProviderOp(
+			profile.executable,
+			buildPreflightRequest(profile, ctx.workspaceRoot),
+			{ timeoutMs: ctx.providerTimeoutMs ?? PROVIDER_PREFLIGHT_TIMEOUT_MS },
+		);
+		if (!response.ok) {
+			const { code, message } = response.error;
+			return failing(
+				`provider ${profile.executable} answered preflight with ${code}: ${message}`,
+				code === "invalid_request"
+					? `the provider executable does not support the preflight op (it predates it); ` +
+							`update providerProfiles."${profile.id}".executable to a current ${profile.provider} provider`
+					: `fix the provider error above, then re-run preflight`,
+			);
+		}
+		if (response.checks.length === 0) {
+			return failing(
+				`provider ${profile.executable} returned no preflight checks`,
+				`update providerProfiles."${profile.id}".executable to a current ${profile.provider} provider`,
+			);
+		}
+		return response.checks;
+	} catch (err) {
+		return failing(
+			`provider ${profile.executable} could not run preflight: ${errMessage(err)}`,
+			`check that providerProfiles."${profile.id}".executable is a working ${profile.provider} provider ` +
+				`(older executables that predate the preflight op fail here)`,
+		);
 	}
-	const detail = launch.args.length > 0 ? `${entry} (bundle session mode)` : entry;
-	return { name: "runtime-entry", ok: true, detail };
-}
-
-async function checkRuntimeBin(ctx: PreflightContext): Promise<PreflightCheck> {
-	const shown = ctx.runtimeBin ?? `bun (${defaultRuntimeBin()})`;
-	const bin = resolveToolPath(ctx.runtimeBin ?? defaultRuntimeBin());
-	if (bin === null) {
-		return {
-			name: "runtime-bin",
-			ok: false,
-			detail: `runtime binary not found: ${shown}`,
-			remediation: `install bun (the sandboxed omp-session runs under bun) or set OMP_RUNTIME_BIN`,
-		};
-	}
-	if (!isExecutable(bin)) {
-		return {
-			name: "runtime-bin",
-			ok: false,
-			detail: `runtime binary is not executable: ${bin}`,
-			remediation: `fix permissions on ${bin} (chmod +x)`,
-		};
-	}
-	return { name: "runtime-bin", ok: true, detail: bin };
 }
 
 /** DNS + TCP class-check with a hard deadline. Nothing is ever written to
@@ -463,85 +354,6 @@ async function checkDurableDirs(ctx: PreflightContext): Promise<PreflightCheck[]
 	];
 }
 
-/** Profile tools must be absolute and existing (a missing tool ro-binds
- *  nothing and breaks the sandbox at launch). */
-async function checkProfileTools(profile: BwrapProfile): Promise<PreflightCheck> {
-	for (const tool of profile.tools) {
-		if (!isAbsolute(tool)) {
-			return {
-				name: "profile-tools",
-				ok: false,
-				detail: `tool path is not absolute: "${tool}"`,
-				remediation:
-					`use an absolute tool path in providerProfiles."${profile.id}".tools ` +
-					`(bare names cannot be ro-bound)`,
-			};
-		}
-		if (!existsSync(tool)) {
-			return {
-				name: "profile-tools",
-				ok: false,
-				detail: `tool not found: ${tool}`,
-				remediation: `install the tool at ${tool} or remove it from providerProfiles."${profile.id}".tools`,
-			};
-		}
-	}
-	return {
-		name: "profile-tools",
-		ok: true,
-		detail: `${profile.tools.length} tool(s) absolute and present`,
-	};
-}
-
-/**
- * Denied-bind sanity (P5.5): a profile that requests a bind inside a
- * forbidden root (operator home/ssh state, container sockets, fleet/provider
- * state) fails HERE with an actionable message.
- */
-async function checkDeniedBinds(
-	profile: ProviderProfile,
-	ctx: PreflightContext,
-): Promise<PreflightCheck> {
-	const roots = defaultDenyRoots(ctx.env ?? process.env);
-	try {
-		// The workspace root is the sanctioned volume root for clone dirs; it
-		// must never alias credentials/sockets/provider state.
-		assertWorkspaceVolume(resolve(ctx.workspaceRoot), roots);
-	} catch (err) {
-		if (err instanceof DeniedBindError) {
-			return {
-				name: "denied-binds",
-				ok: false,
-				detail: `the workspace root ${ctx.workspaceRoot} is inside a forbidden root (${err.root}, ${err.kind})`,
-				remediation:
-					`move the fleet workspace root outside ${err.root}; operator home/ssh state, ` +
-					`container sockets, and fleet/provider state are never bindable`,
-			};
-		}
-		throw err;
-	}
-	for (const tool of profile.provider === "bwrap" ? profile.tools : []) {
-		try {
-			assertAllowedSource(tool, roots);
-		} catch (err) {
-			if (!(err instanceof DeniedBindError)) throw err;
-			return {
-				name: "denied-binds",
-				ok: false,
-				detail: `tool ${tool} resolves inside a forbidden root (${err.root}, ${err.kind})`,
-				remediation:
-					`remove "${tool}" from providerProfiles."${profile.id}".tools; operator home/ssh ` +
-					`state, container sockets, and fleet/provider state are never mounted into a sandbox`,
-			};
-		}
-	}
-	return {
-		name: "denied-binds",
-		ok: true,
-		detail: "workspace root and all profile tools are outside forbidden roots",
-	};
-}
-
 /**
  * P5.4/P5.5: profile secret references must be resolvable on this host
  * BEFORE any launch. bwrap: `env:NAME` scheme only; values are supplied to
@@ -605,88 +417,29 @@ async function checkProfileSecrets(
 	};
 }
 
-/**
- * Kubernetes provider rows (P5.3, P5.6): operator-explicit context,
- * namespace, image, and storage. These become hard failures: a kubernetes
- * profile without an explicit context must never silently use the ambient
- * current-context.
- */
-async function checkKubernetesProvider(
-	profile: ProviderProfile,
-	ctx: PreflightContext,
-): Promise<PreflightCheck[]> {
-	if (profile.provider !== "kubernetes") return [];
-	const context = profile.context ?? ctx.env?.OMP_KUBE_CONTEXT;
-	const rows: PreflightCheck[] = [
-		{
-			name: "k8s-context",
-			ok: context !== undefined && context !== "",
-			detail: context !== undefined && context !== "" ? context : "no context configured",
-			remediation:
-				"set providerProfiles.<id>.context or OMP_KUBE_CONTEXT; the provider never " +
-				"falls back to the ambient current-context",
-		},
-		{
-			name: "k8s-namespace",
-			ok: profile.namespace !== undefined && profile.namespace !== "",
-			detail: profile.namespace ?? "not configured",
-			remediation: "set providerProfiles.<id>.namespace (the operator-approved namespace)",
-		},
-		{
-			name: "k8s-image",
-			ok: profile.image !== undefined && profile.image !== "",
-			detail: profile.image ?? "not configured",
-			remediation: "set providerProfiles.<id>.image (the session runtime image)",
-		},
-	];
-	if (profile.storage !== undefined) {
-		const storage = profile.storage;
-		const parts = [`class ${storage.class ?? "(default)"}`];
-		if (storage.size !== undefined) parts.push(`size ${storage.size}`);
-		rows.push({
-			name: "k8s-storage",
-			ok: true,
-			detail: `${parts.join(", ")} (allocated via PVC; verify capacity before launch)`,
-		});
-	}
-	return rows;
-}
-
 // ---------------------------------------------------------------------------
 // Entry
 // ---------------------------------------------------------------------------
 
 /**
- * Run the full preflight battery for a profile. Never throws for a check
- * outcome: failures are rows; only an internal bug throws. Kubernetes
- * profiles run the host-generic checks plus the real API-requirement rows
- * (context/namespace/image/storage), never a not-yet-supported placeholder.
+ * Run the full preflight battery for a profile: the host-generic rows above,
+ * then (when the provider executable is runnable) the rows the provider owns,
+ * obtained by invoking its `preflight` op. A provider that rejects the op
+ * (an older executable answers `invalid_request`), fails to run, or returns
+ * no checks yields a failing row with remediation, never success. Never
+ * throws for a check outcome: failures are rows; only an internal bug throws.
  */
 export async function runProfilePreflight(
 	profile: ProviderProfile,
 	ctx: PreflightContext,
 ): Promise<PreflightResult> {
-	const hostChecks: PreflightCheck[] =
-		profile.provider === "bwrap"
-			? [
-					await checkBwrapBinary(ctx),
-					await checkBwrapUserns(ctx),
-					await checkRuntimeEntry(ctx),
-					await checkRuntimeBin(ctx),
-				]
-			: [
-					// Kubernetes runs the daemon in a pod image, not a host
-					// bwrap sandbox: host bwrap/runtime checks are not applicable.
-				];
+	const executable = await checkExecutable(profile);
 	const checks: PreflightCheck[] = [
-		...hostChecks,
-		await checkExecutable(profile),
+		executable,
 		await checkCallback(ctx),
 		...(await checkDurableDirs(ctx)),
-		...(profile.provider === "bwrap" ? [await checkProfileTools(profile)] : []),
-		await checkDeniedBinds(profile, ctx),
 		await checkProfileSecrets(profile, ctx),
-		...(await checkKubernetesProvider(profile, ctx)),
+		...(executable.ok ? await checkProviderRows(profile, ctx) : []),
 	];
 	return {
 		ok: checks.every((check) => check.ok),
