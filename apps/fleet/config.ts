@@ -20,7 +20,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { ProviderProfile } from "#lib/runtime/provider-protocol";
 import { validateProfiles } from "./provider-profile";
 import { parseProxyRule } from "./trusted-proxy";
@@ -37,7 +37,7 @@ export interface FleetConfig {
 	defaultTemplate: string;
 	/**
 	 * Per-project template override (project basename → template name),
-	 * consulted by supervisor.spawn when no explicit template is given.
+	 * consulted by the host runtime's spawn when no explicit template is given.
 	 */
 	projectTemplates?: Record<string, string>;
 	/**
@@ -93,6 +93,22 @@ export interface FleetConfig {
 	 * unless the config file declares a `providerProfiles` key.
 	 */
 	providerProfiles?: Record<string, ProviderProfile>;
+}
+
+/**
+ * Resolve the template NAME for a cwd: explicit, else
+ * `projectTemplates[basename(cwd)]`, else `defaultTemplate`; throws when the
+ * resolved name is not in `templates`. The resolved name is stored on the
+ * roster row so a later wake finds the same template.
+ */
+export function resolveTemplateName(
+	config: Pick<FleetConfig, "templates" | "defaultTemplate" | "projectTemplates">,
+	cwd: string,
+	explicit?: string,
+): string {
+	const name = explicit ?? config.projectTemplates?.[basename(cwd)] ?? config.defaultTemplate;
+	if (config.templates[name] === undefined) throw new Error(`unknown spawn template: ${name}`);
+	return name;
 }
 
 /**

@@ -19,7 +19,7 @@ import { shouldDropFrame, toRosterEntry } from "../edge";
 import type { RegistryEntry } from "../registry";
 import { Registry } from "../registry";
 import { startFleet, type FleetServer } from "../server";
-import { enrollSessionCredential } from "../supervisor";
+import { enrollSessionCredential } from "../session-credential";
 import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
 import {
 	FAKE_CWD,
@@ -109,7 +109,7 @@ describe("fleet edge", () => {
 	let streamA = "";
 	let streamB = "";
 	let respawns = 0;
-	/** supervisor.spawn invocations captured by the wrapper (labels passthrough tests). */
+	/** lifecycle.spawnHost invocations captured by the wrapper (labels passthrough tests). */
 	let spawnInits: Array<{ cwd: string; template?: string; labels?: string[] }> = [];
 	/** The entry the wrapper's last spawn returned. */
 	let spawnedByEdge: RegistryEntry | null = null;
@@ -139,7 +139,7 @@ describe("fleet edge", () => {
 		return daemon;
 	}
 
-	/** Pair a supervisor-launched child: the test plays the child's callback dial. */
+	/** Pair a host-launched child: the test plays the child's callback dial. */
 	async function pairSpawned(daemonId: string): Promise<void> {
 		const { generation, credential } = enrollSessionCredential(
 			server.transport,
@@ -283,17 +283,20 @@ describe("fleet edge", () => {
 			configPath,
 			statsConfig: hermeticStatsConfig(statePath),
 		});
-		// Count supervisor.respawn calls and pair the woken child, as its dial would.
-		const origRespawn = server.supervisor.respawn.bind(server.supervisor);
-		server.supervisor.respawn = async (entry: RegistryEntry, opts?: { resumeFile?: string }) => {
+		// Count lifecycle.ensureHostRunning calls and pair the woken child, as its dial would.
+		const origRespawn = server.lifecycle.ensureHostRunning.bind(server.lifecycle);
+		server.lifecycle.ensureHostRunning = async (
+			entry: RegistryEntry,
+			opts?: { resumeFile?: string },
+		) => {
 			respawns++;
 			await origRespawn(entry, opts);
 			await pairSpawned(entry.daemonId);
 		};
-		// Capture supervisor.spawn inits for the labels-passthrough tests, and
+		// Capture lifecycle.spawnHost inits for the labels-passthrough tests, and
 		// pair each spawned child as its dial would.
-		const origSpawn = server.supervisor.spawn.bind(server.supervisor);
-		server.supervisor.spawn = async (init: {
+		const origSpawn = server.lifecycle.spawnHost.bind(server.lifecycle);
+		server.lifecycle.spawnHost = async (init: {
 			cwd: string;
 			template?: string;
 			name?: string;
@@ -360,7 +363,7 @@ describe("fleet edge", () => {
 	test("a spawned row reaches ready once its callback pair dials", async () => {
 		// Spawn is the production path that installs the pair watch; the
 		// beforeAll override dials the child as its callback would.
-		const entry = await server.supervisor.spawn({
+		const entry = await server.lifecycle.spawnHost({
 			cwd: FAKE_CWD,
 			name: "added",
 			template: "local",
@@ -654,13 +657,13 @@ describe("fleet edge", () => {
 		expect(frame.error).toContain("not a directory");
 	});
 
-	test("spawn passes valid labels through to supervisor.spawn", async () => {
+	test("spawn passes valid labels through to lifecycle.spawnHost", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		const before = spawnInits.length;
 		spawnedByEdge = null; // the wait below must observe the NEW spawn
 		await browser.send({ type: "spawn", cwd: FAKE_CWD, labels: ["env=prod", "tag=api"] });
-		// The real supervisor runs underneath: wait until the child pairs ready.
+		// the real host runtime runs underneath: wait until the child pairs ready.
 		await waitFor(
 			() =>
 				spawnedByEdge && server.registry.get(spawnedByEdge.daemonId)?.status === "ready"
@@ -690,7 +693,7 @@ describe("fleet edge", () => {
 			);
 			expect(frame.type).toBe("error");
 		}
-		// None of the bad sends may have reached the supervisor.
+		// None of the bad sends may have reached the host runtime.
 		expect(spawnInits).toHaveLength(before);
 	});
 
@@ -1028,11 +1031,14 @@ describe("fleet edge", () => {
 		// state (the edge has no per-call seam), so point it at the temp dir for
 		// this test only and restore it exactly afterwards.
 		setAgentDir(agentDir);
-		const origRespawn = server.supervisor.respawn;
+		const origRespawn = server.lifecycle.ensureHostRunning;
 		const resumeFiles: Array<string | undefined> = [];
-		server.supervisor.respawn = async (e: RegistryEntry, opts?: { resumeFile?: string }) => {
+		server.lifecycle.ensureHostRunning = async (
+			e: RegistryEntry,
+			opts?: { resumeFile?: string },
+		) => {
 			resumeFiles.push(opts?.resumeFile);
-			await origRespawn.call(server.supervisor, e, opts);
+			await origRespawn.call(server.lifecycle, e, opts);
 		};
 		try {
 			const sessionDir = SessionManager.getDefaultSessionDir(
@@ -1064,7 +1070,7 @@ describe("fleet edge", () => {
 			expect(server.registry.get(entry.daemonId)?.status).toBe("ready");
 			dropDaemon(entry.daemonId);
 		} finally {
-			server.supervisor.respawn = origRespawn;
+			server.lifecycle.ensureHostRunning = origRespawn;
 			for (const [key, value] of Object.entries(savedEnv)) {
 				if (value === undefined) delete process.env[key];
 				else process.env[key] = value;
@@ -1084,11 +1090,14 @@ describe("fleet edge", () => {
 			PI_PROFILE: process.env.PI_PROFILE,
 		};
 		setAgentDir(agentDir);
-		const origRespawn = server.supervisor.respawn;
+		const origRespawn = server.lifecycle.ensureHostRunning;
 		const resumeFiles: Array<string | undefined> = [];
-		server.supervisor.respawn = async (e: RegistryEntry, opts?: { resumeFile?: string }) => {
+		server.lifecycle.ensureHostRunning = async (
+			e: RegistryEntry,
+			opts?: { resumeFile?: string },
+		) => {
 			resumeFiles.push(opts?.resumeFile);
-			await origRespawn.call(server.supervisor, e, opts);
+			await origRespawn.call(server.lifecycle, e, opts);
 		};
 		try {
 			const sessionDir = SessionManager.getDefaultSessionDir(
@@ -1153,7 +1162,7 @@ describe("fleet edge", () => {
 			expect(resumeFiles).toEqual([files[0]]);
 			dropDaemon(entry.daemonId);
 		} finally {
-			server.supervisor.respawn = origRespawn;
+			server.lifecycle.ensureHostRunning = origRespawn;
 			for (const [key, value] of Object.entries(savedEnv)) {
 				if (value === undefined) delete process.env[key];
 				else process.env[key] = value;
@@ -1219,7 +1228,7 @@ describe("fleet edge", () => {
 
 	test("aggregated daemons: merged frames are broadcast on update and on browser open", async () => {
 		// A second spawned daemon with a different cwd; the spawn override pairs it.
-		const spawnedB = await server.supervisor.spawn({
+		const spawnedB = await server.lifecycle.spawnHost({
 			cwd: OTHER_CWD,
 			name: "daemons-b",
 			template: "local",
@@ -1453,8 +1462,8 @@ describe("fleet edge", () => {
 			pid: 4321,
 			readyAt: Date.now() - 30_000,
 		});
-		const origStop = server.supervisor.stop.bind(server.supervisor);
-		server.supervisor.stop = async () => {
+		const origStop = server.lifecycle.stopHost.bind(server.lifecycle);
+		server.lifecycle.stopHost = async () => {
 			throw new Error("stop boom");
 		};
 		try {
@@ -1485,7 +1494,7 @@ describe("fleet edge", () => {
 			expect(reg.readyAt).toBeUndefined();
 			browser.close();
 		} finally {
-			server.supervisor.stop = origStop;
+			server.lifecycle.stopHost = origStop;
 		}
 	});
 
@@ -1604,8 +1613,8 @@ describe("fleet edge", () => {
 			workspace: { kind: "clone", projectId: project.projectId, desiredState: "stopped" },
 		});
 		const pruned: string[] = [];
-		const origPrune = server.supervisor.prune.bind(server.supervisor);
-		server.supervisor.prune = async (daemonId: string) => {
+		const origPrune = server.lifecycle.deleteHost.bind(server.lifecycle);
+		server.lifecycle.deleteHost = async (daemonId: string) => {
 			pruned.push(daemonId);
 			await origPrune(daemonId);
 		};
@@ -1628,7 +1637,7 @@ describe("fleet edge", () => {
 			expect(server.registry.get(clone.daemonId)).toBeDefined();
 			expect(server.registry.projects().some((p) => p.projectId === project.projectId)).toBe(true);
 		} finally {
-			server.supervisor.prune = origPrune;
+			server.lifecycle.deleteHost = origPrune;
 			browser.close();
 			server.registry.remove(live.daemonId);
 			server.registry.remove(clone.daemonId);
@@ -1830,7 +1839,7 @@ describe("pair-loss grace", () => {
 		name: string,
 		redialMs: number,
 	): Promise<{ daemonId: string; daemon: CallbackDaemon }> {
-		const entry = await server.supervisor.spawn({
+		const entry = await server.lifecycle.spawnHost({
 			cwd: FAKE_CWD,
 			name,
 			template: "local",

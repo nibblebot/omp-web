@@ -1,7 +1,8 @@
 /**
- * Clone-workspace lifecycle service (clone-plan P6/P7; proposed module
+ * Workspace lifecycle service (clone-plan P6/P7; proposed module
  * `fleet/workspace-lifecycle.ts`). THE single create/ensure/stop/delete
- * owner for provider-managed clone workspaces, shared by the control-plane
+ * owner for every workspace: provider-managed clones and the local sessions
+ * of main checkouts and git worktrees (the `host` runtime, below). Shared by the control-plane
  * HTTP handlers (POST /ctl/clones, /ctl/start|wake, /ctl/stop, DELETE
  * /ctl/worktrees/:id) and the browser edge's command dispatch (Transport's
  * `EdgeLifecycleHooks`, this class conforms to it structurally).
@@ -27,8 +28,31 @@
  * - Runtime supervision: the one runtime watch (below) restarts a
  *   desired-running clone whose provider-proven runtime died after its pair
  *   came up (new generation, predecessor proven gone, budgeted backoff shared
- *   with the local supervisor via restart-policy.ts); an explicit stop never
+ *   with the host runtime via restart-policy.ts); an explicit stop never
  *   restarts. This is not an idle stop: it never stops compute.
+ * - Every runtime sits behind the runtime-provider contract
+ *   (runtime-provider.ts): clones through their profile's executable provider
+ *   (bwrap, kubernetes), main-checkout and worktree sessions through the
+ *   in-process host provider (host-provider.ts). The host runtime below is the
+ *   lifecycle policy over it, the part the former spawn supervisor owned:
+ *   - each start mints a fresh callback credential and generation (the
+ *     previous one is revoked first); the payload reaches the child only on
+ *     stdin (`--fleet-stdin`), never argv or environment;
+ *   - exit 77 (session locked) and 78 (resume failed) are deterministic: the
+ *     row goes asleep with the child's last log line as its reason, never
+ *     restarted; a clean exit 0 goes asleep; any other exit restarts with the
+ *     shared restart-policy.ts backoff and budget (refilled by a stable
+ *     pair), then errors;
+ *   - a start respawns `--resume <lastSessionFile>`; a replacement refuses
+ *     while the previous process still holds its session lock;
+ *   - a start whose pair never appears errors the row and ends the child;
+ *   - boot reconciliation marks a local session asleep when its file lock or
+ *     recorded pid proves it dead; live or unknown enrolled sessions stay
+ *     reconnecting;
+ *   - sessions outlive close(): it cancels timers and never signals a child
+ *     or revokes an enrollment;
+ *   - delete keeps the worktree guards (worktrees.ts deleteWorktree); the
+ *     eviction path runs them around the host stop and provider delete.
  *
  * The fleet server injects everything external (registry, config, callback
  * transport, log store, resource deleter, event ring, log-tap attach, and
@@ -49,14 +73,21 @@ import {
 	writeSync,
 } from "node:fs";
 import type { Stats } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import { ENROLLMENT_KEY_BYTES, type CallbackErrorCode } from "#lib/wire/callback-protocol";
-import type { LifecycleStage, RegisteredProject, CloneFetchResult } from "#lib/wire/protocol";
+import {
+	OMP_SESSION_EXIT_RESUME_FAILED,
+	OMP_SESSION_EXIT_SESSION_LOCKED,
+	type CloneFetchResult,
+	type DaemonStatus,
+	type LifecycleStage,
+	type RegisteredProject,
+} from "#lib/wire/protocol";
 import type { Registry, RegistryEntry, WorkspaceRecord, DeletionGateError } from "./registry";
 import { PAIR_LOSS_GRACE_MS } from "./registry";
 import { DEFAULT_RESTART_POLICY, RestartBudget, type RestartPolicy } from "./restart-policy";
-import type { FleetConfig } from "./config";
+import { resolveTemplateName, type FleetConfig, type SpawnTemplate } from "./config";
 import {
 	KUBERNETES_POD_LAYOUT,
 	PROVIDER_CAPABILITIES,
@@ -68,14 +99,25 @@ import type { FleetLogStore } from "./log-store";
 import type { FleetEventLog } from "./events";
 import type { WorkspaceResourceDeleter } from "./server";
 import type { ProviderOkResponse } from "#lib/runtime/provider-protocol";
-import { runProviderOp } from "#lib/runtime/provider-exec";
+import { executableRuntimeProvider } from "./runtime-provider";
+import { HostRuntimeProvider, describeExit } from "./host-provider";
+import type { HostExit, HostRequest } from "./host-provider";
+import {
+	enrollSessionCredential,
+	fleetStdinPayload,
+	releaseSessionCredential,
+	requestSessionShutdown,
+} from "./session-credential";
+import { PROVIDER_DAEMON_LOG, readSessionLogTail } from "./session-log";
+import { fillTemplate, shellQuote } from "./spawn-parse";
+import { realpathOf } from "./worktrees";
 import {
 	deriveWorkspaceBranch,
 	PrepareWorkspaceError,
 	prepareWorkspace,
 	resolveWorkspacePin,
 } from "#lib/runtime/prepare-workspace";
-import { runGit } from "./discovery";
+import { resolveWorktreeOf, runGit } from "./discovery";
 import { sha256OfFile } from "#lib/session-files/file-sha256";
 import { verifyWorkspaceLogs } from "./verify-store";
 import { MAX_EXPORT_BYTES, MAX_EXPORT_FILES } from "#lib/session-files/export-sessions";
@@ -134,7 +176,13 @@ export interface CloneCreateInput {
 /** External wiring the fleet server injects (nothing HTTP here). */
 interface WorkspaceLifecycleDeps {
 	registry: Registry;
-	config: Pick<FleetConfig, "providerProfiles">;
+	/** Clone profiles and the host runtime's spawn templates. */
+	config: Pick<
+		FleetConfig,
+		"providerProfiles" | "templates" | "defaultTemplate" | "projectTemplates"
+	>;
+	/** The fleet state file; host session logs live beside it under session-logs/. */
+	statePath: string;
 	/** Private volume allocation root beside this fleet's selected state file. */
 	cloneRoot: string;
 	transport: DaemonTransportRegistry;
@@ -154,7 +202,24 @@ interface WorkspaceLifecycleDeps {
 	callbackUrl(): string;
 	/** Runtime supervision overrides (defaults: restart-policy.ts, registry PAIR_LOSS_GRACE_MS). */
 	runtime?: Partial<CloneRuntimePolicy>;
+	/**
+	 * Fired after each host start enrolls the row's callback credential, so the
+	 * server can watch the row's pair for status (covers edge-initiated spawns).
+	 */
+	onEnrolled?: (daemonId: string) => void;
+	/** Fired once a host spawn created a row, so the server can probe its git state before the next poll tick. */
+	onSpawned?: (daemonId: string) => void;
+	/** Overrides PAIR_TIMEOUT_MS (tests). */
+	pairTimeoutMs?: number;
 }
+
+/** A host session's pair must appear within this window of its start, or the row errors and the child ends. */
+export const PAIR_TIMEOUT_MS = 60_000;
+const STDERR_TAIL_BYTES = 64 * 1024;
+const STOP_SIGTERM_GRACE_MS = 5_000;
+const RESPAWN_KILL_GRACE_MS = 2_000;
+const RESPAWN_LOCK_POLL_MS = 100;
+const DETERMINISTIC_EXIT_FALLBACK = "session refused to run and will not be retried";
 
 /** Runtime supervision knobs: the shared restart policy plus the watch cadences (tests shrink them). */
 export interface CloneRuntimePolicy extends RestartPolicy {
@@ -172,6 +237,23 @@ const DEFAULT_RUNTIME_POLICY: CloneRuntimePolicy = {
 	tickMs: 1_000,
 	inspectEveryMs: 10_000,
 };
+
+/** Supervision state of one host runtime (see the host runtime section of WorkspaceLifecycle). */
+interface HostRuntime {
+	budget: RestartBudget;
+	/** Pending crash-restart backoff. */
+	restartTimer: Timer | null;
+	/** Armed per start: a pair must appear within the pair timeout. */
+	pairTimer: Timer | null;
+	/** Pair-change feed: a pair clears the pair timer and starts the budget's stable window. */
+	unsubscribe: () => void;
+	/** An explicit stop or delete ended the runtime: a scheduled restart must not fire. */
+	stopped: boolean;
+	/** Generation of the current launch; an exit report from an older one is stale. */
+	generation: number;
+	/** In-flight ensureHostRunning; concurrent calls coalesce onto it (one launch). */
+	ensureInFlight: Promise<void> | null;
+}
 
 /** Supervision state of one desired-running clone runtime (see #armRuntimeWatch). */
 interface RuntimeWatch {
@@ -194,6 +276,18 @@ interface RuntimeWatch {
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
+
+/** The host-runtime verbs the control plane drives (operations, edge, waker, eviction, server). */
+export type HostRuntimeApi = Pick<
+	WorkspaceLifecycle,
+	| "spawnHost"
+	| "ensureHostRunning"
+	| "stopHost"
+	| "deleteHost"
+	| "resolveTemplateName"
+	| "hostSnapshot"
+	| "sessionLogTail"
+>;
 
 /** Budget for the clone-deletion `git fetch origin`; a slow or offline remote falls through to cached refs. */
 const GIT_FETCH_TIMEOUT_MS = 15_000;
@@ -456,10 +550,16 @@ export class WorkspaceLifecycle {
 	/** Runtime watches: one per desired-running clone (tick or restart-backoff timer each). */
 	readonly #watches = new Map<string, RuntimeWatch>();
 	readonly #policy: CloneRuntimePolicy;
+	/** Host runtimes: one per main-checkout/worktree row that was started or stopped through this service. */
+	readonly #hostRuntimes = new Map<string, HostRuntime>();
+	readonly #hostProvider: HostRuntimeProvider;
+	readonly #pairTimeoutMs: number;
 
 	constructor(deps: WorkspaceLifecycleDeps) {
 		this.#deps = deps;
 		this.#policy = { ...DEFAULT_RUNTIME_POLICY, ...deps.runtime };
+		this.#pairTimeoutMs = deps.pairTimeoutMs ?? PAIR_TIMEOUT_MS;
+		this.#hostProvider = new HostRuntimeProvider((exit) => this.#onHostExit(exit));
 	}
 
 	/** Runs `fn` after every earlier lifecycle op queued for this daemon. */
@@ -1083,6 +1183,10 @@ export class WorkspaceLifecycle {
 	/** Cancel timers (server close()); never stops provider compute. */
 	close(): void {
 		for (const daemonId of [...this.#watches.keys()]) this.#disposeWatch(daemonId);
+		// Host sessions outlive the control plane: timers and subscriptions end,
+		// children keep running and their enrollments persist.
+		for (const runtime of this.#hostRuntimes.values()) this.#disposeHostRuntime(runtime);
+		this.#hostRuntimes.clear();
 	}
 
 	// ------------------------------------------------------------------
@@ -1995,7 +2099,7 @@ export class WorkspaceLifecycle {
 			...(record?.pinnedRevision !== undefined ? { revision: record.pinnedRevision } : {}),
 			...(record?.branch !== undefined ? { branch: record.branch } : {}),
 		};
-		const response = await runProviderOp(profile.executable, request);
+		const response = await executableRuntimeProvider(profile.executable).run(request);
 		if (response.ok) return response;
 		throw new CloneLifecycleError(
 			this.#codeForProviderError(response.error.code),
@@ -2465,6 +2569,583 @@ export class WorkspaceLifecycle {
 			const message = err instanceof Error ? err.message : String(err);
 			this.#scheduleRestart(daemonId, watch, `restart failed: ${message}`);
 		}
+	}
+
+	// ------------------------------------------------------------------
+	// Host runtime: main-checkout and worktree sessions (the `host` provider)
+	// ------------------------------------------------------------------
+
+	/**
+	 * Resolve the template NAME for a cwd: explicit, else
+	 * `projectTemplates[basename(cwd)]`, else `defaultTemplate`; throws when the
+	 * resolved name is not in `templates` (a spawn rejects before any row is
+	 * created). Stored on the row so a later start finds the same template.
+	 */
+	resolveTemplateName(cwd: string, explicit?: string): string {
+		return resolveTemplateName(this.#deps.config, cwd, explicit);
+	}
+
+	/**
+	 * Create a host row for `init.cwd`, start its session, and return the row.
+	 * The session dials the control plane itself; the row turns "ready" when its
+	 * pair appears (server.ts) or errors after the pair timeout.
+	 *
+	 * Template resolution (first match wins): an explicit `init.template`, else
+	 * `config.projectTemplates[basename(cwd)]`, else `config.defaultTemplate`. An
+	 * unknown name at any tier rejects before any row is created. A cwd inside a
+	 * linked git worktree is tagged with the owning repo's name (worktreeOf) so
+	 * the roster groups it; a main checkout or unresolvable cwd stays untagged.
+	 *
+	 * `reuse`: the fleet's own create/start paths pass it so a row the sync
+	 * registered for this checkout meanwhile is woken instead of duplicated (an
+	 * asleep or errored row restarts; a live one is returned as is). Without it a
+	 * spawn always adds a row: several sessions per folder stay a deliberate
+	 * CLI/`/ctl/spawn` capability.
+	 */
+	async spawnHost(init: {
+		cwd: string;
+		template?: string;
+		name?: string;
+		labels?: string[];
+		reuse?: boolean;
+	}): Promise<RegistryEntry> {
+		const registry = this.#deps.registry;
+		const project = basename(init.cwd);
+		const templateName = this.resolveTemplateName(init.cwd, init.template);
+		const template = this.#deps.config.templates[templateName];
+		const worktreeOf = await resolveWorktreeOf(init.cwd);
+		if (init.reuse) {
+			// After the last await: the sync's own lookup + create is synchronous,
+			// so no row can slip in between this lookup and the create below.
+			const resolved = realpathOf(init.cwd);
+			const existing = registry
+				.list()
+				.find(
+					(entry) =>
+						entry.cwd !== "" &&
+						entry.workspace?.kind !== "clone" &&
+						realpathOf(entry.cwd) === resolved,
+				);
+			if (existing !== undefined) {
+				if (existing.status === "asleep" || existing.status === "error") {
+					await this.ensureHostRunning(existing);
+				}
+				return registry.get(existing.daemonId) ?? existing;
+			}
+		}
+		const entry = registry.create({
+			name: init.name ?? project,
+			cwd: init.cwd,
+			project,
+			...(worktreeOf !== undefined ? { worktreeOf } : {}),
+			labels: init.labels ?? [],
+			template: templateName,
+		});
+		await this.#serialized(entry.daemonId, () =>
+			this.#launchHost(entry, template, { resume: false }),
+		);
+		this.#deps.onSpawned?.(entry.daemonId);
+		return registry.get(entry.daemonId) ?? entry;
+	}
+
+	/**
+	 * Start (or restart) a host row's session: `--resume <lastSessionFile>` when
+	 * the row has one (`opts.resumeFile` overrides it for a picked session; the
+	 * edge validates it against the owning worktree first), with a fresh
+	 * credential and generation per attempt. Concurrent calls for one row
+	 * coalesce onto the in-flight start: the child is never launched twice and
+	 * an orphan is never left behind. A session this process did not launch may
+	 * still hold its lock; the start waits for it to release (after asking it to
+	 * shut down) and refuses when it does not. Rejects when the template is
+	 * unknown or the old session will not let go; a failed launch errors the
+	 * row instead.
+	 */
+	ensureHostRunning(entry: RegistryEntry, opts?: { resumeFile?: string }): Promise<void> {
+		const daemonId = entry.daemonId;
+		this.#requireHost(entry);
+		const runtime = this.#hostRuntime(daemonId);
+		if (runtime.ensureInFlight !== null) return runtime.ensureInFlight;
+		const tracked: Promise<void> = this.#serialized(daemonId, () =>
+			this.#ensureHost(entry, opts?.resumeFile),
+		).finally(() => {
+			// Only clear when this call still owns the slot.
+			if (runtime.ensureInFlight === tracked) runtime.ensureInFlight = null;
+		});
+		runtime.ensureInFlight = tracked;
+		return tracked;
+	}
+
+	async #ensureHost(entry: RegistryEntry, resumeFile?: string): Promise<void> {
+		const registry = this.#deps.registry;
+		const current = registry.get(entry.daemonId) ?? entry;
+		// Fallback for template-less rows (registered asleep, or state files
+		// written before rows stored the resolved name): resolve the same name
+		// spawnHost would for the cwd.
+		const templateName = current.template ?? this.resolveTemplateName(current.cwd);
+		const template = this.#deps.config.templates[templateName];
+		if (!template) throw new Error(`unknown spawn template: ${templateName}`);
+		// Heal the persisted row so later starts skip the fallback.
+		if (current.template === undefined)
+			registry.update(current.daemonId, { template: templateName });
+		const runtime = this.#hostRuntime(current.daemonId);
+		if (runtime.restartTimer !== null) {
+			clearTimeout(runtime.restartTimer);
+			runtime.restartTimer = null;
+		}
+		// A session this process did not launch has no child handle here, so it
+		// may still hold the session lock; launching now would race it for the
+		// lock (the loser exits 77).
+		const observation = this.#hostProvider.inspect(this.#hostRequest("inspect", current));
+		if (observation.observed === "running" && !observation.owned) {
+			await this.#awaitLockRelease(current);
+		}
+		runtime.stopped = false;
+		await this.#launchHost(registry.get(current.daemonId) ?? current, template, {
+			resume: true,
+			resumeFile,
+		});
+	}
+
+	/**
+	 * Adopted-session start: ask it to shut down and wait up to
+	 * RESPAWN_KILL_GRACE_MS for its lock to free; throw when it still holds it.
+	 * A dead or unknown session passes.
+	 */
+	async #awaitLockRelease(entry: RegistryEntry): Promise<void> {
+		await requestSessionShutdown(this.#deps.transport, entry.daemonId, "respawn");
+		const deadline = Date.now() + RESPAWN_KILL_GRACE_MS;
+		while (this.#hostProvider.inspect(this.#hostRequest("inspect", entry)).observed === "running") {
+			if (Date.now() >= deadline) {
+				throw new Error(`session ${entry.name} still holds its lock; respawn refused`);
+			}
+			const { promise, resolve } = Promise.withResolvers<void>();
+			setTimeout(resolve, RESPAWN_LOCK_POLL_MS);
+			await promise;
+		}
+	}
+
+	/**
+	 * Intentional stop: cancel restarts, ask a paired session to shut down
+	 * (ShutdownControl), end our own child (SIGTERM, then SIGKILL after 5s),
+	 * revoke the callback credential, and set the row asleep (startable again,
+	 * lastSessionFile kept). A session adopted from a previous fleet process is
+	 * asked to exit and its enrollment revoked; it is never signalled.
+	 */
+	async stopHost(daemonId: string): Promise<void> {
+		this.#requireHost(this.#deps.registry.get(daemonId));
+		await this.#serialized(daemonId, () => this.#stopHost(daemonId));
+	}
+
+	async #stopHost(daemonId: string): Promise<void> {
+		const runtime = this.#hostRuntimes.get(daemonId);
+		if (runtime !== undefined) {
+			runtime.stopped = true;
+			this.#clearHostTimers(runtime);
+		}
+		await requestSessionShutdown(this.#deps.transport, daemonId, "stop");
+		const entry = this.#deps.registry.get(daemonId);
+		const response =
+			entry === undefined
+				? undefined
+				: await this.#hostProvider.run(
+						this.#hostRequest("stop", entry, { killGraceMs: STOP_SIGTERM_GRACE_MS }),
+					);
+		if (response !== undefined && !response.ok) {
+			throw new Error(`stop of ${daemonId} failed: ${response.error.message}`);
+		}
+		releaseSessionCredential(this.#deps.transport, this.#deps.registry, daemonId);
+		if (entry !== undefined && this.#deps.registry.get(daemonId)) {
+			this.#deps.registry.setStatus(daemonId, "asleep");
+		}
+		// One line per stop that actually ended a child (stopping an already
+		// asleep row, e.g. on fleet shutdown, is a no-op and stays quiet).
+		if (response?.ok && response.exit !== undefined) {
+			this.#log("info", `stop (${response.exit})`, daemonId);
+		}
+	}
+
+	/**
+	 * Removal-time cleanup of a host row's runtime: stop (cancel restarts, ask
+	 * the session to shut down, end the child, revoke, asleep), then drop the
+	 * runtime's restart budget, timers and pair subscription, and delete the
+	 * session logs, so a removed row leaks nothing. The worktree guards
+	 * (worktrees.ts deleteWorktree: linked, clean, no force, `git branch -d`)
+	 * run in the eviction's `removal` step around this, and the row is dropped
+	 * only once they pass. Idempotent for rows never started here.
+	 */
+	async deleteHost(daemonId: string): Promise<void> {
+		this.#requireHost(this.#deps.registry.get(daemonId));
+		await this.#serialized(daemonId, async () => {
+			await this.#stopHost(daemonId);
+			const runtime = this.#hostRuntimes.get(daemonId);
+			if (runtime !== undefined) this.#disposeHostRuntime(runtime);
+			this.#hostRuntimes.delete(daemonId);
+			const entry = this.#deps.registry.get(daemonId);
+			if (entry !== undefined) {
+				await this.#hostProvider.run(this.#hostRequest("delete", entry));
+			}
+			this.#log("info", "delete", daemonId);
+		});
+	}
+
+	/**
+	 * Boot reconciliation of host rows left running or connecting by a previous
+	 * fleet process. A local session proven dead by its file lock or recorded pid
+	 * becomes asleep immediately, as does an unenrolled row; a live or unknown
+	 * enrolled session stays reconnecting (the caller arms its redial grace).
+	 * Stale readyAt and pid facts are cleared. Synchronous on purpose: statuses
+	 * must be truthful before the fleet serves its first request. Returns the
+	 * rows it moved to reconnecting.
+	 */
+	reconcileHostBoot(): string[] {
+		const reconnecting: string[] = [];
+		for (const entry of this.#deps.registry.list()) {
+			if (entry.workspace?.kind === "clone") continue;
+			if (entry.status === "asleep" || entry.status === "error") continue;
+			const enrolled = entry.workspace?.enrollment !== undefined;
+			const observed = this.#hostProvider.inspect(this.#hostRequest("inspect", entry)).observed;
+			const previousStatus = entry.status;
+			const target: DaemonStatus = !enrolled || observed === "stopped" ? "asleep" : "reconnecting";
+			const reason = !enrolled
+				? "not enrolled"
+				: observed === "stopped"
+					? "local session dead"
+					: observed === "running"
+						? "local session alive"
+						: "liveness unknown";
+			this.#deps.registry.update(entry.daemonId, { readyAt: undefined, pid: undefined });
+			this.#deps.registry.setStatus(entry.daemonId, target);
+			this.#log(
+				"info",
+				`boot reconcile: ${previousStatus} → ${target} (${reason})`,
+				entry.daemonId,
+			);
+			if (target === "reconnecting") reconnecting.push(entry.daemonId);
+		}
+		return reconnecting;
+	}
+
+	/**
+	 * Per-row host runtime state for /ctl/debug: the live child's pid (absent
+	 * when nothing is running) and the restarts spent since the last stable pair.
+	 */
+	hostSnapshot(): Record<string, { pid?: number; restarts: number }> {
+		const out: Record<string, { pid?: number; restarts: number }> = {};
+		for (const [daemonId, runtime] of this.#hostRuntimes) {
+			const info: { pid?: number; restarts: number } = { restarts: runtime.budget.used };
+			const pid = this.#hostProvider.pidOf(daemonId);
+			if (pid !== undefined) info.pid = pid;
+			out[daemonId] = info;
+		}
+		return out;
+	}
+
+	/**
+	 * The runtime's log tail (stdout and stderr of a host session, appended per
+	 * launch): the last 64 KiB as text, empty when it never logged. Read from the
+	 * file, so it survives a fleet restart. A provider-managed clone logs to its
+	 * own daemon.log instead.
+	 */
+	sessionLogTail(daemonId: string): string {
+		const local = readSessionLogTail(this.#hostLogPath(daemonId), STDERR_TAIL_BYTES);
+		const entry = this.#deps.registry.get(daemonId);
+		if (local !== "" || entry?.workspace === undefined || entry.cwd === undefined) return local;
+		// Mirrors the provider's clone layout (#clonePaths): state dir =
+		// <dirname(clone root)>/.provider-state/<daemonId>.
+		const stateDir = join(dirname(entry.cwd), ".provider-state", daemonId);
+		return readSessionLogTail(join(stateDir, PROVIDER_DAEMON_LOG), STDERR_TAIL_BYTES);
+	}
+
+	/** A clone's runtime is provider-owned: the host runtime never starts, stops or deletes one. */
+	#requireHost(entry: RegistryEntry | undefined): void {
+		if (entry?.workspace?.kind === "clone") {
+			throw new Error(
+				`daemon ${entry.daemonId} is a clone workspace; its runtime goes through the clone lifecycle`,
+			);
+		}
+	}
+
+	#hostLogPath(daemonId: string): string {
+		return join(dirname(this.#deps.statePath), "session-logs", `${daemonId}.log`);
+	}
+
+	#hostRequest(
+		op: HostRequest["op"],
+		entry: RegistryEntry,
+		extra?: Partial<HostRequest>,
+	): HostRequest {
+		return {
+			op,
+			workspaceId: entry.daemonId,
+			generation: entry.workspace?.authorizedGeneration ?? 0,
+			entry,
+			logPath: this.#hostLogPath(entry.daemonId),
+			...extra,
+		};
+	}
+
+	#hostRuntime(daemonId: string): HostRuntime {
+		let runtime = this.#hostRuntimes.get(daemonId);
+		if (runtime === undefined) {
+			const created: HostRuntime = {
+				budget: new RestartBudget(this.#policy),
+				restartTimer: null,
+				pairTimer: null,
+				unsubscribe: () => {},
+				stopped: false,
+				generation: 0,
+				ensureInFlight: null,
+			};
+			// A pair that holds for the stable window refills the restart budget, so
+			// restartMax bounds crash LOOPS (pair, crash, pair, crash), not lifetime restarts.
+			created.unsubscribe = this.#deps.transport.onPairChange(daemonId, (status) => {
+				if (!status.paired) {
+					created.budget.unpaired();
+					return;
+				}
+				if (created.pairTimer !== null) {
+					clearTimeout(created.pairTimer);
+					created.pairTimer = null;
+				}
+				created.budget.paired();
+			});
+			this.#hostRuntimes.set(daemonId, created);
+			runtime = created;
+		}
+		return runtime;
+	}
+
+	#clearHostTimers(runtime: HostRuntime): void {
+		if (runtime.restartTimer !== null) {
+			clearTimeout(runtime.restartTimer);
+			runtime.restartTimer = null;
+		}
+		if (runtime.pairTimer !== null) {
+			clearTimeout(runtime.pairTimer);
+			runtime.pairTimer = null;
+		}
+		runtime.budget.unpaired();
+	}
+
+	#disposeHostRuntime(runtime: HostRuntime): void {
+		this.#clearHostTimers(runtime);
+		runtime.unsubscribe();
+		runtime.unsubscribe = () => {};
+		runtime.budget.dispose();
+	}
+
+	/**
+	 * One host start under the row's op queue: a fresh listener token and a
+	 * fresh credential and generation (the previous one is revoked first), the
+	 * template filled with shell-quoted values, the provider's ensure-running,
+	 * and the pair timeout armed. A launch the provider refuses errors the row.
+	 */
+	async #launchHost(
+		entry: RegistryEntry,
+		template: SpawnTemplate,
+		opts: { resume: boolean; resumeFile?: string },
+	): Promise<void> {
+		const { registry, transport } = this.#deps;
+		const daemonId = entry.daemonId;
+		const runtime = this.#hostRuntime(daemonId);
+		runtime.stopped = false;
+		if (runtime.pairTimer !== null) {
+			clearTimeout(runtime.pairTimer);
+			runtime.pairTimer = null;
+		}
+		const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+		const enrollment = enrollSessionCredential(transport, registry, daemonId);
+		runtime.generation = enrollment.generation;
+		this.#deps.onEnrolled?.(daemonId);
+		// Every value interpolated into the template command is
+		// attacker-controlled at some call site (POST /ctl/spawn name/labels)
+		// and lands in `sh -c`; shell-quote each one so it can never break
+		// out into command execution (CVE-style injection defense).
+		const labelsArg = (entry.labels ?? []).map((label) => `--label ${shellQuote(label)}`).join(" ");
+		// resume = --resume <file>: default to the row's last session file;
+		// opts.resumeFile overrides it for a dropdown-picked session.
+		const resumeFile =
+			opts.resumeFile && opts.resumeFile.trim() !== "" ? opts.resumeFile : entry.lastSessionFile;
+		// Strict unless the file is known unwritten: an explicit pick, or a file the daemon
+		// reported persisted, must exist (a missing one exits 78). Otherwise a never-prompted
+		// session's recorded path may not exist yet, so the daemon adopts it (identity kept).
+		const resumeStrict =
+			(opts.resumeFile !== undefined && opts.resumeFile.trim() !== "") ||
+			entry.lastSessionPersisted === true;
+		const resumeArg =
+			opts.resume && resumeFile
+				? `--resume ${shellQuote(resumeFile)}${resumeStrict ? "" : " --resume-unwritten"}`
+				: "";
+		const command = fillTemplate(template.command, {
+			cwd: shellQuote(entry.cwd),
+			fleet: "--fleet-stdin",
+			name: shellQuote(entry.name),
+			labels: labelsArg,
+			resume: resumeArg,
+		});
+		const stdin = fleetStdinPayload({ url: this.#deps.callbackUrl(), daemonId, enrollment }, token);
+		const response = await this.#hostProvider.run(
+			this.#hostRequest("ensure-running", registry.get(daemonId) ?? entry, {
+				generation: enrollment.generation,
+				launch: { command, stdin },
+				killGraceMs: RESPAWN_KILL_GRACE_MS,
+			}),
+		);
+		if (!response.ok) {
+			releaseSessionCredential(transport, registry, daemonId);
+			registry.setStatus(daemonId, "error", response.error.message);
+			this.#log("error", response.error.message, daemonId);
+			return;
+		}
+		// The replaced predecessor's death is expected, not a crash.
+		if (response.exit !== undefined) this.#log("info", `${response.exit} (replaced)`, daemonId);
+		// One line per launch: spawn vs respawn (resume) and the template.
+		const verb = opts.resume ? `respawn${resumeArg !== "" ? " --resume" : ""}` : "spawn";
+		this.#log("info", `${verb} template=${entry.template ?? "?"}`, daemonId);
+		registry.update(daemonId, { pid: response.pid });
+		registry.setStatus(daemonId, "connecting");
+		// No pair within the window: error and end the child (a session that
+		// cannot reach the control plane never becomes ready).
+		const generation = enrollment.generation;
+		runtime.pairTimer = setTimeout(() => {
+			runtime.pairTimer = null;
+			void this.#serialized(daemonId, () => this.#onPairTimeout(daemonId, generation)).catch(
+				(err: unknown) => this.#failHostRuntime(daemonId, "pair timeout handling failed", err),
+			);
+		}, this.#pairTimeoutMs);
+	}
+
+	/** The launch's pair window elapsed without a pair: fail the row and end the child (no restart). */
+	async #onPairTimeout(daemonId: string, generation: number): Promise<void> {
+		const runtime = this.#hostRuntimes.get(daemonId);
+		const entry = this.#deps.registry.get(daemonId);
+		if (runtime === undefined || entry === undefined) return;
+		if (runtime.stopped || runtime.generation !== generation) return;
+		if (this.#hostProvider.pidOf(daemonId) === undefined) return; // The child already exited; its exit owns the aftermath.
+		if (this.#deps.transport.pairStatus(daemonId).paired) return;
+		const message = `no callback pair within ${this.#pairTimeoutMs / 1000}s`;
+		releaseSessionCredential(this.#deps.transport, this.#deps.registry, daemonId);
+		this.#deps.registry.setStatus(daemonId, "error", message);
+		this.#log("error", message, daemonId);
+		await this.#hostProvider.run(
+			this.#hostRequest("stop", entry, { killGraceMs: STOP_SIGTERM_GRACE_MS }),
+		);
+	}
+
+	/** The provider reports a host child that died without being ended by it: apply the exit policy. */
+	#onHostExit(exit: HostExit): void {
+		const runtime = this.#hostRuntimes.get(exit.workspaceId);
+		if (runtime === undefined || runtime.generation !== exit.generation) return;
+		if (runtime.pairTimer !== null) {
+			clearTimeout(runtime.pairTimer);
+			runtime.pairTimer = null;
+		}
+		runtime.budget.unpaired();
+		void this.#serialized(exit.workspaceId, async () => this.#applyExitPolicy(runtime, exit)).catch(
+			(err: unknown) => this.#failHostRuntime(exit.workspaceId, "exit handling failed", err),
+		);
+	}
+
+	/**
+	 * Something threw while handling a runtime event: the row would otherwise
+	 * keep its last status with no restart and no reason.
+	 */
+	#failHostRuntime(daemonId: string, what: string, err: unknown): void {
+		releaseSessionCredential(this.#deps.transport, this.#deps.registry, daemonId);
+		const message = `${what}: ${err instanceof Error ? err.message : String(err)}`;
+		this.#deps.registry.setStatus(daemonId, "error", message);
+		this.#log("error", message, daemonId);
+	}
+
+	/**
+	 * Exit policy: exit 0 (a session that shut itself down, e.g. its control
+	 * grace expired) goes asleep with no restart. Exit
+	 * OMP_SESSION_EXIT_SESSION_LOCKED (the session file is open in another
+	 * omp-session) or OMP_SESSION_EXIT_RESUME_FAILED (its --resume session cannot
+	 * be restored) is deterministic: no restart, the row goes asleep carrying the
+	 * child's last log line as its reason. Any other unexpected exit restarts
+	 * with a fresh credential after the shared restart-policy.ts backoff, until
+	 * the budget is spent (refilled by a pair that holds), then errors.
+	 */
+	#applyExitPolicy(runtime: HostRuntime, exit: HostExit): void {
+		const daemonId = exit.workspaceId;
+		const { registry, transport } = this.#deps;
+		if (runtime.stopped || runtime.generation !== exit.generation) return;
+		if (!registry.get(daemonId)) return;
+		const summary = describeExit(exit.exitCode, exit.signalCode);
+		if (
+			exit.exitCode === OMP_SESSION_EXIT_SESSION_LOCKED ||
+			exit.exitCode === OMP_SESSION_EXIT_RESUME_FAILED
+		) {
+			// Deterministic refusals: another omp-session holds the session file
+			// (77), or --resume names a session that cannot be restored (78).
+			const reason = this.#deterministicExitReason(daemonId);
+			releaseSessionCredential(transport, registry, daemonId);
+			registry.setStatus(daemonId, "asleep", reason);
+			this.#log("error", reason, daemonId);
+			return;
+		}
+		if (exit.exitCode === 0 && exit.signalCode === null) {
+			// The session shut itself down cleanly (e.g. its control grace
+			// expired, or a credential it held was revoked): dormant, not restarted.
+			releaseSessionCredential(transport, registry, daemonId);
+			registry.setStatus(daemonId, "asleep");
+			this.#log("info", `${summary} clean → asleep`, daemonId);
+			return;
+		}
+		const claim = runtime.budget.next();
+		if (claim === null) {
+			releaseSessionCredential(transport, registry, daemonId);
+			registry.setStatus(
+				daemonId,
+				"error",
+				`child exited ${runtime.budget.used + 1} times (${runtime.budget.restartMax} restarts allowed)`,
+			);
+			this.#log(
+				"error",
+				`${summary}, restart budget exhausted (${runtime.budget.restartMax} restarts allowed)`,
+				daemonId,
+			);
+			return;
+		}
+		runtime.restartTimer = setTimeout(() => {
+			runtime.restartTimer = null;
+			void this.#serialized(daemonId, () => this.#restartHost(daemonId, runtime)).catch(
+				(err: unknown) => this.#failHostRuntime(daemonId, "restart failed", err),
+			);
+		}, claim.delayMs);
+		this.#log(
+			"warn",
+			`${summary}, restart ${claim.attempt + 1}/${runtime.budget.restartMax} in ${claim.delayMs}ms`,
+			daemonId,
+		);
+	}
+
+	/** The crash restart itself: a resume start with a fresh credential and generation. */
+	async #restartHost(daemonId: string, runtime: HostRuntime): Promise<void> {
+		if (runtime.stopped || this.#hostRuntimes.get(daemonId) !== runtime) return;
+		const current = this.#deps.registry.get(daemonId);
+		if (!current) return;
+		const template = this.#deps.config.templates[current.template ?? ""];
+		if (!template) {
+			this.#deps.registry.setStatus(
+				daemonId,
+				"error",
+				`unknown spawn template: ${current.template}`,
+			);
+			return;
+		}
+		await this.#launchHost(current, template, { resume: true });
+	}
+
+	/** The child's last non-empty log line (its refusal reason), without the omp-session prefix. */
+	#deterministicExitReason(daemonId: string): string {
+		const lastLine = this.sessionLogTail(daemonId)
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line !== "")
+			.at(-1);
+		return lastLine?.replace(/^omp-session: /, "") ?? DETERMINISTIC_EXIT_FALLBACK;
 	}
 
 	// ------------------------------------------------------------------

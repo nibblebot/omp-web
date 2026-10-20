@@ -80,8 +80,8 @@ function startFixture(
 		slot(entry.daemonId).resolve(daemon);
 		return daemon;
 	};
-	const supervisor = {
-		respawn: async (entry: RegistryEntry) => {
+	const host = {
+		ensureHostRunning: async (entry: RegistryEntry) => {
 			respawned.push(entry.daemonId);
 			if (refusals.remaining > 0) {
 				refusals.remaining -= 1;
@@ -92,7 +92,7 @@ function startFixture(
 	};
 	const waker = new SessionWaker({
 		registry,
-		supervisor,
+		host,
 		transport,
 		lifecycle: opts.lifecycle,
 		redialGraceMs: opts.redialGraceMs ?? 50,

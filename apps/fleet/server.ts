@@ -4,7 +4,7 @@
  * A loopback-only HTTP JSON API (default port 4722; opts.port wins;
  * 0 = ephemeral) on a shared Bun.serve; Phase 3 adds the
  * browser SSE edge (/events + /command) on the same server. Wires the
- * persistent Registry, the callback transport and the SpawnSupervisor:
+ * persistent Registry, the callback transport and the workspace lifecycle:
  *
  *   GET  /ctl/sessions {…}                         → DaemonEntry[]
  *   GET  /ctl/projects {…}                         → { projects: RegisteredProject[] }
@@ -52,7 +52,7 @@
  * background and the route returns { submitted } without awaiting the turn.
  *
  * Sessions dial the control plane over the callback pair; the fleet never
- * dials a session. Spawned children are supervised here.
+ * dials a session. Spawned children run through the lifecycle here.
  */
 
 import type { Server } from "bun";
@@ -67,9 +67,8 @@ import { isLoopbackHost } from "#lib/platform/hosts";
 import { acquireFileLock, type FileLock } from "#lib/platform/file-lock";
 import type { DeletionGateError, RegistryEntry } from "./registry";
 import { PAIR_LOSS_GRACE_MS, REDIAL_GRACE_MS, Registry } from "./registry";
-import { sessionLiveness } from "./session-liveness";
 import { matchSelector } from "./selectors";
-import { SpawnSupervisor } from "./supervisor";
+import { ProjectSync } from "./project-sync";
 import { SessionWaker } from "./session-waker";
 import { realpathOf } from "./worktrees";
 import type { FanoutDeps } from "./fanout";
@@ -146,7 +145,10 @@ export interface WorkspaceResourceDeleter {
 export interface FleetServer {
 	port: number;
 	registry: Registry;
-	supervisor: SpawnSupervisor;
+	/** Git-state polling and project sync. */
+	sync: ProjectSync;
+	/** Workspace lifecycle owner: clone and host (main-checkout/worktree) runtimes. */
+	lifecycle: WorkspaceLifecycle;
 	/** Daemon transport registry (callback pairs); tests drive sessions through it. */
 	transport: DaemonTransportRegistry;
 	/** Fleet lifecycle-event ring (backing /ctl/debug; CLI mirrors it to stdout). */
@@ -344,7 +346,7 @@ class LocalCloneResourceDeleter implements WorkspaceResourceDeleter {
 class FleetServerImpl implements FleetServer {
 	readonly port: number;
 	readonly registry: Registry;
-	readonly supervisor: SpawnSupervisor;
+	readonly sync: ProjectSync;
 	readonly config: FleetConfig;
 	readonly edge: FleetEdge;
 	readonly #waker: SessionWaker;
@@ -359,7 +361,7 @@ class FleetServerImpl implements FleetServer {
 	 *  configured). Loopback peer exemptions + CSRF/origin live behind this. */
 	readonly authGate: FleetAuthGate | null;
 	/** Optional P3.3 callback enrollment for roster daemons (mirrors the
-	 *  daemon-half enrollment the fleet supervisor will hand out in P5). */
+	 *  daemon-half enrollment the lifecycle hands out in P5). */
 	readonly transport: DaemonTransportRegistry;
 	/** P3.8 fleet log store; null when the logs dir is not writable at boot.
 	 *  Loaded after the state lock is held; closed only in close(). */
@@ -408,7 +410,7 @@ class FleetServerImpl implements FleetServer {
 
 	/**
 	 * daemonIds mid-eviction for a poll-detected, vanished worktree. The
-	 * supervisor can fire per poll tick; the first report wins and the set
+	 * project sync can fire per poll tick; the first report wins and the set
 	 * is cleared when the eviction settles.
 	 */
 	readonly #evictingWorktrees = new Set<string>();
@@ -549,21 +551,6 @@ class FleetServerImpl implements FleetServer {
 				})
 			: null;
 		let edge: FleetEdge | null = null;
-		this.supervisor = new SpawnSupervisor(
-			registry,
-			config,
-			{
-				transport: this.transport,
-				statePath: facts.statePath,
-				callbackUrl: () => this.#callbackUrl(),
-				onEnrolled: (daemonId) => this.#watchPair(daemonId),
-			},
-			{
-				onEvent: (level, message, daemonId) =>
-					this.eventLog.add(level, "supervisor", message, daemonId),
-				onWorktreeRemoved: (entry) => void this.#onWorktreeVanished(entry),
-			},
-		);
 		// P6/P7 lifecycle owner: the single create/ensure/stop/delete
 		// authority for provider-managed clone workspaces, shared by the
 		// control-plane routes and the edge command dispatch. Constructed
@@ -572,7 +559,8 @@ class FleetServerImpl implements FleetServer {
 		// log-tap attach and callback-URL provider, no edge dependency.
 		this.lifecycle = new WorkspaceLifecycle({
 			registry,
-			config: { providerProfiles: config.providerProfiles },
+			config,
+			statePath: facts.statePath,
 			cloneRoot: this.cloneRoot,
 			transport: this.transport,
 			logStore: this.logStore,
@@ -581,6 +569,13 @@ class FleetServerImpl implements FleetServer {
 			attachLogTap: (workspaceId) => this.#attachLogStoreTap(workspaceId),
 			callbackUrl: () => this.#callbackUrl(),
 			runtime: { pairLossGraceMs, ...cloneRuntime },
+			onEnrolled: (daemonId) => this.#watchPair(daemonId),
+			onSpawned: (daemonId) => this.sync.probeGitState(daemonId),
+		});
+		// Git-state polling and project sync: observes rows, never runs them.
+		this.sync = new ProjectSync(registry, this.lifecycle, {
+			onEvent: (level, message, daemonId) => this.eventLog.add(level, "server", message, daemonId),
+			onWorktreeRemoved: (entry) => void this.#onWorktreeVanished(entry),
 		});
 		this.cloneApi = new CloneControlApi({
 			lifecycle: this.lifecycle,
@@ -588,10 +583,10 @@ class FleetServerImpl implements FleetServer {
 			config: { providerProfiles: config.providerProfiles },
 		});
 		// One session waker per fleet (FLC-23): the edge and fan-out prompts share
-		// its rule set. Built after the supervisor, transport and lifecycle exist.
+		// its rule set. Built after the transport and lifecycle exist.
 		this.#waker = new SessionWaker({
 			registry,
-			supervisor: this.supervisor,
+			host: this.lifecycle,
 			transport: this.transport,
 			lifecycle: this.lifecycle,
 			redialGraceMs: this.#redialGraceMs,
@@ -600,7 +595,8 @@ class FleetServerImpl implements FleetServer {
 		// here and the edge command table call the same methods.
 		this.#ops = new FleetOperations({
 			registry,
-			supervisor: this.supervisor,
+			host: this.lifecycle,
+			sync: this.sync,
 			config,
 			eventLog: this.eventLog,
 			lifecycle: this.lifecycle,
@@ -614,7 +610,8 @@ class FleetServerImpl implements FleetServer {
 		// block above; never a bare store-less app.
 		edge = new FleetEdge({
 			registry,
-			supervisor: this.supervisor,
+			host: this.lifecycle,
+			sync: this.sync,
 			config,
 			eventLog: this.eventLog,
 			fleet: this.fleetFacts,
@@ -645,10 +642,10 @@ class FleetServerImpl implements FleetServer {
 		this.#reconcileBootStatuses();
 		// Tag pre-existing local entries with their owning repo (roster
 		// grouping); per-entry git failures are swallowed inside.
-		void this.supervisor.backfillWorktrees();
+		void this.sync.backfillWorktrees();
 		// Keep branch + dirty counts fresh for local entries; close() clears
-		// the timer via supervisor.close().
-		this.supervisor.startGitStatePolling();
+		// the timer via sync.close().
+		this.sync.startGitStatePolling();
 		this.#server = Bun.serve({
 			hostname: config.bind,
 			port,
@@ -710,7 +707,7 @@ class FleetServerImpl implements FleetServer {
 			errors.push(err);
 		}
 		try {
-			await this.supervisor.close();
+			this.sync.close();
 		} catch (err) {
 			errors.push(err);
 		}
@@ -729,7 +726,7 @@ class FleetServerImpl implements FleetServer {
 		} catch (err) {
 			errors.push(err);
 		}
-		// Write the coalesced registry state once the supervisor has stopped mutating it.
+		// Write the coalesced registry state once the sync has stopped mutating it.
 		try {
 			this.registry.close();
 		} catch (err) {
@@ -941,7 +938,7 @@ class FleetServerImpl implements FleetServer {
 	 * PAIR_LOSS_GRACE_MS: a voluntary byte renewal or brief re-dial re-pairs
 	 * inside that window with no status flicker. Only a drop that outlasts the
 	 * grace becomes "reconnecting". Connecting/asleep/error belong to the
-	 * supervisor, so pair loss in those states changes nothing here.
+	 * lifecycle's host runtime, so pair loss in those states changes nothing here.
 	 */
 	#onPairChange(daemonId: string, paired: boolean): void {
 		const entry = this.registry.get(daemonId);
@@ -1013,45 +1010,26 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * Reconcile statuses persisted by a previous fleet process. A local spawned
-	 * session proven dead by its live file lock or recorded pid becomes "asleep"
-	 * immediately, as does an unenrolled entry. Other enrolled non-clone entries
-	 * stay "reconnecting" until their pair returns or the redial grace expires.
-	 * Remote entries are never probed. Inspect liveness before clearing stale
-	 * readyAt and pid facts. Clones are reconciled by the workspace lifecycle.
+	 * Reconcile statuses persisted by a previous fleet process. Every enrolled
+	 * non-clone row is watched for its pair again; the lifecycle's host runtime
+	 * then marks a local spawned session proven dead by its live file lock or
+	 * recorded pid (or an unenrolled row) "asleep", and leaves other enrolled
+	 * rows "reconnecting" until their pair returns or the redial grace expires.
+	 * Remote entries are never probed. Clones are reconciled by the lifecycle's
+	 * clone reconcile.
 	 */
 	#reconcileBootStatuses(): void {
 		for (const entry of this.registry.list()) {
 			if (entry.workspace?.kind === "clone") continue;
-			const enrolled = entry.workspace?.enrollment !== undefined;
-			if (enrolled) this.#watchPair(entry.daemonId);
-			if (entry.status === "asleep" || entry.status === "error") continue;
-			const verdict = sessionLiveness(entry);
-			const previousStatus = entry.status;
-			const target: DaemonStatus = !enrolled || verdict === "dead" ? "asleep" : "reconnecting";
-			const reason = !enrolled
-				? "not enrolled"
-				: verdict === "dead"
-					? "local session dead"
-					: verdict === "alive"
-						? "local session alive"
-						: "liveness unknown";
-			this.registry.update(entry.daemonId, { readyAt: undefined, pid: undefined });
-			this.registry.setStatus(entry.daemonId, target);
-			this.eventLog.add(
-				"info",
-				"server",
-				`boot reconcile: ${previousStatus} → ${target} (${reason})`,
-				entry.daemonId,
-			);
-			if (target === "reconnecting") this.#armRedialGrace(entry.daemonId);
+			if (entry.workspace?.enrollment !== undefined) this.#watchPair(entry.daemonId);
 		}
+		for (const daemonId of this.lifecycle.reconcileHostBoot()) this.#armRedialGrace(daemonId);
 	}
 
 	/**
 	 * POST /ctl/start {daemonId} (alias POST /ctl/wake): the fleet-side
 	 * ensure-running entry point for CLONE workspaces (P6.1). Direct/template
-	 * spawns keep their existing path (/ctl/spawn + supervisor); this route
+	 * spawns keep their existing path (/ctl/spawn, the lifecycle's host runtime); this route
 	 * only ever runs provider-managed clone entries. On success the workspace
 	 * record rides: fresh enrollment (credential persistence for the callback
 	 * pair), provider handle, and desiredState "running". A missing or
@@ -1095,7 +1073,7 @@ class FleetServerImpl implements FleetServer {
 	#fanoutDeps(): FanoutDeps {
 		// P6.1 fanout trigger: every prompt wakes its session through the shared
 		// SessionWaker (clones via the lifecycle owner; spawned and remote entries
-		// via the supervisor and the callback pair).
+		// via the host runtime and the callback pair).
 		return {
 			registry: this.registry,
 			transport: this.transport,
@@ -1458,7 +1436,7 @@ class FleetServerImpl implements FleetServer {
 	 * DELETE /ctl/projects/:projectId: deregister a project (never touches
 	 * disk). A project with clone workspaces is refused with 409 naming them,
 	 * before anything is stopped. Otherwise each running row is stopped (its
-	 * pair closed, supervisor state pruned) and every row of the project is
+	 * pair closed, host runtime state deleted) and every row of the project is
 	 * dropped; transcripts stay on disk. Unknown ids → 404.
 	 */
 	async #handleRemoveProject(projectId: string): Promise<Response> {
@@ -1508,7 +1486,7 @@ class FleetServerImpl implements FleetServer {
 				`worktree vanished on disk: ${entry.cwd}`,
 				entry.daemonId,
 			);
-			// `this.edge` is assigned AFTER the supervisor in the constructor,
+			// `this.edge` is assigned AFTER the sync in the constructor,
 			// but this hook can only fire during git-state polling, which
 			// starts after the edge assignment, so optional chaining guards any
 			// earlier synchronous trigger regardless.
@@ -1554,7 +1532,7 @@ class FleetServerImpl implements FleetServer {
 
 	/**
 	 * The single eviction of a non-clone roster row (FLC-21/FLC-22). Stops the
-	 * session (supervisor prune), then runs `removal`. Only once it resolves are
+	 * session (host runtime delete), then runs `removal`. Only once it resolves are
 	 * the pair watch and log tap forgotten, the store-orphan marker persisted,
 	 * and the row dropped. A rejecting `removal` leaves the row registered
 	 * (asleep) with its resume state, and rejects with its error.
@@ -1562,7 +1540,7 @@ class FleetServerImpl implements FleetServer {
 	async #evictRow<T>(daemonId: string, removal: () => Promise<T>): Promise<T> {
 		const entry = this.registry.get(daemonId);
 		if (entry === undefined) throw new Error(`unknown daemon: ${daemonId}`);
-		await this.supervisor.prune(daemonId);
+		await this.lifecycle.deleteHost(daemonId);
 		const result = await removal();
 		this.#forgetPair(daemonId);
 		this.#markStoreOrphanIfStored(entry);
@@ -1574,7 +1552,7 @@ class FleetServerImpl implements FleetServer {
 	async #evictProject(projectId: string): Promise<void> {
 		for (const entry of this.registry.list()) {
 			if (entry.projectId !== projectId) continue;
-			if (entry.status !== "asleep") await this.supervisor.prune(entry.daemonId);
+			if (entry.status !== "asleep") await this.lifecycle.deleteHost(entry.daemonId);
 			this.#forgetPair(entry.daemonId);
 			this.#markStoreOrphanIfStored(entry);
 		}

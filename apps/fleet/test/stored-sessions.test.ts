@@ -699,7 +699,7 @@ describe("stored-history reads never wake compute", () => {
 		const server: FleetServer = await startTestFleet(paths, {});
 		try {
 			// The observables (the real-server analogue of fanout.test.ts's
-			// `respawned` recorder): supervisor.spawn/respawn are the ONLY
+			// `respawned` recorder): spawnHost/ensureHostRunning are the ONLY
 			// fleet paths that create a daemon, and a daemon is the only thing
 			// that can dial in (daemons dial OUT; the fleet never dials, and
 			// sendToDaemon is the only fleet→daemon push). A stored-only
@@ -711,11 +711,11 @@ describe("stored-history reads never wake compute", () => {
 			const spawned: string[] = [];
 			const respawned: string[] = [];
 			const pushed: string[] = [];
-			server.supervisor.spawn = async (init) => {
+			server.lifecycle.spawnHost = async (init) => {
 				spawned.push(init.cwd);
 				throw new Error("stored browsing must not spawn");
 			};
-			server.supervisor.respawn = async (entry) => {
+			server.lifecycle.ensureHostRunning = async (entry) => {
 				respawned.push(entry.daemonId);
 				throw new Error("stored browsing must not respawn");
 			};
@@ -754,7 +754,7 @@ describe("stored-history reads never wake compute", () => {
 			expect(spawned).toEqual([]);
 			expect(respawned).toEqual([]);
 			expect(pushed).toEqual([]);
-			expect(server.supervisor.snapshot()).toEqual({});
+			expect(server.lifecycle.hostSnapshot()).toEqual({});
 			expect(server.transport.enrolledWorkspaceIds()).toEqual([]);
 			expect(server.transport.pairStatus(STORED_ONLY).enrolled).toBe(false);
 			expect(server.registry.list()).toEqual([]);

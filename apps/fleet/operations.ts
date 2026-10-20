@@ -24,7 +24,8 @@ import { validateProjectPath } from "./discovery";
 import type { FleetEventLog } from "./events";
 import type { Registry, RegistryEntry } from "./registry";
 import type { CloneFetchResult, RegisteredProject } from "#lib/wire/protocol";
-import type { SpawnSupervisor } from "./supervisor";
+import type { ProjectSync } from "./project-sync";
+import type { HostRuntimeApi } from "./workspace-lifecycle";
 import {
 	createWorktree,
 	deleteWorktree,
@@ -56,7 +57,7 @@ export const SPAWN_LABEL_RE = /^[^=]+=.*$/;
 /**
  * Semantic label check for spawn and add-project: no NUL (cannot appear in a
  * shell command string; keeps it out of wire and state, the real injection
- * defense is quoting in the supervisor launch), then every entry is k=v.
+ * defense is quoting in the host launch), then every entry is k=v.
  */
 export function checkSpawnLabels(labels: readonly string[]): void {
 	if (labels.some((label) => label.includes("\0"))) {
@@ -87,7 +88,7 @@ export interface CloneDeleteResult {
 
 /**
  * Clone lifecycle service (P6/P7 boundary). Operations NEVER stop, remove or
- * delete a clone through the supervisor, the git worktree guards, or
+ * delete a clone through the host runtime, the git worktree guards, or
  * registry.remove: every clone mutation goes through these hooks so the
  * provider lifecycle, admission, and the verify-at-deletion gate cannot be
  * bypassed. Implemented by fleet/workspace-lifecycle.ts.
@@ -105,7 +106,9 @@ export interface CloneLifecycleHooks {
 
 export interface OperationsDeps {
 	registry: Registry;
-	supervisor: SpawnSupervisor;
+	/** Main-checkout and worktree sessions run through the lifecycle's host runtime. */
+	host: HostRuntimeApi;
+	sync: Pick<ProjectSync, "syncNow">;
 	config: Pick<FleetConfig, "workspaceDir">;
 	eventLog: FleetEventLog;
 	/** Absent = clone operations answer 503 (typed unavailability). */
@@ -147,7 +150,8 @@ export function parseCloneSource(raw: unknown): CloneCreateInput["source"] {
 
 export class FleetOperations {
 	readonly #registry: Registry;
-	readonly #supervisor: SpawnSupervisor;
+	readonly #host: HostRuntimeApi;
+	readonly #sync: Pick<ProjectSync, "syncNow">;
 	readonly #config: Pick<FleetConfig, "workspaceDir">;
 	readonly #eventLog: FleetEventLog;
 	readonly #lifecycle: CloneLifecycleHooks | undefined;
@@ -156,7 +160,8 @@ export class FleetOperations {
 
 	constructor(deps: OperationsDeps) {
 		this.#registry = deps.registry;
-		this.#supervisor = deps.supervisor;
+		this.#host = deps.host;
+		this.#sync = deps.sync;
 		this.#config = deps.config;
 		this.#eventLog = deps.eventLog;
 		this.#lifecycle = deps.lifecycle;
@@ -209,7 +214,7 @@ export class FleetOperations {
 		if (input.labels !== undefined) checkSpawnLabels(input.labels);
 		const resolved = await validateProjectPath(input.cwd);
 		if (resolved === null) throw new OperationError(400, `not a directory: ${input.cwd}`);
-		const entry = await this.#supervisor.spawn({
+		const entry = await this.#host.spawnHost({
 			cwd: resolved,
 			template: input.template,
 			name: input.name,
@@ -223,7 +228,7 @@ export class FleetOperations {
 	/**
 	 * Stop a daemon, leaving its row asleep. A clone stops through the
 	 * lifecycle's proof-bearing provider stop; anything else through the
-	 * supervisor (ShutdownControl when paired, kill an own child, revoke the
+	 * host runtime (ShutdownControl when paired, kill an own child, revoke the
 	 * enrollment). A failed non-clone stop flips the row to asleep before the
 	 * error surfaces (never left "ready" with a dead child).
 	 */
@@ -236,7 +241,7 @@ export class FleetOperations {
 			return;
 		}
 		try {
-			await this.#supervisor.stop(daemonId);
+			await this.#host.stopHost(daemonId);
 		} catch (err) {
 			this.#registry.setStatus(daemonId, "asleep");
 			throw err;
@@ -294,12 +299,12 @@ export class FleetOperations {
 		}
 		const { project, existing } = registered;
 		if (existing) {
-			this.#supervisor.syncNow();
+			this.#sync.syncNow();
 			return { project, existing: true };
 		}
 		let entry: RegistryEntry;
 		try {
-			entry = await registerProjectMainEntry(this.#registry, this.#supervisor, project, {
+			entry = await registerProjectMainEntry(this.#registry, this.#host, project, {
 				start: input.start ?? false,
 				template: input.template,
 				labels: input.labels,
@@ -310,7 +315,7 @@ export class FleetOperations {
 				`project ${project.projectId} registered, spawn failed: ${err instanceof Error ? err.message : String(err)}`,
 			);
 		}
-		this.#supervisor.syncNow();
+		this.#sync.syncNow();
 		return { project, existing: false, entry };
 	}
 
@@ -365,7 +370,7 @@ export class FleetOperations {
 		}
 		let entry: RegistryEntry;
 		try {
-			entry = await registerWorktreeEntry(this.#registry, this.#supervisor, project, created.path, {
+			entry = await registerWorktreeEntry(this.#registry, this.#host, project, created.path, {
 				start: input.start,
 			});
 		} catch (err) {

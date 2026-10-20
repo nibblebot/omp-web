@@ -67,7 +67,7 @@ describe("shellQuote", () => {
 
 describe("launch line composition", () => {
 	test("shell-quoting before substitution keeps metacharacters in argv, not in the shell", () => {
-		// supervisor.ts #launch does exactly this: every value substituted into
+		// host-provider.ts launch does exactly this: every value substituted into
 		// the template (cwd/name/labels arrive from HTTP JSON) is shell-quoted
 		// first, then the composed line goes to `sh -c`. Probe it against a real
 		// shell whose sink prints one argv entry per line: if any value escaped

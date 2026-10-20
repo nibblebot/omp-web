@@ -14,11 +14,12 @@ import type { FleetConfig } from "../config";
 import { DaemonTransportRegistry } from "../daemon-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
+import { ProjectSync } from "../project-sync";
 import { Registry } from "../registry";
 import type { FleetServer } from "../server";
-import { SpawnSupervisor } from "../supervisor";
 import { startUiServer, type UiServer } from "../ui-server";
 import { cleanupTempDirs, serveEdge, testEviction, testWaker } from "./edge.testkit";
+import { makeHostLifecycle } from "./host-lifecycle.testkit";
 import { fleetPaths, startTestFleet, waitFor } from "./server.testkit";
 
 afterAll(cleanupTempDirs);
@@ -53,16 +54,19 @@ async function mountEdge(tmp: string, serveUi?: boolean) {
 		bind: "127.0.0.1",
 	};
 	const transport = new DaemonTransportRegistry();
-	const supervisor = new SpawnSupervisor(registry, config, {
+	const { lifecycle } = makeHostLifecycle({
+		registry,
+		config,
 		transport,
 		statePath,
 		callbackUrl: () => "https://fleet.test/callback",
 	});
 	const edge = new FleetEdge({
 		registry,
-		supervisor,
-		eviction: testEviction(registry, supervisor),
-		waker: testWaker(registry, supervisor, undefined),
+		host: lifecycle,
+		sync: new ProjectSync(registry, lifecycle),
+		eviction: testEviction(registry, lifecycle),
+		waker: testWaker(registry, lifecycle, undefined),
 		config,
 		eventLog: new FleetEventLog(),
 		fleet: { port: 0, startedAt: Date.now(), statePath, configPath: null, bind: "127.0.0.1" },

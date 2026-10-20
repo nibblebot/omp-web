@@ -30,7 +30,7 @@ import { slugifyWorktreeName, worktreeBranchName } from "#lib/wire/worktree-name
 import { parseWorktreeList, probeGitState, runGit, validateProjectPath } from "./discovery";
 import type { GitRunner, WorktreeBlock } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
-import type { SpawnSupervisor } from "./supervisor";
+import type { WorkspaceLifecycle } from "./workspace-lifecycle";
 
 /** Map a repo realpath + worktree name to its managed path under workspaceDir. */
 export function managedWorktreePath(
@@ -654,25 +654,31 @@ async function ownBranchRefusal(
 // Roster registration + spawn orchestration (shared by /ctl + edge)
 // ---------------------------------------------------------------------------
 
+/** The slice of the workspace lifecycle (host runtime) that roster registration drives. */
+export type HostSessions = Pick<
+	WorkspaceLifecycle,
+	"spawnHost" | "ensureHostRunning" | "resolveTemplateName"
+>;
+
 /**
  * Register a roster entry for an existing worktree path and optionally spawn
  * a daemon on it (start:true). Shared by the /ctl route, the edge command
  * handler, and the sync pass (which adopts worktrees created outside
  * omp-web). The entry is tagged with the project's projectId and name; when
  * start:false it is registered asleep (wakeable via spawn_resume; the
- * supervisor only spawns, attach is client-side).
+ * lifecycle only spawns, attach is client-side).
  */
 export async function registerWorktreeEntry(
 	registry: Registry,
-	supervisor: SpawnSupervisor,
+	host: HostSessions,
 	project: RegisteredProject,
 	worktreePath: string,
 	opts: { start?: boolean } = {},
 ): Promise<RegistryEntry> {
 	if (opts.start) {
-		// supervisor.spawn creates the entry (worktreeOf auto-resolved from
+		// host.spawnHost creates the entry (worktreeOf auto-resolved from
 		// git) and launches the child; tag the project id right after.
-		const entry = await supervisor.spawn({ cwd: worktreePath, reuse: true });
+		const entry = await host.spawnHost({ cwd: worktreePath, reuse: true });
 		registry.update(entry.daemonId, {
 			projectId: project.projectId,
 			worktreeOf: project.name,
@@ -686,10 +692,10 @@ export async function registerWorktreeEntry(
 		});
 		return registry.get(entry.daemonId) ?? entry;
 	}
-	// Mirror supervisor.spawn's field shape (name/project = worktree
+	// Mirror spawnHost's field shape (name/project = worktree
 	// basename) so a started and an unstarted worktree render identically
 	// except status; worktreeOf carries the owning project's name. The
-	// resolved template NAME is stored like spawn() stores it; respawn()
+	// resolved template NAME is stored like spawnHost stores it; ensureHostRunning
 	// keys off entry.template.
 	return registry.create({
 		name: basename(worktreePath),
@@ -705,7 +711,7 @@ export async function registerWorktreeEntry(
 		},
 		labels: [],
 		status: "asleep",
-		template: supervisor.resolveTemplateName(worktreePath),
+		template: host.resolveTemplateName(worktreePath),
 	});
 }
 
@@ -713,7 +719,7 @@ export async function registerWorktreeEntry(
  * Register the DEFAULT WORKSPACE of a registered project: a roster entry for
  * the repo's main checkout, mapped to the repo CWD. The main checkout is the
  * repo itself, so this never creates anything under workspaceDir. With
- * opts.start the main checkout is spawned via the supervisor (template/labels
+ * opts.start the main checkout is spawned via the host runtime (template/labels
  * passthrough) and the fresh entry is tagged with the projectId; otherwise it
  * is registered asleep (kind "direct") and wakeable via spawn_resume/attach;
  * a respawn with no lastSessionFile is a fresh start. An existing row for the
@@ -722,7 +728,7 @@ export async function registerWorktreeEntry(
  */
 export async function registerProjectMainEntry(
 	registry: Registry,
-	supervisor: SpawnSupervisor,
+	host: HostSessions,
 	project: RegisteredProject,
 	opts: { start?: boolean; template?: string; labels?: string[]; realpaths?: Map<string, string> },
 ): Promise<RegistryEntry> {
@@ -736,15 +742,15 @@ export async function registerProjectMainEntry(
 			registry.update(existing.daemonId, { projectId: project.projectId });
 		}
 		if (opts.start && existing.status === "asleep") {
-			await supervisor.respawn(existing);
+			await host.ensureHostRunning(existing);
 		}
 		return registry.get(existing.daemonId) ?? existing;
 	}
 	if (opts.start) {
-		// supervisor.spawn creates the entry (resolveWorktreeOf leaves main
+		// host.spawnHost creates the entry (resolveWorktreeOf leaves main
 		// checkouts untagged) and launches the child; tag the project id
 		// right after.
-		const entry = await supervisor.spawn({
+		const entry = await host.spawnHost({
 			cwd: project.path,
 			template: opts.template,
 			labels: opts.labels,
@@ -753,7 +759,7 @@ export async function registerProjectMainEntry(
 		registry.update(entry.daemonId, { projectId: project.projectId });
 		return registry.get(entry.daemonId) ?? entry;
 	}
-	// Mirror supervisor.spawn's field shape for the main checkout (name and
+	// Mirror spawnHost's field shape for the main checkout (name and
 	// project = the repo name) so a started and an unstarted default
 	// workspace render identically except status, including the resolved
 	// template NAME (respawn keys off entry.template). NO worktreeOf: main
@@ -765,6 +771,6 @@ export async function registerProjectMainEntry(
 		projectId: project.projectId,
 		labels: opts.labels ?? [],
 		status: "asleep",
-		template: supervisor.resolveTemplateName(project.path, opts.template),
+		template: host.resolveTemplateName(project.path, opts.template),
 	});
 }

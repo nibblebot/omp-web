@@ -22,10 +22,11 @@ import type { FleetConfig } from "../config";
 import { DaemonTransportRegistry } from "../daemon-transport";
 import { fanOut, promptEntry, type FanoutDeps } from "../fanout";
 import { Registry, type RegistryEntry } from "../registry";
-import { SpawnSupervisor } from "../supervisor";
 import { SessionWaker } from "../session-waker";
+import type { WorkspaceLifecycle } from "../workspace-lifecycle";
 import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
 import { sleep, waitFor } from "./edge.testkit";
+import { makeHostLifecycle } from "./host-lifecycle.testkit";
 
 type CreateInit = Parameters<Registry["create"]>[0];
 
@@ -33,9 +34,9 @@ interface Fixture {
 	deps: FanoutDeps;
 	registry: Registry;
 	transport: DaemonTransportRegistry;
-	/** The stubbed supervisor the fixture's waker respawns through (tests may override respawn). */
-	supervisor: SpawnSupervisor;
-	/** daemonIds the stubbed supervisor.respawn was asked to wake, in order. */
+	/** The lifecycle the fixture's waker wakes through (tests may override ensureHostRunning). */
+	lifecycle: WorkspaceLifecycle;
+	/** daemonIds the stubbed lifecycle.ensureHostRunning was asked to wake, in order. */
 	respawned: string[];
 	/** Register a spawned entry in the registry. */
 	create(overrides?: Partial<CreateInit>): RegistryEntry;
@@ -70,7 +71,9 @@ function startFixture(): Fixture {
 		workspaceDir: `${dir}/ws`,
 		bind: "127.0.0.1",
 	};
-	const supervisor = new SpawnSupervisor(registry, config, {
+	const { lifecycle } = makeHostLifecycle({
+		registry,
+		config,
 		transport,
 		statePath,
 		callbackUrl: () => `${url}/callback`,
@@ -98,14 +101,14 @@ function startFixture(): Fixture {
 		slot(entry.daemonId).resolve(daemon);
 		return daemon;
 	};
-	// The real supervisor launches a child that dials out; the stand-in starts
+	// The real lifecycle launches a child that dials out; the stand-in starts
 	// the same dialing daemon without waiting for it to connect.
-	supervisor.respawn = async (entry) => {
+	lifecycle.ensureHostRunning = async (entry) => {
 		respawned.push(entry.daemonId);
 		dial(entry);
 	};
 	cleanups.push(async () => {
-		supervisor.close();
+		lifecycle.close();
 		transport.close();
 		await server.stop(true);
 	});
@@ -113,11 +116,11 @@ function startFixture(): Fixture {
 		deps: {
 			registry,
 			transport,
-			waker: new SessionWaker({ registry, supervisor, transport }),
+			waker: new SessionWaker({ registry, host: lifecycle, transport }),
 		},
 		registry,
 		transport,
-		supervisor,
+		lifecycle,
 		respawned,
 		create(overrides = {}) {
 			return registry.create({
@@ -338,7 +341,7 @@ describe("promptEntry", () => {
 
 	test("a respawn that fails reports its error without sending a prompt", async () => {
 		const fx = startFixture();
-		fx.supervisor.respawn = async () => {
+		fx.lifecycle.ensureHostRunning = async () => {
 			throw new Error("launch refused");
 		};
 		const entry = fx.create({ status: "asleep" });

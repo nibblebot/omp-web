@@ -51,7 +51,7 @@ import { expandTilde } from "./config";
 /**
  * How long an enrolled session may stay unpaired after a control-plane boot
  * before it is shown asleep. A session that redials inside this window keeps
- * its status; the supervisor owns the status of sessions it launches.
+ * its status; the lifecycle owns the status of sessions it launches.
  */
 export const REDIAL_GRACE_MS = 45_000;
 
@@ -175,9 +175,9 @@ export interface WorkspaceRecord {
 
 /** A roster entry: DaemonEntry plus fleet-side registration data. */
 export interface RegistryEntry extends DaemonEntry {
-	/** Current git branch of the session cwd for local entries; set by the supervisor's git-state polling. */
+	/** Current git branch of the session cwd for local entries; set by ProjectSync's git-state polling. */
 	branch?: string;
-	/** git dirty-state file counts; set by the supervisor's git-state polling (absent until the first successful probe). */
+	/** git dirty-state file counts; set by ProjectSync's git-state polling (absent until the first successful probe). */
 	git?: {
 		added: number;
 		modified: number;
@@ -186,10 +186,10 @@ export interface RegistryEntry extends DaemonEntry {
 		linesAdded?: number;
 		linesDeleted?: number;
 	};
-	/** Title of the daemon's last session file; set by the supervisor's git-state polling probe. */
+	/** Title of the daemon's last session file; set by ProjectSync's git-state polling probe. */
 	sessionTitle?: string;
 	/** True when the daemon's last session file has no messages (new/empty session);
-	 *  set alongside sessionTitle by the supervisor's git-state polling probe. */
+	 *  set alongside sessionTitle by ProjectSync's git-state polling probe. */
 	sessionEmpty?: boolean;
 	/**
 	 * True once the daemon reported (`state.sessionPersisted`) that `lastSessionFile`
@@ -611,7 +611,7 @@ export class Registry {
 		// An asleep daemon has no live process: stale liveness facts must not
 		// leak into the roster (no pid, no uptime growing since readyAt). The
 		// registry is the roster truth, so clearing here covers every stop path
-		// (edge stop, supervisor stop, idle exit, ctl stop) in one place; the
+		// (edge stop, lifecycle stop, idle exit, ctl stop) in one place; the
 		// same invariant the boot downgrade in server.ts enforces explicitly.
 		if (status === "asleep") {
 			delete entry.pid;

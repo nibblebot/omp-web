@@ -5,7 +5,7 @@
  * with tmp state + config, and spawns real omp-session daemons through the
  * configured spawn templates (bun apps/session/index.ts). Every daemon dials
  * OUT to the fleet's callback pair (/callback/up, /callback/down); the fleet
- * never dials a daemon. The supervisor enrolls each launch (workspaceId ===
+ * never dials a daemon. The host runtime enrolls each launch (workspaceId ===
  * daemonId, generation bumps per launch, credential on the --fleet-stdin payload,
  * digest persisted in entry.workspace.enrollment),
  * runs the child detached, and appends its output to
@@ -13,7 +13,7 @@
  *
  * Scenarios (serial, one shared fleet; scenario 4 closes and re-opens it):
  *  1. spawn three daemons; all reach ready once their pair forms; prompt each.
- *  2. SIGKILL one child: the supervisor relaunches it under a NEW enrollment
+ *  2. SIGKILL one child: the host runtime relaunches it under a NEW enrollment
  *     generation; the old generation's credential is revoked (a redial with it
  *     is refused with 401/409).
  *  3. idle auto-exit → asleep (enrollment released); a prompt wakes it: the
@@ -82,7 +82,7 @@ const PROVIDER_ENV_SCRUB = PROVIDER_ENV_SCRUB_STR === "" ? "" : `env ${PROVIDER_
 /**
  * Built in beforeAll because the paths derive from the suite tmp dir. {name}
  * and {labels}/{resume} expand per daemon in the fleet templates. {fleet} expands
- * to --fleet-stdin: the supervisor writes the callback pair and listener token to
+ * to --fleet-stdin: the host runtime writes the callback pair and listener token to
  * the child's stdin. Each template tees that payload to handoff-{name}.json (0600,
  * suite tmp dir) so the suite can read the enrolled credential without it ever
  * entering the daemon's environment or argv.
@@ -113,7 +113,7 @@ interface SessionProc {
 
 /**
  * Real wall-clock waiting for OS processes. The daemons under test are separate
- * processes on the platform clock (idle timers, supervisor restart backoff, the
+ * processes on the platform clock (idle timers, host restart backoff, the
  * redial after a fleet restart), so fake timers cannot drive them; waits poll
  * the observable status until it changes instead of guessing a duration.
  */
@@ -244,7 +244,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 			if (last) {
 				if (predicate(last)) return last;
 				if (last.status === "error") {
-					const tail = server.supervisor.stderrTail(id);
+					const tail = server.lifecycle.sessionLogTail(id);
 					throw new Error(
 						`daemon ${id} entered error: ${last.error ?? "unknown"}${tail ? `\nlog tail: ${tail.slice(-500)}` : ""}`,
 					);
@@ -252,7 +252,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 			}
 			await sleep(60);
 		}
-		const tail = server.supervisor.stderrTail(id);
+		const tail = server.lifecycle.sessionLogTail(id);
 		throw new Error(
 			`timed out waiting for ${id} to ${what} (${timeoutMs}ms); last status: ${last?.status ?? "absent"}${tail ? `\nlog tail: ${tail.slice(-500)}` : ""}`,
 		);
@@ -324,7 +324,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 			if (value === undefined) delete process.env[key];
 			else process.env[key] = value;
 		}
-		// Close the fleet FIRST so no supervisor restart races the kills below.
+		// Close the fleet FIRST so no host restart races the kills below.
 		// close() deliberately leaves sessions running, so they are reaped here.
 		if (server !== undefined) await server.close();
 		if (tmp === undefined) return;
@@ -380,7 +380,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 			waitForEntry(d2.daemonId, (e) => e.status === "ready", 60_000, "become ready"),
 			waitForEntry(d3.daemonId, (e) => e.status === "ready", 60_000, "become ready"),
 		]);
-		// The supervisor enrolled each launch: workspaceId === daemonId, first generation.
+		// The host runtime enrolled each launch: workspaceId === daemonId, first generation.
 		for (const entry of [a, b, c]) {
 			expect(entry.status).toBe("ready");
 			const enrollment = getPersistedEntry(entry.daemonId).workspace?.enrollment;
@@ -419,7 +419,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		}
 	}, 90_000);
 
-	test("SIGKILL one child: the supervisor relaunches it under a new generation; the old credential is refused", async () => {
+	test("SIGKILL one child: the host runtime relaunches it under a new generation; the old credential is refused", async () => {
 		const before = (await getEntry(d2.daemonId))!;
 		const enrollmentBefore = getPersistedEntry(d2.daemonId).workspace!.enrollment!;
 		const oldProc = daemonProc("d-two");
@@ -499,7 +499,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		const proc = daemonProc("d-four");
 		// Idle exit runs when no browser stream and no in-flight bash/python is
 		// active; the callback pair does not count. A clean exit is dormant: the
-		// supervisor releases the credential and marks the entry asleep.
+		// host runtime releases the credential and marks the entry asleep.
 		const asleep = await waitForEntry(
 			d4.daemonId,
 			(e) => e.status === "asleep",

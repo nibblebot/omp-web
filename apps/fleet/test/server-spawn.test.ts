@@ -33,7 +33,7 @@ afterAll(cleanupTempDirs);
 // parallel test-file loader (importers sporadically see its bindings in TDZ).
 await pinSettingsInMemory();
 
-/** The `--fleet-stdin` payload the supervisor writes to the child's stdin. */
+/** The `--fleet-stdin` payload the host runtime writes to the child's stdin. */
 type FleetPayload = {
 	v: 1;
 	callback: {
@@ -84,7 +84,7 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 
 	afterAll(async () => {
 		for (const daemon of daemons) await daemon.stop();
-		for (const daemonId of spawned) await server.supervisor.stop(daemonId);
+		for (const daemonId of spawned) await server.lifecycle.stopHost(daemonId);
 		if (server !== undefined) await server.close();
 	});
 

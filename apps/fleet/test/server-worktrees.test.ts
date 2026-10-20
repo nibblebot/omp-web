@@ -119,7 +119,7 @@ describe("worktree lifecycle routes", () => {
 		expect(existsSync(target)).toBe(true);
 		expect(existsSync(join(workspaceDir, project.name, ".omp-web-repo"))).toBe(false);
 		// The spawned child idles (`sleep 30`); stop it so the suite ends clean.
-		await server.supervisor.stop(entry.daemonId);
+		await server.lifecycle.stopHost(entry.daemonId);
 	});
 
 	test("POST /ctl/spawn on a registered project's linked worktree stamps the entry's projectId", async () => {
@@ -133,7 +133,7 @@ describe("worktree lifecycle routes", () => {
 		// worktree set, so the stamp still attaches it to the project group.
 		expect(entry.projectId).toBe(project.projectId);
 		expect(server.registry.get(entry.daemonId)?.projectId).toBe(project.projectId);
-		await server.supervisor.stop(entry.daemonId);
+		await server.lifecycle.stopHost(entry.daemonId);
 	});
 
 	test("GET /ctl/sessions exposes linked worktrees without private provenance", async () => {
@@ -151,7 +151,7 @@ describe("worktree lifecycle routes", () => {
 				resolve();
 			};
 		});
-		server.supervisor.syncNow();
+		server.sync.syncNow();
 		await registrySettled;
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
 		expect(res.status).toBe(200);

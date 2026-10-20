@@ -28,7 +28,7 @@
  */
 
 import { REDIAL_GRACE_MS, type Registry, type RegistryEntry } from "./registry";
-import { PAIR_TIMEOUT_MS, type SpawnSupervisor } from "./supervisor";
+import { PAIR_TIMEOUT_MS, type HostRuntimeApi } from "./workspace-lifecycle";
 
 /** The slice of the callback transport the waker reads (structural; the real DaemonTransportRegistry conforms). */
 export interface WakeTransport {
@@ -44,7 +44,8 @@ export interface WakeLifecycle {
 
 export interface SessionWakerDeps {
 	registry: Registry;
-	supervisor: Pick<SpawnSupervisor, "respawn">;
+	/** Main-checkout and worktree sessions start through the lifecycle's host runtime. */
+	host: Pick<HostRuntimeApi, "ensureHostRunning">;
 	/** Callback transport; without it non-clone and clone wakes answer typed unavailability. */
 	transport?: WakeTransport;
 	/** Clone lifecycle service; without it clone wakes answer typed unavailability. */
@@ -57,7 +58,7 @@ export interface SessionWakerDeps {
 
 export class SessionWaker {
 	readonly #registry: Registry;
-	readonly #supervisor: Pick<SpawnSupervisor, "respawn">;
+	readonly #host: Pick<HostRuntimeApi, "ensureHostRunning">;
 	readonly #transport: WakeTransport | undefined;
 	readonly #lifecycle: WakeLifecycle | undefined;
 	readonly #redialGraceMs: number;
@@ -67,7 +68,7 @@ export class SessionWaker {
 
 	constructor(deps: SessionWakerDeps) {
 		this.#registry = deps.registry;
-		this.#supervisor = deps.supervisor;
+		this.#host = deps.host;
 		this.#transport = deps.transport;
 		this.#lifecycle = deps.lifecycle;
 		this.#redialGraceMs = deps.redialGraceMs ?? REDIAL_GRACE_MS;
@@ -135,7 +136,7 @@ export class SessionWaker {
 		const status = this.#registry.get(daemonId)?.status ?? entry.status;
 		if (status !== "connecting") {
 			const opts = resumeFile && resumeFile.trim() !== "" ? { resumeFile } : undefined;
-			await this.#supervisor.respawn(entry, opts);
+			await this.#host.ensureHostRunning(entry, opts);
 		}
 		if (!(await this.#awaitPair(daemonId, this.#pairTimeoutMs))) {
 			throw new Error(

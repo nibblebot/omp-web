@@ -136,15 +136,15 @@ describe("fleet control plane", () => {
 		try {
 			const rosterBefore = server.registry.list().length;
 			// Drift (jgc5): an existing checkout still syncs, as the edge's add_project does.
-			const supervisor = server.supervisor;
-			const realSync = supervisor.syncNow;
+			const sync = server.sync;
+			const realSync = sync.syncNow;
 			let syncs = 0;
-			supervisor.syncNow = (...args: Parameters<typeof realSync>) => {
+			sync.syncNow = (...args: Parameters<typeof realSync>) => {
 				syncs++;
-				return realSync.apply(supervisor, args);
+				return realSync.apply(sync, args);
 			};
 			const dup = await postJson(server.port, "/ctl/projects", { path: repoDir });
-			supervisor.syncNow = realSync;
+			sync.syncNow = realSync;
 			expect(syncs).toBe(1);
 			expect(dup.status).toBe(200);
 			const dupBody = (await dup.json()) as {
@@ -472,7 +472,7 @@ describe("fleet control plane", () => {
 		expect(fleet.uptimeSec).toBeGreaterThanOrEqual(0);
 		expect(fleet.statePath).toBe(statePath);
 		expect(fleet.configPath).toBe(configPath);
-		// Sessions carry the live entry plus its pair and supervisor internals.
+		// Sessions carry the live entry plus its pair and host internals.
 		const sessions = body.sessions as Array<Record<string, unknown>>;
 		expect(Array.isArray(sessions)).toBe(true);
 		const found = sessions.find((session) => session.daemonId === entry.daemonId);

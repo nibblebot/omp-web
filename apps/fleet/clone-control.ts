@@ -104,8 +104,8 @@ export class CloneControlApi {
 	/**
 	 * POST /ctl/stop {selector}: clone entries take the proof-bearing
 	 * provider stop (desiredState stopped); direct/worktree entries keep
-	 * their existing supervisor paths (dispatched by kind by the server,
-	 * which owns registry + supervisor for those).
+	 * the lifecycle's host runtime (dispatched by kind by the operations
+	 * layer).
 	 */
 	async stop(selector: string): Promise<{ stopped: string[] }> {
 		const matches = this.#registry

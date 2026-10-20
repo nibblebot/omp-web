@@ -21,7 +21,7 @@ Because it drives the agent through the SDK instead of the RPC, omp-web has full
 
 ## Runtime
 
-`omp-web` runs the fleet in one process: registry, supervisor, and the web UI, on one port. The split form runs the two halves as separate processes: the control plane alone, and a UI process that serves the web UI and proxies its API calls to the control plane.
+`omp-web` runs the fleet in one process: registry, session lifecycle, and the web UI, on one port. The split form runs the two halves as separate processes: the control plane alone, and a UI process that serves the web UI and proxies its API calls to the control plane.
 
 ```sh
 omp-web [--port n] [--no-open]                       # control plane + UI on http://localhost:4722
@@ -50,7 +50,7 @@ Session daemons are disposable processes; the durable truth is the session `.jso
 ```mermaid
 flowchart TB
   browser["Web UI (Solid.js)"]
-  fleet["<b>omp-web</b> / <b>omp-web control</b><br/>registry, supervisor, proxy; bare form also serves the web UI"]
+  fleet["<b>omp-web</b> / <b>omp-web control</b><br/>registry, lifecycle, proxy; bare form also serves the web UI"]
   uiproc["<b>omp-web ui</b> (split form)<br/>serves the web UI, proxies to the control plane"]
   model["Model provider"]
   log["session .jsonl, durable truth"]

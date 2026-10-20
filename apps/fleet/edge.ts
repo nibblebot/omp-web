@@ -122,7 +122,8 @@ import {
 	type CloneSessionStore,
 } from "./daemon-sessions";
 import { type Registry, type RegistryChange, type RegistryEntry } from "./registry";
-import type { SpawnSupervisor } from "./supervisor";
+import type { ProjectSync } from "./project-sync";
+import type { HostRuntimeApi } from "./workspace-lifecycle";
 import type { SessionWaker } from "./session-waker";
 import { EDGE_COMMAND_FIELDS, readEdgeArgs, type EdgeArgs } from "./edge-commands";
 import { FleetOperations, OperationError } from "./operations";
@@ -360,7 +361,7 @@ export interface EdgeEvictionHooks {
 
 /**
  * Clone lifecycle service injected into the edge (P6/P7 boundary). The edge
- * NEVER stops/removes/deletes a clone workspace through the supervisor,
+ * NEVER stops/removes/deletes a clone workspace through the host runtime,
  * git worktree guards, or registry.remove directly: every clone
  * lifecycle mutation goes through these hooks so the provider lifecycle,
  * admission, and the verify-at-deletion gate cannot be bypassed from the
@@ -394,7 +395,9 @@ export interface EdgeLifecycleHooks {
 /** The live machinery the edge coordinates. */
 export interface EdgeDeps {
 	registry: Registry;
-	supervisor: SpawnSupervisor;
+	/** Main-checkout and worktree sessions run through the lifecycle's host runtime. */
+	host: HostRuntimeApi;
+	sync: Pick<ProjectSync, "syncNow">;
 	config: FleetConfig;
 	/** Fleet lifecycle-event ring, surfaced verbatim by /ctl/debug. */
 	eventLog: FleetEventLog;
@@ -551,7 +554,7 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 	if (entry.sessionEmpty === true) roster.sessionEmpty = true;
 	// Liveness facts are meaningless for an asleep daemon; keep them off the
 	// roster even if the registry entry transiently carries stale ones (e.g.
-	// mid-respawn, when the supervisor writes the pid before the child readies).
+	// mid-respawn, when the lifecycle writes the pid before the child readies).
 	if (entry.status !== "asleep") {
 		if (entry.readyAt !== undefined) roster.readyAt = entry.readyAt;
 		if (entry.pid !== undefined) roster.pid = entry.pid;
@@ -578,7 +581,8 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 
 export class FleetEdge {
 	readonly #registry: Registry;
-	readonly #supervisor: SpawnSupervisor;
+	readonly #host: HostRuntimeApi;
+	readonly #sync: Pick<ProjectSync, "syncNow">;
 	readonly #config: FleetConfig;
 	readonly #eventLog: FleetEventLog;
 	readonly #fleet: FleetFacts;
@@ -598,7 +602,7 @@ export class FleetEdge {
 				a.projectId as string,
 				a.remote as string | undefined,
 			),
-		sync_projects: () => this.#supervisor.syncNow(),
+		sync_projects: () => this.#sync.syncNow(),
 		spawn: (stream, _id, a) =>
 			void this.#runOperation(stream, () =>
 				this.#ops.spawn({
@@ -727,7 +731,8 @@ export class FleetEdge {
 		},
 	) {
 		this.#registry = deps.registry;
-		this.#supervisor = deps.supervisor;
+		this.#host = deps.host;
+		this.#sync = deps.sync;
 		this.#config = deps.config;
 		this.#eventLog = deps.eventLog;
 		this.#fleet = deps.fleet;
@@ -735,7 +740,8 @@ export class FleetEdge {
 		this.#waker = deps.waker;
 		this.#ops = new FleetOperations({
 			registry: deps.registry,
-			supervisor: deps.supervisor,
+			host: deps.host,
+			sync: deps.sync,
 			config: deps.config,
 			eventLog: deps.eventLog,
 			lifecycle: deps.lifecycle,
@@ -2133,7 +2139,7 @@ export class FleetEdge {
 		if (!entry) {
 			return json({ error: "not found" }, 404);
 		}
-		return json({ text: this.#supervisor.stderrTail(daemonId) });
+		return json({ text: this.#host.sessionLogTail(daemonId) });
 	}
 
 	/**
@@ -2215,7 +2221,7 @@ export class FleetEdge {
 	 * shown.
 	 */
 	#debugSnapshot(): Record<string, unknown> {
-		const supervisorSnap = this.#supervisor.snapshot();
+		const hostSnap = this.#host.hostSnapshot();
 		const sessions = this.#registry.list().map((entry) => {
 			const uptimeBase = entry.readyAt ?? entry.registeredAt;
 			const status = this.#transport?.pairStatus(entry.daemonId);
@@ -2234,8 +2240,8 @@ export class FleetEdge {
 			if (entry.pid !== undefined) session.pid = entry.pid;
 			if (entry.readyAt !== undefined) session.readyAt = entry.readyAt;
 			if (entry.error !== undefined) session.error = entry.error;
-			const supervisor = supervisorSnap[entry.daemonId];
-			if (supervisor) session.supervisor = supervisor;
+			const hostRuntime = hostSnap[entry.daemonId];
+			if (hostRuntime) session.host = hostRuntime;
 			return session;
 		});
 		return {

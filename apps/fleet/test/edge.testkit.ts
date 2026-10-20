@@ -14,7 +14,7 @@ import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { EdgeEvictionHooks, FleetEdge } from "../edge";
 import type { DaemonTransportRegistry } from "../daemon-transport";
 import type { Registry } from "../registry";
-import type { SpawnSupervisor } from "../supervisor";
+import type { HostRuntimeApi } from "../workspace-lifecycle";
 import { SessionWaker } from "../session-waker";
 
 export { cleanupTempDirs };
@@ -290,10 +290,13 @@ export function asRoster(frame: ServerFrame): { type: "roster"; daemons: DaemonE
  * its pair/log-tap/orphan bookkeeping (covered by the server suites). Prune
  * first, run the removal, then drop the row, as the server does.
  */
-export function testEviction(registry: Registry, supervisor: SpawnSupervisor): EdgeEvictionHooks {
+export function testEviction(
+	registry: Registry,
+	host: Pick<HostRuntimeApi, "deleteHost">,
+): EdgeEvictionHooks {
 	return {
 		async evictRow(daemonId, removal) {
-			await supervisor.prune(daemonId);
+			await host.deleteHost(daemonId);
 			const result = await removal();
 			registry.remove(daemonId);
 			return result;
@@ -301,7 +304,7 @@ export function testEviction(registry: Registry, supervisor: SpawnSupervisor): E
 		async evictProject(projectId) {
 			for (const entry of registry.list()) {
 				if (entry.projectId === projectId && entry.status !== "asleep") {
-					await supervisor.prune(entry.daemonId);
+					await host.deleteHost(entry.daemonId);
 				}
 			}
 			registry.removeProject(projectId);
@@ -315,8 +318,8 @@ export function testEviction(registry: Registry, supervisor: SpawnSupervisor): E
  */
 export function testWaker(
 	registry: Registry,
-	supervisor: SpawnSupervisor,
+	host: Pick<HostRuntimeApi, "ensureHostRunning">,
 	transport: DaemonTransportRegistry | undefined,
 ): SessionWaker {
-	return new SessionWaker({ registry, supervisor, transport });
+	return new SessionWaker({ registry, host, transport });
 }

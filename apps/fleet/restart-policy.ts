@@ -1,6 +1,6 @@
 /**
- * Restart policy shared by every runtime owner: the local spawn supervisor
- * (supervisor.ts) and the clone lifecycle (workspace-lifecycle.ts) restart a
+ * Restart policy shared by every runtime owner: the host runtime and the
+ * clone runtime watch (both in workspace-lifecycle.ts) restart a
  * crashed runtime with the same bounded, jittered exponential backoff and the
  * same crash-loop budget.
  *

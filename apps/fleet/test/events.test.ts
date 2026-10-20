@@ -10,7 +10,7 @@ describe("FleetEventLog", () => {
 	test("add appends entries in order; list returns a copy, oldest first", () => {
 		const log = new FleetEventLog(10);
 		log.add("info", "server", "connecting", "d1");
-		log.add("warn", "supervisor", "exit code=1", "d2");
+		log.add("warn", "server", "exit code=1", "d2");
 		log.add("error", "server", "request failed");
 		const list = log.list();
 		expect(list).toHaveLength(3);
@@ -58,8 +58,8 @@ describe("FleetEventLog", () => {
 		const log = new FleetEventLog(0);
 		const seen: string[] = [];
 		log.onEntry = (entry) => seen.push(`${entry.level}:${entry.message}`);
-		const added = log.add("warn", "supervisor", "respawning", "d4");
-		expect(added).toMatchObject({ level: "warn", source: "supervisor", daemonId: "d4" });
+		const added = log.add("warn", "server", "respawning", "d4");
+		expect(added).toMatchObject({ level: "warn", source: "server", daemonId: "d4" });
 		expect(log.list()).toEqual([]);
 		expect(seen).toEqual(["warn:respawning"]);
 	});

@@ -4,7 +4,7 @@
  * There is NO filesystem root scanning: projects enter the fleet only by
  * explicit registration (see registry.ts), and the directory-picker UI
  * browses via fs-browse.ts. What lives here are the git-backed helpers
- * shared by registry/supervisor/worktrees:
+ * shared by registry/project-sync/worktrees:
  *
  * `validateProjectPath` resolves a path (`~`/`~/` expanded) to its
  * realpath, or null unless it is an existing directory.
@@ -269,7 +269,7 @@ export function parseNumstat(stdout: string): { linesAdded: number; linesDeleted
 /**
  * Probe one repo's git state: `git status --porcelain=v1 --branch` via the
  * injectable GitRunner (like resolveWorktreeOf). Returns undefined on spawn
- * failure, nonzero exit, or unparseable output; the caller (supervisor
+ * failure, nonzero exit, or unparseable output; the caller (ProjectSync
  * git-state polling) treats that as "no state", never as a clean repo. On
  * success a best-effort `git diff --numstat HEAD --` run is merged into
  * `git`, but only when the status shows a change: a clean status has no

@@ -6,10 +6,10 @@ import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { slugifyWorktreeName, worktreeBranchName } from "#lib/wire/worktree-name";
 import type { GitRunner } from "../discovery";
 import { Registry, type RegistryEntry } from "../registry";
-import type { SpawnSupervisor } from "../supervisor";
 import {
 	createWorktree,
 	deleteWorktree,
+	type HostSessions,
 	isLinkedWorktreeOf,
 	listProjectBranches,
 	listWorktreeBlocks,
@@ -579,7 +579,7 @@ describe("deleteWorktree", () => {
 		const created = await createWorktree(projectFor(repo), "registered", { workspaceDir: oldRoot });
 		const entry = await registerWorktreeEntry(
 			registry,
-			{ resolveTemplateName: () => "test" } as unknown as SpawnSupervisor,
+			{ resolveTemplateName: () => "test" } as unknown as HostSessions,
 			projectFor(repo),
 			created.path,
 		);
@@ -708,7 +708,7 @@ describe("registerWorktreeEntry", () => {
 		await registry.load();
 		const entry = await registerWorktreeEntry(
 			registry,
-			{ resolveTemplateName: () => "test" } as unknown as SpawnSupervisor,
+			{ resolveTemplateName: () => "test" } as unknown as HostSessions,
 			projectFor(repo, "p7"),
 			a.path,
 			{ start: false },
@@ -729,9 +729,9 @@ describe("registerWorktreeEntry", () => {
 		const statePath = join(tempDir("omp-web-worktrees-"), "state.json");
 		const registry = new Registry(statePath);
 		await registry.load();
-		const supervisor = {
+		const host = {
 			resolveTemplateName: () => "test",
-			spawn: async ({ cwd }: { cwd: string }) =>
+			spawnHost: async ({ cwd }: { cwd: string }) =>
 				registry.create({
 					name: basename(cwd),
 					cwd,
@@ -740,18 +740,14 @@ describe("registerWorktreeEntry", () => {
 					labels: [],
 					status: "connecting",
 				}),
-		} as unknown as SpawnSupervisor;
+		} as unknown as HostSessions;
 		for (const start of [false, true]) {
 			const created = await createWorktree(projectFor(repo), `registered-${start}`, {
 				workspaceDir: tempDir("omp-web-worktrees-"),
 			});
-			const entry = await registerWorktreeEntry(
-				registry,
-				supervisor,
-				projectFor(repo),
-				created.path,
-				{ start },
-			);
+			const entry = await registerWorktreeEntry(registry, host, projectFor(repo), created.path, {
+				start,
+			});
 			expect(entry.workspace).toMatchObject({
 				kind: "worktree",
 				projectId: "p1",
@@ -778,7 +774,7 @@ describe("registerProjectMainEntry", () => {
 		await registry.load();
 		const entry = await registerProjectMainEntry(
 			registry,
-			{ resolveTemplateName: () => "test" } as unknown as SpawnSupervisor,
+			{ resolveTemplateName: () => "test" } as unknown as HostSessions,
 			projectFor(repo, "p7"),
 			{ start: false },
 		);
@@ -808,7 +804,7 @@ describe("registerProjectMainEntry", () => {
 			registry,
 			{
 				resolveTemplateName: (_cwd: string, explicit?: string) => explicit ?? "test",
-			} as unknown as SpawnSupervisor,
+			} as unknown as HostSessions,
 			projectFor(repo, "p7"),
 			{ start: false, template: "local", labels: ["env=prod"] },
 		);
@@ -822,14 +818,14 @@ describe("registerProjectMainEntry", () => {
 		await makeRepo(repo);
 		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
 		await registry.load();
-		const supervisor = {
+		const host = {
 			resolveTemplateName: (_cwd: string, explicit?: string) => {
 				if (explicit === "bogus") throw new Error(`unknown spawn template: ${explicit}`);
 				return explicit ?? "test";
 			},
-		} as unknown as SpawnSupervisor;
+		} as unknown as HostSessions;
 		await expect(
-			registerProjectMainEntry(registry, supervisor, projectFor(repo, "p7"), {
+			registerProjectMainEntry(registry, host, projectFor(repo, "p7"), {
 				start: false,
 				template: "bogus",
 			}),
@@ -872,12 +868,12 @@ describe("registerProjectMainEntry", () => {
 			projectId: "p7",
 		});
 		let respawnedId: string | undefined;
-		const supervisor = {
-			respawn: async (entry: RegistryEntry) => {
+		const host = {
+			ensureHostRunning: async (entry: RegistryEntry) => {
 				respawnedId = entry.daemonId;
 			},
-		} as unknown as SpawnSupervisor;
-		const entry = await registerProjectMainEntry(registry, supervisor, projectFor(repo, "p7"), {
+		} as unknown as HostSessions;
+		const entry = await registerProjectMainEntry(registry, host, projectFor(repo, "p7"), {
 			start: true,
 		});
 		expect(respawnedId).toBe(existing.daemonId);
@@ -893,8 +889,8 @@ describe("registerProjectMainEntry", () => {
 		let spawnInit:
 			| { cwd: string; template?: string; labels?: string[]; reuse?: boolean }
 			| undefined;
-		const supervisor = {
-			spawn: async (init: {
+		const host = {
+			spawnHost: async (init: {
 				cwd: string;
 				template?: string;
 				labels?: string[];
@@ -909,8 +905,8 @@ describe("registerProjectMainEntry", () => {
 					...(init.template !== undefined ? { template: init.template } : {}),
 				});
 			},
-		} as unknown as SpawnSupervisor;
-		const entry = await registerProjectMainEntry(registry, supervisor, projectFor(repo, "p7"), {
+		} as unknown as HostSessions;
+		const entry = await registerProjectMainEntry(registry, host, projectFor(repo, "p7"), {
 			start: true,
 			template: "local",
 			labels: ["env=prod"],

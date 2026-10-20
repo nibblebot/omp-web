@@ -16,8 +16,9 @@ import { DaemonTransportRegistry } from "../daemon-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
 import { Registry } from "../registry";
-import { SpawnSupervisor } from "../supervisor";
+import { ProjectSync } from "../project-sync";
 import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
+import { makeHostLifecycle } from "./host-lifecycle.testkit";
 import {
 	FAKE_CWD,
 	FAKE_STATE,
@@ -63,16 +64,19 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 			bind: "127.0.0.1",
 		};
 		const transport = new DaemonTransportRegistry();
-		const supervisor = new SpawnSupervisor(registry, config, {
+		const { lifecycle } = makeHostLifecycle({
+			registry,
+			config,
 			transport,
 			statePath,
 			callbackUrl: () => "https://fleet.test/callback",
 		});
 		const edge = new FleetEdge({
 			registry,
-			supervisor,
-			eviction: testEviction(registry, supervisor),
-			waker: testWaker(registry, supervisor, transport),
+			host: lifecycle,
+			sync: new ProjectSync(registry, lifecycle),
+			eviction: testEviction(registry, lifecycle),
+			waker: testWaker(registry, lifecycle, transport),
 			config,
 			eventLog: new FleetEventLog(),
 			transport,
@@ -126,7 +130,7 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 				for (const browser of browsers) browser.close();
 				for (const daemon of daemons) await daemon.stop();
 				edge.close();
-				await supervisor.close();
+				lifecycle.close();
 				transport.close();
 				server.stop(true);
 			},

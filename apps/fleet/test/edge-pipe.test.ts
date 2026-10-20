@@ -16,9 +16,10 @@ import type { FleetConfig } from "../config";
 import { DaemonTransportRegistry } from "../daemon-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
+import { ProjectSync } from "../project-sync";
 import { Registry } from "../registry";
-import { SpawnSupervisor } from "../supervisor";
 import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
+import { makeHostLifecycle } from "./host-lifecycle.testkit";
 import {
 	type BrowserSocket,
 	cleanupTempDirs,
@@ -66,7 +67,9 @@ async function startRig(
 	await registry.load();
 	const transport = new DaemonTransportRegistry();
 	let callbackBase = "";
-	const supervisor = new SpawnSupervisor(registry, CONFIG, {
+	const { lifecycle } = makeHostLifecycle({
+		registry,
+		config: CONFIG,
 		transport,
 		statePath,
 		callbackUrl: () => callbackBase,
@@ -74,9 +77,10 @@ async function startRig(
 	const edge = new FleetEdge(
 		{
 			registry,
-			supervisor,
-			eviction: testEviction(registry, supervisor),
-			waker: testWaker(registry, supervisor, transport),
+			host: lifecycle,
+			sync: new ProjectSync(registry, lifecycle),
+			eviction: testEviction(registry, lifecycle),
+			waker: testWaker(registry, lifecycle, transport),
 			config: CONFIG,
 			eventLog: new FleetEventLog(),
 			transport,
@@ -102,7 +106,7 @@ async function startRig(
 		async close() {
 			for (const daemon of daemons) await daemon.stop();
 			edge.close();
-			await supervisor.close();
+			lifecycle.close();
 			transport.close();
 			served.stop();
 		},

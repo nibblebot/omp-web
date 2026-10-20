@@ -16,8 +16,8 @@
  *     admitted and the registry authorizedGeneration does not move.
  *
  *  3. busy / disconnected is not idle-stopped: a clone workspace's compute
- *     is provider-owned (never a supervisor child); the fleet is the SOLE
- *     idle-stop authority; no legacy supervisor idle path, callback pair drop, or
+ *     is provider-owned (never a host-runtime child); the fleet is the SOLE
+ *     idle-stop authority; no legacy host idle path, callback pair drop, or
  *     registry downgrade may stop a desired-running clone.
  *
  * Fixtures: a real local git repo for the clone source, a scripted fake
@@ -415,7 +415,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 	);
 
 	test(
-		"stop of a clone never touches the supervisor child paths and preserves the volume (checkout + enrollment removed, desired stopped)",
+		"stop of a clone never touches the host-runtime child paths and preserves the volume (checkout + enrollment removed, desired stopped)",
 		async () => {
 			const { server, cloneRoot, repoDir } = await bootFleet("stopped");
 			try {

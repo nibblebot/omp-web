@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import { startFleet, type FleetServer } from "../server";
-import { enrollSessionCredential } from "../supervisor";
+import { enrollSessionCredential } from "../session-credential";
 import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
 import { FAKE_CWD, cleanupTempDirs, waitFor } from "./edge.testkit";
 import { hermeticStatsConfig } from "./server.testkit";
@@ -59,7 +59,7 @@ describe("runtime redial deadline", () => {
 	});
 
 	test("a runtime-reconnecting session that never re-pairs becomes asleep after the redial grace", async () => {
-		const entry = await server.supervisor.spawn({
+		const entry = await server.lifecycle.spawnHost({
 			cwd: FAKE_CWD,
 			name: "redial-outage",
 			template: "local",

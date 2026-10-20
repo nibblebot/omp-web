@@ -7,7 +7,7 @@
  *   replacement with NO shell escaping. The substituted VALUES are not
  *   trusted (control-plane spawn takes name/labels from HTTP JSON), so any
  *   caller interpolating them into a shell command MUST shell-quote every
- *   value first (see shellQuote; supervisor.ts #launch does this).
+ *   value first (see shellQuote; workspace-lifecycle.ts #launchHost does this).
  * - Sessions dial the control plane themselves (callback pair); nothing here
  *   parses a session's stdout for an endpoint.
  */
@@ -23,7 +23,7 @@
  * substituted at runtime may be attacker-controlled (e.g. name/labels from
  * POST /ctl/spawn), so a caller that interpolates the result into a shell
  * command MUST run every value through {@link shellQuote} first;
- * supervisor.ts #launch does exactly that.
+ * workspace-lifecycle.ts #launchHost does exactly that.
  */
 export function fillTemplate(command: string, vars: Record<string, string>): string {
 	return command.replace(/\{(\w+)\}/g, (match, key: string) => {

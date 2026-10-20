@@ -15,9 +15,11 @@ import type { FleetConfig } from "../config";
 import { DaemonTransportRegistry } from "../daemon-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
+import { ProjectSync } from "../project-sync";
 import { Registry } from "../registry";
-import { SpawnSupervisor } from "../supervisor";
+import type { WorkspaceLifecycle } from "../workspace-lifecycle";
 import { managedWorktreePath, registerWorktreeEntry } from "../worktrees";
+import { makeHostLifecycle } from "./host-lifecycle.testkit";
 import {
 	openBrowser,
 	serveEdge,
@@ -47,7 +49,7 @@ describe("edge worktree commands", () => {
 	let registry: Registry;
 	let transport: DaemonTransportRegistry;
 	let config: FleetConfig;
-	let supervisor: SpawnSupervisor;
+	let lifecycle: WorkspaceLifecycle;
 	let edge: FleetEdge;
 	let served: { port: number; stop(): void };
 	let repoDir: string;
@@ -79,16 +81,19 @@ describe("edge worktree commands", () => {
 			bind: "127.0.0.1",
 		};
 		transport = new DaemonTransportRegistry();
-		supervisor = new SpawnSupervisor(registry, config, {
+		({ lifecycle } = makeHostLifecycle({
+			registry,
+			config,
 			transport,
 			statePath: join(tmp, "state.json"),
 			callbackUrl: () => "https://fleet.test/callback",
-		});
+		}));
 		edge = new FleetEdge({
 			registry,
-			supervisor,
-			eviction: testEviction(registry, supervisor),
-			waker: testWaker(registry, supervisor, transport),
+			host: lifecycle,
+			sync: new ProjectSync(registry, lifecycle),
+			eviction: testEviction(registry, lifecycle),
+			waker: testWaker(registry, lifecycle, transport),
 			config,
 			eventLog: new FleetEventLog(),
 			transport,
@@ -121,7 +126,7 @@ describe("edge worktree commands", () => {
 	afterAll(async () => {
 		served.stop();
 		edge.close();
-		await supervisor.close();
+		lifecycle.close();
 		transport.close();
 		rmSync(tmp, { recursive: true, force: true });
 	});
@@ -153,7 +158,7 @@ describe("edge worktree commands", () => {
 	test("delete_worktree removes a clean attached linked worktree", async () => {
 		const outside = join(config.workspaceDir, "repo", "raw-wt");
 		await gitIn(repoDir, ["worktree", "add", "-b", "raw-feat", outside]);
-		const entry = await registerWorktreeEntry(registry, supervisor, project, outside, {
+		const entry = await registerWorktreeEntry(registry, lifecycle, project, outside, {
 			start: false,
 		});
 		await browser.send({
@@ -345,7 +350,7 @@ describe("edge worktree commands", () => {
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
 		// Stop the idling child (`sleep 30`) so the suite ends clean.
-		await supervisor.stop(entry.daemonId);
+		await lifecycle.stopHost(entry.daemonId);
 	});
 
 	test("create_worktree refuses an existing branch checked out elsewhere", async () => {

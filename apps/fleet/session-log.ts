@@ -1,5 +1,5 @@
 /**
- * Retention for fleet daemon logs, shared by the local supervisor and the
+ * Retention for fleet daemon logs, shared by the host runtime and the
  * bwrap provider. A log is `<name>.log` plus one rotated generation
  * `<name>.log.1`. Rotation renames an over-cap file to `.1`, replacing the
  * previous generation, so the disk footprint stays near two caps. Removal

@@ -111,7 +111,7 @@ const fleetDebug: FleetDebug = {
 		{
 			ts: FIXTURE_NOW - 60_000,
 			level: "info",
-			source: "supervisor",
+			source: "server",
 			message: "daemon d-1 ready",
 			daemonId: "d-1",
 		},
