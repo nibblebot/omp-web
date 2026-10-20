@@ -109,6 +109,7 @@ import type {
 	ProviderResponse,
 } from "#lib/runtime/provider-protocol";
 import { CloneLifecycleError, WorkspaceLifecycle } from "./workspace-lifecycle";
+import type { CloneRuntimePolicy } from "./workspace-lifecycle";
 import { CloneControlApi, lifecycleStatus } from "./clone-control";
 import { FleetOperations, OperationError, parseCloneSource } from "./operations";
 
@@ -426,6 +427,7 @@ class FleetServerImpl implements FleetServer {
 		pluginStore?: () => Promise<PluginStore>,
 		pairLossGraceMs = PAIR_LOSS_GRACE_MS,
 		usageOptions?: FleetUsageOptions,
+		cloneRuntime?: Partial<CloneRuntimePolicy>,
 	) {
 		this.registry = registry;
 		this.#redialGraceMs = redialGraceMs;
@@ -578,6 +580,7 @@ class FleetServerImpl implements FleetServer {
 			eventLog: this.eventLog,
 			attachLogTap: (workspaceId) => this.#attachLogStoreTap(workspaceId),
 			callbackUrl: () => this.#callbackUrl(),
+			runtime: { pairLossGraceMs, ...cloneRuntime },
 		});
 		this.cloneApi = new CloneControlApi({
 			lifecycle: this.lifecycle,
@@ -1803,6 +1806,8 @@ export async function startFleet(
 		pairLossGraceMs?: number;
 		/** Test seam: usage source (the SDK auth storage otherwise). */
 		usage?: FleetUsageOptions;
+		/** Test seam: clone runtime supervision timings and restart budget (defaults: restart-policy.ts). */
+		cloneRuntime?: Partial<CloneRuntimePolicy>;
 	} = {},
 ): Promise<FleetServer> {
 	const configPath = resolveConfigPath(opts.configPath);
@@ -1850,6 +1855,7 @@ export async function startFleet(
 			opts.pluginStore,
 			opts.pairLossGraceMs,
 			opts.usage,
+			opts.cloneRuntime,
 		);
 	} catch (err) {
 		lock.release();

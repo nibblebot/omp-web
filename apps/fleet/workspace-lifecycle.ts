@@ -24,6 +24,11 @@
  * - Stop preserves checkout and session logs; only the verified gate
  *   deletes. Idle handling stays fleet-owned (P6.4): this service never
  *   stops compute on its own; explicit stop/wake are the only transitions.
+ * - Runtime supervision: the one runtime watch (below) restarts a
+ *   desired-running clone whose provider-proven runtime died after its pair
+ *   came up (new generation, predecessor proven gone, budgeted backoff shared
+ *   with the local supervisor via restart-policy.ts); an explicit stop never
+ *   restarts. This is not an idle stop: it never stops compute.
  *
  * The fleet server injects everything external (registry, config, callback
  * transport, log store, resource deleter, event ring, log-tap attach, and
@@ -49,6 +54,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { ENROLLMENT_KEY_BYTES, type CallbackErrorCode } from "#lib/wire/callback-protocol";
 import type { LifecycleStage, RegisteredProject, CloneFetchResult } from "#lib/wire/protocol";
 import type { Registry, RegistryEntry, WorkspaceRecord, DeletionGateError } from "./registry";
+import { PAIR_LOSS_GRACE_MS } from "./registry";
+import { DEFAULT_RESTART_POLICY, RestartBudget, type RestartPolicy } from "./restart-policy";
 import type { FleetConfig } from "./config";
 import { PROVIDER_CAPABILITIES, type ProviderCapabilities } from "#lib/runtime/provider-protocol";
 import { readCallbackEnv } from "#lib/runtime/provider-callback-env";
@@ -56,7 +63,7 @@ import type { DaemonTransportRegistry } from "./daemon-transport";
 import type { FleetLogStore } from "./log-store";
 import type { FleetEventLog } from "./events";
 import type { WorkspaceResourceDeleter } from "./server";
-import type { ProviderOkResponse, ProviderResponse } from "#lib/runtime/provider-protocol";
+import type { ProviderOkResponse } from "#lib/runtime/provider-protocol";
 import { runProviderOp } from "#lib/runtime/provider-exec";
 import {
 	deriveWorkspaceBranch,
@@ -141,6 +148,43 @@ interface WorkspaceLifecycleDeps {
 	attachLogTap(workspaceId: string): void;
 	/** Fleet callback base URL the sandbox daemon dials (http loopback dev). */
 	callbackUrl(): string;
+	/** Runtime supervision overrides (defaults: restart-policy.ts, registry PAIR_LOSS_GRACE_MS). */
+	runtime?: Partial<CloneRuntimePolicy>;
+}
+
+/** Runtime supervision knobs: the shared restart policy plus the watch cadences (tests shrink them). */
+export interface CloneRuntimePolicy extends RestartPolicy {
+	/** A dropped pair is not acted on (no provider inspect) before this grace; mirrors registry PAIR_LOSS_GRACE_MS. */
+	pairLossGraceMs: number;
+	/** Pair poll cadence of the runtime watch. */
+	tickMs: number;
+	/** Provider inspect cadence while the pair is down. */
+	inspectEveryMs: number;
+}
+
+const DEFAULT_RUNTIME_POLICY: CloneRuntimePolicy = {
+	...DEFAULT_RESTART_POLICY,
+	pairLossGraceMs: PAIR_LOSS_GRACE_MS,
+	tickMs: 1_000,
+	inspectEveryMs: 10_000,
+};
+
+/** Supervision state of one desired-running clone runtime (see #armRuntimeWatch). */
+interface RuntimeWatch {
+	budget: RestartBudget;
+	/**
+	 * A pair has held (or the runtime was reattached) since the last explicit
+	 * start. Only then does a dead runtime restart; a start whose pair never
+	 * came up fails for the operator to retry.
+	 */
+	restartable: boolean;
+	paired: boolean;
+	/** Earliest time the provider is next inspected (pair down only). */
+	nextInspectAt: number;
+	/** Pending tick or restart-backoff timer. */
+	timer: Timer | undefined;
+	/** Pair-change subscription: any pair-up marks the watch restartable, even one shorter than a tick. */
+	unsubscribe: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -389,11 +433,13 @@ export class WorkspaceLifecycle {
 	readonly #deleting = new Set<string>();
 	/** Per-daemon FIFO tails: lifecycle ops on one clone run strictly in order. */
 	readonly #queues = new Map<string, Promise<void>>();
-	/** Bounded pair-readiness watchers (setTimeout id per workspace). */
-	readonly #pairWatchers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** Runtime watches: one per desired-running clone (tick or restart-backoff timer each). */
+	readonly #watches = new Map<string, RuntimeWatch>();
+	readonly #policy: CloneRuntimePolicy;
 
 	constructor(deps: WorkspaceLifecycleDeps) {
 		this.#deps = deps;
+		this.#policy = { ...DEFAULT_RUNTIME_POLICY, ...deps.runtime };
 	}
 
 	/** Runs `fn` after every earlier lifecycle op queued for this daemon. */
@@ -716,6 +762,7 @@ export class WorkspaceLifecycle {
 			}
 		}
 		this.#deps.registry.updateWorkspace(daemonId, { desiredState: "stopped" });
+		this.#disposeWatch(daemonId);
 		this.#deps.registry.setStatus(daemonId, "asleep");
 		// A stopped workspace has no active lifecycle stage (stop cleared
 		// it): start/wake re-runs preparation→runtime→callback→ready.
@@ -960,6 +1007,7 @@ export class WorkspaceLifecycle {
 			this.#deps.registry.updateWorkspace(entry.daemonId, { providerHandle: response.handle });
 			this.#deps.registry.setStatus(entry.daemonId, "ready");
 			this.#setStage(entry.daemonId, "ready");
+			this.#armRuntimeWatch(entry.daemonId, { restartable: true, resume: false });
 			this.#log(
 				"info",
 				`clone boot reconcile: ${entry.daemonId} reattached (running)`,
@@ -996,8 +1044,7 @@ export class WorkspaceLifecycle {
 
 	/** Cancel timers (server close()); never stops provider compute. */
 	close(): void {
-		for (const timer of this.#pairWatchers.values()) clearTimeout(timer);
-		this.#pairWatchers.clear();
+		for (const daemonId of [...this.#watches.keys()]) this.#disposeWatch(daemonId);
 	}
 
 	// ------------------------------------------------------------------
@@ -1022,8 +1069,8 @@ export class WorkspaceLifecycle {
 	 */
 	async #ensure(
 		entry: RegistryEntry,
-		opts: { firstStart: boolean; resumeSessionId?: string },
-	): Promise<ProviderResponse> {
+		opts: { firstStart: boolean; resumeSessionId?: string; recovery?: boolean },
+	): Promise<ProviderOkResponse> {
 		const daemonId = entry.daemonId;
 		const record = entry.workspace;
 		if (record?.kind !== "clone") {
@@ -1101,6 +1148,7 @@ export class WorkspaceLifecycle {
 				generation = (currentGen ?? 0) + 1;
 			}
 		}
+		const reattached = reuseToken !== undefined && generation === currentGen;
 
 		// P8.9 wake resume: when this wake is spawning a NEW daemon process
 		// (not the reattach path), compute the resume target and materialize
@@ -1150,9 +1198,13 @@ export class WorkspaceLifecycle {
 			if (response.observed === "running") {
 				this.#deps.registry.setStatus(daemonId, "ready");
 				this.#setStage(daemonId, "callback");
-				// Bounded pair-readiness watcher: callback → ready when the
-				// daemon's pair is observed live (never blocks the caller).
-				this.#armPairWatcher(daemonId);
+				// Runtime watch: callback → ready when the pair is observed
+				// live, and a runtime that later dies restarts (never blocks
+				// the caller). A reattached runtime already held a pair.
+				this.#armRuntimeWatch(daemonId, {
+					restartable: reattached,
+					resume: opts.recovery === true,
+				});
 			}
 			this.#log(
 				"info",
@@ -2049,78 +2101,191 @@ export class WorkspaceLifecycle {
 	}
 
 	/**
-	 * Bounded callback→ready watcher: polls the transport pair status at 1s
-	 * intervals and writes lifecycleStage "ready" once the daemon's pair is
-	 * observed live. Never blocks callers; stops when the workspace leaves
-	 * desired-running.
-	 *
-	 * A provider that reported `observed: running` can still die before its
-	 * callback pair dials (or never dial at all). The watcher therefore
-	 * periodically re-inspects the provider: a sandbox that is no longer
-	 * running surfaces as status "error" + lifecycleStage "failed" with the
-	 * typed message (never an eternal "callback" stage over a dead pid), and
-	 * the polling stops. A live-but-slow sandbox keeps polling: the stage
-	 * flips to "ready" the moment the pair establishes. There is no silent
-	 * timeout that leaves the stage stuck.
+	 * Runtime watch: supervises one desired-running clone from its start until
+	 * it stops. It polls the transport pair status (in-memory, cheap) and
+	 * re-inspects the provider only while the pair is down:
+	 *   - pair up: lifecycleStage "ready"; the restart budget's stable window
+	 *     runs, so a pair that holds forgives earlier restarts;
+	 *   - pair down, runtime alive (inspect running): nothing; the session
+	 *     redials. A drop is not inspected before `pairLossGraceMs`
+	 *     (registry PAIR_LOSS_GRACE_MS), so a brief drop never acts;
+	 *   - pair down, runtime proven not running (inspect stopped/missing):
+	 *       - a pair never held since the explicit start: stage "failed" +
+	 *         status "error" (a start that never came up is the operator's
+	 *         to retry; never an eternal "callback" stage over a dead pid);
+	 *       - otherwise the predecessor's credential is revoked and a restart
+	 *         is scheduled after a jittered backoff: #ensure (inspect-proven
+	 *         predecessor, fresh credential, generation + 1). Each restart
+	 *         spends the budget; exhausting it surfaces stage "failed" +
+	 *         status "error" with the reason.
+	 * Every inspect/restart decision runs on the clone's op queue, so an
+	 * explicit stop/start/delete never interleaves with it. `resume` keeps the
+	 * existing watch (and its budget) across a restart's own #ensure; any other
+	 * arm starts a fresh watch. Explicit stop disposes the watch.
 	 */
-	#armPairWatcher(daemonId: string): void {
-		if (this.#pairWatchers.has(daemonId)) return;
-		let attempts = 0;
-		const tick = async (): Promise<void> => {
-			const current = this.#deps.registry.get(daemonId);
-			if (!current || current.workspace?.desiredState !== "running") {
-				this.#pairWatchers.delete(daemonId);
-				return;
-			}
-			const pair = this.#deps.transport.pairStatus(daemonId);
-			if (pair.paired && pair.enrolled) {
+	#armRuntimeWatch(daemonId: string, opts: { restartable: boolean; resume: boolean }): void {
+		let watch = this.#watches.get(daemonId);
+		if (watch !== undefined && opts.resume) {
+			clearTimeout(watch.timer);
+			watch.restartable = true; // A restart chain stays restartable.
+		} else {
+			this.#disposeWatch(daemonId);
+			const created: RuntimeWatch = {
+				budget: new RestartBudget(this.#policy),
+				restartable: opts.restartable,
+				paired: false,
+				nextInspectAt: 0,
+				timer: undefined,
+				unsubscribe: () => {},
+			};
+			created.unsubscribe = this.#deps.transport.onPairChange(daemonId, (status) => {
+				if (status.paired) created.restartable = true;
+			});
+			watch = created;
+			this.#watches.set(daemonId, watch);
+		}
+		watch.paired = false;
+		watch.nextInspectAt = Date.now() + this.#policy.inspectEveryMs;
+		this.#scheduleTick(daemonId, watch);
+	}
+
+	#scheduleTick(daemonId: string, watch: RuntimeWatch): void {
+		watch.timer = setTimeout(() => void this.#tick(daemonId, watch), this.#policy.tickMs);
+	}
+
+	/** Stop watching (explicit stop, close, failure); an `only` watch that was already replaced is left alone. */
+	#disposeWatch(daemonId: string, only?: RuntimeWatch): void {
+		const watch = this.#watches.get(daemonId);
+		if (watch === undefined || (only !== undefined && watch !== only)) return;
+		clearTimeout(watch.timer);
+		watch.unsubscribe();
+		watch.budget.dispose();
+		this.#watches.delete(daemonId);
+	}
+
+	/** The entry while `watch` is still the clone's current watch and the clone is desired-running and not being deleted. */
+	#watchLive(daemonId: string, watch: RuntimeWatch): RegistryEntry | undefined {
+		const entry = this.#deps.registry.get(daemonId);
+		if (this.#watches.get(daemonId) !== watch) return undefined;
+		const record = entry?.workspace;
+		if (record?.desiredState !== "running" || record.deletion?.state !== undefined)
+			return undefined;
+		return entry;
+	}
+
+	async #tick(daemonId: string, watch: RuntimeWatch): Promise<void> {
+		watch.timer = undefined;
+		if (this.#watchLive(daemonId, watch) === undefined) {
+			this.#disposeWatch(daemonId, watch);
+			return;
+		}
+		const pair = this.#deps.transport.pairStatus(daemonId);
+		if (pair.paired && pair.enrolled) {
+			if (!watch.paired) {
+				watch.paired = true;
+				watch.restartable = true;
+				watch.budget.paired();
 				this.#setStage(daemonId, "ready");
-				this.#pairWatchers.delete(daemonId);
-				return;
 			}
-			attempts += 1;
-			// Every 10th tick (~10s) re-inspect the provider: a sandbox the
-			// provider claimed running but that has since died (or whose
-			// callback never dials) must not sit at stage "callback" forever.
-			if (attempts % 10 === 0) {
-				try {
-					const inspect = await this.#runCloneOp(daemonId, "inspect", this.#handleOf(current));
-					if (inspect.observed !== "running") {
-						this.#setStage(
-							daemonId,
-							"failed",
-							`sandbox stopped before the callback pair established (observed ${inspect.observed})`,
-						);
-						this.#deps.registry.setStatus(
-							daemonId,
-							"error",
-							`sandbox stopped before the callback pair established (observed ${inspect.observed}); stop and start to retry`,
-						);
-						this.#pairWatchers.delete(daemonId);
-						this.#log(
-							"warn",
-							`clone ${daemonId} callback never established; sandbox ${inspect.observed}`,
-							daemonId,
-						);
-						return;
-					}
-				} catch {
-					// Inspect failed (provider unavailable or a typed
-					// conflict/unavailable): keep polling; the pair may
-					// still come up; the next inspect retries. A genuinely
-					// dead sandbox reports observed != running (not an
-					// error), which is handled above.
-				}
+		} else {
+			if (watch.paired) {
+				watch.paired = false;
+				watch.budget.unpaired();
+				watch.nextInspectAt = Date.now() + this.#policy.pairLossGraceMs;
 			}
-			this.#pairWatchers.set(
+			if (Date.now() >= watch.nextInspectAt) {
+				watch.nextInspectAt = Date.now() + this.#policy.inspectEveryMs;
+				await this.#serialized(daemonId, () => this.#inspectWatched(daemonId, watch));
+			}
+		}
+		// Re-arm unless the watch ended or a restart backoff took the timer.
+		if (this.#watches.get(daemonId) === watch && watch.timer === undefined) {
+			this.#scheduleTick(daemonId, watch);
+		}
+	}
+
+	/** One provider inspect for a pair-down watch; runs on the clone's op queue. */
+	async #inspectWatched(daemonId: string, watch: RuntimeWatch): Promise<void> {
+		const entry = this.#watchLive(daemonId, watch);
+		if (entry === undefined) return;
+		if (this.#deps.transport.pairStatus(daemonId).paired) return; // Re-paired while queued.
+		let observed: string;
+		try {
+			observed = (await this.#runCloneOp(daemonId, "inspect", this.#handleOf(entry))).observed;
+		} catch {
+			// Inspect failed (provider unavailable or a typed conflict): keep
+			// polling; the next inspect retries. A genuinely dead runtime
+			// reports observed != running (not an error), handled below.
+			return;
+		}
+		if (observed === "running") return;
+		if (!watch.restartable) {
+			const message = `sandbox stopped before the callback pair established (observed ${observed})`;
+			this.#setStage(daemonId, "failed", message);
+			this.#deps.registry.setStatus(daemonId, "error", `${message}; stop and start to retry`);
+			this.#disposeWatch(daemonId, watch);
+			this.#log(
+				"warn",
+				`clone ${daemonId} callback never established; sandbox ${observed}`,
 				daemonId,
-				setTimeout(() => void tick(), 1_000),
 			);
-		};
-		this.#pairWatchers.set(
+			return;
+		}
+		// Inspect proved the predecessor gone: fence its credential now, so it
+		// stays dead through the backoff window (#ensure bumps the generation).
+		const generation = entry.workspace?.authorizedGeneration;
+		if (generation !== undefined) {
+			this.#deps.transport.revokeEnrollment(daemonId, generation);
+			this.#deps.registry.clearWorkspaceEnrollment(daemonId, generation);
+		}
+		this.#scheduleRestart(daemonId, watch, `runtime ${observed} after its pair came up`);
+	}
+
+	/**
+	 * Spend one restart from the budget and arm the backoff timer, or surface
+	 * "failed"/error with `reason` when the budget is exhausted. Reused by a
+	 * restart whose own #ensure failed, so provider flaps are bounded too.
+	 */
+	#scheduleRestart(daemonId: string, watch: RuntimeWatch, reason: string): void {
+		const claim = watch.budget.next();
+		if (claim === null) {
+			const message = `${reason}; restart budget exhausted (${watch.budget.restartMax} restarts allowed since the last stable pair); stop and start to retry`;
+			this.#setStage(daemonId, "failed", message);
+			this.#deps.registry.setStatus(daemonId, "error", message);
+			this.#disposeWatch(daemonId, watch);
+			this.#log("error", `clone ${daemonId} ${message}`, daemonId);
+			return;
+		}
+		this.#setStage(daemonId, "runtime");
+		this.#deps.registry.setStatus(daemonId, "reconnecting");
+		this.#log(
+			"warn",
+			`clone ${daemonId} ${reason}; restart ${claim.attempt + 1}/${watch.budget.restartMax} in ${claim.delayMs}ms`,
 			daemonId,
-			setTimeout(() => void tick(), 1_000),
 		);
+		watch.timer = setTimeout(() => {
+			watch.timer = undefined;
+			void this.#serialized(daemonId, () => this.#restartRuntime(daemonId, watch));
+		}, claim.delayMs);
+	}
+
+	/** The restart itself: the ordinary ensure (inspect-proven predecessor, revoke, fresh credential, generation + 1). */
+	async #restartRuntime(daemonId: string, watch: RuntimeWatch): Promise<void> {
+		const entry = this.#watchLive(daemonId, watch);
+		if (entry === undefined) return; // Explicit stop/delete won the race.
+		try {
+			const response = await this.#ensure(entry, { firstStart: false, recovery: true });
+			if (response.observed !== "running") {
+				this.#scheduleRestart(
+					daemonId,
+					watch,
+					`provider reported ${response.observed} after restart`,
+				);
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.#scheduleRestart(daemonId, watch, `restart failed: ${message}`);
+		}
 	}
 
 	// ------------------------------------------------------------------

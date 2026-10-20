@@ -60,6 +60,13 @@ import { fillTemplate, shellQuote } from "./spawn-parse";
 import type { DaemonTransportRegistry } from "./daemon-transport";
 import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
 import type { GitRunner, GitState } from "./discovery";
+import {
+	backoffDelay,
+	DEFAULT_RESTART_MAX,
+	RESTART_BACKOFF_MAX_MS,
+	RESTART_BACKOFF_MIN_MS,
+	STABLE_PAIR_MS,
+} from "./restart-policy";
 import { sessionLiveness } from "./session-liveness";
 import {
 	PROVIDER_DAEMON_LOG,
@@ -125,26 +132,15 @@ interface ChildState {
 
 /** Exported so tests and the launch path share one pair-timeout budget. */
 export const PAIR_TIMEOUT_MS = 60_000;
-/** A pair must hold this long before its restarts are forgiven; a pair-then-crash loop still exhausts restartMax. */
-const STABLE_PAIR_MS = 60_000;
-const DEFAULT_RESTART_MAX = 5;
 const STDERR_TAIL_BYTES = 64 * 1024;
 const STOP_SIGTERM_GRACE_MS = 5_000;
 const RESPAWN_KILL_GRACE_MS = 2_000;
 const RESPAWN_LOCK_POLL_MS = 100;
-const RESTART_BACKOFF_MIN_MS = 1_000;
-const RESTART_BACKOFF_MAX_MS = 30_000;
 const DEFAULT_SYNC_INTERVAL_MS = 10_000;
 const ASLEEP_SYNC_INTERVAL_MS = 60_000;
 /** Max git probes in flight during one sync pass (rows probe in parallel). */
 const SYNC_PROBE_CONCURRENCY = 4;
 const DETERMINISTIC_EXIT_FALLBACK = "session refused to run and will not be retried";
-
-/** Jittered exponential backoff: base = min(max, min·2^attempt), ±50%. */
-function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
-	const base = Math.min(maxMs, minMs * 2 ** attempt);
-	return Math.round(base * (0.5 + Math.random()));
-}
 
 /**
  * Run `fn` over `items` with at most `limit` in flight. Resolves only after
