@@ -1,6 +1,12 @@
 import { COMMAND_DEDUP_WINDOW_MS } from "#lib/wire/protocol";
 import { commandBytes, commandTooLargeMessage, MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
-import type { ClientCommand, DaemonInfo, ServerFrame, WebMethodName } from "#lib/wire/protocol";
+import type {
+	ClientCommand,
+	DaemonInfo,
+	ServerFrame,
+	SessionScope,
+	WebMethodName,
+} from "#lib/wire/protocol";
 import { READ_ONLY_METHODS } from "#lib/wire/protocol";
 import type { DaemonLogsResult, DebugEntry, DebugLevel } from "../state";
 import { setState, state } from "../state";
@@ -118,8 +124,10 @@ interface PendingCall {
 	cmd: Extract<ClientCommand, { type: "call" }>;
 	/** When the original POST went out: the at-most-once bound for replays. */
 	firstPostAt: number;
-	/** The edge answered NOT_ATTACHED: parked. The replay timer keeps re-POSTing it under the same id; an attach re-sends it at once. */
+	/** The edge answered NOT_ATTACHED: parked. An attach re-sends a read at once; a mutation waits for the attachment's `state` frame (awaitingState). */
 	awaitingAttach: boolean;
+	/** A parked mutation that has seen an `attached` frame: it runs only if the attachment's first `state` frame carries its scope, else it is dropped as "session switched". */
+	awaitingState: boolean;
 }
 
 export const pendingCalls = new Map<string, PendingCall>();
@@ -149,8 +157,8 @@ export function settleCallResult(frame: Extract<ServerFrame, { type: "call_resul
 		// A read wants the answer for the session attached when it finally runs,
 		// so it drops the scope of the attachment it was issued under (a new
 		// generation would reject it as stale). A mutation keeps its scope: it
-		// must never run on another attachment. Replays and the attach re-send
-		// both post this stored command.
+		// must never run on another attachment (resumeParkedMutations checks
+		// it against the next attachment before it is posted again).
 		if (READ_ONLY_METHODS[pending.cmd.method] === true && pending.cmd.scope !== undefined)
 			pending.cmd = { ...pending.cmd, scope: undefined };
 		return;
@@ -174,18 +182,49 @@ function scheduleCallReplay(id: string): void {
 		// At-most-once bound: past the dedup window the daemon no longer
 		// remembers the id, so a re-POST could EXECUTE the command again.
 		if (Date.now() - current.firstPostAt > COMMAND_DEDUP_WINDOW_MS) {
-			if (current.awaitingAttach) {
+			if (current.awaitingAttach || current.awaitingState) {
 				pendingCalls.delete(id);
 				clearCallTimers(current);
 				current.reject(new Error(NOT_ATTACHED));
 			}
 			return;
 		}
-		// A failed replay is not fatal: the call keeps its own deadline, and
-		// the next tick re-POSTs again (the daemon replays its answer).
-		void postCommand(current.cmd).catch(() => {});
+		// A parked mutation never goes out from here: only the attachment's
+		// `state` frame (resumeParkedMutations) may decide it still belongs to
+		// the attachment it was made for. The timer stays armed for the window
+		// bound above.
+		if (!isParkedMutation(current)) {
+			// A failed replay is not fatal: the call keeps its own deadline, and
+			// the next tick re-POSTs again (the daemon replays its answer).
+			void postCommand(current.cmd).catch(() => {});
+		}
 		scheduleCallReplay(id);
 	}, CALL_REPLAY_INTERVAL_MS);
+}
+
+/** A mutation the edge refused as not attached and that has not been re-posted yet. */
+function isParkedMutation(pending: PendingCall): boolean {
+	return (
+		(pending.awaitingAttach || pending.awaitingState) &&
+		READ_ONLY_METHODS[pending.cmd.method] !== true
+	);
+}
+
+/** Re-POST a parked call under its own id and put it back on the replay cadence. */
+function repostParkedCall(id: string, pending: PendingCall): void {
+	postCommand(pending.cmd).catch((err) => {
+		if (pendingCalls.get(id) !== pending) return;
+		pendingCalls.delete(id);
+		clearCallTimers(pending);
+		pending.reject(err instanceof Error ? err : new Error(String(err)));
+	});
+	scheduleCallReplay(id);
+}
+
+function dropParkedCall(id: string, pending: PendingCall, err: Error): void {
+	pendingCalls.delete(id);
+	clearCallTimers(pending);
+	pending.reject(err);
 }
 
 export function rejectPendingCalls(err: Error): void {
@@ -199,7 +238,9 @@ export function rejectPendingCalls(err: Error): void {
 /**
  * Re-send each call the edge answered NOT_ATTACHED. Runs on every `attached`
  * frame, so a call parked while the tab was detached goes out again under the
- * same id (the daemon dedups it and never ran the first copy). A call past
+ * same id (the daemon dedups it and never ran the first copy). A parked read
+ * goes out at once, without scope. A parked mutation keeps its scope and waits
+ * for the attachment's first `state` frame (resumeParkedMutations). A call past
  * COMMAND_DEDUP_WINDOW_MS fails instead: a re-POST could execute twice.
  */
 export function retryNotAttachedCalls(): void {
@@ -207,18 +248,44 @@ export function retryNotAttachedCalls(): void {
 		if (!pending.awaitingAttach) continue;
 		pending.awaitingAttach = false;
 		if (Date.now() - pending.firstPostAt > COMMAND_DEDUP_WINDOW_MS) {
-			pendingCalls.delete(id);
-			clearCallTimers(pending);
-			pending.reject(new Error(NOT_ATTACHED));
+			dropParkedCall(id, pending, new Error(NOT_ATTACHED));
 			continue;
 		}
-		postCommand(pending.cmd).catch((err) => {
-			if (pendingCalls.get(id) !== pending) return;
-			pendingCalls.delete(id);
-			clearCallTimers(pending);
-			pending.reject(err instanceof Error ? err : new Error(String(err)));
-		});
-		scheduleCallReplay(id);
+		if (READ_ONLY_METHODS[pending.cmd.method] !== true) {
+			pending.awaitingState = true;
+			continue;
+		}
+		repostParkedCall(id, pending);
+	}
+}
+
+/**
+ * The attachment's first `state` frame has set `scope`: settle each parked
+ * mutation. One made without a scope, or with this attachment's scope (a pair
+ * blip that kept the attachment), goes out again under its own id. Any other
+ * belongs to an attachment that is gone: it is dropped as "session switched"
+ * (silent control flow, see isSessionSwitchSupersession) and never posted.
+ */
+export function resumeParkedMutations(scope: SessionScope | undefined): void {
+	for (const [id, pending] of pendingCalls) {
+		if (!pending.awaitingState) continue;
+		pending.awaitingState = false;
+		if (Date.now() - pending.firstPostAt > COMMAND_DEDUP_WINDOW_MS) {
+			dropParkedCall(id, pending, new Error(NOT_ATTACHED));
+			continue;
+		}
+		const made = pending.cmd.scope;
+		if (
+			made !== undefined &&
+			(scope === undefined ||
+				made.workspaceId !== scope.workspaceId ||
+				made.sessionId !== scope.sessionId ||
+				made.generation !== scope.generation)
+		) {
+			dropParkedCall(id, pending, new Error("session switched"));
+			continue;
+		}
+		repostParkedCall(id, pending);
 	}
 }
 
@@ -275,6 +342,7 @@ export function call(
 		cmd,
 		firstPostAt: Date.now(),
 		awaitingAttach: false,
+		awaitingState: false,
 	});
 	postCommand(cmd).catch((err) => {
 		const pending = pendingCalls.get(id);

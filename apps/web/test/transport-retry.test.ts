@@ -1,9 +1,15 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { COMMAND_DEDUP_WINDOW_MS, OMP_PROTO } from "#lib/wire/protocol";
-import type { ClientCommand, ServerFrame, WebMethodName } from "#lib/wire/protocol";
+import type {
+	ClientCommand,
+	ServerFrame,
+	WebMethodName,
+	WebSessionState,
+} from "#lib/wire/protocol";
 import { connect, connectionState, setState, state } from "../state";
 import {
 	call,
+	isSessionSwitchSupersession,
 	pendingCalls,
 	rejectPendingCalls,
 	retryNotAttachedCalls,
@@ -203,37 +209,93 @@ describe("not-attached retry (SUB-02)", () => {
 		expect(copies(id)).toBe(2);
 	});
 
-	test("a re-attach re-posts a parked read without its scope and a parked mutation with it", () => {
-		setState("sessionScope", { workspaceId: "w1", sessionId: "d9", generation: "1" });
-		const sent = (method: WebMethodName): Extract<ClientCommand, { type: "call" }> => {
-			call(method, [], 0).catch(() => {}); // rejected by the afterEach reset
-			const cmd = posted.at(-1);
-			if (cmd?.type !== "call") throw new Error("expected a call command");
-			return cmd;
-		};
-		const read = sent("resumeList");
-		const mutation = sent("setThinkingLevel");
-		expect(read.scope?.generation).toBe("1");
-		expect(mutation.scope?.generation).toBe("1");
-		settleCallResult(answer(read.id, false, undefined, "not attached"));
-		settleCallResult(answer(mutation.id, false, undefined, "not attached"));
+	/** A state frame carrying the scope of the attachment it primes. */
+	const stateFrame = (generation: string): ServerFrame => ({
+		type: "state",
+		state: {
+			sessionId: "d9",
+			sessionScope: { workspaceId: "w1", sessionId: "d9", generation },
+		} as unknown as WebSessionState,
+	});
+	/** Issue one call with no deadline and record how it settles. */
+	const sent = (method: WebMethodName) => {
+		const outcome: Outcome = { settled: false };
+		call(method, [], 0).then(
+			(value) => Object.assign(outcome, { settled: true, value }),
+			(error: Error) => Object.assign(outcome, { settled: true, error }),
+		);
+		const cmd = posted.at(-1);
+		if (cmd?.type !== "call") throw new Error("expected a call command");
+		return { cmd, outcome };
+	};
+	const reposted = (id: string) =>
+		posted.filter(
+			(c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call" && c.id === id,
+		);
 
-		// The attached frame clears the live scope before the parked calls go out.
+	test("a re-attach re-posts a parked read at once, without its scope", () => {
+		setState("sessionScope", { workspaceId: "w1", sessionId: "d9", generation: "1" });
+		const { cmd: read } = sent("resumeList");
+		expect(read.scope?.generation).toBe("1");
+		settleCallResult(answer(read.id, false, undefined, "not attached"));
+
+		// The attached frame clears the live scope before the parked read goes out.
 		dispatch(attached("d9"));
 		expect(state.sessionScope).toBeUndefined();
-
-		const reposted = (id: string) =>
-			posted.filter(
-				(c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call" && c.id === id,
-			);
 		expect(reposted(read.id)).toHaveLength(2);
 		expect(reposted(read.id)[1]?.scope).toBeUndefined();
+	});
+
+	test("a parked mutation waits for the state frame and is dropped silently when the generation changed", async () => {
+		setState("sessionScope", { workspaceId: "w1", sessionId: "d9", generation: "1" });
+		const { cmd: mutation, outcome } = sent("setThinkingLevel");
+		settleCallResult(answer(mutation.id, false, undefined, "not attached"));
+
+		dispatch(attached("d9"));
+		expect(reposted(mutation.id)).toHaveLength(1);
+		advance(5_000); // the replay timer never posts a mutation waiting for the state frame
+		expect(reposted(mutation.id)).toHaveLength(1);
+
+		dispatch(stateFrame("2"));
+		await flushMicrotasks();
+		expect(reposted(mutation.id)).toHaveLength(1);
+		expect(outcome.error?.message).toBe("session switched");
+		expect(isSessionSwitchSupersession(outcome.error)).toBe(true);
+		expect(pendingCalls.has(mutation.id)).toBe(false);
+		expect(state.error ?? "").not.toMatch(/stale session|session switched/i);
+		expect(state.toasts).toHaveLength(0);
+		advance(COMMAND_DEDUP_WINDOW_MS);
+		expect(reposted(mutation.id)).toHaveLength(1);
+	});
+	test("a parked mutation is re-posted once with its own scope when the state frame keeps the attachment", () => {
+		setState("sessionScope", { workspaceId: "w1", sessionId: "d9", generation: "1" });
+		const { cmd: mutation } = sent("setThinkingLevel");
+		expect(mutation.scope?.generation).toBe("1");
+		settleCallResult(answer(mutation.id, false, undefined, "not attached"));
+
+		dispatch(attached("d9"));
+		expect(reposted(mutation.id)).toHaveLength(1);
+		dispatch(stateFrame("1"));
 		expect(reposted(mutation.id)).toHaveLength(2);
-		expect(reposted(mutation.id)[1]?.scope).toEqual({
-			workspaceId: "w1",
-			sessionId: "d9",
-			generation: "1",
+		expect(reposted(mutation.id)[1]).toMatchObject({
+			id: mutation.id,
+			scope: { workspaceId: "w1", sessionId: "d9", generation: "1" },
 		});
+		// A later state frame sends nothing more: the mutation is no longer parked.
+		dispatch(stateFrame("1"));
+		expect(reposted(mutation.id)).toHaveLength(2);
+	});
+
+	test("a parked mutation past the dedup window fails with not attached and is never re-posted", async () => {
+		setState("sessionScope", { workspaceId: "w1", sessionId: "d9", generation: "1" });
+		const { cmd: mutation, outcome } = sent("setThinkingLevel");
+		settleCallResult(answer(mutation.id, false, undefined, "not attached"));
+		dispatch(attached("d9"));
+		advance(COMMAND_DEDUP_WINDOW_MS + 1);
+		dispatch(stateFrame("1"));
+		await flushMicrotasks();
+		expect(outcome.error?.message).toBe("not attached");
+		expect(reposted(mutation.id)).toHaveLength(1);
 	});
 });
 

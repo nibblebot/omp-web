@@ -80,6 +80,7 @@ import {
 	rejectPendingAttach,
 	rejectPendingCalls,
 	rejectPendingDaemons,
+	resumeParkedMutations,
 	retryNotAttachedCalls,
 	settleAttachedFrame,
 	setConnected,
@@ -1237,6 +1238,8 @@ export function connect(): void {
 			}
 			case "state":
 				applyState(frame.state, frame.stats);
+				// The attachment's scope is set: decide the parked mutations.
+				resumeParkedMutations(state.sessionScope);
 				break;
 			case "ready":
 				// R8: the boot session's readiness gate cleared; the composer
