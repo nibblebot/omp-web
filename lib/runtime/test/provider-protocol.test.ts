@@ -80,9 +80,25 @@ describe("request profile per kind", () => {
 });
 
 const ENVELOPE = { ok: true, handle: "h", observed: "stopped" };
+const DIGEST = "a".repeat(64);
 
 describe("list-sessions response", () => {
 	test("carries a bounded session inventory and its completeness flag", () => {
+		const parsed = parseProviderResponse(
+			JSON.stringify({
+				...ENVELOPE,
+				sessions: [{ path: "s1/s1.jsonl", size: 12, sha256: DIGEST }],
+				complete: true,
+			}),
+		);
+		expect(parsed).toMatchObject({
+			ok: true,
+			sessions: [{ path: "s1/s1.jsonl", size: 12, sha256: DIGEST }],
+			complete: true,
+		});
+	});
+
+	test("an entry without a digest parses (the fleet refuses it, the wire does not)", () => {
 		const parsed = parseProviderResponse(
 			JSON.stringify({
 				...ENVELOPE,
@@ -90,10 +106,9 @@ describe("list-sessions response", () => {
 				complete: true,
 			}),
 		);
-		expect(parsed).toMatchObject({
-			ok: true,
-			sessions: [{ path: "s1/s1.jsonl", size: 12 }],
-			complete: true,
+		expect(parsed.ok && "sessions" in parsed && parsed.sessions?.[0]).toEqual({
+			path: "s1/s1.jsonl",
+			size: 12,
 		});
 	});
 
@@ -108,7 +123,9 @@ describe("list-sessions response", () => {
 		["a negative size", { sessions: [{ path: "s1/a", size: -1 }] }],
 		["a fractional size", { sessions: [{ path: "s1/a", size: 1.5 }] }],
 		["an empty path", { sessions: [{ path: "", size: 1 }] }],
-		["an unknown entry key", { sessions: [{ path: "s1/a", size: 1, sha256: "x" }] }],
+		["an unknown entry key", { sessions: [{ path: "s1/a", size: 1, mtime: 3 }] }],
+		["a malformed digest", { sessions: [{ path: "s1/a", size: 1, sha256: "x" }] }],
+		["an uppercase digest", { sessions: [{ path: "s1/a", size: 1, sha256: "A".repeat(64) }] }],
 		["a non-boolean complete flag", { sessions: [], complete: "yes" }],
 	])("rejects %s", (_label, extra) => {
 		expect(() => parseProviderResponse(JSON.stringify({ ...ENVELOPE, ...extra }))).toThrow(

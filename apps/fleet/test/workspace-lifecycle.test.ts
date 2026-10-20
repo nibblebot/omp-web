@@ -50,6 +50,7 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	existsSync,
@@ -145,11 +146,15 @@ interface ProviderScenario {
 	/** delete failures: consecutive "delete" requests to fail before succeeding. */
 	deleteFailures: number;
 	/**
-	 * list-sessions answer for a volume the fleet cannot read. Absent = the
+	 * list-sessions answer for a volume the fleet cannot read (an entry with
+	 * no `sha256` models a provider that cannot hash). Absent = the
 	 * provider does not know the op (a typed invalid_request, as a real
 	 * provider without it answers).
 	 */
-	listSessions?: { files: { path: string; size: number }[]; complete?: boolean };
+	listSessions?: {
+		files: { path: string; size: number; sha256?: string }[];
+		complete?: boolean;
+	};
 }
 
 /**
@@ -218,6 +223,11 @@ function transcriptJsonl(): string {
 		ts: 2,
 	};
 	return `${JSON.stringify(title)}\n${JSON.stringify(header)}\n${JSON.stringify(entry)}\n`;
+}
+
+/** Lowercase hex sha256 of a string's UTF-8 bytes (what a provider inventory reports). */
+function sha256Hex(text: string): string {
+	return createHash("sha256").update(text).digest("hex");
 }
 
 /** Store-side `readonly.json` marker for a verified workspace. */
@@ -1611,7 +1621,9 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 		"an inventory whose files the verified store holds deletes and retains the store",
 		async () => {
 			const size = Buffer.byteLength(transcriptJsonl(), "utf8");
-			const fixture = await bootStoppedClone("k8s-matched", { files: [{ path: mainPath, size }] });
+			const fixture = await bootStoppedClone("k8s-matched", {
+				files: [{ path: mainPath, size, sha256: sha256Hex(transcriptJsonl()) }],
+			});
 			try {
 				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
 				detachVolume(fixture);
@@ -1631,7 +1643,7 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 		"a volume session the store never received refuses deletion, retains everything, and leaves the row startable",
 		async () => {
 			const fixture = await bootStoppedClone("k8s-unmatched", {
-				files: [{ path: mainPath, size: 64 }],
+				files: [{ path: mainPath, size: 64, sha256: "0".repeat(64) }],
 			});
 			try {
 				const detached = detachVolume(fixture);
@@ -1667,7 +1679,7 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 		async () => {
 			const size = Buffer.byteLength(transcriptJsonl(), "utf8");
 			const fixture = await bootStoppedClone("k8s-short-store", {
-				files: [{ path: mainPath, size: size + 10 }],
+				files: [{ path: mainPath, size: size + 10, sha256: "0".repeat(64) }],
 			});
 			try {
 				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
@@ -1679,6 +1691,82 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 				});
 				const body = (await refusal.json()) as { error?: string };
 				expect(body.error).toContain(`truncated in the fleet store (${size}/${size + 10} bytes)`);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a store file longer than the volume's file refuses deletion (exact match, not append-only growth)",
+		async () => {
+			const size = Buffer.byteLength(transcriptJsonl(), "utf8");
+			const fixture = await bootStoppedClone("k8s-long-store", {
+				files: [{ path: mainPath, size: size - 1, sha256: "0".repeat(64) }],
+			});
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				const detached = detachVolume(fixture);
+				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const refusal = response.clone();
+				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
+					retainedVolumeRoot: detached,
+				});
+				const body = (await refusal.json()) as { error?: string };
+				expect(body.error).toContain(`longer in the fleet store (${size}/${size - 1} bytes)`);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a same-size rewrite of a volume file refuses deletion (sha256 differs from the store)",
+		async () => {
+			const original = transcriptJsonl();
+			const size = Buffer.byteLength(original, "utf8");
+			// Same length, different bytes: only the digest can tell.
+			const rewritten = `${original.slice(0, -2)}X\n`;
+			expect(Buffer.byteLength(rewritten, "utf8")).toBe(size);
+			const fixture = await bootStoppedClone("k8s-rewritten", {
+				files: [{ path: mainPath, size, sha256: sha256Hex(rewritten) }],
+			});
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				const detached = detachVolume(fixture);
+				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const refusal = response.clone();
+				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
+					retainedVolumeRoot: detached,
+				});
+				const body = (await refusal.json()) as { error?: string };
+				expect(body.error).toContain(`file ${SESSION_ID}.jsonl differs from its stored bytes`);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"an inventory entry without a sha256 refuses deletion (fail safe)",
+		async () => {
+			const size = Buffer.byteLength(transcriptJsonl(), "utf8");
+			const fixture = await bootStoppedClone("k8s-no-hash", {
+				files: [{ path: mainPath, size }],
+			});
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				const detached = detachVolume(fixture);
+				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const refusal = response.clone();
+				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
+					retainedVolumeRoot: detached,
+				});
+				const body = (await refusal.json()) as { error?: string };
+				expect(body.error).toContain("without a sha256");
 			} finally {
 				await fixture.server.close();
 			}

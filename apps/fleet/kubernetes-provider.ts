@@ -1499,17 +1499,25 @@ async function opDelete(rawRequest: ProviderRequest, deps: OpDeps): Promise<Prov
 const LIST_SESSIONS_END = "OMP_LIST_SESSIONS_END";
 
 /**
- * Inventory script run by the helper pod: one `<size>\t<relative path>` line
- * per regular file under the agent sessions dir (symlinks are not followed
- * and not listed), then the end marker. A missing sessions dir is an empty
- * inventory; any enumeration failure exits non-zero before the marker, so a
- * partial listing can never pass for a complete one.
+ * Inventory script run by the helper pod: one `<size>\t<sha256>\t<relative
+ * path>` line per regular file under the agent sessions dir (symlinks inside
+ * the tree are not followed and not listed), then the end marker. The digest
+ * comes from the image's coreutils `sha256sum` (Debian base, on the
+ * restricted PATH), fed on stdin so the line never carries an escaped file
+ * name. A missing sessions dir is an empty inventory; any enumeration or
+ * hashing failure exits non-zero before the marker, so a partial listing can
+ * never pass for a complete one.
  */
 const LIST_SESSIONS_SCRIPT = [
 	`d=${POD_HOME_DIR}/agent/sessions`,
 	'if [ -e "$d" ] || [ -L "$d" ]; then',
 	'  [ -d "$d" ] || { echo "sessions path is not a directory" >&2; exit 3; }',
-	"  find -H \"$d\" -type f -printf '%s\\t%P\\n' || exit 4",
+	'  cd "$d" || exit 4',
+	"  find . -type f -exec sh -c 'for f; do " +
+		'h=$(sha256sum < "$f") || exit 1; ' +
+		's=$(wc -c < "$f") || exit 1; ' +
+		'printf "%s\\t%s\\t%s\\n" "$s" "${h%% *}" "${f#./}"; ' +
+		"done' sh {} + || exit 4",
 	"fi",
 	`echo ${LIST_SESSIONS_END}`,
 ].join("\n");
@@ -1517,8 +1525,8 @@ const LIST_SESSIONS_SCRIPT = [
 /** Response budget for the inventory: stays well under the 1 MiB protocol cap. */
 const LIST_SESSIONS_RESPONSE_BUDGET = 768 * 1024;
 
-/** Per-entry JSON overhead allowance (`{"path":"","size":N},`). */
-const LIST_SESSIONS_ENTRY_OVERHEAD = 40;
+/** Per-entry JSON overhead allowance (`{"path":"","size":N,"sha256":"<64 hex>"},`). */
+const LIST_SESSIONS_ENTRY_OVERHEAD = 120;
 
 /**
  * The short-lived inventory pod: mounts the workspace claim READ-ONLY, runs
@@ -1609,11 +1617,12 @@ function parseListSessionsLog(
 			ended = true;
 			continue;
 		}
-		const match = /^(\d+)\t(.+)$/.exec(line);
+		const match = /^(\d+)\t([0-9a-f]{64})\t(.+)$/.exec(line);
 		if (match === null) return { error: `unparseable inventory line: ${line.slice(0, 80)}` };
 		const size = Number(match[1]);
 		if (!Number.isSafeInteger(size)) return { error: `unparseable inventory size: ${match[1]}` };
-		const path = match[2];
+		const sha256 = match[2]!;
+		const path = match[3]!;
 		const cost = Buffer.byteLength(path) + LIST_SESSIONS_ENTRY_OVERHEAD;
 		if (
 			sessions.length >= MAX_EXPORT_FILES ||
@@ -1623,7 +1632,7 @@ function parseListSessionsLog(
 			complete = false;
 			continue;
 		}
-		sessions.push({ path, size });
+		sessions.push({ path, size, sha256 });
 		bytes += size;
 		budget += cost;
 	}

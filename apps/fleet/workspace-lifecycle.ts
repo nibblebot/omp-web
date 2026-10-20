@@ -1817,13 +1817,17 @@ export class WorkspaceLifecycle {
 	/**
 	 * Completeness proof for a volume the fleet cannot read: the provider
 	 * lists the session files the volume holds (stopped compute, bounded like
-	 * the fleet-visible walk) and every one must already be in the verified
-	 * store with at least its size. Sessions are not hashed (the fleet cannot
-	 * read the bytes), so a same-size rewrite is not caught here; truncation
-	 * and unstreamed files are. An empty inventory proves there is nothing to
-	 * lose, whatever the store holds. A provider that fails, is truncated, or
-	 * does not implement `list-sessions` (rejected as `invalid_request`, or an
-	 * ok response without an inventory) proves nothing: deletion is refused.
+	 * the fleet-visible walk) with a sha256 each, and every one must already
+	 * be in the verified store byte-identically. The prefix rule is the
+	 * fleet-visible cross-check's: size AND sha256 must equal the store's
+	 * (a store file longer than the volume copy is refused too, never treated
+	 * as append-only growth; the volume is final once compute is stopped), so
+	 * a same-size rewrite, a truncation, and an unstreamed file are all caught.
+	 * An entry without a digest is refused (fail safe). An empty inventory
+	 * proves there is nothing to lose, whatever the store holds. A provider
+	 * that fails, is truncated, or does not implement `list-sessions` (rejected
+	 * as `invalid_request`, or an ok response without an inventory) proves
+	 * nothing: deletion is refused.
 	 */
 	async #verifyProviderInventory(
 		daemonId: string,
@@ -1853,9 +1857,9 @@ export class WorkspaceLifecycle {
 				message: `session tree for ${daemonId} exceeds verification bounds (${MAX_EXPORT_FILES} files / ${MAX_EXPORT_BYTES} bytes); deletion blocked`,
 			};
 		}
-		const stored = new Map<string, number>();
+		const stored = new Map<string, { size: number; sha256: string }>();
 		for (const file of storeManifest?.files ?? []) {
-			stored.set(`${file.sessionId}/${file.path}`, file.size);
+			stored.set(`${file.sessionId}/${file.path}`, { size: file.size, sha256: file.sha256 });
 		}
 		// Same file selection as the fleet-visible walk: files inside a
 		// session directory with a normalized relative path.
@@ -1865,17 +1869,29 @@ export class WorkspaceLifecycle {
 			const sessionId = file.path.slice(0, slash);
 			const relpath = file.path.slice(slash + 1);
 			if (!SESSION_DIR_NAME.test(sessionId) || !isNormalizedPosixRelativePath(relpath)) continue;
-			const storedSize = stored.get(file.path);
-			if (storedSize === undefined) {
+			const side = stored.get(file.path);
+			if (side === undefined) {
 				return {
 					ok: false,
 					message: `workspace ${daemonId} session ${sessionId} file ${relpath} (${file.size} bytes) is on its volume but missing from the fleet store; deletion blocked (logs were not fully streamed)`,
 				};
 			}
-			if (storedSize < file.size) {
+			if (file.sha256 === undefined) {
 				return {
 					ok: false,
-					message: `workspace ${daemonId} session ${sessionId} file ${relpath} is truncated in the fleet store (${storedSize}/${file.size} bytes); deletion blocked`,
+					message: `workspace ${daemonId} session ${sessionId} file ${relpath} came back from the provider without a sha256; deletion blocked (its bytes cannot be proven identical to the store)`,
+				};
+			}
+			if (side.size !== file.size) {
+				return {
+					ok: false,
+					message: `workspace ${daemonId} session ${sessionId} file ${relpath} is ${side.size < file.size ? "truncated" : "longer"} in the fleet store (${side.size}/${file.size} bytes); deletion blocked`,
+				};
+			}
+			if (side.sha256 !== file.sha256) {
+				return {
+					ok: false,
+					message: `workspace ${daemonId} session ${sessionId} file ${relpath} differs from its stored bytes; deletion blocked (rewrite not re-streamed)`,
 				};
 			}
 		}

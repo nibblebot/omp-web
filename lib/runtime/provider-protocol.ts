@@ -630,7 +630,7 @@ const PROVIDER_OK_KEYS = [
 	"sessions",
 	"complete",
 ] as const;
-const PROVIDER_SESSION_FILE_KEYS = ["path", "size"] as const;
+const PROVIDER_SESSION_FILE_KEYS = ["path", "size", "sha256"] as const;
 const PROVIDER_PREFLIGHT_OK_KEYS = ["ok", "checks"] as const;
 const PREFLIGHT_CHECK_KEYS = ["name", "ok", "detail", "remediation"] as const;
 const PROVIDER_ERROR_KEYS = ["ok", "error"] as const;
@@ -669,11 +669,14 @@ export interface ProviderOkResponse {
  * One session file on a workspace volume, as a `list-sessions` response
  * reports it: `path` is relative to the agent sessions dir
  * (`<sessionId>/<file under the session>`, POSIX separators), `size` is the
- * byte length.
+ * byte length, `sha256` the lowercase hex digest of exactly those bytes. A
+ * provider that cannot hash omits it; the fleet then refuses the deletion
+ * (a size alone cannot prove a file was not rewritten in place).
  */
 export interface ProviderSessionFile {
 	path: string;
 	size: number;
+	sha256?: string;
 }
 
 /** Successful `preflight` envelope: the provider's environment checks. */
@@ -726,7 +729,17 @@ function parseSessionFiles(value: unknown): ProviderSessionFile[] | undefined {
 				`${where}.size must be a non-negative safe integer`,
 			);
 		}
-		return { path: requireStringField(item, "path", where), size };
+		const sha256 = item["sha256"];
+		if (sha256 !== undefined && (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256))) {
+			throw ProviderProtocolError.invalidRequest(
+				`${where}.sha256 must be 64 lowercase hex characters`,
+			);
+		}
+		return {
+			path: requireStringField(item, "path", where),
+			size,
+			...(sha256 !== undefined ? { sha256 } : {}),
+		};
 	});
 }
 

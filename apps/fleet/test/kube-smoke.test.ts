@@ -519,13 +519,15 @@ describe("case F: stop retains the PVC and proves the pod gone", () => {
 
 describe("case F2: list-sessions proves the volume inventory with a read-only helper pod", () => {
 	const END = "OMP_LIST_SESSIONS_END";
+	const H1 = "1".repeat(64);
+	const H2 = "2".repeat(64);
 
 	test("F2a inventory is parsed and the helper is read-only, owned, and removed", async () => {
-		cluster.sessionLog = `123\ts1/s1.jsonl\n45\ts1/sub/a.jsonl\n${END}\n`;
+		cluster.sessionLog = `123\t${H1}\ts1/s1.jsonl\n45\t${H2}\ts1/sub/a.jsonl\n${END}\n`;
 		const listed = expectOk(await runOp(req("list-sessions"), { exec: fakeExec, env }));
 		expect(listed.sessions).toEqual([
-			{ path: "s1/s1.jsonl", size: 123 },
-			{ path: "s1/sub/a.jsonl", size: 45 },
+			{ path: "s1/s1.jsonl", size: 123, sha256: H1 },
+			{ path: "s1/sub/a.jsonl", size: 45, sha256: H2 },
 		]);
 		expect(listed.complete).toBe(true);
 		expect(cluster.pods.size, [...cluster.pods.keys()].join(",")).toBe(0);
@@ -563,15 +565,20 @@ describe("case F2: list-sessions proves the volume inventory with a read-only he
 	});
 
 	test("F2c a listing without the end marker is a failure, not a shorter inventory", async () => {
-		cluster.sessionLog = "123\ts1/s1.jsonl\n";
+		cluster.sessionLog = `123\t${H1}\ts1/s1.jsonl\n`;
 		const listed = expectError(await runOp(req("list-sessions"), { exec: fakeExec, env }));
 		expect(listed.error.code).toBe("unavailable");
 		expect(listed.error.message).toMatch(/no end marker/);
 		expect(cluster.pods.size).toBe(0);
 	});
 
-	test("F2d a malformed line is a failure", async () => {
-		cluster.sessionLog = `not-a-size\ts1/s1.jsonl\n${END}\n`;
+	test.each([
+		["a non-numeric size", `not-a-size\t${H1}\ts1/s1.jsonl`],
+		["a line without a digest (the old size-only format)", "123\ts1/s1.jsonl"],
+		["a short digest", "123\tabc\ts1/s1.jsonl"],
+		["an uppercase digest", `123\t${"A".repeat(64)}\ts1/s1.jsonl`],
+	])("F2d %s is a failure", async (_label, line) => {
+		cluster.sessionLog = `${line}\n${END}\n`;
 		const listed = expectError(await runOp(req("list-sessions"), { exec: fakeExec, env }));
 		expect(listed.error.code).toBe("unavailable");
 		expect(listed.error.message).toMatch(/unparseable/);
@@ -587,12 +594,15 @@ describe("case F2: list-sessions proves the volume inventory with a read-only he
 		expect(cluster.pods.size).toBe(0);
 	});
 
-	test("F2f an inventory beyond the file bound is truncated and flagged incomplete", async () => {
+	test("F2f an inventory beyond the response budget is truncated and flagged incomplete", async () => {
+		// Each entry carries a 64-hex digest, so the 768 KiB response budget
+		// (not the 10,000-file bound) is what a large tree hits first.
 		const lines: string[] = [];
-		for (let i = 0; i < 10_001; i++) lines.push(`1\ts1/f${i}.jsonl`);
+		for (let i = 0; i < 10_001; i++) lines.push(`1\t${H1}\ts1/f${i}.jsonl`);
 		cluster.sessionLog = `${lines.join("\n")}\n${END}\n`;
 		const listed = expectOk(await runOp(req("list-sessions"), { exec: fakeExec, env }));
-		expect(listed.sessions?.length).toBe(10_000);
+		expect(listed.sessions?.length).toBeGreaterThan(1_000);
+		expect(listed.sessions?.length).toBeLessThan(10_000);
 		expect(listed.complete).toBe(false);
 	});
 
