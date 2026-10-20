@@ -18,20 +18,15 @@
  *   materialized values), and key allowlists reject unknown/extra fields at
  *   every nesting level so secret-shaped material cannot be smuggled in.
  * - All JSON I/O is size-bounded: requests and responses are capped at 1 MiB.
- * - State supervision is identity-based. Per-workspace `stateDir` holds the
- *   pidfile `provider.pid.json` = {pid, procStartTime, generation,
- *   workspaceToken}; `procStartTime` comes from `/proc/<pid>/stat` field 22,
- *   recorded at launch, and the launch token is embedded in the workspace
- *   process argv. Liveness requires the pid alive AND its procStartTime
- *   unchanged AND its cmdline still carrying the token; `stop` must prove
- *   the generation terminated by that identity, never by PID alone.
+ * - State supervision is identity-based and provider-private. Each provider
+ *   keeps whatever identity record it needs in its per-workspace `stateDir`
+ *   (the fleet never reads it). Liveness and `stop` must prove the requested
+ *   generation terminated, never by a reusable identifier (a bare pid, a
+ *   resource name) alone.
  *
- * Pure module except the pidfile helpers (small, intended POSIX reads): no
- * process spawning. Spawning lives in lib/runtime/provider-exec.ts.
+ * Pure module: no I/O, no process spawning. Spawning lives in
+ * lib/runtime/provider-exec.ts.
  */
-
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 const utf8 = new TextEncoder();
 
@@ -40,9 +35,6 @@ export const OMP_PROVIDER_PROTO = 1;
 
 /** Serialized request/response cap: one JSON document per invocation (1 MiB). */
 export const PROVIDER_JSON_MAX_BYTES = 1024 * 1024;
-
-/** Pidfile name the provider's per-workspace `stateDir` holds. */
-export const PROVIDER_PID_FILE = "provider.pid.json";
 
 /** Operation kinds; the fleet invokes the executable with one of these. */
 export const PROVIDER_OPS = ["ensure-running", "inspect", "stop", "delete"] as const;
@@ -145,25 +137,6 @@ const SECRET_REF_RE = /^[A-Za-z0-9._~:/@+-]+$/;
 const HANDLE_MAX_BYTES = 4096;
 /** Reference bound: external secret references are short names. */
 const SECRET_REF_MAX_CHARS = 512;
-
-/** The per-workspace identity record in the provider's private `stateDir`. */
-export interface ProviderPidFile {
-	/** OS pid the provider launched for this workspace. */
-	pid: number;
-	/**
-	 * Process start time, `/proc/<pid>/stat` field 22, recorded at launch.
-	 * The identity pair (pid, procStartTime) is what survives a PID reuse.
-	 */
-	procStartTime: number;
-	/** Authorized generation recorded at launch; stop binds its proof to it. */
-	generation: number;
-	/**
-	 * Launch token embedded in the workspace process argv; liveness requires
-	 * `/proc/<pid>/cmdline` to contain it (see matchProviderPidFile). Stays
-	 * in the provider's private stateDir, never in requests.
-	 */
-	workspaceToken: string;
-}
 
 // ---------------------------------------------------------------------------
 // Typed errors
@@ -503,7 +476,11 @@ export interface ProviderOkResponse {
 	handle: ProviderHandle;
 	/** Runtime observation; `running` implies a live resource for the current generation. */
 	observed: ProviderObserved;
-	/** Live process pid, when the resource runs a process the provider can name. */
+	/**
+	 * Diagnostic only: a live process pid when the provider can name one (bwrap
+	 * does; kubernetes does not). The fleet never keys state or decisions on it,
+	 * and a pid alone is never proof of liveness or termination.
+	 */
 	pid?: number;
 	/** Epoch ms when a live process was last (re)started. */
 	startedAt?: number;
@@ -616,94 +593,4 @@ export function parseProviderResponse(
 	if (value["ok"] === true) return parseOkResponse(value);
 	if (value["ok"] === false) return parseErrorResponse(value);
 	throw ProviderProtocolError.invalidRequest("provider response: ok must be true or false");
-}
-
-// ---------------------------------------------------------------------------
-// Identity helpers (stop-proof, PID-reuse-rejecting)
-// ---------------------------------------------------------------------------
-
-/**
- * Read `/proc/<pid>/stat` field 22 (starttime, clock ticks since boot).
- * Returns null when the pid is not a live process or the file is unreadable
- * (the correct "gone" answer). `comm` may contain spaces or `)`; the tail
- * after the LAST `) ` is parsed, keeping the field indexes stable.
- */
-export function parseProcStartTime(pid: number): number | null {
-	if (!Number.isSafeInteger(pid) || pid < 1) return null;
-	let stat: string;
-	try {
-		stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-	} catch {
-		return null;
-	}
-	const close = stat.lastIndexOf(") ");
-	if (close < 0) return null;
-	const tail = stat.slice(close + 2).split(" ");
-	// Field 22 is starttime: 22 - 3 = 19th element of the tail (fields 3..n).
-	const start = Number(tail[19]);
-	return Number.isFinite(start) ? start : null;
-}
-
-/**
- * Read the provider's identity pidfile from its private per-workspace
- * `stateDir`. Returns null when absent or malformed. Unknown extra fields
- * are tolerated; the file is provider-private and forward-compatible.
- */
-export function readProviderPidFile(stateDir: string): ProviderPidFile | null {
-	let raw: string;
-	try {
-		raw = readFileSync(join(stateDir, PROVIDER_PID_FILE), "utf8");
-	} catch {
-		return null;
-	}
-	let value: unknown;
-	try {
-		value = JSON.parse(raw) as unknown;
-	} catch {
-		return null;
-	}
-	if (!isPlainRecord(value)) return null;
-	const pid = value["pid"];
-	const procStartTime = value["procStartTime"];
-	const generation = value["generation"];
-	const workspaceToken = value["workspaceToken"];
-	if (
-		typeof pid !== "number" ||
-		!Number.isSafeInteger(pid) ||
-		pid < 1 ||
-		typeof procStartTime !== "number" ||
-		!Number.isFinite(procStartTime) ||
-		typeof generation !== "number" ||
-		!Number.isSafeInteger(generation) ||
-		generation < 1 ||
-		typeof workspaceToken !== "string" ||
-		workspaceToken.length === 0 ||
-		workspaceToken.length > 4096
-	) {
-		return null;
-	}
-	return { pid, procStartTime, generation, workspaceToken };
-}
-
-/**
- * Identity check for stop-proof: the workspace's launch identity is
- * (pid, procStartTime) plus the launch token in argv. True only when the
- * pidfile exists, a live process at that pid has the same procStartTime (a
- * reused PID with a different start time never matches), and
- * `/proc/<pid>/cmdline` still contains the recorded workspaceToken. A
- * missing pidfile or gone process returns false ("terminated or unknown,
- * cannot claim live"). Never PID-only.
- */
-export function matchProviderPidFile(stateDir: string, pid: number): boolean {
-	const record = readProviderPidFile(stateDir);
-	if (record === null) return false;
-	const live = parseProcStartTime(pid);
-	if (live === null || live !== record.procStartTime) return false;
-	let cmdline: string;
-	try {
-		cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " ");
-	} catch {
-		return false;
-	}
-	return cmdline.includes(record.workspaceToken);
 }

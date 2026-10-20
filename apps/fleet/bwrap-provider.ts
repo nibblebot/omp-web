@@ -16,7 +16,7 @@
  *   the one-shot provider exits, so the sandbox survives provider and fleet
  *   restarts; bwrap's `--die-with-parent` kills the sandbox only when the
  *   SUPERVISOR dies (crash-cleanup, never restart-torn-down).
- * - The supervisor records the launch identity at
+ * - The supervisor records the launch identity (apps/fleet/bwrap-identity.ts) at
  *   `<stateDir>/provider.pid.json` = {pid, procStartTime, generation,
  *   workspaceToken, startedAt}: pid is the HOST pid of the sandboxed
  *   command, found by walking bwrap's descendants for the workspace token;
@@ -32,7 +32,7 @@
  * ever used.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, normalize } from "node:path";
 import {
@@ -51,17 +51,16 @@ import {
 	serveProviderRequest,
 	writeJsonAtomic,
 } from "#lib/runtime/provider-callback-env";
+import {
+	BWRAP_PID_FILE,
+	findTokenPid,
+	identityLive,
+	readLaunchRecord,
+	procIdentity,
+	type LaunchRecord,
+} from "./bwrap-identity";
 import { defaultDenyRoots, defaultRuntimeLaunch, type RuntimeLaunch } from "./runtime-launch";
 import { SessionLog, PROVIDER_DAEMON_LOG, pumpToSessionLog } from "./session-log";
-
-/** The provider's own pidfile record (superset of the shared identity shape). */
-interface LaunchRecord {
-	pid: number;
-	procStartTime: number;
-	generation: number;
-	workspaceToken: string;
-	startedAt: number;
-}
 
 /**
  * Pull the concrete secret-env values for the recorded key names out of the
@@ -82,7 +81,6 @@ function secretEnvFromKeys(keys: readonly string[]): Record<string, string> {
 	return env;
 }
 
-const PID_FILE = "provider.pid.json";
 const SUPERVISE_FILE = "supervise.json";
 const SUPERVISE_ERR_FILE = "supervise.err";
 /** How long ensure-running waits for the supervisor to write the pidfile. */
@@ -96,115 +94,6 @@ const KILL_PROOF_MS = 5_000;
 const POLL_INTERVAL_MS = 50;
 const STATE_LOCK_HOLDER = "bwrap-provider";
 
-// ---------------------------------------------------------------------------
-// Host-side /proc identity helpers
-// ---------------------------------------------------------------------------
-
-/** Host pids that are direct children of `pid` (read from each tid's children file). */
-function childrenOf(pid: number): number[] {
-	try {
-		const kids = new Set<number>();
-		for (const tid of readdirSync(`/proc/${pid}/task`)) {
-			const raw = readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim();
-			if (raw.length === 0) continue;
-			for (const k of raw.split(" ")) {
-				const n = Number(k);
-				if (Number.isSafeInteger(n) && n > 0) kids.add(n);
-			}
-		}
-		return [...kids];
-	} catch {
-		return [];
-	}
-}
-
-/** The process command line, space-joined ("" when unreadable or gone). */
-function cmdlineOf(pid: number): string {
-	try {
-		return readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ").trim();
-	} catch {
-		return "";
-	}
-}
-
-/** procStartTime (stat field 22) + state letter of a pid, or null when gone. */
-function procIdentity(pid: number): { startTime: number; state: string } | null {
-	try {
-		const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-		const close = stat.lastIndexOf(") ");
-		if (close < 0) return null;
-		const tail = stat.slice(close + 2).split(" ");
-		const startTime = Number(tail[19]);
-		const state = tail[0] ?? "";
-		if (!Number.isFinite(startTime)) return null;
-		return { startTime, state };
-	} catch {
-		return null;
-	}
-}
-
-/** Walk descendants of `root` looking for a cmdline containing `token`. */
-function findTokenPid(root: number, token: string): number | null {
-	const seen = new Set<number>([root]);
-	const queue: number[] = [root];
-	while (queue.length > 0) {
-		const current = queue.shift()!;
-		for (const kid of childrenOf(current)) {
-			if (seen.has(kid)) continue;
-			seen.add(kid);
-			if (cmdlineOf(kid).includes(token)) return kid;
-			queue.push(kid);
-		}
-	}
-	return null;
-}
-
-// ---------------------------------------------------------------------------
-// State dir helpers
-// ---------------------------------------------------------------------------
-
-/** Read the provider launch record, or null when absent or malformed. */
-function readLaunchRecord(stateDir: string): LaunchRecord | null {
-	try {
-		const value = JSON.parse(readFileSync(join(stateDir, PID_FILE), "utf8")) as Record<
-			string,
-			unknown
-		>;
-		if (
-			typeof value.pid !== "number" ||
-			typeof value.procStartTime !== "number" ||
-			typeof value.generation !== "number" ||
-			typeof value.workspaceToken !== "string" ||
-			typeof value.startedAt !== "number"
-		) {
-			return null;
-		}
-		return {
-			pid: value.pid,
-			procStartTime: value.procStartTime,
-			generation: value.generation,
-			workspaceToken: value.workspaceToken,
-			startedAt: value.startedAt,
-		};
-	} catch {
-		return null;
-	}
-}
-
-/**
- * The workspace identity check (frozen contract): the pid is alive, its
- * procStartTime (stat field 22) matches the record, its state is not a
- * zombie, and its cmdline still contains the workspace token.
- */
-function identityLive(stateDir: string, record: LaunchRecord | null): boolean {
-	if (record === null) return false;
-	const identity = procIdentity(record.pid);
-	if (identity === null) return false;
-	if (identity.state === "Z" || identity.state === "X") return false;
-	if (identity.startTime !== record.procStartTime) return false;
-	return cmdlineOf(record.pid).includes(record.workspaceToken);
-}
-
 /** Wait up to `timeoutMs` for a pidfile whose identity is live. */
 async function waitForLiveRecord(
 	stateDir: string,
@@ -213,7 +102,7 @@ async function waitForLiveRecord(
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		const record = readLaunchRecord(stateDir);
-		if (identityLive(stateDir, record)) return record;
+		if (identityLive(record)) return record;
 		await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
 	}
 	return null;
@@ -495,7 +384,7 @@ async function runSupervisor(stateDir: string): Promise<number> {
 		proc.kill();
 		return 1;
 	}
-	writeJsonAtomic(join(stateDir, PID_FILE), {
+	writeJsonAtomic(join(stateDir, BWRAP_PID_FILE), {
 		pid: inner,
 		procStartTime: identity.startTime,
 		generation: request.generation,
@@ -533,7 +422,7 @@ async function runSupervisor(stateDir: string): Promise<number> {
  */
 async function stopAndProve(stateDir: string, generation: number): Promise<boolean> {
 	const record = readLaunchRecord(stateDir);
-	if (record === null || !identityLive(stateDir, record)) return true; // already stopped/missing
+	if (record === null || !identityLive(record)) return true; // already stopped/missing
 	const target = record.pid;
 
 	const escalate = async (signal: NodeJS.Signals, budgetMs: number): Promise<boolean> => {
@@ -545,7 +434,7 @@ async function stopAndProve(stateDir: string, generation: number): Promise<boole
 		const deadline = Date.now() + budgetMs;
 		while (Date.now() < deadline) {
 			const now = readLaunchRecord(stateDir);
-			if (!identityLive(stateDir, now)) return true;
+			if (!identityLive(now)) return true;
 			await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
 		}
 		return false;
@@ -620,7 +509,7 @@ async function opEnsureRunning(request: ProviderRequest): Promise<ProviderRespon
 
 	try {
 		const existing = readLaunchRecord(stateDir);
-		if (existing !== null && identityLive(stateDir, existing)) {
+		if (existing !== null && identityLive(existing)) {
 			if (existing.generation !== generation) {
 				return err(
 					"conflict",
@@ -636,7 +525,7 @@ async function opEnsureRunning(request: ProviderRequest): Promise<ProviderRespon
 
 		// Stale record from a dead or different generation: replace it.
 		if (existing !== null && existing.generation !== generation) {
-			rmSync(join(stateDir, PID_FILE), { force: true });
+			rmSync(join(stateDir, BWRAP_PID_FILE), { force: true });
 		}
 		rmSync(join(stateDir, SUPERVISE_ERR_FILE), { force: true });
 
@@ -683,7 +572,7 @@ async function opEnsureRunning(request: ProviderRequest): Promise<ProviderRespon
 function opInspect(request: ProviderRequest): ProviderResponse {
 	const { stateDir, workspaceId, generation } = request;
 	const record = readLaunchRecord(stateDir);
-	if (record !== null && identityLive(stateDir, record)) {
+	if (record !== null && identityLive(record)) {
 		return ok(handleFor(workspaceId, generation, record), "running", {
 			pid: record.pid,
 			startedAt: record.startedAt,
@@ -697,7 +586,7 @@ async function opStop(request: ProviderRequest): Promise<ProviderResponse> {
 	const { stateDir, workspaceId, generation } = request;
 	const record = readLaunchRecord(stateDir);
 	const handle = handleFor(workspaceId, generation, record);
-	if (!identityLive(stateDir, record)) return ok(handle, "stopped"); // idempotent
+	if (!identityLive(record)) return ok(handle, "stopped"); // idempotent
 	if (!(await stopAndProve(stateDir, generation))) {
 		return err("conflict", "could not prove the generation terminated", false);
 	}
@@ -710,11 +599,7 @@ async function opDelete(request: ProviderRequest): Promise<ProviderResponse> {
 	if (!existsSync(stateDir)) return ok(handle, "missing"); // idempotent
 
 	const record = readLaunchRecord(stateDir);
-	if (
-		record !== null &&
-		identityLive(stateDir, record) &&
-		!(await stopAndProve(stateDir, generation))
-	) {
+	if (record !== null && identityLive(record) && !(await stopAndProve(stateDir, generation))) {
 		return err("conflict", "delete: could not prove the generation terminated", false);
 	}
 	rmSync(stateDir, { recursive: true, force: true });
