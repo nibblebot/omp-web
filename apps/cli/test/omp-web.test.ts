@@ -27,6 +27,10 @@ describe("classifyCommand", () => {
 		[["ui", "--control-port", "4722", "--no-open"], "fleet"],
 	];
 
+	test("log-relay (the fleet's internal capped log relay) routes to itself", () => {
+		expect(classifyCommand(["log-relay", "/tmp/daemon.log"])).toBe("log-relay");
+	});
+
 	test("routes argv to its target", () => {
 		for (const [argv, target] of routes) {
 			expect(classifyCommand(argv)).toBe(target);

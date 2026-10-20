@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
-import { defaultDenyRoots, defaultRuntimeLaunch } from "../runtime-launch";
+import { defaultDenyRoots, defaultRuntimeLaunch, logRelayLaunch } from "../runtime-launch";
 import { buildBwrapArgv, DeniedBindError, type BwrapArgsInput } from "#lib/runtime/bwrap-args";
 import type { ProviderProfile } from "#lib/runtime/provider-protocol";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
@@ -97,6 +97,17 @@ describe("defaultRuntimeLaunch scratch layouts", () => {
 	test("installed provider bundle launches cli.js with the session subcommand", () => {
 		const { root, moduleDir } = layout("bundle");
 		const entry = file(join(root, "dist-bundle", "cli.js"));
+		expect(defaultRuntimeLaunch({}, moduleDir)).toEqual({
+			entry,
+			bin: process.execPath,
+			args: ["session"],
+		});
+	});
+
+	test("the installed fleet bundle (running as cli.js) launches itself with the session subcommand", () => {
+		const root = realpathSync(tempDir("fleet-runtime-launch-"));
+		const moduleDir = join(root, "dist-bundle");
+		const entry = file(join(moduleDir, "cli.js"));
 		expect(defaultRuntimeLaunch({}, moduleDir)).toEqual({
 			entry,
 			bin: process.execPath,
@@ -299,3 +310,20 @@ for (const kind of ["source", "bundle"] as const) {
 		});
 	});
 }
+
+describe("logRelayLaunch", () => {
+	test("source tree runs the CLI entry, an installed fleet bundle runs itself", () => {
+		const source = layout("source");
+		const cliSource = file(join(source.root, "apps", "cli", "omp-web.ts"));
+		expect(logRelayLaunch({}, source.moduleDir)).toEqual({
+			bin: process.execPath,
+			args: [cliSource, "log-relay"],
+		});
+		const root = realpathSync(tempDir("fleet-log-relay-"));
+		const bundle = file(join(root, "dist-bundle", "cli.js"));
+		expect(logRelayLaunch({ OMP_RUNTIME_BIN: "/opt/bun" }, join(root, "dist-bundle"))).toEqual({
+			bin: "/opt/bun",
+			args: [bundle, "log-relay"],
+		});
+	});
+});

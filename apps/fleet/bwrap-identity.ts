@@ -81,6 +81,19 @@ export function procIdentity(pid: number): { startTime: number; state: string } 
 	}
 }
 
+/** Process group id of a pid (`/proc/<pid>/stat` field 5), or null when gone. */
+export function processGroupOf(pid: number): number | null {
+	try {
+		const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+		const close = stat.lastIndexOf(") ");
+		if (close < 0) return null;
+		const group = Number(stat.slice(close + 2).split(" ")[2]);
+		return Number.isSafeInteger(group) && group > 0 ? group : null;
+	} catch {
+		return null;
+	}
+}
+
 /** Walk descendants of `root` looking for a cmdline containing `token`. */
 export function findTokenPid(root: number, token: string): number | null {
 	const seen = new Set<number>([root]);

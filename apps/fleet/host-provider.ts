@@ -26,6 +26,7 @@ import type { ProviderErrorResponse, ProviderOkResponse } from "#lib/runtime/pro
 import type { RegistryEntry } from "./registry";
 import type { RuntimeProvider } from "./runtime-provider";
 import { sessionLiveness } from "./session-liveness";
+import { shellQuote } from "./spawn-parse";
 import { removeSessionLog, rotateSessionLog } from "./session-log";
 
 type Child = Subprocess<"pipe", number, number>;
@@ -116,12 +117,18 @@ export interface DetachedLaunch {
 	stdin: string;
 	/** The file the child appends its combined stdout and stderr to; rotated above the cap on each launch. */
 	logPath: string;
+	/**
+	 * Keep the log under the cap for the whole run: the child's output goes through this relay
+	 * command (`logPath` is appended to its args; see log-relay.ts), which rotates mid-run. The
+	 * child is then a descendant of the launched shell, not the launched process itself.
+	 */
+	relay?: { bin: string; args: readonly string[] };
 }
 
 /**
  * Launch a child detached (its own session and process group, so a terminal
  * Ctrl+C or the fleet's exit never reaches it) with the stdin payload and the
- * log as stdout and stderr. The one process mechanic shared by the host
+ * log as stdout and stderr (or, with `relay`, the child's output piped through it). The one process mechanic shared by the host
  * runtime and the host clone runtime. Throws when the log or the spawn fails.
  */
 export function spawnDetached(launch: DetachedLaunch): Child {
@@ -130,7 +137,18 @@ export function spawnDetached(launch: DetachedLaunch): Child {
 	const logFd = openSync(launch.logPath, "a");
 	let child: Child;
 	try {
-		child = Bun.spawn(launch.argv, {
+		const argv =
+			launch.relay === undefined
+				? launch.argv
+				: [
+						"sh",
+						"-c",
+						// The runtime's stderr joins its stdout; the relay is the pipeline's reader.
+						`"$@" 2>&1 | ${[launch.relay.bin, ...launch.relay.args, launch.logPath].map(shellQuote).join(" ")}`,
+						"sh",
+						...launch.argv,
+					];
+		child = Bun.spawn(argv, {
 			stdin: "pipe",
 			stdout: logFd,
 			stderr: logFd,

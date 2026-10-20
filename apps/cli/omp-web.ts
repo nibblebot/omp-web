@@ -54,6 +54,7 @@ export type DispatchTarget =
 	| "fleet"
 	| "session"
 	| "relay"
+	| "log-relay"
 	| "update"
 	| "version"
 	| "help"
@@ -68,6 +69,7 @@ export function classifyCommand(argv: string[]): DispatchTarget {
 	if (cmd === "--help" || cmd === "-h" || cmd === "help") return "help";
 	if (cmd === "session") return "session";
 	if (cmd === "relay") return "relay";
+	if (cmd === "log-relay") return "log-relay";
 	if (cmd === "update") return "update";
 	if (cmd === undefined || cmd === "" || cmd.startsWith("-") || FLEET_SUBCOMMANDS[cmd])
 		return "fleet";
@@ -132,6 +134,14 @@ if (import.meta.main) {
 			// Dynamic like fleet/update: the relay graph loads only when selected.
 			const { main } = await import("./relay");
 			process.exit(await main(argv.slice(1)));
+			break;
+		}
+		case "log-relay": {
+			// Internal: the capped log relay the fleet's host clone runtime launches beside
+			// the installed bundle (apps/fleet/log-relay.ts). Not in the usage text.
+			const { runLogRelay } = await import("../fleet/log-relay");
+			await runLogRelay(argv[1] ?? "");
+			process.exit(0);
 			break;
 		}
 		case "session": {

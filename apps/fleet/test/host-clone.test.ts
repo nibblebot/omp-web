@@ -23,12 +23,14 @@ import {
 	mkdirSync,
 	readFileSync,
 	readdirSync,
+	statSync,
 	writeFileSync,
 	chmodSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ProviderErrorResponse, ProviderOkResponse } from "#lib/runtime/provider-protocol";
 import { hostCloneRuntimeProvider } from "../host-clone-provider";
+import { SESSION_LOG_MAX_BYTES } from "../session-log";
 import type { ExecutableRequest } from "../runtime-provider";
 import type { FleetServer } from "../server";
 import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
@@ -512,20 +514,86 @@ describe("host clone provider ops", () => {
 	test("a runtime that exits after launch inspects as stopped, never running", async () => {
 		const root = scratch();
 		const exits = join(root, "exits.js");
-		writeFileSync(exits, 'console.error("runtime says goodbye"); process.exit(3);\n');
+		// Lives long enough to be launched, then exits on its own.
+		writeFileSync(
+			exits,
+			'console.error("runtime says goodbye"); setTimeout(() => process.exit(3), 800);\n',
+		);
 		const previous = process.env.OMP_RUNTIME_ENTRY;
 		process.env.OMP_RUNTIME_ENTRY = exits;
 		try {
 			okOf(await run(requestFor(root, "ensure-running")));
 			expect(await observedAfterExit(root)).toBe("stopped");
-			// The runtime's own output is in the clone's daemon log.
-			expect(readFileSync(join(root, "state", "daemon.log"), "utf8")).toContain(
-				"runtime says goodbye",
+			// The runtime's own output reaches the clone's daemon log through the relay.
+			const log = join(root, "state", "daemon.log");
+			await waitFor(
+				() => existsSync(log) && readFileSync(log, "utf8").includes("runtime says goodbye"),
+				10_000,
+				"the runtime's output in daemon.log",
 			);
 		} finally {
 			process.env.OMP_RUNTIME_ENTRY = previous;
 		}
 	}, 30_000);
+
+	test("a runtime that dies during launch fails the start with its own output", async () => {
+		const root = scratch();
+		const dies = join(root, "dies.js");
+		writeFileSync(dies, 'console.error("boom from the runtime"); process.exit(3);\n');
+		const previous = process.env.OMP_RUNTIME_ENTRY;
+		process.env.OMP_RUNTIME_ENTRY = dies;
+		try {
+			const response = await run(requestFor(root, "ensure-running"));
+			expect(response).toMatchObject({
+				ok: false,
+				error: { code: "unavailable", retryable: true },
+			});
+			if (!response.ok) expect(response.error.message).toContain("boom from the runtime");
+			expect(existsSync(join(root, "state", "provider.pid.json"))).toBe(false);
+		} finally {
+			process.env.OMP_RUNTIME_ENTRY = previous;
+		}
+	}, 30_000);
+
+	test("daemon.log stays under the cap for the whole run, rotating to daemon.log.1", async () => {
+		const root = scratch();
+		const loud = join(root, "loud.js");
+		// Writes ~3.5 MiB across stdout and stderr in 64 KiB lines, then idles until stopped.
+		writeFileSync(
+			loud,
+			`const line = "x".repeat(65535) + "\\n";
+for (let i = 0; i < 56; i++) (i % 2 === 0 ? process.stdout : process.stderr).write(line);
+process.stdout.write("LAST-LINE\\n");
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+		);
+		const previous = process.env.OMP_RUNTIME_ENTRY;
+		process.env.OMP_RUNTIME_ENTRY = loud;
+		const log = join(root, "state", "daemon.log");
+		const size = (path: string): number => (existsSync(path) ? statSync(path).size : 0);
+		try {
+			okOf(await run(requestFor(root, "ensure-running")));
+			await waitFor(
+				() => existsSync(log) && readFileSync(log, "utf8").includes("LAST-LINE"),
+				15_000,
+				"the runtime's last line in daemon.log",
+			);
+			// The runtime is still running, yet the live file is bounded and the older output rotated.
+			expect(okOf(await run(requestFor(root, "inspect"))).observed).toBe("running");
+			expect(size(log)).toBeLessThanOrEqual(SESSION_LOG_MAX_BYTES);
+			expect(size(`${log}.1`)).toBeGreaterThan(0);
+			expect(size(`${log}.1`)).toBeLessThanOrEqual(SESSION_LOG_MAX_BYTES);
+			// Both generations together hold less than the runtime wrote (it wrote ~3.5 MiB).
+			expect(size(log) + size(`${log}.1`)).toBeLessThanOrEqual(2 * SESSION_LOG_MAX_BYTES);
+		} finally {
+			process.env.OMP_RUNTIME_ENTRY = previous;
+			await run(requestFor(root, "stop"));
+		}
+		// Stopping proves the runtime gone and lets the relay drain and exit.
+		expect(okOf(await run(requestFor(root, "inspect"))).observed).toBe("stopped");
+		expect(size(log)).toBeLessThanOrEqual(SESSION_LOG_MAX_BYTES);
+	}, 60_000);
 
 	test("a launch that cannot spawn fails typed and records nothing", async () => {
 		const root = scratch();

@@ -14,13 +14,16 @@
  * directory is the volume's checkout.
  *
  * Process mechanics are the host runtime's (host-provider.ts `spawnDetached`:
- * detached child, stdin payload, rotated log). Identity is the bwrap
- * provider's (bwrap-identity.ts): the launch token rides the child's argv and
- * the pidfile `<stateDir>/provider.pid.json` records the pid and its start
- * time, so liveness and stop prove a generation terminated by identity, never
- * by a reusable pid, and survive a fleet restart (the child is detached and
- * outlives it). Output goes to `<stateDir>/daemon.log`, rotated above the cap
- * at each launch.
+ * detached child, stdin payload). Identity is the bwrap provider's
+ * (bwrap-identity.ts): the launch token rides the runtime's argv and the
+ * pidfile `<stateDir>/provider.pid.json` records its pid and start time, so
+ * liveness and stop prove a generation terminated by identity, never by a
+ * reusable pid, and survive a fleet restart (the runtime is detached and
+ * outlives it). Output goes to `<stateDir>/daemon.log` through a detached
+ * log relay (log-relay.ts, the shared SessionLog writer) that keeps the file
+ * under the 1 MiB cap for the whole run, rotating to `daemon.log.1`, as the
+ * bwrap supervisor does. The runtime is therefore a descendant of the launched
+ * shell, found by its token.
  */
 
 import { randomUUID } from "node:crypto";
@@ -40,7 +43,9 @@ import {
 } from "#lib/runtime/provider-protocol";
 import {
 	BWRAP_PID_FILE,
+	findTokenPid,
 	identityLive,
+	processGroupOf,
 	procIdentity,
 	readLaunchRecord,
 	stopAndProve,
@@ -48,7 +53,7 @@ import {
 } from "./bwrap-identity";
 import { signalProcessGroup, spawnDetached } from "./host-provider";
 import type { ExecutableRequest, RuntimeProvider } from "./runtime-provider";
-import { cloneRuntimeLaunch } from "./runtime-launch";
+import { cloneRuntimeLaunch, logRelayLaunch } from "./runtime-launch";
 import { PROVIDER_DAEMON_LOG, readSessionLogTail, rotateSessionLog } from "./session-log";
 
 /** How long ensure-running waits for the new child's argv to carry its launch token. */
@@ -169,9 +174,9 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 	// A launch failure quotes only this run's output: rotate now, then remember where it starts.
 	rotateSessionLog(logPath);
 	const logStart = logSize(logPath);
-	let child: Subprocess<"pipe", number, number>;
+	let launcher: Subprocess<"pipe", number, number>;
 	try {
-		child = spawnDetached({
+		launcher = spawnDetached({
 			argv: [
 				runtime.bin,
 				runtime.entry,
@@ -190,40 +195,27 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 			}),
 			stdin: fleetStdin ?? "",
 			logPath,
+			// The runtime can outlive the fleet by days: its log is capped live, not just at launch.
+			relay: logRelayLaunch(),
 		});
 	} catch (cause) {
 		return errResponse("unavailable", `spawn failed: ${String(cause)}`, true);
 	}
-	launched.add(child);
-	void child.exited.finally(() => launched.delete(child));
-	child.unref();
+	launched.add(launcher);
+	void launcher.exited.finally(() => launched.delete(launcher));
+	launcher.unref();
 
-	const identity = procIdentity(child.pid);
-	if (identity === null) {
-		return errResponse(
-			"unavailable",
-			launchFailure("exited before its identity was recorded", logPath, logStart),
-			true,
-		);
-	}
-	const record: LaunchRecord = {
-		pid: child.pid,
-		procStartTime: identity.startTime,
-		generation,
-		workspaceToken,
-		startedAt: Date.now(),
-	};
-	writeJsonAtomic(join(stateDir, BWRAP_PID_FILE), record);
-
-	// Live means the argv carries the token (the identity proof), not merely that the pid exists.
+	// The launched process is the shell holding the runtime and its log relay; the runtime is
+	// the descendant whose argv carries the launch token, and that is the identity recorded.
 	const deadline = Date.now() + LIVE_WAIT_MS;
-	while (!identityLive(record)) {
-		if (child.exitCode !== null || Date.now() >= deadline) {
+	let pid = findTokenPid(launcher.pid, workspaceToken);
+	while (pid === null) {
+		if (launcher.exitCode !== null || Date.now() >= deadline) {
 			return errResponse(
 				"unavailable",
-				launchFailure(
-					child.exitCode !== null
-						? `exited with code ${child.exitCode} before it became live`
+				await launchFailure(
+					launcher.exitCode !== null
+						? `exited with code ${launcher.exitCode} before it became live`
 						: "did not become live in time",
 					logPath,
 					logStart,
@@ -232,7 +224,24 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 			);
 		}
 		await Bun.sleep(LIVE_POLL_MS);
+		pid = findTokenPid(launcher.pid, workspaceToken);
 	}
+	const identity = procIdentity(pid);
+	if (identity === null) {
+		return errResponse(
+			"unavailable",
+			await launchFailure("exited before its identity was recorded", logPath, logStart),
+			true,
+		);
+	}
+	const record: LaunchRecord = {
+		pid,
+		procStartTime: identity.startTime,
+		generation,
+		workspaceToken,
+		startedAt: Date.now(),
+	};
+	writeJsonAtomic(join(stateDir, BWRAP_PID_FILE), record);
 	return okResponse(handleFor(workspaceId, generation, record), "running", record);
 }
 
@@ -244,11 +253,28 @@ function logSize(path: string): number {
 	}
 }
 
-/** The failure reason with the tail of this run's log (from `logStart`), which holds the runtime's own error. */
-function launchFailure(reason: string, logPath: string, logStart: number): string {
+/**
+ * The failure reason with the tail of this run's log (from `logStart`), which holds the runtime's
+ * own error. The relay writes the log, so wait briefly for it to drain what the runtime printed.
+ */
+async function launchFailure(reason: string, logPath: string, logStart: number): Promise<string> {
+	for (let settled = 0, last = -1; settled < 2 && last !== logSize(logPath);) {
+		last = logSize(logPath);
+		await Bun.sleep(100);
+		settled = last === logSize(logPath) ? settled + 1 : 0;
+	}
 	const runBytes = Math.max(0, logSize(logPath) - logStart);
 	const tail = readSessionLogTail(logPath, Math.min(runBytes, FAILURE_TAIL_BYTES)).trim();
 	return tail === "" ? `session runtime ${reason}` : `session runtime ${reason}: ${tail}`;
+}
+
+/**
+ * Stop signals the process group the runtime shares with its launcher shell and log relay (the
+ * relay ignores the signal and drains the runtime's last output to EOF); a pid that is gone
+ * throws, which the proof treats as terminated.
+ */
+function signalRuntimeGroup(pid: number, signal: NodeJS.Signals): void {
+	signalProcessGroup(processGroupOf(pid) ?? pid, signal);
 }
 
 function inspect(request: ExecutableRequest): Response {
@@ -268,7 +294,7 @@ async function stop(request: ExecutableRequest): Promise<Response> {
 	const record = readLaunchRecord(stateDir);
 	const handle = handleFor(workspaceId, generation, record);
 	if (!identityLive(record)) return okResponse(handle, "stopped"); // idempotent
-	if (!(await stopAndProve(stateDir, signalProcessGroup))) {
+	if (!(await stopAndProve(stateDir, signalRuntimeGroup))) {
 		return errResponse("conflict", "could not prove the generation terminated", false);
 	}
 	return okResponse(handle, "stopped");
@@ -282,7 +308,7 @@ async function deleteRuntime(request: ExecutableRequest): Promise<Response> {
 	if (
 		record !== null &&
 		identityLive(record) &&
-		!(await stopAndProve(stateDir, signalProcessGroup))
+		!(await stopAndProve(stateDir, signalRuntimeGroup))
 	) {
 		return errResponse("conflict", "delete: could not prove the generation terminated", false);
 	}
