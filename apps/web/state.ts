@@ -86,6 +86,7 @@ import {
 	setConnected,
 	setTransportToken,
 	settleAttachResult,
+	settleAttachmentState,
 	settleCallResult,
 } from "./store/transport";
 import { createReviewState, resetReviewState } from "./store/slices/review";
@@ -1189,7 +1190,7 @@ export function connect(): void {
 			// parked and idle workers reappear without waiting for a lifecycle frame.
 			requestRosterRefresh();
 			refreshSettings();
-			// Waiters for this frame (untilAttachedFrame) post after the sweep above.
+			// Watchers for this attachment (watchAttachment) wait for its first `state` frame.
 			settleAttachedFrame(frame.sessionId);
 			return;
 		}
@@ -1240,6 +1241,8 @@ export function connect(): void {
 				applyState(frame.state, frame.stats);
 				// The attachment's scope is set: decide the parked mutations.
 				resumeParkedMutations(state.sessionScope);
+				// Watchers whose `attached` frame landed post after the scope is set.
+				settleAttachmentState();
 				break;
 			case "ready":
 				// R8: the boot session's readiness gate cleared; the composer

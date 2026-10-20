@@ -11,7 +11,7 @@ import {
 	isLatestAttachIntent,
 	isSessionSwitchSupersession,
 	postCommand,
-	untilAttachedFrame,
+	watchAttachment,
 } from "./transport";
 import { reportError } from "./toasts";
 
@@ -162,49 +162,69 @@ export function resumeDaemonSession(daemonId: string, sessionFile: string): Prom
  * Start a fresh session in a daemon's worktree (the roster row's "+" under
  * its session switcher). Asleep daemons wake first (respawn --resume
  * lastSessionFile, as a row click does); the daemon attaches when it is not
- * already the live attached session; then, once the attached frame installs
- * it, the session runs the same newSession path /new uses (collab-share
- * confirm included). Never retried: a duplicate would start two sessions.
+ * already the live attached session; then, once THIS attach's `attached` frame
+ * has installed it and the attachment's first `state` frame has set the new
+ * scope (see watchAttachment), the session runs the same newSession path /new
+ * uses (collab-share confirm included). A wake keeps the view on a stopped
+ * current row, so currentSessionId alone never proves the new attachment is
+ * live: posting earlier would carry the previous generation's scope and be
+ * rejected as stale. Never retried: a duplicate would start two sessions.
  * When the user moves to another session meanwhile, the attempt is dropped
  * silently, never banners.
  */
 export async function startDaemonNewSession(daemonId: string): Promise<void> {
 	const asleep = state.daemonRoster.find((d) => d.daemonId === daemonId)?.status === "asleep";
 	if (asleep || state.currentSessionId !== daemonId) {
+		// Registered before the attach is posted: a fast frame is never missed.
+		const watch = watchAttachment(daemonId);
 		try {
 			// A superseded attach resolves with whichever session is current; a
 			// refused wake resolves null (already reported): nothing to start on.
 			const attach = asleep
 				? wakeAndAttach(daemonId, spawnResume(daemonId))
 				: attachSession(daemonId);
-			if ((await attach) !== daemonId) return;
+			if ((await attach) !== daemonId) {
+				watch.cancel();
+				return;
+			}
 		} catch (err) {
+			watch.cancel();
 			reportError(err);
 			return;
 		}
+		if (!(await watch.done())) return;
 	}
-	if (!(await untilAttachedFrame(daemonId))) return;
 	await startNewSession().catch(reportError);
 }
 
 /**
  * Attach `daemonId` for a panel that opens once the daemon is live (Open
- * review). Resolves true when the panel should open. A superseded attach is
- * never an error: when another session took over meanwhile, the attach only
- * still counts if THIS daemon is now the attached session (the same rule as
- * switchSessionRetry); otherwise the user has moved on and the panel stays closed.
+ * review). Resolves true when the panel should open, which is only once the
+ * attachment's first `state` frame has set the new scope (see watchAttachment):
+ * the panel's reads would otherwise carry the previous attachment's scope and
+ * be rejected as stale. A superseded attach is never an error: when another
+ * session took over meanwhile, the attach only still counts if THIS daemon is
+ * now the attached session (the same rule as switchSessionRetry); otherwise the
+ * user has moved on and the panel stays closed.
  */
-export function attachForPanel(daemonId: string): Promise<boolean> {
-	return attachSession(daemonId).then(
-		() => true,
-		(err: unknown) => {
-			if (!isSessionSwitchSupersession(err)) {
-				reportError(err);
-				return false;
-			}
-			return state.currentSessionId === daemonId;
-		},
-	);
+export async function attachForPanel(daemonId: string): Promise<boolean> {
+	const watch = watchAttachment(daemonId);
+	let attached: string;
+	try {
+		attached = await attachSession(daemonId);
+	} catch (err) {
+		watch.cancel();
+		if (!isSessionSwitchSupersession(err)) {
+			reportError(err);
+			return false;
+		}
+		return state.currentSessionId === daemonId;
+	}
+	if (attached !== daemonId) {
+		watch.cancel();
+		return state.currentSessionId === daemonId;
+	}
+	return watch.done();
 }
 
 /**

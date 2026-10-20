@@ -455,36 +455,74 @@ export function rejectPendingAttach(err: Error): void {
 	settleAttachedFrame("");
 }
 
-/** Waiters for the proxied `attached` frame (see untilAttachedFrame). */
-const attachedFrameWaiters = new Set<(sessionId: string) => void>();
-
-/**
- * Resolves true once `daemonId` is the attached session. The attach_result
- * answer can land before the proxied `attached` frame, and a call posted in
- * that gap is swept by the frame's "session switched" rejection after the
- * daemon already ran it; a non-idempotent call (newSession) waits here
- * instead of retrying. Resolves false when an `attached` frame for another
- * session lands first, the stream tears down, or DAEMON_TIMEOUT_MS passes.
- */
-export function untilAttachedFrame(daemonId: string): Promise<boolean> {
-	if (state.currentSessionId === daemonId) return Promise.resolve(true);
-	const { promise, resolve } = Promise.withResolvers<boolean>();
-	const settle = (sessionId: string) => {
-		attachedFrameWaiters.delete(settle);
-		clearTimeout(timer);
-		resolve(sessionId !== "" && sessionId === daemonId);
-	};
-	const timer = window.setTimeout(() => settle(""), DAEMON_TIMEOUT_MS);
-	attachedFrameWaiters.add(settle);
-	return promise;
+/** An attachment watch (see watchAttachment). */
+interface AttachmentWatch {
+	daemonId: string;
+	/** The proxied `attached` frame for the daemon has landed. */
+	attached: boolean;
+	settle: (ready: boolean) => void;
 }
 
-/** Settle every attached-frame waiter with the session the frame installed
- *  ("" = stream teardown). Called by state.ts's `attached` handler after it
- *  updates currentSessionId. */
+const attachmentWatches = new Set<AttachmentWatch>();
+
+/**
+ * Watch for the NEXT attachment of `daemonId` to become usable. `done()`
+ * resolves true once the proxied `attached` frame for the daemon has landed
+ * AND that attachment's first `state` frame has set `state.sessionScope`, so a
+ * call posted afterwards carries the new generation's scope. The attach_result
+ * answer can land before both frames, and a call posted in that gap carries
+ * the previous attachment's scope (a re-attach of the same daemon, such as a
+ * wake after a UI stop, keeps the view) or is swept by the frame's "session
+ * switched" rejection after the daemon already ran it; a non-idempotent call
+ * (newSession) waits here instead of retrying. Register the watch BEFORE the
+ * attach is posted so a fast frame is not missed. `done()` arms the
+ * DAEMON_TIMEOUT_MS deadline, so a slow wake before it never counts against
+ * the wait; it resolves false when an `attached` frame for another session
+ * lands first, the stream tears down, the deadline passes, or `cancel()` ran.
+ */
+export function watchAttachment(daemonId: string): {
+	done: () => Promise<boolean>;
+	cancel: () => void;
+} {
+	const { promise, resolve } = Promise.withResolvers<boolean>();
+	let timer = 0;
+	const watch: AttachmentWatch = {
+		daemonId,
+		attached: false,
+		settle: (ready) => {
+			attachmentWatches.delete(watch);
+			clearTimeout(timer);
+			resolve(ready);
+		},
+	};
+	attachmentWatches.add(watch);
+	return {
+		done: () => {
+			if (attachmentWatches.has(watch)) {
+				clearTimeout(timer);
+				timer = window.setTimeout(() => watch.settle(false), DAEMON_TIMEOUT_MS);
+			}
+			return promise;
+		},
+		cancel: () => watch.settle(false),
+	};
+}
+
+/** An `attached` frame landed (state.ts, after it updated currentSessionId and
+ *  cleared the scope): a watch for another session gives up, a watch for this
+ *  one now waits for the attachment's first `state` frame. "" = stream teardown,
+ *  which ends every watch. */
 export function settleAttachedFrame(sessionId: string): void {
-	// Each waiter deletes only itself, which Set iteration tolerates.
-	for (const settle of attachedFrameWaiters) settle(sessionId);
+	// Each watch deletes only itself, which Set iteration tolerates.
+	for (const watch of attachmentWatches) {
+		if (sessionId !== "" && sessionId === watch.daemonId) watch.attached = true;
+		else watch.settle(false);
+	}
+}
+
+/** A `state` frame was applied (state.ts, after the scope was set): each watch whose `attached` frame has landed is ready. */
+export function settleAttachmentState(): void {
+	for (const watch of attachmentWatches) if (watch.attached) watch.settle(true);
 }
 
 /**

@@ -3193,6 +3193,15 @@ describe("roster session dropdown", () => {
 		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
 	});
 
+	/** A state frame stamping `daemonId`'s attachment scope for `generation`. */
+	const stateFrame = (daemonId: string, generation: string): ServerFrame => ({
+		type: "state",
+		state: {
+			sessionId: daemonId,
+			sessionScope: { workspaceId: "w1", sessionId: daemonId, generation },
+		} as WebSessionState,
+	});
+
 	test("startDaemonNewSession wakes an asleep daemon, attaches, then starts a new session", async () => {
 		// The extra ticks the wake POST adds let the settings pull's fetch resolve;
 		// the default stub has no body reader for it.
@@ -3217,11 +3226,59 @@ describe("roster session dropdown", () => {
 		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
 		await flushMicrotasks();
 		// The proxied attached frame trails attach_result and would sweep a call
-		// posted now after the daemon ran it: newSession waits for the frame.
+		// posted now after the daemon ran it: newSession waits for the frame and
+		// the attachment's first state frame.
 		expect(newSessionCalls()).toHaveLength(0);
 		dispatch(attached("d9"));
 		await flushMicrotasks();
+		expect(newSessionCalls()).toHaveLength(0);
+		dispatch(stateFrame("d9", "1"));
+		await flushMicrotasks();
 		expect(newSessionCalls()).toHaveLength(1);
+		dispatch({ type: "call_result", id: newSessionCalls()[0].id, ok: true, data: null });
+		await started;
+		expect(newSessionCalls()).toHaveLength(1);
+		expect(state.error).toBeNull();
+	});
+
+	test("startDaemonNewSession on a stopped current row posts newSession only under the new attachment's scope", async () => {
+		// A UI stop keeps currentSessionId and the old generation's scope on the
+		// stopped daemon. attach_result lands before the proxied attached/state
+		// frames; a newSession posted in that gap carries the old scope and the
+		// session rejects it as stale.
+		setBrowserGlobal("fetch", (async (_input: unknown, init?: RequestInit) => {
+			if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
+			return { ok: true, status: 202, json: async () => ({}), text: async () => "" } as Response;
+		}) as unknown as typeof fetch);
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+		dispatch(attached("d1"));
+		dispatch(stateFrame("d1", "1"));
+		expect(state.sessionScope?.generation).toBe("1");
+		posted.length = 0;
+
+		const started = startDaemonNewSession("d1");
+		await flushWake();
+		expect(postedOf("attach")).toHaveLength(1);
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d1" });
+		await flushMicrotasks();
+		// currentSessionId is already d1 and the scope is still generation 1.
+		expect(newSessionCalls()).toHaveLength(0);
+		dispatch(attached("d1"));
+		await flushMicrotasks();
+		// The new attachment has no scope until its first state frame.
+		expect(newSessionCalls()).toHaveLength(0);
+		dispatch(stateFrame("d1", "2"));
+		await flushMicrotasks();
+		expect(newSessionCalls()).toHaveLength(1);
+		expect(newSessionCalls()[0].scope).toEqual({
+			workspaceId: "w1",
+			sessionId: "d1",
+			generation: "2",
+		});
 		dispatch({ type: "call_result", id: newSessionCalls()[0].id, ok: true, data: null });
 		await started;
 		expect(newSessionCalls()).toHaveLength(1);
