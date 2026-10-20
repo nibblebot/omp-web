@@ -21,9 +21,9 @@ export interface SessionConfig {
 	 */
 	resume?: string;
 	/**
-	 * `--resume` given without `--resume-unwritten`: a missing absolute file is a
-	 * hard failure (exit 78) before bind. Only the flag is strict; the
-	 * OMP_SESSION_RESUME env fallback (clone wake) keeps the lenient boot.
+	 * A resume target (`--resume`, or the `OMP_SESSION_RESUME` env a clone wake
+	 * hands over) without `--resume-unwritten` (flag) / `OMP_SESSION_RESUME_UNWRITTEN=1`
+	 * (env): a missing absolute file is a hard failure (exit 78) before bind.
 	 */
 	resumeStrict: boolean;
 	/** Idle auto-exit (R11); 0 disables. */
@@ -207,7 +207,10 @@ export function parseConfig(argv: string[], fleet?: FleetStdinPayload): SessionC
 		host,
 		token: flag("token") ?? fleet?.token,
 		resume: flag("resume") ?? Bun.env.OMP_SESSION_RESUME,
-		resumeStrict: flag("resume") !== undefined && !flags.has("resume-unwritten"),
+		resumeStrict:
+			flag("resume") !== undefined
+				? !flags.has("resume-unwritten")
+				: Bun.env.OMP_SESSION_RESUME !== undefined && Bun.env.OMP_SESSION_RESUME_UNWRITTEN !== "1",
 		idleTimeoutMs,
 		name: flag("name") ?? Bun.env.OMP_SESSION_NAME ?? path.basename(cwd),
 		readyDeferMs: Math.max(0, Number(Bun.env.OMP_SESSION_TEST_READY_DELAY_MS ?? 0) || 0),

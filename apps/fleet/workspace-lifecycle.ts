@@ -57,7 +57,11 @@ import type { Registry, RegistryEntry, WorkspaceRecord, DeletionGateError } from
 import { PAIR_LOSS_GRACE_MS } from "./registry";
 import { DEFAULT_RESTART_POLICY, RestartBudget, type RestartPolicy } from "./restart-policy";
 import type { FleetConfig } from "./config";
-import { PROVIDER_CAPABILITIES, type ProviderCapabilities } from "#lib/runtime/provider-protocol";
+import {
+	KUBERNETES_POD_LAYOUT,
+	PROVIDER_CAPABILITIES,
+	type ProviderCapabilities,
+} from "#lib/runtime/provider-protocol";
 import { readCallbackEnv } from "#lib/runtime/provider-callback-env";
 import type { DaemonTransportRegistry } from "./daemon-transport";
 import type { FleetLogStore } from "./log-store";
@@ -277,6 +281,19 @@ function readDirStrict(dir: string): DirEnumeration {
 
 /** A session directory name under the agent sessions dir (the volume walk and provider inventories select by it). */
 const SESSION_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * The sessions-root-relative path of a session file a kubernetes runtime
+ * reported (an in-pod absolute path), or undefined when it is not a normalized
+ * `.jsonl` path under the in-pod agent sessions dir: never hand a runtime an
+ * arbitrary path as its resume target.
+ */
+function podSessionRelpath(file: string | undefined): string | undefined {
+	const prefix = `${KUBERNETES_POD_LAYOUT.sessionsDir}/`;
+	if (file === undefined || !file.startsWith(prefix)) return undefined;
+	const relpath = file.slice(prefix.length);
+	return relpath.endsWith(".jsonl") && isNormalizedPosixRelativePath(relpath) ? relpath : undefined;
+}
 
 /**
  * Walk one volume session dir for regular files (no traversal, no symlinks),
@@ -710,14 +727,19 @@ export class WorkspaceLifecycle {
 	 *
 	 * P8.9 wake resume: `resumeSessionId` names the session this wake
 	 * should boot into (the edge pre-validates it against the fleet store
-	 * listing). When given, the wake materializes that session's cold/
-	 * missing stored transcripts into the volume and hands the daemon the
-	 * resolved main-file path as OMP_SESSION_RESUME (bwrap volumes only:
-	 * the sandbox sees the host path). When ABSENT the wake resumes the
-	 * newest session it can see (volume ∪ store), so a stopped clone wake
-	 * continues its last session instead of booting fresh; a never-started
-	 * clone (no sessions anywhere) still boots fresh. An EXPLICIT id that
-	 * exists nowhere is a typed `unavailable`, never a silent fresh boot.
+	 * listing). Fleet-visible volumes (bwrap): the wake materializes that
+	 * session's cold/missing stored transcripts into the volume and hands the
+	 * daemon the resolved main-file path as OMP_SESSION_RESUME (the sandbox
+	 * sees the host path). Volumes the fleet cannot read (kubernetes): the
+	 * hint is an in-pod path from the session's own report
+	 * (`lastSessionFile`) or the store lineage, and the pod validates it at
+	 * boot (exit 78 when missing). When ABSENT the wake resumes the newest
+	 * session it can see (volume ∪ store; for kubernetes the recorded
+	 * `lastSessionFile`, else the newest stored session), so a stopped clone
+	 * wake continues its last session instead of booting fresh; a
+	 * never-started clone (no sessions anywhere) still boots fresh. An
+	 * EXPLICIT id that exists nowhere is a typed `unavailable`, never a
+	 * silent fresh boot.
 	 */
 	async ensureCloneRunning(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void> {
 		await this.#serialized(daemonId, () => this.#ensureRunning(daemonId, opts));
@@ -1167,14 +1189,14 @@ export class WorkspaceLifecycle {
 		const reattached = reuseToken !== undefined && generation === currentGen;
 
 		// P8.9 wake resume: when this wake is spawning a NEW daemon process
-		// (not the reattach path), compute the resume target and materialize
-		// cold/missing transcripts into the volume BEFORE the provider runs.
-		// The resume hint rides the callback-env handoff
+		// (not the reattach path), compute the resume target (bwrap: also
+		// materialize cold/missing transcripts into the volume BEFORE the
+		// provider runs). The resume hint rides the callback-env handoff
 		// (OMP_SESSION_RESUME, allowlisted by the providers) so the daemon's
-		// existing boot switchSession(config.resume) resumes it. Only bwrap
-		// volumes: the sandbox binds the volume at the HOST path, so the
-		// fleet-resolved path is valid in-sandbox; k8s pod paths differ and
-		// its PVC is retained across stop (warm), so no fleet-side hint.
+		// existing boot switchSession(config.resume) resumes it. Fleet-visible
+		// volumes (bwrap) get the host path the sandbox sees; kubernetes gets
+		// the in-pod path (the provider injects the handoff as pod env) and the
+		// pod validates it at boot.
 		// Computed BEFORE enrollment persists so a typed failure (an explicit
 		// id that exists nowhere) never leaves a dangling enrollment behind.
 		const resumeFile =
@@ -1985,13 +2007,13 @@ export class WorkspaceLifecycle {
 	}
 
 	/**
-	 * P8.9 wake resume: compute the resume target for a NEW daemon spawn and
-	 * materialize cold/missing transcripts into the volume. Returns the
-	 * absolute main-session file path to hand the daemon via
-	 * OMP_SESSION_RESUME, or undefined when the wake should boot fresh:
+	 * P8.9 wake resume: compute the resume target for a NEW daemon spawn.
+	 * Returns the env hint to hand the daemon (OMP_SESSION_RESUME, plus
+	 * OMP_SESSION_RESUME_UNWRITTEN when the file may not exist yet), or
+	 * undefined when the wake should boot fresh. Fleet-visible volumes
+	 * materialize cold/missing transcripts first; volumes the fleet cannot
+	 * read resolve an in-pod path instead (#resolvePodWakeResume).
 	 *   - never-started clones (no sessions anywhere) → fresh;
-	 *   - k8s volumes (pod paths differ from host; PVC retained across
-	 *     stop) → no fleet-side hint (documented P5-blocked lane);
 	 *   - explicit `resumeSessionId` that exists nowhere → typed
 	 *     `unavailable` (the edge pre-validates against the store, so this
 	 *     only fires on a store/volume disagreement, never silent fresh);
@@ -2005,20 +2027,20 @@ export class WorkspaceLifecycle {
 	async #resolveWakeResume(
 		entry: RegistryEntry,
 		opts: { firstStart: boolean; resumeSessionId?: string },
-	): Promise<{ OMP_SESSION_RESUME: string } | undefined> {
+	): Promise<Record<string, string> | undefined> {
 		const daemonId = entry.daemonId;
 		const { profile } = this.#cloneProfile(entry);
-		// Volumes the fleet cannot read at the same path (pod paths differ
-		// from host; PVC retained across stop) get no fleet-side resume hint.
-		if (!PROVIDER_CAPABILITIES[profile.provider].volumeFleetVisible) return undefined;
-		const store = this.#deps.logStore;
-		const { volumeRoot } = this.#clonePaths(entry);
-		const sessionsDir = join(volumeRoot, ".home", "agent", "sessions");
 		const record = this.#deps.registry.get(daemonId)?.workspace;
 		const everStarted =
 			record?.authorizedGeneration !== undefined ||
 			record?.providerHandle !== undefined ||
 			record?.enrollment !== undefined;
+		if (!PROVIDER_CAPABILITIES[profile.provider].volumeFleetVisible) {
+			return this.#resolvePodWakeResume(daemonId, opts, everStarted);
+		}
+		const store = this.#deps.logStore;
+		const { volumeRoot } = this.#clonePaths(entry);
+		const sessionsDir = join(volumeRoot, ".home", "agent", "sessions");
 
 		const explicit = opts.resumeSessionId;
 		const target =
@@ -2098,6 +2120,70 @@ export class WorkspaceLifecycle {
 			// Absent or already cleared, nothing to do.
 		}
 		return { OMP_SESSION_RESUME: mainFile };
+	}
+
+	/**
+	 * Wake resume for a volume the fleet cannot read (kubernetes). No
+	 * inventory call and no materialization: the hint is the in-pod path the
+	 * session itself reported (`lastSessionFile`, from the `state` frame of its
+	 * last pair-up) or, for a session known only to the fleet store, the
+	 * store's main relpath under the in-pod sessions root. The pod is the
+	 * authority on whether the file exists: the daemon boots strictly and exits
+	 * 78 when it is missing, never booting fresh. A reported file the daemon
+	 * has not confirmed on disk (a never-prompted session) carries
+	 * OMP_SESSION_RESUME_UNWRITTEN, so the daemon adopts the path instead.
+	 * The fleet-side validation is the same as for bwrap's explicit pick: an
+	 * explicit id that is neither the reported session nor in the store is a
+	 * typed `unavailable`. (A helper-pod `list-sessions` would add a pod
+	 * schedule to every Start and conflicts with a terminated pod's corpse.)
+	 */
+	#resolvePodWakeResume(
+		daemonId: string,
+		opts: { firstStart: boolean; resumeSessionId?: string },
+		everStarted: boolean,
+	): Record<string, string> | undefined {
+		const store = this.#deps.logStore;
+		const entry = this.#deps.registry.get(daemonId);
+		const reportedRelpath = podSessionRelpath(entry?.lastSessionFile);
+		const reportedHint =
+			reportedRelpath === undefined
+				? undefined
+				: {
+						OMP_SESSION_RESUME: `${KUBERNETES_POD_LAYOUT.sessionsDir}/${reportedRelpath}`,
+						...(entry?.lastSessionPersisted === true ? {} : { OMP_SESSION_RESUME_UNWRITTEN: "1" }),
+					};
+		const storedHint = (sessionId: string): Record<string, string> | undefined => {
+			const relpath = store?.storedLineage(daemonId, sessionId)?.mainRelpath;
+			return relpath !== undefined && isNormalizedPosixRelativePath(relpath)
+				? { OMP_SESSION_RESUME: `${KUBERNETES_POD_LAYOUT.sessionsDir}/${relpath}` }
+				: undefined;
+		};
+
+		const explicit = opts.resumeSessionId;
+		if (explicit !== undefined) {
+			if (!SESSION_DIR_NAME.test(explicit)) {
+				throw new CloneLifecycleError(
+					"invalid_request",
+					`cannot resume session ${JSON.stringify(explicit)} for ${daemonId}: not a session id`,
+				);
+			}
+			if (reportedRelpath?.split("/").pop() === `${explicit}.jsonl`) return reportedHint;
+			const stored = storedHint(explicit);
+			if (stored !== undefined) return stored;
+			throw new CloneLifecycleError(
+				"unavailable",
+				`cannot resume session ${explicit} for ${daemonId}: it is neither the session the runtime last reported nor in the fleet store`,
+			);
+		}
+		if (opts.firstStart && !everStarted) return undefined; // Never started: nothing to resume.
+		if (reportedHint !== undefined) return reportedHint;
+		// No reported session (the runtime never paired): the newest stored one.
+		let newest: { sessionId: string; mtimeMs: number } | undefined;
+		for (const session of store?.listStoredSessions(daemonId) ?? []) {
+			if (session.mainRelpath === undefined) continue;
+			if (newest === undefined || session.mtimeMs > newest.mtimeMs) newest = session;
+		}
+		return newest === undefined ? undefined : storedHint(newest.sessionId);
 	}
 
 	/** Write the 0600 callback-enrollment handoff BEFORE ensure-running. */

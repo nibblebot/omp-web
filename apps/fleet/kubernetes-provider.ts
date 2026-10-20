@@ -52,6 +52,13 @@
  *   read-only, image's own `find`, fleet-owned labels), reads its log, and
  *   always deletes it. A missing claim is an empty inventory. Uses only
  *   pods get|create|delete plus `get pods/log`.
+ * - Wake resume: the fleet's callback-env handoff may carry the resume hint
+ *   (`OMP_SESSION_RESUME`, an in-pod path under the agent sessions dir, plus
+ *   `OMP_SESSION_RESUME_UNWRITTEN=1` when the file may not be on disk yet);
+ *   like the callback pair it is rendered as pod env, with no additional
+ *   request field. The image entrypoint clears a leftover pidfile lock beside
+ *   it and the daemon exits 78 when the file is missing; the provider never
+ *   lists the volume for a wake.
  *
  * Restart rediscovery: pod/PVC names are deterministic from workspaceId
  * (DNS-1123 sanitize + 8-char sha256 suffix), so after a fleet or provider
@@ -99,6 +106,7 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
+	KUBERNETES_POD_LAYOUT,
 	ProviderProtocolError,
 	type KubernetesProfile,
 	type PreflightCheck,
@@ -144,9 +152,9 @@ const RECORD_FILE = "provider.k8s.json";
 const STATE_LOCK_HOLDER = "kubernetes-provider";
 
 /** In-pod workspace volume layout (frozen "Preparation layout"). */
-const POD_WORKSPACE_ROOT = "/workspace";
-const POD_CHECKOUT_DIR = `${POD_WORKSPACE_ROOT}/.checkout`;
-const POD_HOME_DIR = `${POD_WORKSPACE_ROOT}/.home`;
+const POD_WORKSPACE_ROOT = KUBERNETES_POD_LAYOUT.workspaceRoot;
+const POD_CHECKOUT_DIR = KUBERNETES_POD_LAYOUT.checkoutDir;
+const POD_HOME_DIR = KUBERNETES_POD_LAYOUT.homeDir;
 
 const DEFAULT_STORAGE_SIZE = "10Gi";
 const POD_UID = 10001;

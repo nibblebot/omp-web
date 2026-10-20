@@ -24,9 +24,12 @@ import {
 export const CALLBACK_ENV_FILE = "callback-env.json";
 const CALLBACK_ENV_VERSION = 1;
 
-/** P8.9 wake-resume: a fleet-written absolute main-session path (not a
- *  callback key, but allowlisted and daemon-consumed at boot). */
-const RESUME_ENV_KEY = "OMP_SESSION_RESUME";
+/** Wake-resume hint keys (not callback keys, but allowlisted and daemon-consumed
+ *  at boot): `OMP_SESSION_RESUME` is a fleet-written absolute main-session path
+ *  as the runtime sees it; `OMP_SESSION_RESUME_UNWRITTEN=1` marks it as possibly
+ *  not yet on disk (a never-prompted session), so the daemon adopts the path
+ *  instead of failing when it is missing. Without it a missing file exits 78. */
+const RESUME_ENV_KEYS: readonly string[] = ["OMP_SESSION_RESUME", "OMP_SESSION_RESUME_UNWRITTEN"];
 
 /** Request-size cap for the single JSON request on a provider's stdin. */
 const MAX_REQUEST_BYTES = 1024 * 1024;
@@ -106,7 +109,7 @@ export function readCallbackEnv(
 	for (const [key, entry] of Object.entries(rawEnv as Record<string, unknown>)) {
 		// The callback pair's enrollment keys OR the wake-resume hint, both from
 		// a closed list so nothing outside it can ride the handoff file (P5.5).
-		if (key !== RESUME_ENV_KEY && !FLEET_CALLBACK_ENV_KEYS.includes(key)) {
+		if (!RESUME_ENV_KEYS.includes(key) && !FLEET_CALLBACK_ENV_KEYS.includes(key)) {
 			throw ProviderProtocolError.unavailable(
 				`${CALLBACK_ENV_FILE}.env.${key} is not an allowed callback env key`,
 			);

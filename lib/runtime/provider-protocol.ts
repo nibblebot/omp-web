@@ -147,6 +147,20 @@ export const PROVIDER_CAPABILITIES: Record<ProviderKind, ProviderCapabilities> =
 };
 
 /**
+ * In-pod workspace volume layout of a `kubernetes` runtime (the PVC is mounted
+ * at `workspaceRoot`; the image entrypoint and the provider agree on it). The
+ * fleet cannot read these paths: it uses `sessionsDir` only to recognize and
+ * build the session-file paths a session reports (`lastSessionFile`) and the
+ * wake resume hint handed back to it.
+ */
+export const KUBERNETES_POD_LAYOUT = {
+	workspaceRoot: "/workspace",
+	checkoutDir: "/workspace/.checkout",
+	homeDir: "/workspace/.home",
+	sessionsDir: "/workspace/.home/agent/sessions",
+} as const;
+
+/**
  * A provider profile: one `providerProfiles` entry of the fleet config file,
  * a union keyed on `provider`; per-kind fields live only on their member.
  * fleet/provider-profile.ts validates it and owns the config-file concern.

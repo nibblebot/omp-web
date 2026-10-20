@@ -1000,11 +1000,11 @@ function acquireSessionLock(file: string | undefined): void {
 	}
 }
 
-// A strict --resume names a transcript that must already exist. A missing one is
+// A strict resume target (--resume, or the OMP_SESSION_RESUME env of a clone wake)
+// names a transcript that must already exist. A missing one is
 // refused here, before the lock and before bind, so no listening line prints and
-// no .lock is left behind. --resume-unwritten opts into adopting the path instead
-// (a never-prompted session keeps its identity). Only the flag is strict; the
-// OMP_SESSION_RESUME env fallback stays lenient.
+// no .lock is left behind. --resume-unwritten (env: OMP_SESSION_RESUME_UNWRITTEN=1)
+// opts into adopting the path instead (a never-prompted session keeps its identity).
 if (
 	config.resumeStrict &&
 	config.resume &&

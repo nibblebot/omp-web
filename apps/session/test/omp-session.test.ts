@@ -1341,6 +1341,46 @@ test("--resume-unwritten adopts a missing absolute file as the not-yet-written s
 	}
 }, 60_000);
 
+test("OMP_SESSION_RESUME (a clone wake) of a missing absolute file exits 78 before bind, never booting fresh", async () => {
+	const { dir } = await writeResumeFixture();
+	const missing = path.join(dir, "gone.jsonl");
+	try {
+		const refused = await spawnRefusedSession({ env: { OMP_SESSION_RESUME: missing } });
+		expect(refused.exitCode).toBe(OMP_SESSION_EXIT_RESUME_FAILED);
+		expect(refused.stdout).not.toContain(OMP_SESSION_PREFIX);
+		expect(refused.stderr).toContain(`omp-session: --resume ${missing}: session file not found`);
+		expect(existsSync(`${missing}.lock`)).toBe(false);
+		expect(existsSync(missing)).toBe(false);
+	} finally {
+		await rm(dir, { recursive: true, force: true }).catch(() => {});
+	}
+}, 60_000);
+
+test("OMP_SESSION_RESUME with OMP_SESSION_RESUME_UNWRITTEN=1 adopts a missing file as the not-yet-written session", async () => {
+	const { dir } = await writeResumeFixture();
+	const unwritten = path.join(dir, "unwritten-env.jsonl");
+	try {
+		const proc = await spawnSession({
+			env: {
+				OMP_SESSION_CWD: dir,
+				OMP_SESSION_RESUME: unwritten,
+				OMP_SESSION_RESUME_UNWRITTEN: "1",
+			},
+		});
+		running.push(proc);
+		const events = await openEvents(`http://127.0.0.1:${proc.port}`);
+		try {
+			const hello = await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
+			expect(hello.sessionFile).toBe(unwritten);
+		} finally {
+			events.close();
+		}
+		await proc.cleanup();
+	} finally {
+		await rm(dir, { recursive: true, force: true }).catch(() => {});
+	}
+}, 60_000);
+
 test("a crashed omp-session's stale lock is broken: the same --resume starts again", async () => {
 	const { dir, fixture } = await writeResumeFixture();
 	try {

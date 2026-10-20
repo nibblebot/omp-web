@@ -70,6 +70,17 @@ if [ ! -f "$MARKER" ]; then
 	fi
 fi
 
+# Wake resume: the fleet hands the session file to resume as OMP_SESSION_RESUME
+# (an in-pod path). The provider proves the predecessor pod gone before this
+# pod exists and the claim is ReadWriteOnce, so a pidfile lock beside the
+# resume target is a leftover of an ungracefully terminated pod: its pid is
+# namespace-relative and can match a live process here (even the daemon
+# itself), which would refuse the boot as "locked". Clear it, exactly as the
+# bwrap wake does fleet-side. Only a target inside the agent sessions dir.
+case "${OMP_SESSION_RESUME:-}" in
+"$PI_CODING_AGENT_DIR"/sessions/*) rm -f -- "$OMP_SESSION_RESUME.lock" ;;
+esac
+
 # The daemon is bound to its process cwd (the bwrap provider chdirs into the
 # checkout the same way): run it in the prepared checkout, never the image
 # WORKDIR holding the runtime sources.

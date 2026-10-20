@@ -14,6 +14,10 @@
  * file's tests serially unless `test.concurrent` opts out).
  */
 import { afterAll, describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { KUBERNETES_POD_LAYOUT } from "#lib/runtime/provider-protocol";
+import { CALLBACK_ENV_FILE, readCallbackEnv } from "#lib/runtime/provider-callback-env";
 import type {
 	PreflightCheck,
 	ProviderErrorResponse,
@@ -930,7 +934,7 @@ interface PodSpec {
 
 describe("case R: pod manifests render correctly", () => {
 	/** Exactly case R's raw manifest input; pure, so each case rebuilds it. */
-	function podManifest(): Record<string, unknown> {
+	function podManifest(callbackEnv: Record<string, string> = {}): Record<string, unknown> {
 		return buildPodManifest(
 			{
 				kubectlBin: "kubectl",
@@ -961,7 +965,7 @@ describe("case R: pod manifests render correctly", () => {
 				branch: "main",
 			},
 			"tok-1",
-			{ OMP_SESSION_CALLBACK_URL: "https://fleet.example/cb" },
+			{ OMP_SESSION_CALLBACK_URL: "https://fleet.example/cb", ...callbackEnv },
 		);
 	}
 
@@ -1038,5 +1042,52 @@ describe("case R: pod manifests render correctly", () => {
 			spec.volumes.map((v) => v.name),
 			JSON.stringify(spec.volumes),
 		).toEqual(["workspace", "tmp"]);
+	});
+
+	/** Write the fleet's callback-env.json handoff and read it back as the provider does. */
+	function handoffEnv(env: Record<string, string>): Record<string, string> | null {
+		const dir = tempDir("kube-smoke-handoff-");
+		writeFileSync(
+			join(dir, CALLBACK_ENV_FILE),
+			JSON.stringify({ version: 1, workspaceId: "d1", generation: 1, env }),
+			{ mode: 0o600 },
+		);
+		return readCallbackEnv("kube-smoke", dir, "d1", 1);
+	}
+
+	const PAIR_ENV = {
+		OMP_SESSION_CALLBACK_URL: "https://fleet.example/cb",
+		OMP_SESSION_CALLBACK_WORKSPACE: "d1",
+		OMP_SESSION_CALLBACK_GENERATION: "1",
+		OMP_SESSION_CALLBACK_TOKEN: "tok",
+	};
+	const RESUME_PATH = `${KUBERNETES_POD_LAYOUT.sessionsDir}/--workspace-.checkout--/20260906T1200_sess1.jsonl`;
+
+	test("R11 a wake resume hint in the handoff file reaches the pod env", () => {
+		const env = handoffEnv({ ...PAIR_ENV, OMP_SESSION_RESUME: RESUME_PATH });
+		expect(env?.OMP_SESSION_RESUME).toBe(RESUME_PATH);
+		const rendered = (podManifest(env ?? {}).spec as PodSpec).containers[0].env;
+		expect(rendered.find((e) => e.name === "OMP_SESSION_RESUME")?.value).toBe(RESUME_PATH);
+		expect(rendered.find((e) => e.name === "OMP_SESSION_RESUME_UNWRITTEN")).toBeUndefined();
+	});
+
+	test("R12 the unwritten marker rides with the hint; a first start renders neither", () => {
+		const env = handoffEnv({
+			...PAIR_ENV,
+			OMP_SESSION_RESUME: RESUME_PATH,
+			OMP_SESSION_RESUME_UNWRITTEN: "1",
+		});
+		const rendered = (podManifest(env ?? {}).spec as PodSpec).containers[0].env;
+		expect(rendered.find((e) => e.name === "OMP_SESSION_RESUME_UNWRITTEN")?.value).toBe("1");
+
+		const fresh = (podManifest(handoffEnv(PAIR_ENV) ?? {}).spec as PodSpec).containers[0].env;
+		expect(fresh.map((e) => e.name)).not.toContain("OMP_SESSION_RESUME");
+		expect(fresh.map((e) => e.name)).not.toContain("OMP_SESSION_RESUME_UNWRITTEN");
+	});
+
+	test("R13 the handoff file still refuses env keys outside the closed list", () => {
+		expect(() => handoffEnv({ ...PAIR_ENV, OMP_SESSION_NAME: "x" })).toThrow(
+			"not an allowed callback env key",
+		);
 	});
 });
