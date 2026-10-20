@@ -6,7 +6,9 @@ import { parseRoute } from "./route";
 import {
 	attachSession,
 	call,
+	claimAttachIntent,
 	isConnected,
+	isLatestAttachIntent,
 	isSessionSwitchSupersession,
 	postCommand,
 	untilAttachedFrame,
@@ -88,6 +90,28 @@ export function requestDaemonSessions(daemonId: string): Promise<SessionListEntr
 }
 
 /**
+ * Attach `daemonId` once its spawn_resume POST (see spawnResume) has been
+ * accepted. The browser posts the two as independent fetches whose arrival order
+ * at the edge is not guaranteed; an attach that overtakes the wake would wake the
+ * row on lastSessionFile and fail the pick, so the attach waits for the accept
+ * (the edge registers its pending resume before answering). Resolves null with
+ * no attach posted when the wake was refused or failed (spawnResume already
+ * reported it). An attach requested meanwhile (another row click, another
+ * wake) supersedes this one: no attach is posted and it resolves with
+ * whichever session is current, like a superseded attachSession. Otherwise
+ * settles like attachSession.
+ */
+export async function wakeAndAttach(
+	daemonId: string,
+	woke: Promise<boolean>,
+): Promise<string | null> {
+	const intent = claimAttachIntent();
+	if (!(await woke)) return null;
+	if (!isLatestAttachIntent(intent)) return state.currentSessionId;
+	return attachSession(daemonId);
+}
+
+/**
  * Resume a specific session of a daemon from the roster dropdown.
  *
  * Asleep daemons wake with spawn_resume carrying the chosen session file
@@ -104,11 +128,9 @@ export function resumeDaemonSession(daemonId: string, sessionFile: string): Prom
 	if (back?.status === "asleep") {
 		// Wake then attach (mirrors the old asleep-row click): the edge wakes
 		// first and answers the attach once the session is ready.
-		postCommand({ type: "spawn_resume", id: crypto.randomUUID(), daemonId, sessionFile }).catch(
-			() => {},
-		);
-		if (state.currentSessionId === daemonId) return Promise.resolve();
-		return attachSession(daemonId).then(
+		const woke = spawnResume(daemonId, sessionFile);
+		if (state.currentSessionId === daemonId) return woke.then(() => undefined);
+		return wakeAndAttach(daemonId, woke).then(
 			() => undefined,
 			(err) => {
 				reportError(err);
@@ -145,11 +167,14 @@ export function resumeDaemonSession(daemonId: string, sessionFile: string): Prom
  */
 export async function startDaemonNewSession(daemonId: string): Promise<void> {
 	const asleep = state.daemonRoster.find((d) => d.daemonId === daemonId)?.status === "asleep";
-	if (asleep) spawnResume(daemonId);
 	if (asleep || state.currentSessionId !== daemonId) {
 		try {
-			// A superseded attach resolves with whichever session is current.
-			if ((await attachSession(daemonId)) !== daemonId) return;
+			// A superseded attach resolves with whichever session is current; a
+			// refused wake resolves null (already reported): nothing to start on.
+			const attach = asleep
+				? wakeAndAttach(daemonId, spawnResume(daemonId))
+				: attachSession(daemonId);
+			if ((await attach) !== daemonId) return;
 		} catch (err) {
 			reportError(err);
 			return;

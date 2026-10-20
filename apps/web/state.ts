@@ -1658,6 +1658,7 @@ export {
 	setSidebarVisible,
 	closeDrawers,
 	startDaemonNewSession,
+	wakeAndAttach,
 	setTxSidebarVisible,
 	setView,
 	toggleSidebar,

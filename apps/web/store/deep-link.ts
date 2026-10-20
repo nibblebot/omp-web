@@ -12,7 +12,7 @@ import { state } from "../state";
 import { spawnResume } from "./projects";
 import { formatRoute, parseRoute, type Route } from "./route";
 import { closeDock, openDock } from "./dock";
-import { requestDaemonSessions, resumeDaemonSession, setView } from "./roster";
+import { requestDaemonSessions, resumeDaemonSession, setView, wakeAndAttach } from "./roster";
 import { pushToast, reportError } from "./toasts";
 import { attachSession } from "./transport";
 import { isUserStopped } from "./user-stopped";
@@ -63,7 +63,11 @@ async function attachDaemon(daemonId: string): Promise<void> {
 	const entry = state.daemonRoster.find((d) => d.daemonId === daemonId);
 	// A user-stopped daemon stays stopped across a reload: no attach (the edge wakes on attach); the row keeps Stopped + Restart.
 	if (isUserStopped(daemonId)) return;
-	if (entry?.status === "asleep") spawnResume(daemonId);
+	// Wake first, then attach: the attach waits for the wake POST to be accepted.
+	if (entry?.status === "asleep") {
+		await wakeAndAttach(daemonId, spawnResume(daemonId)).catch(reportError);
+		return;
+	}
 	await attachSession(daemonId).catch(reportError);
 }
 

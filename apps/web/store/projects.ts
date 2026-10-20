@@ -124,15 +124,29 @@ export function openAddProject(path?: string): void {
 	setState("modal", "add-project");
 }
 
-/** Wake an asleep daemon (spawned → respawn --resume; attached/remote → redial). */
-export function spawnResume(daemonId: string): void {
-	if (refuseIfDisconnected()) return;
+/**
+ * Wake an asleep daemon (spawned → respawn --resume; attached/remote → redial), on
+ * `sessionFile` when picked. Resolves true once the edge accepted the POST: it
+ * registers its pending resume before answering, so an attach posted after this
+ * resolves can never overtake the wake. Resolves false when refused (not
+ * connected) or the POST failed (reported as a toast); never rejects. Callers that
+ * attach next MUST await it and skip the attach on false (see wakeAndAttach).
+ */
+export function spawnResume(daemonId: string, sessionFile?: string): Promise<boolean> {
+	if (refuseIfDisconnected()) return Promise.resolve(false);
 	clearUserStopped(daemonId);
-	void postCommand({
+	return postCommand({
 		type: "spawn_resume",
 		id: crypto.randomUUID(),
 		daemonId,
-	} satisfies ClientCommand).catch(reportCommandFailure);
+		...(sessionFile !== undefined ? { sessionFile } : {}),
+	} satisfies ClientCommand).then(
+		() => true,
+		(err: unknown) => {
+			reportCommandFailure(err);
+			return false;
+		},
+	);
 }
 
 /** Stop a daemon (spawned → terminate child; attached/remote → drop + asleep).
@@ -153,15 +167,15 @@ const restartAwaitingAsleep = new Set<string>();
 /** Restart a session process. A ready one is stopped first (marks it), and its wake
  *  waits for the roster to show it asleep: the edge refuses a wake while the process
  *  still reads ready. An asleep one clears the mark and wakes right away. No extra
- *  attach: the edge answers the attached frame on wake when this is the attached session. */
-export function restartDaemonById(daemonId: string): void {
+ *  attach: the edge answers the attached frame on wake when this is the attached session.
+ *  Resolves like spawnResume when it wakes at once; a ready row has no wake POST to
+ *  order an attach after (the later wake rides the roster), so it resolves true. */
+export function restartDaemonById(daemonId: string): Promise<boolean> {
 	const entry = state.daemonRoster.find((d) => d.daemonId === daemonId);
-	if (entry?.status !== "ready") {
-		spawnResume(daemonId);
-		return;
-	}
+	if (entry?.status !== "ready") return spawnResume(daemonId);
 	restartAwaitingAsleep.add(daemonId);
 	stopDaemonById(daemonId);
+	return Promise.resolve(true);
 }
 
 /** Called on every roster frame: wake each restarting daemon that now reads asleep, and
@@ -173,7 +187,7 @@ export function resumeRestartedDaemons(roster: Array<{ daemonId: string; status:
 			restartAwaitingAsleep.delete(daemonId);
 		} else if (entry.status === "asleep") {
 			restartAwaitingAsleep.delete(daemonId);
-			spawnResume(daemonId);
+			void spawnResume(daemonId);
 		}
 	}
 }

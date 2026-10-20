@@ -34,6 +34,7 @@ import {
 	startDaemonNewSession,
 	state,
 	stopDaemonById,
+	wakeAndAttach,
 } from "../../../state";
 import { formatTimeAgo } from "../../../text/time-ago";
 import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
@@ -310,10 +311,10 @@ export const WorkspaceRow: Component<{
 	// that session.
 	/** Start (asleep) or restart a row's session process, then attach so the
 	 *  pane follows it. The row pulses until the attach settles. */
-	const wakeAndAttach = (id: string, wake: () => void) => {
+	const activateRow = (id: string, wake: () => Promise<boolean>) => {
 		setActivatingIds((prev) => new Set(prev).add(id));
-		wake();
-		attachSession(id)
+		// The attach is posted only once the wake POST is accepted (see wakeAndAttach).
+		wakeAndAttach(id, wake())
 			.catch(reportError)
 			.finally(() =>
 				setActivatingIds((prev) => {
@@ -346,7 +347,7 @@ export const WorkspaceRow: Component<{
 			if (daemon.daemonId === state.currentSessionId) return;
 			void attachSession(daemon.daemonId).catch(reportError);
 		} else if (daemon.status === "asleep") {
-			wakeAndAttach(daemon.daemonId, () => spawnResume(daemon.daemonId));
+			activateRow(daemon.daemonId, () => spawnResume(daemon.daemonId));
 		}
 	};
 
@@ -358,7 +359,7 @@ export const WorkspaceRow: Component<{
 		setSessionsOpenId(null);
 		setMenuOpenId(null);
 		const id = d().daemonId;
-		wakeAndAttach(id, kind === "start" ? () => spawnResume(id) : () => restartDaemonById(id));
+		activateRow(id, kind === "start" ? () => spawnResume(id) : () => restartDaemonById(id));
 	};
 
 	/** Toggle this row's session dropdown (the session-title line only). */
@@ -526,7 +527,7 @@ export const WorkspaceRow: Component<{
 									disabled={paused()}
 									onClick={() => {
 										setMenuOpenId(null);
-										spawnResume(d().daemonId);
+										void spawnResume(d().daemonId);
 									}}
 								>
 									<ChevronRightIcon />
@@ -753,7 +754,7 @@ export const WorkspaceRow: Component<{
 										disabled={paused()}
 										onClick={(e) => {
 											e.stopPropagation();
-											spawnResume(d().daemonId);
+											void spawnResume(d().daemonId);
 										}}
 									>
 										Retry

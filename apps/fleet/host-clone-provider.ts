@@ -224,9 +224,18 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 	// the descendant whose argv carries the launch token, and that is the identity recorded.
 	const deadline = Date.now() + LIVE_WAIT_MS;
 	// The shell's forked subshell carries the token too until the runtime executes: skip any
-	// descendant that still looks like the shell.
-	const shellCmdline = cmdlineOf(launcher.pid);
-	let pid = findTokenPid(launcher.pid, workspaceToken, shellCmdline);
+	// descendant that still looks like the shell. Bun returns the launcher before its exec has
+	// finished, when /proc reports an empty cmdline; a baseline read then would let the subshell
+	// pass for the runtime (recording the wrong pid, and a runtime that already died looks live).
+	// The shell's argv carries the token, so the baseline is only trusted once it does.
+	let shellCmdline = "";
+	const probe = (): number | null => {
+		if (!shellCmdline.includes(workspaceToken)) shellCmdline = cmdlineOf(launcher.pid);
+		return shellCmdline.includes(workspaceToken)
+			? findTokenPid(launcher.pid, workspaceToken, shellCmdline)
+			: null;
+	};
+	let pid = probe();
 	while (pid === null) {
 		if (launcher.exitCode !== null || Date.now() >= deadline) {
 			return errResponse(
@@ -242,7 +251,7 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 			);
 		}
 		await Bun.sleep(LIVE_POLL_MS);
-		pid = findTokenPid(launcher.pid, workspaceToken, shellCmdline);
+		pid = probe();
 	}
 	const identity = procIdentity(pid);
 	if (identity === null) {

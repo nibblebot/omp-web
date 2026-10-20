@@ -63,7 +63,9 @@ const ChatMode: Component = () => (
 							<BackgroundDaemonsBar />
 						</div>
 						<Show when={isUserStopped(state.currentSessionId)}>
-							<StoppedSessionStrip onRestart={() => restartDaemonById(state.currentSessionId)} />
+							<StoppedSessionStrip
+								onRestart={() => void restartDaemonById(state.currentSessionId)}
+							/>
 						</Show>
 						{/* Composer: the prompt box, with the session config bar (model, thinking, meters) as its bottom row. */}
 						<PromptBox />

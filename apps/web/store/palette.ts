@@ -16,7 +16,14 @@ import {
 	storedSessionItems,
 } from "../palette/palette";
 import { commandUsage, currentCommandRegistry, dispatchInput } from "../prompt/commands";
-import { attachSession, hasLiveSession, setState, spawnResume, state } from "../state";
+import {
+	attachSession,
+	hasLiveSession,
+	setState,
+	spawnResume,
+	state,
+	wakeAndAttach,
+} from "../state";
 import { openDock } from "./dock";
 import { setPromptInsert } from "./chat";
 import { openModelPicker, recentModels, switchSessionModel } from "./models";
@@ -97,8 +104,9 @@ export function runPaletteItem(item: PaletteItem): void {
 			// A sleeping session is started, then attached (the sidebar row does the same).
 			const asleep =
 				state.daemonRoster.find((d) => d.daemonId === action.daemonId)?.status === "asleep";
-			if (asleep) spawnResume(action.daemonId);
-			void attachSession(action.daemonId).catch(reportError);
+			if (asleep)
+				void wakeAndAttach(action.daemonId, spawnResume(action.daemonId)).catch(reportError);
+			else void attachSession(action.daemonId).catch(reportError);
 			return;
 		}
 		case "stored-session":

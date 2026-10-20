@@ -1205,9 +1205,12 @@ export class FleetEdge {
 	): Promise<void> {
 		// An explicit no-pick request supersedes an earlier refusal.
 		if (sessionFile === undefined) this.#refusedResumes.delete(daemonId);
-		// Registered BEFORE the first await: the roster UI fires the attach
-		// back-to-back, and an attach that did not wait for this validation
-		// would wake the daemon on lastSessionFile and silently drop the pick.
+		// Registered BEFORE the first await, so it is in place before this
+		// spawn_resume's POST is answered 202. The browser posts its attach only
+		// after that answer, so the attach always finds this entry and waits for
+		// the validation instead of waking the daemon on lastSessionFile and
+		// silently dropping the pick. The synchronous registration is what makes
+		// that ordering sufficient.
 		const run = this.#runSpawnResume(daemonId, sessionFile).then(
 			() => {
 				if (sessionFile !== undefined) this.#refusedResumes.delete(daemonId);

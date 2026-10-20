@@ -560,6 +560,11 @@ describe("host clone provider ops", () => {
 		expect(started.observed).toBe("running");
 		expect(started.pid).toBeGreaterThan(0);
 		try {
+			// The recorded pid is the runtime itself, never the launcher shell or its pipeline subshell
+			// (which carry the launch token in argv too): stop and liveness probes target this process.
+			const runtimeCmdline = readFileSync(`/proc/${started.pid}/cmdline`, "utf8").split("\0");
+			expect(runtimeCmdline[0]).toBe(process.execPath);
+			expect(runtimeCmdline.some((arg) => arg.startsWith("--omp-workspace-token="))).toBe(true);
 			const again = okOf(await run(requestFor(root, "ensure-running")));
 			expect(again).toMatchObject({ handle: started.handle, pid: started.pid });
 			const conflict = await run(requestFor(root, "ensure-running", { generation: 2 }));
@@ -602,25 +607,6 @@ describe("host clone provider ops", () => {
 				10_000,
 				"the runtime's output in daemon.log",
 			);
-		} finally {
-			process.env.OMP_RUNTIME_ENTRY = previous;
-		}
-	}, 30_000);
-
-	test("a runtime that dies during launch fails the start with its own output", async () => {
-		const root = scratch();
-		const dies = join(root, "dies.js");
-		writeFileSync(dies, 'console.error("boom from the runtime"); process.exit(3);\n');
-		const previous = process.env.OMP_RUNTIME_ENTRY;
-		process.env.OMP_RUNTIME_ENTRY = dies;
-		try {
-			const response = await run(requestFor(root, "ensure-running"));
-			expect(response).toMatchObject({
-				ok: false,
-				error: { code: "unavailable", retryable: true },
-			});
-			if (!response.ok) expect(response.error.message).toContain("boom from the runtime");
-			expect(existsSync(join(root, "state", "provider.pid.json"))).toBe(false);
 		} finally {
 			process.env.OMP_RUNTIME_ENTRY = previous;
 		}
@@ -691,16 +677,26 @@ setInterval(() => {}, 1000);
 			process.env.OMP_RUNTIME_ENTRY = previous;
 		}
 	}, 30_000);
-
-	test("a launch that cannot spawn fails typed and records nothing", async () => {
+	test("a launch whose runtime never goes live fails the start with the launch's own output", async () => {
+		// A runtime observed alive is running, and its later death is inspect's `stopped` and the
+		// lifecycle's crash policy (the tests above), so an instant-exit runtime is not a
+		// deterministic launch failure: it races the liveness poll. A runtime that cannot be
+		// executed is: no process ever carries the launch token, the launcher exits with the
+		// shell's own error, and the start quotes this run's log.
 		const root = scratch();
+		const missing = join(root, "no-such-runtime-binary");
 		const previous = process.env.OMP_RUNTIME_BIN;
-		process.env.OMP_RUNTIME_BIN = join(root, "no-such-runtime-binary");
+		process.env.OMP_RUNTIME_BIN = missing;
 		try {
-			expect(await run(requestFor(root, "ensure-running"))).toMatchObject({
+			const response = await run(requestFor(root, "ensure-running"));
+			expect(response).toMatchObject({
 				ok: false,
 				error: { code: "unavailable", retryable: true },
 			});
+			if (!response.ok) {
+				expect(response.error.message).toContain("before it became live");
+				expect(response.error.message).toContain(missing);
+			}
 			expect(existsSync(join(root, "state", "provider.pid.json"))).toBe(false);
 		} finally {
 			if (previous === undefined) delete process.env.OMP_RUNTIME_BIN;

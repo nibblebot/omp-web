@@ -297,10 +297,24 @@ let pendingAttach: {
 	timer: number;
 } | null = null;
 
+/** Bumped by every attach request and every pending wake-then-attach (latest wins). */
+let attachIntentSeq = 0;
+
+/** Claim the latest attach intent; any later attach request supersedes it. */
+export function claimAttachIntent(): number {
+	return ++attachIntentSeq;
+}
+
+/** Whether `intent` is still the latest attach intent. */
+export function isLatestAttachIntent(intent: number): boolean {
+	return intent === attachIntentSeq;
+}
+
 type AttachCmd = Extract<ClientCommand, { type: "attach" }>;
 
 function requestAttach(cmd: AttachCmd): Promise<string> {
 	const { promise, resolve, reject } = Promise.withResolvers<string>();
+	attachIntentSeq++;
 	if (!connected) {
 		reject(new Error("Not connected"));
 		return promise;

@@ -2891,6 +2891,11 @@ describe("roster session dropdown", () => {
 		return posted.filter((c): c is Extract<ClientCommand, { type: T }> => c.type === type);
 	}
 
+	/** Yield until a settled spawn_resume POST has released its attach (a few microtask hops). */
+	async function flushWake(): Promise<void> {
+		for (let i = 0; i < 4; i++) await flushMicrotasks();
+	}
+
 	/** newSession calls as posted, oldest first. */
 	const newSessionCalls = () => postedOf("call").filter((c) => c.method === "newSession");
 
@@ -2937,7 +2942,98 @@ describe("roster session dropdown", () => {
 				sessionFile: "/sessions/picked.jsonl",
 			},
 		]);
+		// The attach waits for the spawn_resume POST to be accepted.
+		expect(postedOf("attach")).toHaveLength(0);
+		await flushWake();
 		expect(postedOf("attach")).toHaveLength(1);
+	});
+
+	test("resumeDaemonSession posts the attach only after the spawn_resume POST is accepted, and none when it fails", async () => {
+		// The edge registers its pending resume before answering the spawn_resume
+		// POST, so an attach posted after that answer can never overtake the pick.
+		const held: Array<{ cmd: ClientCommand; settle: (ok: boolean) => void }> = [];
+		setBrowserGlobal("fetch", ((_input: unknown, init?: RequestInit) => {
+			if (typeof init?.body !== "string")
+				return Promise.resolve({ ok: true, status: 202 } as Response);
+			const cmd = JSON.parse(init.body) as ClientCommand;
+			posted.push(cmd);
+			if (cmd.type !== "spawn_resume") {
+				return Promise.resolve({ ok: true, status: 202 } as Response);
+			}
+			return new Promise<Response>((resolve) =>
+				held.push({
+					cmd,
+					settle: (ok) => resolve({ ok, status: ok ? 202 : 500 } as Response),
+				}),
+			);
+		}) as unknown as typeof fetch);
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+			rosterDaemon("d8", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+
+		const resumed = resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		await flushMicrotasks();
+		expect(postedOf("spawn_resume")).toHaveLength(1);
+		expect(postedOf("attach")).toHaveLength(0);
+
+		held[0]!.settle(true);
+		await flushWake();
+		expect(postedOf("attach")).toEqual([
+			{ type: "attach", id: expect.any(String), sessionId: "d9" },
+		]);
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		await resumed;
+
+		// A refused spawn_resume POST never posts its attach; the failure toasts.
+		const failed = resumeDaemonSession("d8", "/sessions/picked.jsonl");
+		await flushMicrotasks();
+		held[1]!.settle(false);
+		await failed;
+		await flushMicrotasks();
+		expect(postedOf("attach")).toHaveLength(1);
+		expect(state.toasts.some((t) => t.text.includes("spawn_resume"))).toBe(true);
+	});
+
+	test("an attach requested while a wake's spawn_resume POST is in flight supersedes that wake's attach", async () => {
+		// Click asleep d9, then ready d7 before d9's spawn_resume is accepted: the
+		// user's last choice (d7) wins, d9's attach is never posted.
+		const held: Array<(ok: boolean) => void> = [];
+		setBrowserGlobal("fetch", ((_input: unknown, init?: RequestInit) => {
+			if (typeof init?.body !== "string")
+				return Promise.resolve({ ok: true, status: 202 } as Response);
+			const cmd = JSON.parse(init.body) as ClientCommand;
+			posted.push(cmd);
+			if (cmd.type !== "spawn_resume") {
+				return Promise.resolve({ ok: true, status: 202 } as Response);
+			}
+			return new Promise<Response>((resolve) =>
+				held.push((ok) => resolve({ ok, status: ok ? 202 : 500 } as Response)),
+			);
+		}) as unknown as typeof fetch);
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+			rosterDaemon("d7", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+
+		const woken = resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		await flushMicrotasks();
+		const other = attachSession("d7");
+		expect(postedOf("attach")).toEqual([
+			{ type: "attach", id: expect.any(String), sessionId: "d7" },
+		]);
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d7" });
+		await other;
+
+		held[0]!(true);
+		await flushWake();
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["d7"]);
+		// Superseded, the wake settles without an attach of its own.
+		await woken;
 	});
 
 	test("resumeDaemonSession retries a switch swept by its own attach's supersession, never banners", async () => {
@@ -3046,6 +3142,12 @@ describe("roster session dropdown", () => {
 	});
 
 	test("startDaemonNewSession wakes an asleep daemon, attaches, then starts a new session", async () => {
+		// The extra ticks the wake POST adds let the settings pull's fetch resolve;
+		// the default stub has no body reader for it.
+		setBrowserGlobal("fetch", (async (_input: unknown, init?: RequestInit) => {
+			if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
+			return { ok: true, status: 202, json: async () => ({}), text: async () => "" } as Response;
+		}) as unknown as typeof fetch);
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
@@ -3057,6 +3159,8 @@ describe("roster session dropdown", () => {
 		expect(postedOf("spawn_resume")).toEqual([
 			{ type: "spawn_resume", id: expect.any(String), daemonId: "d9" },
 		]);
+		expect(postedOf("attach")).toHaveLength(0);
+		await flushWake();
 		expect(postedOf("attach")).toHaveLength(1);
 		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
 		await flushMicrotasks();
