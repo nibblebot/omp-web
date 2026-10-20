@@ -40,4 +40,9 @@ describe("scanImages", () => {
 		expect(scanImages({ type: "text", text: "no" })).toEqual([]);
 		expect(scanImages({ type: "image", data: 5, mimeType: "image/png" })).toEqual([]);
 	});
+
+	test("ignores unresolved blob references a raw stored transcript carries", () => {
+		const ref = { type: "image", data: `blob:sha256:${"a".repeat(64)}`, mimeType: "image/webp" };
+		expect(scanImages({ content: [ref, img] })).toEqual([img]);
+	});
 });

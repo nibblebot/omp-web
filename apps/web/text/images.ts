@@ -1,11 +1,15 @@
 import type { ImageArg } from "#lib/wire/protocol";
 
+/** Prefix of an image the session persisted to its blob store; a stored transcript read raw (a subagent's) still carries it. */
+const BLOB_REF_PREFIX = "blob:sha256:";
+
 /**
  * Recursively collect image payloads from a tool result, message content, or
  * any nested value. Handles ImageContent blocks ({type:"image", data,
  * mimeType}) and provider screenshot shapes ({type:"computer_screenshot" |
  * "screenshot", image_url: "data:<mime>;base64,..."}). Values without base64
- * data (e.g. ScreenshotResult file paths) are ignored, as is anything else.
+ * data (e.g. ScreenshotResult file paths) are ignored, as are unresolved blob
+ * references (no bytes to decode) and anything else.
  */
 export function scanImages(value: unknown, out: ImageArg[] = []): ImageArg[] {
 	if (Array.isArray(value)) {
@@ -15,7 +19,9 @@ export function scanImages(value: unknown, out: ImageArg[] = []): ImageArg[] {
 	if (!value || typeof value !== "object") return out;
 	const obj = value as Record<string, unknown>;
 	if (obj.type === "image" && typeof obj.data === "string" && typeof obj.mimeType === "string") {
-		out.push({ type: "image", data: obj.data, mimeType: obj.mimeType });
+		if (!obj.data.startsWith(BLOB_REF_PREFIX)) {
+			out.push({ type: "image", data: obj.data, mimeType: obj.mimeType });
+		}
 		return out;
 	}
 	if (

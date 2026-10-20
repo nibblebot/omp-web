@@ -156,5 +156,8 @@ describe("agentTitle", () => {
 		expect(agentTitle({ description: "  ", assignments: ["  "], displayName: "task" })).toBe(
 			"task",
 		);
+		expect(
+			agentTitle({ assignments: ["# Target\nRepo root (cwd). No edits."], displayName: "task" }),
+		).toBe("Repo root (cwd). No edits.");
 	});
 });

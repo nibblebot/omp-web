@@ -34,7 +34,10 @@ export function shortAgentName(id: string): string {
 	return dot >= 0 && dot < id.length - 1 ? id.slice(dot + 1) : id;
 }
 
-/** Row title: the description, else the first non-empty assignment line, else the display name. */
+/**
+ * Row title: the description, else the first assignment line with prose (a bare
+ * Markdown heading such as `# Target` says nothing), else the display name.
+ */
 export function agentTitle(source: {
 	description?: string;
 	/** Candidate task texts in preference order (assignment, then task). */
@@ -44,7 +47,7 @@ export function agentTitle(source: {
 	const description = source.description?.trim();
 	if (description) return description;
 	for (const text of source.assignments ?? []) {
-		const line = text?.split(/\r?\n/).find((l) => l.trim() !== "");
+		const line = text?.split(/\r?\n/).find((l) => l.trim() !== "" && !/^\s*#{1,6}(\s|$)/.test(l));
 		if (line !== undefined) return line.trim();
 	}
 	return source.displayName;
