@@ -137,6 +137,9 @@ const DROPDOWN_SESSION_LIMIT = 10;
 /** Picked-session membership: the whole worktree listing, never the dropdown page. */
 const RESUME_MEMBERSHIP_LIMIT = Number.POSITIVE_INFINITY;
 
+/** attach_result error for an attach a newer attach on the same stream overtook. */
+const ATTACH_SUPERSEDED = "attach superseded";
+
 /**
  * spawn_resume hit a row that is not asleep (or failed). Distinct from a pick
  * validation or wake failure so the rejection is not recorded as a refused
@@ -427,6 +430,8 @@ interface BrowserStream {
 	/** This browser's dedicated daemon channel: a callback virtual stream
 	 * ("browser/<connId>" on the daemon's pair). Null while unattached. */
 	pipe: CallbackPipeState | null;
+	/** Bumped by every attach on this stream; an attach whose value moved on is superseded. */
+	attachSeq: number;
 }
 
 /**
@@ -894,6 +899,7 @@ export class FleetEdge {
 						unreadEstimate: 0,
 						client,
 						pipe: null,
+						attachSeq: 0,
 					};
 					client.stream = stream;
 					this.#browsers.add(stream);
@@ -1302,11 +1308,28 @@ export class FleetEdge {
 		await this.#waker.wake(entry, { resumeFile });
 	}
 
+	/**
+	 * Handle one browser `attach`: wake the row if needed, then bind this
+	 * stream's pipe to it and answer with an id-keyed attach_result.
+	 *
+	 * Latest attach wins per browser stream. Each call bumps
+	 * `stream.attachSeq`, and an attach whose sequence moved on while it
+	 * awaited a pending spawn_resume or a wake (seconds for an asleep row)
+	 * never opens a pipe: it answers `attach superseded` instead. Without
+	 * this, a slow wake finishing after a quicker attach to another row would
+	 * re-bind the stream to the earlier click. The superseded wake itself
+	 * still completes (the row may stay running). The browser ignores an
+	 * attach_result for an id that is no longer its pending attach, so the
+	 * failure never toasts or disturbs the current attachment. A reconnect
+	 * replaces the stream object; the old handler then reaches #openPipe,
+	 * which skips a stream no longer in #browsers.
+	 */
 	async #handleAttach(
 		stream: BrowserStream,
 		daemonId: string,
 		commandId: string | undefined,
 	): Promise<void> {
+		const seq = ++stream.attachSeq;
 		if (!this.#registry.get(daemonId)) {
 			this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });
 			return;
@@ -1318,6 +1341,10 @@ export class FleetEdge {
 			// session. Await it, then re-read the entry: registry entries are
 			// REPLACED on update, so a pre-wait object can carry a stale status.
 			await this.#pendingResumes.get(daemonId);
+			if (stream.attachSeq !== seq) {
+				this.#sendAttachOutcome(stream, commandId, { error: ATTACH_SUPERSEDED });
+				return;
+			}
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
 				this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });
@@ -1333,6 +1360,10 @@ export class FleetEdge {
 			// #waker.wake resolves once the daemon's callback pair is up (or it
 			// throws the reason it cannot be); #openPipe then primes the stream.
 			await this.#waker.wake(entry);
+			if (stream.attachSeq !== seq) {
+				this.#sendAttachOutcome(stream, commandId, { error: ATTACH_SUPERSEDED });
+				return;
+			}
 		} catch (err) {
 			this.#sendAttachOutcome(stream, commandId, {
 				error: err instanceof Error ? err.message : String(err),

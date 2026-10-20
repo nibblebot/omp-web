@@ -1215,6 +1215,97 @@ describe("fleet edge", () => {
 		}
 	});
 
+	test("a later attach supersedes an earlier attach whose wake is still in flight: the browser ends on the later daemon", async () => {
+		// Click an asleep row, then a ready row before the first wake finishes.
+		// The first attach's wake completes last; it must not open its pipe on
+		// the same browser stream, or the browser would end on the wrong session.
+		const asleep = server.registry.create({
+			name: "spawned-superseded",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			template: "local",
+			status: "asleep",
+		});
+		const origStart = server.lifecycle.start;
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
+			server.registry.setStatus(daemonId, "connecting");
+			await gate;
+			await origStart.call(server.lifecycle, daemonId, opts);
+		};
+		const browser = await openBrowser(server.port);
+		try {
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", id: "sup-a", sessionId: asleep.daemonId });
+			await waitFor(
+				() => (server.registry.get(asleep.daemonId)?.status === "connecting" ? true : null),
+				5000,
+				"first wake connecting",
+			);
+			// The user's last choice: an already paired row, attached at once.
+			const seen = controlsOf(remoteDaemon, "stream_open").length;
+			await browser.send({ type: "attach", id: "sup-b", sessionId: remoteEntry.daemonId });
+			const streamId = await awaitNewStream(remoteDaemon, seen);
+			primeStream(remoteDaemon, streamId);
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === remoteEntry.daemonId,
+				`attached ${remoteEntry.daemonId}`,
+			);
+			// Now the first wake completes.
+			release();
+			const result = await waitFor(
+				() => browser.frames.find((f) => f.type === "attach_result" && f.id === "sup-a") ?? null,
+				5000,
+				"attach_result sup-a",
+			).catch((err: Error) => {
+				const frames = browser.frames.map((f) =>
+					JSON.stringify({
+						type: f.type,
+						id: "id" in f ? f.id : undefined,
+						sessionId: "sessionId" in f ? f.sessionId : undefined,
+						ok: "ok" in f ? f.ok : undefined,
+						error: "error" in f ? f.error : undefined,
+					}),
+				);
+				throw new Error(`${err.message}; frames=[${frames.join(", ")}]`);
+			});
+			if (result.type !== "attach_result") throw new Error("expected attach_result");
+			expect({ ok: result.ok, error: result.error }).toEqual({
+				ok: false,
+				error: "attach superseded",
+			});
+			// The superseded wake still completes, but never binds a pipe to the browser.
+			await waitFor(
+				() => (daemonsById.has(asleep.daemonId) ? true : null),
+				5000,
+				"superseded wake paired",
+			);
+			await sleep(200);
+			const woken = daemonsById.get(asleep.daemonId)!;
+			expect(controlsOf(woken, "stream_open")).toHaveLength(0);
+			const attached = browser.frames
+				.filter((f) => f.type === "attached")
+				.map((f) => (f.type === "attached" ? f.sessionId : undefined));
+			expect(attached).toEqual([remoteEntry.daemonId]);
+			// The browser's pipe is still B's: a call reaches B's daemon.
+			await browser.send({ type: "call", id: "sup-call", method: "getQueuedMessages" });
+			await waitFor(
+				() => (commandsWithId(remoteDaemon, "sup-call").length > 0 ? true : null),
+				5000,
+				"call sup-call at the later daemon",
+			);
+		} finally {
+			release();
+			server.lifecycle.start = origStart;
+			dropDaemon(asleep.daemonId);
+			browser.close();
+		}
+	});
+
 	test("spawn_resume with a picked session then attach resumes the PICKED session once", async () => {
 		// The roster UI fires spawn_resume {sessionFile} and attach back-to-back.
 		// spawn_resume validates the pick against the worktree listing (async disk

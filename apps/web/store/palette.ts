@@ -100,10 +100,12 @@ export function runPaletteItem(item: PaletteItem): void {
 			else dispatchInput(action.text, undefined, "enter");
 			return;
 		case "daemon-session": {
-			if (action.daemonId === state.currentSessionId) return;
-			// A sleeping session is started, then attached (the sidebar row does the same).
 			const asleep =
 				state.daemonRoster.find((d) => d.daemonId === action.daemonId)?.status === "asleep";
+			// The attached session is a no-op, unless its process is stopped (a UI stop keeps
+			// the view on it): then the pick wakes it and attaches again.
+			if (action.daemonId === state.currentSessionId && !asleep) return;
+			// A sleeping session is started, then attached (the sidebar row does the same).
 			if (asleep)
 				void wakeAndAttach(action.daemonId, spawnResume(action.daemonId)).catch(reportError);
 			else void attachSession(action.daemonId).catch(reportError);

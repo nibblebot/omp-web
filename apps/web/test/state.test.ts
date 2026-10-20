@@ -14,6 +14,7 @@ import { activateFeatures, isFeatureEnabled } from "../features/registry";
 import { pruneUnread, unreadIds } from "../fleet-ui/unread";
 import { rejectPendingAttach, rejectPendingCalls } from "../store/transport";
 import { attachForPanel } from "../store/roster";
+import { runPaletteItem } from "../store/palette";
 import {
 	addProject,
 	announce,
@@ -2946,6 +2947,57 @@ describe("roster session dropdown", () => {
 		expect(postedOf("attach")).toHaveLength(0);
 		await flushWake();
 		expect(postedOf("attach")).toHaveLength(1);
+	});
+
+	test("resumeDaemonSession re-attaches the daemon the view is already on when its row is asleep (after a UI stop)", async () => {
+		// A UI stop keeps currentSessionId on the stopped daemon (the edge closed
+		// its pipe); a dropdown pick wakes it on the picked file and must attach
+		// again, or the page sits on "No active session".
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+		setState("currentSessionId", "d1");
+
+		const resumed = resumeDaemonSession("d1", "/sessions/picked.jsonl");
+		expect(postedOf("spawn_resume")).toEqual([
+			{
+				type: "spawn_resume",
+				id: expect.any(String),
+				daemonId: "d1",
+				sessionFile: "/sessions/picked.jsonl",
+			},
+		]);
+		expect(postedOf("attach")).toHaveLength(0);
+		await flushWake();
+		expect(postedOf("attach")).toEqual([
+			{ type: "attach", id: expect.any(String), sessionId: "d1" },
+		]);
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d1" });
+		await resumed;
+	});
+
+	test("picking the asleep session the view is already on from the palette wakes and attaches it", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+		setState("currentSessionId", "d1");
+
+		runPaletteItem({
+			id: "session:d:d1",
+			group: "Sessions",
+			label: "d1",
+			keywords: [],
+			action: { kind: "daemon-session", daemonId: "d1" },
+		});
+		await flushWake();
+		expect(postedOf("spawn_resume")).toHaveLength(1);
+		expect(postedOf("attach")).toEqual([
+			{ type: "attach", id: expect.any(String), sessionId: "d1" },
+		]);
 	});
 
 	test("resumeDaemonSession posts the attach only after the spawn_resume POST is accepted, and none when it fails", async () => {

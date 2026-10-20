@@ -115,11 +115,15 @@ export async function wakeAndAttach(
  * Resume a specific session of a daemon from the roster dropdown.
  *
  * Asleep daemons wake with spawn_resume carrying the chosen session file
- * (the edge validates it belongs to the worktree) and then attach. Ready
- * daemons attach (when not already attached) and switch to the session if
- * it is not the one currently live. Resolves when the attach settles / the
- * command is issued, so the caller can end its waking pulse. NEVER surfaces
- * a "session switched" supersession as an error; see switchSessionRetry.
+ * (the edge validates it belongs to the worktree) and then attach, even when
+ * the view is already on that daemon: a UI stop keeps currentSessionId on the
+ * stopped daemon while the edge closes its browser pipe, so only a fresh
+ * attach rebinds the stream (the edge closes any previous pipe first, so
+ * re-attaching the same daemon never double-primes). Ready daemons attach
+ * (when not already attached) and switch to the session if it is not the one
+ * currently live. Resolves when the attach settles / the command is issued,
+ * so the caller can end its waking pulse. NEVER surfaces a "session
+ * switched" supersession as an error; see switchSessionRetry.
  */
 export function resumeDaemonSession(daemonId: string, sessionFile: string): Promise<void> {
 	const back = state.daemonRoster.find((d) => d.daemonId === daemonId);
@@ -129,7 +133,6 @@ export function resumeDaemonSession(daemonId: string, sessionFile: string): Prom
 		// Wake then attach (mirrors the old asleep-row click): the edge wakes
 		// first and answers the attach once the session is ready.
 		const woke = spawnResume(daemonId, sessionFile);
-		if (state.currentSessionId === daemonId) return woke.then(() => undefined);
 		return wakeAndAttach(daemonId, woke).then(
 			() => undefined,
 			(err) => {
