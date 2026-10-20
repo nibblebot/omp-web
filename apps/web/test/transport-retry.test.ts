@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { COMMAND_DEDUP_WINDOW_MS, OMP_PROTO } from "#lib/wire/protocol";
-import type { ServerFrame } from "#lib/wire/protocol";
+import type { ClientCommand, ServerFrame, WebMethodName } from "#lib/wire/protocol";
 import { connect, connectionState, setState, state } from "../state";
 import {
 	call,
@@ -201,6 +201,39 @@ describe("not-attached retry (SUB-02)", () => {
 		// The answered call is no longer parked: another attached frame sends nothing.
 		dispatch(attached("daemon-a"));
 		expect(copies(id)).toBe(2);
+	});
+
+	test("a re-attach re-posts a parked read without its scope and a parked mutation with it", () => {
+		setState("sessionScope", { workspaceId: "w1", sessionId: "d9", generation: "1" });
+		const sent = (method: WebMethodName): Extract<ClientCommand, { type: "call" }> => {
+			call(method, [], 0).catch(() => {}); // rejected by the afterEach reset
+			const cmd = posted.at(-1);
+			if (cmd?.type !== "call") throw new Error("expected a call command");
+			return cmd;
+		};
+		const read = sent("resumeList");
+		const mutation = sent("setThinkingLevel");
+		expect(read.scope?.generation).toBe("1");
+		expect(mutation.scope?.generation).toBe("1");
+		settleCallResult(answer(read.id, false, undefined, "not attached"));
+		settleCallResult(answer(mutation.id, false, undefined, "not attached"));
+
+		// The attached frame clears the live scope before the parked calls go out.
+		dispatch(attached("d9"));
+		expect(state.sessionScope).toBeUndefined();
+
+		const reposted = (id: string) =>
+			posted.filter(
+				(c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call" && c.id === id,
+			);
+		expect(reposted(read.id)).toHaveLength(2);
+		expect(reposted(read.id)[1]?.scope).toBeUndefined();
+		expect(reposted(mutation.id)).toHaveLength(2);
+		expect(reposted(mutation.id)[1]?.scope).toEqual({
+			workspaceId: "w1",
+			sessionId: "d9",
+			generation: "1",
+		});
 	});
 });
 

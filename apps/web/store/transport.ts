@@ -1,6 +1,7 @@
 import { COMMAND_DEDUP_WINDOW_MS } from "#lib/wire/protocol";
 import { commandBytes, commandTooLargeMessage, MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
 import type { ClientCommand, DaemonInfo, ServerFrame, WebMethodName } from "#lib/wire/protocol";
+import { READ_ONLY_METHODS } from "#lib/wire/protocol";
 import type { DaemonLogsResult, DebugEntry, DebugLevel } from "../state";
 import { setState, state } from "../state";
 import { authedFetch } from "./auth";
@@ -145,6 +146,13 @@ export function settleCallResult(frame: Extract<ServerFrame, { type: "call_resul
 		Date.now() - pending.firstPostAt <= COMMAND_DEDUP_WINDOW_MS
 	) {
 		pending.awaitingAttach = true;
+		// A read wants the answer for the session attached when it finally runs,
+		// so it drops the scope of the attachment it was issued under (a new
+		// generation would reject it as stale). A mutation keeps its scope: it
+		// must never run on another attachment. Replays and the attach re-send
+		// both post this stored command.
+		if (READ_ONLY_METHODS[pending.cmd.method] === true && pending.cmd.scope !== undefined)
+			pending.cmd = { ...pending.cmd, scope: undefined };
 		return;
 	}
 	pendingCalls.delete(frame.id);

@@ -830,6 +830,58 @@ export type WebMethodName =
 	| "dumpSessionArchive"
 	| "exportDownload";
 
+/**
+ * Methods that change no session state. The session skips the post-mutation
+ * state broadcast for them, and the browser re-posts a parked one without its
+ * attachment scope (a read wants the answer for the session attached now).
+ * Everything else is a mutation and keeps the scope it was issued under.
+ */
+export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> = {
+	getSessionStats: true,
+	getModelBrowser: true,
+	getModelPresets: true,
+	getSettings: true,
+	getSkillsState: true,
+	getMcpState: true,
+	mcpTest: true,
+	mcpInspect: true,
+	listPlugins: true,
+	getPluginConfig: true,
+	getQueuedMessages: true,
+	getLoginProviders: true,
+	getSubagents: true,
+	getSubagentMessages: true,
+	formatSessionAsText: true,
+	getContextBreakdown: true,
+	annotationList: true,
+	todoGet: true,
+	todoExport: true,
+	getSessionGraph: true,
+	getModelMentions: true,
+	compactionSnapshot: true,
+	btwList: true,
+	btwSearch: true,
+	btwPage: true,
+	btwCopy: true,
+	btwPromotePreview: true,
+	advisorGetStatus: true,
+	advisorTranscript: true,
+	loopPreview: true,
+	loopPolicy: true,
+	vibeStatus: true,
+	downloadManifest: true,
+	getResumeCapabilities: true,
+	resumeResolve: true,
+	resumeList: true,
+	foreignList: true,
+	foreignPreview: true,
+	gitStatus: true,
+	gitFileDiff: true,
+	getToolSchemas: true,
+	predictWord: true,
+	predictWordFeedback: true,
+};
+
 // Client → server (POST /command bodies; one command per request, 202 accept).
 // Routing is by STREAM ATTACHMENT: on omp-session an /events stream is attached
 // to the single live session from open (connect = attached), so call/

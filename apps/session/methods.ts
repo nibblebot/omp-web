@@ -29,6 +29,7 @@ import type {
 	QueuedMessagesSnapshot,
 	WebMethodName,
 } from "#lib/wire/protocol";
+import { READ_ONLY_METHODS } from "#lib/wire/protocol";
 import { oversizedImageNotice } from "#lib/wire/image-limits";
 import type { CollabSession, Images } from "./collab-session";
 import { removeQueuedCommand } from "./command-queue";
@@ -191,53 +192,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	 *  around METHODS rows. */
 	let inFlightBash = 0;
 	let inFlightPython = 0;
-
-	// Read-only calls skip the post-mutation state broadcast.
-	const READ_ONLY: Partial<Record<WebMethodName, true>> = {
-		getSessionStats: true,
-		getModelBrowser: true,
-		getModelPresets: true,
-		getSettings: true,
-		getSkillsState: true,
-		getMcpState: true,
-		mcpTest: true,
-		mcpInspect: true,
-		listPlugins: true,
-		getPluginConfig: true,
-		getQueuedMessages: true,
-		getLoginProviders: true,
-		getSubagents: true,
-		getSubagentMessages: true,
-		formatSessionAsText: true,
-		getContextBreakdown: true,
-		annotationList: true,
-		todoGet: true,
-		todoExport: true,
-		getSessionGraph: true,
-		getModelMentions: true,
-		compactionSnapshot: true,
-		btwList: true,
-		btwSearch: true,
-		btwPage: true,
-		btwCopy: true,
-		btwPromotePreview: true,
-		advisorGetStatus: true,
-		advisorTranscript: true,
-		loopPreview: true,
-		loopPolicy: true,
-		vibeStatus: true,
-		downloadManifest: true,
-		getResumeCapabilities: true,
-		resumeResolve: true,
-		resumeList: true,
-		foreignList: true,
-		foreignPreview: true,
-		gitStatus: true,
-		gitFileDiff: true,
-		getToolSchemas: true,
-		predictWord: true,
-		predictWordFeedback: true,
-	};
 
 	// Calls whose only state change is the session name. The SDK name listener
 	// (collab-session.ts wireSession) already broadcasts that change, so these
@@ -564,7 +518,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		formatSessionAsText: async (entry) => entry.session.formatSessionAsText(),
 
 		// Model-roles picker (TUI model-hub parity). All three are mutations:
-		// none sit in READ_ONLY (the post-mutation broadcast refreshes state,
+		// none sit in READ_ONLY_METHODS (the post-mutation broadcast refreshes state,
 		// incl. the catalog) and, like setModel, none are readiness-gated or
 		// transcript reloads. Persistence scope follows `modelRoleStorage`;
 		// a changed role applies live only when it is the session's active role.
@@ -772,7 +726,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			await settingsMethods.publish(entry);
 			return supported;
 		},
-		// READ_ONLY rows: context breakdown and tool schemas (skip the state broadcast).
+		// Read-only rows (READ_ONLY_METHODS): context breakdown and tool schemas (skip the state broadcast).
 		getContextBreakdown: async (entry) => entry.session.getContextBreakdown(),
 		getToolSchemas: async (entry) =>
 			entry.session.agent.state.tools.map((tool) => ({
@@ -1037,7 +991,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 
 	return {
 		methods: METHODS,
-		readOnly: READ_ONLY,
+		readOnly: READ_ONLY_METHODS,
 		nameOnly: NAME_ONLY,
 		notReadyGated: NOT_READY_GATED,
 		historyReload: HISTORY_RELOAD,
