@@ -70,12 +70,17 @@ if [ ! -f "$MARKER" ]; then
 	fi
 fi
 
+# The daemon is bound to its process cwd (the bwrap provider chdirs into the
+# checkout the same way): run it in the prepared checkout, never the image
+# WORKDIR holding the runtime sources.
+cd "${OMP_WORKSPACE_DIR:-$OMP_WORKSPACE_ROOT/.checkout}"
+
 # The daemon reads its launch env at apps/session/index.ts boot;
 # apps/session/index.ts argv is parsed (session-config) and tolerates trailing
 # flags, so --omp-workspace-token stays argv-visible for host-side identity
 # checks. (Kubernetes identity is pod/API-based, not pid/cmdline-based; the
 # token flag keeps the two providers' runtime entry contract identical.)
-exec /opt/omp-web/node_modules/.bin/bun /opt/omp-web/apps/session/index.ts \
+exec bun /opt/omp-web/apps/session/index.ts \
 	--omp-workspace-token="$OMP_WORKSPACE_TOKEN" $fleet_flag <<EOF
 $fleet_stdin
 EOF

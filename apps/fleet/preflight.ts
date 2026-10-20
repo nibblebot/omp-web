@@ -706,7 +706,7 @@ export async function runProfilePreflight(
 		await checkDeniedBinds(profile, ctx),
 		await checkProfileSecrets(profile, ctx),
 		...(await checkKubernetesProvider(profile, ctx)),
-		checkStrayK8sFields(profile),
+		...(profile.provider === "kubernetes" ? [] : [checkStrayK8sFields(profile)]),
 	];
 	return {
 		ok: checks.every((check) => check.ok),

@@ -303,6 +303,7 @@ describe("aggregation", () => {
 		expect(names).not.toContain("runtime-entry");
 		expect(names).not.toContain("runtime-bin");
 		expect(names).toContain("k8s-context");
+		expect(names).not.toContain("k8s-fields");
 		expect(result.provider).toBe("kubernetes");
 	});
 

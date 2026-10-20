@@ -608,6 +608,43 @@ describe("fleet edge", () => {
 		expect(server.registry.get(spawnedEntry.daemonId)?.status).toBe("asleep");
 	});
 
+	test("spawn_resume retries a clone whose callback never established (status error, stage failed)", async () => {
+		// The roster's Retry button sends spawn_resume; the pair watcher leaves the
+		// row at status "error", which the asleep-only gate used to refuse.
+		const clone = server.registry.create({
+			name: "retry-clone",
+			cwd: join(tmp, "retry-clone-workspace"),
+			project: "fake-proj",
+			labels: [],
+			template: "local",
+			status: "asleep",
+			workspace: {
+				kind: "clone",
+				projectId: "p-none",
+				profileId: "no-such-profile",
+				desiredState: "running",
+			},
+		});
+		server.registry.update(clone.daemonId, {
+			lifecycleStage: "failed",
+			lifecycleError: "sandbox stopped before the callback pair established",
+		});
+		server.registry.setStatus(clone.daemonId, "error", "stop and start to retry");
+		const browser = await openBrowser(server.port);
+		try {
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "spawn_resume", id: "sr-retry", daemonId: clone.daemonId });
+			const frame = await browser.waitForFrame((f) => f.type === "error", "error frame");
+			if (frame.type !== "error") throw new Error("expected error");
+			// Past the status gate: the wake reached the lifecycle service.
+			expect(frame.error).not.toContain("is not asleep");
+			expect(frame.error).toContain("no resolvable provider profile");
+		} finally {
+			browser.close();
+			server.registry.remove(clone.daemonId);
+		}
+	});
+
 	test("spawn with a bad path answers an error frame", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");

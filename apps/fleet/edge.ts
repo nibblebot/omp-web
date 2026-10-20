@@ -1247,7 +1247,13 @@ export class FleetEdge {
 	async #runSpawnResume(daemonId: string, sessionFile?: string): Promise<void> {
 		const entry = this.#registry.get(daemonId);
 		if (!entry) throw new Error(`unknown daemon: ${daemonId}`);
-		if (entry.status !== "asleep") {
+		// A clone whose pair watcher failed (status "error", lifecycleStage "failed")
+		// is retried in place by the same start the Retry button sends.
+		const failedClone =
+			entry.workspace?.kind === "clone" &&
+			entry.status === "error" &&
+			entry.lifecycleStage === "failed";
+		if (entry.status !== "asleep" && !failedClone) {
 			throw new Error(`daemon ${daemonId} is not asleep (status ${entry.status})`);
 		}
 		// A dropdown-picked session must belong to this worktree's session

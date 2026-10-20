@@ -24,16 +24,20 @@
 #     10001 at first start (prep user), which requires a fsGroup-capable
 #     StorageClass or an operator-owned hostPath chown.
 
+# glibc base, not alpine: the pinned @oh-my-pi/pi-natives addon is linked
+# against glibc (ld-linux-x86-64.so.2) and cannot load on musl. Bun 1.4: the
+# SDK needs bun >= 1.3.14 (DisposableStack), matching the fleet host's runtime.
 # --- deps stage: resolve the exact lockfile, no devDependencies -----------
-FROM oven/bun:1.2-alpine AS deps
+FROM oven/bun:1.4-debian AS deps
 WORKDIR /opt/omp-web
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production && bun pm cache rm
 
 # --- runtime stage: lean image with git + tini ----------------------------
-FROM oven/bun:1.2-alpine
-RUN apk add --no-cache --update git ca-certificates tini \
- && rm -rf /var/cache/apk/*
+FROM oven/bun:1.4-debian
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates tini \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/omp-web
 COPY --from=deps /opt/omp-web/node_modules ./node_modules
 # Session sources the daemon needs: root metadata for version lookup and #lib
@@ -43,15 +47,17 @@ COPY package.json ./
 COPY apps/ ./apps/
 COPY lib/ ./lib/
 
-# Isolated private home: populated at first start under the PVC.
-ENV OMP_WORKSPACE_ROOT=/workspace \
-    PATH=/usr/local/bin:/usr/bin:/bin \
-    LANG=C.UTF-8
-
-RUN addgroup -S -g 10001 omp && adduser -S -D -H -u 10001 -G omp omp \
+RUN groupadd --system --gid 10001 omp \
+ && useradd --system --no-create-home --uid 10001 --gid omp --shell /usr/sbin/nologin omp \
  && mkdir -p /workspace /home/omp \
  && chown -R omp:omp /workspace /home/omp /opt/omp-web \
  && chmod 0555 /opt/omp-web/apps /opt/omp-web/apps/session
 
+# Set after the RUN above: the restricted PATH omits /usr/sbin, where
+# groupadd/useradd live. Isolated private home: populated at first start under the PVC.
+ENV OMP_WORKSPACE_ROOT=/workspace \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+    LANG=C.UTF-8
+
 USER 10001:10001
-ENTRYPOINT ["/sbin/tini", "--", "/opt/omp-web/apps/session/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/omp-web/apps/session/entrypoint.sh"]
