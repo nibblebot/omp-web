@@ -874,7 +874,6 @@ describe("clone source remoteName over /ctl/clones", () => {
 						id: "kube",
 						provider: "kubernetes",
 						executable: fakeProvider,
-						tools: [],
 						image: "img",
 						namespace: "ns",
 						context: "ctx",
@@ -895,6 +894,55 @@ describe("clone source remoteName over /ctl/clones", () => {
 			expect(res.status).toBe(503);
 			expect(await res.text()).toContain("has no origin remote");
 			expect(server.registry.list()).toHaveLength(before);
+		} finally {
+			await server.close();
+		}
+	}, 20_000);
+
+	test("a provider-prepared profile with no source defaults to origin at the main checkout HEAD", async () => {
+		const paths = fleetPaths("omp-workspace-lifecycle-kube-origin-");
+		const workspaceDir = join(paths.tmp, "workspaces");
+		const repoDir = join(paths.tmp, "repo");
+		await makeRepo(repoDir);
+		// A local path is a valid git remote URL and keeps pin verification hermetic.
+		const originUrl = repoDir;
+		await git(repoDir, ["remote", "add", "origin", originUrl]);
+		const head = await git(repoDir, ["rev-parse", "HEAD"]);
+		const fakeProvider = writeFakeProvider(join(paths.tmp, "provider"), {
+			runningWhileLive: false,
+			stopObserved: "stopped",
+			deleteFailures: 0,
+		});
+		const server = await startTestFleet(
+			{ statePath: paths.statePath, configPath: paths.configPath },
+			{
+				workspaceDir,
+				providerProfiles: {
+					kube: {
+						id: "kube",
+						provider: "kubernetes",
+						executable: fakeProvider,
+						image: "img",
+						namespace: "ns",
+						context: "ctx",
+					},
+				},
+			},
+			{ workspaceDir },
+		);
+		try {
+			const { project } = server.registry.addProject(repoDir);
+			const res = await postJson(server.port, "/ctl/clones", {
+				projectId: project.projectId,
+				name: "clone-kube-origin",
+				profileId: "kube",
+				start: false,
+			});
+			expect(res.status).toBe(201);
+			const body = (await res.json()) as { entry: { daemonId: string } };
+			const record = server.registry.get(body.entry.daemonId)?.workspace;
+			expect(record?.source).toEqual({ remote: originUrl });
+			expect(record?.pinnedRevision).toBe(head);
 		} finally {
 			await server.close();
 		}

@@ -67,26 +67,115 @@ export const PROVIDER_ERROR_CODES = [
 export type ProviderErrorCode = (typeof PROVIDER_ERROR_CODES)[number];
 
 /**
- * A provider profile: one `providerProfiles` entry of the fleet config file.
+ * The provider kinds: the ONE source of truth for every validator and type
+ * (protocol request, config load, preflight, wire). Adding a kind is one edit
+ * here, its profile member below, its `PROVIDER_CAPABILITIES` row, and its
+ * validator keys.
+ */
+export const PROVIDER_KINDS = ["bwrap", "kubernetes"] as const;
+export type ProviderKind = (typeof PROVIDER_KINDS)[number];
+
+export function isProviderKind(value: unknown): value is ProviderKind {
+	return typeof value === "string" && (PROVIDER_KINDS as readonly string[]).includes(value);
+}
+
+/** `"a"`, `"a" or "b"`, `"a", "b" or "c"`: the kinds list for error messages. */
+export function describeProviderKinds(): string {
+	const quoted = PROVIDER_KINDS.map((kind) => `"${kind}"`);
+	return quoted.length <= 1
+		? quoted.join("")
+		: `${quoted.slice(0, -1).join(", ")} or ${quoted[quoted.length - 1]}`;
+}
+
+/**
+ * What a provider kind can do, answered by the fleet without exec'ing the
+ * provider. Static per kind (not provider-reported): lifecycle decisions such
+ * as clone preparation, wake resume and secret resolution must not require
+ * spawning the provider executable.
+ */
+export interface ProviderCapabilities {
+	/**
+	 * Who prepares a NEW workspace volume: `"fleet"` clones at the pin and
+	 * seeds the baseline on the fleet host before the provider runs;
+	 * `"provider"` prepares it in place (e.g. a pod init step) from a source
+	 * the provider can reach, so a fleet-host path is not a valid source.
+	 */
+	preparation: "fleet" | "provider";
+	/** The workspace volume is readable at the same path on the fleet host (resume hint, transcript materialization, store-completeness checks). */
+	volumeFleetVisible: boolean;
+	/** `"fleet-env"`: `secretRefs` are `env:NAME` references the fleet resolves from its own environment; `"provider"`: references are resolved by the provider/cluster API-side. */
+	secretResolution: "fleet-env" | "provider";
+}
+
+export const PROVIDER_CAPABILITIES: Record<ProviderKind, ProviderCapabilities> = {
+	bwrap: { preparation: "fleet", volumeFleetVisible: true, secretResolution: "fleet-env" },
+	kubernetes: { preparation: "provider", volumeFleetVisible: false, secretResolution: "provider" },
+};
+
+/**
+ * A provider profile: one `providerProfiles` entry of the fleet config file,
+ * a union keyed on `provider`; per-kind fields live only on their member.
  * fleet/provider-profile.ts validates it and owns the config-file concern.
  * `secretRefs` holds external secret reference NAMES only; values never
  * leave the config file and never appear in requests.
  */
-export interface ProviderProfile {
+interface ProviderProfileBase {
 	id: string;
-	provider: "bwrap" | "kubernetes";
+	provider: ProviderKind;
 	executable: string;
-	tools: string[];
 	resources?: { cpu?: string; memory?: string };
 	storage?: { class?: string; size?: string };
 	secretRefs?: Record<string, string>;
+}
+
+export interface BwrapProfile extends ProviderProfileBase {
+	provider: "bwrap";
+	/** Absolute tool paths ro-bound into the sandbox. */
+	tools: string[];
+	/** Sandbox network mode: "host" shares the host netns (dev profiles), "isolated" (default) keeps the fresh netns. */
+	network?: "host" | "isolated";
+}
+
+export interface KubernetesProfile extends ProviderProfileBase {
+	provider: "kubernetes";
 	image?: string;
 	namespace?: string;
-	/** Kubernetes only: operator-explicit kubeconfig context. The provider
-	 *  never falls back to the ambient current-context (P5.3). */
+	/** Operator-explicit kubeconfig context. The provider never falls back to
+	 *  the ambient current-context (P5.3). */
 	context?: string;
-	/** Sandbox network mode (bwrap): "host" shares the host netns (dev profiles), "isolated" (default) keeps the fresh netns. */
-	network?: "host" | "isolated";
+}
+
+export type ProviderProfile = BwrapProfile | KubernetesProfile;
+
+/** Request/config keys every kind shares. */
+const PROFILE_BASE_KEYS = [
+	"id",
+	"provider",
+	"executable",
+	"resources",
+	"storage",
+	"secretRefs",
+] as const;
+
+/**
+ * Per-kind profile key allowlist (base + the kind's own fields). A key owned
+ * by another kind is a typed validation error, never silently carried.
+ */
+export const PROVIDER_PROFILE_KEYS: Record<ProviderKind, readonly string[]> = {
+	bwrap: [...PROFILE_BASE_KEYS, "tools", "network"],
+	kubernetes: [...PROFILE_BASE_KEYS, "image", "namespace", "context"],
+};
+
+/**
+ * The kind that owns `key`, when it is a per-kind field of a kind other than
+ * `kind` (null for base keys, own keys, and unknown keys).
+ */
+export function foreignProfileKeyOwner(kind: ProviderKind, key: string): ProviderKind | null {
+	if (PROVIDER_PROFILE_KEYS[kind].includes(key)) return null;
+	for (const other of PROVIDER_KINDS) {
+		if (other !== kind && PROVIDER_PROFILE_KEYS[other].includes(key)) return other;
+	}
+	return null;
 }
 
 /** Fixed request field key set (steers `Object.keys` allowlist, see below). */
@@ -102,20 +191,6 @@ const PROVIDER_REQUEST_KEYS = [
 	"source",
 	"revision",
 	"branch",
-] as const;
-
-const PROVIDER_PROFILE_KEYS = [
-	"id",
-	"provider",
-	"executable",
-	"tools",
-	"resources",
-	"storage",
-	"secretRefs",
-	"image",
-	"namespace",
-	"context",
-	"network",
 ] as const;
 
 const PROVIDER_RESOURCES_KEYS = ["cpu", "memory"] as const;
@@ -277,13 +352,21 @@ function parseProfile(value: unknown, where: string): ProviderProfile {
 			`invalid provider request: ${where} must be an object`,
 		);
 	}
-	rejectUnknownKeys(value, PROVIDER_PROFILE_KEYS, where);
 	const provider = value["provider"];
-	if (provider !== "bwrap" && provider !== "kubernetes") {
+	if (!isProviderKind(provider)) {
 		throw ProviderProtocolError.invalidRequest(
-			`invalid provider request: ${where}.provider must be "bwrap" or "kubernetes"`,
+			`invalid provider request: ${where}.provider must be ${describeProviderKinds()}`,
 		);
 	}
+	for (const key of Object.keys(value)) {
+		const owner = foreignProfileKeyOwner(provider, key);
+		if (owner !== null) {
+			throw ProviderProtocolError.invalidRequest(
+				`invalid provider request: ${where}.${key} is a ${owner} field and is not valid on a ${provider} profile`,
+			);
+		}
+	}
+	rejectUnknownKeys(value, PROVIDER_PROFILE_KEYS[provider], where);
 	const secretRefsRaw = value["secretRefs"];
 	let secretRefs: Record<string, string> | undefined;
 	if (secretRefsRaw !== undefined) {
@@ -338,30 +421,35 @@ function parseProfile(value: unknown, where: string): ProviderProfile {
 			size: optionalString(storageRaw, "size", `${where}.storage`),
 		};
 	}
-	const toolsRaw = value["tools"];
-	if (!Array.isArray(toolsRaw) || toolsRaw.some((t) => typeof t !== "string" || t.length === 0)) {
-		throw ProviderProtocolError.invalidRequest(
-			`invalid provider request: ${where}.tools must be an array of non-empty strings`,
-		);
-	}
-	const networkRaw = value["network"];
-	if (networkRaw !== undefined && networkRaw !== "host" && networkRaw !== "isolated") {
-		throw ProviderProtocolError.invalidRequest(
-			`invalid provider request: ${where}.network must be "host" or "isolated"`,
-		);
+	const id = requireString(value, "id", where);
+	const executable = requireString(value, "executable", where);
+	const base = { id, executable, resources, storage, secretRefs };
+	if (provider === "bwrap") {
+		const toolsRaw = value["tools"];
+		if (!Array.isArray(toolsRaw) || toolsRaw.some((t) => typeof t !== "string" || t.length === 0)) {
+			throw ProviderProtocolError.invalidRequest(
+				`invalid provider request: ${where}.tools must be an array of non-empty strings`,
+			);
+		}
+		const networkRaw = value["network"];
+		if (networkRaw !== undefined && networkRaw !== "host" && networkRaw !== "isolated") {
+			throw ProviderProtocolError.invalidRequest(
+				`invalid provider request: ${where}.network must be "host" or "isolated"`,
+			);
+		}
+		return {
+			...base,
+			provider,
+			tools: toolsRaw as string[],
+			...(networkRaw !== undefined ? { network: networkRaw as "host" | "isolated" } : {}),
+		};
 	}
 	return {
-		id: requireString(value, "id", where),
+		...base,
 		provider,
-		executable: requireString(value, "executable", where),
-		tools: toolsRaw as string[],
-		resources,
-		storage,
-		secretRefs,
 		image: optionalString(value, "image", where),
 		namespace: optionalString(value, "namespace", where),
 		context: optionalString(value, "context", where, { maxChars: 512 }),
-		...(networkRaw !== undefined ? { network: networkRaw as "host" | "isolated" } : {}),
 	};
 }
 

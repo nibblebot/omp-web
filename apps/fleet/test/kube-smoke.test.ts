@@ -17,7 +17,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import type {
 	ProviderErrorResponse,
 	ProviderOkResponse,
-	ProviderProfile,
+	KubernetesProfile,
 	ProviderRequest,
 	ProviderResponse,
 } from "#lib/runtime/provider-protocol";
@@ -271,13 +271,10 @@ function fakeExec(argv: readonly string[], input?: string): Promise<KubeExecResu
 // Fixtures
 // ---------------------------------------------------------------------------
 
-type KubeProfile = ProviderProfile & { context?: string };
-
-const PROFILE: KubeProfile = {
+const PROFILE: KubernetesProfile = {
 	id: "k8s-dev",
 	provider: "kubernetes",
 	executable: "/opt/omp-web/providers/kubernetes-provider",
-	tools: [],
 	image: "registry.example.com/omp-web/session-runtime:1.0.0",
 	namespace: "omp-clones",
 	context: "real-ctx",
@@ -300,7 +297,7 @@ function req(op: ProviderRequest["op"], over: Partial<ProviderRequest> = {}): Pr
 		generation: 1,
 		workspaceDir: "/workspace/d1/.checkout",
 		homeDir: "/workspace/d1/.home",
-		profile: PROFILE as ProviderProfile,
+		profile: PROFILE,
 		stateDir,
 		...over,
 	};
@@ -648,13 +645,10 @@ describe("case N: source.local on kubernetes", () => {
 describe("case O: no explicit context anywhere (never ambient)", () => {
 	test("O no context -> invalid_request", async () => {
 		const noCtx = expectError(
-			await runOp(
-				req("ensure-running", { profile: { ...PROFILE, context: undefined } as ProviderProfile }),
-				{
-					exec: fakeExec,
-					env: { ...env, OMP_KUBE_CONTEXT: undefined },
-				},
-			),
+			await runOp(req("ensure-running", { profile: { ...PROFILE, context: undefined } }), {
+				exec: fakeExec,
+				env: { ...env, OMP_KUBE_CONTEXT: undefined },
+			}),
 		);
 		expect(noCtx.error.code).toBe("invalid_request");
 		expect(noCtx.error.message).toMatch(/context/);
@@ -683,7 +677,7 @@ describe("case P: inspect after teardown", () => {
 
 describe("case Q: preflight", () => {
 	test("Q0 preflight all ok", async () => {
-		const allOk = await preflightKubernetesProfile(PROFILE as ProviderProfile, {
+		const allOk = await preflightKubernetesProfile(PROFILE, {
 			exec: fakeExec,
 			env,
 		});
@@ -695,7 +689,7 @@ describe("case Q: preflight", () => {
 
 	test("Q1 preflight no context", async () => {
 		const noCtxP = await preflightKubernetesProfile(
-			{ ...PROFILE, context: undefined } as ProviderProfile,
+			{ ...PROFILE, context: undefined },
 			{
 				exec: fakeExec,
 				env: { ...env, OMP_KUBE_CONTEXT: undefined },
@@ -711,7 +705,7 @@ describe("case Q: preflight", () => {
 	test("Q2 preflight API down", async () => {
 		cluster.reachable = false;
 		try {
-			const apiDown = await preflightKubernetesProfile(PROFILE as ProviderProfile, {
+			const apiDown = await preflightKubernetesProfile(PROFILE, {
 				exec: fakeExec,
 				env,
 			});
@@ -729,7 +723,7 @@ describe("case Q: preflight", () => {
 	test("Q3 preflight RBAC gap", async () => {
 		cluster.rbac.delete("create:persistentvolumeclaims:omp-clones");
 		try {
-			const noRbac = await preflightKubernetesProfile(PROFILE as ProviderProfile, {
+			const noRbac = await preflightKubernetesProfile(PROFILE, {
 				exec: fakeExec,
 				env,
 			});
@@ -752,7 +746,7 @@ describe("case Q: preflight", () => {
 	test("Q4 preflight secret missing", async () => {
 		cluster.secrets.delete("omp-model-secret");
 		try {
-			const noSecret = await preflightKubernetesProfile(PROFILE as ProviderProfile, {
+			const noSecret = await preflightKubernetesProfile(PROFILE, {
 				exec: fakeExec,
 				env,
 			});
@@ -775,7 +769,7 @@ describe("case Q: preflight", () => {
 	test("Q5 preflight storageclass missing", async () => {
 		cluster.storageClasses.delete("standard");
 		try {
-			const noSc = await preflightKubernetesProfile(PROFILE as ProviderProfile, {
+			const noSc = await preflightKubernetesProfile(PROFILE, {
 				exec: fakeExec,
 				env,
 			});
@@ -793,7 +787,7 @@ describe("case Q: preflight", () => {
 	test("Q6 preflight namespace missing", async () => {
 		cluster.namespaces.delete("omp-clones");
 		try {
-			const noNs = await preflightKubernetesProfile(PROFILE as ProviderProfile, {
+			const noNs = await preflightKubernetesProfile(PROFILE, {
 				exec: fakeExec,
 				env,
 			});
@@ -853,7 +847,7 @@ describe("case R: pod manifests render correctly", () => {
 				generation: 1,
 				workspaceDir: "/workspace/d1/.checkout",
 				homeDir: "/workspace/d1/.home",
-				profile: PROFILE as ProviderProfile,
+				profile: PROFILE,
 				stateDir,
 				source: { remote: "https://example.com/repo.git" },
 				revision: "0123456789012345678901234567890123456789",

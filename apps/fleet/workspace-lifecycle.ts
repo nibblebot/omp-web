@@ -50,7 +50,7 @@ import { ENROLLMENT_KEY_BYTES, type CallbackErrorCode } from "#lib/wire/callback
 import type { LifecycleStage, RegisteredProject, CloneFetchResult } from "#lib/wire/protocol";
 import type { Registry, RegistryEntry, WorkspaceRecord, DeletionGateError } from "./registry";
 import type { FleetConfig } from "./config";
-import type { ProviderProfile } from "#lib/runtime/provider-protocol";
+import { PROVIDER_CAPABILITIES, type ProviderCapabilities } from "#lib/runtime/provider-protocol";
 import { readCallbackEnv } from "#lib/runtime/provider-callback-env";
 import type { DaemonTransportRegistry } from "./daemon-transport";
 import type { FleetLogStore } from "./log-store";
@@ -307,14 +307,15 @@ async function remoteUrlOf(repoPath: string, remoteName: string): Promise<string
 /**
  * Resolve a clone's source. Explicit members win (`remoteName` is looked up
  * among the project's git remotes). An omitted source is the project's local
- * path for host-side providers; kubernetes cannot read fleet-host paths, so it
+ * path for fleet-prepared providers; a provider that prepares in place
+ * (`preparation: "provider"`, e.g. kubernetes) cannot read fleet-host paths, so it
  * defaults to the project's `origin` URL at the main checkout HEAD commit
  * (`defaultRevision`, used when the request names no revision). Refuses with
  * the reason when origin or HEAD cannot be read.
  */
 async function resolveCloneSource(
 	project: RegisteredProject,
-	provider: ProviderProfile["provider"],
+	capabilities: ProviderCapabilities,
 	members: { local?: string; remote?: string; remoteName?: string },
 ): Promise<{ source: CloneSource; defaultRevision?: string }> {
 	if (members.local !== undefined) return { source: { local: resolve(members.local) } };
@@ -329,19 +330,19 @@ async function resolveCloneSource(
 		}
 		return { source: { remote: url } };
 	}
-	if (provider !== "kubernetes") return { source: { local: resolve(project.path) } };
+	if (capabilities.preparation !== "provider") return { source: { local: resolve(project.path) } };
 	const origin = await remoteUrlOf(project.path, "origin");
 	if (origin === undefined) {
 		throw new CloneLifecycleError(
 			"unavailable",
-			`kubernetes clones default to the project's origin remote, but ${project.path} has no origin remote; pass source.remote or source.remoteName`,
+			`${project.path} has no origin remote, and this provider cannot read a fleet-host path as the clone source, so the default source is the project's origin; pass source.remote or source.remoteName`,
 		);
 	}
 	const head = await runGit(["rev-parse", "--verify", "HEAD^{commit}"], project.path);
 	if (head.exitCode !== 0) {
 		throw new CloneLifecycleError(
 			"unavailable",
-			`kubernetes clones default to the main checkout HEAD commit, but ${project.path} has no commit at HEAD`,
+			`${project.path} has no commit at HEAD, and this provider cannot read a fleet-host path as the clone source, so the default source is origin at the main checkout HEAD commit`,
 		);
 	}
 	return { source: { remote: origin }, defaultRevision: head.stdout.trim() };
@@ -497,8 +498,8 @@ export class WorkspaceLifecycle {
 		}
 
 		// Exactly one source; an omitted source resolves per provider
-		// (resolveCloneSource: kubernetes defaults to origin at HEAD).
-		const resolved = await resolveCloneSource(project, profile.provider, {
+		// (resolveCloneSource: a provider that prepares in place defaults to origin at HEAD).
+		const resolved = await resolveCloneSource(project, PROVIDER_CAPABILITIES[profile.provider], {
 			local: sourceLocal,
 			remote: sourceRemote,
 			remoteName: sourceRemoteName,
@@ -570,11 +571,12 @@ export class WorkspaceLifecycle {
 		}
 		registry.updateWorkspace(daemonId, { pinnedRevision });
 
-		// Preparation. Fleet-local volumes (bwrap) prepare here; kubernetes
-		// profiles skip the fleet-side clone: the provider initializes its
-		// PVC in-pod at the persisted pin during ensure-running (Runtime
-		// lane), reusing the SAME full commit on every retry.
-		if (profile.provider === "bwrap") {
+		// Preparation. Profiles whose capability is fleet preparation (bwrap)
+		// prepare the volume here; provider-prepared profiles (kubernetes)
+		// skip the fleet-side clone: the provider initializes its volume
+		// in place at the persisted pin during ensure-running, reusing the
+		// SAME full commit on every retry.
+		if (PROVIDER_CAPABILITIES[profile.provider].preparation === "fleet") {
 			try {
 				await prepareWorkspace({
 					workspaceId: daemonId,
@@ -1877,9 +1879,9 @@ export class WorkspaceLifecycle {
 	): Promise<{ OMP_SESSION_RESUME: string } | undefined> {
 		const daemonId = entry.daemonId;
 		const { profile } = this.#cloneProfile(entry);
-		// k8s volumes are not fleet-path-identical and are retained across
-		// stop (warm): no fleet-side resume hint on that lane.
-		if (profile.provider !== "bwrap") return undefined;
+		// Volumes the fleet cannot read at the same path (pod paths differ
+		// from host; PVC retained across stop) get no fleet-side resume hint.
+		if (!PROVIDER_CAPABILITIES[profile.provider].volumeFleetVisible) return undefined;
 		const store = this.#deps.logStore;
 		const { volumeRoot } = this.#clonePaths(entry);
 		const sessionsDir = join(volumeRoot, ".home", "agent", "sessions");

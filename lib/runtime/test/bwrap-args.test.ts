@@ -12,7 +12,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ProviderProfile } from "#lib/runtime/provider-protocol";
+import type { BwrapProfile } from "#lib/runtime/provider-protocol";
 import {
 	DeniedBindError,
 	FLEET_CALLBACK_ENV_KEYS,
@@ -47,7 +47,7 @@ function syntheticDenyRoots() {
 	return { ...syntheticRoots(), userRuntimeDir: null };
 }
 
-function baseProfile(tools: string[]): ProviderProfile {
+function baseProfile(tools: string[]): BwrapProfile {
 	return {
 		id: "test",
 		provider: "bwrap",
@@ -287,7 +287,7 @@ describe("buildBwrapArgv", () => {
 	test('network knob (P5.7): absent and "isolated" keep the frozen argv (no --share-net)', () => {
 		const ws = tempDir("bwrap-ws-");
 		const home = tempDir("bwrap-home-");
-		const run = (profile: ProviderProfile) =>
+		const run = (profile: BwrapProfile) =>
 			buildBwrapArgv({
 				workspaceDir: ws,
 				homeDir: home,

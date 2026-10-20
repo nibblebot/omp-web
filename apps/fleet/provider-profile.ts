@@ -59,7 +59,14 @@ export function validateProfiles(raw: unknown): ProfileValidationResult {
 // lib/wire/protocol.ts (frozen contract) so browser/CLI consumers import it
 // from the shared protocol module, never from this fleet-private leaf.
 import type { PublicProviderProfile } from "#lib/wire/protocol";
-import type { ProviderProfile } from "#lib/runtime/provider-protocol";
+import {
+	describeProviderKinds,
+	foreignProfileKeyOwner,
+	isProviderKind,
+	type BwrapProfile,
+	type KubernetesProfile,
+	type ProviderProfile,
+} from "#lib/runtime/provider-protocol";
 
 /**
  * Derive the public capability view: drops the executable, secret reference
@@ -71,7 +78,7 @@ export function toPublicProfile(profile: ProviderProfile): PublicProviderProfile
 	if (profile.resources !== undefined) pub.resources = { ...profile.resources };
 	if (profile.storage?.class !== undefined) pub.storageClassName = profile.storage.class;
 	if (profile.secretRefs !== undefined) pub.secretRefNames = Object.keys(profile.secretRefs).sort();
-	if (profile.network !== undefined) pub.network = profile.network;
+	if (profile.provider === "bwrap" && profile.network !== undefined) pub.network = profile.network;
 	return pub;
 }
 
@@ -100,10 +107,10 @@ function parseProfile(
 				: `profile id must be a string, got ${describeValue(rawId)}`,
 		);
 	}
-	if (raw.provider !== "bwrap" && raw.provider !== "kubernetes") {
+	if (!isProviderKind(raw.provider)) {
 		return fail(
 			"invalid_request",
-			`provider must be "bwrap" or "kubernetes", got ${
+			`provider must be ${describeProviderKinds()}, got ${
 				typeof raw.provider === "string" ? `"${raw.provider}"` : describeValue(raw.provider)
 			}`,
 		);
@@ -114,15 +121,19 @@ function parseProfile(
 			"executable is required: a non-empty path (absolute, on PATH, or ~/ prefixed)",
 		);
 	}
-	if (!isToolList(raw.tools)) {
-		return fail("invalid_request", "tools is required: an array of non-empty tool names");
+	for (const field of Object.keys(raw)) {
+		const owner = foreignProfileKeyOwner(raw.provider, field);
+		if (owner !== null) {
+			return fail(
+				"invalid_request",
+				`${field} is a ${owner} field and is not valid on a ${raw.provider} profile`,
+			);
+		}
 	}
-	const profile: ProviderProfile = {
-		id: key,
-		provider: raw.provider,
-		executable: raw.executable,
-		tools: raw.tools,
-	};
+	const profile: Pick<
+		ProviderProfile,
+		"id" | "executable" | "resources" | "storage" | "secretRefs"
+	> = { id: key, executable: raw.executable };
 
 	const resources = raw.resources;
 	if (resources !== undefined) {
@@ -205,51 +216,38 @@ function parseProfile(
 		profile.secretRefs = secretRefs as Record<string, string>;
 	}
 
-	const image = raw.image;
-	if (image !== undefined) {
-		if (typeof image !== "string" || image.trim() === "") {
+	const provider = raw.provider;
+	if (provider === "bwrap") {
+		if (!isToolList(raw.tools)) {
+			return fail("invalid_request", "tools is required: an array of non-empty tool names");
+		}
+		const network = raw.network;
+		if (network !== undefined && network !== "host" && network !== "isolated") {
 			return fail(
 				"invalid_request",
-				`image must be a non-empty string, got ${describeValue(image)}`,
+				`network must be "host" or "isolated", got ${
+					typeof network === "string" ? `"${network}"` : describeValue(network)
+				}`,
 			);
 		}
-		profile.image = image;
+		const bwrap: BwrapProfile = { ...profile, provider, tools: raw.tools };
+		if (network !== undefined) bwrap.network = network;
+		return bwrap;
 	}
 
-	const namespace = raw.namespace;
-	if (namespace !== undefined) {
-		if (typeof namespace !== "string" || namespace.trim() === "") {
+	const kubernetes: KubernetesProfile = { ...profile, provider };
+	for (const field of ["image", "namespace", "context"] as const) {
+		const fieldValue = raw[field];
+		if (fieldValue === undefined) continue;
+		if (typeof fieldValue !== "string" || fieldValue.trim() === "") {
 			return fail(
 				"invalid_request",
-				`namespace must be a non-empty string, got ${describeValue(namespace)}`,
+				`${field} must be a non-empty string, got ${describeValue(fieldValue)}`,
 			);
 		}
-		profile.namespace = namespace;
+		kubernetes[field] = fieldValue;
 	}
-
-	const context = raw.context;
-	if (context !== undefined) {
-		if (typeof context !== "string" || context.trim() === "") {
-			return fail(
-				"invalid_request",
-				`context must be a non-empty string, got ${describeValue(context)}`,
-			);
-		}
-		profile.context = context;
-	}
-
-	const network = raw.network;
-	if (network !== undefined && network !== "host" && network !== "isolated") {
-		return fail(
-			"invalid_request",
-			`network must be "host" or "isolated", got ${
-				typeof network === "string" ? `"${network}"` : describeValue(network)
-			}`,
-		);
-	}
-	if (network !== undefined) profile.network = network;
-
-	return profile;
+	return kubernetes;
 }
 
 function isToolList(value: unknown): value is string[] {

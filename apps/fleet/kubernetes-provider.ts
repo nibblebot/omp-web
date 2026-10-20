@@ -93,7 +93,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
 	ProviderProtocolError,
-	type ProviderProfile,
+	type KubernetesProfile,
 	type ProviderRequest,
 	type ProviderResponse,
 } from "#lib/runtime/provider-protocol";
@@ -125,9 +125,6 @@ interface KubernetesProviderRequest extends ProviderRequest {
 	/** Branch to create at the pinned commit. */
 	branch?: string;
 }
-
-/** Additive profile field agreed with the Runtime owner (see header). */
-type KubernetesProfile = ProviderProfile & { context?: string };
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -342,7 +339,7 @@ function resolveConfig(
 	request: ProviderRequest,
 	env: Record<string, string | undefined> = process.env,
 ): KubernetesConfig {
-	const profile = request.profile as KubernetesProfile;
+	const profile = request.profile;
 	if (profile.provider !== "kubernetes") {
 		throw ProviderProtocolError.invalidRequest(
 			`profile ${profile.id} is a ${profile.provider} profile, not kubernetes`,
@@ -1489,13 +1486,12 @@ async function opDelete(rawRequest: ProviderRequest, deps: OpDeps): Promise<Prov
  * the wiring is one function call.
  */
 export async function preflightKubernetesProfile(
-	profile: ProviderProfile,
+	profile: KubernetesProfile,
 	opts?: { exec?: KubeExec; env?: Record<string, string | undefined> },
 ): Promise<PreflightResult> {
 	const exec = opts?.exec ?? defaultKubeExec;
 	const env = opts?.env ?? process.env;
 	const checks: PreflightCheck[] = [];
-	const kprofile = profile as KubernetesProfile;
 
 	// 1. kubectl client binary (no API traffic).
 	let clientVersion: string | null = null;
@@ -1530,7 +1526,7 @@ export async function preflightKubernetesProfile(
 	}
 
 	// 2. Explicit context (the ambient current-context is never used).
-	const context = kprofile.context ?? env.OMP_KUBE_CONTEXT;
+	const context = profile.context ?? env.OMP_KUBE_CONTEXT;
 	if (context === undefined || context.trim() === "") {
 		checks.push({
 			name: "kube-context",

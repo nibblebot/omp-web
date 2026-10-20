@@ -259,34 +259,6 @@ describe("k8s rows are real requirement checks on kubernetes profiles", () => {
 		);
 		expect(result.checks.find((c) => c.name === "profile-secrets")!.ok).toBe(true);
 	});
-
-	test("stray k8s fields on a bwrap profile stay green with detail", async () => {
-		const f = fixtureDirs();
-		const home = syntheticHome();
-		const result = await runProfilePreflight(
-			profile({
-				executable: f.tool,
-				storage: { class: "fast", size: "10Gi" },
-				image: "example.invalid/img:tag",
-				namespace: "ns1",
-				context: "c1",
-			}),
-			ctxFor(f, home),
-		);
-		const k8s = result.checks.find((c) => c.name === "k8s-fields");
-		expect(k8s).toBeDefined();
-		expect(k8s!.ok).toBe(true);
-		expect(k8s!.detail).toContain("k8s-only field(s) ignored on bwrap");
-	});
-
-	test("bwrap profile with no k8s fields reports none", async () => {
-		const f = fixtureDirs();
-		const home = syntheticHome();
-		const result = await runProfilePreflight(profile({ executable: f.tool }), ctxFor(f, home));
-		const k8s = result.checks.find((c) => c.name === "k8s-fields");
-		expect(k8s!.ok).toBe(true);
-		expect(k8s!.detail).toBe("no k8s-only fields configured");
-	});
 });
 
 describe("aggregation", () => {
@@ -303,7 +275,7 @@ describe("aggregation", () => {
 		expect(names).not.toContain("runtime-entry");
 		expect(names).not.toContain("runtime-bin");
 		expect(names).toContain("k8s-context");
-		expect(names).not.toContain("k8s-fields");
+		expect(names).not.toContain("profile-tools");
 		expect(result.provider).toBe("kubernetes");
 	});
 

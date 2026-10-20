@@ -335,7 +335,6 @@ async function bootFleet(profile: "bwrap" | "k8s" = "bwrap"): Promise<Booted> {
 						id: "local",
 						provider: "kubernetes",
 						executable: provider,
-						tools: [],
 						image: "example.invalid/runtime:latest",
 						namespace: "test",
 					},

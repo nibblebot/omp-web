@@ -19,10 +19,9 @@
  *    a profile requesting a denied bind fails HERE with an actionable
  *    message (the same denylist the argv builder enforces at request time,
  *    P5.5);
- *  - k8s-only fields (storage class/size, image, namespace, secretRefs) are
- *    reported as informational rows rather than failed: on the bwrap
- *    provider they are inert, and preflight must distinguish an inert
- *    declaration from an unsafe promise.
+ *  - per-kind profile fields (tools/network on bwrap; image/namespace/context
+ *    on kubernetes) are validated at config load, so a foreign field never
+ *    reaches preflight; storage is shared and inert on bwrap.
  *
  * Every check that can fail carries an actionable remediation string. No
  * check installs tools, creates clusters, or fabricates credentials. All
@@ -35,7 +34,12 @@ import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { connect } from "node:net";
 import { lookup } from "node:dns/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { ProviderProfile } from "#lib/runtime/provider-protocol";
+import {
+	PROVIDER_CAPABILITIES,
+	type BwrapProfile,
+	type ProviderKind,
+	type ProviderProfile,
+} from "#lib/runtime/provider-protocol";
 import {
 	DeniedBindError,
 	assertAllowedSource,
@@ -63,7 +67,7 @@ export interface PreflightCheck {
 export interface PreflightResult {
 	ok: boolean;
 	profileId: string;
-	provider: "bwrap" | "kubernetes";
+	provider: ProviderKind;
 	checks: PreflightCheck[];
 }
 
@@ -461,7 +465,7 @@ async function checkDurableDirs(ctx: PreflightContext): Promise<PreflightCheck[]
 
 /** Profile tools must be absolute and existing (a missing tool ro-binds
  *  nothing and breaks the sandbox at launch). */
-async function checkProfileTools(profile: ProviderProfile): Promise<PreflightCheck> {
+async function checkProfileTools(profile: BwrapProfile): Promise<PreflightCheck> {
 	for (const tool of profile.tools) {
 		if (!isAbsolute(tool)) {
 			return {
@@ -516,7 +520,7 @@ async function checkDeniedBinds(
 		}
 		throw err;
 	}
-	for (const tool of profile.tools) {
+	for (const tool of profile.provider === "bwrap" ? profile.tools : []) {
 		try {
 			assertAllowedSource(tool, roots);
 		} catch (err) {
@@ -553,11 +557,11 @@ async function checkProfileSecrets(
 	if (refs === undefined || Object.keys(refs).length === 0) {
 		return { name: "profile-secrets", ok: true, detail: "no secretRefs configured" };
 	}
-	if (profile.provider === "kubernetes") {
+	if (PROVIDER_CAPABILITIES[profile.provider].secretResolution === "provider") {
 		return {
 			name: "profile-secrets",
 			ok: true,
-			detail: `k8s secret references are resolved by the provider API-side (${Object.keys(refs).join(", ")})`,
+			detail: `secret references are resolved by the ${profile.provider} provider API-side (${Object.keys(refs).join(", ")})`,
 		};
 	}
 	const environment = ctx.env ?? process.env;
@@ -648,29 +652,6 @@ async function checkKubernetesProvider(
 	return rows;
 }
 
-/** k8s-only fields on a non-kubernetes profile: informational only. */
-function checkStrayK8sFields(profile: ProviderProfile): PreflightCheck {
-	const parts: string[] = [];
-	if (profile.image !== undefined) parts.push(`image "${profile.image}"`);
-	if (profile.namespace !== undefined) parts.push(`namespace "${profile.namespace}"`);
-	if (profile.context !== undefined) parts.push(`context "${profile.context}"`);
-	if (profile.storage !== undefined) {
-		const storage = profile.storage;
-		const fields: string[] = [];
-		if (storage.class !== undefined) fields.push(`class "${storage.class}"`);
-		if (storage.size !== undefined) fields.push(`size "${storage.size}"`);
-		parts.push(`storage (${fields.join(", ")})`);
-	}
-	if (parts.length === 0) {
-		return { name: "k8s-fields", ok: true, detail: "no k8s-only fields configured" };
-	}
-	return {
-		name: "k8s-fields",
-		ok: true,
-		detail: `k8s-only field(s) ignored on ${profile.provider}: ${parts.join("; ")}`,
-	};
-}
-
 // ---------------------------------------------------------------------------
 // Entry
 // ---------------------------------------------------------------------------
@@ -702,11 +683,10 @@ export async function runProfilePreflight(
 		await checkExecutable(profile),
 		await checkCallback(ctx),
 		...(await checkDurableDirs(ctx)),
-		await checkProfileTools(profile),
+		...(profile.provider === "bwrap" ? [await checkProfileTools(profile)] : []),
 		await checkDeniedBinds(profile, ctx),
 		await checkProfileSecrets(profile, ctx),
 		...(await checkKubernetesProvider(profile, ctx)),
-		...(profile.provider === "kubernetes" ? [] : [checkStrayK8sFields(profile)]),
 	];
 	return {
 		ok: checks.every((check) => check.ok),

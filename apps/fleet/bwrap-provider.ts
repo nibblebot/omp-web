@@ -37,6 +37,7 @@ import { randomUUID } from "node:crypto";
 import { join, normalize } from "node:path";
 import {
 	ProviderProtocolError,
+	type BwrapProfile,
 	type ProviderObserved,
 	type ProviderRequest,
 	type ProviderResponse,
@@ -135,6 +136,17 @@ interface SuperviseSpec {
 	callbackEnv: Record<string, string>;
 	/** Secret-ref env key NAMES only; values never touch disk. */
 	secretEnvKeys: readonly string[];
+}
+
+/** The request's profile narrowed to bwrap; another kind is a request error. */
+function bwrapProfileOf(request: ProviderRequest): BwrapProfile {
+	const profile = request.profile;
+	if (profile.provider !== "bwrap") {
+		throw ProviderProtocolError.invalidRequest(
+			`profile ${profile.id} is a ${profile.provider} profile, not bwrap`,
+		);
+	}
+	return profile;
 }
 
 /** Secret-ref scheme prefix: the value is an environment variable name. */
@@ -292,7 +304,7 @@ async function runSupervisor(stateDir: string): Promise<number> {
 		built = buildBwrapArgv({
 			workspaceDir: request.workspaceDir,
 			homeDir: request.homeDir,
-			profile: request.profile,
+			profile: bwrapProfileOf(request),
 			workspaceToken: spec.workspaceToken,
 			runtimeEntry: spec.runtimeEntry,
 			runtimeBin: spec.runtimeBin,
@@ -473,7 +485,7 @@ async function opEnsureRunning(request: ProviderRequest): Promise<ProviderRespon
 		buildBwrapArgv({
 			workspaceDir: request.workspaceDir,
 			homeDir: request.homeDir,
-			profile: request.profile,
+			profile: bwrapProfileOf(request),
 			workspaceToken: "validation-token",
 			runtimeEntry: launch.entry,
 			runtimeBin: launch.bin,

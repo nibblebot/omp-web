@@ -22,7 +22,7 @@
 
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import type { ProviderProfile } from "./provider-protocol";
+import type { BwrapProfile } from "./provider-protocol";
 
 /**
  * Thrown when a requested bind source resolves inside a forbidden root
@@ -80,7 +80,7 @@ export interface BwrapArgsInput {
 	/** Workspace private home directory (rw bind). */
 	homeDir: string;
 	/** Provider profile; `tools` are extra read-only binds. */
-	profile: ProviderProfile;
+	profile: BwrapProfile;
 	/** Identity token; must appear in the sandbox command's argv. */
 	workspaceToken: string;
 	/** Runtime entry the sandbox runs (absolute path, ro-visible). */

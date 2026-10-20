@@ -8,6 +8,7 @@ import type { FileEntry } from "@oh-my-pi/pi-coding-agent/session/session-entrie
 import type { AvailableSlashCommandSource } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools";
 import type { Capability } from "./browser-ui-contract";
+import type { ProviderKind } from "#lib/runtime/provider-protocol";
 
 // ---------------------------------------------------------------------------
 // Local copies of the RPC wire types (structurally verbatim from the
@@ -541,7 +542,7 @@ export type LifecycleStage = "preparation" | "runtime" | "callback" | "ready" | 
 export interface PublicProviderProfile {
 	/** Profile id (the config map key). */
 	id: string;
-	provider: "bwrap" | "kubernetes";
+	provider: ProviderKind;
 	/** Declared resource limits, when any. */
 	resources?: { cpu?: string; memory?: string };
 	/** Sandbox network mode (bwrap): "host" | "isolated"; absent = isolated default. */
