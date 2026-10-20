@@ -952,6 +952,11 @@ export class FleetCallback {
 			headers: { ...this.#identityHeaders(pair), [CALLBACK_CHUNKS_HEADER]: "1" },
 			body: this.#makeUpBody(pair),
 			duplex: "half",
+			// Bun's fetch aborts after its default 360 s timeout even while this
+			// streaming body keeps sending heartbeats, which cut every pair (and
+			// re-primed every browser stream on it) each 6 minutes. The pair legs
+			// are long-lived; silence is detected by the pair's own deadlines.
+			timeout: false,
 		});
 		pair.upSettled = fetch(`${this.#base}${CALLBACK_UP_PATH}`, init)
 			.then(async (res) => {
@@ -1015,7 +1020,8 @@ export class FleetCallback {
 		try {
 			const res = await this.#fetchWithDeadline(
 				`${this.#base}${CALLBACK_DOWN_PATH}`,
-				this.#fetchInit(pair.downAbort.signal, { method: "GET", headers }),
+				// No Bun fetch timeout: see #launchUp.
+				this.#fetchInit(pair.downAbort.signal, { method: "GET", headers, timeout: false }),
 				pair.downAbort,
 				deadline,
 			);
