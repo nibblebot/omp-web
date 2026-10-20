@@ -239,18 +239,6 @@ describe("docs-sdk-literals", () => {
 		);
 	});
 
-	test("leaves the frozen clone docs alone (design-time SDK facts)", () => {
-		const content = "pinned SDK 17.1.8. Phases implement these frozen shapes.\n";
-		for (const path of [
-			"docs/clone-contracts.md",
-			"docs/clone-design.md",
-			"docs/clone-plan.md",
-			"docs/clone-summary.md",
-		]) {
-			expect(scanSdkLiterals(file(path, content), input)).toEqual([]);
-		}
-	});
-
 	test("leaves the current pin, the repo's own versions and non-SDK numbers alone", () => {
 		const content = [
 			"pinned SDK 18.2.6",
@@ -366,8 +354,6 @@ function writeRepo(): string {
 			"",
 		].join("\n"),
 	);
-	// The tracker's boxes are live work: the checkbox scan must skip this file.
-	writeFileSync(join(root, "docs/clone-plan.md"), "# Clone plan\n\n- [ ] P5.3 kubernetes\n");
 	return root;
 }
 

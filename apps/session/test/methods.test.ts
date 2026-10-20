@@ -23,7 +23,7 @@ function webMethods() {
 		authStorage: {} as never,
 		collab: {} as never,
 		broker: {} as never,
-		// Clone-workspace deps (P8.9 wake): unused by these rows, so inert doubles.
+		// Clone-workspace deps (wake): unused by these rows, so inert doubles.
 		materializeSession: async () => ({ alreadyPresent: true as const }),
 		sessionsDir: "/tmp/fleet-test-sessions",
 		cwd: "/tmp/fleet-test-cwd",

@@ -1,5 +1,5 @@
 /**
- * Unit tests for the fleet trusted-proxy matcher (P2.3): IP/CIDR literal
+ * Unit tests for the fleet trusted-proxy matcher: IP/CIDR literal
  * parsing and peer matching. The gate-policy semantics (forwarded headers
  * honored only from trusted peers, forged values ignored) live in
  * fleet/server-auth.test.ts; this file covers the matcher itself.

@@ -1,5 +1,5 @@
 /**
- * StoredSessionList: fleet log-store browsing section for the tx sidebar (P8.5).
+ * StoredSessionList: fleet log-store browsing section for the tx sidebar.
  *
  * Lists stored workspaces (GET /ctl/stored/workspaces); expanding one lists
  * its sessions (GET /ctl/stored/sessions?workspaceId=). Selecting a session

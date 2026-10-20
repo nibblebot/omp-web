@@ -20,7 +20,7 @@ import {
 } from "#lib/session-files/export-sessions";
 
 // ---------------------------------------------------------------------------
-// Verify-at-deletion gate (P7.1/P7.2 core).
+// Verify-at-deletion gate (core).
 //
 // Result of verifyWorkspaceLogs:
 //
@@ -28,7 +28,7 @@ import {
 //     { ok: true; sessions: VerifiedSession[] }
 //   | { ok: false; code: <ledger error>; message: string; path?: string }
 //
-// P4.5 (additive): when `registry` provenance is supplied, the success arm
+// Additive: when `registry` provenance is supplied, the success arm
 // additionally carries `manifest` (ArchiveManifest per lib/session-files/archive-manifest.ts
 // schema: every verified file's path/size/sha256/kind/sessionId/parentPath,
 // plus projectId/workspaceId/workspaceName/source/resolvedCommit/generatedAt
@@ -56,7 +56,7 @@ import {
 // a length disagreement) fails the gate. Failures always retain the logs.
 //
 // No staging, rename, receipt, or archive copy is produced anywhere; this is
-// a pure read-only snapshot. Deletion-lane wiring (P7.3/P7.5/P7.6) consumes
+// a pure read-only snapshot. Deletion-lane wiring consumes
 // exactly this exported signature.
 //
 // Error-code mapping (frozen ledger vocabulary):
@@ -80,7 +80,7 @@ export interface VerifiedSession {
 /**
  * Typed verify result; failure codes are the frozen ledger vocabulary.
  *
- * The success arm carries the additive P4.5 verification manifest (built
+ * The success arm carries the additive verification manifest (built
  * only when provenance is supplied via {@link VerifyWorkspaceLogsOptions}):
  * an {@link ArchiveManifest} over every verified file, plus its
  * content-addressed export id. Verify-only semantics are preserved: the
@@ -91,7 +91,7 @@ export type VerifyResult =
 	| {
 			ok: true;
 			sessions: VerifiedSession[];
-			/** Verification manifest (P4.5), present iff registry provenance was provided. */
+			/** Verification manifest, present iff registry provenance was provided. */
 			manifest?: ArchiveManifest;
 			/** `computeExportId(manifest)`; present iff `manifest` is. */
 			exportId?: string;
@@ -109,7 +109,7 @@ export interface VerifyWorkspaceLogsOptions {
 	/** Workspace id whose logs/<workspaceId>/ subtree is verified. */
 	workspaceId: string;
 	/**
-	 * Additive P4.5 registry provenance. When supplied, the success result
+	 * Additive registry provenance. When supplied, the success result
 	 * additionally carries `manifest` + `exportId`. Partial records are
 	 * allowed: absent optional fields are omitted from provenance (they are
 	 * not required by the frozen manifest schema).
@@ -148,7 +148,7 @@ const ENTRY_FIELDS: Record<string, true> = {
 	eof: true,
 };
 
-/** Hard bounds shared with the export gate (clone-plan P4.6). */
+/** Hard bounds shared with the export gate. */
 const MAX_FILES = MAX_EXPORT_FILES;
 const MAX_BYTES = MAX_EXPORT_BYTES;
 

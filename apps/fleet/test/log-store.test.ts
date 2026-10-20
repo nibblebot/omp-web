@@ -1,5 +1,5 @@
 /**
- * FleetLogStore durable-behavior regressions (P3.6/P3.9 callback safety
+ * FleetLogStore durable-behavior regressions (callback safety
  * surface): contiguous append and post-reconnect duplicate replay, gap
  * repair without byte loss, daemon-side rewrite forcing resync from zero,
  * reload after crash-partial record/index disagreement, the remaining

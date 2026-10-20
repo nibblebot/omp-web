@@ -1,13 +1,13 @@
 /**
- * Sandbox baseline config seeding (bwrap fleet clones).
+ * Sandbox baseline config seeding (fleet-prepared clones: bwrap, host).
  *
  * Managed clone sandboxes boot with `HOME=<volume>/.home` and
  * `PI_CODING_AGENT_DIR=<volume>/.home/agent`, so they never see the
  * operator's `~/.omp/agent/config.yml` and every fresh clone would boot at
  * SDK defaults. prepareWorkspace calls seedSandboxBaseline at prepare time
  * to copy a sanitized subset of the operator's global config into the
- * volume's `.home/agent/config.yml` (fleet-side, bwrap only; k8s prepares
- * in-pod and stays unseeded for v1).
+ * volume's `.home/agent/config.yml` (fleet-side, for the fleet-prepared kinds; k8s
+ * prepares in-pod and stays unseeded).
  *
  * The copy is allowlisted, not denylisted, because the SDK config schema
  * holds ~444 keys with no host-boundness annotation, and a denylist would

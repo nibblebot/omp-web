@@ -11,7 +11,7 @@ import { isRingedDeltaType } from "./sse-delivery";
 
 /**
  * Daemon control broker: virtual streams over the callback pair
- * (P3.3/P3.5/P6; Transport/Lifecycle 2026-09-06 contracts).
+ * (Transport/Lifecycle 2026-09-06 contracts).
  *
  * The daemon dials the callback pair; the fleet manages per-browser virtual
  * streams and down-half controls. This module owns the daemon half:
@@ -329,7 +329,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		// Ring MISS: the reconnect floor is BELOW the eviction frontier, so
 		// the client never consumed a ringed delta the ring already dropped;
 		// entries it still needs were evicted. Never honor a partial tail;
-		// resync + full re-prime (P3.10: only a miss re-primes). A floor at
+		// resync + full re-prime (only a miss re-primes). A floor at
 		// or above the frontier (the client consumed every evicted entry) is
 		// a HIT below. A brand-new stream has no frontier and primes below.
 		// A stream_open with NO lastSeq on an existing stream is the fleet's

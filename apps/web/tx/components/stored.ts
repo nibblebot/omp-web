@@ -1,5 +1,5 @@
 /**
- * Shared display helpers for the fleet log-store read surface (P8.5/P8.6).
+ * Shared display helpers for the fleet log-store read surface.
  * Pure + module-private to the tx view: no fetch, no solid. Small presenters
  * exist so the sidebar list, the detail header and the transcript-list
  * coverage chips describe the same store facts in one voice.

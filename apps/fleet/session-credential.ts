@@ -23,7 +23,7 @@ export interface SessionEnrollment {
 
 /**
  * Enroll a fresh callback credential for the entry's next generation. The
- * previous generation is revoked and cleared FIRST (P6.2 fencing order, as in
+ * previous generation is revoked and cleared FIRST (fencing order, as in
  * workspace-lifecycle): a stale credential can never authenticate against
  * the new launch. The generation is monotonic: one above both the persisted
  * enrollment and the last authorized generation, so it survives a stop

@@ -1,5 +1,5 @@
 /**
- * G20 targeted resume, pins and foreign imports — daemon-side adapter (P6).
+ * G20 targeted resume, pins and foreign imports — daemon-side adapter.
  *
  * OWNERSHIP: this module is the ONLY place that composes the SDK resume /
  * pins / foreign-import surface for browser-driven resume. Daemon method

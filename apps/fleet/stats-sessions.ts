@@ -336,7 +336,7 @@ function sessionsRoute(ctx: AppCtx): Route {
 }
 
 /**
- * Full disk walk + db enrichment + fleet-store coverage (P8.6). Degrades to
+ * Full disk walk + db enrichment + fleet-store coverage. Degrades to
  * disk-only rows (metrics zeroed, synced:false) on any stats.db trouble; db
  * failure must never 500 this endpoint. Walk count is exposed for tests
  * asserting cache behavior.
@@ -494,7 +494,7 @@ async function computeSessionsList(ctx: AppCtx): Promise<SessionSummary[]> {
 		}
 	}
 
-	// 3. Fleet log-store coverage (P8.6): store-only sessions surface as
+	// 3. Fleet log-store coverage: store-only sessions surface as
 	// rows with origin "fleet-store"; sessions that also exist on disk are
 	// deduplicated by stable session identity (the store sessionId ↔ a
 	// fleet-local header id), the local row carries the `stored` annotation

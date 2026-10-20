@@ -1,4 +1,4 @@
-# Session runtime image (P5.4)
+# Session runtime image
 
 Reproducible container image for the kubernetes provider
 (`apps/fleet/kubernetes-provider.ts`). Build from the repo root:

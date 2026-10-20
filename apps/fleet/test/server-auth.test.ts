@@ -1,5 +1,5 @@
 /**
- * Fleet browser-auth route tests (P2.2/P2.3 integration): /auth/login,
+ * Fleet browser-auth route tests (integration): /auth/login,
  * /auth/session, /auth/logout and the browser-session gate over the shared
  * Bun.serve, exercised over real HTTP like the other server-* suites.
  *

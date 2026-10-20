@@ -1,6 +1,5 @@
 /**
- * Workspace lifecycle service (clone-plan P6/P7; proposed module
- * `fleet/workspace-lifecycle.ts`). THE single create/ensure/stop/delete
+ * Workspace lifecycle service (`fleet/workspace-lifecycle.ts`). THE single create/ensure/stop/delete
  * owner for every workspace: provider-managed clones and the local sessions
  * of main checkouts and git worktrees (the `host` runtime, below). Shared by the control-plane
  * HTTP handlers (POST /ctl/clones, /ctl/start|wake, /ctl/stop, DELETE
@@ -23,7 +22,7 @@
  *   is the only clone-removal path; no kind-blind roster eviction can bypass
  *   it.
  * - Stop preserves checkout and session logs; only the verified gate
- *   deletes. Idle handling stays fleet-owned (P6.4): this service never
+ *   deletes. Idle handling stays fleet-owned: this service never
  *   stops compute on its own; explicit stop/wake are the only transitions.
  * - Runtime supervision: the one runtime watch (below) restarts a
  *   desired-running clone whose provider-proven runtime died after its pair
@@ -421,7 +420,7 @@ function walkSessionDir(
 		} catch {
 			continue;
 		}
-		if (stats.isSymbolicLink()) continue; // Reject symlinks (P7.2).
+		if (stats.isSymbolicLink()) continue; // Reject symlinks.
 		if (stats.isDirectory()) {
 			const nested = walkSessionDir(
 				absolute,
@@ -828,7 +827,7 @@ export class WorkspaceLifecycle {
 	 * pair readiness (callback → ready rides the roster via the bounded
 	 * pair watcher). Rejects with typed errors otherwise.
 	 *
-	 * P8.9 wake resume: `resumeSessionId` names the session this wake
+	 * Wake resume: `resumeSessionId` names the session this wake
 	 * should boot into (the edge pre-validates it against the fleet store
 	 * listing). Fleet-visible volumes (bwrap, host): the wake materializes that
 	 * session's cold/missing stored transcripts into the volume and hands the
@@ -923,7 +922,7 @@ export class WorkspaceLifecycle {
 		);
 	}
 
-	/** Verified deletion (P7.3/P7.5): the only clone-removal path. Returns the verified session list. */
+	/** Verified deletion: the only clone-removal path. Returns the verified session list. */
 	async deleteClone(daemonId: string): Promise<{ removed: string; verified: string[] }> {
 		return await this.#deleteGate(daemonId);
 	}
@@ -1084,7 +1083,7 @@ export class WorkspaceLifecycle {
 	}
 
 	// ------------------------------------------------------------------
-	// Boot reconciliation (P6.3)
+	// Boot reconciliation
 	// ------------------------------------------------------------------
 
 	/**
@@ -1197,7 +1196,7 @@ export class WorkspaceLifecycle {
 	// ------------------------------------------------------------------
 
 	/**
-	 * P6.1/P6.2 ensure-running. Inspect-before-act, then:
+	 * Ensure-running. Inspect-before-act, then:
 	 *   - running + persisted binding at the current generation → reattach:
 	 *     reuse the daemon's own credential (recovered from the state file),
 	 *     no generation bump, no replacement;
@@ -1224,7 +1223,7 @@ export class WorkspaceLifecycle {
 				`daemon ${daemonId} is not a clone workspace (kind ${record?.kind ?? "legacy"}); start a worktree/direct session through /ctl/spawn`,
 			);
 		}
-		// A workspace mid-deletion must not re-enroll (P7.3 admission
+		// A workspace mid-deletion must not re-enroll (admission
 		// barrier: "block new admission once deletion begins").
 		if (record.deletion?.state !== undefined) {
 			throw new CloneLifecycleError(
@@ -1245,7 +1244,7 @@ export class WorkspaceLifecycle {
 				inspect = await this.#runCloneOp(entry.daemonId, "inspect", handle);
 			} catch (err) {
 				// Inspect unavailable is NOT a license to recreate: an
-				// unknown predecessor blocks replacement (P6.2).
+				// unknown predecessor blocks replacement.
 				throw err instanceof CloneLifecycleError
 					? err
 					: new CloneLifecycleError(
@@ -1295,7 +1294,7 @@ export class WorkspaceLifecycle {
 		}
 		const reattached = reuseToken !== undefined && generation === currentGen;
 
-		// P8.9 wake resume: when this wake is spawning a NEW daemon process
+		// Wake resume: when this wake is spawning a NEW daemon process
 		// (not the reattach path), compute the resume target (fleet-visible volumes: also
 		// materialize cold/missing transcripts into the volume BEFORE the
 		// provider runs). The resume hint rides the callback-env handoff
@@ -1314,7 +1313,7 @@ export class WorkspaceLifecycle {
 		// Enroll + persist the binding BEFORE ensure-running (a live
 		// credential must exist for the daemon's pair). Attach the log tap
 		// at the same time so a fresh clone never streams into the void.
-		// P6.2 fencing: when the generation is BUMPED (predecessor proven
+		// Fencing: when the generation is BUMPED (predecessor proven
 		// terminated), revoke the OLD generation's enrollment first so a
 		// stale credential can never authenticate against the new runtime.
 		if (currentGen !== undefined && generation > currentGen) {
@@ -1333,7 +1332,7 @@ export class WorkspaceLifecycle {
 			// generation override is REQUIRED: the bump was computed +
 			// enrolled above but authorizedGeneration persists only after
 			// ensure succeeds; without it the request would carry the stale
-			// pre-bump generation and the provider would fence it (P6.2).
+			// pre-bump generation and the provider would fence it.
 			const response = await this.#runCloneOp(entry.daemonId, "ensure-running", handle, generation);
 			this.#deps.registry.updateWorkspace(daemonId, {
 				providerHandle: response.handle,
@@ -1367,11 +1366,11 @@ export class WorkspaceLifecycle {
 	}
 
 	// ------------------------------------------------------------------
-	// The verified delete gate (P7.3/P7.5)
+	// The verified delete gate
 	// ------------------------------------------------------------------
 
 	/**
-	 * P7.3/P7.5 ordered gate for clone workspaces (behind deleteClone, the sole
+	 * Ordered gate for clone workspaces (behind deleteClone, the sole
 	 * clone-removal path; removal cannot bypass it):
 	 *   1. serialize concurrent DELETEs + reconcile a persisted "deleting"
 	 *      from a previous fleet process to delete-pending-retry;
@@ -1461,9 +1460,8 @@ export class WorkspaceLifecycle {
 		let entry = this.#require(daemonId);
 		const previous = entry.workspace?.deletion;
 
-		// Durable "deleting" before ANY destructive step (P7.3/P7.5:
-		// registry identity is never removed early; cleanup state survives
-		// restart). Re-entry from delete-pending-retry keeps remaining
+		// Durable "deleting" before ANY destructive step (registry identity is
+		// never removed early; cleanup state survives restart). Re-entry from delete-pending-retry keeps remaining
 		// resources across the retry.
 		registry.setWorkspaceDeletion(daemonId, {
 			state: "deleting",
@@ -1533,7 +1531,7 @@ export class WorkspaceLifecycle {
 			entry = registry.get(daemonId) ?? entry;
 		}
 
-		// Git guard (P7.4), writers stopped: reject dirty files, untracked
+		// Git guard, writers stopped: reject dirty files, untracked
 		// files, stashes, and unpreserved local history. No force override.
 		await this.#runGitGuard(daemonId);
 
@@ -1653,7 +1651,7 @@ export class WorkspaceLifecycle {
 			}
 		}
 
-		// Volume removal (LocalCloneResourceDeleter or a P5 provider hook).
+		// Volume removal (LocalCloneResourceDeleter or a provider hook).
 		try {
 			const current = registry.get(daemonId) ?? entry;
 			await this.#deps.resourceDeleter.deleteWorkspaceResources(daemonId, current);
@@ -1709,7 +1707,7 @@ export class WorkspaceLifecycle {
 	}
 
 	/**
-	 * P7.4 non-bypassable Git guard with writers stopped. Runs against the
+	 * Non-bypassable Git guard with writers stopped. Runs against the
 	 * clone's `.checkout`: dirty files, untracked files, stashes, and
 	 * unpreserved local history all block with actionable messages. No
 	 * force override, no transcript-as-source-backup claim. Unreachable git
@@ -2064,9 +2062,8 @@ export class WorkspaceLifecycle {
 	 * One provider operation invocation, typed. Re-reads the CURRENT
 	 * registry entry by daemonId so every op builds its request from ONE
 	 * consistent snapshot; a stale caller entry can never send a request
-	 * carrying an old generation against a freshly enrolled one (P6.2
-	 * fencing). `generationOverride` is REQUIRED on the ensure-running call
-	 * after a generation bump: the bump is computed and enrolled BEFORE the
+	 * carrying an old generation against a freshly enrolled one (fencing). `generationOverride` is
+	 * REQUIRED on the ensure-running call after a generation bump: the bump is computed and enrolled BEFORE the
 	 * provider runs, but `authorizedGeneration` on the record is only
 	 * persisted AFTER ensure succeeds; without the override the request
 	 * would carry the stale pre-bump generation and the provider would
@@ -2135,7 +2132,7 @@ export class WorkspaceLifecycle {
 	}
 
 	/**
-	 * P8.9 wake resume: compute the resume target for a NEW daemon spawn.
+	 * Wake resume: compute the resume target for a NEW daemon spawn.
 	 * Returns the env hint to hand the daemon (OMP_SESSION_RESUME, plus
 	 * OMP_SESSION_RESUME_UNWRITTEN when the file may not exist yet), or
 	 * undefined when the wake should boot fresh. Fleet-visible volumes
@@ -2229,14 +2226,14 @@ export class WorkspaceLifecycle {
 			}
 			return undefined; // Implicit target vanished; boot fresh.
 		}
-		// Stale-lock cleanup (P8.9 boot-resume): omp-session's own PID-file
+		// Stale-lock cleanup (boot-resume): omp-session's own PID-file
 		// lock (#lib/platform/file-lock) sits at `<file>.lock`. A prior sandbox lifetime
 		// that was stopped without a graceful release leaves that lock file
 		// behind, and its PID is namespace-relative (e.g. 2 inside bwrap),
 		// so the NEW sandbox's liveness probe sees an ALIVE pid 2 and refuses
 		// to boot ("session file ... is locked by another omp-session"). This
 		// wake only reaches here after the predecessor generation is PROVEN
-		// terminated (P6.2 stop proof precedes the generation bump), so any
+		// terminated (stop proof precedes the generation bump), so any
 		// lock beside the resume target is definitionally stale: clear it
 		// before the daemon spawns. Best-effort (a missing lock is fine).
 		// This is NOT the SDK's identity-scoped session ownership lease: that

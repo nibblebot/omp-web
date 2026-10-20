@@ -36,7 +36,7 @@ const DIST_DIR = join(ROOT, "dist");
 const OUTFILE = join(ROOT, "dist-bundle", "cli.js");
 const VITE_CONFIG = join(ROOT, "apps", "web", "vite.config.ts");
 const PROVIDERS_DIR = join(ROOT, "dist-bundle", "providers");
-/** Provider executables (P9.1): key = shipped filename, value = source entry. */
+/** Provider executables: key = shipped filename, value = source entry. */
 const PROVIDER_SOURCES: Record<string, string> = {
 	"bwrap-provider.js": join(ROOT, "apps", "fleet", "bwrap-provider.ts"),
 	"kubernetes-provider.js": join(ROOT, "apps", "fleet", "kubernetes-provider.ts"),
@@ -142,7 +142,7 @@ try {
 	if (head !== "#!/usr/bin/env bun") {
 		throw new Error(`bundle lost its shebang (got ${JSON.stringify(head)}…)`);
 	}
-	// 5. Provider executables (P9.1): one single-file bundle per provider,
+	// 5. Provider executables: one single-file bundle per provider,
 	//    shipped next to cli.js. The installed fleet runs these files
 	//    directly (`<executable> <op>` with one JSON request on stdin), so
 	//    both the shebang AND the exec bit are hard contracts. Missing

@@ -600,7 +600,7 @@ export interface DaemonEntry {
 	uptime?: number;
 	pid?: number;
 	error?: string;
-	// --- Clone workspace identity (P1, additive; older edges omit these) ---
+	// --- Clone workspace identity (additive; older edges omit these) ---
 	/** How the daemon's checkout was produced (source: fleet edge roster; absent for legacy entries). */
 	workspaceKind?: WorkspaceKind;
 	/** Fleet-side desired state of the daemon's workspace (source: fleet edge roster; absent = legacy). */

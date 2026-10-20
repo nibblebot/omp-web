@@ -41,7 +41,7 @@ const MAX_REQUEST_BYTES = 1024 * 1024;
  * payload at spawn), or null when the file is absent (a spawn without a pair is
  * still allowed, stop-only management must not break).
  *
- * Strictness (P5.5): only known callback keys pass and the pair must be whole
+ * Strictness: only known callback keys pass and the pair must be whole
  * (buildFleetStdinPayload validates it); values are bounded non-empty strings;
  * the file's workspaceId and generation must equal the caller's: a new
  * generation must never start under a stale enrollment. Corrupt files throw
@@ -108,7 +108,7 @@ export function readCallbackEnv(
 	const env: Record<string, string> = {};
 	for (const [key, entry] of Object.entries(rawEnv as Record<string, unknown>)) {
 		// The callback pair's enrollment keys OR the wake-resume hint, both from
-		// a closed list so nothing outside it can ride the handoff file (P5.5).
+		// a closed list so nothing outside it can ride the handoff file.
 		if (!RESUME_ENV_KEYS.includes(key) && !FLEET_CALLBACK_ENV_KEYS.includes(key)) {
 			throw ProviderProtocolError.unavailable(
 				`${CALLBACK_ENV_FILE}.env.${key} is not an allowed callback env key`,

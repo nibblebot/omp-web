@@ -74,8 +74,8 @@ export interface FleetConfig {
 	 */
 	browserOrigin?: string;
 	/**
-	 * Trusted reverse proxies whose forwarded headers the fleet honors
-	 * (P2.3): IP or CIDR literals. X-Forwarded-For / X-Forwarded-Proto
+	 * Trusted reverse proxies whose forwarded headers the fleet honors:
+	 * IP or CIDR literals. X-Forwarded-For / X-Forwarded-Proto
 	 * shape the client-address and loopback decisions ONLY when the direct
 	 * socket peer matches this list; forwarded headers from any other peer
 	 * are ignored entirely (fail closed, never trusted by default). Flag

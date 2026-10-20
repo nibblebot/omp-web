@@ -75,7 +75,7 @@ function healthRoute(ctx: AppCtx): Route {
 				sessionsCount: await countOnDiskSessions(ctx),
 				dbCounts,
 				...syncStatus(),
-				// P8.6: fleet-store coverage (excluded from sessionsCount above).
+				// Fleet-store coverage (excluded from sessionsCount above).
 				...(ctx.cfg.stored ? { fleetStore: storeCoverage(ctx.cfg.stored.store) ?? undefined } : {}),
 			};
 			return json(body);

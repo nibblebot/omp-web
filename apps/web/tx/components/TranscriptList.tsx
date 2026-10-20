@@ -18,7 +18,7 @@ import { moveRovingFocus } from "../../components/ui/roving";
 interface TranscriptListProps {
 	selectedFile: string | null;
 	onOpen: (file: string) => void;
-	/** Open a fleet-store-origin row in the stored detail route (P8.6). */
+	/** Open a fleet-store-origin row in the stored detail route. */
 	onOpenStored: (workspaceId: string, sessionId: string) => void;
 	/** Deep-linked selected file is missing: clear the route back to the list. */
 	onMissingFile?: (file: string) => void;
@@ -328,7 +328,7 @@ function TranscriptRow(props: {
 				</div>
 			</Show>
 			<div class="row-tags">
-				{/* Coverage labels (P8.6). */}
+				{/* Coverage labels. */}
 				<Show when={isStore()}>
 					<span class="tag tag-store">fleet-stored</span>
 					<Show when={s().stored?.readOnly}>

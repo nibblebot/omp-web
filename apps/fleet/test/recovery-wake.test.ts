@@ -1,6 +1,7 @@
 /**
- * Wake-from-store / resume recovery regressions (clone-plan P8.4/P8.9/P8.10;
- * docs/clone-contracts.md "Wake"). Deliberately narrow deterministic tests
+ * Wake-from-store / resume recovery regressions (see
+ * docs/provider-protocol.md for the callback env handoff the resume hint rides).
+ * Deliberately narrow deterministic tests
  * over the uncertain boundaries this lane introduced; NOT a lifecycle
  * matrix (DeletionSafetyTests owns fleet/workspace-lifecycle.test.ts for the
  * destroy path; Lifecycle owns fleet/clone-recovery.test.ts for restart
@@ -22,7 +23,7 @@
  *     unless the file is not known persisted; a first start carries none and
  *     an explicit id that exists nowhere is refused.
  *  6. resume-onto-fresh-clone route keeps 404 (no provenance) / 409 (live
- *     workspace or no transcripts) / 503 (no provider hook, P5) after the
+ *     workspace or no transcripts) / 503 (no provider hook) after the
  *     shared-helper refactor.
  */
 
@@ -365,7 +366,7 @@ async function createClone(server: FleetServer, repoDir: string, name: string): 
 	return body.entry.daemonId;
 }
 
-describe("clone wake resume (P8.9)", () => {
+describe("clone wake resume", () => {
 	test(
 		"explicit resume wakes at the persisted legacy location and hands off OMP_SESSION_RESUME there",
 		async () => {

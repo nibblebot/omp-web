@@ -1,14 +1,14 @@
 /**
- * Fleet browser-auth wiring glue (P2.2/P2.3) shared by fleet/server.ts and
+ * Fleet browser-auth wiring glue shared by fleet/server.ts and
  * fleet/edge.ts. Deliberately NOT part of fleet/browser-auth.ts (that module
- * is a pure session store owned by the P2 lane; if it ever changes, this
+ * is a pure session store owned by the browser-auth lane; if it ever changes, this
  * file is the single place the gate policy adapts).
  *
  * Gate policy:
  *   - Browser auth DISABLED (no operator access token configured): every
  *     request is admitted; /auth/session still answers 404 so clients probe
  *     the disabled state and behave exactly as before this integration.
- *   - Client-address resolution (P2.3 trusted proxies): the direct socket
+ *   - Client-address resolution (trusted proxies): the direct socket
  *     peer is the default client. X-Forwarded-For is honored ONLY when the
  *     direct peer matches the configured trustedProxies list (IP/CIDR
  *     literals); then the client is the rightmost X-Forwarded-For hop that

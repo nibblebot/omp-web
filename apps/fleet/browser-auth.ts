@@ -1,5 +1,5 @@
 /**
- * Browser session authentication primitives (P2.1-P2.3).
+ * Browser session authentication primitives.
  *
  * The browser presents one credential: the opaque `omp_session` cookie value.
  * The access token is presented once per login over the wire, verified
@@ -192,7 +192,7 @@ export class BrowserAuthStore {
 				if (record.expiresAt > now) this.#sessions.set(hash, record);
 			}
 		}
-		// Operator token sync (P2.1 rotation): the configured hash is
+		// Operator token sync (rotation): the configured hash is
 		// authoritative. A fresh store adopts it; a DIFFERENT hash means the
 		// operator rotated the access token, every live session is revoked
 		// (absolute lifetimes are never slid; they end now) and the new hash

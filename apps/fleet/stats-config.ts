@@ -53,7 +53,7 @@ export interface StatsConfig {
 	 * Absent for callers that pass explicit paths.
 	 */
 	isolated?: boolean;
-	/** P8.6: fleet log store mounted into stats (absent = fleet-local only). */
+	/** Fleet log store mounted into stats (absent = fleet-local only). */
 	stored?: StoredStatsSource;
 }
 

@@ -1,6 +1,5 @@
 /**
- * Clone-workspace deletion lifecycle tests (clone-plan P7.3/P7.5,
- * DeletionSafetyTests). Deterministic failure-transition regressions over
+ * Clone-workspace deletion lifecycle tests (DeletionSafetyTests). Deterministic failure-transition regressions over
  * the real fleet control plane (loopback HTTP) with a real git clone source
  * and a scripted fixture provider executable that keeps DURABLE operation
  * records (`<stateDir>/ops.jsonl`, appended on every provider request). No
@@ -27,7 +26,7 @@
  *     source both clone successfully and materialize a real volume, while
  *     an invalid source (both members set, or a wrongly typed member) is
  *     refused with a 400 and creates no workspace;
- *  6. the clone-path Git guard (P7.4), one case per condition: a dirty
+ *  6. the clone-path Git guard, one case per condition: a dirty
  *     tracked file, an untracked file, a stash, commits not preserved on
  *     origin, and an unusable git state each refuse deletion with the
  *     checkout, volume, and transcript store retained and no provider
@@ -394,7 +393,7 @@ test(
 	{ timeout: 20_000 },
 );
 
-describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
+describe("clone workspace deletion lifecycle", () => {
 	test(
 		"deleting a live desired-running clone is refused with everything retained, and a second attempt cannot bypass the refusal",
 		async () => {
@@ -727,7 +726,7 @@ test(
 	{ timeout: 20_000 },
 );
 
-describe("clone source validation over /ctl/clones (P1.3)", () => {
+describe("clone source validation over /ctl/clones", () => {
 	const validSources = [
 		{ label: "relative-local", kind: "local" as const },
 		{ label: "remote-only", kind: "remote" as const },
@@ -974,7 +973,7 @@ describe("clone source remoteName over /ctl/clones", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Clone-deletion guard coverage (P7.4 Git guard; volume/store cross-check).
+// Clone-deletion guard coverage (Git guard; volume/store cross-check).
 // The worktree suites exercise the worktree path only, so every refusal
 // class below is pinned on a stopped, EVER-STARTED clone (a real provider
 // history, so "no provider delete" is an observable claim and the gate's
@@ -1080,7 +1079,7 @@ function pathErrorCode(path: string): string | undefined {
 	}
 }
 
-describe("clone deletion git guard (P7.4)", () => {
+describe("clone deletion git guard", () => {
 	test(
 		"a dirty tracked file refuses deletion with the checkout, volume, and store retained",
 		async () => {

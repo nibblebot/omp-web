@@ -1,5 +1,5 @@
 /**
- * Fleet-side callback transport (P3.3) controlled-peer regressions over the
+ * Fleet-side callback transport controlled-peer regressions over the
  * REAL DaemonTransportRegistry: either-half close vs pair observation,
  * reconnect/renewal continuity (seq never reset, no replay), no duplicate
  * acceptance, stale/revoked-generation rejection, bounded + isolated virtual

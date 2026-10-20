@@ -174,7 +174,7 @@ export const api = {
 		fetchJson<SyncResult>("/ctl/stats/sync", undefined, { method: "POST" }),
 
 	// -----------------------------------------------------------------------
-	// Fleet log-store read surface (P8.5). Read-only GETs ride the same
+	// Fleet log-store read surface. Read-only GETs ride the same
 	// cookie session as the /ctl/stats routes (plain same-origin fetch);
 	// ids are single path segments, encoded individually. Never wakes
 	// compute; nothing here offers a resume/download affordance.

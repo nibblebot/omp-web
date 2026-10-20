@@ -1,5 +1,5 @@
 /**
- * Wake materialization wire contract (P8.9/P8.10).
+ * Wake materialization wire contract.
  * A cold or missing session transcript is materialized from the
  * fleet log store into the daemon's agent dir BEFORE the existing resume path
  * runs. The transfer rides the bulk channel: the daemon initiates
@@ -264,7 +264,7 @@ export function encodeMaterializeRecord(record: MaterializeRecord): string {
 export const MATERIALIZE_TRANSFER_MAX_BYTES = BULK_MAX_BYTES;
 
 // ---------------------------------------------------------------------------
-// Fleet-side plan + transfer emission (P8.9): the fleet half builds a sorted,
+// Fleet-side plan + transfer emission: the fleet half builds a sorted,
 // validated file plan for a session subtree and emits one transfer's records
 // honoring the request cursor and the byte budget. Shared with the transport
 // registry and tests so the split semantics are byte-exact everywhere.

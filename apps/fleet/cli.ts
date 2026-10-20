@@ -610,7 +610,7 @@ async function addWorktreeCmd(
 /**
  * add-clone <project> <name> --profile <id> [--local path | --remote url]
  * [--revision rev] [--branch b] [--no-start]: create an independent clone
- * workspace via POST /ctl/clones (P8.7). The source has exactly one member
+ * workspace via POST /ctl/clones. The source has exactly one member
  * when given; an omitted source defaults server-side to the registered
  * project's local path. Clone revision input is `revision` (never baseRef).
  * start defaults to ON (--no-start disables), mirroring add-worktree.
@@ -663,7 +663,7 @@ async function addCloneCmd(
 
 /**
  * preflight --profile <id>: local (no control-plane RPC) production-profile
- * preflight (P5.6). Loads the config file exactly like the server does (env
+ * preflight. Loads the config file exactly like the server does (env
  * OMP_FLEET_CONFIG honored), runs the apps/fleet/preflight.ts battery against the
  * profile (the fleet's host rows plus the rows the provider executable
  * reports through its `preflight` op), prints one line per check with
@@ -733,7 +733,7 @@ async function rmWorktreeCmd(
 
 /**
  * start <selector>: fleet-side ensure-running for a clone workspace
- * (POST /ctl/start, server alias of /ctl/wake; P6.1). The route accepts a
+ * (POST /ctl/start, server alias of /ctl/wake). The route accepts a
  * daemon id only, so the selector (id or exact roster name) is resolved
  * client-side against /ctl/sessions first. The server refuses non-clone
  * entries; direct/template sessions keep /ctl/spawn.

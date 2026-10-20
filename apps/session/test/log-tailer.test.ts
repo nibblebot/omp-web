@@ -1,5 +1,5 @@
 /**
- * SessionLogTailer regression (P3.9): a fleet log_gap control whose envelope
+ * SessionLogTailer regression: a fleet log_gap control whose envelope
  * streamId NAMES the affected log stream must repair that stream; the
  * daemon's handleControl requires the target when the control does not ride
  * the reserved transport stream (fleet sends log_gap on the target stream;

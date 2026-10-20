@@ -113,7 +113,7 @@ describe("CLI", () => {
 		}
 		const output = logs.join("\n");
 		expect(output).toContain("prompt <selector> <text> [--wait <ms>]");
-		// P2.3 trusted-proxy flag is documented with its precedence + the
+		// Trusted-proxy flag is documented with its precedence + the
 		// fail-closed default (forwarded headers from unlisted peers ignored).
 		expect(output).toContain("--trusted-proxy <ip-or-cidr>");
 		expect(output).toContain("OMP_FLEET_TRUSTED_PROXY");

@@ -1,8 +1,8 @@
 /**
- * Provider operation protocol (OMP_PROVIDER_PROTO = 1); the frozen contract
- * for fleet-side clone-workspace sandbox providers (P5.1). Encoding, request
- * shape, response shape, identity/supervision rules and the error vocabulary
- * are fixed here and supersede the earlier "Provider executable contract" draft.
+ * Provider operation protocol (OMP_PROVIDER_PROTO = 1) for fleet-side
+ * clone-workspace providers; docs/provider-protocol.md describes it. Encoding,
+ * request shape, response shape, identity/supervision rules and the error
+ * vocabulary are fixed here.
  *
  * Invocation: the fleet runs `<executable> <op>` with exactly one JSON
  * request on stdin and exactly one JSON response on stdout; stderr is a
@@ -26,7 +26,7 @@
  * predates the op rejects it as `invalid_request` (or exits non-zero), which
  * the fleet reports as a failing check, never as success.
  *
- * Safety rules enforced here (P5.5 never negotiable):
+ * Safety rules enforced here (never negotiable):
  * - No secrets travel in requests. Profiles reference secrets by name only
  *   (`secretRefs` values must be external secret references, never
  *   materialized values), and key allowlists reject unknown/extra fields at
@@ -88,8 +88,7 @@ export type ProviderObserved = "running" | "stopped" | "missing";
 export type ProviderHandle = string;
 
 /**
- * Typed error vocabulary for provider operations, reusing the frozen ledger
- * vocabulary.
+ * Typed error vocabulary for provider operations.
  */
 export const PROVIDER_ERROR_CODES = [
 	"invalid_request",
@@ -196,7 +195,7 @@ export interface KubernetesProfile extends ExecutableProfileBase {
 	image?: string;
 	namespace?: string;
 	/** Operator-explicit kubeconfig context. The provider never falls back to
-	 *  the ambient current-context (P5.3). */
+	 *  the ambient current-context. */
 	context?: string;
 }
 
@@ -286,7 +285,7 @@ const SECRET_REF_MAX_CHARS = 512;
 // ---------------------------------------------------------------------------
 
 /**
- * Typed protocol error carrying a ledger error code. Default retryability is
+ * Typed protocol error carrying a provider error code. Default retryability is
  * code-derived: `unavailable` and `timeout` are retryable; `invalid_request`
  * and `internal` are not. Provider-authored error envelopes carry their own
  * explicit `retryable` flag (honored by ProviderOpError).
@@ -322,7 +321,7 @@ export function isProviderProtocolError(value: unknown): value is ProviderProtoc
 // Request validation
 // ---------------------------------------------------------------------------
 
-/** One provider operation request (frozen contract). */
+/** One provider operation request. */
 export interface ProviderRequest {
 	op: ProviderOp;
 	workspaceId: string;
@@ -465,7 +464,7 @@ function parseProfile(value: unknown, where: string): ProviderProfile {
 		}
 		secretRefs = {};
 		// Values are external secret reference names ONLY, never materialized
-		// secrets (P5.5). Reference-shaped values are enforced here so a
+		// secrets. Reference-shaped values are enforced here so a
 		// secret cannot be smuggled into a request.
 		for (const [name, ref] of Object.entries(secretRefsRaw)) {
 			if (typeof ref !== "string" || ref.length === 0 || ref.length > SECRET_REF_MAX_CHARS) {
@@ -719,7 +718,7 @@ export interface ProviderErrorResponse {
 	};
 }
 
-/** One provider operation response (frozen contract). */
+/** One provider operation response. */
 export type ProviderResponse =
 	| ProviderOkResponse
 	| ProviderPreflightResponse

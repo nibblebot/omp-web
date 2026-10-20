@@ -55,6 +55,7 @@ bun run install:omp-web             # build, pack, install into ~/.omp-web/insta
 | `lib/` | Closed wire/runtime/session-files/sdk-settings/platform/testkit libraries |
 | `apps/*/test/`, `lib/*/test/`, `scripts/test/`, `e2e/` | Owner-local tests and cross-app/distribution checks |
 | `scripts/`, `docs/release.md` | Tooling and release contracts |
+| `docs/provider-protocol.md` | The provider protocol reference: ops, envelopes, identity, capabilities, profiles, layout. Keep it current with `lib/runtime/provider-protocol.ts` in the same change |
 
 Production source is flat in cli/fleet/session; preserve the web feature hierarchy. `apps/web/components/` groups by feature, matching `store/` modules: `ui/` (domain-free primitives, no `state.ts` import), `app/` (shell widgets), `chat/{status,transcript,tools,composer,controls}`, `requests/` (agent-to-user dialogs that self-mount on store state), `sessions/`, `models/`, `settings/{integrations}`, `usage/`, `fleet/{sidebar,daemon,workspaces}`, `subagents/`, `review/`. `apps/web/tx/` (Analysis) stays a self-contained feature, wired by `features/analysis.tsx`. A component used by exactly one parent lives in that parent's folder. Logic and types stay out of `components/`.
 

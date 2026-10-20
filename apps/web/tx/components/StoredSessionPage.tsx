@@ -1,5 +1,5 @@
 /**
- * StoredSessionPage: main-pane detail for a fleet-stored session (P8.5).
+ * StoredSessionPage: main-pane detail for a fleet-stored session.
  *
  * Route #/stored/<workspaceId>/<sessionId>. Header + per-kind file list from
  * StoredSessionDetail.files; selecting a stored file shows its transcript

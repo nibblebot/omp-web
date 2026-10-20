@@ -53,7 +53,7 @@ export interface SessionConfig {
 	uiRequestTestHook: boolean;
 	collabMaxGuests: number;
 	/**
-	 * Callback transport (P3.2): fleet callback pair base URL, e.g.
+	 * Callback transport: fleet callback pair base URL, e.g.
 	 * https://fleet.example.com. HTTPS required; HTTP only with the payload's allowHttp AND a loopback
 	 * host (isLoopbackHost). Set only from `--fleet-stdin`.
 	 */
@@ -139,7 +139,7 @@ export function parseConfig(argv: string[], fleet?: FleetStdinPayload): SessionC
 		flag("idle-timeout") ?? Bun.env.OMP_SESSION_IDLE_TIMEOUT ?? "30m",
 	);
 
-	// Callback transport (P3.2). The pair arrives only
+	// Callback transport. The pair arrives only
 	// in the fleet's `--fleet-stdin` payload. HTTPS always; HTTP only with the payload's allowHttp for
 	// a loopback host; an explicit proxy must be http/https, never silently ignored, never fallen back
 	// from.

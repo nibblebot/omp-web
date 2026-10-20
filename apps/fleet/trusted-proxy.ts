@@ -1,5 +1,5 @@
 /**
- * Trusted-proxy matching (P2.3): IP/CIDR literal parsing and peer matching
+ * Trusted-proxy matching: IP/CIDR literal parsing and peer matching
  * for the fleet's forwarded-header policy. X-Forwarded-For / X-Forwarded-Proto
  * are honored ONLY when the direct socket peer matches the configured
  * trustedProxies list; this module is the single parser/matcher for that

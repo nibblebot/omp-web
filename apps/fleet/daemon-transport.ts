@@ -318,7 +318,7 @@ export class DaemonTransportRegistry {
 	readonly #bulk = new Map<string, BulkRecord>();
 	/** Pair-ready/teardown observers per workspace (edge stream_open re-sends). */
 	readonly #pairListeners = new Map<string, Set<(status: PairStatus) => void>>();
-	/** P8.9 wake materialization: log-store source for bulk materialization
+	/** Wake materialization: log-store source for bulk materialization
 	 * transfers, wired by the fleet server after the store loads. Null =
 	 * no store (the fleet rejects materialization requests typed
 	 * `unavailable`). */
@@ -583,7 +583,7 @@ export class DaemonTransportRegistry {
 						}),
 					);
 				}
-				// P8.9 wake materialization: a bulk POST whose body is a small
+				// Wake materialization: a bulk POST whose body is a small
 				// MaterializeRequest is a DOWNLOAD request; the daemon mints
 				// the correlation id (never issued by the fleet, so no bulk
 				// record exists) and the fleet serves the workspace's stored
@@ -1137,7 +1137,7 @@ export class DaemonTransportRegistry {
 			this.#failBulk(record, record.bytes, "bulk upload had no body");
 			throw callbackError("invalid_request", "bulk upload requires a body");
 		}
-		// Multi-part transfers (P3.4 downloads): a daemon streams one logical
+		// Multi-part transfers (downloads): a daemon streams one logical
 		// payload as sequential POSTs to the SAME correlation: headers
 		// x-omp-bulk-part:<n> (0-based, strictly sequential, no gaps/overlaps)
 		// and x-omp-bulk-final:1 on the last part. Neither side buffers the
@@ -1226,7 +1226,7 @@ export class DaemonTransportRegistry {
 		return Response.json({ status: "received", correlationId, bytes: record.bytes });
 	}
 
-	// --- materialization (P8.9 wake: bulk download from the log store) --------
+	// --- materialization (wake: bulk download from the log store) --------
 
 	/**
 	 * Wires the fleet log store as the source for bulk materialization
@@ -1240,7 +1240,7 @@ export class DaemonTransportRegistry {
 
 	/**
 	 * Serve one workspace's stored session lineage bytes as an NDJSON
-	 * response under a bulk correlation (P8.9). Called for EVERY bulk POST
+	 * response under a bulk correlation. Called for EVERY bulk POST
 	 * whose correlation id is NOT fleet-issued (a daemon-minted materialize
 	 * pull; fleet-issued upload correlations are routed to #handleBulk
 	 * before any body read). Reads at most MATERIALIZE_REQUEST_MAX_BYTES:

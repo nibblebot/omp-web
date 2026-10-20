@@ -65,7 +65,7 @@ export default defineConfig({
 			"/command": fleetProxy(),
 			// Fleet control plane: same edge port.
 			"/ctl": fleetProxy(),
-			// Browser-auth surface (P2.4): same-origin sign-in must reach the
+			// Browser-auth surface: same-origin sign-in must reach the
 			// fleet under HMR too, or the login modal can never work in dev.
 			"/auth": fleetProxy(),
 		},

@@ -1454,7 +1454,7 @@ describe("initialView (boot view resolution)", () => {
 		expect(initialView("chat", "#s/abc.jsonl", true)).toBe("analysis");
 	});
 
-	test("a #/stored/<workspaceId>/<sessionId> hash deep-links into analysis (P8.5)", () => {
+	test("a #/stored/<workspaceId>/<sessionId> hash deep-links into analysis", () => {
 		expect(initialView("chat", "#/stored/d7/sess-1", true)).toBe("analysis");
 		expect(initialView("chat", "#stored/d7/sess-1", true)).toBe("analysis");
 	});

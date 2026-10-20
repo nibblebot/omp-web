@@ -1,9 +1,9 @@
 /**
- * Workspace preparation (P4.1–P4.3): resolves and pins the initial commit
+ * Workspace preparation: resolves and pins the initial commit
  * exactly once, clones it into `.checkout/` with an independent object store,
  * and verifies the completed checkout before recording the init marker.
  *
- * Layout per the frozen contract:
+ * Layout (docs/provider-protocol.md, "Preparation layout"):
  *
  * - `.omp-workspace-init.json`: the pin (workspaceId, source, resolvedCommit,
  *   branch) is persisted BEFORE the clone so retries reuse the same commit and
@@ -28,9 +28,9 @@ import { seedSandboxBaseline, type BaselineSeedResult } from "./sandbox-baseline
 /** Marker contract version stamped into a verified init marker. */
 export const WORKSPACE_PREP_VERSION = 1;
 
-/** Marker file name per the frozen preparation layout. */
+/** Marker file name per the preparation layout. */
 const MARKER_NAME = ".omp-workspace-init.json";
-/** Working clone directory name per the frozen preparation layout. */
+/** Working clone directory name per the preparation layout. */
 const CHECKOUT_NAME = ".checkout";
 
 /** Full commit ids are SHA-1 (40) or SHA-256 (64) hex. */
@@ -61,14 +61,14 @@ export interface WorkspaceInitMarker extends WorkspacePin {
 	prepVersion: number;
 }
 
-/** Subset of the frozen ledger typed-error vocabulary that preparation raises. */
+/** Subset of the typed-error vocabulary that preparation raises. */
 export type PrepareWorkspaceErrorCode =
 	| "invalid_request"
 	| "unavailable"
 	| "conflict"
 	| "provider_failed";
 
-/** Typed preparation failure; `code` is from the frozen ledger vocabulary. */
+/** Typed preparation failure; `code` is from the typed-error vocabulary. */
 export class PrepareWorkspaceError extends Error {
 	constructor(
 		readonly code: PrepareWorkspaceErrorCode,
@@ -704,7 +704,7 @@ export interface ResolveWorkspacePinOptions {
  * profile and persists the full commit as `pinnedRevision` before any
  * provider-side init, so in-pod preparation always reuses the same pin.
  *
- * Throws {@link PrepareWorkspaceError} with the frozen ledger codes
+ * Throws {@link PrepareWorkspaceError} with the typed-error codes
  * (`invalid_request` for malformed revisions, `unavailable` when the source
  * does not offer the commit).
  */

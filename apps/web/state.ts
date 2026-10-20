@@ -236,7 +236,7 @@ export type ModalName =
 	| "debug"
 	// Phase 5: project onboarding. Opens the Add project folder chooser.
 	| "add-project"
-	// Browser-auth sign-in surface (P2.4; opened by the auth subscription on
+	// Browser-auth sign-in surface (opened by the auth subscription on
 	// signedOut, exactly like the store/modals contract wires it).
 	| "sign-in"
 	| "integrations"
@@ -391,7 +391,7 @@ export const [state, setState] = createStore({
 	stats: null as SessionStats | null,
 	subagents: new Map<string, SubagentInfo>(),
 	connected: false,
-	// Browser-auth state (P2.4): mirrored from apps/web/store/auth.ts by
+	// Browser-auth state: mirrored from apps/web/store/auth.ts by
 	// subscribeAuth. "unknown" until the first session probe; "disabled"
 	// (fleet/daemon without browser auth) behaves exactly as before this
 	// integration. signedOut opens the sign-in modal.
@@ -449,8 +449,8 @@ export const [state, setState] = createStore({
 	// fleet-scoped like daemonRoster; it survives session resets, and
 	// zero-daemon projects still render).
 	registeredProjects: [] as RegisteredProject[],
-	// P8.1: secret-free provider profile catalog (clone-contracts ledger:
-	// optional registered_projects.providerProfiles; older fleets omit it →
+	// Secret-free provider profile catalog (optional
+	// registered_projects.providerProfiles; older fleets omit it →
 	// []). Fleet-scoped like registeredProjects and boot-static; a fleet
 	// restart/reload re-sends it, so a session reset must not clear it.
 	providerProfiles: [] as PublicProviderProfile[],
@@ -461,7 +461,7 @@ export const [state, setState] = createStore({
 	// Phase 5: delete-worktree guard evidence (worktree_delete_info unicast),
 	// keyed by daemonId.
 	worktreeDeleteInfo: {} as Record<string, WorktreeDeleteInfo>,
-	// Phase 5 + P8.1: post-attach session-picker gate. Holds the daemonId
+	// Phase 5: post-attach session-picker gate. Holds the daemonId
 	// awaiting the new-vs-resume decision (armed by start:true onboarding
 	// senders (add project / create worktree / create clone), stamped with
 	// the real daemonId when the attach fires, cleared by the sessions
@@ -1428,7 +1428,7 @@ export function connect(): void {
 				// like the roster; it survives session resets, and zero-daemon
 				// projects still render via daemonsByProject).
 				setState("registeredProjects", frame.projects);
-				// P8.1: secret-free provider profile catalog rides the same
+				// Secret-free provider profile catalog rides the same
 				// frame (additive; older edges omit it, so missing = []).
 				setState("providerProfiles", frame.providerProfiles ?? []);
 				// Phase 4: the resolved fleet config path rides the same frame

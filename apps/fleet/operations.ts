@@ -80,14 +80,14 @@ export interface RowEvictionHooks {
 	evictProject(projectId: string): Promise<void>;
 }
 
-/** Result of the verified clone delete gate (P7). */
+/** Result of the verified clone delete gate. */
 export interface CloneDeleteResult {
 	removed: string;
 	verified: string[];
 }
 
 /**
- * Clone lifecycle service (P6/P7 boundary). Operations NEVER stop, remove or
+ * Clone lifecycle service. Operations NEVER stop, remove or
  * delete a clone through the host runtime, the git worktree guards, or
  * registry.remove: every clone mutation goes through these hooks so the
  * provider lifecycle, admission, and the verify-at-deletion gate cannot be
@@ -98,7 +98,7 @@ export interface CloneLifecycleHooks {
 	createClone(input: CloneCreateInput): Promise<RegistryEntry>;
 	/** Ordinary stop: proof-bearing provider stop, desiredState stopped, data retained. */
 	stopClone(daemonId: string): Promise<void>;
-	/** Verified delete (P7 gate); roster remove routes through the same gate. */
+	/** Verified delete; roster remove routes through the same gate. */
 	deleteClone(daemonId: string): Promise<CloneDeleteResult>;
 	/** Fetch a local-source clone's branch into its project's main repo (fast-forward or create only). */
 	fetchCloneIntoProject(daemonId: string): Promise<CloneFetchResult>;

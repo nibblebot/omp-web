@@ -87,7 +87,7 @@ export interface DeletionGateError {
 }
 
 /**
- * Per-entry verify-at-deletion state (P7.3). Absent = never deleted.
+ * Per-entry verify-at-deletion state. Absent = never deleted.
  *
  * Lifecycle: a delete request enters "deleting" (gate in flight; the roster
  * identity is NEVER removed early; cleanup state remains until the whole
@@ -123,7 +123,7 @@ export interface StoreOrphanMarker {
 	/** Why the workspace was deleted without verification. */
 	reason?: string;
 	/**
-	 * Clone provenance retained for P8.10 resume-onto-fresh-clone: the
+	 * Clone provenance captured at removal: the
 	 * workspace record's source + pinnedRevision, captured at removal. The
 	 * roster identity is dropped on deletion, so this is the ONLY place the
 	 * provenance survives for an orphaned clone workspace.
@@ -167,7 +167,7 @@ export interface WorkspaceRecord {
 	authorizedGeneration?: number;
 	/** Private, opaque provider-owned state. */
 	providerHandle?: unknown;
-	/** Verify-at-deletion state (P7.3). Absent = never deleted. */
+	/** Verify-at-deletion state. Absent = never deleted. */
 	deletion?: WorkspaceDeletion;
 	/** Persisted callback enrollment (digest only). Absent = not enrolled. */
 	enrollment?: WorkspaceEnrollment;
@@ -202,7 +202,7 @@ export interface RegistryEntry extends DaemonEntry {
 	template?: string;
 	registeredAt: number;
 	/**
-	 * Fleet-private P1 workspace record: lifecycle, provider handle,
+	 * Fleet-private workspace record: lifecycle, provider handle,
 	 * cleanup/archive state. Never serialized into roster frames,
 	 * registered_projects frames, or /ctl/debug.
 	 */
@@ -219,7 +219,7 @@ interface RegistryFile {
 	nextProjectId?: number;
 	/**
 	 * Registry-level markers for workspaces deleted without a passed
-	 * verification gate (P7.3/P7.5); absent in files written before the
+	 * verification gate; absent in files written before the
 	 * markers existed. Keyed by workspaceId.
 	 */
 	storeOrphans?: Record<string, StoreOrphanMarker>;
@@ -258,7 +258,7 @@ const VOLATILE_ENTRY_KEYS: Record<string, true> = {
 };
 
 /**
- * Legacy-inference base workspace record for entries persisted before P1.
+ * Legacy-inference base workspace record for entries persisted before workspace records existed.
  * Contract rule: managed or worktreeOf → "worktree"; every other entry
  * (spawned without worktreeOf) → "direct". desiredState is "running": a
  * legacy entry is a live roster row. projectId comes from the entry's
@@ -325,7 +325,7 @@ export class Registry {
 	/** Registered projects in insertion order (public API: projects()). */
 	private projectList: RegisteredProject[] = [];
 	private nextProjectId = 1;
-	/** Deleted-without-verification markers keyed by workspaceId (P7.5). */
+	/** Deleted-without-verification markers keyed by workspaceId. */
 	private storeOrphanList: Record<string, StoreOrphanMarker> = {};
 	/** Pending coalesced write, armed by #schedule and cleared by flush(). */
 	#flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -422,7 +422,7 @@ export class Registry {
 		};
 		// create() is a mutation, so it stamps the legacy-inferred record when
 		// init omits one; in-memory state then matches what a reload would
-		// produce (load() inference covers files written before P1).
+		// produce (load() inference covers files written before workspace records existed).
 		if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
 		this.entries.push(entry);
 		this.#mutated({ upserted: [entry], removed: [] }, true);
@@ -549,7 +549,7 @@ export class Registry {
 	}
 
 	/**
-	 * Persist a store-orphan marker (P7.5: a workspace deleted without a
+	 * Persist a store-orphan marker (a workspace deleted without a
 	 * passed verification gate whose log-store subtree survives). Idempotent
 	 * for an existing marker. Cleared only by {@link clearStoreOrphan}.
 	 */
@@ -670,7 +670,7 @@ export class Registry {
 	 * no disk and no transcript). The CALLER stops running rows first
 	 * (shutdown/stop + forgetPair); this method only edits the registry.
 	 * Clone workspaces own provider-managed volumes that must go through the
-	 * verified deletion gate (P7.3/P7.5), so any clone of the project refuses
+	 * verified deletion gate, so any clone of the project refuses
 	 * the whole removal with `project <id> has clone workspaces: <ids>`
 	 * (nothing is removed on refusal). Unknown ids also throw. Returns the
 	 * removed daemon ids.
@@ -736,7 +736,7 @@ export class Registry {
 			if (Number.isFinite(n) && n > maxIndex) maxIndex = n;
 		}
 		const entries = [...file.entries];
-		// Lazy workspace migration (P1): entries persisted before workspace
+		// Lazy workspace migration: entries persisted before workspace
 		// records existed get an in-memory record here; it persists on the
 		// entry's next mutation, never at boot.
 		for (const entry of entries) {
@@ -762,9 +762,9 @@ export class Registry {
 		// (missing key = 1), then the max-index floor applies.
 		const rawNextProjectId = typeof file.nextProjectId === "number" ? file.nextProjectId : 1;
 		// Tolerant read of deletion-without-verification markers (absent in
-		// files written before P7.5). Entries whose workspace record claims a
+		// files written before store-orphan markers existed). Entries whose workspace record claims a
 		// non-verified deletion also reconcile to the orphan list on their
-		// next mutation (never at boot, matching the P1 lazy-migration rule).
+		// next mutation (never at boot, matching the lazy-migration rule).
 		const storeOrphans: Record<string, StoreOrphanMarker> = {};
 		if (file.storeOrphans !== undefined) {
 			if (

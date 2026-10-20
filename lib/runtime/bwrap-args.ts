@@ -1,5 +1,5 @@
 /**
- * Pure bwrap argv builder for clone-workspace sandboxes (P5.2).
+ * Pure bwrap argv builder for clone-workspace sandboxes.
  *
  * Mount policy: the sandbox is built by ALLOWLIST, not by deny-list. The
  * host `/` is never bound; instead a fixed set of credential-free system
@@ -13,7 +13,7 @@
  * the namespace; the deny-root masks are still applied on top and hide
  * anything under an allowlisted root that resolves into a forbidden area.
  *
- * Per P5.5: operator credentials, the SSH agent, container sockets, and
+ * Policy: operator credentials, the SSH agent, container sockets, and
  * fleet/provider administration state are never mountable; selected model
  * credentials enter ONLY through profile `secretRefs` resolved by the
  * provider and merged after the ambient allowlist, never from the operator
@@ -54,7 +54,7 @@ export const CONTAINER_SOCKET_PATTERNS: readonly string[] = [
 ];
 
 /**
- * Forbidden bind roots (P5.5). `operatorHome` is the operator's home
+ * Forbidden bind roots. `operatorHome` is the operator's home
  * directory; the provider derives these from its own environment (HOME,
  * SSH_AUTH_SOCK, the provider script location) once, at request time.
  */
@@ -100,13 +100,13 @@ export interface BwrapArgsInput {
 	env?: Record<string, string | undefined>;
 	/**
 	 * Selected model credentials resolved from `profile.secretRefs` by the
-	 * provider (P5.5). Values merge AFTER the ambient allowlist; they are
+	 * provider. Values merge AFTER the ambient allowlist; they are
 	 * the ONLY source for keys outside the allowlist and cannot override any
 	 * allowlisted key.
 	 */
 	secretEnv?: Record<string, string>;
 	/**
-	 * The clone source's fleet-host path (P4.2: the running sandbox never
+	 * The clone source's fleet-host path (the running sandbox never
 	 * mounts the source repository). When provided and distinct from the
 	 * workspace volumes, its realpath is masked with an empty tmpfs (or
 	 * /dev/null for regular files) so the source stays invisible even where
@@ -155,7 +155,7 @@ export const ENV_ALLOW_KEYS: readonly string[] = [
 	"TZ",
 	"NO_COLOR",
 	"OMP_SESSION",
-	// P8.9 wake-resume: fleet-written absolute main-session path; the daemon
+	// Wake-resume: fleet-written absolute main-session path; the daemon
 	// resumes it at boot (apps/session/config.ts reads OMP_SESSION_RESUME). Rides
 	// the callback-env handoff, never the ambient environment.
 	"OMP_SESSION_RESUME",
@@ -451,10 +451,10 @@ function isContained(candidate: string, root: string): boolean {
  *   profile `tools` ro (denylist-asserted).
  * - deny-root masks applied afterwards (empty tmpfs over existing denied
  *   dirs, /dev/null over existing denied files); the clone source path is
- *   masked too (P4.2) unless it IS a workspace volume (dev dogfood).
+ *   masked too unless it IS a workspace volume (dev dogfood).
  * - `--unshare-all --die-with-parent --new-session`, chdir into the
  *   checkout, then the runtime entry argv with the identity token last.
- * - P5.7 network knob: `network` mode swaps ONLY the netns share (`--share-net`
+ * - Network knob: `network` mode swaps ONLY the netns share (`--share-net`
  *   after `--unshare-all` re-shares the host network namespace) while
  *   pid/user/ipc isolation stays intact; absent `network` = isolated.
  * - Env: ambient allowlist copy + builder-set values + secretEnv (merged
@@ -521,7 +521,7 @@ export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 		argv.push("--ro-bind", "/dev/null", deniedFile);
 	}
 
-	// P4.2: the clone source must be invisible. Mask its realpath when it is
+	// The clone source must be invisible. Mask its realpath when it is
 	// not one of the workspace volumes (dev dogfood: source == checkout).
 	if (
 		input.sourceLocal !== undefined &&

@@ -1,5 +1,5 @@
 /**
- * Fleet-side wake materialization (P8.9/P8.10).
+ * Fleet-side wake materialization.
  *
  * When a clone workspace wakes and the resume-target session's transcript
  * is cold or missing in the volume agent dir, the FLEET fills the missing

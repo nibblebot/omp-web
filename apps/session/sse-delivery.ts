@@ -541,7 +541,7 @@ export function setOnConsumerDetached(fn: (stream: SseConsumer, reason: string) 
 	onConsumerDetached = fn;
 }
 
-// Callback mirror tap (P3.4): registered by apps/session/index.ts when a callback
+// Callback mirror tap: registered by apps/session/index.ts when a callback
 // pair exists. Every broadcastTo/broadcastAnswer/broadcast frame is handed to
 // the tap VERBATIM (payload only; seq/stream stamping is the transport's),
 // so the fleet derives activity + fanout correlation exactly like the direct

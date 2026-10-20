@@ -119,7 +119,7 @@ const STATUS_TITLE: Record<DaemonStatus, string> = {
 	error: "error, see details",
 };
 
-/** Provider lifecycle stage copy for clone rows (P8.1; only stages that need
+/** Provider lifecycle stage copy for clone rows (only stages that need
  *  row presence render; "ready" is implied by the ready status dot). */
 const LIFECYCLE_LABEL: Record<NonNullable<RosterEntry["lifecycleStage"]>, string> = {
 	preparation: "preparing workspace",
@@ -197,7 +197,7 @@ export const WorkspaceRow: Component<{
 	// dirs. The branch (or name fallback) becomes the title and the project
 	// chip + cwd path are dropped so the row never shows the directory.
 	const isWorktree = () => d().worktreeOf !== undefined;
-	// Provider-run clone workspaces (P8.1): independent checkouts that must
+	// Provider-run clone workspaces: independent checkouts that must
 	// NOT read as the project's main checkout (which would put a root glyph
 	// on them and hide the group's Start action).
 	const isClone = () => d().workspaceKind === "clone";
@@ -723,7 +723,7 @@ export const WorkspaceRow: Component<{
 							</For>
 						</div>
 					</Show>
-					{/* Provider lifecycle progress (P8.1): preparation → runtime →
+					{/* Provider lifecycle progress: preparation → runtime →
 					    callback → ready, shown while a clone workspace is being
 					    created/recovered; "ready" renders nothing extra (the status
 					    dot already says it). A failed stage is actionable: the

@@ -132,7 +132,7 @@ export function TranscriptBrowser() {
 					syncTick={syncTick}
 					onSynced={bumpSync}
 				/>
-				{/* Fleet log-store browsing (P8.5) sits beneath the local
+				{/* Fleet log-store browsing sits beneath the local
 				    transcript list in the same scroll surface. */}
 				<StoredSessionList
 					selectedWorkspaceId={storedRoute()?.workspaceId ?? null}

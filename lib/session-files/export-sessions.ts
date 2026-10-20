@@ -5,7 +5,7 @@ import { ExportError, type ManifestFileKind } from "./archive-manifest";
 // Workspace session-tree lineage + structural verification
 // (lib/session-files/export-sessions.ts).
 //
-// Role after the 09-05 amendment (P4.4-P4.6, P7.1-P7.2): the sealed
+// Role after the 09-05 amendment: the sealed
 // export/archive-copy pipeline is DEAD. This module
 // keeps only the lineage classification and the structural JSONL checker that
 // the verify-at-deletion gate (apps/fleet/verify-store.ts) and the archive
@@ -27,7 +27,7 @@ import { ExportError, type ManifestFileKind } from "./archive-manifest";
 export const JSONL_SUFFIX = ".jsonl";
 export const ADVISOR_TRANSCRIPT_STEM = "__advisor";
 
-/** Hard bounds from clone-plan P4.6 ("bound export traversal and transfer"). */
+/** Hard bounds that keep export traversal and transfer finite. */
 export const MAX_EXPORT_FILES = 10_000;
 export const MAX_EXPORT_BYTES = 16 * 1024 * 1024 * 1024; // 16 GiB
 

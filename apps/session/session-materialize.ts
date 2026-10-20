@@ -1,5 +1,5 @@
 /**
- * Daemon-side wake materialization (P8.9).
+ * Daemon-side wake materialization.
  * When a session transcript is cold or missing in the agent dir and a fleet
  * callback pair is active, the daemon requests the stored lineage bytes from
  * the fleet log store over the bulk channel and writes them into the agent

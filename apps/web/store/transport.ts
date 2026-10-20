@@ -63,7 +63,7 @@ export function postCommand(cmd: ClientCommand): Promise<void> {
 	if (bytes > MAX_COMMAND_BYTES) {
 		return Promise.reject(new Error(commandTooLargeMessage(bytes, MAX_COMMAND_BYTES)));
 	}
-	// Browser auth (P2.4): with a server-side session (signedIn/signedOut/
+	// Browser auth: with a server-side session (signedIn/signedOut/
 	// unknown) the /command uplink rides authedFetch; the session cookie is
 	// the credential and a 401 transitions to signedOut (sign-in modal). When
 	// auth is DISABLED the path stays a plain fetch: byte-identical behavior

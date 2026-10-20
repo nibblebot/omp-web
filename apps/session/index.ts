@@ -1165,10 +1165,10 @@ async function bootReadiness(entry: SessionEntry): Promise<void> {
 }
 
 let bootSession: SessionEntry;
-/** Callback transport pair to the fleet (P3.2); started after the boot
+/** Callback transport pair to the fleet; started after the boot
  *  session exists, stopped in shutdown(). Null = no callback flags. */
 let fleetCallback: FleetCallback | null = null;
-/** Session-lineage log tailer (P3.7), streamed over the callback pair.
+/** Session-lineage log tailer, streamed over the callback pair.
  *  Constructed with the callback (never without it); started after the
  *  pair starts, stopped before it stops in shutdown(). Null = no callback
  *  flags / tailer failed to construct. */
@@ -1183,14 +1183,14 @@ const SHUTDOWN_DEADLINE_MS = 20_000;
 /** No-control-plane shutdown timer (C4): armed while no callback pair is ready. */
 let controlGraceTimer: Timer | undefined;
 /**
- * Callback control broker (P3.3/P3.5): per-browser virtual streams,
+ * Callback control broker: per-browser virtual streams,
  * command routing, and control mirror. Created
  * only when the callback pair exists; null otherwise.
  */
 let daemonControl: DaemonControl | null = null;
 
 /**
- * P8.9 wake: materialize a session's stored transcripts from the fleet log
+ * Wake: materialize a session's stored transcripts from the fleet log
  * store into the agent sessions dir when the transcript is cold/missing, so
  * the caller can resume it. Returns `{ alreadyPresent: true }` when the
  * session tree exists locally (warm, no transfer needed) and throws a typed
@@ -1300,7 +1300,7 @@ resolveBootReady();
 void bootReadiness(bootEntry);
 
 // ---------------------------------------------------------------------------
-// Callback transport (P3.2): with all four callback flags set, dial the
+// Callback transport: with all four callback flags set, dial the
 // fleet's callback pair. The daemon drives the pair (POST /callback/up +
 // GET /callback/down); the HTTP/SSE listener above stays fully functional;
 // the callback is additive, not a replacement, in this pass. Started AFTER
@@ -1407,7 +1407,7 @@ if (config.callbackUrl !== undefined) {
 			},
 		},
 	);
-	// P3.7 session log tailing: the SDK's per-project sessions layout is a
+	// Session log tailing: the SDK's per-project sessions layout is a
 	// cwd-encoded subdir under the agent's sessions root (main JSONL at
 	// `<sessionsRoot>/<encoded-cwd>/`, its artifact subtree alongside), so
 	// the tailer watches the sessions ROOT (matching the manifest traversal
@@ -1428,7 +1428,7 @@ if (config.callbackUrl !== undefined) {
 			);
 		}
 	}
-	// Control broker (P3.3/P3.5): mounted after the tailer so log
+	// Control broker: mounted after the tailer so log
 	// controls are routed first; broker handles stream_open/close and
 	// command dispatch over the pair. Command answers flow through the
 	// broadcast mirror (the frame tap), so handleCommand resolves undefined

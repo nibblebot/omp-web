@@ -332,12 +332,6 @@ export const RELEASE_DOCS: Record<string, true> = {
 };
 
 /**
- * The clone plan's own phased execution tracker: its `- [ ]` boxes are live
- * clone work, not documentation drift, so the checkbox scan skips the file.
- */
-const CHECKBOX_SKIPPED: Record<string, true> = { "docs/clone-plan.md": true };
-
-/**
  * Docs files scanned by the text checks: `docs/*.md` plus the markdown files
  * under the Starlight content tree `docs/src/content/docs`, repo-relative.
  */
@@ -459,26 +453,12 @@ export interface SdkLiteralInput {
 }
 
 /**
- * The frozen clone design/ledger docs. By charter they record design-time SDK
- * facts (the P0 investigation ran against 17.1.8), so an old pin literal there
- * is history, not drift; flagging it would train readers to ignore the report.
- */
-const FROZEN_SDK_LITERAL_DOCS: Record<string, true> = {
-	"docs/clone-contracts.md": true,
-	"docs/clone-design.md": true,
-	"docs/clone-plan.md": true,
-	"docs/clone-summary.md": true,
-};
-
-/**
  * `docs-sdk-literals`: a docs page quoting an SDK version older than the
  * current pin sends readers to a stale interface. Only published @oh-my-pi
  * versions are flagged, and the repo's own versions are excluded because early
- * 0.x SDK numbers collide with them. The frozen clone docs are excluded by
- * charter (FROZEN_SDK_LITERAL_DOCS).
+ * 0.x SDK numbers collide with them.
  */
 export function scanSdkLiterals(file: DocsFile, input: SdkLiteralInput): Finding[] {
-	if (FROZEN_SDK_LITERAL_DOCS[file.path] === true) return [];
 	const findings: Finding[] = [];
 	file.content.split("\n").forEach((line, index) => {
 		for (const match of line.matchAll(VERSION_TOKEN)) {
@@ -665,10 +645,7 @@ export async function runChecks(opts: PreflightOptions): Promise<PreflightOutcom
 		path,
 		content: readFileSync(join(root, path), "utf8"),
 	}));
-	for (const file of docs) {
-		if (CHECKBOX_SKIPPED[file.path] === true) continue;
-		findings.push(...scanCheckboxes(file));
-	}
+	for (const file of docs) findings.push(...scanCheckboxes(file));
 	for (const file of docs) findings.push(...scanRelativeLinks(file, (path) => existsSync(path)));
 	findings.push(
 		...checkGateList(

@@ -1,5 +1,5 @@
 /**
- * Daemon control broker replay regression (P3.10): per-browser virtual
+ * Daemon control broker replay regression: per-browser virtual
  * stream_open ring-hit replay vs ring-miss re-prime. The observed defect:
  * openStream's ring-miss guard was logically unreachable (`live > 0 &&
  * replay.length === 0 && newest > lastSeq` cannot fire; the newest live
@@ -12,7 +12,7 @@
  *     violated).
  *   - A caught-up ring hit (existing stream, floor >= newest) fell through
  *     to a re-prime where the client already had
- *     everything (P3.10: "ring hit replays; only a miss re-primes").
+ *     everything ("ring hit replays; only a miss re-primes").
  *
  * Fix: track the ring eviction frontier (`evictedSeq`, the highest wire seq
  * dropped from the head). A floor BELOW the frontier is a MISS →
@@ -149,7 +149,7 @@ const resyncSent = (sent: Sent[], from: number): boolean =>
 				s.payload.type === "stream_resync",
 		);
 
-describe("daemon-control stream_open replay (P3.10)", () => {
+describe("daemon-control stream_open replay", () => {
 	test("a fresh stream primes; subsequent ringed deltas ring with wire seqs", () => {
 		const { control, sent, primes } = makeHarness();
 		openStream(control); // brand-new: prime

@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /**
- * bwrap sandbox provider (P5.2): implements the frozen provider operation
- * protocol for
- * clone workspaces on a bwrap-capable Linux host.
+ * bwrap sandbox provider: implements the provider operation protocol
+ * (docs/provider-protocol.md) for clone workspaces on a bwrap-capable Linux
+ * host.
  *
  * Invocation: `<executable> ensure-running|inspect|stop|delete|preflight` with exactly
  * one JSON request on stdin and one JSON response on stdout; exit 0 when a
@@ -27,7 +27,7 @@
  *   SIGTERM → SIGKILL and reporting stopped only after proof.
  *
  * The sandbox argv is built by lib/runtime/bwrap-args.ts (pure, denylist-
- * enforced per P5.5: operator credentials, the SSH agent, container
+ * enforced: operator credentials, the SSH agent, container
  * sockets, and fleet/provider admin state are never mounted). No shell is
  * ever used.
  */
@@ -369,7 +369,7 @@ async function opEnsureRunning(request: ProviderRequest): Promise<ProviderRespon
 	}
 
 	// Fail fast on a policy-rejected profile: validate the sandbox argv before
-	// any supervisor spawn (P5.5 denylist errors are request config problems).
+	// any supervisor spawn (denylist errors are request config problems).
 	let secretEnv: Record<string, string>;
 	try {
 		secretEnv = resolveProfileSecrets(request);

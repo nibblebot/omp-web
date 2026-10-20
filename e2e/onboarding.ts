@@ -269,7 +269,7 @@ try {
 				"EMBEDDED_DIST: Record<string, string> = {}",
 			),
 	);
-	// P9.1: the build ships the provider executables and the reproducible
+	// The build ships the provider executables and the reproducible
 	// session-runtime image definition next to cli.js. package `files` =
 	// ["dist-bundle/"], so the tarball carries only the bundle; the source
 	// tree here is the pre-pack proof.
@@ -355,7 +355,7 @@ try {
 		installedPiAi === sdkPin,
 		JSON.stringify(installedPiAi),
 	);
-	// P9.1 installed-tree resolution: the provider executables + image
+	// Installed-tree resolution: the provider executables + image
 	// definition must survive pack + pinned install next to cli.js, and the
 	// installed provider must actually run (shebang + exec bit intact), since
 	// the fleet spawns `<executable> <op>` directly.

@@ -8,7 +8,7 @@
  *  - runtime entry (the sandboxed omp-session entry) + runtime binary (bun)
  *    resolvable;
  *  - profile tools: absolute and existing (a missing tool ro-binds nothing);
- *  - denied binds (P5.5): the workspace volume root and every profile tool sit
+ *  - denied binds: the workspace volume root and every profile tool sit
  *    outside every forbidden root (the same denylist the argv builder
  *    enforces at request time).
  *
@@ -155,7 +155,7 @@ function checkProfileTools(profile: BwrapProfile): PreflightCheck {
 }
 
 /**
- * Denied-bind sanity (P5.5): a profile that requests a bind inside a
+ * Denied-bind sanity: a profile that requests a bind inside a
  * forbidden root (operator home/ssh state, container sockets, fleet/provider
  * state) fails HERE with an actionable message.
  */

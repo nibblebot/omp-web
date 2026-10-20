@@ -6,7 +6,7 @@ import { gitReviewAvailable, gitReviewUnavailableReason } from "../../../store/r
 import { attachForPanel } from "../../../store/roster";
 import { openDock } from "../../../store/dock";
 
-// Delete-workspace confirm (Phase 5 close-out + P8.3): one self-mounting
+// Delete-workspace confirm (Phase 5 close-out): one self-mounting
 // dialog for BOTH workspace kinds, dispatched on the target daemon's kind.
 //
 // Worktree targets keep the guard-evidence flow: the sidebar row asked for

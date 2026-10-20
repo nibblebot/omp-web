@@ -1,5 +1,5 @@
 /**
- * Verify-at-deletion gate regressions (clone-plan P6.6/P7.7 deterministic
+ * Verify-at-deletion gate regressions (deterministic
  * failure coverage): the real FleetLogStore writer plus the real
  * verifyWorkspaceLogs gate, never mocks echoing inputs. Every unsafe store
  * shape must REFUSE deletion authorization and leave the stored bytes

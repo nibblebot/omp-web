@@ -1,6 +1,6 @@
 /**
- * Clone recovery + race regressions (clone-plan P6.1/P6.2/P6.3/P6.4:
- * RecoveryCompletion's uncertain-safety boundaries). These are deliberately
+ * Clone recovery + race regressions (RecoveryCompletion's uncertain-safety
+ * boundaries). These are deliberately
  * narrow deterministic regressions, NOT a lifecycle matrix:
  *
  *  1. restart at the enrollment-before-authorization boundary: a fleet that
@@ -361,7 +361,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				server.registry.setStatus(daemonId, "ready");
 				// Start/wake must refuse: the inspect conflict means the
 				// predecessor's termination is uncertain; no new writer may be
-				// admitted (P6.2).
+				// admitted.
 				const wake = await postJson(server.port, "/ctl/start", { daemonId });
 				expect(wake.status).toBe(409);
 				const body = (await wake.json()) as { error?: string };

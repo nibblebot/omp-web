@@ -1,4 +1,4 @@
-// Fleet log store (P3.8): durable, append-only mirror of the session lineage
+// Fleet log store: durable, append-only mirror of the session lineage
 // logs that daemons continuously stream over the callback pair. Contracts are summarized below:
 //   - Layout under the fleet state dir: logs/<workspaceId>/<sessionId>/<relpath>
 //     holds raw bytes, byte-identical to the streamed lineage file.
@@ -1028,7 +1028,7 @@ export class FleetLogStore {
 	}
 
 	// -------------------------------------------------------------------------
-	// Read-only surface (P8.5/P8.6). Every method below is a pure disk read:
+	// Read-only surface. Every method below is a pure disk read:
 	// never mutates, never repairs, never touches a daemon or the SDK, and
 	// never throws across the API boundary. Sessions not present in the
 	// in-memory map are restored from disk on demand (constructor-only usage).

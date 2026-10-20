@@ -15,7 +15,7 @@ import type { CallbackErrorCode } from "#lib/wire/callback-protocol";
 import type { CallbackSendResult } from "./fleet-callback";
 
 /**
- * Continuous session-log tailer, daemon half (P3.7). Tails the full session
+ * Continuous session-log tailer, daemon half. Tails the full session
  * lineage subtree of an
  * agent sessions dir: main session JSONL, subagent/advisor recorders,
  * metadata JSONL and blobs, and streams raw bytes to the fleet as `frame`
@@ -123,7 +123,7 @@ const POLL_INTERVAL_MS = 1_000;
 /** Backup rescan cadence while the recursive watcher is healthy; watch events drive the live path. */
 const WATCHED_BACKUP_INTERVAL_MS = 15_000;
 /**
- * Ack-watermark persistence (P3.7 daemon half): an ack is fleet-side
+ * Ack-watermark persistence (daemon half): an ack is fleet-side
  * durability, so a daemon restart resumes each lineage stream from its last
  * acked offset instead of re-streaming. Watermarks live in a sidecar next to
  * the sessions dir, a plain streamId → {offset, generation} map, rewritten

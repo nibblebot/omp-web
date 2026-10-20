@@ -1,5 +1,5 @@
 /**
- * Production-profile preflight (P5.6): a battery of environment checks for a
+ * Production-profile preflight: a battery of environment checks for a
  * provider profile BEFORE its first use, so a broken or unsafe profile fails
  * here with an actionable message instead of at launch time.
  *
@@ -368,7 +368,7 @@ async function checkDurableDirs(ctx: PreflightContext): Promise<PreflightCheck[]
 }
 
 /**
- * P5.4/P5.5: profile secret references must be resolvable on this host
+ * Profile secret references must be resolvable on this host
  * BEFORE any launch. bwrap: `env:NAME` scheme only; values are supplied to
  * the fleet as environment variables; the sandbox never mounts operator
  * agent state. Kubernetes: values are cluster secret references resolved

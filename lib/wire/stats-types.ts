@@ -35,7 +35,7 @@ export interface SessionSummary {
 	size: number;
 	mtimeMs: number;
 	/**
-	 * Coverage label (P8.6). "fleet-local" (default, omitted) = the row came
+	 * Coverage label. "fleet-local" (default, omitted) = the row came
 	 * from the fleet-local sessions dir walk + stats.db; "fleet-store" = the
 	 * session lives in the fleet transcript store (deleted/stopped workspace,
 	 * compute absent). A "fleet-store" row's `file` is a display key only;
@@ -204,7 +204,7 @@ export interface Health {
 	sessionsDir: string;
 	sessionsCount: number;
 	dbCounts: { messages: number; toolCalls: number; userMessages: number } | null;
-	/** Fleet log-store coverage (P8.6); absent when no store is mounted. */
+	/** Fleet log-store coverage; absent when no store is mounted. */
 	fleetStore?: {
 		workspaces: number;
 		sessions: number;
@@ -221,7 +221,7 @@ export interface SyncResult {
 }
 
 // ---------------------------------------------------------------------------
-// Fleet log-store read surface (P8.5). Server: apps/fleet/log-store.ts +
+// Fleet log-store read surface. Server: apps/fleet/log-store.ts +
 // apps/fleet/stored-sessions.ts. Client: apps/web/store/fleet-api.ts reads these through /ctl/stored.
 // Browsing is fleet-owned and read-only and never wakes compute.
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 /**
- * Fleet-side provider invocation (P5.1): runs a clone-workspace provider
- * executable per the frozen op contract (wire shapes and validation live in
- * lib/runtime/provider-protocol.ts).
+ * Fleet-side provider invocation: runs a clone-workspace provider
+ * executable per the op contract (docs/provider-protocol.md; wire shapes and
+ * validation live in lib/runtime/provider-protocol.ts).
  *
  * Invocation model: `<executable> <op>` with exactly one JSON request on
  * stdin (<= 1 MiB), exactly one JSON response on stdout, stderr a human log

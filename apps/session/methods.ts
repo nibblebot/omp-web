@@ -153,7 +153,7 @@ export interface WebMethodsDeps {
 	authStorage: AuthStorage;
 	collab: CollabSession;
 	broker: DaemonBroker;
-	/** P8.9 wake: materialize a session's stored transcripts from the fleet
+	/** Wake: materialize a session's stored transcripts from the fleet
 	 * log store into the agent sessions dir (wired by apps/session/index.ts). */
 	materializeSession: (
 		entry: SessionEntry,
@@ -312,7 +312,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			return { cancelled: !ok };
 		}
 		if (kind === "switchSession") {
-			// P8.4/P8.9: a READY clone's dropdown sends the session ID (the
+			// A READY clone's dropdown sends the session ID (the
 			// fleet store key: path=id=sessionId), not a file path. The SDK
 			// switchSession treats a non-existent path as "start fresh at
 			// that path", which is the "only New session" defect. Resolve a

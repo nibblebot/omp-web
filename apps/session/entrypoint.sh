@@ -1,5 +1,5 @@
 #!/bin/sh
-# Kubernetes provider session-runtime entrypoint (P5.4).
+# Kubernetes provider session-runtime entrypoint.
 #
 # Runs inside the per-workspace pod. Env the provider always sets:
 #   OMP_WORKSPACE_ROOT   /workspace (PVC)

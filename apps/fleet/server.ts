@@ -27,11 +27,11 @@
  *   POST /ctl/projects/:id/worktrees {name, baseRef?, existingBranch?, start?} -> 201 { entry }
  *   POST /ctl/clones/:daemonId/fetch-into-project -> CloneFetchResult | 400/409/503 { error } (local-source clones on a fleet-visible volume only; fast-forward or create, never overwrite)
  *   DELETE /ctl/worktrees/:daemonId {deleteBranch?: string} -> worktree: stop -> remove entry -> git worktree remove
- *                    (clone workspace: verify-at-deletion gate, P7.3/P7.5)
- *   GET  /ctl/logs/orphans                         -> orphaned log-store subtrees (P7.6)
- *   POST /ctl/logs/purge {workspaceId}             -> explicit manual purge (P7.6)
+ *                    (clone workspace: verify-at-deletion gate)
+ *   GET  /ctl/logs/orphans                         -> orphaned log-store subtrees
+ *   POST /ctl/logs/purge {workspaceId}             -> explicit manual purge
  *
- * Browser auth (P2.2/P2.3, optional): when an operator access token is
+ * Browser auth (optional): when an operator access token is
  * configured (OMP_FLEET_BROWSER_TOKEN / --browser-access-token /
  * config browserAccessToken), the same Bun.serve additionally mounts:
  *
@@ -44,7 +44,7 @@
  * Origin. Loopback peers stay exempt (the CLI precedent, R14). With no token
  * configured every route behaves exactly as before. /callback/* is NEVER
  * gated by browser auth: the DaemonTransportRegistry authenticates it with
- * the workspace enrollment credentials (P3.3, mounted first for that prefix).
+ * the workspace enrollment credentials (mounted first for that prefix).
  *
  * Errors: 400 invalid JSON / validation failure, 404 empty selector match,
  * 405 wrong method, 500 {error} on anything else. `waitMs` absent on
@@ -113,7 +113,7 @@ import { CloneControlApi, lifecycleStatus } from "./clone-control";
 import { FleetOperations, OperationError, parseCloneSource } from "./operations";
 
 export const DEFAULT_PORT = 4722;
-// P3.8 fleet log-store ack batching ("Session log
+// Fleet log-store ack batching ("Session log
 // streaming"): log_ack controls ride the reserved transport stream once per
 // batch. Batches flush when the accumulated-chunk budget is hit or the
 // time budget elapses, whichever comes first; a high-churn session acking
@@ -123,8 +123,8 @@ const LOG_ACK_FLUSH_MS = 1_000;
 const LOG_ACK_BATCH_MAX = 64;
 
 /**
- * Post-verification provider/storage deletion hook (P7.5 step 4). P5
- * providers implement this; the local-clone default removes the workspace
+ * Post-verification provider/storage deletion hook (step 4). Provider
+ * implementations supply this; the local-clone default removes the workspace
  * volume after the store flipped read-only. Never removes the store, and the
  * roster removal happens AFTER this resolves (or is left delete-pending-
  * retry with remainingResources when it partially fails).
@@ -161,7 +161,7 @@ export interface FleetServer {
 }
 
 /**
- * Secret-free provider-profile catalog (P1.3): the boot-static config's
+ * Secret-free provider-profile catalog: the boot-static config's
  * providerProfiles projected through toPublicProfile, published to the
  * browser on the registered_projects frame and served by GET /ctl/profiles.
  * Absent/empty config → empty catalog (never a failure); values/executables
@@ -357,21 +357,21 @@ class FleetServerImpl implements FleetServer {
 	readonly eventLog = new FleetEventLog();
 	readonly startedAt: number;
 	readonly fleetFacts: FleetFacts;
-	/** Optional P2.2/P2.3 browser-session auth; null when disabled (no token
+	/** Optional browser-session auth; null when disabled (no token
 	 *  configured). Loopback peer exemptions + CSRF/origin live behind this. */
 	readonly authGate: FleetAuthGate | null;
-	/** Optional P3.3 callback enrollment for roster daemons (mirrors the
-	 *  daemon-half enrollment the lifecycle hands out in P5). */
+	/** Callback enrollment for roster daemons (mirrors the
+	 *  daemon-half enrollment the lifecycle hands out). */
 	readonly transport: DaemonTransportRegistry;
-	/** P3.8 fleet log store; null when the logs dir is not writable at boot.
+	/** Fleet log store; null when the logs dir is not writable at boot.
 	 *  Loaded after the state lock is held; closed only in close(). */
 	readonly logStore: FleetLogStore | null;
-	/** P7.5 post-verification provider/storage deletion hook. The default
-	 *  removes a local clone's volume; P5 providers inject their own. */
+	/** Post-verification provider/storage deletion hook. The default
+	 *  removes a local clone's volume; a provider may inject its own. */
 	readonly resourceDeleter: WorkspaceResourceDeleter;
-	/** P6/P7 clone lifecycle owner (single create/ensure/stop/delete authority). */
+	/** Clone lifecycle owner (single create/ensure/stop/delete authority). */
 	readonly lifecycle: WorkspaceLifecycle;
-	/** P1/P8 clones control API (route layer over the lifecycle service). */
+	/** Clones control API (route layer over the lifecycle service). */
 	readonly cloneApi: CloneControlApi;
 	readonly cloneRoot: string;
 	/** State-file lock: taken in startFleet, released in close(). */
@@ -391,11 +391,11 @@ class FleetServerImpl implements FleetServer {
 	/** Pair-loss grace timers for ready non-clone entries; cleared on re-pair, entry removal, or close(). */
 	readonly #pairLossTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	readonly #pairLossGraceMs: number;
-	/** Historical transcripts/stats API (P8.6): per-instance stats app,
+	/** Historical transcripts/stats API: per-instance stats app,
 	 *  constructed in the constructor so it can receive the log store when it
 	 *  loads; closed in close(). */
 	readonly #statsApp: ReturnType<typeof createStatsApp>;
-	/** Stored-sessions read API (P8.5): mounted under /ctl/stored once the
+	/** Stored-sessions read API: mounted under /ctl/stored once the
 	 *  fleet log store loads; null when the store is unavailable. Read-only,
 	 *  never wakes compute. */
 	readonly storedApp: StoredApp | null = null;
@@ -447,7 +447,7 @@ class FleetServerImpl implements FleetServer {
 			bind: config.bind,
 		};
 		this.transport = new DaemonTransportRegistry();
-		// P3.8 fleet log store: loaded under the state lock (the state dir is
+		// Fleet log store: loaded under the state lock (the state dir is
 		// this fleet's alone) so restarts rebuild in-memory offset state from
 		// the durable index before any daemon pair streams. A boot-time logs
 		// dir that cannot be created/made writable is logged and disables log
@@ -468,7 +468,7 @@ class FleetServerImpl implements FleetServer {
 			);
 		}
 		this.logStore = logStore;
-		// P8.5/P8.6 stored-sessions + stats store coverage: BOTH consume the
+		// Stored-sessions + stats store coverage: BOTH consume the
 		// same secret-free provenance resolver over live registry records
 		// (never tokens/endpoints). Built only when the log store loaded;
 		// absent store → storedApp null and stats stays fleet-local-only.
@@ -501,7 +501,7 @@ class FleetServerImpl implements FleetServer {
 				store: logStore,
 				provenance: storedProvenance,
 			});
-			// P8.6: stats mounts the SAME store so /ctl/stats/health reports
+			// Stats mounts the SAME store so /ctl/stats/health reports
 			// fleetStore coverage and sessions carry origin/stored labels +
 			// dedup. Without this the store stays invisible to stats.
 			this.#statsApp = createStatsApp({
@@ -551,7 +551,7 @@ class FleetServerImpl implements FleetServer {
 				})
 			: null;
 		let edge: FleetEdge | null = null;
-		// P6/P7 lifecycle owner: the single create/ensure/stop/delete
+		// Lifecycle owner: the single create/ensure/stop/delete
 		// authority for provider-managed clone workspaces, shared by the
 		// control-plane routes and the edge command dispatch. Constructed
 		// BEFORE the edge (the edge takes it as a hook object); its deps are
@@ -605,7 +605,7 @@ class FleetServerImpl implements FleetServer {
 				evictProject: (projectId) => this.#evictProject(projectId),
 			},
 		});
-		// Historical transcripts/stats API (P8.6): per-instance, constructed
+		// Historical transcripts/stats API: per-instance, constructed
 		// with the log store (fleetStore coverage) once the store loads in the
 		// block above; never a bare store-less app.
 		edge = new FleetEdge({
@@ -662,14 +662,14 @@ class FleetServerImpl implements FleetServer {
 		});
 		this.port = this.#server.port!;
 		this.fleetFacts.port = this.port;
-		// P6.3: provider-managed clone workspaces reconcile SEPARATELY; their
+		// Provider-managed clone workspaces reconcile SEPARATELY; their
 		// compute survived the restart (it is not an in-memory child), so the
 		// legacy boot downgrade above must never touch them. Runs AFTER the
 		// port binds so checkout callbacks dial a real address. Inspect-
 		// before-act: reattach live sandboxes, recreate desired-running ones,
 		// leave desired-stopped ones alone. Fire-and-forget; failures log.
 		void this.lifecycle.reconcile();
-		// P8.9 wake materialization: the transport serves stored session
+		// Wake materialization: the transport serves stored session
 		// bytes over the bulk channel from this store.
 		if (this.logStore !== null) {
 			this.transport.setMaterializeStore(this.logStore);
@@ -678,7 +678,7 @@ class FleetServerImpl implements FleetServer {
 			// Boot enrollments above include persisted re-enrollments (a fleet
 			// restart accepts daemon redials with their original credential),
 			// so the static attach below covers every tap the fleet will ever
-			// need; runtime attach on enrollment is added with P5.
+			// need; runtime attach happens on enrollment.
 			for (const workspaceId of this.transport.enrolledWorkspaceIds()) {
 				this.#attachLogStoreTap(workspaceId);
 			}
@@ -738,7 +738,7 @@ class FleetServerImpl implements FleetServer {
 		if (errors.length > 0) throw errors[0];
 	}
 
-	// --- fleet log store (P3.8) ---
+	// --- fleet log store ---
 
 	/**
 	 * Per-workspace log-frame tap: durability-append daemon log chunks and
@@ -763,7 +763,7 @@ class FleetServerImpl implements FleetServer {
 	/**
 	 * One daemon callback envelope on a log-tapped workspace. Frame chunks
 	 * append to the store; a `control` envelope carrying the additive
-	 * workspace-side session-deletion notice (P7.6) purges that session's
+	 * workspace-side session-deletion notice purges that session's
 	 * fleet copy; the workspace wins. Read-only workspaces refuse the purge
 	 * (their verified store is Retention's; explicit purgeWorkspace is the
 	 * manual path).
@@ -1028,7 +1028,7 @@ class FleetServerImpl implements FleetServer {
 
 	/**
 	 * POST /ctl/start {daemonId} (alias POST /ctl/wake): the fleet-side
-	 * ensure-running entry point for CLONE workspaces (P6.1). Direct/template
+	 * ensure-running entry point for CLONE workspaces. Direct/template
 	 * spawns keep their existing path (/ctl/spawn, the lifecycle's host runtime); this route
 	 * only ever runs provider-managed clone entries. On success the workspace
 	 * record rides: fresh enrollment (credential persistence for the callback
@@ -1047,7 +1047,7 @@ class FleetServerImpl implements FleetServer {
 					"start a worktree/direct session through /ctl/spawn",
 			);
 		}
-		// P6.1: the single lifecycle owner. Never HTTP-self-fetch; resolves
+		// The single lifecycle owner. Never HTTP-self-fetch; resolves
 		// when the provider confirms compute running + enrollment persisted;
 		// callback→ready rides the roster (lifecycleStage broadcasts).
 		// Typed lifecycle failures map onto the same frozen HTTP statuses
@@ -1071,7 +1071,7 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	#fanoutDeps(): FanoutDeps {
-		// P6.1 fanout trigger: every prompt wakes its session through the shared
+		// Fanout trigger: every prompt wakes its session through the shared
 		// SessionWaker (clones via the lifecycle owner; spawned and remote entries
 		// via the host runtime and the callback pair).
 		return {
@@ -1097,7 +1097,7 @@ class FleetServerImpl implements FleetServer {
 		// /callback/* is the transport's, mounted BEFORE everything else and
 		// NEVER gated by browser auth: the registry authenticates with the
 		// workspace enrollment credentials (the callback pair from the fleet's
-		// host daemon in this pass; daemon-session pairs in P5).
+		// host daemon in this pass; daemon-session pairs later).
 		if (path0.startsWith("/callback")) {
 			const transportHandled = await this.transport.handleFetch(req);
 			if (transportHandled !== null) return transportHandled;
@@ -1121,7 +1121,7 @@ class FleetServerImpl implements FleetServer {
 		// dev) are exempt; the R14 precedent, so fleet/cli.ts keeps
 		// working. The client is the socket peer unless the peer is a
 		// configured trusted proxy, whose X-Forwarded-For client hop (the
-		// rightmost untrusted one) wins (P2.3); forwarded headers from any
+		// rightmost untrusted one) wins; forwarded headers from any
 		// untrusted peer are ignored, so
 		// a non-loopback deployment behind an unlisted proxy still requires
 		// a session.
@@ -1178,7 +1178,7 @@ class FleetServerImpl implements FleetServer {
 					case "/ctl/sessions":
 						return json(this.registry.list().map(toRosterEntry));
 					case "/ctl/profiles":
-						// P1.3: secret-free provider-profile catalog for CLI/browser.
+						// Secret-free provider-profile catalog for CLI/browser.
 						return json(this.cloneApi.profiles());
 					case "/ctl/omp-setup":
 						// Read-only probe for the web first-run panel. Never writes config.
@@ -1204,7 +1204,7 @@ class FleetServerImpl implements FleetServer {
 							return json({ error: "Usage unavailable (see the fleet log)" }, 502);
 						}
 					case "/ctl/logs/orphans":
-						// P7.6: log-store subtrees with no live roster identity
+						// Log-store subtrees with no live roster identity
 						// (deleted-without-verification workspaces), never
 						// auto-GC'd; explicit POST /ctl/logs/purge removes them.
 						return json(await this.#handleLogOrphans());
@@ -1231,14 +1231,14 @@ class FleetServerImpl implements FleetServer {
 					case "/ctl/projects":
 						return await this.#handleAddProject(req);
 					case "/ctl/clones":
-						// P1.3/P8: create a clone workspace (frozen contract).
+						// Create a clone workspace (frozen contract).
 						// Validate the payload, then delegate ENTIRELY to the
 						// lifecycle service, the same create the edge uses.
 						return await this.#handleCreateClone(req);
 					case "/ctl/spawn":
 						return await this.#handleSpawn(req);
-					// P6.1 clone lifecycle: ensure-running / wake for a
-					// provider-managed clone workspace (P8 UI rides later).
+					// Clone lifecycle: ensure-running / wake for a
+					// provider-managed clone workspace (UI rides later).
 					case "/ctl/start":
 					case "/ctl/wake":
 						return await this.#handleStart(req);
@@ -1253,7 +1253,7 @@ class FleetServerImpl implements FleetServer {
 					case "/ctl/settings/unset":
 						return await this.#handleSettingsWrite(req, true);
 					case "/ctl/logs/purge":
-						// P7.6 explicit manual purge of orphaned (or verified
+						// Explicit manual purge of orphaned (or verified
 						// read-only) workspace logs. Never automatic.
 						return await this.#handleLogPurge(req);
 					default:
@@ -1266,7 +1266,7 @@ class FleetServerImpl implements FleetServer {
 				// DELETE /ctl/worktrees/:daemonId. Worktree workspaces keep the
 				// legacy path (stop → remove entry → git worktree remove)
 				// UNCHANGED. Clone workspaces run the verify-at-deletion gate
-				// (P7.3/P7.5): admission refusal on active work, writer
+				// Admission refusal on active work, writer
 				// quiesce, fleet-store verification, read-only flip, provider
 				// deletion, THEN roster removal.
 				const worktreeMatch = WORKTREE_DELETE_ROUTE.exec(path);
@@ -1352,7 +1352,7 @@ class FleetServerImpl implements FleetServer {
 				return json({ error: "not found" }, 404);
 		}
 	}
-	/** P2.2/P2.3: presence-check the create_clone payload, then the shared create (the SAME create the edge uses). */
+	/** Presence-check the create_clone payload, then the shared create (the SAME create the edge uses). */
 	async #handleCreateClone(req: Request): Promise<Response> {
 		const body = await readJson(req);
 		const raw = body["source"];
@@ -1467,7 +1467,7 @@ class FleetServerImpl implements FleetServer {
 	 * delete_worktree/remove paths, which evict directly and must not toast.
 	 */
 	async #onWorktreeVanished(entry: RegistryEntry): Promise<void> {
-		// P6.3/P7: a clone workspace's compute is provider-owned and its
+		// A clone workspace's compute is provider-owned and its
 		// volume never vanishes under it (unlike a git worktree); the
 		// lifecycle + boot reconcile own clone eviction. Never route a clone
 		// through this legacy worktree-eviction path.
@@ -1505,7 +1505,7 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * P7.6 orphan provenance: when a roster identity is removed WITHOUT a
+	 * Orphan provenance: when a roster identity is removed WITHOUT a
 	 * passed verification gate but its fleet log-store subtree survives,
 	 * persist a storeOrphan marker so Retention can distinguish
 	 * deleted-without-verification logs (manual purge only) from verified
@@ -1701,7 +1701,7 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * P7.6: log-store subtrees with no live roster identity (and no
+	 * Log-store subtrees with no live roster identity (and no
 	 *  delete-pending-retry workspace). Retention-governed: never auto-GC'd. */
 	async #handleLogOrphans(): Promise<unknown> {
 		const store = this.logStore;
@@ -1719,7 +1719,7 @@ class FleetServerImpl implements FleetServer {
 		};
 	}
 
-	/** P7.6 explicit manual purge (never automatic). Removes one workspace's
+	/** Explicit manual purge (never automatic). Removes one workspace's
 	 *  stored logs (orphaned or verified read-only) and its storeOrphan
 	 *  marker. A live, non-read-only workspace is refused; its store is
 	 *  still being written. */
@@ -1806,7 +1806,7 @@ export async function startFleet(
 		const registry = new Registry(statePath);
 		await registry.load();
 		// Browser auth + non-loopback binds: opening the bind address must
-		// never create an unauthenticated control plane (P2.3). A
+		// never create an unauthenticated control plane. A
 		// non-loopback bind without browser auth configured is a startup
 		// error, mirroring the daemon's R14 rule.
 		if (!isLoopbackHost(config.bind) && config.browserAccessTokenHash === undefined) {

@@ -1,5 +1,5 @@
 /**
- * Unit tests for the browser session store (P2.1): opaque 256-bit session
+ * Unit tests for the browser session store: opaque 256-bit session
  * cookies, hashed credentials at rest, HttpOnly Secure SameSite=Lax cookie
  * construction with the explicit loopback-dev Secure exception, absolute
  * 30-day expiry that never slides, and logout plus the configuredTokenHash boot

@@ -1,5 +1,5 @@
 /**
- * In-pod workspace preparation (P5.3/P5.4): called by apps/session/
+ * In-pod workspace preparation: called by apps/session/
  * entrypoint.sh only when the per-workspace PVC lacks the verified init
  * marker (i.e. a NEW workspace volume). Reuses the fleet's own
  * prepareWorkspace so clone semantics are identical across providers.

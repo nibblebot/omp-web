@@ -1,5 +1,5 @@
 /**
- * Targeted tests for the fleet-side production-profile preflight (P5.6): the
+ * Targeted tests for the fleet-side production-profile preflight: the
  * host-generic rows (executable, durable dirs, secretRefs, aggregation) and
  * the merge of the rows a provider reports through its `preflight` op. The
  * provider-owned rows themselves are tested next to their providers

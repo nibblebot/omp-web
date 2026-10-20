@@ -1,5 +1,5 @@
 /**
- * P7.6 log retention on the fleet control plane (apps/fleet/server.ts):
+ * Log retention on the fleet control plane (apps/fleet/server.ts):
  *   - the daemon's additive `session_deleted` control notice purges that
  *     session's fleet copy (the workspace wins), is refused on a verified
  *     read-only workspace, and ignores an empty/non-string sessionId;
@@ -65,7 +65,7 @@ interface SeededWorkspace {
 	generation: number;
 }
 
-describe("fleet log retention routes (P7.6)", () => {
+describe("fleet log retention routes", () => {
 	let statePath: string;
 	let configPath: string;
 	let server: FleetServer;

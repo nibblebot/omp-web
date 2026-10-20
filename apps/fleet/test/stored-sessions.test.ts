@@ -1,5 +1,5 @@
 /**
- * /ctl/stored read surface (fleet/stored-sessions.ts, P8.5): route dispatch
+ * /ctl/stored read surface (fleet/stored-sessions.ts): route dispatch
  * for all four routes, the frozen typed error envelope
  * { error: { code, message } }, the reserved-name guard, transcript
  * parsed/raw paging (including the last page at EOF), the readStoredPrefix

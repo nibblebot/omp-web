@@ -44,7 +44,7 @@ import {
 import { isLoopbackHost } from "#lib/platform/hosts";
 
 /**
- * Callback transport, daemon half (P3.2). The daemon dials OUT to the fleet and
+ * Callback transport, daemon half. The daemon dials OUT to the fleet and
  * keeps one long-lived
  * pair of connections per workspace+generation:
  *
@@ -546,7 +546,7 @@ export class FleetCallback {
 	}
 
 	/**
-	 * POST a materialization request over the bulk channel (P8.9 wake): the
+	 * POST a materialization request over the bulk channel (wake): the
 	 * daemon mints a fresh correlation id and asks the fleet to serve the
 	 * workspace's stored session lineage bytes as NDJSON. Requires a READY
 	 * pair (a reconnecting or stopped pair has no live identity headers).

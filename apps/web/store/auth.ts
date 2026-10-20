@@ -1,5 +1,5 @@
 /**
- * Browser auth domain (P2.4 store facade): opaque 256-bit session cookie
+ * Browser auth domain (store facade): opaque 256-bit session cookie
  * (`omp_session`, HttpOnly + Secure + SameSite=Lax, 30-day absolute expiry).
  * The access token lives
  * ONLY for the duration of a signIn() call: it is posted once to

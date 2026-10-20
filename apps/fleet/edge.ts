@@ -159,7 +159,7 @@ interface DaemonActivity {
 const SSE_ENCODER = new TextEncoder();
 
 const STDERR_ROUTE = /^\/ctl\/sessions\/([^/]+)\/stderr$/;
-/** Fleet-proxied session-file download (P3.4): files ride the callback bulk channel. */
+/** Fleet-proxied session-file download: files ride the callback bulk channel. */
 const DOWNLOAD_ROUTE = /^\/ctl\/sessions\/([^/]+)\/download$/;
 
 /**
@@ -187,7 +187,7 @@ const BROWSER_COMMAND_LIST = [
 	"spawn_resume",
 	"stop",
 	"remove",
-	// Clone creation (P8.1): handled at the edge via the injected lifecycle hooks.
+	// Clone creation: handled at the edge via the injected lifecycle hooks.
 	"create_clone",
 	"add_project",
 	"remove_project",
@@ -360,7 +360,7 @@ export interface EdgeEvictionHooks {
 }
 
 /**
- * Clone lifecycle service injected into the edge (P6/P7 boundary). The edge
+ * Clone lifecycle service injected into the edge. The edge
  * NEVER stops/removes/deletes a clone workspace through the host runtime,
  * git worktree guards, or registry.remove directly: every clone
  * lifecycle mutation goes through these hooks so the provider lifecycle,
@@ -370,7 +370,7 @@ export interface EdgeEvictionHooks {
  * (structural conformance: the edge holds no runtime import on it).
  */
 export interface EdgeLifecycleHooks {
-	/** Create + optionally start a clone workspace (P1/P8.1); the roster broadcast carries the result. */
+	/** Create + optionally start a clone workspace; the roster broadcast carries the result. */
 	createClone(input: CloneCreateInput): Promise<RegistryEntry>;
 	/**
 	 * Start + wake: resolves once the provider confirms compute running and
@@ -386,7 +386,7 @@ export interface EdgeLifecycleHooks {
 	ensureCloneRunning(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void>;
 	/** Ordinary stop: proof-bearing provider stop, desiredState stopped, data retained. */
 	stopClone(daemonId: string): Promise<void>;
-	/** Verified delete (P7 gate): refuses active work, verifies the fleet store, then deletes provider resources. */
+	/** Verified delete: refuses active work, verifies the fleet store, then deletes provider resources. */
 	deleteClone(daemonId: string): Promise<{ removed: string; verified: string[] }>;
 	/** Fetch a local-source clone's branch into its project's main repo (the control route's operation). */
 	fetchCloneIntoProject(daemonId: string): Promise<CloneFetchResult>;
@@ -404,7 +404,7 @@ export interface EdgeDeps {
 	/** Fleet-wide facts (port/startedAt/state paths) surfaced by /ctl/debug. */
 	fleet: FleetFacts;
 	/**
-	 * Callback transport (P3): every daemon dials the fleet and attaches,
+	 * Callback transport: every daemon dials the fleet and attaches,
 	 * commands, and downloads over its pair. Absent (test construction) =
 	 * daemon rows report typed unavailability.
 	 */
@@ -415,9 +415,9 @@ export interface EdgeDeps {
 	eviction: EdgeEvictionHooks;
 	/** Session wake (FLC-23): brings a session's callback pair up before an attach or prompt. Required; the server owns it. */
 	waker: SessionWaker;
-	/** Boot-static secret-free provider catalog (P1.3), published on registered_projects. Omitted entirely when not configured. */
+	/** Boot-static secret-free provider catalog, published on registered_projects. Omitted entirely when not configured. */
 	providerProfiles?: PublicProviderProfile[];
-	/** Fleet transcript store (P3.8) for clone session listing/resume membership. Absent = clone rows list no sessions. */
+	/** Fleet transcript store for clone session listing/resume membership. Absent = clone rows list no sessions. */
 	logStore?: CloneSessionStore;
 	/** Serve the static UI for non-API paths (default true); false = 404 JSON, the split-setup control plane. */
 	serveUi?: boolean;
@@ -510,7 +510,7 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
  * or registeredAt) plus a live uptime in seconds since
  * readyAt (or registeredAt when never ready) and pid.
  *
- * P1.4 clone-workspace projection: the roster surfaces the PUBLIC subset of
+ * Clone-workspace projection: the roster surfaces the PUBLIC subset of
  * the fleet-private WorkspaceRecord: kind→workspaceKind,
  * desiredState→desiredState, profileId→providerProfileId, plus the
  * ephemeral lifecycle liveness facts (lifecycleStage/lifecycleError, the
@@ -560,7 +560,7 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 		if (entry.pid !== undefined) roster.pid = entry.pid;
 	}
 	if (entry.error !== undefined) roster.error = entry.error;
-	// Clone workspace projection (P1.4): pass through the PUBLIC workspace
+	// Clone workspace projection: pass through the PUBLIC workspace
 	// fields only: kind/desiredState/profileId from the fleet-private record
 	// (legacy entries carry an in-memory inferred workspace after load), and
 	// the ephemeral lifecycle liveness facts straight off the entry. The
@@ -586,7 +586,7 @@ export class FleetEdge {
 	readonly #config: FleetConfig;
 	readonly #eventLog: FleetEventLog;
 	readonly #fleet: FleetFacts;
-	/** Callback transport (P3): clone attach/commands/downloads ride it; undefined = clone rows answer typed unavailability. */
+	/** Callback transport: clone attach/commands/downloads ride it; undefined = clone rows answer typed unavailability. */
 	readonly #transport: DaemonTransportRegistry | undefined;
 	/** Session wake (FLC-23): one rule set shared with fan-out prompts, so every wake follows it. */
 	readonly #waker: SessionWaker;
@@ -660,9 +660,9 @@ export class FleetEdge {
 		attach: (stream, id, a) =>
 			void this.#handleAttach(stream, a.sessionId as string, id !== "" ? id : undefined),
 	};
-	/** Boot-static secret-free provider catalog, published on registered_projects (P1.3). */
+	/** Boot-static secret-free provider catalog, published on registered_projects. */
 	readonly #providerProfiles: PublicProviderProfile[] | undefined;
-	/** Fleet transcript store for clone session listing/resume membership (P3.8). */
+	/** Fleet transcript store for clone session listing/resume membership. */
 	readonly #logStore: CloneSessionStore | undefined;
 	readonly #backpressureBytes: number;
 	/** Per-client ring byte budget (default SSE_RING_BYTES; finding #5). */
@@ -958,7 +958,7 @@ export class FleetEdge {
 								type: "registered_projects",
 								projects: this.#registry.projects(),
 								configPath: this.#fleet.configPath,
-								// P1.3/P8: the boot-static secret-free profile
+								// The boot-static secret-free profile
 								// catalog; omitted entirely when not configured
 								// (older fleets imply an empty catalog).
 								...(this.#providerProfiles !== undefined
@@ -1111,7 +1111,7 @@ export class FleetEdge {
 				this.#sendError(stream, `unknown daemon: ${daemonId}`);
 				return;
 			}
-			// Clone sessions list from the fleet transcript store (P8.4: the
+			// Clone sessions list from the fleet transcript store (the
 			// owning daemon's session dir lives in the provider volume, never
 			// a fleet-local cwd); non-clone sessions list from disk so asleep/
 			// never-started daemons answer too. Empty list when no store.
@@ -1271,7 +1271,7 @@ export class FleetEdge {
 		// A dropdown-picked session must belong to this worktree's session
 		// listing; never let an arbitrary path/id reach resume. Clones
 		// validate against the fleet store's sessionId (the store key is
-		// the SDK session id, P8.4), never a fleet-local cwd.
+		// the SDK session id), never a fleet-local cwd.
 		let resumeFile: string | undefined;
 		if (sessionFile !== undefined) {
 			if (entry.workspace?.kind === "clone") {
@@ -2084,7 +2084,7 @@ export class FleetEdge {
 	}
 
 	/**
-	 * Delete-gate admission signal (P7.3): the derived realtime activity of
+	 * Delete-gate admission signal: the derived realtime activity of
 	 * one daemon. UNKNOWN (known:false) until the first derivable frame; a
 	 * daemon with no observed activity cannot be proven idle, so callers
 	 * refuse deletion while it is live. `live` reports whether the daemon's

@@ -1,7 +1,6 @@
 /**
- * Pure helpers for the fleet's session-spawn surface
- * (docs/src/content/docs/reference/configuration.md). No subprocess, no live
- * sessions; the spawn SUPERVISOR imports from here.
+ * Pure helpers for the fleet's session-spawn surface. No subprocess, no live
+ * sessions; the workspace lifecycle imports from here.
  *
  * - Templates are trusted config; `{key}` substitution is plain text
  *   replacement with NO shell escaping. The substituted VALUES are not

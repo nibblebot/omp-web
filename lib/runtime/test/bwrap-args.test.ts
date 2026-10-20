@@ -1,7 +1,7 @@
 /**
- * Denylist + argv-shape tests for the pure bwrap argv builder (P5.2).
+ * Denylist + argv-shape tests for the pure bwrap argv builder.
  *
- * The denylist is the enforcement point of P5.5: operator credentials, the
+ * The denylist is the enforcement point of the sandbox policy: operator credentials, the
  * SSH agent, container sockets, and fleet/provider administration state are
  * never mountable into a sandbox. Every profile `tools` bind source must
  * survive `assertAllowedSource`; a denied source throws DeniedBindError
@@ -286,7 +286,7 @@ describe("buildBwrapArgv", () => {
 		expect(argv[argv.length - 2]).toBe("/usr/bin/bun");
 	});
 
-	test('network knob (P5.7): absent and "isolated" keep the frozen argv (no --share-net)', () => {
+	test('network knob: absent and "isolated" keep the frozen argv (no --share-net)', () => {
 		const ws = tempDir("bwrap-ws-");
 		const home = tempDir("bwrap-home-");
 		const run = (profile: BwrapProfile) =>
@@ -313,7 +313,7 @@ describe("buildBwrapArgv", () => {
 		}
 	});
 
-	test('network knob (P5.7): "host" shares ONLY the netns after --unshare-all', () => {
+	test('network knob: "host" shares ONLY the netns after --unshare-all', () => {
 		const ws = tempDir("bwrap-ws-");
 		const home = tempDir("bwrap-home-");
 		const { argv } = buildBwrapArgv({

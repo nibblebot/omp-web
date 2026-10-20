@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /**
- * Kubernetes provider (P5.3): implements the frozen provider operation
- * protocol for
- * clone workspaces on an operator-prepared Kubernetes API.
+ * Kubernetes provider: implements the provider operation protocol
+ * (docs/provider-protocol.md) for clone workspaces on an operator-prepared
+ * Kubernetes API.
  *
  * Invocation: `<executable> ensure-running|inspect|stop|delete|list-sessions` with exactly
  * one JSON request on stdin and one JSON response on stdout; exit 0 when a
@@ -12,13 +12,13 @@
  * Resource model (one workspace = one Pod + one PVC, nothing else):
  * - A persistent per-workspace PVC (`ReadWriteOnce`) holds the runtime
  *   workspace volume: `.omp-workspace-init.json`, `.checkout/`, `.home/`
- *   (frozen "Preparation layout"). Stop retains the claim; replacement
+ *   (docs/provider-protocol.md, "Preparation layout"). Stop retains the claim; replacement
  *   reuses it; initialization runs only when the verified init marker is
  *   absent (new workspace), enforced by the image entrypoint.
  * - A single Pod mounts the claim at /workspace and runs the session
  *   daemon with `restartPolicy: "Never"` so identity is never masked by a
  *   kubelet restart. No Service/Ingress is created: the daemon dials the
- *   fleet callback pair outbound (P5.3: no inbound pod service required).
+ *   fleet callback pair outbound (no inbound pod service required).
  * - No cluster mutation beyond these two namespaced objects, ever. The
  *   provider never creates namespaces, RBAC, StorageClasses, Secrets, or
  *   NetworkPolicies, and never changes kubectl's ambient current-context:
@@ -84,7 +84,7 @@
  *   daemon's `--fleet-stdin` payload and unsets it before exec: the daemon
  *   process never carries it in its environment. The pod spec still exposes
  *   the token to anyone with pod get permission in the operator-approved
- *   namespace; the namespace must be scoped accordingly (P5.5 RBAC is
+ *   namespace; the namespace must be scoped accordingly (RBAC is
  *   operator-owned).
  * - in-pod preparation: the fleet resolves the pin and passes it through
  *   the additive request fields `source.remote`/`revision`/`branch`; the
@@ -151,7 +151,7 @@ interface KubernetesProviderRequest extends ProviderRequest {
 const RECORD_FILE = "provider.k8s.json";
 const STATE_LOCK_HOLDER = "kubernetes-provider";
 
-/** In-pod workspace volume layout (frozen "Preparation layout"). */
+/** In-pod workspace volume layout (docs/provider-protocol.md, "Preparation layout"). */
 const POD_WORKSPACE_ROOT = KUBERNETES_POD_LAYOUT.workspaceRoot;
 const POD_CHECKOUT_DIR = KUBERNETES_POD_LAYOUT.checkoutDir;
 const POD_HOME_DIR = KUBERNETES_POD_LAYOUT.homeDir;
@@ -718,7 +718,7 @@ function buildPvcManifest(
 
 /**
  * The workspace pod: single container, no inbound service, restartPolicy
- * Never, service-account token unmounted (P5.5: no Kubernetes credentials
+ * Never, service-account token unmounted (no Kubernetes credentials
  * inside agent execution), hardened securityContext, PVC at /workspace
  * plus an emptyDir /tmp for the read-only root filesystem.
  */
@@ -1805,7 +1805,7 @@ async function readListPod(
 }
 
 // ---------------------------------------------------------------------------
-// Preflight (P5.6): actionable, no installs, no object creation
+// Preflight: actionable, no installs, no object creation
 // ---------------------------------------------------------------------------
 
 /**

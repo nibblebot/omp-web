@@ -61,10 +61,10 @@ Warnings (drift that is not a broken release by itself):
 - the pinned `@oh-my-pi/*` versions are behind the upstream npm latest;
 - commits are unpushed relative to `origin/main` (the release pushes to `origin/main`);
 - `gh` is not authenticated;
-- an unchecked Markdown task box in `docs/*.md` or `docs/src/content/docs/**/*.md` (line-anchored task items; prose that quotes the box syntax is not a finding, and `docs/clone-plan.md` is excluded because its boxes are the live clone-phase tracker);
+- an unchecked Markdown task box in `docs/*.md` or `docs/src/content/docs/**/*.md` (line-anchored task items; prose that quotes the box syntax is not a finding);
 - a relative link in the docs resolves to no file;
 - a documented gate list disagrees with `GATE_COMMANDS` in `scripts/release.ts`;
-- a stale SDK version literal in a docs page (the frozen clone design and ledger docs, `docs/clone-*.md`, are excluded: they record design-time SDK facts by charter).
+- a stale SDK version literal in a docs page.
 
 `--offline` never invokes npm: the two npm-backed checks (pins behind upstream latest, stale SDK version literals) report as skipped, and every other check still runs. `--json` prints the whole report as one JSON object on stdout instead of the text report; usage errors go to stderr in either mode. (This is the repository script; `omp-web preflight --profile <id>` is the unrelated provider-profile check in the CLI.)
 
@@ -83,7 +83,7 @@ Warnings (drift that is not a broken release by itself):
 
 ## Release history and CI
 
-The repository is public. `v0.1.0` and `v0.1.1` shipped on 2026-08-20, and the stable latest-download manifest serves `0.1.1`. The release workflow is documented in `docs/src/content/docs/project/release.md` and implemented by `scripts/release.ts`.
+The repository is public. `v0.1.0` and `v0.1.1` shipped on 2026-08-20, and the stable latest-download manifest serves `0.1.1`. The release workflow is documented in this file and implemented by `scripts/release.ts`.
 
 The live channel is verified by the release script only as far as the manifest poll in step 12. A full live-channel walk (install from the real release URL, then `omp-web update` against the real channel) has no recorded result: `bun e2e/onboarding.ts` exercises install and update against local fixtures, and the packed-tarball smoke installs the local artifact. Treat that path as unproven until someone records it.
 

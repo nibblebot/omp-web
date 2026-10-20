@@ -1,5 +1,5 @@
 /**
- * Fleet log-store read model + HTTP surface (P8.5). Everything here is a
+ * Fleet log-store read model + HTTP surface. Everything here is a
  * pure disk read over FleetLogStore: never touches a daemon, the SDK, or
  * compute, so browsing fleet-stored history can never wake a workspace.
  *

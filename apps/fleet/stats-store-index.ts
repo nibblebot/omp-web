@@ -1,5 +1,5 @@
 /**
- * Fleet log-store coverage for /ctl/stats (P8.6). Everything here is a pure
+ * Fleet log-store coverage for /ctl/stats. Everything here is a pure
  * disk read over FleetLogStore: never a daemon, the SDK, or compute.
  *
  * Rows joined by STABLE SESSION IDENTITY (the store sessionId ↔ a

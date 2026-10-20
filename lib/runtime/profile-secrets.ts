@@ -16,7 +16,7 @@ const SECRET_ENV_SCHEME = "env:";
 const SECRET_MAX_CHARS = 4096;
 
 /**
- * Resolve profile `secretRefs` to concrete runtime env values (P5.5).
+ * Resolve profile `secretRefs` to concrete runtime env values.
  * Scheme `env:NAME` reads the named variable from `env`: selected model
  * credentials are supplied to the fleet, never mounted from the operator
  * agent dir. Unknown schemes are configuration errors (`invalid_request`); a

@@ -1,5 +1,5 @@
 /**
- * Clone-workspace HTTP control surface (clone-plan P1/P6/P7/P8).
+ * Clone-workspace HTTP control surface.
  *
  * A thin route layer over the single fleet-internal lifecycle service
  * (fleet/workspace-lifecycle.ts): the CLI and the browser edge share the

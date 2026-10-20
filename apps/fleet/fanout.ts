@@ -112,7 +112,7 @@ export async function promptEntry(
 /**
  * Prompt one session over its callback pair: wake it when the pair is down,
  * then send kind:"command" on the transport control stream and correlate the
- * frames the daemon mirrors there (P3.4). No offline queue and no blind
+ * frames the daemon mirrors there. No offline queue and no blind
  * retry: a missing transport or an unpairable session answers a typed
  * failure immediately.
  */
