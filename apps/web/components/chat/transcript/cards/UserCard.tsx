@@ -1,7 +1,7 @@
 import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
 import { pushNotice, type ChatItem } from "../../../../state";
 import type { ImageArg } from "#lib/wire/protocol";
-import { imageDataUrl } from "../../../../text/images";
+import { ImageThumb } from "../../../ui/ImageThumb";
 import { branchFromCard } from "../../../../store/graph";
 import { CopyButton } from "../../../ui/CopyButton";
 
@@ -78,13 +78,11 @@ export const UserCard: Component<{
 				<div class="msg-user-images">
 					<For each={images()}>
 						{(img) => (
-							<button class="img-thumb" type="button" onClick={() => props.onZoom(img)}>
-								<img
-									src={imageDataUrl(img)}
-									alt={`user attached image (${img.mimeType})`}
-									decoding="async"
-								/>
-							</button>
+							<ImageThumb
+								image={img}
+								alt={`user attached image (${img.mimeType})`}
+								onZoom={props.onZoom}
+							/>
 						)}
 					</For>
 				</div>

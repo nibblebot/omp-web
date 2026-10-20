@@ -1,6 +1,6 @@
 import { batch, createSignal, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import type { SubagentMessagesResult } from "#lib/wire/protocol";
+import type { SubagentImageResult, SubagentMessagesResult } from "#lib/wire/protocol";
 import type { SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { createHistoryBuilder, type HistoryBuilder } from "../chat/history-items";
 import { metricsOf, normalizeStatus, type UsageFallback } from "./subagent-frames";
@@ -10,6 +10,7 @@ import { setState, setView, state, type ChatItem, type SubagentInfo } from "../s
 import { api } from "./fleet-api";
 import { subagentAnalysisHash } from "./slices/analysis";
 import { agentTitle, shortAgentName, sumKnown } from "../subagents/format";
+import { imageBlobHash } from "../text/images";
 import {
 	liveLineOf,
 	modelView,
@@ -317,11 +318,16 @@ export function normalizeWorkerSnapshot(
 		if (!record) continue;
 		const old = records[record.key];
 		if (!old) order.push(record.key);
+		// Progress and the usage derived from it are a live sample (the first roster read after a spawn can
+		// carry one taken 45 ms in). Keep them only while the worker runs; once it settles the row's own
+		// usage (retained at finish, or summed from its transcript) is the truth, and absent means unknown.
+		const running =
+			record.status === "pending" || record.status === "started" || record.status === "running";
 		records[record.key] = {
 			...old,
 			...record,
-			progress: record.progress ?? old?.progress,
-			usage: record.usage ?? old?.usage,
+			progress: record.progress ?? (running ? old?.progress : undefined),
+			usage: record.usage ?? (running ? old?.usage : undefined),
 			parentAgentId: record.parentAgentId ?? old?.parentAgentId,
 		};
 	}
@@ -618,10 +624,15 @@ export async function reviveSubagent(id: string): Promise<void> {
 	requestRosterRefresh();
 }
 
-/** Pages of the agent's JSONL transcript are read forward from byte 0 at this size until caught up. */
-const TRANSCRIPT_PAGE_BYTES = 1 << 20;
-/** Server page cap (readSubagentTranscript); a single record larger than a page escalates up to it. */
-const TRANSCRIPT_MAX_PAGE_BYTES = 4 << 20;
+/**
+ * Pages of the agent's JSONL transcript are read forward from byte 0 at this size until caught up.
+ * The answer carries each record twice (`entries` and `messages`) and must fit one 1 MiB callback
+ * envelope (ENVELOPE_MAX_BYTES): a 256 KiB page of a real 8 MB transcript answers at most 0.48 MiB,
+ * a 1 MiB page up to 1.85 MiB, which the session refuses to send.
+ */
+const TRANSCRIPT_PAGE_BYTES = 256 * 1024;
+/** Largest page a single oversized record escalates to; its answer still has to fit the envelope. */
+const TRANSCRIPT_MAX_PAGE_BYTES = 448 * 1024;
 
 interface TranscriptSlot {
 	/** Built chat items, append-only. A later tool result patches its ToolItem in place. */
@@ -715,9 +726,109 @@ function applyTranscriptPage(key: string, agentId: string, res: SubagentMessages
 		setTranscripts(key, "nextByte", res.nextByte);
 	});
 	if (agentSettled(agentId)) settleRunningTranscriptTools(key);
+	resolveTranscriptImages(key, agentId);
 }
 
-/** Read forward from the cursor in 1 MB pages until caught up. */
+/** Concurrent `getSubagentImage` calls across all transcripts: each answer may be most of a 1 MiB envelope. */
+const IMAGE_FETCH_CONCURRENCY = 3;
+/** Resolved images kept for items built on later pages; the items themselves hold the bytes. */
+const RESOLVED_IMAGE_CACHE_CAP = 32;
+
+interface ResolvedImage {
+	data: string;
+	mimeType: string;
+}
+
+/** By hash: a blob is content-addressed, so every transcript referencing it shares one answer. */
+const resolvedImages = new Map<string, ResolvedImage>();
+/** `[transcript key, hash]` -> in flight, or failed (error, too large, missing). A failed hash is never asked again. */
+const imageAttempts = new Map<string, "pending" | "failed">();
+let imageSlots = IMAGE_FETCH_CONCURRENCY;
+const imageWaiters: Array<() => void> = [];
+
+async function withImageSlot<T>(task: () => Promise<T>): Promise<T> {
+	if (imageSlots === 0) await new Promise<void>((wake) => imageWaiters.push(wake));
+	else imageSlots -= 1;
+	try {
+		return await task();
+	} finally {
+		// A waiter inherits the slot directly.
+		const next = imageWaiters.shift();
+		if (next) next();
+		else imageSlots += 1;
+	}
+}
+
+/**
+ * Write resolved bytes into every image of the transcript that still points at `hash`. The
+ * ImageArg objects and their arrays keep their identity; only `data` (and a sniffed `mimeType`) change.
+ */
+function patchResolvedImage(key: string, hash: string, image: ResolvedImage): void {
+	if (!transcripts[key]) return;
+	setTranscripts(
+		key,
+		"items",
+		produce((items) => {
+			for (const item of items) {
+				if (item.kind !== "user" && item.kind !== "tool") continue;
+				for (const img of item.images ?? []) {
+					if (imageBlobHash(img) !== hash) continue;
+					img.data = image.data;
+					// The server sniffs magic bytes; the transcript block's declared type stands when it cannot.
+					if (image.mimeType.startsWith("image/")) img.mimeType = image.mimeType;
+				}
+			}
+		}),
+	);
+}
+
+async function fetchTranscriptImage(key: string, agentId: string, hash: string): Promise<void> {
+	const attempt = JSON.stringify([key, hash]);
+	imageAttempts.set(attempt, "pending");
+	try {
+		const res = (await withImageSlot(() =>
+			call("getSubagentImage", [{ subagentId: agentId, hash }]),
+		)) as SubagentImageResult;
+		if (res.status !== "ok") {
+			imageAttempts.set(attempt, "failed");
+			return;
+		}
+		imageAttempts.delete(attempt);
+		resolvedImages.set(hash, { data: res.data, mimeType: res.mimeType });
+		if (resolvedImages.size > RESOLVED_IMAGE_CACHE_CAP) {
+			resolvedImages.delete(resolvedImages.keys().next().value as string);
+		}
+		patchResolvedImage(key, hash, res);
+	} catch {
+		// Stays an `[image]` placeholder; a transient failure is not retried in a loop.
+		imageAttempts.set(attempt, "failed");
+	}
+}
+
+/**
+ * Resolve the `blob:sha256:` images of the transcript's built items, lazily by hash: cached hashes patch
+ * at once, new ones are requested with bounded concurrency. Runs after every page, so items built by
+ * this page (and results patched onto earlier items) are covered; a hash already asked is not asked again.
+ */
+function resolveTranscriptImages(key: string, agentId: string): void {
+	const wanted = new Set<string>();
+	for (const item of transcripts[key]?.items ?? []) {
+		if (item.kind !== "user" && item.kind !== "tool") continue;
+		for (const img of item.images ?? []) {
+			const hash = imageBlobHash(img);
+			if (hash !== undefined) wanted.add(hash);
+		}
+	}
+	for (const hash of wanted) {
+		const cached = resolvedImages.get(hash);
+		if (cached) patchResolvedImage(key, hash, cached);
+		else if (!imageAttempts.has(JSON.stringify([key, hash]))) {
+			void fetchTranscriptImage(key, agentId, hash);
+		}
+	}
+}
+
+/** Read forward from the cursor in TRANSCRIPT_PAGE_BYTES pages until caught up. */
 async function fetchTranscript(key: string, agentId: string): Promise<void> {
 	if (!transcripts[key]) {
 		setTranscripts(key, {

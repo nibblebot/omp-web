@@ -1,4 +1,5 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { getBlobsDir } from "@oh-my-pi/pi-utils";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
@@ -12,6 +13,7 @@ import {
 	resolveCliModel,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { BlobStore } from "@oh-my-pi/pi-coding-agent/session/blob-store";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -46,7 +48,7 @@ import { resolveSessionMainFile, MaterializeSessionError } from "./session-mater
 import os from "node:os";
 import { createDownloadMethods } from "./download-manifest";
 import { createResumeImportHandlers } from "./resume-import-adapter";
-import { listWorkers, parkWorker, reviveWorker } from "./worker-lifecycle";
+import { listWorkers, parkWorker, resolveTranscriptFile, reviveWorker } from "./worker-lifecycle";
 import {
 	getAdvisorOverview,
 	getAdvisorStats,
@@ -98,11 +100,8 @@ import { createTodoMethods } from "./review-todos";
 import { createMcpMethods } from "./mcp-methods";
 import { createSkillMethods } from "./skill-methods";
 import { broadcast, broadcastHistory, broadcastTo } from "./sse-delivery";
-import {
-	clearSubagents,
-	readSubagentTranscript,
-	resolveSubagentSessionFile,
-} from "./subagent-mirror";
+import { clearSubagents, readSubagentTranscript } from "./subagent-mirror";
+import { readSubagentImage } from "./subagent-image";
 import { projectProgress } from "./subagent-progress";
 import {
 	createGraphModelHandlers,
@@ -160,6 +159,8 @@ export interface WebMethodsDeps {
 		entry: SessionEntry,
 		args: { sessionId?: string },
 	) => Promise<{ files: number; bytes: number } | { alreadyPresent: true }>;
+	/** Blob store holding the sessions' externalized images; defaults to the agent directory's shared store. */
+	blobStore?: BlobStore;
 	/** Agent sessions root the daemon writes into (boot-time constant). */
 	sessionsDir: string;
 	/** Daemon bound cwd (resume scoping); entry.cwd matches it on this daemon. */
@@ -804,7 +805,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 				};
 			});
 		},
-		getSubagentMessages: (entry, a) => {
+		getSubagentMessages: async (entry, a) => {
 			const selector = a[0] as {
 				subagentId?: string;
 				sessionFile?: string;
@@ -812,9 +813,20 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 				maxBytes?: number;
 			};
 			return readSubagentTranscript(
-				resolveSubagentSessionFile(entry, selector),
+				await resolveTranscriptFile(entry, selector),
 				selector.fromByte,
 				selector.maxBytes,
+			);
+		},
+		getSubagentImage: async (entry, a) => {
+			const selector = a[0] as { subagentId?: string; hash?: unknown };
+			if (typeof selector?.subagentId !== "string") {
+				throw new Error("getSubagentImage requires subagentId");
+			}
+			return readSubagentImage(
+				await resolveTranscriptFile(entry, { subagentId: selector.subagentId }),
+				selector.hash,
+				deps.blobStore ?? new BlobStore(getBlobsDir()),
 			);
 		},
 		subagentSteer: async (entry, a) => {

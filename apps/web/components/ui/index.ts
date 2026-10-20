@@ -3,6 +3,7 @@ export type { ConfirmArm } from "./ConfirmButton";
 export { COPY_FEEDBACK_MS, CopyButton } from "./CopyButton";
 export { DialogActions } from "./DialogActions";
 export { ImageLightbox } from "./ImageLightbox";
+export { ImageThumb } from "./ImageThumb";
 export { ImageThumbnails } from "./ImageThumbnails";
 export { KebabMenu } from "./KebabMenu";
 export { Markdown } from "./Markdown";

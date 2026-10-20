@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { scanImages } from "../../text/images";
+import { imageBlobHash, isUnresolvedImage, scanImages } from "../../text/images";
 
 describe("scanImages", () => {
 	const img = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
@@ -41,8 +41,38 @@ describe("scanImages", () => {
 		expect(scanImages({ type: "image", data: 5, mimeType: "image/png" })).toEqual([]);
 	});
 
-	test("ignores unresolved blob references a raw stored transcript carries", () => {
-		const ref = { type: "image", data: `blob:sha256:${"a".repeat(64)}`, mimeType: "image/webp" };
-		expect(scanImages({ content: [ref, img] })).toEqual([img]);
+	test("keeps the blob references a raw stored transcript carries, in order", () => {
+		const ref = {
+			type: "image" as const,
+			data: `blob:sha256:${"a".repeat(64)}`,
+			mimeType: "image/webp",
+		};
+		expect(scanImages({ content: [ref, img] })).toEqual([ref, img]);
+	});
+});
+
+describe("unresolved image refs", () => {
+	const hash = "0123456789abcdef".repeat(4);
+
+	test("a canonical blob ref yields its hash and counts as unresolved", () => {
+		const ref = { data: `blob:sha256:${hash}` };
+		expect(imageBlobHash(ref)).toBe(hash);
+		expect(isUnresolvedImage(ref)).toBe(true);
+	});
+
+	test("base64 data is resolved and has no hash", () => {
+		expect(imageBlobHash({ data: "aGVsbG8=" })).toBeUndefined();
+		expect(isUnresolvedImage({ data: "aGVsbG8=" })).toBe(false);
+	});
+
+	test("a malformed blob ref is never fetched but still renders as a placeholder", () => {
+		for (const data of [
+			`blob:sha256:${hash.toUpperCase()}`,
+			`blob:sha256:${hash}0`,
+			"blob:sha256:../x",
+		]) {
+			expect(imageBlobHash({ data })).toBeUndefined();
+			expect(isUnresolvedImage({ data })).toBe(true);
+		}
 	});
 });

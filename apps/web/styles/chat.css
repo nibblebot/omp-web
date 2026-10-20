@@ -263,6 +263,15 @@
 	font-size: var(--fs-md);
 	font-style: italic;
 }
+/* Stand-in for a subagent transcript image that is still loading, too large, or no longer stored. */
+.img-pending {
+	display: inline-block;
+	padding: var(--space-1) var(--space-3);
+	border: 1px dashed var(--border);
+	border-radius: var(--r-md);
+	color: var(--muted-2);
+	font-size: var(--fs-md);
+}
 .msg-notice {
 	text-align: center;
 	color: var(--muted-2);

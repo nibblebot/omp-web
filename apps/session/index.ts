@@ -68,6 +68,7 @@ import { createDaemonBroker } from "./daemon-broker";
 import { gitCapability } from "./capabilities";
 import { createWebMethods } from "./methods";
 import { BOOT_HANDLE, type SessionEntry } from "./session-entry";
+import { createSessionChangeGate } from "./session-change-gate";
 import { loginWithCallbacks } from "./login";
 import {
 	broadcast,
@@ -271,6 +272,7 @@ const {
 	hasCallbackPair: () => fleetCallback !== null,
 	lifecycleMirror,
 });
+const sessionChangeGate = createSessionChangeGate(NOT_READY_GATED);
 setOnStreamsEmpty(() => {
 	// Callback-pair browsers are virtual streams outside this set; keep the
 	// daemon roster poll alive while any of them remain.
@@ -578,6 +580,9 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 			case "call": {
 				const entry = attachedEntry();
 				if (!entry) throw new Error("Not attached to a session");
+				// Before the scope check: a send that races a session replacement is told so,
+				// not advised to refresh (see session-change-gate.ts).
+				sessionChangeGate.assertOpen(cmd.method);
 				if (
 					cmd.scope &&
 					(cmd.scope.workspaceId !== attachmentWorkspace ||
@@ -592,46 +597,48 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				// Own-property lookup: an inherited name (`constructor`, `toString`) is not a method.
 				const method = Object.hasOwn(METHODS, cmd.method) ? METHODS[cmd.method] : undefined;
 				if (!method) throw new Error(`Unknown method: ${cmd.method}`);
-				const data =
-					cmd.method === "login"
-						? await loginWithCallbacks(
-								entry,
-								cmd.args?.[0] as string,
-								authStorage,
-								async (providerId) => {
-									// Online refresh re-runs discovery for the stored credential's
-									// provider (device-login aliases can store under another id).
-									await modelRegistry.refreshProvider(providerId, "online");
-									await daemonBroker.broadcastAvailableCommands(entry);
-								},
-							)
-						: await method(entry, cmd.args ?? [], cmd.streamId);
-				// A settings write that changes the transcript (display.collapseCompacted) resyncs
-				// history like a HISTORY_RELOAD method, so attached transcripts follow the setting.
-				const reloadsHistory =
-					Boolean(HISTORY_RELOAD[cmd.method]) || settingWriteReloadsHistory(cmd.method, cmd.args);
-				// Post-mutation resync is best-effort: the mutation already
-				// succeeded, so a resync failure must not fail the call.
-				const resync = async () => {
-					try {
-						if (reloadsHistory)
-							await broadcastHistory(entry.handle, transcriptHistoryFrames(entry.session));
-						if (HISTORY_RELOAD[cmd.method] || !(READ_ONLY[cmd.method] || NAME_ONLY[cmd.method]))
-							await daemonBroker.broadcastState(entry);
-					} catch (err) {
-						console.error("Post-mutation resync failed:", err);
-						broadcast({ type: "error", error: `resync failed: ${String(err)}` });
+				await sessionChangeGate.track(cmd.method, async () => {
+					const result =
+						cmd.method === "login"
+							? await loginWithCallbacks(
+									entry,
+									cmd.args?.[0] as string,
+									authStorage,
+									async (providerId) => {
+										// Online refresh re-runs discovery for the stored credential's
+										// provider (device-login aliases can store under another id).
+										await modelRegistry.refreshProvider(providerId, "online");
+										await daemonBroker.broadcastAvailableCommands(entry);
+									},
+								)
+							: await method(entry, cmd.args ?? [], cmd.streamId);
+					// A settings write that changes the transcript (display.collapseCompacted) resyncs
+					// history like a HISTORY_RELOAD method, so attached transcripts follow the setting.
+					const reloadsHistory =
+						Boolean(HISTORY_RELOAD[cmd.method]) || settingWriteReloadsHistory(cmd.method, cmd.args);
+					// Post-mutation resync is best-effort: the mutation already
+					// succeeded, so a resync failure must not fail the call.
+					const resync = async () => {
+						try {
+							if (reloadsHistory)
+								await broadcastHistory(entry.handle, transcriptHistoryFrames(entry.session));
+							if (HISTORY_RELOAD[cmd.method] || !(READ_ONLY[cmd.method] || NAME_ONLY[cmd.method]))
+								await daemonBroker.broadcastState(entry);
+						} catch (err) {
+							console.error("Post-mutation resync failed:", err);
+							broadcast({ type: "error", error: `resync failed: ${String(err)}` });
+						}
+					};
+					if (reloadsHistory) {
+						// Resync BEFORE the call_result: picker success UI (notices,
+						// modal close) must run after the transcript is replaced.
+						await resync();
+						answerCommand(cmd.id, { type: "call_result", id: cmd.id, ok: true, data: result });
+					} else {
+						answerCommand(cmd.id, { type: "call_result", id: cmd.id, ok: true, data: result });
+						await resync();
 					}
-				};
-				if (reloadsHistory) {
-					// Resync BEFORE the call_result: picker success UI (notices,
-					// modal close) must run after the transcript is replaced.
-					await resync();
-					answerCommand(cmd.id, { type: "call_result", id: cmd.id, ok: true, data });
-				} else {
-					answerCommand(cmd.id, { type: "call_result", id: cmd.id, ok: true, data });
-					await resync();
-				}
+				});
 				break;
 			}
 			case "login_code": {

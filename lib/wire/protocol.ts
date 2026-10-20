@@ -137,6 +137,23 @@ export interface SubagentMessagesResult {
 	messages: AgentMessage[];
 }
 
+/**
+ * Serialized-size ceiling of a `getSubagentImage` answer. A call answer must fit one callback envelope
+ * (ENVELOPE_MAX_BYTES, 1 MiB) with the call_result wrapper around it; an image whose base64 answer would
+ * pass this is reported as `too_large` instead of failing the send.
+ */
+export const SUBAGENT_IMAGE_MAX_ANSWER_BYTES = 900 * 1024;
+
+/**
+ * Answer of `getSubagentImage({ subagentId, hash })`: one image a subagent transcript references as
+ * `blob:sha256:<hash>`. `missing` means the transcript references the hash but the session's blob store no
+ * longer holds it. A hash the transcript does not reference, or one that is not a sha256 hex digest, is an error.
+ */
+export type SubagentImageResult =
+	| { status: "ok"; data: string; mimeType: string }
+	| { status: "too_large"; bytes: number }
+	| { status: "missing" };
+
 /** Image payload accepted by prompt/steer/followUp (structurally compatible with pi-ai's ImageContent). */
 export type ImageArg = { type: "image"; data: string; mimeType: string; detail?: string };
 
@@ -725,6 +742,7 @@ export type WebMethodName =
 	| "login"
 	| "getSubagents"
 	| "getSubagentMessages"
+	| "getSubagentImage"
 	| "subagentSteer"
 	| "subagentAbort"
 	| "materializeSession"
@@ -851,6 +869,7 @@ export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> =
 	getLoginProviders: true,
 	getSubagents: true,
 	getSubagentMessages: true,
+	getSubagentImage: true,
 	formatSessionAsText: true,
 	getContextBreakdown: true,
 	annotationList: true,
@@ -881,6 +900,24 @@ export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> =
 	predictWord: true,
 	predictWordFeedback: true,
 };
+
+/**
+ * Methods that replace the attached session's identity (a new session id and
+ * transcript). The SDK mints the new id partway through the call, so until the
+ * call's answer lands the daemon's identity runs ahead of the `sessionScope`
+ * every client last received: a call sent in that gap carries the old scope.
+ * The server answers these only after the history and state resync; clients
+ * hold their own sends while one is pending.
+ */
+export const SESSION_REPLACING_METHODS = [
+	"newSession",
+	"switchSession",
+	"branch",
+	"fork",
+	"handoff",
+	"clearSession",
+	"deleteSession",
+] as const satisfies readonly WebMethodName[];
 
 // Client → server (POST /command bodies; one command per request, 202 accept).
 // Routing is by STREAM ATTACHMENT: on omp-session an /events stream is attached

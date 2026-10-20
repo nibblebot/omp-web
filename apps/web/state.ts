@@ -1523,7 +1523,7 @@ export function connect(): void {
 // importing from "../state" byte-identical. Types and the store stay defined
 // above; the actions live in apps/web/store/<domain>.ts.
 // ---------------------------------------------------------------------------
-export { isReady } from "./store/session";
+export { isReady, isSessionChanging } from "./store/session";
 export {
 	argsSummary,
 	truncateHead,

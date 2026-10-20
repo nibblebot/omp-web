@@ -3,7 +3,7 @@ import type { InputMode } from "../../../prompt/commands";
 import type { ImageArg } from "#lib/wire/protocol";
 import type { TextAttachment } from "../../../prompt/attachments";
 import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
-import { connectionState, isReady, state, stopTurn } from "../../../state";
+import { connectionState, isReady, isSessionChanging, state, stopTurn } from "../../../state";
 import { ArrowUpIcon, CornerDownRightIcon, StopIcon } from "../../ui/icons";
 import { RunningAgentsButton } from "./RunningAgentsButton";
 
@@ -43,6 +43,7 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 				disabled={
 					paused() ||
 					!isReady() ||
+					isSessionChanging() ||
 					(!props.message().trim() &&
 						props.images().length === 0 &&
 						!props.files().some((f) => f.text !== undefined))
@@ -50,11 +51,13 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 				title={
 					paused()
 						? PAUSED_TOOLTIP[connectionState()]
-						: !isReady()
-							? "The attached session is not ready yet…"
-							: state.streaming
-								? "Steer"
-								: "Send"
+						: isSessionChanging()
+							? "Starting the new session…"
+							: !isReady()
+								? "The attached session is not ready yet…"
+								: state.streaming
+									? "Steer"
+									: "Send"
 				}
 			>
 				<Show when={state.streaming} fallback={<ArrowUpIcon />}>

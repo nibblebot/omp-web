@@ -8,6 +8,7 @@ import type {
 	WebMethodName,
 } from "#lib/wire/protocol";
 import { READ_ONLY_METHODS } from "#lib/wire/protocol";
+import { createSignal } from "solid-js";
 import type { DaemonLogsResult, DebugEntry, DebugLevel } from "../state";
 import { setState, state } from "../state";
 import { authedFetch } from "./auth";
@@ -132,6 +133,21 @@ interface PendingCall {
 
 export const pendingCalls = new Map<string, PendingCall>();
 
+// pendingCalls is a plain Map, so views over it (isSessionChanging) read this
+// revision to re-run whenever a call is added or settles.
+const [pendingRevision, bumpPendingRevision] = createSignal(0);
+
+/** Subscribe the caller's reactive scope to pendingCalls changes. */
+export function watchPendingCalls(): void {
+	pendingRevision();
+}
+
+/** Remove one settled call and notify watchers. */
+function forgetCall(id: string): void {
+	pendingCalls.delete(id);
+	bumpPendingRevision((rev) => rev + 1);
+}
+
 function clearCallTimers(pending: PendingCall): void {
 	if (pending.timer !== 0) clearTimeout(pending.timer);
 	if (pending.replayTimer !== 0) clearTimeout(pending.replayTimer);
@@ -163,7 +179,7 @@ export function settleCallResult(frame: Extract<ServerFrame, { type: "call_resul
 			pending.cmd = { ...pending.cmd, scope: undefined };
 		return;
 	}
-	pendingCalls.delete(frame.id);
+	forgetCall(frame.id);
 	clearCallTimers(pending);
 	if (frame.ok) pending.resolve(frame.data);
 	else pending.reject(new Error(frame.error ?? "call failed"));
@@ -183,7 +199,7 @@ function scheduleCallReplay(id: string): void {
 		// remembers the id, so a re-POST could EXECUTE the command again.
 		if (Date.now() - current.firstPostAt > COMMAND_DEDUP_WINDOW_MS) {
 			if (current.awaitingAttach || current.awaitingState) {
-				pendingCalls.delete(id);
+				forgetCall(id);
 				clearCallTimers(current);
 				current.reject(new Error(NOT_ATTACHED));
 			}
@@ -210,19 +226,8 @@ function isParkedMutation(pending: PendingCall): boolean {
 	);
 }
 
-/** Re-POST a parked call under its own id and put it back on the replay cadence. */
-function repostParkedCall(id: string, pending: PendingCall): void {
-	postCommand(pending.cmd).catch((err) => {
-		if (pendingCalls.get(id) !== pending) return;
-		pendingCalls.delete(id);
-		clearCallTimers(pending);
-		pending.reject(err instanceof Error ? err : new Error(String(err)));
-	});
-	scheduleCallReplay(id);
-}
-
 function dropParkedCall(id: string, pending: PendingCall, err: Error): void {
-	pendingCalls.delete(id);
+	forgetCall(id);
 	clearCallTimers(pending);
 	pending.reject(err);
 }
@@ -231,8 +236,21 @@ export function rejectPendingCalls(err: Error): void {
 	for (const [id, p] of pendingCalls) {
 		clearCallTimers(p);
 		p.reject(err);
-		pendingCalls.delete(id);
+		forgetCall(id);
 	}
+}
+
+/** POST a call under its own id and put it on the replay cadence. */
+function sendCall(id: string): void {
+	const pending = pendingCalls.get(id);
+	if (!pending) return;
+	postCommand(pending.cmd).catch((err) => {
+		if (pendingCalls.get(id) !== pending) return; // a racing answer already settled the call
+		forgetCall(id);
+		clearCallTimers(pending);
+		pending.reject(err instanceof Error ? err : new Error(String(err)));
+	});
+	scheduleCallReplay(id);
 }
 
 /**
@@ -255,7 +273,7 @@ export function retryNotAttachedCalls(): void {
 			pending.awaitingState = true;
 			continue;
 		}
-		repostParkedCall(id, pending);
+		sendCall(id);
 	}
 }
 
@@ -285,7 +303,7 @@ export function resumeParkedMutations(scope: SessionScope | undefined): void {
 			dropParkedCall(id, pending, new Error("session switched"));
 			continue;
 		}
-		repostParkedCall(id, pending);
+		sendCall(id);
 	}
 }
 
@@ -330,7 +348,7 @@ export function call(
 			? window.setTimeout(() => {
 					const pending = pendingCalls.get(id);
 					if (pending) clearCallTimers(pending);
-					pendingCalls.delete(id);
+					forgetCall(id);
 					reject(new Error(`call "${method}" timed out`));
 				}, timeoutMs)
 			: 0;
@@ -344,14 +362,8 @@ export function call(
 		awaitingAttach: false,
 		awaitingState: false,
 	});
-	postCommand(cmd).catch((err) => {
-		const pending = pendingCalls.get(id);
-		if (!pending) return; // a racing answer already settled the call
-		pendingCalls.delete(id);
-		clearCallTimers(pending);
-		reject(err instanceof Error ? err : new Error(String(err)));
-	});
-	scheduleCallReplay(id);
+	bumpPendingRevision((rev) => rev + 1);
+	sendCall(id);
 	return promise;
 }
 

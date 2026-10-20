@@ -2,7 +2,7 @@ import { Show, type Component } from "solid-js";
 import { planToggle } from "../../../prompt/commands";
 import { cycleModelPreset, openModelPicker, openThinkingPicker } from "../../../store/models";
 import { formatTokens, getContextUsageLevel } from "../../../usage/context";
-import { isReady, setState, state } from "../../../state";
+import { isReady, isSessionChanging, setState, state } from "../../../state";
 import { ArrowDownIcon, ArrowUpIcon } from "../../ui/icons";
 import { RetryBadge } from "./RetryBadge";
 import { StatusSegment } from "./StatusSegment";
@@ -50,6 +50,14 @@ export const SessionConfigBar: Component = () => (
 				title="The attached session is still starting (or reconnecting)…"
 			>
 				{rosterHint()}
+			</span>
+		</Show>
+		<Show when={state.connected && isReady() && isSessionChanging()}>
+			<span
+				class="segment badge ready-pill"
+				title="The daemon is replacing the session; sending resumes once the new session is shown."
+			>
+				starting new session…
 			</span>
 		</Show>
 		<Show when={state.compacting}>

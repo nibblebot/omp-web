@@ -19,8 +19,13 @@ import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createPersistedSubagentReviverFactory } from "@oh-my-pi/pi-coding-agent/task/persisted-revive";
 import type { SubagentProgressFields, SubagentUsageFields } from "#lib/wire/protocol";
 import type { SessionEntry } from "./session-entry";
-import { finishedSubagentMeta, finishedSubagentUsage } from "./subagent-mirror";
+import {
+	finishedSubagentMeta,
+	finishedSubagentUsage,
+	resolveSubagentSessionFile,
+} from "./subagent-mirror";
 import { projectProgress } from "./subagent-progress";
+import { persistedTaskMeta } from "./subagent-task-meta";
 import { transcriptUsage } from "./subagent-transcript-usage";
 
 export type WorkerLifecycleStatus =
@@ -152,13 +157,92 @@ const rank: Record<WorkerLifecycleStatus, number> = {
 	unavailable: 4,
 };
 
-export async function listWorkers(entry: SessionEntry): Promise<WorkerRecord[]> {
+/** Best effort: a roster scan failure leaves the authorized in-memory history, never the call. */
+async function refreshPersistedRoster(entry: SessionEntry): Promise<void> {
 	const root = entry.session.sessionFile;
 	try {
 		if (root) await ensurePersistedRoster(entry.agentRegistry, root);
 	} catch {
 		/* Preserve authorized in-memory history. */
 	}
+}
+
+/**
+ * The transcript file of a worker the roster lists. `undefined` means the file is outside the root
+ * session's artifact tree: such a worker is never listed or read. `null` means no file is known.
+ */
+function workerSessionFile(
+	entry: SessionEntry,
+	id: string,
+	registered: AgentRef | undefined,
+): string | null | undefined {
+	const root = entry.session.sessionFile;
+	const sessionFile =
+		registered?.sessionFile ??
+		entry.transcriptSessionFilesBySubagentId.get(id) ??
+		entry.subagentSnapshots.get(id)?.sessionFile ??
+		null;
+	if (sessionFile && (!root || !sessionFileBelongsToRoot(sessionFile, root))) return undefined;
+	return sessionFile;
+}
+
+/** An owned worker's registry ref, or `undefined` for an id this session does not list (including Main). */
+function listedWorkerRef(entry: SessionEntry, id: string): { registered?: AgentRef } | undefined {
+	if (id === MAIN_AGENT_ID) return undefined;
+	const registered = workerRef(entry, id);
+	if (registered && !ownsRef(entry, registered)) return undefined;
+	if (
+		registered ||
+		entry.subagentSnapshots.has(id) ||
+		entry.transcriptSessionFilesBySubagentId.has(id)
+	)
+		return { registered };
+	return undefined;
+}
+
+/**
+ * Transcript path for a `getSubagentMessages` / `getSubagentImage` selector. The lifecycle mirror
+ * answers while it remembers the agent; after a resume it does not, so the persisted roster answers
+ * for every worker `listWorkers` lists, with the same ownership and root-artifact jail. Never an arbitrary path.
+ */
+export async function resolveTranscriptFile(
+	entry: SessionEntry,
+	selector: { subagentId?: string; sessionFile?: string },
+): Promise<string> {
+	try {
+		return resolveSubagentSessionFile(entry, selector);
+	} catch (mirrorError) {
+		await refreshPersistedRoster(entry);
+		if (selector.subagentId) {
+			const listed = listedWorkerRef(entry, selector.subagentId);
+			const file = listed && workerSessionFile(entry, selector.subagentId, listed.registered);
+			if (file) return file;
+		} else if (selector.sessionFile) {
+			const wanted = selector.sessionFile;
+			for (const ref of entry.agentRegistry.list()) {
+				if (ref.sessionFile !== wanted || !ownsRef(entry, ref)) continue;
+				if (workerSessionFile(entry, ref.id, ref) === wanted) return wanted;
+			}
+		}
+		throw mirrorError;
+	}
+}
+
+/** Where a worker's durable Task call record lives: Main's calls in the root file, a subagent's in its own transcript. */
+function parentTranscriptFile(
+	entry: SessionEntry,
+	parentId: string | undefined,
+): string | undefined {
+	if (parentId === undefined || parentId === MAIN_AGENT_ID)
+		return entry.session.sessionFile ?? undefined;
+	const parent = workerRef(entry, parentId);
+	const root = entry.session.sessionFile;
+	const file = parent?.sessionFile;
+	return file && root && sessionFileBelongsToRoot(file, root) ? file : undefined;
+}
+
+export async function listWorkers(entry: SessionEntry): Promise<WorkerRecord[]> {
+	await refreshPersistedRoster(entry);
 	const ids = new Set([
 		...entry.subagentSnapshots.keys(),
 		...entry.transcriptSessionFilesBySubagentId.keys(),
@@ -170,12 +254,8 @@ export async function listWorkers(entry: SessionEntry): Promise<WorkerRecord[]> 
 			const registered = workerRef(entry, id);
 			if (registered && !ownsRef(entry, registered)) return undefined;
 			const snap = entry.subagentSnapshots.get(id);
-			const sessionFile =
-				registered?.sessionFile ??
-				entry.transcriptSessionFilesBySubagentId.get(id) ??
-				snap?.sessionFile ??
-				null;
-			if (sessionFile && (!root || !sessionFileBelongsToRoot(sessionFile, root))) return undefined;
+			const sessionFile = workerSessionFile(entry, id, registered);
+			if (sessionFile === undefined) return undefined;
 			let hasHistory = false;
 			if (sessionFile) {
 				try {
@@ -216,11 +296,21 @@ export async function listWorkers(entry: SessionEntry): Promise<WorkerRecord[]> 
 							"worker history, persisted contract or workspace is unavailable or nonresumable";
 				}
 			}
-			const meta = finishedSubagentMeta(entry, id);
+			const finishedMeta = finishedSubagentMeta(entry, id);
+			// The mirror has nothing for an agent that finished before a resume; its parent's Task result does.
+			const parentFile =
+				snap || finishedMeta ? undefined : parentTranscriptFile(entry, registered?.parentId);
+			const durable = parentFile ? (await persistedTaskMeta(entry, parentFile)).get(id) : undefined;
+			const meta = finishedMeta ?? durable;
+			const agentType = snap?.agent ?? meta?.agent ?? registered?.history?.agent;
 			return {
 				id,
 				sessionId: entry.session.sessionManager.getSessionId(),
-				displayName: registered?.displayName ?? snap?.agent ?? meta?.agent ?? id,
+				// A live ref is named for its agent definition; a roster-restored ref is named for its id, so its recorded type stands in.
+				displayName:
+					registered && registered.displayName !== id
+						? registered.displayName
+						: (agentType ?? registered?.displayName ?? id),
 				status,
 				parentAgentId: registered?.parentId,
 				parentToolCallId: snap?.parentToolCallId ?? meta?.parentToolCallId,

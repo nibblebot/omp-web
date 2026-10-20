@@ -7,6 +7,7 @@ import {
 	connectionState,
 	dequeueLastQueued,
 	isReady,
+	isSessionChanging,
 	pushNotice,
 	state,
 	stopTurn,
@@ -46,6 +47,13 @@ export const PromptBox: Component = () => {
 		// while the transport is down (the connection strip explains why).
 		if (connectionState() !== "connected") {
 			reportError(new Error("Message not sent: the connection is down. Retry once it reconnects."));
+			return;
+		}
+		if (isSessionChanging()) {
+			// The draft stays in the textarea: the new session's identity has not landed yet.
+			reportError(
+				new Error("Message not sent: the new session is still starting. Retry in a moment."),
+			);
 			return;
 		}
 		if (!isReady()) {
