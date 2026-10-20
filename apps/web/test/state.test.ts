@@ -144,6 +144,7 @@ beforeEach(() => {
 	installTransportStubs();
 	setState({
 		currentSessionId: "",
+		sessionScope: undefined,
 		connected: false,
 		readyAt: undefined,
 		subagents: new Map(),
@@ -253,6 +254,41 @@ describe("attached-frame handling", () => {
 		await flushMicrotasks();
 		expect(state.subagents.get("s1")?.status).toBe("running");
 		expect(state.currentSessionId).toBe("session-b");
+	});
+
+	test("a re-attach of the same session drops the previous generation's scope before the on-attach calls", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("d9"));
+		dispatch({
+			type: "state",
+			state: {
+				sessionId: "d9",
+				sessionScope: { workspaceId: "w1", sessionId: "d9", generation: "1" },
+			} as WebSessionState,
+		});
+		expect(state.sessionScope?.generation).toBe("1");
+
+		// A UI stop keeps the view; waking the row re-attaches the SAME daemon
+		// (generation 2 on the session side), so this is not a switched attach.
+		posted.length = 0;
+		dispatch(attached("d9"));
+		const calls = posted.filter(
+			(c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call",
+		);
+		expect(calls.map((c) => c.method)).toEqual(["getSubagents", "getSettings"]);
+		for (const c of calls) expect(c.scope).toBeUndefined();
+		expect(state.sessionScope).toBeUndefined();
+
+		// The new attachment's first state frame re-stamps the scope.
+		dispatch({
+			type: "state",
+			state: {
+				sessionId: "d9",
+				sessionScope: { workspaceId: "w1", sessionId: "d9", generation: "2" },
+			} as WebSessionState,
+		});
+		expect(state.sessionScope?.generation).toBe("2");
 	});
 });
 

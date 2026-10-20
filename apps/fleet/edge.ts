@@ -138,6 +138,13 @@ const DROPDOWN_SESSION_LIMIT = 10;
 const RESUME_MEMBERSHIP_LIMIT = Number.POSITIVE_INFINITY;
 
 /**
+ * spawn_resume hit a row that is not asleep (or failed). Distinct from a pick
+ * validation or wake failure so the rejection is not recorded as a refused
+ * pick: a running row has no pending pick for a later attach to protect.
+ */
+class NotAsleepError extends Error {}
+
+/**
  * Per-daemon realtime activity, derived by the edge from the raw tapped
  * daemon frames (state → isStreaming; ui_request / ui_request_end → the
  * open-dialog set that drives `blocked`). Starts UNKNOWN per daemon
@@ -651,10 +658,11 @@ export class FleetEdge {
 	 */
 	readonly #pendingResumes = new Map<string, Promise<void>>();
 	/**
-	 * Reason the last picked spawn_resume for a daemonId was refused or failed.
-	 * Set on refusal, cleared on a successful pick or an explicit no-pick
-	 * spawn_resume. While set, an attach that would wake the daemon fails with
-	 * this reason instead of waking on lastSessionFile.
+	 * Reason the last picked spawn_resume for a daemonId failed validation or
+	 * its wake. Set on that failure, cleared on a successful pick or an
+	 * explicit no-pick spawn_resume. While set, an attach that would wake the
+	 * daemon fails with this reason instead of waking on lastSessionFile. A
+	 * status rejection (NotAsleepError) is never recorded: the row is running.
 	 */
 	readonly #refusedResumes = new Map<string, string>();
 	/** Cached broker rosters per daemonId, merged into the broadcast daemons frame. */
@@ -1183,6 +1191,13 @@ export class FleetEdge {
 		);
 	}
 
+	/**
+	 * spawn_resume: wake an asleep (or failed) daemon, optionally on a picked
+	 * session. A no-pick request on a row already connecting, ready or
+	 * reconnecting is idempotent (it joins the in-flight wake and sends no
+	 * error), so a reload's restore racing a wake click, or a second tab, does
+	 * not toast; see #runSpawnResume.
+	 */
 	async #handleSpawnResume(
 		stream: BrowserStream,
 		daemonId: string,
@@ -1202,8 +1217,13 @@ export class FleetEdge {
 				this.#sendError(stream, reason);
 				// Recorded so the attach that follows, and any later attach before a
 				// successful pick or a no-pick request, fails with this reason. A wake
-				// without a pick has no target to protect, so it is not recorded.
-				if (sessionFile !== undefined) this.#refusedResumes.set(daemonId, reason);
+				// without a pick has no target to protect, so it is not recorded. Nor
+				// is a status rejection (NotAsleepError): the row is running, so no
+				// pick is pending, and a stale reason would fail the wake attach after
+				// the session sleeps again.
+				if (sessionFile !== undefined && !(err instanceof NotAsleepError)) {
+					this.#refusedResumes.set(daemonId, reason);
+				}
 			},
 		);
 		this.#pendingResumes.set(daemonId, run);
@@ -1216,17 +1236,42 @@ export class FleetEdge {
 
 	/**
 	 * The validation + wake body of spawn_resume (see #handleSpawnResume).
-	 * Rejects with the refusal or wake failure reason.
+	 * Rejects with the refusal or wake failure reason; a status rejection (the
+	 * row is not asleep or failed) is a NotAsleepError.
+	 *
+	 * A no-pick request is idempotent: on a row already being woken or up
+	 * (connecting, ready, reconnecting: the states #handleAttach also wakes
+	 * through) it joins the wake via #waker.wake, which serializes per daemon
+	 * and returns at once when paired. A reload's deep-link restore and the
+	 * row's wake click (or a second tab) race exactly this way. A PICKED
+	 * request on such a row is an error: a running session cannot honor a
+	 * different pick. stopping and a non-failed error also stay errors. These
+	 * status rejections are reported to the browser but never recorded in
+	 * #refusedResumes: the row is running, so no pick is pending for a later
+	 * attach to protect.
 	 */
 	async #runSpawnResume(daemonId: string, sessionFile?: string): Promise<void> {
+		// Read synchronously, before any await: once this run yields,
+		// #handleSpawnResume replaces the slot with this run's own promise.
+		const previous = this.#pendingResumes.get(daemonId);
+		// A back-to-back spawn_resume may still be validating its pick or
+		// starting the wake; re-read the entry after it (entries are REPLACED
+		// on update, so a pre-wait object can carry a stale status).
+		await previous;
 		const entry = this.#registry.get(daemonId);
 		if (!entry) throw new Error(`unknown daemon: ${daemonId}`);
 		// A workspace the lifecycle gave up on (status "error", lifecycleStage
 		// "failed": any kind) is retried in place by the same start the Retry
 		// button sends.
 		const failed = entry.status === "error" && entry.lifecycleStage === "failed";
+		const waking =
+			entry.status === "connecting" || entry.status === "ready" || entry.status === "reconnecting";
+		if (waking && sessionFile === undefined) {
+			await this.#waker.wake(entry);
+			return;
+		}
 		if (entry.status !== "asleep" && !failed) {
-			throw new Error(`daemon ${daemonId} is not asleep (status ${entry.status})`);
+			throw new NotAsleepError(`daemon ${daemonId} is not asleep (status ${entry.status})`);
 		}
 		// A dropdown-picked session must belong to this worktree's session
 		// listing; never let an arbitrary path/id reach resume. Clones

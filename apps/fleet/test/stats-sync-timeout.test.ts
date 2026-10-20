@@ -94,7 +94,11 @@ afterAll(() => {
 
 describe("POST /ctl/stats/sync: default runner", () => {
 	test("times out: kills the omp child and returns 504", async () => {
-		syncConfig.timeoutMs = 400;
+		// The kill must land after the fake omp has written its pidfile. With a
+		// 400 ms timeout, a loaded full suite failed with ENOENT at the
+		// readFileSync below (presumably sh had not reached `echo $$` yet); a
+		// longer timeout makes that race less likely, it does not remove it.
+		syncConfig.timeoutMs = 2000;
 		const pidfile = join(tmpDir, "omp.pid");
 		process.env.PATH = `${binDir}:${savedPath ?? ""}`;
 		process.env.OMP_PIDFILE = pidfile;

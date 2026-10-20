@@ -15,6 +15,7 @@ import { __resetDirsFromEnvForTests, setAgentDir } from "@oh-my-pi/pi-utils";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import { OMP_PROTO } from "#lib/wire/protocol";
 import { CALLBACK_CONTROL_STREAM_ID, type CallbackEnvelope } from "#lib/wire/callback-protocol";
+import { signalProcessGroup } from "../host-provider";
 import { shouldDropFrame, toRosterEntry } from "../edge";
 import type { RegistryEntry } from "../registry";
 import { Registry } from "../registry";
@@ -32,6 +33,7 @@ import {
 	cleanupTempDirs,
 	daemonInfo,
 	openBrowser,
+	stopSpawnedRows,
 	sleep,
 	waitFor,
 } from "./edge.testkit";
@@ -252,7 +254,7 @@ describe("fleet edge", () => {
 			configPath,
 			JSON.stringify({
 				templates: {
-					local: { command: ": {fleet}; while :; do sleep 0.05; done" },
+					local: { command: ": {fleet}; while kill -0 $PPID 2>/dev/null; do sleep 0.05; done" },
 				},
 				defaultTemplate: "local",
 			}),
@@ -310,7 +312,11 @@ describe("fleet edge", () => {
 	afterAll(async () => {
 		for (const browser of allBrowsers) browser.close();
 		for (const daemon of daemonsById.values()) daemon.stop();
-		if (server !== undefined) await server.close();
+		try {
+			if (server !== undefined) await stopSpawnedRows(server);
+		} finally {
+			if (server !== undefined) await server.close();
+		}
 		if (savedLocalTemplate !== undefined) process.env.OMP_FLEET_LOCAL_TEMPLATE = savedLocalTemplate;
 	});
 
@@ -1014,6 +1020,201 @@ describe("fleet edge", () => {
 		expect(server.registry.get(entry.daemonId)?.status).toBe("ready");
 	});
 
+	test("a second no-pick spawn_resume while the first wake is connecting is idempotent: no error, one start", async () => {
+		// A reload's deep-link restore sends spawn_resume + attach, and the row's
+		// wake click sends a second spawn_resume before the roster shows the
+		// status change. The second must join the wake, not toast "not asleep".
+		const entry = server.registry.create({
+			name: "spawned-double-wake",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			template: "local",
+			status: "asleep",
+		});
+		const origStart = server.lifecycle.start;
+		let starts = 0;
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
+			starts++;
+			// The lifecycle publishes "connecting" while the host boots.
+			server.registry.setStatus(daemonId, "connecting");
+			await gate;
+			await origStart.call(server.lifecycle, daemonId, opts);
+		};
+		const browser = await openBrowser(server.port);
+		try {
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "spawn_resume", id: "dw1", daemonId: entry.daemonId });
+			await waitFor(
+				() => (server.registry.get(entry.daemonId)?.status === "connecting" ? true : null),
+				5000,
+				"first wake connecting",
+			);
+			await browser.send({ type: "spawn_resume", id: "dw2", daemonId: entry.daemonId });
+			await sleep(200);
+			expect(browser.frames.filter((f) => f.type === "error")).toEqual([]);
+			release();
+			await waitFor(
+				() => (server.registry.get(entry.daemonId)?.status === "ready" ? true : null),
+				5000,
+				"woken ready",
+			);
+			await sleep(100);
+			expect(browser.frames.filter((f) => f.type === "error")).toEqual([]);
+			expect(starts).toBe(1);
+		} finally {
+			release();
+			server.lifecycle.start = origStart;
+			dropDaemon(entry.daemonId);
+			browser.close();
+		}
+	});
+
+	test("a picked spawn_resume on a connecting row still errors and starts nothing", async () => {
+		// A running (or booting) session cannot honor a different pick.
+		const entry = server.registry.create({
+			name: "spawned-connecting-picked",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			template: "local",
+			status: "connecting",
+		});
+		const respawnsBefore = respawns;
+		const browser = await openBrowser(server.port);
+		try {
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({
+				type: "spawn_resume",
+				id: "pc1",
+				daemonId: entry.daemonId,
+				sessionFile: "/etc/passwd",
+			});
+			const frame = await browser.waitForFrame((f) => f.type === "error", "error frame");
+			if (frame.type !== "error") throw new Error("expected error");
+			expect(frame.error).toBe(`daemon ${entry.daemonId} is not asleep (status connecting)`);
+			expect(respawns).toBe(respawnsBefore);
+		} finally {
+			server.registry.remove(entry.daemonId);
+			browser.close();
+		}
+	});
+
+	test("a picked spawn_resume that lost to a running wake does not poison a later wake attach", async () => {
+		// The pick errors "not asleep (status connecting)" because the row is
+		// running: there is no pending pick for a later attach to protect. Once
+		// the session sleeps again, a plain attach must wake it, not fail with
+		// that stale status text.
+		const entry = server.registry.create({
+			name: "spawned-stale-refusal",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			template: "local",
+			status: "asleep",
+		});
+		const origStart = server.lifecycle.start;
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let starts = 0;
+		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
+			starts++;
+			server.registry.setStatus(daemonId, "connecting");
+			await gate;
+			await origStart.call(server.lifecycle, daemonId, opts);
+		};
+		const browser = await openBrowser(server.port);
+		try {
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			// The first wake is an attach (not tracked as a pending spawn_resume),
+			// so the pick below is judged against the connecting row at once.
+			await browser.send({ type: "attach", id: "at-first", sessionId: entry.daemonId });
+			await waitFor(
+				() => (server.registry.get(entry.daemonId)?.status === "connecting" ? true : null),
+				5000,
+				"first wake connecting",
+			);
+			await browser.send({
+				type: "spawn_resume",
+				id: "sr2",
+				daemonId: entry.daemonId,
+				sessionFile: "/etc/passwd",
+			});
+			const frame = await browser.waitForFrame((f) => f.type === "error", "error frame");
+			if (frame.type !== "error") throw new Error("expected error");
+			expect(frame.error).toBe(`daemon ${entry.daemonId} is not asleep (status connecting)`);
+			release();
+			// "ready" is published by the lifecycle before the test plays the child's
+			// dial, so it does not mean the wake finished. The first attach's wake
+			// resolves on the pair, and its pipe opens right after: that stream_open
+			// proves the wake is done. Stopping earlier leaves the wake in flight
+			// (waiting out its pair timeout), and the later attach would join it.
+			const first = await waitFor(
+				() =>
+					server.transport.pairStatus(entry.daemonId).paired
+						? (daemonsById.get(entry.daemonId) ?? null)
+						: null,
+				5000,
+				"first wake paired",
+			);
+			await awaitNewStream(first, 0);
+			// The session goes back to sleep the way a user does it: the stop frame
+			// runs lifecycle.stop, which kills the host and closes the pair. Merely
+			// dropping the test's socket and flipping the status would race the
+			// edge noticing the close: the waker still sees the stale pair as
+			// paired, returns without a start, and the attach never wakes anything.
+			await browser.send({ type: "stop", id: "sr-stop", daemonId: entry.daemonId });
+			await waitFor(
+				() =>
+					server.registry.get(entry.daemonId)?.status === "asleep" &&
+					!server.transport.pairStatus(entry.daemonId).paired
+						? true
+						: null,
+				5000,
+				"stopped: asleep with the pair down",
+			);
+			dropDaemon(entry.daemonId);
+			await browser.send({ type: "attach", id: "at-stale", sessionId: entry.daemonId });
+			try {
+				await waitFor(
+					() => {
+						const failed = browser.frames.find(
+							(f) => f.type === "attach_result" && f.id === "at-stale" && !f.ok,
+						);
+						if (failed) throw new Error(`attach refused: ${JSON.stringify(failed)}`);
+						return daemonsById.has(entry.daemonId) ? true : null;
+					},
+					5000,
+					"attach to wake the stopped session",
+				);
+			} catch (err) {
+				const frames = browser.frames.map((f) =>
+					JSON.stringify({
+						type: f.type,
+						id: "id" in f ? f.id : undefined,
+						error: "error" in f ? f.error : undefined,
+					}),
+				);
+				throw new Error(
+					`${(err as Error).message}; status=${server.registry.get(entry.daemonId)?.status} starts=${starts} paired=${server.transport.pairStatus(entry.daemonId).paired} frames=[${frames.join(", ")}]`,
+				);
+			}
+			// The wake started the host a second time, on the plain attach.
+			expect(starts).toBe(2);
+		} finally {
+			release();
+			server.lifecycle.start = origStart;
+			dropDaemon(entry.daemonId);
+			browser.close();
+		}
+	});
+
 	test("spawn_resume with a picked session then attach resumes the PICKED session once", async () => {
 		// The roster UI fires spawn_resume {sessionFile} and attach back-to-back.
 		// spawn_resume validates the pick against the worktree listing (async disk
@@ -1346,18 +1547,25 @@ describe("fleet edge", () => {
 		// daemon's cached roster AND broadcast the shrunken merged frame (the
 		// pure eviction semantics live in daemons-aggregator.test.ts, which
 		// cannot reach the registry -> edge wiring asserted here).
+		// Dropping the row straight from the registry (not through the lifecycle)
+		// orphans its host child, which afterAll's row sweep can no longer see: end it here.
+		const childPid = server.registry.get(daemonsBId)?.pid;
 		expect(server.registry.remove(daemonsBId)).toBe(true);
-		const frame = await daemonsBrowser.waitForFrame(
-			(f) => f.type === "daemons" && !f.daemons.some((d) => d.name === "hub-b"),
-			"evicted merged frame",
-		);
-		if (frame.type !== "daemons") throw new Error("expected daemons");
-		const names = new Set(frame.daemons.map((d) => d.name));
-		expect(names.has("hub-a")).toBe(true);
-		expect(names.has("hub-c")).toBe(true);
-		expect(names.has("hub-b")).toBe(false);
-		expect(names.has("only-b")).toBe(false);
-		dropDaemon(daemonsBId);
+		try {
+			const frame = await daemonsBrowser.waitForFrame(
+				(f) => f.type === "daemons" && !f.daemons.some((d) => d.name === "hub-b"),
+				"evicted merged frame",
+			);
+			if (frame.type !== "daemons") throw new Error("expected daemons");
+			const names = new Set(frame.daemons.map((d) => d.name));
+			expect(names.has("hub-a")).toBe(true);
+			expect(names.has("hub-c")).toBe(true);
+			expect(names.has("hub-b")).toBe(false);
+			expect(names.has("only-b")).toBe(false);
+			dropDaemon(daemonsBId);
+		} finally {
+			if (childPid !== undefined) signalProcessGroup(childPid, "SIGKILL");
+		}
 	});
 
 	test("remove evicts a daemon and broadcasts a roster_delta that removes it", async () => {
@@ -1855,7 +2063,7 @@ describe("pair-loss grace", () => {
 			configPath,
 			JSON.stringify({
 				templates: {
-					local: { command: ": {fleet}; while :; do sleep 0.05; done" },
+					local: { command: ": {fleet}; while kill -0 $PPID 2>/dev/null; do sleep 0.05; done" },
 				},
 				defaultTemplate: "local",
 			}),
@@ -1871,7 +2079,11 @@ describe("pair-loss grace", () => {
 
 	afterAll(async () => {
 		for (const daemon of daemons) daemon.stop();
-		await server.close();
+		try {
+			await stopSpawnedRows(server);
+		} finally {
+			await server.close();
+		}
 		if (savedLocalTemplate !== undefined) process.env.OMP_FLEET_LOCAL_TEMPLATE = savedLocalTemplate;
 	});
 

@@ -65,6 +65,24 @@ export const FAKE_STATE = {
 	computerToolEnabled: false,
 };
 
+/**
+ * End every host child a suite spawned. Fleet `close()` never kills sessions (they
+ * outlive the control plane), so a suite whose template idles forever must stop its
+ * spawned rows itself or each run leaks one process per spawn. Stopping an asleep
+ * row is a no-op; every row is attempted before a failure is thrown.
+ */
+export async function stopSpawnedRows(server: {
+	registry: Pick<Registry, "list">;
+	lifecycle: Pick<LifecycleApi, "stop">;
+}): Promise<void> {
+	const rows = server.registry.list().filter((entry) => entry.template !== undefined);
+	const results = await Promise.allSettled(
+		rows.map((entry) => server.lifecycle.stop(entry.daemonId)),
+	);
+	const failures = results.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
+	if (failures.length > 0) throw new AggregateError(failures, "stopSpawnedRows: a stop failed");
+}
+
 export function sleep(ms: number): Promise<void> {
 	const { promise, resolve } = Promise.withResolvers<void>();
 	setTimeout(resolve, ms);

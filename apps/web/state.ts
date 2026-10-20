@@ -1140,6 +1140,14 @@ export function connect(): void {
 			// A fresh priming series starts; the replay-dedup window resets
 			// (seqs restart per connection, see seenFrameSeqs).
 			seenFrameSeqs.clear();
+			// Every attach starts a new attachment generation on the session side,
+			// even a re-attach of the SAME daemon (wake after a UI stop keeps the
+			// view, so it is not a switch). The scope of the previous generation
+			// would make the on-attach calls below fail the session's stale-scope
+			// check; drop it so they go out unscoped (the session accepts calls
+			// without a scope) until the attachment's first `state` frame
+			// re-stamps it via applyState.
+			setState("sessionScope", undefined);
 			// Finding #28: the attach waiter settles from the edge's id-keyed
 			// attach_result, never from this PROXIED frame; the priming rides
 			// the daemon pipe, which may be mid-redial when the attach lands.

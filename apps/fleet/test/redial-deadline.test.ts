@@ -10,7 +10,7 @@ import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import { startFleet, type FleetServer } from "../server";
 import { enrollSessionCredential } from "../session-credential";
 import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
-import { FAKE_CWD, cleanupTempDirs, waitFor } from "./edge.testkit";
+import { FAKE_CWD, cleanupTempDirs, stopSpawnedRows, waitFor } from "./edge.testkit";
 import { hermeticStatsConfig } from "./server.testkit";
 
 afterAll(cleanupTempDirs);
@@ -37,7 +37,7 @@ describe("runtime redial deadline", () => {
 			configPath,
 			JSON.stringify({
 				templates: {
-					local: { command: ": {fleet}; while :; do sleep 0.05; done" },
+					local: { command: ": {fleet}; while kill -0 $PPID 2>/dev/null; do sleep 0.05; done" },
 				},
 				defaultTemplate: "local",
 			}),
@@ -54,7 +54,11 @@ describe("runtime redial deadline", () => {
 
 	afterAll(async () => {
 		for (const daemon of daemons) daemon.stop();
-		await server.close();
+		try {
+			await stopSpawnedRows(server);
+		} finally {
+			await server.close();
+		}
 		if (savedLocalTemplate !== undefined) process.env.OMP_FLEET_LOCAL_TEMPLATE = savedLocalTemplate;
 	});
 
