@@ -764,7 +764,7 @@ export class WorkspaceLifecycle {
 			);
 		}
 		const { profile } = this.#cloneProfile(entry);
-		if (profile.provider !== "bwrap") {
+		if (!PROVIDER_CAPABILITIES[profile.provider].volumeFleetVisible) {
 			throw new CloneLifecycleError(
 				"invalid_request",
 				`clone ${daemonId} runs on a ${profile.provider} provider whose volume the fleet cannot read; its work leaves through its remote`,

@@ -71,7 +71,7 @@ async function bootFleet(): Promise<Fixture> {
 		{
 			providerProfiles: {
 				local: { id: "local", provider: "bwrap", executable, tools: [] },
-				remote: { id: "remote", provider: "kubernetes", executable, tools: [] },
+				remote: { id: "remote", provider: "kubernetes", executable },
 			},
 		},
 		{ workspaceDir: join(paths.tmp, "workspaces") },
