@@ -314,6 +314,18 @@ export const fixtureRoutes: FixtureRoute[] = [
 	},
 	// --- store/usage.ts: fleet usage reports (stories vary it with answerRoutes) ---
 	{ method: "GET", path: "/ctl/usage", respond: () => rosterUsageReports },
+	// --- store/projects.ts: fetch a local-source clone's branch into its project ---
+	{
+		method: "POST",
+		path: "/ctl/clones/:daemonId/fetch-into-project",
+		respond: ({ params }) => ({
+			daemonId: params.daemonId,
+			branch: "local-clone",
+			projectPath: "/home/joshua/Repos/omp-web",
+			outcome: "created",
+			commit: "3f9c2a1d5b7e8a60c4d1e2f3a4b5c6d7e8f90123",
+		}),
+	},
 ];
 
 function compile(path: string): { regex: RegExp; names: string[] } {

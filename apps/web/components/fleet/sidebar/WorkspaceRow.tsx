@@ -22,6 +22,7 @@ import {
 	call,
 	closeDrawers,
 	connectionState,
+	fetchCloneIntoProject,
 	openDaemonDetails,
 	removeDaemonById,
 	requestDaemonSessions,
@@ -45,6 +46,7 @@ import { KebabMenu } from "../../ui/KebabMenu";
 import { useClickableRow } from "../../ui/PickerRow";
 import { displayTitle } from "../../ui/title-icons";
 import {
+	ArrowDownIcon,
 	ChevronDownIcon,
 	ChevronRightIcon,
 	FileIcon,
@@ -593,6 +595,28 @@ export const WorkspaceRow: Component<{
 								>
 									<TrashIcon />
 									Delete worktree…
+								</button>
+							</Show>
+							{/* Only a clone cut from the project's local path has a branch the
+							    project lacks; a remote-source clone pushes upstream from inside. */}
+							<Show when={isClone() && d().localSource === true}>
+								<button
+									type="button"
+									role="menuitem"
+									class="sidebar-menu-item"
+									title={
+										paused()
+											? PAUSED_TOOLTIP[connectionState()]
+											: "Fetches the clone's committed branch into the project (creates it or fast-forwards; never overwrites)"
+									}
+									disabled={paused()}
+									onClick={() => {
+										setMenuOpenId(null);
+										void fetchCloneIntoProject(d().daemonId);
+									}}
+								>
+									<ArrowDownIcon />
+									Fetch into project
 								</button>
 							</Show>
 							<Show when={isClone()}>

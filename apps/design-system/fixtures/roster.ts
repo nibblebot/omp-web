@@ -178,6 +178,25 @@ const daemonCloneFailed: DaemonEntry = {
 		"PersistentVolumeClaim omp-k8s-trial stayed Pending for 120s (no fast-ssd capacity)",
 };
 
+/** DaemonEntry: ready clone cut from the project's local path; its row offers "Fetch into project". */
+const daemonCloneLocal: DaemonEntry = {
+	daemonId: "dmn_a008",
+	name: "local-clone",
+	cwd: "/home/joshua/.omp/clones/local-clone",
+	project: "omp-web",
+	projectId: "proj_omp_web",
+	branch: "local-clone",
+	labels: [],
+	status: "ready",
+	providerProfileId: "bwrap-default",
+	workspaceKind: "clone",
+	desiredState: "running",
+	lifecycleStage: "ready",
+	localSource: true,
+	readyAt: T0 - 12 * MIN,
+	uptime: 12 * 60,
+};
+
 /** DaemonEntry: localaction main checkout, ready; its turn finished while the user was elsewhere (unread). */
 const daemonLocalactionMain: DaemonEntry = {
 	daemonId: "dmn_b001",
@@ -255,6 +274,7 @@ export const rosterDaemons: DaemonEntry[] = [
 	daemonStarting,
 	daemonClonePreparing,
 	daemonCloneFailed,
+	daemonCloneLocal,
 	daemonLocalactionMain,
 	daemonReconnecting,
 	daemonSessionError,
@@ -270,6 +290,7 @@ export const rosterDaemon = {
 	starting: daemonStarting,
 	clonePreparing: daemonClonePreparing,
 	cloneFailed: daemonCloneFailed,
+	cloneLocal: daemonCloneLocal,
 	localactionMain: daemonLocalactionMain,
 	reconnecting: daemonReconnecting,
 	sessionError: daemonSessionError,
@@ -373,6 +394,7 @@ export const rosterSidebarGroups: ProjectGroupsData = [
 			daemonMain,
 			daemonClonePreparing,
 			daemonCloneFailed,
+			daemonCloneLocal,
 			daemonFixtures,
 			daemonAsleep,
 			daemonStarting,

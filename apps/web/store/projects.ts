@@ -1,5 +1,12 @@
-import type { ClientCommand, OmpSetupStatus, ProjectBranch } from "#lib/wire/protocol";
+import type {
+	ClientCommand,
+	CloneFetchResult,
+	OmpSetupStatus,
+	ProjectBranch,
+} from "#lib/wire/protocol";
 import { setState, state } from "../state";
+import { authedFetch } from "./auth";
+import { ctlError } from "./settings";
 import { ctlFetch, isConnected, postCommand } from "./transport";
 import { clearUserStopped, markUserStopped } from "./user-stopped";
 import { pushToast } from "./toasts";
@@ -402,6 +409,41 @@ export function sendWorktreeDeleteInfo(daemonId: string): void {
 		id: crypto.randomUUID(),
 		daemonId,
 	} satisfies ClientCommand).catch(reportCommandFailure);
+}
+
+/** Toast copy for a fetch-into-project answer. */
+function fetchOutcomeText(result: CloneFetchResult): string {
+	const into = `into ${result.projectPath}`;
+	switch (result.outcome) {
+		case "created":
+			return `Created branch ${result.branch} ${into}`;
+		case "updated":
+			return `Fast-forwarded ${result.branch} ${into}`;
+		case "up-to-date":
+			return `${result.branch} is already up to date ${into}`;
+	}
+}
+
+/** POST /ctl/clones/:id/fetch-into-project: fetch a local-source clone's branch into
+ *  its project's main repo (create or fast-forward only; the fleet refuses anything
+ *  else). Success and the fleet's refusal reason both surface as toasts. Resolves
+ *  true when the branch landed (or was already there). */
+export async function fetchCloneIntoProject(daemonId: string): Promise<boolean> {
+	try {
+		const res = await (state.authStatus !== "disabled" ? authedFetch : fetch)(
+			`/ctl/clones/${encodeURIComponent(daemonId)}/fetch-into-project`,
+			{ method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+		);
+		if (!res.ok) {
+			pushToast(`Fetch into project refused: ${await ctlError(res)}`, { durationMs: 12_000 });
+			return false;
+		}
+		pushToast(fetchOutcomeText((await res.json()) as CloneFetchResult));
+		return true;
+	} catch (err) {
+		pushToast(`Fetch into project failed: ${err instanceof Error ? err.message : String(err)}`);
+		return false;
+	}
 }
 
 // ---------------------------------------------------------------------------

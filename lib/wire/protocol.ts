@@ -604,6 +604,27 @@ export interface DaemonEntry {
 	lifecycleStage?: LifecycleStage;
 	/** Last workspace lifecycle failure detail (source: fleet edge roster; present only after a failed stage). */
 	lifecycleError?: string;
+	/**
+	 * True for a clone whose source is a path on the fleet host (source: fleet edge roster;
+	 * absent for remote-source clones and every non-clone row). Gates the "Fetch into project"
+	 * row action: only a clone whose volume the fleet can read has a branch to fetch.
+	 */
+	localSource?: true;
+}
+
+/** POST /ctl/clones/:daemonId/fetch-into-project answer: the clone's branch now in the project's main repo. */
+export interface CloneFetchResult {
+	daemonId: string;
+	/** Short branch name fetched (the clone's own branch). */
+	branch: string;
+	/** Main checkout the branch was fetched into. */
+	projectPath: string;
+	/** created: the project had no such branch; updated: fast-forwarded; up-to-date: already the same commit. */
+	outcome: "created" | "updated" | "up-to-date";
+	/** The project branch's commit after the fetch. */
+	commit: string;
+	/** The project branch's commit before an `updated` fetch. */
+	previousCommit?: string;
 }
 
 /** One local branch of a registered project, or one branch of a project remote (project_branches frame). */

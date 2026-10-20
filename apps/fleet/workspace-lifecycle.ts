@@ -38,6 +38,7 @@ import {
 	openSync,
 	readdirSync,
 	rmSync,
+	realpathSync,
 	statSync,
 	unlinkSync,
 	writeSync,
@@ -46,7 +47,7 @@ import type { Stats } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { ENROLLMENT_KEY_BYTES, type CallbackErrorCode } from "#lib/wire/callback-protocol";
-import type { LifecycleStage, RegisteredProject } from "#lib/wire/protocol";
+import type { LifecycleStage, RegisteredProject, CloneFetchResult } from "#lib/wire/protocol";
 import type { Registry, RegistryEntry, WorkspaceRecord, DeletionGateError } from "./registry";
 import type { FleetConfig } from "./config";
 import type { ProviderProfile } from "#lib/runtime/provider-protocol";
@@ -344,6 +345,32 @@ async function resolveCloneSource(
 		);
 	}
 	return { source: { remote: origin }, defaultRevision: head.stdout.trim() };
+}
+
+/** Realpath of an existing path, else its resolved absolute form (comparison key for "same directory"). */
+function realpathOrResolve(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return resolve(path);
+	}
+}
+
+/** Commit a ref points at in a repo, or undefined when the ref does not exist. */
+async function gitTip(repoPath: string, ref: string): Promise<string | undefined> {
+	const result = await runGit(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repoPath);
+	const sha = result.stdout.trim();
+	return result.exitCode === 0 && sha !== "" ? sha : undefined;
+}
+
+/** Path of the worktree that has `ref` checked out in `git worktree list --porcelain` output, if any. */
+function worktreePathOfBranch(porcelain: string, ref: string): string | undefined {
+	let path: string | undefined;
+	for (const line of porcelain.split("\n")) {
+		if (line.startsWith("worktree ")) path = line.slice("worktree ".length);
+		else if (line === `branch ${ref}`) return path;
+	}
+	return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -709,6 +736,161 @@ export class WorkspaceLifecycle {
 	/** Verified deletion (P7.3/P7.5): the only clone-removal path. Returns the verified session list. */
 	async deleteClone(daemonId: string): Promise<{ removed: string; verified: string[] }> {
 		return await this.#deleteGate(daemonId);
+	}
+
+	/**
+	 * Fetch a local-source clone's branch into its project's main repo
+	 * (`git fetch <clone checkout> <branch>:<branch>`, no `+`: an existing
+	 * project branch is only ever fast-forwarded). Refuses, leaving the
+	 * project untouched, when the clone is remote-source (it pushes upstream
+	 * from inside its runtime), runs on a provider whose volume the fleet
+	 * cannot read, is being deleted, has no such branch, the branch is
+	 * checked out in any worktree of the project, or the update is not a
+	 * fast-forward. Only committed work travels: a dirty tree stays behind.
+	 */
+	async fetchCloneIntoProject(daemonId: string): Promise<CloneFetchResult> {
+		return await this.#serialized(daemonId, () => this.#fetchIntoProject(daemonId));
+	}
+
+	async #fetchIntoProject(daemonId: string): Promise<CloneFetchResult> {
+		const entry = this.#requireClone(daemonId, "fetch into project");
+		const record = entry.workspace;
+		if (record?.deletion?.state !== undefined) {
+			throw new CloneLifecycleError(
+				"conflict",
+				`workspace ${daemonId} is being deleted (${record.deletion.state}); fetch is not available`,
+			);
+		}
+		const { profile } = this.#cloneProfile(entry);
+		if (profile.provider !== "bwrap") {
+			throw new CloneLifecycleError(
+				"invalid_request",
+				`clone ${daemonId} runs on a ${profile.provider} provider whose volume the fleet cannot read; its work leaves through its remote`,
+			);
+		}
+		const sourceLocal = record?.source?.local;
+		if (sourceLocal === undefined) {
+			throw new CloneLifecycleError(
+				"invalid_request",
+				`clone ${daemonId} has a remote source; it pushes upstream from inside its runtime`,
+			);
+		}
+		const project = this.#deps.registry.projects().find((p) => p.projectId === record?.projectId);
+		if (project === undefined) {
+			throw new CloneLifecycleError("invalid_request", `unknown project: ${record?.projectId}`);
+		}
+		if (project.missing === true) {
+			throw new CloneLifecycleError(
+				"unavailable",
+				`project ${project.path} is missing on disk; cannot fetch into it`,
+			);
+		}
+		if (realpathOrResolve(sourceLocal) !== realpathOrResolve(project.path)) {
+			throw new CloneLifecycleError(
+				"invalid_request",
+				`clone ${daemonId} was cloned from ${sourceLocal}, not the project's local path ${project.path}`,
+			);
+		}
+		const branch = record?.branch;
+		if (branch === undefined || branch === "") {
+			throw new CloneLifecycleError("invalid_request", `clone ${daemonId} records no branch`);
+		}
+		const ref = `refs/heads/${branch}`;
+		const valid = await runGit(["check-ref-format", ref], project.path);
+		if (valid.exitCode !== 0) {
+			throw new CloneLifecycleError("invalid_request", `"${branch}" is not a valid branch name`);
+		}
+		const { checkoutDir } = this.#clonePaths(entry);
+		if (!existsSync(join(checkoutDir, ".git"))) {
+			throw new CloneLifecycleError(
+				"unavailable",
+				`clone ${daemonId} has no prepared checkout to fetch from`,
+			);
+		}
+		const cloneTip = await gitTip(checkoutDir, ref);
+		if (cloneTip === undefined) {
+			throw new CloneLifecycleError(
+				"conflict",
+				`clone ${daemonId} has no local branch "${branch}" (its checkout is on another branch or the branch was renamed)`,
+			);
+		}
+
+		// Git refuses to move a checked-out branch; name where, before it does.
+		const worktrees = await runGit(["worktree", "list", "--porcelain"], project.path);
+		if (worktrees.exitCode !== 0) {
+			throw new CloneLifecycleError(
+				"unavailable",
+				`cannot list worktrees of ${project.path} (git exited ${worktrees.exitCode}); not fetching`,
+			);
+		}
+		const checkedOutAt = worktreePathOfBranch(worktrees.stdout, ref);
+		if (checkedOutAt !== undefined) {
+			throw new CloneLifecycleError(
+				"conflict",
+				`branch "${branch}" is checked out at ${checkedOutAt}; git will not update a checked-out branch. Switch that checkout to another branch and retry`,
+			);
+		}
+
+		const projectTip = await gitTip(project.path, ref);
+		if (projectTip === cloneTip) {
+			return {
+				daemonId,
+				branch,
+				projectPath: project.path,
+				outcome: "up-to-date",
+				commit: cloneTip,
+			};
+		}
+		// No `+` on the refspec: git itself rejects anything but a creation or fast-forward.
+		const fetched = await runGit(
+			[
+				"fetch",
+				"--quiet",
+				"--no-tags",
+				"--no-recurse-submodules",
+				"--no-write-fetch-head",
+				checkoutDir,
+				`${ref}:${ref}`,
+			],
+			project.path,
+			{ timeoutMs: GIT_FETCH_TIMEOUT_MS },
+		);
+		if (fetched.exitCode !== 0) {
+			// Objects arrive before the ref update is judged, so when the project
+			// branch is not an ancestor of the clone's tip the fetch was a
+			// non-fast-forward refusal (the project branch is untouched).
+			if (projectTip !== undefined) {
+				const ancestor = await runGit(
+					["merge-base", "--is-ancestor", projectTip, cloneTip],
+					project.path,
+				);
+				if (ancestor.exitCode === 1) {
+					throw new CloneLifecycleError(
+						"conflict",
+						`project branch "${branch}" is not an ancestor of the clone's "${branch}" (not a fast-forward); the project branch was left untouched. Reconcile the two branches (merge or rebase in the clone) and retry`,
+					);
+				}
+			}
+			const detail = fetched.stderr.trim().split("\n")[0] ?? "";
+			throw new CloneLifecycleError(
+				"provider_failed",
+				`git fetch of "${branch}" from clone ${daemonId} failed (exit ${fetched.exitCode})${detail !== "" ? `: ${detail}` : ""}`,
+			);
+		}
+		const commit = (await gitTip(project.path, ref)) ?? cloneTip;
+		this.#log(
+			"info",
+			`clone ${daemonId} branch ${branch} fetched into ${project.path} (${projectTip === undefined ? "created" : "fast-forward"} ${commit.slice(0, 12)})`,
+			daemonId,
+		);
+		return {
+			daemonId,
+			branch,
+			projectPath: project.path,
+			outcome: projectTip === undefined ? "created" : "updated",
+			commit,
+			...(projectTip !== undefined ? { previousCommit: projectTip } : {}),
+		};
 	}
 
 	// ------------------------------------------------------------------

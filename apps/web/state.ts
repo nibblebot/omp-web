@@ -1670,6 +1670,7 @@ export {
 	highlightProject,
 	sendDeleteWorktree,
 	sendWorktreeDeleteInfo,
+	fetchCloneIntoProject,
 } from "./store/projects";
 export {
 	closeDaemonDetails,

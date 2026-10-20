@@ -23,7 +23,7 @@ import type { FleetConfig } from "./config";
 import { validateProjectPath } from "./discovery";
 import type { FleetEventLog } from "./events";
 import type { Registry, RegistryEntry } from "./registry";
-import type { RegisteredProject } from "#lib/wire/protocol";
+import type { CloneFetchResult, RegisteredProject } from "#lib/wire/protocol";
 import type { SpawnSupervisor } from "./supervisor";
 import {
 	createWorktree,
@@ -99,6 +99,8 @@ export interface CloneLifecycleHooks {
 	stopClone(daemonId: string): Promise<void>;
 	/** Verified delete (P7 gate); roster remove routes through the same gate. */
 	deleteClone(daemonId: string): Promise<CloneDeleteResult>;
+	/** Fetch a local-source clone's branch into its project's main repo (fast-forward or create only). */
+	fetchCloneIntoProject(daemonId: string): Promise<CloneFetchResult>;
 }
 
 export interface OperationsDeps {
@@ -459,5 +461,15 @@ export class FleetOperations {
 		const entry = await this.#clones("create_clone").createClone(input);
 		this.#eventLog.add("info", "server", `clone created ${entry.daemonId}`, entry.daemonId);
 		return entry;
+	}
+
+	/**
+	 * Fetch a local-source clone's branch into its project through the
+	 * lifecycle (git runs only there, never in a handler). Refusals
+	 * (CloneLifecycleError) propagate for each transport to map.
+	 */
+	async fetchCloneIntoProject(daemonId: string): Promise<CloneFetchResult> {
+		this.#entry(daemonId);
+		return await this.#clones("fetch into project").fetchCloneIntoProject(daemonId);
 	}
 }

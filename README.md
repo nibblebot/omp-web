@@ -117,6 +117,8 @@ Interactive first run can choose a data home and write `config.json` there. If y
 
 Local **Remove from omp-web** / `omp-web remove` stops and unregisters the daemon without deleting files or the Git worktree. Linked worktrees of a registered project offer disk deletion, with clean-tree checks, no force, and removal of their Git-ignored files. Provider-managed clones retain their separate verified-deletion lifecycle.
 
+Clones cut from the project's local path on a fleet-readable volume (bwrap) have a **Fetch into project** row action, also `POST /ctl/clones/<daemonId>/fetch-into-project`. It fetches the clone's own branch (the branch named after the workspace) from its checkout into the project's main repo: a missing branch is created and an existing one is fast-forwarded, never overwritten. The fleet refuses, and leaves the project untouched, when the project's branch has commits the clone's lacks (not a fast-forward) or is checked out in any worktree of the project (switch that checkout away first). Only committed work travels; uncommitted changes stay in the clone. Remote-source and Kubernetes clones push upstream from inside their runtime and do not offer the action.
+
 ## Optional features
 
 The web UI's optional features can be turned on or off per browser in **Settings > Features**. A feature that is off is never downloaded: its code loads only when it is enabled.

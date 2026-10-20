@@ -1,4 +1,4 @@
-import { WorkspaceRow } from "../../../../web/components/fleet/sidebar/WorkspaceRow";
+import { WorkspaceRow, setMenuOpenId } from "../../../../web/components/fleet/sidebar/WorkspaceRow";
 import { rosterDaemon } from "../../../fixtures/roster";
 import { seedRosterFleet } from "../../../fixtures/roster-seed";
 import { defineStory } from "../../../registry";
@@ -67,6 +67,24 @@ export default defineStory({
 		},
 		{
 			name: "Clone failed",
+			render: () => (
+				<div class="sidebar-list">
+					<WorkspaceRow daemon={rosterDaemon.cloneFailed} />
+				</div>
+			),
+		},
+		{
+			name: "Local-source clone, actions menu (Fetch into project)",
+			seed: () => setMenuOpenId(rosterDaemon.cloneLocal.daemonId),
+			render: () => (
+				<div class="sidebar-list">
+					<WorkspaceRow daemon={rosterDaemon.cloneLocal} />
+				</div>
+			),
+		},
+		{
+			name: "Remote-source clone, actions menu (no fetch action)",
+			seed: () => setMenuOpenId(rosterDaemon.cloneFailed.daemonId),
 			render: () => (
 				<div class="sidebar-list">
 					<WorkspaceRow daemon={rosterDaemon.cloneFailed} />

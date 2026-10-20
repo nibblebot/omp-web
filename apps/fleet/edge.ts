@@ -83,6 +83,7 @@ import {
 	SSE_KEEPALIVE_MS,
 	SSE_RING_CAP,
 	SSE_RING_BYTES,
+	type CloneFetchResult,
 	type ClientCommand,
 	type DaemonEntry,
 	type DaemonInfo,
@@ -386,6 +387,8 @@ export interface EdgeLifecycleHooks {
 	stopClone(daemonId: string): Promise<void>;
 	/** Verified delete (P7 gate): refuses active work, verifies the fleet store, then deletes provider resources. */
 	deleteClone(daemonId: string): Promise<{ removed: string; verified: string[] }>;
+	/** Fetch a local-source clone's branch into its project's main repo (the control route's operation). */
+	fetchCloneIntoProject(daemonId: string): Promise<CloneFetchResult>;
 }
 
 /** The live machinery the edge coordinates. */
@@ -509,8 +512,8 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
  * desiredState→desiredState, profileId→providerProfileId, plus the
  * ephemeral lifecycle liveness facts (lifecycleStage/lifecycleError, the
  * same liveness class as status/pid/readyAt). The record's private
- * remainder (providerHandle, cleanup/archive state, clone sources) NEVER
- * crosses this boundary, exactly as RegistryEntry credentials and templates
+ * remainder (providerHandle, cleanup/archive state, clone source paths and URLs) NEVER
+ * crosses this boundary (only the `localSource` boolean does), exactly as RegistryEntry credentials and templates
  * never do: roster frames and registered_projects frames stay free of
  * credentials, private addresses, provider handles, and secret material. Any
  * future workspace field must be mapped here explicitly (or added to the
@@ -564,6 +567,9 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 		roster.workspaceKind = workspace.kind;
 		roster.desiredState = workspace.desiredState;
 		if (workspace.profileId !== undefined) roster.providerProfileId = workspace.profileId;
+		if (workspace.kind === "clone" && workspace.source?.local !== undefined) {
+			roster.localSource = true;
+		}
 	}
 	if (entry.lifecycleStage !== undefined) roster.lifecycleStage = entry.lifecycleStage;
 	if (entry.lifecycleError !== undefined) roster.lifecycleError = entry.lifecycleError;
