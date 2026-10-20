@@ -122,7 +122,12 @@ export interface DetachedLaunch {
 	 * command (`logPath` is appended to its args; see log-relay.ts), which rotates mid-run. The
 	 * child is then a descendant of the launched shell, not the launched process itself.
 	 */
-	relay?: { bin: string; args: readonly string[] };
+	relay?: {
+		bin: string;
+		args: readonly string[];
+		/** The runtime's own exit status is written here (the launcher's exit code is the relay's). */
+		statusFile?: string;
+	};
 }
 
 /**
@@ -144,7 +149,7 @@ export function spawnDetached(launch: DetachedLaunch): Child {
 						"sh",
 						"-c",
 						// The runtime's stderr joins its stdout; the relay is the pipeline's reader.
-						`"$@" 2>&1 | ${[launch.relay.bin, ...launch.relay.args, launch.logPath].map(shellQuote).join(" ")}`,
+						`${launch.relay.statusFile === undefined ? '"$@"' : `( "$@"; echo $? > ${shellQuote(launch.relay.statusFile)} )`} 2>&1 | ${[launch.relay.bin, ...launch.relay.args, launch.logPath].map(shellQuote).join(" ")}`,
 						"sh",
 						...launch.argv,
 					];

@@ -14,7 +14,7 @@ import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { EdgeEvictionHooks, FleetEdge } from "../edge";
 import type { DaemonTransportRegistry } from "../daemon-transport";
 import type { Registry } from "../registry";
-import type { HostRuntimeApi } from "../workspace-lifecycle";
+import type { LifecycleApi } from "../workspace-lifecycle";
 import { SessionWaker } from "../session-waker";
 
 export { cleanupTempDirs };
@@ -292,11 +292,11 @@ export function asRoster(frame: ServerFrame): { type: "roster"; daemons: DaemonE
  */
 export function testEviction(
 	registry: Registry,
-	host: Pick<HostRuntimeApi, "deleteHost">,
+	lifecycle: Pick<LifecycleApi, "delete">,
 ): EdgeEvictionHooks {
 	return {
 		async evictRow(daemonId, removal) {
-			await host.deleteHost(daemonId);
+			await lifecycle.delete(daemonId);
 			const result = await removal();
 			registry.remove(daemonId);
 			return result;
@@ -304,7 +304,7 @@ export function testEviction(
 		async evictProject(projectId) {
 			for (const entry of registry.list()) {
 				if (entry.projectId === projectId && entry.status !== "asleep") {
-					await host.deleteHost(entry.daemonId);
+					await lifecycle.delete(entry.daemonId);
 				}
 			}
 			registry.removeProject(projectId);
@@ -318,8 +318,8 @@ export function testEviction(
  */
 export function testWaker(
 	registry: Registry,
-	host: Pick<HostRuntimeApi, "ensureHostRunning">,
+	lifecycle: Pick<LifecycleApi, "start">,
 	transport: DaemonTransportRegistry | undefined,
 ): SessionWaker {
-	return new SessionWaker({ registry, host, transport });
+	return new SessionWaker({ registry, lifecycle, transport });
 }

@@ -108,6 +108,7 @@ import { join } from "node:path";
 import {
 	KUBERNETES_POD_LAYOUT,
 	ProviderProtocolError,
+	boundedDetail,
 	type KubernetesProfile,
 	type PreflightCheck,
 	type ProviderRequest,
@@ -636,6 +637,44 @@ function podContainerReason(pod: Record<string, unknown>): string | null {
 	return null;
 }
 
+/**
+ * How the workspace container ended, from the pod status alone (no extra API
+ * call): its exit code, and a bounded detail made of the exit code, the
+ * container reason and the last non-empty line of the termination message
+ * (the pod's `terminationMessagePolicy: FallbackToLogsOnError` puts the log
+ * tail there on a failed exit). Null when no container has terminated.
+ */
+function podTermination(
+	pod: Record<string, unknown>,
+): { exitCode?: number; detail: string } | null {
+	const list = asRecord(pod.status)?.containerStatuses;
+	if (!Array.isArray(list)) return null;
+	for (const entry of list) {
+		const terminated = asRecord(asRecord(asRecord(entry)?.state)?.terminated);
+		if (terminated === undefined || terminated === null) continue;
+		const code = terminated.exitCode;
+		const exitCode =
+			typeof code === "number" && Number.isSafeInteger(code) && code >= 0 && code <= 255
+				? code
+				: undefined;
+		const reason = typeof terminated.reason === "string" ? terminated.reason : undefined;
+		const lastLine =
+			typeof terminated.message === "string"
+				? terminated.message
+						.split("\n")
+						.map((line) => line.trim())
+						.filter((line) => line !== "")
+						.at(-1)
+				: undefined;
+		const head = `container exited${exitCode === undefined ? "" : ` ${exitCode}`}${reason === undefined ? "" : ` (${reason})`}`;
+		return {
+			...(exitCode !== undefined ? { exitCode } : {}),
+			detail: boundedDetail(lastLine === undefined ? head : `${head}: ${lastLine}`),
+		};
+	}
+	return null;
+}
+
 function pvcMeta(pvc: Record<string, unknown>): {
 	labels: Record<string, string>;
 	annotations: Record<string, string>;
@@ -782,6 +821,8 @@ export function buildPodManifest(
 		name: "session",
 		image: cfg.image,
 		imagePullPolicy: "IfNotPresent",
+		// A failed exit leaves the log tail in the pod status (inspect's `detail`).
+		terminationMessagePolicy: "FallbackToLogsOnError",
 		env,
 		resources,
 		securityContext: {
@@ -1304,7 +1345,7 @@ async function opInspect(rawRequest: ProviderRequest, deps: OpDeps): Promise<Pro
 		if (meta.deletionTimestamp === null && (phase === "Running" || phase === "Pending")) {
 			return ok(handle, "running", { startedAt: podStartTime(pod) ?? record?.startedAt });
 		}
-		return ok(handle, "stopped", { startedAt: record?.startedAt });
+		return ok(handle, "stopped", { startedAt: record?.startedAt, ...podTermination(pod) });
 	}
 	if (pvc !== null || record !== null) {
 		// Compute gone, storage (or at least the identity record) retained.

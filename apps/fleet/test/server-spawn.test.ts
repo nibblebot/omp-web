@@ -84,7 +84,7 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 
 	afterAll(async () => {
 		for (const daemon of daemons) await daemon.stop();
-		for (const daemonId of spawned) await server.lifecycle.stopHost(daemonId);
+		for (const daemonId of spawned) await server.lifecycle.stop(daemonId);
 		if (server !== undefined) await server.close();
 	});
 
@@ -187,5 +187,30 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 				.filter((e) => e.projectId === project.projectId)
 				.every((e) => e.cwd === repoReal),
 		).toBe(true);
+	});
+
+	test("POST /ctl/stop then /ctl/start run a spawned session through the lifecycle's kind-agnostic verbs", async () => {
+		const project = server.registry.projects().find((p) => p.path === repoReal)!;
+		const row = server.registry
+			.list()
+			.find((e) => e.projectId === project.projectId && e.status === "ready")!;
+		const stopped = await postJson(server.port, "/ctl/stop", { selector: row.daemonId });
+		expect(stopped.status).toBe(200);
+		expect(server.registry.get(row.daemonId)?.status).toBe("asleep");
+
+		const launches = (): string[] => readFileSync(payloadFile, "utf8").trim().split("\n");
+		const before = launches().length;
+		const started = await postJson(server.port, "/ctl/start", { daemonId: row.daemonId });
+		expect(started.status).toBe(200);
+		expect(await started.json()).toEqual({ daemonId: row.daemonId, observed: "running" });
+		await waitFor(() => launches().length === before + 1, 5000, "child relaunched by start");
+		const relaunch = JSON.parse(launches().at(-1)!) as FleetPayload;
+		expect(relaunch.callback.workspace).toBe(row.daemonId);
+		// A fresh generation: the stop revoked the first credential.
+		expect(relaunch.callback.generation).toBeGreaterThan(1);
+		expect(server.registry.get(row.daemonId)?.status).toBe("connecting");
+
+		const unknown = await postJson(server.port, "/ctl/start", { daemonId: "no-such-daemon" });
+		expect(unknown.status).toBe(404);
 	});
 });

@@ -20,6 +20,7 @@ import type { RegistryEntry } from "../registry";
 import { Registry } from "../registry";
 import { startFleet, type FleetServer } from "../server";
 import { enrollSessionCredential } from "../session-credential";
+import type { StartOptions } from "../workspace-lifecycle";
 import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
 import {
 	FAKE_CWD,
@@ -283,15 +284,12 @@ describe("fleet edge", () => {
 			configPath,
 			statsConfig: hermeticStatsConfig(statePath),
 		});
-		// Count lifecycle.ensureHostRunning calls and pair the woken child, as its dial would.
-		const origRespawn = server.lifecycle.ensureHostRunning.bind(server.lifecycle);
-		server.lifecycle.ensureHostRunning = async (
-			entry: RegistryEntry,
-			opts?: { resumeFile?: string },
-		) => {
+		// Count lifecycle.start calls and pair the woken child, as its dial would.
+		const origRespawn = server.lifecycle.start.bind(server.lifecycle);
+		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
 			respawns++;
-			await origRespawn(entry, opts);
-			await pairSpawned(entry.daemonId);
+			await origRespawn(daemonId, opts);
+			await pairSpawned(daemonId);
 		};
 		// Capture lifecycle.spawnHost inits for the labels-passthrough tests, and
 		// pair each spawned child as its dial would.
@@ -1031,14 +1029,11 @@ describe("fleet edge", () => {
 		// state (the edge has no per-call seam), so point it at the temp dir for
 		// this test only and restore it exactly afterwards.
 		setAgentDir(agentDir);
-		const origRespawn = server.lifecycle.ensureHostRunning;
+		const origRespawn = server.lifecycle.start;
 		const resumeFiles: Array<string | undefined> = [];
-		server.lifecycle.ensureHostRunning = async (
-			e: RegistryEntry,
-			opts?: { resumeFile?: string },
-		) => {
-			resumeFiles.push(opts?.resumeFile);
-			await origRespawn.call(server.lifecycle, e, opts);
+		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
+			resumeFiles.push(opts?.resume);
+			await origRespawn.call(server.lifecycle, daemonId, opts);
 		};
 		try {
 			const sessionDir = SessionManager.getDefaultSessionDir(
@@ -1070,7 +1065,7 @@ describe("fleet edge", () => {
 			expect(server.registry.get(entry.daemonId)?.status).toBe("ready");
 			dropDaemon(entry.daemonId);
 		} finally {
-			server.lifecycle.ensureHostRunning = origRespawn;
+			server.lifecycle.start = origRespawn;
 			for (const [key, value] of Object.entries(savedEnv)) {
 				if (value === undefined) delete process.env[key];
 				else process.env[key] = value;
@@ -1090,14 +1085,11 @@ describe("fleet edge", () => {
 			PI_PROFILE: process.env.PI_PROFILE,
 		};
 		setAgentDir(agentDir);
-		const origRespawn = server.lifecycle.ensureHostRunning;
+		const origRespawn = server.lifecycle.start;
 		const resumeFiles: Array<string | undefined> = [];
-		server.lifecycle.ensureHostRunning = async (
-			e: RegistryEntry,
-			opts?: { resumeFile?: string },
-		) => {
-			resumeFiles.push(opts?.resumeFile);
-			await origRespawn.call(server.lifecycle, e, opts);
+		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
+			resumeFiles.push(opts?.resume);
+			await origRespawn.call(server.lifecycle, daemonId, opts);
 		};
 		try {
 			const sessionDir = SessionManager.getDefaultSessionDir(
@@ -1162,7 +1154,7 @@ describe("fleet edge", () => {
 			expect(resumeFiles).toEqual([files[0]]);
 			dropDaemon(entry.daemonId);
 		} finally {
-			server.lifecycle.ensureHostRunning = origRespawn;
+			server.lifecycle.start = origRespawn;
 			for (const [key, value] of Object.entries(savedEnv)) {
 				if (value === undefined) delete process.env[key];
 				else process.env[key] = value;
@@ -1451,7 +1443,7 @@ describe("fleet edge", () => {
 		browser.close();
 	});
 
-	test("stop surfaces the error frame but still flips the entry to asleep when the terminate fails", async () => {
+	test("stop surfaces the lifecycle's failure as an error frame (the asleep flip itself is the lifecycle's, covered in host-lifecycle.test.ts)", async () => {
 		const stopMe2 = server.registry.create({
 			name: "stop-me-2",
 			cwd: FAKE_CWD,
@@ -1462,8 +1454,8 @@ describe("fleet edge", () => {
 			pid: 4321,
 			readyAt: Date.now() - 30_000,
 		});
-		const origStop = server.lifecycle.stopHost.bind(server.lifecycle);
-		server.lifecycle.stopHost = async () => {
+		const origStop = server.lifecycle.stop.bind(server.lifecycle);
+		server.lifecycle.stop = async () => {
 			throw new Error("stop boom");
 		};
 		try {
@@ -1475,26 +1467,9 @@ describe("fleet edge", () => {
 				"stop error frame",
 			);
 			expect(error.type).toBe("error");
-			// The entry must not stay "ready" forever: the status flip happens
-			// even on terminate failure, and the broadcast carries no pid/uptime.
-			const delta = await browser.waitForFrame(
-				(f) =>
-					f.type === "roster_delta" &&
-					f.upserted.some((d) => d.daemonId === stopMe2.daemonId && d.status === "asleep"),
-				"asleep roster delta after failed stop",
-			);
-			if (delta.type !== "roster_delta") throw new Error("expected roster_delta frame");
-			const entry = delta.upserted.find((d) => d.daemonId === stopMe2.daemonId)!;
-			expect(entry.status).toBe("asleep");
-			expect(entry.pid).toBeUndefined();
-			expect(entry.uptime).toBeUndefined();
-			const reg = server.registry.get(stopMe2.daemonId)!;
-			expect(reg.status).toBe("asleep");
-			expect(reg.pid).toBeUndefined();
-			expect(reg.readyAt).toBeUndefined();
 			browser.close();
 		} finally {
-			server.lifecycle.stopHost = origStop;
+			server.lifecycle.stop = origStop;
 		}
 	});
 
@@ -1613,10 +1588,10 @@ describe("fleet edge", () => {
 			workspace: { kind: "clone", projectId: project.projectId, desiredState: "stopped" },
 		});
 		const pruned: string[] = [];
-		const origPrune = server.lifecycle.deleteHost.bind(server.lifecycle);
-		server.lifecycle.deleteHost = async (daemonId: string) => {
+		const origPrune = server.lifecycle.delete.bind(server.lifecycle);
+		server.lifecycle.delete = async (daemonId: string) => {
 			pruned.push(daemonId);
-			await origPrune(daemonId);
+			return await origPrune(daemonId);
 		};
 		const browser = await openBrowser(server.port);
 		try {
@@ -1637,7 +1612,7 @@ describe("fleet edge", () => {
 			expect(server.registry.get(clone.daemonId)).toBeDefined();
 			expect(server.registry.projects().some((p) => p.projectId === project.projectId)).toBe(true);
 		} finally {
-			server.lifecycle.deleteHost = origPrune;
+			server.lifecycle.delete = origPrune;
 			browser.close();
 			server.registry.remove(live.daemonId);
 			server.registry.remove(clone.daemonId);

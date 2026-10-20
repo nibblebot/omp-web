@@ -5,7 +5,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+	PROVIDER_DETAIL_MAX_BYTES,
 	ProviderProtocolError,
+	boundedDetail,
 	parseProviderRequest,
 	parseProviderResponse,
 	type ProviderRequest,
@@ -151,5 +153,47 @@ describe("list-sessions response", () => {
 		expect(() => parseProviderResponse(JSON.stringify({ ...ENVELOPE, ...extra }))).toThrow(
 			/provider response/,
 		);
+	});
+});
+
+describe("exit report on a non-running observation", () => {
+	test("carries the exit code and a bounded detail", () => {
+		const parsed = parseProviderResponse(
+			JSON.stringify({ ...ENVELOPE, exitCode: 78, detail: "container exited 78 (Error): no file" }),
+		);
+		expect(parsed).toMatchObject({
+			ok: true,
+			exitCode: 78,
+			detail: "container exited 78 (Error): no file",
+		});
+	});
+
+	test("an ok response without an exit report carries neither field", () => {
+		const parsed = parseProviderResponse(JSON.stringify(ENVELOPE));
+		expect(parsed.ok && "exitCode" in parsed).toBe(false);
+		expect(parsed.ok && "detail" in parsed).toBe(false);
+	});
+
+	test.each([
+		["a negative exit code", { exitCode: -1 }],
+		["an exit code above 255", { exitCode: 256 }],
+		["a fractional exit code", { exitCode: 1.5 }],
+		["a string exit code", { exitCode: "78" }],
+		["a non-string detail", { detail: 7 }],
+		["an oversize detail", { detail: "x".repeat(PROVIDER_DETAIL_MAX_BYTES + 1) }],
+		["a detail with a NUL", { detail: "a\0b" }],
+	])("rejects %s", (_label, extra) => {
+		expect(() => parseProviderResponse(JSON.stringify({ ...ENVELOPE, ...extra }))).toThrow(
+			/provider response/,
+		);
+	});
+
+	test("boundedDetail trims, caps at the byte limit without splitting a character, and marks the cut", () => {
+		expect(boundedDetail("  short  ")).toBe("short");
+		const cut = boundedDetail("é".repeat(PROVIDER_DETAIL_MAX_BYTES));
+		expect(new TextEncoder().encode(cut).length).toBeLessThanOrEqual(PROVIDER_DETAIL_MAX_BYTES);
+		expect(cut.endsWith("...")).toBe(true);
+		expect(cut).not.toContain("\uFFFD");
+		expect(() => parseProviderResponse(JSON.stringify({ ...ENVELOPE, detail: cut }))).not.toThrow();
 	});
 });

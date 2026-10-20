@@ -141,7 +141,10 @@ export function readCallbackEnv(
 export function ok(
 	handle: string,
 	observed: ProviderObserved,
-	extra?: Pick<ProviderOkResponse, "pid" | "startedAt" | "sessions" | "complete">,
+	extra?: Pick<
+		ProviderOkResponse,
+		"pid" | "startedAt" | "exitCode" | "detail" | "sessions" | "complete"
+	>,
 ): ProviderResponse {
 	return { ok: true, handle, observed, ...extra };
 }

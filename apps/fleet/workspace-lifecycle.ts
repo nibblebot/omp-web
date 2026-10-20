@@ -1,10 +1,12 @@
 /**
  * Workspace lifecycle service (`fleet/workspace-lifecycle.ts`). THE single create/ensure/stop/delete
  * owner for every workspace: provider-managed clones and the local sessions
- * of main checkouts and git worktrees (the `host` runtime, below). Shared by the control-plane
+ * of main checkouts and git worktrees (the `host` runtime, below). Callers use
+ * the kind-agnostic verbs `start`, `stop` and `delete`; the kind dispatch is
+ * internal. Shared by the control-plane
  * HTTP handlers (POST /ctl/clones, /ctl/start|wake, /ctl/stop, DELETE
- * /ctl/worktrees/:id) and the browser edge's command dispatch (Transport's
- * `EdgeLifecycleHooks`, this class conforms to it structurally).
+ * /ctl/worktrees/:id) and the browser edge's command dispatch (both hold a
+ * `LifecycleApi`).
  *
  * Ownership rules this service enforces:
  * - One lifecycle implementation. HTTP handlers and edge commands call
@@ -18,17 +20,22 @@
  * - Every destructive transition runs the verify-at-deletion gate
  *   (admission → quiesce with proven stop → Git guard → store verification
  *   against the workspace volume's own session tree → read-only flip →
- *   provider deletion → volume deletion → roster removal). `deleteClone`
+ *   provider deletion → volume deletion → roster removal). `delete` of a clone
  *   is the only clone-removal path; no kind-blind roster eviction can bypass
  *   it.
  * - Stop preserves checkout and session logs; only the verified gate
  *   deletes. Idle handling stays fleet-owned: this service never
  *   stops compute on its own; explicit stop/wake are the only transitions.
- * - Runtime supervision: the one runtime watch (below) restarts a
- *   desired-running clone whose provider-proven runtime died after its pair
- *   came up (new generation, predecessor proven gone, budgeted backoff shared
- *   with the host runtime via restart-policy.ts); an explicit stop never
- *   restarts. This is not an idle stop: it never stops compute.
+ * - Crash policy: ONE policy object for every runtime kind, `#restartOrGiveUp`
+ *   over a per-runtime `RestartBudget` (restart-policy.ts). A host child that
+ *   exits unexpectedly, and a clone whose provider-proven runtime died after
+ *   its pair came up, are restarted the same way: dead generation revoked
+ *   first, jittered 1s-30s backoff, fresh credential and generation + 1 with
+ *   the predecessor proven gone, a cap between pair-ups (refilled by a pair
+ *   that holds), then status "error" + lifecycleStage "failed" with the
+ *   reason (a provider's reported exit detail included). Exit 77/78 (a host
+ *   child's, or a provider-reported `exitCode`) and an explicit stop never
+ *   restart. This is not an idle stop: it never stops compute.
  * - Every runtime sits behind the runtime-provider contract
  *   (runtime-provider.ts): clones through their profile's provider (an
  *   executable for bwrap and kubernetes; the in-process host-clone-provider.ts
@@ -41,9 +48,8 @@
  *     stdin (`--fleet-stdin`), never argv or environment;
  *   - exit 77 (session locked) and 78 (resume failed) are deterministic: the
  *     row goes asleep with the child's last log line as its reason, never
- *     restarted; a clean exit 0 goes asleep; any other exit restarts with the
- *     shared restart-policy.ts backoff and budget (refilled by a stable
- *     pair), then errors;
+ *     restarted; a clean exit 0 goes asleep; any other exit takes the one
+ *     crash policy (#restartOrGiveUp, below), then errors;
  *   - a start respawns `--resume <lastSessionFile>`; a replacement refuses
  *     while the previous process still holds its session lock;
  *   - a start whose pair never appears errors the row and ends the child;
@@ -223,6 +229,13 @@ const RESPAWN_KILL_GRACE_MS = 2_000;
 const RESPAWN_LOCK_POLL_MS = 100;
 const DETERMINISTIC_EXIT_FALLBACK = "session refused to run and will not be retried";
 
+/** Exit 77 (session locked) and 78 (resume failed) are deterministic refusals: retrying cannot help. */
+function isDeterministicExit(exitCode: number | null | undefined): boolean {
+	return (
+		exitCode === OMP_SESSION_EXIT_SESSION_LOCKED || exitCode === OMP_SESSION_EXIT_RESUME_FAILED
+	);
+}
+
 /** Runtime supervision knobs: the shared restart policy plus the watch cadences (tests shrink them). */
 export interface CloneRuntimePolicy extends RestartPolicy {
 	/** A dropped pair is not acted on (no provider inspect) before this grace; mirrors registry PAIR_LOSS_GRACE_MS. */
@@ -243,8 +256,6 @@ const DEFAULT_RUNTIME_POLICY: CloneRuntimePolicy = {
 /** Supervision state of one host runtime (see the host runtime section of WorkspaceLifecycle). */
 interface HostRuntime {
 	budget: RestartBudget;
-	/** Pending crash-restart backoff. */
-	restartTimer: Timer | null;
 	/** Armed per start: a pair must appear within the pair timeout. */
 	pairTimer: Timer | null;
 	/** Pair-change feed: a pair clears the pair timer and starts the budget's stable window. */
@@ -253,7 +264,7 @@ interface HostRuntime {
 	stopped: boolean;
 	/** Generation of the current launch; an exit report from an older one is stale. */
 	generation: number;
-	/** In-flight ensureHostRunning; concurrent calls coalesce onto it (one launch). */
+	/** In-flight host start; concurrent calls coalesce onto it (one launch). */
 	ensureInFlight: Promise<void> | null;
 }
 
@@ -269,7 +280,7 @@ interface RuntimeWatch {
 	paired: boolean;
 	/** Earliest time the provider is next inspected (pair down only). */
 	nextInspectAt: number;
-	/** Pending tick or restart-backoff timer. */
+	/** Pending pair-poll tick (a crash restart's backoff lives on `budget`). */
 	timer: Timer | undefined;
 	/** Pair-change subscription: any pair-up marks the watch restartable, even one shorter than a tick. */
 	unsubscribe: () => void;
@@ -279,13 +290,25 @@ interface RuntimeWatch {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-/** The host-runtime verbs the control plane drives (operations, edge, waker, eviction, server). */
-export type HostRuntimeApi = Pick<
+/** What `start` takes beyond the workspace id. */
+export interface StartOptions {
+	/** The durable session to resume: a session file (host session) or a stored session id or file (clone). */
+	resume?: string;
+}
+
+/**
+ * Everything the control plane drives through the lifecycle (operations, edge,
+ * waker, eviction, server): the kind-agnostic verbs plus creation, the clone
+ * fetch, and the host runtime's debug facts.
+ */
+export type LifecycleApi = Pick<
 	WorkspaceLifecycle,
+	| "start"
+	| "stop"
+	| "delete"
 	| "spawnHost"
-	| "ensureHostRunning"
-	| "stopHost"
-	| "deleteHost"
+	| "createClone"
+	| "fetchCloneIntoProject"
 	| "resolveTemplateName"
 	| "hostSnapshot"
 	| "sessionLogTail"
@@ -539,9 +562,8 @@ function worktreePathOfBranch(porcelain: string, ref: string): string | undefine
 // ---------------------------------------------------------------------------
 
 /**
- * Clone workspace lifecycle owner. Conforms to Transport's `EdgeLifecycleHooks`
- * (createClone / ensureCloneRunning / stopClone / deleteClone);
- * richer method returns are assignable to the void-hook signatures.
+ * The workspace lifecycle owner: every runtime start, stop, restart and delete
+ * for clones and host sessions (`LifecycleApi` is what callers hold).
  */
 export class WorkspaceLifecycle {
 	readonly #deps: WorkspaceLifecycleDeps;
@@ -579,7 +601,7 @@ export class WorkspaceLifecycle {
 	}
 
 	// ------------------------------------------------------------------
-	// Public hook surface (EdgeLifecycleHooks-compatible)
+	// Public surface (LifecycleApi): create, then the kind-agnostic verbs
 	// ------------------------------------------------------------------
 
 	/**
@@ -597,7 +619,7 @@ export class WorkspaceLifecycle {
 	 * and the error is typed; nothing streamed, nothing retained. On
 	 * START failure after a successful preparation the entry IS retained
 	 * (volume + pin are expensive and durable) with lifecycleStage
-	 * "failed" + lifecycleError; retry via ensureCloneRunning (start).
+	 * "failed" + lifecycleError; retry via `start`.
 	 */
 	async createClone(input: CloneCreateInput): Promise<RegistryEntry> {
 		const { registry, config } = this.#deps;
@@ -821,6 +843,69 @@ export class WorkspaceLifecycle {
 		return registry.get(daemonId) ?? created;
 	}
 
+	// ------------------------------------------------------------------
+	// Kind-agnostic verbs: every caller starts, stops and deletes through
+	// these; the lifecycle dispatches on the workspace kind internally.
+	// ------------------------------------------------------------------
+
+	/**
+	 * Start (wake) a workspace's runtime, whatever its kind. A clone
+	 * resolves when the provider confirms compute running and the enrollment
+	 * is persisted (never blocking on pair readiness); a host session when its
+	 * child is launched with a fresh credential and generation. Concurrent
+	 * starts of one workspace coalesce or queue; never two launches.
+	 * `opts.resume` names the durable session to resume (a session file for a
+	 * host session, a stored session id or file for a clone); absent = the
+	 * workspace's own last session.
+	 */
+	start(daemonId: string, opts?: StartOptions): Promise<void> {
+		const entry = this.#require(daemonId);
+		if (entry.workspace?.kind === "clone") {
+			return this.#startClone(daemonId, { resumeSessionId: opts?.resume });
+		}
+		return this.#ensureHostRunning(entry, { resumeFile: opts?.resume });
+	}
+
+	/**
+	 * Intentional stop, whatever the kind: cancels a pending restart, ends the
+	 * runtime with proof, revokes the callback credential, and leaves the row
+	 * asleep and startable again (checkout, session files and logs kept). A
+	 * clone takes the proof-bearing provider stop (desiredState stopped); a
+	 * host session asks a paired session to shut down and ends its own child
+	 * (an adopted one is asked to exit, never signalled). A host stop that
+	 * fails still flips the row to asleep before the error surfaces (never
+	 * left "ready" over a dead child).
+	 */
+	async stop(daemonId: string): Promise<void> {
+		const entry = this.#require(daemonId);
+		if (entry.workspace?.kind === "clone") {
+			await this.#serialized(daemonId, () => this.#stopClone(daemonId));
+			return;
+		}
+		try {
+			await this.#serialized(daemonId, () => this.#stopHost(daemonId));
+		} catch (err) {
+			if (this.#deps.registry.get(daemonId)) this.#deps.registry.setStatus(daemonId, "asleep");
+			throw err;
+		}
+	}
+
+	/**
+	 * Delete a workspace's runtime and provider resources, whatever the kind.
+	 * A clone runs the verified deletion gate (P7.3/P7.5), the only clone-removal
+	 * path, and drops its roster row; the result lists the verified sessions.
+	 * A host session is stopped (cancelling restarts) and its runtime state and
+	 * session logs removed, `verified` empty: its row removal is the
+	 * caller's, because the worktree guards (worktrees.ts deleteWorktree: linked,
+	 * clean, no force, `git branch -d`) and the pair/orphan bookkeeping wrap it.
+	 */
+	async delete(daemonId: string): Promise<{ removed: string; verified: string[] }> {
+		const entry = this.#require(daemonId);
+		if (entry.workspace?.kind === "clone") return await this.#deleteGate(daemonId);
+		await this.#deleteHost(daemonId);
+		return { removed: daemonId, verified: [] };
+	}
+
 	/**
 	 * Start/wake: ensure-running. Resolves when the provider confirms the
 	 * compute is running and the enrollment is persisted; never blocks on
@@ -843,7 +928,7 @@ export class WorkspaceLifecycle {
 	 * EXPLICIT id that exists nowhere is a typed `unavailable`, never a
 	 * silent fresh boot.
 	 */
-	async ensureCloneRunning(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void> {
+	async #startClone(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void> {
 		await this.#serialized(daemonId, () => this.#ensureRunning(daemonId, opts));
 	}
 
@@ -869,12 +954,6 @@ export class WorkspaceLifecycle {
 			entry = this.#deps.registry.get(daemonId) ?? entry;
 		}
 		await this.#ensure(entry, { firstStart: false, resumeSessionId: opts?.resumeSessionId });
-	}
-
-	/** Stop: proof-bearing provider stop, desiredState stopped, enrollment
-	 *  revoked. Preserves checkout + session logs (never deletes). */
-	async stopClone(daemonId: string): Promise<void> {
-		await this.#serialized(daemonId, () => this.#stopClone(daemonId));
 	}
 
 	async #stopClone(daemonId: string): Promise<void> {
@@ -920,11 +999,6 @@ export class WorkspaceLifecycle {
 			`clone ${daemonId} stopped (gen ${generation ?? "never-started"})`,
 			daemonId,
 		);
-	}
-
-	/** Verified deletion: the only clone-removal path. Returns the verified session list. */
-	async deleteClone(daemonId: string): Promise<{ removed: string; verified: string[] }> {
-		return await this.#deleteGate(daemonId);
 	}
 
 	/**
@@ -1370,7 +1444,7 @@ export class WorkspaceLifecycle {
 	// ------------------------------------------------------------------
 
 	/**
-	 * Ordered gate for clone workspaces (behind deleteClone, the sole
+	 * Ordered gate for clone workspaces (behind `delete`, the sole
 	 * clone-removal path; removal cannot bypass it):
 	 *   1. serialize concurrent DELETEs + reconcile a persisted "deleting"
 	 *      from a previous fleet process to delete-pending-retry;
@@ -2379,13 +2453,84 @@ export class WorkspaceLifecycle {
 	// ------------------------------------------------------------------
 
 	/** Write lifecycleStage (+ optional error) and broadcast via onChange. */
-	#setStage(daemonId: string, stage: LifecycleStage, error?: string): void {
+	#setStage(daemonId: string, stage: LifecycleStage | undefined, error?: string): void {
 		const entry = this.#deps.registry.get(daemonId);
 		if (!entry) return;
 		this.#deps.registry.update(daemonId, {
 			lifecycleStage: stage,
 			...(error !== undefined ? { lifecycleError: error } : { lifecycleError: undefined }),
 		});
+	}
+
+	/**
+	 * A runtime that cannot be brought back, the same roster shape for every
+	 * kind: status "error" and lifecycleStage "failed", both carrying `reason`.
+	 * An explicit start retries.
+	 */
+	#markFailed(daemonId: string, reason: string): void {
+		this.#setStage(daemonId, "failed", reason);
+		this.#deps.registry.setStatus(daemonId, "error", reason);
+	}
+
+	/**
+	 * Fence a dead runtime's credential: revoke its generation and clear the
+	 * binding, so it stays dead through the backoff window (the replacement
+	 * enrolls generation + 1). Idempotent; the first step of every restart.
+	 */
+	#revokePredecessor(daemonId: string): void {
+		const workspace = this.#deps.registry.get(daemonId)?.workspace;
+		const generation = workspace?.enrollment?.generation ?? workspace?.authorizedGeneration;
+		if (generation === undefined) return;
+		this.#deps.transport.revokeEnrollment(daemonId, generation);
+		this.#deps.registry.clearWorkspaceEnrollment(daemonId, generation);
+	}
+
+	/**
+	 * THE crash policy, applied to every runtime kind (host sessions and each
+	 * provider clone). The caller has proven the runtime dead and decided it
+	 * is restartable (exit 77/78 and an explicit stop never reach here):
+	 *   1. the dead generation's credential is revoked first;
+	 *   2. the runtime's `RestartBudget` is claimed: a jittered 1s-30s backoff
+	 *      is armed and the row shows stage "runtime" + status "reconnecting";
+	 *   3. after the backoff, `hooks.restart` runs on the daemon's op queue
+	 *      (fresh credential, generation + 1, predecessor proven gone) unless
+	 *      `hooks.live` says an explicit stop/delete won the race;
+	 *   4. a restart that throws takes the same path again, so provider flaps
+	 *      are bounded by the same budget;
+	 *   5. a spent budget (refilled only by a pair that holds) gives up:
+	 *      status "error" + stage "failed" with the reason, then `hooks.giveUp`.
+	 */
+	#restartOrGiveUp(
+		daemonId: string,
+		budget: RestartBudget,
+		reason: string,
+		hooks: { live(): boolean; restart(): Promise<void>; giveUp(): void },
+	): void {
+		this.#revokePredecessor(daemonId);
+		const claim = budget.schedule(() => {
+			if (!hooks.live()) return;
+			void this.#serialized(daemonId, async () => {
+				if (hooks.live()) await hooks.restart();
+			}).catch((err: unknown) => {
+				if (!hooks.live()) return;
+				const message = err instanceof Error ? err.message : String(err);
+				this.#restartOrGiveUp(daemonId, budget, `restart failed: ${message}`, hooks);
+			});
+		});
+		if (claim === null) {
+			const message = `${reason}; restart budget exhausted (${budget.restartMax} restarts allowed since the last stable pair); stop and start to retry`;
+			this.#markFailed(daemonId, message);
+			this.#log("error", message, daemonId);
+			hooks.giveUp();
+			return;
+		}
+		this.#setStage(daemonId, "runtime");
+		this.#deps.registry.setStatus(daemonId, "reconnecting");
+		this.#log(
+			"warn",
+			`${reason}; restart ${claim.attempt + 1}/${budget.restartMax} in ${claim.delayMs}ms`,
+			daemonId,
+		);
 	}
 
 	/**
@@ -2487,7 +2632,7 @@ export class WorkspaceLifecycle {
 			}
 		}
 		// Re-arm unless the watch ended or a restart backoff took the timer.
-		if (this.#watches.get(daemonId) === watch && watch.timer === undefined) {
+		if (this.#watches.get(daemonId) === watch && !watch.budget.pending) {
 			this.#scheduleTick(daemonId, watch);
 		}
 	}
@@ -2497,82 +2642,62 @@ export class WorkspaceLifecycle {
 		const entry = this.#watchLive(daemonId, watch);
 		if (entry === undefined) return;
 		if (this.#deps.transport.pairStatus(daemonId).paired) return; // Re-paired while queued.
-		let observed: string;
+		let response: ProviderOkResponse;
 		try {
-			observed = (await this.#runCloneOp(daemonId, "inspect", this.#handleOf(entry))).observed;
+			response = await this.#runCloneOp(daemonId, "inspect", this.#handleOf(entry));
 		} catch {
 			// Inspect failed (provider unavailable or a typed conflict): keep
 			// polling; the next inspect retries. A genuinely dead runtime
 			// reports observed != running (not an error), handled below.
 			return;
 		}
-		if (observed === "running") return;
+		if (response.observed === "running") return;
+		// What the provider knows of the death (exit code and the container's
+		// reason / last log line), so a dead clone explains itself like a host child.
+		const died = response.detail === undefined ? "" : `: ${response.detail}`;
+		if (isDeterministicExit(response.exitCode)) {
+			// Exit 77/78 is a refusal retrying cannot fix: no restart, and the row
+			// is handled exactly like a host child's (asleep, startable again, the
+			// reason on the row). Desired state follows, so boot never retries it.
+			this.#revokePredecessor(daemonId);
+			const reason =
+				response.detail ?? `${DETERMINISTIC_EXIT_FALLBACK} (exit ${response.exitCode})`;
+			this.#deps.registry.updateWorkspace(daemonId, { desiredState: "stopped" });
+			this.#disposeWatch(daemonId, watch);
+			this.#setStage(daemonId, undefined);
+			this.#deps.registry.setStatus(daemonId, "asleep", reason);
+			this.#log("error", `clone ${daemonId} ${reason}`, daemonId);
+			return;
+		}
 		if (!watch.restartable) {
-			const message = `sandbox stopped before the callback pair established (observed ${observed})`;
-			this.#setStage(daemonId, "failed", message);
-			this.#deps.registry.setStatus(daemonId, "error", `${message}; stop and start to retry`);
+			// A start whose pair never came up is the operator's to retry, never
+			// an eternal "callback" stage over a dead runtime.
+			this.#revokePredecessor(daemonId);
+			const message = `sandbox stopped before the callback pair established (observed ${response.observed})${died}; stop and start to retry`;
+			this.#markFailed(daemonId, message);
 			this.#disposeWatch(daemonId, watch);
-			this.#log(
-				"warn",
-				`clone ${daemonId} callback never established; sandbox ${observed}`,
-				daemonId,
-			);
+			this.#log("warn", `clone ${daemonId} ${message}`, daemonId);
 			return;
 		}
-		// Inspect proved the predecessor gone: fence its credential now, so it
-		// stays dead through the backoff window (#ensure bumps the generation).
-		const generation = entry.workspace?.authorizedGeneration;
-		if (generation !== undefined) {
-			this.#deps.transport.revokeEnrollment(daemonId, generation);
-			this.#deps.registry.clearWorkspaceEnrollment(daemonId, generation);
-		}
-		this.#scheduleRestart(daemonId, watch, `runtime ${observed} after its pair came up`);
-	}
-
-	/**
-	 * Spend one restart from the budget and arm the backoff timer, or surface
-	 * "failed"/error with `reason` when the budget is exhausted. Reused by a
-	 * restart whose own #ensure failed, so provider flaps are bounded too.
-	 */
-	#scheduleRestart(daemonId: string, watch: RuntimeWatch, reason: string): void {
-		const claim = watch.budget.next();
-		if (claim === null) {
-			const message = `${reason}; restart budget exhausted (${watch.budget.restartMax} restarts allowed since the last stable pair); stop and start to retry`;
-			this.#setStage(daemonId, "failed", message);
-			this.#deps.registry.setStatus(daemonId, "error", message);
-			this.#disposeWatch(daemonId, watch);
-			this.#log("error", `clone ${daemonId} ${message}`, daemonId);
-			return;
-		}
-		this.#setStage(daemonId, "runtime");
-		this.#deps.registry.setStatus(daemonId, "reconnecting");
-		this.#log(
-			"warn",
-			`clone ${daemonId} ${reason}; restart ${claim.attempt + 1}/${watch.budget.restartMax} in ${claim.delayMs}ms`,
+		this.#restartOrGiveUp(
 			daemonId,
+			watch.budget,
+			`runtime ${response.observed} after its pair came up${died}`,
+			{
+				live: () => this.#watchLive(daemonId, watch) !== undefined,
+				restart: () => this.#restartRuntime(daemonId, watch),
+				giveUp: () => this.#disposeWatch(daemonId, watch),
+			},
 		);
-		watch.timer = setTimeout(() => {
-			watch.timer = undefined;
-			void this.#serialized(daemonId, () => this.#restartRuntime(daemonId, watch));
-		}, claim.delayMs);
 	}
 
 	/** The restart itself: the ordinary ensure (inspect-proven predecessor, revoke, fresh credential, generation + 1). */
 	async #restartRuntime(daemonId: string, watch: RuntimeWatch): Promise<void> {
 		const entry = this.#watchLive(daemonId, watch);
 		if (entry === undefined) return; // Explicit stop/delete won the race.
-		try {
-			const response = await this.#ensure(entry, { firstStart: false, recovery: true });
-			if (response.observed !== "running") {
-				this.#scheduleRestart(
-					daemonId,
-					watch,
-					`provider reported ${response.observed} after restart`,
-				);
-			}
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			this.#scheduleRestart(daemonId, watch, `restart failed: ${message}`);
+		const response = await this.#ensure(entry, { firstStart: false, recovery: true });
+		if (response.observed !== "running") {
+			throw new Error(`provider reported ${response.observed} after restart`);
 		}
 	}
 
@@ -2633,7 +2758,7 @@ export class WorkspaceLifecycle {
 				);
 			if (existing !== undefined) {
 				if (existing.status === "asleep" || existing.status === "error") {
-					await this.ensureHostRunning(existing);
+					await this.#ensureHostRunning(existing);
 				}
 				return registry.get(existing.daemonId) ?? existing;
 			}
@@ -2647,7 +2772,7 @@ export class WorkspaceLifecycle {
 			template: templateName,
 		});
 		await this.#serialized(entry.daemonId, () =>
-			this.#launchHost(entry, template, { resume: false }),
+			this.#startHost(entry, template, { resume: false }),
 		);
 		this.#deps.onSpawned?.(entry.daemonId);
 		return registry.get(entry.daemonId) ?? entry;
@@ -2665,9 +2790,8 @@ export class WorkspaceLifecycle {
 	 * unknown or the old session will not let go; a failed launch errors the
 	 * row instead.
 	 */
-	ensureHostRunning(entry: RegistryEntry, opts?: { resumeFile?: string }): Promise<void> {
+	#ensureHostRunning(entry: RegistryEntry, opts?: { resumeFile?: string }): Promise<void> {
 		const daemonId = entry.daemonId;
-		this.#requireHost(entry);
 		const runtime = this.#hostRuntime(daemonId);
 		if (runtime.ensureInFlight !== null) return runtime.ensureInFlight;
 		const tracked: Promise<void> = this.#serialized(daemonId, () =>
@@ -2693,10 +2817,8 @@ export class WorkspaceLifecycle {
 		if (current.template === undefined)
 			registry.update(current.daemonId, { template: templateName });
 		const runtime = this.#hostRuntime(current.daemonId);
-		if (runtime.restartTimer !== null) {
-			clearTimeout(runtime.restartTimer);
-			runtime.restartTimer = null;
-		}
+		// An explicit start is the operator's retry: spent restarts are forgiven.
+		runtime.budget.reset();
 		// A session this process did not launch has no child handle here, so it
 		// may still hold the session lock; launching now would race it for the
 		// lock (the loser exits 77).
@@ -2705,10 +2827,20 @@ export class WorkspaceLifecycle {
 			await this.#awaitLockRelease(current);
 		}
 		runtime.stopped = false;
-		await this.#launchHost(registry.get(current.daemonId) ?? current, template, {
+		await this.#startHost(registry.get(current.daemonId) ?? current, template, {
 			resume: true,
 			resumeFile,
 		});
+	}
+
+	/** A first or explicit start: a launch the provider refuses fails the row (no restart). */
+	async #startHost(
+		entry: RegistryEntry,
+		template: SpawnTemplate,
+		opts: { resume: boolean; resumeFile?: string },
+	): Promise<void> {
+		const refusal = await this.#launchHost(entry, template, opts);
+		if (refusal !== undefined) this.#markFailed(entry.daemonId, refusal);
 	}
 
 	/**
@@ -2736,11 +2868,6 @@ export class WorkspaceLifecycle {
 	 * lastSessionFile kept). A session adopted from a previous fleet process is
 	 * asked to exit and its enrollment revoked; it is never signalled.
 	 */
-	async stopHost(daemonId: string): Promise<void> {
-		this.#requireHost(this.#deps.registry.get(daemonId));
-		await this.#serialized(daemonId, () => this.#stopHost(daemonId));
-	}
-
 	async #stopHost(daemonId: string): Promise<void> {
 		const runtime = this.#hostRuntimes.get(daemonId);
 		if (runtime !== undefined) {
@@ -2778,8 +2905,7 @@ export class WorkspaceLifecycle {
 	 * run in the eviction's `removal` step around this, and the row is dropped
 	 * only once they pass. Idempotent for rows never started here.
 	 */
-	async deleteHost(daemonId: string): Promise<void> {
-		this.#requireHost(this.#deps.registry.get(daemonId));
+	async #deleteHost(daemonId: string): Promise<void> {
 		await this.#serialized(daemonId, async () => {
 			await this.#stopHost(daemonId);
 			const runtime = this.#hostRuntimes.get(daemonId);
@@ -2861,15 +2987,6 @@ export class WorkspaceLifecycle {
 		return readSessionLogTail(join(stateDir, PROVIDER_DAEMON_LOG), STDERR_TAIL_BYTES);
 	}
 
-	/** A clone's runtime is provider-owned: the host runtime never starts, stops or deletes one. */
-	#requireHost(entry: RegistryEntry | undefined): void {
-		if (entry?.workspace?.kind === "clone") {
-			throw new Error(
-				`daemon ${entry.daemonId} is a clone workspace; its runtime goes through the clone lifecycle`,
-			);
-		}
-	}
-
 	#hostLogPath(daemonId: string): string {
 		return join(dirname(this.#deps.statePath), "session-logs", `${daemonId}.log`);
 	}
@@ -2894,7 +3011,6 @@ export class WorkspaceLifecycle {
 		if (runtime === undefined) {
 			const created: HostRuntime = {
 				budget: new RestartBudget(this.#policy),
-				restartTimer: null,
 				pairTimer: null,
 				unsubscribe: () => {},
 				stopped: false,
@@ -2913,6 +3029,10 @@ export class WorkspaceLifecycle {
 					created.pairTimer = null;
 				}
 				created.budget.paired();
+				// A paired session is past its start (or restart): no lifecycle stage to show.
+				if (this.#deps.registry.get(daemonId)?.lifecycleStage !== undefined) {
+					this.#setStage(daemonId, undefined);
+				}
 			});
 			this.#hostRuntimes.set(daemonId, created);
 			runtime = created;
@@ -2921,10 +3041,7 @@ export class WorkspaceLifecycle {
 	}
 
 	#clearHostTimers(runtime: HostRuntime): void {
-		if (runtime.restartTimer !== null) {
-			clearTimeout(runtime.restartTimer);
-			runtime.restartTimer = null;
-		}
+		runtime.budget.cancel();
 		if (runtime.pairTimer !== null) {
 			clearTimeout(runtime.pairTimer);
 			runtime.pairTimer = null;
@@ -2949,7 +3066,7 @@ export class WorkspaceLifecycle {
 		entry: RegistryEntry,
 		template: SpawnTemplate,
 		opts: { resume: boolean; resumeFile?: string },
-	): Promise<void> {
+	): Promise<string | undefined> {
 		const { registry, transport } = this.#deps;
 		const daemonId = entry.daemonId;
 		const runtime = this.#hostRuntime(daemonId);
@@ -2961,6 +3078,7 @@ export class WorkspaceLifecycle {
 		const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
 		const enrollment = enrollSessionCredential(transport, registry, daemonId);
 		runtime.generation = enrollment.generation;
+		this.#setStage(daemonId, "runtime");
 		this.#deps.onEnrolled?.(daemonId);
 		// Every value interpolated into the template command is
 		// attacker-controlled at some call site (POST /ctl/spawn name/labels)
@@ -2998,9 +3116,8 @@ export class WorkspaceLifecycle {
 		);
 		if (!response.ok) {
 			releaseSessionCredential(transport, registry, daemonId);
-			registry.setStatus(daemonId, "error", response.error.message);
 			this.#log("error", response.error.message, daemonId);
-			return;
+			return response.error.message;
 		}
 		// The replaced predecessor's death is expected, not a crash.
 		if (response.exit !== undefined) this.#log("info", `${response.exit} (replaced)`, daemonId);
@@ -3018,6 +3135,7 @@ export class WorkspaceLifecycle {
 				(err: unknown) => this.#failHostRuntime(daemonId, "pair timeout handling failed", err),
 			);
 		}, this.#pairTimeoutMs);
+		return undefined;
 	}
 
 	/** The launch's pair window elapsed without a pair: fail the row and end the child (no restart). */
@@ -3030,7 +3148,7 @@ export class WorkspaceLifecycle {
 		if (this.#deps.transport.pairStatus(daemonId).paired) return;
 		const message = `no callback pair within ${this.#pairTimeoutMs / 1000}s`;
 		releaseSessionCredential(this.#deps.transport, this.#deps.registry, daemonId);
-		this.#deps.registry.setStatus(daemonId, "error", message);
+		this.#markFailed(daemonId, message);
 		this.#log("error", message, daemonId);
 		await this.#hostProvider.run(
 			this.#hostRequest("stop", entry, { killGraceMs: STOP_SIGTERM_GRACE_MS }),
@@ -3058,7 +3176,7 @@ export class WorkspaceLifecycle {
 	#failHostRuntime(daemonId: string, what: string, err: unknown): void {
 		releaseSessionCredential(this.#deps.transport, this.#deps.registry, daemonId);
 		const message = `${what}: ${err instanceof Error ? err.message : String(err)}`;
-		this.#deps.registry.setStatus(daemonId, "error", message);
+		this.#markFailed(daemonId, message);
 		this.#log("error", message, daemonId);
 	}
 
@@ -3068,9 +3186,8 @@ export class WorkspaceLifecycle {
 	 * OMP_SESSION_EXIT_SESSION_LOCKED (the session file is open in another
 	 * omp-session) or OMP_SESSION_EXIT_RESUME_FAILED (its --resume session cannot
 	 * be restored) is deterministic: no restart, the row goes asleep carrying the
-	 * child's last log line as its reason. Any other unexpected exit restarts
-	 * with a fresh credential after the shared restart-policy.ts backoff, until
-	 * the budget is spent (refilled by a pair that holds), then errors.
+	 * child's last log line as its reason. Any other unexpected exit takes the
+	 * one crash policy (#restartOrGiveUp), shared with every provider clone.
 	 */
 	#applyExitPolicy(runtime: HostRuntime, exit: HostExit): void {
 		const daemonId = exit.workspaceId;
@@ -3078,14 +3195,12 @@ export class WorkspaceLifecycle {
 		if (runtime.stopped || runtime.generation !== exit.generation) return;
 		if (!registry.get(daemonId)) return;
 		const summary = describeExit(exit.exitCode, exit.signalCode);
-		if (
-			exit.exitCode === OMP_SESSION_EXIT_SESSION_LOCKED ||
-			exit.exitCode === OMP_SESSION_EXIT_RESUME_FAILED
-		) {
+		if (isDeterministicExit(exit.exitCode)) {
 			// Deterministic refusals: another omp-session holds the session file
 			// (77), or --resume names a session that cannot be restored (78).
 			const reason = this.#deterministicExitReason(daemonId);
 			releaseSessionCredential(transport, registry, daemonId);
+			this.#setStage(daemonId, undefined);
 			registry.setStatus(daemonId, "asleep", reason);
 			this.#log("error", reason, daemonId);
 			return;
@@ -3094,53 +3209,35 @@ export class WorkspaceLifecycle {
 			// The session shut itself down cleanly (e.g. its control grace
 			// expired, or a credential it held was revoked): dormant, not restarted.
 			releaseSessionCredential(transport, registry, daemonId);
+			this.#setStage(daemonId, undefined);
 			registry.setStatus(daemonId, "asleep");
 			this.#log("info", `${summary} clean → asleep`, daemonId);
 			return;
 		}
-		const claim = runtime.budget.next();
-		if (claim === null) {
-			releaseSessionCredential(transport, registry, daemonId);
-			registry.setStatus(
-				daemonId,
-				"error",
-				`child exited ${runtime.budget.used + 1} times (${runtime.budget.restartMax} restarts allowed)`,
-			);
-			this.#log(
-				"error",
-				`${summary}, restart budget exhausted (${runtime.budget.restartMax} restarts allowed)`,
-				daemonId,
-			);
-			return;
-		}
-		runtime.restartTimer = setTimeout(() => {
-			runtime.restartTimer = null;
-			void this.#serialized(daemonId, () => this.#restartHost(daemonId, runtime)).catch(
-				(err: unknown) => this.#failHostRuntime(daemonId, "restart failed", err),
-			);
-		}, claim.delayMs);
-		this.#log(
-			"warn",
-			`${summary}, restart ${claim.attempt + 1}/${runtime.budget.restartMax} in ${claim.delayMs}ms`,
-			daemonId,
+		this.#restartOrGiveUp(daemonId, runtime.budget, `child exited (${summary})`, {
+			live: () => this.#hostLive(daemonId, runtime),
+			restart: () => this.#restartHost(daemonId),
+			giveUp: () => {},
+		});
+	}
+
+	/** The host runtime is still the row's current one and no explicit stop or delete ended it. */
+	#hostLive(daemonId: string, runtime: HostRuntime): boolean {
+		return (
+			!runtime.stopped &&
+			this.#hostRuntimes.get(daemonId) === runtime &&
+			this.#deps.registry.get(daemonId) !== undefined
 		);
 	}
 
 	/** The crash restart itself: a resume start with a fresh credential and generation. */
-	async #restartHost(daemonId: string, runtime: HostRuntime): Promise<void> {
-		if (runtime.stopped || this.#hostRuntimes.get(daemonId) !== runtime) return;
+	async #restartHost(daemonId: string): Promise<void> {
 		const current = this.#deps.registry.get(daemonId);
 		if (!current) return;
 		const template = this.#deps.config.templates[current.template ?? ""];
-		if (!template) {
-			this.#deps.registry.setStatus(
-				daemonId,
-				"error",
-				`unknown spawn template: ${current.template}`,
-			);
-			return;
-		}
-		await this.#launchHost(current, template, { resume: true });
+		if (!template) throw new Error(`unknown spawn template: ${current.template}`);
+		const refusal = await this.#launchHost(current, template, { resume: true });
+		if (refusal !== undefined) throw new Error(refusal);
 	}
 
 	/** The child's last non-empty log line (its refusal reason), without the omp-session prefix. */

@@ -90,7 +90,7 @@ describe("edge worktree commands", () => {
 		}));
 		edge = new FleetEdge({
 			registry,
-			host: lifecycle,
+			lifecycle,
 			sync: new ProjectSync(registry, lifecycle),
 			eviction: testEviction(registry, lifecycle),
 			waker: testWaker(registry, lifecycle, transport),
@@ -350,7 +350,7 @@ describe("edge worktree commands", () => {
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
 		// Stop the idling child (`sleep 30`) so the suite ends clean.
-		await lifecycle.stopHost(entry.daemonId);
+		await lifecycle.stop(entry.daemonId);
 	});
 
 	test("create_worktree refuses an existing branch checked out elsewhere", async () => {

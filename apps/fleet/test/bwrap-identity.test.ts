@@ -144,10 +144,10 @@ describe("findTokenPid", () => {
 	});
 });
 
-/** Run the provider's real `stop` op against a hand-written stateDir. */
-async function runStop(stateDir: string): Promise<Record<string, unknown>> {
+/** Run one of the provider's real ops against a hand-written stateDir. */
+async function runOp(op: "stop" | "inspect", stateDir: string): Promise<Record<string, unknown>> {
 	const request = {
-		op: "stop",
+		op,
 		workspaceId: "w1",
 		generation: 1,
 		workspaceDir: join(stateDir, "workspace"),
@@ -155,7 +155,7 @@ async function runStop(stateDir: string): Promise<Record<string, unknown>> {
 		profile: { id: "p", provider: "bwrap", executable: PROVIDER, tools: [] },
 		stateDir,
 	};
-	const proc = Bun.spawn([process.execPath, PROVIDER, "stop"], {
+	const proc = Bun.spawn([process.execPath, PROVIDER, op], {
 		stdin: new TextEncoder().encode(JSON.stringify(request)),
 		stdout: "pipe",
 		stderr: "pipe",
@@ -164,6 +164,8 @@ async function runStop(stateDir: string): Promise<Record<string, unknown>> {
 	await proc.exited;
 	return JSON.parse(out) as Record<string, unknown>;
 }
+
+const runStop = (stateDir: string): Promise<Record<string, unknown>> => runOp("stop", stateDir);
 
 describe("bwrap provider stop", () => {
 	test("stop kills the recorded process and proves termination by identity", async () => {
@@ -188,5 +190,60 @@ describe("bwrap provider stop", () => {
 		const response = await runStop(stateDir);
 		expect(response).toMatchObject({ ok: true, observed: "stopped" });
 		expect(identityLive(record)).toBe(true);
+	});
+});
+
+describe("bwrap provider inspect of a sandbox that exited", () => {
+	/** A dead launch record (its process was killed and reaped) in a fresh stateDir. */
+	async function deadLaunch(token: string, generation = 1): Promise<string> {
+		const stateDir = tempDir("bwrap-identity-inspect-");
+		const child = sleeper(token);
+		writeRecord(stateDir, recordFor(child, token, generation));
+		child.kill("SIGKILL");
+		await child.exited;
+		return stateDir;
+	}
+
+	test("reports the supervisor's exit code and detail for this launch", async () => {
+		const stateDir = await deadLaunch("bwrap-identity-token-exit");
+		writeFileSync(
+			join(stateDir, "exit.json"),
+			JSON.stringify({
+				generation: 1,
+				workspaceToken: "bwrap-identity-token-exit",
+				exitCode: 78,
+				detail: "sandbox exited (rc 78): omp-session: --resume: session file not found",
+			}),
+		);
+		expect(await runOp("inspect", stateDir)).toMatchObject({
+			ok: true,
+			observed: "stopped",
+			exitCode: 78,
+			detail: "sandbox exited (rc 78): omp-session: --resume: session file not found",
+		});
+	});
+
+	test("ignores an exit record of another generation or token", async () => {
+		const stateDir = await deadLaunch("bwrap-identity-token-stale");
+		writeFileSync(
+			join(stateDir, "exit.json"),
+			JSON.stringify({ generation: 2, workspaceToken: "bwrap-identity-token-stale", exitCode: 78 }),
+		);
+		const stale = await runOp("inspect", stateDir);
+		expect(stale).toMatchObject({ ok: true, observed: "stopped" });
+		expect(stale).not.toHaveProperty("exitCode");
+		writeFileSync(
+			join(stateDir, "exit.json"),
+			JSON.stringify({ generation: 1, workspaceToken: "someone-else", exitCode: 78 }),
+		);
+		expect(await runOp("inspect", stateDir)).not.toHaveProperty("exitCode");
+	});
+
+	test("reports nothing when the supervisor left no exit record", async () => {
+		const stateDir = await deadLaunch("bwrap-identity-token-none");
+		const response = await runOp("inspect", stateDir);
+		expect(response).toMatchObject({ ok: true, observed: "stopped" });
+		expect(response).not.toHaveProperty("exitCode");
+		expect(response).not.toHaveProperty("detail");
 	});
 });

@@ -16,7 +16,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { KUBERNETES_POD_LAYOUT } from "#lib/runtime/provider-protocol";
+import { KUBERNETES_POD_LAYOUT, PROVIDER_DETAIL_MAX_BYTES } from "#lib/runtime/provider-protocol";
 import { CALLBACK_ENV_FILE, readCallbackEnv } from "#lib/runtime/provider-callback-env";
 import type {
 	PreflightCheck,
@@ -43,6 +43,8 @@ interface FakePod {
 	annotations: Record<string, string>;
 	startTime?: string;
 	containerReason?: string | null;
+	/** A terminated workspace container (restartPolicy Never keeps its status on the pod). */
+	terminated?: { exitCode: number; reason?: string; message?: string };
 	/** Phase a Pending pod settles into (default Running). */
 	settlesTo?: string;
 }
@@ -204,6 +206,9 @@ function fakeExec(argv: readonly string[], input?: string): Promise<KubeExecResu
 			if (pod.startTime !== undefined) status.startTime = pod.startTime;
 			if (pod.containerReason !== undefined) {
 				status.containerStatuses = [{ state: { waiting: { reason: pod.containerReason } } }];
+			}
+			if (pod.terminated !== undefined) {
+				status.containerStatuses = [{ state: { terminated: pod.terminated } }];
 			}
 			return json({ apiVersion: "v1", kind: "Pod", metadata, status });
 		}
@@ -794,11 +799,84 @@ describe("case P: inspect after teardown", () => {
 	test("P inspect missing + strict envelope", async () => {
 		const inspect = expectOk(await runOp(req("inspect"), { exec: fakeExec, env }));
 		expect(inspect.observed).toBe("missing");
-		const allowedKeys = ["ok", "handle", "observed", "pid", "startedAt", "error"];
+		const allowedKeys = [
+			"ok",
+			"handle",
+			"observed",
+			"pid",
+			"startedAt",
+			"exitCode",
+			"detail",
+			"error",
+		];
 		expect(
 			Object.keys(inspect).every((k) => allowedKeys.includes(k)),
 			JSON.stringify(inspect),
 		).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Case P2: inspect of a pod whose container exited reports how it ended
+// ---------------------------------------------------------------------------
+
+describe("case P2: inspect of a terminated workspace container", () => {
+	/** Run a fresh pod, then terminate its container the way the kubelet reports it. */
+	async function terminatedPod(terminated: FakePod["terminated"]): Promise<void> {
+		expectOk(await runOp(req("ensure-running"), { exec: fakeExec, env }));
+		const pod = [...cluster.pods.values()][0]!;
+		pod.phase = "Failed";
+		pod.terminated = terminated;
+	}
+
+	test("P2 exit 78 with a log-tail termination message surfaces exitCode and a bounded detail", async () => {
+		await terminatedPod({
+			exitCode: 78,
+			reason: "Error",
+			message: "booting\nomp-session: --resume /w/s.jsonl: session file not found\n",
+		});
+		const inspect = expectOk(await runOp(req("inspect"), { exec: fakeExec, env }));
+		expect(inspect.observed).toBe("stopped");
+		expect(inspect.exitCode).toBe(78);
+		expect(inspect.detail).toBe(
+			"container exited 78 (Error): omp-session: --resume /w/s.jsonl: session file not found",
+		);
+		expect(new TextEncoder().encode(inspect.detail ?? "").length).toBeLessThanOrEqual(
+			PROVIDER_DETAIL_MAX_BYTES,
+		);
+	});
+
+	test("P2b an oversize termination message is bounded", async () => {
+		const pod = [...cluster.pods.values()][0]!;
+		pod.terminated = { exitCode: 1, reason: "Error", message: `x${"y".repeat(2000)}` };
+		const inspect = expectOk(await runOp(req("inspect"), { exec: fakeExec, env }));
+		expect(inspect.exitCode).toBe(1);
+		expect(new TextEncoder().encode(inspect.detail ?? "").length).toBeLessThanOrEqual(
+			PROVIDER_DETAIL_MAX_BYTES,
+		);
+	});
+
+	test("P2c a terminated container without a message still names the exit and reason", async () => {
+		const pod = [...cluster.pods.values()][0]!;
+		pod.terminated = { exitCode: 137, reason: "OOMKilled" };
+		const inspect = expectOk(await runOp(req("inspect"), { exec: fakeExec, env }));
+		expect(inspect.exitCode).toBe(137);
+		expect(inspect.detail).toBe("container exited 137 (OOMKilled)");
+	});
+
+	test("P2d a running pod reports no exit", async () => {
+		const pod = [...cluster.pods.values()][0]!;
+		pod.phase = "Running";
+		pod.terminated = undefined;
+		const inspect = expectOk(await runOp(req("inspect"), { exec: fakeExec, env }));
+		expect(inspect.observed).toBe("running");
+		expect(inspect.exitCode).toBeUndefined();
+		expect(inspect.detail).toBeUndefined();
+	});
+
+	test("P2e cleanup: stop removes the pod", async () => {
+		expectOk(await runOp(req("stop"), { exec: fakeExec, env }));
+		expect(cluster.pods.size).toBe(0);
 	});
 });
 
@@ -937,6 +1015,7 @@ interface PodSpec {
 		env: Array<{ name: string; value?: string; valueFrom?: Record<string, unknown> }>;
 		securityContext: Record<string, unknown>;
 		resources: Record<string, unknown>;
+		terminationMessagePolicy?: string;
 	}>;
 	/** Never rendered by the provider; case R2 asserts it stays absent. */
 	service?: unknown;
@@ -1000,6 +1079,10 @@ describe("case R: pod manifests render correctly", () => {
 	test("R3 restartPolicy Never", () => {
 		const spec = podSpec();
 		expect(spec.restartPolicy, spec.restartPolicy).toBe("Never");
+	});
+
+	test("R3b the workspace container keeps its log tail in the pod status on failure", () => {
+		expect(podSpec().containers[0].terminationMessagePolicy).toBe("FallbackToLogsOnError");
 	});
 
 	test("R4 no SA token automount", () => {

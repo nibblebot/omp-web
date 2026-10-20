@@ -578,28 +578,24 @@ class FleetServerImpl implements FleetServer {
 			onWorktreeRemoved: (entry) => void this.#onWorktreeVanished(entry),
 		});
 		this.cloneApi = new CloneControlApi({
-			lifecycle: this.lifecycle,
-			registry,
 			config: { providerProfiles: config.providerProfiles },
 		});
 		// One session waker per fleet (FLC-23): the edge and fan-out prompts share
 		// its rule set. Built after the transport and lifecycle exist.
 		this.#waker = new SessionWaker({
 			registry,
-			host: this.lifecycle,
-			transport: this.transport,
 			lifecycle: this.lifecycle,
+			transport: this.transport,
 			redialGraceMs: this.#redialGraceMs,
 		});
 		// Shared roster/workspace mutations (operations.ts): the control API
 		// here and the edge command table call the same methods.
 		this.#ops = new FleetOperations({
 			registry,
-			host: this.lifecycle,
+			lifecycle: this.lifecycle,
 			sync: this.sync,
 			config,
 			eventLog: this.eventLog,
-			lifecycle: this.lifecycle,
 			eviction: {
 				evictRow: (daemonId, removal) => this.#evictRow(daemonId, removal),
 				evictProject: (projectId) => this.#evictProject(projectId),
@@ -610,13 +606,12 @@ class FleetServerImpl implements FleetServer {
 		// block above; never a bare store-less app.
 		edge = new FleetEdge({
 			registry,
-			host: this.lifecycle,
+			lifecycle: this.lifecycle,
 			sync: this.sync,
 			config,
 			eventLog: this.eventLog,
 			fleet: this.fleetFacts,
 			transport: this.transport,
-			lifecycle: this.lifecycle,
 			waker: this.#waker,
 			eviction: {
 				evictRow: (daemonId, removal) => this.#evictRow(daemonId, removal),
@@ -1027,42 +1022,35 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * POST /ctl/start {daemonId} (alias POST /ctl/wake): the fleet-side
-	 * ensure-running entry point for CLONE workspaces. Direct/template
-	 * spawns keep their existing path (/ctl/spawn, the lifecycle's host runtime); this route
-	 * only ever runs provider-managed clone entries. On success the workspace
-	 * record rides: fresh enrollment (credential persistence for the callback
-	 * pair), provider handle, and desiredState "running". A missing or
+	 * POST /ctl/start {daemonId} (alias POST /ctl/wake): the fleet-side start
+	 * for ANY workspace through the lifecycle's one start verb (a provider
+	 * clone ensure-running, or a host session's launch; the lifecycle picks by
+	 * kind). A row whose pair is already up answers running without touching
+	 * its runtime. On success a clone's workspace record rides: fresh
+	 * enrollment, provider handle, and desiredState "running"; a missing or
 	 * untyped profile is a typed `unavailable`, never a fake spawn.
 	 */
 	async #handleStart(req: Request): Promise<Response> {
 		const body = await readJson(req);
 		const daemonId = requireString(body, "daemonId");
-		const entry = this.registry.get(daemonId);
-		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
-		if (entry.workspace?.kind !== "clone") {
-			throw new HttpError(
-				400,
-				`daemon ${daemonId} is not a clone workspace (kind ${entry.workspace?.kind ?? "legacy"}); ` +
-					"start a worktree/direct session through /ctl/spawn",
-			);
-		}
-		// The single lifecycle owner. Never HTTP-self-fetch; resolves
-		// when the provider confirms compute running + enrollment persisted;
-		// callback→ready rides the roster (lifecycleStage broadcasts).
-		// Typed lifecycle failures map onto the same frozen HTTP statuses
-		// as create/remove/delete (an uncertain-predecessor conflict is a
-		// 409, never an untyped 500).
-		try {
-			await this.lifecycle.ensureCloneRunning(daemonId);
-		} catch (err) {
-			if (err instanceof CloneLifecycleError) {
-				throw new HttpError(lifecycleStatus(err.code), err.message);
+		if (!this.registry.get(daemonId)) throw new HttpError(404, `unknown daemon: ${daemonId}`);
+		// Never HTTP-self-fetch; resolves when the runtime is up (clone: provider
+		// confirms compute + enrollment persisted; host: child launched).
+		// callback→ready rides the roster. Typed lifecycle failures map onto the
+		// same frozen HTTP statuses as create/remove/delete (an
+		// uncertain-predecessor conflict is a 409, never an untyped 500).
+		if (!this.transport.pairStatus(daemonId).paired) {
+			try {
+				await this.lifecycle.start(daemonId);
+			} catch (err) {
+				if (err instanceof CloneLifecycleError) {
+					throw new HttpError(lifecycleStatus(err.code), err.message);
+				}
+				throw new HttpError(
+					500,
+					`start failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
 			}
-			throw new HttpError(
-				500,
-				`clone start failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
 		}
 		return json({
 			daemonId,
@@ -1532,7 +1520,7 @@ class FleetServerImpl implements FleetServer {
 
 	/**
 	 * The single eviction of a non-clone roster row (FLC-21/FLC-22). Stops the
-	 * session (host runtime delete), then runs `removal`. Only once it resolves are
+	 * session and drops its runtime state (`lifecycle.delete`), then runs `removal`. Only once it resolves are
 	 * the pair watch and log tap forgotten, the store-orphan marker persisted,
 	 * and the row dropped. A rejecting `removal` leaves the row registered
 	 * (asleep) with its resume state, and rejects with its error.
@@ -1540,7 +1528,7 @@ class FleetServerImpl implements FleetServer {
 	async #evictRow<T>(daemonId: string, removal: () => Promise<T>): Promise<T> {
 		const entry = this.registry.get(daemonId);
 		if (entry === undefined) throw new Error(`unknown daemon: ${daemonId}`);
-		await this.lifecycle.deleteHost(daemonId);
+		await this.lifecycle.delete(daemonId);
 		const result = await removal();
 		this.#forgetPair(daemonId);
 		this.#markStoreOrphanIfStored(entry);
@@ -1552,7 +1540,7 @@ class FleetServerImpl implements FleetServer {
 	async #evictProject(projectId: string): Promise<void> {
 		for (const entry of this.registry.list()) {
 			if (entry.projectId !== projectId) continue;
-			if (entry.status !== "asleep") await this.lifecycle.deleteHost(entry.daemonId);
+			if (entry.status !== "asleep") await this.lifecycle.delete(entry.daemonId);
 			this.#forgetPair(entry.daemonId);
 			this.#markStoreOrphanIfStored(entry);
 		}

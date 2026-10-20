@@ -63,7 +63,7 @@ async function mountEdge(tmp: string, serveUi?: boolean) {
 	});
 	const edge = new FleetEdge({
 		registry,
-		host: lifecycle,
+		lifecycle,
 		sync: new ProjectSync(registry, lifecycle),
 		eviction: testEviction(registry, lifecycle),
 		waker: testWaker(registry, lifecycle, undefined),

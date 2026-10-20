@@ -33,6 +33,7 @@ import { hostCloneRuntimeProvider } from "../host-clone-provider";
 import { SESSION_LOG_MAX_BYTES } from "../session-log";
 import type { ExecutableRequest } from "../runtime-provider";
 import type { FleetServer } from "../server";
+import type { CloneRuntimePolicy } from "../workspace-lifecycle";
 import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
 import {
 	cleanupTempDirs,
@@ -53,7 +54,7 @@ const LEAK_VAR = "OMP_HOST_CLONE_TEST_FLEET_ONLY";
 
 /** The scripted stand-in for omp-session: records its launch, writes one transcript, idles until stopped. */
 const FAKE_RUNTIME = `
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const home = process.env.HOME;
 const agentDir = process.env.PI_CODING_AGENT_DIR;
@@ -82,7 +83,13 @@ mkdirSync(sessionDir, { recursive: true });
 const transcript = join(sessionDir, "${SESSION_ID}.jsonl");
 if (!existsSync(transcript)) writeFileSync(transcript, ${JSON.stringify(transcriptJsonl())});
 process.on("SIGTERM", () => process.exit(0));
-setInterval(() => {}, 1000);
+// Exits with the status named by a marker file in its home, as a session refusing to resume does.
+setInterval(() => {
+	const marker = join(home, "exit-with");
+	if (!existsSync(marker)) return;
+	console.error("omp-session: --resume: session file not found");
+	process.exit(Number(readFileSync(marker, "utf8")));
+}, 50);
 `;
 
 /** Same structure a real session streams: a title slot, a session header, one message. */
@@ -158,7 +165,7 @@ interface Fixture {
 	daemons: CallbackDaemon[];
 }
 
-async function bootFleet(): Promise<Fixture> {
+async function bootFleet(cloneRuntime?: Partial<CloneRuntimePolicy>): Promise<Fixture> {
 	const paths = fleetPaths("omp-host-clone-");
 	const repoDir = await makeRepo(join(paths.tmp, "repo"));
 	const server = await startTestFleet(
@@ -168,7 +175,7 @@ async function bootFleet(): Promise<Fixture> {
 				host: { id: "host", provider: "host", secretRefs: { MODEL_KEY: `env:${MODEL_KEY_VAR}` } },
 			},
 		},
-		{ workspaceDir: join(paths.tmp, "workspaces") },
+		{ workspaceDir: join(paths.tmp, "workspaces"), ...(cloneRuntime ? { cloneRuntime } : {}) },
 	);
 	const { project } = server.registry.addProject(repoDir);
 	return { server, tmp: paths.tmp, repoDir, projectId: project.projectId, daemons: [] };
@@ -419,6 +426,70 @@ describe("host clone workspace", () => {
 		}
 	}, 60_000);
 
+	test("a runtime exiting 78 after pair-up reports the real exit code through the relay and is never restarted", async () => {
+		const fx = await bootFleet({
+			pairLossGraceMs: 150,
+			tickMs: 30,
+			inspectEveryMs: 60,
+			backoffMinMs: 20,
+			backoffMaxMs: 40,
+			restartMax: 3,
+		});
+		try {
+			const clone = await createClone(fx, "exit78-host", { start: true });
+			await waitFor(() => boots(clone).length === 1, 10_000, "the runtime to boot");
+			const daemon = await pairUp(fx, clone);
+			await waitFor(() => stageOf(fx, clone) === "ready", 5_000, "ready");
+
+			// The runtime refuses to resume and exits 78; its pair drops with it.
+			writeFileSync(join(clone.home, "exit-with"), "78");
+			await daemon.stop();
+			await waitFor(
+				() => fx.server.registry.get(clone.daemonId)?.status === "asleep",
+				10_000,
+				"asleep after exit 78",
+			);
+			const entry = fx.server.registry.get(clone.daemonId)!;
+			expect(entry.error).toContain("rc 78");
+			expect(entry.error).toContain("session file not found");
+			expect(entry.workspace?.enrollment).toBeUndefined();
+			await Bun.sleep(500); // Several backoffs and watch cadences.
+			expect(boots(clone)).toHaveLength(1);
+			expect(fx.server.registry.get(clone.daemonId)!.workspace!.authorizedGeneration).toBe(1);
+		} finally {
+			await teardown(fx);
+		}
+	}, 60_000);
+
+	test("a crashing runtime restarts at the next generation", async () => {
+		const fx = await bootFleet({
+			pairLossGraceMs: 150,
+			tickMs: 30,
+			inspectEveryMs: 60,
+			backoffMinMs: 20,
+			backoffMaxMs: 40,
+			restartMax: 3,
+		});
+		try {
+			const clone = await createClone(fx, "crash-host", { start: true });
+			await waitFor(() => boots(clone).length === 1, 10_000, "the runtime to boot");
+			const daemon = await pairUp(fx, clone);
+			await waitFor(() => stageOf(fx, clone) === "ready", 5_000, "ready");
+
+			writeFileSync(join(clone.home, "exit-with"), "1");
+			await daemon.stop();
+			await waitFor(() => boots(clone).length === 2, 15_000, "the restarted runtime");
+			// The generation persists after the provider answers, so wait for it rather than race it.
+			await waitFor(
+				() => fx.server.registry.get(clone.daemonId)?.workspace?.authorizedGeneration === 2,
+				10_000,
+				"generation 2",
+			);
+		} finally {
+			await teardown(fx);
+		}
+	}, 60_000);
+
 	test("fetch-into-project brings the host clone's branch back to the project", async () => {
 		const fx = await bootFleet();
 		try {
@@ -594,6 +665,32 @@ setInterval(() => {}, 1000);
 		expect(okOf(await run(requestFor(root, "inspect"))).observed).toBe("stopped");
 		expect(size(log)).toBeLessThanOrEqual(SESSION_LOG_MAX_BYTES);
 	}, 60_000);
+
+	test("a runtime exiting 78 reports exitCode 78 and its last output line from inspect", async () => {
+		const root = scratch();
+		const refuses = join(root, "refuses.js");
+		writeFileSync(
+			refuses,
+			'console.error("omp-session: --resume: session file not found"); setTimeout(() => process.exit(78), 800);\n',
+		);
+		const previous = process.env.OMP_RUNTIME_ENTRY;
+		process.env.OMP_RUNTIME_ENTRY = refuses;
+		try {
+			okOf(await run(requestFor(root, "ensure-running")));
+			expect(await observedAfterExit(root)).toBe("stopped");
+			// The launcher shell writes the runtime's status, then the fleet records the exit.
+			let inspected = okOf(await run(requestFor(root, "inspect")));
+			for (let i = 0; i < 100 && inspected.exitCode === undefined; i++) {
+				await Bun.sleep(50);
+				inspected = okOf(await run(requestFor(root, "inspect")));
+			}
+			expect(inspected.exitCode).toBe(78);
+			expect(inspected.detail).toContain("rc 78");
+			expect(inspected.detail).toContain("session file not found");
+		} finally {
+			process.env.OMP_RUNTIME_ENTRY = previous;
+		}
+	}, 30_000);
 
 	test("a launch that cannot spawn fails typed and records nothing", async () => {
 		const root = scratch();

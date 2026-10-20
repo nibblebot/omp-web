@@ -77,7 +77,7 @@ async function startRig(
 	const edge = new FleetEdge(
 		{
 			registry,
-			host: lifecycle,
+			lifecycle,
 			sync: new ProjectSync(registry, lifecycle),
 			eviction: testEviction(registry, lifecycle),
 			waker: testWaker(registry, lifecycle, transport),

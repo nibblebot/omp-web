@@ -266,7 +266,7 @@ async function makeHarness(
 	cleanups.push(async () => {
 		for (const entry of registry.list()) {
 			// A clone's runtime goes through the clone lifecycle, never the host verbs.
-			if (entry.workspace?.kind !== "clone") await lifecycle.stopHost(entry.daemonId);
+			if (entry.workspace?.kind !== "clone") await lifecycle.stop(entry.daemonId);
 		}
 		lifecycle.close();
 		transport.close();
@@ -495,7 +495,7 @@ describe("host runtime", () => {
 			fx.eventLog
 				.list()
 				.some(
-					(event) => event.daemonId === entry.daemonId && event.message.startsWith("exit code=1"),
+					(event) => event.daemonId === entry.daemonId && event.message.includes("exit code=1"),
 				),
 		).toBe(true);
 		expect(
@@ -517,9 +517,9 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitForPayload(fx.payloadFile, 1);
-		await fx.lifecycle.ensureHostRunning(fx.registry.get(entry.daemonId)!);
+		await fx.lifecycle.start(entry.daemonId);
 		await waitForPayload(fx.payloadFile, 2);
-		await fx.lifecycle.deleteHost(entry.daemonId);
+		await fx.lifecycle.delete(entry.daemonId);
 		await waitFor(
 			() =>
 				fx.eventLog
@@ -557,7 +557,7 @@ describe("host runtime", () => {
 		const pair1 = await waitForPayload(fx.payloadFile, 1);
 		const first = await pairDaemon(fx, pair1);
 
-		await fx.lifecycle.ensureHostRunning(fx.registry.get(entry.daemonId)!);
+		await fx.lifecycle.start(entry.daemonId);
 		const pair2 = await waitForPayload(fx.payloadFile, 2);
 		expect(pair2.workspace).toBe(entry.daemonId);
 		expect(pair2.token).toMatch(/^[0-9a-f]{64}$/);
@@ -584,7 +584,7 @@ describe("host runtime", () => {
 		await waitForLaunches(fx.argsFile, 1);
 		fx.registry.update(entry.daemonId, { lastSessionFile: "/srv/proj/sess.jsonl" });
 
-		await fx.lifecycle.ensureHostRunning(fx.registry.get(entry.daemonId)!);
+		await fx.lifecycle.start(entry.daemonId);
 		const lines = await waitForLaunches(fx.argsFile, 2);
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toBe("--fleet-stdin"); // first spawn: no resume, bare fleet flag
@@ -603,11 +603,11 @@ describe("host runtime", () => {
 		await waitForLaunches(fx.argsFile, 1);
 		fx.registry.update(entry.daemonId, { lastSessionFile: "/srv/proj/sess.jsonl" });
 
-		// Dropdown-picked session: the SUPERVISOR takes the file verbatim (the
+		// Dropdown-picked session: the lifecycle takes the file verbatim (the
 		// edge validates membership); this test proves the argv actually carries
 		// the chosen path rather than the entry's lastSessionFile.
-		await fx.lifecycle.ensureHostRunning(fx.registry.get(entry.daemonId)!, {
-			resumeFile: "/chosen/other-session.jsonl",
+		await fx.lifecycle.start(entry.daemonId, {
+			resume: "/chosen/other-session.jsonl",
 		});
 		const lines = await waitForLaunches(fx.argsFile, 2);
 		expect(lines).toHaveLength(2);
@@ -623,7 +623,7 @@ describe("host runtime", () => {
 		await waitForLaunches(fx.argsFile, 1);
 		fx.registry.update(entry.daemonId, { lastSessionFile: "/srv/proj/sess.jsonl" });
 
-		await fx.lifecycle.ensureHostRunning(fx.registry.get(entry.daemonId)!);
+		await fx.lifecycle.start(entry.daemonId);
 		const lines = await waitForLaunches(fx.argsFile, 2);
 		expect(lines[1]).toContain("--resume /srv/proj/sess.jsonl --resume-unwritten");
 	});
@@ -638,7 +638,7 @@ describe("host runtime", () => {
 			lastSessionPersisted: true,
 		});
 
-		await fx.lifecycle.ensureHostRunning(fx.registry.get(entry.daemonId)!);
+		await fx.lifecycle.start(entry.daemonId);
 		const lines = await waitForLaunches(fx.argsFile, 2);
 		expect(lines[1]).toContain("--resume /srv/proj/sess.jsonl");
 		expect(lines[1]).not.toContain("--resume-unwritten");
@@ -660,7 +660,7 @@ describe("host runtime", () => {
 		});
 		expect(entry.template).toBeUndefined();
 
-		await fx.lifecycle.ensureHostRunning(entry);
+		await fx.lifecycle.start(entry.daemonId);
 		const lines = await waitForLaunches(fx.argsFile, 1);
 		expect(fx.registry.get(entry.daemonId)?.template).toBe("test"); // healed with the resolved name
 		expect(lines).toHaveLength(1);
@@ -711,7 +711,7 @@ describe("host runtime", () => {
 			lastSessionFile,
 		});
 
-		await expect(fx.lifecycle.ensureHostRunning(adopted)).rejects.toThrow("still holds its lock");
+		await expect(fx.lifecycle.start(adopted.daemonId)).rejects.toThrow("still holds its lock");
 		expect(existsSync(fx.argsFile)).toBe(false);
 	}, 20_000);
 
@@ -808,10 +808,7 @@ describe("host runtime", () => {
 		// Two overlapping respawns (no await between the calls): both must
 		// coalesce onto ONE launch. Exactly one replacement child is launched,
 		// and the original is terminated rather than orphaned.
-		await Promise.all([
-			lifecycle.ensureHostRunning(registry.get(entry.daemonId)!),
-			lifecycle.ensureHostRunning(registry.get(entry.daemonId)!),
-		]);
+		await Promise.all([lifecycle.start(entry.daemonId), lifecycle.start(entry.daemonId)]);
 		await waitForLaunches(argsFile, 2);
 		await sleep(150); // a double-launch would have landed by now
 
@@ -825,7 +822,7 @@ describe("host runtime", () => {
 
 		// stop() kills the tracked (only) child; the pre-respawn child was
 		// terminated by the respawn, so no orphan survives.
-		await lifecycle.stopHost(entry.daemonId);
+		await lifecycle.stop(entry.daemonId);
 		for (const pid of pids) expect(isAlive(pid)).toBe(false);
 	});
 
@@ -1077,7 +1074,7 @@ describe("host runtime", () => {
 		const pid = await waitForPid(fx.pidFile);
 		const daemon = await pairDaemon(fx, pair);
 
-		await fx.lifecycle.stopHost(entry.daemonId);
+		await fx.lifecycle.stop(entry.daemonId);
 
 		const shutdown = await waitFor(
 			() =>
@@ -1102,10 +1099,32 @@ describe("host runtime", () => {
 		// The first child exits ~instantly and schedules a restart at >=500ms;
 		// stop() within that window must cancel it.
 		await waitForLaunches(fx.argsFile, 1);
-		await fx.lifecycle.stopHost(entry.daemonId);
+		await fx.lifecycle.stop(entry.daemonId);
 		expect(fx.registry.get(entry.daemonId)?.status).toBe("asleep");
 		await sleep(2200); // the 1s-min backoff would have fired by now if not cancelled
 		expect(readLines(fx.argsFile)).toHaveLength(1);
+	});
+
+	test("a stop that fails still flips the row to asleep before the error surfaces (never left ready over a dead child)", async () => {
+		const fx = await makeFixture("host-lifecycle-stopfail-", {}, { restartMax: 2 });
+
+		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
+		const pair = await waitForPayload(fx.payloadFile, 1);
+		await pairDaemon(fx, pair);
+		fx.registry.setStatus(entry.daemonId, "ready");
+		// The shutdown request reads the pair state first; making that throw fails the stop for real.
+		const pairStatus = fx.transport.pairStatus.bind(fx.transport);
+		fx.transport.pairStatus = () => {
+			throw new Error("stop boom");
+		};
+		try {
+			await expect(fx.lifecycle.stop(entry.daemonId)).rejects.toThrow("stop boom");
+		} finally {
+			fx.transport.pairStatus = pairStatus;
+		}
+		expect(fx.registry.get(entry.daemonId)?.status).toBe("asleep");
+		// The failed stop left the child up; a later stop ends it.
+		await fx.lifecycle.stop(entry.daemonId);
 	});
 
 	test("close leaves the child running and its enrollment in place", async () => {
@@ -1163,7 +1182,7 @@ describe("host runtime", () => {
 		expect(tail.endsWith("tail-marker\n")).toBe(true);
 	});
 
-	test("deleteHost drops the per-daemon runtime state and deletes its session log", async () => {
+	test("delete drops the per-daemon runtime state and deletes its session log", async () => {
 		const fx = await makeFixture(
 			"host-lifecycle-delete-",
 			{ stderrLines: ["delete-boom"] },
@@ -1180,7 +1199,7 @@ describe("host runtime", () => {
 		writeFileSync(`${logPath}.1`, "rotated\n");
 		expect(fx.lifecycle.hostSnapshot()[entry.daemonId]).toBeDefined();
 
-		await fx.lifecycle.deleteHost(entry.daemonId);
+		await fx.lifecycle.delete(entry.daemonId);
 		expect(fx.registry.get(entry.daemonId)?.status).toBe("asleep");
 		expect(fx.lifecycle.hostSnapshot()[entry.daemonId]).toBeUndefined();
 		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
@@ -1205,11 +1224,11 @@ describe("host runtime", () => {
 			5000,
 			"child log",
 		);
-		await fx.lifecycle.stopHost(entry.daemonId);
+		await fx.lifecycle.stop(entry.daemonId);
 		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.daemonId}.log`);
 		const oversized = "x".repeat(1024 * 1024 + 1);
 		writeFileSync(logPath, oversized);
-		await fx.lifecycle.ensureHostRunning(fx.registry.get(entry.daemonId) ?? entry);
+		await fx.lifecycle.start(entry.daemonId);
 		expect(readFileSync(`${logPath}.1`, "utf8")).toBe(oversized);
 		const relaunched = await waitFor(
 			() =>
@@ -1218,7 +1237,7 @@ describe("host runtime", () => {
 			"relaunch log",
 		);
 		expect(relaunched).toBe("relogged");
-		await fx.lifecycle.stopHost(entry.daemonId);
+		await fx.lifecycle.stop(entry.daemonId);
 	});
 
 	test("unknown template rejects and creates nothing", async () => {
@@ -1356,7 +1375,7 @@ describe("host runtime", () => {
 		});
 		expect(asleep.template).toBeUndefined();
 
-		await lifecycle.ensureHostRunning(asleep);
+		await lifecycle.start(asleep.daemonId);
 		// The OVERRIDE template's child ran, never the default's; the
 		// fallback resolved projectTemplates.
 		expect(await waitForLaunches(argsOverride, 1)).toHaveLength(1);
@@ -1383,12 +1402,15 @@ describe("host restart policy is the lifecycle's runtime policy", () => {
 			10_000,
 			"error status",
 		);
-		expect(failed.error).toBe("child exited 1 times (0 restarts allowed)");
+		expect(failed.error).toContain("child exited (exit code=1)");
+		expect(failed.error).toContain("restart budget exhausted (0 restarts allowed");
+		expect(failed.lifecycleStage).toBe("failed");
+		expect(failed.lifecycleError).toBe(failed.error);
 		expect(readLines(fx.argsFile)).toHaveLength(1);
 		expect(
 			fx.eventLog
 				.list()
-				.some((event) => event.level === "error" && event.message.includes("(0 restarts allowed)")),
+				.some((event) => event.level === "error" && event.message.includes("(0 restarts allowed")),
 		).toBe(true);
 	});
 
@@ -1408,7 +1430,8 @@ describe("host restart policy is the lifecycle's runtime policy", () => {
 			10_000,
 			"error status",
 		);
-		expect(failed.error).toBe("child exited 3 times (2 restarts allowed)");
+		expect(failed.error).toContain("restart budget exhausted (2 restarts allowed");
+		expect(failed.lifecycleStage).toBe("failed");
 		// Initial launch + the 2 restarts the override allows (the default would allow 5).
 		expect(readLines(fx.argsFile)).toHaveLength(3);
 		const restarts = fx.eventLog

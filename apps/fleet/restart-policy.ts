@@ -1,8 +1,10 @@
 /**
- * Restart policy shared by every runtime owner: the host runtime and the
- * clone runtime watch (both in workspace-lifecycle.ts) restart a
- * crashed runtime with the same bounded, jittered exponential backoff and the
- * same crash-loop budget.
+ * The crash-restart policy of every runtime, whatever its kind. The
+ * lifecycle owner (workspace-lifecycle.ts) keeps one `RestartBudget` per
+ * runtime (host session or provider clone) and is the only code that spends
+ * it: a crash claims the next restart (bounded, jittered exponential backoff
+ * armed on the budget itself), and an exhausted budget is the cue to give up
+ * with a reason. A pending restart is cancelled by an explicit stop or delete.
  *
  * The budget bounds crash LOOPS, not lifetime restarts: it refills only after
  * a pair has held for `stablePairMs`, so a pair-then-crash loop still exhausts
@@ -50,6 +52,7 @@ export class RestartBudget {
 	readonly #policy: RestartPolicy;
 	#restarts = 0;
 	#stableTimer: Timer | null = null;
+	#restartTimer: Timer | null = null;
 
 	constructor(policy: RestartPolicy) {
 		this.#policy = policy;
@@ -64,14 +67,41 @@ export class RestartBudget {
 		return this.#restarts;
 	}
 
-	/** Claim the next restart, or null when the budget is exhausted. */
-	next(): RestartClaim | null {
+	/** A restart is waiting out its backoff. */
+	get pending(): boolean {
+		return this.#restartTimer !== null;
+	}
+
+	/**
+	 * Claim the next restart and arm its backoff: `run` fires after the
+	 * jittered delay unless `cancel`/`dispose` comes first. Null when the
+	 * budget is exhausted (nothing armed). A previously pending restart is
+	 * replaced.
+	 */
+	schedule(run: () => void): RestartClaim | null {
 		if (this.#restarts >= this.#policy.restartMax) return null;
+		this.cancel();
 		const attempt = this.#restarts++;
-		return {
-			attempt,
-			delayMs: backoffDelay(attempt, this.#policy.backoffMinMs, this.#policy.backoffMaxMs),
-		};
+		const delayMs = backoffDelay(attempt, this.#policy.backoffMinMs, this.#policy.backoffMaxMs);
+		this.#restartTimer = setTimeout(() => {
+			this.#restartTimer = null;
+			run();
+		}, delayMs);
+		return { attempt, delayMs };
+	}
+
+	/** Cancel a pending restart (explicit stop or delete); the budget keeps its count. */
+	cancel(): void {
+		if (this.#restartTimer === null) return;
+		clearTimeout(this.#restartTimer);
+		this.#restartTimer = null;
+	}
+
+	/** An explicit start is the operator's retry: forget spent restarts and any pending one. */
+	reset(): void {
+		this.cancel();
+		this.unpaired();
+		this.#restarts = 0;
 	}
 
 	/** The pair came up: refill the budget if it holds for `stablePairMs`. */
@@ -90,8 +120,9 @@ export class RestartBudget {
 		this.#stableTimer = null;
 	}
 
-	/** Cancel the pending refill timer; the budget is not reused afterwards. */
+	/** Cancel the pending restart and refill timer; the budget is not reused afterwards. */
 	dispose(): void {
+		this.cancel();
 		this.unpaired();
 	}
 }

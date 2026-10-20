@@ -83,7 +83,6 @@ import {
 	SSE_KEEPALIVE_MS,
 	SSE_RING_CAP,
 	SSE_RING_BYTES,
-	type CloneFetchResult,
 	type ClientCommand,
 	type DaemonEntry,
 	type DaemonInfo,
@@ -123,11 +122,10 @@ import {
 } from "./daemon-sessions";
 import { type Registry, type RegistryChange, type RegistryEntry } from "./registry";
 import type { ProjectSync } from "./project-sync";
-import type { HostRuntimeApi } from "./workspace-lifecycle";
 import type { SessionWaker } from "./session-waker";
 import { EDGE_COMMAND_FIELDS, readEdgeArgs, type EdgeArgs } from "./edge-commands";
 import { FleetOperations, OperationError } from "./operations";
-import type { CloneCreateInput } from "./workspace-lifecycle";
+import type { CloneCreateInput, LifecycleApi } from "./workspace-lifecycle";
 import type { FleetEventLog, FleetFacts } from "./events";
 import { listProjectBranches, realpathOf } from "./worktrees";
 
@@ -359,44 +357,11 @@ export interface EdgeEvictionHooks {
 	evictProject(projectId: string): Promise<void>;
 }
 
-/**
- * Clone lifecycle service injected into the edge. The edge
- * NEVER stops/removes/deletes a clone workspace through the host runtime,
- * git worktree guards, or registry.remove directly: every clone
- * lifecycle mutation goes through these hooks so the provider lifecycle,
- * admission, and the verify-at-deletion gate cannot be bypassed from the
- * browser surface. All methods throw typed errors whose messages are safe
- * to surface in an error frame. Implemented by fleet/workspace-lifecycle.ts
- * (structural conformance: the edge holds no runtime import on it).
- */
-export interface EdgeLifecycleHooks {
-	/** Create + optionally start a clone workspace; the roster broadcast carries the result. */
-	createClone(input: CloneCreateInput): Promise<RegistryEntry>;
-	/**
-	 * Start + wake: resolves once the provider confirms compute running and
-	 * enrollment is persisted; pair readiness rides the lifecycleStage roster
-	 * broadcasts (runtime → callback → ready). Idempotent; safe to call for
-	 * both start and wake.
-	 *
-	 * `resumeSessionId` (optional) is the store-validated session id from a
-	 * dropdown pick; the lifecycle materializes cold transcripts and resumes
-	 * that session on wake. Omitted = plain wake (lifecycle resumes the
-	 * newest session, or boots fresh when none exists).
-	 */
-	ensureCloneRunning(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void>;
-	/** Ordinary stop: proof-bearing provider stop, desiredState stopped, data retained. */
-	stopClone(daemonId: string): Promise<void>;
-	/** Verified delete: refuses active work, verifies the fleet store, then deletes provider resources. */
-	deleteClone(daemonId: string): Promise<{ removed: string; verified: string[] }>;
-	/** Fetch a local-source clone's branch into its project's main repo (the control route's operation). */
-	fetchCloneIntoProject(daemonId: string): Promise<CloneFetchResult>;
-}
-
 /** The live machinery the edge coordinates. */
 export interface EdgeDeps {
 	registry: Registry;
-	/** Main-checkout and worktree sessions run through the lifecycle's host runtime. */
-	host: HostRuntimeApi;
+	/** The lifecycle owner: every runtime start, stop, delete, clone create/fetch and the host debug facts. */
+	lifecycle: LifecycleApi;
 	sync: Pick<ProjectSync, "syncNow">;
 	config: FleetConfig;
 	/** Fleet lifecycle-event ring, surfaced verbatim by /ctl/debug. */
@@ -409,8 +374,6 @@ export interface EdgeDeps {
 	 * daemon rows report typed unavailability.
 	 */
 	transport?: DaemonTransportRegistry;
-	/** Clone lifecycle service (create/start/wake/stop/remove/delete). Absent = clone commands answer typed unavailability. */
-	lifecycle?: EdgeLifecycleHooks;
 	/** Non-clone row eviction (FLC-22). Required: the server owns pair/log-tap/orphan cleanup. */
 	eviction: EdgeEvictionHooks;
 	/** Session wake (FLC-23): brings a session's callback pair up before an attach or prompt. Required; the server owns it. */
@@ -581,7 +544,7 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 
 export class FleetEdge {
 	readonly #registry: Registry;
-	readonly #host: HostRuntimeApi;
+	readonly #lifecycle: LifecycleApi;
 	readonly #sync: Pick<ProjectSync, "syncNow">;
 	readonly #config: FleetConfig;
 	readonly #eventLog: FleetEventLog;
@@ -731,7 +694,7 @@ export class FleetEdge {
 		},
 	) {
 		this.#registry = deps.registry;
-		this.#host = deps.host;
+		this.#lifecycle = deps.lifecycle;
 		this.#sync = deps.sync;
 		this.#config = deps.config;
 		this.#eventLog = deps.eventLog;
@@ -740,11 +703,10 @@ export class FleetEdge {
 		this.#waker = deps.waker;
 		this.#ops = new FleetOperations({
 			registry: deps.registry,
-			host: deps.host,
+			lifecycle: deps.lifecycle,
 			sync: deps.sync,
 			config: deps.config,
 			eventLog: deps.eventLog,
-			lifecycle: deps.lifecycle,
 			eviction: deps.eviction,
 		});
 		// A detached daemon's browser pipes drop before its row is stopped,
@@ -1259,13 +1221,11 @@ export class FleetEdge {
 	async #runSpawnResume(daemonId: string, sessionFile?: string): Promise<void> {
 		const entry = this.#registry.get(daemonId);
 		if (!entry) throw new Error(`unknown daemon: ${daemonId}`);
-		// A clone whose pair watcher failed (status "error", lifecycleStage "failed")
-		// is retried in place by the same start the Retry button sends.
-		const failedClone =
-			entry.workspace?.kind === "clone" &&
-			entry.status === "error" &&
-			entry.lifecycleStage === "failed";
-		if (entry.status !== "asleep" && !failedClone) {
+		// A workspace the lifecycle gave up on (status "error", lifecycleStage
+		// "failed": any kind) is retried in place by the same start the Retry
+		// button sends.
+		const failed = entry.status === "error" && entry.lifecycleStage === "failed";
+		if (entry.status !== "asleep" && !failed) {
 			throw new Error(`daemon ${daemonId} is not asleep (status ${entry.status})`);
 		}
 		// A dropdown-picked session must belong to this worktree's session
@@ -2139,7 +2099,7 @@ export class FleetEdge {
 		if (!entry) {
 			return json({ error: "not found" }, 404);
 		}
-		return json({ text: this.#host.sessionLogTail(daemonId) });
+		return json({ text: this.#lifecycle.sessionLogTail(daemonId) });
 	}
 
 	/**
@@ -2221,7 +2181,7 @@ export class FleetEdge {
 	 * shown.
 	 */
 	#debugSnapshot(): Record<string, unknown> {
-		const hostSnap = this.#host.hostSnapshot();
+		const hostSnap = this.#lifecycle.hostSnapshot();
 		const sessions = this.#registry.list().map((entry) => {
 			const uptimeBase = entry.readyAt ?? entry.registeredAt;
 			const status = this.#transport?.pairStatus(entry.daemonId);

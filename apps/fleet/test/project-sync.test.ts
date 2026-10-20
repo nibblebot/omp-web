@@ -101,7 +101,7 @@ async function makeHarness(
 	sync = new ProjectSync(registry, lifecycle, opts);
 	cleanups.push(async () => {
 		for (const entry of registry.list()) {
-			if (entry.workspace?.kind !== "clone") await lifecycle.stopHost(entry.daemonId);
+			if (entry.workspace?.kind !== "clone") await lifecycle.stop(entry.daemonId);
 		}
 		sync.close();
 		lifecycle.close();
@@ -508,7 +508,7 @@ describe("git-state polling", () => {
 	test("a host spawn runs a one-off probe before the next poll tick", async () => {
 		const projectDir = tempDir("omp-session-sync-gitone-");
 		const script = join(projectDir, "child.sh");
-		// Drain the fleet stdin payload, then idle until stopHost kills the child.
+		// Drain the fleet stdin payload, then idle until stop kills the child.
 		writeFileSync(
 			script,
 			[

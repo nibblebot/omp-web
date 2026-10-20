@@ -25,7 +25,7 @@ import type { FleetEventLog } from "./events";
 import type { Registry, RegistryEntry } from "./registry";
 import type { CloneFetchResult, RegisteredProject } from "#lib/wire/protocol";
 import type { ProjectSync } from "./project-sync";
-import type { HostRuntimeApi } from "./workspace-lifecycle";
+import type { LifecycleApi } from "./workspace-lifecycle";
 import {
 	createWorktree,
 	deleteWorktree,
@@ -87,32 +87,29 @@ export interface CloneDeleteResult {
 }
 
 /**
- * Clone lifecycle service. Operations NEVER stop, remove or
- * delete a clone through the host runtime, the git worktree guards, or
- * registry.remove: every clone mutation goes through these hooks so the
- * provider lifecycle, admission, and the verify-at-deletion gate cannot be
- * bypassed. Implemented by fleet/workspace-lifecycle.ts.
+ * The lifecycle verbs the operations layer drives. Every runtime transition
+ * (spawn, stop, verified clone delete, create, fetch) goes through the
+ * lifecycle owner, which dispatches on the workspace kind: operations never
+ * stop, remove or delete a runtime any other way, so the provider lifecycle,
+ * admission and the verify-at-deletion gate cannot be bypassed.
  */
-export interface CloneLifecycleHooks {
-	/** Create + optionally start a clone workspace; the roster broadcast carries the result. */
-	createClone(input: CloneCreateInput): Promise<RegistryEntry>;
-	/** Ordinary stop: proof-bearing provider stop, desiredState stopped, data retained. */
-	stopClone(daemonId: string): Promise<void>;
-	/** Verified delete; roster remove routes through the same gate. */
-	deleteClone(daemonId: string): Promise<CloneDeleteResult>;
-	/** Fetch a local-source clone's branch into its project's main repo (fast-forward or create only). */
-	fetchCloneIntoProject(daemonId: string): Promise<CloneFetchResult>;
-}
+export type OperationsLifecycle = Pick<
+	LifecycleApi,
+	| "spawnHost"
+	| "start"
+	| "stop"
+	| "delete"
+	| "resolveTemplateName"
+	| "createClone"
+	| "fetchCloneIntoProject"
+>;
 
 export interface OperationsDeps {
 	registry: Registry;
-	/** Main-checkout and worktree sessions run through the lifecycle's host runtime. */
-	host: HostRuntimeApi;
+	lifecycle: OperationsLifecycle;
 	sync: Pick<ProjectSync, "syncNow">;
 	config: Pick<FleetConfig, "workspaceDir">;
 	eventLog: FleetEventLog;
-	/** Absent = clone operations answer 503 (typed unavailability). */
-	lifecycle?: CloneLifecycleHooks;
 	eviction: RowEvictionHooks;
 }
 
@@ -150,21 +147,19 @@ export function parseCloneSource(raw: unknown): CloneCreateInput["source"] {
 
 export class FleetOperations {
 	readonly #registry: Registry;
-	readonly #host: HostRuntimeApi;
+	readonly #lifecycle: OperationsLifecycle;
 	readonly #sync: Pick<ProjectSync, "syncNow">;
 	readonly #config: Pick<FleetConfig, "workspaceDir">;
 	readonly #eventLog: FleetEventLog;
-	readonly #lifecycle: CloneLifecycleHooks | undefined;
 	readonly #eviction: RowEvictionHooks;
 	readonly #detachListeners = new Set<(daemonId: string) => void>();
 
 	constructor(deps: OperationsDeps) {
 		this.#registry = deps.registry;
-		this.#host = deps.host;
+		this.#lifecycle = deps.lifecycle;
 		this.#sync = deps.sync;
 		this.#config = deps.config;
 		this.#eventLog = deps.eventLog;
-		this.#lifecycle = deps.lifecycle;
 		this.#eviction = deps.eviction;
 	}
 
@@ -190,13 +185,6 @@ export class FleetOperations {
 		return entry;
 	}
 
-	#clones(action: string): CloneLifecycleHooks {
-		if (this.#lifecycle === undefined) {
-			throw new OperationError(503, `${action} is unavailable: no lifecycle service wired`);
-		}
-		return this.#lifecycle;
-	}
-
 	/**
 	 * Spawn a session for `cwd`. A cwd that belongs to a registered project
 	 * (main checkout or linked worktree) is tagged with that projectId so the
@@ -214,7 +202,7 @@ export class FleetOperations {
 		if (input.labels !== undefined) checkSpawnLabels(input.labels);
 		const resolved = await validateProjectPath(input.cwd);
 		if (resolved === null) throw new OperationError(400, `not a directory: ${input.cwd}`);
-		const entry = await this.#host.spawnHost({
+		const entry = await this.#lifecycle.spawnHost({
 			cwd: resolved,
 			template: input.template,
 			name: input.name,
@@ -226,26 +214,15 @@ export class FleetOperations {
 	}
 
 	/**
-	 * Stop a daemon, leaving its row asleep. A clone stops through the
-	 * lifecycle's proof-bearing provider stop; anything else through the
-	 * host runtime (ShutdownControl when paired, kill an own child, revoke the
-	 * enrollment). A failed non-clone stop flips the row to asleep before the
-	 * error surfaces (never left "ready" with a dead child).
+	 * Stop a daemon, leaving its row asleep, through the lifecycle's stop verb
+	 * (the same call for every kind; the lifecycle picks the proof-bearing
+	 * provider stop or the host child stop and keeps a failed stop from
+	 * leaving the row "ready"). Browsers detach first.
 	 */
 	async stop(daemonId: string): Promise<void> {
-		const entry = this.#entry(daemonId);
+		this.#entry(daemonId);
 		this.#detach(daemonId);
-		if (entry.workspace?.kind === "clone") {
-			const lifecycle = this.#clones("clone stop");
-			await lifecycle.stopClone(daemonId);
-			return;
-		}
-		try {
-			await this.#host.stopHost(daemonId);
-		} catch (err) {
-			this.#registry.setStatus(daemonId, "asleep");
-			throw err;
-		}
+		await this.#lifecycle.stop(daemonId);
 	}
 
 	/**
@@ -253,14 +230,14 @@ export class FleetOperations {
 	 * (never registry.remove: dropping the roster identity unverified would
 	 * orphan or lose the volume/store silently); its browsers detach only after
 	 * the gate passes, so a refusal keeps live attachments. Anything else is
-	 * detached, stopped and evicted through the single eviction path.
+	 * detached, stopped and evicted through the single eviction path (the guards
+	 * and the row removal around `lifecycle.delete`).
 	 */
 	async remove(daemonId: string): Promise<{ verified: string[] }> {
 		const entry = this.#entry(daemonId);
 		let verified: string[] = [];
 		if (entry.workspace?.kind === "clone") {
-			const lifecycle = this.#clones("clone remove");
-			verified = (await lifecycle.deleteClone(daemonId)).verified;
+			verified = (await this.#lifecycle.delete(daemonId)).verified;
 			this.#detach(daemonId);
 		} else {
 			this.#detach(daemonId);
@@ -304,7 +281,7 @@ export class FleetOperations {
 		}
 		let entry: RegistryEntry;
 		try {
-			entry = await registerProjectMainEntry(this.#registry, this.#host, project, {
+			entry = await registerProjectMainEntry(this.#registry, this.#lifecycle, project, {
 				start: input.start ?? false,
 				template: input.template,
 				labels: input.labels,
@@ -370,7 +347,7 @@ export class FleetOperations {
 		}
 		let entry: RegistryEntry;
 		try {
-			entry = await registerWorktreeEntry(this.#registry, this.#host, project, created.path, {
+			entry = await registerWorktreeEntry(this.#registry, this.#lifecycle, project, created.path, {
 				start: input.start,
 			});
 		} catch (err) {
@@ -420,8 +397,9 @@ export class FleetOperations {
 	): Promise<DeleteWorkspaceResult> {
 		const entry = this.#entry(daemonId);
 		if (entry.workspace?.kind === "clone") {
-			const lifecycle = this.#clones("clone delete");
-			const result = await lifecycle.deleteClone(daemonId);
+			// The verified gate (never the git guards, which reason about a
+			// fleet-local cwd), then the browsers detach.
+			const result = await this.#lifecycle.delete(daemonId);
 			this.#detach(daemonId);
 			return result;
 		}
@@ -463,7 +441,7 @@ export class FleetOperations {
 	 * module at runtime.
 	 */
 	async createClone(input: CloneCreateInput): Promise<RegistryEntry> {
-		const entry = await this.#clones("create_clone").createClone(input);
+		const entry = await this.#lifecycle.createClone(input);
 		this.#eventLog.add("info", "server", `clone created ${entry.daemonId}`, entry.daemonId);
 		return entry;
 	}
@@ -475,6 +453,6 @@ export class FleetOperations {
 	 */
 	async fetchCloneIntoProject(daemonId: string): Promise<CloneFetchResult> {
 		this.#entry(daemonId);
-		return await this.#clones("fetch into project").fetchCloneIntoProject(daemonId);
+		return await this.#lifecycle.fetchCloneIntoProject(daemonId);
 	}
 }

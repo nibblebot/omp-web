@@ -32,6 +32,11 @@
  *   materialized values), and key allowlists reject unknown/extra fields at
  *   every nesting level so secret-shaped material cannot be smuggled in.
  * - All JSON I/O is size-bounded: requests and responses are capped at 1 MiB.
+ * - A non-running observation MAY say how the runtime ended (additive, optional,
+ *   no `OMP_PROVIDER_PROTO` bump): `exitCode` (0-255) and `detail` (at most
+ *   `PROVIDER_DETAIL_MAX_BYTES` bytes: exit code, container reason, last log
+ *   line). The lifecycle puts `detail` in a failed runtime's reason and never
+ *   restarts an `exitCode` of 77 (session locked) or 78 (resume failed).
  * - State supervision is identity-based and provider-private. Each provider
  *   keeps whatever identity record it needs in its per-workspace `stateDir`
  *   (the fleet never reads it). Liveness and `stop` must prove the requested
@@ -46,6 +51,24 @@ const utf8 = new TextEncoder();
 
 /** Provider protocol version; the fleet pins it before invoking any provider. */
 export const OMP_PROVIDER_PROTO = 1;
+
+/** Cap of a response's `detail` text, in UTF-8 bytes. */
+export const PROVIDER_DETAIL_MAX_BYTES = 512;
+
+/** Trim and bound `text` to `PROVIDER_DETAIL_MAX_BYTES` without splitting a character. */
+export function boundedDetail(text: string): string {
+	const trimmed = text.trim();
+	if (utf8.encode(trimmed).length <= PROVIDER_DETAIL_MAX_BYTES) return trimmed;
+	let out = "";
+	let bytes = 0;
+	for (const char of trimmed) {
+		const size = utf8.encode(char).length;
+		if (bytes + size > PROVIDER_DETAIL_MAX_BYTES - 3) break;
+		out += char;
+		bytes += size;
+	}
+	return `${out}...`;
+}
 
 /** Serialized request/response cap: one JSON document per invocation (1 MiB). */
 export const PROVIDER_JSON_MAX_BYTES = 1024 * 1024;
@@ -649,6 +672,8 @@ const PROVIDER_OK_KEYS = [
 	"observed",
 	"pid",
 	"startedAt",
+	"exitCode",
+	"detail",
 	"sessions",
 	"complete",
 ] as const;
@@ -673,6 +698,22 @@ export interface ProviderOkResponse {
 	pid?: number;
 	/** Epoch ms when a live process was last (re)started. */
 	startedAt?: number;
+	/**
+	 * A runtime that is NOT running (`stopped`) and whose last exit the provider
+	 * recorded: the process or container exit status (0-255). The lifecycle
+	 * treats 77 (session locked) and 78 (resume failed) as deterministic refusals
+	 * and never restarts them, exactly like a host session. Additive and
+	 * optional: absent when the provider cannot tell.
+	 */
+	exitCode?: number;
+	/**
+	 * Why the runtime ended, caller-safe and at most `PROVIDER_DETAIL_MAX_BYTES`
+	 * UTF-8 bytes (use `boundedDetail`): the exit code with the container
+	 * reason, and the last log line the provider can read cheaply. The
+	 * lifecycle appends it to the failed reason so every runtime kind explains
+	 * a dead runtime. Never secret-bearing; never keyed on by decisions.
+	 */
+	detail?: string;
 	/**
 	 * `list-sessions` only: every session file on the workspace volume
 	 * (regular files under the agent sessions dir, symlinks excluded).
@@ -787,6 +828,29 @@ function parseOkResponse(value: Record<string, unknown>): ProviderOkResponse {
 			"provider response: startedAt must be a non-negative number",
 		);
 	}
+	const exitCode = value["exitCode"];
+	if (
+		exitCode !== undefined &&
+		(typeof exitCode !== "number" ||
+			!Number.isSafeInteger(exitCode) ||
+			exitCode < 0 ||
+			exitCode > 255)
+	) {
+		throw ProviderProtocolError.invalidRequest(
+			"provider response: exitCode must be an integer from 0 to 255",
+		);
+	}
+	const detail = value["detail"];
+	if (
+		detail !== undefined &&
+		(typeof detail !== "string" ||
+			detail.includes("\0") ||
+			utf8.encode(detail).length > PROVIDER_DETAIL_MAX_BYTES)
+	) {
+		throw ProviderProtocolError.invalidRequest(
+			`provider response: detail must be a string of at most ${PROVIDER_DETAIL_MAX_BYTES} bytes`,
+		);
+	}
 	const response: ProviderOkResponse = {
 		ok: true,
 		handle: requireStringField(value, "handle", "provider response"),
@@ -794,6 +858,8 @@ function parseOkResponse(value: Record<string, unknown>): ProviderOkResponse {
 		pid,
 		startedAt,
 	};
+	if (exitCode !== undefined) response.exitCode = exitCode;
+	if (detail !== undefined) response.detail = detail;
 	const sessions = parseSessionFiles(value["sessions"]);
 	if (sessions !== undefined) response.sessions = sessions;
 	const complete = value["complete"];

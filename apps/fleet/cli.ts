@@ -732,11 +732,11 @@ async function rmWorktreeCmd(
 }
 
 /**
- * start <selector>: fleet-side ensure-running for a clone workspace
- * (POST /ctl/start, server alias of /ctl/wake). The route accepts a
- * daemon id only, so the selector (id or exact roster name) is resolved
- * client-side against /ctl/sessions first. The server refuses non-clone
- * entries; direct/template sessions keep /ctl/spawn.
+ * start <selector>: fleet-side start of any workspace, a provider clone or a
+ * main-checkout/worktree session (POST /ctl/start, server alias of /ctl/wake):
+ * the lifecycle's one start verb picks the runtime by kind. The route accepts
+ * a daemon id only, so the selector (id or exact roster name) is resolved
+ * client-side against /ctl/sessions first.
  */
 async function startCmd(
 	positionals: string[],

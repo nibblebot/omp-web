@@ -34,9 +34,9 @@ interface Fixture {
 	deps: FanoutDeps;
 	registry: Registry;
 	transport: DaemonTransportRegistry;
-	/** The lifecycle the fixture's waker wakes through (tests may override ensureHostRunning). */
+	/** The lifecycle the fixture's waker wakes through (tests may override start). */
 	lifecycle: WorkspaceLifecycle;
-	/** daemonIds the stubbed lifecycle.ensureHostRunning was asked to wake, in order. */
+	/** daemonIds the stubbed lifecycle.start was asked to wake, in order. */
 	respawned: string[];
 	/** Register a spawned entry in the registry. */
 	create(overrides?: Partial<CreateInit>): RegistryEntry;
@@ -103,9 +103,9 @@ function startFixture(): Fixture {
 	};
 	// The real lifecycle launches a child that dials out; the stand-in starts
 	// the same dialing daemon without waiting for it to connect.
-	lifecycle.ensureHostRunning = async (entry) => {
-		respawned.push(entry.daemonId);
-		dial(entry);
+	lifecycle.start = async (daemonId) => {
+		respawned.push(daemonId);
+		dial(registry.get(daemonId)!);
 	};
 	cleanups.push(async () => {
 		lifecycle.close();
@@ -116,7 +116,7 @@ function startFixture(): Fixture {
 		deps: {
 			registry,
 			transport,
-			waker: new SessionWaker({ registry, host: lifecycle, transport }),
+			waker: new SessionWaker({ registry, lifecycle, transport }),
 		},
 		registry,
 		transport,
@@ -341,7 +341,7 @@ describe("promptEntry", () => {
 
 	test("a respawn that fails reports its error without sending a prompt", async () => {
 		const fx = startFixture();
-		fx.lifecycle.ensureHostRunning = async () => {
+		fx.lifecycle.start = async () => {
 			throw new Error("launch refused");
 		};
 		const entry = fx.create({ status: "asleep" });

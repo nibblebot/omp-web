@@ -869,8 +869,8 @@ describe("registerProjectMainEntry", () => {
 		});
 		let respawnedId: string | undefined;
 		const host = {
-			ensureHostRunning: async (entry: RegistryEntry) => {
-				respawnedId = entry.daemonId;
+			start: async (daemonId: string) => {
+				respawnedId = daemonId;
 			},
 		} as unknown as HostSessions;
 		const entry = await registerProjectMainEntry(registry, host, projectFor(repo, "p7"), {

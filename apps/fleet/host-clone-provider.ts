@@ -23,11 +23,15 @@
  * log relay (log-relay.ts, the shared SessionLog writer) that keeps the file
  * under the 1 MiB cap for the whole run, rotating to `daemon.log.1`, as the
  * bwrap supervisor does. The runtime is therefore a descendant of the launched
- * shell, found by its token.
+ * shell, found by its token. The shell writes the runtime's exit status to
+ * `<stateDir>/runtime.status` (the launcher's own exit code is the relay's), and
+ * when the launcher ends this runtime records the exit for `inspect`
+ * (`exitCode` and the last logged line, bwrap-identity.ts `writeExitRecord`,
+ * which never recreates a deleted stateDir).
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { FLEET_CALLBACK_ENV_KEYS, assertSecretEnv, buildSessionEnv } from "#lib/runtime/bwrap-args";
@@ -43,12 +47,16 @@ import {
 } from "#lib/runtime/provider-protocol";
 import {
 	BWRAP_PID_FILE,
+	PROVIDER_EXIT_FILE,
+	cmdlineOf,
 	findTokenPid,
 	identityLive,
 	processGroupOf,
 	procIdentity,
+	readExitRecord,
 	readLaunchRecord,
 	stopAndProve,
+	writeExitRecord,
 	type LaunchRecord,
 } from "./bwrap-identity";
 import { signalProcessGroup, spawnDetached } from "./host-provider";
@@ -56,6 +64,8 @@ import type { ExecutableRequest, RuntimeProvider } from "./runtime-provider";
 import { cloneRuntimeLaunch, logRelayLaunch } from "./runtime-launch";
 import { PROVIDER_DAEMON_LOG, readSessionLogTail, rotateSessionLog } from "./session-log";
 
+/** The runtime's exit status, written by the launcher shell beside the pidfile. */
+const RUNTIME_STATUS_FILE = "runtime.status";
 /** How long ensure-running waits for the new child's argv to carry its launch token. */
 const LIVE_WAIT_MS = 5_000;
 const LIVE_POLL_MS = 25;
@@ -76,12 +86,14 @@ function okResponse(
 	handle: string,
 	observed: ProviderObserved,
 	record?: LaunchRecord,
+	exit?: { exitCode?: number; detail?: string },
 ): ProviderOkResponse {
 	return {
 		ok: true,
 		handle,
 		observed,
 		...(record !== undefined ? { pid: record.pid, startedAt: record.startedAt } : {}),
+		...exit,
 	};
 }
 
@@ -166,6 +178,9 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 
 	// A stale record (dead process, or a previous generation) is replaced.
 	rmSync(join(stateDir, BWRAP_PID_FILE), { force: true });
+	rmSync(join(stateDir, PROVIDER_EXIT_FILE), { force: true });
+	const statusFile = join(stateDir, RUNTIME_STATUS_FILE);
+	rmSync(statusFile, { force: true });
 
 	const runtime = cloneRuntimeLaunch();
 	const fleetStdin = fleetStdinFor(callbackEnv);
@@ -196,7 +211,7 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 			stdin: fleetStdin ?? "",
 			logPath,
 			// The runtime can outlive the fleet by days: its log is capped live, not just at launch.
-			relay: logRelayLaunch(),
+			relay: { ...logRelayLaunch(), statusFile },
 		});
 	} catch (cause) {
 		return errResponse("unavailable", `spawn failed: ${String(cause)}`, true);
@@ -208,7 +223,10 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 	// The launched process is the shell holding the runtime and its log relay; the runtime is
 	// the descendant whose argv carries the launch token, and that is the identity recorded.
 	const deadline = Date.now() + LIVE_WAIT_MS;
-	let pid = findTokenPid(launcher.pid, workspaceToken);
+	// The shell's forked subshell carries the token too until the runtime executes: skip any
+	// descendant that still looks like the shell.
+	const shellCmdline = cmdlineOf(launcher.pid);
+	let pid = findTokenPid(launcher.pid, workspaceToken, shellCmdline);
 	while (pid === null) {
 		if (launcher.exitCode !== null || Date.now() >= deadline) {
 			return errResponse(
@@ -224,7 +242,7 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 			);
 		}
 		await Bun.sleep(LIVE_POLL_MS);
-		pid = findTokenPid(launcher.pid, workspaceToken);
+		pid = findTokenPid(launcher.pid, workspaceToken, shellCmdline);
 	}
 	const identity = procIdentity(pid);
 	if (identity === null) {
@@ -242,7 +260,39 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 		startedAt: Date.now(),
 	};
 	writeJsonAtomic(join(stateDir, BWRAP_PID_FILE), record);
+	// How this launch ends, for inspect (exit code and the last line it logged). The launcher
+	// shell exits only after the runtime ended and the relay drained its output, so the capped
+	// log already holds the runtime's last words. The runtime's own status comes from the file
+	// the shell wrote (the launcher's exit code is the relay's, not the runtime's); a runtime
+	// killed with its group leaves none. The launcher is this process's own child, so a fleet
+	// restart loses the observation and inspect then reports a bare stop.
+	void launcher.exited.then(() => {
+		const exitCode = readRuntimeStatus(statusFile);
+		const runBytes = Math.max(0, logSize(logPath) - logStart);
+		writeExitRecord(
+			stateDir,
+			{ generation, workspaceToken },
+			{
+				exitCode,
+				summary:
+					exitCode === undefined
+						? "session runtime ended without an exit status"
+						: `session runtime exited (rc ${exitCode})`,
+				output: readSessionLogTail(logPath, Math.min(runBytes, FAILURE_TAIL_BYTES)),
+			},
+		);
+	});
 	return okResponse(handleFor(workspaceId, generation, record), "running", record);
+}
+
+/** The runtime's exit status the launcher shell recorded, or undefined when it never got to. */
+function readRuntimeStatus(path: string): number | undefined {
+	try {
+		const code = Number.parseInt(readFileSync(path, "utf8").trim(), 10);
+		return Number.isSafeInteger(code) && code >= 0 && code <= 255 ? code : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function logSize(path: string): number {
@@ -286,6 +336,8 @@ function inspect(request: ExecutableRequest): Response {
 	return okResponse(
 		handleFor(workspaceId, generation, record),
 		record === null ? "missing" : "stopped",
+		undefined,
+		readExitRecord(stateDir, record),
 	);
 }
 

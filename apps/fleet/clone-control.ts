@@ -1,79 +1,35 @@
 /**
- * Clone-workspace HTTP control surface.
+ * Clone-workspace HTTP control helpers.
  *
- * A thin route layer over the single fleet-internal lifecycle service
- * (fleet/workspace-lifecycle.ts): the CLI and the browser edge share the
- * same create/ensure/stop/delete owner, and the clone delete gate can never
- * be bypassed by a route. Mounted by fleet/server.ts under /ctl/clones,
- * /ctl/profiles, /ctl/start|wake, /ctl/stop (clone dispatch), and DELETE
- * /ctl/worktrees/:id (kind dispatch). No HTTP self-fetch and no second
- * lifecycle implementation.
+ * The provider profile catalog route and the lifecycle-failure status map.
+ * Clone and session mutations live nowhere in this module: every create,
+ * start, stop and delete goes through the lifecycle owner
+ * (fleet/workspace-lifecycle.ts, via FleetOperations and the server's
+ * routes), so a route can never bypass the delete gate or hold a second
+ * implementation of a verb.
  *
- * Wire contracts:
- *   POST /ctl/clones {projectId, name, profileId, source?, revision?,
- *                     branch?, start?} → 201 {entry: DaemonEntry}
  *   GET  /ctl/profiles → {profiles: PublicProviderProfile[]} (secret-free)
- *   POST /ctl/start|wake {daemonId} → ensure-running (clone-only)
- *   POST /ctl/stop {selector} → clone entries take the proof-bearing stop
- *   DELETE /ctl/worktrees/:daemonId → kind-dispatch to the verified gate
- *   POST /ctl/remove {selector} → clone entries hit the SAME verified gate
  *
- * Entry-bearing responses use the public roster projection; workspace
- * sources, provider handles, enrollment credentials, and private ownership
- * stay in the registry. Start/wake return only daemonId and observed state.
- *
- * Typed failures reuse the frozen ledger vocabulary with caller-safe
- * messages; the HTTP layer maps them onto status codes.
+ * Typed lifecycle failures reuse the frozen ledger vocabulary with
+ * caller-safe messages; `lifecycleStatus` maps them onto HTTP statuses.
  */
 
-import type { Registry } from "./registry";
 import { CALLBACK_ERROR_HTTP_STATUS } from "#lib/wire/callback-protocol";
 import type { PublicProviderProfile } from "#lib/wire/protocol";
 import type { ProviderProfile } from "#lib/runtime/provider-protocol";
 import { toPublicProfile } from "./provider-profile";
-import { CloneLifecycleError, type WorkspaceLifecycle } from "./workspace-lifecycle";
-
-/** curl/HTTP error with a message safe to return to the caller. */
-export class CloneHttpError extends Error {
-	constructor(
-		readonly status: number,
-		readonly code: string,
-		message: string,
-	) {
-		super(message);
-	}
-}
-
-function json(data: unknown, status = 200): Response {
-	return new Response(JSON.stringify(data), {
-		status,
-		headers: { "content-type": "application/json" },
-	});
-}
+import type { CloneLifecycleError } from "./workspace-lifecycle";
 
 /** Map a lifecycle failure onto the HTTP status the CLI/UI expects: the callback error table. */
 export function lifecycleStatus(code: CloneLifecycleError["code"]): number {
 	return CALLBACK_ERROR_HTTP_STATUS[code];
 }
 
-/**
- * The clones control app: mount responses for the fleet server. Every
- * mutation goes through {@link WorkspaceLifecycle}, the authoritative
- * create/ensure/stop/delete owner.
- */
+/** The boot-static provider profile catalog (secret-free projection). */
 export class CloneControlApi {
-	readonly #lifecycle: WorkspaceLifecycle;
-	readonly #registry: Registry;
-	/** Boot-static profile catalog (secret-free projection). */
 	readonly #publicProfiles: Record<string, PublicProviderProfile>;
 
-	constructor(deps: {
-		lifecycle: WorkspaceLifecycle;
-		registry: Registry;
-		config: { providerProfiles?: Record<string, ProviderProfile> };
-	}) {
-		this.#lifecycle = deps.lifecycle;
-		this.#registry = deps.registry;
+	constructor(deps: { config: { providerProfiles?: Record<string, ProviderProfile> } }) {
 		const profiles: Record<string, PublicProviderProfile> = {};
 		if (deps.config.providerProfiles !== undefined) {
 			for (const profile of Object.values(deps.config.providerProfiles)) {
@@ -86,93 +42,5 @@ export class CloneControlApi {
 	/** GET /ctl/profiles → { profiles: PublicProviderProfile[] } (secret-free). */
 	profiles(): { profiles: PublicProviderProfile[] } {
 		return { profiles: Object.values(this.#publicProfiles) };
-	}
-
-	/** POST /ctl/start|wake {daemonId}: clone-only ensure-running. */
-	async start(body: { daemonId?: unknown }): Promise<Response> {
-		if (typeof body.daemonId !== "string" || body.daemonId === "") {
-			throw new CloneHttpError(400, "invalid_request", "missing or invalid field: daemonId");
-		}
-		// ensureCloneRunning is a service-level ensure; resolve synchronously.
-		await this.#lifecycle.ensureCloneRunning(body.daemonId);
-		return json({
-			daemonId: body.daemonId,
-			observed: "running",
-		});
-	}
-
-	/**
-	 * POST /ctl/stop {selector}: clone entries take the proof-bearing
-	 * provider stop (desiredState stopped); direct/worktree entries keep
-	 * the lifecycle's host runtime (dispatched by kind by the operations
-	 * layer).
-	 */
-	async stop(selector: string): Promise<{ stopped: string[] }> {
-		const matches = this.#registry
-			.list()
-			.filter((entry) => entry.daemonId === selector || entry.name === selector);
-		if (matches.length === 0) {
-			throw new CloneHttpError(404, "not_found", `no daemon matches selector: ${selector}`);
-		}
-		const stopped: string[] = [];
-		for (const entry of matches) {
-			if (entry.workspace?.kind === "clone") {
-				await this.#lifecycle.stopClone(entry.daemonId);
-			}
-			stopped.push(entry.daemonId);
-		}
-		return { stopped };
-	}
-
-	/**
-	 * POST /ctl/remove {selector}: clone entries route through the SAME
-	 * verified delete gate as DELETE /ctl/worktrees/:id; removal can never
-	 * bypass it. Direct/worktree entries are removed by the server's legacy
-	 * path (kind-dispatched at the caller).
-	 */
-	async remove(selector: string): Promise<{ removed: string[]; verified?: string[] }> {
-		const matches = this.#registry
-			.list()
-			.filter((entry) => entry.daemonId === selector || entry.name === selector);
-		if (matches.length === 0) {
-			throw new CloneHttpError(404, "not_found", `no daemon matches selector: ${selector}`);
-		}
-		const removed: string[] = [];
-		let verified: string[] = [];
-		const clonesVerified: string[] = [];
-		for (const entry of matches) {
-			if (entry.workspace?.kind === "clone") {
-				const result = await this.#lifecycle.deleteClone(entry.daemonId);
-				clonesVerified.push(...result.verified);
-			}
-			removed.push(entry.daemonId);
-		}
-		if (clonesVerified.length > 0) verified = clonesVerified;
-		return { removed, ...(verified.length > 0 ? { verified } : {}) };
-	}
-
-	/** DELETE /ctl/worktrees/:daemonId → kind-dispatched verified gate. */
-	async deleteWorktree(
-		daemonId: string,
-	): Promise<{ removed: string; verified: string[] } | { removed: string; legacy: string }> {
-		const entry = this.#registry.get(daemonId);
-		if (!entry) {
-			throw new CloneHttpError(404, "not_found", `unknown daemon: ${daemonId}`);
-		}
-		if (entry.workspace?.kind === "clone") {
-			return await this.#lifecycle.deleteClone(daemonId);
-		}
-		return { removed: daemonId, legacy: "worktree" as const };
-	}
-
-	/** Error → Response adapter (message-safe). */
-	toResponse(err: unknown): Response {
-		if (err instanceof CloneHttpError) return json({ error: err.message }, err.status);
-		if (err instanceof CloneLifecycleError) {
-			const status = lifecycleStatus(err.code);
-			return json({ error: { code: err.code, message: err.message } }, status);
-		}
-		const message = err instanceof Error ? err.message : String(err);
-		return json({ error: message }, 500);
 	}
 }

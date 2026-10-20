@@ -396,13 +396,7 @@ describe("clone wake resume", () => {
 				// validation. The /ctl/start route intentionally takes only
 				// daemonId (implicit wake); the explicit id rides the
 				// lifecycle call the edge owns.
-				await (
-					server as FleetServer & {
-						lifecycle: {
-							ensureCloneRunning(d: string, o?: { resumeSessionId?: string }): Promise<void>;
-						};
-					}
-				).lifecycle.ensureCloneRunning(daemonId, { resumeSessionId: SESSION });
+				await server.lifecycle.start(daemonId, { resume: SESSION });
 
 				// Volume got the materialized main file.
 				const volumeMain = join(volumeRoot, ".home", "agent", "sessions", MAIN_RELPATH);
@@ -527,13 +521,7 @@ describe("clone wake resume", () => {
 					MAIN_RELPATH,
 					chunkAt(0, 1, sessionBody(SESSION), true),
 				);
-				await (
-					server as FleetServer & {
-						lifecycle: {
-							ensureCloneRunning(d: string, o?: { resumeSessionId?: string }): Promise<void>;
-						};
-					}
-				).lifecycle.ensureCloneRunning(daemonId, { resumeSessionId: SESSION });
+				await server.lifecycle.start(daemonId, { resume: SESSION });
 				const seen = envSeen(cloneRoot, daemonId);
 				expect(seen?.env?.OMP_SESSION_RESUME).toBe(`${K8S_POD_SESSIONS}/${MAIN_RELPATH}`);
 				expect(seen?.env?.OMP_SESSION_RESUME_UNWRITTEN).toBeUndefined();
@@ -554,13 +542,7 @@ describe("clone wake resume", () => {
 					lastSessionFile: `${K8S_POD_SESSIONS}/${SESSION}.jsonl`,
 				});
 				await expect(
-					(
-						server as FleetServer & {
-							lifecycle: {
-								ensureCloneRunning(d: string, o?: { resumeSessionId?: string }): Promise<void>;
-							};
-						}
-					).lifecycle.ensureCloneRunning(daemonId, { resumeSessionId: "no-such-session" }),
+					server.lifecycle.start(daemonId, { resume: "no-such-session" }),
 				).rejects.toMatchObject({ code: "unavailable" });
 				// Refused before the provider ran: no handoff, no enrollment left behind.
 				expect(envSeen(cloneRoot, daemonId)).toBeNull();

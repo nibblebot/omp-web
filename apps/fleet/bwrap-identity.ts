@@ -14,11 +14,16 @@
  * still carries the token, so a reused pid never matches.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { boundedDetail } from "#lib/runtime/provider-protocol";
+import { writeJsonAtomic } from "#lib/runtime/provider-callback-env";
 
 /** Pidfile name inside the provider's per-workspace `stateDir`. */
 export const BWRAP_PID_FILE = "provider.pid.json";
+
+/** Exit record name: how the launch recorded in the pidfile ended (inspect's `exitCode` / `detail`). */
+export const PROVIDER_EXIT_FILE = "exit.json";
 
 /** The provider's launch record for one workspace generation. */
 export interface LaunchRecord {
@@ -94,8 +99,12 @@ export function processGroupOf(pid: number): number | null {
 	}
 }
 
-/** Walk descendants of `root` looking for a cmdline containing `token`. */
-export function findTokenPid(root: number, token: string): number | null {
+/**
+ * Walk descendants of `root` looking for a cmdline containing `token`. `exceptCmdline` skips a
+ * descendant whose command line equals it, for a launcher shell whose forked subshells carry the
+ * same arguments (token included) as the shell until the real command executes.
+ */
+export function findTokenPid(root: number, token: string, exceptCmdline?: string): number | null {
 	const seen = new Set<number>([root]);
 	const queue: number[] = [root];
 	while (queue.length > 0) {
@@ -103,7 +112,8 @@ export function findTokenPid(root: number, token: string): number | null {
 		for (const kid of childrenOf(current)) {
 			if (seen.has(kid)) continue;
 			seen.add(kid);
-			if (cmdlineOf(kid).includes(token)) return kid;
+			const cmdline = cmdlineOf(kid);
+			if (cmdline.includes(token) && cmdline !== exceptCmdline) return kid;
 			queue.push(kid);
 		}
 	}
@@ -192,4 +202,61 @@ export async function stopAndProve(
 
 	if (await escalate("SIGTERM", TERM_PROOF_MS)) return true;
 	return await escalate("SIGKILL", KILL_PROOF_MS);
+}
+
+/**
+ * Record how THIS launch ended, for inspect to report: the exit code (absent
+ * when a signal ended it) and a bounded detail made of `summary` and the last
+ * non-empty line of the run's output. Scoped by generation + launch token, so
+ * a later launch never inherits it. Best effort: the stateDir may be gone.
+ */
+export function writeExitRecord(
+	stateDir: string,
+	launch: { generation: number; workspaceToken: string },
+	exit: { exitCode: number | null | undefined; summary: string; output: string },
+): void {
+	const lastLine = exit.output
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line !== "")
+		.at(-1);
+	// A delete that raced the exit removed the stateDir: never recreate it.
+	if (!existsSync(stateDir)) return;
+	try {
+		writeJsonAtomic(join(stateDir, PROVIDER_EXIT_FILE), {
+			generation: launch.generation,
+			workspaceToken: launch.workspaceToken,
+			...(exit.exitCode !== null && exit.exitCode !== undefined ? { exitCode: exit.exitCode } : {}),
+			detail: boundedDetail(lastLine === undefined ? exit.summary : `${exit.summary}: ${lastLine}`),
+		});
+	} catch {
+		// The stateDir may be gone (delete raced the exit); best effort.
+	}
+}
+
+/** The exit record of THIS launch (generation + token match), else nothing. */
+export function readExitRecord(
+	stateDir: string,
+	record: LaunchRecord | null,
+): { exitCode?: number; detail?: string } {
+	if (record === null) return {};
+	try {
+		const value = JSON.parse(readFileSync(join(stateDir, PROVIDER_EXIT_FILE), "utf8")) as Record<
+			string,
+			unknown
+		>;
+		if (value.generation !== record.generation || value.workspaceToken !== record.workspaceToken) {
+			return {};
+		}
+		const code = value.exitCode;
+		const detail = value.detail;
+		return {
+			...(typeof code === "number" && Number.isSafeInteger(code) && code >= 0 && code <= 255
+				? { exitCode: code }
+				: {}),
+			...(typeof detail === "string" && detail !== "" ? { detail: boundedDetail(detail) } : {}),
+		};
+	} catch {
+		return {};
+	}
 }

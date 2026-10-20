@@ -655,10 +655,7 @@ async function ownBranchRefusal(
 // ---------------------------------------------------------------------------
 
 /** The slice of the workspace lifecycle (host runtime) that roster registration drives. */
-export type HostSessions = Pick<
-	WorkspaceLifecycle,
-	"spawnHost" | "ensureHostRunning" | "resolveTemplateName"
->;
+export type HostSessions = Pick<WorkspaceLifecycle, "spawnHost" | "start" | "resolveTemplateName">;
 
 /**
  * Register a roster entry for an existing worktree path and optionally spawn
@@ -695,8 +692,8 @@ export async function registerWorktreeEntry(
 	// Mirror spawnHost's field shape (name/project = worktree
 	// basename) so a started and an unstarted worktree render identically
 	// except status; worktreeOf carries the owning project's name. The
-	// resolved template NAME is stored like spawnHost stores it; ensureHostRunning
-	// keys off entry.template.
+	// resolved template NAME is stored like spawnHost stores it; the lifecycle's
+	// start keys off entry.template.
 	return registry.create({
 		name: basename(worktreePath),
 		cwd: worktreePath,
@@ -742,7 +739,7 @@ export async function registerProjectMainEntry(
 			registry.update(existing.daemonId, { projectId: project.projectId });
 		}
 		if (opts.start && existing.status === "asleep") {
-			await host.ensureHostRunning(existing);
+			await host.start(existing.daemonId);
 		}
 		return registry.get(existing.daemonId) ?? existing;
 	}

@@ -56,11 +56,14 @@ import { resolveProfileSecrets } from "#lib/runtime/profile-secrets";
 import { preflightBwrapProfile } from "./bwrap-preflight";
 import {
 	BWRAP_PID_FILE,
+	PROVIDER_EXIT_FILE,
 	findTokenPid,
 	identityLive,
+	readExitRecord,
 	readLaunchRecord,
 	procIdentity,
 	stopAndProve,
+	writeExitRecord,
 	type LaunchRecord,
 } from "./bwrap-identity";
 import { cloneRuntimeLaunch, defaultDenyRoots } from "./runtime-launch";
@@ -337,6 +340,12 @@ async function runSupervisor(stateDir: string): Promise<number> {
 	} else {
 		console.error(`bwrap-provider: supervise: ${message}`);
 	}
+	// The exit record inspect reports for this launch (generation + token scope it).
+	writeExitRecord(
+		stateDir,
+		{ generation: request.generation, workspaceToken: spec.workspaceToken },
+		{ exitCode: code, summary: message, output: detail },
+	);
 	return code ?? 0;
 }
 
@@ -432,6 +441,7 @@ async function opEnsureRunning(request: ProviderRequest): Promise<ProviderRespon
 			rmSync(join(stateDir, BWRAP_PID_FILE), { force: true });
 		}
 		rmSync(join(stateDir, SUPERVISE_ERR_FILE), { force: true });
+		rmSync(join(stateDir, PROVIDER_EXIT_FILE), { force: true });
 
 		// Read + validate the fleet's callback enrollment handoff BEFORE
 		// spawning: a stale enrollment must never start a generation.
@@ -483,7 +493,7 @@ function opInspect(request: ProviderRequest): ProviderResponse {
 		});
 	}
 	const observed: ProviderObserved = record === null ? "missing" : "stopped";
-	return ok(handleFor(workspaceId, generation, record), observed);
+	return ok(handleFor(workspaceId, generation, record), observed, readExitRecord(stateDir, record));
 }
 
 async function opStop(request: ProviderRequest): Promise<ProviderResponse> {

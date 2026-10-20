@@ -14,7 +14,8 @@ import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import { DaemonTransportRegistry } from "../daemon-transport";
 import { promptEntry, type FanoutDeps } from "../fanout";
 import { Registry, type RegistryEntry } from "../registry";
-import { SessionWaker, type WakeLifecycle } from "../session-waker";
+import { SessionWaker } from "../session-waker";
+import type { StartOptions } from "../workspace-lifecycle";
 import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
 import { sleep, waitFor } from "./edge.testkit";
 
@@ -24,8 +25,10 @@ interface Fixture {
 	registry: Registry;
 	transport: DaemonTransportRegistry;
 	waker: SessionWaker;
-	/** daemonIds the respawn stand-in was asked to wake, in order (refused attempts included). */
+	/** daemonIds of local sessions the start stand-in was asked to wake, in order (refused attempts included). */
 	respawned: string[];
+	/** Every lifecycle.start call, clone or local session, with its options. */
+	starts: Array<{ daemonId: string; opts?: StartOptions }>;
 	/** Respawn attempts still to refuse with "launch refused". */
 	refusals: { remaining: number };
 	/** Register a spawned entry in the registry. */
@@ -42,9 +45,7 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-function startFixture(
-	opts: { redialGraceMs?: number; pairTimeoutMs?: number; lifecycle?: WakeLifecycle } = {},
-): Fixture {
+function startFixture(opts: { redialGraceMs?: number; pairTimeoutMs?: number } = {}): Fixture {
 	const dir = tempDir("omp-web-session-waker-");
 	const registry = new Registry(`${dir}/state.json`);
 	const transport = new DaemonTransportRegistry();
@@ -57,6 +58,7 @@ function startFixture(
 	});
 	const url = `http://127.0.0.1:${server.port}`;
 	const respawned: string[] = [];
+	const starts: Array<{ daemonId: string; opts?: StartOptions }> = [];
 	const refusals = { remaining: 0 };
 	const daemons = new Map<string, PromiseWithResolvers<CallbackDaemon>>();
 	const slot = (daemonId: string): PromiseWithResolvers<CallbackDaemon> => {
@@ -80,9 +82,15 @@ function startFixture(
 		slot(entry.daemonId).resolve(daemon);
 		return daemon;
 	};
-	const host = {
-		ensureHostRunning: async (entry: RegistryEntry) => {
-			respawned.push(entry.daemonId);
+	// The real lifecycle launches a child that dials out (or boots a provider
+	// clone); the stand-in records the call and, for a local session, starts the
+	// same dialing daemon without waiting for it to connect.
+	const lifecycle = {
+		start: async (daemonId: string, startOpts?: StartOptions) => {
+			starts.push({ daemonId, opts: startOpts });
+			const entry = registry.get(daemonId)!;
+			if (entry.workspace?.kind === "clone") return;
+			respawned.push(daemonId);
 			if (refusals.remaining > 0) {
 				refusals.remaining -= 1;
 				throw new Error("launch refused");
@@ -92,9 +100,8 @@ function startFixture(
 	};
 	const waker = new SessionWaker({
 		registry,
-		host,
+		lifecycle,
 		transport,
-		lifecycle: opts.lifecycle,
 		redialGraceMs: opts.redialGraceMs ?? 50,
 		pairTimeoutMs: opts.pairTimeoutMs ?? 5000,
 	});
@@ -107,6 +114,7 @@ function startFixture(
 		transport,
 		waker,
 		respawned,
+		starts,
 		refusals,
 		create(overrides = {}) {
 			return registry.create({
@@ -234,15 +242,8 @@ describe("concurrent and failed wakes", () => {
 });
 
 describe("clone wake", () => {
-	test("ensures the clone with a resume pick only when one is given, without waiting for the pair", async () => {
-		const calls: Array<{ daemonId: string; opts?: { resumeSessionId?: string } }> = [];
-		const fx = startFixture({
-			lifecycle: {
-				ensureCloneRunning: async (daemonId, opts) => {
-					calls.push({ daemonId, opts });
-				},
-			},
-		});
+	test("starts the clone with a resume pick only when one is given, without waiting for the pair", async () => {
+		const fx = startFixture();
 		const entry = fx.create({
 			status: "asleep",
 			workspace: { kind: "clone", projectId: "proj", desiredState: "running" },
@@ -250,11 +251,20 @@ describe("clone wake", () => {
 		await fx.waker.wake(entry);
 		await fx.waker.wake(entry, { resumeFile: "   " });
 		await fx.waker.wake(entry, { resumeFile: "sess-42" });
-		expect(calls).toEqual([
+		expect(fx.starts).toEqual([
 			{ daemonId: entry.daemonId, opts: undefined },
 			{ daemonId: entry.daemonId, opts: undefined },
-			{ daemonId: entry.daemonId, opts: { resumeSessionId: "sess-42" } },
+			{ daemonId: entry.daemonId, opts: { resume: "sess-42" } },
 		]);
 		expect(fx.transport.pairStatus(entry.daemonId).paired).toBe(false);
+	});
+
+	test("a local session wake passes its resume pick through the same start verb", async () => {
+		const fx = startFixture();
+		const entry = fx.create({ status: "asleep" });
+		await fx.waker.wake(entry, { resumeFile: "/srv/proj/picked.jsonl" });
+		expect(fx.starts).toEqual([
+			{ daemonId: entry.daemonId, opts: { resume: "/srv/proj/picked.jsonl" } },
+		]);
 	});
 });

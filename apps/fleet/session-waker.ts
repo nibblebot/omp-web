@@ -28,7 +28,7 @@
  */
 
 import { REDIAL_GRACE_MS, type Registry, type RegistryEntry } from "./registry";
-import { PAIR_TIMEOUT_MS, type HostRuntimeApi } from "./workspace-lifecycle";
+import { PAIR_TIMEOUT_MS, type LifecycleApi, type StartOptions } from "./workspace-lifecycle";
 
 /** The slice of the callback transport the waker reads (structural; the real DaemonTransportRegistry conforms). */
 export interface WakeTransport {
@@ -36,31 +36,27 @@ export interface WakeTransport {
 	onPairChange(daemonId: string, cb: (status: { paired: boolean }) => void): () => void;
 }
 
-/** Clone lifecycle slice the waker drives. */
-export interface WakeLifecycle {
-	/** Resolves at provider-running + enrollment persisted. */
-	ensureCloneRunning(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void>;
-}
-
 export interface SessionWakerDeps {
 	registry: Registry;
-	/** Main-checkout and worktree sessions start through the lifecycle's host runtime. */
-	host: Pick<HostRuntimeApi, "ensureHostRunning">;
-	/** Callback transport; without it non-clone and clone wakes answer typed unavailability. */
+	/** Every start, clone or host session, goes through the lifecycle owner. */
+	lifecycle: Pick<LifecycleApi, "start">;
+	/** Callback transport; without it wakes answer typed unavailability. */
 	transport?: WakeTransport;
-	/** Clone lifecycle service; without it clone wakes answer typed unavailability. */
-	lifecycle?: WakeLifecycle;
 	/** How long a reconnecting/ready unpaired session may redial before it is respawned (default REDIAL_GRACE_MS). */
 	redialGraceMs?: number;
 	/** Pair wait after a respawn (default PAIR_TIMEOUT_MS). */
 	pairTimeoutMs?: number;
 }
 
+/** A blank resume pick means none (plain wake: the workspace resumes its own last session). */
+function startOptions(resumeFile: string | undefined): StartOptions | undefined {
+	return resumeFile !== undefined && resumeFile.trim() !== "" ? { resume: resumeFile } : undefined;
+}
+
 export class SessionWaker {
 	readonly #registry: Registry;
-	readonly #host: Pick<HostRuntimeApi, "ensureHostRunning">;
+	readonly #lifecycle: Pick<LifecycleApi, "start">;
 	readonly #transport: WakeTransport | undefined;
-	readonly #lifecycle: WakeLifecycle | undefined;
 	readonly #redialGraceMs: number;
 	readonly #pairTimeoutMs: number;
 	/** In-flight wake per daemonId; concurrent wakes share its outcome. */
@@ -68,9 +64,8 @@ export class SessionWaker {
 
 	constructor(deps: SessionWakerDeps) {
 		this.#registry = deps.registry;
-		this.#host = deps.host;
-		this.#transport = deps.transport;
 		this.#lifecycle = deps.lifecycle;
+		this.#transport = deps.transport;
 		this.#redialGraceMs = deps.redialGraceMs ?? REDIAL_GRACE_MS;
 		this.#pairTimeoutMs = deps.pairTimeoutMs ?? PAIR_TIMEOUT_MS;
 	}
@@ -87,6 +82,10 @@ export class SessionWaker {
 		const existing = this.#inflight.get(daemonId);
 		if (existing !== undefined) return existing;
 		const resumeFile = opts?.resumeFile;
+		// The one kind-dependent choice left is WHAT to wait on, not which verb to
+		// call (both run `lifecycle.start`): a clone returns once the provider has
+		// the runtime up (readiness rides lifecycleStage), a local session waits for
+		// its redial grace and its pair.
 		const run =
 			entry.workspace?.kind === "clone"
 				? this.#wakeClone(entry, resumeFile)
@@ -105,16 +104,18 @@ export class SessionWaker {
 		}
 	}
 
+	/**
+	 * Clone wake: the lifecycle start only. A provider boots slowly and its
+	 * readiness rides the roster (lifecycleStage), so the wake does not wait
+	 * for the pair; callers that need it use waitForPair.
+	 */
 	async #wakeClone(entry: RegistryEntry, resumeFile: string | undefined): Promise<void> {
 		const daemonId = entry.daemonId;
 		if (this.#transport?.pairStatus(daemonId).paired === true) return;
-		if (this.#lifecycle === undefined || this.#transport === undefined) {
-			throw new Error("clone wake is unavailable: no lifecycle/transport wired");
+		if (this.#transport === undefined) {
+			throw new Error("clone wake is unavailable: no transport wired");
 		}
-		await this.#lifecycle.ensureCloneRunning(
-			daemonId,
-			resumeFile && resumeFile.trim() !== "" ? { resumeSessionId: resumeFile } : undefined,
-		);
+		await this.#lifecycle.start(daemonId, startOptions(resumeFile));
 	}
 
 	async #wakeSession(entry: RegistryEntry, resumeFile: string | undefined): Promise<void> {
@@ -135,8 +136,7 @@ export class SessionWaker {
 		// The status may have changed during the wait; respect the live value.
 		const status = this.#registry.get(daemonId)?.status ?? entry.status;
 		if (status !== "connecting") {
-			const opts = resumeFile && resumeFile.trim() !== "" ? { resumeFile } : undefined;
-			await this.#host.ensureHostRunning(entry, opts);
+			await this.#lifecycle.start(daemonId, startOptions(resumeFile));
 		}
 		if (!(await this.#awaitPair(daemonId, this.#pairTimeoutMs))) {
 			throw new Error(
