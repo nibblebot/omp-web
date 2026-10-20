@@ -1,14 +1,15 @@
 /**
- * bwrap provider process identity: the pidfile record and the host `/proc`
- * reads behind it. Identity is private to the bwrap provider's per-workspace
- * `stateDir`; the shared provider protocol (lib/runtime/provider-protocol.ts)
- * knows nothing of pids. Liveness and `stop` prove the requested generation
- * terminated by this identity, never by a reusable pid alone.
+ * Clone runtime process identity (the bwrap provider and the host clone
+ * runtime): the pidfile record and the host `/proc` reads behind it. Identity
+ * is private to the provider's per-workspace `stateDir`; the shared provider
+ * protocol (lib/runtime/provider-protocol.ts) knows nothing of pids. Liveness
+ * and `stop` prove the requested generation terminated by this identity,
+ * never by a reusable pid alone.
  *
  * Record: `<stateDir>/provider.pid.json` = {pid, procStartTime, generation,
- * workspaceToken, startedAt}. `pid` is the HOST pid of the sandboxed command,
+ * workspaceToken, startedAt}. `pid` is the HOST pid of the session command,
  * `procStartTime` is `/proc/<pid>/stat` field 22 recorded at launch, and the
- * launch token is embedded in the sandboxed command's argv. Liveness needs
+ * launch token is embedded in the session command's argv. Liveness needs
  * the pid alive, not a zombie, with the same procStartTime AND a cmdline that
  * still carries the token, so a reused pid never matches.
  */
@@ -138,4 +139,44 @@ export function identityLive(record: LaunchRecord | null): boolean {
 	if (identity.state === "Z" || identity.state === "X") return false;
 	if (identity.startTime !== record.procStartTime) return false;
 	return cmdlineOf(record.pid).includes(record.workspaceToken);
+}
+
+/** SIGTERM proof budget before SIGKILL escalation. */
+const TERM_PROOF_MS = 10_000;
+/** SIGKILL proof budget before declaring the termination unproven. */
+const KILL_PROOF_MS = 5_000;
+const PROOF_POLL_MS = 50;
+
+/**
+ * Terminate the workspace's recorded process and PROVE the generation
+ * terminated by identity (re-reading the record each poll), escalating
+ * SIGTERM, then SIGKILL. `signal` delivers a signal to the recorded pid (the
+ * caller decides whether that reaches the pid or its process group). True
+ * when the recorded process is gone or no longer matches the launch identity;
+ * false when proof is impossible (the caller reports a conflict).
+ */
+export async function stopAndProve(
+	stateDir: string,
+	signal: (pid: number, signal: NodeJS.Signals) => void,
+): Promise<boolean> {
+	const record = readLaunchRecord(stateDir);
+	if (record === null || !identityLive(record)) return true; // already stopped/missing
+	const target = record.pid;
+
+	const escalate = async (sig: NodeJS.Signals, budgetMs: number): Promise<boolean> => {
+		try {
+			signal(target, sig);
+		} catch {
+			return true;
+		}
+		const deadline = Date.now() + budgetMs;
+		while (Date.now() < deadline) {
+			if (!identityLive(readLaunchRecord(stateDir))) return true;
+			await Bun.sleep(PROOF_POLL_MS);
+		}
+		return false;
+	};
+
+	if (await escalate("SIGTERM", TERM_PROOF_MS)) return true;
+	return await escalate("SIGKILL", KILL_PROOF_MS);
 }

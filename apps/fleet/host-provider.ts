@@ -15,7 +15,8 @@
  * a child that dies without this provider having ended it.
  *
  * Children are never tied to the provider's lifetime: nothing here kills them
- * when the fleet closes.
+ * when the fleet closes. `spawnDetached` is the launch mechanic itself, shared
+ * with the host clone provider (host-clone-provider.ts).
  */
 
 import { closeSync, mkdirSync, openSync } from "node:fs";
@@ -91,6 +92,65 @@ function signalGroup(child: Child, signal: NodeJS.Signals): void {
 		// The group is already gone (or never formed); signal the child itself.
 		child.kill(signal);
 	}
+}
+
+/**
+ * Signal the process group a detached child leads, or the pid alone when the group is gone.
+ * Throws when the pid itself is gone (the caller treats that as terminated).
+ */
+export function signalProcessGroup(pid: number, signal: NodeJS.Signals): void {
+	try {
+		process.kill(-pid, signal);
+	} catch {
+		process.kill(pid, signal);
+	}
+}
+
+/** A detached child to launch on the fleet host. */
+export interface DetachedLaunch {
+	argv: string[];
+	cwd?: string;
+	/** The child's whole environment. */
+	env: Record<string, string>;
+	/** Written to the child's stdin, which is then closed (the daemon reads its payload to EOF). */
+	stdin: string;
+	/** The file the child appends its combined stdout and stderr to; rotated above the cap on each launch. */
+	logPath: string;
+}
+
+/**
+ * Launch a child detached (its own session and process group, so a terminal
+ * Ctrl+C or the fleet's exit never reaches it) with the stdin payload and the
+ * log as stdout and stderr. The one process mechanic shared by the host
+ * runtime and the host clone runtime. Throws when the log or the spawn fails.
+ */
+export function spawnDetached(launch: DetachedLaunch): Child {
+	mkdirSync(dirname(launch.logPath), { recursive: true });
+	rotateSessionLog(launch.logPath);
+	const logFd = openSync(launch.logPath, "a");
+	let child: Child;
+	try {
+		child = Bun.spawn(launch.argv, {
+			stdin: "pipe",
+			stdout: logFd,
+			stderr: logFd,
+			detached: true,
+			...(launch.cwd !== undefined ? { cwd: launch.cwd } : {}),
+			env: launch.env,
+		});
+	} finally {
+		// The child holds its own copy of the descriptor.
+		closeSync(logFd);
+	}
+	// A write racing the child's exit is not ours to report: whoever supervises the child
+	// records that outcome.
+	try {
+		child.stdin.write(launch.stdin);
+		child.stdin.end();
+	} catch {
+		// The child exited before reading its payload.
+	}
+	return child;
 }
 
 /**
@@ -194,36 +254,14 @@ export class HostRuntimeProvider implements RuntimeProvider<HostRequest, HostOkR
 		if (request.launch === undefined) return failure("ensure-running without a launch");
 		let child: Child;
 		try {
-			mkdirSync(dirname(request.logPath), { recursive: true });
-			rotateSessionLog(request.logPath);
-			const logFd = openSync(request.logPath, "a");
-			try {
-				// Detached: its own session and process group; stdin carries the
-				// --fleet-stdin payload (written below).
-				child = Bun.spawn(["sh", "-c", request.launch.command], {
-					stdin: "pipe",
-					stdout: logFd,
-					stderr: logFd,
-					detached: true,
-					env: {
-						...inheritedChildEnv(process.env),
-						OMP_SESSION_LOG_MIRROR: "0",
-					},
-				});
-			} finally {
-				// The child holds its own copy of the descriptor.
-				closeSync(logFd);
-			}
+			child = spawnDetached({
+				argv: ["sh", "-c", request.launch.command],
+				env: { ...inheritedChildEnv(process.env), OMP_SESSION_LOG_MIRROR: "0" },
+				stdin: request.launch.stdin,
+				logPath: request.logPath,
+			});
 		} catch (err) {
 			return failure(`spawn failed: ${err instanceof Error ? err.message : String(err)}`);
-		}
-		// The daemon reads its callback pair and listener token from stdin to EOF. A write racing the
-		// child's exit is not ours to report: the exit handler records that outcome.
-		try {
-			child.stdin.write(request.launch.stdin);
-			child.stdin.end();
-		} catch {
-			// The child exited before reading its payload.
 		}
 		const hosted: Hosted = {
 			child,

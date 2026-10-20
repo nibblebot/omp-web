@@ -24,6 +24,8 @@
  *     respawn, and a prompt still reaches it.
  *  5. POST /ctl/stop on that daemon makes the process exit and the entry asleep.
  *  6. a prompt on that stopped daemon wakes it: the respawn carries --resume <lastSessionFile>.
+ *  7. a host-kind clone of a git repo (real omp-session, no sandbox): create through
+ *     the control API, start, pair up to ready, stop, delete.
  *
  * Model determinism: every daemon runs with a fresh, empty PI_CODING_AGENT_DIR
  * and PI_AUTH_NO_BORROW=1, so no model is selectable and no live model or API
@@ -55,7 +57,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Subprocess } from "bun";
 import type { DaemonEntry } from "#lib/wire/protocol";
 import { startCallbackDaemon } from "../apps/fleet/test/callback-daemon.testkit";
@@ -299,6 +301,8 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 					shortidle: { command: SHORTIDLE_TEMPLATE },
 				},
 				defaultTemplate: "local",
+				// The in-process host kind: clones run the real omp-session on this host, unsandboxed.
+				providerProfiles: { host: { provider: "host" } },
 			}),
 		);
 		// Hermetic against the dev-runner override: OMP_FLEET_* env replaces config
@@ -627,4 +631,69 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		// Accounting: this is the sixth prompt across the suite.
 		expect(promptCount).toBe(6);
 	}, 120_000);
+
+	test("a host clone of a git repo runs the real omp-session: create, start, ready, stop, delete", async () => {
+		const source = join(tmp, "host-clone-source");
+		mkdirSync(source, { recursive: true });
+		const git = (...args: string[]): void => {
+			const proc = Bun.spawnSync(["git", "-C", source, ...args], { stderr: "pipe" });
+			if (proc.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${proc.stderr.toString()}`);
+		};
+		git("init", "-q", "-b", "main");
+		writeFileSync(join(source, "readme.md"), "hello\n");
+		git("add", ".");
+		git("commit", "-q", "-m", "init");
+
+		const registered = await postJson("/ctl/projects", { path: source });
+		expect(registered.status).toBe(201);
+		const { project } = (await registered.json()) as { project: { projectId: string } };
+		const created = await postJson("/ctl/clones", {
+			projectId: project.projectId,
+			name: "host-clone",
+			profileId: "host",
+			start: true,
+		});
+		expect(created.status).toBe(201);
+		const { entry } = (await created.json()) as { entry: DaemonEntry };
+		const persisted = getPersistedEntry(entry.daemonId);
+		const volume = persisted.cwd!;
+		const checkout = join(volume, ".checkout");
+		expect(existsSync(join(checkout, ".git"))).toBe(true);
+		const stateDir = join(dirname(volume), ".provider-state", entry.daemonId);
+		const recorded = (): number =>
+			(JSON.parse(readFileSync(join(stateDir, "provider.pid.json"), "utf8")) as { pid: number })
+				.pid;
+		try {
+			// The real session dials out over the callback pair and the roster settles ready.
+			await waitForEntry(
+				entry.daemonId,
+				(e) => e.status === "ready" && e.lifecycleStage === "ready",
+				60_000,
+				"become ready",
+			);
+			const pid = recorded();
+			trackedPids.add(pid);
+			expect(isRunning(pid)).toBe(true);
+			// The session runs in the clone's checkout with its home inside the volume.
+			expect(readFileSync(`/proc/${pid}/cmdline`, "utf8")).toContain("--fleet-stdin");
+			const environ = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0");
+			expect(environ).toContain(`HOME=${join(volume, ".home")}`);
+			expect(environ.some((line) => line.startsWith("OMP_SESSION_CALLBACK_"))).toBe(false);
+
+			const stopped = await postJson("/ctl/stop", { selector: entry.daemonId });
+			expect(stopped.status).toBe(200);
+			await waitUntil(() => !isRunning(pid), 30_000, "the host clone process to exit");
+			expect(existsSync(checkout)).toBe(true);
+
+			const removed = await fetch(`${base()}/ctl/worktrees/${entry.daemonId}`, {
+				method: "DELETE",
+			});
+			expect(removed.status).toBe(200);
+			expect(existsSync(volume)).toBe(false);
+			expect(await getEntry(entry.daemonId)).toBeUndefined();
+		} finally {
+			// A failure midway must not leave the unsandboxed session behind.
+			await postJson("/ctl/stop", { selector: entry.daemonId }).catch(() => undefined);
+		}
+	}, 150_000);
 });

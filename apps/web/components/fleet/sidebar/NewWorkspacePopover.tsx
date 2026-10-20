@@ -12,7 +12,7 @@ import {
 	type Resource,
 } from "solid-js";
 import { Portal } from "solid-js/web";
-import type { ProjectBranch } from "#lib/wire/protocol";
+import type { ProjectBranch, PublicProviderProfile } from "#lib/wire/protocol";
 import { slugifyWorktreeName, worktreeBranchName } from "#lib/wire/worktree-name";
 import {
 	currentWorkspaceCreationPrefs,
@@ -63,6 +63,13 @@ const MARGIN = 8;
 /** Below this much room under the anchor the popover opens upward when more room is above. */
 const MIN_BELOW = 240;
 
+/** The short kind name shown next to a profile id in the "Run on" switch. */
+const PROVIDER_KIND_LABEL: Record<PublicProviderProfile["provider"], string> = {
+	bwrap: "bwrap",
+	kubernetes: "k8s",
+	host: "host",
+};
+
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /** A listing's value, or undefined while unresolved or errored (reading an errored resource throws). */
@@ -94,12 +101,13 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 	const profile = () => state.providerProfiles.find((p) => p.id === runOn()) ?? null;
 	const cloning = () => profile() !== null;
 
-	// Kubernetes profiles never have a local source; the switch is forced to Remote.
+	// A profile whose provider prepares its own volume (kubernetes) never has a local
+	// source; the switch is forced to Remote.
 	const [sourceChoice, setSourceChoice] = createSignal<WorkspaceSourceChoice>(
 		remembered.source ?? "local",
 	);
 	const source = (): WorkspaceSourceChoice =>
-		profile()?.provider === "kubernetes" ? "remote" : sourceChoice();
+		profile()?.preparation === "provider" ? "remote" : sourceChoice();
 	const remoteMode = () => cloning() && source() === "remote";
 
 	// Local branches: This machine lists worktree checkouts; a clone lists the
@@ -429,7 +437,7 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 											disabled={busy()}
 											onClick={() => setRunOn(p.id)}
 										>
-											{`${p.id} · ${p.provider === "kubernetes" ? "k8s" : "bwrap"}`}
+											{`${p.id} · ${PROVIDER_KIND_LABEL[p.provider]}`}
 										</button>
 									)}
 								</For>
@@ -439,7 +447,7 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 					<Show when={cloning()}>
 						<div class="new-workspace-field">
 							<div class="new-workspace-segments" role="group" aria-label="Source">
-								<Show when={profile()?.provider !== "kubernetes"}>
+								<Show when={profile()?.preparation !== "provider"}>
 									<button
 										type="button"
 										class="new-workspace-segment"

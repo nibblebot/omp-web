@@ -104,9 +104,11 @@ export type ProviderErrorCode = (typeof PROVIDER_ERROR_CODES)[number];
  * The provider kinds: the ONE source of truth for every validator and type
  * (protocol request, config load, preflight, wire). Adding a kind is one edit
  * here, its profile member below, its `PROVIDER_CAPABILITIES` row, and its
- * validator keys.
+ * validator keys. `bwrap` and `kubernetes` are executable providers (one
+ * `<executable> <op>` process per op); `host` is the in-process host runtime
+ * (no executable, no sandbox).
  */
-export const PROVIDER_KINDS = ["bwrap", "kubernetes"] as const;
+export const PROVIDER_KINDS = ["bwrap", "kubernetes", "host"] as const;
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
 export function isProviderKind(value: unknown): value is ProviderKind {
@@ -144,6 +146,7 @@ export interface ProviderCapabilities {
 export const PROVIDER_CAPABILITIES: Record<ProviderKind, ProviderCapabilities> = {
 	bwrap: { preparation: "fleet", volumeFleetVisible: true, secretResolution: "fleet-env" },
 	kubernetes: { preparation: "provider", volumeFleetVisible: false, secretResolution: "provider" },
+	host: { preparation: "fleet", volumeFleetVisible: true, secretResolution: "fleet-env" },
 };
 
 /**
@@ -170,13 +173,17 @@ export const KUBERNETES_POD_LAYOUT = {
 interface ProviderProfileBase {
 	id: string;
 	provider: ProviderKind;
-	executable: string;
-	resources?: { cpu?: string; memory?: string };
-	storage?: { class?: string; size?: string };
 	secretRefs?: Record<string, string>;
 }
 
-export interface BwrapProfile extends ProviderProfileBase {
+/** Profiles of the executable kinds: a provider process per op, with its declared limits. */
+interface ExecutableProfileBase extends ProviderProfileBase {
+	executable: string;
+	resources?: { cpu?: string; memory?: string };
+	storage?: { class?: string; size?: string };
+}
+
+export interface BwrapProfile extends ExecutableProfileBase {
 	provider: "bwrap";
 	/** Absolute tool paths ro-bound into the sandbox. */
 	tools: string[];
@@ -184,7 +191,7 @@ export interface BwrapProfile extends ProviderProfileBase {
 	network?: "host" | "isolated";
 }
 
-export interface KubernetesProfile extends ProviderProfileBase {
+export interface KubernetesProfile extends ExecutableProfileBase {
 	provider: "kubernetes";
 	image?: string;
 	namespace?: string;
@@ -193,25 +200,38 @@ export interface KubernetesProfile extends ProviderProfileBase {
 	context?: string;
 }
 
-export type ProviderProfile = BwrapProfile | KubernetesProfile;
+/**
+ * The in-process host runtime: the session runs directly on the fleet host as
+ * the fleet user, with no sandbox. There is no executable, and no resource or
+ * storage limit the runtime could enforce, so neither field exists here.
+ */
+export interface HostProfile extends ProviderProfileBase {
+	provider: "host";
+}
+
+export type ProviderProfile = BwrapProfile | KubernetesProfile | HostProfile;
+
+/** A profile whose runtime is an external `<executable> <op>` provider. */
+export type ExecutableProfile = Exclude<ProviderProfile, HostProfile>;
+
+export function isExecutableProfile(profile: ProviderProfile): profile is ExecutableProfile {
+	return profile.provider !== "host";
+}
 
 /** Request/config keys every kind shares. */
-const PROFILE_BASE_KEYS = [
-	"id",
-	"provider",
-	"executable",
-	"resources",
-	"storage",
-	"secretRefs",
-] as const;
+const PROFILE_BASE_KEYS = ["id", "provider", "secretRefs"] as const;
+
+/** Keys of the executable kinds: where the provider is, and the limits it is asked to apply. */
+const EXECUTABLE_PROFILE_KEYS = ["executable", "resources", "storage"] as const;
 
 /**
  * Per-kind profile key allowlist (base + the kind's own fields). A key owned
  * by another kind is a typed validation error, never silently carried.
  */
 export const PROVIDER_PROFILE_KEYS: Record<ProviderKind, readonly string[]> = {
-	bwrap: [...PROFILE_BASE_KEYS, "tools", "network"],
-	kubernetes: [...PROFILE_BASE_KEYS, "image", "namespace", "context"],
+	bwrap: [...PROFILE_BASE_KEYS, ...EXECUTABLE_PROFILE_KEYS, "tools", "network"],
+	kubernetes: [...PROFILE_BASE_KEYS, ...EXECUTABLE_PROFILE_KEYS, "image", "namespace", "context"],
+	host: [...PROFILE_BASE_KEYS],
 };
 
 /**
@@ -461,6 +481,10 @@ function parseProfile(value: unknown, where: string): ProviderProfile {
 			secretRefs[name] = ref;
 		}
 	}
+	const id = requireString(value, "id", where);
+	if (provider === "host") {
+		return { id, provider, ...(secretRefs !== undefined ? { secretRefs } : {}) };
+	}
 	let resources: { cpu?: string; memory?: string } | undefined;
 	if (value["resources"] !== undefined) {
 		const resourcesRaw = value["resources"];
@@ -489,7 +513,6 @@ function parseProfile(value: unknown, where: string): ProviderProfile {
 			size: optionalString(storageRaw, "size", `${where}.storage`),
 		};
 	}
-	const id = requireString(value, "id", where);
 	const executable = requireString(value, "executable", where);
 	const base = { id, executable, resources, storage, secretRefs };
 	if (provider === "bwrap") {

@@ -21,7 +21,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import type { ProviderProfile } from "#lib/runtime/provider-protocol";
+import { isExecutableProfile, type ProviderProfile } from "#lib/runtime/provider-protocol";
 import { validateProfiles } from "./provider-profile";
 import { parseProxyRule } from "./trusted-proxy";
 
@@ -314,7 +314,7 @@ function mergeConfig(raw: unknown): FleetConfig {
 			// Executable paths honor the config file's `~` convention
 			// (expandTilde passes absolute/PATH names through untouched).
 			for (const profile of Object.values(profiles)) {
-				profile.executable = expandTilde(profile.executable);
+				if (isExecutableProfile(profile)) profile.executable = expandTilde(profile.executable);
 			}
 			config.providerProfiles = profiles;
 		}

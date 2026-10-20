@@ -52,6 +52,7 @@ import {
 	serveProviderRequest,
 	writeJsonAtomic,
 } from "#lib/runtime/provider-callback-env";
+import { resolveProfileSecrets } from "#lib/runtime/profile-secrets";
 import { preflightBwrapProfile } from "./bwrap-preflight";
 import {
 	BWRAP_PID_FILE,
@@ -59,9 +60,10 @@ import {
 	identityLive,
 	readLaunchRecord,
 	procIdentity,
+	stopAndProve,
 	type LaunchRecord,
 } from "./bwrap-identity";
-import { defaultDenyRoots, defaultRuntimeLaunch, type RuntimeLaunch } from "./runtime-launch";
+import { cloneRuntimeLaunch, defaultDenyRoots } from "./runtime-launch";
 import { SessionLog, PROVIDER_DAEMON_LOG, pumpToSessionLog } from "./session-log";
 
 /**
@@ -89,10 +91,6 @@ const SUPERVISE_ERR_FILE = "supervise.err";
 const PIDFILE_WAIT_MS = 10_000;
 /** Descendant-walk poll budget for the sandboxed command pid. */
 const INNER_PID_WAIT_MS = 5_000;
-/** SIGTERM proof budget before SIGKILL escalation. */
-const TERM_PROOF_MS = 10_000;
-/** SIGKILL proof budget before declaring conflict. */
-const KILL_PROOF_MS = 5_000;
 const POLL_INTERVAL_MS = 50;
 const STATE_LOCK_HOLDER = "bwrap-provider";
 
@@ -150,88 +148,6 @@ function bwrapProfileOf(request: ProviderRequest): BwrapProfile {
 	return profile;
 }
 
-/** Secret-ref scheme prefix: the value is an environment variable name. */
-const SECRET_ENV_SCHEME = "env:";
-/** Secret-values bound (values ride the supervisor's process env). */
-const SECRET_MAX_CHARS = 4096;
-
-/**
- * Resolve profile `secretRefs` to concrete sandbox env values (P5.5).
- * Scheme `env:NAME` reads the named variable from the PROVIDER's own
- * environment: selected model credentials are supplied to the fleet, never
- * mounted from the operator agent dir. Values never touch the request JSON,
- * argv, or the stateDir; the supervisor receives only key names and pulls
- * the actual values from its own env. Unknown schemes are configuration
- * errors (`invalid_request`); a missing variable is `unavailable` with
- * actionable remediation (the operator must provision it before launch).
- */
-function resolveProfileSecrets(request: ProviderRequest): {
-	env: Record<string, string>;
-	keys: readonly string[];
-} {
-	const refs = request.profile.secretRefs;
-	if (refs === undefined || Object.keys(refs).length === 0) return { env: {}, keys: [] };
-	const env: Record<string, string> = {};
-	const keys: string[] = [];
-	for (const [name, ref] of Object.entries(refs)) {
-		if (!ref.startsWith(SECRET_ENV_SCHEME)) {
-			throw new ProviderProtocolError(
-				"invalid_request",
-				`secretRefs.${name}: unsupported secret reference scheme "${ref}" (expected ${SECRET_ENV_SCHEME}NAME)`,
-				{},
-			);
-		}
-		const varName = ref.slice(SECRET_ENV_SCHEME.length);
-		if (varName.length === 0) {
-			throw new ProviderProtocolError(
-				"invalid_request",
-				`secretRefs.${name}: empty environment variable name in reference "${ref}"`,
-				{},
-			);
-		}
-		if (!/^[A-Za-z_][A-Za-z0-9_]{0,255}$/.test(varName)) {
-			throw new ProviderProtocolError(
-				"invalid_request",
-				`secretRefs.${name}: "${varName}" is not a valid POSIX environment variable name`,
-				{},
-			);
-		}
-		const value = process.env[varName];
-		if (value === undefined) {
-			throw new ProviderProtocolError(
-				"unavailable",
-				`secretRefs.${name} references environment variable ${varName}, which is not set on the fleet host; provide it to the provider process (e.g. systemd unit EnvironmentFile) or fix the reference`,
-				{},
-			);
-		}
-		if (value.length === 0 || value.length > SECRET_MAX_CHARS) {
-			throw new ProviderProtocolError(
-				"invalid_request",
-				`secretRefs.${name}: ${varName} must be a non-empty string of at most ${SECRET_MAX_CHARS} characters`,
-				{},
-			);
-		}
-		env[name] = value;
-		keys.push(name);
-	}
-	return { env, keys };
-}
-
-/** Runtime entry resolution: process.resources env, else dev/bundle layout. */
-function runtimeLaunchFor(): RuntimeLaunch {
-	const launch = defaultRuntimeLaunch(process.env);
-	// Clone daemons dial OUT over the callback channel; nobody dials in. The
-	// daemon still binds its HTTP listener at boot, and under a host-network
-	// profile (P5.7) the default port 4721 collides with any other local
-	// daemon: an instant, silent in-sandbox death (smoke 2026-09-06: "Failed
-	// to start server. Is port 4721 in use?"). Always bind an ephemeral port
-	// unless the operator pinned one (env flag mapping is 1:1).
-	if (process.env.OMP_SESSION_PORT === undefined && !launch.args.includes("--port")) {
-		return { ...launch, args: [...launch.args, "--port", "0"] };
-	}
-	return launch;
-}
-
 /** Spawn the detached supervisor that owns the sandbox process tree. */
 function spawnSupervisor(
 	stateDir: string,
@@ -240,7 +156,7 @@ function spawnSupervisor(
 	secretEnv: Record<string, string>,
 ): void {
 	mkdirSync(stateDir, { recursive: true });
-	const launch = runtimeLaunchFor();
+	const launch = cloneRuntimeLaunch();
 	const spec: SuperviseSpec = {
 		request,
 		runtimeEntry: launch.entry,
@@ -428,35 +344,10 @@ async function runSupervisor(stateDir: string): Promise<number> {
 // Operations
 // ---------------------------------------------------------------------------
 
-/**
- * Stop the workspace's sandbox and PROVE the generation terminated by
- * identity. Returns true when the recorded process is gone or no longer
- * matches the launch identity; false when proof is impossible (conflict).
- */
-async function stopAndProve(stateDir: string, generation: number): Promise<boolean> {
-	const record = readLaunchRecord(stateDir);
-	if (record === null || !identityLive(record)) return true; // already stopped/missing
-	const target = record.pid;
-
-	const escalate = async (signal: NodeJS.Signals, budgetMs: number): Promise<boolean> => {
-		try {
-			process.kill(target, signal);
-		} catch {
-			return true;
-		}
-		const deadline = Date.now() + budgetMs;
-		while (Date.now() < deadline) {
-			const now = readLaunchRecord(stateDir);
-			if (!identityLive(now)) return true;
-			await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-		}
-		return false;
-	};
-
-	if (await escalate("SIGTERM", TERM_PROOF_MS)) return true;
-	if (await escalate("SIGKILL", KILL_PROOF_MS)) return true;
-	return false;
-}
+/** Stop proof signals the recorded sandbox command pid (bwrap-identity.ts proves the termination by identity). */
+const killRecordedPid = (pid: number, signal: NodeJS.Signals): void => {
+	process.kill(pid, signal);
+};
 
 async function opEnsureRunning(request: ProviderRequest): Promise<ProviderResponse> {
 	const { stateDir, workspaceId, generation, homeDir } = request;
@@ -479,10 +370,10 @@ async function opEnsureRunning(request: ProviderRequest): Promise<ProviderRespon
 
 	// Fail fast on a policy-rejected profile: validate the sandbox argv before
 	// any supervisor spawn (P5.5 denylist errors are request config problems).
-	let secretResolved: { env: Record<string, string>; keys: readonly string[] } | undefined;
+	let secretEnv: Record<string, string>;
 	try {
-		secretResolved = resolveProfileSecrets(request);
-		const launch = runtimeLaunchFor();
+		secretEnv = resolveProfileSecrets(request);
+		const launch = cloneRuntimeLaunch();
 		buildBwrapArgv({
 			workspaceDir: request.workspaceDir,
 			homeDir: request.homeDir,
@@ -558,7 +449,7 @@ async function opEnsureRunning(request: ProviderRequest): Promise<ProviderRespon
 		}
 
 		try {
-			spawnSupervisor(stateDir, request, callbackEnv, secretResolved.env);
+			spawnSupervisor(stateDir, request, callbackEnv, secretEnv);
 		} catch (cause) {
 			return err("unavailable", `cannot start supervisor: ${String(cause)}`, true);
 		}
@@ -600,7 +491,7 @@ async function opStop(request: ProviderRequest): Promise<ProviderResponse> {
 	const record = readLaunchRecord(stateDir);
 	const handle = handleFor(workspaceId, generation, record);
 	if (!identityLive(record)) return ok(handle, "stopped"); // idempotent
-	if (!(await stopAndProve(stateDir, generation))) {
+	if (!(await stopAndProve(stateDir, killRecordedPid))) {
 		return err("conflict", "could not prove the generation terminated", false);
 	}
 	return ok(handle, "stopped");
@@ -612,7 +503,7 @@ async function opDelete(request: ProviderRequest): Promise<ProviderResponse> {
 	if (!existsSync(stateDir)) return ok(handle, "missing"); // idempotent
 
 	const record = readLaunchRecord(stateDir);
-	if (record !== null && identityLive(record) && !(await stopAndProve(stateDir, generation))) {
+	if (record !== null && identityLive(record) && !(await stopAndProve(stateDir, killRecordedPid))) {
 		return err("conflict", "delete: could not prove the generation terminated", false);
 	}
 	rmSync(stateDir, { recursive: true, force: true });

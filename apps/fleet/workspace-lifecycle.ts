@@ -31,9 +31,11 @@
  *   with the host runtime via restart-policy.ts); an explicit stop never
  *   restarts. This is not an idle stop: it never stops compute.
  * - Every runtime sits behind the runtime-provider contract
- *   (runtime-provider.ts): clones through their profile's executable provider
- *   (bwrap, kubernetes), main-checkout and worktree sessions through the
- *   in-process host provider (host-provider.ts). The host runtime below is the
+ *   (runtime-provider.ts): clones through their profile's provider (an
+ *   executable for bwrap and kubernetes; the in-process host-clone-provider.ts
+ *   for the `host` kind, an unsandboxed session on the fleet host),
+ *   main-checkout and worktree sessions through the in-process host provider
+ *   (host-provider.ts). The host runtime below is the
  *   lifecycle policy over it, the part the former spawn supervisor owned:
  *   - each start mints a fresh callback credential and generation (the
  *     previous one is revoked first); the payload reaches the child only on
@@ -100,6 +102,7 @@ import type { FleetEventLog } from "./events";
 import type { WorkspaceResourceDeleter } from "./server";
 import type { ProviderOkResponse } from "#lib/runtime/provider-protocol";
 import { executableRuntimeProvider } from "./runtime-provider";
+import { hostCloneRuntimeProvider } from "./host-clone-provider";
 import { HostRuntimeProvider, describeExit } from "./host-provider";
 import type { HostExit, HostRequest } from "./host-provider";
 import {
@@ -583,8 +586,8 @@ export class WorkspaceLifecycle {
 	/**
 	 * Create a clone workspace (frozen contract). Persists the registry
 	 * record (source, profile, desired state) and the resolved pin BEFORE
-	 * any retry-prone step; prepares the fleet-local volume (bwrap
-	 * profiles); starts it when `start` is true.
+	 * any retry-prone step; prepares the fleet-local volume (profiles with
+	 * fleet preparation: bwrap, host); starts it when `start` is true.
 	 *
 	 * Typed failures: invalid_request (bad input), unavailable (unknown
 	 * profile / unresolvable source or pin / provider unavailable),
@@ -711,7 +714,7 @@ export class WorkspaceLifecycle {
 
 		// Resolve the pin ONCE, for EVERY profile (fleet-owned pin
 		// resolution, the k8s provider never resolves; Runtime contract).
-		// prepareWorkspace (bwrap) resolves internally too, but the explicit
+		// prepareWorkspace (fleet preparation) resolves internally too, but the explicit
 		// resolve here persists the full commit BEFORE any retry-prone step
 		// and feeds the persisted pin into the volume prep below.
 		let pinnedRevision: string | undefined;
@@ -737,7 +740,7 @@ export class WorkspaceLifecycle {
 		}
 		registry.updateWorkspace(daemonId, { pinnedRevision });
 
-		// Preparation. Profiles whose capability is fleet preparation (bwrap)
+		// Preparation. Profiles whose capability is fleet preparation (bwrap, host)
 		// prepare the volume here; provider-prepared profiles (kubernetes)
 		// skip the fleet-side clone: the provider initializes its volume
 		// in place at the persisted pin during ensure-running, reusing the
@@ -827,9 +830,9 @@ export class WorkspaceLifecycle {
 	 *
 	 * P8.9 wake resume: `resumeSessionId` names the session this wake
 	 * should boot into (the edge pre-validates it against the fleet store
-	 * listing). Fleet-visible volumes (bwrap): the wake materializes that
+	 * listing). Fleet-visible volumes (bwrap, host): the wake materializes that
 	 * session's cold/missing stored transcripts into the volume and hands the
-	 * daemon the resolved main-file path as OMP_SESSION_RESUME (the sandbox
+	 * daemon the resolved main-file path as OMP_SESSION_RESUME (the runtime
 	 * sees the host path). Volumes the fleet cannot read (kubernetes): the
 	 * hint is an in-pod path from the session's own report
 	 * (`lastSessionFile`) or the store lineage, and the pod validates it at
@@ -1293,12 +1296,12 @@ export class WorkspaceLifecycle {
 		const reattached = reuseToken !== undefined && generation === currentGen;
 
 		// P8.9 wake resume: when this wake is spawning a NEW daemon process
-		// (not the reattach path), compute the resume target (bwrap: also
+		// (not the reattach path), compute the resume target (fleet-visible volumes: also
 		// materialize cold/missing transcripts into the volume BEFORE the
 		// provider runs). The resume hint rides the callback-env handoff
 		// (OMP_SESSION_RESUME, allowlisted by the providers) so the daemon's
 		// existing boot switchSession(config.resume) resumes it. Fleet-visible
-		// volumes (bwrap) get the host path the sandbox sees; kubernetes gets
+		// volumes (bwrap, host) get the host path the runtime sees; kubernetes gets
 		// the in-pod path (the provider injects the handoff as pod env) and the
 		// pod validates it at boot.
 		// Computed BEFORE enrollment persists so a typed failure (an explicit
@@ -2099,7 +2102,12 @@ export class WorkspaceLifecycle {
 			...(record?.pinnedRevision !== undefined ? { revision: record.pinnedRevision } : {}),
 			...(record?.branch !== undefined ? { branch: record.branch } : {}),
 		};
-		const response = await executableRuntimeProvider(profile.executable).run(request);
+		// The host kind is the in-process runtime; every other kind runs its profile's executable.
+		const runtime =
+			profile.provider === "host"
+				? hostCloneRuntimeProvider
+				: executableRuntimeProvider(profile.executable);
+		const response = await runtime.run(request);
 		if (response.ok) return response;
 		throw new CloneLifecycleError(
 			this.#codeForProviderError(response.error.code),

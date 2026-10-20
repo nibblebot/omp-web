@@ -59,6 +59,25 @@ export function defaultRuntimeLaunch(
 }
 
 /**
+ * The launch of a clone session runtime (bwrap sandbox or host runtime).
+ * Clone daemons dial OUT over the callback channel; nobody dials in. The
+ * daemon still binds its HTTP listener at boot, and where the runtime shares
+ * the host network namespace (a host-network bwrap profile, the host kind)
+ * the default port 4721 collides with any other local daemon: an instant,
+ * silent death ("Failed to start server. Is port 4721 in use?"). Always bind
+ * an ephemeral port unless the operator pinned one (env flag mapping is 1:1).
+ */
+export function cloneRuntimeLaunch(
+	env: Record<string, string | undefined> = process.env,
+): RuntimeLaunch {
+	const launch = defaultRuntimeLaunch(env);
+	if (env.OMP_SESSION_PORT === undefined && !launch.args.includes("--port")) {
+		return { ...launch, args: [...launch.args, "--port", "0"] };
+	}
+	return launch;
+}
+
+/**
  * Keep application administration-root discovery out of sandbox policy. The
  * source fleet directory and installed provider directory are denied at their
  * respective physical locations, independent of the reusable library's path.

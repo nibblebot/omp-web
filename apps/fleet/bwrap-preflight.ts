@@ -16,7 +16,7 @@
  * anything or writes to disk. All checks run (no short-circuit).
  */
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
 	DeniedBindError,
@@ -24,7 +24,8 @@ import {
 	assertWorkspaceVolume,
 } from "#lib/runtime/bwrap-args";
 import type { PreflightCheck, BwrapProfile } from "#lib/runtime/provider-protocol";
-import { defaultDenyRoots, defaultRuntimeLaunch } from "./runtime-launch";
+import { defaultDenyRoots } from "./runtime-launch";
+import { checkRuntimeBin, checkRuntimeEntry } from "./runtime-preflight";
 
 /** Inputs beyond the profile: the fleet workspace volume root and the provider's environment. */
 export interface BwrapPreflightOptions {
@@ -40,23 +41,6 @@ export interface BwrapPreflightOptions {
 /** Human message for an unexpected thrown value. */
 function errMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
-}
-
-/** True when the file exists and carries at least one execute bit. */
-function isExecutable(p: string): boolean {
-	try {
-		return (statSync(p).mode & 0o111) !== 0;
-	} catch {
-		return false;
-	}
-}
-
-/** Resolve a tool path the way spawning would: absolute paths must exist,
- *  bare names resolve through PATH. */
-function resolveToolPath(tool: string): string | null {
-	if (tool.length === 0) return null;
-	if (isAbsolute(tool)) return existsSync(tool) ? tool : null;
-	return Bun.which(tool);
 }
 
 /** bwrap path used for probes: absolute directly, else PATH resolution. */
@@ -138,47 +122,6 @@ async function checkBwrapUserns(env: Record<string, string | undefined>): Promis
 			remediation: `cannot spawn ${resolved}; fix its permissions/loader or reinstall bubblewrap`,
 		};
 	}
-}
-
-function checkRuntimeEntry(env: Record<string, string | undefined>): PreflightCheck {
-	const launch = defaultRuntimeLaunch(env);
-	const entry = resolve(launch.entry);
-	if (!existsSync(entry)) {
-		return {
-			name: "runtime-entry",
-			ok: false,
-			detail: `runtime entry not found: ${entry}`,
-			remediation:
-				`the sandbox runs the repo's apps/session/index.ts (dev) or the installed cli.js ` +
-				`(bundle). Set OMP_RUNTIME_ENTRY to the built session runtime entry, or ` +
-				`rebuild/install omp-web`,
-		};
-	}
-	const detail = launch.args.length > 0 ? `${entry} (bundle session mode)` : entry;
-	return { name: "runtime-entry", ok: true, detail };
-}
-
-function checkRuntimeBin(env: Record<string, string | undefined>): PreflightCheck {
-	const wanted = defaultRuntimeLaunch(env).bin;
-	const shown = env.OMP_RUNTIME_BIN ?? `bun (${wanted})`;
-	const bin = resolveToolPath(wanted);
-	if (bin === null) {
-		return {
-			name: "runtime-bin",
-			ok: false,
-			detail: `runtime binary not found: ${shown}`,
-			remediation: `install bun (the sandboxed omp-session runs under bun) or set OMP_RUNTIME_BIN`,
-		};
-	}
-	if (!isExecutable(bin)) {
-		return {
-			name: "runtime-bin",
-			ok: false,
-			detail: `runtime binary is not executable: ${bin}`,
-			remediation: `fix permissions on ${bin} (chmod +x)`,
-		};
-	}
-	return { name: "runtime-bin", ok: true, detail: bin };
 }
 
 /** Profile tools must be absolute and existing (a missing tool ro-binds

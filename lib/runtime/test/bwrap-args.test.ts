@@ -17,8 +17,10 @@ import {
 	DeniedBindError,
 	FLEET_CALLBACK_ENV_KEYS,
 	assertAllowedSource,
+	assertSecretEnv,
 	assertWorkspaceVolume,
 	buildBwrapArgv,
+	buildSessionEnv,
 	deriveDenyRoots,
 	existingDenyDirs,
 	existingDenyFiles,
@@ -710,5 +712,53 @@ describe("runtimeRootFor package roots", () => {
 			flag === "--ro-bind" ? [[argv[index + 1], argv[index + 2]]] : [],
 		);
 		expect(mounts).toContainEqual([packageRoot, aliasRoot]);
+	});
+});
+
+describe("buildSessionEnv", () => {
+	const ambient = {
+		HOME: "/home/operator",
+		PATH: "/usr/bin",
+		LANG: "C.UTF-8",
+		OMP_SESSION_RESUME: "/volume/.home/agent/sessions/s/s.jsonl",
+		OMP_SESSION_CALLBACK_TOKEN: "pair-token",
+		AWS_SECRET_ACCESS_KEY: "ambient-secret",
+	};
+
+	test("is the allowlist plus the volume's home layout, never the rest of the ambient env", () => {
+		const env = buildSessionEnv({
+			env: ambient,
+			homeDir: "/volume/.home",
+			workspaceDir: "/volume/.checkout",
+		});
+		expect(env).toEqual({
+			HOME: "/volume/.home",
+			PATH: "/usr/bin",
+			LANG: "C.UTF-8",
+			OMP_SESSION_RESUME: "/volume/.home/agent/sessions/s/s.jsonl",
+			PI_CODING_AGENT_DIR: "/volume/.home/agent",
+			OMP_PROVIDER_PROTO: "1",
+			OMP_WORKSPACE_DIR: "/volume/.checkout",
+		});
+	});
+
+	test("falls back to a default PATH and merges secrets last", () => {
+		const env = buildSessionEnv({
+			env: {},
+			homeDir: "/h",
+			workspaceDir: "/w",
+			secretEnv: { MODEL_KEY: "k" },
+		});
+		expect(env.PATH).toBeString();
+		expect(env.MODEL_KEY).toBe("k");
+	});
+
+	test("assertSecretEnv refuses reserved names and unbounded values", () => {
+		expect(() => assertSecretEnv({ HOME: "x" })).toThrow("non-reserved");
+		expect(() => assertSecretEnv({ OMP_SESSION_CALLBACK_TOKEN: "x" })).toThrow("non-reserved");
+		expect(() => assertSecretEnv({ "not valid": "x" })).toThrow("non-reserved");
+		expect(() => assertSecretEnv({ MODEL_KEY: "" })).toThrow("non-empty");
+		expect(() => assertSecretEnv({ MODEL_KEY: "k" })).not.toThrow();
+		expect(() => assertSecretEnv(undefined)).not.toThrow();
 	});
 });

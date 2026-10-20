@@ -94,6 +94,18 @@ export default defineStory({
 			render: () => <Anchored typed="feat/refused" submit />,
 		},
 		{
+			name: "Host clone from the local checkout (no sandbox)",
+			seed: () => {
+				answerNewWorkspaceCommands();
+				rememberWorkspaceCreationPrefs(PROJECT_ID, {
+					kind: "clone",
+					profileId: "host-dev",
+					source: "local",
+				});
+			},
+			render: () => <Anchored />,
+		},
+		{
 			name: "Project missing on disk",
 			seed: () =>
 				seedRosterFleet({

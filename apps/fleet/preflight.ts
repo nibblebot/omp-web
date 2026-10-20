@@ -4,7 +4,8 @@
  * here with an actionable message instead of at launch time.
  *
  * The fleet owns the host-generic rows:
- *  - profile executable present + executable bit;
+ *  - profile executable present + executable bit (the in-process `host` kind
+ *    has none: its row passes and says so);
  *  - callback URL reachability CLASS-CHECK (DNS + TCP only; no bytes are
  *    ever written, so no credential or request can leak) when configured;
  *  - durable state dirs writable (workspace root + logs root; a missing dir
@@ -15,8 +16,9 @@
  * Each provider owns the rows about its own environment (bwrap binary and
  * user namespaces, runtime entry, tools, denied binds; kubernetes API,
  * namespace, RBAC, StorageClass, Secrets, image). The fleet obtains them by
- * invoking the provider executable's `preflight` op and merges them, so this
- * module has no per-kind branch.
+ * invoking the provider executable's `preflight` op and merges them. The
+ * in-process host kind has no executable to ask, so its rows (runtime entry,
+ * runtime binary, an explicit no-sandbox row) come from runtime-preflight.ts.
  *
  * Every check that can fail carries an actionable remediation string. No
  * check installs tools, creates clusters, or fabricates credentials. All
@@ -33,10 +35,13 @@ import { runProviderOp } from "#lib/runtime/provider-exec";
 import {
 	PROVIDER_CAPABILITIES,
 	buildPreflightRequest,
+	isExecutableProfile,
+	type ExecutableProfile,
 	type PreflightCheck,
 	type ProviderKind,
 	type ProviderProfile,
 } from "#lib/runtime/provider-protocol";
+import { preflightHostProfile } from "./runtime-preflight";
 
 /** Wall-clock budget for the provider's preflight op: a kubernetes preflight runs one kubectl call per check. */
 const PROVIDER_PREFLIGHT_TIMEOUT_MS = 120_000;
@@ -169,7 +174,14 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<
 // Individual checks
 // ---------------------------------------------------------------------------
 
-async function checkExecutable(profile: ProviderProfile): Promise<PreflightCheck> {
+/** The executable row of a profile with no executable: the in-process host runtime. */
+const HOST_RUNTIME_ROW: PreflightCheck = {
+	name: "profile-executable",
+	ok: true,
+	detail: "in-process host runtime (no provider executable)",
+};
+
+async function checkExecutable(profile: ExecutableProfile): Promise<PreflightCheck> {
 	const exe = resolveToolPath(profile.executable);
 	if (exe === null) {
 		return {
@@ -192,11 +204,12 @@ async function checkExecutable(profile: ProviderProfile): Promise<PreflightCheck
 	return { name: "profile-executable", ok: true, detail: exe };
 }
 
-/** Rows the provider owns: its `preflight` op, run through the shared provider executor. */
+/** Rows the provider owns: its `preflight` op, run through the shared provider executor (the in-process host runtime answers in process). */
 async function checkProviderRows(
 	profile: ProviderProfile,
 	ctx: PreflightContext,
 ): Promise<PreflightCheck[]> {
+	if (!isExecutableProfile(profile)) return preflightHostProfile(ctx.env ?? process.env);
 	const failing = (detail: string, remediation: string): PreflightCheck[] => [
 		{ name: "provider-preflight", ok: false, detail, remediation },
 	];
@@ -433,7 +446,9 @@ export async function runProfilePreflight(
 	profile: ProviderProfile,
 	ctx: PreflightContext,
 ): Promise<PreflightResult> {
-	const executable = await checkExecutable(profile);
+	const executable = isExecutableProfile(profile)
+		? await checkExecutable(profile)
+		: HOST_RUNTIME_ROW;
 	const checks: PreflightCheck[] = [
 		executable,
 		await checkCallback(ctx),

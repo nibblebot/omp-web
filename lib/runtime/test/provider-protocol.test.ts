@@ -69,13 +69,33 @@ describe("request profile per kind", () => {
 	test("unknown keys and unknown kinds are still rejected", () => {
 		expect(rejection({ ...bwrap, bogus: 1 }).message).toContain("bogus");
 		expect(rejection({ ...bwrap, provider: "microvm" }).message).toContain(
-			'provider must be "bwrap" or "kubernetes"',
+			'provider must be "bwrap", "kubernetes" or "host"',
 		);
 	});
 
 	test("a bwrap profile still requires tools", () => {
 		const { tools: _tools, ...noTools } = bwrap;
 		expect(rejection(noTools).message).toContain("tools must be an array");
+	});
+
+	test("a host profile carries only id, provider and secretRefs", () => {
+		const h = parseProviderRequest(
+			request({ id: "h", provider: "host", secretRefs: { KEY: "env:KEY" } }),
+		);
+		expect(h.profile).toEqual({ id: "h", provider: "host", secretRefs: { KEY: "env:KEY" } });
+		expect(parseProviderRequest(request({ id: "h", provider: "host" })).profile).toEqual({
+			id: "h",
+			provider: "host",
+		});
+	});
+
+	test("a host profile rejects the executable kinds' fields, and executable kinds still require an executable", () => {
+		for (const field of ["executable", "resources", "storage", "tools", "image"]) {
+			const value = field === "executable" ? "/p" : field === "tools" ? [] : {};
+			expect(rejection({ id: "h", provider: "host", [field]: value }).code).toBe("invalid_request");
+		}
+		const { executable: _executable, ...noExecutable } = bwrap;
+		expect(rejection(noExecutable).message).toContain("executable");
 	});
 });
 

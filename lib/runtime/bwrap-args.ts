@@ -327,6 +327,54 @@ function allowedEnv(
 	return out;
 }
 
+const SECRET_ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+const SECRET_ENV_MAX_CHARS = 4096;
+
+/**
+ * Shape-check resolved secret env values: only valid, non-reserved names with
+ * bounded non-empty values may enter a runtime environment.
+ */
+export function assertSecretEnv(secretEnv: Record<string, string> | undefined): void {
+	if (secretEnv === undefined) return;
+	for (const [key, value] of Object.entries(secretEnv)) {
+		if (!SECRET_ENV_NAME_RE.test(key) || RESERVED_SECRET_ENV_KEYS.includes(key)) {
+			throw new Error(`secretEnv key ${key} is not a valid, non-reserved sandbox env name`);
+		}
+		if (typeof value !== "string" || value.length === 0 || value.length > SECRET_ENV_MAX_CHARS) {
+			throw new Error(
+				`secretEnv.${key} must be a non-empty string of at most ${SECRET_ENV_MAX_CHARS} chars`,
+			);
+		}
+	}
+}
+
+/**
+ * The environment of a clone session runtime, one layout for every provider
+ * that runs it on the fleet host (bwrap inside its sandbox, the host runtime
+ * unsandboxed): the ambient allowlist copy, `HOME` and the agent dir inside
+ * the workspace's private home (so transcripts land under the volume's
+ * `.home/agent/sessions`), the workspace dir, the provider protocol version,
+ * then `secretEnv` merged last. Secret names were checked by
+ * {@link assertSecretEnv}, so nothing with a fixed meaning can be overridden.
+ */
+export function buildSessionEnv(input: {
+	env: Record<string, string | undefined>;
+	homeDir: string;
+	workspaceDir: string;
+	secretEnv?: Record<string, string>;
+}): Record<string, string> {
+	const env = allowedEnv(input.env, ENV_ALLOW_KEYS);
+	env.HOME = input.homeDir;
+	if (env.PATH === undefined) env.PATH = DEFAULT_PATH;
+	env.PI_CODING_AGENT_DIR = join(input.homeDir, "agent");
+	env.OMP_PROVIDER_PROTO = "1";
+	env.OMP_WORKSPACE_DIR = input.workspaceDir;
+	if (input.secretEnv !== undefined) {
+		for (const [key, value] of Object.entries(input.secretEnv)) env[key] = value;
+	}
+	return env;
+}
+
 // ---------------------------------------------------------------------------
 // Sandbox file system policy
 // ---------------------------------------------------------------------------
@@ -361,9 +409,6 @@ const ETC_ALLOW_ENTRIES: readonly string[] = [
 	"pki",
 	"ca-certificates",
 ];
-
-const SECRET_ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
-const SECRET_ENV_MAX_CHARS = 4096;
 
 /**
  * The package root the sandbox must see: the nearest ancestor of `entry`
@@ -433,21 +478,7 @@ export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 	const roots = input.denyRoots;
 	assertWorkspaceVolume(workspaceDir, roots);
 	assertWorkspaceVolume(homeDir, roots);
-
-	// Secret env values are the only non-allowlisted keys; shape-check them
-	// here so a malformed provider never reaches argv.
-	if (input.secretEnv !== undefined) {
-		for (const [key, value] of Object.entries(input.secretEnv)) {
-			if (!SECRET_ENV_NAME_RE.test(key) || RESERVED_SECRET_ENV_KEYS.includes(key)) {
-				throw new Error(`secretEnv key ${key} is not a valid, non-reserved sandbox env name`);
-			}
-			if (typeof value !== "string" || value.length === 0 || value.length > SECRET_ENV_MAX_CHARS) {
-				throw new Error(
-					`secretEnv.${key} must be a non-empty string of at most ${SECRET_ENV_MAX_CHARS} chars`,
-				);
-			}
-		}
-	}
+	assertSecretEnv(input.secretEnv);
 
 	const argv: string[] = [input.bwrapBin ?? "bwrap"];
 	const bind = (flags: readonly string[], source: string, dest: string) => {
@@ -540,17 +571,12 @@ export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 		`--omp-workspace-token=${workspaceToken}`,
 	);
 
-	const env = allowedEnv(input.env ?? process.env, ENV_ALLOW_KEYS);
-	env.HOME = homeDir;
-	if (env.PATH === undefined) env.PATH = DEFAULT_PATH;
-	env.PI_CODING_AGENT_DIR = join(homeDir, "agent");
-	env.OMP_PROVIDER_PROTO = "1";
-	env.OMP_WORKSPACE_DIR = workspaceDir;
-	if (input.secretEnv !== undefined) {
-		// Merged last by construction; RESERVED_SECRET_ENV_KEYS was enforced
-		// above, so nothing with a fixed sandbox meaning can be overridden.
-		for (const [key, value] of Object.entries(input.secretEnv)) env[key] = value;
-	}
+	const env = buildSessionEnv({
+		env: input.env ?? process.env,
+		homeDir,
+		workspaceDir,
+		secretEnv: input.secretEnv,
+	});
 
 	return { argv, env };
 }

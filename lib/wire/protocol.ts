@@ -522,10 +522,10 @@ export type DaemonStatus =
 // --- Clone workspace identity: workspace/daemon lifecycle facts the fleet
 // edge surfaces on the roster (optional DaemonEntry fields).
 
-/** How a workspace's checkout was produced (clone-contracts ledger). */
+/** How a workspace's checkout was produced. */
 export type WorkspaceKind = "worktree" | "clone" | "direct";
 
-/** Fleet-side desired state of a workspace (clone-contracts ledger). */
+/** Fleet-side desired state of a workspace. */
 export type DesiredState = "running" | "stopped";
 
 /** Provider-managed workspace lifecycle: preparation → runtime → callback → ready; failed is terminal. */
@@ -543,6 +543,12 @@ export interface PublicProviderProfile {
 	/** Profile id (the config map key). */
 	id: string;
 	provider: ProviderKind;
+	/**
+	 * Who prepares a new clone's volume (the kind's `PROVIDER_CAPABILITIES`
+	 * entry): `"fleet"` clones from a local path or a remote, `"provider"`
+	 * prepares in place from a remote only, so the UI offers no local source.
+	 */
+	preparation: "fleet" | "provider";
 	/** Declared resource limits, when any. */
 	resources?: { cpu?: string; memory?: string };
 	/** Sandbox network mode (bwrap): "host" | "isolated"; absent = isolated default. */

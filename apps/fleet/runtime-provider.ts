@@ -4,11 +4,13 @@
  * delete), answered with the provider protocol's typed envelope (an ok
  * observation or a typed error, never a throw for an operational failure).
  *
- * Two implementations: executable providers (bwrap, kubernetes) run as a
+ * Three implementations: executable providers (bwrap, kubernetes) run as a
  * one-shot process per op over `runProviderOp`; the host provider
  * (host-provider.ts) is in-process, for sessions that run as children of the
- * fleet on the fleet host. The request shape is each implementation's own;
- * the lifecycle builds the right one for the workspace's kind.
+ * fleet on the fleet host; the host clone provider (host-clone-provider.ts) is
+ * the in-process answer to the provider protocol for the `host` profile kind.
+ * The request shape is each implementation's own; the lifecycle builds the
+ * right one for the workspace's kind.
  */
 
 import { runProviderOp } from "#lib/runtime/provider-exec";

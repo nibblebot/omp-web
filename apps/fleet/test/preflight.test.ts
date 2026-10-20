@@ -12,6 +12,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
 	BwrapProfile,
+	HostProfile,
 	KubernetesProfile,
 	PreflightCheck,
 } from "#lib/runtime/provider-protocol";
@@ -290,5 +291,66 @@ describe("aggregation", () => {
 			expect(typeof check.remediation).toBe("string");
 		}
 		expect(result.ok).toBe(false);
+	});
+});
+
+describe("host profile (in-process, no provider executable)", () => {
+	const host = (overrides: Partial<HostProfile> = {}): HostProfile => ({
+		id: "test",
+		provider: "host",
+		...overrides,
+	});
+
+	test("reports the host-generic rows, the runtime rows and an explicit no-sandbox row, with no provider invocation", async () => {
+		const f = fixtureDirs();
+		const entry = join(f.root, "entry.js");
+		writeFileSync(entry, "");
+		const result = await runProfilePreflight(host(), {
+			...ctxFor(f),
+			env: { HOME: f.root, OMP_RUNTIME_ENTRY: entry },
+		});
+		expect(names(result.checks)).toEqual([
+			"profile-executable",
+			"callback-url",
+			"durable-workspace-root",
+			"durable-logs-root",
+			"profile-secrets",
+			"runtime-entry",
+			"runtime-bin",
+			"host-isolation",
+		]);
+		const row = (name: string) => result.checks.find((c) => c.name === name)!;
+		expect(row("profile-executable")).toMatchObject({ ok: true });
+		expect(row("profile-executable").detail).toContain("in-process");
+		expect(row("runtime-entry")).toMatchObject({ ok: true, detail: entry });
+		expect(row("host-isolation")).toMatchObject({ ok: true });
+		expect(row("host-isolation").detail).toContain("no sandbox");
+		expect(names(result.checks)).not.toContain("provider-preflight");
+		expect(result.ok).toBe(true);
+		expect(result.provider).toBe("host");
+	});
+
+	test("a missing runtime entry fails with remediation", async () => {
+		const f = fixtureDirs();
+		const result = await runProfilePreflight(host(), {
+			...ctxFor(f),
+			env: { HOME: f.root, OMP_RUNTIME_ENTRY: join(f.root, "absent.js") },
+		});
+		const entry = result.checks.find((c) => c.name === "runtime-entry")!;
+		expect(entry.ok).toBe(false);
+		expect(entry.remediation).toContain("OMP_RUNTIME_ENTRY");
+		expect(result.ok).toBe(false);
+	});
+
+	test("secretRefs resolve from the fleet env, as for bwrap", async () => {
+		const f = fixtureDirs();
+		const withRef = host({ secretRefs: { model: "env:MODEL_CRED" } });
+		const found = await runProfilePreflight(withRef, {
+			...ctxFor(f),
+			env: { HOME: f.root, MODEL_CRED: "x" },
+		});
+		expect(found.checks.find((c) => c.name === "profile-secrets")!.ok).toBe(true);
+		const missing = await runProfilePreflight(withRef, ctxFor(f));
+		expect(missing.checks.find((c) => c.name === "profile-secrets")!.ok).toBe(false);
 	});
 });

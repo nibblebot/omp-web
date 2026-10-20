@@ -60,10 +60,14 @@ export function validateProfiles(raw: unknown): ProfileValidationResult {
 // from the shared protocol module, never from this fleet-private leaf.
 import type { PublicProviderProfile } from "#lib/wire/protocol";
 import {
+	PROVIDER_CAPABILITIES,
 	describeProviderKinds,
 	foreignProfileKeyOwner,
+	isExecutableProfile,
 	isProviderKind,
 	type BwrapProfile,
+	type ExecutableProfile,
+	type HostProfile,
 	type KubernetesProfile,
 	type ProviderProfile,
 } from "#lib/runtime/provider-protocol";
@@ -74,9 +78,15 @@ import {
  * limits, storage class name, and secret reference names.
  */
 export function toPublicProfile(profile: ProviderProfile): PublicProviderProfile {
-	const pub: PublicProviderProfile = { id: profile.id, provider: profile.provider };
-	if (profile.resources !== undefined) pub.resources = { ...profile.resources };
-	if (profile.storage?.class !== undefined) pub.storageClassName = profile.storage.class;
+	const pub: PublicProviderProfile = {
+		id: profile.id,
+		provider: profile.provider,
+		preparation: PROVIDER_CAPABILITIES[profile.provider].preparation,
+	};
+	if (isExecutableProfile(profile)) {
+		if (profile.resources !== undefined) pub.resources = { ...profile.resources };
+		if (profile.storage?.class !== undefined) pub.storageClassName = profile.storage.class;
+	}
 	if (profile.secretRefs !== undefined) pub.secretRefNames = Object.keys(profile.secretRefs).sort();
 	if (profile.provider === "bwrap" && profile.network !== undefined) pub.network = profile.network;
 	return pub;
@@ -115,25 +125,35 @@ function parseProfile(
 			}`,
 		);
 	}
-	if (typeof raw.executable !== "string" || raw.executable.trim() === "") {
+	const provider = raw.provider;
+	if (provider === "host") {
+		// The host runtime is in-process and unsandboxed: there is no provider to
+		// point at and no limit it could enforce, so these are errors, not ignored.
+		for (const field of ["executable", "resources", "storage"] as const) {
+			if (raw[field] !== undefined) {
+				return fail(
+					"invalid_request",
+					`${field} is not valid on a host profile: the host runtime is in-process and unsandboxed (no provider executable, no resource or storage limits)`,
+				);
+			}
+		}
+	} else if (typeof raw.executable !== "string" || raw.executable.trim() === "") {
 		return fail(
 			"invalid_request",
 			"executable is required: a non-empty path (absolute, on PATH, or ~/ prefixed)",
 		);
 	}
 	for (const field of Object.keys(raw)) {
-		const owner = foreignProfileKeyOwner(raw.provider, field);
+		const owner = foreignProfileKeyOwner(provider, field);
 		if (owner !== null) {
 			return fail(
 				"invalid_request",
-				`${field} is a ${owner} field and is not valid on a ${raw.provider} profile`,
+				`${field} is a ${owner} field and is not valid on a ${provider} profile`,
 			);
 		}
 	}
-	const profile: Pick<
-		ProviderProfile,
-		"id" | "executable" | "resources" | "storage" | "secretRefs"
-	> = { id: key, executable: raw.executable };
+	const profile: Pick<ProviderProfile, "id" | "secretRefs"> &
+		Pick<ExecutableProfile, "resources" | "storage"> = { id: key };
 
 	const resources = raw.resources;
 	if (resources !== undefined) {
@@ -216,7 +236,13 @@ function parseProfile(
 		profile.secretRefs = secretRefs as Record<string, string>;
 	}
 
-	const provider = raw.provider;
+	if (provider === "host") {
+		const host: HostProfile = { id: key, provider };
+		if (profile.secretRefs !== undefined) host.secretRefs = profile.secretRefs;
+		return host;
+	}
+	// Present and non-empty: the executable check above fails every other kind first.
+	const executable = raw.executable as string;
 	if (provider === "bwrap") {
 		if (!isToolList(raw.tools)) {
 			return fail("invalid_request", "tools is required: an array of non-empty tool names");
@@ -230,12 +256,12 @@ function parseProfile(
 				}`,
 			);
 		}
-		const bwrap: BwrapProfile = { ...profile, provider, tools: raw.tools };
+		const bwrap: BwrapProfile = { ...profile, executable, provider, tools: raw.tools };
 		if (network !== undefined) bwrap.network = network;
 		return bwrap;
 	}
 
-	const kubernetes: KubernetesProfile = { ...profile, provider };
+	const kubernetes: KubernetesProfile = { ...profile, executable, provider };
 	for (const field of ["image", "namespace", "context"] as const) {
 		const fieldValue = raw[field];
 		if (fieldValue === undefined) continue;

@@ -25,7 +25,7 @@
  *   POST /ctl/plugins/:name/features {features|null}  -> detail after feature selection
  *   POST /ctl/plugins/:name/setting {key, value|null} -> detail after setting write (null clears)
  *   POST /ctl/projects/:id/worktrees {name, baseRef?, existingBranch?, start?} -> 201 { entry }
- *   POST /ctl/clones/:daemonId/fetch-into-project -> CloneFetchResult | 400/409/503 { error } (local-source bwrap clones only; fast-forward or create, never overwrite)
+ *   POST /ctl/clones/:daemonId/fetch-into-project -> CloneFetchResult | 400/409/503 { error } (local-source clones on a fleet-visible volume only; fast-forward or create, never overwrite)
  *   DELETE /ctl/worktrees/:daemonId {deleteBranch?: string} -> worktree: stop -> remove entry -> git worktree remove
  *                    (clone workspace: verify-at-deletion gate, P7.3/P7.5)
  *   GET  /ctl/logs/orphans                         -> orphaned log-store subtrees (P7.6)

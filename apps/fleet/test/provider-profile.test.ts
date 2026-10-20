@@ -78,8 +78,57 @@ describe("validateProfiles per kind", () => {
 	test("an unknown provider names the kinds list", () => {
 		const { errors } = validateProfiles({ x: { ...bwrap, provider: "microvm" } });
 		expect(errors[0]!.message).toBe(
-			`provider must be ${PROVIDER_KINDS.map((k) => `"${k}"`).join(" or ")}, got "microvm"`,
+			`provider must be "bwrap", "kubernetes" or "host", got "microvm"`,
 		);
+	});
+});
+
+describe("host profiles", () => {
+	test("a host profile needs no executable and carries only id, provider and secretRefs", () => {
+		const { profiles, errors } = validateProfiles({
+			h: { provider: "host", secretRefs: { KEY: "env:MODEL_KEY" } },
+			bare: { provider: "host" },
+		});
+		expect(errors).toEqual([]);
+		expect(profiles.h).toEqual({ id: "h", provider: "host", secretRefs: { KEY: "env:MODEL_KEY" } });
+		expect(profiles.bare).toEqual({ id: "bare", provider: "host" });
+		expect(profiles.bare).not.toHaveProperty("executable");
+	});
+
+	test.each([
+		["executable", "/usr/bin/provider"],
+		["resources", { cpu: "1" }],
+		["storage", { class: "fast" }],
+	])("%s on a host profile is a typed error and the profile is dropped", (field, value) => {
+		const { profiles, errors } = validateProfiles({ h: { provider: "host", [field]: value } });
+		expect(profiles).toEqual({});
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toMatchObject({ code: "invalid_request", profileId: "h" });
+		expect(errors[0]!.message).toContain(`${field} is not valid on a host profile`);
+	});
+
+	test.each([
+		["tools", [], "bwrap"],
+		["network", "host", "bwrap"],
+		["image", "img", "kubernetes"],
+	])("%s on a host profile names its owner kind", (field, value, owner) => {
+		const { profiles, errors } = validateProfiles({ h: { provider: "host", [field]: value } });
+		expect(profiles).toEqual({});
+		expect(errors[0]!.message).toBe(
+			`${field} is a ${owner} field and is not valid on a host profile`,
+		);
+	});
+
+	test("every executable kind still requires an executable", () => {
+		const { profiles, errors } = validateProfiles({
+			b: { provider: "bwrap", tools: [] },
+			k: { provider: "kubernetes" },
+		});
+		expect(profiles).toEqual({});
+		expect(errors.map((e) => e.message)).toEqual([
+			expect.stringContaining("executable is required"),
+			expect.stringContaining("executable is required"),
+		]);
 	});
 });
 
@@ -88,11 +137,13 @@ describe("toPublicProfile", () => {
 		const { profiles } = validateProfiles({
 			b: { ...bwrap, network: "host", secretRefs: { KEY: "env:SECRET_VALUE_NAME" } },
 			k: { ...kube, secretRefs: { KEY: "secret/key" }, storage: { class: "fast", size: "1Gi" } },
+			h: { provider: "host", secretRefs: { KEY: "env:HOST_SECRET_NAME" } },
 		});
 		const b = toPublicProfile(profiles.b!);
 		expect(b).toEqual({
 			id: "b",
 			provider: "bwrap",
+			preparation: "fleet",
 			network: "host",
 			secretRefNames: ["KEY"],
 		});
@@ -100,26 +151,36 @@ describe("toPublicProfile", () => {
 		expect(k).toEqual({
 			id: "k",
 			provider: "kubernetes",
+			preparation: "provider",
 			storageClassName: "fast",
 			secretRefNames: ["KEY"],
 		});
-		for (const pub of [b, k]) {
+		const h = toPublicProfile(profiles.h!);
+		expect(h).toEqual({
+			id: "h",
+			provider: "host",
+			preparation: "fleet",
+			secretRefNames: ["KEY"],
+		});
+		for (const pub of [b, k, h]) {
 			const json = JSON.stringify(pub);
 			expect(json).not.toContain("executable");
 			expect(json).not.toContain("SECRET_VALUE_NAME");
+			expect(json).not.toContain("HOST_SECRET_NAME");
 			expect(json).not.toContain("secret/key");
 		}
 	});
 });
 
 describe("provider capabilities", () => {
-	test("every kind declares capabilities; bwrap is fleet-prepared and fleet-visible, kubernetes is neither", () => {
+	test("every kind declares capabilities; bwrap and host are fleet-prepared and fleet-visible, kubernetes is neither", () => {
 		for (const kind of PROVIDER_KINDS) expect(PROVIDER_CAPABILITIES[kind]).toBeDefined();
 		expect(PROVIDER_CAPABILITIES.bwrap).toEqual({
 			preparation: "fleet",
 			volumeFleetVisible: true,
 			secretResolution: "fleet-env",
 		});
+		expect(PROVIDER_CAPABILITIES.host).toEqual(PROVIDER_CAPABILITIES.bwrap);
 		expect(PROVIDER_CAPABILITIES.kubernetes).toEqual({
 			preparation: "provider",
 			volumeFleetVisible: false,

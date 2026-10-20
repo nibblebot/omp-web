@@ -477,10 +477,12 @@ export function rosterDaemonInfos(now: number): DaemonInfo[] {
 
 /** PublicProviderProfile list: NewWorkspacePopover run-on profiles and clone-row profile chips. */
 export const rosterProviderProfiles: PublicProviderProfile[] = [
-	{ id: "bwrap-default", provider: "bwrap", network: "host" },
+	{ id: "bwrap-default", provider: "bwrap", preparation: "fleet", network: "host" },
+	{ id: "host-dev", provider: "host", preparation: "fleet" },
 	{
 		id: "k8s-bench",
 		provider: "kubernetes",
+		preparation: "provider",
 		resources: { cpu: "4", memory: "8Gi" },
 		storageClassName: "fast-ssd",
 		secretRefNames: ["omp-api-keys"],
