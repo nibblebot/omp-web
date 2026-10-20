@@ -2,7 +2,9 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { type JSX, onMount } from "solid-js";
 import type { SettingsModel, SubagentMessagesResult } from "#lib/wire/protocol";
-import { type SubagentInfo, setState, type state } from "../../web/state";
+import { createHistoryBuilder } from "../../web/chat/history-items";
+import { DockPane } from "../../web/components/ui/DockPane";
+import { type ChatItem, type SubagentInfo, setState, type state } from "../../web/state";
 import type { AdvisorOverview } from "../../web/store/subagents-advisor";
 import type {
 	SubagentNode,
@@ -21,7 +23,6 @@ const at = (minute: number): number => T0 + minute * 60_000;
 
 export const SESSION_ID = "sess_9d2c";
 const SONNET = "claude-sonnet-4-5";
-const OPUS = "claude-opus-4-1";
 const GPT = "gpt-5";
 
 const SESSIONS_ROOT = "/home/joshua/.omp/agent/sessions";
@@ -115,11 +116,20 @@ function toolResult(
 	};
 }
 
+/** One transcript file: its entries with the byte offset each ends at, as the server pages them. */
+export interface SubagentTranscriptFile {
+	sessionFile: string;
+	entries: TranscriptEntry[];
+	messages: TranscriptMessage[];
+	/** `ends[i]` is the byte offset just past entry `i`; a cursor always sits on one of these. */
+	ends: number[];
+}
+
 function transcript(
 	sessionFile: string,
 	prefix: string,
 	messages: TranscriptMessage[],
-): SubagentMessagesResult {
+): SubagentTranscriptFile {
 	const entries: TranscriptEntry[] = messages.map((message, index) => ({
 		type: "message",
 		id: `${prefix}${index + 1}`,
@@ -127,10 +137,50 @@ function transcript(
 		timestamp: new Date(message.timestamp).toISOString(),
 		message,
 	}));
-	return { sessionFile, fromByte: 0, nextByte: 0, reset: true, entries, messages };
+	let offset = 0;
+	const ends = entries.map((entry) => {
+		offset += JSON.stringify(entry).length + 1;
+		return offset;
+	});
+	return { sessionFile, entries, messages, ends };
 }
 
-const exploreTranscript = transcript(subFile("0-ChatMap"), "c", [
+/**
+ * One `getSubagentMessages` page, shaped like the server's: whole entries from `fromByte`, at most
+ * `maxBytes` (always at least one), `hasMore` while entries remain and `nextByte` the cursor for the
+ * next read. A cursor past the end of the file means the file shrank, so the page restarts at 0 with
+ * `reset`. Reading from the end returns no entries and the same cursor, so the catch-up loop ends.
+ */
+export function transcriptPage(
+	file: SubagentTranscriptFile,
+	fromByte: number,
+	maxBytes: number,
+): SubagentMessagesResult {
+	const total = file.ends.at(-1) ?? 0;
+	const reset = fromByte > total;
+	const start = reset ? 0 : fromByte;
+	const first = file.ends.filter((end) => end <= start).length;
+	const base = first === 0 ? 0 : (file.ends[first - 1] ?? 0);
+	let last = first;
+	while (
+		last < file.entries.length &&
+		(last === first || (file.ends[last] ?? 0) - base <= maxBytes)
+	) {
+		last++;
+	}
+	const entries = file.entries.slice(first, last);
+	return {
+		sessionFile: file.sessionFile,
+		fromByte: start,
+		nextByte: last === first ? start : (file.ends[last - 1] ?? start),
+		hasMore: last < file.entries.length,
+		reset,
+		entries,
+		messages: file.messages.slice(first, last),
+	};
+}
+
+const exploreTranscript = transcript(subFile("FixtureBuilder.ChatMap"), "c", [
 	user(
 		"Map how assistant blocks become tool cards in the chat view. Name the file and function that splits them.",
 		1,
@@ -193,14 +243,58 @@ const exploreTranscript = transcript(subFile("0-ChatMap"), "c", [
 	}),
 ]);
 
-const builderTranscript = transcript(subFile("1-FixtureBuilder"), "b", [
-	user(
-		"Add a retry badge to tool cards that failed once and then succeeded. Keep the header layout unchanged.",
-		7,
+/** A long assignment (more than 8 lines) so the agent view folds it behind Show all. */
+const BUILDER_ASSIGNMENT = [
+	"## Goal",
+	"Add a retry badge to tool cards that failed once and then succeeded. Keep the header layout unchanged.",
+	"",
+	"## Context",
+	"- Tool cards live in `apps/web/components/chat/tools/ToolCard.tsx`; the item type is `ToolItem` in `apps/web/state.ts`.",
+	"- The header already shows a duration chip. The badge should take that slot's neighbor, not a new row.",
+	"- A call counts as retried when an earlier call with the same name and arguments ended in error.",
+	"",
+	"## Constraints",
+	"- Do not touch the collapsed header: it truncates the tool name at 60 characters.",
+	"- Run `bun run check:types` before reporting back.",
+	"- Report the files you changed and anything you left undone.",
+].join("\n");
+
+const builderTranscript = transcript(subFile("FixtureBuilder"), "b", [
+	user(BUILDER_ASSIGNMENT, 2),
+	assistant({
+		model: SONNET,
+		minute: 3,
+		stopReason: "toolUse",
+		input: 4210,
+		output: 188,
+		content: [
+			{ type: "text", text: "Looking at how the card header and item type fit together first." },
+			{
+				type: "toolCall",
+				id: "toolu_02A",
+				name: "read",
+				arguments: { path: "apps/web/components/chat/tools/ToolCard.tsx", offset: 30, limit: 20 },
+			},
+		],
+	}),
+	toolResult(
+		"toolu_02A",
+		"read",
+		[
+			"30\texport function ToolCard(props: ToolCardProps) {",
+			"31\t\tconst duration = createMemo(() => formatToolDuration(props.item));",
+			"32\t\treturn (",
+			'33\t\t\t<section class="tool-card">',
+			"34\t\t\t\t<header>",
+			'35\t\t\t\t\t<span class="tool-name">{props.item.name}</span>',
+			'36\t\t\t\t\t<span class="tool-duration">{duration()}</span>',
+			"37\t\t\t\t</header>",
+		].join("\n"),
+		3,
 	),
 	assistant({
-		model: OPUS,
-		minute: 8,
+		model: SONNET,
+		minute: 4,
 		stopReason: "toolUse",
 		input: 9120,
 		output: 640,
@@ -216,16 +310,21 @@ const builderTranscript = transcript(subFile("1-FixtureBuilder"), "b", [
 			},
 			{
 				type: "toolCall",
-				id: "toolu_01C",
+				id: "toolu_02B",
 				name: "edit",
-				arguments: { path: "apps/web/state.ts", reason: "add retried flag to ToolItem" },
+				arguments: {
+					path: "apps/web/state.ts",
+					old_string: "\tstatus: ToolStatus;\n\toutput?: string;",
+					new_string:
+						"\tstatus: ToolStatus;\n\t/** An earlier identical call failed before this one succeeded. */\n\tretried?: boolean;\n\toutput?: string;",
+				},
 			},
 		],
 	}),
-	toolResult("toolu_01C", "edit", "Edited apps/web/state.ts (+1 -0)", 9),
+	toolResult("toolu_02B", "edit", "Applied 1 edit to apps/web/state.ts", 5),
 	assistant({
-		model: OPUS,
-		minute: 10,
+		model: SONNET,
+		minute: 6,
 		stopReason: "toolUse",
 		input: 11840,
 		output: 412,
@@ -233,22 +332,22 @@ const builderTranscript = transcript(subFile("1-FixtureBuilder"), "b", [
 			{ type: "text", text: "Now the badge in ToolCard, then a typecheck pass." },
 			{
 				type: "toolCall",
-				id: "toolu_01D",
+				id: "toolu_02C",
 				name: "bash",
 				arguments: { command: "bun run check:types" },
 			},
 		],
 	}),
 	toolResult(
-		"toolu_01D",
+		"toolu_02C",
 		"bash",
-		"apps/web/components/chat/ToolCard.tsx(42,18): error TS2339: Property 'retried' does not exist on type 'ToolItem'.",
-		10,
+		"apps/web/components/chat/tools/ToolCard.tsx(42,18): error TS2339: Property 'retried' does not exist on type 'ToolItem'.",
+		7,
 		true,
 	),
 	assistant({
-		model: OPUS,
-		minute: 11,
+		model: SONNET,
+		minute: 8,
 		stopReason: "toolUse",
 		input: 12604,
 		output: 228,
@@ -257,11 +356,22 @@ const builderTranscript = transcript(subFile("1-FixtureBuilder"), "b", [
 				type: "text",
 				text: "`ToolItem` is derived from `ChatItem` in state.ts, so the field has to land there. Fixing the narrowing in ToolCard next.",
 			},
+			{
+				type: "toolCall",
+				id: "toolu_02D",
+				name: "edit",
+				arguments: {
+					path: "apps/web/components/chat/tools/ToolCard.tsx",
+					old_string: '\t\t\t\t\t<span class="tool-duration">{duration()}</span>',
+					new_string:
+						'\t\t\t\t\t<span class="tool-duration">{duration()}</span>\n\t\t\t\t\t<Show when={props.item.retried}>\n\t\t\t\t\t\t<span class="tool-badge">retried</span>\n\t\t\t\t\t</Show>',
+				},
+			},
 		],
 	}),
 ]);
 
-const advisorTranscript = transcript(subFile("3-AdvisorA"), "a", [
+const advisorTranscript = transcript(subFile("FixtureBuilder.AdvisorA"), "a", [
 	user("Review the retry-badge plan against the tool-card render path.", 9),
 	assistant({
 		model: GPT,
@@ -278,7 +388,7 @@ const advisorTranscript = transcript(subFile("3-AdvisorA"), "a", [
 	}),
 ]);
 
-const docsTranscript = transcript(subFile("4-DocsSweep"), "d", [
+const docsTranscript = transcript(subFile("DocsSweep"), "d", [
 	user("Sweep docs/ for stale tool-card screenshots.", 4),
 	assistant({
 		model: SONNET,
@@ -295,26 +405,35 @@ const docsTranscript = transcript(subFile("4-DocsSweep"), "d", [
 	}),
 ]);
 
-/** Transcripts by subagent id. `2-ReviewPass` has none: its artifact is missing. */
-export const subagentTranscripts: Record<string, SubagentMessagesResult> = {
-	"0-ChatMap": exploreTranscript,
-	"1-FixtureBuilder": builderTranscript,
-	"3-AdvisorA": advisorTranscript,
-	"4-DocsSweep": docsTranscript,
+/** Transcripts by subagent id. `FixtureBuilder.ReviewPass` has none: its artifact is missing. */
+export const subagentTranscripts: Record<string, SubagentTranscriptFile> = {
+	"FixtureBuilder.ChatMap": exploreTranscript,
+	FixtureBuilder: builderTranscript,
+	"FixtureBuilder.AdvisorA": advisorTranscript,
+	DocsSweep: docsTranscript,
+	// Queued, not started: the file exists but holds nothing yet.
+	"FixtureBuilder.LintPass": transcript(subFile("FixtureBuilder.LintPass"), "l", []),
 };
+
+/** The chat items a fixture transcript builds, through the same builder the store uses. */
+export function subagentTranscriptItems(id: string): ChatItem[] {
+	const file = subagentTranscripts[id];
+	if (file === undefined) throw new Error(`no transcript for ${id}`);
+	return createHistoryBuilder().append(file.messages).items;
+}
 
 export const subagentInfos: SubagentFixture[] = [
 	{
-		id: "0-ChatMap",
+		id: "FixtureBuilder.ChatMap",
 		index: 0,
 		agent: "explore",
 		description: "Map the chat pipeline",
 		task: "Map how assistant blocks become tool cards in the chat view.",
 		status: "completed",
 		lastUpdate: at(5),
-		parentToolCallId: "toolu_01P0",
+		parentToolCallId: "toolu_01P1",
 		model: SONNET,
-		sessionFile: subFile("0-ChatMap"),
+		sessionFile: subFile("FixtureBuilder.ChatMap"),
 		tokensUsed: 58210,
 		requests: 7,
 		cost: 0.142,
@@ -325,7 +444,7 @@ export const subagentInfos: SubagentFixture[] = [
 			"apps/web/components/chat/tools/ToolCard.tsx",
 			"apps/web/components/chat/blocks.ts",
 		],
-		lineage: ["main › toolu_01P0 › 0-ChatMap"],
+		lineage: ["main › toolu_01P1 › FixtureBuilder › FixtureBuilder.ChatMap"],
 		output:
 			"Tool cards come from groupBlocks() in apps/web/components/chat/blocks.ts. An assistant turn is split at each toolCall part.",
 		artifactAvailability: "available",
@@ -333,7 +452,7 @@ export const subagentInfos: SubagentFixture[] = [
 		revivable: false,
 	},
 	{
-		id: "1-FixtureBuilder",
+		id: "FixtureBuilder",
 		index: 1,
 		agent: "task",
 		description: "Retry badge on tool cards",
@@ -341,8 +460,8 @@ export const subagentInfos: SubagentFixture[] = [
 		status: "running",
 		lastUpdate: at(11),
 		parentToolCallId: "toolu_01P1",
-		model: OPUS,
-		sessionFile: subFile("1-FixtureBuilder"),
+		model: SONNET,
+		sessionFile: subFile("FixtureBuilder"),
 		tokensUsed: 102774,
 		requests: 19,
 		cost: 0.861,
@@ -353,7 +472,7 @@ export const subagentInfos: SubagentFixture[] = [
 			"apps/web/state.ts",
 			"apps/web/components/chat/blocks.ts",
 		],
-		lineage: ["main › toolu_01P1 › 1-FixtureBuilder"],
+		lineage: ["main › toolu_01P1 › FixtureBuilder"],
 		patch: [
 			"--- a/apps/web/components/chat/ToolCard.tsx",
 			"+++ b/apps/web/components/chat/ToolCard.tsx",
@@ -370,13 +489,13 @@ export const subagentInfos: SubagentFixture[] = [
 		revivable: false,
 	},
 	{
-		id: "2-ReviewPass",
+		id: "FixtureBuilder.ReviewPass",
 		index: 2,
 		agent: "review",
 		description: "Review retry badge diff",
 		status: "failed",
 		lastUpdate: at(8),
-		parentToolCallId: "toolu_01P2",
+		parentToolCallId: "toolu_01P1",
 		model: SONNET,
 		tokensUsed: 24011,
 		requests: 4,
@@ -389,25 +508,25 @@ export const subagentInfos: SubagentFixture[] = [
 		revivable: false,
 	},
 	{
-		id: "3-AdvisorA",
+		id: "FixtureBuilder.AdvisorA",
 		index: 3,
 		agent: "advisor",
 		description: "Architecture advisor",
 		status: "running",
 		lastUpdate: at(10),
-		parentToolCallId: "toolu_01P3",
+		parentToolCallId: "toolu_01P1",
 		model: GPT,
-		sessionFile: subFile("3-AdvisorA"),
+		sessionFile: subFile("FixtureBuilder.AdvisorA"),
 		tokensUsed: 31480,
 		requests: 3,
 		cost: 0.204,
-		lineage: ["main › toolu_01P3 › 3-AdvisorA"],
+		lineage: ["main › toolu_01P1 › FixtureBuilder › FixtureBuilder.AdvisorA"],
 		artifactAvailability: "available",
 		hasHistory: true,
 		revivable: false,
 	},
 	{
-		id: "4-DocsSweep",
+		id: "DocsSweep",
 		index: 4,
 		agent: "task",
 		description: "Docs sweep",
@@ -416,7 +535,7 @@ export const subagentInfos: SubagentFixture[] = [
 		lastUpdate: at(5),
 		parentToolCallId: "toolu_01P4",
 		model: SONNET,
-		sessionFile: subFile("4-DocsSweep"),
+		sessionFile: subFile("DocsSweep"),
 		tokensUsed: 40210,
 		requests: 5,
 		cost: 0.091,
@@ -426,13 +545,13 @@ export const subagentInfos: SubagentFixture[] = [
 		revivable: true,
 	},
 	{
-		id: "5-TypesCheck",
+		id: "FixtureBuilder.ReviewPass.TypesCheck",
 		index: 5,
 		agent: "task",
 		description: "Typecheck sweep",
 		status: "started",
 		lastUpdate: at(11.5),
-		parentToolCallId: "toolu_01P5",
+		parentToolCallId: "toolu_01P1",
 		model: SONNET,
 		tokensUsed: 4120,
 		requests: 2,
@@ -644,10 +763,14 @@ export function argRecord(args: unknown[]): Partial<Record<string, unknown>> {
 const defaultCalls: CallHandlers = {
 	workerList: () => subagentWorkers,
 	getSubagentMessages: (args) => {
-		const id = argRecord(args).subagentId;
-		const found = typeof id === "string" ? subagentTranscripts[id] : undefined;
-		if (found === undefined) throw new Error(`no transcript for ${String(id)}`);
-		return found;
+		const { subagentId, fromByte, maxBytes } = argRecord(args);
+		const found = typeof subagentId === "string" ? subagentTranscripts[subagentId] : undefined;
+		if (found === undefined) throw new Error(`no transcript for ${String(subagentId)}`);
+		return transcriptPage(
+			found,
+			typeof fromByte === "number" ? fromByte : 0,
+			typeof maxBytes === "number" ? maxBytes : Number.POSITIVE_INFINITY,
+		);
 	},
 	subagentSteer: () => ({ ok: true }),
 	subagentAbort: () => ({ ok: true }),
@@ -678,6 +801,41 @@ const defaultCalls: CallHandlers = {
 /** Default answers for every subagent-area call, with per-variant overrides applied on top. */
 export function subagentCalls(overrides: CallHandlers = {}): CallHandlers {
 	return { ...defaultCalls, ...overrides };
+}
+
+/**
+ * The real dock pane on the right of a fixed-height frame, like the app body hosts it: the pane
+ * stretches to the frame's height and its body gives a flush panel its column layout.
+ */
+export function DockFrame(props: {
+	title: string;
+	width: number;
+	flush?: boolean;
+	children: JSX.Element;
+}): JSX.Element {
+	return (
+		<div
+			class="ds-frame ds-frame-tall"
+			style={{
+				display: "flex",
+				"justify-content": "flex-end",
+				// The dock's layout width comes only from this variable (prefs/dock.ts sets it on the app).
+				"--dock-w": `${props.width}px`,
+			}}
+		>
+			<DockPane
+				title={props.title}
+				width={props.width}
+				minWidth={320}
+				maxWidth={900}
+				onWidth={() => undefined}
+				onClose={() => undefined}
+				flush={props.flush}
+			>
+				{props.children}
+			</DockPane>
+		</div>
+	);
 }
 
 /**
@@ -728,7 +886,9 @@ interface AgentSpec {
 	id: string;
 	parentId?: string;
 	agent: string;
-	description: string;
+	/** Absent on one agent so its title falls back to the first line of `assignment`. */
+	description?: string;
+	assignment?: string;
 	status: WorkerStatus;
 	parentToolCallId: string;
 	startMin?: number;
@@ -740,15 +900,19 @@ const SONNET_ID = "anthropic/claude-sonnet-4-5";
 const OPUS_ID = "anthropic/claude-opus-4-1";
 
 /**
- * Ids reuse the subagent fixtures above so their transcripts load. `1-FixtureBuilder` is a root
- * with a finished scout, a running advisor, a failed review (which aborted its typecheck child)
- * and a pending lint pass. `4-DocsSweep` is a parked root.
+ * Ids follow the SDK form: the requested name, nested children dotted onto their parent, and a
+ * `-2` suffix when a sibling name repeats. `FixtureBuilder` is a root with a finished scout, a
+ * running advisor, a failed review (whose aborted typecheck was rerun as `TypesCheck-2`) and a
+ * pending lint pass. `DocsSweep` is a parked root with no model. Ids that have a fixture
+ * transcript are listed in `subagentTranscripts`.
  */
 const agentSpecs: AgentSpec[] = [
 	{
-		id: "1-FixtureBuilder",
+		// Live line from the in-flight tool and its intent.
+		id: "FixtureBuilder",
 		agent: "task",
 		description: "Retry badge on tool cards",
+		assignment: BUILDER_ASSIGNMENT,
 		status: "running",
 		parentToolCallId: "toolu_01P1",
 		startMin: 2,
@@ -759,13 +923,14 @@ const agentSpecs: AgentSpec[] = [
 			contextWindow: 200_000,
 			durationMs: 548_000,
 			currentTool: "edit",
+			currentToolIntent: "Render the retried badge in the card header",
 			resolvedModelIdentity: SONNET_ID,
 			resolvedThinkingLevel: "high",
 		},
 	},
 	{
-		id: "0-ChatMap",
-		parentId: "1-FixtureBuilder",
+		id: "FixtureBuilder.ChatMap",
+		parentId: "FixtureBuilder",
 		agent: "explore",
 		description: "Map the chat pipeline",
 		status: "completed",
@@ -782,8 +947,9 @@ const agentSpecs: AgentSpec[] = [
 		},
 	},
 	{
-		id: "3-AdvisorA",
-		parentId: "1-FixtureBuilder",
+		// Live line from the last finished tool, which failed (error color).
+		id: "FixtureBuilder.AdvisorA",
+		parentId: "FixtureBuilder",
 		agent: "advisor",
 		description: "Architecture advisor",
 		status: "running",
@@ -795,14 +961,15 @@ const agentSpecs: AgentSpec[] = [
 			contextTokens: 31_000,
 			contextWindow: 200_000,
 			durationMs: 420_000,
-			currentTool: "read",
+			lastTool: { tool: "read", intent: "Open the card header styles", isError: true },
 			resolvedModelIdentity: OPUS_ID,
+			resolvedThinkingLevel: "medium",
 			advisor: true,
 		},
 	},
 	{
-		id: "2-ReviewPass",
-		parentId: "1-FixtureBuilder",
+		id: "FixtureBuilder.ReviewPass",
+		parentId: "FixtureBuilder",
 		agent: "review",
 		description: "Review retry badge diff",
 		status: "failed",
@@ -819,8 +986,8 @@ const agentSpecs: AgentSpec[] = [
 		},
 	},
 	{
-		id: "5-TypesCheck",
-		parentId: "2-ReviewPass",
+		id: "FixtureBuilder.ReviewPass.TypesCheck",
+		parentId: "FixtureBuilder.ReviewPass",
 		agent: "task",
 		description: "Typecheck sweep",
 		status: "aborted",
@@ -830,15 +997,36 @@ const agentSpecs: AgentSpec[] = [
 		progress: { tokens: 3_100, cost: 0.008, durationMs: 90_000 },
 	},
 	{
-		id: "6-LintPass",
-		parentId: "1-FixtureBuilder",
+		// Dedup suffix, and no description: the title is the first non-empty assignment line.
+		id: "FixtureBuilder.ReviewPass.TypesCheck-2",
+		parentId: "FixtureBuilder.ReviewPass",
+		agent: "task",
+		assignment:
+			"\nRe-run the typecheck sweep on apps/web only.\nReport TypeScript errors grouped by file.",
+		status: "completed",
+		parentToolCallId: "toolu_01P1",
+		startMin: 7.5,
+		endMin: 9,
+		progress: {
+			tokens: 2_600,
+			cost: 0.006,
+			contextTokens: 9_800,
+			contextWindow: 200_000,
+			durationMs: 80_000,
+			resolvedModelIdentity: SONNET_ID,
+		},
+	},
+	{
+		id: "FixtureBuilder.LintPass",
+		parentId: "FixtureBuilder",
 		agent: "task",
 		description: "Lint changed files",
 		status: "pending",
 		parentToolCallId: "toolu_01P1",
 	},
 	{
-		id: "4-DocsSweep",
+		// Parked: the roster has no model, so the model part of line 3 is absent.
+		id: "DocsSweep",
 		agent: "task",
 		description: "Docs sweep",
 		status: "parked",
@@ -865,7 +1053,14 @@ function agentInfoOf(spec: AgentSpec, index: number): SubagentInfo {
 		lastUpdate: at(spec.endMin ?? 11.5),
 		parentToolCallId: spec.parentToolCallId,
 		progress: spec.progress,
-		startedAt: spec.startMin === undefined ? undefined : at(spec.startMin),
+		// A running agent's clock follows the real time, so it starts `durationMs` before now (like the
+		// store does on a first progress frame); finished agents keep their fixed fixture times.
+		startedAt:
+			spec.status === "running" && typeof spec.progress?.durationMs === "number"
+				? Date.now() - spec.progress.durationMs
+				: spec.startMin === undefined
+					? undefined
+					: at(spec.startMin),
 		endedAt: spec.endMin === undefined ? undefined : at(spec.endMin),
 	};
 }
@@ -876,11 +1071,12 @@ function agentRecordOf(spec: AgentSpec): WorkerRecord {
 		agentId: spec.id,
 		sessionId: SESSION_ID,
 		key: workerKey(SESSION_ID, spec.id),
-		displayName: spec.description,
+		displayName: spec.description ?? spec.id,
 		status: spec.status,
 		parentAgentId: spec.parentId,
 		parentToolCallId: spec.parentToolCallId,
 		kind: spec.agent,
+		assignment: spec.assignment,
 		description: spec.description,
 		progress: spec.progress,
 		artifactAvailability: "available",
@@ -889,7 +1085,7 @@ function agentRecordOf(spec: AgentSpec): WorkerRecord {
 		lastActivity: at(spec.endMin ?? 11.5),
 		createdAt: at(spec.startMin ?? 11),
 		adopted: false,
-		revivable: false,
+		revivable: spec.status === "parked",
 	};
 }
 
@@ -899,7 +1095,7 @@ export const agentTreeInfos: SubagentInfo[] = agentSpecs.map(agentInfoOf);
 /** Roster records for the agent tree; they carry the parent links that nest the rows. */
 export const agentTreeWorkers: WorkerRecord[] = agentSpecs.map(agentRecordOf);
 
-/** Settings the tree row reads: the live tool preview and the resolved-model badge. */
+/** Settings the tree row reads: the live line under running rows. */
 export const agentSettingsModel: SettingsModel = {
 	revision: 1,
 	target: "current-session",
@@ -919,14 +1115,6 @@ export const agentSettingsModel: SettingsModel = {
 							value: true,
 							changed: false,
 						},
-						{
-							path: "task.showResolvedModelBadge",
-							label: "Resolved model badge",
-							description: "Show the model a subagent resolved to.",
-							type: "boolean",
-							value: true,
-							changed: false,
-						},
 					],
 				},
 			],
@@ -936,8 +1124,8 @@ export const agentSettingsModel: SettingsModel = {
 
 /**
  * Seeds the attached session with the agent forest, or an empty session with `empty`.
- * `display` also turns on the live-tool preview and model badge settings the tree row reads.
- * `analysis` names the parent session file, which the "Open in Analysis" links need.
+ * `display` also turns on the live-line setting the tree row reads (off by default, so rows show
+ * three lines). `analysis` names the parent session file, which the "Open in Analysis" links need.
  */
 export function seedAgentTree(
 	options: { empty?: boolean; display?: boolean; analysis?: boolean } = {},

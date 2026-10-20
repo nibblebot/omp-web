@@ -197,13 +197,3 @@ export function metricsOf(
 		cost: usage?.cost,
 	};
 }
-
-/** Name of the most recent tool call: the last finished one, else the one in flight. */
-export function lastToolOf(info: SubagentInfo): string | undefined {
-	const p = info.progress;
-	if (!p) return undefined;
-	const direct = str(p.lastTool) ?? str(rec(p.lastTool)?.tool);
-	if (direct) return direct;
-	const recent: unknown[] = Array.isArray(p.recentTools) ? p.recentTools : [];
-	return str(rec(recent[recent.length - 1])?.tool) ?? str(p.currentTool);
-}

@@ -27,3 +27,25 @@ export function sumKnown(values: readonly (number | undefined)[]): number | unde
 	for (const value of values) if (value !== undefined) total = (total ?? 0) + value;
 	return total;
 }
+
+/** Short agent name: the last dot segment of the id (`Parent.Child-2` -> `Child-2`); the `-N` dedup suffix stays. */
+export function shortAgentName(id: string): string {
+	const dot = id.lastIndexOf(".");
+	return dot >= 0 && dot < id.length - 1 ? id.slice(dot + 1) : id;
+}
+
+/** Row title: the description, else the first non-empty assignment line, else the display name. */
+export function agentTitle(source: {
+	description?: string;
+	/** Candidate task texts in preference order (assignment, then task). */
+	assignments?: readonly (string | undefined)[];
+	displayName: string;
+}): string {
+	const description = source.description?.trim();
+	if (description) return description;
+	for (const text of source.assignments ?? []) {
+		const line = text?.split(/\r?\n/).find((l) => l.trim() !== "");
+		if (line !== undefined) return line.trim();
+	}
+	return source.displayName;
+}

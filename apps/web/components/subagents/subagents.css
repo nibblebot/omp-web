@@ -57,8 +57,9 @@
 .subagent-tree-open {
 	display: flex;
 	flex: 1 1 auto;
-	align-items: center;
-	gap: 8px;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 2px;
 	min-width: 0;
 	padding: 6px 8px;
 	border: 1px solid transparent;
@@ -82,8 +83,15 @@
 	outline-offset: 2px;
 }
 
+.subagent-tree-line {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
 .subagent-tree-name {
-	flex: 1 1 auto;
+	flex: 0 1 auto;
 	min-width: 0;
 	overflow: hidden;
 	font-weight: 600;
@@ -91,9 +99,30 @@
 	white-space: nowrap;
 }
 
-.subagent-tree-type,
+.subagent-tree-type {
+	flex: none;
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+/* The chip is the last item of line 1 and sits at its right edge. */
+.subagent-tree-line > .subagent-status-chip {
+	margin-left: auto;
+}
+
+.subagent-tree-title {
+	overflow: hidden;
+	color: var(--muted-3);
+	font-size: 12px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .subagent-tree-model,
 .subagent-tree-live {
+	min-width: 0;
 	overflow: hidden;
 	font-family: var(--font-mono);
 	font-size: 11px;
@@ -101,17 +130,25 @@
 	white-space: nowrap;
 }
 
-.subagent-tree-type {
-	color: var(--muted);
+/* Line 3: the model keeps its full width; the metrics wrap under it in a narrow pane
+   instead of squeezing it, and the model truncates only when wider than the row. */
+.subagent-tree-line.subagent-tree-stats {
+	flex-wrap: wrap;
+	row-gap: 2px;
 }
 
 .subagent-tree-model {
+	flex: 0 1 auto;
+	max-width: 100%;
 	color: var(--muted-3);
 }
 
 .subagent-tree-live {
-	max-width: 220px;
 	color: var(--accent);
+}
+
+.subagent-tree-live[data-error="true"] {
+	color: var(--error);
 }
 
 .subagent-tree-metrics {
@@ -119,6 +156,7 @@
 	flex: none;
 	align-items: center;
 	gap: 10px;
+	margin-left: auto;
 	color: var(--muted);
 	font-size: 12px;
 	font-variant-numeric: tabular-nums;
@@ -177,15 +215,11 @@
 	color: var(--error);
 }
 
+/* Root of SubagentTranscript: fills the pane column. Its inner .chat-transcript (chat.css) is the only scroller. */
 .subagent-transcript {
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
+	flex: 1 1 auto;
+	min-height: 0;
 	min-width: 0;
-}
-
-.subagent-transcript-more {
-	align-self: flex-start;
 }
 
 .subagent-transcript-status {
@@ -200,30 +234,32 @@
 	font-size: 12px;
 }
 
-.subagent-message {
-	min-width: 0;
-}
-
-.subagent-prose {
-	margin: 0;
-	overflow-wrap: anywhere;
-	font-size: 13px;
-	white-space: pre-wrap;
-}
-
+/* Agent pane column: header, transcript (the only scroller), status bar, composer area. The dock body is flush and clips. */
 .subagent-panel {
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
 	min-width: 0;
-	padding: 12px;
+	min-height: 0;
 }
 
 .subagent-panel-head {
 	display: flex;
+	flex: none;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-4) var(--space-5);
+	border-bottom: 1px solid var(--border);
+}
+
+.subagent-panel-id {
+	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px;
+	gap: var(--space-3);
+}
+
+.subagent-panel-id .sidebar-menu-wrap {
+	margin-left: auto;
 }
 
 .subagent-panel-name {
@@ -232,61 +268,85 @@
 	overflow-wrap: anywhere;
 }
 
+.subagent-panel-title {
+	margin: 0;
+	color: var(--muted-3);
+	font-size: var(--fs-md);
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
 .subagent-panel-missing {
 	padding: 12px;
 	color: var(--muted);
 }
 
-.subagent-panel-metrics {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-	gap: 8px;
-	margin: 0;
-}
-
-.subagent-panel-metrics dt {
-	color: var(--muted);
-	font-size: 11px;
-}
-
-.subagent-panel-metrics dd {
-	margin: 0;
-	font-variant-numeric: tabular-nums;
-}
-
-.subagent-panel-actions {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px;
-}
-
 /* KebabMenu's trigger is sidebar-hover-only (fleet.css); the pane header and tree rows have no hover row to reveal it. */
-.subagent-panel-actions .sidebar-menu-btn,
+.subagent-panel-id .sidebar-menu-btn,
 .subagent-tree-row .sidebar-menu-btn {
 	opacity: 1;
 	pointer-events: auto;
 }
 
-.subagent-steer {
+/* Status bar: the main session bar, read-only. Segments wrap onto a second row in a narrow pane
+   rather than clip; only a model id wider than the row truncates. */
+.session-bar.subagent-status-bar {
+	flex: none;
+	flex-wrap: wrap;
+	gap: var(--space-1) var(--space-2);
+	padding: var(--space-2) var(--space-5);
+	border-top: 1px solid var(--border);
+}
+
+/* A queued agent has nothing to report yet: only the spacer renders, so drop the empty strip. */
+.session-bar.subagent-status-bar:has(> .status-spacer:only-child) {
+	display: none;
+}
+
+.subagent-status-bar .segment {
+	flex: none;
+	padding: var(--space-1) var(--space-2);
+	white-space: nowrap;
+}
+
+.subagent-status-bar .segment.model-segment {
+	flex: 0 1 auto;
+	max-width: 100%;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Composer area: the steer box is the main composer in `.prompt-box`; the other states are one quiet row. */
+.subagent-composer {
+	padding-inline: var(--space-5);
+}
+
+/* The armed Stop shows its confirm text beside the icon. */
+.prompt-actions button.stop.armed {
+	padding: 0 var(--space-3);
+	gap: var(--space-2);
+	font-size: var(--fs-md);
+}
+
+.subagent-composer-strip {
 	display: flex;
-	flex-direction: column;
-	gap: 6px;
+	flex: none;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-4);
+	padding: var(--space-4) var(--space-5);
+	border-top: 1px solid var(--border);
 }
 
-.subagent-steer-label {
-	color: var(--muted-3);
-	font-size: 12px;
+.subagent-composer-state {
+	color: var(--muted-2);
+	font-size: var(--fs-md);
 }
 
-.subagent-steer textarea {
-	width: 100%;
-	padding: 8px;
-	border: 1px solid var(--border);
-	border-radius: 6px;
-	background: var(--bg-deep);
-	color: var(--text);
-	font: 13px/1.4 var(--font-mono);
-	resize: vertical;
+.subagent-composer-strip button.subagent-composer-action {
+	padding: var(--space-2) var(--space-5);
+	font-size: var(--fs-md);
 }
 
 .agents-panel {
@@ -333,14 +393,8 @@
 	font-variant-numeric: tabular-nums;
 }
 
-@media (max-width: 768px) {
-	.subagent-metric-wide {
-		display: none;
-	}
-}
-
 /* Narrow or touch: tree rows, agents search, and the composer counter reach
-   44px; a row's chips and metrics wrap under the name instead of clipping. */
+   44px. */
 @media (max-width: 768px), (pointer: coarse) {
 	.subagent-tree-toggle,
 	.subagent-tree-toggle-spacer {
@@ -348,21 +402,7 @@
 		height: 44px;
 	}
 	.subagent-tree-open {
-		flex-wrap: wrap;
-		row-gap: 2px;
 		min-height: 44px;
-	}
-	.subagent-tree-name {
-		flex-basis: 6rem;
-	}
-	.subagent-tree-type,
-	.subagent-tree-model,
-	.subagent-tree-live {
-		max-width: 100%;
-	}
-	.subagent-steer textarea {
-		min-height: 44px;
-		font-size: max(1rem, 16px);
 	}
 	.agents-panel-search {
 		min-height: 44px;

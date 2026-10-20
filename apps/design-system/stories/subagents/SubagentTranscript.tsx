@@ -11,12 +11,23 @@ export default defineStory({
 	},
 	variants: [
 		{
-			name: "Populated",
-			description: "A finished builder's transcript, loaded from the session file.",
-			seed: () => seedAgentTree(),
+			name: "Running agent",
+			description:
+				"The builder's transcript as the chat cards draw it: a folded assignment with Show all, grep/read/edit/bash cards paired with their results (one failed), and a last edit call still without a result, which shows as running.",
+			seed: () => seedAgentTree({ display: true }),
 			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<SubagentTranscript id="1-FixtureBuilder" />
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<SubagentTranscript id="FixtureBuilder" />
+				</div>
+			),
+		},
+		{
+			name: "Finished agent",
+			description: "A completed scout's transcript, loaded from the start until caught up.",
+			seed: () => seedAgentTree({ display: true }),
+			render: () => (
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<SubagentTranscript id="FixtureBuilder.ChatMap" />
 				</div>
 			),
 		},
@@ -29,37 +40,28 @@ export default defineStory({
 					getSubagentMessages: () => Promise.withResolvers<never>().promise,
 				}),
 			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<SubagentTranscript id="1-FixtureBuilder" />
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<SubagentTranscript id="FixtureBuilder" />
 				</div>
 			),
 		},
 		{
 			name: "Empty",
 			description: "The session file has no entries for this agent yet.",
-			seed: () =>
-				seedSubagents({
-					getSubagentMessages: () => ({
-						sessionFile: "",
-						fromByte: 0,
-						nextByte: 0,
-						reset: false,
-						entries: [],
-					}),
-				}),
+			seed: () => seedAgentTree({ display: true }),
 			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<SubagentTranscript id="6-LintPass" />
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<SubagentTranscript id="FixtureBuilder.LintPass" />
 				</div>
 			),
 		},
 		{
 			name: "Load failed",
 			description: "The transcript request fails, so the panel shows the error in an alert.",
-			seed: () => seedAgentTree(),
+			seed: () => seedAgentTree({ display: true }),
 			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<SubagentTranscript id="2-ReviewPass" />
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<SubagentTranscript id="FixtureBuilder.ReviewPass" />
 				</div>
 			),
 		},

@@ -420,6 +420,28 @@ pre {
 .msg-user-text {
 	white-space: pre-wrap;
 }
+/* Opt-in fold (UserCard fold): the subagent assignment clamps to 8 lines. */
+.msg-user-text-folded {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 8;
+	line-clamp: 8;
+	overflow: hidden;
+}
+.msg-user-fold-toggle {
+	margin-top: var(--space-2);
+	padding: 0;
+	background: none;
+	border: 0;
+	color: var(--muted);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+.msg-user-fold-toggle:hover {
+	color: var(--text);
+	text-decoration: underline;
+}
 .msg-user-images {
 	display: flex;
 	flex-wrap: wrap;

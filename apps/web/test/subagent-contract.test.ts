@@ -31,6 +31,12 @@ interface Seed {
 	lastUpdate?: number;
 	rosterStatus?: string;
 	rosterActivity?: number;
+	/** Extra live progress fields (description, model, tools). */
+	extra?: Record<string, unknown>;
+	/** Roster assignment text. */
+	assignment?: string;
+	/** Task text of the progress frame; defaults to "t". */
+	task?: string;
 }
 
 /** Seeds live subagent state and the matching roster records for the attached session. */
@@ -44,13 +50,14 @@ function seed(agents: Seed[]): void {
 			{
 				index: 0,
 				agent: "task",
-				task: "t",
+				task: agent.task ?? "t",
 				parentToolCallId: agent.toolCallId,
 				progress: {
 					id: agent.id,
 					status: agent.status,
 					tokens: agent.tokens ?? 0,
 					cost: agent.cost ?? 0,
+					...agent.extra,
 				},
 			},
 			agent.lastUpdate ?? NOW,
@@ -64,6 +71,7 @@ function seed(agents: Seed[]): void {
 			agentId: agent.id,
 			sessionId: SESSION,
 			displayName: "task",
+			assignment: agent.assignment,
 			status: agent.rosterStatus ?? agent.status,
 			parentAgentId: agent.parent,
 			parentToolCallId: agent.toolCallId,
@@ -82,6 +90,112 @@ beforeEach(() => {
 	setState("currentSessionId", SESSION);
 	setState("subagents", new Map<string, SubagentInfo>());
 	setState("workers", createWorkersState());
+});
+
+describe("node display fields", () => {
+	test("name is the last dot segment of the id and keeps the dedup suffix", () => {
+		seed([
+			{ id: "Explorer", status: "running", startedAt: 1 },
+			{ id: "Explorer-2", status: "running", startedAt: 2 },
+			{ id: "Explorer.Reader-3", status: "running", startedAt: 3, parent: "Explorer" },
+		]);
+		expect(subagentById("Explorer")?.name).toBe("Explorer");
+		expect(subagentById("Explorer-2")?.name).toBe("Explorer-2");
+		expect(subagentById("Explorer.Reader-3")?.name).toBe("Reader-3");
+	});
+
+	test("title falls back from description to the first non-empty assignment line to displayName", () => {
+		seed([
+			{
+				id: "a",
+				status: "running",
+				startedAt: 1,
+				extra: { description: "Find the bug" },
+				assignment: "ignored",
+			},
+			{
+				id: "b",
+				status: "running",
+				startedAt: 2,
+				assignment: "\n  \n  Review the diff \nsecond line",
+			},
+			{ id: "c", status: "running", startedAt: 3, task: "" },
+		]);
+		expect(subagentById("a")?.title).toBe("Find the bug");
+		expect(subagentById("b")?.title).toBe("Review the diff");
+		expect(subagentById("c")?.title).toBe("task");
+	});
+
+	test("model comes from the resolved identity and thinking level of live progress", () => {
+		seed([
+			{
+				id: "a",
+				status: "running",
+				startedAt: 1,
+				extra: {
+					resolvedModel: "anthropic/claude-sonnet-5-5:high",
+					resolvedModelIdentity: "anthropic/claude-sonnet-5-5",
+					resolvedThinkingLevel: "medium",
+				},
+			},
+			{ id: "b", status: "running", startedAt: 2, extra: { resolvedModel: "openai/gpt-5:low" } },
+			{ id: "c", status: "running", startedAt: 3 },
+		]);
+		expect(subagentById("a")?.model).toEqual({
+			id: "claude-sonnet-5-5",
+			identity: "anthropic/claude-sonnet-5-5",
+			thinking: "medium",
+		});
+		expect(subagentById("b")?.model).toEqual({
+			id: "gpt-5",
+			identity: "openai/gpt-5",
+			thinking: "low",
+		});
+		expect(subagentById("c")?.model).toBeUndefined();
+	});
+
+	test("live line follows the precedence and exists only while running", () => {
+		seed([
+			{
+				id: "cur",
+				status: "running",
+				startedAt: 1,
+				extra: {
+					currentTool: "bash",
+					currentToolIntent: "Run tests",
+					lastTool: { tool: "read", intent: "Read file" },
+					lastIntent: "Thinking",
+				},
+			},
+			{
+				id: "last",
+				status: "running",
+				startedAt: 2,
+				extra: {
+					lastTool: { tool: "read", intent: "Read file", isError: true },
+					lastIntent: "Thinking",
+				},
+			},
+			{ id: "intent", status: "running", startedAt: 3, extra: { lastIntent: "Thinking" } },
+			{ id: "none", status: "running", startedAt: 4 },
+			{
+				id: "done",
+				status: "completed",
+				startedAt: 5,
+				endedAt: 6,
+				extra: { lastIntent: "Thinking" },
+			},
+		]);
+		expect(subagentById("cur")?.live).toEqual({ tool: "bash", intent: "Run tests" });
+		expect(subagentById("last")?.live).toEqual({
+			tool: "read",
+			intent: "Read file",
+			isError: true,
+		});
+		expect(subagentById("intent")?.live).toEqual({ intent: "Thinking" });
+		expect(subagentById("none")?.live).toBeUndefined();
+		expect(subagentById("done")?.live).toBeUndefined();
+	});
 });
 
 describe("subagentForest", () => {

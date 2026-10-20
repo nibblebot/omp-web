@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SettingsModel } from "#lib/wire/protocol";
 import { displayTitle } from "../components/ui/title-icons";
 import { setState } from "../state";
-import { modelBadge, pickProgress } from "../subagents/progress";
+import { formatLiveLine, liveLineOf, modelView, pickProgress } from "../subagents/progress";
 
 /** A settings model holding one item per `path: value` entry, all under one tab. */
 function modelOf(values: Record<string, unknown>): SettingsModel {
@@ -75,32 +75,94 @@ describe("pickProgress", () => {
 	});
 });
 
-describe("modelBadge", () => {
-	test("is undefined when the model could not be resolved", () => {
-		expect(modelBadge(undefined)).toBeUndefined();
-		expect(modelBadge({ status: "running" })).toBeUndefined();
+describe("modelView", () => {
+	test("is undefined when the model is unknown", () => {
+		expect(modelView(undefined)).toBeUndefined();
+		expect(modelView({ status: "running" })).toBeUndefined();
 	});
 
-	test("prefers the resolved identity, drops an inherited thinking level, and flags advisors", () => {
+	test("prefers the resolved identity and takes the id from its last path segment", () => {
 		expect(
-			modelBadge({
+			modelView({
 				status: "running",
 				resolvedModel: "sonnet",
-				resolvedModelIdentity: "anthropic/claude-sonnet-5-5",
-				resolvedThinkingLevel: "inherit",
-				advisor: true,
+				resolvedModelIdentity: "openrouter/anthropic/claude-sonnet-5-5",
+				resolvedThinkingLevel: "high",
 			}),
-		).toEqual({ model: "anthropic/claude-sonnet-5-5", thinking: undefined, advisor: true });
+		).toEqual({
+			id: "claude-sonnet-5-5",
+			identity: "openrouter/anthropic/claude-sonnet-5-5",
+			thinking: "high",
+		});
 	});
 
-	test("sanitizes control characters and keeps an explicit thinking level", () => {
-		expect(
-			modelBadge({ status: "running", resolvedModel: "a\tb\nc", resolvedThinkingLevel: "high" }),
-		).toEqual({
-			model: "a b c",
+	test("reads the level from a provider/id:level string when no level is reported", () => {
+		expect(modelView({ resolvedModel: "anthropic/claude-sonnet-5-5:high" })).toEqual({
+			id: "claude-sonnet-5-5",
+			identity: "anthropic/claude-sonnet-5-5",
 			thinking: "high",
-			advisor: false,
 		});
+	});
+
+	test("a reported level beats the suffix, and an inherited level is dropped", () => {
+		expect(modelView({ resolvedModel: "a/b:low", resolvedThinkingLevel: "medium" })?.thinking).toBe(
+			"medium",
+		);
+		expect(
+			modelView({ resolvedModel: "a/b", resolvedThinkingLevel: "inherit" })?.thinking,
+		).toBeUndefined();
+		expect(modelView({ resolvedModel: "a/b:inherit" })?.thinking).toBeUndefined();
+	});
+
+	test("keeps a colon that is part of the model id", () => {
+		expect(modelView({ resolvedModelIdentity: "ollama/llama3:8b" })).toEqual({
+			id: "llama3:8b",
+			identity: "ollama/llama3:8b",
+			thinking: undefined,
+		});
+	});
+
+	test("sanitizes control characters", () => {
+		expect(modelView({ resolvedModel: "x/a\tb\nc" })).toEqual({
+			id: "a b c",
+			identity: "x/a b c",
+			thinking: undefined,
+		});
+	});
+});
+
+describe("liveLineOf", () => {
+	test("prefers the in-flight tool with its intent", () => {
+		expect(
+			liveLineOf({
+				currentTool: "bash",
+				currentToolIntent: "Run tests",
+				lastTool: { tool: "read", intent: "Read file" },
+				lastIntent: "Thinking",
+			}),
+		).toEqual({ tool: "bash", intent: "Run tests" });
+	});
+
+	test("falls back to the last tool, flagging an error", () => {
+		expect(
+			liveLineOf({
+				lastTool: { tool: "read", intent: "Read file", isError: true },
+				lastIntent: "x",
+			}),
+		).toEqual({ tool: "read", intent: "Read file", isError: true });
+		expect(liveLineOf({ lastTool: { tool: "read" } })?.isError).toBeUndefined();
+	});
+
+	test("falls back to the last intent alone, then to nothing", () => {
+		expect(liveLineOf({ lastIntent: "Thinking" })).toEqual({ intent: "Thinking" });
+		expect(liveLineOf({ status: "running" })).toBeUndefined();
+		expect(liveLineOf(undefined)).toBeUndefined();
+	});
+
+	test("formats tool and intent, skipping a missing part", () => {
+		expect(formatLiveLine({ tool: "bash", intent: "Run tests" })).toBe("bash · Run tests");
+		expect(formatLiveLine({ tool: "bash" })).toBe("bash");
+		expect(formatLiveLine({ intent: "Thinking" })).toBe("Thinking");
 	});
 });
 

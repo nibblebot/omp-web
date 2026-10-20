@@ -27,6 +27,7 @@ import {
 	chatThinking,
 	chatUserImagesItem,
 	chatUserItem,
+	chatUserLongItem,
 } from "../../fixtures/chat";
 import { genericDoneTool } from "../../fixtures/tools";
 import { defineStory } from "../../registry";
@@ -36,11 +37,20 @@ import type { Story } from "../../registry";
  * Host for UserCard: the real card reports thumbnail clicks through onZoom, so
  * this shows what the transcript host receives for the clicked attachment.
  */
-const UserWithZoom = (props: { user: Extract<ChatItem, { kind: "user" }> }) => {
+const UserWithZoom = (props: {
+	user: Extract<ChatItem, { kind: "user" }>;
+	branchable?: boolean;
+	fold?: boolean;
+}) => {
 	const [zoomed, setZoomed] = createSignal<ImageArg | null>(null);
 	return (
 		<>
-			<UserCard user={props.user} onZoom={setZoomed} />
+			<UserCard
+				user={props.user}
+				onZoom={setZoomed}
+				branchable={props.branchable}
+				fold={props.fold}
+			/>
 			<Show when={zoomed()}>
 				{(img) => <div class="msg-notice">Zoom requested: {img().mimeType}</div>}
 			</Show>
@@ -62,6 +72,18 @@ const stories: Story[] = [
 				name: "Prompt with two images",
 				description: "Click a thumbnail to see the zoom request the host receives.",
 				render: () => <UserWithZoom user={chatUserImagesItem} />,
+			},
+			{
+				name: "Long brief, folded",
+				description:
+					"The agent view's assignment: `fold` clamps the text to about eight lines behind a Show all toggle. Branch-from-here is hidden (`branchable` false), since a subagent transcript is not a branchable session.",
+				render: () => <UserWithZoom user={chatUserLongItem} fold branchable={false} />,
+			},
+			{
+				name: "Long brief, not folded",
+				description:
+					"The main session's card: the same text in full, with branch-from-here on hover.",
+				render: () => <UserWithZoom user={chatUserLongItem} />,
 			},
 		],
 	}),

@@ -1,7 +1,7 @@
 import { SubagentPanel } from "../../../web/components/subagents/SubagentPanel";
-import { seedAgentTree } from "../../fixtures/subagents";
-import { defineStory } from "../../registry";
 import { setFeaturePreference } from "../../../web/features/preferences";
+import { DockFrame, seedAgentTree } from "../../fixtures/subagents";
+import { defineStory } from "../../registry";
 
 export default defineStory({
 	id: "subagents-panel",
@@ -14,46 +14,81 @@ export default defineStory({
 	variants: [
 		{
 			name: "Running agent",
-			description: "A running builder: steer and abort are available, park is not.",
+			description:
+				"A running builder: header with its title, the assignment folded with Show all, paired tool cards (one call still without a result), the status strip, and the steer composer with a Stop button.",
 			seed: () => seedAgentTree({ display: true }),
 			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<SubagentPanel id="1-FixtureBuilder" />
-				</div>
+				<DockFrame title="Agent" width={520} flush>
+					<SubagentPanel id="FixtureBuilder" />
+				</DockFrame>
 			),
 		},
 		{
-			name: "Pending agent",
-			description: "A queued lint pass that has not started: abort is available.",
-			seed: () => seedAgentTree(),
+			name: "Running agent, narrow dock",
+			description: "The same pane at 420px: the status strip and composer keep to one row each.",
+			seed: () => seedAgentTree({ display: true }),
 			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<SubagentPanel id="6-LintPass" />
-				</div>
+				<DockFrame title="Agent" width={420} flush>
+					<SubagentPanel id="FixtureBuilder" />
+				</DockFrame>
 			),
 		},
 		{
 			name: "Parked agent",
-			description: "A parked docs sweep: it is held for follow-up and cannot be steered.",
-			seed: () => seedAgentTree(),
+			description:
+				"A parked docs sweep: its transcript stays readable, the status strip has no model, and a Parked strip offers Revive in place of the composer.",
+			seed: () => seedAgentTree({ display: true }),
 			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<SubagentPanel id="4-DocsSweep" />
-				</div>
+				<DockFrame title="Agent" width={520} flush>
+					<SubagentPanel id="DocsSweep" />
+				</DockFrame>
+			),
+		},
+		{
+			name: "Finished agent",
+			description:
+				"A completed scout: the transcript ends with its answer and a Finished strip replaces the composer.",
+			seed: () => seedAgentTree({ display: true }),
+			render: () => (
+				<DockFrame title="Agent" width={520} flush>
+					<SubagentPanel id="FixtureBuilder.ChatMap" />
+				</DockFrame>
+			),
+		},
+		{
+			name: "Finished, transcript missing",
+			description:
+				"A failed review whose session file is gone: the transcript request fails and the pane shows the error in an alert above the Finished strip.",
+			seed: () => seedAgentTree({ display: true }),
+			render: () => (
+				<DockFrame title="Agent" width={520} flush>
+					<SubagentPanel id="FixtureBuilder.ReviewPass" />
+				</DockFrame>
+			),
+		},
+		{
+			name: "Pending agent",
+			description:
+				"A queued lint pass that has not started: an empty transcript and a Starting strip with Abort agent (inline confirm).",
+			seed: () => seedAgentTree({ display: true }),
+			render: () => (
+				<DockFrame title="Agent" width={520} flush>
+					<SubagentPanel id="FixtureBuilder.LintPass" />
+				</DockFrame>
 			),
 		},
 		{
 			name: "Open in Analysis",
 			description:
-				"Analysis is on and the transcript is known: the header offers Open in Analysis next to the status chip.",
+				"Analysis is on and the transcript is known: the header menu offers Open in Analysis.",
 			seed: () => {
 				setFeaturePreference("analysis", true);
 				seedAgentTree({ display: true, analysis: true });
 			},
 			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<SubagentPanel id="1-FixtureBuilder" />
-				</div>
+				<DockFrame title="Agent" width={520} flush>
+					<SubagentPanel id="FixtureBuilder" />
+				</DockFrame>
 			),
 		},
 		{
@@ -61,9 +96,9 @@ export default defineStory({
 			description: "The id is not in the session forest, so the panel says the agent is gone.",
 			seed: () => seedAgentTree(),
 			render: () => (
-				<div class="ds-frame ds-frame-tall">
+				<DockFrame title="Agent" width={520} flush>
 					<SubagentPanel id="missing-agent" />
-				</div>
+				</DockFrame>
 			),
 		},
 	],

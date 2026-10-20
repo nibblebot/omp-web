@@ -50,19 +50,28 @@ import { magicKeywordSegments } from "../../../prompt/magic-keywords";
 interface PromptComposerProps {
 	message: () => string;
 	setMessage: Setter<string>;
-	images: () => ImageArg[];
-	setImages: Setter<ImageArg[]>;
-	files: () => TextAttachment[];
-	setFiles: Setter<TextAttachment[]>;
-	ac: PromptAutocomplete;
-	ghost: GhostText;
 	onKeyDown: (e: KeyboardEvent) => void;
 	setTextareaRef: (el: HTMLTextAreaElement) => void;
-	/** Prompt history popover open state; PromptBox opens it on first-line Up. */
-	historyOpen: () => boolean;
-	closeHistory: () => void;
 	/** Icon buttons rendered at the end of the textarea row (PromptActions). */
 	actions?: JSX.Element;
+	/**
+	 * Text-only mode (agent steer box): no attachments, images, drops, paste
+	 * folding, magic keywords, autocomplete, ghost text, or history, and no
+	 * main-session draft restore/persist. The caller owns the draft. The
+	 * attachment, autocomplete, ghost and history props below are then omitted.
+	 */
+	textOnly?: boolean;
+	placeholder?: string;
+	ariaLabel?: string;
+	images?: () => ImageArg[];
+	setImages?: Setter<ImageArg[]>;
+	files?: () => TextAttachment[];
+	setFiles?: Setter<TextAttachment[]>;
+	ac?: PromptAutocomplete;
+	ghost?: GhostText;
+	/** Prompt history popover open state; PromptBox opens it on first-line Up. */
+	historyOpen?: () => boolean;
+	closeHistory?: () => void;
 }
 
 /**
@@ -83,7 +92,9 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const [pasteError, setPasteError] = createSignal<string | null>(null);
 	const [chipError, setChipError] = createSignal<string | null>(null);
 	const draftKey = () => currentDraftKey();
-	const unsaved = createMemo(() => unsavedFileIds(props.files()));
+	const images = () => props.images?.() ?? [];
+	const files = () => props.files?.() ?? [];
+	const unsaved = createMemo(() => unsavedFileIds(files()));
 	// Magic keyword highlight and ghost text share one mirror behind the textarea.
 	let mirrorEl: HTMLDivElement | undefined;
 	const segments = createMemo(() =>
@@ -95,38 +106,40 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		),
 	);
 	const mirrored = () =>
-		props.ghost.text() !== "" || segments().some((seg) => seg.id !== undefined);
+		!props.textOnly &&
+		((props.ghost?.text() ?? "") !== "" || segments().some((seg) => seg.id !== undefined));
 	const syncMirror = () => {
 		if (mirrorEl) mirrorEl.scrollTop = textarea.scrollTop;
 	};
 	const onCaretMove = () => {
-		props.ac.refreshToken();
-		props.ghost.refreshCaret();
+		props.ac?.refreshToken();
+		props.ghost?.refreshCaret();
 	};
 
 	// QueueBar dequeue / PromptHistoryPicker picks / graph editorText land here.
 	createEffect(() => {
+		if (props.textOnly) return;
 		const insert = promptInsert();
 		if (!insert) return;
 		setPromptInsert(null);
 		const pristine = !props.message();
 		if (insert.text)
 			props.setMessage((prev) => (prev.trim() ? `${prev}\n${insert.text}` : insert.text));
-		if (insert.images?.length) props.setImages((prev) => [...prev, ...insert.images!]);
-		if (insert.files?.length) props.setFiles((prev) => [...prev, ...insert.files!]);
+		if (insert.images?.length) props.setImages?.((prev) => [...prev, ...insert.images!]);
+		if (insert.files?.length) props.setFiles?.((prev) => [...prev, ...insert.files!]);
 		requestAnimationFrame(() => {
 			textarea.focus();
 			// A history pick into an empty composer restores the saved caret.
 			if (insert.selection && pristine)
 				textarea.setSelectionRange(insert.selection.start, insert.selection.end);
-			props.ac.autoGrow();
-			persist(props.message(), props.images(), props.files());
+			props.ac?.autoGrow();
+			persist(props.message(), images(), files());
 		});
 	});
 
 	// A started session (/new, New session button, picker gate) hands focus here.
 	createEffect(() => {
-		if (!promptFocusRequest()) return;
+		if (props.textOnly || !promptFocusRequest()) return;
 		setPromptFocusRequest(false);
 		requestAnimationFrame(() => textarea.focus());
 	});
@@ -134,11 +147,12 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	// Restore the partition draft on mount (prior text/image draft restore);
 	// restoration never submits.
 	onMount(() => {
+		if (props.textOnly) return;
 		const saved = loadDraft(draftKey());
 		if (saved && (saved.text || saved.images.length > 0 || saved.files?.length)) {
 			props.setMessage(saved.text);
-			if (saved.images.length > 0) props.setImages(saved.images);
-			if (saved.files?.length) props.setFiles(saved.files);
+			if (saved.images.length > 0) props.setImages?.(saved.images);
+			if (saved.files?.length) props.setFiles?.(saved.files);
 			if (saved.selectionStart !== undefined) {
 				requestAnimationFrame(() => {
 					try {
@@ -155,10 +169,11 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	});
 
 	onCleanup(() => {
-		cancelScheduledDraftSave(draftKey());
+		if (!props.textOnly) cancelScheduledDraftSave(draftKey());
 	});
 
 	const persist = (text: string, imgs: ImageArg[], attached: TextAttachment[]): void => {
+		if (props.textOnly) return;
 		scheduleDraftSave(draftKey(), {
 			text,
 			images: imgs,
@@ -172,8 +187,8 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	// Chips reach the model at send time and never enter the textarea. Every change is
 	// saved with the draft so a reload keeps them.
 	const addFiles = (next: TextAttachment[]): void => {
-		props.setFiles(next);
-		persist(props.message(), props.images(), next);
+		props.setFiles?.(next);
+		persist(props.message(), images(), next);
 	};
 
 	const addImages = (files: Array<{ data: string; mimeType: string }>): void => {
@@ -187,7 +202,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 			}
 			valid.push({ type: "image", data: f.data, mimeType: f.mimeType });
 		}
-		if (valid.length > 0) props.setImages((prev) => [...prev, ...valid]);
+		if (valid.length > 0) props.setImages?.((prev) => [...prev, ...valid]);
 	};
 
 	const onPaste = (e: ClipboardEvent): void => {
@@ -239,7 +254,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		}
 		// Text files become chips and reach the model at send time; they never enter the textarea.
 		const attachment = await importTextAttachment(f);
-		addFiles([...props.files(), attachment]);
+		addFiles([...files(), attachment]);
 	};
 
 	// Files dropped on the window land here. Deferred so a drop made while no
@@ -248,7 +263,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		on(
 			droppedFiles,
 			(dropped) => {
-				if (!dropped) return;
+				if (props.textOnly || !dropped) return;
 				setDroppedFiles(null);
 				for (const f of dropped) void importFile(f);
 			},
@@ -259,15 +274,15 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const onTextareaInput = (e: Event): void => {
 		const el = e.currentTarget as HTMLTextAreaElement;
 		props.setMessage(el.value);
-		props.ac.inlineEmoji(); // `:smile:` -> emoji before the draft is persisted
-		props.ac.setDismissed(false);
-		props.ac.setSelected(0);
-		props.ac.autoGrow();
-		props.ac.refreshToken();
-		props.ghost.refreshCaret();
-		persist(el.value, props.images(), props.files());
+		props.ac?.inlineEmoji(); // `:smile:` -> emoji before the draft is persisted
+		props.ac?.setDismissed(false);
+		props.ac?.setSelected(0);
+		props.ac?.autoGrow();
+		props.ac?.refreshToken();
+		props.ghost?.refreshCaret();
+		persist(el.value, images(), files());
 		// Live `^selector` chip validation (offline mirror; submit expands).
-		if (MODEL_MENTION_RE.test(el.value)) {
+		if (!props.textOnly && MODEL_MENTION_RE.test(el.value)) {
 			MODEL_MENTION_RE.lastIndex = 0;
 			void getModelMentions(graphGeneration()).catch((err) =>
 				setChipError(String(err instanceof Error ? err.message : err)),
@@ -277,26 +292,27 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 
 	const pasteThreshold = () =>
 		settingValue<number>("paste.largeMenuThreshold") ?? PASTE_LARGE_MENU_DEFAULT;
-	const showFold = () => shouldFoldPaste(props.message(), pasteThreshold()) && folded();
+	const showFold = () =>
+		!props.textOnly && shouldFoldPaste(props.message(), pasteThreshold()) && folded();
 	const preview = () => foldedPreview(props.message()).head;
 
 	return (
 		<>
-			<Show when={fileDragDepth() > 0}>
+			<Show when={!props.textOnly && fileDragDepth() > 0}>
 				<div class="file-drop-overlay" aria-hidden="true">
 					<span class="file-drop-label">Drop files to attach</span>
 				</div>
 			</Show>
-			{props.images().length > 0 && (
+			{images().length > 0 && (
 				<div class="image-tray">
-					<For each={props.images()}>
+					<For each={images()}>
 						{(img, i) => (
 							<span class="image-thumb">
 								<img src={`data:${img.mimeType};base64,${img.data}`} alt="" aria-hidden="true" />
 								<button
 									class="image-remove"
 									aria-label="Remove image"
-									onClick={() => props.setImages((prev) => prev.filter((_, j) => j !== i()))}
+									onClick={() => props.setImages?.((prev) => prev.filter((_, j) => j !== i()))}
 								>
 									<XIcon />
 								</button>
@@ -305,14 +321,14 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 					</For>
 				</div>
 			)}
-			<Show when={props.files().length > 0}>
+			<Show when={files().length > 0}>
 				<div class="attachment-tray" role="group" aria-label="Attached files">
-					<For each={props.files()}>
+					<For each={files()}>
 						{(attachment) => (
 							<AttachmentChip
 								attachment={attachment}
 								unsaved={unsaved().has(attachment.id)}
-								onRemove={() => addFiles(props.files().filter((x) => x.id !== attachment.id))}
+								onRemove={() => addFiles(files().filter((x) => x.id !== attachment.id))}
 							/>
 						)}
 					</For>
@@ -343,20 +359,22 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 				)}
 			</Show>
 			<div class="prompt-input">
-				{props.ac.open() && (
-					<AutocompletePopup
-						items={props.ac.items()}
-						selected={props.ac.selected()}
-						maxVisible={props.ac.maxVisible()}
-						onHover={props.ac.setSelected}
-						onApply={props.ac.apply}
-						listId={listId}
-					/>
-				)}
-				<Show when={props.historyOpen()}>
+				<Show when={props.ac?.open() ? props.ac : undefined}>
+					{(ac) => (
+						<AutocompletePopup
+							items={ac().items()}
+							selected={ac().selected()}
+							maxVisible={ac().maxVisible()}
+							onHover={ac().setSelected}
+							onApply={ac().apply}
+							listId={listId}
+						/>
+					)}
+				</Show>
+				<Show when={props.historyOpen?.()}>
 					<PromptHistoryPicker
 						onClose={(restoreFocus) => {
-							props.closeHistory();
+							props.closeHistory?.();
 							if (restoreFocus) textarea.focus();
 						}}
 					/>
@@ -379,7 +397,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 						<Show when={mirrored()}>
 							<PromptMirror
 								segments={segments()}
-								ghost={props.ghost.text()}
+								ghost={props.ghost?.text() ?? ""}
 								ref={(el) => {
 									mirrorEl = el;
 								}}
@@ -391,47 +409,51 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 								textarea = el;
 								props.setTextareaRef(el);
 							}}
-							role="combobox"
-							aria-label="Message the agent"
-							aria-expanded={props.ac.open()}
-							aria-controls={props.ac.open() ? listId : undefined}
+							role={props.textOnly ? undefined : "combobox"}
+							aria-label={props.ariaLabel ?? "Message the agent"}
+							aria-expanded={props.ac?.open()}
+							aria-controls={props.ac?.open() ? listId : undefined}
 							aria-activedescendant={
-								props.ac.open() ? `${listId}-opt-${props.ac.selected()}` : undefined
+								props.ac?.open() ? `${listId}-opt-${props.ac.selected()}` : undefined
 							}
-							aria-autocomplete="list"
+							aria-autocomplete={props.textOnly ? undefined : "list"}
 							value={props.message()}
 							onInput={onTextareaInput}
 							onKeyDown={(e) => props.onKeyDown(e)}
 							onKeyUp={onCaretMove}
 							onClick={onCaretMove}
 							onScroll={syncMirror}
-							onPaste={onPaste}
-							placeholder="Message the Agent"
-							rows={3}
+							onPaste={(e) => {
+								if (!props.textOnly) onPaste(e);
+							}}
+							placeholder={props.placeholder ?? "Message the Agent"}
+							rows={props.textOnly ? 2 : 3}
 						/>
 					</div>
-					<input
-						ref={fileInput}
-						type="file"
-						accept={ATTACH_ACCEPT}
-						multiple
-						hidden
-						aria-hidden="true"
-						tabIndex={-1}
-						onChange={(e) => {
-							for (const f of [...(e.currentTarget.files ?? [])]) void importFile(f);
-							e.currentTarget.value = "";
-						}}
-					/>
-					<button
-						type="button"
-						class="prompt-attach"
-						title="Attach files (images + text, validated)"
-						aria-label="Attach files"
-						onClick={() => fileInput.click()}
-					>
-						<PaperclipIcon />
-					</button>
+					<Show when={!props.textOnly}>
+						<input
+							ref={fileInput}
+							type="file"
+							accept={ATTACH_ACCEPT}
+							multiple
+							hidden
+							aria-hidden="true"
+							tabIndex={-1}
+							onChange={(e) => {
+								for (const f of [...(e.currentTarget.files ?? [])]) void importFile(f);
+								e.currentTarget.value = "";
+							}}
+						/>
+						<button
+							type="button"
+							class="prompt-attach"
+							title="Attach files (images + text, validated)"
+							aria-label="Attach files"
+							onClick={() => fileInput.click()}
+						>
+							<PaperclipIcon />
+						</button>
+					</Show>
 					{props.actions}
 				</div>
 			</div>

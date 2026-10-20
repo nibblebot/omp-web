@@ -59,6 +59,17 @@
 	overflow-y: auto;
 	padding: var(--space-5);
 }
+/* Flush body: the hosted panel is a column that owns its padding and scrolling. */
+.dock-body--flush {
+	display: flex;
+	flex-direction: column;
+	padding: 0;
+	overflow: hidden;
+}
+.dock-body--flush > * {
+	flex: 1 1 auto;
+	min-height: 0;
+}
 
 @media (max-width: 768px) {
 	.dock-pane {

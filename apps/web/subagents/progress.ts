@@ -1,7 +1,7 @@
 /**
  * Display helpers for subagent rows: the slice of the SDK's `AgentProgress`
- * the web renders and the resolved-model badge. Pure, so the setting that
- * drives the badge (`task.showResolvedModelBadge`) stays testable without a DOM.
+ * the web renders, the model line, and the live tool line. Pure, so they stay
+ * testable without a DOM.
  */
 
 /** The `AgentProgress` fields the web keeps per subagent (see `pickProgress`). */
@@ -13,6 +13,8 @@ export interface SubagentProgressView {
 	currentToolStartMs?: number;
 	/** The newest finished tool call (the daemon's wire projection; no bulk history). */
 	lastTool?: { tool: string; args?: string; intent?: string; isError?: boolean };
+	/** The agent's latest stated intent, kept after its tool call finishes. */
+	lastIntent?: string;
 	/** `<provider>/<id>`, suffixed with `:<level>` when the level was set explicitly. */
 	resolvedModel?: string;
 	/** Provider/id including routing, with no thinking suffix. */
@@ -43,6 +45,7 @@ export function pickProgress(raw: unknown): SubagentProgressView | undefined {
 		currentToolIntent: str(p.currentToolIntent),
 		currentToolStartMs: typeof p.currentToolStartMs === "number" ? p.currentToolStartMs : undefined,
 		lastTool,
+		lastIntent: str(p.lastIntent),
 		resolvedModel: str(p.resolvedModel),
 		resolvedModelIdentity: str(p.resolvedModelIdentity),
 		resolvedThinkingLevel: str(p.resolvedThinkingLevel),
@@ -51,31 +54,90 @@ export function pickProgress(raw: unknown): SubagentProgressView | undefined {
 }
 
 // ---------------------------------------------------------------------------
-
-// task.showResolvedModelBadge
+// Model line
 // ---------------------------------------------------------------------------
 
-export interface ModelBadge {
-	/** Sanitized model identity, e.g. `anthropic/claude-sonnet-5-5`. */
-	model: string;
+/** What a row shows for the model a subagent resolved to. */
+export interface SubagentModelView {
+	/** Model id without provider or `:level` suffix, e.g. `claude-sonnet-5-5`. */
+	id: string;
+	/** Full `provider/id` (no `:level` suffix), for tooltips. */
+	identity: string;
 	/** Explicit thinking level (`high`); undefined when inherited or unset. */
 	thinking?: string;
-	advisor: boolean;
 }
 
-/** The badge for a subagent's resolved model; undefined when the model could not be resolved. */
-export function modelBadge(progress: SubagentProgressView | undefined): ModelBadge | undefined {
-	const raw = progress?.resolvedModelIdentity ?? progress?.resolvedModel;
-	const model = raw
+/** Levels a `:level` suffix may carry. Any other colon belongs to the model id (`llama3:8b`). */
+const THINKING_LEVELS: Record<string, true> = {
+	off: true,
+	minimal: true,
+	low: true,
+	medium: true,
+	high: true,
+	xhigh: true,
+	max: true,
+	auto: true,
+	inherit: true,
+};
+
+/**
+ * The model of a subagent from its live progress: `resolvedModelIdentity`, else `resolvedModel`.
+ * The thinking level is `resolvedThinkingLevel`, else the `:level` suffix of the raw string.
+ * Undefined when the model is unknown.
+ */
+export function modelView(
+	progress: SubagentProgressView | undefined,
+): SubagentModelView | undefined {
+	const raw = (progress?.resolvedModelIdentity ?? progress?.resolvedModel)
 		// eslint-disable-next-line no-control-regex
 		?.replace(/[\u0000-\u001f\u007f]/g, " ")
 		.replace(/\s+/g, " ")
 		.trim();
-	if (!model) return undefined;
-	const level = progress?.resolvedThinkingLevel;
-	return {
-		model,
-		thinking: level && level !== "inherit" ? level : undefined,
-		advisor: progress?.advisor === true,
-	};
+	if (!raw) return undefined;
+	const colon = raw.lastIndexOf(":");
+	const suffix = colon > 0 ? raw.slice(colon + 1) : undefined;
+	const hasLevel = suffix !== undefined && THINKING_LEVELS[suffix] === true;
+	const identity = hasLevel ? raw.slice(0, colon) : raw;
+	const id = identity.slice(identity.lastIndexOf("/") + 1);
+	if (id === "") return undefined;
+	const level = progress?.resolvedThinkingLevel ?? (hasLevel ? suffix : undefined);
+	return { id, identity, thinking: level && level !== "inherit" ? level : undefined };
+}
+
+// ---------------------------------------------------------------------------
+// Live line
+// ---------------------------------------------------------------------------
+
+/** The live line of a running subagent: a tool and/or an intent, never its arguments. */
+export interface SubagentLiveLine {
+	tool?: string;
+	intent?: string;
+	isError?: boolean;
+}
+
+/**
+ * Precedence: the in-flight tool with its intent; else the last finished tool with its intent
+ * (flagged when it errored); else the last intent alone; else nothing.
+ */
+export function liveLineOf(
+	progress: SubagentProgressView | undefined,
+): SubagentLiveLine | undefined {
+	if (!progress) return undefined;
+	if (progress.currentTool !== undefined) {
+		return { tool: progress.currentTool, intent: progress.currentToolIntent };
+	}
+	if (progress.lastTool !== undefined) {
+		return {
+			tool: progress.lastTool.tool,
+			intent: progress.lastTool.intent,
+			isError: progress.lastTool.isError === true ? true : undefined,
+		};
+	}
+	if (progress.lastIntent !== undefined) return { intent: progress.lastIntent };
+	return undefined;
+}
+
+/** `tool · intent`, skipping whichever part is missing. */
+export function formatLiveLine(live: SubagentLiveLine): string {
+	return [live.tool, live.intent].filter((part) => part !== undefined && part !== "").join(" · ");
 }

@@ -43,8 +43,12 @@ const RE_PIN_DISTANCE_PX = 80;
  * innerHTML write and read a stale scrollHeight); scrollTop writes can't feed
  * back because neither observed box changes size. Starts pinned so a fresh
  * attach/history load lands at the bottom.
+ *
+ * `mirrorSession` (default on) is the main transcript's tie to the store
+ * (`chatPinned`, `answerUnviewed`); a secondary stream (a subagent's) passes
+ * false so its scrolling never marks the main answer viewed.
  */
-export function useStickyScroll(): {
+export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	containerRef: (el: HTMLDivElement) => void;
 	contentRef: (el: HTMLDivElement) => void;
 	jumpVisible: () => boolean;
@@ -61,6 +65,7 @@ export function useStickyScroll(): {
 	// The local var stays for the synchronous reads inside the handlers.
 	const setPinned = (p: boolean) => {
 		pinned = p;
+		if (options.mirrorSession === false) return;
 		setState("chatPinned", p);
 		if (p) setState("answerUnviewed", false);
 	};

@@ -11,6 +11,8 @@ export interface DockPaneProps {
 	onWidth: (px: number) => void;
 	onClose: () => void;
 	actions?: JSX.Element;
+	/** Body without padding or scrolling, for a panel that lays out and scrolls itself (agent pane). */
+	flush?: boolean;
 	children?: JSX.Element;
 }
 
@@ -102,7 +104,9 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 					<XIcon />
 				</button>
 			</header>
-			<div class="dock-body">{props.children}</div>
+			<div class="dock-body" classList={{ "dock-body--flush": props.flush === true }}>
+				{props.children}
+			</div>
 		</aside>
 	);
 };

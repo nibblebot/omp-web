@@ -1,5 +1,5 @@
 import { AgentsPanel } from "../../../web/components/subagents/AgentsPanel";
-import { seedAgentTree } from "../../fixtures/subagents";
+import { DockFrame, seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
 
 export default defineStory({
@@ -15,9 +15,19 @@ export default defineStory({
 			description: "The session's agent forest with its totals footer.",
 			seed: () => seedAgentTree({ display: true }),
 			render: () => (
-				<div class="ds-frame ds-frame-tall">
+				<DockFrame title="Agents" width={520}>
 					<AgentsPanel />
-				</div>
+				</DockFrame>
+			),
+		},
+		{
+			name: "Narrow dock, 420px",
+			description: "The dock at its narrowest: all four row lines fit without horizontal overflow.",
+			seed: () => seedAgentTree({ display: true }),
+			render: () => (
+				<DockFrame title="Agents" width={420}>
+					<AgentsPanel />
+				</DockFrame>
 			),
 		},
 		{
@@ -25,9 +35,9 @@ export default defineStory({
 			description: "No agents yet: the panel explains that agents appear when a Task runs.",
 			seed: () => seedAgentTree({ empty: true }),
 			render: () => (
-				<div class="ds-frame ds-frame-tall">
+				<DockFrame title="Agents" width={520}>
 					<AgentsPanel />
-				</div>
+				</DockFrame>
 			),
 		},
 	],

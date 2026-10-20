@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { formatCost, formatDuration, formatTokens } from "../subagents/format";
+import {
+	agentTitle,
+	formatCost,
+	formatDuration,
+	formatTokens,
+	shortAgentName,
+} from "../subagents/format";
 import { filterSubagentTree, flattenSubagentTree, summarizeSubagentTree } from "../subagents/tree";
 import type { SubagentNode, SubagentStatus } from "../store/subagents";
 
@@ -16,7 +22,8 @@ function node(
 ): SubagentNode {
 	return {
 		id,
-		label: id,
+		name: id,
+		title: id,
 		agentType: options.agentType,
 		status: options.status ?? "done",
 		metrics: {
@@ -122,5 +129,32 @@ describe("subagent formatters", () => {
 	test("shows three decimals under a dollar", () => {
 		expect(formatCost(0.0421)).toBe("$0.042");
 		expect(formatCost(1.5)).toBe("$1.50");
+	});
+});
+
+describe("shortAgentName", () => {
+	test("takes the last dot segment and keeps the dedup suffix", () => {
+		expect(shortAgentName("Explorer")).toBe("Explorer");
+		expect(shortAgentName("Explorer-2")).toBe("Explorer-2");
+		expect(shortAgentName("Parent.Child-3")).toBe("Child-3");
+		expect(shortAgentName("A.B.C")).toBe("C");
+		expect(shortAgentName("trailing.")).toBe("trailing.");
+	});
+});
+
+describe("agentTitle", () => {
+	test("prefers the description, then the first non-empty assignment line, then the display name", () => {
+		expect(agentTitle({ description: " Fix it ", assignments: ["x"], displayName: "task" })).toBe(
+			"Fix it",
+		);
+		expect(agentTitle({ assignments: ["\n  \n  Do the thing \nmore"], displayName: "task" })).toBe(
+			"Do the thing",
+		);
+		expect(agentTitle({ assignments: [undefined, "", "second"], displayName: "task" })).toBe(
+			"second",
+		);
+		expect(agentTitle({ description: "  ", assignments: ["  "], displayName: "task" })).toBe(
+			"task",
+		);
 	});
 });

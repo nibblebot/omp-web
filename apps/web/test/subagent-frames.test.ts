@@ -3,7 +3,6 @@ import type { SubagentInfo } from "../state";
 import {
 	applyLifecycleFrame,
 	applyProgressFrame,
-	lastToolOf,
 	mergeProgress,
 	metricsOf,
 	normalizeStatus,
@@ -191,30 +190,6 @@ describe("metricsOf", () => {
 			"t",
 		);
 		expect(metricsOf(info, NOW + 60_000).elapsedMs).toBe(0);
-	});
-});
-
-describe("lastToolOf", () => {
-	test("prefers the lastTool object, then the last recent tool, then currentTool", () => {
-		const base = byId(
-			applyProgressFrame(new Map(), { progress: { id: "l", lastTool: { tool: "read" } } }, NOW),
-			"l",
-		);
-		expect(lastToolOf(base)).toBe("read");
-		const recent = byId(
-			applyProgressFrame(
-				new Map(),
-				{ progress: { id: "l", recentTools: [{ tool: "grep" }, { tool: "edit" }] } },
-				NOW,
-			),
-			"l",
-		);
-		expect(lastToolOf(recent)).toBe("edit");
-		const current = byId(
-			applyProgressFrame(new Map(), { progress: { id: "l", currentTool: "bash" } }, NOW),
-			"l",
-		);
-		expect(lastToolOf(current)).toBe("bash");
 	});
 });
 

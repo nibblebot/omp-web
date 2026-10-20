@@ -120,7 +120,7 @@ export const chatTaskTool: ToolItem = {
 		description: "Map the chat transcript rendering path",
 	},
 	status: "done",
-	output: "Subagent 0-ChatMap finished: 6 files read, 2 call sites found.",
+	output: "Subagent ChatMap finished: 6 files read, 2 call sites found.",
 };
 
 // ---------------------------------------------------------------------------
@@ -369,6 +369,26 @@ export const chatUserItem: Extract<ChatItem, { kind: "user" }> = {
 	kind: "user",
 	id: 501,
 	text: "The queued follow-up never shows the retry badge. Check the queue bar and the review store, then fix it.",
+};
+
+/** UserCard: long task brief, so `fold` clamps it behind Show all. */
+export const chatUserLongItem: Extract<ChatItem, { kind: "user" }> = {
+	kind: "user",
+	id: 503,
+	text: [
+		"## Goal",
+		"Add a retry badge to tool cards that failed once and then succeeded. Keep the header layout unchanged.",
+		"",
+		"## Context",
+		"- Tool cards live in `apps/web/components/chat/tools/ToolCard.tsx`; the item type is `ToolItem` in `apps/web/state.ts`.",
+		"- The header already shows a duration chip. The badge should sit next to it, not on a new row.",
+		"- A call counts as retried when an earlier call with the same name and arguments ended in error.",
+		"",
+		"## Constraints",
+		"- Do not touch the collapsed header: it truncates the tool name at 60 characters.",
+		"- Run `bun run check:types` before reporting back.",
+		"- Report the files you changed and anything you left undone.",
+	].join("\n"),
 };
 
 /** UserCard: prompt with a pasted type-check screenshot and a 1x1 image chip. */

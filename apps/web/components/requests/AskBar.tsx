@@ -38,8 +38,12 @@ interface AskParams {
 const AskRequest: Component<{ req: UiRequest }> = (props) => {
 	// Trusted boundary: ui_request params follow the SDK dialog shape for the method.
 	const params = props.req.params as AskParams;
-	// The composer regains focus when the dialog settles, however it settled.
-	onCleanup(() => document.querySelector<HTMLTextAreaElement>(".prompt-box textarea")?.focus());
+	// The main composer regains focus when the dialog settles, however it settled (never an agent pane's steer box).
+	onCleanup(() =>
+		document
+			.querySelector<HTMLTextAreaElement>(".prompt-box:not(.subagent-composer) textarea")
+			?.focus(),
+	);
 	return (
 		<Switch fallback={null}>
 			<Match when={props.req.method === "askDialog"}>

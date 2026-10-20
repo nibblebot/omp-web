@@ -12,13 +12,15 @@ import { state } from "../../state";
 interface DockKind {
 	title: string;
 	body: Component<{ id?: string }>;
+	/** The body scrolls and pads itself (see DockPane `flush`). */
+	flush?: boolean;
 }
 
 /** Dock panel kinds, keyed by the route's `<kind>` segment. */
 const DOCK_KINDS: Record<string, DockKind> = {
 	review: { title: "Git review", body: ReviewPanel },
 	tree: { title: "Session tree", body: SessionTreePanel },
-	agent: { title: "Agent", body: SubagentPanel },
+	agent: { title: "Agent", body: SubagentPanel, flush: true },
 	agents: { title: "Agents", body: AgentsPanel },
 };
 
@@ -56,6 +58,7 @@ export const DockHost: Component = () => {
 					minWidth={DOCK_MIN_WIDTH}
 					maxWidth={DOCK_MAX_WIDTH}
 					onWidth={setDockWidth}
+					flush={kind.flush}
 					onClose={onBack}
 				>
 					<Dynamic component={kind.body} id={state.dock?.id} />

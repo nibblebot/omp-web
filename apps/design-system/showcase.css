@@ -329,6 +329,12 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 .ds-frame-tall {
 	height: 820px;
 }
+/* Column host for a component that fills its parent and scrolls itself (a transcript stream),
+ * like the flex columns the app places it in. */
+.ds-frame-column {
+	display: flex;
+	flex-direction: column;
+}
 /* Icons page: a gallery of tiles plus rows of the full set. */
 .ds-icon-grid {
 	display: grid;

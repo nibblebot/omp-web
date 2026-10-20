@@ -1,14 +1,22 @@
-import { createSignal } from "solid-js";
-import { createStore } from "solid-js/store";
+import { batch, createSignal, untrack } from "solid-js";
+import { createStore, produce } from "solid-js/store";
 import type { SubagentMessagesResult } from "#lib/wire/protocol";
 import type { SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { lastToolOf, metricsOf, normalizeStatus, type UsageFallback } from "./subagent-frames";
+import { createHistoryBuilder, type HistoryBuilder } from "../chat/history-items";
+import { metricsOf, normalizeStatus, type UsageFallback } from "./subagent-frames";
 import { call } from "./transport";
 import { pushNotice } from "./chat";
-import { setState, setView, state, type SubagentInfo } from "../state";
+import { setState, setView, state, type ChatItem, type SubagentInfo } from "../state";
 import { api } from "./fleet-api";
 import { subagentAnalysisHash } from "./slices/analysis";
-import { sumKnown } from "../subagents/format";
+import { agentTitle, shortAgentName, sumKnown } from "../subagents/format";
+import {
+	liveLineOf,
+	modelView,
+	pickProgress,
+	type SubagentLiveLine,
+	type SubagentModelView,
+} from "../subagents/progress";
 
 /**
  * Subagents domain (Phase 3 store facade split). The subagent mirror itself
@@ -374,7 +382,10 @@ export interface SubagentNode {
 	id: string;
 	parentId?: string;
 	toolCallId?: string;
-	label: string;
+	/** Short name: last dot segment of the id, `-N` dedup suffix kept. */
+	name: string;
+	/** description, else first non-empty assignment line, else displayName. */
+	title: string;
 	agentType?: string;
 	status: SubagentStatus;
 	startedAt?: number;
@@ -382,7 +393,10 @@ export interface SubagentNode {
 	metrics: SubagentMetrics;
 	/** Self plus descendants. Never context percent. */
 	subtree: { tokens?: number; cost?: number };
-	lastTool?: string;
+	/** Model from live progress only; undefined when unknown (e.g. parked). */
+	model?: SubagentModelView;
+	/** The running agent's live tool line; undefined unless running. */
+	live?: SubagentLiveLine;
 	children: SubagentNode[];
 }
 
@@ -394,10 +408,11 @@ export interface SubagentCapabilities {
 }
 
 export interface SubagentTranscriptView {
-	readonly entries: readonly SessionMessageEntry[];
+	/** Built chat items; appended in place, results patch their ToolItem in place. */
+	readonly items: readonly ChatItem[];
+	/** True until the first catch-up from byte 0 finishes. */
 	readonly loading: boolean;
 	readonly error: string | null;
-	readonly hasMore: boolean;
 }
 
 const ROSTER_RETRY_MS = [0, 500, 1500, 4000];
@@ -480,18 +495,26 @@ function buildForest(): SubagentNode[] {
 	}
 	for (const [id, { info, record }] of infos) {
 		const fallback: UsageFallback | undefined = record?.usage;
+		const status = resolveStatus(state.subagents.get(id), record);
+		const progress = pickProgress(info.progress);
 		nodes.set(id, {
 			id,
 			parentId: record?.parentAgentId,
 			toolCallId: info.parentToolCallId ?? record?.parentToolCallId,
-			label: info.description ?? record?.description ?? record?.displayName ?? info.agent,
+			name: shortAgentName(id),
+			title: agentTitle({
+				description: info.description ?? record?.description,
+				assignments: [record?.assignment, record?.task ?? info.task],
+				displayName: record?.displayName ?? info.agent,
+			}),
 			agentType: info.agent,
-			status: resolveStatus(state.subagents.get(id), record),
+			status,
 			startedAt: info.startedAt,
 			endedAt: info.endedAt,
 			metrics: metricsOf(info, now, fallback),
 			subtree: {},
-			lastTool: lastToolOf(info),
+			model: modelView(progress),
+			live: status === "running" ? liveLineOf(progress) : undefined,
 			children: [],
 		});
 	}
@@ -595,33 +618,113 @@ export async function reviveSubagent(id: string): Promise<void> {
 	requestRosterRefresh();
 }
 
-const [transcripts, setTranscripts] = createStore<
-	Record<
-		string,
-		{
-			entries: SessionMessageEntry[];
-			loading: boolean;
-			error: string | null;
-			hasMore: boolean;
-			loaded: boolean;
-			nextByte: number;
-			seenUpdate: number;
-		}
-	>
->({});
+/** Pages of the agent's JSONL transcript are read forward from byte 0 at this size until caught up. */
+const TRANSCRIPT_PAGE_BYTES = 1 << 20;
+/** Server page cap (readSubagentTranscript); a single record larger than a page escalates up to it. */
+const TRANSCRIPT_MAX_PAGE_BYTES = 4 << 20;
+
+interface TranscriptSlot {
+	/** Built chat items, append-only. A later tool result patches its ToolItem in place. */
+	items: ChatItem[];
+	/** A fetch (catch-up or incremental) is in flight. */
+	loading: boolean;
+	/** The first catch-up from byte 0 has reached the end of the file. */
+	loaded: boolean;
+	error: string | null;
+	/** Cursor: the byte the next read starts from. */
+	nextByte: number;
+	/** `lastUpdate` of the agent when the last fetch started; a newer one means more transcript may exist. */
+	seenUpdate: number;
+}
+
+const [transcripts, setTranscripts] = createStore<Record<string, TranscriptSlot>>({});
+
+/**
+ * Per-transcript item builders. They hold the call/result pairing map (not
+ * reactive state) so a result landing on a later page settles its ToolItem.
+ * Only built items reach the store; raw messages are never retained.
+ */
+const builders = new Map<string, HistoryBuilder>();
 
 function transcriptKey(agentId: string): string {
 	return JSON.stringify([state.currentSessionId, agentId]);
 }
 
-async function fetchTranscript(key: string, agentId: string, fromByte?: number): Promise<void> {
+/** True once the agent can no longer be running a tool (terminal or parked); unknown agents are not settled. */
+function agentSettled(agentId: string): boolean {
+	const status = subagentById(agentId)?.status;
+	return status === "done" || status === "failed" || status === "aborted" || status === "parked";
+}
+
+/** Index of the item with `id`, searching from the end: results settle recent calls. */
+function lastIndexOfId(items: readonly ChatItem[], id: number): number {
+	for (let i = items.length - 1; i >= 0; i--) if (items[i]?.id === id) return i;
+	return -1;
+}
+
+/**
+ * A tool call with no result counts as running only while its agent runs. For
+ * an agent that is no longer running the call is unfinished: settle it the way
+ * main settles an interrupted turn (settleRunningTools). A result that shows
+ * up later still patches the item.
+ */
+function settleRunningTranscriptTools(key: string): void {
+	const items = transcripts[key]?.items;
+	if (!items?.some((item) => item.kind === "tool" && item.status === "running")) return;
+	setTranscripts(
+		key,
+		"items",
+		produce((draft) => {
+			for (const item of draft) {
+				if (item.kind === "tool" && item.status === "running") item.status = "done";
+			}
+		}),
+	);
+}
+
+/** Append one page: new items are pushed, results for earlier items patch those items in place. */
+function applyTranscriptPage(key: string, agentId: string, res: SubagentMessagesResult): void {
+	const messages = res.entries
+		.filter((entry): entry is SessionMessageEntry => entry.type === "message")
+		.map((entry) => entry.message);
+	batch(() => {
+		let builder = builders.get(key);
+		if (!builder || res.reset === true) {
+			// The file shrank under the cursor: the page starts over from byte 0.
+			builder = createHistoryBuilder();
+			builders.set(key, builder);
+			setTranscripts(key, "items", []);
+		}
+		const built = builder.append(messages);
+		setTranscripts(
+			key,
+			"items",
+			produce((items) => {
+				for (const patched of built.patched) {
+					const target = items[lastIndexOfId(items, patched.id)];
+					if (target?.kind !== "tool") continue;
+					target.status = patched.status;
+					target.output = patched.output;
+					target.details = patched.details;
+					if (patched.images) target.images = patched.images;
+				}
+				// Copies: the builder keeps mutating its own ToolItems, which must not alias store targets.
+				for (const item of built.items) items.push({ ...item });
+			}),
+		);
+		setTranscripts(key, "nextByte", res.nextByte);
+	});
+	if (agentSettled(agentId)) settleRunningTranscriptTools(key);
+}
+
+/** Read forward from the cursor in 1 MB pages until caught up. */
+async function fetchTranscript(key: string, agentId: string): Promise<void> {
 	if (!transcripts[key]) {
 		setTranscripts(key, {
-			entries: [],
+			items: [],
 			loading: false,
-			error: null,
-			hasMore: false,
 			loaded: false,
+			error: null,
 			nextByte: 0,
 			seenUpdate: 0,
 		});
@@ -629,62 +732,67 @@ async function fetchTranscript(key: string, agentId: string, fromByte?: number):
 	if (transcripts[key]?.loading) return;
 	const seen = state.subagents.get(agentId)?.lastUpdate ?? 0;
 	setTranscripts(key, { loading: true, error: null });
+	let pageBytes = TRANSCRIPT_PAGE_BYTES;
 	try {
-		const args: { subagentId: string; fromByte?: number } = { subagentId: agentId };
-		if (fromByte !== undefined) args.fromByte = fromByte;
-		const res = (await call("getSubagentMessages", [args])) as SubagentMessagesResult;
-		const incoming = res.entries.filter(
-			(entry): entry is SessionMessageEntry => entry.type === "message",
-		);
-		const replace = fromByte === undefined || res.reset === true;
-		setTranscripts(key, "entries", (prev) => {
-			if (replace) return incoming;
-			const known = new Set(prev.map((entry) => entry.id));
-			return [...prev, ...incoming.filter((entry) => !known.has(entry.id))];
-		});
-		setTranscripts(key, {
-			nextByte: res.nextByte,
-			hasMore: res.hasMore === true,
-			loaded: true,
-			seenUpdate: seen,
-		});
+		for (;;) {
+			const args = {
+				subagentId: agentId,
+				fromByte: transcripts[key]?.nextByte ?? 0,
+				maxBytes: pageBytes,
+			};
+			let res: SubagentMessagesResult;
+			try {
+				res = (await call("getSubagentMessages", [args])) as SubagentMessagesResult;
+			} catch (err) {
+				const oversized = err instanceof Error && err.message.includes("exceeds page size");
+				if (!oversized || pageBytes >= TRANSCRIPT_MAX_PAGE_BYTES) throw err;
+				pageBytes = Math.min(pageBytes * 2, TRANSCRIPT_MAX_PAGE_BYTES);
+				continue;
+			}
+			applyTranscriptPage(key, agentId, res);
+			if (res.hasMore !== true) break;
+		}
+		setTranscripts(key, "loaded", true);
 	} catch (err) {
 		setTranscripts(key, { error: err instanceof Error ? err.message : String(err) });
 	} finally {
-		setTranscripts(key, "loading", false);
+		// A failed read retries only on the next progress bump, never in a loop.
+		setTranscripts(key, { loading: false, seenUpdate: seen });
 	}
 }
 
-/** Reactive, live transcript of one subagent. The first read fetches; live updates append from the last byte. */
-export function subagentTranscript(id: string): SubagentTranscriptView {
+/**
+ * Drive one agent's transcript from a reactive scope (an effect): the first
+ * call loads from byte 0 until caught up, every later progress bump reads from
+ * the cursor, and an agent that stopped running settles its unfinished tools.
+ */
+export function syncSubagentTranscript(id: string): void {
 	const key = transcriptKey(id);
 	const lastUpdate = state.subagents.get(id)?.lastUpdate;
 	const slot = transcripts[key];
-	if (!slot) queueMicrotask(fetchTranscript.bind(undefined, key, id));
-	else if (!slot.loading && lastUpdate !== undefined && lastUpdate > slot.seenUpdate) {
-		const from = slot.loaded ? slot.nextByte : undefined;
-		queueMicrotask(fetchTranscript.bind(undefined, key, id, from));
+	if (agentSettled(id)) settleRunningTranscriptTools(key);
+	if (!slot) {
+		untrack(() => void fetchTranscript(key, id));
+		return;
 	}
+	if (!slot.loading && lastUpdate !== undefined && lastUpdate > slot.seenUpdate) {
+		untrack(() => void fetchTranscript(key, id));
+	}
+}
+
+/** Reactive view of one subagent's built transcript. Reading it never fetches; see syncSubagentTranscript. */
+export function subagentTranscript(id: string): SubagentTranscriptView {
+	const key = transcriptKey(id);
 	return {
-		get entries() {
-			return transcripts[key]?.entries ?? [];
+		get items() {
+			return transcripts[key]?.items ?? [];
 		},
 		get loading() {
-			return transcripts[key]?.loading ?? true;
+			const slot = transcripts[key];
+			return slot === undefined || (slot.loading && !slot.loaded);
 		},
 		get error() {
 			return transcripts[key]?.error ?? null;
 		},
-		get hasMore() {
-			return transcripts[key]?.hasMore ?? false;
-		},
 	};
-}
-
-/** Fetches the next page of an older transcript. No-op when there is no more history. */
-export async function loadMoreSubagentTranscript(id: string): Promise<void> {
-	const key = transcriptKey(id);
-	const slot = transcripts[key];
-	if (!slot?.hasMore || slot.loading) return;
-	await fetchTranscript(key, id, slot.nextByte);
 }

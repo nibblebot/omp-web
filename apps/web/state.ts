@@ -22,30 +22,22 @@ import type {
 import { SSE_PING_EVENT } from "#lib/wire/sse";
 import { featurePreferences } from "./features/preferences";
 import { clearUnread, markUnread, pruneUnread } from "./fleet-ui/unread";
-import { scanImages } from "./text/images";
 import type { UsageLike } from "./usage/usage";
-import { promptTimestamp } from "./chat/turn-usage";
-import { compactionItemOf } from "./store/compaction-view";
-import { advisorNotesOf } from "./store/slices/advisor";
+import { createHistoryBuilder } from "./chat/history-items";
 import { noticeAdvisorNotesWhileOff } from "./store/advisor-notice";
-import { COLLAB_OFF, guestPromptOf } from "./store/slices/collab";
+import { COLLAB_OFF } from "./store/slices/collab";
 import {
 	announce,
 	appendBashChunk,
 	applyEvent,
-	assistantBlocks,
-	capTail,
 	clearPendingDeltas,
 	nextChatId,
 	pendingEphemeral,
 	resetChatIds,
 	settleRunningTools,
 	scheduleFlush,
-	tabsToSpaces,
-	extractText,
 	notifyDesktop,
 	pushNotice,
-	userText,
 	startNewSession,
 } from "./store/chat";
 import { cancelUiRequest } from "./store/modals";
@@ -638,110 +630,9 @@ export function loadHistory(messages: AgentMessage[]): void {
 	// Appending per message (`[...items, item]`) copied the array and made the
 	// store re-walk every prior item on each push: quadratic, ~400ms of main
 	// thread on a 2 MB transcript before the chat could paint.
-	const items: ChatItem[] = [];
-	// First tool item per toolCallId (the store's findToolIndex semantics).
-	const toolIndex = new Map<string, number>();
-	let advisorNoteCount = 0;
-	for (const msg of messages) {
-		if (msg.role === "user") {
-			const images = scanImages(msg.content);
-			const stamp = promptTimestamp(msg);
-			items.push({
-				kind: "user",
-				id: nextChatId(),
-				text: userText(msg.content),
-				...(images.length > 0 ? { images } : {}),
-				...(stamp !== undefined ? { timestamp: stamp } : {}),
-			});
-		} else if (msg.role === "assistant") {
-			const meta = msg as {
-				usage?: UsageLike;
-				ttft?: number;
-				duration?: number;
-				completedAt?: number;
-				stopReason?: string;
-			};
-			items.push({
-				kind: "assistant",
-				id: nextChatId(),
-				blocks: assistantBlocks(msg.content),
-				usage: meta.usage,
-				ttft: meta.ttft,
-				duration: meta.duration,
-				...(meta.completedAt !== undefined ? { completedAt: meta.completedAt } : {}),
-				...(meta.stopReason === "aborted" ? { interrupted: true } : {}),
-			});
-			for (const c of msg.content) {
-				if (c.type === "toolCall") {
-					if (!toolIndex.has(c.id)) toolIndex.set(c.id, items.length);
-					items.push({
-						kind: "tool",
-						id: nextChatId(),
-						toolCallId: c.id,
-						name: c.name,
-						args: c.arguments ?? {},
-						// No result yet means the call is still in flight (a pending ask, say);
-						// the matching toolResult below settles it.
-						status: "running",
-						output: "",
-					});
-				}
-			}
-		} else if (msg.role === "toolResult") {
-			const index = toolIndex.get(msg.toolCallId);
-			const output = capTail(tabsToSpaces(extractText(msg)), 8000);
-			const status: ToolStatus = msg.isError ? "error" : "done";
-			const images = scanImages(msg);
-			const item = index === undefined ? undefined : items[index];
-			if (item?.kind === "tool") {
-				item.output = output;
-				item.status = status;
-				if (images.length > 0) item.images = images;
-				item.details = msg.details;
-			} else {
-				toolIndex.set(msg.toolCallId, items.length);
-				items.push({
-					kind: "tool",
-					id: nextChatId(),
-					toolCallId: msg.toolCallId,
-					name: msg.toolName,
-					args: null,
-					status,
-					output,
-					...(images.length > 0 ? { images } : {}),
-					details: msg.details,
-				});
-			}
-		} else if (msg.role === "bashExecution" || msg.role === "pythonExecution") {
-			// `!`/`$` runs: the same card the live call renders, settled.
-			items.push({
-				kind: "bash",
-				id: nextChatId(),
-				command: msg.role === "bashExecution" ? msg.command : msg.code,
-				dimmed: msg.excludeFromContext === true,
-				lang: msg.role === "bashExecution" ? "bash" : "python",
-				status: "done",
-				output: capTail(msg.output, 8000),
-				exitCode: msg.exitCode ?? null,
-				truncated: msg.truncated,
-			});
-		} else if (msg.role === "compactionSummary") {
-			// The settled divider for a compaction boundary (see compaction-view).
-			const card = compactionItemOf(msg);
-			if (card !== null) items.push({ ...card, id: nextChatId() });
-		} else {
-			// Advisor cards render inline like the TUI; other custom/developer
-			// messages stay hidden.
-			const notes = advisorNotesOf(msg);
-			if (notes !== null) {
-				items.push({ kind: "advisor", id: nextChatId(), notes });
-				advisorNoteCount += notes.length;
-			}
-			const guest = guestPromptOf(msg);
-			if (guest !== null) items.push({ kind: "guestPrompt", id: nextChatId(), ...guest });
-		}
-	}
-	noticeAdvisorNotesWhileOff(advisorNoteCount);
+	const built = createHistoryBuilder(nextChatId).append(messages);
+	const items = built.items;
+	noticeAdvisorNotesWhileOff(built.advisorNotes);
 	setState({
 		items,
 		live: { active: false, blocks: [], rev: 0 },

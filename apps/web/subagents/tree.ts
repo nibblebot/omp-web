@@ -17,7 +17,7 @@ export function flattenSubagentTree(nodes: readonly SubagentNode[]): SubagentNod
 }
 
 /**
- * The forest narrowed to agents whose label, type or status contains `query`
+ * The forest narrowed to agents whose id, title, type or status contains `query`
  * (case-insensitive). A matching agent keeps its whole subtree; a non-matching
  * ancestor of a match is kept so the path to it stays visible.
  */
@@ -25,7 +25,7 @@ export function filterSubagentTree(nodes: readonly SubagentNode[], query: string
 	const needle = query.trim().toLowerCase();
 	if (needle === "") return [...nodes];
 	return nodes.flatMap((node) => {
-		const self = [node.label, node.agentType ?? "", node.status].some((text) =>
+		const self = [node.id, node.title, node.agentType ?? "", node.status].some((text) =>
 			text.toLowerCase().includes(needle),
 		);
 		if (self) return [node];
