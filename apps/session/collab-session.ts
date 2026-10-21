@@ -42,6 +42,7 @@ import {
 import { cancelEntryUiRequests } from "./ui-context";
 import { handleSubagentLifecycle, handleSubagentProgress } from "./subagent-mirror";
 import { buildUiContext } from "./ui-context";
+import { watchSkills } from "./skill-methods";
 import { ensureWorkerReviver } from "./worker-lifecycle";
 
 // ---------------------------------------------------------------------------
@@ -351,6 +352,12 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			sessionsDir: join(deps.agentDir, "sessions"),
 		});
 		wireSession(entry);
+		// One `disabledExtensions` listener per entry; the session object persists across new/switch/delete.
+		watchSkills(entry, {
+			broadcastAvailableCommands: (target) => deps.broker.broadcastAvailableCommands(target),
+			broadcastSkillsChanged: (target, state) =>
+				broadcastTo(target.handle, { type: "skills_changed", state }),
+		});
 		installPlanReviewHandler(entry);
 		return entry;
 	}

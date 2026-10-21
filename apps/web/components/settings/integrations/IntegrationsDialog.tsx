@@ -6,22 +6,20 @@ import {
 	selectIntegrationsTab,
 } from "../../../store/integrations";
 import { Modal } from "../../ui/Modal";
-import { McpTab } from "./McpTab";
+import { ExtensionsTab } from "./ExtensionsTab";
 import { PluginsTab } from "./PluginsTab";
-import { SkillsTab } from "./SkillsTab";
 import "./integrations.css";
 
 const TABS: Array<{ id: IntegrationTab; label: string }> = [
-	{ id: "mcp", label: "MCP servers" },
-	{ id: "skills", label: "Skills" },
+	{ id: "extensions", label: "Extensions" },
 	{ id: "plugins", label: "Plugins" },
 ];
 
-/** One sheet for MCP servers, skills, and plugins. */
-export const IntegrationsSheet: Component<{ onClose: () => void }> = (props) => (
-	<Modal title="Integrations" class="integrations-sheet" onClose={props.onClose}>
+/** One dialog for extensions (skills and MCP servers) and plugins. */
+export const IntegrationsDialog: Component<{ onClose: () => void }> = (props) => (
+	<Modal title="Extensions" class="integrations-dialog" size="wide" onClose={props.onClose}>
 		<div class="integrations-head">
-			<div class="integrations-tabs" role="tablist" aria-label="Integrations">
+			<div class="integrations-tabs" role="tablist" aria-label="Sections">
 				<For each={TABS}>
 					{(tab) => (
 						<button
@@ -51,13 +49,11 @@ export const IntegrationsSheet: Component<{ onClose: () => void }> = (props) => 
 		<div
 			role="tabpanel"
 			id="integrations-panel"
+			class="integrations-panel"
 			aria-labelledby={`integrations-tab-${integrationsTab()}`}
 		>
-			<Show when={integrationsTab() === "mcp"}>
-				<McpTab />
-			</Show>
-			<Show when={integrationsTab() === "skills"}>
-				<SkillsTab />
+			<Show when={integrationsTab() === "extensions"}>
+				<ExtensionsTab />
 			</Show>
 			<Show when={integrationsTab() === "plugins"}>
 				<PluginsTab />

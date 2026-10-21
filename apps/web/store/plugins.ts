@@ -10,7 +10,7 @@ import { call } from "./transport";
  * Installed-plugins domain. Fleet mode talks to /ctl/plugins/*; a session talks
  * to its plugin wire methods. Both write the same omp-plugins.lock.json.
  * Enabling a plugin runs its code with daemon permissions, so enable is
- * trust-gated exactly like installs in the Integrations sheet.
+ * trust-gated exactly like installs in the Extensions dialog.
  */
 
 /** Card meta line, e.g. "Enabled · npm · v1.2.0". The version is omitted when absent. */

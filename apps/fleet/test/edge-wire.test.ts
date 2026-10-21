@@ -794,6 +794,16 @@ describe("fleet edge", () => {
 		expect(browserA.frames.filter((f) => f.type === "call_result" && f.id === "c1")).toHaveLength(
 			1,
 		);
+		// A live skills_changed push reaches the browser stamped with the daemon id.
+		remoteDaemon.send(streamA, "frame", {
+			type: "skills_changed",
+			state: { skills: [], warnings: [] },
+		});
+		const skills = await browserA.waitForFrame(
+			(f) => f.type === "skills_changed",
+			"skills_changed",
+		);
+		expect("sessionId" in skills ? skills.sessionId : undefined).toBe(remoteEntry.daemonId);
 	});
 
 	test("a second browser gets an independent pipe, and answers reach only the browser that forwarded the command", async () => {

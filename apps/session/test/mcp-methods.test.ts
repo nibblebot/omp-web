@@ -1,10 +1,14 @@
-import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tempDir } from "#lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { readDisabledServers } from "@oh-my-pi/pi-coding-agent/mcp/config-writer";
+import { getAgentDir, getMCPConfigPath, setAgentDir } from "@oh-my-pi/pi-utils";
 import { createMcpMethods } from "../mcp-methods";
 import type { SessionEntry } from "../session-entry";
+
+afterAll(cleanupTempDirs);
 
 const SECRET_ENV = "sk-live-env-value-123";
 const SECRET_HEADER = "Bearer hdr-token-456";
@@ -145,4 +149,167 @@ describe("session mcp methods: per-server reloads", () => {
 		expect(calls.disconnected).toEqual(["beta"]);
 		expect([...live]).toEqual(["alpha"]);
 	});
+});
+
+describe("session mcp methods: toggle file routing", () => {
+	// The user mcp.json lives under the agent dir; point it at a temp dir so the
+	// denylist fallback never touches the real one.
+	const previousEnv = process.env.PI_CODING_AGENT_DIR;
+	const previousDir = getAgentDir();
+	beforeAll(() => setAgentDir(tempDir("mcp-agent-dir-")));
+	afterAll(() => {
+		setAgentDir(previousDir);
+		if (previousEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousEnv;
+	});
+
+	type Source = { provider: string; providerName: string; path: string; level: string };
+
+	/** A live entry whose manager knows `discovered` servers declared outside the project/user files. */
+	function entryWithManager(cwd: string, discovered: Record<string, Source>) {
+		const sources = new Map(Object.entries(discovered));
+		const stdio = { command: "node", args: [] as string[] };
+		const manager = {
+			getAllServerNames: () => [...sources.keys()],
+			getServerConfig: () => stdio,
+			getSource: (name: string) => sources.get(name),
+			getConnectionStatus: () => "disconnected",
+			getTools: () => [],
+			disconnectServer: async () => {},
+			discoverAndConnect: async () => ({ errors: new Map<string, string>() }),
+		};
+		const base = makeEntry(cwd, true);
+		return {
+			...base,
+			mcpManager: manager,
+			session: { ...base.session, setMCPPromptCommands: () => {}, mcpPromptCommands: [] },
+		} as unknown as SessionEntry;
+	}
+
+	type StateShape = { servers: Array<{ name: string; toggleFile?: string }> };
+
+	test("a server declared in another owned file toggles in that file, not the user config", async () => {
+		const cwd = makeProject({});
+		const otherFile = join(cwd, "pkg", ".mcp.json");
+		mkdirSync(join(cwd, "pkg"), { recursive: true });
+		writeFileSync(
+			otherFile,
+			JSON.stringify({ mcpServers: { ext: { command: "node", args: [] } } }),
+		);
+		const entry = entryWithManager(cwd, {
+			ext: { provider: "mcp-json", providerName: "MCP JSON", path: otherFile, level: "project" },
+		});
+		const methods = createMcpMethods(deps);
+
+		const state = (await methods.getMcpState(entry, [])) as StateShape;
+		expect(state.servers.find((server) => server.name === "ext")?.toggleFile).toBe(otherFile);
+
+		await methods.mcpDisable(entry, ["ext"]);
+		expect(JSON.parse(readFileSync(otherFile, "utf8")).mcpServers.ext.enabled).toBe(false);
+		await expect(readDisabledServers(getMCPConfigPath("user", cwd))).resolves.toEqual([]);
+
+		await methods.mcpEnable(entry, ["ext"]);
+		expect(JSON.parse(readFileSync(otherFile, "utf8")).mcpServers.ext.enabled).toBe(true);
+	});
+
+	test("a project server reports and writes the project file", async () => {
+		const cwd = makeProject({ local: { command: "node", args: [] } });
+		const projectFile = getMCPConfigPath("project", cwd);
+		const entry = entryWithManager(cwd, {});
+		const methods = createMcpMethods(deps);
+
+		const state = (await methods.getMcpState(entry, [])) as StateShape;
+		expect(state.servers.find((server) => server.name === "local")?.toggleFile).toBe(projectFile);
+		await methods.mcpDisable(entry, ["local"]);
+		expect(JSON.parse(readFileSync(projectFile, "utf8")).mcpServers.local.enabled).toBe(false);
+	});
+
+	test("a tool-owned source is never written: the toggle lands in the user denylist", async () => {
+		const cwd = makeProject({});
+		const toolFile = join(cwd, "opencode.json");
+		writeFileSync(toolFile, JSON.stringify({ mcp: { foreign: { command: "node" } } }));
+		const entry = entryWithManager(cwd, {
+			foreign: { provider: "opencode", providerName: "OpenCode", path: toolFile, level: "project" },
+		});
+		const userFile = getMCPConfigPath("user", cwd);
+		const methods = createMcpMethods(deps);
+
+		const state = (await methods.getMcpState(entry, [])) as StateShape;
+		expect(state.servers.find((server) => server.name === "foreign")?.toggleFile).toBe(userFile);
+
+		await methods.mcpDisable(entry, ["foreign"]);
+		await expect(readDisabledServers(userFile)).resolves.toEqual(["foreign"]);
+		expect(readFileSync(toolFile, "utf8")).toBe(
+			JSON.stringify({ mcp: { foreign: { command: "node" } } }),
+		);
+	});
+});
+
+describe("session mcp methods: mcpInspect", () => {
+	// A minimal stdio MCP server: newline-delimited JSON-RPC, one tool with a typed input schema.
+	const SERVER = `
+const tools = [{
+	name: "search",
+	title: "Search docs",
+	description: "Find pages.",
+	inputSchema: {
+		type: "object",
+		properties: {
+			query: { type: "string", description: "Search text" },
+			limit: { type: "number" },
+			mode: { enum: ["fast", "deep"] },
+		},
+		required: ["query"],
+	},
+}];
+const reply = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
+for await (const chunk of process.stdin) {
+	for (const line of chunk.toString().split("\\n")) {
+		if (!line.trim()) continue;
+		const msg = JSON.parse(line);
+		if (msg.method === "initialize") {
+			reply(msg.id, {
+				protocolVersion: msg.params.protocolVersion,
+				capabilities: { tools: {} },
+				serverInfo: { name: "fixture-server", version: "1.2.3" },
+			});
+		} else if (msg.method === "tools/list") reply(msg.id, { tools });
+		else if (msg.id !== undefined) reply(msg.id, {});
+	}
+}
+`;
+
+	test("reports the server implementation and tool titles with typed parameters", async () => {
+		const dir = tempDir("mcp-inspect-");
+		const script = join(dir, "server.js");
+		writeFileSync(script, SERVER);
+		const cwd = makeProject({ fixture: { command: process.execPath, args: [script] } });
+		const base = makeEntry(cwd, true);
+		const entry = {
+			...base,
+			session: { ...base.session, modelRegistry: { authStorage: undefined } },
+		} as unknown as SessionEntry;
+
+		const inspection = (await createMcpMethods(deps).mcpInspect(entry, ["fixture"])) as {
+			server?: { name: string; version?: string };
+			tools: Array<{
+				name: string;
+				title?: string;
+				parameters?: Array<{
+					name: string;
+					type?: string;
+					required: boolean;
+					description?: string;
+				}>;
+			}>;
+		};
+		expect(inspection.server).toEqual({ name: "fixture-server", version: "1.2.3" });
+		expect(inspection.tools).toHaveLength(1);
+		expect(inspection.tools[0]).toMatchObject({ name: "search", title: "Search docs" });
+		expect(inspection.tools[0]?.parameters).toEqual([
+			{ name: "query", type: "string", required: true, description: "Search text" },
+			{ name: "limit", type: "number", required: false, description: undefined },
+			{ name: "mode", type: "enum", required: false, description: undefined },
+		]);
+	}, 20_000);
 });

@@ -19,6 +19,7 @@ import type {
 	ModelRoleCatalogEntry,
 	SettingsItem,
 	SettingsModel,
+	SkillDetail,
 	SkillSummary,
 } from "#lib/wire/protocol";
 
@@ -510,7 +511,7 @@ export const foreignSessionPreviews: ForeignSessionPreview[] = [
 // Integrations: MCP servers, skills, and plugins.
 // ---------------------------------------------------------------------------
 
-/** McpServerSummary list: MCP tab rows, one connected, one errored (OAuth), one disabled. */
+/** McpServerSummary list: one connected, one errored (OAuth), one disabled, one discovered from another tool (read-only). */
 export const mcpServers: McpServerSummary[] = [
 	{
 		name: "filesystem",
@@ -523,7 +524,8 @@ export const mcpServers: McpServerSummary[] = [
 		args: ["-y", "@modelcontextprotocol/server-filesystem", "."],
 		envKeys: [],
 		auth: "none",
-		toolCount: 11,
+		toolCount: 14,
+		toggleFile: "/repo/.omp/mcp.json",
 	},
 	{
 		name: "linear",
@@ -536,6 +538,7 @@ export const mcpServers: McpServerSummary[] = [
 		headerNames: [],
 		auth: "oauth",
 		error: "401 Unauthorized: token expired",
+		toggleFile: "/home/dev/.config/omp/mcp.json",
 	},
 	{
 		name: "postgres",
@@ -548,10 +551,25 @@ export const mcpServers: McpServerSummary[] = [
 		args: ["mcp-server-postgres"],
 		envKeys: ["DATABASE_URL"],
 		auth: "none",
+		toggleFile: "/repo/.omp/mcp.json",
+	},
+	{
+		name: "github",
+		transport: "http",
+		status: "connected",
+		enabled: true,
+		scope: "discovered",
+		source: "Claude Code",
+		writable: false,
+		url: "https://api.githubcopilot.com/mcp/",
+		headerNames: ["Authorization"],
+		auth: "token",
+		toolCount: 3,
+		toggleFile: "/home/dev/.config/omp/mcp.json",
 	},
 ];
 
-/** SkillSummary list: Skills tab rows. One enabled, one disabled and hidden from the listing. */
+/** SkillSummary list: one enabled, one disabled and hidden from the listing. */
 export const skillEntries: SkillSummary[] = [
 	{
 		name: "pdf-extract",
@@ -570,6 +588,38 @@ export const skillEntries: SkillSummary[] = [
 		hidden: true,
 	},
 ];
+
+/** getSkillDetail answers keyed by skill name: the summary plus its SKILL.md body, alwaysApply, and globs. */
+export const skillDetails: Record<string, SkillDetail> = {
+	"pdf-extract": {
+		...skillEntries[0],
+		alwaysApply: false,
+		globs: ["**/*.pdf"],
+		body: [
+			"# PDF extract",
+			"",
+			"Use this skill when the user attaches a PDF and asks for its text or tables.",
+			"",
+			"## Steps",
+			"",
+			"1. Run `pdftotext -layout <file> -` to get the text.",
+			"2. For tables, run `pdfplumber` and print each table as markdown.",
+			"3. Summarize what you found before quoting long passages.",
+			"",
+			"```sh",
+			"pdftotext -layout report.pdf - | head -n 40",
+			"```",
+			"",
+			"Untrusted content check: <script>alert(1)</script> never runs here.",
+		].join("\n"),
+	},
+	changelog: {
+		...skillEntries[1],
+		alwaysApply: true,
+		globs: [],
+		body: "Draft a CHANGELOG entry from the commits since the last tag. Group them under Added, Changed, and Fixed.",
+	},
+};
 
 // ---------------------------------------------------------------------------
 // Downloads: consent dialog and manifest.
@@ -715,16 +765,81 @@ export const mcpTestFailed: { server: string; result: McpTestResult } = {
 	result: { ok: false, detail: "Error: 401 Unauthorized. The OAuth token has expired.", tools: [] },
 };
 
-/** MCP inspection: the tool list shown after inspecting a connected server. */
+/** The filesystem server's tools: first ten of fourteen show before "Show all". */
+const filesystemTools: McpInspection["tools"] = [
+	{
+		name: "read_file",
+		title: "Read file",
+		description: "Read a text file.",
+		parameters: [
+			{ name: "path", type: "string", required: true, description: "File to read." },
+			{ name: "head", type: "number", required: false, description: "Only the first N lines." },
+		],
+	},
+	{
+		name: "write_file",
+		title: "Write file",
+		description: "Create or overwrite a file.",
+		parameters: [
+			{ name: "path", type: "string", required: true },
+			{ name: "content", type: "string", required: true },
+		],
+	},
+	{
+		name: "list_directory",
+		description: "List entries in a directory.",
+		parameters: [{ name: "path", type: "string", required: true }],
+	},
+	{
+		name: "search_files",
+		description: "Recursive filename search.",
+		parameters: [
+			{ name: "path", type: "string", required: true },
+			{ name: "pattern", type: "string", required: true },
+			{ name: "excludePatterns", type: "array", required: false },
+		],
+	},
+	...[
+		"edit_file",
+		"create_directory",
+		"move_file",
+		"get_file_info",
+		"directory_tree",
+		"read_multiple_files",
+		"list_allowed_directories",
+		"read_media_file",
+		"delete_file",
+		"copy_file",
+	].map((name) => ({
+		name,
+		description: `The ${name.replaceAll("_", " ")} tool.`,
+		parameters: [{ name: "path", type: "string", required: true }],
+	})),
+];
+
+/** MCP inspection: what a connected server reports (implementation, tools with parameters, a resource, a prompt). */
 export const mcpInspectionTools: { server: string; inspection: McpInspection } = {
 	server: "filesystem",
 	inspection: {
-		tools: [
-			{ name: "read_file", description: "Read a text file." },
-			{ name: "write_file", description: "Create or overwrite a file." },
-			{ name: "list_directory", description: "List entries in a directory." },
-			{ name: "search_files", description: "Recursive filename search." },
+		server: { name: "secure-filesystem-server", version: "0.2.0" },
+		tools: filesystemTools,
+		resources: [
+			{
+				uri: "file:///repo/README.md",
+				name: "README",
+				description: "Project readme exposed as a resource.",
+			},
 		],
+		prompts: [{ name: "summarize_directory", description: "Summarize a directory tree." }],
+	},
+};
+
+/** MCP inspection with only a few tools: no "Show all" button. */
+export const mcpInspectionFewTools: { server: string; inspection: McpInspection } = {
+	server: "github",
+	inspection: {
+		server: { name: "github-mcp-server" },
+		tools: filesystemTools.slice(0, 3),
 		resources: [],
 		prompts: [],
 	},

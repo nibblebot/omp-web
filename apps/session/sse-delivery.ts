@@ -119,6 +119,7 @@ const RING_DELTAS: Record<string, true> = {
 	ephemeral_delta: true,
 	command_echo: true,
 	settings_changed: true,
+	skills_changed: true,
 	subagent_lifecycle: true,
 	subagent_progress: true,
 	ui_request: true,

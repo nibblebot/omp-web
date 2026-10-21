@@ -87,7 +87,7 @@ import {
 import { createReviewState, resetReviewState } from "./store/slices/review";
 import { applyBtwEphemeralDelta, createBtwState } from "./store/slices/btw";
 import { createGoalState } from "./store/slices/goals";
-import { createIntegrationState } from "./store/slices/integrations";
+import { createIntegrationState, skillsPatch } from "./store/slices/integrations";
 import { createResumeState } from "./store/resume";
 import { createCompactionState } from "./store/compaction";
 import { createWorkersState, requestRosterRefresh } from "./store/subagents";
@@ -1599,6 +1599,11 @@ export function connect(): void {
 				applySettingsModel(model);
 				break;
 			}
+			case "skills_changed":
+				// Effective disabledExtensions changed (web, TUI, or a settings file edit):
+				// a fresh skill inventory, applied like a getSkillsState reply.
+				setState("integrations", skillsPatch(state.integrations, frame.state));
+				break;
 			case "collab_status":
 				setState("collabStatus", frame.status);
 				break;

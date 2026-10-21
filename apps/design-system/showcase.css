@@ -335,6 +335,18 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 	display: flex;
 	flex-direction: column;
 }
+/* A dialog-body panel in a frame: the panel surface and padding the Modal would give it. */
+.ds-frame-panel {
+	padding: var(--space-5);
+	background: var(--panel);
+	border: 1px solid var(--border);
+	overflow-y: auto;
+}
+/* A phone-width host: container queries inside it switch to their narrow layout. */
+.ds-frame-narrow {
+	width: 380px;
+	max-width: 100%;
+}
 /* Icons page: a gallery of tiles plus rows of the full set. */
 .ds-icon-grid {
 	display: grid;

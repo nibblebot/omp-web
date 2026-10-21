@@ -49,7 +49,7 @@ export default defineStory({
 			name: "Long message",
 			seed: () =>
 				pushToast(
-					"Could not reach the Linear MCP server after 3 attempts. Check the OAuth token in Settings > Integrations, then retry the tool call.",
+					"Could not reach the Linear MCP server after 3 attempts. Check the OAuth token in the Extensions dialog (/mcp), then retry the tool call.",
 				),
 			render: () => (
 				<div class="ds-frame">

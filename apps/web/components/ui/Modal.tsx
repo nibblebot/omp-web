@@ -68,6 +68,8 @@ export const Modal: Component<{
 	class?: string;
 	/** "sheet": full-height right-anchored side sheet. "lightbox": bare full-size image, no panel chrome. */
 	variant?: "sheet" | "lightbox";
+	/** "wide": a roomy dialog (about 960px, fitting the viewport) for list-and-detail bodies. */
+	size?: "wide";
 	children: JSX.Element;
 }> = (props) => {
 	// Only a sheet that a host keeps alive plays an exit; elsewhere closing unmounts at once.
@@ -149,7 +151,11 @@ export const Modal: Component<{
 			>
 				<div
 					class={props.class ? `modal ${props.class}` : "modal"}
-					classList={{ sheet: props.variant === "sheet", lightbox: props.variant === "lightbox" }}
+					classList={{
+						sheet: props.variant === "sheet",
+						lightbox: props.variant === "lightbox",
+						wide: props.size === "wide",
+					}}
 					role="dialog"
 					aria-modal="true"
 					aria-labelledby={props.title ? titleId : undefined}

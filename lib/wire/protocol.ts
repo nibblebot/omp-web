@@ -354,6 +354,8 @@ export interface McpServerSummary {
 	toolCount?: number;
 	/** Last connection failure. */
 	error?: string;
+	/** File mcpEnable / mcpDisable write: the config declaring the server, or the user mcp.json denylist. Absent from older daemons. */
+	toggleFile?: string;
 }
 
 export interface McpState {
@@ -389,8 +391,24 @@ export interface McpTestResult extends McpActionResult {
 	tools: string[];
 }
 
+export interface McpToolParameter {
+	name: string;
+	/** JSON Schema type, e.g. "string" or "array". */
+	type?: string;
+	required: boolean;
+	description?: string;
+}
+
 export interface McpInspection {
-	tools: Array<{ name: string; description?: string }>;
+	/** Implementation the server reported at initialize. */
+	server?: { name: string; version?: string };
+	/** `parameters` is absent from older daemons. */
+	tools: Array<{
+		name: string;
+		title?: string;
+		description?: string;
+		parameters?: McpToolParameter[];
+	}>;
 	resources: Array<{ uri: string; name?: string; description?: string }>;
 	prompts: Array<{ name: string; description?: string }>;
 }
@@ -409,6 +427,14 @@ export interface SkillSummary {
 export interface SkillsState {
 	skills: SkillSummary[];
 	warnings: string[];
+}
+
+/** getSkillDetail answer: the summary plus what the TUI inspector shows. */
+export interface SkillDetail extends SkillSummary {
+	/** SKILL.md body, frontmatter stripped. Untrusted markdown. */
+	body: string;
+	alwaysApply: boolean;
+	globs: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -764,6 +790,7 @@ export type WebMethodName =
 	| "mcpInspect"
 	| "getSkillsState"
 	| "setSkillEnabled"
+	| "getSkillDetail"
 	| "listPlugins"
 	| "getPluginConfig"
 	| "setPluginEnabled"
@@ -860,6 +887,7 @@ export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> =
 	getModelPresets: true,
 	getSettings: true,
 	getSkillsState: true,
+	getSkillDetail: true,
 	getMcpState: true,
 	mcpTest: true,
 	mcpInspect: true,
@@ -1196,6 +1224,8 @@ export type SessionScopedFrame =
 	| { type: "available_commands"; commands: AvailableSlashCommand[] }
 	// Settings panel: fresh model after a setSetting mutation (TUI /settings parity).
 	| { type: "settings_changed"; model: SettingsModel }
+	// Skills panel: fresh skill inventory after `disabledExtensions` changed (web, TUI, or file edit).
+	| { type: "skills_changed"; state: SkillsState }
 	| { type: "subagent_lifecycle" | "subagent_progress"; payload: unknown }
 	// Server-driven ExtensionUIContext dialog; the client answers with ui_response.
 	| { type: "ui_request"; id: string; method: string; params: unknown }

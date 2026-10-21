@@ -24,6 +24,7 @@ import {
 import { cfgMcpEnableProjectConfig } from "@oh-my-pi/pi-coding-agent/mcp/settings";
 import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { getMCPConfigPath } from "@oh-my-pi/pi-utils";
+import { toolParamsFromSchema } from "@oh-my-pi/pi-tui/overlays/extensions/inspector-model";
 import type {
 	McpActionResult,
 	McpConnectionState,
@@ -173,6 +174,38 @@ interface ReadContext {
 	disabled: Set<string>;
 	errors: Map<string, string>;
 	toolCounts: Map<string, number>;
+	toggleFiles: Map<string, string>;
+}
+
+/**
+ * The server's own config file, passed to `setMcpServerEnabled` as `sourcePath`. Only formats
+ * this codebase owns qualify (the TUI dashboard applies the same rule); tool-owned configs
+ * (opencode.json, claude.json, ...) are never mutated, so the toggle falls back to the user file.
+ */
+function ownedSourcePath(manager: MCPManager | undefined, name: string): string | undefined {
+	const source = manager?.getSource(name);
+	return source && (source.provider === "native" || source.provider === "mcp-json")
+		? source.path
+		: undefined;
+}
+
+/**
+ * The file `setMcpServerEnabled` writes for `name`: the first of sourcePath, project, user that
+ * declares it (same order as the SDK), else the user mcp.json denylist/allowlist.
+ */
+async function toggleFileFor(
+	name: string,
+	sourcePath: string | undefined,
+	p: Record<McpScope, string>,
+): Promise<string> {
+	for (const filePath of new Set([sourcePath, p.project, p.user])) {
+		if (filePath === undefined) continue;
+		const servers = await readServers(filePath).catch(
+			() => ({}) as Record<string, MCPServerConfig>,
+		);
+		if (servers[name] !== undefined) return filePath;
+	}
+	return p.user;
 }
 
 function summarize(
@@ -201,6 +234,7 @@ function summarize(
 		enabled,
 		scope,
 		writable,
+		toggleFile: ctx.toggleFiles.get(name),
 		source,
 		command: "command" in config ? config.command : undefined,
 		args: "args" in config ? config.args : undefined,
@@ -226,11 +260,23 @@ async function readState(entry: SessionEntry): Promise<McpState> {
 		const server = (tool as { mcpServerName?: string }).mcpServerName;
 		if (server) toolCounts.set(server, (toolCounts.get(server) ?? 0) + 1);
 	}
+	const names = new Set([
+		...Object.keys(project),
+		...Object.keys(user),
+		...(manager?.getAllServerNames() ?? []),
+	]);
+	const toggleFiles = new Map<string, string>();
+	await Promise.all(
+		[...names].map(async (name) =>
+			toggleFiles.set(name, await toggleFileFor(name, ownedSourcePath(manager, name), p)),
+		),
+	);
 	const ctx: ReadContext = {
 		manager,
 		disabled: new Set(disabledList),
 		errors: (manager && discoveryErrors.get(manager)) ?? new Map(),
 		toolCounts,
+		toggleFiles,
 	};
 	const servers: McpServerSummary[] = [];
 	const seen = new Set<string>();
@@ -395,7 +441,13 @@ export function createMcpMethods(deps: McpMethodsDeps): Record<McpMethodName, Ha
 			const name = text(args[0], "name");
 			if (!(await hasServer(entry, name))) throw new Error(`Unknown MCP server: ${name}`);
 			const p = paths(entry.cwd);
-			await setMcpServerEnabled({ userPath: p.user, projectPath: p.project, name, enabled });
+			await setMcpServerEnabled({
+				userPath: p.user,
+				projectPath: p.project,
+				sourcePath: ownedSourcePath(entry.mcpManager, name),
+				name,
+				enabled,
+			});
 			return reloadServer(entry, name);
 		});
 
@@ -458,7 +510,15 @@ export function createMcpMethods(deps: McpMethodsDeps): Record<McpMethodName, Ha
 				listPrompts(connection).catch(() => []),
 			]);
 			return {
-				tools: tools.map((tool) => ({ name: tool.name, description: tool.description })),
+				server: { name: connection.serverInfo.name, version: connection.serverInfo.version },
+				tools: tools.map((tool) => ({
+					name: tool.name,
+					title: tool.title,
+					description: tool.description,
+					parameters: toolParamsFromSchema(tool.inputSchema).map(
+						({ name, type, required, description }) => ({ name, type, required, description }),
+					),
+				})),
 				resources: resources.map((resource) => ({
 					uri: resource.uri,
 					name: resource.name,

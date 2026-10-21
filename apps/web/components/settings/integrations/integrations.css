@@ -1,10 +1,24 @@
-/* Integrations sheet (IntegrationsSheet.tsx and its tabs). Reuses picker-filter,
-   msg-notice, tool-collapsed-note, and settings-control-btn from the shared
-   stylesheets. Forms stack on narrow widths and go two-column only when the
-   sheet has room. */
+/* Extensions dialog (IntegrationsDialog.tsx and its tabs). Reuses picker-filter,
+   msg-notice, tool-collapsed-note, settings-toggle, and settings-control-btn from
+   the shared stylesheets. The Extensions tab lays list and detail side by side and
+   drills from list to detail when its own container is narrow (a container query,
+   so the same component narrows in a dock or story frame). Forms stack on narrow
+   widths and go two-column only when the dialog has room. */
 
-.integrations-sheet {
-	width: min(960px, 100%);
+/* The wide Modal has a fixed height so the list and detail panes scroll inside it. */
+.integrations-dialog {
+	display: flex;
+	flex-direction: column;
+	height: min(720px, 80dvh);
+	overflow: hidden;
+}
+
+.integrations-panel {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
 }
 
 .integrations-head {
@@ -47,16 +61,6 @@
 	min-width: 0;
 }
 
-.integrations-toolbar {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: var(--space-3);
-}
-.integrations-toolbar .picker-filter {
-	flex: 1 1 220px;
-	min-width: 0;
-}
 
 .integrations-hint {
 	margin: 0;
@@ -65,57 +69,11 @@
 	overflow-wrap: anywhere;
 }
 
-.integrations-list {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-3);
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
 
-.integrations-row {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-3);
-	min-width: 0;
-	padding: var(--space-5) var(--space-6);
-	background: var(--settings-fill);
-	border: 1px solid var(--border);
-	border-radius: var(--r-2xl);
-}
 
-.integrations-row-main {
-	min-width: 0;
-}
 
-.integrations-row-head {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: var(--space-2);
-	min-width: 0;
-}
 
-.integrations-row-name {
-	color: var(--text);
-	font-size: var(--fs-lg);
-	font-weight: 500;
-	overflow-wrap: anywhere;
-}
 
-.integrations-row-detail {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-2);
-	color: var(--muted);
-	font-size: var(--fs-sm);
-	min-width: 0;
-	overflow-wrap: anywhere;
-}
-.integrations-row-detail p {
-	margin: 0;
-}
 
 .integrations-target {
 	overflow-wrap: anywhere;
@@ -131,6 +89,7 @@
 }
 
 .integrations-dot {
+	display: inline-block;
 	width: 8px;
 	height: 8px;
 	flex: none;
@@ -189,7 +148,7 @@
 	border-radius: var(--r-2xl);
 }
 
-/* Narrow sheets: one column. Two columns only from 640px up. */
+/* Narrow dialogs: one column. Two columns only from 640px up. */
 .integrations-form-grid {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
@@ -239,7 +198,7 @@
 }
 
 /* Phones and narrow windows: 44px targets and 16px form text (no iOS zoom),
-   with field labels and buttons no smaller than the rest of the sheet. */
+   with field labels and buttons no smaller than the rest of the dialog. */
 @media (max-width: 767px) {
 	.integrations-field {
 		font-size: var(--fs-md);
@@ -252,7 +211,7 @@
 	.integrations-field textarea {
 		font-size: max(1rem, 16px);
 	}
-	.integrations-sheet button {
+	.integrations-dialog button {
 		min-height: 44px;
 		font-size: var(--fs-md);
 	}
@@ -260,4 +219,235 @@
 
 .integrations-plugins {
 	gap: var(--space-5);
+}
+
+/* Extensions tab: list pane and detail pane. */
+.extensions-tab {
+	flex: 1 1 auto;
+	min-height: 0;
+	container-type: inline-size;
+}
+
+.extensions-layout {
+	display: grid;
+	grid-template-columns: minmax(240px, 5fr) minmax(0, 7fr);
+	grid-template-rows: minmax(0, 1fr);
+	gap: var(--space-5);
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+.extensions-list-pane,
+.extensions-detail-pane {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+	min-width: 0;
+	min-height: 0;
+	padding: var(--space-1);
+	overflow-y: auto;
+}
+.extensions-detail-pane {
+	padding-left: var(--space-5);
+	border-left: 1px solid var(--border);
+}
+
+/* Back appears only where the detail replaces the list. */
+.extensions-back {
+	display: none;
+	align-self: flex-start;
+}
+
+.extensions-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+.extensions-group-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+}
+.extensions-group-title {
+	margin: 0;
+	color: var(--muted);
+	font-size: var(--fs-sm);
+	font-weight: 500;
+	text-transform: none;
+}
+
+.extensions-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.extension-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	min-width: 0;
+	padding: var(--space-1) var(--space-3);
+	border: 1px solid transparent;
+	border-radius: var(--r-xl);
+}
+.extension-row:hover {
+	background: var(--hover);
+}
+.extension-row-selected,
+.extension-row-selected:hover {
+	background: var(--settings-fill);
+	border-color: var(--border);
+}
+
+.extension-row-main {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-width: 0;
+	padding: var(--space-2) 0;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	background: none;
+	border: none;
+	cursor: pointer;
+}
+.extension-row-name {
+	color: var(--text);
+	font-weight: 500;
+	overflow-wrap: anywhere;
+}
+.extension-row[data-enabled="false"] .extension-row-name {
+	color: var(--muted);
+}
+.extension-row-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+	color: var(--muted);
+	font-size: var(--fs-sm);
+}
+.extension-row .settings-toggle {
+	flex: none;
+}
+
+.extension-detail {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+	min-width: 0;
+}
+.extension-detail-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-4);
+}
+.extension-detail-title {
+	margin: 0;
+	color: var(--text);
+	font-size: var(--fs-lg);
+	font-weight: 500;
+	overflow-wrap: anywhere;
+}
+.extension-detail-text {
+	margin: 0;
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+
+.extension-facts {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: var(--space-2) var(--space-5);
+	margin: 0;
+	font-size: var(--fs-sm);
+}
+.extension-facts dt {
+	color: var(--muted);
+}
+.extension-facts dd {
+	display: flex;
+	flex-direction: column;
+	margin: 0;
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+
+.extension-section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+.extension-section-title {
+	margin: 0;
+	color: var(--muted);
+	font-size: var(--fs-sm);
+	font-weight: 500;
+}
+.extension-tools {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.extension-tools > li {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.extension-tools p {
+	margin: 0;
+}
+.extension-params {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin: 0;
+	padding: 0 0 0 var(--space-5);
+	list-style: none;
+}
+.extension-params li {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--space-2);
+	font-size: var(--fs-sm);
+}
+
+/* The skill's SKILL.md body renders in the detail pane's own scroll. */
+.extension-body {
+	min-width: 0;
+	padding-top: var(--space-4);
+	border-top: 1px solid var(--border);
+}
+
+/* Narrow container: one pane at a time, list first, detail after a pick. */
+@container (max-width: 640px) {
+	.extensions-layout {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.extensions-layout[data-view="list"] .extensions-detail-pane,
+	.extensions-layout[data-view="detail"] .extensions-list-pane {
+		display: none;
+	}
+	.extensions-detail-pane {
+		padding-left: 0;
+		border-left: none;
+	}
+	.extensions-back {
+		display: inline-flex;
+		align-items: center;
+	}
 }

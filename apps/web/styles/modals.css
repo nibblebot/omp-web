@@ -20,6 +20,11 @@
 	max-height: 80dvh;
 	overflow-y: auto;
 }
+/* Wide size: a roomy dialog for list-and-detail bodies. */
+.modal.wide {
+	width: min(960px, 92vw);
+	max-width: none;
+}
 /* Sheet variant: full-height side sheet anchored to the right edge; the
    sheet's content area scrolls internally, not the page. */
 .modal-backdrop.sheet {
@@ -978,6 +983,15 @@ button.picker-row.kbd-active {
 	.modal summary,
 	.dock-pane button {
 		min-height: 44px;
+	}
+	/* Switches keep their 26px track; the 44px target comes from an invisible hit area. */
+	.modal .settings-toggle {
+		min-height: 26px;
+	}
+	.modal .settings-toggle::before {
+		content: "";
+		position: absolute;
+		inset: -9px 0;
 	}
 	.modal summary {
 		display: flex;

@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sdk from "@oh-my-pi/pi-coding-agent";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
@@ -73,6 +74,8 @@ describe("worker roster depth", () => {
 			return {
 				session: {
 					sessionFile: root,
+					// createSession watches `disabledExtensions` on the session's settings.
+					settings: Settings.isolated({}),
 					subscribe: () => () => {},
 					getEnabledToolNames: () => [],
 					getMountedXdevToolNames: () => [],

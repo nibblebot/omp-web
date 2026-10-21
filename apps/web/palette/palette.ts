@@ -38,7 +38,10 @@ export type PaletteOpenTarget =
 	| "debug"
 	| "add-project"
 	| "sign-in"
-	| "login";
+	| "login"
+	/** Extensions dialog on that group's first item. */
+	| "skills"
+	| "mcp";
 
 /** What choosing an item does. Plain data: `store/palette.ts` executes it. */
 export type PaletteAction =
@@ -205,6 +208,8 @@ export function commandItem(entry: CommandEntry, live?: CommandLiveSource): Pale
 
 export interface PaletteContext {
 	debugEnabled: boolean;
+	/** The `integrations` feature is on: Skills and MCP servers open the Extensions dialog. */
+	integrationsEnabled: boolean;
 	projects: readonly { projectId: string; name: string }[];
 }
 
@@ -250,6 +255,18 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 	];
 	if (context.debugEnabled)
 		items.push(openItem("debug", "Debug", "Fleet and daemon diagnostics", ["logs", "diagnostics"]));
+	if (context.integrationsEnabled)
+		items.push(
+			openItem("skills", "Skills", "Turn skills on or off and read their instructions", [
+				"extensions",
+				"integrations",
+			]),
+			openItem("mcp", "MCP servers", "Manage MCP servers and see their tools", [
+				"extensions",
+				"integrations",
+				"tools",
+			]),
+		);
 	items.push(
 		openItem("add-project", "Add project", "Register a folder as a project", [
 			"folder",

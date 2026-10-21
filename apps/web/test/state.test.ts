@@ -4002,3 +4002,38 @@ describe("the attached daemon is removed from the roster", () => {
 		expect(connectionState()).toBe("connected");
 	});
 });
+
+describe("skills_changed frame", () => {
+	const entry = (name: string, enabled: boolean) => ({
+		name,
+		description: "",
+		source: "OMP (user)",
+		path: `/skills/${name}/SKILL.md`,
+		enabled,
+		hidden: false,
+	});
+
+	test("applies the broadcast inventory and bumps the revision the open detail reloads on", () => {
+		setState({ currentSessionId: "daemon-a" });
+		setState("integrations", {
+			skills: [entry("pdf", true)],
+			skillWarnings: [],
+			skillsRevision: 3,
+		});
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({
+			type: "skills_changed",
+			state: { skills: [entry("pdf", false), entry("changelog", true)], warnings: ["w"] },
+		});
+
+		expect(state.integrations.skills.map((s) => [s.name, s.enabled])).toEqual([
+			["pdf", false],
+			["changelog", true],
+		]);
+		expect(state.integrations.skillWarnings).toEqual(["w"]);
+		expect(state.integrations.skillsRevision).toBe(4);
+		setState("integrations", { skills: [], skillWarnings: [], skillsRevision: 0 });
+	});
+});

@@ -54,6 +54,8 @@ export interface SessionEntry {
 	collab: { adapter: CollabHostAdapter | null; starting: boolean; refusal: string | null };
 	/** Fired by the subagent mirror when the roster may have changed (collab agents tap). */
 	onSubagentsChange: (() => void) | null;
+	/** Unsubscribes the `disabledExtensions` listener (skill-methods `watchSkills`); undefined until wired. */
+	skillsUnlisten?: () => void;
 }
 
 /** The single boot session's constant handle: the attached frame's client guard token. */

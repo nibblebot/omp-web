@@ -862,9 +862,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		...createMcpMethods({
 			broadcastAvailableCommands: (entry) => deps.broker.broadcastAvailableCommands(entry),
 		}),
-		...createSkillMethods({
-			broadcastAvailableCommands: (entry) => deps.broker.broadcastAvailableCommands(entry),
-		}),
+		...createSkillMethods(),
 		...createDownloadMethods({
 			manifestDeps: (entry) => ({
 				sessionId: entry.session.sessionId,

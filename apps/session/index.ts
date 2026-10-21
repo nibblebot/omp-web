@@ -69,6 +69,7 @@ import { gitCapability } from "./capabilities";
 import { createWebMethods } from "./methods";
 import { BOOT_HANDLE, type SessionEntry } from "./session-entry";
 import { createSessionChangeGate } from "./session-change-gate";
+import { unwatchSkills } from "./skill-methods";
 import { loginWithCallbacks } from "./login";
 import {
 	broadcast,
@@ -544,6 +545,7 @@ async function closeSession(entry: SessionEntry, reason: string): Promise<void> 
 	entry.collab.adapter = null;
 	if (adapter) await adapter.stop(reason).catch(() => {});
 	getAutonomyAdapter(entry).dispose();
+	unwatchSkills(entry);
 	entry.session.beginDispose();
 	await entry.session.dispose().catch(() => {});
 	rejectEntryUiRequests(entry, reason);

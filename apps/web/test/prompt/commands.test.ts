@@ -654,7 +654,7 @@ describe("feature-owned commands with arguments (INT-06)", () => {
 		expect(state.items.at(-1)).toMatchObject({
 			kind: "notice",
 			message:
-				'/skills status is terminal-only. Install or update skills with "omp skill status" in a terminal; turn skills on or off in the Integrations sheet.',
+				'/skills status is terminal-only. Install or update skills with "omp skill status" in a terminal; turn skills on or off in the Extensions dialog.',
 		});
 		expect(posted.some((c) => c.type === "call" && c.method === "prompt")).toBe(false);
 	});
