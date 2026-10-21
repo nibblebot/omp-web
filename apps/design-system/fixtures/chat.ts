@@ -9,7 +9,7 @@ import type {
 	PromptInsert,
 	ToolItem,
 } from "../../web/state";
-import type { ImageArg } from "#lib/wire/protocol";
+import type { ImageArg, SettingsModel } from "#lib/wire/protocol";
 import { terminalScreenshot } from "./tools";
 
 /** 1x1 PNG, enough for an image chip without shipping real pixels. */
@@ -426,6 +426,47 @@ export const chatAssistantItem: Extract<ChatItem, { kind: "assistant" }> = {
 	usage,
 	ttft: 820,
 	duration: 6400,
+};
+
+/** AssistantCard: the settled answer, completed at a fixed local time so the usage row's stamp is stable. */
+export const chatAssistantStampedItem: Extract<ChatItem, { kind: "assistant" }> = {
+	...chatAssistantItem,
+	completedAt: new Date(2026, 9, 20, 14, 32).getTime(),
+};
+
+/** Settings the AssistantCard usage row reads: token usage and turn time on. */
+export const chatTokenUsageSettingsModel: SettingsModel = {
+	revision: 1,
+	target: "current-session",
+	tabs: [
+		{
+			id: "display",
+			label: "Display",
+			groups: [
+				{
+					name: "Transcript",
+					items: [
+						{
+							path: "display.showTokenUsage",
+							label: "Show token usage",
+							description: "Per-turn usage row under assistant messages.",
+							type: "boolean",
+							value: true,
+							changed: true,
+						},
+						{
+							path: "display.showTurnTime",
+							label: "Turn time",
+							description: "Prompt-to-completion time on the usage row.",
+							type: "boolean",
+							value: true,
+							changed: true,
+						},
+					],
+				},
+			],
+		},
+	],
 };
 
 /** AssistantCard: reasoning block followed by the answer, after a settled turn. */

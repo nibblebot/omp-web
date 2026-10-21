@@ -9,7 +9,12 @@ import {
 import { formatThinkingForDisplay, hasDisplayableThinking } from "../../../../chat/thinking";
 import type { TurnMeta } from "../../../../chat/turn-usage";
 import { formatTokens } from "../../../../usage/context";
-import { buildUsageRow, formatDurationMs, formatUsageRow } from "../../../../usage/usage";
+import {
+	buildUsageRow,
+	formatDurationMs,
+	formatTurnStamp,
+	formatUsageRow,
+} from "../../../../usage/usage";
 import { CopyButton } from "../../../ui/CopyButton";
 import { Markdown } from "../../../ui/Markdown";
 
@@ -84,7 +89,9 @@ export const AssistantCard: Component<{
 					const row = buildUsageRow(u(), props.assistant.ttft, props.assistant.duration);
 					if (!row) return null;
 					const turn = props.meta?.turnMs;
+					const at = props.assistant.completedAt;
 					const summary = [
+						at !== undefined ? formatTurnStamp(at, Date.now()) : null,
 						turn !== undefined ? `Δ ${formatDurationMs(turn)}` : null,
 						formatUsageRow(row),
 					]

@@ -127,6 +127,21 @@ export function usageBrand(provider: string): UsageBrand | undefined {
 	return undefined;
 }
 
+/**
+ * Wall-clock stamp for a turn on the usage row: local "Oct 20, 14:32", with
+ * the year when it differs from `nowMs`'s.
+ */
+export function formatTurnStamp(ms: number, nowMs: number): string {
+	const at = new Date(ms);
+	return at.toLocaleString(undefined, {
+		...(at.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
+		month: "short",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
+	});
+}
+
 const MINUTE_MS = 60_000;
 
 /**

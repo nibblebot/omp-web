@@ -145,7 +145,7 @@ export type ChatItem =
 			usage?: UsageLike;
 			ttft?: number;
 			duration?: number;
-			/** Epoch ms the session stamped at message_end; anchors display.showTurnTime. */
+			/** Epoch ms the session stamped at message_end; the usage row's turn stamp and display.showTurnTime anchor. */
 			completedAt?: number;
 			/** Stop aborted this turn; the card shows an Interrupted footer. */
 			interrupted?: boolean;

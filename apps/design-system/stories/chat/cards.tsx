@@ -14,6 +14,7 @@ import {
 	chatAdvisorBlockerItem,
 	chatAdvisorItem,
 	chatAssistantItem,
+	chatAssistantStampedItem,
 	chatAssistantStreamingItem,
 	chatAssistantThinkingItem,
 	chatBashItems,
@@ -28,6 +29,7 @@ import {
 	chatUserImagesItem,
 	chatUserItem,
 	chatUserLongItem,
+	chatTokenUsageSettingsModel,
 } from "../../fixtures/chat";
 import { genericDoneTool } from "../../fixtures/tools";
 import { defineStory } from "../../registry";
@@ -112,6 +114,19 @@ const stories: Story[] = [
 				description: "A turn the user stopped ends with an Interrupted footer.",
 				render: () => (
 					<AssistantCard assistant={{ ...chatAssistantItem, interrupted: true }} thinking={false} />
+				),
+			},
+			{
+				name: "Per-turn usage row",
+				description:
+					"With Show Token Usage on, the row under the answer leads with the turn's completion date and time, then turn time and usage.",
+				seed: { settingsModel: chatTokenUsageSettingsModel },
+				render: () => (
+					<AssistantCard
+						assistant={chatAssistantStampedItem}
+						thinking={false}
+						meta={{ turnMs: 9200 }}
+					/>
 				),
 			},
 		],
