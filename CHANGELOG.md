@@ -190,6 +190,7 @@ Fleet, session, and wire fixes from the infra audit (`kfg5`). Wire is OMP_PROTO 
 - Read the latest `omp stats` summary from stderr, align profile and existing flattened XDG paths, pin sync children to the viewer's resolved targets, and correct the CLI install hint to `@oh-my-pi/pi-coding-agent`.
 - Apply the thinking level of a `default` role assigned or cleared in the model roles picker to the live session, matching the TUI model hub; previously only the saved role value changed and the session bar kept the old level.
 - Show the system prompt of transcript `session_init` rows written by SDK 18.6.3 or later, which store it as a block array instead of one string; the transcripts view previously rendered it empty.
+- Paste screenshots whose clipboard also offers an unsupported encoding (image/tiff, image/x-qt-image, ...) or an alias type (image/x-png): the composer attaches the supported encoding, otherwise converts the image to PNG, and errors only when the browser cannot decode any encoding. The error names the image, its type, and the accepted formats, and has a dismiss button.
 
 ## v0.2.1, 2026-09-25
 

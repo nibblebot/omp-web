@@ -918,7 +918,8 @@ button.picker-row.kbd-active {
 .toast-action:hover {
 	background: var(--hover);
 }
-.toast-dismiss {
+.toast-dismiss,
+.prompt-error-dismiss {
 	flex: 0 0 auto;
 	display: inline-flex;
 	align-items: center;
@@ -932,7 +933,8 @@ button.picker-row.kbd-active {
 	color: var(--muted);
 	cursor: pointer;
 }
-.toast-dismiss:hover {
+.toast-dismiss:hover,
+.prompt-error-dismiss:hover {
 	background: var(--hover);
 	color: var(--text);
 }
@@ -942,6 +944,7 @@ button.picker-row.kbd-active {
 @media (pointer: coarse), (max-width: 767px) {
 	.modal-close,
 	.toast-dismiss,
+	.prompt-error-dismiss,
 	.picker-row-action,
 	.picker-row-close,
 	.picker-hidden-toggle,
@@ -954,7 +957,8 @@ button.picker-row.kbd-active {
 		min-height: 44px;
 	}
 	.modal-close,
-	.toast-dismiss {
+	.toast-dismiss,
+	.prompt-error-dismiss {
 		width: 44px;
 		height: 44px;
 	}

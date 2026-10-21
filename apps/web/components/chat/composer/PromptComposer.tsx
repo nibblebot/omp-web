@@ -33,8 +33,10 @@ import {
 	ATTACH_ACCEPT,
 	foldedPreview,
 	PASTE_LARGE_MENU_DEFAULT,
-	readFileAsDataUrl,
+	clipboardImageCandidates,
+	readImagePayload,
 	shouldFoldPaste,
+	unsupportedImageReason,
 	validateImage,
 } from "../../../prompt/paste";
 import { importTextAttachment, type TextAttachment } from "../../../prompt/attachments";
@@ -197,18 +199,36 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		persist(props.message(), images(), next);
 	};
 
-	const addImages = (files: Array<{ data: string; mimeType: string }>): void => {
+	const addImages = (files: Array<{ data: string; mimeType: string }>, label: string): void => {
 		const valid: ImageArg[] = [];
 		for (const f of files) {
 			const bytes = Math.floor((f.data.length * 3) / 4);
-			const v = validateImage(f.mimeType, bytes);
+			const v = validateImage(f.mimeType, bytes, label);
 			if (!v.ok) {
-				setPasteError(v.reason ?? "Image rejected.");
+				setPasteError(v.reason ?? `${label} was rejected.`);
 				continue;
 			}
 			valid.push({ type: "image", data: f.data, mimeType: f.mimeType });
 		}
 		if (valid.length > 0) props.setImages?.((prev) => [...prev, ...valid]);
+	};
+
+	/** Attach the first of `files` that reads or converts; they are encodings of one image. */
+	const attachImage = async (files: File[], label: string): Promise<void> => {
+		for (const file of files) {
+			try {
+				addImages([await readImagePayload(file)], label);
+				return;
+			} catch {
+				// Undecodable encoding: try the next one.
+			}
+		}
+		setPasteError(
+			unsupportedImageReason(
+				label,
+				files.map((file) => file.type),
+			),
+		);
 	};
 
 	const onPaste = (e: ClipboardEvent): void => {
@@ -227,18 +247,12 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		const imageItems = items.filter((it) => it.type.startsWith("image/"));
 		if (imageItems.length > 0) {
 			e.preventDefault();
-			for (const item of imageItems) {
-				const file = item.getAsFile();
-				if (!file) continue;
-				const { promise, resolve } = Promise.withResolvers<string>();
-				const reader = new FileReader();
-				reader.onload = () => resolve(String(reader.result));
-				reader.readAsDataURL(file);
-				void promise.then((dataUrl) => {
-					const data = dataUrl.slice(dataUrl.indexOf(",") + 1);
-					addImages([{ data, mimeType: item.type }]);
-				});
-			}
+			const { attach, convert } = clipboardImageCandidates(imageItems);
+			const asFiles = (list: DataTransferItem[]): File[] =>
+				list.flatMap((item) => item.getAsFile() ?? []);
+			for (const file of asFiles(attach)) void attachImage([file], "Pasted image");
+			const alternates = asFiles(convert);
+			if (alternates.length > 0) void attachImage(alternates, "Pasted image");
 		}
 		// Large text paste: keep the EXACT payload, fold visually.
 		const text = e.clipboardData?.getData("text/plain") ?? "";
@@ -254,8 +268,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 
 	const importFile = async (f: File): Promise<void> => {
 		if (f.type.startsWith("image/")) {
-			const url = await readFileAsDataUrl(f);
-			addImages([{ data: url.slice(url.indexOf(",") + 1), mimeType: f.type }]);
+			await attachImage([f], `"${f.name}"`);
 			return;
 		}
 		// Text files become chips and reach the model at send time; they never enter the textarea.
@@ -271,6 +284,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 			(dropped) => {
 				if (props.textOnly || !dropped) return;
 				setDroppedFiles(null);
+				setPasteError(null);
 				for (const f of dropped) void importFile(f);
 			},
 			{ defer: true },
@@ -360,7 +374,15 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 			<Show when={pasteError()}>
 				{(e) => (
 					<div class="prompt-error" role="alert">
-						{e()}
+						<span class="prompt-error-text">{e()}</span>
+						<button
+							type="button"
+							class="prompt-error-dismiss"
+							aria-label="Dismiss error"
+							onClick={() => setPasteError(null)}
+						>
+							<XIcon />
+						</button>
 					</div>
 				)}
 			</Show>
@@ -447,6 +469,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							aria-hidden="true"
 							tabIndex={-1}
 							onChange={(e) => {
+								setPasteError(null);
 								for (const f of [...(e.currentTarget.files ?? [])]) void importFile(f);
 								e.currentTarget.value = "";
 							}}

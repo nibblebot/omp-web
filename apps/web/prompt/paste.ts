@@ -12,6 +12,7 @@ export const PASTE_FOLD_LINES = 30;
 export const PASTE_FOLD_CHARS = 4000;
 /** Model attachment gate: images must be image/* and bounded (~10MB each). */
 export const IMAGE_MIME_RE = /^image\/(png|jpeg|gif|webp|avif|bmp|svg\+xml)$/;
+const IMAGE_FORMATS = "PNG, JPEG, GIF, WebP, AVIF, BMP or SVG";
 /** Generic file attachments (external-edit import, drop): text-ish only, bounded. */
 export const MAX_FILE_BYTES = 1_000_000;
 const TEXT_EXTENSIONS = [
@@ -77,13 +78,58 @@ export interface ImageValidation {
 	reason?: string;
 }
 
-/** SDK/model validation for clipboard/dropped images. */
-export function validateImage(mimeType: string, bytes: number): ImageValidation {
+/** Refusal for an image whose type is not attachable and could not be converted. */
+export function unsupportedImageReason(label: string, mimeTypes: readonly string[]): string {
+	const types = mimeTypes.map((type) => type || "an unknown type").join(" / ");
+	return `${label} can't be attached: ${types} is not supported and the browser could not convert it. Use ${IMAGE_FORMATS}.`;
+}
+
+/** SDK/model validation for clipboard/dropped images. `label` names the image in the refusal. */
+export function validateImage(mimeType: string, bytes: number, label = "Image"): ImageValidation {
 	if (!IMAGE_MIME_RE.test(mimeType))
-		return { ok: false, reason: `Unsupported image type ${mimeType}.` };
-	if (bytes > MAX_IMAGE_BYTES) return { ok: false, reason: "Image is too large (over ~10MB)." };
-	if (bytes === 0) return { ok: false, reason: "Empty image." };
+		return { ok: false, reason: unsupportedImageReason(label, [mimeType]) };
+	if (bytes > MAX_IMAGE_BYTES)
+		return {
+			ok: false,
+			reason: `${label} is ${(bytes / 1_000_000).toFixed(1)} MB; the limit is ${MAX_IMAGE_BYTES / 1_000_000} MB per image.`,
+		};
+	if (bytes === 0) return { ok: false, reason: `${label} is empty.` };
 	return { ok: true };
+}
+
+/**
+ * Images to take from one paste. The clipboard holds one capture offered in several encodings
+ * (image/png beside image/tiff, image/x-qt-image, ...), so supported types are attached and
+ * unsupported ones are alternates; with none supported, `convert` lists the candidates to try in
+ * order, attaching only the first that converts.
+ */
+export function clipboardImageCandidates<T extends { type: string }>(
+	items: readonly T[],
+): { attach: T[]; convert: T[] } {
+	const attach = items.filter((item) => IMAGE_MIME_RE.test(item.type));
+	return attach.length > 0 ? { attach, convert: [] } : { attach, convert: [...items] };
+}
+
+/**
+ * Base64 payload of an image the model accepts: a supported type is read as is, anything else the
+ * browser decodes (TIFF in Safari, ICO, type aliases like image/x-png) is re-encoded as PNG.
+ * Rejects when the browser cannot decode it.
+ */
+export async function readImagePayload(file: Blob): Promise<{ data: string; mimeType: string }> {
+	if (IMAGE_MIME_RE.test(file.type)) {
+		const url = await readFileAsDataUrl(file);
+		return { data: url.slice(url.indexOf(",") + 1), mimeType: file.type };
+	}
+	const bitmap = await createImageBitmap(file);
+	try {
+		const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+		const context = canvas.getContext("2d");
+		if (!context) throw new Error("2d canvas unavailable");
+		context.drawImage(bitmap, 0, 0);
+		return await readImagePayload(await canvas.convertToBlob({ type: "image/png" }));
+	} finally {
+		bitmap.close();
+	}
 }
 
 export interface FileValidation {
