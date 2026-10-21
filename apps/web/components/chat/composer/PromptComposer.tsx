@@ -50,6 +50,7 @@ import type { PromptAutocomplete } from "./usePromptAutocomplete";
 import { PromptMirror } from "./PromptMirror";
 import type { GhostText } from "./useGhostText";
 import { magicKeywordSegments } from "../../../prompt/magic-keywords";
+import { createPresence } from "../../../motion/presence";
 
 interface PromptComposerProps {
 	message: () => string;
@@ -73,7 +74,7 @@ interface PromptComposerProps {
 	setFiles?: Setter<TextAttachment[]>;
 	ac?: PromptAutocomplete;
 	ghost?: GhostText;
-	/** Prompt history popover open state; PromptBox opens it on first-line Up. */
+	/** Prompt history popover open state; PromptBox opens it on top-row Up. */
 	historyOpen?: () => boolean;
 	closeHistory?: () => void;
 }
@@ -91,6 +92,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	let fileInput!: HTMLInputElement;
 	// Stable id for the combobox/listbox wiring (aria-controls/activedescendant).
 	const listId = `prompt-ac-${Math.random().toString(36).slice(2, 8)}`;
+	const historyPresence = createPresence(() => props.historyOpen?.() ?? false);
 	const [folded, setFolded] = createSignal(true);
 	const [pasteNote, setPasteNote] = createSignal<string | null>(null);
 	const [pasteError, setPasteError] = createSignal<string | null>(null);
@@ -399,8 +401,10 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 						/>
 					)}
 				</Show>
-				<Show when={props.historyOpen?.()}>
+				<Show when={historyPresence.mounted()}>
 					<PromptHistoryPicker
+						phase={historyPresence.phase()}
+						ref={historyPresence.ref}
 						onClose={(restoreFocus) => {
 							props.closeHistory?.();
 							if (restoreFocus) textarea.focus();

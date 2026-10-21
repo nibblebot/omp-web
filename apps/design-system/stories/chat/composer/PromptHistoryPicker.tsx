@@ -33,7 +33,7 @@ export default defineStory({
 	variants: [
 		{
 			name: "Recent prompts",
-			description: "Up on the composer's first line: newest prompt at the bottom, selected.",
+			description: "Up on the composer's top row: newest prompt at the bottom, selected.",
 			seed: () => seedHistory(promptHistoryEntries),
 			render: anchored,
 		},

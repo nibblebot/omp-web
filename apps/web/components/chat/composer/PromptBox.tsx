@@ -1,5 +1,6 @@
 import { createSignal, type Component } from "solid-js";
 import { dispatchInput, parseInput, type InputMode } from "../../../prompt/commands";
+import { caretOnFirstRow } from "../../../prompt/caret-row";
 import { PromptHistory } from "../../../prompt/history";
 import type { ImageArg } from "#lib/wire/protocol";
 import { composeTextAttachments, type TextAttachment } from "../../../prompt/attachments";
@@ -28,8 +29,9 @@ const history = new PromptHistory();
 /**
  * P2 prompt box (G03). Submit expands `^model` chips, pushes submitted text
  * to history (separate from unsent drafts), and clears the live draft slot.
- * Plain Up with the caret on the first line opens the prompt history popover
- * (PromptHistoryPicker); Up on later lines keeps native caret motion.
+ * Plain Up with the caret on the top visual row (no newline or soft wrap
+ * before it) opens the prompt history popover (PromptHistoryPicker); Up on
+ * later rows keeps native caret motion.
  */
 export const PromptBox: Component = () => {
 	const [message, setMessage] = createSignal("");
@@ -173,17 +175,14 @@ export const PromptBox: Component = () => {
 			return;
 		}
 		const el = e.currentTarget as HTMLTextAreaElement;
-		// First-line Up opens the history popover; multiline caret motion and
-		// IME always win; with no history, Up goes to the browser.
-		if (
-			e.key === "ArrowUp" &&
-			!e.shiftKey &&
-			!e.ctrlKey &&
-			!e.metaKey &&
-			!el.value.slice(0, el.selectionStart).includes("\n")
-		) {
+		// Up with the caret on the top visual row opens the history popover;
+		// caret motion on later rows (logical or soft-wrapped) and IME always
+		// win; with no history, Up goes to the browser. Cheap checks first, so
+		// the layout-based row check only runs when it could matter.
+		if (e.key === "ArrowUp" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
 			if (e.isComposing || e.keyCode === 229) return;
 			if (new PromptHistory().size === 0) return;
+			if (!caretOnFirstRow(el)) return;
 			e.preventDefault();
 			setHistoryOpen(true);
 		}

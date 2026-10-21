@@ -1,15 +1,8 @@
-import {
-	createEffect,
-	createMemo,
-	createSignal,
-	For,
-	onMount,
-	Show,
-	type Component,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, Show, type Component } from "solid-js";
 import { fuzzyRank } from "../../../prompt/autocomplete";
 import { PromptHistory } from "../../../prompt/history";
 import { setPromptInsert } from "../../../state";
+import type { PresencePhase } from "../../../motion/presence";
 
 /** A picker row: one prompt history string. */
 interface PickerEntry {
@@ -19,7 +12,7 @@ interface PickerEntry {
 /**
  * Prompt history popover, anchored to the composer's top-left corner and
  * growing up and to the right. PromptBox opens it on Up with the caret on the
- * first line; the composer owns its open state (anchored popover, not a
+ * top row; the composer owns its open state (anchored popover, not a
  * ModalHost overlay). The newest (or best-matching) entry sits at the bottom,
  * next to the prompt: Up walks older, Down past the newest returns to the
  * prompt. Typing fuzzy-filters; Enter/click inserts the entry through the
@@ -29,6 +22,10 @@ interface PickerEntry {
 export const PromptHistoryPicker: Component<{
 	/** `restoreFocus`: hand focus back to the prompt (false when focus moved elsewhere). */
 	onClose: (restoreFocus: boolean) => void;
+	/** Motion phase from the host's presence (`data-motion`); an exiting popover is inert. Omitted: static, no motion. */
+	phase?: PresencePhase;
+	/** Host presence ref: lets the presence observe the exit transition's end. */
+	ref?: (el: HTMLElement) => void;
 }> = (props) => {
 	const [query, setQuery] = createSignal("");
 	const [selected, setSelected] = createSignal(0);
@@ -92,12 +89,24 @@ export const PromptHistoryPicker: Component<{
 		}
 	};
 
-	onMount(() => input.focus());
+	// Focus on mount and again when a reopen reverses an exit in place (presence
+	// keeps the popover mounted, so focus is still in the textarea).
+	createEffect(
+		on(
+			() => props.phase,
+			(phase) => phase !== "exit" && input.focus(),
+		),
+	);
 
 	return (
 		<div
-			ref={root}
+			ref={(el) => {
+				root = el;
+				props.ref?.(el);
+			}}
 			class="history-popover"
+			data-motion={props.phase}
+			inert={props.phase === "exit"}
 			role="dialog"
 			aria-label="Prompt history"
 			onFocusOut={(e) => {

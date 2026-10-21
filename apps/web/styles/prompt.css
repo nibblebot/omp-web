@@ -424,7 +424,7 @@ button.stop:not(:disabled):hover {
 .autocomplete-live {
 	margin-left: auto;
 }
-/* Prompt history popover (first-line Up): anchored at the composer's top-left
+/* Prompt history popover (top-row Up): anchored at the composer's top-left
  * corner, growing up and to the right. The list is column-reverse so the
  * newest/best entry (index 0) sits at the bottom next to the search input. */
 .history-popover {
@@ -439,23 +439,18 @@ button.stop:not(:disabled):hover {
 	border-radius: var(--r-lg);
 	box-shadow: var(--shadow-2);
 	z-index: var(--z-autocomplete);
-	transform-origin: bottom left;
-	animation: history-popover-in var(--dur-move-base) var(--ease-out);
+	transition:
+		opacity var(--dur-base) var(--ease-out),
+		transform var(--dur-move-base) var(--ease-out);
 }
-@keyframes history-popover-in {
-	from {
-		opacity: 0;
-		transform: scale(0.6);
-	}
+.history-popover[data-motion="enter"],
+.history-popover[data-motion="exit"] {
+	opacity: 0;
+	transform: translateY(4px);
 }
 .msg-notice-echo {
 	color: var(--accent);
 	font-family: var(--font-mono);
-}
-@media (prefers-reduced-motion: reduce) {
-	.history-popover {
-		animation: none;
-	}
 }
 .history-popover-list {
 	display: flex;
