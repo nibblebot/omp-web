@@ -1395,6 +1395,12 @@ export type DaemonInfo = {
 	owner?: string;
 	persist: boolean;
 	detached: boolean;
+	/**
+	 * Fleet daemonIds whose session broker listed this process, stamped by the
+	 * fleet edge's merge (daemons-aggregator.ts); a session's own roster frame
+	 * omits it. The web strip shows only entries the selected session reported.
+	 */
+	reportedBy?: string[];
 };
 
 /**

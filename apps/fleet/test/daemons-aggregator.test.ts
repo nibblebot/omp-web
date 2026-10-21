@@ -113,6 +113,17 @@ describe("mergeDaemonRosters", () => {
 		// Two owners (/a): d1 arrived latest among them.
 		expect(merged[0].pid).toBe(111);
 	});
+
+	test("each merged entry lists exactly the daemons whose roster reported its key", () => {
+		const merged = mergeDaemonRosters(
+			new Map([
+				["d1", source("/a", 10, info("shared", "/a"), info("only-a", "/a"))],
+				["d2", source("/b", 20, info("shared", "/a"), info("only-b", "/b"))],
+			]),
+		);
+		const byName = Object.fromEntries(merged.map((d) => [d.name, d.reportedBy?.toSorted()]));
+		expect(byName).toEqual({ shared: ["d1", "d2"], "only-a": ["d1"], "only-b": ["d2"] });
+	});
 });
 
 describe("DaemonsAggregator", () => {

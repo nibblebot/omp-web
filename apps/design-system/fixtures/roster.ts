@@ -404,13 +404,17 @@ export const rosterSidebarGroups: ProjectGroupsData = [
 	{ project: nixosConfig, daemons: [daemonSessionError, daemonBlocked] },
 ];
 
-/** Supervised process rows for BackgroundDaemonsBar, anchored to `now` since the strip renders `Date.now() - startedAt`. */
+/** Supervised process rows for BackgroundDaemonsBar, anchored to `now` since the strip renders `Date.now() - startedAt`.
+    Each row's projectDir and `reportedBy` match the roster session whose broker reports it: the
+    design-fixtures worktree (dmn_a002, the seeded selection) and localaction main (dmn_b001). */
 export function rosterDaemonInfos(now: number): DaemonInfo[] {
+	const designFixtures = `${WORKTREES}/design-fixtures`;
 	return [
 		{
 			name: "vite-dev",
 			id: "dmn_p001",
-			projectDir: OMP_WEB,
+			projectDir: designFixtures,
+			reportedBy: ["dmn_a002"],
 			state: "running",
 			pid: 48211,
 			createdAt: now - 25 * MIN,
@@ -425,7 +429,8 @@ export function rosterDaemonInfos(now: number): DaemonInfo[] {
 		{
 			name: "design-server",
 			id: "dmn_p002",
-			projectDir: OMP_WEB,
+			projectDir: designFixtures,
+			reportedBy: ["dmn_a002"],
 			state: "running",
 			pid: 48540,
 			createdAt: now - 12 * MIN,
@@ -440,6 +445,7 @@ export function rosterDaemonInfos(now: number): DaemonInfo[] {
 			name: "bench-runner",
 			id: "dmn_p003",
 			projectDir: LOCALACTION,
+			reportedBy: ["dmn_b001"],
 			state: "restarting",
 			pid: 49102,
 			createdAt: now - 6 * MIN,
@@ -451,7 +457,8 @@ export function rosterDaemonInfos(now: number): DaemonInfo[] {
 		{
 			name: "fleet-edge",
 			id: "dmn_p004",
-			projectDir: OMP_WEB,
+			projectDir: designFixtures,
+			reportedBy: ["dmn_a002"],
 			state: "starting",
 			createdAt: now - 20_000,
 			startedAt: now - 15_000,
@@ -462,7 +469,8 @@ export function rosterDaemonInfos(now: number): DaemonInfo[] {
 		{
 			name: "docs-watch",
 			id: "dmn_p005",
-			projectDir: `${OMP_WEB}/docs`,
+			projectDir: designFixtures,
+			reportedBy: ["dmn_a002"],
 			state: "exited",
 			createdAt: now - 90 * MIN,
 			startedAt: now - 89 * MIN,

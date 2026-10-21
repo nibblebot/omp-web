@@ -12,7 +12,7 @@ export default defineStory({
 	},
 	variants: [
 		{
-			name: "Supervised processes",
+			name: "Selected workspace's processes",
 			seed: () => seedRosterFleet({ daemons: rosterDaemonMap(Date.now()) }),
 			render: () => (
 				<div class="ds-frame">
@@ -24,6 +24,16 @@ export default defineStory({
 			name: "Single process",
 			seed: () =>
 				seedRosterFleet({ daemons: new Map([...rosterDaemonMap(Date.now())].slice(0, 1)) }),
+			render: () => (
+				<div class="ds-frame">
+					<BackgroundDaemonsBar />
+				</div>
+			),
+		},
+		{
+			name: "Another workspace selected",
+			seed: () =>
+				seedRosterFleet({ currentSessionId: "dmn_b001", daemons: rosterDaemonMap(Date.now()) }),
 			render: () => (
 				<div class="ds-frame">
 					<BackgroundDaemonsBar />

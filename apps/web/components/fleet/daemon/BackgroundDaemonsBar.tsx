@@ -69,10 +69,14 @@ const BackgroundDaemonRow: Component<{ d: DaemonInfo }> = (props) => {
 };
 
 /** Background daemons strip above the prompt: one row per live supervised process
-    (rows are not clickable; restart/kill act in place). Visible only while >=1 is alive. */
+    of the selected session's workspace, i.e. reported by its broker (the fleet edge
+    stamps `reportedBy`; an unattributed entry is never shown). Rows are not
+    clickable; restart/kill act in place. Visible only while >=1 is alive. */
 export const BackgroundDaemonsBar: Component = () => {
 	const live = () =>
-		[...state.daemons.values()].filter(isLiveDaemon).sort((a, b) => a.startedAt - b.startedAt);
+		[...state.daemons.values()]
+			.filter((d) => isLiveDaemon(d) && d.reportedBy?.includes(state.currentSessionId) === true)
+			.sort((a, b) => a.startedAt - b.startedAt);
 	return (
 		<BackgroundBar items={live()} label="Background session processes">
 			{(d) => <BackgroundDaemonRow d={d} />}
