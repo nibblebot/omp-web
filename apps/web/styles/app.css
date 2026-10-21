@@ -224,6 +224,11 @@
 /* --- Sessions sidebar: centered chat column + left-side overlay roster --- */
 
 .app-body {
+	/* Positioning context for the dock overlay while it slides (dock.css);
+	   overflow-x: clip hides its off-screen start/end position without
+	   making a scroll container. */
+	position: relative;
+	overflow-x: clip;
 	display: flex;
 	flex: 1;
 	min-height: 0;

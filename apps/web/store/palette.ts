@@ -16,19 +16,13 @@ import {
 	storedSessionItems,
 } from "../palette/palette";
 import { commandUsage, currentCommandRegistry, dispatchInput } from "../prompt/commands";
-import {
-	attachSession,
-	hasLiveSession,
-	setState,
-	spawnResume,
-	state,
-	wakeAndAttach,
-} from "../state";
+import { hasLiveSession, setState, state } from "../state";
 import { openDock } from "./dock";
 import { setPromptInsert } from "./chat";
 import { openModelPicker, recentModels, switchSessionModel } from "./models";
 import { openAddProject, openNewWorkspace } from "./projects";
 import { chooseResumeTarget, searchAllProjectSessions, sessionRowsFromResume } from "./resume";
+import { switchToDaemon } from "./roster";
 import { reportError } from "./toasts";
 
 const RECENTS_KEY = "omp-web:palette-recents";
@@ -100,15 +94,9 @@ export function runPaletteItem(item: PaletteItem): void {
 			else dispatchInput(action.text, undefined, "enter");
 			return;
 		case "daemon-session": {
-			const asleep =
-				state.daemonRoster.find((d) => d.daemonId === action.daemonId)?.status === "asleep";
 			// The attached session is a no-op, unless its process is stopped (a UI stop keeps
 			// the view on it): then the pick wakes it and attaches again.
-			if (action.daemonId === state.currentSessionId && !asleep) return;
-			// A sleeping session is started, then attached (the sidebar row does the same).
-			if (asleep)
-				void wakeAndAttach(action.daemonId, spawnResume(action.daemonId)).catch(reportError);
-			else void attachSession(action.daemonId).catch(reportError);
+			void switchToDaemon(action.daemonId);
 			return;
 		}
 		case "stored-session":

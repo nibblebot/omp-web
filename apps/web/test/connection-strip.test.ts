@@ -1,10 +1,11 @@
 /**
- * Killing the attached session process: roster truth (asleep/error, or the
- * entry gone) moves the view to "offline", the connection strip renders with
- * the offline state, and session-bound actions render disabled.
+ * Killing the attached session process: roster truth (asleep/error) moves the
+ * view to "offline", the connection strip renders with the offline state, and
+ * session-bound actions render disabled. A removed entry is not offline: the
+ * view moves to a neighbouring session or clears to the no-session pane.
  *
  * Store path: a roster frame drives reconcileAttachedSession, which sets
- * sessionDownId and clears currentSessionId. Component path: ConnectionBar,
+ * sessionDownId (asleep/error only) and clears currentSessionId. Component path: ConnectionBar,
  * SessionTitle (New session) and PromptActions (Send) render through solid's
  * SSR runtime (see the shared JSX shim).
  */
@@ -13,6 +14,7 @@ import { createComponent } from "solid-js";
 import * as solidWeb from "solid-js/web";
 import type { DaemonEntry, ServerFrame } from "#lib/wire/protocol";
 import { ConnectionBar } from "../components/app/ConnectionBar";
+import { WorkspaceRow, setMenuOpenId } from "../components/fleet/sidebar/WorkspaceRow";
 import { PromptActions } from "../components/chat/composer/PromptActions";
 import { SessionTitle } from "../components/chat/status/SessionTitle";
 import { connect, connectionState, setState, state } from "../state";
@@ -47,6 +49,16 @@ function attachReady(): void {
 	dispatch(attached("daemon-a"));
 	dispatchSeq({ type: "history", messages: [] } as ServerFrame, 3);
 	setState("readyAt", 123);
+}
+
+/** A row's kebab menu, open, rendered as it is in the current state. */
+function renderRowMenu(entry: DaemonEntry): string {
+	setMenuOpenId(entry.daemonId);
+	try {
+		return solidWeb.renderToString(() => createComponent(WorkspaceRow, { daemon: entry }));
+	} finally {
+		setMenuOpenId(null);
+	}
 }
 
 /** Render the strip, the session title, and the composer actions as they are in the current state. */
@@ -114,11 +126,13 @@ describe("killed attached session process", () => {
 		},
 	);
 
-	test("a removed roster entry is also offline, not a silent empty pane", () => {
+	test("a removed roster entry with no session left clears the view without the offline strip", () => {
 		dispatch({ type: "roster", daemons: [] });
-		expect(state.sessionDownId).toBe("daemon-a");
-		expect(connectionState()).toBe("offline");
-		expect(renderChrome().strip).toContain('data-state="offline"');
+		expect(state.sessionDownId).toBe("");
+		expect(state.currentSessionId).toBe("");
+		expect(state.transcriptPhase).toBe("idle");
+		expect(connectionState()).toBe("connected");
+		expect(renderChrome().strip).not.toContain("connection-bar");
 	});
 
 	test("a fresh attach after the kill clears the offline strip", () => {
@@ -129,5 +143,34 @@ describe("killed attached session process", () => {
 		expect(state.sessionDownId).toBe("");
 		expect(connectionState()).toBe("connected");
 		expect(renderChrome().strip).not.toContain("connection-bar");
+	});
+
+	// The strip describes the dead attached session; the fleet transport is still
+	// up, so fleet-scoped row actions (start, restart, switching rows) must stay
+	// live, or the user has no way out of the offline view.
+	test.each([
+		["asleep", /Start session process/],
+		["removed", /Start session process/],
+	] as const)("an attached session that went %s leaves other rows startable", (how, item) => {
+		const other = daemon("daemon-b", { status: "asleep" });
+		dispatch({
+			type: "roster",
+			daemons: how === "removed" ? [other] : [daemon("daemon-a", { status: "asleep" }), other],
+		});
+		expect(connectionState()).toBe(how === "removed" ? "connected" : "offline");
+		const menu = renderRowMenu(other);
+		const button = menu.match(new RegExp(`<button[^>]*>(?:(?!</button>).)*${item.source}`))?.[0];
+		expect(button).toBeDefined();
+		expect(button).not.toMatch(/\bdisabled\b/);
+	});
+
+	test("a dropped /events stream still pauses row actions", () => {
+		const other = daemon("daemon-b", { status: "asleep" });
+		dispatch({ type: "roster", daemons: [daemon("daemon-a"), other] });
+		setState("connected", false);
+		const button = renderRowMenu(other).match(
+			/<button[^>]*>(?:(?!<\/button>).)*Start session process/,
+		)?.[0];
+		expect(button).toMatch(/\bdisabled\b/);
 	});
 });

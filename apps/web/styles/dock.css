@@ -1,7 +1,10 @@
-/* Dock pane (components/ui/DockPane.tsx): a right-hand column beside the chat,
-   a flex sibling of .main-pane in .app-body. Its width is --dock-w, set from
-   prefs/dock.ts; the 480px fallback matches DOCK_DEFAULT_WIDTH. Below 768px it
-   covers the whole app instead. */
+/* Dock pane (components/ui/DockPane.tsx): a right-hand column beside the chat.
+   Settled, it is a flex sibling of .main-pane in .app-body, `--dock-w` wide
+   (set from prefs/dock.ts; the 480px fallback matches DOCK_DEFAULT_WIDTH).
+   While DockHost slides it in or out it is an overlay at the right edge of
+   .app-body instead (data-overlay), so the main pane reflows once, not per
+   frame. data-motion holds the off-screen state for "enter" and "exit".
+   Below 768px it covers the whole app and only slides. */
 .dock-pane {
 	position: relative;
 	display: flex;
@@ -12,6 +15,27 @@
 	min-height: 0;
 	background: var(--panel);
 	border-left: 1px solid var(--border);
+	transition: transform var(--dur-move-base) var(--ease-out);
+}
+.dock-pane[data-overlay] {
+	position: absolute;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	z-index: var(--z-autocomplete);
+}
+.dock-pane[data-motion="enter"],
+.dock-pane[data-motion="exit"] {
+	transform: translateX(100%);
+}
+/* Switching panel kind: title, actions and body fade out, swap, fade in. */
+.dock-title,
+.dock-actions,
+.dock-body {
+	transition: opacity var(--dur-fast) var(--ease-out);
+}
+.dock-pane[data-swapping] :is(.dock-title, .dock-actions, .dock-body) {
+	opacity: 0;
 }
 .dock-resizer {
 	position: absolute;
@@ -72,7 +96,8 @@
 }
 
 @media (max-width: 768px) {
-	.dock-pane {
+	.dock-pane,
+	.dock-pane[data-overlay] {
 		position: fixed;
 		inset: 0;
 		z-index: var(--z-overlay);

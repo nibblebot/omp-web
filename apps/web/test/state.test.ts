@@ -41,6 +41,7 @@ import {
 	setSidebarVisible,
 	setState,
 	setTxSidebarVisible,
+	isSwitching,
 	setView,
 	spawnResume,
 	stopDaemonById,
@@ -49,9 +50,10 @@ import {
 	requestDaemonSessions,
 	resumeDaemonSession,
 	startDaemonNewSession,
+	switchToDaemon,
 	type SubagentInfo,
 } from "../state";
-import { resetPendingProjects } from "../store/projects";
+import { clearAllDeletePending, resetPendingProjects } from "../store/projects";
 import { settingValue } from "../store/settings";
 import { reportError } from "../store/toasts";
 import {
@@ -191,6 +193,9 @@ beforeEach(() => {
 		chatUnviewed: false,
 		txSidebarVisible: true,
 		modelSynced: false,
+		transcriptPhase: "idle",
+		transcriptError: null,
+		transcriptTarget: null,
 	});
 });
 
@@ -2675,6 +2680,81 @@ describe("roster_delta frames", () => {
 		expect(rosterIds()).toEqual(["a"]);
 		expect(state.daemonRoster[0]?.status).toBe("ready");
 	});
+
+	test("a full roster frame with identical ids keeps every row's store object", () => {
+		seedAB();
+		const [a, b] = [state.daemonRoster[0]!, state.daemonRoster[1]!];
+
+		dispatch({
+			type: "roster",
+			daemons: [daemon("a", { name: "renamed" }), daemon("b")],
+		});
+
+		expect(state.daemonRoster[0]).toBe(a);
+		expect(state.daemonRoster[1]).toBe(b);
+		expect(a.name).toBe("renamed");
+	});
+
+	test("a full roster frame drops absent ids and deletes fields the frame no longer carries", () => {
+		seedAB();
+		dispatch({ type: "roster", daemons: [daemon("a", { error: "boom" }), daemon("b")] });
+		const a = state.daemonRoster[0]!;
+		expect(a.error).toBe("boom");
+
+		dispatch({ type: "roster", daemons: [daemon("a")] });
+
+		expect(rosterIds()).toEqual(["a"]);
+		expect(state.daemonRoster[0]).toBe(a);
+		expect("error" in a).toBe(false);
+	});
+
+	test("a roster_delta upsert keeps the row's store object and updates the changed field", () => {
+		seedAB();
+		const [a, b] = [state.daemonRoster[0]!, state.daemonRoster[1]!];
+
+		dispatch({
+			type: "roster_delta",
+			upserted: [daemon("a", { status: "asleep" })],
+			removed: [],
+		});
+
+		expect(state.daemonRoster[0]).toBe(a);
+		expect(state.daemonRoster[1]).toBe(b);
+		expect(a.status).toBe("asleep");
+		expect(b.status).toBe("ready");
+	});
+
+	test("a roster_delta removal keeps the surviving rows' store objects", () => {
+		seedAB();
+		dispatch({ type: "roster_delta", upserted: [daemon("c")], removed: [] });
+		const [a, c] = [state.daemonRoster[0]!, state.daemonRoster[2]!];
+
+		dispatch({ type: "roster_delta", upserted: [], removed: ["b"] });
+
+		expect(rosterIds()).toEqual(["a", "c"]);
+		expect(state.daemonRoster[0]).toBe(a);
+		expect(state.daemonRoster[1]).toBe(c);
+	});
+
+	test("a daemon_status frame patches status and error without replacing the row", () => {
+		seedAB();
+		const [a, b] = [state.daemonRoster[0]!, state.daemonRoster[1]!];
+
+		dispatch({ type: "daemon_status", daemonId: "a", status: "error", error: "spawn failed" });
+
+		expect(state.daemonRoster[0]).toBe(a);
+		expect(state.daemonRoster[1]).toBe(b);
+		expect(a.status).toBe("error");
+		expect(a.error).toBe("spawn failed");
+		expect(b.status).toBe("ready");
+
+		// No error on the next frame clears the field (deleted, not left stale).
+		dispatch({ type: "daemon_status", daemonId: "a", status: "ready" });
+
+		expect(state.daemonRoster[0]).toBe(a);
+		expect(a.status).toBe("ready");
+		expect("error" in a).toBe(false);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -3417,5 +3497,508 @@ describe("call delivery: a lost answer is recovered by re-POSTing the command", 
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe("transcript phase (session switch)", () => {
+	function rosterDaemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: "x",
+			labels: [],
+			status: "ready",
+			...extra,
+		};
+	}
+
+	function postedOf<T extends ClientCommand["type"]>(
+		type: T,
+	): Array<Extract<ClientCommand, { type: T }>> {
+		return posted.filter((c): c is Extract<ClientCommand, { type: T }> => c.type === type);
+	}
+
+	async function flushWake(): Promise<void> {
+		for (let i = 0; i < 4; i++) await flushMicrotasks();
+	}
+
+	const phase = () => ({
+		phase: state.transcriptPhase,
+		target: state.transcriptTarget,
+		error: state.transcriptError,
+	});
+
+	/** Connected, attached to d1 with its (empty) history loaded, d2 ready in the roster. */
+	function onD1(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({ type: "roster", daemons: [rosterDaemon("d1"), rosterDaemon("d2")] });
+		dispatch(attached("d1"));
+		dispatch({ type: "history", messages: [] });
+		posted.length = 0;
+	}
+
+	test("starts idle, and an attach alone never marks it loaded", () => {
+		expect(phase()).toEqual({ phase: "idle", target: null, error: null });
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("d1"));
+		expect(state.transcriptPhase).toBe("idle");
+	});
+
+	test("a switch goes attaching, stays attaching through attach_result and attached, and loads on the history frame (empty included)", async () => {
+		onD1();
+		expect(state.transcriptPhase).toBe("loaded");
+
+		const switched = switchToDaemon("d2");
+		// Written synchronously: the row highlight reads it on click.
+		expect(phase()).toEqual({ phase: "attaching", target: "d2", error: null });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, sessionId: "d2" });
+		await switched;
+		expect(state.transcriptPhase).toBe("attaching");
+
+		dispatch(attached("d2"));
+		expect(state.transcriptPhase).toBe("attaching");
+		dispatch({ type: "history", messages: [] });
+		expect(phase()).toEqual({ phase: "loaded", target: null, error: null });
+	});
+
+	test("the final chunk of a multi-frame history loads, the partial ones do not", () => {
+		onD1();
+		void switchToDaemon("d2");
+		dispatch(attached("d2"));
+		dispatch({ type: "history", messages: [userMsg("a")], final: false } as ServerFrame);
+		expect(state.transcriptPhase).toBe("attaching");
+		dispatch({ type: "history", messages: [userMsg("b")], final: true } as ServerFrame);
+		expect(state.transcriptPhase).toBe("loaded");
+	});
+
+	test("an asleep daemon wakes first (waking), then attaches (attaching), then loads", async () => {
+		onD1();
+		setState("daemonRoster", [rosterDaemon("d1"), rosterDaemon("d2", { status: "asleep" })]);
+
+		const switched = switchToDaemon("d2");
+		expect(phase()).toEqual({ phase: "waking", target: "d2", error: null });
+		expect(postedOf("spawn_resume")).toHaveLength(1);
+		await flushWake();
+		expect(postedOf("attach")).toHaveLength(1);
+		expect(state.transcriptPhase).toBe("waking");
+		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, sessionId: "d2" });
+		await switched;
+		expect(state.transcriptPhase).toBe("attaching");
+		dispatch(attached("d2"));
+		dispatch({ type: "history", messages: [userMsg("hi")] });
+		expect(state.transcriptPhase).toBe("loaded");
+	});
+
+	test("a failed attach lands in failed with the reason; the promise still resolves", async () => {
+		onD1();
+		const switched = switchToDaemon("d2");
+		dispatch({
+			type: "attach_result",
+			id: postedOf("attach")[0]!.id,
+			ok: false,
+			error: "session exited with code 78",
+		});
+		await expect(switched).resolves.toBeUndefined();
+		expect(phase()).toEqual({
+			phase: "failed",
+			target: "d2",
+			error: "session exited with code 78",
+		});
+		// The old session is still attached underneath, so the composer gate holds.
+		expect(state.currentSessionId).toBe("d1");
+		expect(isSwitching()).toBe(true);
+	});
+
+	test("a refused wake lands in failed", async () => {
+		onD1();
+		setState("daemonRoster", [rosterDaemon("d1"), rosterDaemon("d2", { status: "asleep" })]);
+		setBrowserGlobal("fetch", ((_input: unknown, init?: RequestInit) => {
+			const cmd =
+				typeof init?.body === "string" ? (JSON.parse(init.body) as ClientCommand) : undefined;
+			if (cmd !== undefined) posted.push(cmd);
+			return Promise.resolve({ ok: cmd?.type !== "spawn_resume", status: 500 } as Response);
+		}) as unknown as typeof fetch);
+
+		await switchToDaemon("d2");
+		expect(state.transcriptPhase).toBe("failed");
+		expect(state.transcriptTarget).toBe("d2");
+		expect(postedOf("attach")).toHaveLength(0);
+	});
+
+	test("a superseded switch never writes the phase of the one that replaced it", async () => {
+		onD1();
+		dispatch({
+			type: "roster",
+			daemons: [rosterDaemon("d1"), rosterDaemon("d2"), rosterDaemon("d3")],
+		});
+		const a = switchToDaemon("d2");
+		const attachA = postedOf("attach")[0]!;
+		const b = switchToDaemon("d3");
+		expect(phase()).toEqual({ phase: "attaching", target: "d3", error: null });
+		// A's attach settled as superseded (it resolves with the current session).
+		await a;
+		expect(phase()).toEqual({ phase: "attaching", target: "d3", error: null });
+		// A late answer for A's attach id is ignored by the transport and the phase.
+		dispatch({ type: "attach_result", id: attachA.id, ok: false, error: "attach superseded" });
+		expect(phase()).toEqual({ phase: "attaching", target: "d3", error: null });
+		// B's own failure does land.
+		dispatch({ type: "attach_result", id: postedOf("attach")[1]!.id, ok: false, error: "gone" });
+		await b;
+		expect(phase()).toEqual({ phase: "failed", target: "d3", error: "gone" });
+	});
+
+	test("a wake superseded by a later click never flips that click's phase", async () => {
+		const held: Array<(ok: boolean) => void> = [];
+		setBrowserGlobal("fetch", ((_input: unknown, init?: RequestInit) => {
+			if (typeof init?.body !== "string")
+				return Promise.resolve({ ok: true, status: 202 } as Response);
+			const cmd = JSON.parse(init.body) as ClientCommand;
+			posted.push(cmd);
+			if (cmd.type !== "spawn_resume")
+				return Promise.resolve({ ok: true, status: 202 } as Response);
+			return new Promise<Response>((resolve) =>
+				held.push((ok) => resolve({ ok, status: ok ? 202 : 500 } as Response)),
+			);
+		}) as unknown as typeof fetch);
+		onD1();
+		setState("daemonRoster", [
+			rosterDaemon("d1"),
+			rosterDaemon("d2", { status: "asleep" }),
+			rosterDaemon("d3"),
+		]);
+
+		const a = switchToDaemon("d2");
+		expect(state.transcriptPhase).toBe("waking");
+		const b = switchToDaemon("d3");
+		expect(phase()).toEqual({ phase: "attaching", target: "d3", error: null });
+		// A's wake is refused AFTER B took over: A must stay silent.
+		held[0]!(false);
+		await a;
+		expect(phase()).toEqual({ phase: "attaching", target: "d3", error: null });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, sessionId: "d3" });
+		await b;
+		expect(state.transcriptPhase).toBe("attaching");
+	});
+
+	test("a history frame of the old session during a switch does not end its wait", () => {
+		onD1();
+		void switchToDaemon("d2");
+		dispatch({ type: "history", messages: [userMsg("old")] });
+		expect(phase()).toEqual({ phase: "attaching", target: "d2", error: null });
+	});
+
+	test("a reconnect re-attach of the same session keeps it loaded", () => {
+		onD1();
+		FakeEventSource.instances.at(-1)!.onopen?.(); // the stream came back
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["d1"]);
+		expect(state.transcriptPhase).toBe("loaded");
+		dispatch(attached("d1"));
+		expect(state.transcriptPhase).toBe("loaded");
+		dispatch({ type: "history", messages: [userMsg("again")] });
+		expect(phase()).toEqual({ phase: "loaded", target: null, error: null });
+	});
+
+	test("re-attaching the attached daemon is no transition; clicking it clears a failed attempt elsewhere", async () => {
+		onD1();
+		await switchToDaemon("d1");
+		expect(postedOf("attach")).toHaveLength(0);
+		expect(state.transcriptPhase).toBe("loaded");
+
+		setState({ transcriptPhase: "failed", transcriptTarget: "d2", transcriptError: "boom" });
+		await switchToDaemon("d1");
+		expect(phase()).toEqual({ phase: "loaded", target: null, error: null });
+		expect(postedOf("attach")).toHaveLength(0);
+	});
+
+	test("waking the stopped daemon the view is on is quiet (no transition)", async () => {
+		onD1();
+		setState("daemonRoster", [rosterDaemon("d1", { status: "asleep" }), rosterDaemon("d2")]);
+		const switched = switchToDaemon("d1");
+		expect(state.transcriptPhase).toBe("loaded");
+		await flushWake();
+		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, sessionId: "d1" });
+		await switched;
+		expect(state.transcriptPhase).toBe("loaded");
+	});
+
+	test("the session being cleared goes idle (attached daemon removed from the roster)", () => {
+		onD1();
+		dispatch({ type: "roster", daemons: [rosterDaemon("d2")] });
+		expect(state.currentSessionId).toBe("");
+		expect(phase()).toEqual({ phase: "idle", target: null, error: null });
+	});
+
+	test("a cleared session does not clobber a switch already in flight to another daemon", () => {
+		onD1();
+		void switchToDaemon("d2");
+		dispatch({ type: "roster", daemons: [rosterDaemon("d2")] });
+		expect(state.currentSessionId).toBe("");
+		expect(phase()).toEqual({ phase: "attaching", target: "d2", error: null });
+	});
+
+	test("resuming a session on an asleep daemon runs the same switch machinery", async () => {
+		onD1();
+		setState("daemonRoster", [rosterDaemon("d1"), rosterDaemon("d2", { status: "asleep" })]);
+		const resumed = resumeDaemonSession("d2", "/sessions/picked.jsonl");
+		expect(phase()).toEqual({ phase: "waking", target: "d2", error: null });
+		await flushWake();
+		dispatch({
+			type: "attach_result",
+			id: postedOf("attach")[0]!.id,
+			ok: false,
+			error: "wake failed",
+		});
+		await resumed;
+		expect(phase()).toEqual({ phase: "failed", target: "d2", error: "wake failed" });
+	});
+});
+
+describe("the attached daemon is removed from the roster", () => {
+	const p1: RegisteredProject = { projectId: "p1", path: "/repos/a", name: "a", addedAt: 1 };
+	const p2: RegisteredProject = { projectId: "p2", path: "/repos/b", name: "b", addedAt: 2 };
+
+	/** Worktree rows sort by branch after the main checkout, so the ids below read in sidebar order. */
+	function row(id: string, projectId: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		const main = id.endsWith("main");
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: projectId,
+			projectId,
+			labels: [],
+			status: "ready",
+			...(main ? {} : { worktreeOf: projectId, branch: id }),
+			...extra,
+		};
+	}
+
+	function postedOf<T extends ClientCommand["type"]>(
+		type: T,
+	): Array<Extract<ClientCommand, { type: T }>> {
+		return posted.filter((c): c is Extract<ClientCommand, { type: T }> => c.type === type);
+	}
+
+	/** Sidebar order: p1 [a-main, a-wt1, a-wt2], p2 [b-main, b-wt1]; attached to `on` with history loaded. */
+	function attachedTo(on: string, rows = defaultRows()): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({ type: "registered_projects", projects: [p1, p2] });
+		dispatch({ type: "roster", daemons: rows });
+		dispatch(attached(on));
+		dispatch({ type: "history", messages: [] });
+		posted.length = 0;
+	}
+
+	function defaultRows(): DaemonEntry[] {
+		return [
+			row("a-main", "p1"),
+			row("a-wt1", "p1"),
+			row("a-wt2", "p1"),
+			row("b-main", "p2"),
+			row("b-wt1", "p2"),
+		];
+	}
+
+	/** The roster frame after the rows with these ids vanish (and `patch` applies). */
+	function without(ids: string[], patch: Record<string, Partial<DaemonEntry>> = {}): DaemonEntry[] {
+		return defaultRows()
+			.filter((d) => !ids.includes(d.daemonId))
+			.map((d) => ({ ...d, ...patch[d.daemonId] }));
+	}
+
+	afterEach(() => {
+		clearAllDeletePending();
+		// A switch still waiting on its attach_result would block the next test's auto-switch.
+		rejectPendingAttach(new Error("test teardown"));
+	});
+
+	test("the middle row switches to the row before it, with no offline state", () => {
+		attachedTo("a-wt1");
+		dispatch({ type: "roster", daemons: without(["a-wt1"]) });
+
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+		expect(state.transcriptTarget).toBe("a-main");
+		expect(state.transcriptPhase).toBe("attaching");
+		expect(state.sessionDownId).toBe("");
+		expect(connectionState()).toBe("connected");
+	});
+
+	test("the first row switches to the next row", () => {
+		attachedTo("a-main");
+		dispatch({ type: "roster", daemons: without(["a-main"]) });
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-wt1"]);
+		expect(state.transcriptTarget).toBe("a-wt1");
+		expect(state.sessionDownId).toBe("");
+	});
+
+	test("the target attaches and loads like any switch", () => {
+		attachedTo("a-wt1");
+		dispatch({ type: "roster", daemons: without(["a-wt1"]) });
+		dispatch({
+			type: "attach_result",
+			id: postedOf("attach")[0]!.id,
+			ok: true,
+			sessionId: "a-main",
+		});
+		dispatch(attached("a-main"));
+		dispatch({ type: "history", messages: [] });
+		expect(state.currentSessionId).toBe("a-main");
+		expect(state.transcriptPhase).toBe("loaded");
+		expect(state.transcriptTarget).toBeNull();
+	});
+
+	test("an asleep neighbour is skipped for a farther ready row, and never woken", () => {
+		attachedTo("a-wt2");
+		dispatch({ type: "roster", daemons: without(["a-wt2"], { "a-wt1": { status: "asleep" } }) });
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+		expect(postedOf("spawn_resume")).toHaveLength(0);
+	});
+
+	test("the row before is preferred over the row after", () => {
+		attachedTo("a-wt1");
+		dispatch({ type: "roster", daemons: without(["a-wt1"]) });
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+	});
+
+	test("every other row asleep (after a restart): idle, no attach, no wake, no offline strip", () => {
+		const asleep = defaultRows().map((d) => ({ ...d, status: "asleep" as const }));
+		attachedTo("a-wt1");
+		dispatch({ type: "roster", daemons: asleep.filter((d) => d.daemonId !== "a-wt1") });
+		expect(postedOf("attach")).toHaveLength(0);
+		expect(postedOf("spawn_resume")).toHaveLength(0);
+		expect(state.currentSessionId).toBe("");
+		expect(state.transcriptPhase).toBe("idle");
+		expect(state.sessionDownId).toBe("");
+		expect(connectionState()).toBe("connected");
+	});
+
+	test("an error neighbour is skipped for a farther active row", () => {
+		attachedTo("a-wt2");
+		dispatch({ type: "roster", daemons: without(["a-wt2"], { "a-wt1": { status: "error" } }) });
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+	});
+
+	test("a reconnecting neighbour is chosen and attached without a wake", () => {
+		attachedTo("a-wt2");
+		dispatch({
+			type: "roster",
+			daemons: without(["a-wt2"], { "a-wt1": { status: "reconnecting" } }),
+		});
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-wt1"]);
+		expect(postedOf("spawn_resume")).toHaveLength(0);
+	});
+
+	test("neighbours of a missing project are skipped", () => {
+		attachedTo("b-main");
+		dispatch({ type: "registered_projects", projects: [{ ...p1, missing: true }, p2] });
+		dispatch({ type: "roster", daemons: without(["b-main"]) });
+		// Everything before it is p1 (missing), so the next row after it opens.
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-wt1"]);
+	});
+
+	test("with nothing active before it, the scan turns around and takes the next one after", () => {
+		attachedTo("a-wt2");
+		dispatch({
+			type: "roster",
+			daemons: without(["a-wt2"], { "a-wt1": { status: "error" }, "a-main": { status: "error" } }),
+		});
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-main"]);
+	});
+
+	test("the order runs across project groups", () => {
+		// b-main is first of group p2; the row before it is the last of p1 (a-wt2).
+		attachedTo("b-main");
+		dispatch({ type: "roster", daemons: without(["b-main"]) });
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-wt2"]);
+	});
+
+	test("forward across a group boundary when nothing before is openable", () => {
+		attachedTo("a-main");
+		dispatch({
+			type: "roster",
+			daemons: without(["a-main"], {
+				"a-wt1": { status: "error" },
+				"a-wt2": { status: "error" },
+			}),
+		});
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-main"]);
+	});
+
+	test("no active row left clears to the idle no-session state without attaching", () => {
+		attachedTo("a-wt1");
+		dispatch({
+			type: "roster",
+			daemons: [
+				row("a-main", "p1", { status: "asleep" }),
+				row("b-main", "p2", { status: "error" }),
+				row("b-wt1", "p2", { status: "connecting" }),
+			],
+		});
+		expect(postedOf("attach")).toHaveLength(0);
+		expect(state.currentSessionId).toBe("");
+		expect(state.transcriptPhase).toBe("idle");
+		expect(state.transcriptTarget).toBeNull();
+		expect(state.sessionDownId).toBe("");
+		expect(connectionState()).toBe("connected");
+	});
+
+	test("a neighbour pending delete is skipped", () => {
+		attachedTo("a-wt2");
+		sendDeleteWorktree("a-wt1");
+		posted.length = 0;
+		dispatch({ type: "roster", daemons: without(["a-wt2"]) });
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+	});
+
+	test("rows vanishing in the same frame are never the target", () => {
+		attachedTo("a-wt2");
+		dispatch({ type: "roster", daemons: without(["a-wt2", "a-wt1"]) });
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+	});
+
+	test("a user switch already in flight is not overridden", () => {
+		attachedTo("a-wt1");
+		void switchToDaemon("b-wt1");
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-wt1"]);
+		dispatch({ type: "roster", daemons: without(["a-wt1"]) });
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-wt1"]);
+		expect(state.transcriptTarget).toBe("b-wt1");
+		expect(state.sessionDownId).toBe("");
+	});
+
+	test("an asleep or errored attached daemon still goes offline", () => {
+		attachedTo("a-wt1");
+		dispatch({ type: "roster", daemons: without([], { "a-wt1": { status: "asleep" } }) });
+		expect(state.sessionDownId).toBe("a-wt1");
+		expect(connectionState()).toBe("offline");
+		expect(postedOf("attach")).toHaveLength(0);
+	});
+
+	test("from the offline state, clicking another asleep row wakes and attaches it", async () => {
+		attachedTo("a-wt1");
+		dispatch({
+			type: "roster",
+			daemons: without([], { "a-wt1": { status: "asleep" }, "b-main": { status: "asleep" } }),
+		});
+		expect(state.sessionDownId).toBe("a-wt1");
+
+		const switched = switchToDaemon("b-main");
+		expect(postedOf("spawn_resume").map((c) => c.daemonId)).toEqual(["b-main"]);
+		for (let i = 0; i < 4; i++) await flushMicrotasks();
+		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-main"]);
+		dispatch({
+			type: "attach_result",
+			id: postedOf("attach")[0]!.id,
+			ok: true,
+			sessionId: "b-main",
+		});
+		await switched;
+		dispatch(attached("b-main"));
+		expect(state.sessionDownId).toBe("");
+		expect(connectionState()).toBe("connected");
 	});
 });

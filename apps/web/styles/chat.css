@@ -4,7 +4,7 @@
    restarts this mount-triggered animation. */
 .md .fresh {
 	white-space: pre-wrap;
-	animation: fresh-in 150ms ease-out;
+	animation: fresh-in var(--dur-fast) var(--ease-out);
 }
 @keyframes fresh-in {
 	from {
@@ -41,6 +41,190 @@
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-5);
+}
+/* Each item skips layout/paint while far off-screen (auto size remembers the last
+   measured height). Paint containment clips an item to its box, so nothing inside
+   may poke out of it (see .msg-toolbar); the live turn and its shimmer sit at the
+   stream's end and stay uncontained. The clip margin leaves room for the global
+   focus ring (2px + 1px offset) of controls near the edge, where the browser
+   supports it; summaries flush with the edge also draw their ring inside. */
+.chat-transcript-content > :not(.live, .live-shimmer) {
+	content-visibility: auto;
+	contain-intrinsic-size: auto 130px;
+	overflow-clip-margin: 4px;
+}
+.chat-transcript-content > * summary:focus-visible {
+	outline-offset: -2px;
+}
+
+/* The transcript view: the body (message list or empty state) with the switch
+   states layered over it. When a switch starts the body holds its hidden start pose
+   ("enter": faded, 6px down) while a snapshot of the old content fades out over it;
+   once loaded and the snapshot is gone it opens and rises into place. */
+.chat-transcript-view {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.chat-transcript-body {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	transition:
+		opacity var(--dur-base) var(--ease-out),
+		transform var(--dur-move-base) var(--ease-out);
+}
+.chat-transcript-body[data-motion="enter"] {
+	opacity: 0;
+	transform: translateY(6px);
+	transition: none;
+}
+/* A snapshot of the body (a copy, inert and aria-hidden) fading away on top of
+   it: the old session on a switch, a vanished session's last frame. */
+.chat-transcript-ghost {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	user-select: none;
+	transition: none;
+	animation: chat-transcript-out var(--dur-fast) var(--ease-out) both;
+}
+/* The snapshot's items are all on screen, so none may be skipped: a skipped item
+   lays out at its 130px placeholder, which would shorten the scroller and clamp
+   its scroll position. The spacers stand in for the items not cloned (they are
+   flex items, so the column's gap applies around them); their height is the
+   cloned-away run's, set per snapshot. */
+.chat-transcript-ghost .chat-transcript-content > * {
+	content-visibility: visible;
+}
+.chat-transcript-ghost .chat-transcript-ghost-spacer {
+	flex: none;
+	height: var(--spacer);
+}
+@keyframes chat-transcript-out {
+	to {
+		opacity: 0;
+	}
+}
+@keyframes chat-transcript-in {
+	from {
+		opacity: 0;
+	}
+}
+/* Skeleton: message-shaped placeholders at the column width while a switch loads. */
+.chat-transcript-skeleton {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-5);
+	padding: var(--space-6) var(--space-5) var(--space-4);
+	overflow: hidden;
+	pointer-events: none;
+	transition: opacity var(--dur-fast) var(--ease-out);
+}
+.chat-transcript-skeleton[data-motion="enter"],
+.chat-transcript-skeleton[data-motion="exit"] {
+	opacity: 0;
+}
+.chat-transcript-skeleton-status {
+	margin: 0;
+	align-self: flex-start;
+	font-size: var(--fs-base);
+	font-weight: 600;
+	font-style: italic;
+}
+.chat-transcript-skeleton-column {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-5);
+}
+.chat-skeleton-block {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+.chat-skeleton-block--user {
+	align-self: flex-start;
+	width: 70%;
+	padding: var(--space-4) var(--space-5);
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+}
+.chat-skeleton-block--tool {
+	padding: var(--space-4) var(--space-5);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+}
+.chat-skeleton-line {
+	display: block;
+	height: var(--space-4);
+	border-radius: var(--r-sm);
+	background: linear-gradient(100deg, var(--btn) 40%, var(--hover) 50%, var(--btn) 60%);
+	background-size: 250% 100%;
+	background-position: 100% 0;
+	animation: shimmer-sweep var(--dur-shimmer) linear infinite;
+}
+.chat-skeleton-line--medium {
+	width: 72%;
+}
+.chat-skeleton-line--short {
+	width: 38%;
+}
+@media (prefers-reduced-motion: reduce) {
+	.chat-skeleton-line {
+		animation: none;
+		background: var(--btn);
+	}
+}
+/* Failed switch: why, and Retry; top aligned like the empty state. */
+.chat-transcript-failed {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	padding: 0 var(--space-5);
+	animation: chat-transcript-in var(--dur-base) var(--ease-out) both;
+}
+.chat-transcript-failed::before {
+	content: "";
+	flex: 0 1 38%;
+}
+.chat-transcript-failed-body {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--space-4);
+}
+.chat-transcript-failed-title {
+	margin: 0;
+	font-size: var(--fs-xl);
+	font-weight: 600;
+	color: var(--text);
+}
+.chat-transcript-failed-reason {
+	margin: 0;
+	max-width: 60ch;
+	font-size: var(--fs-md);
+	color: var(--error);
+	word-break: break-word;
+}
+.chat-transcript-failed-retry {
+	background: var(--btn);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-md);
+	padding: var(--space-2) var(--space-5);
+	cursor: pointer;
+}
+.chat-transcript-failed-retry:hover {
+	background: var(--hover);
 }
 /* Floating re-pin affordance: appears when the user scrolls up mid-stream.
    Sits above the stream cards (--z-toolbar owns the in-card toolbars) with a
@@ -153,7 +337,7 @@
 	height: 6px;
 	border-radius: 50%;
 	background: var(--accent);
-	animation: run-row-pulse 1s ease-in-out infinite;
+	animation: run-row-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 }
 @keyframes run-row-pulse {
 	50% {
@@ -216,7 +400,7 @@
 	-webkit-background-clip: text;
 	background-clip: text;
 	color: transparent;
-	animation: shimmer-sweep 1.8s linear infinite;
+	animation: shimmer-sweep var(--dur-shimmer) linear infinite;
 }
 @keyframes shimmer-sweep {
 	to {
@@ -230,10 +414,17 @@
 	}
 }
 /* display.shimmer: "kitt" sweeps a narrow scanner band back and forth; "disabled"
-   shows the label static. Reduced motion already stops both via the block above. */
+   shows the label static. Reduced motion stops both (the kitt rule has higher
+   specificity than the reduced-motion block above, so it repeats the override). */
 [data-shimmer="kitt"] .shimmer-text {
 	background-size: 300% 100%;
-	animation: shimmer-scan 1.2s ease-in-out infinite alternate;
+	animation: shimmer-scan calc(var(--dur-shimmer) * 2 / 3) var(--ease-in-out) infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+	[data-shimmer="kitt"] .shimmer-text {
+		animation: none;
+		color: var(--muted-2);
+	}
 }
 @keyframes shimmer-scan {
 	from {
@@ -382,26 +573,134 @@ pre {
 	color: var(--muted-3);
 }
 
-/* --- Empty state: greeting before the first message --- */
+/* --- Empty state: orientation before the first message --- */
 
+/* Left-aligned to the 820px column (.app-main); ::before holds the content's top
+   at ~38% of the transcript height and shrinks first on short viewports. */
 .chat-transcript-empty {
 	flex: 1;
+	min-height: 0;
 	display: flex;
 	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: var(--space-6);
-	padding: var(--space-7) var(--space-5);
-	text-align: center;
+	padding: 0 var(--space-5);
+	overflow-y: auto;
+	animation: chat-transcript-empty-in var(--dur-base) var(--ease-out) both;
 }
-.chat-transcript-empty canvas {
-	image-rendering: pixelated;
-	filter: drop-shadow(var(--shadow-sprite));
+.chat-transcript-empty::before {
+	content: "";
+	flex: 0 1 38%;
 }
-.chat-transcript-empty-greeting {
+@keyframes chat-transcript-empty-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+.chat-transcript-empty-body {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--space-4);
+	padding-bottom: var(--space-7);
+}
+.chat-transcript-empty-title {
 	margin: 0;
-	font-size: 1rem;
+	font-size: var(--fs-2xl);
+	font-weight: 600;
+	color: var(--text);
+}
+.chat-transcript-empty-meta {
+	margin: 0;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2) var(--space-5);
+	font-size: var(--fs-md);
+	color: var(--muted-3);
+}
+.chat-transcript-empty-branch {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.chat-transcript-empty-branch .icon {
+	color: var(--muted-2);
+}
+.chat-transcript-empty-new {
+	margin: var(--space-4) 0 0;
+	font-size: var(--fs-md);
 	color: var(--muted);
+}
+.chat-transcript-empty-hints {
+	margin: 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2) var(--space-6);
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+}
+.chat-transcript-empty-hints kbd {
+	font-family: var(--font-mono);
+	color: var(--muted-3);
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	padding: 0 var(--space-3);
+}
+.chat-transcript-empty-recent {
+	align-self: stretch;
+	margin-top: var(--space-6);
+	animation: chat-transcript-empty-in var(--dur-base) var(--ease-out) both;
+}
+.chat-transcript-empty-recent-title {
+	margin: 0 0 var(--space-3);
+	font-size: var(--fs-sm);
+	font-weight: 600;
+	color: var(--muted);
+}
+.chat-transcript-empty-recent-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.chat-transcript-empty-recent-item {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--space-5);
+	width: calc(100% + var(--space-4) * 2);
+	padding: var(--space-3) var(--space-4);
+	margin-inline: calc(var(--space-4) * -1);
+	box-sizing: border-box;
+	background: none;
+	border: none;
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-md);
+	text-align: left;
+	cursor: pointer;
+	transition: background var(--dur-fast) var(--ease-out);
+}
+.chat-transcript-empty-recent-item:hover {
+	background: var(--hover);
+}
+.chat-transcript-empty-recent-item:focus-visible {
+	outline: var(--focus-ring);
+	outline-offset: -2px;
+}
+.chat-transcript-empty-recent-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.chat-transcript-empty-recent-age {
+	flex: none;
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
 }
 
 /* --- Inline images, eval/lsp/hub/ask tool cards --- */
@@ -469,15 +768,18 @@ pre {
 		min-height: 44px;
 	}
 }
-/* Per-message hover/focus toolbar (user: branch + copy; assistant: copy). */
+/* Per-message hover/focus toolbar (user: branch + copy; assistant: copy). It sits
+   inside its item's box: transcript items are paint-contained (content-visibility),
+   which clips anything poking out. It also reveals without an opacity transition:
+   under content-visibility:auto, Chromium leaves a hover-driven opacity transition
+   stuck part-way (reproduced on Chrome 155), so the toolbar appears at once. */
 .msg-toolbar {
 	position: absolute;
-	top: -8px;
-	right: 8px;
+	top: var(--space-2);
+	right: var(--space-4);
 	display: flex;
 	gap: var(--space-3);
 	opacity: 0;
-	transition: opacity 0.12s ease;
 	z-index: var(--z-toolbar);
 }
 .msg-user:hover .msg-toolbar,

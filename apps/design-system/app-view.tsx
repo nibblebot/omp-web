@@ -61,6 +61,7 @@ export const AppView: Component = () => {
 		...screenSessionSeed,
 		items: renumber(screenItems),
 		streaming: false,
+		transcriptPhase: "loaded",
 		view: "chat",
 	});
 	answerCannedTurns();
@@ -87,13 +88,18 @@ export const AppView: Component = () => {
 				// only a real session is kept for switching back.
 				abortCannedTurn();
 				if (left !== "" && left !== id) visited.set(left, captureSession());
+				if (id === "") return;
 				const session = visited.get(id) ?? appSessions[id];
-				if (session === undefined) return;
-				// Restore once the handler's reset has run.
+				// Restore once the handler's reset has run. It stands in for the daemon's
+				// history priming, so it also ends the switch's wait (loaded), even when
+				// there is no transcript to restore.
 				queueMicrotask(() => {
 					if (state.currentSessionId !== id) return;
-					const { view, items } = structuredClone(session);
-					setState({ ...view, items: renumber(items), streaming: false });
+					if (session !== undefined) {
+						const { view, items } = structuredClone(session);
+						setState({ ...view, items: renumber(items), streaming: false });
+					}
+					setState({ transcriptPhase: "loaded", transcriptError: null, transcriptTarget: null });
 				});
 			},
 			{ defer: true },

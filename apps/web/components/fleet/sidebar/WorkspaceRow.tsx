@@ -18,10 +18,8 @@ import { sessionActivity, type SessionActivity } from "../../../fleet-ui/session
 import { unreadIds } from "../../../fleet-ui/unread";
 import { rowAction, sessionChip, type RowActionKind } from "../../../fleet-ui/workspace-status";
 import {
-	attachSession,
 	call,
 	closeDrawers,
-	connectionState,
 	fetchCloneIntoProject,
 	openDaemonDetails,
 	removeDaemonById,
@@ -36,6 +34,8 @@ import {
 	stopDaemonById,
 	wakeAndAttach,
 } from "../../../state";
+import { deletePendingIds } from "../../../store/projects";
+import { switchToDaemon } from "../../../store/roster";
 import { formatTimeAgo } from "../../../text/time-ago";
 import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
 import { projectLabelFromCwd, sessionStatus, type SessionRow } from "../../../store/session-list";
@@ -130,23 +130,34 @@ const LIFECYCLE_LABEL: Record<NonNullable<RosterEntry["lifecycleStage"]>, string
 	failed: "failed",
 };
 
-/** Which row's "⋯" actions menu is open, if any. Module-level for the same
- *  reason as activatingIds: roster broadcasts remount rows, so per-row
- *  signals would silently close an open menu mid-interaction. Daemon rows
- *  key on the daemonId, project-group headers (ProjectGroups) on
- *  `project:<id>`, one open menu total. */
+/** Which row's "⋯" actions menu is open, if any. Module-level so there is
+ *  one open menu total across all rows (opening one closes another) and the
+ *  state is readable outside a row (ProjectGroups headers share it). Rows no
+ *  longer remount on roster frames (the roster reconciles by daemonId), but a
+ *  row that leaves the roster still releases its menu through this one
+ *  signal. Daemon rows key on the daemonId, project-group headers
+ *  (ProjectGroups) on `project:<id>`. */
 export const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
 
 /** Which row's session dropdown (the last-10-sessions resume picker) is
- *  open, if any. Module-level for the same remount-safety reason as
- *  menuOpenId: roster broadcasts remount rows mid-interaction, and per-row
- *  signals would silently close the dropdown while it is open. */
+ *  open, if any. Module-level for the same one-open-total semantics as
+ *  menuOpenId: opening one row's dropdown closes any other. */
 export const [sessionsOpenId, setSessionsOpenId] = createSignal<string | null>(null);
 
 /** DaemonIds with a wake-attach in flight (asleep-row click → attach
- *  settles). Module-level because roster/daemon_status frames remount rows
- *  mid-wake; per-row component signals would not survive. */
+ *  settles). Module-level so it survives a row unmounting mid-wake (the row
+ *  leaving the roster, or a reconnect resetting the sidebar); per-row
+ *  component signals would not survive that. */
 const [activatingIds, setActivatingIds] = createSignal<ReadonlySet<string>>(new Set());
+
+/** Clear a row's activating mark once its wake/attach/new-session settles. */
+function endActivating(id: string): void {
+	setActivatingIds((prev) => {
+		const next = new Set(prev);
+		next.delete(id);
+		return next;
+	});
+}
 
 export const WorkspaceRow: Component<{
 	daemon: DaemonEntry;
@@ -159,7 +170,10 @@ export const WorkspaceRow: Component<{
 	projectMissing?: boolean;
 }> = (props) => {
 	const d = () => props.daemon as RosterEntry;
-	const paused = () => connectionState() !== "connected";
+	// Row actions go to the fleet, not to the attached session: only a dropped
+	// /events stream pauses them. A dead attached session ("offline") must not,
+	// since starting, restarting or switching rows is the way out of it.
+	const paused = () => !state.connected;
 
 	// Per-row id-scoped reads: the module signals (menuOpenId/activatingIds)
 	// change on ANY row's interaction, so a plain read would re-render every
@@ -167,6 +181,8 @@ export const WorkspaceRow: Component<{
 	// notifies the row when ITS OWN membership flips, so one row's menu-open
 	// wake no longer re-renders the whole roster.
 	const activating = createMemo(() => activatingIds().has(d().daemonId));
+	/** The delete was submitted; the row dims now and collapses when the roster drops it. */
+	const deleting = createMemo(() => deletePendingIds().has(d().daemonId));
 	const menuOpen = createMemo(() => menuOpenId() === d().daemonId);
 	/** Whether THIS row's session dropdown is open (module-level open id). */
 	const sessionsOpen = createMemo(() => sessionsOpenId() === d().daemonId);
@@ -233,6 +249,17 @@ export const WorkspaceRow: Component<{
 		return isClone() && st !== undefined && st !== "ready" ? st : undefined;
 	};
 	const isAttached = () => d().daemonId === state.currentSessionId;
+	/** Selected row: the switch target while its switch is waking/attaching or failed (the
+	 *  old session is still attached underneath a failed one, so currentSessionId alone
+	 *  would snap the highlight back); otherwise the attached session. A superseded or
+	 *  cancelled switch clears the target and the highlight returns to the attached row. */
+	const selected = createMemo(() => {
+		const phase = state.transcriptPhase;
+		const target = state.transcriptTarget;
+		if (target !== null && (phase === "waking" || phase === "attaching" || phase === "failed"))
+			return target === d().daemonId;
+		return isAttached();
+	});
 	/** Activity dot for THIS row, derived from the attached session's live
 	 *  signals (state.streaming / state.uiRequest / state.answerUnviewed,
 	 *  finished answer sitting below the scrolled-up viewport) plus the
@@ -267,7 +294,8 @@ export const WorkspaceRow: Component<{
 		return a && a !== "idle" ? a : undefined;
 	});
 
-	const clickable = () => !blocked() && (d().status === "ready" || d().status === "asleep");
+	const clickable = () =>
+		!blocked() && !deleting() && (d().status === "ready" || d().status === "asleep");
 	/** Loading phase: activating but the daemon isn't ready yet. Renders with
 	 *  the pulsing transitional ("resolving") visual vocabulary. */
 	const waking = () => activating() && d().status !== "ready";
@@ -303,12 +331,6 @@ export const WorkspaceRow: Component<{
 	/** "1 file" / "3 files", English plural for the diffstat titles. */
 	const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-	// Clicking the row CARD (anything but the session-title line) resumes the
-	// daemon's current session: ready rows attach; stopped (asleep) rows wake
-	// (respawn --resume lastSessionFile) then attach; the whole card is the
-	// resume target, leaving no dead space. The session-title line is the dropdown trigger
-	// (sessionTitleClick below); clicking an open dropdown's own entry resumes
-	// that session.
 	/** Start (asleep) or restart a row's session process, then attach so the
 	 *  pane follows it. The row pulses until the attach settles. */
 	const activateRow = (id: string, wake: () => Promise<boolean>) => {
@@ -316,20 +338,19 @@ export const WorkspaceRow: Component<{
 		// The attach is posted only once the wake POST is accepted (see wakeAndAttach).
 		wakeAndAttach(id, wake())
 			.catch(reportError)
-			.finally(() =>
-				setActivatingIds((prev) => {
-					const next = new Set(prev);
-					next.delete(id);
-					return next;
-				}),
-			);
+			.finally(() => endActivating(id));
 	};
 
-	// Clicking the row CARD (anything but the session-title line) attaches a
-	// ready session process; a stopped (asleep) one wakes then attaches. The
-	// session-title line is the dropdown trigger (sessionTitleClick below).
+	// Clicking the row CARD (anything but the session-title line) resumes the
+	// daemon's current session: a ready session process attaches; a stopped
+	// (asleep) one wakes then attaches (switchToDaemon covers both, and owns
+	// the transcript phase). The whole card is the resume target, leaving no
+	// dead space. The row highlights at once (switch-target.ts); the pane
+	// follows when the switch settles. The session-title line is the dropdown
+	// trigger (sessionTitleClick below); clicking an open dropdown's own entry
+	// resumes that session.
 	const rowClick = () => {
-		if (activating()) return;
+		if (activating() || deleting()) return;
 		// A pick changes the main pane: a drawer sidebar gets out of the way now
 		// instead of when the attach lands.
 		closeDrawers();
@@ -338,17 +359,23 @@ export const WorkspaceRow: Component<{
 		setSessionsOpenId(null);
 		const daemon = d();
 		if (paused()) {
-			pushToast(PAUSED_TOOLTIP[connectionState()]);
+			pushToast(PAUSED_TOOLTIP.reconnecting);
 			return;
 		}
-		if (daemon.status === "ready") {
-			// Already the attached session: clicking its card is a no-op (a
-			// redundant attach round-trip would also reset the chat view).
-			if (daemon.daemonId === state.currentSessionId) return;
-			void attachSession(daemon.daemonId).catch(reportError);
-		} else if (daemon.status === "asleep") {
-			activateRow(daemon.daemonId, () => spawnResume(daemon.daemonId));
-		}
+		if (daemon.status !== "ready" && daemon.status !== "asleep") return;
+		// Already the attached session: clicking its card is a no-op (a
+		// redundant attach round-trip would also reset the chat view). A failed
+		// switch to this row leaves the old session attached, so it still retries.
+		if (
+			daemon.status === "ready" &&
+			daemon.daemonId === state.currentSessionId &&
+			state.transcriptPhase === "loaded"
+		)
+			return;
+		const id = daemon.daemonId;
+		// Asleep rows keep the waking pulse until the switch settles.
+		if (daemon.status === "asleep") setActivatingIds((prev) => new Set(prev).add(id));
+		void switchToDaemon(id).finally(() => endActivating(id));
 	};
 
 	/** The kebab's Start/Restart item. Restart stops and respawns the
@@ -378,7 +405,7 @@ export const WorkspaceRow: Component<{
 	const newSessionClick = () => {
 		if (activating()) return;
 		if (paused()) {
-			pushToast(PAUSED_TOOLTIP[connectionState()]);
+			pushToast(PAUSED_TOOLTIP.reconnecting);
 			return;
 		}
 		closeDrawers();
@@ -386,13 +413,7 @@ export const WorkspaceRow: Component<{
 		setMenuOpenId(null);
 		const id = d().daemonId;
 		setActivatingIds((prev) => new Set(prev).add(id));
-		void startDaemonNewSession(id).finally(() =>
-			setActivatingIds((prev) => {
-				const next = new Set(prev);
-				next.delete(id);
-				return next;
-			}),
-		);
+		void startDaemonNewSession(id).finally(() => endActivating(id));
 	};
 
 	const doStop = () => {
@@ -411,9 +432,11 @@ export const WorkspaceRow: Component<{
 				ref={rowRef}
 				class="sidebar-row daemon-row"
 				data-roster-item
+				aria-busy={deleting() ? "true" : undefined}
 				classList={{
-					active: isAttached() || activating(),
+					active: selected() || activating(),
 					clickable: clickable() && !activating(),
+					"daemon-row--deleting": deleting(),
 					"daemon-row--nested": props.nested === true,
 					"daemon-row--worktree": isWorktree(),
 					"daemon-row--root": isRoot(),
@@ -500,7 +523,7 @@ export const WorkspaceRow: Component<{
 										disabled={paused() || blocked()}
 										title={
 											paused()
-												? PAUSED_TOOLTIP[connectionState()]
+												? PAUSED_TOOLTIP.reconnecting
 												: blocked()
 													? "Project folder is missing; this checkout cannot start"
 													: a().kind === "start"
@@ -521,7 +544,7 @@ export const WorkspaceRow: Component<{
 									class="sidebar-menu-item"
 									title={
 										paused()
-											? PAUSED_TOOLTIP[connectionState()]
+											? PAUSED_TOOLTIP.reconnecting
 											: "Starts the clone workspace (checkout and session logs are preserved)"
 									}
 									disabled={paused()}
@@ -557,7 +580,7 @@ export const WorkspaceRow: Component<{
 									class="sidebar-menu-item"
 									title={
 										paused()
-											? PAUSED_TOOLTIP[connectionState()]
+											? PAUSED_TOOLTIP.reconnecting
 											: "Interrupts the running turn; the workspace keeps running"
 									}
 									disabled={paused()}
@@ -588,6 +611,7 @@ export const WorkspaceRow: Component<{
 									role="menuitem"
 									class="sidebar-menu-item sidebar-menu-item--danger"
 									title="Stops the session process and removes the worktree (guard checks first)"
+									disabled={deleting()}
 									onClick={() => {
 										setMenuOpenId(null);
 										sendWorktreeDeleteInfo(d().daemonId);
@@ -607,7 +631,7 @@ export const WorkspaceRow: Component<{
 									class="sidebar-menu-item"
 									title={
 										paused()
-											? PAUSED_TOOLTIP[connectionState()]
+											? PAUSED_TOOLTIP.reconnecting
 											: "Fetches the clone's committed branch into the project (creates it or fast-forwards; never overwrites)"
 									}
 									disabled={paused()}
@@ -627,10 +651,10 @@ export const WorkspaceRow: Component<{
 									class="sidebar-menu-item sidebar-menu-item--danger"
 									title={
 										paused()
-											? PAUSED_TOOLTIP[connectionState()]
+											? PAUSED_TOOLTIP.reconnecting
 											: "Verified delete: refuses active work, verifies the fleet transcript store, then removes compute, storage, and the checkout"
 									}
-									disabled={paused()}
+									disabled={paused() || deleting()}
 									onClick={() => {
 										setMenuOpenId(null);
 										setState("deleteWorkspaceTarget", d().daemonId);
@@ -748,7 +772,7 @@ export const WorkspaceRow: Component<{
 										class="daemon-stage-retry"
 										title={
 											paused()
-												? PAUSED_TOOLTIP[connectionState()]
+												? PAUSED_TOOLTIP.reconnecting
 												: "Retry the workspace start (backend admission applies)"
 										}
 										disabled={paused()}
@@ -874,8 +898,8 @@ const DaemonSessionsDropdown: Component<{
 	const resume = (path: string) => {
 		const id = props.daemon.daemonId;
 		const wasAsleep = props.daemon.status === "asleep";
-		// Wake pulse for an asleep row (mirrors the old row-click wake): set
-		// the activating id before the resume, clear when the attach settles.
+		// Wake pulse for an asleep row (mirrors the row-click wake): set the
+		// activating id before the resume, clear when the attach settles.
 		if (wasAsleep) setActivatingIds((prev) => new Set(prev).add(id));
 		const pending = resumeDaemonSession(id, path);
 		props.onClose();
@@ -883,13 +907,7 @@ const DaemonSessionsDropdown: Component<{
 		if (wasAsleep) {
 			Promise.resolve(pending)
 				.catch(() => {})
-				.finally(() =>
-					setActivatingIds((prev) => {
-						const next = new Set(prev);
-						next.delete(id);
-						return next;
-					}),
-				);
+				.finally(() => endActivating(id));
 		}
 	};
 

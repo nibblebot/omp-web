@@ -86,11 +86,21 @@
 	   chat column below 768px. */
 	--shadow-1: 0 1px 2px rgb(0 0 0 / 0.25);
 	--shadow-2: 0 8px 24px rgb(0 0 0 / 0.35);
-	--shadow-sprite: 0 2px 6px rgb(0 0 0 / 0.45);
 	--shadow-glow-success: 0 0 6px var(--success);
+	/* Motion (the only place literal durations live; every other file uses
+	   these). fast = hover/toggle/caret/highlight/fade-out; base = rows,
+	   panels, transcript-in. Use the --dur-move-* pair for transform, size
+	   and grid-track motion and --dur-fast/--dur-base for opacity/color, so
+	   reduced motion can make movement instant while fades stay (below). */
 	--dur-fast: 140ms;
 	--dur-base: 200ms;
-	--ease-out: ease-out;
+	--dur-move-fast: var(--dur-fast);
+	--dur-move-base: var(--dur-base);
+	/* Infinite loops: spinners, pulses/blinks, shimmer sweep. */
+	--dur-spin: 0.9s;
+	--dur-pulse: 1.2s;
+	--dur-shimmer: 1.8s;
+	--ease-out: cubic-bezier(0.2, 0, 0, 1);
 	--ease-in-out: ease-in-out;
 	--focus-ring: 2px solid var(--accent);
 	/* Type scale: stepped sizes for a real hierarchy (micro < sm < md < lg <
@@ -313,4 +323,15 @@
 	--diff-del-bg: oklch(52% 0.19 22 / 0.08);
 	--diff-del-text: oklch(48% 0.17 22);
 	--backdrop: oklch(22% 0.025 285 / 0.35);
+}
+
+/* Reduced motion: movement and size changes become instant, fades stay short.
+   Looping shimmer goes static in its own rule (chat.css). */
+@media (prefers-reduced-motion: reduce) {
+	:root {
+		--dur-fast: 80ms;
+		--dur-base: 80ms;
+		--dur-move-fast: 0ms;
+		--dur-move-base: 0ms;
+	}
 }

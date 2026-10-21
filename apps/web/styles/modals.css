@@ -27,6 +27,24 @@
 	align-items: stretch;
 	z-index: var(--z-sheet);
 }
+/* Sheet motion (Modal.tsx presence): the backdrop scrim fades (--dur-base, a
+   color fade so the sheet itself stays opaque) while the sheet slides in from
+   and back out to the right edge (--dur-move-base). data-motion holds the
+   hidden state for "enter" and "exit"; the base rules are the shown state. */
+.modal-backdrop.sheet[data-motion] {
+	transition: background-color var(--dur-base) var(--ease-out);
+}
+.modal-backdrop.sheet[data-motion="enter"],
+.modal-backdrop.sheet[data-motion="exit"] {
+	background-color: transparent;
+}
+.modal.sheet {
+	transition: transform var(--dur-move-base) var(--ease-out);
+}
+.modal-backdrop.sheet[data-motion="enter"] > .modal.sheet,
+.modal-backdrop.sheet[data-motion="exit"] > .modal.sheet {
+	transform: translateX(100%);
+}
 /* Danger confirm opened from inside a sheet (e.g. plugin trust in Settings):
    lift its backdrop above the sheet tier so the confirm stays clickable. */
 .modal-backdrop:has(> .modal.danger-confirm) {
@@ -127,7 +145,7 @@
 /* Danger-confirm dialog (ConfirmDialog.tsx): Alarm Red confirm button. The
    actions row reuses .ask-actions (flex, gap var(--space-4), flex-end);
    geometry (radius var(--r-md), padding 6px 12px, font inherit) and the
-   140ms ease-out transition come from the global `button` rules. */
+   `--dur-fast` / `--ease-out` transition come from the global `button` rules. */
 .danger-confirm-body {
 	color: var(--muted-3);
 	margin: 0 0 var(--space-6);

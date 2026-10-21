@@ -1,3 +1,4 @@
+import { createSignal } from "solid-js";
 import type {
 	ClientCommand,
 	CloneFetchResult,
@@ -73,8 +74,34 @@ export function settleProjectBranches(frame: {
 	for (const waiter of waiters) waiter.resolve(result);
 }
 
-/** Reject every in-flight project waiter (stream teardown in state.ts). */
+/** DaemonIds whose delete was submitted and whose roster removal has not arrived yet.
+ *  Module-level (like WorkspaceRow's activatingIds) so the dim survives a row
+ *  unmounting (collapsed group) and is readable by the delete dialog's sender. The row
+ *  dims at once (`.daemon-row--deleting`) and collapses only when the roster drops it. */
+const [deletePendingIds, setDeletePendingIds] = createSignal<ReadonlySet<string>>(new Set());
+export { deletePendingIds };
+
+/** Forget a pending delete: the delete failed, or the roster removal arrived. */
+export function clearDeletePending(daemonId: string): void {
+	if (!deletePendingIds().has(daemonId)) return;
+	setDeletePendingIds((prev) => {
+		const next = new Set(prev);
+		next.delete(daemonId);
+		return next;
+	});
+}
+
+/** Forget every pending delete. The fleet's refusal is an uncorrelated error frame
+ *  (state.error), so ProjectGroups clears them all when one arrives. */
+export function clearAllDeletePending(): void {
+	if (deletePendingIds().size > 0) setDeletePendingIds(new Set<string>());
+}
+
+/** Reject every in-flight project waiter (stream teardown in state.ts). Pending
+ *  deletes are forgotten too: after a reconnect the roster resync shows the truth
+ *  (row gone: it collapses; row still there: the delete failed or never ran). */
 export function resetPendingProjects(): void {
+	clearAllDeletePending();
 	const err = new Error("Disconnected");
 	for (const waiters of pendingBranches.values()) for (const w of waiters) w.reject(err);
 	pendingBranches.clear();
@@ -388,17 +415,10 @@ export function closeNewWorkspace(): void {
 	setState("newWorkspaceProjectId", null);
 }
 
-let highlightTimer: number | undefined;
-const HIGHLIGHT_MS = 2000;
-
-/** Scroll to and flash a project group (ProjectGroups); auto-clears. */
+/** Scroll to and flash a project group. ProjectGroups clears the flag when the
+ *  group's flash animation ends (afterMotion), so the flash length lives only in CSS. */
 export function highlightProject(projectId: string): void {
-	window.clearTimeout(highlightTimer);
 	setState("highlightProjectId", projectId);
-	highlightTimer = window.setTimeout(() => {
-		highlightTimer = undefined;
-		setState("highlightProjectId", null);
-	}, HIGHLIGHT_MS);
 }
 
 /** Stop + evict the worktree's daemon and git-remove the linked worktree. `deleteBranch`
@@ -406,12 +426,20 @@ export function highlightProject(projectId: string): void {
  *  unprotected branch). Clean only; a refusal surfaces as an error frame. */
 export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: string } = {}): void {
 	if (refuseIfDisconnected()) return;
+	// A refusal arrives as an uncorrelated error frame that only registers when the text
+	// changes: drop the stale one so this delete's own refusal always registers (it clears
+	// the pending dim below via ProjectGroups, and fills the clone dialog's refusal).
+	setState("error", null);
+	setDeletePendingIds((prev) => new Set(prev).add(daemonId));
 	void postCommand({
 		type: "delete_worktree",
 		id: crypto.randomUUID(),
 		daemonId,
 		...(opts.deleteBranch !== undefined ? { deleteBranch: opts.deleteBranch } : {}),
-	} satisfies ClientCommand).catch(reportCommandFailure);
+	} satisfies ClientCommand).catch((err: unknown) => {
+		clearDeletePending(daemonId);
+		reportCommandFailure(err);
+	});
 }
 
 /** Pull guard evidence for the delete-worktree confirm; the answer lands in

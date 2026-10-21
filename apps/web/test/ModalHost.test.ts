@@ -5,6 +5,7 @@ import * as stateModule from "../state";
 import * as registryModule from "../features/registry";
 import { FEATURE_IDS } from "../features/manifest";
 import type * as HostModule from "../ModalHost";
+import type * as ModalUiModule from "../components/ui/Modal";
 import type * as ShortcutsModule from "../components/app/ShortcutsDialog";
 import type * as DaemonDetailsModule from "../components/fleet/daemon/DaemonDetailsDialog";
 import type * as RegistryModule from "../features/registry";
@@ -46,6 +47,7 @@ const created: unknown[] = [];
 const createdProps: Record<string, unknown>[] = [];
 const flow = new Set<unknown>();
 let ModalHost: typeof HostModule.ModalHost;
+let ModalLayerContext: typeof ModalUiModule.ModalLayerContext;
 let ShortcutsDialog: typeof ShortcutsModule.ShortcutsDialog;
 let DaemonDetailsDialog: typeof DaemonDetailsModule.DaemonDetailsDialog;
 let activateFeatures: typeof RegistryModule.activateFeatures;
@@ -85,6 +87,7 @@ beforeAll(async () => {
 	flow.add(solid.For);
 	// Static imports cannot bind the host to the suite-scoped client runtime.
 	({ ModalHost } = await import("../ModalHost"));
+	({ ModalLayerContext } = await import("../components/ui/Modal"));
 	({ ShortcutsDialog } = await import("../components/app/ShortcutsDialog"));
 	({ DaemonDetailsDialog } = await import("../components/fleet/daemon/DaemonDetailsDialog"));
 	({ activateFeatures, featureModal } = await import("../features/registry"));
@@ -168,10 +171,12 @@ describe("ModalHost", () => {
 	});
 
 	test("renders nothing for a modal owned by a feature that is off", () => {
-		const withoutModal = renderHost();
+		// The layer's context provider is structure, not a dialog.
+		const dialogs = (types: unknown[]) => types.filter((t) => t !== ModalLayerContext.Provider);
+		const withoutModal = dialogs(renderHost());
 		// "goal" belongs to the goals feature, which is not active on this page.
 		setState("modal", "goal");
-		expect(renderHost()).toEqual(withoutModal);
+		expect(dialogs(renderHost())).toEqual(withoutModal);
 	});
 
 	test("renders the feature's registered renderer once the feature is active", async () => {
@@ -207,5 +212,34 @@ describe("ModalHost", () => {
 		openDaemonDetails("d1");
 		expect(renderHost()).not.toContain(DaemonDetailsDialog);
 		expect(state.daemonDetailsId).toBeNull();
+	});
+
+	describe("layers", () => {
+		/** The layer handle ModalHost provided to the modal rendered for the open `state.modal`. */
+		function openLayer(): {
+			exiting: () => boolean;
+			hold: () => void;
+			release: () => void;
+		} {
+			const at = created.lastIndexOf(ModalLayerContext.Provider);
+			return createdProps[at]?.value as ReturnType<typeof openLayer>;
+		}
+
+		test("a modal that does not hold its layer never enters an exit (the host unmounts it at once)", () => {
+			setState("modal", "help");
+			renderHost();
+			const layer = openLayer();
+			setState("modal", null);
+			expect(layer.exiting()).toBe(false);
+		});
+
+		test("a modal that holds its layer (a side sheet) keeps it through the exit", () => {
+			setState("modal", "help");
+			renderHost();
+			const layer = openLayer();
+			layer.hold();
+			setState("modal", null);
+			expect(layer.exiting()).toBe(true);
+		});
 	});
 });

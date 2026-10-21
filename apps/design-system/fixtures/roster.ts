@@ -685,6 +685,8 @@ export const rosterFleetState = {
 	sidebarVisible: true,
 	registeredProjects: rosterProjects,
 	daemonRoster: rosterDaemons,
+	// The seeded roster is the first roster frame: rows present now never animate in.
+	rosterLoaded: true,
 	providerProfiles: rosterProviderProfiles,
 	fleetConfigPath: "/home/joshua/.config/omp-web/fleet.json",
 	currentSessionId: "dmn_a002",

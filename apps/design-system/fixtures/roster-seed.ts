@@ -34,12 +34,16 @@ const projectCommands: CommandHandlers = {
  * Function seed for roster stories: resets the module-level unread set (it
  * lives outside the store), marks the transport connected (daemon.ts), applies
  * `rosterFleetState` with `extra` on
- * top, and marks the finished-while-away session unread. Browser-only: kept
+ * top, and marks the finished-while-away session unread. `commands` adds story
+ * answers for further command types (the sidebar story answers delete_worktree). Browser-only: kept
  * out of roster.ts, whose data the design server also loads.
  */
-export function seedRosterFleet(extra: Partial<typeof state> = {}): void {
+export function seedRosterFleet(
+	extra: Partial<typeof state> = {},
+	commands: CommandHandlers = {},
+): void {
 	pruneUnread(new Set());
-	answerCommands(projectCommands);
+	answerCommands({ ...projectCommands, ...commands });
 	setState({ ...structuredClone(rosterFleetState), ...structuredClone(extra) });
 	markUnread("dmn_b001");
 }

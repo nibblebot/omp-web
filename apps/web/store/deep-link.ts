@@ -9,12 +9,10 @@
  * restoring a route, replace the entry in place.
  */
 import { state } from "../state";
-import { spawnResume } from "./projects";
 import { formatRoute, parseRoute, type Route } from "./route";
 import { closeDock, openDock } from "./dock";
-import { requestDaemonSessions, resumeDaemonSession, setView, wakeAndAttach } from "./roster";
-import { pushToast, reportError } from "./toasts";
-import { attachSession } from "./transport";
+import { requestDaemonSessions, resumeDaemonSession, setView, switchToDaemon } from "./roster";
+import { pushToast } from "./toasts";
 import { isUserStopped } from "./user-stopped";
 
 /** Route restores in flight. While any runs, the attached session does not write the hash: the restore owns it. */
@@ -60,15 +58,9 @@ export function syncRouteToAttached(): void {
 
 async function attachDaemon(daemonId: string): Promise<void> {
 	if (state.currentSessionId === daemonId) return;
-	const entry = state.daemonRoster.find((d) => d.daemonId === daemonId);
 	// A user-stopped daemon stays stopped across a reload: no attach (the edge wakes on attach); the row keeps Stopped + Restart.
 	if (isUserStopped(daemonId)) return;
-	// Wake first, then attach: the attach waits for the wake POST to be accepted.
-	if (entry?.status === "asleep") {
-		await wakeAndAttach(daemonId, spawnResume(daemonId)).catch(reportError);
-		return;
-	}
-	await attachSession(daemonId).catch(reportError);
+	await switchToDaemon(daemonId);
 }
 
 async function attachSessionRoute(daemonId: string, sessionId: string): Promise<void> {

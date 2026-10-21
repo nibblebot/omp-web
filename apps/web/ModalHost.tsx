@@ -1,4 +1,13 @@
-import { For, Show, createEffect, type Component, type JSX } from "solid-js";
+import {
+	For,
+	Show,
+	createComputed,
+	createEffect,
+	createSignal,
+	on,
+	type Component,
+	type JSX,
+} from "solid-js";
 import { ShortcutsDialog } from "./components/app/ShortcutsDialog";
 import { CommandPalettePicker } from "./components/app/CommandPalettePicker";
 import { FleetSignInDialog } from "./components/app/FleetSignInDialog";
@@ -21,6 +30,7 @@ import { ShareSheet } from "./components/collab/ShareSheet";
 import { SessionStatsDialog } from "./components/usage/SessionStatsDialog";
 import { UsageLimitsDialog } from "./components/usage/UsageLimitsDialog";
 import { ImageLightbox } from "./components/ui/ImageLightbox";
+import { createModalLayer, ModalLayerContext, type ModalLayer } from "./components/ui/Modal";
 import { featureModal, featureOverlays } from "./features/registry";
 import { closeDaemonDetails, closeLightbox, setState, state, type ModalName } from "./state";
 import { resumePickerOpen } from "./store/resume";
@@ -78,11 +88,42 @@ export const ModalHost: Component = () => {
 		share: () => <ShareSheet onClose={close} />,
 		btw: () => featureModalHost("btw"),
 	} satisfies Record<ModalName, () => JSX.Element>;
+	// One layer per open `state.modal`. A side sheet keeps its layer mounted
+	// through its slide-out (Modal calls `hold()`), so a sheet that is closing
+	// and the dialog replacing it (Settings -> provider login) coexist briefly;
+	// every other modal's layer unmounts the moment its modal closes.
+	interface Layer extends ModalLayer {
+		readonly name: ModalName;
+		close: () => void;
+	}
+	const [layers, setLayers] = createSignal<Layer[]>([]);
+	const openLayer = (name: ModalName): Layer => {
+		const layer: Layer = {
+			name,
+			...createModalLayer(() => setLayers((all) => all.filter((l) => l !== layer))),
+		};
+		setLayers((all) => [...all, layer]);
+		return layer;
+	};
+	let active: Layer | undefined;
+	createComputed(
+		on(
+			() => state.modal,
+			(name) => {
+				active?.close();
+				active = name === null ? undefined : openLayer(name);
+			},
+		),
+	);
 	return (
 		<>
-			<Show when={state.modal} keyed>
-				{(name) => modals[name]()}
-			</Show>
+			<For each={layers()}>
+				{(layer) => (
+					<ModalLayerContext.Provider value={layer}>
+						{modals[layer.name]()}
+					</ModalLayerContext.Provider>
+				)}
+			</For>
 			<Show when={state.lightboxImage} keyed>
 				{(img) => <ImageLightbox image={img} onClose={closeLightbox} />}
 			</Show>

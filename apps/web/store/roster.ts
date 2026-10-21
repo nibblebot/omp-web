@@ -7,6 +7,7 @@ import {
 	attachSession,
 	call,
 	claimAttachIntent,
+	currentAttachIntent,
 	isConnected,
 	isLatestAttachIntent,
 	isSessionSwitchSupersession,
@@ -90,25 +91,87 @@ export function requestDaemonSessions(daemonId: string): Promise<SessionListEntr
 }
 
 /**
- * Attach `daemonId` once its spawn_resume POST (see spawnResume) has been
- * accepted. The browser posts the two as independent fetches whose arrival order
- * at the edge is not guaranteed; an attach that overtakes the wake would wake the
- * row on lastSessionFile and fail the pick, so the attach waits for the accept
- * (the edge registers its pending resume before answering). Resolves null with
- * no attach posted when the wake was refused or failed (spawnResume already
- * reported it). An attach requested meanwhile (another row click, another
- * wake) supersedes this one: no attach is posted and it resolves with
- * whichever session is current, like a superseded attachSession. Otherwise
- * settles like attachSession.
+ * Attach `daemonId`, first waiting for its wake when `woke` is given (the
+ * spawn_resume POST, see spawnResume). The browser posts the two as independent
+ * fetches whose arrival order at the edge is not guaranteed; an attach that
+ * overtakes the wake would wake the row on lastSessionFile and fail the pick, so
+ * the attach waits for the accept (the edge registers its pending resume
+ * before answering). Resolves null with no attach posted when the wake was
+ * refused or failed (spawnResume already reported it). An attach requested
+ * meanwhile (another row click, another wake) supersedes this one: no attach
+ * is posted and it resolves with whichever session is current, like a
+ * superseded attachSession. Otherwise settles like attachSession.
+ *
+ * This is the one writer of the transcript's switch phases (`waking`,
+ * `attaching`, `failed`), each only while its attach intent is still the
+ * latest: a superseded switch never touches the pane the newer one owns.
+ * Re-attaching the daemon the view is already on is no transition and writes
+ * nothing (the caller reports its failure). `loaded` comes from the history
+ * frame (loadHistory), never from here.
  */
-export async function wakeAndAttach(
+export function wakeAndAttach(
 	daemonId: string,
-	woke: Promise<boolean>,
+	woke: Promise<boolean> | null = null,
 ): Promise<string | null> {
-	const intent = claimAttachIntent();
-	if (!(await woke)) return null;
-	if (!isLatestAttachIntent(intent)) return state.currentSessionId;
-	return attachSession(daemonId);
+	const quiet = state.currentSessionId === daemonId;
+	let intent = claimAttachIntent();
+	const writePhase = (phase: "waking" | "attaching" | "failed", error: string | null = null) => {
+		if (quiet || !isLatestAttachIntent(intent)) return;
+		setState({ transcriptPhase: phase, transcriptTarget: daemonId, transcriptError: error });
+	};
+	const attach = (): Promise<string> => {
+		// The attach request claims its own intent; the phase writes ride it. They
+		// hang off a side branch so the caller's chain keeps its microtask timing.
+		const attached = attachSession(daemonId);
+		intent = currentAttachIntent();
+		attached.then(
+			() => {
+				// The wake is done once the edge answers; the history is what remains.
+				if (state.transcriptPhase === "waking") writePhase("attaching");
+			},
+			(err: unknown) => writePhase("failed", err instanceof Error ? err.message : String(err)),
+		);
+		return attached;
+	};
+	if (woke === null) {
+		writePhase("attaching");
+		return attach();
+	}
+	writePhase("waking");
+	return woke.then((ok) => {
+		if (!ok) {
+			writePhase("failed", "The session could not be started.");
+			return null;
+		}
+		if (!isLatestAttachIntent(intent)) return state.currentSessionId;
+		return attach();
+	});
+}
+
+/**
+ * Switch the transcript to `daemonId` (a row click, the new-workspace attach, the
+ * palette, a deep link): asleep/stopped daemons wake then attach, everything else
+ * attaches. Claims the attach intent, so a later click supersedes this one and
+ * only the latest writes `transcriptPhase`. Never rejects: a failure lands in
+ * phase `failed` with `transcriptError` (the transcript shows it with Retry).
+ * Resolves when the switch settled or was superseded; the history frame, not
+ * this promise, marks the transcript loaded. Clicking the attached daemon is a
+ * no-op, except that it dismisses a failed attempt at another daemon.
+ */
+export async function switchToDaemon(daemonId: string): Promise<void> {
+	const asleep = state.daemonRoster.find((d) => d.daemonId === daemonId)?.status === "asleep";
+	if (!asleep && state.currentSessionId === daemonId) {
+		if (state.transcriptPhase === "failed")
+			setState({ transcriptPhase: "loaded", transcriptError: null, transcriptTarget: null });
+		return;
+	}
+	const quiet = state.currentSessionId === daemonId;
+	try {
+		await wakeAndAttach(daemonId, asleep ? spawnResume(daemonId) : null);
+	} catch (err) {
+		// A quiet re-attach has no pane to show the failure in.
+		if (quiet) reportError(err);
+	}
 }
 
 /**
@@ -147,7 +210,7 @@ export function resumeDaemonSession(daemonId: string, sessionFile: string): Prom
 	const attach =
 		state.currentSessionId === daemonId
 			? Promise.resolve()
-			: attachSession(daemonId).then(
+			: wakeAndAttach(daemonId).then(
 					() => undefined,
 					(err) => {
 						reportError(err);
@@ -180,9 +243,7 @@ export async function startDaemonNewSession(daemonId: string): Promise<void> {
 		try {
 			// A superseded attach resolves with whichever session is current; a
 			// refused wake resolves null (already reported): nothing to start on.
-			const attach = asleep
-				? wakeAndAttach(daemonId, spawnResume(daemonId))
-				: attachSession(daemonId);
+			const attach = wakeAndAttach(daemonId, asleep ? spawnResume(daemonId) : null);
 			if ((await attach) !== daemonId) {
 				watch.cancel();
 				return;
@@ -209,9 +270,9 @@ export async function startDaemonNewSession(daemonId: string): Promise<void> {
  */
 export async function attachForPanel(daemonId: string): Promise<boolean> {
 	const watch = watchAttachment(daemonId);
-	let attached: string;
+	let attached: string | null;
 	try {
-		attached = await attachSession(daemonId);
+		attached = await wakeAndAttach(daemonId);
 	} catch (err) {
 		watch.cancel();
 		if (!isSessionSwitchSupersession(err)) {

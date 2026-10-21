@@ -10,13 +10,41 @@ const INNER_SCROLLBAR_PX = 14;
 // bottom hit; small enough that a mid-stream scroll-up escapes cleanly.
 const RE_PIN_DISTANCE_PX = 80;
 
+/** Geometry + bookkeeping the scroll-event unpin rule reads. */
+export interface ScrollUnpinInput {
+	pinned: boolean;
+	scrollHeight: number;
+	scrollTop: number;
+	clientHeight: number;
+	/** scrollTop right after our own last snapToBottom write (null before any). */
+	snapTop: number | null;
+}
+
+/**
+ * The ONLY thing a scroll event may decide: whether a pinned viewport was
+ * moved away from the live edge by something other than a gesture (a
+ * programmatic jump: scrollIntoView, find-in-page, an anchor link). True when
+ * the view is pinned, sits more than one viewport above the bottom, and the
+ * event is not the echo of our own snap (scrollTop still equals what the snap
+ * left; content that grew after the snap, before the event, must not read as
+ * the user leaving). A browser clamp or a shrink moves scrollTop toward the
+ * bottom by far less than a viewport, so it can never qualify. Never yields
+ * a re-pin.
+ */
+export function shouldUnpinOnScroll(m: ScrollUnpinInput): boolean {
+	if (!m.pinned) return false;
+	if (m.snapTop !== null && m.scrollTop === m.snapTop) return false;
+	return m.scrollHeight - m.scrollTop - m.clientHeight > m.clientHeight;
+}
+
 /**
  * Imperative pin/unpin/gesture machinery for the message stream. Hands back
  * the container + content refs, the jump-to-bottom visibility signal, and the
  * jump button's click.
  *
- * Pin state is owned ENTIRELY by synchronous gesture handlers; scroll events
- * never touch it. Up-gestures (wheel-up, scrollbar grab, upward touch drag,
+ * Pin state is owned by synchronous gesture handlers; scroll events never
+ * RE-PIN (and never touch pin state except for the single unpin-only rule
+ * below). Up-gestures (wheel-up, scrollbar grab, upward touch drag,
  * up-keys) unpin; down-gestures that land inside the re-pin band, plus the
  * jump button and session switches, re-pin. This closes the two failure
  * classes of distance-threshold scroll-event reconciliation:
@@ -29,6 +57,17 @@ const RE_PIN_DISTANCE_PX = 80;
  * 2. Content growth can't move an unpinned viewport; snaps run only while
  *    pinned, so a pinned stream follows the live edge and an escaped one
  *    stays exactly where the user left it.
+ *
+ * The one exception: while pinned, a scroll event that leaves the bottom by
+ * MORE than one viewport unpins (shouldUnpinOnScroll). Gestures can't see
+ * programmatic jumps (scrollIntoView, find-in-page) into content-visibility
+ * placeholders; without this, the jump changes the content size as items
+ * render and the pinned ResizeObserver snaps straight back to the bottom.
+ * It preserves class 1 because it can only unpin, never re-pin, and a clamp
+ * or shrink moves the view by less than a viewport. It preserves class 2
+ * because it only ever stops snaps. Our own snaps land at the bottom (and
+ * their scroll echo is recognised by scrollTop === the post-snap value), so
+ * they can't trip it.
  *
  * While pinned, a ResizeObserver pair re-snaps the viewport to the live edge.
  * Observing the CONTENT element catches every growth source with one
@@ -71,19 +110,22 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	};
 	const nearBottom = () =>
 		container.scrollHeight - container.scrollTop - container.clientHeight < RE_PIN_DISTANCE_PX;
-	const unpin = () => {
-		// No room above → the gesture can't move the viewport; stay pinned.
-		if (container.scrollTop <= 0) return;
-		// A pending wheel-down re-pin check must not fire after the escape.
-		// The viewport is still inside the band until the wheel-up lands, so
-		// it would re-pin and snap back (the "can't unstick" race at rAF
-		// granularity).
+	// Leave the live edge: cancels a pending wheel-down re-pin check, which
+	// must not fire after the escape (the viewport is still inside the band
+	// until the wheel-up lands, so it would re-pin and snap back: the "can't
+	// unstick" race at rAF granularity).
+	const escapeBottom = () => {
 		if (rePinRaf !== 0) {
 			cancelAnimationFrame(rePinRaf);
 			rePinRaf = 0;
 		}
 		setPinned(false);
 		setJumpVisible(true);
+	};
+	const unpin = () => {
+		// No room above → the gesture can't move the viewport; stay pinned.
+		if (container.scrollTop <= 0) return;
+		escapeBottom();
 	};
 	// Re-pin when a DOWNWARD gesture lands inside the band. Never called from
 	// scroll events (see the module comment). No-op while already pinned:
@@ -95,8 +137,26 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 			setJumpVisible(false);
 		}
 	};
+	let snapTop: number | null = null;
 	const snapToBottom = () => {
 		container.scrollTop = container.scrollHeight;
+		// Read back the clamped result: the scroll event this write queues is
+		// recognised by scrollTop still equaling it (see shouldUnpinOnScroll).
+		snapTop = container.scrollTop;
+	};
+	// The single scroll-event rule: unpin-only (see the module comment).
+	const onScroll = () => {
+		if (
+			!shouldUnpinOnScroll({
+				pinned,
+				scrollHeight: container.scrollHeight,
+				scrollTop: container.scrollTop,
+				clientHeight: container.clientHeight,
+				snapTop,
+			})
+		)
+			return;
+		escapeBottom();
 	};
 	// Wheel-down is a continuous gesture: re-check the band on the frame
 	// AFTER the browser applies each tick, so a single tick that jumps from
@@ -253,7 +313,7 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 				e.preventDefault();
 				setPinned(true);
 				setJumpVisible(false);
-				container.scrollTop = container.scrollHeight;
+				snapToBottom();
 				break;
 			case " ":
 				// Space ACTIVATES focused buttons/links; only Shift+Space (page
@@ -293,6 +353,7 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 		container.addEventListener("keydown", onScrollKeyDown);
 		container.addEventListener("touchstart", onTouchStart, { passive: true });
 		container.addEventListener("touchmove", onTouchMove, { passive: true });
+		container.addEventListener("scroll", onScroll, { passive: true });
 		document.addEventListener("mouseup", onMouseUp);
 		onCleanup(() => {
 			ro.disconnect();
@@ -301,6 +362,7 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 			container.removeEventListener("keydown", onScrollKeyDown);
 			container.removeEventListener("touchstart", onTouchStart);
 			container.removeEventListener("touchmove", onTouchMove);
+			container.removeEventListener("scroll", onScroll);
 			document.removeEventListener("mouseup", onMouseUp);
 		});
 	});

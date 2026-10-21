@@ -817,6 +817,17 @@ export const [promptInsert, setPromptInsert] = createSignal<PromptInsert | null>
  */
 export const [promptFocusRequest, setPromptFocusRequest] = createSignal(false);
 
+/**
+ * Whether a programmatic composer focus may take the keyboard: a fine pointer
+ * (no soft keyboard popping up on touch), no modal open, and no agent question
+ * (ask/permission dialog) waiting for an answer.
+ */
+export function mayAutoFocusComposer(): boolean {
+	return (
+		window.matchMedia("(pointer: fine)").matches && state.modal === null && state.uiRequest === null
+	);
+}
+
 /** Start a fresh session (/new, New session button, picker gate) and focus the composer once it lands. */
 export function startNewSession(): Promise<void> {
 	if (!collabLive(state.collabStatus)) return startNewSessionNow();

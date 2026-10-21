@@ -121,25 +121,33 @@ export function TranscriptBrowser() {
 
 	return (
 		<div class="tx-app">
-			<aside class="tx-sidebar" classList={{ open: state.txSidebarVisible }}>
-				<SidebarHeader onCollapse={() => setTxSidebarVisible(false)} />
-				<TranscriptList
-					selectedFile={file()}
-					onOpen={navigate}
-					onOpenStored={navigateStored}
-					onMissingFile={handleMissingFile}
-					health={healthSafe}
-					syncTick={syncTick}
-					onSynced={bumpSync}
-				/>
-				{/* Fleet log-store browsing sits beneath the local
-				    transcript list in the same scroll surface. */}
-				<StoredSessionList
-					selectedWorkspaceId={storedRoute()?.workspaceId ?? null}
-					selectedSessionId={storedRoute()?.sessionId ?? null}
-					onOpenSession={navigateStored}
-					syncTick={syncTick}
-				/>
+			{/* Closed = inert: the clipped/hidden sidebar leaves tab order and the a11y tree. It stays mounted so its lists keep their state. */}
+			<aside
+				class="tx-sidebar"
+				classList={{ open: state.txSidebarVisible }}
+				inert={!state.txSidebarVisible}
+			>
+				{/* Fixed-width panel (fleet.css .sidebar-panel): the docked column's width animates, the content does not reflow. */}
+				<div class="sidebar-panel">
+					<SidebarHeader onCollapse={() => setTxSidebarVisible(false)} />
+					<TranscriptList
+						selectedFile={file()}
+						onOpen={navigate}
+						onOpenStored={navigateStored}
+						onMissingFile={handleMissingFile}
+						health={healthSafe}
+						syncTick={syncTick}
+						onSynced={bumpSync}
+					/>
+					{/* Fleet log-store browsing sits beneath the local
+					    transcript list in the same scroll surface. */}
+					<StoredSessionList
+						selectedWorkspaceId={storedRoute()?.workspaceId ?? null}
+						selectedSessionId={storedRoute()?.sessionId ?? null}
+						onOpenSession={navigateStored}
+						syncTick={syncTick}
+					/>
+				</div>
 			</aside>
 			{/* Below 1024px the sidebar is a drawer: tapping outside the
 			    slide-out closes it. Same .sidebar-scrim pattern as the roster

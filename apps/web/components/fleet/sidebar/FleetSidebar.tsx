@@ -61,37 +61,45 @@ export const FleetSidebar: Component = () => {
 
 	return (
 		<>
-			<aside class="sidebar" classList={{ open: state.sidebarVisible }}>
-				<SidebarHeader onCollapse={() => setSidebarVisible(false)} />
-				<div
-					class="sidebar-list"
-					ref={roster}
-					onKeyDown={onRosterKeyDown}
-					onFocusIn={onRosterFocusIn}
-				>
-					{/* Static top-level header: single grouping for the whole roster,
+			{/* Closed = inert: the clipped/hidden sidebar leaves tab order and the a11y tree. */}
+			<aside
+				class="sidebar"
+				classList={{ open: state.sidebarVisible }}
+				inert={!state.sidebarVisible}
+			>
+				{/* Fixed-width panel: the docked sidebar's width animates, the content inside does not reflow. */}
+				<div class="sidebar-panel">
+					<SidebarHeader onCollapse={() => setSidebarVisible(false)} />
+					<div
+						class="sidebar-list"
+						ref={roster}
+						onKeyDown={onRosterKeyDown}
+						onFocusIn={onRosterFocusIn}
+					>
+						{/* Static top-level header: single grouping for the whole roster,
 				    no caret (not collapsible), no indent; carries the add-project
 				    action (top-right). Always rendered so the empty-state hint
 				    has a referent. */}
-					<div class="picker-group-name sidebar-subgroup sidebar-projects-head">
-						Projects
-						<span class="sidebar-projects-actions">
-							<button
-								class="sidebar-icon-btn"
-								onClick={() => setState("modal", "add-project")}
-								title="Add a project"
-								aria-label="Add a project"
-							>
-								<PlusIcon />
-							</button>
-						</span>
+						<div class="picker-group-name sidebar-subgroup sidebar-projects-head">
+							Projects
+							<span class="sidebar-projects-actions">
+								<button
+									class="sidebar-icon-btn"
+									onClick={() => setState("modal", "add-project")}
+									title="Add a project"
+									aria-label="Add a project"
+								>
+									<PlusIcon />
+								</button>
+							</span>
+						</div>
+						<ProjectGroups groups={groups()} />
 					</div>
-					<ProjectGroups groups={groups()} />
+					{/* Setting-gated condensed usage panel docked under the roster list. */}
+					<Show when={state.sidebarUsage}>
+						<SidebarUsage />
+					</Show>
 				</div>
-				{/* Setting-gated condensed usage panel docked under the roster list. */}
-				<Show when={state.sidebarUsage}>
-					<SidebarUsage />
-				</Show>
 			</aside>
 			<Show when={state.sidebarVisible}>
 				<button

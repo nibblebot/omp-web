@@ -14,13 +14,46 @@
 	font-size: var(--fs-sm);
 	line-height: 1.4;
 }
-.sidebar:not(.open) {
-	display: none;
+/* Content box (FleetSidebar.tsx): fills the drawer; docked it keeps the open
+   width (below) so the column can shrink to 0 without reflowing its content. */
+.sidebar-panel {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-height: 0;
+	width: 100%;
+}
+/* Docked (1024px and up): the width animates between --sidebar-w and 0 while
+   the panel inside stays at full width and is clipped, so the main pane
+   re-centers smoothly. Closed hides the column (visibility, delayed until the
+   collapse ends, so it also leaves the a11y tree and tab order; the component
+   adds `inert` as well) instead of display:none, which could not animate. */
+@media (min-width: 1024px) {
+	.sidebar {
+		overflow: hidden;
+		transition:
+			width var(--dur-move-base) var(--ease-out),
+			border-right-width var(--dur-move-base) var(--ease-out),
+			visibility 0s;
+	}
+	.sidebar-panel {
+		/* The open column's content box: --sidebar-w minus the 1px border. */
+		width: calc(var(--sidebar-w) - 1px);
+	}
+	.sidebar:not(.open) {
+		width: 0;
+		border-right-width: 0;
+		visibility: hidden;
+		transition:
+			width var(--dur-move-base) var(--ease-out),
+			border-right-width var(--dur-move-base) var(--ease-out),
+			visibility 0s var(--dur-move-base);
+	}
 }
 /* Below 1024px the sidebar stops participating in .app-body layout and
    becomes a fixed slide-out drawer (layout chrome, not a ModalHost overlay),
    because docking it would squeeze the chat column. Closed state slides
-   off-canvas instead of display:none so the transform transition can run. */
+   off-canvas instead of collapsing so the transform transition can run. */
 .sidebar-scrim {
 	display: none;
 }
@@ -38,16 +71,15 @@
 		box-shadow: var(--shadow-1);
 		transform: translateX(0);
 		transition:
-			transform var(--dur-base) var(--ease-out),
+			transform var(--dur-move-base) var(--ease-out),
 			visibility 0s;
 	}
 	.sidebar:not(.open) {
-		display: flex;
 		visibility: hidden;
 		transform: translateX(-105%);
 		transition:
-			transform var(--dur-base) var(--ease-out),
-			visibility 0s var(--dur-base);
+			transform var(--dur-move-base) var(--ease-out),
+			visibility 0s var(--dur-move-base);
 	}
 	.sidebar-scrim {
 		display: block;
@@ -58,12 +90,6 @@
 		border: none;
 		padding: 0;
 		cursor: default;
-	}
-}
-@media (max-width: 1023px) and (prefers-reduced-motion: reduce) {
-	.sidebar,
-	.sidebar:not(.open) {
-		transition: none;
 	}
 }
 /* Phones: sidebar labels at body size and 44px tap targets for its controls. */
@@ -254,7 +280,11 @@
 	border-radius: var(--r-md);
 	border: 1px solid transparent;
 	cursor: pointer;
-	transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+	transition:
+		background-color var(--dur-fast) var(--ease-out),
+		border-color var(--dur-fast) var(--ease-out),
+		color var(--dur-fast) var(--ease-out),
+		opacity var(--dur-fast) var(--ease-out);
 }
 .sidebar-row > canvas {
 	flex: none;
@@ -327,6 +357,61 @@
 .daemon-row.clickable {
 	cursor: pointer;
 }
+/* Delete submitted: the row dims at once and collapses when the roster drops
+   it (RowMotion). A refused delete clears the class again. */
+.daemon-row--deleting {
+	opacity: 0.5;
+}
+/* Row enter/exit shell (RowMotion.tsx): the grid track animates the height
+   0fr <-> 1fr, the clip inside holds the row, the shell fades and slides 4px.
+   Movement uses the move tokens, the fade the plain ones; all one-shot
+   motion eases out. data-motion enter/exit = hidden state, open = shown. */
+.row-motion {
+	display: grid;
+	grid-template-rows: 1fr;
+	/* The full-sidebar-width bleed of .daemon-row lives here: the clip below
+	   would cut a row that bleeds on its own. */
+	margin-inline: calc(-1 * var(--space-3));
+	margin-top: 0;
+	opacity: 1;
+	transform: none;
+	transition:
+		grid-template-rows var(--dur-move-base) var(--ease-out),
+		margin-top var(--dur-move-base) var(--ease-out),
+		transform var(--dur-move-base) var(--ease-out),
+		opacity var(--dur-base) var(--ease-out);
+}
+.row-motion .daemon-row {
+	margin-inline: 0;
+}
+.row-motion[data-motion="enter"],
+.row-motion[data-motion="exit"] {
+	grid-template-rows: 0fr;
+	/* Cancels the roster list's flex gap so a collapsed row takes no space. */
+	margin-top: calc(-1 * var(--space-1));
+	opacity: 0;
+	transform: translateY(-4px);
+	pointer-events: none;
+}
+.row-motion-clip {
+	min-height: 0;
+	overflow: hidden;
+}
+/* Settled rows must not clip their dropdowns (kebab menu, session picker);
+   the clip lifts once the expand finishes. */
+.row-motion[data-motion="open"] > .row-motion-clip {
+	overflow: visible;
+	transition: overflow 0s var(--dur-move-base) allow-discrete;
+}
+/* Reduced motion: no height or slide, only the short fade. */
+@media (prefers-reduced-motion: reduce) {
+	.row-motion[data-motion="enter"],
+	.row-motion[data-motion="exit"] {
+		grid-template-rows: 1fr;
+		margin-top: 0;
+		transform: none;
+	}
+}
 /* Status dot: ready = green glow, asleep = flat grey, reconnecting = amber,
    error = red, transitional (spawning/connecting/session/resolving) = pulsing
    accent. Unambiguous at a glance: exactly one visual language per state. */
@@ -381,7 +466,7 @@
 .daemon-status-dot[data-status="resolving"] {
 	background: var(--accent);
 	box-shadow: 0 0 6px var(--accent);
-	animation: daemon-dot-pulse 1.2s ease-in-out infinite;
+	animation: daemon-dot-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 }
 /* Activity cases repaint the status dot (single dot, no separate badge):
    presence of any colored dot means alive. These override the green
@@ -411,7 +496,7 @@
 	border: 2px solid transparent;
 	border-top-color: var(--success);
 	box-shadow: none;
-	animation: daemon-activity-spin 0.9s linear infinite;
+	animation: daemon-activity-spin var(--dur-spin) linear infinite;
 }
 @keyframes daemon-activity-spin {
 	to {
@@ -477,7 +562,7 @@
 	padding: var(--space-2) 0 0;
 }
 .daemon-stage-label {
-	animation: daemon-dot-pulse 1.2s ease-in-out infinite;
+	animation: daemon-dot-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 }
 .daemon-stage--failed {
 	color: var(--error-text);
@@ -556,7 +641,7 @@
 .sidebar-caret {
 	flex: none;
 	color: var(--muted-2);
-	transition: transform var(--dur-fast) var(--ease-out);
+	transition: transform var(--dur-move-fast) var(--ease-out);
 }
 button.sidebar-group[data-open="false"] .sidebar-caret {
 	transform: rotate(-90deg);
@@ -856,7 +941,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .daemon-session-chevron {
 	width: 75%;
 	height: 75%;
-	transition: transform var(--dur-fast) var(--ease-out);
+	transition: transform var(--dur-move-fast) var(--ease-out);
 }
 .daemon-session-title--clickable[aria-expanded="true"] .daemon-session-chevron {
 	transform: rotate(180deg);
@@ -1499,8 +1584,10 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 .project-group--missing > .project-group-toggle .sidebar-group-label {
 	opacity: 0.55;
 }
+/* ProjectGroups releases the highlight flag when this animation ends, so the
+   flash length lives here only. */
 .project-group--highlight {
-	animation: project-group-flash 1.2s ease-out 2;
+	animation: project-group-flash var(--dur-pulse) var(--ease-out) 2;
 }
 @keyframes project-group-flash {
 	from {
@@ -1510,10 +1597,18 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 		background: transparent;
 	}
 }
+/* Reduced motion: no colour flash; a still outline holds for the same length
+   (an animation that changes nothing, so its end still releases the flag). */
 @media (prefers-reduced-motion: reduce) {
 	.project-group--highlight {
-		animation: none;
+		animation: project-group-hold var(--dur-pulse) linear 2;
 		outline: 1px solid var(--accent-border);
+	}
+}
+@keyframes project-group-hold {
+	from,
+	to {
+		outline-color: var(--accent-border);
 	}
 }
 .sidebar-empty-action {

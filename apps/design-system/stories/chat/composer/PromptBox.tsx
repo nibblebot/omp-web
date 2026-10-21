@@ -46,5 +46,16 @@ export default defineStory({
 				</div>
 			),
 		},
+		{
+			name: "Switching session",
+			description:
+				"A session switch is loading (or failed): the composer is disabled, the old session may still be attached underneath.",
+			seed: { transcriptPhase: "attaching", transcriptTarget: "dmn_a002" },
+			render: () => (
+				<div class="ds-frame">
+					<PromptBox />
+				</div>
+			),
+		},
 	],
 });

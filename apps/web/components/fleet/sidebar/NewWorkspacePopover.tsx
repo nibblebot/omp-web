@@ -20,7 +20,8 @@ import {
 	type WorkspaceCreationPrefs,
 	type WorkspaceSourceChoice,
 } from "../../../prefs/workspace-creation";
-import { attachSession, state } from "../../../state";
+import { state } from "../../../state";
+import { switchToDaemon } from "../../../store/roster";
 import {
 	createClone,
 	createWorktree,
@@ -290,13 +291,9 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 		}
 		if (row.status === "ready") {
 			setPhase({ kind: "attaching", daemonId: p.daemonId });
-			attachSession(p.daemonId).then(
-				() => props.onClose(),
-				(err: unknown) => {
-					setPhase({ kind: "idle" });
-					setError(messageOf(err));
-				},
-			);
+			// switchToDaemon never rejects: a failed attach lands in the transcript's
+			// failed panel (with Retry), so the popover closes either way.
+			void switchToDaemon(p.daemonId).then(() => props.onClose());
 		}
 	});
 

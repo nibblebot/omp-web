@@ -13,11 +13,13 @@ import {
 } from "solid-js";
 import type { ImageArg } from "#lib/wire/protocol";
 import {
+	isSwitching,
 	promptFocusRequest,
 	promptInsert,
 	setPromptFocusRequest,
 	setPromptInsert,
 } from "../../../state";
+import { mayAutoFocusComposer } from "../../../store/chat";
 import {
 	cancelScheduledDraftSave,
 	currentDraftKey,
@@ -137,11 +139,15 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		});
 	});
 
-	// A started session (/new, New session button, picker gate) hands focus here.
+	// A started session (/new, New session button, picker gate) and a finished
+	// session switch hand focus here; mayAutoFocusComposer keeps it from
+	// stealing the keyboard from a dialog or opening a touch keyboard.
 	createEffect(() => {
 		if (props.textOnly || !promptFocusRequest()) return;
 		setPromptFocusRequest(false);
-		requestAnimationFrame(() => textarea.focus());
+		requestAnimationFrame(() => {
+			if (mayAutoFocusComposer()) textarea.focus({ preventScroll: true });
+		});
 	});
 
 	// Restore the partition draft on mount (prior text/image draft restore);
@@ -405,6 +411,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 						</Show>
 						<textarea
 							data-focus-fallback
+							disabled={isSwitching()}
 							ref={(el) => {
 								textarea = el;
 								props.setTextareaRef(el);

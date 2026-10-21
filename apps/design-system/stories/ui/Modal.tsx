@@ -1,9 +1,42 @@
-import { For } from "solid-js";
+import { For, type Component } from "solid-js";
 import { Markdown } from "../../../web/components/ui/Markdown";
-import { Modal } from "../../../web/components/ui/Modal";
+import { createModalLayer, Modal, ModalLayerContext } from "../../../web/components/ui/Modal";
 import { PickerRow } from "../../../web/components/ui/PickerRow";
 import { markdownLong, pickerModels } from "../../fixtures/shared";
 import { defineStory } from "../../registry";
+
+/**
+ * A side sheet inside the same layer ModalHost provides: it slides in on mount
+ * and slides out on close (Esc, scrim, close button), and `close` (the
+ * stage's dismiss) runs once the exit has ended.
+ */
+const SideSheet: Component<{ close: () => void }> = (props) => {
+	const layer = createModalLayer(props.close);
+	return (
+		<ModalLayerContext.Provider value={layer}>
+			<Modal title="Session stats" variant="sheet" onClose={layer.close}>
+				<dl class="ds-meta">
+					<div class="ds-meta-row">
+						<dt>Turns</dt>
+						<dd>64</dd>
+					</div>
+					<div class="ds-meta-row">
+						<dt>Tool calls</dt>
+						<dd>142</dd>
+					</div>
+					<div class="ds-meta-row">
+						<dt>Tokens</dt>
+						<dd>1,284,310</dd>
+					</div>
+					<div class="ds-meta-row">
+						<dt>Subagents</dt>
+						<dd>8</dd>
+					</div>
+				</dl>
+			</Modal>
+		</ModalLayerContext.Provider>
+	);
+};
 
 export default defineStory({
 	id: "ui-modal",
@@ -32,29 +65,9 @@ export default defineStory({
 		},
 		{
 			name: "Side sheet",
-			description: 'variant="sheet" anchors the dialog to the right edge at full height.',
-			render: (ctx) => (
-				<Modal title="Session stats" variant="sheet" onClose={ctx.close}>
-					<dl class="ds-meta">
-						<div class="ds-meta-row">
-							<dt>Turns</dt>
-							<dd>64</dd>
-						</div>
-						<div class="ds-meta-row">
-							<dt>Tool calls</dt>
-							<dd>142</dd>
-						</div>
-						<div class="ds-meta-row">
-							<dt>Tokens</dt>
-							<dd>1,284,310</dd>
-						</div>
-						<div class="ds-meta-row">
-							<dt>Subagents</dt>
-							<dd>8</dd>
-						</div>
-					</dl>
-				</Modal>
-			),
+			description:
+				'variant="sheet" anchors the dialog to the right edge at full height. It slides in from the right and back out when closed; Reopen replays the slide-in.',
+			render: (ctx) => <SideSheet close={ctx.close} />,
 		},
 		{
 			name: "Aria-labelled, no title",

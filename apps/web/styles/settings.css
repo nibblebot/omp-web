@@ -269,7 +269,7 @@
 		width: 16px;
 		height: 16px;
 		flex: none;
-		transition: transform 0.15s ease;
+		transition: transform var(--dur-move-fast) var(--ease-out);
 	}
 	.settings-block[data-open] .settings-group-caret {
 		transform: rotate(180deg);
@@ -394,7 +394,7 @@
 	height: 22px;
 	border-radius: 50%;
 	background: var(--panel);
-	transition: transform 120ms ease;
+	transition: transform var(--dur-move-fast) var(--ease-out);
 }
 .settings-toggle[aria-checked="true"] .settings-toggle-knob {
 	transform: translateX(20px);

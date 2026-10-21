@@ -3,7 +3,14 @@ import type { InputMode } from "../../../prompt/commands";
 import type { ImageArg } from "#lib/wire/protocol";
 import type { TextAttachment } from "../../../prompt/attachments";
 import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
-import { connectionState, isReady, isSessionChanging, state, stopTurn } from "../../../state";
+import {
+	connectionState,
+	isReady,
+	isSessionChanging,
+	isSwitching,
+	state,
+	stopTurn,
+} from "../../../state";
 import { ArrowUpIcon, CornerDownRightIcon, StopIcon } from "../../ui/icons";
 import { RunningAgentsButton } from "./RunningAgentsButton";
 
@@ -28,7 +35,7 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 					type="button"
 					class="stop"
 					aria-label="Stop"
-					disabled={paused()}
+					disabled={paused() || isSwitching()}
 					title={paused() ? PAUSED_TOOLTIP[connectionState()] : "Stop the turn and its subagents"}
 					onClick={() => void stopTurn()}
 				>
@@ -42,6 +49,7 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 				onClick={() => props.submit("enter")}
 				disabled={
 					paused() ||
+					isSwitching() ||
 					!isReady() ||
 					isSessionChanging() ||
 					(!props.message().trim() &&

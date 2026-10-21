@@ -1,37 +1,49 @@
 import { Show, type Component } from "solid-js";
-import { characterForModel } from "../../../sprites/characters";
 import { state } from "../../../state";
-import { CharacterAvatar } from "../../models/CharacterAvatar";
+import { EmptyTranscript } from "./EmptyTranscript";
+import { TranscriptFailed, TranscriptSkeleton } from "./TranscriptStates";
 import { TranscriptStream } from "./TranscriptStream";
-
-/** Empty-transcript state: large character sprite and a one-line greeting.
- *  Held blank until the loaded transcript's state frame lands (modelSynced):
- *  history primes before state, so rendering earlier would flash the
- *  previous session's (or the fallback) character. */
-const EmptyState: Component = () => (
-	<div class="chat-transcript-empty">
-		<Show when={state.modelSynced}>
-			<CharacterAvatar
-				provider={state.model?.provider}
-				id={state.model?.id}
-				pose="happy"
-				size={96}
-			/>
-			<p class="chat-transcript-empty-greeting">
-				{characterForModel(state.model?.provider, state.model?.id).name} is ready. What should we
-				work on?
-			</p>
-		</Show>
-	</div>
-);
+import { useTranscriptTransition } from "./useTranscriptTransition";
 
 /**
  * The session transcript: the sticky-scrolling message stream over the main
- * items. Shows the greeting empty state while there are no items and no live
- * turn.
+ * items plus the states around a session switch. The body (stream or empty
+ * state) fades out when a switch starts and back in once loaded; the skeleton
+ * and the failed panel overlay it (see useTranscriptTransition). A loaded
+ * session with nothing in it shows EmptyTranscript; an idle one (no session)
+ * shows nothing.
  */
-export const Transcript: Component = () => (
-	<Show when={state.items.length > 0 || state.live.active} fallback={<EmptyState />}>
-		<TranscriptStream items={state.items} variant="session" />
-	</Show>
-);
+export const Transcript: Component = () => {
+	let view: HTMLDivElement | undefined;
+	let body: HTMLDivElement | undefined;
+	const { motion, skeletonOpen } = useTranscriptTransition({
+		view: () => view,
+		body: () => body,
+	});
+
+	return (
+		<div class="chat-transcript-view" ref={view}>
+			<div
+				class="chat-transcript-body"
+				ref={body}
+				data-motion={motion()}
+				inert={motion() === "enter"}
+			>
+				<Show
+					when={state.items.length > 0 || state.live.active}
+					fallback={
+						<Show when={state.transcriptPhase === "loaded"}>
+							<EmptyTranscript />
+						</Show>
+					}
+				>
+					<TranscriptStream items={state.items} variant="session" />
+				</Show>
+			</div>
+			<TranscriptSkeleton open={skeletonOpen()} />
+			<Show when={state.transcriptPhase === "failed"}>
+				<TranscriptFailed />
+			</Show>
+		</div>
+	);
+};

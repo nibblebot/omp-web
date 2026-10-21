@@ -1,4 +1,5 @@
-import { onCleanup, onMount, type Component, type JSX } from "solid-js";
+import { createEffect, on, onCleanup, onMount, type Component, type JSX } from "solid-js";
+import type { PresencePhase } from "../../motion/presence";
 import { focusOrigin, pageFocusFallback, resolveFocusReturn } from "./focus";
 import { XIcon } from "./icons";
 
@@ -14,6 +15,19 @@ export interface DockPaneProps {
 	/** Body without padding or scrolling, for a panel that lays out and scrolls itself (agent pane). */
 	flush?: boolean;
 	children?: JSX.Element;
+	/**
+	 * Motion phase from the host's presence (`data-motion`): "enter" and "exit"
+	 * hold the off-screen state, and an exiting pane is inert and hands focus
+	 * back at once. Omitted: a static pane with no motion.
+	 */
+	phase?: PresencePhase;
+	/** Lay the pane over the main pane at the right edge instead of in the flex row. */
+	overlay?: boolean;
+	/** Fade title, actions and body out (the host swaps the content while it is faded). */
+	swapping?: boolean;
+	/** Receives the pane element, and the body element the content fade runs on. */
+	paneRef?: (el: HTMLElement) => void;
+	bodyRef?: (el: HTMLElement) => void;
 }
 
 const KEY_STEP = 16;
@@ -32,13 +46,25 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 	onMount(() => {
 		previousFocus = focusOrigin();
 	});
-	onCleanup(() => {
-		// Hand focus back when it is still inside the pane or was lost with it (Esc, Back,
-		// close button). Focus that moved to another control on purpose is left alone.
+	// Hand focus back when it is still inside the pane or was lost with it (Esc, Back,
+	// close button). Focus that moved to another control on purpose is left alone.
+	// Runs once, when the close starts: an exiting pane is inert while it slides out.
+	let focusReturned = false;
+	const returnFocus = () => {
+		if (focusReturned) return;
+		focusReturned = true;
 		const active = document.activeElement;
 		if (active && active !== document.body && !pane.contains(active)) return;
 		resolveFocusReturn(previousFocus, pageFocusFallback)?.focus();
-	});
+	};
+	onCleanup(returnFocus);
+	createEffect(
+		on(
+			() => props.phase,
+			(phase) => phase === "exit" && returnFocus(),
+			{ defer: true },
+		),
+	);
 
 	const clamp = (px: number): number =>
 		Math.min(props.maxWidth, Math.max(props.minWidth, Math.round(px)));
@@ -75,7 +101,19 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 	};
 
 	return (
-		<aside ref={pane} class="dock-pane" aria-label={props.title} onKeyDown={onPaneKey}>
+		<aside
+			ref={(el) => {
+				pane = el;
+				props.paneRef?.(el);
+			}}
+			class="dock-pane"
+			aria-label={props.title}
+			data-motion={props.phase}
+			data-overlay={props.overlay ? "" : undefined}
+			data-swapping={props.swapping ? "" : undefined}
+			inert={props.phase === "exit"}
+			onKeyDown={onPaneKey}
+		>
 			<div
 				class="dock-resizer"
 				role="separator"
@@ -104,7 +142,11 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 					<XIcon />
 				</button>
 			</header>
-			<div class="dock-body" classList={{ "dock-body--flush": props.flush === true }}>
+			<div
+				class="dock-body"
+				classList={{ "dock-body--flush": props.flush === true }}
+				ref={(el) => props.bodyRef?.(el)}
+			>
 				{props.children}
 			</div>
 		</aside>

@@ -135,16 +135,32 @@
   display: flex;
   flex-direction: column;
 }
-/* Collapsed: drop the tx sidebar from the grid (transparent grid-area: none
-   lets the detail pane's auto-placement flow into its column full width),
-   mirroring the roster .sidebar:not(.open) display:none pattern. */
-.tx-sidebar:not(.open) {
-  display: none;
-  grid-area: none;
-}
-/* A collapsed docked sidebar leaves no column behind for the main pane. */
-.tx-app:has(> .tx-sidebar:not(.open)) {
-  grid-template-columns: minmax(0, 1fr);
+/* Docked (1024px and up): the sidebar's grid track animates between
+   --sidebar-w and 0 (a collapsed sidebar keeps its column at 0 instead of
+   leaving the grid), the panel inside keeps its open width and is clipped, so
+   the main pane re-centers smoothly. Closed hides the column with a
+   visibility switch delayed until the collapse ends (it also leaves the a11y
+   tree and tab order; TranscriptBrowser adds `inert` too). */
+@media (min-width: 1024px) {
+  .tx-app {
+    transition: grid-template-columns var(--dur-move-base) var(--ease-out);
+  }
+  .tx-app:has(> .tx-sidebar:not(.open)) {
+    grid-template-columns: 0px minmax(0, 1fr);
+  }
+  .tx-sidebar {
+    overflow: hidden;
+    transition:
+      border-right-width var(--dur-move-base) var(--ease-out),
+      visibility 0s;
+  }
+  .tx-sidebar:not(.open) {
+    border-right-width: 0;
+    visibility: hidden;
+    transition:
+      border-right-width var(--dur-move-base) var(--ease-out),
+      visibility 0s var(--dur-move-base);
+  }
 }
 .sidebar-inner {
   display: flex;
@@ -571,7 +587,7 @@
   border: 2px solid var(--tx-border);
   border-top-color: var(--tx-accent);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: spin var(--dur-spin) linear infinite;
   vertical-align: -1px;
 }
 @keyframes spin {
@@ -1483,29 +1499,22 @@
     box-shadow: var(--shadow-1);
     transform: translateX(0);
     transition:
-      transform var(--dur-base) var(--ease-out),
+      transform var(--dur-move-base) var(--ease-out),
       visibility 0s;
   }
-  /* Closed slides off-canvas (display kept so the transform transition can
+  /* Closed slides off-canvas (not collapsed, so the transform transition can
      run), same as the roster drawer. */
   .tx-sidebar:not(.open) {
-    display: flex;
     visibility: hidden;
     transform: translateX(-105%);
     transition:
-      transform var(--dur-base) var(--ease-out),
-      visibility 0s var(--dur-base);
+      transform var(--dur-move-base) var(--ease-out),
+      visibility 0s var(--dur-move-base);
   }
 }
 @media (max-width: 767px) {
   .tx-main {
     padding: 12px 14px 32px;
-  }
-}
-@media (max-width: 1023px) and (prefers-reduced-motion: reduce) {
-  .tx-sidebar,
-  .tx-sidebar:not(.open) {
-    transition: none;
   }
 }
 /* ---------- transcript: rows + a11y (transcript-scoped) ---------- */
@@ -1578,11 +1587,11 @@
 @media (prefers-reduced-motion: no-preference) {
   .tx-msg-toggle,
   .sys-toggle {
-    transition: background-color 100ms ease;
+    transition: background-color var(--dur-fast) var(--ease-out);
   }
   .tx-msg-toggle .tx-caret,
   .sys-toggle .tx-caret {
-    transition: transform 100ms ease;
+    transition: transform var(--dur-move-fast) var(--ease-out);
   }
 }
 

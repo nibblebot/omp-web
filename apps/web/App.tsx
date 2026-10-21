@@ -22,6 +22,7 @@ import {
 	connect,
 	hasLiveSession,
 	initAuth,
+	isSwitching,
 	isUserStopped,
 	setState,
 	setView,
@@ -36,6 +37,7 @@ import { featureView } from "./features/registry";
 import { featurePreferences } from "./features/preferences";
 import { displayTitle } from "./components/ui/title-icons";
 import { onHashChange, restoreInitialRoute, syncRouteToAttached } from "./store/deep-link";
+import { transcriptExiting } from "./components/chat/transcript/useTranscriptTransition";
 import { installWindowFileDrop } from "./prompt/file-drop";
 // Apply persisted theme/font-size before first render to avoid a dark flash.
 initTheme();
@@ -49,9 +51,11 @@ const ChatMode: Component = () => (
 	<>
 		<FleetSidebar />
 		{/* No live session (stopped/removed daemon, or none picked yet): the
-		    empty pane replaces the chat column. */}
+		    empty pane replaces the chat column. A switch in flight (or failed)
+		    and a vanished session's fade-out keep the chat column, which shows
+		    their skeleton / failed panel / fade. */}
 		<Show
-			when={!hasLiveSession()}
+			when={!(hasLiveSession() || isSwitching() || transcriptExiting())}
 			fallback={
 				<div class="main-pane">
 					<MainHeader title={<SessionTitle />} actions={<ToolCardsMenu />} session />

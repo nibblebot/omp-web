@@ -99,7 +99,7 @@
 	vertical-align: -0.15em;
 	margin-left: var(--space-1);
 	background: var(--accent);
-	animation: btw-blink 1s steps(2, start) infinite;
+	animation: btw-blink var(--dur-pulse) steps(2, start) infinite;
 }
 @keyframes btw-blink {
 	to {

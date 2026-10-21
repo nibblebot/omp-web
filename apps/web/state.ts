@@ -4,6 +4,7 @@ import type { AdvisorItem } from "./store/slices/advisor";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { UsageReport } from "@oh-my-pi/pi-ai";
 import type { TextAttachment } from "./prompt/attachments";
+import { batch } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "#lib/wire/protocol";
 import type {
@@ -43,6 +44,7 @@ import {
 import { cancelUiRequest } from "./store/modals";
 import {
 	resetPendingProjects,
+	deletePendingIds,
 	resumeRestartedDaemons,
 	settleAddProject,
 	settleProjectBranches,
@@ -58,6 +60,7 @@ import {
 	settleFiles,
 	settleProjectWakes,
 	settleSessions,
+	switchToDaemon,
 } from "./store/roster";
 import { dismissToast, pushToast, type ToastAction } from "./store/toasts";
 import { parseRoute } from "./store/route";
@@ -103,6 +106,8 @@ import {
 // call sites are byte-identical.
 // ---------------------------------------------------------------------------
 export type Block = { kind: "text" | "thinking"; text: string };
+/** What the transcript pane shows for a session switch (see `state.transcriptPhase`). */
+export type TranscriptPhase = "idle" | "waking" | "attaching" | "loaded" | "failed";
 export type ToolStatus = "running" | "done" | "error";
 export type BashItem = {
 	kind: "bash";
@@ -359,6 +364,17 @@ export const [state, setState] = createStore({
 	// to (distinct from sessionId above, the agent's own id, which changes on
 	// switchSession). Session-scoped frames for any other handle are dropped.
 	currentSessionId: "",
+	// What the transcript pane is doing for a session switch (C3). `waking` /
+	// `attaching` / `failed` are written only by the switch in store/roster.ts
+	// (switchToDaemon and the paths that share it), `loaded` only by loadHistory,
+	// `idle` when no session is selected. The boot session is always "" (a
+	// remembered route attaches through the switch once the roster lands).
+	transcriptPhase: "idle" as TranscriptPhase,
+	// Why the switch failed; null unless `transcriptPhase` is `failed`.
+	transcriptError: null as string | null,
+	// The daemon the in-flight (or failed) switch targets; null when the pane is
+	// loaded/idle, and for a re-attach of the attached daemon (no transition).
+	transcriptTarget: null as string | null,
 	sessionFile: undefined as string | undefined,
 	contextUsage: undefined as WebSessionState["contextUsage"],
 	queuedMessageCount: 0,
@@ -400,7 +416,7 @@ export const [state, setState] = createStore({
 	// Set by openNewWorkspace/closeNewWorkspace; the palette uses the same calls.
 	newWorkspaceProjectId: null as string | null,
 	// Project group the sidebar scrolls to and flashes after an add; cleared
-	// ~2s later by highlightProject.
+	// by ProjectGroups when the flash animation ends.
 	highlightProjectId: null as string | null,
 	// Folder the Add-project dialog opens prefilled with (an unowned session's
 	// folder); null when opened from elsewhere. Cleared when the dialog closes.
@@ -434,6 +450,9 @@ export const [state, setState] = createStore({
 	// fleet-scoped, not session-scoped). Entries carry projectId
 	// (Phase 5: project-first grouping + linked-worktree eligibility).
 	daemonRoster: [] as DaemonEntry[],
+	// True once the first roster frame landed (never reset: it survives session
+	// resets and reconnects); lets the sidebar tell boot priming from a new row.
+	rosterLoaded: false as boolean,
 	// Per-daemon realtime activity (streaming / blocked) fed by the edge's
 	// additive fleet-scoped `daemon_activity` frames (derived from each ready
 	// daemon's tapped stream). Survives resetSessionView / session switches
@@ -506,8 +525,10 @@ export const [state, setState] = createStore({
 	// Delay (ms) of the next scheduled manual reconnect; 0 = stream open (no
 	// retry pending). Mirrors the module-level backoff ladder for the panel.
 	reconnectDelay: 0,
-	// The attached daemon id whose session process went down (the view was
-	// cleared by reconcileAttachedSession); "" when nothing is down.
+	// The attached daemon id whose session process stopped or crashed (asleep/error:
+	// the view was cleared by reconcileAttachedSession and Restart makes sense);
+	// "" when nothing is down. A daemon REMOVED from the roster never sets it: the
+	// view moves to a neighbouring session instead (see switchAwayFromRemoved).
 	sessionDownId: "",
 	// True once the attached daemon has stayed "reconnecting" past the grace
 	// window: a routine renewal or brief re-dial never shows the strip.
@@ -639,6 +660,11 @@ export function loadHistory(messages: AgentMessage[]): void {
 		retryInfo: null,
 		workingIntent: undefined,
 		modelSynced: false,
+		// A history frame of the OLD session landing while a switch to another
+		// daemon is pending must not end that switch's wait.
+		...(state.transcriptTarget === null || state.transcriptTarget === state.currentSessionId
+			? { transcriptPhase: "loaded" as const, transcriptError: null, transcriptTarget: null }
+			: {}),
 	});
 }
 
@@ -768,7 +794,7 @@ export function fleetSettingsActive(): boolean {
 // order breaks ties). Rows without a registered projectId are not shown.
 // ---------------------------------------------------------------------------
 
-/** The roster after one row-level delta: removed rows dropped, upserted rows replaced in place or appended in arrival order. */
+/** The roster after one row-level delta: removed rows dropped, upserted rows replacing their id's row or appended in arrival order. */
 function mergeRosterDelta(delta: { upserted: DaemonEntry[]; removed: string[] }): DaemonEntry[] {
 	const removed = new Set(delta.removed);
 	const next = unwrap(state.daemonRoster).filter((d) => !removed.has(d.daemonId));
@@ -778,6 +804,57 @@ function mergeRosterDelta(delta: { upserted: DaemonEntry[]; removed: string[] })
 		else next[at] = row;
 	}
 	return next;
+}
+
+/** Whether two row fields hold the same value; the only nested fields (`labels`, `git`) are small and flat, so a JSON compare is exact. */
+function sameRosterField(a: unknown, b: unknown): boolean {
+	if (a === b) return true;
+	if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** The fields of `prev` that `row` changes, absent ones as `undefined` (a store set of `undefined` deletes the key); undefined when nothing differs. */
+function rosterRowPatch(prev: DaemonEntry, row: DaemonEntry): Partial<DaemonEntry> | undefined {
+	const patch: Record<string, unknown> = {};
+	let changed = false;
+	const before = prev as unknown as Record<string, unknown>;
+	const after = row as unknown as Record<string, unknown>;
+	for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+		if (sameRosterField(before[key], after[key])) continue;
+		patch[key] = after[key];
+		changed = true;
+	}
+	return changed ? (patch as Partial<DaemonEntry>) : undefined;
+}
+
+/**
+ * Replace the roster with `next` while every surviving daemonId keeps its
+ * store object (same proxy, only changed fields notify), so keyed <For>
+ * consumers (sidebar rows) stay mounted across roster frames. Rows with new
+ * ids adopt the frame's object into the store; removed ids drop out; the
+ * array is only replaced when membership or order changed.
+ *
+ * Hand-rolled instead of solid's `reconcile`: the SSR store build the tests
+ * run on implements `reconcile` as an index-wise merge (no keying, holes on
+ * shrink), so identity could neither be guaranteed nor tested there.
+ */
+function applyRoster(next: readonly DaemonEntry[]): void {
+	const current = unwrap(state.daemonRoster);
+	const before = new Map(current.map((d) => [d.daemonId, d]));
+	batch(() => {
+		const rows = next.map((row) => {
+			const prev = before.get(row.daemonId);
+			if (prev === undefined || prev === row) return row;
+			const patch = rosterRowPatch(prev, row);
+			if (patch !== undefined) {
+				setState("daemonRoster", (d) => d.daemonId === row.daemonId, patch);
+			}
+			return prev;
+		});
+		if (rows.length !== current.length || rows.some((r, i) => r !== current[i])) {
+			setState("daemonRoster", rows);
+		}
+	});
 }
 
 /** Sort rank of a checkout row: main checkout, worktree, then clone. */
@@ -865,6 +942,75 @@ export function hasLiveSession(): boolean {
 	return pendingAttachTarget() === state.currentSessionId;
 }
 
+/** True while the transcript is waking, attaching or showing a failed switch: the
+ *  old session may still be attached underneath, so nothing may be sent to it. */
+export function isSwitching(): boolean {
+	const phase = state.transcriptPhase;
+	return phase === "waking" || phase === "attaching" || phase === "failed";
+}
+
+/** Apply one `roster` / `roster_delta` frame to the fleet roster and reconcile the attached session against it. */
+export function applyRosterFrame(
+	frame: Extract<ServerFrame, { type: "roster" | "roster_delta" }>,
+): void {
+	// A delta patches the current roster; the reconciliation below runs on
+	// the full list either way, so both frames settle identically. The
+	// store applies it with a keyed reconcile (below), so rows keep identity.
+	const daemons = frame.type === "roster" ? frame.daemons : mergeRosterDelta(frame);
+	// finding #P1: diff the replacement roster against what we had.
+	// First sighting is boot priming (silent); later transitions to
+	// ready/error announce.
+	const rosterBefore = state.daemonRoster;
+	for (const entry of daemons) {
+		announceDaemonStatus(
+			rosterBefore.find((d) => d.daemonId === entry.daemonId),
+			entry.name,
+			entry.status,
+		);
+	}
+	// The fleet edge's daemon roster (sidebar swaps to the session
+	// list).
+	// Phase 5: entries carry projectId (project-first grouping and
+	// linked-worktree eligibility). DaemonEntry owns those fields, so they
+	// flow through wholesale with the list.
+	// Surviving daemonIds keep their store object (fields patched, absent
+	// ones deleted), so keyed rows stay mounted across roster frames.
+	switchAwayFromRemoved(daemons);
+	idleBeforeSessionDies(daemons.find((d) => d.daemonId === state.currentSessionId));
+	applyRoster(daemons);
+	if (!state.rosterLoaded) setState("rosterLoaded", true);
+	settleProjectWakes();
+	resumeRestartedDaemons(daemons);
+	// Removed daemons never reuse ids, but don't let the set grow unbounded.
+	pruneUnread(new Set(daemons.map((d) => d.daemonId)));
+	// Same for daemonActivity: drop entries whose id left the roster.
+	// setState MERGES plain-object values, so a shrunken record would
+	// never delete keys. Reconcile diffs to the pruned record instead.
+	// Skip it when nothing dropped (no useless store notification).
+	{
+		const kept = new Set(daemons.map((d) => d.daemonId));
+		const current = state.daemonActivity;
+		let dropped = false;
+		const next: Record<string, { streaming: boolean; blocked: boolean }> = {};
+		for (const id of Object.keys(current)) {
+			if (kept.has(id)) next[id] = current[id]!;
+			else dropped = true;
+		}
+		if (dropped) setState("daemonActivity", reconcile(next));
+	}
+	// Persisted user-stop marks are confirmed (or dropped) against the roster first.
+	reconcileUserStopped(daemons);
+	// Roster truth wins over the attached chat: if the daemon we were
+	// attached to vanished or went asleep, drop the session view (the
+	// roster itself is fleet-scoped and survives).
+	reconcileAttachedSession();
+	pushDebug(
+		"info",
+		"roster",
+		`roster frame: ${daemons.length} session process${daemons.length === 1 ? "" : "es"}`,
+	);
+}
+
 /** Per-session UI state dropped when attaching to a different session. */
 function resetSessionView(): void {
 	setState("review", resetReviewState(state.review));
@@ -906,8 +1052,10 @@ function resetSessionView(): void {
 
 /** Roster truth wins over the attached chat column: after a roster or
  *  daemon_status update, if the daemon we are attached to is missing or
- *  terminal-dead (asleep/error), drop the session view. The roster itself
- *  is fleet-scoped and survives. Race guard: the clear MUST NOT fire while
+ *  terminal-dead (asleep/error), drop the session view. Only asleep/error mark the
+ *  session down (`sessionDownId`, the offline strip with Restart); a removed entry
+ *  just clears the view to the no-session pane, after switchAwayFromRemoved had its
+ *  chance to move to a neighbour. The roster itself is fleet-scoped and survives. Race guard: the clear MUST NOT fire while
  *  an attach to that daemon is in flight, since a freshly waking daemon reads
  *  as "asleep" in lagging roster frames right after wake-attach; the entry and
  *  in-flight state are re-checked against the POST-frame roster here. */
@@ -921,14 +1069,19 @@ function reconcileAttachedSession(): void {
 	if (pendingAttachTarget() === id) return;
 	const entry = state.daemonRoster.find((d) => d.daemonId === id);
 	if (!isDaemonDead(entry)) return;
-	// A removed entry is not a stop: drop its mark and clear the view as before.
+	// A removed entry is not a stop: drop its mark; the view clears without going offline.
 	if (entry === undefined) clearUserStopped(id);
 	// A user stop keeps the transcript behind the stopped strip; only readiness drops.
 	else if (isUserStopped(id)) {
 		setState("readyAt", undefined);
 		return;
 	}
-	setState("sessionDownId", id);
+	// Phase first: the transcript view is still mounted and reads it to fade
+	// the session out before the writes below empty it. A switch in flight to
+	// another daemon owns the phase (and still hides the old content).
+	if (state.transcriptTarget === null)
+		setState({ transcriptPhase: "idle", transcriptError: null, transcriptTarget: null });
+	if (entry !== undefined) setState("sessionDownId", id);
 	setState("currentSessionId", "");
 	setState("readyAt", undefined);
 	resetSessionView();
@@ -972,6 +1125,51 @@ export function bootAuth(): void {
 			);
 		}
 	});
+}
+/** The roster frame `next` is about to remove the attached daemon: open the nearest
+ *  ACTIVE session before it in the sidebar order (`daemonsByProject`: groups, then
+ *  rows), else the nearest after it. Active = `ready` or `reconnecting` (a live pair
+ *  re-dialing) in `next`, so opening it is a plain attach: a session is never woken
+ *  here. Skipped: asleep, error and transitional rows, rows of a missing project
+ *  (WorkspaceRow `blocked`: the row cannot be opened), rows pending delete (they may
+ *  be the next to vanish), and rows that vanish in this very frame (absent from
+ *  `next`). With none, the view clears to the no-session state with no offline strip
+ *  (reconcileAttachedSession). Must run BEFORE the roster write: the order is read
+ *  from the pre-removal roster, and the switch's phase write keeps the transcript
+ *  pane mounted so the removed session fades out. A user switch already in flight
+ *  (phase target or pending attach) wins. */
+function switchAwayFromRemoved(next: readonly DaemonEntry[]): void {
+	const id = state.currentSessionId;
+	if (id === "" || next.some((d) => d.daemonId === id)) return;
+	if (state.transcriptTarget !== null || pendingAttachTarget() !== null) return;
+	const rows = daemonsByProject().flatMap((g) =>
+		g.daemons.map((d) => ({ id: d.daemonId, projectMissing: g.project.missing === true })),
+	);
+	const at = rows.findIndex((r) => r.id === id);
+	if (at === -1) return;
+	const byId = new Map(next.map((d) => [d.daemonId, d]));
+	const active = (r: { id: string; projectMissing: boolean }): boolean => {
+		const status = byId.get(r.id)?.status;
+		return (
+			(status === "ready" || status === "reconnecting") &&
+			!r.projectMissing &&
+			!deletePendingIds().has(r.id)
+		);
+	};
+	const target = rows.slice(0, at).reverse().find(active) ?? rows.slice(at + 1).find(active);
+	if (target !== undefined) void switchToDaemon(target.id);
+}
+
+/** The roster is about to say the attached daemon is gone or dead (`next` is its entry
+ *  after the frame): the chat pane unmounts as soon as hasLiveSession() flips, i.e. with
+ *  the roster write itself, so the phase must already be idle by then for the
+ *  transcript to fade the session out. reconcileAttachedSession clears the session
+ *  right after. A switch in flight owns the phase and is left alone. */
+function idleBeforeSessionDies(next: DaemonEntry | undefined): void {
+	const id = state.currentSessionId;
+	if (id === "" || state.transcriptTarget !== null || pendingAttachTarget() === id) return;
+	if (!isDaemonDead(next) || (next !== undefined && isUserStopped(id))) return;
+	setState({ transcriptPhase: "idle", transcriptError: null, transcriptTarget: null });
 }
 
 export function connect(): void {
@@ -1206,59 +1404,9 @@ export function connect(): void {
 				);
 				break;
 			case "roster":
-			case "roster_delta": {
-				// A delta patches the current roster; the reconciliation below runs on
-				// the full list either way, so both frames settle identically.
-				const daemons = frame.type === "roster" ? frame.daemons : mergeRosterDelta(frame);
-				// finding #P1: diff the replacement roster against what we had.
-				// First sighting is boot priming (silent); later transitions to
-				// ready/error announce.
-				const rosterBefore = state.daemonRoster;
-				for (const entry of daemons) {
-					announceDaemonStatus(
-						rosterBefore.find((d) => d.daemonId === entry.daemonId),
-						entry.name,
-						entry.status,
-					);
-				}
-				// The fleet edge's daemon roster (sidebar swaps to the session
-				// list).
-				// Phase 5: entries carry projectId (project-first grouping and
-				// linked-worktree eligibility). DaemonEntry owns those fields, so they
-				// flow through wholesale with the array.
-				setState("daemonRoster", daemons);
-				settleProjectWakes();
-				resumeRestartedDaemons(daemons);
-				// Removed daemons never reuse ids, but don't let the set grow unbounded.
-				pruneUnread(new Set(daemons.map((d) => d.daemonId)));
-				// Same for daemonActivity: drop entries whose id left the roster.
-				// setState MERGES plain-object values, so a shrunken record would
-				// never delete keys. Reconcile diffs to the pruned record instead.
-				// Skip it when nothing dropped (no useless store notification).
-				{
-					const kept = new Set(daemons.map((d) => d.daemonId));
-					const current = state.daemonActivity;
-					let dropped = false;
-					const next: Record<string, { streaming: boolean; blocked: boolean }> = {};
-					for (const id of Object.keys(current)) {
-						if (kept.has(id)) next[id] = current[id]!;
-						else dropped = true;
-					}
-					if (dropped) setState("daemonActivity", reconcile(next));
-				}
-				// Persisted user-stop marks are confirmed (or dropped) against the roster first.
-				reconcileUserStopped(daemons);
-				// Roster truth wins over the attached chat: if the daemon we were
-				// attached to vanished or went asleep, drop the session view (the
-				// roster itself is fleet-scoped and survives).
-				reconcileAttachedSession();
-				pushDebug(
-					"info",
-					"roster",
-					`roster frame: ${daemons.length} session process${daemons.length === 1 ? "" : "es"}`,
-				);
+			case "roster_delta":
+				applyRosterFrame(frame);
 				break;
-			}
 			case "daemon_activity": {
 				// Edge-generated, fleet-scoped realtime activity for ANY ready daemon.
 				// It carries no sessionId, so it sails past the stale-frame guard above
@@ -1290,22 +1438,18 @@ export function connect(): void {
 			}
 			case "daemon_status": {
 				// finding #P1: announce the transition to a terminal rung
-				// (ready/error) before patching the entry in place.
+				// (ready/error) before patching the entry.
 				const daemonBefore = state.daemonRoster.find((d) => d.daemonId === frame.daemonId);
 				announceDaemonStatus(daemonBefore, daemonBefore?.name ?? frame.daemonId, frame.status);
-				// Patch the matching roster entry in place; the error field
-				// clears unless the frame carries a fresh one.
-				setState("daemonRoster", (roster) =>
-					roster.map((d) =>
-						d.daemonId === frame.daemonId
-							? {
-									...d,
-									status: frame.status,
-									...(frame.error !== undefined ? { error: frame.error } : { error: undefined }),
-								}
-							: d,
-					),
-				);
+				if (frame.daemonId === state.currentSessionId)
+					idleBeforeSessionDies(daemonBefore && { ...daemonBefore, status: frame.status });
+				// Path-patch only the matching entry: its store object keeps identity and
+				// only status/error notify. Setting `error: undefined` deletes the field,
+				// so it clears unless the frame carries a fresh one.
+				setState("daemonRoster", (d) => d.daemonId === frame.daemonId, {
+					status: frame.status,
+					error: frame.error,
+				});
 				settleProjectWakes();
 				pushDebug(
 					frame.status === "error" || frame.error !== undefined ? "error" : "info",
@@ -1555,6 +1699,7 @@ export {
 	setSidebarVisible,
 	closeDrawers,
 	startDaemonNewSession,
+	switchToDaemon,
 	wakeAndAttach,
 	setTxSidebarVisible,
 	setView,

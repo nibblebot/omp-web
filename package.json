@@ -21,7 +21,7 @@
 		"install:omp-web": "bun scripts/install-omp-web.ts",
 		"check": "bun run check:types && bun run lint && bun run format:check && bun run test",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
-		"lint": "bun scripts/check-lib-boundary.ts && oxlint",
+		"lint": "bun scripts/check-lib-boundary.ts && bun scripts/check-css-durations.ts && oxlint",
 		"format": "oxfmt",
 		"format:check": "oxfmt --check",
 		"test": "bun scripts/test.ts",

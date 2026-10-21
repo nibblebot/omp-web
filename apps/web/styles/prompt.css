@@ -14,6 +14,12 @@
 	/* Progressive enhancement: native content sizing where supported. */
 	field-sizing: content;
 }
+/* A switch in flight (isSwitching): the composer waits, dimmed, and cannot be focused. */
+.prompt-box textarea:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+	transition: opacity var(--dur-fast) var(--ease-out);
+}
 /* Composer mirror: magic keyword gradients and ghost text render in a layer
  * behind the textarea. The layer copies the textarea's box so glyphs line up. */
 .prompt-field {
@@ -427,7 +433,7 @@ button.stop:not(:disabled):hover {
 	box-shadow: var(--shadow-2);
 	z-index: var(--z-autocomplete);
 	transform-origin: bottom left;
-	animation: history-popover-in var(--dur-base) var(--ease-out);
+	animation: history-popover-in var(--dur-move-base) var(--ease-out);
 }
 @keyframes history-popover-in {
 	from {

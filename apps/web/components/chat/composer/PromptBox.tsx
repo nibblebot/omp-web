@@ -8,6 +8,7 @@ import {
 	dequeueLastQueued,
 	isReady,
 	isSessionChanging,
+	isSwitching,
 	pushNotice,
 	state,
 	stopTurn,
@@ -42,6 +43,9 @@ export const PromptBox: Component = () => {
 	let lastEsc = 0;
 
 	const submit = (mode: InputMode) => {
+		// A switch in flight: the old session is still attached underneath, so a
+		// prompt must never reach it.
+		if (isSwitching()) return;
 		// R8 readiness gate: the send button is disabled and Enter is suppressed
 		// until the server broadcasts `ready` (boot session's gate cleared), and
 		// while the transport is down (the connection strip explains why).

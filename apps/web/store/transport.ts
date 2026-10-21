@@ -398,6 +398,11 @@ export function isLatestAttachIntent(intent: number): boolean {
 	return intent === attachIntentSeq;
 }
 
+/** The latest attach intent without claiming a new one: the intent of the attach request just made (attachSession claims its own). */
+export function currentAttachIntent(): number {
+	return attachIntentSeq;
+}
+
 type AttachCmd = Extract<ClientCommand, { type: "attach" }>;
 
 function requestAttach(cmd: AttachCmd): Promise<string> {

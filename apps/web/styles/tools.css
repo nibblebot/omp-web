@@ -238,7 +238,7 @@ pre.terminal {
 .background-bar {
 	min-width: 0;
 	padding: var(--space-3) var(--space-5);
-	animation: background-bar-in 180ms ease-out;
+	animation: background-bar-in var(--dur-move-base) var(--ease-out);
 }
 /* One-line "N <label>" toggle: shown only on short viewports (below). */
 .background-bar-summary {

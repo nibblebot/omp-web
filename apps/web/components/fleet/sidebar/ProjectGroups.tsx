@@ -1,4 +1,5 @@
 import {
+	createComputed,
 	createEffect,
 	createMemo,
 	createSignal,
@@ -10,8 +11,11 @@ import {
 } from "solid-js";
 import type { DaemonEntry, RegisteredProject } from "#lib/wire/protocol";
 import { projectRollup } from "../../../fleet-ui/workspace-status";
+import { afterMotion } from "../../../motion/presence";
 import { setState, state } from "../../../state";
 import {
+	clearAllDeletePending,
+	clearDeletePending,
 	closeNewWorkspace,
 	fetchOmpSetup,
 	openNewWorkspace,
@@ -20,6 +24,13 @@ import {
 import { KebabMenu } from "../../ui/KebabMenu";
 import { ChevronDownIcon, PlusIcon, TrashIcon } from "../../ui/icons";
 import { NewWorkspacePopover } from "./NewWorkspacePopover";
+import { RowMotion } from "./RowMotion";
+import {
+	finishRowExit,
+	initialRowSlots,
+	reconcileRowSlots,
+	type RowSlot,
+} from "../../../fleet-ui/row-presence";
 import { WorkspaceRow, menuOpenId, setMenuOpenId } from "./WorkspaceRow";
 
 // ---------------------------------------------------------------------------
@@ -28,7 +39,10 @@ import { WorkspaceRow, menuOpenId, setMenuOpenId } from "./WorkspaceRow";
 // workspace popover (anchored to the header), and a "⋯" menu with Remove
 // project. Rows are one per checkout (main checkout, worktrees, clones).
 // Per-group collapse state persists in localStorage. Row and project menus
-// share the single module-level open-menu id (WorkspaceRow.tsx).
+// share the single module-level open-menu id (WorkspaceRow.tsx). Each group
+// renders its rows through RowMotion: a row new to the roster enters, a row
+// that left it stays rendered (inert) until its exit motion ends
+// (fleet-ui/row-presence.ts derives that list).
 // ---------------------------------------------------------------------------
 
 /** localStorage key for the roster sidebar's collapsed group headers. */
@@ -82,6 +96,17 @@ const EmptyProjects: Component = () => {
 };
 
 export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) => {
+	// A delete refusal arrives as an uncorrelated error frame (state.error): the
+	// pending-delete dims un-dim. A transport failure clears its own (store/projects.ts).
+	createEffect(
+		on(
+			() => state.error,
+			(err) => {
+				if (err !== null) clearAllDeletePending();
+			},
+			{ defer: true },
+		),
+	);
 	const [collapsedGroups, setCollapsedGroups] = createSignal<Set<string>>(readCollapsedGroups());
 
 	/** Flip a group's collapse state and persist the updated key set.
@@ -118,12 +143,46 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 		let groupRef!: HTMLDivElement;
 
 		// Palette or session-picker highlight: bring the group into view; the
-		// flash class follows highlightProjectId (cleared by the store).
+		// flash class follows highlightProjectId, which is released when the
+		// flash animation ends (the flash length lives only in CSS).
 		createEffect(
 			on(highlighted, (hit) => {
-				if (hit) groupRef.scrollIntoView({ block: "nearest", behavior: "smooth" });
+				if (!hit) return;
+				groupRef.scrollIntoView({ block: "nearest", behavior: "smooth" });
+				const projectId = props.project.projectId;
+				void afterMotion(groupRef).then(() => {
+					if (state.highlightProjectId === projectId) setState("highlightProjectId", null);
+				});
 			}),
 		);
+
+		// Rendered rows: the live ones plus rows still playing their exit. Seeded
+		// from the first render, so page load never animates; a row enters only
+		// when its daemonId was not rendered before. The roster counts as arrived
+		// only after the first roster frame (`armed` trails state.rosterLoaded by
+		// one run), so the frame that fills an initially empty list animates
+		// nothing. A collapsed group animates nothing either: expanding it never
+		// counts its rows as new.
+		const [slots, setSlots] = createSignal<RowSlot<DaemonEntry>[]>(
+			initialRowSlots(props.daemons, (d) => d.daemonId),
+		);
+		let armed = state.rosterLoaded;
+		createComputed(
+			on(
+				[() => props.daemons, open, () => state.rosterLoaded],
+				([daemons, isOpen, loaded]) => {
+					const live = new Set(daemons.map((d) => d.daemonId));
+					for (const slot of slots()) if (!live.has(slot.id)) clearDeletePending(slot.id);
+					setSlots((prev) => reconcileRowSlots(prev, daemons, (d) => d.daemonId, isOpen && armed));
+					armed = loaded;
+				},
+				{ defer: true },
+			),
+		);
+		const rowIds = createMemo(() => slots().map((s) => s.id), [], {
+			equals: (a, b) => a.length === b.length && a.every((id, i) => id === b[i]),
+		});
+		const slotsById = createMemo(() => new Map(slots().map((s) => [s.id, s])));
 
 		const onPlus = () => {
 			if (popoverOpen()) {
@@ -211,15 +270,30 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 					)}
 				</Show>
 				<Show when={open()}>
-					<For each={props.daemons}>
-						{(d) => (
-							<WorkspaceRow
-								daemon={d}
-								nested={d.worktreeOf !== undefined}
-								inProjectGroup
-								projectMissing={missing()}
-							/>
-						)}
+					{/* Keyed by daemonId: slots are rebuilt on every roster change and a
+					    row must keep its DOM (and any open menu) across them. */}
+					<For each={rowIds()}>
+						{(id) => {
+							const first = slotsById().get(id)!;
+							const slot = () => slotsById().get(id) ?? first;
+							return (
+								<RowMotion
+									id={id}
+									mode={slot().mode}
+									onExited={(done) => {
+										clearDeletePending(done);
+										setSlots((prev) => finishRowExit(prev, done));
+									}}
+								>
+									<WorkspaceRow
+										daemon={slot().item}
+										nested={slot().item.worktreeOf !== undefined}
+										inProjectGroup
+										projectMissing={missing()}
+									/>
+								</RowMotion>
+							);
+						}}
 					</For>
 				</Show>
 			</>
