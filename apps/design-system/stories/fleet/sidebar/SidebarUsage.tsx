@@ -11,11 +11,28 @@ export default defineStory({
 	variants: [
 		{
 			name: "Loaded limits",
+			// Two minutes into the five-minute countdown: the ring is three fifths full.
 			seed: () =>
 				seedRosterFleet({
 					usageReports: rosterUsageReports,
 					usageLoading: false,
 					usageError: null,
+					usageRefreshedAt: Date.now() - 2 * 60_000,
+				}),
+			render: () => (
+				<div class="ds-frame">
+					<SidebarUsage />
+				</div>
+			),
+		},
+		{
+			name: "Refreshing",
+			seed: () =>
+				seedRosterFleet({
+					usageReports: rosterUsageReports,
+					usageLoading: true,
+					usageError: null,
+					usageRefreshedAt: Date.now() - 5 * 60_000,
 				}),
 			render: () => (
 				<div class="ds-frame">
@@ -25,7 +42,13 @@ export default defineStory({
 		},
 		{
 			name: "Loading",
-			seed: () => seedRosterFleet({ usageReports: null, usageLoading: true, usageError: null }),
+			seed: () =>
+				seedRosterFleet({
+					usageReports: null,
+					usageLoading: true,
+					usageError: null,
+					usageRefreshedAt: null,
+				}),
 			render: () => (
 				<div class="ds-frame">
 					<SidebarUsage />

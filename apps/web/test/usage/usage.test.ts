@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { UsageLimit, UsageWindow } from "@oh-my-pi/pi-ai";
 import {
 	buildUsageRow,
 	formatAmount,
@@ -7,6 +8,7 @@ import {
 	formatUnitAmount,
 	formatUsageRow,
 	formatTimeRemaining,
+	resolveElapsedFraction,
 	usageBrand,
 	type UsageLike,
 } from "../../usage/usage";
@@ -142,3 +144,48 @@ describe("usageBrand", () => {
 function usage(): UsageLike {
 	return { input: 1200, output: 340, cacheRead: 0, cacheWrite: 0 };
 }
+
+describe("resolveElapsedFraction", () => {
+	const now = Date.parse("2026-10-09T10:00:00Z");
+	const HOUR = 3_600_000;
+	const limit = (window: Partial<UsageWindow>): UsageLimit => ({
+		id: "5h",
+		label: "5 Hour",
+		scope: { provider: "anthropic" },
+		window: { id: "5h", label: "5 Hour", ...window },
+		amount: { unit: "percent", usedFraction: 0.5 },
+	});
+
+	test("elapsed share of the window, clamped to 0..1", () => {
+		expect(
+			resolveElapsedFraction(limit({ durationMs: 5 * HOUR, resetsAt: now + 4 * HOUR }), now),
+		).toBeCloseTo(0.2);
+		expect(
+			resolveElapsedFraction(limit({ durationMs: 5 * HOUR, resetsAt: now + 5 * HOUR }), now),
+		).toBe(0);
+		// A stale report (reset already passed) and a reset further out than the window clamp.
+		expect(resolveElapsedFraction(limit({ durationMs: 5 * HOUR, resetsAt: now - HOUR }), now)).toBe(
+			1,
+		);
+		expect(
+			resolveElapsedFraction(limit({ durationMs: 5 * HOUR, resetsAt: now + 6 * HOUR }), now),
+		).toBe(0);
+	});
+
+	test("no marker without a full window, or when resetsAt is a regen tick", () => {
+		expect(resolveElapsedFraction(limit({ resetsAt: now + HOUR }), now)).toBeUndefined();
+		expect(resolveElapsedFraction(limit({ durationMs: 5 * HOUR }), now)).toBeUndefined();
+		expect(
+			resolveElapsedFraction(
+				limit({ durationMs: 5 * HOUR, resetsAt: now + HOUR, resetLabel: "tick" }),
+				now,
+			),
+		).toBeUndefined();
+		expect(
+			resolveElapsedFraction(
+				limit({ durationMs: 5 * HOUR, resetsAt: now + HOUR, resetLabel: "resets" }),
+				now,
+			),
+		).toBeCloseTo(0.8);
+	});
+});

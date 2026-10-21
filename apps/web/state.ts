@@ -550,6 +550,9 @@ export const [state, setState] = createStore({
 	usageReports: null as UsageReport[] | null,
 	usageLoading: false as boolean,
 	usageError: null as string | null,
+	// Epoch ms the last /ctl/usage fetch settled (success or failure); null
+	// before the first. Anchors the sidebar widget's auto-refresh countdown.
+	usageRefreshedAt: null as number | null,
 	// Phase 11: /btw side-panel session. streamId routes ephemeral_delta
 	// frames to this panel; the panel never appears in the transcript.
 	btw: createBtwState(),
@@ -1734,7 +1737,7 @@ export {
 export { checkSession, signIn, signOut } from "./store/auth";
 export { isUserStopped } from "./store/user-stopped";
 export { refreshSettings, updateSetting } from "./store/settings";
-export { refreshUsageReports, setSidebarUsage } from "./store/usage";
+export { refreshUsageReports, setSidebarUsage, USAGE_AUTO_REFRESH_MS } from "./store/usage";
 export {
 	DEBUG_RING_CAP,
 	fetchCtlDebug,

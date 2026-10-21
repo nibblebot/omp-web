@@ -6,12 +6,16 @@ import { ctlError } from "./settings";
 /**
  * Usage domain (Phase 3 store facade split): provider usage reports from the
  * fleet control plane (GET /ctl/usage), mirrored into state.usage* with
- * one-shot, single-flight refresh semantics. Usage is provider-account data,
+ * single-flight refresh semantics. Usage is provider-account data,
  * not session data, so it needs neither the /events stream nor an attached
  * session. The SDK caches provider /usage for ~5min upstream (with jitter),
- * so callers must never poll; they re-run refreshUsageReports() on mount or
- * on user action and read the mirror.
+ * so the only periodic caller is the sidebar widget, re-running
+ * refreshUsageReports() USAGE_AUTO_REFRESH_MS after the last fetch settled;
+ * everything else refreshes on mount or on user action and reads the mirror.
  */
+
+/** Auto-refresh period, matching the SDK's upstream usage cache. */
+export const USAGE_AUTO_REFRESH_MS = 5 * 60_000;
 
 /** localStorage key for the Phase 12 roster-sidebar usage widget toggle. */
 const USAGE_SIDEBAR_KEY = "omp.sidebarUsage";
@@ -22,7 +26,8 @@ const USAGE_SIDEBAR_KEY = "omp.sidebarUsage";
  * and clears state.usageError; failure lands in
  * state.usageError (the {error} message of a non-ok response, else the thrown
  * message). state.usageLoading tracks the in-flight window for both the modal
- * and the sidebar widget.
+ * and the sidebar widget; state.usageRefreshedAt stamps when it settled,
+ * success or failure, and anchors the next auto-refresh.
  */
 export function refreshUsageReports(): void {
 	if (state.usageLoading) return;
@@ -36,7 +41,7 @@ export function refreshUsageReports(): void {
 		} catch (err) {
 			setState("usageError", err instanceof Error ? err.message : String(err));
 		} finally {
-			setState("usageLoading", false);
+			setState({ usageLoading: false, usageRefreshedAt: Date.now() });
 		}
 	})();
 }

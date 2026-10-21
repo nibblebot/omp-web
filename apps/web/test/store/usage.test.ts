@@ -80,6 +80,7 @@ beforeEach(() => {
 		usageReports: null,
 		usageLoading: false,
 		usageError: null,
+		usageRefreshedAt: null,
 		authStatus: "disabled",
 	});
 });
@@ -93,8 +94,10 @@ describe("usage store slice", () => {
 		connect(); // EventSource exists but onopen never fires: the page-load window
 		const requests = stubFetch(() => ({ status: 200, body: reportsFixture() }));
 
+		const before = Date.now();
 		refreshUsageReports();
 		expect(state.usageLoading).toBe(true);
+		expect(state.usageRefreshedAt).toBeNull();
 		await settle();
 
 		// Exactly one GET; nothing went to POST /command.
@@ -103,6 +106,8 @@ describe("usage store slice", () => {
 		expect(state.usageLoading).toBe(false);
 		expect(state.usageError).toBeNull();
 		expect(state.usageReports).toEqual(reportsFixture());
+		// The settle time anchors the sidebar's auto-refresh countdown.
+		expect(state.usageRefreshedAt).toBeGreaterThanOrEqual(before);
 	});
 
 	test("a second refresh while loading issues no second GET", async () => {
@@ -134,6 +139,8 @@ describe("usage store slice", () => {
 		expect(state.usageLoading).toBe(false);
 		expect(state.usageError).toBe("Usage endpoint returned 503");
 		expect(state.usageReports).toBeNull();
+		// A failure also restarts the countdown, so a broken endpoint is retried on schedule, not hammered.
+		expect(state.usageRefreshedAt).not.toBeNull();
 	});
 
 	test("a successful refresh clears a previous usageError; a null body means []", async () => {

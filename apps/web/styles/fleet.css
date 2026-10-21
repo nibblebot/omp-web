@@ -204,6 +204,33 @@
 	text-transform: uppercase;
 	letter-spacing: 0.05em;
 }
+/* Refresh button: a countdown ring to the next automatic refresh (draining
+   clockwise from 12 o'clock) around a small refresh glyph. */
+.sidebar-usage-refresh {
+	display: inline-grid;
+	place-items: center;
+}
+.sidebar-usage-refresh > * {
+	grid-area: 1 / 1;
+}
+.sidebar-usage-ring {
+	width: 18px;
+	height: 18px;
+	transform: rotate(-90deg);
+	fill: none;
+	stroke-width: 2;
+}
+.sidebar-usage-ring-track {
+	stroke: var(--border);
+}
+.sidebar-usage-ring-fill {
+	stroke: var(--accent);
+	transition: stroke-dashoffset var(--dur-move-base) var(--ease-out);
+}
+.sidebar-usage-refresh .sidebar-usage-refresh-icon {
+	width: 10px;
+	height: 10px;
+}
 .sidebar-usage-empty {
 	color: var(--muted);
 	font-size: var(--fs-micro);
@@ -246,10 +273,10 @@
 	row-gap: var(--usage-gap);
 }
 .sidebar-usage-bar {
+	position: relative; /* anchors the elapsed tick, which overhangs by 1px */
 	height: 100%;
 	border-radius: var(--r-xs);
 	background: var(--border);
-	overflow: hidden;
 }
 .sidebar-usage-bar-fill {
 	height: 100%;
@@ -261,6 +288,16 @@
 }
 .sidebar-usage-bar[data-status="exhausted"] .sidebar-usage-bar-fill {
 	background: var(--error);
+}
+/* How far through the window we are: a muted red 1px tick over the fill,
+   1px taller than the bar at each edge. */
+.sidebar-usage-bar-elapsed {
+	position: absolute;
+	top: -1px;
+	bottom: -1px;
+	width: 1px;
+	background: var(--error);
+	opacity: 0.7;
 }
 .sidebar-usage-reset {
 	color: var(--muted);

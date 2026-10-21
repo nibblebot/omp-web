@@ -112,6 +112,22 @@ export function resolveUsedFraction(limit: UsageLimit): number | undefined {
 	return undefined;
 }
 
+/**
+ * Fraction of a limit's window already elapsed (0..1) at `nowMs`, to set
+ * against its used fraction. Undefined without both `durationMs` and
+ * `resetsAt`, or when `resetLabel` marks `resetsAt` as a regen/tick step
+ * rather than the window end.
+ */
+export function resolveElapsedFraction(limit: UsageLimit, nowMs: number): number | undefined {
+	const w = limit.window;
+	if (!w || (w.resetLabel !== undefined && w.resetLabel !== "resets")) return undefined;
+	const { durationMs, resetsAt } = w;
+	if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0)
+		return undefined;
+	if (typeof resetsAt !== "number" || !Number.isFinite(resetsAt)) return undefined;
+	return Math.max(0, Math.min(1, 1 - (resetsAt - nowMs) / durationMs));
+}
+
 /** Brand whose logo marks a provider account in the sidebar usage panel. */
 export type UsageBrand = "anthropic" | "openai" | "opencode";
 
