@@ -57,11 +57,12 @@
  *   carry only the bare function name: JSON.stringify is `stringify`,
  *   JSON.parse is `parse`, TextEncoder.encode is `encode`, TextDecoder.decode
  *   is `decode`, ReadableStreamDefaultController.enqueue is `enqueue`,
- *   writer/socket writes are `write` / `writeBuffered`, and Bun's
+ *   writer/socket writes are `write` / `writeBuffered` (and `send` for
+ *   WebSocket.send: matched by name, not yet confirmed in a /ws profile), and Bun's
  *   stream-to-sink machinery is `onReadStreamIntoSinkChunk`,
  *   `onRSDefaultControllerPullFulfilled`, `onWSSinkWriteFulfilled`,
  *   `onNativePullFulfilled`, `boundReadStreamIntoSinkOnReady` (the session's
- *   NDJSON up-POST body alone was 723 of 3000 samples in a streaming turn).
+ *   former NDJSON up-POST body alone was 723 of 3000 samples in a streaming turn).
  *   JS frames carry a `file://` url and a 0-based lineNumber.
  * - Bare `parse` / `stringify` are ambiguous (YAML, TOML, URL, Date natives
  *   have the same names); they are booked to `json-stringify-parse` unless the
@@ -73,7 +74,7 @@ import { basename } from "node:path";
 /** Bucket ids, in report order. `idle` is excluded from the percentage base. */
 export const BUCKET_NAMES = [
 	"json-stringify-parse",
-	"sse-ndjson-encode",
+	"wire-encode",
 	"stream-enqueue-write",
 	"other",
 	"gc",
@@ -223,24 +224,35 @@ const JSON_NATIVE = /^(stringify|parse|json|JSON\.stringify|JSON\.parse)$/;
 const NOT_JSON_CALLER = /yaml|toml|json5|jsonc|\burl\b|date|semver|path/i;
 /** TextEncoder.encode / encodeInto / TextDecoder.decode builtins. */
 const ENCODE_NATIVE = /^(encode|encodeInto|decode)$/;
-/** Stream/sink/socket builtins: controller.enqueue, writer.write, Bun's stream-to-sink callbacks. */
+/** Stream/sink/socket builtins: controller.enqueue, writer.write, WebSocket.send, Bun's stream-to-sink callbacks. */
 const STREAM_NATIVE =
-	/^(enqueue|write|writev|writeBuffered|pull|onReadStream\w*|onRSDefaultController\w*|onWSSink\w*|onNative\w*|boundReadStreamIntoSink\w*)$/;
+	/^(enqueue|write|writev|writeBuffered|send|pull|onReadStream\w*|onRSDefaultController\w*|onWSSink\w*|onNative\w*|boundReadStreamIntoSink\w*)$/;
 
 /**
  * Repo functions classified by name and file (the url is matched as a suffix
  * so `file://` and worktree location do not matter). Derived from the encode
- * / enqueue call sites: lib/wire/sse.ts and lib/wire/callback-protocol.ts
- * build the SSE and NDJSON text; edge.ts `#enqueue`, daemon-transport.ts
- * `#writeDown` and fleet-callback.ts `#pump` are the controller.enqueue
- * loops (fleet-callback.ts `#enqueue` is the pending queue and is NOT one).
- * pi-utils json.ts `stringifyJson` is the session persistence stringify.
+ * / send call sites: `wire-encode` is the socket message build path, i.e. the
+ * lib/wire/browser-socket.ts builders that splice the browser socket's
+ * `{"seq":N,"frame":...}` / ping / ack / nack / `{"cmd":...}` messages (the
+ * successor of the SSE `encodeSseEvent*` bucket entries) and the callback pair's
+ * lib/wire/callback-protocol.ts `encodeEnvelopeAround`, plus the TextEncoder /
+ * TextDecoder natives. The actual socket write (`ws.send`) is a native and
+ * lands in `stream-enqueue-write` with the other write natives. edge.ts
+ * `#enqueue`, daemon-transport.ts `#writeDown` and fleet-callback.ts `#pump`
+ * are the enqueue loops (fleet-callback.ts `#enqueue` is the pending queue and
+ * is NOT one). pi-utils json.ts `stringifyJson` is the session persistence
+ * stringify.
  */
 const JS_RULES: Array<{ bucket: BucketName; url: RegExp; fn: RegExp }> = [
 	{
-		bucket: "sse-ndjson-encode",
-		url: /lib\/wire\/(sse|callback-protocol)\.ts$/,
-		fn: /^(encodeSseEvent|encodeSseEventData|encodeSseEnvelope|encodeNdjsonLine)$/,
+		bucket: "wire-encode",
+		url: /lib\/wire\/browser-socket\.ts$/,
+		fn: /^(seqFrameMessage|frameMessage|pingMessage|ackMessage|nackMessage|commandMessage)$/,
+	},
+	{
+		bucket: "wire-encode",
+		url: /lib\/wire\/callback-protocol\.ts$/,
+		fn: /^encodeEnvelopeAround$/,
 	},
 	{ bucket: "stream-enqueue-write", url: /apps\/fleet\/edge\.ts$/, fn: /^#enqueue$/ },
 	{ bucket: "stream-enqueue-write", url: /apps\/fleet\/daemon-transport\.ts$/, fn: /^#writeDown$/ },
@@ -261,7 +273,7 @@ function classify(frame: CallFrame, callerName: string): BucketName {
 			const ambiguous = name === "parse" || name === "stringify";
 			return ambiguous && NOT_JSON_CALLER.test(callerName) ? "other" : "json-stringify-parse";
 		}
-		if (ENCODE_NATIVE.test(name)) return "sse-ndjson-encode";
+		if (ENCODE_NATIVE.test(name)) return "wire-encode";
 		if (STREAM_NATIVE.test(name)) return "stream-enqueue-write";
 		return "other";
 	}
@@ -301,7 +313,7 @@ export async function bucketCpuProfile(
 	const capUs = periodUs * IDLE_GAP_PERIODS;
 	const ms: Record<BucketName, number> = {
 		"json-stringify-parse": 0,
-		"sse-ndjson-encode": 0,
+		"wire-encode": 0,
 		"stream-enqueue-write": 0,
 		other: 0,
 		gc: 0,
@@ -349,11 +361,7 @@ export async function bucketCpuProfile(
 		}
 	}
 	const totalMs =
-		ms["json-stringify-parse"] +
-		ms["sse-ndjson-encode"] +
-		ms["stream-enqueue-write"] +
-		ms.other +
-		ms.gc;
+		ms["json-stringify-parse"] + ms["wire-encode"] + ms["stream-enqueue-write"] + ms.other + ms.gc;
 	const windowMs = windowUs / 1000;
 	const buckets = {} as Record<BucketName, BucketStat>;
 	for (const name of BUCKET_NAMES) {

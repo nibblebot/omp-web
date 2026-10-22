@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { ProfileClient, RecoveryFailed } from "./client";
 import { BROWSER_SCENARIO, runBrowserScenario } from "./browser-pass";
 import { loadSummary, compareSummaries, renderComparisonMarkdown } from "./compare";
-import { ssePostAdapter } from "./adapters/sse-post";
+import { wsAdapter } from "./adapters/ws";
 import { startFakeModelProcess, type FakeModelProcess } from "./fake-process";
 import { collectFingerprint } from "./host";
 import { joinLatency } from "./latency";
@@ -146,7 +146,7 @@ export async function runProfile(
 			stack: liveStack,
 			fake: liveFake,
 			sendLog,
-			adapter: ssePostAdapter,
+			adapter: wsAdapter,
 			pin,
 			durationMs: options.durationMs,
 			quick: options.quick,
@@ -292,7 +292,7 @@ export async function runProfile(
 		const fingerprint = await collectFingerprint({
 			repoRoot,
 			pin,
-			transport: ssePostAdapter.name,
+			transport: wsAdapter.name,
 			...(chromium !== undefined ? { chromium } : {}),
 		});
 		await liveFake.close();

@@ -1,121 +1,21 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import type { Mock } from "bun:test";
-import { SSE_EVENT_NAME } from "#lib/wire/protocol";
-import { encodeSseEvent, SSE_PING_BLOCK } from "#lib/wire/sse";
-import { ssePostAdapter } from "../adapters/sse-post";
+import { wsAdapter } from "../adapters/ws";
 import { ProfileClient } from "../client";
+import { FakeFleet, type Frame } from "./fake-fleet";
 
 /**
  * `ProfileClient.prompt()` replays a command the edge answered `call_result ok:false
- * "not attached"` after the next `attached` frame, re-posting the SAME id (the web store's
+ * "not attached"` after the next `attached` frame, re-sending the SAME id (the web store's
  * parked-call replay, apps/web/store/transport.ts). The real run only hits this in the few ms
- * between two callback pairs, so it is driven here against a minimal fake fleet: GET /events
- * SSE frames (real lib/wire encoders) and POST /command 202.
+ * between two callback pairs, so it is driven here against a minimal fake fleet (./fake-fleet.ts):
+ * `GET /ws` frames (real lib/wire/browser-socket builders) and an ack per command.
  *
  * No test waits on a guessed duration: the replay path logs to stderr right before it starts
  * waiting for the re-attach, so the spy's call is the "client is parked" signal, and "the turn
  * has not ended yet" is asserted after a `ping` call round trip (the fleet answers it), which
- * is issued after the re-post's 202 was written and so completes after the client handled it.
+ * is issued after the re-send's ack was written and so completes after the client handled it.
  */
-
-interface PostedCommand {
-	type: string;
-	id: string;
-	method: string;
-	args: unknown[];
-}
-
-type Frame = Record<string, unknown> & { type: string };
-
-class FakeFleet {
-	readonly commands: PostedCommand[] = [];
-	/** How many priming groups the fleet had sent when each command arrived. */
-	readonly primesAtPost: number[] = [];
-	#primes = 0;
-	readonly #server: Bun.Server<undefined>;
-	readonly #encoder = new TextEncoder();
-	#downlink: ReadableStreamDefaultController<Uint8Array> | undefined;
-	#seq = 0;
-	readonly #commandWaiters: Array<{ n: number; resolve: (c: PostedCommand) => void }> = [];
-
-	constructor() {
-		this.#server = Bun.serve({
-			port: 0,
-			hostname: "127.0.0.1",
-			// The downlink stays open for the whole test.
-			idleTimeout: 0,
-			fetch: async (req) => {
-				const url = new URL(req.url);
-				if (req.method === "GET" && url.pathname === "/events") {
-					const body = new ReadableStream<Uint8Array>({
-						start: (controller) => {
-							this.#downlink = controller;
-							// Flushes the response headers; the adapter skips pings.
-							controller.enqueue(this.#encoder.encode(SSE_PING_BLOCK));
-						},
-					});
-					return new Response(body, {
-						headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
-					});
-				}
-				if (req.method === "POST" && url.pathname === "/command") {
-					const command = (await req.json()) as PostedCommand;
-					this.commands.push(command);
-					this.primesAtPost.push(this.#primes);
-					if (command.method === "ping")
-						this.push({ type: "call_result", id: command.id, ok: true });
-					for (const waiter of this.#commandWaiters.splice(0)) {
-						if (this.commands.length >= waiter.n) waiter.resolve(this.commands[waiter.n - 1]!);
-						else this.#commandWaiters.push(waiter);
-					}
-					return new Response(null, { status: 202 });
-				}
-				return new Response("not found", { status: 404 });
-			},
-		});
-	}
-
-	get baseUrl(): string {
-		return `http://127.0.0.1:${this.#server.port}`;
-	}
-
-	/** Resolves with the nth (1-based) command posted so far or yet to come. */
-	command(n: number): Promise<PostedCommand> {
-		const have = this.commands[n - 1];
-		if (have !== undefined) return Promise.resolve(have);
-		const { promise, resolve } = Promise.withResolvers<PostedCommand>();
-		this.#commandWaiters.push({ n, resolve });
-		return promise;
-	}
-
-	push(...frames: Frame[]): void {
-		for (const frame of frames) {
-			this.#downlink?.enqueue(
-				this.#encoder.encode(encodeSseEvent(SSE_EVENT_NAME, frame, ++this.#seq)),
-			);
-		}
-	}
-
-	/** The edge's priming group for an attach: attached, state, history, available_commands. */
-	prime(isStreaming: boolean): void {
-		this.#primes++;
-		this.push(
-			{ type: "attached", sessionId: "s1" },
-			{ type: "state", state: { isStreaming } },
-			{ type: "history", messages: [], final: true },
-			{ type: "available_commands", commands: [] },
-		);
-	}
-
-	async stop(): Promise<void> {
-		try {
-			this.#downlink?.close();
-		} catch {
-			// Already closed by the client.
-		}
-		await this.#server.stop(true);
-	}
-}
 
 const notAttached = (id: string): Frame => ({
 	type: "call_result",
@@ -143,7 +43,7 @@ beforeEach(async () => {
 	// The replay path logs to stderr by design; keep the output clean and use it as the signal.
 	errorSpy = spyOn(console, "error").mockImplementation(() => parked.resolve());
 	fleet = new FakeFleet();
-	client = await ProfileClient.connect(ssePostAdapter, fleet.baseUrl, { resilient: false });
+	client = await ProfileClient.connect(wsAdapter, fleet.baseUrl, { resilient: false });
 });
 
 /** Barrier, then assert `turn` has not settled. */
@@ -158,7 +58,7 @@ afterEach(async () => {
 	errorSpy.mockRestore();
 });
 
-test("not-attached prompt is re-posted once with the same id after the re-attach; the re-prime idle state does not end the turn", async () => {
+test("not-attached prompt is re-sent once with the same id after the re-attach; the re-prime idle state does not end the turn", async () => {
 	const turn = client.prompt("hello", 10_000, 10_000);
 	turn.catch(() => undefined);
 
@@ -172,7 +72,7 @@ test("not-attached prompt is re-posted once with the same id after the re-attach
 	fleet.prime(false);
 	const second = await fleet.command(2);
 	expect(second).toEqual(first);
-	// Re-posted only after the re-attach.
+	// Re-sent only after the re-attach.
 	expect(fleet.primesAtPost).toEqual([0, 1]);
 	await expectTurnPending(turn);
 
@@ -186,7 +86,7 @@ test("not-attached prompt is re-posted once with the same id after the re-attach
 	expect(timings.turnMs).toBeGreaterThan(0);
 	expect(client.pendingWaiters).toBe(0);
 
-	// Exactly one re-post: never a third copy, and the same id both times.
+	// Exactly one re-send: never a third copy, and the same id both times.
 	expect(fleet.commands.filter((c) => c.method === "prompt").map((c) => c.id)).toEqual([
 		first.id,
 		first.id,

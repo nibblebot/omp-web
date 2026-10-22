@@ -5,8 +5,8 @@
  *
  * The fake model (`./fake-model/server.ts`) writes one NDJSON line per streamed
  * text chunk to its send log: `{ route, req, contentIndex, offset, sendNs }`.
- * A client observing the browser wire (`GET /events` SSE frames, see
- * `apps/session/sse-delivery.ts` `toWireEvent`) derives the same key from frames
+ * A client observing the browser wire (`GET /ws` frames, see `lib/wire/browser-socket.ts`
+ * and `toWireEvent` in `apps/session/`) derives the same key from frames
  * it already sees, with no markers in model text:
  *
  * - `route`: the label the scenario passed to the directive builder
@@ -30,8 +30,8 @@
  *   the `text_delta` frames for that (req, contentIndex) up to and including
  *   this one. A delta that arrives coalesced from several sent chunks yields an
  *   offset equal to the last chunk's offset, so it still matches that chunk.
- * - `recvNs`: `monotonicNs()` (`./clock.ts`) stamped by the client when the SSE
- *   unit carrying the frame was parsed. Bun's own `process.hrtime.bigint()` is
+ * - `recvNs`: `monotonicNs()` (`./clock.ts`) stamped by the client when the socket
+ *   message carrying the frame arrived (before it was parsed). Bun's own `process.hrtime.bigint()` is
  *   relative to process start and must not be used here. The send log uses the
  *   same CLOCK_MONOTONIC reading, so the difference is the end-to-end stream latency
  *   (model write -> session -> fleet -> client). A Chromium client stamps wall

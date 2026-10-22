@@ -2,15 +2,15 @@
  * Synthetic browser client: one fleet connection behind a TransportAdapter,
  * instrumented with the measurements the scenarios report.
  *
- * - command RTT: `call()` stamps POST start and the matching `call_result`
- *   frame's receive time (both `monotonicNs()`).
+ * - command RTT: `call()` stamps the command send and the matching `call_result`
+ *   frame's receive time (both `monotonicNs()`); the socket's ack is not the answer.
  * - stream latency: every main-session `text_delta` becomes a RecvRecord keyed
  *   (route, req, contentIndex, cumulative offset) exactly as latency.ts
  *   documents; deltas received while an attach is still priming are excluded.
  * - TTFF: `attach()` timestamps `attached`, the final `history` chunk and the
- *   end of the priming group (`available_commands`) relative to the attach POST.
- * - reconnect/resume: `reconnect()` drops the downlink, reopens it with the
- *   last seen seq (Last-Event-ID) and re-attaches, as apps/web/state.ts does.
+ *   end of the priming group (`available_commands`) relative to the attach send.
+ * - reconnect/resume: `reconnect()` drops the socket, redials it with the
+ *   last seen seq (`after`) and re-attaches, as apps/web/state.ts does.
  * - frames and bytes per frame type, for H1 throughput.
  */
 import { randomUUID } from "node:crypto";
@@ -18,22 +18,24 @@ import { monotonicNs } from "./clock";
 import type { RecvRecord } from "./latency";
 import type { ReceivedFrame, TransportAdapter, TransportConnection } from "./types";
 
-/** The server ended the downlink while a call was waiting on it (non-resilient clients). */
+/** The server closed the socket while a call was waiting on it (non-resilient clients). */
 export class DownlinkEnded extends Error {}
 
-/** A resilient client could not re-open or re-attach after a drop: the rep cannot continue. */
+/** A resilient client could not redial or re-attach after a drop: the rep cannot continue. */
 export class RecoveryFailed extends Error {}
 
-/** One unexpected downlink end and how the client recovered, as a browser's EventSource would. */
+/** One unexpected socket close and how the client recovered, as the web client's reconnect would. */
 export interface DropRecord {
-	/** How the stream ended (`closed` = clean EOF, the edge's drop-and-resume; `error`). */
+	/** How the socket ended (`closed` = the server's close frame, e.g. 4503 slow consumer; `error` = abnormal close or protocol violation). */
 	how: string;
+	/** Close code and reason of the socket (`4503 slow_consumer: ...`, `1006 Connection ended`). */
+	close?: string;
 	/** Last frame types received before the end, oldest first. */
 	lastTypes: string[];
 	/** Bytes and frames received since the last `attached` frame (the priming burst in progress). */
 	bytesSinceAttached: number;
 	framesSinceAttached: number;
-	/** Drop to downlink re-opened and the session re-attached and primed; undefined until recovered. */
+	/** Close to socket redialed and the session re-attached and primed; undefined until recovered. */
 	recoveryMs?: number;
 	/** Open/attach attempts the recovery needed. */
 	attempts?: number;
@@ -41,9 +43,9 @@ export interface DropRecord {
 
 export interface ConnectOptions {
 	/**
-	 * Behave like EventSource plus the UI's onopen re-attach: on an unexpected
-	 * downlink end reopen with Last-Event-ID, re-attach and carry on, counting a
-	 * drop. Default true. When false the end rejects waiters with DownlinkEnded.
+	 * Behave like the web client's reconnect plus the UI's onopen re-attach: on an
+	 * unexpected socket close redial with `after`, re-attach and carry on, counting a
+	 * drop. Default true. When false the close rejects waiters with DownlinkEnded.
 	 */
 	resilient?: boolean;
 }
@@ -68,7 +70,7 @@ export interface TypeCount {
 }
 
 export interface AttachTimings {
-	/** POST attach accepted (HTTP 202). */
+	/** Attach command acked by the server. */
 	acceptMs: number;
 	/** First session frame (`attached`). */
 	ttffMs: number;
@@ -85,13 +87,13 @@ export interface AttachTimings {
 }
 
 export interface ReconnectTimings {
-	/** Drop to downlink re-established (response headers). */
+	/** Close to socket open (the upgrade completed). */
 	openMs: number;
-	/** Drop to first frame of the new stream. */
+	/** Close to first frame of the new socket (replayed or primed). */
 	firstFrameMs: number;
-	/** Drop to the first frame whose seq is beyond everything seen before the drop (resume proper). */
+	/** Close to the first frame whose seq is beyond everything seen before the close (resumed with `after`). */
 	resumeMs: number;
-	/** Drop to re-attach priming complete. */
+	/** Close to re-attach priming complete. */
 	reattachPrimedMs: number;
 	/** Frames received between reopen and the end of re-attach priming. */
 	replayFrames: number;
@@ -101,9 +103,9 @@ export interface CallResult {
 	ok: boolean;
 	data?: unknown;
 	error?: string;
-	/** POST start to call_result receive. */
+	/** Command send to call_result receive. */
 	rttMs: number;
-	/** POST start to HTTP accept (uplink only). */
+	/** Command send to the server's ack (uplink only). */
 	acceptMs: number;
 }
 
@@ -214,7 +216,7 @@ export class ProfileClient {
 		return client;
 	}
 
-	async #open(resumeFrom: string | undefined): Promise<void> {
+	async #open(after: number | undefined): Promise<void> {
 		// The connection being replaced keeps counting toward the totals.
 		const previous: TransportConnection | undefined = this.#conn;
 		if (previous !== undefined) {
@@ -224,19 +226,21 @@ export class ProfileClient {
 		this.#conn = await this.#adapter.open({
 			baseUrl: this.#baseUrl,
 			clientId: this.clientId,
-			...(resumeFrom !== undefined ? { resumeFrom } : {}),
+			...(after !== undefined ? { after } : {}),
 		});
 		const conn = this.#conn;
 		conn.onFrame((r) => this.#onFrame(r));
-		// A downlink the server ended unexpectedly (for example the edge's backpressure
-		// drop-and-resume): a resilient client recovers like a browser; otherwise waiters fail.
+		// A socket the server closed unexpectedly (for example the edge's 4503 slow-consumer
+		// drop-and-resume): a resilient client recovers like the web client; otherwise waiters fail.
 		void conn.ended.then((how) => {
 			if (this.#conn !== conn || this.#expectedEnd) return;
-			const err = new DownlinkEnded(`downlink ended unexpectedly (${how}) while waiting`);
+			const err = new DownlinkEnded(
+				`socket closed unexpectedly (${how}, ${conn.closeInfo ?? "no close info"}) while waiting`,
+			);
 			if (!this.#resilient) {
 				this.#rejectWaiters(err, () => true);
 			} else if (this.#recovering !== undefined) {
-				// The re-attach's own stream dropped again; the recovery loop retries.
+				// The re-attach's own socket closed again; the recovery loop retries.
 				this.#rejectWaiters(err, (w) => w.owner === "recovery");
 			} else {
 				this.#recovering = this.#recover(how).finally(() => {
@@ -254,10 +258,11 @@ export class ProfileClient {
 		}
 	}
 
-	/** Reopen with Last-Event-ID and re-attach until it works; fatal after MAX_RECOVERY_ATTEMPTS. */
+	/** Redial with `after` and re-attach until it works; fatal after MAX_RECOVERY_ATTEMPTS. */
 	async #recover(how: string): Promise<void> {
 		const record: DropRecord = {
 			how,
+			...(this.#conn.closeInfo !== undefined ? { close: this.#conn.closeInfo } : {}),
 			lastTypes: [...this.#recentTypes],
 			bytesSinceAttached: this.#bytesSinceAttached,
 			framesSinceAttached: this.#framesSinceAttached,
@@ -282,7 +287,7 @@ export class ProfileClient {
 			}
 		}
 		const fatal = new RecoveryFailed(
-			`could not recover the downlink after ${MAX_RECOVERY_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+			`could not recover the socket after ${MAX_RECOVERY_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
 		);
 		this.#fatal = fatal;
 		this.#rejectWaiters(fatal, () => true);
@@ -480,7 +485,7 @@ export class ProfileClient {
 		await this.#conn.send(command);
 	}
 
-	/** `call` command: RTT from POST start to the matching `call_result` frame. */
+	/** `call` command: RTT from the command send to the matching `call_result` frame (the ack is not the answer). */
 	async call(method: string, args: unknown[] = [], timeoutMs = 60_000): Promise<CallResult> {
 		const id = randomUUID();
 		const result = this.waitFrame(
@@ -655,7 +660,7 @@ export class ProfileClient {
 			};
 			let first = await post();
 			// A command that lands in the few ms between two callback pairs (a pair redial)
-			// is answered "not attached" by the edge. The UI parks such a call and re-posts the
+			// is answered "not attached" by the edge. The UI parks such a call and re-sends the
 			// SAME id on the next `attached` frame (apps/web/store/transport.ts), the session
 			// dedups by id; do the same instead of failing the scenario.
 			if (
@@ -702,12 +707,12 @@ export class ProfileClient {
 	}
 
 	/**
-	 * Network-loss drill: abort the downlink, reopen with Last-Event-ID, then
-	 * re-attach (the edge keeps no attach memory across a reconnect).
+	 * Network-loss drill: terminate the socket, redial with `after` (the last seq
+	 * seen), then re-attach (the edge keeps no attach memory across a reconnect).
 	 */
 	async reconnect(daemonId: string, route: string): Promise<ReconnectTimings> {
 		const lastSeq = this.#conn.lastSeq;
-		const lastSeen = lastSeq === undefined ? -1 : Number(lastSeq);
+		const lastSeen = lastSeq ?? -1;
 		const previous = this.#conn;
 		const t0 = monotonicNs();
 		this.#expectedEnd = true;
@@ -720,7 +725,7 @@ export class ProfileClient {
 		const off = this.onFrame((r) => {
 			frames++;
 			firstNs ??= r.recvNs;
-			if (resumeNs === undefined && r.seq !== undefined && Number(r.seq) > lastSeen) {
+			if (resumeNs === undefined && r.seq !== undefined && r.seq > lastSeen) {
 				resumeNs = r.recvNs;
 			}
 		});

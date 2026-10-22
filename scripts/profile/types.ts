@@ -176,43 +176,48 @@ export interface Summary {
 export interface ReceivedFrame {
 	/** Parsed JSON frame (`{ type: string, ... }`). */
 	frame: { type: string; [key: string]: unknown };
-	/** `monotonicNs()` (./clock) when the chunk carrying the frame arrived. */
+	/** `monotonicNs()` (./clock) when the message carrying the frame arrived. */
 	recvNs: bigint;
-	/** Wire bytes of this frame as received (payload + framing). */
+	/** Wire bytes of this frame as received: the UTF-8 length of its socket message (envelope included, WebSocket framing not). */
 	bytes: number;
-	/** Transport sequence/id (SSE `id:`), when the transport has one. */
-	seq?: string;
+	/** Browser-socket `seq` of the frame; absent for an unsequenced frame. */
+	seq?: number;
 }
 
 export interface TransportOpen {
-	/** Fleet origin, e.g. `http://127.0.0.1:4722`. */
+	/** Fleet origin, e.g. `http://127.0.0.1:4722` (dialed as `ws://` on `/ws`). */
 	baseUrl: string;
-	/** Browser client id (`?client=` / `X-Omp-Client-Id`). */
+	/** Browser client id (`client=` query parameter). */
 	clientId: string;
-	/** Resume token of the previous connection (SSE Last-Event-ID); omitted = fresh. */
-	resumeFrom?: string;
+	/** Highest seq the previous connection received (`after=` query parameter); omitted = fresh priming. */
+	after?: number;
 }
 
 export interface TransportConnection {
-	/** Cumulative bytes received on the downlink / sent on the uplink for this connection. */
+	/** Cumulative message bytes received / sent on this connection (pings and acks included, WebSocket framing not). */
 	readonly bytesDown: number;
 	readonly bytesUp: number;
-	/** Last frame seq seen; feed to the next `open({ resumeFrom })`. */
-	readonly lastSeq: string | undefined;
-	/** Resolves when the downlink ends (closed, dropped or errored). */
+	/** Highest frame seq seen (starts at the `after` the connection was opened with); feed to the next `open({ after })`. */
+	readonly lastSeq: number | undefined;
+	/** Once the socket closed: `<code> <reason>` of the close, for diagnostics; undefined while open. */
+	readonly closeInfo: string | undefined;
+	/**
+	 * Resolves when the socket closes: `dropped` = this side dropped it, `error` = abnormal close (1006)
+	 * or a protocol violation, `closed` = the server's close frame (4503 slow consumer is a drop-and-resume).
+	 */
 	readonly ended: Promise<"closed" | "dropped" | "error">;
 	onFrame(cb: (received: ReceivedFrame) => void): void;
-	/** Uplink: resolves when the transport accepts the command (SSE+POST: HTTP 202). */
+	/** Uplink: resolves when the server acks the command (`{"ack":id}`); rejects on a nack or a close before the ack. */
 	send(command: Record<string, unknown>): Promise<void>;
-	/** Abort the downlink without a protocol goodbye (network loss); server keeps its resume state. */
+	/** Terminate the socket without a close handshake (network loss); the server keeps its resume state. */
 	drop(): void;
 	close(): Promise<void>;
 }
 
 export interface TransportAdapter {
-	/** Label recorded in the fingerprint and summary (`sse+post`, later `ws`). */
+	/** Label recorded in the fingerprint and summary (`ws`). */
 	readonly name: string;
-	/** Opens the downlink and resolves once the transport is established (response headers / upgrade). */
+	/** Dials the browser socket and resolves once it is open (the upgrade succeeded). */
 	open(opts: TransportOpen): Promise<TransportConnection>;
 }
 

@@ -7,8 +7,9 @@
  * scope (type annotations are erased and are fine).
  *
  * What it does, with the least work it can get away with in the page it measures:
- * - wraps `EventSource` so a `frame` listener registered in the constructor runs
- *   BEFORE the app's own listener (the DOM is still pre-update at stamping time);
+ * - wraps `WebSocket` so a `message` listener registered in the constructor of the
+ *   browser socket (`/ws`) runs BEFORE the app's own listener (the DOM is still
+ *   pre-update at stamping time); only messages that carry a frame are counted;
  * - stamps `performance.timeOrigin + performance.now()` (wall-clock ms, sub-ms
  *   resolution) per frame and `JSON.parse`s only frames whose text contains a
  *   marker for something we record;
@@ -79,7 +80,7 @@ export function installProbe(cfg: ProbeConfig): void {
 			assistantMessageEvent?: { type?: string; contentIndex?: number; delta?: string };
 		};
 	}
-	const NativeEventSource = window.EventSource;
+	const NativeWebSocket = window.WebSocket;
 	const wall = (): number => performance.timeOrigin + performance.now();
 	const state: ProbeData = {
 		frames: 0,
@@ -161,9 +162,11 @@ export function installProbe(cfg: ProbeConfig): void {
 
 	const onFrame = (ev: MessageEvent): void => {
 		const at = wall();
+		const data = String(ev.data);
+		// Browser socket messages: {"seq":N,"frame":F} / {"frame":F}; pings and acks carry no frame.
+		if (!data.startsWith('{"seq":') && !data.startsWith('{"frame":')) return;
 		state.frames++;
 		if (state.wallSkewMs.length < 64) state.wallSkewMs.push(Date.now() - at);
-		const data = String(ev.data);
 		const interesting =
 			data.includes("text_delta") ||
 			data.includes("message_start") ||
@@ -172,7 +175,9 @@ export function installProbe(cfg: ProbeConfig): void {
 			data.includes('"history"') ||
 			data.includes("available_commands");
 		if (!interesting) return;
-		const frame: WireFrame = JSON.parse(data);
+		const envelope: { frame?: WireFrame } = JSON.parse(data);
+		const frame = envelope.frame;
+		if (frame === undefined) return;
 		if (frame.sessionId !== undefined && frame.sessionId !== cfg.sessionId) return;
 		switch (frame.type) {
 			case "attached":
@@ -243,11 +248,13 @@ export function installProbe(cfg: ProbeConfig): void {
 		schedule();
 	};
 
-	class ProbedEventSource extends NativeEventSource {
-		constructor(url: string | URL, init?: EventSourceInit) {
-			super(url, init);
-			this.addEventListener("frame", onFrame as EventListener);
+	class ProbedWebSocket extends NativeWebSocket {
+		constructor(url: string | URL, protocols?: string | string[]) {
+			super(url, protocols);
+			if (new URL(String(url), location.href).pathname === "/ws") {
+				this.addEventListener("message", onFrame);
+			}
 		}
 	}
-	window.EventSource = ProbedEventSource;
+	window.WebSocket = ProbedWebSocket;
 }

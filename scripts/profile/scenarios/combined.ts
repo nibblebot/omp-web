@@ -65,8 +65,8 @@ export const combined: Scenario = {
 		"(resumed from the cached fixture, driven with idle turns), s2 streams high-rate text, s3 runs tool-heavy turns, s4 fans out " +
 		"subagents. The ONE browser client attaches to s2 only: it receives s2's full stream plus the fleet-global frames " +
 		"(roster/daemon_activity) the other sessions cause, and probes command RTT; stream latency is s2's. The other sessions are " +
-		"driven through POST /ctl/prompt and observed externally (per-session CPU/RSS, H2 socket bytes). One mid-stream drop + " +
-		"Last-Event-ID reconnect runs after the window while the others keep working. s3 keeps the same bounded history as s3-tools: its session is replaced " +
+		"driven through POST /ctl/prompt and observed externally (per-session CPU/RSS, H2 socket bytes). One mid-stream " +
+		"browser-socket drop + redial with `after` + re-attach runs after the window while the others keep working. s3 keeps the same bounded history as s3-tools: its session is replaced " +
 		`(newSession, issued through a short-lived client attached just for that call) before its first turn and then every ${TOOL_TURNS_PER_SESSION} turns, ` +
 		`so its tool output stays under ${TOOL_HISTORY_BUDGET_BYTES / (1024 * 1024)} MiB and s3 is stationary across reps (tool.sessions counts the sessions used).`,
 	async start(env) {

@@ -35,8 +35,8 @@ export const s3Tools: Scenario = {
 		"reaches the wire, so wire bytes are the measured truth (H1 and H2 byte metrics). A synthetic client is attached; " +
 		"it probes command RTT every 250 ms. Tool subprocesses count toward the session's CPU (its process tree). " +
 		"The session is replaced (newSession, a history resync) every few turns so its history stays under 3 MiB: past about 4 MiB the edge drops attaches and re-primes, " +
-		"and past about 8 MiB a dropped stream can never re-attach (see s1-history-large). The client behaves like a browser on a dropped stream " +
-		"(reopen with Last-Event-ID, re-attach) and counts it: h1.drops, h1.recovery.*.",
+		"and past about 8 MiB a dropped stream can never re-attach (see s1-history-large; measured on the previous SSE transport, to be re-measured on /ws). The client behaves like the web client on a dropped socket " +
+		"(redial with `after`, re-attach) and counts it: h1.drops, h1.recovery.*.",
 	async start(env) {
 		const repo = await env.newRepo("s3");
 		const handle = await env.stack.addSession({ label: "s3", slot: 2 }, repo);

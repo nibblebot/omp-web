@@ -24,9 +24,9 @@ export async function streamMetrics(
 }
 
 /**
- * Notes on the downlink drops a window saw: what preceded each end, how much of
+ * Notes on the browser-socket drops a window saw: what preceded each close, how much of
  * the priming burst had arrived, and how long recovery took. The recovery time
- * excludes the delay a browser's EventSource would wait before reconnecting.
+ * excludes the backoff delay the web client would wait before redialing.
  */
 export function dropNotes(drops: DropRecord[], notes: string[]): void {
 	if (drops.length === 0) return;
@@ -36,14 +36,14 @@ export function dropNotes(drops: DropRecord[], notes: string[]): void {
 			d.recoveryMs === undefined
 				? "not recovered"
 				: `recovered in ${d.recoveryMs.toFixed(0)} ms (${d.attempts} attempt${d.attempts === 1 ? "" : "s"})`;
-		return `[${d.how}] after ${mib} MiB / ${d.framesSinceAttached} frames since the last attached; last frames: ${d.lastTypes.join(", ")}; ${recovery}`;
+		return `[${d.how}${d.close === undefined ? "" : ` ${d.close}`}] after ${mib} MiB / ${d.framesSinceAttached} frames since the last attached; last frames: ${d.lastTypes.join(", ")}; ${recovery}`;
 	});
 	notes.push(
-		`${drops.length} unexpected downlink end(s) (edge drop-and-resume or reset) recovered like a browser (reopen with Last-Event-ID, re-attach); latency samples of the in-flight message after each are excluded. ${shown.join(" | ")}${drops.length > 3 ? " | ..." : ""}`,
+		`${drops.length} unexpected socket close(s) (edge 4503 drop-and-resume or reset) recovered like the web client (redial with \`after\`, re-attach); latency samples of the in-flight message after each are excluded. ${shown.join(" | ")}${drops.length > 3 ? " | ..." : ""}`,
 	);
 }
 
-/** Command round-trip samples (POST -> `call_result` frame) as p50/p95/p99 plus failures. */
+/** Command round-trip samples (command send -> `call_result` frame) as p50/p95/p99 plus failures. */
 export function rttMetrics(
 	prefix: string,
 	rttMs: number[],
@@ -146,7 +146,7 @@ export const TOOL_CALLS_PER_TURN = 6;
 export const TOOL_OUTPUT_BYTES = 40_000;
 /**
  * Tool results pile up in the session's history. Past about 4 MiB an attach or re-prime is
- * dropped by the edge, and past about 8 MiB re-attaching never completes (see s1-history-large),
+ * dropped by the edge (measured on the previous SSE transport; re-measure on /ws), and past about 8 MiB re-attaching never completes (see s1-history-large),
  * so the session is replaced (`newSession`) before its history reaches this many bytes of tool output.
  */
 export const TOOL_HISTORY_BUDGET_BYTES = 3 * 1024 * 1024;

@@ -29,7 +29,7 @@ export const s2Text: Scenario = {
 		`(${CHUNK_CHARS} chars each) for the rep window. A synthetic client is attached to it (H1 = frames the ` +
 		"client receives) and fires a read-only command every 200 ms to measure RTT under load; idle RTT is " +
 		"sampled first. Stream latency joins model send time to client receive time per delta. After the window, " +
-		"a second short turn is interrupted by a downlink drop and a Last-Event-ID reconnect with re-attach " +
+		"a second short turn is interrupted by a browser-socket drop and a redial with `after` plus re-attach " +
 		"(reconnect.* metrics: the reconnect cost mid-stream, replay and re-priming included; the pair itself is not dropped).",
 	async start(env) {
 		const repo = await env.newRepo("s2");

@@ -8,7 +8,7 @@ export const USAGE = `bun run profile: baseline CPU, RSS, latency and throughput
 
 Boots an isolated out-of-process fleet (own state, port, workspace dir under
 .profile-out/run-<ts>/), real session daemons, a deterministic fake OpenAI
-model and a synthetic browser client (sse+post), pins every process to its own
+model and a synthetic browser client (ws: the browser socket, GET /ws), pins every process to its own
 core, runs the scenarios, and writes summary.json + summary.md.
 
 Scenarios (ids for --scenario):
@@ -37,7 +37,7 @@ Usage: bun run profile [options]
   --heap               opt-in end-of-rep JS heap read per process (starts bun with
                        --inspect; perturbs memory and timing; labeled in the summary)
   --cpuprofile         bun --cpu-prof on the fleet and every session; buckets self time into
-                       JSON stringify/parse, SSE/NDJSON encode, stream enqueue/write, other.
+                       JSON stringify/parse, socket/NDJSON encode, stream enqueue/write, other.
                        Timings are perturbed and labeled; do not compare them to plain runs.
   --compare <file>     compare against a baseline summary.json (median delta vs noise band,
                        'within noise' labels; fingerprint mismatches warn; always exits 0)
