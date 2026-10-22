@@ -1,7 +1,9 @@
 import {
+	createEffect,
 	createSignal,
 	For,
 	Match,
+	on,
 	onCleanup,
 	onMount,
 	Show,
@@ -9,6 +11,15 @@ import {
 	type Component,
 } from "solid-js";
 import { cancelUiRequest, sendUiResponse, state } from "../../state";
+import {
+	answerSummary,
+	buildResults,
+	entryCursor,
+	initialAnswer,
+	isAnswered,
+	tabLabel,
+	type AskAnswer,
+} from "../../prompt/ask-dialog";
 import type { AskOption, AskQuestion, UiRequest } from "../../prompt/ask-types";
 import { PickerRow } from "../ui/PickerRow";
 
@@ -76,10 +87,15 @@ interface Keys {
 	cursor: () => number;
 	setCursor: (index: number) => void;
 	pick: (index: number) => void;
+	/** Left/Right move between steps (-1 previous, 1 next); omitted when there are none. */
+	step?: (direction: -1 | 1) => void;
 	cancel: () => void;
 }
 
-/** Shared key map for a row list; text fields keep every key except Esc. */
+/**
+ * Shared key map for a row list; text fields keep every key except Esc, and a
+ * focused button keeps Enter/Space so it activates natively.
+ */
 function rowKeys(k: Keys) {
 	return (e: KeyboardEvent) => {
 		if (e.key === "Escape") {
@@ -89,12 +105,22 @@ function rowKeys(k: Keys) {
 		}
 		const target = e.target as HTMLElement;
 		if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+		if (target.tagName === "BUTTON" && (e.key === "Enter" || e.key === " ")) return;
 		if (/^[1-9]$/.test(e.key)) {
 			const index = Number(e.key) - 1;
 			if (index < (k.digitRows?.() ?? k.rows())) {
 				e.preventDefault();
 				k.pick(index);
 			}
+			return;
+		}
+		if (
+			k.step &&
+			(e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+			!(e.altKey || e.ctrlKey || e.metaKey)
+		) {
+			e.preventDefault();
+			k.step(e.key === "ArrowRight" ? 1 : -1);
 			return;
 		}
 		const count = k.rows();
@@ -112,75 +138,71 @@ function rowKeys(k: Keys) {
 	};
 }
 
-const AskHeader: Component<{ id: string; title: string; progress?: string }> = (props) => (
+const AskHeader: Component<{ id: string; title: string }> = (props) => (
 	<header class="ask-bar-head">
 		<span class="ask-bar-title">{props.title}</span>
-		<Show when={props.progress}>
-			<span class="ask-bar-progress">{props.progress}</span>
-		</Show>
 		<button type="button" class="ask-bar-cancel" onClick={() => cancelUiRequest(props.id)}>
-			Cancel <kbd>Esc</kbd>
+			<kbd>esc</kbd> Cancel
 		</button>
 	</header>
 );
 
-interface Answer {
-	selected: string[];
-	custom: string;
-}
-
-/** The ask tool's dialog: one question at a time; Enter or a digit answers single-select and advances. */
+/**
+ * The ask tool's dialog. One question: a single-select pick submits, a
+ * multi-select has its Submit button. Two or more: a tab per question plus a
+ * review step; picks and Next/Skip/arrows only move between steps and the
+ * review step's Submit button is the only way to send.
+ */
 const AskQuestions: Component<{ id: string; questions: AskQuestion[] }> = (props) => {
 	let root!: HTMLDivElement;
 	let other!: HTMLInputElement;
-	// The recommended option is preselected so a plain Enter accepts it.
-	const initialAnswer = (q: AskQuestion): Answer => {
-		const rec = q.recommended !== undefined ? q.options[q.recommended] : undefined;
-		return { selected: rec ? [rec.label] : [], custom: "" };
-	};
+	let submitButton: HTMLButtonElement | undefined;
+	const tabs: HTMLButtonElement[] = [];
+	const count = props.questions.length;
+	const stepped = count > 1;
+	/** Steps 0..count-1 are the questions; step `count` is the review. */
 	const [step, setStep] = createSignal(0);
-	const [cursor, setCursor] = createSignal(props.questions[0]?.recommended ?? 0);
-	const [answers, setAnswers] = createSignal<Answer[]>(props.questions.map(initialAnswer));
-	const current = () => props.questions[step()];
-	const otherIndex = () => current().options.length;
+	const [answers, setAnswers] = createSignal<AskAnswer[]>(props.questions.map(initialAnswer));
+	const [cursor, setCursor] = createSignal(
+		props.questions[0] ? entryCursor(props.questions[0], answers()[0]) : 0,
+	);
+	const reviewing = () => stepped && step() === count;
+	const current = (): AskQuestion | undefined =>
+		reviewing() ? undefined : props.questions[step()];
 
-	const setAnswer = (i: number, next: (a: Answer) => Answer) =>
+	const setAnswer = (i: number, next: (a: AskAnswer) => AskAnswer) =>
 		setAnswers((all) => all.map((a, j) => (j === i ? next(a) : a)));
 
-	/** Accept the current question when it has an answer; the last one submits. */
-	const commit = () => {
-		const a = answers()[step()];
-		if (a.selected.length === 0 && a.custom.trim() === "") return;
-		if (step() + 1 < props.questions.length) {
-			const next = step() + 1;
-			setStep(next);
-			setCursor(props.questions[next].recommended ?? 0);
-			return;
-		}
-		// ExtensionAskDialogSubmitResult: AskToolCard validates count, order, and ids.
-		sendUiResponse(props.id, {
-			kind: "submit",
-			results: props.questions.map((q, i) => {
-				const text = answers()[i].custom.trim();
-				return {
-					id: q.id,
-					question: q.question,
-					options: q.options.map((o) => o.label),
-					multi: q.multi ?? false,
-					selectedOptions: answers()[i].selected,
-					...(text ? { customInput: text } : {}),
-				};
-			}),
-		});
+	const goTo = (target: number) => {
+		const next = Math.max(0, Math.min(target, count));
+		if (next === step()) return;
+		setStep(next);
+		if (next < count) setCursor(entryCursor(props.questions[next], answers()[next]));
+	};
+
+	// ExtensionAskDialogSubmitResult: the SDK validates count, order, and ids.
+	const submit = () =>
+		sendUiResponse(props.id, { kind: "submit", results: buildResults(props.questions, answers()) });
+
+	/** Steps forward; a lone question submits instead, once it has an answer. */
+	const advance = () => {
+		if (stepped) goTo(step() + 1);
+		else if (isAnswered(answers()[0])) submit();
+	};
+
+	const skip = () => {
+		setAnswer(step(), () => ({ selected: [], custom: "" }));
+		goTo(step() + 1);
 	};
 
 	const pick = (index: number) => {
 		setCursor(index);
-		if (index === otherIndex()) {
+		const q = current();
+		if (!q) return;
+		if (index === q.options.length) {
 			other.focus();
 			return;
 		}
-		const q = current();
 		const label = q.options[index].label;
 		if (q.multi) {
 			setAnswer(step(), (a) => ({
@@ -192,16 +214,43 @@ const AskQuestions: Component<{ id: string; questions: AskQuestion[] }> = (props
 			return;
 		}
 		setAnswer(step(), (a) => ({ ...a, selected: [label] }));
-		commit();
+		advance();
 	};
 
 	onMount(() => root.focus());
+	// After a step change: keep the active tab visible, focus Submit on the review,
+	// and keep keys flowing to the dialog when the focused control went away.
+	createEffect(
+		on(
+			step,
+			(s) => {
+				tabs[s]?.scrollIntoView({ block: "nearest", inline: "nearest" });
+				if (s === count) {
+					submitButton?.focus();
+					return;
+				}
+				const active = document.activeElement;
+				if (
+					!root.contains(active) ||
+					active === other ||
+					(active instanceof HTMLButtonElement && active.disabled)
+				) {
+					root.focus();
+				}
+			},
+			{ defer: true },
+		),
+	);
 	const onKey = rowKeys({
-		rows: () => otherIndex() + 1,
-		digitRows: otherIndex,
+		rows: () => {
+			const q = current();
+			return q ? q.options.length + 1 : 0;
+		},
+		digitRows: () => current()?.options.length ?? 0,
 		cursor,
 		setCursor,
 		pick,
+		step: stepped ? (direction) => goTo(step() + direction) : undefined,
 		cancel: () => cancelUiRequest(props.id),
 	});
 
@@ -214,67 +263,157 @@ const AskQuestions: Component<{ id: string; questions: AskQuestion[] }> = (props
 			tabIndex={-1}
 			onKeyDown={onKey}
 		>
-			<AskHeader
-				id={props.id}
-				title="Agent asks"
-				progress={
-					props.questions.length > 1
-						? `Question ${step() + 1} of ${props.questions.length}`
-						: undefined
-				}
-			/>
-			<Show when={current()?.header}>
-				<div class="ask-header">{current().header}</div>
+			<AskHeader id={props.id} title="Agent asks" />
+			<Show when={stepped}>
+				<div class="ask-tabs" role="tablist" aria-label="Questions">
+					<For each={props.questions}>
+						{(q, i) => {
+							const answered = () => isAnswered(answers()[i()]);
+							return (
+								<button
+									type="button"
+									role="tab"
+									class="ask-tab"
+									classList={{ answered: answered() }}
+									aria-selected={step() === i()}
+									aria-label={`${tabLabel(q, i())}, ${answered() ? "answered" : "unanswered"}`}
+									ref={(el) => {
+										tabs[i()] = el;
+									}}
+									onClick={() => goTo(i())}
+								>
+									<span class="ask-tab-mark" aria-hidden="true">
+										{answered() ? "✓" : "○"}
+									</span>
+									<span class="ask-tab-label">{tabLabel(q, i())}</span>
+								</button>
+							);
+						}}
+					</For>
+					<button
+						type="button"
+						role="tab"
+						class="ask-tab"
+						aria-selected={reviewing()}
+						ref={(el) => {
+							tabs[count] = el;
+						}}
+						onClick={() => goTo(count)}
+					>
+						Review
+					</button>
+				</div>
 			</Show>
-			<div class="ask-label">{current()?.question}</div>
-			<div class="picker-list ask-options">
-				<For each={current()?.options ?? []}>
-					{(opt, oi) => {
-						const selected = () => answers()[step()]?.selected.includes(opt.label) ?? false;
-						return (
-							<PickerRow
-								class="picker-row ask-option"
-								classList={{ active: selected(), cursor: cursor() === oi() }}
-								onClick={() => pick(oi())}
-							>
-								<span class="ask-key">{oi() < 9 ? oi() + 1 : ""}</span>
-								<span class="ask-marker">
-									{current().multi ? (selected() ? "☑" : "☐") : selected() ? "●" : "○"}
-								</span>
-								<span class="picker-label">{opt.label}</span>
-								{oi() === current().recommended && <span class="ask-recommended">recommended</span>}
-								{opt.description && <span class="picker-detail">{opt.description}</span>}
-							</PickerRow>
-						);
-					}}
-				</For>
-				<PickerRow
-					class="picker-row ask-option"
-					classList={{ cursor: cursor() === otherIndex() }}
-					onClick={() => pick(otherIndex())}
-				>
-					<span class="ask-key" />
-					<span class="ask-marker">✎</span>
-					<span class="picker-label">Other</span>
-				</PickerRow>
-			</div>
-			<input
-				ref={other}
-				class="picker-filter ask-custom"
-				aria-label="Custom answer"
-				placeholder="Type your own answer"
-				value={answers()[step()]?.custom ?? ""}
-				onInput={(e) => setAnswer(step(), (a) => ({ ...a, custom: e.currentTarget.value }))}
-				onKeyDown={(e) => {
-					if (e.key !== "Enter") return;
-					e.preventDefault();
-					commit();
+			<Show when={current()} keyed>
+				{(q) => {
+					// Fixed per render: the question's view is rebuilt when the step changes.
+					const qi = step();
+					return (
+						<>
+							<Show when={q.header}>
+								<div class="ask-header">{q.header}</div>
+							</Show>
+							<div class="ask-label">{q.question}</div>
+							<div class="picker-list ask-options">
+								<For each={q.options}>
+									{(opt, oi) => {
+										const selected = () => answers()[qi].selected.includes(opt.label);
+										return (
+											<PickerRow
+												class="picker-row ask-option"
+												classList={{ active: selected(), cursor: cursor() === oi() }}
+												onClick={() => pick(oi())}
+											>
+												<span class="ask-key">{oi() < 9 ? oi() + 1 : ""}</span>
+												<span class="ask-marker">
+													{q.multi ? (selected() ? "☑" : "☐") : selected() ? "●" : "○"}
+												</span>
+												<span class="ask-option-text">
+													<span class="picker-label">{opt.label}</span>
+													{oi() === q.recommended && (
+														<span class="ask-recommended">recommended</span>
+													)}
+													{opt.description && <span class="picker-detail">{opt.description}</span>}
+												</span>
+											</PickerRow>
+										);
+									}}
+								</For>
+								<PickerRow
+									class="picker-row ask-option"
+									classList={{ cursor: cursor() === q.options.length }}
+									onClick={() => pick(q.options.length)}
+								>
+									<span class="ask-key" />
+									<span class="ask-marker">✎</span>
+									<span class="picker-label">Other</span>
+								</PickerRow>
+							</div>
+							<input
+								ref={other}
+								class="picker-filter ask-custom"
+								aria-label="Custom answer"
+								placeholder="Type your own answer"
+								value={answers()[qi].custom}
+								onInput={(e) => setAnswer(qi, (a) => ({ ...a, custom: e.currentTarget.value }))}
+								onKeyDown={(e) => {
+									if (e.key !== "Enter") return;
+									e.preventDefault();
+									advance();
+								}}
+							/>
+							<Show when={!stepped && q.multi}>
+								<div class="ask-actions">
+									<button type="button" class="ask-bar-next" onClick={advance}>
+										Submit
+									</button>
+								</div>
+							</Show>
+						</>
+					);
 				}}
-			/>
-			<Show when={current()?.multi}>
+			</Show>
+			<Show when={stepped && !reviewing()}>
+				<div class="ask-actions ask-nav">
+					<button
+						type="button"
+						class="ask-bar-nav"
+						disabled={step() === 0}
+						onClick={() => goTo(step() - 1)}
+					>
+						Back
+					</button>
+					<button type="button" class="ask-bar-nav ask-nav-skip" onClick={skip}>
+						Skip
+					</button>
+					<button type="button" class="ask-bar-next" onClick={() => goTo(step() + 1)}>
+						Next
+					</button>
+				</div>
+			</Show>
+			<Show when={reviewing()}>
+				<div class="ask-header">Review</div>
+				<div class="ask-review">
+					<For each={props.questions}>
+						{(q, i) => (
+							<button type="button" class="ask-review-row" onClick={() => goTo(i())}>
+								<span class="ask-review-q">{q.question}</span>
+								<span
+									class="ask-review-a"
+									classList={{ "ask-review-skipped": !isAnswered(answers()[i()]) }}
+								>
+									{isAnswered(answers()[i()]) ? answerSummary(answers()[i()]) : "Skipped"}
+								</span>
+							</button>
+						)}
+					</For>
+				</div>
 				<div class="ask-actions">
-					<button type="button" class="ask-bar-next" onClick={commit}>
-						{step() + 1 < props.questions.length ? "Next" : "Submit"}
+					<button type="button" class="ask-bar-nav" onClick={() => goTo(count - 1)}>
+						Back
+					</button>
+					<button type="button" class="ask-bar-next" ref={submitButton} onClick={submit}>
+						Submit
 					</button>
 				</div>
 			</Show>
@@ -318,10 +457,12 @@ const AskSelect: Component<{ id: string; title: string; options: (string | AskOp
 							onClick={() => sendUiResponse(props.id, typeof opt === "string" ? opt : opt.label)}
 						>
 							<span class="ask-key">{oi() < 9 ? oi() + 1 : ""}</span>
-							<span class="picker-label">{typeof opt === "string" ? opt : opt.label}</span>
-							{typeof opt !== "string" && opt.description && (
-								<span class="picker-detail">{opt.description}</span>
-							)}
+							<span class="ask-option-text">
+								<span class="picker-label">{typeof opt === "string" ? opt : opt.label}</span>
+								{typeof opt !== "string" && opt.description && (
+									<span class="picker-detail">{opt.description}</span>
+								)}
+							</span>
 						</PickerRow>
 					)}
 				</For>
@@ -360,7 +501,7 @@ const AskConfirm: Component<{ id: string; title: string; message: string }> = (p
 					classList={{ cursor: cursor() === 0 }}
 					onClick={() => sendUiResponse(props.id, true)}
 				>
-					OK <kbd>1</kbd>
+					<kbd>1</kbd> OK
 				</button>
 				<button
 					type="button"
@@ -368,7 +509,7 @@ const AskConfirm: Component<{ id: string; title: string; message: string }> = (p
 					classList={{ cursor: cursor() === 1 }}
 					onClick={() => sendUiResponse(props.id, false)}
 				>
-					Cancel <kbd>2</kbd>
+					<kbd>2</kbd> Cancel
 				</button>
 			</div>
 		</div>

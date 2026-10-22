@@ -441,15 +441,65 @@ pre.terminal.eval-code {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.ask-tool-item {
+	display: grid;
+	gap: var(--space-2);
+	padding: 0 var(--space-4) var(--space-3);
+}
 .ask-tool-question {
-	padding: 0 var(--space-4) var(--space-2);
 	font-weight: 600;
 	color: var(--muted-3);
 }
 .ask-tool-options {
-	padding: 0 var(--space-4) var(--space-3);
-	color: var(--muted-3);
+	display: grid;
+	gap: var(--space-1);
+	margin: 0;
+	padding: 0;
+	list-style: none;
 	font-size: var(--fs-md);
+	color: var(--muted-2);
+}
+.ask-tool-option {
+	display: flex;
+	gap: var(--space-2);
+	align-items: baseline;
+}
+.ask-tool-option-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+.ask-tool-option-description {
+	font-size: var(--fs-sm);
+	color: var(--muted);
+}
+.ask-tool-option--selected {
+	color: var(--text);
+	font-weight: 600;
+}
+.ask-tool-option--selected .ask-tool-marker {
+	color: var(--accent);
+}
+.ask-tool-answer {
+	display: grid;
+	gap: var(--space-1);
+	padding: var(--space-2) var(--space-3);
+	border-left: 2px solid var(--accent);
+	font-size: var(--fs-md);
+}
+.ask-tool-answer-label {
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+}
+.ask-tool-answer-text {
+	color: var(--text);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.ask-tool-status {
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+	font-style: italic;
 }
 
 /* Touch: 44px targets for background-bar controls. */

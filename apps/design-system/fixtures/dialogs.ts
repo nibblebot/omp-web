@@ -53,6 +53,22 @@ export const askChecksQuestion: AskQuestion = {
 	multi: true,
 };
 
+/** Three headed questions (one multi-select) so the step tabs show their labels. */
+export const askTabbedQuestions: AskQuestion[] = [
+	askScopeQuestion,
+	askChecksQuestion,
+	{
+		id: "rollout",
+		header: "Rollout",
+		question: "How should the change ship?",
+		options: [
+			{ label: "Behind a flag", description: "Off by default until the next release" },
+			{ label: "Straight to main", description: "Enabled for everyone on merge" },
+		],
+		recommended: 0,
+	},
+];
+
 /** Long content: option previews, a long question, and a multi-select with many rows. */
 export const askLongQuestions: AskQuestion[] = [
 	{

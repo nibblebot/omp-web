@@ -189,31 +189,96 @@ function tool(
 /** Joins lines the way a tool result carries them. */
 const lines = (...rows: string[]): string => rows.join("\n");
 
-// ask
+// ask: `details` mirror the SDK's AskToolDetails for each answer shape.
 const askArgs = {
 	questions: [
 		{
 			id: "retry-scope",
 			question: "Should the retry badge also appear on queued follow-up messages?",
-			options: [{ label: "Only the active turn" }, { label: "Active turn and queue" }],
+			options: [
+				{ label: "Only the active turn", description: "Queued messages stay unbadged." },
+				{ label: "Active turn and queue" },
+			],
 		},
 	],
 };
 /** AskToolCard: question posed, waiting for the user's answer. */
 export const askRunningTool: ToolItem = tool("ask", "running", askArgs, "");
-/** AskToolCard: answered question. */
-export const askDoneTool: ToolItem = tool(
-	"ask",
-	"done",
-	askArgs,
-	"Selected: Active turn and queue",
-);
+/** AskToolCard: answered by picking an offered option. */
+export const askDoneTool: ToolItem = {
+	...tool("ask", "done", askArgs, "User selected: Active turn and queue"),
+	details: {
+		question: askArgs.questions[0]?.question,
+		options: ["Only the active turn", "Active turn and queue"],
+		multi: false,
+		selectedOptions: ["Active turn and queue"],
+	},
+};
+/** AskToolCard: answered with a typed custom response and a note instead of an option. */
+export const askCustomTool: ToolItem = {
+	...tool(
+		"ask",
+		"done",
+		askArgs,
+		"User provided custom input: Only when the queue has more than one message\nUser note: keep it subtle",
+	),
+	details: {
+		question: askArgs.questions[0]?.question,
+		options: ["Only the active turn", "Active turn and queue"],
+		multi: false,
+		selectedOptions: [],
+		customInput: "Only when the queue has more than one message",
+		note: "keep it subtle",
+	},
+};
+const askMultiArgs = {
+	questions: [
+		{
+			id: "targets",
+			question: "Which platforms should the release build?",
+			multi: true,
+			options: [{ label: "linux-x64" }, { label: "linux-arm64" }, { label: "darwin-arm64" }],
+		},
+		{
+			id: "channel",
+			question: "Publish to which channel?",
+			options: [{ label: "stable" }, { label: "beta" }],
+		},
+	],
+};
+/** AskToolCard: two questions, one multi-select, answered in one dialog. */
+export const askMultiTool: ToolItem = {
+	...tool(
+		"ask",
+		"done",
+		askMultiArgs,
+		"User answers:\ntargets: [linux-x64, darwin-arm64]\nchannel: beta",
+	),
+	details: {
+		results: [
+			{
+				id: "targets",
+				question: "Which platforms should the release build?",
+				options: ["linux-x64", "linux-arm64", "darwin-arm64"],
+				multi: true,
+				selectedOptions: ["linux-x64", "darwin-arm64"],
+			},
+			{
+				id: "channel",
+				question: "Publish to which channel?",
+				options: ["stable", "beta"],
+				multi: false,
+				selectedOptions: ["beta"],
+			},
+		],
+	},
+};
 /** AskToolCard: dismissed question. */
 export const askErrorTool: ToolItem = tool(
 	"ask",
 	"error",
 	askArgs,
-	"Question dismissed without an answer.",
+	"Ask tool was cancelled by the user",
 );
 
 // bash

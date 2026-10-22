@@ -14,8 +14,10 @@ import { TaskToolCard } from "../../../../web/components/chat/tools/TaskToolCard
 import { TodoToolCard } from "../../../../web/components/chat/tools/TodoToolCard";
 import { WebSearchToolCard } from "../../../../web/components/chat/tools/WebSearchToolCard";
 import {
+	askCustomTool,
 	askDoneTool,
 	askErrorTool,
+	askMultiTool,
 	askRunningTool,
 	bashDoneTool,
 	bashErrorTool,
@@ -166,7 +168,17 @@ const stories: Story[] = [
 		component: { file: "apps/web/components/chat/tools/AskToolCard.tsx", export: "AskToolCard" },
 		variants: [
 			{ name: "Waiting for an answer", render: () => <AskToolCard item={askRunningTool} /> },
-			{ name: "Answered", render: () => <AskToolCard item={askDoneTool} /> },
+			{ name: "Answered with an option", render: () => <AskToolCard item={askDoneTool} /> },
+			{
+				name: "Answered with a custom response",
+				description:
+					"No option picked: every offered option stays unmarked and the typed response and note show below.",
+				render: () => <AskToolCard item={askCustomTool} />,
+			},
+			{
+				name: "Two questions, multi-select",
+				render: () => <AskToolCard item={askMultiTool} />,
+			},
 			{ name: "Dismissed", render: () => <AskToolCard item={askErrorTool} /> },
 		],
 	}),

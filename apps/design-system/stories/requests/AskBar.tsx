@@ -5,6 +5,7 @@ import {
 	askDialogRequest,
 	askLongQuestions,
 	askScopeQuestion,
+	askTabbedQuestions,
 	confirmParams,
 	editorParams,
 	inputParams,
@@ -20,9 +21,20 @@ export default [
 		tabs: true,
 		variants: [
 			{
+				name: "Agent asks one question",
+				description: "No tabs: picking an option answers at once.",
+				seed: () => setState("uiRequest", askDialogRequest("ask_41", [askScopeQuestion])),
+				render: () => <AskBar />,
+			},
+			{
 				name: "Agent asks two questions",
 				seed: () =>
 					setState("uiRequest", askDialogRequest("ask_42", [askScopeQuestion, askChecksQuestion])),
+				render: () => <AskBar />,
+			},
+			{
+				name: "Three questions with tabs",
+				seed: () => setState("uiRequest", askDialogRequest("ask_44", askTabbedQuestions)),
 				render: () => <AskBar />,
 			},
 			{

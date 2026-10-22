@@ -523,6 +523,16 @@ button.picker-row.kbd-active {
 .ask-option.active .ask-marker {
 	color: var(--accent);
 }
+/* Label, badge and description wrap inside this column, so a wrapped
+   description lines up with the label instead of the row's left edge. */
+.ask-option-text {
+	display: flex;
+	flex: 1;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--space-1) var(--space-4);
+	min-width: 0;
+}
 .ask-recommended {
 	padding: 0 var(--space-2);
 	border: 1px solid var(--success-border);
@@ -588,11 +598,8 @@ button.picker-row.kbd-active {
 	color: var(--text);
 	font-weight: 600;
 }
-.ask-bar-progress {
-	color: var(--muted-2);
-	font-size: var(--fs-sm);
-}
 .ask-bar-cancel,
+.ask-bar-nav,
 .ask-bar-next {
 	padding: var(--space-1) var(--space-3);
 	border: 1px solid var(--border);
@@ -608,8 +615,15 @@ button.picker-row.kbd-active {
 	color: var(--accent);
 }
 .ask-bar kbd {
-	color: var(--muted-2);
-	font-family: inherit;
+	padding: 0 var(--space-2);
+	border: 1px solid var(--border);
+	border-bottom-width: 2px;
+	border-radius: var(--r-sm);
+	background: var(--panel);
+	color: var(--muted-3);
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	line-height: 1.4;
 }
 .ask-bar .ask-options {
 	display: flex;
@@ -629,6 +643,73 @@ button.picker-row.kbd-active {
 }
 .ask-bar .ask-actions {
 	margin-top: 0;
+}
+.ask-bar-nav:disabled {
+	color: var(--muted-2);
+	cursor: default;
+}
+.ask-nav .ask-nav-skip {
+	margin-left: auto;
+}
+/* Step tabs: one per question plus Submit; compact, scrolls sideways when crowded. */
+.ask-tabs {
+	display: flex;
+	gap: var(--space-2);
+	overflow-x: auto;
+	flex: none;
+}
+.ask-tab {
+	display: inline-flex;
+	flex: none;
+	align-items: baseline;
+	gap: var(--space-2);
+	max-width: 16em;
+	padding: var(--space-1) var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	background: transparent;
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-sm);
+	white-space: nowrap;
+	cursor: pointer;
+}
+.ask-tab-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.ask-tab.answered .ask-tab-mark {
+	color: var(--accent);
+}
+.ask-tab[aria-selected="true"] {
+	border-color: var(--accent-border);
+	color: var(--text);
+}
+/* Review step: one jump-back row per question with its answer. */
+.ask-review {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+.ask-review-row {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.ask-review-a {
+	color: var(--accent);
+	font-size: var(--fs-sm);
+}
+.ask-review-a.ask-review-skipped {
+	color: var(--muted-2);
 }
 
 /* --- SessionListPicker (resume and session picker): grouped rows beside a
@@ -1096,12 +1177,16 @@ button.picker-row.kbd-active {
    separator keeps a 44px-wide target. */
 @media (max-width: 767px) {
 	.ask-bar-cancel,
+	.ask-bar-nav,
 	.ask-bar-next,
+	.ask-tab,
+	.ask-review-row,
 	.ask-custom,
 	.picker-filter {
 		min-height: 44px;
 	}
 	.ask-bar-cancel,
+	.ask-bar-nav,
 	.ask-bar-next {
 		min-width: 44px;
 	}
