@@ -8,6 +8,9 @@ const STRIP_COPY: Record<Exclude<ConnectionState, "connected">, string> = {
 	offline: "Offline, actions paused",
 };
 
+/** Strip copy once the server refused this page's OMP_PROTO: it never reconnects on its own. */
+const PROTO_MISMATCH_COPY = "This page is out of date with the server. Reload to reconnect.";
+
 /** Tooltip on session-bound actions that are paused by the current state.
  *  Empty while connected (the action is live, no tooltip). */
 export const PAUSED_TOOLTIP: Record<ConnectionState, string> = {
@@ -27,7 +30,13 @@ export const ConnectionBar: Component = () => (
 	<Show when={connectionState() !== "connected" && !(state.transportStartup && !state.connected)}>
 		<div class="connection-bar" role="status" data-state={connectionState()}>
 			<WarningIcon />
-			<span>{connectionState() === "offline" ? STRIP_COPY.offline : STRIP_COPY.reconnecting}</span>
+			<span>
+				{state.protoMismatch
+					? PROTO_MISMATCH_COPY
+					: connectionState() === "offline"
+						? STRIP_COPY.offline
+						: STRIP_COPY.reconnecting}
+			</span>
 		</div>
 	</Show>
 );

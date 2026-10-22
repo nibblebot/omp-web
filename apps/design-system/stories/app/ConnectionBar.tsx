@@ -33,7 +33,7 @@ export default defineStory({
 		{
 			name: "Proto mismatch",
 			description:
-				"The edge closes the socket 4426: the client records the mismatch error and stops reconnecting. The strip stays up; Toasts holds the error back while it reports an outage.",
+				"The edge closes the socket 4426: the client records the mismatch error and stops reconnecting. The strip asks for a reload; Toasts holds the error back while the strip is up.",
 			seed: () => dialClient({ close: "proto_mismatch", message: "server speaks OMP_PROTO 6" }),
 			render: () => (
 				<>

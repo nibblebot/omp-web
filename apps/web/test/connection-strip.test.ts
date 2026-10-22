@@ -12,6 +12,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createComponent } from "solid-js";
 import * as solidWeb from "solid-js/web";
+import { browserCloseFor } from "#lib/wire/browser-socket";
 import type { DaemonEntry, ServerFrame } from "#lib/wire/protocol";
 import { ConnectionBar } from "../components/app/ConnectionBar";
 import { WorkspaceRow, setMenuOpenId } from "../components/fleet/sidebar/WorkspaceRow";
@@ -108,6 +109,14 @@ describe("transport strip", () => {
 		// After the first open (or the startup grace), a down stream is a real reconnect.
 		setState({ transportStartup: false });
 		expect(renderChrome().strip).toContain('data-state="reconnecting"');
+	});
+
+	test("a proto mismatch close asks for a reload instead of showing a reconnect that never comes", () => {
+		const { code, reason } = browserCloseFor("proto_mismatch", "server speaks OMP_PROTO 6");
+		FakeWebSocket.instances.at(-1)!.serverClose(code, reason);
+		const { strip } = renderChrome();
+		expect(strip).toContain("Reload to reconnect");
+		expect(strip).not.toContain("Reconnecting");
 	});
 });
 

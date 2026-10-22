@@ -421,6 +421,9 @@ export const [state, setState] = createStore({
 	// startup grace in connect() runs out): the strip stays hidden meanwhile,
 	// since nothing has dropped yet.
 	transportStartup: true,
+	// The server speaks another OMP_PROTO (hello_ok or a 4426 close): the socket
+	// stays down for good and the strip asks for a reload instead of reconnecting.
+	protoMismatch: false,
 	// Browser-auth state: mirrored from apps/web/store/auth.ts by
 	// subscribeAuth. "unknown" until the first session probe; "disabled"
 	// (fleet/daemon without browser auth) behaves exactly as before this
@@ -861,6 +864,7 @@ function teardownSocket(ws: WebSocket, plan: ReconnectPlan, code?: number, reaso
 function failProtoMismatch(ws: WebSocket, speaks: string): void {
 	const message = `proto mismatch: ${speaks}, expected ${OMP_PROTO}`;
 	setState("error", message);
+	setState("protoMismatch", true);
 	pushDebug("error", "transport", message);
 	teardownSocket(ws, "never");
 }
@@ -891,6 +895,7 @@ export function resetBrowserSocket(): void {
 	reconnectAttempt = 0;
 	socketMessages = 0;
 	awaitingSignIn = false;
+	setState("protoMismatch", false);
 }
 
 /** The fleet roster with no daemon attached yet: settings go through the

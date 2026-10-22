@@ -475,8 +475,6 @@ export const OMP_PROTO = 5;
 
 // --- Client connection constants (browser socket, shared by the session and the fleet) ---
 
-/** SSE event field carrying every ServerFrame. */
-export const SSE_EVENT_NAME = "frame";
 /** Keepalive interval: a server sends a ping on every idle client connection this often. */
 export const CLIENT_KEEPALIVE_MS = 15_000;
 /**
