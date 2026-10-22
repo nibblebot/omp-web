@@ -22,7 +22,8 @@ import { dirname, join } from "node:path";
 import { staleTabEventsBody } from "#lib/wire/browser-socket";
 import { OMP_PROTO } from "#lib/wire/protocol";
 import { BrowserAuthStore, SESSION_TTL_MS } from "../browser-auth";
-import { FleetAuthGate, peerIsLoopback } from "../fleet-auth-gate";
+import { isLoopbackIp } from "#lib/runtime/browser-guard";
+import { FleetAuthGate } from "../fleet-auth-gate";
 import { startFleet, type FleetServer } from "../server";
 import { compileTrustedProxies } from "../trusted-proxy";
 import { BrowserSocket } from "./edge.testkit";
@@ -365,7 +366,7 @@ describe("fleet auth gate forwarded-header resolution", () => {
 		// A loopback hop from a trusted proxy is not the client when the socket
 		// peer is remote: the resolved client is never loopback.
 		const loopbackHop = gate.clientAddress(req({ "x-forwarded-for": "127.0.0.1" }), "203.0.113.9");
-		expect(peerIsLoopback(loopbackHop)).toBe(false);
+		expect(isLoopbackIp(loopbackHop)).toBe(false);
 		expect(gate.authenticate(req({ "x-forwarded-for": "127.0.0.1" }), loopbackHop)).toBeNull();
 		// A forwarded NON-loopback client hop from the same trusted peer still
 		// demands a session: a null authenticate is the 401 server.ts emits.
@@ -387,7 +388,7 @@ describe("fleet auth gate forwarded-header resolution", () => {
 		// client is the peer, and the gate still demands a session (401).
 		const forged = req({ "x-forwarded-for": "127.0.0.1" });
 		const forgedClient = gate.clientAddress(forged, "198.51.100.7");
-		expect(peerIsLoopback(forgedClient)).toBe(false);
+		expect(isLoopbackIp(forgedClient)).toBe(false);
 		expect(gate.authenticate(forged, forgedClient)).toBeNull();
 		// The host loopback itself is never a trusted proxy by default: a
 		// forwarded header arriving ON the loopback socket is an undeclared
@@ -397,29 +398,27 @@ describe("fleet auth gate forwarded-header resolution", () => {
 
 	test("loopback peers stay exempt only without forwarded headers", () => {
 		// Plain loopback client (CLI / local UI / dev browser): exemption applies.
-		expect(peerIsLoopback(noProxyGate.clientAddress(req(), "127.0.0.1"))).toBe(true);
+		expect(isLoopbackIp(noProxyGate.clientAddress(req(), "127.0.0.1"))).toBe(true);
 		// A loopback peer carrying ANY forwarded header is an undeclared
 		// proxy: resolving non-loopback means the server demands a session,
 		// so remote clients behind an unlisted proxy never inherit the
 		// loopback exemption, and a hostile XFF on the loopback socket can
 		// never forge one.
 		expect(
-			peerIsLoopback(
-				noProxyGate.clientAddress(req({ "x-forwarded-for": "10.0.0.9" }), "127.0.0.1"),
-			),
+			isLoopbackIp(noProxyGate.clientAddress(req({ "x-forwarded-for": "10.0.0.9" }), "127.0.0.1")),
 		).toBe(false);
 		expect(
-			peerIsLoopback(noProxyGate.clientAddress(req({ "x-forwarded-proto": "https" }), "127.0.0.1")),
+			isLoopbackIp(noProxyGate.clientAddress(req({ "x-forwarded-proto": "https" }), "127.0.0.1")),
 		).toBe(false);
 		expect(
-			peerIsLoopback(
+			isLoopbackIp(
 				noProxyGate.clientAddress(req({ "x-forwarded-host": "app.example" }), "127.0.0.1"),
 			),
 		).toBe(false);
 		// A loopback hop through a trusted proxy with a remote socket peer never
 		// resolves as loopback: the exemption belongs to the socket peer alone.
 		expect(
-			peerIsLoopback(gate.clientAddress(req({ "x-forwarded-for": "127.0.0.1" }), "203.0.113.9")),
+			isLoopbackIp(gate.clientAddress(req({ "x-forwarded-for": "127.0.0.1" }), "203.0.113.9")),
 		).toBe(false);
 	});
 

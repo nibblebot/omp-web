@@ -9,6 +9,7 @@ import {
 	type AvailableSlashCommand,
 	type ImageArg,
 	CLIENT_BACKPRESSURE_BYTES,
+	CLIENT_STALL_MS,
 	DELTA_SEQ_START,
 	CLIENT_KEEPALIVE_MS,
 	CLIENT_RING_CAP,
@@ -667,13 +668,6 @@ export function notifyEvent(
 // `stallMs` is a peer that stopped reading (it still answers Bun's pings, so
 // idleTimeout never reaps it): closed 4503 like a cap overflow, so it resumes
 // with `after` once it reads again. A drain (or an empty buffer) resets the clock.
-
-/**
- * How long a buffered socket may go without draining before it is closed 4503.
- * Mirrors BROWSER_STALL_MS in apps/fleet/edge.ts; integration hoists the one
- * value next to CLIENT_BACKPRESSURE_BYTES in lib/wire/protocol.ts.
- */
-const CLIENT_STALL_MS = 30_000;
 
 /** Timing of the sweep; production passes none, tests shorten it. */
 export interface KeepaliveOptions {

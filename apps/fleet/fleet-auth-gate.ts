@@ -40,6 +40,7 @@
 
 import { createHash } from "node:crypto";
 import { isLoopbackHost } from "#lib/platform/hosts";
+import { isLoopbackIp } from "#lib/runtime/browser-guard";
 import { isTrustedProxy, type ProxyRule } from "./trusted-proxy";
 import { LoginThrottle } from "./login-throttle";
 import {
@@ -192,7 +193,7 @@ export class FleetAuthGate {
 		const peer = remoteAddress ?? "";
 		if (!isTrustedProxy(peer, this.#trustedProxies)) {
 			if (
-				peerIsLoopback(peer) &&
+				isLoopbackIp(peer) &&
 				(req.headers.has("x-forwarded-for") ||
 					req.headers.has("x-forwarded-proto") ||
 					req.headers.has("x-forwarded-host"))
@@ -208,7 +209,7 @@ export class FleetAuthGate {
 			const hop = hops[i]!.trim();
 			if (hop === "") return "";
 			if (isTrustedProxy(hop, this.#trustedProxies)) continue;
-			return peerIsLoopback(hop) && !peerIsLoopback(peer) ? "" : hop;
+			return isLoopbackIp(hop) && !isLoopbackIp(peer) ? "" : hop;
 		}
 		return peer;
 	}
@@ -220,7 +221,7 @@ export class FleetAuthGate {
 	 *  authenticate never re-reads forwarded headers itself. */
 	authenticate(req: Request, effectiveClient: string): AuthenticatedSession | null {
 		if (!this.enabled) return null;
-		if (peerIsLoopback(effectiveClient)) return null; // CLI loopback precedent
+		if (isLoopbackIp(effectiveClient)) return null; // CLI loopback precedent
 		return this.#store.authenticate(req);
 	}
 
@@ -233,21 +234,6 @@ export class FleetAuthGate {
 	checkOrigin(req: Request): boolean {
 		return this.#store.checkOrigin(req, this.#allowedOrigins);
 	}
-}
-
-/** Loopback peer test for a socket address: 127.0.0.0/8, ::1, and IPv4-mapped
- *  IPv6 of the same (strict numeric parts, same rule as the daemon R14 gate). */
-export function isLoopbackIp(address: string | null | undefined): boolean {
-	if (address === null || address === undefined) return false;
-	const a = address.toLowerCase();
-	if (a === "::1" || a.startsWith("::ffff:127.")) return true;
-	if (!a.startsWith("127.")) return false;
-	// Every dotted part must be numeric; "127.a.b.c" resolves off-loopback.
-	return a.split(".").every((part) => /^[0-9]{1,3}$/.test(part) && Number(part) <= 255);
-}
-
-export function peerIsLoopback(address: string | null | undefined): boolean {
-	return isLoopbackIp(address);
 }
 
 export { BrowserAuthError };

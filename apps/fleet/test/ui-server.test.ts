@@ -596,7 +596,7 @@ describe("ui daemon browser WebSocket bridge", () => {
 	/** 64 MiB in 64 KiB frames: more than the kernel buffers on the path, so the burst only fits if the forwarder absorbs it. */
 	const FLOOD_CHUNK_BYTES = 64 * 1024;
 	const FLOOD_MESSAGES = 1024;
-	/** The stand-in's stall rule (the edge's BROWSER_STALL_MS, shortened). */
+	/** The stand-in's stall rule (CLIENT_STALL_MS, shortened). */
 	const STALL_MS = 300;
 
 	interface FakeBrowserSocket {

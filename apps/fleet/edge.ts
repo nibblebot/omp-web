@@ -58,7 +58,7 @@
  *     attach.
  *   - Backpressure: a browser socket whose send buffer exceeds the cap (default
  *     CLIENT_BACKPRESSURE_BYTES) before a send, whose send is refused, or
- *     that buffers bytes with no drain for BROWSER_STALL_MS (a browser that
+ *     that buffers bytes with no drain for CLIENT_STALL_MS (a browser that
  *     stopped reading) is closed 4503 (drop-and-resume): the browser
  *     reconnects with `after` and the edge replays its ring. One slow
  *     browser never stalls the daemon stream or other browsers. The daemon's
@@ -97,6 +97,7 @@ import {
 	COMMAND_DEDUP_WINDOW_MS,
 	OMP_PROTO,
 	CLIENT_BACKPRESSURE_BYTES,
+	CLIENT_STALL_MS,
 	DELTA_SEQ_START,
 	CLIENT_KEEPALIVE_MS,
 	CLIENT_RING_CAP,
@@ -158,12 +159,6 @@ import { listProjectBranches, realpathOf } from "./worktrees";
 
 /** Reclaim grace for a disconnected browser's ring (`after` resume window). */
 const CLIENT_RECLAIM_MS = 60_000;
-/**
- * A browser socket whose send buffer holds unread bytes and has not drained
- * for this long has stopped reading and is closed 4503 (resume via `after`).
- * Checked on the keepalive sweep, so the drop lands within one sweep interval after it.
- */
-export const BROWSER_STALL_MS = 30_000;
 /** Drain checkpoints merge until they span this many queued bytes (bounds the checkpoint list). */
 const CREDIT_GRAIN_BYTES = 32 * 1024;
 
@@ -748,7 +743,7 @@ export class FleetEdge {
 	/** Fleet transcript store for clone session listing/resume membership. */
 	readonly #logStore: CloneSessionStore | undefined;
 	readonly #backpressureBytes: number;
-	/** A queue with unread bytes and no drain for this long drops the stream (default BROWSER_STALL_MS). */
+	/** A queue with unread bytes and no drain for this long drops the stream (default CLIENT_STALL_MS). */
 	readonly #stallMs: number;
 	/** Keepalive/stall sweep cadence (default CLIENT_KEEPALIVE_MS). */
 	readonly #keepaliveMs: number;
@@ -816,7 +811,7 @@ export class FleetEdge {
 			backpressureBytes?: number;
 			/** Per-client replay-ring byte budget (default CLIENT_RING_BYTES). */
 			ringBytes?: number;
-			/** Stall limit for a browser stream whose queue stops draining (default BROWSER_STALL_MS). */
+			/** Stall limit for a browser stream whose queue stops draining (default CLIENT_STALL_MS). */
 			stallMs?: number;
 			/** Keepalive and stall-sweep interval (default CLIENT_KEEPALIVE_MS). */
 			keepaliveMs?: number;
@@ -849,7 +844,7 @@ export class FleetEdge {
 		this.#logStore = deps.logStore;
 		this.#backpressureBytes = opts?.backpressureBytes ?? CLIENT_BACKPRESSURE_BYTES;
 		this.#ringBytes = opts?.ringBytes ?? CLIENT_RING_BYTES;
-		this.#stallMs = opts?.stallMs ?? BROWSER_STALL_MS;
+		this.#stallMs = opts?.stallMs ?? CLIENT_STALL_MS;
 		this.#keepaliveMs = opts?.keepaliveMs ?? CLIENT_KEEPALIVE_MS;
 		this.#serveUi = deps.serveUi ?? true;
 		this.#sessionsDir = deps.sessionsDir;

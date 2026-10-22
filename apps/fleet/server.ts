@@ -94,11 +94,12 @@ import {
 import { createStatsApp } from "./stats-app";
 import type { StatsConfig } from "./stats-config";
 import { BrowserAuthStore, clearSessionCookie } from "./browser-auth";
-import { browserRequestAllowed, isJsonRequest, PRE_AUTH_IDLE_TIMEOUT_S } from "./browser-guard";
+import { browserRequestAllowed, isLoopbackIp } from "#lib/runtime/browser-guard";
+import { isJsonRequest, PRE_AUTH_IDLE_TIMEOUT_S } from "./browser-guard";
 import { DaemonTransportRegistry } from "./daemon-transport";
 import { fleetWebSocket, type FleetSocketData } from "./fleet-websocket";
 import { BROWSER_SOCKET_PATH } from "#lib/wire/browser-socket";
-import { FleetAuthGate, isLoopbackBind, peerIsLoopback, BrowserAuthError } from "./fleet-auth-gate";
+import { FleetAuthGate, isLoopbackBind, BrowserAuthError } from "./fleet-auth-gate";
 import { compileTrustedProxies } from "./trusted-proxy";
 import { CALLBACK_TRANSPORT_STREAM_ID, type CallbackEnvelope } from "#lib/wire/callback-protocol";
 import { FleetLogStore, LogStoreError, type LogChunk, type LogIngestResult } from "./log-store";
@@ -1119,11 +1120,11 @@ class FleetServerImpl implements FleetServer {
 			);
 		}
 		const admission: BrowserAdmission = { refusal: null, session: null };
-		if (peerIsLoopback(remoteAddress) && !browserRequestAllowed(req, this.#browserOrigin)) {
+		if (isLoopbackIp(remoteAddress) && !browserRequestAllowed(req, this.#browserOrigin)) {
 			admission.refusal = { kind: "forbidden", message: "request host or origin refused" };
 		} else if (this.authGate !== null) {
 			const client = this.authGate.clientAddress(req, remoteAddress);
-			if (!peerIsLoopback(client)) {
+			if (!isLoopbackIp(client)) {
 				if (!this.authGate.checkOrigin(req)) {
 					admission.refusal = { kind: "forbidden", message: "origin not allowed" };
 				} else {
@@ -1161,7 +1162,7 @@ class FleetServerImpl implements FleetServer {
 		// Loopback peers skip browser auth below, so a request a browser sent on a
 		// page's behalf (foreign Host, Origin, or Sec-Fetch-Site) is refused here,
 		// before any route runs (FEDGE-02). Header-less CLI calls pass.
-		if (peerIsLoopback(remoteAddress) && !browserRequestAllowed(req, this.#browserOrigin)) {
+		if (isLoopbackIp(remoteAddress) && !browserRequestAllowed(req, this.#browserOrigin)) {
 			return json({ error: "forbidden" }, 403);
 		}
 		// Browser auth: /auth/* is public (the login/session/logout surface),
@@ -1199,7 +1200,7 @@ class FleetServerImpl implements FleetServer {
 			const isMutation = req.method !== "GET" && req.method !== "HEAD";
 			if (isDataRoute || isMutation) {
 				const client = this.authGate.clientAddress(req, remoteAddress);
-				if (!peerIsLoopback(client)) {
+				if (!isLoopbackIp(client)) {
 					const session = this.authGate.authenticate(req, client);
 					if (session === null) return json({ error: "unauthorized" }, 401);
 					if (req.method !== "GET" && req.method !== "HEAD") {

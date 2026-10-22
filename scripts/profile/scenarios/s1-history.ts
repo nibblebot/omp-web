@@ -241,7 +241,7 @@ export const s1HistoryLarge: Scenario = build({
 	prefix: "attach.completed.",
 	describe: (mib) =>
 		`Same shape as s1-history with a fixture of ${LARGE_HISTORY.turns} rounds, about ${mib} MiB on the wire, which is PAST the size at which ` +
-		"the edge ends a browser socket mid-priming (close 4503 at the 4 MiB CLIENT_BACKPRESSURE_BYTES drop-and-resume cap; a stalled client is cut after BROWSER_STALL_MS without drain. On the previous SSE transport, which added the kernel socket buffers, " +
+		"the edge ends a browser socket mid-priming (close 4503 at the 4 MiB CLIENT_BACKPRESSURE_BYTES drop-and-resume cap; a stalled client is cut after CLIENT_STALL_MS without drain. On the previous SSE transport, which added the kernel socket buffers, " +
 		"the harness's JSON-parsing client dropped roughly 14% of attaches at 8.9 MiB and nearly all at 23 MiB). " +
 		"The primary metric is attach.drop-rate (dropped attaches / attempts, over a fixed number of attempts per rep). " +
 		"attach.completed.* timings cover COMPLETED attaches only and are therefore BIASED toward attaches that were not dropped; " +

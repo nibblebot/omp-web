@@ -510,6 +510,12 @@ export const DELTA_SEQ_START = 1024;
 /** Per-client send-buffer cap: beyond it the connection is closed (drop-and-resume). */
 export const CLIENT_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
 /**
+ * A client socket whose send buffer holds unread bytes and has not drained for
+ * this long has stopped reading and is closed 4503 (resume via `after`).
+ * Servers check it on their keepalive sweep.
+ */
+export const CLIENT_STALL_MS = 30_000;
+/**
  * POST /command idempotency: how long an id is remembered, how many recorded
  * ANSWERS stay replayable, and the flood backstop on remembered ids.
  * Remembering an id is what makes a re-POST safe (it is re-accepted, never

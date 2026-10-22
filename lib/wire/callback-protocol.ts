@@ -1,4 +1,8 @@
-import { CLIENT_BACKPRESSURE_BYTES, CLIENT_KEEPALIVE_MS, CLIENT_SILENCE_DEADLINE_MS } from "./protocol";
+import {
+	CLIENT_BACKPRESSURE_BYTES,
+	CLIENT_KEEPALIVE_MS,
+	CLIENT_SILENCE_DEADLINE_MS,
+} from "./protocol";
 
 /**
  * Callback transport protocol (OMP_CALLBACK_PROTO = 2), separately versioned

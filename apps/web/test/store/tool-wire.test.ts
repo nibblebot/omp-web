@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
+import { parseServerMessage } from "#lib/wire/browser-socket";
 import type { WireSessionEvent } from "#lib/wire/protocol";
 import type { SessionEntry } from "../../../session/session-entry";
 import {
@@ -213,9 +214,10 @@ describe("running tool output on the wire", () => {
 			if (wire !== null) broadcastTo(entry.handle, { type: "event", event: wire });
 		}
 		for (const { value } of ringAfter(floor)) {
-			const data = /^data: (.*)$/m.exec(value)![1];
-			const frame = JSON.parse(data) as { event: WireSessionEvent };
-			applyEvent(frame.event);
+			const message = parseServerMessage(value);
+			if (message?.kind !== "frame" || message.frame.type !== "event")
+				throw new Error(`not an event frame: ${value}`);
+			applyEvent(message.frame.event);
 		}
 		await tick();
 		expect(cardOutput()).toBe("one\ntwo\nthree\n");

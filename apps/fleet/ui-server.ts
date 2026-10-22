@@ -62,7 +62,8 @@ import {
 	callbackError,
 } from "#lib/wire/callback-protocol";
 import { OMP_PROTO } from "#lib/wire/protocol";
-import { browserRequestAllowed, PRE_AUTH_IDLE_TIMEOUT_S } from "./browser-guard";
+import { browserRequestAllowed } from "#lib/runtime/browser-guard";
+import { PRE_AUTH_IDLE_TIMEOUT_S } from "./browser-guard";
 import { serveStaticUi } from "./static-ui";
 
 export const DEFAULT_UI_PORT = 4723;
