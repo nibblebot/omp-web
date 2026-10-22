@@ -33,7 +33,6 @@ import {
 	BULK_FINAL_HEADER,
 	BULK_PART_HEADER,
 	CALLBACK_BULK_PATH_PREFIX,
-	CALLBACK_PROTO1_PATHS,
 	CALLBACK_PROTO_HEADER,
 	CALLBACK_WS_PATH,
 	CALLBACK_WS_SEND_HIGH_WATER_BYTES,
@@ -437,32 +436,6 @@ describe("daemon transport pair: establishment and refusal", () => {
 		}
 	});
 
-	test("the proto-1 legs answer a typed proto_unsupported 410 whatever the method or credential", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
-		const ws = "ws-legacy-legs";
-		const cred = randomBytes(32).toString("hex");
-		fixture.registry.enrollWorkspace(ws, 1, cred);
-		try {
-			expect(CALLBACK_PROTO1_PATHS).toEqual(["/callback/up", "/callback/down"]);
-			for (const path of CALLBACK_PROTO1_PATHS) {
-				for (const method of ["POST", "GET"]) {
-					const res = await fetch(`${fixture.url}${path}`, {
-						method,
-						headers: wireHeaders(ws, 1, randomUUID(), cred),
-						...(method === "POST" ? { body: "" } : {}),
-					});
-					expect(res.status).toBe(410);
-					expect(await res.json()).toMatchObject({ error: "proto_unsupported" });
-				}
-			}
-			const anonymous = await fetch(`${fixture.url}/callback/up`, { method: "POST", body: "" });
-			expect(anonymous.status).toBe(410);
-			expect(fixture.registry.pairStatus(ws).paired).toBe(false);
-		} finally {
-			fixture.stop();
-		}
-	});
-
 	test("revoking a generation closes its live pair; the revoked credential is then refused and a new generation pairs", async () => {
 		const fixture = serve(new DaemonTransportRegistry());
 		const ws = "ws-revoke";
@@ -688,7 +661,7 @@ describe("daemon transport pair: receive path", () => {
 		}
 	});
 
-	test("bad messages (not JSON, binary, unknown kind, over the envelope cap) are dropped, counted and logged; the pair stays live and ordered", async () => {
+	test("bad messages (not JSON, binary, over the envelope cap) are dropped, counted and logged; the pair stays live and ordered", async () => {
 		const dropped: string[] = [];
 		const fixture = serve(
 			new DaemonTransportRegistry({ onDroppedMessage: (m) => dropped.push(m) }),
@@ -706,11 +679,6 @@ describe("daemon transport pair: receive path", () => {
 			const client = await dialReady(fixture, ws, 1, cred);
 			client.sendRaw("{ not json");
 			client.sendRaw(new Uint8Array([1, 2, 3]));
-			// A pre-wqd2 session sends `ack` as its command receipt: an unknown kind.
-			client.push("control", "ack" as CallbackEnvelope["kind"], {
-				type: "command_ack",
-				id: "legacy",
-			});
 			// Past the 1 MiB envelope cap but under the socket's message cap: the
 			// envelope is dropped alone, the socket survives.
 			client.push("control", "frame", { blob: "x".repeat(ENVELOPE_MAX_BYTES + 1024) });
@@ -718,7 +686,7 @@ describe("daemon transport pair: receive path", () => {
 			client.push("control", "command", { type: "cmd", id: "probe" });
 			await waitFor(() => (sunk.includes("command") ? true : undefined), 2000, "probe sunk");
 			expect(sunk).toEqual(["command"]);
-			expect(dropped).toHaveLength(4);
+			expect(dropped).toHaveLength(3);
 			expect(dropped.join("\n")).toContain("binary message");
 			expect(fixture.registry.pairStatus(ws).paired).toBe(true);
 			const cmd = await fixture.registry.sendToDaemon(ws, {

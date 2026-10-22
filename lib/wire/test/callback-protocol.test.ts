@@ -7,7 +7,6 @@ import {
 	callbackCloseFor,
 	callbackErrorFromClose,
 	canonicalPayloadJson,
-	codeFromHttpStatus,
 	decodeEnvelope,
 	ENVELOPE_MAX_BYTES,
 	encodeEnvelopeAround,
@@ -223,12 +222,6 @@ describe("pair-socket refusal close codes", () => {
 	test("an untyped refusal reason falls back to the status", () => {
 		expect(callbackErrorFromClose(4401, "denied")?.code).toBe("unauthorized");
 		expect(callbackErrorFromClose(4599, "")?.code).toBe("retryable");
-	});
-
-	test("proto_unsupported reads as generation_obsolete to a client that does not know the code", () => {
-		const close = callbackCloseFor(new CallbackError("proto_unsupported", "proto 1"));
-		expect(close.code).toBe(4410);
-		expect(codeFromHttpStatus(close.code - 4000)).toBe("generation_obsolete");
 	});
 });
 

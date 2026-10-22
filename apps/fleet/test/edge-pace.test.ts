@@ -1,9 +1,10 @@
 /**
  * Edge priming pace (kata 0tas): a browser attach whose history is far past the
- * edge's byte cap is paced by the browser's drain (stream_open `ack`, stream_ack)
- * instead of being cut mid-priming when the browser drains slower than the
- * daemon writes, while a browser that stopped reading is still dropped and the
- * daemon's burst stays parked upstream (memory in the fleet stays bounded).
+ * edge's byte cap is paced by the browser's drain (stream_open ack pacing,
+ * stream_ack) instead of being cut mid-priming when the browser drains slower
+ * than the daemon writes, while a browser that stopped reading is still dropped
+ * and the daemon's burst stays parked upstream (memory in the fleet stays
+ * bounded).
  *
  * The daemon is the callback-daemon testkit driving a session-shaped sender that
  * honors the credit window exactly as apps/session/daemon-control.ts does. The
@@ -156,8 +157,8 @@ function controls(daemon: CallbackDaemon, streamId: string, type: string): Callb
 		.filter((e) => e.kind === "control" && e.streamId === streamId && controlType(e) === type);
 }
 
-/** The stream_open the edge sent for the single browser stream: its id and whether it asked for ack pacing. */
-async function openedStream(daemon: CallbackDaemon): Promise<{ streamId: string; ack: boolean }> {
+/** The stream_open the edge sent for the single browser stream: its id. */
+async function openedStream(daemon: CallbackDaemon): Promise<{ streamId: string }> {
 	const open = await waitFor(
 		() =>
 			daemon.received().find((e) => e.kind === "control" && controlType(e) === "stream_open") ??
@@ -165,14 +166,14 @@ async function openedStream(daemon: CallbackDaemon): Promise<{ streamId: string;
 		5000,
 		"stream_open",
 	);
-	return { streamId: open.streamId, ack: payloadField(open, "ack") === true };
+	return { streamId: open.streamId };
 }
 
 /**
  * A session-shaped priming burst: `FRAMES` history frames and a closing `ready`.
  * With `honorCredit` it keeps at most the credit window of unacknowledged frames
- * in flight, exactly as the session's paced prime does; without it (an older
- * session) it writes everything at once. `parked` resolves the first time the
+ * in flight, exactly as the session's paced prime does; without it (a daemon that
+ * ignores the credit window) it writes everything at once. `parked` resolves the first time the
  * sender had to wait for credit.
  */
 function startPrimer(daemon: CallbackDaemon, streamId: string, honorCredit: boolean) {
@@ -239,8 +240,7 @@ describe("edge priming pace", () => {
 			const { daemonId, daemon } = await connectRemote(rig, "paced");
 			browser.pause();
 			browser.send({ type: "attach", sessionId: daemonId });
-			const { streamId, ack } = await openedStream(daemon);
-			expect(ack).toBe(true);
+			const { streamId } = await openedStream(daemon);
 			const primer = startPrimer(daemon, streamId, true);
 			// The burst runs into the credit window while the browser reads nothing:
 			// upstream backpressure, not an edge-side queue growing toward the cap.
@@ -307,8 +307,7 @@ describe("edge priming pace", () => {
 			const { daemonId, daemon } = await connectRemote(rig, "ignoring");
 			browser.pause();
 			browser.send({ type: "attach", sessionId: daemonId });
-			const { streamId, ack } = await openedStream(daemon);
-			expect(ack).toBe(true);
+			const { streamId } = await openedStream(daemon);
 			const primer = startPrimer(daemon, streamId, false);
 			await primer.run;
 			await waitFor(

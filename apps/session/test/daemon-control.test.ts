@@ -116,8 +116,8 @@ function makeHarness(
 	return { control, sent, primes, sentCount };
 }
 
-/** Open the stream (stream_open control) with an optional lastSeq; `ack` asks for the fleet's drain pacing. */
-function openStream(control: DaemonControl, lastSeq?: number, ack = false): void {
+/** Open the stream (stream_open control) with an optional lastSeq. */
+function openStream(control: DaemonControl, lastSeq?: number): void {
 	control.handleEnvelope({
 		version: 2,
 		workspaceId: "w1",
@@ -129,7 +129,6 @@ function openStream(control: DaemonControl, lastSeq?: number, ack = false): void
 		payload: {
 			type: "stream_open",
 			...(lastSeq !== undefined ? { lastSeq } : {}),
-			...(ack ? { ack: true } : {}),
 		},
 		at: Date.now(),
 	} satisfies CallbackEnvelope);
@@ -540,18 +539,24 @@ test("a live backlog past the ring budget mid-prime re-primes in place with no s
 
 test("sustained output with a full-speed client primes without a reset loop", async () => {
 	// Live output keeps arriving while the prime drains. A full-speed client
-	// never overflows the held budget, so the prime completes once and every
+	// acknowledges each frame as it drains, so the prime completes once and every
 	// live delta lands in order, with no stream_resync.
 	const { control, sent, primes, sentCount } = makeHarness(() => [{ type: "state", state: {} }]);
+	const acknowledgeDrained = (): void => {
+		const seq = sent.reduce((max, s) => (s.seq === null ? max : Math.max(max, s.seq)), 0);
+		if (seq > 0) ackStream(control, seq);
+	};
 	openStream(control);
 	const blob = "x".repeat(1024 * 1024);
 	for (let i = 0; i < 40; i++) {
 		const before = sent.length;
 		control.mirror({ type: "event", event: { i, blob } });
 		await sentCount(before + 1);
+		acknowledgeDrained();
 	}
 	// state + 40 live deltas.
 	await sentCount(41);
+	acknowledgeDrained();
 	expect(primes).toHaveLength(1);
 	expect(
 		sent.some(
@@ -674,9 +679,9 @@ describe("daemon-control ack-paced priming (fleet drain credit)", () => {
 	const historySeqs = (sent: Sent[]): number[] =>
 		sent.filter((s) => s.kind === "frame" && typeOf(s.payload) === "history").map((s) => s.seq!);
 
-	test("an acked stream holds the burst to the credit window and releases it per stream_ack", async () => {
+	test("a stream holds the burst to the credit window and releases it per stream_ack", async () => {
 		const { control, sent } = makeHarness(snapshot);
-		openStream(control, undefined, true);
+		openStream(control);
 		await settle();
 		// A frame goes out only while unacknowledged bytes plus one maximal envelope
 		// (1 MiB) fit the 3 MiB window: three 700 KiB frames leave 2100 KiB in flight.
@@ -689,14 +694,6 @@ describe("daemon-control ack-paced priming (fleet drain credit)", () => {
 		expect(historySeqs(sent)).toHaveLength(4);
 		// A cumulative ack past everything sent lets the rest through.
 		ackStream(control, historySeqs(sent).at(-1)!);
-		await settle();
-		expect(historySeqs(sent)).toHaveLength(FRAMES);
-		control.stop();
-	});
-
-	test("a stream opened without ack is not held by the window (older fleet)", async () => {
-		const { control, sent } = makeHarness(snapshot);
-		openStream(control);
 		await settle();
 		expect(historySeqs(sent)).toHaveLength(FRAMES);
 		control.stop();
@@ -716,7 +713,7 @@ describe("daemon-control ack-paced priming (fleet drain credit)", () => {
 				return () => drains.delete(listener);
 			},
 		);
-		openStream(control, undefined, true);
+		openStream(control);
 		await settle();
 		expect(historySeqs(sent)).toHaveLength(3);
 		ackStream(control, 1); // below every sent seq

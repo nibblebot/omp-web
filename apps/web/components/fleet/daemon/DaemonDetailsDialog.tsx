@@ -17,9 +17,9 @@ export const DaemonDetailsDialog: Component<{ daemon: DaemonEntry; onClose: () =
 ) => {
 	const d = () => props.daemon;
 	// Live-process facts (uptime/pid) mean nothing once the daemon is asleep or
-	// errored; stale entries from older edges may still carry pid/readyAt from
-	// the last run, so render them defensively off status, not field presence.
-	// The roster entry's status is the single source of truth.
+	// errored, and such an entry may still carry pid/readyAt from the last run,
+	// so render them defensively off status, not field presence. The roster
+	// entry's status is the single source of truth.
 	const alive = () =>
 		d().status === "ready" ||
 		d().status === "connecting" ||

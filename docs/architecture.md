@@ -84,7 +84,7 @@ sequenceDiagram
   E-->>B: roster, daemons, projects (priming, seq 1..k)
   B->>E: cmd attach
   E-->>B: ack
-  E->>S: stream_open (lastSeq, ack) on browser/connId
+  E->>S: stream_open (lastSeq) on browser/connId
   E-->>B: attach_result (id-keyed)
   S->>E: hello_ok, attached, history chunks, state, available_commands, ready
   E-->>B: frames (sessionId stamped)

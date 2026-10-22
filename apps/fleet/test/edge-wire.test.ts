@@ -14,7 +14,6 @@ import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-st
 import { __resetDirsFromEnvForTests, setAgentDir } from "@oh-my-pi/pi-utils";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import { OMP_PROTO } from "#lib/wire/protocol";
-import { staleTabEventsBody } from "#lib/wire/browser-socket";
 import { MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
 import { CALLBACK_CONTROL_STREAM_ID, type CallbackEnvelope } from "#lib/wire/callback-protocol";
 import { signalProcessGroup } from "../host-provider";
@@ -473,27 +472,6 @@ describe("fleet edge", () => {
 		expect(anon.nacks).toEqual([{ id, status: 400, error: expect.any(String) }]);
 		expect(anon.acks).toEqual([]);
 		expect(anon.closeInfo).toBeNull();
-	});
-
-	test("stale tabs: GET /events answers the proto mismatch hello_ok and ends; POST /command answers 410", async () => {
-		const events = await fetch(`${fleetUrl()}/events?client=old-tab`);
-		expect(events.status).toBe(200);
-		expect(events.headers.get("content-type")).toContain("text/event-stream");
-		// The body ends on its own: reading it to the end resolves.
-		expect(await events.text()).toBe(staleTabEventsBody(OMP_PROTO));
-		for (const body of [JSON.stringify({ type: "sync_projects", id: "x" }), "not json", ""]) {
-			const res = await fetch(`${fleetUrl()}/command`, {
-				method: "POST",
-				headers: { "content-type": "application/json", "x-omp-client-id": "old-tab" },
-				body,
-			});
-			expect(res.status).toBe(410);
-			expect(await res.json()).toEqual({ error: "proto_unsupported" });
-		}
-		// Other methods on the retired paths are not the stale answer: they fall
-		// through to the control plane, which knows neither route.
-		expect((await fetch(`${fleetUrl()}/events`, { method: "POST", body: "{}" })).status).toBe(404);
-		expect((await fetch(`${fleetUrl()}/command`)).status).toBe(404);
 	});
 
 	test("add_project registers the main checkout for a linked-worktree path; a second add answers existing", async () => {

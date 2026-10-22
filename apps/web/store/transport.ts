@@ -481,9 +481,9 @@ export function call(
 // `attach_result` frame (finding #28): the sessionId is the daemonId, and
 // the daemon's own priming (history/state/available_commands) follows the
 // proxied attached frame. A bare omp-session never receives attach (its
-// sockets are attached from upgrade). An older edge that ignores the attach
-// id never sends the keyed frame; the DAEMON_TIMEOUT_MS backstop settles
-// the waiter then (#31-style pending map).
+// sockets are attached from upgrade). An attach that never gets its keyed
+// answer is settled by the DAEMON_TIMEOUT_MS backstop (#31-style pending
+// map).
 // ---------------------------------------------------------------------------
 let pendingAttach: {
 	id: string;

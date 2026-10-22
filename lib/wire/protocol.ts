@@ -1406,10 +1406,10 @@ export type ServerFrame =
 			projects: RegisteredProject[];
 			configPath?: string | null;
 			/**
-			 * Boot-static secret-free provider-profile catalog (frozen
-			 * contract, additive). Absent from older fleets; clients treat
-			 * it as an empty catalog. Never carries secret values or
-			 * executable internals.
+			 * Boot-static secret-free provider-profile catalog. Absent when
+			 * the fleet has no profiles configured; clients treat that as an
+			 * empty catalog. Never carries secret values or executable
+			 * internals.
 			 */
 			providerProfiles?: PublicProviderProfile[];
 	  }

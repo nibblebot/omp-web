@@ -81,7 +81,7 @@ location /ws {
 }
 ```
 
-Kubernetes ingress-nginx passes the upgrade by itself; raise `nginx.ingress.kubernetes.io/proxy-read-timeout` and `nginx.ingress.kubernetes.io/proxy-send-timeout` to `"120"` on the Ingress that serves the UI. Other ingress controllers and gateways have an equivalent WebSocket or upgrade option and timeout setting. A browser tab that was open before an upgrade to this protocol still dials `GET /events` and `POST /command`; both answer with a protocol-mismatch notice (`/command` with 410), and a reload fixes it.
+Kubernetes ingress-nginx passes the upgrade by itself; raise `nginx.ingress.kubernetes.io/proxy-read-timeout` and `nginx.ingress.kubernetes.io/proxy-send-timeout` to `"120"` on the Ingress that serves the UI. Other ingress controllers and gateways have an equivalent WebSocket or upgrade option and timeout setting.
 
 The other direction: a session that has to leave its network through a proxy resolves the proxy itself, because Bun's WebSocket client ignores `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` (Bun's `fetch`, used for the bulk POSTs, honors them; the session passes the one resolved proxy to both). It uses the launch payload's explicit `callback.proxy` (`OMP_SESSION_CALLBACK_PROXY` in the callback handoff) when present, else those variables in its own process environment. The fleet does not copy its own proxy variables into a clone or pod: a sandboxed or in-pod session sees only the proxy variables the runtime environment gives it (for a pod, whatever the cluster injects). Only `http://` and `https://` proxies are supported, reached with `CONNECT`; an unsupported scheme is an error, never a silent direct connection. The proxy must allow `CONNECT` to the control plane's port.
 

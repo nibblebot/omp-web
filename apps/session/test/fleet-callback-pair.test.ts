@@ -157,23 +157,6 @@ describe("FleetCallback dial", () => {
 		// An ordinary close is no refusal: the instance keeps redialing.
 		expect(callback.status().state).toBe("ready");
 	});
-
-	test("a failed dial is not the end: a fleet without the route is retried, never terminal", async () => {
-		const fleet = makeFleet({ noRoute: true });
-		const rejections: CallbackError[] = [];
-		const callback = makeCallback(
-			fleet,
-			{ backoffMinMs: 10, backoffMaxMs: 10 },
-			{ onRejected: (error) => rejections.push(error) },
-		);
-		void callback.start().catch(() => {});
-		await fleet.whenUpgrades(3);
-
-		expect(rejections).toEqual([]);
-		expect(callback.status().state).not.toBe("stopped");
-		expect(callback.status().lastError?.code).toBe("retryable");
-		callback.stop();
-	});
 });
 
 describe("FleetCallback pair_ready", () => {

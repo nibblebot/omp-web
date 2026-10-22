@@ -61,8 +61,8 @@ export function sessionActivity(
 		unreviewed: boolean;
 		unread: boolean;
 		/** Per-daemon realtime activity broadcast by the fleet edge
-		 *  (`daemon_activity` frames). Undefined for old edges that never send
-		 *  them, for a daemon whose stream is down, and for the attached row
+		 *  (`daemon_activity` frames). Undefined for a daemon whose stream is
+		 *  down or whose activity is not known yet, and for the attached row
 		 *  (its own live signals win). */
 		remote?: { streaming: boolean; blocked: boolean };
 	},
@@ -75,9 +75,10 @@ export function sessionActivity(
 	// user is scrolled up), yellow until they scroll to the live edge.
 	if (live.attached && live.unreviewed) return "unreviewed";
 	// Detached row: fall back to the edge's realtime per-daemon reading
-	// (undefined for old edges / a down stream; then only the unread latch
-	// below can paint a dot). Remote blocked is checked before remote
-	// streaming so a daemon with an open dialog reads "blocked" even mid-turn.
+	// (undefined while the stream is down or activity is unknown; then only
+	// the unread latch below can paint a dot). Remote blocked is checked
+	// before remote streaming so a daemon with an open dialog reads "blocked"
+	// even mid-turn.
 	if (!live.attached && live.remote?.blocked) return "blocked";
 	if (!live.attached && live.remote?.streaming) return "in_progress";
 	// Unread is detached-only and secondary to the live readings above: the

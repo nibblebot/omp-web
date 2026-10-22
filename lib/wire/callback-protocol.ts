@@ -36,8 +36,6 @@ import {
  * Bulk: daemon-initiated POST /callback/bulk/<correlationId>, 64 MiB cap,
  *       on its own HTTP request so a transfer never blocks the pair;
  *       completion is never archive acceptance.
- * Proto 1: the fleet answers the old POST /callback/up and GET
- *       /callback/down legs with a typed `proto_unsupported` refusal (410).
  */
 
 /** Callback protocol version. */
@@ -45,9 +43,7 @@ export const OMP_CALLBACK_PROTO = 2;
 
 /** The one pair route: WebSocket upgrade. */
 export const CALLBACK_WS_PATH = "/callback/ws";
-/** Proto-1 pair legs; the fleet refuses them with `proto_unsupported`. */
-export const CALLBACK_PROTO1_PATHS: readonly string[] = ["/callback/up", "/callback/down"];
-/** Bulk transfer route prefix (HTTP POST, unchanged from proto 1). */
+/** Bulk transfer route prefix (HTTP POST). */
 export const CALLBACK_BULK_PATH_PREFIX = "/callback/bulk/";
 /**
  * Upgrade request header naming the daemon's OMP_CALLBACK_PROTO. The fleet
@@ -102,24 +98,22 @@ export interface StreamResyncControl {
 
 /**
  * fleet→daemon, kind "control", on a `browser/<connId>` stream: (re)open it.
- * `lastSeq` is the replay floor (absent after a pair replacement). `ack: true`
- * asks the daemon to pace the stream's priming and history resyncs by the
- * fleet's drain: it keeps at most STREAM_ACK_WINDOW_BYTES of frames the fleet
- * has not yet acknowledged with StreamAckControl, instead of pacing against its
- * own outbound buffer alone. Every proto-2 daemon honors it.
+ * `lastSeq` is the replay floor (absent after a pair replacement). The daemon
+ * paces the stream's priming and history resyncs by the fleet's drain: it
+ * keeps at most STREAM_ACK_WINDOW_BYTES of frames the fleet has not yet
+ * acknowledged with StreamAckControl, instead of pacing against its own
+ * outbound buffer alone.
  */
 export interface StreamOpenControl {
 	type: "stream_open";
 	lastSeq?: number;
-	ack?: true;
 }
 
 /**
- * fleet→daemon, kind "control", on a `browser/<connId>` stream opened with
- * `ack: true`: every frame the daemon sent on this stream with wire seq at or
- * below `seq` has left the fleet's memory for the browser's socket (the
- * fleet's per-browser queue drained past it). Cumulative; stale or repeated
- * values are harmless.
+ * fleet→daemon, kind "control", on a `browser/<connId>` stream: every frame the
+ * daemon sent on this stream with wire seq at or below `seq` has left the
+ * fleet's memory for the browser's socket (the fleet's per-browser queue
+ * drained past it). Cumulative; stale or repeated values are harmless.
  */
 export interface StreamAckControl {
 	type: "stream_ack";
@@ -127,7 +121,7 @@ export interface StreamAckControl {
 }
 
 /**
- * Unacknowledged bytes a daemon may hold in flight per acked browser stream
+ * Unacknowledged bytes a daemon may hold in flight per browser stream
  * (sent, or queued for sending, and not yet covered by a stream_ack). A
  * sender also keeps one maximal envelope (ENVELOPE_MAX_BYTES) of headroom
  * inside it, so the fleet's per-browser queue (CLIENT_BACKPRESSURE_BYTES) always
@@ -290,10 +284,6 @@ export const CALLBACK_ERROR_HTTP_STATUS: Record<CallbackErrorCode, number> = {
 	provider_failed: 500,
 	retryable: 503,
 	payload_too_large: 413,
-	/**
-	 * 410 on purpose: a proto-1 session does not know this code, falls back to
-	 * the status, reads `generation_obsolete`, and exits instead of redialing.
-	 */
 	proto_unsupported: 410,
 };
 
@@ -302,18 +292,12 @@ export function isCallbackErrorCode(value: string): value is CallbackErrorCode {
 	return (CALLBACK_ERROR_CODES as readonly string[]).includes(value);
 }
 
-/**
- * Ledger code a refusal with no typed `error` body stands for, keyed by HTTP
- * status. Shared statuses take the ledger's canonical code; 404/410 predate
- * typed refusals and have no ledger code of their own.
- */
+/** Ledger code a refusal with no typed `error` body stands for, keyed by HTTP status. */
 const UNTYPED_REFUSAL_CODE: Record<number, CallbackErrorCode> = {
 	400: "invalid_request",
 	401: "unauthorized",
 	403: "forbidden",
-	404: "invalid_identity",
 	409: "conflict",
-	410: "generation_obsolete",
 	429: "retryable",
 	503: "unavailable",
 };

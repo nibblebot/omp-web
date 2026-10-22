@@ -26,13 +26,10 @@ export interface FakeFleetOptions {
 	generation: number;
 	/** Credential the fleet accepts; anything else is refused `unauthorized`. */
 	token: string;
-	/**
-	 * Refuse every upgrade (the fleet upgrades, then closes): with a typed ledger code, or with
+	/** Refuse every upgrade (the fleet upgrades, then closes): with a typed ledger code, or with
 	 * a raw close frame such as one whose reason names no code.
 	 */
 	refuse?: { code: CallbackErrorCode; message?: string } | { close: FakeFleetClose };
-	/** Answer the pair route with a plain 404 and no upgrade (an old fleet without the route). */
-	noRoute?: boolean;
 	/** Withhold pair_ready on every accepted socket until releaseReady(). */
 	holdReady?: boolean;
 	/** Envelopes written in the same tick right behind pair_ready, so they share its socket read. */
@@ -197,7 +194,6 @@ export function startFakeFleet(options: FakeFleetOptions): FakeFleet {
 			if (path === CALLBACK_WS_PATH) {
 				upgrades.push({ url: req.url, headers: req.headers });
 				notify();
-				if (options.noRoute === true) return new Response("not found", { status: 404 });
 				const data: SocketData = {
 					connectionId: req.headers.get("x-omp-connection-id") ?? "",
 					seq: 0,

@@ -2,9 +2,9 @@
  * UI daemon wire tests: startUiServer in front of a real control plane
  * (startFleet) and in front of fake upstreams (a stand-in /ws and
  * /callback/ws control plane). Covers static serving, proxied JSON, the
- * stale-tab answers for /events and /command, the forwarded-header rewrite,
- * upstream status passthrough, the 502 when the control plane is down, the
- * auth gate as seen through the proxy, the control plane's serveUi=false 404,
+ * forwarded-header rewrite, upstream status passthrough, the 502 when the
+ * control plane is down, the auth gate as seen through the proxy, the control
+ * plane's serveUi=false 404,
  * and the callback and browser WebSocket bridges.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -18,7 +18,6 @@ import {
 	browserCloseFromCode,
 	browserSocketUrl,
 	seqFrameMessage,
-	staleTabEventsBody,
 } from "#lib/wire/browser-socket";
 import {
 	CALLBACK_PROTO_HEADER,
@@ -117,23 +116,6 @@ describe("ui daemon proxy", () => {
 		expect(via.status).toBe(direct.status);
 		expect(via.status).toBe(200);
 		expect(await via.json()).toEqual(await direct.json());
-	});
-
-	test("answers a stale tab's GET /events with one hello_ok naming the current proto, then ends", async () => {
-		const res = await fetch(`http://127.0.0.1:${ui.port}/events?client=${crypto.randomUUID()}`);
-		expect(res.status).toBe(200);
-		expect(res.headers.get("content-type")).toContain("text/event-stream");
-		expect(await res.text()).toBe(staleTabEventsBody(OMP_PROTO));
-	});
-
-	test("answers a stale tab's POST /command with 410 proto_unsupported", async () => {
-		const res = await fetch(`http://127.0.0.1:${ui.port}/command`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ type: "nope" }),
-		});
-		expect(res.status).toBe(410);
-		expect(await res.json()).toEqual({ error: "proto_unsupported" });
 	});
 
 	test("a plain GET /ws is refused with 426, not served as the UI shell", async () => {
@@ -680,7 +662,7 @@ describe("ui daemon browser WebSocket bridge", () => {
 						pump(ws);
 					} else if (text.startsWith("close:")) {
 						const code = Number(text.slice("close:".length));
-						ws.close(code, browserCloseFor("proto_mismatch", "stale tab").reason);
+						ws.close(code, browserCloseFor("proto_mismatch", "old build").reason);
 					} else ws.send(`echo:${text}`);
 				},
 				drain: pump,
@@ -771,7 +753,7 @@ describe("ui daemon browser WebSocket bridge", () => {
 		fromUpstream.ws.send("close:4426");
 		expect(await fromUpstream.closed).toEqual({
 			code: 4426,
-			reason: "proto_mismatch: stale tab",
+			reason: "proto_mismatch: old build",
 		});
 
 		const fromBrowser = dialBrowser(ui.port, { clientId: "tab-3", after: null });

@@ -1170,14 +1170,6 @@ class FleetServerImpl implements FleetServer {
 		// probe. Disabled (no token configured) → the session route still
 		// answers 404 and everything below behaves exactly as before.
 		if (path0.startsWith("/auth/")) return await this.#handleAuth(req, remoteAddress);
-		// A tab loaded before OMP_PROTO 5 still dials GET /events and POST
-		// /command. Both answers carry no data (the proto mismatch the old tab
-		// shows), so they sit before the session gate: a signed-out old tab sees
-		// the mismatch, not a sign-in loop it cannot leave.
-		if (path0 === "/events" || path0 === "/command") {
-			const stale = await this.edge.handleFetch(req);
-			if (stale !== null) return stale;
-		}
 		// Everything remaining is protected when browser auth is enabled:
 		// the edge's browser routes (/ctl/*, static) AND
 		// the control-plane /ctl/* routes. Non-loopback clients must hold a

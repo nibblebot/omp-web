@@ -1762,7 +1762,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 
-		// Older edges omit configPath entirely: the store must read null.
+		// A frame without configPath means no config file: the store reads null.
 		dispatch({ type: "registered_projects", projects: [p1] });
 		expect(state.fleetConfigPath).toBeNull();
 
@@ -2797,9 +2797,9 @@ describe("reportError", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Unread-dot tracking: a session abandoned mid-stream (its turn's end will
-// never be observed on this tab) is marked unread at switch-away time; the
-// row is cleared on attach; dead roster entries are pruned. All client-side.
+// Unread-dot tracking: a detached daemon's daemon_activity flip true→false
+// marks it unread; the row is cleared on attach; dead roster entries are
+// pruned. All client-side.
 // ---------------------------------------------------------------------------
 describe("unread-dot tracking", () => {
 	/** Minimal roster entry (mirrors the reconciliation describe). */
@@ -2815,43 +2815,22 @@ describe("unread-dot tracking", () => {
 		};
 	}
 
-	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
+	/** A turn ending on a detached daemon: the edge observed streaming → idle. */
+	function detachedTurnEnd(id: string): void {
+		dispatch({ type: "daemon_activity", daemonId: id, streaming: true, blocked: false });
+		dispatch({ type: "daemon_activity", daemonId: id, streaming: false, blocked: false });
+	}
 
 	beforeEach(() => {
 		// Module-level unread state must not leak between tests.
 		pruneUnread(new Set());
 	});
 
-	test("switching away mid-stream marks the abandoned session unread", () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch(attached("daemon-a"));
-		dispatchSeq(agentStart(), 1024); // driver state.streaming → true
-		expect(state.streaming).toBe(true);
-
-		dispatch(attached("daemon-b"));
-
-		expect(unreadIds().has("daemon-a")).toBe(true);
-		expect(unreadIds().has("daemon-b")).toBe(false);
-	});
-
-	test("switching away while NOT streaming leaves the session read", () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch(attached("daemon-a"));
-
-		dispatch(attached("daemon-b"));
-
-		expect(unreadIds().has("daemon-a")).toBe(false);
-		expect(unreadIds().has("daemon-b")).toBe(false);
-	});
-
 	test("attaching to a marked session clears its unread dot", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch(attached("daemon-a"));
-		dispatchSeq(agentStart(), 1024);
-		dispatch(attached("daemon-b"));
+		dispatch(attached("daemon-b")); // daemon-a is detached
+		detachedTurnEnd("daemon-a");
 		expect(unreadIds().has("daemon-a")).toBe(true);
 
 		dispatch(attached("daemon-a"));
@@ -2862,9 +2841,8 @@ describe("unread-dot tracking", () => {
 	test("a roster frame prunes unread ids for daemons that left", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch(attached("daemon-a"));
-		dispatchSeq(agentStart(), 1024);
 		dispatch(attached("daemon-b"));
+		detachedTurnEnd("daemon-a");
 		expect(unreadIds().has("daemon-a")).toBe(true);
 
 		dispatch({ type: "roster", daemons: [daemon("daemon-b")] });

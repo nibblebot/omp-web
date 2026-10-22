@@ -89,7 +89,7 @@ describe("sessionActivity precedence on ready rows", () => {
 	});
 });
 
-describe("sessionActivity detached rows (no remote signal: old edge or down stream)", () => {
+describe("sessionActivity detached rows (no remote signal: stream down or activity not yet known)", () => {
 	test("uiPending without attached → not blocked (client signals describe only the attached session)", () => {
 		expect(sessionActivity({ status: "ready" }, { ...DETACHED, uiPending: true })).toBe("idle");
 	});

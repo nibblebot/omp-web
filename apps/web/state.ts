@@ -486,8 +486,8 @@ export const [state, setState] = createStore({
 	// zero-daemon projects still render).
 	registeredProjects: [] as RegisteredProject[],
 	// Secret-free provider profile catalog (optional
-	// registered_projects.providerProfiles; older fleets omit it →
-	// []). Fleet-scoped like registeredProjects and boot-static; a fleet
+	// registered_projects.providerProfiles; omitted when the fleet has none
+	// → []). Fleet-scoped like registeredProjects and boot-static; a fleet
 	// restart/reload re-sends it, so a session reset must not clear it.
 	providerProfiles: [] as PublicProviderProfile[],
 	// Phase 4: resolved fleet config path from the registered_projects frame
@@ -1342,19 +1342,8 @@ export function connect(): void {
 		if (frame.type === "attached") {
 			pushDebug("info", "transport", `attached ${frame.sessionId}`);
 			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
-			// Capture the previous session BEFORE the switch overwrites the id:
-			// state.streaming still reflects the prior session here (it is only
-			// overwritten by the next state frame; resetSessionView never touches
-			// it). Switching away MID-STREAM means the abandoned turn's end will
-			// never be observed on this tab (the edge streams live frames only for
-			// the attached daemon), so mark it unread. Attaching the target renders
-			// it read.
-			const prevSessionId = state.currentSessionId;
-			const prevStreaming = state.streaming;
 			setState("currentSessionId", frame.sessionId);
 			setState("sessionDownId", "");
-			if (prevSessionId !== "" && prevSessionId !== frame.sessionId && prevStreaming)
-				markUnread(prevSessionId);
 			clearUnread(frame.sessionId);
 			// Every attach re-primes history from scratch: drop any in-flight
 			// chunked-series accumulation from the previous attach/session.
@@ -1549,13 +1538,10 @@ export function connect(): void {
 					streaming: frame.streaming,
 					blocked: frame.blocked,
 				});
-				// Unread-on-completion: a detached turn's END is now observable in
-				// realtime. This is the original unread semantic (in_progress → idle
-				// while unfocused) that the old switch-away-only mark could not cover.
-				// Skip the attached daemon (its live signals are on-screen anyway). The
-				// switch-away-mid-stream mark in the `attached` handler stays as
-				// belt-and-suspenders for edges/old fleets that never send this frame;
-				// the precedence in session-activity hides it while the daemon still
+				// Unread-on-completion: a detached turn's END is observable in
+				// realtime (in_progress → idle while unfocused). Skip the attached
+				// daemon (its live signals are on-screen anyway); the precedence in
+				// session-activity hides an unread latch while the daemon still
 				// streams (remote live truth beats the unread latch).
 				if (wasStreaming && !frame.streaming && frame.daemonId !== state.currentSessionId) {
 					markUnread(frame.daemonId);
@@ -1607,11 +1593,11 @@ export function connect(): void {
 				// projects still render via daemonsByProject).
 				setState("registeredProjects", frame.projects);
 				// Secret-free provider profile catalog rides the same
-				// frame (additive; older edges omit it, so missing = []).
+				// frame (optional; missing = no catalog).
 				setState("providerProfiles", frame.providerProfiles ?? []);
 				// Phase 4: the resolved fleet config path rides the same frame
-				// (additive; older edges omit it, so missing = null). Also
-				// fleet-scoped: resetSessionView must not wipe it.
+				// (optional; missing = no config file). Also fleet-scoped:
+				// resetSessionView must not wipe it.
 				setState("fleetConfigPath", frame.configPath ?? null);
 				break;
 			case "worktree_delete_info":

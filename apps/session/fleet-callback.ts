@@ -67,8 +67,7 @@ import { isLoopbackHost } from "#lib/platform/hosts";
  * (callbackErrorFromClose). A credential rejection (unauthorized,
  * invalid_identity, generation_obsolete) or proto_unsupported is terminal: the
  * instance stops, onRejected fires, and nothing redials. Every other close, and
- * a dial that fails outright (an old fleet without the route answers non-101,
- * which surfaces as a socket error with no status), is retryable.
+ * a dial that fails outright (a socket error with no status), is retryable.
  *
  * Pair lifecycle:
  *   - start() resolves when the fleet's in-band `pair_ready` control envelope

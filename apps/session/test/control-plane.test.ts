@@ -57,7 +57,7 @@ const REFUSALS = {
 	generationObsolete: { code: "generation_obsolete" },
 	protoUnsupported: {
 		code: "proto_unsupported",
-		message: "callback protocol 1 is no longer served",
+		message: "callback protocol mismatch",
 	},
 	conflict: { code: "conflict" },
 	/** A refusal close whose reason names no ledger code: the status alone maps it. */
@@ -265,9 +265,9 @@ test("a fleet generation_obsolete shuts the session down without waiting for the
 });
 
 test("an invalid_identity or proto_unsupported refusal shuts the session down at once", async () => {
-	// proto_unsupported is what a proto-2 fleet answers a proto-1 session with (HTTP 410
-	// on the legacy routes); here the session itself is told its protocol is gone and
-	// must exit instead of redialing a fleet that will never serve it.
+	// proto_unsupported is what a fleet answers a session speaking another callback
+	// protocol; here the session itself is told its protocol is gone and must exit
+	// instead of redialing a fleet that will never serve it.
 	for (const refusal of [REFUSALS.invalidIdentity, REFUSALS.protoUnsupported]) {
 		const fleet = trackFleet({ refuse: refusal });
 		const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });

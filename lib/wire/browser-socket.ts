@@ -343,14 +343,3 @@ export function reconnectDelayMs(attempt: number, random: () => number = Math.ra
 	);
 	return Math.round(ceiling / 2 + random() * (ceiling / 2));
 }
-
-// --- Stale tabs ------------------------------------------------------------------
-
-/**
- * Body for a `GET /events` request from a tab loaded before OMP_PROTO 5: one
- * SSE `hello_ok` frame naming the current proto, so the stale tab's own proto
- * gate shows its mismatch error instead of reconnecting forever.
- */
-export function staleTabEventsBody(proto: number): string {
-	return `event: frame\nid: 1\ndata: ${JSON.stringify({ type: "hello_ok", proto })}\n\n`;
-}

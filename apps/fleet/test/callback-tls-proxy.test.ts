@@ -1,7 +1,7 @@
 /**
  * One pair socket carries more than Bun's 128 MiB default request-body cap
- * (the reason the proto-1 HTTP up leg renewed its request every 128 MiB) with
- * no reconnect, on the two transports a deployment uses:
+ * (the limit a long-lived one-way HTTP upload had to renew around) with no
+ * reconnect, on the two transports a deployment uses:
  *
  *  1. wss:// through an HTTP CONNECT proxy, certificate verification ON. A
  *     real session half (FleetCallback, spawned as its own process so the trust

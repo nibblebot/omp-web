@@ -33,10 +33,6 @@
  * so a stuck browser is dropped by the control plane's stall rule and not
  * absorbed here.
  *
- * Stale tabs: a tab from before OMP_PROTO 5 dials GET /events and POST
- * /command; neither is proxied. /events answers one SSE hello_ok naming the
- * current proto (its proto gate shows the mismatch) and ends, /command 410.
- *
  * Always binds 127.0.0.1; external exposure is the operator's reverse proxy.
  *
  * The proxy strips the browser's Host, so the control plane cannot see it. The
@@ -50,7 +46,6 @@ import {
 	BROWSER_SOCKET_MAX_PAYLOAD_BYTES,
 	BROWSER_SOCKET_PATH,
 	browserCloseFor,
-	staleTabEventsBody,
 } from "#lib/wire/browser-socket";
 import {
 	CALLBACK_WS_MAX_PAYLOAD_BYTES,
@@ -61,7 +56,6 @@ import {
 	callbackCloseFor,
 	callbackError,
 } from "#lib/wire/callback-protocol";
-import { OMP_PROTO } from "#lib/wire/protocol";
 import { browserRequestAllowed } from "#lib/runtime/browser-guard";
 import { PRE_AUTH_IDLE_TIMEOUT_S } from "./browser-guard";
 import { serveStaticUi } from "./static-ui";
@@ -485,19 +479,6 @@ async function route(
 	browserOrigin: string | undefined,
 ): Promise<Response> {
 	const path = new URL(req.url).pathname;
-	// A tab loaded before OMP_PROTO 5 still dials these; its own proto gate shows the mismatch.
-	if (path === "/events" && req.method === "GET") {
-		return new Response(staleTabEventsBody(OMP_PROTO), {
-			headers: {
-				"content-type": "text/event-stream",
-				"cache-control": "no-store",
-				"x-accel-buffering": "no",
-			},
-		});
-	}
-	if (path === "/command" && req.method === "POST") {
-		return Response.json({ error: "proto_unsupported" }, { status: 410 });
-	}
 	if (!PROXIED_PATH.test(path)) return serveStaticUi(path);
 	if (!browserRequestAllowed(req, browserOrigin)) {
 		return Response.json({ error: "forbidden" }, { status: 403 });

@@ -36,10 +36,6 @@
  *                                        is transport receipt, state
  *                                        "received", NEVER archive
  *                                        acceptance.
- *   POST /callback/up, GET /callback/down  The OMP_CALLBACK_PROTO 1 legs: refused
- *                                        with a typed `proto_unsupported` 410
- *                                        (an old session reads the status as
- *                                        `generation_obsolete` and exits).
  *
  * Upgrade and refusal: the upgrade request is authenticated exactly like
  * every other callback request (below) and must carry CALLBACK_PROTO_HEADER =
@@ -134,7 +130,6 @@ import {
 	CALLBACK_CONTROL_STREAM_ID,
 	CALLBACK_ERROR_HTTP_STATUS,
 	CALLBACK_PAIR_READY_TYPE,
-	CALLBACK_PROTO1_PATHS,
 	CALLBACK_PROTO_HEADER,
 	CALLBACK_TRANSPORT_STREAM_ID,
 	CALLBACK_WS_MAX_PAYLOAD_BYTES,
@@ -697,17 +692,6 @@ export class DaemonTransportRegistry {
 				return req.method === "GET"
 					? this.#upgrade(req, server)
 					: routeResponse(req.method, path, "GET");
-			}
-			if (CALLBACK_PROTO1_PATHS.includes(path)) {
-				// An OMP_CALLBACK_PROTO 1 leg. Unauthenticated on purpose: it reveals
-				// nothing about any enrollment, and the 410 makes an old session exit.
-				throw callbackError(
-					"proto_unsupported",
-					`${path} is an OMP_CALLBACK_PROTO 1 leg; this fleet speaks OMP_CALLBACK_PROTO ${OMP_CALLBACK_PROTO}`,
-					{
-						detail: `dial ${CALLBACK_WS_PATH} with ${CALLBACK_PROTO_HEADER}: ${OMP_CALLBACK_PROTO}`,
-					},
-				);
 			}
 			if (path.startsWith(CALLBACK_BULK_PATH_PREFIX)) {
 				if (req.method !== "POST") return routeResponse(req.method, path, "POST");

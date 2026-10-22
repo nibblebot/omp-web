@@ -19,8 +19,6 @@ import { createHash } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { staleTabEventsBody } from "#lib/wire/browser-socket";
-import { OMP_PROTO } from "#lib/wire/protocol";
 import { BrowserAuthStore, SESSION_TTL_MS } from "../browser-auth";
 import { isLoopbackIp } from "#lib/runtime/browser-guard";
 import { FleetAuthGate } from "../fleet-auth-gate";
@@ -553,25 +551,6 @@ describe("browser socket admission (/ws on a real fleet, browser auth on)", () =
 		expect(plain.headers.get("upgrade")).toBe("websocket");
 		const post = await fetch(`http://127.0.0.1:${port}/ws`, { method: "POST", body: "{}" });
 		expect(post.status).toBe(405);
-	});
-
-	test("stale GET /events and POST /command answer without a session while the gate is on", async () => {
-		// The control: with the same proxied, cookie-less client the data routes are gated.
-		const gated = await fetch(`http://127.0.0.1:${port}/ctl/sessions`, { headers: REMOTE });
-		expect(gated.status).toBe(401);
-		const events = await fetch(`http://127.0.0.1:${port}/events?client=old-tab`, {
-			headers: REMOTE,
-		});
-		expect(events.status).toBe(200);
-		expect(events.headers.get("content-type")).toContain("text/event-stream");
-		expect(await events.text()).toBe(staleTabEventsBody(OMP_PROTO));
-		const command = await fetch(`http://127.0.0.1:${port}/command`, {
-			method: "POST",
-			headers: { ...REMOTE, "content-type": "application/json", "x-omp-client-id": "old-tab" },
-			body: JSON.stringify({ type: "sync_projects", id: "x" }),
-		});
-		expect(command.status).toBe(410);
-		expect(await command.json()).toEqual({ error: "proto_unsupported" });
 	});
 
 	test("sign-out closes that session's sockets 4401 and leaves another session's socket open", async () => {

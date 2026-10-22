@@ -45,9 +45,8 @@ import { isRingedDeltaType } from "./client-delivery";
  *   only. Each mirrored frame is serialized once and shared by every stream.
  *
  * Controls are not acknowledged on the wire, except that the fleet's stream_ack
- * (see StreamOpenControl in callback-protocol.ts) releases credit on a browser
- * stream it opened with `ack: true`. An unknown control type is logged to stderr
- * and otherwise ignored.
+ * (see StreamAckControl in callback-protocol.ts) releases credit on a browser
+ * stream. An unknown control type is logged to stderr and otherwise ignored.
  */
 
 // ── deps ───────────────────────────────────────────────────────────────────
@@ -138,13 +137,7 @@ interface BrowserStream {
 	 * fleet on the current pair, so it is an orphan (SXP-03).
 	 */
 	pairId: string | null;
-	/**
-	 * The fleet opened this stream with `ack: true`: priming and history resyncs
-	 * also wait for its stream_ack, so a slow browser paces the burst instead of
-	 * overflowing the fleet's per-browser queue.
-	 */
-	acked: boolean;
-	/** Paced frames sent on an acked stream and not yet acknowledged, in wire-seq order (slots before `inflightHead` are consumed). */
+	/** Paced frames sent on this stream and not yet acknowledged, in wire-seq order (slots before `inflightHead` are consumed). */
 	inflight: Array<{ seq: number; bytes: number } | undefined>;
 	inflightHead: number;
 	inflightBytes: number;
@@ -241,10 +234,10 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		// A ringed frame needs its JSON and byte size for the ring: serialize it
 		// here once and hand the same encoding to the transport, so the send
 		// does not serialize it again.
-		// A paced frame on an acked stream counts against the fleet's credit
-		// window from the moment its wire seq is known (stream_ack releases it),
-		// so it needs its byte size too.
-		const track = paced && stream !== undefined && stream.acked;
+		// A paced frame counts against the fleet's credit window from the moment
+		// its wire seq is known (stream_ack releases it), so it needs its byte
+		// size too.
+		const track = paced && stream !== undefined;
 		const wire = encoded ?? (ringFrame || track ? tryEncode(payload) : undefined);
 		const result = deps.send(
 			streamId,
@@ -326,9 +319,9 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 
 	/**
 	 * Wait until the pair's outbound buffer can take one maximal envelope for
-	 * this stream and, on an acked stream, until the fleet's unacknowledged
-	 * window can too. False when the stream closed, the broker stopped, or a
-	 * newer prime superseded `epoch`: the caller's remaining frames are obsolete.
+	 * this stream and the fleet's unacknowledged window can too. False when the
+	 * stream closed, the broker stopped, or a newer prime superseded `epoch`:
+	 * the caller's remaining frames are obsolete.
 	 */
 	const waitForRoom = async (stream: BrowserStream, epoch: number): Promise<boolean> => {
 		for (;;) {
@@ -338,8 +331,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			if (
 				queued.stream + ENVELOPE_MAX_BYTES + PACE_MARGIN_BYTES <= STREAM_MAX_BYTES &&
 				queued.connection + ENVELOPE_MAX_BYTES + PACE_MARGIN_BYTES <= CONNECTION_MAX_BYTES &&
-				(!stream.acked ||
-					queued.stream + stream.inflightBytes + ENVELOPE_MAX_BYTES <= STREAM_ACK_WINDOW_BYTES)
+				queued.stream + stream.inflightBytes + ENVELOPE_MAX_BYTES <= STREAM_ACK_WINDOW_BYTES
 			)
 				return true;
 			// Sleep until the pair drains (a pump pass that sent bytes) or the fleet
@@ -420,7 +412,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		});
 	};
 
-	const openStream = (streamId: string, lastSeq?: number, ack = false): void => {
+	const openStream = (streamId: string, lastSeq?: number): void => {
 		if (stopped || !streamId.startsWith(CALLBACK_BROWSER_STREAM_PREFIX)) return;
 		let stream = streams.get(streamId);
 		const newStream = stream === undefined;
@@ -436,7 +428,6 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 				deferred: null,
 				deferredBytes: 0,
 				pairId: null,
-				acked: false,
 				inflight: [],
 				inflightHead: 0,
 				inflightBytes: 0,
@@ -447,7 +438,6 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		}
 		// Every stream_open restarts the credit ledger: the fleet resets its side
 		// when it sends one, so frames sent before it will never be acknowledged.
-		stream!.acked = ack;
 		stream!.inflight = [];
 		stream!.inflightHead = 0;
 		stream!.inflightBytes = 0;
@@ -506,11 +496,11 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		const lastSeq = typeof payload.lastSeq === "number" ? payload.lastSeq : undefined;
 		switch (type) {
 			case "stream_open":
-				openStream(envelope.streamId, lastSeq, payload.ack === true);
+				openStream(envelope.streamId, lastSeq);
 				break;
 			case "stream_ack": {
 				const stream = streams.get(envelope.streamId);
-				if (stream !== undefined && stream.acked && typeof payload.seq === "number") {
+				if (stream !== undefined && typeof payload.seq === "number") {
 					ackStream(stream, payload.seq);
 				}
 				break;

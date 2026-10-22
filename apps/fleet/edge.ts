@@ -38,9 +38,6 @@
  *     rejected with an error frame. The upgrade is origin-checked whenever
  *     browser auth is enabled (see server.ts), which replaces `requireCsrf`
  *     for commands.
- *   - Stale tabs (loaded before OMP_PROTO 5): GET /events answers the proto
- *     mismatch frame once and ends, POST /command answers 410
- *     `{error:"proto_unsupported"}`; nothing else of /events or /command survives.
  *   - PAIR ATTACH: one callback virtual stream PER BROWSER ("browser/<connId>"
  *     on the daemon's pair). The daemon primes every new stream, so
  *     hello_ok → attached → history → state → available_commands → ready come
@@ -63,12 +60,11 @@
  *     reconnects with `after` and the edge replays its ring. One slow
  *     browser never stalls the daemon stream or other browsers. The daemon's
  *     priming and history bursts are paced by the browser's drain, not
- *     counted against the cap: stream_open asks the daemon for ack pacing
- *     (every proto-2 session honors it), and the edge answers with
- *     stream_ack controls as the socket's buffer drains (`drain` events and
- *     every send), so at most STREAM_ACK_WINDOW_BYTES of a burst sit in the
- *     edge (a slow browser slows its own priming; a stuck one is dropped by
- *     the stall rule).
+ *     counted against the cap: stream_open puts the stream on ack pacing,
+ *     and the edge answers with stream_ack controls as the socket's buffer
+ *     drains (`drain` events and every send), so at most
+ *     STREAM_ACK_WINDOW_BYTES of a burst sit in the edge (a slow browser
+ *     slows its own priming; a stuck one is dropped by the stall rule).
  *   - Real-time daemon activity: the daemon's control-stream envelopes are
  *     tapped and derive per-daemon {streaming, blocked} from state /
  *     ui_request / ui_request_end, broadcasting an edge-generated
@@ -118,7 +114,6 @@ import {
 	parseClientMessage,
 	pingMessage,
 	seqFrameMessage,
-	staleTabEventsBody,
 	type BrowserCloseKind,
 } from "#lib/wire/browser-socket";
 import { ReplayRing } from "#lib/wire/replay-ring";
@@ -210,9 +205,9 @@ const DOWNLOAD_ROUTE = /^\/ctl\/sessions\/([^/]+)\/download$/;
 
 /**
  * Error frame for any browser command outside the allowlist. Phase 6: the
- * mux-era commands and `detach` are gone from ClientCommand, so a stale
- * client sending them (or plain garbage) must not reach the daemon; the
- * edge rejects it with this instead.
+ * mux-era commands and `detach` are gone from ClientCommand, so an unknown
+ * command (or plain garbage) must not reach the daemon; the edge rejects it
+ * with this instead.
  */
 const UNKNOWN_COMMAND_MESSAGE = "fleet edge: use spawn/stop/roster";
 
@@ -735,8 +730,7 @@ export class FleetEdge {
 				const info = await this.#ops.worktreeDeleteInfo(daemonId);
 				this.#sendAnswer(stream, { type: "worktree_delete_info", daemonId, ...info });
 			}),
-		attach: (stream, id, a) =>
-			void this.#handleAttach(stream, a.sessionId as string, id !== "" ? id : undefined),
+		attach: (stream, id, a) => void this.#handleAttach(stream, a.sessionId as string, id),
 	};
 	/** Boot-static secret-free provider catalog, published on registered_projects. */
 	readonly #providerProfiles: PublicProviderProfile[] | undefined;
@@ -864,19 +858,6 @@ export class FleetEdge {
 		try {
 			const url = new URL(req.url);
 			const path = url.pathname;
-			// Stale tabs (loaded before OMP_PROTO 5) still dial the old SSE downlink
-			// and POST uplink. Both answer with the proto mismatch the old
-			// client already knows how to show; nothing else of them survives.
-			if (path === "/events") {
-				if (req.method !== "GET") return null; // control plane 405s
-				return new Response(staleTabEventsBody(OMP_PROTO), {
-					headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
-				});
-			}
-			if (path === "/command") {
-				if (req.method !== "POST") return null; // control plane 405s
-				return json({ error: "proto_unsupported" }, 410);
-			}
 			if (req.method !== "GET") return null;
 			if (path === "/ctl/templates") {
 				return json(Object.keys(this.#config.templates));
@@ -1089,8 +1070,7 @@ export class FleetEdge {
 					projects: this.#registry.projects(),
 					configPath: this.#fleet.configPath,
 					// The boot-static secret-free profile catalog; omitted
-					// entirely when not configured (older fleets imply an
-					// empty catalog).
+					// entirely when the fleet has none to publish.
 					...(this.#providerProfiles !== undefined
 						? { providerProfiles: this.#providerProfiles }
 						: {}),
@@ -1234,8 +1214,8 @@ export class FleetEdge {
 		try {
 			// Phase 6: the mux-era commands and detach are gone from
 			// ClientCommand. Any type outside the browser allowlist, whether a
-			// stale client's removed command or plain garbage, is rejected here
-			// so the daemon never sees a command it no longer understands.
+			// removed command or plain garbage, is rejected here so the daemon
+			// never sees a command it no longer understands.
 			if (BROWSER_COMMAND_TYPES[type] !== true) {
 				this.#sendError(stream, UNKNOWN_COMMAND_MESSAGE);
 			} else {
@@ -1249,7 +1229,7 @@ export class FleetEdge {
 						this.#sendError(stream, err.message);
 					}
 				} else {
-					this.#forwardCommand(stream, cmd);
+					this.#forwardCommand(stream, id, cmd);
 				}
 			}
 		} catch (err) {
@@ -1512,11 +1492,7 @@ export class FleetEdge {
 	 * replaces the stream object; the old handler then reaches #openPipe,
 	 * which skips a stream no longer in #browsers.
 	 */
-	async #handleAttach(
-		stream: BrowserStream,
-		daemonId: string,
-		commandId: string | undefined,
-	): Promise<void> {
+	async #handleAttach(stream: BrowserStream, daemonId: string, commandId: string): Promise<void> {
 		const seq = ++stream.attachSeq;
 		if (!this.#registry.get(daemonId)) {
 			this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });
@@ -1579,7 +1555,7 @@ export class FleetEdge {
 	 * stream_open after every pair replacement (finding #28), so the attach
 	 * survives drops without a separate dial.
 	 */
-	#openPipe(stream: BrowserStream, entry: RegistryEntry, commandId?: string): void {
+	#openPipe(stream: BrowserStream, entry: RegistryEntry, commandId: string): void {
 		// A racing attach may have replaced stream.pipe while we waited; never leak it.
 		this.#closePipe(stream);
 		// The browser may have closed while wake was pending; don't bind a
@@ -1598,7 +1574,7 @@ export class FleetEdge {
 	 * A torn-down pair surfaces as the terminal "daemon connection lost"
 	 * error frame; the edge never redials.
 	 */
-	#openCallbackPipe(stream: BrowserStream, entry: RegistryEntry, commandId?: string): void {
+	#openCallbackPipe(stream: BrowserStream, entry: RegistryEntry, commandId: string): void {
 		const daemonId = entry.daemonId;
 		const transport = this.#transport;
 		if (!transport) {
@@ -1633,8 +1609,7 @@ export class FleetEdge {
 		// transport owns pair liveness (stream_open re-sends on pair change);
 		// the browser is attached. Progress rides the lifecycleStage roster
 		// broadcasts; attach_result acknowledges the attach as accepted.
-		if (commandId !== undefined)
-			this.#sendAttachOutcome(stream, commandId, { sessionId: daemonId });
+		this.#sendAttachOutcome(stream, commandId, { sessionId: daemonId });
 		const sink: VirtualStreamSink = {
 			deliver: (envelope, payloadJson) => {
 				if (stream.pipe !== pipe || pipe.closed) return;
@@ -1674,7 +1649,7 @@ export class FleetEdge {
 		pipe.drainedSeq = 0;
 		pipe.ackedSeq = 0;
 		pipe.ackedDrained = stream.enqueuedBytes - this.#bufferedBytes(stream);
-		const open: StreamOpenControl = { type: "stream_open", ack: true };
+		const open: StreamOpenControl = { type: "stream_open" };
 		transport
 			.sendToDaemon(pipe.daemonId, {
 				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
@@ -1833,35 +1808,29 @@ export class FleetEdge {
 	 * the session may have applied the command; that answer says the outcome
 	 * is unknown instead of "not attached".
 	 */
-	#forwardCommand(stream: BrowserStream, cmd: Record<string, unknown>): void {
+	#forwardCommand(stream: BrowserStream, commandId: string, cmd: Record<string, unknown>): void {
 		const pipe = stream.pipe;
 		const transport = this.#transport;
 		// Finding #59: an unattached call must fail fast BY ID; the client
 		// correlates call() promises only with call_result, so a bare error
-		// frame would leave the promise hanging until its 30s timeout. A
-		// malformed id-less command keeps the legacy global error frame.
+		// frame would leave the promise hanging until its 30s timeout.
 		const failNotAttached = (cause?: unknown): void => {
 			// An oversize command is refused by name; it never reached the session.
 			const refused =
 				cause instanceof CallbackError && cause.code === "payload_too_large"
 					? cause.message
 					: undefined;
-			const commandId = typeof cmd.id === "string" && cmd.id !== "" ? cmd.id : undefined;
-			if (commandId !== undefined) {
-				const sent = this.#forwardOrigins.get(commandId)?.sent === true;
-				this.#sendAnswer(stream, {
-					type: "call_result",
-					id: commandId,
-					ok: false,
-					error:
-						refused ??
-						(sent
-							? "connection to the session process was lost; the change may have been applied, refresh to check"
-							: "not attached"),
-				});
-			} else {
-				this.#sendError(stream, refused ?? "not attached");
-			}
+			const sent = this.#forwardOrigins.get(commandId)?.sent === true;
+			this.#sendAnswer(stream, {
+				type: "call_result",
+				id: commandId,
+				ok: false,
+				error:
+					refused ??
+					(sent
+						? "connection to the session process was lost; the change may have been applied, refresh to check"
+						: "not attached"),
+			});
 		};
 		if (!pipe || !transport) {
 			failNotAttached();
@@ -1874,20 +1843,19 @@ export class FleetEdge {
 			stream.client.clientId,
 			pipe.daemonId,
 			transport.pairStatus(pipe.daemonId).authorizedGeneration,
-			cmd,
+			commandId,
+			String(cmd.type),
 		);
 		if (refusal !== null) {
 			const answerType = REFUSED_ANSWER_TYPES[String(cmd.type)];
-			const id = typeof cmd.id === "string" ? cmd.id : "";
-			if (answerType !== undefined && id !== "") {
-				this.#sendAnswer(stream, { type: answerType, id, ok: false, error: refusal });
+			if (answerType !== undefined) {
+				this.#sendAnswer(stream, { type: answerType, id: commandId, ok: false, error: refusal });
 			} else {
 				this.#sendError(stream, refusal);
 			}
 			return;
 		}
-		const origin =
-			typeof cmd.id === "string" && cmd.id !== "" ? this.#forwardOrigins.get(cmd.id) : undefined;
+		const origin = this.#forwardOrigins.get(commandId);
 		transport
 			.sendToDaemon(pipe.daemonId, {
 				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
@@ -1918,12 +1886,11 @@ export class FleetEdge {
 		clientId: string | null,
 		daemonId: string,
 		generation: number | null,
-		cmd: Record<string, unknown>,
+		id: string,
+		type: string,
 	): string | null {
 		if (clientId === null) return null;
-		if (ANSWERED_FORWARD_TYPES[String(cmd.type)] !== true) return null;
-		const id = typeof cmd.id === "string" && cmd.id !== "" ? cmd.id : undefined;
-		if (id === undefined) return null;
+		if (ANSWERED_FORWARD_TYPES[type] !== true) return null;
 		const now = Date.now();
 		const existing = this.#forwardOrigins.get(id);
 		if (existing !== undefined && !existing.delivered) {
@@ -2130,23 +2097,14 @@ export class FleetEdge {
 	}
 
 	/**
-	 * Answer an attach command (finding #28): an id-keyed attach_result
-	 * unicast when the command carried an id (new clients settle their
-	 * pending attach from exactly this frame); a legacy global error frame
-	 * for a malformed client that sent none.
+	 * Answer an attach command (finding #28): the id-keyed attach_result
+	 * unicast the client settles its pending attach from.
 	 */
 	#sendAttachOutcome(
 		stream: BrowserStream,
-		commandId: string | undefined,
+		commandId: string,
 		outcome: { sessionId: string } | { error: string },
 	): void {
-		if (commandId === undefined) {
-			this.#sendError(
-				stream,
-				"error" in outcome ? outcome.error : `attached: ${outcome.sessionId}`,
-			);
-			return;
-		}
 		this.#sendAnswer(
 			stream,
 			"error" in outcome

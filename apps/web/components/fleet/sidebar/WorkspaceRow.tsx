@@ -81,8 +81,8 @@ import {
 export type RosterEntry = DaemonEntry & {
 	template?: string;
 	/** Title of the daemon's last session file (probed by the fleet edge's
-	 *  git-state poll from the lastSessionFile JSONL title slot; absent for
-	 *  older edges). */
+	 *  git-state poll from the lastSessionFile JSONL title slot; absent until
+	 *  there is a title to probe). */
 	sessionTitle?: string;
 	/** Current branch of the session cwd; absent for detached/non-git/unprobed. */
 	branch?: string;
@@ -283,7 +283,8 @@ export const WorkspaceRow: Component<{
 			// Signal read inside the memo: per-row reactivity off the unread set.
 			unread: unreadIds().has(d().daemonId),
 			// Store read inside the memo = per-row reactivity: undefined for the
-			// attached row, old edges, and daemons whose stream is down.
+			// attached row and any daemon with no reading yet (stream down or
+			// activity still unknown).
 			remote: state.daemonActivity[d().daemonId],
 		}),
 	);
