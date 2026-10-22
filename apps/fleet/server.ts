@@ -3,7 +3,7 @@
  *
  * A loopback-only HTTP JSON API (default port 4722; opts.port wins;
  * 0 = ephemeral) on a shared Bun.serve; Phase 3 adds the
- * browser SSE edge (/events + /command) on the same server. Wires the
+ * browser WebSocket edge (GET /ws) on the same server. Wires the
  * persistent Registry, the callback transport and the workspace lifecycle:
  *
  *   GET  /ctl/sessions {…}                         → DaemonEntry[]
@@ -40,8 +40,10 @@
  *   GET  /auth/session                 → { sessionIdHash, csrfToken, expiresAt } | 401
  *
  * Non-loopback peers must then hold a live browser session for /ctl/* and the
- * edge browser routes; mutations additionally need X-Omp-Csrf + an allowed
- * Origin. Loopback peers stay exempt (the CLI precedent, R14). With no token
+ * browser socket (GET /ws, whose upgrade must also pass the Origin allowlist:
+ * that origin check replaces the per-command CSRF token); other mutations
+ * additionally need X-Omp-Csrf + an allowed Origin. Loopback peers stay exempt
+ * (the CLI precedent, R14). With no token
  * configured every route behaves exactly as before. /callback/* is NEVER
  * gated by browser auth: the DaemonTransportRegistry authenticates it with
  * the workspace enrollment credentials (mounted first for that prefix).
@@ -73,7 +75,7 @@ import { SessionWaker } from "./session-waker";
 import { realpathOf } from "./worktrees";
 import type { FanoutDeps } from "./fanout";
 import { fanOut } from "./fanout";
-import { FleetEdge, toRosterEntry } from "./edge";
+import { FleetEdge, toRosterEntry, type BrowserAdmission } from "./edge";
 import { FleetEventLog, type FleetFacts } from "./events";
 import {
 	createFleetSettings,
@@ -93,7 +95,9 @@ import { createStatsApp } from "./stats-app";
 import type { StatsConfig } from "./stats-config";
 import { BrowserAuthStore, clearSessionCookie } from "./browser-auth";
 import { browserRequestAllowed, isJsonRequest, PRE_AUTH_IDLE_TIMEOUT_S } from "./browser-guard";
-import { DaemonTransportRegistry, type FleetSocketData } from "./daemon-transport";
+import { DaemonTransportRegistry } from "./daemon-transport";
+import { fleetWebSocket, type FleetSocketData } from "./fleet-websocket";
+import { BROWSER_SOCKET_PATH } from "#lib/wire/browser-socket";
 import { FleetAuthGate, isLoopbackBind, peerIsLoopback, BrowserAuthError } from "./fleet-auth-gate";
 import { compileTrustedProxies } from "./trusted-proxy";
 import { CALLBACK_TRANSPORT_STREAM_ID, type CallbackEnvelope } from "#lib/wire/callback-protocol";
@@ -644,15 +648,15 @@ class FleetServerImpl implements FleetServer {
 		this.#server = Bun.serve<FleetSocketData>({
 			hostname: config.bind,
 			port,
-			// SSE responses are long-lived and quiet between 15s keepalive
-			// pings; Bun's default 10s fetch idleTimeout would kill them. (The
-			// callback pair's WebSocket idle timeout lives in the transport's
-			// `websocket` options.)
+			// Long-lived HTTP responses (a fleet-proxied download waits on its
+			// daemon's bulk transfer) are quiet for longer than Bun's default 10s
+			// fetch idleTimeout. (The WebSocket idle timeout, for the callback pair
+			// and the browser socket, lives in `websocket`.)
 			idleTimeout: 0,
-			websocket: this.transport.websocket,
+			websocket: fleetWebSocket(this.transport, this.edge),
 			fetch: (req, srv) => {
 				// Pre-auth routes read a small body and get a bounded idle window
-				// (FEDGE-11); SSE stays on idleTimeout 0.
+				// (FEDGE-11); the other routes stay on idleTimeout 0.
 				if (new URL(req.url).pathname.startsWith("/auth/"))
 					srv.timeout(req, PRE_AUTH_IDLE_TIMEOUT_S);
 				return this.#fetch(req, srv, srv.requestIP(req)?.address);
@@ -1082,6 +1086,59 @@ class FleetServerImpl implements FleetServer {
 		return `http://${this.config.bind}:${this.port}`;
 	}
 
+	/**
+	 * GET /ws: admit one browser socket (OMP_PROTO 5). Admission follows the
+	 * rules the SSE downlink had: with browser auth enabled a non-loopback
+	 * client (the socket peer, or the trusted proxy's X-Forwarded-For client
+	 * hop) must hold a live session cookie, and the upgrade must also pass
+	 * `checkOrigin` (cross-site WebSocket hijacking: a cross-site page can open
+	 * a socket carrying the victim's cookie, and unlike an HTTP mutation it
+	 * carries no CSRF header, so the origin-checked handshake is what replaces
+	 * `requireCsrf` for the commands sent over it). A loopback peer is held to
+	 * FEDGE-02's browserRequestAllowed (foreign Host/Origin/Sec-Fetch-Site).
+	 * A refusal is not an HTTP status (a browser cannot read one): the socket
+	 * upgrades and closes at once with 4401 (no session) or 4403 (origin or
+	 * host refused); a proto claim other than OMP_PROTO closes 4426 (the edge
+	 * judges it). A request that is no WebSocket upgrade gets an HTTP 426.
+	 */
+	#browserSocket(
+		req: Request,
+		server: Server<FleetSocketData>,
+		remoteAddress: string | null | undefined,
+	): Response | undefined {
+		if (req.method !== "GET") {
+			return new Response(JSON.stringify({ error: `${BROWSER_SOCKET_PATH} is GET only` }), {
+				status: 405,
+				headers: { "content-type": "application/json", allow: "GET" },
+			});
+		}
+		if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+			return new Response(
+				JSON.stringify({ error: `${BROWSER_SOCKET_PATH} requires a WebSocket upgrade` }),
+				{ status: 426, headers: { "content-type": "application/json", upgrade: "websocket" } },
+			);
+		}
+		const admission: BrowserAdmission = { refusal: null, session: null };
+		if (peerIsLoopback(remoteAddress) && !browserRequestAllowed(req, this.#browserOrigin)) {
+			admission.refusal = { kind: "forbidden", message: "request host or origin refused" };
+		} else if (this.authGate !== null) {
+			const client = this.authGate.clientAddress(req, remoteAddress);
+			if (!peerIsLoopback(client)) {
+				if (!this.authGate.checkOrigin(req)) {
+					admission.refusal = { kind: "forbidden", message: "origin not allowed" };
+				} else {
+					const session = this.authGate.authenticate(req, client);
+					if (session === null) {
+						admission.refusal = { kind: "unauthorized", message: "sign in required" };
+					} else {
+						admission.session = { hash: session.sessionIdHash, expiresAt: session.expiresAt };
+					}
+				}
+			}
+		}
+		return this.edge.acceptBrowserSocket(req, server, admission);
+	}
+
 	#fetch = async (
 		req: Request,
 		server: Server<FleetSocketData>,
@@ -1097,6 +1154,10 @@ class FleetServerImpl implements FleetServer {
 			const transportHandled = await this.transport.handleFetch(req, server);
 			if (transportHandled !== null) return transportHandled;
 		}
+		// The browser socket is admitted (or refused with a typed close) by its own
+		// rules below, not by the HTTP gate: a browser cannot read a 401/403 on a
+		// WebSocket handshake.
+		if (path0 === BROWSER_SOCKET_PATH) return this.#browserSocket(req, server, remoteAddress);
 		// Loopback peers skip browser auth below, so a request a browser sent on a
 		// page's behalf (foreign Host, Origin, or Sec-Fetch-Site) is refused here,
 		// before any route runs (FEDGE-02). Header-less CLI calls pass.
@@ -1108,8 +1169,16 @@ class FleetServerImpl implements FleetServer {
 		// probe. Disabled (no token configured) → the session route still
 		// answers 404 and everything below behaves exactly as before.
 		if (path0.startsWith("/auth/")) return await this.#handleAuth(req, remoteAddress);
+		// A tab loaded before OMP_PROTO 5 still dials GET /events and POST
+		// /command. Both answers carry no data (the proto mismatch the old tab
+		// shows), so they sit before the session gate: a signed-out old tab sees
+		// the mismatch, not a sign-in loop it cannot leave.
+		if (path0 === "/events" || path0 === "/command") {
+			const stale = await this.edge.handleFetch(req);
+			if (stale !== null) return stale;
+		}
 		// Everything remaining is protected when browser auth is enabled:
-		// the edge's browser routes (/events, /command, /ctl/*, static) AND
+		// the edge's browser routes (/ctl/*, static) AND
 		// the control-plane /ctl/* routes. Non-loopback clients must hold a
 		// live browser session; mutations additionally need the X-Omp-Csrf
 		// header and an allowed Origin. Loopback clients (CLI + local UI
@@ -1121,12 +1190,12 @@ class FleetServerImpl implements FleetServer {
 		// a non-loopback deployment behind an unlisted proxy still requires
 		// a session.
 		if (this.authGate !== null) {
-			// Data routes (/events, /command, /ctl/*) and every mutation are
+			// Data routes (/ctl/*) and every mutation are
 			// gated. The static UI shell stays public: it carries no data, and
 			// the client must boot to reach /auth/login at all. A fresh browser
 			// loads the shell, probes /auth/session (404 disabled / 401
 			// signed-out), and signs in from there.
-			const isDataRoute = path0 === "/events" || path0 === "/command" || path0.startsWith("/ctl");
+			const isDataRoute = path0.startsWith("/ctl");
 			const isMutation = req.method !== "GET" && req.method !== "HEAD";
 			if (isDataRoute || isMutation) {
 				const client = this.authGate.clientAddress(req, remoteAddress);
@@ -1140,8 +1209,7 @@ class FleetServerImpl implements FleetServer {
 				}
 			}
 		}
-		// Edge routes first: /events (SSE), /command (POST), the /ctl routes,
-		// and static dist. null = not an edge route.
+		// Edge routes first: the /ctl routes and static dist. null = not an edge route.
 		const edgeHandled = await this.edge.handleFetch(req);
 		if (edgeHandled !== null) return edgeHandled;
 		try {
@@ -1327,7 +1395,11 @@ class FleetServerImpl implements FleetServer {
 			}
 			case "POST /auth/logout": {
 				const sessionId = gate.sessionCookie(req);
-				if (sessionId !== null) gate.logout(sessionId);
+				if (sessionId !== null) {
+					gate.logout(sessionId);
+					// The revoked session's browser sockets close 4401 now, not at their next reconnect.
+					this.edge.closeAuthSession(gate.sessionIdHash(sessionId));
+				}
 				return new Response(JSON.stringify({ ok: true }), {
 					headers: {
 						"content-type": "application/json",

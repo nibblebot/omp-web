@@ -1,5 +1,5 @@
 /**
- * Fleet edge wire-contract tests: the browser edge (/events + /command) and
+ * Fleet edge wire-contract tests: the browser socket (/ws) edge and
  * the /ctl routes against the real server mount (startFleet). Every session
  * daemon is a fake that dials the callback pair (startCallbackDaemon); the
  * fleet never dials a session. Order-dependent shared fixtures (browserA,
@@ -14,6 +14,8 @@ import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-st
 import { __resetDirsFromEnvForTests, setAgentDir } from "@oh-my-pi/pi-utils";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import { OMP_PROTO } from "#lib/wire/protocol";
+import { staleTabEventsBody } from "#lib/wire/browser-socket";
+import { MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
 import { CALLBACK_CONTROL_STREAM_ID, type CallbackEnvelope } from "#lib/wire/callback-protocol";
 import { signalProcessGroup } from "../host-provider";
 import { shouldDropFrame, toRosterEntry } from "../edge";
@@ -458,13 +460,40 @@ describe("fleet edge", () => {
 		}
 	});
 
-	test("POST /command with an unknown client id is a 400", async () => {
-		const res = await fetch(`${fleetUrl()}/command`, {
-			method: "POST",
-			headers: { "content-type": "application/json", "x-omp-client-id": "nobody" },
-			body: JSON.stringify({ type: "sync_projects", id: "x" }),
+	test("an anonymous socket (no client id) nacks every command 400 and stays open", async () => {
+		const anon = new BrowserSocket(server.port, undefined, { anonymous: true });
+		allBrowsers.push(anon);
+		await anon.open();
+		await anon.waitForFrame((f) => f.type === "roster", "roster");
+		const id = crypto.randomUUID();
+		await expect(anon.send({ type: "sync_projects", id })).rejects.toMatchObject({
+			id,
+			status: 400,
 		});
-		expect(res.status).toBe(400);
+		expect(anon.nacks).toEqual([{ id, status: 400, error: expect.any(String) }]);
+		expect(anon.acks).toEqual([]);
+		expect(anon.closeInfo).toBeNull();
+	});
+
+	test("stale tabs: GET /events answers the proto mismatch hello_ok and ends; POST /command answers 410", async () => {
+		const events = await fetch(`${fleetUrl()}/events?client=old-tab`);
+		expect(events.status).toBe(200);
+		expect(events.headers.get("content-type")).toContain("text/event-stream");
+		// The body ends on its own: reading it to the end resolves.
+		expect(await events.text()).toBe(staleTabEventsBody(OMP_PROTO));
+		for (const body of [JSON.stringify({ type: "sync_projects", id: "x" }), "not json", ""]) {
+			const res = await fetch(`${fleetUrl()}/command`, {
+				method: "POST",
+				headers: { "content-type": "application/json", "x-omp-client-id": "old-tab" },
+				body,
+			});
+			expect(res.status).toBe(410);
+			expect(await res.json()).toEqual({ error: "proto_unsupported" });
+		}
+		// Other methods on the retired paths are not the stale answer: they fall
+		// through to the control plane, which knows neither route.
+		expect((await fetch(`${fleetUrl()}/events`, { method: "POST", body: "{}" })).status).toBe(404);
+		expect((await fetch(`${fleetUrl()}/command`)).status).toBe(404);
 	});
 
 	test("add_project registers the main checkout for a linked-worktree path; a second add answers existing", async () => {
@@ -946,15 +975,15 @@ describe("fleet edge", () => {
 		await oldBrowser.waitForFrame((f) => f.type === "roster", "roster");
 		const oldStream = await attachBrowser(oldBrowser, remoteDaemon, remoteEntry.daemonId);
 
-		// Rebind: a SECOND /events open with the SAME clientId while the old
-		// stream is still live.
+		// Rebind: a SECOND /ws dial with the SAME clientId while the old
+		// socket is still live.
 		const newBrowser = new BrowserSocket(server.port, sharedId);
 		allBrowsers.push(newBrowser);
 		await newBrowser.open();
 		await newBrowser.waitForFrame((f) => f.type === "roster", "roster");
 
-		// The old stream is torn down: its body ends and its pipe closes.
-		await oldBrowser.end(5000);
+		// The old socket is replaced (closed 1000) and its pipe closes.
+		expect((await oldBrowser.end(5000)).code).toBe(1000);
 		await waitFor(
 			() =>
 				controlsOf(remoteDaemon, "stream_close").some((e) => e.streamId === oldStream)
@@ -1979,6 +2008,168 @@ describe("fleet edge", () => {
 				// Already removed.
 			}
 		}
+	});
+
+	test("an oversize command is nacked 413 and the socket stays open and usable", async () => {
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		const id = crypto.randomUUID();
+		// One message whose command JSON is just past MAX_COMMAND_BYTES: the
+		// server reads it (the payload cap sits above the command cap) and nacks.
+		const oversize = JSON.stringify({
+			cmd: { type: "bogus_command", id, pad: "x".repeat(MAX_COMMAND_BYTES) },
+		});
+		await expect(browser.sendRaw(oversize, id)).rejects.toMatchObject({ id, status: 413 });
+		expect(browser.nacks).toHaveLength(1);
+		expect(browser.closeInfo).toBeNull();
+		// The same socket still takes a normal command: acked, and the edge's
+		// own rejection frame answers it (nothing of the oversize one ran).
+		const before = browser.frames.length;
+		await browser.send({ type: "bogus_command" });
+		await browser.waitForFrame(
+			(f) => f.type === "error" && f.error === "fleet edge: use spawn/stop/roster",
+			"error frame for the follow-up command",
+		);
+		expect(browser.frames.slice(before).filter((f) => f.type === "error")).toHaveLength(1);
+		expect(browser.closeInfo).toBeNull();
+	});
+
+	test("a message that is not one JSON command object with a string id closes the socket 4400", async () => {
+		const validJson = JSON.stringify({ cmd: { type: "bogus_command", id: "x" } });
+		const variants: Array<[string, string | Uint8Array<ArrayBuffer>]> = [
+			["non-JSON text", "this is not json"],
+			["binary message", new TextEncoder().encode(validJson)],
+			["no cmd", JSON.stringify({ nope: 1 })],
+			["cmd that is not an object", JSON.stringify({ cmd: "bogus_command" })],
+			["cmd without an id", JSON.stringify({ cmd: { type: "bogus_command" } })],
+			["cmd with a non-string id", JSON.stringify({ cmd: { type: "bogus_command", id: 7 } })],
+		];
+		for (const [label, payload] of variants) {
+			const browser = await openBrowser(server.port);
+			await browser.waitForFrame((f) => f.type === "roster", `roster (${label})`);
+			await browser.sendRaw(payload);
+			const close = await browser.end();
+			expect(close.code, label).toBe(4400);
+			expect(close.reason, label).toStartWith("protocol_violation:");
+			expect(browser.acks, label).toEqual([]);
+		}
+	});
+
+	test("the proto gate: a missing or different proto closes 4426 before any frame is delivered", async () => {
+		for (const proto of [OMP_PROTO - 1, OMP_PROTO + 1, null]) {
+			const browser = new BrowserSocket(server.port, undefined, { proto });
+			allBrowsers.push(browser);
+			await browser.open();
+			const close = await browser.end();
+			expect(close.code, `proto ${proto}`).toBe(4426);
+			expect(close.reason, `proto ${proto}`).toStartWith("proto_mismatch:");
+			expect(browser.messages, `proto ${proto}`).toEqual([]);
+		}
+	});
+
+	test("a daemon hello_ok with a different proto ends the attach with the proto mismatch error frame", async () => {
+		const row = enrollRow("proto-mismatch");
+		const daemon = await connectDaemon(row.daemonId, row.generation, row.token);
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		const seen = controlsOf(daemon, "stream_open").length;
+		await browser.send({ type: "attach", sessionId: row.daemonId });
+		const streamId = await awaitNewStream(daemon, seen);
+		daemon.send(streamId, "frame", { type: "hello_ok", proto: OMP_PROTO - 1 });
+		const error = await browser.waitForFrame(
+			(f) => f.type === "error" && f.error.startsWith("proto mismatch"),
+			"proto mismatch error",
+		);
+		expect(error).toMatchObject({
+			error: `proto mismatch: daemon speaks OMP_PROTO ${OMP_PROTO - 1}, expected ${OMP_PROTO}`,
+		});
+		// The mismatched hello_ok never reaches the browser and the stream is
+		// terminal: the socket itself stays open for the next attach.
+		expect(browser.frames.some((f) => f.type === "hello_ok")).toBe(false);
+		expect(browser.closeInfo).toBeNull();
+		const id = crypto.randomUUID();
+		await browser.send({ type: "call", id, method: "getQueuedMessages" });
+		const result = await browser.waitForFrame(
+			(f) => f.type === "call_result" && f.id === id,
+			"call_result after the terminal stream",
+		);
+		if (result.type !== "call_result") throw new Error("expected call_result");
+		expect(result.error).toContain("not attached");
+	});
+
+	test("answers reach only the originating client, and a re-sent id after a reconnect is acked again with its replayed answer landing on the new socket only", async () => {
+		const row = enrollRow("answer-routing");
+		const daemon = await connectDaemon(row.daemonId, row.generation, row.token);
+		const a = await openBrowser(server.port);
+		const b = await openBrowser(server.port);
+		await a.waitForFrame((f) => f.type === "roster", "roster A");
+		await b.waitForFrame((f) => f.type === "roster", "roster B");
+		const streamA = await attachBrowser(a, daemon, row.daemonId);
+		const streamB = await attachBrowser(b, daemon, row.daemonId);
+
+		const call = { type: "call", id: "route-1", method: "getQueuedMessages" };
+		await a.send(call);
+		await waitFor(
+			() => (commandsWithId(daemon, "route-1").length > 0 ? "sent" : null),
+			5000,
+			"route-1 at the session",
+		);
+		expect(commandsWithId(daemon, "route-1").map((env) => env.streamId)).toEqual([streamA]);
+
+		// A's tab drops before the answer. The session (which broadcasts to every
+		// stream it has open) answers B's pipe: B must not see A's answer.
+		a.close();
+		await a.end();
+		await waitFor(
+			() =>
+				controlsOf(daemon, "stream_close").some((e) => e.streamId === streamA) ? "closed" : null,
+			5000,
+			"A's pipe closed",
+		);
+		daemon.send(streamB, "frame", { type: "call_result", id: "route-1", ok: true });
+
+		// A redials as the same client with its resume point, re-attaches, and
+		// re-sends the same command id: acked again (the dedup memory survived
+		// the disconnect) and forwarded on the NEW stream.
+		const a2 = new BrowserSocket(server.port, a.clientId, { after: a.lastSeq });
+		allBrowsers.push(a2);
+		await a2.open();
+		await a2.waitForFrame((f) => f.type === "registered_projects", "priming on the new socket");
+		const streamA2 = await attachBrowser(a2, daemon, row.daemonId);
+		expect(streamA2).not.toBe(streamA);
+		await a2.send(call);
+		expect(a2.acks).toContain("route-1");
+		await waitFor(
+			() => (commandsWithId(daemon, "route-1").length > 1 ? "resent" : null),
+			5000,
+			"route-1 re-sent at the session",
+		);
+		expect(commandsWithId(daemon, "route-1").map((env) => env.streamId)).toEqual([
+			streamA,
+			streamA2,
+		]);
+
+		// The session's dedup replays the answer on every open stream. Order on
+		// B's own pipe proves B never got it: B's later sentinel arrives after.
+		daemon.send(streamA2, "frame", { type: "call_result", id: "route-1", ok: true });
+		daemon.send(streamB, "frame", { type: "call_result", id: "route-1", ok: true });
+		await b.send({ type: "call", id: "route-b", method: "getQueuedMessages" });
+		await waitFor(
+			() => (commandsWithId(daemon, "route-b").length > 0 ? "sent" : null),
+			5000,
+			"route-b at the session",
+		);
+		daemon.send(streamB, "frame", { type: "call_result", id: "route-b", ok: true });
+		await b.waitForFrame((f) => f.type === "call_result" && f.id === "route-b", "route-b result");
+		await a2.waitForFrame((f) => f.type === "call_result" && f.id === "route-1", "route-1 result");
+
+		const answersTo = (browser: BrowserSocket) =>
+			browser.frames.filter((f) => f.type === "call_result" && f.id === "route-1");
+		expect(answersTo(a2)).toHaveLength(1);
+		expect(answersTo(b)).toHaveLength(0);
+		expect(answersTo(a)).toHaveLength(0);
+		a2.close();
+		b.close();
 	});
 });
 

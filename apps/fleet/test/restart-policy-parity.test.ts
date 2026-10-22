@@ -24,7 +24,7 @@ import { join } from "node:path";
 import type { Server } from "bun";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry, type FleetSocketData } from "../daemon-transport";
+import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
 import { Registry, type RegistryEntry } from "../registry";
 import type { CloneRuntimePolicy } from "../workspace-lifecycle";
 import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
@@ -93,7 +93,7 @@ async function hostRig(runtime: Partial<CloneRuntimePolicy>): Promise<Rig> {
 	const registry = new Registry(statePath);
 	await registry.load();
 	const transport = new DaemonTransportRegistry();
-	const server: Server<FleetSocketData> = Bun.serve<FleetSocketData>({
+	const server: Server<CallbackSocketData> = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
 		idleTimeout: 255,

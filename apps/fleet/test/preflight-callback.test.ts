@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { startConnectProxy } from "#lib/testkit/connect-proxy.testkit";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { BwrapProfile, PreflightCheck } from "#lib/runtime/provider-protocol";
-import { DaemonTransportRegistry, type FleetSocketData } from "../daemon-transport";
+import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
 import { runProfilePreflight } from "../preflight";
 
 afterAll(cleanupTempDirs);
@@ -63,7 +63,7 @@ async function callbackRows(
 /** A real fleet callback registry mounted the way fleet/server.ts mounts it. */
 function startFleet(): { url: string } {
 	const registry = new DaemonTransportRegistry();
-	const server = Bun.serve<FleetSocketData>({
+	const server = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
 		websocket: registry.websocket,

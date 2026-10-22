@@ -12,7 +12,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry, type FleetSocketData } from "../daemon-transport";
+import { DaemonTransportRegistry } from "../daemon-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
 import { Registry } from "../registry";
@@ -23,6 +23,7 @@ import {
 	FAKE_CWD,
 	FAKE_STATE,
 	openBrowser,
+	serveEdge,
 	testEviction,
 	testWaker,
 	waitFor,
@@ -82,18 +83,8 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 			transport,
 			fleet: { port: 0, startedAt: Date.now(), statePath, configPath: null, bind: "127.0.0.1" },
 		});
-		const server = Bun.serve<FleetSocketData>({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: async (req, srv) => {
-				const handled = await transport.handleFetch(req, srv);
-				if (handled !== null) return handled;
-				return (await edge.handleFetch(req)) ?? new Response("not found", { status: 404 });
-			},
-			websocket: transport.websocket,
-		});
+		const server = serveEdge(edge, transport);
 		const port = server.port;
-		if (port === undefined) throw new Error("edge test server bound no port");
 		const url = `http://127.0.0.1:${port}`;
 		const daemons: CallbackDaemon[] = [];
 		const browsers: BrowserSocket[] = [];
@@ -134,7 +125,7 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 				edge.close();
 				lifecycle.close();
 				transport.close();
-				server.stop(true);
+				server.stop();
 			},
 		};
 	}

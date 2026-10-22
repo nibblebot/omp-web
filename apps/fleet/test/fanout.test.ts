@@ -19,7 +19,7 @@ import type { Server } from "bun";
 import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry, type FleetSocketData } from "../daemon-transport";
+import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
 import { fanOut, promptEntry, type FanoutDeps } from "../fanout";
 import { Registry, type RegistryEntry } from "../registry";
 import { SessionWaker } from "../session-waker";
@@ -57,7 +57,7 @@ function startFixture(): Fixture {
 	const statePath = `${dir}/state.json`;
 	const registry = new Registry(statePath);
 	const transport = new DaemonTransportRegistry();
-	const server: Server<FleetSocketData> = Bun.serve<FleetSocketData>({
+	const server: Server<CallbackSocketData> = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
 		idleTimeout: 255,

@@ -1,18 +1,23 @@
 /**
  * Shared harness for the split fleet edge suites (edge-wire, edge-pipe,
- * edge-worktrees): a browser SSE edge client, ring replay collection, wire
+ * edge-worktrees): a browser socket (`/ws`) client, ring replay collection, wire
  * fixtures, and polling helpers. The controlled daemon lives in
  * callback-daemon.testkit.ts (a session-side callback pair dialed out to the
  * fleet; the fleet never dials a session). Named *.testkit.ts so bun test
  * discovery never picks it up as a suite.
  */
 import { join } from "node:path";
-import { DELTA_SEQ_START, SSE_EVENT_NAME } from "#lib/wire/protocol";
+import { DELTA_SEQ_START, OMP_PROTO } from "#lib/wire/protocol";
 import type { DaemonEntry, DaemonInfo, ServerFrame } from "#lib/wire/protocol";
-import { parseSseUnits } from "#lib/wire/sse";
+import {
+	BROWSER_SOCKET_PATH,
+	browserSocketUrl,
+	parseServerMessage,
+} from "#lib/wire/browser-socket";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { EdgeEvictionHooks, FleetEdge } from "../edge";
-import type { DaemonTransportRegistry, FleetSocketData } from "../daemon-transport";
+import type { DaemonTransportRegistry } from "../daemon-transport";
+import { fleetWebSocket, type FleetSocketData } from "../fleet-websocket";
 import type { Registry } from "../registry";
 import type { LifecycleApi } from "../workspace-lifecycle";
 import { SessionWaker } from "../session-waker";
@@ -120,90 +125,188 @@ export async function waitForEvent(
 	}
 }
 
+/** A command the edge nacked (the HTTP status the old POST /command would have answered). */
+export class CommandNack extends Error {
+	constructor(
+		readonly id: string,
+		readonly status: number,
+		message: string,
+	) {
+		super(`command ${id} nacked ${status}: ${message}`);
+	}
+}
+
+/** How a browser socket closed (RFC 6455 code + reason). */
+export interface SocketClose {
+	code: number;
+	reason: string;
+}
+
+/** Bun's WebSocket client with its upgrade-header options; the DOM lib types hide them. */
+const BunWebSocket = WebSocket as unknown as new (
+	url: string,
+	options: Bun.WebSocketOptions,
+) => WebSocket;
+
 /**
- * A browser edge client: GET /events SSE downlink (bound with ?client= for
- * per-browser command routing) + POST /command uplink (X-Omp-Client-Id
- * header). Reconnects carry Last-Event-ID for ring replay.
+ * A browser edge client: one `/ws` socket bound with `client=<id>` (per-browser
+ * command routing), `proto` and, after a reconnect, `after` (the highest seq
+ * received). Commands ride in band; `send` resolves on the ack and rejects with
+ * CommandNack on a nack.
  */
 export class BrowserSocket {
 	readonly frames: ServerFrame[] = [];
 	readonly events: Array<{ id: number; frame: ServerFrame }> = [];
-	/** Every byte of the /events body received so far (decoded text), for wire-shape assertions. */
+	/** Every message received, in order (raw JSON text), for wire-shape assertions. */
+	readonly messages: string[] = [];
+	/** The same text joined by newlines. */
 	rawText = "";
+	readonly pings: number[] = [];
+	readonly acks: string[] = [];
+	readonly nacks: Array<{ id: string; status: number; error: string }> = [];
+	/** Set once the socket closed. */
+	closeInfo: SocketClose | null = null;
 	readonly clientId: string;
 	readonly port: number;
-	#abort: AbortController | null = null;
-	#readerDone: Promise<void> | null = null;
-	#lastEventId: string | null = null;
+	/** Overrides for dial-time tests: a different `proto`, none at all, no client id, extra headers. */
+	readonly dial: {
+		proto?: number | null;
+		headers?: Record<string, string>;
+		after?: number | null;
+		/** Dial without a `client` query (a socket no command can address). */
+		anonymous?: boolean;
+	};
+	#ws: WebSocket | null = null;
+	#after: number | null = null;
+	#closed: Promise<SocketClose> | null = null;
+	readonly #pending = new Map<string, { resolve: () => void; reject: (err: Error) => void }>();
 
-	constructor(port: number, clientId = crypto.randomUUID()) {
+	constructor(
+		port: number,
+		clientId: string = crypto.randomUUID(),
+		dial: BrowserSocket["dial"] = {},
+	) {
 		this.port = port;
 		this.clientId = clientId;
+		this.dial = dial;
 	}
 
+	/** Dial and resolve once the socket is open (a refused dial opens, then closes typed). */
 	async open(): Promise<void> {
-		const headers: Record<string, string> = {};
-		if (this.#lastEventId !== null) headers["Last-Event-ID"] = this.#lastEventId;
-		const abort = new AbortController();
-		this.#abort = abort;
-		const res = await fetch(`http://127.0.0.1:${this.port}/events?client=${this.clientId}`, {
-			headers,
-			signal: abort.signal,
+		const proto = this.dial.proto === undefined ? OMP_PROTO : this.dial.proto;
+		const url = browserSocketUrl(`http://127.0.0.1:${this.port}`, {
+			clientId: this.dial.anonymous === true ? null : this.clientId,
+			after: this.dial.after === undefined ? this.#after : this.dial.after,
+			proto,
+			token: null,
 		});
-		if (!res.ok || !res.body) throw new Error(`browser /events → HTTP ${res.status}`);
-		const [parsed, raw] = res.body.tee();
-		const rawReader = (async () => {
-			const decoder = new TextDecoder();
-			try {
-				for await (const chunk of raw) this.rawText += decoder.decode(chunk, { stream: true });
-			} catch {
-				// Stream dropped/aborted.
+		const ws = new BunWebSocket(url, { headers: this.dial.headers });
+		this.#ws = ws;
+		this.closeInfo = null;
+		const closed = Promise.withResolvers<SocketClose>();
+		this.#closed = closed.promise;
+		ws.addEventListener("close", (event) => {
+			const info = { code: event.code, reason: event.reason };
+			this.closeInfo = info;
+			for (const waiter of this.#pending.values()) {
+				waiter.reject(new Error(`socket closed ${info.code} before the command settled`));
 			}
-		})();
-		this.#readerDone = (async () => {
-			try {
-				for await (const unit of parseSseUnits(parsed)) {
-					if (unit.kind !== "event" || unit.event !== SSE_EVENT_NAME || unit.id === undefined)
-						continue;
-					this.#lastEventId = unit.id;
-					const frame = JSON.parse(unit.data) as ServerFrame;
-					this.frames.push(frame);
-					this.events.push({ id: Number(unit.id), frame });
+			this.#pending.clear();
+			closed.resolve(info);
+		});
+		ws.addEventListener("message", (event) => this.#onMessage(event.data));
+		const opened = Promise.withResolvers<void>();
+		ws.addEventListener("open", () => opened.resolve(), { once: true });
+		ws.addEventListener("error", () => opened.reject(new Error("browser /ws dial failed")), {
+			once: true,
+		});
+		await opened.promise;
+	}
+
+	#onMessage(data: unknown): void {
+		const text = typeof data === "string" ? data : String(data);
+		this.messages.push(text);
+		this.rawText += `${text}\n`;
+		const message = parseServerMessage(text);
+		if (message === null) throw new Error(`unparseable server message: ${text.slice(0, 200)}`);
+		switch (message.kind) {
+			case "frame": {
+				const id = message.seq ?? -1;
+				if (message.seq !== null && (this.#after === null || message.seq > this.#after)) {
+					this.#after = message.seq;
 				}
-			} catch {
-				// Stream dropped/aborted; tests observe via frames + end().
+				this.frames.push(message.frame);
+				this.events.push({ id, frame: message.frame });
+				return;
 			}
-			await rawReader;
-		})();
+			case "ping":
+				this.pings.push(message.at);
+				return;
+			case "ack": {
+				this.acks.push(message.id);
+				const waiter = this.#pending.get(message.id);
+				this.#pending.delete(message.id);
+				waiter?.resolve();
+				return;
+			}
+			case "nack": {
+				this.nacks.push({ id: message.id, status: message.status, error: message.error });
+				const waiter = this.#pending.get(message.id);
+				this.#pending.delete(message.id);
+				waiter?.reject(new CommandNack(message.id, message.status, message.error));
+				return;
+			}
+		}
 	}
 
-	/** POST one command; resolves on the 202 accept. */
-	async send(cmd: unknown): Promise<void> {
-		const res = await fetch(`http://127.0.0.1:${this.port}/command`, {
-			method: "POST",
-			headers: { "content-type": "application/json", "x-omp-client-id": this.clientId },
-			body: JSON.stringify(cmd),
-		});
-		if (!res.ok) throw new Error(`browser command rejected (HTTP ${res.status})`);
+	/** Highest seq received so far (the `after` the next dial carries). */
+	get lastSeq(): number | null {
+		return this.#after;
 	}
 
-	/** Resolves when the /events body ends (backpressure drop / close), or rejects on timeout. */
-	async end(timeoutMs = 5000): Promise<void> {
-		if (!this.#readerDone) throw new Error("browser not open");
-		await Promise.race([
-			this.#readerDone,
-			new Promise((_, reject) =>
-				setTimeout(() => reject(new Error("browser stream did not end")), timeoutMs),
-			),
-		]);
+	/** Send one command (an id is minted when the test gives none); resolves on the ack, rejects on a nack. */
+	send(cmd: Record<string, unknown>): Promise<void> {
+		const id = typeof cmd.id === "string" && cmd.id !== "" ? cmd.id : crypto.randomUUID();
+		return this.sendRaw(JSON.stringify({ cmd: { ...cmd, id } }), id);
 	}
 
-	/** Close the stream (abort the fetch), like a browser tab closing. */
+	/** Send raw text as one message; when `id` is given, resolve on its ack and reject on its nack. */
+	sendRaw(text: string | Uint8Array<ArrayBuffer>, id?: string): Promise<void> {
+		const ws = this.#ws;
+		if (ws === null || ws.readyState !== WebSocket.OPEN) {
+			return Promise.reject(new Error("browser socket is not open"));
+		}
+		if (id === undefined) {
+			ws.send(text);
+			return Promise.resolve();
+		}
+		const settled = Promise.withResolvers<void>();
+		this.#pending.set(id, { resolve: settled.resolve, reject: settled.reject });
+		ws.send(text);
+		return settled.promise;
+	}
+
+	/** Resolves with the close code when the socket closes (dropped, refused, closed), or rejects on timeout. */
+	async end(timeoutMs = 5000): Promise<SocketClose> {
+		if (!this.#closed) throw new Error("browser not open");
+		const timeout = Promise.withResolvers<never>();
+		const timer = setTimeout(
+			() => timeout.reject(new Error("browser socket did not close")),
+			timeoutMs,
+		);
+		try {
+			return await Promise.race([this.#closed, timeout.promise]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	/** Close the socket, like a browser tab closing. */
 	close(): void {
-		this.#abort?.abort();
+		this.#ws?.close(1000, "test done");
 	}
 
-	/** Reconnect after a drop: the last received id rides the new open. */
+	/** Reconnect after a drop: the highest received seq rides the new dial as `after`. */
 	reopen(): Promise<void> {
 		return this.open();
 	}
@@ -237,9 +340,10 @@ export async function openBrowser(port: number): Promise<BrowserSocket> {
 }
 
 /**
- * Mount a standalone edge on an ephemeral loopback port for direct tests.
- * Pass the transport the edge was built with to also serve /callback/* so a
- * callback-daemon.testkit daemon can dial the pair.
+ * Mount a standalone edge on an ephemeral loopback port for direct tests
+ * (no browser auth: every `/ws` dial is admitted). Pass the transport the
+ * edge was built with to also serve /callback/* so a callback-daemon.testkit
+ * daemon can dial the pair.
  */
 export function serveEdge(
 	edge: FleetEdge,
@@ -249,55 +353,45 @@ export function serveEdge(
 		hostname: "127.0.0.1",
 		port: 0,
 		fetch: async (req, srv) => {
+			if (new URL(req.url).pathname === BROWSER_SOCKET_PATH) {
+				return edge.acceptBrowserSocket(req, srv, { refusal: null, session: null });
+			}
 			const handled = (await transport?.handleFetch(req, srv)) ?? null;
 			if (handled !== null) return handled;
 			return (await edge.handleFetch(req)) ?? new Response("not found", { status: 404 });
 		},
-		// Without a transport nothing upgrades, so the stand-in handler is never reached.
-		websocket: transport?.websocket ?? { message() {} },
+		websocket: fleetWebSocket(transport, edge),
 	});
 	return { port: server.port!, stop: () => server.stop(true) };
 }
 
 /**
- * Open /events for a clientId with a delta-era Last-Event-ID and collect the
- * RING REPLAY (delta-era frames only) until `want` matches or `timeoutMs`
- * elapses. The probe binds the client (a rebind closes any previous stream),
+ * Dial /ws for a clientId with a delta-era `after` and collect the RING
+ * REPLAY (delta-era frames only) until `want` matches or `timeoutMs`
+ * elapses. The probe binds the client (a rebind closes any previous socket),
  * so it must be the LAST use of that clientId in a test. A non-matching
- * `want` falls through to the timeout abort and returns what was collected;
+ * `want` falls through to the timeout and returns what was collected;
  * assertions judge the frames.
  */
 export async function collectReplay(
 	port: number,
 	clientId: string,
-	lastEventId: number,
+	after: number,
 	want: (f: ServerFrame) => boolean,
 	timeoutMs = 3000,
 ): Promise<Array<{ id: number; frame: ServerFrame }>> {
-	const abort = new AbortController();
-	const res = await fetch(`http://127.0.0.1:${port}/events?client=${clientId}`, {
-		headers: { "Last-Event-ID": String(lastEventId) },
-		signal: abort.signal,
-	});
-	if (!res.ok || !res.body) throw new Error(`replay probe /events → HTTP ${res.status}`);
-	const frames: Array<{ id: number; frame: ServerFrame }> = [];
-	const timer = setTimeout(() => abort.abort(), timeoutMs);
+	const probe = new BrowserSocket(port, clientId, { after });
+	await probe.open();
+	const deadline = Date.now() + timeoutMs;
 	try {
-		for await (const unit of parseSseUnits(res.body!)) {
-			if (unit.kind !== "event" || unit.event !== SSE_EVENT_NAME || unit.id === undefined) continue;
-			const frame = JSON.parse(unit.data) as ServerFrame;
-			if (Number(unit.id) >= DELTA_SEQ_START) {
-				frames.push({ id: Number(unit.id), frame });
-				if (want(frame)) break;
-			}
+		while (Date.now() < deadline) {
+			if (probe.events.some((ev) => ev.id >= DELTA_SEQ_START && want(ev.frame))) break;
+			await sleep(10);
 		}
-	} catch {
-		// Aborted (timeout or teardown): the collected frames are the result.
 	} finally {
-		clearTimeout(timer);
-		abort.abort();
+		probe.close();
 	}
-	return frames;
+	return probe.events.filter((ev) => ev.id >= DELTA_SEQ_START);
 }
 
 /** Narrow a replay entry to an event frame (type guard preserving narrowing). */

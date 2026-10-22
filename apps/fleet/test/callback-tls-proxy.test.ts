@@ -31,7 +31,7 @@ import {
 	type CallbackEnvelope,
 } from "#lib/wire/callback-protocol";
 import { FleetCallback } from "../../session/fleet-callback";
-import { DaemonTransportRegistry, type FleetSocketData } from "../daemon-transport";
+import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
 import { BRIDGE_MAX_BYTES, startUiServer, type BridgeSample } from "../ui-server";
 import {
 	VOLUME_BYTES,
@@ -90,7 +90,7 @@ async function startControlPlane(tls?: {
 	key: Bun.BunFile;
 }): Promise<ControlPlane> {
 	const registry = new DaemonTransportRegistry();
-	const server = Bun.serve<FleetSocketData>({
+	const server = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
 		idleTimeout: 0,

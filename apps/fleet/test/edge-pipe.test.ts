@@ -9,7 +9,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { CALLBACK_CONTROL_STREAM_ID, type CallbackEnvelope } from "#lib/wire/callback-protocol";
+import { mkdirSync } from "node:fs";
+import {
+	CALLBACK_CONTROL_STREAM_ID,
+	ENVELOPE_MAX_BYTES,
+	STREAM_ACK_WINDOW_BYTES,
+	type CallbackEnvelope,
+} from "#lib/wire/callback-protocol";
 import { OMP_PROTO, DELTA_SEQ_START, type ServerFrame } from "#lib/wire/protocol";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import { createDaemonControl, type DaemonControl } from "../../session/daemon-control";
@@ -22,8 +28,10 @@ import { ProjectSync } from "../project-sync";
 import { Registry } from "../registry";
 import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
 import { makeHostLifecycle } from "./host-lifecycle.testkit";
+import { RawBrowserSocket } from "./raw-browser-socket.testkit";
 import {
-	type BrowserSocket,
+	allBrowsers,
+	BrowserSocket,
 	cleanupTempDirs,
 	collectReplay,
 	eventMessage,
@@ -61,7 +69,7 @@ interface Remote {
 
 /** One edge on loopback with the callback routes mounted, plus its registry and transport. */
 async function startRig(
-	opts: { backpressureBytes?: number; ringBytes?: number } = {},
+	opts: { backpressureBytes?: number; ringBytes?: number; keepaliveMs?: number } = {},
 ): Promise<Rig> {
 	const dir = tempDir("omp-web-edge-pipe-");
 	const statePath = join(dir, "state.json");
@@ -94,7 +102,7 @@ async function startRig(
 				bind: "127.0.0.1",
 			},
 		},
-		{ backpressureBytes: opts.backpressureBytes, ringBytes: opts.ringBytes },
+		opts,
 	);
 	const served = serveEdge(edge, transport);
 	callbackBase = `http://127.0.0.1:${served.port}`;
@@ -210,51 +218,287 @@ function commandsWithId(daemon: CallbackDaemon, id: string): CallbackEnvelope[] 
 	});
 }
 
+/**
+ * Which tracer a roster_delta frame carries for `rowId`: the text before the
+ * ":" in the row's `error` (the tests' marker field: a volatile registry
+ * field, so no state-file write), "create" for the row's first delta, or
+ * undefined for any other frame.
+ */
+function tagOf(rowId: string, frame: ServerFrame): string | undefined {
+	if (frame.type !== "roster_delta") return undefined;
+	const entry = frame.upserted.find((d) => d.daemonId === rowId);
+	return entry === undefined ? undefined : (entry.error?.split(":")[0] ?? "create");
+}
+
+/** Highest wire seq the edge acknowledged (stream_ack) on one browser stream of a daemon. */
+function ackedThrough(daemon: CallbackDaemon, streamId: string): number {
+	let acked = 0;
+	for (const env of daemon.received()) {
+		if (env.kind !== "control" || env.streamId !== streamId || controlType(env) !== "stream_ack") {
+			continue;
+		}
+		const seq =
+			typeof env.payload === "object" && env.payload !== null && "seq" in env.payload
+				? env.payload.seq
+				: undefined;
+		if (typeof seq === "number") acked = Math.max(acked, seq);
+	}
+	return acked;
+}
+
+function isEventFrame(frame: ServerFrame): frame is ServerFrame & { type: "event" } {
+	return frame.type === "event";
+}
+
+/** A directory `registry.addProject` accepts (an existing directory with a `.git` entry). */
+function fakeRepoDir(name: string): string {
+	const dir = join(tempDir("omp-web-edge-pipe-repo-"), name);
+	mkdirSync(join(dir, ".git"), { recursive: true });
+	return dir;
+}
+
 describe("edge pipe backpressure and replay", () => {
-	test("backpressure: overflow drops the browser stream; Last-Event-ID resume replays the ring", async () => {
-		// Sizing rule, not a pinned byte count: the cap must be smaller than
-		// the 40-frame synchronous burst (overflow must trigger) yet larger
-		// than priming + the ring-replay tail after the drop (the resumed
-		// stream's replay is enqueued synchronously, so an over-small cap
-		// re-drops it mid-replay). Roster frames grow as additive fields are
-		// added to DaemonEntry; keep the burst:cap ratio wide.
-		const rig = await startRig({ backpressureBytes: 8_192 });
+	test("backpressure: a client that stops reading is closed 4503; a reconnect with `after` replays exactly the ringed deltas it never received", async () => {
+		// The ring must hold every delta of the burst (the default budget would evict).
+		const rig = await startRig({ ringBytes: 256 * 1024 * 1024 });
+		const slow = new RawBrowserSocket(rig.port);
 		try {
-			const browser = await openBrowser(rig.port);
-			// Priming arrives (roster + merged daemons, seqs 1..2).
-			await browser.waitForFrame((f) => f.type === "roster", "priming roster");
-			// One delta the browser reads, so its Last-Event-ID lands in the
-			// delta range (>= DELTA_SEQ_START) before the drop.
-			const x1 = rig.registry.create({
+			const remote = await connectRemote(rig, "slow-drop");
+			await slow.open();
+			await slow.waitForFrame((f) => f.type === "roster", "priming roster");
+			slow.send({ type: "attach", id: "a1", sessionId: remote.daemonId });
+			await slow.waitForFrame(
+				(f) => f.type === "attach_result" && f.id === "a1" && f.ok,
+				"attach_result",
+			);
+			// The attached daemon stream is the test's drop detector: the edge
+			// sends stream_close the moment it drops the socket.
+			await awaitStreams(remote.daemon, 1);
+			const row = rig.registry.create({
 				name: "x1",
 				cwd: "/x1",
 				project: "x1",
 				labels: [],
 				status: "connecting",
 			});
-			await browser.waitForFrame(
-				(f) => f.type === "roster_delta" && f.upserted.some((d) => d.daemonId === x1.daemonId),
-				"first delta roster",
-			);
-			// Overflow: a synchronous burst of roster broadcasts (constant-size
-			// blocks) far exceeds the cap while the browser is not reading, so
-			// the stream must be dropped.
-			for (let i = 2; i <= 40; i++) {
-				rig.registry.update(x1.daemonId, { labels: [`v=${i}`] });
+			await slow.waitForEvent((ev) => tagOf(row.daemonId, ev.frame) === "create", "first delta");
+			slow.pause();
+			// Ringed deltas, 64 KiB each, until the socket's send buffer (kernel
+			// plus the edge's queue) passes the cap and the edge drops it.
+			const pad = "p".repeat(64 * 1024);
+			const emittedTags = ["create"];
+			while (controlFrames(remote.daemon, "stream_close").length === 0) {
+				if (emittedTags.length > 1500) throw new Error("the edge never dropped the slow client");
+				const tag = `v${emittedTags.length}`;
+				emittedTags.push(tag);
+				rig.registry.update(row.daemonId, { error: `${tag}:${pad}` });
+				await sleep(1);
 			}
-			await browser.end(); // the dropped stream's body ends
-			// Reconnect with Last-Event-ID: the ring replays deltas after it.
-			await browser.reopen();
-			// The replay delivers the ringed deltas (delta-era seqs), including
-			// the final burst roster, not only the fresh priming.
-			const replayed = await browser.waitForEvent(
-				(ev) =>
-					ev.frame.type === "roster_delta" &&
-					ev.frame.upserted.some((d) => d.daemonId === x1.daemonId && d.labels.includes("v=40")) &&
-					ev.id >= DELTA_SEQ_START,
-				"replayed final roster delta",
+			// While it is gone: a ringed delta, an unringed frame (consumes a seq,
+			// never replayed), a ringed delta.
+			emittedTags.push("post1");
+			rig.registry.update(row.daemonId, { error: "post1:" });
+			rig.registry.addProject(fakeRepoDir("slow-drop-repo"));
+			emittedTags.push("post2");
+			rig.registry.update(row.daemonId, { error: "post2:" });
+			// The client reads again: what was buffered arrives, then the typed close.
+			slow.resume();
+			const closed = await slow.end(15_000);
+			expect(closed?.code).toBe(4503);
+			expect(closed?.reason).toStartWith("slow_consumer");
+			const received = slow.events.filter((ev) => tagOf(row.daemonId, ev.frame) !== undefined);
+			const receivedTags = received.map((ev) => tagOf(row.daemonId, ev.frame));
+			// It got a contiguous prefix of the deltas, and not all of them.
+			expect(receivedTags).toEqual(emittedTags.slice(0, receivedTags.length));
+			expect(receivedTags.length).toBeLessThan(emittedTags.length - 2);
+			const lastSeq = Math.max(...slow.events.map((ev) => ev.id));
+
+			const again = new BrowserSocket(rig.port, slow.clientId, { after: lastSeq });
+			allBrowsers.push(again);
+			await again.open();
+			await again.waitForEvent((ev) => tagOf(row.daemonId, ev.frame) === "post2", "replayed post2");
+			const replayed = again.events.filter((ev) => ev.id >= DELTA_SEQ_START);
+			// Exactly the ringed deltas it missed: none lost, none twice, in order, the
+			// unringed registered_projects absent (it is in the priming instead).
+			expect(replayed.map((ev) => tagOf(row.daemonId, ev.frame))).toEqual(
+				emittedTags.slice(receivedTags.length),
 			);
-			expect(replayed.frame.type).toBe("roster_delta");
+			const ids = replayed.map((ev) => ev.id);
+			expect(ids[0]).toBe(lastSeq + 1);
+			for (let i = 1; i < ids.length; i++) expect(ids[i]).toBeGreaterThan(ids[i - 1]!);
+			expect(
+				again.events.filter((ev) => ev.id < DELTA_SEQ_START).map((ev) => ev.frame.type),
+			).toEqual(["roster", "daemons", "registered_projects"]);
+			again.close();
+		} finally {
+			slow.destroy();
+			await rig.close();
+		}
+	});
+
+	test("resume: `after` replays exactly the ringed deltas missed while disconnected, seqs preserved; an `after` below the delta range replays nothing", async () => {
+		const rig = await startRig();
+		try {
+			const browser = await openBrowser(rig.port);
+			await browser.waitForFrame((f) => f.type === "roster", "priming roster");
+			const row = rig.registry.create({
+				name: "x1",
+				cwd: "/x1",
+				project: "x1",
+				labels: [],
+				status: "connecting",
+			});
+			const tag = (name: string): void => {
+				rig.registry.update(row.daemonId, { error: `${name}:` });
+			};
+			tag("m1");
+			tag("m2");
+			await browser.waitForEvent((ev) => tagOf(row.daemonId, ev.frame) === "m2", "m2");
+			const after = browser.lastSeq;
+			expect(after).toBeGreaterThanOrEqual(DELTA_SEQ_START);
+			browser.close();
+			await browser.end();
+			// Missed while disconnected: a ringed delta, an unringed frame (takes a
+			// seq, never replayed), a ringed delta.
+			tag("m3");
+			rig.registry.addProject(fakeRepoDir("resume-repo"));
+			tag("m4");
+			const seen = browser.events.length;
+			await browser.reopen();
+			await browser.waitForEvent((ev) => tagOf(row.daemonId, ev.frame) === "m4", "replayed m4");
+			const events = browser.events.slice(seen);
+			expect(events.filter((ev) => ev.id < DELTA_SEQ_START).map((ev) => ev.frame.type)).toEqual([
+				"roster",
+				"daemons",
+				"registered_projects",
+			]);
+			const replayed = events.filter((ev) => ev.id >= DELTA_SEQ_START);
+			expect(replayed.map((ev) => tagOf(row.daemonId, ev.frame))).toEqual(["m3", "m4"]);
+			// The seqs the edge assigned at emission: m3 right after `after`, the
+			// unringed frame took the next one, m4 the one after.
+			expect(replayed.map((ev) => ev.id)).toEqual([after! + 1, after! + 3]);
+
+			// A resume point below the delta range means "priming carries full
+			// state": no replay. A live delta sent once the socket is primed
+			// would arrive after any replay, so it bounds the check.
+			browser.close();
+			await browser.end();
+			const fresh = new BrowserSocket(rig.port, browser.clientId, {
+				after: DELTA_SEQ_START - 1,
+			});
+			allBrowsers.push(fresh);
+			await fresh.open();
+			await fresh.waitForFrame((f) => f.type === "roster", "priming roster");
+			tag("m5");
+			await fresh.waitForEvent((ev) => tagOf(row.daemonId, ev.frame) === "m5", "live m5");
+			expect(
+				fresh.events
+					.filter((ev) => ev.id >= DELTA_SEQ_START)
+					.map((ev) => tagOf(row.daemonId, ev.frame)),
+			).toEqual(["m5"]);
+			fresh.close();
+		} finally {
+			await rig.close();
+		}
+	});
+
+	test("a slow client is dropped (4503) without stalling the healthy client or the daemon, whose credit keeps flowing", async () => {
+		const rig = await startRig({ keepaliveMs: 100 });
+		const slow = new RawBrowserSocket(rig.port);
+		try {
+			const remote = await connectRemote(rig, "slow-vs-healthy");
+			const healthy = await openBrowser(rig.port);
+			await healthy.waitForFrame((f) => f.type === "roster", "healthy roster");
+			await attach(healthy, remote.daemonId, "h1");
+			const [healthyStream] = await awaitStreams(remote.daemon, 1);
+			await slow.open();
+			slow.pause();
+			slow.send({ type: "attach", id: "s1", sessionId: remote.daemonId });
+			const [, slowStream] = await awaitStreams(remote.daemon, 2);
+			// 24 MiB per stream: far past the 4 MiB cap plus every kernel buffer.
+			// The daemon honors the healthy stream's credit window (as a session
+			// does) and ignores the slow one's (the burst that must hit the cap).
+			const BURST = 48;
+			const pad = "x".repeat(512 * 1024);
+			const notice = (tag: string, i: number) => ({
+				type: "event",
+				event: { type: "notice", level: "info", message: `${tag}${i}:${pad}` },
+			});
+			const slowClosed = (): boolean =>
+				controlFrames(remote.daemon, "stream_close").some((env) => env.streamId === slowStream);
+			const healthySeqs: number[] = [];
+			for (let i = 0; i < BURST; i++) {
+				await waitFor(
+					() => {
+						const acked = ackedThrough(remote.daemon, healthyStream!);
+						const unacked = healthySeqs.filter((seq) => seq > acked).length;
+						return (unacked + 1) * pad.length + ENVELOPE_MAX_BYTES <= STREAM_ACK_WINDOW_BYTES
+							? true
+							: null;
+					},
+					10_000,
+					"healthy stream credit",
+				);
+				healthySeqs.push(remote.daemon.send(healthyStream!, "frame", notice("h", i)));
+				if (!slowClosed()) remote.daemon.send(slowStream!, "frame", notice("s", i));
+				await sleep(1);
+			}
+			// The healthy client has every frame, in order, while the slow one is
+			// still not reading a byte.
+			await healthy.waitForEvent(
+				(ev) =>
+					ev.frame.type === "event" &&
+					eventMessage(ev.frame)?.startsWith(`h${BURST - 1}:`) === true,
+				"last healthy frame",
+				20_000,
+			);
+			const healthyTags = healthy.frames
+				.filter(isEventFrame)
+				.map((f) => eventMessage(f)!.split(":")[0]);
+			expect(healthyTags).toEqual(Array.from({ length: BURST }, (_, i) => `h${i}`));
+			await waitFor(() => (slowClosed() ? true : null), 10_000, "stream_close for the slow client");
+			// The daemon's pair is untouched and the healthy stream was never cut;
+			// its credit kept flowing right through to the last frame.
+			expect(remote.daemon.connected()).toBe(true);
+			expect(remote.daemon.dials()).toBe(1);
+			expect(
+				controlFrames(remote.daemon, "stream_close").filter(
+					(env) => env.streamId === healthyStream,
+				),
+			).toHaveLength(0);
+			await waitFor(
+				() => (ackedThrough(remote.daemon, healthyStream!) >= healthySeqs.at(-1)! ? true : null),
+				10_000,
+				"stream_ack through the last healthy frame",
+			);
+			// The slow client reads again: whatever was buffered, then the typed close.
+			slow.resume();
+			const closed = await slow.end(15_000);
+			expect(closed?.code).toBe(4503);
+			expect(closed?.reason).toStartWith("slow_consumer");
+			expect(slow.frames.filter(isEventFrame).length).toBeLessThan(BURST);
+			expect(healthy.closeInfo).toBeNull();
+		} finally {
+			slow.destroy();
+			await rig.close();
+		}
+	}, 60_000);
+
+	test('keepalive: an idle socket receives {"ping":ms} messages', async () => {
+		const rig = await startRig({ keepaliveMs: 40 });
+		try {
+			const browser = await openBrowser(rig.port);
+			await browser.waitForFrame((f) => f.type === "roster", "priming roster");
+			await waitFor(() => (browser.pings.length >= 3 ? true : null), 5000, "three pings");
+			const pings = browser.messages.filter((m) => m.startsWith('{"ping":'));
+			expect(pings.length).toBeGreaterThanOrEqual(3);
+			for (const message of pings) expect(Object.keys(JSON.parse(message))).toEqual(["ping"]);
+			for (let i = 1; i < browser.pings.length; i++) {
+				expect(browser.pings[i]).toBeGreaterThanOrEqual(browser.pings[i - 1]!);
+			}
+			// Epoch ms of the edge's clock.
+			expect(Math.abs(Date.now() - browser.pings.at(-1)!)).toBeLessThan(5000);
+			expect(browser.closeInfo).toBeNull();
 		} finally {
 			await rig.close();
 		}
@@ -820,14 +1064,6 @@ describe("edge pipe relays the session's own frame text", () => {
 		) as ServerFrame;
 	}
 
-	/** Every SSE block of the browser's stream carrying a frame, as its data lines. */
-	function dataLinesOf(browser: BrowserSocket): string[][] {
-		return browser.rawText
-			.split("\n\n")
-			.filter((block) => block.startsWith("event: frame\n"))
-			.map((block) => block.split("\n").filter((line) => line.startsWith("data:")));
-	}
-
 	async function attached(rig: Rig, name: string) {
 		const remote = await connectRemote(rig, name);
 		const browser = await openBrowser(rig.port);
@@ -863,7 +1099,7 @@ describe("edge pipe relays the session's own frame text", () => {
 				{ text: '{"type": "state" , "state": {"x": [1, 2.5, null, true]}}', stamp: true },
 				{ text: '{"type":"attached","sessionId":"s1"}', stamp: true },
 				{ text: '{"type":"ready","marker":"unscoped"}', stamp: false },
-				{ text: "{}", stamp: false },
+				{ text: '{"type":"ready"}', stamp: false },
 			];
 			for (const { text } of cases) remote.daemon.sendRaw(stream, "frame", text);
 			remote.daemon.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
@@ -912,30 +1148,34 @@ describe("edge pipe relays the session's own frame text", () => {
 		}
 	});
 
-	test("a frame with a raw newline between tokens, or non-canonical framing, arrives intact as one single-line SSE event", async () => {
+	test("a frame with a raw newline between tokens, or non-canonical framing, is spliced into its message unchanged", async () => {
 		const rig = await startRig();
 		try {
 			const { remote, browser, stream } = await attached(rig, "relay-newline");
 			const pretty =
 				'{\n  "type": "event",\r\n  "event": {"type":"notice","level":"info","message":"nl é"}\n}';
+			const compact =
+				'{"type":"event","event":{"type":"notice","level":"info","message":"padded"}}';
 			remote.daemon.sendRaw(stream, "frame", pretty);
-			remote.daemon.sendRaw(
-				stream,
-				"frame",
-				'{"type":"event","event":{"type":"notice","level":"info","message":"padded"}}',
-				{ padded: true },
-			);
+			remote.daemon.sendRaw(stream, "frame", compact, { padded: true });
 			remote.daemon.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
 			await browser.waitForFrame((f) => markerOf(f) === "done", "last frame");
+			// Parsed, the relayed frame equals the re-serialized one.
 			expect(browser.frames.find((f) => f.type === "event" && eventMessage(f) === "nl é")).toEqual(
 				viaStringify(pretty, remote.daemonId),
 			);
 			expect(
 				browser.frames.find((f) => f.type === "event" && eventMessage(f) === "padded"),
 			).toMatchObject({ sessionId: remote.daemonId });
-			// Each frame is one SSE block with exactly one data line; no raw CR or LF split it.
-			for (const lines of dataLinesOf(browser)) expect(lines).toHaveLength(1);
-			expect(browser.rawText).not.toContain("\r");
+			// On the wire the session's own text is spliced in verbatim (its raw
+			// CR/LF kept, JSON allows them between tokens), the stamp appended
+			// before the closing brace, all inside one `{"seq":N,"frame":...}` message.
+			const stamp = `,"sessionId":${JSON.stringify(remote.daemonId)}}}`;
+			for (const text of [pretty, compact]) {
+				const message = browser.messages.find((m) => m.endsWith(`${text.slice(0, -1)}${stamp}`));
+				expect(message).toMatch(/^\{"seq":\d+,"frame":\{/);
+			}
+			expect(browser.rawText).toContain("\r\n");
 		} finally {
 			await rig.close();
 		}

@@ -284,8 +284,8 @@ class Fifo<T> {
 }
 
 /**
- * `ws.data` of a callback pair socket. `kind` discriminates it from any other
- * WebSocket consumer sharing the fleet's Bun.serve.
+ * `ws.data` of a callback pair socket. A fleet server hosting other socket
+ * kinds (the browser socket) dispatches on `kind` (fleet-websocket.ts).
  */
 export interface CallbackSocketData {
 	kind: "callback";
@@ -298,9 +298,6 @@ export interface CallbackSocketData {
 	generation: number;
 	connectionId: string;
 }
-
-/** Every `ws.data` shape the fleet's Bun.serve hands its `websocket` handler. */
-export type FleetSocketData = CallbackSocketData;
 
 /** One encoded down envelope waiting for the socket to take it. */
 interface OutboxItem {
@@ -326,7 +323,7 @@ interface PairConnection {
 	connectionId: string;
 	workspaceId: string;
 	generation: number;
-	ws: ServerWebSocket<FleetSocketData>;
+	ws: ServerWebSocket<CallbackSocketData>;
 	/** Last fleet-assigned down seq; strictly monotonic per socket. */
 	downSeq: number;
 	/** Last accepted daemon seq. */
@@ -427,13 +424,16 @@ export type CallbackEnvelopeInput = Partial<CallbackEnvelope> &
 
 export class DaemonTransportRegistry {
 	/**
-	 * The fleet's WebSocket handler: hand it to `Bun.serve({ websocket })` next
-	 * to a `fetch` that calls {@link handleFetch}. perMessageDeflate stays off
-	 * and the message cap is CALLBACK_WS_MAX_PAYLOAD_BYTES; `backpressureLimit`
-	 * sits far above anything the send gate lets accumulate and never closes the
-	 * socket (nothing here relies on Bun to drop or close for it).
+	 * The pair's WebSocket handler: hand it to `Bun.serve({ websocket })` next
+	 * to a `fetch` that calls {@link handleFetch}, or compose it with other
+	 * socket kinds (fleet-websocket.ts). perMessageDeflate stays off and the
+	 * message cap is CALLBACK_WS_MAX_PAYLOAD_BYTES, which `onMessage` also
+	 * enforces itself because a composed server raises Bun's cap for the
+	 * browser socket; `backpressureLimit` sits far above anything the send
+	 * gate lets accumulate and never closes the socket (nothing here relies
+	 * on Bun to drop or close for it).
 	 */
-	readonly websocket: WebSocketHandler<FleetSocketData> = {
+	readonly websocket: WebSocketHandler<CallbackSocketData> = {
 		maxPayloadLength: CALLBACK_WS_MAX_PAYLOAD_BYTES,
 		perMessageDeflate: false,
 		backpressureLimit: WS_BACKPRESSURE_LIMIT_BYTES,
@@ -689,7 +689,7 @@ export class DaemonTransportRegistry {
 	 * Response), and null for anything else. */
 	async handleFetch(
 		req: Request,
-		server: Server<FleetSocketData>,
+		server: Server<CallbackSocketData>,
 	): Promise<Response | null | undefined> {
 		const path = new URL(req.url).pathname;
 		try {
@@ -762,7 +762,7 @@ export class DaemonTransportRegistry {
 	 * callbackCloseFor (a WebSocket client cannot read a non-101 status). Only a
 	 * request that is no WebSocket upgrade at all gets an HTTP error.
 	 */
-	#upgrade(req: Request, server: Server<FleetSocketData>): undefined {
+	#upgrade(req: Request, server: Server<CallbackSocketData>): undefined {
 		if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
 			throw callbackError("invalid_request", `${CALLBACK_WS_PATH} requires a WebSocket upgrade`);
 		}
@@ -804,13 +804,13 @@ export class DaemonTransportRegistry {
 	}
 
 	/** The registered pair of a socket, or undefined for a refused, replaced or closed one. */
-	#pairOf(ws: ServerWebSocket<FleetSocketData>): PairConnection | undefined {
+	#pairOf(ws: ServerWebSocket<CallbackSocketData>): PairConnection | undefined {
 		const pair = this.#pairs.get(ws.data.connectionId);
 		return pair !== undefined && pair.ws.data === ws.data ? pair : undefined;
 	}
 
 	/** Accepted upgrade: register the pair and announce it with pair_ready, the first message. */
-	#onOpen(ws: ServerWebSocket<FleetSocketData>): void {
+	#onOpen(ws: ServerWebSocket<CallbackSocketData>): void {
 		const { refusal, workspaceId, generation, connectionId } = ws.data;
 		if (refusal !== null) {
 			const { code, reason } = callbackCloseFor(refusal);
@@ -866,12 +866,12 @@ export class DaemonTransportRegistry {
 	}
 
 	/** The socket's buffer emptied: hand it the envelopes that waited for room. */
-	#onDrain(ws: ServerWebSocket<FleetSocketData>): void {
+	#onDrain(ws: ServerWebSocket<CallbackSocketData>): void {
 		const pair = this.#pairOf(ws);
 		if (pair !== undefined) this.#flush(pair);
 	}
 
-	#onClose(ws: ServerWebSocket<FleetSocketData>): void {
+	#onClose(ws: ServerWebSocket<CallbackSocketData>): void {
 		const pair = this.#pairOf(ws);
 		if (pair !== undefined) this.#teardownPair(pair);
 	}
@@ -883,9 +883,18 @@ export class DaemonTransportRegistry {
 	 * failing validation) is dropped, counted and logged; identity and seq
 	 * violations close the pair with their typed code: they are not bad bytes.
 	 */
-	#onMessage(ws: ServerWebSocket<FleetSocketData>, message: string | Buffer): void {
+	#onMessage(ws: ServerWebSocket<CallbackSocketData>, message: string | Buffer): void {
 		const pair = this.#pairOf(ws);
 		if (pair === undefined) return;
+		// The fleet's server-wide Bun `maxPayloadLength` is sized for the browser
+		// socket's commands, so the pair's own cap is enforced here, with the close
+		// Bun itself sends for an over-cap message (1009).
+		const size =
+			typeof message === "string" ? Buffer.byteLength(message, "utf8") : message.byteLength;
+		if (size > CALLBACK_WS_MAX_PAYLOAD_BYTES) {
+			ws.close(1009, `message exceeds ${CALLBACK_WS_MAX_PAYLOAD_BYTES} bytes`);
+			return;
+		}
 		pair.lastDataAt = this.#now();
 		const bytes =
 			typeof message === "string" ? Buffer.byteLength(message, "utf8") : message.byteLength;

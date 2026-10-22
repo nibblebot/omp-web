@@ -49,11 +49,7 @@ import {
 	type CallbackEnvelope,
 	type PairCreditControl,
 } from "#lib/wire/callback-protocol";
-import {
-	DaemonTransportRegistry,
-	type CallbackSocketData,
-	type FleetSocketData,
-} from "../daemon-transport";
+import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
 
 const sleep = (ms: number): Promise<void> => Bun.sleep(ms);
 
@@ -92,7 +88,7 @@ interface Fixture {
 
 /** Mount one registry on an ephemeral loopback port, exactly as fleet/server.ts does. */
 function serve(registry: DaemonTransportRegistry): Fixture {
-	const server = Bun.serve<FleetSocketData>({
+	const server = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
 		idleTimeout: 255,
@@ -279,7 +275,7 @@ function clockedRegistry(): {
 function scriptedSocket(
 	data: CallbackSocketData,
 	script: { send?: (text: string) => number; buffered?: () => number },
-): { ws: ServerWebSocket<FleetSocketData>; sent: string[]; closes: CloseInfo[] } {
+): { ws: ServerWebSocket<CallbackSocketData>; sent: string[]; closes: CloseInfo[] } {
 	const sent: string[] = [];
 	const closes: CloseInfo[] = [];
 	const ws = {
@@ -292,7 +288,7 @@ function scriptedSocket(
 		close(code: number, reason: string): void {
 			closes.push({ code, reason });
 		},
-	} as unknown as ServerWebSocket<FleetSocketData>;
+	} as unknown as ServerWebSocket<CallbackSocketData>;
 	return { ws, sent, closes };
 }
 

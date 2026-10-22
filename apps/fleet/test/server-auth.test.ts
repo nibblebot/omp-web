@@ -8,19 +8,24 @@
  * INJECTED peer address: startFleet has no seam to fake srv.requestIP, so
  * the gate's peer argument is the injection point (server.ts passes the
  * same value from srv.requestIP at runtime). No host-dependent LAN-interface
- * skips.
+ * skips. The browser socket (GET /ws) admission rules need a real upgrade, so
+ * they run against a real fleet whose loopback peer is a trusted proxy: the
+ * X-Forwarded-For hop is the non-loopback client.
  *
  * No real omp-session children are spawned.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setSystemTime, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { BrowserAuthStore } from "../browser-auth";
+import { staleTabEventsBody } from "#lib/wire/browser-socket";
+import { OMP_PROTO } from "#lib/wire/protocol";
+import { BrowserAuthStore, SESSION_TTL_MS } from "../browser-auth";
 import { FleetAuthGate, peerIsLoopback } from "../fleet-auth-gate";
 import { startFleet, type FleetServer } from "../server";
 import { compileTrustedProxies } from "../trusted-proxy";
+import { BrowserSocket } from "./edge.testkit";
 import {
 	cleanupTempDirs,
 	fleetPaths,
@@ -450,5 +455,166 @@ describe("fleet auth gate forwarded-header resolution", () => {
 		).toBe("10.0.0.5");
 		// An empty hop fails closed.
 		expect(chain.clientAddress(req({ "x-forwarded-for": "198.51.100.7, " }), "10.0.0.5")).toBe("");
+	});
+});
+
+describe("browser socket admission (/ws on a real fleet, browser auth on)", () => {
+	const ORIGIN = "https://ui.example.com";
+	/** The proxied client hop: the test's loopback peer is a trusted proxy, so this address is the client. */
+	const REMOTE = { "x-forwarded-for": "203.0.113.50" };
+	let server: FleetServer;
+	let port: number;
+	const sockets: BrowserSocket[] = [];
+
+	beforeAll(async () => {
+		await pinSettingsInMemory();
+		const paths = fleetPaths("omp-web-server-auth-ws-");
+		server = await startFleet({
+			port: 0,
+			statePath: paths.statePath,
+			configPath: paths.configPath,
+			statsConfig: hermeticStatsConfig(paths.statePath),
+			browserAccessToken: TOKEN,
+			browserOrigin: ORIGIN,
+			trustedProxy: ["127.0.0.1"],
+		});
+		port = server.port;
+	});
+
+	afterAll(async () => {
+		for (const socket of sockets) socket.close();
+		setSystemTime();
+		await server?.close().catch(() => {});
+	});
+
+	/** Dial /ws with extra upgrade headers; resolves once open (a refusal opens, then closes typed). */
+	async function dial(headers: Record<string, string>): Promise<BrowserSocket> {
+		const socket = new BrowserSocket(port, undefined, { headers });
+		sockets.push(socket);
+		await socket.open();
+		return socket;
+	}
+
+	async function signIn(): Promise<string> {
+		const outcome = await login(port, TOKEN);
+		expect(outcome.res.status).toBe(200);
+		return outcome.cookie!;
+	}
+
+	/** An admitted socket is primed and still open. */
+	async function expectAdmitted(socket: BrowserSocket): Promise<void> {
+		await socket.waitForFrame((f) => f.type === "roster", "priming roster");
+		expect(socket.closeInfo).toBeNull();
+	}
+
+	/** A refused socket closes with the typed code before any frame is delivered. */
+	async function expectRefused(socket: BrowserSocket, code: number, kind: string): Promise<void> {
+		const close = await socket.end();
+		expect(close.code).toBe(code);
+		expect(close.reason).toStartWith(`${kind}:`);
+		expect(socket.messages).toEqual([]);
+	}
+
+	test("a proxied non-loopback client with a session cookie and the configured origin is admitted and primed", async () => {
+		const cookie = await signIn();
+		await expectAdmitted(await dial({ ...REMOTE, cookie, origin: ORIGIN }));
+	});
+
+	test("a proxied non-loopback client with a session cookie but a foreign origin closes 4403", async () => {
+		const cookie = await signIn();
+		await expectRefused(
+			await dial({ ...REMOTE, cookie, origin: "https://evil.example" }),
+			4403,
+			"forbidden",
+		);
+	});
+
+	test("a proxied non-loopback client with no Origin header is refused 4403 even with a live session", async () => {
+		const cookie = await signIn();
+		await expectRefused(await dial({ ...REMOTE, cookie }), 4403, "forbidden");
+	});
+
+	test("a proxied non-loopback client with no cookie, or a cookie that is not a session, closes 4401", async () => {
+		await expectRefused(await dial({ ...REMOTE, origin: ORIGIN }), 4401, "unauthorized");
+		await expectRefused(
+			await dial({ ...REMOTE, origin: ORIGIN, cookie: "omp_session=not-a-session" }),
+			4401,
+			"unauthorized",
+		);
+	});
+
+	test("a loopback peer with a foreign Origin closes 4403 (FEDGE-02); without one it is admitted with no session", async () => {
+		await expectRefused(await dial({ origin: "https://evil.example" }), 4403, "forbidden");
+		await expectAdmitted(await dial({}));
+	});
+
+	test("GET /ws without an upgrade is HTTP 426, any other method 405", async () => {
+		const plain = await fetch(`http://127.0.0.1:${port}/ws`);
+		expect(plain.status).toBe(426);
+		expect(plain.headers.get("upgrade")).toBe("websocket");
+		const post = await fetch(`http://127.0.0.1:${port}/ws`, { method: "POST", body: "{}" });
+		expect(post.status).toBe(405);
+	});
+
+	test("stale GET /events and POST /command answer without a session while the gate is on", async () => {
+		// The control: with the same proxied, cookie-less client the data routes are gated.
+		const gated = await fetch(`http://127.0.0.1:${port}/ctl/sessions`, { headers: REMOTE });
+		expect(gated.status).toBe(401);
+		const events = await fetch(`http://127.0.0.1:${port}/events?client=old-tab`, {
+			headers: REMOTE,
+		});
+		expect(events.status).toBe(200);
+		expect(events.headers.get("content-type")).toContain("text/event-stream");
+		expect(await events.text()).toBe(staleTabEventsBody(OMP_PROTO));
+		const command = await fetch(`http://127.0.0.1:${port}/command`, {
+			method: "POST",
+			headers: { ...REMOTE, "content-type": "application/json", "x-omp-client-id": "old-tab" },
+			body: JSON.stringify({ type: "sync_projects", id: "x" }),
+		});
+		expect(command.status).toBe(410);
+		expect(await command.json()).toEqual({ error: "proto_unsupported" });
+	});
+
+	test("sign-out closes that session's sockets 4401 and leaves another session's socket open", async () => {
+		const cookieA = await signIn();
+		const cookieB = await signIn();
+		expect(cookieA).not.toBe(cookieB);
+		const a1 = await dial({ ...REMOTE, cookie: cookieA, origin: ORIGIN });
+		const a2 = await dial({ ...REMOTE, cookie: cookieA, origin: ORIGIN });
+		const b = await dial({ ...REMOTE, cookie: cookieB, origin: ORIGIN });
+		await Promise.all([expectAdmitted(a1), expectAdmitted(a2), expectAdmitted(b)]);
+
+		const logout = await fetch(`http://127.0.0.1:${port}/auth/logout`, {
+			method: "POST",
+			headers: { "content-type": "application/json", cookie: cookieA },
+		});
+		expect(logout.status).toBe(200);
+		for (const closed of [a1, a2]) {
+			expect(await closed.end()).toEqual({ code: 4401, reason: "unauthorized: signed out" });
+		}
+		// The other session's socket is untouched and still takes commands.
+		expect(b.closeInfo).toBeNull();
+		await b.send({ type: "bogus_command" });
+		expect(b.closeInfo).toBeNull();
+		// The signed-out session can not dial again.
+		await expectRefused(
+			await dial({ ...REMOTE, cookie: cookieA, origin: ORIGIN }),
+			4401,
+			"unauthorized",
+		);
+	});
+
+	test("a session that expires closes its socket 4401 at the next command", async () => {
+		const cookie = await signIn();
+		const socket = await dial({ ...REMOTE, cookie, origin: ORIGIN });
+		await expectAdmitted(socket);
+		try {
+			// The edge judges expiry against Date.now: move the clock past the 30-day TTL.
+			setSystemTime(new Date(Date.now() + SESSION_TTL_MS + 60_000));
+			await socket.send({ type: "bogus_command" }).catch(() => {});
+		} finally {
+			setSystemTime();
+		}
+		expect(await socket.end()).toEqual({ code: 4401, reason: "unauthorized: session expired" });
 	});
 });

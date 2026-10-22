@@ -4,34 +4,43 @@
  * Mounted by fleet/server.ts on the same loopback Bun.serve as the
  * /ctl control API:
  *
- *   - GET /events is the browser SSE downlink. Every open stream gets an
+ *   - GET /ws is the browser socket (OMP_PROTO 5), one WebSocket per client
+ *     (lib/wire/browser-socket.ts is the wire). Every open socket gets an
  *     immediate roster + merged-daemons + registered-projects priming
  *     (edge-local seqs 1..k, k < DELTA_SEQ_START); live `roster_delta` /
  *     `daemon_status` / `daemons` / `registered_projects` broadcasts and
- *     proxied daemon frames follow as SSE events with
+ *     proxied daemon frames follow as `{"seq":N,"frame":…}` messages with
  *     edge-local monotonic seqs from DELTA_SEQ_START, kept in a
  *     per-client ReplayRing (cap CLIENT_RING_CAP, byte budget CLIENT_RING_BYTES) for
- *     Last-Event-ID resume: N ≥ DELTA_SEQ_START replays ring.after(N)
+ *     `after` resume: N ≥ DELTA_SEQ_START replays ring.after(N)
  *     after priming, anything below skips replay (priming already carries
  *     full current state). Only daemon DELTA types are ringed (mirror of the
  *     daemon's RING_DELTAS, finding #5): priming frames (history,
  *     available_commands) and unicast answers (call_result) ride the live
- *     stream with a seq but no ring entry, re-derivable by re-attach
- *     priming / re-POST, exactly like the daemon. The daemon broadcasts an
- *     answer to every stream it has, so an id-keyed answer is additionally
- *     routed to the ONE browser whose POST asked for it (the pipe's copy is
- *     dropped otherwise), never fanned out to browsers that share nothing
- *     with the command but the daemon.
- *   - POST /command is the browser uplink: one ClientCommand per request,
- *     202 {commandId} on accept, answers ride /events only. Commands are
- *     routed to a browser by the X-Omp-Client-Id header (the browser binds
- *     its stream at /events open with ?client=<id>); a missing or unknown
- *     id is a 400. Fleet-level commands (add_project / sync_projects /
- *     spawn / spawn_resume / stop / remove / attach) are handled here;
- *     attached-session commands (call / login_code / ui_response /
- *     collab_* / daemon_* / list_*) ride the daemon's callback pair. Anything
- *     outside the browser-command allowlist is rejected with an error
- *     frame.
+ *     socket with a seq but no ring entry, re-derivable by re-attach
+ *     priming / a re-sent command, exactly like the daemon. The daemon
+ *     broadcasts an answer to every stream it has, so an id-keyed answer is
+ *     additionally routed to the ONE browser whose command asked for it (the
+ *     pipe's copy is dropped otherwise), never fanned out to browsers that
+ *     share nothing with the command but the daemon. Frames are spliced
+ *     (relayJson into seqFrameMessage), never re-stringified on the relay path.
+ *   - Commands arrive in band as `{"cmd":…}` messages on that socket: acked
+ *     (`{"ack":id}`, was 202) or nacked (`{"nack":id,"status":S,…}`, was
+ *     400/413/…), answers ride the same socket as id-keyed frames. The
+ *     browser a command acts on is the socket's `client` query id (an
+ *     anonymous socket is not command-addressable). A re-sent id after a
+ *     reconnect is acked again; the dedup window (#forwardOrigins and the
+ *     session's own cache) survives the disconnect. Fleet-level commands
+ *     (add_project / sync_projects / spawn / spawn_resume / stop / remove /
+ *     attach) are handled here; attached-session commands (call / login_code
+ *     / ui_response / collab_* / daemon_* / list_*) ride the daemon's
+ *     callback pair. Anything outside the browser-command allowlist is
+ *     rejected with an error frame. The upgrade is origin-checked whenever
+ *     browser auth is enabled (see server.ts), which replaces `requireCsrf`
+ *     for commands.
+ *   - Stale tabs (loaded before OMP_PROTO 5): GET /events answers the proto
+ *     mismatch frame once and ends, POST /command answers 410
+ *     `{error:"proto_unsupported"}`; nothing else of the SSE path survives.
  *   - PAIR ATTACH: one callback virtual stream PER BROWSER ("browser/<connId>"
  *     on the daemon's pair). The daemon primes every new stream, so
  *     hello_ok → attached → history → state → available_commands → ready come
@@ -47,18 +56,19 @@
  *     Attach is answered with an id-keyed attach_result frame (finding #28)
  *     so unrelated global error frames never settle a browser's in-flight
  *     attach.
- *   - Backpressure: a browser stream buffering more than the cap (default
- *     CLIENT_BACKPRESSURE_BYTES) is terminated (drop-and-resume): the browser
- *     reconnects with Last-Event-ID and the edge replays its ring. One slow
- *     browser never stalls the daemon stream or other browsers. A stream
- *     whose queue stays non-empty with no drain for BROWSER_STALL_MS (a
- *     browser that stopped reading) is terminated the same way. The daemon's
+ *   - Backpressure: a browser socket whose send buffer exceeds the cap (default
+ *     CLIENT_BACKPRESSURE_BYTES) before a send, whose send is refused, or
+ *     that buffers bytes with no drain for BROWSER_STALL_MS (a browser that
+ *     stopped reading) is closed 4503 (drop-and-resume): the browser
+ *     reconnects with `after` and the edge replays its ring. One slow
+ *     browser never stalls the daemon stream or other browsers. The daemon's
  *     priming and history bursts are paced by the browser's drain, not
  *     counted against the cap: stream_open asks the daemon for ack pacing
  *     (every proto-2 session honors it), and the edge answers with
- *     stream_ack controls as the browser's queue drains, so at most
- *     STREAM_ACK_WINDOW_BYTES of a burst sit in the edge (a slow browser
- *     slows its own priming; a stuck one is dropped by the stall rule).
+ *     stream_ack controls as the socket's buffer drains (`drain` events and
+ *     every send), so at most STREAM_ACK_WINDOW_BYTES of a burst sit in the
+ *     edge (a slow browser slows its own priming; a stuck one is dropped by
+ *     the stall rule).
  *   - Real-time daemon activity: the daemon's control-stream envelopes are
  *     tapped and derive per-daemon {streaming, blocked} from state /
  *     ui_request / ui_request_end, broadcasting an edge-generated
@@ -81,13 +91,13 @@
  * to browsers (see toRosterEntry).
  */
 
+import type { ServerWebSocket } from "bun";
 import { randomUUID } from "node:crypto";
 import {
 	COMMAND_DEDUP_WINDOW_MS,
 	OMP_PROTO,
 	CLIENT_BACKPRESSURE_BYTES,
 	DELTA_SEQ_START,
-	SSE_EVENT_NAME,
 	CLIENT_KEEPALIVE_MS,
 	CLIENT_RING_CAP,
 	CLIENT_RING_BYTES,
@@ -99,12 +109,17 @@ import {
 	type SessionScopedFrame,
 } from "#lib/wire/protocol";
 import {
-	encodeSseEvent,
-	encodeSseEventData,
-	parseSseUnits,
-	SSE_PING_BLOCK,
-	SSE_PING_EVENT,
-} from "#lib/wire/sse";
+	ackMessage,
+	BROWSER_SOCKET_PATH,
+	browserCloseFor,
+	nackMessage,
+	parseBrowserSocketParams,
+	parseClientMessage,
+	pingMessage,
+	seqFrameMessage,
+	staleTabEventsBody,
+	type BrowserCloseKind,
+} from "#lib/wire/browser-socket";
 import { ReplayRing } from "#lib/wire/replay-ring";
 import {
 	CALLBACK_BROWSER_STREAM_PREFIX,
@@ -118,7 +133,6 @@ import type {
 	StreamOpenControl,
 } from "#lib/wire/callback-protocol";
 import type { FleetConfig } from "./config";
-import { isJsonRequest } from "./browser-guard";
 import { serveStaticUi } from "./static-ui";
 import { BrowseError, browseDirectories } from "./fs-browse";
 import { listRecentRoots } from "./recent-roots";
@@ -142,12 +156,12 @@ import type { CloneCreateInput, LifecycleApi } from "./workspace-lifecycle";
 import type { FleetEventLog, FleetFacts } from "./events";
 import { listProjectBranches, realpathOf } from "./worktrees";
 
-/** Reclaim grace for a disconnected browser's ring (Last-Event-ID resume window). */
+/** Reclaim grace for a disconnected browser's ring (`after` resume window). */
 const CLIENT_RECLAIM_MS = 60_000;
 /**
- * A browser stream whose queue holds unread bytes and has not drained for this
- * long has stopped reading and is dropped (resume via Last-Event-ID). Checked
- * on the keepalive sweep, so the drop lands within one sweep interval after it.
+ * A browser socket whose send buffer holds unread bytes and has not drained
+ * for this long has stopped reading and is closed 4503 (resume via `after`).
+ * Checked on the keepalive sweep, so the drop lands within one sweep interval after it.
  */
 export const BROWSER_STALL_MS = 30_000;
 /** Drain checkpoints merge until they span this many queued bytes (bounds the checkpoint list). */
@@ -184,8 +198,16 @@ interface DaemonActivity {
 	openDialogIds: Set<string>;
 }
 
-/** Encode SSE blocks once per edge (the queue strategy sizes in bytes). */
-const SSE_ENCODER = new TextEncoder();
+/**
+ * Bytes a text message costs on the wire: its UTF-8 length plus the
+ * WebSocket frame header (2 bytes; 4 past 125 bytes; 10 past 65535). Server
+ * frames are unmasked. Matches what `getBufferedAmount()` counts, so drain
+ * accounting (sent minus buffered) lands on zero when the socket empties.
+ */
+function sentBytes(text: string): number {
+	const payload = Buffer.byteLength(text, "utf8");
+	return payload + (payload < 126 ? 2 : payload < 65536 ? 4 : 10);
+}
 
 const STDERR_ROUTE = /^\/ctl\/sessions\/([^/]+)\/stderr$/;
 /** Fleet-proxied session-file download: files ride the callback bulk channel. */
@@ -225,7 +247,7 @@ const BROWSER_COMMAND_LIST = [
 	"create_worktree",
 	"delete_worktree",
 	"worktree_delete_info",
-	// Forwarded to the attached daemon's POST /command.
+	// Forwarded to the attached daemon over its callback pair.
 	"call",
 	"login_code",
 	"ui_response",
@@ -293,22 +315,21 @@ const SESSION_SCOPED_FRAME_TYPES: Record<string, true> = Object.fromEntries(
 );
 
 /**
- * The SSE data text for a relayed session frame, taken from the frame's own
+ * The JSON text for a relayed session frame, taken from the frame's own
  * wire text instead of re-serialized, or undefined when the caller must
  * stringify the parsed frame. The edge decided on JSON.parse(payloadJson); the
  * browser JSON.parses the text this returns, so both see one value. With
  * `sessionId`, the stamp `{ ...frame, sessionId }` is spliced in as the last
  * member (JSON.parse is last-key-wins, so it overrides an existing key, as the
  * spread does). Only stamped frame types reach the splice, and those carry a
- * `type` member, so the object is never empty. Declined (undefined) when the text is not a bare
- * object, or holds a CR or LF: canonical JSON.stringify output never does,
- * but whitespace between tokens can, and a raw line break would split the SSE
- * data field.
+ * `type` member, so the object is never empty. Declined (undefined) when the
+ * text is not a bare object. The text lands inside a `{"seq":N,"frame":…}`
+ * message (seqFrameMessage): JSON tolerates whitespace and line breaks
+ * between tokens, so nothing else needs declining.
  */
 function relayJson(payloadJson: string, sessionId: string | undefined): string | undefined {
 	if (payloadJson.charCodeAt(0) !== 0x7b || payloadJson.charCodeAt(payloadJson.length - 1) !== 0x7d)
 		return undefined;
-	if (payloadJson.includes("\n") || payloadJson.includes("\r")) return undefined;
 	if (sessionId === undefined) return payloadJson;
 	const member = `"sessionId":${JSON.stringify(sessionId)}`;
 	return `${payloadJson.slice(0, -1)},${member}}`;
@@ -319,8 +340,8 @@ function relayJson(payloadJson: string, sessionId: string | undefined): string |
  * server/index.ts RING_DELTAS: a frame the daemon does not ring (priming:
  * hello_ok/attached/history/available_commands; unicast answers:
  * call_result; per-stream lifecycle: stream_reset) is forwarded live but
- * never ringed; it is re-derivable by re-attach priming or re-POSTing the
- * command. Ringed deltas are the frames a Last-Event-ID resume actually
+ * never ringed; it is re-derivable by re-attach priming or a re-sent
+ * command. Ringed deltas are the frames an `after` resume actually
  * needs; everything else merely consumes a seq, exactly like the daemon's
  * delta counter, so ring replay has the same deliberate gaps and a
  * resuming consumer tolerates them (after() returns only ringed entries
@@ -444,45 +465,70 @@ export interface EdgeDeps {
 }
 
 /**
- * One browser /events consumer on the edge, keyed by the browser's
+ * Admission the fleet server decided for one `/ws` upgrade (auth, origin,
+ * loopback exemption). A refusal is delivered as a typed close after the
+ * upgrade; `session` is the browser auth session the socket belongs to
+ * (null for a loopback peer or with auth disabled), so sign-out and expiry
+ * can close exactly its sockets.
+ */
+export interface BrowserAdmission {
+	refusal: { kind: BrowserCloseKind; message: string } | null;
+	session: { hash: string; expiresAt: number } | null;
+}
+
+/** `ws.data` of a browser socket on the fleet's Bun.serve (see the `kind` discriminator). */
+export interface BrowserSocketData {
+	kind: "browser";
+	/** Typed refusal decided at upgrade; `open` closes the socket with it at once. */
+	refusal: { kind: BrowserCloseKind; message: string } | null;
+	/** Page-scoped id from `client` (null = anonymous, not command-addressable). */
+	clientId: string | null;
+	/** Resume point from `after` (null = fresh priming). */
+	after: number | null;
+	session: { hash: string; expiresAt: number } | null;
+	/** Set by `open` once the socket is bound to a client. */
+	stream: BrowserStream | null;
+}
+
+/**
+ * One browser socket consumer on the edge, keyed by the browser's
  * page-scoped clientId. The ring + seq counter live here so a reconnecting
- * browser (same clientId) resumes from its Last-Event-ID across stream
- * replacement; the state is reclaimed after a grace period with no stream.
+ * browser (same clientId) resumes from its `after` across socket
+ * replacement; the state is reclaimed after a grace period with no socket.
  */
 interface BrowserClient {
-	/** Page-scoped id from ?client= (null for anonymous streams, not command-addressable). */
+	/** Page-scoped id from `client` (null for anonymous sockets, not command-addressable). */
 	clientId: string | null;
-	/** Edge-local replay ring of this browser's ringed deltas (cap CLIENT_RING_CAP, byte budget CLIENT_RING_BYTES). */
+	/** Edge-local replay ring of this browser's ringed deltas, as the full wire messages (cap CLIENT_RING_CAP, byte budget CLIENT_RING_BYTES). */
 	ring: ReplayRing<string>;
 	/** Next edge-local delta seq for this browser (≥ DELTA_SEQ_START). */
 	nextSeq: number;
-	/** Live stream, or null while disconnected (the ring is kept for resume). */
+	/** Live socket, or null while disconnected (the ring is kept for resume). */
 	stream: BrowserStream | null;
-	/** Reclaim timer: drops the client state when no stream rebinds in time. */
+	/** Reclaim timer: drops the client state when no socket rebinds in time. */
 	gcTimer: ReturnType<typeof setTimeout> | null;
 }
 
-/** One live GET /events stream on the edge. */
-interface BrowserStream {
-	controller: ReadableStreamDefaultController<Uint8Array>;
-	/**
-	 * Bytes enqueued while no reader is attached (desiredSize is null then).
-	 * Reset once a reader becomes visible and desiredSize reports the truth.
-	 */
-	unreadEstimate: number;
-	/** The client this stream belongs to (ring/seq live there). */
+/** One live `/ws` browser socket on the edge. */
+export interface BrowserStream {
+	ws: ServerWebSocket<BrowserSocketData>;
+	/** Set once released (closed by either side, dropped, replaced): nothing is sent after. */
+	closed: boolean;
+	/** The client this socket belongs to (ring/seq live there). */
 	client: BrowserClient;
 	/** This browser's dedicated daemon channel: a callback virtual stream
 	 * ("browser/<connId>" on the daemon's pair). Null while unattached. */
 	pipe: CallbackPipeState | null;
-	/** Bumped by every attach on this stream; an attach whose value moved on is superseded. */
+	/** Bumped by every attach on this socket; an attach whose value moved on is superseded. */
 	attachSeq: number;
-	/** Bytes ever enqueued onto the queue (the socket has taken `enqueuedBytes` minus what is still queued). */
+	/** Bytes ever sent on the socket (the kernel has taken `enqueuedBytes` minus what is still buffered). */
 	enqueuedBytes: number;
 	/** Bytes the socket had taken at the last drain check; only moves forward. */
 	drainedMark: number;
-	/** Last time the queue was empty or the socket took bytes (the stall clock). */
+	/** Last time the buffer was empty or the socket took bytes (the stall clock). */
 	progressAt: number;
+	/** Last time the edge wrote anything (the keepalive's idle clock). */
+	lastSendAt: number;
 }
 
 /**
@@ -744,7 +790,7 @@ export class FleetEdge {
 	readonly #daemonTaps = new Map<string, () => void>();
 	/** Per-daemon realtime activity, derived in the control-socket tap (browser-gated). */
 	readonly #daemonActivity = new Map<string, DaemonActivity>();
-	/** Keepalive ping events on every open browser stream every CLIENT_KEEPALIVE_MS. */
+	/** Keepalive/stall sweep: pings idle browser sockets every CLIENT_KEEPALIVE_MS. */
 	#keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 	/** False on the split-setup control plane: static paths answer 404 JSON instead of the UI. */
 	readonly #serveUi: boolean;
@@ -823,13 +869,18 @@ export class FleetEdge {
 		try {
 			const url = new URL(req.url);
 			const path = url.pathname;
+			// Stale tabs (loaded before OMP_PROTO 5) still dial the SSE downlink
+			// and the POST uplink. Both answer with the proto mismatch the old
+			// client already knows how to show; nothing else of them survives.
 			if (path === "/events") {
 				if (req.method !== "GET") return null; // control plane 405s
-				return this.#openEventsResponse(req);
+				return new Response(staleTabEventsBody(OMP_PROTO), {
+					headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+				});
 			}
 			if (path === "/command") {
 				if (req.method !== "POST") return null; // control plane 405s
-				return await this.#handleCommand(req);
+				return json({ error: "proto_unsupported" }, 410);
 			}
 			if (req.method !== "GET") return null;
 			if (path === "/ctl/templates") {
@@ -886,9 +937,9 @@ export class FleetEdge {
 	/**
 	 * Global broadcast: a poll-detected, on-disk worktree removal (the
 	 * daemon's cwd vanished between git-state poll ticks). Ringed (default)
-	 * so a browser whose stream was down at emit time still gets the toast
-	 * once via Last-Event-ID resume; the client's per-prime-window
-	 * seenFrameSeqs dedups the replay. Never sent for UI-initiated
+	 * so a browser whose socket was down at emit time still gets the toast
+	 * once via `after` resume; the client's per-connection seq dedup drops
+	 * the replay of one it already saw. Never sent for UI-initiated
 	 * delete_worktree/remove.
 	 */
 	announceWorktreeRemoved(entry: { daemonId: string; name: string; cwd: string }): void {
@@ -900,7 +951,7 @@ export class FleetEdge {
 		});
 	}
 
-	/** Detach broadcast wiring and close every browser stream + pipe. */
+	/** Detach broadcast wiring and close every browser socket + pipe. */
 	close(): void {
 		if (this.#registry.onChange === this.#onRegistryChange) {
 			this.#registry.onChange = null;
@@ -916,11 +967,12 @@ export class FleetEdge {
 		}
 		this.#clients.clear();
 		for (const stream of [...this.#browsers]) {
+			stream.closed = true;
 			this.#closePipe(stream);
 			try {
-				stream.controller.close();
+				stream.ws.close(1001, "fleet shutting down");
 			} catch {
-				// Ignore; the stream is already gone.
+				// Ignore; the socket is already gone.
 			}
 		}
 		this.#browsers.clear();
@@ -931,155 +983,221 @@ export class FleetEdge {
 	// ---------------------------------------------------------------------
 
 	/**
-	 * Open a browser GET /events SSE response: bind the stream to the
-	 * clientId (?client=), prime it (roster + merged daemons, seqs 1..k),
-	 * replay the client's ring per Last-Event-ID, and stream live deltas
-	 * until the browser goes away. The body's queuing strategy sizes chunks
-	 * in bytes so backpressure is measured against the configured cap.
+	 * Accept one `GET /ws` upgrade. The caller (fleet/server.ts) has already
+	 * decided admission from the request (cookie session, loopback exemption,
+	 * trusted-proxy client address, origin checks); a refusal rides `admission`
+	 * and is delivered as a typed close once the socket is open, because a
+	 * browser cannot read the status of a failed WebSocket handshake. Only the
+	 * proto claim is judged here: a missing or different `proto` is 4426.
+	 * Returns undefined once upgraded, or the HTTP error when the handshake
+	 * itself failed.
 	 */
-	#openEventsResponse(req: Request): Response {
-		const clientId = new URL(req.url).searchParams.get("client");
-		const lastEventId = req.headers.get("last-event-id");
-		let stream: BrowserStream | null = null;
-		const body = new ReadableStream<Uint8Array>(
-			{
-				start: (controller) => {
-					const client = this.#bindClient(clientId);
-					// Finding #25: a rebind with a STILL-LIVE previous stream (the
-					// old EventSource's cancel hasn't fired yet since browser
-					// reconnects overlap) must not leave it in #browsers: two
-					// live streams for one client would ring every broadcast
-					// twice (two seqs) and double-deliver. Close the old
-					// stream's controller + pipe and drop its entry first,
-					// #dropBrowser-style. The stale cancel that fires later is a
-					// no-op thanks to the identity guard in #releaseBrowser.
-					const previous = client.stream;
-					if (previous) {
-						this.#browsers.delete(previous);
-						this.#closePipe(previous);
-						try {
-							previous.controller.close();
-						} catch {
-							// Already closed/cancelled.
-						}
-					}
-					// The constructor's start callback types the controller as the
-					// default/byte union; this stream is built with a default
-					// source, so the default controller is the actual runtime type.
-					stream = {
-						controller: controller as ReadableStreamDefaultController<Uint8Array>,
-						unreadEstimate: 0,
-						enqueuedBytes: 0,
-						drainedMark: 0,
-						progressAt: Date.now(),
-						client,
-						pipe: null,
-						attachSeq: 0,
-					};
-					client.stream = stream;
-					this.#browsers.add(stream);
-					this.#startKeepalive();
-					// Priming: roster + merged daemons + registered projects
-					// (seqs 1..k, k < DELTA_SEQ_START).
-					let seq = 1;
-					this.#enqueue(
-						stream,
-						encodeSseEvent(
-							SSE_EVENT_NAME,
-							{
-								type: "roster",
-								daemons: this.#registry.list().map((entry) => toRosterEntry(entry)),
-							},
-							seq++,
-						),
-					);
-					this.#enqueue(
-						stream,
-						encodeSseEvent(
-							SSE_EVENT_NAME,
-							{ type: "daemons", daemons: this.#daemonsAggregator.merge() },
-							seq++,
-						),
-					);
-					this.#enqueue(
-						stream,
-						encodeSseEvent(
-							SSE_EVENT_NAME,
-							{
-								type: "registered_projects",
-								projects: this.#registry.projects(),
-								configPath: this.#fleet.configPath,
-								// The boot-static secret-free profile
-								// catalog; omitted entirely when not configured
-								// (older fleets imply an empty catalog).
-								...(this.#providerProfiles !== undefined
-									? { providerProfiles: this.#providerProfiles }
-									: {}),
-							},
-							seq++,
-						),
-					);
-					// Real-time activity priming: one daemon_activity frame per READY
-					// daemon with KNOWN derived activity (unknown ones are omitted;
-					// their first derivable frame broadcasts live right after the
-					// dial below). Edge-local seq, like the rest of the priming group.
-					for (const [daemonId, activity] of this.#daemonActivity) {
-						if (!activity.known) continue;
-						if (this.#registry.get(daemonId)?.status !== "ready") continue;
-						this.#enqueue(
-							stream,
-							encodeSseEvent(
-								SSE_EVENT_NAME,
-								{
-									type: "daemon_activity",
-									daemonId,
-									streaming: activity.streaming,
-									blocked: activity.blocked,
-								},
-								seq++,
-							),
-						);
-					}
-					// Resume: only a delta-era id (≥ DELTA_SEQ_START) replays
-					// the ring; anything below means priming carries full state.
-					const last = lastEventId === null ? NaN : Number(lastEventId);
-					if (Number.isFinite(last) && last >= DELTA_SEQ_START) {
-						for (const { value } of client.ring.after(last)) {
-							// Dropped mid-replay: the rest would be encoded and discarded.
-							if (!this.#browsers.has(stream)) break;
-							this.#enqueue(stream, value);
-						}
-					}
-				},
-				cancel: () => {
-					// The browser went away: close its pipe + release; the
-					// client's ring is kept for Last-Event-ID resume.
-					if (stream) this.#releaseBrowser(stream);
-				},
-				// The socket took queued bytes: the stall clock moves and the
-				// daemon is acknowledged how far its burst has drained.
-				pull: () => {
-					if (stream) this.#noteDrain(stream, false);
-				},
-			},
-			{ highWaterMark: this.#backpressureBytes, size: (chunk) => chunk?.byteLength ?? 0 },
-		);
-		return new Response(body, {
-			headers: {
-				"content-type": "text/event-stream",
-				"cache-control": "no-cache",
-				"x-accel-buffering": "no",
-			},
-		});
+	acceptBrowserSocket(
+		req: Request,
+		server: { upgrade(req: Request, options: { data: BrowserSocketData }): boolean },
+		admission: BrowserAdmission,
+	): Response | undefined {
+		const params = parseBrowserSocketParams(new URL(req.url).searchParams);
+		let refusal = admission.refusal;
+		if (refusal === null && params.proto !== OMP_PROTO) {
+			refusal = {
+				kind: "proto_mismatch",
+				message: `client speaks OMP_PROTO ${params.proto ?? "(none)"}, this fleet speaks ${OMP_PROTO}`,
+			};
+		}
+		const data: BrowserSocketData = {
+			kind: "browser",
+			refusal,
+			clientId: params.clientId,
+			after: params.after,
+			session: admission.session,
+			stream: null,
+		};
+		if (!server.upgrade(req, { data })) {
+			return json({ error: `${BROWSER_SOCKET_PATH} WebSocket upgrade failed` }, 400);
+		}
+		return undefined;
 	}
 
-	/** Find or create the client state for a stream open (?client= optional). */
+	/**
+	 * Bun `websocket.open` for a browser socket: bind it to the client id
+	 * (`client` query), prime it (roster + merged daemons + registered
+	 * projects + activity, seqs 1..k), replay the client's ring per `after`,
+	 * then stream live deltas until the browser goes away.
+	 */
+	onBrowserOpen(ws: ServerWebSocket<BrowserSocketData>): void {
+		const { refusal, clientId, after } = ws.data;
+		if (refusal !== null) {
+			const { code, reason } = browserCloseFor(refusal.kind, refusal.message);
+			ws.close(code, reason);
+			return;
+		}
+		const client = this.#bindClient(clientId);
+		// Finding #25: a rebind with a STILL-LIVE previous socket (the old
+		// page's close hasn't been seen yet since browser reconnects overlap)
+		// must not leave it in #browsers: two live sockets for one client
+		// would ring every broadcast twice (two seqs) and double-deliver.
+		// Release the old stream and close its socket first; the old socket's
+		// late close event is a no-op thanks to the identity guard in
+		// #releaseBrowser.
+		const previous = client.stream;
+		if (previous) {
+			this.#releaseBrowser(previous);
+			try {
+				previous.ws.close(1000, "replaced by a newer socket for this client");
+			} catch {
+				// Already closed.
+			}
+		}
+		const now = Date.now();
+		const stream: BrowserStream = {
+			ws,
+			closed: false,
+			enqueuedBytes: 0,
+			drainedMark: 0,
+			progressAt: now,
+			lastSendAt: now,
+			client,
+			pipe: null,
+			attachSeq: 0,
+		};
+		ws.data.stream = stream;
+		client.stream = stream;
+		this.#browsers.add(stream);
+		this.#startKeepalive();
+		// Priming: roster + merged daemons + registered projects
+		// (seqs 1..k, k < DELTA_SEQ_START).
+		let seq = 1;
+		this.#send(
+			stream,
+			seqFrameMessage(
+				seq++,
+				JSON.stringify({
+					type: "roster",
+					daemons: this.#registry.list().map((entry) => toRosterEntry(entry)),
+				}),
+			),
+		);
+		this.#send(
+			stream,
+			seqFrameMessage(
+				seq++,
+				JSON.stringify({ type: "daemons", daemons: this.#daemonsAggregator.merge() }),
+			),
+		);
+		this.#send(
+			stream,
+			seqFrameMessage(
+				seq++,
+				JSON.stringify({
+					type: "registered_projects",
+					projects: this.#registry.projects(),
+					configPath: this.#fleet.configPath,
+					// The boot-static secret-free profile catalog; omitted
+					// entirely when not configured (older fleets imply an
+					// empty catalog).
+					...(this.#providerProfiles !== undefined
+						? { providerProfiles: this.#providerProfiles }
+						: {}),
+				}),
+			),
+		);
+		// Real-time activity priming: one daemon_activity frame per READY
+		// daemon with KNOWN derived activity (unknown ones are omitted;
+		// their first derivable frame broadcasts live right after the
+		// dial below). Edge-local seq, like the rest of the priming group.
+		for (const [daemonId, activity] of this.#daemonActivity) {
+			if (!activity.known) continue;
+			if (this.#registry.get(daemonId)?.status !== "ready") continue;
+			this.#send(
+				stream,
+				seqFrameMessage(
+					seq++,
+					JSON.stringify({
+						type: "daemon_activity",
+						daemonId,
+						streaming: activity.streaming,
+						blocked: activity.blocked,
+					}),
+				),
+			);
+		}
+		// Resume: only a delta-era `after` (≥ DELTA_SEQ_START) replays the
+		// ring; anything below means priming carries full state.
+		if (after !== null && after >= DELTA_SEQ_START) {
+			for (const { value } of client.ring.after(after)) {
+				// Dropped mid-replay: the rest would be sent and refused.
+				if (stream.closed) break;
+				this.#send(stream, value);
+			}
+		}
+	}
+
+	/** Bun `websocket.close`: the browser went away; close its pipe + release, keep the ring for resume. */
+	onBrowserClose(ws: ServerWebSocket<BrowserSocketData>): void {
+		const stream = ws.data.stream;
+		if (stream !== null) this.#releaseBrowser(stream);
+	}
+
+	/**
+	 * Bun `websocket.drain`: the socket took its buffered bytes. The stall
+	 * clock moves and the daemon is acknowledged how far its burst drained.
+	 */
+	onBrowserDrain(ws: ServerWebSocket<BrowserSocketData>): void {
+		const stream = ws.data.stream;
+		if (stream !== null && !stream.closed) this.#noteDrain(stream, false);
+	}
+
+	/**
+	 * Bun `websocket.message`: one in-band command (`{"cmd":...}`). A message
+	 * that is not one parseable command is a protocol violation (close 4400);
+	 * a refused command (oversize 413, bad shape 400) is a nack and the socket
+	 * stays up. This socket is origin-checked at upgrade whenever browser auth
+	 * is enabled, so a command needs no per-command CSRF token: the origin
+	 * check on the handshake replaces `requireCsrf` for commands.
+	 */
+	onBrowserMessage(ws: ServerWebSocket<BrowserSocketData>, message: string | Buffer): void {
+		const stream = ws.data.stream;
+		if (stream === null || stream.closed) return;
+		const session = ws.data.session;
+		if (session !== null && Date.now() >= session.expiresAt) {
+			this.#closeStream(stream, "unauthorized", "session expired", true);
+			return;
+		}
+		const bytes =
+			typeof message === "string" ? Buffer.byteLength(message, "utf8") : message.byteLength;
+		const parsed = parseClientMessage(message, bytes);
+		if (!parsed.ok) {
+			if (parsed.id === null) {
+				this.#closeStream(stream, "protocol_violation", parsed.error);
+			} else {
+				this.#send(stream, nackMessage(parsed.id, parsed.status, parsed.error));
+			}
+			return;
+		}
+		this.#acceptCommand(stream, parsed.command as unknown as Record<string, unknown>);
+	}
+
+	/**
+	 * Close every socket of one browser auth session with 4401 (sign-out). The
+	 * clients' rings are discarded with them: their replay state belongs to
+	 * the ended session.
+	 */
+	closeAuthSession(sessionIdHash: string): void {
+		for (const stream of [...this.#browsers]) {
+			if (stream.ws.data.session?.hash === sessionIdHash) {
+				this.#closeStream(stream, "unauthorized", "signed out", true);
+			}
+		}
+	}
+
+	/** Find or create the client state for a socket open (`client` query optional). */
 	#bindClient(clientId: string | null): BrowserClient {
 		if (clientId !== null && clientId !== "") {
 			let client = this.#clients.get(clientId);
 			if (client) {
 				// Reconnect with the same clientId: clear the reclaim timer and
-				// rebind; the ring resumes from the browser's Last-Event-ID.
+				// rebind; the ring resumes from the browser's `after`.
 				if (client.gcTimer) {
 					clearTimeout(client.gcTimer);
 					client.gcTimer = null;
@@ -1090,65 +1208,60 @@ export class FleetEdge {
 			this.#clients.set(clientId, client);
 			return client;
 		}
-		// Anonymous stream: served (priming + broadcasts + ring) but not
-		// command-addressable (POST /command needs a client id).
+		// Anonymous socket: served (priming + broadcasts + ring) but not
+		// command-addressable (a command needs a client id).
 		return newClient(null, this.#ringBytes);
 	}
 
 	/**
-	 * POST /command: one ClientCommand per request, 202 {commandId} on
-	 * accept; answers ride the /events stream only. The X-Omp-Client-Id
-	 * header selects the browser stream the command acts on (edge-level
-	 * commands answer there; attached-session commands proxy to that
-	 * browser's daemon pipe).
+	 * Dispatch one parsed command and acknowledge it (`{"ack":id}`, today's
+	 * 202); a command the edge cannot take is a nack with the status the
+	 * HTTP route answered. The socket's client selects the browser the
+	 * command acts on (edge-level commands answer there; attached-session
+	 * commands proxy to that browser's daemon pipe). The ack follows any
+	 * answer frame the dispatch produced synchronously (an unknown command's
+	 * error frame, an attach to an unknown daemon): a client settles
+	 * commands from their id-keyed answers and must not assume ack-first.
+	 * A re-sent id after a reconnect is acked again and re-forwarded; the
+	 * session's own dedup replays its answer, never re-dispatches (see
+	 * #recordForwardOrigin).
 	 */
-	async #handleCommand(req: Request): Promise<Response> {
-		const clientId = req.headers.get("x-omp-client-id");
-		const client =
-			typeof clientId === "string" && clientId !== "" ? this.#clients.get(clientId) : undefined;
-		const stream = client?.stream ?? null;
-		if (!stream) {
-			return json({ error: "unknown client or not connected" }, 400);
+	#acceptCommand(stream: BrowserStream, cmd: Record<string, unknown>): void {
+		const id = cmd.id as string;
+		if (stream.client.clientId === null) {
+			this.#send(
+				stream,
+				nackMessage(id, 400, "unknown client or not connected: dial /ws with ?client=<id>"),
+			);
+			return;
 		}
-		if (!isJsonRequest(req)) return json({ error: "request body must be application/json" }, 415);
-		let raw: unknown;
-		try {
-			raw = await req.json();
-		} catch {
-			return json({ error: "malformed JSON body" }, 400);
-		}
-		if (
-			typeof raw !== "object" ||
-			raw === null ||
-			!("type" in raw) ||
-			typeof raw.type !== "string"
-		) {
-			return json({ error: "request body must be a JSON object with a string type" }, 400);
-		}
-		const cmd = raw as Record<string, unknown>;
 		const type = cmd.type as string;
-		const id = typeof cmd.id === "string" ? cmd.id : "";
-		// Phase 6: the mux-era commands and detach are gone from
-		// ClientCommand. Any type outside the browser allowlist, whether a
-		// stale client's removed command or plain garbage, is rejected here
-		// so the daemon never sees a command it no longer understands.
-		if (BROWSER_COMMAND_TYPES[type] !== true) {
-			this.#sendError(stream, UNKNOWN_COMMAND_MESSAGE);
-			return json({ commandId: cmd.id }, 202);
-		}
-		const fields = EDGE_COMMAND_FIELDS[type];
-		if (fields !== undefined) {
-			try {
-				const args = readEdgeArgs(type, fields, cmd);
-				this.#runners[type]?.(stream, id, args);
-			} catch (err) {
-				if (!(err instanceof OperationError)) throw err;
-				this.#sendError(stream, err.message);
+		try {
+			// Phase 6: the mux-era commands and detach are gone from
+			// ClientCommand. Any type outside the browser allowlist, whether a
+			// stale client's removed command or plain garbage, is rejected here
+			// so the daemon never sees a command it no longer understands.
+			if (BROWSER_COMMAND_TYPES[type] !== true) {
+				this.#sendError(stream, UNKNOWN_COMMAND_MESSAGE);
+			} else {
+				const fields = EDGE_COMMAND_FIELDS[type];
+				if (fields !== undefined) {
+					try {
+						const args = readEdgeArgs(type, fields, cmd);
+						this.#runners[type]?.(stream, id, args);
+					} catch (err) {
+						if (!(err instanceof OperationError)) throw err;
+						this.#sendError(stream, err.message);
+					}
+				} else {
+					this.#forwardCommand(stream, cmd);
+				}
 			}
-		} else {
-			this.#forwardCommand(stream, cmd);
+		} catch (err) {
+			this.#send(stream, nackMessage(id, 500, err instanceof Error ? err.message : String(err)));
+			return;
 		}
-		return json({ commandId: cmd.id }, 202);
+		this.#send(stream, ackMessage(id));
 	}
 
 	// ---------------------------------------------------------------------
@@ -1485,8 +1598,8 @@ export class FleetEdge {
 	 * ("browser/<connId>"). The daemon primes + replays per stream: the edge
 	 * sends stream_open on bind and after every pair replacement, then
 	 * forwards the daemon's frame envelopes verbatim (priming included) to
-	 * this browser. Slow browsers are dropped by #enqueue's byte cap
-	 * (drop-and-resume: the ring and Last-Event-ID resume close the gap).
+	 * this browser. Slow browsers are dropped by #send's cap (drop-and-resume:
+	 * the ring and `after` resume close the gap).
 	 * A torn-down pair surfaces as the terminal "daemon connection lost"
 	 * error frame; the edge never redials.
 	 */
@@ -1615,7 +1728,7 @@ export class FleetEdge {
 	 * `attached` (its required "s1" must read as the daemonId through the
 	 * edge). Global frames pass unchanged. Every forwarded frame is an
 	 * edge-local delta for this browser (a fresh seq; RINGED only for the
-	 * daemon's delta types, see #sendDelta, and recoverable via Last-Event-ID;
+	 * daemon's delta types, see #sendDelta, and recoverable via `after`;
 	 * unringed priming/answer frames are re-derived on re-attach). The
 	 * payload is the already-parsed frame object (an envelope payload is
 	 * verbatim JSON); every decision (gate, strip, stamp, answer routing, ring
@@ -1716,7 +1829,7 @@ export class FleetEdge {
 	/**
 	 * Forward a non-edge command to the attached session as a kind:"command"
 	 * envelope on this browser's callback stream (same payload as the
-	 * session's POST /command; answers ride the stream's frame envelopes).
+	 * session's command channel; answers ride the stream's frame envelopes).
 	 * A missing or unpaired channel fails fast BY ID (finding #59: the client
 	 * correlates call() promises only with call_result, so a bare error frame
 	 * would leave the promise hanging until its 30s timeout). No offline
@@ -1798,10 +1911,10 @@ export class FleetEdge {
 	 * can be routed back to exactly that browser (see #routeAnswer). The FIRST
 	 * forward wins while the answer is outstanding: a second browser reusing a
 	 * numeric id must not steal the correlation (ids are page-unique, so this
-	 * only guards hand-crafted collisions and a client's own re-POST).
+	 * only guards hand-crafted collisions and a client's own re-send).
 	 *
 	 * Returns null when the command may be forwarded, or the error message to
-	 * answer an id-keyed refusal with. A replay (the client re-POSTing an id
+	 * answer an id-keyed refusal with. A replay (the client re-sending an id
 	 * whose answer never arrived) is refused when the entry is now served under
 	 * a different GENERATION: a respawn or re-enrollment is a different process
 	 * with no dedup memory, so forwarding would execute the command twice.
@@ -1869,8 +1982,8 @@ export class FleetEdge {
 		if (origin === undefined) return false;
 		if (origin.delivered) return true;
 		const target = this.#clients.get(origin.clientId)?.stream ?? null;
-		// The origin has no live stream right now (drop-and-resume): keep the
-		// record outstanding so its re-POST's replayed answer still lands.
+		// The origin has no live socket right now (drop-and-resume): keep the
+		// record outstanding so its re-sent command's replayed answer still lands.
 		if (target === null) return true;
 		origin.delivered = true;
 		this.#sendAnswer(target, outgoing, json);
@@ -1881,32 +1994,38 @@ export class FleetEdge {
 	// Sending + broadcasting
 	// ---------------------------------------------------------------------
 
-	/** Bytes currently buffered on a browser stream (the queue is byte-sized via the stream's queuing strategy). */
+	/** Bytes currently buffered on a browser socket (not yet taken by the kernel). */
 	#bufferedBytes(stream: BrowserStream): number {
-		const desired = stream.controller.desiredSize;
-		if (desired === null) return stream.unreadEstimate;
-		if (stream.unreadEstimate > 0) stream.unreadEstimate = 0;
-		return Math.max(0, this.#backpressureBytes - desired);
+		return stream.closed ? 0 : stream.ws.getBufferedAmount();
 	}
 
-	/** Enqueue one pre-encoded block; past the backpressure cap the stream is terminated (drop-and-resume). */
-	#enqueue(stream: BrowserStream, block: string): void {
-		try {
-			const chunk = SSE_ENCODER.encode(block);
-			const buffered = this.#bufferedBytes(stream);
-			if (shouldDropFrame(buffered + chunk.byteLength, this.#backpressureBytes)) {
-				this.#dropBrowser(stream);
-				return;
-			}
-			// An empty queue starts the stall clock afresh: only bytes that sit
-			// unread count against the stream.
-			if (buffered === 0) stream.progressAt = Date.now();
-			stream.unreadEstimate += chunk.byteLength;
-			stream.enqueuedBytes += chunk.byteLength;
-			stream.controller.enqueue(chunk);
-		} catch {
-			// Stream already closed/cancelled: dropped (removal happens on cancel/drop).
+	/**
+	 * The one write path to a browser socket. Before the send, a buffer past
+	 * the backpressure cap closes the socket 4503 (drop-and-resume); a send the
+	 * socket refuses (`send` returned 0: dropped) closes it the same way, so a
+	 * frame is never lost silently. Bun is configured with a send limit above
+	 * the cap plus a maximum frame, so it never drops first. Returns false when
+	 * the message was not sent.
+	 */
+	#send(stream: BrowserStream, text: string): boolean {
+		if (stream.closed) return false;
+		this.#noteDrain(stream, false);
+		const buffered = stream.ws.getBufferedAmount();
+		if (shouldDropFrame(buffered, this.#backpressureBytes)) {
+			this.#dropBrowser(stream, "send buffer past the backpressure cap");
+			return false;
 		}
+		// An empty buffer starts the stall clock afresh: only bytes that sit
+		// unread count against the socket.
+		const now = Date.now();
+		if (buffered === 0) stream.progressAt = now;
+		if (stream.ws.send(text) === 0) {
+			this.#dropBrowser(stream, "send refused");
+			return false;
+		}
+		stream.enqueuedBytes += sentBytes(text);
+		stream.lastSendAt = now;
+		return true;
 	}
 
 	/**
@@ -1976,47 +2095,39 @@ export class FleetEdge {
 	 * daemon would ring it (mirror of its RING_DELTAS, finding #5); priming
 	 * frames (hello_ok, attached, history, available_commands), unicast
 	 * answers (call_result) and per-stream lifecycle (stream_reset) are
-	 * re-derivable (re-attach priming / re-POST) and consume a seq but no
-	 * ring entry, exactly like the daemon's delta counter. A resuming
+	 * re-derivable (re-attach priming / re-sent command) and consume a seq but
+	 * no ring entry, exactly like the daemon's delta counter. A resuming
 	 * browser's ring replay therefore has the same deliberate gaps and is
-	 * still correct: after() returns only ringed entries newer than the
-	 * Last-Event-ID, and the client re-attaches on every reconnect open,
-	 * re-deriving anything the ring never held.
+	 * still correct: after() returns only ringed entries newer than `after`,
+	 * and the client re-attaches on every reconnect open, re-deriving
+	 * anything the ring never held.
 	 */
 	#sendDelta(stream: BrowserStream, frame: unknown, json?: string): void {
 		const client = stream.client;
 		const seq = client.nextSeq++;
-		const block =
-			json === undefined
-				? encodeSseEvent(SSE_EVENT_NAME, frame, seq)
-				: encodeSseEventData(SSE_EVENT_NAME, json, seq);
+		const message = seqFrameMessage(seq, json ?? JSON.stringify(frame));
 		const type = (frame as { type?: unknown } | null)?.type;
-		if (typeof type === "string" && EDGE_RING_DELTAS[type]) client.ring.push(seq, block);
-		this.#enqueue(stream, block);
+		if (typeof type === "string" && EDGE_RING_DELTAS[type]) client.ring.push(seq, message);
+		this.#send(stream, message);
 	}
 
 	/**
-	 * Ring one client's copy of a broadcast; deliver when its stream is
+	 * Ring one client's copy of a broadcast; deliver when its socket is
 	 * live. `ring: false` still advances the client seq (like priming and
 	 * unicast answers) but leaves no ring entry; the frame must be
 	 * re-derivable from the next open's priming.
 	 */
 	#broadcastTo(client: BrowserClient, json: string, ring = true): void {
 		const seq = client.nextSeq++;
-		const block = encodeSseEventData(SSE_EVENT_NAME, json, seq);
-		if (ring) client.ring.push(seq, block);
-		if (client.stream) this.#enqueue(client.stream, block);
+		const message = seqFrameMessage(seq, json);
+		if (ring) client.ring.push(seq, message);
+		if (client.stream) this.#send(client.stream, message);
 	}
 
-	/** Unicast answer (projects / error): fresh seq but NOT ringed (lost answers are re-POSTed). */
+	/** Unicast answer (projects / error): fresh seq but NOT ringed (lost answers are re-sent by the client). */
 	#sendAnswer(stream: BrowserStream, frame: unknown, json?: string): void {
 		const seq = stream.client.nextSeq++;
-		this.#enqueue(
-			stream,
-			json === undefined
-				? encodeSseEvent(SSE_EVENT_NAME, frame, seq)
-				: encodeSseEventData(SSE_EVENT_NAME, json, seq),
-		);
+		this.#send(stream, seqFrameMessage(seq, json ?? JSON.stringify(frame)));
 	}
 
 	#sendError(stream: BrowserStream, error: string): void {
@@ -2051,18 +2162,25 @@ export class FleetEdge {
 
 	/**
 	 * Broadcast one frame to every browser. Named clients ring EVERY delta,
-	 * also while disconnected, so a Last-Event-ID resume replays the gap;
-	 * anonymous streams ring only what they receive (no resume contract).
+	 * also while disconnected, so an `after` resume replays the gap;
+	 * anonymous sockets ring only what they receive (no resume contract).
 	 * `ring: false` skips the ring (re-derivable frames only, e.g.
 	 * registered_projects).
 	 */
 	#broadcast(frame: ServerFrame, opts?: { ring?: boolean }): void {
 		const ring = opts?.ring ?? true;
-		// Serialize once: every consumer frames the same JSON (only `id` varies).
+		// Serialize once: every consumer frames the same JSON (only the seq varies).
 		const json = JSON.stringify(frame);
-		for (const stream of this.#browsers) this.#broadcastTo(stream.client, json, ring);
+		// A send can drop its socket mid-broadcast (4503), which detaches the
+		// client from its stream: remember who already got this frame so the
+		// disconnected-clients pass below never rings it a second time.
+		const served = new Set<BrowserClient>();
+		for (const stream of [...this.#browsers]) {
+			served.add(stream.client);
+			this.#broadcastTo(stream.client, json, ring);
+		}
 		for (const client of this.#clients.values()) {
-			if (client.stream === null) this.#broadcastTo(client, json, ring);
+			if (!served.has(client)) this.#broadcastTo(client, json, ring);
 		}
 	}
 
@@ -2094,37 +2212,58 @@ export class FleetEdge {
 	}
 
 	/**
-	 * Drop-and-resume: a browser stream past the backpressure cap is
-	 * terminated (buffered data still flushes; the browser reconnects with
-	 * Last-Event-ID and the edge replays its ring). The client state (ring)
-	 * survives for the resume; the pipe is closed + released.
+	 * Drop-and-resume: a browser socket past the backpressure cap, one whose
+	 * send was refused, or one that stopped draining is closed 4503
+	 * (slow_consumer); the browser reconnects with `after` and the edge
+	 * replays its ring. The client state (ring) survives for the resume; the
+	 * pipe is closed + released.
 	 */
-	#dropBrowser(stream: BrowserStream): void {
+	#dropBrowser(stream: BrowserStream, why = "slow consumer"): void {
+		this.#closeStream(stream, "slow_consumer", why);
+	}
+
+	/** Release a stream and close its socket with a typed code; the client's ring survives unless `discard`. */
+	#closeStream(
+		stream: BrowserStream,
+		kind: BrowserCloseKind,
+		message: string,
+		discard = false,
+	): void {
+		this.#releaseBrowser(stream);
+		if (discard) this.#discardClient(stream.client);
+		const { code, reason } = browserCloseFor(kind, message);
+		try {
+			stream.ws.close(code, reason);
+		} catch {
+			// Already closed.
+		}
+	}
+
+	/**
+	 * The socket is gone (closed by either side, dropped, replaced): close the
+	 * pipe, forget the stream, keep the ring for resume. Idempotent.
+	 */
+	#releaseBrowser(stream: BrowserStream): void {
+		stream.closed = true;
 		this.#browsers.delete(stream);
 		this.#closePipe(stream);
-		// Identity guard (finding #25): a STALE stream's late teardown (its
-		// cancel fired after a rebind installed a replacement) must not
-		// clobber the client's current stream reference.
-		if (stream.client.stream === stream) stream.client.stream = null;
-		this.#armClientReclaim(stream.client);
-		try {
-			stream.controller.close();
-		} catch {
-			// Already closed/cancelled.
+		// Identity guard (finding #25): the close of a socket already
+		// superseded by a rebind must not null the client's NEW stream.
+		if (stream.client.stream === stream) {
+			stream.client.stream = null;
+			this.#armClientReclaim(stream.client);
 		}
 		if (this.#browsers.size === 0) this.#stopKeepalive();
 	}
 
-	/** The browser's stream ended (client cancel): close pipe + release; keep the ring for resume. */
-	#releaseBrowser(stream: BrowserStream): void {
-		this.#browsers.delete(stream);
-		this.#closePipe(stream);
-		// Identity guard (finding #25): the cancel of a stream already
-		// superseded by a rebind must not null the client's NEW stream.
-		if (stream.client.stream === stream) stream.client.stream = null;
-		this.#armClientReclaim(stream.client);
-		if (this.#browsers.size === 0) {
-			this.#stopKeepalive();
+	/** Forget a client's ring at once (sign-out): its replay state belongs to the ended session. */
+	#discardClient(client: BrowserClient): void {
+		if (client.gcTimer) {
+			clearTimeout(client.gcTimer);
+			client.gcTimer = null;
+		}
+		if (client.clientId !== null && this.#clients.get(client.clientId) === client) {
+			this.#clients.delete(client.clientId);
 		}
 	}
 
@@ -2141,16 +2280,31 @@ export class FleetEdge {
 		}, CLIENT_RECLAIM_MS);
 	}
 
+	/**
+	 * One sweep per keepalive interval: close sockets whose session expired
+	 * (4401), settle the stall clock and drop a socket that holds bytes with no
+	 * drain for the stall limit (4503), and ping every socket the edge has not
+	 * written to for half an interval (an idle socket is pinged within one
+	 * interval, far inside the client's silence deadline).
+	 */
 	#startKeepalive(): void {
 		if (this.#keepaliveTimer) return;
 		this.#keepaliveTimer = setInterval(() => {
+			const now = Date.now();
 			for (const stream of [...this.#browsers]) {
-				this.#noteDrain(stream, true);
-				if (this.#bufferedBytes(stream) > 0 && Date.now() - stream.progressAt >= this.#stallMs) {
-					this.#dropBrowser(stream);
+				const session = stream.ws.data.session;
+				if (session !== null && now >= session.expiresAt) {
+					this.#closeStream(stream, "unauthorized", "session expired", true);
 					continue;
 				}
-				this.#enqueue(stream, SSE_PING_BLOCK);
+				this.#noteDrain(stream, true);
+				if (this.#bufferedBytes(stream) > 0 && now - stream.progressAt >= this.#stallMs) {
+					this.#dropBrowser(stream, "browser stopped reading");
+					continue;
+				}
+				if (now - stream.lastSendAt >= this.#keepaliveMs / 2) {
+					this.#send(stream, pingMessage(now));
+				}
 			}
 		}, this.#keepaliveMs);
 	}

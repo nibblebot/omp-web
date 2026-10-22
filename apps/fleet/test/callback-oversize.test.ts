@@ -19,7 +19,7 @@ import {
 	OMP_CALLBACK_PROTO,
 } from "#lib/wire/callback-protocol";
 import { FleetCallback } from "../../session/fleet-callback";
-import { DaemonTransportRegistry, type FleetSocketData } from "../daemon-transport";
+import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
 import { waitFor } from "./edge.testkit";
 
 /** Bun's WebSocket client with its upgrade-header options; the DOM lib types hide them. */
@@ -45,7 +45,7 @@ interface Rig {
 
 function startRig(opts: { onDroppedMessage?: (message: string) => void } = {}): Rig {
 	const registry = new DaemonTransportRegistry(opts);
-	const server = Bun.serve<FleetSocketData>({
+	const server = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
 		idleTimeout: 255,

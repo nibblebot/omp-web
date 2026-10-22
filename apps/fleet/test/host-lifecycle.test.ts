@@ -28,7 +28,7 @@ import {
 	OMP_SESSION_EXIT_SESSION_LOCKED,
 } from "#lib/wire/protocol";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry, type FleetSocketData } from "../daemon-transport";
+import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
 import type { FleetEventLog } from "../events";
 import { Registry, type RegistryEntry } from "../registry";
 import type { WorkspaceLifecycle, CloneRuntimePolicy } from "../workspace-lifecycle";
@@ -245,7 +245,7 @@ async function makeHarness(
 	const registry = new Registry(statePath);
 	await registry.load();
 	const transport = new DaemonTransportRegistry();
-	const server: Server<FleetSocketData> = Bun.serve<FleetSocketData>({
+	const server: Server<CallbackSocketData> = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
 		idleTimeout: 255,

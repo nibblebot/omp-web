@@ -13,7 +13,6 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { createConnection, type Socket } from "node:net";
 import { join } from "node:path";
 import {
 	ENVELOPE_MAX_BYTES,
@@ -37,6 +36,7 @@ import {
 	waitFor,
 } from "./edge.testkit";
 import { makeHostLifecycle } from "./host-lifecycle.testkit";
+import { RawBrowserSocket } from "./raw-browser-socket.testkit";
 
 afterAll(cleanupTempDirs);
 
@@ -129,62 +129,6 @@ async function connectRemote(
 	rig.daemons.push(daemon);
 	await daemon.waitConnected(5000);
 	return { daemonId: entry.daemonId, daemon };
-}
-
-/** A browser /events stream on a raw socket: the test decides when it reads. */
-class RawBrowser {
-	readonly clientId = crypto.randomUUID();
-	bytes = 0;
-	ready = false;
-	readonly ended = Promise.withResolvers<void>();
-	isEnded = false;
-	readonly #socket: Socket;
-	#tail = "";
-
-	constructor(readonly port: number) {
-		this.#socket = createConnection({ host: "127.0.0.1", port });
-		const end = (): void => {
-			this.isEnded = true;
-			this.ended.resolve();
-		};
-		this.#socket.on("data", (chunk: Buffer) => {
-			this.bytes += chunk.byteLength;
-			const text = this.#tail + chunk.toString("latin1");
-			if (text.includes('"type":"ready"')) this.ready = true;
-			// The chunked body's terminator: the edge ended the response (the
-			// connection itself stays open for keep-alive).
-			if (text.includes("\r\n0\r\n\r\n")) end();
-			this.#tail = text.slice(-32);
-		});
-		this.#socket.on("close", end);
-		this.#socket.on("end", end);
-		this.#socket.on("error", end);
-		this.#socket.write(
-			`GET /events?client=${this.clientId} HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n`,
-		);
-	}
-
-	/** Stop reading: the kernel buffers fill, then the edge's queue does. */
-	pause(): void {
-		this.#socket.pause();
-	}
-
-	resume(): void {
-		this.#socket.resume();
-	}
-
-	destroy(): void {
-		this.#socket.destroy();
-	}
-
-	async attach(daemonId: string): Promise<void> {
-		const res = await fetch(`http://127.0.0.1:${this.port}/command`, {
-			method: "POST",
-			headers: { "content-type": "application/json", "x-omp-client-id": this.clientId },
-			body: JSON.stringify({ type: "attach", id: crypto.randomUUID(), sessionId: daemonId }),
-		});
-		if (!res.ok) throw new Error(`attach rejected (HTTP ${res.status})`);
-	}
 }
 
 function controlType(env: CallbackEnvelope): string | undefined {
@@ -289,11 +233,12 @@ function startPrimer(daemon: CallbackDaemon, streamId: string, honorCredit: bool
 describe("edge priming pace", () => {
 	test("a browser that is not reading holds the daemon's burst at the credit window instead of being cut; it then receives every frame", async () => {
 		const rig = await startRig();
-		const browser = new RawBrowser(rig.port);
+		const browser = new RawBrowserSocket(rig.port);
 		try {
+			await browser.open();
 			const { daemonId, daemon } = await connectRemote(rig, "paced");
 			browser.pause();
-			await browser.attach(daemonId);
+			browser.send({ type: "attach", sessionId: daemonId });
 			const { streamId, ack } = await openedStream(daemon);
 			expect(ack).toBe(true);
 			const primer = startPrimer(daemon, streamId, true);
@@ -302,14 +247,16 @@ describe("edge priming pace", () => {
 			await primer.parked;
 			expect(primer.finished).toBe(false);
 			expect(primer.sentBytes).toBeLessThan(FRAMES * FRAME_BYTES);
-			expect(browser.isEnded).toBe(false);
+			expect(browser.isClosed).toBe(false);
 			expect(controls(daemon, streamId, "stream_close")).toHaveLength(0);
-			// The browser starts reading: the whole priming arrives, no stream_reset-less EOF.
+			// The browser starts reading: the whole priming arrives, the socket is never closed.
 			browser.resume();
 			await primer.run;
-			await waitFor(() => (browser.ready ? true : null), 20_000, "ready frame");
-			expect(browser.isEnded).toBe(false);
+			await browser.waitForFrame((f) => f.type === "ready", "ready frame", 20_000);
+			expect(browser.isClosed).toBe(false);
+			expect(browser.closeInfo).toBeNull();
 			expect(browser.bytes).toBeGreaterThanOrEqual(FRAMES * FRAME_BYTES);
+			expect(browser.frames.filter((f) => f.type === "history")).toHaveLength(FRAMES);
 			expect(controls(daemon, streamId, "stream_close")).toHaveLength(0);
 			// The edge acknowledged as the queue drained, cumulatively and in order.
 			const seqs = controls(daemon, streamId, "stream_ack").map(ackedSeq);
@@ -323,11 +270,12 @@ describe("edge priming pace", () => {
 
 	test("a browser that stops reading is dropped after the stall limit, while the daemon's burst stays parked", async () => {
 		const rig = await startRig({ stallMs: 150, keepaliveMs: 25 });
-		const browser = new RawBrowser(rig.port);
+		const browser = new RawBrowserSocket(rig.port);
 		try {
+			await browser.open();
 			const { daemonId, daemon } = await connectRemote(rig, "stuck");
 			browser.pause();
-			await browser.attach(daemonId);
+			browser.send({ type: "attach", sessionId: daemonId });
 			const { streamId } = await openedStream(daemon);
 			const primer = startPrimer(daemon, streamId, true);
 			await primer.parked;
@@ -340,10 +288,11 @@ describe("edge priming pace", () => {
 			await primer.run;
 			expect(primer.finished).toBe(true);
 			expect(primer.sentBytes).toBeLessThan(FRAMES * FRAME_BYTES);
-			// The cut is the existing drop-and-resume: buffered bytes flush, then a clean end.
+			// The cut is the typed drop: once the browser reads again, the buffered
+			// bytes arrive, then the 4503 close; the priming never completed.
 			browser.resume();
-			await browser.ended.promise;
-			expect(browser.ready).toBe(false);
+			expect((await browser.end())?.code).toBe(4503);
+			expect(browser.frames.some((f) => f.type === "ready")).toBe(false);
 		} finally {
 			browser.destroy();
 			await rig.close();
@@ -352,11 +301,12 @@ describe("edge priming pace", () => {
 
 	test("a daemon that ignores the credit window still hits the cap drop", async () => {
 		const rig = await startRig();
-		const browser = new RawBrowser(rig.port);
+		const browser = new RawBrowserSocket(rig.port);
 		try {
+			await browser.open();
 			const { daemonId, daemon } = await connectRemote(rig, "ignoring");
 			browser.pause();
-			await browser.attach(daemonId);
+			browser.send({ type: "attach", sessionId: daemonId });
 			const { streamId, ack } = await openedStream(daemon);
 			expect(ack).toBe(true);
 			const primer = startPrimer(daemon, streamId, false);
@@ -367,8 +317,8 @@ describe("edge priming pace", () => {
 				"stream_close after the cap drop",
 			);
 			browser.resume();
-			await browser.ended.promise;
-			expect(browser.ready).toBe(false);
+			expect((await browser.end())?.code).toBe(4503);
+			expect(browser.frames.some((f) => f.type === "ready")).toBe(false);
 		} finally {
 			browser.destroy();
 			await rig.close();
