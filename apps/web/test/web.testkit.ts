@@ -152,6 +152,7 @@ export async function flushMicrotasks(): Promise<void> {
  */
 export function installTransportStubs(): void {
 	resetBrowserSocket();
+	dropPendingCalls(); // a fresh page has no calls in flight, even after a sibling file that left some
 	posted.length = 0;
 	FakeWebSocket.instances.length = 0;
 	FakeWebSocket.autoAck = true;

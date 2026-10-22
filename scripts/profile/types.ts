@@ -189,7 +189,7 @@ export interface TransportOpen {
 	baseUrl: string;
 	/** Browser client id (`client=` query parameter). */
 	clientId: string;
-	/** Highest seq the previous connection received (`after=` query parameter); omitted = fresh priming. */
+	/** Last seq the previous connection received (`after=` query parameter); omitted = fresh priming. */
 	after?: number;
 }
 
@@ -197,7 +197,7 @@ export interface TransportConnection {
 	/** Cumulative message bytes received / sent on this connection (pings and acks included, WebSocket framing not). */
 	readonly bytesDown: number;
 	readonly bytesUp: number;
-	/** Highest frame seq seen (starts at the `after` the connection was opened with); feed to the next `open({ after })`. */
+	/** Last frame seq seen (starts at the `after` the connection was opened with); feed to the next `open({ after })`, as the web client does. */
 	readonly lastSeq: number | undefined;
 	/** Once the socket closed: `<code> <reason>` of the close, for diagnostics; undefined while open. */
 	readonly closeInfo: string | undefined;

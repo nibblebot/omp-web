@@ -132,7 +132,7 @@ class WsConnection implements TransportConnection {
 				};
 				if (message.seq !== null) {
 					received.seq = message.seq;
-					if (this.lastSeq === undefined || message.seq > this.lastSeq) this.lastSeq = message.seq;
+					this.lastSeq = message.seq;
 				}
 				if (this.#backlog !== null) this.#backlog.push(received);
 				else for (const cb of this.#listeners) cb(received);

@@ -51,6 +51,8 @@ beforeEach(() => {
 		pushState: (_: unknown, __: string, url: string) => written.push(`push ${url}`),
 		replaceState: (_: unknown, __: string, url: string) => written.push(`replace ${url}`),
 	} as unknown as History);
+	// A reloaded page has no attached session yet: the socket's open must not re-attach one a sibling file left.
+	setState({ currentSessionId: "" });
 	connect();
 	FakeWebSocket.instances.at(-1)?.onopen?.();
 	setState({

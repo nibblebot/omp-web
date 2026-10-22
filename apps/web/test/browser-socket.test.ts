@@ -4,7 +4,7 @@
  * the typed close codes, and the silence deadline. The server is the
  * FakeWebSocket from web.testkit: each test plays the server's half.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test, vi } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test, vi } from "bun:test";
 import { browserCloseFor } from "#lib/wire/browser-socket";
 import { CLIENT_SILENCE_DEADLINE_MS, COMMAND_DEDUP_WINDOW_MS, OMP_PROTO } from "#lib/wire/protocol";
 import { connect, initAuth, setState, state } from "../state";
@@ -76,6 +76,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.useRealTimers();
+	mock.restore(); // the Date.now spies
 	// Calls a test left pending would be re-sent by the next test's reconnects.
 	rejectPendingCalls(new Error("test teardown"));
 });
@@ -152,7 +153,7 @@ describe("dial", () => {
 });
 
 describe("resume after a drop", () => {
-	test("redials with after = the highest seq received; the replay overlap is applied once and no ringed delta is lost", () => {
+	test("redials with after = the last seq received; the replay overlap is applied once and no ringed delta is lost", () => {
 		vi.useFakeTimers();
 		const first = openSocket();
 		// Priming (seq below DELTA_SEQ_START) then ringed deltas.
@@ -179,6 +180,20 @@ describe("resume after a drop", () => {
 		// Nothing before the resume point was applied twice.
 		expect(echoCount("d1")).toBe(1);
 		expect(echoCount("d2")).toBe(1);
+	});
+
+	test("after a server restart numbers from scratch, the next resume asks for the new epoch's last seq", () => {
+		vi.useFakeTimers();
+		const first = openSocket();
+		dispatchSeq(echo("old"), 1500);
+		first.serverClose(1001); // the control plane restarts
+		vi.advanceTimersByTime(state.reconnectDelay);
+		current().onopen?.();
+		dispatchSeq(echo("primed"), 2);
+		dispatchSeq(echo("new"), 1030);
+		current().serverClose(1006);
+		vi.advanceTimersByTime(state.reconnectDelay);
+		expect(new URL(current().url).searchParams.get("after")).toBe("1030");
 	});
 
 	test("a reconnect re-attaches the daemon the tab was viewing", () => {
@@ -458,7 +473,8 @@ describe("typed closes", () => {
 			expect(state.modal).toBe("sign-in");
 			expect(state.connected).toBe(false);
 
-			vi.advanceTimersByTime(10 * 60_000);
+			// Longer than any reconnect backoff, inside the dedup window so the call survives the wait.
+			vi.advanceTimersByTime(COMMAND_DEDUP_WINDOW_MS / 2);
 			expect(FakeWebSocket.instances).toHaveLength(1); // held until sign-in
 			expect(state.error).toBeNull(); // not a terminal error: the modal is the surface
 
@@ -468,7 +484,7 @@ describe("typed closes", () => {
 			current().onopen?.();
 			expect(state.connected).toBe(true);
 			// The call that waited out the sign-in goes out again under its own id.
-			const id = [...pendingCalls.keys()][0]!;
+			const id = posted.find((c) => c.type === "call" && c.method === "getSubagents")!.id;
 			expect(posted.filter((c) => c.id === id)).toHaveLength(2);
 			dispatch(callResult(id, "ok"));
 			expect(await pending).toBe("resolved");

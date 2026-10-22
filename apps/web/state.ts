@@ -752,8 +752,12 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 /** The one browser socket this tab holds; null while down or between dials. */
 let socket: WebSocket | null = null;
 
-/** Highest frame seq received on this page: the next dial's `after` (null = fresh priming). */
-let highestSeq: number | null = null;
+/**
+ * Seq of the last sequenced frame received: the next dial's `after` (null =
+ * fresh priming). The last one, not the highest: a restarted server numbers
+ * from scratch, and a stale high mark would skip every delta of its new epoch.
+ */
+let lastSeq: number | null = null;
 
 /** Consecutive failed dials, the reconnectDelayMs attempt; a socket's first message resets it. */
 let reconnectAttempt = 0;
@@ -891,7 +895,8 @@ export function resetBrowserSocket(): void {
 		}
 	}
 	resetUplink();
-	highestSeq = null;
+	setConnected(false);
+	lastSeq = null;
 	reconnectAttempt = 0;
 	socketMessages = 0;
 	awaitingSignIn = false;
@@ -1318,11 +1323,11 @@ export function connect(): void {
 	// One WebSocket per tab, same origin. It cannot carry headers, so the
 	// off-loopback bearer token rides the query string when the page URL
 	// carries one; loopback dev needs none. `after` resumes the server's ring
-	// replay from the highest seq this page has received.
+	// replay from the last seq this page received.
 	const token = new URLSearchParams(location.search).get("token");
 	const url = browserSocketUrl(location.origin, {
 		clientId,
-		after: highestSeq,
+		after: lastSeq,
 		proto: OMP_PROTO,
 		token,
 	});
@@ -1799,9 +1804,7 @@ export function connect(): void {
 				refuseCommand(message.id, message.status, message.error);
 				break;
 			case "frame":
-				if (message.seq !== null && (highestSeq === null || message.seq > highestSeq)) {
-					highestSeq = message.seq;
-				}
+				if (message.seq !== null) lastSeq = message.seq;
 				handleFrame(message.frame, message.seq);
 				break;
 		}
