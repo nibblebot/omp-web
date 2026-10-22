@@ -6,8 +6,13 @@
  * The fleet owns the host-generic rows:
  *  - profile executable present + executable bit (the in-process `host` kind
  *    has none: its row passes and says so);
- *  - callback URL reachability CLASS-CHECK (DNS + TCP only; no bytes are
- *    ever written, so no credential or request can leak) when configured;
+ *  - callback URL reachability when configured: a DNS + TCP class check
+ *    (skipped when the session would dial through a proxy, which resolves
+ *    the host itself), then a real WebSocket upgrade to `/callback/ws`, the
+ *    way the session dials it (same proxy resolution). The probe carries no
+ *    identity and no credential, so the fleet closes it at once with a typed
+ *    refusal, which proves the upgrade passed every hop and reached the
+ *    fleet;
  *  - durable state dirs writable (workspace root + logs root; a missing dir
  *    passes when its parent is writable; those dirs are created lazily on
  *    demand, so a preflight must not require them to pre-exist);
@@ -41,10 +46,25 @@ import {
 	type ProviderKind,
 	type ProviderProfile,
 } from "#lib/runtime/provider-protocol";
+import { assertCallbackProxy, callbackWsUrl, environmentProxy } from "#lib/wire/callback-endpoint";
+import {
+	CALLBACK_PAIR_READY_TYPE,
+	CALLBACK_PROTO_HEADER,
+	OMP_CALLBACK_PROTO,
+	callbackErrorFromClose,
+} from "#lib/wire/callback-protocol";
 import { preflightHostProfile } from "./runtime-preflight";
 
 /** Wall-clock budget for the provider's preflight op: a kubernetes preflight runs one kubectl call per check. */
 const PROVIDER_PREFLIGHT_TIMEOUT_MS = 120_000;
+/** Wall-clock budget for the callback WebSocket upgrade probe (one attempt, no retry). */
+const CALLBACK_PROBE_TIMEOUT_MS = 5000;
+
+/** Bun's WebSocket client constructor with its upgrade `headers` and `proxy` options (the DOM typings hide them). */
+const BunWebSocket = WebSocket as unknown as new (
+	url: string | URL,
+	options?: Bun.WebSocketOptions,
+) => Bun.WebSocket;
 
 // ---------------------------------------------------------------------------
 // Typed report
@@ -65,11 +85,14 @@ export interface PreflightContext {
 	/** Fleet logs root (durable streamed-lineage store). */
 	logsRoot: string;
 	/**
-	 * Callback URL to class-check (DNS + TCP only, never a request). When
-	 * omitted the callback check reports "not configured" and passes.
+	 * Callback base URL to probe: DNS + TCP, then a credential-less WebSocket
+	 * upgrade to its `/callback/ws`. When omitted the callback check reports
+	 * "not configured" and passes.
 	 */
 	callbackUrl?: string;
-	/** Operator environment for secretRefs resolution; defaults to process.env. */
+	/** Budget for the WebSocket upgrade probe; defaults to CALLBACK_PROBE_TIMEOUT_MS. */
+	callbackProbeTimeoutMs?: number;
+	/** Operator environment for secretRefs resolution and the HTTP(S)_PROXY / NO_PROXY the callback dial resolves; defaults to process.env. */
 	env?: Record<string, string | undefined>;
 	/** Wall-clock budget for the provider's preflight op; defaults to PROVIDER_PREFLIGHT_TIMEOUT_MS. */
 	providerTimeoutMs?: number;
@@ -245,54 +268,215 @@ async function checkProviderRows(
 	}
 }
 
-/** DNS + TCP class-check with a hard deadline. Nothing is ever written to
- *  the socket, so no credential or request can leak. */
-async function checkCallback(ctx: PreflightContext): Promise<PreflightCheck> {
+/** `proxy` without credentials, for display (a proxy URL may carry userinfo). */
+function displayProxy(proxy: string): string {
+	const url = new URL(proxy);
+	url.username = "";
+	url.password = "";
+	return url.toString();
+}
+
+/** What a credential-less upgrade to the callback endpoint ended as. */
+type CallbackProbe =
+	| { kind: "fleet"; code: number; reason: string }
+	| { kind: "refused"; detail: string }
+	| { kind: "foreign"; detail: string }
+	| { kind: "timeout"; opened: boolean };
+
+/**
+ * One WebSocket upgrade to `wsUrl` (through `proxy` when given) carrying no
+ * identity and no credential, bounded by `timeoutMs`, never retried. The fleet
+ * upgrades an unauthenticated request and closes it at once with a typed
+ * refusal (close code 4000 + status); that answer is the proof of reach. The
+ * socket is always closed before this returns.
+ */
+function probeCallbackSocket(
+	wsUrl: string,
+	proxy: string | undefined,
+	timeoutMs: number,
+): Promise<CallbackProbe> {
+	return new Promise<CallbackProbe>((resolve) => {
+		let opened = false;
+		let error = "";
+		let socket: Bun.WebSocket;
+		try {
+			socket = new BunWebSocket(wsUrl, {
+				headers: { [CALLBACK_PROTO_HEADER]: String(OMP_CALLBACK_PROTO) },
+				perMessageDeflate: false,
+				...(proxy !== undefined ? { proxy } : {}),
+			});
+		} catch (err) {
+			resolve({ kind: "refused", detail: errMessage(err) });
+			return;
+		}
+		const finish = (outcome: CallbackProbe) => {
+			clearTimeout(timer);
+			socket.close();
+			resolve(outcome);
+		};
+		const timer = setTimeout(() => finish({ kind: "timeout", opened }), timeoutMs);
+		timer.unref();
+		socket.addEventListener("open", () => {
+			opened = true;
+		});
+		socket.addEventListener("error", (event) => {
+			error = "message" in event && typeof event.message === "string" ? event.message : "";
+		});
+		socket.addEventListener("message", (event: Event) => {
+			const data = "data" in event ? event.data : undefined;
+			const pairReady = typeof data === "string" && data.includes(CALLBACK_PAIR_READY_TYPE);
+			finish({
+				kind: "foreign",
+				detail: pairReady
+					? "the endpoint accepted a credential-less pair"
+					: "the endpoint answered the upgrade with data instead of a typed refusal",
+			});
+		});
+		socket.addEventListener("close", (event) => {
+			if (!opened) {
+				finish({
+					kind: "refused",
+					detail: error !== "" ? error : event.reason || `close ${event.code}`,
+				});
+			} else if (callbackErrorFromClose(event.code, event.reason) !== null) {
+				finish({ kind: "fleet", code: event.code, reason: event.reason });
+			} else {
+				finish({
+					kind: "foreign",
+					detail: `the endpoint upgraded, then closed with code ${event.code} instead of a typed refusal`,
+				});
+			}
+		});
+	});
+}
+
+/** The `callback-ws` row for one probe outcome. */
+function callbackWsRow(
+	probe: CallbackProbe,
+	wsUrl: string,
+	via: string,
+	timeoutMs: number,
+): PreflightCheck {
+	const name = "callback-ws";
+	const path = `GET ${new URL(wsUrl).pathname}`;
+	switch (probe.kind) {
+		case "fleet":
+			return {
+				name,
+				ok: true,
+				detail: `reached the fleet${via}: ${wsUrl} upgraded and the fleet answered a credential-less dial with its typed refusal (close ${probe.code}${probe.reason === "" ? "" : `, ${probe.reason}`})`,
+			};
+		case "refused":
+			return {
+				name,
+				ok: false,
+				detail: `WebSocket upgrade to ${wsUrl}${via} failed: ${probe.detail}`,
+				remediation:
+					`${path} must reach the omp-web control plane as a WebSocket upgrade: a reverse proxy or ingress ` +
+					`must forward the Upgrade and Connection headers over HTTP/1.1 to the upstream, and the callback ` +
+					`URL must name the control plane (a proxy that strips Upgrade, or a different service, answers a plain HTTP response)`,
+			};
+		case "foreign":
+			return {
+				name,
+				ok: false,
+				detail: `${wsUrl}${via} is a WebSocket endpoint but not the omp-web fleet: ${probe.detail}`,
+				remediation: `point the callback URL at the omp-web control plane (the fleet closes a credential-less ${path} upgrade with a 4xxx refusal)`,
+			};
+		case "timeout":
+			return {
+				name,
+				ok: false,
+				detail: probe.opened
+					? `${wsUrl}${via} upgraded but did not answer within ${timeoutMs}ms (the fleet closes a credential-less upgrade at once)`
+					: `no WebSocket upgrade answer from ${wsUrl}${via} within ${timeoutMs}ms`,
+				remediation: probe.opened
+					? `point the callback URL at the omp-web control plane`
+					: `check that the proxy or ingress forwards ${path} and does not hold the upgrade open or buffer it`,
+			};
+	}
+}
+
+/**
+ * The callback rows. `callback-url`: URL shape, then DNS + TCP with a hard
+ * deadline (nothing is written to the socket), skipped when the session would
+ * dial through a proxy because the proxy resolves the host, not this host.
+ * `callback-ws`: a credential-less WebSocket upgrade to `/callback/ws` through
+ * the same proxy the session resolves, run only when `callback-url` passed.
+ */
+async function checkCallback(ctx: PreflightContext): Promise<PreflightCheck[]> {
 	const urlRaw = ctx.callbackUrl;
 	if (urlRaw === undefined) {
-		return {
-			name: "callback-url",
-			ok: true,
-			detail: "not configured (no callback URL passed to preflight)",
-		};
+		return [
+			{
+				name: "callback-url",
+				ok: true,
+				detail: "not configured (no callback URL passed to preflight)",
+			},
+		];
 	}
+	const urlRow = await checkCallbackUrl(urlRaw, ctx);
+	if (!urlRow.check.ok) return [urlRow.check];
+	const timeoutMs = ctx.callbackProbeTimeoutMs ?? CALLBACK_PROBE_TIMEOUT_MS;
+	const wsUrl = callbackWsUrl(urlRaw);
+	const via = urlRow.proxy === undefined ? "" : ` via proxy ${displayProxy(urlRow.proxy)}`;
+	const probe = await probeCallbackSocket(wsUrl, urlRow.proxy, timeoutMs);
+	return [urlRow.check, callbackWsRow(probe, wsUrl, via, timeoutMs)];
+}
+
+async function checkCallbackUrl(
+	urlRaw: string,
+	ctx: PreflightContext,
+): Promise<{ check: PreflightCheck; proxy?: string }> {
+	const fail = (detail: string, remediation: string) => ({
+		check: { name: "callback-url", ok: false, detail, remediation },
+	});
 	let url: URL;
 	try {
 		url = new URL(urlRaw);
 	} catch {
-		return {
-			name: "callback-url",
-			ok: false,
-			detail: `callback URL is not a URL: ${urlRaw}`,
-			remediation: `fix the callback URL (expected http:// or https://)`,
-		};
+		return fail(
+			`callback URL is not a URL: ${urlRaw}`,
+			`fix the callback URL (expected http:// or https://)`,
+		);
 	}
 	if (url.protocol !== "http:" && url.protocol !== "https:") {
-		return {
-			name: "callback-url",
-			ok: false,
-			detail: `callback URL uses ${url.protocol}// (not http/https)`,
-			remediation: `serve the callback over http:// or https://`,
-		};
+		return fail(
+			`callback URL uses ${url.protocol}// (not http/https)`,
+			`serve the callback over http:// or https://`,
+		);
 	}
 	if (url.hostname === "") {
-		return {
-			name: "callback-url",
-			ok: false,
-			detail: `callback URL has no host: ${urlRaw}`,
-			remediation: `include a hostname in the callback URL`,
-		};
+		return fail(`callback URL has no host: ${urlRaw}`, `include a hostname in the callback URL`);
 	}
 	let port: number;
 	try {
 		port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
 		if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("bad port");
 	} catch {
+		return fail(
+			`callback URL has an invalid port: ${urlRaw}`,
+			`use a valid port in the callback URL`,
+		);
+	}
+	let proxy: string | undefined;
+	try {
+		proxy = environmentProxy(url, ctx.env ?? process.env);
+		if (proxy !== undefined) assertCallbackProxy(proxy);
+	} catch (err) {
+		return fail(
+			errMessage(err),
+			`set HTTP_PROXY / HTTPS_PROXY (minus NO_PROXY) to an http:// or https:// proxy URL, or unset it (there is no direct fallback)`,
+		);
+	}
+	if (proxy !== undefined) {
 		return {
-			name: "callback-url",
-			ok: false,
-			detail: `callback URL has an invalid port: ${urlRaw}`,
-			remediation: `use a valid port in the callback URL`,
+			check: {
+				name: "callback-url",
+				ok: true,
+				detail: `${url.hostname}:${port} is dialed through proxy ${displayProxy(proxy)}; direct DNS and TCP not checked (the proxy resolves and connects)`,
+			},
+			proxy,
 		};
 	}
 	const deadline = Date.now() + 5000;
@@ -311,20 +495,16 @@ async function checkCallback(ctx: PreflightContext): Promise<PreflightCheck> {
 		);
 		addresses = found.map((entry) => entry.address);
 	} catch (err) {
-		return {
-			name: "callback-url",
-			ok: false,
-			detail: `DNS lookup failed for ${url.hostname}: ${errMessage(err)}`,
-			remediation: `check that ${url.hostname} resolves (fix the callback URL or DNS)`,
-		};
+		return fail(
+			`DNS lookup failed for ${url.hostname}: ${errMessage(err)}`,
+			`check that ${url.hostname} resolves (fix the callback URL or DNS)`,
+		);
 	}
 	if (addresses.length === 0) {
-		return {
-			name: "callback-url",
-			ok: false,
-			detail: `DNS returned no addresses for ${url.hostname}`,
-			remediation: `check that ${url.hostname} has an A/AAAA record`,
-		};
+		return fail(
+			`DNS returned no addresses for ${url.hostname}`,
+			`check that ${url.hostname} has an A/AAAA record`,
+		);
 	}
 
 	// TCP class-check (connect only, nothing is written), bounded per try.
@@ -343,20 +523,19 @@ async function checkCallback(ctx: PreflightContext): Promise<PreflightCheck> {
 		});
 		if (connected) {
 			return {
-				name: "callback-url",
-				ok: true,
-				detail: `reachable: ${url.hostname}:${port} (TCP connect to ${address} succeeded; no request sent)`,
+				check: {
+					name: "callback-url",
+					ok: true,
+					detail: `reachable: ${url.hostname}:${port} (TCP connect to ${address} succeeded)`,
+				},
 			};
 		}
 	}
-	return {
-		name: "callback-url",
-		ok: false,
-		detail: `TCP connect failed for ${url.hostname}:${port} (tried ${addresses.join(", ")})`,
-		remediation:
-			`the callback server must be reachable from the daemon host: start it (omp-web on the ` +
+	return fail(
+		`TCP connect failed for ${url.hostname}:${port} (tried ${addresses.join(", ")})`,
+		`the callback server must be reachable from the daemon host: start it (omp-web on the ` +
 			`reachable bind), open firewall port ${port}, or fix the callback URL`,
-	};
+	);
 }
 
 /** One row per durable state dir. */
@@ -451,7 +630,7 @@ export async function runProfilePreflight(
 		: HOST_RUNTIME_ROW;
 	const checks: PreflightCheck[] = [
 		executable,
-		await checkCallback(ctx),
+		...(await checkCallback(ctx)),
 		...(await checkDurableDirs(ctx)),
 		await checkProfileSecrets(profile, ctx),
 		...(executable.ok ? await checkProviderRows(profile, ctx) : []),

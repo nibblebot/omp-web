@@ -4,18 +4,17 @@ import {
 	BULK_MAX_BYTES,
 	BULK_PART_HEADER,
 	CALLBACK_BULK_PATH_PREFIX,
-	CALLBACK_CHUNKS_HEADER,
-	CALLBACK_DOWN_PATH,
-	CALLBACK_PAIR_READY_TYPE,
 	CALLBACK_CONTROL_STREAM_ID,
+	CALLBACK_PAIR_READY_TYPE,
+	CALLBACK_PROTO_HEADER,
 	CALLBACK_TRANSPORT_STREAM_ID,
-	CALLBACK_UP_PATH,
+	CALLBACK_WS_SEND_HIGH_WATER_BYTES,
 	CONNECTION_MAX_BYTES,
 	ENVELOPE_MAX_BYTES,
 	HEARTBEAT_INTERVAL_MS,
 	OMP_CALLBACK_PROTO,
+	PAIR_CREDIT_WINDOW_BYTES,
 	PAIR_READY_TIMEOUT_MS,
-	UP_RENEWAL_BYTES,
 	RECONNECT_BACKOFF_MAX_MS,
 	RECONNECT_BACKOFF_MIN_MS,
 	SILENCE_DEADLINE_MS,
@@ -23,18 +22,23 @@ import {
 	WAKE_TIMEOUT_MS,
 	CallbackError,
 	callbackError,
+	callbackErrorFromClose,
 	codeFromHttpStatus,
-	encodeNdjsonLine,
+	decodeEnvelope,
+	envelopeFraming,
+	PreEncodedPayload,
+	preEncodePayload,
 	isCallbackErrorCode,
+	isPairCreditControl,
 	isChunkPayload,
 	reassembleChunks,
-	parseSseEnvelope,
 	validateEnvelope,
 	type CallbackEnvelope,
 	type CallbackErrorCode,
 	type CallbackKind,
 	type ChunkEnvelopePayload,
 } from "#lib/wire/callback-protocol";
+import { assertCallbackProxy, callbackWsUrl, environmentProxy } from "#lib/wire/callback-endpoint";
 import { MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
 import {
 	parseMaterializeRecord,
@@ -44,49 +48,59 @@ import {
 import { isLoopbackHost } from "#lib/platform/hosts";
 
 /**
- * Callback transport, daemon half. The daemon dials OUT to the fleet and
- * keeps one long-lived
- * pair of connections per workspace+generation:
+ * Callback transport, daemon half (OMP_CALLBACK_PROTO 2). The daemon dials OUT
+ * to the fleet and keeps one WebSocket per workspace+generation:
  *
- *   up:   POST /callback/up    NDJSON streaming writer (incremental enqueue)
- *   down: GET  /callback/down  SSE reader (parseSseEnvelope)
+ *   GET <base>/callback/ws   upgrade; one text message = one canonical-JSON envelope
  *
- * Identity and the enrollment credential ride request HEADERS (frozen by
- * Main): x-omp-workspace-id, x-omp-generation, x-omp-connection-id, plus
- * `authorization: Bearer <credential>`. Never query params or path segments;
- * the connection id stays out of URL logs. A fresh `connectionId`
- * (crypto.randomUUID()) is minted per pair and both halves of one pair share
- * it.
+ * The base URL scheme maps http to ws and https to wss (http only for an
+ * explicit loopback exception, enforced at construction). Identity, the
+ * enrollment credential and the protocol version ride the upgrade request
+ * HEADERS (x-omp-workspace-id, x-omp-generation, x-omp-connection-id,
+ * x-omp-callback-proto, `authorization: Bearer <credential>`), never the URL.
+ * A fresh connectionId (crypto.randomUUID()) is minted per socket; it also
+ * names the live pair on bulk requests (POST /callback/bulk/<id>), which stay
+ * plain HTTP on their own requests so a 64 MiB transfer never blocks the pair.
  *
- * Up establishment (Bun.serve constraint, agreed with the fleet half): the
- * fleet reads the /callback/up body to COMPLETION inside its handler, so the
- * up HTTP response arrives only when the upload ENDS, never while the pair
- * lives. The daemon therefore treats the up half as established when the POST
- * is launched and still pending; any settled up response (or a rejected
- * upload) means the up half ended and the pair is replaced. Pair readiness is
- * confirmed IN-BAND: once both halves for a connectionId are live the fleet
- * emits a `control` envelope on the down stream with
- * payload {type:"pair_ready", connectionId, generation} and
- * streamId "transport". start() resolves on that (PAIR_READY_TIMEOUT_MS).
+ * Refusal: a WebSocket client cannot read a non-101 status, so the fleet
+ * upgrades a refused dial and closes it at once with a typed refusal code
+ * (callbackErrorFromClose). A credential rejection (unauthorized,
+ * invalid_identity, generation_obsolete) or proto_unsupported is terminal: the
+ * instance stops, onRejected fires, and nothing redials. Every other close, and
+ * a dial that fails outright (an old fleet without the route answers non-101,
+ * which surfaces as a socket error with no status), is retryable.
  *
  * Pair lifecycle:
- *   - start() resolves only when the pair is READY (up launched + down open +
- *     pair_ready observed), within the pair-ready timeout.
- *   - Either half failing, down stream ended/errored, up response settled,
- *     up body cancelled by the peer, 30 s down silence, or an outbound
- *     backlog that never drained within the silence deadline, replaces
- *     BOTH halves after jittered 1 s → 30 s backoff.
- *   - The fleet emits 15 s `heartbeat` envelopes (streamId "transport") that
- *     keep the 30 s down silence deadline alive; the daemon mirrors 15 s
- *     heartbeats up (streamId "control") while idle.
- *   - Down envelopes are never resumed across a replacement: a fresh
- *     connectionId starts a fresh per-connection seq space.
- *   - The up POST body counts against the fleet server's request-body limit
- *     for its whole life (Bun maxRequestBodySize, 128 MiB), so the pair is
- *     renewed once the up half has carried UP_RENEWAL_BYTES (64 MiB),
- *     gracefully (queued bytes drain first; unsent envelopes replay on the
- *     fresh pair), with no backoff. Sustained load never reaches a drained
- *     moment, so the renewal cannot wait for one.
+ *   - start() resolves when the fleet's in-band `pair_ready` control envelope
+ *     (streamId "transport", the first message on an accepted socket) arrives,
+ *     within the pair-ready timeout. The backlog is held until then.
+ *   - A socket close or error, a refusal close, 30 s without an inbound
+ *     envelope, or an outbound backlog that never drains within the silence
+ *     deadline replaces the pair after jittered 1 s to 30 s backoff.
+ *   - The fleet emits 15 s `heartbeat` envelopes (streamId "transport"); the
+ *     daemon mirrors 15 s heartbeats (streamId "control") while idle. Liveness
+ *     is this envelope deadline, never WebSocket ping/pong.
+ *   - A fresh socket is a fresh connectionId and a fresh inbound seq space;
+ *     nothing is resumed. The daemon's own seq stays monotonic across pairs so
+ *     the fleet floor and the daemon replay rings share one space.
+ *   - A message that is binary or fails envelope validation is dropped,
+ *     counted (status.badMessages) and reported through onError; it never ends
+ *     the pair.
+ *
+ * Flow control: an envelope is handed to the socket only while its send
+ * buffer (`bufferedAmount`) is at or below CALLBACK_WS_SEND_HIGH_WATER_BYTES.
+ * Bun's client WebSocket fires no drain event (probed on 1.4.2: only
+ * open/message/error/close), so a blocked pump re-checks on a short timer
+ * (SEND_RECHECK_MS) while the unsent envelopes wait in the bounded queue below.
+ *
+ * Credit: on top of that gate, a message is handed to the socket only while
+ * the bytes sent beyond the fleet's last pair_credit grant (cumulative, see
+ * PairCreditControl), plus this message, fit PAIR_CREDIT_WINDOW_BYTES. Bytes
+ * are the UTF-8 length of the text message, assembled exactly from the
+ * framing and the payload length known at enqueue (no scan of the payload).
+ * A pump that waits for credit sets no timer: a grant wakes it (a fleet that
+ * never grants is replaced by the stall timer like any non-reading peer). The
+ * window is per pair; a fresh socket starts from zero.
  *
  * Outbound envelopes are held in a bounded queue (8 MiB per connection,
  * 4 MiB per virtual stream; the ledger caps). The fleet keeps no offline
@@ -97,10 +111,12 @@ import { isLoopbackHost } from "#lib/platform/hosts";
  * after start(): every failure reaches onError / onStatus.
  *
  * HTTPS is enforced at construction (matching config.ts): http is refused
- * unless `allowHttp` is set AND the host is loopback. An explicit
- * `proxy` (http/https) is passed to every fetch; there is no silent
- * fallback to a direct connection, and an unsupported scheme is a
- * construction-time error.
+ * unless `allowHttp` is set AND the host is loopback. An http/https proxy is
+ * passed to every dial and every bulk fetch: the explicit `proxy` option, else
+ * the HTTP(S)_PROXY / NO_PROXY environment, which Bun's fetch honors on its
+ * own but its WebSocket client ignores, so it is resolved here for both. There
+ * is no silent fallback to a direct connection, and an unsupported proxy
+ * scheme is a construction-time error.
  */
 
 /** Header names binding a callback pair (frozen by Main). */
@@ -115,6 +131,27 @@ export const CALLBACK_IDENTITY_HEADERS = {
 // re-export so the FleetCallback public surface for Main's wiring is stable.
 export { CALLBACK_TRANSPORT_STREAM_ID, CALLBACK_CONTROL_STREAM_ID, CALLBACK_PAIR_READY_TYPE };
 
+/** Re-check interval while the socket's send buffer is above the high-water mark (no client drain event exists). */
+const SEND_RECHECK_MS = 10;
+
+/**
+ * Bun's WebSocket client constructor. The tsconfig loads the DOM lib, whose
+ * WebSocket type hides Bun's upgrade `headers`, `proxy` and `perMessageDeflate`
+ * options and `terminate()`; this is the same global under its Bun typings.
+ */
+const BunWebSocket = WebSocket as unknown as new (
+	url: string | URL,
+	options?: Bun.WebSocketOptions,
+) => Bun.WebSocket;
+
+/** Refusals that end the instance for good: the credential or generation is dead, or the fleet speaks another protocol. */
+const TERMINAL_REFUSALS: Record<string, true> = {
+	unauthorized: true,
+	invalid_identity: true,
+	generation_obsolete: true,
+	proto_unsupported: true,
+};
+
 export type FleetCallbackState = "idle" | "connecting" | "ready" | "reconnecting" | "stopped";
 
 /** Outbound envelope the daemon hands the pair; identity/seq/at are stamped at emit. */
@@ -122,6 +159,10 @@ export interface CallbackSendInput {
 	/** Logical per-browser/control stream within the connection. */
 	streamId: string;
 	kind: CallbackKind;
+	/**
+	 * The payload value, or a {@link PreEncodedPayload} the sender serialized
+	 * once and shares across streams or keeps for replay (never re-serialized).
+	 */
 	payload: unknown;
 	/**
 	 * Called with the FINAL envelope seq the moment the envelope is written
@@ -141,9 +182,9 @@ export interface FleetCallbackOptions {
 	workspaceId: string;
 	/** Authorized generation this pair speaks for. */
 	generation: number;
-	/** Enrollment credential; sent as `authorization: Bearer <token>` on both halves. */
+	/** Enrollment credential; sent as `authorization: Bearer <token>` on the upgrade and every bulk request. */
 	token?: string;
-	/** Explicit http(s) streaming proxy; absent = direct. Never silently bypassed. */
+	/** Explicit http(s) proxy for the pair socket and bulk requests; absent = the HTTP(S)_PROXY / NO_PROXY environment, else direct. Never silently bypassed. */
 	proxy?: string;
 	/** Explicit loopback-HTTP exception; honored only for loopback callback hosts. */
 	allowHttp?: boolean;
@@ -151,8 +192,6 @@ export interface FleetCallbackOptions {
 	// shrink them to observe cadence deterministically.
 	heartbeatMs?: number;
 	silenceMs?: number;
-	/** Up-leg bytes after which the pair is voluntarily renewed; 0 disables. */
-	upRenewalBytes?: number;
 	readyTimeoutMs?: number;
 	/** Deadline for one bulk-channel request (materialize or upload part); past it the caller gets a retryable error. */
 	bulkTimeoutMs?: number;
@@ -164,7 +203,7 @@ export interface FleetCallbackOptions {
 }
 
 export interface FleetCallbackErrorContext {
-	phase: "send" | "up" | "down" | "pair";
+	phase: "send" | "receive" | "pair";
 	streamId?: string;
 	kind?: CallbackKind;
 }
@@ -183,9 +222,10 @@ export interface FleetCallbackEvents {
 	 */
 	onControl?: (envelope: CallbackEnvelope) => void;
 	/**
-	 * Terminal refusal: the fleet rejected this credential (`unauthorized`) or superseded its
-	 * generation (`generation_obsolete`). The instance is already stopped when this fires;
-	 * no reconnect follows.
+	 * Terminal refusal: the fleet rejected this credential (`unauthorized`,
+	 * `invalid_identity`), superseded its generation (`generation_obsolete`) or
+	 * speaks another callback protocol (`proto_unsupported`). The instance is
+	 * already stopped when this fires; no reconnect follows.
 	 */
 	onRejected?: (error: CallbackError) => void;
 }
@@ -196,20 +236,20 @@ export interface FleetCallbackStatus {
 	generation: number;
 	/** Live pair connection id; null while idle/stopped. */
 	connectionId: string | null;
-	/** Up seq of the current pair (last assigned). */
+	/** Seq of the current pair (last assigned). */
 	seq: number;
 	/** Envelopes actually written to the wire. */
 	sent: number;
-	/** Non-heartbeat envelopes read from the down stream. */
+	/** Non-heartbeat envelopes read from the socket. */
 	received: number;
 	/** Envelopes dropped because the outbound buffer was full. */
 	drops: number;
 	/** Envelopes rejected before queueing (oversize / not JSON-serializable / bad shape). */
 	rejected: number;
+	/** Inbound messages dropped as binary or as invalid envelopes. */
+	badMessages: number;
 	/** Failure-driven pair replacements. */
 	reconnects: number;
-	/** Voluntary pair renewals. */
-	renewals: number;
 	/** Times the pair reached ready (fresh after every replacement). */
 	readyCount: number;
 	pendingEnvelopes: number;
@@ -273,7 +313,10 @@ function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
 interface PendingItem {
 	streamId: string;
 	kind: CallbackKind;
-	payload: unknown;
+	/** The payload's canonical JSON, serialized once at enqueue (or shared by the sender). */
+	payloadJson: string;
+	/** The payload's UTF-8 byte length (known at enqueue): a message's exact wire size is its framing plus this. */
+	payloadBytes: number;
 	/** Projected wire bytes (canonical JSON with the current identity), for buffer accounting. */
 	bytes: number;
 	/** Transport-internal (heartbeat): dropped silently, never counted or reported. */
@@ -283,29 +326,35 @@ interface PendingItem {
 }
 
 interface PairEnd {
-	kind: "failure" | "renewal" | "stopped";
+	/** `drained`: the shutdown drain closed the socket; the supervisor dials no replacement. */
+	kind: "failure" | "drained" | "stopped";
 	error?: CallbackError;
 }
 
 interface PairHandle {
 	connectionId: string;
-	/** Last assigned up envelope seq (per-connection monotonic). */
+	socket: Bun.WebSocket;
+	/** Last assigned envelope seq. */
 	seq: number;
-	/** Bytes enqueued on this pair's up body (fleet-side lifetime budget). */
-	upBytes: number;
-	/** Settles when the up POST settles (the fleet's end-of-up response or failure). */
-	upSettled: Promise<void>;
-	/** Settles when the down stream ends (the fleet closes it once it has read the up leg). */
-	downSettled: Promise<void>;
+	/** Wire bytes handed to this socket (UTF-8 length of every text message). */
+	sentBytes: number;
+	/** Highest cumulative `consumed` the fleet granted on this socket (never above sentBytes). */
+	grantedBytes: number;
 	/** False once torn down / superseded / stopped. */
 	open: boolean;
-	upAbort: AbortController;
-	downAbort: AbortController;
+	/** Chunked commands in flight on this socket, keyed by chunkId. */
+	chunks: Map<string, CallbackEnvelope[]>;
+	/** Last socket `error` event text, folded into the close failure's detail. */
+	socketError: string | undefined;
 	heartbeatTimer: ReturnType<typeof setInterval> | null;
 	silenceTimer: ReturnType<typeof setTimeout> | null;
 	stallTimer: ReturnType<typeof setTimeout> | null;
-	/** Resolved exactly once, by finishPair (failure/renewal) or teardown (stopped). */
+	/** Pending re-check of a send buffer above high water. */
+	sendTimer: ReturnType<typeof setTimeout> | null;
+	/** Resolved exactly once, by finishPair (failure/drained) or teardown (stopped). */
 	end: Deferred<PairEnd>;
+	/** Resolved when the socket's close event fires, whoever ended it. */
+	closed: Deferred<void>;
 	/** Resolved when the fleet's pair_ready envelope arrives for this pair. */
 	readyWaiter: Deferred<void>;
 	readyArrived: boolean;
@@ -343,13 +392,13 @@ function errMsg(cause: unknown): string {
 
 export class FleetCallback {
 	readonly #base: string;
+	readonly #wsUrl: string;
 	readonly #workspaceId: string;
 	readonly #generation: number;
 	readonly #token: string | undefined;
 	readonly #proxy: string | undefined;
 	readonly #heartbeatMs: number;
 	readonly #silenceMs: number;
-	readonly #upRenewalBytes: number;
 	readonly #readyTimeoutMs: number;
 	readonly #backoffMinMs: number;
 	readonly #backoffMaxMs: number;
@@ -357,7 +406,6 @@ export class FleetCallback {
 	readonly #streamBufferBytes: number;
 	readonly #maxEnvelopeBytes: number;
 	readonly #events: FleetCallbackEvents | undefined;
-	readonly #enc = new TextEncoder();
 
 	#state: FleetCallbackState = "idle";
 	#started = false;
@@ -367,11 +415,11 @@ export class FleetCallback {
 	#startedAt: number | null = null;
 	#readyAt: number | null = null;
 
+	/** The live pair: carries writes and is read for commands. */
 	#pair: PairHandle | null = null;
-	#upController: ReadableStreamDefaultController<Uint8Array> | null = null;
 
 	/** Outbound queue; bytes are capped, so this doubles as the 8 MiB/4 MiB hold. */
-	#pending: PendingItem[] = [];
+	#pending: Array<PendingItem | undefined> = [];
 	#pendingHead = 0;
 	#pendingBytes = 0;
 	#streamBytes = new Map<string, number>();
@@ -380,8 +428,8 @@ export class FleetCallback {
 	#received = 0;
 	#drops = 0;
 	#rejected = 0;
+	#badMessages = 0;
 	#reconnects = 0;
-	#renewals = 0;
 	#readyCount = 0;
 	/** Highest seq assigned on any pair. Seq stays monotonic across pair replacements so the fleet floor and the daemon ring share one space. */
 	#seqHigh = 0;
@@ -424,27 +472,16 @@ export class FleetCallback {
 				`invalid callback generation ${options.generation} (positive integer required)`,
 			);
 		}
-		if (options.proxy !== undefined) {
-			let proxy: URL;
-			try {
-				proxy = new URL(options.proxy);
-			} catch (cause) {
-				throw new Error(`invalid callback proxy "${options.proxy}" (not a URL)`, { cause });
-			}
-			if (proxy.protocol !== "http:" && proxy.protocol !== "https:") {
-				throw new Error(
-					`unsupported callback proxy scheme "${proxy.protocol}" ("${options.proxy}"); only http/https proxies are supported and there is no direct fallback`,
-				);
-			}
-		}
+		const proxyUrl = options.proxy ?? environmentProxy(url);
+		if (proxyUrl !== undefined) assertCallbackProxy(proxyUrl);
 		this.#base = options.url.replace(/\/+$/, "");
+		this.#wsUrl = callbackWsUrl(this.#base);
 		this.#workspaceId = options.workspaceId;
 		this.#generation = options.generation;
 		this.#token = options.token;
-		this.#proxy = options.proxy;
+		this.#proxy = proxyUrl;
 		this.#heartbeatMs = options.heartbeatMs ?? HEARTBEAT_INTERVAL_MS;
 		this.#silenceMs = options.silenceMs ?? SILENCE_DEADLINE_MS;
-		this.#upRenewalBytes = options.upRenewalBytes ?? UP_RENEWAL_BYTES;
 		this.#readyTimeoutMs = options.readyTimeoutMs ?? PAIR_READY_TIMEOUT_MS;
 		this.#bulkTimeoutMs = options.bulkTimeoutMs ?? WAKE_TIMEOUT_MS;
 		this.#backoffMinMs = options.backoffMinMs ?? RECONNECT_BACKOFF_MIN_MS;
@@ -456,9 +493,9 @@ export class FleetCallback {
 	}
 
 	/**
-	 * Start the pair. Resolves when the pair is READY (up launched, down open,
-	 * pair_ready observed); rejects only if stop() runs first. Safe to call
-	 * once; a stopped instance rejects.
+	 * Start the pair. Resolves when the pair is READY (socket open, pair_ready
+	 * observed); rejects only if stop() runs first. Safe to call once; a
+	 * stopped instance rejects.
 	 */
 	start(): Promise<void> {
 		if (this.#stopped) {
@@ -473,11 +510,11 @@ export class FleetCallback {
 		const startDeferred = this.#startDeferred;
 		this.#state = "connecting";
 		this.#emitStatus();
-		void this.#supervise(startDeferred);
+		void this.#supervise();
 		return startDeferred.promise;
 	}
 
-	/** Terminal: tears down both halves, cancels timers/backoff; no reconnects after. */
+	/** Terminal: closes the socket, cancels timers/backoff; no reconnects after. */
 	stop(): void {
 		if (this.#stopped) return;
 		this.#stopped = true;
@@ -495,38 +532,42 @@ export class FleetCallback {
 
 	/**
 	 * Shutdown drain. Waits up to `timeoutMs` for every queued envelope to be
-	 * written into the up leg, then ends the pair the graceful way (the renewal
-	 * path): the fleet reads the whole up body before it answers, and the
-	 * supervisor dials no replacement. Then waits up to `timeoutMs` more for both
-	 * halves to settle. Never throws; a pair that is not ready has nothing to
-	 * hand off and returns at once.
+	 * written to the socket and its send buffer to empty, then closes the socket
+	 * with a normal close (the supervisor dials no replacement). Bun's client
+	 * reports the close as soon as it is initiated, and the closing frame follows
+	 * the buffered data on the wire, so nothing queued is lost. Never throws; a
+	 * pair that is not ready has nothing to hand off and returns at once.
 	 */
 	async drain(timeoutMs: number): Promise<void> {
 		const deadline = Date.now() + timeoutMs;
 		while (
 			this.#state === "ready" &&
-			this.#pendingHead < this.#pending.length &&
-			Date.now() < deadline
+			Date.now() < deadline &&
+			(this.#pendingHead < this.#pending.length || (this.#pair?.socket.bufferedAmount ?? 0) > 0)
 		) {
 			await new Promise<void>((resolve) => setTimeout(resolve, 10));
 		}
 		const pair = this.#pair;
 		if (this.#stopped || pair === null || !pair.open || this.#state !== "ready") return;
 		this.#draining = true;
-		this.#finishPair(pair, { kind: "renewal" });
+		try {
+			pair.socket.close(1000, "session shutting down");
+		} catch {
+			// Already closing; the close event still settles `closed`.
+		}
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const bound = new Promise<void>((resolve) => {
 			timer = setTimeout(resolve, timeoutMs);
 		});
 		try {
-			await Promise.race([Promise.all([pair.upSettled, pair.downSettled]), bound]);
+			await Promise.race([pair.closed.promise, bound]);
 		} finally {
 			clearTimeout(timer);
 		}
 	}
 
 	/**
-	 * Queue one envelope for the up half. Identity (workspaceId/generation/
+	 * Queue one envelope for the pair. Identity (workspaceId/generation/
 	 * connectionId), seq, and at are stamped at emit, so envelopes queued
 	 * while a pair is down replay on the fresh pair (the fleet keeps no
 	 * offline queue). Returns "sent" when accepted into the bounded queue,
@@ -674,7 +715,7 @@ export class FleetCallback {
 				headers,
 				// BodyInit under the DOM lib rejects plain Uint8Array; a
 				// single-part ReadableStream is accepted and streams the exact
-				// bytes (matches the up-half's streamed NDJSON body).
+				// bytes.
 				body: new ReadableStream<Uint8Array>({
 					start: (controller) => {
 						controller.enqueue(body);
@@ -729,8 +770,8 @@ export class FleetCallback {
 			received: this.#received,
 			drops: this.#drops,
 			rejected: this.#rejected,
+			badMessages: this.#badMessages,
 			reconnects: this.#reconnects,
-			renewals: this.#renewals,
 			readyCount: this.#readyCount,
 			pendingEnvelopes: this.#pending.length - this.#pendingHead,
 			pendingBytes: this.#pendingBytes,
@@ -743,7 +784,7 @@ export class FleetCallback {
 
 	// ── supervisor ────────────────────────────────────────────────────────────
 
-	async #supervise(start: Deferred<void>): Promise<void> {
+	async #supervise(): Promise<void> {
 		try {
 			while (this.#started && !this.#stopped) {
 				const pair = await this.#establishPair();
@@ -753,38 +794,7 @@ export class FleetCallback {
 					if (stopped) break;
 					continue;
 				}
-				this.#state = "ready";
-				this.#readyAt = Date.now();
-				this.#readyCount++;
-				if (!this.#everReady) {
-					this.#everReady = true;
-					if (this.#startDeferred !== null && this.#startDeferred === start) {
-						this.#startDeferred = null;
-						start.resolve();
-					}
-				}
-				this.#armHeartbeat(pair);
-				// A backlog carried into ready must start its drain clock now:
-				// if the fleet never pulls, the stall fires after the silence
-				// window and the pair is replaced.
-				if (this.#pendingBytes > 0) this.#armStall(pair);
-				this.#emitStatus();
-				const end = await this.#livePair(pair);
-				if (end.kind === "stopped" || this.#stopped) break;
-				// Only a pair that stayed up a full heartbeat interval proves the fleet is
-				// healthy; one that ends sooner keeps growing the backoff.
-				if (this.#readyAt !== null && Date.now() - this.#readyAt > this.#heartbeatMs) {
-					this.#backoffAttempt = 0;
-				}
-				if (end.kind === "renewal") {
-					this.#renewals++;
-					if (this.#draining) break; // shutdown drain: no replacement pair
-					continue; // voluntary: fresh pair, no backoff
-				}
-				this.#reconnects++;
-				if (end.error) this.#reportError("pair", end.error);
-				const stopped = await this.#scheduleBackoff();
-				if (stopped) break;
+				if (!(await this.#servePair(pair))) break;
 			}
 		} catch (cause) {
 			if (!this.#stopped) {
@@ -805,45 +815,87 @@ export class FleetCallback {
 	}
 
 	/**
-	 * Open one fresh pair: launch the up POST (fire-and-forget; the fleet
-	 * reads the body to completion, so its response only arrives when the up
-	 * half ends), open the down GET, then wait for the in-band pair_ready
-	 * envelope. Returns the ready pair, or null when establishment failed
-	 * (the failure was reported; the caller backs off and retries).
+	 * Serve a ready pair until it ends. Returns false when the supervisor must
+	 * exit (stopped, or the shutdown drain closed the pair), true to redial
+	 * after the backoff the failure owes.
+	 */
+	async #servePair(pair: PairHandle): Promise<boolean> {
+		// Readiness itself was applied synchronously by #markReady.
+		const end = await pair.end.promise;
+		this.#teardownPair(pair);
+		if (end.kind === "stopped" || end.kind === "drained" || this.#stopped || this.#draining) {
+			return false;
+		}
+		// Only a pair that stayed up a full heartbeat interval proves the fleet is
+		// healthy; one that ends sooner keeps growing the backoff.
+		if (this.#readyAt !== null && Date.now() - this.#readyAt > this.#heartbeatMs) {
+			this.#backoffAttempt = 0;
+		}
+		this.#reconnects++;
+		if (end.error) this.#reportError("pair", end.error);
+		return !(await this.#scheduleBackoff());
+	}
+
+	/**
+	 * Dial one fresh socket and wait for the in-band pair_ready envelope.
+	 * Returns the ready pair, or null when establishment failed (the failure was
+	 * reported; the caller backs off and retries). The pair-ready deadline
+	 * covers the whole dial: a hung connect and a missing pair_ready both end it.
 	 */
 	async #establishPair(): Promise<PairHandle | null> {
-		// A voluntary renewal keeps the state: the callback is still live, and a
-		// connecting flip here would make every renewal look like an outage.
 		if (this.#state !== "ready") {
 			this.#state = "connecting";
 			this.#emitStatus();
 		}
-		const pair = this.#newPair();
-		this.#pair = pair;
-		// Any end while we are still establishing (up settled early, stop(),
-		// teardown) must abort the down dial and the ready wait.
-		const endValue: { end: PairEnd | null } = { end: null };
-		pair.end.promise.then((end) => {
-			endValue.end = end;
-		});
-		this.#launchUp(pair);
-		const deadline = Date.now() + this.#readyTimeoutMs;
-		const downOk = await this.#dialDown(pair, deadline);
-		if (!downOk) {
-			this.#teardownPair(pair);
-			return null;
-		}
-		const remaining = deadline - Date.now();
-		if (remaining <= 0) {
+		const connectionId = randomUUID();
+		let socket: Bun.WebSocket;
+		try {
+			socket = new BunWebSocket(this.#wsUrl, {
+				headers: this.#upgradeHeaders(connectionId),
+				perMessageDeflate: false,
+				...(this.#proxy !== undefined ? { proxy: this.#proxy } : {}),
+			});
+		} catch (cause) {
 			this.#reportError(
 				"pair",
-				callbackError("retryable", "callback pair not ready", {
-					detail: `no pair_ready within ${this.#readyTimeoutMs}ms`,
+				callbackError("retryable", "callback socket dial failed", {
+					detail: errMsg(cause),
+					cause,
 				}),
 			);
-			this.#teardownPair(pair);
 			return null;
 		}
+		const pair: PairHandle = {
+			connectionId,
+			socket,
+			seq: this.#seqHigh,
+			sentBytes: 0,
+			grantedBytes: 0,
+			open: true,
+			chunks: new Map(),
+			socketError: undefined,
+			heartbeatTimer: null,
+			silenceTimer: null,
+			stallTimer: null,
+			sendTimer: null,
+			end: deferred<PairEnd>(),
+			closed: deferred<void>(),
+			readyWaiter: deferred<void>(),
+			readyArrived: false,
+		};
+		this.#pair = pair;
+		socket.addEventListener("open", () => {
+			if (this.#isCurrent(pair)) this.#armSilence(pair);
+		});
+		// Bun's typings resolve its message event to the constructor value; narrow `data` at runtime instead.
+		socket.addEventListener("message", (event: Event) =>
+			this.#onMessage(pair, "data" in event ? event.data : undefined),
+		);
+		socket.addEventListener("error", (event) => {
+			const detail = "message" in event && typeof event.message === "string" ? event.message : "";
+			pair.socketError = detail === "" ? "socket error" : detail;
+		});
+		socket.addEventListener("close", (event) => this.#onClose(pair, event));
 		const readyTimer = setTimeout(() => {
 			if (this.#isCurrent(pair)) {
 				this.#finishPair(pair, {
@@ -853,84 +905,22 @@ export class FleetCallback {
 					}),
 				});
 			}
-		}, remaining);
-		const readyWaiter = pair.readyWaiter;
+		}, this.#readyTimeoutMs);
 		const outcome = await Promise.race([
-			readyWaiter.promise.then(() => "ready" as const),
+			pair.readyWaiter.promise.then(() => "ready" as const),
 			pair.end.promise.then(() => "end" as const),
 		]);
 		clearTimeout(readyTimer);
-		if (outcome === "ready" && this.#isCurrent(pair)) {
-			return pair; // ready; end is consumed by #livePair
-		}
-		if (endValue.end?.error) this.#reportError("pair", endValue.end.error);
+		if (outcome === "ready" && this.#isCurrent(pair)) return pair; // ready; end is consumed by #servePair
+		const end = await pair.end.promise;
+		if (end.error) this.#reportError("pair", end.error);
 		this.#teardownPair(pair);
 		return null;
 	}
 
-	#newPair(): PairHandle {
-		return {
-			connectionId: crypto.randomUUID(),
-			seq: this.#seqHigh,
-			upBytes: 0,
-			upSettled: Promise.resolve(),
-			downSettled: Promise.resolve(),
-			open: true,
-			upAbort: new AbortController(),
-			downAbort: new AbortController(),
-			heartbeatTimer: null,
-			silenceTimer: null,
-			stallTimer: null,
-			end: deferred<PairEnd>(),
-			readyWaiter: deferred<void>(),
-			readyArrived: false,
-		};
-	}
-
-	async #livePair(pair: PairHandle): Promise<PairEnd> {
-		const end = await pair.end.promise;
-		if (end.kind === "renewal") await this.#drainUp(pair);
-		this.#teardownPair(pair);
-		return end;
-	}
-
-	/**
-	 * Graceful up end for a renewal: close the body so every queued byte is
-	 * read by the fleet before it answers 200 (end-of-up). Teardown then runs
-	 * only after that answer, so the handover never strands an envelope the
-	 * fleet had not yet read. A fleet that never answers is bounded by the
-	 * silence window; the fallback abort then surfaces as a pair error.
-	 */
-	async #drainUp(pair: PairHandle): Promise<void> {
-		const controller = this.#upController;
-		this.#upController = null;
-		if (controller !== null) {
-			try {
-				controller.close();
-			} catch {
-				// Already closed or errored; the up settle below still resolves.
-			}
-		}
-		const bound = setTimeout(() => pair.upAbort.abort(), this.#silenceMs);
-		try {
-			await pair.upSettled;
-		} finally {
-			clearTimeout(bound);
-		}
-		// The fleet closes the down leg once it has read the whole up leg. Wait for
-		// that end so every command the fleet already wrote on this pair is read
-		// before teardown; a silent leg is bounded the same way.
-		const downBound = setTimeout(() => pair.downAbort.abort(), this.#silenceMs);
-		try {
-			await pair.downSettled;
-		} finally {
-			clearTimeout(downBound);
-		}
-	}
-
 	// ── dialing ───────────────────────────────────────────────────────────────
 
-	#identityHeaders(pair: PairHandle): Record<string, string> {
+	#identityHeaders(pair: { connectionId: string }): Record<string, string> {
 		const headers: Record<string, string> = {
 			[CALLBACK_IDENTITY_HEADERS.workspaceId]: this.#workspaceId,
 			[CALLBACK_IDENTITY_HEADERS.generation]: String(this.#generation),
@@ -940,222 +930,88 @@ export class FleetCallback {
 		return headers;
 	}
 
-	/**
-	 * Launch the up POST and watch it. The fleet reads the NDJSON body to
-	 * completion, so a settled response is the END-of-up signal: any settle
-	 * while the pair is current ends the pair (the fleet refused it, stopped
-	 * reading, or the connection died).
-	 */
-	#launchUp(pair: PairHandle): void {
-		const init = this.#fetchInit(pair.upAbort.signal, {
-			method: "POST",
-			headers: { ...this.#identityHeaders(pair), [CALLBACK_CHUNKS_HEADER]: "1" },
-			body: this.#makeUpBody(pair),
-			duplex: "half",
-			// Bun's fetch aborts after its default 360 s timeout even while this
-			// streaming body keeps sending heartbeats, which cut every pair (and
-			// re-primed every browser stream on it) each 6 minutes. The pair legs
-			// are long-lived; silence is detected by the pair's own deadlines.
-			timeout: false,
-		});
-		pair.upSettled = fetch(`${this.#base}${CALLBACK_UP_PATH}`, init)
-			.then(async (res) => {
-				if (!this.#isCurrent(pair)) {
-					res.body?.cancel().catch(() => {});
-					return;
-				}
-				const text = res.ok ? "" : await res.text().catch(() => "");
-				if (res.ok) res.body?.cancel().catch(() => {});
-				const code = res.ok ? "retryable" : parseRefusal(res.status, text).code;
-				if (pair.end.settled) {
-					// Graceful renewal: the fleet answered the drained up leg. A clean 200 is
-					// the expected end; a refusal here is a loss and must be surfaced.
-					if (!res.ok) {
-						this.#reportError(
-							"pair",
-							callbackError(code, `callback up refused during renewal: HTTP ${res.status}`, {
-								detail: text,
-							}),
-						);
-					}
-					return;
-				}
-				this.#finishPair(pair, {
-					kind: "failure",
-					error: callbackError(
-						code,
-						res.ok
-							? "callback up ended (the fleet stopped reading)"
-							: `callback up refused: HTTP ${res.status}`,
-						{ detail: res.ok ? undefined : `the fleet ended the up half` },
-					),
-				});
-			})
-			.catch((cause) => {
-				if (!this.#isCurrent(pair)) return; // intentional teardown abort
-				if (pair.end.settled) {
-					// Renewal drain aborted the up leg (the fleet never answered); surface it.
-					this.#reportError(
-						"pair",
-						callbackError("retryable", "callback up drain aborted", {
-							detail: errMsg(cause),
-							cause,
-						}),
-					);
-					return;
-				}
-				this.#finishPair(pair, {
-					kind: "failure",
-					error: callbackError("retryable", "callback up failed", {
-						detail: errMsg(cause),
-						cause,
-					}),
-				});
-			});
+	#upgradeHeaders(connectionId: string): Record<string, string> {
+		return {
+			...this.#identityHeaders({ connectionId }),
+			[CALLBACK_PROTO_HEADER]: String(OMP_CALLBACK_PROTO),
+		};
 	}
 
-	async #dialDown(pair: PairHandle, deadline: number): Promise<boolean> {
-		const headers = this.#identityHeaders(pair);
-		headers.Accept = "text/event-stream";
-		try {
-			const res = await this.#fetchWithDeadline(
-				`${this.#base}${CALLBACK_DOWN_PATH}`,
-				// No Bun fetch timeout: see #launchUp.
-				this.#fetchInit(pair.downAbort.signal, { method: "GET", headers, timeout: false }),
-				pair.downAbort,
-				deadline,
-			);
-			if (!this.#isCurrent(pair)) {
-				res.body?.cancel().catch(() => {});
-				return false;
-			}
-			if (!res.ok) {
-				const bodyText = await res.text().catch(() => "");
-				this.#reportError(
-					"down",
-					callbackError(
-						parseRefusal(res.status, bodyText).code,
-						`callback down refused: HTTP ${res.status}`,
-						{ detail: bodyText.length > 0 ? bodyText.slice(0, 300) : undefined },
-					),
-				);
-				res.body?.cancel().catch(() => {});
-				return false;
-			}
-			if (!res.body) {
-				this.#reportError("down", callbackError("unavailable", "callback down has no body"));
-				return false;
-			}
-			this.#armSilence(pair);
-			pair.downSettled = this.#consumeDown(pair, res);
-			return true;
-		} catch (cause) {
-			if (!this.#isCurrent(pair)) return false;
-			this.#reportError(
-				"down",
-				callbackError("retryable", "callback down dial failed", {
-					detail: errMsg(cause),
-					cause,
-				}),
-			);
-			return false;
-		}
-	}
-
-	/** fetch with a hard deadline (used for the down dial / pair-ready wait). */
-	async #fetchWithDeadline(
-		url: string,
-		init: RequestInit,
-		abort: AbortController,
-		deadline: number,
-	): Promise<Response> {
-		const remaining = deadline - Date.now();
-		if (remaining <= 0) {
-			abort.abort();
-			throw new Error(`dial timed out after ${this.#readyTimeoutMs}ms`);
-		}
-		let timedOut = false;
-		let done = false;
-		const timer = setTimeout(() => {
-			if (!done) {
-				timedOut = true;
-				abort.abort();
-			}
-		}, remaining);
-		try {
-			const res = await fetch(url, init);
-			done = true;
-			clearTimeout(timer);
-			return res;
-		} catch (cause) {
-			done = true;
-			clearTimeout(timer);
-			if (timedOut) throw new Error(`dial timed out after ${this.#readyTimeoutMs}ms`);
-			throw cause;
-		}
-	}
-
+	/** Init for a bulk fetch: the abort signal plus the explicit proxy. */
 	#fetchInit(signal: AbortSignal, extra: Record<string, unknown>): RequestInit {
 		const init: RequestInit = { ...extra, signal };
 		if (this.#proxy !== undefined) (init as RequestInit & { proxy?: string }).proxy = this.#proxy;
 		return init;
 	}
 
-	// ── up half: NDJSON writer ────────────────────────────────────────────────
-
-	#makeUpBody(pair: PairHandle): ReadableStream<Uint8Array> {
-		return new ReadableStream<Uint8Array>({
-			start: (controller) => {
-				if (this.#isCurrent(pair)) {
-					this.#upController = controller;
-					this.#pump();
-				}
-			},
-			pull: () => {
-				if (this.#isCurrent(pair)) this.#pump();
-			},
-			cancel: (reason) => {
-				// The peer stopped reading / the socket died while we were not
-				// the ones tearing down; the up half is gone.
-				if (!this.#isCurrent(pair)) return;
-				this.#finishPair(pair, {
-					kind: "failure",
-					error: callbackError("retryable", "callback up body cancelled", {
-						detail: errMsg(reason),
-					}),
-				});
-			},
-		});
-	}
+	// ── outbound pump ─────────────────────────────────────────────────────────
 
 	#pumping = false;
 	/** Subscribers to outbound drain (see onDrain). */
 	readonly #drainListeners = new Set<() => void>();
 
 	#pump(): void {
-		const controller = this.#upController;
 		const pair = this.#pair;
-		// Hold the backlog until the fleet confirms this pair with pair_ready. The
-		// up POST's headers carry the identity the fleet needs, so ready never waits
-		// on up bytes. Envelopes written to a pair that never becomes ready would be
-		// consumed from the queue and lost with the aborted leg.
-		if (controller === null || pair === null || !pair.open || !pair.readyArrived) return;
-		// Reentrancy guard: controller.enqueue can synchronously trigger the
-		// fetch consumer's read, which fires pull() → #pump() while this loop
-		// is mid-flight. Without the guard both invocations emit the same
-		// pending head (double-send + a corrupted byte ledger).
+		// Hold the backlog until the fleet confirms this pair with pair_ready.
+		// Envelopes written to a pair that never becomes ready would be consumed
+		// from the queue and lost with the closed socket.
+		if (pair === null || !pair.open || !pair.readyArrived) return;
+		// Reentrancy guard: an onEmittedSeq listener may send, which pumps again
+		// while this loop is mid-flight. Without the guard both invocations emit
+		// the same pending head (double-send + a corrupted byte ledger).
 		if (this.#pumping) return;
 		this.#pumping = true;
+		const socket = pair.socket;
 		let progressed = false;
+		let blocked = false;
 		try {
-			while (this.#pendingHead < this.#pending.length && (controller.desiredSize ?? 0) > 0) {
+			while (this.#pendingHead < this.#pending.length) {
+				// A closing socket ends the pair through its close event; the item
+				// stays queued for the next pair.
+				if (socket.readyState !== WebSocket.OPEN) break;
+				// Never hand the socket more while it holds a high-water backlog: the
+				// envelope waits in the bounded queue instead of growing the socket buffer.
+				if (socket.bufferedAmount > CALLBACK_WS_SEND_HIGH_WATER_BYTES) {
+					blocked = true;
+					break;
+				}
 				const item = this.#pending[this.#pendingHead]!;
-				const emitted = this.#emit(pair, item);
-				const line = encodeNdjsonLine(emitted);
-				const bytes = this.#enc.encode(line);
-				pair.upBytes += bytes.byteLength;
-				controller.enqueue(bytes);
-				this.#pendingHead++;
+				// The wire size is exact before anything is committed: framing (a few
+				// hundred bytes) plus the payload length known since enqueue.
+				const seq = this.#seqHigh + 1;
+				const { head, tail } = envelopeFraming({
+					version: OMP_CALLBACK_PROTO,
+					workspaceId: this.#workspaceId,
+					generation: this.#generation,
+					connectionId: pair.connectionId,
+					streamId: item.streamId,
+					seq,
+					kind: item.kind,
+					at: Date.now(),
+				});
+				const wireBytes =
+					Buffer.byteLength(head, "utf8") + item.payloadBytes + Buffer.byteLength(tail, "utf8");
+				// Out of credit: wait for the fleet's next grant (it calls #pump). No
+				// timer, and no seq is consumed.
+				if (pair.sentBytes - pair.grantedBytes + wireBytes > PAIR_CREDIT_WINDOW_BYTES) break;
+				this.#seqHigh = seq;
+				pair.seq = seq;
+				try {
+					socket.send(head + item.payloadJson + tail);
+				} catch (cause) {
+					this.#finishPair(pair, {
+						kind: "failure",
+						error: callbackError("retryable", "callback socket send failed", {
+							detail: errMsg(cause),
+							cause,
+						}),
+					});
+					break;
+				}
+				pair.sentBytes += wireBytes;
+				// Release the consumed slot: its payload JSON would otherwise live until the
+				// deque compacts (1024 consumed items), megabytes per large history frame.
+				this.#pending[this.#pendingHead++] = undefined;
 				this.#pendingBytes -= item.bytes;
 				const left = (this.#streamBytes.get(item.streamId) ?? 0) - item.bytes;
 				if (left > 0) this.#streamBytes.set(item.streamId, left);
@@ -1165,7 +1021,7 @@ export class FleetCallback {
 				// The wire seq is now exact; surface it to ring keepers.
 				if (item.onEmittedSeq !== undefined) {
 					try {
-						item.onEmittedSeq(emitted.seq);
+						item.onEmittedSeq(pair.seq);
 					} catch {
 						// Listener failures never break the transport.
 					}
@@ -1176,24 +1032,21 @@ export class FleetCallback {
 		}
 		// Snapshot: a listener that re-registers must wait for the next drain, not run again now.
 		if (progressed) for (const listener of Array.from(this.#drainListeners)) listener();
-		// Lifetime up-leg budget (see UP_RENEWAL_BYTES): renew once the up half has
-		// carried its share, whether or not a backlog is queued. Waiting for a
-		// drained moment would let a sustained burst run straight through the
-		// fleet's body cap; unsent items stay in the session queue and go out on
-		// the fresh pair. The renewal itself is graceful (#drainUp): the body
-		// closes after every queued byte and teardown waits for the fleet's
-		// end-of-up answer, so no envelope is stranded behind the abort.
-		if (this.#upRenewalBytes > 0 && pair.upBytes >= this.#upRenewalBytes) {
-			this.#finishPair(pair, { kind: "renewal" });
-		}
 		// Compact the deque occasionally so shift-by-index never degrades.
 		if (this.#pendingHead > 1024 && this.#pendingHead * 2 > this.#pending.length) {
 			this.#pending = this.#pending.slice(this.#pendingHead);
 			this.#pendingHead = 0;
 		}
+		// The client socket has no drain event: poll the buffer until it clears.
+		if (blocked && pair.sendTimer === null && pair.open) {
+			pair.sendTimer = setTimeout(() => {
+				pair.sendTimer = null;
+				this.#pump();
+			}, SEND_RECHECK_MS);
+		}
 		// A backlog that never drains while the pair is live means the fleet
 		// stopped reading: after a silence window with NO progress the pair is
-		// replaced. Progress (the fleet drained at least one envelope) rolls
+		// replaced. Progress (the socket took at least one envelope) rolls
 		// the window so a slow-but-live reader is not replaced; while
 		// connecting/reconnecting a backlog is expected (it replays on the
 		// fresh pair), so no stall fires then.
@@ -1208,7 +1061,9 @@ export class FleetCallback {
 		}
 	}
 
-	#enqueue(item: Omit<PendingItem, "bytes">): CallbackSendResult {
+	#enqueue(
+		item: Omit<PendingItem, "bytes" | "payloadJson" | "payloadBytes"> & { payload: unknown },
+	): CallbackSendResult {
 		const pair = this.#pair;
 		// While no pair is live (initial dial / mid-reconnect) the send is held
 		// for the fresh pair. UUIDs are fixed-width (36 chars), so validating
@@ -1226,10 +1081,16 @@ export class FleetCallback {
 			payload: item.payload,
 			at: Date.now(),
 		};
+		let encoded: PreEncodedPayload;
 		let bytes: number;
 		try {
-			const json = JSON.stringify(candidate);
-			bytes = Buffer.byteLength(json, "utf8");
+			// The payload is serialized at most once (never when the sender shares a
+			// PreEncodedPayload), and the envelope's canonical size is the framing
+			// around it plus the payload bytes: no whole-envelope stringify.
+			encoded =
+				item.payload instanceof PreEncodedPayload ? item.payload : preEncodePayload(item.payload);
+			const { head, tail } = envelopeFraming(candidate);
+			bytes = Buffer.byteLength(head, "utf8") + encoded.bytes + Buffer.byteLength(tail, "utf8");
 			validateEnvelope(candidate, { maxBytes: this.#maxEnvelopeBytes, bytes });
 		} catch (cause) {
 			if (item.internal) return "rejected"; // transport keepalive cannot be invalid
@@ -1257,79 +1118,95 @@ export class FleetCallback {
 			}
 			return "dropped";
 		}
-		this.#pending.push({ ...item, bytes });
+		this.#pending.push({
+			streamId: item.streamId,
+			kind: item.kind,
+			payloadJson: encoded.json,
+			payloadBytes: encoded.bytes,
+			bytes,
+			internal: item.internal,
+			...(item.onEmittedSeq !== undefined ? { onEmittedSeq: item.onEmittedSeq } : {}),
+		});
 		this.#pendingBytes += bytes;
 		this.#streamBytes.set(item.streamId, streamBytes + bytes);
 		this.#pump();
 		return "sent";
 	}
 
-	#emit(pair: PairHandle, item: PendingItem): CallbackEnvelope {
-		pair.seq = ++this.#seqHigh;
-		return {
-			version: OMP_CALLBACK_PROTO,
-			workspaceId: this.#workspaceId,
-			generation: this.#generation,
-			connectionId: pair.connectionId,
-			streamId: item.streamId,
-			seq: pair.seq,
-			kind: item.kind,
-			payload: item.payload,
-			at: Date.now(),
-		};
-	}
+	// ── inbound ───────────────────────────────────────────────────────────────
 
-	// ── down half: SSE reader ─────────────────────────────────────────────────
-
-	async #consumeDown(pair: PairHandle, res: Response): Promise<void> {
-		// Chunked commands in flight on this down stream, keyed by chunkId.
-		const pending = new Map<string, CallbackEnvelope[]>();
+	/** One message from the fleet: validate, then liveness, chunk reassembly, readiness, routing. */
+	#onMessage(pair: PairHandle, data: unknown): void {
+		if (!this.#isCurrent(pair)) return;
+		let envelope: CallbackEnvelope;
 		try {
-			const onRecordError = (error: CallbackError): void =>
-				this.#events?.onError?.(error, { phase: "down" });
-			for await (const envelope of parseSseEnvelope(res.body!, { onRecordError })) {
-				if (!this.#isCurrent(pair)) return;
-				this.#resetSilence(pair);
-				if (envelope.connectionId !== pair.connectionId) {
-					this.#finishPair(pair, {
-						kind: "failure",
-						error: callbackError("conflict", "callback down envelope has a foreign connectionId", {
-							detail: `stream ${envelope.connectionId}, expected ${pair.connectionId}`,
-						}),
-					});
-					return;
-				}
-				if (envelope.kind === "control" && isChunkPayload(envelope.payload)) {
-					const command = this.#reassembleDown(pending, envelope, envelope.payload);
-					if (command !== undefined) this.#deliverDown(pair, command);
-					continue;
-				}
-				this.#deliverDown(pair, envelope);
-			}
-			if (this.#isCurrent(pair)) {
-				this.#finishPair(pair, {
-					kind: "failure",
-					error: callbackError("retryable", "callback down stream ended", {
-						detail: "the fleet closed the down stream",
-					}),
+			if (typeof data !== "string") {
+				throw callbackError("invalid_request", "callback binary message dropped", {
+					detail: "pair messages are text envelopes",
 				});
 			}
+			envelope = decodeEnvelope(data, Buffer.byteLength(data, "utf8"));
 		} catch (cause) {
-			if (!this.#isCurrent(pair)) return;
+			this.#badMessages++;
+			this.#events?.onError?.(
+				cause instanceof CallbackError
+					? cause
+					: callbackError("invalid_request", "invalid callback message", { cause }),
+				{ phase: "receive" },
+			);
+			return;
+		}
+		this.#resetSilence(pair);
+		if (envelope.connectionId !== pair.connectionId) {
 			this.#finishPair(pair, {
 				kind: "failure",
-				error:
-					cause instanceof CallbackError
-						? cause
-						: callbackError("retryable", "callback down stream failed", { cause }),
+				error: callbackError("conflict", "callback envelope has a foreign connectionId", {
+					detail: `message ${envelope.connectionId}, expected ${pair.connectionId}`,
+				}),
 			});
+			return;
 		}
+		if (envelope.kind === "control" && isChunkPayload(envelope.payload)) {
+			const command = this.#reassemble(pair.chunks, envelope, envelope.payload);
+			if (command !== undefined) this.#deliver(pair, command);
+			return;
+		}
+		this.#deliver(pair, envelope);
 	}
 
-	/** Hand one validated down envelope to the session: readiness, liveness, control, raw frames. */
-	#deliverDown(pair: PairHandle, envelope: CallbackEnvelope): void {
+	/** The socket closed: a refusal close is typed, anything else is a retryable loss (an orderly drain close is no loss). */
+	#onClose(pair: PairHandle, event: CloseEvent): void {
+		pair.closed.resolve();
+		if (!this.#isCurrent(pair)) return;
+		if (this.#draining) {
+			this.#finishPair(pair, { kind: "drained" });
+			return;
+		}
+		const refusal = callbackErrorFromClose(event.code, event.reason);
+		this.#finishPair(pair, {
+			kind: "failure",
+			error:
+				refusal ??
+				callbackError("retryable", "callback socket closed", {
+					detail: [`close ${event.code}`, event.reason, pair.socketError]
+						.filter((part) => part !== undefined && part !== "")
+						.join(": "),
+				}),
+		});
+	}
+
+	/** Hand one validated envelope to the session: readiness, liveness, control, raw frames. */
+	#deliver(pair: PairHandle, envelope: CallbackEnvelope): void {
 		if (envelope.kind === "control" && isPairReadyEnvelope(envelope)) {
-			this.#markReady(pair, envelope);
+			this.#markReady(pair);
+			return; // transport control, not user traffic
+		}
+		if (
+			envelope.kind === "control" &&
+			envelope.streamId === CALLBACK_TRANSPORT_STREAM_ID &&
+			isPairCreditControl(envelope.payload)
+		) {
+			this.#grant(pair, envelope.payload.consumed);
 			return; // transport control, not user traffic
 		}
 		if (envelope.kind === "heartbeat") return; // liveness only
@@ -1356,11 +1233,23 @@ export class FleetCallback {
 	}
 
 	/**
+	 * The fleet consumed `consumed` bytes of this pair's uploads (cumulative).
+	 * A stale value changes nothing; one above what was sent is clamped (the
+	 * fleet cannot have consumed more than arrived). New credit wakes the pump.
+	 */
+	#grant(pair: PairHandle, consumed: number): void {
+		const granted = Math.min(consumed, pair.sentBytes);
+		if (granted <= pair.grantedBytes) return;
+		pair.grantedBytes = granted;
+		this.#pump();
+	}
+
+	/**
 	 * Collect one slice of a chunked command. Returns the rebuilt command once
 	 * every slice of its chunkId has arrived. A group that fails to reassemble
 	 * is reported and dropped; the pair stays up.
 	 */
-	#reassembleDown(
+	#reassemble(
 		pending: Map<string, CallbackEnvelope[]>,
 		slice: CallbackEnvelope,
 		chunk: ChunkEnvelopePayload,
@@ -1379,18 +1268,37 @@ export class FleetCallback {
 				cause instanceof CallbackError
 					? cause
 					: callbackError("invalid_request", "chunked command failed to reassemble", { cause }),
-				{ phase: "down" },
+				{ phase: "receive" },
 			);
 			return undefined;
 		}
 	}
 
-	#markReady(pair: PairHandle, envelope: CallbackEnvelope): void {
+	/**
+	 * The fleet's pair_ready arrived: the pair becomes the live ready pair in
+	 * this very message. A command the fleet wrote right behind pair_ready may
+	 * already sit in the same socket read, so readiness (state, pairLive, the
+	 * backlog) cannot wait for the supervisor's promise continuations.
+	 */
+	#markReady(pair: PairHandle): void {
 		if (pair.readyArrived) return;
 		pair.readyArrived = true;
+		this.#state = "ready";
+		this.#readyAt = Date.now();
+		this.#readyCount++;
+		this.#armHeartbeat(pair);
 		pair.readyWaiter.resolve();
-		// The backlog held for this pair (see #pump) starts flowing now.
+		if (!this.#everReady) {
+			this.#everReady = true;
+			const start = this.#startDeferred;
+			this.#startDeferred = null;
+			start?.resolve();
+		}
+		// The backlog held for this pair (see #pump) starts flowing now; a backlog
+		// left over starts its drain clock there: if the fleet never reads, the
+		// stall fires after the silence window and the pair is replaced.
 		this.#pump();
+		this.#emitStatus();
 	}
 
 	// ── timers ────────────────────────────────────────────────────────────────
@@ -1415,7 +1323,7 @@ export class FleetCallback {
 			if (!this.#isCurrent(pair)) return;
 			this.#finishPair(pair, {
 				kind: "failure",
-				error: callbackError("retryable", "callback down stream silent", {
+				error: callbackError("retryable", "callback socket silent", {
 					detail: `no envelope for ${this.#silenceMs}ms`,
 				}),
 			});
@@ -1436,7 +1344,7 @@ export class FleetCallback {
 			if (!this.#isCurrent(pair)) return;
 			this.#finishPair(pair, {
 				kind: "failure",
-				error: callbackError("retryable", "callback up stalled", {
+				error: callbackError("retryable", "callback send stalled", {
 					detail: `outbound backlog did not drain within ${this.#silenceMs}ms`,
 				}),
 			});
@@ -1460,6 +1368,10 @@ export class FleetCallback {
 			clearInterval(pair.heartbeatTimer);
 			pair.heartbeatTimer = null;
 		}
+		if (pair.sendTimer !== null) {
+			clearTimeout(pair.sendTimer);
+			pair.sendTimer = null;
+		}
 		this.#clearSilence(pair);
 		this.#clearStall(pair);
 	}
@@ -1467,7 +1379,7 @@ export class FleetCallback {
 	// ── pair teardown / finish ────────────────────────────────────────────────
 
 	#isCurrent(pair: PairHandle): boolean {
-		return pair.open && this.#pair === pair && !this.#stopped;
+		return pair.open && !this.#stopped && this.#pair === pair;
 	}
 
 	#finishPair(pair: PairHandle, end: PairEnd): void {
@@ -1478,22 +1390,14 @@ export class FleetCallback {
 	#teardownPair(pair: PairHandle): void {
 		if (!pair.open) return;
 		pair.open = false;
-		if (this.#pair === pair) {
-			this.#pair = null;
-			this.#upController = null;
-		}
+		if (this.#pair === pair) this.#pair = null;
 		this.#clearPairTimers(pair);
 		// Idempotent: end may already be settled (finishPair ran first).
 		pair.end.resolve({ kind: "stopped" });
 		try {
-			pair.upAbort.abort();
+			pair.socket.terminate();
 		} catch {
-			// Ignore; already aborted.
-		}
-		try {
-			pair.downAbort.abort();
-		} catch {
-			// Ignore; already aborted.
+			// Already closed.
 		}
 	}
 
@@ -1531,7 +1435,7 @@ export class FleetCallback {
 	// ── status / errors ───────────────────────────────────────────────────────
 
 	#reportError(
-		phase: "send" | "up" | "down" | "pair",
+		phase: FleetCallbackErrorContext["phase"],
 		error: CallbackError,
 		item?: { streamId?: string; kind?: CallbackKind },
 	): void {
@@ -1544,10 +1448,10 @@ export class FleetCallback {
 				// Listener failures never break the transport.
 			}
 		}
-		if (error.code === "unauthorized" || error.code === "generation_obsolete") this.#refuse(error);
+		if (TERMINAL_REFUSALS[error.code] === true) this.#refuse(error);
 	}
 
-	/** Terminal fleet refusal (credential rejected or superseded): stop for good, no re-dial. */
+	/** Terminal fleet refusal (credential rejected or superseded, protocol unsupported): stop for good, no re-dial. */
 	#refuse(error: CallbackError): void {
 		if (this.#stopped) return;
 		this.stop();

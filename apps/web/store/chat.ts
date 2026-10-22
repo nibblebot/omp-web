@@ -8,7 +8,7 @@ import type {
 	QueuedMessageRef,
 	WireSessionEvent,
 } from "#lib/wire/protocol";
-import { scanImages } from "../text/images";
+import { extractText, scanImages } from "#lib/wire/tool-result";
 import { promptTimestamp } from "../chat/turn-usage";
 import { smoothStreaming } from "../chat/display-prefs";
 import type { UsageLike } from "../usage/usage";
@@ -18,6 +18,7 @@ import {
 	type BashResultLike,
 	type Block,
 	type ChatItem,
+	type ToolItem,
 	type CompactionItem,
 	type PromptInsert,
 } from "../state";
@@ -99,31 +100,6 @@ export function argsSummary(args: unknown): string {
 
 export function capTail(s: string, max: number): string {
 	return s.length > max ? s.slice(-max) : s;
-}
-
-export function extractText(value: unknown): string {
-	if (value && typeof value === "object" && "content" in value && Array.isArray(value.content)) {
-		const parts: string[] = [];
-		for (const c of value.content) {
-			if (
-				c &&
-				typeof c === "object" &&
-				"type" in c &&
-				c.type === "text" &&
-				"text" in c &&
-				typeof c.text === "string"
-			) {
-				parts.push(c.text);
-			}
-		}
-		return parts.join("\n");
-	}
-	if (value == null) return "";
-	try {
-		return JSON.stringify(value, null, 2) ?? "";
-	} catch {
-		return String(value);
-	}
 }
 
 type UserContent = Extract<AgentMessage, { role: "user" }>["content"];
@@ -302,6 +278,7 @@ const pendingDeltas = new Map<number, { kind: Block["kind"]; text: string }>();
 /** Drop all buffered token deltas (history rebuild / session reset). */
 export function clearPendingDeltas(): void {
 	pendingDeltas.clear();
+	pendingToolUpdates.clear();
 }
 
 // Phase 1: SSE-frame text writes share the same rAF flush, coalescing N
@@ -311,9 +288,14 @@ export function clearPendingDeltas(): void {
 // ONLY text/chunk appends and running-status text updates are buffered here;
 // state transitions (tool_execution_end, resolveBashItem, call_result, stream
 // close) stay synchronous and drain the matching key first so output is never
-// lost or reordered. Tool partials REPLACE the card's output (last frame
-// wins); bash/python chunks and btw deltas APPEND (frames coalesce).
-const pendingToolUpdates = new Map<string, { output: string; images: ImageArg[] }>();
+// lost or reordered. A tool partial either REPLACES the card's output (a
+// snapshot) or APPENDS to it (`append` frames); a snapshot buffered before an
+// append keeps the pair a snapshot. Bash/python chunks and btw deltas APPEND
+// (frames coalesce).
+const pendingToolUpdates = new Map<
+	string,
+	{ output: string; append: boolean; images: ImageArg[] | undefined }
+>();
 const pendingBashChunks = new Map<number, string>();
 export const pendingEphemeral = new Map<number, string>();
 let rafId = 0;
@@ -374,9 +356,8 @@ function flushDeltas(): void {
 				for (const [toolCallId, update] of pendingToolUpdates) {
 					const item =
 						items[items.findIndex((it) => it.kind === "tool" && it.toolCallId === toolCallId)];
-					if (item?.kind !== "tool") continue;
-					item.output = capTail(update.output, 8000);
-					if (update.images.length > 0) item.images = update.images;
+					if (item?.kind !== "tool" || item.status !== "running") continue;
+					applyToolUpdate(item, update);
 				}
 			}),
 		);
@@ -440,6 +421,15 @@ function bumpLiveRev(): void {
 	setState("live", "rev", (rev) => rev + 1);
 }
 
+/** Apply a buffered tool partial to its card: replace the output, or append to it. */
+function applyToolUpdate(
+	item: ToolItem,
+	update: { output: string; append: boolean; images: ImageArg[] | undefined },
+): void {
+	item.output = capTail(update.append ? item.output + update.output : update.output, 8000);
+	if (update.images !== undefined) item.images = update.images;
+}
+
 /** Apply a buffered tool partial for one card synchronously (drain on
  *  tool_execution_end so the authoritative final result replaces ALL partial
  *  text; a late flush must never clobber the settled output). */
@@ -452,8 +442,7 @@ function drainToolUpdate(toolCallId: string, index: number): void {
 		produce((items) => {
 			const item = items[index];
 			if (item?.kind !== "tool") return;
-			item.output = capTail(update.output, 8000);
-			if (update.images.length > 0) item.images = update.images;
+			applyToolUpdate(item, update);
 		}),
 	);
 }
@@ -560,11 +549,11 @@ export function applyEvent(e: WireSessionEvent): void {
 			// finding #P1: turn ended (streamed text itself is never announced).
 			announceIfReady("agent finished");
 			// Phase 11: desktop notification while the tab is hidden (OSC parity).
-			if (turnCompleted(e.messages))
+			if (turnCompleted(e.lastAssistant))
 				notifyDesktop("completion", "Turn complete", truncateHead(lastAssistantText(), 80));
 			// Error notification mirrors SDK sendErrorNotification: fired at agent_end, not from the error notice.
 			{
-				const failure = turnFailure(e.messages, {
+				const failure = turnFailure(e.lastAssistant, {
 					terminal: e.isTerminal !== false,
 					retryPending: state.retryInfo !== null,
 				});
@@ -678,12 +667,18 @@ export function applyEvent(e: WireSessionEvent): void {
 			const index = findToolIndex(e.toolCallId);
 			if (index >= 0) {
 				// Running-tool partial text: coalesced by toolCallId into the
-				// rAF flush (last partial wins, since tool output is replaced, not
-				// appended). tool_execution_end drains this key first.
-				pendingToolUpdates.set(e.toolCallId, {
-					output: tabsToSpaces(extractText(e.partialResult)),
-					images: scanImages(e.partialResult),
-				});
+				// rAF flush. A snapshot replaces what is buffered; an append
+				// extends it (only the tail the card keeps is buffered).
+				// tool_execution_end drains this key first.
+				const output = tabsToSpaces(e.output);
+				const images = e.images !== undefined && e.images.length > 0 ? e.images : undefined;
+				const pending = pendingToolUpdates.get(e.toolCallId);
+				if (e.append === true && pending !== undefined) {
+					pending.output = capTail(pending.output + output, 8000);
+					if (images !== undefined) pending.images = images;
+				} else {
+					pendingToolUpdates.set(e.toolCallId, { output, append: e.append === true, images });
+				}
 				scheduleFlush();
 			}
 			break;

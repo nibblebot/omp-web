@@ -10,8 +10,10 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { CALLBACK_CONTROL_STREAM_ID, type CallbackEnvelope } from "#lib/wire/callback-protocol";
-import { SSE_DELTA_SEQ_START } from "#lib/wire/protocol";
+import { OMP_PROTO, SSE_DELTA_SEQ_START, type ServerFrame } from "#lib/wire/protocol";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
+import { createDaemonControl, type DaemonControl } from "../../session/daemon-control";
+import { FleetCallback } from "../../session/fleet-callback";
 import type { FleetConfig } from "../config";
 import { DaemonTransportRegistry } from "../daemon-transport";
 import { FleetEdge } from "../edge";
@@ -615,6 +617,369 @@ describe("edge pipe session file over the callback pair", () => {
 			);
 			second.abort();
 			expect(await secondFetch).not.toBeInstanceOf(Response);
+		} finally {
+			await rig.close();
+		}
+	});
+});
+
+/** The `i` counter of a test live frame, -1 when absent. */
+function liveIndex(frame: object): number {
+	return "i" in frame && typeof frame.i === "number" ? frame.i : -1;
+}
+
+interface LiveSession {
+	callback: FleetCallback;
+	control: DaemonControl;
+}
+
+describe("edge pipe over one real session pair", () => {
+	/** A real session half: FleetCallback + daemon control, answering every command ok. */
+	function startSession(
+		rig: Rig,
+		daemonId: string,
+		token: string,
+		priming: Record<string, unknown>[] = [
+			{ type: "hello_ok", proto: OMP_PROTO },
+			{ type: "history", messages: [], final: true },
+		],
+	): LiveSession {
+		let control!: DaemonControl;
+		const callback = new FleetCallback(
+			{
+				url: `http://127.0.0.1:${rig.port}`,
+				workspaceId: daemonId,
+				generation: 1,
+				token,
+				allowHttp: true,
+				backoffMinMs: 25,
+				backoffMaxMs: 100,
+			},
+			{
+				onEnvelope: (envelope) => control.handleEnvelope(envelope),
+				onControl: (envelope) => control.handleEnvelope(envelope),
+			},
+		);
+		control = createDaemonControl({
+			handleCommand: async (command) => {
+				const id =
+					typeof command === "object" && command !== null && "id" in command ? command.id : "";
+				return { type: "call_result", id, ok: true };
+			},
+			preparePriming: async () => () => priming,
+			send: (streamId, kind, payload, onEmittedSeq) =>
+				callback.send({
+					streamId,
+					kind,
+					payload,
+					...(onEmittedSeq !== undefined ? { onEmittedSeq } : {}),
+				}),
+			bufferedBytes: (streamId) => callback.bufferedBytes(streamId),
+			onDrain: (listener) => callback.onDrain(listener),
+			pairLive: () => callback.status().state === "ready",
+			onShutdown: () => {},
+		});
+		return { callback, control };
+	}
+
+	test("a long run of live traffic and commands over one pair arrives once and in order: no re-prime, no stream reset, no lost or refused command", async () => {
+		const rig = await startRig();
+		let session: LiveSession | undefined;
+		try {
+			const entry = rig.registry.create({
+				name: "one-pair",
+				cwd: "/one-pair",
+				project: "one-pair",
+				labels: [],
+				status: "connecting",
+			});
+			const token = randomBytes(32).toString("hex");
+			await rig.transport.enrollWorkspace(entry.daemonId, 1, token);
+			const PAD = 8 * 1024;
+			session = startSession(rig, entry.daemonId, token);
+			await session.callback.start();
+			const pairs: Array<string | null> = [];
+			const unsubscribe = rig.transport.onPairChange(entry.daemonId, (status) =>
+				pairs.push(status.paired ? status.connectionId : null),
+			);
+
+			const browser = await openBrowser(rig.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await attach(browser, entry.daemonId, "a1");
+			await browser.waitForFrame((f) => f.type === "history", "priming history");
+
+			// Live traffic and commands interleaved over the one pair (about 1.9 MiB
+			// of frames, the load that used to cross several byte-budget renewals).
+			const FRAMES = 240;
+			const COMMANDS = 60;
+			let sentCommands = 0;
+			for (let i = 0; i < FRAMES; i++) {
+				session.control.mirror({ type: "event", i, pad: "x".repeat(PAD) });
+				if (i % 4 === 0) {
+					await browser.send({ type: "call", id: `c${sentCommands++}`, method: "ping", args: [] });
+				}
+				if (i % 8 === 7) await sleep(2);
+			}
+			expect(sentCommands).toBe(COMMANDS);
+			await browser.waitForFrame(
+				(f) => f.type === "event" && liveIndex(f) === FRAMES - 1,
+				"last live frame",
+				10_000,
+			);
+			await browser.waitForFrame(
+				(f) => f.type === "call_result" && f.id === `c${COMMANDS - 1}`,
+				"last answer",
+				10_000,
+			);
+			unsubscribe();
+
+			expect(session.callback.status().reconnects).toBe(0);
+			expect(session.callback.status().readyCount).toBe(1);
+			// The pair was never unpaired, and the browser stream was neither re-primed nor reset.
+			expect(pairs).not.toContain(null);
+			expect(browser.frames.filter((f) => f.type === "history")).toHaveLength(1);
+			expect(browser.frames.filter((f) => f.type === "hello_ok")).toHaveLength(1);
+			expect(browser.frames.filter((f) => f.type === "stream_reset")).toEqual([]);
+			// Every live frame arrived exactly once and in order.
+			const live = browser.frames.filter((f) => f.type === "event").map(liveIndex);
+			expect(live).toEqual(Array.from({ length: FRAMES }, (_, i) => i));
+			// Every command was answered ok: none refused as "not attached".
+			const answers = browser.frames.filter((f) => f.type === "call_result");
+			expect(answers.map((f) => f.id).sort()).toEqual(
+				Array.from({ length: COMMANDS }, (_, i) => `c${i}`).sort(),
+			);
+			expect(answers.every((f) => f.ok === true)).toBe(true);
+		} finally {
+			session?.callback.stop();
+			await rig.close();
+		}
+	});
+
+	test("priming a history far past the stream budget sends it once: no second attached, no stream reset (g8nh)", async () => {
+		// Every pair has its own socket and connectionId, so the stream is primed
+		// exactly once per pair. A history of 24 x 256 KiB (6 MiB, past the 4 MiB
+		// stream cap) rides one pair under ack pacing; before the one-socket pair,
+		// byte-budget renewals mid-prime reached the fleet as a fresh stream_open
+		// and the session primed the whole history again.
+		const rig = await startRig();
+		let session: LiveSession | undefined;
+		try {
+			const entry = rig.registry.create({
+				name: "big-history",
+				cwd: "/big-history",
+				project: "big-history",
+				labels: [],
+				status: "connecting",
+			});
+			const token = randomBytes(32).toString("hex");
+			await rig.transport.enrollWorkspace(entry.daemonId, 1, token);
+			const CHUNKS = 24;
+			const priming: Record<string, unknown>[] = [
+				{ type: "hello_ok", proto: OMP_PROTO },
+				{ type: "attached", sessionId: "x" },
+				...Array.from({ length: CHUNKS }, (_, i) => ({
+					type: "history",
+					messages: [],
+					chunk: i,
+					final: i === CHUNKS - 1,
+					pad: "h".repeat(256 * 1024),
+				})),
+				{ type: "ready" },
+			];
+			session = startSession(rig, entry.daemonId, token, priming);
+			await session.callback.start();
+
+			const browser = await openBrowser(rig.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await attach(browser, entry.daemonId, "a1");
+			await browser.waitForFrame((f) => f.type === "ready", "end of priming", 20_000);
+			await sleep(300); // real time: a restarted prime would deliver a second copy in this window
+
+			expect(session.callback.status().reconnects).toBe(0);
+			expect(session.callback.status().readyCount).toBe(1);
+			expect(browser.frames.filter((f) => f.type === "hello_ok")).toHaveLength(1);
+			expect(browser.frames.filter((f) => f.type === "attached")).toHaveLength(1);
+			expect(browser.frames.filter((f) => f.type === "stream_reset")).toEqual([]);
+			expect(browser.frames.filter((f) => f.type === "history")).toHaveLength(CHUNKS);
+		} finally {
+			session?.callback.stop();
+			await rig.close();
+		}
+	});
+});
+
+const markerOf = (f: ServerFrame): unknown => (f as unknown as { marker?: unknown }).marker;
+const hostileOf = (f: ServerFrame): unknown => (f as unknown as { hostile?: unknown }).hostile;
+
+describe("edge pipe relays the session's own frame text", () => {
+	/** What the browser receives when the edge re-serializes: the parsed frame plus the stamp, through JSON. */
+	function viaStringify(text: string, stamp: string | null): ServerFrame {
+		const frame = JSON.parse(text) as Record<string, unknown>;
+		return JSON.parse(
+			JSON.stringify(stamp === null ? frame : { ...frame, sessionId: stamp }),
+		) as ServerFrame;
+	}
+
+	/** Every SSE block of the browser's stream carrying a frame, as its data lines. */
+	function dataLinesOf(browser: BrowserSocket): string[][] {
+		return browser.rawText
+			.split("\n\n")
+			.filter((block) => block.startsWith("event: frame\n"))
+			.map((block) => block.split("\n").filter((line) => line.startsWith("data:")));
+	}
+
+	async function attached(rig: Rig, name: string) {
+		const remote = await connectRemote(rig, name);
+		const browser = await openBrowser(rig.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		await attach(browser, remote.daemonId, "a1");
+		const [stream] = await awaitStreams(remote.daemon, 1);
+		return { remote, browser, stream: stream! };
+	}
+
+	test("relayed frames deep-equal what the re-serializing path produced: non-ASCII, with and without a sessionId key, unscoped", async () => {
+		const rig = await startRig();
+		try {
+			const { remote, browser, stream } = await attached(rig, "relay-parity");
+			const cases: Array<{ text: string; stamp: boolean }> = [
+				{
+					text: JSON.stringify({
+						type: "history",
+						messages: [
+							{ role: "user", content: 'é日本 \u{1F600} \u2028 "q" \\ \n tab\t', timestamp: 1 },
+						],
+						final: true,
+					}),
+					stamp: true,
+				},
+				{
+					text: '{"type":"event","event":{"type":"notice","level":"info","message":"no id"}}',
+					stamp: true,
+				},
+				{
+					text: '{"type":"event","sessionId":"spoofed","event":{"type":"notice","level":"info","message":"has id"}}',
+					stamp: true,
+				},
+				{ text: '{"type": "state" , "state": {"x": [1, 2.5, null, true]}}', stamp: true },
+				{ text: '{"type":"attached","sessionId":"s1"}', stamp: true },
+				{ text: '{"type":"ready","marker":"unscoped"}', stamp: false },
+				{ text: "{}", stamp: false },
+			];
+			for (const { text } of cases) remote.daemon.sendRaw(stream, "frame", text);
+			remote.daemon.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
+			await browser.waitForFrame((f) => markerOf(f) === "done", "last relayed frame");
+			const received = browser.frames.filter(
+				(f) => f.type !== "roster" && f.type !== "attach_result" && markerOf(f) !== "done",
+			);
+			// The browser also saw priming (roster, daemons); compare only the relayed frames.
+			const relayed = received.slice(-cases.length);
+			expect(relayed).toEqual(
+				cases.map(({ text, stamp }) => viaStringify(text, stamp ? remote.daemonId : null)),
+			);
+			expect(relayed[2]).toMatchObject({ sessionId: remote.daemonId });
+		} finally {
+			await rig.close();
+		}
+	});
+
+	test("an id-keyed answer in padded-but-single-line JSON reaches only its origin browser, stamped, equal to the re-serialized frame", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "relay-answer");
+			const a = await openBrowser(rig.port);
+			await a.waitForFrame((f) => f.type === "roster", "roster A");
+			await attach(a, remote.daemonId, "a1");
+			const [streamA] = await awaitStreams(remote.daemon, 1);
+			const b = await openBrowser(rig.port);
+			await b.waitForFrame((f) => f.type === "roster", "roster B");
+			await attach(b, remote.daemonId, "b1");
+			const [, streamB] = await awaitStreams(remote.daemon, 2);
+			await a.send({ type: "call", id: "c9", method: "prompt", args: ["x"] });
+			await awaitCommand(remote.daemon, "c9");
+			const text = '{"type": "call_result", "id": "c9", "ok": true, "data": "é日本"}';
+			remote.daemon.sendRaw(streamA!, "frame", text);
+			remote.daemon.sendRaw(streamB!, "frame", text);
+			const answer = await a.waitForFrame(
+				(f) => f.type === "call_result" && f.id === "c9",
+				"answer",
+			);
+			await sleep(300);
+			expect(answer).toEqual(viaStringify(text, remote.daemonId));
+			expect(a.frames.filter((f) => f.type === "call_result")).toHaveLength(1);
+			expect(b.frames.filter((f) => f.type === "call_result")).toHaveLength(0);
+		} finally {
+			await rig.close();
+		}
+	});
+
+	test("a frame with a raw newline between tokens, or non-canonical framing, arrives intact as one single-line SSE event", async () => {
+		const rig = await startRig();
+		try {
+			const { remote, browser, stream } = await attached(rig, "relay-newline");
+			const pretty =
+				'{\n  "type": "event",\r\n  "event": {"type":"notice","level":"info","message":"nl é"}\n}';
+			remote.daemon.sendRaw(stream, "frame", pretty);
+			remote.daemon.sendRaw(
+				stream,
+				"frame",
+				'{"type":"event","event":{"type":"notice","level":"info","message":"padded"}}',
+				{ padded: true },
+			);
+			remote.daemon.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
+			await browser.waitForFrame((f) => markerOf(f) === "done", "last frame");
+			expect(browser.frames.find((f) => f.type === "event" && eventMessage(f) === "nl é")).toEqual(
+				viaStringify(pretty, remote.daemonId),
+			);
+			expect(
+				browser.frames.find((f) => f.type === "event" && eventMessage(f) === "padded"),
+			).toMatchObject({ sessionId: remote.daemonId });
+			// Each frame is one SSE block with exactly one data line; no raw CR or LF split it.
+			for (const lines of dataLinesOf(browser)) expect(lines).toHaveLength(1);
+			expect(browser.rawText).not.toContain("\r");
+		} finally {
+			await rig.close();
+		}
+	});
+
+	test("duplicate-key frames are handled by their parsed (last-wins) type, exactly what the browser parses", async () => {
+		const rig = await startRig();
+		try {
+			const { remote, browser, stream } = await attached(rig, "relay-hostile");
+			// Parses as `daemons`: tapped and never forwarded, whatever the first `type` says.
+			remote.daemon.sendRaw(
+				stream,
+				"frame",
+				'{"type":"history","messages":[],"final":true,"hostile":"HOSTILE-ONE","type":"daemons","daemons":[]}',
+			);
+			// Parses as `history`: forwarded and stamped, whatever the first `type` says.
+			remote.daemon.sendRaw(
+				stream,
+				"frame",
+				'{"type":"daemons","daemons":[],"type":"history","messages":[],"final":true,"hostile":"HOSTILE-TWO"}',
+			);
+			// Parses as the unscoped `ready`: forwarded WITHOUT a stamp.
+			remote.daemon.sendRaw(
+				stream,
+				"frame",
+				'{"type":"state","state":{},"type":"ready","hostile":"HOSTILE-THREE"}',
+			);
+			// Parses as `daemon_activity`: stripped like a broker roster.
+			remote.daemon.sendRaw(
+				stream,
+				"frame",
+				'{"type":"ready","type":"daemon_activity","hostile":"HOSTILE-FOUR"}',
+			);
+			remote.daemon.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
+			await browser.waitForFrame((f) => markerOf(f) === "done", "last frame");
+			const hostile = browser.frames.filter((f) => typeof hostileOf(f) === "string");
+			expect(hostile.map((f) => hostileOf(f))).toEqual(["HOSTILE-TWO", "HOSTILE-THREE"]);
+			expect(hostile[0]).toMatchObject({ type: "history", sessionId: remote.daemonId });
+			expect(hostile[1]).toMatchObject({ type: "ready" });
+			expect(hostile[1]).not.toHaveProperty("sessionId");
+			// The session's own text went out (duplicate keys intact), not a re-serialization.
+			expect(browser.rawText).toContain('"type":"daemons","daemons":[],"type":"history"');
+			expect(browser.rawText).not.toContain("HOSTILE-ONE");
+			expect(browser.rawText).not.toContain("HOSTILE-FOUR");
 		} finally {
 			await rig.close();
 		}

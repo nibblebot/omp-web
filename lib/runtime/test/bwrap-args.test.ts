@@ -435,7 +435,7 @@ describe("buildBwrapArgv", () => {
 			runtimeEntry: "/usr/bin/bun",
 			denyRoots: syntheticDenyRoots(),
 			env: {
-				OMP_SESSION_CALLBACK_URL: "https://fleet.example/callback/up",
+				OMP_SESSION_CALLBACK_URL: "https://fleet.example/cb",
 				OMP_SESSION_CALLBACK_WORKSPACE: "d1",
 				OMP_SESSION_CALLBACK_GENERATION: "3",
 				OMP_SESSION_CALLBACK_TOKEN: "secret-256-bit-enrollment",

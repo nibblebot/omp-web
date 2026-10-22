@@ -12,7 +12,7 @@ import type { DaemonEntry, DaemonInfo, ServerFrame } from "#lib/wire/protocol";
 import { parseSseUnits } from "#lib/wire/sse";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { EdgeEvictionHooks, FleetEdge } from "../edge";
-import type { DaemonTransportRegistry } from "../daemon-transport";
+import type { DaemonTransportRegistry, FleetSocketData } from "../daemon-transport";
 import type { Registry } from "../registry";
 import type { LifecycleApi } from "../workspace-lifecycle";
 import { SessionWaker } from "../session-waker";
@@ -128,6 +128,8 @@ export async function waitForEvent(
 export class BrowserSocket {
 	readonly frames: ServerFrame[] = [];
 	readonly events: Array<{ id: number; frame: ServerFrame }> = [];
+	/** Every byte of the /events body received so far (decoded text), for wire-shape assertions. */
+	rawText = "";
 	readonly clientId: string;
 	readonly port: number;
 	#abort: AbortController | null = null;
@@ -149,9 +151,18 @@ export class BrowserSocket {
 			signal: abort.signal,
 		});
 		if (!res.ok || !res.body) throw new Error(`browser /events → HTTP ${res.status}`);
+		const [parsed, raw] = res.body.tee();
+		const rawReader = (async () => {
+			const decoder = new TextDecoder();
+			try {
+				for await (const chunk of raw) this.rawText += decoder.decode(chunk, { stream: true });
+			} catch {
+				// Stream dropped/aborted.
+			}
+		})();
 		this.#readerDone = (async () => {
 			try {
-				for await (const unit of parseSseUnits(res.body!)) {
+				for await (const unit of parseSseUnits(parsed)) {
 					if (unit.kind !== "event" || unit.event !== SSE_EVENT_NAME || unit.id === undefined)
 						continue;
 					this.#lastEventId = unit.id;
@@ -162,6 +173,7 @@ export class BrowserSocket {
 			} catch {
 				// Stream dropped/aborted; tests observe via frames + end().
 			}
+			await rawReader;
 		})();
 	}
 
@@ -233,13 +245,16 @@ export function serveEdge(
 	edge: FleetEdge,
 	transport?: DaemonTransportRegistry,
 ): { port: number; stop(): void } {
-	const server = Bun.serve({
+	const server = Bun.serve<FleetSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
-		fetch: async (req) =>
-			(await transport?.handleFetch(req)) ??
-			(await edge.handleFetch(req)) ??
-			new Response("not found", { status: 404 }),
+		fetch: async (req, srv) => {
+			const handled = (await transport?.handleFetch(req, srv)) ?? null;
+			if (handled !== null) return handled;
+			return (await edge.handleFetch(req)) ?? new Response("not found", { status: 404 });
+		},
+		// Without a transport nothing upgrades, so the stand-in handler is never reached.
+		websocket: transport?.websocket ?? { message() {} },
 	});
 	return { port: server.port!, stop: () => server.stop(true) };
 }

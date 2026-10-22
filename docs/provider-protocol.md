@@ -17,7 +17,7 @@ How the fleet runs a clone workspace's session runtime on a compute provider, an
 
 ## Model
 
-A **provider** manages one runtime per workspace: a process or pod that runs `omp-session` against the workspace's checkout and dials the fleet out over the callback pair. The fleet never dials a session. The fleet owns every decision (generations, credentials, desired state, restarts, deletion); a provider answers four lifecycle questions about one workspace and keeps whatever it needs to answer them in the workspace's private `stateDir`.
+A **provider** manages one runtime per workspace: a process or pod that runs `omp-session` against the workspace's checkout and dials the fleet out over the callback pair (one WebSocket to `GET /callback/ws`, plus plain HTTP `POST /callback/bulk/<id>` for bulk transfers). The fleet never dials a session. The fleet owns every decision (generations, credentials, desired state, restarts, deletion); a provider answers four lifecycle questions about one workspace and keeps whatever it needs to answer them in the workspace's private `stateDir`.
 
 A provider **kind** is one entry of `PROVIDER_KINDS` (`bwrap`, `kubernetes`, `host`). A **profile** is one entry of the fleet config's `providerProfiles` map: it names a kind and carries that kind's settings. A clone is bound to a profile when it is created.
 
@@ -251,7 +251,7 @@ No secret ever travels in a request. `secretRefs` maps an environment variable n
 
 `omp-web preflight --profile <id>` runs the fleet's host-generic rows and merges the provider's:
 
-- Fleet rows: `profile-executable` (the executable exists and has an execute bit; for `host`, an always-passing row that says the runtime is in process), `callback-url` (DNS and TCP class check only, nothing written), `durable-workspace-root`, `durable-logs-root`, `profile-secrets` (shape and resolvability per `secretResolution`).
+- Fleet rows: `profile-executable` (the executable exists and has an execute bit; for `host`, an always-passing row that says the runtime is in process), `callback-url` and `callback-ws` (with `OMP_FLEET_CALLBACK_URL` set: a DNS and TCP check, skipped when the session would dial through the `HTTP(S)_PROXY` of the fleet's environment; then a real credential-less WebSocket upgrade to `<url>/callback/ws`, bounded to 5 s with no retry, that passes when the fleet answers with its typed refusal and fails when the upgrade is refused, never answered, or answered by a non-fleet endpoint, such as a proxy or ingress that does not pass the upgrade), `durable-workspace-root`, `durable-logs-root`, `profile-secrets` (shape and resolvability per `secretResolution`).
 - Provider rows, from the executable's `preflight` op: for bwrap the binary, user namespaces, runtime entry and binary, tools and denied binds; for kubernetes the kubectl binary, context, API reachability, namespace, RBAC, StorageClass, Secrets and image. For `host` there is no executable to ask, so the fleet produces `runtime-entry`, `runtime-bin` and `host-isolation` itself.
 - A provider that rejects the op (an older executable answers `invalid_request`), fails to run, or returns no checks yields a failing `provider-preflight` row with remediation, never success. All rows run; the overall result is their AND.
 

@@ -1,5 +1,5 @@
 import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessageEvent, Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, AssistantMessageEvent, Model, ToolExample } from "@oh-my-pi/pi-ai";
 import type { ContextUsage } from "@oh-my-pi/pi-coding-agent";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
@@ -460,8 +460,12 @@ export interface SkillDetail extends SkillSummary {
  *  `roster_delta`, `getToolSchemas`, and a 32 MiB command cap. Removes the
  *  system prompt, tool schemas, and steering/follow-up/interrupt/inspect-image
  *  modes from `state`, the `subagent_event` frame, and uncalled methods
- *  (A27, `annotationUpdate`, `annotationReanchor`); see CHANGELOG.md
- *  "Infra remediation". */
+ *  (A27, `annotationUpdate`, `annotationReanchor`). Session events are
+ *  slimmed (kata ns60, same unreleased 4): `tool_execution_update` carries the
+ *  appended output (`WireToolExecutionUpdate`), `turn_end` is a bare marker,
+ *  `agent_end` carries `lastAssistant` instead of `messages`, and tool-result
+ *  `message_start`/`message_end` are not sent; see CHANGELOG.md
+ *  "Infra remediation" and "Performance and efficiency". */
 export const OMP_PROTO = 4;
 
 // --- SSE framing constants (shared by the daemon and the fleet) ---
@@ -1193,10 +1197,65 @@ export interface WireMessageUpdate {
 	assistantMessageEvent: WireAssistantMessageEvent;
 }
 
-/** SDK session event as shipped in an `event` frame: `message_update` slimmed to a delta. */
+/**
+ * `tool_execution_update` as it crosses the wire: what a running tool's card
+ * shows, not the SDK's partial result. The SDK repeats the whole accumulated
+ * output (and the call's args and details) in every update; here a growing
+ * output rides as the appended text only, and an update that changes nothing
+ * the card shows is not sent. The settled output arrives on `tool_execution_end`;
+ * a late joiner is primed with the accumulated output of every running call.
+ */
+export interface WireToolExecutionUpdate {
+	type: "tool_execution_update";
+	toolCallId: string;
+	toolName: string;
+	/**
+	 * The partial's output text (`extractText` of the SDK partial result). With
+	 * `append` it is only the text added after the call's previous update.
+	 */
+	output: string;
+	/** `output` continues the card's text instead of replacing it. */
+	append?: true;
+	/** Images of the partial result, replacing the card's; omitted while unchanged. */
+	images?: ImageArg[];
+}
+
+/** `turn_end` as it crosses the wire: a bare marker (the assistant message and tool results already went out as their own events). */
+export interface WireTurnEnd {
+	type: "turn_end";
+}
+
+/**
+ * The part of a turn's last assistant message the browser reads at `agent_end`
+ * (desktop completion and error notifications).
+ */
+export type WireTurnOutcome = Partial<Pick<AssistantMessage, "stopReason" | "errorMessage">>;
+
+/**
+ * `agent_end` as it crosses the wire: the run's messages (every message and
+ * tool result of the turn, each already sent as its own event) are replaced by
+ * the last assistant message's outcome.
+ */
+export type WireAgentEnd = Omit<Extract<AgentSessionEvent, { type: "agent_end" }>, "messages"> & {
+	/** Absent when the run produced no assistant message. */
+	lastAssistant?: WireTurnOutcome;
+};
+
+/**
+ * SDK session event as shipped in an `event` frame: `message_update` slimmed to
+ * a delta, `tool_execution_update` to the card's appended text, `turn_end` and
+ * `agent_end` without their repeated messages. Tool-result `message_start` /
+ * `message_end` events are not shipped (`tool_execution_end` carries the result).
+ */
 export type WireSessionEvent =
-	| Exclude<AgentSessionEvent, { type: "message_update" }>
-	| WireMessageUpdate;
+	| Exclude<
+			AgentSessionEvent,
+			{ type: "message_update" | "tool_execution_update" | "turn_end" | "agent_end" }
+	  >
+	| WireMessageUpdate
+	| WireToolExecutionUpdate
+	| WireTurnEnd
+	| WireAgentEnd;
 
 /**
  * Session-scoped frames as the server composes them, before broadcastTo

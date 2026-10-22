@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
+import type { WireSessionEvent } from "#lib/wire/protocol";
 import { setState, state } from "../../state";
 import { applyEvent } from "../../store/chat";
 
@@ -11,14 +11,14 @@ function seedIntentTracing(value: boolean): void {
 	setState("settingsModel", model as never);
 }
 
-function toolStart(args: Record<string, unknown>, intent?: string): AgentSessionEvent {
+function toolStart(args: Record<string, unknown>, intent?: string): WireSessionEvent {
 	return {
 		type: "tool_execution_start",
 		toolCallId: "t1",
 		toolName: "read",
 		args,
 		...(intent === undefined ? {} : { intent }),
-	} as unknown as AgentSessionEvent;
+	} as unknown as WireSessionEvent;
 }
 
 afterEach(() => {

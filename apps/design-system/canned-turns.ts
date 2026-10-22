@@ -70,7 +70,7 @@ export function abortCannedTurn(): void {
 			isError: true,
 		});
 	}
-	applyEvent({ type: "agent_end", messages: [], yielded: true });
+	applyEvent({ type: "agent_end", yielded: true });
 }
 
 function start(prompt: string): void {

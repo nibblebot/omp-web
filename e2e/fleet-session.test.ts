@@ -4,7 +4,7 @@
  * Boots a real fleet (startFleet from apps/fleet/server) on a loopback port
  * with tmp state + config, and spawns real omp-session daemons through the
  * configured spawn templates (bun apps/session/index.ts). Every daemon dials
- * OUT to the fleet's callback pair (/callback/up, /callback/down); the fleet
+ * OUT to the fleet's callback pair (one WebSocket, /callback/ws); the fleet
  * never dials a daemon. The host runtime enrolls each launch (workspaceId ===
  * daemonId, generation bumps per launch, credential on the --fleet-stdin payload,
  * digest persisted in entry.workspace.enrollment),

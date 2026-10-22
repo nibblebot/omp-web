@@ -29,7 +29,11 @@
  */
 import { describe, expect, test, vi } from "bun:test";
 import { createDaemonControl, type DaemonControl, type DaemonControlDeps } from "../daemon-control";
-import type { CallbackEnvelope, CallbackKind } from "#lib/wire/callback-protocol";
+import {
+	PreEncodedPayload,
+	type CallbackEnvelope,
+	type CallbackKind,
+} from "#lib/wire/callback-protocol";
 
 const STREAM = "browser/test-conn";
 
@@ -80,7 +84,11 @@ function makeHarness(
 			seq = ++wireSeq;
 			onEmittedSeq(seq);
 		}
-		if (recordSent) sent.push({ streamId, kind, payload, seq });
+		if (recordSent) {
+			// The broker hands the transport the payload pre-serialized; record what the wire carries.
+			const wire = payload instanceof PreEncodedPayload ? JSON.parse(payload.json) : payload;
+			sent.push({ streamId, kind, payload: wire, seq });
+		}
 		for (const waiter of waiters) if (sent.length >= waiter.count) waiter.resolve();
 		return "sent";
 	};
@@ -108,17 +116,36 @@ function makeHarness(
 	return { control, sent, primes, sentCount };
 }
 
-/** Open the stream (stream_open control) with an optional lastSeq. */
-function openStream(control: DaemonControl, lastSeq?: number): void {
+/** Open the stream (stream_open control) with an optional lastSeq; `ack` asks for the fleet's drain pacing. */
+function openStream(control: DaemonControl, lastSeq?: number, ack = false): void {
 	control.handleEnvelope({
-		version: 1,
+		version: 2,
 		workspaceId: "w1",
 		generation: 1,
 		connectionId: "conn",
 		streamId: STREAM,
 		seq: 0,
 		kind: "control",
-		payload: { type: "stream_open", ...(lastSeq !== undefined ? { lastSeq } : {}) },
+		payload: {
+			type: "stream_open",
+			...(lastSeq !== undefined ? { lastSeq } : {}),
+			...(ack ? { ack: true } : {}),
+		},
+		at: Date.now(),
+	} satisfies CallbackEnvelope);
+}
+
+/** The fleet's stream_ack: every frame up to wire seq `seq` has drained. */
+function ackStream(control: DaemonControl, seq: number): void {
+	control.handleEnvelope({
+		version: 2,
+		workspaceId: "w1",
+		generation: 1,
+		connectionId: "conn",
+		streamId: STREAM,
+		seq: 0,
+		kind: "control",
+		payload: { type: "stream_ack", seq },
 		at: Date.now(),
 	} satisfies CallbackEnvelope);
 }
@@ -247,7 +274,7 @@ describe("daemon-control stream_open replay", () => {
 		const { control, primes } = makeHarness();
 		openStream(control); // prime (1)
 		control.handleEnvelope({
-			version: 1,
+			version: 2,
 			workspaceId: "w1",
 			generation: 1,
 			connectionId: "conn",
@@ -313,7 +340,7 @@ describe("daemon-control stream_open replay", () => {
 describe("daemon-control browser-stream orphan GC (SXP-03)", () => {
 	const open = (control: DaemonControl, streamId: string, connectionId: string): void => {
 		control.handleEnvelope({
-			version: 1,
+			version: 2,
 			workspaceId: "w1",
 			generation: 1,
 			connectionId,
@@ -440,7 +467,7 @@ describe("daemon-control browser-stream count (FLEET-05)", () => {
 		const { control } = makeHarness(undefined, undefined, (count) => counts.push(count));
 		const envelope = (streamId: string, type: "stream_open" | "stream_close"): void =>
 			control.handleEnvelope({
-				version: 1,
+				version: 2,
 				workspaceId: "w1",
 				generation: 1,
 				connectionId: "conn",
@@ -632,5 +659,160 @@ describe("daemon-control paced priming waits on drain (SXP-16)", () => {
 			"attached",
 		]);
 		harness.control.stop();
+	});
+});
+
+describe("daemon-control ack-paced priming (fleet drain credit)", () => {
+	const PAD = 700 * 1024;
+	const FRAMES = 6;
+	const snapshot = (): Record<string, unknown>[] =>
+		Array.from({ length: FRAMES }, (_, i) => ({ type: "history", chunk: i, pad: "x".repeat(PAD) }));
+	/** Let every promise continuation the priming loop has queued run (it awaits only microtasks until it parks). */
+	const settle = async (): Promise<void> => {
+		for (let i = 0; i < 50; i++) await Promise.resolve();
+	};
+	const historySeqs = (sent: Sent[]): number[] =>
+		sent.filter((s) => s.kind === "frame" && typeOf(s.payload) === "history").map((s) => s.seq!);
+
+	test("an acked stream holds the burst to the credit window and releases it per stream_ack", async () => {
+		const { control, sent } = makeHarness(snapshot);
+		openStream(control, undefined, true);
+		await settle();
+		// A frame goes out only while unacknowledged bytes plus one maximal envelope
+		// (1 MiB) fit the 3 MiB window: three 700 KiB frames leave 2100 KiB in flight.
+		expect(historySeqs(sent)).toHaveLength(3);
+		await settle();
+		expect(historySeqs(sent)).toHaveLength(3);
+		// Acking the first frees exactly enough for the next one.
+		ackStream(control, historySeqs(sent)[0]!);
+		await settle();
+		expect(historySeqs(sent)).toHaveLength(4);
+		// A cumulative ack past everything sent lets the rest through.
+		ackStream(control, historySeqs(sent).at(-1)!);
+		await settle();
+		expect(historySeqs(sent)).toHaveLength(FRAMES);
+		control.stop();
+	});
+
+	test("a stream opened without ack is not held by the window (older fleet)", async () => {
+		const { control, sent } = makeHarness(snapshot);
+		openStream(control);
+		await settle();
+		expect(historySeqs(sent)).toHaveLength(FRAMES);
+		control.stop();
+	});
+
+	test("a stale ack releases nothing; a stream_close wakes the parked sender", async () => {
+		const drains = new Set<() => void>();
+		const { control, sent } = makeHarness(
+			snapshot,
+			() => true,
+			undefined,
+			undefined,
+			true,
+			undefined,
+			(listener) => {
+				drains.add(listener);
+				return () => drains.delete(listener);
+			},
+		);
+		openStream(control, undefined, true);
+		await settle();
+		expect(historySeqs(sent)).toHaveLength(3);
+		ackStream(control, 1); // below every sent seq
+		await settle();
+		expect(historySeqs(sent)).toHaveLength(3);
+		expect(drains.size).toBe(1); // the sender is parked on drain
+		control.handleEnvelope({
+			version: 2,
+			workspaceId: "w1",
+			generation: 1,
+			connectionId: "conn",
+			streamId: STREAM,
+			seq: 0,
+			kind: "control",
+			payload: { type: "stream_close" },
+			at: Date.now(),
+		} satisfies CallbackEnvelope);
+		await settle();
+		expect(drains.size).toBe(0); // closing the stream woke it and it gave up
+		expect(historySeqs(sent)).toHaveLength(3);
+		control.stop();
+	});
+});
+
+describe("daemon-control control mirror carries only what the fleet reads", () => {
+	const messageUpdate = (text: string) => ({
+		type: "event",
+		event: {
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text },
+		},
+	});
+	/** `type`, or `event:<event.type>` for an event frame. */
+	const label = (payload: unknown): string => {
+		if (typeof payload === "object" && payload !== null && "event" in payload) {
+			const event = payload.event;
+			if (typeof event === "object" && event !== null && "type" in event) {
+				return `event:${String(event.type)}`;
+			}
+		}
+		return typeOf(payload) ?? "";
+	};
+	const fromTypes = (sent: Sent[], streamId: string): string[] =>
+		sent.filter((s) => s.streamId === streamId && s.kind === "frame").map((s) => label(s.payload));
+
+	test("streaming deltas skip the control stream; every other frame still mirrors", () => {
+		const { control, sent } = makeHarness();
+		control.mirror({ type: "state", state: { isStreaming: true } });
+		control.mirror(messageUpdate("a"));
+		control.mirror({ type: "event", event: { type: "tool_execution_update", toolCallId: "t1" } });
+		control.mirror({ type: "bash_chunk", id: 1, text: "out" });
+		control.mirror({ type: "python_chunk", id: 2, text: "out" });
+		control.mirror({
+			type: "event",
+			event: { type: "message_end", message: { role: "assistant" } },
+		});
+		control.mirror({ type: "event", event: { type: "agent_end" } });
+		control.mirror({ type: "call_result", id: "c1", ok: true });
+		control.mirror({ type: "ui_request", id: "d1" });
+		expect(fromTypes(sent, "control")).toEqual([
+			"state",
+			"event:message_end",
+			"event:agent_end",
+			"call_result",
+			"ui_request",
+		]);
+		control.stop();
+	});
+
+	test("browser streams still get the deltas, ringed with wire seqs, and replay them", () => {
+		const { control, sent } = makeHarness();
+		openStream(control);
+		control.mirror({ type: "state", state: { isStreaming: true } }); // wire 1025
+		control.mirror(messageUpdate("a")); // wire 1026
+		control.mirror(messageUpdate("b")); // wire 1027
+		control.mirror({ type: "bash_chunk", id: 1, text: "out" }); // wire 1028
+		expect(fromTypes(sent, STREAM)).toEqual([
+			"state",
+			"event:message_update",
+			"event:message_update",
+			"bash_chunk",
+		]);
+		expect(ringedSeqs(sent)).toEqual([1025, 1026, 1027, 1028]);
+		expect(fromTypes(sent, "control")).toEqual(["state"]);
+
+		// A reconnect with the floor at the first delta replays the three dropped-from-control
+		// frames from the ring, unchanged, under fresh seqs.
+		const before = sent.length;
+		openStream(control, 1025);
+		const replayed = sent.slice(before).filter((s) => s.kind === "frame");
+		expect(replayed.map((s) => s.payload)).toEqual([
+			messageUpdate("a"),
+			messageUpdate("b"),
+			{ type: "bash_chunk", id: 1, text: "out" },
+		]);
+		expect(control.status().streams[0]!.ringEntries).toBe(4);
+		control.stop();
 	});
 });

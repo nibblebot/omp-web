@@ -63,7 +63,14 @@ anyone with pod `get` permission in the profile namespace, so scope the
 namespace to trusted operators (the same exposure class as a process
 environment). Production deployments need a routable HTTPS callback endpoint
 in front of the fleet, with the fleet's `--trusted-proxy` list admitting the
-gateway. Real same-origin TLS gateway streaming and Kubernetes lifecycle
+gateway. The gateway or ingress must pass the WebSocket upgrade on
+`GET /callback/ws` (HTTP/1.1 upstream, `Upgrade` and `Connection` headers) and
+idle for more than 30 s (the pair heartbeats every 15 s and closes after 30 s
+of silence), and accept `POST /callback/bulk/<id>` bodies up to 64 MiB; see the
+README section "Reverse proxy or ingress in front of the control plane". The
+daemon honors the `HTTP(S)_PROXY` / `NO_PROXY` in its own pod environment itself
+(for the WebSocket too, via `CONNECT`; the fleet does not set them). `OMP_FLEET_CALLBACK_URL=<url> omp-web preflight
+--profile <id>` proves the upgrade passes from the fleet host. Real same-origin TLS gateway streaming and Kubernetes lifecycle
 evidence is pending operator setup, not a shipped claim.
 
 ## Security model notes

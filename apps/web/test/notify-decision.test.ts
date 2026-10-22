@@ -32,59 +32,39 @@ describe("notifyKindEnabled (SDK setting decides per event kind)", () => {
 });
 
 describe("turnCompleted (completion skips errored or aborted turns)", () => {
-	const assistant = (stopReason: string) => ({ role: "assistant", stopReason });
-
 	test("a turn ending in a normal stop counts as complete", () => {
-		expect(turnCompleted([{ role: "user" }, assistant("stop")])).toBe(true);
+		expect(turnCompleted({ stopReason: "stop" })).toBe(true);
 	});
 
 	test("an errored or aborted last assistant message does not count", () => {
-		expect(turnCompleted([assistant("error")])).toBe(false);
-		expect(turnCompleted([{ role: "user" }, assistant("aborted")])).toBe(false);
+		expect(turnCompleted({ stopReason: "error" })).toBe(false);
+		expect(turnCompleted({ stopReason: "aborted" })).toBe(false);
 	});
 
-	test("only the last assistant message decides", () => {
-		expect(turnCompleted([assistant("error"), { role: "user" }, assistant("stop")])).toBe(true);
-	});
-
-	test("missing messages or no assistant message counts as complete", () => {
+	test("a turn with no assistant message counts as complete", () => {
 		expect(turnCompleted(undefined)).toBe(true);
-		expect(turnCompleted([{ role: "user" }])).toBe(true);
 	});
 });
 
 describe("turnFailure (error notification mirrors sendErrorNotification)", () => {
-	const assistant = (stopReason: string, errorMessage?: string) => ({
-		role: "assistant",
-		stopReason,
-		errorMessage,
-	});
-
 	test("a settled turn whose last assistant stopped in error returns its errorMessage", () => {
-		expect(turnFailure([{ role: "user" }, assistant("error", "boom")])).toBe("boom");
+		expect(turnFailure({ stopReason: "error", errorMessage: "boom" })).toBe("boom");
 	});
 
 	test("a missing errorMessage yields an empty body rather than silence", () => {
-		expect(turnFailure([assistant("error")])).toBe("");
+		expect(turnFailure({ stopReason: "error" })).toBe("");
 	});
 
 	test("normal stop, aborted, or no assistant message stays silent", () => {
-		expect(turnFailure([assistant("stop")])).toBeUndefined();
-		expect(turnFailure([assistant("aborted", "x")])).toBeUndefined();
-		expect(turnFailure([{ role: "user" }])).toBeUndefined();
+		expect(turnFailure({ stopReason: "stop" })).toBeUndefined();
+		expect(turnFailure({ stopReason: "aborted", errorMessage: "x" })).toBeUndefined();
 		expect(turnFailure(undefined)).toBeUndefined();
 	});
 
-	test("only the last assistant message decides", () => {
-		expect(
-			turnFailure([assistant("error", "boom"), { role: "user" }, assistant("stop")]),
-		).toBeUndefined();
-	});
-
 	test("non-terminal agent_end or a pending retry stays silent", () => {
-		const messages = [assistant("error", "boom")];
-		expect(turnFailure(messages, { terminal: false })).toBeUndefined();
-		expect(turnFailure(messages, { retryPending: true })).toBeUndefined();
-		expect(turnFailure(messages)).toBe("boom");
+		const last = { stopReason: "error", errorMessage: "boom" } as const;
+		expect(turnFailure(last, { terminal: false })).toBeUndefined();
+		expect(turnFailure(last, { retryPending: true })).toBeUndefined();
+		expect(turnFailure(last)).toBe("boom");
 	});
 });

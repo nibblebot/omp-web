@@ -277,7 +277,8 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		// frames the RPC child emitted onSessionEvent.
 		session.subscribe((event) => {
 			trackStreamingAssistant(entry, event);
-			broadcastTo(entry.handle, { type: "event", event: toWireEvent(event) });
+			const wire = toWireEvent(entry.handle, event);
+			if (wire !== null) broadcastTo(entry.handle, { type: "event", event: wire });
 			// Tokens/cost/context/queue counts all change at turn end.
 			if (event.type === "agent_end") void deps.broker.broadcastState(entry, true).catch(() => {});
 			if (event.type === "agent_end") void drainCommands(entry);

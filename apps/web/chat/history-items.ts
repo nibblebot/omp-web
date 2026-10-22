@@ -3,8 +3,8 @@ import type { ChatItem, ToolItem, ToolStatus } from "../state";
 import { advisorNotesOf } from "../store/slices/advisor";
 import { guestPromptOf } from "../store/slices/collab";
 import { compactionItemOf } from "../store/compaction-view";
-import { assistantBlocks, capTail, extractText, tabsToSpaces, userText } from "../store/chat";
-import { scanImages } from "../text/images";
+import { extractText, scanImages } from "#lib/wire/tool-result";
+import { assistantBlocks, capTail, tabsToSpaces, userText } from "../store/chat";
 import type { UsageLike } from "../usage/usage";
 import { promptTimestamp } from "./turn-usage";
 

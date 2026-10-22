@@ -19,7 +19,7 @@ import type { Server } from "bun";
 import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry } from "../daemon-transport";
+import { DaemonTransportRegistry, type FleetSocketData } from "../daemon-transport";
 import { fanOut, promptEntry, type FanoutDeps } from "../fanout";
 import { Registry, type RegistryEntry } from "../registry";
 import { SessionWaker } from "../session-waker";
@@ -57,12 +57,15 @@ function startFixture(): Fixture {
 	const statePath = `${dir}/state.json`;
 	const registry = new Registry(statePath);
 	const transport = new DaemonTransportRegistry();
-	const server: Server<undefined> = Bun.serve({
+	const server: Server<FleetSocketData> = Bun.serve<FleetSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
 		idleTimeout: 255,
-		fetch: async (req) =>
-			(await transport.handleFetch(req)) ?? new Response("not found", { status: 404 }),
+		fetch: async (req, srv) => {
+			const handled = await transport.handleFetch(req, srv);
+			return handled === null ? new Response("not found", { status: 404 }) : handled;
+		},
+		websocket: transport.websocket,
 	});
 	const url = `http://127.0.0.1:${server.port}`;
 	const config: FleetConfig = {

@@ -12,7 +12,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry } from "../daemon-transport";
+import { DaemonTransportRegistry, type FleetSocketData } from "../daemon-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
 import { Registry } from "../registry";
@@ -82,13 +82,15 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 			transport,
 			fleet: { port: 0, startedAt: Date.now(), statePath, configPath: null, bind: "127.0.0.1" },
 		});
-		const server = Bun.serve({
+		const server = Bun.serve<FleetSocketData>({
 			hostname: "127.0.0.1",
 			port: 0,
-			fetch: async (req) =>
-				(await transport.handleFetch(req)) ??
-				(await edge.handleFetch(req)) ??
-				new Response("not found", { status: 404 }),
+			fetch: async (req, srv) => {
+				const handled = await transport.handleFetch(req, srv);
+				if (handled !== null) return handled;
+				return (await edge.handleFetch(req)) ?? new Response("not found", { status: 404 });
+			},
+			websocket: transport.websocket,
 		});
 		const port = server.port;
 		if (port === undefined) throw new Error("edge test server bound no port");

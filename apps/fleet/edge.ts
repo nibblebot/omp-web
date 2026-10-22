@@ -50,7 +50,15 @@
  *   - Backpressure: a browser stream buffering more than the cap (default
  *     SSE_BACKPRESSURE_BYTES) is terminated (drop-and-resume): the browser
  *     reconnects with Last-Event-ID and the edge replays its ring. One slow
- *     browser never stalls the daemon stream or other browsers.
+ *     browser never stalls the daemon stream or other browsers. A stream
+ *     whose queue stays non-empty with no drain for BROWSER_STALL_MS (a
+ *     browser that stopped reading) is terminated the same way. The daemon's
+ *     priming and history bursts are paced by the browser's drain, not
+ *     counted against the cap: stream_open asks the daemon for ack pacing
+ *     (every proto-2 session honors it), and the edge answers with
+ *     stream_ack controls as the browser's queue drains, so at most
+ *     STREAM_ACK_WINDOW_BYTES of a burst sit in the edge (a slow browser
+ *     slows its own priming; a stuck one is dropped by the stall rule).
  *   - Real-time daemon activity: the daemon's control-stream envelopes are
  *     tapped and derive per-daemon {streaming, blocked} from state /
  *     ui_request / ui_request_end, broadcasting an edge-generated
@@ -102,8 +110,13 @@ import {
 	CALLBACK_BROWSER_STREAM_PREFIX,
 	CALLBACK_CONTROL_STREAM_ID,
 	CallbackError,
+	STREAM_ACK_STEP_BYTES,
 } from "#lib/wire/callback-protocol";
-import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
+import type {
+	CallbackEnvelope,
+	StreamAckControl,
+	StreamOpenControl,
+} from "#lib/wire/callback-protocol";
 import type { FleetConfig } from "./config";
 import { isJsonRequest } from "./browser-guard";
 import { serveStaticUi } from "./static-ui";
@@ -131,6 +144,14 @@ import { listProjectBranches, realpathOf } from "./worktrees";
 
 /** Reclaim grace for a disconnected browser's ring (Last-Event-ID resume window). */
 const CLIENT_RECLAIM_MS = 60_000;
+/**
+ * A browser stream whose queue holds unread bytes and has not drained for this
+ * long has stopped reading and is dropped (resume via Last-Event-ID). Checked
+ * on the keepalive sweep, so the drop lands within one sweep interval after it.
+ */
+export const BROWSER_STALL_MS = 30_000;
+/** Drain checkpoints merge until they span this many queued bytes (bounds the checkpoint list). */
+const CREDIT_GRAIN_BYTES = 32 * 1024;
 
 /** Roster-dropdown listing size: the last N sessions of a daemon's worktree. */
 const DROPDOWN_SESSION_LIMIT = 10;
@@ -270,6 +291,28 @@ const _sessionScopedFrameListExhaustive: Record<
 const SESSION_SCOPED_FRAME_TYPES: Record<string, true> = Object.fromEntries(
 	SESSION_SCOPED_FRAME_LIST.map((type) => [type, true]),
 );
+
+/**
+ * The SSE data text for a relayed session frame, taken from the frame's own
+ * wire text instead of re-serialized, or undefined when the caller must
+ * stringify the parsed frame. The edge decided on JSON.parse(payloadJson); the
+ * browser JSON.parses the text this returns, so both see one value. With
+ * `sessionId`, the stamp `{ ...frame, sessionId }` is spliced in as the last
+ * member (JSON.parse is last-key-wins, so it overrides an existing key, as the
+ * spread does). Only stamped frame types reach the splice, and those carry a
+ * `type` member, so the object is never empty. Declined (undefined) when the text is not a bare
+ * object, or holds a CR or LF: canonical JSON.stringify output never does,
+ * but whitespace between tokens can, and a raw line break would split the SSE
+ * data field.
+ */
+function relayJson(payloadJson: string, sessionId: string | undefined): string | undefined {
+	if (payloadJson.charCodeAt(0) !== 0x7b || payloadJson.charCodeAt(payloadJson.length - 1) !== 0x7d)
+		return undefined;
+	if (payloadJson.includes("\n") || payloadJson.includes("\r")) return undefined;
+	if (sessionId === undefined) return payloadJson;
+	const member = `"sessionId":${JSON.stringify(sessionId)}`;
+	return `${payloadJson.slice(0, -1)},${member}}`;
+}
 
 /**
  * Daemon frame types the edge RINGS per client (finding #5). MUST mirror
@@ -434,6 +477,12 @@ interface BrowserStream {
 	pipe: CallbackPipeState | null;
 	/** Bumped by every attach on this stream; an attach whose value moved on is superseded. */
 	attachSeq: number;
+	/** Bytes ever enqueued onto the queue (the socket has taken `enqueuedBytes` minus what is still queued). */
+	enqueuedBytes: number;
+	/** Bytes the socket had taken at the last drain check; only moves forward. */
+	drainedMark: number;
+	/** Last time the queue was empty or the socket took bytes (the stall clock). */
+	progressAt: number;
 }
 
 /**
@@ -450,14 +499,25 @@ interface CallbackPipeState {
 	connId: string;
 	/** Intentional teardown (browser close / re-attach / clone stopped/removed). */
 	closed: boolean;
-	/** Last daemon envelope seq consumed on this stream (stream_open.lastSeq). */
-	lastSeq: number;
-	/** The pair connectionId this stream was primed against; a change re-primes from 0. */
+	/** The pair connectionId this stream was last opened on (a stream_open went). */
 	pairConnectionId: string | null;
 	/** Unbind the transport virtual stream; idempotent, safe after close(). */
 	detach: () => void;
 	/** Unsubscribe the pair-change observer; idempotent, safe after close(). */
 	unsubscribePair: () => void;
+	/**
+	 * Drain checkpoints for the daemon envelopes this stream consumed, in wire-seq
+	 * order: each covers the stream's `enqueuedBytes` in (start, end]. Slots
+	 * before `creditHead` are consumed. Adjacent small envelopes merge, so the
+	 * list is bounded by the queue's bytes, not its frame count.
+	 */
+	credits: Array<{ start: number; end: number; seq: number } | undefined>;
+	creditHead: number;
+	/** Highest checkpoint seq the queue has drained past, and the highest sent as stream_ack. */
+	drainedSeq: number;
+	ackedSeq: number;
+	/** Socket-taken bytes at the last stream_ack. */
+	ackedDrained: number;
 }
 
 function newClient(clientId: string | null, ringBytes: number): BrowserClient {
@@ -642,6 +702,10 @@ export class FleetEdge {
 	/** Fleet transcript store for clone session listing/resume membership. */
 	readonly #logStore: CloneSessionStore | undefined;
 	readonly #backpressureBytes: number;
+	/** A queue with unread bytes and no drain for this long drops the stream (default BROWSER_STALL_MS). */
+	readonly #stallMs: number;
+	/** Keepalive/stall sweep cadence (default SSE_KEEPALIVE_MS). */
+	readonly #keepaliveMs: number;
 	/** Per-client ring byte budget (default SSE_RING_BYTES; finding #5). */
 	readonly #ringBytes: number;
 	/** Live browser streams (broadcasts + backpressure). */
@@ -706,6 +770,10 @@ export class FleetEdge {
 			backpressureBytes?: number;
 			/** Per-client replay-ring byte budget (default SSE_RING_BYTES). */
 			ringBytes?: number;
+			/** Stall limit for a browser stream whose queue stops draining (default BROWSER_STALL_MS). */
+			stallMs?: number;
+			/** Keepalive and stall-sweep interval (default SSE_KEEPALIVE_MS). */
+			keepaliveMs?: number;
 		},
 	) {
 		this.#registry = deps.registry;
@@ -735,6 +803,8 @@ export class FleetEdge {
 		this.#logStore = deps.logStore;
 		this.#backpressureBytes = opts?.backpressureBytes ?? SSE_BACKPRESSURE_BYTES;
 		this.#ringBytes = opts?.ringBytes ?? SSE_RING_BYTES;
+		this.#stallMs = opts?.stallMs ?? BROWSER_STALL_MS;
+		this.#keepaliveMs = opts?.keepaliveMs ?? SSE_KEEPALIVE_MS;
 		this.#serveUi = deps.serveUi ?? true;
 		this.#sessionsDir = deps.sessionsDir;
 		deps.registry.onChange = this.#onRegistryChange;
@@ -899,6 +969,9 @@ export class FleetEdge {
 					stream = {
 						controller: controller as ReadableStreamDefaultController<Uint8Array>,
 						unreadEstimate: 0,
+						enqueuedBytes: 0,
+						drainedMark: 0,
+						progressAt: Date.now(),
 						client,
 						pipe: null,
 						attachSeq: 0,
@@ -982,6 +1055,11 @@ export class FleetEdge {
 					// The browser went away: close its pipe + release; the
 					// client's ring is kept for Last-Event-ID resume.
 					if (stream) this.#releaseBrowser(stream);
+				},
+				// The socket took queued bytes: the stall clock moves and the
+				// daemon is acknowledged how far its burst has drained.
+				pull: () => {
+					if (stream) this.#noteDrain(stream, false);
 				},
 			},
 			{ highWaterMark: this.#backpressureBytes, size: (chunk) => chunk?.byteLength ?? 0 },
@@ -1427,14 +1505,18 @@ export class FleetEdge {
 			daemonId,
 			connId,
 			closed: false,
-			lastSeq: 0,
 			pairConnectionId: null,
+			credits: [],
+			creditHead: 0,
+			drainedSeq: 0,
+			ackedSeq: 0,
+			ackedDrained: 0,
 			detach: () => {},
 			unsubscribePair: () => {},
 		};
 		const unsubscribePair = transport.onPairChange(daemonId, () => {
 			if (stream.pipe !== pipe || pipe.closed) return;
-			this.#sendStreamOpen(pipe);
+			this.#sendStreamOpen(stream, pipe);
 		});
 		pipe.unsubscribePair = unsubscribePair;
 		pipe.detach = () => transport.detachVirtualStream(daemonId, streamId);
@@ -1446,9 +1528,11 @@ export class FleetEdge {
 		if (commandId !== undefined)
 			this.#sendAttachOutcome(stream, commandId, { sessionId: daemonId });
 		const sink: VirtualStreamSink = {
-			deliver: (envelope) => {
+			deliver: (envelope, payloadJson) => {
 				if (stream.pipe !== pipe || pipe.closed) return;
-				this.#onCallbackEnvelope(stream, pipe, envelope);
+				const before = stream.enqueuedBytes;
+				this.#onCallbackEnvelope(stream, pipe, envelope, payloadJson);
+				this.#recordCredit(stream, pipe, before, envelope.seq);
 			},
 		};
 		transport.attachVirtualStream(daemonId, streamId, sink);
@@ -1460,30 +1544,34 @@ export class FleetEdge {
 		// Pair already live at bind: prime now; onPairChange handles later
 		// replacements (and the very first pair-ready when ensure returned
 		// before the daemon dialed).
-		if (transport.pairStatus(daemonId).paired) this.#sendStreamOpen(pipe);
+		if (transport.pairStatus(daemonId).paired) this.#sendStreamOpen(stream, pipe);
 	}
 
-	/** Send stream_open on this browser's callback stream (prime / re-prime).
-	 * lastSeq is omitted on pair replacement: the per-connection daemon seq
-	 * space restarts, so the daemon re-primes from its ring head. */
-	#sendStreamOpen(pipe: CallbackPipeState): void {
+	/**
+	 * Send stream_open on this browser's callback stream (prime / re-prime), once
+	 * per daemon pair. Every pair has its own connectionId (one socket, never
+	 * resumed), so each new pair is a fresh session pipe: the daemon re-primes it.
+	 */
+	#sendStreamOpen(stream: BrowserStream, pipe: CallbackPipeState): void {
 		const transport = this.#transport;
 		if (!transport || pipe.closed) return;
 		const status = transport.pairStatus(pipe.daemonId);
 		if (!status.paired || status.connectionId === null) return;
-		if (pipe.pairConnectionId !== status.connectionId) {
-			// New pair: its seq space is fresh; never send a stale lastSeq.
-			pipe.pairConnectionId = status.connectionId;
-			pipe.lastSeq = 0;
-		}
+		if (pipe.pairConnectionId === status.connectionId) return;
+		pipe.pairConnectionId = status.connectionId;
+		// Every stream_open restarts the daemon's credit ledger (and ours): frames
+		// it sent before this open are never acknowledged.
+		pipe.credits = [];
+		pipe.creditHead = 0;
+		pipe.drainedSeq = 0;
+		pipe.ackedSeq = 0;
+		pipe.ackedDrained = stream.enqueuedBytes - this.#bufferedBytes(stream);
+		const open: StreamOpenControl = { type: "stream_open", ack: true };
 		transport
 			.sendToDaemon(pipe.daemonId, {
 				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
 				kind: "control",
-				payload: {
-					type: "stream_open",
-					...(pipe.lastSeq > 0 ? { lastSeq: pipe.lastSeq } : {}),
-				},
+				payload: open,
 			})
 			.catch(() => {
 				// No live pair / send failure: onPairChange re-sends once the
@@ -1499,9 +1587,9 @@ export class FleetEdge {
 		stream: BrowserStream,
 		pipe: CallbackPipeState,
 		envelope: CallbackEnvelope,
+		payloadJson: string | undefined,
 	): void {
 		if (envelope.kind !== "frame" && envelope.kind !== "control") return;
-		if (Number.isFinite(envelope.seq) && envelope.seq > pipe.lastSeq) pipe.lastSeq = envelope.seq;
 		if (envelope.kind === "control") {
 			const payload = envelope.payload;
 			if (typeof payload === "object" && payload !== null && "type" in payload) {
@@ -1516,7 +1604,7 @@ export class FleetEdge {
 		}
 		const payload = envelope.payload;
 		if (typeof payload !== "object" || payload === null) return;
-		this.#onPipeFrame(stream, pipe, payload as Record<string, unknown>);
+		this.#onPipeFrame(stream, pipe, payload as Record<string, unknown>, payloadJson);
 	}
 
 	/**
@@ -1530,13 +1618,19 @@ export class FleetEdge {
 	 * daemon's delta types, see #sendDelta, and recoverable via Last-Event-ID;
 	 * unringed priming/answer frames are re-derived on re-attach). The
 	 * payload is the already-parsed frame object (an envelope payload is
-	 * verbatim JSON). Shared by every session stream so session semantics
-	 * stay identical.
+	 * verbatim JSON); every decision (gate, strip, stamp, answer routing, ring
+	 * class) reads that parsed view. When `payloadJson` (the frame's own wire
+	 * text, which the browser will JSON.parse) is present, it is forwarded
+	 * instead of re-serializing the parsed frame: every transform here is the
+	 * identity or the sessionId stamp, which relayJson splices into the text
+	 * (last key wins, as with the spread). Shared by every session stream so
+	 * session semantics stay identical.
 	 */
 	#onPipeFrame(
 		stream: BrowserStream,
 		pipe: CallbackPipeState,
 		frame: Record<string, unknown>,
+		payloadJson?: string,
 	): void {
 		if (frame.type === "hello_ok") {
 			// Proto gate: a daemon speaking a different OMP_PROTO is not
@@ -1570,14 +1664,18 @@ export class FleetEdge {
 			// does; the edge owns the only activity frame browsers see.
 			return;
 		}
-		const stamped =
-			SESSION_SCOPED_FRAME_TYPES[String(frame.type)] === true || frame.type === "attached"
-				? { ...frame, sessionId: pipe.daemonId }
-				: frame;
+		const stamp =
+			SESSION_SCOPED_FRAME_TYPES[String(frame.type)] === true || frame.type === "attached";
+		const json =
+			payloadJson === undefined
+				? undefined
+				: relayJson(payloadJson, stamp ? pipe.daemonId : undefined);
+		const outgoing = json === undefined && stamp ? { ...frame, sessionId: pipe.daemonId } : frame;
 		// Id-keyed answers go to the browser that asked, not to every browser
-		// whose pipe happens to carry the daemon's broadcast copy.
-		if (this.#routeAnswer(stamped)) return;
-		this.#sendDelta(stream, stamped);
+		// whose pipe happens to carry the daemon's broadcast copy. The stamp
+		// never touches `id` or `type`, so routing reads the same on either view.
+		if (this.#routeAnswer(frame, outgoing, json)) return;
+		this.#sendDelta(stream, outgoing, json);
 	}
 
 	/** A callback channel is gone for good: detach the stream and report lost. */
@@ -1760,7 +1858,11 @@ export class FleetEdge {
 	 * False leaves the frame to normal forwarding: an answer this edge never
 	 * forwarded a command for has no origin to correlate with.
 	 */
-	#routeAnswer(frame: Record<string, unknown>): boolean {
+	#routeAnswer(
+		frame: Record<string, unknown>,
+		outgoing: unknown,
+		json: string | undefined,
+	): boolean {
 		const id = typeof frame.id === "string" ? frame.id : undefined;
 		if (id === undefined || ANSWER_FRAME_TYPES[String(frame.type)] !== true) return false;
 		const origin = this.#forwardOrigins.get(id);
@@ -1771,7 +1873,7 @@ export class FleetEdge {
 		// record outstanding so its re-POST's replayed answer still lands.
 		if (target === null) return true;
 		origin.delivered = true;
-		this.#sendAnswer(target, frame);
+		this.#sendAnswer(target, outgoing, json);
 		return true;
 	}
 
@@ -1791,17 +1893,82 @@ export class FleetEdge {
 	#enqueue(stream: BrowserStream, block: string): void {
 		try {
 			const chunk = SSE_ENCODER.encode(block);
-			if (
-				shouldDropFrame(this.#bufferedBytes(stream) + chunk.byteLength, this.#backpressureBytes)
-			) {
+			const buffered = this.#bufferedBytes(stream);
+			if (shouldDropFrame(buffered + chunk.byteLength, this.#backpressureBytes)) {
 				this.#dropBrowser(stream);
 				return;
 			}
+			// An empty queue starts the stall clock afresh: only bytes that sit
+			// unread count against the stream.
+			if (buffered === 0) stream.progressAt = Date.now();
 			stream.unreadEstimate += chunk.byteLength;
+			stream.enqueuedBytes += chunk.byteLength;
 			stream.controller.enqueue(chunk);
 		} catch {
 			// Stream already closed/cancelled: dropped (removal happens on cancel/drop).
 		}
+	}
+
+	/**
+	 * Note how far the browser's socket has drained this stream's queue: move
+	 * the stall clock, retire the drain checkpoints it passed, and acknowledge
+	 * the daemon (stream_ack) once STREAM_ACK_STEP_BYTES more drained, or at
+	 * once with `flush` (the periodic sweep, so a tail below the step is never
+	 * left unacknowledged).
+	 */
+	#noteDrain(stream: BrowserStream, flush: boolean): void {
+		const drained = Math.max(
+			stream.drainedMark,
+			stream.enqueuedBytes - this.#bufferedBytes(stream),
+		);
+		if (drained > stream.drainedMark || stream.enqueuedBytes === drained) {
+			stream.progressAt = Date.now();
+		}
+		stream.drainedMark = drained;
+		const pipe = stream.pipe;
+		if (pipe === null || pipe.closed) return;
+		while (pipe.creditHead < pipe.credits.length) {
+			const credit = pipe.credits[pipe.creditHead]!;
+			if (credit.end > drained) break;
+			pipe.drainedSeq = credit.seq;
+			pipe.credits[pipe.creditHead++] = undefined;
+		}
+		if (pipe.creditHead > 1024 && pipe.creditHead * 2 > pipe.credits.length) {
+			pipe.credits = pipe.credits.slice(pipe.creditHead);
+			pipe.creditHead = 0;
+		}
+		if (pipe.drainedSeq <= pipe.ackedSeq) return;
+		if (!flush && drained - pipe.ackedDrained < STREAM_ACK_STEP_BYTES) return;
+		pipe.ackedSeq = pipe.drainedSeq;
+		pipe.ackedDrained = drained;
+		const ack: StreamAckControl = { type: "stream_ack", seq: pipe.drainedSeq };
+		this.#transport
+			?.sendToDaemon(pipe.daemonId, {
+				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
+				kind: "control",
+				payload: ack,
+			})
+			.catch(() => {
+				// No live pair: the stream re-opens (and its ledger restarts) on the next pair.
+			});
+	}
+
+	/**
+	 * Record that the daemon envelope `seq` was consumed into this stream's queue
+	 * (forwarded, consumed, or dropped alike): it is acknowledged once the queue
+	 * has drained past the bytes enqueued so far. `start` is the queue's byte
+	 * total before the envelope was processed.
+	 */
+	#recordCredit(stream: BrowserStream, pipe: CallbackPipeState, start: number, seq: number): void {
+		if (pipe.closed || !Number.isFinite(seq)) return;
+		const end = stream.enqueuedBytes;
+		const tail = pipe.credits.length > pipe.creditHead ? pipe.credits.at(-1) : undefined;
+		if (tail !== undefined && end - tail.start < CREDIT_GRAIN_BYTES) {
+			tail.end = end;
+			tail.seq = seq;
+			return;
+		}
+		pipe.credits.push({ start, end, seq });
 	}
 
 	/**
@@ -1816,10 +1983,13 @@ export class FleetEdge {
 	 * Last-Event-ID, and the client re-attaches on every reconnect open,
 	 * re-deriving anything the ring never held.
 	 */
-	#sendDelta(stream: BrowserStream, frame: unknown): void {
+	#sendDelta(stream: BrowserStream, frame: unknown, json?: string): void {
 		const client = stream.client;
 		const seq = client.nextSeq++;
-		const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
+		const block =
+			json === undefined
+				? encodeSseEvent(SSE_EVENT_NAME, frame, seq)
+				: encodeSseEventData(SSE_EVENT_NAME, json, seq);
 		const type = (frame as { type?: unknown } | null)?.type;
 		if (typeof type === "string" && EDGE_RING_DELTAS[type]) client.ring.push(seq, block);
 		this.#enqueue(stream, block);
@@ -1839,9 +2009,14 @@ export class FleetEdge {
 	}
 
 	/** Unicast answer (projects / error): fresh seq but NOT ringed (lost answers are re-POSTed). */
-	#sendAnswer(stream: BrowserStream, frame: unknown): void {
+	#sendAnswer(stream: BrowserStream, frame: unknown, json?: string): void {
 		const seq = stream.client.nextSeq++;
-		this.#enqueue(stream, encodeSseEvent(SSE_EVENT_NAME, frame, seq));
+		this.#enqueue(
+			stream,
+			json === undefined
+				? encodeSseEvent(SSE_EVENT_NAME, frame, seq)
+				: encodeSseEventData(SSE_EVENT_NAME, json, seq),
+		);
 	}
 
 	#sendError(stream: BrowserStream, error: string): void {
@@ -1969,8 +2144,15 @@ export class FleetEdge {
 	#startKeepalive(): void {
 		if (this.#keepaliveTimer) return;
 		this.#keepaliveTimer = setInterval(() => {
-			for (const stream of [...this.#browsers]) this.#enqueue(stream, SSE_PING_BLOCK);
-		}, SSE_KEEPALIVE_MS);
+			for (const stream of [...this.#browsers]) {
+				this.#noteDrain(stream, true);
+				if (this.#bufferedBytes(stream) > 0 && Date.now() - stream.progressAt >= this.#stallMs) {
+					this.#dropBrowser(stream);
+					continue;
+				}
+				this.#enqueue(stream, SSE_PING_BLOCK);
+			}
+		}, this.#keepaliveMs);
 	}
 
 	#stopKeepalive(): void {

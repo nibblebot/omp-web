@@ -1,13 +1,14 @@
 /**
- * Regression (kata w622): Bun's fetch aborted the session's callback legs
- * (POST /callback/up with a streaming body, GET /callback/down SSE) after its
- * default timeout even while heartbeats flowed, cutting every pair every
- * 360 s. FleetCallback now passes `timeout: false` on both legs.
+ * Regression (kata w622, carried to the WebSocket pair): Bun's fetch aborted
+ * the session's long-lived callback legs after its default HTTP client timeout
+ * even while heartbeats flowed, cutting every pair every 360 s. The pair is now
+ * one WebSocket; this keeps the guarantee that no native client timer ends a
+ * heartbeating pair.
  *
  * The timeout is Bun's native HTTP client timer, so fake timers cannot
  * reproduce it. Bun reads BUN_CONFIG_HTTP_IDLE_TIMEOUT (seconds) at process
  * start, so a child `bun` started with it set to 1 s cuts a default-timeout
- * fetch at ~8 s. The child (fleet-callback-pair-timeout.testkit.ts) holds a
+ * request at ~8 s. The child (fleet-callback-pair-timeout.testkit.ts) holds a
  * real FleetCallback pair against a real DaemonTransportRegistry for longer
  * than that and reports whether the pair was ever replaced.
  */
@@ -17,7 +18,7 @@ import { resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const HARNESS = resolve(import.meta.dir, "fleet-callback-pair-timeout.testkit.ts");
-/** Longer than the ~8 s a default-timeout fetch survives with the 1 s idle setting. */
+/** Longer than the ~8 s a default-timeout request survives with the 1 s idle setting. */
 const HOLD_MS = 12_000;
 const HEARTBEAT_MS = 500;
 
@@ -28,7 +29,6 @@ interface HarnessReport {
 	state: string;
 	readyCount: number;
 	reconnects: number;
-	renewals: number;
 	lastError: { code: string; message: string; at: number } | null;
 	errors: string[];
 }
@@ -59,14 +59,13 @@ async function runHarness(): Promise<{ report: HarnessReport; stderr: string }> 
 	}
 }
 
-describe("FleetCallback pair under Bun's fetch timeout", () => {
-	test("a heartbeating pair survives past the default fetch timeout without a replacement", async () => {
+describe("FleetCallback pair under Bun's HTTP client timeout", () => {
+	test("a heartbeating pair survives past the default client timeout without a replacement", async () => {
 		const { report } = await runHarness();
 
 		expect(report.errors).toEqual([]);
 		expect(report.lastError).toBeNull();
 		expect(report.reconnects).toBe(0);
-		expect(report.renewals).toBe(0);
 		expect(report.readyCount).toBe(1);
 		expect(report.state).toBe("ready");
 		expect(report.readyConnectionId).not.toBeNull();

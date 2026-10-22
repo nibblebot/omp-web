@@ -35,7 +35,34 @@ Behind a reverse proxy, the proxy must set the browser origin: the public origin
 
 A proxy listed in `trustedProxies` must append the connecting client to `X-Forwarded-For` (or overwrite the header); the fleet reads the header right to left and takes the first hop that is not a trusted proxy. A proxy that forwards a client-supplied `X-Forwarded-For` unchanged lets that client claim any address, including loopback, which skips sign-in.
 
-Sessions dial out: each session daemon connects to the control plane over the callback pair (an NDJSON upload and an SSE downlink), and the control plane never opens a connection into a session. Sessions behind NAT, in a sandbox, or in a Kubernetes pod with no inbound traffic work the same way. Ctrl+C on `omp-web` or `omp-web control` stops the control plane only; sessions keep running, including a turn in progress, and redial the next control plane with the same credential. Restart the control plane on the same port: a session keeps dialing the address it was given. After a restart, entries show `reconnecting`, then `ready` once their session redials; one that has not redialed within 45 seconds is shown `asleep`. A session with no control plane for 10 minutes (`--control-grace`, or `OMP_SESSION_CONTROL_GRACE`; `0` disables) shuts itself down gracefully, and one whose credential the fleet rejects (revoked, or superseded by a newer generation) shuts down at once. A spawned session that is asleep wakes on attach or prompt, resuming its last transcript; if the previous process is still alive somewhere (for example dialing an old port), the wake fails with "locked by another omp-session" until that process exits or is stopped. `omp-web stop <selector>` asks a session to shut down, terminates a local one, and revokes its credential.
+Sessions dial out: each session daemon connects to the control plane over the callback pair (one WebSocket, `/callback/ws`; a reverse proxy in front of the control plane must pass the WebSocket upgrade), and the control plane never opens a connection into a session. Sessions behind NAT, in a sandbox, or in a Kubernetes pod with no inbound traffic work the same way. Ctrl+C on `omp-web` or `omp-web control` stops the control plane only; sessions keep running, including a turn in progress, and redial the next control plane with the same credential. Restart the control plane on the same port: a session keeps dialing the address it was given. After a restart, entries show `reconnecting`, then `ready` once their session redials; one that has not redialed within 45 seconds is shown `asleep`. A session with no control plane for 10 minutes (`--control-grace`, or `OMP_SESSION_CONTROL_GRACE`; `0` disables) shuts itself down gracefully, and one whose credential the fleet rejects (revoked, or superseded by a newer generation) shuts down at once. A spawned session that is asleep wakes on attach or prompt, resuming its last transcript; if the previous process is still alive somewhere (for example dialing an old port), the wake fails with "locked by another omp-session" until that process exits or is stopped. `omp-web stop <selector>` asks a session to shut down, terminates a local one, and revokes its credential.
+
+**Reverse proxy or ingress in front of the control plane.** Every session reaches the control plane through `GET /callback/ws`, one long-lived WebSocket per session (there is no renewal and no per-connection byte cap). Anything between a session and the control plane (nginx, Caddy, Envoy, an Istio or Kubernetes ingress, a cloud load balancer, a corporate proxy) must:
+
+- **Pass the WebSocket upgrade** on `/callback/ws`: forward the `Upgrade: websocket` and `Connection: Upgrade` request headers, speak HTTP/1.1 to the upstream, and forward the `Authorization` and `X-Omp-*` request headers unchanged (identity and credential travel in the upgrade request headers, never in the URL). A proxy that strips `Upgrade` answers the upgrade with a plain HTTP response and the session never pairs; its log shows a refused or failed WebSocket dial.
+- **Tolerate idle time.** Each side sends a heartbeat message every 15 s (`HEARTBEAT_INTERVAL_MS`) and closes the pair after 30 s without any message (`SILENCE_DEADLINE_MS`), so the pair is never silent for more than about 15 s in either direction. Set the proxy's read, send and idle timeouts for this route above 30 s (60 s or more is a safe margin); a shorter idle timeout drops the pair on every quiet period and the session redials with backoff.
+- **Pass messages up to 2 MiB** (`CALLBACK_WS_MAX_PAYLOAD_BYTES`; an envelope is at most 1 MiB) without a lower frame or message size cap.
+- **Accept `POST /callback/bulk/<id>` bodies up to 64 MiB** (`BULK_MAX_BYTES`); these downloads and wake transfers are separate plain HTTP requests.
+
+nginx:
+
+```nginx
+location /callback/ {
+    proxy_pass http://127.0.0.1:4722;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 120s;
+    proxy_send_timeout 120s;
+    client_max_body_size 64m;
+}
+```
+
+Kubernetes ingress-nginx passes the upgrade by itself; raise its timeouts and body limit on the control plane's Ingress: `nginx.ingress.kubernetes.io/proxy-read-timeout: "120"`, `nginx.ingress.kubernetes.io/proxy-send-timeout: "120"`, `nginx.ingress.kubernetes.io/proxy-body-size: "64m"`. Other ingress controllers and gateways have equivalent upgrade and timeout settings; use their WebSocket or upgrade option for `/callback/ws`.
+
+The other direction: a session that has to leave its network through a proxy resolves the proxy itself, because Bun's WebSocket client ignores `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` (Bun's `fetch`, used for the bulk POSTs, honors them; the session passes the one resolved proxy to both). It uses the launch payload's explicit `callback.proxy` (`OMP_SESSION_CALLBACK_PROXY` in the callback handoff) when present, else those variables in its own process environment. The fleet does not copy its own proxy variables into a clone or pod: a sandboxed or in-pod session sees only the proxy variables the runtime environment gives it (for a pod, whatever the cluster injects). Only `http://` and `https://` proxies are supported, reached with `CONNECT`; an unsupported scheme is an error, never a silent direct connection. The proxy must allow `CONNECT` to the control plane's port.
+
+Check the path before launching clones: `OMP_FLEET_CALLBACK_URL=https://control.example.com omp-web preflight --profile <id>` opens a real WebSocket upgrade to `<url>/callback/ws` (through the proxy resolved from the fleet's own `HTTP(S)_PROXY` / `NO_PROXY`, as a session with that environment would), carrying no credential. The `callback-ws` row passes when the control plane answers with its typed refusal for the missing credential, and fails with the proxy or ingress setting to fix when the upgrade is refused, never answered, or answered by something that is not the fleet. A host-local session and the fleet's own derived callback URL (`http://<bind>:<port>`) need none of this.
 
 A `--resume` session file that is missing exits 78 before bind (`omp-session: --resume <file>: session file not found`) and is never created. The fleet passes plain `--resume` only for a file the daemon has reported persisted, so a transcript that was written and later deleted fails with 78 and its row parks asleep with that reason. A file the fleet never saw persisted (a session that had no messages yet) relaunches with `--resume <file> --resume-unwritten`, which adopts that path as the same not-yet-written session. An explicitly picked file always resumes strictly. A transcript that exists but cannot be restored exits 78 instead of starting empty; its row stays asleep with the daemon's reason and is never restarted. A provider-managed clone wake resumes the same way through `OMP_SESSION_RESUME` (strict; `OMP_SESSION_RESUME_UNWRITTEN=1` for a file not known to be written): a bwrap clone gets the host path of the newest session, a Kubernetes clone the in-pod path of the session its runtime last reported (or an explicitly picked stored session), and a first start gets none.
 
@@ -68,7 +95,7 @@ flowchart TB
   daemons -.-> log
 ```
 
-See [`AGENTS.md`](AGENTS.md) for the engineering map, wire contract, and import, state, and security boundaries.
+See [`docs/architecture.md`](docs/architecture.md) for how the browser, fleet and session protocols fit together over time, and [`AGENTS.md`](AGENTS.md) for the engineering map, wire contract, and import, state, and security boundaries.
 
 ## Requirements
 

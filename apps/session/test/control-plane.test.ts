@@ -9,194 +9,82 @@
 import { afterAll, expect, test } from "bun:test";
 import type { Subprocess } from "bun";
 import {
+	CALLBACK_CLOSE_REFUSAL_BASE,
 	CALLBACK_CONTROL_STREAM_ID,
-	CALLBACK_DOWN_PATH,
 	CALLBACK_ERROR_HTTP_STATUS,
 	CALLBACK_TRANSPORT_STREAM_ID,
-	CALLBACK_UP_PATH,
 	type CallbackEnvelope,
 	type CallbackKind,
-	encodeSseEnvelope,
 } from "#lib/wire/callback-protocol";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+import { startFakeFleet, type FakeFleetOptions } from "./fake-fleet.testkit";
 
 const repoRoot = new URL("../../..", import.meta.url).pathname;
 const WORKSPACE = "ws-control-plane";
 const GENERATION = 1;
 const TOKEN = "ab".repeat(32);
 
+/** The fake fleet the daemon dials, over the shared WebSocket fake (fake-fleet.testkit.ts). */
 interface FakeFleet {
 	url: string;
-	/** Resolves when the daemon opens its down stream. */
+	/** Resolves when the daemon's pair socket has been sent pair_ready. */
 	paired: Promise<void>;
-	/** Envelopes the daemon uploaded on /callback/up, in arrival order. */
+	/** Envelopes the daemon sent on the pair, in arrival order. */
 	up: CallbackEnvelope[];
 	/** Resolves once `count` uploaded envelopes satisfy `match`. */
 	waitForUp(match: (envelope: CallbackEnvelope) => boolean, count: number): Promise<void>;
-	/** Sends one down envelope on the current pair. */
+	/** Sends one envelope on the current pair. */
 	send(streamId: string, kind: CallbackKind, payload: unknown): void;
-	/** Requests the fake has answered (a refused pair dials again after its backoff). */
-	readonly counters: { requests: number };
+	/** Resolves once the daemon has dialed `count` times (a refused pair dials again after its backoff). */
+	whenDials(count: number): Promise<void>;
 	stop(): void;
-	/** Ends the current down stream (network loss); the daemon redials and a new pair forms. */
+	/** Closes the current pair socket (network loss); the daemon redials and a new pair forms. */
 	dropPair(): void;
 }
 
-/** A refusal every request is answered with, standing in for the real fleet's error bodies. */
-interface FakeRefusal {
-	status: number;
-	/** JSON-serialized when `json`, raw text otherwise. */
-	body: unknown;
-	json: boolean;
-}
+/** A refusal every upgrade is answered with, standing in for the real fleet's typed closes. */
+type FakeRefusal = NonNullable<FakeFleetOptions["refuse"]>;
 
 /**
- * The fleet's refusal shapes (callback-protocol error codes). The session treats
- * only `unauthorized` and `generation_obsolete` as terminal; every other code,
- * typed or inferred from the status, is retryable.
+ * The fleet's refusal shapes (callback-protocol error codes). The session treats a
+ * credential rejection (`unauthorized`, `invalid_identity`), a superseded generation
+ * and an unsupported protocol as terminal; every other code, typed or inferred from
+ * the close status, is retryable.
  */
 const REFUSALS = {
-	unauthorized: {
-		status: CALLBACK_ERROR_HTTP_STATUS.unauthorized,
-		body: { error: "unauthorized", message: "unknown credential" },
-		json: true,
+	unauthorized: { code: "unauthorized", message: "unknown credential" },
+	invalidIdentity: { code: "invalid_identity", message: "missing x-omp-workspace-id header" },
+	generationObsolete: { code: "generation_obsolete" },
+	protoUnsupported: {
+		code: "proto_unsupported",
+		message: "callback protocol 1 is no longer served",
 	},
-	generationObsolete: {
-		status: CALLBACK_ERROR_HTTP_STATUS.generation_obsolete,
-		body: { error: "generation_obsolete" },
-		json: true,
-	},
-	conflict: {
-		status: CALLBACK_ERROR_HTTP_STATUS.conflict,
-		body: { error: "conflict" },
-		json: true,
-	},
+	conflict: { code: "conflict" },
+	/** A refusal close whose reason names no ledger code: the status alone maps it. */
 	plainConflict: {
-		status: CALLBACK_ERROR_HTTP_STATUS.conflict,
-		body: "conflict",
-		json: false,
+		close: {
+			code: CALLBACK_CLOSE_REFUSAL_BASE + CALLBACK_ERROR_HTTP_STATUS.conflict,
+			reason: "conflict",
+		},
 	},
 } as const satisfies Record<string, FakeRefusal>;
 
-function refusalResponse(refusal: FakeRefusal): Response {
-	if (refusal.json) return Response.json(refusal.body, { status: refusal.status });
-	return new Response(String(refusal.body), {
-		status: refusal.status,
-		headers: { "content-type": "text/plain; charset=utf-8" },
-	});
-}
-
-function startFakeFleet(options: { refuse?: FakeRefusal } = {}): FakeFleet {
-	const encoder = new TextEncoder();
-	const decoder = new TextDecoder();
-	const up: CallbackEnvelope[] = [];
-	const arrivalListeners = new Set<() => void>();
-	let down: ReadableStreamDefaultController<Uint8Array> | null = null;
-	let connectionId = "";
-	let seq = 0;
-	const counters = { requests: 0 };
-	let resolvePaired: () => void = () => {};
-	const paired = new Promise<void>((resolve) => {
-		resolvePaired = resolve;
-	});
-
-	const envelope = (streamId: string, kind: CallbackKind, payload: unknown): CallbackEnvelope => ({
-		version: 1,
+function startFleet(options: { refuse?: FakeRefusal } = {}): FakeFleet {
+	const fleet = startFakeFleet({
 		workspaceId: WORKSPACE,
 		generation: GENERATION,
-		connectionId,
-		streamId,
-		seq: ++seq,
-		kind,
-		payload,
-		at: Date.now(),
+		token: TOKEN,
+		...options,
 	});
-
-	const server = Bun.serve({
-		hostname: "127.0.0.1",
-		port: 0,
-		idleTimeout: 255,
-		async fetch(req) {
-			counters.requests++;
-			const pathname = new URL(req.url).pathname;
-			const wrongCredential = req.headers.get("authorization") !== `Bearer ${TOKEN}`;
-			if (options.refuse !== undefined || wrongCredential) {
-				return refusalResponse(options.refuse ?? REFUSALS.unauthorized);
-			}
-			if (req.method === "GET" && pathname === CALLBACK_DOWN_PATH) {
-				connectionId = req.headers.get("x-omp-connection-id") ?? "";
-				const stream = new ReadableStream<Uint8Array>({
-					start(controller) {
-						down = controller;
-						const ready = envelope(CALLBACK_TRANSPORT_STREAM_ID, "control", {
-							type: "pair_ready",
-							connectionId,
-							generation: GENERATION,
-						});
-						controller.enqueue(encoder.encode(encodeSseEnvelope(ready)));
-						resolvePaired();
-					},
-					cancel() {
-						down = null;
-					},
-				});
-				return new Response(stream, { headers: { "content-type": "text/event-stream" } });
-			}
-			if (req.method === "POST" && pathname === CALLBACK_UP_PATH) {
-				const reader = req.body?.getReader();
-				if (!reader) return new Response("missing body", { status: 400 });
-				let buffered = "";
-				for (;;) {
-					const chunk = await reader.read();
-					if (chunk.done) break;
-					buffered += decoder.decode(chunk.value, { stream: true });
-					let newline = buffered.indexOf("\n");
-					while (newline !== -1) {
-						const line = buffered.slice(0, newline).trim();
-						buffered = buffered.slice(newline + 1);
-						if (line.length > 0) {
-							up.push(JSON.parse(line) as CallbackEnvelope);
-							for (const notify of arrivalListeners) notify();
-						}
-						newline = buffered.indexOf("\n");
-					}
-				}
-				return Response.json({ ok: true });
-			}
-			return new Response("not found", { status: 404 });
-		},
-	});
-
 	return {
-		url: `http://127.0.0.1:${server.port}`,
-		paired,
-		up,
-		waitForUp(match, count) {
-			return new Promise<void>((resolve) => {
-				const check = (): void => {
-					if (up.filter(match).length >= count) {
-						arrivalListeners.delete(check);
-						resolve();
-					}
-				};
-				arrivalListeners.add(check);
-				check();
-			});
-		},
-		send(streamId, kind, payload) {
-			if (!down) throw new Error("fake fleet has no open down stream");
-			down.enqueue(encoder.encode(encodeSseEnvelope(envelope(streamId, kind, payload))));
-		},
-		counters,
-		stop() {
-			down?.close();
-			server.stop(true);
-		},
-		dropPair() {
-			const current = down;
-			down = null;
-			current?.close();
-		},
+		url: fleet.url,
+		paired: fleet.paired,
+		up: fleet.received,
+		waitForUp: (match, count) => fleet.whenReceived(count, match),
+		send: fleet.send,
+		whenDials: fleet.whenUpgrades,
+		stop: fleet.stop,
+		dropPair: () => fleet.close(1012, "service restart"),
 	};
 }
 
@@ -272,7 +160,7 @@ afterAll(async () => {
 });
 
 function trackFleet(options: { refuse?: FakeRefusal } = {}): FakeFleet {
-	const fleet = startFakeFleet(options);
+	const fleet = startFleet(options);
 	fleets.push(fleet);
 	return fleet;
 }
@@ -325,15 +213,6 @@ function exitWithin(child: Subprocess, timeoutMs: number): Promise<number | null
 	return Promise.race([child.exited, Bun.sleep(timeoutMs).then(() => null)]);
 }
 
-/** Poll `probe` until it holds, or throw once the deadline passes. */
-async function waitUntil(probe: () => boolean, timeoutMs: number, label: string): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (!probe()) {
-		if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label} (${timeoutMs}ms)`);
-		await Bun.sleep(25);
-	}
-}
-
 test("a ShutdownControl from the fleet stops the session with exit 0", async () => {
 	const fleet = trackFleet();
 	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
@@ -376,27 +255,35 @@ test("a credential the fleet rejects exits 0 even while postmortem teardown is s
 }, 30_000);
 
 test("a fleet generation_obsolete shuts the session down without waiting for the grace period", async () => {
-	// The fleet announces a superseded generation with HTTP 409 and a typed
-	// body (apps/fleet/test/daemon-transport.test.ts). Like a rejected
-	// credential, it is terminal: the session must not keep dialing a pair the
-	// fleet has already replaced, and it must not sit out the grace window.
+	// The fleet announces a superseded generation with a typed refusal close
+	// (apps/fleet/test/daemon-transport.test.ts). Like a rejected credential, it is
+	// terminal: the session must not keep dialing a pair the fleet has already
+	// replaced, and it must not sit out the grace window.
 	const fleet = trackFleet({ refuse: REFUSALS.generationObsolete });
 	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });
 
+test("an invalid_identity or proto_unsupported refusal shuts the session down at once", async () => {
+	// proto_unsupported is what a proto-2 fleet answers a proto-1 session with (HTTP 410
+	// on the legacy routes); here the session itself is told its protocol is gone and
+	// must exit instead of redialing a fleet that will never serve it.
+	for (const refusal of [REFUSALS.invalidIdentity, REFUSALS.protoUnsupported]) {
+		const fleet = trackFleet({ refuse: refusal });
+		const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
+		expect(await exitWithin(child, 20_000)).toBe(0);
+	}
+}, 60_000);
+
 test("a 409 that is not a terminal refusal leaves the session dialing", async () => {
-	// Only `unauthorized` and `generation_obsolete` stop the transport; every
-	// other refusal (a typed conflict, or a 409 body the status must map) is
-	// retried on the backoff, so the daemon keeps dialing instead of exiting.
+	// Only a credential rejection, a superseded generation and an unsupported protocol
+	// stop the transport; every other refusal (a typed conflict, or a 4409 close whose
+	// reason names no code) is retried on the backoff, so the daemon keeps dialing
+	// instead of exiting.
 	for (const refusal of [REFUSALS.conflict, REFUSALS.plainConflict]) {
 		const fleet = trackFleet({ refuse: refusal });
 		const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
-		await waitUntil(
-			() => fleet.counters.requests >= 2,
-			30_000,
-			`a second dial after HTTP ${refusal.status}`,
-		);
+		await fleet.whenDials(2);
 		expect(await exitWithin(child, 2_000)).toBeNull();
 		child.kill();
 	}
@@ -417,7 +304,11 @@ test("a command repeated over the pair is dispatched once and its answer replaye
 	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
 	await fleet.paired;
 	const command = { type: "call", id: "dup-cmd", method: "setSessionName", args: ["dup-name"] };
+	// The retry follows the recorded answer: a duplicate that races the first dispatch
+	// is still in flight and has no answer to replay yet, so back-to-back frames on one
+	// socket read would not prove the replay.
 	fleet.send(CALLBACK_CONTROL_STREAM_ID, "command", command);
+	await fleet.waitForUp((e) => callResultId(e) === "dup-cmd", 1);
 	fleet.send(CALLBACK_CONTROL_STREAM_ID, "command", command);
 	await fleet.waitForUp((e) => callResultId(e) === "dup-cmd", 2);
 	// Real time: a re-dispatch would land a third answer only after the

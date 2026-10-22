@@ -1,10 +1,10 @@
 /**
  * Child-process harness for fleet-callback-pair-timeout.test.ts. Runs under a
  * `bun` started with BUN_CONFIG_HTTP_IDLE_TIMEOUT=1 (Bun reads it at process
- * start), which shrinks the native fetch timeout from minutes to ~8 s and
- * makes the default-timeout cut of the session's callback legs observable in
- * seconds. A real FleetCallback pair dials a real DaemonTransportRegistry over
- * loopback HTTP, is held for holdMs with up-leg heartbeats flowing, and the
+ * start), which shrinks the native HTTP client timeout from minutes to ~8 s and
+ * makes a default-timeout cut of the session's pair observable in seconds. A
+ * real FleetCallback pair dials a real DaemonTransportRegistry over loopback
+ * WebSocket, is held for holdMs with heartbeats flowing both ways, and the
  * outcome is printed as ONE JSON line on stdout.
  *
  * argv: <holdMs> <heartbeatMs>
@@ -21,13 +21,14 @@ const heartbeatMs = Number(process.argv[3]);
 
 const registry = new DaemonTransportRegistry();
 registry.enrollWorkspace(WORKSPACE, GENERATION, TOKEN);
-// The server's own idle timeout is pinned: only the CLIENT fetch timeout is under test.
+// The server's own idle timeout is pinned: only the CLIENT side is under test.
 const server = Bun.serve({
 	hostname: "127.0.0.1",
 	port: 0,
 	idleTimeout: 255,
-	fetch: async (req) =>
-		(await registry.handleFetch(req)) ?? new Response("not found", { status: 404 }),
+	fetch: async (req, srv) =>
+		(await registry.handleFetch(req, srv)) ?? new Response("not found", { status: 404 }),
+	websocket: registry.websocket,
 });
 
 const connectionIds = new Set<string>();
@@ -64,7 +65,6 @@ try {
 			state: status.state,
 			readyCount: status.readyCount,
 			reconnects: status.reconnects,
-			renewals: status.renewals,
 			lastError: status.lastError,
 			errors,
 		}),

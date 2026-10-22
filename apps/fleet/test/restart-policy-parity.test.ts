@@ -24,7 +24,7 @@ import { join } from "node:path";
 import type { Server } from "bun";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry } from "../daemon-transport";
+import { DaemonTransportRegistry, type FleetSocketData } from "../daemon-transport";
 import { Registry, type RegistryEntry } from "../registry";
 import type { CloneRuntimePolicy } from "../workspace-lifecycle";
 import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
@@ -93,12 +93,15 @@ async function hostRig(runtime: Partial<CloneRuntimePolicy>): Promise<Rig> {
 	const registry = new Registry(statePath);
 	await registry.load();
 	const transport = new DaemonTransportRegistry();
-	const server: Server<undefined> = Bun.serve({
+	const server: Server<FleetSocketData> = Bun.serve<FleetSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
 		idleTimeout: 255,
-		fetch: async (req) =>
-			(await transport.handleFetch(req)) ?? new Response("not found", { status: 404 }),
+		fetch: async (req, srv) => {
+			const handled = await transport.handleFetch(req, srv);
+			return handled === null ? new Response("not found", { status: 404 }) : handled;
+		},
+		websocket: transport.websocket,
 	});
 	const base = `http://127.0.0.1:${server.port}`;
 	const { lifecycle } = makeHostLifecycle({

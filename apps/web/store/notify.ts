@@ -6,6 +6,7 @@
  * The client-local `omp.notifyEnabled` toggle is only the browser-permission
  * grant: it gates delivery in chat.ts `notifyDesktop`, never the event choice.
  */
+import type { WireTurnOutcome } from "#lib/wire/protocol";
 
 export type NotifyKind = "completion" | "error" | "ask";
 
@@ -29,22 +30,13 @@ export function notifyKindEnabled(kind: NotifyKind, value: unknown): boolean {
 	return effective === "on";
 }
 
-type AssistantLike = { role?: string; stopReason?: string; errorMessage?: string };
-
-function lastAssistant(messages: readonly unknown[]): AssistantLike | undefined {
-	return messages.findLast(
-		(m): m is AssistantLike => (m as AssistantLike | null)?.role === "assistant",
-	);
-}
-
 /**
  * A settled turn counts as complete unless its last assistant message stopped
  * in error or abort, matching sendCompletionNotification (those turns are
  * covered by the error notification, or by nothing when aborted).
  */
-export function turnCompleted(messages: readonly unknown[] = []): boolean {
-	const stop = lastAssistant(messages)?.stopReason;
-	return stop !== "aborted" && stop !== "error";
+export function turnCompleted(last?: WireTurnOutcome): boolean {
+	return last?.stopReason !== "aborted" && last?.stopReason !== "error";
 }
 
 /**
@@ -54,11 +46,10 @@ export function turnCompleted(messages: readonly unknown[] = []): boolean {
  * that message's errorMessage.
  */
 export function turnFailure(
-	messages: readonly unknown[] = [],
+	last: WireTurnOutcome | undefined,
 	{ terminal = true, retryPending = false }: { terminal?: boolean; retryPending?: boolean } = {},
 ): string | undefined {
 	if (!terminal || retryPending) return undefined;
-	const last = lastAssistant(messages);
 	if (last?.stopReason !== "error") return undefined;
 	return last.errorMessage ?? "";
 }

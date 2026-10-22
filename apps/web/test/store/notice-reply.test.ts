@@ -1,15 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
+import type { WireSessionEvent } from "#lib/wire/protocol";
 import { state } from "../../state";
 import { applyEvent } from "../../store/chat";
 
-function notice(extra: Record<string, unknown>): AgentSessionEvent {
+function notice(extra: Record<string, unknown>): WireSessionEvent {
 	return {
 		type: "notice",
 		level: "info",
 		message: "Added /tmp/extra to the workspace.",
 		...extra,
-	} as unknown as AgentSessionEvent;
+	} as unknown as WireSessionEvent;
 }
 
 describe("forwarded command reply header (U10b, CMD-09)", () => {

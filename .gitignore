@@ -7,3 +7,4 @@ omp-session-*.html
 apps/fleet/test/.fixture/
 dist-release/
 .kata.local.toml
+.profile-out/

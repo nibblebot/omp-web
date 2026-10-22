@@ -1031,8 +1031,8 @@ if (
 if (config.resume && path.isAbsolute(config.resume)) acquireSessionLock(config.resume);
 
 // A fleet-managed session (--fleet-stdin, so callbackUrl is set) binds no
-// listener: the fleet reaches it only over the callback pair. A bare daemon
-// binds the direct listener.
+// listener: the fleet reaches it only over the callback WebSocket. A bare
+// daemon binds the direct listener.
 const server =
 	config.callbackUrl === undefined
 		? Bun.serve({
@@ -1310,12 +1310,12 @@ void bootReadiness(bootEntry);
 
 // ---------------------------------------------------------------------------
 // Callback transport: with all four callback flags set, dial the
-// fleet's callback pair. The daemon drives the pair (POST /callback/up +
-// GET /callback/down); the HTTP/SSE listener above stays fully functional;
-// the callback is additive, not a replacement, in this pass. Started AFTER
-// the boot session + readiness resolve so the pair speaks for a live
-// workspace. start() resolves when the fleet's pair_ready lands; readiness
-// and failures log to stderr (stdout is reserved for OMP_SESSION| lines).
+// fleet's callback WebSocket (OMP_CALLBACK_PROTO 2, GET /callback/ws); the
+// HTTP/SSE listener above stays fully functional; the callback is additive,
+// not a replacement, in this pass. Started AFTER the boot session + readiness
+// resolve so the pair speaks for a live workspace. start() resolves when the
+// fleet's pair_ready lands; readiness and failures log to stderr (stdout is
+// reserved for OMP_SESSION| lines).
 // ---------------------------------------------------------------------------
 if (config.callbackUrl !== undefined) {
 	// Down-traffic router: log controls (log_ack/log_gap) apply to the
@@ -1410,7 +1410,7 @@ if (config.callbackUrl !== undefined) {
 			onControl: (envelope) => routeDown(envelope),
 			onRejected: (error) => {
 				console.error(
-					`omp-session: fleet rejected the callback credential: ${error.code} ${error.message}; shutting down`,
+					`omp-session: fleet refused the callback pair: ${error.code} ${error.message}; shutting down`,
 				);
 				void shutdown();
 			},

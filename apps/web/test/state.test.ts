@@ -1281,7 +1281,7 @@ describe("answerUnviewed (turn ended below the viewport)", () => {
 	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
 	const agentEnd = (): ServerFrame => ({
 		type: "event",
-		event: { type: "agent_end", messages: [] },
+		event: { type: "agent_end" },
 	});
 
 	test("agent_end while the transcript is pinned → not flagged (the answer was in view)", () => {
@@ -1311,7 +1311,7 @@ describe("answerUnviewed (turn ended below the viewport)", () => {
 		dispatchSeq(
 			{
 				type: "event",
-				event: { type: "agent_end", messages: [], isTerminal: false, yielded: false },
+				event: { type: "agent_end", isTerminal: false, yielded: false },
 			},
 			1025,
 		);
@@ -1332,7 +1332,6 @@ describe("answerUnviewed (turn ended below the viewport)", () => {
 				type: "event",
 				event: {
 					type: "agent_end",
-					messages: [],
 					isTerminal: false,
 					yielded: true,
 					awaitingAsyncWork: true,
@@ -1359,7 +1358,7 @@ describe("chatUnviewed (a turn ended while in Analysis)", () => {
 	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
 	const agentEnd = (): ServerFrame => ({
 		type: "event",
-		event: { type: "agent_end", messages: [] },
+		event: { type: "agent_end" },
 	});
 
 	test("agent_end while the view is chat → not flagged", () => {
@@ -1532,7 +1531,7 @@ describe("aria-live announcements (finding #P1)", () => {
 	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
 	const agentEnd = (): ServerFrame => ({
 		type: "event",
-		event: { type: "agent_end", messages: [] },
+		event: { type: "agent_end" },
 	});
 
 	test("an agent turn starting announces only after the session is ready", () => {
@@ -1650,7 +1649,7 @@ describe("workingIntent (dynamic shimmer label)", () => {
 	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
 	const agentEnd = (): ServerFrame => ({
 		type: "event",
-		event: { type: "agent_end", messages: [] },
+		event: { type: "agent_end" },
 	});
 	const toolStart = (toolCallId: string, extra: Record<string, unknown>): ServerFrame => ({
 		type: "event",

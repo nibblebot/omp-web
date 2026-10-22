@@ -37,7 +37,7 @@ import type { CallbackSendResult } from "./fleet-callback";
  * Wire contract (frozen):
  * - LogChunk payload `{offset, generation, data(base64), eof}`; `kind` stays
  *   `frame`; eof=true only on the final chunk of a closed session file.
- * - Fleet→daemon control on the down half: `{type:"log_ack", offsets}` (an
+ * - Fleet→daemon control: `{type:"log_ack", offsets}` (an
  *   ack is durability; the fleet fsynced before it) and
  *   `{type:"log_gap", from, to}` (repair request: re-stream `[from, to)` of
  *   the named stream). Both arrive via handleControl() from FleetCallback's
@@ -419,7 +419,7 @@ export class SessionLogTailer {
 	// ------------------------------------------------------------- control legs
 
 	/**
-	 * One fleet→daemon control envelope (down half). `log_ack` carries a batch
+	 * One fleet→daemon control envelope. `log_ack` carries a batch
 	 * of durable offsets keyed by streamId; `log_gap` requests re-streaming
 	 * `[from, to)` of the stream named by the envelope's streamId. Malformed
 	 * payloads are recorded as typed errors and ignored, never throws.

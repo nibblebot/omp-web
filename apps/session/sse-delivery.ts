@@ -3,6 +3,7 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import { ENVELOPE_MAX_BYTES } from "#lib/wire/callback-protocol";
 import {
+	type ImageArg,
 	SSE_BACKPRESSURE_BYTES,
 	SSE_DELTA_SEQ_START,
 	SSE_EVENT_NAME,
@@ -14,6 +15,7 @@ import {
 	type WireSessionEvent,
 } from "#lib/wire/protocol";
 import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "#lib/wire/sse";
+import { extractText, scanImages } from "#lib/wire/tool-result";
 import type { SessionEntry } from "./session-entry";
 
 // ---------------------------------------------------------------------------
@@ -397,40 +399,159 @@ export function trackStreamingAssistant(entry: SessionEntry, event: AgentSession
 	}
 }
 
-/** Priming for a late joiner: the in-progress assistant message, when one is streaming. */
+/** What a running tool call's card shows on the browsers, as last sent on the wire. */
+interface ToolProgress {
+	toolName: string;
+	output: string;
+	/** Last non-empty image set sent: a partial without images never clears the card's. */
+	images: ImageArg[];
+	/** A history resync rebuilt the cards without their output: the next update is a full snapshot. */
+	resync: boolean;
+}
+
+/** Running tool calls per session handle, keyed by toolCallId; cleared at tool end and agent end. */
+const runningTools = new Map<string, Map<string, ToolProgress>>();
+
+/** Priming for a late joiner: the in-progress assistant message and every running tool's output so far. */
 export function streamingPrimeFrames(
 	entry: SessionEntry,
 ): Array<{ type: "event"; event: WireSessionEvent }> {
+	const frames: Array<{ type: "event"; event: WireSessionEvent }> = [];
 	const message = streamingAssistant.get(entry);
-	return message === undefined
-		? []
-		: [{ type: "event", event: { type: "message_start", message } }];
+	if (message !== undefined)
+		frames.push({ type: "event", event: { type: "message_start", message } });
+	for (const [toolCallId, progress] of runningTools.get(entry.handle) ?? []) {
+		if (progress.output === "" && progress.images.length === 0) continue;
+		frames.push({
+			type: "event",
+			event: {
+				type: "tool_execution_update",
+				toolCallId,
+				toolName: progress.toolName,
+				output: progress.output,
+				...(progress.images.length > 0 ? { images: progress.images } : {}),
+			},
+		});
+	}
+	return frames;
+}
+
+function sameImages(a: readonly ImageArg[], b: readonly ImageArg[]): boolean {
+	return (
+		a.length === b.length &&
+		a.every((img, i) => img.data === b[i].data && img.mimeType === b[i].mimeType)
+	);
 }
 
 /**
- * SDK session event to its wire form. The SDK's `message_update` carries the
- * cumulative assistant message twice (`message` and `assistantMessageEvent.partial`),
- * so shipping it verbatim costs O(n^2) bytes per reply across the SSE ring, the
- * control mirror and every browser stream. On the wire it is a delta keyed by
- * content block (see WireAssistantMessageEvent); the full message goes out once,
- * on `message_end`. Every other event is forwarded untouched.
+ * A tool partial as the wire carries it: the text appended since the call's
+ * previous update when the output grew, the whole text when it changed any
+ * other way, nothing (null) when it changes nothing the card shows.
  */
-export function toWireEvent(event: AgentSessionEvent): WireSessionEvent {
-	if (event.type !== "message_update") return event;
-	const sub = event.assistantMessageEvent;
-	if (sub.type === "text_delta" || sub.type === "thinking_delta") {
-		return {
-			type: "message_update",
-			assistantMessageEvent: { type: sub.type, contentIndex: sub.contentIndex, delta: sub.delta },
-		};
-	}
-	if (sub.type === "start" || sub.type === "done" || sub.type === "error") {
-		return { type: "message_update", assistantMessageEvent: { type: sub.type } };
-	}
+function toolUpdateFrame(
+	handle: string,
+	event: Extract<AgentSessionEvent, { type: "tool_execution_update" }>,
+): WireSessionEvent | null {
+	let tools = runningTools.get(handle);
+	if (tools === undefined) runningTools.set(handle, (tools = new Map()));
+	const sent = tools.get(event.toolCallId);
+	const output = extractText(event.partialResult);
+	const scanned = scanImages(event.partialResult);
+	const images =
+		scanned.length > 0 && !sameImages(scanned, sent?.images ?? []) ? scanned : undefined;
+	const previous = sent?.resync === true ? undefined : (sent?.output ?? "");
+	tools.set(event.toolCallId, {
+		toolName: event.toolName,
+		output,
+		images: images ?? sent?.images ?? [],
+		resync: false,
+	});
+	if (output === previous && images === undefined) return null;
+	const appended =
+		previous !== undefined &&
+		previous !== "" &&
+		output.length > previous.length &&
+		output.startsWith(previous)
+			? output.slice(previous.length)
+			: undefined;
 	return {
-		type: "message_update",
-		assistantMessageEvent: { type: sub.type, contentIndex: sub.contentIndex },
+		type: "tool_execution_update",
+		toolCallId: event.toolCallId,
+		toolName: event.toolName,
+		output: appended ?? output,
+		...(appended !== undefined ? { append: true as const } : {}),
+		...(images !== undefined ? { images } : {}),
 	};
+}
+
+/**
+ * SDK session event to its wire form, or null for an event that carries
+ * nothing the consumers read. Every slimming below drops data a consumer
+ * already received in another event (or never reads); see the wire types:
+ *
+ * - `message_update` is a delta keyed by content block (WireAssistantMessageEvent).
+ *   The SDK's carries the cumulative assistant message twice (`message` and
+ *   `assistantMessageEvent.partial`), O(n^2) bytes per reply across the SSE
+ *   ring, the control mirror and every browser stream. The full message goes
+ *   out once, on `message_end`.
+ * - `tool_execution_update` is the appended output (WireToolExecutionUpdate);
+ *   the SDK repeats the whole output and args in each.
+ * - Tool-result `message_start`/`message_end` are dropped: `tool_execution_end`
+ *   carries the same result and no consumer reads the message events.
+ * - `turn_end` and `agent_end` lose the messages and tool results they repeat.
+ *
+ * Every other event is forwarded untouched. Stateful: tool updates are
+ * deltas against the call's previous update on this handle.
+ */
+export function toWireEvent(handle: string, event: AgentSessionEvent): WireSessionEvent | null {
+	switch (event.type) {
+		case "message_update": {
+			const sub = event.assistantMessageEvent;
+			if (sub.type === "text_delta" || sub.type === "thinking_delta") {
+				return {
+					type: "message_update",
+					assistantMessageEvent: {
+						type: sub.type,
+						contentIndex: sub.contentIndex,
+						delta: sub.delta,
+					},
+				};
+			}
+			if (sub.type === "start" || sub.type === "done" || sub.type === "error") {
+				return { type: "message_update", assistantMessageEvent: { type: sub.type } };
+			}
+			return {
+				type: "message_update",
+				assistantMessageEvent: { type: sub.type, contentIndex: sub.contentIndex },
+			};
+		}
+		case "message_start":
+		case "message_end":
+			return event.message.role === "toolResult" ? null : event;
+		case "tool_execution_update":
+			return toolUpdateFrame(handle, event);
+		case "tool_execution_end":
+			runningTools.get(handle)?.delete(event.toolCallId);
+			return event;
+		case "turn_end":
+			return { type: "turn_end" };
+		case "agent_end": {
+			runningTools.delete(handle);
+			const { messages, ...rest } = event;
+			const last = messages.findLast((m): m is AssistantMessage => m.role === "assistant");
+			return last === undefined
+				? rest
+				: {
+						...rest,
+						lastAssistant: {
+							stopReason: last.stopReason,
+							...(last.errorMessage !== undefined ? { errorMessage: last.errorMessage } : {}),
+						},
+					};
+		}
+		default:
+			return event;
+	}
 }
 
 /**
@@ -467,6 +588,8 @@ export async function broadcastHistory(handle: string, frames: HistoryFrame[]): 
 		}
 	}
 	if (onHistoryTap !== null) await onHistoryTap(frames);
+	// The rebuilt cards of running tools hold no output: their next update must be a snapshot, not an append.
+	for (const progress of runningTools.get(handle)?.values() ?? []) progress.resync = true;
 }
 
 /**

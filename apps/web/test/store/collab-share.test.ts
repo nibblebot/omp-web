@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
+import type { WireSessionEvent } from "#lib/wire/protocol";
 import type { ClientCommand, CollabWireStatus } from "#lib/wire/protocol";
 import {
 	cancelDangerConfirm,
@@ -170,7 +170,7 @@ describe("guest prompt cards", () => {
 		applyEvent({
 			type: "message_end",
 			message: guestPrompt("ada", "run the tests"),
-		} as unknown as AgentSessionEvent);
+		} as unknown as WireSessionEvent);
 		expect(state.items.map((i) => i.kind)).toEqual(["guestPrompt"]);
 		expect(state.items[0]).toMatchObject({ from: "ada", text: "run the tests" });
 	});

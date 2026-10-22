@@ -93,7 +93,7 @@ import { createStatsApp } from "./stats-app";
 import type { StatsConfig } from "./stats-config";
 import { BrowserAuthStore, clearSessionCookie } from "./browser-auth";
 import { browserRequestAllowed, isJsonRequest, PRE_AUTH_IDLE_TIMEOUT_S } from "./browser-guard";
-import { DaemonTransportRegistry } from "./daemon-transport";
+import { DaemonTransportRegistry, type FleetSocketData } from "./daemon-transport";
 import { FleetAuthGate, isLoopbackBind, peerIsLoopback, BrowserAuthError } from "./fleet-auth-gate";
 import { compileTrustedProxies } from "./trusted-proxy";
 import { CALLBACK_TRANSPORT_STREAM_ID, type CallbackEnvelope } from "#lib/wire/callback-protocol";
@@ -400,7 +400,7 @@ class FleetServerImpl implements FleetServer {
 	 *  never wakes compute. */
 	readonly storedApp: StoredApp | null = null;
 
-	readonly #server: Server<undefined>;
+	readonly #server: Server<FleetSocketData>;
 	/** Boot-time sha-256 digest of the operator browser-access token (the
 	 *  store adopts it on first login; the login route verifies against it).
 	 *  Empty when auth is disabled (never used). */
@@ -641,18 +641,21 @@ class FleetServerImpl implements FleetServer {
 		// Keep branch + dirty counts fresh for local entries; close() clears
 		// the timer via sync.close().
 		this.sync.startGitStatePolling();
-		this.#server = Bun.serve({
+		this.#server = Bun.serve<FleetSocketData>({
 			hostname: config.bind,
 			port,
 			// SSE responses are long-lived and quiet between 15s keepalive
-			// pings; Bun's default 10s fetch idleTimeout would kill them.
+			// pings; Bun's default 10s fetch idleTimeout would kill them. (The
+			// callback pair's WebSocket idle timeout lives in the transport's
+			// `websocket` options.)
 			idleTimeout: 0,
+			websocket: this.transport.websocket,
 			fetch: (req, srv) => {
 				// Pre-auth routes read a small body and get a bounded idle window
 				// (FEDGE-11); SSE stays on idleTimeout 0.
 				if (new URL(req.url).pathname.startsWith("/auth/"))
 					srv.timeout(req, PRE_AUTH_IDLE_TIMEOUT_S);
-				return this.#fetch(req, srv.requestIP(req)?.address);
+				return this.#fetch(req, srv, srv.requestIP(req)?.address);
 			},
 		});
 		this.port = this.#server.port!;
@@ -930,7 +933,7 @@ class FleetServerImpl implements FleetServer {
 	/**
 	 * Pair transitions drive the status of non-clone entries. A paired session
 	 * is "ready". A ready session that loses its pair stays "ready" for
-	 * PAIR_LOSS_GRACE_MS: a voluntary byte renewal or brief re-dial re-pairs
+	 * PAIR_LOSS_GRACE_MS: a brief re-dial re-pairs
 	 * inside that window with no status flicker. Only a drop that outlasts the
 	 * grace becomes "reconnecting". Connecting/asleep/error belong to the
 	 * lifecycle's host runtime, so pair loss in those states changes nothing here.
@@ -1079,7 +1082,11 @@ class FleetServerImpl implements FleetServer {
 		return `http://${this.config.bind}:${this.port}`;
 	}
 
-	#fetch = async (req: Request, remoteAddress?: string | null): Promise<Response> => {
+	#fetch = async (
+		req: Request,
+		server: Server<FleetSocketData>,
+		remoteAddress?: string | null,
+	): Promise<Response | undefined> => {
 		const url0 = new URL(req.url);
 		const path0 = url0.pathname;
 		// /callback/* is the transport's, mounted BEFORE everything else and
@@ -1087,7 +1094,7 @@ class FleetServerImpl implements FleetServer {
 		// workspace enrollment credentials (the callback pair from the fleet's
 		// host daemon in this pass; daemon-session pairs later).
 		if (path0.startsWith("/callback")) {
-			const transportHandled = await this.transport.handleFetch(req);
+			const transportHandled = await this.transport.handleFetch(req, server);
 			if (transportHandled !== null) return transportHandled;
 		}
 		// Loopback peers skip browser auth below, so a request a browser sent on a

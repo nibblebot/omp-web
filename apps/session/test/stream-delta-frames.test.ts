@@ -42,7 +42,7 @@ function textDelta(soFar: string, delta: string): AgentSessionEvent {
 
 describe("toWireEvent", () => {
 	test("a text delta keeps only its block index and the appended text", () => {
-		expect(toWireEvent(textDelta("hello world", " world"))).toEqual({
+		expect(toWireEvent("s1", textDelta("hello world", " world"))).toEqual({
 			type: "message_update",
 			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " world" },
 		});
@@ -55,7 +55,7 @@ describe("toWireEvent", () => {
 			message: partial,
 			assistantMessageEvent: { type: "thinking_delta", contentIndex: 2, delta: "hm", partial },
 		};
-		expect(toWireEvent(event)).toEqual({
+		expect(toWireEvent("s1", event)).toEqual({
 			type: "message_update",
 			assistantMessageEvent: { type: "thinking_delta", contentIndex: 2, delta: "hm" },
 		});
@@ -78,15 +78,15 @@ describe("toWireEvent", () => {
 			message: partial,
 			assistantMessageEvent: { type: "done", reason: "stop", message: partial },
 		};
-		expect(toWireEvent(start)).toEqual({
+		expect(toWireEvent("s1", start)).toEqual({
 			type: "message_update",
 			assistantMessageEvent: { type: "text_start", contentIndex: 1 },
 		});
-		expect(toWireEvent(end)).toEqual({
+		expect(toWireEvent("s1", end)).toEqual({
 			type: "message_update",
 			assistantMessageEvent: { type: "text_end", contentIndex: 1 },
 		});
-		expect(toWireEvent(done)).toEqual({
+		expect(toWireEvent("s1", done)).toEqual({
 			type: "message_update",
 			assistantMessageEvent: { type: "done" },
 		});
@@ -94,7 +94,7 @@ describe("toWireEvent", () => {
 
 	test("message_end keeps the full settled message", () => {
 		const event: AgentSessionEvent = { type: "message_end", message: assistant("final text") };
-		expect(toWireEvent(event)).toBe(event);
+		expect(toWireEvent("s1", event)).toBe(event);
 	});
 
 	test("bytes per reply grow linearly, not quadratically", () => {
@@ -107,7 +107,7 @@ describe("toWireEvent", () => {
 			const delta = `tok${i} `;
 			soFar += delta;
 			const event = textDelta(soFar, delta);
-			lastFrameBytes = JSON.stringify(toWireEvent(event)).length;
+			lastFrameBytes = JSON.stringify(toWireEvent("s1", event)).length;
 			wireBytes += lastFrameBytes;
 			verbatimBytes += JSON.stringify(event).length;
 		}
@@ -121,7 +121,7 @@ describe("toWireEvent", () => {
 
 describe("streamingPrimeFrames", () => {
 	test("a late joiner is primed with the in-progress message, not one frame per token", () => {
-		const entry = {} as SessionEntry;
+		const entry = { handle: "s1" } as SessionEntry;
 		expect(streamingPrimeFrames(entry)).toEqual([]);
 		trackStreamingAssistant(entry, textDelta("hello", "lo"));
 		expect(streamingPrimeFrames(entry)).toEqual([
@@ -130,7 +130,7 @@ describe("streamingPrimeFrames", () => {
 	});
 
 	test("message_end clears the in-progress message", () => {
-		const entry = {} as SessionEntry;
+		const entry = { handle: "s1" } as SessionEntry;
 		trackStreamingAssistant(entry, textDelta("", "hi"));
 		trackStreamingAssistant(entry, {
 			type: "message_end",

@@ -684,11 +684,14 @@ async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
 		);
 	}
 	const dataHome = dirname(resolveStatePath(undefined, configPath));
+	const callbackUrl = process.env.OMP_FLEET_CALLBACK_URL?.replace(/\/+$/, "");
 	const result = await runProfilePreflight(profile, {
 		workspaceRoot: join(dataHome, "clones"),
 		logsRoot: join(dataHome, "logs"),
-		// A callback URL is only reachability-class-checked once the fleet
-		// has one to pass.
+		// The probe runs against the operator's explicit callback URL (the
+		// override the fleet itself dials sessions with); without one the fleet
+		// derives it from its bind and port at serve time, which preflight cannot know.
+		...(callbackUrl !== undefined && callbackUrl !== "" ? { callbackUrl } : {}),
 	});
 	const lines: string[] = [`profile ${profile.id}: ${result.ok ? "ready" : "NOT ready"}`];
 	for (const check of result.checks) {

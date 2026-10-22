@@ -1,4 +1,4 @@
-import type { AssistantMessage, ToolCall, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ToolCall, UserMessage } from "@oh-my-pi/pi-ai";
 import type { WireAssistantMessageEvent, WireSessionEvent } from "#lib/wire/protocol";
 import { claude } from "./screen";
 
@@ -138,27 +138,13 @@ export function cannedTurn(prompt: string, run: number, now: number): CannedStep
 	};
 
 	/** Runs one tool: start, a partial update with the first output line, then the result. */
-	const runTool = (call: ToolCall, output: string, ms: number): ToolResultMessage => {
+	const runTool = (call: ToolCall, output: string, ms: number): void => {
 		const result = { content: [{ type: "text" as const, text: output }] };
-		const firstLine = { content: [{ type: "text" as const, text: output.split("\n")[0] }] };
+		const firstLine = output.split("\n")[0];
 		const ids = { toolCallId: call.id, toolName: call.name };
 		emit({ type: "tool_execution_start", ...ids, args: call.arguments }, 60);
-		emit(
-			{ type: "tool_execution_update", ...ids, args: call.arguments, partialResult: firstLine },
-			ms / 2,
-		);
+		emit({ type: "tool_execution_update", ...ids, output: firstLine }, ms / 2);
 		emit({ type: "tool_execution_end", ...ids, result }, ms / 2);
-		const message: ToolResultMessage = {
-			role: "toolResult",
-			toolCallId: call.id,
-			toolName: call.name,
-			content: result.content,
-			isError: false,
-			timestamp: now + at,
-		};
-		emit({ type: "message_start", message });
-		emit({ type: "message_end", message });
-		return message;
 	};
 
 	const user: UserMessage = { role: "user", content: prompt, timestamp: now };
@@ -198,11 +184,9 @@ export function cannedTurn(prompt: string, run: number, now: number): CannedStep
 	};
 	emit({ type: "turn_start" });
 	streamMessage(first, 820);
-	const toolResults = [
-		runTool(statusCall, STATUS_OUTPUT, 640),
-		runTool(grepCall, GREP_OUTPUT, 280),
-	];
-	emit({ type: "turn_end", message: first, toolResults });
+	runTool(statusCall, STATUS_OUTPUT, 640);
+	runTool(grepCall, GREP_OUTPUT, 280);
+	emit({ type: "turn_end" });
 
 	// Turn 2: the markdown answer.
 	const second: AssistantMessage = {
@@ -216,7 +200,7 @@ export function cannedTurn(prompt: string, run: number, now: number): CannedStep
 	};
 	emit({ type: "turn_start" }, 300);
 	streamMessage(second, 640);
-	emit({ type: "turn_end", message: second, toolResults: [] });
-	emit({ type: "agent_end", messages: [user, first, ...toolResults, second], yielded: true }, 60);
+	emit({ type: "turn_end" });
+	emit({ type: "agent_end", lastAssistant: { stopReason: second.stopReason }, yielded: true }, 60);
 	return steps;
 }

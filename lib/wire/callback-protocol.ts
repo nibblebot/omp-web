@@ -1,38 +1,55 @@
 import { SSE_BACKPRESSURE_BYTES, SSE_KEEPALIVE_MS, SSE_SILENCE_DEADLINE_MS } from "./protocol";
-import { encodeSseEvent, parseSseUnits, SSE_PING_EVENT } from "./sse";
 
 /**
- * Callback transport protocol (OMP_CALLBACK_PROTO = 1), separately versioned
+ * Callback transport protocol (OMP_CALLBACK_PROTO = 2), separately versioned
  * from OMP_PROTO. This module is the single source of truth for the
  * envelope shape, route paths, and parsing rules shared by the fleet and the
  * daemon callback client.
  *
- * Pure module: no I/O, no ambient state beyond the explicit parser this file
- * creates. Shared by the fleet (server routes, edge) and the daemon's
- * callback client.
+ * Pure module: no I/O, no ambient state. Shared by the fleet (server routes,
+ * edge) and the daemon's callback client.
  *
- * Up:   daemon-initiated long-lived POST /callback/up, body
- *       application/x-ndjson UTF-8 envelopes, one record <= 1 MiB,
- *       incremental parsing, HTTP chunk boundaries are not message
- *       boundaries.
- * Down: daemon-initiated long-lived GET /callback/down, SSE response,
- *       same envelope version. Each pair mints a fresh connectionId and the
- *       down stream is never resumed: the fleet ignores Last-Event-ID.
- * Bulk: daemon-initiated POST /callback/bulk/<correlationId>, 64 MiB cap;
+ * Pair: one daemon-initiated WebSocket, `GET /callback/ws` upgrade, carrying
+ *       envelopes both ways. Identity, credential and protocol version ride
+ *       the upgrade request HEADERS, never the URL. One text message is one
+ *       canonical-JSON envelope of at most ENVELOPE_MAX_BYTES; larger payloads
+ *       travel as chunk envelopes (planOversizeSplit). Binary messages are a
+ *       protocol violation. Each socket mints a fresh connectionId with its
+ *       own seq space per direction (starts at 1, strictly monotonic) and is
+ *       never resumed. No per-connection byte cap and no renewal: a pair lives
+ *       until either side closes it or its silence deadline passes.
+ *       perMessageDeflate stays off on both ends.
+ * Credit: the daemon's uploads are paced by a pair-level credit window
+ *       (PairCreditControl, PAIR_CREDIT_WINDOW_BYTES): the fleet grants as it
+ *       consumes, a daemon never has more than the window outstanding, and
+ *       the fleet closes a pair that ignores it. This, not a size guess,
+ *       bounds what a forwarder or reverse proxy holds for one pair.
+ * Refusal: the fleet authenticates the upgrade request, but a WebSocket
+ *       client cannot read a non-101 status, so a refused dial is upgraded
+ *       and immediately closed with a refusal close code
+ *       ({@link callbackCloseFor}); the daemon maps it back with
+ *       {@link callbackErrorFromClose}.
+ * Bulk: daemon-initiated POST /callback/bulk/<correlationId>, 64 MiB cap,
+ *       on its own HTTP request so a transfer never blocks the pair;
  *       completion is never archive acceptance.
- *
- * An HTTP 200 on the POST is transport receipt only; it is NOT command
- * execution acceptance (that remains the daemon's 202/call_result
- * semantics).
+ * Proto 1: the fleet answers the old POST /callback/up and GET
+ *       /callback/down legs with a typed `proto_unsupported` refusal (410).
  */
 
 /** Callback protocol version. */
-export const OMP_CALLBACK_PROTO = 1;
+export const OMP_CALLBACK_PROTO = 2;
 
-/** Fleet route shapes for the three callback legs. */
-export const CALLBACK_UP_PATH = "/callback/up";
-export const CALLBACK_DOWN_PATH = "/callback/down";
+/** The one pair route: WebSocket upgrade. */
+export const CALLBACK_WS_PATH = "/callback/ws";
+/** Proto-1 pair legs; the fleet refuses them with `proto_unsupported`. */
+export const CALLBACK_PROTO1_PATHS: readonly string[] = ["/callback/up", "/callback/down"];
+/** Bulk transfer route prefix (HTTP POST, unchanged from proto 1). */
 export const CALLBACK_BULK_PATH_PREFIX = "/callback/bulk/";
+/**
+ * Upgrade request header naming the daemon's OMP_CALLBACK_PROTO. The fleet
+ * refuses an upgrade without it or with another value (`proto_unsupported`).
+ */
+export const CALLBACK_PROTO_HEADER = "x-omp-callback-proto";
 /**
  * Reserved control-plane wire literals both halves must agree on
  * byte-for-byte; carried here so neither lane invents a variant:
@@ -42,8 +59,8 @@ export const CALLBACK_BULK_PATH_PREFIX = "/callback/bulk/";
  * - CALLBACK_CONTROL_STREAM_ID: streamId the daemon uses for its transport
  *   heartbeats on the up stream.
  * - CALLBACK_PAIR_READY_TYPE: payload.type of the single control envelope
- *   the fleet emits once both halves of a connectionId are live; payload is
- *   {type, connectionId, generation}, idempotent by connectionId.
+ *   the fleet sends first on an accepted socket, once it registered the
+ *   pair; payload is {type, connectionId, generation}.
  */
 export const CALLBACK_TRANSPORT_STREAM_ID = "transport";
 export const CALLBACK_CONTROL_STREAM_ID = "control";
@@ -80,6 +97,92 @@ export interface StreamResyncControl {
 }
 
 /**
+ * fleet→daemon, kind "control", on a `browser/<connId>` stream: (re)open it.
+ * `lastSeq` is the replay floor (absent after a pair replacement). `ack: true`
+ * asks the daemon to pace the stream's priming and history resyncs by the
+ * fleet's drain: it keeps at most STREAM_ACK_WINDOW_BYTES of frames the fleet
+ * has not yet acknowledged with StreamAckControl, instead of pacing against its
+ * own outbound buffer alone. Every proto-2 daemon honors it.
+ */
+export interface StreamOpenControl {
+	type: "stream_open";
+	lastSeq?: number;
+	ack?: true;
+}
+
+/**
+ * fleet→daemon, kind "control", on a `browser/<connId>` stream opened with
+ * `ack: true`: every frame the daemon sent on this stream with wire seq at or
+ * below `seq` has left the fleet's memory for the browser's socket (the
+ * fleet's per-browser queue drained past it). Cumulative; stale or repeated
+ * values are harmless.
+ */
+export interface StreamAckControl {
+	type: "stream_ack";
+	seq: number;
+}
+
+/**
+ * Unacknowledged bytes a daemon may hold in flight per acked browser stream
+ * (sent, or queued for sending, and not yet covered by a stream_ack). A
+ * sender also keeps one maximal envelope (ENVELOPE_MAX_BYTES) of headroom
+ * inside it, so the fleet's per-browser queue (SSE_BACKPRESSURE_BYTES) always
+ * has at least 1 MiB left for live frames that interleave with a burst.
+ */
+export const STREAM_ACK_WINDOW_BYTES = 3 * 1024 * 1024;
+/** The fleet acknowledges once at least this many more bytes drained since its last ack. */
+export const STREAM_ACK_STEP_BYTES = 512 * 1024;
+
+/**
+ * fleet→daemon, kind "control", streamId "transport": pair upload credit. The
+ * fleet has consumed (parsed, routed, handed to its sinks) `consumed` bytes of
+ * everything the daemon sent on this socket since it opened. Cumulative, in
+ * the UTF-8 length of each text message, so a stale or repeated value is
+ * harmless and a lost grant is repaired by the next.
+ *
+ * A daemon hands the socket a message only while the bytes it has sent beyond
+ * the last grant, plus that message, fit PAIR_CREDIT_WINDOW_BYTES. The fleet
+ * counts every message it receives (dropped and binary ones too) and closes a
+ * pair that is more than PAIR_CREDIT_WINDOW_BYTES ahead of the credit it has
+ * granted: `invalid_request`, retryable (4400, like the other per-pair protocol
+ * violations; the redial starts a fresh window). The fleet's receive side is
+ * thereby bounded exactly: never more than the window sits between the
+ * daemon's `send()` and the fleet's consumer, in the socket buffers, a
+ * forwarder (`omp-web ui`) and a reverse proxy alike, because a grant is only
+ * issued by the real consumer at the end of the path.
+ */
+export interface PairCreditControl {
+	type: "pair_credit";
+	consumed: number;
+}
+
+/** True when `payload` is a {@link PairCreditControl}: a non-negative safe integer `consumed`. */
+export function isPairCreditControl(payload: unknown): payload is PairCreditControl {
+	if (typeof payload !== "object" || payload === null) return false;
+	const grant = payload as Record<string, unknown>;
+	return (
+		grant.type === "pair_credit" &&
+		typeof grant.consumed === "number" &&
+		Number.isSafeInteger(grant.consumed) &&
+		grant.consumed >= 0
+	);
+}
+
+/**
+ * Bytes a daemon may have on the wire towards the fleet beyond the credit it
+ * has seen: sent, in the socket buffers, in a forwarder, or received and not
+ * yet consumed. 8 MiB, the daemon's own per-connection queue cap
+ * (CONNECTION_MAX_BYTES), so a full queue never waits on more than it can hold.
+ * It must admit a maximal message beside the ungranted tail the grant cadence
+ * leaves behind: window - PAIR_CREDIT_STEP_BYTES must be at least
+ * CALLBACK_WS_MAX_PAYLOAD_BYTES (2 MiB, which covers ENVELOPE_MAX_BYTES), or a
+ * sender could wait for credit that never comes.
+ */
+export const PAIR_CREDIT_WINDOW_BYTES = 8 * 1024 * 1024;
+/** The fleet grants once at least this many more bytes were consumed since its last grant (the tail below it is never granted). */
+export const PAIR_CREDIT_STEP_BYTES = 512 * 1024;
+
+/**
  * fleet→daemon, kind "command", streamId "control": stream a server-side file
  * to the fleet as multi-part raw bytes under the given bulk correlation. Same
  * realpath jail + authorization rules as the session's canonicalRoots; failures are reported
@@ -105,24 +208,30 @@ export interface ShutdownControl {
 	reason?: string;
 }
 
-/** Serialized envelope cap: one NDJSON record / one SSE data payload (1 MiB). */
+/** Serialized envelope cap: one WebSocket text message (1 MiB). */
 export const ENVELOPE_MAX_BYTES = 1024 * 1024;
 /** Per-connection buffered-envelope cap across all streams (8 MiB). */
 export const CONNECTION_MAX_BYTES = 8 * 1024 * 1024;
 /** Per-virtual-stream buffered cap (4 MiB); also bounds reassembled chunks. */
 export const STREAM_MAX_BYTES = SSE_BACKPRESSURE_BYTES;
-/** Daemon heartbeat cadence on the down stream (15 s). */
+/** Heartbeat envelope cadence each side sends while otherwise idle (15 s). */
 export const HEARTBEAT_INTERVAL_MS = SSE_KEEPALIVE_MS;
-/** Down-stream silence deadline (30 s): no envelope by then = dead pair. */
+/** Receive silence deadline (30 s), applied by both sides: no envelope by then = dead pair. */
 export const SILENCE_DEADLINE_MS = SSE_SILENCE_DEADLINE_MS;
 /**
- * Up-leg lifetime byte budget (64 MiB). The fleet's Bun.serve counts a
- * streaming request body against `maxRequestBodySize` (default 128 MiB) for
- * the WHOLE life of the POST, so the long-lived /callback/up upload dies
- * (413) once it has carried that many bytes. The daemon renews the pair
- * voluntarily before then; half the platform default leaves headroom.
+ * Socket-level message cap (`maxPayloadLength`) on both ends: above the
+ * envelope cap, so an over-cap envelope reaches validation and is dropped
+ * alone instead of killing the socket.
  */
-export const UP_RENEWAL_BYTES = 64 * 1024 * 1024;
+export const CALLBACK_WS_MAX_PAYLOAD_BYTES = 2 * ENVELOPE_MAX_BYTES;
+/**
+ * Socket send-buffer high-water mark. A sender hands the socket no further
+ * envelope while its buffered amount is above this and resumes once it drains
+ * below, so unsent envelopes stay in the sender's own bounded queues. Neither
+ * side relies on the socket to buffer or drop: Bun's server `send()` drops a
+ * message silently past `backpressureLimit`.
+ */
+export const CALLBACK_WS_SEND_HIGH_WATER_BYTES = 1024 * 1024;
 /** Wait for the daemon's pair-ready confirmation (60 s). */
 export const PAIR_READY_TIMEOUT_MS = 60_000;
 /** Wait for a parked/suspended daemon to wake (60 s). */
@@ -135,7 +244,7 @@ export const BULK_MAX_BYTES = 64 * 1024 * 1024;
 /** Callback enrollment credential width (256-bit, hashed fleet-side). */
 export const ENROLLMENT_KEY_BYTES = 32;
 
-/** Envelope kinds; the event name on the down stream mirrors the kind. */
+/** Envelope kinds. */
 export const CALLBACK_KINDS = ["frame", "command", "control", "heartbeat"] as const;
 export type CallbackKind = (typeof CALLBACK_KINDS)[number];
 
@@ -158,6 +267,7 @@ export const CALLBACK_ERROR_CODES = [
 	"provider_failed",
 	"retryable",
 	"payload_too_large",
+	"proto_unsupported",
 ] as const;
 export type CallbackErrorCode = (typeof CALLBACK_ERROR_CODES)[number];
 
@@ -176,6 +286,11 @@ export const CALLBACK_ERROR_HTTP_STATUS: Record<CallbackErrorCode, number> = {
 	provider_failed: 500,
 	retryable: 503,
 	payload_too_large: 413,
+	/**
+	 * 410 on purpose: a proto-1 session does not know this code, falls back to
+	 * the status, reads `generation_obsolete`, and exits instead of redialing.
+	 */
+	proto_unsupported: 410,
 };
 
 /** True when `value` names a frozen callback error code. */
@@ -203,9 +318,6 @@ const UNTYPED_REFUSAL_CODE: Record<number, CallbackErrorCode> = {
 export function codeFromHttpStatus(status: number): CallbackErrorCode {
 	return UNTYPED_REFUSAL_CODE[status] ?? "retryable";
 }
-
-/** Request header a session sets on POST /callback/up when it reassembles chunked commands ("1"). */
-export const CALLBACK_CHUNKS_HEADER = "x-omp-callback-chunks";
 
 /** Typed protocol error carrying a ledger error code. */
 export class CallbackError extends Error {
@@ -235,6 +347,42 @@ export function callbackError(
 
 export function isCallbackError(value: unknown): value is CallbackError {
 	return value instanceof CallbackError;
+}
+
+/** WebSocket close codes at or above this carry a typed refusal: 4000 + the code's HTTP status. */
+export const CALLBACK_CLOSE_REFUSAL_BASE = 4000;
+/** RFC 6455 caps a close reason at 123 UTF-8 bytes. */
+const CLOSE_REASON_MAX_BYTES = 123;
+
+/**
+ * Close frame carrying a typed refusal on the pair socket: code
+ * CALLBACK_CLOSE_REFUSAL_BASE + the ledger code's HTTP status, reason
+ * `<ledger code>: <message>` cut to the 123-byte close-reason limit.
+ */
+export function callbackCloseFor(error: CallbackError): { code: number; reason: string } {
+	let reason = `${error.code}: ${error.message}`;
+	if (Buffer.byteLength(reason, "utf8") > CLOSE_REASON_MAX_BYTES) {
+		const bytes = Buffer.from(reason, "utf8").subarray(0, CLOSE_REASON_MAX_BYTES);
+		// Drop a multi-byte character the cut split (decodes as U+FFFD).
+		reason = bytes.toString("utf8").replace(/\uFFFD+$/, "");
+	}
+	return { code: CALLBACK_CLOSE_REFUSAL_BASE + CALLBACK_ERROR_HTTP_STATUS[error.code], reason };
+}
+
+/**
+ * Typed refusal a pair-socket close stands for, or null for an ordinary close
+ * (below CALLBACK_CLOSE_REFUSAL_BASE or above 4999). The reason's leading
+ * ledger code wins; without one the status picks the code (codeFromHttpStatus).
+ */
+export function callbackErrorFromClose(code: number, reason: string): CallbackError | null {
+	if (code < CALLBACK_CLOSE_REFUSAL_BASE || code > 4999) return null;
+	const sep = reason.indexOf(": ");
+	const head = sep === -1 ? reason : reason.slice(0, sep);
+	const message = sep === -1 ? reason : reason.slice(sep + 2);
+	const ledger = isCallbackErrorCode(head)
+		? head
+		: codeFromHttpStatus(code - CALLBACK_CLOSE_REFUSAL_BASE);
+	return new CallbackError(ledger, message || `callback pair refused (close ${code})`);
 }
 
 /** One callback-transport envelope (ledger "Callback transport"). */
@@ -267,9 +415,9 @@ export interface ValidateEnvelopeOptions {
 	/** Serialized-size cap; defaults to ENVELOPE_MAX_BYTES. */
 	maxBytes?: number;
 	/**
-	 * Canonical JSON byte length, when the caller already serialized the value
-	 * (skips a second JSON.stringify). Must equal the UTF-8 length of
-	 * JSON.stringify(value).
+	 * Serialized byte length, when the caller already has it (skips a second
+	 * JSON.stringify): the UTF-8 length of JSON.stringify(value), or of a wire
+	 * form of it (never shorter than the canonical form). Only bounds the cap.
 	 */
 	bytes?: number;
 }
@@ -331,183 +479,106 @@ export function validateEnvelope(value: unknown, opts?: ValidateEnvelopeOptions)
 	return value as CallbackEnvelope;
 }
 
-/** Encode one envelope as a complete NDJSON record (trailing newline included). */
-export function encodeNdjsonLine(envelope: CallbackEnvelope): string {
-	return `${JSON.stringify(envelope)}\n`;
+/**
+ * A payload serialized once (canonical JSON.stringify form) with its UTF-8
+ * length. Hand one to a sender instead of the raw value when the same payload
+ * goes to several streams or is ringed for replay: the envelope record is
+ * assembled around `json` ({@link encodeEnvelopeAround}) so neither sizing,
+ * validation, nor the per-stream seq stamp re-serializes it.
+ */
+export class PreEncodedPayload {
+	readonly json: string;
+	readonly bytes: number;
+	constructor(json: string, bytes: number) {
+		this.json = json;
+		this.bytes = bytes;
+	}
 }
 
-/** Parse one NDJSON record / SSE data payload into a validated envelope. */
-export function decodeEnvelope(line: string): CallbackEnvelope {
+/**
+ * Serialize `value` once into a {@link PreEncodedPayload}. Throws
+ * CallbackError("invalid_request") for `undefined` (a payload is required) and
+ * whatever JSON.stringify throws for a value that is not serializable.
+ */
+export function preEncodePayload(value: unknown): PreEncodedPayload {
+	const json = JSON.stringify(value);
+	if (json === undefined) {
+		throw new CallbackError("invalid_request", "invalid callback envelope: payload is required");
+	}
+	return new PreEncodedPayload(json, Buffer.byteLength(json, "utf8"));
+}
+
+/** Envelope fields other than the payload: what is stamped per emit. */
+export type EnvelopeHead = Omit<CallbackEnvelope, "payload">;
+
+/** Printable ASCII with no quote or backslash: serializes as itself between quotes. */
+const PLAIN_JSON_STRING = /^[\x20\x21\x23-\x5b\x5d-\x7e]*$/;
+
+/** JSON.stringify of a string, skipping the call for the plain-ASCII identifiers envelopes carry. */
+function quote(value: string): string {
+	return PLAIN_JSON_STRING.test(value) ? `"${value}"` : JSON.stringify(value);
+}
+
+/**
+ * The canonical serialization of an envelope split around its payload:
+ * `head + payloadJson + tail` equals `JSON.stringify(envelope)`. Key order is
+ * the CallbackEnvelope field order, which every producer builds in.
+ */
+export function envelopeFraming(envelope: EnvelopeHead): { head: string; tail: string } {
+	return {
+		head:
+			`{"version":${envelope.version},"workspaceId":${quote(envelope.workspaceId)}` +
+			`,"generation":${envelope.generation},"connectionId":${quote(envelope.connectionId)}` +
+			`,"streamId":${quote(envelope.streamId)},"seq":${envelope.seq}` +
+			`,"kind":${quote(envelope.kind)},"payload":`,
+		tail: `,"at":${envelope.at}}`,
+	};
+}
+
+/**
+ * One envelope as a pair-socket text message, assembled around an already
+ * serialized payload: equals `JSON.stringify` of the envelope carrying the
+ * payload `payloadJson` was serialized from.
+ */
+export function encodeEnvelopeAround(envelope: EnvelopeHead, payloadJson: string): string {
+	const { head, tail } = envelopeFraming(envelope);
+	return head + payloadJson + tail;
+}
+
+/**
+ * The payload's own JSON text inside a pair-socket message, or undefined when
+ * the message is not canonically framed. `envelope` is `decodeEnvelope(message)`:
+ * the message must start with the canonical head of that envelope and end with
+ * its canonical tail (what every producer emits, see {@link envelopeFraming}),
+ * so the slice between them is the text the payload was parsed from. Padded or
+ * re-keyed framing (extra whitespace, other key order) returns undefined.
+ * Callers that forward the slice must still route and filter on the parsed
+ * `envelope.payload`: both sides JSON.parse the same text.
+ */
+export function canonicalPayloadJson(message: string, envelope: EnvelopeHead): string | undefined {
+	const { head, tail } = envelopeFraming(envelope);
+	if (message.length < head.length + tail.length) return undefined;
+	if (!message.startsWith(head) || !message.endsWith(tail)) return undefined;
+	return message.slice(head.length, message.length - tail.length);
+}
+
+/**
+ * Parse one pair-socket text message into a validated envelope. `wireBytes`
+ * is the message's UTF-8 length when the receiver knows it: the canonical
+ * form is never longer than the wire form, so a message within the cap skips
+ * the re-serialization validateEnvelope would otherwise do to size it.
+ */
+export function decodeEnvelope(text: string, wireBytes?: number): CallbackEnvelope {
 	let value: unknown;
 	try {
-		value = JSON.parse(line);
+		value = JSON.parse(text);
 	} catch (cause) {
 		throw new CallbackError("invalid_request", "callback envelope is not valid JSON", { cause });
 	}
-	return validateEnvelope(value);
-}
-
-/** Concatenate record pieces into one buffer; a single piece is returned as-is. */
-function joinBytes(parts: Uint8Array[], total: number): Uint8Array {
-	if (parts.length === 1) return parts[0]!;
-	const out = new Uint8Array(total);
-	let offset = 0;
-	for (const part of parts) {
-		out.set(part, offset);
-		offset += part.length;
-	}
-	return out;
-}
-
-/** One NDJSON outcome: a complete record, or one bad record dropped (the stream resynchronizes after it). */
-export type NdjsonItem = { record: string } | { dropped: CallbackError };
-
-/** Incremental NDJSON parser over raw HTTP chunks. Never throws on a bad record. */
-export interface NdjsonParser {
-	/** Feed one HTTP chunk; returns every record and dropped record it completes, in stream order. */
-	push(chunk: Uint8Array | string): NdjsonItem[];
-	/** Flush at end-of-body; a trailing non-blank record without a newline is legal. */
-	end(): NdjsonItem[];
-	/** Bytes buffered since the last record boundary (bounded by the record cap). */
-	readonly bufferedBytes: number;
-}
-
-/**
- * Create an incremental NDJSON record parser for POST /callback/up bodies.
- * Bytes accumulate until a newline and only complete records are decoded, so
- * HTTP chunk boundaries are not message boundaries and multi-byte UTF-8
- * sequences split across chunks stay intact (0x0a can never occur inside a
- * UTF-8 multi-byte sequence). A bad record (over `maxRecordBytes`, default
- * ENVELOPE_MAX_BYTES, or invalid UTF-8) is returned as a `dropped` item and
- * the stream resynchronizes at the next newline. An over-cap record is dropped
- * as soon as the cap is crossed; its remaining bytes are discarded unbuffered.
- * Blank lines are skipped; a trailing CR is tolerated.
- */
-export function createNdjsonParser(opts?: { maxRecordBytes?: number }): NdjsonParser {
-	const maxRecordBytes = opts?.maxRecordBytes ?? ENVELOPE_MAX_BYTES;
-	// Pieces of the current partial record, joined once when its record closes.
-	let parts: Uint8Array[] = [];
-	let pendingBytes = 0;
-	// Set once an over-cap record was dropped: its bytes are discarded up to the next newline.
-	let discarding = false;
-
-	const overSize = (length: number): CallbackError =>
-		new CallbackError(
-			"invalid_request",
-			`invalid ndjson stream: record is ${length} bytes, over the ${maxRecordBytes}-byte record limit`,
-		);
-
-	// Close the buffered record at a newline or end-of-body.
-	const closeRecord = (): NdjsonItem | undefined => {
-		let line = joinBytes(parts, pendingBytes);
-		parts = [];
-		pendingBytes = 0;
-		if (line[line.length - 1] === 0x0d) line = line.subarray(0, line.length - 1);
-		if (line.length === 0) return undefined;
-		if (line.length > maxRecordBytes) return { dropped: overSize(line.length) };
-		try {
-			return { record: utf8Strict.decode(line) };
-		} catch (cause) {
-			return {
-				dropped: new CallbackError(
-					"invalid_request",
-					"invalid ndjson stream: record is not valid UTF-8",
-					{ cause },
-				),
-			};
-		}
-	};
-
-	return {
-		get bufferedBytes(): number {
-			return pendingBytes;
-		},
-		push(chunk) {
-			const bytes = typeof chunk === "string" ? utf8.encode(chunk) : chunk;
-			const out: NdjsonItem[] = [];
-			let start = 0;
-			for (;;) {
-				const nl = bytes.indexOf(0x0a, start);
-				if (nl === -1) break;
-				if (discarding) {
-					discarding = false;
-				} else {
-					parts.push(bytes.slice(start, nl));
-					pendingBytes += nl - start;
-					const item = closeRecord();
-					if (item !== undefined) out.push(item);
-				}
-				start = nl + 1;
-			}
-			if (start < bytes.length && !discarding) {
-				parts.push(bytes.slice(start));
-				pendingBytes += bytes.length - start;
-				if (pendingBytes > maxRecordBytes) {
-					out.push({ dropped: overSize(pendingBytes) });
-					parts = [];
-					pendingBytes = 0;
-					discarding = true;
-				}
-			}
-			return out;
-		},
-		end() {
-			if (discarding) {
-				discarding = false;
-				return [];
-			}
-			const item = closeRecord();
-			return item === undefined ? [] : [item];
-		},
-	};
-}
-
-/**
- * Encode one envelope as a complete SSE event block on the down stream:
- * event name is the envelope kind, id is the envelope seq, data is the
- * canonical JSON. Reuses lib/wire/sse.ts conventions.
- */
-export function encodeSseEnvelope(envelope: CallbackEnvelope): string {
-	return encodeSseEvent(envelope.kind, envelope, envelope.seq);
-}
-
-/**
- * Async-iterate validated envelopes from a /callback/down response body.
- * Reuses parseSseUnits (partial-chunk, CRLF, multi-line-data handling).
- * Comments and the transport `ping` keepalive are consumed silently;
- * observable liveness comes from `heartbeat` envelopes (15 s cadence vs the
- * 30 s silence deadline). Malformed event data throws
- * CallbackError("invalid_request") unless `onRecordError` is given: then the
- * bad event is reported and skipped (SSE event boundaries stay intact), so one
- * malformed envelope fails only itself. The event name mirrors the envelope
- * kind by convention but only the data is validated.
- */
-export async function* parseSseEnvelope(
-	body: ReadableStream<Uint8Array>,
-	opts?: { onRecordError?: (error: CallbackError) => void },
-): AsyncGenerator<CallbackEnvelope> {
-	for await (const unit of parseSseUnits(body)) {
-		if (unit.kind !== "event" || unit.event === SSE_PING_EVENT) continue;
-		let envelope: CallbackEnvelope;
-		try {
-			envelope = parseEventEnvelope(unit.data);
-		} catch (error) {
-			if (opts?.onRecordError === undefined) throw error;
-			opts.onRecordError(error as CallbackError);
-			continue;
-		}
-		yield envelope;
-	}
-}
-
-function parseEventEnvelope(data: string): CallbackEnvelope {
-	let value: unknown;
-	try {
-		value = JSON.parse(data);
-	} catch (cause) {
-		throw new CallbackError("invalid_request", "sse event data is not valid JSON", { cause });
-	}
-	return validateEnvelope(value);
+	return validateEnvelope(
+		value,
+		wireBytes !== undefined && wireBytes <= ENVELOPE_MAX_BYTES ? { bytes: wireBytes } : undefined,
+	);
 }
 
 /** Payload of a control envelope carrying one slice of an oversized payload. */

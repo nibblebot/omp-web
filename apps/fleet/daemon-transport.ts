@@ -1,58 +1,101 @@
 /**
- * Fleet-side callback transport: the fleet half of the OMP_CALLBACK_PROTO 1
+ * Fleet-side callback transport: the fleet half of the OMP_CALLBACK_PROTO 2
  * outbound callback pair. Wire vocabulary comes from lib/wire/callback-protocol.ts.
  * Daemons dial OUT to the fleet; the fleet never dials in, and there is NO
- * durable offline command
- * queue: sendToDaemon with no live pair fails `unavailable`, never buffers.
+ * durable offline command queue: sendToDaemon with no live pair fails
+ * `unavailable`, never buffers.
  *
  * Routes (mounted by handleFetch; identity rides HEADERS ONLY; the URL
  * alone never enrolls, authenticates, or authorizes anything):
  *
- *   POST /callback/up                    Long-lived NDJSON upload of daemon
- *                                        envelopes, parsed incrementally;
- *                                        HTTP chunk boundaries are never
- *                                        record boundaries (createNdjsonParser
- *                                        over the raw byte chunks). Bounded:
- *                                        1 MiB per record (validateEnvelope),
- *                                        no cumulative byte cap (the session renews the pair), seq
- *                                        strictly monotonic (first record
- *                                        seq ≥ 1). The request body is read
- *                                        to completion inside the handler
- *                                        (Bun cancels a body on early
- *                                        Response), so the up Response is
- *                                        the END-of-up signal: 200
- *                                        {ok, received} = clean upload end;
- *                                        4xx/5xx typed JSON = rejection. An
- *                                        upload half silent past
- *                                        SILENCE_DEADLINE_MS is killed (its
- *                                        Response settles typed) and the pair
- *                                        goes down with it: the down half is
- *                                        write-only, so up silence is the
- *                                        only dead-daemon signal the fleet
- *                                        has.
- *   GET  /callback/down                  Long-lived SSE downlink. Each connection
- *                                        has its own down seq space (starts at 1,
- *                                        strictly monotonic). Last-Event-ID is
- *                                        ignored: a redial starts live, never
- *                                        replayed. 15 s heartbeat envelopes.
+ *   GET  /callback/ws                    The pair: ONE daemon-dialed WebSocket
+ *                                        carrying envelopes both ways. One
+ *                                        text message is one canonical-JSON
+ *                                        envelope of at most ENVELOPE_MAX_BYTES;
+ *                                        every message is parsed; a message
+ *                                        framed canonically also hands
+ *                                        its sink the payload's own JSON text
+ *                                        (VirtualStreamSink.deliver) so a
+ *                                        relay need not re-serialize it;
+ *                                        a binary message is dropped and
+ *                                        counted. The socket mints its own
+ *                                        connectionId (x-omp-connection-id,
+ *                                        fresh per socket) and a seq space per
+ *                                        direction (strictly monotonic, first
+ *                                        daemon seq >= 1, the fleet's starts
+ *                                        at 1); it is never resumed. It lives
+ *                                        until either side closes it or its
+ *                                        silence deadline passes: no byte
+ *                                        budget, no renewal.
  *   POST /callback/bulk/<correlationId>  Daemon-initiated bounded bulk
- *                                        transfer (64 MiB cap) correlated to
- *                                        a fleet-issued id from
+ *                                        transfer (64 MiB cap) on its own
+ *                                        HTTP request, so a transfer never
+ *                                        blocks the pair, correlated to a
+ *                                        fleet-issued id from
  *                                        createBulkCorrelation. Completion
  *                                        is transport receipt, state
  *                                        "received", NEVER archive
  *                                        acceptance.
+ *   POST /callback/up, GET /callback/down  The OMP_CALLBACK_PROTO 1 legs: refused
+ *                                        with a typed `proto_unsupported` 410
+ *                                        (an old session reads the status as
+ *                                        `generation_obsolete` and exits).
  *
- * Pair establishment: once both halves for a connectionId are live, the
- * fleet emits ONE control envelope on the down half (streamId "transport",
- * payload {type:"pair_ready", connectionId, generation}); a daemon resolves
- * start() on it (PAIR_READY_TIMEOUT_MS deadline); idempotent by connectionId.
- * transport-generated envelopes (pair_ready, heartbeats) carry streamId
- * "transport" so they pass validateEnvelope on the daemon side.
+ * Upgrade and refusal: the upgrade request is authenticated exactly like
+ * every other callback request (below) and must carry CALLBACK_PROTO_HEADER =
+ * OMP_CALLBACK_PROTO. A WebSocket client cannot read a non-101 status, so a
+ * refused dial is still upgraded and then closed at once with
+ * callbackCloseFor(error): code 4000 + the ledger status, reason
+ * `<code>: <message>`. A request that is not a WebSocket upgrade gets a typed
+ * 400. Bun runs the handler's `open` inside `server.upgrade`, so the
+ * enrollment verdict and the pair registration happen in one tick.
+ *
+ * Pair establishment: an accepted socket is registered as the workspace's
+ * live pair and the fleet sends ONE control envelope first (streamId
+ * "transport", payload {type:"pair_ready", connectionId, generation}); a daemon
+ * resolves start() on it (PAIR_READY_TIMEOUT_MS deadline). Transport-generated
+ * envelopes (pair_ready, heartbeats) carry streamId "transport" so they pass
+ * validateEnvelope on the daemon side. A newer socket of a workspace replaces
+ * its older pair as the live one (sends go to the newest); the older socket
+ * lives until its own close or silence deadline.
+ *
+ * Liveness: envelope heartbeats both ways (the fleet sends one every
+ * HEARTBEAT_INTERVAL_MS on "transport"); a socket that delivers no message for
+ * SILENCE_DEADLINE_MS is closed by the registry sweep. WebSocket ping/pong is
+ * not relied on.
+ *
+ * Flow control, never silent loss: Bun's server `send()` drops past
+ * `backpressureLimit` and never reports it to the receiver, so the registry
+ * hands the socket nothing while `getBufferedAmount()` is above
+ * CALLBACK_WS_SEND_HIGH_WATER_BYTES. Unsent envelopes wait in the pair's own
+ * outbox (bounded by CONNECTION_MAX_BYTES; past it the pair is closed
+ * `retryable`) and flush on the socket's `drain`. A chunked command parks
+ * until the outbox has room (DOWN_ROOM_STALL_MS). A `send()` that returns 0
+ * (dropped) closes the pair. The receive side cannot pause a server socket:
+ * envelopes reach their sinks strictly in arrival order per (pair, stream),
+ * queued behind a sink of that stream that returns a promise (other streams
+ * never wait on it). What a stuck stream can pile up is bounded by the upload
+ * credit below.
+ *
+ * Upload credit: the daemon may have PAIR_CREDIT_WINDOW_BYTES of messages
+ * outstanding beyond the credit the fleet granted (PairCreditControl on
+ * "transport"). Every message received on a socket, dropped or binary ones
+ * included, counts its UTF-8 bytes into `bytesIn`. Once at least
+ * PAIR_CREDIT_STEP_BYTES more are consumed than were granted, the fleet sends
+ * the cumulative consumed count; consumed is what arrived, was processed
+ * (decoded, tapped, handed to its sink) and is not parked in a lane behind a
+ * stuck sink. Credit is therefore issued only by this consumer, after whatever
+ * sits in front of it (a forwarder, a reverse proxy, the kernel buffers). A
+ * socket whose `bytesIn` runs more than the window ahead of the credit already
+ * granted has ignored it: it is closed `invalid_request` (4400, retryable like
+ * the other per-pair protocol violations; a redial starts a fresh window)
+ * before the message is processed. No slack is needed: a daemon that obeys the
+ * window has at most the window beyond the credit it SAW, which never exceeds
+ * what the fleet granted. This one bound replaces a separate cap on lane backlog.
  *
  * Auth on every route: x-omp-workspace-id, x-omp-generation,
- * x-omp-connection-id (up may also establish it from the first envelope),
- * and `authorization: Bearer <enrollment credential>`. Enrollment is
+ * x-omp-connection-id (the socket's identity), and
+ * `authorization: Bearer <enrollment credential>`. Enrollment is
  * explicit (enrollWorkspace): ONLY the SHA-256 digest of the 256-bit
  * credential is stored, scoped to workspace+generation; comparison is
  * timing-safe (crypto.timingSafeEqual over fixed-size digests). A verified
@@ -65,50 +108,55 @@
  *
  * Virtual streams: a daemon envelope carries the logical streamId of its
  * consumer (one per browser/control client). attachVirtualStream binds a
- * sink per (workspaceId, streamId). Each envelope is handed to its sink as it
- * arrives: there is no queue and no drain, so the sink owns its own flow
- * control. An envelope for a streamId with no attached sink is dropped by
- * design (bounded transport); the fleet edge attaches sinks before letting
+ * sink per (workspaceId, streamId). Each envelope is handed to its sink in
+ * arrival order. An envelope for a streamId with no attached sink is dropped
+ * by design (bounded transport); the fleet edge attaches sinks before letting
  * traffic flow.
  *
  * Main (fleet/server.ts) mounts this as the first responder for the
- * /callback prefix:
+ * /callback prefix and hands `websocket` to Bun.serve:
  *
- *   fetch: (req) => transport.handleFetch(req) ?? nextRoutes(req)
+ *   fetch: (req, server) => transport.handleFetch(req, server) ?? nextRoutes(req)
+ *   websocket: transport.websocket
  *
  * handleFetch resolves a Response for /callback/* paths (typed-error JSON
- * {error, message, detail?} on failures) and null for anything else;
+ * {error, message, detail?} on failures), `undefined` once it upgraded the
+ * socket (Bun then needs no Response), and null for anything else;
  * non-callback paths are not this module's business.
  */
 
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
+import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import {
 	BULK_MAX_BYTES,
 	CALLBACK_BULK_PATH_PREFIX,
-	CALLBACK_CHUNKS_HEADER,
 	CALLBACK_CONTROL_STREAM_ID,
-	CALLBACK_DOWN_PATH,
 	CALLBACK_ERROR_HTTP_STATUS,
 	CALLBACK_PAIR_READY_TYPE,
-	CALLBACK_UP_PATH,
+	CALLBACK_PROTO1_PATHS,
+	CALLBACK_PROTO_HEADER,
 	CALLBACK_TRANSPORT_STREAM_ID,
+	CALLBACK_WS_MAX_PAYLOAD_BYTES,
+	CALLBACK_WS_PATH,
+	CALLBACK_WS_SEND_HIGH_WATER_BYTES,
+	PAIR_CREDIT_STEP_BYTES,
+	PAIR_CREDIT_WINDOW_BYTES,
+	type PairCreditControl,
 	type CallbackEnvelope,
 	type CallbackError,
+	callbackCloseFor,
 	callbackError,
-	createNdjsonParser,
-	encodeSseEnvelope,
+	CONNECTION_MAX_BYTES,
+	canonicalPayloadJson,
+	decodeEnvelope,
 	ENROLLMENT_KEY_BYTES,
 	ENVELOPE_MAX_BYTES,
-	CONNECTION_MAX_BYTES,
 	HEARTBEAT_INTERVAL_MS,
 	isCallbackError,
-	type NdjsonItem,
-	needsSplit,
-	planOversizeSplit,
 	OMP_CALLBACK_PROTO,
+	planOversizeSplit,
 	SILENCE_DEADLINE_MS,
-	validateEnvelope,
 } from "#lib/wire/callback-protocol";
 import { commandBytes, commandTooLargeMessage, MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
 import type { FleetLogStore } from "./log-store";
@@ -120,18 +168,28 @@ import {
 	planMaterializeFiles,
 } from "#lib/session-files/wake-materialize";
 
-/** Down seq records with no live connection and no activity for this long are dropped. */
-const SEQ_RECORD_IDLE_MS = 10 * 60_000;
-/** A chunked command waits this long for the daemon to drain the down stream before the connection is dropped. */
+/** A chunked command waits this long for the socket to drain before the pair is dropped. */
 const DOWN_ROOM_STALL_MS = 30_000;
 /** Open bulk correlations with no payload progress for this long expire as failed; settled ones are reaped. */
 const BULK_IDLE_MS = 60_000;
 /** Capture (download) correlations open at once; each buffers up to BULK_MAX_BYTES, so this bounds fleet heap. */
 const BULK_CAPTURE_MAX_OPEN = 2;
-/** Registry sweep cadence: up-connection silence, seq record idleness, bulk expiry. */
+/** Registry sweep cadence: pair silence, bulk expiry. */
 const SWEEP_INTERVAL_MS = 5_000;
 /** Revoked enrollments are kept this long (diagnostics) before the sweep drops them. */
 const ENROLLMENT_REVOKED_RETENTION_MS = 10 * 60_000;
+/**
+ * Bun's WebSocket idle timeout (seconds; any frame from the peer resets it).
+ * Well above the 30 s silence deadline, which the sweep enforces on envelopes
+ * alone, so Bun's own timer never decides first.
+ */
+const WS_IDLE_TIMEOUT_S = 120;
+/**
+ * Bun's per-socket send-buffer ceiling (`backpressureLimit`). The send gate
+ * keeps the buffered amount at most the high-water mark plus one envelope, far
+ * below this, so Bun never has to drop.
+ */
+const WS_BACKPRESSURE_LIMIT_BYTES = 4 * CALLBACK_WS_MAX_PAYLOAD_BYTES;
 
 /** Canonical 32-byte credential. Accepts 64-char hex, base64/base64url of
  * exactly 32 bytes, or raw bytes. Anything else throws (callers map that to
@@ -195,50 +253,105 @@ interface Enrollment {
 	revokedAt?: number;
 }
 
-interface UpConnection {
+/** Plain FIFO with O(1) shift: a long outbox or backlog of small envelopes never pays Array#shift's copy. */
+class Fifo<T> {
+	#items: Array<T | undefined> = [];
+	#head = 0;
+
+	get length(): number {
+		return this.#items.length - this.#head;
+	}
+
+	push(item: T): void {
+		this.#items.push(item);
+	}
+
+	shift(): T | undefined {
+		if (this.#head >= this.#items.length) return undefined;
+		const item = this.#items[this.#head];
+		this.#items[this.#head++] = undefined;
+		if (this.#head > 1024 && this.#head * 2 > this.#items.length) {
+			this.#items = this.#items.slice(this.#head);
+			this.#head = 0;
+		}
+		return item;
+	}
+
+	clear(): void {
+		this.#items = [];
+		this.#head = 0;
+	}
+}
+
+/**
+ * `ws.data` of a callback pair socket. `kind` discriminates it from any other
+ * WebSocket consumer sharing the fleet's Bun.serve.
+ */
+export interface CallbackSocketData {
+	kind: "callback";
+	/**
+	 * Typed refusal decided at upgrade: a WebSocket client cannot read a non-101
+	 * status, so `open` closes the upgraded socket with it instead.
+	 */
+	refusal: CallbackError | null;
 	workspaceId: string;
 	generation: number;
-	/** The callback-pair id: from the header or the first envelope. */
-	connectionId: string | null;
+	connectionId: string;
+}
+
+/** Every `ws.data` shape the fleet's Bun.serve hands its `websocket` handler. */
+export type FleetSocketData = CallbackSocketData;
+
+/** One encoded down envelope waiting for the socket to take it. */
+interface OutboxItem {
+	text: string;
+	bytes: number;
+}
+
+/** One daemon envelope waiting behind its stream's unsettled sink. */
+interface PendingDelivery {
+	sink: VirtualStreamSink;
+	envelope: CallbackEnvelope;
+	payloadJson: string | undefined;
+	bytes: number;
+}
+
+/** One stream's envelopes queued, in arrival order, behind its unsettled sink promise. */
+interface DeliveryLane {
+	queue: Fifo<PendingDelivery>;
+}
+
+/** One live callback pair: a registered, authenticated WebSocket. */
+interface PairConnection {
+	connectionId: string;
+	workspaceId: string;
+	generation: number;
+	ws: ServerWebSocket<FleetSocketData>;
+	/** Last fleet-assigned down seq; strictly monotonic per socket. */
+	downSeq: number;
+	/** Last accepted daemon seq. */
 	lastSeq: number;
+	/** UTF-8 bytes of every message received on this socket (the unit of the upload credit). */
 	bytesIn: number;
+	/** Cumulative `consumed` of the last pair_credit grant sent. */
+	creditGranted: number;
 	envelopes: number;
+	/** Bad messages dropped on this socket (each logged; the socket stays up). */
+	droppedMessages: number;
+	/** Last message of any kind from the daemon: the silence deadline's clock. */
 	lastDataAt: number;
-	silenceKilled: boolean;
-	reader: ReadableStreamDefaultReader<Uint8Array> | null;
-	pairAnnounced: boolean;
-	/** The session advertised chunk reassembly on its up POST (CALLBACK_CHUNKS_HEADER). */
-	chunks: boolean;
-	/** Bad records dropped on this upload (each logged; the upload stays up). */
-	droppedRecords: number;
-}
-
-interface SeqRecord {
-	connectionId: string;
-	workspaceId: string;
-	generation: number;
-	/** Fleet-assigned down-side seq; strictly monotonic per connectionId. */
-	nextSeq: number;
-	lastActiveAt: number;
-}
-
-interface DownConnection {
-	connectionId: string;
-	workspaceId: string;
-	generation: number;
-	record: SeqRecord;
-	encoder: TextEncoder;
-	controller: ReadableStreamDefaultController<Uint8Array>;
-	/** Serializes wire writes so envelope order is preserved. */
-	sendChain: Promise<void>;
 	lastSendAt: number;
-	heartbeatTimer: ReturnType<typeof setInterval> | null;
+	heartbeatTimer: Timer;
 	closed: boolean;
-	pairAnnounced: boolean;
-	/** Chunked senders parked until the reader drains (the down source's pull wakes them). */
+	/** Encoded envelopes the socket has not taken yet (it is above the high-water mark). */
+	outbox: Fifo<OutboxItem>;
+	outboxBytes: number;
+	/** Chunked senders parked until the outbox has room (a flush wakes them). */
 	roomWaiters: Array<() => void>;
-	/** Registration time: a leg no up half joins by the silence deadline is half-open (FEDGE-14). */
-	openedAt: number;
+	/** Streams whose sink returned a promise that has not settled; each holds its later envelopes in order. */
+	lanes: Map<string, DeliveryLane>;
+	/** Bytes queued across all lanes: the pair-wide undelivered backlog. */
+	backlogBytes: number;
 }
 
 interface BulkRecord {
@@ -260,9 +373,15 @@ interface BulkRecord {
 }
 
 /** Consumer of one virtual stream. The registry hands each envelope to
- * deliver as it arrives; a sink that needs flow control owns it. */
+ * deliver as it arrives; a sink that needs flow control owns it.
+ *
+ * `payloadJson` is the payload's own JSON text, sliced from the wire message,
+ * for an envelope that arrived canonically framed (see
+ * canonicalPayloadJson); undefined otherwise. `envelope.payload` is always the
+ * parse of that text: a sink that forwards the text must route and filter on
+ * `envelope.payload`, so what it inspected is what the next JSON.parse sees. */
 export interface VirtualStreamSink {
-	deliver(envelope: CallbackEnvelope): void | Promise<void>;
+	deliver(envelope: CallbackEnvelope, payloadJson?: string): void | Promise<void>;
 }
 
 export interface PairStatus {
@@ -307,12 +426,31 @@ export type CallbackEnvelopeInput = Partial<CallbackEnvelope> &
 	Pick<CallbackEnvelope, "streamId" | "kind" | "payload">;
 
 export class DaemonTransportRegistry {
+	/**
+	 * The fleet's WebSocket handler: hand it to `Bun.serve({ websocket })` next
+	 * to a `fetch` that calls {@link handleFetch}. perMessageDeflate stays off
+	 * and the message cap is CALLBACK_WS_MAX_PAYLOAD_BYTES; `backpressureLimit`
+	 * sits far above anything the send gate lets accumulate and never closes the
+	 * socket (nothing here relies on Bun to drop or close for it).
+	 */
+	readonly websocket: WebSocketHandler<FleetSocketData> = {
+		maxPayloadLength: CALLBACK_WS_MAX_PAYLOAD_BYTES,
+		perMessageDeflate: false,
+		backpressureLimit: WS_BACKPRESSURE_LIMIT_BYTES,
+		closeOnBackpressureLimit: false,
+		idleTimeout: WS_IDLE_TIMEOUT_S,
+		open: (ws) => this.#onOpen(ws),
+		message: (ws, message) => this.#onMessage(ws, message),
+		drain: (ws) => this.#onDrain(ws),
+		close: (ws) => this.#onClose(ws),
+	};
 	readonly #enrollments = new Map<string, Enrollment>();
 	/** Highest non-revoked enrolled generation per workspace; kept in step with #enrollments. */
 	readonly #authorizedMax = new Map<string, number>();
-	readonly #upConnections = new Set<UpConnection>();
-	readonly #downConnections = new Map<string, DownConnection>();
-	readonly #seqRecords = new Map<string, SeqRecord>();
+	/** Live pair sockets by connectionId. */
+	readonly #pairs = new Map<string, PairConnection>();
+	/** Open pairs per workspace in registration order: the last is the workspace's live pair. */
+	readonly #pairsByWorkspace = new Map<string, PairConnection[]>();
 	readonly #virtualStreams = new Map<string, Map<string, VirtualStreamSink>>();
 	readonly #taps = new Map<string, Set<(envelope: CallbackEnvelope) => void>>();
 	readonly #bulk = new Map<string, BulkRecord>();
@@ -326,23 +464,23 @@ export class DaemonTransportRegistry {
 	readonly #sweepTimer: Timer;
 	/** Registry clock for every timestamp and sweep comparison. */
 	readonly #now: () => number;
-	/** Sink for dropped up-leg records (one line each); defaults to console.warn. */
-	readonly #onDroppedRecord: (message: string) => void;
+	/** Sink for dropped pair messages (one line each); defaults to console.warn. */
+	readonly #onDroppedMessage: (message: string) => void;
 
 	/**
-	 * `now` and `sweepIntervalMs` exist so the sweep deadlines (up silence,
-	 * seq record idleness, bulk expiry) are testable without wall-clock waits;
-	 * production passes neither and uses the module constants + Date.now.
+	 * `now` and `sweepIntervalMs` exist so the sweep deadlines (pair silence,
+	 * bulk expiry) are testable without wall-clock waits; production passes
+	 * neither and uses the module constants + Date.now.
 	 */
 	constructor(
 		opts: {
 			now?: () => number;
 			sweepIntervalMs?: number;
-			onDroppedRecord?: (message: string) => void;
+			onDroppedMessage?: (message: string) => void;
 		} = {},
 	) {
 		this.#now = opts.now ?? Date.now;
-		this.#onDroppedRecord = opts.onDroppedRecord ?? ((message) => console.warn(message));
+		this.#onDroppedMessage = opts.onDroppedMessage ?? ((message) => console.warn(message));
 		const sweepMs = opts.sweepIntervalMs ?? SWEEP_INTERVAL_MS;
 		this.#sweepTimer = setInterval(() => this.#sweep(), sweepMs);
 		unrefTimer(this.#sweepTimer);
@@ -465,13 +603,10 @@ export class DaemonTransportRegistry {
 		}
 		if (max === null) this.#authorizedMax.delete(workspaceId);
 		else this.#authorizedMax.set(workspaceId, max);
-		const inScope = (conn: UpConnection | DownConnection): boolean =>
-			generation === undefined ? true : conn.generation === generation;
-		for (const conn of [...this.#upConnections]) {
-			if (conn.workspaceId === workspaceId && inScope(conn)) this.#killUp(conn);
-		}
-		for (const conn of [...this.#downConnections.values()]) {
-			if (conn.workspaceId === workspaceId && inScope(conn)) this.#teardownDown(conn);
+		for (const pair of [...this.#pairs.values()]) {
+			if (pair.workspaceId !== workspaceId) continue;
+			if (generation !== undefined && pair.generation !== generation) continue;
+			this.#teardownPair(pair, { code: 1000, reason: "enrollment revoked" });
 		}
 	}
 
@@ -510,10 +645,11 @@ export class DaemonTransportRegistry {
 		}
 	}
 
-	#authenticate(
-		req: Request,
-		opts: { requireConnectionId?: boolean } = {},
-	): { workspaceId: string; generation: number; connectionId?: string } {
+	#authenticate(req: Request): {
+		workspaceId: string;
+		generation: number;
+		connectionId: string | undefined;
+	} {
 		const workspaceId = req.headers.get("x-omp-workspace-id") ?? "";
 		const generationRaw = req.headers.get("x-omp-generation") ?? "";
 		const connectionId = req.headers.get("x-omp-connection-id") ?? undefined;
@@ -543,28 +679,35 @@ export class DaemonTransportRegistry {
 			});
 		}
 		this.#verifyEnrollment(workspaceId, generation, credential);
-		if (opts.requireConnectionId && !connectionId) {
-			throw callbackError("invalid_identity", "missing x-omp-connection-id header");
-		}
 		return { workspaceId, generation, connectionId };
 	}
 
 	// --- routing ---------------------------------------------------------------
 
-	/** Fleet-server mount: resolves a Response for /callback/* paths and null
-	 * for anything else. */
-	async handleFetch(req: Request): Promise<Response | null> {
+	/** Fleet-server mount: resolves a Response for /callback/* paths, `undefined`
+	 * once the request was upgraded to a pair socket (Bun then needs no
+	 * Response), and null for anything else. */
+	async handleFetch(
+		req: Request,
+		server: Server<FleetSocketData>,
+	): Promise<Response | null | undefined> {
 		const path = new URL(req.url).pathname;
 		try {
-			if (path === CALLBACK_UP_PATH) {
-				return req.method === "POST"
-					? await this.#handleUp(req)
-					: routeResponse(req.method, path, "POST");
-			}
-			if (path === CALLBACK_DOWN_PATH) {
+			if (path === CALLBACK_WS_PATH) {
 				return req.method === "GET"
-					? this.#handleDown(req)
+					? this.#upgrade(req, server)
 					: routeResponse(req.method, path, "GET");
+			}
+			if (CALLBACK_PROTO1_PATHS.includes(path)) {
+				// An OMP_CALLBACK_PROTO 1 leg. Unauthenticated on purpose: it reveals
+				// nothing about any enrollment, and the 410 makes an old session exit.
+				throw callbackError(
+					"proto_unsupported",
+					`${path} is an OMP_CALLBACK_PROTO 1 leg; this fleet speaks OMP_CALLBACK_PROTO ${OMP_CALLBACK_PROTO}`,
+					{
+						detail: `dial ${CALLBACK_WS_PATH} with ${CALLBACK_PROTO_HEADER}: ${OMP_CALLBACK_PROTO}`,
+					},
+				);
 			}
 			if (path.startsWith(CALLBACK_BULK_PATH_PREFIX)) {
 				if (req.method !== "POST") return routeResponse(req.method, path, "POST");
@@ -611,278 +754,267 @@ export class DaemonTransportRegistry {
 		}
 	}
 
-	// --- up: POST /callback/up --------------------------------------------------
+	// --- pair: GET /callback/ws -----------------------------------------------------
 
 	/**
-	 * Long-lived NDJSON upload. The body is consumed to completion (Bun
-	 * cancels the body on early Response), so the Response is the END-of-up
-	 * signal: 200 {ok, received} = clean end; typed error = rejection; the
-	 * pair-ready signal rides the DOWN half, never this response.
+	 * Authenticate the upgrade request, then upgrade. A refused dial is upgraded
+	 * too, carrying its typed refusal in `ws.data`: `open` closes it at once with
+	 * callbackCloseFor (a WebSocket client cannot read a non-101 status). Only a
+	 * request that is no WebSocket upgrade at all gets an HTTP error.
 	 */
-	async #handleUp(req: Request): Promise<Response> {
-		const auth = this.#authenticate(req);
-		const conn: UpConnection = {
-			workspaceId: auth.workspaceId,
-			generation: auth.generation,
-			connectionId: auth.connectionId ?? null,
-			lastSeq: 0,
-			bytesIn: 0,
-			envelopes: 0,
-			lastDataAt: this.#now(),
-			silenceKilled: false,
-			reader: null,
-			pairAnnounced: false,
-			chunks: req.headers.get(CALLBACK_CHUNKS_HEADER) === "1",
-			droppedRecords: 0,
-		};
-		this.#upConnections.add(conn);
-		// Header-borne connectionId: the up half may complete the pair (down
-		// dialed first), announce without waiting for the first envelope.
-		this.#maybeAnnouncePairReady(conn);
-		if (req.body === null) {
-			this.#upConnections.delete(conn);
-			return Response.json({ ok: true, received: 0 });
+	#upgrade(req: Request, server: Server<FleetSocketData>): undefined {
+		if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+			throw callbackError("invalid_request", `${CALLBACK_WS_PATH} requires a WebSocket upgrade`);
 		}
-		const parser = createNdjsonParser();
+		let data: CallbackSocketData;
 		try {
-			conn.reader = req.body.getReader();
-			for (;;) {
-				const { done, value } = await conn.reader.read();
-				if (done) break;
-				conn.lastDataAt = this.#now();
-				// Telemetry only: records are consumed as they arrive, and the parser
-				// bounds the unprocessed remainder to one envelope (ENVELOPE_MAX_BYTES),
-				// so a long-lived upload never buffers toward CONNECTION_MAX_BYTES.
-				conn.bytesIn += value.byteLength;
-				for (const item of parser.push(value)) this.#consumeUpItem(conn, item);
+			const auth = this.#authenticate(req);
+			if (auth.connectionId === undefined) {
+				throw callbackError("invalid_identity", "missing x-omp-connection-id header");
 			}
-			for (const item of parser.end()) this.#consumeUpItem(conn, item);
-			if (conn.silenceKilled) {
+			const claimed = req.headers.get(CALLBACK_PROTO_HEADER);
+			if (claimed !== String(OMP_CALLBACK_PROTO)) {
 				throw callbackError(
-					"unavailable",
-					`callback up connection silent past the ${SILENCE_DEADLINE_MS} ms silence deadline`,
+					"proto_unsupported",
+					`callback protocol ${claimed ?? "(none)"} is not supported; this fleet speaks OMP_CALLBACK_PROTO ${OMP_CALLBACK_PROTO}`,
+					{ detail: `send ${CALLBACK_PROTO_HEADER}: ${OMP_CALLBACK_PROTO}` },
 				);
 			}
-			// Clean end-of-up: the session drained this pair (renewal). Close its down
-			// leg now that the up leg is fully read, so a send the fleet has not yet
-			// written fails typed ("unavailable") rather than riding a leg the session
-			// is about to drop. Bytes already written are read before the close.
-			const down =
-				conn.connectionId === null ? undefined : this.#downConnections.get(conn.connectionId);
-			if (down !== undefined) this.#teardownDown(down);
-			return Response.json({ ok: true, received: conn.envelopes });
+			const owner = this.#pairs.get(auth.connectionId);
+			if (owner !== undefined && owner.workspaceId !== auth.workspaceId) {
+				throw callbackError(
+					"unauthorized",
+					`connection ${auth.connectionId} is not enrolled to workspace ${auth.workspaceId}`,
+				);
+			}
+			data = {
+				kind: "callback",
+				refusal: null,
+				workspaceId: auth.workspaceId,
+				generation: auth.generation,
+				connectionId: auth.connectionId,
+			};
 		} catch (error) {
-			if (isCallbackError(error)) return errorResponse(error);
-			// The platform aborted the body (daemon dropped the upload); any
-			// status is unobservable; respond typed for symmetry.
-			return Response.json(
-				{ error: "unavailable", message: "callback up connection aborted" },
-				{ status: 503 },
-			);
-		} finally {
-			this.#upConnections.delete(conn);
-			this.#emitPairChange(conn.workspaceId);
+			if (!isCallbackError(error)) throw error;
+			data = { kind: "callback", refusal: error, workspaceId: "", generation: 0, connectionId: "" };
+		}
+		if (!server.upgrade(req, { data })) {
+			throw callbackError("invalid_request", `${CALLBACK_WS_PATH} WebSocket upgrade failed`);
 		}
 	}
 
-	/** One up-leg parser outcome. A bad record is dropped and logged; the upload continues. */
-	#consumeUpItem(conn: UpConnection, item: NdjsonItem): void {
-		if ("dropped" in item) {
-			this.#dropUpRecord(conn, item.dropped);
+	/** The registered pair of a socket, or undefined for a refused, replaced or closed one. */
+	#pairOf(ws: ServerWebSocket<FleetSocketData>): PairConnection | undefined {
+		const pair = this.#pairs.get(ws.data.connectionId);
+		return pair !== undefined && pair.ws.data === ws.data ? pair : undefined;
+	}
+
+	/** Accepted upgrade: register the pair and announce it with pair_ready, the first message. */
+	#onOpen(ws: ServerWebSocket<FleetSocketData>): void {
+		const { refusal, workspaceId, generation, connectionId } = ws.data;
+		if (refusal !== null) {
+			const { code, reason } = callbackCloseFor(refusal);
+			ws.close(code, reason);
 			return;
 		}
-		let value: unknown;
-		try {
-			value = JSON.parse(item.record);
-		} catch (cause) {
-			this.#dropUpRecord(
-				conn,
-				callbackError("invalid_request", "callback record is not valid JSON", { cause }),
+		const replaced = this.#pairs.get(connectionId);
+		if (replaced !== undefined) {
+			this.#teardownPair(replaced, {
+				code: 1000,
+				reason: "replaced by a newer socket with the same connectionId",
+			});
+		}
+		const now = this.#now();
+		const pair: PairConnection = {
+			connectionId,
+			workspaceId,
+			generation,
+			ws,
+			downSeq: 0,
+			lastSeq: 0,
+			bytesIn: 0,
+			creditGranted: 0,
+			envelopes: 0,
+			droppedMessages: 0,
+			lastDataAt: now,
+			lastSendAt: now,
+			heartbeatTimer: setInterval(() => {
+				if (!pair.closed) {
+					this.#sendDown(pair, {
+						streamId: CALLBACK_TRANSPORT_STREAM_ID,
+						kind: "heartbeat",
+						payload: {},
+					});
+				}
+			}, HEARTBEAT_INTERVAL_MS),
+			closed: false,
+			outbox: new Fifo(),
+			outboxBytes: 0,
+			roomWaiters: [],
+			lanes: new Map(),
+			backlogBytes: 0,
+		};
+		this.#pairs.set(connectionId, pair);
+		this.#indexPair(pair);
+		unrefTimer(pair.heartbeatTimer);
+		this.#sendDown(pair, {
+			streamId: CALLBACK_TRANSPORT_STREAM_ID,
+			kind: "control",
+			payload: { type: CALLBACK_PAIR_READY_TYPE, connectionId, generation },
+		});
+		this.#emitPairChange(workspaceId);
+	}
+
+	/** The socket's buffer emptied: hand it the envelopes that waited for room. */
+	#onDrain(ws: ServerWebSocket<FleetSocketData>): void {
+		const pair = this.#pairOf(ws);
+		if (pair !== undefined) this.#flush(pair);
+	}
+
+	#onClose(ws: ServerWebSocket<FleetSocketData>): void {
+		const pair = this.#pairOf(ws);
+		if (pair !== undefined) this.#teardownPair(pair);
+	}
+
+	// --- up: daemon -> fleet messages ---------------------------------------------------
+
+	/**
+	 * One daemon message. A bad message (binary, not JSON, over the envelope cap,
+	 * failing validation) is dropped, counted and logged; identity and seq
+	 * violations close the pair with their typed code: they are not bad bytes.
+	 */
+	#onMessage(ws: ServerWebSocket<FleetSocketData>, message: string | Buffer): void {
+		const pair = this.#pairOf(ws);
+		if (pair === undefined) return;
+		pair.lastDataAt = this.#now();
+		const bytes =
+			typeof message === "string" ? Buffer.byteLength(message, "utf8") : message.byteLength;
+		pair.bytesIn += bytes;
+		const outstanding = pair.bytesIn - pair.creditGranted;
+		if (outstanding > PAIR_CREDIT_WINDOW_BYTES) {
+			for (const parked of pair.lanes.values()) parked.queue.clear();
+			pair.lanes.clear();
+			pair.backlogBytes = 0;
+			this.#failPair(
+				pair,
+				callbackError(
+					"invalid_request",
+					`callback pair ignored its credit window: ${outstanding} bytes beyond the granted credit, window ${PAIR_CREDIT_WINDOW_BYTES}`,
+				),
+			);
+			return;
+		}
+		this.#acceptMessage(pair, message, bytes);
+		this.#grantCredit(pair);
+	}
+
+	/** Decode and route one counted message; a bad one is dropped, an identity or seq violation closes the pair. */
+	#acceptMessage(pair: PairConnection, message: string | Buffer, bytes: number): void {
+		if (typeof message !== "string") {
+			this.#dropMessage(
+				pair,
+				callbackError("invalid_request", "binary message: the pair carries text envelopes only"),
 			);
 			return;
 		}
 		let envelope: CallbackEnvelope;
 		try {
-			envelope = validateEnvelope(value);
+			envelope = decodeEnvelope(message, bytes);
 		} catch (error) {
 			if (!isCallbackError(error)) throw error;
-			this.#dropUpRecord(conn, error);
+			this.#dropMessage(pair, error);
 			return;
 		}
-		this.#acceptUpEnvelope(conn, envelope);
+		try {
+			this.#acceptEnvelope(pair, envelope, bytes, message);
+		} catch (error) {
+			if (!isCallbackError(error)) throw error;
+			this.#failPair(pair, error);
+		}
 	}
 
-	#dropUpRecord(conn: UpConnection, error: CallbackError): void {
-		conn.droppedRecords += 1;
-		this.#onDroppedRecord(
-			`callback up ${conn.workspaceId}@${conn.generation}: dropped record: ${error.message}`,
+	/**
+	 * Tell the daemon how much of its upload this fleet has consumed, once a step
+	 * more than the last grant has been. Consumed is what was received less what
+	 * still waits in a lane behind a stuck sink: credit comes back only from the
+	 * real consumer, and a stream that cannot drain holds its share of the window.
+	 * Monotonic: a byte joins the backlog only as it is received, and leaves it
+	 * into consumed.
+	 */
+	#grantCredit(pair: PairConnection): void {
+		const consumed = pair.bytesIn - pair.backlogBytes;
+		if (pair.closed || consumed - pair.creditGranted < PAIR_CREDIT_STEP_BYTES) return;
+		pair.creditGranted = consumed;
+		const grant: PairCreditControl = { type: "pair_credit", consumed };
+		this.#sendDown(pair, {
+			streamId: CALLBACK_TRANSPORT_STREAM_ID,
+			kind: "control",
+			payload: grant,
+		});
+	}
+
+	#dropMessage(pair: PairConnection, error: CallbackError): void {
+		pair.droppedMessages += 1;
+		this.#onDroppedMessage(
+			`callback pair ${pair.workspaceId}@${pair.generation}: dropped message: ${error.message}`,
 		);
 	}
 
-	/** Identity, pair, and seq violations still end the upload: they are not bad bytes. */
-	#acceptUpEnvelope(conn: UpConnection, envelope: CallbackEnvelope): void {
-		if (envelope.workspaceId !== conn.workspaceId || envelope.generation !== conn.generation) {
+	/** Identity and seq violations end the pair: they are not bad bytes. */
+	#acceptEnvelope(
+		pair: PairConnection,
+		envelope: CallbackEnvelope,
+		bytes: number,
+		message: string,
+	): void {
+		if (envelope.workspaceId !== pair.workspaceId || envelope.generation !== pair.generation) {
 			throw callbackError(
 				"forbidden",
 				"callback envelope identity does not match the authenticated connection",
 				{
-					detail: `envelope=${envelope.workspaceId}@${envelope.generation} connection=${conn.workspaceId}@${conn.generation}`,
+					detail: `envelope=${envelope.workspaceId}@${envelope.generation} connection=${pair.workspaceId}@${pair.generation}`,
 				},
 			);
 		}
-		if (conn.connectionId === null) {
-			conn.connectionId = envelope.connectionId;
-			this.#maybeAnnouncePairReady(conn);
-		} else if (envelope.connectionId !== conn.connectionId) {
+		if (envelope.connectionId !== pair.connectionId) {
 			throw callbackError(
 				"invalid_request",
-				"callback envelope connectionId changed mid-connection",
+				"callback envelope connectionId does not match the socket",
 			);
 		}
-		if (envelope.seq <= conn.lastSeq) {
+		if (envelope.seq <= pair.lastSeq) {
 			throw callbackError(
 				"invalid_request",
-				`callback envelope seq ${envelope.seq} is not monotonic (connection last seq ${conn.lastSeq})`,
+				`callback envelope seq ${envelope.seq} is not monotonic (connection last seq ${pair.lastSeq})`,
 			);
 		}
-		conn.lastSeq = envelope.seq;
-		conn.envelopes += 1;
-		this.#dispatchUpEnvelope(conn, envelope);
-	}
-
-	#dispatchUpEnvelope(conn: UpConnection, envelope: CallbackEnvelope): void {
+		pair.lastSeq = envelope.seq;
+		pair.envelopes += 1;
 		if (envelope.kind === "heartbeat") return; // transport liveness only
 		if (envelope.kind === "control" && envelope.streamId === CALLBACK_CONTROL_STREAM_ID) {
-			this.#applyDownloadBulkFailed(conn.workspaceId, envelope.payload);
+			this.#applyDownloadBulkFailed(pair.workspaceId, envelope.payload);
 		}
-		for (const tap of this.#taps.get(conn.workspaceId) ?? []) {
+		for (const tap of this.#taps.get(pair.workspaceId) ?? []) {
 			try {
 				tap(envelope);
 			} catch {
 				// a fleet tap must never break the transport
 			}
 		}
-		const sink = this.#virtualStreams.get(conn.workspaceId)?.get(envelope.streamId);
+		const sink = this.#virtualStreams.get(pair.workspaceId)?.get(envelope.streamId);
 		// No sink for this streamId: dropped by design (bounded transport).
-		if (sink) void this.#deliverVirtual(sink, envelope);
+		if (sink === undefined) return;
+		this.#deliver(pair, sink, envelope, canonicalPayloadJson(message, envelope), bytes);
 	}
 
-	/** Emit the single pair_ready control once BOTH halves of a connectionId
-	 * are live. Called from up-open/first-envelope and down-open. */
-	#maybeAnnouncePairReady(candidate: UpConnection | DownConnection): void {
-		const connectionId = candidate.connectionId;
-		if (!connectionId) return;
-		const up = [...this.#upConnections].find((c) => c.connectionId === connectionId);
-		const down = this.#downConnections.get(connectionId);
-		if (!up || !down || (up.pairAnnounced && down.pairAnnounced)) return;
-		up.pairAnnounced = true;
-		down.pairAnnounced = true;
-		this.#sendDownEnvelope(down, {
-			streamId: CALLBACK_TRANSPORT_STREAM_ID,
-			kind: "control",
-			payload: { type: CALLBACK_PAIR_READY_TYPE, connectionId, generation: down.generation },
-		});
-		this.#emitPairChange(down.workspaceId);
-	}
-
-	// --- down: GET /callback/down -------------------------------------------------
-
-	/** Long-lived SSE downlink with 15 s heartbeats; Last-Event-ID is ignored. */
-	#handleDown(req: Request): Response {
-		const auth = this.#authenticate(req, { requireConnectionId: true });
-		const connectionId = auth.connectionId as string;
-		const record = this.#seqRecordFor(connectionId, auth.workspaceId, auth.generation);
-		const replaced = this.#downConnections.get(connectionId);
-		if (replaced) this.#teardownDown(replaced);
-		const encoder = new TextEncoder();
-		const conn: DownConnection = {
-			connectionId,
-			workspaceId: auth.workspaceId,
-			generation: auth.generation,
-			record,
-			encoder,
-			controller: undefined as unknown as ReadableStreamDefaultController<Uint8Array>,
-			sendChain: Promise.resolve(),
-			lastSendAt: this.#now(),
-			heartbeatTimer: null,
-			closed: false,
-			pairAnnounced: false,
-			roomWaiters: [],
-			openedAt: this.#now(),
-		};
-		const body = new ReadableStream<Uint8Array>(
-			{
-				start: (controller) => {
-					conn.controller = controller;
-				},
-				cancel: () => {
-					this.#teardownDown(conn);
-				},
-				pull: () => {
-					// The reader drained queued bytes: wake a chunked send waiting for room.
-					for (const wake of conn.roomWaiters.splice(0)) wake();
-				},
-			},
-			// Byte-counted queuing strategy (finding: a default chunk-counted
-			// strategy made desiredSize a CHUNK count, never below the
-			// byte budget regardless of how many unread bytes accumulated,
-			// so #writeDown's drop-and-resume could not trip and a stalled
-			// daemon buffered unbounded bytes). Mirroring the browser edge's
-			// byte strategy, desiredSize is now a true byte fill level and
-			// the frozen per-connection CONNECTION_MAX_BYTES bound holds.
-			{
-				highWaterMark: CONNECTION_MAX_BYTES,
-				size: (chunk) => (chunk as Uint8Array).byteLength,
-			},
-		);
-		this.#downConnections.set(connectionId, conn);
-		conn.heartbeatTimer = setInterval(() => {
-			if (!conn.closed) {
-				this.#sendDownEnvelope(conn, {
-					streamId: CALLBACK_TRANSPORT_STREAM_ID,
-					kind: "heartbeat",
-					payload: {},
-				});
-			}
-		}, HEARTBEAT_INTERVAL_MS);
-		unrefTimer(conn.heartbeatTimer);
-		this.#maybeAnnouncePairReady(conn);
-		return new Response(body, {
-			status: 200,
-			headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" },
-		});
-	}
-
-	#seqRecordFor(connectionId: string, workspaceId: string, generation: number): SeqRecord {
-		const existing = this.#seqRecords.get(connectionId);
-		if (existing) {
-			if (existing.workspaceId !== workspaceId) {
-				throw callbackError(
-					"unauthorized",
-					`connection ${connectionId} is not enrolled to workspace ${workspaceId}`,
-				);
-			}
-			existing.generation = generation;
-			return existing;
-		}
-		const record: SeqRecord = {
-			connectionId,
-			workspaceId,
-			generation,
-
-			nextSeq: 0,
-			lastActiveAt: this.#now(),
-		};
-		this.#seqRecords.set(connectionId, record);
-		return record;
-	}
+	// --- down: fleet -> daemon messages ---------------------------------------------------
 
 	/** Fleet → daemon envelope. Returns the registry-stamped envelope (down
-	 * seq assigned) once the write is queued.
+	 * seq assigned) once it is queued for the socket.
 	 * No live pair: throws `unavailable`; never queues offline work. */
 	async sendToDaemon(workspaceId: string, draft: CallbackEnvelopeInput): Promise<CallbackEnvelope> {
-		const conn = this.#liveDownFor(workspaceId);
-		if (!conn) {
+		const pair = this.#pairsByWorkspace.get(workspaceId)?.at(-1);
+		if (!pair) {
 			throw callbackError(
 				"unavailable",
 				`workspace ${workspaceId} has no live callback pair; the fleet does not queue offline work`,
@@ -891,21 +1023,20 @@ export class DaemonTransportRegistry {
 				},
 			);
 		}
-		// Probe the envelope as #sendDownEnvelope will build it: one over the wire
-		// cap is sliced (commands to a chunk-capable session) or refused.
-		const probe = this.#downEnvelope(conn, draft, conn.record.nextSeq + 1);
-		if (needsSplit(probe)) return this.#sendOversize(conn, probe);
-		const envelope = this.#sendDownEnvelope(conn, draft);
-		await conn.sendChain;
+		const envelope = this.#downEnvelope(pair, draft, pair.downSeq + 1);
+		const text = JSON.stringify(envelope);
+		const bytes = Buffer.byteLength(text, "utf8");
+		if (bytes > ENVELOPE_MAX_BYTES) return this.#sendOversize(pair, envelope);
+		this.#commit(pair, envelope, text, bytes);
 		return envelope;
 	}
 
-	/** Oversize down envelope. A command to a session that advertised
-	 * CALLBACK_CHUNKS_HEADER goes out as ordered slices, each sent once the down
-	 * stream has room for it, so the byte budget never trips. Anything else fails
-	 * only this call, with payload_too_large; the pair stays up. */
-	async #sendOversize(conn: DownConnection, probe: CallbackEnvelope): Promise<CallbackEnvelope> {
-		const chunked = probe.kind === "command" && this.#chunkCapable(conn.connectionId);
+	/** Oversize down envelope. A command goes out as ordered chunk slices (every
+	 * proto-2 session reassembles), each sent once the outbox has room for it, so
+	 * the byte budget never trips. Anything else fails only this call, with
+	 * payload_too_large; the pair stays up. */
+	async #sendOversize(pair: PairConnection, probe: CallbackEnvelope): Promise<CallbackEnvelope> {
+		const chunked = probe.kind === "command";
 		const bytes = commandBytes(probe.payload);
 		if (!chunked || bytes > MAX_COMMAND_BYTES) {
 			const limit = chunked ? MAX_COMMAND_BYTES : ENVELOPE_MAX_BYTES;
@@ -913,62 +1044,53 @@ export class DaemonTransportRegistry {
 		}
 		let envelope: CallbackEnvelope | undefined;
 		for (const slice of planOversizeSplit(probe).envelopes) {
-			await conn.sendChain;
-			await this.#awaitDownRoom(conn, ENVELOPE_MAX_BYTES);
-			envelope = this.#sendDownEnvelope(conn, {
+			await this.#awaitRoom(pair, ENVELOPE_MAX_BYTES);
+			envelope = this.#sendDown(pair, {
 				streamId: slice.streamId,
 				kind: slice.kind,
 				payload: slice.payload,
 				at: slice.at,
 			});
 		}
-		await conn.sendChain;
 		if (envelope === undefined) {
 			throw callbackError("invalid_request", "oversize command split into no slices");
 		}
 		return envelope;
 	}
 
-	/** True when an open up half of this pair advertised chunk reassembly. */
-	#chunkCapable(connectionId: string): boolean {
-		for (const up of this.#upConnections) {
-			if (up.connectionId === connectionId && up.chunks) return true;
-		}
-		return false;
-	}
-
-	/** Resolves once the down stream can take `bytes` more. A reader that stops
-	 * draining past DOWN_ROOM_STALL_MS is dropped like any stalled reader. */
-	async #awaitDownRoom(conn: DownConnection, bytes: number): Promise<void> {
-		while (!conn.closed && (conn.controller.desiredSize ?? 0) < bytes) {
+	/** Resolves once the outbox can take `bytes` more. A socket that stops draining
+	 * past DOWN_ROOM_STALL_MS is dropped like any stalled reader. */
+	async #awaitRoom(pair: PairConnection, bytes: number): Promise<void> {
+		while (!pair.closed && CONNECTION_MAX_BYTES - pair.outboxBytes < bytes) {
 			const room = Promise.withResolvers<"room" | "stalled">();
 			const stall = setTimeout(() => room.resolve("stalled"), DOWN_ROOM_STALL_MS);
 			unrefTimer(stall);
-			conn.roomWaiters.push(() => room.resolve("room"));
+			pair.roomWaiters.push(() => room.resolve("room"));
 			const outcome = await room.promise;
 			clearTimeout(stall);
 			if (outcome === "stalled") {
-				this.#teardownDown(conn);
-				throw callbackError(
+				const error = callbackError(
 					"unavailable",
-					`callback down stream for ${conn.connectionId} stopped draining`,
+					`callback socket for ${pair.connectionId} stopped draining`,
 				);
+				this.#failPair(pair, error);
+				throw error;
 			}
 		}
-		if (conn.closed) {
+		if (pair.closed) {
 			throw callbackError(
 				"unavailable",
-				`callback down stream for ${conn.connectionId} closed mid-command`,
+				`callback socket for ${pair.connectionId} closed mid-command`,
 			);
 		}
 	}
 
-	#downEnvelope(conn: DownConnection, draft: CallbackEnvelopeInput, seq: number): CallbackEnvelope {
+	#downEnvelope(pair: PairConnection, draft: CallbackEnvelopeInput, seq: number): CallbackEnvelope {
 		return {
 			version: OMP_CALLBACK_PROTO,
-			workspaceId: conn.workspaceId,
-			generation: conn.generation,
-			connectionId: conn.connectionId,
+			workspaceId: pair.workspaceId,
+			generation: pair.generation,
+			connectionId: pair.connectionId,
 			streamId: draft.streamId,
 			seq,
 			kind: draft.kind,
@@ -977,59 +1099,100 @@ export class DaemonTransportRegistry {
 		};
 	}
 
-	#liveDownFor(workspaceId: string): DownConnection | null {
-		let found: DownConnection | null = null;
-		for (const conn of this.#downConnections.values()) {
-			if (conn.workspaceId === workspaceId && conn.pairAnnounced) found = conn; // most recent pair wins
-		}
-		return found;
+	/** Register a pair as its workspace's newest socket (the live pair). */
+	#indexPair(pair: PairConnection): void {
+		const siblings = this.#pairsByWorkspace.get(pair.workspaceId);
+		if (siblings === undefined) this.#pairsByWorkspace.set(pair.workspaceId, [pair]);
+		else siblings.push(pair);
 	}
 
-	#sendDownEnvelope(conn: DownConnection, draft: CallbackEnvelopeInput): CallbackEnvelope {
-		const record = conn.record;
-		record.nextSeq += 1;
-		const envelope = this.#downEnvelope(conn, draft, record.nextSeq);
-		const block = encodeSseEnvelope(envelope);
-		record.lastActiveAt = this.#now();
-		conn.sendChain = conn.sendChain.then(() => {
-			if (conn.closed) return;
-			try {
-				this.#writeDown(conn, block);
-			} catch {
-				this.#teardownDown(conn);
-			}
-		});
+	/** Drop a pair from its workspace's index; an older open socket becomes live again. */
+	#unindexPair(pair: PairConnection): void {
+		const siblings = this.#pairsByWorkspace.get(pair.workspaceId);
+		if (siblings === undefined) return;
+		const at = siblings.indexOf(pair);
+		if (at < 0) return;
+		siblings.splice(at, 1);
+		if (siblings.length === 0) this.#pairsByWorkspace.delete(pair.workspaceId);
+	}
+
+	/** Build, stamp and queue one transport-originated (or already sliced) envelope. */
+	#sendDown(pair: PairConnection, draft: CallbackEnvelopeInput): CallbackEnvelope {
+		const envelope = this.#downEnvelope(pair, draft, pair.downSeq + 1);
+		const text = JSON.stringify(envelope);
+		this.#commit(pair, envelope, text, Buffer.byteLength(text, "utf8"));
 		return envelope;
 	}
 
-	#writeDown(conn: DownConnection, block: string): void {
-		conn.controller.enqueue(conn.encoder.encode(block));
-		conn.lastSendAt = this.#now();
-		// Byte-counted strategy (#handleDown): desiredSize = highWaterMark −
-		// buffered, so a stalled reader that lets buffered bytes exceed the
-		// frozen per-connection cap (CONNECTION_MAX_BYTES) drives desiredSize
-		// below zero: the genuine drop-and-resume signal. The daemon redials
-		// on a fresh pair when it notices the closed stream.
-		const desired = conn.controller.desiredSize;
-		if (desired !== null && desired < 0) {
-			this.#teardownDown(conn);
+	/** Assign the envelope its seq and queue it; past CONNECTION_MAX_BYTES of unsent bytes the pair is closed. */
+	#commit(pair: PairConnection, envelope: CallbackEnvelope, text: string, bytes: number): void {
+		pair.downSeq = envelope.seq;
+		if (pair.closed) return;
+		pair.outbox.push({ text, bytes });
+		pair.outboxBytes += bytes;
+		this.#flush(pair);
+		if (!pair.closed && pair.outboxBytes > CONNECTION_MAX_BYTES) {
+			this.#failPair(
+				pair,
+				callbackError(
+					"retryable",
+					`callback socket for ${pair.connectionId} stopped draining: ${pair.outboxBytes} unsent bytes`,
+				),
+			);
 		}
 	}
 
-	#teardownDown(conn: DownConnection): void {
-		if (conn.closed) return;
-		conn.closed = true;
-		for (const wake of conn.roomWaiters.splice(0)) wake();
-		if (conn.heartbeatTimer !== null) clearInterval(conn.heartbeatTimer);
-		if (this.#downConnections.get(conn.connectionId) === conn)
-			this.#downConnections.delete(conn.connectionId);
-		conn.record.lastActiveAt = this.#now();
-		this.#emitPairChange(conn.workspaceId);
-		try {
-			conn.controller.close();
-		} catch {
-			// already closed or errored
+	/**
+	 * Hand the socket queued envelopes while its buffer is at or under the
+	 * high-water mark; the rest waits for `drain`. `send()` returns the byte count
+	 * (sent), -1 (enqueued under backpressure) or 0 (DROPPED): a drop must never
+	 * go unnoticed, so it closes the pair.
+	 */
+	#flush(pair: PairConnection): void {
+		let moved = false;
+		while (
+			!pair.closed &&
+			pair.outbox.length > 0 &&
+			pair.ws.getBufferedAmount() <= CALLBACK_WS_SEND_HIGH_WATER_BYTES
+		) {
+			const item = pair.outbox.shift()!;
+			pair.outboxBytes -= item.bytes;
+			moved = true;
+			if (pair.ws.send(item.text) === 0) {
+				this.#failPair(
+					pair,
+					callbackError("retryable", `callback socket for ${pair.connectionId} dropped a message`),
+				);
+				return;
+			}
+			pair.lastSendAt = this.#now();
 		}
+		if (moved) for (const wake of pair.roomWaiters.splice(0)) wake();
+	}
+
+	/** End a pair with a close frame (omitted when the peer already closed). */
+	#teardownPair(pair: PairConnection, close?: { code: number; reason: string }): void {
+		if (pair.closed) return;
+		pair.closed = true;
+		for (const wake of pair.roomWaiters.splice(0)) wake();
+		clearInterval(pair.heartbeatTimer);
+		if (this.#pairs.get(pair.connectionId) === pair) this.#pairs.delete(pair.connectionId);
+		this.#unindexPair(pair);
+		pair.outbox.clear();
+		pair.outboxBytes = 0;
+		this.#emitPairChange(pair.workspaceId);
+		if (close !== undefined) {
+			try {
+				pair.ws.close(close.code, close.reason);
+			} catch {
+				// already closed
+			}
+		}
+	}
+
+	/** Close the pair with the typed refusal frame for `error`; the daemon redials. */
+	#failPair(pair: PairConnection, error: CallbackError): void {
+		this.#teardownPair(pair, callbackCloseFor(error));
 	}
 
 	// --- virtual streams ---------------------------------------------------------
@@ -1058,13 +1221,81 @@ export class DaemonTransportRegistry {
 		if (streams.size === 0) this.#virtualStreams.delete(workspaceId);
 	}
 
-	/** Hand one envelope straight to its sink. There is no queue: a sink error
-	 * never fails the up leg. */
-	async #deliverVirtual(sink: VirtualStreamSink, envelope: CallbackEnvelope): Promise<void> {
+	/**
+	 * Hand one envelope to its sink. Order is strict per (pair, streamId): while
+	 * a stream's sink holds a promise, that stream's later envelopes wait in its
+	 * lane in arrival order; other streams of the pair are delivered meanwhile
+	 * and never wait on it. A sink returning void delivers inline and allocates
+	 * nothing (a lane exists only while a stream has an unsettled promise). The
+	 * receive side cannot pause a server socket, so what a stuck stream can pile
+	 * up is bounded by the upload credit instead: bytes parked in a lane are not
+	 * consumed (see #grantCredit), the daemon stops at PAIR_CREDIT_WINDOW_BYTES,
+	 * and one that sends past it closes the pair. A sink error never fails the pair.
+	 */
+	#deliver(
+		pair: PairConnection,
+		sink: VirtualStreamSink,
+		envelope: CallbackEnvelope,
+		payloadJson: string | undefined,
+		bytes: number,
+	): void {
+		const lane = pair.lanes.get(envelope.streamId);
+		if (lane === undefined) {
+			const pending = this.#invokeSink(sink, envelope, payloadJson);
+			if (pending !== undefined) {
+				const parked: DeliveryLane = { queue: new Fifo() };
+				pair.lanes.set(envelope.streamId, parked);
+				this.#parkLane(pair, envelope.streamId, parked, pending);
+			}
+			return;
+		}
+		lane.queue.push({ sink, envelope, payloadJson, bytes });
+		pair.backlogBytes += bytes;
+	}
+
+	/** Run one sink; its promise when it returned one, else undefined (sink errors never kill the transport). */
+	#invokeSink(
+		sink: VirtualStreamSink,
+		envelope: CallbackEnvelope,
+		payloadJson: string | undefined,
+	): Promise<void> | undefined {
+		let pending: void | Promise<void>;
 		try {
-			await sink.deliver(envelope);
+			pending = sink.deliver(envelope, payloadJson);
 		} catch {
-			// sink errors never kill the transport
+			return undefined;
+		}
+		return pending instanceof Promise ? pending : undefined;
+	}
+
+	/** The lane's sink returned `pending`: once it settles (either way) the lane drains. */
+	#parkLane(
+		pair: PairConnection,
+		streamId: string,
+		lane: DeliveryLane,
+		pending: Promise<void>,
+	): void {
+		const settled = (): void => this.#drainLane(pair, streamId, lane);
+		// a sink rejection never kills the transport
+		void pending.then(settled, settled);
+	}
+
+	/** The lane's sink settled: deliver its queued envelopes in order until one goes async again, then retire the lane. */
+	#drainLane(pair: PairConnection, streamId: string, lane: DeliveryLane): void {
+		for (;;) {
+			const next = lane.queue.shift();
+			if (next === undefined) {
+				if (pair.lanes.get(streamId) === lane) pair.lanes.delete(streamId);
+				this.#grantCredit(pair);
+				return;
+			}
+			pair.backlogBytes -= next.bytes;
+			const pending = this.#invokeSink(next.sink, next.envelope, next.payloadJson);
+			if (pending !== undefined) {
+				this.#parkLane(pair, streamId, lane, pending);
+				this.#grantCredit(pair);
+				return;
+			}
 		}
 	}
 
@@ -1451,30 +1682,25 @@ export class DaemonTransportRegistry {
 	/** Point-in-time pair/enrollment view for the fleet edge. */
 	pairStatus(workspaceId: string): PairStatus {
 		const authorizedGeneration = this.#authorizedMax.get(workspaceId) ?? null;
-		let down: DownConnection | null = null;
-		for (const conn of this.#downConnections.values()) {
-			// FEDGE-14: only a leg its up half joined is a pair; a down-only dial is not.
-			if (conn.workspaceId === workspaceId && conn.pairAnnounced) down = conn;
-		}
+		const workspacePairs = this.#pairsByWorkspace.get(workspaceId);
+		const live = workspacePairs?.at(-1) ?? null;
 		let upBytesIn = 0;
 		let envelopesReceived = 0;
 		let lastEnvelopeAt: number | null = null;
-		for (const conn of this.#upConnections) {
-			if (conn.workspaceId !== workspaceId) continue;
-			upBytesIn += conn.bytesIn;
-			envelopesReceived += conn.envelopes;
-			if (lastEnvelopeAt === null || conn.lastDataAt > lastEnvelopeAt)
-				lastEnvelopeAt = conn.lastDataAt;
+		for (const pair of workspacePairs ?? []) {
+			upBytesIn += pair.bytesIn;
+			envelopesReceived += pair.envelopes;
+			if (lastEnvelopeAt === null || pair.lastDataAt > lastEnvelopeAt)
+				lastEnvelopeAt = pair.lastDataAt;
 		}
-
 		return {
 			workspaceId,
 			enrolled: authorizedGeneration !== null,
 			authorizedGeneration,
-			paired: down !== null,
-			connectionId: down?.connectionId ?? null,
+			paired: live !== null,
+			connectionId: live?.connectionId ?? null,
 			lastEnvelopeAt,
-			lastDownSendAt: down?.lastSendAt ?? null,
+			lastDownSendAt: live?.lastSendAt ?? null,
 			envelopesReceived,
 			upBytesIn,
 		};
@@ -1482,19 +1708,19 @@ export class DaemonTransportRegistry {
 
 	#sweep(): void {
 		const now = this.#now();
-		for (const conn of [...this.#upConnections]) {
-			if (now - conn.lastDataAt > SILENCE_DEADLINE_MS) this.#killUp(conn);
-		}
-		// FEDGE-14: a down leg no up half joined by the silence deadline is
-		// half-open. It was never a pair, so the fleet closes it.
-		for (const conn of [...this.#downConnections.values()]) {
-			if (!conn.pairAnnounced && now - conn.openedAt > SILENCE_DEADLINE_MS) {
-				this.#teardownDown(conn);
+		// The daemon's heartbeat is the fleet's liveness evidence for a socket: past
+		// the silence deadline the pair is dead, and leaving it registered would
+		// report a dead daemon as paired and accept commands into a zombie.
+		for (const pair of [...this.#pairs.values()]) {
+			if (now - pair.lastDataAt > SILENCE_DEADLINE_MS) {
+				this.#failPair(
+					pair,
+					callbackError(
+						"unavailable",
+						`callback socket silent past the ${SILENCE_DEADLINE_MS} ms silence deadline`,
+					),
+				);
 			}
-		}
-		for (const [connectionId, record] of this.#seqRecords) {
-			if (this.#downConnections.has(connectionId)) continue;
-			if (now - record.lastActiveAt > SEQ_RECORD_IDLE_MS) this.#seqRecords.delete(connectionId);
 		}
 		for (const [correlationId, record] of this.#bulk) {
 			if (now - record.touchedAt <= BULK_IDLE_MS) continue;
@@ -1510,30 +1736,15 @@ export class DaemonTransportRegistry {
 		}
 	}
 
-	#killUp(conn: UpConnection): void {
-		conn.silenceKilled = true;
-		conn.reader?.cancel().catch(() => {});
-		// The up half is the fleet's ONLY liveness evidence for a daemon (the
-		// down half is write-only), so killing it ends the pair: leaving the
-		// down half live would report a dead daemon as paired (roster
-		// "ready") and keep accepting commands into a zombie socket. The seq record
-		// survives for a redial, exactly as after any other pair teardown.
-		// A down half already torn down (or never dialed) has nothing to close.
-		const down =
-			conn.connectionId === null ? undefined : this.#downConnections.get(conn.connectionId);
-		if (down !== undefined) this.#teardownDown(down);
-	}
-
 	/** Tear everything down (fleet shutdown / tests). Open bulk correlations
-	 * settle failed; live pairs close; seq records and enrollments are cleared. */
+	 * settle failed; live pairs close; enrollments are cleared. */
 	close(): void {
 		clearInterval(this.#sweepTimer);
-		for (const conn of [...this.#upConnections]) this.#killUp(conn);
-		for (const conn of [...this.#downConnections.values()]) this.#teardownDown(conn);
+		for (const pair of [...this.#pairs.values()]) {
+			this.#teardownPair(pair, { code: 1001, reason: "fleet shutting down" });
+		}
 		for (const record of this.#bulk.values())
 			this.#failBulk(record, record.bytes, "transport closed");
-		this.#upConnections.clear();
-		this.#seqRecords.clear();
 		this.#bulk.clear();
 		this.#virtualStreams.clear();
 		this.#taps.clear();

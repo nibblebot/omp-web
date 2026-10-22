@@ -3,7 +3,10 @@ import {
 	CONNECTION_MAX_BYTES,
 	ENVELOPE_MAX_BYTES,
 	HEARTBEAT_INTERVAL_MS,
+	STREAM_ACK_WINDOW_BYTES,
 	STREAM_MAX_BYTES,
+	preEncodePayload,
+	type PreEncodedPayload,
 } from "#lib/wire/callback-protocol";
 import type { CallbackEnvelope, CallbackKind } from "#lib/wire/callback-protocol";
 import type { StreamResyncControl } from "#lib/wire/callback-protocol";
@@ -14,7 +17,7 @@ import { isRingedDeltaType } from "./sse-delivery";
  * (Transport/Lifecycle 2026-09-06 contracts).
  *
  * The daemon dials the callback pair; the fleet manages per-browser virtual
- * streams and down-half controls. This module owns the daemon half:
+ * streams and fleet-to-daemon controls. This module owns the daemon half:
  *
  * - Browser streams: per `browser/<connId>` replay ring of emitted frame
  *   envelopes. stream_open (lastSeq = replay floor) replays ring frames with
@@ -33,13 +36,18 @@ import { isRingedDeltaType } from "./sse-delivery";
  *   dispatched through the mounted handleCommand; answers (call_result/unicast)
  *   flow as frames on the same stream. Re-submitted command ids are deduped by
  *   the session's command handler (index.ts), not by this broker.
- * - Control mirror: every session-scoped frame the direct /events path
- *   broadcasts is mirrored as a kind:"frame" envelope on streamId "control"
+ * - Control mirror: the session-scoped frames the direct /events path
+ *   broadcasts are mirrored as kind:"frame" envelopes on streamId "control"
  *   (payload verbatim) while the pair lives, so the fleet derives activity +
- *   fanout correlation exactly like the direct control-socket tap.
+ *   fanout correlation exactly like the direct control-socket tap. Streaming
+ *   deltas no fleet consumer reads (message_update, tool_execution_update,
+ *   bash_chunk, python_chunk) skip the control stream and ride browser streams
+ *   only. Each mirrored frame is serialized once and shared by every stream.
  *
- * Controls are not acknowledged on the wire. An unknown control type is logged
- * to stderr and otherwise ignored.
+ * Controls are not acknowledged on the wire, except that the fleet's stream_ack
+ * (see StreamOpenControl in callback-protocol.ts) releases credit on a browser
+ * stream it opened with `ack: true`. An unknown control type is logged to stderr
+ * and otherwise ignored.
  */
 
 // ── deps ───────────────────────────────────────────────────────────────────
@@ -90,7 +98,8 @@ export interface DaemonControlDeps {
 interface RingEntry {
 	seq: number;
 	kind: CallbackKind;
-	payload: unknown;
+	/** The payload serialized once; replay re-sends it under a fresh wire seq without re-serializing. */
+	encoded: PreEncodedPayload;
 	bytes: number;
 }
 
@@ -117,7 +126,11 @@ interface BrowserStream {
 	 * frames already reflected in the snapshot are never delivered twice and
 	 * later frames never land before the history they extend.
 	 */
-	deferred: Array<{ frame: Record<string, unknown>; bytes: number }> | null;
+	deferred: Array<{
+		frame: Record<string, unknown>;
+		encoded: PreEncodedPayload | undefined;
+		bytes: number;
+	}> | null;
 	deferredBytes: number;
 	/**
 	 * connectionId of the callback pair that last sent this stream an envelope.
@@ -125,6 +138,18 @@ interface BrowserStream {
 	 * fleet on the current pair, so it is an orphan (SXP-03).
 	 */
 	pairId: string | null;
+	/**
+	 * The fleet opened this stream with `ack: true`: priming and history resyncs
+	 * also wait for its stream_ack, so a slow browser paces the burst instead of
+	 * overflowing the fleet's per-browser queue.
+	 */
+	acked: boolean;
+	/** Paced frames sent on an acked stream and not yet acknowledged, in wire-seq order (slots before `inflightHead` are consumed). */
+	inflight: Array<{ seq: number; bytes: number } | undefined>;
+	inflightHead: number;
+	inflightBytes: number;
+	/** Paced senders asleep on credit or drain; woken by an ack, a re-prime, or the stream ending. */
+	roomWaiters: Set<() => void>;
 }
 
 export interface DaemonControlStatus {
@@ -145,6 +170,41 @@ function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Serialize a payload once, or undefined when it cannot be serialized: the
+ * transport then sees the raw value and rejects it with its usual error, and
+ * the mirror tap never throws into delivery.
+ */
+function tryEncode(payload: unknown): PreEncodedPayload | undefined {
+	try {
+		return preEncodePayload(payload);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Frames the control mirror does not carry (browser streams still do). The
+ * fleet reads the control stream for exactly: `state` (activity, lastSessionFile),
+ * `daemons`, `ui_request`/`ui_request_end` (activity), and prompt-fanout
+ * correlation (`call_result`, `error`, and `event` message_end/agent_end/abort).
+ * Streaming deltas carry nothing any of them reads, and dominate the bytes.
+ */
+function isUnmirroredToControl(frame: Record<string, unknown>): boolean {
+	switch (frame.type) {
+		case "bash_chunk":
+		case "python_chunk":
+			return true;
+		case "event": {
+			const event = frame.event;
+			if (!isObject(event)) return false;
+			return event.type === "message_update" || event.type === "tool_execution_update";
+		}
+		default:
+			return false;
+	}
+}
+
 export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	const streams = new Map<string, BrowserStream>();
 	let stopped = false;
@@ -162,7 +222,14 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	 * semantics. Ring memory is byte-bounded (4 MiB) per stream. A "dropped"
 	 * send on a browser stream flips stream_resync, no silent gap ever.
 	 */
-	const emit = (streamId: string, kind: CallbackKind, payload: unknown, record = true): void => {
+	const emit = (
+		streamId: string,
+		kind: CallbackKind,
+		payload: unknown,
+		record = true,
+		encoded?: PreEncodedPayload,
+		paced = false,
+	): void => {
 		const isBrowser = streamId.startsWith(CALLBACK_BROWSER_STREAM_PREFIX);
 		const stream = isBrowser ? streams.get(streamId) : undefined;
 		const isDelta =
@@ -171,14 +238,29 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			typeof payload.type === "string" &&
 			isRingedDeltaType(payload.type);
 		const ringFrame = isBrowser && stream !== undefined && record && isDelta;
+		// A ringed frame needs its JSON and byte size for the ring: serialize it
+		// here once and hand the same encoding to the transport, so the send
+		// does not serialize it again.
+		// A paced frame on an acked stream counts against the fleet's credit
+		// window from the moment its wire seq is known (stream_ack releases it),
+		// so it needs its byte size too.
+		const track = paced && stream !== undefined && stream.acked;
+		const wire = encoded ?? (ringFrame || track ? tryEncode(payload) : undefined);
 		const result = deps.send(
 			streamId,
 			kind,
-			payload,
-			ringFrame
+			wire ?? payload,
+			ringFrame || track
 				? (seq) => {
-						const bytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
-						stream.entries.push({ seq, kind, payload, bytes });
+						if (track && stream !== undefined) {
+							const bytes = wire?.bytes ?? 0;
+							stream.inflight.push({ seq, bytes });
+							stream.inflightBytes += bytes;
+						}
+						if (!ringFrame || stream === undefined) return;
+						const entryEncoded = wire ?? preEncodePayload(payload);
+						const bytes = entryEncoded.bytes;
+						stream.entries.push({ seq, kind, encoded: entryEncoded, bytes });
 						stream.bytes += bytes;
 						// The client has been sent this delta: keep the floor at
 						// the highest delivered wire seq so any later open
@@ -220,10 +302,33 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		return out;
 	};
 
+	/** Wake every paced sender asleep on this stream so it re-checks its epoch, credit and room. */
+	const wakeRoomWaiters = (stream: BrowserStream): void => {
+		for (const wake of [...stream.roomWaiters]) wake();
+	};
+
+	/** Release credit: the fleet acknowledged every frame up to wire seq `seq`. */
+	const ackStream = (stream: BrowserStream, seq: number): void => {
+		let released = false;
+		while (stream.inflightHead < stream.inflight.length) {
+			const entry = stream.inflight[stream.inflightHead]!;
+			if (entry.seq > seq) break;
+			stream.inflight[stream.inflightHead++] = undefined;
+			stream.inflightBytes -= entry.bytes;
+			released = true;
+		}
+		if (stream.inflightHead > 1024 && stream.inflightHead * 2 > stream.inflight.length) {
+			stream.inflight = stream.inflight.slice(stream.inflightHead);
+			stream.inflightHead = 0;
+		}
+		if (released) wakeRoomWaiters(stream);
+	};
+
 	/**
 	 * Wait until the pair's outbound buffer can take one maximal envelope for
-	 * this stream. False when the stream closed, the broker stopped, or a newer
-	 * prime superseded `epoch`: the caller's remaining frames are obsolete.
+	 * this stream and, on an acked stream, until the fleet's unacknowledged
+	 * window can too. False when the stream closed, the broker stopped, or a
+	 * newer prime superseded `epoch`: the caller's remaining frames are obsolete.
 	 */
 	const waitForRoom = async (stream: BrowserStream, epoch: number): Promise<boolean> => {
 		for (;;) {
@@ -232,17 +337,22 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			const queued = deps.bufferedBytes(stream.streamId);
 			if (
 				queued.stream + ENVELOPE_MAX_BYTES + PACE_MARGIN_BYTES <= STREAM_MAX_BYTES &&
-				queued.connection + ENVELOPE_MAX_BYTES + PACE_MARGIN_BYTES <= CONNECTION_MAX_BYTES
+				queued.connection + ENVELOPE_MAX_BYTES + PACE_MARGIN_BYTES <= CONNECTION_MAX_BYTES &&
+				(!stream.acked ||
+					queued.stream + stream.inflightBytes + ENVELOPE_MAX_BYTES <= STREAM_ACK_WINDOW_BYTES)
 			)
 				return true;
-			// Sleep until the pair drains: a pump pass that sent bytes wakes this
-			// one-shot listener, then the room check runs again.
-			await new Promise<void>((resolve) => {
-				const off = deps.onDrain(() => {
-					off();
-					resolve();
-				});
-			});
+			// Sleep until the pair drains (a pump pass that sent bytes) or the fleet
+			// acknowledges, then the room check runs again.
+			const { promise, resolve } = Promise.withResolvers<void>();
+			const wake = (): void => {
+				off();
+				stream.roomWaiters.delete(wake);
+				resolve();
+			};
+			const off = deps.onDrain(wake);
+			stream.roomWaiters.add(wake);
+			await promise;
 		}
 	};
 
@@ -252,13 +362,17 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	 * the prime in place, which supersedes the held frames (bounded memory).
 	 * Nothing is reset on the client.
 	 */
-	const deliver = (stream: BrowserStream, frame: Record<string, unknown>): void => {
+	const deliver = (
+		stream: BrowserStream,
+		frame: Record<string, unknown>,
+		encoded: PreEncodedPayload | undefined = tryEncode(frame),
+	): void => {
 		if (stream.deferred === null) {
-			emit(stream.streamId, "frame", frame);
+			emit(stream.streamId, "frame", frame, true, encoded);
 			return;
 		}
-		const bytes = Buffer.byteLength(JSON.stringify(frame), "utf8");
-		stream.deferred.push({ frame, bytes });
+		const bytes = encoded?.bytes ?? 0;
+		stream.deferred.push({ frame, encoded, bytes });
 		stream.deferredBytes += bytes;
 		if (stream.deferredBytes <= RING_MAX_BYTES) return;
 		// Supersede the backlog: a fresh prime rebuilds the snapshot from current
@@ -277,6 +391,8 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	 */
 	const prime = (stream: BrowserStream): void => {
 		const epoch = ++stream.epoch;
+		// A sender of the previous prime asleep on credit now sees its epoch moved on.
+		wakeRoomWaiters(stream);
 		stream.deferred = null;
 		stream.deferredBytes = 0;
 		const run = async (): Promise<void> => {
@@ -286,7 +402,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			stream.deferred = held;
 			for (const frame of build()) {
 				if (!(await waitForRoom(stream, epoch))) return;
-				emit(stream.streamId, "frame", frame);
+				emit(stream.streamId, "frame", frame, true, undefined, true);
 			}
 			// Drained entries leave the backlog and its byte count, so the budget bounds
 			// what is still outstanding, not everything the prime has ever seen.
@@ -294,7 +410,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 				if (!(await waitForRoom(stream, epoch))) return;
 				const entry = held.shift()!;
 				stream.deferredBytes -= entry.bytes;
-				emit(stream.streamId, "frame", entry.frame);
+				emit(stream.streamId, "frame", entry.frame, true, entry.encoded, true);
 			}
 			stream.deferred = null;
 			stream.deferredBytes = 0;
@@ -304,7 +420,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		});
 	};
 
-	const openStream = (streamId: string, lastSeq?: number): void => {
+	const openStream = (streamId: string, lastSeq?: number, ack = false): void => {
 		if (stopped || !streamId.startsWith(CALLBACK_BROWSER_STREAM_PREFIX)) return;
 		let stream = streams.get(streamId);
 		const newStream = stream === undefined;
@@ -320,10 +436,22 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 				deferred: null,
 				deferredBytes: 0,
 				pairId: null,
+				acked: false,
+				inflight: [],
+				inflightHead: 0,
+				inflightBytes: 0,
+				roomWaiters: new Set(),
 			};
 			streams.set(streamId, stream);
 			deps.onBrowserStreamsChange?.(streams.size);
 		}
+		// Every stream_open restarts the credit ledger: the fleet resets its side
+		// when it sends one, so frames sent before it will never be acknowledged.
+		stream!.acked = ack;
+		stream!.inflight = [];
+		stream!.inflightHead = 0;
+		stream!.inflightBytes = 0;
+		wakeRoomWaiters(stream!);
 		if (lastSeq !== undefined) stream!.lastSeq = lastSeq;
 		const replay = ringAfter(stream!, stream!.lastSeq);
 		// Ring MISS: the reconnect floor is BELOW the eviction frontier, so
@@ -361,7 +489,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		// Ring HIT: replay the retained entries newer than the floor with a
 		// FRESH wire seq; never re-record them.
 		for (const entry of replay) {
-			emit(streamId, entry.kind, entry.payload, false);
+			emit(streamId, entry.kind, entry.encoded, false);
 			stream!.lastSeq = entry.seq;
 		}
 		// A caught-up ring hit (an existing stream whose floor is at or past
@@ -378,11 +506,23 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		const lastSeq = typeof payload.lastSeq === "number" ? payload.lastSeq : undefined;
 		switch (type) {
 			case "stream_open":
-				openStream(envelope.streamId, lastSeq);
+				openStream(envelope.streamId, lastSeq, payload.ack === true);
 				break;
-			case "stream_close":
-				if (streams.delete(envelope.streamId)) deps.onBrowserStreamsChange?.(streams.size);
+			case "stream_ack": {
+				const stream = streams.get(envelope.streamId);
+				if (stream !== undefined && stream.acked && typeof payload.seq === "number") {
+					ackStream(stream, payload.seq);
+				}
 				break;
+			}
+			case "stream_close": {
+				const stream = streams.get(envelope.streamId);
+				if (streams.delete(envelope.streamId)) {
+					deps.onBrowserStreamsChange?.(streams.size);
+					if (stream !== undefined) wakeRoomWaiters(stream);
+				}
+				break;
+			}
 			case "log_ack":
 			case "log_gap":
 				// Log controls belong to the log tailer (mounted by index.ts
@@ -418,11 +558,13 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 
 	const mirror = (frame: Record<string, unknown>): void => {
 		if (stopped || !deps.pairLive()) return;
-		// Session-scoped frame: forward verbatim to the fleet's activity
-		// mirror stream AND every open browser stream (ringed-delta frames
-		// ring on the browser stream for reconnect replay).
-		emit("control", "frame", frame);
-		for (const stream of streams.values()) deliver(stream, frame);
+		// Session-scoped frame: serialized once and shared by every recipient.
+		// It goes verbatim to the fleet's activity mirror stream (minus the
+		// types in isUnmirroredToControl) AND every open browser stream
+		// (ringed-delta frames ring on the browser stream for reconnect replay).
+		const encoded = tryEncode(frame);
+		if (!isUnmirroredToControl(frame)) emit("control", "frame", frame, true, encoded);
+		for (const stream of streams.values()) deliver(stream, frame, encoded);
 	};
 
 	/**
@@ -442,7 +584,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 				const epoch = stream.epoch;
 				for (const frame of frames) {
 					if (!(await waitForRoom(stream, epoch))) return;
-					emit(stream.streamId, "frame", frame);
+					emit(stream.streamId, "frame", frame, true, undefined, true);
 				}
 			}),
 		);
@@ -451,6 +593,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	const stop = (): void => {
 		stopped = true;
 		clearTimeout(orphanSweep);
+		for (const stream of streams.values()) wakeRoomWaiters(stream);
 		streams.clear();
 		deps.onBrowserStreamsChange?.(0);
 	};
@@ -471,6 +614,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		for (const [streamId, stream] of streams) {
 			if (stream.pairId === livePairId) continue;
 			streams.delete(streamId);
+			wakeRoomWaiters(stream);
 			dropped = true;
 		}
 		if (dropped) deps.onBrowserStreamsChange?.(streams.size);
@@ -510,7 +654,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 }
 
 export interface DaemonControl {
-	/** Route one down-half envelope (kind command/control) to its handler. */
+	/** Route one fleet-to-daemon envelope (kind command/control) to its handler. */
 	handleEnvelope(envelope: CallbackEnvelope): void;
 	/** Mirror a session-scoped frame onto streamId "control" + browser streams (verbatim payload). */
 	mirror(frame: Record<string, unknown>): void;

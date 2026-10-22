@@ -32,6 +32,10 @@ bun scripts/test.ts <test-file>     # targeted tests
 bun run test                        # full suite, one worker per file (default)
 bun run test:isolated               # full suite in ONE process: the hermeticity gate (releases only)
 bun e2e/onboarding.ts               # offline distribution E2E
+bun run profile --help              # transport profiling harness (isolated fleet, fake model, pinned cores); output in .profile-out/
+bun run profile --quick             # liveness check, then a 3 s warmup + 1 rep x 10 s per scenario (~2 min)
+bun run profile --save-baseline <name>                                  # record a local baseline (gitignored .profile-out/baselines/)
+bun run profile --quick --compare .profile-out/baselines/<name>.json   # deltas vs that baseline
 ```
 
 ### Build & install
@@ -65,7 +69,7 @@ Overlay is the umbrella term, not a suffix: a portaled layer above the app shell
 
 ## The wire contract (OMP_PROTO 4)
 
-Agent transport is HTTP + SSE, not WebSocket (collab-only; room traffic runs on the standalone `omp-web relay`, never on a session). Browser to fleet: `GET /events` SSE down, `POST /command` up, ID-keyed commands accepted with `202`, answers via SSE `call_result`. Fleet to session: only the session-initiated callback pair (`OMP_CALLBACK_PROTO 1`, `lib/wire/callback-protocol.ts`): `POST /callback/up` NDJSON, `GET /callback/down` SSE, `POST /callback/bulk/<id>`; browser streams and commands ride it as virtual streams. A standalone session's own `/events` and `/command` listener serves direct clients; a fleet-managed session (`--fleet-stdin`) binds no listener and the fleet never uses one. `lib/wire/protocol.ts` owns frame shapes/constants. Fleet stamps session identity.
+Browser transport is HTTP + SSE. Browser to fleet: `GET /events` SSE down, `POST /command` up, ID-keyed commands accepted with `202`, answers via SSE `call_result`. Fleet to session: only the session-initiated callback pair (`OMP_CALLBACK_PROTO 2`, `lib/wire/callback-protocol.ts`): one WebSocket, `GET /callback/ws` upgrade with identity and credential in headers, one JSON envelope per text message, typed refusals as close codes 4000 + status; uploads are paced by an 8 MiB pair credit window (the fleet grants `pair_credit` as its consumer drains, a socket that ignores it is closed `invalid_request`), which is also what bounds the `omp-web ui` bridge; `POST /callback/bulk/<id>` stays HTTP. Browser streams and commands ride the pair as virtual streams. The fleet refuses proto-1 `/callback/up` and `/callback/down` with 410 `proto_unsupported`. Collab room traffic runs on the standalone `omp-web relay` WebSocket, never on a session. A standalone session's own `/events` and `/command` listener serves direct clients; a fleet-managed session (`--fleet-stdin`) binds no listener and the fleet never uses one. `lib/wire/protocol.ts` owns frame shapes/constants. Fleet stamps session identity.
 
 ## Invariants & conventions, read before editing
 
@@ -73,7 +77,7 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only; room traffic runs on 
 
 - Changes are additive-only unless the version is bumped with both gates: `OMP_PROTO` (frames) is gated in `apps/fleet/edge.ts` (daemon `hello_ok`) and `apps/web/state.ts`; `OMP_CALLBACK_PROTO` (the callback pair) is gated in `lib/wire/callback-protocol.ts`, shared by `apps/fleet/daemon-transport.ts` and `apps/session/fleet-callback.ts`.
 - Preserve byte-bounded history, chunk accumulation, and replay/backpressure semantics. `stream_reset` ends a stream, not the daemon. Do not clip messages merely because they exceed the frame batch target.
-- `message_update` on the session wire is a delta keyed by content block (`WireAssistantMessageEvent`), never the cumulative message. The full message goes out on `message_end`; a late joiner is primed with the in-progress message (`streamingPrimeFrames`). `toWireEvent` in `apps/session/sse-delivery.ts` is the only SDK-to-wire slimming point. Collab peer frames (`collab-host.ts`) keep the SDK shape because the SDK guest reads the full `message`.
+- `message_update` on the session wire is a delta keyed by content block (`WireAssistantMessageEvent`), never the cumulative message. The full message goes out on `message_end`; a late joiner is primed with the in-progress message (`streamingPrimeFrames`). `toWireEvent` in `apps/session/sse-delivery.ts` is the only SDK-to-wire slimming point: it also sends `tool_execution_update` as the appended output (a snapshot when the output did not grow; late joiners are primed by `streamingPrimeFrames`, and a history resync forces the next update to be a snapshot), drops tool-result `message_start`/`message_end` (`tool_execution_end` carries the result), reduces `turn_end` to a bare marker, and replaces `agent_end.messages` with `lastAssistant`. Collab peer frames (`collab-host.ts`) keep the SDK shape because the SDK guest reads the full `message`.
 - Command retries reuse the same ID within the dedup window. Duplicates replay answers, never re-dispatch; replay across daemon process changes must fail, never execute again.
 
 ### Server
@@ -81,9 +85,9 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only; room traffic runs on 
 - Daemon stdout is reserved for `OMP_SESSION|` contract lines (informational for whoever launched it; the fleet does not parse it); logs go to stderr. Spawned sessions' stdout/stderr land in `<state dir>/session-logs/<daemonId>.log`, rotated to `.log.1` above 1 MiB (see `apps/fleet/session-log.ts`); provider-managed clones write combined output to `<clone state dir>/daemon.log` under the same cap.
 - Preserve `methods.ts` classification: read-only calls skip mutation broadcasts, history reloads resync before answers, prompts are readiness-gated.
 - Loopback auth exemption does not extend off-loopback: binding without a token fails startup; wrong credentials return 401.
-- Callback transport requires workspace/generation identity and HTTPS, except explicitly allowed loopback HTTP. Configured proxies must be http/https, never silently ignored.
+- Callback transport requires workspace/generation identity and HTTPS/WSS, except explicitly allowed loopback HTTP. Configured proxies must be http/https, never silently ignored; the WebSocket client ignores proxy env vars, so a proxy is always passed explicitly. A reverse proxy or ingress in front of the control plane must pass the `/callback/ws` upgrade and idle for longer than `SILENCE_DEADLINE_MS` (README, "Reverse proxy or ingress"); `omp-web preflight` probes it. A pair socket sender never relies on the socket to buffer or drop: it stops at the high-water mark and keeps unsent envelopes in its own bounded queues.
 - Downloads stay realpath-jailed; file listings stay inside cwd. Idle exit requires no clients (local `/events` streams or callback browser streams) or active work, tools, dialogs, or collab room.
-- With a callback pair configured, a session redials with backoff and never shuts down on a dropped pair alone: it exits gracefully after `--control-grace` without a ready pair, at once on a fleet `shutdown` control, and at once on a credential rejection (401, 409 `generation_obsolete`). Pair commands share the `POST /command` dedup window.
+- With a callback pair configured, a session redials with backoff and never shuts down on a dropped pair alone: it exits gracefully after `--control-grace` without a ready pair, at once on a fleet `shutdown` control, and at once on a credential rejection (401, 409 `generation_obsolete`) or `proto_unsupported`. Pair commands share the `POST /command` dedup window.
 
 ### Fleet
 
@@ -151,6 +155,7 @@ Update wire contracts, producers, consumers, dispatch classification, and behavi
 - Code: targeted tests, then types. Library/daemon/edge changes also require the full suite.
 - UI: `bun run dev`, verify the actual browser surface. Component changes also get their story checked in `bun run design` (refresh after source edits; restart after `server.ts` or fixture-route edits).
 - CLI/distribution/bundle/first-run: `bun e2e/onboarding.ts`.
+- Transport/wire changes (`lib/wire/`, `apps/fleet/edge.ts`, `daemon-transport.ts`, `apps/session/{sse-delivery,fleet-callback,daemon-control}.ts`): record a baseline of `main` on your host (`--save-baseline`), then from the branch run `bun run profile --quick --compare .profile-out/baselines/<name>.json` and read the deltas; they are advisory (the command always exits 0 on compare), but a failing liveness check or a regression outside the noise band needs an explanation. Do not compare runs made with `--cpuprofile`/`--heap`, different pinning, or different hosts. Baselines stay local; record conclusions worth keeping as prose in `scripts/profile/results/`.
 - Docs: check paths/links.
 - Release: `GATE_COMMANDS` in `scripts/release.ts` is authoritative; includes types, format, web build, full tests, onboarding, followed by packed-artifact installation smoke. Preflight is advisory, not part of orchestration.
 

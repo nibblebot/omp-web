@@ -26,6 +26,7 @@
 		"format:check": "oxfmt --check",
 		"test": "bun scripts/test.ts",
 		"test:isolated": "bun scripts/test.ts --isolated",
+		"profile": "bun scripts/profile/index.ts",
 		"design": "bun apps/design-system/server.ts stories",
 		"demo": "bun apps/design-system/server.ts demo"
 	},
@@ -58,6 +59,7 @@
 		"eslint-plugin-solid": "^0.15.0",
 		"oxfmt": "^0.63.0",
 		"oxlint": "^1.87.0",
+		"playwright-core": "1.64.1",
 		"vite": "^8.3.4",
 		"vite-plugin-solid": "^2.11.14"
 	}
