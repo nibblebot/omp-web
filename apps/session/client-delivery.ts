@@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { ServerWebSocket } from "bun";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { browserCloseFor, pingMessage, seqFrameMessage } from "#lib/wire/browser-socket";
 import { ENVELOPE_MAX_BYTES } from "#lib/wire/callback-protocol";
 import {
@@ -56,6 +57,8 @@ export interface ClientConsumer {
 	lastSendAt: number;
 	/** Resolves the priming wait in sendPaced; set only while that wait is parked. */
 	drainWaiter?: () => void;
+	/** Stall clock: the smallest buffered amount seen and since when; cleared by a drain. */
+	stall?: { since: number; buffered: number };
 }
 
 /** Every live browser socket. The daemon boot (index.ts) adds/removes consumers and reads the size. */
@@ -88,6 +91,8 @@ export function rejectOwnedCodeInputs(owner: string, reason: string): void {
 
 const ring = new ReplayRing<string>(CLIENT_RING_CAP, CLIENT_RING_BYTES);
 let nextDeltaSeq = DELTA_SEQ_START;
+/** The socket whose command is being dispatched (see answeringTo); unset for the callback pair's dispatch. */
+const answerOrigin = new AsyncLocalStorage<ClientConsumer>();
 
 /**
  * Byte budget per `history` frame (mirrors collab-host's SNAPSHOT_CHUNK_BYTES),
@@ -221,10 +226,11 @@ export async function sendPaced(consumer: ClientConsumer, message: string): Prom
 
 /**
  * Resume a priming wait parked in sendPaced. Called from the socket's drain
- * (the buffer emptied, so there is room) and from detachConsumer (so a parked
- * wait ends). A no-op when nothing is parked.
+ * (the buffer emptied, so there is room, and the stall clock restarts) and from
+ * detachConsumer (so a parked wait ends). A no-op when nothing is parked.
  */
 export function wakeDrainWaiter(consumer: ClientConsumer): void {
+	consumer.stall = undefined;
 	const resolve = consumer.drainWaiter;
 	if (resolve === undefined) return;
 	consumer.drainWaiter = undefined;
@@ -372,15 +378,31 @@ export function broadcast(frame: ServerFrame): void {
 }
 
 /**
- * Unicast answers (call_result, sessions, files, login_url, …) go to every
- * live socket of this single-session daemon; the socket is the one answer
- * channel. Sequenced but NOT ringed; a lost answer is recovered by re-sending
- * the command (deduped by id, the recorded answer replays).
+ * Run `fn` as the dispatch of one command from `consumer`: every answer it
+ * produces (directly or from its async continuations) goes to that socket
+ * only. Answers are routed by the AsyncLocalStorage context so deep emitters
+ * (login, files, sessions) need no origin parameter; a dispatch with no
+ * origin (the callback pair's, whose answers ride the frame tap) keeps the
+ * all-sockets behavior.
+ */
+export function answeringTo<T>(consumer: ClientConsumer, fn: () => T): T {
+	return answerOrigin.run(consumer, fn);
+}
+
+/**
+ * Unicast answers (call_result, sessions, files, login_url, …) go only to the
+ * socket whose command produced them (see answeringTo); with no originating
+ * socket they go to every live socket. Sequenced but NOT ringed; a lost
+ * answer is recovered by re-sending the command (deduped by id, the recorded
+ * answer replays to the re-sending socket). The frame tap still sees every
+ * answer, for the callback pair.
  */
 export function broadcastAnswer(frame: ServerFrame): void {
 	const seq = nextDeltaSeq++;
 	const message = seqFrameMessage(seq, JSON.stringify(frame));
-	for (const consumer of streams) sendTo(consumer, message);
+	const origin = answerOrigin.getStore();
+	if (origin !== undefined) sendTo(origin, message);
+	else for (const consumer of streams) sendTo(consumer, message);
 	tapFrame(frame);
 }
 
@@ -632,23 +654,63 @@ export function notifyEvent(
 	});
 }
 
+// Keepalive and stall sweep, every CLIENT_KEEPALIVE_MS while sockets are live.
+//
 // Keepalive: a `{"ping":ms}` message (pingMessage, deliberately unsequenced,
 // so it never advances a client's resume counter) on every open browser
-// socket that has been idle for half a CLIENT_KEEPALIVE_MS, swept every
-// CLIENT_KEEPALIVE_MS. A socket therefore hears from the daemon at least
-// every 1.5 sweeps (22.5 s), inside CLIENT_SILENCE_DEADLINE_MS, the point where
-// clients treat total silence as a dead peer and reconnect. Runs only while
-// sockets are live.
+// socket that has been idle for half a CLIENT_KEEPALIVE_MS. A socket therefore
+// hears from the daemon at least every 1.5 sweeps (22.5 s), inside
+// CLIENT_SILENCE_DEADLINE_MS, the point where clients treat total silence as a
+// dead peer and reconnect.
+//
+// Stall: a socket holding unsent bytes whose buffer has not shrunk for
+// `stallMs` is a peer that stopped reading (it still answers Bun's pings, so
+// idleTimeout never reaps it): closed 4503 like a cap overflow, so it resumes
+// with `after` once it reads again. A drain (or an empty buffer) resets the clock.
+
+/**
+ * How long a buffered socket may go without draining before it is closed 4503.
+ * Mirrors BROWSER_STALL_MS in apps/fleet/edge.ts; integration hoists the one
+ * value next to CLIENT_BACKPRESSURE_BYTES in lib/wire/protocol.ts.
+ */
+const CLIENT_STALL_MS = 30_000;
+
+/** Timing of the sweep; production passes none, tests shorten it. */
+export interface KeepaliveOptions {
+	/** Sweep interval (default CLIENT_KEEPALIVE_MS). */
+	sweepMs?: number;
+	/** Stall limit (default CLIENT_STALL_MS). */
+	stallMs?: number;
+}
+
 let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
-export function startKeepalive(): void {
+/** One stall check for one socket; closes it 4503 once its buffer sat undrained for `stallMs`. */
+function checkStall(consumer: ClientConsumer, now: number, stallMs: number): void {
+	const buffered = bufferedBytes(consumer);
+	if (buffered === 0) {
+		consumer.stall = undefined;
+		return;
+	}
+	const mark = consumer.stall;
+	if (mark === undefined || buffered < mark.buffered) {
+		consumer.stall = { since: now, buffered };
+		return;
+	}
+	if (now - mark.since >= stallMs) terminateConsumer(consumer, "stalled: no drain");
+}
+
+export function startKeepalive(options: KeepaliveOptions = {}): void {
 	if (keepaliveTimer) return;
+	const stallMs = options.stallMs ?? CLIENT_STALL_MS;
 	keepaliveTimer = setInterval(() => {
-		const idleSince = Date.now() - CLIENT_KEEPALIVE_MS / 2;
+		const now = Date.now();
+		const idleSince = now - CLIENT_KEEPALIVE_MS / 2;
 		for (const consumer of streams) {
-			if (consumer.lastSendAt <= idleSince) sendTo(consumer, pingMessage(Date.now()));
+			if (consumer.lastSendAt <= idleSince) sendTo(consumer, pingMessage(now));
+			if (streams.has(consumer)) checkStall(consumer, now, stallMs);
 		}
-	}, CLIENT_KEEPALIVE_MS);
+	}, options.sweepMs ?? CLIENT_KEEPALIVE_MS);
 }
 
 export function stopKeepalive(): void {

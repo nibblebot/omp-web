@@ -57,6 +57,7 @@ import {
 } from "./download-manifest";
 import { discardAllStagedUploads } from "./resume-import-adapter";
 import { type ClientCredentials, httpAuthorized, socketRefusal } from "./client-auth";
+import { browserRequestAllowed } from "#lib/runtime/browser-guard";
 import {
 	CALLBACK_TRANSPORT_STREAM_ID,
 	FleetCallback,
@@ -82,6 +83,7 @@ import { unwatchSkills } from "./skill-methods";
 import { loginWithCallbacks } from "./login";
 import {
 	broadcast,
+	answeringTo,
 	broadcastAnswer,
 	broadcastHistory,
 	broadcastTo,
@@ -461,13 +463,16 @@ function closeProtocolViolation(ws: ServerWebSocket<ClientSocketData>, message: 
 function acceptCommand(consumer: ClientConsumer, cmd: ClientCommand): void {
 	markActivity();
 	sendTo(consumer, ackMessage(cmd.id));
-	if (commandSeenRecently(cmd.id)) {
-		const answer = commandAnswers.get(cmd.id);
-		if (answer !== undefined) broadcastAnswer(answer.frame);
-		return;
-	}
-	// Fire-and-forget accept: answers ride the socket only.
-	void handleCommand(cmd).catch((err) => console.error("command dispatch failed:", err));
+	// Answers go to the socket that sent the command, never to its siblings.
+	answeringTo(consumer, () => {
+		if (commandSeenRecently(cmd.id)) {
+			const answer = commandAnswers.get(cmd.id);
+			if (answer !== undefined) broadcastAnswer(answer.frame);
+			return;
+		}
+		// Fire-and-forget accept: answers ride the socket only.
+		void handleCommand(cmd).catch((err) => console.error("command dispatch failed:", err));
+	});
 }
 
 /**
@@ -939,6 +944,8 @@ function clientCredentials(req: Request, srv: Server<ClientSocketData>): ClientC
 		loopback: isLoopbackIp(srv.requestIP(req)?.address),
 		token: config.token,
 		authorization: req.headers.get("authorization"),
+		// The session serves no UI, so no browser origin is configured: only loopback names pass.
+		browserAllowed: browserRequestAllowed(req, undefined),
 	};
 }
 

@@ -12,7 +12,7 @@ import {
 const TOKEN = "sekret";
 
 function credentials(overrides: Partial<ClientCredentials> = {}): ClientCredentials {
-	return { loopback: false, token: TOKEN, authorization: null, ...overrides };
+	return { loopback: false, token: TOKEN, authorization: null, browserAllowed: true, ...overrides };
 }
 
 function params(overrides: Partial<BrowserSocketParams> = {}): BrowserSocketParams {
@@ -74,6 +74,23 @@ describe("browser socket refusal (off-loopback peer)", () => {
 		expect(
 			socketRefusal(credentials({ token: undefined }), params({ token: "anything" })),
 		).toBeNull();
+	});
+
+	test("a loopback dial from a foreign browser page is refused 4403; off loopback the token decides", () => {
+		const foreign = credentials({ loopback: true, browserAllowed: false });
+		const refused = socketRefusal(foreign, params());
+		expect(refused?.code).toBe(4403);
+		expect(refused?.reason).toStartWith("forbidden:");
+		// The token does not rescue a foreign loopback dial: loopback never carries one.
+		expect(socketRefusal(foreign, params({ token: TOKEN }))?.code).toBe(4403);
+		// A header-less CLI dial passes, and so does an off-loopback peer with the token.
+		expect(socketRefusal(credentials({ loopback: true }), params())).toBeNull();
+		expect(
+			socketRefusal(credentials({ browserAllowed: false }), params({ token: TOKEN })),
+		).toBeNull();
+		// Auth is judged before the guard, proto after it.
+		expect(socketRefusal(credentials({ browserAllowed: false }), params())?.code).toBe(4401);
+		expect(socketRefusal(foreign, params({ proto: OMP_PROTO - 1 }))?.code).toBe(4403);
 	});
 
 	test("a missing or different proto is refused 4426, after auth", () => {

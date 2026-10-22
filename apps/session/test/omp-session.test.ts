@@ -1650,3 +1650,87 @@ test("SDK persistence relocation updates live state and locks its new journal", 
 		await proc.cleanup();
 	}
 }, 60_000);
+
+test("a loopback dial from a foreign browser page closes 4403; loopback and header-less dials are accepted", async () => {
+	// Loopback is exempt from the token, and a WebSocket dial is not CORS-gated,
+	// so a page the user visits could otherwise drive the session through
+	// ws://127.0.0.1:<port>/ws (CSWSH / DNS rebinding). A browser marks such a
+	// dial with a foreign Origin, Host or Sec-Fetch-Site; a CLI sends none.
+	const proc = await spawnSession({});
+	running.push(proc);
+	const base = `http://127.0.0.1:${proc.port}`;
+	const refusedDials: Array<Record<string, string>> = [
+		{ origin: "https://evil.example" },
+		{ origin: "null" },
+		{ "sec-fetch-site": "cross-site" },
+		{ host: "evil.example" },
+	];
+	for (const headers of refusedDials) {
+		const refused = await openBrowserSocket(base, { headers });
+		const closed = await refused.closed;
+		expect(closed.code).toBe(4403);
+		expect(closed.kind).toBe("forbidden");
+		expect(refused.frames).toEqual([]);
+	}
+	const acceptedDials: Array<Record<string, string> | undefined> = [
+		undefined,
+		{ origin: `http://127.0.0.1:${proc.port}` },
+		{ origin: "http://localhost:5173" },
+		{ "sec-fetch-site": "same-origin" },
+	];
+	for (const headers of acceptedDials) {
+		const accepted = await openBrowserSocket(base, { headers });
+		await waitForFrame(accepted.frames, "hello_ok", 10_000, "hello_ok for an accepted dial");
+		accepted.close();
+	}
+	await proc.cleanup();
+}, 30_000);
+
+test("an answer goes only to the socket whose command produced it", async () => {
+	const proc = await spawnSession({});
+	running.push(proc);
+	const base = `http://127.0.0.1:${proc.port}`;
+	const a = await openBrowserSocket(base);
+	const b = await openBrowserSocket(base);
+	await waitForFrame(a.frames, "attached", 10_000, "attached on A");
+	await waitForFrame(b.frames, "attached", 10_000, "attached on B");
+	expect(await a.command({ type: "call", id: "only-a", method: "getSettings", args: [] })).toEqual({
+		ok: true,
+	});
+	await waitFor(
+		() => (a.frames.some((f) => f.type === "call_result" && f.id === "only-a") ? true : null),
+		10_000,
+		"call_result on A",
+	);
+	// A daemon-wide answer (fleet-only error) is an answer too: it stays with its asker.
+	expect(await b.command({ type: "spawn", cwd: "/tmp", id: "only-b" })).toEqual({ ok: true });
+	await waitFor(
+		() =>
+			b.frames.some((f) => f.type === "error" && f.error === "fleet-only command") ? true : null,
+		10_000,
+		"fleet-only error on B",
+	);
+	// Real delay: the subprocess owns delivery; observing silence needs real time.
+	await sleep(1000);
+	expect(b.frames.some((f) => f.type === "call_result")).toBe(false);
+	expect(a.frames.some((f) => f.type === "error" && f.error === "fleet-only command")).toBe(false);
+
+	// A duplicate id re-sent on a NEW socket replays the recorded answer to that socket only.
+	const c = await openBrowserSocket(base);
+	await waitForFrame(c.frames, "attached", 10_000, "attached on C");
+	expect(await c.command({ type: "call", id: "only-a", method: "getSettings", args: [] })).toEqual({
+		ok: true,
+	});
+	await waitFor(
+		() => (c.frames.some((f) => f.type === "call_result" && f.id === "only-a") ? true : null),
+		10_000,
+		"replayed call_result on C",
+	);
+	await sleep(500);
+	expect(a.frames.filter((f) => f.type === "call_result" && f.id === "only-a")).toHaveLength(1);
+	expect(b.frames.some((f) => f.type === "call_result")).toBe(false);
+	a.close();
+	b.close();
+	c.close();
+	await proc.cleanup();
+}, 30_000);

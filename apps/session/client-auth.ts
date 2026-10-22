@@ -36,6 +36,8 @@ export interface ClientCredentials {
 	token: string | undefined;
 	/** The request's Authorization header. */
 	authorization: string | null;
+	/** `browserRequestAllowed` of the request: no foreign Host, Origin or Sec-Fetch-Site. Judged for loopback peers only. */
+	browserAllowed: boolean;
 }
 
 /** Gate for every plain HTTP route: loopback is exempt, off-loopback needs the bearer header. */
@@ -65,9 +67,11 @@ export function socketAuthorized(
 /**
  * Typed close for a dial the session refuses, or null to accept it. A
  * browser cannot read a non-101 status, so a refusal is delivered by
- * upgrading and closing at once: 4401 for a missing or wrong token, 4426 for a
- * missing or different `proto`. Auth is judged first, so an unauthenticated
- * peer learns nothing about the daemon's proto.
+ * upgrading and closing at once: 4401 for a missing or wrong token, 4403 for a
+ * loopback dial a browser page made from a foreign site (loopback is exempt
+ * from the token, so only the Host/Origin/Sec-Fetch-Site guard stands between
+ * a visited page and the session), 4426 for a missing or different `proto`.
+ * Auth is judged first, so an unauthenticated peer learns nothing else.
  */
 export function socketRefusal(
 	credentials: ClientCredentials,
@@ -75,6 +79,12 @@ export function socketRefusal(
 ): { code: number; reason: string } | null {
 	if (!socketAuthorized(credentials, params)) {
 		return browserCloseFor("unauthorized", "missing or wrong bearer token");
+	}
+	if (credentials.loopback && !credentials.browserAllowed) {
+		return browserCloseFor(
+			"forbidden",
+			"foreign Host, Origin or Sec-Fetch-Site on a loopback dial",
+		);
 	}
 	if (params.proto !== OMP_PROTO) {
 		return browserCloseFor(

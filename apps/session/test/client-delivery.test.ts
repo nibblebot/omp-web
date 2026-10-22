@@ -6,12 +6,14 @@ import {
 	type ServerFrame,
 } from "#lib/wire/protocol";
 import {
+	answeringTo,
 	broadcast,
 	broadcastAnswer,
 	detachConsumer,
 	ringAfter,
 	sendPaced,
 	sendTo,
+	setOnFrameTap,
 	snapshotDeltaSeq,
 	startKeepalive,
 	stopKeepalive,
@@ -134,6 +136,49 @@ describe("sequencing and the replay ring", () => {
 	});
 });
 
+describe("answers go only to the originating socket", () => {
+	test("an answer produced inside answeringTo reaches that socket alone, even across awaits", async () => {
+		const a = attach();
+		const b = attach();
+		await answeringTo(a.consumer, async () => {
+			await Promise.resolve();
+			broadcastAnswer(answerFrame("only-a"));
+		});
+		expect(a.socket.sent.map((m) => parsed(m).frame.type)).toEqual(["call_result"]);
+		expect(b.socket.sent).toEqual([]);
+	});
+
+	test("with no originating socket (the callback pair's dispatch) an answer reaches every socket", () => {
+		const a = attach();
+		const b = attach();
+		broadcastAnswer(answerFrame("everyone"));
+		expect(a.socket.sent).toHaveLength(1);
+		expect(b.socket.sent).toHaveLength(1);
+	});
+
+	test("an originating socket that closed receives nothing and no sibling picks the answer up", () => {
+		const a = attach();
+		const b = attach();
+		detachConsumer(a.consumer, "closed");
+		a.socket.readyState = 3;
+		answeringTo(a.consumer, () => broadcastAnswer(answerFrame("late")));
+		expect(a.socket.sent).toEqual([]);
+		expect(b.socket.sent).toEqual([]);
+	});
+
+	test("the frame tap still sees a routed answer", () => {
+		const a = attach();
+		const tapped: ServerFrame[] = [];
+		setOnFrameTap((frame) => tapped.push(frame as ServerFrame));
+		try {
+			answeringTo(a.consumer, () => broadcastAnswer(answerFrame("tap")));
+		} finally {
+			setOnFrameTap(null);
+		}
+		expect(tapped.map((f) => f.type)).toEqual(["call_result"]);
+	});
+});
+
 describe("per-socket backpressure", () => {
 	test("a socket buffering past the cap is closed 4503 and detached, not sent to", () => {
 		const { consumer, socket } = attach({ buffered: CLIENT_BACKPRESSURE_BYTES + 1 });
@@ -231,5 +276,45 @@ describe("keepalive", () => {
 		detachConsumer(consumer, "closed");
 		jest.advanceTimersByTime(CLIENT_KEEPALIVE_MS * 3);
 		expect(socket.sent).toEqual([]);
+	});
+});
+
+describe("stall rule", () => {
+	test("a socket holding bytes with no drain for the stall limit is closed 4503 on a sweep", () => {
+		jest.useFakeTimers();
+		const stuck = attach({ buffered: 1000 });
+		const healthy = attach();
+		startKeepalive({ sweepMs: 100, stallMs: 450 });
+		jest.advanceTimersByTime(400);
+		expect(stuck.socket.closes).toEqual([]);
+		jest.advanceTimersByTime(300);
+		expect(stuck.socket.closes.map((c) => c.code)).toEqual([4503]);
+		expect(stuck.socket.closes[0]!.reason).toContain("stalled");
+		expect(streams.has(stuck.consumer)).toBe(false);
+		expect(healthy.socket.closes).toEqual([]);
+		expect(streams.has(healthy.consumer)).toBe(true);
+	});
+
+	test("a buffer that shrinks, or a drain, restarts the clock", () => {
+		jest.useFakeTimers();
+		const slow = attach({ buffered: 1000 });
+		startKeepalive({ sweepMs: 100, stallMs: 450 });
+		jest.advanceTimersByTime(300);
+		slow.socket.buffered = 600; // progress: the peer is reading
+		jest.advanceTimersByTime(300);
+		slow.socket.buffered = 600;
+		wakeDrainWaiter(slow.consumer); // the socket's drain event
+		jest.advanceTimersByTime(300);
+		expect(slow.socket.closes).toEqual([]);
+		jest.advanceTimersByTime(600); // now nothing moves for longer than the limit
+		expect(slow.socket.closes.map((c) => c.code)).toEqual([4503]);
+	});
+
+	test("an empty buffer never stalls", () => {
+		jest.useFakeTimers();
+		const idle = attach();
+		startKeepalive({ sweepMs: 100, stallMs: 150 });
+		jest.advanceTimersByTime(2000);
+		expect(idle.socket.closes).toEqual([]);
 	});
 });
