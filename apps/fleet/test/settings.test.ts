@@ -28,6 +28,19 @@ describe("createFleetSettings", () => {
 		expect(model.tabs.map((tab) => tab.id)).toEqual(SETTING_TABS);
 	});
 
+	test("getModel reports each row's own effect, not next-session for all", async () => {
+		const settings = createFleetSettings({ registry: emptyRegistry });
+		const model = await settings.getModel();
+		const items = model.tabs.flatMap((tab) => tab.groups.flatMap((group) => group.items));
+		expect(new Set(items.map((item) => item.view?.effect))).toEqual(
+			new Set(["live", "next-session"]),
+		);
+		expect(items.find((item) => item.path === "defaultThinkingLevel")?.view?.effect).toBe(
+			"next-session",
+		);
+		expect(items.find((item) => item.path === "steeringMode")?.view?.effect).toBe("live");
+	});
+
 	test("defaultThinkingLevel offers the schema's levels with auto first when no session levels exist", async () => {
 		const settings = createFleetSettings({ registry: emptyRegistry });
 		const model = await settings.getModel();

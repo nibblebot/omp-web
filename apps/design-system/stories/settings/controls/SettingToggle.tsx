@@ -12,19 +12,21 @@ export default [
 		variants: [
 			{
 				name: "Off",
+				description:
+					"Rectangular track with a square knob; the knob radius nests inside the track radius.",
 				render: () => (
-					<SettingToggle label="Auto-compact" checked={false} onChange={() => undefined} />
+					<SettingToggle label="Auto-Compact" checked={false} onChange={() => undefined} />
 				),
 			},
 			{
 				name: "On",
-				render: () => <SettingToggle label="Auto-compact" checked onChange={() => undefined} />,
+				render: () => <SettingToggle label="Auto-Compact" checked onChange={() => undefined} />,
 			},
 			{
 				name: "Disabled",
 				description: "Set by project config: the switch shows the value and cannot change.",
 				render: () => (
-					<SettingToggle label="Auto-compact" checked disabled onChange={() => undefined} />
+					<SettingToggle label="Auto-Compact" checked disabled onChange={() => undefined} />
 				),
 			},
 		],

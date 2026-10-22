@@ -49,7 +49,7 @@ export const ModelRoleTable: Component = () => {
 				<div class="settings-group">
 					<div class="settings-roles-scroll">
 						<table class="settings-roles">
-							<caption>Model roles</caption>
+							<caption>Model Roles</caption>
 							<thead>
 								<tr>
 									<th scope="col">Role</th>
@@ -117,7 +117,7 @@ export const ModelRoleTable: Component = () => {
 											<td>
 												<button
 													type="button"
-													class="settings-reset"
+													class="settings-control-btn"
 													aria-label={`${entry.hidden ? "Show" : "Hide"} role ${entry.name}`}
 													disabled={busy() !== undefined}
 													onClick={() =>

@@ -2,12 +2,13 @@ import { createSignal, Show, type ParentComponent } from "solid-js";
 import { ChevronDownIcon } from "../ui/icons";
 
 /**
- * A settings section: a sentence-case label sitting above a bordered card of
- * rows. The label is outside the card, matching the reference layout.
+ * A settings section: a small title above a flat list of rows.
  *
- * `collapsible` groups fold their card behind a toggle header on narrow
- * viewports (CSS-gated below 768px; wide layouts always show every card), so a
- * long SDK tab reads as a short list of section headers. Groups start folded.
+ * `collapsible` groups fold their rows behind a toggle header on narrow
+ * viewports (CSS-gated below 768px; wide layouts show every group open), so a
+ * long SDK tab reads as a short list of section headers. The "Advanced" group
+ * is the exception: it folds on every width, since its rows are rarely wanted.
+ * Groups start folded wherever they fold.
  */
 export const SettingsGroup: ParentComponent<{
 	title?: string;
@@ -20,6 +21,7 @@ export const SettingsGroup: ParentComponent<{
 			class="settings-block"
 			id={props.id}
 			data-collapsible={props.collapsible === true ? "" : undefined}
+			data-foldable={props.collapsible === true && props.title === "Advanced" ? "" : undefined}
 			data-open={open() ? "" : undefined}
 		>
 			<Show when={props.title}>

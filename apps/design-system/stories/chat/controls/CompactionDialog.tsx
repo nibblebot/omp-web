@@ -25,6 +25,15 @@ export default defineStory({
 			render: (ctx) => <CompactionDialog onClose={ctx.close} />,
 		},
 		{
+			name: "Auto-compaction off",
+			description: "The switch under the mode list shows the off position.",
+			seed: () => {
+				ready();
+				setState("autoCompactionEnabled", false);
+			},
+			render: (ctx) => <CompactionDialog onClose={ctx.close} />,
+		},
+		{
 			name: "Remote refused on this route",
 			seed: () => {
 				answerCalls({ compactionSnapshot: () => compactionSnapshotRemoteBlocked });

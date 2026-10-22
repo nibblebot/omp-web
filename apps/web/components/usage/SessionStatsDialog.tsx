@@ -7,6 +7,7 @@ import { call, setState, state } from "../../state";
 import { reportError } from "../../store/toasts";
 import { Modal } from "../ui/Modal";
 import { Tabs, tabButtonId, tabPanelId } from "../ui/Tabs";
+import { SettingToggle } from "../settings/controls/SettingToggle";
 
 /** Sections of the stats dialog. */
 type StatsTab = "overview" | "context" | "tools";
@@ -144,15 +145,13 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 						</button>
 						<button onClick={() => setState("modal", "compaction")}>Compact…</button>
 						<button onClick={() => setState("modal", "usage")}>usage reports</button>
-						<label class="toggle">
-							<input
-								type="checkbox"
+						<label class="dialog-toggle">
+							<SettingToggle
+								label="Auto-Compaction"
 								checked={state.autoCompactionEnabled}
-								onChange={(e) =>
-									void call("setAutoCompaction", [e.currentTarget.checked]).catch(reportError)
-								}
+								onChange={(checked) => void call("setAutoCompaction", [checked]).catch(reportError)}
 							/>
-							auto-compaction
+							Auto-Compaction
 						</label>
 					</div>
 				</div>

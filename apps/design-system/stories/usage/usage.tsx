@@ -1,5 +1,6 @@
 import { SessionStatsDialog } from "../../../web/components/usage/SessionStatsDialog";
 import { UsageLimitsDialog } from "../../../web/components/usage/UsageLimitsDialog";
+import { setState } from "../../../web/state";
 import { contextBreakdown, sessionStatsSummary } from "../../fixtures/overlays";
 import { rosterUsageReports } from "../../fixtures/roster";
 import { answerCalls, answerRoutes } from "../../daemon";
@@ -28,6 +29,19 @@ export default [
 						getContextBreakdown: () => contextBreakdown,
 						getToolSchemas: () => [],
 					}),
+				render: (ctx) => <SessionStatsDialog onClose={ctx.close} />,
+			},
+			{
+				name: "Auto-compaction off",
+				description: "The auto-compaction switch below the actions, in its off position.",
+				seed: () => {
+					setState("autoCompactionEnabled", false);
+					answerCalls({
+						getSessionStats: () => sessionStatsSummary,
+						getContextBreakdown: () => contextBreakdown,
+						getToolSchemas: () => [],
+					});
+				},
 				render: (ctx) => <SessionStatsDialog onClose={ctx.close} />,
 			},
 			{

@@ -79,7 +79,7 @@ export function FeaturesSettings(props: { query?: string }) {
 												class="settings-control-btn"
 												onClick={openModelSettings}
 											>
-												Open Model settings
+												Open Model Settings
 											</button>
 										</p>
 									</Show>

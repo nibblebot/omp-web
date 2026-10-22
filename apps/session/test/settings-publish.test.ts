@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
+import { settingsRevision } from "#lib/sdk-settings/settings-model";
 import type { SettingsModel } from "#lib/wire/protocol";
 import { createSettingsMethods, type SettingsEntry } from "../settings-methods";
 
@@ -9,6 +10,7 @@ await Settings.init({ inMemory: true });
 
 afterEach(() => {
 	lookup("compaction.thresholdPercent")!.unset(Settings.instance);
+	Settings.instance.clearOverrideValue(lookup("compaction.thresholdPercent")!);
 });
 
 const entry: SettingsEntry = {
@@ -27,12 +29,12 @@ describe("settings publish", () => {
 			getThemes: async () => ["dark", "light"],
 			broadcast: (model) => sent.push(model),
 		});
-		const before = Settings.instance.revision;
+		const before = settingsRevision(Settings.instance);
 		// A session-side change (fast mode, auto-retry) moves the revision without a settings RPC.
 		lookup("compaction.thresholdPercent")!.set(Settings.instance, 80);
 		const model = await bundle.publish(entry);
 		expect(sent).toEqual([model]);
-		expect(model.revision).toBe(Settings.instance.revision);
+		expect(model.revision).toBe(settingsRevision(Settings.instance));
 		expect(model.revision).toBeGreaterThan(before);
 	});
 
@@ -51,7 +53,44 @@ describe("settings publish", () => {
 			"revision",
 		]);
 		expect(sent).toHaveLength(1);
-		expect(ack).toEqual({ revision: Settings.instance.revision });
+		expect(ack).toEqual({ revision: settingsRevision(Settings.instance) });
+	});
+
+	test("a write at the answered revision is accepted after a rebuild that changed no persisted value", async () => {
+		const bundle = createSettingsMethods({
+			settings: Settings.instance,
+			getThemes: async () => ["dark", "light"],
+			broadcast: () => {},
+		});
+		const ack = (await bundle.methods.setSetting(entry, [
+			"compaction.thresholdPercent",
+			83,
+			undefined,
+			undefined,
+			"revision",
+		])) as { revision: number };
+		// Like the config watcher reloading the file this daemon just wrote: the SDK
+		// rebuilds its merged settings (its own counter moves) but persisted content is unchanged.
+		const sdkBefore = Settings.instance.revision;
+		Settings.instance.writeValue(lookup("compaction.thresholdPercent")!, 84, "override");
+		expect(Settings.instance.revision).toBeGreaterThan(sdkBefore);
+		await bundle.methods.setSetting(entry, ["compaction.thresholdPercent", 85, ack.revision]);
+		expect(Settings.instance.getGlobalSettings().compaction).toMatchObject({
+			thresholdPercent: 85,
+		});
+	});
+
+	test("a write at a revision older than a persisted change is refused", async () => {
+		const bundle = createSettingsMethods({
+			settings: Settings.instance,
+			getThemes: async () => ["dark", "light"],
+			broadcast: () => {},
+		});
+		const stale = settingsRevision(Settings.instance);
+		lookup("compaction.thresholdPercent")!.set(Settings.instance, 86);
+		await expect(
+			bundle.methods.setSetting(entry, ["compaction.thresholdPercent", 87, stale]),
+		).rejects.toThrow("Settings changed");
 	});
 
 	test("a write without the reply option keeps answering with the full model", async () => {

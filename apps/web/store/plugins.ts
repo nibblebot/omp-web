@@ -13,7 +13,7 @@ import { call } from "./transport";
  * trust-gated exactly like installs in the Extensions dialog.
  */
 
-/** Card meta line, e.g. "Enabled · npm · v1.2.0". The version is omitted when absent. */
+/** Row meta line, e.g. "Enabled · npm · v1.2.0". The version is omitted when absent. */
 export function pluginMetaLine(plugin: PluginSummary): string {
 	const parts = [plugin.enabled ? "Enabled" : "Disabled", plugin.source];
 	if (plugin.version) parts.push(`v${plugin.version}`);

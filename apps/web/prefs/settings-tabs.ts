@@ -1,15 +1,18 @@
 import type { SettingsModel } from "#lib/wire/protocol";
 
 /**
- * Settings sheet tab metadata (display contract for the sidebar, the body
- * hero and the narrow picker). Pure data plus helpers over the wire model, so
- * it stays unit-testable without the store.
+ * Settings sheet tab metadata (display contract for the sidebar, the stream
+ * headings and the narrow picker). Pure data plus helpers over the wire model,
+ * so it stays unit-testable without the store.
  *
- * Four kinds of tab share one sidebar:
+ * Three kinds of tab share one sidebar and one scroll stream:
+ * - "session": rows that act on the attached session only; absent without one.
  * - "sdk": a tab of the settings model; `id` matches `SettingsTab.id`.
- * - "common": the daily view: SDK rows gathered by commonSettingGroups plus the Web UI section.
- * - "installed": plugins, backed by the plugin store rather than the model.
- * - "client": browser-local preferences (Web UI, Features).
+ * - "client": browser-local preferences (Appearance, Features).
+ *
+ * Each tab belongs to a `section`: `session` (the attached session), `omp`
+ * (the SDK's own settings) or `omp-web` (this web UI). The sidebar labels the
+ * latter two; the session tab sits above them with no label.
  */
 
 /** Glyph names; the sidebar maps each one to an icon component. */
@@ -24,125 +27,117 @@ export type SettingsTabIconName =
 	| "wand"
 	| "list"
 	| "server"
-	| "package"
 	| "monitor"
-	| "flask";
+	| "flask"
+	| "bot";
 
-export type SettingsTabKind = "sdk" | "installed" | "client" | "common";
+export type SettingsTabKind = "session" | "sdk" | "client";
+
+/** Which of the three stream parts a tab belongs to. */
+export type SettingsTabSection = "session" | "omp" | "omp-web";
 
 export interface SettingsTabMeta {
 	id: string;
 	label: string;
 	icon: SettingsTabIconName;
 	kind: SettingsTabKind;
-	/** One-sentence description shown under the tab heading. */
-	lead: string;
+	section: SettingsTabSection;
 }
 
-/** Tabs in sidebar order: Common, the 10 SDK tabs, Installed, then the client tabs. */
+/** Tabs in stream order: This session, the 10 SDK tabs (omp), then the client tabs (omp-web). */
 export const SETTINGS_TABS: SettingsTabMeta[] = [
 	{
-		id: "common",
-		label: "Common",
-		icon: "list",
-		kind: "common",
-		lead: "The settings you change most often. Other tabs hold the rest.",
+		id: "session",
+		label: "This Session",
+		icon: "bot",
+		kind: "session",
+		section: "session",
 	},
 	{
 		id: "appearance",
-		label: "Appearance",
+		label: "Display",
 		icon: "pencil",
 		kind: "sdk",
-		lead: "Theme, composer, status line and how the transcript renders.",
+		section: "omp",
 	},
 	{
 		id: "model",
 		label: "Model",
 		icon: "crosshair",
 		kind: "sdk",
-		lead: "Thinking, sampling, the system prompt, retries and the helper models.",
+		section: "omp",
 	},
 	{
 		id: "interaction",
 		label: "Interaction",
 		icon: "keyboard",
 		kind: "sdk",
-		lead: "Input, approvals, notifications, speech and what happens at startup.",
+		section: "omp",
 	},
 	{
 		id: "context",
 		label: "Context",
 		icon: "layers",
 		kind: "sdk",
-		lead: "What the model sees, and when and how the conversation compacts.",
+		section: "omp",
 	},
 	{
 		id: "memory",
 		label: "Memory",
 		icon: "memory",
 		kind: "sdk",
-		lead: "What omp remembers across sessions and where it keeps it.",
+		section: "omp",
 	},
 	{
 		id: "files",
 		label: "Files",
 		icon: "files",
 		kind: "sdk",
-		lead: "How files are read, summarized and edited, and the language servers.",
+		section: "omp",
 	},
 	{
 		id: "shell",
 		label: "Shell",
 		icon: "terminal",
 		kind: "sdk",
-		lead: "The bash tool and the eval runtimes.",
+		section: "omp",
 	},
 	{
 		id: "tools",
 		label: "Tools",
 		icon: "wand",
 		kind: "sdk",
-		lead: "Which tools the model has, their limits and the external integrations.",
+		section: "omp",
 	},
 	{
 		id: "tasks",
 		label: "Tasks",
 		icon: "list",
 		kind: "sdk",
-		lead: "Modes, subagents, isolation and custom commands.",
+		section: "omp",
 	},
 	{
 		id: "providers",
 		label: "Providers",
 		icon: "server",
 		kind: "sdk",
-		lead: "Services, provider protocols, timeouts and privacy.",
-	},
-	{
-		id: "installed",
-		label: "Installed",
-		icon: "package",
-		kind: "installed",
-		lead: "Plugins installed for you and this project. Configure one to turn it or its features on and off.",
+		section: "omp",
 	},
 	{
 		id: "web-ui",
-		label: "Web UI",
+		label: "Appearance",
 		icon: "monitor",
 		kind: "client",
-		lead: "Preferences kept in this browser: theme, text size and notifications.",
+		section: "omp-web",
 	},
 	{
 		id: "features",
 		label: "Features",
 		icon: "flask",
 		kind: "client",
-		lead: "Optional parts of the web UI that load on demand in this browser.",
+		section: "omp-web",
 	},
 ];
-
-/** The tab a fresh sheet opens on. */
-export const DEFAULT_SETTINGS_TAB_ID = "common";
 
 /** Metadata for one tab id; undefined for an unknown id. */
 export function settingsTabMeta(id: string): SettingsTabMeta | undefined {
@@ -150,19 +145,77 @@ export function settingsTabMeta(id: string): SettingsTabMeta | undefined {
 }
 
 /**
- * Tabs the sidebar lists. SDK tabs follow the loaded model (a tab the model
- * does not carry has nothing to show); with no model yet they all stay
- * listed so the sidebar does not collapse while settings load.
+ * Tabs the stream and sidebar list. The session tab needs an attached
+ * session. SDK tabs follow the loaded model (a tab the model does not carry
+ * has nothing to show); with no model yet they all stay listed so the sidebar
+ * does not collapse while settings load.
  */
-export function visibleSettingsTabs(model: SettingsModel | null): SettingsTabMeta[] {
-	if (!model) return [...SETTINGS_TABS];
-	const present = new Set(model.tabs.map((tab) => tab.id));
-	return SETTINGS_TABS.filter((tab) => tab.kind !== "sdk" || present.has(tab.id));
+export function visibleSettingsTabs(
+	model: SettingsModel | null,
+	sessionAttached: boolean,
+): SettingsTabMeta[] {
+	const present = model ? new Set(model.tabs.map((tab) => tab.id)) : null;
+	return SETTINGS_TABS.filter((tab) => {
+		if (tab.kind === "session") return sessionAttached;
+		if (tab.kind === "sdk") return present === null || present.has(tab.id);
+		return true;
+	});
+}
+
+/** The tab a fresh sheet opens on: the first visible one. */
+export function defaultSettingsTabId(tabs: readonly SettingsTabMeta[]): string {
+	return tabs[0]?.id ?? "";
+}
+
+/** Consecutive tabs of one section, in stream order; the sidebar labels each run. */
+export interface SettingsTabRun {
+	section: SettingsTabSection;
+	tabs: SettingsTabMeta[];
+}
+
+/** Splits tabs into runs of equal section, keeping order. */
+export function settingsTabRuns(tabs: readonly SettingsTabMeta[]): SettingsTabRun[] {
+	const runs: SettingsTabRun[] = [];
+	for (const tab of tabs) {
+		const last = runs[runs.length - 1];
+		if (last && last.section === tab.section) last.tabs.push(tab);
+		else runs.push({ section: tab.section, tabs: [tab] });
+	}
+	return runs;
+}
+
+/** DOM id of a tab's heading in the stream; the sidebar and deep links scroll to it. */
+export function settingsTabHeadingId(tabId: string): string {
+	return `settings-heading-${tabId}`;
 }
 
 /** DOM id of a section inside a tab body; the sidebar scrolls to it. */
 export function settingsSectionId(tabId: string, sectionName: string): string {
 	return `settings-${tabId}-${sectionName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+/**
+ * Scroll-spy: the index of the last heading whose top has crossed `line`, or
+ * -1 when none has. `offsets` are heading tops relative to the body's top
+ * edge, in document order; `line` is the spy line's distance below that edge.
+ * At the very top the first heading wins, so a short first tab is not skipped
+ * because the next heading already sits above the line; at the very bottom
+ * the last heading wins, so a short final tab that can never scroll to the
+ * line still gets highlighted.
+ */
+export function scrollSpyIndex(
+	offsets: readonly number[],
+	line: number,
+	edge: "top" | "bottom" | null,
+): number {
+	if (offsets.length === 0) return -1;
+	if (edge === "top") return 0;
+	if (edge === "bottom") return offsets.length - 1;
+	let index = -1;
+	for (let i = 0; i < offsets.length; i++) {
+		if (offsets[i] <= line) index = i;
+	}
+	return index;
 }
 
 /**
@@ -183,7 +236,7 @@ export function changedCountsByTab(model: SettingsModel | null): Map<string, num
 	return counts;
 }
 
-/** Sidebar badge for a tab: its changed count; 0 (no badge) for Installed and client tabs. */
+/** Sidebar badge for a tab: its changed count; 0 (no badge) for client tabs. */
 export function tabBadgeCount(counts: Map<string, number>, tab: SettingsTabMeta): number {
 	return tab.kind === "sdk" ? (counts.get(tab.id) ?? 0) : 0;
 }

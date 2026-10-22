@@ -73,45 +73,78 @@ export function unmetDependency(path: string, valueOf: (path: string) => unknown
 	return valueOf(dep.on) === true ? null : dep.reason;
 }
 
-/** Badge text for when a change takes effect; null for live settings (no badge needed). */
-export function effectLabel(effect: SettingView["effect"] | undefined): string | null {
-	if (effect === "next-session") return "Next session";
-	if (effect === "restart") return "Restart";
-	return null;
+/** Muted suffix for settings whose change applies only at session start; null otherwise (live, and the legacy `restart`). */
+export function effectNote(effect: SettingView["effect"] | undefined): string | null {
+	return effect === "next-session" ? "New sessions only." : null;
 }
 
 /**
- * Browser-local rows in WebUiSettings. They are not in the SDK model, so settings search reaches them here.
- * `session` rows render only with a session attached; `signedIn` rows only after sign-in.
+ * Browser-local and session-scoped rows outside the SDK model, so settings search reaches them here.
+ * Each names the tab that renders it and its label matches the row's label. `session` rows render only
+ * with a session attached; `signedIn` rows only after sign-in.
  */
 const WEB_UI_SEARCH_ROWS: {
 	label: string;
 	keywords: string;
+	tabId: string;
 	session?: boolean;
 	signedIn?: boolean;
 }[] = [
-	{ label: "theme preference", keywords: "theme dark light color appearance" },
-	{ label: "font size", keywords: "text size zoom larger smaller" },
+	{ label: "Theme", keywords: "theme dark light color appearance", tabId: "web-ui" },
+	{ label: "Font Size", keywords: "text size zoom larger smaller", tabId: "web-ui" },
 	{
-		label: "browser notification permission",
+		label: "Browser Notification Permission",
 		keywords: "notify notifications desktop alert os permission",
+		tabId: "web-ui",
 	},
-	{ label: "soft fade", keywords: "fade transcript smooth streaming" },
-	{ label: "usage in sidebar", keywords: "usage sidebar tokens cost" },
-	{ label: "fast mode", keywords: "fast priority service tier speed", session: true },
-	{ label: "auto-retry", keywords: "retry retries error recover", session: true },
-	{ label: "Login providers…", keywords: "login provider auth sign in oauth api key" },
-	{ label: "sign out", keywords: "sign out logout log out account", signedIn: true },
+	{ label: "Soft Fade", keywords: "fade transcript smooth streaming", tabId: "web-ui" },
+	{ label: "Usage in Sidebar", keywords: "usage sidebar tokens cost", tabId: "web-ui" },
+	{
+		label: "Sign Out",
+		keywords: "sign out logout log out account",
+		tabId: "web-ui",
+		signedIn: true,
+	},
+	{
+		label: "Fast Mode",
+		keywords: "fast priority service tier speed",
+		tabId: "session",
+		session: true,
+	},
+	{
+		label: "Auto-Retry",
+		keywords: "retry retries error recover",
+		tabId: "session",
+		session: true,
+	},
+	{
+		label: "Auto-Compact",
+		keywords: "compact compaction context summarize",
+		tabId: "session",
+		session: true,
+	},
+	{
+		label: "Login Providers",
+		keywords: "login provider auth sign in oauth api key",
+		tabId: "providers",
+		session: true,
+	},
 ];
 
-/** What the Web UI tab renders right now, so search never offers a row it cannot show. */
+/** What the stream renders right now, so search never offers a row it cannot show. */
 export interface WebUiContext {
 	sessionAttached: boolean;
 	signedIn: boolean;
 }
 
-/** Web UI row labels matching the query and rendered in this context; each one lives on the Web UI tab. */
-export function filterWebUiSettings(query: string, context: WebUiContext): string[] {
+/** A matching non-model row: its label and the tab that renders it. */
+export interface WebUiSearchRow {
+	label: string;
+	tabId: string;
+}
+
+/** Non-model rows matching the query and rendered in this context. */
+export function filterWebUiSettings(query: string, context: WebUiContext): WebUiSearchRow[] {
 	const q = query.trim().toLowerCase();
 	if (!q) return [];
 	return WEB_UI_SEARCH_ROWS.filter(
@@ -119,43 +152,5 @@ export function filterWebUiSettings(query: string, context: WebUiContext): strin
 			(row.session !== true || context.sessionAttached) &&
 			(row.signedIn !== true || context.signedIn) &&
 			`${row.label} ${row.keywords}`.toLowerCase().includes(q),
-	).map((row) => row.label);
-}
-
-/** Daily rows for the Common tab, by group. Paths the model lacks are skipped. */
-const COMMON_GROUPS: { title: string; paths: string[] }[] = [
-	{
-		title: "Chat",
-		paths: [
-			"defaultThinkingLevel",
-			"hideThinkingBlock",
-			"expandThinkingBlocks",
-			"display.hideToolActivity",
-			"display.showTokenUsage",
-			"display.showTurnTime",
-			"compaction.enabled",
-		],
-	},
-	{
-		title: "Steering and approvals",
-		paths: ["steeringMode", "followUpMode", "tools.approvalMode"],
-	},
-	{ title: "Notifications", paths: ["completion.notify", "error.notify", "ask.notify"] },
-];
-
-/** Common tab groups with their model items, in COMMON_GROUPS order. Empty groups are dropped. */
-export function commonSettingGroups(
-	model: SettingsModel | null,
-): { title: string; items: SettingsItem[] }[] {
-	if (!model) return [];
-	const byPath = new Map<string, SettingsItem>();
-	for (const tab of model.tabs) {
-		for (const group of tab.groups) {
-			for (const item of group.items) byPath.set(item.path, item);
-		}
-	}
-	return COMMON_GROUPS.map(({ title, paths }) => ({
-		title,
-		items: paths.flatMap((path) => byPath.get(path) ?? []),
-	})).filter((group) => group.items.length > 0);
+	).map(({ label, tabId }) => ({ label, tabId }));
 }

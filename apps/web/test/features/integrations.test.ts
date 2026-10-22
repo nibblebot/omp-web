@@ -36,7 +36,12 @@ describe("integrations feature", () => {
 	});
 
 	test("the palette's Skills and MCP servers entries open the dialog on that group", () => {
-		const items = openItems({ debugEnabled: false, integrationsEnabled: true, projects: [] });
+		const items = openItems({
+			debugEnabled: false,
+			integrationsEnabled: true,
+			pluginsEnabled: false,
+			projects: [],
+		});
 		runPaletteItem(items.find((item) => item.label === "MCP servers")!);
 		expect(state.modal).toBe("integrations");
 		expect(state.integrations.tab).toBe("extensions");

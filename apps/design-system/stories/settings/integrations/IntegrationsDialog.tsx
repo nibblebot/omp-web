@@ -1,4 +1,5 @@
 import { IntegrationsDialog } from "../../../../web/components/settings/integrations/IntegrationsDialog";
+import { markFeaturesActive } from "../../../../web/features/preferences";
 import { setState } from "../../../../web/state";
 import { selectExtension } from "../../../../web/store/integrations";
 import { answerCalls } from "../../../daemon";
@@ -125,6 +126,26 @@ export default [
 				seed: () => {
 					answerCalls({ ...extensionCalls(), listPlugins: () => [] });
 					setState("integrations", "tab", "plugins");
+				},
+				render: (ctx) => <IntegrationsDialog onClose={ctx.close} />,
+			},
+			{
+				name: "Extensions only",
+				description:
+					"The Plugins feature is off: no tab list, the Extensions title, and the reload button stays.",
+				seed: () => {
+					markFeaturesActive(["integrations"]);
+					answerCalls(extensionCalls());
+				},
+				render: (ctx) => <IntegrationsDialog onClose={ctx.close} />,
+			},
+			{
+				name: "Plugins only",
+				description:
+					"The MCP & Skills feature is off: the Plugins list alone under a Plugins title, with no reload button.",
+				seed: () => {
+					markFeaturesActive(["plugins"]);
+					answerCalls({ ...extensionCalls(), listPlugins: () => [] });
 				},
 				render: (ctx) => <IntegrationsDialog onClose={ctx.close} />,
 			},

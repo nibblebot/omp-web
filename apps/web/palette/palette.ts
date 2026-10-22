@@ -8,6 +8,7 @@ import {
 	type CommandEntry,
 	type CommandLiveSource,
 } from "../prompt/command-registry";
+import type { WebUiSearchRow } from "../prefs/settings";
 import type { SettingsTabMeta } from "../prefs/settings-tabs";
 import { formatSessionAge, sessionDisplayTitle, type SessionRow } from "../store/session-list";
 
@@ -41,7 +42,9 @@ export type PaletteOpenTarget =
 	| "login"
 	/** Extensions dialog on that group's first item. */
 	| "skills"
-	| "mcp";
+	| "mcp"
+	/** Extensions dialog on the Plugins tab. */
+	| "plugins";
 
 /** What choosing an item does. Plain data: `store/palette.ts` executes it. */
 export type PaletteAction =
@@ -210,6 +213,8 @@ export interface PaletteContext {
 	debugEnabled: boolean;
 	/** The `integrations` feature is on: Skills and MCP servers open the Extensions dialog. */
 	integrationsEnabled: boolean;
+	/** The `plugins` feature is on: Plugins opens the Extensions dialog on its Plugins tab. */
+	pluginsEnabled: boolean;
 	projects: readonly { projectId: string; name: string }[];
 }
 
@@ -265,6 +270,14 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 				"extensions",
 				"integrations",
 				"tools",
+			]),
+		);
+	if (context.pluginsEnabled)
+		items.push(
+			openItem("plugins", "Plugins", "Enable, disable, and configure installed plugins", [
+				"plugin",
+				"extensions",
+				"integrations",
 			]),
 		);
 	items.push(
@@ -348,12 +361,13 @@ export function storedSessionItems(
 
 /**
  * Settings tabs, sections and rows. SDK rows come from the model; `webRows`
- * are the browser-local Web UI rows whose labels the caller already matched.
+ * are the rows outside it (browser-local and session toggles) that the caller
+ * already matched, each with the tab that renders it.
  */
 export function settingItems(
 	model: SettingsModel | null,
 	tabs: readonly SettingsTabMeta[],
-	webRows: readonly string[],
+	webRows: readonly WebUiSearchRow[],
 ): PaletteItem[] {
 	const items: PaletteItem[] = [];
 	for (const tab of tabs) {
@@ -361,33 +375,34 @@ export function settingItems(
 			id: `setting:tab:${tab.id}`,
 			group: "Settings",
 			label: `${tab.label} settings`,
-			detail: tab.lead,
+			detail: tab.section,
 			action: { kind: "setting", tabId: tab.id },
 			keywords: [tab.label],
 		});
 	}
 	for (const tab of model?.tabs ?? []) {
+		// The sheet's labels win over the SDK's (it names the Display tab "Appearance").
+		const tabLabel = tabs.find((meta) => meta.id === tab.id)?.label ?? tab.label;
 		for (const group of tab.groups) {
 			for (const row of group.items) {
 				items.push({
 					id: `setting:row:${row.path}`,
 					group: "Settings",
 					label: row.label,
-					detail: `${tab.label}${group.name ? ` · ${group.name}` : ""}`,
+					detail: `${tabLabel}${group.name ? ` · ${group.name}` : ""}`,
 					action: { kind: "setting", tabId: tab.id, query: row.label },
 					keywords: [row.description, row.path, group.name],
 				});
 			}
 		}
 	}
-	for (const label of webRows) {
+	for (const { label, tabId } of webRows) {
 		items.push({
 			id: `setting:web:${label}`,
 			group: "Settings",
 			label,
-			detail: "Web UI",
-			chip: "this browser",
-			action: { kind: "setting", tabId: "web-ui", query: label },
+			detail: tabs.find((tab) => tab.id === tabId)?.label ?? tabId,
+			action: { kind: "setting", tabId, query: label },
 			keywords: [],
 		});
 	}

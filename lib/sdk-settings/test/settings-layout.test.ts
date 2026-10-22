@@ -8,12 +8,7 @@ import {
 	TAB_SECTION_ORDER,
 	WEB_TRUE_CONDITIONS,
 } from "#lib/sdk-settings/settings-layout";
-import {
-	buildSettingsModel,
-	settingEffect,
-	type SettingsSession,
-	WEB_RENDER_PATHS,
-} from "#lib/sdk-settings/settings-model";
+import { buildSettingsModel, type SettingsSession } from "#lib/sdk-settings/settings-model";
 
 // The model reads the shared Settings singleton for gates and values. Keep it in-memory.
 await Settings.init({ inMemory: true });
@@ -103,22 +98,5 @@ describe("settings layout manifest", () => {
 	test("terminal-probe gates are forced visible in the web model", () => {
 		expect(emitted.has("terminal.showImages")).toBe(true);
 		expect(emitted.has("expandThinkingBlocks")).toBe(true);
-	});
-
-	test("WEB_RENDER_PATHS: 49 live, non-hidden host rows", () => {
-		const paths = Object.keys(WEB_RENDER_PATHS);
-		expect(paths).toHaveLength(49);
-		for (const path of paths) {
-			expect({
-				path,
-				host: hostPaths.has(path),
-				hidden: HIDDEN_SETTING_PATHS[path] === true,
-			}).toEqual({
-				path,
-				host: true,
-				hidden: false,
-			});
-			expect({ path, effect: settingEffect(path) }).toEqual({ path, effect: "live" });
-		}
 	});
 });

@@ -8,7 +8,7 @@ import {
 	FEATURE_IDS,
 	FEATURES,
 	featureForCommand,
-	featureForModal,
+	featuresForModal,
 	type FeatureId,
 	type FeatureInfo,
 } from "./manifest";
@@ -58,6 +58,7 @@ export const LOADERS: Record<FeatureId, Loader> = {
 	analysis: () => import("./analysis"),
 	review: () => import("./review"),
 	integrations: () => import("./integrations"),
+	plugins: () => import("./plugins"),
 	btw: () => import("./btw"),
 	goals: () => import("./goals"),
 	advisor: () => import("./advisor"),
@@ -122,8 +123,8 @@ export async function setFeatureEnabled(id: FeatureId, enabled: boolean): Promis
 
 /** Close the modal, dock panel and view that a disabled feature owned, so nothing points at it. */
 function releaseDisabledSurfaces(): void {
-	const owner = state.modal === null ? undefined : featureForModal(state.modal);
-	if (owner && !isFeatureEnabled(owner.id)) setState("modal", null);
+	const owners = state.modal === null ? [] : featuresForModal(state.modal);
+	if (owners.length > 0 && !owners.some((f) => isFeatureEnabled(f.id))) setState("modal", null);
 	const dock = state.dock?.kind;
 	if (dock !== undefined && FEATURES.some((f) => f.docks.includes(dock) && !isFeatureEnabled(f.id)))
 		closeDock();
@@ -146,10 +147,16 @@ function allActiveModules(): FeatureModule[] {
 	});
 }
 
-/** Modal renderer owned by a feature, or undefined when it is core or the feature is off. */
+/**
+ * Modal renderer from the first active feature that owns the modal, or undefined
+ * when it is core or every owner is off.
+ */
 export function featureModal(name: ModalName): Component<{ onClose: () => void }> | undefined {
-	const owner = featureForModal(name);
-	return owner ? activeModule(owner.id)?.modals?.[name] : undefined;
+	for (const owner of featuresForModal(name)) {
+		const renderer = activeModule(owner.id)?.modals?.[name];
+		if (renderer) return renderer;
+	}
+	return undefined;
 }
 
 /** The feature owning a slash name, and its handler, when that feature is active. */

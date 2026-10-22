@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { SettingsItem, SettingsModel, SettingsTab } from "#lib/wire/protocol";
 import {
-	commonSettingGroups,
 	displayOptionValue,
-	effectLabel,
+	effectNote,
 	filterSettings,
 	filterWebUiSettings,
 	unmetDependency,
@@ -133,50 +132,34 @@ describe("filterSettings", () => {
 
 describe("filterWebUiSettings", () => {
 	const attached = { sessionAttached: true, signedIn: true };
-	test("finds browser-local rows by label or keyword", () => {
-		expect(filterWebUiSettings("retry", attached)).toEqual(["auto-retry"]);
-		expect(filterWebUiSettings("DESKTOP", attached)).toEqual(["browser notification permission"]);
+	test("finds non-model rows by label or keyword, each with its home tab", () => {
+		expect(filterWebUiSettings("retry", attached)).toEqual([
+			{ label: "Auto-Retry", tabId: "session" },
+		]);
+		expect(filterWebUiSettings("DESKTOP", attached)).toEqual([
+			{ label: "Browser Notification Permission", tabId: "web-ui" },
+		]);
+		expect(filterWebUiSettings("oauth", attached)).toEqual([
+			{ label: "Login Providers", tabId: "providers" },
+		]);
 		expect(filterWebUiSettings("   ", attached)).toEqual([]);
 		expect(filterWebUiSettings("nothing matches this", attached)).toEqual([]);
 	});
-	test("offers session and sign-in rows only when the Web UI tab renders them", () => {
+	test("offers session and sign-in rows only when the stream renders them", () => {
 		const none = { sessionAttached: false, signedIn: false };
 		expect(filterWebUiSettings("retry", none)).toEqual([]);
 		expect(filterWebUiSettings("fast", none)).toEqual([]);
+		expect(filterWebUiSettings("compact", none)).toEqual([]);
+		expect(filterWebUiSettings("login", none)).toEqual([]);
 		expect(filterWebUiSettings("sign out", none)).toEqual([]);
 		const signedInOnly = { sessionAttached: false, signedIn: true };
-		expect(filterWebUiSettings("sign out", signedInOnly)).toEqual(["sign out"]);
+		expect(filterWebUiSettings("sign out", signedInOnly)).toEqual([
+			{ label: "Sign Out", tabId: "web-ui" },
+		]);
 	});
 });
 
-describe("commonSettingGroups", () => {
-	test("gathers model items into Common groups in order and drops empty groups", () => {
-		const tab: SettingsTab = {
-			id: "general",
-			label: "General",
-			groups: [
-				{
-					name: "",
-					items: [
-						item({ type: "boolean", path: "steeringMode", label: "Steering" }),
-						item({ type: "boolean", path: "display.showTurnTime", label: "Turn time" }),
-						item({ type: "boolean", path: "ui.unrelated" }),
-					],
-				},
-			],
-		};
-		const groups = commonSettingGroups({ tabs: [tab] });
-		expect(groups.map((group) => group.title)).toEqual(["Chat", "Steering and approvals"]);
-		expect(groups[0].items.map((entry) => entry.path)).toEqual(["display.showTurnTime"]);
-		expect(groups[1].items.map((entry) => entry.path)).toEqual(["steeringMode"]);
-	});
-
-	test("is empty without a model", () => {
-		expect(commonSettingGroups(null)).toEqual([]);
-	});
-});
-
-describe("unmetDependency and effectLabel", () => {
+describe("unmetDependency and effectNote", () => {
 	test("turn time needs token usage on", () => {
 		const off = () => false;
 		expect(unmetDependency("display.showTurnTime", off)).toBe(
@@ -188,10 +171,10 @@ describe("unmetDependency and effectLabel", () => {
 		expect(unmetDependency("display.showTokenUsage", off)).toBeNull();
 	});
 
-	test("labels only the non-live effects", () => {
-		expect(effectLabel("next-session")).toBe("Next session");
-		expect(effectLabel("restart")).toBe("Restart");
-		expect(effectLabel("live")).toBeNull();
-		expect(effectLabel(undefined)).toBeNull();
+	test("notes only next-session effects", () => {
+		expect(effectNote("next-session")).not.toBeNull();
+		expect(effectNote("live")).toBeNull();
+		expect(effectNote("restart")).toBeNull();
+		expect(effectNote(undefined)).toBeNull();
 	});
 });

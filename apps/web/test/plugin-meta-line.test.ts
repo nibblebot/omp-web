@@ -4,7 +4,7 @@ import { pluginMetaLine } from "../store/plugins";
 
 const base: PluginSummary = { name: "demo", source: "npm", enabled: true };
 
-describe("Installed card meta line", () => {
+describe("Plugin row meta line", () => {
 	test("shows state, source, and version", () => {
 		expect(pluginMetaLine({ ...base, version: "1.2.0" })).toBe("Enabled · npm · v1.2.0");
 	});

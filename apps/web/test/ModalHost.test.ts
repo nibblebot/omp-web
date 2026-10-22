@@ -187,6 +187,20 @@ describe("ModalHost", () => {
 		expect(renderHost()).toContain(registered);
 	});
 
+	test("renders a modal several features own while any one of them is active", async () => {
+		setState("modal", "integrations");
+		const dialogs = (types: unknown[]) => types.filter((t) => t !== ModalLayerContext.Provider);
+		const none = dialogs(renderHost());
+		for (const only of ["plugins", "integrations"] as const) {
+			await activateFeatures([only]);
+			const registered = featureModal("integrations");
+			expect(registered).toBeDefined();
+			expect(renderHost()).toContain(registered);
+		}
+		await activateFeatures([]);
+		expect(dialogs(renderHost())).toEqual(none);
+	});
+
 	test("renders the daemon details dialog while its daemon is in the roster", () => {
 		setState("daemonRoster", [daemon("d1")]);
 		openDaemonDetails("d1");

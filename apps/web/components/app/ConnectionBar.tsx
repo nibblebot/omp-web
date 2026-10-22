@@ -1,5 +1,5 @@
 import { Show, type Component } from "solid-js";
-import { connectionState, type ConnectionState } from "../../state";
+import { connectionState, state, type ConnectionState } from "../../state";
 import { WarningIcon } from "../ui/icons";
 
 /** Strip copy while the transport is not connected. */
@@ -19,10 +19,12 @@ export const PAUSED_TOOLTIP: Record<ConnectionState, string> = {
 /**
  * Thin strip under the main header, rendered only while the transport is not
  * connected. Replaces the header disconnected pill and collapses crash and
- * transport toasts into one calm status line.
+ * transport toasts into one calm status line. Hidden while the page's first
+ * stream is still opening: nothing has dropped yet, so there is nothing to
+ * reconnect (connect() ends that window after a grace if the fleet never answers).
  */
 export const ConnectionBar: Component = () => (
-	<Show when={connectionState() !== "connected"}>
+	<Show when={connectionState() !== "connected" && !(state.transportStartup && !state.connected)}>
 		<div class="connection-bar" role="status" data-state={connectionState()}>
 			<WarningIcon />
 			<span>{connectionState() === "offline" ? STRIP_COPY.offline : STRIP_COPY.reconnecting}</span>

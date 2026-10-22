@@ -1,0 +1,30 @@
+/* Plugins tab (PluginsTab.tsx, PluginDetail.tsx). Rows, groups and
+   notes come from settings.css; this file only adds the open-row wrapper, the
+   indented inline detail, and two small control tweaks. */
+
+/* One plugin: its settings row and, while configuring, its detail beneath.
+   The wrapper owns the divider so the detail stays inside the row it belongs to. */
+.plugin-item {
+	min-width: 0;
+	border-bottom: 1px solid var(--settings-divider);
+}
+.plugin-item:last-child {
+	border-bottom: none;
+}
+.plugin-item > .settings-item {
+	border-bottom: none;
+}
+
+/* Expanded detail: the same flat groups, indented under the row's label rail. */
+.plugin-detail {
+	padding: 0 0 var(--space-3) var(--space-7);
+}
+
+.plugin-stored {
+	color: var(--muted);
+	font-size: var(--fs-sm);
+}
+
+.settings-text-input.plugin-number {
+	width: 8rem;
+}

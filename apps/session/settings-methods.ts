@@ -3,6 +3,7 @@ import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import {
 	buildSettingsModel,
 	coerceSettingValue,
+	settingsRevision,
 	type SettingsSession,
 } from "#lib/sdk-settings/settings-model";
 import type { SettingsModel, SettingsRevisionAck } from "#lib/wire/protocol";
@@ -44,7 +45,7 @@ export function createSettingsMethods(deps: SettingsMethodsDeps): SettingsMethod
 	};
 	const assertRevision = (revision: unknown) => {
 		if (revision === undefined) return;
-		if (!Number.isSafeInteger(revision) || revision !== deps.settings.revision)
+		if (!Number.isSafeInteger(revision) || revision !== settingsRevision(deps.settings))
 			throw new Error("Settings changed; refresh before editing.");
 	};
 	const getSettings = async (entry: SettingsEntry): Promise<SettingsModel> => {
@@ -74,11 +75,12 @@ export function createSettingsMethods(deps: SettingsMethodsDeps): SettingsMethod
 				else setting.set(deps.settings, coerceSettingValue(path, args[1], deps.settings));
 				await deps.settings.flush();
 			}
-			// Unset applies the inherited layered preference, not a null/default substitute.
-			await applySettingSideEffects(entry.session, path, setting.layered(deps.settings));
+			await applySettingSideEffects(entry.session, path);
 			const model = await getSettings(entry);
 			deps.broadcast(model);
-			return replyWithRevision ? { revision: deps.settings.revision } : model;
+			return replyWithRevision
+				? { revision: model.revision ?? settingsRevision(deps.settings) }
+				: model;
 		});
 	const publish = async (entry: SettingsEntry): Promise<SettingsModel> => {
 		const model = await getSettings(entry);

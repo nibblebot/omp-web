@@ -20,7 +20,7 @@ import type {
 	PluginSummary,
 } from "#lib/wire/protocol";
 
-/** The PluginManager surface the Installed tab uses. */
+/** The PluginManager surface the Plugins tab uses. */
 export interface PluginStore {
 	list(): Promise<InstalledPlugin[]>;
 	getPlugin(name: string): Promise<InstalledPlugin | undefined>;

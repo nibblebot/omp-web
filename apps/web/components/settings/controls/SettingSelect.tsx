@@ -3,8 +3,10 @@ import type { SettingsOption } from "#lib/wire/protocol";
 import { ChevronDownIcon } from "../../ui/icons";
 
 /**
- * Native select styled as a pill; keeps the browser's keyboard and screen-reader behaviour.
+ * Native select with a small-radius border; keeps the browser's keyboard and screen-reader behaviour.
  * A value absent from `options` is appended, so the control always shows the stored value.
+ * Each option carries `selected`: a model refresh hands in a new options array, which
+ * recreates every <option>, and the select's own `value` is not re-applied when it is unchanged.
  */
 export const SettingSelect: Component<{
 	label: string;
@@ -26,7 +28,11 @@ export const SettingSelect: Component<{
 				onChange={(e) => props.onChange(e.currentTarget.value)}
 			>
 				<For each={options()}>
-					{(option) => <option value={option.value}>{option.label}</option>}
+					{(option) => (
+						<option value={option.value} selected={option.value === props.value}>
+							{option.label}
+						</option>
+					)}
 				</For>
 			</select>
 			<ChevronDownIcon class="settings-select-chevron" />

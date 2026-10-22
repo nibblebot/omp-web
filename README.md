@@ -135,7 +135,7 @@ The web UI's optional features can be turned on or off per browser in **Settings
 - The panel shows each feature's size (gzip and raw) and the total you load: the core plus the enabled features. Sizes come from the production build's `feature-sizes.json`; development builds do not produce it and show no sizes.
 - A slash command owned by a disabled feature, such as `/git` under Review, shows a local notice and is never sent to the agent. Enable the feature to use it again.
 - Unknown commands and terminal-only commands, such as `/collab` and `/live`, show a local notice and are never sent to the agent. `/help` (also under the keyboard shortcuts) lists the commands available in the browser.
-- Features: Analysis mode, Review (`/git`, `/plan-review`, `/annotations`, `/todo`), Integrations (`/mcp`, `/skills`: one Extensions dialog for skills, MCP servers, and plugins), BTW (`/btw`, one sheet for the question, answer, history, and promote to transcript), Goals (`/goal`: the goal badge opens one dialog for the objective, token budget, loops, and Vibe workers), Advisor, and Debug. All are on by default except Analysis mode, which you enable in Settings > Features.
+- Features: Analysis mode, Review (`/git`, `/plan-review`, `/annotations`, `/todo`), MCP & Skills (`/mcp`, `/skills`) and Plugins (one Extensions dialog that shows the parts whose feature is on), BTW (`/btw`, one sheet for the question, answer, history, and promote to transcript), Goals (`/goal`: the goal badge opens one dialog for the objective, token budget, loops, and Vibe workers), Advisor, and Debug. All are on by default except Analysis mode, which you enable in Settings > Features.
 
 ## Develop
 

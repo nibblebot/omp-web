@@ -425,6 +425,14 @@ button.picker-row.kbd-active {
 	align-items: center;
 	margin-bottom: var(--space-4);
 }
+/* A SettingToggle with its text: clicking the text flips the switch. */
+.dialog-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-3);
+	cursor: pointer;
+	user-select: none;
+}
 .stats-subhead {
 	font-size: var(--fs-md);
 	color: var(--muted-3);
@@ -968,7 +976,7 @@ button.picker-row.kbd-active {
 		height: 44px;
 	}
 	.stats-actions > button,
-	.stats-actions > .toggle,
+	.stats-actions > .dialog-toggle,
 	.compaction-actions > button,
 	.ui-tab {
 		min-height: 44px;
@@ -984,9 +992,9 @@ button.picker-row.kbd-active {
 	.dock-pane button {
 		min-height: 44px;
 	}
-	/* Switches keep their 26px track; the 44px target comes from an invisible hit area. */
+	/* Switches keep their 22px track; the 44px target comes from an invisible hit area. */
 	.modal .settings-toggle {
-		min-height: 26px;
+		min-height: 22px;
 	}
 	.modal .settings-toggle::before {
 		content: "";

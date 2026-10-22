@@ -268,7 +268,7 @@ export interface SettingsRevisionAck {
 }
 
 // ---------------------------------------------------------------------------
-// Installed plugins (Settings > Installed). Backed by the SDK plugin manager
+// Installed plugins (Integrations > Plugins). Backed by the SDK plugin manager
 // (~/.omp/plugins/omp-plugins.lock.json): session RPCs when a session is
 // attached, /ctl/plugins/* on the fleet otherwise. A secret setting never
 // carries its value or default: only `set` says whether one is stored.
@@ -1499,6 +1499,11 @@ export interface SettingView {
 	explicit?: { value: unknown; layer: string };
 	canUnset: boolean;
 	warnings: string[];
+	/**
+	 * When an edit applies: `live` to the running session, `next-session` only to
+	 * sessions started afterwards. `restart` is no longer produced; an older
+	 * daemon may still send it, and clients treat it as `live`.
+	 */
 	effect: "live" | "next-session" | "restart";
 }
 

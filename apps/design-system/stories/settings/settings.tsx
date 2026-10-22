@@ -4,8 +4,13 @@ import { SettingsNav, SettingsSectionPicker } from "../../../web/components/sett
 import { WebUiSettings } from "../../../web/components/settings/WebUiSettings";
 import { SettingStepper } from "../../../web/components/settings/controls/SettingStepper";
 import { SettingToggle } from "../../../web/components/settings/controls/SettingToggle";
+import { ResetIcon } from "../../../web/components/ui/icons";
 import { setState } from "../../../web/state";
-import { changedCountsByTab, SETTINGS_TABS } from "../../../web/prefs/settings-tabs";
+import {
+	changedCountsByTab,
+	SETTINGS_TABS,
+	visibleSettingsTabs,
+} from "../../../web/prefs/settings-tabs";
 import {
 	modelInfos,
 	modelRoleCatalog,
@@ -19,6 +24,7 @@ import {
 	settingSkillPaths,
 	settingThinkingLevel,
 	settingThinkingLevelGlobal,
+	settingsModel,
 	settingsModelCurrentSession,
 	settingsModelSections,
 	settingsWebUiSections,
@@ -35,8 +41,8 @@ export default [
 		seed: { currentSessionId: "sess_09a41c" },
 		variants: [
 			{
-				name: "Session settings",
-				description: "Current-session target, every section populated.",
+				name: "Session attached",
+				description: "Current-session target, every section populated, This Session tab first.",
 				seed: () => {
 					answerCalls({
 						getSettings: () => settingsModelCurrentSession,
@@ -58,6 +64,16 @@ export default [
 				render: (ctx) => <SettingsSheet onClose={ctx.close} />,
 			},
 			{
+				name: "No session attached",
+				description:
+					"The fleet fallback: no This Session tab, no Login row, changes save to config.yml.",
+				seed: () => {
+					setState("currentSessionId", "");
+					setState("settingsModel", settingsModel);
+				},
+				render: (ctx) => <SettingsSheet onClose={ctx.close} />,
+			},
+			{
 				name: "Load failed",
 				seed: () =>
 					answerCalls({
@@ -76,10 +92,13 @@ export default [
 		variants: [
 			{
 				name: "Model selected, Defaults section",
+				description:
+					"The current tab's sections sit beneath it; the section the stream is at is current.",
 				render: () => (
 					<SettingsNav
 						tabs={SETTINGS_TABS}
 						activeTabId="model"
+						activeSectionId={settingsModelSections[0]?.id}
 						changedCounts={changedCountsByTab(settingsModelCurrentSession)}
 						sections={settingsModelSections}
 						onSelectTab={() => undefined}
@@ -88,13 +107,41 @@ export default [
 				),
 			},
 			{
-				name: "Web UI selected",
+				name: "This Session selected",
+				description: "The session tab leads with no section label above it.",
+				render: () => (
+					<SettingsNav
+						tabs={SETTINGS_TABS}
+						activeTabId="session"
+						changedCounts={new Map()}
+						sections={[]}
+						onSelectTab={() => undefined}
+						onSelectSection={() => undefined}
+					/>
+				),
+			},
+			{
+				name: "Appearance selected",
 				render: () => (
 					<SettingsNav
 						tabs={SETTINGS_TABS}
 						activeTabId="web-ui"
 						changedCounts={new Map()}
 						sections={settingsWebUiSections}
+						onSelectTab={() => undefined}
+						onSelectSection={() => undefined}
+					/>
+				),
+			},
+			{
+				name: "No session attached",
+				description: "Without a session the session tab is gone and `omp` heads the list.",
+				render: () => (
+					<SettingsNav
+						tabs={visibleSettingsTabs(settingsModelCurrentSession, false)}
+						activeTabId="appearance"
+						changedCounts={changedCountsByTab(settingsModelCurrentSession)}
+						sections={[]}
 						onSelectTab={() => undefined}
 						onSelectSection={() => undefined}
 					/>
@@ -116,6 +163,7 @@ export default [
 					<SettingsSectionPicker
 						tabs={SETTINGS_TABS}
 						activeTabId="model"
+						activeSectionId="model-providers"
 						sections={[
 							{ id: "model-roles", label: "Model roles" },
 							{ id: "model-providers", label: "Providers" },
@@ -126,15 +174,12 @@ export default [
 				),
 			},
 			{
-				name: "Web UI selected",
+				name: "Appearance selected, before the first section",
 				render: () => (
 					<SettingsSectionPicker
 						tabs={SETTINGS_TABS}
 						activeTabId="web-ui"
-						sections={[
-							{ id: "web-interface", label: "Interface" },
-							{ id: "web-session", label: "Session" },
-						]}
+						sections={settingsWebUiSections}
 						onSelectTab={() => undefined}
 						onSelectSection={() => undefined}
 					/>
@@ -210,25 +255,62 @@ export default [
 			{
 				name: "Plain",
 				render: () => (
-					<SettingsRowLayout label="Auto-compact">
-						<SettingToggle label="Auto-compact" checked disabled onChange={() => undefined} />
+					<SettingsRowLayout label="Auto-Compact">
+						<SettingToggle label="Auto-Compact" checked disabled onChange={() => undefined} />
 					</SettingsRowLayout>
 				),
 			},
 			{
-				name: "Changed, with description",
+				name: "Changed, with description and reset",
+				description:
+					"The reset icon button sits left of the control; the changed dot marks the label.",
 				render: () => (
 					<SettingsRowLayout
-						label="Bash timeout"
+						label="Bash Timeout"
 						description="Seconds before a foreground bash call is cancelled."
 						changed
+						reset={
+							<button
+								type="button"
+								class="settings-reset"
+								aria-label="Reset to default"
+								title="Reset to default"
+							>
+								<ResetIcon />
+							</button>
+						}
 					>
 						<SettingStepper
-							label="Bash timeout"
+							label="Bash Timeout"
 							path="bash.timeoutSec"
 							value={120}
 							onChange={() => Promise.resolve(true)}
 						/>
+					</SettingsRowLayout>
+				),
+			},
+			{
+				name: "With note",
+				description: "The muted suffix ends the description line; it is always visible.",
+				render: () => (
+					<SettingsRowLayout
+						label="Plan Mode On Startup"
+						description="Start new sessions in plan mode."
+						note="New sessions only."
+					>
+						<SettingToggle
+							label="Plan Mode On Startup"
+							checked={false}
+							onChange={() => undefined}
+						/>
+					</SettingsRowLayout>
+				),
+			},
+			{
+				name: "Note without description",
+				render: () => (
+					<SettingsRowLayout label="Default Thinking Level" note="New sessions only.">
+						<SettingToggle label="Default Thinking Level" checked onChange={() => undefined} />
 					</SettingsRowLayout>
 				),
 			},
@@ -240,7 +322,14 @@ export default [
 		component: { file: "apps/web/components/settings/WebUiSettings.tsx", export: "WebUiSettings" },
 		variants: [
 			{
-				name: "All sections",
+				name: "Interface only",
+				description: "Signed out or auth disabled: no Account group.",
+				render: () => <WebUiSettings />,
+			},
+			{
+				name: "Interface and Account",
+				description: "Signed in: Sign Out sits under Account.",
+				seed: { authStatus: "signedIn" },
 				render: () => <WebUiSettings />,
 			},
 		],

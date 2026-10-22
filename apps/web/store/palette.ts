@@ -16,7 +16,7 @@ import {
 	storedSessionItems,
 } from "../palette/palette";
 import { commandUsage, currentCommandRegistry, dispatchInput } from "../prompt/commands";
-import { hasLiveSession, setState, state } from "../state";
+import { fleetSettingsActive, hasLiveSession, setState, state } from "../state";
 import { openDock } from "./dock";
 import { setPromptInsert } from "./chat";
 import { openModelPicker, recentModels, switchSessionModel } from "./models";
@@ -58,10 +58,15 @@ export function paletteSources(query: string, stored: readonly PaletteItem[]): P
 		open: openItems({
 			debugEnabled: isFeatureEnabled("debug"),
 			integrationsEnabled: isFeatureEnabled("integrations"),
+			pluginsEnabled: isFeatureEnabled("plugins"),
 			projects: state.registeredProjects,
 		}),
 		sessions: [...rosterSessionItems(state.daemonRoster, state.currentSessionId), ...stored],
-		settings: settingItems(state.settingsModel, visibleSettingsTabs(state.settingsModel), webRows),
+		settings: settingItems(
+			state.settingsModel,
+			visibleSettingsTabs(state.settingsModel, !fleetSettingsActive()),
+			webRows,
+		),
 		models: modelItems(
 			state.modelBrowser ?? null,
 			recentModels(),
@@ -124,12 +129,14 @@ export function runPaletteItem(item: PaletteItem): void {
 				openDock("agents");
 				return;
 			}
-			if (action.target === "skills" || action.target === "mcp") {
-				// The opener lives in the integrations feature, which core never imports; the
+			if (action.target === "skills" || action.target === "mcp" || action.target === "plugins") {
+				// The opener lives in the integrations features, which core never imports; the
 				// slice's patch is the whole opening contract.
 				setState(
 					"integrations",
-					integrationsOpenPatch("extensions", action.target === "skills" ? "skill" : "mcp"),
+					action.target === "plugins"
+						? integrationsOpenPatch("plugins")
+						: integrationsOpenPatch("extensions", action.target === "skills" ? "skill" : "mcp"),
 				);
 				setState("modal", "integrations");
 				return;

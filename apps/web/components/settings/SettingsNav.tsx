@@ -1,11 +1,12 @@
 import { createEffect, For, on, Show, type Component } from "solid-js";
-import { fleetSettingsActive } from "../../state";
 import {
+	settingsTabRuns,
 	tabBadgeCount,
 	type SettingsTabIconName,
 	type SettingsTabMeta,
 } from "../../prefs/settings-tabs";
 import {
+	BotIcon,
 	DatabaseIcon,
 	FileIcon,
 	FlaskIcon,
@@ -14,7 +15,6 @@ import {
 	ListIcon,
 	MonitorIcon,
 	CrosshairIcon,
-	PackageIcon,
 	PencilIcon,
 	ServerIcon,
 	TerminalIcon,
@@ -40,45 +40,54 @@ const TAB_ICONS: Record<SettingsTabIconName, Component<IconProps>> = {
 	wand: WandIcon,
 	list: ListIcon,
 	server: ServerIcon,
-	package: PackageIcon,
 	monitor: MonitorIcon,
 	flask: FlaskIcon,
+	bot: BotIcon,
 };
 
 /**
  * Narrow-layout navigation (CSS-gated below 768px): a tab select and, beneath
- * it, a section select for the active tab, instead of the wide layout's
- * sidebar. The section select jumps within the stacked body, so a long tab
- * such as Model stays reachable without scrolling thousands of pixels. It is
- * a pure view; the shell owns the selected-tab state and passes it down with
- * the callbacks.
+ * it, a section select for the current tab, instead of the wide layout's
+ * sidebar. Both selects follow the stream's scroll position and jump within it,
+ * so a long tab such as Model stays reachable without scrolling thousands of
+ * pixels. It is a pure view; the shell owns the position and passes it down
+ * with the callbacks.
  */
 export function SettingsSectionPicker(props: {
 	tabs: SettingsTabMeta[];
 	activeTabId: string;
+	/** The section the stream is scrolled to; none before the first section heading. */
+	activeSectionId?: string | null;
 	sections: SettingsSection[];
 	onSelectTab: (id: string) => void;
 	onSelectSection: (id: string) => void;
 }) {
 	return (
 		<nav class="settings-section-picker" aria-label="Settings sections">
-			<select
-				aria-label="Settings tab"
-				value={props.activeTabId}
-				onChange={(e) => props.onSelectTab(e.currentTarget.value)}
-			>
-				<For each={props.tabs}>{(tab) => <option value={tab.id}>{tab.label}</option>}</For>
+			<select aria-label="Settings tab" onChange={(e) => props.onSelectTab(e.currentTarget.value)}>
+				<For each={props.tabs}>
+					{(tab) => (
+						<option value={tab.id} selected={tab.id === props.activeTabId}>
+							{tab.label}
+						</option>
+					)}
+				</For>
 			</select>
 			<Show when={props.sections.length > 0}>
 				<select
 					aria-label="Settings section"
-					value=""
 					onChange={(e) => props.onSelectSection(e.currentTarget.value)}
 				>
-					<option value="" disabled>
+					<option value="" disabled selected={!props.activeSectionId}>
 						Jump to section
 					</option>
-					<For each={props.sections}>{(s) => <option value={s.id}>{s.label}</option>}</For>
+					<For each={props.sections}>
+						{(s) => (
+							<option value={s.id} selected={s.id === props.activeSectionId}>
+								{s.label}
+							</option>
+						)}
+					</For>
 				</select>
 			</Show>
 		</nav>
@@ -86,15 +95,18 @@ export function SettingsSectionPicker(props: {
 }
 
 /**
- * Wide-layout sidebar (CSS-gated to ≥721px): one row per tab (icon, label,
- * purple changed-count for SDK tabs), a rule between the SDK, Installed and
- * client groups, the active tab's sections beneath it, and the fleet
- * fallback footnote pinned to the bottom. It is a pure view; the shell owns
- * selection state and passes callbacks down.
+ * Wide-layout sidebar (CSS-gated to ≥721px): the tabs of the stream, one row
+ * each (icon, label, purple changed-count for SDK tabs), under lowercase `omp`
+ * and `omp-web` section labels (none above the session tab), with the current
+ * tab's sections beneath it. Both levels carry aria-current and follow the
+ * stream's scroll position. It is a pure view; the shell owns the position and
+ * passes callbacks down.
  */
 export function SettingsNav(props: {
 	tabs: SettingsTabMeta[];
 	activeTabId: string;
+	/** The section the stream is scrolled to; none before the first section heading. */
+	activeSectionId?: string | null;
 	changedCounts: Map<string, number>;
 	sections: SettingsSection[];
 	onSelectTab: (id: string) => void;
@@ -130,52 +142,52 @@ export function SettingsNav(props: {
 			onKeyDown={onNavKeyDown}
 			onFocusIn={onNavFocusIn}
 		>
-			<For each={props.tabs}>
-				{(tab, index) => {
-					const Icon = TAB_ICONS[tab.icon];
-					const badge = () => tabBadgeCount(props.changedCounts, tab);
-					return (
-						<>
-							<Show when={index() > 0 && props.tabs[index() - 1].kind !== tab.kind}>
-								<hr class="settings-nav-divider" />
-							</Show>
-							<button
-								type="button"
-								class="settings-section"
-								classList={{ active: tab.id === props.activeTabId }}
-								aria-current={tab.id === props.activeTabId ? "true" : undefined}
-								onClick={() => props.onSelectTab(tab.id)}
-							>
-								<Icon class="settings-nav-icon" />
-								<span class="settings-nav-label">{tab.label}</span>
-								<Show when={badge() > 0}>
-									<span class="settings-nav-badge">{badge()}</span>
-								</Show>
-							</button>
-							<Show when={tab.id === props.activeTabId}>
-								<For each={props.sections}>
-									{(section) => (
+			<For each={settingsTabRuns(props.tabs)}>
+				{(run) => (
+					<>
+						<Show when={run.section !== "session"}>
+							<div class="settings-nav-heading">{run.section}</div>
+						</Show>
+						<For each={run.tabs}>
+							{(tab) => {
+								const Icon = TAB_ICONS[tab.icon];
+								const badge = () => tabBadgeCount(props.changedCounts, tab);
+								return (
+									<>
 										<button
 											type="button"
-											class="settings-subsection"
-											onClick={() => props.onSelectSection(section.id)}
+											class="settings-section"
+											classList={{ active: tab.id === props.activeTabId }}
+											aria-current={tab.id === props.activeTabId ? "true" : undefined}
+											onClick={() => props.onSelectTab(tab.id)}
 										>
-											{section.label}
+											<Icon class="settings-nav-icon" />
+											<span class="settings-nav-label">{tab.label}</span>
+											<Show when={badge() > 0}>
+												<span class="settings-nav-badge">{badge()}</span>
+											</Show>
 										</button>
-									)}
-								</For>
-							</Show>
-						</>
-					);
-				}}
+										<Show when={tab.id === props.activeTabId}>
+											<For each={props.sections}>
+												{(section) => (
+													<button
+														type="button"
+														class="settings-subsection"
+														aria-current={section.id === props.activeSectionId ? "true" : undefined}
+														onClick={() => props.onSelectSection(section.id)}
+													>
+														{section.label}
+													</button>
+												)}
+											</For>
+										</Show>
+									</>
+								);
+							}}
+						</For>
+					</>
+				)}
 			</For>
-			{/* Fleet fallback notice: a quiet footnote pinned to the bottom of
-			    the nav, not body chrome. */}
-			<Show when={fleetSettingsActive()}>
-				<div class="settings-nav-footnote">
-					No session attached. Changes save to config.yml and apply to new sessions.
-				</div>
-			</Show>
 		</nav>
 	);
 }

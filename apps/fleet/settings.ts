@@ -130,11 +130,11 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 			)
 				throw new FleetSettingsError("Invalid expectedRevision", 400);
 			const settings = await ensureSettings();
-			const [{ lookup }, { coerceSettingValue }] = await Promise.all([
+			const [{ lookup }, { coerceSettingValue, settingsRevision }] = await Promise.all([
 				import("@oh-my-pi/pi-coding-agent/config/registry"),
 				import("#lib/sdk-settings/settings-model"),
 			]);
-			if (expectedRevision !== undefined && settings.revision !== expectedRevision)
+			if (expectedRevision !== undefined && settingsRevision(settings) !== expectedRevision)
 				throw new FleetSettingsError("Settings changed; refresh before editing.", 409);
 			const setting = lookup(path);
 			if (!setting) throw new FleetSettingsError(`Unknown setting: ${path}`, 400);

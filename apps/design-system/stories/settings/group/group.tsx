@@ -11,7 +11,7 @@ export default [
 			{
 				name: "Titled group",
 				description:
-					"A group label above a card of rows; the label is omitted when no title is given.",
+					"A small group title above a flat list of rows; the title is omitted when none is given.",
 				render: () => (
 					<SettingsGroup title="Modes" id="modes">
 						<SettingsRowLayout
@@ -26,7 +26,7 @@ export default [
 			{
 				name: "Collapsible group (narrow)",
 				description:
-					"Below 768px a collapsible group folds its card behind a 44px header with a caret; wide layouts keep the card open under a plain title.",
+					"Below 768px a collapsible group folds its rows behind a 44px header with a caret; wide layouts keep the group open under a plain title.",
 				render: () => (
 					<SettingsGroup title="Agent SDK" id="sdk-model" collapsible>
 						<SettingsRowLayout
@@ -34,6 +34,21 @@ export default [
 							description="Used for new sessions in this project."
 						>
 							<span>gpt-5</span>
+						</SettingsRowLayout>
+					</SettingsGroup>
+				),
+			},
+			{
+				name: "Advanced group (every width)",
+				description:
+					"The Advanced group of a collapsible tab starts folded on wide layouts too; its header toggles it open.",
+				render: () => (
+					<SettingsGroup title="Advanced" id="sdk-model-advanced" collapsible>
+						<SettingsRowLayout
+							label="Request Timeout"
+							description="Seconds before a model request is abandoned."
+						>
+							<span>120</span>
 						</SettingsRowLayout>
 					</SettingsGroup>
 				),

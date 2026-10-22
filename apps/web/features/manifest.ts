@@ -10,6 +10,7 @@ export type FeatureId =
 	| "analysis"
 	| "review"
 	| "integrations"
+	| "plugins"
 	| "btw"
 	| "goals"
 	| "advisor"
@@ -26,7 +27,10 @@ export interface FeatureInfo {
 	defaultEnabled: boolean;
 	/** Slash names (no leading `/`) owned by this feature; disabled → local notice, never forwarded. */
 	commands: readonly string[];
-	/** Modals owned by this feature; disabled → ModalHost renders nothing. */
+	/**
+	 * Modals owned by this feature; with every owner disabled, ModalHost renders nothing.
+	 * A modal may be listed by several features: it renders while any of them is active.
+	 */
 	modals: readonly ModalName[];
 	/** Dock panel kinds owned by this feature; turning it off closes them. */
 	docks: readonly string[];
@@ -35,7 +39,7 @@ export interface FeatureInfo {
 export const FEATURES: readonly FeatureInfo[] = [
 	{
 		id: "analysis",
-		label: "Analysis mode",
+		label: "Analysis Mode",
 		description: "Transcript browser and session statistics view next to Chat.",
 		experimental: false,
 		defaultEnabled: false,
@@ -64,8 +68,19 @@ export const FEATURES: readonly FeatureInfo[] = [
 		docks: [],
 	},
 	{
+		id: "plugins",
+		label: "Plugins",
+		description:
+			"Enable, disable, and configure installed omp plugins (Extensions dialog, Plugins tab). Installing stays in the terminal.",
+		experimental: true,
+		defaultEnabled: true,
+		commands: [],
+		modals: ["integrations"],
+		docks: [],
+	},
+	{
 		id: "btw",
-		label: "BTW side questions",
+		label: "BTW Side Questions",
 		description:
 			"Ask side questions outside the transcript (/btw) and review, follow up, or promote them.",
 		experimental: true,
@@ -76,7 +91,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 	},
 	{
 		id: "goals",
-		label: "Goals, loops & vibe",
+		label: "Goals, Loops & Vibe",
 		description: "Goal tracking, bounded loops, and vibe mode (/goal).",
 		experimental: true,
 		defaultEnabled: true,
@@ -86,7 +101,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 	},
 	{
 		id: "advisor",
-		label: "Advisor in the browser",
+		label: "Advisor in the Browser",
 		description:
 			"Shows advisor notes and the advisor sheet in this browser. The advisor itself is turned on in Settings > Model > Advisor.",
 		experimental: true,
@@ -97,7 +112,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 	},
 	{
 		id: "debug",
-		label: "Debug sheet",
+		label: "Debug Sheet",
 		description: "Build identity, fleet and transport debug log, opened from the sidebar header.",
 		experimental: false,
 		defaultEnabled: true,
@@ -123,7 +138,11 @@ export function featureForCommand(name: string): FeatureInfo | undefined {
 	return FEATURES.find((f) => f.commands.includes(name));
 }
 
-/** The feature owning a modal, if any; core modals return undefined. */
-export function featureForModal(name: ModalName): FeatureInfo | undefined {
-	return FEATURES.find((f) => f.modals.includes(name));
+/**
+ * Every feature that lists a modal, in manifest order; core modals return an
+ * empty list. A modal may be listed by several features and renders while any
+ * of them is active.
+ */
+export function featuresForModal(name: ModalName): FeatureInfo[] {
+	return FEATURES.filter((f) => f.modals.includes(name));
 }

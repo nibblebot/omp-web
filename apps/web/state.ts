@@ -401,6 +401,10 @@ export const [state, setState] = createStore({
 	stats: null as SessionStats | null,
 	subagents: new Map<string, SubagentInfo>(),
 	connected: false,
+	// True from page load until the first /events stream opens (or the
+	// startup grace in connect() runs out): the strip stays hidden meanwhile,
+	// since nothing has dropped yet.
+	transportStartup: true,
 	// Browser-auth state: mirrored from apps/web/store/auth.ts by
 	// subscribeAuth. "unknown" until the first session probe; "disabled"
 	// (fleet/daemon without browser auth) behaves exactly as before this
@@ -1175,6 +1179,18 @@ function idleBeforeSessionDies(next: DaemonEntry | undefined): void {
 	setState({ transcriptPhase: "idle", transcriptError: null, transcriptTarget: null });
 }
 
+/** A first connection still pending after this long shows the strip after all (the fleet is not answering). */
+const STARTUP_CONNECT_GRACE_MS = 10_000;
+let startupGraceTimer: ReturnType<typeof setTimeout> | undefined;
+
+function armStartupGrace(): void {
+	if (!state.transportStartup || startupGraceTimer !== undefined) return;
+	startupGraceTimer = setTimeout(
+		() => setState("transportStartup", false),
+		STARTUP_CONNECT_GRACE_MS,
+	);
+}
+
 export function connect(): void {
 	// Browser-only transport: without EventSource there is nothing to dial.
 	// (A bun test worker has neither EventSource nor location; a silence
@@ -1194,10 +1210,11 @@ export function connect(): void {
 	const source = new EventSource(`/events?${params}`);
 	events = source;
 	armSilenceTimer();
+	armStartupGrace();
 	source.onopen = () => {
 		backoff = 1000;
 		setConnected(true);
-		setState("connected", true);
+		setState({ connected: true, transportStartup: false });
 		setState("reconnectDelay", 0);
 		pushDebug("info", "transport", "stream open");
 		// No boot-time calls: the fleet edge answers every call with "not

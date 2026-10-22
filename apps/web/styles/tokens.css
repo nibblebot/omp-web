@@ -39,8 +39,8 @@
 	--settings-track-off: color-mix(in srgb, var(--border) 70%, var(--bg));
 	--settings-title: var(--text);
 	--settings-desc: color-mix(in srgb, var(--text) 80%, var(--muted));
-	--settings-row-x: 20px;
-	--settings-row-y: 14px;
+	--settings-row-x: 12px;
+	--settings-row-y: 10px;
 	--settings-warning: var(--warning);
 	--settings-mark-bg: #5a8080;
 	--settings-mark-fg: #17222a;

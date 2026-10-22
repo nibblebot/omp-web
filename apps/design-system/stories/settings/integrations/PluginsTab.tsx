@@ -1,23 +1,7 @@
 import { PluginsTab } from "../../../../web/components/settings/integrations/PluginsTab";
-import type { PluginSummary } from "#lib/wire/protocol";
 import { answerCalls } from "../../../daemon";
+import { pluginDetail, pluginSummaries } from "../../../fixtures/plugins";
 import { defineStory } from "../../../registry";
-
-const plugins: PluginSummary[] = [
-	{
-		name: "omp-usage-status-plugin",
-		source: "npm",
-		version: "1.4.2",
-		enabled: true,
-		description: "Shows token usage and cost in the status line.",
-	},
-	{
-		name: "omp-review-kit",
-		source: "link",
-		enabled: false,
-		description: "Review hooks that run inside the agent process.",
-	},
-];
 
 export default [
 	defineStory({
@@ -31,12 +15,15 @@ export default [
 		variants: [
 			{
 				name: "Plugins",
-				description: "The CLI install hint above the installed plugin cards.",
-				seed: () => answerCalls({ listPlugins: () => plugins }),
+				description:
+					"The CLI install hint above two installed plugins as flat settings rows: one enabled npm plugin with a version, one linked plugin without one. Configure expands the detail under its row.",
+				seed: () =>
+					answerCalls({ listPlugins: () => pluginSummaries, getPluginConfig: () => pluginDetail }),
 				render: () => <PluginsTab />,
 			},
 			{
 				name: "No plugins",
+				description: "The lock file lists no plugins.",
 				seed: () => answerCalls({ listPlugins: () => [] }),
 				render: () => <PluginsTab />,
 			},

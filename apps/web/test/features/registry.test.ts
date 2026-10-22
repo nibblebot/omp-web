@@ -219,4 +219,29 @@ describe("live feature toggles", () => {
 		await setFeatureEnabled("review", false);
 		expect(state.dock).toBeNull();
 	});
+
+	test("a modal shared by two features resolves while either one is active", async () => {
+		await activateFeatures(["plugins"]);
+		const fromPlugins = featureModal("integrations");
+		expect(fromPlugins).toBeDefined();
+		await activateFeatures(["integrations"]);
+		expect(featureModal("integrations")).toBeDefined();
+		await activateFeatures(["integrations", "plugins"]);
+		expect(featureModal("integrations")).toBeDefined();
+		await activateFeatures([]);
+		expect(featureModal("integrations")).toBeUndefined();
+	});
+
+	test("a shared modal stays open while one owner remains and closes with the last", async () => {
+		setPreferredOnly(["integrations", "plugins"]);
+		await activateFeatures(["integrations", "plugins"]);
+		setState("modal", "integrations");
+		await setFeatureEnabled("plugins", false);
+		expect(state.modal).toBe("integrations");
+		await setFeatureEnabled("plugins", true);
+		await setFeatureEnabled("integrations", false);
+		expect(state.modal).toBe("integrations");
+		await setFeatureEnabled("plugins", false);
+		expect(state.modal).toBeNull();
+	});
 });

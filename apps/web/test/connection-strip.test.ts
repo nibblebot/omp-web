@@ -87,6 +87,7 @@ afterEach(() => {
 	// connect() opens a fresh stream and the next roster frame applies.
 	setState({
 		connected: false,
+		transportStartup: true,
 		sessionDownId: "",
 		currentSessionId: "",
 		daemonRoster: [],
@@ -97,6 +98,17 @@ afterEach(() => {
 afterAll(() => {
 	restoreJsxShim();
 	restoreBrowserGlobals();
+});
+
+describe("transport strip", () => {
+	test("stays hidden while the page's first stream is opening, and shows once a connected stream drops", () => {
+		setState({ connected: false, transportStartup: true, currentSessionId: "" });
+		expect(connectionState()).toBe("reconnecting");
+		expect(renderChrome().strip).not.toContain("connection-bar");
+		// After the first open (or the startup grace), a down stream is a real reconnect.
+		setState({ transportStartup: false });
+		expect(renderChrome().strip).toContain('data-state="reconnecting"');
+	});
 });
 
 describe("killed attached session process", () => {

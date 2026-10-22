@@ -3,11 +3,11 @@ import { parseJsonDraft } from "../../../prefs/setting-controls";
 
 /**
  * Lists and records edited as JSON. The row shows the value as compact JSON in a
- * pill, truncated to the row width; the pill is the trigger and opens the editor
+ * summary button, truncated to the row width; the button is the trigger and opens the editor
  * inline below it with Save and Cancel. Opening moves focus into the textarea;
  * while open, Escape cancels (the wrapper listener stops it, and the marked
  * wrapper keeps Modal from closing the sheet); Ctrl/Cmd+Enter saves; Cancel and
- * Save return focus to the pill.
+ * Save return focus to the summary button.
  */
 export const SettingJsonField: Component<{
 	label: string;

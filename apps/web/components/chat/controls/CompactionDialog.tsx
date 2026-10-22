@@ -2,6 +2,7 @@ import { For, Show, createEffect, on, type Component } from "solid-js";
 import { formatTokens } from "../../../usage/context";
 import { state } from "../../../state";
 import { Modal } from "../../ui/Modal";
+import { SettingToggle } from "../../settings/controls/SettingToggle";
 import {
 	COMPACTION_MODE_META,
 	ESTIMATE_NOTE,
@@ -202,12 +203,12 @@ export const CompactionDialog: Component<{ onClose: () => void }> = (props) => {
 						)}
 					</Show>
 
-					<label class="toggle">
-						<input
-							type="checkbox"
+					<label class="dialog-toggle">
+						<SettingToggle
+							label="Compact automatically when the context fills up"
 							checked={state.autoCompactionEnabled}
 							disabled={autoPending()}
-							onChange={(e) => toggleAutoCompaction(e.currentTarget.checked)}
+							onChange={toggleAutoCompaction}
 						/>
 						Compact automatically when the context fills up
 					</label>

@@ -143,17 +143,25 @@
 	flex: none;
 	min-width: 1.5em;
 	padding: 0 var(--space-3);
-	border-radius: var(--r-pill);
+	border-radius: var(--r-xs);
 	text-align: center;
 	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
 	color: var(--settings-accent);
 	background: color-mix(in srgb, var(--settings-accent) 16%, transparent);
 }
-.settings-nav-divider {
-	border: 0;
-	border-top: 1px solid var(--border);
-	margin: var(--space-3) var(--space-4);
+/* Section labels in the sidebar: literal lowercase `omp` / `omp-web`, in the
+   small group-title style; no dividers. */
+.settings-nav-heading {
+	margin: var(--space-5) 0 var(--space-2);
+	padding: 0 var(--space-4);
+	font-size: var(--fs-sm);
+	font-weight: 500;
+	letter-spacing: 0.06em;
+	color: var(--muted);
+}
+.settings-nav-heading:first-child {
+	margin-top: 0;
 }
 .settings-subsection {
 	background: none;
@@ -170,7 +178,8 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-.settings-subsection:hover {
+.settings-subsection:hover,
+.settings-subsection[aria-current="true"] {
 	color: var(--text);
 }
 @media (max-width: 767px) {
@@ -186,28 +195,18 @@
 	overflow-x: hidden;
 	padding: var(--space-3) var(--space-6);
 }
-.settings-hero {
-	padding: var(--space-5) 0 var(--space-6);
-	margin-bottom: var(--space-5);
-	border-bottom: 1px solid var(--border);
+/* The stream: every visible tab stacked, each under a small plain heading
+   (not sticky) that the sidebar and deep links scroll to. */
+.settings-tab + .settings-tab {
+	margin-top: var(--space-7);
 }
-.settings-hero-title {
-	margin: 0;
-	font-size: 1.75rem;
+.settings-tab-heading {
+	margin: 0 0 var(--space-4);
+	padding: 0 var(--settings-row-x);
+	font-size: var(--fs-xl);
 	font-weight: 600;
-	line-height: 1.2;
+	line-height: 1.3;
 	color: var(--text);
-}
-.settings-lead {
-	margin: var(--space-4) 0 0;
-	max-width: 64ch;
-	color: var(--muted);
-}
-.settings-nav-footnote {
-	margin-top: auto;
-	padding-top: var(--space-5);
-	font-size: var(--fs-sm);
-	color: var(--muted);
 }
 .settings-note {
 	color: var(--muted);
@@ -219,16 +218,17 @@
 	gap: var(--space-2);
 	margin-bottom: var(--space-6);
 }
+/* Flat list: a hairline above the group and between rows, no card. */
 .settings-group {
-	border: 1px solid var(--settings-line);
-	border-radius: var(--r-xl);
-	overflow: hidden;
+	border-top: 1px solid var(--settings-line);
 }
 .settings-group-title {
 	margin: 0;
-	padding: 0 var(--space-2);
-	font-size: var(--fs-md);
-	font-weight: 400;
+	padding: 0 var(--settings-row-x);
+	font-size: var(--fs-sm);
+	font-weight: 500;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
 	color: var(--muted);
 }
 /* Wide layouts: the toggle is plain text, so the title reads as before. */
@@ -238,6 +238,8 @@
 	padding: 0;
 	color: inherit;
 	font: inherit;
+	letter-spacing: inherit;
+	text-transform: inherit;
 	text-align: inherit;
 	cursor: default;
 }
@@ -278,6 +280,26 @@
 		display: none;
 	}
 }
+/* The Advanced group folds on every width: its header is always a toggle. */
+.settings-block[data-foldable] .settings-group-toggle {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	cursor: pointer;
+}
+.settings-block[data-foldable] .settings-group-caret {
+	display: block;
+	width: 16px;
+	height: 16px;
+	flex: none;
+	transition: transform var(--dur-move-fast) var(--ease-out);
+}
+.settings-block[data-foldable][data-open] .settings-group-caret {
+	transform: rotate(180deg);
+}
+.settings-block[data-foldable]:not([data-open]) > .settings-group {
+	display: none;
+}
 .settings-item {
 	position: relative;
 	display: grid;
@@ -306,27 +328,20 @@
 	align-items: center;
 	flex-wrap: wrap;
 	gap: var(--space-3);
-	font-size: var(--fs-2xl);
+	font-size: var(--fs-lg);
+	line-height: 1.4;
 	font-weight: 500;
 	color: var(--settings-title);
 }
-.settings-item-scope,
-.settings-item-effect {
-	flex: none;
-	padding: 0 var(--space-3);
-	border: 1px solid var(--border);
-	border-radius: var(--r-pill);
-	color: var(--muted);
-	font-size: var(--fs-sm);
-	font-weight: 400;
-	line-height: 1.6;
-	white-space: nowrap;
-}
 .settings-item-desc {
 	color: var(--settings-desc);
-	font-size: var(--fs-xl);
-	line-height: 1.7;
+	font-size: var(--fs-md);
+	line-height: 1.45;
 	margin-top: var(--space-1);
+}
+/* "New sessions only." and similar: muted, always visible, at the end of the description. */
+.settings-item-note {
+	color: var(--muted);
 }
 .settings-item-warning-icon {
 	display: block;
@@ -338,8 +353,8 @@
 .settings-item-warning {
 	margin: var(--space-2) 0 0;
 	color: var(--settings-warning);
-	font-size: var(--fs-xl);
-	line-height: 1.7;
+	font-size: var(--fs-md);
+	line-height: 1.45;
 }
 .settings-item-source {
 	margin: var(--space-2) 0 0;
@@ -349,55 +364,67 @@
 .changed-dot {
 	position: absolute;
 	left: var(--space-2);
-	top: calc(var(--settings-row-y) + 0.55em);
-	width: 6px;
-	height: 6px;
+	top: calc(var(--settings-row-y) + 0.45em);
+	width: 5px;
+	height: 5px;
 	border-radius: 50%;
 	background: var(--settings-accent);
 }
 .settings-reset {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
 	background: none;
 	border: none;
+	border-radius: var(--r-sm);
 	color: var(--muted-3);
-	font: inherit;
-	font-size: var(--fs-md);
-	padding: var(--space-2) var(--space-3);
 	cursor: pointer;
+	transition: color var(--dur-fast) var(--ease-out);
 }
-.settings-reset:hover {
+.settings-reset:hover:not(:disabled) {
 	color: var(--text);
-	text-decoration: underline;
+	background: var(--hover);
 }
 .settings-reset:disabled {
 	opacity: 0.5;
 	cursor: default;
 }
+/* Rectangular switch: the knob radius is the track radius minus the inset, so the corners stay concentric. */
 .settings-toggle {
 	position: relative;
-	width: 46px;
-	height: 26px;
+	width: 40px;
+	height: 22px;
 	padding: 0;
 	border: none;
-	border-radius: var(--r-pill);
-	background: var(--settings-track-off);
+	border-radius: var(--r-xs);
+	--toggle-track: var(--settings-track-off);
+	background: var(--toggle-track);
 	cursor: pointer;
 	flex: none;
+	transition: background-color var(--dur-fast) var(--ease-out);
 }
 .settings-toggle[aria-checked="true"] {
-	background: var(--settings-accent);
+	--toggle-track: var(--settings-accent);
+}
+/* base.css paints every hovered button with --hover; a switch keeps its track color. */
+button.settings-toggle:not(:disabled):hover {
+	background-color: var(--toggle-track);
 }
 .settings-toggle-knob {
 	position: absolute;
-	top: 2px;
-	left: 2px;
-	width: 22px;
-	height: 22px;
-	border-radius: 50%;
+	top: 3px;
+	left: 3px;
+	width: 16px;
+	height: 16px;
+	border-radius: 1px;
 	background: var(--panel);
 	transition: transform var(--dur-move-fast) var(--ease-out);
 }
 .settings-toggle[aria-checked="true"] .settings-toggle-knob {
-	transform: translateX(20px);
+	transform: translateX(18px);
 }
 .settings-toggle:disabled {
 	opacity: 0.5;
@@ -406,19 +433,19 @@
 .settings-segmented {
 	display: inline-flex;
 	align-items: center;
-	min-height: 2rem;
-	padding: 3px;
+	min-height: 1.75rem;
+	padding: 2px;
 	border: 1px solid var(--border);
-	border-radius: var(--r-pill);
+	border-radius: var(--r-sm);
 }
 .settings-segment {
 	background: none;
 	border: none;
-	border-radius: var(--r-pill);
+	border-radius: var(--r-xs);
 	color: var(--muted-3);
 	padding: var(--space-1) var(--space-4);
 	font: inherit;
-	font-size: var(--fs-lg);
+	font-size: var(--fs-md);
 	cursor: pointer;
 }
 .settings-segment.selected {
@@ -434,14 +461,14 @@
 	appearance: none;
 	background: transparent;
 	field-sizing: content;
-	min-height: 2rem;
+	min-height: 1.75rem;
 	min-width: 5rem;
 	border: 1px solid var(--border);
-	border-radius: var(--r-pill);
+	border-radius: var(--r-sm);
 	color: var(--text);
 	padding: var(--space-1) 28px var(--space-1) var(--space-4);
 	font-family: var(--font-sans);
-	font-size: var(--fs-lg);
+	font-size: var(--fs-md);
 	max-width: 100%;
 	cursor: pointer;
 }
@@ -454,7 +481,7 @@
 .settings-stepper {
 	display: inline-flex;
 	align-items: center;
-	border-radius: var(--r-pill);
+	border-radius: var(--r-sm);
 	background: transparent;
 	border: 1px solid var(--border);
 	overflow: hidden;
@@ -463,8 +490,8 @@
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 34px;
-	height: 34px;
+	width: 28px;
+	height: 28px;
 	background: none;
 	border: none;
 	color: var(--text);
@@ -509,7 +536,7 @@
 	max-width: 100%;
 	padding: var(--space-2) var(--space-4);
 	border: 1px solid var(--border-strong);
-	border-radius: var(--r-lg);
+	border-radius: var(--r-sm);
 	background: var(--bg-deep);
 	color: var(--text);
 	font-family: var(--font-mono);
@@ -563,7 +590,7 @@
 	padding: var(--space-2);
 	width: min(360px, 100%);
 	border: 1px solid var(--settings-line);
-	border-radius: var(--r-xl);
+	border-radius: var(--r-md);
 	background: var(--settings-fill);
 }
 .settings-ordered-row {
@@ -648,7 +675,7 @@
 	white-space: nowrap;
 	padding: var(--space-2) var(--space-5);
 	border: none;
-	border-radius: var(--r-pill);
+	border-radius: var(--r-sm);
 	background: var(--settings-fill);
 	color: var(--muted);
 	font-family: var(--font-mono);
@@ -714,7 +741,7 @@
 	background: var(--settings-fill);
 	border: none;
 	color: var(--muted);
-	border-radius: var(--r-pill);
+	border-radius: var(--r-sm);
 	padding: var(--space-1) var(--space-4);
 	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
@@ -822,7 +849,7 @@
 	min-height: 2rem;
 	max-width: 100%;
 	border: 1px solid var(--border);
-	border-radius: var(--r-pill);
+	border-radius: var(--r-sm);
 	background: transparent;
 	color: var(--text);
 	padding: var(--space-1) 28px var(--space-1) var(--space-4);

@@ -21,19 +21,35 @@ const labels = (sources: PaletteSources, query: string) =>
 
 describe("openItems", () => {
 	test("debug is listed only when the debug feature is enabled", () => {
-		const off = openItems({ debugEnabled: false, integrationsEnabled: true, projects: [] }).map(
-			(item) => item.label,
-		);
-		const on = openItems({ debugEnabled: true, integrationsEnabled: true, projects: [] }).map(
-			(item) => item.label,
-		);
+		const off = openItems({
+			debugEnabled: false,
+			integrationsEnabled: true,
+			pluginsEnabled: true,
+			projects: [],
+		}).map((item) => item.label);
+		const on = openItems({
+			debugEnabled: true,
+			integrationsEnabled: true,
+			pluginsEnabled: true,
+			projects: [],
+		}).map((item) => item.label);
 		expect(off).not.toContain("Debug");
 		expect(on).toContain("Debug");
 	});
 
 	test("Skills and MCP servers are listed only when the integrations feature is enabled", () => {
-		const on = openItems({ debugEnabled: false, integrationsEnabled: true, projects: [] });
-		const off = openItems({ debugEnabled: false, integrationsEnabled: false, projects: [] });
+		const on = openItems({
+			debugEnabled: false,
+			integrationsEnabled: true,
+			pluginsEnabled: false,
+			projects: [],
+		});
+		const off = openItems({
+			debugEnabled: false,
+			integrationsEnabled: false,
+			pluginsEnabled: true,
+			projects: [],
+		});
 		expect(on.filter((item) => item.action.kind === "open").map((item) => item.label)).toEqual(
 			expect.arrayContaining(["Skills", "MCP servers"]),
 		);
@@ -41,10 +57,21 @@ describe("openItems", () => {
 		expect(off.map((item) => item.label)).not.toContain("MCP servers");
 	});
 
+	test("Plugins is listed only when the plugins feature is enabled, independent of integrations", () => {
+		const context = { debugEnabled: false, projects: [] };
+		const on = openItems({ ...context, integrationsEnabled: false, pluginsEnabled: true });
+		const off = openItems({ ...context, integrationsEnabled: true, pluginsEnabled: false });
+		expect(on.map((item) => item.label)).toContain("Plugins");
+		expect(on.map((item) => item.label)).not.toContain("Skills");
+		expect(off.map((item) => item.label)).not.toContain("Plugins");
+		expect(off.map((item) => item.label)).toContain("Skills");
+	});
+
 	test("sign-in and provider login are offered without a live session or signed-in state", () => {
 		const labelsOut = openItems({
 			debugEnabled: false,
 			integrationsEnabled: true,
+			pluginsEnabled: true,
 			projects: [],
 		}).map((item) => item.label);
 		expect(labelsOut).toContain("Sign in");
@@ -55,6 +82,7 @@ describe("openItems", () => {
 		const items = openItems({
 			debugEnabled: false,
 			integrationsEnabled: true,
+			pluginsEnabled: true,
 			projects: [
 				{ projectId: "p1", name: "alpha" },
 				{ projectId: "p2", name: "beta" },
@@ -71,7 +99,14 @@ describe("openItems", () => {
 describe("searchPalette", () => {
 	test("an empty query lists the open targets", () => {
 		const names = labels(
-			sourcesWith(openItems({ debugEnabled: false, integrationsEnabled: true, projects: [] })),
+			sourcesWith(
+				openItems({
+					debugEnabled: false,
+					integrationsEnabled: true,
+					pluginsEnabled: true,
+					projects: [],
+				}),
+			),
 			"",
 		);
 		expect(names).toContain("Settings");
@@ -80,7 +115,14 @@ describe("searchPalette", () => {
 
 	test("a query finds the matching open target", () => {
 		const names = labels(
-			sourcesWith(openItems({ debugEnabled: false, integrationsEnabled: true, projects: [] })),
+			sourcesWith(
+				openItems({
+					debugEnabled: false,
+					integrationsEnabled: true,
+					pluginsEnabled: true,
+					projects: [],
+				}),
+			),
 			"sign",
 		);
 		expect(names).toContain("Sign in");

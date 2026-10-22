@@ -1,9 +1,9 @@
 import { Show, Switch, Match, type JSX } from "solid-js";
-import { displayOptionValue, effectLabel, unmetDependency } from "../../prefs/settings";
+import { displayOptionValue, effectNote, unmetDependency } from "../../prefs/settings";
 import { asRecord, controlKind, hasWideSelection, itemOptions } from "../../prefs/setting-controls";
 import { settingValue, unsetSetting, updateSetting } from "../../store/settings";
 import { state } from "../../state";
-import { WarningIcon } from "../ui/icons";
+import { ResetIcon, WarningIcon } from "../ui/icons";
 import { SettingJsonField } from "./controls/SettingJsonField";
 import { SettingOrderedList } from "./controls/SettingOrderedList";
 import { SettingProviderLimits } from "./controls/SettingProviderLimits";
@@ -25,10 +25,8 @@ export function SettingsRowLayout(props: {
 	changed?: boolean;
 	/** Set by project config: the value is read-only here. */
 	setByProject?: boolean;
-	/** Where the value lives, shown as a badge (for example "omp config" or "This browser"). */
-	scope?: string;
-	/** When a change takes effect; null or omitted shows no badge (live). */
-	effect?: string | null;
+	/** Muted suffix at the end of the description line, for example "New sessions only." */
+	note?: string;
 	/** Text, secret, JSON and ordered-list rows: the control drops below the help text. */
 	stacked?: boolean;
 	children: JSX.Element;
@@ -45,20 +43,20 @@ export function SettingsRowLayout(props: {
 						<span class="changed-dot" title="Changed from default" />
 					</Show>
 					<span>{props.label}</span>
-					<Show when={props.scope}>
-						<span class="settings-item-scope">{props.scope}</span>
-					</Show>
-					<Show when={props.effect}>
-						<span class="settings-item-effect">{props.effect}</span>
-					</Show>
 				</div>
 				<Show when={props.warning}>
 					<p class="settings-item-warning" role="note">
 						{props.warning}
 					</p>
 				</Show>
-				<Show when={props.description}>
-					<p class="settings-item-desc">{props.description}</p>
+				<Show when={props.description || props.note}>
+					<p class="settings-item-desc">
+						{props.description}
+						<Show when={props.note}>
+							{props.description ? " · " : null}
+							<span class="settings-item-note">{props.note}</span>
+						</Show>
+					</p>
 				</Show>
 				<Show when={props.setByProject}>
 					<p class="settings-item-source">Set by project config</p>
@@ -89,7 +87,6 @@ export function SettingsRow(props: { item: SettingsItem }) {
 		return item().warning ? `${item().warning} ${note}` : note;
 	};
 	const blocked = () => unmetDependency(item().path, settingValue);
-	const effect = () => effectLabel(item().view?.effect);
 
 	return (
 		<SettingsRowLayout
@@ -98,8 +95,7 @@ export function SettingsRow(props: { item: SettingsItem }) {
 			warning={blocked() ?? rowWarning()}
 			changed={item().changed}
 			setByProject={setByProject()}
-			scope="omp config"
-			effect={effect()}
+			note={effectNote(item().view?.effect) ?? undefined}
 			stacked={
 				kind() === "text" ||
 				kind() === "secret" ||
@@ -112,10 +108,12 @@ export function SettingsRow(props: { item: SettingsItem }) {
 					<button
 						type="button"
 						class="settings-reset"
+						aria-label="Reset to default"
+						title="Reset to default"
 						disabled={setByProject() || item().view?.canUnset === false}
 						onClick={() => unsetSetting(item().path)}
 					>
-						Reset
+						<ResetIcon />
 					</button>
 				</Show>
 			}

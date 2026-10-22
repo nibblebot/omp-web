@@ -216,78 +216,35 @@ function layerValue(layer: unknown, path: string): unknown {
 }
 
 /**
- * Settings the web client applies to its own rendering the moment they change
- * (the transcript, composer, subagent and notification surfaces read them
- * through settingValue()). The session applies them immediately too, so they
- * are `live`.
+ * Settings that only take effect when a session starts. Every other visible row is
+ * `live`: a running session picks the edit up through a settings listener, a tool-gate
+ * reconcile, or a read at use time (lib/sdk-settings/test/live-setting-trace.ts holds the
+ * per-row evidence; the exhaustiveness test keeps both lists complete). Evidence paths
+ * are relative to @oh-my-pi/pi-coding-agent 18.11.0 `src/`.
  */
-export const WEB_RENDER_PATHS: Readonly<Record<string, true>> = {
-	"display.shimmer": true,
-	"display.smoothStreaming": true,
-	"display.hideToolActivity": true,
-	"display.showTokenUsage": true,
-	"display.showTurnTime": true,
-	"display.cacheMissMarker": true,
-	"display.collapseCompacted": true,
-	hideThinkingBlock: true,
-	expandThinkingBlocks: true,
-	proseOnlyThinking: true,
-	"terminal.showImages": true,
-	"tui.renderMermaid": true,
-	"tui.renderSvg": true,
-	"tui.autoGraph": true,
-	"tui.reactions": true,
-	"tui.codexResetFireworks": true,
-	readLineNumbers: true,
-	"read.renderMarkdown": true,
-	"read.toolResultPreview": true,
-	"mcp.renderMarkdownResults": true,
-	"tools.intentTracing": true,
-	"images.questionTimeoutMs": true,
-	"tools.artifactSpillThreshold": true,
-	"tools.artifactTailBytes": true,
-	"tools.artifactHeadBytes": true,
-	"tools.outputMaxColumns": true,
-	"tools.artifactTailLines": true,
-	"tools.artifactMaxBytes": true,
-	"title.generator": true,
-	"title.refreshOnReplan": true,
-	"display.pinnedAgents": true,
-	"display.subagentLivePreview": true,
-	"task.showResolvedModelBadge": true,
-	"title.icons": true,
-	autocompleteMaxVisible: true,
-	"spelling.autocomplete": true,
-	"composer.predictions": true,
-	emojiAutocomplete: true,
-	"paste.largeMenuThreshold": true,
-	"magicKeywords.enabled": true,
-	"magicKeywords.ultrathink": true,
-	"magicKeywords.orchestrate": true,
-	"magicKeywords.workflow": true,
-	"magicKeywords.jevify": true,
-	"completion.notify": true,
-	"error.notify": true,
-	"ask.notify": true,
-	"recap.enabled": true,
-	"recap.idleSeconds": true,
+export const NEXT_SESSION_PATHS: Readonly<Record<string, true>> = {
+	// Seeds a new session's level (sdk.ts:2079 pickInitialThinkingLevel, agent-session.ts:11642
+	// on session switch); agent-session.ts:2584-2587 states it is deliberately not listened to.
+	defaultThinkingLevel: true,
+	// Read once into mcpDiscoverOptions (sdk.ts:2528) at construction; no listener, and
+	// MCP reconnects reuse that captured option (mcp/manager.ts:670,732).
+	"mcp.startupTimeoutMs": true,
+	// Read by startup/new-session discovery only (discovery/custom-context-files.ts:36); the
+	// SDK's own description says "Start a new session to load them" (session/context-settings.ts:58).
+	"contextFiles.extra": true,
+	// Entering plan mode on startup is decided at launch and after /new
+	// (modes/interactive-mode.ts:627, main.ts:2404); no listener.
+	"plan.defaultOnStartup": true,
+	// Auto-start of a collab room runs at startup and on session change or guest restore
+	// (collab/controller.ts:120,352; modes/interactive-mode.ts:2388).
+	"collab.autoStart": true,
+	// Telemetry export is initialised once at process startup (main.ts:2272); no listener.
+	"telemetry.otlpExportEnabled": true,
 };
 
-/** Timing is conservative for defaults consumed only when a session is constructed. */
+/** When an edit to a setting reaches a running session; see NEXT_SESSION_PATHS. */
 export function settingEffect(path: string): SettingView["effect"] {
-	if (
-		Object.hasOwn(WEB_RENDER_PATHS, path) ||
-		path === "defaultThinkingLevel" ||
-		path === "memory.backend" ||
-		path.startsWith("sampling.") ||
-		path.startsWith("advisor.") ||
-		path.startsWith("compaction.") ||
-		path.startsWith("providers.") ||
-		path.startsWith("images.")
-	)
-		return "live";
-	if (path.startsWith("tui.") || path.startsWith("theme.")) return "restart";
-	return "next-session";
+	return Object.hasOwn(NEXT_SESSION_PATHS, path) ? "next-session" : "live";
 }
 
 export function settingView(
@@ -330,7 +287,7 @@ export function settingView(
 		explicit,
 		canUnset: explicit !== undefined,
 		warnings,
-		effect: options.target === "future-sessions" ? "next-session" : settingEffect(path),
+		effect: settingEffect(path),
 	};
 }
 
@@ -467,6 +424,46 @@ function buildGroups(
 }
 
 /**
+ * Optimistic-concurrency revision of the persisted settings: it moves only
+ * when the global or project layer's content changes. The SDK's own
+ * `Settings.revision` moves on every merge rebuild, including the config
+ * watcher reloading a file this process just wrote, so a client holding the
+ * revision a write answered with would be refused as stale on its next write.
+ */
+const contentRevisions = new WeakMap<
+	Settings,
+	{ sdkRevision: number; fingerprint: string; revision: number }
+>();
+
+export function settingsRevision(settings: Settings): number {
+	const sdkRevision = settings.revision;
+	const previous = contentRevisions.get(settings);
+	if (previous?.sdkRevision === sdkRevision) return previous.revision;
+	const fingerprint = canonicalJson([settings.getGlobalSettings(), settings.getProjectSettings()]);
+	const revision =
+		previous === undefined
+			? sdkRevision
+			: previous.fingerprint === fingerprint
+				? previous.revision
+				: previous.revision + 1;
+	contentRevisions.set(settings, { sdkRevision, fingerprint, revision });
+	return revision;
+}
+
+/** JSON with object keys sorted, so a reload that reorders keys keeps the fingerprint. */
+function canonicalJson(value: unknown): string {
+	return JSON.stringify(value, (_key, inner: unknown) =>
+		inner !== null && typeof inner === "object" && !Array.isArray(inner)
+			? Object.fromEntries(
+					Object.entries(inner as Record<string, unknown>).sort(([a], [b]) =>
+						a < b ? -1 : a > b ? 1 : 0,
+					),
+				)
+			: inner,
+	);
+}
+
+/**
  * Build the wire settings model for one session. Everything is computed
  * fresh on every call (no caching): values, changed flags, and condition
  * gates read the live Settings singleton, so a setSetting response reflects
@@ -492,5 +489,5 @@ export function buildSettingsModel(
 		label: TAB_METADATA[tab].label,
 		groups: buildGroups(tab, session, themes, providers, options, global, project),
 	}));
-	return { tabs, revision: scope.revision, target: options.target ?? "current-session" };
+	return { tabs, revision: settingsRevision(scope), target: options.target ?? "current-session" };
 }

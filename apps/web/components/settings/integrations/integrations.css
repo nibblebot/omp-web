@@ -30,6 +30,11 @@
 	margin-bottom: var(--space-4);
 }
 
+/* Reload stays right-aligned when the tab list is hidden (one feature on). */
+.integrations-head > .settings-control-btn {
+	margin-left: auto;
+}
+
 .integrations-tabs {
 	display: flex;
 	flex-wrap: wrap;

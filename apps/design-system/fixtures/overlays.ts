@@ -81,10 +81,10 @@ export const settingsModelSections: SettingsSection[] = [
 	{ id: settingsSectionId("model", "Providers"), label: "Providers" },
 ];
 
-/** Sidebar sections under the Web UI tab while signed in. */
+/** Sidebar sections under the Appearance (client) tab while signed in. */
 export const settingsWebUiSections: SettingsSection[] = [
 	{ id: settingsSectionId("web-ui", "Interface"), label: "Interface" },
-	{ id: settingsSectionId("web-ui", "Session"), label: "Session" },
+	{ id: settingsSectionId("web-ui", "Account"), label: "Account" },
 ];
 
 /** SettingsItem: enum with provenance, so the row shows effective/explicit/source and the layer picker. */
