@@ -867,10 +867,18 @@ describe("ui daemon browser WebSocket bridge", () => {
 	test("a stuck browser behind the forwarder stops the upstream reads and the forwarder holds only its bound", async () => {
 		await withStuckBrowser(async ({ client, samples, socket }) => {
 			// The burst is bigger than every buffer on the path: it is held back at the control plane.
-			expect(socket.flooded).toBeLessThan(FLOOD_MESSAGES);
-			const flooded = socket.flooded;
-			await new Promise((resolve) => setTimeout(resolve, 200));
+			// The first stall is not yet the end: the kernel buffers between the stand-in and the
+			// forwarder still drain until the forwarder's paused reads fill them, slower under load.
+			// So wait for the flood to stop moving, then require that it stopped short of the burst.
+			// Real time on purpose: the quiet window is kernel TCP flow control, which fake timers do not drive.
+			let flooded = -1;
+			const deadline = Date.now() + 10_000;
+			while (socket.flooded !== flooded && Date.now() < deadline) {
+				flooded = socket.flooded;
+				await Bun.sleep(300);
+			}
 			expect(socket.flooded).toBe(flooded);
+			expect(flooded).toBeLessThan(FLOOD_MESSAGES);
 			// What the forwarder buffered for the browser stopped at the high-water mark plus what one
 			// paused read chunk could still dispatch.
 			const peak = Math.max(...samples.map((sample) => sample.clientBuffered));
