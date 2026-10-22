@@ -99,7 +99,7 @@ import { createPlanReviewMethods, exitPlanMode } from "./review-plan";
 import { createTodoMethods } from "./review-todos";
 import { createMcpMethods } from "./mcp-methods";
 import { createSkillMethods } from "./skill-methods";
-import { broadcast, broadcastHistory, broadcastTo } from "./sse-delivery";
+import { broadcast, broadcastHistory, broadcastTo } from "./client-delivery";
 import { clearSubagents, readSubagentTranscript } from "./subagent-mirror";
 import { readSubagentImage } from "./subagent-image";
 import { projectProgress } from "./subagent-progress";
@@ -141,7 +141,7 @@ function activeRoleOf(session: AgentSession): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// The METHODS dispatch table: every WebMethodName the POST /command `call`
+// The METHODS dispatch table: every WebMethodName the `call` command
 // route can invoke. Rows are closures over the session entry; the boot-local
 // settings/authStorage singletons and the collab-session / daemon-broker
 // surfaces are injected at construction. The dispatch core itself (routing,

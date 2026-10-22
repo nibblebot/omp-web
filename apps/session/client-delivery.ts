@@ -1,12 +1,14 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
+import type { ServerWebSocket } from "bun";
+import { browserCloseFor, pingMessage, seqFrameMessage } from "#lib/wire/browser-socket";
 import { ENVELOPE_MAX_BYTES } from "#lib/wire/callback-protocol";
 import {
+	type AvailableSlashCommand,
 	type ImageArg,
 	CLIENT_BACKPRESSURE_BYTES,
 	DELTA_SEQ_START,
-	SSE_EVENT_NAME,
 	CLIENT_KEEPALIVE_MS,
 	CLIENT_RING_CAP,
 	CLIENT_RING_BYTES,
@@ -14,46 +16,54 @@ import {
 	type SessionScopedFrame,
 	type WireSessionEvent,
 } from "#lib/wire/protocol";
-import { encodeSseEvent, SSE_PING_BLOCK } from "#lib/wire/sse";
 import { ReplayRing } from "#lib/wire/replay-ring";
 import { extractText, scanImages } from "#lib/wire/tool-result";
 import type { SessionEntry } from "./session-entry";
 
 // ---------------------------------------------------------------------------
-// SSE delivery. Live deltas carry daemon-global seqs
+// Browser-socket delivery. Live deltas carry daemon-global seqs
 // (≥ DELTA_SEQ_START) and are kept in a bounded ring so a reconnecting
-// stream can resume from its Last-Event-ID. Priming frames and unicast
+// socket can resume from its `after` seq. Priming frames and unicast
 // answers are NOT ringed: priming is always re-derived fresh on open, and a
-// lost answer is retried by re-POSTing the command (deduped by id).
+// lost answer is recovered by re-sending the command (deduped by id).
 // ---------------------------------------------------------------------------
 
+/** Per-socket state of a direct client (`ws.data` of a `GET /ws` upgrade). */
+export interface ClientSocketData {
+	/** The registered consumer once `open` ran; null until then and for a refused dial. */
+	consumer: ClientConsumer | null;
+	/** Typed refusal decided at upgrade (a browser cannot read a non-101 status): `open` closes with it. */
+	refusal: { code: number; reason: string } | null;
+	/** Resume point from the dial (`after`), null = fresh priming. */
+	after: number | null;
+	/** Slash commands built before the upgrade so priming seqs stay contiguous (null = none built). */
+	commands: AvailableSlashCommand[] | null;
+}
+
 /**
- * One live GET /events consumer (agent-driving transport). Each stream is a
+ * One live GET /ws consumer (agent-driving transport). Each consumer is a
  * connection: it primes on open (hello_ok → attached → …), then receives live
  * deltas (daemon-global seqs ≥ DELTA_SEQ_START) and unicast answers. It is
  * also the per-connection key for pending code inputs and UI requests.
  */
-export interface SseConsumer {
+export interface ClientConsumer {
 	/** Stable identity; keys pending code inputs and ui_request targets. */
 	id: number;
-	controller: ReadableStreamDefaultController<Uint8Array>;
-	/** Attached session handle ("s1"); streams attach at open. */
+	ws: ServerWebSocket<ClientSocketData>;
+	/** Attached session handle ("s1"); consumers attach at open. */
 	attached: string | null;
-	/**
-	 * Bytes enqueued while no reader is attached (desiredSize is null then).
-	 * Reset once a reader becomes visible and desiredSize reports the truth.
-	 */
-	unreadEstimate: number;
-	/** Resolves the priming wait in enqueuePaced; set only while that wait is parked. */
+	/** Epoch ms of the last message sent; drives the idle keepalive. */
+	lastSendAt: number;
+	/** Resolves the priming wait in sendPaced; set only while that wait is parked. */
 	drainWaiter?: () => void;
 }
 
-/** Every live /events stream. The daemon boot (index.ts) adds/removes consumers and reads the size. */
-export const streams = new Set<SseConsumer>();
+/** Every live browser socket. The daemon boot (index.ts) adds/removes consumers and reads the size. */
+export const streams = new Set<ClientConsumer>();
 
 /**
  * Pending login code inputs, keyed per connection. `owner` is the session
- * handle whose login opened the prompt; `streams` are the dispatch-time /events
+ * handle whose login opened the prompt; `streams` are the dispatch-time /ws
  * consumers, empty when the browser rides the callback pair. Rejected on login
  * settle, on every owning stream closing, on the owning session's close, and on shutdown.
  */
@@ -61,7 +71,7 @@ export const pendingCodeInputs = new Map<
 	string,
 	{
 		owner: string;
-		streams: Set<SseConsumer>;
+		streams: Set<ClientConsumer>;
 		resolve: (code: string) => void;
 		reject: (err: Error) => void;
 	}
@@ -78,7 +88,6 @@ export function rejectOwnedCodeInputs(owner: string, reason: string): void {
 
 const ring = new ReplayRing<string>(CLIENT_RING_CAP, CLIENT_RING_BYTES);
 let nextDeltaSeq = DELTA_SEQ_START;
-const sseEncoder = new TextEncoder();
 
 /**
  * Byte budget per `history` frame (mirrors collab-host's SNAPSHOT_CHUNK_BYTES),
@@ -109,7 +118,7 @@ const MESSAGE_REPLICATION_CEILING_BYTES = ENVELOPE_MAX_BYTES - HISTORY_ENVELOPE_
 /**
  * Headroom the paced priming loop keeps below the hard cap: a slow reader
  * mid-prime hovers near the cap, and a concurrent keepalive ping or small
- * delta (which still use the terminating enqueueTo) must not kill the stream.
+ * delta (which still use the terminating sendTo) must not close the socket.
  */
 const PRIMING_QUEUE_MARGIN = 256 * 1024;
 
@@ -137,99 +146,88 @@ const RING_DELTAS: Record<string, true> = {
 };
 
 /** True when `type` names a ringed delta frame (the callback virtual-stream
- *  replay ring mirrors the direct SSE ring semantics exactly). */
+ *  replay ring mirrors the direct /ws ring semantics exactly). */
 export function isRingedDeltaType(type: string): boolean {
 	return RING_DELTAS[type] === true;
 }
 
-/** Bytes currently buffered on a stream (the queue is byte-sized via the stream's queuing strategy). */
-function bufferedBytes(stream: SseConsumer): number {
-	const desired = stream.controller.desiredSize;
-	if (desired === null) return stream.unreadEstimate;
-	if (stream.unreadEstimate > 0) stream.unreadEstimate = 0;
-	return Math.max(0, CLIENT_BACKPRESSURE_BYTES - desired);
+/** Bytes the socket holds unsent (0 for a consumer whose socket is gone). */
+function bufferedBytes(consumer: ClientConsumer): number {
+	try {
+		return consumer.ws.getBufferedAmount();
+	} catch {
+		return 0;
+	}
 }
 
-/** Enqueue one pre-encoded block; past the backpressure cap the stream is terminated (drop-and-resume). */
-export function enqueueTo(stream: SseConsumer, block: string): void {
+/**
+ * Send one pre-built message; past the backpressure cap, or when the socket
+ * dropped it, the socket is closed 4503 (drop-and-resume). A socket that is
+ * no longer open is skipped (its removal happens on close).
+ */
+export function sendTo(consumer: ClientConsumer, message: string): void {
 	try {
-		const chunk = sseEncoder.encode(block);
-		if (bufferedBytes(stream) + chunk.byteLength > CLIENT_BACKPRESSURE_BYTES) {
-			terminateStream(stream, "backpressure");
+		const { ws } = consumer;
+		if (ws.readyState !== 1) return;
+		if (ws.getBufferedAmount() > CLIENT_BACKPRESSURE_BYTES || ws.send(message) === 0) {
+			terminateConsumer(consumer, "backpressure");
 			return;
 		}
-		stream.unreadEstimate += chunk.byteLength;
-		stream.controller.enqueue(chunk);
+		consumer.lastSendAt = Date.now();
 	} catch {
-		// Stream already closed/cancelled: dropped (removal happens on cancel/terminate).
+		// Socket already closed: dropped (removal happens on close/terminate).
 	}
 }
 
 /**
- * End a stream (buffered data is still delivered; the client resumes via
- * Last-Event-ID). A backpressure drop is signaled IN-BAND: Bun's HTTP layer
- * writes the chunked terminator for both controller.close() and
- * controller.error() (scratch-verified, since an errored body stream reads
- * as a clean EOF to fetch clients), so the wire cannot carry the
- * distinction. The `stream_reset` frame enqueued ahead of the close tells
- * direct /events clients to drop and resume (the browser ignores it and
- * native-reconnects). Termination that is genuinely terminal (shutdown, which
- * detaches without closing) keeps the bare clean-close semantics, which
- * clients read as a dormant close.
+ * Close a socket 4503 slow_consumer (buffered data is still delivered; the
+ * client resumes with `after`). The typed close code carries the drop
+ * distinction the SSE era had to signal in-band with a stream_reset frame.
  */
-export function terminateStream(stream: SseConsumer, reason: string): void {
-	if (reason === "backpressure") {
-		try {
-			// The frame takes a fresh delta-range seq so the consumer's
-			// Last-Event-ID advances past the buffered overflow (read in order
-			// before EOF); it is never ringed, so only the dying stream sees it.
-			stream.controller.enqueue(
-				sseEncoder.encode(
-					encodeSseEvent(SSE_EVENT_NAME, { type: "stream_reset", reason }, nextDeltaSeq++),
-				),
-			);
-		} catch {
-			// Already closed or errored; detach below still cleans up.
-		}
-	}
+export function terminateConsumer(consumer: ClientConsumer, reason: string): void {
+	const { code, reason: text } = browserCloseFor("slow_consumer", reason);
 	try {
-		stream.controller.close();
+		consumer.ws.close(code, text);
 	} catch {
-		// already closed or errored; detach below still cleans up.
+		// Already closed; detach below still cleans up.
 	}
-	detachConsumer(stream, reason);
+	detachConsumer(consumer, reason);
 }
 
 /**
- * Enqueue one priming block, pacing to the consumer's drain so the 4 MiB cap
- * never trips. Unlike enqueueTo (deltas: drop-and-resume via the ring),
+ * Send one priming message, pacing to the socket's drain so the 4 MiB cap
+ * never trips. Unlike sendTo (deltas: drop-and-resume via the ring),
  * priming MUST complete. A terminated prime is a permanent
  * connect → terminate → reconnect loop for transcripts over the cap, so this
- * waits for room instead of terminating. The wait holds the queue
+ * waits for room instead of terminating. The wait holds the socket's buffer
  * PRIMING_QUEUE_MARGIN below the cap so a concurrent keepalive ping or small
- * delta never kills a slow reader mid-prime. A detached consumer (cancel,
- * keepalive/delta termination) ends the wait.
+ * delta never closes a slow reader mid-prime. An empty buffer always admits
+ * the message (one message larger than the room would otherwise wait forever).
+ * A detached consumer (close, keepalive/delta termination) ends the wait.
  */
-export async function enqueuePaced(stream: SseConsumer, block: string): Promise<void> {
-	const size = Buffer.byteLength(block, "utf8");
-	while (bufferedBytes(stream) + size > CLIENT_BACKPRESSURE_BYTES - PRIMING_QUEUE_MARGIN) {
-		if (!streams.has(stream)) return; // consumer detached/cancelled
+export async function sendPaced(consumer: ClientConsumer, message: string): Promise<void> {
+	const size = Buffer.byteLength(message, "utf8");
+	for (;;) {
+		const buffered = bufferedBytes(consumer);
+		if (buffered === 0 || buffered + size <= CLIENT_BACKPRESSURE_BYTES - PRIMING_QUEUE_MARGIN)
+			break;
+		if (!streams.has(consumer)) return; // consumer detached/closed
 		await new Promise<void>((resolve) => {
-			stream.drainWaiter = resolve;
+			consumer.drainWaiter = resolve;
 		});
 	}
-	enqueueTo(stream, block);
+	sendTo(consumer, message);
 }
 
 /**
- * Resume a priming wait parked in enqueuePaced. Called from the stream's pull
- * (the consumer read, so the queue has room) and from detachConsumer (so a
- * parked wait ends). A no-op when nothing is parked.
+ * Resume a priming wait parked in sendPaced. Called from the socket's drain
+ * (the buffer emptied, so there is room) and from detachConsumer (so a parked
+ * wait ends). A no-op when nothing is parked.
  */
-export function wakeDrainWaiter(stream: SseConsumer): void {
-	const resolve = stream.drainWaiter;
+export function wakeDrainWaiter(consumer: ClientConsumer): void {
+	const resolve = consumer.drainWaiter;
 	if (resolve === undefined) return;
-	stream.drainWaiter = undefined;
+	consumer.drainWaiter = undefined;
 	resolve();
 }
 
@@ -259,7 +257,7 @@ function messageWithoutImages(message: AgentMessage): AgentMessage {
  * {@link MESSAGE_REPLICATION_CEILING_BYTES} wins. The cadence mirrors the
  * collab replication shrink 17.1.8 applied here, kept local because 18.1.9
  * dropped that generic helper (session entries and agent events now own their
- * own bounds) and SSE history frames are omp-web's own wire.
+ * own bounds) and history frames are omp-web's own wire.
  */
 const MESSAGE_SHRINK_PASSES: ReadonlyArray<{ stringCap: number; arrayLimit: number }> = [
 	{ stringCap: 64 * 1024, arrayLimit: 256 },
@@ -364,24 +362,25 @@ export function historyFrames(messages: AgentMessage[]): HistoryFrame[] {
 	return frames;
 }
 
-/** Global frames (error, daemons roster, ready): ringed deltas to every stream. */
+/** Global frames (error, daemons roster, ready): ringed deltas to every socket. */
 export function broadcast(frame: ServerFrame): void {
 	const seq = nextDeltaSeq++;
-	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
-	ring.push(seq, block);
-	for (const stream of streams) enqueueTo(stream, block);
+	const message = seqFrameMessage(seq, JSON.stringify(frame));
+	ring.push(seq, message);
+	for (const consumer of streams) sendTo(consumer, message);
 	tapFrame(frame);
 }
 
 /**
  * Unicast answers (call_result, sessions, files, login_url, …) go to every
- * live stream of this single-session daemon; the SSE stream is the one answer
- * channel. NOT ringed; a lost answer is re-POSTed by the client.
+ * live socket of this single-session daemon; the socket is the one answer
+ * channel. Sequenced but NOT ringed; a lost answer is recovered by re-sending
+ * the command (deduped by id, the recorded answer replays).
  */
 export function broadcastAnswer(frame: ServerFrame): void {
 	const seq = nextDeltaSeq++;
-	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
-	for (const stream of streams) enqueueTo(stream, block);
+	const message = seqFrameMessage(seq, JSON.stringify(frame));
+	for (const consumer of streams) sendTo(consumer, message);
 	tapFrame(frame);
 }
 
@@ -492,7 +491,7 @@ function toolUpdateFrame(
  *
  * - `message_update` is a delta keyed by content block (WireAssistantMessageEvent).
  *   The SDK's carries the cumulative assistant message twice (`message` and
- *   `assistantMessageEvent.partial`), O(n^2) bytes per reply across the SSE
+ *   `assistantMessageEvent.partial`), O(n^2) bytes per reply across the
  *   ring, the control mirror and every browser stream. The full message goes
  *   out once, on `message_end`.
  * - `tool_execution_update` is the appended output (WireToolExecutionUpdate);
@@ -556,17 +555,17 @@ export function toWireEvent(handle: string, event: AgentSessionEvent): WireSessi
 }
 
 /**
- * Deliver a session-scoped frame to every stream attached to the handle.
+ * Deliver a session-scoped frame to every socket attached to the handle.
  * Delta types get a ring entry (resumable); priming-style frames (history,
- * available_commands) are re-derivable from fresh priming, so live streams
+ * available_commands) are re-derivable from fresh priming, so live sockets
  * only.
  */
 export function broadcastTo(handle: string, frame: SessionScopedFrame): void {
 	const seq = nextDeltaSeq++;
-	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
-	if (RING_DELTAS[frame.type]) ring.push(seq, block);
-	for (const stream of streams) {
-		if (stream.attached === handle) enqueueTo(stream, block);
+	const message = seqFrameMessage(seq, JSON.stringify(frame));
+	if (RING_DELTAS[frame.type]) ring.push(seq, message);
+	for (const consumer of streams) {
+		if (consumer.attached === handle) sendTo(consumer, message);
 	}
 	tapFrame(frame);
 }
@@ -575,17 +574,17 @@ export function broadcastTo(handle: string, frame: SessionScopedFrame): void {
  * History resync after a transcript-replacing call (newSession/switchSession/
  * branch/fork/handoff): chunked + paced exactly like priming, because a
  * replaced transcript can also exceed the 4 MiB cap. A single-frame
- * broadcast would terminate every attached stream (the same permanent-reconnect
+ * broadcast would close every attached socket 4503 (the same permanent-reconnect
  * bug as priming). History is not ringed; a reconnect re-primes instead.
  * Callback-pair browser streams get the same frames through the history tap;
  * the frame tap is not used because it also feeds the fleet's control mirror,
  * which has no use for a transcript.
  */
 export async function broadcastHistory(handle: string, frames: HistoryFrame[]): Promise<void> {
-	for (const stream of streams) {
-		if (stream.attached !== handle) continue;
+	for (const consumer of streams) {
+		if (consumer.attached !== handle) continue;
 		for (const frame of frames) {
-			await enqueuePaced(stream, encodeSseEvent(SSE_EVENT_NAME, frame, nextDeltaSeq++));
+			await sendPaced(consumer, seqFrameMessage(nextDeltaSeq++, JSON.stringify(frame)));
 		}
 	}
 	if (onHistoryTap !== null) await onHistoryTap(frames);
@@ -594,27 +593,27 @@ export async function broadcastHistory(handle: string, frames: HistoryFrame[]): 
 }
 
 /**
- * Remove a stream from every bookkeeping structure (stream close, backpressure
- * termination, or shutdown). Sessions outlive streams: pending code inputs
- * and UI requests that only this stream could answer are rejected. The
- * stream-owned UI-request rejection runs in the boot-registered
+ * Remove a consumer from every bookkeeping structure (socket close, backpressure
+ * termination, or shutdown). Sessions outlive sockets: pending code inputs
+ * and UI requests that only this socket could answer are rejected. The
+ * socket-owned UI-request rejection runs in the boot-registered
  * onConsumerDetached hook (the requests live on the daemon's session state).
  */
-export function detachConsumer(stream: SseConsumer, reason: string): void {
-	streams.delete(stream);
+export function detachConsumer(consumer: ClientConsumer, reason: string): void {
+	streams.delete(consumer);
 	if (streams.size === 0) {
 		onStreamsEmpty();
 		stopKeepalive();
 	}
-	stream.attached = null;
-	wakeDrainWaiter(stream);
+	consumer.attached = null;
+	wakeDrainWaiter(consumer);
 	for (const [id, p] of pendingCodeInputs) {
-		if (p.streams.delete(stream) && p.streams.size === 0) {
+		if (p.streams.delete(consumer) && p.streams.size === 0) {
 			p.reject(new Error(reason));
 			pendingCodeInputs.delete(id);
 		}
 	}
-	onConsumerDetached(stream, reason);
+	onConsumerDetached(consumer, reason);
 }
 
 /**
@@ -633,17 +632,22 @@ export function notifyEvent(
 	});
 }
 
-// Keepalive: a named ping event block (SSE_PING_BLOCK, deliberately no id
-// field, so it never advances a consumer's resume counter) on every open
-// /events stream every CLIENT_KEEPALIVE_MS; consumers treat >
-// CLIENT_SILENCE_DEADLINE_MS of total silence as a dead peer and reconnect.
-// Runs only while streams are live.
+// Keepalive: a `{"ping":ms}` message (pingMessage, deliberately unsequenced,
+// so it never advances a client's resume counter) on every open browser
+// socket that has been idle for half a CLIENT_KEEPALIVE_MS, swept every
+// CLIENT_KEEPALIVE_MS. A socket therefore hears from the daemon at least
+// every 1.5 sweeps (22.5 s), inside CLIENT_SILENCE_DEADLINE_MS, the point where
+// clients treat total silence as a dead peer and reconnect. Runs only while
+// sockets are live.
 let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
 export function startKeepalive(): void {
 	if (keepaliveTimer) return;
 	keepaliveTimer = setInterval(() => {
-		for (const stream of streams) enqueueTo(stream, SSE_PING_BLOCK);
+		const idleSince = Date.now() - CLIENT_KEEPALIVE_MS / 2;
+		for (const consumer of streams) {
+			if (consumer.lastSendAt <= idleSince) sendTo(consumer, pingMessage(Date.now()));
+		}
 	}, CLIENT_KEEPALIVE_MS);
 }
 
@@ -661,8 +665,8 @@ export function setOnStreamsEmpty(fn: () => void): void {
 	onStreamsEmpty = fn;
 }
 
-let onConsumerDetached: (stream: SseConsumer, reason: string) => void = () => {};
-export function setOnConsumerDetached(fn: (stream: SseConsumer, reason: string) => void): void {
+let onConsumerDetached: (stream: ClientConsumer, reason: string) => void = () => {};
+export function setOnConsumerDetached(fn: (stream: ClientConsumer, reason: string) => void): void {
 	onConsumerDetached = fn;
 }
 

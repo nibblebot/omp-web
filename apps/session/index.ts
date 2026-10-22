@@ -15,7 +15,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import { cleanup as postmortemCleanup } from "@oh-my-pi/pi-utils/postmortem";
-import type { Server } from "bun";
+import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import type {
 	AvailableSlashCommand,
 	ClientCommand,
@@ -33,10 +33,18 @@ import {
 	OMP_SESSION_PREFIX,
 	CLIENT_BACKPRESSURE_BYTES,
 	DELTA_SEQ_START,
-	SSE_EVENT_NAME,
 	type StdoutContractLine,
 } from "#lib/wire/protocol";
-import { encodeSseEvent } from "#lib/wire/sse";
+import {
+	ackMessage,
+	BROWSER_SOCKET_MAX_PAYLOAD_BYTES,
+	BROWSER_SOCKET_PATH,
+	browserCloseFor,
+	nackMessage,
+	parseBrowserSocketParams,
+	parseClientMessage,
+	seqFrameMessage,
+} from "#lib/wire/browser-socket";
 import { parseClientCommand } from "#lib/wire/client-command";
 import { acquireFileLock, LockHeldError } from "#lib/platform/file-lock";
 import type { FileLock } from "#lib/platform/file-lock";
@@ -48,6 +56,7 @@ import {
 	serveDownloadBulk,
 } from "./download-manifest";
 import { discardAllStagedUploads } from "./resume-import-adapter";
+import { type ClientCredentials, httpAuthorized, socketRefusal } from "./client-auth";
 import {
 	CALLBACK_TRANSPORT_STREAM_ID,
 	FleetCallback,
@@ -77,21 +86,22 @@ import {
 	broadcastHistory,
 	broadcastTo,
 	detachConsumer,
-	enqueuePaced,
-	enqueueTo,
 	notifyEvent,
 	pendingCodeInputs,
 	rejectOwnedCodeInputs,
 	ringAfter,
+	sendPaced,
+	sendTo,
 	setOnConsumerDetached,
 	setOnStreamsEmpty,
 	snapshotDeltaSeq,
 	startKeepalive,
 	streams,
-	terminateStream,
-	type SseConsumer,
+	terminateConsumer,
+	type ClientConsumer,
+	type ClientSocketData,
 	wakeDrainWaiter,
-} from "./sse-delivery";
+} from "./client-delivery";
 import { clearSubagents } from "./subagent-mirror";
 import {
 	pendingUiRequestFrames,
@@ -103,7 +113,7 @@ import {
 import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
 import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
 import { createDaemonControl, type DaemonControl } from "./daemon-control";
-import { setOnFrameTap, setOnHistoryTap, streamingPrimeFrames } from "./sse-delivery";
+import { setOnFrameTap, setOnHistoryTap, streamingPrimeFrames } from "./client-delivery";
 import { settingWriteReloadsHistory, transcriptHistoryFrames } from "./transcript-history";
 import { initSdkTuiGlobals } from "./sdk-tui-globals";
 import { initSettings } from "./settings-boot";
@@ -111,7 +121,7 @@ import { initSettings } from "./settings-boot";
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
 // pairing), one Settings instance, then the single boot session. omp-session is
-// de-muxed (Phase 6): every /events stream is attached to that one session from
+// de-muxed (Phase 6): every /ws socket is attached to that one session from
 // open (connect = attached), which routes call/login_code/ui_response and
 // all session-scoped frames. The constant handle "s1" survives only as the
 // attached frame's client guard token; session-scoped frames carry no
@@ -285,9 +295,9 @@ setOnConsumerDetached((stream, reason) => {
 });
 
 // ---------------------------------------------------------------------------
-// /events: register the consumer (connect = attached), prime it, and stream
+// /ws: register the consumer (connect = attached), prime it, and stream
 // live deltas. The consumer registry and all delivery primitives live in
-// sse-delivery.ts.
+// client-delivery.ts.
 // ---------------------------------------------------------------------------
 
 let nextConsumerId = 1;
@@ -296,7 +306,7 @@ let nextConsumerId = 1;
  * The attach priming frames, in order: hello_ok (daemon identity), attached,
  * history (one frame, or byte-bounded chunks), state, collab_status,
  * available_commands (when built), ready (once the boot session is ready).
- * One builder for both transports, so a direct /events stream and a callback
+ * One builder for both transports, so a direct /ws socket and a callback
  * browser stream always prime the same state. Snapshots the session when called.
  */
 function primingFrames(
@@ -338,31 +348,31 @@ function primingFrames(
 }
 
 /**
- * Prime a fresh /events stream: hello_ok first (daemon identity; HTTP-level
+ * Prime a fresh browser socket: hello_ok first (daemon identity; HTTP-level
  * auth replaced the WS hello handshake), then the attach priming (attached →
  * history → state → collab_status → available_commands → ready), seqs 1..k
- * (k < DELTA_SEQ_START). `commands` is built BEFORE the stream opens so
+ * (k < DELTA_SEQ_START). `commands` is built BEFORE the socket upgrades so
  * every priming seq is assigned contiguously (no async gap between priming
- * and the delta era). Then resume per Last-Event-ID: only ring deltas with
- * seq > max(lastEventId, snapshotSeq - 1) replay. The snapshot mark (the
+ * and the delta era). Then resume per `after`: only ring deltas with
+ * seq > max(after, snapshotSeq - 1) replay. The snapshot mark (the
  * next delta seq at prime start) bounds the overlap so a resume never
  * re-delivers deltas whose effects are already inside the fresh priming
  * (finding #2: a completed turn's event deltas would otherwise duplicate
  * chat/tool items on top of the just-primed history).
  *
  * The history frame is the one potentially multi-megabyte payload (base64
- * image data URLs inside messages): it is chunked and paced to the consumer's
+ * image data URLs inside messages): it is chunked and paced to the socket's
  * drain so a transcript over the 4 MiB backpressure cap still primes; a
- * synchronous single-frame prime would be terminated by enqueueTo and the
+ * synchronous single-frame prime would be closed 4503 by sendTo and the
  * client could never attach (finding #11). Pacing lets the socket drain
  * between chunks; the sequence stays 1..k because priming seqs never reach
  * DELTA_SEQ_START.
  */
 async function primeConsumer(
-	consumer: SseConsumer,
+	consumer: ClientConsumer,
 	entry: SessionEntry,
 	commands: AvailableSlashCommand[] | null,
-	lastEventId: string | null,
+	after: number | null,
 ): Promise<void> {
 	// Snapshot the delta high-water mark BEFORE any priming is built: every
 	// ringed delta with seq < snapshotSeq is fully reflected in the history/
@@ -372,100 +382,157 @@ async function primeConsumer(
 	consumer.attached = entry.handle;
 	let seq = 1;
 	for (const [index, frame] of primingFrames(entry, commands).entries()) {
-		const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq++);
+		const message = seqFrameMessage(seq++, JSON.stringify(frame));
 		// hello_ok and attached land synchronously, before any await; the
-		// rest (history chunks first) pace to the consumer's drain.
-		if (index < 2) enqueueTo(consumer, block);
-		else await enqueuePaced(consumer, block);
+		// rest (history chunks first) pace to the socket's drain.
+		if (index < 2) sendTo(consumer, message);
+		else await sendPaced(consumer, message);
 	}
-	const last = lastEventId === null ? NaN : Number(lastEventId);
-	// Replay floor: the client already has everything up to its Last-Event-ID
+	// The socket closed while priming: nothing left to replay to.
+	if (!streams.has(consumer)) return;
+	// Replay floor: the client already has everything up to its `after` seq
 	// and the fresh priming carries everything before the snapshot, so only
-	// deltas after max(last, snapshotSeq-1) are new. An absent/sub-1024 id
+	// deltas after max(after, snapshotSeq-1) are new. An absent/sub-1024 seq
 	// (fresh client, or a drop mid-prime) means priming carries full state up
 	// to the snapshot, so the floor is just the snapshot mark; deltas that
 	// arrived during the paced prime still replay exactly once.
 	const resumeFrom =
-		Number.isFinite(last) && last >= DELTA_SEQ_START
-			? Math.max(last, snapshotSeq - 1)
-			: snapshotSeq - 1;
+		after !== null && after >= DELTA_SEQ_START ? Math.max(after, snapshotSeq - 1) : snapshotSeq - 1;
 	const replay = ringAfter(resumeFrom);
 	// The ring keeps only the last CLIENT_RING_CAP deltas and evicts from the
 	// head; a first entry above resumeFrom+1 means entries the client still
 	// needs were evicted while the (paced) prime was in flight. Replaying the
 	// tail would silently skip them, so drop and resume instead: the reconnect's
-	// Last-Event-ID is a priming seq, so it lands below the new snapshot mark
+	// `after` is a priming seq, so it lands below the new snapshot mark
 	// and the fresh prime carries everything again.
 	if (replay.length > 0 && replay[0].seq > resumeFrom + 1) {
-		terminateStream(consumer, "ring eviction: resume window exceeded the replay ring");
+		terminateConsumer(consumer, "ring eviction: resume window exceeded the replay ring");
 		return;
 	}
-	for (const { value } of replay) enqueueTo(consumer, value);
+	for (const { value } of replay) sendTo(consumer, value);
 }
 
 /**
- * Open a GET /events SSE response: register the consumer (connect = attached
- * to the single boot session, exactly like the WS open), prime it, and stream
- * live deltas until the client goes away. The body's queuing strategy sizes
- * chunks in bytes so backpressure is measured against CLIENT_BACKPRESSURE_BYTES.
+ * Answer a `GET /ws`: authenticate and proto-check the dial, then upgrade.
+ * A refused dial is upgraded too and closed at once with its typed code in
+ * `open` (a browser cannot read a non-101 status); only a request that is no
+ * WebSocket upgrade at all gets an HTTP 400. Slash commands are built before
+ * the upgrade so the priming sequence is written contiguously (seqs 1..k)
+ * with no async gap into the delta era.
  */
-async function openEventsResponse(req: Request): Promise<Response> {
-	const entry = bootEntry!;
-	// Build slash commands before the stream opens so the priming sequence is
-	// written contiguously (seqs 1..k) with no async gap into the delta era.
-	let commands: AvailableSlashCommand[] | null = null;
-	try {
-		commands = await buildAvailableSlashCommands(entry.session);
-	} catch (err) {
-		console.error("Failed to build available commands:", err);
+async function upgradeClient(
+	req: Request,
+	srv: Server<ClientSocketData>,
+	url: URL,
+): Promise<Response | undefined> {
+	if (req.method !== "GET" || req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+		return new Response(`${BROWSER_SOCKET_PATH} requires a WebSocket upgrade`, { status: 400 });
 	}
-	const lastEventId = req.headers.get("last-event-id");
-	let consumer: SseConsumer | undefined;
-	const stream = new ReadableStream<Uint8Array>(
-		{
-			start: (controller) => {
-				// The constructor's start callback types the controller as the
-				// default/byte union; this stream is built with a default
-				// source, so the default controller is the actual runtime type.
-				const c: SseConsumer = {
-					id: nextConsumerId++,
-					controller: controller as ReadableStreamDefaultController<Uint8Array>,
-					attached: null,
-					unreadEstimate: 0,
-				};
-				consumer = c;
-				streams.add(c);
-				daemonBroker.startDaemonPoll();
-				startKeepalive();
-				// Connect = attached: a bare /events open reproduces the
-				// single-session priming sequence (the bootReady gate admits
-				// requests only after the boot session exists). hello_ok and
-				// attached are enqueued synchronously above any await; only the
-				// history chunking paces (large transcripts drain between
-				// chunks).
-				void primeConsumer(c, entry, commands, lastEventId).catch((err) => {
-					console.error("Failed to prime /events stream:", err);
-				});
-			},
-			// The queue dropped below the high-water mark: a priming wait may resume.
-			pull: () => {
-				if (consumer) wakeDrainWaiter(consumer);
-			},
-			cancel: () => {
-				// Detach only: sessions outlive streams.
-				if (consumer) detachConsumer(consumer, "stream closed");
-			},
-		},
-		{ highWaterMark: CLIENT_BACKPRESSURE_BYTES, size: (chunk) => chunk?.byteLength ?? 0 },
-	);
-	return new Response(stream, {
-		headers: {
-			"content-type": "text/event-stream",
-			"cache-control": "no-cache",
-			"x-accel-buffering": "no",
-		},
-	});
+	const params = parseBrowserSocketParams(url.searchParams);
+	const refusal = socketRefusal(clientCredentials(req, srv), params);
+	let commands: AvailableSlashCommand[] | null = null;
+	if (refusal === null) {
+		try {
+			commands = await buildAvailableSlashCommands(bootEntry!.session);
+		} catch (err) {
+			console.error("Failed to build available commands:", err);
+		}
+	}
+	if (!srv.upgrade(req, { data: { consumer: null, refusal, after: params.after, commands } })) {
+		return new Response(`${BROWSER_SOCKET_PATH} WebSocket upgrade failed`, { status: 400 });
+	}
+	return undefined;
 }
+
+/** Refuse one client message that breaks the contract: close 4400. */
+function closeProtocolViolation(ws: ServerWebSocket<ClientSocketData>, message: string): void {
+	const { code, reason } = browserCloseFor("protocol_violation", message);
+	ws.close(code, reason);
+}
+
+/**
+ * Accept one parsed command from a socket: ack it, then dispatch. A duplicate
+ * id inside COMMAND_DEDUP_WINDOW_MS is acked again without a re-dispatch.
+ * When the original already answered, the recorded answer is replayed (the
+ * duplicate is the client recovering a lost one); a duplicate that arrives
+ * while the original is still in flight is a silent accept, since that answer
+ * is still coming. The ack precedes any answer the dispatch emits.
+ */
+function acceptCommand(consumer: ClientConsumer, cmd: ClientCommand): void {
+	markActivity();
+	sendTo(consumer, ackMessage(cmd.id));
+	if (commandSeenRecently(cmd.id)) {
+		const answer = commandAnswers.get(cmd.id);
+		if (answer !== undefined) broadcastAnswer(answer.frame);
+		return;
+	}
+	// Fire-and-forget accept: answers ride the socket only.
+	void handleCommand(cmd).catch((err) => console.error("command dispatch failed:", err));
+}
+
+/**
+ * The browser-socket handler of the direct listener. Bun runs `open` inside
+ * `server.upgrade`. perMessageDeflate stays off; `backpressureLimit` sits far
+ * above anything the sendTo cap lets accumulate and never closes the socket
+ * (the CLIENT_BACKPRESSURE_BYTES cap, not Bun, decides drop-and-resume).
+ */
+const clientSocketHandler: WebSocketHandler<ClientSocketData> = {
+	maxPayloadLength: BROWSER_SOCKET_MAX_PAYLOAD_BYTES,
+	perMessageDeflate: false,
+	backpressureLimit: 4 * CLIENT_BACKPRESSURE_BYTES,
+	closeOnBackpressureLimit: false,
+	// Bun pings idle peers and reaps ones that never pong.
+	idleTimeout: 120,
+	open: (ws) => {
+		const { refusal } = ws.data;
+		if (refusal !== null) {
+			ws.close(refusal.code, refusal.reason);
+			return;
+		}
+		const entry = bootEntry!; // the fetch gate waited for bootReady
+		const consumer: ClientConsumer = {
+			id: nextConsumerId++,
+			ws,
+			attached: null,
+			lastSendAt: Date.now(),
+		};
+		ws.data.consumer = consumer;
+		streams.add(consumer);
+		daemonBroker.startDaemonPoll();
+		startKeepalive();
+		// Connect = attached: a bare /ws open reproduces the single-session
+		// priming sequence. hello_ok and attached are sent synchronously above
+		// any await; only the history chunking paces (large transcripts drain
+		// between chunks).
+		void primeConsumer(consumer, entry, ws.data.commands, ws.data.after).catch((err) => {
+			console.error("Failed to prime /ws socket:", err);
+		});
+	},
+	message: (ws, message) => {
+		const { consumer } = ws.data;
+		if (consumer === null) return;
+		if (typeof message !== "string") {
+			closeProtocolViolation(ws, "binary messages are not part of the protocol");
+			return;
+		}
+		const parsed = parseClientMessage(message, Buffer.byteLength(message, "utf8"));
+		if (!parsed.ok) {
+			if (parsed.id === null) closeProtocolViolation(ws, parsed.error);
+			else sendTo(consumer, nackMessage(parsed.id, parsed.status, parsed.error));
+			return;
+		}
+		acceptCommand(consumer, parsed.command);
+	},
+	// The socket's buffer emptied: a priming wait may resume.
+	drain: (ws) => {
+		if (ws.data.consumer !== null) wakeDrainWaiter(ws.data.consumer);
+	},
+	close: (ws) => {
+		// Detach only: sessions outlive sockets. A terminated consumer is already detached.
+		const { consumer } = ws.data;
+		if (consumer !== null && streams.has(consumer)) detachConsumer(consumer, "socket closed");
+	},
+};
 
 const LIST_FILES_SKIP: Record<string, true> = { ".git": true, node_modules: true };
 const LIST_FILES_CEILING = 10_000;
@@ -659,8 +726,8 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 					if (cmd.error !== undefined) pending.reject(new Error(cmd.error));
 					else pending.resolve(cmd.result);
 					// Finding #16: broadcast the ringed ui_request_end so every
-					// attached tab dismisses the dialog and a resuming stream
-					// (older Last-Event-ID) replays end-after-request instead of
+					// attached tab dismisses the dialog and a resuming socket
+					// (older `after`) replays end-after-request instead of
 					// a stale dialog whose answer would no-op.
 					broadcastTo(entry.handle, { type: "ui_request_end", id: cmd.id });
 				}
@@ -836,7 +903,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 			// call_result, even without an attached session entry. The
 			// client correlates call() promises only with call_result; a bare
 			// error frame here would leave the promise hanging until timeout.
-			// Recorded like any other answer, so a re-POST replay reports the
+			// Recorded like any other answer, so a re-sent command's replay reports the
 			// real dispatch failure instead of a fabricated success.
 			answerCommand(cmd.id, {
 				type: "call_result",
@@ -866,30 +933,26 @@ async function canonicalRoots(): Promise<string[]> {
 	return out;
 }
 
-/**
- * Authorization header check: the scheme is case-insensitive (`bearer`/
- * `Bearer`), but the token value is compared EXACTLY (regression: the whole
- * header used to be lowercased, accepting wrong-case tokens).
- */
-function bearerHeaderOk(header: string | null, token: string): boolean {
-	if (header === null) return false;
-	return header.slice(0, 7).toLowerCase() === "bearer " && header.slice(7) === token;
+/** The peer's credentials for the R14 gate (loopback is read from the socket peer address). */
+function clientCredentials(req: Request, srv: Server<ClientSocketData>): ClientCredentials {
+	return {
+		loopback: isLoopbackIp(srv.requestIP(req)?.address),
+		token: config.token,
+		authorization: req.headers.get("authorization"),
+	};
 }
 
 /**
- * R14 gate for the agent-driving endpoints (/events, /command) and every
- * other route: loopback is exempt; off-loopback peers need the bearer token
- * via the Authorization header. A missing or wrong credential is a 401 with
- * no hello window and no close codes.
+ * R14 gate for every plain HTTP route: loopback is exempt; off-loopback
+ * peers need the bearer token via the Authorization header. A missing or
+ * wrong credential is a 401 with no hello window and no close codes.
  */
-function r14Authorized(req: Request, srv: Server<undefined>): boolean {
-	if (isLoopbackIp(srv.requestIP(req)?.address)) return true;
-	if (!config.token) return true;
-	return bearerHeaderOk(req.headers.get("authorization"), config.token);
+function r14Authorized(req: Request, srv: Server<ClientSocketData>): boolean {
+	return httpAuthorized(clientCredentials(req, srv));
 }
 
 /**
- * POST /command idempotency: re-accept duplicates of a command id within
+ * Command idempotency (browser socket and callback pair): re-accept duplicates of a command id within
  * COMMAND_DEDUP_WINDOW_MS (ids capped at COMMAND_DEDUP_ID_CAP as a flood
  * backstop) without re-dispatching, and REPLAY the answer the original
  * already produced (answers capped at COMMAND_DEDUP_ANSWER_CAP, since each
@@ -897,8 +960,8 @@ function r14Authorized(req: Request, srv: Server<undefined>): boolean {
  *
  * The replay is what makes the client's lost-answer recovery work. Answers are
  * unicast (call_result and friends) and deliberately NOT ringed, so a dropped
- * answer is recoverable only by re-POSTing the command; a dedup that re-accepts
- * the duplicate silently would leave that re-POST unanswered forever. The
+ * answer is recoverable only by re-sending the command; a dedup that re-accepts
+ * the duplicate silently would leave that re-send unanswered forever. The
  * duplicate still never re-dispatches, so a replayed command executes once: the
  * id memory therefore outlives every answer, and only the id cap can lose one
  * (an evicted id would re-execute the command).
@@ -1032,51 +1095,25 @@ if (config.resume && path.isAbsolute(config.resume)) acquireSessionLock(config.r
 
 // A fleet-managed session (--fleet-stdin, so callbackUrl is set) binds no
 // listener: the fleet reaches it only over the callback WebSocket. A bare
-// daemon binds the direct listener.
+// daemon binds the direct listener: the browser socket (GET /ws, OMP_PROTO 5)
+// and nothing else; every other route answers the 404 pointer to the fleet.
 const server =
 	config.callbackUrl === undefined
-		? Bun.serve({
+		? Bun.serve<ClientSocketData>({
 				port: config.port,
 				hostname: config.host,
-				// SSE responses are long-lived and quiet between 15s keepalive pings;
-				// Bun's default 10s fetch idleTimeout would kill them mid-stream.
+				// The only long-lived connections are WebSockets, whose idle reaping
+				// lives in `websocket` below; plain requests keep no 10s cut-off.
 				idleTimeout: 0,
 				async fetch(req, srv) {
 					// Boot gate: the OMP_SESSION| listening line prints before the boot session
-					// exists; the first requests (and /events opens) wait for registration
-					// so connect-implies-attached holds for streams that race boot.
+					// exists; the first requests (and /ws upgrades) wait for registration
+					// so connect-implies-attached holds for sockets that race boot.
 					await bootReady;
 					const url = new URL(req.url);
-					// Agent-driving transport: GET /events down (SSE),
-					// POST /command up (one ClientCommand per request, 202 accept).
-					if (url.pathname === "/events") {
-						if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });
-						return openEventsResponse(req);
-					}
-					if (url.pathname === "/command") {
-						if (req.method !== "POST") return new Response("Not found", { status: 404 });
-						if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });
-						markActivity();
-						let cmd: ClientCommand;
-						try {
-							cmd = parseClientCommand(JSON.parse(await req.text()));
-						} catch {
-							return new Response("Malformed command", { status: 400 });
-						}
-						// Idempotent accept: a duplicate id is 202 without a re-dispatch.
-						// When the original already answered, the recorded answer is
-						// replayed (the duplicate is the client recovering a lost one); a
-						// duplicate that arrives while the original is still in flight is
-						// a silent accept, since that answer is still coming.
-						if (commandSeenRecently(cmd.id)) {
-							const answer = commandAnswers.get(cmd.id);
-							if (answer !== undefined) broadcastAnswer(answer.frame);
-							return Response.json({ commandId: cmd.id }, { status: 202 });
-						}
-						// Fire-and-forget accept: answers ride the /events stream only.
-						void handleCommand(cmd).catch((err) => console.error("command dispatch failed:", err));
-						return Response.json({ commandId: cmd.id }, { status: 202 });
-					}
+					// Agent-driving transport: one WebSocket per client; frames down,
+					// in-band commands up (ack/nack replaces the old 202/4xx).
+					if (url.pathname === BROWSER_SOCKET_PATH) return upgradeClient(req, srv, url);
 					// Off-loopback peers need the bearer header on every non-wire route too,
 					// so a tokened daemon answers no unauthenticated peer, not even its 404.
 					if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });
@@ -1088,6 +1125,7 @@ const server =
 						{ status: 404, headers: { "content-type": "text/plain; charset=utf-8" } },
 					);
 				},
+				websocket: clientSocketHandler,
 			})
 		: null;
 
@@ -1311,8 +1349,7 @@ void bootReadiness(bootEntry);
 // ---------------------------------------------------------------------------
 // Callback transport: with all four callback flags set, dial the
 // fleet's callback WebSocket (OMP_CALLBACK_PROTO 2, GET /callback/ws); the
-// HTTP/SSE listener above stays fully functional; the callback is additive,
-// not a replacement, in this pass. Started AFTER the boot session + readiness
+// session binds no direct listener, the pair is its only transport. Started AFTER the boot session + readiness
 // resolve so the pair speaks for a live workspace. start() resolves when the
 // fleet's pair_ready lands; readiness and failures log to stderr (stdout is
 // reserved for OMP_SESSION| lines).
@@ -1446,7 +1483,7 @@ if (config.callbackUrl !== undefined) {
 		handleCommand: async (command: unknown) => {
 			const cmd = parseClientCommand(command);
 			markActivity();
-			// Same idempotency window as POST /command: a duplicate id replays the
+			// Same idempotency window as the browser socket: a duplicate id replays the
 			// recorded answer and is never re-dispatched.
 			if (commandSeenRecently(cmd.id)) {
 				const answer = commandAnswers.get(cmd.id);
@@ -1484,7 +1521,7 @@ if (config.callbackUrl !== undefined) {
 		},
 	});
 	// Browser presence for dialog/contribution guards: production browsers ride
-	// the pair as virtual streams, invisible to the local /events consumer set.
+	// the pair as virtual streams, invisible to the local /ws consumer set.
 	setCallbackBrowserStreamCount(() => daemonControl?.browserStreamCount() ?? 0);
 	// Register the mirror tap: every broadcast/broadcastAnswer/broadcastTo
 	// frame is forwarded verbatim: to the "control" stream (fleet activity +

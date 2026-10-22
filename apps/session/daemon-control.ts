@@ -10,7 +10,7 @@ import {
 } from "#lib/wire/callback-protocol";
 import type { CallbackEnvelope, CallbackKind } from "#lib/wire/callback-protocol";
 import type { StreamResyncControl } from "#lib/wire/callback-protocol";
-import { isRingedDeltaType } from "./sse-delivery";
+import { isRingedDeltaType } from "./client-delivery";
 
 /**
  * Daemon control broker: virtual streams over the callback pair
@@ -36,7 +36,7 @@ import { isRingedDeltaType } from "./sse-delivery";
  *   dispatched through the mounted handleCommand; answers (call_result/unicast)
  *   flow as frames on the same stream. Re-submitted command ids are deduped by
  *   the session's command handler (index.ts), not by this broker.
- * - Control mirror: the session-scoped frames the direct /events path
+ * - Control mirror: the session-scoped frames the direct /ws path
  *   broadcasts are mirrored as kind:"frame" envelopes on streamId "control"
  *   (payload verbatim) while the pair lives, so the fleet derives activity +
  *   fanout correlation exactly like the direct control-socket tap. Streaming
@@ -59,7 +59,7 @@ export interface DaemonControlDeps {
 	 * Async half of a browser-stream prime (anything that must be awaited, such
 	 * as building the slash-command list). Resolves to the synchronous half,
 	 * which snapshots the session into the full priming frame list (the same
-	 * frames the direct SSE prime sends) at the moment it is called.
+	 * frames the direct /ws prime sends) at the moment it is called.
 	 */
 	preparePriming: () => Promise<() => Record<string, unknown>[]>;
 	/** Send leg to the callback pair (the transport stamps identity/seq). */
@@ -83,7 +83,7 @@ export interface DaemonControlDeps {
 	 * from `stop()` (always 0). Ring-hit reopens of an existing stream do not
 	 * fire it. Lets the host run work (the daemon roster poll) that must live
 	 * exactly as long as callback-pair browsers do, since these virtual streams
-	 * never join the local SSE consumer set.
+	 * never join the local /ws consumer set.
 	 */
 	onBrowserStreamsChange?: (count: number) => void;
 	/**
@@ -218,7 +218,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	 * transport at emit) so a reconnect re-sends exactly what the edge is
 	 * missing; acks/controls and non-ringed frames (priming bursts, unicast
 	 * answers) are never ringed; priming is re-derived on stream_open and a
-	 * lost answer is re-POSTed by the client, matching the direct SSE ring
+	 * lost answer is re-sent by the client, matching the direct /ws ring
 	 * semantics. Ring memory is byte-bounded (4 MiB) per stream. A "dropped"
 	 * send on a browser stream flips stream_resync, no silent gap ever.
 	 */
@@ -665,7 +665,7 @@ export interface DaemonControl {
 	stop(): void;
 	status(): DaemonControlStatus;
 	/**
-	 * Live callback-pair browser streams (virtual; not SseConsumers). 0 while
+	 * Live callback-pair browser streams (virtual; not ClientConsumers). 0 while
 	 * the pair is down: the streams survive a drop and re-prime on the new
 	 * pair, but the mirror drops every frame meanwhile, so nothing could
 	 * receive a dialog opened in that window.

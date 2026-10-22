@@ -505,10 +505,10 @@ test("a read-only call broadcasts no state; a mutating call does", async () => {
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });
 
-test("a pair-attached browser with no local /events consumer answers a ui_request", async () => {
+test("a pair-attached browser with no local /ws consumer answers a ui_request", async () => {
 	// Locks the presence check to the callback pair: production browsers ride
 	// the pair as `browser/<connId>` virtual streams and never enter the
-	// daemon's own /events consumer set, so a local-only check rejected every
+	// daemon's own /ws consumer set, so a local-only check rejected every
 	// dialog with "No connected client to answer the UI request" (the
 	// regression users saw in the ask card).
 	const fleet = trackFleet();
@@ -517,7 +517,7 @@ test("a pair-attached browser with no local /events consumer answers a ui_reques
 		OMP_SESSION_TEST_UI_REQUEST: "1",
 	});
 	await fleet.paired;
-	// Pair only: nothing here opens a local /events stream, so the daemon's
+	// Pair only: nothing here opens a local /ws socket, so the daemon's
 	// `streams` set stays empty for the whole test.
 	fleet.send("browser/one", "control", { type: "stream_open" });
 	await fleet.waitForUp((e) => streamFrame(e, "browser/one")?.type === "state", 1);

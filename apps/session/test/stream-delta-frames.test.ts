@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { SessionEntry } from "../session-entry";
-import { streamingPrimeFrames, toWireEvent, trackStreamingAssistant } from "../sse-delivery";
+import { streamingPrimeFrames, toWireEvent, trackStreamingAssistant } from "../client-delivery";
 
 function assistant(text: string): AssistantMessage {
 	return {

@@ -1,15 +1,15 @@
 /**
  * omp-session Phase 1 server tests: config surface, stdout contract line, bearer
- * auth (R14), readiness gate (R8), idle auto-exit (R11), POST idempotency, and
+ * auth (R14), readiness gate (R8), idle auto-exit (R11), command idempotency, and
  * the removed-mux-command fallthrough. Spawns apps/session/index.ts as a subprocess on
  * an ephemeral port (OMP_SESSION_PORT=0) with a hermetic tmp cwd; connects over
  * loopback and, wherever the host owns an interface the daemon is reachable on,
  * from that off-loopback address too (the token gate decides from the socket
  * peer address, so only a real peer address exercises its off-loopback half)
- * using the agent-driving transport (GET /events SSE down, POST /command
- * up). No external network, no real model calls; the readiness gate is deferred
- * via the OMP_SESSION_TEST_READY_DELAY_MS test hook instead of racing provider
- * discovery.
+ * using the agent-driving transport (one `GET /ws` WebSocket: frames down,
+ * in-band commands up with ack/nack). No external network, no real model
+ * calls; the readiness gate is deferred via the OMP_SESSION_TEST_READY_DELAY_MS
+ * test hook instead of racing provider discovery.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -27,8 +27,13 @@ import {
 	DELTA_SEQ_START,
 	type StdoutContractLine,
 } from "#lib/wire/protocol";
-import { parseSseUnits, SSE_PING_EVENT } from "#lib/wire/sse";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+import { MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
+import {
+	openBrowserSocket,
+	openRawBrowserSocket,
+	type WireFrame,
+} from "./browser-socket-client.testkit";
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 
@@ -49,7 +54,7 @@ async function waitFor<T>(probe: () => T | null, timeoutMs: number, label: strin
 	}
 }
 
-type Frame = { type: string; [key: string]: unknown };
+type Frame = WireFrame;
 
 /** The `sessionName` a `state` frame carries (undefined when absent/not a string). */
 function stateSessionName(frame: Frame): string | undefined {
@@ -57,128 +62,6 @@ function stateSessionName(frame: Frame): string | undefined {
 	const { state } = frame;
 	if (typeof state !== "object" || state === null || !("sessionName" in state)) return undefined;
 	return typeof state.sessionName === "string" ? state.sessionName : undefined;
-}
-
-/** The daemon's /events URL for an origin. */
-function eventsUrlFor(baseUrl: string): string {
-	return `${baseUrl}/events`;
-}
-
-/**
- * Open a daemon /events SSE stream; resolves once the stream is established.
- * Frames accumulate on `frames` (poll with waitFor); `close()` aborts the
- * stream. Auth goes through an optional Authorization header (loopback is
- * exempt, so plain tests need none). `ids` runs parallel to `frames` with
- * each frame's SSE id (its seq: priming 1..k, deltas >= DELTA_SEQ_START)
- * for Last-Event-ID resume assertions.
- */
-function openEvents(
-	baseUrl: string,
-	opts: { headers?: Record<string, string> } = {},
-): Promise<{ frames: Frame[]; ids: number[]; pings: number; close: () => void }> {
-	const { promise, resolve, reject } = Promise.withResolvers<{
-		frames: Frame[];
-		ids: number[];
-		pings: number;
-		close: () => void;
-	}>();
-	const controller = new AbortController();
-	const frames: Frame[] = [];
-	const ids: number[] = [];
-	let pings = 0;
-	const url = eventsUrlFor(baseUrl);
-	const timer = setTimeout(() => reject(new Error(`events stream open timed out: ${url}`)), 15_000);
-	void (async () => {
-		try {
-			const res = await fetch(url, { headers: opts.headers, signal: controller.signal });
-			if (!res.ok || !res.body) throw new Error(`GET /events returned ${res.status}`);
-			clearTimeout(timer);
-			resolve({
-				frames,
-				ids,
-				get pings() {
-					return pings;
-				},
-				close: () => controller.abort(),
-			});
-			for await (const unit of parseSseUnits(res.body)) {
-				if (unit.kind !== "event") continue;
-				// Keepalive pings are not frames (no id, empty-object data);
-				// count them separately so the keepalive contract stays observable.
-				if (unit.event === SSE_PING_EVENT) {
-					pings++;
-					continue;
-				}
-				frames.push(JSON.parse(unit.data) as Frame);
-				ids.push(Number(unit.id));
-			}
-		} catch (err) {
-			if (controller.signal.aborted) return; // aborted by close(), which is expected teardown
-			reject(err instanceof Error ? err : new Error(String(err)));
-		}
-	})();
-	return promise;
-}
-
-/** The daemon's /command URL for an origin. */
-function commandUrlFor(baseUrl: string): string {
-	return `${baseUrl}/command`;
-}
-
-/**
- * Like openEvents, but also resolves `ended` with how the stream finished:
- * "eof" (clean end), "aborted" (close()), or "error: …" (body read rejected).
- * Used where the distinction matters (backpressure drop vs dormant close).
- */
-function openEventsTracked(
-	baseUrl: string,
-): Promise<{ frames: Frame[]; ended: Promise<string>; close: () => void }> {
-	const { promise, resolve } = Promise.withResolvers<{
-		frames: Frame[];
-		ended: Promise<string>;
-		close: () => void;
-	}>();
-	const controller = new AbortController();
-	const frames: Frame[] = [];
-	let settleEnd!: (kind: string) => void;
-	const ended = new Promise<string>((r) => (settleEnd = r));
-	const url = eventsUrlFor(baseUrl);
-	void (async () => {
-		try {
-			const res = await fetch(url, { signal: controller.signal });
-			if (!res.ok || !res.body) {
-				settleEnd(`http-${res.status}`);
-				return;
-			}
-			resolve({ frames, ended, close: () => controller.abort() });
-			for await (const unit of parseSseUnits(res.body)) {
-				if (unit.kind !== "event") continue;
-				if (unit.event === SSE_PING_EVENT) continue;
-				frames.push(JSON.parse(unit.data) as Frame);
-			}
-			settleEnd("eof");
-		} catch (err) {
-			settleEnd(
-				controller.signal.aborted
-					? "aborted"
-					: `error:${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
-	})();
-	return promise;
-}
-
-/** POST one ClientCommand (JSON body); every command carries an id. */
-function postCommand(
-	baseUrl: string,
-	cmd: Record<string, unknown>,
-	opts: { headers?: Record<string, string> } = {},
-): Promise<Response> {
-	return fetch(commandUrlFor(baseUrl), {
-		method: "POST",
-		headers: { "content-type": "application/json", ...opts.headers },
-		body: JSON.stringify(cmd),
-	});
 }
 
 /** The first frame of a given type, waiting for it to arrive. */
@@ -455,17 +338,17 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 	const offLoopback = (await offLoopbackOrigins(port, "sekret"))[0];
 
 	// Loopback is exempt on every route (the daemon's own default peer): the
-	// stream primes with no credential, commands are accepted, and the doc route
+	// socket primes with no credential, commands are acked, and the doc route
 	// answers its plain-text 404 instead of the gate's 401.
-	const loopback = await openEvents(loopbackBase);
+	const loopback = await openBrowserSocket(loopbackBase);
 	await waitForFrame(loopback.frames, "attached", 10_000, "loopback attached frame");
-	const loopbackCmd = await postCommand(loopbackBase, {
+	const loopbackCmd = await loopback.command({
 		type: "call",
 		id: "c-l1",
 		method: "getSettings",
 		args: [],
 	});
-	expect(loopbackCmd.status).toBe(202);
+	expect(loopbackCmd).toEqual({ ok: true });
 	const loopbackRoot = await fetch(`${loopbackBase}/`);
 	expect(loopbackRoot.status).toBe(404);
 	expect(loopbackRoot.headers.get("content-type")).toContain("text/plain");
@@ -473,74 +356,72 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 
 	// Off-loopback peers need the token. The gate reads the socket peer address,
 	// so this half runs over the interfaces this host can source a connection
-	// from (offLoopbackOrigins); the loopback half above runs everywhere.
+	// from (offLoopbackOrigins); the loopback half above runs everywhere, and
+	// client-auth.test.ts covers every refusal for a non-loopback peer
+	// without needing one.
 	if (offLoopback !== undefined) {
 		const base = offLoopback;
 
-		// Wrong credential → 401 on both endpoints (no hello window, no close codes).
-		const wrongStream = await fetch(`${base}/events`, {
-			headers: { authorization: "Bearer nope" },
-		});
-		expect(wrongStream.status).toBe(401);
-		const wrongCommand = await fetch(`${base}/command`, {
-			method: "POST",
-			headers: { authorization: "Bearer nope", "content-type": "application/json" },
-			body: JSON.stringify({ type: "call", id: "c-wrong", method: "getSettings", args: [] }),
-		});
-		expect(wrongCommand.status).toBe(401);
-
-		// Wrong-CASE token → 401 too: the scheme is case-insensitive, the token
-		// value is not (regression: the whole header used to be lowercased, so
+		// Missing or wrong credential: the dial is upgraded and closed at once
+		// 4401 (a browser cannot read a 401), with no frame sent.
+		// Wrong-CASE token too: the scheme is case-insensitive, the token value
+		// is not (regression: the whole header used to be lowercased, so
 		// "Bearer SEKRET" slipped past a "sekret" token).
-		const caseStream = await fetch(`${base}/events`, {
-			headers: { authorization: "Bearer SEKRET" },
-		});
-		expect(caseStream.status).toBe(401);
-		const caseCommand = await fetch(`${base}/command`, {
-			method: "POST",
-			headers: { authorization: "Bearer SEKRET", "content-type": "application/json" },
-			body: JSON.stringify({ type: "call", id: "c-case", method: "getSettings", args: [] }),
-		});
-		expect(caseCommand.status).toBe(401);
+		for (const credentials of [
+			{},
+			{ token: "nope" },
+			{ token: "SEKRET" },
+			{ headers: { authorization: "Bearer nope" } },
+			{ headers: { authorization: "Bearer SEKRET" } },
+		]) {
+			const refused = await openBrowserSocket(base, credentials);
+			const closed = await refused.closed;
+			expect(closed.code).toBe(4401);
+			expect(closed.kind).toBe("unauthorized");
+			expect(refused.frames).toEqual([]);
+		}
+		// A wrong credential never learns the proto verdict either.
+		const wrongAndStale = await openBrowserSocket(base, { token: "nope", proto: OMP_PROTO - 1 });
+		expect((await wrongAndStale.closed).code).toBe(4401);
 
-		// Lowercase scheme with the exact token still authenticates.
-		const lowerScheme = await fetch(`${base}/events`, {
+		// The `token` query param (all a browser can send) authenticates: the
+		// socket primes hello_ok with the daemon identity and acks commands.
+		const queryStream = await openBrowserSocket(base, { token: "sekret" });
+		const queryHello = await waitForFrame(queryStream.frames, "hello_ok", 10_000, "query hello_ok");
+		expect(queryHello.proto).toBe(OMP_PROTO);
+		expect(queryHello.cwd).toBe(tmp);
+		expect(queryHello.pid).toBe(child.pid);
+		expect(queryHello.name).toBe(path.basename(tmp));
+		expect(typeof queryHello.version).toBe("string");
+		expect(
+			await queryStream.command({ type: "call", id: "c-q1", method: "getSettings", args: [] }),
+		).toEqual({ ok: true });
+
+		// The Authorization header stays accepted for non-browser clients, with a
+		// case-insensitive scheme and the exact token.
+		const headerStream = await openBrowserSocket(base, {
 			headers: { authorization: "bearer sekret" },
 		});
-		expect(lowerScheme.status).toBe(200);
-		lowerScheme.body?.cancel();
-
-		// Authorization header → the stream primes hello_ok with the daemon identity.
-		const headerStream = await openEvents(base, { headers: { authorization: "Bearer sekret" } });
-		const headerHello = await waitForFrame(
-			headerStream.frames,
-			"hello_ok",
-			10_000,
-			"header hello_ok",
-		);
-		expect(headerHello.proto).toBe(OMP_PROTO);
-		expect(headerHello.cwd).toBe(tmp);
-		expect(headerHello.pid).toBe(child.pid);
-		expect(headerHello.name).toBe(path.basename(tmp));
-		expect(typeof headerHello.version).toBe("string");
-		// …and commands accept with 202 echoing the id.
-		const headerCmd = await postCommand(
-			base,
-			{ type: "call", id: "c-h1", method: "getSettings", args: [] },
-			{ headers: { authorization: "Bearer sekret" } },
-		);
-		expect(headerCmd.status).toBe(202);
-		expect((await headerCmd.json()).commandId).toBe("c-h1");
+		await waitForFrame(headerStream.frames, "hello_ok", 10_000, "header hello_ok");
+		expect(
+			await headerStream.command({ type: "call", id: "c-h1", method: "getSettings", args: [] }),
+		).toEqual({ ok: true });
 
 		// The non-wire routes stay gated off-loopback, and the daemon serves no
-		// HTML: an authenticated "/" is the plain-text 404 pointing at the fleet.
+		// HTML: an authenticated "/" is the plain-text 404 pointing at the fleet,
+		// and so are the removed SSE/POST routes.
 		const unauthRoot = await fetch(`${base}/`);
 		expect(unauthRoot.status).toBe(401);
+		expect((await fetch(`${base}/events`)).status).toBe(401);
 		const authedRoot = await fetch(`${base}/`, { headers: { authorization: "Bearer sekret" } });
 		expect(authedRoot.status).toBe(404);
 		expect(authedRoot.headers.get("content-type")).toContain("text/plain");
 		expect(await authedRoot.text()).toContain("this is a session daemon (no web UI)");
+		expect(
+			(await fetch(`${base}/events`, { headers: { authorization: "Bearer sekret" } })).status,
+		).toBe(404);
 
+		queryStream.close();
 		headerStream.close();
 	}
 
@@ -559,30 +440,67 @@ test("OMP_SESSION| listening line is the first stdout line and parses as StdoutC
 	await proc.cleanup();
 }, 30_000);
 
-test("loopback /events opens with hello_ok as the FIRST event, carrying the daemon identity", async () => {
+test("loopback /ws opens with hello_ok as the FIRST frame, carrying the daemon identity", async () => {
 	const proc = await spawnSession({});
 	running.push(proc);
 	const { child, tmp, port, cleanup } = proc;
-	const events = await openEvents(`http://127.0.0.1:${port}`);
-	const hello = await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
+	const socket = await openBrowserSocket(`http://127.0.0.1:${port}`);
+	const hello = await waitForFrame(socket.frames, "hello_ok", 10_000, "hello_ok");
 	expect(hello.proto).toBe(OMP_PROTO);
 	expect(hello.cwd).toBe(tmp);
 	expect(hello.pid).toBe(child.pid);
 	expect(hello.name).toBe(path.basename(tmp));
 	expect(typeof hello.version).toBe("string");
-	// hello_ok precedes the attach priming on every stream open.
-	expect(events.frames[0].type).toBe("hello_ok");
-	const attached = await waitForFrame(events.frames, "attached", 10_000, "attached frame");
+	// hello_ok precedes the attach priming on every socket open, and the
+	// priming is sequenced 1..k below the delta era.
+	expect(socket.frames[0].type).toBe("hello_ok");
+	const attached = await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
 	expect(attached.sessionId).toBe("s1");
+	// `ready` is priming when the gate already cleared, else a live delta: wait for it, then
+	// every frame below the delta era is priming and numbered 1..k with no gap.
+	await waitForFrame(socket.frames, "ready", 20_000, "ready frame");
+	expect(socket.seqs.every((seq) => seq !== null)).toBe(true);
+	const primingSeqs = socket.seqs.filter((seq) => seq! < DELTA_SEQ_START);
+	expect(primingSeqs.length).toBeGreaterThanOrEqual(2);
+	expect(primingSeqs).toEqual(primingSeqs.map((_, i) => i + 1));
+	expect(socket.frames[1].type).toBe("attached");
 
-	// Malformed command bodies are rejected with 400.
-	const bad = await fetch(`http://127.0.0.1:${port}/command`, {
-		method: "POST",
-		body: "{not json",
-	});
-	expect(bad.status).toBe(400);
-	events.close();
+	// A message that is no `{"cmd":...}` object breaks the contract: close 4400.
+	socket.sendRaw("{not json");
+	const closed = await socket.closed;
+	expect(closed.code).toBe(4400);
+	expect(closed.kind).toBe("protocol_violation");
 	await cleanup();
+}, 30_000);
+
+test("a dial with a missing or different proto closes 4426 before any frame", async () => {
+	const proc = await spawnSession({});
+	running.push(proc);
+	const base = `http://127.0.0.1:${proc.port}`;
+	for (const proto of [OMP_PROTO - 1, null]) {
+		const socket = await openBrowserSocket(base, { proto });
+		const closed = await socket.closed;
+		expect(closed.code).toBe(4426);
+		expect(closed.kind).toBe("proto_mismatch");
+		expect(socket.frames).toEqual([]);
+	}
+	await proc.cleanup();
+}, 30_000);
+
+test("a non-upgrade request to /ws is a 400; the old /events and /command routes are unknown routes", async () => {
+	const proc = await spawnSession({});
+	running.push(proc);
+	const base = `http://127.0.0.1:${proc.port}`;
+	expect((await fetch(`${base}/ws?proto=${OMP_PROTO}`)).status).toBe(400);
+	const events = await fetch(`${base}/events`);
+	expect(events.status).toBe(404);
+	expect(await events.text()).toContain("this is a session daemon (no web UI)");
+	const command = await fetch(`${base}/command`, {
+		method: "POST",
+		body: JSON.stringify({ type: "call", id: "gone", method: "getSettings", args: [] }),
+	});
+	expect(command.status).toBe(404);
+	await proc.cleanup();
 }, 30_000);
 
 test("idle auto-exit: --idle-timeout 1s exits the process via shutdown", async () => {
@@ -592,7 +510,7 @@ test("idle auto-exit: --idle-timeout 1s exits the process via shutdown", async (
 	});
 	running.push(proc);
 	expect(proc.port).toBeGreaterThan(0);
-	// No streams: the first check past the 1s idle timeout finds it idle and
+	// No sockets: the first check past the 1s idle timeout finds it idle and
 	// shutdown() exits 0 (250ms check tick via the test env hook, not the 15s default).
 	const code = await Promise.race([
 		proc.child.exited,
@@ -602,22 +520,22 @@ test("idle auto-exit: --idle-timeout 1s exits the process via shutdown", async (
 	await proc.cleanup();
 }, 30_000);
 
-test("an attached /events stream suppresses idle auto-exit", async () => {
+test("an open socket suppresses idle auto-exit; closing it lets the daemon exit", async () => {
 	const proc = await spawnSession({
 		args: ["--idle-timeout", "1s"],
 		env: { OMP_SESSION_TEST_IDLE_CHECK_MS: "250" },
 	});
 	running.push(proc);
 	const { child, port, cleanup } = proc;
-	const events = await openEvents(`http://127.0.0.1:${port}`);
-	await waitForFrame(events.frames, "attached", 10_000, "attached frame");
-	// Span several 250ms idle-check ticks (the env hook) with the stream
-	// attached: an attached stream suppresses idle, so the process must stay
+	const socket = await openBrowserSocket(`http://127.0.0.1:${port}`);
+	await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
+	// Span several 250ms idle-check ticks (the env hook) with the socket
+	// open: an open socket counts as a client, so the process must stay
 	// alive past ticks that would otherwise exit it (1s idle timeout).
 	await sleep(1500);
 	expect(child.exitCode).toBeNull();
-	events.close();
-	// The stream closed → nothing suppresses idle: the next tick (≤250ms)
+	socket.close();
+	// The socket closed → nothing suppresses idle: the next tick (≤250ms)
 	// finds it idle and shutdown() exits 0.
 	const code = await Promise.race([child.exited, sleep(10_000).then(() => "timeout" as const)]);
 	expect(code).toBe(0);
@@ -632,31 +550,31 @@ test("prompt-family calls fail with not_ready until the readiness gate clears", 
 	running.push(proc);
 	const { port, cleanup } = proc;
 	const base = `http://127.0.0.1:${port}`;
-	const events = await openEvents(base);
+	const socket = await openBrowserSocket(base);
 	// The open auto-attaches; the priming arrives with the constant guard
 	// token (Phase 6: de-muxed, so the client hides the sessions sidebar).
-	const attached = await waitForFrame(events.frames, "attached", 10_000, "attached frame");
+	const attached = await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
 	expect(attached.sessionId).toBe("s1");
 	// The gate is still closed: prompt is rejected with not_ready, not a model error.
-	const resp = await postCommand(base, {
+	const resp = await socket.command({
 		type: "call",
 		id: "c1",
 		method: "prompt",
 		args: ["hello"],
 	});
-	expect(resp.status).toBe(202);
+	expect(resp).toEqual({ ok: true });
 	const notReady = await waitFor(
-		() => events.frames.find((f) => f.type === "call_result" && f.id === "c1") ?? null,
+		() => socket.frames.find((f) => f.type === "call_result" && f.id === "c1") ?? null,
 		10_000,
 		"not_ready call_result",
 	);
 	expect(notReady.ok).toBe(false);
 	expect(notReady.error).toBe("not_ready");
 	// The gate clears: ready is broadcast and state snapshots carry readyAt.
-	await waitForFrame(events.frames, "ready", 20_000, "ready frame");
+	await waitForFrame(socket.frames, "ready", 20_000, "ready frame");
 	await waitFor(
 		() => {
-			const frame = events.frames.find((f) => {
+			const frame = socket.frames.find((f) => {
 				if (f.type !== "state") return false;
 				const st = f.state;
 				return typeof st === "object" && st !== null && "readyAt" in st && st.readyAt !== undefined;
@@ -666,7 +584,7 @@ test("prompt-family calls fail with not_ready until the readiness gate clears", 
 		10_000,
 		"state with readyAt",
 	);
-	events.close();
+	socket.close();
 	await cleanup();
 }, 30_000);
 
@@ -675,23 +593,23 @@ test("removed mux commands fall through to the unknown-command error; read-only 
 	running.push(proc);
 	const { port, cleanup } = proc;
 	const base = `http://127.0.0.1:${port}`;
-	const events = await openEvents(base);
+	const socket = await openBrowserSocket(base);
 	// The attached frame carries the constant guard token.
-	const attached = await waitForFrame(events.frames, "attached", 10_000, "attached frame");
+	const attached = await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
 	expect(attached.sessionId).toBe("s1");
 
 	// The four removed mux commands (plus attach/detach, which only exist at
 	// the fleet edge) fall through to the generic unknown-command error; a
 	// benign read-only call probe still answers with call_result.
-	await postCommand(base, { type: "create_session", cwd: "/tmp", id: "m1" });
-	await postCommand(base, { type: "attach", sessionId: "s1", id: "m2" });
-	await postCommand(base, { type: "detach", id: "m3" });
-	await postCommand(base, { type: "close_session", sessionId: "s1", id: "m4" });
-	await postCommand(base, { type: "list_live_sessions", id: "m5" });
-	await postCommand(base, { type: "call", id: "m6", method: "getSettings", args: [] });
+	await socket.command({ type: "create_session", cwd: "/tmp", id: "m1" });
+	await socket.command({ type: "attach", sessionId: "s1", id: "m2" });
+	await socket.command({ type: "detach", id: "m3" });
+	await socket.command({ type: "close_session", sessionId: "s1", id: "m4" });
+	await socket.command({ type: "list_live_sessions", id: "m5" });
+	await socket.command({ type: "call", id: "m6", method: "getSettings", args: [] });
 	const unknown = await waitFor<Frame[]>(
 		() => {
-			const errors = events.frames.filter(
+			const errors = socket.frames.filter(
 				(f) => f.type === "error" && String(f.error).includes("Unknown command:"),
 			);
 			return errors.length >= 5 ? errors : null;
@@ -709,7 +627,7 @@ test("removed mux commands fall through to the unknown-command error; read-only 
 		expect(unknown.some((f) => String(f.error).includes(`"${type}"`))).toBe(true);
 	}
 	const probe = await waitForFrame(
-		events.frames,
+		socket.frames,
 		"call_result",
 		10_000,
 		"call_result for the probe",
@@ -721,44 +639,44 @@ test("removed mux commands fall through to the unknown-command error; read-only 
 	// Real delay: the subprocess is the only authority on what it broadcasts;
 	// fake timers cannot drive another process's event loop.
 	await sleep(1000);
-	expect(events.frames.some((f) => f.type === "live_sessions")).toBe(false);
+	expect(socket.frames.some((f) => f.type === "live_sessions")).toBe(false);
 
 	// Fleet-edge commands are rejected on a bare omp-session.
-	await postCommand(base, { type: "spawn", cwd: "/tmp", id: "m7" });
-	await postCommand(base, { type: "stop", daemonId: "d1", id: "m8" });
+	await socket.command({ type: "spawn", cwd: "/tmp", id: "m7" });
+	await socket.command({ type: "stop", daemonId: "d1", id: "m8" });
 	await waitFor(
 		() =>
-			events.frames.filter((f) => f.type === "error" && f.error === "fleet-only command").length >=
+			socket.frames.filter((f) => f.type === "error" && f.error === "fleet-only command").length >=
 			2
 				? true
 				: null,
 		10_000,
 		"fleet-only errors",
 	);
-	events.close();
+	socket.close();
 	await cleanup();
 }, 30_000);
 
-test("POST /command dedups by id within the window and replays the recorded answer", async () => {
+test("a command id re-sent on the same socket is acked again and replays the recorded answer", async () => {
 	const proc = await spawnSession({});
 	running.push(proc);
 	const { port, cleanup } = proc;
 	const base = `http://127.0.0.1:${port}`;
-	const events = await openEvents(base);
-	await waitForFrame(events.frames, "attached", 10_000, "attached frame");
-	// The same command id posted twice: both accept 202, the method dispatches
-	// ONCE, and the duplicate receives the answer the original produced. The
-	// duplicate is the client recovering a lost answer (call_result is a
-	// non-ringed unicast), so a dedup that re-accepted silently would leave
-	// that recovery re-POST unanswered forever.
+	const socket = await openBrowserSocket(base);
+	await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
+	// The same command id sent twice: both ack, the method dispatches ONCE, and
+	// the duplicate receives the answer the original produced. The duplicate is
+	// the client recovering a lost answer (call_result is a non-ringed unicast),
+	// so a dedup that re-accepted silently would leave that recovery re-send
+	// unanswered forever.
 	const payload = { type: "call", id: "dup-cmd", method: "setSessionName", args: ["dup-name"] };
-	const first = await postCommand(base, payload);
-	const second = await postCommand(base, payload);
-	expect(first.status).toBe(202);
-	expect(second.status).toBe(202);
+	const first = await socket.command(payload);
+	const second = await socket.command(payload);
+	expect(first).toEqual({ ok: true });
+	expect(second).toEqual({ ok: true });
 	await waitFor(
 		() =>
-			events.frames.filter((f) => f.type === "call_result" && f.id === "dup-cmd").length >= 2
+			socket.frames.filter((f) => f.type === "call_result" && f.id === "dup-cmd").length >= 2
 				? true
 				: null,
 		10_000,
@@ -767,68 +685,156 @@ test("POST /command dedups by id within the window and replays the recorded answ
 	// Real delay: the dedup window and answer delivery live in the subprocess;
 	// only observing real time proves the duplicate was NOT re-dispatched.
 	await sleep(1200);
-	const answers = events.frames.filter((f) => f.type === "call_result" && f.id === "dup-cmd");
+	const answers = socket.frames.filter((f) => f.type === "call_result" && f.id === "dup-cmd");
 	expect(answers).toHaveLength(2);
 	expect(answers[1]).toEqual(answers[0]); // the replay is the recorded answer
 	// The post-mutation state resync is the dispatch's own fingerprint: exactly
 	// one broadcast carried the new name, so the duplicate replayed an answer
 	// instead of executing the call again.
-	const resyncs = events.frames.filter((f) => stateSessionName(f) === "dup-name");
+	const resyncs = socket.frames.filter((f) => stateSessionName(f) === "dup-name");
 	expect(resyncs).toHaveLength(1);
 
 	// A FAILED dispatch replays its real error the same way: the recovery must
 	// report the daemon's failure, never a fabricated success.
 	const bad = { type: "call", id: "dup-err", method: "no-such-method", args: [] };
-	await postCommand(base, bad);
-	await postCommand(base, bad);
+	await socket.command(bad);
+	await socket.command(bad);
 	await waitFor(
 		() =>
-			events.frames.filter((f) => f.type === "call_result" && f.id === "dup-err").length >= 2
+			socket.frames.filter((f) => f.type === "call_result" && f.id === "dup-err").length >= 2
 				? true
 				: null,
 		10_000,
 		"replayed error call_result for dup-err",
 	);
-	const errors = events.frames.filter((f) => f.type === "call_result" && f.id === "dup-err");
+	const errors = socket.frames.filter((f) => f.type === "call_result" && f.id === "dup-err");
 	expect(errors).toHaveLength(2);
 	expect(errors[0].ok).toBe(false);
 	expect(String(errors[0].error)).toContain("Unknown method");
 	expect(errors[1]).toEqual(errors[0]);
-	events.close();
+	socket.close();
 	await cleanup();
 }, 30_000);
 
-test("POST /command rejects non-command bodies and never dispatches inherited names", async () => {
+test("command dedup survives a reconnect: the same id re-sent on a new socket is acked and replayed, never re-dispatched", async () => {
 	const proc = await spawnSession({});
 	running.push(proc);
 	const { port, cleanup } = proc;
 	const base = `http://127.0.0.1:${port}`;
-	const events = await openEvents(base);
-	await waitForFrame(events.frames, "attached", 10_000, "attached frame");
-	// Shape errors are a 400 before any dispatch. A bare `null` used to pass
-	// JSON.parse and crash on `cmd.id`; `{}`-like bodies reached the switch.
-	for (const body of ["null", "42", '"text"', "[]", '{"type":"call"}', '{"id":"x"}']) {
-		const res = await fetch(commandUrlFor(base), {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body,
-		});
-		expect(res.status).toBe(400);
+	const clientId = crypto.randomUUID();
+	const first = await openBrowserSocket(base, { clientId });
+	await waitForFrame(first.frames, "attached", 10_000, "attached frame");
+	// The client sent a command, the socket dropped before it saw the answer:
+	// the page re-sends the SAME id after reconnecting, inside the dedup window.
+	const payload = {
+		type: "call",
+		id: "reconnect-cmd",
+		method: "setSessionName",
+		args: ["re-name"],
+	};
+	expect(await first.command(payload)).toEqual({ ok: true });
+	const original = await waitFor(
+		() => first.frames.find((f) => f.type === "call_result" && f.id === "reconnect-cmd") ?? null,
+		10_000,
+		"original call_result",
+	);
+	// The dispatch's post-mutation resync follows its answer; let it land on
+	// this socket so none of it can reach the next one mid-test.
+	await waitFor(
+		() => (first.frames.some((f) => stateSessionName(f) === "re-name") ? true : null),
+		10_000,
+		"post-mutation state resync",
+	);
+	first.close();
+	await first.closed;
+
+	const second = await openBrowserSocket(base, { clientId });
+	await waitForFrame(second.frames, "attached", 10_000, "attached frame on the second socket");
+	expect(second.frames.some((f) => f.type === "call_result" && f.id === "reconnect-cmd")).toBe(
+		false,
+	);
+	expect(await second.command(payload)).toEqual({ ok: true });
+	const replay = await waitFor(
+		() => second.frames.find((f) => f.type === "call_result" && f.id === "reconnect-cmd") ?? null,
+		10_000,
+		"replayed call_result on the second socket",
+	);
+	expect(replay).toEqual(original);
+	// Real delay: only observing real time proves nothing re-dispatched. The
+	// fresh priming's state carries the name once; a re-dispatch would
+	// broadcast a second `state` delta carrying it.
+	await sleep(1200);
+	expect(
+		second.frames.filter(
+			(f, i) => stateSessionName(f) === "re-name" && second.seqs[i]! >= DELTA_SEQ_START,
+		),
+	).toHaveLength(0);
+	expect(
+		second.frames.filter((f) => f.type === "call_result" && f.id === "reconnect-cmd"),
+	).toHaveLength(1);
+	second.close();
+	await cleanup();
+}, 30_000);
+
+test("the socket rejects non-command messages and never dispatches inherited names", async () => {
+	const proc = await spawnSession({});
+	running.push(proc);
+	const { port, cleanup } = proc;
+	const base = `http://127.0.0.1:${port}`;
+	const socket = await openBrowserSocket(base);
+	await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
+	// A message that is no `{"cmd":<object with a string id>}` is a protocol
+	// violation: close 4400. A bare `null` used to pass JSON.parse and crash on
+	// `cmd.id`; `{}`-like bodies reached the switch.
+	for (const body of [
+		"null",
+		"42",
+		'"text"',
+		"[]",
+		'{"type":"call"}',
+		'{"cmd":null}',
+		'{"cmd":{"type":"call"}}',
+		'{"cmd":{"type":"call","id":""}}',
+	]) {
+		const probe = await openBrowserSocket(base);
+		probe.sendRaw(body);
+		const closed = await probe.closed;
+		expect(closed.code).toBe(4400);
+		expect(closed.kind).toBe("protocol_violation");
 	}
+	// A binary message is a protocol violation too.
+	const binary = await openBrowserSocket(base);
+	binary.sendBinary(new TextEncoder().encode('{"cmd":{"type":"call","id":"b1"}}'));
+	expect((await binary.closed).code).toBe(4400);
+
+	// A command that carries an id but no valid shape is nacked 400 with that id
+	// and leaves the socket open.
+	const malformed = await socket.command({ id: "x" });
+	expect(malformed.ok).toBe(false);
+	if (!malformed.ok) expect(malformed.status).toBe(400);
+	// An oversize command is nacked 413, not a socket close.
+	const oversize = await socket.command({
+		type: "call",
+		id: "oversize",
+		method: "getSettings",
+		args: ["x".repeat(MAX_COMMAND_BYTES + 1024)],
+	});
+	expect(oversize.ok).toBe(false);
+	if (!oversize.ok) expect(oversize.status).toBe(413);
 	// `constructor` is an inherited property of every object. Pre-fix the
 	// METHODS lookup found Object itself and answered ok with the session.
 	const inherited = { type: "call", id: "proto-name", method: "constructor", args: [] };
-	expect((await postCommand(base, inherited)).status).toBe(202);
+	expect(await socket.command(inherited)).toEqual({ ok: true });
 	await waitFor(
 		() =>
-			events.frames.some((f) => f.type === "call_result" && f.id === "proto-name") ? true : null,
+			socket.frames.some((f) => f.type === "call_result" && f.id === "proto-name") ? true : null,
 		10_000,
 		"call_result for proto-name",
 	);
-	const answer = events.frames.find((f) => f.type === "call_result" && f.id === "proto-name");
+	const answer = socket.frames.find((f) => f.type === "call_result" && f.id === "proto-name");
 	expect(answer?.ok).toBe(false);
 	expect(String(answer?.error)).toContain("Unknown method");
-	events.close();
+	socket.close();
 	await cleanup();
 }, 30_000);
 
@@ -875,18 +881,18 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 		running.push(proc);
 		const { port, cleanup } = proc;
 		const base = `http://127.0.0.1:${port}`;
-		const events = await openEvents(base);
-		const hello = await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
+		const socket = await openBrowserSocket(base);
+		const hello = await waitForFrame(socket.frames, "hello_ok", 10_000, "hello_ok");
 		expect(hello.proto).toBe(OMP_PROTO);
-		expect(events.frames[0].type).toBe("hello_ok");
-		await waitForFrame(events.frames, "attached", 10_000, "attached frame");
+		expect(socket.frames[0].type).toBe("hello_ok");
+		await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
 
 		// The whole history arrives across multiple chunks, the last tagged
 		// final: true. A terminated stream would have delivered nothing after
 		// `attached` (the pre-fix behavior), so arrival alone proves survival.
 		const historyFrames = await waitFor<Frame[]>(
 			() => {
-				const hs = events.frames.filter((f) => f.type === "history");
+				const hs = socket.frames.filter((f) => f.type === "history");
 				return hs.length >= 2 && hs.at(-1)?.final === true ? hs : null;
 			},
 			20_000,
@@ -919,14 +925,14 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 		// resumed transcript), and the stream is STILL attached: a command
 		// answer arrives on the same stream, which a terminated
 		// (drop-and-resume) stream would never deliver.
-		const state = await waitForFrame(events.frames, "state", 10_000, "state");
+		const state = await waitForFrame(socket.frames, "state", 10_000, "state");
 		expect((state.state as { messageCount?: number }).messageCount).toBe(6);
-		expect(events.frames.findIndex((f) => f.type === "state")).toBeGreaterThan(
-			events.frames.findIndex((f) => f.type === "history"),
+		expect(socket.frames.findIndex((f) => f.type === "state")).toBeGreaterThan(
+			socket.frames.findIndex((f) => f.type === "history"),
 		);
-		await postCommand(base, { type: "call", id: "big-liveness", method: "getSettings", args: [] });
-		await waitForFrame(events.frames, "call_result", 10_000, "call_result after priming");
-		events.close();
+		await socket.command({ type: "call", id: "big-liveness", method: "getSettings", args: [] });
+		await waitForFrame(socket.frames, "call_result", 10_000, "call_result after priming");
+		socket.close();
 		await cleanup();
 	} finally {
 		await rm(bigDir, { recursive: true, force: true }).catch(() => {});
@@ -979,25 +985,24 @@ test("small transcripts keep the single-frame history shape (no `final` field)",
 	const proc = await spawnSession({});
 	running.push(proc);
 	const { port, cleanup } = proc;
-	const events = await openEvents(`http://127.0.0.1:${port}`);
-	const history = await waitForFrame(events.frames, "history", 10_000, "history frame");
+	const socket = await openBrowserSocket(`http://127.0.0.1:${port}`);
+	const history = await waitForFrame(socket.frames, "history", 10_000, "history frame");
 	expect(history.messages).toEqual([]);
 	expect("final" in history).toBe(false);
-	events.close();
+	socket.close();
 	await cleanup();
 }, 30_000);
 
-test("backpressure drop is in-band: stream_reset precedes the end; the daemon stays alive for resume", async () => {
-	// Regression (audit #0): a stream killed for exceeding the SSE
-	// backpressure cap must NOT read as a dormant close on its /events client.
-	// Bun's HTTP layer writes the chunked terminator for both
-	// controller.close() and controller.error(), so a wire error cannot carry
-	// the distinction; the daemon marks the drop with a stream_reset frame
-	// immediately before the end instead. This test overflows the cap with a
-	// >4 MiB answer frame (formatSessionAsText serializes the whole resumed
-	// transcript as ONE frame) and proves the marker arrives in-band, the
-	// end still reads as a clean EOF (what a client needs the marker
-	// for), and the daemon serves a fresh stream right after.
+test("backpressure drop is a typed close: a socket buffering past the cap closes 4503; the daemon stays alive for resume", async () => {
+	// A socket whose peer stops reading must not read as a dormant close: the
+	// daemon closes it with the typed 4503 slow_consumer (the SSE era had to
+	// mark the drop with an in-band stream_reset frame, because a chunked body
+	// cannot carry a close reason). The cap is CLIENT_BACKPRESSURE_BYTES of
+	// buffered amount; the test overflows it with several >4 MiB answer
+	// frames (formatSessionAsText serializes the whole resumed transcript as
+	// ONE frame) toward a raw TCP peer that has stopped reading, and proves
+	// the typed close arrives after the buffered data and the daemon serves a
+	// fresh socket right after.
 	const bigDir = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-bpres-"));
 	try {
 		const chunk = "x".repeat(900 * 1024);
@@ -1033,36 +1038,40 @@ test("backpressure drop is in-band: stream_reset precedes the end; the daemon st
 		running.push(proc);
 		const { port, cleanup } = proc;
 		const base = `http://127.0.0.1:${port}`;
-		const events = await openEventsTracked(base);
-		await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
-		await waitForFrame(events.frames, "attached", 10_000, "attached frame");
-		// Priming completes (paced history) before the over-cap answer.
-		await waitFor<Frame[]>(
-			() => {
-				const hs = events.frames.filter((f) => f.type === "history");
-				if (hs.length === 0) return null;
-				const last = hs.at(-1)!;
-				return last.final === true || !("final" in last) ? hs : null;
-			},
+		// A peer that primes, then stops reading, then asks for answers the daemon
+		// cannot get out: its send buffer grows past the cap.
+		const stalled = await openRawBrowserSocket(port);
+		await waitFor(
+			() => (stalled.types.has("history") && stalled.types.has("state") ? true : null),
 			20_000,
-			"history primed",
+			"priming read before the stall",
 		);
-		// The answer serializes the whole transcript in one frame, over the
-		// 4 MiB cap, tripping enqueueTo's drop-and-resume termination.
-		await postCommand(base, { type: "call", id: "bp-1", method: "formatSessionAsText", args: [] });
-		const reset = await waitForFrame(events.frames, "stream_reset", 10_000, "stream_reset frame");
-		expect(reset.reason).toBe("backpressure");
-		// The marker precedes the end: the wire close still reads clean (EOF),
-		// which is exactly why a client needs the in-band marker to tell
-		// drop-and-resume apart from a dormant close.
-		expect(await events.ended).toBe("eof");
-		// The daemon is ALIVE: a fresh stream attaches and answers commands.
-		const resumed = await openEvents(base);
+		stalled.pause();
+		// Each answer serializes the whole 5.4 MB transcript in one frame; the
+		// daemon checks the socket's buffered amount before every send, so the
+		// sends that find it over the cap close the socket instead of queueing.
+		for (let i = 0; i < 6; i++) {
+			stalled.sendCommand({ type: "call", id: `bp-${i}`, method: "formatSessionAsText", args: [] });
+		}
+		// Real delay: the buffering happens in the subprocess's kernel/userland buffers.
+		await sleep(1500);
+		// What the peer then reads ends with the typed close, not a bare EOF: the
+		// drop is a 4503 slow_consumer (drop-and-resume), distinct from a dormant close.
+		const closed = await stalled.drainToClose();
+		expect(closed.code).toBe(4503);
+		expect(closed.kind).toBe("slow_consumer");
+		expect(closed.reason).toContain("backpressure");
+		stalled.destroy();
+		// The daemon is ALIVE: a fresh socket attaches and answers commands.
+		const resumed = await openBrowserSocket(base);
 		const hello2 = await waitForFrame(resumed.frames, "hello_ok", 10_000, "hello_ok after drop");
 		expect(hello2.proto).toBe(OMP_PROTO);
-		await postCommand(base, { type: "call", id: "bp-live", method: "getSettings", args: [] });
+		expect(
+			await resumed.command({ type: "call", id: "bp-live", method: "getSettings", args: [] }),
+		).toEqual({
+			ok: true,
+		});
 		await waitForFrame(resumed.frames, "call_result", 10_000, "call_result after resume");
-		events.close();
 		resumed.close();
 		await cleanup();
 	} finally {
@@ -1075,32 +1084,32 @@ test("a deduped id survives a burst past COMMAND_DEDUP_ANSWER_CAP: the replay is
 	running.push(proc);
 	const { port, cleanup } = proc;
 	const base = `http://127.0.0.1:${port}`;
-	const events = await openEvents(base);
-	await waitForFrame(events.frames, "attached", 10_000, "attached frame");
-	// A browser recovering a lost answer re-POSTs the same id every 5s for the
+	const socket = await openBrowserSocket(base);
+	await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
+	// A browser recovering a lost answer re-sends the same id every 5s for the
 	// whole dedup window, so id memory has to outlive a window of other
 	// commands: answers are capped tightly (they can be large), ids are not.
 	const payload = { type: "call", id: "cap-a", method: "setSessionName", args: ["cap-name"] };
-	await postCommand(base, payload);
-	await waitForFrame(events.frames, "call_result", 10_000, "initial call_result");
+	await socket.command(payload);
+	await waitForFrame(socket.frames, "call_result", 10_000, "initial call_result");
 	// Distinct ids past the answer cap, oldest-first: pre-fix these evicted
 	// cap-a itself, and the replay below dispatched the call a SECOND time.
 	for (let i = 0; i < COMMAND_DEDUP_ANSWER_CAP + 6; i++) {
-		const res = await postCommand(base, {
+		const res = await socket.command({
 			type: "call",
 			id: `cap-fill-${i}`,
 			method: "getSettings",
 			args: [],
 		});
-		expect(res.status).toBe(202);
+		expect(res).toEqual({ ok: true });
 	}
 	// The replay (the client's recovery attempt) must NOT re-dispatch, which
 	// only the dispatch fingerprint can show: the post-mutation resync.
-	await postCommand(base, payload);
+	await socket.command(payload);
 	await sleep(1200); // real time: the subprocess owns the dedup maps
-	expect(events.frames.filter((f) => stateSessionName(f) === "cap-name")).toHaveLength(1);
-	expect(events.frames.filter((f) => f.type === "call_result" && f.id === "cap-a")).toHaveLength(1);
-	events.close();
+	expect(socket.frames.filter((f) => stateSessionName(f) === "cap-name")).toHaveLength(1);
+	expect(socket.frames.filter((f) => f.type === "call_result" && f.id === "cap-a")).toHaveLength(1);
+	socket.close();
 	await cleanup();
 }, 30_000);
 
@@ -1125,13 +1134,13 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 	running.push(proc);
 	const { port, cleanup } = proc;
 	const base = `http://127.0.0.1:${port}`;
-	const events = await openEvents(base);
-	await waitForFrame(events.frames, "ready", 20_000, "ready frame");
+	const socket = await openBrowserSocket(base);
+	await waitForFrame(socket.frames, "ready", 20_000, "ready frame");
 
 	// Deterministic ringed delta: setSessionName broadcasts a state delta
 	// (seq >= DELTA_SEQ_START), and every later prime's state snapshot
 	// carries its effect (sessionName "ringed delta"). No model needed.
-	await postCommand(base, {
+	await socket.command({
 		type: "call",
 		id: "sn1",
 		method: "setSessionName",
@@ -1139,40 +1148,125 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 	});
 	const deltaIdx = await waitFor(
 		() => {
-			const idx = events.ids.findIndex(
+			const idx = socket.seqs.findIndex(
 				(id, i) =>
+					id !== null &&
 					id >= DELTA_SEQ_START &&
-					events.frames[i]?.type === "state" &&
-					stateSessionName(events.frames[i]) === "ringed delta",
+					socket.frames[i]?.type === "state" &&
+					stateSessionName(socket.frames[i]) === "ringed delta",
 			);
 			return idx >= 0 ? idx : null;
 		},
 		10_000,
 		"setSessionName state delta",
 	);
-	const deltaSeq = events.ids[deltaIdx];
+	const deltaSeq = socket.seqs[deltaIdx];
 	expect(deltaSeq).toBeGreaterThanOrEqual(DELTA_SEQ_START);
 
-	// Drop and reconnect with Last-Event-ID INSIDE the delta window (one
-	// behind the ringed delta): pre-fix, ring.after(deltaSeq-1) replayed it.
-	events.close();
-	const resumed = await openEvents(base, { headers: { "last-event-id": String(deltaSeq - 1) } });
+	// Drop and reconnect with `after` INSIDE the delta window (one behind the
+	// ringed delta): pre-fix, ring.after(deltaSeq-1) replayed it.
+	socket.close();
+	await socket.closed;
+	const resumed = await openBrowserSocket(base, { after: deltaSeq! - 1 });
 	await waitForFrame(resumed.frames, "ready", 10_000, "resumed ready");
 	// The overlap, proven: the fresh priming itself carries the delta's effect,
 	// so re-delivering the delta would be a redundant double-apply.
 	const resumedState = await waitForFrame(resumed.frames, "state", 10_000, "resumed state");
 	expect(stateSessionName(resumedState)).toBe("ringed delta");
-	// The re-primed stream must contain no delta-era frame: the snapshot-era
+	// The re-primed socket must contain no delta-era frame: the snapshot-era
 	// delta was not replayed and the idle daemon emitted no new deltas during
-	// the prime. The replay (pre-fix) is enqueued synchronously right after
+	// the prime. The replay (pre-fix) is sent synchronously right after
 	// the last priming frame, so a short real wait observes the subprocess's
 	// delivery; fake timers cannot drive another process (same convention as
-	// the POST-dedup and removed-mux tests above).
+	// the dedup and removed-mux tests above).
 	await sleep(1500);
-	expect(resumed.ids.every((id) => id < DELTA_SEQ_START)).toBe(true);
+	expect(resumed.seqs.every((seq) => seq! < DELTA_SEQ_START)).toBe(true);
 	resumed.close();
 	await cleanup();
 }, 30_000);
+
+test("resume with `after` while deltas keep arriving: every ringed delta lands once per seq and the page converges on the last state", async () => {
+	// A second page keeps mutating (each setSessionName is a ringed `state`
+	// delta plus its answer) while the resumer re-primes with `after` inside
+	// the delta window. Whether a delta falls inside the priming snapshot, is
+	// delivered live mid-prime, or rides the ring replay (which re-sends mid-prime
+	// live deltas under the SAME seq so the client drops the repeat), the page
+	// must neither lose one nor see two different frames under one seq, and
+	// must end on the last state.
+	const proc = await spawnSession({});
+	running.push(proc);
+	const { port, cleanup } = proc;
+	const base = `http://127.0.0.1:${port}`;
+	const mutator = await openBrowserSocket(base);
+	const watcher = await openBrowserSocket(base);
+	await waitForFrame(watcher.frames, "ready", 20_000, "watcher ready");
+	await watcher.command({ type: "call", id: "seed", method: "setSessionName", args: ["seed"] });
+	const seedSeq = await waitFor(
+		() => {
+			const i = watcher.frames.findIndex((f) => stateSessionName(f) === "seed");
+			return i >= 0 ? watcher.seqs[i]! : null;
+		},
+		10_000,
+		"seed state delta",
+	);
+	expect(seedSeq).toBeGreaterThanOrEqual(DELTA_SEQ_START);
+	watcher.close();
+	await watcher.closed;
+
+	const names = Array.from({ length: 40 }, (_, i) => `flood-${i}`);
+	const flood = (async () => {
+		for (const [i, name] of names.entries()) {
+			await mutator.command({
+				type: "call",
+				id: `flood-${i}`,
+				method: "setSessionName",
+				args: [name],
+			});
+		}
+	})();
+	const resumed = await openBrowserSocket(base, { after: seedSeq });
+	await flood;
+	const last = names.at(-1)!;
+	await waitFor(
+		() => (resumed.frames.some((f) => stateSessionName(f) === last) ? true : null),
+		15_000,
+		"the last flooded state on the resumed page",
+	);
+	// Real delay: late duplicates (live + replay) and any stragglers settle.
+	await sleep(1000);
+
+	// One frame per seq: a repeat under a seq is the same message (the client's seq dedup drops it).
+	const bySeq = new Map<number, string>();
+	for (const [i, frame] of resumed.frames.entries()) {
+		const text = JSON.stringify(frame);
+		const seen = bySeq.get(resumed.seqs[i]!);
+		if (seen !== undefined) expect(text).toBe(seen);
+		bySeq.set(resumed.seqs[i]!, text);
+	}
+	// Deduplicated by seq, the page's last state frame is the last mutation.
+	const states = [...bySeq.entries()]
+		.sort(([a], [b]) => a - b)
+		.map(([, text]) => JSON.parse(text) as Frame)
+		.filter((frame) => frame.type === "state");
+	expect(stateSessionName(states.at(-1)!)).toBe(last);
+	// No flooded name after the priming snapshot is missing: the flooded names
+	// that arrived as deltas come in order and run contiguously to the last
+	// (the first is the first one the priming snapshot did not already carry).
+	const deltaNames = [...bySeq.entries()]
+		.filter(([seq]) => seq >= DELTA_SEQ_START)
+		.sort(([a], [b]) => a - b)
+		.map(([, text]) => stateSessionName(JSON.parse(text) as Frame))
+		.filter((name): name is string => name !== undefined && names.includes(name));
+	const indexes = [...new Set(deltaNames)].map((name) => names.indexOf(name));
+	expect(indexes).toEqual([...indexes].sort((a, b) => a - b));
+	if (indexes.length > 0) {
+		expect(indexes).toEqual(Array.from({ length: indexes.length }, (_, k) => indexes[0]! + k));
+		expect(indexes.at(-1)).toBe(names.length - 1);
+	}
+	resumed.close();
+	mutator.close();
+	await cleanup();
+}, 60_000);
 
 test("a settled ui_request is never a stale dialog: resumers see end-after-request or nothing (finding #16)", async () => {
 	// The finding: ui_request is a ringed delta, but the ring copy was never
@@ -1186,28 +1280,28 @@ test("a settled ui_request is never a stale dialog: resumers see end-after-reque
 	running.push(proc);
 	const { port, cleanup } = proc;
 	const base = `http://127.0.0.1:${port}`;
-	const events = await openEvents(base);
-	await waitForFrame(events.frames, "ready", 20_000, "ready frame");
-	events.close();
+	const socket = await openBrowserSocket(base);
+	await waitForFrame(socket.frames, "ready", 20_000, "ready frame");
+	socket.close();
 
 	// The resumer opens fresh; once its FIRST frame lands its delta snapshot
 	// is captured (primeConsumer's first statement) and the paced prime is in
 	// flight. A request broadcast now has seq >= the snapshot mark, so the
 	// resumer receives it either live (post-prime) or via the ring replay,
 	// and pre-fix would receive it WITHOUT any end.
-	const resumed = await openEvents(base);
+	const resumed = await openBrowserSocket(base);
 	await waitFor(
 		() => (resumed.frames.length > 0 ? resumed.frames[0] : null),
 		10_000,
 		"resumer first frame",
 	);
-	await postCommand(base, { type: "test_ui_request", id: "tui0" });
+	await resumed.command({ type: "test_ui_request", id: "tui0" });
 	const request = await waitForFrame(resumed.frames, "ui_request", 10_000, "ui_request on resumer");
 	expect(typeof (request as { id?: unknown }).id).toBe("string");
 	const requestId = (request as { id?: unknown }).id as string;
 
 	// Answer it: the pending settles and a ringed ui_request_end broadcasts.
-	await postCommand(base, { type: "ui_response", id: requestId, result: true });
+	await resumed.command({ type: "ui_response", id: requestId, result: true });
 	const ended = await waitForFrame(
 		resumed.frames,
 		"ui_request_end",
@@ -1222,7 +1316,7 @@ test("a settled ui_request is never a stale dialog: resumers see end-after-reque
 	// reappear"): priming re-derives current state and the snapshot mark
 	// bounds replay, so neither frame comes back down a new stream.
 	resumed.close();
-	const later = await openEvents(base);
+	const later = await openBrowserSocket(base);
 	await waitForFrame(later.frames, "ready", 10_000, "later ready");
 	expect(later.frames.some((f) => f.type === "ui_request" || f.type === "ui_request_end")).toBe(
 		false,
@@ -1277,10 +1371,10 @@ test("a second omp-session on the same --resume file refuses before bind with th
 		const a = await spawnSession({ args: ["--resume", fixture], env: { OMP_SESSION_CWD: dir } });
 		running.push(a);
 		const base = `http://127.0.0.1:${a.port}`;
-		const events = await openEvents(base);
-		await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
-		await waitForFrame(events.frames, "ready", 10_000, "ready");
-		events.close();
+		const socket = await openBrowserSocket(base);
+		await waitForFrame(socket.frames, "hello_ok", 10_000, "hello_ok");
+		await waitForFrame(socket.frames, "ready", 10_000, "ready");
+		socket.close();
 		// The live holder owns the lock file, stamped with its pid.
 		expect(existsSync(`${fixture}.lock`)).toBe(true);
 		expect((JSON.parse(readFileSync(`${fixture}.lock`, "utf8")) as { pid: number }).pid).toBe(
@@ -1328,12 +1422,12 @@ test("--resume-unwritten adopts a missing absolute file as the not-yet-written s
 			env: { OMP_SESSION_CWD: dir },
 		});
 		running.push(proc);
-		const events = await openEvents(`http://127.0.0.1:${proc.port}`);
+		const socket = await openBrowserSocket(`http://127.0.0.1:${proc.port}`);
 		try {
-			const hello = await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
+			const hello = await waitForFrame(socket.frames, "hello_ok", 10_000, "hello_ok");
 			expect(hello.sessionFile).toBe(unwritten);
 		} finally {
-			events.close();
+			socket.close();
 		}
 		await proc.cleanup();
 	} finally {
@@ -1368,12 +1462,12 @@ test("OMP_SESSION_RESUME with OMP_SESSION_RESUME_UNWRITTEN=1 adopts a missing fi
 			},
 		});
 		running.push(proc);
-		const events = await openEvents(`http://127.0.0.1:${proc.port}`);
+		const socket = await openBrowserSocket(`http://127.0.0.1:${proc.port}`);
 		try {
-			const hello = await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
+			const hello = await waitForFrame(socket.frames, "hello_ok", 10_000, "hello_ok");
 			expect(hello.sessionFile).toBe(unwritten);
 		} finally {
-			events.close();
+			socket.close();
 		}
 		await proc.cleanup();
 	} finally {
@@ -1387,10 +1481,10 @@ test("a crashed omp-session's stale lock is broken: the same --resume starts aga
 		const a = await spawnSession({ args: ["--resume", fixture], env: { OMP_SESSION_CWD: dir } });
 		running.push(a);
 		const base = `http://127.0.0.1:${a.port}`;
-		const events = await openEvents(base);
-		await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
-		await waitForFrame(events.frames, "ready", 10_000, "ready");
-		events.close();
+		const socket = await openBrowserSocket(base);
+		await waitForFrame(socket.frames, "hello_ok", 10_000, "hello_ok");
+		await waitForFrame(socket.frames, "ready", 10_000, "ready");
+		socket.close();
 
 		// Crash: SIGKILL skips shutdown, so the lock file survives with a dead
 		// pid (awaiting exited reaps the child, so kill(pid, 0) sees ESRCH).
@@ -1402,7 +1496,7 @@ test("a crashed omp-session's stale lock is broken: the same --resume starts aga
 		const b = await spawnSession({ args: ["--resume", fixture], env: { OMP_SESSION_CWD: dir } });
 		running.push(b);
 		const bBase = `http://127.0.0.1:${b.port}`;
-		const bEvents = await openEvents(bBase);
+		const bEvents = await openBrowserSocket(bBase);
 		await waitForFrame(bEvents.frames, "hello_ok", 10_000, "hello_ok");
 		await waitForFrame(bEvents.frames, "ready", 10_000, "ready");
 		bEvents.close();
@@ -1443,10 +1537,10 @@ test("SDK persistence relocation updates live state and locks its new journal", 
 	});
 	running.push(proc);
 	const base = `http://127.0.0.1:${proc.port}`;
-	const events = await openEvents(base);
+	const socket = await openBrowserSocket(base);
 	try {
-		await waitForFrame(events.frames, "ready", 15_000, "ready");
-		const hello = await waitForFrame(events.frames, "hello_ok", 10_000, "hello");
+		await waitForFrame(socket.frames, "ready", 15_000, "ready");
+		const hello = await waitForFrame(socket.frames, "hello_ok", 10_000, "hello");
 		const original = hello.sessionFile;
 		if (typeof original !== "string") throw new Error("missing session file");
 		expect(original).toBe(fixture);
@@ -1464,8 +1558,9 @@ test("SDK persistence relocation updates live state and locks its new journal", 
 			timestamp: new Date().toISOString(),
 		})}\n`;
 		await writeFile(original, replacement);
-		events.frames.length = 0;
-		await postCommand(base, {
+		socket.frames.length = 0;
+		socket.seqs.length = 0;
+		await socket.command({
 			type: "call",
 			id: "persist-after",
 			method: "setSessionName",
@@ -1473,7 +1568,7 @@ test("SDK persistence relocation updates live state and locks its new journal", 
 		});
 		const after = await waitFor(
 			() =>
-				events.frames.find(
+				socket.frames.find(
 					(frame) => frame.type === "call_result" && frame.id === "persist-after",
 				) ?? null,
 			10_000,
@@ -1482,7 +1577,7 @@ test("SDK persistence relocation updates live state and locks its new journal", 
 		expect(after.ok).toBe(true);
 		const moved = await waitFor(
 			() =>
-				events.frames.find((frame) => {
+				socket.frames.find((frame) => {
 					const state = frame.state;
 					return (
 						frame.type === "state" &&
@@ -1523,7 +1618,7 @@ test("SDK persistence relocation updates live state and locks its new journal", 
 		expect(state).toMatchObject({ sessionName: "after relocation" });
 		expect(readFileSync(original, "utf8")).toBe(replacement);
 		expect(
-			events.frames.some((frame) => {
+			socket.frames.some((frame) => {
 				const event = frame.event;
 				return (
 					frame.type === "event" &&
@@ -1551,7 +1646,7 @@ test("SDK persistence relocation updates live state and locks its new journal", 
 		await proc.cleanup();
 		expect(existsSync(`${sessionFile}.lock`)).toBe(false);
 	} finally {
-		events.close();
+		socket.close();
 		await proc.cleanup();
 	}
 }, 60_000);

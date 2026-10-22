@@ -11,7 +11,7 @@
  * The ask tool's dialog must reach whichever browser is attached. Production
  * browsers ride the callback pair as virtual streams (apps/session/daemon-control.ts
  * `browserStreamCount`, wired into ui-context by index.ts), which the daemon's
- * local `/events` consumer set never sees, so presence and delivery are covered
+ * local `/ws` consumer set never sees, so presence and delivery are covered
  * over a local stream, over the callback pair alone, and with nothing attached
  * (a reject, never a hang). This file runs the real pinned AskTool against the
  * daemon's browser UI context with a frame tap playing the browser: it answers
@@ -31,7 +31,7 @@ import {
 	pendingUiRequestFrames,
 	setCallbackBrowserStreamCount,
 } from "../ui-context";
-import { setOnFrameTap, streams, type SseConsumer } from "../sse-delivery";
+import { setOnFrameTap, streams, type ClientConsumer } from "../client-delivery";
 import type { SessionEntry } from "../session-entry";
 
 // initSdkTuiGlobals sets PI_NOTIFICATIONS=off process-globally (the daemon's
@@ -52,13 +52,13 @@ const entry = {
 	pendingUiRequests: new Map(),
 } as unknown as SessionEntry;
 
-/** The local /events consumer stand-in: webUiRequest targets a stream attached to s1. */
+/** The local /ws consumer stand-in: webUiRequest targets a socket attached to s1. */
 const consumer = {
 	id: 1,
-	controller: { enqueue: () => {}, desiredSize: 1 } as never,
+	ws: { readyState: 1, getBufferedAmount: () => 0, send: () => 1, close: () => {} } as never,
 	attached: "s1",
-	unreadEstimate: 0,
-} as unknown as SseConsumer;
+	lastSendAt: 0,
+} as ClientConsumer;
 
 const originalStdoutWrite = process.stdout.write;
 
@@ -90,7 +90,7 @@ const answerAskDialogAsBrowser: NonNullable<Parameters<typeof setOnFrameTap>[0]>
 
 /**
  * Run one test with exactly that test's browser presence installed: `localStream`
- * plays a /events consumer attached to s1 (this file's consumer, deleted first
+ * plays a /ws consumer attached to s1 (this file's consumer, deleted first
  * so a previous test's leftovers never apply) and `callbackBrowsers` counts the
  * browsers riding the callback pair. Torn down before the test returns.
  */
@@ -202,7 +202,7 @@ describe("ask tool over the daemon's browser UI context", () => {
 	});
 
 	test("a browser attached through the callback pair answers without a local stream", async () => {
-		// Production: the fleet dials the daemon, so no /events consumer is
+		// Production: the fleet dials the daemon, so no /ws consumer is
 		// attached and the browser exists only as a pair-side virtual stream.
 		await withBrowserPresence({ localStream: false, callbackBrowsers: 1 }, async () => {
 			const { texts } = await runAskTool();
@@ -248,14 +248,14 @@ describe("ask tool over the daemon's browser UI context", () => {
 		const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 		promise.catch(() => {});
 		entry.pendingUiRequests.set("ui900", {
-			streams: new Set<SseConsumer>(),
+			streams: new Set<ClientConsumer>(),
 			method: "askDialog",
 			params: { questions: [] },
 			resolve,
 			reject,
 		});
 		entry.pendingUiRequests.set("ui901", {
-			streams: new Set<SseConsumer>(),
+			streams: new Set<ClientConsumer>(),
 			method: "browser_ui",
 			params: {},
 			resolve,

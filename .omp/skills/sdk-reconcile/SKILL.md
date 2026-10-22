@@ -100,7 +100,7 @@ bun e2e/onboarding.ts
 bun "$SKILL_DIR/smoke-daemon.ts" --root "$WT"
 ```
 
-This is the release gate (`GATE_COMMANDS` in `scripts/release.ts`; re-read it in case it changed) plus lint and a real-daemon smoke. `smoke-daemon.ts` boots `apps/session/index.ts` against the operator's real agent dir and auth (the suites are hermetic and never do), reads `/events` priming through `ready`, and prints JSON with `ok`, `frames`, and `sdkModel`. `sdkModel: null` means no default model resolved under the new SDK. Treat that as a regression if the same smoke on the invoking checkout returns a model.
+This is the release gate (`GATE_COMMANDS` in `scripts/release.ts`; re-read it in case it changed) plus lint and a real-daemon smoke. `smoke-daemon.ts` boots `apps/session/index.ts` against the operator's real agent dir and auth (the suites are hermetic and never do), reads the `/ws` browser-socket priming through `ready`, and prints JSON with `ok`, `frames`, and `sdkModel`. `sdkModel: null` means no default model resolved under the new SDK. Treat that as a regression if the same smoke on the invoking checkout returns a model.
 
 Attribute every failure before fixing it. A failure the base commit also has is pre-existing: list it in the report and leave it alone. To check a failing test file against the base without touching the invoking checkout:
 

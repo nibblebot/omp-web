@@ -7,6 +7,7 @@ import {
 	type OAuthProviderInterface,
 } from "@oh-my-pi/pi-ai/oauth";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+import { parseServerMessage } from "#lib/wire/browser-socket";
 import type { ServerFrame } from "#lib/wire/protocol";
 import { loginWithCallbacks } from "../login";
 import { createWebMethods } from "../methods";
@@ -16,8 +17,8 @@ import {
 	pendingCodeInputs,
 	rejectOwnedCodeInputs,
 	streams,
-	type SseConsumer,
-} from "../sse-delivery";
+	type ClientConsumer,
+} from "../client-delivery";
 import { setCallbackBrowserStreamCount } from "../ui-context";
 
 afterAll(cleanupTempDirs);
@@ -27,7 +28,7 @@ const CREDENTIAL_PROVIDER = `${PROVIDER}-credential`;
 let store: SqliteAuthCredentialStore;
 let auth: AuthStorage;
 let dbPath: string;
-let consumer: SseConsumer;
+let consumer: ClientConsumer;
 let received: ServerFrame[];
 const entry = { handle: "s1" } as SessionEntry;
 
@@ -40,17 +41,17 @@ beforeEach(async () => {
 	consumer = {
 		id: 9876,
 		attached: "s1",
-		unreadEstimate: 0,
-		controller: {
-			desiredSize: null,
-			enqueue: (bytes: Uint8Array) => {
-				const data = new TextDecoder()
-					.decode(bytes)
-					.split("\n")
-					.find((line) => line.startsWith("data: "));
-				if (data) received.push(JSON.parse(data.slice(6)));
+		lastSendAt: 0,
+		ws: {
+			readyState: 1,
+			getBufferedAmount: () => 0,
+			send: (text: string) => {
+				const message = parseServerMessage(text);
+				if (message?.kind === "frame") received.push(message.frame);
+				return text.length;
 			},
-		} as ReadableStreamDefaultController<Uint8Array>,
+			close: () => {},
+		} as unknown as ClientConsumer["ws"],
 	};
 	streams.add(consumer);
 });
@@ -71,7 +72,7 @@ function provider(login: OAuthProviderInterface["login"]): void {
 	});
 }
 
-describe("namespaced OAuth login through production SSE dialogs", () => {
+describe("namespaced OAuth login through production browser-socket dialogs", () => {
 	test("URL/code flow stores real credentials before refresh and reports effective auth for aliases", async () => {
 		provider(async (callbacks) => {
 			callbacks.onAuth({
@@ -166,7 +167,7 @@ describe("namespaced OAuth login through production SSE dialogs", () => {
 	});
 
 	test("a callback-pair browser keeps the code prompt open; only the owning session's close rejects it", async () => {
-		// Production browsers ride the callback pair: no local /events stream is attached.
+		// Production browsers ride the callback pair: no local /ws socket is attached.
 		setCallbackBrowserStreamCount(() => 1);
 		streams.delete(consumer);
 		provider(async (callbacks) => {

@@ -13,7 +13,7 @@ import type { CollabHostAdapter } from "./collab-host";
 import type { ServerFrame } from "#lib/wire/protocol";
 import { BROWSER_UI_METHOD } from "#lib/wire/browser-ui-contract";
 import type { SessionEntry } from "./session-entry";
-import { broadcastTo, notifyEvent, streams, type SseConsumer } from "./sse-delivery";
+import { broadcastTo, notifyEvent, streams, type ClientConsumer } from "./client-delivery";
 import { wrapTerminalHooks } from "./browser-ui";
 
 // ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ let callbackBrowserStreamCount: (() => number) | null = null;
 /**
  * Wire (or clear) the callback-pair browser-stream count provider (index.ts
  * owns the callback pair). Production browsers ride the pair as virtual
- * streams, invisible to this process's /events consumers, so the local
+ * streams, invisible to this process's /ws consumers, so the local
  * `streams` set stays empty and browser presence must be asked of the pair.
  */
 export function setCallbackBrowserStreamCount(fn: (() => number) | null): void {
@@ -183,7 +183,7 @@ export function setCallbackBrowserStreamCount(fn: (() => number) | null): void {
 }
 
 /**
- * True when a browser can answer a dialog for this session: a local /events
+ * True when a browser can answer a dialog for this session: a local /ws
  * consumer attached to the entry, or a live callback-pair browser stream.
  * The pre-existing web dialog path; one pending request per entry.
  */
@@ -200,7 +200,7 @@ export function webUiRequest(
 	params: unknown,
 	onRegistered?: (id: string) => void,
 ): Promise<unknown> {
-	const targets = new Set<SseConsumer>();
+	const targets = new Set<ClientConsumer>();
 	for (const stream of streams) {
 		if (stream.attached === entry.handle) targets.add(stream);
 	}
@@ -323,7 +323,7 @@ async function collabAsk(
  * Sequential per-question askDialog over the wire, mirroring the TUI's
  * #runGuestAskDialog minus the "Chat about this" escape. `undefined` is a
  * genuine guest cancel that aborts the whole dialog; COLLAB_UI_FALLTHROUGH
- * routes back to the /events streams.
+ * routes back to the /ws sockets.
  */
 async function askDialogViaCollab(
 	adapter: CollabHostAdapter,
@@ -454,12 +454,12 @@ export function rejectEntryUiRequests(entry: SessionEntry, reason: string): void
 /**
  * A UI request dies only when every stream it was shown to is gone: reject it
  * and ring the end. No live stream gets the frame (the last target just
- * closed), but a Last-Event-ID resume must replay end-after-request, not a
+ * closed), but a resume with `after` must replay end-after-request, not a
  * stale dialog (finding #16).
  */
 export function rejectStreamUiRequests(
 	entry: SessionEntry,
-	stream: SseConsumer,
+	stream: ClientConsumer,
 	reason: string,
 ): void {
 	for (const [id, p] of entry.pendingUiRequests) {

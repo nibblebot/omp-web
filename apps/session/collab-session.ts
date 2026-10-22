@@ -38,7 +38,7 @@ import {
 	notifyEvent,
 	toWireEvent,
 	trackStreamingAssistant,
-} from "./sse-delivery";
+} from "./client-delivery";
 import { cancelEntryUiRequests } from "./ui-context";
 import { handleSubagentLifecycle, handleSubagentProgress } from "./subagent-mirror";
 import { buildUiContext } from "./ui-context";

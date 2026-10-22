@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 /**
  * Boots a real omp-session daemon from a checkout against the operator's own
- * SDK config (agent dir, auth, models) and reads its /events priming through
+ * SDK config (agent dir, auth, models) and reads its browser-socket (`/ws`,
+ * OMP_PROTO 5) priming through
  * `ready`. This exercises in-process SDK session creation with real settings,
  * which the hermetic test suites deliberately avoid.
  *
@@ -14,6 +15,8 @@
 import { mkdtempSync, rmdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { browserSocketUrl, parseServerMessage } from "../../../lib/wire/browser-socket";
+import { OMP_PROTO } from "../../../lib/wire/protocol";
 
 function arg(name: string): string | undefined {
 	const index = process.argv.indexOf(`--${name}`);
@@ -59,39 +62,48 @@ try {
 	if (base === undefined)
 		throw new Error("daemon exited before printing its OMP_SESSION| listening line");
 
-	const response = await fetch(`${base}/events`, { signal: deadline });
-	if (!response.ok || response.body === null)
-		throw new Error(`/events answered ${response.status}`);
-	let pending = "";
-	streamLoop: for await (const chunk of response.body.pipeThrough(new TextDecoderStream())) {
-		pending += chunk;
-		const units = pending.split("\n\n");
-		pending = units.pop() ?? "";
-		for (const unit of units) {
-			const data = unit
-				.split("\n")
-				.filter((l) => l.startsWith("data:"))
-				.map((l) => l.slice(5).trimStart())
-				.join("\n");
-			if (data === "") continue;
-			const frame = record(JSON.parse(data));
-			const type = typeof frame?.type === "string" ? frame.type : "?";
-			frames.push(type);
-			if (type === "hello_ok") {
-				result.proto = frame?.proto;
-				result.version = frame?.version;
-				result.sessionFile = frame?.sessionFile;
-			} else if (type === "state") {
-				const model = record(record(frame?.state)?.model);
-				result.sdkModel =
-					model === undefined ? null : `${String(model.provider)}/${String(model.id)}`;
-			} else if (type === "ready") {
-				break streamLoop;
-			}
+	const url = browserSocketUrl(base, {
+		clientId: null,
+		after: null,
+		proto: OMP_PROTO,
+		token: null,
+	});
+	const socket = new WebSocket(url);
+	const priming = Promise.withResolvers<void>();
+	const onDeadline = () => priming.reject(new Error(`no ready frame within ${timeoutMs}ms`));
+	if (deadline.aborted) onDeadline();
+	else deadline.addEventListener("abort", onDeadline, { once: true });
+	socket.addEventListener("error", () => priming.reject(new Error(`/ws dial failed: ${url}`)));
+	socket.addEventListener("close", () => priming.resolve());
+	socket.addEventListener("message", (event) => {
+		const message = parseServerMessage(event.data);
+		if (message === null) {
+			priming.reject(new Error("/ws sent an unparseable message"));
+			return;
 		}
+		if (message.kind !== "frame") return;
+		const frame = record(message.frame);
+		const type = typeof frame?.type === "string" ? frame.type : "?";
+		frames.push(type);
+		if (type === "hello_ok") {
+			result.proto = frame?.proto;
+			result.version = frame?.version;
+			result.sessionFile = frame?.sessionFile;
+		} else if (type === "state") {
+			const model = record(record(frame?.state)?.model);
+			result.sdkModel =
+				model === undefined ? null : `${String(model.provider)}/${String(model.id)}`;
+		} else if (type === "ready") {
+			priming.resolve();
+		}
+	});
+	try {
+		await priming.promise;
+	} finally {
+		socket.close();
 	}
 	const missing = ["hello_ok", "state", "ready"].filter((t) => !frames.includes(t));
-	if (missing.length > 0) throw new Error(`stream ended without: ${missing.join(", ")}`);
+	if (missing.length > 0) throw new Error(`socket ended without: ${missing.join(", ")}`);
 	result.ok = true;
 } catch (error) {
 	result.error = error instanceof Error ? error.message : String(error);

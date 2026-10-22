@@ -11,7 +11,7 @@ import { MAX_IMAGE_BYTES } from "#lib/wire/image-limits";
 import type { QueuedMessagesSnapshot, ServerFrame } from "#lib/wire/protocol";
 import { createCollabSession } from "../collab-session";
 import type { SessionEntry } from "../session-entry";
-import { setOnFrameTap } from "../sse-delivery";
+import { setOnFrameTap } from "../client-delivery";
 
 // The SDK goal controller needs a real AgentSession. The abort row reaches it through the
 // autonomy adapter, so it is replaced here. The dynamic import must follow the mock.

@@ -29,7 +29,7 @@ import {
 import type { SessionConfig } from "./config";
 import { planReviewWaiting } from "./review-plan";
 import type { SessionEntry } from "./session-entry";
-import { broadcast, broadcastTo } from "./sse-delivery";
+import { broadcast, broadcastTo } from "./client-delivery";
 
 // ---------------------------------------------------------------------------
 // Session state snapshots + the omp hub daemon-broker polling/control client:

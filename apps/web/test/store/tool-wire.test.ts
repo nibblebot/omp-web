@@ -17,7 +17,7 @@ import {
 	snapshotDeltaSeq,
 	streamingPrimeFrames,
 	toWireEvent,
-} from "../../../session/sse-delivery";
+} from "../../../session/client-delivery";
 import { loadHistory, setState, state } from "../../state";
 import { applyEvent } from "../../store/chat";
 

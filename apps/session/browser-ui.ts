@@ -12,7 +12,7 @@
 //   with an isolation-contract-required error: extension payloads run in the
 //   browser with no isolation boundary, so code never crosses it.
 // - Transport stays minimal: ONE ui_request method ("browser_ui") over the
-//   existing POST /command + SSE ui_request/ui_response/ui_request_end path.
+//   existing browser socket ui_request/ui_response/ui_request_end path.
 //   No new transport, no new bus (no OMP_PROTO bump; additive-only wire).
 // - Lifecycle is owner-scoped: same (owner, id) supersedes; dispose rings
 //   ui_request_end; ui_response with an undefined result cancels (existing
@@ -24,7 +24,7 @@
 
 import type { ExtensionUIContext } from "@oh-my-pi/pi-coding-agent";
 import type { SessionEntry } from "./session-entry";
-import { broadcastTo } from "./sse-delivery";
+import { broadcastTo } from "./client-delivery";
 import { hasBrowserUiClient, webUiRequest } from "./ui-context";
 import {
 	BROWSER_UI_DOC,

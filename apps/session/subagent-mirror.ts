@@ -17,7 +17,7 @@ import type {
 } from "#lib/wire/protocol";
 import { createProgressCoalescer, type ProgressCoalescer } from "./subagent-progress";
 import type { SessionEntry } from "./session-entry";
-import { broadcastTo } from "./sse-delivery";
+import { broadcastTo } from "./client-delivery";
 
 // ---------------------------------------------------------------------------
 // Subagent mirror: a port of the RPC mode's subagent registry semantics at a

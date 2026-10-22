@@ -6,7 +6,7 @@ import type { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import type { CollabHostAdapter } from "./collab-host";
 import type { QueuedCommandState } from "./command-queue";
 import type { HeldQueuedMessage } from "./queue-hold";
-import type { SseConsumer } from "./sse-delivery";
+import type { ClientConsumer } from "./client-delivery";
 import type { SubagentSnapshot } from "./subagent-mirror";
 
 // ---------------------------------------------------------------------------
@@ -30,7 +30,7 @@ export interface SessionEntry {
 	pendingUiRequests: Map<
 		string,
 		{
-			streams: Set<SseConsumer>;
+			streams: Set<ClientConsumer>;
 			/** The dialog as sent, so a client that attaches later is primed with it. */
 			method?: string;
 			params?: unknown;

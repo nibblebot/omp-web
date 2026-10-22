@@ -1,6 +1,6 @@
 import { cfgDisplayCollapseCompacted } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { type HistoryFrame, historyFrames } from "./sse-delivery";
+import { type HistoryFrame, historyFrames } from "./client-delivery";
 
 /** Settings whose write changes the transcript a fresh attach primes. */
 const HISTORY_SETTINGS: Record<string, true> = { "display.collapseCompacted": true };
