@@ -1089,7 +1089,7 @@ class FleetServerImpl implements FleetServer {
 
 	/**
 	 * GET /ws: admit one browser socket (OMP_PROTO 5). Admission follows the
-	 * rules the SSE downlink had: with browser auth enabled a non-loopback
+	 * rules the retired SSE downlink had: with browser auth enabled a non-loopback
 	 * client (the socket peer, or the trusted proxy's X-Forwarded-For client
 	 * hop) must hold a live session cookie, and the upgrade must also pass
 	 * `checkOrigin` (cross-site WebSocket hijacking: a cross-site page can open

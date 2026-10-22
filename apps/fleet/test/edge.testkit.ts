@@ -125,7 +125,7 @@ export async function waitForEvent(
 	}
 }
 
-/** A command the edge nacked (the HTTP status the old POST /command would have answered). */
+/** A command the edge nacked (the HTTP-like status of the nack message). */
 export class CommandNack extends Error {
 	constructor(
 		readonly id: string,

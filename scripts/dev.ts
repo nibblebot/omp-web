@@ -2,8 +2,8 @@
 /**
  * dev: one-command dev runner.
  *
- *   bun run dev          vite (HMR UI on a stable per-worktree port, /events + /command
- *                        + /ctl proxied to the fleet edge) + bare omp-web fleet
+ *   bun run dev          vite (HMR UI on a stable per-worktree port, /ws (the browser
+ *                        socket) + /ctl proxied to the fleet edge) + bare omp-web fleet
  *                        (stable per-worktree port). Open the `ui` URL; the fleet's own `/`
  *                        serves dist/, not the dev UI. NO session is started. Spawn one from
  *                        the roster UI, or enroll a remote one with `omp-web enroll`.
@@ -346,7 +346,7 @@ function buildChild(name: string): Child {
 		String(ports.vite),
 		"--strictPort",
 	];
-	// --host exposes vite only: the /events, /command, /ctl proxies run
+	// --host exposes vite only: the /ws, /ctl proxies run
 	// server-side, so remote browsers reach the loopback fleet edge through
 	// vite. The edge is loopback-only by design.
 	if (host !== undefined) cmd.push("--host", host);
@@ -357,7 +357,7 @@ function buildChild(name: string): Child {
 	// another machine).
 	if (!noOpen && host === undefined && isInteractiveDesktop()) cmd.push("--open");
 	const env: Record<string, string> = {
-		// vite's proxy target for /events + /command + /ctl; the roster UI runs
+		// vite's proxy target for /ws + /ctl; the roster UI runs
 		// with HMR, no dist/ build needed.
 		OMP_DEV_FLEET_PORT: String(ports.fleet),
 	};

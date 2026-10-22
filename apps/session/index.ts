@@ -184,8 +184,8 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * Boot gate: the OMP_SESSION| listening line prints BEFORE the boot session exists,
- * so early requests (event streams and commands) wait for registration. The
- * connect-implies-attached invariant holds even for streams that race boot.
+ * so early requests (socket upgrades) wait for registration. The
+ * connect-implies-attached invariant holds even for sockets that race boot.
  */
 let resolveBootReady: () => void = () => {};
 const bootReady = new Promise<void>((resolve) => {
@@ -1000,7 +1000,7 @@ function capRemembered<K, V>(map: Map<K, V>, cap: number): void {
 }
 
 /**
- * Record one id-keyed answer so a later duplicate POST can replay it, then
+ * Record one id-keyed answer so a later duplicate command can replay it, then
  * broadcast it. Every answer the daemon emits for a command id goes through
  * here: the replay must return the ORIGINAL outcome (success data or the real
  * dispatch error), never a re-execution.

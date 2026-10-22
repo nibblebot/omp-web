@@ -1,7 +1,7 @@
 import type { ClientCommand } from "./protocol";
 
 /**
- * Shape check for an untrusted client command body (POST /command or a
+ * Shape check for an untrusted client command body (a browser-socket `cmd` or a
  * callback-pair command envelope). Every ClientCommand variant carries a string
  * `type` and a string `id`; a `call` also needs a string `method` and an array
  * `args` when present. `method` membership is the dispatch table's job

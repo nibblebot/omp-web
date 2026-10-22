@@ -188,7 +188,7 @@ export function sendTo(consumer: ClientConsumer, message: string): void {
 /**
  * Close a socket 4503 slow_consumer (buffered data is still delivered; the
  * client resumes with `after`). The typed close code carries the drop
- * distinction the SSE era had to signal in-band with a stream_reset frame.
+ * distinction an in-band stream_reset frame would otherwise have to signal.
  */
 export function terminateConsumer(consumer: ClientConsumer, reason: string): void {
 	const { code, reason: text } = browserCloseFor("slow_consumer", reason);

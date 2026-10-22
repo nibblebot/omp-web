@@ -3,7 +3,7 @@
  *
  * Provider usage reports are provider-account data read from the auth storage
  * in the agent dir, not session state. The session RPC fetchUsageReports needs
- * an attached AgentSession, so it fails before SSE connects and before any
+ * an attached AgentSession, so it fails before the browser socket connects and before any
  * session is attached. This service reads the same SDK source without a
  * session: the base URL resolution matches AgentSession.fetchUsageReports, and
  * no usage support (authStorage.usage.reports absent) yields []. The SDK caches

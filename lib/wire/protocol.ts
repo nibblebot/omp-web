@@ -442,13 +442,15 @@ export interface SkillDetail extends SkillSummary {
 // fleet↔omp-session drift (the collab COLLAB_PROTO pattern); bump on any
 // breaking change to the transport or frame shapes.
 //
-// Transport: no WebSockets on the agent-driving path. Client →
-// server commands are POST /command bodies (one ClientCommand per request,
-// answered 202); server → client frames are SSE events on GET /events
-// (event: frame, id: <seq>, data: <JSON ServerFrame>). Auth is HTTP-level
-// (R14): loopback exempt, off-loopback bearer via the Authorization header; a
-// wrong credential is a 401, not a close code. hello_ok is the
-// FIRST event on every stream open (daemon identity), followed by the attach
+// Transport: every client connection (a browser to the fleet edge, a direct
+// client to a standalone omp-session) is ONE WebSocket on GET /ws, the browser socket
+// (lib/wire/browser-socket.ts is the wire). Client → server commands are
+// `{"cmd": ClientCommand}` messages, acked or nacked in band; server → client
+// frames are `{"seq": N, "frame": ServerFrame}` messages. Auth is judged at
+// the upgrade (R14): loopback exempt, off-loopback bearer via the Authorization
+// header or the `token` query; a refusal is an upgrade followed by a typed
+// close code (4401/4403/4426), not an HTTP status. hello_ok is the
+// FIRST frame on every socket open (daemon identity), followed by the attach
 // priming (attached → history → state → collab_status → available_commands →
 // ready).
 // ---------------------------------------------------------------------------
@@ -516,17 +518,17 @@ export const CLIENT_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
  */
 export const CLIENT_STALL_MS = 30_000;
 /**
- * POST /command idempotency: how long an id is remembered, how many recorded
+ * Command idempotency: how long an id is remembered, how many recorded
  * ANSWERS stay replayable, and the flood backstop on remembered ids.
- * Remembering an id is what makes a re-POST safe (it is re-accepted, never
- * re-dispatched), and a browser recovering a lost answer re-POSTs every 5s for
+ * Remembering an id is what makes a re-send safe (it is re-acked, never
+ * re-dispatched), and a browser recovering a lost answer re-sends every 5s for
  * the whole window, so id memory has to cover a window of real traffic rather
  * than a handful of commands: evicting a live id early would let the replay
  * execute the command twice. Recorded answers are kept under a count cap AND a
- * byte budget: a browser re-POSTs after 5s, so an answer must survive that
+ * byte budget: a browser re-sends after 5s, so an answer must survive that
  * replay window at the burst rate (a settings write answers with the whole
  * model, so a count alone evicts the answers the replays are waiting for). An
- * evicted answer degrades a replay to "accepted, no answer" (the caller's
+ * evicted answer degrades a replay to "acked, no answer" (the caller's
  * deadline settles it) and never to a re-execution.
  */
 export const COMMAND_DEDUP_WINDOW_MS = 60_000;
@@ -960,15 +962,15 @@ export const SESSION_REPLACING_METHODS = [
 	"deleteSession",
 ] as const satisfies readonly WebMethodName[];
 
-// Client → server (POST /command bodies; one command per request, 202 accept).
-// Routing is by STREAM ATTACHMENT: on omp-session an /events stream is attached
+// Client → server (`{"cmd": ...}` messages on the browser socket; one command per message, acked).
+// Routing is by STREAM ATTACHMENT: on omp-session a /ws socket is attached
 // to the single live session from open (connect = attached), so call/
 // login_code/ui_response implicitly target it. `attach` exists only at the
 // fleet edge, where it selects the daemon to proxy.
-// Every command carries a client-supplied `id` for POST idempotency: the
+// Every command carries a client-supplied `id` for idempotency: the
 // server dedups within a window (COMMAND_DEDUP_WINDOW_MS), remembering ids up
 // to COMMAND_DEDUP_ID_CAP and replayable answers up to COMMAND_DEDUP_ANSWER_CAP,
-// and re-accepts duplicates with 202; answers ride the /events stream.
+// and acks duplicates again; answers ride the socket as frames.
 export type ClientCommand =
 	| {
 			type: "call";
@@ -1272,7 +1274,7 @@ export type WireSessionEvent =
  */
 export type SessionScopedFrame =
 	// History: a small transcript ships as ONE frame with no `final` field (the
-	// original shape); a transcript over the SSE backpressure cap ships as
+	// original shape); a transcript over the client backpressure cap ships as
 	// byte-bounded sequential frames (`final: false` … `final: true`) that the
 	// client accumulates until the `final` chunk completes the series.
 	| { type: "history"; messages: AgentMessage[]; final?: boolean }
@@ -1317,7 +1319,7 @@ export type ServerFrame =
 	// Unicast answer to list_sessions.
 	| { type: "sessions"; sessions: SessionListEntry[] }
 	// Unicast answer to list_daemon_sessions (the fleet edge answers it directly;
-	// NOT ringed; lost answers are re-POSTed like projects).
+	// NOT ringed; lost answers are re-sent like projects).
 	| { type: "daemon_sessions"; daemonId: string; sessions: SessionListEntry[] }
 	// Unicast answer to list_files.
 	| { type: "files"; files: string[] }
@@ -1354,8 +1356,8 @@ export type ServerFrame =
 	// Broadcast once the SDK session is live AND provider/model/auth has
 	// resolved. Before it, prompt-family calls fail with a not_ready error.
 	| { type: "ready"; readyAt: number }
-	// --- Daemon identity (omp-session → any /events consumer) ---
-	// FIRST event on every /events stream open (HTTP-level auth replaced the
+	// --- Daemon identity (omp-session → any /ws consumer) ---
+	// FIRST frame on every /ws socket open (upgrade-time auth replaced the
 	// hello handshake); the attach priming follows immediately.
 	| {
 			type: "hello_ok";
@@ -1366,11 +1368,12 @@ export type ServerFrame =
 			version: string;
 			sessionFile?: string;
 	  }
-	// --- Stream lifecycle (omp-session → the one stream being dropped) ---
-	// Sent immediately before the stream ends when the SSE buffer exceeded
-	// the backpressure cap: the daemon is ALIVE and the drop is recoverable
-	// (resume via Last-Event-ID), so consumers must NOT treat the following
-	// clean close as a dormant daemon. Per-stream only, never ringed.
+	// --- Stream lifecycle (fleet edge → the one stream being re-primed) ---
+	// Sent when a session's own outbound buffer dropped frames and the edge
+	// mirrors its resync (`daemon_resync`): the stream is ALIVE and a fresh
+	// snapshot follows, so consumers re-prime instead of treating a gap as a
+	// dormant daemon. A browser socket that is itself too slow is closed with
+	// the typed 4503 instead (resume via `after`). Per-stream only, never ringed.
 	| { type: "stream_reset"; reason: string }
 	// --- Fleet edge (omp-fleet → browser; a bare omp-session never sends these) ---
 	// Global broadcast + unicast answer; the fleet sidebar's source.
@@ -1413,8 +1416,8 @@ export type ServerFrame =
 			providerProfiles?: PublicProviderProfile[];
 	  }
 	// Global broadcast: a poll-detected, on-disk worktree removal (the
-	// daemon's cwd vanished between git-state poll ticks). Ringed so a
-	// Last-Event-ID resume within the reclaim window still delivers the
+	// daemon's cwd vanished between git-state poll ticks). Ringed so an
+	// `after` resume within the reclaim window still delivers the
 	// toast once (client-side ring dedup guards the replay). Fleet-edge-only
 	// (a bare omp-session never sends it) and never carries tokens/endpoints,
 	// just daemonId + display name + the vanished path. Never sent for

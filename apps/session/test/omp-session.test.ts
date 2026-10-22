@@ -840,10 +840,10 @@ test("the socket rejects non-command messages and never dispatches inherited nam
 
 test("a >4 MiB transcript primes as chunked history; the stream stays attached (no backpressure kill)", async () => {
 	// Fixture: a resumed session whose serialized transcript exceeds the 4 MiB
-	// SSE backpressure cap (real transcripts cross it via base64 image data
+	// client backpressure cap (real transcripts cross it via base64 image data
 	// URLs inside messages; a huge text payload exercises the same wire size).
-	// Pre-fix, the single history frame tripped enqueueTo's cap and terminated
-	// the stream right after `attached`, so the session could never attach.
+	// Pre-fix, the single history frame tripped the per-consumer send cap and terminated
+	// the socket right after `attached`, so the session could never attach.
 	const bigDir = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-big-"));
 	try {
 		const chunk = "x".repeat(900 * 1024);
@@ -995,7 +995,7 @@ test("small transcripts keep the single-frame history shape (no `final` field)",
 
 test("backpressure drop is a typed close: a socket buffering past the cap closes 4503; the daemon stays alive for resume", async () => {
 	// A socket whose peer stops reading must not read as a dormant close: the
-	// daemon closes it with the typed 4503 slow_consumer (the SSE era had to
+	// daemon closes it with the typed 4503 slow_consumer (the retired SSE path had to
 	// mark the drop with an in-band stream_reset frame, because a chunked body
 	// cannot carry a close reason). The cap is CLIENT_BACKPRESSURE_BYTES of
 	// buffered amount; the test overflows it with several >4 MiB answer
@@ -1113,9 +1113,9 @@ test("a deduped id survives a burst past COMMAND_DEDUP_ANSWER_CAP: the replay is
 	await cleanup();
 }, 30_000);
 
-test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (finding #2)", async () => {
+test("resume with a delta-era `after` replays no snapshot-era deltas (finding #2)", async () => {
 	// The finding: primeConsumer always sent the full priming, and then, for
-	// a Last-Event-ID >= DELTA_SEQ_START, replayed ring.after(last). The
+	// an `after` >= DELTA_SEQ_START, replayed ring.after(last). The
 	// replayed window includes deltas whose effects are ALREADY inside the
 	// just-primed fresh history/state, so a resume overlapping a completed turn
 	// double-applies every message/tool item (duplicated chat items, stranded
@@ -1123,7 +1123,7 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 	// where snapshotSeq is the delta high-water mark captured BEFORE the
 	// priming snapshot is built.
 	//
-	// This exercises the overlap end-to-end at the SSE level: a ringed delta
+	// This exercises the overlap end-to-end at the socket level: a ringed delta
 	// whose effect the fresh priming provably carries must NOT come back down
 	// the re-primed stream. The event-delta variant needs a live model turn
 	// (integration tests cannot drive one), so the ringed `state` delta from a

@@ -13,7 +13,7 @@ Because it drives the agent through the SDK instead of the RPC, omp-web has full
 
 - **Multiple Repos and Worktrees, one UI.** Start, monitor, and chat with one agent daemon per worktree across every repo.
 - **A full web UI, not a terminal wrapper.** Live-streamed responses, rendered markdown and diffs, tool output, slash commands, prompt history and autocomplete, per-session context/usage meters, and a transcripts/stats view.
-- **Custom wire protocol for full SDK control.** The SSE + POST contract carries the full SDK surface, including daemon and subagent control the RPC doesn't expose.
+- **Custom wire protocol for full SDK control.** One WebSocket per browser tab (`GET /ws`) carries the full SDK surface, including daemon and subagent control the RPC doesn't expose.
 - **Manage repos and worktrees from the UI.** Register projects (deduped by realpath); create worktrees. Deletion removes a local linked worktree only when its tree is clean, with `git branch -d` and no `--force`. As with `git worktree remove`, it also deletes the worktree's Git-ignored files (for example `.env` and `node_modules`). Removing a local daemon preserves its files.
 - **CLI for automation.** Spawn, stop, remove, inspect, and fan a prompt out to many daemons from the terminal, the same fleet the browser talks to.
 - **Self-updating.** `omp-web update` checks GitHub Releases and installs a newer release when available.
@@ -81,7 +81,7 @@ location /ws {
 }
 ```
 
-Kubernetes ingress-nginx passes the upgrade by itself; raise `nginx.ingress.kubernetes.io/proxy-read-timeout` and `nginx.ingress.kubernetes.io/proxy-send-timeout` to `"120"` on the Ingress that serves the UI. Other ingress controllers and gateways have an equivalent WebSocket or upgrade option and timeout setting. A browser tab loaded before this protocol still dials `GET /events` and `POST /command`; both answer with a protocol-mismatch notice (`/command` with 410), and a reload fixes it.
+Kubernetes ingress-nginx passes the upgrade by itself; raise `nginx.ingress.kubernetes.io/proxy-read-timeout` and `nginx.ingress.kubernetes.io/proxy-send-timeout` to `"120"` on the Ingress that serves the UI. Other ingress controllers and gateways have an equivalent WebSocket or upgrade option and timeout setting. A browser tab that was open before an upgrade to this protocol still dials `GET /events` and `POST /command`; both answer with a protocol-mismatch notice (`/command` with 410), and a reload fixes it.
 
 The other direction: a session that has to leave its network through a proxy resolves the proxy itself, because Bun's WebSocket client ignores `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` (Bun's `fetch`, used for the bulk POSTs, honors them; the session passes the one resolved proxy to both). It uses the launch payload's explicit `callback.proxy` (`OMP_SESSION_CALLBACK_PROXY` in the callback handoff) when present, else those variables in its own process environment. The fleet does not copy its own proxy variables into a clone or pod: a sandboxed or in-pod session sees only the proxy variables the runtime environment gives it (for a pod, whatever the cluster injects). Only `http://` and `https://` proxies are supported, reached with `CONNECT`; an unsupported scheme is an error, never a silent direct connection. The proxy must allow `CONNECT` to the control plane's port.
 
@@ -89,7 +89,7 @@ Check the path before launching clones: `OMP_FLEET_CALLBACK_URL=https://control.
 
 A `--resume` session file that is missing exits 78 before bind (`omp-session: --resume <file>: session file not found`) and is never created. The fleet passes plain `--resume` only for a file the daemon has reported persisted, so a transcript that was written and later deleted fails with 78 and its row parks asleep with that reason. A file the fleet never saw persisted (a session that had no messages yet) relaunches with `--resume <file> --resume-unwritten`, which adopts that path as the same not-yet-written session. An explicitly picked file always resumes strictly. A transcript that exists but cannot be restored exits 78 instead of starting empty; its row stays asleep with the daemon's reason and is never restarted. A provider-managed clone wake resumes the same way through `OMP_SESSION_RESUME` (strict; `OMP_SESSION_RESUME_UNWRITTEN=1` for a file not known to be written): a bwrap clone gets the host path of the newest session, a Kubernetes clone the in-pod path of the session its runtime last reported (or an explicitly picked stored session), and a first start gets none.
 
-`omp-web session` runs one session daemon (one process, one bound directory, one live agent session, wire API only, no web UI). The fleet spawns sessions with the default local template. Callback URLs must be https, except loopback http, which the fleet enables for its own loopback bind (the daemon reads `callback.allowHttp` from its `--fleet-stdin` payload). Non-loopback fleet service requires browser authentication.
+`omp-web session` runs one session daemon (one process, one bound directory, one live agent session, wire API only, no web UI). The fleet spawns sessions with the default local template. Callback URLs must be https, except loopback http, which the fleet enables for its own loopback bind (the daemon reads `callback.allowHttp` from its `--fleet-stdin` payload). Non-loopback fleet service requires browser authentication. A standalone session (started without `--fleet-stdin`) also serves the browser socket itself on `GET /ws` for direct clients: loopback peers need no token but a cross-site dial (foreign `Host`, `Origin` or `Sec-Fetch-Site`) is closed 4403, and an off-loopback client passes the token as the `token` query parameter or an `Authorization: Bearer` header. A fleet-managed session binds no listener.
 
 Local sessions are not mirrored: their transcripts stay on this host (`OMP_SESSION_LOG_MIRROR=0`).
 
@@ -110,9 +110,9 @@ flowchart TB
     dots["…"]
   end
 
-  browser <-->|"SSE + POST"| fleet
+  browser <-->|"WebSocket /ws"| fleet
   browser <-.->|"split form"| uiproc
-  uiproc <-.->|"SSE + POST"| fleet
+  uiproc <-.->|"WebSocket /ws"| fleet
   daemons -->|"callback pair (session dials out)"| fleet
   daemons <--> model
   daemons -.-> log

@@ -40,7 +40,7 @@
  *     for commands.
  *   - Stale tabs (loaded before OMP_PROTO 5): GET /events answers the proto
  *     mismatch frame once and ends, POST /command answers 410
- *     `{error:"proto_unsupported"}`; nothing else of the SSE path survives.
+ *     `{error:"proto_unsupported"}`; nothing else of /events or /command survives.
  *   - PAIR ATTACH: one callback virtual stream PER BROWSER ("browser/<connId>"
  *     on the daemon's pair). The daemon primes every new stream, so
  *     hello_ok → attached → history → state → available_commands → ready come
@@ -864,8 +864,8 @@ export class FleetEdge {
 		try {
 			const url = new URL(req.url);
 			const path = url.pathname;
-			// Stale tabs (loaded before OMP_PROTO 5) still dial the SSE downlink
-			// and the POST uplink. Both answer with the proto mismatch the old
+			// Stale tabs (loaded before OMP_PROTO 5) still dial the old SSE downlink
+			// and POST uplink. Both answer with the proto mismatch the old
 			// client already knows how to show; nothing else of them survives.
 			if (path === "/events") {
 				if (req.method !== "GET") return null; // control plane 405s
@@ -1209,9 +1209,9 @@ export class FleetEdge {
 	}
 
 	/**
-	 * Dispatch one parsed command and acknowledge it (`{"ack":id}`, today's
-	 * 202); a command the edge cannot take is a nack with the status the
-	 * HTTP route answered. The socket's client selects the browser the
+	 * Dispatch one parsed command and acknowledge it (`{"ack":id}`); a
+	 * command the edge cannot take is a nack carrying an HTTP-like status
+	 * (400, 409, 413, 429, 503, ...). The socket's client selects the browser the
 	 * command acts on (edge-level commands answer there; attached-session
 	 * commands proxy to that browser's daemon pipe). The ack follows any
 	 * answer frame the dispatch produced synchronously (an unknown command's
@@ -1400,8 +1400,8 @@ export class FleetEdge {
 		// An explicit no-pick request supersedes an earlier refusal.
 		if (sessionFile === undefined) this.#refusedResumes.delete(daemonId);
 		// Registered BEFORE the first await, so it is in place before this
-		// spawn_resume's POST is answered 202. The browser posts its attach only
-		// after that answer, so the attach always finds this entry and waits for
+		// spawn_resume is acked. The browser sends its attach only
+		// after that ack, so the attach always finds this entry and waits for
 		// the validation instead of waking the daemon on lastSessionFile and
 		// silently dropping the pick. The synchronous registration is what makes
 		// that ordering sufficient.

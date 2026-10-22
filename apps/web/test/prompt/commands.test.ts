@@ -505,7 +505,7 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 // (a turn streaming); confirming runs the pending
 // action and clears the dialog. `/new` executes immediately with no
 // confirmation. The file-level beforeEach already resets
-// items/connected and installs the fetch stub that records POSTed commands.
+// items/connected and installs the fake socket that records sent commands.
 // ---------------------------------------------------------------------------
 describe("danger confirm guards (P1 hardening)", () => {
 	const connectTransport = () => {
@@ -546,7 +546,7 @@ describe("danger confirm guards (P1 hardening)", () => {
 		expect(dangerConfirm()).toBeNull();
 	});
 
-	test("/delete requests a danger confirm and POSTs deleteSession only after confirming", async () => {
+	test("/delete requests a danger confirm and sends deleteSession only after confirming", async () => {
 		connectTransport();
 		seedItem();
 		dispatchInput("/delete", undefined, "enter");
@@ -563,7 +563,7 @@ describe("danger confirm guards (P1 hardening)", () => {
 		expect(postedMethod("deleteSession").length).toBe(1);
 	});
 
-	test("/fresh while streaming requests a danger confirm and POSTs only after confirming", async () => {
+	test("/fresh while streaming requests a danger confirm and sends only after confirming", async () => {
 		connectTransport();
 		setState("streaming", true);
 		dispatchInput("/fresh", undefined, "enter");

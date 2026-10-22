@@ -1,7 +1,7 @@
 /**
  * Streaming assistant updates cross the wire as deltas keyed by content block.
  * The SDK's message_update carries the cumulative message twice, so shipping it
- * verbatim made a reply cost O(n^2) bytes on every hop (SSE ring, control
+ * verbatim made a reply cost O(n^2) bytes on every hop (client replay ring, control
  * mirror, each browser stream).
  */
 import { describe, expect, test } from "bun:test";

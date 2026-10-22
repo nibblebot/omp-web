@@ -2974,7 +2974,7 @@ describe("roster session dropdown", () => {
 		return posted.filter((c): c is Extract<ClientCommand, { type: T }> => c.type === type);
 	}
 
-	/** Yield until a settled spawn_resume POST has released its attach (a few microtask hops). */
+	/** Yield until an acked spawn_resume has released its attach (a few microtask hops). */
 	async function flushWake(): Promise<void> {
 		for (let i = 0; i < 4; i++) await flushMicrotasks();
 	}
@@ -3025,7 +3025,7 @@ describe("roster session dropdown", () => {
 				sessionFile: "/sessions/picked.jsonl",
 			},
 		]);
-		// The attach waits for the spawn_resume POST to be accepted.
+		// The attach waits for the spawn_resume ack.
 		expect(postedOf("attach")).toHaveLength(0);
 		await flushWake();
 		expect(postedOf("attach")).toHaveLength(1);

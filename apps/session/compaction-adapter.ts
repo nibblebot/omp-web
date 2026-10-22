@@ -15,7 +15,7 @@ import {
  * G13 explicit compaction + context maintenance (server-side domain adapter).
  *
  * Pure domain helpers + thin SDK execution wrappers. No wire imports: this
- * module never touches lib/wire, apps/session/methods.ts, or SSE delivery.
+ * module never touches lib/wire, apps/session/methods.ts, or client delivery.
  * It reuses the installed SDK 18.11.0 behavior (compact-modes grammar,
  * CompactOptions, shake types) instead of reimplementing it.
  */
