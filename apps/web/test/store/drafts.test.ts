@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	cancelScheduledDraftSave,
+	currentDraftKey,
 	loadDraft,
 	removeDraft,
 	saveDraft,
 	scheduleDraftSave,
+	swapDraft,
 	type DraftBody,
 	type DraftKey,
 } from "../../store/drafts";
 import type { TextAttachment } from "../../prompt/attachments";
+import { setState, state } from "../../state";
 import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
 
 // ---------------------------------------------------------------------------
@@ -142,5 +145,43 @@ describe("drafts (text-file chips)", () => {
 		expect(restored?.files?.[1]?.text).toBeUndefined();
 		expect(restored?.files?.[1]?.error).toBe("Not kept with the draft; attach it again.");
 		removeDraft(key);
+	});
+});
+
+describe("drafts (per-session partitions)", () => {
+	test("each attached session gets its own slot; none while its id is pending", () => {
+		const prior = { currentSessionId: state.currentSessionId, sessionId: state.sessionId };
+		try {
+			setState({ currentSessionId: "d1", sessionId: "s1" });
+			const first = currentDraftKey();
+			setState({ currentSessionId: "d2", sessionId: "s1" });
+			const otherDaemon = currentDraftKey();
+			setState({ currentSessionId: "d1", sessionId: "s2" });
+			const otherSession = currentDraftKey();
+			expect(first).not.toBeNull();
+			expect(new Set([first, otherDaemon, otherSession].map((k) => k?.sessionId)).size).toBe(3);
+			setState({ sessionId: "" });
+			expect(currentDraftKey()).toBeNull();
+		} finally {
+			setState(prior);
+		}
+	});
+
+	test("switching sessions stores the leaving draft and shows the arriving one", () => {
+		const a = freshKey("swap-a");
+		const b = freshKey("swap-b");
+		expect(swapDraft(undefined, a, body(""))).toBeNull();
+		expect(swapDraft(a, b, body("alpha"))?.text).toBe("");
+		expect(swapDraft(b, a, body("beta"))?.text).toBe("alpha");
+		expect(swapDraft(a, b, body("alpha"))?.text).toBe("beta");
+	});
+
+	test("content typed while the session id is pending stays for the arriving session", () => {
+		const a = freshKey("pending-a");
+		const b = freshKey("pending-b");
+		expect(swapDraft(a, null, body("alpha"))?.text).toBe("");
+		expect(swapDraft(null, b, body("early"))).toBeNull();
+		expect(loadDraft(b)?.text).toBe("early");
+		expect(loadDraft(a)?.text).toBe("alpha");
 	});
 });

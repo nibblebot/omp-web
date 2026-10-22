@@ -88,8 +88,10 @@ export const PromptBox: Component = () => {
 		setFiles([]);
 		ac.setToken(null);
 		const key = currentDraftKey();
-		cancelScheduledDraftSave(key);
-		removeDraft(key);
+		if (key) {
+			cancelScheduledDraftSave(key);
+			removeDraft(key);
+		}
 		requestAnimationFrame(ac.autoGrow);
 	};
 

@@ -1,4 +1,4 @@
-import { setPromptInsert } from "../state";
+import { setPromptInsert, state } from "../state";
 import type { ImageArg } from "#lib/wire/protocol";
 import type { TextAttachment } from "../prompt/attachments";
 
@@ -278,21 +278,38 @@ export function stashUnsent(text = "", images: ImageArg[] = []): void {
 	setPromptInsert({ text, ...(images.length > 0 ? { images } : {}) });
 }
 
-/** Default partition for the currently attached session. Branch/agent refine
- *  it when known; Main is always `agentId: "main"` so worker focus never
- *  overwrites it (G04 focus contract). */
-export function currentDraftKey(
-	opts: {
-		origin?: string;
-		sessionId?: string;
-		branchId?: string;
-		agentId?: string;
-	} = {},
-): DraftKey {
+/** Partition of the attached session: one slot per session process and agent
+ *  session id, so switching sessions never carries the composer along. Main
+ *  is always `agentId: "main"` so worker focus never overwrites it (G04 focus
+ *  contract). Null while no session is attached or its id has not landed. */
+export function currentDraftKey(): DraftKey | null {
+	if (state.currentSessionId === "" || state.sessionId === "") return null;
 	return {
-		origin: opts.origin ?? "local",
-		sessionId: opts.sessionId ?? "",
-		branchId: opts.branchId ?? "main",
-		agentId: opts.agentId ?? "main",
+		origin: "local",
+		sessionId: `${state.currentSessionId}:${state.sessionId}`,
+		branchId: "main",
+		agentId: "main",
 	};
+}
+
+/** Partition change in the composer: stores `leaving` (the composer's content)
+ *  under `prev` and returns what the composer shows for `next`, or null to keep
+ *  what it holds. `prev` is undefined on mount and null while the previous
+ *  session id was pending; content typed in that window stays and is stored
+ *  for `next` unless `next` already has a draft. */
+export function swapDraft(
+	prev: DraftKey | null | undefined,
+	next: DraftKey | null,
+	leaving: DraftBody,
+): DraftBody | null {
+	if (prev) {
+		cancelScheduledDraftSave(prev);
+		saveDraft(prev, leaving);
+	}
+	// saveDraft never stores an empty body, so a loaded draft always has content.
+	const saved = next ? loadDraft(next) : null;
+	if (saved) return saved;
+	if (prev) return { text: "", images: [], files: [], updatedAt: Date.now() };
+	if (prev === null && next) saveDraft(next, leaving);
+	return null;
 }

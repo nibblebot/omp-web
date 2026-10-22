@@ -5,7 +5,6 @@ import {
 	For,
 	onCleanup,
 	on,
-	onMount,
 	Show,
 	type Component,
 	type JSX,
@@ -23,9 +22,11 @@ import { mayAutoFocusComposer } from "../../../store/chat";
 import {
 	cancelScheduledDraftSave,
 	currentDraftKey,
+	draftKey,
 	unsavedFileIds,
-	loadDraft,
 	scheduleDraftSave,
+	swapDraft,
+	type DraftBody,
 } from "../../../store/drafts";
 import { graphGeneration } from "../../../store/graph";
 import { expandMentionChips, getModelMentions, MODEL_MENTION_RE } from "../../../store/models";
@@ -97,7 +98,10 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const [pasteNote, setPasteNote] = createSignal<string | null>(null);
 	const [pasteError, setPasteError] = createSignal<string | null>(null);
 	const [chipError, setChipError] = createSignal<string | null>(null);
-	const draftKey = () => currentDraftKey();
+	// The attached session's draft slot; a fresh key object for the same slot is not a switch.
+	const draftSlot = createMemo(() => currentDraftKey(), undefined, {
+		equals: (a, b) => (a && b ? draftKey(a) === draftKey(b) : a === b),
+	});
 	const images = () => props.images?.() ?? [];
 	const files = () => props.files?.() ?? [];
 	const unsaved = createMemo(() => unsavedFileIds(files()));
@@ -154,44 +158,54 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		});
 	});
 
-	// Restore the partition draft on mount (prior text/image draft restore);
-	// restoration never submits.
-	onMount(() => {
-		if (props.textOnly) return;
-		const saved = loadDraft(draftKey());
-		if (saved && (saved.text || saved.images.length > 0 || saved.files?.length)) {
-			props.setMessage(saved.text);
-			if (saved.images.length > 0) props.setImages?.(saved.images);
-			if (saved.files?.length) props.setFiles?.(saved.files);
-			if (saved.selectionStart !== undefined) {
-				requestAnimationFrame(() => {
+	const draftBody = (text: string, imgs: ImageArg[], attached: TextAttachment[]): DraftBody => ({
+		text,
+		images: imgs,
+		files: attached,
+		selectionStart: textarea.selectionStart ?? undefined,
+		selectionEnd: textarea.selectionEnd ?? undefined,
+		updatedAt: Date.now(),
+	});
+
+	// Each session keeps its own draft: a switch stores the leaving session's
+	// composer and shows the arriving one's; the first run restores the attached
+	// session's draft on mount. Restoration never submits.
+	createEffect(
+		on(draftSlot, (next, prev) => {
+			if (props.textOnly) return;
+			const shown = swapDraft(prev, next, draftBody(props.message(), images(), files()));
+			if (!shown) return;
+			props.setMessage(shown.text);
+			props.setImages?.(shown.images);
+			props.setFiles?.(shown.files ?? []);
+			setPasteNote(null);
+			setPasteError(null);
+			requestAnimationFrame(() => {
+				if (shown.selectionStart !== undefined) {
 					try {
 						textarea.setSelectionRange(
-							saved.selectionStart ?? 0,
-							saved.selectionEnd ?? saved.selectionStart ?? 0,
+							shown.selectionStart,
+							shown.selectionEnd ?? shown.selectionStart,
 						);
 					} catch {
 						// Detached textarea: ignore.
 					}
-				});
-			}
-		}
-	});
+				}
+				props.ac?.autoGrow();
+			});
+		}),
+	);
 
 	onCleanup(() => {
-		if (!props.textOnly) cancelScheduledDraftSave(draftKey());
+		const key = draftSlot();
+		if (!props.textOnly && key) cancelScheduledDraftSave(key);
 	});
 
 	const persist = (text: string, imgs: ImageArg[], attached: TextAttachment[]): void => {
-		if (props.textOnly) return;
-		scheduleDraftSave(draftKey(), {
-			text,
-			images: imgs,
-			files: attached,
-			selectionStart: textarea.selectionStart ?? undefined,
-			selectionEnd: textarea.selectionEnd ?? undefined,
-			updatedAt: Date.now(),
-		});
+		const key = draftSlot();
+		// No slot while the session id is pending: the swap stores this content once it lands.
+		if (props.textOnly || !key) return;
+		scheduleDraftSave(key, draftBody(text, imgs, attached));
 	};
 
 	// Chips reach the model at send time and never enter the textarea. Every change is
