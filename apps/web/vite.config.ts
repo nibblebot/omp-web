@@ -12,7 +12,7 @@ import { fleetOrigin } from "./dev-proxy.ts";
 // so `bun run build:web` works from the repository root.
 const webRoot = dirname(fileURLToPath(import.meta.url));
 
-// Dev HMR proxy: /events + /command go to the omp-fleet edge (it serves the
+// Dev HMR proxy: /ws (the browser socket) goes to the omp-fleet edge (it serves the
 // roster UI and proxies each session's wire API), and /ctl to the fleet
 // control plane on the same port. OMP_DEV_FLEET_PORT is picked per-run by
 // scripts/dev.ts so parallel worktrees don't collide; the fixed default keeps
@@ -42,10 +42,15 @@ function fleetProxy(): ProxyOptions {
 		target: `http://localhost:${fleetPort}`,
 		changeOrigin: true,
 		configure: (proxy) => {
-			proxy.on("proxyReq", (proxyReq, req) => {
+			const represent = (
+				proxyReq: { setHeader(name: string, value: string): unknown },
+				req: { headers: { host?: string; origin?: string } },
+			): void => {
 				const origin = fleetOrigin(req.headers.host, req.headers.origin, fleetPort);
 				if (origin !== undefined) proxyReq.setHeader("origin", origin);
-			});
+			};
+			proxy.on("proxyReq", represent);
+			proxy.on("proxyReqWs", represent);
 		},
 	};
 }
@@ -59,10 +64,10 @@ export default defineConfig({
 		port: 4713,
 		allowedHosts,
 		proxy: {
-			// /events is a long-lived SSE stream: http-proxy pipes it through (no ws: true);
-			// X-Accel-Buffering asks intermediaries not to buffer the response.
-			"/events": { ...fleetProxy(), headers: { "X-Accel-Buffering": "no" } },
-			"/command": fleetProxy(),
+			// The browser socket (OMP_PROTO 5): one WebSocket per tab carries the
+			// downlink and the command uplink. ws: true makes http-proxy tunnel the
+			// upgrade; fleetProxy re-presents the Origin on it via proxyReqWs.
+			"/ws": { ...fleetProxy(), ws: true },
 			// Fleet control plane: same edge port.
 			"/ctl": fleetProxy(),
 			// Browser-auth surface: same-origin sign-in must reach the

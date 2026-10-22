@@ -20,7 +20,7 @@ import {
 	state,
 } from "../state";
 import {
-	FakeEventSource,
+	FakeWebSocket,
 	callResult,
 	dispatch,
 	flushMicrotasks,
@@ -38,7 +38,7 @@ function callsTo(method: string): Extract<ClientCommand, { type: "call" }>[] {
 beforeEach(() => {
 	installTransportStubs();
 	connect();
-	FakeEventSource.instances.at(-1)!.onopen?.();
+	FakeWebSocket.instances.at(-1)!.onopen?.();
 	posted.length = 0;
 	setState({ streaming: true, queuedMessageCount: 2, pausedQueueCount: 0 });
 });

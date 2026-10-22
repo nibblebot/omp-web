@@ -14,7 +14,6 @@ import {
 	renameDispatch,
 	resumeDispatch,
 } from "../../prompt/commands";
-import { SSE_EVENT_NAME } from "#lib/wire/protocol";
 import type { ClientCommand, ServerFrame } from "#lib/wire/protocol";
 import {
 	addBashItem,
@@ -31,7 +30,14 @@ import {
 	confirmDangerConfirm,
 	dangerConfirm,
 } from "../../prompt/danger-confirm";
-import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
+import {
+	dispatch,
+	FakeWebSocket,
+	installTransportStubs,
+	posted,
+	restoreBrowserGlobals,
+	setBrowserGlobal,
+} from "../web.testkit";
 import { FEATURE_IDS, type FeatureId } from "../../features/manifest";
 import { activateFeatures, isFeatureEnabled } from "../../features/registry";
 
@@ -295,34 +301,10 @@ describe("P0.2 argument-aware collision routes", () => {
 // the promise rejected, resolveBashItem wiped the streamed output, and the
 // late call_result found no pending entry. call(timeoutMs=0) arms no timer.
 // ---------------------------------------------------------------------------
-// Transport doubles mirroring state.test.ts: connect() registers its SSE
-// handler on a FakeEventSource; POST /command bodies land in `posted` via a
-// stubbed fetch. The controllable clock records the ONLY window.setTimeout
-// consumer (call()'s timeout timer), so tests can advance past the old 30s
-// default and prove nothing fires.
-type SseHandler = (ev: { data: string }) => void;
-
-class FakeEventSource {
-	static instances: FakeEventSource[] = [];
-	static handlers = new Map<string, SseHandler>();
-	onopen: (() => void) | null = null;
-	constructor(public readonly url: string) {
-		FakeEventSource.instances.push(this);
-	}
-	addEventListener(type: string, handler: SseHandler): void {
-		FakeEventSource.handlers.set(type, handler);
-	}
-	close(): void {}
-	static dispatch(type: string, data: string): void {
-		FakeEventSource.handlers.get(type)?.({ data });
-	}
-}
-
-const posted: ClientCommand[] = [];
-
-function dispatch(frame: ServerFrame): void {
-	FakeEventSource.dispatch(SSE_EVENT_NAME, JSON.stringify(frame));
-}
+// Transport doubles from web.testkit: connect() dials a FakeWebSocket and the
+// commands the client sends land in `posted`. The controllable clock records
+// the ONLY window.setTimeout consumer (call()'s timeout and replay timers), so
+// tests can advance past the old 30s default and prove nothing fires.
 
 function callResult(id: string, data: unknown): ServerFrame {
 	return { type: "call_result", id, ok: true, data };
@@ -356,17 +338,9 @@ function advance(ms: number): void {
 }
 
 beforeEach(() => {
-	posted.length = 0;
+	installTransportStubs();
 	timers.length = 0;
-	FakeEventSource.instances.length = 0;
-	FakeEventSource.handlers.clear();
 	installClock();
-	setBrowserGlobal("location", { search: "" } as Location);
-	setBrowserGlobal("EventSource", FakeEventSource as unknown as typeof EventSource);
-	setBrowserGlobal("fetch", (async (_input: unknown, init?: RequestInit) => {
-		if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
-		return { ok: true, status: 202 } as Response;
-	}) as unknown as typeof fetch);
 	setState({
 		currentSessionId: "",
 		connected: false,
@@ -383,7 +357,7 @@ afterEach(restoreBrowserGlobals);
 describe("bang-shell/python stream lifecycle (#29)", () => {
 	test("/live is refused locally without sending a prompt", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		const before = state.items.length;
 		dispatchInput("/live", undefined, "enter");
 		expect(posted.filter((command) => command.type === "call")).toEqual([]);
@@ -398,7 +372,7 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 
 	function startBang(input: string, method: "bash" | "python") {
 		connect();
-		const es = FakeEventSource.instances.at(-1);
+		const es = FakeWebSocket.instances.at(-1);
 		expect(es).toBeDefined();
 		es!.onopen?.(); // connected = true; without this call() fails fast
 		dispatchInput(input, undefined, "enter");
@@ -536,7 +510,7 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 describe("danger confirm guards (P1 hardening)", () => {
 	const connectTransport = () => {
 		connect();
-		const es = FakeEventSource.instances.at(-1);
+		const es = FakeWebSocket.instances.at(-1);
 		expect(es).toBeDefined();
 		es!.onopen?.(); // connected = true; without this call() fails fast
 	};
@@ -622,7 +596,7 @@ describe("disabled feature commands", () => {
 
 	test("a slash command owned by a disabled feature shows a local notice and is never forwarded", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		posted.length = 0;
 		dispatchInput("/git", undefined, "enter");
 		expect(state.items.at(-1)).toMatchObject({
@@ -648,7 +622,7 @@ describe("feature-owned commands with arguments (INT-06)", () => {
 
 	test("/skills with a subcommand shows a terminal-only notice and is never forwarded", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		posted.length = 0;
 		dispatchInput("/skills status", undefined, "enter");
 		expect(state.items.at(-1)).toMatchObject({
@@ -671,7 +645,7 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 
 	test("an unknown command is never sent to the model and says so", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		posted.length = 0;
 		dispatchInput("/zzqx", undefined, "enter");
 		expect(promptCalls()).toEqual([]);
@@ -684,7 +658,7 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 
 	test("a terminal-only command is not forwarded and gets a notice", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		posted.length = 0;
 		dispatchInput("/collab status", undefined, "enter");
 		expect(promptCalls()).toEqual([]);
@@ -699,7 +673,7 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 
 	test("/stats is not forwarded and points at /usage", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		posted.length = 0;
 		dispatchInput("/stats", undefined, "enter");
 		expect(promptCalls()).toEqual([]);
@@ -711,7 +685,7 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 
 	test("a forwarded command echoes itself as a notice before it is sent", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		posted.length = 0;
 		dispatchInput("/security status", undefined, "enter");
 		expect(promptCalls().length).toBe(1);
@@ -724,7 +698,7 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 
 	test("/skills with arguments is never forwarded to the model", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		posted.length = 0;
 		dispatchInput("/skills status", undefined, "enter");
 		expect(promptCalls()).toEqual([]);
@@ -738,7 +712,7 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 
 	test("/settings with a query opens the Settings sheet with the search pre-filled", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		posted.length = 0;
 		dispatchInput("/settings  security ", undefined, "enter");
 		expect(state.modal).toBe("settings");
@@ -748,7 +722,7 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 
 	test("a bare /settings clears a stale search query", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState({ settingsQuery: "stale" });
 		dispatchInput("/settings", undefined, "enter");
 		expect(state.modal).toBe("settings");
@@ -757,7 +731,7 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 
 	test("a queueable builtin (/add-dir) queues instead of echoing while a turn streams (U10b)", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("streaming", true);
 		posted.length = 0;
 		dispatchInput("/add-dir /tmp/extra", undefined, "enter");
@@ -774,7 +748,7 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 
 	test("a queued builtin keeps its attached images on the queueCommand call", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("streaming", true);
 		posted.length = 0;
 		const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
@@ -790,7 +764,7 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 
 	test("an idle /add-dir runs at once through prompt and is not queued (U10b)", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		posted.length = 0;
 		dispatchInput("/add-dir /tmp/extra", undefined, "enter");
 		expect(promptCalls().length).toBe(1);
@@ -799,7 +773,7 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 
 	test("a read-only forwarded command still runs through prompt while streaming (jx0b)", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("streaming", true);
 		posted.length = 0;
 		dispatchInput("/dirs", undefined, "enter");
@@ -829,7 +803,7 @@ describe("busy policy dispatch (CMD-08, jx0b)", () => {
 		"%s queues instead of running while a turn streams (jx0b)",
 		(text) => {
 			connect();
-			FakeEventSource.instances.at(-1)!.onopen?.();
+			FakeWebSocket.instances.at(-1)!.onopen?.();
 			setState("streaming", true);
 			posted.length = 0;
 			dispatchInput(text, undefined, "enter");
@@ -842,7 +816,7 @@ describe("busy policy dispatch (CMD-08, jx0b)", () => {
 
 	test("/session delete is refused while a turn streams: no queue, no SDK call (jx0b)", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("streaming", true);
 		posted.length = 0;
 		dispatchInput("/session delete", undefined, "enter");
@@ -857,7 +831,7 @@ describe("busy policy dispatch (CMD-08, jx0b)", () => {
 
 	test("/delete is refused while a turn streams: no confirm dialog, no deleteSession (jx0b)", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("streaming", true);
 		posted.length = 0;
 		dispatchInput("/delete", undefined, "enter");

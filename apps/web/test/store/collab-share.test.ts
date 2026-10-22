@@ -22,7 +22,7 @@ import {
 	stopCollabRoom,
 } from "../../store/collab";
 import {
-	FakeEventSource,
+	FakeWebSocket,
 	callResult,
 	dispatch,
 	flushMicrotasks,
@@ -89,7 +89,7 @@ beforeEach(() => {
 	installTransportStubs();
 	installLocalStorageShim();
 	connect();
-	FakeEventSource.instances.at(-1)?.onopen?.();
+	FakeWebSocket.instances.at(-1)?.onopen?.();
 	resetStatus();
 	posted.length = 0;
 });

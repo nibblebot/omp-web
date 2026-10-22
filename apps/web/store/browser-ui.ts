@@ -1,7 +1,7 @@
 import type { SessionScope } from "#lib/wire/protocol";
 import { buildBrowserUiParams, type BrowserUiContribution } from "#lib/wire/browser-ui-contract";
 import { setState, state } from "../state";
-import { isConnected, postCommand } from "./transport";
+import { isConnected, sendCommand } from "./transport";
 
 export interface BrowserUiRequest {
 	requestId: string;
@@ -53,7 +53,7 @@ export function receiveBrowserUiRequest(frame: { id: string; params: unknown }):
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		setState("browserUi", "error", message);
-		void postCommand({ type: "ui_response", id: frame.id, error: message }).catch(() => {});
+		void sendCommand({ type: "ui_response", id: frame.id, error: message }).catch(() => {});
 	}
 }
 
@@ -85,7 +85,7 @@ export async function answerBrowserUiRequest(requestId: string, actionId?: strin
 		error: null,
 	});
 	try {
-		await postCommand({
+		await sendCommand({
 			type: "ui_response",
 			id: requestId,
 			...(actionId === undefined ? {} : { result: { actionId } }),
@@ -106,7 +106,7 @@ export async function answerBrowserUiRequest(requestId: string, actionId?: strin
 export function resetBrowserUiRequests(): void {
 	for (const request of state.browserUi.requests) {
 		if (sameScope(request.scope) && isConnected()) {
-			void postCommand({ type: "ui_response", id: request.requestId }).catch(() => {});
+			void sendCommand({ type: "ui_response", id: request.requestId }).catch(() => {});
 		}
 	}
 	setState("browserUi", createBrowserUiState());

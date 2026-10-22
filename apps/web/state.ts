@@ -6,7 +6,7 @@ import type { UsageReport } from "@oh-my-pi/pi-ai";
 import type { TextAttachment } from "./prompt/attachments";
 import { batch } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import { OMP_PROTO, SSE_EVENT_NAME, CLIENT_SILENCE_DEADLINE_MS, daemonsKey } from "#lib/wire/protocol";
+import { OMP_PROTO, CLIENT_SILENCE_DEADLINE_MS, daemonsKey } from "#lib/wire/protocol";
 import type {
 	AvailableSlashCommand,
 	DaemonEntry,
@@ -20,7 +20,12 @@ import type {
 	SettingsModel,
 	WebSessionState,
 } from "#lib/wire/protocol";
-import { SSE_PING_EVENT } from "#lib/wire/sse";
+import {
+	browserCloseFromCode,
+	browserSocketUrl,
+	parseServerMessage,
+	reconnectDelayMs,
+} from "#lib/wire/browser-socket";
 import { featurePreferences } from "./features/preferences";
 import { clearUnread, markUnread, pruneUnread } from "./fleet-ui/unread";
 import type { UsageLike } from "./usage/usage";
@@ -52,7 +57,13 @@ import {
 } from "./store/projects";
 import { reportError } from "./store/toasts";
 import { clearUserStopped, isUserStopped, reconcileUserStopped } from "./store/user-stopped";
-import { checkSession, subscribeAuth, type AuthStatus, type AuthSnapshot } from "./store/auth";
+import {
+	checkSession,
+	expireSession,
+	subscribeAuth,
+	type AuthStatus,
+	type AuthSnapshot,
+} from "./store/auth";
 import { applySettingsModel, refreshSettings } from "./store/settings";
 import {
 	resetPendingSessionsFiles,
@@ -79,7 +90,12 @@ import {
 	retryNotAttachedCalls,
 	settleAttachedFrame,
 	setConnected,
-	setTransportToken,
+	acknowledgeCommand,
+	refuseCommand,
+	rejectOutbound,
+	resendUnsettled,
+	resetUplink,
+	setUplink,
 	settleAttachResult,
 	settleAttachmentState,
 	settleCallResult,
@@ -401,7 +417,7 @@ export const [state, setState] = createStore({
 	stats: null as SessionStats | null,
 	subagents: new Map<string, SubagentInfo>(),
 	connected: false,
-	// True from page load until the first /events stream opens (or the
+	// True from page load until the first browser socket opens (or the
 	// startup grace in connect() runs out): the strip stays hidden meanwhile,
 	// since nothing has dropped yet.
 	transportStartup: true,
@@ -505,7 +521,7 @@ export const [state, setState] = createStore({
 	),
 	// Chat-button activity dot: a turn ENDED while the tab was in Analysis
 	// (agent_end in apps/web/store/chat.ts for the attached session, detached
-	// daemon_activity flips in the /events handler below). Ephemeral like
+	// daemon_activity flips in the socket frame handler below). Ephemeral like
 	// answerUnviewed; cleared only by setView("chat").
 	chatUnviewed: false,
 	// Phase 6: in-flight OAuth login prompts (unicast frames).
@@ -523,7 +539,7 @@ export const [state, setState] = createStore({
 	// event, capped at DEBUG_RING_CAP (oldest dropped). Mirror of the fleet's
 	// /ctl/debug log for the browser half of the connection loop.
 	debugLog: [] as DebugEntry[],
-	// Last /events downlink activity (frame or ping) in ms epoch; 0 = never.
+	// Last browser socket downlink activity (any message) in ms epoch; 0 = never.
 	// Drives the panel's "seconds since last frame" readout.
 	lastFrameAt: 0,
 	// Delay (ms) of the next scheduled manual reconnect; 0 = stream open (no
@@ -723,19 +739,38 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 }
 
 // ---------------------------------------------------------------------------
-// /events stream teardown. The EventSource itself and the reconnect ladder
-// live in connect() below; the teardown (terminal CLOSED or silence deadline)
-// is shared with transport.ts's silence watcher. Pending slots across every
-// domain are settled through the domain modules' exported resets.
+// Browser socket lifecycle. The dial, the open/message/close handlers and the
+// frame mux live in connect() below; the teardown (any close, the silence
+// deadline, a malformed message, a proto mismatch) and the reconnect ladder
+// are shared here. Pending slots across every domain are settled through the
+// domain modules' exported resets.
 // ---------------------------------------------------------------------------
 
-let events: EventSource | null = null;
+/** The one browser socket this tab holds; null while down or between dials. */
+let socket: WebSocket | null = null;
 
-/** Silence deadline for the /events stream: any frame or ping re-arms it; a
- *  fire means the peer is dead. The socket is open but nothing is flowing
- *  (e.g. a hung middlebox), so tear down and reconnect. The daemon emits a
- *  named `ping` event every CLIENT_KEEPALIVE_MS precisely so this browser-side
- *  consumer can observe liveness. */
+/** Highest frame seq received on this page: the next dial's `after` (null = fresh priming). */
+let highestSeq: number | null = null;
+
+/** Consecutive failed dials, the reconnectDelayMs attempt; a socket's first message resets it. */
+let reconnectAttempt = 0;
+
+/** Messages the current socket has delivered (0 until its first). */
+let socketMessages = 0;
+
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** A 4401 close holds the reconnect until the sign-in succeeds (initAuth releases it). */
+let awaitingSignIn = false;
+
+/** What follows a teardown: dial at once, dial after the backoff delay, wait for a later connect(), or stop for good. */
+type ReconnectPlan = "now" | "backoff" | "hold" | "never";
+
+/** Silence deadline for the socket: any message re-arms it; a fire means the
+ *  peer is dead. The socket is open but nothing is flowing (e.g. a hung
+ *  middlebox), so tear down and reconnect. The server pings every
+ *  CLIENT_KEEPALIVE_MS idle precisely so this browser-side consumer can
+ *  observe liveness. */
 let silenceTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** (Re)arm the silence deadline from any downlink activity. */
@@ -743,14 +778,12 @@ function armSilenceTimer(): void {
 	if (silenceTimer !== null) clearTimeout(silenceTimer);
 	silenceTimer = setTimeout(() => {
 		silenceTimer = null;
-		if (!events) return; // already torn down / no live stream
-		const dead = events;
+		if (socket === null) return; // already torn down / no live socket
 		pushDebug("warn", "transport", "silence deadline hit, forcing reconnect");
-		teardownStream(dead);
 		// Reconnect immediately (no backoff delay): the server may be
 		// perfectly healthy behind a hung middlebox. If the reconnect itself
-		// fails, the CLOSED-onerror backoff ladder takes over.
-		connect();
+		// fails, the backoff ladder takes over.
+		teardownSocket(socket, "now", 1000, "silence deadline");
 	}, CLIENT_SILENCE_DEADLINE_MS);
 }
 
@@ -761,29 +794,103 @@ function clearSilenceTimer(): void {
 	}
 }
 
-/** Teardown for a dead /events stream (terminal CLOSED or silence deadline):
- *  drop readiness and reject pendings. Does NOT schedule the reconnect;
- *  callers pick the delay (backoff ladder for CLOSED, immediate for silence). */
-function teardownStream(source: EventSource): void {
-	if (events !== source) return; // a newer connect() already superseded this stream
+/** Open the socket, or schedule the retry when the browser refuses the dial outright (bad URL, mixed content). */
+function dialSocket(url: string): WebSocket | null {
+	try {
+		return new WebSocket(url);
+	} catch (err) {
+		pushDebug("error", "transport", `socket dial failed: ${String(err)}`);
+		scheduleReconnect();
+		return null;
+	}
+}
+
+/** Dial again after the jittered backoff delay. */
+function scheduleReconnect(): void {
+	const delay = reconnectDelayMs(reconnectAttempt++);
+	setState("reconnectDelay", delay);
+	pushDebug("warn", "transport", `connection lost, retrying in ${delay}ms`);
+	reconnectTimer = setTimeout(() => {
+		reconnectTimer = undefined;
+		connect();
+	}, delay);
+}
+
+/**
+ * Teardown for a dead socket (a close, the silence deadline, a malformed
+ * message): drop readiness, close it, and settle the pending slots that cannot
+ * outlive it, then follow `plan`. Calls and unacked commands survive a drop
+ * that will reconnect: they are re-sent under their own ids after the next
+ * open (resendUnsettled). Only a drop with no reconnect to come ("never")
+ * rejects them.
+ */
+function teardownSocket(ws: WebSocket, plan: ReconnectPlan, code?: number, reason?: string): void {
+	if (socket !== ws) return; // a newer connect() already superseded this socket
 	pushDebug("info", "transport", "stream closed");
 	clearSilenceTimer();
 	setConnected(false);
-	events = null;
-	source.close();
+	setUplink(null);
+	socket = null;
+	ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; // a late event of this socket is stale
+	try {
+		ws.close(code, reason);
+	} catch {
+		// Already closing or closed.
+	}
 	setState("connected", false);
-	// Readiness is per-connection: the reconnecting stream's boot session
+	// Readiness is per-connection: the reconnecting socket's boot session
 	// must clear its own gate before the composer un-gates again.
 	setState("readyAt", undefined);
-	rejectPendingCalls(new Error("Disconnected"));
+	if (plan === "never") {
+		rejectPendingCalls(new Error("Disconnected"));
+		rejectOutbound(new Error("Disconnected"));
+	}
 	resetPendingSessionsFiles();
 	resetPendingProjects();
-	// Phase 5: a dead stream cannot complete the onboarding flow, so disarm
+	// Phase 5: a dead socket cannot complete the onboarding flow, so disarm
 	// the picker gate and drop any picker context.
 	rejectPendingAttach(new Error("Disconnected"));
 	setState("pendingSessionPicker", null);
 	setState("sessionPickerGate", null);
 	rejectPendingDaemons(new Error("Disconnected"));
+	if (plan === "now") connect();
+	else if (plan === "backoff") scheduleReconnect();
+}
+
+/** The server speaks another OMP_PROTO (a hello_ok naming it, or a 4426 close): terminal, a reload picks up the matching build. */
+function failProtoMismatch(ws: WebSocket, speaks: string): void {
+	const message = `proto mismatch: ${speaks}, expected ${OMP_PROTO}`;
+	setState("error", message);
+	pushDebug("error", "transport", message);
+	teardownSocket(ws, "never");
+}
+
+/**
+ * Close the socket and forget every resume detail: the dial history, the last
+ * seq, the reconnect and startup-grace timers, the sign-in hold. The test seam
+ * that gives each test a fresh page's socket state (see web.testkit.ts).
+ */
+export function resetBrowserSocket(): void {
+	clearTimeout(reconnectTimer);
+	reconnectTimer = undefined;
+	clearTimeout(startupGraceTimer);
+	startupGraceTimer = undefined;
+	clearSilenceTimer();
+	if (socket !== null) {
+		const ws = socket;
+		socket = null;
+		ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+		try {
+			ws.close();
+		} catch {
+			// Already closing or closed.
+		}
+	}
+	resetUplink();
+	highestSeq = null;
+	reconnectAttempt = 0;
+	socketMessages = 0;
+	awaitingSignIn = false;
 }
 
 /** The fleet roster with no daemon attached yet: settings go through the
@@ -904,7 +1011,7 @@ export function isDaemonDead(entry: DaemonEntry | undefined): boolean {
 }
 
 /** Transport state for the header strip and the session-bound action gate:
- *  the /events stream is up (connected); the stream is retrying, or the
+ *  the browser socket is up (connected); the stream is retrying, or the
  *  attached daemon is re-dialing (reconnecting); the attached session process
  *  is gone (offline). Session-bound actions run only when connected. */
 export type ConnectionState = "connected" | "reconnecting" | "offline";
@@ -1099,8 +1206,6 @@ function reconcileAttachedSession(): void {
 	);
 }
 
-let backoff = 1000;
-
 /** Wire the browser-auth module into the store: mirror snapshots into the
  *  state fields and open the sign-in modal on signedOut. The module's own
  *  statuses ('unknown' | 'signedOut' | 'signedIn') map 1:1; the 'disabled'
@@ -1111,6 +1216,8 @@ export function initAuth(): () => void {
 		setState("authStatus", snap.status);
 		setState("authExpiresAt", snap.expiresAt);
 		if (snap.status === "signedOut") setState("modal", "sign-in");
+		// A 4401 close held the reconnect: the sign-in that just succeeded releases it.
+		if (snap.status === "signedIn" && awaitingSignIn) connect();
 	});
 	return unsubscribe;
 }
@@ -1192,42 +1299,36 @@ function armStartupGrace(): void {
 }
 
 export function connect(): void {
-	// Browser-only transport: without EventSource there is nothing to dial.
-	// (A bun test worker has neither EventSource nor location; a silence
-	// timer armed by an earlier suite in the same worker must no-op here,
-	// not crash on location.search.)
-	if (typeof EventSource === "undefined") return;
-	pushDebug("info", "transport", "connecting /events");
-	// Same-origin http(s): EventSource for the downlink (native auto-reconnect
-	// sends Last-Event-ID for ring replay) + POST /command for the uplink.
-	// EventSource can't set headers, so the off-loopback bearer token rides
-	// the query string when the page URL carries one; loopback dev needs none.
-	clearSilenceTimer(); // a new connect() supersedes any prior stream's deadline
-	const token = new URLSearchParams(location.search).get("token") ?? null;
-	setTransportToken(token);
-	const params = new URLSearchParams({ client: clientId });
-	if (token !== null) params.set("token", token);
-	const source = new EventSource(`/events?${params}`);
-	events = source;
+	// Browser-only transport: without WebSocket and location there is nothing
+	// to dial. (A bun test worker has no location; a timer armed by an earlier
+	// suite in the same worker must no-op here, not crash on location.search.)
+	if (typeof WebSocket === "undefined" || typeof location === "undefined") return;
+	clearTimeout(reconnectTimer);
+	reconnectTimer = undefined;
+	awaitingSignIn = false;
+	// A new connect() supersedes any live socket.
+	if (socket !== null) teardownSocket(socket, "hold", 1000, "superseded");
+	pushDebug("info", "transport", "connecting /ws");
+	clearSilenceTimer(); // a new connect() supersedes any prior socket's deadline
+	// One WebSocket per tab, same origin. It cannot carry headers, so the
+	// off-loopback bearer token rides the query string when the page URL
+	// carries one; loopback dev needs none. `after` resumes the server's ring
+	// replay from the highest seq this page has received.
+	const token = new URLSearchParams(location.search).get("token");
+	const url = browserSocketUrl(location.origin, {
+		clientId,
+		after: highestSeq,
+		proto: OMP_PROTO,
+		token,
+	});
+	const ws = dialSocket(url);
+	if (ws === null) return;
+	socket = ws;
 	armSilenceTimer();
 	armStartupGrace();
-	source.onopen = () => {
-		backoff = 1000;
-		setConnected(true);
-		setState({ connected: true, transportStartup: false });
-		setState("reconnectDelay", 0);
-		pushDebug("info", "transport", "stream open");
-		// No boot-time calls: the fleet edge answers every call with "not
-		// attached" until the browser picks a daemon. The attached handler
-		// pulls getSubagents. On a RECONNECT the edge has no attach
-		// memory, so re-attach to the daemon we were viewing.
-		if (state.currentSessionId) void attachSession(state.currentSessionId).catch(() => {});
-		else refreshSettings(); // boot with no session: the fleet /ctl model backs the panel
-	};
-	source.addEventListener(SSE_EVENT_NAME, (ev) => {
-		armSilenceTimer(); // any downlink activity means the peer is alive
-		setState("lastFrameAt", Date.now());
-		const frame = JSON.parse(String((ev as MessageEvent).data)) as ServerFrame;
+	// The frame mux: one decoded server frame; `frameSeq` is its ring/priming
+	// seq, null when the server sent it unsequenced.
+	const handleFrame = (frame: ServerFrame, frameSeq: number | null): void => {
 		if (frame.type === "attached") {
 			pushDebug("info", "transport", `attached ${frame.sessionId}`);
 			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
@@ -1319,13 +1420,11 @@ export function connect(): void {
 		// Replay-dedup guard (finding #2): a delta live-delivered during the
 		// paced prime is re-sent verbatim by the ring replay. Its seq was seen
 		// on this connection already, so the second copy is the replay; drop
-		// it (see seenFrameSeqs; native EventSource exposes the SSE id as
-		// MessageEvent.lastEventId, absent for ping/undecorated frames).
-		const frameSeq = Number((ev as MessageEvent).lastEventId);
-		if (Number.isFinite(frameSeq) && frameSeq > 0 && seenFrameSeqs.has(frameSeq)) return;
+		// it (see seenFrameSeqs; unsequenced messages carry no seq).
+		if (frameSeq !== null && frameSeq > 0 && seenFrameSeqs.has(frameSeq)) return;
 		switch (frame.type) {
 			case "history": {
-				// A transcript over the SSE backpressure cap primes as
+				// A transcript over the client backpressure cap primes as
 				// sequential frames (final: false … final: true); a frame
 				// WITHOUT `final` (the original single-frame shape) is complete
 				// on its own. Reassemble before loadHistory; it rebuilds items
@@ -1637,21 +1736,11 @@ export function connect(): void {
 				// Finding #61: the browser enforces OMP_PROTO too. A bare
 				// session daemon leads its priming with hello_ok; the fleet edge
 				// forwards the (pipe-gated) hello_ok. A mismatch is terminal;
-				// fail closed: surface the
-				// error, tear the stream down, and do NOT schedule the
-				// reconnect (the backoff loop in onerror would otherwise hot-loop
+				// fail closed: surface the error, tear the socket down, and do
+				// NOT reconnect (the backoff loop would otherwise hot-loop
 				// against an undrivable daemon).
 				if (frame.proto !== OMP_PROTO) {
-					setState(
-						"error",
-						`proto mismatch: session process speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`,
-					);
-					pushDebug(
-						"error",
-						"transport",
-						`proto mismatch: session process speaks ${String(frame.proto)}, expected ${OMP_PROTO}`,
-					);
-					teardownStream(source);
+					failProtoMismatch(ws, `session process speaks OMP_PROTO ${String(frame.proto)}`);
 					return;
 				}
 				break;
@@ -1660,29 +1749,88 @@ export function connect(): void {
 				console.debug(`[omp-session] ignoring ${frame.type} frame`);
 				break;
 		}
-		if (Number.isFinite(frameSeq) && frameSeq > 0) seenFrameSeqs.add(frameSeq);
-	});
-	source.addEventListener(SSE_PING_EVENT, () => {
-		// Keepalive tick: the server is alive (the stream is not silently
-		// hung). Re-arm the silence deadline. The wire block carries no id,
-		// so this never advances Last-Event-ID / ring replay.
-		armSilenceTimer();
-		setState("lastFrameAt", Date.now());
-	});
-	source.onerror = () => {
-		// Terminal (401 or fatal): EventSource gives up (readyState CLOSED) and
-		// will NOT retry. Teardown like a socket close, then manually reconnect
-		// with the same 1s→8s backoff, since auth failures must not hot-loop.
-		if (source.readyState !== EventSource.CLOSED) {
-			pushDebug("info", "transport", "transient blip, native auto-reconnect");
-			return; // transient blip: native auto-reconnect resumes with Last-Event-ID
+		if (frameSeq !== null && frameSeq > 0) seenFrameSeqs.add(frameSeq);
+	};
+	ws.onopen = () => {
+		if (socket !== ws) return;
+		// Seqs restart with every connection's priming: only the overlap within
+		// one connection is deduped (see seenFrameSeqs).
+		seenFrameSeqs.clear();
+		socketMessages = 0;
+		setConnected(true);
+		setUplink(ws);
+		setState({ connected: true, transportStartup: false });
+		setState("reconnectDelay", 0);
+		pushDebug("info", "transport", "stream open");
+		// No boot-time calls: the fleet edge answers every call with "not
+		// attached" until the browser picks a daemon. The attached handler
+		// pulls getSubagents. On a RECONNECT the edge has no attach
+		// memory, so re-attach to the daemon we were viewing.
+		if (state.currentSessionId) void attachSession(state.currentSessionId).catch(() => {});
+		else refreshSettings(); // boot with no session: the fleet /ctl model backs the panel
+		// After the re-attach request, so a re-sent command that needs the
+		// attachment follows it on the wire.
+		resendUnsettled();
+	};
+	ws.onmessage = (ev) => {
+		if (socket !== ws) return;
+		const message = parseServerMessage(ev.data);
+		if (message === null) {
+			pushDebug("error", "transport", "malformed server message, reconnecting");
+			teardownSocket(ws, "backoff", 4400, "malformed server message");
+			return;
 		}
-		teardownStream(source); // no-op if a newer connect() superseded this stream
-		const delay = backoff;
-		backoff = Math.min(backoff * 2, 8000);
-		setState("reconnectDelay", delay);
-		pushDebug("warn", "transport", `connection lost, retrying in ${delay}ms`);
-		setTimeout(connect, delay);
+		if (socketMessages++ === 0) reconnectAttempt = 0; // the socket proved itself
+		armSilenceTimer(); // any downlink activity (frame, ping, ack) means the peer is alive
+		setState("lastFrameAt", Date.now());
+		switch (message.kind) {
+			case "ping":
+				// Keepalive tick: nothing to apply, the deadline re-arm above is the point.
+				break;
+			case "ack":
+				acknowledgeCommand(message.id);
+				break;
+			case "nack":
+				refuseCommand(message.id, message.status, message.error);
+				break;
+			case "frame":
+				if (message.seq !== null && (highestSeq === null || message.seq > highestSeq)) {
+					highestSeq = message.seq;
+				}
+				handleFrame(message.frame, message.seq);
+				break;
+		}
+	};
+	ws.onclose = (ev) => {
+		if (socket !== ws) return; // superseded or already torn down
+		const typed = browserCloseFromCode(ev.code, ev.reason);
+		pushDebug("info", "transport", `socket closed ${ev.code} ${ev.reason}`.trimEnd());
+		switch (typed?.kind) {
+			case "unauthorized":
+				// Signed out or expired: no reconnect until the sign-in succeeds
+				// (initAuth dials again on signedIn). Calls and unacked commands wait.
+				awaitingSignIn = true;
+				teardownSocket(ws, "hold");
+				expireSession();
+				break;
+			case "forbidden":
+				// Origin refused: retrying cannot succeed.
+				setState("error", `connection refused: ${typed.message}`);
+				pushDebug("error", "transport", `connection refused: ${typed.message}`);
+				teardownSocket(ws, "never");
+				break;
+			case "proto_mismatch":
+				failProtoMismatch(ws, `server refused this client (${typed.message})`);
+				break;
+			case "slow_consumer":
+				// Drop-and-resume: the server dropped a slow reader and the ring
+				// closes the gap. A socket that was delivering resumes at once.
+				teardownSocket(ws, socketMessages > 0 ? "now" : "backoff");
+				break;
+			default:
+				teardownSocket(ws, "backoff");
+				break;
+		}
 	};
 }
 

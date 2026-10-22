@@ -1,3 +1,4 @@
+import { commandMessage } from "#lib/wire/browser-socket";
 import { COMMAND_DEDUP_WINDOW_MS } from "#lib/wire/protocol";
 import { commandBytes, commandTooLargeMessage, MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
 import type {
@@ -11,14 +12,15 @@ import { READ_ONLY_METHODS } from "#lib/wire/protocol";
 import { createSignal } from "solid-js";
 import type { DaemonLogsResult, DebugEntry, DebugLevel } from "../state";
 import { setState, state } from "../state";
-import { authedFetch } from "./auth";
+import { expireSession } from "./auth";
 
 /**
  * Transport domain (Phase 3 store facade split): the RPC/relay layer,
- * POST /command uplink, the call() id-keyed promise map, fleet attach, and
- * the per-daemon logs/stop/restart RPCs. The /events downlink itself
- * (connect() and its onmessage mux) stays in state.ts; this module owns the
- * module-level connection flags and pending maps the mux reads/settles.
+ * the in-band command uplink over the browser socket, the call() id-keyed
+ * promise map, fleet attach, and the per-daemon logs/stop/restart RPCs.
+ * The socket itself (connect() and its frame mux) stays in state.ts; this
+ * module owns the module-level connection flags, the outbox of commands not
+ * yet acked, and the pending maps the mux reads/settles.
  */
 
 // ---------------------------------------------------------------------------
@@ -37,61 +39,163 @@ export function pushDebug(level: DebugLevel, source: DebugEntry["source"], messa
 
 let connected = false;
 
-/** True while the /events stream is open (between first `open` and a terminal CLOSED). */
+/** True while the browser socket is open (between its `open` and the drop that ends it). */
 export function isConnected(): boolean {
 	return connected;
 }
 
-/** Mark the /events stream connected/disconnected (connect/teardown in state.ts). */
+/** Mark the browser socket connected/disconnected (connect/teardown in state.ts). */
 export function setConnected(value: boolean): void {
 	connected = value;
 }
 
-/** Off-loopback bearer token from the page URL (?token=…); loopback dev needs none. */
-let token: string | null = null;
-
-/** Set the bearer token from the page URL (connect() in state.ts parses it). */
-export function setTransportToken(value: string | null): void {
-	token = value;
-}
-
-/** One page-scoped client id: the fleet edge matches it across the /events
- *  stream and POST /command to route anonymous commands to the owning browser
- *  stream (a bare omp-session ignores both). Shown (truncated) in the Debug
- *  panel; not a secret, as it already rides the query string and headers. */
+/** One page-scoped client id: the browser socket's `client` query parameter,
+ *  which keys the server's replay ring across reconnects (a bare omp-session
+ *  ignores it). Shown (truncated) in the Debug panel; not a secret, as it
+ *  already rides the query string. */
 export const clientId = crypto.randomUUID();
 
+// ---------------------------------------------------------------------------
+// Uplink: commands ride the browser socket as `{"cmd":...}`; the server answers
+// acceptance in band (`ack`, or `nack` with an HTTP-like status), and answers
+// to calls arrive as id-keyed frames. A command that is not acked when the
+// socket drops stays in the outbox and goes out again, under the SAME id,
+// after the next open while it is inside COMMAND_DEDUP_WINDOW_MS (the server
+// dedups the id and replays its answer, never re-dispatching).
+// ---------------------------------------------------------------------------
+
+/** The send side of the open browser socket. */
+interface Uplink {
+	send(data: string): void;
+}
+
+let uplink: Uplink | null = null;
+/** Which open socket `uplink` is (0 before the first); an outbox entry sent on this one is not re-sent. */
+let uplinkGen = 0;
+
+/** One command waiting for its ack. */
+interface OutboundCommand {
+	cmd: ClientCommand;
+	/** The `{"cmd":...}` message, encoded once for every (re-)send. */
+	text: string;
+	/** When the command was first issued: the at-most-once bound for re-sends. */
+	firstAt: number;
+	/** `uplinkGen` of the socket that last carried it; 0 = never sent. */
+	sentGen: number;
+	waiters: Array<{ resolve: () => void; reject: (err: Error) => void }>;
+}
+
+/** Unacked commands by id (every ClientCommand carries one). */
+const outbox = new Map<string, OutboundCommand>();
+
+/** Bind (an open socket) or unbind (null: any drop) the command uplink. Does not send: see resendUnsettled. */
+export function setUplink(next: Uplink | null): void {
+	uplink = next;
+	if (next !== null) uplinkGen++;
+}
+
+/** Forget the uplink and every unacked command without settling them (test isolation between files sharing a process). */
+export function resetUplink(): void {
+	uplink = null;
+	outbox.clear();
+}
+
+function transmit(entry: OutboundCommand): void {
+	if (uplink === null) return;
+	try {
+		uplink.send(entry.text);
+		entry.sentGen = uplinkGen;
+	} catch {
+		// The socket is going away: the entry stays unsent and the next open re-sends it.
+	}
+}
+
+function settleOutbound(id: string): OutboundCommand | undefined {
+	const entry = outbox.get(id);
+	if (entry !== undefined) outbox.delete(id);
+	return entry;
+}
+
+/** The server accepted command `id` (the old 202). */
+export function acknowledgeCommand(id: string): void {
+	for (const w of settleOutbound(id)?.waiters ?? []) w.resolve();
+}
+
 /**
- * Uplink: POST one ClientCommand to /command (202 fire-and-forget accept;
- * answers ride the /events stream only). A non-2xx rejects here so the
- * caller's pending promise settles instead of hanging until timeout.
+ * The server refused command `id` with an HTTP-like status (the old non-2xx).
+ * 413 keeps the server's payload-too-large wording; 401 means the session is
+ * gone (sign-in modal, as a 401 on any authed fetch does).
  */
-export function postCommand(cmd: ClientCommand): Promise<void> {
+export function refuseCommand(id: string, status: number, error: string): void {
+	const entry = settleOutbound(id);
+	if (entry === undefined) return;
+	const message =
+		status === 413 && error !== ""
+			? error
+			: `command "${entry.cmd.type}" rejected (HTTP ${status})`;
+	pushDebug("error", "command", `command "${entry.cmd.type}" rejected (HTTP ${status})`);
+	if (status === 401) expireSession();
+	for (const w of entry.waiters) w.reject(new Error(message));
+}
+
+/** Fail every unacked command (a drop with no reconnect to come). */
+export function rejectOutbound(err: Error): void {
+	for (const [id, entry] of outbox) {
+		outbox.delete(id);
+		for (const w of entry.waiters) w.reject(err);
+	}
+}
+
+/**
+ * Uplink: send one ClientCommand over the browser socket. Resolves when the
+ * server acks it (answers ride the downlink as frames); rejects on a nack, on
+ * an oversize command (refused before sending), or when it stays unacked past
+ * COMMAND_DEDUP_WINDOW_MS of socket drops. With no open socket the command
+ * waits for the next open.
+ */
+export function sendCommand(cmd: ClientCommand): Promise<void> {
 	const bytes = commandBytes(cmd);
 	if (bytes > MAX_COMMAND_BYTES) {
 		return Promise.reject(new Error(commandTooLargeMessage(bytes, MAX_COMMAND_BYTES)));
 	}
-	// Browser auth: with a server-side session (signedIn/signedOut/
-	// unknown) the /command uplink rides authedFetch; the session cookie is
-	// the credential and a 401 transitions to signedOut (sign-in modal). When
-	// auth is DISABLED the path stays a plain fetch: byte-identical behavior
-	// to before this integration, no probe, no CSRF.
-	const authOn = state.authStatus !== "disabled";
-	const doFetch = authOn ? authedFetch : fetch;
-	return doFetch("/command", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			"X-Omp-Client-Id": clientId,
-			...(token !== null ? { Authorization: `Bearer ${token}` } : {}),
-		},
-		body: JSON.stringify(cmd),
-	}).then((res) => {
-		if (!res.ok) {
-			pushDebug("error", "command", `command "${cmd.type}" rejected (HTTP ${res.status})`);
-			throw new Error(`command "${cmd.type}" rejected (HTTP ${res.status})`);
+	const { promise, resolve, reject } = Promise.withResolvers<void>();
+	let entry = outbox.get(cmd.id);
+	if (entry === undefined) {
+		entry = { cmd, text: commandMessage(cmd), firstAt: Date.now(), sentGen: 0, waiters: [] };
+		outbox.set(cmd.id, entry);
+	}
+	entry.waiters.push({ resolve, reject });
+	transmit(entry);
+	return promise;
+}
+
+/**
+ * After a (re)open: send again what the previous socket left unsettled, under
+ * the same ids. Unacked commands go out again; a call that was acked but has
+ * no answer yet is re-sent too (the server replays the answer it recorded). Both
+ * fail with "Disconnected" once past COMMAND_DEDUP_WINDOW_MS, when a re-send
+ * could execute twice. A call parked as not attached is left to the attach
+ * path (retryNotAttachedCalls / resumeParkedMutations).
+ */
+export function resendUnsettled(): void {
+	if (uplink === null) return;
+	const now = Date.now();
+	for (const [id, entry] of outbox) {
+		if (now - entry.firstAt > COMMAND_DEDUP_WINDOW_MS) {
+			outbox.delete(id);
+			for (const w of entry.waiters) w.reject(new Error("Disconnected"));
+		} else if (entry.sentGen !== uplinkGen) {
+			transmit(entry);
 		}
-	});
+	}
+	for (const [id, pending] of pendingCalls) {
+		if (outbox.has(id) || pending.awaitingAttach || pending.awaitingState) continue;
+		if (now - pending.firstPostAt > COMMAND_DEDUP_WINDOW_MS) {
+			dropParkedCall(id, pending, new Error("Disconnected"));
+		} else {
+			sendCall(id);
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -100,13 +204,14 @@ export function postCommand(cmd: ClientCommand): Promise<void> {
 
 /**
  * Replay cadence for a call whose answer never arrived. call_result is a
- * non-ringed unicast answer (server/sse-delivery.ts), so when the daemon-pipe
- * downlink drops it: drop-and-resume backpressure, an emission while the pipe
- * is mid-redial, a lost accept; nothing else replays it and the pending call
- * would hang until its own timeout. Re-POSTing the SAME command id recovers
+ * non-ringed unicast answer, so when the edge-to-daemon pipe drops it (an
+ * emission while the pipe is mid-redial) or the socket drops it (drop-and-
+ * resume backpressure), nothing else replays it and the pending call would
+ * hang until its own timeout. Re-sending the SAME command id recovers
  * it: the daemon dedups the id within COMMAND_DEDUP_WINDOW_MS (never
  * re-dispatching) and replays the answer it recorded, so a replay can neither
- * execute the command twice nor report a different outcome.
+ * execute the command twice nor report a different outcome. A socket drop is
+ * covered at the next open by resendUnsettled.
  */
 const CALL_REPLAY_INTERVAL_MS = 5_000;
 
@@ -121,9 +226,9 @@ interface PendingCall {
 	timer: number;
 	/** Replay handle (0 while no replay is armed). */
 	replayTimer: number;
-	/** The exact command to re-POST: verbatim, same id (the dedup key). */
+	/** The exact command to re-send: verbatim, same id (the dedup key). */
 	cmd: Extract<ClientCommand, { type: "call" }>;
-	/** When the original POST went out: the at-most-once bound for replays. */
+	/** When the call was first sent: the at-most-once bound for replays. */
 	firstPostAt: number;
 	/** The edge answered NOT_ATTACHED: parked. An attach re-sends a read at once; a mutation waits for the attachment's `state` frame (awaitingState). */
 	awaitingAttach: boolean;
@@ -145,6 +250,8 @@ export function watchPendingCalls(): void {
 /** Remove one settled call and notify watchers. */
 function forgetCall(id: string): void {
 	pendingCalls.delete(id);
+	// A call nobody waits for any more must not be re-sent after a reconnect.
+	outbox.delete(id);
 	bumpPendingRevision((rev) => rev + 1);
 }
 
@@ -162,7 +269,7 @@ export function settleCallResult(frame: Extract<ServerFrame, { type: "call_resul
 	const pending = pendingCalls.get(frame.id);
 	if (!pending) return; // unknown id (timed out or stale): ignore
 	// The command never reached a session, so the same id is safe to re-send.
-	// Park the call: its replay timer keeps re-POSTing under the same id (never
+	// Park the call: its replay timer keeps re-sending under the same id (never
 	// past the dedup window), and an attach re-sends it at once.
 	if (
 		!frame.ok &&
@@ -185,7 +292,7 @@ export function settleCallResult(frame: Extract<ServerFrame, { type: "call_resul
 	else pending.reject(new Error(frame.error ?? "call failed"));
 }
 
-/** Re-POST an unanswered call, then re-arm: a recovered answer may be lost again. */
+/** Re-send an unanswered call, then re-arm: a recovered answer may be lost again. */
 function scheduleCallReplay(id: string): void {
 	const pending = pendingCalls.get(id);
 	if (!pending) return;
@@ -196,7 +303,7 @@ function scheduleCallReplay(id: string): void {
 		if (!current) return;
 		current.replayTimer = 0;
 		// At-most-once bound: past the dedup window the daemon no longer
-		// remembers the id, so a re-POST could EXECUTE the command again.
+		// remembers the id, so a re-send could EXECUTE the command again.
 		if (Date.now() - current.firstPostAt > COMMAND_DEDUP_WINDOW_MS) {
 			if (current.awaitingAttach || current.awaitingState) {
 				forgetCall(id);
@@ -209,16 +316,18 @@ function scheduleCallReplay(id: string): void {
 		// `state` frame (resumeParkedMutations) may decide it still belongs to
 		// the attachment it was made for. The timer stays armed for the window
 		// bound above.
-		if (!isParkedMutation(current)) {
+		// While the socket is down nothing goes out: resendUnsettled re-sends the
+		// call at the next open, and this chain only bounds it by the window.
+		if (uplink !== null && !isParkedMutation(current)) {
 			// A failed replay is not fatal: the call keeps its own deadline, and
-			// the next tick re-POSTs again (the daemon replays its answer).
-			void postCommand(current.cmd).catch(() => {});
+			// the next tick re-sends again (the daemon replays its answer).
+			void sendCommand(current.cmd).catch(() => {});
 		}
 		scheduleCallReplay(id);
 	}, CALL_REPLAY_INTERVAL_MS);
 }
 
-/** A mutation the edge refused as not attached and that has not been re-posted yet. */
+/** A mutation the edge refused as not attached and that has not been re-sent yet. */
 function isParkedMutation(pending: PendingCall): boolean {
 	return (
 		(pending.awaitingAttach || pending.awaitingState) &&
@@ -240,11 +349,11 @@ export function rejectPendingCalls(err: Error): void {
 	}
 }
 
-/** POST a call under its own id and put it on the replay cadence. */
+/** Send a call under its own id and put it on the replay cadence. */
 function sendCall(id: string): void {
 	const pending = pendingCalls.get(id);
 	if (!pending) return;
-	postCommand(pending.cmd).catch((err) => {
+	sendCommand(pending.cmd).catch((err) => {
 		if (pendingCalls.get(id) !== pending) return; // a racing answer already settled the call
 		forgetCall(id);
 		clearCallTimers(pending);
@@ -259,7 +368,7 @@ function sendCall(id: string): void {
  * same id (the daemon dedups it and never ran the first copy). A parked read
  * goes out at once, without scope. A parked mutation keeps its scope and waits
  * for the attachment's first `state` frame (resumeParkedMutations). A call past
- * COMMAND_DEDUP_WINDOW_MS fails instead: a re-POST could execute twice.
+ * COMMAND_DEDUP_WINDOW_MS fails instead: a re-send could execute twice.
  */
 export function retryNotAttachedCalls(): void {
 	for (const [id, pending] of pendingCalls) {
@@ -329,7 +438,7 @@ export function call(
 		return promise;
 	}
 	// Page-unique: ids from two tabs must never collide. The daemon dedups
-	// POSTs by id alone, so a shared id would swallow the other tab's command
+	// commands by id alone, so a shared id would swallow the other tab's command
 	// and a replayed answer would settle the wrong tab's pending call.
 	const id = `c${crypto.randomUUID()}`;
 	// streamId tags server-side bash/python chunk frames so the client can
@@ -436,7 +545,7 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 				}, DAEMON_TIMEOUT_MS)
 			: 0;
 	pendingAttach = { id, sessionId: cmd.sessionId, resolve, reject, timer };
-	postCommand(cmd).catch((err) => {
+	sendCommand(cmd).catch((err) => {
 		if (pendingAttach?.id === id) {
 			clearTimeout(pendingAttach.timer);
 			pendingAttach = null;
@@ -467,6 +576,8 @@ export function rejectPendingAttach(err: Error): void {
 	if (pendingAttach) {
 		clearTimeout(pendingAttach.timer);
 		pendingAttach.reject(err);
+		// The waiter was told "Disconnected": its attach must not run after the reconnect.
+		outbox.delete(pendingAttach.id);
 		pendingAttach = null;
 	}
 	settleAttachedFrame("");
@@ -559,7 +670,7 @@ export function settleAttachResult(frame: Extract<ServerFrame, { type: "attach_r
 		// its sessions to decide new-vs-resume; the sessions answer
 		// clears the gate (the flag stays set until then).
 		if (state.pendingSessionPicker === frame.sessionId) {
-			void postCommand({
+			void sendCommand({
 				type: "list_sessions",
 				id: crypto.randomUUID(),
 			} satisfies ClientCommand).catch(() => {});
@@ -596,15 +707,18 @@ export const pendingDaemonControl = new Map<
 >();
 
 export function rejectPendingDaemons(err: Error): void {
+	// A waiter that was told "Disconnected" must not have its command run after the reconnect.
 	for (const [id, p] of pendingDaemonLogs) {
 		clearTimeout(p.timer);
 		p.reject(err);
 		pendingDaemonLogs.delete(id);
+		outbox.delete(id);
 	}
 	for (const [id, p] of pendingDaemonControl) {
 		clearTimeout(p.timer);
 		p.reject(err);
 		pendingDaemonControl.delete(id);
+		outbox.delete(id);
 	}
 }
 
@@ -653,7 +767,7 @@ export function requestDaemonLogs(
 		...(opts.grep !== undefined ? { grep: opts.grep } : {}),
 	};
 	const { id, timer } = registerDaemonPending<DaemonLogsResult>(resolve, reject, pendingDaemonLogs);
-	postCommand({ ...cmd, id } satisfies ClientCommand).catch((err) => {
+	sendCommand({ ...cmd, id } satisfies ClientCommand).catch((err) => {
 		pendingDaemonLogs.delete(id);
 		clearTimeout(timer);
 		reject(err instanceof Error ? err : new Error(String(err)));
@@ -674,7 +788,7 @@ export function stopDaemon(projectDir: string, name: string): Promise<DaemonInfo
 		name,
 	};
 	const { id, timer } = registerDaemonPending<DaemonInfo>(resolve, reject, pendingDaemonControl);
-	postCommand({ ...cmd, id } satisfies ClientCommand).catch((err) => {
+	sendCommand({ ...cmd, id } satisfies ClientCommand).catch((err) => {
 		pendingDaemonControl.delete(id);
 		clearTimeout(timer);
 		reject(err instanceof Error ? err : new Error(String(err)));
@@ -695,7 +809,7 @@ export function restartDaemon(projectDir: string, name: string): Promise<DaemonI
 		name,
 	};
 	const { id, timer } = registerDaemonPending<DaemonInfo>(resolve, reject, pendingDaemonControl);
-	postCommand({ ...cmd, id } satisfies ClientCommand).catch((err) => {
+	sendCommand({ ...cmd, id } satisfies ClientCommand).catch((err) => {
 		pendingDaemonControl.delete(id);
 		clearTimeout(timer);
 		reject(err instanceof Error ? err : new Error(String(err)));

@@ -22,7 +22,7 @@ import {
 	attached,
 	dispatch,
 	dispatchSeq,
-	FakeEventSource,
+	FakeWebSocket,
 	installJsxShim,
 	installTransportStubs,
 	restoreBrowserGlobals,
@@ -44,7 +44,7 @@ function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
 /** Attach to daemon-a with its priming series done and the composer ready. */
 function attachReady(): void {
 	connect();
-	FakeEventSource.instances.at(-1)!.onopen?.();
+	FakeWebSocket.instances.at(-1)!.onopen?.();
 	dispatch({ type: "roster", daemons: [daemon("daemon-a")] });
 	dispatch(attached("daemon-a"));
 	dispatchSeq({ type: "history", messages: [] } as ServerFrame, 3);
@@ -176,7 +176,7 @@ describe("killed attached session process", () => {
 		expect(button).not.toMatch(/\bdisabled\b/);
 	});
 
-	test("a dropped /events stream still pauses row actions", () => {
+	test("a dropped browser socket still pauses row actions", () => {
 		const other = daemon("daemon-b", { status: "asleep" });
 		dispatch({ type: "roster", daemons: [daemon("daemon-a"), other] });
 		setState("connected", false);

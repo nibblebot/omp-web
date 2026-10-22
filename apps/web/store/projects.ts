@@ -8,7 +8,7 @@ import type {
 import { setState, state } from "../state";
 import { authedFetch } from "./auth";
 import { ctlError } from "./settings";
-import { ctlFetch, isConnected, postCommand } from "./transport";
+import { ctlFetch, isConnected, sendCommand } from "./transport";
 import { clearUserStopped, markUserStopped } from "./user-stopped";
 import { pushToast } from "./toasts";
 
@@ -128,7 +128,7 @@ export function listProjectBranches(
 	const waiters = pendingBranches.get(key);
 	if (waiters === undefined) pendingBranches.set(key, [waiter]);
 	else waiters.push(waiter);
-	postCommand({
+	sendCommand({
 		type: "list_project_branches",
 		id: crypto.randomUUID(),
 		projectId,
@@ -153,16 +153,16 @@ export function openAddProject(path?: string): void {
 
 /**
  * Wake an asleep daemon (spawned → respawn --resume; attached/remote → redial), on
- * `sessionFile` when picked. Resolves true once the edge accepted the POST: it
- * registers its pending resume before answering, so an attach posted after this
+ * `sessionFile` when picked. Resolves true once the edge acked the command: it
+ * registers its pending resume before acking, so an attach posted after this
  * resolves can never overtake the wake. Resolves false when refused (not
- * connected) or the POST failed (reported as a toast); never rejects. Callers that
+ * connected) or the command was refused (reported as a toast); never rejects. Callers that
  * attach next MUST await it and skip the attach on false (see wakeAndAttach).
  */
 export function spawnResume(daemonId: string, sessionFile?: string): Promise<boolean> {
 	if (refuseIfDisconnected()) return Promise.resolve(false);
 	clearUserStopped(daemonId);
-	return postCommand({
+	return sendCommand({
 		type: "spawn_resume",
 		id: crypto.randomUUID(),
 		daemonId,
@@ -181,7 +181,7 @@ export function spawnResume(daemonId: string, sessionFile?: string): Promise<boo
 export function stopDaemonById(daemonId: string): void {
 	if (refuseIfDisconnected()) return;
 	markUserStopped(daemonId);
-	void postCommand({
+	void sendCommand({
 		type: "stop",
 		id: crypto.randomUUID(),
 		daemonId,
@@ -195,7 +195,7 @@ const restartAwaitingAsleep = new Set<string>();
  *  waits for the roster to show it asleep: the edge refuses a wake while the process
  *  still reads ready. An asleep one clears the mark and wakes right away. No extra
  *  attach: the edge answers the attached frame on wake when this is the attached session.
- *  Resolves like spawnResume when it wakes at once; a ready row has no wake POST to
+ *  Resolves like spawnResume when it wakes at once; a ready row has no wake command to
  *  order an attach after (the later wake rides the roster), so it resolves true. */
 export function restartDaemonById(daemonId: string): Promise<boolean> {
 	const entry = state.daemonRoster.find((d) => d.daemonId === daemonId);
@@ -223,7 +223,7 @@ export function resumeRestartedDaemons(roster: Array<{ daemonId: string; status:
 export function removeDaemonById(daemonId: string): void {
 	if (refuseIfDisconnected()) return;
 	clearUserStopped(daemonId);
-	void postCommand({
+	void sendCommand({
 		type: "remove",
 		id: crypto.randomUUID(),
 		daemonId,
@@ -306,7 +306,7 @@ function sendKeyed<T>(
 	}
 	if (armPickerGate) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	pending.set(id, { resolve, reject });
-	postCommand(cmd).catch((err) => {
+	sendCommand(cmd).catch((err) => {
 		if (!pending.delete(id)) return;
 		disarmPickerGate();
 		reject(err instanceof Error ? err : new Error(String(err)));
@@ -327,7 +327,7 @@ export function addProject(path: string): Promise<{ projectId: string; existing:
  *  (the refusal arrives as an error frame). */
 export function sendRemoveProject(projectId: string): void {
 	if (refuseIfDisconnected()) return;
-	void postCommand({
+	void sendCommand({
 		type: "remove_project",
 		id: crypto.randomUUID(),
 		projectId,
@@ -400,7 +400,7 @@ export function syncProjects(): void {
 	const now = Date.now();
 	if (now - lastSyncAt < SYNC_MIN_INTERVAL_MS) return;
 	lastSyncAt = now;
-	void postCommand({
+	void sendCommand({
 		type: "sync_projects",
 		id: crypto.randomUUID(),
 	} satisfies ClientCommand).catch(() => {});
@@ -431,7 +431,7 @@ export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: stri
 	// the pending dim below via ProjectGroups, and fills the clone dialog's refusal).
 	setState("error", null);
 	setDeletePendingIds((prev) => new Set(prev).add(daemonId));
-	void postCommand({
+	void sendCommand({
 		type: "delete_worktree",
 		id: crypto.randomUUID(),
 		daemonId,
@@ -446,7 +446,7 @@ export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: stri
  *  state.worktreeDeleteInfo[daemonId] (worktree_delete_info unicast). */
 export function sendWorktreeDeleteInfo(daemonId: string): void {
 	if (refuseIfDisconnected()) return;
-	void postCommand({
+	void sendCommand({
 		type: "worktree_delete_info",
 		id: crypto.randomUUID(),
 		daemonId,

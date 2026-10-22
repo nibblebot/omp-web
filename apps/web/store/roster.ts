@@ -11,7 +11,7 @@ import {
 	isConnected,
 	isLatestAttachIntent,
 	isSessionSwitchSupersession,
-	postCommand,
+	sendCommand,
 	watchAttachment,
 } from "./transport";
 import { reportError } from "./toasts";
@@ -80,7 +80,7 @@ export function requestDaemonSessions(daemonId: string): Promise<SessionListEntr
 	}
 	pendingDaemonSessions.get(daemonId)?.([]); // supersede an older request
 	pendingDaemonSessions.set(daemonId, resolve);
-	postCommand({ type: "list_daemon_sessions", id: crypto.randomUUID(), daemonId }).catch(() => {
+	sendCommand({ type: "list_daemon_sessions", id: crypto.randomUUID(), daemonId }).catch(() => {
 		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
 		if (pendingDaemonSessions.get(daemonId) === resolve) {
 			pendingDaemonSessions.delete(daemonId);
@@ -92,7 +92,7 @@ export function requestDaemonSessions(daemonId: string): Promise<SessionListEntr
 
 /**
  * Attach `daemonId`, first waiting for its wake when `woke` is given (the
- * spawn_resume POST, see spawnResume). The browser posts the two as independent
+ * spawn_resume command, see spawnResume). The browser posts the two as independent
  * fetches whose arrival order at the edge is not guaranteed; an attach that
  * overtakes the wake would wake the row on lastSessionFile and fail the pick, so
  * the attach waits for the accept (the edge registers its pending resume
@@ -300,7 +300,7 @@ const pendingProjectWakes = new Map<string, string>();
  */
 export function spawnProjectSession(cwd: string, sessionFile: string): void {
 	pendingProjectWakes.set(cwd, sessionFile);
-	postCommand({ type: "spawn", id: crypto.randomUUID(), cwd } satisfies ClientCommand).catch(
+	sendCommand({ type: "spawn", id: crypto.randomUUID(), cwd } satisfies ClientCommand).catch(
 		(err: unknown) => {
 			pendingProjectWakes.delete(cwd);
 			reportError(err);
@@ -352,7 +352,7 @@ export function listSessions(): Promise<SessionListEntry[]> {
 	}
 	pendingSessions?.([]);
 	pendingSessions = resolve;
-	postCommand({ type: "list_sessions", id: crypto.randomUUID() } satisfies ClientCommand).catch(
+	sendCommand({ type: "list_sessions", id: crypto.randomUUID() } satisfies ClientCommand).catch(
 		(err) => {
 			// Latest-wins: only clear the slot if a newer request hasn't claimed it.
 			if (pendingSessions === resolve) pendingSessions = null;
@@ -370,7 +370,7 @@ export function listFiles(query: string, limit?: number): Promise<string[]> {
 	}
 	pendingFiles?.([]);
 	pendingFiles = resolve;
-	postCommand({
+	sendCommand({
 		type: "list_files",
 		id: crypto.randomUUID(),
 		query,

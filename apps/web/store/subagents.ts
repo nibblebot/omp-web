@@ -24,8 +24,8 @@ import {
  * (state.subagents) is maintained by the connect() mux in state.ts; this
  * module owns the mid-task steering/abort actions.
  *
- * All worker/advisor/goal/vibe reads go through `call()` (POST /command id
- * dedup + SSE call_result + ring replay). No new transport.
+ * All worker/advisor/goal/vibe reads go through `call()` (in-band command id
+ * dedup + call_result frame + ring replay). No new transport.
  */
 
 /** Steer a running subagent mid-task; rejects for unknown/idle/parked agents. */

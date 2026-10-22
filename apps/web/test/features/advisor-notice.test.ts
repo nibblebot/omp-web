@@ -5,7 +5,7 @@ import { featurePreferences, setFeaturePreference } from "../../features/prefere
 import { activateFeatures, isFeatureEnabled } from "../../features/registry";
 import { connect, setState, state } from "../../state";
 import {
-	FakeEventSource,
+	FakeWebSocket,
 	attached,
 	dispatch,
 	installTransportStubs,
@@ -47,7 +47,7 @@ function advisorMsg(count: number) {
 
 function primed(sessionId: string): void {
 	connect();
-	FakeEventSource.instances.at(-1)!.onopen?.();
+	FakeWebSocket.instances.at(-1)!.onopen?.();
 	dispatch(attached(sessionId));
 	dispatch({ type: "history", messages: [] } as ServerFrame);
 }

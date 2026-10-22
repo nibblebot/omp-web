@@ -616,7 +616,7 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 				return;
 			}
 			// Agent-side builtin/skill/extension/file command. Its command_output frames
-			// don't arrive over the SSE/POST transport (documented tradeoff).
+			// don't arrive over the browser socket transport (documented tradeoff).
 			forwardSlash(trimmed, entry.name, entry.source, parsed.args, images);
 			return;
 		}

@@ -10,7 +10,7 @@ import { connect, setState } from "../../state";
 import { restoreInitialRoute } from "../../store/deep-link";
 import { settleDaemonSessions } from "../../store/roster";
 import {
-	FakeEventSource,
+	FakeWebSocket,
 	callResult,
 	dispatch,
 	flushMicrotasks,
@@ -42,6 +42,7 @@ beforeEach(() => {
 	installLocalStorageShim();
 	written.length = 0;
 	setBrowserGlobal("location", {
+		origin: "http://localhost",
 		pathname: "/",
 		search: "",
 		hash: "#/d/d1/s/s1",
@@ -51,7 +52,7 @@ beforeEach(() => {
 		replaceState: (_: unknown, __: string, url: string) => written.push(`replace ${url}`),
 	} as unknown as History);
 	connect();
-	FakeEventSource.instances.at(-1)?.onopen?.();
+	FakeWebSocket.instances.at(-1)?.onopen?.();
 	setState({
 		modal: null,
 		view: "chat",

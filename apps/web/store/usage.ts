@@ -7,7 +7,7 @@ import { ctlError } from "./settings";
  * Usage domain (Phase 3 store facade split): provider usage reports from the
  * fleet control plane (GET /ctl/usage), mirrored into state.usage* with
  * single-flight refresh semantics. Usage is provider-account data,
- * not session data, so it needs neither the /events stream nor an attached
+ * not session data, so it needs neither the browser socket nor an attached
  * session. The SDK caches provider /usage for ~5min upstream (with jitter),
  * so the only periodic caller is the sidebar widget, re-running
  * refreshUsageReports() USAGE_AUTO_REFRESH_MS after the last fetch settled;

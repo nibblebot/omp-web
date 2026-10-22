@@ -184,6 +184,17 @@ export async function authedFetch(
 	});
 }
 
+/**
+ * The server said the session is dead without an HTTP answer to read: the
+ * browser socket closed 4401 or nacked a command 401. Same effect as a 401
+ * on authedFetch: drop the stale CSRF token and move to signedOut (sign-in
+ * modal). Concurrent reports collapse into one notification.
+ */
+export function expireSession(): void {
+	csrf = null;
+	transition("signedOut");
+}
+
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------

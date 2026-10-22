@@ -46,7 +46,7 @@ import {
  * the transcript (`items`/`live`), the /btw side panel reply buffer, and the
  * rAF-coalesced write machinery moved here from state.ts; state.ts re-exports
  * the public actions so call sites stay byte-identical. The store itself and
- * the connect()/SSE mux remain in state.ts. This module's buffered maps are
+ * the connect()/socket mux remain in state.ts. This module's buffered maps are
  * drained by the single flushDeltas rAF loop and called into by the mux.
  */
 
@@ -281,7 +281,7 @@ export function clearPendingDeltas(): void {
 	pendingToolUpdates.clear();
 }
 
-// Phase 1: SSE-frame text writes share the same rAF flush, coalescing N
+// Phase 1: Socket-frame text writes share the same rAF flush, coalescing N
 // frames between flushes into 1 store write per target key. Keys are stable
 // ids (toolCallId / bash item id / btw streamId). Unlike pendingDeltas'
 // positional block indices, a flush can never apply to the wrong item.
@@ -345,7 +345,7 @@ function flushDeltas(): void {
 		return;
 	}
 
-	// Coalesced SSE-frame writes: at most one store write per target key per
+	// Coalesced Socket-frame writes: at most one store write per target key per
 	// flush (the rAF cadence caps this at ≤60/s). The maps touch disjoint
 	// store paths (items vs btw.reply vs live.blocks), so application order
 	// between them is unconstrained.

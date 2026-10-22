@@ -90,8 +90,8 @@ beforeEach(() => {
 afterEach(restoreBrowserGlobals);
 
 describe("usage store slice", () => {
-	test("before the SSE stream opens, refreshUsageReports GETs /ctl/usage and fills the mirror", async () => {
-		connect(); // EventSource exists but onopen never fires: the page-load window
+	test("before the browser socket opens, refreshUsageReports GETs /ctl/usage and fills the mirror", async () => {
+		connect(); // the socket is dialed but onopen never fires: the page-load window
 		const requests = stubFetch(() => ({ status: 200, body: reportsFixture() }));
 
 		const before = Date.now();
@@ -100,7 +100,7 @@ describe("usage store slice", () => {
 		expect(state.usageRefreshedAt).toBeNull();
 		await settle();
 
-		// Exactly one GET; nothing went to POST /command.
+		// Exactly one GET; nothing was sent in band.
 		expect(requests).toEqual([{ url: "/ctl/usage", method: "GET" }]);
 		expect(state.connected).toBe(false);
 		expect(state.usageLoading).toBe(false);

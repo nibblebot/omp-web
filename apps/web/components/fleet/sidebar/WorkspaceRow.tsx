@@ -171,7 +171,7 @@ export const WorkspaceRow: Component<{
 }> = (props) => {
 	const d = () => props.daemon as RosterEntry;
 	// Row actions go to the fleet, not to the attached session: only a dropped
-	// /events stream pauses them. A dead attached session ("offline") must not,
+	// browser socket pauses them. A dead attached session ("offline") must not,
 	// since starting, restarting or switching rows is the way out of it.
 	const paused = () => !state.connected;
 
@@ -335,7 +335,7 @@ export const WorkspaceRow: Component<{
 	 *  pane follows it. The row pulses until the attach settles. */
 	const activateRow = (id: string, wake: () => Promise<boolean>) => {
 		setActivatingIds((prev) => new Set(prev).add(id));
-		// The attach is posted only once the wake POST is accepted (see wakeAndAttach).
+		// The attach is posted only once the wake command is acked (see wakeAndAttach).
 		wakeAndAttach(id, wake())
 			.catch(reportError)
 			.finally(() => endActivating(id));

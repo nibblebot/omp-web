@@ -7,7 +7,7 @@ import { FEATURE_IDS, type FeatureId } from "../../features/manifest";
 import { activateFeatures, featureModal, isFeatureEnabled } from "../../features/registry";
 import { connect, setState, state } from "../../state";
 import {
-	FakeEventSource,
+	FakeWebSocket,
 	assistantMsg,
 	attached,
 	callResult,
@@ -56,7 +56,7 @@ describe("advisor notes render inline (TUI advisor card parity)", () => {
 
 	function primed(): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("session-a"));
 	}
 
@@ -101,7 +101,7 @@ describe("advisor sheet modal", () => {
 describe("advisor sheet panel wire requests", () => {
 	test("stats and warnings read advisorGetStatus by section, never as probe or stats flags", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("session-a"));
 		installJsxShim();
 		void renderToStringAsync(() => createComponent(AdvisorPanel, {}));
@@ -125,7 +125,7 @@ describe("advisor sheet actions follow real state", () => {
 	/** Render the panel, answering each advisorGetStatus read it posts; `overview` is the case under test. */
 	async function renderPanel(overview: unknown): Promise<string> {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("session-a"));
 		installJsxShim();
 		try {

@@ -1,6 +1,6 @@
 /**
  * Store tests for the resume picker slice (store/resume.ts): the behavior the
- * picker components consume. The /events transport is the shared fake; every
+ * picker components consume. The browser socket transport is the shared fake; every
  * daemon answer is dispatched by hand, so nothing touches the network.
  *
  * - "All projects" is sent with every list request and persists in localStorage
@@ -31,7 +31,7 @@ import {
 } from "../../store/resume";
 import { openAddProject } from "../../store/projects";
 import {
-	FakeEventSource,
+	FakeWebSocket,
 	callResult,
 	dispatch,
 	flushMicrotasks,
@@ -78,7 +78,7 @@ beforeEach(() => {
 	installTransportStubs();
 	installLocalStorageShim();
 	connect();
-	FakeEventSource.instances.at(-1)?.onopen?.();
+	FakeWebSocket.instances.at(-1)?.onopen?.();
 	setState({ modal: null, daemonRoster: [] });
 	reset();
 });

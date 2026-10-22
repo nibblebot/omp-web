@@ -1,7 +1,7 @@
 import type { ClientCommand } from "#lib/wire/protocol";
 import { setState } from "../state";
 import { settingValue } from "./settings";
-import { isConnected, postCommand } from "./transport";
+import { isConnected, sendCommand } from "./transport";
 
 /**
  * Public relay the ShareSheet opt-in uses. Same value as the SDK's
@@ -24,7 +24,7 @@ export function relayConfigured(): boolean {
  */
 export function startCollabRoom(access: "view" | "control", relayUrl?: string): void {
 	if (!isConnected()) return;
-	void postCommand({
+	void sendCommand({
 		type: "collab_start",
 		id: crypto.randomUUID(),
 		access,
@@ -35,7 +35,7 @@ export function startCollabRoom(access: "view" | "control", relayUrl?: string): 
 /** End the attached session's room. The daemon answers with collab_status off. */
 export function stopCollabRoom(): void {
 	if (!isConnected()) return;
-	void postCommand({ type: "collab_stop", id: crypto.randomUUID() } satisfies ClientCommand).catch(
+	void sendCommand({ type: "collab_stop", id: crypto.randomUUID() } satisfies ClientCommand).catch(
 		() => {},
 	);
 }

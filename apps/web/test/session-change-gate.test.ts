@@ -22,7 +22,7 @@ import { call, rejectPendingCalls } from "../store/transport";
 import {
 	attached,
 	dispatch,
-	FakeEventSource,
+	FakeWebSocket,
 	installJsxShim,
 	installTransportStubs,
 	posted,
@@ -73,7 +73,7 @@ beforeEach(() => {
 	installTransportStubs();
 	installJsxShim();
 	connect();
-	FakeEventSource.instances.at(-1)!.onopen?.();
+	FakeWebSocket.instances.at(-1)!.onopen?.();
 	dispatch(attached("d1"));
 	dispatch(stateFrame("s1"));
 	setState("readyAt", 123);

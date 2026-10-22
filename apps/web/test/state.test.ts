@@ -57,13 +57,14 @@ import { clearAllDeletePending, resetPendingProjects } from "../store/projects";
 import { settingValue } from "../store/settings";
 import { reportError } from "../store/toasts";
 import {
-	FakeEventSource,
+	FakeWebSocket,
 	attached,
 	assistantMsg,
 	callResult,
 	dispatch,
 	dispatchSeq,
 	flushMicrotasks,
+	holdCommands,
 	installLocalStorageShim,
 	installTransportStubs,
 	itemCounts,
@@ -212,7 +213,7 @@ afterEach(() => {
 describe("attached-frame handling", () => {
 	test("daemon switch rejects the old session's calls but the fresh getSubagents pull survives", async () => {
 		connect();
-		const es = FakeEventSource.instances.at(-1);
+		const es = FakeWebSocket.instances.at(-1);
 		expect(es).toBeDefined();
 		es!.onopen?.(); // connected = true; without this call() fails fast
 
@@ -264,7 +265,7 @@ describe("attached-frame handling", () => {
 
 	test("a re-attach of the same session drops the previous generation's scope before the on-attach calls", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("d9"));
 		dispatch({
 			type: "state",
@@ -301,7 +302,7 @@ describe("attached-frame handling", () => {
 describe("replay dedup (finding #2: resume must not double-apply deltas)", () => {
 	function primeAndStream(): void {
 		connect();
-		const es = FakeEventSource.instances.at(-1);
+		const es = FakeWebSocket.instances.at(-1);
 		expect(es).toBeDefined();
 		es!.onopen?.();
 		dispatch(attached("session-a"));
@@ -368,7 +369,7 @@ describe("advisor notes render inline (TUI advisor card parity)", () => {
 
 	function primed(): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("session-a"));
 	}
 
@@ -407,7 +408,7 @@ describe("advisor notes render inline (TUI advisor card parity)", () => {
 describe("history: bang-shell and python runs render as settled cards", () => {
 	test("bashExecution and pythonExecution messages become bash items", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("session-a"));
 		dispatch({
 			type: "history",
@@ -470,7 +471,7 @@ describe("replayed mid-ask transcript (an ask card must not read done while pend
 
 	function primeAttached(): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("session-a"));
 	}
 
@@ -512,7 +513,7 @@ describe("attach correlation (finding #28)", () => {
 
 	test("an unrelated global error frame does not reject an in-flight attach; the keyed attach_result settles it", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true
+		FakeWebSocket.instances.at(-1)!.onopen?.(); // connected = true
 
 		const attach = attachSession("daemon-a");
 		const { id } = lastAttach();
@@ -539,7 +540,7 @@ describe("attach correlation (finding #28)", () => {
 
 	test("a keyed attach_result failure rejects the attach", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const attach = attachSession("daemon-b");
 		const { id } = lastAttach();
@@ -550,7 +551,7 @@ describe("attach correlation (finding #28)", () => {
 
 	test("a stale attach_result for a superseded attach never settles the new waiter", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		// Latest-wins: the second attach supersedes the first (which resolves
 		// immediately with whatever session is current, still "" here).
@@ -583,7 +584,7 @@ describe("attach correlation (finding #28)", () => {
 describe("ui_request_end dismissal (finding #16)", () => {
 	test("a settled dialog's ui_request_end dismisses it; ends for other ids leave it open", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch({
 			type: "ui_request",
 			id: "ui1",
@@ -603,21 +604,22 @@ describe("ui_request_end dismissal (finding #16)", () => {
 describe("hello_ok proto gate (finding #61)", () => {
 	test("hello_ok with a mismatched proto is terminal: error + teardown, no reconnect loop", () => {
 		connect();
-		const es = FakeEventSource.instances.at(-1)!;
+		const es = FakeWebSocket.instances.at(-1)!;
 		es.onopen?.();
 		expect(state.connected).toBe(true);
 		dispatch({ type: "hello_ok", proto: 1, name: "old", cwd: "/x", pid: 1, version: "0.0.0" });
 		expect(state.error).toContain("proto mismatch");
-		expect(state.error).toContain("expected 4");
+		expect(state.error).toContain(`expected ${OMP_PROTO}`);
 		expect(state.connected).toBe(false);
-		// Fail-closed: the stream is torn down and NO reconnect is scheduled
-		// (a second connect() would create a second FakeEventSource).
-		expect(FakeEventSource.instances.length).toBe(1);
+		// Fail-closed: the socket is torn down and NO reconnect is scheduled
+		// (a retry would show a backoff delay and dial a second FakeWebSocket).
+		expect(state.reconnectDelay).toBe(0);
+		expect(FakeWebSocket.instances.length).toBe(1);
 	});
 
 	test("hello_ok with the current proto is accepted", () => {
 		connect();
-		const es = FakeEventSource.instances.at(-1)!;
+		const es = FakeWebSocket.instances.at(-1)!;
 		es.onopen?.();
 		expect(state.connected).toBe(true);
 		dispatch({
@@ -757,28 +759,29 @@ describe("client debug ring (transport observability)", () => {
 		return cmd.id;
 	}
 
-	test("connect/open/teardown write ring entries; CLOSED onerror schedules the backoff retry", () => {
+	test("connect/open/teardown write ring entries; a socket close schedules the jittered backoff retry", () => {
 		vi.useFakeTimers();
 		try {
 			connect();
-			expect(state.debugLog.at(-1)?.message).toBe("connecting /events");
-			const es = FakeEventSource.instances.at(-1)!;
-			es.onopen?.();
+			expect(state.debugLog.at(-1)?.message).toBe("connecting /ws");
+			const ws = FakeWebSocket.instances.at(-1)!;
+			ws.onopen?.();
 			expect(state.debugLog.at(-1)?.message).toBe("stream open");
 			expect(state.reconnectDelay).toBe(0);
 
-			// The stub carries no readyState, so onerror takes the terminal CLOSED
-			// path (teardown + manual retry) rather than the transient-blip return.
-			es.onerror?.();
+			ws.serverClose(1006);
 			expect(state.connected).toBe(false);
-			expect(state.reconnectDelay).toBe(1000);
+			// reconnectDelayMs(0): uniform in [MIN/2, MIN] (RECONNECT_BACKOFF_MIN_MS = 1000).
+			const delay = state.reconnectDelay;
+			expect(delay).toBeGreaterThanOrEqual(500);
+			expect(delay).toBeLessThanOrEqual(1000);
 			const messages = state.debugLog.map((e) => e.message).join("\n");
 			expect(messages).toContain("stream closed");
-			expect(messages).toContain("connection lost, retrying in 1000ms");
+			expect(messages).toContain(`connection lost, retrying in ${delay}ms`);
 
-			// The scheduled retry dials a fresh stream once the backoff elapses.
-			vi.advanceTimersByTime(1000);
-			expect(FakeEventSource.instances.length).toBe(2);
+			// The scheduled retry dials a fresh socket once the backoff elapses.
+			vi.advanceTimersByTime(delay);
+			expect(FakeWebSocket.instances.length).toBe(2);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -786,7 +789,7 @@ describe("client debug ring (transport observability)", () => {
 
 	test("the ring is capped at 300 entries, oldest dropped", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		// daemon_status frames land one ring entry each; distinct daemon ids
 		// make the cap's drop boundary observable in the messages.
 		for (let i = 0; i < 320; i++) {
@@ -799,7 +802,7 @@ describe("client debug ring (transport observability)", () => {
 
 	test("attach/attach_result and error frames land ring entries", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		dispatch(attached("daemon-a"));
 		expect(state.debugLog.at(-1)?.message).toBe("attached daemon-a");
@@ -853,7 +856,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		return requests;
 	}
 
-	test("refreshSettings GETs /ctl/settings and stores the model (no /command POST)", async () => {
+	test("refreshSettings GETs /ctl/settings and stores the model (nothing sent in band)", async () => {
 		setState({
 			currentSessionId: "",
 			settingsModel: null,
@@ -866,7 +869,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		await settle();
 
 		expect(requests).toEqual([{ url: "/ctl/settings", method: "GET", body: undefined }]);
-		expect(posted).toEqual([]); // nothing went over the /command uplink
+		expect(posted).toEqual([]); // nothing went over the browser socket
 		expect(state.settingsModel).toBe(model);
 		expect(state.settingsLoading).toBe(false);
 		expect(state.error).toBeNull();
@@ -949,7 +952,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		expect(state.settingsLoading).toBe(false);
 	});
 
-	test("with a session attached, updateSetting stays on the /command call path (no /ctl fetch)", async () => {
+	test("with a session attached, updateSetting stays on the in-band call path (no /ctl fetch)", async () => {
 		setState({
 			currentSessionId: "",
 			settingsModel: null,
@@ -958,7 +961,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		});
 		const requests = stubFetch(() => ({ status: 200, body: model }));
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true so call() posts
+		FakeWebSocket.instances.at(-1)!.onopen?.(); // connected = true so call() posts
 		// Flip to an attached state AFTER the stream opens. onopen's boot refresh
 		// is a GET /ctl/settings, which the assertion below excludes.
 		setState({ currentSessionId: "daemon-a" });
@@ -967,11 +970,11 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		await settle();
 
 		expect(requests.filter((r) => r.url.startsWith("/ctl") && r.method !== "GET")).toEqual([]); // no /ctl write while attached
-		// The /command uplink carries the RPC (recorded by stubFetch, since it
-		// replaced the beforeEach fetch stub that feeds `posted`).
-		const calls = requests
-			.filter((r) => r.url === "/command")
-			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>);
+		// The browser socket carries the RPC (recorded in `posted`).
+		const calls = posted.filter(
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method === "setSetting",
+		);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].method).toBe("setSetting");
 		expect(calls[0].args).toEqual(["agent.model", "gpt-5", null, null, "revision"]);
@@ -985,17 +988,17 @@ describe("fleet settings fallback (no daemon attached)", () => {
 
 	test("a revision-reply write applies the pushed model and does not refetch when it arrived", async () => {
 		setState({ currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
-		const requests = stubFetch(() => ({ status: 200, body: model }));
+		stubFetch(() => ({ status: 200, body: model }));
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState({ currentSessionId: "daemon-a" });
 
 		updateSetting("agent.model", "gpt-5");
 		await settle();
-		const write = requests
-			.filter((r) => r.url === "/command")
-			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>)
-			.find((c) => c.method === "setSetting")!;
+		const write = posted.find(
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method === "setSetting",
+		)!;
 		expect(write.args).toEqual(["agent.model", "gpt-5", null, null, "revision"]);
 
 		const next: SettingsModel = { tabs: [], revision: 12 };
@@ -1003,32 +1006,32 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		dispatch(callResult(write.id, { revision: 12 }));
 		await settle();
 		expect(state.settingsModel).toEqual(next);
-		const reads = requests
-			.filter((r) => r.url === "/command")
-			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>)
-			.filter((c) => c.method === "getSettings");
+		const reads = posted.filter(
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method === "getSettings",
+		);
 		expect(reads).toEqual([]);
 	});
 
 	test("a revision reply ahead of the pushed model refetches the full model", async () => {
 		setState({ currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
-		const requests = stubFetch(() => ({ status: 200, body: model }));
+		stubFetch(() => ({ status: 200, body: model }));
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState({ currentSessionId: "daemon-a" });
 
 		updateSetting("agent.model", "gpt-5");
 		await settle();
-		const write = requests
-			.filter((r) => r.url === "/command")
-			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>)
-			.find((c) => c.method === "setSetting")!;
+		const write = posted.find(
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method === "setSetting",
+		)!;
 		dispatch(callResult(write.id, { revision: 13 }));
 		await settle();
-		const read = requests
-			.filter((r) => r.url === "/command")
-			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>)
-			.find((c) => c.method === "getSettings");
+		const read = posted.find(
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method === "getSettings",
+		);
 		expect(read).toBeDefined();
 		dispatch(callResult(read!.id, { tabs: [], revision: 13 }));
 		await settle();
@@ -1071,16 +1074,16 @@ describe("fleet settings fallback (no daemon attached)", () => {
 			settingsLoading: false,
 			error: null,
 		});
-		const requests = stubFetch(() => ({ status: 200, body: model }));
+		stubFetch(() => ({ status: 200, body: model }));
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState({ currentSessionId: "daemon-a" });
 
 		updateSetting("display.hideToolActivity", true, 3);
 		await settle();
-		const sent = requests
-			.filter((r) => r.url === "/command")
-			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>);
+		const sent = posted.filter(
+			(c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call",
+		);
 		dispatch(
 			callResult(sent.at(-1)!.id, undefined, false, "Settings changed; refresh before editing."),
 		);
@@ -1124,7 +1127,7 @@ describe("settings_changed revision guard and settingValue()", () => {
 		// path and must not run here.
 		setState({ currentSessionId: "daemon-a", settingsModel: null });
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		dispatch({ type: "settings_changed", model: modelAt(5, "gpt-5") });
 		expect(state.settingsModel?.revision).toBe(5);
@@ -1273,7 +1276,7 @@ describe("answerUnviewed (turn ended below the viewport)", () => {
 	/** A fully primed stream: attached, empty history, readiness gate cleared. */
 	function primeReady(): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("s1"));
 		dispatchSeq({ type: "history", messages: [] }, 3);
 		dispatch({ type: "ready", readyAt: 123 });
@@ -1350,7 +1353,7 @@ describe("chatUnviewed (a turn ended while in Analysis)", () => {
 	/** A fully primed stream: attached, empty history, readiness gate cleared. */
 	function primeReady(): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("s1"));
 		dispatchSeq({ type: "history", messages: [] }, 3);
 		dispatch({ type: "ready", readyAt: 123 });
@@ -1387,7 +1390,7 @@ describe("chatUnviewed (a turn ended while in Analysis)", () => {
 		// Prime the connected transport without an attached session so d2 is
 		// detached; then switch to analysis.
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setView("analysis");
 
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
@@ -1404,7 +1407,7 @@ describe("chatUnviewed (a turn ended while in Analysis)", () => {
 
 	test("the ATTACHED daemon's turn end is not chatUnviewed either", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("d2")); // currentSessionId = d2
 		setView("analysis");
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
@@ -1522,7 +1525,7 @@ describe("aria-live announcements (finding #P1)", () => {
 	/** A fully primed stream: attached, empty history, readiness gate cleared. */
 	function primeReady(): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("s1"));
 		dispatchSeq({ type: "history", messages: [] }, 3);
 		dispatch({ type: "ready", readyAt: 123 });
@@ -1536,7 +1539,7 @@ describe("aria-live announcements (finding #P1)", () => {
 
 	test("an agent turn starting announces only after the session is ready", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("s1"));
 		// Streaming flips during priming; no announcement until the gate clears.
 		dispatchSeq(agentStart(), 1024);
@@ -1641,7 +1644,7 @@ describe("aria-live announcements (finding #P1)", () => {
 describe("workingIntent (dynamic shimmer label)", () => {
 	function primeReady(): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("s1"));
 		dispatchSeq({ type: "history", messages: [] }, 3);
 		dispatch({ type: "ready", readyAt: 123 });
@@ -1733,7 +1736,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 
 	test("registered_projects populates the store and survives a session reset (fleet-scoped)", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		dispatch({ type: "registered_projects", projects: [p1, p2, p3] });
 		expect(state.registeredProjects).toEqual([p1, p2, p3]);
@@ -1748,7 +1751,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 
 	test("a later registered_projects broadcast replaces the collection wholesale", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		dispatch({ type: "registered_projects", projects: [p1, p2] });
 		dispatch({ type: "registered_projects", projects: [p2] }); // p1 deregistered
@@ -1757,7 +1760,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 
 	test("registered_projects carries the fleet config path (additive; missing = null, fleet-scoped)", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		// Older edges omit configPath entirely: the store must read null.
 		dispatch({ type: "registered_projects", projects: [p1] });
@@ -1791,7 +1794,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 
 	test("daemonsByProject: registry order, zero-daemon projects present, main-checkout rows first", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		// Registry order deliberately differs from roster order.
 		dispatch({ type: "registered_projects", projects: [p2, p1, p3] });
@@ -1814,7 +1817,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 
 	test("daemonsByProject drops entries without a projectId and orders each group main, worktrees by branch, clones", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch({ type: "registered_projects", projects: [p1] });
 		dispatch({
 			type: "roster",
@@ -1842,7 +1845,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 
 	test("worktree_delete_info answers populate the daemonId-keyed evidence map (fleet-scoped)", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		dispatch({
 			type: "worktree_delete_info",
@@ -1894,7 +1897,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 
 	test("listProjectBranches resolves via a matching project_branches frame; other projects or remotes do not settle it", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true
+		FakeWebSocket.instances.at(-1)!.onopen?.(); // connected = true
 
 		const branches = listProjectBranches("p1");
 		expect(posted).toEqual([
@@ -1933,7 +1936,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 
 	test("listProjectBranches with a remote posts it and settles from that remote's frame", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const fromOrigin = listProjectBranches("p1", "origin");
 		expect(posted).toEqual([
@@ -1966,7 +1969,7 @@ function lastCommandId(): string {
 describe("Phase 5: project/worktree command senders", () => {
 	test("addProject posts add_project and resolves from add_project_result", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const added = addProject("/repos/a");
 		expect(posted).toEqual([{ type: "add_project", id: expect.any(String), path: "/repos/a" }]);
@@ -1982,7 +1985,7 @@ describe("Phase 5: project/worktree command senders", () => {
 
 	test("addProject reports an already-registered checkout as existing; a refusal rejects with the fleet's message", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const again = addProject("/repos/a/src");
 		dispatch({
@@ -2006,7 +2009,7 @@ describe("Phase 5: project/worktree command senders", () => {
 
 	test("addProject never arms the session picker gate", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const added = addProject("/repos/a");
 		expect(state.pendingSessionPicker).toBeNull();
@@ -2023,14 +2026,14 @@ describe("Phase 5: project/worktree command senders", () => {
 
 	test("sendRemoveProject posts remove_project", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		sendRemoveProject("p1");
 		expect(posted).toEqual([{ type: "remove_project", id: expect.any(String), projectId: "p1" }]);
 	});
 
 	test("createWorktree posts create_worktree (start:true) and resolves with the daemonId from workspace_create_result", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const created = createWorktree("p1", { name: "feature-x", baseRef: "main" });
 		expect(posted).toEqual([
@@ -2049,7 +2052,7 @@ describe("Phase 5: project/worktree command senders", () => {
 
 	test("createWorktree with an existing branch posts existingBranch; a refusal rejects with the fleet's message", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const existing = createWorktree("p1", { name: "feat", existingBranch: "feat" });
 		expect(posted).toEqual([
@@ -2073,7 +2076,7 @@ describe("Phase 5: project/worktree command senders", () => {
 
 	test("createClone posts create_clone (start:true) with the remote source and resolves from workspace_create_result", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const cloned = createClone("p1", {
 			name: "clone-x",
@@ -2099,7 +2102,7 @@ describe("Phase 5: project/worktree command senders", () => {
 
 	test("resetPendingProjects (stream teardown) rejects in-flight add and create waiters with Disconnected", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const added = addProject("/repos/a");
 		const created = createWorktree("p1", { name: "feat" });
@@ -2110,7 +2113,7 @@ describe("Phase 5: project/worktree command senders", () => {
 
 	test("syncProjects posts sync_projects and coalesces calls within 5s", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const base = Date.now() + 100_000;
 		const now = vi.spyOn(Date, "now").mockReturnValue(base);
@@ -2128,7 +2131,7 @@ describe("Phase 5: project/worktree command senders", () => {
 
 	test("sendDeleteWorktree posts delete_worktree (deleteBranch is the branch name, optional)", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		sendDeleteWorktree("d1", { deleteBranch: "feat" });
 		expect(posted).toEqual([
@@ -2142,7 +2145,7 @@ describe("Phase 5: project/worktree command senders", () => {
 
 	test("sendWorktreeDeleteInfo posts worktree_delete_info for the daemon", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		sendWorktreeDeleteInfo("d1");
 		expect(posted).toEqual([
 			{ type: "worktree_delete_info", id: expect.any(String), daemonId: "d1" },
@@ -2179,7 +2182,7 @@ describe("Phase 5: post-attach session-picker gate", () => {
 
 	test("armed gate: attach_result asks list_sessions; non-empty answer opens the picker with the daemon context", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		// The sender arms the gate (it cannot know the spawned daemon's id).
 		const created = createWorktree("p1", { name: "feat" });
@@ -2206,7 +2209,7 @@ describe("Phase 5: post-attach session-picker gate", () => {
 
 	test("armed gate: empty sessions answer starts a new session and clears the gate (no picker)", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const created = createWorktree("p1", { name: "feat" });
 		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d2" });
@@ -2228,7 +2231,7 @@ describe("Phase 5: post-attach session-picker gate", () => {
 
 	test("an attach failure disarms the gate", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const created = createWorktree("p1", { name: "feat", existingBranch: "feat" });
 		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d3" });
@@ -2248,7 +2251,7 @@ describe("Phase 5: post-attach session-picker gate", () => {
 
 	test("a refused create disarms the gate before any attach", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const created = createWorktree("p1", { name: "feat" });
 		expect(state.pendingSessionPicker).not.toBeNull();
@@ -2264,7 +2267,7 @@ describe("Phase 5: post-attach session-picker gate", () => {
 
 	test("a superseding attach re-points the gate to the latest daemon (latest-wins)", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const created = createClone("p1", { name: "clone-x", profileId: "prof" });
 		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d0" });
@@ -2303,7 +2306,7 @@ describe("Phase 5: post-attach session-picker gate", () => {
 
 	test("spawn_resume never arms the gate (routine asleep-row wake)", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		expect(state.pendingSessionPicker).toBeNull();
 		spawnResume("d9");
@@ -2313,7 +2316,7 @@ describe("Phase 5: post-attach session-picker gate", () => {
 
 	test("no armed gate: attach + sessions answer open nothing", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const attach = attachSession("d4");
 		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: true, sessionId: "d4" });
@@ -2329,7 +2332,7 @@ describe("Phase 5: post-attach session-picker gate", () => {
 
 	test("a switch to a different daemon disarms the gate; the onboarding daemon's own switch keeps it", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("daemon-a")); // already attached elsewhere
 
 		// Onboarding flow: armed, then attached to the new daemon.
@@ -2359,7 +2362,7 @@ describe("worktree_removed (on-disk removal toast)", () => {
 	/** A fully primed stream: attached + empty history. */
 	function prime(): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("s1"));
 	}
 
@@ -2453,7 +2456,7 @@ describe("attached session reconciliation against roster truth", () => {
 	/** Connect + attach to a daemon with an empty-transcript prime in place. */
 	function attachAndPrime(): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("daemon-a"));
 		dispatchSeq({ type: "history", messages: [userMsg("q"), assistantMsg("a")] } as ServerFrame, 3);
 		setState("readyAt", 123);
@@ -2644,7 +2647,7 @@ describe("roster_delta frames", () => {
 	/** Open the stream and seed the roster with daemons A and B. */
 	function seedAB(): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch({ type: "roster", daemons: [daemon("a"), daemon("b")] });
 		expect(rosterIds()).toEqual(["a", "b"]);
 	}
@@ -2773,7 +2776,7 @@ describe("reportError", () => {
 
 	test("a failed queue action surfaces the bare error text; a superseded one stays silent", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		// Queue actions act on an attached session.
 		dispatch(attached("d1"));
 		const chip = { kind: "steer" as const, text: "hi" };
@@ -2821,7 +2824,7 @@ describe("unread-dot tracking", () => {
 
 	test("switching away mid-stream marks the abandoned session unread", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("daemon-a"));
 		dispatchSeq(agentStart(), 1024); // driver state.streaming → true
 		expect(state.streaming).toBe(true);
@@ -2834,7 +2837,7 @@ describe("unread-dot tracking", () => {
 
 	test("switching away while NOT streaming leaves the session read", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("daemon-a"));
 
 		dispatch(attached("daemon-b"));
@@ -2845,7 +2848,7 @@ describe("unread-dot tracking", () => {
 
 	test("attaching to a marked session clears its unread dot", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("daemon-a"));
 		dispatchSeq(agentStart(), 1024);
 		dispatch(attached("daemon-b"));
@@ -2858,7 +2861,7 @@ describe("unread-dot tracking", () => {
 
 	test("a roster frame prunes unread ids for daemons that left", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("daemon-a"));
 		dispatchSeq(agentStart(), 1024);
 		dispatch(attached("daemon-b"));
@@ -2898,7 +2901,7 @@ describe("daemon_activity frames", () => {
 
 	test("stores per-daemon activity; an identical repeat is idempotent", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
 		expect(state.daemonActivity["d2"]).toEqual({ streaming: true, blocked: false });
@@ -2914,7 +2917,7 @@ describe("daemon_activity frames", () => {
 
 	test("a detached daemon's streaming flip true→false marks it unread", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
 		expect(unreadIds().has("d2")).toBe(false);
@@ -2925,7 +2928,7 @@ describe("daemon_activity frames", () => {
 
 	test("the ATTACHED daemon's turn end is NOT marked unread", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("d2")); // currentSessionId = d2
 
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
@@ -2936,7 +2939,7 @@ describe("daemon_activity frames", () => {
 
 	test("a roster frame without d2 prunes its daemonActivity entry", () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
 
 		dispatch({ type: "roster", daemons: [daemon("d1")] });
@@ -2990,7 +2993,7 @@ describe("roster session dropdown", () => {
 
 	test("daemon_sessions frame settles the per-daemon dropdown request", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		const pending = requestDaemonSessions("d9");
 		expect(postedOf("list_daemon_sessions")).toEqual([
@@ -3005,7 +3008,7 @@ describe("roster session dropdown", () => {
 
 	test("resumeDaemonSession wakes an asleep daemon with the chosen session then attaches", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
 			rosterDaemon("d9", {
 				status: "asleep",
@@ -3033,7 +3036,7 @@ describe("roster session dropdown", () => {
 		// its pipe); a dropdown pick wakes it on the picked file and must attach
 		// again, or the page sits on "No active session".
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
 			rosterDaemon("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
@@ -3059,7 +3062,7 @@ describe("roster session dropdown", () => {
 
 	test("picking the asleep session the view is already on from the palette wakes and attaches it", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
 			rosterDaemon("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
@@ -3079,27 +3082,12 @@ describe("roster session dropdown", () => {
 		]);
 	});
 
-	test("resumeDaemonSession posts the attach only after the spawn_resume POST is accepted, and none when it fails", async () => {
-		// The edge registers its pending resume before answering the spawn_resume
-		// POST, so an attach posted after that answer can never overtake the pick.
-		const held: Array<{ cmd: ClientCommand; settle: (ok: boolean) => void }> = [];
-		setBrowserGlobal("fetch", ((_input: unknown, init?: RequestInit) => {
-			if (typeof init?.body !== "string")
-				return Promise.resolve({ ok: true, status: 202 } as Response);
-			const cmd = JSON.parse(init.body) as ClientCommand;
-			posted.push(cmd);
-			if (cmd.type !== "spawn_resume") {
-				return Promise.resolve({ ok: true, status: 202 } as Response);
-			}
-			return new Promise<Response>((resolve) =>
-				held.push({
-					cmd,
-					settle: (ok) => resolve({ ok, status: ok ? 202 : 500 } as Response),
-				}),
-			);
-		}) as unknown as typeof fetch);
+	test("resumeDaemonSession sends the attach only after the spawn_resume is acked, and none when it is refused", async () => {
+		// The edge registers its pending resume before acking the spawn_resume,
+		// so an attach sent after that ack can never overtake the pick.
+		const held = holdCommands("spawn_resume");
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
 			rosterDaemon("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 			rosterDaemon("d8", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
@@ -3118,7 +3106,7 @@ describe("roster session dropdown", () => {
 		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
 		await resumed;
 
-		// A refused spawn_resume POST never posts its attach; the failure toasts.
+		// A refused spawn_resume never sends its attach; the failure toasts.
 		const failed = resumeDaemonSession("d8", "/sessions/picked.jsonl");
 		await flushMicrotasks();
 		held[1]!.settle(false);
@@ -3128,24 +3116,12 @@ describe("roster session dropdown", () => {
 		expect(state.toasts.some((t) => t.text.includes("spawn_resume"))).toBe(true);
 	});
 
-	test("an attach requested while a wake's spawn_resume POST is in flight supersedes that wake's attach", async () => {
+	test("an attach requested while a wake's spawn_resume is in flight supersedes that wake's attach", async () => {
 		// Click asleep d9, then ready d7 before d9's spawn_resume is accepted: the
-		// user's last choice (d7) wins, d9's attach is never posted.
-		const held: Array<(ok: boolean) => void> = [];
-		setBrowserGlobal("fetch", ((_input: unknown, init?: RequestInit) => {
-			if (typeof init?.body !== "string")
-				return Promise.resolve({ ok: true, status: 202 } as Response);
-			const cmd = JSON.parse(init.body) as ClientCommand;
-			posted.push(cmd);
-			if (cmd.type !== "spawn_resume") {
-				return Promise.resolve({ ok: true, status: 202 } as Response);
-			}
-			return new Promise<Response>((resolve) =>
-				held.push((ok) => resolve({ ok, status: ok ? 202 : 500 } as Response)),
-			);
-		}) as unknown as typeof fetch);
+		// user's last choice (d7) wins, d9's attach is never sent.
+		const held = holdCommands("spawn_resume");
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
 			rosterDaemon("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 			rosterDaemon("d7", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
@@ -3160,7 +3136,7 @@ describe("roster session dropdown", () => {
 		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d7" });
 		await other;
 
-		held[0]!(true);
+		held[0]!.settle(true);
 		await flushWake();
 		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["d7"]);
 		// Superseded, the wake settles without an attach of its own.
@@ -3169,7 +3145,7 @@ describe("roster session dropdown", () => {
 
 	test("resumeDaemonSession retries a switch swept by its own attach's supersession, never banners", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		// Attached to d1; resume a session on a DIFFERENT ready daemon (d9).
 		// the switch lands in-flight while the d9 attach's `attached` frame
 		// sweeps pending calls with "session switched".
@@ -3205,7 +3181,7 @@ describe("roster session dropdown", () => {
 				}) as unknown as Response) as unknown as typeof fetch,
 		);
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("currentSessionId", "d1");
 		const opened = attachForPanel("d9");
 		setState("currentSessionId", "d9");
@@ -3226,7 +3202,7 @@ describe("roster session dropdown", () => {
 				}) as unknown as Response) as unknown as typeof fetch,
 		);
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("currentSessionId", "d1");
 		const opened = attachForPanel("d9");
 		setState("currentSessionId", "d2");
@@ -3237,7 +3213,7 @@ describe("roster session dropdown", () => {
 
 	test("resumeDaemonSession on a ready detached daemon attaches first, then switches to the picked session", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
 			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
@@ -3262,7 +3238,7 @@ describe("roster session dropdown", () => {
 
 	test("resumeDaemonSession to the already-current session on a ready daemon only attaches", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
 			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
@@ -3284,12 +3260,18 @@ describe("roster session dropdown", () => {
 	test("startDaemonNewSession wakes an asleep daemon, attaches, then starts a new session", async () => {
 		// The extra ticks the wake POST adds let the settings pull's fetch resolve;
 		// the default stub has no body reader for it.
-		setBrowserGlobal("fetch", (async (_input: unknown, init?: RequestInit) => {
-			if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
-			return { ok: true, status: 202, json: async () => ({}), text: async () => "" } as Response;
-		}) as unknown as typeof fetch);
+		setBrowserGlobal(
+			"fetch",
+			(async () =>
+				({
+					ok: true,
+					status: 202,
+					json: async () => ({}),
+					text: async () => "",
+				}) as Response) as unknown as typeof fetch,
+		);
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
 			rosterDaemon("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
@@ -3325,12 +3307,18 @@ describe("roster session dropdown", () => {
 		// stopped daemon. attach_result lands before the proxied attached/state
 		// frames; a newSession posted in that gap carries the old scope and the
 		// session rejects it as stale.
-		setBrowserGlobal("fetch", (async (_input: unknown, init?: RequestInit) => {
-			if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
-			return { ok: true, status: 202, json: async () => ({}), text: async () => "" } as Response;
-		}) as unknown as typeof fetch);
+		setBrowserGlobal(
+			"fetch",
+			(async () =>
+				({
+					ok: true,
+					status: 202,
+					json: async () => ({}),
+					text: async () => "",
+				}) as Response) as unknown as typeof fetch,
+		);
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
 			rosterDaemon("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
@@ -3366,7 +3354,7 @@ describe("roster session dropdown", () => {
 
 	test("startDaemonNewSession drops the new session when another session gets attached first", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("currentSessionId", "d1");
 		setState("daemonRoster", [rosterDaemon("d9", { status: "ready" })]);
 
@@ -3384,7 +3372,7 @@ describe("roster session dropdown", () => {
 
 	test("startDaemonNewSession on the attached ready daemon starts at once", async () => {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		setState("currentSessionId", "d9");
 		setState("daemonRoster", [rosterDaemon("d9", { status: "ready" })]);
 
@@ -3395,15 +3383,14 @@ describe("roster session dropdown", () => {
 	});
 });
 
-describe("call delivery: a lost answer is recovered by re-POSTing the command", () => {
+describe("call delivery: a lost answer is recovered by re-sending the command", () => {
 	/**
-	 * Fake daemon over the stubbed fetch + FakeEventSource. It EXECUTES each
-	 * command id once and records the answer, but the first answer never rides
-	 * the downlink: call_result is a non-ringed unicast, so a frame dropped on
-	 * the daemon pipe (backpressure drop-and-resume, a redial, a lost accept)
-	 * is gone for good. A re-POST of the SAME id is deduped, no second
-	 * execution, and REPLAYS the recorded answer, exactly like the daemon's
-	 * command dedup.
+	 * Fake daemon over FakeWebSocket. It EXECUTES each command id once and
+	 * records the answer, but the first answer never rides the downlink:
+	 * call_result is a non-ringed unicast, so a frame dropped on the daemon
+	 * pipe (a redial, backpressure drop-and-resume) is gone for good. A re-send
+	 * of the SAME id is acked again, deduped (no second execution), and REPLAYS
+	 * the recorded answer, exactly like the daemon's command dedup.
 	 */
 	function startLostAnswerDaemon(answerFor: (id: string) => ServerFrame): {
 		executed: string[];
@@ -3412,20 +3399,18 @@ describe("call delivery: a lost answer is recovered by re-POSTing the command", 
 		const executed: string[] = [];
 		const posts: string[] = [];
 		const answers = new Map<string, ServerFrame>();
-		setBrowserGlobal("fetch", (async (_input: unknown, init?: RequestInit) => {
-			const cmd = JSON.parse(String(init?.body)) as ClientCommand;
-			if (cmd.type === "call") {
-				posts.push(cmd.id);
-				const recorded = answers.get(cmd.id);
-				if (recorded === undefined) {
-					executed.push(cmd.id);
-					answers.set(cmd.id, answerFor(cmd.id));
-				} else {
-					dispatch(recorded); // the deduped re-POST's replayed answer
-				}
+		FakeWebSocket.reply = (cmd, ws) => {
+			ws.ack(cmd.id);
+			if (cmd.type !== "call") return;
+			posts.push(cmd.id);
+			const recorded = answers.get(cmd.id);
+			if (recorded === undefined) {
+				executed.push(cmd.id);
+				answers.set(cmd.id, answerFor(cmd.id));
+			} else {
+				dispatch(recorded); // the deduped re-send's replayed answer
 			}
-			return { ok: true, status: 202 } as Response;
-		}) as unknown as typeof fetch);
+		};
 		return { executed, posts };
 	}
 
@@ -3433,7 +3418,7 @@ describe("call delivery: a lost answer is recovered by re-POSTing the command", 
 		vi.useFakeTimers();
 		try {
 			connect();
-			FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true
+			FakeWebSocket.instances.at(-1)!.onopen?.(); // connected = true
 			const daemon = startLostAnswerDaemon((id) => ({
 				type: "call_result",
 				id,
@@ -3451,7 +3436,7 @@ describe("call delivery: a lost answer is recovered by re-POSTing the command", 
 			expect(daemon.executed).toHaveLength(1);
 
 			// The answer was lost: the call is still pending, so the replay
-			// re-POSTs the SAME command (same id, the dedup key).
+			// re-sends the SAME command (same id, the dedup key).
 			vi.advanceTimersByTime(5_000);
 			await flushMicrotasks();
 			expect(daemon.posts).toHaveLength(2);
@@ -3472,7 +3457,7 @@ describe("call delivery: a lost answer is recovered by re-POSTing the command", 
 		vi.useFakeTimers();
 		try {
 			connect();
-			FakeEventSource.instances.at(-1)!.onopen?.();
+			FakeWebSocket.instances.at(-1)!.onopen?.();
 			const daemon = startLostAnswerDaemon((id) => ({
 				type: "call_result",
 				id,
@@ -3488,7 +3473,7 @@ describe("call delivery: a lost answer is recovered by re-POSTing the command", 
 			await flushMicrotasks();
 			vi.advanceTimersByTime(5_000);
 			await flushMicrotasks();
-			expect(daemon.posts).toHaveLength(2); // the lost answer was re-POSTed
+			expect(daemon.posts).toHaveLength(2); // the lost answer was re-sent
 
 			await pending;
 			expect(outcomes).toEqual(["Error: not_ready"]);
@@ -3531,7 +3516,7 @@ describe("transcript phase (session switch)", () => {
 	/** Connected, attached to d1 with its (empty) history loaded, d2 ready in the roster. */
 	function onD1(): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch({ type: "roster", daemons: [rosterDaemon("d1"), rosterDaemon("d2")] });
 		dispatch(attached("d1"));
 		dispatch({ type: "history", messages: [] });
@@ -3541,7 +3526,7 @@ describe("transcript phase (session switch)", () => {
 	test("starts idle, and an attach alone never marks it loaded", () => {
 		expect(phase()).toEqual({ phase: "idle", target: null, error: null });
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("d1"));
 		expect(state.transcriptPhase).toBe("idle");
 	});
@@ -3614,12 +3599,8 @@ describe("transcript phase (session switch)", () => {
 	test("a refused wake lands in failed", async () => {
 		onD1();
 		setState("daemonRoster", [rosterDaemon("d1"), rosterDaemon("d2", { status: "asleep" })]);
-		setBrowserGlobal("fetch", ((_input: unknown, init?: RequestInit) => {
-			const cmd =
-				typeof init?.body === "string" ? (JSON.parse(init.body) as ClientCommand) : undefined;
-			if (cmd !== undefined) posted.push(cmd);
-			return Promise.resolve({ ok: cmd?.type !== "spawn_resume", status: 500 } as Response);
-		}) as unknown as typeof fetch);
+		FakeWebSocket.reply = (cmd, ws) =>
+			cmd.type === "spawn_resume" ? ws.nack(cmd.id, 500, "refused") : ws.ack(cmd.id);
 
 		await switchToDaemon("d2");
 		expect(state.transcriptPhase).toBe("failed");
@@ -3650,18 +3631,7 @@ describe("transcript phase (session switch)", () => {
 	});
 
 	test("a wake superseded by a later click never flips that click's phase", async () => {
-		const held: Array<(ok: boolean) => void> = [];
-		setBrowserGlobal("fetch", ((_input: unknown, init?: RequestInit) => {
-			if (typeof init?.body !== "string")
-				return Promise.resolve({ ok: true, status: 202 } as Response);
-			const cmd = JSON.parse(init.body) as ClientCommand;
-			posted.push(cmd);
-			if (cmd.type !== "spawn_resume")
-				return Promise.resolve({ ok: true, status: 202 } as Response);
-			return new Promise<Response>((resolve) =>
-				held.push((ok) => resolve({ ok, status: ok ? 202 : 500 } as Response)),
-			);
-		}) as unknown as typeof fetch);
+		const held = holdCommands("spawn_resume");
 		onD1();
 		setState("daemonRoster", [
 			rosterDaemon("d1"),
@@ -3674,7 +3644,7 @@ describe("transcript phase (session switch)", () => {
 		const b = switchToDaemon("d3");
 		expect(phase()).toEqual({ phase: "attaching", target: "d3", error: null });
 		// A's wake is refused AFTER B took over: A must stay silent.
-		held[0]!(false);
+		held[0]!.settle(false);
 		await a;
 		expect(phase()).toEqual({ phase: "attaching", target: "d3", error: null });
 		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, sessionId: "d3" });
@@ -3691,7 +3661,7 @@ describe("transcript phase (session switch)", () => {
 
 	test("a reconnect re-attach of the same session keeps it loaded", () => {
 		onD1();
-		FakeEventSource.instances.at(-1)!.onopen?.(); // the stream came back
+		FakeWebSocket.instances.at(-1)!.onopen?.(); // the stream came back
 		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["d1"]);
 		expect(state.transcriptPhase).toBe("loaded");
 		dispatch(attached("d1"));
@@ -3784,7 +3754,7 @@ describe("the attached daemon is removed from the roster", () => {
 	/** Sidebar order: p1 [a-main, a-wt1, a-wt2], p2 [b-main, b-wt1]; attached to `on` with history loaded. */
 	function attachedTo(on: string, rows = defaultRows()): void {
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch({ type: "registered_projects", projects: [p1, p2] });
 		dispatch({ type: "roster", daemons: rows });
 		dispatch(attached(on));
@@ -4020,7 +3990,7 @@ describe("skills_changed frame", () => {
 			skillsRevision: 3,
 		});
 		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		dispatch({
 			type: "skills_changed",

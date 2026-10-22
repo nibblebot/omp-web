@@ -5,7 +5,7 @@ import type { ModelBrowserEntry, ModelRoleCatalogEntry } from "#lib/wire/protoco
 import { ModelRoleTable } from "../../components/settings/ModelRoleTable";
 import { connect, setState } from "../../state";
 import {
-	FakeEventSource,
+	FakeWebSocket,
 	attached,
 	callResult,
 	dispatch,
@@ -51,7 +51,7 @@ afterEach(restoreBrowserGlobals);
 /** Render the role table, answering each getModelBrowser call it posts with `models`. */
 async function renderTable(): Promise<string> {
 	connect();
-	FakeEventSource.instances.at(-1)!.onopen?.();
+	FakeWebSocket.instances.at(-1)!.onopen?.();
 	dispatch(attached("session-a"));
 	setState("modelBrowser", []);
 	setState("modelRoleCatalog", roles);

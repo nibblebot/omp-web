@@ -18,7 +18,7 @@ import {
 import {
 	attached,
 	dispatch,
-	FakeEventSource,
+	FakeWebSocket,
 	flushMicrotasks,
 	installTransportStubs,
 	posted,
@@ -85,7 +85,7 @@ function start(): { id: string; outcome: Outcome } {
 	return { id: cmd.id, outcome };
 }
 
-/** Number of /command POSTs that carried this call id. */
+/** Number of sends that carried this call id. */
 function copies(id: string): number {
 	return posted.filter((c) => c.type === "call" && c.id === id).length;
 }
@@ -94,7 +94,7 @@ beforeEach(() => {
 	installTransportStubs();
 	installClock();
 	connect();
-	FakeEventSource.instances.at(-1)!.onopen?.();
+	FakeWebSocket.instances.at(-1)!.onopen?.();
 });
 
 afterEach(() => {
@@ -116,7 +116,7 @@ describe("not-attached retry (SUB-02)", () => {
 		expect(pendingCalls.get(id)?.awaitingAttach).toBe(true);
 	});
 
-	test("retryNotAttachedCalls re-POSTs the same command id once and the answer settles it", async () => {
+	test("retryNotAttachedCalls re-sends the same command id once and the answer settles it", async () => {
 		const { id, outcome } = start();
 		settleCallResult(answer(id, false, undefined, "not attached"));
 		retryNotAttachedCalls();
@@ -300,7 +300,7 @@ describe("not-attached retry (SUB-02)", () => {
 });
 
 describe("connectionState()", () => {
-	test("reconnecting while the /events stream is down", () => {
+	test("reconnecting while the browser socket is down", () => {
 		setState({ connected: false });
 		expect(connectionState()).toBe("reconnecting");
 	});

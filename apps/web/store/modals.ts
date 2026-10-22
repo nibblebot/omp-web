@@ -1,6 +1,6 @@
 import type { ClientCommand, ImageArg } from "#lib/wire/protocol";
 import { setState, state } from "../state";
-import { isConnected, postCommand } from "./transport";
+import { isConnected, sendCommand } from "./transport";
 
 /**
  * Modals/login domain (Phase 3 store facade split): server-pushed login
@@ -12,7 +12,7 @@ import { isConnected, postCommand } from "./transport";
 export function sendLoginCode(requestId: string, code: string): void {
 	setState("loginCodeRequest", null);
 	if (!isConnected()) return;
-	void postCommand({
+	void sendCommand({
 		type: "login_code",
 		id: crypto.randomUUID(),
 		requestId,
@@ -22,11 +22,11 @@ export function sendLoginCode(requestId: string, code: string): void {
 
 // Phase 3: answer the server's ui_request (ExtensionUIContext dialogs).
 // Routing is by stream attachment; no sessionId on the command. The
-// ui_request id doubles as the POST dedup id.
+// ui_request id doubles as the command dedup id.
 export function sendUiResponse(id: string, result: unknown): void {
 	if (state.uiRequest?.id === id) setState("uiRequest", null);
 	if (!isConnected()) return;
-	void postCommand({ type: "ui_response", id, result } satisfies ClientCommand).catch(() => {});
+	void sendCommand({ type: "ui_response", id, result } satisfies ClientCommand).catch(() => {});
 }
 
 // Cancellation resolves the request undefined, NOT the error variant. The
@@ -36,7 +36,7 @@ export function sendUiResponse(id: string, result: unknown): void {
 export function cancelUiRequest(id: string): void {
 	if (state.uiRequest?.id === id) setState("uiRequest", null);
 	if (!isConnected()) return;
-	void postCommand({ type: "ui_response", id } satisfies ClientCommand).catch(() => {});
+	void sendCommand({ type: "ui_response", id } satisfies ClientCommand).catch(() => {});
 }
 
 /** Full-size image overlay (ModalHost mounts ImageLightbox while the slot is set). */
