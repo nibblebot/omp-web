@@ -1,6 +1,6 @@
 /**
  * UI daemon for the split setup (`omp-web ui`): serves the static UI and
- * reverse-proxies the data routes (/events, /command, /ctl, /auth, /callback) to the
+ * reverse-proxies the data routes (/ctl, /auth, /callback) to the
  * control plane on loopback. The control plane runs with serveUi off, so
  * this process is the only one that answers for static paths.
  *
@@ -11,22 +11,31 @@
  * non-loopback (fleet-auth-gate.ts clientAddress), so this hop never launders
  * remote clients into the loopback exemption.
  *
- * Streaming: request and response bodies pass through unbuffered, so SSE
- * flows event by event (idleTimeout is 0). A client disconnect aborts the
- * upstream fetch, so the control plane sees its stream close. Redirects are
- * returned, not followed. An unreachable control plane answers 502 JSON,
- * which the web client maps to its fleet-unreachable notice.
+ * Streaming: request and response bodies pass through unbuffered (idleTimeout
+ * is 0). A client disconnect aborts the upstream fetch, so the control plane
+ * sees its stream close. Redirects are returned, not followed. An unreachable
+ * control plane answers 502 JSON, which the web client maps to its
+ * fleet-unreachable notice.
  *
- * WebSocket: a session's pair socket (GET /callback/ws upgrade) is bridged to
- * the control plane's /callback/ws message for message (see BridgeData),
- * frames forwarded opaquely, text or binary. The
- * upgrade request's end-to-end headers, credentials included, are replayed on
- * the upstream dial; a control-plane close (typed refusals are 4xxx) reaches
- * the session intact, and an unreachable control plane closes it with a typed
- * `unavailable` (4503) so the session redials. Upstream sends are gated at the
- * 1 MiB send high-water mark, so the pre-open backlog never lands as one burst,
- * and what the bridge may hold for a session is bounded by the pair credit
- * window (BRIDGE_MAX_BYTES).
+ * WebSocket: a session's pair socket (GET /callback/ws upgrade) and a
+ * browser's socket (GET /ws upgrade, OMP_PROTO 5, same path and query
+ * upstream) are bridged to the control plane message for message (see
+ * BridgeData); the callback pair forwards frames opaquely, text or binary, the
+ * browser socket is text only. The upgrade request's end-to-end headers,
+ * credentials (Cookie, Authorization) and Origin included, are replayed on the
+ * upstream dial with X-Forwarded-For appended like an HTTP request's; a
+ * control-plane close (typed refusals are 4xxx) reaches the client intact, and
+ * an unreachable control plane closes it with a typed 4503 (a session's
+ * `unavailable`, a browser's `slow_consumer`) so it redials. Sends are gated
+ * at a 1 MiB high-water mark and the forwarder holds a bounded amount per
+ * socket (BRIDGE_MAX_BYTES for a pair, BROWSER_BRIDGE_MAX_BYTES toward the
+ * control plane and a high-water mark plus one read chunk toward a browser),
+ * so a stuck browser is dropped by the control plane's stall rule and not
+ * absorbed here.
+ *
+ * Stale tabs: a tab from before OMP_PROTO 5 dials GET /events and POST
+ * /command; neither is proxied. /events answers one SSE hello_ok naming the
+ * current proto (its proto gate shows the mismatch) and ends, /command 410.
  *
  * Always binds 127.0.0.1; external exposure is the operator's reverse proxy.
  *
@@ -38,6 +47,12 @@
 
 import type { Server, ServerWebSocket } from "bun";
 import {
+	BROWSER_SOCKET_MAX_PAYLOAD_BYTES,
+	BROWSER_SOCKET_PATH,
+	browserCloseFor,
+	staleTabEventsBody,
+} from "#lib/wire/browser-socket";
+import {
 	CALLBACK_WS_MAX_PAYLOAD_BYTES,
 	CALLBACK_WS_PATH,
 	CALLBACK_WS_SEND_HIGH_WATER_BYTES,
@@ -46,6 +61,7 @@ import {
 	callbackCloseFor,
 	callbackError,
 } from "#lib/wire/callback-protocol";
+import { OMP_PROTO } from "#lib/wire/protocol";
 import { browserRequestAllowed, PRE_AUTH_IDLE_TIMEOUT_S } from "./browser-guard";
 import { serveStaticUi } from "./static-ui";
 
@@ -57,12 +73,14 @@ export interface UiServer {
 	close(): Promise<void>;
 }
 
-/** What startUiServer's `observeBridge` seam reports for one session socket's upstream leg. */
+/** What startUiServer's `observeBridge` seam reports for one bridged socket's upstream leg. */
 export interface BridgeSample {
-	/** Session bytes queued, not yet handed to the upstream client. */
+	/** Client bytes queued, not yet handed to the upstream client. */
 	queuedBytes: number;
 	/** The upstream client's send buffer (`bufferedAmount`). */
 	upstreamBuffered: number;
+	/** The client-facing socket's send buffer (`getBufferedAmount()`). */
+	clientBuffered: number;
 }
 
 const LOOPBACK = "127.0.0.1";
@@ -92,13 +110,32 @@ const SEND_RECHECK_MS = 10;
  * granting while it kept sending) and fails loudly.
  */
 export const BRIDGE_MAX_BYTES = PAIR_CREDIT_WINDOW_BYTES + ENVELOPE_MAX_BYTES;
+/** Send high-water mark of a browser socket's legs: the upstream client is paused above it, queued messages wait above it. */
+export const BROWSER_BRIDGE_HIGH_WATER_BYTES = 1024 * 1024;
+/**
+ * What the bridge may hold for one browser socket toward the control plane
+ * (queued plus upstream-buffered) before the socket is closed 4503. A server
+ * socket cannot be paused, so what a browser sends is read at once; the bound
+ * is two maximum command messages, so a command at the size cap (32 MiB) does
+ * not starve the next one while it drains. A browser sends commands one user
+ * action at a time; past the bound it is flooding and fails loudly (it resumes
+ * with the same command ids after the reconnect).
+ */
+export const BROWSER_BRIDGE_MAX_BYTES = 2 * BROWSER_SOCKET_MAX_PAYLOAD_BYTES;
+/**
+ * Bun's send-queue cap per client socket (above it `send` drops and returns 0,
+ * which closes the socket 4503). The browser leg holds at most its high-water
+ * mark plus what the paused upstream client had already read, so this is slack
+ * for the largest relayed message; Bun never closes on it by itself.
+ */
+const SEND_BACKPRESSURE_LIMIT_BYTES = 32 * 1024 * 1024;
 /** Bun's WebSocket client with its upgrade-header options; the DOM lib types hide them. */
 const BunWebSocket = WebSocket as unknown as new (
 	url: string,
 	options: Bun.WebSocketOptions,
 ) => Bun.WebSocket;
 /** Data routes proxied to the control plane: the exact path or anything under it. */
-const PROXIED_PATH = /^\/(events|command|ctl|auth|callback)(\/|$)/;
+const PROXIED_PATH = /^\/(ctl|auth|callback)(\/|$)/;
 /** Hop-by-hop headers (RFC 7230 6.1) are per-connection and never forwarded. */
 const HOP_BY_HOP: Record<string, true> = {
 	connection: true,
@@ -113,38 +150,52 @@ const HOP_BY_HOP: Record<string, true> = {
 };
 
 /**
- * One session pair socket bridged to the control plane's /callback/ws. The
- * bridge is a transparent message pipe: it neither parses envelopes nor
- * validates them, so refusals (close 4xxx) and everything else pass through.
- * Memory stays bounded both ways: toward the session the upstream client is
- * paused while the session-facing socket is above the send high-water mark;
- * toward the control plane a server socket cannot be paused, so session
- * messages queue in `backlog` and reach the upstream client only while its
- * send buffer is at or below CALLBACK_WS_SEND_HIGH_WATER_BYTES (bridgeFlush:
- * the queue built before the upstream opened drains through the same gate,
- * not in one burst, and the Bun client has no drain event, so a short timer
- * re-checks). New messages queue behind a remaining backlog, so order holds.
- * The pair is closed `retryable` once queued plus upstream-buffered bytes pass
- * BRIDGE_MAX_BYTES.
+ * One client socket bridged to the control plane: a session's pair socket to
+ * /callback/ws, or a browser's socket to /ws (`kind`). The bridge is a
+ * transparent message pipe: it neither parses envelopes nor validates them, so
+ * refusals (close 4xxx) and everything else pass through. Memory stays
+ * bounded both ways: toward the client the upstream client is paused (Bun's
+ * client WebSocket `pause()` stops reading its TCP socket, so the control
+ * plane's own send buffer fills and its slow-consumer rule applies to the
+ * stuck client) while the client-facing socket is above the send high-water
+ * mark; the forwarder then holds that mark plus what the paused client had
+ * already received (one socket read chunk of messages and the message being
+ * assembled), and nothing grows with the stream. Toward the control plane a
+ * server socket cannot be paused, so client messages queue in `backlog` and
+ * reach the upstream client only while its send buffer is at or below the high-water
+ * mark (bridgeFlush: the queue built before the upstream opened drains through
+ * the same gate, not in one burst, and the Bun client has no drain event, so a
+ * short timer re-checks). New messages queue behind a remaining backlog, so
+ * order holds. The socket is closed once queued plus upstream-buffered bytes
+ * pass `maxBytes` (a pair: `retryable`; a browser: 4503).
  */
 interface BridgeData {
+	kind: "callback" | "browser";
+	/** Path and query of the upstream dial: the request's own. */
+	upstreamTarget: string;
+	/** Dial-time refusal: the socket upgrades and closes at once with this (a browser cannot read a non-101 status). */
+	refusal: { code: number; reason: string } | null;
+	/** Send high-water mark of both legs. */
+	highWater: number;
+	/** Cap on `backlogBytes` plus the upstream's buffered amount. */
+	maxBytes: number;
 	/** End-to-end request headers for the upstream dial (credentials included, never logged). */
 	upstreamHeaders: Headers;
 	upstream: Bun.WebSocket | null;
 	/**
-	 * Messages from the session not yet handed to the upstream, oldest at
+	 * Messages from the client not yet handed to the upstream, oldest at
 	 * `backlogHead`: everything that arrived before the upstream opened and
 	 * whatever the high-water gate in bridgeFlush is holding back.
 	 */
 	backlog: (string | Buffer)[];
 	backlogHead: number;
-	/** Bytes in `backlog[backlogHead..]`; with the upstream's buffered amount it is capped at BRIDGE_MAX_BYTES. */
+	/** Bytes in `backlog[backlogHead..]`; with the upstream's buffered amount it is capped at `maxBytes`. */
 	backlogBytes: number;
 	/** Pending re-check of an upstream send buffer above high water. */
 	sendTimer: Timer | null;
 	/** Test seam, see startUiServer. */
 	observeBridge: ((sample: BridgeSample) => void) | undefined;
-	/** The upstream client is paused until the session-facing socket drains. */
+	/** The upstream client is paused until the client-facing socket drains. */
 	paused: boolean;
 	done: boolean;
 }
@@ -179,20 +230,39 @@ function bridgeClose(ws: ServerWebSocket<BridgeData>, code: number, reason: stri
 	ws.close(sendable ? code : 1011, reason);
 }
 
+/** Report the bridge's current queue and buffers to the test seam. */
+function observe(ws: ServerWebSocket<BridgeData>): void {
+	const bridge = ws.data;
+	if (bridge.observeBridge === undefined || bridge.upstream === null) return;
+	bridge.observeBridge({
+		queuedBytes: bridge.backlogBytes,
+		upstreamBuffered: bridge.upstream.bufferedAmount,
+		clientBuffered: ws.getBufferedAmount(),
+	});
+}
+
+/** Close the client with the typed code for a forwarder-side failure: a pair's `unavailable`/`retryable`, a browser's 4503. */
 function bridgeFail(
 	ws: ServerWebSocket<BridgeData>,
 	code: "unavailable" | "retryable",
 	message: string,
 ): void {
-	const close = callbackCloseFor(callbackError(code, message));
+	const close =
+		ws.data.kind === "browser"
+			? browserCloseFor("slow_consumer", message)
+			: callbackCloseFor(callbackError(code, message));
 	bridgeClose(ws, close.code, close.reason);
 }
 
 function bridgeOpen(ws: ServerWebSocket<BridgeData>, controlPort: number): void {
 	const bridge = ws.data;
+	if (bridge.refusal !== null) {
+		bridgeClose(ws, bridge.refusal.code, bridge.refusal.reason);
+		return;
+	}
 	let upstream: Bun.WebSocket;
 	try {
-		upstream = new BunWebSocket(`ws://${LOOPBACK}:${controlPort}${CALLBACK_WS_PATH}`, {
+		upstream = new BunWebSocket(`ws://${LOOPBACK}:${controlPort}${bridge.upstreamTarget}`, {
 			headers: Object.fromEntries(bridge.upstreamHeaders),
 		});
 	} catch {
@@ -204,13 +274,19 @@ function bridgeOpen(ws: ServerWebSocket<BridgeData>, controlPort: number): void 
 	upstream.addEventListener("open", () => bridgeFlush(ws));
 	upstream.addEventListener("message", (event) => {
 		if (bridge.done) return;
-		// 0 = dropped by Bun: tear the pair down rather than lose a message.
 		const { data } = event as unknown as MessageEvent<string | ArrayBuffer>;
-		if (ws.send(data) === 0) {
-			bridgeFail(ws, "retryable", "callback bridge could not deliver a message");
+		if (bridge.kind === "browser" && typeof data !== "string") {
+			const close = browserCloseFor("protocol_violation", "control plane sent a binary message");
+			bridgeClose(ws, close.code, close.reason);
 			return;
 		}
-		if (ws.getBufferedAmount() > CALLBACK_WS_SEND_HIGH_WATER_BYTES && !bridge.paused) {
+		// 0 = dropped by Bun: tear the socket down rather than lose a message.
+		if (ws.send(data) === 0) {
+			bridgeFail(ws, "retryable", "bridge could not deliver a message");
+			return;
+		}
+		observe(ws);
+		if (ws.getBufferedAmount() > bridge.highWater && !bridge.paused) {
 			bridge.paused = true;
 			upstream.pause();
 		}
@@ -219,7 +295,12 @@ function bridgeOpen(ws: ServerWebSocket<BridgeData>, controlPort: number): void 
 		bridgeFail(ws, "unavailable", `omp-web control plane unreachable on :${controlPort}`);
 	});
 	upstream.addEventListener("close", (event) => {
-		// A close the control plane sent passes through whole, so a typed refusal reaches the session intact.
+		// An abnormal drop of a browser's upstream (no close frame) is the control plane going away: 4503, so the browser resumes.
+		if (bridge.kind === "browser" && (event.code === 1006 || event.code === 1015)) {
+			bridgeFail(ws, "unavailable", `omp-web control plane unreachable on :${controlPort}`);
+			return;
+		}
+		// A close the control plane sent passes through whole, so a typed refusal reaches the client intact.
 		bridgeClose(ws, event.code, event.reason);
 	});
 }
@@ -230,42 +311,47 @@ function bridgeMessage(ws: ServerWebSocket<BridgeData>, message: string | Buffer
 	if (bridge.done || upstream === null) return;
 	if (upstream.readyState !== WebSocket.CONNECTING && upstream.readyState !== WebSocket.OPEN)
 		return;
-	bridge.backlog.push(message);
-	bridge.backlogBytes +=
-		typeof message === "string" ? Buffer.byteLength(message) : message.byteLength;
-	if (bridge.backlogBytes + upstream.bufferedAmount > BRIDGE_MAX_BYTES) {
-		bridgeFail(ws, "retryable", "callback bridge upstream backlog exceeded");
+	if (bridge.kind === "browser" && typeof message !== "string") {
+		const close = browserCloseFor("protocol_violation", "binary message");
+		bridgeClose(ws, close.code, close.reason);
 		return;
 	}
-	bridge.observeBridge?.({
-		queuedBytes: bridge.backlogBytes,
-		upstreamBuffered: upstream.bufferedAmount,
-	});
+	const bytes = typeof message === "string" ? Buffer.byteLength(message) : message.byteLength;
+	// The one socket config serves both routes, so the pair's own cap is enforced here.
+	if (bridge.kind === "callback" && bytes > CALLBACK_WS_MAX_PAYLOAD_BYTES) {
+		bridgeClose(ws, 1009, "message too big");
+		return;
+	}
+	bridge.backlog.push(message);
+	bridge.backlogBytes += bytes;
+	if (bridge.backlogBytes + upstream.bufferedAmount > bridge.maxBytes) {
+		bridgeFail(ws, "retryable", "bridge upstream backlog exceeded");
+		return;
+	}
+	observe(ws);
 	if (upstream.readyState === WebSocket.OPEN) bridgeFlush(ws);
 }
 
 /**
- * Hand queued session messages to the open upstream in order while its send
- * buffer is at or below CALLBACK_WS_SEND_HIGH_WATER_BYTES, so neither the
- * pre-open backlog nor a slow control plane turns into one burst. What is
- * left waits in the bounded queue and is retried on a short timer (the Bun
- * client has no drain event). Frames are forwarded opaquely, text or binary.
+ * Hand queued client messages to the open upstream in order while its send
+ * buffer is at or below the high-water mark, so neither the pre-open backlog
+ * nor a slow control plane turns into one burst. What is left waits in the
+ * bounded queue and is retried on a short timer (the Bun client has no drain
+ * event). A pair's frames are forwarded opaquely, text or binary; a browser's
+ * are text.
  */
 function bridgeFlush(ws: ServerWebSocket<BridgeData>): void {
 	const bridge = ws.data;
 	const upstream = bridge.upstream;
 	if (bridge.done || upstream === null || upstream.readyState !== WebSocket.OPEN) return;
 	while (bridge.backlogHead < bridge.backlog.length) {
-		if (upstream.bufferedAmount > CALLBACK_WS_SEND_HIGH_WATER_BYTES) break;
+		if (upstream.bufferedAmount > bridge.highWater) break;
 		const message = bridge.backlog[bridge.backlogHead]!;
 		bridge.backlog[bridge.backlogHead++] = "";
 		bridge.backlogBytes -=
 			typeof message === "string" ? Buffer.byteLength(message) : message.byteLength;
 		upstream.send(message);
-		bridge.observeBridge?.({
-			queuedBytes: bridge.backlogBytes,
-			upstreamBuffered: upstream.bufferedAmount,
-		});
+		observe(ws);
 	}
 	if (bridge.backlogHead === bridge.backlog.length) {
 		bridge.backlog = [];
@@ -287,25 +373,38 @@ function bridgeFlush(ws: ServerWebSocket<BridgeData>): void {
 
 function bridgeDrain(ws: ServerWebSocket<BridgeData>): void {
 	const bridge = ws.data;
-	if (!bridge.paused || bridge.done || ws.getBufferedAmount() > CALLBACK_WS_SEND_HIGH_WATER_BYTES) {
+	if (!bridge.paused || bridge.done || ws.getBufferedAmount() > bridge.highWater) {
 		return;
 	}
 	bridge.paused = false;
 	bridge.upstream?.resume();
 }
 
-/** Upgrade a session's /callback/ws request and bridge it to the control plane. */
-function upgradeCallback(
+/**
+ * Upgrade a session's /callback/ws or a browser's /ws request and bridge it to
+ * the control plane. A `refusal` upgrades and closes at once with that typed
+ * close, since a browser cannot read a non-101 status.
+ */
+function upgradeBridge(
 	req: Request,
 	srv: Server<BridgeData>,
 	peer: string | undefined,
 	observeBridge: ((sample: BridgeSample) => void) | undefined,
+	variant:
+		| { kind: "callback" }
+		| { kind: "browser"; refusal: { code: number; reason: string } | null },
 ): Response | undefined {
 	const upstreamHeaders = new Headers();
 	for (const [name, value] of forwardedHeaders(req, peer)) {
 		if (!name.startsWith("sec-websocket-")) upstreamHeaders.append(name, value);
 	}
+	const browser = variant.kind === "browser";
 	const data: BridgeData = {
+		kind: variant.kind,
+		upstreamTarget: browser ? `${BROWSER_SOCKET_PATH}${new URL(req.url).search}` : CALLBACK_WS_PATH,
+		refusal: browser ? variant.refusal : null,
+		highWater: browser ? BROWSER_BRIDGE_HIGH_WATER_BYTES : CALLBACK_WS_SEND_HIGH_WATER_BYTES,
+		maxBytes: browser ? BROWSER_BRIDGE_MAX_BYTES : BRIDGE_MAX_BYTES,
 		upstreamHeaders,
 		upstream: null,
 		backlog: [],
@@ -331,28 +430,40 @@ export function startUiServer(opts: {
 	const server = Bun.serve<BridgeData>({
 		hostname: LOOPBACK,
 		port: opts.port ?? DEFAULT_UI_PORT,
-		// SSE responses are long-lived and quiet between keepalive pings;
-		// Bun's default idle timeout would kill them.
+		// Quiet streams and sockets (both ping every 15 s) outlive Bun's default idle timeout.
 		idleTimeout: 0,
 		fetch: (req, srv) => {
-			// /auth/* gets the pre-auth idle window (FEDGE-11); SSE stays on idleTimeout 0.
+			// /auth/* gets the pre-auth idle window (FEDGE-11); sockets stay on idleTimeout 0.
 			const { pathname } = new URL(req.url);
 			if (pathname.startsWith("/auth/")) srv.timeout(req, PRE_AUTH_IDLE_TIMEOUT_S);
 			const peer = srv.requestIP(req)?.address;
-			if (
-				pathname === CALLBACK_WS_PATH &&
-				req.headers.get("upgrade")?.toLowerCase() === "websocket"
-			) {
+			const upgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
+			if (pathname === CALLBACK_WS_PATH && upgrade) {
 				if (!browserRequestAllowed(req, opts.browserOrigin)) {
 					return Response.json({ error: "forbidden" }, { status: 403 });
 				}
-				return upgradeCallback(req, srv, peer, opts.observeBridge);
+				return upgradeBridge(req, srv, peer, opts.observeBridge, { kind: "callback" });
+			}
+			if (pathname === BROWSER_SOCKET_PATH) {
+				if (!upgrade) {
+					return Response.json(
+						{ error: "websocket upgrade required" },
+						{ status: 426, headers: { upgrade: "websocket" } },
+					);
+				}
+				const refusal = browserRequestAllowed(req, opts.browserOrigin)
+					? null
+					: browserCloseFor("forbidden", "origin or host not allowed");
+				return upgradeBridge(req, srv, peer, opts.observeBridge, { kind: "browser", refusal });
 			}
 			return route(req, peer, controlPort, opts.browserOrigin);
 		},
 		websocket: {
 			perMessageDeflate: false,
-			maxPayloadLength: CALLBACK_WS_MAX_PAYLOAD_BYTES,
+			// One config serves both routes: the browser's cap is the larger; a pair's own cap is enforced in bridgeMessage.
+			maxPayloadLength: Math.max(CALLBACK_WS_MAX_PAYLOAD_BYTES, BROWSER_SOCKET_MAX_PAYLOAD_BYTES),
+			backpressureLimit: SEND_BACKPRESSURE_LIMIT_BYTES,
+			closeOnBackpressureLimit: false,
 			open: (ws) => bridgeOpen(ws, controlPort),
 			message: bridgeMessage,
 			drain: bridgeDrain,
@@ -373,6 +484,19 @@ async function route(
 	browserOrigin: string | undefined,
 ): Promise<Response> {
 	const path = new URL(req.url).pathname;
+	// A tab loaded before OMP_PROTO 5 still dials these; its own proto gate shows the mismatch.
+	if (path === "/events" && req.method === "GET") {
+		return new Response(staleTabEventsBody(OMP_PROTO), {
+			headers: {
+				"content-type": "text/event-stream",
+				"cache-control": "no-store",
+				"x-accel-buffering": "no",
+			},
+		});
+	}
+	if (path === "/command" && req.method === "POST") {
+		return Response.json({ error: "proto_unsupported" }, { status: 410 });
+	}
 	if (!PROXIED_PATH.test(path)) return serveStaticUi(path);
 	if (!browserRequestAllowed(req, browserOrigin)) {
 		return Response.json({ error: "forbidden" }, { status: 403 });

@@ -1,15 +1,25 @@
 /**
  * UI daemon wire tests: startUiServer in front of a real control plane
- * (startFleet) and in front of a fake upstream whose /events stream reports
- * when the proxy cancels it. Covers static serving, proxied JSON / command /
- * SSE, the forwarded-header rewrite, upstream status passthrough, the 502
- * when the control plane is down, the auth gate as seen through the proxy,
- * and the control plane's serveUi=false 404.
+ * (startFleet) and in front of fake upstreams (a stand-in /ws and
+ * /callback/ws control plane). Covers static serving, proxied JSON, the
+ * stale-tab answers for /events and /command, the forwarded-header rewrite,
+ * upstream status passthrough, the 502 when the control plane is down, the
+ * auth gate as seen through the proxy, the control plane's serveUi=false 404,
+ * and the callback and browser WebSocket bridges.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Server, ServerWebSocket } from "bun";
 import { join } from "node:path";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
+import {
+	BROWSER_SOCKET_MAX_PAYLOAD_BYTES,
+	BROWSER_SOCKET_PATH,
+	browserCloseFor,
+	browserCloseFromCode,
+	browserSocketUrl,
+	seqFrameMessage,
+	staleTabEventsBody,
+} from "#lib/wire/browser-socket";
 import {
 	CALLBACK_PROTO_HEADER,
 	CALLBACK_WS_MAX_PAYLOAD_BYTES,
@@ -18,6 +28,7 @@ import {
 	PAIR_CREDIT_WINDOW_BYTES,
 	callbackErrorFromClose,
 } from "#lib/wire/callback-protocol";
+import { OMP_PROTO } from "#lib/wire/protocol";
 import type { FleetConfig } from "../config";
 import { DaemonTransportRegistry } from "../daemon-transport";
 import { FleetEdge } from "../edge";
@@ -25,7 +36,13 @@ import { FleetEventLog } from "../events";
 import { ProjectSync } from "../project-sync";
 import { Registry } from "../registry";
 import type { FleetServer } from "../server";
-import { BRIDGE_MAX_BYTES, startUiServer, type BridgeSample, type UiServer } from "../ui-server";
+import {
+	BRIDGE_MAX_BYTES,
+	BROWSER_BRIDGE_HIGH_WATER_BYTES,
+	startUiServer,
+	type BridgeSample,
+	type UiServer,
+} from "../ui-server";
 import { cleanupTempDirs, serveEdge, testEviction, testWaker } from "./edge.testkit";
 import { makeHostLifecycle } from "./host-lifecycle.testkit";
 import { fleetPaths, startTestFleet, waitFor } from "./server.testkit";
@@ -33,22 +50,6 @@ import { fleetPaths, startTestFleet, waitFor } from "./server.testkit";
 afterAll(cleanupTempDirs);
 
 const SERVES_NO_UI = "this omp-web control plane serves no UI; run: omp-web ui";
-
-/** Read the SSE body until `needle` appears (or 5s), then cancel the client side. */
-async function readUntil(body: ReadableStream<Uint8Array>, needle: string): Promise<string> {
-	const reader = body.getReader();
-	const decoder = new TextDecoder();
-	const deadline = Date.now() + 5000;
-	let text = "";
-	while (!text.includes(needle)) {
-		if (Date.now() > deadline) throw new Error(`no ${needle} within 5s`);
-		const { value, done } = await reader.read();
-		if (done) break;
-		text += decoder.decode(value, { stream: true });
-	}
-	await reader.cancel();
-	return text;
-}
 
 /** A standalone edge (no UI hop) with the given serveUi setting, on an ephemeral port. */
 async function mountEdge(tmp: string, serveUi?: boolean) {
@@ -118,57 +119,26 @@ describe("ui daemon proxy", () => {
 		expect(await via.json()).toEqual(await direct.json());
 	});
 
-	test("proxies POST /command with the control plane's status and body", async () => {
-		const init = {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ type: "nope" }),
-		};
-		const via = await fetch(`http://127.0.0.1:${ui.port}/command`, init);
-		const direct = await fetch(`http://127.0.0.1:${fleet.port}/command`, init);
-		expect(via.status).toBe(direct.status);
-		expect(await via.text()).toBe(await direct.text());
-	});
-
-	test("streams /events through the proxy, starting with the roster priming frame", async () => {
+	test("answers a stale tab's GET /events with one hello_ok naming the current proto, then ends", async () => {
 		const res = await fetch(`http://127.0.0.1:${ui.port}/events?client=${crypto.randomUUID()}`);
 		expect(res.status).toBe(200);
 		expect(res.headers.get("content-type")).toContain("text/event-stream");
-		expect(res.headers.get("x-accel-buffering")).toBe("no");
-		const text = await readUntil(res.body!, '"type":"roster"');
-		expect(text).toContain('"type":"roster"');
+		expect(await res.text()).toBe(staleTabEventsBody(OMP_PROTO));
 	});
-});
 
-describe("ui daemon SSE abort", () => {
-	test("a client that drops /events cancels the upstream stream", async () => {
-		let upstreamCancelled = false;
-		const encoder = new TextEncoder();
-		const fake = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: () =>
-				new Response(
-					new ReadableStream<Uint8Array>({
-						start(controller) {
-							controller.enqueue(encoder.encode("data: hi\n\n"));
-						},
-						cancel() {
-							upstreamCancelled = true;
-						},
-					}),
-					{ headers: { "content-type": "text/event-stream" } },
-				),
+	test("answers a stale tab's POST /command with 410 proto_unsupported", async () => {
+		const res = await fetch(`http://127.0.0.1:${ui.port}/command`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ type: "nope" }),
 		});
-		const ui = startUiServer({ port: 0, controlPort: fake.port! });
-		try {
-			const res = await fetch(`http://127.0.0.1:${ui.port}/events`);
-			await readUntil(res.body!, "data: hi");
-			await waitFor(() => upstreamCancelled, 5000, "upstream /events cancel");
-		} finally {
-			await ui.close();
-			fake.stop(true);
-		}
+		expect(res.status).toBe(410);
+		expect(await res.json()).toEqual({ error: "proto_unsupported" });
+	});
+
+	test("a plain GET /ws is refused with 426, not served as the UI shell", async () => {
+		const res = await fetch(`http://127.0.0.1:${ui.port}/ws`);
+		expect(res.status).toBe(426);
 	});
 });
 
@@ -618,6 +588,318 @@ describe("ui daemon callback WebSocket bridge", () => {
 			expect(close.reason).toContain("backlog exceeded");
 			// Everything up to the bound was queued; nothing past it.
 			expect(Math.max(...samples.map((s) => s.queuedBytes))).toBeLessThanOrEqual(BRIDGE_MAX_BYTES);
+		});
+	});
+});
+
+describe("ui daemon browser WebSocket bridge", () => {
+	/** 64 MiB in 64 KiB frames: more than the kernel buffers on the path, so the burst only fits if the forwarder absorbs it. */
+	const FLOOD_CHUNK_BYTES = 64 * 1024;
+	const FLOOD_MESSAGES = 1024;
+	/** The stand-in's stall rule (the edge's BROWSER_STALL_MS, shortened). */
+	const STALL_MS = 300;
+
+	interface FakeBrowserSocket {
+		/** Messages the stand-in control plane received, in order. */
+		received: string[];
+		closes: { code: number; reason: string }[];
+		flooded: number;
+		/** A "flood" command started the pump (a drain after any other send must not). */
+		flooding: boolean;
+		/** The flood pump stopped because the socket's send buffer was above high water. */
+		stalled: boolean;
+		stallTimer: Timer | null;
+		/** The stand-in applied its stall rule and closed the socket 4503. */
+		stallClosed: boolean;
+	}
+
+	let upstream: Server<FakeBrowserSocket>;
+	let ui: UiServer;
+	const upgrades: { url: URL; headers: Headers }[] = [];
+	const sockets: FakeBrowserSocket[] = [];
+	let stallRule = false;
+
+	/** Send flood frames while the socket has room; drain resumes it. A stall with no drain for STALL_MS closes it 4503. */
+	function pump(ws: ServerWebSocket<FakeBrowserSocket>): void {
+		const state = ws.data;
+		if (!state.flooding) return;
+		if (state.stallTimer !== null) {
+			clearTimeout(state.stallTimer);
+			state.stallTimer = null;
+		}
+		while (state.flooded < FLOOD_MESSAGES) {
+			if (ws.getBufferedAmount() > BROWSER_BRIDGE_HIGH_WATER_BYTES) {
+				state.stalled = true;
+				if (stallRule) {
+					state.stallTimer = setTimeout(() => {
+						state.stallClosed = true;
+						const close = browserCloseFor("slow_consumer", "browser stopped draining");
+						ws.close(close.code, close.reason);
+					}, STALL_MS);
+				}
+				return;
+			}
+			const index = state.flooded++;
+			const frame = JSON.stringify({ type: "flood", pad: "x".repeat(FLOOD_CHUNK_BYTES) });
+			if (ws.send(seqFrameMessage(index, frame)) === 0) throw new Error("stand-in send dropped");
+		}
+	}
+
+	beforeAll(() => {
+		upstream = Bun.serve<FakeBrowserSocket>({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(req, srv) {
+				const url = new URL(req.url);
+				if (url.pathname !== BROWSER_SOCKET_PATH) return new Response("nope", { status: 404 });
+				upgrades.push({ url, headers: req.headers });
+				const data: FakeBrowserSocket = {
+					received: [],
+					closes: [],
+					flooded: 0,
+					flooding: false,
+					stalled: false,
+					stallTimer: null,
+					stallClosed: false,
+				};
+				sockets.push(data);
+				if (srv.upgrade(req, { data })) return undefined;
+				return new Response("upgrade failed", { status: 400 });
+			},
+			websocket: {
+				perMessageDeflate: false,
+				maxPayloadLength: BROWSER_SOCKET_MAX_PAYLOAD_BYTES,
+				open(ws) {
+					ws.send(seqFrameMessage(1, JSON.stringify({ type: "hello_ok", proto: OMP_PROTO })));
+				},
+				message(ws, message) {
+					const text = String(message);
+					ws.data.received.push(text);
+					if (text === "flood") {
+						ws.data.flooding = true;
+						pump(ws);
+					} else if (text.startsWith("close:")) {
+						const code = Number(text.slice("close:".length));
+						ws.close(code, browserCloseFor("proto_mismatch", "stale tab").reason);
+					} else ws.send(`echo:${text}`);
+				},
+				drain: pump,
+				close(ws, code, reason) {
+					ws.data.closes.push({ code, reason });
+				},
+			},
+		});
+		if (upstream.port === undefined) throw new Error("upstream has no port");
+		ui = startUiServer({ port: 0, controlPort: upstream.port });
+	});
+
+	afterAll(async () => {
+		await ui.close();
+		await upstream.stop(true);
+	});
+
+	/** Dial the UI's /ws; messages and the close are collected from the first event on. */
+	function dialBrowser(
+		port: number,
+		params: { clientId: string | null; after: number | null; token?: string },
+		headers: Record<string, string> = {},
+	): DialedSession {
+		const url = browserSocketUrl(`http://127.0.0.1:${port}`, {
+			clientId: params.clientId,
+			after: params.after,
+			proto: OMP_PROTO,
+			token: params.token ?? null,
+		});
+		const ws = new BunWebSocket(url, { headers });
+		const messages: string[] = [];
+		const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+			ws.addEventListener("close", (event) => resolve({ code: event.code, reason: event.reason }));
+		});
+		ws.addEventListener("message", (event) => {
+			messages.push((event as unknown as MessageEvent<string>).data);
+		});
+		return { ws, messages, closed };
+	}
+
+	test("streams messages both ways in order, replays headers and the query upstream, and appends X-Forwarded-For", async () => {
+		const client = dialBrowser(
+			ui.port,
+			{ clientId: "tab-1", after: 1030, token: "t0k" },
+			{
+				cookie: "omp_session=abc123",
+				origin: `http://127.0.0.1:${ui.port}`,
+				"user-agent": "omp-test/1",
+				"x-forwarded-for": "203.0.113.9",
+			},
+		);
+		await waitFor(() => client.messages.length === 1, 5000, "first upstream message");
+		expect(JSON.parse(client.messages[0]!)).toEqual({
+			seq: 1,
+			frame: { type: "hello_ok", proto: OMP_PROTO },
+		});
+
+		const sent = Array.from({ length: 50 }, (_, index) => `m${index}`);
+		for (const text of sent) client.ws.send(text);
+		// A command-sized message crosses whole, above the callback pair's own cap.
+		const large = `large:${"y".repeat(3 * 1024 * 1024)}`;
+		client.ws.send(large);
+		await waitFor(() => client.messages.length === 2 + sent.length, 10_000, "echoes");
+		expect(client.messages.slice(1, 1 + sent.length)).toEqual(sent.map((text) => `echo:${text}`));
+		expect(client.messages.at(-1)).toBe(`echo:${large}`);
+		const socket = sockets.at(-1)!;
+		expect(socket.received).toEqual([...sent, large]);
+
+		const { url, headers } = upgrades.at(-1)!;
+		expect(url.pathname).toBe(BROWSER_SOCKET_PATH);
+		expect(url.search).toBe(`?client=tab-1&after=1030&proto=${OMP_PROTO}&token=t0k`);
+		expect(headers.get("cookie")).toBe("omp_session=abc123");
+		expect(headers.get("origin")).toBe(`http://127.0.0.1:${ui.port}`);
+		expect(headers.get("user-agent")).toBe("omp-test/1");
+		expect(headers.get("x-forwarded-for")).toBe("203.0.113.9, 127.0.0.1");
+		expect(headers.get("x-forwarded-proto")).toBe("http");
+		expect(headers.get("x-forwarded-host")).toBe(`127.0.0.1:${ui.port}`);
+
+		client.ws.close(1000, "done");
+		await client.closed;
+		await waitFor(() => socket.closes.length === 1, 5000, "upstream close");
+		expect(socket.closes[0]).toEqual({ code: 1000, reason: "done" });
+	});
+
+	test("typed closes pass through both ways with their code and reason", async () => {
+		const fromUpstream = dialBrowser(ui.port, { clientId: "tab-2", after: null });
+		await waitFor(() => fromUpstream.messages.length === 1, 5000, "first upstream message");
+		fromUpstream.ws.send("close:4426");
+		expect(await fromUpstream.closed).toEqual({
+			code: 4426,
+			reason: "proto_mismatch: stale tab",
+		});
+
+		const fromBrowser = dialBrowser(ui.port, { clientId: "tab-3", after: null });
+		await waitFor(() => fromBrowser.messages.length === 1, 5000, "first upstream message");
+		const socket = sockets.at(-1)!;
+		fromBrowser.ws.close(4400, "protocol_violation: bad message");
+		await fromBrowser.closed;
+		await waitFor(() => socket.closes.length === 1, 5000, "upstream close");
+		expect(socket.closes[0]).toEqual({ code: 4400, reason: "protocol_violation: bad message" });
+	});
+
+	test("an unreachable control plane closes the browser socket 4503", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
+		const deadPort = probe.port!;
+		await probe.stop(true);
+		const orphan = startUiServer({ port: 0, controlPort: deadPort });
+		try {
+			const client = dialBrowser(orphan.port, { clientId: "tab-4", after: null });
+			const close = await client.closed;
+			expect(close.code).toBe(4503);
+			expect(browserCloseFromCode(close.code, close.reason)?.kind).toBe("slow_consumer");
+			expect(close.reason).toContain(`unreachable on :${deadPort}`);
+			expect(client.messages).toEqual([]);
+		} finally {
+			await orphan.close();
+		}
+	});
+
+	test("a foreign Origin is refused with a typed 4403 before it reaches the control plane", async () => {
+		const before = upgrades.length;
+		const client = dialBrowser(
+			ui.port,
+			{ clientId: "tab-5", after: null },
+			{ origin: "https://evil.example" },
+		);
+		const close = await client.closed;
+		expect(close.code).toBe(4403);
+		expect(browserCloseFromCode(close.code, close.reason)?.kind).toBe("forbidden");
+		expect(client.messages).toEqual([]);
+		expect(upgrades.length).toBe(before);
+	});
+
+	test("a binary message is a protocol violation: 4400, nothing forwarded", async () => {
+		const client = dialBrowser(ui.port, { clientId: "tab-6", after: null });
+		await waitFor(() => client.messages.length === 1, 5000, "first upstream message");
+		const socket = sockets.at(-1)!;
+		client.ws.send(new Uint8Array([1, 2, 3]));
+		const close = await client.closed;
+		expect(close.code).toBe(4400);
+		expect(browserCloseFromCode(close.code, close.reason)?.kind).toBe("protocol_violation");
+		await waitFor(() => socket.closes.length === 1, 5000, "upstream close");
+		expect(socket.received).toEqual([]);
+	});
+
+	/**
+	 * A browser that stops reading while the control plane floods it: runs `check` once the flood has
+	 * stalled at the stand-in, with the forwarder's samples and the stand-in socket.
+	 */
+	async function withStuckBrowser(
+		run: (stuck: {
+			client: DialedSession;
+			samples: BridgeSample[];
+			socket: FakeBrowserSocket;
+		}) => Promise<void>,
+	): Promise<void> {
+		const samples: BridgeSample[] = [];
+		const gated = startUiServer({
+			port: 0,
+			controlPort: upstream.port!,
+			observeBridge: (sample) => samples.push(sample),
+		});
+		try {
+			const client = dialBrowser(gated.port, { clientId: "tab-slow", after: null });
+			await waitFor(() => client.messages.length === 1, 5000, "first upstream message");
+			const socket = sockets.at(-1)!;
+			client.ws.pause();
+			client.ws.send("flood");
+			await waitFor(() => socket.stalled, 10_000, "upstream send buffer full");
+			await run({ client, samples, socket });
+		} finally {
+			stallRule = false;
+			await gated.close();
+		}
+	}
+
+	/** Flood frames carry their index as seq: the delivered ones are exactly 0..n-1 in order. */
+	function expectFloodInOrder(messages: string[]): void {
+		messages.slice(1).forEach((text, index) => {
+			expect((JSON.parse(text) as { seq: number }).seq).toBe(index);
+		});
+	}
+
+	test("a stuck browser behind the forwarder stops the upstream reads and the forwarder holds only its bound", async () => {
+		await withStuckBrowser(async ({ client, samples, socket }) => {
+			// The burst is bigger than every buffer on the path: it is held back at the control plane.
+			expect(socket.flooded).toBeLessThan(FLOOD_MESSAGES);
+			const flooded = socket.flooded;
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			expect(socket.flooded).toBe(flooded);
+			// What the forwarder buffered for the browser stopped at the high-water mark plus what one
+			// paused read chunk could still dispatch.
+			const peak = Math.max(...samples.map((sample) => sample.clientBuffered));
+			expect(peak).toBeGreaterThan(BROWSER_BRIDGE_HIGH_WATER_BYTES);
+			expect(peak).toBeLessThanOrEqual(BROWSER_BRIDGE_HIGH_WATER_BYTES + 2 * 1024 * 1024);
+
+			client.ws.resume();
+			await waitFor(
+				() => client.messages.length === 1 + FLOOD_MESSAGES,
+				30_000,
+				"flood delivered after the browser resumed",
+			);
+			expect(socket.flooded).toBe(FLOOD_MESSAGES);
+			expectFloodInOrder(client.messages);
+			client.ws.close();
+			await client.closed;
+		});
+	});
+
+	test("the control plane's stall rule drops a stuck browser behind the forwarder with 4503", async () => {
+		stallRule = true;
+		await withStuckBrowser(async ({ client, socket }) => {
+			await waitFor(() => socket.stallClosed, 10_000, "stand-in stall rule");
+			client.ws.resume();
+			const close = await client.closed;
+			expect(close.code).toBe(4503);
+			// What was delivered before the drop is a gap-free prefix: the browser resumes with `after`.
+			expect(client.messages.length).toBeLessThan(1 + FLOOD_MESSAGES);
+			expectFloodInOrder(client.messages);
 		});
 	});
 });
