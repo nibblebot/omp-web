@@ -66,12 +66,9 @@ const NO_FLEET = { error: "design system: no fleet behind this server" };
 
 const server = Bun.serve({
 	port,
-	async fetch(req, srv) {
+	async fetch(req) {
 		const url = new URL(req.url);
 		const { pathname } = url;
-		// The fixture SSE stream pings every 15s (like the fleet edge); Bun's
-		// default 10s idle timeout would cut it between pings and force reconnects.
-		if (pathname === "/events") srv.timeout(req, 0);
 		if (pathname === "/") {
 			// A top-level page load starts a fresh build; its assets await the same
 			// promise. Inspector frames (`/?embed=`) reuse the current bundle.
@@ -110,7 +107,7 @@ const server = Bun.serve({
 		// else a clear 404 instead of the SPA fallback.
 		const fixture = await handleFixtureRoute(req);
 		if (fixture) return fixture;
-		if (/^\/(ctl|auth|events|command)(\/|$)/.test(pathname)) {
+		if (/^\/(ctl|auth)(\/|$)/.test(pathname)) {
 			return Response.json(NO_FLEET, { status: 404 });
 		}
 		return new Response("not found", { status: 404 });

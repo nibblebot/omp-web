@@ -45,7 +45,7 @@ function captureSession(): AppSession {
  * label opens its component in the inspector sidebar.
  *
  * Clicking a sidebar row attaches like the real fleet: the command bus
- * (fixtures/command-bus.ts) answers with `attached`, the store resets the
+ * (fixtures/command-bus.ts, over the fake socket) answers with `attached`, the store resets the
  * session view, and this view restores that daemon's transcript from
  * `appSessions` in place of the daemon's history priming. A row's session
  * dropdown lists that daemon's session, answered in the page (daemon.ts).

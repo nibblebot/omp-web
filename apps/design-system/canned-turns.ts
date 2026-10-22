@@ -9,7 +9,7 @@ import { type CannedStep, cannedTurn } from "./fixtures/canned-turn";
  * Plays the canned agent turn (fixtures/canned-turn.ts) for the App view.
  * `prompt`, `steer` and `followUp` calls are answered in the page; each
  * accepted prompt replays the turn through the real `applyEvent` action, the
- * same path the SSE mux uses for `event` frames. Prompts sent while a turn
+ * same path the socket mux uses for `event` frames. Prompts sent while a turn
  * runs wait their turn. A state-frame-like stats update follows every
  * settled message, so the cost, token and context readouts move.
  */

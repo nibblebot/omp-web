@@ -108,7 +108,7 @@ export function call(method: WebMethodName, args: unknown[] = [], timeoutMs = 30
     reject(new Error(\`\${method} timed out after \${timeoutMs}ms\`));
   }, timeoutMs);
   pending.set(id, { resolve, reject, timer });
-  void postCommand({ type: "call", id, method, args });
+  void sendCommand({ type: "call", id, method, args });
   return promise;
 }
 \`\`\`

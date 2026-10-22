@@ -13,9 +13,10 @@ import { installDaemon } from "./daemon";
  * imports this module first so the global CSS order holds.
  *
  * Deliberately NOT importing apps/web/index.tsx: its render boots App, whose
- * onMount opens the SSE connection and probes /auth/session. The pages import
+ * onMount opens the browser socket and probes /auth/session. The pages import
  * components and the (side-effect free) store module; only the demo and the App
- * story mount App, against the design server's fixture /events stream.
+ * story mount App, against the in-page fake socket (fake-socket.ts) that
+ * `installDaemon` installs at boot.
  */
 export function boot(title: string, page: () => JSX.Element): void {
 	document.title = title;

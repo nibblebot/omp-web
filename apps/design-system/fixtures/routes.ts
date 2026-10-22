@@ -17,7 +17,6 @@ import {
 import { FIXTURE_NOW } from "./session";
 import { rosterFsBrowse, rosterRecentRoots } from "./roster-routes";
 import { rosterUsageReports } from "./roster";
-import { answerCommand, eventsResponse } from "./command-bus";
 
 /**
  * Fixture HTTP routes. Components fetch fleet endpoints at runtime (store/fleet-api.ts,
@@ -294,17 +293,6 @@ export const fixtureRoutes: FixtureRoute[] = [
 		method: "GET",
 		path: "/ctl/fs/recent-roots",
 		respond: () => rosterRecentRoots,
-	},
-	{
-		method: "POST",
-		path: "/command",
-		respond: ({ body }) =>
-			answerCommand(body) ?? unavailable("command not answered by the design server"),
-	},
-	{
-		method: "GET",
-		path: "/events",
-		respond: () => eventsResponse(),
 	},
 	{
 		method: "GET",

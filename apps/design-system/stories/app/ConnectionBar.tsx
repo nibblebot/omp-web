@@ -1,17 +1,46 @@
 import { ConnectionBar } from "../../../web/components/app/ConnectionBar";
+import { ModalHost } from "../../../web/ModalHost";
+import { Toasts } from "../../../web/components/app/Toasts";
+import { dialClient } from "../../daemon";
 import { defineStory } from "../../registry";
 
 export default defineStory({
 	id: "app-connection-bar",
 	title: "ConnectionBar",
 	component: { file: "apps/web/components/app/ConnectionBar.tsx", export: "ConnectionBar" },
+	// The page's first dial is long past: with the startup hold on, the strip stays hidden until a grace ends.
+	seed: { transportStartup: false, view: "chat", sidebarVisible: false },
 	variants: [
 		{
 			name: "Reconnecting",
 			description:
-				"The /events stream is down: the strip says it is reconnecting and session actions are paused.",
-			seed: { connected: false, view: "chat", sidebarVisible: false },
+				"The browser socket cannot be dialed: the client's reconnect loop runs against a fake edge that refuses every dial, the strip says it is reconnecting and session actions are paused.",
+			seed: () => dialClient("refuse"),
 			render: () => <ConnectionBar />,
+		},
+		{
+			name: "Signed out",
+			description:
+				"The edge closes the socket 4401: the client holds its reconnect, the strip stays up and the sign-in modal opens.",
+			seed: () => dialClient({ close: "unauthorized", message: "session expired, sign in again" }),
+			render: () => (
+				<>
+					<ConnectionBar />
+					<ModalHost />
+				</>
+			),
+		},
+		{
+			name: "Proto mismatch",
+			description:
+				"The edge closes the socket 4426: the client records the mismatch error and stops reconnecting. The strip stays up; Toasts holds the error back while it reports an outage.",
+			seed: () => dialClient({ close: "proto_mismatch", message: "server speaks OMP_PROTO 6" }),
+			render: () => (
+				<>
+					<ConnectionBar />
+					<Toasts />
+				</>
+			),
 		},
 		{
 			name: "Offline",

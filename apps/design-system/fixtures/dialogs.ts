@@ -412,7 +412,7 @@ export function compactionWith(overrides: Partial<CompactionState>): CompactionS
 // ---------------------------------------------------------------------------
 
 export const debugLogEntries: DebugEntry[] = [
-	{ ts: at(14), level: "info", source: "transport", message: "/events stream opened (seq 0)" },
+	{ ts: at(14), level: "info", source: "transport", message: "/ws socket opened (fresh priming)" },
 	{
 		ts: at(13),
 		level: "info",
