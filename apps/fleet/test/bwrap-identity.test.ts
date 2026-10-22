@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
 import {
 	BWRAP_PID_FILE,
+	cmdlineOf,
 	findTokenPid,
 	identityLive,
 	procIdentity,
@@ -19,12 +20,22 @@ const PROVIDER = join(import.meta.dir, "..", "bwrap-provider.ts");
 type Child = Subprocess<"ignore", "ignore", "ignore">;
 const children: Child[] = [];
 
-/** A long-lived host process whose argv carries `token` (as the shell's $0). */
+/**
+ * A long-lived host process whose argv carries `token` (as the shell's $0).
+ * Returns once the child has exec'd, as the providers do (findTokenPid) before
+ * recording an identity: between fork and exec its cmdline is still the test
+ * runner's, so a record taken in that window never matches.
+ */
 function sleeper(token: string): Child {
 	const child = Bun.spawn(["sh", "-c", "while :; do sleep 1; done", token], {
 		stdio: ["ignore", "ignore", "ignore"],
 	});
 	children.push(child);
+	const deadline = Date.now() + 5000;
+	while (!cmdlineOf(child.pid).includes(token)) {
+		if (Date.now() > deadline) throw new Error("sleeper never exec'd");
+		Bun.sleepSync(1);
+	}
 	return child;
 }
 
