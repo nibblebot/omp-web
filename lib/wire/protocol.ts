@@ -465,47 +465,50 @@ export interface SkillDetail extends SkillSummary {
  *  appended output (`WireToolExecutionUpdate`), `turn_end` is a bare marker,
  *  `agent_end` carries `lastAssistant` instead of `messages`, and tool-result
  *  `message_start`/`message_end` are not sent; see CHANGELOG.md
- *  "Infra remediation" and "Performance and efficiency". */
-export const OMP_PROTO = 4;
+ *  "Infra remediation" and "Performance and efficiency".
+ *  5: every client connection (browser to fleet, direct client to a
+ *  standalone session) is one WebSocket on `GET /ws` (lib/wire/browser-socket.ts)
+ *  instead of `GET /events` SSE + `POST /command`. Frame shapes are unchanged. */
+export const OMP_PROTO = 5;
 
-// --- SSE framing constants (shared by the daemon and the fleet) ---
+// --- Client connection constants (browser socket, shared by the session and the fleet) ---
 
 /** SSE event field carrying every ServerFrame. */
 export const SSE_EVENT_NAME = "frame";
-/** Keepalive ping event (see SSE_PING_BLOCK in sse.ts) interval written to every open stream. */
-export const SSE_KEEPALIVE_MS = 15_000;
+/** Keepalive interval: a server sends a ping on every idle client connection this often. */
+export const CLIENT_KEEPALIVE_MS = 15_000;
 /**
- * Consumers treat this much total silence (no event, no comment) as a dead
- * peer → abort + reconnect. Generous vs SSE_KEEPALIVE_MS so one delayed
- * comment never trips it.
+ * Clients treat this much total silence (no frame, no ping) as a dead
+ * peer → close + reconnect. Generous vs CLIENT_KEEPALIVE_MS so one delayed
+ * ping never trips it.
  */
-export const SSE_SILENCE_DEADLINE_MS = 30_000;
-/** Bounded replay ring of recent deltas, per daemon / per browser stream. */
-export const SSE_RING_CAP = 10_000;
+export const CLIENT_SILENCE_DEADLINE_MS = 30_000;
+/** Bounded replay ring of recent deltas, per daemon / per browser client. */
+export const CLIENT_RING_CAP = 10_000;
 /**
  * Byte budget for one replay ring (finding #5): a ring must be bounded in
  * BYTES, not only in entries. Multi-megabyte deltas (large bash chunks,
  * base64 image payloads) across thousands of entries would otherwise
  * balloon memory.
- * Sized at 2× SSE_BACKPRESSURE_BYTES so the ring comfortably holds the
+ * Sized at 2× CLIENT_BACKPRESSURE_BYTES so the ring comfortably holds the
  * post-drop replay window of a stream that was buffered up to the cap. The
- * entry cap (SSE_RING_CAP) remains a secondary bound for many-small-delta
+ * entry cap (CLIENT_RING_CAP) remains a secondary bound for many-small-delta
  * bursts.
  */
-export const SSE_RING_BYTES = 8 * 1024 * 1024;
+export const CLIENT_RING_BYTES = 8 * 1024 * 1024;
 /**
  * First seq assigned to post-priming deltas (a daemon-global counter).
- * Priming frames carry seqs 1..k (k < SSE_DELTA_SEQ_START) per stream, so a
- * Last-Event-ID below this value means "stale/empty client: priming already
- * carries full current state". The daemon replays ring deltas with
- * seq > max(lastEventId, snapshotSeq-1). The snapshot mark (the next delta
+ * Priming frames carry seqs 1..k (k < DELTA_SEQ_START) per connection, so a
+ * resume point (`after`) below this value means "stale/empty client: priming
+ * already carries full current state". The daemon replays ring deltas with
+ * seq > max(after, snapshotSeq-1). The snapshot mark (the next delta
  * seq captured before the priming snapshot is built) bounds the overlap, so
  * a resume never re-delivers deltas whose effects are inside the fresh
  * priming (finding #2: no duplicated items after a resume).
  */
-export const SSE_DELTA_SEQ_START = 1024;
-/** Per-stream enqueue cap: beyond it the stream is terminated (drop-and-resume). */
-export const SSE_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
+export const DELTA_SEQ_START = 1024;
+/** Per-client send-buffer cap: beyond it the connection is closed (drop-and-resume). */
+export const CLIENT_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
 /**
  * POST /command idempotency: how long an id is remembered, how many recorded
  * ANSWERS stay replayable, and the flood backstop on remembered ids.

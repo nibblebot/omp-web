@@ -1,5 +1,3 @@
-import { SSE_RING_BYTES } from "./protocol";
-
 /**
  * Shared SSE helpers for the agent-driving transport (POST /command up,
  * GET /events down). Used by the daemon (session/), the fleet edge and daemon
@@ -13,7 +11,7 @@ import { SSE_RING_BYTES } from "./protocol";
  *   data: <JSON ServerFrame>
  *
  * Keepalive is a named `ping` event (NO id field, so it must not advance the
- * consumer's lastEventId/resume counter) written every SSE_KEEPALIVE_MS.
+ * consumer's lastEventId/resume counter) written every CLIENT_KEEPALIVE_MS.
  * A named event instead of the idiomatic `: ping` comment because native
  * EventSource (the browser consumer) drops comments without surfacing them,
  * and the browser needs observable liveness for its silence deadline.
@@ -25,7 +23,7 @@ export type SseUnit =
 	| { kind: "event"; event: string; id: string | undefined; data: string }
 	| { kind: "comment"; text: string };
 
-/** Keepalive event name; servers emit SSE_PING_BLOCK every SSE_KEEPALIVE_MS. */
+/** Keepalive event name; servers emit SSE_PING_BLOCK every CLIENT_KEEPALIVE_MS. */
 export const SSE_PING_EVENT = "ping";
 /** The keepalive block: named event, empty-object data, deliberately no id. */
 export const SSE_PING_BLOCK = "event: ping\ndata: {}\n\n";
@@ -121,76 +119,5 @@ export async function* parseSseUnits(body: ReadableStream<Uint8Array>): AsyncGen
 		if (tail) yield tail;
 	} finally {
 		reader.releaseLock();
-	}
-}
-
-/**
- * Bounded replay ring of recent deltas. The server stamps each delta with a
- * monotonic seq (≥ SSE_DELTA_SEQ_START) and keeps the last `cap` entries so a
- * reconnecting consumer can resume from its Last-Event-ID.
- *
- * Bounds are byte-first, entry-count second: `maxBytes` (default
- * SSE_RING_BYTES) evicts from the head so a few multi-megabyte deltas cannot
- * balloon memory even far below `cap` (finding #5); the entry cap remains as
- * a secondary bound for many-small-delta bursts. Sizes are the stored
- * values' UTF-8 byte lengths, which is what the budget protects. A single
- * entry larger than the whole budget still lands (the newest delta is the one
- * consumer needs most, and `cap` still bounds the count). Eviction is from
- * the head only, so `after()` stays correct: a resumed consumer simply sees
- * older entries missing, which callers treat as re-derivable (drop-and-
- * resume), never as a corrupted tail.
- */
-export class SseRing<T = unknown> {
-	readonly #cap: number;
-	readonly #maxBytes: number;
-	#entries: Array<{ seq: number; value: T; bytes: number }> = [];
-	#bytes = 0;
-
-	constructor(cap: number, maxBytes?: number) {
-		this.#cap = cap;
-		this.#maxBytes = maxBytes ?? SSE_RING_BYTES;
-	}
-
-	get size(): number {
-		return this.#entries.length;
-	}
-
-	/** Total UTF-8 byte size of the ringed string values (0 for non-strings). */
-	get bytes(): number {
-		return this.#bytes;
-	}
-
-	push(seq: number, value: T): void {
-		const bytes = typeof value === "string" ? Buffer.byteLength(value, "utf8") : 0;
-		this.#entries.push({ seq, value, bytes });
-		this.#bytes += bytes;
-		// Byte budget first: evict from the head while over budget. The
-		// newest entry is never evicted (a single frame larger than the whole
-		// budget still lands); `drop` counts from the head so one splice does
-		// all the work.
-		let drop = 0;
-		while (drop < this.#entries.length - 1 && this.#bytes > this.#maxBytes) {
-			this.#bytes -= this.#entries[drop].bytes;
-			drop++;
-		}
-		// Entry cap second (secondary bound for many-small-delta bursts).
-		if (this.#entries.length - drop > this.#cap) {
-			const capDrop = this.#entries.length - drop - this.#cap;
-			for (let i = 0; i < capDrop; i++) this.#bytes -= this.#entries[drop + i].bytes;
-			drop += capDrop;
-		}
-		if (drop > 0) this.#entries.splice(0, drop);
-	}
-
-	/** Entries with seq > `after`, oldest first. */
-	after(after: number): Array<{ seq: number; value: T }> {
-		let lo = 0;
-		let hi = this.#entries.length;
-		while (lo < hi) {
-			const mid = (lo + hi) >> 1;
-			if (this.#entries[mid].seq <= after) lo = mid + 1;
-			else hi = mid;
-		}
-		return this.#entries.slice(lo);
 	}
 }

@@ -31,8 +31,8 @@ import {
 	OMP_SESSION_EXIT_RESUME_FAILED,
 	OMP_SESSION_EXIT_SESSION_LOCKED,
 	OMP_SESSION_PREFIX,
-	SSE_BACKPRESSURE_BYTES,
-	SSE_DELTA_SEQ_START,
+	CLIENT_BACKPRESSURE_BYTES,
+	DELTA_SEQ_START,
 	SSE_EVENT_NAME,
 	type StdoutContractLine,
 } from "#lib/wire/protocol";
@@ -341,7 +341,7 @@ function primingFrames(
  * Prime a fresh /events stream: hello_ok first (daemon identity; HTTP-level
  * auth replaced the WS hello handshake), then the attach priming (attached →
  * history → state → collab_status → available_commands → ready), seqs 1..k
- * (k < SSE_DELTA_SEQ_START). `commands` is built BEFORE the stream opens so
+ * (k < DELTA_SEQ_START). `commands` is built BEFORE the stream opens so
  * every priming seq is assigned contiguously (no async gap between priming
  * and the delta era). Then resume per Last-Event-ID: only ring deltas with
  * seq > max(lastEventId, snapshotSeq - 1) replay. The snapshot mark (the
@@ -356,7 +356,7 @@ function primingFrames(
  * synchronous single-frame prime would be terminated by enqueueTo and the
  * client could never attach (finding #11). Pacing lets the socket drain
  * between chunks; the sequence stays 1..k because priming seqs never reach
- * SSE_DELTA_SEQ_START.
+ * DELTA_SEQ_START.
  */
 async function primeConsumer(
 	consumer: SseConsumer,
@@ -386,11 +386,11 @@ async function primeConsumer(
 	// to the snapshot, so the floor is just the snapshot mark; deltas that
 	// arrived during the paced prime still replay exactly once.
 	const resumeFrom =
-		Number.isFinite(last) && last >= SSE_DELTA_SEQ_START
+		Number.isFinite(last) && last >= DELTA_SEQ_START
 			? Math.max(last, snapshotSeq - 1)
 			: snapshotSeq - 1;
 	const replay = ringAfter(resumeFrom);
-	// The ring keeps only the last SSE_RING_CAP deltas and evicts from the
+	// The ring keeps only the last CLIENT_RING_CAP deltas and evicts from the
 	// head; a first entry above resumeFrom+1 means entries the client still
 	// needs were evicted while the (paced) prime was in flight. Replaying the
 	// tail would silently skip them, so drop and resume instead: the reconnect's
@@ -407,7 +407,7 @@ async function primeConsumer(
  * Open a GET /events SSE response: register the consumer (connect = attached
  * to the single boot session, exactly like the WS open), prime it, and stream
  * live deltas until the client goes away. The body's queuing strategy sizes
- * chunks in bytes so backpressure is measured against SSE_BACKPRESSURE_BYTES.
+ * chunks in bytes so backpressure is measured against CLIENT_BACKPRESSURE_BYTES.
  */
 async function openEventsResponse(req: Request): Promise<Response> {
 	const entry = bootEntry!;
@@ -456,7 +456,7 @@ async function openEventsResponse(req: Request): Promise<Response> {
 				if (consumer) detachConsumer(consumer, "stream closed");
 			},
 		},
-		{ highWaterMark: SSE_BACKPRESSURE_BYTES, size: (chunk) => chunk?.byteLength ?? 0 },
+		{ highWaterMark: CLIENT_BACKPRESSURE_BYTES, size: (chunk) => chunk?.byteLength ?? 0 },
 	);
 	return new Response(stream, {
 		headers: {

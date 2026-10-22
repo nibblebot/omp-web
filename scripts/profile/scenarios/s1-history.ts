@@ -225,7 +225,7 @@ export const s1History: Scenario = build({
 		`A session (pin slot 0, route s1) is resumed from a generated transcript of ${SUB_THRESHOLD_HISTORY.turns} rounds ` +
 		`(user, assistant+bash call, ${SUB_THRESHOLD_HISTORY.toolOutputBytes} B tool result, assistant), about ${mib} MiB on the wire, cached under ` +
 		".profile-out/fixtures. This fixture is SUB-THRESHOLD: it stays under the size at which the edge ends a browser stream mid-priming " +
-		"(4 MiB SSE_BACKPRESSURE_BYTES cap plus kernel socket buffers; measured: 150 to 350 rounds never dropped or re-primed over thousands of rapid attaches, " +
+		"(4 MiB CLIENT_BACKPRESSURE_BYTES cap plus kernel socket buffers; measured: 150 to 350 rounds never dropped or re-primed over thousands of rapid attaches, " +
 		"400 rounds already does; see s1-history-large), so the timings are for complete, undropped, single-priming attaches. " +
 		"A rep in which any attach is dropped or re-primed mid-attach is marked FAILED and excluded from every aggregate (counted in the summary). " +
 		"Each rep opens fresh browser connections and attaches repeatedly (at least 30 attempts and 2 s in quick mode, 5 s otherwise), timing from the attach " +
@@ -241,7 +241,7 @@ export const s1HistoryLarge: Scenario = build({
 	prefix: "attach.completed.",
 	describe: (mib) =>
 		`Same shape as s1-history with a fixture of ${LARGE_HISTORY.turns} rounds, about ${mib} MiB on the wire, which is PAST the size at which ` +
-		"the edge ends a browser stream mid-priming (4 MiB SSE_BACKPRESSURE_BYTES drop-and-resume cap plus the kernel socket buffers; a stalled client is cut at about 8 MiB, " +
+		"the edge ends a browser stream mid-priming (4 MiB CLIENT_BACKPRESSURE_BYTES drop-and-resume cap plus the kernel socket buffers; a stalled client is cut at about 8 MiB, " +
 		"and the harness's JSON-parsing client drops roughly 14% of attaches at 8.9 MiB and nearly all at 23 MiB). " +
 		"The primary metric is attach.drop-rate (dropped attaches / attempts, over a fixed number of attempts per rep). " +
 		"attach.completed.* timings cover COMPLETED attaches only and are therefore BIASED toward attaches that were not dropped; " +

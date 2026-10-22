@@ -7,7 +7,7 @@
  * discovery never picks it up as a suite.
  */
 import { join } from "node:path";
-import { SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "#lib/wire/protocol";
+import { DELTA_SEQ_START, SSE_EVENT_NAME } from "#lib/wire/protocol";
 import type { DaemonEntry, DaemonInfo, ServerFrame } from "#lib/wire/protocol";
 import { parseSseUnits } from "#lib/wire/sse";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
@@ -286,7 +286,7 @@ export async function collectReplay(
 		for await (const unit of parseSseUnits(res.body!)) {
 			if (unit.kind !== "event" || unit.event !== SSE_EVENT_NAME || unit.id === undefined) continue;
 			const frame = JSON.parse(unit.data) as ServerFrame;
-			if (Number(unit.id) >= SSE_DELTA_SEQ_START) {
+			if (Number(unit.id) >= DELTA_SEQ_START) {
 				frames.push({ id: Number(unit.id), frame });
 				if (want(frame)) break;
 			}

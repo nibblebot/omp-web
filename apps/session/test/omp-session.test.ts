@@ -24,7 +24,7 @@ import {
 	OMP_SESSION_EXIT_RESUME_FAILED,
 	OMP_SESSION_EXIT_SESSION_LOCKED,
 	OMP_SESSION_PREFIX,
-	SSE_DELTA_SEQ_START,
+	DELTA_SEQ_START,
 	type StdoutContractLine,
 } from "#lib/wire/protocol";
 import { parseSseUnits, SSE_PING_EVENT } from "#lib/wire/sse";
@@ -69,7 +69,7 @@ function eventsUrlFor(baseUrl: string): string {
  * Frames accumulate on `frames` (poll with waitFor); `close()` aborts the
  * stream. Auth goes through an optional Authorization header (loopback is
  * exempt, so plain tests need none). `ids` runs parallel to `frames` with
- * each frame's SSE id (its seq: priming 1..k, deltas >= SSE_DELTA_SEQ_START)
+ * each frame's SSE id (its seq: priming 1..k, deltas >= DELTA_SEQ_START)
  * for Last-Event-ID resume assertions.
  */
 function openEvents(
@@ -1106,7 +1106,7 @@ test("a deduped id survives a burst past COMMAND_DEDUP_ANSWER_CAP: the replay is
 
 test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (finding #2)", async () => {
 	// The finding: primeConsumer always sent the full priming, and then, for
-	// a Last-Event-ID >= SSE_DELTA_SEQ_START, replayed ring.after(last). The
+	// a Last-Event-ID >= DELTA_SEQ_START, replayed ring.after(last). The
 	// replayed window includes deltas whose effects are ALREADY inside the
 	// just-primed fresh history/state, so a resume overlapping a completed turn
 	// double-applies every message/tool item (duplicated chat items, stranded
@@ -1129,7 +1129,7 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 	await waitForFrame(events.frames, "ready", 20_000, "ready frame");
 
 	// Deterministic ringed delta: setSessionName broadcasts a state delta
-	// (seq >= SSE_DELTA_SEQ_START), and every later prime's state snapshot
+	// (seq >= DELTA_SEQ_START), and every later prime's state snapshot
 	// carries its effect (sessionName "ringed delta"). No model needed.
 	await postCommand(base, {
 		type: "call",
@@ -1141,7 +1141,7 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 		() => {
 			const idx = events.ids.findIndex(
 				(id, i) =>
-					id >= SSE_DELTA_SEQ_START &&
+					id >= DELTA_SEQ_START &&
 					events.frames[i]?.type === "state" &&
 					stateSessionName(events.frames[i]) === "ringed delta",
 			);
@@ -1151,7 +1151,7 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 		"setSessionName state delta",
 	);
 	const deltaSeq = events.ids[deltaIdx];
-	expect(deltaSeq).toBeGreaterThanOrEqual(SSE_DELTA_SEQ_START);
+	expect(deltaSeq).toBeGreaterThanOrEqual(DELTA_SEQ_START);
 
 	// Drop and reconnect with Last-Event-ID INSIDE the delta window (one
 	// behind the ringed delta): pre-fix, ring.after(deltaSeq-1) replayed it.
@@ -1169,7 +1169,7 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 	// delivery; fake timers cannot drive another process (same convention as
 	// the POST-dedup and removed-mux tests above).
 	await sleep(1500);
-	expect(resumed.ids.every((id) => id < SSE_DELTA_SEQ_START)).toBe(true);
+	expect(resumed.ids.every((id) => id < DELTA_SEQ_START)).toBe(true);
 	resumed.close();
 	await cleanup();
 }, 30_000);

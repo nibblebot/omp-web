@@ -55,7 +55,7 @@ export function dispatch(frame: ServerFrame): void {
 	FakeEventSource.dispatch(SSE_EVENT_NAME, JSON.stringify(frame));
 }
 
-/** Dispatch one frame stamped with an SSE id (priming seqs 1..k or delta seqs >= SSE_DELTA_SEQ_START). */
+/** Dispatch one frame stamped with an SSE id (priming seqs 1..k or delta seqs >= DELTA_SEQ_START). */
 export function dispatchSeq(frame: ServerFrame, seq: number): void {
 	FakeEventSource.dispatch(SSE_EVENT_NAME, JSON.stringify(frame), String(seq));
 }

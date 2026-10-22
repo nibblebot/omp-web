@@ -310,7 +310,7 @@ describe("replay dedup (finding #2: resume must not double-apply deltas)", () =>
 	test("a delta live-delivered during priming is not double-applied by the ring replay", async () => {
 		primeAndStream();
 		// A fresh prime with an empty transcript; a NEW turn streams live while
-		// the paced prime is still in flight (delta seqs >= SSE_DELTA_SEQ_START).
+		// the paced prime is still in flight (delta seqs >= DELTA_SEQ_START).
 		dispatchSeq({ type: "history", messages: [] }, 3);
 		const events = completedTurnEvents(); // user q → tool t1 (done) → assistant a
 		events.forEach((frame, i) => dispatchSeq(frame, 1024 + i));

@@ -4,23 +4,24 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-
 import { ENVELOPE_MAX_BYTES } from "#lib/wire/callback-protocol";
 import {
 	type ImageArg,
-	SSE_BACKPRESSURE_BYTES,
-	SSE_DELTA_SEQ_START,
+	CLIENT_BACKPRESSURE_BYTES,
+	DELTA_SEQ_START,
 	SSE_EVENT_NAME,
-	SSE_KEEPALIVE_MS,
-	SSE_RING_CAP,
-	SSE_RING_BYTES,
+	CLIENT_KEEPALIVE_MS,
+	CLIENT_RING_CAP,
+	CLIENT_RING_BYTES,
 	type ServerFrame,
 	type SessionScopedFrame,
 	type WireSessionEvent,
 } from "#lib/wire/protocol";
-import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "#lib/wire/sse";
+import { encodeSseEvent, SSE_PING_BLOCK } from "#lib/wire/sse";
+import { ReplayRing } from "#lib/wire/replay-ring";
 import { extractText, scanImages } from "#lib/wire/tool-result";
 import type { SessionEntry } from "./session-entry";
 
 // ---------------------------------------------------------------------------
 // SSE delivery. Live deltas carry daemon-global seqs
-// (≥ SSE_DELTA_SEQ_START) and are kept in a bounded ring so a reconnecting
+// (≥ DELTA_SEQ_START) and are kept in a bounded ring so a reconnecting
 // stream can resume from its Last-Event-ID. Priming frames and unicast
 // answers are NOT ringed: priming is always re-derived fresh on open, and a
 // lost answer is retried by re-POSTing the command (deduped by id).
@@ -29,7 +30,7 @@ import type { SessionEntry } from "./session-entry";
 /**
  * One live GET /events consumer (agent-driving transport). Each stream is a
  * connection: it primes on open (hello_ok → attached → …), then receives live
- * deltas (daemon-global seqs ≥ SSE_DELTA_SEQ_START) and unicast answers. It is
+ * deltas (daemon-global seqs ≥ DELTA_SEQ_START) and unicast answers. It is
  * also the per-connection key for pending code inputs and UI requests.
  */
 export interface SseConsumer {
@@ -75,13 +76,13 @@ export function rejectOwnedCodeInputs(owner: string, reason: string): void {
 	}
 }
 
-const ring = new SseRing<string>(SSE_RING_CAP, SSE_RING_BYTES);
-let nextDeltaSeq = SSE_DELTA_SEQ_START;
+const ring = new ReplayRing<string>(CLIENT_RING_CAP, CLIENT_RING_BYTES);
+let nextDeltaSeq = DELTA_SEQ_START;
 const sseEncoder = new TextEncoder();
 
 /**
  * Byte budget per `history` frame (mirrors collab-host's SNAPSHOT_CHUNK_BYTES),
- * in UTF-8 bytes. Each chunk stays well under SSE_BACKPRESSURE_BYTES so priming
+ * in UTF-8 bytes. Each chunk stays well under CLIENT_BACKPRESSURE_BYTES so priming
  * of a >4 MiB transcript (base64 image payloads inside messages) never trips
  * the stream's drop-and-resume termination; a terminated prime is a permanent
  * connect → terminate → reconnect loop, since priming is never ringed.
@@ -146,14 +147,14 @@ function bufferedBytes(stream: SseConsumer): number {
 	const desired = stream.controller.desiredSize;
 	if (desired === null) return stream.unreadEstimate;
 	if (stream.unreadEstimate > 0) stream.unreadEstimate = 0;
-	return Math.max(0, SSE_BACKPRESSURE_BYTES - desired);
+	return Math.max(0, CLIENT_BACKPRESSURE_BYTES - desired);
 }
 
 /** Enqueue one pre-encoded block; past the backpressure cap the stream is terminated (drop-and-resume). */
 export function enqueueTo(stream: SseConsumer, block: string): void {
 	try {
 		const chunk = sseEncoder.encode(block);
-		if (bufferedBytes(stream) + chunk.byteLength > SSE_BACKPRESSURE_BYTES) {
+		if (bufferedBytes(stream) + chunk.byteLength > CLIENT_BACKPRESSURE_BYTES) {
 			terminateStream(stream, "backpressure");
 			return;
 		}
@@ -211,7 +212,7 @@ export function terminateStream(stream: SseConsumer, reason: string): void {
  */
 export async function enqueuePaced(stream: SseConsumer, block: string): Promise<void> {
 	const size = Buffer.byteLength(block, "utf8");
-	while (bufferedBytes(stream) + size > SSE_BACKPRESSURE_BYTES - PRIMING_QUEUE_MARGIN) {
+	while (bufferedBytes(stream) + size > CLIENT_BACKPRESSURE_BYTES - PRIMING_QUEUE_MARGIN) {
 		if (!streams.has(stream)) return; // consumer detached/cancelled
 		await new Promise<void>((resolve) => {
 			stream.drainWaiter = resolve;
@@ -634,8 +635,8 @@ export function notifyEvent(
 
 // Keepalive: a named ping event block (SSE_PING_BLOCK, deliberately no id
 // field, so it never advances a consumer's resume counter) on every open
-// /events stream every SSE_KEEPALIVE_MS; consumers treat >
-// SSE_SILENCE_DEADLINE_MS of total silence as a dead peer and reconnect.
+// /events stream every CLIENT_KEEPALIVE_MS; consumers treat >
+// CLIENT_SILENCE_DEADLINE_MS of total silence as a dead peer and reconnect.
 // Runs only while streams are live.
 let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -643,7 +644,7 @@ export function startKeepalive(): void {
 	if (keepaliveTimer) return;
 	keepaliveTimer = setInterval(() => {
 		for (const stream of streams) enqueueTo(stream, SSE_PING_BLOCK);
-	}, SSE_KEEPALIVE_MS);
+	}, CLIENT_KEEPALIVE_MS);
 }
 
 export function stopKeepalive(): void {

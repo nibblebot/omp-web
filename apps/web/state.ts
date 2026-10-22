@@ -6,7 +6,7 @@ import type { UsageReport } from "@oh-my-pi/pi-ai";
 import type { TextAttachment } from "./prompt/attachments";
 import { batch } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "#lib/wire/protocol";
+import { OMP_PROTO, SSE_EVENT_NAME, CLIENT_SILENCE_DEADLINE_MS, daemonsKey } from "#lib/wire/protocol";
 import type {
 	AvailableSlashCommand,
 	DaemonEntry,
@@ -734,7 +734,7 @@ let events: EventSource | null = null;
 /** Silence deadline for the /events stream: any frame or ping re-arms it; a
  *  fire means the peer is dead. The socket is open but nothing is flowing
  *  (e.g. a hung middlebox), so tear down and reconnect. The daemon emits a
- *  named `ping` event every SSE_KEEPALIVE_MS precisely so this browser-side
+ *  named `ping` event every CLIENT_KEEPALIVE_MS precisely so this browser-side
  *  consumer can observe liveness. */
 let silenceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -751,7 +751,7 @@ function armSilenceTimer(): void {
 		// perfectly healthy behind a hung middlebox. If the reconnect itself
 		// fails, the CLOSED-onerror backoff ladder takes over.
 		connect();
-	}, SSE_SILENCE_DEADLINE_MS);
+	}, CLIENT_SILENCE_DEADLINE_MS);
 }
 
 function clearSilenceTimer(): void {

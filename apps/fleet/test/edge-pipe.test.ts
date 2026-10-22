@@ -10,7 +10,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { CALLBACK_CONTROL_STREAM_ID, type CallbackEnvelope } from "#lib/wire/callback-protocol";
-import { OMP_PROTO, SSE_DELTA_SEQ_START, type ServerFrame } from "#lib/wire/protocol";
+import { OMP_PROTO, DELTA_SEQ_START, type ServerFrame } from "#lib/wire/protocol";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import { createDaemonControl, type DaemonControl } from "../../session/daemon-control";
 import { FleetCallback } from "../../session/fleet-callback";
@@ -224,7 +224,7 @@ describe("edge pipe backpressure and replay", () => {
 			// Priming arrives (roster + merged daemons, seqs 1..2).
 			await browser.waitForFrame((f) => f.type === "roster", "priming roster");
 			// One delta the browser reads, so its Last-Event-ID lands in the
-			// delta range (>= SSE_DELTA_SEQ_START) before the drop.
+			// delta range (>= DELTA_SEQ_START) before the drop.
 			const x1 = rig.registry.create({
 				name: "x1",
 				cwd: "/x1",
@@ -251,7 +251,7 @@ describe("edge pipe backpressure and replay", () => {
 				(ev) =>
 					ev.frame.type === "roster_delta" &&
 					ev.frame.upserted.some((d) => d.daemonId === x1.daemonId && d.labels.includes("v=40")) &&
-					ev.id >= SSE_DELTA_SEQ_START,
+					ev.id >= DELTA_SEQ_START,
 				"replayed final roster delta",
 			);
 			expect(replayed.frame.type).toBe("roster_delta");

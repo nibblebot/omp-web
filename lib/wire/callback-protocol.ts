@@ -1,4 +1,4 @@
-import { SSE_BACKPRESSURE_BYTES, SSE_KEEPALIVE_MS, SSE_SILENCE_DEADLINE_MS } from "./protocol";
+import { CLIENT_BACKPRESSURE_BYTES, CLIENT_KEEPALIVE_MS, CLIENT_SILENCE_DEADLINE_MS } from "./protocol";
 
 /**
  * Callback transport protocol (OMP_CALLBACK_PROTO = 2), separately versioned
@@ -126,7 +126,7 @@ export interface StreamAckControl {
  * Unacknowledged bytes a daemon may hold in flight per acked browser stream
  * (sent, or queued for sending, and not yet covered by a stream_ack). A
  * sender also keeps one maximal envelope (ENVELOPE_MAX_BYTES) of headroom
- * inside it, so the fleet's per-browser queue (SSE_BACKPRESSURE_BYTES) always
+ * inside it, so the fleet's per-browser queue (CLIENT_BACKPRESSURE_BYTES) always
  * has at least 1 MiB left for live frames that interleave with a burst.
  */
 export const STREAM_ACK_WINDOW_BYTES = 3 * 1024 * 1024;
@@ -213,11 +213,11 @@ export const ENVELOPE_MAX_BYTES = 1024 * 1024;
 /** Per-connection buffered-envelope cap across all streams (8 MiB). */
 export const CONNECTION_MAX_BYTES = 8 * 1024 * 1024;
 /** Per-virtual-stream buffered cap (4 MiB); also bounds reassembled chunks. */
-export const STREAM_MAX_BYTES = SSE_BACKPRESSURE_BYTES;
+export const STREAM_MAX_BYTES = CLIENT_BACKPRESSURE_BYTES;
 /** Heartbeat envelope cadence each side sends while otherwise idle (15 s). */
-export const HEARTBEAT_INTERVAL_MS = SSE_KEEPALIVE_MS;
+export const HEARTBEAT_INTERVAL_MS = CLIENT_KEEPALIVE_MS;
 /** Receive silence deadline (30 s), applied by both sides: no envelope by then = dead pair. */
-export const SILENCE_DEADLINE_MS = SSE_SILENCE_DEADLINE_MS;
+export const SILENCE_DEADLINE_MS = CLIENT_SILENCE_DEADLINE_MS;
 /**
  * Socket-level message cap (`maxPayloadLength`) on both ends: above the
  * envelope cap, so an over-cap envelope reaches validation and is dropped

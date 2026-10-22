@@ -6,12 +6,12 @@
  *
  *   - GET /events is the browser SSE downlink. Every open stream gets an
  *     immediate roster + merged-daemons + registered-projects priming
- *     (edge-local seqs 1..k, k < SSE_DELTA_SEQ_START); live `roster_delta` /
+ *     (edge-local seqs 1..k, k < DELTA_SEQ_START); live `roster_delta` /
  *     `daemon_status` / `daemons` / `registered_projects` broadcasts and
  *     proxied daemon frames follow as SSE events with
- *     edge-local monotonic seqs from SSE_DELTA_SEQ_START, kept in a
- *     per-client SseRing (cap SSE_RING_CAP, byte budget SSE_RING_BYTES) for
- *     Last-Event-ID resume: N ≥ SSE_DELTA_SEQ_START replays ring.after(N)
+ *     edge-local monotonic seqs from DELTA_SEQ_START, kept in a
+ *     per-client ReplayRing (cap CLIENT_RING_CAP, byte budget CLIENT_RING_BYTES) for
+ *     Last-Event-ID resume: N ≥ DELTA_SEQ_START replays ring.after(N)
  *     after priming, anything below skips replay (priming already carries
  *     full current state). Only daemon DELTA types are ringed (mirror of the
  *     daemon's RING_DELTAS, finding #5): priming frames (history,
@@ -48,7 +48,7 @@
  *     so unrelated global error frames never settle a browser's in-flight
  *     attach.
  *   - Backpressure: a browser stream buffering more than the cap (default
- *     SSE_BACKPRESSURE_BYTES) is terminated (drop-and-resume): the browser
+ *     CLIENT_BACKPRESSURE_BYTES) is terminated (drop-and-resume): the browser
  *     reconnects with Last-Event-ID and the edge replays its ring. One slow
  *     browser never stalls the daemon stream or other browsers. A stream
  *     whose queue stays non-empty with no drain for BROWSER_STALL_MS (a
@@ -85,12 +85,12 @@ import { randomUUID } from "node:crypto";
 import {
 	COMMAND_DEDUP_WINDOW_MS,
 	OMP_PROTO,
-	SSE_BACKPRESSURE_BYTES,
-	SSE_DELTA_SEQ_START,
+	CLIENT_BACKPRESSURE_BYTES,
+	DELTA_SEQ_START,
 	SSE_EVENT_NAME,
-	SSE_KEEPALIVE_MS,
-	SSE_RING_CAP,
-	SSE_RING_BYTES,
+	CLIENT_KEEPALIVE_MS,
+	CLIENT_RING_CAP,
+	CLIENT_RING_BYTES,
 	type ClientCommand,
 	type DaemonEntry,
 	type DaemonInfo,
@@ -104,8 +104,8 @@ import {
 	parseSseUnits,
 	SSE_PING_BLOCK,
 	SSE_PING_EVENT,
-	SseRing,
 } from "#lib/wire/sse";
+import { ReplayRing } from "#lib/wire/replay-ring";
 import {
 	CALLBACK_BROWSER_STREAM_PREFIX,
 	CALLBACK_CONTROL_STREAM_ID,
@@ -452,9 +452,9 @@ export interface EdgeDeps {
 interface BrowserClient {
 	/** Page-scoped id from ?client= (null for anonymous streams, not command-addressable). */
 	clientId: string | null;
-	/** Edge-local replay ring of this browser's ringed deltas (cap SSE_RING_CAP, byte budget SSE_RING_BYTES). */
-	ring: SseRing<string>;
-	/** Next edge-local delta seq for this browser (≥ SSE_DELTA_SEQ_START). */
+	/** Edge-local replay ring of this browser's ringed deltas (cap CLIENT_RING_CAP, byte budget CLIENT_RING_BYTES). */
+	ring: ReplayRing<string>;
+	/** Next edge-local delta seq for this browser (≥ DELTA_SEQ_START). */
 	nextSeq: number;
 	/** Live stream, or null while disconnected (the ring is kept for resume). */
 	stream: BrowserStream | null;
@@ -523,8 +523,8 @@ interface CallbackPipeState {
 function newClient(clientId: string | null, ringBytes: number): BrowserClient {
 	return {
 		clientId,
-		ring: new SseRing<string>(SSE_RING_CAP, ringBytes),
-		nextSeq: SSE_DELTA_SEQ_START,
+		ring: new ReplayRing<string>(CLIENT_RING_CAP, ringBytes),
+		nextSeq: DELTA_SEQ_START,
 		stream: null,
 		gcTimer: null,
 	};
@@ -704,9 +704,9 @@ export class FleetEdge {
 	readonly #backpressureBytes: number;
 	/** A queue with unread bytes and no drain for this long drops the stream (default BROWSER_STALL_MS). */
 	readonly #stallMs: number;
-	/** Keepalive/stall sweep cadence (default SSE_KEEPALIVE_MS). */
+	/** Keepalive/stall sweep cadence (default CLIENT_KEEPALIVE_MS). */
 	readonly #keepaliveMs: number;
-	/** Per-client ring byte budget (default SSE_RING_BYTES; finding #5). */
+	/** Per-client ring byte budget (default CLIENT_RING_BYTES; finding #5). */
 	readonly #ringBytes: number;
 	/** Live browser streams (broadcasts + backpressure). */
 	readonly #browsers = new Set<BrowserStream>();
@@ -744,7 +744,7 @@ export class FleetEdge {
 	readonly #daemonTaps = new Map<string, () => void>();
 	/** Per-daemon realtime activity, derived in the control-socket tap (browser-gated). */
 	readonly #daemonActivity = new Map<string, DaemonActivity>();
-	/** Keepalive ping events on every open browser stream every SSE_KEEPALIVE_MS. */
+	/** Keepalive ping events on every open browser stream every CLIENT_KEEPALIVE_MS. */
 	#keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 	/** False on the split-setup control plane: static paths answer 404 JSON instead of the UI. */
 	readonly #serveUi: boolean;
@@ -766,13 +766,13 @@ export class FleetEdge {
 	constructor(
 		deps: EdgeDeps,
 		opts?: {
-			/** Backpressure cap for browser streams (default SSE_BACKPRESSURE_BYTES). */
+			/** Backpressure cap for browser streams (default CLIENT_BACKPRESSURE_BYTES). */
 			backpressureBytes?: number;
-			/** Per-client replay-ring byte budget (default SSE_RING_BYTES). */
+			/** Per-client replay-ring byte budget (default CLIENT_RING_BYTES). */
 			ringBytes?: number;
 			/** Stall limit for a browser stream whose queue stops draining (default BROWSER_STALL_MS). */
 			stallMs?: number;
-			/** Keepalive and stall-sweep interval (default SSE_KEEPALIVE_MS). */
+			/** Keepalive and stall-sweep interval (default CLIENT_KEEPALIVE_MS). */
 			keepaliveMs?: number;
 		},
 	) {
@@ -801,10 +801,10 @@ export class FleetEdge {
 		});
 		this.#providerProfiles = deps.providerProfiles;
 		this.#logStore = deps.logStore;
-		this.#backpressureBytes = opts?.backpressureBytes ?? SSE_BACKPRESSURE_BYTES;
-		this.#ringBytes = opts?.ringBytes ?? SSE_RING_BYTES;
+		this.#backpressureBytes = opts?.backpressureBytes ?? CLIENT_BACKPRESSURE_BYTES;
+		this.#ringBytes = opts?.ringBytes ?? CLIENT_RING_BYTES;
 		this.#stallMs = opts?.stallMs ?? BROWSER_STALL_MS;
-		this.#keepaliveMs = opts?.keepaliveMs ?? SSE_KEEPALIVE_MS;
+		this.#keepaliveMs = opts?.keepaliveMs ?? CLIENT_KEEPALIVE_MS;
 		this.#serveUi = deps.serveUi ?? true;
 		this.#sessionsDir = deps.sessionsDir;
 		deps.registry.onChange = this.#onRegistryChange;
@@ -980,7 +980,7 @@ export class FleetEdge {
 					this.#browsers.add(stream);
 					this.#startKeepalive();
 					// Priming: roster + merged daemons + registered projects
-					// (seqs 1..k, k < SSE_DELTA_SEQ_START).
+					// (seqs 1..k, k < DELTA_SEQ_START).
 					let seq = 1;
 					this.#enqueue(
 						stream,
@@ -1040,10 +1040,10 @@ export class FleetEdge {
 							),
 						);
 					}
-					// Resume: only a delta-era id (≥ SSE_DELTA_SEQ_START) replays
+					// Resume: only a delta-era id (≥ DELTA_SEQ_START) replays
 					// the ring; anything below means priming carries full state.
 					const last = lastEventId === null ? NaN : Number(lastEventId);
-					if (Number.isFinite(last) && last >= SSE_DELTA_SEQ_START) {
+					if (Number.isFinite(last) && last >= DELTA_SEQ_START) {
 						for (const { value } of client.ring.after(last)) {
 							// Dropped mid-replay: the rest would be encoded and discarded.
 							if (!this.#browsers.has(stream)) break;
