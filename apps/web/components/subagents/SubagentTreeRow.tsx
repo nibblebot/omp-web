@@ -1,17 +1,12 @@
-import { createEffect, Show, type Component } from "solid-js";
+import { Show, type Component } from "solid-js";
 import { settingValue } from "../../store/settings";
-import { isFeatureEnabled } from "../../features/registry";
-import {
-	ensureAnalysisSessionsDir,
-	openAnalysisHash,
-	subagentAnalysisHref,
-	type SubagentNode,
-} from "../../store/subagents";
+import type { SubagentNode } from "../../store/subagents";
 import { formatCost, formatDuration, formatTokens } from "../../subagents/format";
 import { createLiveElapsed } from "../../subagents/elapsed";
 import { formatLiveLine } from "../../subagents/progress";
+import { subagentRowDomId } from "../../subagents/tree";
 import { ChevronDownIcon, ChevronRightIcon } from "../ui/icons";
-import { KebabMenu } from "../ui/KebabMenu";
+import { SubagentActionsMenu } from "./SubagentActionsMenu";
 import { SubagentStatusChip } from "./SubagentStatusChip";
 
 /** One tree row: expander, then the agent (opens its pane) as name, title, model and metrics, and a live line. */
@@ -21,13 +16,15 @@ export const SubagentTreeRow: Component<{
 	expanded: boolean;
 	onToggle: () => void;
 	onOpen: (id: string) => void;
+	/** Accordion single-select: `aria-selected` and the highlight. Omit outside a selection model. */
+	selected?: boolean;
+	/** DOM id of the expanded region this row controls (`aria-controls`); omit while collapsed. */
+	controlsId?: string;
+	/** The Open in Analysis kebab at the row's end; on unless the host turns it off (the agents dock). */
+	menu?: boolean;
 }> = (props) => {
 	const hasChildren = () => props.node.children.length > 0;
 	const elapsedMs = createLiveElapsed(() => props.node);
-	/** ANA-08 (brnh, km9k): the kebab offers "Open in Analysis" only when Analysis is on and the transcript is known. */
-	createEffect(() => {
-		if (isFeatureEnabled("analysis")) ensureAnalysisSessionsDir();
-	});
 	/** Line 4: only while running, and only when the live preview display setting is on. */
 	const liveText = () => {
 		const live = props.node.live;
@@ -37,7 +34,7 @@ export const SubagentTreeRow: Component<{
 		return formatLiveLine(live) || undefined;
 	};
 	return (
-		<div class="subagent-tree-row">
+		<div class="subagent-tree-row" data-selected={props.selected === true ? "" : undefined}>
 			<Show
 				when={hasChildren()}
 				fallback={<span class="subagent-tree-toggle-spacer" aria-hidden="true" />}
@@ -54,11 +51,14 @@ export const SubagentTreeRow: Component<{
 			</Show>
 			<button
 				type="button"
+				id={subagentRowDomId(props.node.id)}
 				role="treeitem"
 				class="subagent-tree-open"
 				data-subagent-id={props.node.id}
 				aria-level={props.level}
 				aria-expanded={hasChildren() ? props.expanded : undefined}
+				aria-selected={props.selected}
+				aria-controls={props.controlsId}
 				onClick={() => props.onOpen(props.node.id)}
 			>
 				<span class="subagent-tree-line">
@@ -104,15 +104,8 @@ export const SubagentTreeRow: Component<{
 					)}
 				</Show>
 			</button>
-			{/* ANA-08 (brnh, km9k): hidden, never disabled, when no Analysis link exists. */}
-			<Show when={subagentAnalysisHref(props.node.id, isFeatureEnabled("analysis"))}>
-				{(href) => (
-					<KebabMenu label={`More actions for ${props.node.name}`}>
-						<button type="button" role="menuitem" onClick={() => openAnalysisHash(href())}>
-							Open in Analysis
-						</button>
-					</KebabMenu>
-				)}
+			<Show when={props.menu !== false}>
+				<SubagentActionsMenu id={props.node.id} label={`More actions for ${props.node.name}`} />
 			</Show>
 		</div>
 	);

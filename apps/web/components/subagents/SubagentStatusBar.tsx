@@ -1,12 +1,14 @@
-import { Show, type Component } from "solid-js";
+import { Show, type Component, type JSX } from "solid-js";
 import type { SubagentNode } from "../../store/subagents";
 import { formatCost, formatDuration, formatTokens } from "../../subagents/format";
 import { createLiveElapsed } from "../../subagents/elapsed";
 import { getContextUsageLevel } from "../../usage/context";
 import { StatusSegment } from "../chat/status/StatusSegment";
 
-/** Read-only status row under an agent's transcript, styled like the main session bar. Unknown values are omitted. */
-export const SubagentStatusBar: Component<{ node: SubagentNode }> = (props) => {
+/** Read-only status row under an agent's transcript, styled like the main session bar. Unknown values are omitted; `actions` ends the row. */
+export const SubagentStatusBar: Component<{ node: SubagentNode; actions?: JSX.Element }> = (
+	props,
+) => {
 	const elapsedMs = createLiveElapsed(() => props.node);
 	const hasSubtree = () =>
 		props.node.children.length > 0 &&
@@ -65,6 +67,7 @@ export const SubagentStatusBar: Component<{ node: SubagentNode }> = (props) => {
 					subtree {formatTokens(props.node.subtree.tokens)}, {formatCost(props.node.subtree.cost)}
 				</StatusSegment>
 			</Show>
+			{props.actions}
 		</div>
 	);
 };

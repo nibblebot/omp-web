@@ -1,3 +1,5 @@
+import type { AgentsFilter, AgentsMode } from "./prefs/dock-layout";
+import { restoreDockLayout } from "./store/dock";
 import { readDockWidth } from "./prefs/dock";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AdvisorItem } from "./store/slices/advisor";
@@ -434,6 +436,17 @@ export const [state, setState] = createStore({
 	// Right-hand dock (U18): which panel is open, null when closed. Written only
 	// through store/dock.ts (openDock/closeDock); the route mirrors it.
 	dock: null as { kind: string; id?: string } | null,
+	// The attached workspace's agents-dock layout, live here and saved per
+	// workspace by store/dock.ts: the agents mode and filter, the accordion's remembered
+	// expanded agent, and the agents whose children are collapsed in the dock tree.
+	agentsMode: "single" as AgentsMode,
+	agentsFilter: "all" as AgentsFilter,
+	agentsExpanded: undefined as string | undefined,
+	agentTreeCollapsed: new Set<string>() as ReadonlySet<string>,
+	// True once the attached session's subagent forest is fully pulled (the
+	// live mirror and the worker roster); false from every attach until then.
+	// A saved agent id is only judged missing once both are in.
+	subagentsLoaded: { mirror: false, roster: false },
 	dockWidth: readDockWidth(),
 	// Project whose New workspace popover is open (anchored to its group "+").
 	// Set by openNewWorkspace/closeNewWorkspace; the palette uses the same calls.
@@ -1142,6 +1155,7 @@ function resetSessionView(): void {
 	setState({
 		// Unknown until the new daemon's state frame lands; deep-link URL sync relies on it.
 		sessionId: "",
+		subagentsLoaded: { mirror: false, roster: false },
 		sessionScope: undefined,
 		capabilities: {},
 		integrations: createIntegrationState(),
@@ -1345,7 +1359,14 @@ export function connect(): void {
 		if (frame.type === "attached") {
 			pushDebug("info", "transport", `attached ${frame.sessionId}`);
 			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
-			setState("currentSessionId", frame.sessionId);
+			// One batch: the incoming workspace's saved dock lands together with
+			// its id, so no effect ever sees the previous workspace's dock under the new id.
+			batch(() => {
+				if (state.currentSessionId !== frame.sessionId) restoreDockLayout(frame.sessionId);
+				setState("currentSessionId", frame.sessionId);
+			});
+			// The subagent forest is pulled afresh on every attach below.
+			setState("subagentsLoaded", { mirror: false, roster: false });
 			setState("sessionDownId", "");
 			clearUnread(frame.sessionId);
 			// Every attach re-primes history from scratch: drop any in-flight
@@ -1395,7 +1416,10 @@ export function connect(): void {
 				.then((subs) => {
 					const next = new Map<string, SubagentInfo>();
 					for (const s of subs as SubagentInfo[]) if (s.id) next.set(s.id, s);
-					setState("subagents", next);
+					batch(() => {
+						setState("subagents", next);
+						setState("subagentsLoaded", "mirror", true);
+					});
 				})
 				.catch(() => {});
 			// The worker roster is a separate read model: pull it on attach too, so

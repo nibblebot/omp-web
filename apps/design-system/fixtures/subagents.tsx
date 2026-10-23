@@ -12,6 +12,7 @@ import type {
 	WorkerStatus,
 	WorkersState,
 } from "../../web/store/subagents";
+import { type AgentsMode, openAgent, openAgents, setAgentsMode } from "../../web/store/dock";
 import { subagentForest, workerKey } from "../../web/store/subagents";
 import { flattenSubagentTree } from "../../web/subagents/tree";
 import { answerCalls, type CallHandlers } from "../daemon";
@@ -1126,12 +1127,21 @@ export const agentSettingsModel: SettingsModel = {
  * Seeds the attached session with the agent forest, or an empty session with `empty`.
  * `display` also turns on the live-line setting the tree row reads (off by default, so rows show
  * three lines). `analysis` names the parent session file, which the "Open in Analysis" links need.
+ * `settled` finishes the running and pending agents, so nothing in the forest is active.
  */
 export function seedAgentTree(
-	options: { empty?: boolean; display?: boolean; analysis?: boolean } = {},
+	options: { empty?: boolean; display?: boolean; analysis?: boolean; settled?: boolean } = {},
 ): void {
-	const workers = options.empty === true ? [] : agentTreeWorkers;
-	const infos = options.empty === true ? [] : agentTreeInfos;
+	const specs =
+		options.empty === true
+			? []
+			: agentSpecs.map((spec) =>
+					options.settled === true && (spec.status === "running" || spec.status === "pending")
+						? { ...spec, status: "completed" as const, endMin: spec.endMin ?? 11 }
+						: spec,
+				);
+	const workers = specs.map(agentRecordOf);
+	const infos = specs.map(agentInfoOf);
 	seedSubagents(
 		{ workerList: () => workers },
 		{
@@ -1142,6 +1152,22 @@ export function seedAgentTree(
 			...(options.analysis === true ? { sessionFile: PARENT_SESSION_FILE } : {}),
 		},
 	);
+}
+
+/**
+ * Seeds the agent forest and the attached workspace's agents dock: `mode`, and `agentId` opened the
+ * way a row click does (its own pane in single, expanded in the list in accordion). No id leaves
+ * the dock on the agents list.
+ */
+export function seedAgentsDock(
+	mode: AgentsMode,
+	agentId?: string,
+	options: { analysis?: boolean } = {},
+): void {
+	seedAgentTree({ display: true, ...options });
+	setAgentsMode(mode);
+	if (agentId === undefined) openAgents();
+	else openAgent(agentId);
 }
 
 /** One node of the seeded forest by agent id. Call after `seedAgentTree`. Throws on an unknown id. */

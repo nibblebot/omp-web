@@ -1,5 +1,5 @@
 import { Show, type Component } from "solid-js";
-import { openDock } from "../../../store/dock";
+import { openAgents } from "../../../store/dock";
 import { runningSubagentCount } from "../../../store/subagents";
 import { BotIcon } from "../../ui/icons";
 
@@ -13,7 +13,7 @@ export const RunningAgentsButton: Component = () => (
 			aria-label={`${runningSubagentCount()} running subagents, open agents panel`}
 			aria-keyshortcuts="Alt+A"
 			title="Running subagents (Alt+A)"
-			onClick={() => openDock("agents")}
+			onClick={openAgents}
 		>
 			<BotIcon />
 			<span class="running-agents-count">{runningSubagentCount()}</span>

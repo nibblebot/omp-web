@@ -2,7 +2,8 @@ import type { Component } from "solid-js";
 import { DockHost } from "../../../web/components/app/DockHost";
 import { answerCalls } from "../../daemon";
 import { sessionGraphPage } from "../../fixtures/dialogs";
-import { closeDock, openDock } from "../../../web/store/dock";
+import { closeDock, openAgents, openDock, setAgentsFilter } from "../../../web/store/dock";
+import { seedAgentsDock } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
 
 /**
@@ -25,7 +26,7 @@ const DockStage: Component = () => (
 					<button type="button" onClick={() => openDock("tree")}>
 						Session tree
 					</button>
-					<button type="button" onClick={() => openDock("agents")}>
+					<button type="button" onClick={openAgents}>
 						Agents
 					</button>
 					<button type="button" onClick={closeDock}>
@@ -64,8 +65,33 @@ export default defineStory({
 		},
 		{
 			name: "Agents open",
-			description: "The agents kind mounts the agents list; Back from an agent returns here.",
-			seed: () => openDock("agents"),
+			description:
+				"The agents kind mounts the agents list (flush body, its own inset) with the Single agent / Accordion view toggle in the header. A row opens that agent's pane; Back returns here.",
+			seed: () => seedAgentsDock("single"),
+			render: () => <DockStage />,
+		},
+		{
+			name: "Agents open, Running filter",
+			description:
+				"The header shows the Running / All filter left of the view toggle. With Running pressed the list keeps running and pending agents and the ancestors that hold them, and hides the finished ones; the footer still totals the whole forest.",
+			seed: () => {
+				seedAgentsDock("single");
+				setAgentsFilter("running");
+			},
+			render: () => <DockStage />,
+		},
+		{
+			name: "Agent open (single view)",
+			description:
+				"The agent kind mounts one agent's pane. The header toggle switches to the accordion and carries this agent along, expanded in the list.",
+			seed: () => seedAgentsDock("single", "FixtureBuilder"),
+			render: () => <DockStage />,
+		},
+		{
+			name: "Agents accordion",
+			description:
+				"The accordion view: clicking a row expands that agent under it (one at a time), and the toggle switches back to the single view with the expanded agent open in its pane.",
+			seed: () => seedAgentsDock("accordion", "FixtureBuilder"),
 			render: () => <DockStage />,
 		},
 	],

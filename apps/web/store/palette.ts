@@ -17,7 +17,7 @@ import {
 } from "../palette/palette";
 import { commandUsage, currentCommandRegistry, dispatchInput } from "../prompt/commands";
 import { fleetSettingsActive, hasLiveSession, setState, state } from "../state";
-import { openDock } from "./dock";
+import { openAgents } from "./dock";
 import { setPromptInsert } from "./chat";
 import { openModelPicker, recentModels, switchSessionModel } from "./models";
 import { openAddProject, openNewWorkspace } from "./projects";
@@ -126,7 +126,7 @@ export function runPaletteItem(item: PaletteItem): void {
 				return;
 			}
 			if (action.target === "subagents") {
-				openDock("agents");
+				openAgents();
 				return;
 			}
 			if (action.target === "skills" || action.target === "mcp" || action.target === "plugins") {

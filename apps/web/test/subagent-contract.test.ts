@@ -378,13 +378,14 @@ describe("subagentTree and fanoutTotals", () => {
 });
 
 describe("runningSubagentCount and subagentById", () => {
-	test("counts running agents at every depth", () => {
+	test("counts running and pending agents at every depth", () => {
 		seed([
 			{ id: "p", status: "running", startedAt: 1 },
 			{ id: "c", status: "running", parent: "p", startedAt: 2 },
+			{ id: "q", status: "pending", parent: "p" },
 			{ id: "d", status: "done", startedAt: 3, endedAt: 4 },
 		]);
-		expect(runningSubagentCount()).toBe(2);
+		expect(runningSubagentCount()).toBe(3);
 	});
 
 	test("finds nested agents by id and returns undefined for unknown ids", () => {

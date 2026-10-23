@@ -16,7 +16,12 @@ import {
 } from "./components/chat";
 import { BackgroundDaemonsBar, FleetSidebar } from "./components/fleet";
 import { ModalHost } from "./ModalHost";
-import { isAgentsShortcut, openDock } from "./store/dock";
+import {
+	isAgentsShortcut,
+	openAgents,
+	pruneDockLayoutsToRoster,
+	reconcileMissingAgent,
+} from "./store/dock";
 import {
 	bootAuth,
 	closeDrawers,
@@ -149,7 +154,7 @@ export const App: Component = () => {
 			}
 			if (!isAgentsShortcut(e)) return;
 			e.preventDefault();
-			openDock("agents");
+			openAgents();
 		});
 		// Alt+M opens Settings > Model; Alt+P opens the quick model picker.
 		window.addEventListener("keydown", (e) => {
@@ -203,6 +208,16 @@ export const App: Component = () => {
 			() => JSON.stringify(state.dock),
 			() => syncRouteToAttached(),
 			{ defer: true },
+		),
+	);
+	// A saved or opened agent that is not in the attached session falls back to
+	// the agents list; it waits until the session's forest has fully loaded.
+	createEffect(() => reconcileMissingAgent());
+	// Per-workspace dock layouts of workspaces that left the roster are dropped.
+	createEffect(
+		on(
+			() => JSON.stringify(state.daemonRoster.map((d) => d.daemonId)),
+			() => pruneDockLayoutsToRoster(),
 		),
 	);
 	// Tab title names the attached session.

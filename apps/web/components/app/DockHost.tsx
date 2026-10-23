@@ -11,6 +11,7 @@ import { Dynamic } from "solid-js/web";
 import { DockPane } from "../ui/DockPane";
 import { ReviewPanel } from "../review/ReviewPanel";
 import { SessionTreePanel } from "../sessions/SessionTreePanel";
+import { AgentsDockActions } from "../subagents/AgentsDockActions";
 import { AgentsPanel } from "../subagents/AgentsPanel";
 import { SubagentPanel } from "../subagents/SubagentPanel";
 import { afterMotion, createPresence } from "../../motion/presence";
@@ -23,14 +24,16 @@ interface DockKind {
 	body: Component<{ id?: string }>;
 	/** The body scrolls and pads itself (see DockPane `flush`). */
 	flush?: boolean;
+	/** Header controls beside the close button (DockPane `actions`). */
+	actions?: Component;
 }
 
 /** Dock panel kinds, keyed by the route's `<kind>` segment. */
 const DOCK_KINDS: Record<string, DockKind> = {
 	review: { title: "Git review", body: ReviewPanel },
 	tree: { title: "Session tree", body: SessionTreePanel },
-	agent: { title: "Agent", body: SubagentPanel, flush: true },
-	agents: { title: "Agents", body: AgentsPanel },
+	agent: { title: "Agent", body: SubagentPanel, flush: true, actions: AgentsDockActions },
+	agents: { title: "Agents", body: AgentsPanel, flush: true, actions: AgentsDockActions },
 };
 
 /** Focus the agents-list row for `id` once the list has mounted. */
@@ -147,6 +150,11 @@ export const DockHost: Component = () => {
 					maxWidth={DOCK_MAX_WIDTH}
 					onWidth={setDockWidth}
 					flush={content().kind.flush}
+					actions={
+						<Show when={content().kind.actions}>
+							{(actions) => <Dynamic component={actions()} />}
+						</Show>
+					}
 					onClose={onBack}
 					phase={presence.phase()}
 					overlay={!docked()}

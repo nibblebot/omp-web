@@ -6,7 +6,12 @@ import {
 	formatTokens,
 	shortAgentName,
 } from "../subagents/format";
-import { filterSubagentTree, flattenSubagentTree, summarizeSubagentTree } from "../subagents/tree";
+import {
+	filterActiveSubagentTree,
+	filterSubagentTree,
+	flattenSubagentTree,
+	summarizeSubagentTree,
+} from "../subagents/tree";
 import type { SubagentNode, SubagentStatus } from "../store/subagents";
 
 function node(
@@ -73,6 +78,62 @@ describe("filterSubagentTree", () => {
 	test("keeps a matching agent's whole subtree", () => {
 		const [kept] = filterSubagentTree(forest, "explore");
 		expect(kept?.children.map((n) => n.id)).toEqual(["reader"]);
+	});
+});
+
+describe("filterActiveSubagentTree", () => {
+	const forest = () => [
+		node("builder", {
+			status: "done",
+			children: [
+				node("mapper", { status: "done" }),
+				node("advisor", { status: "running" }),
+				node("lint", { status: "pending" }),
+				node("review", { status: "failed", children: [node("types", { status: "aborted" })] }),
+			],
+		}),
+		node("docs", { status: "parked" }),
+		node("solo", { status: "running" }),
+	];
+
+	test("keeps running and pending agents and drops finished leaves", () => {
+		const kept = filterActiveSubagentTree(forest());
+		expect(flattenSubagentTree(kept).map((n) => n.id)).toEqual([
+			"builder",
+			"advisor",
+			"lint",
+			"solo",
+		]);
+	});
+
+	test("keeps a finished ancestor of a running child with only its kept children", () => {
+		const [builder] = filterActiveSubagentTree(forest());
+		expect(builder?.id).toBe("builder");
+		expect(builder?.status).toBe("done");
+		expect(builder?.children.map((n) => n.id)).toEqual(["advisor", "lint"]);
+	});
+
+	test("keeps keepId even when finished, and its ancestors", () => {
+		const kept = filterActiveSubagentTree(forest(), "types");
+		expect(flattenSubagentTree(kept).map((n) => n.id)).toEqual([
+			"builder",
+			"advisor",
+			"lint",
+			"review",
+			"types",
+			"solo",
+		]);
+	});
+
+	test("returns nothing when no agent is active and none is kept", () => {
+		expect(filterActiveSubagentTree([node("a"), node("b", { status: "failed" })])).toEqual([]);
+	});
+
+	test("does not mutate the input", () => {
+		const input = forest();
+		const before = structuredClone(input);
+		filterActiveSubagentTree(input, "types");
+		expect(input).toEqual(before);
 	});
 });
 

@@ -1,6 +1,6 @@
 import { Show, type Component } from "solid-js";
 import type { ToolItem } from "../../../state";
-import { openDock } from "../../../store/dock";
+import { openAgent } from "../../../store/dock";
 import { fanoutTotals, subagentTree } from "../../../store/subagents";
 import { SubagentFanoutFooter } from "../../subagents/SubagentFanoutFooter";
 import { SubagentTree } from "../../subagents/SubagentTree";
@@ -17,11 +17,7 @@ export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 	return (
 		<ToolCardShell name="task" arg={description()} status={props.item.status} class="task-tool">
 			<Show when={forest().length > 0}>
-				<SubagentTree
-					nodes={forest()}
-					label="Agents spawned by this task"
-					onOpen={(id) => openDock("agent", id)}
-				/>
+				<SubagentTree nodes={forest()} label="Agents spawned by this task" onOpen={openAgent} />
 				<SubagentFanoutFooter totals={fanoutTotals(props.item.toolCallId)} />
 			</Show>
 		</ToolCardShell>

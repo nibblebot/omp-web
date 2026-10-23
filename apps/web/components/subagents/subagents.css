@@ -1,4 +1,4 @@
-/* Subagent tree, fan-out footer, agent pane, agents dock, and composer counter. */
+/* Subagent tree, fan-out footer, agent pane, agents dock (list and accordion), and composer counter. */
 
 .subagent-tree {
 	display: grid;
@@ -73,6 +73,28 @@
 
 .subagent-tree-open:hover {
 	background: var(--hover);
+}
+
+/* Accordion: the expanded agent's row and its body form one accent-outlined card. */
+.subagent-tree-row[data-selected] {
+	border: 1px solid var(--accent);
+	border-bottom: 0;
+	border-radius: var(--r-md) var(--r-md) 0 0;
+	background: var(--hover);
+}
+
+/* Accordion body under its row: the agent's conversation, about 60% of the list scroller
+   (a size container, see .agents-panel-list) plus two collapsed rows (~4.75rem each), capped so
+   the open row (~5rem) and its body still fit the scroller together. */
+.subagent-tree-body {
+	display: flex;
+	flex-direction: column;
+	height: min(calc(max(60cqh, 16rem) + 9.5rem), calc(100cqh - 5rem));
+	margin: 0 0 var(--space-2);
+	border: 1px solid var(--accent);
+	border-top-color: var(--border);
+	border-radius: 0 0 var(--r-md) var(--r-md);
+	overflow: hidden;
 }
 
 .subagent-tree-open:focus-visible,
@@ -202,6 +224,7 @@
 
 .subagent-fanout-footer {
 	display: flex;
+	flex: none;
 	flex-wrap: wrap;
 	gap: 12px;
 	padding: 6px 8px;
@@ -234,7 +257,17 @@
 	font-size: 12px;
 }
 
-/* Agent pane column: header, transcript (the only scroller), status bar, composer area. The dock body is flush and clips. */
+/* One agent's transcript, status bar and composer area: fills the agent pane below its header
+   or the accordion region below its row. The transcript is the only scroller. */
+.subagent-conversation {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+
+/* Agent pane column: header, then the conversation. The dock body is flush and clips. */
 .subagent-panel {
 	display: flex;
 	flex-direction: column;
@@ -283,7 +316,8 @@
 
 /* KebabMenu's trigger is sidebar-hover-only (fleet.css); the pane header and tree rows have no hover row to reveal it. */
 .subagent-panel-id .sidebar-menu-btn,
-.subagent-tree-row .sidebar-menu-btn {
+.subagent-tree-row .sidebar-menu-btn,
+.subagent-status-bar .sidebar-menu-btn {
 	opacity: 1;
 	pointer-events: auto;
 }
@@ -349,15 +383,122 @@
 	font-size: var(--fs-md);
 }
 
+/* Flush dock column: it owns its inset and gap. Search and footer are pinned; the list between
+   them is the one scroller. */
 .agents-panel {
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: var(--space-3);
 	min-width: 0;
-	padding: 12px;
+	min-height: 0;
+	padding: var(--space-2);
+}
+
+.agents-panel-list {
+	flex: 1 1 0;
+	min-height: 0;
+	overflow-y: auto;
+}
+
+/* Outlines inside the scroller would clip at its edge; draw them inside the row. */
+.agents-panel-list .subagent-tree-open:focus-visible,
+.agents-panel-list .subagent-tree-toggle:focus-visible {
+	outline-offset: -2px;
+}
+
+/* Dock list: rows stack as one bordered list, each row sharing its top border with whatever sits
+   above it (the previous row or the open agent's body). The children chevron sits inside the row,
+   and leaf rows reserve no space for it; nesting shows as an indent without a guide line, so a
+   nested row's left border is the only vertical line. */
+.agents-panel-list :is(.subagent-tree, .subagent-tree-group) {
+	gap: 0;
+}
+
+.agents-panel-list .subagent-tree-group {
+	margin-left: 0;
+	padding-left: var(--space-5);
+	border-left: 0;
+}
+
+.agents-panel-list .subagent-tree-row {
+	gap: 0;
+	margin-top: -1px;
+	border: 1px solid var(--border-strong);
+}
+
+.agents-panel-list > .subagent-tree > .subagent-tree-item:first-child > .subagent-tree-row {
+	margin-top: 0;
+}
+
+.agents-panel-list .subagent-tree-row:hover {
+	background: var(--hover);
+}
+
+.agents-panel-list .subagent-tree-toggle-spacer {
+	display: none;
+}
+
+.agents-panel-list .subagent-tree-toggle {
+	margin-left: var(--space-1);
+}
+
+.agents-panel-list .subagent-tree-open,
+.agents-panel-list .subagent-tree-open:hover {
+	border: 0;
+	background: transparent;
+}
+
+/* The open agent: its row and body stay on top of the shared borders so the accent outline wins. */
+.agents-panel-list .subagent-tree-row[data-selected] {
+	position: relative;
+	z-index: 1;
+	border-color: var(--accent);
+	border-bottom: 0;
+	border-radius: 0;
+}
+
+.agents-panel-list .subagent-tree-body {
+	position: relative;
+	z-index: 1;
+	margin: 0;
+	border-radius: 0;
+}
+
+/* Accordion: the list scroller is the size container the expanded body's height is a share of. */
+.agents-panel[data-mode="accordion"] .agents-panel-list {
+	container-type: size;
+	overscroll-behavior: contain;
+}
+
+/* Dock header controls: the filter toggle, then the view toggle. */
+.agents-dock-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-6);
+}
+
+/* Dock header segmented controls: Running / All filter (words), single agent view or accordion view (icons). */
+.agents-filter-toggle,
+.agents-mode-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+}
+
+.agents-filter-toggle .segment-button,
+.agents-mode-toggle .segment-button {
+	display: inline-grid;
+	place-items: center;
+	cursor: pointer;
+}
+
+.agents-filter-toggle .segment-button.active,
+.agents-mode-toggle .segment-button.active {
+	color: var(--accent);
 }
 
 .agents-panel-search {
+	flex: none;
 	width: 100%;
 	padding: 6px 10px;
 	border: 1px solid var(--border);

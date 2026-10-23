@@ -181,6 +181,15 @@ export const SquareIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
+/** Accordion view toggle: stacked horizontal bars, drawn with Lucide's rows-3. */
+export const Rows3Icon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<rect width="18" height="18" x="3" y="3" rx="2" />
+		<path d="M21 9H3" />
+		<path d="M21 15H3" />
+	</Svg>
+);
+
 export const SquareCheckIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<rect width="18" height="18" x="3" y="3" rx="2" />

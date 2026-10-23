@@ -11,6 +11,16 @@ export interface SubagentTotals {
 	elapsedMs: number;
 }
 
+/** DOM id of an agent's tree row button; the accordion region is labelled by it. */
+export function subagentRowDomId(id: string): string {
+	return `subagent-row-${id}`;
+}
+
+/** DOM id of an agent's expanded accordion region; the row's `aria-controls` names it. */
+export function subagentRegionDomId(id: string): string {
+	return `subagent-region-${id}`;
+}
+
 /** Every agent in a forest, pre-order (a parent before its children). */
 export function flattenSubagentTree(nodes: readonly SubagentNode[]): SubagentNode[] {
 	return nodes.flatMap((node) => [node, ...flattenSubagentTree(node.children)]);
@@ -34,12 +44,32 @@ export function filterSubagentTree(nodes: readonly SubagentNode[], query: string
 	});
 }
 
+/** Active = running or pending: what every "running" count and the Running filter mean. */
+export function isActiveSubagent(node: Pick<SubagentNode, "status">): boolean {
+	return node.status === "running" || node.status === "pending";
+}
+
+/**
+ * Running filter: active nodes, `keepId`, and ancestors of anything kept. Returns new arrays;
+ * never mutates input nodes' children arrays.
+ */
+export function filterActiveSubagentTree(
+	nodes: readonly SubagentNode[],
+	keepId?: string,
+): SubagentNode[] {
+	return nodes.flatMap((node) => {
+		const children = filterActiveSubagentTree(node.children, keepId);
+		const kept = children.length > 0 || isActiveSubagent(node) || node.id === keepId;
+		return kept ? [{ ...node, children }] : [];
+	});
+}
+
 /** Totals across every agent in a forest; same definition as the store's `fanoutTotals`. */
 export function summarizeSubagentTree(nodes: readonly SubagentNode[]): SubagentTotals {
 	const all = flattenSubagentTree(nodes);
 	return {
 		count: all.length,
-		running: all.filter((node) => node.status === "running" || node.status === "pending").length,
+		running: all.filter(isActiveSubagent).length,
 		failed: all.filter((node) => node.status === "failed").length,
 		tokens: sumKnown(all.map((node) => node.metrics.tokens)),
 		cost: sumKnown(all.map((node) => node.metrics.cost)),

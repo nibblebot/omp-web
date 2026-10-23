@@ -10,7 +10,7 @@
  */
 import { state } from "../state";
 import { formatRoute, parseRoute, type Route } from "./route";
-import { closeDock, openDock } from "./dock";
+import { applyRouteDock, closeDock } from "./dock";
 import { requestDaemonSessions, resumeDaemonSession, setView, switchToDaemon } from "./roster";
 import { pushToast } from "./toasts";
 import { isUserStopped } from "./user-stopped";
@@ -30,9 +30,11 @@ function writeRoute(route: Route, mode: "push" | "replace"): void {
 /**
  * Mirror the attached session into the hash. Runs whenever the attached
  * daemon or its session id changes. Analysis hashes belong to the transcript
- * browser and are never touched.
+ * browser and are never touched. `replaceEntry` rewrites the current history
+ * entry instead of pushing one: a restore that fills in a saved dock must not
+ * truncate the Forward history of the entry the user just navigated to.
  */
-export function syncRouteToAttached(): void {
+export function syncRouteToAttached(replaceEntry = false): void {
 	if (restoring > 0) return;
 	const daemonId = state.currentSessionId;
 	const hash = parseRoute(location.hash);
@@ -53,7 +55,7 @@ export function syncRouteToAttached(): void {
 		...(dock === undefined ? {} : { dock }),
 	};
 	if (base.kind === "session" && formatRoute(base) === formatRoute(next)) return;
-	writeRoute(next, base.kind === "daemon" ? "replace" : "push");
+	writeRoute(next, base.kind === "daemon" || replaceEntry ? "replace" : "push");
 }
 
 async function attachDaemon(daemonId: string): Promise<void> {
@@ -94,6 +96,7 @@ async function restoreRoute(route: Route): Promise<void> {
 		return;
 	}
 	if (state.view !== "chat") setView("chat");
+	const switchedWorkspace = state.currentSessionId !== daemonId;
 	restoring++;
 	try {
 		if (route.kind === "session") await attachSessionRoute(daemonId, route.sessionId);
@@ -101,11 +104,13 @@ async function restoreRoute(route: Route): Promise<void> {
 	} finally {
 		restoring--;
 	}
-	// The URL is the source of truth for the dock: a route without one closes it.
-	if (route.kind === "session" && route.dock !== undefined)
-		openDock(route.dock.kind, route.dock.id);
-	else closeDock();
-	syncRouteToAttached();
+	// The URL is the source of truth for the dock when it names one. A route
+	// without one closes the dock of the workspace the user is already on
+	// (Back/Forward); after a switch to another workspace the dock saved for it
+	// was restored with the attach (store/dock.ts restoreDockLayout) and stays.
+	if (route.kind === "session" && route.dock !== undefined) applyRouteDock(route.dock);
+	else if (!switchedWorkspace || state.currentSessionId !== daemonId) closeDock();
+	syncRouteToAttached(true);
 }
 
 /** Restore the hash once the roster first arrives non-empty (the initial load). */

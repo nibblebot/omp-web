@@ -1,5 +1,6 @@
 import { SubagentTreeRow } from "../../../web/components/subagents/SubagentTreeRow";
 import { setFeaturePreference } from "../../../web/features/preferences";
+import { subagentRegionDomId } from "../../../web/subagents/tree";
 import { agentNode, seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
 
@@ -98,6 +99,41 @@ export default defineStory({
 				<div style={{ width: "420px", border: "1px dashed var(--border)" }}>
 					{row("FixtureBuilder.AdvisorA", 1)}
 				</div>
+			),
+		},
+		{
+			name: "Selected, accordion row",
+			description:
+				"The expanded agent's row in the accordion: hover background, accent card outline (in the agents dock), aria-selected true, and aria-controls naming its region.",
+			seed: () => seedAgentTree({ display: true }),
+			render: () => (
+				<SubagentTreeRow
+					node={agentNode("FixtureBuilder")}
+					level={1}
+					expanded={false}
+					onToggle={noop}
+					onOpen={noop}
+					selected
+					controlsId={subagentRegionDomId("FixtureBuilder")}
+					menu={false}
+				/>
+			),
+		},
+		{
+			name: "Not selected, accordion row",
+			description:
+				"Another row of the accordion: aria-selected false, and no kebab (the agents dock turns row menus off).",
+			seed: () => seedAgentTree({ display: true }),
+			render: () => (
+				<SubagentTreeRow
+					node={agentNode("DocsSweep")}
+					level={1}
+					expanded={false}
+					onToggle={noop}
+					onOpen={noop}
+					selected={false}
+					menu={false}
+				/>
 			),
 		},
 		{

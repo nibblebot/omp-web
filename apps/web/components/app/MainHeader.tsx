@@ -2,7 +2,7 @@ import { For, Show, type Component, type JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { featureMainHeader } from "../../features/registry";
 import { subagentCount } from "../../store/subagents";
-import { openDock } from "../../store/dock";
+import { openAgents } from "../../store/dock";
 import { openShareSheet } from "../../store/collab";
 import { setSidebarVisible, setState, setTxSidebarVisible, state } from "../../state";
 import { LayersIcon, PanelLeftIcon, SettingsIcon } from "../ui/icons";
@@ -47,7 +47,7 @@ export const MainHeader: Component<{
 					<button
 						type="button"
 						class="segment segment-button main-header-subagents"
-						onClick={() => openDock("agents")}
+						onClick={openAgents}
 						title={`${subagentCount()} subagents`}
 						aria-label={`${subagentCount()} subagents`}
 					>

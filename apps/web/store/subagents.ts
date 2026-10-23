@@ -10,6 +10,7 @@ import { setState, setView, state, type ChatItem, type SubagentInfo } from "../s
 import { api } from "./fleet-api";
 import { subagentAnalysisHash } from "./slices/analysis";
 import { agentTitle, shortAgentName, sumKnown } from "../subagents/format";
+import { isActiveSubagent } from "../subagents/tree";
 import { imageBlobHash } from "../text/images";
 import {
 	liveLineOf,
@@ -203,6 +204,7 @@ export async function listWorkers(): Promise<WorkerRecord[]> {
 	if (state.currentSessionId !== sessionId)
 		throw new Error("Session switched during worker discovery");
 	setState("workers", (previous) => normalizeWorkerSnapshot(previous, sessionId, list));
+	setState("subagentsLoaded", "roster", true);
 	return list
 		.map((row) => coerceWorkerRow(row, sessionId))
 		.filter((row): row is WorkerRecord => row !== null);
@@ -568,7 +570,7 @@ export function fanoutTotals(toolCallId: string): {
 	const cost = sumKnown(nodes.map((node) => node.metrics.cost));
 	return {
 		count: nodes.length,
-		running: nodes.filter((node) => node.status === "running").length,
+		running: nodes.filter(isActiveSubagent).length,
 		failed: nodes.filter((node) => node.status === "failed").length,
 		tokens,
 		cost,
@@ -581,8 +583,9 @@ export function subagentCount(): number {
 	return flatten(buildForest()).length;
 }
 
+/** Running or pending agents at every depth (the composer button's count; matches the dock's Running filter). */
 export function runningSubagentCount(): number {
-	return flatten(buildForest()).filter((node) => node.status === "running").length;
+	return flatten(buildForest()).filter(isActiveSubagent).length;
 }
 
 export function subagentById(id: string): SubagentNode | undefined {
