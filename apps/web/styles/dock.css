@@ -112,6 +112,14 @@
 	}
 }
 
+/* Review panels (plan review, annotations, todos) mount in a sheet; the sheet body scrolls, not the page. */
+.modal.sheet.review-sheet {
+	overflow-y: auto;
+}
+.modal.sheet.review-sheet > * {
+	flex-shrink: 0;
+}
+
 /* Git review body (components/review/ReviewPanel.tsx) inside the dock. */
 .review-panel {
 	display: flex;

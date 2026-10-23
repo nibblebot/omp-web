@@ -28,7 +28,6 @@ import { isReady } from "./session";
 import { call } from "./transport";
 import { reportError } from "./toasts";
 import { advisorNotesOf } from "./slices/advisor";
-import { noticeAdvisorNotesWhileOff } from "./advisor-notice";
 import { collabLive, guestPromptOf } from "./slices/collab";
 import { flushBtwEphemeral } from "./slices/btw";
 import { applyGoalUpdated } from "./slices/goals";
@@ -658,10 +657,7 @@ export function applyEvent(e: WireSessionEvent): void {
 			} else {
 				// Advisor cards (steered or preserved) settle as custom messages.
 				const notes = advisorNotesOf(msg);
-				if (notes !== null) {
-					pushItem({ kind: "advisor", id: nextId++, notes });
-					noticeAdvisorNotesWhileOff(notes.length);
-				}
+				if (notes !== null) pushItem({ kind: "advisor", id: nextId++, notes });
 				const guest = guestPromptOf(msg);
 				if (guest !== null) pushItem({ kind: "guestPrompt", id: nextId++, ...guest });
 			}

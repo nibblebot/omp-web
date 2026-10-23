@@ -18,7 +18,7 @@ const FIXTURE: Record<string, string> = {
 		'import "./main.css";',
 		'console.info("CORE_ENTRY_MARK");',
 		'void import("./features/analysis");',
-		'void import("./features/review");',
+		'void import("./features/plan");',
 		"",
 	].join("\n"),
 	"main.css": ".CORE_CSS_MARK { color: red; }\n",
@@ -33,10 +33,10 @@ const FIXTURE: Record<string, string> = {
 		"",
 	].join("\n"),
 	"features/analysis.css": ".ANALYSIS_CSS_MARK { color: blue; }\n",
-	"features/review.ts": [
+	"features/plan.ts": [
 		'import "../shared";',
 		'import "../core-lib";',
-		'console.info("REVIEW_MARK");',
+		'console.info("PLAN_MARK");',
 		"",
 	].join("\n"),
 };
@@ -90,23 +90,23 @@ describe("featureSizes build plugin (real vite build over fixture feature entrie
 	test("a chunk shared by two features is listed under both", () => {
 		const shared = assetWith("SHARED_MARK");
 		expect(manifest.features.analysis).toContain(shared);
-		expect(manifest.features.review).toContain(shared);
+		expect(manifest.features.plan).toContain(shared);
 		expect(manifest.core).not.toContain(shared);
 	});
 
 	test("a feature-private chunk is listed only under its feature", () => {
 		const analysis = manifest.features.analysis ?? [];
-		const review = manifest.features.review ?? [];
+		const plan = manifest.features.plan ?? [];
 		expect(analysis).toContain(assetWith("ANALYSIS_MARK"));
-		expect(review).toContain(assetWith("REVIEW_MARK"));
-		expect(review).not.toContain(assetWith("ANALYSIS_MARK"));
-		expect(analysis).not.toContain(assetWith("REVIEW_MARK"));
+		expect(plan).toContain(assetWith("PLAN_MARK"));
+		expect(plan).not.toContain(assetWith("ANALYSIS_MARK"));
+		expect(analysis).not.toContain(assetWith("PLAN_MARK"));
 	});
 
 	test("a chunk statically reachable from the app entry is core even when a feature imports it", () => {
 		const coreLib = assetWith("CORE_LIB_MARK");
 		expect(manifest.core).toContain(coreLib);
-		expect(manifest.features.review).not.toContain(coreLib);
+		expect(manifest.features.plan).not.toContain(coreLib);
 		expect(manifest.features.analysis).not.toContain(coreLib);
 		expect(manifest.core).toContain(assetWith("CORE_ENTRY_MARK"));
 	});
@@ -114,7 +114,7 @@ describe("featureSizes build plugin (real vite build over fixture feature entrie
 	test("a dynamic import made by a feature belongs to that feature", () => {
 		const extra = assetWith("EXTRA_MARK");
 		expect(manifest.features.analysis).toContain(extra);
-		expect(manifest.features.review).not.toContain(extra);
+		expect(manifest.features.plan).not.toContain(extra);
 		expect(manifest.core).not.toContain(extra);
 	});
 
@@ -122,7 +122,7 @@ describe("featureSizes build plugin (real vite build over fixture feature entrie
 		const analysisCss = assetWith("ANALYSIS_CSS_MARK");
 		expect(analysisCss.endsWith(".css")).toBe(true);
 		expect(manifest.features.analysis).toContain(analysisCss);
-		expect(manifest.features.review).not.toContain(analysisCss);
+		expect(manifest.features.plan).not.toContain(analysisCss);
 		expect(manifest.core).not.toContain(analysisCss);
 		expect(manifest.core).toContain(assetWith("CORE_CSS_MARK"));
 	});

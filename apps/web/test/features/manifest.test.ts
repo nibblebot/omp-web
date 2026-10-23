@@ -5,11 +5,9 @@ import {
 	FEATURES,
 	featureForCommand,
 	featuresForModal,
-	type FeatureId,
 	type FeatureInfo,
 } from "../../features/manifest";
 import { LOADERS } from "../../features/registry";
-import type { ModalName } from "../../state";
 
 /**
  * `FEATURES` is the only feature metadata the entry chunk carries: the
@@ -55,15 +53,6 @@ describe("FEATURES manifest", () => {
 
 	test("no command name is claimed by two features", () => {
 		expect(claimedBy((f) => f.commands).filter(([, ids]) => ids.length > 1)).toEqual([]);
-	});
-
-	test("a modal shared by several features lists each owner once", () => {
-		const shared = claimedBy((f) => f.modals).filter(([, ids]) => ids.length > 1);
-		for (const [name, ids] of shared) {
-			expect(new Set(ids).size).toBe(ids.length);
-			expect(featuresForModal(name as ModalName).map((f) => f.id)).toEqual(ids as FeatureId[]);
-		}
-		expect(featuresForModal("integrations").map((f) => f.id)).toEqual(["integrations", "plugins"]);
 	});
 
 	test("core modals have no owning feature", () => {

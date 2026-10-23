@@ -31,8 +31,7 @@ export default defineStory({
 		},
 		{
 			name: "Disconnected, no session",
-			description:
-				"No-session pane and Analysis: toggle and settings only; the connection bar sits below.",
+			description: "No-session pane: toggle and settings only; the connection bar sits below.",
 			seed: { connected: false, view: "chat", sidebarVisible: false },
 			render: () => <MainHeader />,
 		},

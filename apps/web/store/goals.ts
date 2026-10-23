@@ -4,7 +4,7 @@ import { asBoolean, asNumber, asRecord, asString } from "./subagents";
 import { state } from "../state";
 
 /**
- * Goals store (goals feature). Owns every goal, loop, and vibe wire call made
+ * Goals store. Owns every goal, loop, and vibe wire call made
  * from the web client. Components mutate server state only through these
  * exports. Arg shapes match apps/session/methods.ts positionally.
  */

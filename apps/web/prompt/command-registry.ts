@@ -1,5 +1,6 @@
 import type { AvailableSlashCommand } from "#lib/wire/protocol";
 import type { SlashCommandSource } from "#lib/wire/slash-busy";
+import type { FeatureStatus } from "../features/manifest";
 import { SDK_BUILTINS, type SdkBuiltin } from "./sdk-builtins";
 
 /**
@@ -31,6 +32,7 @@ export const COMMAND_GROUP_ORDER: readonly CommandGroup[] = [
 export interface CommandFeature {
 	id: string;
 	label: string;
+	status: FeatureStatus;
 	enabled: boolean;
 }
 
@@ -80,7 +82,10 @@ const WEB_DESCRIPTIONS: Readonly<Record<string, string>> = {
 	compact: "Summarize the transcript to free context",
 	model: "Switch the active model",
 	queue: "Queue a follow-up message for after the turn",
-	plan: "Toggle plan mode",
+	btw: "Side question (/btw [question])",
+	goal: "Goal controls (/goal set|show|pause|resume|drop|budget)",
+	mcp: "MCP servers (/mcp [add|list|remove|test])",
+	skills: "Skills (/skills [installed])",
 	compaction: "Open the context compaction controls",
 	usage: "Show token usage and cost",
 	context: "Open the context usage breakdown",
@@ -378,11 +383,20 @@ export function suggestCommand(
 /** Local message for a command that is not sent to the agent; undefined for runnable entries. */
 export function refusalNotice(entry: CommandEntry): string | undefined {
 	if (entry.kind === "tui-only") return entry.notice;
-	if (entry.feature && !entry.feature.enabled) {
-		return `/${entry.name} is part of ${entry.feature.label}, which is disabled. Enable it in Settings > Features.`;
-	}
+	if (entry.feature && !entry.feature.enabled)
+		return disabledFeatureNotice(entry.name, entry.feature);
 	if (entry.refusal) return `/${entry.name}: ${entry.refusal}`;
 	return undefined;
+}
+
+/** Local notice for a command whose owning feature is off; an in-development owner cannot be turned on, so no enable hint. */
+export function disabledFeatureNotice(
+	name: string,
+	feature: { label: string; status: FeatureStatus },
+): string {
+	return feature.status === "in-development"
+		? `/${name} is part of ${feature.label}, which is in development.`
+		: `/${name} is part of ${feature.label}, which is disabled. Enable it in Settings > Features.`;
 }
 
 export function unknownCommandNotice(typed: string, suggestion: CommandEntry | undefined): string {

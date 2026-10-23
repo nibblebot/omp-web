@@ -23,13 +23,11 @@ describe("openItems", () => {
 	test("debug is listed only when the debug feature is enabled", () => {
 		const off = openItems({
 			debugEnabled: false,
-			integrationsEnabled: true,
 			pluginsEnabled: true,
 			projects: [],
 		}).map((item) => item.label);
 		const on = openItems({
 			debugEnabled: true,
-			integrationsEnabled: true,
 			pluginsEnabled: true,
 			projects: [],
 		}).map((item) => item.label);
@@ -37,40 +35,18 @@ describe("openItems", () => {
 		expect(on).toContain("Debug");
 	});
 
-	test("Skills and MCP servers are listed only when the integrations feature is enabled", () => {
-		const on = openItems({
-			debugEnabled: false,
-			integrationsEnabled: true,
-			pluginsEnabled: false,
-			projects: [],
-		});
-		const off = openItems({
-			debugEnabled: false,
-			integrationsEnabled: false,
-			pluginsEnabled: true,
-			projects: [],
-		});
-		expect(on.filter((item) => item.action.kind === "open").map((item) => item.label)).toEqual(
-			expect.arrayContaining(["Skills", "MCP servers"]),
-		);
-		expect(off.map((item) => item.label)).not.toContain("Skills");
-		expect(off.map((item) => item.label)).not.toContain("MCP servers");
-	});
-
-	test("Plugins is listed only when the plugins feature is enabled, independent of integrations", () => {
+	test("Skills and MCP servers are always listed, and Plugins only when the plugins feature is enabled", () => {
 		const context = { debugEnabled: false, projects: [] };
-		const on = openItems({ ...context, integrationsEnabled: false, pluginsEnabled: true });
-		const off = openItems({ ...context, integrationsEnabled: true, pluginsEnabled: false });
-		expect(on.map((item) => item.label)).toContain("Plugins");
-		expect(on.map((item) => item.label)).not.toContain("Skills");
-		expect(off.map((item) => item.label)).not.toContain("Plugins");
-		expect(off.map((item) => item.label)).toContain("Skills");
+		const on = openItems({ ...context, pluginsEnabled: true }).map((item) => item.label);
+		const off = openItems({ ...context, pluginsEnabled: false }).map((item) => item.label);
+		expect(on).toEqual(expect.arrayContaining(["Skills", "MCP servers", "Plugins"]));
+		expect(off).toEqual(expect.arrayContaining(["Skills", "MCP servers"]));
+		expect(off).not.toContain("Plugins");
 	});
 
 	test("sign-in and provider login are offered without a live session or signed-in state", () => {
 		const labelsOut = openItems({
 			debugEnabled: false,
-			integrationsEnabled: true,
 			pluginsEnabled: true,
 			projects: [],
 		}).map((item) => item.label);
@@ -81,7 +57,6 @@ describe("openItems", () => {
 	test("one new-workspace item per registered project", () => {
 		const items = openItems({
 			debugEnabled: false,
-			integrationsEnabled: true,
 			pluginsEnabled: true,
 			projects: [
 				{ projectId: "p1", name: "alpha" },
@@ -102,7 +77,6 @@ describe("searchPalette", () => {
 			sourcesWith(
 				openItems({
 					debugEnabled: false,
-					integrationsEnabled: true,
 					pluginsEnabled: true,
 					projects: [],
 				}),
@@ -118,7 +92,6 @@ describe("searchPalette", () => {
 			sourcesWith(
 				openItems({
 					debugEnabled: false,
-					integrationsEnabled: true,
 					pluginsEnabled: true,
 					projects: [],
 				}),

@@ -85,7 +85,7 @@ describe("DeleteWorkspaceDialog guard evidence", () => {
 		expect(html).toContain("Cancel</button>");
 	});
 
-	test("dirty evidence lists the changed files, offers Open review, and keeps Delete disabled", () => {
+	test("dirty evidence lists the changed files, hides Open review while Git Review is in development, and keeps Delete disabled", () => {
 		const html = renderDialog({
 			...DIRTY,
 			files: ["src/a.ts", "src/b.ts"],
@@ -95,7 +95,7 @@ describe("DeleteWorkspaceDialog guard evidence", () => {
 		expect(html).toContain("src/a.ts");
 		expect(html).toContain("src/b.ts");
 		expect(html).toContain("3 more not listed");
-		expect(html).toContain("Open review</button>");
+		expect(html).not.toContain("Open review");
 		expect(html).toMatch(/<button[^>]*disabled[^>]*>Delete worktree/);
 	});
 

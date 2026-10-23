@@ -357,7 +357,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		});
 	};
 
-	// A deep link (Alt+M, /model, Features > Advisor, a palette pick) names a
+	// A deep link (Alt+M, /model, a palette pick) names a
 	// tab to scroll to; consume it once. The first one lands instantly. While
 	// a search is showing it waits for the search to clear.
 	createEffect(() => {

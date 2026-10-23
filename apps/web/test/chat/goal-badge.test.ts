@@ -2,7 +2,7 @@
  * GoalBadge narrow-layout regression test.
  *
  * The header goal badge has no DOM test harness, so this reads the shell and
- * goals stylesheets and enforces the narrow contract:
+ * usage stylesheets and enforces the narrow contract:
  * - below 768px the objective and budget hide, keeping the label and state
  *   (a long goal must not squeeze the header title)
  * - below 360px the whole badge hides
@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 const webRoot = join(import.meta.dir, "..", "..");
 const shellCss = readFileSync(join(webRoot, "styles", "shell.css"), "utf8");
-const goalsCss = readFileSync(join(webRoot, "features", "goals.css"), "utf8");
+const goalsCss = readFileSync(join(webRoot, "styles", "usage.css"), "utf8");
 
 /** Concatenated bodies of every top-level `@media <query>` block in `css`. */
 function mediaBodies(css: string, query: string): string {

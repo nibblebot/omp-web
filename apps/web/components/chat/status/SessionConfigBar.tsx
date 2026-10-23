@@ -1,5 +1,5 @@
 import { Show, type Component } from "solid-js";
-import { planToggle } from "../../../prompt/commands";
+import { featureCommand } from "../../../features/registry";
 import { cycleModelPreset, openModelPicker, openThinkingPicker } from "../../../store/models";
 import { formatTokens, getContextUsageLevel } from "../../../usage/context";
 import { isReady, isSessionChanging, setState, state } from "../../../state";
@@ -60,14 +60,31 @@ export const SessionConfigBar: Component = () => (
 				starting new session…
 			</span>
 		</Show>
+		{/* Plan mode can be on from the terminal while the Plan Mode feature is off: the badge then
+		    only reports it. The toggle comes from the feature registry, never from core. */}
 		<Show when={state.planModeEnabled}>
-			<StatusSegment
-				class="badge plan-badge"
-				title="Plan mode on · click to exit"
-				onClick={planToggle}
+			<Show
+				when={featureCommand("plan")?.command}
+				fallback={
+					<StatusSegment
+						class="badge plan-badge"
+						readOnly
+						title="Plan mode is on. It is controlled from the terminal while Plan Mode is in development in the browser."
+					>
+						Plan mode
+					</StatusSegment>
+				}
 			>
-				Plan mode
-			</StatusSegment>
+				{(plan) => (
+					<StatusSegment
+						class="badge plan-badge"
+						title="Plan mode on · click to exit"
+						onClick={() => plan().run("")}
+					>
+						Plan mode
+					</StatusSegment>
+				)}
+			</Show>
 		</Show>
 		<RetryBadge />
 		<StatusSegment

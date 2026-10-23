@@ -175,12 +175,26 @@ describe("refusals and availability", () => {
 	test("a command owned by a disabled feature is unavailable and names the feature", () => {
 		const entries = registry({
 			featureOf: (name) =>
-				name === "plan" ? { id: "plan", label: "Plan mode", enabled: false } : undefined,
+				name === "plan"
+					? { id: "plan", label: "Plan mode", status: "stable", enabled: false }
+					: undefined,
 		});
 		const plan = entry(entries, "plan");
 		expect(isAvailable(plan)).toBe(false);
 		expect(refusalNotice(plan)).toBe(
 			"/plan is part of Plan mode, which is disabled. Enable it in Settings > Features.",
+		);
+	});
+
+	test("a command owned by an in-development feature has no enable hint", () => {
+		const entries = registry({
+			featureOf: (name) =>
+				name === "plan"
+					? { id: "plan", label: "Plan mode", status: "in-development", enabled: false }
+					: undefined,
+		});
+		expect(refusalNotice(entry(entries, "plan"))).toBe(
+			"/plan is part of Plan mode, which is in development.",
 		);
 	});
 

@@ -1,7 +1,7 @@
 import type { JSX } from "solid-js";
 import { render } from "solid-js/web";
 import { initTheme } from "../web/prefs/theme";
-import { FEATURE_IDS } from "../web/features/manifest";
+import { ENABLEABLE_FEATURE_IDS } from "../web/features/manifest";
 import { activateFeatures } from "../web/features/registry";
 // Same global stylesheet production loads (index.tsx), then the showcase chrome.
 import "../web/styles.css";
@@ -22,5 +22,8 @@ export function boot(title: string, page: () => JSX.Element): void {
 	document.title = title;
 	initTheme();
 	installDaemon();
-	void activateFeatures(FEATURE_IDS).then(() => render(page, document.getElementById("root")!));
+	// Only what the app can enable: an in-development feature (Analysis) is never active here.
+	void activateFeatures(ENABLEABLE_FEATURE_IDS).then(() =>
+		render(page, document.getElementById("root")!),
+	);
 }

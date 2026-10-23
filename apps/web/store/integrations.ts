@@ -49,7 +49,7 @@ export function selectIntegrationsTab(tab: IntegrationTab): void {
 }
 
 /**
- * Opens the Extensions dialog on `tab` (used by `/mcp`, `/skills`, and the feature commands).
+ * Opens the Extensions dialog on `tab` (used by `/mcp`, `/skills`, and the command palette).
  * `group` selects that group's first item once its list loads.
  */
 export function openIntegrations(tab: IntegrationTab, group: ExtensionKind | null = null): void {

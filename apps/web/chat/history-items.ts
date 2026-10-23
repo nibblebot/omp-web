@@ -22,8 +22,6 @@ export interface HistoryAppend {
 	 * call are not listed: they were never emitted yet.
 	 */
 	patched: ToolItem[];
-	/** Advisor notes seen in this call's messages. */
-	advisorNotes: number;
 }
 
 /**
@@ -51,7 +49,6 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 			const items: ChatItem[] = [];
 			const fresh = new Set<ToolItem>();
 			const patched = new Set<ToolItem>();
-			let advisorNotes = 0;
 			for (const msg of messages) {
 				if (msg.role === "user") {
 					const images = scanImages(msg.content);
@@ -159,15 +156,12 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 					// Advisor cards render inline like the TUI; other custom/developer
 					// messages stay hidden.
 					const notes = advisorNotesOf(msg);
-					if (notes !== null) {
-						items.push({ kind: "advisor", id: nextId(), notes });
-						advisorNotes += notes.length;
-					}
+					if (notes !== null) items.push({ kind: "advisor", id: nextId(), notes });
 					const guest = guestPromptOf(msg);
 					if (guest !== null) items.push({ kind: "guestPrompt", id: nextId(), ...guest });
 				}
 			}
-			return { items, patched: [...patched], advisorNotes };
+			return { items, patched: [...patched] };
 		},
 	};
 }

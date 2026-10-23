@@ -18,12 +18,12 @@ import {
 import { commandUsage, currentCommandRegistry, dispatchInput } from "../prompt/commands";
 import { fleetSettingsActive, hasLiveSession, setState, state } from "../state";
 import { openAgents } from "./dock";
+import { openIntegrations } from "./integrations";
 import { setPromptInsert } from "./chat";
 import { openModelPicker, recentModels, switchSessionModel } from "./models";
 import { openAddProject, openNewWorkspace } from "./projects";
 import { chooseResumeTarget, searchAllProjectSessions, sessionRowsFromResume } from "./resume";
 import { switchToDaemon } from "./roster";
-import { integrationsOpenPatch } from "./slices/integrations";
 import { reportError } from "./toasts";
 
 const RECENTS_KEY = "omp-web:palette-recents";
@@ -57,7 +57,6 @@ export function paletteSources(query: string, stored: readonly PaletteItem[]): P
 		commands: { registry: currentCommandRegistry(), usage: commandUsage(), live: state },
 		open: openItems({
 			debugEnabled: isFeatureEnabled("debug"),
-			integrationsEnabled: isFeatureEnabled("integrations"),
 			pluginsEnabled: isFeatureEnabled("plugins"),
 			projects: state.registeredProjects,
 		}),
@@ -130,15 +129,10 @@ export function runPaletteItem(item: PaletteItem): void {
 				return;
 			}
 			if (action.target === "skills" || action.target === "mcp" || action.target === "plugins") {
-				// The opener lives in the integrations features, which core never imports; the
-				// slice's patch is the whole opening contract.
-				setState(
-					"integrations",
-					action.target === "plugins"
-						? integrationsOpenPatch("plugins")
-						: integrationsOpenPatch("extensions", action.target === "skills" ? "skill" : "mcp"),
+				openIntegrations(
+					action.target === "plugins" ? "plugins" : "extensions",
+					action.target === "skills" ? "skill" : action.target === "mcp" ? "mcp" : null,
 				);
-				setState("modal", "integrations");
 				return;
 			}
 			setState("modal", action.target);

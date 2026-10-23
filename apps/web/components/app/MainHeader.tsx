@@ -1,6 +1,5 @@
-import { For, Show, type Component, type JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
-import { featureMainHeader } from "../../features/registry";
+import { Show, type Component, type JSX } from "solid-js";
+import { GoalBadge } from "../chat/status/GoalBadge";
 import { subagentCount } from "../../store/subagents";
 import { openAgents } from "../../store/dock";
 import { openShareSheet } from "../../store/collab";
@@ -40,9 +39,7 @@ export const MainHeader: Component<{
 		<div class="main-header-end">
 			{props.actions}
 			<Show when={props.session}>
-				<For each={featureMainHeader()}>
-					{(slot) => (slot.goalBadge ? <Dynamic component={slot.goalBadge} /> : null)}
-				</For>
+				<GoalBadge />
 				<Show when={subagentCount() > 0}>
 					<button
 						type="button"

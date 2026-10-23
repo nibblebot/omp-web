@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { goalDispatch } from "../../features/goal-dispatch";
+import { goalDispatch } from "../../prompt/goal-dispatch";
 import {
 	GOAL_OBJECTIVE_MAX,
 	goalCreateArgs,
@@ -9,7 +9,7 @@ import {
 	validLoopLimit,
 } from "../../store/goals";
 
-describe("goals feature dispatch", () => {
+describe("goal dispatch", () => {
 	test("/goal set starts the goal, collapsing the objective whitespace", () => {
 		expect(goalDispatch("set implement the API")).toEqual({
 			kind: "start",

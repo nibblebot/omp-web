@@ -1,10 +1,12 @@
 import type { ImageArg } from "#lib/wire/protocol";
 import { slashBusyPolicy, type SlashCommandSource } from "#lib/wire/slash-busy";
 import { requestDangerConfirm } from "./danger-confirm";
+import { goalRouteArgs } from "./goal-dispatch";
 import { featureCommand, featureCommandDetails, isFeatureEnabled } from "../features/registry";
 import { featureForCommand } from "../features/manifest";
 import {
 	buildCommandRegistry,
+	disabledFeatureNotice,
 	findCommand,
 	isSdkHandled,
 	refusalNotice,
@@ -32,6 +34,8 @@ import {
 import { humanizeCompactionError } from "../store/compaction-view";
 import { runManualCompact } from "../store/compaction";
 import { openDock } from "../store/dock";
+import { openIntegrations } from "../store/integrations";
+import { askBtw, btwDispatch } from "../store/btw";
 import { downloadArchive, downloadHtml, downloadRequest, downloadText } from "../store/downloads";
 import { queuedAnnotationIds, withQueuedAnnotations } from "../store/review";
 import { MAINTENANCE_CALL_TIMEOUT_MS } from "../store/transport";
@@ -98,7 +102,9 @@ export function currentCommandRegistry(): CommandEntry[] {
 		remote: state.availableCommands,
 		featureOf: (name) => {
 			const f = featureForCommand(name);
-			return f ? { id: f.id, label: f.label, enabled: isFeatureEnabled(f.id) } : undefined;
+			return f
+				? { id: f.id, label: f.label, status: f.status, enabled: isFeatureEnabled(f.id) }
+				: undefined;
 		},
 		featureDetails: new Map(featureCommandDetails()),
 	});
@@ -165,35 +171,6 @@ export function renameDispatch(
 export function handoffArgs(args: string): [string | undefined] {
 	const focus = args.trim();
 	return [focus || undefined];
-}
-
-/**
- * `/plan [prompt]`: TUI-only in the SDK registry (builtin-modes.ts:326 `plan`
- * carries `handleTui` only). Bare toggles plan mode; a prompt arg enters plan
- * mode with that prompt as the first plan turn (handlePlanModeCommand
- * semantics). Args are never dropped and never sent as ordinary agent text.
- */
-export function planDispatch(args = ""): {
-	method: "setPlanModeState";
-	args: [{ enabled: boolean }];
-} {
-	return {
-		method: "setPlanModeState",
-		args: [{ enabled: args.trim() ? true : !state.planModeEnabled }],
-	};
-}
-/** Shared /plan entry used by the LOCAL_COMMANDS entry and the session config bar's plan badge. */
-export function planToggle(rawArgs: unknown = ""): void {
-	// The plan badge wires onClick={planToggle}, so a MouseEvent can
-	// arrive here; only strings are command args.
-	const args = typeof rawArgs === "string" ? rawArgs : "";
-	const d = planDispatch(args);
-	if (args.trim() && !state.planModeEnabled) {
-		pushNotice("info", "Plan mode on. The prompt was entered as the first plan turn.");
-	}
-	void call(d.method, d.args)
-		.then(() => (args.trim() ? call("prompt", [args.trim()]) : undefined))
-		.catch(showError);
 }
 
 /**
@@ -367,7 +344,7 @@ function freshSession(): void {
 }
 
 /** Bare `/name` opens its dialog. Arguments reach the agent only for SDK builtins with a headless handler (`/mcp list`); TUI-only ones such as `/skills installed` get a notice (INT-06). */
-export function openOrForward(modal: ModalName, name: string): (args: string) => void {
+function openOrForward(modal: ModalName, name: string): (args: string) => void {
 	return (args) => {
 		const text = args.trim();
 		if (!text) {
@@ -382,6 +359,8 @@ export function openOrForward(modal: ModalName, name: string): (args: string) =>
 			);
 	};
 }
+
+const forwardMcp = openOrForward("integrations", "mcp");
 
 /** Bare `/name` opens its dialog. Arguments (e.g. the SDK's `/git [revision]`)
  *  belong to the terminal UI, whose output never reaches the browser. */
@@ -502,7 +481,6 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 			d.method === "setSessionName" ? call("setSessionName", [d.title]) : call("prompt", [d.text])
 		).catch(showError);
 	},
-	plan: planToggle,
 	// Modal openers: bare names open the dialog (see openOrForward/openModal).
 	compaction: openModal("compaction"),
 	queue: (args) => {
@@ -529,6 +507,26 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	hotkeys: () => setState("modal", "hotkeys"),
 	exit: () => pushNotice("info", "Close this browser tab; the session persists."),
 	quit: () => pushNotice("info", "Close this browser tab; the session persists."),
+	// `/btw [question]`: a question starts a saved side turn and opens the sheet to
+	// show it; bare `/btw` opens the sheet on its history. Arguments never reach the transcript.
+	btw: (args) => {
+		const d = btwDispatch(args);
+		if (d.kind === "ask") askBtw(d.question);
+		setState("modal", "btw");
+	},
+	goal: goalRouteArgs,
+	// Bare `/mcp` opens the Extensions dialog on MCP servers; arguments follow the SDK's /mcp grammar and go to the agent.
+	mcp: (args) => (args.trim() ? forwardMcp(args) : openIntegrations("extensions", "mcp")),
+	// Skill install, update, and search are terminal commands (`omp skill ...`); the dialog covers listing and toggling.
+	skills: (args) => {
+		const sub = args.trim();
+		if (sub === "" || sub === "installed") openIntegrations("extensions", "skill");
+		else
+			pushNotice(
+				"error",
+				`/skills ${sub} is terminal-only. Install or update skills with "omp skill ${sub}" in a terminal; turn skills on or off in the Extensions dialog.`,
+			);
+	},
 };
 
 /**
@@ -584,10 +582,7 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			}
 			const off = featureForCommand(parsed.name);
 			if (off) {
-				pushNotice(
-					"info",
-					`/${parsed.name} is part of ${off.label}, which is disabled. Enable it in Settings > Features.`,
-				);
+				pushNotice("info", disabledFeatureNotice(parsed.name, off));
 				return;
 			}
 			// Names the browser cannot run never reach the model: unknown ones get a

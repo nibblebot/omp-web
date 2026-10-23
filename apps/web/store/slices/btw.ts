@@ -1,6 +1,6 @@
-// Core-owned pure slice for the /btw side panel (feature `btw`). Holds only
+// Pure slice for the /btw side panel. Holds only
 // the state shape, its initial value, and the reducers core event handlers
-// call, so state.ts and chat.ts never import the btw feature's UI or actions.
+// call, so state.ts and chat.ts never import the btw UI or actions.
 
 /**
  * /btw side-panel session. streamId routes ephemeral_delta frames to this

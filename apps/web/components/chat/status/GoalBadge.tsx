@@ -4,7 +4,7 @@ import { setState, state } from "../../../state";
 import { StatusSegment } from "./StatusSegment";
 
 /**
- * Main-header goal badge (goals feature slot). Shows the full objective (CSS
+ * Main-header goal badge. Shows the full objective (CSS
  * ellipsis, never a JS slice), the token budget when one is set, and a paused
  * marker. Click opens the Goal dialog, the single goals surface.
  */

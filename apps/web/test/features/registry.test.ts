@@ -3,7 +3,7 @@ import type { Component } from "solid-js";
 import { FEATURE_BY_ID, FEATURE_IDS } from "../../features/manifest";
 import type { FeatureId } from "../../features/manifest";
 import * as analysisEntry from "../../features/analysis";
-import * as goalsEntry from "../../features/goals";
+import * as gitEntry from "../../features/git";
 import type * as Registry from "../../features/registry";
 import {
 	activateFeatures,
@@ -16,18 +16,19 @@ import {
 } from "../../features/registry";
 import {
 	activeFeatureIds,
+	FEATURES_KEY,
 	type FeaturePreferences,
 	featurePreferences,
 	markFeaturesActive,
 	setFeaturePreference,
 } from "../../features/preferences";
 import { setState, state } from "../../state";
-import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
+import { installLocalStorageShim, restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
 
 // Module namespaces are live and mock.restore() leaves mocked exports installed.
 // Snapshot real exports and explicitly restore them after this suite.
 const originalAnalysisEntry = { ...analysisEntry };
-const originalGoalsEntry = { ...goalsEntry };
+const originalGitEntry = { ...gitEntry };
 let analysisFetches = 0;
 let originalActiveIds: ReadonlySet<FeatureId>;
 let originalToasts: typeof state.toasts;
@@ -52,7 +53,7 @@ beforeAll(() => {
 	suiteActiveIds = FEATURE_IDS.filter(isFeatureEnabled);
 	suiteToasts = [...state.toasts];
 	mock.module("../../features/analysis", () => ({ default: mockedAnalysis }));
-	mock.module("../../features/goals", () => ({
+	mock.module("../../features/git", () => ({
 		default: {
 			// Fail inside activateFeatures' load/validation catch, rather than
 			// throwing eagerly while Bun registers an already-loaded mock.
@@ -71,7 +72,7 @@ afterAll(async () => {
 		Object.getOwnPropertyDescriptors(originalAnalysisEntry.default),
 	);
 	mock.module("../../features/analysis", () => originalAnalysisEntry);
-	mock.module("../../features/goals", () => originalGoalsEntry);
+	mock.module("../../features/git", () => originalGitEntry);
 	try {
 		await activateFeatures(suiteActiveIds);
 	} finally {
@@ -100,8 +101,8 @@ describe("feature registry activation", () => {
 		await activateFeatures([]);
 		expect(isFeatureEnabled("analysis")).toBe(false);
 		expect(featureView("analysis")).toBeUndefined();
-		expect(featureModal("goal")).toBeUndefined();
-		expect(featureCommand("goal")).toBeUndefined();
+		expect(featureModal("plan-review")).toBeUndefined();
+		expect(featureCommand("plan")).toBeUndefined();
 		expect(featureOverlays()).toEqual([]);
 		expect(analysisFetches).toBe(0);
 	});
@@ -120,7 +121,7 @@ describe("feature registry activation", () => {
 
 	test("a feature whose loader rejects stays off and surfaces a toast", async () => {
 		// Exercise loading with a fresh page cache even when a sibling suite
-		// already activated goals. Static imports share the page-lifetime cache.
+		// already activated git. Static imports share the page-lifetime cache.
 		const registrySpecifier = `../../features/registry.ts?fresh=${crypto.randomUUID()}`;
 		const isolatedRegistry: typeof Registry = await import(registrySpecifier);
 		const { activateFeatures, featureCommand, featureModal, featureOverlays, isFeatureEnabled } =
@@ -133,22 +134,22 @@ describe("feature registry activation", () => {
 			logged.push(String(msg));
 		};
 		try {
-			await activateFeatures(["goals"]);
+			await activateFeatures(["git"]);
 		} finally {
 			console.error = originalError;
 		}
 		expect(logged).toHaveLength(1);
-		expect(logged[0]).toContain("goals");
+		expect(logged[0]).toContain("git");
 		// ...the failed feature is off and its slots stay empty...
-		expect(isFeatureEnabled("goals")).toBe(false);
-		expect(featureModal("goal")).toBeUndefined();
-		expect(featureCommand("goal")).toBeUndefined();
+		expect(isFeatureEnabled("git")).toBe(false);
+		expect(featureCommand("git")).toBeUndefined();
+		expect(featureModal("annotations")).toBeUndefined();
 		expect(featureOverlays()).toEqual([]);
 		// ...and it replaced the active set rather than joining it.
 		expect(isFeatureEnabled("analysis")).toBe(false);
 		// The failure is surfaced with the cause, not swallowed.
 		const toast = state.toasts.at(-1);
-		expect(toast?.text).toContain(FEATURE_BY_ID.goals.label);
+		expect(toast?.text).toContain(FEATURE_BY_ID.git.label);
 		expect(toast?.text).toContain("could not load");
 		expect(toast?.text).toContain("chunk load failed");
 	});
@@ -187,61 +188,54 @@ describe("live feature toggles", () => {
 
 	test("turning a feature on and off changes its slots, and re-enabling does not re-fetch", async () => {
 		setPreferredOnly([]);
-		await setFeatureEnabled("analysis", true);
-		expect(isFeatureEnabled("analysis")).toBe(true);
-		expect(featureView("analysis")).toBe(AnalysisView);
-		const loaded = analysisFetches;
-		await setFeatureEnabled("analysis", false);
-		expect(isFeatureEnabled("analysis")).toBe(false);
-		expect(featureView("analysis")).toBeUndefined();
-		await setFeatureEnabled("analysis", true);
-		expect(isFeatureEnabled("analysis")).toBe(true);
-		expect(analysisFetches).toBe(loaded);
+		await setFeatureEnabled("debug", true);
+		expect(isFeatureEnabled("debug")).toBe(true);
+		const modal = featureModal("debug");
+		expect(modal).toBeDefined();
+		await setFeatureEnabled("debug", false);
+		expect(isFeatureEnabled("debug")).toBe(false);
+		expect(featureModal("debug")).toBeUndefined();
+		await setFeatureEnabled("debug", true);
+		expect(isFeatureEnabled("debug")).toBe(true);
+		expect(featureModal("debug")).toBe(modal);
 	});
 
-	test("turning a feature off closes the modal and view it owned and keeps unrelated ones", async () => {
-		setPreferredOnly(["analysis", "debug"]);
-		await activateFeatures(["analysis", "debug"]);
-		setState({ view: "analysis", modal: "debug" });
+	test("an in-development feature cannot be turned on and nothing is persisted or loaded", async () => {
+		installLocalStorageShim();
+		setPreferredOnly([]);
+		localStorage.removeItem(FEATURES_KEY);
+		const before = analysisFetches;
+		await setFeatureEnabled("analysis", true);
+		expect(isFeatureEnabled("analysis")).toBe(false);
+		expect(featurePreferences().analysis).toBe(false);
+		expect(localStorage.getItem(FEATURES_KEY)).toBeNull();
+		expect(analysisFetches).toBe(before);
+	});
+
+	test("turning a feature off closes the modal it owned and keeps an unrelated one", async () => {
+		setPreferredOnly(["debug", "plugins"]);
+		await activateFeatures(["debug", "plugins"]);
+		setState("modal", "debug");
 		await setFeatureEnabled("debug", false);
 		expect(state.modal).toBeNull();
-		expect(state.view).toBe("analysis");
 
 		setState("modal", "sign-in");
-		await setFeatureEnabled("analysis", false);
-		expect(state.view).toBe("chat");
+		await setFeatureEnabled("plugins", false);
 		expect(state.modal).toBe("sign-in");
+	});
+
+	test("a toggle that leaves Analysis out of the active set returns the view to chat", async () => {
+		setPreferredOnly(["debug"]);
+		await activateFeatures(["analysis", "debug"]);
+		setState("view", "analysis");
+		await setFeatureEnabled("debug", false);
+		expect(state.view).toBe("chat");
 	});
 
 	test("turning a feature off closes a dock panel it owned", async () => {
 		setPreferredOnly([]);
 		setState("dock", { kind: "review" });
-		await setFeatureEnabled("review", false);
+		await setFeatureEnabled("git", false);
 		expect(state.dock).toBeNull();
-	});
-
-	test("a modal shared by two features resolves while either one is active", async () => {
-		await activateFeatures(["plugins"]);
-		const fromPlugins = featureModal("integrations");
-		expect(fromPlugins).toBeDefined();
-		await activateFeatures(["integrations"]);
-		expect(featureModal("integrations")).toBeDefined();
-		await activateFeatures(["integrations", "plugins"]);
-		expect(featureModal("integrations")).toBeDefined();
-		await activateFeatures([]);
-		expect(featureModal("integrations")).toBeUndefined();
-	});
-
-	test("a shared modal stays open while one owner remains and closes with the last", async () => {
-		setPreferredOnly(["integrations", "plugins"]);
-		await activateFeatures(["integrations", "plugins"]);
-		setState("modal", "integrations");
-		await setFeatureEnabled("plugins", false);
-		expect(state.modal).toBe("integrations");
-		await setFeatureEnabled("plugins", true);
-		await setFeatureEnabled("integrations", false);
-		expect(state.modal).toBe("integrations");
-		await setFeatureEnabled("plugins", false);
-		expect(state.modal).toBeNull();
 	});
 });

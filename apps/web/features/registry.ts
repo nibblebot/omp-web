@@ -1,5 +1,5 @@
 import type { Component } from "solid-js";
-import { type ChatItem, type ModalName, setState, state } from "../state";
+import { type ModalName, setState, state } from "../state";
 import { pushToast } from "../store/toasts";
 import { closeDock } from "../store/dock";
 import { setView } from "../store/roster";
@@ -35,20 +35,16 @@ export interface FeatureModule {
 	id: FeatureId;
 	/** Dialogs and sheets rendered by ModalHost for `state.modal === name`. */
 	modals?: Partial<Record<ModalName, Component<{ onClose: () => void }>>>;
-	/** Always-mounted overlays that render from their own store state (e.g. BTW sheet). */
+	/** Always-mounted overlays that render from their own store state. */
 	overlays?: readonly Component[];
 	/** Slash commands handled locally. Names are declared in `manifest.ts`. */
 	commands?: Readonly<Record<string, FeatureCommand>>;
 	/** Analysis main view, mounted by App next to Chat. */
 	view?: Component;
-	/** Main pane header items, placed by MainHeader. */
-	mainHeader?: { goalBadge?: Component };
 	/** Control shown in this feature's own row in Settings > Features (e.g. an Open button). */
 	settingsAction?: Component;
-	/** Transcript item renderers keyed by ChatItem kind. */
-	transcriptCards?: {
-		[K in ChatItem["kind"]]?: Component<{ item: Extract<ChatItem, { kind: K }> }>;
-	};
+	/** Plugins tab body of the Extensions dialog; the dialog shows the tab only while a feature fills this. */
+	pluginsTab?: Component;
 }
 
 type Loader = () => Promise<{ default: FeatureModule }>;
@@ -56,12 +52,10 @@ type Loader = () => Promise<{ default: FeatureModule }>;
 /** Every feature entry is reached only through `import()`, so disabled features are never fetched. */
 export const LOADERS: Record<FeatureId, Loader> = {
 	analysis: () => import("./analysis"),
-	review: () => import("./review"),
-	integrations: () => import("./integrations"),
+	plan: () => import("./plan"),
+	git: () => import("./git"),
+	todos: () => import("./todos"),
 	plugins: () => import("./plugins"),
-	btw: () => import("./btw"),
-	goals: () => import("./goals"),
-	advisor: () => import("./advisor"),
 	debug: () => import("./debug"),
 };
 
@@ -115,6 +109,8 @@ export async function activateFeatures(
  * Turn one feature on or off without a reload. The choice is persisted, the
  * feature's slots load or drop out immediately, and any modal, dock panel or
  * view it owned is closed. The attached session, draft and route are untouched.
+ * Turning an "in-development" feature on is refused by `setFeaturePreference`,
+ * so it is never persisted or loaded.
  */
 export async function setFeatureEnabled(id: FeatureId, enabled: boolean): Promise<void> {
 	setFeaturePreference(id, enabled);
@@ -181,26 +177,16 @@ export function featureView(id: "analysis"): Component | undefined {
 	return activeModule(id)?.view;
 }
 
-export function featureOverlays(): Component[] {
-	return allActiveModules().flatMap((mod) => [...(mod.overlays ?? [])]);
+/** Plugins tab body for the Extensions dialog, when the plugins feature is active. */
+export function featurePluginsTab(): Component | undefined {
+	return activeModule("plugins")?.pluginsTab;
 }
 
-export function featureMainHeader(): NonNullable<FeatureModule["mainHeader"]>[] {
-	return allActiveModules().flatMap((mod) => (mod.mainHeader ? [mod.mainHeader] : []));
+export function featureOverlays(): Component[] {
+	return allActiveModules().flatMap((mod) => [...(mod.overlays ?? [])]);
 }
 
 /** The control a feature adds to its own row in Settings > Features, when the feature is active. */
 export function featureSettingsAction(id: FeatureId): Component | undefined {
 	return activeModule(id)?.settingsAction;
-}
-
-/** Transcript renderer for one item kind from an active feature. */
-export function featureTranscriptCard<K extends ChatItem["kind"]>(
-	kind: K,
-): Component<{ item: Extract<ChatItem, { kind: K }> }> | undefined {
-	for (const mod of allActiveModules()) {
-		const card = mod.transcriptCards?.[kind];
-		if (card) return card;
-	}
-	return undefined;
 }

@@ -2,7 +2,6 @@ import { createMemo, createResource, For, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { FEATURES } from "../../features/manifest";
 import { activeFeatureIds, featurePreferences } from "../../features/preferences";
-import { openModelSettings } from "../../store/models";
 import { featureSettingsAction, setFeatureEnabled } from "../../features/registry";
 import {
 	featureOwnSize,
@@ -23,7 +22,8 @@ export function searchFeatures(query: string) {
 /**
  * Settings > Features: per-browser feature toggles plus bundle sizes.
  * A toggle loads or unloads its feature on this page at once; the attached
- * session, draft and sheet stay as they are. Sizes come from the build's
+ * session, draft and sheet stay as they are. A feature marked "In development"
+ * is listed with a disabled, unchecked toggle and cannot be turned on. Sizes come from the build's
  * feature-sizes.json; dev builds have none, so the panel says so instead of
  * showing numbers. `query` filters the feature rows for settings search;
  * without it the panel shows the bundle summary.
@@ -68,22 +68,11 @@ export function FeaturesSettings(props: { query?: string }) {
 								<div class="settings-item-text">
 									<div class="settings-item-label">
 										<span>{f.label}</span>
-										<Show when={f.experimental}>
-											<span class="badge">Experimental</span>
+										<Show when={f.status === "in-development"}>
+											<span class="badge">In development</span>
 										</Show>
 									</div>
 									<p class="settings-item-desc">{f.description}</p>
-									<Show when={f.id === "advisor"}>
-										<p>
-											<button
-												type="button"
-												class="settings-control-btn"
-												onClick={openModelSettings}
-											>
-												Open Model Settings
-											</button>
-										</p>
-									</Show>
 									<Show when={featureSettingsAction(f.id)}>
 										{(action) => (
 											<p>
@@ -106,6 +95,7 @@ export function FeaturesSettings(props: { query?: string }) {
 									<SettingToggle
 										label={`Enable ${f.label}`}
 										checked={featurePreferences()[f.id]}
+										disabled={f.status === "in-development"}
 										onChange={(checked) => void setFeatureEnabled(f.id, checked)}
 									/>
 								</div>

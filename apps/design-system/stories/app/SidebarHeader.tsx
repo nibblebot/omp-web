@@ -1,5 +1,4 @@
 import { SidebarHeader } from "../../../web/components/app/SidebarHeader";
-import { setFeaturePreference } from "../../../web/features/preferences";
 import { defineStory } from "../../registry";
 
 export default defineStory({
@@ -9,18 +8,9 @@ export default defineStory({
 	variants: [
 		{
 			name: "Chat only",
-			description: "Analysis off (the default): wordmark and the collapse toggle; no debug button.",
+			description:
+				"Wordmark and the collapse toggle; no Chat/Analysis switch while Analysis Mode is in development.",
 			seed: { view: "chat", modal: null },
-			render: () => (
-				<aside class="sidebar open">
-					<SidebarHeader onCollapse={() => {}} />
-				</aside>
-			),
-		},
-		{
-			name: "With Analysis",
-			description: "The Chat/Analysis switch sits between the wordmark and the collapse toggle.",
-			seed: () => setFeaturePreference("analysis", true),
 			render: () => (
 				<aside class="sidebar open">
 					<SidebarHeader onCollapse={() => {}} />

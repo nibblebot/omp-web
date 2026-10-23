@@ -16,7 +16,6 @@ export const longSlashCommandItems: AcItem[] = [
 	{ label: "/fork", detail: "Branch the conversation from an earlier turn", apply: "/fork " },
 	{ label: "/tree", detail: "Browse the session tree", apply: "/tree " },
 	{ label: "/settings", detail: "Open the settings panel", apply: "/settings " },
-	{ label: "/plan", detail: "Toggle plan mode", apply: "/plan " },
 	{ label: "/usage", detail: "Show token usage and cost", apply: "/usage " },
 	{ label: "/export", detail: "Export the transcript to HTML", apply: "/export " },
 	{ label: "/copy", detail: "Copy the last assistant reply", apply: "/copy " },

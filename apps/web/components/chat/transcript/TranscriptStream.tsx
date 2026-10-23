@@ -13,8 +13,8 @@ import {
 import { buildTurnMeta } from "../../../chat/turn-usage";
 import { useStickyScroll } from "./useStickyScroll";
 import { StreamingBlock } from "./StreamingBlock";
-import { featureTranscriptCard } from "../../../features/registry";
 import {
+	AdvisorCard,
 	AssistantCard,
 	CompactionCard,
 	GuestPromptCard,
@@ -94,11 +94,7 @@ export const TranscriptStream: Component<{
 									{(c) => <CompactionCard item={c()} />}
 								</Match>
 								<Match when={item.kind === "advisor" && item}>
-									{(a) => (
-										<Show when={featureTranscriptCard("advisor")} keyed>
-											{(Card) => <Card item={a()} />}
-										</Show>
-									)}
+									{(a) => <AdvisorCard item={a()} />}
 								</Match>
 								<Match when={item.kind === "guestPrompt" && item}>
 									{(guest) => <GuestPromptCard item={guest()} />}

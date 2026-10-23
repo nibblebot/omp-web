@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { FEATURES, isFeatureId, type FeatureId } from "./manifest";
+import { FEATURE_BY_ID, FEATURES, isFeatureId, type FeatureId } from "./manifest";
 
 /** localStorage key: JSON object of explicit per-feature choices ({ [id]: boolean }). */
 export const FEATURES_KEY = "omp.features";
@@ -9,10 +9,13 @@ export type FeaturePreferences = Record<FeatureId, boolean>;
 /**
  * Resolve stored choices against the manifest defaults. Unknown ids and
  * non-boolean values are ignored; unparseable storage falls back to defaults.
+ * An "in-development" feature resolves to off whatever is stored or its default.
+ * Nothing rewrites stored keys in place: `setFeaturePreference` saves manifest
+ * ids only, so an unknown key drops on the next change.
  */
 export function resolveFeaturePreferences(raw: string | null): FeaturePreferences {
 	const prefs = Object.fromEntries(
-		FEATURES.map((f) => [f.id, f.defaultEnabled]),
+		FEATURES.map((f) => [f.id, f.defaultEnabled && f.status !== "in-development"]),
 	) as FeaturePreferences;
 	if (raw === null) return prefs;
 	let parsed: unknown;
@@ -23,7 +26,12 @@ export function resolveFeaturePreferences(raw: string | null): FeaturePreference
 	}
 	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return prefs;
 	for (const [id, value] of Object.entries(parsed)) {
-		if (isFeatureId(id) && typeof value === "boolean") prefs[id] = value;
+		if (
+			isFeatureId(id) &&
+			typeof value === "boolean" &&
+			FEATURE_BY_ID[id].status !== "in-development"
+		)
+			prefs[id] = value;
 	}
 	return prefs;
 }
@@ -37,8 +45,12 @@ const [preferences, setPreferences] = createSignal<FeaturePreferences>(
 /** Stored choices (defaults applied). Reactive; `setFeatureEnabled` in registry.ts applies a change. */
 export const featurePreferences = preferences;
 
-/** Persist one choice. Only ids that differ from the manifest default are stored. */
+/**
+ * Persist one choice. Only ids that differ from the manifest default are stored.
+ * Turning an "in-development" feature on is refused: no in-memory change, no storage write.
+ */
 export function setFeaturePreference(id: FeatureId, enabled: boolean): void {
+	if (enabled && FEATURE_BY_ID[id].status === "in-development") return;
 	const next = { ...preferences(), [id]: enabled };
 	setPreferences(next);
 	if (typeof localStorage === "undefined") return;

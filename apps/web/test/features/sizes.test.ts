@@ -14,12 +14,12 @@ const manifest: FeatureSizeManifest = {
 		"assets/index.css": { bytes: 100, gzip: 50 },
 		"assets/analysis.js": { bytes: 300, gzip: 120 },
 		"assets/shared.js": { bytes: 200, gzip: 80 },
-		"assets/goals.js": { bytes: 500, gzip: 190 },
+		"assets/plan.js": { bytes: 500, gzip: 190 },
 	},
 	core: ["assets/index.js", "assets/index.css"],
 	features: {
 		analysis: ["assets/analysis.js", "assets/shared.js"],
-		goals: ["assets/goals.js", "assets/shared.js"],
+		plan: ["assets/plan.js", "assets/shared.js"],
 	},
 };
 
@@ -29,7 +29,7 @@ describe("featureSizeTotals", () => {
 	});
 
 	test("a chunk shared by two enabled features is counted once", () => {
-		expect(featureSizeTotals(manifest, ["analysis", "goals"])).toEqual({
+		expect(featureSizeTotals(manifest, ["analysis", "plan"])).toEqual({
 			bytes: 1100 + 300 + 200 + 500,
 			gzip: 450 + 120 + 80 + 190,
 		});

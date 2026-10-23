@@ -132,20 +132,10 @@ export default [
 			{
 				name: "Extensions only",
 				description:
-					"The Plugins feature is off: no tab list, the Extensions title, and the reload button stays.",
+					"The Plugins feature is off: no tab bar, and skills and MCP servers stay listed under the Extensions title with the reload button.",
 				seed: () => {
-					markFeaturesActive(["integrations"]);
+					markFeaturesActive([]);
 					answerCalls(extensionCalls());
-				},
-				render: (ctx) => <IntegrationsDialog onClose={ctx.close} />,
-			},
-			{
-				name: "Plugins only",
-				description:
-					"The MCP & Skills feature is off: the Plugins list alone under a Plugins title, with no reload button.",
-				seed: () => {
-					markFeaturesActive(["plugins"]);
-					answerCalls({ ...extensionCalls(), listPlugins: () => [] });
 				},
 				render: (ctx) => <IntegrationsDialog onClose={ctx.close} />,
 			},

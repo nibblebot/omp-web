@@ -1,6 +1,7 @@
 import type { DaemonEntry } from "#lib/wire/protocol";
 import { createEffect, createSignal, For, Show, type Component } from "solid-js";
 import { sendDeleteWorktree, setState, state } from "../../../state";
+import { isFeatureEnabled } from "../../../features/registry";
 import { Modal } from "../../ui/Modal";
 import { gitReviewAvailable, gitReviewUnavailableReason } from "../../../store/review";
 import { attachForPanel } from "../../../store/roster";
@@ -263,13 +264,15 @@ export const DeleteWorkspaceDialog: Component = () => {
 								{dirtyTotal() - (info()!.files?.length ?? 0)} more not listed
 							</p>
 						</Show>
-						<div class="ask-actions">
-							<button type="button" disabled={!gitReviewAvailable()} onClick={openReview}>
-								Open review
-							</button>
-						</div>
-						<Show when={!gitReviewAvailable()}>
-							<p class="danger-confirm-body">{gitReviewUnavailableReason()}</p>
+						<Show when={isFeatureEnabled("git")}>
+							<div class="ask-actions">
+								<button type="button" disabled={!gitReviewAvailable()} onClick={openReview}>
+									Open review
+								</button>
+							</div>
+							<Show when={!gitReviewAvailable()}>
+								<p class="danger-confirm-body">{gitReviewUnavailableReason()}</p>
+							</Show>
 						</Show>
 					</Show>
 					<Show when={info() !== undefined && info()!.linked && !info()!.dirty && unproven()}>

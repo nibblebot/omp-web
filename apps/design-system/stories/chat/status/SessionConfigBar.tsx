@@ -48,7 +48,8 @@ export default defineStory({
 		},
 		{
 			name: "Plan mode on",
-			description: "The Plan mode chip leads the row; clicking it exits plan mode.",
+			description:
+				"The Plan badge leads the row as a read-only label: plan mode is controlled from the terminal while Plan Mode is in development in the browser.",
 			seed: { planModeEnabled: true },
 			render: () => <SessionConfigBar />,
 		},

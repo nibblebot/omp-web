@@ -13,6 +13,7 @@ import { CommandPalettePicker } from "./components/app/CommandPalettePicker";
 import { FleetSignInDialog } from "./components/app/FleetSignInDialog";
 import { Toasts } from "./components/app/Toasts";
 import { CompactionDialog } from "./components/chat/controls/CompactionDialog";
+import { GoalDialog } from "./components/chat/controls/GoalDialog";
 import { AddProjectDialog } from "./components/fleet/workspaces/AddProjectDialog";
 import { DeleteWorkspaceDialog } from "./components/fleet/workspaces/DeleteWorkspaceDialog";
 import { RemoveProjectDialog } from "./components/fleet/workspaces/RemoveProjectDialog";
@@ -24,10 +25,13 @@ import { ExtensionUi } from "./components/requests/ExtensionUi";
 import { DangerConfirmDialog } from "./components/requests/DangerConfirmDialog";
 import { DownloadDialog } from "./components/requests/DownloadDialog";
 import { ResumePicker } from "./components/sessions/ResumePicker";
+import { BtwSheet } from "./components/requests/BtwSheet";
 import { SessionPicker } from "./components/sessions/SessionPicker";
 import { SettingsSheet } from "./components/settings/SettingsSheet";
+import { IntegrationsDialog } from "./components/settings/integrations/IntegrationsDialog";
 import { ShareSheet } from "./components/collab/ShareSheet";
 import { SessionStatsDialog } from "./components/usage/SessionStatsDialog";
+import { AdvisorSheet } from "./components/subagents/AdvisorSheet";
 import { UsageLimitsDialog } from "./components/usage/UsageLimitsDialog";
 import { ImageLightbox } from "./components/ui/ImageLightbox";
 import { createModalLayer, ModalLayerContext, type ModalLayer } from "./components/ui/Modal";
@@ -55,8 +59,8 @@ export const ModalHost: Component = () => {
 		const id = state.daemonDetailsId;
 		if (id !== null && !state.daemonRoster.some((d) => d.daemonId === id)) closeDaemonDetails();
 	});
-	// Renderer for a modal owned by a feature. Renders nothing when the feature
-	// is disabled on this page, so a stale `state.modal` cannot mount feature UI.
+	// Renderer for a modal owned by an optional feature. Renders nothing when the
+	// feature is disabled on this page, so a stale `state.modal` cannot mount feature UI.
 	const featureModalHost = (name: ModalName): JSX.Element => {
 		const Render = featureModal(name);
 		return Render ? <Render onClose={close} /> : null;
@@ -73,25 +77,25 @@ export const ModalHost: Component = () => {
 		stats: () => <SessionStatsDialog onClose={close} />,
 		settings: () => <SettingsSheet onClose={close} />,
 		sessions: () => <SessionPicker onClose={close} />,
-		advisor: () => featureModalHost("advisor"),
+		advisor: () => <AdvisorSheet onClose={close} />,
 		// Login opens from Settings > Providers: closing returns there.
 		login: () => (
 			<ProviderLoginDialog
 				onClose={() => setState({ modal: "settings", settingsTab: "providers" })}
 			/>
 		),
-		goal: () => featureModalHost("goal"),
+		goal: () => <GoalDialog onClose={close} />,
 		usage: () => <UsageLimitsDialog onClose={close} />,
 		debug: () => featureModalHost("debug"),
 		"add-project": () => <AddProjectDialog onClose={close} />,
 		"sign-in": () => <FleetSignInDialog onClose={close} />,
-		integrations: () => featureModalHost("integrations"),
+		integrations: () => <IntegrationsDialog onClose={close} />,
 		"plan-review": () => featureModalHost("plan-review"),
 		annotations: () => featureModalHost("annotations"),
 		todos: () => featureModalHost("todos"),
 		compaction: () => <CompactionDialog onClose={close} />,
 		share: () => <ShareSheet onClose={close} />,
-		btw: () => featureModalHost("btw"),
+		btw: () => <BtwSheet onClose={close} />,
 	} satisfies Record<ModalName, () => JSX.Element>;
 	// One layer per open `state.modal`. A side sheet keeps its layer mounted
 	// through its slide-out (Modal calls `hold()`), so a sheet that is closing

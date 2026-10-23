@@ -8,6 +8,7 @@ import type * as HostModule from "../ModalHost";
 import type * as ModalUiModule from "../components/ui/Modal";
 import type * as ShortcutsModule from "../components/app/ShortcutsDialog";
 import type * as DaemonDetailsModule from "../components/fleet/daemon/DaemonDetailsDialog";
+import type * as IntegrationsModule from "../components/settings/integrations/IntegrationsDialog";
 import type * as RegistryModule from "../features/registry";
 import type * as ModalsModule from "../store/modals";
 import type * as StateModule from "../state";
@@ -50,6 +51,7 @@ let ModalHost: typeof HostModule.ModalHost;
 let ModalLayerContext: typeof ModalUiModule.ModalLayerContext;
 let ShortcutsDialog: typeof ShortcutsModule.ShortcutsDialog;
 let DaemonDetailsDialog: typeof DaemonDetailsModule.DaemonDetailsDialog;
+let IntegrationsDialog: typeof IntegrationsModule.IntegrationsDialog;
 let activateFeatures: typeof RegistryModule.activateFeatures;
 let featureModal: typeof RegistryModule.featureModal;
 let closeDaemonDetails: typeof ModalsModule.closeDaemonDetails;
@@ -78,7 +80,7 @@ beforeAll(async () => {
 		state: reactiveState,
 		setState: reactiveSetState,
 	}));
-	// A fresh real registry keeps this suite's goals load out of sibling caches.
+	// A fresh real registry keeps this suite's feature loads out of sibling caches.
 	// Static imports cannot exercise this isolated module-loading boundary.
 	const registryPath: string = "../features/registry.ts?fresh=modal-host-isolation";
 	const isolatedRegistry = { ...(await import(registryPath)) };
@@ -90,6 +92,7 @@ beforeAll(async () => {
 	({ ModalLayerContext } = await import("../components/ui/Modal"));
 	({ ShortcutsDialog } = await import("../components/app/ShortcutsDialog"));
 	({ DaemonDetailsDialog } = await import("../components/fleet/daemon/DaemonDetailsDialog"));
+	({ IntegrationsDialog } = await import("../components/settings/integrations/IntegrationsDialog"));
 	({ activateFeatures, featureModal } = await import("../features/registry"));
 	({ closeDaemonDetails, openDaemonDetails } = await import("../store/modals"));
 	({ setState, state } = await import("../state"));
@@ -174,31 +177,29 @@ describe("ModalHost", () => {
 		// The layer's context provider is structure, not a dialog.
 		const dialogs = (types: unknown[]) => types.filter((t) => t !== ModalLayerContext.Provider);
 		const withoutModal = dialogs(renderHost());
-		// "goal" belongs to the goals feature, which is not active on this page.
-		setState("modal", "goal");
+		// "plan-review" belongs to the plan feature, which is not active on this page.
+		setState("modal", "plan-review");
 		expect(dialogs(renderHost())).toEqual(withoutModal);
 	});
 
 	test("renders the feature's registered renderer once the feature is active", async () => {
-		await activateFeatures(["goals"]);
-		setState("modal", "goal");
-		const registered = featureModal("goal");
+		await activateFeatures(["plan"]);
+		setState("modal", "plan-review");
+		const registered = featureModal("plan-review");
 		expect(registered).toBeDefined();
 		expect(renderHost()).toContain(registered);
 	});
 
-	test("renders a modal several features own while any one of them is active", async () => {
+	test("renders the Extensions dialog with no features active", () => {
 		setState("modal", "integrations");
+		expect(renderHost()).toContain(IntegrationsDialog);
+	});
+
+	test("renders nothing for the todos sheet with no features active", () => {
 		const dialogs = (types: unknown[]) => types.filter((t) => t !== ModalLayerContext.Provider);
-		const none = dialogs(renderHost());
-		for (const only of ["plugins", "integrations"] as const) {
-			await activateFeatures([only]);
-			const registered = featureModal("integrations");
-			expect(registered).toBeDefined();
-			expect(renderHost()).toContain(registered);
-		}
-		await activateFeatures([]);
-		expect(dialogs(renderHost())).toEqual(none);
+		const withoutModal = dialogs(renderHost());
+		setState("modal", "todos");
+		expect(dialogs(renderHost())).toEqual(withoutModal);
 	});
 
 	test("renders the daemon details dialog while its daemon is in the roster", () => {

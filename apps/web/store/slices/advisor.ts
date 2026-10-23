@@ -1,6 +1,6 @@
-// Core-owned pure slice for the advisor feature. Holds the transcript item type
+// Pure slice for advisor notes. Holds the transcript item type
 // and the message parser core event handlers call, so state.ts and chat.ts
-// never import the advisor feature's UI or actions.
+// never import the advisor UI or actions.
 
 import type { AdvisorNote } from "@oh-my-pi/pi-tui/chat/messages";
 

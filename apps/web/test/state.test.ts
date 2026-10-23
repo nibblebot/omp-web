@@ -9,8 +9,6 @@ import type {
 	SettingsModel,
 	WebSessionState,
 } from "#lib/wire/protocol";
-import { FEATURE_IDS, type FeatureId } from "../features/manifest";
-import { activateFeatures, isFeatureEnabled } from "../features/registry";
 import { pruneUnread, unreadIds } from "../fleet-ui/unread";
 import { rejectPendingAttach, rejectPendingCalls } from "../store/transport";
 import { attachForPanel } from "../store/roster";
@@ -128,18 +126,15 @@ function sub(status: string): SubagentInfo {
 	return { id: "s1", index: 0, agent: "task", status, lastUpdate: 0 };
 }
 
-let baselineFeatures: FeatureId[];
 let baselineToasts: typeof state.toasts;
 let baselinePlanModeEnabled: typeof state.planModeEnabled;
 
 beforeAll(() => {
-	baselineFeatures = FEATURE_IDS.filter(isFeatureEnabled);
 	baselineToasts = [...state.toasts];
 	baselinePlanModeEnabled = state.planModeEnabled;
 });
 
-afterAll(async () => {
-	await activateFeatures(baselineFeatures);
+afterAll(() => {
 	setState("toasts", baselineToasts);
 	setState("planModeEnabled", baselinePlanModeEnabled);
 });
@@ -350,10 +345,6 @@ describe("replay dedup (finding #2: resume must not double-apply deltas)", () =>
 });
 
 describe("advisor notes render inline (TUI advisor card parity)", () => {
-	beforeAll(async () => {
-		await activateFeatures(["advisor"]);
-	});
-
 	const notes = [
 		{ note: "check the null path", severity: "concern" },
 		{ note: "ship it", advisor: "reviewer", turnsAgo: 2 },
@@ -1214,14 +1205,10 @@ describe("state-frame application (model-role picker state)", () => {
 		expect(state.modelRoleStorage).toBe("project");
 	});
 
-	test("a waiting plan review opens the sheet once, on the false-to-true edge only", () => {
+	test("a waiting plan review is mirrored but does not open the sheet while Plan Mode is in development", () => {
 		connect();
 		dispatch(stateFrame({ planReviewPending: true }));
 		expect(state.planReviewPending).toBe(true);
-		expect(state.modal).toBe("plan-review");
-		// The operator dismisses; a re-broadcast of the same pending review must not reopen it.
-		setState("modal", null);
-		dispatch(stateFrame({ planReviewPending: true }));
 		expect(state.modal).toBeNull();
 		dispatch(stateFrame({ planReviewPending: false }));
 		expect(state.planReviewPending).toBe(false);

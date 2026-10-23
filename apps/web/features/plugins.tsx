@@ -1,11 +1,9 @@
-import { IntegrationsDialog } from "../components/settings/integrations/IntegrationsDialog";
+import { PluginsTab } from "../components/settings/integrations/PluginsTab";
 import type { FeatureModule } from "./registry";
 
-// The Extensions dialog shows its Plugins tab while this feature is on; the
-// `integrations` feature renders the same dialog, so either one opens it.
+// The Extensions dialog (core) shows its Plugins tab only while this feature is on; the tab
+// body is contributed here so the plugins chunk stays out of the entry bundle.
 export default {
 	id: "plugins",
-	modals: {
-		integrations: (props) => <IntegrationsDialog onClose={props.onClose} />,
-	},
+	pluginsTab: PluginsTab,
 } satisfies FeatureModule;

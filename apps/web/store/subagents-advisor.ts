@@ -2,9 +2,8 @@ import { call } from "./transport";
 import { asBoolean, asNumber, asRecord, asString } from "./subagents";
 
 /**
- * Advisor store (advisor feature). Server DTO read models and tolerant
- * coercers for the advisor wire methods. Owned by the `advisor` feature; core
- * code never imports this module.
+ * Advisor store. Server DTO read models and tolerant
+ * coercers for the advisor wire methods.
  */
 
 // ---------------------------------------------------------------------------

@@ -20,9 +20,6 @@ const DockStage: Component = () => (
 					narrows in one step. Closing widens this pane first, then slides the dock out.
 				</p>
 				<div class="review-actions">
-					<button type="button" onClick={() => openDock("review")}>
-						Git review
-					</button>
 					<button type="button" onClick={() => openDock("tree")}>
 						Session tree
 					</button>
@@ -49,12 +46,6 @@ export default defineStory({
 			name: "Closed",
 			description:
 				"No dock kind is set, so the host renders nothing. The buttons open, close and switch panels through the store: switching fades the content, closing slides the dock out.",
-			render: () => <DockStage />,
-		},
-		{
-			name: "Git review open",
-			description: "The review kind mounts the git review pane in the dock.",
-			seed: () => openDock("review"),
 			render: () => <DockStage />,
 		},
 		{

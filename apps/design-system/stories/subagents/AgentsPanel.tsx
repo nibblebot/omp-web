@@ -1,5 +1,4 @@
 import { AgentsPanel } from "../../../web/components/subagents/AgentsPanel";
-import { setFeaturePreference } from "../../../web/features/preferences";
 import { setAgentsFilter } from "../../../web/store/dock";
 import { DockFrame, seedAgentsDock, seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
@@ -102,16 +101,6 @@ export default defineStory({
 			description: "The expanded body at the narrowest dock width: no horizontal overflow.",
 			seed: () => seedAgentsDock("accordion", "FixtureBuilder"),
 			render: () => dock(420),
-		},
-		{
-			name: "Accordion, Open in Analysis",
-			description:
-				"Analysis is on and the transcript is known: each row's menu offers Open in Analysis, beside Park or Revive where the status allows.",
-			seed: () => {
-				setFeaturePreference("analysis", true);
-				seedAgentsDock("accordion", "FixtureBuilder", { analysis: true });
-			},
-			render: () => dock(520),
 		},
 	],
 });

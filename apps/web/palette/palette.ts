@@ -211,8 +211,6 @@ export function commandItem(entry: CommandEntry, live?: CommandLiveSource): Pale
 
 export interface PaletteContext {
 	debugEnabled: boolean;
-	/** The `integrations` feature is on: Skills and MCP servers open the Extensions dialog. */
-	integrationsEnabled: boolean;
 	/** The `plugins` feature is on: Plugins opens the Extensions dialog on its Plugins tab. */
 	pluginsEnabled: boolean;
 	projects: readonly { projectId: string; name: string }[];
@@ -260,18 +258,17 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 	];
 	if (context.debugEnabled)
 		items.push(openItem("debug", "Debug", "Fleet and daemon diagnostics", ["logs", "diagnostics"]));
-	if (context.integrationsEnabled)
-		items.push(
-			openItem("skills", "Skills", "Turn skills on or off and read their instructions", [
-				"extensions",
-				"integrations",
-			]),
-			openItem("mcp", "MCP servers", "Manage MCP servers and see their tools", [
-				"extensions",
-				"integrations",
-				"tools",
-			]),
-		);
+	items.push(
+		openItem("skills", "Skills", "Turn skills on or off and read their instructions", [
+			"extensions",
+			"integrations",
+		]),
+		openItem("mcp", "MCP servers", "Manage MCP servers and see their tools", [
+			"extensions",
+			"integrations",
+			"tools",
+		]),
+	);
 	if (context.pluginsEnabled)
 		items.push(
 			openItem("plugins", "Plugins", "Enable, disable, and configure installed plugins", [

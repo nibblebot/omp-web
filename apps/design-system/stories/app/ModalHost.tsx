@@ -13,6 +13,7 @@ import {
 } from "../../fixtures/overlays";
 import { rosterDaemon, rosterFleetState } from "../../fixtures/roster";
 import { chartScreenshot } from "../../fixtures/shared";
+import { extensionCalls } from "../../fixtures/extensions";
 import { defineStory } from "../../registry";
 
 /**
@@ -31,6 +32,16 @@ export default defineStory({
 			name: "state.modal: help",
 			description: "A registry modal: `state.modal` names it and ModalHost renders it.",
 			seed: { modal: "help" },
+			render: () => <ModalHost />,
+		},
+		{
+			name: "Extensions",
+			description:
+				'`state.modal` is "integrations" (/mcp, /skills): the Extensions dialog lists skills and MCP servers, plus a Plugins tab while the plugins feature is on.',
+			seed: () => {
+				answerCalls(extensionCalls());
+				setState("modal", "integrations");
+			},
 			render: () => <ModalHost />,
 		},
 		{

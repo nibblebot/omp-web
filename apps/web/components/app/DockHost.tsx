@@ -9,6 +9,8 @@ import {
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { DockPane } from "../ui/DockPane";
+import { FEATURES } from "../../features/manifest";
+import { isFeatureEnabled } from "../../features/registry";
 import { ReviewPanel } from "../review/ReviewPanel";
 import { SessionTreePanel } from "../sessions/SessionTreePanel";
 import { AgentsDockActions } from "../subagents/AgentsDockActions";
@@ -69,9 +71,11 @@ export const DockHost: Component = () => {
 	const entry = () => {
 		const dock = state.dock;
 		// hasOwn: a kind such as `constructor` must not match an inherited key.
-		return dock !== null && Object.hasOwn(DOCK_KINDS, dock.kind)
-			? DOCK_KINDS[dock.kind]
-			: undefined;
+		if (dock === null || !Object.hasOwn(DOCK_KINDS, dock.kind)) return undefined;
+		// A saved layout or route can name a panel whose feature is off; it stays closed.
+		const kind = dock.kind;
+		if (FEATURES.some((f) => f.docks.includes(kind) && !isFeatureEnabled(f.id))) return undefined;
+		return DOCK_KINDS[kind];
 	};
 	const presence = createPresence(() => entry() !== undefined);
 

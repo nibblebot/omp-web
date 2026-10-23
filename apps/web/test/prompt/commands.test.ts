@@ -9,7 +9,6 @@ import {
 	LOCAL_COMMANDS,
 	modelDispatch,
 	parseInput,
-	planDispatch,
 	queueMethod,
 	renameDispatch,
 	resumeDispatch,
@@ -179,10 +178,6 @@ describe("session command parsing", () => {
 });
 
 describe("goal/plan local commands", () => {
-	test("LOCAL_COMMANDS covers plan", () => {
-		expect(LOCAL_COMMANDS.plan).toBeFunction();
-	});
-
 	test("parseInput classifies /goal and /plan as slash (local dispatch gate, not passthrough)", () => {
 		expect(parseInput("/goal set implement the API")).toEqual({
 			kind: "slash",
@@ -191,20 +186,6 @@ describe("goal/plan local commands", () => {
 		});
 		expect(parseInput("/goal pause")).toEqual({ kind: "slash", name: "goal", args: "pause" });
 		expect(parseInput("/plan")).toEqual({ kind: "slash", name: "plan", args: "" });
-	});
-
-	test("/plan toggles planModeEnabled via setPlanModeState", () => {
-		const before = state.planModeEnabled;
-		try {
-			setState("planModeEnabled", false);
-			expect(planDispatch().args[0].enabled).toBe(true);
-			expect(planDispatch().args[0]).toEqual({ enabled: true });
-			// Flip the store and confirm the toggle inverts.
-			setState("planModeEnabled", true);
-			expect(planDispatch().args[0].enabled).toBe(false);
-		} finally {
-			setState("planModeEnabled", before);
-		}
 	});
 });
 
@@ -271,18 +252,6 @@ describe("P0.2 argument-aware collision routes", () => {
 		expect(dumpDispatch("ALL")).toEqual({ kind: "all" });
 		expect(dumpDispatch("request")).toEqual({ kind: "request" });
 		expect(dumpDispatch("everything").kind).toBe("usage");
-	});
-
-	test("/plan with prompt enters plan mode, bare toggles", () => {
-		const before = state.planModeEnabled;
-		try {
-			setState("planModeEnabled", false);
-			expect(planDispatch("design the api").args[0].enabled).toBe(true);
-			expect(planDispatch("").args[0].enabled).toBe(true);
-			expect(planDispatch().args[0].enabled).toBe(true);
-		} finally {
-			setState("planModeEnabled", before);
-		}
 	});
 
 	test("LOCAL_COMMANDS covers move/wt/worktree refusals", () => {
@@ -594,16 +563,51 @@ describe("disabled feature commands", () => {
 		setState({ items: [], streaming: false });
 	});
 
-	test("a slash command owned by a disabled feature shows a local notice and is never forwarded", () => {
+	test("/plan with the plan feature off says so, never reaches the agent, and leaves plan mode alone", () => {
+		const before = state.planModeEnabled;
+		try {
+			setState("planModeEnabled", false);
+			connect();
+			FakeWebSocket.instances.at(-1)!.onopen?.();
+			posted.length = 0;
+			dispatchInput("/plan", undefined, "enter");
+			dispatchInput("/plan design the api", undefined, "enter");
+			expect(state.items.filter((i) => i.kind === "notice").map((i) => i.message)).toEqual([
+				"/plan is part of Plan Mode, which is in development.",
+				"/plan is part of Plan Mode, which is in development.",
+			]);
+			expect(posted.some((c) => c.type === "call")).toBe(false);
+			expect(state.planModeEnabled).toBe(false);
+		} finally {
+			setState("planModeEnabled", before);
+		}
+	});
+
+	test("a slash command owned by an in-development feature says so, offers no enable hint, and is never forwarded", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 		posted.length = 0;
 		dispatchInput("/git", undefined, "enter");
 		expect(state.items.at(-1)).toMatchObject({
 			kind: "notice",
-			message: "/git is part of Review, which is disabled. Enable it in Settings > Features.",
+			message: "/git is part of Git Review, which is in development.",
 		});
 		expect(posted.some((c) => c.type === "call" && c.method === "prompt")).toBe(false);
+	});
+
+	test("/todo and /todo <args> with the todos feature in development say so, open no sheet, and are never forwarded", () => {
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		posted.length = 0;
+		setState("modal", null);
+		dispatchInput("/todo", undefined, "enter");
+		dispatchInput("/todo add write tests", undefined, "enter");
+		expect(state.items.filter((i) => i.kind === "notice").map((i) => i.message)).toEqual([
+			"/todo is part of Todos, which is in development.",
+			"/todo is part of Todos, which is in development.",
+		]);
+		expect(state.modal).toBeNull();
+		expect(posted.some((c) => c.type === "call")).toBe(false);
 	});
 });
 
@@ -617,7 +621,7 @@ describe("feature-owned commands with arguments (INT-06)", () => {
 	});
 	beforeEach(async () => {
 		setState({ items: [], streaming: false });
-		await activateFeatures(["integrations"]);
+		await activateFeatures([]);
 	});
 
 	test("/skills with a subcommand shows a terminal-only notice and is never forwarded", () => {
@@ -631,6 +635,25 @@ describe("feature-owned commands with arguments (INT-06)", () => {
 				'/skills status is terminal-only. Install or update skills with "omp skill status" in a terminal; turn skills on or off in the Extensions dialog.',
 		});
 		expect(posted.some((c) => c.type === "call" && c.method === "prompt")).toBe(false);
+	});
+
+	test("bare /mcp opens the Extensions dialog on MCP servers", () => {
+		setState("modal", null);
+		dispatchInput("/mcp", undefined, "enter");
+		expect(state.modal).toBe("integrations");
+		expect(state.integrations.tab).toBe("extensions");
+		expect(state.integrations.extensionsFocus).toBe("mcp");
+	});
+
+	test("bare /skills and /skills installed open the Extensions dialog on skills", () => {
+		for (const input of ["/skills", "/skills installed"]) {
+			setState("modal", null);
+			setState("integrations", "extensionsFocus", null);
+			dispatchInput(input, undefined, "enter");
+			expect(state.modal).toBe("integrations");
+			expect(state.integrations.tab).toBe("extensions");
+			expect(state.integrations.extensionsFocus).toBe("skill");
+		}
 	});
 });
 
@@ -693,20 +716,6 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 			kind: "notice",
 			level: "echo",
 			message: "/security status",
-		});
-	});
-
-	test("/skills with arguments is never forwarded to the model", () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-		posted.length = 0;
-		dispatchInput("/skills status", undefined, "enter");
-		expect(promptCalls()).toEqual([]);
-		expect(state.items.at(-1)).toMatchObject({
-			kind: "notice",
-			level: "info",
-			message:
-				"/skills is part of MCP & Skills, which is disabled. Enable it in Settings > Features.",
 		});
 	});
 

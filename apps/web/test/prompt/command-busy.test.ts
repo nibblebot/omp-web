@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { slashBusyPolicy } from "#lib/wire/slash-busy";
 import type { AvailableSlashCommand } from "#lib/wire/protocol";
+import { featureForCommand } from "../../features/manifest";
 import { buildCommandRegistry, findCommand } from "../../prompt/command-registry";
 import { LOCAL_COMMANDS } from "../../prompt/commands";
 
@@ -28,8 +29,6 @@ const QUEUED = [
 	"advisor",
 	"share",
 	"browser",
-	"todo",
-	"mcp",
 	"ssh",
 	"shake",
 	"pin",
@@ -46,7 +45,11 @@ function registry(remote: AvailableSlashCommand[] = []) {
 	return buildCommandRegistry({
 		localNames: Object.keys(LOCAL_COMMANDS),
 		remote,
-		featureOf: () => undefined,
+		// Feature-owned commands are local in the app (/todo belongs to the Todos feature), never forwarded.
+		featureOf: (name) => {
+			const f = featureForCommand(name);
+			return f ? { id: f.id, label: f.label, status: f.status, enabled: false } : undefined;
+		},
 	});
 }
 

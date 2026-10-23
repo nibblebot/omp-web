@@ -160,7 +160,7 @@ const NavList: Component<{ title: string; list: StoryEntry[]; current: Route }> 
 /**
  * App at the top, drilled down by what each component renders, with pieces
  * from other feature folders grouped under folder rows. App's file-local
- * screens ("Chat Mode", "Analysis Mode") are rows of their own, each drilled
+ * screens ("Chat Mode") are rows of their own, each drilled
  * down the same way. `ui/` primitives and Icons sit in one list below the
  * tree; a search replaces both with a flat list of matches.
  */

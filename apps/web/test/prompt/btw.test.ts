@@ -1,14 +1,9 @@
-import { beforeEach, describe, expect, test } from "bun:test";
-import { parseInput } from "../../prompt/commands";
-import { activateFeatures, featureCommand } from "../../features/registry";
+import { describe, expect, test } from "bun:test";
+import { LOCAL_COMMANDS, parseInput } from "../../prompt/commands";
 import { setState, state } from "../../state";
 import { btwDispatch } from "../../store/btw";
 
-describe("btw feature", () => {
-	beforeEach(async () => {
-		await activateFeatures(["btw"]);
-	});
-
+describe("btw command", () => {
 	test("parseInput classifies /btw with and without a question", () => {
 		expect(parseInput("/btw")).toEqual({ kind: "slash", name: "btw", args: "" });
 		expect(parseInput("/btw what does this function do")).toEqual({
@@ -35,11 +30,11 @@ describe("btw feature", () => {
 
 	test("bare /btw opens the btw modal and does not ask", () => {
 		setState("modal", null);
-		featureCommand("btw")!.command.run("");
+		LOCAL_COMMANDS.btw!("");
 		expect(state.modal).toBe("btw");
 	});
 
 	test("the btw-history command is gone (single sheet)", () => {
-		expect(featureCommand("btw-history")).toBeUndefined();
+		expect(LOCAL_COMMANDS["btw-history"]).toBeUndefined();
 	});
 });

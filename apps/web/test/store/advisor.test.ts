@@ -1,10 +1,8 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Suspense, createComponent } from "solid-js";
 import { renderToStringAsync } from "solid-js/web";
 import type { ServerFrame } from "#lib/wire/protocol";
 import { AdvisorPanel } from "../../components/subagents/AdvisorPanel";
-import { FEATURE_IDS, type FeatureId } from "../../features/manifest";
-import { activateFeatures, featureModal, isFeatureEnabled } from "../../features/registry";
 import { connect, setState, state } from "../../state";
 import {
 	FakeWebSocket,
@@ -21,17 +19,6 @@ import {
 	restoreJsxShim,
 	userMsg,
 } from "../web.testkit";
-
-let baselineFeatures: FeatureId[];
-
-beforeAll(async () => {
-	baselineFeatures = FEATURE_IDS.filter(isFeatureEnabled);
-	await activateFeatures(["advisor"]);
-});
-
-afterAll(async () => {
-	await activateFeatures(baselineFeatures);
-});
 
 beforeEach(() => {
 	installTransportStubs();
@@ -89,12 +76,6 @@ describe("advisor notes render inline (TUI advisor card parity)", () => {
 		dispatch(ev({ type: "message_end", message: advisorMsg }));
 		expect(itemCounts()).toEqual({ advisor: 1 });
 		expect(state.items[0]).toMatchObject({ kind: "advisor", notes });
-	});
-});
-
-describe("advisor sheet modal", () => {
-	test("the Open advisor button's modal resolves to the advisor sheet", () => {
-		expect(featureModal("advisor")).toBeDefined();
 	});
 });
 

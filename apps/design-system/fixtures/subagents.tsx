@@ -27,8 +27,6 @@ const SONNET = "claude-sonnet-4-5";
 const GPT = "gpt-5";
 
 const SESSIONS_ROOT = "/home/joshua/.omp/agent/sessions";
-/** Parent session file. Sits under the health fixture's sessionsDir so Analysis links resolve. */
-export const PARENT_SESSION_FILE = `${SESSIONS_ROOT}/omp-web/2026-10-09T09-40-12.jsonl`;
 const subFile = (id: string): string => `${SESSIONS_ROOT}/omp-web/2026-10-09T09-40-12/${id}.jsonl`;
 
 type TranscriptMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
@@ -1126,11 +1124,10 @@ export const agentSettingsModel: SettingsModel = {
 /**
  * Seeds the attached session with the agent forest, or an empty session with `empty`.
  * `display` also turns on the live-line setting the tree row reads (off by default, so rows show
- * three lines). `analysis` names the parent session file, which the "Open in Analysis" links need.
- * `settled` finishes the running and pending agents, so nothing in the forest is active.
+ * three lines). `settled` finishes the running and pending agents, so nothing in the forest is active.
  */
 export function seedAgentTree(
-	options: { empty?: boolean; display?: boolean; analysis?: boolean; settled?: boolean } = {},
+	options: { empty?: boolean; display?: boolean; settled?: boolean } = {},
 ): void {
 	const specs =
 		options.empty === true
@@ -1149,7 +1146,6 @@ export function seedAgentTree(
 			workers: workersStateOf(workers),
 			subagents: subagentMapOf(infos),
 			settingsModel: options.display === true ? agentSettingsModel : null,
-			...(options.analysis === true ? { sessionFile: PARENT_SESSION_FILE } : {}),
 		},
 	);
 }
@@ -1159,12 +1155,8 @@ export function seedAgentTree(
  * way a row click does (its own pane in single, expanded in the list in accordion). No id leaves
  * the dock on the agents list.
  */
-export function seedAgentsDock(
-	mode: AgentsMode,
-	agentId?: string,
-	options: { analysis?: boolean } = {},
-): void {
-	seedAgentTree({ display: true, ...options });
+export function seedAgentsDock(mode: AgentsMode, agentId?: string): void {
+	seedAgentTree({ display: true });
 	setAgentsMode(mode);
 	if (agentId === undefined) openAgents();
 	else openAgent(agentId);

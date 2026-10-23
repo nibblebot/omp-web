@@ -122,16 +122,19 @@ const navGroups = new Map<string, NavGroup>();
 
 /**
  * Whether `child` (a node `parentId` renders) is a mode row: a story-less
- * component declared in the root's own file, so App's file-local screens
- * ("ChatMode", "AnalysisMode") stay as rows of their own instead of being
- * flattened into App's children.
+ * component declared in the root's own file that renders stories of its own,
+ * so App's file-local screens ("ChatMode") stay as rows of their own instead
+ * of being flattened into App's children. A screen that renders nothing the
+ * showcase can reach ("AnalysisMode" mounts a feature slot, and the
+ * in-development analysis feature never activates) is no row at all.
  */
 function isModeRow(parentId: string, child: GraphNode): boolean {
 	return (
 		rootNode !== null &&
 		parentId === rootNode.id &&
 		child.file === rootNode.file &&
-		!entryByNodeId.has(child.id)
+		!entryByNodeId.has(child.id) &&
+		renderedStories(child.id).length > 0
 	);
 }
 
@@ -154,8 +157,8 @@ const storyCache = new Map<string, string[]>();
  * The stories a node renders, in render order: `ui/` primitives are left to
  * their own section (they appear under almost everything), and nodes without
  * a story (file-local helpers) are skipped with their own children pulled up
- * in their place. The exception is the root's own file-local components
- * (App's "ChatMode" and "AnalysisMode"), which stay as mode rows.
+ * in their place. The exception is the root's own file-local screens
+ * (App's "ChatMode"), which stay as mode rows.
  */
 function renderedStories(id: string): string[] {
 	const cached = storyCache.get(id);

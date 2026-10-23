@@ -32,7 +32,6 @@ import { featurePreferences } from "./features/preferences";
 import { clearUnread, markUnread, pruneUnread } from "./fleet-ui/unread";
 import type { UsageLike } from "./usage/usage";
 import { createHistoryBuilder } from "./chat/history-items";
-import { noticeAdvisorNotesWhileOff } from "./store/advisor-notice";
 import { COLLAB_OFF } from "./store/slices/collab";
 import {
 	announce,
@@ -701,7 +700,6 @@ export function loadHistory(messages: AgentMessage[]): void {
 	// thread on a 2 MB transcript before the chat could paint.
 	const built = createHistoryBuilder(nextChatId).append(messages);
 	const items = built.items;
-	noticeAdvisorNotesWhileOff(built.advisorNotes);
 	setState({
 		items,
 		live: { active: false, blocks: [], rev: 0 },
@@ -718,7 +716,9 @@ export function loadHistory(messages: AgentMessage[]): void {
 
 function applyState(s: WebSessionState, stats?: SessionStats): void {
 	// Open the review sheet only on the false→true edge, so a re-broadcast does not reopen a dismissed sheet.
-	const reviewOpened = s.planReviewPending === true && !state.planReviewPending;
+	// Only while the plan feature is on: its sheet is not mounted otherwise, so opening it would leave an empty modal layer.
+	const reviewOpened =
+		s.planReviewPending === true && !state.planReviewPending && featurePreferences().plan;
 	setState({
 		sessionScope: s.sessionScope,
 		capabilities: s.capabilities ?? {},

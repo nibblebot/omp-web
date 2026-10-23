@@ -1,5 +1,4 @@
 import { SubagentPanel } from "../../../web/components/subagents/SubagentPanel";
-import { setFeaturePreference } from "../../../web/features/preferences";
 import { DockFrame, seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
 
@@ -74,20 +73,6 @@ export default defineStory({
 			render: () => (
 				<DockFrame title="Agent" width={520} flush>
 					<SubagentPanel id="FixtureBuilder.LintPass" />
-				</DockFrame>
-			),
-		},
-		{
-			name: "Open in Analysis",
-			description:
-				"Analysis is on and the transcript is known: the header menu offers Open in Analysis.",
-			seed: () => {
-				setFeaturePreference("analysis", true);
-				seedAgentTree({ display: true, analysis: true });
-			},
-			render: () => (
-				<DockFrame title="Agent" width={520} flush>
-					<SubagentPanel id="FixtureBuilder" />
 				</DockFrame>
 			),
 		},

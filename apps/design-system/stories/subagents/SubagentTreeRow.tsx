@@ -1,5 +1,4 @@
 import { SubagentTreeRow } from "../../../web/components/subagents/SubagentTreeRow";
-import { setFeaturePreference } from "../../../web/features/preferences";
 import { subagentRegionDomId } from "../../../web/subagents/tree";
 import { agentNode, seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
@@ -135,16 +134,6 @@ export default defineStory({
 					menu={false}
 				/>
 			),
-		},
-		{
-			name: "Open in Analysis",
-			description:
-				"Analysis is on and the transcript is known: the kebab offers Open in Analysis. Rows without an Analysis link show no kebab.",
-			seed: () => {
-				setFeaturePreference("analysis", true);
-				seedAgentTree({ display: true, analysis: true });
-			},
-			render: () => row("FixtureBuilder", 0),
 		},
 	],
 });
