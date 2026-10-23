@@ -120,7 +120,7 @@ const TUI_ONLY_HINTS: Readonly<Record<string, string>> = {
 	copy: "Select text in the transcript and copy it.",
 	agents: "Use the Agents dock (Alt+A).",
 	hub: "Use the Agents dock (Alt+A).",
-	debug: "Open the Debug sheet from the sidebar header.",
+	debug: "Open the Debug sheet from Settings > Features.",
 	extensions: "Use the MCP and Skills dialogs.",
 	collab: "Start or join collaboration from the terminal.",
 	join: "Join collaboration from the terminal.",

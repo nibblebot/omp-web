@@ -1,17 +1,14 @@
 import type { Component } from "solid-js";
-import { setState, state } from "../../../state";
-import { InfoIcon } from "../../ui/icons";
+import { setState } from "../../../state";
 
-/** Debug tool button in the sidebar header (both Chat and Analysis). */
+/** Opens the debug sheet; the debug feature's control in its Settings > Features row. */
 export const DebugButton: Component = () => (
 	<button
 		type="button"
-		class="sidebar-icon-btn"
-		classList={{ active: state.modal === "debug" }}
-		onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}
+		class="settings-control-btn"
+		onClick={() => setState("modal", "debug")}
 		title="Debug, transport and fleet visibility"
-		aria-label="Debug, transport and fleet visibility"
 	>
-		<InfoIcon />
+		Open Debug Sheet
 	</button>
 );

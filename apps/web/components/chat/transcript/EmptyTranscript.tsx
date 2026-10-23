@@ -12,7 +12,7 @@ import type { SessionListEntry } from "#lib/wire/protocol";
 import { requestDaemonSessions, resumeDaemonSession, state } from "../../../state";
 import { reportError } from "../../../store/toasts";
 import { formatTimeAgo } from "../../../text/time-ago";
-import { PackageIcon, RootIcon, WorktreeIcon } from "../../ui/icons";
+import { PackageIcon, WorktreeIcon } from "../../ui/icons";
 import { displayTitle } from "../../ui/title-icons";
 
 /** Most recent sessions listed under "Recent in this workspace". */
@@ -73,11 +73,8 @@ export const EmptyTranscript: Component = () => {
 											<Show when={d().workspaceKind === "clone"}>
 												<PackageIcon />
 											</Show>
-											<Show when={d().workspaceKind !== "clone" && d().worktreeOf !== undefined}>
+											<Show when={d().workspaceKind !== "clone"}>
 												<WorktreeIcon />
-											</Show>
-											<Show when={d().workspaceKind !== "clone" && d().worktreeOf === undefined}>
-												<RootIcon />
 											</Show>
 											{name()}
 										</span>

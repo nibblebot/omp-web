@@ -14,8 +14,8 @@ import type {
 	LifecycleStage,
 	SessionListEntry,
 } from "#lib/wire/protocol";
-import { sessionActivity, type SessionActivity } from "../../../fleet-ui/session-activity";
-import { unreadIds } from "../../../fleet-ui/unread";
+import { rowActivity } from "../../../fleet-ui/row-activity";
+import type { SessionActivity } from "../../../fleet-ui/session-activity";
 import { canStartRow, sessionChip } from "../../../fleet-ui/workspace-status";
 import {
 	call,
@@ -34,7 +34,6 @@ import {
 } from "../../../state";
 import { deletePendingIds } from "../../../store/projects";
 import { switchToDaemon } from "../../../store/roster";
-import { formatTimeAgo } from "../../../text/time-ago";
 import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
 import { projectLabelFromCwd, sessionStatus, type SessionRow } from "../../../store/session-list";
 import { pushToast, reportError } from "../../../store/toasts";
@@ -44,6 +43,7 @@ import { ConfirmButton } from "../../ui/ConfirmButton";
 import { KebabMenu } from "../../ui/KebabMenu";
 import { useClickableRow } from "../../ui/PickerRow";
 import { displayTitle } from "../../ui/title-icons";
+import { RowSignal } from "./RowSignal";
 import {
 	ArrowDownIcon,
 	ChevronDownIcon,
@@ -53,22 +53,25 @@ import {
 	LockIcon,
 	PackageIcon,
 	PlusIcon,
-	RootIcon,
 	StopIcon,
 	TrashIcon,
 	WorktreeIcon,
 } from "../../ui/icons";
 
 // ---------------------------------------------------------------------------
-// One fleet-roster row: title, a corner slot at the top-right showing the
-// status dot, label chips, git diffstat, and hover-revealed controls in one
-// right-hand column: the "⋯" actions menu (details, Start/Restart, two-click
-// stop, delete worktree; it replaces the dot while shown and its
-// tooltip names the state), the chevron that opens the session dropdown, and
-// "+" for a new session. Ready rows attach on click, asleep rows wake-then-attach.
-// Each row is one checkout: a kind icon (main checkout, worktree, clone) and the
-// branch (or detached sha) as the primary text. The group header names the
-// project; the full path lives in the hover tooltip.
+// One fleet-roster row, sized to its content. The top line holds the kind icon
+// and the branch (or detached sha) as the primary text, then on the right the
+// session chevron and "+" (new session), revealed on row hover/focus, and the
+// corner slot: the state signal (RowSignal: spinner or dot, nothing for an
+// idle ready row) that crossfades to the "⋯" actions menu on hover/focus
+// (details, Start/Restart, two-click stop, delete worktree; its tooltip names
+// the state). Under the top line, aligned with the branch text: the last
+// session's title (clamped to one line, or two with the sidebarSessionTitleLines
+// setting; absent when the session has no title), label chips, clone lifecycle
+// progress, and the git diffstat when there is one. A ready row carries a rail
+// on its right edge instead of a dot. Ready rows attach on click, asleep rows
+// wake-then-attach. The group header names the project; the full path lives in
+// the hover tooltip. Touch keeps the chevron, "+" and "⋯" visible at 44px.
 // ---------------------------------------------------------------------------
 
 /** Roster entries may carry a template name, the last-session title, and
@@ -95,9 +98,9 @@ export type RosterEntry = DaemonEntry & {
 	};
 };
 
-/** Activity-dot tooltips (sessionActivity state → copy). Only the four
- *  non-idle states render a dot: blocked → red, in_progress → spinning
- *  green, unreviewed → yellow, unread → light blue. Idle renders nothing. */
+/** Signal tooltips (sessionActivity state → copy). Only the four non-idle
+ *  states render a signal: blocked → red dot, in_progress → spinning green
+ *  ring, unreviewed → yellow dot, unread → light blue dot. Idle renders nothing. */
 const ACTIVITY_TITLE: Record<SessionActivity, string> = {
 	in_progress: "in progress",
 	blocked: "blocked, waiting for your input",
@@ -118,7 +121,7 @@ const STATUS_TITLE: Record<DaemonStatus, string> = {
 };
 
 /** Provider lifecycle stage copy for clone rows (only stages that need
- *  row presence render; "ready" is implied by the ready status dot). */
+ *  row presence render; "ready" is implied by the row's ready rail). */
 const LIFECYCLE_LABEL: Record<NonNullable<RosterEntry["lifecycleStage"]>, string> = {
 	preparation: "preparing workspace",
 	runtime: "starting runtime",
@@ -158,7 +161,6 @@ function endActivating(id: string): void {
 
 export const WorkspaceRow: Component<{
 	daemon: DaemonEntry;
-	nested?: boolean;
 	/** Rendered inside a registered-project group (ProjectGroups ProjectGroup):
 	 *  the group header carries the project name, so an untagged row here is
 	 *  the main worktree and distills to the root profile. */
@@ -183,8 +185,8 @@ export const WorkspaceRow: Component<{
 	const menuOpen = createMemo(() => menuOpenId() === d().daemonId);
 	/** Whether THIS row's session dropdown is open (module-level open id). */
 	const sessionsOpen = createMemo(() => sessionsOpenId() === d().daemonId);
-	/** The session-title row text: the last session's title, else "no session yet". */
-	const sessionTitleText = createMemo(() => displayTitle(d().sessionTitle) ?? "no session yet");
+	/** The session-title line text: the last session's title, absent when it has none. */
+	const sessionTitleText = createMemo(() => displayTitle(d().sessionTitle));
 	/** Row ref anchors the dropdown's outside-pointerdown dismissal. */
 	let rowRef!: HTMLDivElement;
 	// Dismiss the dropdown on outside pointerdown or Escape (KebabMenu's
@@ -221,8 +223,8 @@ export const WorkspaceRow: Component<{
 			? state.providerProfiles.find((p) => p.id === d().providerProfileId)
 			: undefined;
 	// Root rows are a project group's MAIN worktree: the header already names
-	// the project, so the row distills to a root glyph + branch-as-title (the
-	// worktree profile, unindented) and drops the project chip + cwd line.
+	// the project, so the row distills to branch-as-title (the worktree
+	// profile) and drops the project chip + cwd line.
 	// Clones are siblings of the main checkout, never root rows.
 	const isRoot = () => props.inProjectGroup === true && !isWorktree() && !isClone();
 	/** Project folder missing on disk: the group shows it, rows cannot start. */
@@ -257,36 +259,14 @@ export const WorkspaceRow: Component<{
 			return target === d().daemonId;
 		return isAttached();
 	});
-	/** Activity dot for THIS row, derived from the attached session's live
-	 *  signals (state.streaming / state.uiRequest / state.answerUnviewed,
-	 *  finished answer sitting below the scrolled-up viewport) plus the
-	 *  edge's per-daemon realtime activity (state.daemonActivity, where detached
-	 *  rows get live blocked/in-progress via daemon_activity frames when the
-	 *  edge broadcasts them) and the client-side unread set (detached rows
-	 *  marked when a turn's end is observed or the user switches away; see
-	 *  src/fleet-ui/unread.ts). Git dirtiness deliberately does NOT feed the
-	 *  dot; uncommitted changes are the diffstat chips, a separate display.
-	 *  Memoized so only signal flips re-render the row; the store reads
-	 *  inside track state.streaming/state.uiRequest/state.answerUnviewed/
-	 *  state.daemonActivity individually, and a roster broadcast replacing
-	 *  the entry refires the memo. Only ready rows get a dot (sessionActivity
-	 *  returns null otherwise). */
-	const activity = createMemo(() =>
-		sessionActivity(d(), {
-			attached: isAttached(),
-			streaming: state.streaming,
-			uiPending: state.uiRequest !== null,
-			unreviewed: state.answerUnviewed,
-			// Signal read inside the memo: per-row reactivity off the unread set.
-			unread: unreadIds().has(d().daemonId),
-			// Store read inside the memo = per-row reactivity: undefined for the
-			// attached row and any daemon with no reading yet (stream down or
-			// activity still unknown).
-			remote: state.daemonActivity[d().daemonId],
-		}),
-	);
-	/** Only the non-idle activity states repaint the status dot. Idle keeps
-	 *  the plain status dot (green for a live ready row). */
+	/** Activity for THIS row (blocked, in progress, unreviewed, unread, idle),
+	 *  shared with the collapsed group summary through rowActivity so the two
+	 *  always agree. Git dirtiness deliberately does NOT feed it; uncommitted
+	 *  changes are the diffstat chips, a separate display. Memoized so only
+	 *  signal flips re-render the row. Only ready rows have activity
+	 *  (rowActivity returns null otherwise). */
+	const activity = createMemo(() => rowActivity(d()));
+	/** Only the non-idle activity states paint a signal. */
 	const activityDot = createMemo(() => {
 		const a = activity();
 		return a && a !== "idle" ? a : undefined;
@@ -295,15 +275,15 @@ export const WorkspaceRow: Component<{
 	const clickable = () =>
 		!blocked() && !deleting() && (d().status === "ready" || d().status === "asleep");
 	/** Loading phase: activating but the daemon isn't ready yet. Renders with
-	 *  the pulsing transitional ("resolving") visual vocabulary. */
+	 *  the transitional ("resolving") spinner. */
 	const waking = () => activating() && d().status !== "ready";
-	/** Process state behind the status dot's tooltip and the kebab's
+	/** Process state behind the status announcer, the "⋯" tooltip and the kebab's
 	 *  Start/Restart item. Both read the user-stopped mark so a stopped
 	 *  process reads Stopped, not Asleep. */
 	const chip = createMemo(() =>
 		sessionChip(d().status, { waking: activating(), stoppedByUser: isUserStopped(d().daemonId) }),
 	);
-	/** Status dot label: the process state, plus the activity when non-idle. */
+	/** Status label: the process state, plus the activity when non-idle. */
 	const statusLabel = createMemo(() => {
 		const a = activityDot();
 		return a ? `${chip().label}, ${ACTIVITY_TITLE[a]}` : chip().label;
@@ -428,11 +408,13 @@ export const WorkspaceRow: Component<{
 					active: selected() || activating(),
 					clickable: clickable() && !activating(),
 					"daemon-row--deleting": deleting(),
-					"daemon-row--nested": props.nested === true,
 					"daemon-row--worktree": isWorktree(),
 					"daemon-row--root": isRoot(),
 					"daemon-row--clone": isClone(),
-					"daemon-row--switcher": clickable(),
+					// Ready rows wear the right-edge rail; asleep ones dim their title
+					// (until a wake is in flight).
+					"daemon-row--ready": d().status === "ready",
+					"daemon-row--asleep": d().status === "asleep" && !activating(),
 				}}
 				{...useClickableRow(rowClick, clickable())}
 				title={
@@ -452,17 +434,11 @@ export const WorkspaceRow: Component<{
 								aria-label={kindLabel()}
 								title={kindLabel()}
 							>
-								<Show when={isClone()}>
+								<Show when={isClone()} fallback={<WorktreeIcon />}>
 									<PackageIcon />
 								</Show>
-								<Show when={!isClone() && isWorktree()}>
-									<WorktreeIcon />
-								</Show>
-								<Show when={!isClone() && !isWorktree()}>
-									<RootIcon />
-								</Show>
 							</span>
-							{primaryText()}
+							<span class="daemon-row-branch">{primaryText()}</span>
 							<Show when={d().worktreeLocked === true}>
 								<span
 									class="daemon-lock-icon"
@@ -474,25 +450,59 @@ export const WorkspaceRow: Component<{
 								</span>
 							</Show>
 						</span>
-						{/* Corner slot at the top-right, on the axis of the session
-						    chevron and "+" below it. At rest it shows the status dot; on
-						    row hover/focus (or an open menu/dropdown) the dot fades out
-						    and the "⋯" row-actions menu fades in over the same spot, its
-						    tooltip naming the state. On touch the menu is always shown and
-						    the dot rides on it as a badge (fleet.css). Stop keeps the
-						    two-click confirm inside the menu; the first click arms (menu
-						    stays open), the second executes and closes. */}
+						{/* Session chevron and "+" (clickable rows only), beside the
+						    corner on the top line. Hidden at rest; row hover/focus (or an
+						    open menu/dropdown) reveals them with the "⋯" (always visible
+						    on touch). The chevron opens the last-10-sessions resume
+						    picker; the "+" starts a fresh session in this worktree. */}
+						<Show when={clickable()}>
+							<span class="daemon-row-actions">
+								<button
+									type="button"
+									class="daemon-session-toggle"
+									aria-expanded={sessionsOpen()}
+									aria-label="Switch session"
+									title="Switch session"
+									onClick={(e) => {
+										// The card's resume must NOT fire when opening the
+										// dropdown.
+										e.stopPropagation();
+										sessionsToggleClick();
+									}}
+								>
+									<ChevronDownIcon class="daemon-session-chevron" />
+								</button>
+								<button
+									type="button"
+									class="daemon-session-new"
+									aria-label="New session in this worktree"
+									title="New session in this worktree"
+									onClick={(e) => {
+										// The card's resume must NOT fire as well.
+										e.stopPropagation();
+										newSessionClick();
+									}}
+								>
+									<PlusIcon class="daemon-session-new-icon" />
+								</button>
+							</span>
+						</Show>
+						{/* Corner slot at the top-right. At rest it shows the state
+						    signal (spinner or dot; nothing for an idle ready or asleep
+						    row); on row hover/focus (or an open menu/dropdown) the signal
+						    fades out and the "⋯" row-actions menu fades in over the same
+						    spot, its tooltip naming the state. On touch the menu is always
+						    shown and the signal rides on it as a badge (fleet.css). The
+						    status announcer always names the state, signal or not. Stop
+						    keeps the two-click confirm inside the menu; the first click
+						    arms (menu stays open), the second executes and closes. */}
 						<span class="daemon-row-corner">
 							<span
 								class="daemon-row-status"
 								role="status"
 								aria-label={`${statusLabel()}. ${chip().title}`}
 							>
-								<span
-									class="daemon-status-dot"
-									data-status={waking() ? "resolving" : d().status}
-									data-activity={activityDot()}
-								/>
+								<RowSignal status={waking() ? "resolving" : d().status} activity={activityDot()} />
 							</span>
 							<KebabMenu
 								label="Row actions"
@@ -657,60 +667,24 @@ export const WorkspaceRow: Component<{
 							</KebabMenu>
 						</span>
 					</div>
-					{/* Session switcher: the last session's title (probed by the
-					    fleet edge from the session file's JSONL title slot; "no
-					    session yet" for an untitled one) plus a bare chevron in the
-					    row's right gutter, on the corner slot's column. The title is
-					    part of the card (click resumes); only the chevron opens the
-					    last-10-sessions resume picker (ready/asleep rows only); other
-					    rows show the bare title. The title wraps to at most two lines
-					    and the tooltip exposes the full string. A "+" under the
-					    chevron starts a fresh session in this worktree. Both show on
-					    row hover/focus like the "⋯" menu (always on touch). */}
-					<Show
-						when={clickable()}
-						fallback={
-							<div class="daemon-session-title" title={sessionTitleText()}>
-								{sessionTitleText()}
-							</div>
-						}
-					>
-						<div class="daemon-session-switcher">
+					{/* The last session's title (probed by the fleet edge from the
+					    session file's JSONL title slot), under the top line and
+					    aligned with the branch text. Part of the card (click
+					    resumes). Absent for an untitled session, so the row stays one
+					    line. Clamped to one line, or two with the setting on, taking
+					    only the lines it needs; the tooltip carries the full string. */}
+					<Show when={sessionTitleText()}>
+						{(title) => (
 							<div
-								class="daemon-session-title daemon-session-title--switcher"
-								title={sessionTitleText()}
+								class="daemon-session-title"
+								classList={{
+									"daemon-session-title--two-line": state.sidebarSessionTitleLines === 2,
+								}}
+								title={title()}
 							>
-								{sessionTitleText()}
+								{title()}
 							</div>
-							<button
-								type="button"
-								class="daemon-session-toggle"
-								aria-expanded={sessionsOpen()}
-								aria-label="Switch session"
-								title="Switch session"
-								onClick={(e) => {
-									// The card's resume must NOT fire when opening the
-									// dropdown.
-									e.stopPropagation();
-									sessionsToggleClick();
-								}}
-							>
-								<ChevronDownIcon class="daemon-session-chevron" />
-							</button>
-							<button
-								type="button"
-								class="daemon-session-new"
-								aria-label="New session in this worktree"
-								title="New session in this worktree"
-								onClick={(e) => {
-									// The card's resume must NOT fire as well.
-									e.stopPropagation();
-									newSessionClick();
-								}}
-							>
-								<PlusIcon class="daemon-session-new-icon" />
-							</button>
-						</div>
+						)}
 					</Show>
 					<Show when={cloneProfile() !== undefined || d().labels.length > 0}>
 						<div class="daemon-chips">
@@ -736,7 +710,7 @@ export const WorkspaceRow: Component<{
 					{/* Provider lifecycle progress: preparation → runtime →
 					    callback → ready, shown while a clone workspace is being
 					    created/recovered; "ready" renders nothing extra (the status
-					    dot already says it). A failed stage is actionable: the
+					    rail already says it). A failed stage is actionable: the
 					    lifecycle error text plus a Retry that re-issues the wake
 					    command the backend routes to the lifecycle service.
 					    activeStage() gates the Show, so the callback narrows to

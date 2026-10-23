@@ -1,5 +1,5 @@
 import type { ClientCommand, SessionListEntry } from "#lib/wire/protocol";
-import { SIDEBAR_KEY, TX_SIDEBAR_KEY, setState, state } from "../state";
+import { SIDEBAR_KEY, SIDEBAR_TITLE_LINES_KEY, TX_SIDEBAR_KEY, setState, state } from "../state";
 import { startNewSession } from "./chat";
 import { spawnResume } from "./projects";
 import { parseRoute } from "./route";
@@ -395,6 +395,13 @@ export function setSidebarVisible(visible: boolean): void {
 
 export function toggleSidebar(): void {
 	setSidebarVisible(!state.sidebarVisible);
+}
+
+/** Persist + apply how many lines a roster row's session title may take. */
+export function setSidebarSessionTitleLines(lines: 1 | 2): void {
+	if (typeof localStorage !== "undefined")
+		localStorage.setItem(SIDEBAR_TITLE_LINES_KEY, String(lines));
+	setState("sidebarSessionTitleLines", lines);
 }
 
 /** Closes both sidebar drawers. A no-op when docked, since docked visibility is a choice, not a drawer state. */

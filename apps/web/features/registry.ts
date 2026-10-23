@@ -43,8 +43,8 @@ export interface FeatureModule {
 	view?: Component;
 	/** Main pane header items, placed by MainHeader. */
 	mainHeader?: { goalBadge?: Component };
-	/** Sidebar header tool buttons, placed by SidebarHeader. */
-	sidebarHeader?: { debugButton?: Component };
+	/** Control shown in this feature's own row in Settings > Features (e.g. an Open button). */
+	settingsAction?: Component;
 	/** Transcript item renderers keyed by ChatItem kind. */
 	transcriptCards?: {
 		[K in ChatItem["kind"]]?: Component<{ item: Extract<ChatItem, { kind: K }> }>;
@@ -189,8 +189,9 @@ export function featureMainHeader(): NonNullable<FeatureModule["mainHeader"]>[] 
 	return allActiveModules().flatMap((mod) => (mod.mainHeader ? [mod.mainHeader] : []));
 }
 
-export function featureSidebarHeader(): NonNullable<FeatureModule["sidebarHeader"]>[] {
-	return allActiveModules().flatMap((mod) => (mod.sidebarHeader ? [mod.sidebarHeader] : []));
+/** The control a feature adds to its own row in Settings > Features, when the feature is active. */
+export function featureSettingsAction(id: FeatureId): Component | undefined {
+	return activeModule(id)?.settingsAction;
 }
 
 /** Transcript renderer for one item kind from an active feature. */

@@ -2,7 +2,13 @@ import { createSignal, Show } from "solid-js";
 import { settingsSectionId } from "../../prefs/settings-tabs";
 import { signOut } from "../../store/auth";
 import { notificationsBlocked } from "../../store/chat";
-import { setNotifyEnabled, setSidebarUsage, setState, state } from "../../state";
+import {
+	setNotifyEnabled,
+	setSidebarSessionTitleLines,
+	setSidebarUsage,
+	setState,
+	state,
+} from "../../state";
 import { MinusIcon, PlusIcon } from "../ui/icons";
 import {
 	currentFontSize,
@@ -94,6 +100,16 @@ export function WebUiSettings() {
 						label="Usage in Sidebar"
 						checked={state.sidebarUsage}
 						onChange={setSidebarUsage}
+					/>
+				</SettingsRowLayout>
+				<SettingsRowLayout
+					label="Two-Line Session Titles"
+					description="Lets a roster row show up to two lines of its last session title instead of one. A short title still takes one line."
+				>
+					<SettingToggle
+						label="Two-Line Session Titles"
+						checked={state.sidebarSessionTitleLines === 2}
+						onChange={(checked) => setSidebarSessionTitleLines(checked ? 2 : 1)}
 					/>
 				</SettingsRowLayout>
 			</SettingsGroup>

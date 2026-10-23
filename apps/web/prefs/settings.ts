@@ -100,6 +100,11 @@ const WEB_UI_SEARCH_ROWS: {
 	{ label: "Soft Fade", keywords: "fade transcript smooth streaming", tabId: "web-ui" },
 	{ label: "Usage in Sidebar", keywords: "usage sidebar tokens cost", tabId: "web-ui" },
 	{
+		label: "Two-Line Session Titles",
+		keywords: "session title sidebar roster row lines wrap",
+		tabId: "web-ui",
+	},
+	{
 		label: "Sign Out",
 		keywords: "sign out logout log out account",
 		tabId: "web-ui",

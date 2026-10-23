@@ -102,9 +102,6 @@
 	.sidebar .daemon-row-btn {
 		min-height: 44px;
 	}
-	.sidebar .daemon-row--switcher {
-		--session-title-height: 44px;
-	}
 	.sidebar .sidebar-icon-btn {
 		width: 44px;
 		height: 44px;
@@ -173,6 +170,24 @@
 	border-radius: 50%;
 }
 .sidebar-list {
+	/* Row geometry shared with the group headers (ProjectGroups). The indent is
+	   where a row's branch text starts, measured from the sidebar's left edge: list
+	   padding + group toggle padding + caret (1em) + toggle gap, i.e. the x of the
+	   project-name text in the header above, so branch and project names align.
+	   The edge is how far a row's corner slot sits from the right edge. */
+	--sidebar-row-indent: calc(var(--space-3) * 2 + var(--fs-sm) + var(--space-2));
+	--sidebar-row-edge: calc(var(--space-3) * 2);
+	/* Right-edge rail of a ready row (and the matching mark in a collapsed
+	   group's summary): thin, rounded, a quiet green. No glow. */
+	--ready-rail-width: 2px;
+	--ready-rail-color: color-mix(in srgb, var(--success) 55%, transparent);
+	/* Row controls share one column on the row's right edge. --row-control-size
+	   is the column width; each control's hit area is --row-control-hit, centered
+	   on the column axis (it may spill a few pixels into the neighbours); glyphs
+	   are a fixed --row-control-glyph. */
+	--row-control-size: 1.2rem;
+	--row-control-hit: 24px;
+	--row-control-glyph: calc(0.75 * 1.2rem);
 	flex: 1;
 	overflow-y: auto;
 	padding: var(--space-3);
@@ -311,15 +326,13 @@
 	align-items: flex-start;
 	flex-wrap: wrap;
 	gap: var(--space-4);
-	/* 6px all around: the status dot lands on the 12px scan line shared with
-	   project carets and the PROJECTS header text. */
+	/* Vertical padding only sizes the row around its content; .daemon-row sets
+	   the horizontal padding from the shared sidebar geometry. */
 	padding: var(--space-3);
 	border-radius: var(--r-md);
-	border: 1px solid transparent;
 	cursor: pointer;
 	transition:
 		background-color var(--dur-fast) var(--ease-out),
-		border-color var(--dur-fast) var(--ease-out),
 		color var(--dur-fast) var(--ease-out),
 		opacity var(--dur-fast) var(--ease-out);
 }
@@ -333,7 +346,6 @@
 }
 .sidebar-row.active {
 	background: var(--accent-dim);
-	border-color: var(--accent-border);
 }
 .sidebar-row-main {
 	flex: 1;
@@ -343,6 +355,7 @@
 	gap: var(--space-1);
 }
 .sidebar-row-top {
+	position: relative;
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -376,20 +389,43 @@
 /* --- Session roster sidebar (fleet edge, Phase 3) --- */
 
 .daemon-row {
+	/* The kind icon sits in a fixed-width box (the caret's 1em) so every row's
+	   icon and branch text start on the same x; the session title, chips and
+	   diffstat indent by the box plus its gap to sit under the branch text. */
+	--row-kind-box: var(--fs-sm);
+	--row-text-inset: calc(var(--row-kind-box) + var(--space-2));
+	/* What the row paints over: the fade behind the revealed controls matches it. */
+	--row-bg: var(--bg-deep);
 	/* sidebar-row defaults to a pointer cursor; the whole row is a resume
-	   target and the session-title line a separate dropdown trigger. */
+	   target and the chevron a separate dropdown trigger. */
 	cursor: default;
-	/* Containing block for the row-anchored session dropdown (editorial: no
-	   other absolutely-positioned child depends on it). */
+	/* Containing block for the row-anchored session dropdown and the ready rail. */
 	position: relative;
-	/* Full sidebar width: bleed over the list's side padding with square
-	   ends and no side borders. The padding absorbs the bleed and the dropped
-	   1px borders, so row content keeps its place on the shared scan lines. */
+	/* Full sidebar width: bleed over the list's side padding with square ends.
+	   The left padding puts the branch text at --sidebar-row-indent. */
 	margin-inline: calc(-1 * var(--space-3));
-	border-left: none;
-	border-right: none;
 	border-radius: 0;
-	padding-inline: calc(var(--space-3) + var(--space-3) + 1px);
+	padding-inline: calc(var(--sidebar-row-indent) - var(--row-text-inset)) var(--sidebar-row-edge);
+}
+.daemon-row:hover {
+	--row-bg: var(--hover);
+}
+.daemon-row.active {
+	--row-bg: var(--accent-dim);
+}
+/* Ready rail: a thin rounded bar on the row's right edge marks every ready
+   row, whatever it is doing. Inset vertically so consecutive ready rows stay
+   separate bars; the corner signal tells activity, never readiness. */
+.daemon-row--ready::after {
+	content: "";
+	position: absolute;
+	top: var(--space-2);
+	bottom: var(--space-2);
+	right: var(--space-1);
+	width: var(--ready-rail-width);
+	border-radius: var(--r-pill);
+	background: var(--ready-rail-color);
+	pointer-events: none;
 }
 .daemon-row.clickable {
 	cursor: pointer;
@@ -449,10 +485,11 @@
 		transform: none;
 	}
 }
-/* Status dot: ready = green glow, asleep = flat grey (hidden on roster rows),
-   reconnecting = amber, error = red, transitional
-   (spawning/connecting/session/resolving) = pulsing accent. Unambiguous at a
-   glance: exactly one visual language per state. */
+/* Status dot (RowSignal and the daemon details title): ready = green glow
+   (details only; a roster row marks ready with its rail), asleep = flat grey
+   (details only), reconnecting = amber, error = red. Roster signals: a dot for
+   blocked/unreviewed/unread/reconnecting/error, a comet ring (below) for
+   working and for a process on its way up. */
 .daemon-status-dot {
 	width: 8px;
 	height: 8px;
@@ -461,20 +498,10 @@
 	margin-top: var(--space-2);
 	background: var(--muted-2);
 }
-/* Row controls share one column on the row's right edge: the corner slot on
-   the top line (every row), then the session toggle and "+" on switcher rows.
-   --row-control-size is the column width; each control's hit area is
-   --row-control-hit, centered on the column axis (it may spill a few pixels
-   into the gap before the title); glyphs are a fixed --row-control-glyph. */
-.daemon-row {
-	--row-control-size: 1.2rem;
-	--row-control-hit: 24px;
-	--row-control-glyph: calc(0.75 * 1.2rem);
-}
-/* Corner slot: the status dot and the "⋯" row-actions trigger stack in one
-   grid cell. At rest the dot shows; row hover/focus or an open menu/dropdown
+/* Corner slot: the state signal and the "⋯" row-actions trigger stack in one
+   grid cell. At rest the signal shows; row hover/focus or an open menu/dropdown
    crossfades it to the trigger (rules after .sidebar-menu-btn below). Touch
-   keeps both, the dot as a badge on the trigger (trailing touch block). */
+   keeps both, the signal as a badge on the trigger (trailing touch block). */
 .daemon-row-corner {
 	flex: none;
 	display: grid;
@@ -482,7 +509,7 @@
 	grid-template: minmax(0, 1fr) / minmax(0, 1fr);
 	place-items: center;
 	width: var(--row-control-size);
-	height: var(--row-control-hit);
+	height: var(--row-control-size);
 	margin-left: auto;
 }
 .daemon-row-corner > * {
@@ -515,16 +542,6 @@
 }
 .daemon-row-status .daemon-status-dot {
 	margin-top: 0;
-}
-/* An asleep roster row shows no dot. */
-.daemon-row-status .daemon-status-dot[data-status="asleep"] {
-	visibility: hidden;
-}
-/* House glyph before a root row's branch title: muted, optically centered
-   against the 1em icon box. */
-.daemon-root-icon {
-	color: var(--muted-2);
-	margin-right: var(--space-1);
 }
 .daemon-status-dot[data-status="ready"] {
 	background: var(--success);
@@ -570,15 +587,21 @@
 	background: var(--warning);
 	box-shadow: none;
 }
-/* Busy: a green comet ring, a conic tail masked to a ring, spinning. */
+/* Busy: a comet ring, a conic tail masked to a ring, spinning. Green while the
+   session works; accent while its process is starting (transitional status),
+   so the two read apart. */
 .daemon-status-dot[data-activity="in_progress"] {
+	--spinner-color: var(--success);
 	width: 11px;
 	height: 11px;
-	background: conic-gradient(from 0deg, transparent 0 15%, var(--success));
+	background: conic-gradient(from 0deg, transparent 0 15%, var(--spinner-color));
 	mask: radial-gradient(farthest-side, transparent calc(100% - 2.2px), #000 calc(100% - 2px));
 	box-shadow: none;
-	filter: drop-shadow(0 0 2px var(--success));
+	filter: drop-shadow(0 0 2px var(--spinner-color));
 	animation: daemon-activity-spin var(--dur-spin) linear infinite;
+}
+.daemon-status-dot[data-activity="in_progress"]:not([data-status="ready"]) {
+	--spinner-color: var(--accent);
 }
 @keyframes daemon-activity-spin {
 	to {
@@ -596,15 +619,14 @@
 		transform: scale(1);
 	}
 }
-/* Reduced motion: the loops hold still. The comet becomes a full green ring,
-   the transitional pulse a steady dot. */
+/* Reduced motion: the loops hold still. The comet becomes a full ring. */
 @media (prefers-reduced-motion: reduce) {
 	.daemon-status-dot[data-status] {
 		animation: none;
 	}
 	.daemon-status-dot[data-activity="in_progress"] {
 		animation: none;
-		background: var(--success);
+		background: var(--spinner-color);
 	}
 }
 .daemon-chips {
@@ -636,12 +658,6 @@
 }
 .daemon-chip--profile {
 	color: var(--muted-2);
-}
-/* Collapsed-project roll-up beside the project name (FLEET-13). */
-.project-rollup {
-	font-size: var(--fs-micro);
-	color: var(--muted-2);
-	white-space: nowrap;
 }
 /* P8.1: provider lifecycle progress on clone rows (preparation → runtime →
    callback; a failed stage shows its error + Retry in place of the label). */
@@ -708,8 +724,8 @@
 .workspace-profile-select {
 	margin-bottom: var(--space-3);
 }
-/* --- Roster group headers: per-repo collapsible containers under the static
-   REPOS header (caret rotates when collapsed), plus rows nested under them --- */
+/* --- Roster group headers: per-project collapsible containers (caret rotates
+   when collapsed), plus rows nested under them --- */
 
 .sidebar-group {
 	background: none;
@@ -751,37 +767,6 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	font-size: var(--fs-micro);
 	color: var(--muted-3);
 }
-.sidebar-group--repo {
-	/* Same left edge as project groups (the PROJECTS header's text sits one
-	   notch further left at the same 12px scan line). */
-	padding-left: var(--space-3);
-}
-.picker-group-name.sidebar-subgroup {
-	/* Static REPOS header sits at the sidebar's edge (no caret, no indent);
-	   mono uppercase inherits the sidebar font. */
-	font-family: var(--font-mono);
-	padding-left: 0;
-}
-/* PROJECTS header carries the add-project + close actions right-aligned.
-   Left padding lands its text on the same 12px scan line as the project
-   carets and row status dots below. Selector doubled: the base
-   .picker-group-name.sidebar-subgroup rule would win at equal specificity. */
-.picker-group-name.sidebar-projects-head {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	padding-left: var(--space-3);
-}
-.sidebar-projects-actions {
-	display: flex;
-	align-items: center;
-	gap: var(--space-1);
-}
-.daemon-row--nested {
-	/* One notch deeper than main rows: the dot sits 6px right of the 12px
-	   scan line, marking the row as a child of its project. */
-	padding-left: calc(var(--space-3) + var(--space-3) + var(--space-3) + 1px);
-}
 .daemon-cwd {
 	font-size: var(--fs-micro);
 	color: var(--muted-2);
@@ -796,16 +781,14 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	margin-left: auto;
 	flex: none;
 }
-/* Menu trigger: hidden until the row/group header is hovered/focused (or
-   the menu is open) on fine pointers; always visible on touch via the
-   pointer:coarse block near the top of this file. The G4 start-session
-   header action (ProjectGroups project group) reveals the same way. */
+/* Menu trigger: hidden until the row is hovered/focused (or the menu is open)
+   on fine pointers; always visible on touch via the pointer:coarse block in
+   base.css. A project header reveals its "⋯" and "+" with its own hover
+   rule (.project-group-tail below). */
 .sidebar-menu-btn {
 	opacity: 0;
 	pointer-events: none;
 }
-.project-group:hover .sidebar-menu-btn,
-.project-group:focus-within .sidebar-menu-btn,
 .sidebar-menu-btn[aria-expanded="true"] {
 	opacity: 1;
 	pointer-events: auto;
@@ -813,7 +796,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 /* Roster rows: the corner trigger, session toggle and "+" fade in on row
    hover, keyboard focus (focus-visible on the row or inside it; a mouse
    click focuses the row but must not pin the controls once the pointer
-   leaves), or while the row's menu or dropdown is open, and the status dot
+   leaves), or while the row's menu or dropdown is open, and the state signal
    fades out under the trigger. Touch overrides (trailing touch block).
    Scoped under .daemon-row to outrank the global button:not(:disabled)
    transition. */
@@ -829,6 +812,10 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	:is(.sidebar-menu-btn, .daemon-session-toggle, .daemon-session-new) {
 	opacity: 1;
 	pointer-events: auto;
+}
+.daemon-row:is(:hover, :focus-visible, :has(:focus-visible), :has([aria-expanded="true"]))
+	.daemon-row-actions::before {
+	opacity: 1;
 }
 .daemon-row:is(:hover, :focus-visible, :has(:focus-visible), :has([aria-expanded="true"]))
 	.daemon-row-status {
@@ -927,9 +914,9 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .daemon-icon-btn:hover {
 	color: var(--text);
 }
-/* Bottom meta row: branch + diffstat cluster (changed-file count, numstat
-   +/- line counts) in compact mono. Row actions live in the "⋯" menu on
-   the top row now, so nothing is right-aligned here. */
+/* Diffstat line (changed-file count, numstat +/- line counts) in compact mono,
+   under the branch text; rendered only when git stats exist. Row actions live
+   in the "⋯" menu on the top line, so nothing is right-aligned here. */
 .daemon-git {
 	display: flex;
 	align-items: center;
@@ -938,6 +925,13 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	font-size: var(--fs-micro);
 	color: var(--muted-2);
 	min-width: 0;
+}
+/* Everything under the top line starts at the branch text, past the kind icon. */
+.daemon-session-title,
+.daemon-chips,
+.daemon-stage,
+.daemon-git {
+	padding-left: var(--row-text-inset);
 }
 .daemon-git-branch {
 	min-width: 0;
@@ -963,61 +957,81 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .daemon-git-dirty[data-kind="deleted"] {
 	color: var(--error);
 }
+/* Top line: kind icon + branch (+ lock) on the left, the session chevron and
+   "+" and the corner slot on the right. Asleep rows dim the title. */
 .daemon-row-title {
 	display: inline-flex;
 	align-items: center;
 	flex: 1;
 	min-width: 0;
 }
-/* Last-session title under the row's top line (probed by the fleet edge
-   from the session file's JSONL title slot): a muted micro line mirroring
-   the cwd meta line, wrapping to at most two lines with the full string on
+/* Asleep rows dim the title by opacity: a muted color is nearly the text
+   color in some light palettes, so it would not read as dimmed. */
+.daemon-row--asleep .daemon-row-title {
+	opacity: 0.65;
+}
+/* The icon sits in a fixed-width box so every row's icon and branch text line up. */
+.daemon-kind-icon {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	width: var(--row-kind-box);
+	margin-right: var(--space-2);
+}
+.daemon-row-branch {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Last-session title under the top line, aligned with the branch text (probed
+   by the fleet edge from the session file's JSONL title slot): prose in the
+   sans face, muted. One line by default; with the "two-line session titles"
+   setting it takes up to two but only the lines it needs. The full string is on
    the tooltip. */
 .daemon-session-title {
+	font-family: var(--font-sans);
 	font-size: var(--fs-micro);
 	line-height: 1.5;
-	color: var(--muted-2);
+	color: var(--muted);
 	display: -webkit-box;
 	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 2;
+	-webkit-line-clamp: 1;
 	overflow: hidden;
 	overflow-wrap: anywhere;
 }
-/* Ready/asleep rows: the session-title line is two text rows tall and part
-   of the card (click resumes). The row reserves a right gutter for the
-   control column, so the title keeps the full content width; the top line
-   extends into the gutter to put the corner slot on the column. The session
-   toggle (chevron) sits beside the title line and the "+" (new session) under
-   it, both bare glyphs; the switcher wrapper is tall enough to hold both. */
-.daemon-row--switcher {
-	/* Two title rows: fs-micro at line-height 1.5. */
-	--session-title-height: calc(3 * var(--fs-micro));
-	--session-switcher-gutter: calc(var(--row-control-size) + var(--space-3));
-	/* Toggle-to-"+" spacing: never less than one hit area, so they never overlap. */
-	--session-control-pitch: max(var(--row-control-hit), calc(var(--row-control-size) + var(--space-2)));
+.daemon-session-title--two-line {
+	-webkit-line-clamp: 2;
 }
-.daemon-row--switcher .sidebar-row-main {
-	padding-right: var(--session-switcher-gutter);
-}
-.daemon-row--switcher .sidebar-row-top {
-	margin-right: calc(-1 * var(--session-switcher-gutter));
-}
-.daemon-session-switcher {
-	position: relative;
+/* Chevron and "+" (clickable rows) overlay the right end of the top line,
+   just left of the corner slot, so the branch keeps the full width at rest. A
+   fade behind them (the row's own background) keeps the text they cover from
+   showing through; both appear with the "⋯" on row hover/focus. The container
+   offset puts the "+" one hit area left of the corner's hit area. */
+.daemon-row-actions {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	right: calc((var(--row-control-size) + var(--row-control-hit)) / 2);
 	display: flex;
-	flex-direction: column;
-	min-height: calc(var(--session-control-pitch) + var(--row-control-size));
+	align-items: center;
+	pointer-events: none;
 }
-.daemon-session-title--switcher {
-	height: var(--session-title-height);
+.daemon-row-actions::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	right: 0;
+	left: calc(-1 * var(--space-5));
+	background: linear-gradient(to right, transparent, var(--row-bg) var(--space-5));
+	opacity: 0;
+	transition: opacity var(--dur-fast) var(--ease-out);
 }
 .daemon-session-toggle,
 .daemon-session-new {
-	position: absolute;
-	top: calc((var(--row-control-size) - var(--row-control-hit)) / 2);
-	right: calc(
-		var(--row-control-size) / 2 - var(--session-switcher-gutter) - var(--row-control-hit) / 2
-	);
+	position: relative;
+	flex: none;
 	width: var(--row-control-hit);
 	height: var(--row-control-hit);
 	display: flex;
@@ -1031,9 +1045,6 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	cursor: pointer;
 	opacity: 0;
 	pointer-events: none;
-}
-.daemon-session-new {
-	top: calc(var(--session-control-pitch) + (var(--row-control-size) - var(--row-control-hit)) / 2);
 }
 .daemon-session-chevron,
 .daemon-session-new-icon {
@@ -1053,14 +1064,23 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .daemon-session-new:focus-visible {
 	color: var(--text);
 }
-/* Touch and phones: no hover, so the row controls always show at 44px, and
-   the status dot rides on the corner trigger as a badge at its glyph's
-   top-right (the comet a little larger to stay legible). Asleep rows keep no
-   badge. Selectors outrank the hover crossfade above. */
+/* Touch and phones: no hover, so the row controls always show at 44px (the
+   --row-control-* override covers the group headers too), the chevron and "+"
+   take their own room on the top line instead of overlaying it, and the state
+   signal rides on the corner trigger as a badge at its glyph's top-right (the
+   comet a little larger to stay legible). Selectors outrank the hover
+   crossfade above. */
 @media (pointer: coarse), (max-width: 767px) {
-	.daemon-row {
+	.sidebar-list {
 		--row-control-size: 44px;
 		--row-control-hit: 44px;
+	}
+	.daemon-row-actions {
+		position: static;
+		flex: none;
+	}
+	.daemon-row-actions::before {
+		display: none;
 	}
 	.daemon-row .daemon-row-corner .daemon-row-status {
 		opacity: 1;
@@ -1647,11 +1667,19 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 }
 /* --- Sidebar: project-first groups (FleetSidebar.tsx) --- */
 /* Left padding lives entirely on the toggle so the caret lands on the 12px
-   scan line (list padding 6 + toggle padding 6). */
+   scan line (list padding 6 + toggle padding 6). Right padding puts the tail's
+   corner column where a row's corner sits (rows bleed over the list padding,
+   the header does not). The gap above a header is 4x the --space-1 gap between
+   rows, so groups read as separate; the first group needs none. */
 .project-group {
 	display: flex;
 	align-items: center;
 	padding-left: 0;
+	padding-right: calc(var(--sidebar-row-edge) - var(--space-3));
+	margin-top: var(--space-4);
+}
+.project-group:first-child {
+	margin-top: 0;
 }
 .project-group-toggle {
 	flex: 1;
@@ -1673,9 +1701,6 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 .project-group-toggle:hover {
 	background: var(--hover);
 }
-.project-new-btn {
-	margin-left: var(--space-1);
-}
 .project-new-btn[aria-expanded="true"] {
 	background: var(--btn);
 	color: var(--text);
@@ -1683,6 +1708,138 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 .project-new-btn:disabled {
 	opacity: 0.4;
 	cursor: not-allowed;
+}
+/* Header tail, laid out like a row's right edge: a slot for the collapsed
+   summary / "+" and the corner column (.daemon-row-corner, shared with rows)
+   for the urgent signal / "⋯". */
+.project-group-tail {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+/* One grid cell: the summary (at rest) and the "+" (on header hover) stack, so
+   the slot is as wide as the wider of the two and swapping them never shifts
+   the header. */
+.project-group-slot {
+	display: grid;
+	align-items: center;
+	justify-items: end;
+}
+.project-group-slot > * {
+	grid-area: 1 / 1;
+}
+.project-group-summary {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	text-transform: none;
+	letter-spacing: normal;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+/* The ready rail's look (--ready-rail-*, set on .sidebar-list) as a small mark. */
+.project-group-rail {
+	flex: none;
+	width: var(--ready-rail-width);
+	height: 1em;
+	border-radius: var(--ready-rail-width);
+	background: var(--ready-rail-color);
+}
+/* Header hover/focus (or an open popover/menu) swaps summary and signal for
+   "+" and "⋯". Open state is read from the two triggers, not the group toggle,
+   whose aria-expanded is the collapse state. Always shown on touch (below). */
+.project-group .project-new-btn {
+	opacity: 0;
+	pointer-events: none;
+}
+.project-group .project-group-summary,
+.project-group .daemon-row-status,
+.project-group .project-new-btn,
+.project-group .sidebar-menu-btn {
+	transition: opacity var(--dur-fast) var(--ease-out);
+}
+.project-group:is(
+		:hover,
+		:has(:focus-visible),
+		:has(.project-new-btn[aria-expanded="true"], .sidebar-menu-btn[aria-expanded="true"])
+	)
+	:is(.project-new-btn, .sidebar-menu-btn) {
+	opacity: 1;
+	pointer-events: auto;
+}
+.project-group:is(
+		:hover,
+		:has(:focus-visible),
+		:has(.project-new-btn[aria-expanded="true"], .sidebar-menu-btn[aria-expanded="true"])
+	)
+	.project-new-btn:disabled {
+	opacity: 0.4;
+}
+.project-group:is(
+		:hover,
+		:has(:focus-visible),
+		:has(.project-new-btn[aria-expanded="true"], .sidebar-menu-btn[aria-expanded="true"])
+	)
+	:is(.project-group-summary, .daemon-row-status) {
+	opacity: 0;
+}
+/* Touch and phones: no hover, so "+" and "⋯" always show (base.css shows the
+   "⋯"), the signal rides on the "⋯" as a badge (the rows' rule), and the
+   summary sits beside the "+" instead of under it. */
+@media (pointer: coarse), (max-width: 767px) {
+	.project-group .project-new-btn,
+	.project-group .project-new-btn:disabled {
+		pointer-events: auto;
+	}
+	.project-group .project-new-btn {
+		opacity: 1;
+	}
+	.project-group .project-new-btn:disabled {
+		opacity: 0.4;
+	}
+	/* Doubled so the touch rules outrank the hover swap (a tap leaves :hover stuck). */
+	.project-group.project-group .daemon-row-corner .daemon-row-status {
+		opacity: 1;
+		z-index: 1;
+	}
+	.project-group.project-group.project-group .project-group-summary {
+		opacity: 1;
+	}
+	.project-group-slot {
+		grid-auto-flow: column;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.project-group-slot > * {
+		grid-area: auto;
+	}
+	.sidebar .sidebar-add-project {
+		min-height: 44px;
+	}
+}
+/* "Add project": a text row closing the project list; the plus sits on the
+   caret's scan line and the label on the project names'. */
+.sidebar-add-project {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	margin-top: var(--space-4);
+	padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+	background: none;
+	border: none;
+	border-radius: var(--r-md);
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-sm);
+	text-align: left;
+	cursor: pointer;
+}
+.sidebar-add-project:hover {
+	background: var(--hover);
+	color: var(--text);
 }
 .project-missing-chip {
 	flex: none;

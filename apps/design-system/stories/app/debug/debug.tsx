@@ -91,11 +91,11 @@ export default [
 			export: "DebugButton",
 		},
 		variants: [
-			{ name: "Closed", seed: { modal: null }, render: () => <DebugButton /> },
 			{
-				name: "Sheet open",
-				description: "Active while the debug sheet is the open modal.",
-				seed: { modal: "debug" },
+				name: "Closed",
+				description:
+					"The control in the debug feature's row in Settings > Features (it no longer sits in the sidebar header).",
+				seed: { modal: null },
 				render: () => <DebugButton />,
 			},
 		],

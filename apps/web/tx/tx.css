@@ -175,16 +175,14 @@
      leaving room for the capped stored section beneath. */
   flex: 1 1 0;
 }
-/* Title row mirrors the roster's PROJECTS header (mono uppercase label at
-   the same 12px scan line, no separator) so the two sidebars share one
-   chrome geometry. */
+/* Title row: mono uppercase label at the roster's 12px scan line, no
+   separator, so the two sidebars share one chrome geometry. */
 .tx-sidebar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  /* Same box as the roster PROJECTS header: the roster's row sits inside
-     .sidebar-list's 6px padding and is 32px tall (its + button is 24px);
-     margin reproduces the list inset, min-height the row height. */
+  /* 6px inset like the roster list's padding; min-height is a 32px row
+     (the title plus its 24px actions). */
   margin: var(--space-3) var(--space-3) 0;
   min-height: 32px;
   box-sizing: border-box;

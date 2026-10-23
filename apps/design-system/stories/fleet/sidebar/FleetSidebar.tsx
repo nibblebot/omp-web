@@ -1,9 +1,10 @@
 import type { DaemonEntry } from "#lib/wire/protocol";
 import type { JSX } from "solid-js";
 import { FleetSidebar } from "../../../../web/components/fleet/sidebar/FleetSidebar";
+import { GROUPS_KEY } from "../../../../web/components/fleet/sidebar/ProjectGroups";
 import { applyRosterFrame, sendDeleteWorktree, setState, state } from "../../../../web/state";
 import { toggleSidebar } from "../../../../web/store/roster";
-import { rosterDaemon } from "../../../fixtures/roster";
+import { rosterDaemon, rosterSidebarGroups } from "../../../fixtures/roster";
 import { seedRosterFleet } from "../../../fixtures/roster-seed";
 import { defineStory } from "../../../registry";
 
@@ -67,6 +68,19 @@ export default defineStory({
 	variants: [
 		{
 			name: "Projects and fleet",
+			description:
+				"No PROJECTS header: the groups start at the top and the list ends with the Add project row.",
+			render: () => <Frame />,
+		},
+		{
+			name: "Collapsed groups",
+			description:
+				"Each collapsed project shows its live/total summary (or `N asleep`) and the most urgent row signal in the corner column.",
+			seed: () =>
+				localStorage.setItem(
+					GROUPS_KEY,
+					JSON.stringify(rosterSidebarGroups.map((g) => `project:${g.project.projectId}`)),
+				),
 			render: () => <Frame />,
 		},
 		{
@@ -76,6 +90,7 @@ export default defineStory({
 		},
 		{
 			name: "First run, no projects",
+			description: "The empty hint with the Add project row right under it.",
 			seed: () => seedRosterFleet({ registeredProjects: [], daemonRoster: [], daemons: new Map() }),
 			render: () => <Frame />,
 		},

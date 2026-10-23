@@ -278,6 +278,9 @@ const NOTIFY_KEY = "omp.notifyEnabled";
 /** localStorage key for the Phase 12 roster-sidebar usage widget toggle. */
 const USAGE_SIDEBAR_KEY = "omp.sidebarUsage";
 
+/** localStorage key for the roster-sidebar session-title line count ("1" or "2"). */
+export const SIDEBAR_TITLE_LINES_KEY = "omp.sidebarSessionTitleLines";
+
 /** localStorage key for the persisted Chat/Analysis top-level view. */
 const VIEW_KEY = "omp.view";
 
@@ -581,6 +584,12 @@ export const [state, setState] = createStore({
 		typeof localStorage !== "undefined"
 			? localStorage.getItem(USAGE_SIDEBAR_KEY) !== "false"
 			: true,
+	// Roster rows clamp the last-session title to this many lines (persisted;
+	// anything but a saved "2" reads as the one-line default).
+	sidebarSessionTitleLines: (typeof localStorage !== "undefined" &&
+	localStorage.getItem(SIDEBAR_TITLE_LINES_KEY) === "2"
+		? 2
+		: 1) as 1 | 2,
 	// Phase 12: GET /ctl/usage mirror; null means never fetched, [] means
 	// fetched but no reporting. Single-flight via usageLoading (refreshUsageReports).
 	usageReports: null as UsageReport[] | null,
@@ -1891,6 +1900,7 @@ export {
 	requestDaemonSessions,
 	resumeDaemonSession,
 	setSidebarVisible,
+	setSidebarSessionTitleLines,
 	closeDrawers,
 	startDaemonNewSession,
 	switchToDaemon,

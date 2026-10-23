@@ -1,8 +1,9 @@
 import { createMemo, createResource, For, Show } from "solid-js";
+import { Dynamic } from "solid-js/web";
 import { FEATURES } from "../../features/manifest";
 import { activeFeatureIds, featurePreferences } from "../../features/preferences";
 import { openModelSettings } from "../../store/models";
-import { setFeatureEnabled } from "../../features/registry";
+import { featureSettingsAction, setFeatureEnabled } from "../../features/registry";
 import {
 	featureOwnSize,
 	featureSizeTotals,
@@ -82,6 +83,13 @@ export function FeaturesSettings(props: { query?: string }) {
 												Open Model Settings
 											</button>
 										</p>
+									</Show>
+									<Show when={featureSettingsAction(f.id)}>
+										{(action) => (
+											<p>
+												<Dynamic component={action()} />
+											</p>
+										)}
 									</Show>
 									<p class="feature-meta">
 										{activeFeatureIds().has(f.id) ? "Loaded" : "Not loaded"}

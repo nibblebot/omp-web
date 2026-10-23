@@ -347,6 +347,17 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 	width: 380px;
 	max-width: 100%;
 }
+/* The docked sidebar's width and text, for rows and groups shown outside the
+ * real .sidebar (which turns into a fixed drawer below 1024px). */
+.ds-frame-sidebar {
+	width: var(--sidebar-w);
+	max-width: 100%;
+	background: var(--bg-deep);
+	border-right: 1px solid var(--border);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	line-height: 1.4;
+}
 /* Tool cards side by side (one card per status or category). */
 .ds-status-grid {
 	display: grid;

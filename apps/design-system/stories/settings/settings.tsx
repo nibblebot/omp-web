@@ -332,6 +332,12 @@ export default [
 				seed: { authStatus: "signedIn" },
 				render: () => <WebUiSettings />,
 			},
+			{
+				name: "Two-line session titles on",
+				description: "Roster rows may show two lines of the last session title.",
+				seed: { sidebarSessionTitleLines: 2 },
+				render: () => <WebUiSettings />,
+			},
 		],
 	}),
 ];

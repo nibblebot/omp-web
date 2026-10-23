@@ -264,24 +264,13 @@ export const CornerDownRightIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** Worktree marker on daemon rows, drawn with Lucide's git-branch. It replaces
- *  the hand-drawn 3-node glyph; sized/tinted by .daemon-worktree-icon in
- *  src/styles/fleet.css. */
+/** Checkout marker (main checkout and linked worktrees) on sidebar rows and
+ *  the empty-transcript workspace line, drawn with Lucide's git-branch. */
 export const WorktreeIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M15 6a9 9 0 0 0-9 9V3" />
 		<circle cx="18" cy="6" r="3" />
 		<circle cx="6" cy="18" r="3" />
-	</Svg>
-);
-
-/** Main-worktree marker on project-group root rows, drawn with Lucide's house.
- *  This is the checkout the project was registered from, and linked worktrees
- *  nest beneath it. Sized/tinted by .daemon-root-icon in src/styles/fleet.css. */
-export const RootIcon: Component<IconProps> = (props) => (
-	<Svg class={props.class}>
-		<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-		<path d="M9 22V12h6v10" />
 	</Svg>
 );
 

@@ -1,5 +1,6 @@
 import { batch } from "solid-js";
 import { unwrap } from "solid-js/store";
+import { GROUPS_KEY } from "../web/components/fleet/sidebar/ProjectGroups";
 import { FEATURE_IDS, FEATURES } from "../web/features/manifest";
 import { markFeaturesActive, setFeaturePreference } from "../web/features/preferences";
 import { cancelDangerConfirm } from "../web/prompt/danger-confirm";
@@ -22,10 +23,11 @@ const pristine = structuredClone(unwrap(state));
 /**
  * Restore every top-level store field to its import-time value, close the
  * self-mounting dialogs whose state lives in module signals outside the store
- * (danger confirm, download), and restore manifest-default feature
- * preferences (persisted in localStorage, read by core UI such as the view
- * switch) and the all-features-active page set that boot installs, so one
- * story's state never shows in the next.
+ * (danger confirm, download), restore manifest-default feature preferences
+ * (persisted in localStorage, read by core UI such as the view switch) and the
+ * all-features-active page set that boot installs, and expand every project
+ * group (collapse state is persisted in localStorage too), so one story's
+ * state never shows in the next.
  */
 export function resetStore(): void {
 	batch(() => {
@@ -35,6 +37,8 @@ export function resetStore(): void {
 		for (const feature of FEATURES) setFeaturePreference(feature.id, feature.defaultEnabled);
 		// The page boots with every feature active; a story that narrows the set must not leak it.
 		markFeaturesActive(FEATURE_IDS);
+		// Project groups collapse through localStorage: every story starts expanded.
+		localStorage.removeItem(GROUPS_KEY);
 	});
 }
 

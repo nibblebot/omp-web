@@ -21,7 +21,7 @@ export default [
 			{
 				name: "Sizes",
 				description:
-					"Sizes measured and the default features loaded: the summary lists them, and each row shows its own size. Toggles load or unload at once.",
+					"Sizes measured and the default features loaded: the summary lists them, and each row shows its own size. Toggles load or unload at once. The Debug Sheet row carries the Open Debug Sheet button.",
 				seed: () => {
 					featureSizesFixture.available = true;
 					resetFeatureSizes();
@@ -37,6 +37,17 @@ export default [
 					featureSizesFixture.available = false;
 					resetFeatureSizes();
 					markFeaturesActive(defaultEnabled);
+				},
+				render: () => <FeaturesSettings />,
+			},
+			{
+				name: "Debug off",
+				description:
+					"The debug feature is not loaded: its row has no Open Debug Sheet button. Loaded (the other variants), the button opens the sheet; it no longer lives in the sidebar header.",
+				seed: () => {
+					featureSizesFixture.available = true;
+					resetFeatureSizes();
+					markFeaturesActive(defaultEnabled.filter((id) => id !== "debug"));
 				},
 				render: () => <FeaturesSettings />,
 			},

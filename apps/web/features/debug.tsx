@@ -8,5 +8,5 @@ export default {
 	modals: {
 		debug: (props) => <FleetDebugSheet onClose={props.onClose} />,
 	},
-	sidebarHeader: { debugButton: DebugButton },
+	settingsAction: DebugButton,
 } satisfies FeatureModule;

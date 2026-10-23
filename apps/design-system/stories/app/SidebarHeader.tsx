@@ -9,7 +9,7 @@ export default defineStory({
 	variants: [
 		{
 			name: "Chat only",
-			description: "Analysis off (the default): wordmark, debug button, and the collapse toggle.",
+			description: "Analysis off (the default): wordmark and the collapse toggle; no debug button.",
 			seed: { view: "chat", modal: null },
 			render: () => (
 				<aside class="sidebar open">
@@ -19,7 +19,7 @@ export default defineStory({
 		},
 		{
 			name: "With Analysis",
-			description: "The Chat/Analysis switch sits between the wordmark and the debug button.",
+			description: "The Chat/Analysis switch sits between the wordmark and the collapse toggle.",
 			seed: () => setFeaturePreference("analysis", true),
 			render: () => (
 				<aside class="sidebar open">

@@ -10,7 +10,8 @@ import {
 	type Component,
 } from "solid-js";
 import type { DaemonEntry, RegisteredProject } from "#lib/wire/protocol";
-import { projectRollup } from "../../../fleet-ui/workspace-status";
+import { projectRollup, rollupSummary } from "../../../fleet-ui/workspace-status";
+import { rowActivity } from "../../../fleet-ui/row-activity";
 import { afterMotion } from "../../../motion/presence";
 import { setState, state } from "../../../state";
 import {
@@ -25,6 +26,7 @@ import { KebabMenu } from "../../ui/KebabMenu";
 import { ChevronDownIcon, PlusIcon, TrashIcon } from "../../ui/icons";
 import { NewWorkspacePopover } from "./NewWorkspacePopover";
 import { RowMotion } from "./RowMotion";
+import { RowSignal } from "./RowSignal";
 import {
 	finishRowExit,
 	initialRowSlots,
@@ -35,18 +37,24 @@ import { WorkspaceRow, menuOpenId, setMenuOpenId } from "./WorkspaceRow";
 
 // ---------------------------------------------------------------------------
 // Project-grouped roster rendering: one collapsible group per registered
-// project. The header carries the caret, the name, a "+" that opens the New
-// workspace popover (anchored to the header), and a "⋯" menu with Remove
-// project. Rows are one per checkout (main checkout, worktrees, clones).
-// Per-group collapse state persists in localStorage. Row and project menus
-// share the single module-level open-menu id (WorkspaceRow.tsx). Each group
-// renders its rows through RowMotion: a row new to the roster enters, a row
-// that left it stays rendered (inert) until its exit motion ends
-// (fleet-ui/row-presence.ts derives that list).
+// project, then an "Add project" row at the bottom of the list (opens the
+// Add project dialog). The header carries the caret and the name, then a
+// tail laid out like a row's right edge: while the group is collapsed, a
+// muted summary (rail mark + live/total, or "N asleep") with the most urgent
+// row signal in the corner column (fleet-ui/workspace-status.ts projectRollup,
+// RowSignal); on header hover the summary gives way to the "+" that opens
+// the New workspace popover (anchored to the "+") and the signal to the "⋯"
+// menu with Remove project. Rows are one per checkout (main checkout,
+// worktrees, clones). Per-group collapse state persists in localStorage. Row
+// and project menus share the single module-level open-menu id
+// (WorkspaceRow.tsx). Each group renders its rows through RowMotion: a row
+// new to the roster enters, a row that left it stays rendered (inert) until
+// its exit motion ends (fleet-ui/row-presence.ts derives that list).
 // ---------------------------------------------------------------------------
 
-/** localStorage key for the roster sidebar's collapsed group headers. */
-const GROUPS_KEY = "omp.sidebarGroupsCollapsed";
+/** localStorage key for the roster sidebar's collapsed group headers (the design
+ *  system clears it between stories). */
+export const GROUPS_KEY = "omp.sidebarGroupsCollapsed";
 
 /** Read the collapsed group-key set from localStorage; malformed or
  *  unavailable storage yields an empty set (all groups default open). */
@@ -80,7 +88,7 @@ const EmptyProjects: Component = () => {
 	});
 	return (
 		<div class="sidebar-empty">
-			<p>No projects yet. Press + to add one.</p>
+			<p>No projects yet. Add one below.</p>
 			<Show when={noProvider()}>
 				<p>No model provider signed in.</p>
 				<button
@@ -122,16 +130,20 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 		if (expanding) syncProjects();
 	};
 
-	/** One registered-project group: collapsible header (caret, name, a
-	 *  roll-up of its workspaces while collapsed, the "+" New workspace
-	 *  trigger, and the "⋯" menu carrying Remove project), then one row per
-	 *  checkout in daemonsByProject order. */
+	/** One registered-project group: collapsible header (caret, name, and a
+	 *  right tail: roll-up summary and signal while collapsed, the "+" New
+	 *  workspace trigger and the "⋯" menu carrying Remove project on header
+	 *  hover), then one row per checkout in daemonsByProject order. */
 	const ProjectGroup: Component<{ project: RegisteredProject; daemons: DaemonEntry[] }> = (
 		props,
 	) => {
 		const gkey = `project:${props.project.projectId}`;
 		const open = () => !collapsedGroups().has(gkey);
-		const rollup = () => projectRollup(props.daemons);
+		/** One entry per checkout: its status and, for a ready one, its activity
+		 *  (the same derivation the row uses, so group and rows always agree). */
+		const rollup = createMemo(() =>
+			projectRollup(props.daemons.map((d) => ({ status: d.status, activity: rowActivity(d) }))),
+		);
 		// Id-scoped read of the shared open-menu signal: the menu closes only
 		// when THIS project's key changes, so other groups' toggles don't
 		// re-render this header.
@@ -220,45 +232,72 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 								missing
 							</span>
 						</Show>
-						<Show when={!open() && rollup() !== ""}>
-							<span class="project-rollup">{rollup()}</span>
-						</Show>
 					</button>
-					<KebabMenu
-						label={`Project actions for ${props.project.name}`}
-						open={menuOpen()}
-						onOpenChange={(v) => setMenuOpenId(v ? gkey : null)}
-					>
-						<button
-							type="button"
-							role="menuitem"
-							class="sidebar-menu-item sidebar-menu-item--danger"
-							title="Deregisters the project (never touches disk)"
-							onClick={() => {
-								setMenuOpenId(null);
-								setState("removeProjectTarget", props.project.projectId);
-							}}
-						>
-							<TrashIcon />
-							Remove project…
-						</button>
-					</KebabMenu>
-					<button
-						ref={setPlusEl}
-						type="button"
-						class="sidebar-icon-btn project-new-btn"
-						aria-label={`New workspace in ${props.project.name}`}
-						aria-expanded={popoverOpen()}
-						title={
-							missing()
-								? "Project folder is missing; no workspace can start"
-								: `New workspace in ${props.project.name}`
-						}
-						disabled={missing()}
-						onClick={onPlus}
-					>
-						<PlusIcon />
-					</button>
+					{/* Right tail, laid out like a row's right edge. The first slot holds
+					    the collapsed summary at rest and the "+" on header hover (one grid
+					    cell: no layout shift); the corner column holds the most urgent row
+					    signal at rest and the "⋯" menu on hover, as a row's corner does. */}
+					<span class="project-group-tail">
+						<span class="project-group-slot">
+							<Show when={!open() && rollup().total > 0}>
+								<span
+									class="project-group-summary"
+									role="img"
+									title={rollup().breakdown}
+									aria-label={rollup().breakdown}
+								>
+									<Show when={rollup().live > 0}>
+										<span class="project-group-rail" />
+									</Show>
+									{rollupSummary(rollup())}
+								</span>
+							</Show>
+							<button
+								ref={setPlusEl}
+								type="button"
+								class="sidebar-icon-btn project-new-btn"
+								aria-label={`New workspace in ${props.project.name}`}
+								aria-expanded={popoverOpen()}
+								title={
+									missing()
+										? "Project folder is missing; no workspace can start"
+										: `New workspace in ${props.project.name}`
+								}
+								disabled={missing()}
+								onClick={onPlus}
+							>
+								<PlusIcon />
+							</button>
+						</span>
+						<span class="daemon-row-corner project-group-corner">
+							<Show when={!open() ? rollup().signal : null}>
+								{(signal) => (
+									<span class="daemon-row-status" aria-hidden="true">
+										<RowSignal status={signal().status} activity={signal().activity} />
+									</span>
+								)}
+							</Show>
+							<KebabMenu
+								label={`Project actions for ${props.project.name}`}
+								open={menuOpen()}
+								onOpenChange={(v) => setMenuOpenId(v ? gkey : null)}
+							>
+								<button
+									type="button"
+									role="menuitem"
+									class="sidebar-menu-item sidebar-menu-item--danger"
+									title="Deregisters the project (never touches disk)"
+									onClick={() => {
+										setMenuOpenId(null);
+										setState("removeProjectTarget", props.project.projectId);
+									}}
+								>
+									<TrashIcon />
+									Remove project…
+								</button>
+							</KebabMenu>
+						</span>
+					</span>
 				</div>
 				<Show when={popoverOpen() ? plusEl() : undefined}>
 					{(anchor) => (
@@ -285,12 +324,7 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 										setSlots((prev) => finishRowExit(prev, done));
 									}}
 								>
-									<WorkspaceRow
-										daemon={slot().item}
-										nested={slot().item.worktreeOf !== undefined}
-										inProjectGroup
-										projectMissing={missing()}
-									/>
+									<WorkspaceRow daemon={slot().item} inProjectGroup projectMissing={missing()} />
 								</RowMotion>
 							);
 						}}
@@ -315,6 +349,16 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 					</Show>
 				)}
 			</For>
+			{/* Bottom of the project list: the only add-project entry point. */}
+			<button
+				type="button"
+				class="sidebar-add-project"
+				data-roster-item
+				onClick={() => setState("modal", "add-project")}
+			>
+				<PlusIcon />
+				Add project
+			</button>
 		</>
 	);
 };
