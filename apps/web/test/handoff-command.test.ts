@@ -5,7 +5,7 @@
  * session still committed the handoff in place.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import type { ClientCommand, ServerFrame } from "#lib/wire/protocol";
+import type { ServerFrame } from "#lib/wire/protocol";
 import { LOCAL_COMMANDS } from "../prompt/commands";
 import { connect, setState, state } from "../state";
 import {
@@ -15,7 +15,7 @@ import {
 	settleCallResult,
 } from "../store/transport";
 import {
-	FakeEventSource,
+	FakeWebSocket,
 	flushMicrotasks,
 	installTransportStubs,
 	posted,
@@ -44,13 +44,18 @@ beforeEach(async () => {
 	});
 	spyOn(Date, "now").mockImplementation(() => START + elapsed);
 	// Bootstrap fetches parse a JSON body; the testkit stub has none, so give it one.
-	setBrowserGlobal("fetch", (async (_input: unknown, init?: RequestInit) => {
-		if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
-		return { ok: true, status: 202, json: async () => ({}) } as unknown as Response;
-	}) as unknown as typeof fetch);
+	setBrowserGlobal(
+		"fetch",
+		(async () =>
+			({
+				ok: true,
+				status: 200,
+				json: async () => ({}),
+			}) as unknown as Response) as unknown as typeof fetch,
+	);
 	connect();
-	FakeEventSource.instances.at(-1)!.onopen?.();
-	// connect()'s own bootstrap fetches reject against the stub; drop that noise.
+	FakeWebSocket.instances.at(-1)!.onopen?.();
+	// Let connect()'s bootstrap fetches settle before the tests read state.error.
 	await flushMicrotasks();
 	setState("error", "");
 });
