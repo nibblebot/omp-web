@@ -67,7 +67,7 @@ import {
 // One fleet-roster row: title, status indicator at the top-right corner (its
 // tooltip names the state), label chips, git diffstat, and a hover-revealed
 // "⋯" actions menu (details, Start/Restart, two-click stop/remove, delete
-// worktree). The session-title line with its chevron opens the session
+// worktree). The chevron box beside the session title opens the session
 // dropdown. Ready rows attach on click, asleep rows wake-then-attach.
 // Each row is one checkout: a kind icon (main checkout, worktree, clone) and the
 // branch (or detached sha) as the primary text. The group header names the
@@ -342,13 +342,13 @@ export const WorkspaceRow: Component<{
 			.finally(() => endActivating(id));
 	};
 
-	// Clicking the row CARD (anything but the session-title line) resumes the
-	// daemon's current session: a ready session process attaches; a stopped
-	// (asleep) one wakes then attaches (switchToDaemon covers both, and owns
-	// the transcript phase). The whole card is the resume target, leaving no
-	// dead space. The row highlights at once (switch-target.ts); the pane
-	// follows when the switch settles. The session-title line is the dropdown
-	// trigger (sessionTitleClick below); clicking an open dropdown's own entry
+	// Clicking the row CARD (anything but the chevron, "+" and kebab buttons,
+	// title line included) resumes the daemon's current session: a ready session
+	// process attaches; a stopped (asleep) one wakes then attaches (switchToDaemon
+	// covers both, and owns the transcript phase). The whole card is the resume
+	// target, leaving no dead space. The row highlights at once (switch-target.ts);
+	// the pane follows when the switch settles. The chevron box is the dropdown
+	// trigger (sessionsToggleClick below); clicking an open dropdown's own entry
 	// resumes that session.
 	const rowClick = () => {
 		if (activating() || deleting()) return;
@@ -356,7 +356,7 @@ export const WorkspaceRow: Component<{
 		// instead of when the attach lands.
 		closeDrawers();
 		// Clicking the card is a resume action, so close any open dropdown (the
-		// title click stops propagation, so this never fights the trigger).
+		// chevron click stops propagation, so this never fights the trigger).
 		setSessionsOpenId(null);
 		const daemon = d();
 		if (paused()) {
@@ -390,13 +390,13 @@ export const WorkspaceRow: Component<{
 		activateRow(id, kind === "start" ? () => spawnResume(id) : () => restartDaemonById(id));
 	};
 
-	/** Toggle this row's session dropdown (the session-title line only). */
-	const sessionTitleClick = () => {
+	/** Toggle this row's session dropdown (the chevron box only). */
+	const sessionsToggleClick = () => {
 		if (activating()) return;
 		const daemon = d();
 		if (daemon.status !== "ready" && daemon.status !== "asleep") return;
 		// The kebab menu closes so the two popups never stack; the card's
-		// resume handler is suppressed by the title's stopPropagation.
+		// resume handler is suppressed by the chevron's stopPropagation.
 		setMenuOpenId(null);
 		setSessionsOpenId(sessionsOpenId() === daemon.daemonId ? null : daemon.daemonId);
 	};
@@ -682,11 +682,12 @@ export const WorkspaceRow: Component<{
 					{/* Session switcher: the last session's title (probed by the
 					    fleet edge from the session file's JSONL title slot; "no
 					    session yet" for an untitled one) plus a square chevron box in
-					    the row's right gutter. Clicking it opens the last-10-sessions
-					    resume picker (ready/asleep rows only); other rows show the
-					    bare title. The title wraps to at most two lines and the
-					    tooltip exposes the full string. A "+" box under the chevron
-					    starts a fresh session in this worktree. */}
+					    the row's right gutter. The title is part of the card (click
+					    resumes); only the chevron opens the last-10-sessions resume
+					    picker (ready/asleep rows only); other rows show the bare
+					    title. The title wraps to at most two lines and the tooltip
+					    exposes the full string. A "+" box under the chevron starts a
+					    fresh session in this worktree. */}
 					<Show
 						when={clickable()}
 						fallback={
@@ -696,22 +697,26 @@ export const WorkspaceRow: Component<{
 						}
 					>
 						<div class="daemon-session-switcher">
+							<div
+								class="daemon-session-title daemon-session-title--switcher"
+								title={sessionTitleText()}
+							>
+								{sessionTitleText()}
+							</div>
 							<button
 								type="button"
-								class="daemon-session-title daemon-session-title--clickable"
+								class="daemon-session-chevron-box"
 								aria-expanded={sessionsOpen()}
-								title={`${sessionTitleText()}, switch session`}
+								aria-label="Switch session"
+								title="Switch session"
 								onClick={(e) => {
 									// The card's resume must NOT fire when opening the
-									// dropdown from the title line.
+									// dropdown.
 									e.stopPropagation();
-									sessionTitleClick();
+									sessionsToggleClick();
 								}}
 							>
-								<span class="daemon-session-title-text">{sessionTitleText()}</span>
-								<span class="daemon-session-chevron-box">
-									<ChevronDownIcon class="daemon-session-chevron" />
-								</span>
+								<ChevronDownIcon class="daemon-session-chevron" />
 							</button>
 							<button
 								type="button"

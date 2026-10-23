@@ -905,13 +905,13 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	overflow: hidden;
 	overflow-wrap: anywhere;
 }
-/* Ready/asleep rows: the session-title line is a session switcher button,
-   two text rows tall (44px on phones). Its 1.2rem square (18px at the
-   default 15px text size), lightly outlined chevron box sits at the top of a
-   right gutter the row reserves, so the title keeps the full content width;
-   the top line extends into the gutter to keep the status dot in the corner
-   above the box. A matching "+" box (new session) sits under the chevron;
-   the switcher wrapper is tall enough to hold both boxes. */
+/* Ready/asleep rows: the session-title line is two text rows tall and part
+   of the card (click resumes). The session switcher is a 1.2rem square (18px
+   at the default 15px text size), lightly outlined chevron button at the top
+   of a right gutter the row reserves, so the title keeps the full content
+   width; the top line extends into the gutter to keep the status dot in the
+   corner above the box. A matching "+" box (new session) sits under the
+   chevron; the switcher wrapper is tall enough to hold both boxes. */
 .daemon-row--switcher {
 	/* Two title rows: fs-micro at line-height 1.5. */
 	--session-title-height: calc(3 * var(--fs-micro));
@@ -930,62 +930,13 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	flex-direction: column;
 	min-height: calc(2 * var(--session-switcher-size) + var(--space-2));
 }
-.daemon-session-title--clickable {
-	position: relative;
-	display: flex;
-	align-items: flex-start;
-	align-self: stretch;
+.daemon-session-title--switcher {
 	height: var(--session-title-height);
-	overflow: visible;
-	background: none;
-	border: none;
-	border-radius: var(--r-sm);
-	padding: 0 0 0 var(--space-1);
-	margin-left: calc(-1 * var(--space-1));
-	text-align: left;
 }
-.daemon-session-title--clickable:hover,
-.daemon-session-title--clickable:focus-visible,
-.daemon-session-title--clickable[aria-expanded="true"] {
-	color: var(--text);
-}
-.daemon-session-title-text {
-	min-width: 0;
-	display: -webkit-box;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 2;
-	overflow: hidden;
-	overflow-wrap: anywhere;
-}
-.daemon-session-chevron-box {
-	position: absolute;
-	top: 0;
-	right: calc(-1 * var(--session-switcher-gutter));
-	width: var(--session-switcher-size);
-	height: var(--session-switcher-size);
-	box-sizing: border-box;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	border: 1px solid var(--border);
-	border-radius: var(--r-sm);
-}
-.daemon-session-title--clickable:hover .daemon-session-chevron-box,
-.daemon-session-title--clickable:focus-visible .daemon-session-chevron-box,
-.daemon-session-title--clickable[aria-expanded="true"] .daemon-session-chevron-box {
-	border-color: var(--border-strong);
-}
-.daemon-session-chevron {
-	width: 75%;
-	height: 75%;
-	transition: transform var(--dur-move-fast) var(--ease-out);
-}
-.daemon-session-title--clickable[aria-expanded="true"] .daemon-session-chevron {
-	transform: rotate(180deg);
-}
+.daemon-session-chevron-box,
 .daemon-session-new {
 	position: absolute;
-	top: calc(var(--session-switcher-size) + var(--space-2));
+	top: 0;
 	right: calc(-1 * var(--session-switcher-gutter));
 	width: var(--session-switcher-size);
 	height: var(--session-switcher-size);
@@ -1000,6 +951,20 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	color: var(--muted-2);
 	cursor: pointer;
 }
+.daemon-session-chevron {
+	width: 75%;
+	height: 75%;
+	transition: transform var(--dur-move-fast) var(--ease-out);
+}
+.daemon-session-chevron-box[aria-expanded="true"] .daemon-session-chevron {
+	transform: rotate(180deg);
+}
+.daemon-session-new {
+	top: calc(var(--session-switcher-size) + var(--space-2));
+}
+.daemon-session-chevron-box:hover,
+.daemon-session-chevron-box:focus-visible,
+.daemon-session-chevron-box[aria-expanded="true"],
 .daemon-session-new:hover,
 .daemon-session-new:focus-visible {
 	color: var(--text);
