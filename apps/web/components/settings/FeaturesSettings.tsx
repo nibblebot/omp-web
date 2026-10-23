@@ -12,11 +12,17 @@ import {
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingToggle } from "./controls/SettingToggle";
 
-/** Feature rows matching a settings-search query; the whole list for an empty query. */
+/** Manifest order, with every in-development feature after the ones that can be turned on. */
+const ORDERED_FEATURES = [
+	...FEATURES.filter((f) => f.status !== "in-development"),
+	...FEATURES.filter((f) => f.status === "in-development"),
+];
+
+/** Feature rows matching a settings-search query; the whole list for an empty query. In-development features come last. */
 export function searchFeatures(query: string) {
 	const q = query.trim().toLowerCase();
-	if (q === "") return FEATURES;
-	return FEATURES.filter((f) => `${f.label} ${f.description}`.toLowerCase().includes(q));
+	if (q === "") return ORDERED_FEATURES;
+	return ORDERED_FEATURES.filter((f) => `${f.label} ${f.description}`.toLowerCase().includes(q));
 }
 
 /**
