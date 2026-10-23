@@ -36,6 +36,7 @@ import { oversizedImageNotice } from "#lib/wire/image-limits";
 import type { CollabSession, Images } from "./collab-session";
 import { removeQueuedCommand } from "./command-queue";
 import type { DaemonBroker } from "./daemon-broker";
+import { repinModelRole, retakeModelRolePin } from "./model-role-pin";
 import type { SessionEntry } from "./session-entry";
 import {
 	dropHeldQueue,
@@ -264,6 +265,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		if (kind === "newSession") {
 			const ok = await session.newSession(arg ? { parentSession: arg } : undefined);
 			if (ok) {
+				retakeModelRolePin(session.settings);
 				clearSubagents(entry);
 				dropHeldQueue(entry);
 				await deps.broker.broadcastAvailableCommands(entry);
@@ -587,6 +589,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 				if (targetScope === "project") {
 					settings.setProjectModelRole("default", formatModelSelectorValue(selector, level));
 				}
+				repinModelRole(settings, role);
 				// setModel bakes `level` into the persisted role value but keeps the
 				// live effort; apply it like the TUI model hub's onAssign does.
 				if (level !== undefined) session.setThinkingLevel(level);
@@ -598,6 +601,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			} else {
 				settings.setModelRole(role, modelRoleValue);
 			}
+			repinModelRole(settings, role);
 			// Apply live when the changed role is the session's active role.
 			if (activeRoleOf(session) === role) {
 				const resolved = resolveRoleModelFull(
@@ -631,6 +635,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			} else {
 				settings.setModelRole(role, undefined);
 			}
+			repinModelRole(settings, role);
 			if (!wasActive) return { role };
 			// The cleared role re-resolves from the newly exposed persisted
 			// layer; apply the effective value live when one resolves.

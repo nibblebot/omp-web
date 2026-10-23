@@ -134,6 +134,7 @@ Fleet, session, and wire fixes from the infra audit (`kfg5`). Wire is OMP_PROTO 
 - Empty session: the character avatar and greeting are replaced by the project, branch and model, key hints, and up to five recent sessions of the workspace to resume (`8s68`).
 
 ### Fixes
+- Models: applying a model preset (`/modelpreset switch`, the preset segment under the composer) no longer changes the other running sessions. The preset is still saved to `config.yml`, but every session process watches that file, so sessions already running took its roles (smol, slow, ...) and showed it as the active preset. A session now keeps the model roles it started with, like its model: only its own preset switches and role edits change them. New sessions, including `/new` in a running session process, start from `config.yml` (`ereg`).
 - Composer: each session keeps its own unsent draft (text, images and file chips). Switching sessions in the sidebar or resuming another session file saved one shared draft and carried it into every session; the draft is now stored per session process and session id, and switching back restores it (`jx4y`). A draft left from before this change is not restored.
 - Startup: the "Reconnecting..." strip no longer shows while the page's first connection to the fleet is opening (it flashed on every load, and stayed up while `bun run dev` was still starting the fleet). It appears only when an open connection drops, or when the first connection has not opened after 10 s.
 - Settings: hovering a switch no longer greys out its track.

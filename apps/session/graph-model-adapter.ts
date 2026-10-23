@@ -2,15 +2,14 @@ import { createHash } from "node:crypto";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionEntry as SdkEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import {
-	applyModelPreset,
 	deleteModelPreset,
 	describeShadowedRoles,
-	findActiveModelPreset,
 	formatModelPresetSwitch,
 	getModelPresetNames,
 	modelPresetSavedMessage,
 	saveModelPreset,
 } from "@oh-my-pi/pi-coding-agent/config/model-presets";
+import { activeModelPreset, applyPinnedModelPreset } from "./model-role-pin";
 import type { SessionEntry } from "./session-entry";
 
 export interface GraphQuery {
@@ -255,7 +254,7 @@ export function createGraphModelHandlers(deps: {
 		getModelPresets(entry: SessionEntry) {
 			return {
 				names: getModelPresetNames(entry.session.settings),
-				active: findActiveModelPreset(entry.session.settings),
+				active: activeModelPreset(entry.session.settings),
 			};
 		},
 		saveModelPreset(entry: SessionEntry, name: string) {
@@ -263,7 +262,7 @@ export function createGraphModelHandlers(deps: {
 			return { message: modelPresetSavedMessage(entry.session.settings, name) };
 		},
 		async applyModelPreset(entry: SessionEntry, name: string) {
-			const result = await applyModelPreset(entry.session.settings, entry.session, name);
+			const result = await applyPinnedModelPreset(entry.session.settings, entry.session, name);
 			if (result.kind !== "switched") throw new Error(formatModelPresetSwitch(name, result));
 			return {
 				applied: name,

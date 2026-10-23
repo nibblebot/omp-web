@@ -5,6 +5,7 @@ import { getAutonomyAdapter } from "./autonomy-adapter";
 import { dropHeldQueue } from "./queue-hold";
 import { exitPlanMode } from "./review-plan";
 import type { SessionEntry } from "./session-entry";
+import { retakeModelRolePin } from "./model-role-pin";
 import { clearSubagents } from "./subagent-mirror";
 
 export interface LifecycleDeletionTarget {
@@ -220,7 +221,10 @@ export function createLifecycleMethods(deps: LifecycleDeps) {
 				const ok = await bracketTranscript(entry, true, () =>
 					entry.session.newSession(parent ? { parentSession: parent } : undefined),
 				);
-				if (ok) await changed(entry);
+				if (ok) {
+					retakeModelRolePin(entry.session.settings);
+					await changed(entry);
+				}
 				return { cancelled: !ok };
 			}),
 		freshSession: (entry: SessionEntry, _args: unknown[] = []) =>
@@ -247,6 +251,7 @@ export function createLifecycleMethods(deps: LifecycleDeps) {
 				// use drop:true: that path catches deletion failure and logs-and-continues.
 				const ok = await bracketTranscript(entry, true, () => entry.session.newSession());
 				if (!ok) return { cancelled: true, deleted: false, sessionId: target.sessionId };
+				retakeModelRolePin(entry.session.settings);
 				let localDeleted = false;
 				try {
 					const lease = tryAcquireSessionLease(target.sessionId);

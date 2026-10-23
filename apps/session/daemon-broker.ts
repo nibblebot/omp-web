@@ -4,10 +4,7 @@ import {
 	getKnownRoleIds,
 	getRoleInfo,
 } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import {
-	findActiveModelPreset,
-	getModelPresetNames,
-} from "@oh-my-pi/pi-coding-agent/config/model-presets";
+import { getModelPresetNames } from "@oh-my-pi/pi-coding-agent/config/model-presets";
 import { resolveModelRoleValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { cfgModelRoleStorage } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import {
@@ -29,6 +26,7 @@ import {
 import type { SessionConfig } from "./config";
 import { planReviewWaiting } from "./review-plan";
 import type { SessionEntry } from "./session-entry";
+import { activeModelPreset } from "./model-role-pin";
 import { broadcast, broadcastTo } from "./client-delivery";
 
 // ---------------------------------------------------------------------------
@@ -177,7 +175,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			thinkingSelectors: session.getAvailableEffortSelectors(),
 			modelPresets:
 				presetNames.length > 0
-					? { names: presetNames, active: findActiveModelPreset(session.settings) }
+					? { names: presetNames, active: activeModelPreset(session.settings) }
 					: undefined,
 			taskModel: taskModel || undefined,
 			isStreaming: session.isStreaming,
