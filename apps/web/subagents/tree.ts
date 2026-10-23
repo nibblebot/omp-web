@@ -64,6 +64,41 @@ export function filterActiveSubagentTree(
 	});
 }
 
+/**
+ * Remembered order for one task card: an active agent (running or pending) keeps the
+ * place it was first seen in, and settled agents (done, failed, aborted, parked) sit on
+ * top in the order they settled. The input's `startedAt` order is not stable (live
+ * frames, the roster and a mirror reload stamp it from different clocks), so agents that
+ * started close together would swap on updates. A revived agent returns to its first-seen
+ * place. Applies at every level and returns new arrays; one instance per card.
+ */
+export function createStableSubagentOrder(): (nodes: readonly SubagentNode[]) => SubagentNode[] {
+	const seen = new Map<string, number>();
+	const settled = new Map<string, number>();
+	let settleCount = 0;
+	const order = (nodes: readonly SubagentNode[]): SubagentNode[] => {
+		for (const node of nodes) {
+			if (!seen.has(node.id)) seen.set(node.id, seen.size);
+			if (isActiveSubagent(node)) settled.delete(node.id);
+		}
+		const newlySettled = nodes
+			.filter((node) => !isActiveSubagent(node) && !settled.has(node.id))
+			.sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0));
+		for (const node of newlySettled) settled.set(node.id, settleCount++);
+		return nodes
+			.map((node) => ({ ...node, children: order(node.children) }))
+			.sort((a, b) => {
+				const aSettled = settled.get(a.id);
+				const bSettled = settled.get(b.id);
+				if (aSettled !== undefined && bSettled !== undefined) return aSettled - bSettled;
+				if (aSettled !== undefined) return -1;
+				if (bSettled !== undefined) return 1;
+				return (seen.get(a.id) ?? 0) - (seen.get(b.id) ?? 0);
+			});
+	};
+	return order;
+}
+
 /** Totals across every agent in a forest; same definition as the store's `fanoutTotals`. */
 export function summarizeSubagentTree(nodes: readonly SubagentNode[]): SubagentTotals {
 	const all = flattenSubagentTree(nodes);

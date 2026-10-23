@@ -9,7 +9,7 @@ import { ChevronDownIcon, ChevronRightIcon } from "../ui/icons";
 import { SubagentActionsMenu } from "./SubagentActionsMenu";
 import { SubagentStatusChip } from "./SubagentStatusChip";
 
-/** One tree row: expander, then the agent (opens its pane) as name, title, model and metrics, and a live line. */
+/** One tree row: expander, then the agent (opens its pane) in two columns: name, title and live line on the left; status, model and metrics on the right. */
 export const SubagentTreeRow: Component<{
 	node: SubagentNode;
 	level: number;
@@ -25,7 +25,7 @@ export const SubagentTreeRow: Component<{
 }> = (props) => {
 	const hasChildren = () => props.node.children.length > 0;
 	const elapsedMs = createLiveElapsed(() => props.node);
-	/** Line 4: only while running, and only when the live preview display setting is on. */
+	/** Left of the metrics: only while running, and only when the live preview display setting is on. */
 	const liveText = () => {
 		const live = props.node.live;
 		if (live === undefined || settingValue<boolean>("display.subagentLivePreview") !== true) {
@@ -35,10 +35,7 @@ export const SubagentTreeRow: Component<{
 	};
 	return (
 		<div class="subagent-tree-row" data-selected={props.selected === true ? "" : undefined}>
-			<Show
-				when={hasChildren()}
-				fallback={<span class="subagent-tree-toggle-spacer" aria-hidden="true" />}
-			>
+			<Show when={hasChildren()}>
 				<button
 					type="button"
 					class="subagent-tree-toggle"
@@ -68,29 +65,27 @@ export const SubagentTreeRow: Component<{
 					<Show when={props.node.agentType}>
 						{(type) => <span class="subagent-tree-type">{type()}</span>}
 					</Show>
-					<SubagentStatusChip status={props.node.status} />
 				</span>
+				<SubagentStatusChip status={props.node.status} />
 				<span class="subagent-tree-title" title={props.node.title}>
 					{props.node.title}
 				</span>
-				<span class="subagent-tree-line subagent-tree-stats">
-					<Show when={props.node.model}>
-						{(model) => (
-							<span class="subagent-tree-model" title={model().identity}>
-								{model().thinking ? `${model().id} · ${model().thinking}` : model().id}
-							</span>
-						)}
+				<Show when={props.node.model}>
+					{(model) => (
+						<span class="subagent-tree-model" title={model().identity}>
+							{model().thinking ? `${model().id} · ${model().thinking}` : model().id}
+						</span>
+					)}
+				</Show>
+				<span class="subagent-tree-metrics">
+					<Show when={elapsedMs() !== undefined}>
+						<span>{formatDuration(elapsedMs() ?? 0)}</span>
 					</Show>
-					<span class="subagent-tree-metrics">
-						<Show when={elapsedMs() !== undefined}>
-							<span>{formatDuration(elapsedMs() ?? 0)}</span>
-						</Show>
-						<span>{formatTokens(props.node.metrics.tokens)} tokens</span>
-						<span>{formatCost(props.node.metrics.cost)}</span>
-						<Show when={props.node.metrics.contextPercent !== undefined}>
-							<span>ctx {Math.round(props.node.metrics.contextPercent ?? 0)}%</span>
-						</Show>
-					</span>
+					<span>{formatTokens(props.node.metrics.tokens)} tokens</span>
+					<span>{formatCost(props.node.metrics.cost)}</span>
+					<Show when={props.node.metrics.contextPercent !== undefined}>
+						<span>ctx {Math.round(props.node.metrics.contextPercent ?? 0)}%</span>
+					</Show>
 				</span>
 				<Show when={liveText()}>
 					{(text) => (

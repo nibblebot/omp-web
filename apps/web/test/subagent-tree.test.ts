@@ -7,6 +7,7 @@ import {
 	shortAgentName,
 } from "../subagents/format";
 import {
+	createStableSubagentOrder,
 	filterActiveSubagentTree,
 	filterSubagentTree,
 	flattenSubagentTree,
@@ -22,6 +23,7 @@ function node(
 		tokens?: number;
 		cost?: number;
 		elapsedMs?: number;
+		endedAt?: number;
 		children?: SubagentNode[];
 	} = {},
 ): SubagentNode {
@@ -31,6 +33,7 @@ function node(
 		title: id,
 		agentType: options.agentType,
 		status: options.status ?? "done",
+		endedAt: options.endedAt,
 		metrics: {
 			elapsedMs: options.elapsedMs ?? 0,
 			tokens: options.tokens ?? 0,
@@ -134,6 +137,70 @@ describe("filterActiveSubagentTree", () => {
 		const before = structuredClone(input);
 		filterActiveSubagentTree(input, "types");
 		expect(input).toEqual(before);
+	});
+});
+
+describe("createStableSubagentOrder", () => {
+	const ids = (nodes: SubagentNode[]) => nodes.map((n) => n.id);
+
+	test("keeps the first-seen order while agents work, even when the input reorders", () => {
+		const order = createStableSubagentOrder();
+		const a = node("a", { status: "running" });
+		const b = node("b", { status: "running" });
+		expect(ids(order([a, b]))).toEqual(["a", "b"]);
+		expect(ids(order([b, a]))).toEqual(["a", "b"]);
+		expect(ids(order([b, node("c", { status: "pending" }), a]))).toEqual(["a", "b", "c"]);
+	});
+
+	test("moves settled agents to the top in the order they settled", () => {
+		const order = createStableSubagentOrder();
+		order(["a", "b", "c", "d", "e"].map((id) => node(id, { status: "running" })));
+		expect(
+			ids(
+				order([
+					node("a", { status: "running" }),
+					node("b", { status: "pending" }),
+					node("c", { status: "done", endedAt: 5 }),
+					node("d", { status: "failed", endedAt: 4 }),
+					node("e", { status: "running" }),
+				]),
+			),
+		).toEqual(["d", "c", "a", "b", "e"]);
+		// a and e settle after d and c even though their endedAt stamps (other clocks) are earlier.
+		expect(
+			ids(
+				order([
+					node("e", { status: "parked", endedAt: 2 }),
+					node("d", { status: "failed", endedAt: 4 }),
+					node("c", { status: "done", endedAt: 5 }),
+					node("b", { status: "running" }),
+					node("a", { status: "aborted", endedAt: 1 }),
+				]),
+			),
+		).toEqual(["d", "c", "a", "e", "b"]);
+	});
+
+	test("a revived agent returns to its first-seen place", () => {
+		const order = createStableSubagentOrder();
+		order([node("a", { status: "running" }), node("b", { status: "running" })]);
+		expect(ids(order([node("a", { status: "running" }), node("b", { status: "parked" })]))).toEqual(
+			["b", "a"],
+		);
+		expect(
+			ids(order([node("a", { status: "running" }), node("b", { status: "running" })])),
+		).toEqual(["a", "b"]);
+	});
+
+	test("orders nested children by the same rule", () => {
+		const order = createStableSubagentOrder();
+		const parent = (children: SubagentNode[]) => node("p", { status: "running", children });
+		order([parent([node("x", { status: "running" }), node("y", { status: "running" })])]);
+		const [p] = order([parent([node("y", { status: "done" }), node("x", { status: "running" })])]);
+		expect(ids(p?.children ?? [])).toEqual(["y", "x"]);
+		const [again] = order([
+			parent([node("x", { status: "running" }), node("y", { status: "done" })]),
+		]);
+		expect(ids(again?.children ?? [])).toEqual(["y", "x"]);
 	});
 });
 

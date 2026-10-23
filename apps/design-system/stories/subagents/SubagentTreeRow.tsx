@@ -27,7 +27,7 @@ export default defineStory({
 		{
 			name: "Running with in-flight tool",
 			description:
-				"Four lines: short name, agent type and status; the description; the model with its thinking level and the metrics; and the live line, here the tool in flight with its intent.",
+				"Three rows in two columns: short name and agent type beside the status; the description beside the model with its thinking level; and the live line, here the tool in flight with its intent, beside the metrics.",
 			seed: () => seedAgentTree({ display: true }),
 			render: () => row("FixtureBuilder", 0),
 		},
@@ -41,7 +41,7 @@ export default defineStory({
 		{
 			name: "Live preview off",
 			description:
-				"With `display.subagentLivePreview` off a running row has three lines: no live line.",
+				"With `display.subagentLivePreview` off a running row has no live line; the metrics row keeps its place.",
 			seed: () => seedAgentTree(),
 			render: () => row("FixtureBuilder", 0),
 		},
@@ -62,7 +62,7 @@ export default defineStory({
 		{
 			name: "Parked, model unknown",
 			description:
-				"A parked agent has no live progress, so the model is absent and line 3 holds only the metrics.",
+				"A parked agent has no live progress, so the model is absent and the right column holds only the status and the metrics.",
 			seed: () => seedAgentTree({ display: true }),
 			render: () => row("DocsSweep", 0),
 		},

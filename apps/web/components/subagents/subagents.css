@@ -1,11 +1,16 @@
 /* Subagent tree, fan-out footer, agent pane, agents dock (list and accordion), and composer counter. */
 
+/* One rounded list, outlined like a card, with a light separator above each row. The children
+   chevron sits inside the row and leaf rows reserve no space for it; nesting shows as an indent
+   without a guide line, so a nested row's left border is the only inner vertical line. */
 .subagent-tree {
 	display: grid;
-	gap: 2px;
 	margin: 0;
 	padding: 0;
 	min-width: 0;
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	overflow: hidden;
 	list-style: none;
 }
 
@@ -16,31 +21,37 @@
 
 .subagent-tree-group {
 	display: grid;
-	gap: 2px;
 	margin: 0;
-	padding: 0 0 0 18px;
-	border-left: 1px solid var(--border);
-	margin-left: 9px;
+	padding: 0 0 0 var(--space-5);
 	list-style: none;
 }
 
 .subagent-tree-row {
 	display: flex;
 	align-items: center;
-	gap: 4px;
 	min-width: 0;
+	border-top: 1px solid var(--border);
 }
 
-.subagent-tree-toggle,
-.subagent-tree-toggle-spacer {
-	flex: none;
-	width: 20px;
-	height: 20px;
+.subagent-tree > .subagent-tree-item:first-child > .subagent-tree-row:not([data-selected]) {
+	border-top: 0;
+}
+
+.subagent-tree-group .subagent-tree-row {
+	border-left: 1px solid var(--border);
+}
+
+.subagent-tree-row:hover {
+	background: var(--hover);
 }
 
 .subagent-tree-toggle {
 	display: inline-grid;
+	flex: none;
 	place-items: center;
+	width: 20px;
+	height: 20px;
+	margin-left: var(--space-1);
 	padding: 0;
 	border: 0;
 	border-radius: 4px;
@@ -54,25 +65,26 @@
 	color: var(--text);
 }
 
+/* Two columns: name line, title and live line on the left; status chip, model and
+   metrics stacked on the right, so the live line shares a row with the metrics. */
 .subagent-tree-open {
-	display: flex;
+	display: grid;
 	flex: 1 1 auto;
-	flex-direction: column;
-	align-items: stretch;
-	gap: 2px;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-areas:
+		"line chip"
+		"title model"
+		"live metrics";
+	align-items: center;
+	gap: 2px 12px;
 	min-width: 0;
 	padding: 6px 8px;
-	border: 1px solid transparent;
-	border-radius: 6px;
+	border: 0;
 	background: transparent;
 	color: inherit;
 	font: inherit;
 	text-align: left;
 	cursor: pointer;
-}
-
-.subagent-tree-open:hover {
-	background: var(--hover);
 }
 
 /* Accordion: the expanded agent's row and its body form one accent-outlined card. */
@@ -97,8 +109,14 @@
 	overflow: hidden;
 }
 
+/* Inside the row: the list clips its rounded corners (overflow: hidden), so an outline drawn
+   outside the row would be cut off at the list's edge. */
 .subagent-tree-open:focus-visible,
-.subagent-tree-toggle:focus-visible,
+.subagent-tree-toggle:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
 .agents-panel-search:focus-visible,
 .running-agents-button:focus-visible {
 	outline: 2px solid var(--accent);
@@ -107,6 +125,7 @@
 
 .subagent-tree-line {
 	display: flex;
+	grid-area: line;
 	align-items: center;
 	gap: 8px;
 	min-width: 0;
@@ -129,12 +148,13 @@
 	white-space: nowrap;
 }
 
-/* The chip is the last item of line 1 and sits at its right edge. */
-.subagent-tree-line > .subagent-status-chip {
-	margin-left: auto;
+.subagent-tree-open > .subagent-status-chip {
+	grid-area: chip;
+	justify-self: end;
 }
 
 .subagent-tree-title {
+	grid-area: title;
 	overflow: hidden;
 	color: var(--muted-3);
 	font-size: 12px;
@@ -152,20 +172,16 @@
 	white-space: nowrap;
 }
 
-/* Line 3: the model keeps its full width; the metrics wrap under it in a narrow pane
-   instead of squeezing it, and the model truncates only when wider than the row. */
-.subagent-tree-line.subagent-tree-stats {
-	flex-wrap: wrap;
-	row-gap: 2px;
-}
-
+/* The model truncates only when wider than the right column allows. */
 .subagent-tree-model {
-	flex: 0 1 auto;
+	grid-area: model;
+	justify-self: end;
 	max-width: 100%;
 	color: var(--muted-3);
 }
 
 .subagent-tree-live {
+	grid-area: live;
 	color: var(--accent);
 }
 
@@ -175,10 +191,10 @@
 
 .subagent-tree-metrics {
 	display: flex;
-	flex: none;
+	grid-area: metrics;
+	justify-self: end;
 	align-items: center;
 	gap: 10px;
-	margin-left: auto;
 	color: var(--muted);
 	font-size: 12px;
 	font-variant-numeric: tabular-nums;
@@ -222,16 +238,35 @@
 	color: var(--muted);
 }
 
-.subagent-fanout-footer {
+.subagent-fanout-totals {
 	display: flex;
-	flex: none;
 	flex-wrap: wrap;
 	gap: 12px;
-	padding: 6px 8px;
-	border-top: 1px solid var(--border);
 	color: var(--muted);
 	font-size: 12px;
+	font-weight: 400;
 	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.subagent-fanout-totals[data-placement="footer"] {
+	flex: none;
+	padding: 6px 8px;
+	border-top: 1px solid var(--border);
+}
+
+/* Inline in the tool card header: pushed right, beside the status slot, and
+   wrapping onto a second header line only when the card is too narrow. */
+.subagent-fanout-totals[data-placement="header"] {
+	flex: 0 1 auto;
+	justify-content: flex-end;
+	row-gap: 2px;
+	min-width: 0;
+	margin-left: auto;
+}
+
+.subagent-fanout-totals[data-placement="header"] + .tool-state {
+	margin-left: 0;
 }
 
 .subagent-fanout-failed {
@@ -400,54 +435,6 @@
 	overflow-y: auto;
 }
 
-/* Outlines inside the scroller would clip at its edge; draw them inside the row. */
-.agents-panel-list .subagent-tree-open:focus-visible,
-.agents-panel-list .subagent-tree-toggle:focus-visible {
-	outline-offset: -2px;
-}
-
-/* Dock list: rows stack as one bordered list, each row sharing its top border with whatever sits
-   above it (the previous row or the open agent's body). The children chevron sits inside the row,
-   and leaf rows reserve no space for it; nesting shows as an indent without a guide line, so a
-   nested row's left border is the only vertical line. */
-.agents-panel-list :is(.subagent-tree, .subagent-tree-group) {
-	gap: 0;
-}
-
-.agents-panel-list .subagent-tree-group {
-	margin-left: 0;
-	padding-left: var(--space-5);
-	border-left: 0;
-}
-
-.agents-panel-list .subagent-tree-row {
-	gap: 0;
-	margin-top: -1px;
-	border: 1px solid var(--border-strong);
-}
-
-.agents-panel-list > .subagent-tree > .subagent-tree-item:first-child > .subagent-tree-row {
-	margin-top: 0;
-}
-
-.agents-panel-list .subagent-tree-row:hover {
-	background: var(--hover);
-}
-
-.agents-panel-list .subagent-tree-toggle-spacer {
-	display: none;
-}
-
-.agents-panel-list .subagent-tree-toggle {
-	margin-left: var(--space-1);
-}
-
-.agents-panel-list .subagent-tree-open,
-.agents-panel-list .subagent-tree-open:hover {
-	border: 0;
-	background: transparent;
-}
-
 /* The open agent: its row and body stay on top of the shared borders so the accent outline wins. */
 .agents-panel-list .subagent-tree-row[data-selected] {
 	position: relative;
@@ -537,8 +524,7 @@
 /* Narrow or touch: tree rows, agents search, and the composer counter reach
    44px. */
 @media (max-width: 768px), (pointer: coarse) {
-	.subagent-tree-toggle,
-	.subagent-tree-toggle-spacer {
+	.subagent-tree-toggle {
 		width: 44px;
 		height: 44px;
 	}

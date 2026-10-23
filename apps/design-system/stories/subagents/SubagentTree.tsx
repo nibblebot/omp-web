@@ -100,7 +100,8 @@ export default defineStory({
 		},
 		{
 			name: "Live preview off",
-			description: "Without the live preview setting, running rows have three lines.",
+			description:
+				"Without the live preview setting, running rows have no live line beside the metrics.",
 			seed: () => seedAgentTree(),
 			render: () => (
 				<div class="ds-frame">

@@ -118,6 +118,10 @@
 		transform: rotate(1turn);
 	}
 }
+/* The bordered agent list sits inset in the card so its row borders never double the card's. */
+.task-tool > .subagent-tree {
+	margin: 0 var(--space-4) var(--space-4);
+}
 /* Card border by status (the existing 1px .card border, recolored). */
 .tool-card[data-status="done"] {
 	border-color: var(--success-border);

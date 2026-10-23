@@ -17,7 +17,7 @@ import {
 	summarizeSubagentTree,
 } from "../../subagents/tree";
 import { SubagentConversation } from "./SubagentConversation";
-import { SubagentFanoutFooter } from "./SubagentFanoutFooter";
+import { SubagentFanoutTotals } from "./SubagentFanoutTotals";
 import { SubagentTree } from "./SubagentTree";
 
 /** Search appears only once the forest is large enough to need it. */
@@ -103,7 +103,7 @@ export const AgentsPanel: Component = () => {
 				</Show>
 			</div>
 			<Show when={total() > 0}>
-				<SubagentFanoutFooter totals={summarizeSubagentTree(forest())} />
+				<SubagentFanoutTotals totals={summarizeSubagentTree(forest())} placement="footer" />
 			</Show>
 		</div>
 	);
