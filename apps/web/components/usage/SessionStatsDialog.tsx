@@ -4,6 +4,7 @@ import type { ContextUsageBreakdown } from "@oh-my-pi/pi-coding-agent/session/ag
 import type { ToolSchemaInfo } from "#lib/wire/protocol";
 import { formatTokens } from "../../usage/context";
 import { call, setState, state } from "../../state";
+import { runManualCompact } from "../../store/compaction";
 import { reportError } from "../../store/toasts";
 import { Modal } from "../ui/Modal";
 import { Tabs, tabButtonId, tabPanelId } from "../ui/Tabs";
@@ -131,18 +132,7 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 						)}
 					</Show>
 					<div class="stats-actions">
-						<button
-							onClick={() =>
-								void call("compactEx", [{ mode: "soft" }])
-									.then((o) => {
-										const outcome = o as { ok: boolean; error?: string };
-										if (!outcome.ok) reportError(outcome.error ?? "Compaction returned no result.");
-									})
-									.catch(reportError)
-							}
-						>
-							Compact now
-						</button>
+						<button onClick={() => void runManualCompact({ mode: "soft" })}>Compact now</button>
 						<button onClick={() => setState("modal", "compaction")}>Compact…</button>
 						<button onClick={() => setState("modal", "usage")}>usage reports</button>
 						<label class="dialog-toggle">

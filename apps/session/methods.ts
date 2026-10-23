@@ -193,6 +193,10 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	 *  around METHODS rows. */
 	let inFlightBash = 0;
 	let inFlightPython = 0;
+	/** Fire-and-forget state frame, for a mid-call change browsers must see before the answer. */
+	const publishState = (entry: SessionEntry): void => {
+		void deps.broker.broadcastState(entry).catch(() => {});
+	};
 
 	// Calls whose only state change is the session name. The SDK name listener
 	// (collab-session.ts wireSession) already broadcasts that change, so these
@@ -474,7 +478,18 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		resumeAfterAskReanswer: async (entry) => graph.resumeAfterAskReanswer(entry),
 		retry: (entry) => entry.session.retry(),
 		fork: (entry) => entry.session.fork(),
-		handoff: (entry, a) => entry.session.handoff(a[0] as string | undefined),
+		handoff: (entry, a) => {
+			const pending = entry.session.handoff(a[0] as string | undefined);
+			// The SDK marks the session compacting before its first await; publish
+			// that now so browsers show progress while the document is generated.
+			// A throw skips the post-mutation resync, so a failure republishes the
+			// cleared flag itself.
+			publishState(entry);
+			return pending.catch((err: unknown) => {
+				publishState(entry);
+				throw err;
+			});
+		},
 		setSessionName: (entry, a) => entry.session.setSessionName(a[0] as string, "user"),
 		// Phase 9 (SDK 18.2.6): /goal and /plan are NOT ACP-intercepted server-side, so
 		// goal/plan control drives the SDK directly. The post-mutation state
@@ -886,11 +901,13 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		),
 		compactionSnapshot: async (entry) => compactionSnapshot(entry.session),
 		compactEx: async (entry, a) => {
-			const input = (a[0] ?? {}) as { mode?: string; instructions?: string };
-			const mode = input.mode === "remote" || input.mode === "snapcompact" ? input.mode : "soft";
+			const input = (a[0] ?? {}) as { mode?: unknown; instructions?: unknown };
+			// No mode runs the configured compaction.methodOrder (bare /compact), never a fixed soft pass.
 			return executeCompaction(entry.session, {
-				mode,
+				...(typeof input.mode === "string" && input.mode ? { mode: input.mode } : {}),
 				...(typeof input.instructions === "string" ? { instructions: input.instructions } : {}),
+				// The post-mutation state broadcast clears the flag; this one raises it.
+				onStarted: () => publishState(entry),
 			});
 		},
 		shake: async (entry, a) => {

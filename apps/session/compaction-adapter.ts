@@ -60,21 +60,8 @@ export interface CompactionEligibility {
 	interruptsTurn?: boolean;
 }
 
-/**
- * Eligibility for one explicit mode. Unsupported mode/model/backend is an
- * explicit refusal with a reason; modes never silently fall back to each other.
- */
-export function eligibilityFor(
-	mode: string,
-	ctx: CompactionEligibilityContext,
-): CompactionEligibility {
-	const def = findCompactMode(mode);
-	if (!def) {
-		return {
-			eligible: false,
-			reason: `unsupported compaction mode "${mode}" (expected soft, remote, or snapcompact)`,
-		};
-	}
+/** Refusals every manual compaction shares, whichever method runs. */
+function sharedRefusal(ctx: CompactionEligibilityContext): CompactionEligibility | undefined {
 	if (ctx.compacting)
 		return { eligible: false, reason: "Context maintenance is already in progress." };
 	if (!ctx.hasModel) {
@@ -91,6 +78,37 @@ export function eligibilityFor(
 				"Wait for it to settle before compacting so the pass does not race the delivery turn.",
 		};
 	}
+	return undefined;
+}
+
+/**
+ * Eligibility for a run in the configured `compaction.methodOrder` (bare
+ * `/compact`): only the shared gates apply, because the SDK itself skips a
+ * method the route cannot run and tries the next one.
+ */
+export function configuredOrderEligibility(
+	ctx: CompactionEligibilityContext,
+): CompactionEligibility {
+	return sharedRefusal(ctx) ?? { eligible: true, interruptsTurn: ctx.streaming };
+}
+
+/**
+ * Eligibility for one explicit mode. Unsupported mode/model/backend is an
+ * explicit refusal with a reason; modes never silently fall back to each other.
+ */
+export function eligibilityFor(
+	mode: string,
+	ctx: CompactionEligibilityContext,
+): CompactionEligibility {
+	const def = findCompactMode(mode);
+	if (!def) {
+		return {
+			eligible: false,
+			reason: `unsupported compaction mode "${mode}" (expected soft, remote, or snapcompact)`,
+		};
+	}
+	const refusal = sharedRefusal(ctx);
+	if (refusal) return refusal;
 	const interruptsTurn = ctx.streaming;
 	if (def.name === "remote") {
 		if (ctx.providerSupportsRemote === true) return { eligible: true, interruptsTurn };
@@ -198,13 +216,17 @@ function sampleContextTokens(session: AgentSession): number | undefined {
 // ---------------------------------------------------------------------------
 
 export interface ExecuteCompactionArgs {
-	mode: CompactMode;
+	/** Explicit mode; absent runs the configured `compaction.methodOrder`, like the SDK's bare `/compact`. */
+	mode?: string;
 	/** Focus instructions; rejected without an SDK round trip when the grammar rejects focus. */
 	instructions?: string;
+	/** Runs once the SDK has entered the run (`isCompacting` is true), before it settles. */
+	onStarted?: () => void;
 }
 
 export interface ShapedCompactionResult {
-	mode: CompactMode;
+	/** The explicit mode requested; absent for a configured-order run (see `appliedMethod`). */
+	mode?: CompactMode;
 	summary: string;
 	firstKeptEntryId: string;
 	/** SDK-reported pre-compact total (estimate). */
@@ -221,17 +243,18 @@ export interface ShapedCompactionResult {
 }
 
 /**
- * Run one explicit-mode compaction. Maps mode -> CompactOptions{mode} with
- * plain customInstructions pass-through where the grammar allows focus text.
- * Model-context change (the new summary) is distinguished from retained
- * graph/history via firstKeptEntryId; token figures are labeled estimates.
+ * Run one compaction: an explicit mode maps to CompactOptions{mode}; no mode
+ * leaves method selection to the SDK's configured order. Focus text passes
+ * through as customInstructions where the grammar allows it. Model-context
+ * change (the new summary) is distinguished from retained graph/history via
+ * firstKeptEntryId; token figures are labeled estimates.
  */
 export async function executeCompaction(
 	session: AgentSession,
 	args: ExecuteCompactionArgs,
 ): Promise<CompactionOutcome<ShapedCompactionResult>> {
-	const def = findCompactMode(args.mode);
-	if (!def) {
+	const def = args.mode === undefined ? undefined : findCompactMode(args.mode);
+	if (args.mode !== undefined && !def) {
 		return {
 			ok: false,
 			error: `unsupported compaction mode "${args.mode}"`,
@@ -239,21 +262,24 @@ export async function executeCompaction(
 		};
 	}
 	const instructions = args.instructions?.trim() || undefined;
-	if (def.rejectsFocus && instructions) {
+	if (def?.rejectsFocus && instructions) {
 		return {
 			ok: false,
 			error: `/compact ${def.name} does not take focus instructions (it archives history without an LLM summary).`,
 			failureKind: "invalid_request",
 		};
 	}
-	const gate = eligibilityFor(def.name, sessionEligibilityContext(session));
+	const ctx = sessionEligibilityContext(session);
+	const gate = def ? eligibilityFor(def.name, ctx) : configuredOrderEligibility(ctx);
 	if (!gate.eligible) return { ok: false, error: gate.reason, failureKind: "unavailable" };
 	const interruptedTurn = session.isStreaming;
 	try {
-		const options: CompactOptions = { mode: def.name };
-		const result: CompactionResult = await session.compact(instructions, options);
+		const options: CompactOptions = def ? { mode: def.name } : {};
+		const pending = session.compact(instructions, options);
+		args.onStarted?.();
+		const result: CompactionResult = await pending;
 		const shaped: ShapedCompactionResult = {
-			mode: def.name,
+			...(def ? { mode: def.name } : {}),
 			summary: result?.summary ?? "",
 			firstKeptEntryId: result?.firstKeptEntryId ?? "",
 			historyRetained: true,

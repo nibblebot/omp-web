@@ -1,6 +1,6 @@
 import { state, setState } from "../state";
 import { humanizeCompactionError } from "./compaction-view";
-import { call, isSessionSwitchSupersession } from "./transport";
+import { call, isSessionSwitchSupersession, MAINTENANCE_CALL_TIMEOUT_MS } from "./transport";
 
 export type CompactionModeName = "soft" | "remote" | "snapcompact";
 export type ShakeModeName = "elide" | "images" | "thinking";
@@ -25,7 +25,8 @@ export interface HandoffAnchor {
 	keepRecentTokens: number;
 }
 export interface CompactionResultView {
-	mode: CompactionModeName;
+	/** Absent for a configured-order run; `appliedMethod` names what ran. */
+	mode?: CompactionModeName;
 	appliedMethod?: string;
 	summary: string;
 	firstKeptEntryId: string;
@@ -227,7 +228,7 @@ export async function startCompaction(): Promise<void> {
 		const outcome = (await call(
 			"compactEx",
 			[{ mode, instructions }],
-			300_000,
+			MAINTENANCE_CALL_TIMEOUT_MS,
 		)) as Outcome<CompactionResultView>;
 		if (state.compaction !== owner) return;
 		if (!outcome.ok || !outcome.data) {
@@ -246,6 +247,31 @@ export async function startCompaction(): Promise<void> {
 		});
 	} finally {
 		if (state.compaction === owner) await refreshCompactionEligibility(true);
+	}
+}
+
+/**
+ * One-shot manual compaction (`/compact`, Stats dialog "Compact now"): run it
+ * through the gated `compactEx`, surfacing a refusal or failure as the
+ * session error. The transcript resync the session broadcasts on success is
+ * the success signal, so nothing is reported then.
+ */
+export async function runManualCompact(input: {
+	mode?: string;
+	instructions?: string;
+}): Promise<void> {
+	try {
+		const outcome = (await call(
+			"compactEx",
+			[{ mode: input.mode, instructions: input.instructions }],
+			MAINTENANCE_CALL_TIMEOUT_MS,
+		)) as Outcome<unknown>;
+		if (!outcome.ok) {
+			setState("error", humanizeCompactionError(outcome.error ?? "Compaction returned no result."));
+		}
+	} catch (error) {
+		if (isSessionSwitchSupersession(error)) return;
+		setState("error", humanizeCompactionError(error));
 	}
 }
 

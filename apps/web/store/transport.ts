@@ -426,6 +426,13 @@ export function isSessionSwitchSupersession(err: unknown): boolean {
 	return (err instanceof Error ? err.message : String(err)) === "session switched";
 }
 
+/**
+ * Call timeout for session methods that run an LLM summarizer to completion
+ * (`compactEx`, `handoff`). The session answers only after the run settles,
+ * which routinely outlasts the 30 s default.
+ */
+export const MAINTENANCE_CALL_TIMEOUT_MS = 300_000;
+
 export function call(
 	method: WebMethodName,
 	args: unknown[] = [],

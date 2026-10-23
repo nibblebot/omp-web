@@ -30,9 +30,11 @@ import {
 	type ModelPresetAction,
 } from "../store/models";
 import { humanizeCompactionError } from "../store/compaction-view";
+import { runManualCompact } from "../store/compaction";
 import { openDock } from "../store/dock";
 import { downloadArchive, downloadHtml, downloadRequest, downloadText } from "../store/downloads";
 import { queuedAnnotationIds, withQueuedAnnotations } from "../store/review";
+import { MAINTENANCE_CALL_TIMEOUT_MS } from "../store/transport";
 
 export type InputMode = "enter" | "followup";
 
@@ -284,13 +286,7 @@ function compactRoute(args: string): void {
 		return;
 	}
 	// The marker comes with the transcript resync that compaction triggers (HISTORY_RELOAD).
-	void call("compactEx", [{ mode: d.mode, instructions: d.instructions }])
-		.then((outcome) => {
-			const { ok, error } = outcome as { ok: boolean; error?: string };
-			if (!ok)
-				setState("error", humanizeCompactionError(error ?? "Compaction returned no result."));
-		})
-		.catch((err) => setState("error", humanizeCompactionError(err)));
+	void runManualCompact({ mode: d.mode, instructions: d.instructions });
 }
 
 /** `/export [--themes] [path]`: `--themes` carries the web theme; a path is parsed so exportRoute can refuse it. */
@@ -467,9 +463,12 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	},
 	// Handoff compacts IN PLACE (session-maintenance.ts handoff commits a
 	// compaction entry; no new session file, same identity). The prose below
-	// reports the in-place outcome, not a new session.
+	// reports the in-place outcome, not a new session. The call settles only after
+	// a oneshot LLM request over the whole context writes the document, so it gets
+	// the compaction modal's 5 minute deadline, not call()'s 30 second default
+	// (which reported "did not answer in time" while the handoff still committed).
 	handoff: (args) =>
-		void call("handoff", handoffArgs(args))
+		void call("handoff", handoffArgs(args), MAINTENANCE_CALL_TIMEOUT_MS)
 			.then((result) => {
 				const r = result as { document?: string; savedPath?: string } | null | undefined;
 				if (r?.document) {

@@ -1161,6 +1161,8 @@ function resetSessionView(): void {
 		stats: null,
 		...createGoalState(),
 		retryInfo: null,
+		// The last state frame's flag belongs to the old process; the next frame re-reads it.
+		compacting: false,
 		workingIntent: undefined,
 		modal: null,
 		// Phase 5: picker context dies with the modal it belongs to; the
@@ -1195,9 +1197,10 @@ function reconcileAttachedSession(): void {
 	if (!isDaemonDead(entry)) return;
 	// A removed entry is not a stop: drop its mark; the view clears without going offline.
 	if (entry === undefined) clearUserStopped(id);
-	// A user stop keeps the transcript behind the stopped strip; only readiness drops.
+	// A user stop keeps the transcript behind the stopped strip; readiness drops,
+	// and so does a compacting flag the dead process can no longer clear.
 	else if (isUserStopped(id)) {
-		setState("readyAt", undefined);
+		setState({ readyAt: undefined, compacting: false });
 		return;
 	}
 	// Phase first: the transcript view is still mounted and reads it to fade

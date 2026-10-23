@@ -2597,6 +2597,25 @@ describe("attached session reconciliation against roster truth", () => {
 		expect(isUserStopped("daemon-a")).toBe(false);
 	});
 
+	test("an attached session that goes asleep mid-compaction drops the compacting badge", () => {
+		// The last state frame said compacting; the dead process never sends the frame that clears it.
+		attachAndPrime();
+		setState("compacting", true);
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		expect(state.currentSessionId).toBe("");
+		expect(state.compacting).toBe(false);
+	});
+
+	test("a user stop mid-compaction keeps the transcript but drops the compacting badge", () => {
+		attachAndPrime();
+		setState("compacting", true);
+		stopDaemonById("daemon-a");
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(state.compacting).toBe(false);
+		restartDaemonById("daemon-a");
+	});
+
 	test("restarting a ready process waits for the roster to show it asleep before waking", () => {
 		attachAndPrime();
 		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });

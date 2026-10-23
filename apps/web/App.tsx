@@ -6,6 +6,7 @@ import { NoActiveSessionPane } from "./components/app/NoActiveSessionPane";
 import { DockHost } from "./components/app/DockHost";
 import { StoppedSessionStrip } from "./components/app/StoppedSessionStrip";
 import {
+	CompactionBar,
 	PromptBox,
 	QueueBar,
 	SessionConfigBar,
@@ -71,6 +72,7 @@ const ChatMode: Component = () => (
 								onRestart={() => void restartDaemonById(state.currentSessionId)}
 							/>
 						</Show>
+						<CompactionBar />
 						{/* Composer: the prompt box, with the session config bar (model, thinking, meters) as its bottom row. */}
 						<PromptBox />
 						<SessionConfigBar />

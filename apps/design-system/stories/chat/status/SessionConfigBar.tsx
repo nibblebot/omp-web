@@ -47,12 +47,6 @@ export default defineStory({
 			render: () => <SessionConfigBar />,
 		},
 		{
-			name: "Compacting in plan mode",
-			description: "Per-turn badges lead the row while active.",
-			seed: { compacting: true, planModeEnabled: true },
-			render: () => <SessionConfigBar />,
-		},
-		{
 			name: "Plan mode on",
 			description: "The Plan mode chip leads the row; clicking it exits plan mode.",
 			seed: { planModeEnabled: true },

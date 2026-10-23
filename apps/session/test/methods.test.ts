@@ -352,11 +352,17 @@ describe("session graph rows", () => {
 
 describe("transcript-rewriting rows", () => {
 	// One table set for both rows: the rewrite classification and the compaction gate.
+	// The broker records the session's compacting flag at each state broadcast.
+	const broadcasts: boolean[] = [];
 	const tables = createWebMethods({
 		settings: {} as never,
 		authStorage: {} as never,
 		collab: {} as never,
-		broker: {} as never,
+		broker: {
+			broadcastState: async (entry: SessionEntry) => {
+				broadcasts.push(entry.session.isCompacting);
+			},
+		} as never,
 		materializeSession: async () => ({ alreadyPresent: true as const }),
 		sessionsDir: "/tmp/fleet-test-sessions",
 		cwd: "/tmp/fleet-test-cwd",
@@ -395,6 +401,103 @@ describe("transcript-rewriting rows", () => {
 		expect(outcome.ok).toBe(false);
 		expect(outcome.failureKind).toBe("unavailable");
 		expect(compacts).toEqual([]);
+	});
+
+	test("compactEx without a mode leaves method choice to the configured order; an explicit mode is kept", async () => {
+		// Bare /compact used to be forced to soft, skipping a remote-first
+		// compaction.methodOrder that the SDK's own /compact honours.
+		const compacts: Array<[unknown, unknown]> = [];
+		const session = {
+			settings: Settings.isolated(),
+			model: { api: "openai-completions", provider: "openai", input: ["text"], compat: {} },
+			isStreaming: false,
+			hasPostPromptWork: false,
+			isCompacting: false,
+			compact: async (instructions: unknown, options: unknown) => {
+				compacts.push([instructions, options]);
+				return { summary: "s", firstKeptEntryId: "e1" };
+			},
+			getContextUsage: () => undefined,
+			getContextBreakdown: () => undefined,
+			sessionManager: { getBranch: () => [{ type: "compaction", method: "remote" }] },
+		};
+		const entry = { session } as unknown as SessionEntry;
+		const bare = (await tables.methods.compactEx!(entry, [{ instructions: "focus" }])) as {
+			ok: boolean;
+			data?: { mode?: string; appliedMethod?: string };
+		};
+		expect(bare.ok).toBe(true);
+		expect(bare.data?.mode).toBeUndefined();
+		expect(bare.data?.appliedMethod).toBe("remote");
+		await tables.methods.compactEx!(entry, [{ mode: "soft" }]);
+		const unknown = (await tables.methods.compactEx!(entry, [{ mode: "bogus" }])) as {
+			ok: boolean;
+			failureKind?: string;
+		};
+		expect(compacts).toEqual([
+			["focus", {}],
+			[undefined, { mode: "soft" }],
+		]);
+		expect(unknown).toMatchObject({ ok: false, failureKind: "invalid_request" });
+	});
+
+	test("compactEx and handoff publish the compacting state while the run is still in flight", async () => {
+		// The post-call state broadcast only lands after the run settles, so
+		// without a start broadcast browsers never saw compaction in progress.
+		const settle = Promise.withResolvers<void>();
+		const session = {
+			settings: Settings.isolated(),
+			model: { api: "openai-completions", provider: "openai", input: ["text"], compat: {} },
+			isStreaming: false,
+			hasPostPromptWork: false,
+			isCompacting: false,
+			compact: async () => {
+				session.isCompacting = true;
+				await settle.promise;
+				session.isCompacting = false;
+				return { summary: "s", firstKeptEntryId: "e1" };
+			},
+			handoff: async () => {
+				session.isCompacting = true;
+				await settle.promise;
+				session.isCompacting = false;
+				return { document: "d" };
+			},
+			getContextUsage: () => undefined,
+			getContextBreakdown: () => undefined,
+			sessionManager: { getBranch: () => [] },
+		};
+		const entry = { session } as unknown as SessionEntry;
+		broadcasts.length = 0;
+		const compacting = tables.methods.compactEx!(entry, [{}]);
+		await Promise.resolve();
+		expect(broadcasts).toEqual([true]);
+		settle.resolve();
+		await compacting;
+		broadcasts.length = 0;
+		const handingOff = tables.methods.handoff!(entry, [undefined]);
+		expect(broadcasts).toEqual([true]);
+		await handingOff;
+	});
+
+	test("a failed handoff republishes the cleared compacting state", async () => {
+		// A thrown call skips the post-mutation resync; without this the browser
+		// kept "Compaction in progress…" up after the failure.
+		const session = {
+			isCompacting: false,
+			handoff: async () => {
+				session.isCompacting = true;
+				await Promise.resolve();
+				session.isCompacting = false;
+				throw new Error("Nothing to hand off (no messages yet)");
+			},
+		};
+		const entry = { session } as unknown as SessionEntry;
+		broadcasts.length = 0;
+		await expect(tables.methods.handoff!(entry, [undefined])).rejects.toThrow(
+			"Nothing to hand off",
+		);
+		expect(broadcasts).toEqual([true, false]);
 	});
 });
 
