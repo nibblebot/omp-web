@@ -8,7 +8,7 @@
  * (durations come from the `--dur-*` tokens in styles/tokens.css, so reduced
  * motion shortens them without any logic here).
  */
-import { type Accessor, createEffect, createSignal, on, onCleanup } from "solid-js";
+import { type Accessor, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 
 export type PresencePhase = "enter" | "open" | "exit";
 
@@ -120,6 +120,13 @@ export function afterMotion(el: Element): Promise<void> {
 	return promise;
 }
 
+/** A presence: mount state, motion phase, and the ref of the element whose motion it waits on. */
+export interface Presence {
+	mounted: Accessor<boolean>;
+	phase: Accessor<PresencePhase>;
+	ref: (el: HTMLElement) => void;
+}
+
 /**
  * Keeps content mounted through its exit motion. `mounted()` turns true when
  * `open()` does; `phase()` is "enter" for the first frame after mount (the CSS
@@ -131,11 +138,7 @@ export function afterMotion(el: Element): Promise<void> {
  * An `open()` that is already true at creation also plays the enter motion; a
  * closed one starts unmounted in phase "exit" (the hidden state).
  */
-export function createPresence(open: Accessor<boolean>): {
-	mounted: Accessor<boolean>;
-	phase: Accessor<PresencePhase>;
-	ref: (el: HTMLElement) => void;
-} {
+export function createPresence(open: Accessor<boolean>): Presence {
 	const [mounted, setMounted] = createSignal(open());
 	const [phase, setPhase] = createSignal<PresencePhase>(open() ? "enter" : "exit");
 	let el: HTMLElement | undefined;
@@ -152,8 +155,11 @@ export function createPresence(open: Accessor<boolean>): {
 		cancelWatch = undefined;
 	};
 
+	// Memoized: a source that re-evaluates to the same value (DockHost's open() reads the
+	// whole dock, so a kind switch re-runs it) must not replay the enter motion.
+	const opened = createMemo(open);
 	createEffect(
-		on(open, (isOpen) => {
+		on(opened, (isOpen) => {
 			cancelPending();
 			if (isOpen) {
 				if (mounted() && phase() === "exit") {

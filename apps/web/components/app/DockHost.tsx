@@ -59,7 +59,10 @@ interface Shown {
  * `--dock-w` (one reflow). Closing takes it out of the row first (the main
  * pane widens in one step underneath), then slides it out over the pane and
  * unmounts it. Switching panel kind while open fades the content out, swaps
- * it, and fades it in; the width never changes (one shared `--dock-w`).
+ * it, and fades it in; the width never changes (one shared `--dock-w`). A
+ * switch that comes with an agents-mode change (the view toggle carrying the
+ * open agent between `agent` and `agents`) swaps at once: it is one panel
+ * changing its view, not another panel.
  */
 export const DockHost: Component = () => {
 	onMount(() => applyDockWidth(state.dockWidth));
@@ -80,16 +83,17 @@ export const DockHost: Component = () => {
 	let body: HTMLElement | undefined;
 	let afterSwap: (() => void) | undefined;
 	createComputed(
-		on([entry, () => state.dock?.id], ([next, id], prev) => {
+		on([entry, () => state.dock?.id, () => state.agentsMode], ([next, id, mode], prev) => {
 			if (next === undefined) {
 				afterSwap = undefined;
 				return;
 			}
 			const target = { kind: next, id };
 			const current = shown();
-			if (prev?.[0] === undefined || current === undefined) {
-				// Opening: no fade, the slide is the motion.
+			if (prev?.[0] === undefined || current === undefined || prev[2] !== mode) {
+				// Opening: no fade, the slide is the motion. A view toggle: no motion.
 				swapId++;
+				afterSwap = undefined;
 				setSwapping(false);
 				setShown(target);
 				return;

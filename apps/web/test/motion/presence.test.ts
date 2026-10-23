@@ -11,6 +11,7 @@ import {
 } from "bun:test";
 import * as solid from "solid-js";
 import type * as PresenceModule from "../../motion/presence";
+import type { Presence } from "../../motion/presence";
 
 // bun resolves "solid-js" to its SSR build (effects never run); the client
 // build gives createPresence a live reactive scope. Same technique as
@@ -197,7 +198,7 @@ describe("afterMotion", () => {
 interface Harness {
 	e: FakeEl;
 	open: (v: boolean) => void;
-	presence: ReturnType<typeof createPresence>;
+	presence: Presence;
 	dispose: () => void;
 }
 
@@ -296,6 +297,29 @@ describe("createPresence", () => {
 		h.e.fire("animationend");
 		expect(h.presence.mounted()).toBe(false);
 		h.dispose();
+	});
+
+	test("an open source that re-runs without changing value keeps the open phase", () => {
+		const e = el({ transitionProperty: "opacity", transitionDuration: "5s" });
+		let setKind!: (v: string | undefined) => void;
+		let presence!: Presence;
+		let dispose!: () => void;
+		createRoot((d) => {
+			const [kind, set] = createSignal<string | undefined>("agent");
+			setKind = set;
+			presence = createPresence(() => kind() !== undefined);
+			presence.ref(e as unknown as HTMLElement);
+			dispose = d;
+		});
+		flushFrames();
+		flushFrames();
+		expect(presence.phase()).toBe("open");
+		setKind("agents");
+		expect(presence.phase()).toBe("open");
+		flushFrames();
+		flushFrames();
+		expect(presence.phase()).toBe("open");
+		dispose();
 	});
 
 	test("disposing clears the exit listeners and timer", async () => {
