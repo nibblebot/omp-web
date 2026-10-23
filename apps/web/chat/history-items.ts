@@ -1,9 +1,10 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { ChatItem, ToolItem, ToolStatus } from "../state";
+import type { ChatItem, ToolItem } from "../state";
 import { advisorNotesOf } from "../store/slices/advisor";
 import { guestPromptOf } from "../store/slices/collab";
 import { compactionItemOf } from "../store/compaction-view";
 import { extractText, scanImages } from "#lib/wire/tool-result";
+import { isAbortRelabelable, toolResultStatus } from "./tool-interrupt";
 import { assistantBlocks, capTail, tabsToSpaces, userText } from "../store/chat";
 import type { UsageLike } from "../usage/usage";
 import { promptTimestamp } from "./turn-usage";
@@ -43,6 +44,8 @@ export interface HistoryBuilder {
 export function createHistoryBuilder(nextId: () => number = sequence()): HistoryBuilder {
 	// First tool item per toolCallId (the store's findToolIndex semantics).
 	const tools = new Map<string, ToolItem>();
+	// Tool items of the closest assistant message that made calls in the current turn: what an aborted message interrupts.
+	let lastCalls: ToolItem[] = [];
 	return {
 		append(messages) {
 			const items: ChatItem[] = [];
@@ -52,6 +55,7 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 			for (const msg of messages) {
 				if (msg.role === "user") {
 					const images = scanImages(msg.content);
+					lastCalls = [];
 					const stamp = promptTimestamp(msg);
 					items.push({
 						kind: "user",
@@ -61,6 +65,15 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 						...(stamp !== undefined ? { timestamp: stamp } : {}),
 					});
 				} else if (msg.role === "assistant") {
+					if (msg.stopReason === "aborted") {
+						// Relabel before this message's own calls join `lastCalls`. A tool item
+						// emitted by an earlier append is mutated in place and handed back as patched.
+						for (const item of lastCalls) {
+							if (!isAbortRelabelable(item)) continue;
+							item.status = "interrupted";
+							if (!fresh.has(item)) patched.add(item);
+						}
+					}
 					const meta = msg as {
 						usage?: UsageLike;
 						ttft?: number;
@@ -78,6 +91,7 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 						...(meta.completedAt !== undefined ? { completedAt: meta.completedAt } : {}),
 						...(meta.stopReason === "aborted" ? { interrupted: true } : {}),
 					});
+					const calls: ToolItem[] = [];
 					for (const c of msg.content) {
 						if (c.type !== "toolCall") continue;
 						const item: ToolItem = {
@@ -93,11 +107,13 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 						};
 						if (!tools.has(c.id)) tools.set(c.id, item);
 						fresh.add(item);
+						calls.push(item);
 						items.push(item);
 					}
+					if (calls.length > 0) lastCalls = calls;
 				} else if (msg.role === "toolResult") {
 					const output = capTail(tabsToSpaces(extractText(msg)), TOOL_OUTPUT_CAP);
-					const status: ToolStatus = msg.isError ? "error" : "done";
+					const status = toolResultStatus(msg.isError, msg.details);
 					const images = scanImages(msg);
 					const item = tools.get(msg.toolCallId);
 					if (item) {

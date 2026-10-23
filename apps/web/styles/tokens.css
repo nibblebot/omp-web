@@ -58,6 +58,20 @@
 	--diff-del-text: #f3b3b3;
 	--accent-border: #2d527f;
 	--backdrop: rgba(4, 6, 10, 0.65);
+	/* Tool card category hues (no red/green, so they never read as status) and syntax colors; every value clears 4.5:1 on --panel and --bg-deep, and syntax colors also on the diff row backgrounds over --panel. */
+	--tool-shell: #b68de4;
+	--tool-read: #5aa3ec;
+	--tool-write: #d98f3f;
+	--tool-search: #0bb0b8;
+	--tool-agents: #de82b7;
+	--tool-other: #92a0b1;
+	--syn-keyword: #bc93eb;
+	--syn-string: #6ab76d;
+	--syn-number: #e3924b;
+	--syn-comment: #8892a2;
+	--syn-title: #60aaf3;
+	--syn-attr: #10b6bd;
+	--syn-meta: #e488be;
 
 	/* System scales: radius / spacing / elevation / motion / focus / z-order.
 	   Shared across all themes; density tweaks live here. */
@@ -174,6 +188,19 @@
 	--diff-del-text: #b91c1c;
 	--accent-border: #9db8e8;
 	--backdrop: rgba(15, 20, 30, 0.35);
+	--tool-shell: #784ca4;
+	--tool-read: #0262ab;
+	--tool-write: #8e5300;
+	--tool-search: #076b6f;
+	--tool-agents: #9b3f78;
+	--tool-other: #556272;
+	--syn-keyword: #72469d;
+	--syn-string: #06691b;
+	--syn-number: #8a4b01;
+	--syn-comment: #5e6879;
+	--syn-title: #025da1;
+	--syn-attr: #016569;
+	--syn-meta: #953972;
 }
 :root[data-theme="catppuccin-mocha"] {
 	color-scheme: dark;
@@ -214,6 +241,19 @@
 	--diff-del-bg: rgba(243, 139, 168, 0.1);
 	--diff-del-text: #f38ba8;
 	--backdrop: rgba(17, 17, 27, 0.65);
+	--tool-shell: #c8a5f0;
+	--tool-read: #7bb8f6;
+	--tool-write: #e6a767;
+	--tool-search: #46c6cd;
+	--tool-agents: #ec9cc9;
+	--tool-other: #a8b6c8;
+	--syn-keyword: #ceacf7;
+	--syn-string: #8aca8b;
+	--syn-number: #f2ad73;
+	--syn-comment: #a9b3c1;
+	--syn-title: #83c0ff;
+	--syn-attr: #4eccd3;
+	--syn-meta: #f4a4d1;
 }
 :root[data-theme="catppuccin-latte"] {
 	color-scheme: light;
@@ -253,6 +293,19 @@
 	--diff-del-bg: rgba(210, 15, 57, 0.08);
 	--diff-del-text: #a6122e;
 	--backdrop: rgba(76, 79, 105, 0.35);
+	--tool-shell: #6f439a;
+	--tool-read: #035b9e;
+	--tool-write: #824c03;
+	--tool-search: #056367;
+	--tool-agents: #91366f;
+	--tool-other: #4d5969;
+	--syn-keyword: #693d94;
+	--syn-string: #026117;
+	--syn-number: #7c4301;
+	--syn-comment: #556070;
+	--syn-title: #015493;
+	--syn-attr: #045b5f;
+	--syn-meta: #8b306a;
 }
 :root[data-theme="omp-dark"] {
 	color-scheme: dark;
@@ -288,6 +341,19 @@
 	--diff-del-bg: oklch(68% 0.2 20 / 0.12);
 	--diff-del-text: oklch(75% 0.16 20);
 	--backdrop: oklch(10% 0.01 295 / 0.65);
+	--tool-shell: #ae85dc;
+	--tool-read: #529be3;
+	--tool-write: #d08736;
+	--tool-search: #08a8af;
+	--tool-agents: #d57aaf;
+	--tool-other: #8b98a9;
+	--syn-keyword: #b48be2;
+	--syn-string: #62af66;
+	--syn-number: #da8b43;
+	--syn-comment: #87919f;
+	--syn-title: #58a2ea;
+	--syn-attr: #04afb6;
+	--syn-meta: #dc80b6;
 }
 :root[data-theme="omp-light"] {
 	color-scheme: light;
@@ -323,6 +389,19 @@
 	--diff-del-bg: oklch(52% 0.19 22 / 0.08);
 	--diff-del-text: oklch(48% 0.17 22);
 	--backdrop: oklch(22% 0.025 285 / 0.35);
+	--tool-shell: #7241a0;
+	--tool-read: #035b9e;
+	--tool-write: #824c03;
+	--tool-search: #056367;
+	--tool-agents: #963372;
+	--tool-other: #4e5b6a;
+	--syn-keyword: #6c3c9a;
+	--syn-string: #026117;
+	--syn-number: #7e4503;
+	--syn-comment: #556070;
+	--syn-title: #005696;
+	--syn-attr: #005d61;
+	--syn-meta: #8e2b6b;
 }
 
 /* Reduced motion: movement and size changes become instant, fades stay short.

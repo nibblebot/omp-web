@@ -15,7 +15,7 @@ export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 	};
 	const forest = () => subagentTree(props.item.toolCallId);
 	return (
-		<ToolCardShell name={<>task {description()}</>} status={props.item.status} class="task-tool">
+		<ToolCardShell name="task" arg={description()} status={props.item.status} class="task-tool">
 			<Show when={forest().length > 0}>
 				<SubagentTree
 					nodes={forest()}

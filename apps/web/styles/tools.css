@@ -1,24 +1,7 @@
 /* Tools: tool/bash card renderers, diff, todo, search, subagents, background bars, eval/lsp/hub/ask-tool cards. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
-.tool-name {
-	font-weight: 600;
-	color: var(--accent);
-}
 .tool-status[data-status="running"] {
 	color: var(--warning);
-}
-.tool-status[data-status="done"] {
-	color: var(--success);
-}
-.tool-status[data-status="error"] {
-	color: var(--error);
-}
-.tool-args {
-	font-family: var(--font-mono);
-	color: var(--muted-2);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
 }
 
 .user-command-card.dimmed {
@@ -63,14 +46,94 @@
 	font-size: var(--fs-sm);
 }
 
-.tool-card > div.card-header .tool-name {
+.tool-card > .card-header {
+	align-items: center;
+}
+.tool-kind {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-width: 0;
+	flex-shrink: 0;
+	font-weight: 600;
+	color: var(--tool-other);
+}
+.tool-kind[data-kind="shell"] {
+	color: var(--tool-shell);
+}
+.tool-kind[data-kind="read"] {
+	color: var(--tool-read);
+}
+.tool-kind[data-kind="write"] {
+	color: var(--tool-write);
+}
+.tool-kind[data-kind="search"] {
+	color: var(--tool-search);
+}
+.tool-kind[data-kind="agents"] {
+	color: var(--tool-agents);
+}
+.tool-name {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.tool-card > div.card-header .tool-status {
+.tool-arg {
+	font-family: var(--font-mono);
+	font-weight: 400;
+	color: var(--text);
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.tool-card > .card-header > .diff-stats {
+	flex-shrink: 0;
+}
+/* Status slot, pinned to the right edge of both div and summary headers. The
+   visually-hidden label inside needs a positioned parent. */
+.tool-state {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
 	margin-left: auto;
 	flex-shrink: 0;
+}
+.tool-state[data-status="error"] {
+	color: var(--error);
+}
+.tool-state[data-status="interrupted"] {
+	color: var(--warning);
+}
+.tool-state[data-status="running"] {
+	color: var(--muted-2);
+}
+@media (prefers-reduced-motion: no-preference) {
+	.tool-spin {
+		animation: tool-spin var(--dur-spin) linear infinite;
+	}
+}
+@keyframes tool-spin {
+	to {
+		transform: rotate(1turn);
+	}
+}
+/* Card border by status (the existing 1px .card border, recolored). */
+.tool-card[data-status="done"] {
+	border-color: var(--success-border);
+}
+.tool-card[data-status="error"] {
+	border-color: var(--error);
+}
+.tool-card[data-status="interrupted"] {
+	border-color: var(--warning-border);
+}
+/* A flush terminal body ending the card would paint its square corners over the
+   rounded border; round it to the card's inner radius. Not overflow: clip on the
+   card, which would clip the Task card's row menus. */
+.tool-card > pre.terminal:last-child,
+.tool-card > :last-child > pre.terminal:last-child {
+	border-radius: 0 0 calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px);
 }
 .tool-collapsed-note {
 	color: var(--muted-2);
@@ -102,6 +165,9 @@ pre.terminal {
 .diff-line[data-type="context"] {
 	color: var(--muted);
 }
+.diff-line[data-hl]:is([data-type="add"], [data-type="del"]) {
+	color: var(--text);
+}
 .diff-sign {
 	display: inline-block;
 	width: 14px;
@@ -112,32 +178,6 @@ pre.terminal {
 	color: var(--muted-2);
 	font-size: var(--fs-sm);
 	padding: 1px var(--space-5) 1px var(--space-7);
-}
-.diff-section {
-	container-type: inline-size;
-	container-name: diff;
-}
-.diff-split {
-	display: none;
-	font-family: var(--font-mono);
-	font-size: var(--fs-md);
-	padding: var(--space-2) 0;
-	overflow-x: auto;
-}
-.diff-split-row {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-.diff-split-row > .diff-line {
-	min-width: 0;
-}
-@container diff (min-width: 640px) {
-	.diff-view {
-		display: none;
-	}
-	.diff-split {
-		display: block;
-	}
 }
 .diff-stats {
 	font-family: var(--font-mono);
@@ -219,6 +259,53 @@ pre.terminal {
 }
 .search-path:hover {
 	text-decoration: underline;
+}
+.search-file {
+	margin-top: var(--space-3);
+}
+.search-file:first-child {
+	margin-top: 0;
+}
+.search-hit {
+	padding-left: var(--space-4);
+}
+/* Line number: a button (copies path:line) when the file is known, else a span. */
+.search-no {
+	display: inline-block;
+	min-width: 5ch;
+	margin-right: var(--space-4);
+	padding: 0;
+	border: none;
+	background: none;
+	font: inherit;
+	text-align: right;
+	color: var(--muted-2);
+	user-select: none;
+}
+button.search-no {
+	cursor: pointer;
+}
+button.search-no:hover {
+	text-decoration: underline;
+}
+.search-hit[data-match="true"] .search-no {
+	color: var(--accent);
+}
+/* Context rows recede; hljs token colors still apply inside them. */
+.search-hit[data-match="false"] .search-text {
+	color: var(--muted);
+}
+.search-gap {
+	padding-left: var(--space-4);
+	color: var(--muted-2);
+}
+.search-note {
+	color: var(--muted);
+	margin-top: var(--space-3);
+}
+.search-col {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
 }
 .websearch-body {
 	display: flex;
@@ -410,10 +497,12 @@ pre.terminal {
 	font-size: var(--fs-sm);
 }
 
-pre.terminal.eval-code {
-	margin: 0 var(--space-4);
+pre.terminal.tool-code {
+	margin: var(--space-3) var(--space-4) 0;
 	border: 1px solid var(--border);
 	padding: var(--space-3) var(--space-4);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 .tool-meta {
 	font-family: var(--font-mono);
@@ -520,14 +609,15 @@ pre.terminal.eval-code {
    terminal output scrolls inside its card, and disclosure headers reach 44px. */
 @media (max-width: 767px) {
 	.bash-cmd,
-	.tool-card > div.card-header .tool-name {
+	.tool-card .tool-arg,
+	.tool-card .tool-name {
 		min-width: 0;
 		max-width: 100%;
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
 	}
 	.tool-card,
-	.tool-card > div.card-header {
+	.tool-card > .card-header {
 		min-width: 0;
 		max-width: 100%;
 	}

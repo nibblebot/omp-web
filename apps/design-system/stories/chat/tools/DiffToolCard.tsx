@@ -1,11 +1,13 @@
 import { DiffToolCard } from "../../../../web/components/chat/tools/DiffToolCard";
 import {
 	applyPatchToolItem,
+	commentEditToolItem,
 	editToolItem,
 	hashlineEditToolItem,
 	longWriteToolItem,
 	malformedEditToolItem,
 	multiEditToolItem,
+	multiFilePatchToolItem,
 	runningEditToolItem,
 	streamingEditToolItem,
 	writeToolItem,
@@ -45,6 +47,16 @@ export default defineStory({
 		},
 		{ name: "Two hunks in one call", render: () => <DiffToolCard item={multiEditToolItem} /> },
 		{ name: "Write, new file", render: () => <DiffToolCard item={writeToolItem} /> },
+		{
+			name: "Comment spanning context and added rows",
+			seed: { toolsExpanded: true },
+			render: () => <DiffToolCard item={commentEditToolItem} />,
+		},
+		{
+			name: "apply_patch, two files (TS + Python)",
+			seed: { toolsExpanded: true },
+			render: () => <DiffToolCard item={multiFilePatchToolItem} />,
+		},
 		{ name: "Write, 60 lines", render: () => <DiffToolCard item={longWriteToolItem} /> },
 	],
 });

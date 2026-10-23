@@ -21,7 +21,7 @@ export const HubToolCard: Component<{ item: ToolItem }> = (props) => {
 	const target = () => to() || from() || name() || "";
 	const preview = () => message().split("\n")[0].slice(0, 140);
 	return (
-		<ToolCardShell name={<>hub {op()}</>} status={props.item.status} class="hub-tool">
+		<ToolCardShell name="hub" arg={op()} status={props.item.status} class="hub-tool">
 			<Show when={target()}>
 				<div class="tool-meta">
 					{to() ? (

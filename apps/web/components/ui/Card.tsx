@@ -11,6 +11,8 @@ interface CardProps {
 	onToggle?: JSX.EventHandler<HTMLDetailsElement, Event>;
 	class?: string;
 	classList?: Record<string, boolean | undefined>;
+	/** Reflected as `data-status` on the card root for status-driven styling. */
+	status?: string;
 	children?: JSX.Element;
 }
 
@@ -21,7 +23,7 @@ export const Card: Component<CardProps> = (props) => {
 		<Show
 			when={props.collapsible}
 			fallback={
-				<div class={cardClass()} classList={props.classList}>
+				<div class={cardClass()} data-status={props.status} classList={props.classList}>
 					<Show when={props.header}>
 						<div class="card-header">{props.header}</div>
 					</Show>
@@ -31,6 +33,7 @@ export const Card: Component<CardProps> = (props) => {
 		>
 			<details
 				class={cardClass()}
+				data-status={props.status}
 				classList={props.classList}
 				open={props.open}
 				onToggle={(e) => props.onToggle?.(e)}

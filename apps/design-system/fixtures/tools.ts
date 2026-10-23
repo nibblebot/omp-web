@@ -320,6 +320,42 @@ export const bashErrorTool: ToolItem = tool(
 		"exit code 1",
 	),
 );
+/** BashToolCard: command cut short by a user interrupt (synthetic result). */
+export const bashInterruptedTool: ToolItem = tool(
+	"bash",
+	"interrupted",
+	{ command: "bun run build && bun run test" },
+	lines("$ bun run build", "building apps/web ...", "Aborted: operation interrupted"),
+);
+/** BashToolCard: multi-line command, so the full highlighted command shows above the output. */
+export const bashMultilineTool: ToolItem = tool(
+	"bash",
+	"done",
+	{
+		command: lines(
+			"for f in apps/web/components/chat/tools/*ToolCard.tsx; do",
+			'  echo "== $f" # per-card line count',
+			'  wc -l < "$f"',
+			"done | tee /tmp/tool-cards.txt",
+		),
+	},
+	lines(
+		"== apps/web/components/chat/tools/AskToolCard.tsx",
+		"101",
+		"== apps/web/components/chat/tools/BashToolCard.tsx",
+		"28",
+	),
+);
+/** BashToolCard: one very long line, truncated in the header and shown in full in the body. */
+export const bashLongCommandTool: ToolItem = tool(
+	"bash",
+	"done",
+	{
+		command:
+			'git log --since="2 weeks ago" --author="joshua" --pretty=format:"%h %ad %s" --date=short -- apps/web/components/chat/tools apps/web/styles apps/design-system | grep -v "Merge" | head -n 40',
+	},
+	lines("a1b2c3d 2026-10-20 Tool card header redesign", "9f8e7d6 2026-10-18 Add highlight module"),
+);
 /** BashToolCard: 46 lines of lint output, so the tail collapse note shows. */
 export const bashLongTool: ToolItem = tool(
 	"bash",
@@ -404,7 +440,7 @@ export const evalImageTool: ToolItem = tool(
 const issueArgs = { team: "OMP", state: "In Progress", limit: 3 };
 /** GenericToolCard: finished MCP tool call with JSON output. */
 export const genericDoneTool: ToolItem = tool(
-	"mcp_linear_list_issues",
+	"mcp__linear_list_issues",
 	"done",
 	issueArgs,
 	lines(
@@ -417,21 +453,28 @@ export const genericDoneTool: ToolItem = tool(
 );
 /** GenericToolCard: call in flight (details stay open while running). */
 export const genericRunningTool: ToolItem = tool(
-	"mcp_linear_list_issues",
+	"mcp__linear_list_issues",
 	"running",
 	issueArgs,
 	"",
 );
 /** GenericToolCard: call that failed. */
 export const genericErrorTool: ToolItem = tool(
-	"mcp_linear_list_issues",
+	"mcp__linear_list_issues",
 	"error",
 	issueArgs,
 	"MCP error -32001: request timed out after 30000ms (server 'linear' is reconnecting)",
 );
+/** GenericToolCard: call cut short by a user interrupt (synthetic result). */
+export const genericInterruptedTool: ToolItem = tool(
+	"mcp__linear_list_issues",
+	"interrupted",
+	issueArgs,
+	"Aborted: operation interrupted",
+);
 /** GenericToolCard: 60 lines of output in one pre. */
 export const genericLongTool: ToolItem = tool(
-	"mcp_linear_list_issues",
+	"mcp__linear_list_issues",
 	"done",
 	{ ...issueArgs, limit: 60 },
 	lines(
@@ -528,6 +571,7 @@ export const lspDiagnosticsTool: ToolItem = tool(
 );
 
 // read
+// Tabs become two spaces before output reaches the card (store/chat.ts tabsToSpaces).
 const copyButtonSource = [
 	'import { createSignal, type Component } from "solid-js";',
 	'import { copyText } from "../../text/clipboard";',
@@ -536,34 +580,36 @@ const copyButtonSource = [
 	"export const COPY_FEEDBACK_MS = 1200;",
 	"",
 	"interface CopyButtonProps {",
-	"\ttext: () => string;",
-	"\tclass?: string;",
-	"\ttitle?: string;",
+	"  text: () => string;",
+	"  class?: string;",
+	"  title?: string;",
 	"}",
 	"",
 	"/** Icon button that copies text and flashes a check mark. */",
 	"export const CopyButton: Component<CopyButtonProps> = (props) => {",
-	"\tconst [copied, setCopied] = createSignal(false);",
-	"\tconst onClick = async () => {",
-	"\t\tawait copyText(props.text());",
-	"\t\tsetCopied(true);",
-	"\t\tsetTimeout(() => setCopied(false), COPY_FEEDBACK_MS);",
-	"\t};",
-	"\treturn (",
-	"\t\t<button class={props.class} title={props.title} onClick={onClick}>",
-	"\t\t\t{copied() ? <CheckIcon /> : <CopyIcon />}",
-	"\t\t</button>",
-	"\t);",
+	"  const [copied, setCopied] = createSignal(false);",
+	"  const onClick = async () => {",
+	"    await copyText(props.text());",
+	"    setCopied(true);",
+	"    setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);",
+	"  };",
+	"  return (",
+	"    <button class={props.class} title={props.title} onClick={onClick}>",
+	"      {copied() ? <CheckIcon /> : <CopyIcon />}",
+	"    </button>",
+	"  );",
 	"};",
 ];
-const numbered = (rows: string[], from: number): string =>
-	rows.map((row, i) => `${from + i}→${row}`).join("\n");
+const copyButtonPath = "apps/web/components/ui/CopyButton.tsx";
+/** Hashline read output: `[path#TAG]` header, then `N:text` rows (SDK read-format.ts). */
+const numbered = (path: string, rows: string[], from: number): string =>
+	[`[${path}#7k2m]`, ...rows.map((row, i) => `${from + i}:${row}`)].join("\n");
 /** ReadToolCard: short excerpt with the tool's own line numbers. */
 export const readDoneTool: ToolItem = tool(
 	"read",
 	"done",
-	{ path: "apps/web/components/ui/CopyButton.tsx", offset: 1, limit: 12 },
-	numbered(copyButtonSource.slice(0, 12), 1),
+	{ path: copyButtonPath, offset: 1, limit: 12 },
+	`${numbered(copyButtonPath, copyButtonSource.slice(0, 12), 1)}\n\n[14 more lines in file. Use ${copyButtonPath}:13 to continue]`,
 );
 /** ReadToolCard: read still in flight, so no body yet. */
 export const readRunningTool: ToolItem = tool(
@@ -576,8 +622,60 @@ export const readRunningTool: ToolItem = tool(
 export const readLongTool: ToolItem = tool(
 	"read",
 	"done",
-	{ path: "apps/web/components/ui/CopyButton.tsx", offset: 40 },
-	numbered(copyButtonSource, 40),
+	{ path: copyButtonPath, offset: 40 },
+	numbered(copyButtonPath, copyButtonSource, 40),
+);
+/** ReadToolCard: Python file whose module docstring and block string span lines. */
+export const readPythonTool: ToolItem = tool(
+	"read",
+	"done",
+	{ path: "scripts/check_boundaries.py" },
+	numbered(
+		"scripts/check_boundaries.py",
+		[
+			'"""Fail when a web component imports from another feature.',
+			"",
+			"Run from the repo root; exits 1 on the first violation.",
+			'"""',
+			"import pathlib",
+			"import sys",
+			"",
+			"ALLOWED = {'shared', 'ui'}",
+			"",
+			"def violations(root: pathlib.Path) -> list[str]:",
+			"    found = []",
+			"    for f in root.rglob('*.tsx'):",
+			"        for n, line in enumerate(f.read_text().splitlines(), 1):",
+			"            if 'from \"../../' in line:  # crosses a feature folder",
+			"                found.append(f'{f}:{n}')",
+			"    return found",
+			"",
+			"if __name__ == '__main__':",
+			"    sys.exit(1 if violations(pathlib.Path('apps/web')) else 0)",
+		],
+		1,
+	),
+);
+/** ReadToolCard: plain output without SDK line numbers (readLineNumbers off), a block comment spanning rows. */
+export const readPlainTool: ToolItem = tool(
+	"read",
+	"done",
+	{ path: "apps/web/chat/tool-kinds.ts", limit: 12 },
+	lines(
+		"/**",
+		" * Tool name -> display category and icon. Unknown names fall back to",
+		" * `other`; MCP tools arrive as `mcp__server__tool`.",
+		" */",
+		'export type ToolCategory = "shell" | "read" | "write" | "search" | "agent" | "other";',
+		"",
+		"export const TOOL_KINDS: Record<string, { category: ToolCategory; icon: ToolIconKey }> = {",
+		'  bash: { category: "shell", icon: "terminal" },',
+		'  read: { category: "read", icon: "file-text" },',
+		'  grep: { category: "search", icon: "search" },',
+		"};",
+		"",
+		"[8 more lines in file. Use apps/web/chat/tool-kinds.ts:13 to continue]",
+	),
 );
 /** ReadToolCard: missing file. */
 export const readErrorTool: ToolItem = tool(
@@ -588,15 +686,45 @@ export const readErrorTool: ToolItem = tool(
 );
 
 // grep / glob
-/** SearchToolCard: grep with path:line hits. */
+/** SearchToolCard: grouped grep (SDK grouped-file-output.ts): folded dir header, nested files with #TAG, `*N:` hits, ` N:` context, `...` gap. */
 export const grepDoneTool: ToolItem = tool(
 	"grep",
 	"done",
 	{ pattern: "COPY_FEEDBACK_MS", path: "apps/web" },
 	lines(
-		"apps/web/components/ui/CopyButton.tsx:5:export const COPY_FEEDBACK_MS = 1200;",
-		"apps/web/components/ui/CopyButton.tsx:20:\t\tsetTimeout(() => setCopied(false), COPY_FEEDBACK_MS);",
-		'apps/web/components/tx/TxMessage.tsx:14:import { COPY_FEEDBACK_MS } from "../shared/CopyButton";',
+		"# apps/web/components/",
+		"## tx/",
+		"### TxMessage.tsx#c3d4",
+		'*14:import { COPY_FEEDBACK_MS } from "../ui/CopyButton";',
+		" 15:",
+		" 16:/** Copy affordance shown on hover. */",
+		"",
+		"## ui/",
+		"### CopyButton.tsx#e5f6",
+		"*5:export const COPY_FEEDBACK_MS = 1200;",
+		" 6:",
+		" 7:interface CopyButtonProps {",
+		"...",
+		" 18:    setCopied(true);",
+		"*19:    setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);",
+		" 20:  };",
+	),
+);
+/** SearchToolCard: single-file grep in plain mode (`*N|text`, no header; the card falls back to args.path). */
+export const grepSingleFileTool: ToolItem = tool(
+	"grep",
+	"done",
+	{ pattern: "violations", path: "scripts/check_boundaries.py" },
+	lines(
+		' 1|"""Fail when a web component imports from another feature.',
+		" 2|",
+		" 3|Run from the repo root; exits 1 on the first violation.",
+		' 4|"""',
+		"...",
+		"*10|def violations(root: pathlib.Path) -> list[str]:",
+		" 11|    found = []",
+		"...",
+		"*19|    sys.exit(1 if violations(pathlib.Path('apps/web')) else 0)",
 	),
 );
 /** SearchToolCard: glob listing plain paths. */
@@ -627,21 +755,28 @@ export const grepErrorTool: ToolItem = tool(
 	{ pattern: "(unclosed", path: "apps/web" },
 	"regex parse error: unclosed group",
 );
-/** SearchToolCard: 40 hits so the result body scrolls. */
+/** SearchToolCard: 40 hits across four files so the result body scrolls, with the SDK's file-limit note. */
 export const grepLongTool: ToolItem = tool(
 	"grep",
 	"done",
 	{ pattern: "state\\.", path: "apps/web/components", glob: "*.tsx" },
 	lines(
-		...Array.from({ length: 40 }, (_, i) => {
-			const file = [
-				"chat/SessionConfigBar",
-				"chat/Transcript",
-				"overlays/SessionStatsDialog",
-				"fleet-ui/FleetSidebar",
-			][i % 4];
-			return `apps/web/components/${file}.tsx:${12 + i * 7}:\tconst value = () => state.field${i}();`;
-		}),
+		"# apps/web/components/",
+		...[
+			["chat/SessionConfigBar.tsx", "aa11"],
+			["chat/Transcript.tsx", "bb22"],
+			["fleet-ui/FleetSidebar.tsx", "cc33"],
+			["overlays/SessionStatsDialog.tsx", "dd44"],
+		].flatMap(([file, tag], f) => [
+			...(f > 0 ? [""] : []),
+			`## ${file}#${tag}`,
+			...Array.from(
+				{ length: 10 },
+				(_, i) => `*${12 + i * 7}:  const value = () => state.field${f * 10 + i}();`,
+			),
+		]),
+		"",
+		"Showing files 1-4 of 4+. Use skip=4 for the next page, or narrow paths/pattern.",
 	),
 );
 
@@ -854,3 +989,60 @@ export const longWriteToolItem: ToolItem = tool(
 	},
 	"Wrote 60 lines to apps/design-system/fixtures/numbers.ts",
 );
+/** DiffToolCard: an edit inside a block comment, so the colored comment spans context and added rows. */
+export const commentEditToolItem: ToolItem = tool(
+	"edit",
+	"done",
+	{
+		path: "apps/web/store/toasts.ts",
+		old_string: lines(
+			"/*",
+			" * Toasts auto-dismiss after TOAST_DISMISS_MS.",
+			" */",
+			"export const TOAST_DISMISS_MS = 4000;",
+		),
+		new_string: lines(
+			"/*",
+			" * Toasts auto-dismiss after TOAST_DISMISS_MS.",
+			" * Hovering a toast pauses the timer.",
+			" */",
+			"export const TOAST_DISMISS_MS = 5000;",
+		),
+	},
+	"Applied 1 edit to apps/web/store/toasts.ts",
+);
+/** DiffToolCard: apply_patch across two files, each section highlighted by its own language. */
+export const multiFilePatchToolItem: ToolItem = {
+	...tool(
+		"apply_patch",
+		"done",
+		{ input: "*** Begin Patch\n*** Update File: apps/web/store/toasts.ts\n*** End Patch" },
+		"Patched 2 files",
+	),
+	details: {
+		diff: lines(
+			"-12|export const TOAST_DISMISS_MS = 4000;",
+			"+12|export const TOAST_DISMISS_MS = 5000;",
+			" 40|def retry(attempts):",
+			"-41|    return attempts < 3",
+			'+41|    return attempts < 5  # "max"',
+		),
+		perFileResults: [
+			{
+				path: "apps/web/store/toasts.ts",
+				diff: lines(
+					"-12|export const TOAST_DISMISS_MS = 4000;",
+					"+12|export const TOAST_DISMISS_MS = 5000;",
+				),
+			},
+			{
+				path: "scripts/retry.py",
+				diff: lines(
+					" 40|def retry(attempts):",
+					"-41|    return attempts < 3",
+					'+41|    return attempts < 5  # "max"',
+				),
+			},
+		],
+	},
+};

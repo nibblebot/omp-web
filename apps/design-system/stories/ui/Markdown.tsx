@@ -1,5 +1,10 @@
 import { Markdown } from "../../../web/components/ui/Markdown";
-import { markdownAnswer, markdownLong, markdownUntrusted } from "../../fixtures/shared";
+import {
+	markdownAnswer,
+	markdownCodeFences,
+	markdownLong,
+	markdownUntrusted,
+} from "../../fixtures/shared";
 import { defineStory } from "../../registry";
 
 export default defineStory({
@@ -12,6 +17,12 @@ export default defineStory({
 			description:
 				"Headings, inline code, a fenced block, a list, and a link, as in a typical agent reply.",
 			render: () => <Markdown src={markdownAnswer} />,
+		},
+		{
+			name: "Code fences",
+			description:
+				"Closed fences (ts, bash, json, diff) are syntax highlighted; unlabelled, unknown-language, and still-streaming fences stay plain.",
+			render: () => <Markdown src={markdownCodeFences} />,
 		},
 		{
 			name: "Untrusted HTML",

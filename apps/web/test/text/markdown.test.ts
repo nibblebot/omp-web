@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type {
+	highlightCode as HighlightCode,
+	highlightLines as HighlightLines,
+	languageForPath as LanguageForPath,
+	loadHighlighter as LoadHighlighter,
+} from "../../text/highlight";
+import type {
 	getMarkdownSanitizer as GetMarkdownSanitizer,
 	renderMarkdown as RenderMarkdown,
 	splitForStreaming as SplitForStreaming,
@@ -558,6 +564,10 @@ let restoreMinimalDom: (() => void) | undefined;
 let renderMarkdown: typeof RenderMarkdown;
 let splitForStreaming: typeof SplitForStreaming;
 let getMarkdownSanitizer: typeof GetMarkdownSanitizer;
+let highlightCode: typeof HighlightCode;
+let highlightLines: typeof HighlightLines;
+let languageForPath: typeof LanguageForPath;
+let loadHighlighter: typeof LoadHighlighter;
 
 // Import in the hook after installing the DOM double so the first sanitizer
 // creation sees this window, without mutating globals while collecting tests.
@@ -565,6 +575,8 @@ beforeAll(async () => {
 	restoreMinimalDom = installMinimalDom();
 	({ renderMarkdown, splitForStreaming, getMarkdownSanitizer } =
 		await import("../../text/markdown"));
+	({ highlightCode, highlightLines, languageForPath, loadHighlighter } =
+		await import("../../text/highlight"));
 });
 afterAll(() => {
 	restoreMinimalDom?.();
@@ -636,5 +648,249 @@ describe("splitForStreaming", () => {
 			complete: ["intro"],
 			tail: "```\nopen block\n\nstill open",
 		});
+	});
+});
+
+describe("highlightCode", () => {
+	test("returns null until the library has loaded, then highlights", async () => {
+		// First call triggers the lazy load and renders plain.
+		expect(highlightCode("const a = 1;", "ts")).toBeNull();
+		await loadHighlighter();
+		const html = highlightCode("const a = 1;", "ts");
+		expect(html).toContain('<span class="hljs-keyword">const</span>');
+	});
+
+	test("resolves aliases and returns null for unknown or missing languages", async () => {
+		await loadHighlighter();
+		for (const alias of [
+			"sh",
+			"shell",
+			"zsh",
+			"py",
+			"tsx",
+			"js",
+			"jsx",
+			"yml",
+			"toml",
+			"html",
+			"c++",
+			"golang",
+			"rs",
+		]) {
+			expect(highlightCode("x", alias)).not.toBeNull();
+		}
+		expect(highlightCode("x", "klingon")).toBeNull();
+		expect(highlightCode("x", undefined)).toBeNull();
+		expect(highlightCode("x", "")).toBeNull();
+	});
+
+	test("escapes markup inside the code", async () => {
+		await loadHighlighter();
+		const html = highlightCode('<img src=x onerror="alert(1)">', "html");
+		expect(html).not.toBeNull();
+		expect(html).not.toContain("<img");
+		expect(html).toContain("&lt;");
+	});
+
+	test("repeat calls hit the cache and return an identical string", async () => {
+		await loadHighlighter();
+		const first = highlightCode("def f(): return 1", "python");
+		expect(first).not.toBeNull();
+		expect(highlightCode("def f(): return 1", "python")).toBe(first);
+	});
+});
+
+describe("languageForPath", () => {
+	test("maps extensions onto registered grammars", () => {
+		const cases: Record<string, string> = {
+			"a.ts": "typescript",
+			"a/b/c.TSX": "typescript",
+			"x.mts": "typescript",
+			"x.cts": "typescript",
+			"a.js": "javascript",
+			"a.jsx": "javascript",
+			"a.mjs": "javascript",
+			"a.cjs": "javascript",
+			"a.py": "python",
+			"a.rs": "rust",
+			"a.go": "go",
+			"a.json": "json",
+			"tsconfig.jsonc": "json",
+			"a.yaml": "yaml",
+			"a.yml": "yaml",
+			"Cargo.toml": "ini",
+			"a.ini": "ini",
+			"a.css": "css",
+			"a.html": "xml",
+			"a.xml": "xml",
+			"icon.svg": "xml",
+			"a.sql": "sql",
+			"a.diff": "diff",
+			"a.patch": "diff",
+			"README.md": "markdown",
+			"a.c": "c",
+			"a.h": "c",
+			"a.cpp": "cpp",
+			"a.cc": "cpp",
+			"a.hpp": "cpp",
+			"A.java": "java",
+			"a.sh": "bash",
+			"a.bash": "bash",
+			"a.zsh": "bash",
+			"/home/u/.zshrc": "bash",
+			".gitconfig": "ini",
+		};
+		for (const [path, lang] of Object.entries(cases)) {
+			expect(languageForPath(path)).toBe(lang);
+		}
+	});
+
+	test("every mapped language is registered", async () => {
+		await loadHighlighter();
+		for (const path of ["a.ts", "a.js", "a.py", "a.toml", "a.svg", "a.hh", "a.zsh", "a.jsonc"]) {
+			expect(highlightCode("x", languageForPath(path))).not.toBeNull();
+		}
+	});
+
+	test("unknown, missing and extensionless names have no language", () => {
+		for (const path of [
+			"",
+			"Makefile",
+			"Dockerfile",
+			".gitignore",
+			"a.klingon",
+			"dir.ts/noext",
+			"a.constructor",
+			"a.toString",
+		]) {
+			expect(languageForPath(path)).toBeUndefined();
+		}
+	});
+
+	test("tolerates read selectors and archive members", () => {
+		expect(languageForPath("src/a.ts:10-20")).toBe("typescript");
+		expect(languageForPath("src/a.py:raw:5-9")).toBe("python");
+		expect(languageForPath("bundle.zip:src/a.rs")).toBe("rust");
+		expect(languageForPath("bundle.tar.gz:notes.md")).toBe("markdown");
+	});
+});
+
+/** Every `<span ...>` is closed and nothing but spans nests. */
+function balanced(html: string): boolean {
+	let depth = 0;
+	for (const m of html.matchAll(/<(\/?)span\b[^>]*>/g)) {
+		depth += m[1] ? -1 : 1;
+		if (depth < 0) return false;
+	}
+	return depth === 0;
+}
+
+describe("highlightLines", () => {
+	test("returns null before load, for unknown languages and oversized input", async () => {
+		await loadHighlighter();
+		expect(highlightLines("x", undefined)).toBeNull();
+		expect(highlightLines("x", "klingon")).toBeNull();
+		expect(highlightLines("a\n".repeat(60_000), "ts")).toBeNull();
+	});
+
+	test("one entry per input line, trailing newline gives a final empty entry", async () => {
+		await loadHighlighter();
+		const lines = highlightLines("const a = 1;\nconst b = 2;\n", "ts");
+		expect(lines).toHaveLength(3);
+		expect(lines?.[0]).toContain('<span class="hljs-keyword">const</span>');
+		expect(lines?.[1]).toContain('<span class="hljs-keyword">const</span>');
+		expect(lines?.[2]).toBe("");
+		expect(highlightLines("", "ts")).toEqual([""]);
+	});
+
+	test("a multi-line block comment stays colored on every row with balanced spans", async () => {
+		await loadHighlighter();
+		const code = "/**\n * doc\n\n */\nconst x = 1;";
+		const lines = highlightLines(code, "ts");
+		expect(lines).toHaveLength(5);
+		for (const line of lines ?? []) expect(balanced(line)).toBe(true);
+		// Each comment row, including the blank one, is wrapped in the comment span.
+		for (const i of [0, 1, 2, 3]) expect(lines?.[i]).toMatch(/^<span class="hljs-comment">/);
+		expect(lines?.[1]).toContain(" * doc");
+		expect(lines?.[4]).toContain('<span class="hljs-keyword">const</span>');
+	});
+
+	test("a multi-line template string and python docstring keep the string span per row", async () => {
+		await loadHighlighter();
+		const ts = highlightLines("const s = `a\nb\nc`;", "ts");
+		expect(ts).toHaveLength(3);
+		expect(ts?.[1]).toBe('<span class="hljs-string">b</span>');
+		for (const line of ts ?? []) expect(balanced(line)).toBe(true);
+		const py = highlightLines('"""doc\nmore\n"""\nx = 1', "python");
+		expect(py).toHaveLength(4);
+		expect(py?.[1]).toBe('<span class="hljs-string">more</span>');
+		for (const line of py ?? []) expect(balanced(line)).toBe(true);
+	});
+
+	test("joined lines equal the whole-text highlight and markup stays escaped", async () => {
+		await loadHighlighter();
+		const code = '<img src=x onerror="alert(1)">\n<!-- c\nd -->\n<b>x</b>';
+		const lines = highlightLines(code, "html");
+		expect(lines).toHaveLength(4);
+		for (const line of lines ?? []) {
+			expect(balanced(line)).toBe(true);
+			expect(line).not.toContain("<img");
+			expect(line).not.toContain("<b>");
+		}
+		const flat = (lines ?? []).join("\n").replace(/<\/?span\b[^>]*>/g, "");
+		const whole = (highlightCode(code, "html") ?? "").replace(/<\/?span\b[^>]*>/g, "");
+		expect(flat).toBe(whole);
+	});
+
+	test("repeat calls hit the cache and return the same array", async () => {
+		await loadHighlighter();
+		const first = highlightLines("x = 1\ny = 2", "py");
+		expect(first).not.toBeNull();
+		expect(highlightLines("x = 1\ny = 2", "py")).toBe(first);
+	});
+});
+
+describe("renderMarkdown code fences", () => {
+	test("a closed fence is highlighted and keeps the language-x shape", async () => {
+		await loadHighlighter();
+		const html = renderMarkdown("```ts\nconst a = 1;\n```\n");
+		expect(html).toContain('<pre><code class="language-ts">');
+		expect(html).toContain("hljs-keyword");
+	});
+
+	test("an open (unterminated) fence renders exactly as plain", async () => {
+		await loadHighlighter();
+		const html = renderMarkdown("```ts\nconst a = 1;\n");
+		expect(html).toBe('<pre><code class="language-ts">const a = 1;\n</code></pre>\n');
+	});
+
+	test("a fence closed by a shorter fence stays open", async () => {
+		await loadHighlighter();
+		const html = renderMarkdown("````ts\nconst a = 1;\n```\n");
+		expect(html).not.toContain("hljs-");
+	});
+
+	test("tilde fences close with tildes", async () => {
+		await loadHighlighter();
+		expect(renderMarkdown("~~~ts\nconst a = 1;\n~~~\n")).toContain("hljs-keyword");
+		expect(renderMarkdown("~~~ts\nconst a = 1;\n")).not.toContain("hljs-");
+	});
+
+	test("unknown or missing language renders plain", async () => {
+		await loadHighlighter();
+		expect(renderMarkdown("```klingon\nconst a = 1;\n```\n")).toBe(
+			'<pre><code class="language-klingon">const a = 1;\n</code></pre>\n',
+		);
+		expect(renderMarkdown("```\nconst a = 1;\n```\n")).toBe(
+			"<pre><code>const a = 1;\n</code></pre>\n",
+		);
+	});
+
+	test("markup inside a highlighted fence stays escaped", async () => {
+		await loadHighlighter();
+		const html = renderMarkdown('```html\n<img src=x onerror="alert(1)">\n```\n');
+		expect(html).toContain("hljs-");
+		expect(html).not.toContain("<img");
+		expect(removedBySanitizer()).toEqual([]);
 	});
 });

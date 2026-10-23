@@ -1,3 +1,4 @@
+import type { JSX } from "solid-js";
 import { AskToolCard } from "../../../../web/components/chat/tools/AskToolCard";
 import { BashToolCard } from "../../../../web/components/chat/tools/BashToolCard";
 import {
@@ -13,7 +14,11 @@ import { SearchToolCard } from "../../../../web/components/chat/tools/SearchTool
 import { TaskToolCard } from "../../../../web/components/chat/tools/TaskToolCard";
 import { TodoToolCard } from "../../../../web/components/chat/tools/TodoToolCard";
 import { WebSearchToolCard } from "../../../../web/components/chat/tools/WebSearchToolCard";
+import { ToolCard } from "../../../../web/components/chat/tools/ToolCard";
+import { HighlightedLine } from "../../../../web/components/chat/tools/HighlightedLine";
+import { HighlightedText } from "../../../../web/components/chat/tools/HighlightedText";
 import {
+	editToolItem,
 	askCustomTool,
 	askDoneTool,
 	askErrorTool,
@@ -21,7 +26,10 @@ import {
 	askRunningTool,
 	bashDoneTool,
 	bashErrorTool,
+	bashInterruptedTool,
+	bashLongCommandTool,
 	bashLongTool,
+	bashMultilineTool,
 	bashRunningTool,
 	evalDoneTool,
 	evalErrorTool,
@@ -29,11 +37,13 @@ import {
 	evalRunningTool,
 	genericDoneTool,
 	genericErrorTool,
+	genericInterruptedTool,
 	genericImageTool,
 	genericLongTool,
 	genericRunningTool,
 	globDoneTool,
 	grepDoneTool,
+	grepSingleFileTool,
 	grepErrorTool,
 	grepLongTool,
 	grepRunningTool,
@@ -46,6 +56,8 @@ import {
 	lspReferencesTool,
 	lspRunningTool,
 	readDoneTool,
+	readPlainTool,
+	readPythonTool,
 	readErrorTool,
 	readLongTool,
 	readRunningTool,
@@ -66,6 +78,9 @@ import {
 import { defineStory } from "../../../registry";
 import type { Story } from "../../../registry";
 
+/** One tool card per status, side by side: running, done, error, interrupted. */
+const statusRow = (cards: JSX.Element[]): JSX.Element => <div class="ds-status-grid">{cards}</div>;
+
 const stories: Story[] = [
 	defineStory({
 		id: "chat-tools-tool-card-shell",
@@ -78,7 +93,7 @@ const stories: Story[] = [
 			{
 				name: "Settled, with body",
 				render: () => (
-					<ToolCardShell name="bash" status="done" class="bash-tool">
+					<ToolCardShell name="bash" arg="bun run lint" status="done" class="bash-tool">
 						<pre>{"$ bun run lint\nFound 0 warnings and 0 errors."}</pre>
 					</ToolCardShell>
 				),
@@ -88,8 +103,9 @@ const stories: Story[] = [
 				render: () => (
 					<ToolCardShell
 						name="eval"
+						arg="(python)"
 						status="running"
-						meta={<span class="tool-meta">python · cell 2</span>}
+						meta={<span class="tool-meta">cell 2</span>}
 					>
 						<pre>{"apps/web/components/app/NoActiveSessionPane.tsx 612\n"}</pre>
 					</ToolCardShell>
@@ -98,14 +114,23 @@ const stories: Story[] = [
 			{
 				name: "Collapsible, closed by default",
 				render: () => (
-					<ToolCardShell name="mcp_linear_list_issues" status="done" collapsible>
+					<ToolCardShell
+						name="mcp__linear_list_issues"
+						arg='{"team":"OMP","limit":3}'
+						status="done"
+						collapsible
+					>
 						<pre>{'[{ "id": "OMP-412", "assignee": "joshua" }]'}</pre>
 					</ToolCardShell>
 				),
 			},
 			{
 				name: "Error status, no body",
-				render: () => <ToolCardShell name="read" status="error" />,
+				render: () => <ToolCardShell name="read" arg="apps/web/missing.ts" status="error" />,
+			},
+			{
+				name: "Interrupted status, no body",
+				render: () => <ToolCardShell name="bash" arg="sleep 600" status="interrupted" />,
 			},
 		],
 	}),
@@ -159,6 +184,18 @@ const stories: Story[] = [
 				name: "Long output, collapsed tail",
 				description: "Settled card past the 20-line cap; toggle Ctrl+O from the header to expand.",
 				render: () => <BashToolCard item={bashLongTool} />,
+			},
+			{
+				name: "Multi-line command",
+				description:
+					"The header shows the first line; the full highlighted command sits above the output.",
+				render: () => <BashToolCard item={bashMultilineTool} />,
+			},
+			{
+				name: "Very long command",
+				description:
+					"Truncated with an ellipsis in the header; shown in full (wrapped) above the output.",
+				render: () => <BashToolCard item={bashLongCommandTool} />,
 			},
 		],
 	}),
@@ -268,7 +305,23 @@ const stories: Story[] = [
 		title: "ReadToolCard",
 		component: { file: "apps/web/components/chat/tools/ReadToolCard.tsx", export: "ReadToolCard" },
 		variants: [
-			{ name: "Excerpt with line numbers", render: () => <ReadToolCard item={readDoneTool} /> },
+			{
+				name: "Excerpt with line numbers",
+				description:
+					"Hashline output: the [path#TAG] header is dropped, content is highlighted by file extension.",
+				render: () => <ReadToolCard item={readDoneTool} />,
+			},
+			{
+				name: "Python, multi-line docstring",
+				description: "Highlighted as one block, so the docstring colors across its rows.",
+				render: () => <ReadToolCard item={readPythonTool} />,
+			},
+			{
+				name: "Plain output, no line numbers",
+				description:
+					"Bare terminal body with a block comment spanning rows; the SDK notice stays plain.",
+				render: () => <ReadToolCard item={readPlainTool} />,
+			},
 			{ name: "Running", render: () => <ReadToolCard item={readRunningTool} /> },
 			{
 				name: "Long file, offset 40",
@@ -286,7 +339,16 @@ const stories: Story[] = [
 			export: "SearchToolCard",
 		},
 		variants: [
-			{ name: "grep with path:line hits", render: () => <SearchToolCard item={grepDoneTool} /> },
+			{
+				name: "grep, grouped by file",
+				description: "SDK grouped output: file headers copy the path, line numbers copy path:line.",
+				render: () => <SearchToolCard item={grepDoneTool} />,
+			},
+			{
+				name: "grep, single file (plain mode)",
+				description: "No file header; rows use the search path from the call's arguments.",
+				render: () => <SearchToolCard item={grepSingleFileTool} />,
+			},
 			{ name: "glob listing", render: () => <SearchToolCard item={globDoneTool} /> },
 			{ name: "Running", render: () => <SearchToolCard item={grepRunningTool} /> },
 			{ name: "Invalid pattern", render: () => <SearchToolCard item={grepErrorTool} /> },
@@ -349,6 +411,126 @@ const stories: Story[] = [
 			{
 				name: "Provider rate limit",
 				render: () => <WebSearchToolCard item={webSearchErrorTool} />,
+			},
+		],
+	}),
+	defineStory({
+		id: "chat-tools-statuses",
+		title: "Tool card statuses and categories",
+		component: { file: "apps/web/components/chat/tools/ToolCard.tsx", export: "ToolCard" },
+		variants: [
+			{
+				name: "All four statuses (bash)",
+				description:
+					"Running spins, done leaves the slot empty with a green border, error shows the warning icon on a red border, interrupted the stop icon on an amber border.",
+				render: () =>
+					statusRow([
+						<BashToolCard item={bashRunningTool} />,
+						<BashToolCard item={bashDoneTool} />,
+						<BashToolCard item={bashErrorTool} />,
+						<BashToolCard item={bashInterruptedTool} />,
+					]),
+			},
+			{
+				name: "All four statuses (collapsible summary header)",
+				description: "Same status slot in the <summary> header of a collapsible card.",
+				render: () =>
+					statusRow([
+						<GenericToolCard item={genericRunningTool} />,
+						<GenericToolCard item={genericDoneTool} />,
+						<GenericToolCard item={genericErrorTool} />,
+						<GenericToolCard item={genericInterruptedTool} />,
+					]),
+			},
+			{
+				name: "Every tool category",
+				description:
+					"Shell, read, write, search, agents, and other (MCP) each get their own icon and color.",
+				render: () =>
+					statusRow([
+						<ToolCard item={bashDoneTool} />,
+						<ToolCard item={evalDoneTool} />,
+						<ToolCard item={readDoneTool} />,
+						<ToolCard item={editToolItem} />,
+						<ToolCard item={grepDoneTool} />,
+						<ToolCard item={webSearchDoneTool} />,
+						<ToolCard item={lspDefinitionTool} />,
+						<ToolCard item={taskPendingTool} />,
+						<ToolCard item={hubSendTool} />,
+						<ToolCard item={askDoneTool} />,
+						<ToolCard item={todoArgsTool} />,
+						<ToolCard item={genericDoneTool} />,
+						<ToolCard item={genericImageTool} />,
+					]),
+			},
+		],
+	}),
+	defineStory({
+		id: "chat-tools-highlighted-text",
+		title: "HighlightedText",
+		component: {
+			file: "apps/web/components/chat/tools/HighlightedText.tsx",
+			export: "HighlightedText",
+		},
+		variants: [
+			{
+				name: "Bash",
+				render: () => (
+					<pre class="terminal tool-code">
+						<HighlightedText code={'for f in *.ts; do echo "$f"; done # list'} lang="bash" />
+					</pre>
+				),
+			},
+			{
+				name: "JSON",
+				render: () => (
+					<pre class="terminal tool-code">
+						<HighlightedText
+							code={'{\n  "team": "OMP",\n  "limit": 3,\n  "open": true\n}'}
+							lang="json"
+						/>
+					</pre>
+				),
+			},
+			{
+				name: "Unknown language (plain)",
+				render: () => (
+					<pre class="terminal tool-code">
+						<HighlightedText code="SELECT-ish text with <tags> stays escaped" lang="cobol" />
+					</pre>
+				),
+			},
+		],
+	}),
+	defineStory({
+		id: "chat-tools-highlighted-line",
+		title: "HighlightedLine",
+		component: {
+			file: "apps/web/components/chat/tools/HighlightedLine.tsx",
+			export: "HighlightedLine",
+		},
+		variants: [
+			{
+				name: "Highlighted HTML",
+				description: "One row of highlightLines output: hljs spans, balanced within the row.",
+				render: () => (
+					<pre class="terminal tool-code">
+						<HighlightedLine
+							html={
+								'<span class="hljs-keyword">const</span> limit = <span class="hljs-number">3</span>; <span class="hljs-comment">// cap</span>'
+							}
+							text="const limit = 3; // cap"
+						/>
+					</pre>
+				),
+			},
+			{
+				name: "No grammar (plain text)",
+				render: () => (
+					<pre class="terminal tool-code">
+						<HighlightedLine html={null} text="const limit = <3>; stays escaped" />
+					</pre>
+				),
 			},
 		],
 	}),

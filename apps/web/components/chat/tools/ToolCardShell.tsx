@@ -1,6 +1,38 @@
-import { createEffect, createSignal, For, on, Show, type Component, type JSX } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	Match,
+	on,
+	Show,
+	Switch,
+	type Component,
+	type JSX,
+} from "solid-js";
+import { Dynamic } from "solid-js/web";
+import { toolKind, type ToolIconKey } from "../../../chat/tool-kinds";
 import { state, type ToolItem } from "../../../state";
 import { Card } from "../../ui/Card";
+import {
+	BotIcon,
+	BracesIcon,
+	CodeIcon,
+	FileTextIcon,
+	GlobeIcon,
+	ListChecksIcon,
+	LoaderIcon,
+	MessageCircleQuestionIcon,
+	MessagesSquareIcon,
+	PencilIcon,
+	PlugIcon,
+	SearchIcon,
+	StopIcon,
+	TerminalIcon,
+	WarningIcon,
+	WrenchIcon,
+	type IconProps,
+} from "../../ui/icons";
 
 /** Lines of tool output shown while collapsed; Ctrl+O (toolsExpanded) reveals the rest. */
 export const COLLAPSED_LINES = 20;
@@ -10,20 +42,38 @@ export const toolExpanded = (item: ToolItem): boolean =>
 	state.toolsExpanded || item.status === "running";
 
 interface ToolShellProps {
-	/** Header label, rendered inside span.tool-name. */
-	name: JSX.Element;
-	/** Renders span.tool-status[data-status] when provided. */
+	/** Tool name: the header label, also the key for the category color and icon (chat/tool-kinds.ts). */
+	name: string;
+	/** One-line argument shown after the name, in the monospace arg slot (command, path, pattern...). */
+	arg?: JSX.Element;
+	/** Tool status ("running" | "done" | "error" | "interrupted"): drives the card border and the right-edge status slot. */
 	status?: string;
 	/** Extra card class, e.g. "bash-tool". */
 	class?: string;
-	/** Extra header content after name/status (the generic card's args chip). */
+	/** Extra header content between the arg and the status slot (diff +n −m). */
 	meta?: JSX.Element;
 	/** Render as a <details> that stays open while running (GenericToolCard). */
 	collapsible?: boolean;
 	children?: JSX.Element;
 }
 
-/** Shared tool card: header (name + status) plus a tool-specific body. */
+const TOOL_ICONS: Record<ToolIconKey, Component<IconProps>> = {
+	terminal: TerminalIcon,
+	code: CodeIcon,
+	"file-text": FileTextIcon,
+	pencil: PencilIcon,
+	search: SearchIcon,
+	globe: GlobeIcon,
+	braces: BracesIcon,
+	bot: BotIcon,
+	"messages-square": MessagesSquareIcon,
+	"message-circle-question": MessageCircleQuestionIcon,
+	"list-checks": ListChecksIcon,
+	plug: PlugIcon,
+	wrench: WrenchIcon,
+};
+
+/** Shared tool card: header ([icon] name arg meta, status slot pinned right) plus a tool-specific body. */
 export const ToolCardShell: Component<ToolShellProps> = (props) => {
 	// User intent for the <details> toggle. A trusted toggle that differs from
 	// the reactive default is a user click; the browser also fires trusted
@@ -38,16 +88,11 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 		),
 	);
 	const cardClass = () => (props.class ? `tool-card ${props.class}` : "tool-card");
-	const status = () => (
-		<Show when={props.status}>
-			<span class="tool-status" data-status={props.status}>
-				{props.status}
-			</span>
-		</Show>
-	);
+	const kind = createMemo(() => toolKind(props.name));
 	return (
 		<Card
 			class={cardClass()}
+			status={props.status}
 			collapsible={props.collapsible}
 			open={userOpen() ?? (state.toolsExpanded || props.status === "running")}
 			onToggle={(e) => {
@@ -59,9 +104,30 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 			}}
 			header={
 				<>
-					<span class="tool-name">{props.name}</span>
-					{status()}
+					<span class="tool-kind" data-kind={kind().category}>
+						<Dynamic component={TOOL_ICONS[kind().icon]} />
+						<span class="tool-name">{props.name}</span>
+					</span>
+					<Show when={props.arg}>
+						<span class="tool-arg">{props.arg}</span>
+					</Show>
 					{props.meta}
+					<Show when={props.status}>
+						<span class="tool-state" data-status={props.status} title={props.status}>
+							<Switch>
+								<Match when={props.status === "running"}>
+									<LoaderIcon class="tool-spin" />
+								</Match>
+								<Match when={props.status === "error"}>
+									<WarningIcon />
+								</Match>
+								<Match when={props.status === "interrupted"}>
+									<StopIcon />
+								</Match>
+							</Switch>
+							<span class="visually-hidden">{props.status}</span>
+						</span>
+					</Show>
 				</>
 			}
 		>

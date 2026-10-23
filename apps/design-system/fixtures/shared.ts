@@ -70,6 +70,46 @@ Run \`bun run check:types\` once the edit lands. The component lives in \`apps/w
 - background notes: [tool-card notes](https://example.dev/notes/tool-card)
 `;
 
+/** Closed fences in several languages, an unlabelled fence, an unknown language, and one still streaming (no closing fence). */
+export const markdownCodeFences = `Closed fences are highlighted once the closing fence arrives.
+
+\`\`\`ts
+export function greet(name: string): string {
+	// say hello
+	return \`hello \${name}\` + 42;
+}
+\`\`\`
+
+\`\`\`bash
+for f in *.ts; do echo "$f" | grep -c "import"; done
+\`\`\`
+
+\`\`\`json
+{ "name": "omp-web", "private": true, "workers": 4, "tags": ["a", null] }
+\`\`\`
+
+\`\`\`diff
+- const old = 1;
++ const next = 2;
+\`\`\`
+
+An unlabelled fence and an unknown language stay plain:
+
+\`\`\`
+no language here
+\`\`\`
+
+\`\`\`klingon
+qapla'
+\`\`\`
+
+This fence is still streaming, so it renders plain:
+
+\`\`\`python
+def streaming():
+    return "no closing fence yet"
+`;
+
 /** Untrusted markdown: raw HTML, a script URL, and an image handler that must not run. */
 export const markdownUntrusted = `Here is the summary you asked for.
 

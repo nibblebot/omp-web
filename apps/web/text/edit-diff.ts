@@ -1,20 +1,24 @@
 import { buildDiffRows, type DiffRow } from "./diff";
 
+/** One file's slice of a change: its rows are highlighted as one contiguous source per side. */
+export interface DiffFile {
+	/** File path (picks the highlight grammar); null when unknown. */
+	path: string | null;
+	rows: DiffRow[];
+}
+
 /** One edit call's change as diff rows, with its +/- line counts. */
 export interface EditPreview {
 	/** Target file from the call args (or the result details); null when unknown. */
 	path: string | null;
 	/** Files the change touches: 1 for replacements, the patch's file count otherwise. */
 	files: number;
+	/** All rows, in order. */
 	rows: DiffRow[];
+	/** `rows` split per file; a single entry unless per-file results describe the same rows. */
+	sections: DiffFile[];
 	added: number;
 	removed: number;
-}
-
-/** One side-by-side row: `left` is the old side, `right` the new side. */
-export interface SplitRow {
-	left: DiffRow | null;
-	right: DiffRow | null;
 }
 
 type Record_ = Record<string, unknown>;
@@ -63,14 +67,73 @@ function countType(rows: DiffRow[], type: "add" | "del"): number {
 	return n;
 }
 
-function preview(path: string | null, files: number, rows: DiffRow[]): EditPreview {
+function preview(
+	path: string | null,
+	files: number,
+	rows: DiffRow[],
+	sections: DiffFile[] = [{ path, rows }],
+): EditPreview {
 	return {
 		path,
 		files,
 		rows,
+		sections,
 		added: countType(rows, "add"),
 		removed: countType(rows, "del"),
 	};
+}
+
+/**
+ * Per-file sections from `details.perFileResults` (each `{ path, diff }`), only
+ * when they cover exactly the combined `rows`; otherwise undefined (one section).
+ */
+function perFileSections(results: unknown, rows: DiffRow[]): DiffFile[] | undefined {
+	if (!Array.isArray(results) || results.length < 2) return undefined;
+	const sections: DiffFile[] = [];
+	let total = 0;
+	for (const entry of results) {
+		const r = asRecord(entry);
+		if (typeof r?.path !== "string" || typeof r.diff !== "string") return undefined;
+		const own = parseCompactDiff(r.diff);
+		total += own.length;
+		sections.push({ path: r.path, rows: own });
+	}
+	return total === rows.length ? sections : undefined;
+}
+
+/**
+ * Per-row highlighted HTML for one file's rows, or null when `highlight`
+ * declines (no grammar yet). Each side is highlighted as contiguous text so
+ * multi-line comments and strings color across rows: the old side is the
+ * context+del rows, the new side the context+add rows. Del rows take the old
+ * side's line, add and context rows the new side's. Collapse rows are null.
+ */
+export function highlightDiffRows(
+	rows: DiffRow[],
+	highlight: (code: string) => string[] | null,
+): Array<string | null> | null {
+	const oldText: string[] = [];
+	const newText: string[] = [];
+	for (const row of rows) {
+		if (row.type === "collapse") continue;
+		if (row.type !== "add") oldText.push(row.text);
+		if (row.type !== "del") newText.push(row.text);
+	}
+	const side = (lines: string[]): string[] | null | undefined =>
+		lines.length === 0 ? [] : highlight(lines.join("\n"));
+	const oldHtml = side(oldText);
+	const newHtml = side(newText);
+	if (!oldHtml || !newHtml) return null;
+	if (oldHtml.length !== oldText.length || newHtml.length !== newText.length) return null;
+	let o = 0;
+	let n = 0;
+	return rows.map((row) => {
+		if (row.type === "collapse") return null;
+		if (row.type === "del") return oldHtml[o++] ?? null;
+		if (row.type === "add") return newHtml[n++] ?? null;
+		o++;
+		return newHtml[n++] ?? null;
+	});
 }
 
 /**
@@ -100,30 +163,8 @@ export function editPreview(name: string, args: unknown, details?: unknown): Edi
 
 	if (typeof d?.diff === "string") {
 		const files = Array.isArray(d.perFileResults) ? d.perFileResults.length : 1;
-		return preview(path, Math.max(files, 1), parseCompactDiff(d.diff));
+		const rows = parseCompactDiff(d.diff);
+		return preview(path, Math.max(files, 1), rows, perFileSections(d.perFileResults, rows));
 	}
 	return null;
-}
-
-/** Pair old/new sides for a two-column view: context on both, changes zipped. */
-export function splitRows(rows: DiffRow[]): SplitRow[] {
-	const out: SplitRow[] = [];
-	let dels: DiffRow[] = [];
-	let adds: DiffRow[] = [];
-	const flush = () => {
-		const n = Math.max(dels.length, adds.length);
-		for (let i = 0; i < n; i++) out.push({ left: dels[i] ?? null, right: adds[i] ?? null });
-		dels = [];
-		adds = [];
-	};
-	for (const row of rows) {
-		if (row.type === "del") dels.push(row);
-		else if (row.type === "add") adds.push(row);
-		else {
-			flush();
-			out.push({ left: row, right: row });
-		}
-	}
-	flush();
-	return out;
 }

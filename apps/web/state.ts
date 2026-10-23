@@ -124,7 +124,7 @@ import {
 export type Block = { kind: "text" | "thinking"; text: string };
 /** What the transcript pane shows for a session switch (see `state.transcriptPhase`). */
 export type TranscriptPhase = "idle" | "waking" | "attaching" | "loaded" | "failed";
-export type ToolStatus = "running" | "done" | "error";
+export type ToolStatus = "running" | "done" | "error" | "interrupted";
 export type BashItem = {
 	kind: "bash";
 	id: number;

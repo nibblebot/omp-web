@@ -461,6 +461,87 @@ export const BotIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
+/** Eval tool glyph, drawn with Lucide's code. */
+export const CodeIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="m16 18 6-6-6-6" />
+		<path d="m8 6-6 6 6 6" />
+	</Svg>
+);
+
+/** Read tool glyph, drawn with Lucide's file-text. */
+export const FileTextIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" />
+		<path d="M14 2v5a1 1 0 0 0 1 1h5" />
+		<path d="M10 9H8" />
+		<path d="M16 13H8" />
+		<path d="M16 17H8" />
+	</Svg>
+);
+
+/** Web search tool glyph, drawn with Lucide's globe. */
+export const GlobeIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<circle cx="12" cy="12" r="10" />
+		<path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+		<path d="M2 12h20" />
+	</Svg>
+);
+
+/** LSP tool glyph, drawn with Lucide's braces. */
+export const BracesIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1" />
+		<path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" />
+	</Svg>
+);
+
+/** Hub tool glyph, drawn with Lucide's messages-square. */
+export const MessagesSquareIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+		<path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1" />
+	</Svg>
+);
+
+/** Ask tool glyph, drawn with Lucide's message-circle-question. */
+export const MessageCircleQuestionIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719" />
+		<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+		<path d="M12 17h.01" />
+	</Svg>
+);
+
+/** Todo tool glyph, drawn with Lucide's list-checks. */
+export const ListChecksIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M13 5h8" />
+		<path d="M13 12h8" />
+		<path d="M13 19h8" />
+		<path d="m3 17 2 2 4-4" />
+		<path d="m3 7 2 2 4-4" />
+	</Svg>
+);
+
+/** MCP tool glyph, drawn with Lucide's plug. */
+export const PlugIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M12 22v-5" />
+		<path d="M15 8V2" />
+		<path d="M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z" />
+		<path d="M9 8V2" />
+	</Svg>
+);
+
+/** Unknown-tool glyph, drawn with Lucide's wrench. */
+export const WrenchIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z" />
+	</Svg>
+);
+
 /** Official omp mark, vendored from https://omp.sh/favicon.svg. A brand logo,
  *  so unlike the Lucide set it keeps its own fill colors instead of
  *  currentColor. */

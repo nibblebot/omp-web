@@ -10,6 +10,7 @@ import type {
 } from "#lib/wire/protocol";
 import { extractText, scanImages } from "#lib/wire/tool-result";
 import { promptTimestamp } from "../chat/turn-usage";
+import { abortedTools, toolResultStatus } from "../chat/tool-interrupt";
 import { smoothStreaming } from "../chat/display-prefs";
 import type { UsageLike } from "../usage/usage";
 import {
@@ -63,7 +64,8 @@ export function resetChatIds(): void {
 /**
  * A turn that is not streaming has no tool in flight. A replayed transcript
  * opens an unanswered tool call as running (its result is written only when the
- * tool returns), so an idle snapshot settles any such leftover here.
+ * tool returns), so an idle snapshot settles any such leftover here. The call
+ * never reported an outcome, so it reads as interrupted, not done.
  */
 export function settleRunningTools(): void {
 	if (!state.items.some((it) => it.kind === "tool" && it.status === "running")) return;
@@ -71,7 +73,26 @@ export function settleRunningTools(): void {
 		"items",
 		produce((items) => {
 			for (const item of items) {
-				if (item.kind === "tool" && item.status === "running") item.status = "done";
+				if (item.kind === "tool" && item.status === "running") item.status = "interrupted";
+			}
+		}),
+	);
+}
+
+/**
+ * An aborted assistant message arrived: the tools of the closest earlier
+ * assistant that made calls were cut short, so those still running or settled
+ * `error` (what Esc turns a killed tool into) become interrupted. Mutates in place.
+ */
+function interruptAbortedTools(): void {
+	const targets = abortedTools(state.items);
+	if (targets.length === 0) return;
+	const ids = new Set(targets.map((item) => item.id));
+	setState(
+		"items",
+		produce((items) => {
+			for (const item of items) {
+				if (item.kind === "tool" && ids.has(item.id)) item.status = "interrupted";
 			}
 		}),
 	);
@@ -622,6 +643,7 @@ export function applyEvent(e: WireSessionEvent): void {
 					completedAt?: number;
 					stopReason?: string;
 				};
+				if (meta.stopReason === "aborted") interruptAbortedTools();
 				pushItem({
 					kind: "assistant",
 					id: nextId++,
@@ -685,6 +707,11 @@ export function applyEvent(e: WireSessionEvent): void {
 		}
 		case "tool_execution_end": {
 			const index = findToolIndex(e.toolCallId);
+			const details =
+				e.result && typeof e.result === "object" && "details" in e.result
+					? e.result.details
+					: undefined;
+			const status = toolResultStatus(e.isError, details);
 			if (index >= 0) {
 				// Synchronous transition: a buffered partial lands first so the
 				// authoritative final result replaces ALL partial text. A late
@@ -695,22 +722,20 @@ export function applyEvent(e: WireSessionEvent): void {
 					produce((items) => {
 						const item = items[index];
 						if (item?.kind === "tool") {
-							item.status = e.isError ? "error" : "done";
+							item.status = status;
 							item.output = capTail(tabsToSpaces(extractText(e.result)), 8000);
 							const images = scanImages(e.result);
 							if (images.length > 0) item.images = images;
-							const details =
-								e.result && typeof e.result === "object" && "details" in e.result
-									? e.result.details
-									: undefined;
 							if (details !== undefined) item.details = details;
 						}
 					}),
 				);
 			}
-			// finding #P1: announce the settled rung (failed/complete), never
-			// the tool output itself.
-			announceIfReady(`${e.toolName} ${e.isError ? "failed" : "completed"}`);
+			// finding #P1: announce the settled rung (failed/complete/interrupted),
+			// never the tool output itself.
+			announceIfReady(
+				`${e.toolName} ${status === "interrupted" ? "interrupted" : e.isError ? "failed" : "completed"}`,
+			);
 			break;
 		}
 		case "notice":

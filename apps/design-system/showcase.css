@@ -347,6 +347,13 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 	width: 380px;
 	max-width: 100%;
 }
+/* Tool cards side by side (one card per status or category). */
+.ds-status-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+	gap: var(--space-4);
+	align-items: start;
+}
 /* Icons page: a gallery of tiles plus rows of the full set. */
 .ds-icon-grid {
 	display: grid;

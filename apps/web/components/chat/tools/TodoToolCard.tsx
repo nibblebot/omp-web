@@ -68,7 +68,7 @@ export const TodoToolCard: Component<{ item: ToolItem }> = (props) => {
 	const fallback = () => parsePhases(props.item.args);
 	const phases = () => (snapshot().length > 0 ? snapshot() : fallback());
 	return (
-		<ToolCardShell name="todos" class="todo-tool">
+		<ToolCardShell name="todo" status={props.item.status} class="todo-tool">
 			<div class="todo-body">
 				<For each={phases()}>
 					{(phase) => (

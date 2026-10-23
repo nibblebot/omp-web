@@ -134,3 +134,101 @@ describe("createHistoryBuilder", () => {
 		expect([...first.items, ...second.items].map((item) => item.id)).toEqual([100, 101, 102, 103]);
 	});
 });
+
+function aborted(content: unknown[] = []): AgentMessage {
+	return msg({ role: "assistant", content, stopReason: "aborted" });
+}
+
+describe("interrupted tool status", () => {
+	test("a synthetic or interrupted marker on the result reads interrupted, whatever isError says", () => {
+		const built = createHistoryBuilder().append([
+			assistantCalling({ id: "a", name: "read" }, { id: "b", name: "read" }),
+			result("a", "gone", { isError: true, details: { __synthetic: true, source: "orphan" } }),
+			result("b", "cut", { details: { __interrupted: true } }),
+			result("orphan", "stray", { isError: true, details: { __synthetic: true } }),
+		]);
+		expect(tools(built.items).map((item) => item.status)).toEqual([
+			"interrupted",
+			"interrupted",
+			"interrupted",
+		]);
+	});
+
+	test("an unmarked error stays error and a falsy marker does not count", () => {
+		const built = createHistoryBuilder().append([
+			assistantCalling({ id: "a", name: "read" }, { id: "b", name: "read" }),
+			result("a", "boom", { isError: true, details: {} }),
+			result("b", "ok", { details: { __synthetic: false } }),
+		]);
+		expect(tools(built.items).map((item) => item.status)).toEqual(["error", "done"]);
+	});
+
+	test("an aborted assistant interrupts the error results of the call round before it", () => {
+		const built = createHistoryBuilder().append([
+			user("go"),
+			assistantCalling({ id: "a", name: "bash" }, { id: "b", name: "read" }),
+			result("a", "killed", { isError: true, details: {} }),
+			result("b", "fine", { details: {} }),
+			aborted(),
+		]);
+		expect(tools(built.items).map((item) => item.status)).toEqual(["interrupted", "done"]);
+		expect(built.patched).toEqual([]);
+	});
+
+	test("a call still running when the abort lands becomes interrupted", () => {
+		const built = createHistoryBuilder().append([
+			user("go"),
+			assistantCalling({ id: "a", name: "bash" }),
+			aborted(),
+		]);
+		expect(tools(built.items)[0]?.status).toBe("interrupted");
+	});
+
+	test("the relabel reaches items of an earlier append, in place, and reports them patched", () => {
+		const builder = createHistoryBuilder();
+		const first = builder.append([
+			user("go"),
+			assistantCalling({ id: "a", name: "bash" }, { id: "b", name: "read" }),
+			result("a", "killed", { isError: true, details: {} }),
+			result("b", "fine", { details: {} }),
+		]);
+		const [a, b] = tools(first.items) as [ToolItem, ToolItem];
+		expect(a.status).toBe("error");
+
+		const second = builder.append([aborted()]);
+		expect(a.status).toBe("interrupted");
+		expect(b.status).toBe("done");
+		expect(second.patched).toEqual([a]);
+	});
+
+	test("only the closest earlier round is relabelled, not older legitimate errors", () => {
+		const built = createHistoryBuilder().append([
+			user("go"),
+			assistantCalling({ id: "old", name: "bash" }),
+			result("old", "real failure", { isError: true, details: {} }),
+			assistantCalling({ id: "new", name: "bash" }),
+			result("new", "killed", { isError: true, details: {} }),
+			aborted(),
+		]);
+		expect(tools(built.items).map((item) => item.status)).toEqual(["error", "interrupted"]);
+	});
+
+	test("an aborted turn before any call leaves the previous turn alone", () => {
+		const built = createHistoryBuilder().append([
+			user("one"),
+			assistantCalling({ id: "a", name: "bash" }),
+			result("a", "real failure", { isError: true, details: {} }),
+			user("two"),
+			aborted(),
+		]);
+		expect(tools(built.items)[0]?.status).toBe("error");
+	});
+
+	test("a call with no result and no abort stays running", () => {
+		const built = createHistoryBuilder().append([
+			user("go"),
+			assistantCalling({ id: "a", name: "ask" }),
+		]);
+		expect(tools(built.items)[0]?.status).toBe("running");
+	});
+});

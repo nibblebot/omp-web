@@ -16,7 +16,7 @@ export const LspToolCard: Component<{ item: ToolItem }> = (props) => {
 	const file = () => args().file ?? "";
 	const symbol = () => args().symbol ?? "";
 	return (
-		<ToolCardShell name={<>lsp {action()}</>} status={props.item.status} class="lsp-tool">
+		<ToolCardShell name="lsp" arg={action()} status={props.item.status} class="lsp-tool">
 			<Show when={file() || symbol()}>
 				<div class="tool-meta">
 					{file() && <span class="lsp-file">{file()}</span>}

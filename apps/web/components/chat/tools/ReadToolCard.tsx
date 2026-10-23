@@ -1,15 +1,18 @@
-import { Show, type Component } from "solid-js";
+import { createMemo, For, Show, type Component } from "solid-js";
 import { type ToolItem } from "../../../state";
 import { settingValue } from "../../../store/settings";
+import { highlightLines, languageForPath } from "../../../text/highlight";
 import { Markdown } from "../../ui/Markdown";
-import { CollapsibleOutput, ToolCardShell } from "./ToolCardShell";
-import { hasLineNumbers, isMarkitDocument, LINE_NUMBER } from "./read-view";
+import { HighlightedLine } from "./HighlightedLine";
+import { isMarkitDocument, parseReadOutput } from "./read-view";
+import { COLLAPSED_LINES, toolExpanded, ToolCardShell } from "./ToolCardShell";
 
 /**
  * Read tool: path header and body. Settings gate the view:
  * - `read.toolResultPreview` (off: a collapsed summary row; on: body inline).
  * - `readLineNumbers` (line gutter); SDK-numbered output always keeps it.
  * - `read.renderMarkdown` (converted documents render as Markdown).
+ * File content is syntax-highlighted by the path's language (never the gutter).
  */
 export const ReadToolCard: Component<{ item: ToolItem }> = (props) => {
 	const path = () => (props.item.args as { path?: string } | null)?.path ?? "";
@@ -19,38 +22,69 @@ export const ReadToolCard: Component<{ item: ToolItem }> = (props) => {
 	const renderMarkdown = () =>
 		(settingValue<boolean>("read.renderMarkdown") ?? false) && isMarkitDocument(path());
 
-	const gutter = () => hasLineNumbers(props.item.output) || lineNumbersOn();
-	const lines = () => {
-		const raw = props.item.output.split("\n");
-		const numbered = hasLineNumbers(props.item.output);
-		return raw.map((l) => (numbered ? l.replace(LINE_NUMBER, "") : l));
-	};
-	const startNo = () => {
-		if (!props.item.output) return offset();
-		const m = /^\s*(\d+)\s*[→|:]/.exec(props.item.output);
-		return m ? Number(m[1]) : offset();
+	const view = createMemo(() => parseReadOutput(props.item.output, offset()));
+	const gutter = () => view().numbered || lineNumbersOn();
+	// Whole content highlighted once so multi-line comments and strings color
+	// right; the memo only re-runs when the output or the grammar load changes.
+	const rows = createMemo(() => {
+		const all = view().rows;
+		const code = all.filter((row) => row.code).map((row) => row.text);
+		const html =
+			props.item.status === "error"
+				? null
+				: highlightLines(code.join("\n"), languageForPath(path()));
+		let k = 0;
+		return all.map((row) => ({ ...row, html: row.code ? (html?.[k++] ?? null) : null }));
+	});
+	const expanded = () => toolExpanded(props.item);
+	const shown = () => (expanded() ? rows() : rows().slice(0, COLLAPSED_LINES));
+	const hidden = () => Math.max(0, rows().length - COLLAPSED_LINES);
+
+	const ReadRows: Component = () => {
+		return (
+			<Show when={rows().length > 0}>
+				<Show
+					when={gutter()}
+					fallback={
+						<pre class="terminal">
+							<For each={shown()}>
+								{(row, i) => (
+									<>
+										<Show when={i() > 0}>{"\n"}</Show>
+										<HighlightedLine html={row.html} text={row.text} />
+									</>
+								)}
+							</For>
+						</pre>
+					}
+				>
+					<For each={shown()}>
+						{(row) => (
+							<div class="write-line">
+								<span class="line-no">{row.no}</span>
+								<HighlightedLine html={row.html} text={row.text} />
+							</div>
+						)}
+					</For>
+				</Show>
+				<Show when={!expanded() && hidden() > 0}>
+					<div class="tool-collapsed-note">{hidden()} hidden lines (Ctrl+O to expand)</div>
+				</Show>
+			</Show>
+		);
 	};
 
 	return (
 		<ToolCardShell
-			name={<>read {path()}</>}
+			name="read"
+			arg={path()}
 			status={props.item.status}
 			class="read-tool"
 			collapsible={!previewInline()}
 		>
 			<Show when={props.item.output}>
 				<div class="read-body">
-					<Show
-						when={renderMarkdown()}
-						fallback={
-							<CollapsibleOutput
-								item={props.item}
-								output={lines().join("\n")}
-								numbered={gutter()}
-								startNo={startNo()}
-							/>
-						}
-					>
+					<Show when={renderMarkdown()} fallback={<ReadRows />}>
 						<Markdown src={props.item.output} />
 					</Show>
 				</div>

@@ -1,48 +1,53 @@
 import { createMemo, For, Match, Show, Switch, type Component } from "solid-js";
 import type { DiffRow } from "../../../text/diff";
-import { editPreview, splitRows, type EditPreview } from "../../../text/edit-diff";
+import {
+	editPreview,
+	highlightDiffRows,
+	type DiffFile,
+	type EditPreview,
+} from "../../../text/edit-diff";
+import { highlightLines, languageForPath } from "../../../text/highlight";
 import type { ToolItem } from "../../../state";
 import { CollapsibleOutput, ToolCardShell } from "./ToolCardShell";
+import { HighlightedLine } from "./HighlightedLine";
 
-/** One diff line, or a collapsed-run marker. `null` is an empty split cell. */
-const DiffLine: Component<{ row: DiffRow | null }> = (props) => (
-	<Show when={props.row} fallback={<div class="diff-line" data-type="blank" />}>
+/** One diff line, or a collapsed-run marker. `html` is its highlighted code, null for plain text. */
+const DiffLine: Component<{ row: DiffRow; html: string | null }> = (props) => (
+	<Show when={props.row}>
 		{(row) => {
 			const r = row();
 			return r.type === "collapse" ? (
 				<div class="diff-collapse">… {r.count} unchanged lines</div>
 			) : (
-				<div class="diff-line" data-type={r.type}>
+				<div class="diff-line" data-type={r.type} data-hl={props.html === null ? undefined : ""}>
 					<span class="diff-sign">{r.type === "add" ? "+" : r.type === "del" ? "-" : " "}</span>
-					{r.text}
+					<HighlightedLine html={props.html} text={r.text} />
 				</div>
 			);
 		}}
 	</Show>
 );
 
-/** Shows the unified diff (narrow) and the two-column split (wide); CSS picks one by container width. */
-const DiffSection: Component<{ rows: DiffRow[] }> = (props) => (
-	<div class="diff-section">
-		<div class="diff-view">
-			<For each={props.rows}>{(row) => <DiffLine row={row} />}</For>
-		</div>
-		<div class="diff-split">
-			<For each={splitRows(props.rows)}>
-				{(pair) => (
-					<div class="diff-split-row">
-						<DiffLine row={pair.left} />
-						<DiffLine row={pair.right} />
-					</div>
-				)}
-			</For>
-		</div>
-	</div>
-);
+/** One file's rows, highlighted by the file's language (plain when it has none or the grammar is loading). */
+const DiffFileRows: Component<{ file: DiffFile }> = (props) => {
+	const html = createMemo(() => {
+		const path = props.file.path;
+		const lang = path === null ? undefined : languageForPath(path);
+		if (lang === undefined) return null;
+		return highlightDiffRows(props.file.rows, (code) => highlightLines(code, lang));
+	});
+	return (
+		<For each={props.file.rows}>
+			{(row, i) => <DiffLine row={row} html={html()?.[i()] ?? null} />}
+		</For>
+	);
+};
 
 const DiffBody: Component<{ preview: EditPreview }> = (props) => (
 	<Show when={props.preview.rows.length > 0} fallback={<div class="diff-pending">no changes</div>}>
-		<DiffSection rows={props.preview.rows} />
+		<div class="diff-view">
+			<For each={props.preview.sections}>{(file) => <DiffFileRows file={file} />}</For>
+		</div>
 	</Show>
 );
 
@@ -55,14 +60,14 @@ export const DiffToolCard: Component<{ item: ToolItem }> = (props) => {
 	const preview = createMemo(() =>
 		editPreview(props.item.name, props.item.args, props.item.details),
 	);
-	const label = () => {
+	const target = () => {
 		const p = preview();
-		const target = p && p.files > 1 ? `${p.files} files` : p?.path;
-		return target ? `${props.item.name} ${target}` : props.item.name;
+		return p && p.files > 1 ? `${p.files} files` : p?.path;
 	};
 	return (
 		<ToolCardShell
-			name={label()}
+			name={props.item.name}
+			arg={target()}
 			status={props.item.status}
 			class="diff-tool"
 			collapsible

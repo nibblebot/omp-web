@@ -1,0 +1,66 @@
+/* highlight.js token colors. Class names come from the hljs grammars
+   (text/highlight.ts); colors come from the --syn-* tokens per theme. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-doctag,
+.hljs-type {
+	color: var(--syn-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link,
+.hljs-template-variable,
+.hljs-selector-attr,
+.hljs-selector-pseudo {
+	color: var(--syn-string);
+}
+.hljs-number,
+.hljs-literal {
+	color: var(--syn-number);
+}
+.hljs-comment,
+.hljs-quote {
+	color: var(--syn-comment);
+	font-style: italic;
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-function,
+.hljs-class,
+.hljs-section,
+.hljs-selector-id,
+.hljs-selector-class {
+	color: var(--syn-title);
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-params,
+.hljs-property,
+.hljs-name {
+	color: var(--syn-attr);
+}
+.hljs-built_in,
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-meta .hljs-string,
+.hljs-operator,
+.hljs-punctuation,
+.hljs-subst {
+	color: var(--syn-meta);
+}
+.hljs-addition {
+	color: var(--diff-add-text);
+}
+.hljs-deletion {
+	color: var(--diff-del-text);
+}
+.hljs-emphasis {
+	font-style: italic;
+}
+.hljs-strong {
+	font-weight: 700;
+}

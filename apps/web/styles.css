@@ -12,6 +12,7 @@
 @import "./styles/dock.css";
 @import "./styles/shell.css";
 @import "./styles/chat.css";
+@import "./styles/syntax.css";
 @import "./styles/tools.css";
 @import "./styles/prompt.css";
 @import "./styles/modals.css";

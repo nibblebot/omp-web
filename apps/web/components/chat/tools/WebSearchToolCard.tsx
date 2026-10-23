@@ -15,7 +15,8 @@ export const WebSearchToolCard: Component<{ item: ToolItem }> = (props) => {
 			fallback={<GenericToolCard item={props.item} />}
 		>
 			<ToolCardShell
-				name={<>web search {query()}</>}
+				name="web_search"
+				arg={query()}
 				status={props.item.status}
 				class="websearch-tool"
 			>

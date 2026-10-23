@@ -485,11 +485,11 @@ describe("replayed mid-ask transcript (an ask card must not read done while pend
 		});
 	});
 
-	test("a dangling tool call in an idle transcript settles to done", () => {
+	test("a dangling tool call in an idle transcript settles to interrupted", () => {
 		primeAttached();
 		dispatch({ type: "history", messages: pendingAskHistory() } as ServerFrame);
 		dispatch({ type: "state", state: { isStreaming: false } as unknown as WebSessionState });
-		expect(state.items.find((it) => it.kind === "tool")).toMatchObject({ status: "done" });
+		expect(state.items.find((it) => it.kind === "tool")).toMatchObject({ status: "interrupted" });
 	});
 
 	test("an answered ask keeps its recorded result status while the turn streams", () => {
@@ -1609,6 +1609,24 @@ describe("aria-live announcements (finding #P1)", () => {
 			1027,
 		);
 		expect(state.announcement).toBe("bash failed");
+	});
+
+	test("a tool run that ends on an interrupt marker announces interrupted", () => {
+		primeReady();
+		const event = (e: unknown, seq: number) =>
+			dispatchSeq({ type: "event", event: e } as ServerFrame, seq);
+		event({ type: "tool_execution_start", toolCallId: "t9", toolName: "bash", args: {} }, 1024);
+		event(
+			{
+				type: "tool_execution_end",
+				toolCallId: "t9",
+				toolName: "bash",
+				isError: true,
+				result: { output: "", details: { __synthetic: true, source: "orphan" } },
+			},
+			1025,
+		);
+		expect(state.announcement).toBe("bash interrupted");
 	});
 
 	test("an error notice announces its message; non-error notices stay silent", () => {

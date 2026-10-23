@@ -675,9 +675,9 @@ function lastIndexOfId(items: readonly ChatItem[], id: number): number {
 
 /**
  * A tool call with no result counts as running only while its agent runs. For
- * an agent that is no longer running the call is unfinished: settle it the way
- * main settles an interrupted turn (settleRunningTools). A result that shows
- * up later still patches the item.
+ * an agent that is no longer running the call is unfinished: it never reported
+ * an outcome, so it reads as interrupted (main's settleRunningTools does the
+ * same for an idle turn). A result that shows up later still patches the item.
  */
 function settleRunningTranscriptTools(key: string): void {
 	const items = transcripts[key]?.items;
@@ -687,7 +687,7 @@ function settleRunningTranscriptTools(key: string): void {
 		"items",
 		produce((draft) => {
 			for (const item of draft) {
-				if (item.kind === "tool" && item.status === "running") item.status = "done";
+				if (item.kind === "tool" && item.status === "running") item.status = "interrupted";
 			}
 		}),
 	);
