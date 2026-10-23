@@ -16,8 +16,10 @@ let kebabMenuSeq = 0;
  *  keys, Home and End move between items with wrap. Escape closes and returns
  *  focus to the trigger. Tab closes the menu and moves on from the trigger. */
 export function KebabMenu(props: {
-	/** Trigger title/aria-label. */
+	/** Trigger aria-label, and its tooltip unless `title` is given. */
 	label: string;
+	/** Trigger tooltip when it should say more than the label. */
+	title?: string;
 	/** Dropdown content (`role="menuitem"` buttons). */
 	children: JSX.Element;
 	/** Controlled open state (module-level sharing); omit for internal. */
@@ -62,7 +64,7 @@ export function KebabMenu(props: {
 			<button
 				type="button"
 				class="daemon-icon-btn sidebar-menu-btn"
-				title={props.label}
+				title={props.title ?? props.label}
 				aria-label={props.label}
 				aria-haspopup="menu"
 				aria-expanded={open()}

@@ -1880,7 +1880,6 @@ export {
 	restartDaemonById,
 	spawnResume,
 	stopDaemonById,
-	removeDaemonById,
 	addProject,
 	sendRemoveProject,
 	createWorktree,

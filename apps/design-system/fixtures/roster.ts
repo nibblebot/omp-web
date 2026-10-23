@@ -653,8 +653,7 @@ export const worktreeInfoNotLinked: WorktreeDeleteInfo = {
 	daemonId: "dmn_a007",
 	linked: false,
 	dirty: false,
-	reason:
-		"This is not a linked Git worktree omp-web can delete. Remove it from omp-web to preserve its files.",
+	reason: "This is not a linked Git worktree omp-web can delete; its files stay on disk.",
 };
 
 /** SessionListEntry list per daemon for the row's session dropdown, newest first. */

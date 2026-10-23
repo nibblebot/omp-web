@@ -219,17 +219,6 @@ export function resumeRestartedDaemons(roster: Array<{ daemonId: string; status:
 	}
 }
 
-/** Stop a daemon AND evict it from the fleet roster (registry removal). */
-export function removeDaemonById(daemonId: string): void {
-	if (refuseIfDisconnected()) return;
-	clearUserStopped(daemonId);
-	void sendCommand({
-		type: "remove",
-		id: crypto.randomUUID(),
-		daemonId,
-	} satisfies ClientCommand).catch(reportCommandFailure);
-}
-
 // ---------------------------------------------------------------------------
 // Project/workspace onboarding. add_project / create_worktree / create_clone
 // answer with id-keyed unicast result frames and resolve as promises; the new

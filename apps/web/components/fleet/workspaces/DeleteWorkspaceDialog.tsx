@@ -225,7 +225,7 @@ export const DeleteWorkspaceDialog: Component = () => {
 					<Show when={info() !== undefined && !info()!.linked}>
 						<p class="danger-confirm-body">
 							{info()!.reason ??
-								"This is not a linked Git worktree omp-web can delete. Remove it from omp-web to preserve its files."}
+								"This is not a linked Git worktree omp-web can delete; its files stay on disk."}
 						</p>
 					</Show>
 					<Show when={info() !== undefined && info()!.linked && info()!.dirty}>

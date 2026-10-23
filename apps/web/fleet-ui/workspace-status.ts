@@ -80,28 +80,16 @@ export function sessionChip(status: DaemonStatus, ctx: ChipContext = {}): Sessio
 	}
 }
 
-export type RowActionKind = "start" | "restart";
-
-export interface RowAction {
-	kind: RowActionKind;
-	label: "Start" | "Restart";
-}
-
 /**
- * The row's Start/Restart kebab item: a running or crashed process
- * restarts, a never-started (asleep) one starts, a user-stopped one restarts.
- * In-between states (starting, reconnecting) offer nothing: acting on a
- * process mid-transition races the supervisor.
+ * Whether the row's kebab offers Start: an asleep process (never started or
+ * stopped by the user) or a crashed one starts fresh; a running one offers
+ * only Stop (stop, then start, replaces a restart). In-between states
+ * (starting, reconnecting, waking) offer nothing: acting on a process
+ * mid-transition races the supervisor.
  */
-export function rowAction(status: DaemonStatus, ctx: ChipContext = {}): RowAction | null {
-	if (ctx.waking === true && status !== "ready") return null;
-	if (status === "ready" || status === "error") return { kind: "restart", label: "Restart" };
-	if (status === "asleep") {
-		return ctx.stoppedByUser === true
-			? { kind: "restart", label: "Restart" }
-			: { kind: "start", label: "Start" };
-	}
-	return null;
+export function canStartRow(status: DaemonStatus, ctx: ChipContext = {}): boolean {
+	if (ctx.waking === true) return false;
+	return status === "asleep" || status === "error";
 }
 
 /** Display name of a workspace, identical in rows, dialogs and the header. */

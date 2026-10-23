@@ -449,9 +449,10 @@
 		transform: none;
 	}
 }
-/* Status dot: ready = green glow, asleep = flat grey, reconnecting = amber,
-   error = red, transitional (spawning/connecting/session/resolving) = pulsing
-   accent. Unambiguous at a glance: exactly one visual language per state. */
+/* Status dot: ready = green glow, asleep = flat grey (hidden on roster rows),
+   reconnecting = amber, error = red, transitional
+   (spawning/connecting/session/resolving) = pulsing accent. Unambiguous at a
+   glance: exactly one visual language per state. */
 .daemon-status-dot {
 	width: 8px;
 	height: 8px;
@@ -460,20 +461,64 @@
 	margin-top: var(--space-2);
 	background: var(--muted-2);
 }
-/* Roster row status indicator: the dot at the top row's right end, centered
-   in a hover target as tall as the kebab trigger, whose tooltip names the
-   state. */
-.daemon-row-status {
+/* Row controls share one column on the row's right edge: the corner slot on
+   the top line (every row), then the session toggle and "+" on switcher rows.
+   --row-control-size is the column width; each control's hit area is
+   --row-control-hit, centered on the column axis (it may spill a few pixels
+   into the gap before the title); glyphs are a fixed --row-control-glyph. */
+.daemon-row {
+	--row-control-size: 1.2rem;
+	--row-control-hit: 24px;
+	--row-control-glyph: calc(0.75 * 1.2rem);
+}
+/* Corner slot: the status dot and the "⋯" row-actions trigger stack in one
+   grid cell. At rest the dot shows; row hover/focus or an open menu/dropdown
+   crossfades it to the trigger (rules after .sidebar-menu-btn below). Touch
+   keeps both, the dot as a badge on the trigger (trailing touch block). */
+.daemon-row-corner {
 	flex: none;
+	display: grid;
+	/* One track the slot's size; a wider hit area overflows it evenly. */
+	grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+	place-items: center;
+	width: var(--row-control-size);
+	height: var(--row-control-hit);
+	margin-left: auto;
+}
+.daemon-row-corner > * {
+	grid-area: 1 / 1;
+}
+.daemon-row-corner .sidebar-menu-wrap {
+	margin-left: 0;
+}
+.daemon-row-corner .sidebar-menu-btn {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 16px;
-	height: 24px;
-	cursor: help;
+	width: var(--row-control-hit);
+	height: var(--row-control-hit);
+	padding: 0;
+}
+.daemon-row-corner .sidebar-menu-btn .icon {
+	width: var(--row-control-glyph);
+	height: var(--row-control-glyph);
+}
+/* The status announcer: no tooltip of its own (the trigger's names the
+   state), never a pointer target. */
+.daemon-row-status {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+	pointer-events: none;
 }
 .daemon-row-status .daemon-status-dot {
 	margin-top: 0;
+}
+/* An asleep roster row shows no dot. */
+.daemon-row-status .daemon-status-dot[data-status="asleep"] {
+	visibility: hidden;
 }
 /* House glyph before a root row's branch title: muted, optically centered
    against the 1em icon box. */
@@ -508,8 +553,7 @@
 /* Activity cases repaint the status dot (single dot, no separate badge):
    presence of any colored dot means alive. These override the green
    ready dot; at the same specificity, the later rule in the cascade wins. A
-   stopped (asleep) row keeps the plain grey dot (no data-activity), and
-   ready+idle keeps green. */
+   stopped (asleep) row has no data-activity, and ready+idle keeps green. */
 .daemon-status-dot[data-activity="blocked"] {
 	background: var(--error);
 	box-shadow: 0 0 6px var(--error);
@@ -526,13 +570,14 @@
 	background: var(--warning);
 	box-shadow: none;
 }
+/* Busy: a green comet ring, a conic tail masked to a ring, spinning. */
 .daemon-status-dot[data-activity="in_progress"] {
-	background: none;
-	width: 10px;
-	height: 10px;
-	border: 2px solid transparent;
-	border-top-color: var(--success);
+	width: 11px;
+	height: 11px;
+	background: conic-gradient(from 0deg, transparent 0 15%, var(--success));
+	mask: radial-gradient(farthest-side, transparent calc(100% - 2.2px), #000 calc(100% - 2px));
 	box-shadow: none;
+	filter: drop-shadow(0 0 2px var(--success));
 	animation: daemon-activity-spin var(--dur-spin) linear infinite;
 }
 @keyframes daemon-activity-spin {
@@ -549,6 +594,17 @@
 	50% {
 		opacity: 1;
 		transform: scale(1);
+	}
+}
+/* Reduced motion: the loops hold still. The comet becomes a full green ring,
+   the transitional pulse a steady dot. */
+@media (prefers-reduced-motion: reduce) {
+	.daemon-status-dot[data-status] {
+		animation: none;
+	}
+	.daemon-status-dot[data-activity="in_progress"] {
+		animation: none;
+		background: var(--success);
 	}
 }
 .daemon-chips {
@@ -748,13 +804,35 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	opacity: 0;
 	pointer-events: none;
 }
-.daemon-row:hover .sidebar-menu-btn,
-.daemon-row:focus-within .sidebar-menu-btn,
 .project-group:hover .sidebar-menu-btn,
 .project-group:focus-within .sidebar-menu-btn,
 .sidebar-menu-btn[aria-expanded="true"] {
 	opacity: 1;
 	pointer-events: auto;
+}
+/* Roster rows: the corner trigger, session toggle and "+" fade in on row
+   hover, keyboard focus (focus-visible on the row or inside it; a mouse
+   click focuses the row but must not pin the controls once the pointer
+   leaves), or while the row's menu or dropdown is open, and the status dot
+   fades out under the trigger. Touch overrides (trailing touch block).
+   Scoped under .daemon-row to outrank the global button:not(:disabled)
+   transition. */
+.daemon-row .daemon-row-status,
+.daemon-row .sidebar-menu-btn,
+.daemon-row .daemon-session-toggle,
+.daemon-row .daemon-session-new {
+	transition:
+		opacity var(--dur-fast) var(--ease-out),
+		color var(--dur-fast) var(--ease-out);
+}
+.daemon-row:is(:hover, :focus-visible, :has(:focus-visible), :has([aria-expanded="true"]))
+	:is(.sidebar-menu-btn, .daemon-session-toggle, .daemon-session-new) {
+	opacity: 1;
+	pointer-events: auto;
+}
+.daemon-row:is(:hover, :focus-visible, :has(:focus-visible), :has([aria-expanded="true"]))
+	.daemon-row-status {
+	opacity: 0;
 }
 /* Dropdown: compact action list anchored under the trigger. */
 .sidebar-menu {
@@ -906,17 +984,17 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	overflow-wrap: anywhere;
 }
 /* Ready/asleep rows: the session-title line is two text rows tall and part
-   of the card (click resumes). The session switcher is a 1.2rem square (18px
-   at the default 15px text size), lightly outlined chevron button at the top
-   of a right gutter the row reserves, so the title keeps the full content
-   width; the top line extends into the gutter to keep the status dot in the
-   corner above the box. A matching "+" box (new session) sits under the
-   chevron; the switcher wrapper is tall enough to hold both boxes. */
+   of the card (click resumes). The row reserves a right gutter for the
+   control column, so the title keeps the full content width; the top line
+   extends into the gutter to put the corner slot on the column. The session
+   toggle (chevron) sits beside the title line and the "+" (new session) under
+   it, both bare glyphs; the switcher wrapper is tall enough to hold both. */
 .daemon-row--switcher {
 	/* Two title rows: fs-micro at line-height 1.5. */
 	--session-title-height: calc(3 * var(--fs-micro));
-	--session-switcher-size: 1.2rem;
-	--session-switcher-gutter: calc(var(--session-switcher-size) + var(--space-3));
+	--session-switcher-gutter: calc(var(--row-control-size) + var(--space-3));
+	/* Toggle-to-"+" spacing: never less than one hit area, so they never overlap. */
+	--session-control-pitch: max(var(--row-control-hit), calc(var(--row-control-size) + var(--space-2)));
 }
 .daemon-row--switcher .sidebar-row-main {
 	padding-right: var(--session-switcher-gutter);
@@ -928,51 +1006,82 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	position: relative;
 	display: flex;
 	flex-direction: column;
-	min-height: calc(2 * var(--session-switcher-size) + var(--space-2));
+	min-height: calc(var(--session-control-pitch) + var(--row-control-size));
 }
 .daemon-session-title--switcher {
 	height: var(--session-title-height);
 }
-.daemon-session-chevron-box,
+.daemon-session-toggle,
 .daemon-session-new {
 	position: absolute;
-	top: 0;
-	right: calc(-1 * var(--session-switcher-gutter));
-	width: var(--session-switcher-size);
-	height: var(--session-switcher-size);
-	box-sizing: border-box;
+	top: calc((var(--row-control-size) - var(--row-control-hit)) / 2);
+	right: calc(
+		var(--row-control-size) / 2 - var(--session-switcher-gutter) - var(--row-control-hit) / 2
+	);
+	width: var(--row-control-hit);
+	height: var(--row-control-hit);
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	padding: 0;
 	background: none;
-	border: 1px solid var(--border);
+	border: none;
 	border-radius: var(--r-sm);
 	color: var(--muted-2);
 	cursor: pointer;
-}
-.daemon-session-chevron {
-	width: 75%;
-	height: 75%;
-	transition: transform var(--dur-move-fast) var(--ease-out);
-}
-.daemon-session-chevron-box[aria-expanded="true"] .daemon-session-chevron {
-	transform: rotate(180deg);
+	opacity: 0;
+	pointer-events: none;
 }
 .daemon-session-new {
-	top: calc(var(--session-switcher-size) + var(--space-2));
+	top: calc(var(--session-control-pitch) + (var(--row-control-size) - var(--row-control-hit)) / 2);
 }
-.daemon-session-chevron-box:hover,
-.daemon-session-chevron-box:focus-visible,
-.daemon-session-chevron-box[aria-expanded="true"],
+.daemon-session-chevron,
+.daemon-session-new-icon {
+	width: var(--row-control-glyph);
+	height: var(--row-control-glyph);
+}
+.daemon-session-chevron {
+	transition: transform var(--dur-move-fast) var(--ease-out);
+}
+.daemon-session-toggle[aria-expanded="true"] .daemon-session-chevron {
+	transform: rotate(180deg);
+}
+.daemon-session-toggle:hover,
+.daemon-session-toggle:focus-visible,
+.daemon-session-toggle[aria-expanded="true"],
 .daemon-session-new:hover,
 .daemon-session-new:focus-visible {
 	color: var(--text);
-	border-color: var(--border-strong);
 }
-.daemon-session-new-icon {
-	width: 75%;
-	height: 75%;
+/* Touch and phones: no hover, so the row controls always show at 44px, and
+   the status dot rides on the corner trigger as a badge at its glyph's
+   top-right (the comet a little larger to stay legible). Asleep rows keep no
+   badge. Selectors outrank the hover crossfade above. */
+@media (pointer: coarse), (max-width: 767px) {
+	.daemon-row {
+		--row-control-size: 44px;
+		--row-control-hit: 44px;
+	}
+	.daemon-row .daemon-row-corner .daemon-row-status {
+		opacity: 1;
+		z-index: 1;
+	}
+	.daemon-row-corner .daemon-row-status .daemon-status-dot {
+		position: relative;
+		left: calc(var(--row-control-glyph) / 2);
+		top: calc(var(--row-control-glyph) / -2);
+		width: 6px;
+		height: 6px;
+	}
+	.daemon-row-corner .daemon-row-status .daemon-status-dot[data-activity="in_progress"] {
+		width: 9px;
+		height: 9px;
+	}
+	.daemon-session-toggle.daemon-session-toggle,
+	.daemon-session-new.daemon-session-new {
+		opacity: 1;
+		pointer-events: auto;
+	}
 }
 .daemon-row-btn {
 	background: none;

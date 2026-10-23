@@ -62,23 +62,18 @@ export function answerBusCommand(
 		wake(cmd.daemonId);
 		return true;
 	}
-	if (cmd.type === "stop" || cmd.type === "remove") {
+	if (cmd.type === "stop") {
 		const { daemonId } = cmd;
 		if (!roster.some((d) => d.daemonId === daemonId)) {
 			publish({ type: "error", error: `unknown daemon: ${daemonId}` });
 			return true;
 		}
 		// Local only: the roster changes, no process is touched. The broadcast
-		// drives the web's own reconcile (a stopped or removed attached
-		// daemon clears the chat column), as the edge's registry change does.
-		if (cmd.type === "stop") {
-			roster = roster.map((d) => (d.daemonId === daemonId ? asleep(d) : d));
-			const row = roster.find((d) => d.daemonId === daemonId);
-			publish({ type: "roster_delta", upserted: row ? [row] : [], removed: [] });
-		} else {
-			roster = roster.filter((d) => d.daemonId !== daemonId);
-			publish({ type: "roster_delta", upserted: [], removed: [daemonId] });
-		}
+		// drives the web's own reconcile (a stopped attached daemon clears the
+		// chat column), as the edge's registry change does.
+		roster = roster.map((d) => (d.daemonId === daemonId ? asleep(d) : d));
+		const row = roster.find((d) => d.daemonId === daemonId);
+		publish({ type: "roster_delta", upserted: row ? [row] : [], removed: [] });
 		return true;
 	}
 	if (cmd.type === "attach") {

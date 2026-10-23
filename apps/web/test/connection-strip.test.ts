@@ -170,8 +170,8 @@ describe("killed attached session process", () => {
 	// up, so fleet-scoped row actions (start, restart, switching rows) must stay
 	// live, or the user has no way out of the offline view.
 	test.each([
-		["asleep", /Start session process/],
-		["removed", /Start session process/],
+		["asleep", /Start session/],
+		["removed", /Start session/],
 	] as const)("an attached session that went %s leaves other rows startable", (how, item) => {
 		const other = daemon("daemon-b", { status: "asleep" });
 		dispatch({
@@ -190,7 +190,7 @@ describe("killed attached session process", () => {
 		dispatch({ type: "roster", daemons: [daemon("daemon-a"), other] });
 		setState("connected", false);
 		const button = renderRowMenu(other).match(
-			/<button[^>]*>(?:(?!<\/button>).)*Start session process/,
+			/<button[^>]*>(?:(?!<\/button>).)*Start session/,
 		)?.[0];
 		expect(button).toMatch(/\bdisabled\b/);
 	});

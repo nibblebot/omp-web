@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	projectRollup,
-	rowAction,
+	canStartRow,
 	sessionChip,
 	workspaceName,
 } from "../../fleet-ui/workspace-status";
@@ -35,24 +35,21 @@ describe("sessionChip", () => {
 	});
 });
 
-describe("rowAction", () => {
-	test("never-started asleep rows offer Start", () => {
-		expect(rowAction("asleep")).toEqual({ kind: "start", label: "Start" });
+describe("canStartRow", () => {
+	test("asleep and crashed rows offer Start, user-stopped ones included", () => {
+		expect(canStartRow("asleep")).toBe(true);
+		expect(canStartRow("asleep", { stoppedByUser: true })).toBe(true);
+		expect(canStartRow("error")).toBe(true);
 	});
 
-	test("running, crashed, and user-stopped rows offer Restart", () => {
-		expect(rowAction("ready")).toEqual({ kind: "restart", label: "Restart" });
-		expect(rowAction("error")).toEqual({ kind: "restart", label: "Restart" });
-		expect(rowAction("asleep", { stoppedByUser: true })).toEqual({
-			kind: "restart",
-			label: "Restart",
-		});
+	test("running rows offer only Stop", () => {
+		expect(canStartRow("ready")).toBe(false);
 	});
 
 	test("in-between states offer nothing", () => {
-		expect(rowAction("spawning")).toBeNull();
-		expect(rowAction("reconnecting")).toBeNull();
-		expect(rowAction("asleep", { waking: true })).toBeNull();
+		expect(canStartRow("spawning")).toBe(false);
+		expect(canStartRow("reconnecting")).toBe(false);
+		expect(canStartRow("asleep", { waking: true })).toBe(false);
 	});
 });
 

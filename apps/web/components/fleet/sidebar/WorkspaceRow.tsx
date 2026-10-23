@@ -16,15 +16,13 @@ import type {
 } from "#lib/wire/protocol";
 import { sessionActivity, type SessionActivity } from "../../../fleet-ui/session-activity";
 import { unreadIds } from "../../../fleet-ui/unread";
-import { rowAction, sessionChip, type RowActionKind } from "../../../fleet-ui/workspace-status";
+import { canStartRow, sessionChip } from "../../../fleet-ui/workspace-status";
 import {
 	call,
 	closeDrawers,
 	fetchCloneIntoProject,
 	openDaemonDetails,
-	removeDaemonById,
 	requestDaemonSessions,
-	restartDaemonById,
 	resumeDaemonSession,
 	sendWorktreeDeleteInfo,
 	setState,
@@ -55,20 +53,19 @@ import {
 	LockIcon,
 	PackageIcon,
 	PlusIcon,
-	RefreshIcon,
 	RootIcon,
 	StopIcon,
 	TrashIcon,
 	WorktreeIcon,
-	XIcon,
 } from "../../ui/icons";
 
 // ---------------------------------------------------------------------------
-// One fleet-roster row: title, status indicator at the top-right corner (its
-// tooltip names the state), label chips, git diffstat, and a hover-revealed
-// "⋯" actions menu (details, Start/Restart, two-click stop/remove, delete
-// worktree). The chevron box beside the session title opens the session
-// dropdown. Ready rows attach on click, asleep rows wake-then-attach.
+// One fleet-roster row: title, a corner slot at the top-right showing the
+// status dot, label chips, git diffstat, and hover-revealed controls in one
+// right-hand column: the "⋯" actions menu (details, Start/Restart, two-click
+// stop, delete worktree; it replaces the dot while shown and its
+// tooltip names the state), the chevron that opens the session dropdown, and
+// "+" for a new session. Ready rows attach on click, asleep rows wake-then-attach.
 // Each row is one checkout: a kind icon (main checkout, worktree, clone) and the
 // branch (or detached sha) as the primary text. The group header names the
 // project; the full path lives in the hover tooltip.
@@ -172,7 +169,7 @@ export const WorkspaceRow: Component<{
 	const d = () => props.daemon as RosterEntry;
 	// Row actions go to the fleet, not to the attached session: only a dropped
 	// browser socket pauses them. A dead attached session ("offline") must not,
-	// since starting, restarting or switching rows is the way out of it.
+	// since starting, stopping or switching rows is the way out of it.
 	const paused = () => !state.connected;
 
 	// Per-row id-scoped reads: the module signals (menuOpenId/activatingIds)
@@ -312,9 +309,7 @@ export const WorkspaceRow: Component<{
 		return a ? `${chip().label}, ${ACTIVITY_TITLE[a]}` : chip().label;
 	});
 
-	const action = createMemo(() =>
-		rowAction(d().status, { waking: activating(), stoppedByUser: isUserStopped(d().daemonId) }),
-	);
+	const startable = createMemo(() => canStartRow(d().status, { waking: activating() }));
 	/** Total files with uncommitted changes (nonzero porcelain counts),
 	 *  or 0 when git facts are absent. */
 	const filesChanged = (): number => {
@@ -332,8 +327,8 @@ export const WorkspaceRow: Component<{
 	/** "1 file" / "3 files", English plural for the diffstat titles. */
 	const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-	/** Start (asleep) or restart a row's session process, then attach so the
-	 *  pane follows it. The row pulses until the attach settles. */
+	/** Start a row's session process, then attach so the pane follows it.
+	 *  The row pulses until the attach settles. */
 	const activateRow = (id: string, wake: () => Promise<boolean>) => {
 		setActivatingIds((prev) => new Set(prev).add(id));
 		// The attach is posted only once the wake command is acked (see wakeAndAttach).
@@ -347,7 +342,7 @@ export const WorkspaceRow: Component<{
 	// process attaches; a stopped (asleep) one wakes then attaches (switchToDaemon
 	// covers both, and owns the transcript phase). The whole card is the resume
 	// target, leaving no dead space. The row highlights at once (switch-target.ts);
-	// the pane follows when the switch settles. The chevron box is the dropdown
+	// the pane follows when the switch settles. The chevron is the dropdown
 	// trigger (sessionsToggleClick below); clicking an open dropdown's own entry
 	// resumes that session.
 	const rowClick = () => {
@@ -379,18 +374,18 @@ export const WorkspaceRow: Component<{
 		void switchToDaemon(id).finally(() => endActivating(id));
 	};
 
-	/** The kebab's Start/Restart item. Restart stops and respawns the
-	 *  process; the attached pane keeps its transcript while it restarts. */
-	const runAction = (kind: RowActionKind) => {
+	/** The kebab's Start item: spawn the session process, then attach so the
+	 *  pane follows it. */
+	const startRow = () => {
 		if (activating() || blocked()) return;
 		closeDrawers();
 		setSessionsOpenId(null);
 		setMenuOpenId(null);
 		const id = d().daemonId;
-		activateRow(id, kind === "start" ? () => spawnResume(id) : () => restartDaemonById(id));
+		activateRow(id, () => spawnResume(id));
 	};
 
-	/** Toggle this row's session dropdown (the chevron box only). */
+	/** Toggle this row's session dropdown (the chevron only). */
 	const sessionsToggleClick = () => {
 		if (activating()) return;
 		const daemon = d();
@@ -419,11 +414,6 @@ export const WorkspaceRow: Component<{
 
 	const doStop = () => {
 		stopDaemonById(d().daemonId);
-		setMenuOpenId(null);
-	};
-
-	const doRemove = () => {
-		removeDaemonById(d().daemonId);
 		setMenuOpenId(null);
 	};
 
@@ -484,39 +474,41 @@ export const WorkspaceRow: Component<{
 								</span>
 							</Show>
 						</span>
-						{/* Status indicator at the top-right corner, its tooltip naming
-						    the state. The "⋯" row-actions menu sits just left of it:
-						    hidden until row hover/focus (always visible on touch, see the
-						    pointer:coarse block in apps/web/styles/base.css). Stop/remove
-						    keep the two-click confirm inside the menu; the first click
-						    arms (menu stays open), the second executes and closes. */}
-						<KebabMenu
-							label="Row actions"
-							open={menuOpen()}
-							onOpenChange={(v) => {
-								setMenuOpenId(v ? d().daemonId : null);
-								// The two popups never stack: opening the kebab closes
-								// the session dropdown.
-								if (v) setSessionsOpenId(null);
-							}}
-						>
-							{/* Safe actions first, destructive last. Stop and Remove keep
-						    the two-click confirm inside the menu. */}
-							<button
-								type="button"
-								role="menuitem"
-								class="sidebar-menu-item"
-								onClick={() => {
-									setMenuOpenId(null);
-									openDaemonDetails(d().daemonId);
+						{/* Corner slot at the top-right, on the axis of the session
+						    chevron and "+" below it. At rest it shows the status dot; on
+						    row hover/focus (or an open menu/dropdown) the dot fades out
+						    and the "⋯" row-actions menu fades in over the same spot, its
+						    tooltip naming the state. On touch the menu is always shown and
+						    the dot rides on it as a badge (fleet.css). Stop keeps the
+						    two-click confirm inside the menu; the first click arms (menu
+						    stays open), the second executes and closes. */}
+						<span class="daemon-row-corner">
+							<span
+								class="daemon-row-status"
+								role="status"
+								aria-label={`${statusLabel()}. ${chip().title}`}
+							>
+								<span
+									class="daemon-status-dot"
+									data-status={waking() ? "resolving" : d().status}
+									data-activity={activityDot()}
+								/>
+							</span>
+							<KebabMenu
+								label="Row actions"
+								title={`Row actions\n${statusLabel()}\n${chip().title}`}
+								open={menuOpen()}
+								onOpenChange={(v) => {
+									setMenuOpenId(v ? d().daemonId : null);
+									// The two popups never stack: opening the kebab closes
+									// the session dropdown.
+									if (v) setSessionsOpenId(null);
 								}}
 							>
-								<InfoIcon />
-								Session process details
-							</button>
-							{/* Asleep clones start through "Start workspace" below. */}
-							<Show when={isClone() && d().status === "asleep" ? null : action()}>
-								{(a) => (
+								{/* Lifecycle first (start, stop), then details, destructive
+								    last. Stop keeps the two-click confirm inside the menu.
+								    Asleep clones start through "Start workspace" below. */}
+								<Show when={!(isClone() && d().status === "asleep") && startable()}>
 									<button
 										type="button"
 										role="menuitem"
@@ -527,167 +519,154 @@ export const WorkspaceRow: Component<{
 												? PAUSED_TOOLTIP.reconnecting
 												: blocked()
 													? "Project folder is missing; this checkout cannot start"
-													: a().kind === "start"
-														? "Starts the session process and attaches to it"
-														: "Stops and respawns the session process; the transcript is kept"
+													: "Starts the session process and attaches to it"
 										}
-										onClick={() => runAction(a().kind)}
+										onClick={startRow}
 									>
-										{a().kind === "start" ? <ChevronRightIcon /> : <RefreshIcon />}
-										{a().label} {isClone() ? "workspace" : "session process"}
+										<ChevronRightIcon />
+										Start {isClone() ? "workspace" : "session"}
 									</button>
-								)}
-							</Show>
-							<Show when={isClone() && d().status === "asleep"}>
+								</Show>
+								<Show when={isClone() && d().status === "asleep"}>
+									<button
+										type="button"
+										role="menuitem"
+										class="sidebar-menu-item"
+										title={
+											paused()
+												? PAUSED_TOOLTIP.reconnecting
+												: "Starts the clone workspace (checkout and session logs are preserved)"
+										}
+										disabled={paused()}
+										onClick={() => {
+											setMenuOpenId(null);
+											void spawnResume(d().daemonId);
+										}}
+									>
+										<ChevronRightIcon />
+										Start workspace
+									</button>
+								</Show>
+								<Show when={d().status !== "asleep"}>
+									<ConfirmButton
+										role="menuitem"
+										class="sidebar-menu-item"
+										label={isClone() ? "Stop workspace" : "Stop session"}
+										confirmLabel="Confirm stop"
+										title={
+											isClone()
+												? "Stops the clone's compute; checkout and session logs are preserved"
+												: "Stops the session process; the transcript is kept"
+										}
+										onConfirm={() => doStop()}
+									>
+										<StopIcon />
+									</ConfirmButton>
+								</Show>
+								<Show when={isClone() && isAttached()}>
+									<button
+										type="button"
+										role="menuitem"
+										class="sidebar-menu-item"
+										title={
+											paused()
+												? PAUSED_TOOLTIP.reconnecting
+												: "Interrupts the running turn; the workspace keeps running"
+										}
+										disabled={paused()}
+										onClick={() => {
+											setMenuOpenId(null);
+											void call("abort").catch(reportError);
+										}}
+									>
+										<StopIcon />
+										Stop current work
+									</button>
+								</Show>
 								<button
 									type="button"
 									role="menuitem"
 									class="sidebar-menu-item"
-									title={
-										paused()
-											? PAUSED_TOOLTIP.reconnecting
-											: "Starts the clone workspace (checkout and session logs are preserved)"
-									}
-									disabled={paused()}
 									onClick={() => {
 										setMenuOpenId(null);
-										void spawnResume(d().daemonId);
+										openDaemonDetails(d().daemonId);
 									}}
 								>
-									<ChevronRightIcon />
-									Start workspace
+									<InfoIcon />
+									Process details
 								</button>
-							</Show>
-							<Show when={d().status !== "asleep"}>
-								<ConfirmButton
-									role="menuitem"
-									class="sidebar-menu-item"
-									label={isClone() ? "Stop workspace" : "Stop session process"}
-									confirmLabel="Confirm stop"
-									title={
-										isClone()
-											? "Stops the clone's compute; checkout and session logs are preserved"
-											: "Stops the session process; the transcript is kept"
-									}
-									onConfirm={() => doStop()}
-								>
-									<StopIcon />
-								</ConfirmButton>
-							</Show>
-							<Show when={isClone() && isAttached()}>
-								<button
-									type="button"
-									role="menuitem"
-									class="sidebar-menu-item"
-									title={
-										paused()
-											? PAUSED_TOOLTIP.reconnecting
-											: "Interrupts the running turn; the workspace keeps running"
-									}
-									disabled={paused()}
-									onClick={() => {
-										setMenuOpenId(null);
-										void call("abort").catch(reportError);
-									}}
-								>
-									<StopIcon />
-									Stop current work
-								</button>
-							</Show>
-							<Show when={!isClone()}>
-								<ConfirmButton
-									role="menuitem"
-									class="sidebar-menu-item sidebar-menu-item--danger"
-									label="Remove from omp-web"
-									confirmLabel="Confirm remove"
-									title="Stops the session process and removes it from omp-web; worktree files are preserved"
-									onConfirm={() => doRemove()}
-								>
-									<XIcon />
-								</ConfirmButton>
-							</Show>
-							<Show when={isWorktree() && !isClone()}>
-								<button
-									type="button"
-									role="menuitem"
-									class="sidebar-menu-item sidebar-menu-item--danger"
-									title="Stops the session process and removes the worktree (guard checks first)"
-									disabled={deleting()}
-									onClick={() => {
-										setMenuOpenId(null);
-										sendWorktreeDeleteInfo(d().daemonId);
-										setState("deleteWorkspaceTarget", d().daemonId);
-									}}
-								>
-									<TrashIcon />
-									Delete worktree…
-								</button>
-							</Show>
-							{/* Only a clone cut from the project's local path has a branch the
+								<Show when={isWorktree() && !isClone()}>
+									<button
+										type="button"
+										role="menuitem"
+										class="sidebar-menu-item sidebar-menu-item--danger"
+										title="Stops the session process and removes the worktree (guard checks first)"
+										disabled={deleting()}
+										onClick={() => {
+											setMenuOpenId(null);
+											sendWorktreeDeleteInfo(d().daemonId);
+											setState("deleteWorkspaceTarget", d().daemonId);
+										}}
+									>
+										<TrashIcon />
+										Delete worktree…
+									</button>
+								</Show>
+								{/* Only a clone cut from the project's local path has a branch the
 							    project lacks; a remote-source clone pushes upstream from inside. */}
-							<Show when={isClone() && d().localSource === true}>
-								<button
-									type="button"
-									role="menuitem"
-									class="sidebar-menu-item"
-									title={
-										paused()
-											? PAUSED_TOOLTIP.reconnecting
-											: "Fetches the clone's committed branch into the project (creates it or fast-forwards; never overwrites)"
-									}
-									disabled={paused()}
-									onClick={() => {
-										setMenuOpenId(null);
-										void fetchCloneIntoProject(d().daemonId);
-									}}
-								>
-									<ArrowDownIcon />
-									Fetch into project
-								</button>
-							</Show>
-							<Show when={isClone()}>
-								<button
-									type="button"
-									role="menuitem"
-									class="sidebar-menu-item sidebar-menu-item--danger"
-									title={
-										paused()
-											? PAUSED_TOOLTIP.reconnecting
-											: "Verified delete: refuses active work, verifies the fleet transcript store, then removes compute, storage, and the checkout"
-									}
-									disabled={paused() || deleting()}
-									onClick={() => {
-										setMenuOpenId(null);
-										setState("deleteWorkspaceTarget", d().daemonId);
-									}}
-								>
-									<TrashIcon />
-									Delete workspace…
-								</button>
-							</Show>
-						</KebabMenu>
-						<span
-							class="daemon-row-status"
-							role="status"
-							aria-label={`${statusLabel()}. ${chip().title}`}
-							title={`${statusLabel()}\n${chip().title}`}
-						>
-							<span
-								class="daemon-status-dot"
-								data-status={waking() ? "resolving" : d().status}
-								data-activity={activityDot()}
-							/>
+								<Show when={isClone() && d().localSource === true}>
+									<button
+										type="button"
+										role="menuitem"
+										class="sidebar-menu-item"
+										title={
+											paused()
+												? PAUSED_TOOLTIP.reconnecting
+												: "Fetches the clone's committed branch into the project (creates it or fast-forwards; never overwrites)"
+										}
+										disabled={paused()}
+										onClick={() => {
+											setMenuOpenId(null);
+											void fetchCloneIntoProject(d().daemonId);
+										}}
+									>
+										<ArrowDownIcon />
+										Fetch into project
+									</button>
+								</Show>
+								<Show when={isClone()}>
+									<button
+										type="button"
+										role="menuitem"
+										class="sidebar-menu-item sidebar-menu-item--danger"
+										title={
+											paused()
+												? PAUSED_TOOLTIP.reconnecting
+												: "Verified delete: refuses active work, verifies the fleet transcript store, then removes compute, storage, and the checkout"
+										}
+										disabled={paused() || deleting()}
+										onClick={() => {
+											setMenuOpenId(null);
+											setState("deleteWorkspaceTarget", d().daemonId);
+										}}
+									>
+										<TrashIcon />
+										Delete workspace…
+									</button>
+								</Show>
+							</KebabMenu>
 						</span>
 					</div>
 					{/* Session switcher: the last session's title (probed by the
 					    fleet edge from the session file's JSONL title slot; "no
-					    session yet" for an untitled one) plus a square chevron box in
-					    the row's right gutter. The title is part of the card (click
-					    resumes); only the chevron opens the last-10-sessions resume
-					    picker (ready/asleep rows only); other rows show the bare
-					    title. The title wraps to at most two lines and the tooltip
-					    exposes the full string. A "+" box under the chevron starts a
-					    fresh session in this worktree. */}
+					    session yet" for an untitled one) plus a bare chevron in the
+					    row's right gutter, on the corner slot's column. The title is
+					    part of the card (click resumes); only the chevron opens the
+					    last-10-sessions resume picker (ready/asleep rows only); other
+					    rows show the bare title. The title wraps to at most two lines
+					    and the tooltip exposes the full string. A "+" under the
+					    chevron starts a fresh session in this worktree. Both show on
+					    row hover/focus like the "⋯" menu (always on touch). */}
 					<Show
 						when={clickable()}
 						fallback={
@@ -705,7 +684,7 @@ export const WorkspaceRow: Component<{
 							</div>
 							<button
 								type="button"
-								class="daemon-session-chevron-box"
+								class="daemon-session-toggle"
 								aria-expanded={sessionsOpen()}
 								aria-label="Switch session"
 								title="Switch session"

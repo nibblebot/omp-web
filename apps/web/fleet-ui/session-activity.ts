@@ -45,7 +45,7 @@ import type { DaemonStatus } from "#lib/wire/protocol";
  * appears when it finishes (see the daemon_activity handler in apps/web/state.ts,
  * which marks unread on the observed true→false flip for a detached daemon).
  *
- * Rendering maps blocked → red dot, in_progress → spinning green,
+ * Rendering maps blocked → red dot, in_progress → spinning green comet ring,
  * unreviewed → yellow dot, unread → light blue, idle → nothing.
  */
 export type SessionActivity = "in_progress" | "blocked" | "unread" | "unreviewed" | "idle";
