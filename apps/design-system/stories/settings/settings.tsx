@@ -338,6 +338,12 @@ export default [
 				seed: { sidebarSessionTitleLines: 2 },
 				render: () => <WebUiSettings />,
 			},
+			{
+				name: "Title-first workspace rows on",
+				description: "Roster rows lead with the last session title.",
+				seed: { sidebarTitleFirst: true },
+				render: () => <WebUiSettings />,
+			},
 		],
 	}),
 ];

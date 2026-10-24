@@ -55,7 +55,10 @@ import {
 // progress, and the git diffstat when there is one. A ready row carries a rail
 // on its right edge instead of a dot. Ready rows attach on click, asleep rows
 // wake-then-attach. The group header names the project; the full path lives in
-// the hover tooltip. Touch keeps the chevron, "+" and "⋯" visible at 44px.
+// the hover tooltip. Touch keeps the chevron, "+" and "⋯" visible at 44px. With
+// the title-first setting (sidebarTitleFirst) a titled row swaps the two: the
+// session title leads the top line, flush left, and the kind icon + branch move
+// in small gray text to the head of the diffstat line.
 // ---------------------------------------------------------------------------
 
 /** Roster entries may carry a template name, the last-session title, and
@@ -149,6 +152,9 @@ export const WorkspaceRow: Component<{
 	const menuOpen = createMemo(() => menuOpenId() === d().daemonId);
 	/** The session-title line text: the last session's title, absent when it has none. */
 	const sessionTitleText = createMemo(() => displayTitle(d().sessionTitle));
+	/** Title-first layout (setting): the session title leads the top line and the
+	 *  branch moves to the diffstat line. A row without a title keeps the branch first. */
+	const titleFirst = () => state.sidebarTitleFirst && sessionTitleText() !== undefined;
 
 	// Worktree sessions belong to a main checkout and read as branches, not
 	// dirs. The branch (or name fallback) becomes the title and the project
@@ -182,6 +188,28 @@ export const WorkspaceRow: Component<{
 		if (d().detachedAt !== undefined) return `detached @ ${d().detachedAt}`;
 		return d().branch ?? d().name;
 	};
+	/** Kind icon + primary text (+ lock): the top line in the branch-first layout,
+	 *  the head of the diffstat line in the title-first one. */
+	const branchLabel = () => (
+		<>
+			<span class="daemon-kind-icon" role="img" aria-label={kindLabel()} title={kindLabel()}>
+				<Show when={isClone()} fallback={<WorktreeIcon />}>
+					<PackageIcon />
+				</Show>
+			</span>
+			<span class="daemon-row-branch">{primaryText()}</span>
+			<Show when={d().worktreeLocked === true}>
+				<span
+					class="daemon-lock-icon"
+					role="img"
+					aria-label="locked worktree"
+					title="locked worktree"
+				>
+					<LockIcon />
+				</span>
+			</Show>
+		</>
+	);
 	/** Non-ready provider lifecycle stage for clone rows, else undefined;
 	 *  Show narrows the child callback to the stage STRING (never `true`). */
 	const activeStage = (): Exclude<LifecycleStage, "ready"> | undefined => {
@@ -345,6 +373,7 @@ export const WorkspaceRow: Component<{
 					"daemon-row--worktree": isWorktree(),
 					"daemon-row--root": isRoot(),
 					"daemon-row--clone": isClone(),
+					"daemon-row--title-first": titleFirst(),
 					// Ready rows wear the right-edge rail; asleep ones dim their title
 					// (until a wake is in flight).
 					"daemon-row--ready": d().status === "ready",
@@ -362,26 +391,18 @@ export const WorkspaceRow: Component<{
 				<div class="sidebar-row-main">
 					<div class="sidebar-row-top">
 						<span class="sidebar-row-title daemon-row-title" title={d().cwd}>
-							<span
-								class="daemon-kind-icon"
-								role="img"
-								aria-label={kindLabel()}
-								title={kindLabel()}
-							>
-								<Show when={isClone()} fallback={<WorktreeIcon />}>
-									<PackageIcon />
-								</Show>
-							</span>
-							<span class="daemon-row-branch">{primaryText()}</span>
-							<Show when={d().worktreeLocked === true}>
-								<span
-									class="daemon-lock-icon"
-									role="img"
-									aria-label="locked worktree"
-									title="locked worktree"
-								>
-									<LockIcon />
-								</span>
+							<Show when={titleFirst() ? sessionTitleText() : undefined} fallback={branchLabel()}>
+								{(title) => (
+									<span
+										class="daemon-row-session"
+										classList={{
+											"daemon-session-title--two-line": state.sidebarSessionTitleLines === 2,
+										}}
+										title={title()}
+									>
+										{title()}
+									</span>
+								)}
 							</Show>
 						</span>
 						{/* Session chevron and "+" (clickable rows only), beside the
@@ -601,8 +622,9 @@ export const WorkspaceRow: Component<{
 					    aligned with the branch text. Part of the card (click
 					    resumes). Absent for an untitled session, so the row stays one
 					    line. Clamped to one line, or two with the setting on, taking
-					    only the lines it needs; the tooltip carries the full string. */}
-					<Show when={sessionTitleText()}>
+					    only the lines it needs; the tooltip carries the full string.
+					    The title-first layout puts it on the top line instead. */}
+					<Show when={titleFirst() ? undefined : sessionTitleText()}>
 						{(title) => (
 							<div
 								class="daemon-session-title"
@@ -679,11 +701,15 @@ export const WorkspaceRow: Component<{
 						)}
 					</Show>
 					{/* Bottom meta row: the diffstat cluster (changed-file count +
-					    numstat +/- line counts when probed). Row actions live in the
-					    "⋯" menu on the top row. Rendered only when there is git info
-					    to show. */}
-					<Show when={hasGitStats()}>
+					    numstat +/- line counts when probed), led by the small gray
+					    branch in the title-first layout. Row actions live in the
+					    "⋯" menu on the top row. Rendered only when there is
+					    something to show. */}
+					<Show when={titleFirst() || hasGitStats()}>
 						<div class="daemon-git">
+							<Show when={titleFirst()}>
+								<span class="daemon-git-branch">{branchLabel()}</span>
+							</Show>
 							<Show when={filesChanged()}>
 								{(n) => (
 									<span

@@ -135,6 +135,50 @@ export default defineStory({
 			render: () => <Row daemon={withTitle("Fixture modules")} />,
 		},
 		{
+			name: "Title first, with diffstat (setting on)",
+			description:
+				"The session title leads the top line, flush left; the branch sits in small gray text before the diffstat.",
+			seed: { sidebarTitleFirst: true },
+			render: () => <Row daemon={rosterDaemon.main} />,
+		},
+		{
+			name: "Title first, long title and branch (setting on)",
+			description:
+				"Both clamp: the title to one line, the branch with an ellipsis before the diffstat.",
+			seed: { sidebarTitleFirst: true },
+			render: () => (
+				<Row
+					daemon={{
+						...rosterDaemon.main,
+						sessionTitle: LONG_TITLE,
+						branch: "feat/design-fixtures-for-every-sidebar-state-and-more",
+						detachedAt: undefined,
+					}}
+				/>
+			),
+		},
+		{
+			name: "Title first, no git changes (setting on)",
+			description:
+				"The branch line shows on its own when there is no diffstat; the lock rides with the branch.",
+			seed: { sidebarTitleFirst: true },
+			render: () => (
+				<Row
+					daemon={{
+						...rosterDaemon.worktree,
+						worktreeLocked: true,
+						git: { added: 0, modified: 0, deleted: 0, untracked: 0 },
+					}}
+				/>
+			),
+		},
+		{
+			name: "Title first, no session title (setting on)",
+			description: "A row without a session title keeps the branch on the top line.",
+			seed: { sidebarTitleFirst: true },
+			render: () => <Row daemon={withTitle(undefined)} />,
+		},
+		{
 			name: "Long branch name",
 			description: "The branch truncates with an ellipsis before the right-hand controls.",
 			render: () => (

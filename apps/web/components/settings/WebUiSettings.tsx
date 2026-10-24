@@ -5,6 +5,7 @@ import { notificationsBlocked } from "../../store/chat";
 import {
 	setNotifyEnabled,
 	setSidebarSessionTitleLines,
+	setSidebarTitleFirst,
 	setSidebarUsage,
 	setState,
 	state,
@@ -110,6 +111,16 @@ export function WebUiSettings() {
 						label="Two-Line Session Titles"
 						checked={state.sidebarSessionTitleLines === 2}
 						onChange={(checked) => setSidebarSessionTitleLines(checked ? 2 : 1)}
+					/>
+				</SettingsRowLayout>
+				<SettingsRowLayout
+					label="Title-First Workspace Rows"
+					description="Roster rows lead with the last session title; the branch moves to the git stats line in small gray text. Rows without a session title keep the branch first."
+				>
+					<SettingToggle
+						label="Title-First Workspace Rows"
+						checked={state.sidebarTitleFirst}
+						onChange={setSidebarTitleFirst}
 					/>
 				</SettingsRowLayout>
 			</SettingsGroup>

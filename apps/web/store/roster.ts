@@ -1,5 +1,12 @@
 import { daemonSessionsLimit, type ClientCommand, type SessionListEntry } from "#lib/wire/protocol";
-import { SIDEBAR_KEY, SIDEBAR_TITLE_LINES_KEY, TX_SIDEBAR_KEY, setState, state } from "../state";
+import {
+	SIDEBAR_KEY,
+	SIDEBAR_TITLE_FIRST_KEY,
+	SIDEBAR_TITLE_LINES_KEY,
+	TX_SIDEBAR_KEY,
+	setState,
+	state,
+} from "../state";
 import { startNewSession } from "./chat";
 import { spawnResume } from "./projects";
 import { parseRoute } from "./route";
@@ -427,6 +434,13 @@ export function setSidebarSessionTitleLines(lines: 1 | 2): void {
 	if (typeof localStorage !== "undefined")
 		localStorage.setItem(SIDEBAR_TITLE_LINES_KEY, String(lines));
 	setState("sidebarSessionTitleLines", lines);
+}
+
+/** Persist + apply the title-first roster row layout. */
+export function setSidebarTitleFirst(enabled: boolean): void {
+	if (typeof localStorage !== "undefined")
+		localStorage.setItem(SIDEBAR_TITLE_FIRST_KEY, String(enabled));
+	setState("sidebarTitleFirst", enabled);
 }
 
 /** Closes both sidebar drawers. A no-op when docked, since docked visibility is a choice, not a drawer state. */

@@ -105,6 +105,11 @@ const WEB_UI_SEARCH_ROWS: {
 		tabId: "web-ui",
 	},
 	{
+		label: "Title-First Workspace Rows",
+		keywords: "session title branch sidebar roster row layout workspace",
+		tabId: "web-ui",
+	},
+	{
 		label: "Sign Out",
 		keywords: "sign out logout log out account",
 		tabId: "web-ui",

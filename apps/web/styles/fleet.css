@@ -901,11 +901,42 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .daemon-git {
 	padding-left: var(--row-text-inset);
 }
+/* Title-first layout (setting): the branch heads the diffstat line in the
+   line's small gray text, its kind icon shrunk to the text size, and gives way
+   to the stats when the row is narrow. Everything under the top line starts
+   flush left with the title, which takes the kind icon's spot. */
 .daemon-git-branch {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	flex: 0 1 auto;
 	min-width: 0;
 	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+}
+.daemon-git-branch .daemon-kind-icon {
+	width: auto;
+	margin-right: 0;
+}
+.daemon-row--title-first .daemon-git {
+	flex-wrap: nowrap;
+}
+.daemon-row--title-first .daemon-session-title,
+.daemon-row--title-first .daemon-chips,
+.daemon-row--title-first .daemon-stage,
+.daemon-row--title-first .daemon-git {
+	padding-left: 0;
+}
+/* The session title as the top line: prose in the sans face at the row title
+   size, clamped like the under-line title (one line, or two with the setting). */
+.daemon-row-session {
+	font-family: var(--font-sans);
+	white-space: normal;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 1;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	min-width: 0;
 }
 .daemon-git-dirty {
 	flex: none;
