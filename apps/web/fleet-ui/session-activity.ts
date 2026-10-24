@@ -46,7 +46,7 @@ import type { DaemonStatus } from "#lib/wire/protocol";
  * which marks unread on the observed true→false flip for a detached daemon).
  *
  * Rendering maps blocked → red dot, in_progress → spinning green comet ring,
- * unreviewed → yellow dot, unread → light blue, idle → nothing.
+ * unreviewed and unread → light blue (one look; they clear differently), idle → nothing.
  */
 export type SessionActivity = "in_progress" | "blocked" | "unread" | "unreviewed" | "idle";
 
@@ -72,7 +72,7 @@ export function sessionActivity(
 	if (live.attached && live.uiPending) return "blocked";
 	if (live.attached && live.streaming) return "in_progress";
 	// Attached and idle: the finished answer sits below the viewport (the
-	// user is scrolled up), yellow until they scroll to the live edge.
+	// user is scrolled up), light blue until they scroll to the live edge.
 	if (live.attached && live.unreviewed) return "unreviewed";
 	// Detached row: fall back to the edge's realtime per-daemon reading
 	// (undefined while the stream is down or activity is unknown; then only

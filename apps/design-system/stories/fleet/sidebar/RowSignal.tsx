@@ -42,7 +42,7 @@ export default defineStory({
 		},
 		{
 			name: "Unreviewed (dot)",
-			description: "A turn ended below the viewport: a yellow dot.",
+			description: "A turn ended below the viewport: a light blue dot, the same as unread.",
 			render: () => <Signal status="ready" activity="unreviewed" />,
 		},
 		{

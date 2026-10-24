@@ -9,7 +9,7 @@ import type { SessionActivity } from "../../../fleet-ui/session-activity";
 //            on its way up (spawning/connecting/session/resolving). Green
 //            comet ring for working, accent comet ring for starting.
 //   dot:     something needs a look: blocked (red), error (red),
-//            reconnecting (amber), unreviewed (yellow), unread (light blue).
+//            reconnecting (amber), unreviewed and unread (light blue).
 //   nothing: ready + idle and asleep. A ready row is marked by the right-edge
 //            rail instead (.sidebar-list --ready-rail-*), never by a dot.
 // Styling is the .daemon-status-dot family in fleet.css, keyed by data-status

@@ -100,7 +100,7 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	const [jumpVisible, setJumpVisible] = createSignal(false);
 	// Mirror pin state into the store: agent_end (apps/web/store/chat.ts) reads
 	// chatPinned to decide whether the finished answer was viewed (unviewed →
-	// the roster's yellow unreviewed dot), and every re-pin clears the flag.
+	// the roster's light-blue unreviewed dot), and every re-pin clears the flag.
 	// The local var stays for the synchronous reads inside the handlers.
 	const setPinned = (p: boolean) => {
 		pinned = p;

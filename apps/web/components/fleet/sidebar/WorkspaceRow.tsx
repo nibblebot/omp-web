@@ -84,7 +84,7 @@ export type RosterEntry = DaemonEntry & {
 
 /** Signal tooltips (sessionActivity state → copy). Only the four non-idle
  *  states render a signal: blocked → red dot, in_progress → spinning green
- *  ring, unreviewed → yellow dot, unread → light blue dot. Idle renders nothing. */
+ *  ring, unreviewed and unread → light blue dot. Idle renders nothing. */
 const ACTIVITY_TITLE: Record<SessionActivity, string> = {
 	in_progress: "in progress",
 	blocked: "blocked, waiting for your input",

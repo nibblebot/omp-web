@@ -575,17 +575,15 @@
 	background: var(--error);
 	box-shadow: 0 0 6px var(--error);
 }
-/* Light-blue unread dot (--accent is the theme's light blue): marked client-
-   side when the user switches away from an in-progress attached session. */
-.daemon-status-dot[data-activity="unread"] {
+/* Light-blue new-output dot (--accent is the theme's light blue), one look for
+   two states that clear differently: unread (a detached session's turn ended
+   while another was in view; cleared on attach) and unreviewed (the attached
+   session's turn ended while the transcript was scrolled away from the live
+   edge; cleared on re-pin, prompt or switch). */
+.daemon-status-dot[data-activity="unread"],
+.daemon-status-dot[data-activity="unreviewed"] {
 	background: var(--accent);
 	box-shadow: 0 0 6px var(--accent);
-}
-/* Yellow unreviewed dot: attached session whose turn ended while the
-   transcript was scrolled away from the live edge (answer not yet viewed). */
-.daemon-status-dot[data-activity="unreviewed"] {
-	background: var(--warning);
-	box-shadow: none;
 }
 /* Busy: a comet ring, a conic tail masked to a ring, spinning. Green while the
    session works; accent while its process is starting (transitional status),
