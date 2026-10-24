@@ -22,6 +22,21 @@ export default defineStory({
 			),
 		},
 		{
+			name: "Aborted agent, revivable, lifecycle on",
+			description: "A stopped agent the session can resume offers Revive and nothing else.",
+			seed: () =>
+				seedAgentTree({ display: true, revivable: ["FixtureBuilder.ReviewPass.TypesCheck"] }),
+			render: () => (
+				<div class="ds-frame">
+					<SubagentActionsMenu
+						id="FixtureBuilder.ReviewPass.TypesCheck"
+						label="More actions for TypesCheck"
+						lifecycle
+					/>
+				</div>
+			),
+		},
+		{
 			name: "Finished agent, lifecycle on",
 			description: "A finished agent can be parked.",
 			seed: () => seedAgentTree({ display: true }),

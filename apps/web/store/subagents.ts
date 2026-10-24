@@ -224,7 +224,7 @@ export function parkWorker(
 	});
 }
 
-/** Revive a parked worker; rejects (throws to caller) on server failure. */
+/** Revive a parked or stopped worker; rejects (throws to caller) on server failure. */
 export function reviveWorker(agentId: string): Promise<{ id: string; status: string }> {
 	return call("workerRevive", [agentId]).then((data) => {
 		const r: Record<string, unknown> = asRecord(data) ?? {};
@@ -600,8 +600,12 @@ export function subagentCapabilities(id: string): SubagentCapabilities {
 		steer: status === "running",
 		abort: status === "running" || status === "pending",
 		park: status === "done",
-		// Revive applies to a parked worker; the session re-registers it and the lifecycle reports it idle.
-		revive: status === "parked",
+		// A parked worker revives unconditionally. A stopped (aborted) one only when the session's roster
+		// reports its transcript resumable; either way the lifecycle reports the revived worker idle.
+		revive:
+			status === "parked" ||
+			(status === "aborted" &&
+				rosterOfSession().some((record) => record.agentId === id && record.revivable)),
 	};
 }
 

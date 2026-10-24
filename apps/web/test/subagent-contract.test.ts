@@ -37,6 +37,8 @@ interface Seed {
 	assignment?: string;
 	/** Task text of the progress frame; defaults to "t". */
 	task?: string;
+	/** The roster's revivable verdict; defaults to false. */
+	revivable?: boolean;
 }
 
 /** Seeds live subagent state and the matching roster records for the attached session. */
@@ -77,7 +79,7 @@ function seed(agents: Seed[]): void {
 			parentToolCallId: agent.toolCallId,
 			lastActivity: agent.rosterActivity ?? 0,
 			createdAt: agent.startedAt ?? 0,
-			revivable: false,
+			revivable: agent.revivable ?? false,
 		} as WorkerRecord;
 		order.push(key);
 	}
@@ -461,6 +463,23 @@ describe("subagentCapabilities", () => {
 	test("parked agents can be revived", () => {
 		seed([{ id: "a", status: "parked" }]);
 		expect(subagentCapabilities("a").revive).toBe(true);
+	});
+
+	test("an aborted agent can be revived only when the roster says it is revivable", () => {
+		seed([{ id: "a", status: "aborted", startedAt: 1, endedAt: 2, revivable: true }]);
+		expect(subagentCapabilities("a")).toEqual({
+			steer: false,
+			abort: false,
+			park: false,
+			revive: true,
+		});
+		seed([{ id: "a", status: "aborted", startedAt: 1, endedAt: 2, revivable: false }]);
+		expect(subagentCapabilities("a").revive).toBe(false);
+	});
+
+	test("a revivable verdict never revives an agent that is not parked or aborted", () => {
+		seed([{ id: "a", status: "done", startedAt: 1, endedAt: 2, revivable: true }]);
+		expect(subagentCapabilities("a").revive).toBe(false);
 	});
 
 	test("unknown agents expose no capabilities", () => {

@@ -410,6 +410,27 @@ export const subagentTranscripts: Record<string, SubagentTranscriptFile> = {
 	FixtureBuilder: builderTranscript,
 	"FixtureBuilder.AdvisorA": advisorTranscript,
 	DocsSweep: docsTranscript,
+	// Stopped mid-run: the transcript is on disk, so the agent can resume from it.
+	"FixtureBuilder.ReviewPass.TypesCheck": transcript(
+		subFile("FixtureBuilder.ReviewPass.TypesCheck"),
+		"t",
+		[
+			user("Run the typecheck sweep over apps/ and report errors by file.", 6),
+			assistant({
+				model: SONNET,
+				minute: 7,
+				stopReason: "aborted",
+				input: 1840,
+				output: 92,
+				content: [
+					{
+						type: "text",
+						text: "Starting with apps/web, then apps/session. Stopped by the reviewer before the first run finished.",
+					},
+				],
+			}),
+		],
+	),
 	// Queued, not started: the file exists but holds nothing yet.
 	"FixtureBuilder.LintPass": transcript(subFile("FixtureBuilder.LintPass"), "l", []),
 };
@@ -1064,7 +1085,7 @@ function agentInfoOf(spec: AgentSpec, index: number): SubagentInfo {
 	};
 }
 
-function agentRecordOf(spec: AgentSpec): WorkerRecord {
+function agentRecordOf(spec: AgentSpec, revivable = spec.status === "parked"): WorkerRecord {
 	return {
 		id: spec.id,
 		agentId: spec.id,
@@ -1084,7 +1105,7 @@ function agentRecordOf(spec: AgentSpec): WorkerRecord {
 		lastActivity: at(spec.endMin ?? 11.5),
 		createdAt: at(spec.startMin ?? 11),
 		adopted: false,
-		revivable: spec.status === "parked",
+		revivable,
 	};
 }
 
@@ -1092,7 +1113,7 @@ function agentRecordOf(spec: AgentSpec): WorkerRecord {
 export const agentTreeInfos: SubagentInfo[] = agentSpecs.map(agentInfoOf);
 
 /** Roster records for the agent tree; they carry the parent links that nest the rows. */
-export const agentTreeWorkers: WorkerRecord[] = agentSpecs.map(agentRecordOf);
+export const agentTreeWorkers: WorkerRecord[] = agentSpecs.map((spec) => agentRecordOf(spec));
 
 /** Settings the tree row reads: the live line under running rows. */
 export const agentSettingsModel: SettingsModel = {
@@ -1125,9 +1146,16 @@ export const agentSettingsModel: SettingsModel = {
  * Seeds the attached session with the agent forest, or an empty session with `empty`.
  * `display` also turns on the live-line setting the tree row reads (off by default, so rows show
  * three lines). `settled` finishes the running and pending agents, so nothing in the forest is active.
+ * `revivable` lists aborted agents the roster reports as resumable (parked agents always are).
  */
 export function seedAgentTree(
-	options: { empty?: boolean; display?: boolean; settled?: boolean } = {},
+	options: {
+		empty?: boolean;
+		display?: boolean;
+		settled?: boolean;
+		/** Ids whose roster record reports a stopped (aborted) agent as resumable from its transcript. */
+		revivable?: readonly string[];
+	} = {},
 ): void {
 	const specs =
 		options.empty === true
@@ -1137,7 +1165,9 @@ export function seedAgentTree(
 						? { ...spec, status: "completed" as const, endMin: spec.endMin ?? 11 }
 						: spec,
 				);
-	const workers = specs.map(agentRecordOf);
+	const workers = specs.map((spec) =>
+		agentRecordOf(spec, spec.status === "parked" || options.revivable?.includes(spec.id) === true),
+	);
 	const infos = specs.map(agentInfoOf);
 	seedSubagents(
 		{ workerList: () => workers },

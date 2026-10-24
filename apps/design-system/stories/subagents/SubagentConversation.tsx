@@ -30,6 +30,20 @@ export default defineStory({
 			render: () => conversation("DocsSweep"),
 		},
 		{
+			name: "Aborted agent, revivable",
+			description:
+				"A stopped agent whose transcript the session can resume: an Aborted strip offers Revive in place of the Finished strip.",
+			seed: () =>
+				seedAgentTree({ display: true, revivable: ["FixtureBuilder.ReviewPass.TypesCheck"] }),
+			render: () => conversation("FixtureBuilder.ReviewPass.TypesCheck"),
+		},
+		{
+			name: "Aborted agent, not revivable",
+			description: "A stopped agent the session cannot resume: the Finished strip offers nothing.",
+			seed: () => seedAgentTree({ display: true }),
+			render: () => conversation("FixtureBuilder.ReviewPass.TypesCheck"),
+		},
+		{
 			name: "Pending agent",
 			description: "A queued agent: empty transcript and a Starting strip with Abort agent.",
 			seed: () => seedAgentTree({ display: true }),

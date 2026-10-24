@@ -6,6 +6,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import {
 	AgentRegistry,
+	isResumable,
 	MAIN_AGENT_ID,
 	type AgentRef,
 } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -278,9 +279,14 @@ export async function listWorkers(entry: SessionEntry): Promise<WorkerRecord[]> 
 			let revivable = false;
 			let unavailableReason: string | undefined =
 				sessionFile && !hasHistory ? "worker history is missing or inaccessible" : undefined;
-			if (status === "parked") {
+			// A stopped (aborted) worker resumes from its transcript through the same cold path as a parked one.
+			if (status === "parked" || status === "aborted") {
 				const factory = revivers.get(entry);
-				if (!hasHistory) unavailableReason = "worker history is missing or inaccessible";
+				if (status === "aborted" && registered && !isResumable(registered))
+					unavailableReason = "worker was stopped and has no transcript to resume from";
+				else if (status === "aborted" && registered?.session)
+					unavailableReason = "worker is still shutting down";
+				else if (!hasHistory) unavailableReason = "worker history is missing or inaccessible";
 				// An adopted worker revives through its own reviver; the persisted factory is the cold path.
 				else if (manager && registered && manager.has(id, registered)) revivable = true;
 				else if (!manager || !factory || !registered)
@@ -358,9 +364,12 @@ export async function parkWorker(
 ): Promise<WorkerLifecycleResult> {
 	const ref = await authorizedWorker(entry, agentId);
 	const manager = AgentLifecycleManager.global();
-	const snapshot = entry.subagentSnapshots.get(agentId);
-	if (ref.status === "aborted" || snapshot?.status === "aborted") {
-		throw new Error(`worker "${agentId}" is terminal`);
+	// Parking disposes a live session. A stopped worker has none, and the SDK never moves an aborted
+	// ref to parked (aborted is terminal for its generation), so claiming success would misreport it.
+	if (ref.status === "aborted") {
+		throw new WorkerNotAdoptedError(
+			`worker "${agentId}" was stopped and has no live session to park; revive it to resume`,
+		);
 	}
 	// A parked worker has already released its session; re-parking is a no-op success.
 	if (ref.status !== "parked" && !manager.has(agentId, ref)) {
@@ -385,10 +394,6 @@ export async function reviveWorker(
 	agentId: string,
 ): Promise<WorkerLifecycleResult> {
 	const ref = await authorizedWorker(entry, agentId);
-	const snapshot = entry.subagentSnapshots.get(agentId);
-	if (ref.status === "aborted" || snapshot?.status === "aborted") {
-		throw new Error(`worker "${agentId}" is terminal and cannot be revived`);
-	}
 	const before = ref.status;
 	if (!ref.session && (!ref.sessionFile || !revivers.has(entry)))
 		throw new Error(
@@ -407,6 +412,6 @@ export async function reviveWorker(
 	return {
 		id: agentId,
 		status: mapStatus(fresh.status),
-		outcome: before === "parked" ? "revived" : "noop",
+		outcome: before === "parked" || before === "aborted" ? "revived" : "noop",
 	};
 }

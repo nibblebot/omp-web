@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -86,8 +86,10 @@ function adoptFinished(revive?: () => Promise<AgentSession>, sessionFile = child
 	return live;
 }
 
+afterAll(cleanupTempDirs);
+
 beforeEach(async () => {
-	dir = await mkdtemp(join(tmpdir(), "omp-web-worker-lifecycle-"));
+	dir = tempDir("omp-web-worker-lifecycle-");
 	root = join(dir, "root.jsonl");
 	await mkdir(join(dir, "root"));
 	childFile = join(dir, "root", `${ID}.jsonl`);
@@ -98,7 +100,8 @@ beforeEach(async () => {
 afterEach(async () => {
 	await AgentLifecycleManager.global().release(ID);
 	AgentRegistry.global().unregister(ID);
-	await rm(dir, { recursive: true, force: true });
+	// A test may install its own persisted reviver; the next entry reinstalls the real one.
+	AgentLifecycleManager.resetGlobalForTests();
 });
 
 describe("worker park and revive", () => {
@@ -149,12 +152,12 @@ describe("worker park and revive", () => {
 		});
 	});
 
-	test("an aborted worker rejects park and revive", async () => {
+	test("an aborted worker has no live session to park", async () => {
 		adoptFinished();
-		AgentRegistry.global().setStatus(ID, "aborted");
+		await AgentLifecycleManager.global().release(ID, undefined, { tombstone: true });
 		const entry = makeEntry("completed");
-		await expect(parkWorker(entry, ID)).rejects.toThrow(/terminal/);
-		await expect(reviveWorker(entry, ID)).rejects.toThrow(/terminal/);
+		await expect(parkWorker(entry, ID)).rejects.toBeInstanceOf(WorkerNotAdoptedError);
+		expect(AgentRegistry.global().get(ID)?.status).toBe("aborted");
 	});
 
 	test("a worker the session does not own rejects", async () => {
@@ -216,5 +219,99 @@ describe("worker park and revive", () => {
 			sessionFile: childFile,
 		});
 		expect(await readFile(childFile, "utf8")).toBe(transcript);
+	});
+});
+
+/** A transcript carrying the persisted session contract the SDK needs to rebuild a subagent. */
+function resumableTranscript(cwd: string): string {
+	const timestamp = "2026-01-01T00:00:00.000Z";
+	return [
+		{ type: "session", version: 3, id: ID, timestamp, cwd },
+		{
+			type: "session_init",
+			timestamp,
+			task: "review the diff",
+			agent: "explore",
+			systemPrompt: "You review diffs.",
+			tools: ["read"],
+		},
+	]
+		.map((line) => `${JSON.stringify(line)}\n`)
+		.join("");
+}
+
+/** The explicit-kill path: the ref stays registered as a detached `aborted` row. */
+async function killAdopted(): Promise<void> {
+	await AgentLifecycleManager.global().release(ID, undefined, { tombstone: true });
+}
+
+describe("aborted workers", () => {
+	test("an aborted worker with a resumable transcript lists as revivable and revives under its own id", async () => {
+		await writeFile(childFile, resumableTranscript(dir));
+		adoptFinished();
+		await killAdopted();
+		const entry = makeEntry("completed");
+
+		const [row] = await listWorkers(entry);
+		expect(row).toMatchObject({ id: ID, status: "aborted", revivable: true, adopted: false });
+		expect(row?.unavailableReason).toBeUndefined();
+
+		// The real factory needs a live root session; a double stands in for the rebuilt subagent.
+		const revived = fakeSession();
+		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
+			async () => async () => revived.session,
+			() => 0,
+		);
+		expect(await reviveWorker(entry, ID)).toMatchObject({
+			id: ID,
+			status: "idle",
+			outcome: "revived",
+		});
+		expect(AgentRegistry.global().get(ID)?.session).toBe(revived.session);
+		expect((await listWorkers(entry))[0]).toMatchObject({
+			id: ID,
+			status: "idle",
+			revivable: false,
+		});
+	});
+
+	test("an aborted worker with no transcript is not revivable and says why", async () => {
+		AgentRegistry.global().register({
+			id: ID,
+			displayName: "explore",
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: null,
+			sessionFile: null,
+			status: "aborted",
+		});
+		const entry = makeEntry("completed");
+
+		expect((await listWorkers(entry))[0]).toMatchObject({
+			id: ID,
+			status: "aborted",
+			revivable: false,
+			unavailableReason: "worker was stopped and has no transcript to resume from",
+		});
+		await expect(reviveWorker(entry, ID)).rejects.toThrow(/history/);
+		expect(AgentRegistry.global().get(ID)?.status).toBe("aborted");
+	});
+
+	test("an aborted worker whose transcript carries no session contract is not revivable", async () => {
+		await writeFile(
+			childFile,
+			`${JSON.stringify({ type: "session", version: 3, id: ID, timestamp: "2026-01-01T00:00:00.000Z", cwd: dir })}\n`,
+		);
+		adoptFinished();
+		await killAdopted();
+		const entry = makeEntry("completed");
+
+		expect((await listWorkers(entry))[0]).toMatchObject({
+			status: "aborted",
+			revivable: false,
+			unavailableReason: expect.stringMatching(/nonresumable/),
+		});
+		await expect(reviveWorker(entry, ID)).rejects.toThrow(/transcript cannot be resumed/);
+		expect(AgentRegistry.global().get(ID)?.status).toBe("aborted");
 	});
 });

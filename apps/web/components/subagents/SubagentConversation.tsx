@@ -41,9 +41,11 @@ export const SubagentConversation: Component<{ id: string; menu?: boolean }> = (
 									onAbort={() => void lifecycle.abort()}
 								/>
 							</Match>
-							<Match when={lifecycle.offers("revive") && agent().status === "parked"}>
+							<Match when={lifecycle.offers("revive")}>
 								<div class="subagent-composer-strip">
-									<span class="subagent-composer-state">Parked</span>
+									<span class="subagent-composer-state">
+										{agent().status === "parked" ? "Parked" : "Aborted"}
+									</span>
 									<button
 										type="button"
 										class="send subagent-composer-action"
