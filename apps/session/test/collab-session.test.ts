@@ -258,3 +258,61 @@ describe("collab port snapshot", () => {
 		});
 	});
 });
+
+describe("slash runtime MCP reauth wiring", () => {
+	function slashRuntimeFor(entry: Partial<SessionEntry>) {
+		const { broker } = stubBroker();
+		const collab = createCollabSession({
+			config: { idleTimeoutMs: 0 } as never,
+			agentDir: "",
+			authStorage: {} as never,
+			modelRegistry: {} as never,
+			settings: {} as never,
+			broker,
+		});
+		return collab.buildSlashRuntime(entry as SessionEntry);
+	}
+
+	test("reconnects the live manager entry and rebinds its tools after a reauth", async () => {
+		const calls: string[] = [];
+		const tools = [{ name: "mcp_demo_tool" }];
+		const config = {
+			type: "http",
+			url: "https://mcp.example/api",
+			headers: { Authorization: "stale" },
+		};
+		const mcpManager = {
+			getServerConfig: () => config,
+			updateServerConfig: (_name: string, next: { headers?: Record<string, string> }) => {
+				calls.push(`update:${JSON.stringify(next.headers)}`);
+				return undefined;
+			},
+			reconnectServer: async (name: string, options: { manual?: boolean }) => {
+				calls.push(`reconnect:${name}:${options.manual}`);
+			},
+			getConnectionStatus: () => "connected" as const,
+			getTools: () => tools,
+		};
+		const refreshed: unknown[] = [];
+		const runtime = slashRuntimeFor({
+			session: {
+				sessionManager: SessionManager.inMemory("/tmp"),
+				settings: {},
+				refreshMCPTools: async (next: unknown) => {
+					refreshed.push(next);
+				},
+			} as unknown as AgentSession,
+			mcpManager: mcpManager as never,
+		});
+
+		expect(runtime.mcpManager).toBe(mcpManager as never);
+		const state = await runtime.reconnectMcpServer?.("demo", {
+			type: "http",
+			url: "https://mcp.example/api",
+		});
+
+		expect(state).toBe("connected");
+		expect(calls).toEqual(["update:{}", "reconnect:demo:true"]);
+		expect(refreshed).toEqual([tools]);
+	});
+});

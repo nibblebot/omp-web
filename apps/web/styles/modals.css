@@ -595,8 +595,12 @@ button.picker-row.kbd-active {
 }
 .ask-bar-title {
 	flex: 1;
+	min-width: 0;
 	color: var(--text);
 	font-weight: 600;
+	/* Tool approval prompts arrive as one multi-line title (arguments one per line, indented). */
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 .ask-bar-cancel,
 .ask-bar-nav,

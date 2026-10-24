@@ -10,14 +10,15 @@ const HISTORY_SETTINGS: Record<string, true> = { "display.collapseCompacted": tr
  * transcript context so `display.collapseCompacted` means what it means in the
  * TUI (interactive-mode.ts, ui-helpers.ts): collapsed shows only the latest
  * compacted tail; full shows every entry with compaction dividers. Mid-stream,
- * dangling tool calls are kept, as the TUI keeps them.
+ * the current run's in-flight tool calls are kept, as the TUI keeps them; calls
+ * an earlier run left unpaired are stripped (session-provider-boundary.ts).
  */
 export function transcriptHistoryFrames(
 	session: Pick<AgentSession, "settings" | "isStreaming" | "buildTranscriptSessionContext">,
 ): HistoryFrame[] {
 	const context = session.buildTranscriptSessionContext({
 		collapseCompactedHistory: cfgDisplayCollapseCompacted.get(session.settings),
-		keepDanglingToolCalls: session.isStreaming,
+		keepInFlightToolCalls: session.isStreaming,
 	});
 	return historyFrames(context.messages);
 }

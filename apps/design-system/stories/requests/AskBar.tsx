@@ -1,6 +1,7 @@
 import { AskBar } from "../../../web/components/requests/AskBar";
 import { setState } from "../../../web/state";
 import {
+	approvalSelectParams,
 	askChecksQuestion,
 	askDialogRequest,
 	askLongQuestions,
@@ -45,6 +46,13 @@ export default [
 			{
 				name: "Select a model",
 				seed: () => setState("uiRequest", { id: "sel_7", method: "select", params: selectParams }),
+				render: () => <AskBar />,
+			},
+			{
+				name: "Tool approval (multi-line prompt)",
+				description: "The SDK's select fallback for tool approval: one argument per line.",
+				seed: () =>
+					setState("uiRequest", { id: "sel_8", method: "select", params: approvalSelectParams }),
 				render: () => <AskBar />,
 			},
 			{

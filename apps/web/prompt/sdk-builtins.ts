@@ -387,6 +387,12 @@ export const SDK_BUILTINS: readonly SdkBuiltin[] = [
 		sdkHandled: true,
 	},
 	{
+		name: "seance",
+		description: "Consult a saved session without resuming it",
+		hint: "[session id|path] [--model selector]",
+		sdkHandled: false,
+	},
+	{
 		name: "resume",
 		description: "Resume a different session",
 		hint: "[session id|@claude|@codex]",
@@ -536,6 +542,11 @@ export const SDK_BUILTINS: readonly SdkBuiltin[] = [
 		name: "pause",
 		description: "Freeze all agents (main, subagents, advisor) until resumed",
 		sdkHandled: false,
+	},
+	{
+		name: "forget-approvals",
+		description: "Forget every file and folder approval Ask and remember has recorded",
+		sdkHandled: true,
 	},
 	{ name: "quit", aliases: ["q"], description: "Quit the application", sdkHandled: false },
 ];

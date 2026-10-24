@@ -7,6 +7,7 @@ import {
 	type CollabPromptDetails,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { copyForReplication } from "@oh-my-pi/pi-coding-agent/collab/replication-shrink";
+import { reconnectMcpManagerServer } from "@oh-my-pi/pi-coding-agent/mcp/oauth-reauth";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -69,6 +70,7 @@ type PromptOrigin = "queue" | "direct";
 export interface CollabSession {
 	createSession(sessionCwd: string): Promise<SessionEntry>;
 	buildCollabPort(entry: SessionEntry): CollabSessionPort;
+	buildSlashRuntime(entry: SessionEntry): SlashCommandRuntime;
 	toWireStatus(status: CollabHostStatus | null): CollabWireStatus;
 	liveSubagentSession(entry: SessionEntry, agentId: string, op: "steer" | "abort"): AgentSession;
 	abortSubagent(entry: SessionEntry, agentId: string): Promise<void>;
@@ -268,6 +270,22 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			// name listener in wireSession already broadcasts, or beside
 			// notifyConfigChanged (model/preset switch, move), which broadcasts state.
 			notifyConfigChanged: () => deps.broker.broadcastState(entry),
+			// `/mcp reauth` writes the refreshed credential to config; reconnect the
+			// live manager's entry so the server comes back without a restart, as
+			// RPC mode does. The manager has no tools-changed callback here, so
+			// rebind the recovered tools explicitly. No `signal` or
+			// `runCommandInBackground`: the browser wait is bounded by the SDK's own
+			// 5 minute timeout and runs inside the awaited `prompt` call like
+			// /compact does.
+			mcpManager: entry.mcpManager,
+			reconnectMcpServer: entry.mcpManager
+				? async (name, selected) => {
+						const manager = entry.mcpManager;
+						const state = await reconnectMcpManagerServer(manager, name, selected);
+						if (state && manager) await session.refreshMCPTools(manager.getTools());
+						return state;
+					}
+				: undefined,
 		};
 	}
 
@@ -527,6 +545,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 	return {
 		createSession,
 		buildCollabPort,
+		buildSlashRuntime,
 		toWireStatus,
 		liveSubagentSession,
 		abortSubagent,

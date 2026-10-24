@@ -4,7 +4,7 @@ import { ImageThumbnails } from "../../ui/ImageThumbnails";
 import { HighlightedText } from "./HighlightedText";
 import { CollapsibleOutput, ToolCardShell } from "./ToolCardShell";
 
-/** eval tool: language arg in the header, highlighted code block, streaming output pre, display images. */
+/** eval tool: language arg in the header, highlighted code block, streaming output pre, images the cell printed. */
 export const EvalToolCard: Component<{ item: ToolItem }> = (props) => {
 	const args = () => (props.item.args as { code?: string; language?: string } | null) ?? {};
 	const code = () => args().code ?? "";

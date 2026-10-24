@@ -142,7 +142,7 @@ export const terminalScreenshot: ImageArg = svgImage(
 	].join(""),
 );
 
-/** ImageArg: bar chart rendered by an eval cell (matplotlib-style display output). */
+/** ImageArg: bar chart rendered by an eval cell (matplotlib figure printed by the cell). */
 export const chartImage: ImageArg = svgImage(
 	[
 		'<svg xmlns="http://www.w3.org/2000/svg" width="420" height="240" viewBox="0 0 420 240">',
@@ -419,7 +419,7 @@ export const evalErrorTool: ToolItem = tool(
 		"    at <eval> (cell-1:1:28)",
 	),
 );
-/** EvalToolCard: cell that displays a chart image next to its text output. */
+/** EvalToolCard: cell that prints a chart image next to its text output. */
 export const evalImageTool: ToolItem = tool(
 	"eval",
 	"done",

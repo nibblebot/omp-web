@@ -138,6 +138,7 @@ const GROUPS: Readonly<Record<CommandGroup, readonly string[]>> = {
 	Session: [
 		"new",
 		"resume",
+		"seance",
 		"fork",
 		"fresh",
 		"delete",

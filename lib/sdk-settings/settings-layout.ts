@@ -1,6 +1,6 @@
 /**
  * Settings sheet layout manifest: checked-in data. Generated once from the web
- * inventory against @oh-my-pi/pi-coding-agent 18.11.0 (412 settings host rows).
+ * inventory against @oh-my-pi/pi-coding-agent 18.12.6 (419 settings host rows).
  * buildSettingsModel applies it over the SDK's own metadata; nothing here is read
  * from disk at runtime. Rows in HIDDEN_SETTING_PATHS never appear on the web; rows in
  * ADVANCED_SETTING_PATHS go to the Advanced group; every other host row shows in its SDK
@@ -45,7 +45,7 @@ export const TAB_SECTION_ORDER: Readonly<Record<string, readonly string[]>> = {
 /** Name of the group that holds a tab's Advanced rows; always the last group of its tab. */
 export const ADVANCED_GROUP = "Advanced";
 
-/** Terminal-only rows that never appear on the web (56). */
+/** Terminal-only rows that never appear on the web (58). */
 export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"theme.dark": true,
 	"theme.light": true,
@@ -61,6 +61,7 @@ export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"statusLine.compactThinkingLevel": true,
 	"statusLine.showHookStatus": true,
 	"tui.resizeScrollback": true,
+	"tui.completeScrollback": true,
 	"terminal.showProgress": true,
 	"terminal.programStatus": true,
 	"tui.textSizing": true,
@@ -103,9 +104,12 @@ export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"spelling.typoDetection": true,
 	"spelling.autocorrect": true,
 	"stream.redactPatterns": true,
+	// No web job-widget renderer yet. To show it, move this line to ADVANCED_SETTING_PATHS (or delete it) and
+	// trace it live ("sdk.ts:2289", JobWidgets enabled() reads cfgAsyncWidgets per call) in live-setting-trace.ts.
+	"async.widgets": true,
 };
 
-/** Rows absent from the inventory, shown in the Advanced group of their tab (65). Gated rows keep their condition. */
+/** Rows absent from the inventory, shown in the Advanced group of their tab (66). Gated rows keep their condition. */
 export const ADVANCED_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"model.toolCallLoopGuard.threshold": true,
 	"model.toolCallLoopGuard.exemptTools": true,
@@ -142,6 +146,7 @@ export const ADVANCED_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"retry.usageReservePct": true,
 	"retry.usageReservePolicy": true,
 	"providers.autoThinkingMaxEffort": true,
+	"lsp.requestTimeout": true,
 	"autolearn.autoContinue": true,
 	"mnemopi.dbPath": true,
 	"mnemopi.bank": true,

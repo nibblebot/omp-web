@@ -134,6 +134,24 @@ export const selectParams = {
 	],
 };
 
+/** Tool approval fallback: the SDK sends the whole multi-line prompt as the select title (arguments one per line). */
+export const approvalSelectParams = {
+	title: [
+		"Allow tool: mcp__linear__create_issue",
+		"Origin: MCP server tool",
+		"Arguments:",
+		"{",
+		'  "team": "WEB",',
+		'  "title": "Approval prompts lose their line breaks",',
+		'  "description": "',
+		"    Each argument sits on its own line in the prompt.",
+		"    The ask bar must keep those line breaks and indentation.",
+		'  "',
+		"}",
+	].join("\n"),
+	options: ["Approve", "Approve mcp__linear__create_issue for this session", "Deny"],
+};
+
 export const inputParams = {
 	title: "Branch name for the stories split",
 	placeholder: "feature/overlay-stories",

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -312,4 +312,32 @@ for await (const chunk of process.stdin) {
 			{ name: "mode", type: "enum", required: false, description: undefined },
 		]);
 	}, 20_000);
+});
+
+describe("session mcp methods: mcp.enableProjectConfig off", () => {
+	// A project command that records its launch: the opt-out must keep it from ever starting.
+	function optedOutEntry() {
+		const dir = tempDir("mcp-optout-");
+		const marker = join(dir, "spawned");
+		const script = join(dir, "server.js");
+		writeFileSync(script, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "x");`);
+		const cwd = makeProject({ repoOnly: { command: process.execPath, args: [script] } });
+		return { entry: makeEntry(cwd, false), marker };
+	}
+
+	test("test and inspect refuse a project-only server without spawning its command", async () => {
+		const { entry, marker } = optedOutEntry();
+		const methods = createMcpMethods(deps);
+		const message = /declared in the project config, which is off \(mcp\.enableProjectConfig\)/;
+		await expect(methods.mcpTest(entry, ["repoOnly"])).rejects.toThrow(message);
+		await expect(methods.mcpInspect(entry, ["repoOnly"])).rejects.toThrow(message);
+		expect(existsSync(marker)).toBe(false);
+	});
+
+	test("a server unknown to every config still reports unknown", async () => {
+		const { entry } = optedOutEntry();
+		await expect(createMcpMethods(deps).mcpTest(entry, ["nope"])).rejects.toThrow(
+			"Unknown MCP server: nope",
+		);
+	});
 });

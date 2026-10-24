@@ -39,6 +39,7 @@ const QUEUED = [
 	"plugins",
 	"reload-plugins",
 	"force",
+	"forget-approvals",
 ];
 
 function registry(remote: AvailableSlashCommand[] = []) {

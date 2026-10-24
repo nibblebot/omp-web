@@ -1,3 +1,4 @@
+import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { CompactOptions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -16,8 +17,8 @@ import {
  *
  * Pure domain helpers + thin SDK execution wrappers. No wire imports: this
  * module never touches lib/wire, apps/session/methods.ts, or client delivery.
- * It reuses the installed SDK 18.11.0 behavior (compact-modes grammar,
- * CompactOptions, shake types) instead of reimplementing it.
+ * It reuses the installed SDK 18.12.6 behavior (compact-modes grammar,
+ * CompactOptions, shake types, wire-vision gate) instead of reimplementing it.
  */
 
 // ---------------------------------------------------------------------------
@@ -471,7 +472,9 @@ export function sessionEligibilityContext(session: AgentSession): CompactionElig
 			session.model,
 			resolveMethodSettings(settings, "remote"),
 		),
-		visionCapable: session.model?.input.includes("image") === true,
+		// The SDK's own snapcompact gate: a route that strips images on the wire
+		// (e.g. a text-only Chat Completions SKU declaring image input) is not vision capable.
+		visionCapable: !!session.model && sendsImageInputOnWire(session.model),
 	};
 }
 

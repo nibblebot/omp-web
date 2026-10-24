@@ -21,6 +21,7 @@ import {
 	mcpOAuthCredentialIdsForServerUrl,
 	removeManagedMcpOAuthCredentials,
 } from "@oh-my-pi/pi-coding-agent/mcp/oauth-credentials";
+import { findMcpServerForAuth } from "@oh-my-pi/pi-coding-agent/mcp/oauth-reauth";
 import { cfgMcpEnableProjectConfig } from "@oh-my-pi/pi-coding-agent/mcp/settings";
 import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { getMCPConfigPath } from "@oh-my-pi/pi-utils";
@@ -117,10 +118,18 @@ async function hasServer(entry: SessionEntry, name: string): Promise<boolean> {
 async function findConfig(entry: SessionEntry, name: string): Promise<MCPServerConfig> {
 	const live = entry.mcpManager?.getServerConfig(name);
 	if (live) return live;
-	const p = paths(entry.cwd);
-	const declared = (await readServers(p.project))[name] ?? (await readServers(p.user))[name];
-	if (!declared) throw new Error(`Unknown MCP server: ${name}`);
-	return declared;
+	// The SDK's resolver is what `/mcp test` and `/mcp reauth` use: it skips project
+	// config while `mcp.enableProjectConfig` is off, so an opted-out project entry
+	// (a stdio command from the repo) is never spawned by a test or inspect click.
+	const enableProjectConfig = cfgMcpEnableProjectConfig.get(entry.session.settings);
+	const found = await findMcpServerForAuth(name, entry.cwd, undefined, { enableProjectConfig });
+	if (found) return found.config;
+	if (!enableProjectConfig && Object.hasOwn(await readServers(paths(entry.cwd).project), name)) {
+		throw new Error(
+			`${name} is declared in the project config, which is off (mcp.enableProjectConfig)`,
+		);
+	}
+	throw new Error(`Unknown MCP server: ${name}`);
 }
 
 /** Merges env/header edits: a `null` value keeps the stored value; an omitted key is removed. */

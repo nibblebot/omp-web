@@ -343,6 +343,8 @@ export function wrapTerminalHooks(
 				"custom editors are component factories, which are executable code.",
 			);
 		},
+		// setEditorComponent never installs a factory here, so there is none to wrap.
+		getEditorComponent: () => undefined,
 		getAllThemes: () =>
 			hookRejected(
 				"getAllThemes",
