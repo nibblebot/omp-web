@@ -598,7 +598,7 @@ button.picker-row.kbd-active {
 	min-width: 0;
 	color: var(--text);
 	font-weight: 600;
-	/* Tool approval prompts arrive as one multi-line title (arguments one per line, indented). */
+	/* A select title may be multi-line (indented lines); keep its whitespace. */
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
@@ -635,6 +635,21 @@ button.picker-row.kbd-active {
 	gap: var(--space-1);
 	max-height: 30dvh;
 	overflow-y: auto;
+}
+/* Tool approval: the call's details keep their whitespace and scroll on their own, so the answer rows stay in view. */
+.ask-approval-details {
+	margin: 0;
+	padding: var(--space-3) var(--space-4);
+	max-height: 30dvh;
+	overflow-y: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	background: var(--panel);
+	color: var(--text);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 .ask-key {
 	flex: none;

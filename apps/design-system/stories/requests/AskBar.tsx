@@ -1,7 +1,9 @@
 import { AskBar } from "../../../web/components/requests/AskBar";
 import { setState } from "../../../web/state";
 import {
-	approvalSelectParams,
+	approvalGrantsParams,
+	approvalParams,
+	approvalSessionParams,
 	askChecksQuestion,
 	askDialogRequest,
 	askLongQuestions,
@@ -49,10 +51,34 @@ export default [
 				render: () => <AskBar />,
 			},
 			{
-				name: "Tool approval (multi-line prompt)",
-				description: "The SDK's select fallback for tool approval: one argument per line.",
+				name: "Tool approval",
+				description:
+					"The approve ui_request: a title line, the call's details with their whitespace, then Approve or Deny.",
 				seed: () =>
-					setState("uiRequest", { id: "sel_8", method: "select", params: approvalSelectParams }),
+					setState("uiRequest", { id: "appr_8", method: "approve", params: approvalParams }),
+				render: () => <AskBar />,
+			},
+			{
+				name: "Tool approval with session choice",
+				description: "The prompt offers to approve the tool for the rest of the session.",
+				seed: () =>
+					setState("uiRequest", {
+						id: "appr_9",
+						method: "approve",
+						params: approvalSessionParams,
+					}),
+				render: () => <AskBar />,
+			},
+			{
+				name: "Tool approval with grants",
+				description:
+					"An always-ask-cached prompt: each grant remembered for this session or across sessions.",
+				seed: () =>
+					setState("uiRequest", {
+						id: "appr_10",
+						method: "approve",
+						params: approvalGrantsParams,
+					}),
 				render: () => <AskBar />,
 			},
 			{

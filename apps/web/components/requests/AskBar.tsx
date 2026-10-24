@@ -20,7 +20,9 @@ import {
 	tabLabel,
 	type AskAnswer,
 } from "../../prompt/ask-dialog";
+import { approvalChoices, splitApprovalPrompt } from "../../prompt/approval";
 import type { AskOption, AskQuestion, UiRequest } from "../../prompt/ask-types";
+import type { UiApprovalParams } from "#lib/wire/protocol";
 import { PickerRow } from "../ui/PickerRow";
 
 /**
@@ -74,6 +76,9 @@ const AskRequest: Component<{ req: UiRequest }> = (props) => {
 					placeholder={params.placeholder}
 					prefill={params.prefill}
 				/>
+			</Match>
+			<Match when={props.req.method === "approve"}>
+				<AskApproval id={props.req.id} prompt={props.req.params as UiApprovalParams} />
 			</Match>
 		</Switch>
 	);
@@ -511,6 +516,70 @@ const AskConfirm: Component<{ id: string; title: string; message: string }> = (p
 				>
 					<kbd>2</kbd> Cancel
 				</button>
+			</div>
+		</div>
+	);
+};
+
+/**
+ * Tool approval: the prompt's title line, its details (monospace, whitespace
+ * preserved, scrolls on its own) and one row per answer. Digit keys, Up/Down + Enter or a
+ * click answers; Esc and Cancel answer nothing, which the daemon reads as Deny.
+ * PageUp/PageDown scroll the details while the keys above own the arrows.
+ */
+const AskApproval: Component<{ id: string; prompt: UiApprovalParams }> = (props) => {
+	let root!: HTMLDivElement;
+	let details: HTMLPreElement | undefined;
+	const [cursor, setCursor] = createSignal(0);
+	onMount(() => root.focus());
+	const split = () => splitApprovalPrompt(props.prompt.full);
+	const choices = () => approvalChoices(props.prompt);
+	const onKeys = rowKeys({
+		rows: () => choices().length,
+		cursor,
+		setCursor,
+		pick: (index) => sendUiResponse(props.id, choices()[index].answer),
+		cancel: () => cancelUiRequest(props.id),
+	});
+	const onKey = (e: KeyboardEvent) => {
+		if ((e.key === "PageUp" || e.key === "PageDown") && details) {
+			e.preventDefault();
+			details.scrollBy({ top: (e.key === "PageDown" ? 1 : -1) * details.clientHeight * 0.9 });
+			return;
+		}
+		onKeys(e);
+	};
+	return (
+		<div
+			class="ask-bar ask-approval"
+			role="dialog"
+			aria-label={split().title}
+			ref={root}
+			tabIndex={-1}
+			onKeyDown={onKey}
+		>
+			<AskHeader id={props.id} title={split().title} />
+			<Show when={split().details}>
+				<pre class="ask-approval-details" ref={details}>
+					{split().details}
+				</pre>
+			</Show>
+			<div class="picker-list ask-options">
+				<For each={choices()}>
+					{(choice, ci) => (
+						<PickerRow
+							class="picker-row ask-option"
+							classList={{ cursor: cursor() === ci() }}
+							onClick={() => sendUiResponse(props.id, choice.answer)}
+						>
+							<span class="ask-key">{ci() < 9 ? ci() + 1 : ""}</span>
+							<span class="ask-option-text">
+								<span class="picker-label">{choice.label}</span>
+								{choice.detail && <span class="picker-detail">{choice.detail}</span>}
+							</span>
+						</PickerRow>
+					)}
+				</For>
 			</div>
 		</div>
 	);

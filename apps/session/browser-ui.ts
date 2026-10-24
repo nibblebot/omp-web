@@ -174,14 +174,14 @@ function hookRejected(
  * browser equivalent become browser_ui contributions (fire-and-forget:
  * sync hooks cannot await answers; transport failures log to stderr, never
  * stdout); hooks without one throw/reject explicit unsupported errors.
- * Non-presentation hooks (select/confirm/input/editor/askDialog/notify)
+ * Non-presentation hooks (select/confirm/input/editor/askDialog/approve/notify)
  * pass through untouched from `base`.
  */
 export function wrapTerminalHooks(
 	entry: SessionEntry,
 	base: Pick<
 		ExtensionUIContext,
-		"select" | "confirm" | "input" | "editor" | "askDialog" | "notify"
+		"select" | "confirm" | "input" | "editor" | "askDialog" | "approve" | "notify"
 	>,
 	owner: string = TERMINAL_HOOKS_OWNER,
 ): ExtensionUIContext {
@@ -216,6 +216,7 @@ export function wrapTerminalHooks(
 		input: base.input,
 		editor: base.editor,
 		askDialog: base.askDialog,
+		approve: base.approve,
 		notify: base.notify,
 		get theme(): never {
 			throw hookUnsupported("theme", "renderer", "terminal themes are unavailable in the browser");

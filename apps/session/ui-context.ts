@@ -1,16 +1,22 @@
 import type {
+	ExtensionApprovalAnswer,
+	ExtensionApprovalPrompt,
 	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
 	ExtensionAskDialogResultItem,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 } from "@oh-my-pi/pi-coding-agent";
+import {
+	approvalAnswerForChoice,
+	approvalChoiceLabels,
+} from "@oh-my-pi/pi-coding-agent/tools/approval";
 import type {
 	CollabUiRequestDraft,
 	CollabUiSelectItem,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import type { CollabHostAdapter } from "./collab-host";
-import type { ServerFrame } from "#lib/wire/protocol";
+import type { ServerFrame, UiApprovalAnswer, UiApprovalParams } from "#lib/wire/protocol";
 import { BROWSER_UI_METHOD } from "#lib/wire/browser-ui-contract";
 import type { SessionEntry } from "./session-entry";
 import { broadcastTo, notifyEvent, streams, type ClientConsumer } from "./client-delivery";
@@ -267,6 +273,26 @@ interface AskDialogParams {
 	questions: ExtensionAskDialogQuestion[];
 }
 
+/**
+ * An approve answer from a browser or guest as the SDK's answer union. Anything but an
+ * explicit approval the prompt offers (a cancel included) is `deny`: `session` only when the
+ * prompt has a session choice, a grant only when the prompt lists that scope.
+ */
+function toApprovalAnswer(
+	prompt: Pick<ExtensionApprovalPrompt, "session" | "grants">,
+	value: unknown,
+): ExtensionApprovalAnswer {
+	if (value === "once") return "once";
+	if (value === "session") return prompt.session ? "session" : "deny";
+	if (typeof value === "object" && value !== null) {
+		const { grant, always } = value as Partial<Extract<UiApprovalAnswer, object>>;
+		if (prompt.grants?.some((offered) => offered.scope === grant) && grant) {
+			return { grant, always: always === true };
+		}
+	}
+	return "deny";
+}
+
 /** Map one dialog method to its collab wire request; null = not a collab surface. */
 function mapUiMethodToCollab(method: string, params: unknown): CollabUiRequestDraft | null {
 	switch (method) {
@@ -289,6 +315,12 @@ function mapUiMethodToCollab(method: string, params: unknown): CollabUiRequestDr
 			// Shape fixed by buildUiContext's editor call site.
 			const p = params as EditorDialogParams;
 			return { kind: "editor", title: p.title, prefill: p.prefill };
+		}
+		case "approve": {
+			// Shape fixed by buildUiContext's approve call site. Guests have no approval dialog:
+			// they get the SDK's select fallback, mapped back by approvalAnswerForChoice.
+			const p = params as UiApprovalParams;
+			return { kind: "select", title: p.full, options: approvalChoiceLabels(p) };
 		}
 		default:
 			return null;
@@ -438,6 +470,10 @@ async function uiRequestViaCollab(
 	if (value === COLLAB_UI_FALLTHROUGH) return value;
 	// confirm answers with Yes/No over the wire; the web contract wants a boolean.
 	if (method === "confirm") return value === "Yes";
+	// approve answers with a select label over the wire; the web contract wants the answer union.
+	if (method === "approve") {
+		return approvalAnswerForChoice(params as UiApprovalParams, value as string | undefined);
+	}
 	return value;
 }
 
@@ -490,6 +526,15 @@ export function buildUiContext(entry: SessionEntry): ExtensionUIContext {
 			uiRequest(entry, "askDialog", { questions }, dialogOptions) as Promise<
 				ExtensionAskDialogResult | undefined
 			>,
+		// The wire carries the prompt minus `compact`, which no web surface shows.
+		approve: async (prompt, dialogOptions) => {
+			const params: UiApprovalParams = {
+				full: prompt.full,
+				...(prompt.session ? { session: prompt.session } : {}),
+				...(prompt.grants?.length ? { grants: prompt.grants.map((grant) => ({ ...grant })) } : {}),
+			};
+			return toApprovalAnswer(prompt, await uiRequest(entry, "approve", params, dialogOptions));
+		},
 		notify: (message, type) => notifyEvent(entry, message, type ?? "info"),
 	});
 }

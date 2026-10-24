@@ -1266,6 +1266,38 @@ export type WireSessionEvent =
 	| WireTurnEnd
 	| WireAgentEnd;
 
+/** One remembered-approval choice of an `approve` ui_request (mirrors the SDK's ExtensionApprovalGrant). */
+export interface UiApprovalGrant {
+	/** `folder`: the directory around the call; `target`: the exact file or URL. */
+	scope: "folder" | "target";
+	/** Label of the choice remembered for this session. */
+	label: string;
+	/** Label of the same choice remembered across sessions. */
+	alwaysLabel: string;
+}
+
+/**
+ * Params of the `approve` ui_request method (a tool-approval prompt). `full` is the
+ * whole multi-line prompt, a title line then details with whitespace preserved.
+ * `session` is the label of the approve-for-this-session choice, absent when the call
+ * must be approved each time; `grants` are the always-ask-cached choices in display order.
+ */
+export interface UiApprovalParams {
+	full: string;
+	session?: string;
+	grants?: UiApprovalGrant[];
+}
+
+/**
+ * The ui_response `result` for an `approve` ui_request (mirrors the SDK's
+ * ExtensionApprovalAnswer). A response without a result is a cancel, read as `deny`.
+ */
+export type UiApprovalAnswer =
+	| "once"
+	| "session"
+	| "deny"
+	| { grant: UiApprovalGrant["scope"]; always: boolean };
+
 /**
  * Session-scoped frames as the server composes them, before broadcastTo
  * stamps the session handle. On the wire they always carry sessionId.
@@ -1296,6 +1328,7 @@ export type SessionScopedFrame =
 	| { type: "skills_changed"; state: SkillsState }
 	| { type: "subagent_lifecycle" | "subagent_progress"; payload: unknown }
 	// Server-driven ExtensionUIContext dialog; the client answers with ui_response.
+	// `method: "approve"` (UiApprovalParams / UiApprovalAnswer) is a tool-approval prompt.
 	| { type: "ui_request"; id: string; method: string; params: unknown }
 	// The dialog above settled (answered via ui_response, or rejected when its
 	// last target stream closed / the session closed). Ringed like ui_request

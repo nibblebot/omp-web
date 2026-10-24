@@ -1696,6 +1696,7 @@ export function connect(): void {
 					setState("uiRequest", { id: frame.id, method: frame.method, params: frame.params });
 					// Ask-tool dialogs notify where the SDK does (tools/ask.ts #sendAskNotification).
 					if (frame.method === "askDialog") notifyDesktop("ask", "omp", "Waiting for input");
+					if (frame.method === "approve") notifyDesktop("ask", "omp", "Waiting for approval");
 				}
 				break;
 			case "ui_request_end":

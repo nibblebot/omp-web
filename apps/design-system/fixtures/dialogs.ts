@@ -8,7 +8,7 @@ import {
 } from "../../web/store/compaction";
 import { answerCalls } from "../daemon";
 import type { GraphNode, GraphPage } from "../../web/store/graph";
-import type { WebSessionState } from "#lib/wire/protocol";
+import type { UiApprovalParams, WebSessionState } from "#lib/wire/protocol";
 import type { DebugEntry, state } from "../../web/state";
 import type { FleetDebug } from "../../web/fleet-ui/fleet-debug";
 import type { AskOption, AskQuestion, UiRequest } from "../../web/prompt/ask-types";
@@ -134,9 +134,9 @@ export const selectParams = {
 	],
 };
 
-/** Tool approval fallback: the SDK sends the whole multi-line prompt as the select title (arguments one per line). */
-export const approvalSelectParams = {
-	title: [
+/** Tool approval with nothing to remember: approve, or deny (the SDK's `approve` ui_request). */
+export const approvalParams: UiApprovalParams = {
+	full: [
 		"Allow tool: mcp__linear__create_issue",
 		"Origin: MCP server tool",
 		"Arguments:",
@@ -145,11 +145,39 @@ export const approvalSelectParams = {
 		'  "title": "Approval prompts lose their line breaks",',
 		'  "description": "',
 		"    Each argument sits on its own line in the prompt.",
-		"    The ask bar must keep those line breaks and indentation.",
+		"    The approval bar must keep those line breaks and indentation.",
 		'  "',
 		"}",
 	].join("\n"),
-	options: ["Approve", "Approve mcp__linear__create_issue for this session", "Deny"],
+};
+
+/** The same prompt plus the approve-for-this-session choice. */
+export const approvalSessionParams: UiApprovalParams = {
+	...approvalParams,
+	session: "Approve mcp__linear__create_issue for this session",
+};
+
+/** An always-ask-cached prompt: session choice plus a directory grant and an exact-file grant. */
+export const approvalGrantsParams: UiApprovalParams = {
+	full: [
+		"Allow tool: write",
+		"Path: apps/web/components/requests/AskBar.tsx",
+		"Directory: apps/web/components/requests",
+		"  AskBar.tsx",
+		"  BtwSheet.tsx",
+		"  DangerConfirmDialog.tsx",
+		"  DownloadDialog.tsx",
+		"  ExtensionUi.tsx",
+	].join("\n"),
+	session: "Approve write for this session",
+	grants: [
+		{
+			scope: "folder",
+			label: "Approve Directory: apps/web/components/requests",
+			alwaysLabel: "Always Approve Directory: apps/web/components/requests",
+		},
+		{ scope: "target", label: "Approve File", alwaysLabel: "Always Approve File" },
+	],
 };
 
 export const inputParams = {
