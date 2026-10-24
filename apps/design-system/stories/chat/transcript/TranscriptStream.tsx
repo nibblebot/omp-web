@@ -1,10 +1,38 @@
 import { TranscriptStream } from "../../../../web/components/chat/transcript/TranscriptStream";
-import { state } from "../../../../web/state";
+import { state, type ChatItem } from "../../../../web/state";
+import { assistantBlocks } from "../../../../web/store/chat";
 import { screenItems, screenSessionSeed } from "../../../fixtures/screen";
 import { subagentTranscriptItems } from "../../../fixtures/subagents";
 import { defineStory } from "../../../registry";
 
 const idleLive = { active: false, blocks: [], rev: 0 };
+
+/** Built through the store's mapping so the story exercises it: one reasoning block, one narration block. */
+const narrationItems: ChatItem[] = [
+	{
+		kind: "user",
+		id: 1,
+		text: "Rename `fetchUser` to `loadUser` across the app.",
+	},
+	{
+		kind: "assistant",
+		id: 2,
+		blocks: assistantBlocks([
+			{
+				type: "thinking",
+				thinking: "A rename touches every caller. I should list them before editing.",
+				thinkingSignature: "sig-reasoning",
+			},
+			{
+				type: "thinking",
+				thinking: "Found 4 callers in `apps/web`. Renaming the export first, then each import.",
+				thinkingSignature: "sig-narration",
+				narration: true,
+			},
+			{ type: "text", text: "Renamed `fetchUser` to `loadUser` in all 4 callers." },
+		]),
+	},
+];
 
 export default defineStory({
 	id: "chat-transcript-transcript-stream",
@@ -46,6 +74,22 @@ export default defineStory({
 			description:
 				"`variant` session over the main transcript: branch-from-here on user cards, nothing folded, and the live turn and working shimmer when streaming.",
 			seed: { ...screenSessionSeed, items: screenItems, live: idleLive, streaming: false },
+			render: () => (
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<TranscriptStream items={state.items} variant="session" />
+				</div>
+			),
+		},
+		{
+			name: "Session: narration",
+			description:
+				"An assistant message whose second thinking block carries `narration: true` (Anthropic prose between tool calls). Blocks come from the store's `assistantBlocks`: the reasoning block folds under thinking, the narration reads as reply text, as in the TUI.",
+			seed: {
+				...screenSessionSeed,
+				items: narrationItems,
+				live: idleLive,
+				streaming: false,
+			},
 			render: () => (
 				<div class="ds-frame ds-frame-tall ds-frame-column">
 					<TranscriptStream items={state.items} variant="session" />

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { WireSessionEvent } from "#lib/wire/protocol";
 import { setState, state } from "../../state";
+import { createHistoryBuilder } from "../../chat/history-items";
 import { applyEvent } from "../../store/chat";
 
 const assistantStart = {
@@ -120,5 +121,60 @@ describe("streamed deltas (slim message_update frames)", () => {
 		await tick();
 		expect(state.live.blocks[0]).toBe(before);
 		expect(state.live.blocks[0]?.text).toBe("Hi");
+	});
+});
+
+describe("narration thinking blocks (ThinkingContent.narration)", () => {
+	const content = [
+		{ type: "thinking", thinking: "plan the edit", thinkingSignature: "sig-a" },
+		{
+			type: "thinking",
+			thinking: "Checking the callers now.",
+			thinkingSignature: "sig-b",
+			narration: true,
+		},
+		{ type: "text", text: "Done." },
+	];
+
+	test("a live message renders narration as answer text at message_end and keeps reasoning thinking", async () => {
+		applyEvent(assistantStart);
+		applyEvent(delta(1, "Checking the callers now.", "thinking"));
+		await tick();
+		// No flag on the slim stream: it streams as thinking until the full message lands.
+		expect(state.live.blocks[1]?.kind).toBe("thinking");
+		applyEvent({
+			type: "message_end",
+			message: { role: "assistant", content } as unknown as AgentMessage,
+		});
+		expect(state.items.at(-1)).toMatchObject({
+			kind: "assistant",
+			blocks: [
+				{ kind: "thinking", text: "plan the edit" },
+				{ kind: "text", text: "Checking the callers now." },
+				{ kind: "text", text: "Done." },
+			],
+		});
+	});
+
+	test("history frames build the same blocks", () => {
+		const { items } = createHistoryBuilder().append([
+			{ role: "assistant", content } as unknown as AgentMessage,
+		]);
+		expect(items[0]).toMatchObject({
+			kind: "assistant",
+			blocks: [
+				{ kind: "thinking", text: "plan the edit" },
+				{ kind: "text", text: "Checking the callers now." },
+				{ kind: "text", text: "Done." },
+			],
+		});
+	});
+
+	test("a late joiner primed past a finished narration block seeds it as text", async () => {
+		applyEvent({
+			type: "message_start",
+			message: { role: "assistant", content: content.slice(0, 2) },
+		} as unknown as WireSessionEvent);
+		expect(state.live.blocks.map((b) => b?.kind)).toEqual(["thinking", "text"]);
 	});
 });

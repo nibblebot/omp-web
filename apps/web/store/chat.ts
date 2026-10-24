@@ -497,12 +497,27 @@ function ensureLiveBlock(contentIndex: number, kind: Block["kind"]): void {
 	bumpLiveRev();
 }
 
+/**
+ * One assistant content block as the transcript shows it. A thinking block the
+ * provider flagged `narration` (prose addressed to the user between tool calls)
+ * is answer text, matching the TUI's `presentNarrationAsAnswer`. Display-only:
+ * the SDK keeps the thinking block and its signature for replay; the web never
+ * sends content back. The flag lands with the block's signature at block end,
+ * after the slim stream frames, so a live block streams as thinking and flips
+ * here, at `message_end` (or when a late joiner is primed past that block).
+ */
+function displayBlock(c: AssistantContent[number]): Block | undefined {
+	if (c.type === "text") return { kind: "text", text: tabsToSpaces(c.text) };
+	if (c.type === "thinking")
+		return { kind: c.narration === true ? "text" : "thinking", text: tabsToSpaces(c.thinking) };
+	return undefined;
+}
+
 export function assistantBlocks(content: AssistantContent): Block[] {
 	const blocks: Block[] = [];
 	for (const c of content) {
-		if (c.type === "text") blocks.push({ kind: "text", text: tabsToSpaces(c.text) });
-		else if (c.type === "thinking")
-			blocks.push({ kind: "thinking", text: tabsToSpaces(c.thinking) });
+		const block = displayBlock(c);
+		if (block !== undefined) blocks.push(block);
 	}
 	return blocks;
 }
@@ -511,9 +526,8 @@ export function assistantBlocks(content: AssistantContent): Block[] {
 function liveBlocks(content: AssistantContent): Block[] {
 	const blocks: Block[] = [];
 	content.forEach((c, index) => {
-		if (c.type === "text") blocks[index] = { kind: "text", text: tabsToSpaces(c.text) };
-		else if (c.type === "thinking")
-			blocks[index] = { kind: "thinking", text: tabsToSpaces(c.thinking) };
+		const block = displayBlock(c);
+		if (block !== undefined) blocks[index] = block;
 	});
 	return blocks;
 }
