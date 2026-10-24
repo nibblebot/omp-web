@@ -179,6 +179,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 					: undefined,
 			taskModel: taskModel || undefined,
 			isStreaming: session.isStreaming,
+			pendingUiRequestIds: [...entry.pendingUiRequests.keys()],
 			isCompacting: session.isCompacting,
 			sessionFile: session.sessionFile,
 			...(session.sessionManager.isSessionOnDisk() ? { sessionPersisted: true as const } : {}),

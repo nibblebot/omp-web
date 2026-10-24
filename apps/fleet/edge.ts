@@ -67,7 +67,10 @@
  *     slows its own priming; a stuck one is dropped by the stall rule).
  *   - Real-time daemon activity: the daemon's control-stream envelopes are
  *     tapped and derive per-daemon {streaming, blocked} from state /
- *     ui_request / ui_request_end, broadcasting an edge-generated
+ *     the agent_start event (the session sends no state frame at turn start) /
+ *     ui_request / ui_request_end (a state frame's pendingUiRequestIds, when
+ *     present, replaces the delta-built open-dialog set, so every pair-up
+ *     resyncs `blocked`), broadcasting an edge-generated
  *     {type:"daemon_activity"} frame ONLY on change (never ringed,
  *     re-derivable from the next open's priming). Daemons hold their own
  *     pair, so no browser presence is needed to keep activity live.
@@ -173,8 +176,10 @@ class NotAsleepError extends Error {}
 
 /**
  * Per-daemon realtime activity, derived by the edge from the raw tapped
- * daemon frames (state → isStreaming; ui_request / ui_request_end → the
- * open-dialog set that drives `blocked`). Starts UNKNOWN per daemon
+ * daemon frames (state → isStreaming, an agent_start event → streaming; ui_request / ui_request_end, and a
+ * state frame's pendingUiRequestIds snapshot → the open-dialog set that
+ * drives `blocked`), and reset to idle when the row's process is gone or
+ * relaunching (#resetActivityOfGoneRuntime). Starts UNKNOWN per daemon
  * (`known: false`, nothing derived) until the first derivable frame
  * arrives. Never carries credentials.
  */
@@ -794,6 +799,7 @@ export class FleetEdge {
 		// cached rosters are evicted (broadcast so browsers drop the entries).
 		this.#reconcileDaemonTaps();
 		this.#broadcastRosterDelta(change);
+		for (const entry of change.upserted) this.#resetActivityOfGoneRuntime(entry);
 	};
 
 	/** Project-set mutations only; the frame is re-derivable from priming, so it is never ringed. */
@@ -1080,13 +1086,18 @@ export class FleetEdge {
 				}),
 			),
 		);
-		// Real-time activity priming: one daemon_activity frame per READY
-		// daemon with KNOWN derived activity (unknown ones are omitted;
-		// their first derivable frame broadcasts live right after the
-		// dial below). Edge-local seq, like the rest of the priming group.
+		// Real-time activity priming: one daemon_activity frame per managed
+		// daemon with KNOWN derived activity, whatever its roster status
+		// (unknown ones are omitted; their first derivable frame broadcasts
+		// live right after the dial below). Non-ready daemons are primed too:
+		// broadcasts are never ringed, so a browser offline when a turn ended
+		// holds a stale streaming:true, and a daemon asleep at reconnect
+		// would otherwise never correct it (its pair-up state equals the
+		// stored value and broadcasts nothing). The client ignores activity
+		// for non-ready rows. Edge-local seq, like the rest of the priming group.
 		for (const [daemonId, activity] of this.#daemonActivity) {
 			if (!activity.known) continue;
-			if (this.#registry.get(daemonId)?.status !== "ready") continue;
+			if (!this.#registry.get(daemonId)) continue;
 			this.#send(
 				stream,
 				seqFrameMessage(
@@ -2311,7 +2322,23 @@ export class FleetEdge {
 						if (Array.isArray(frame.daemons)) this.#ingestDaemons(entry.daemonId, frame.daemons);
 						break;
 					case "state": {
-						this.#setActivity(entry.daemonId, { streaming: frame.state?.isStreaming === true });
+						// A state snapshot carrying the session's pending ui_request ids is
+						// authoritative for the open-dialog set: the control mirror is not
+						// replayed across a pair drop and a restarted daemon never sends
+						// ui_request_end for the dead process's dialogs, so deltas alone can
+						// stick or miss `blocked`. The session publishes state at every
+						// pair-up. Older sessions omit the field: deltas only.
+						const pending: unknown = frame.state?.pendingUiRequestIds;
+						const patch: { streaming: boolean; blocked?: boolean } = {
+							streaming: frame.state?.isStreaming === true,
+						};
+						if (Array.isArray(pending)) {
+							const openDialogIds = this.#ensureActivity(entry.daemonId).openDialogIds;
+							openDialogIds.clear();
+							for (const id of pending) if (typeof id === "string") openDialogIds.add(id);
+							patch.blocked = openDialogIds.size > 0;
+						}
+						this.#setActivity(entry.daemonId, patch);
 						// The session file the daemon is on is what respawn resumes
 						// (`--resume <lastSessionFile>`); record it whenever it changes.
 						// lastSessionPersisted is the daemon's report that the SDK has
@@ -2334,6 +2361,15 @@ export class FleetEdge {
 						}
 						break;
 					}
+					case "event":
+						// Turn start: the session publishes state at turn end and at
+						// pair-up but not when a turn begins (a prompt's resync runs
+						// before SDK admission, and wakes, follow-ups and continuations
+						// send none), so the mirrored agent_start event is what flips a
+						// detached row to working. The next state frame stays authoritative.
+						if (frame.event?.type === "agent_start")
+							this.#setActivity(entry.daemonId, { streaming: true });
+						break;
 					case "ui_request": {
 						const activity = this.#ensureActivity(entry.daemonId);
 						if (activity.openDialogIds.has(frame.id)) break; // replay of the same open
@@ -2397,6 +2433,26 @@ export class FleetEdge {
 		activity.known = true;
 		if (!changed) return;
 		this.#broadcastActivity(daemonId);
+	}
+
+	/**
+	 * A row whose process is gone (asleep, error) or is being launched again
+	 * (stage preparation/runtime: a restart proves its predecessor dead first)
+	 * has no turn and no open dialog. Only a live process's state frame clears
+	 * what agent_start or ui_request set, so without this a daemon that died
+	 * mid-turn would prime a stale spinner until its next pair-up state.
+	 */
+	#resetActivityOfGoneRuntime(entry: RegistryEntry): void {
+		const gone =
+			entry.status === "asleep" ||
+			entry.status === "error" ||
+			entry.lifecycleStage === "preparation" ||
+			entry.lifecycleStage === "runtime";
+		if (!gone) return;
+		const activity = this.#daemonActivity.get(entry.daemonId);
+		if (!activity?.known) return;
+		activity.openDialogIds.clear();
+		this.#setActivity(entry.daemonId, { streaming: false, blocked: false });
 	}
 
 	/**

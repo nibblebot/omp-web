@@ -10,8 +10,8 @@ import type { DaemonStatus } from "#lib/wire/protocol";
  * existing status-dot ladder and asleep shows nothing at all.
  *
  * WHY detached rows can report live blocked/in-progress: every paired daemon
- * mirrors the frames it emits (`state`/`ui_request`/`ui_request_end`) on its
- * callback control stream; the fleet derives `{streaming, blocked}` per daemon
+ * mirrors the frames it emits (`state`, `ui_request`/`ui_request_end`, the
+ * `agent_start` event) on its callback control stream; the fleet derives `{streaming, blocked}` per daemon
  * from those and broadcasts them as additive fleet-scoped `daemon_activity`
  * frames (`remote` here), whichever session a browser has open. A browser
  * attached to a session keeps that daemon alive (idle exit is suppressed); a

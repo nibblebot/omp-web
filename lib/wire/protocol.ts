@@ -73,6 +73,13 @@ export interface WebSessionState {
 	/** Effective Task subagent model `provider/id`; absent when Task inherits the session model. */
 	taskModel?: string;
 	isStreaming: boolean;
+	/**
+	 * Ids of the ui_requests pending on the session (the `id` carried by the
+	 * `ui_request`/`ui_request_end` frames). Lets the fleet edge rebuild a
+	 * daemon's blocked state from any state frame, notably the one published at
+	 * every pair-up, which the delta-only control mirror cannot replay.
+	 */
+	pendingUiRequestIds?: string[];
 	isCompacting: boolean;
 	sessionFile?: string;
 	/**

@@ -178,9 +178,11 @@ function tryEncode(payload: unknown): PreEncodedPayload | undefined {
 
 /**
  * Frames the control mirror does not carry (browser streams still do). The
- * fleet reads the control stream for exactly: `state` (activity, lastSessionFile),
- * `daemons`, `ui_request`/`ui_request_end` (activity), and prompt-fanout
- * correlation (`call_result`, `error`, and `event` message_end/agent_end/abort).
+ * fleet reads the control stream for exactly: `state` (activity: isStreaming and
+ * pendingUiRequestIds, the authoritative open-dialog set; lastSessionFile),
+ * `daemons`, `ui_request`/`ui_request_end` (blocked deltas between states), and prompt-fanout
+ * correlation (`call_result`, `error`, and `event` message_end/agent_end/abort),
+ * plus `event` agent_start (activity: turn start, which publishes no state).
  * Streaming deltas carry nothing any of them reads, and dominate the bytes.
  */
 function isUnmirroredToControl(frame: Record<string, unknown>): boolean {

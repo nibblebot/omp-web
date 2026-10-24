@@ -550,3 +550,51 @@ test("a pair-attached browser with no local /ws consumer answers a ui_request", 
 	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });
+
+test("a state snapshot carries the ids of the ui_requests pending at that moment", async () => {
+	// The fleet rebuilds a daemon's blocked flag from this field on every state
+	// frame (notably the pair-up one), so the stream_open priming snapshot is
+	// the observable seam: it must list the open dialog, then list none once settled.
+	const fleet = trackFleet();
+	const child = spawnDaemon(fleet.url, {
+		OMP_SESSION_CONTROL_GRACE: "0",
+		OMP_SESSION_TEST_UI_REQUEST: "1",
+	});
+	await fleet.paired;
+	const pendingIds = (streamId: string): unknown => {
+		const frame = fleet.up.map((e) => streamFrame(e, streamId)).find((f) => f?.type === "state");
+		const state = frame?.state;
+		return typeof state === "object" && state !== null && "pendingUiRequestIds" in state
+			? state.pendingUiRequestIds
+			: undefined;
+	};
+
+	fleet.send("browser/one", "control", { type: "stream_open" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/one")?.type === "state", 1);
+	expect(pendingIds("browser/one")).toEqual([]);
+
+	fleet.send("browser/one", "command", { type: "test_ui_request", id: "tui-1" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/one")?.type === "ui_request", 1);
+	const requestId = (
+		fleet.up.map((e) => streamFrame(e, "browser/one")).find((f) => f?.type === "ui_request") as
+			| { id?: unknown }
+			| undefined
+	)?.id;
+	expect(typeof requestId).toBe("string");
+
+	fleet.send("browser/two", "control", { type: "stream_open" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/two")?.type === "state", 1);
+	expect(pendingIds("browser/two")).toEqual([requestId]);
+
+	fleet.send("browser/one", "command", { type: "ui_response", id: requestId, result: true });
+	await fleet.waitForUp((e) => {
+		const frame = streamFrame(e, "browser/one");
+		return frame?.type === "ui_request_end" && frame.id === requestId;
+	}, 1);
+	fleet.send("browser/three", "control", { type: "stream_open" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/three")?.type === "state", 1);
+	expect(pendingIds("browser/three")).toEqual([]);
+
+	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});

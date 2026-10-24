@@ -1,8 +1,9 @@
 /**
  * Fleet edge realtime daemon-activity tests: per-daemon
  * {type:"daemon_activity"} frames derived from the frames each session
- * mirrors onto its callback pair's control stream (state -> streaming,
- * ui_request / ui_request_end -> blocked). The only daemon is the shared
+ * mirrors onto its callback pair's control stream (state and agent_start ->
+ * streaming, ui_request / ui_request_end and state pendingUiRequestIds ->
+ * blocked), reset when the row's process is gone. The only daemon is the shared
  * callback-pair fake dialing OUT to a real DaemonTransportRegistry; the
  * fleet never dials a session.
  */
@@ -39,8 +40,15 @@ function activityFrames(browser: BrowserSocket, daemonId: string) {
 	);
 }
 
-function stateFrame(isStreaming: boolean) {
-	return { type: "state", state: { ...FAKE_STATE, isStreaming } };
+function stateFrame(isStreaming: boolean, pendingUiRequestIds?: string[]) {
+	return {
+		type: "state",
+		state: {
+			...FAKE_STATE,
+			isStreaming,
+			...(pendingUiRequestIds === undefined ? {} : { pendingUiRequestIds }),
+		},
+	};
 }
 
 function dialogOpen(id: string) {
@@ -206,6 +214,156 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 		}
 	});
 
+	test("a state snapshot with pendingUiRequestIds clears a dialog whose end was lost, in one broadcast", async () => {
+		const s = await setup();
+		try {
+			const { entry, daemon } = await s.addDaemon("lost-end");
+			const browser = await s.browser();
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("r1"));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 1 ? "ok" : null),
+				3000,
+				"blocked activity",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({
+				streaming: false,
+				blocked: true,
+			});
+
+			// The ui_request_end never arrives (pair drop / daemon restart);
+			// the pair-up state snapshot reports no pending dialogs. Streaming
+			// and blocked change together: one frame, not two.
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true, []));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 2 ? "ok" : null),
+				3000,
+				"unblocked by snapshot",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({
+				streaming: true,
+				blocked: false,
+			});
+
+			// A late end for the cleared dialog is a no-op; the next genuine
+			// change (ordered after it) is the barrier proving no extra frame.
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogEnd("r1"));
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("r2"));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 3 ? "ok" : null),
+				3000,
+				"re-block barrier",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({ blocked: true });
+			expect(activityFrames(browser, entry.daemonId)).toHaveLength(3);
+		} finally {
+			await s.teardown();
+		}
+	});
+
+	test("a state snapshot naming a pending dialog blocks the daemon; its ui_request_end clears it", async () => {
+		const s = await setup();
+		try {
+			const { entry, daemon } = await s.addDaemon("fresh-plane");
+			const browser = await s.browser();
+			// No ui_request was ever observed (dialog opened before pair-up).
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true, ["x"]));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 1 ? "ok" : null),
+				3000,
+				"blocked by snapshot",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({
+				streaming: true,
+				blocked: true,
+			});
+			expect(s.edge.daemonActivity(entry.daemonId)).toMatchObject({ known: true, blocked: true });
+
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogEnd("x"));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 2 ? "ok" : null),
+				3000,
+				"unblocked by end",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({
+				streaming: true,
+				blocked: false,
+			});
+		} finally {
+			await s.teardown();
+		}
+	});
+
+	test("an agent_start event marks the daemon streaming; the turn-end state clears it", async () => {
+		const s = await setup();
+		try {
+			const { entry, daemon } = await s.addDaemon("turn-start");
+			const browser = await s.browser();
+			// The real order: a prompt's resync state (still idle, the SDK has not
+			// admitted the turn yet), then agent_start with no state frame, then
+			// the turn-end state.
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(false, []));
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+				type: "event",
+				event: { type: "agent_start" },
+			});
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 2 ? "ok" : null),
+				3000,
+				"streaming from agent_start",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({
+				streaming: true,
+				blocked: false,
+			});
+
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(false, []));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 3 ? "ok" : null),
+				3000,
+				"idle from the turn-end state",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({
+				streaming: false,
+				blocked: false,
+			});
+		} finally {
+			await s.teardown();
+		}
+	});
+
+	test("a state frame without pendingUiRequestIds leaves delta-derived blocked untouched", async () => {
+		const s = await setup();
+		try {
+			const { entry, daemon } = await s.addDaemon("legacy-state");
+			const browser = await s.browser();
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("r1"));
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 2 ? "ok" : null),
+				3000,
+				"blocked then streaming",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({
+				streaming: true,
+				blocked: true,
+			});
+
+			// The open set survived the field-less state: its end still unblocks.
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogEnd("r1"));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 3 ? "ok" : null),
+				3000,
+				"unblocked by end",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({
+				streaming: true,
+				blocked: false,
+			});
+		} finally {
+			await s.teardown();
+		}
+	});
+
 	test("a new browser stream primes the known activity of a ready daemon", async () => {
 		const s = await setup();
 		try {
@@ -230,6 +388,118 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 			} finally {
 				browser.close();
 			}
+		} finally {
+			await s.teardown();
+		}
+	});
+
+	test("a new browser stream also primes the known activity of a non-ready daemon", async () => {
+		const s = await setup();
+		try {
+			const { entry, daemon } = await s.addDaemon("asleep");
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(false));
+			await waitFor(
+				() => (s.edge.daemonActivity(entry.daemonId).known ? "known" : null),
+				3000,
+				"activity derived",
+			);
+			// Idle-exited: the browser may hold a stale streaming:true from
+			// before it went offline, and no wake-time state would correct it.
+			s.registry.setStatus(entry.daemonId, "asleep");
+			const browser = await openBrowser(s.port);
+			try {
+				await browser.waitForFrame(
+					(f) =>
+						f.type === "daemon_activity" &&
+						f.daemonId === entry.daemonId &&
+						f.streaming === false &&
+						f.blocked === false,
+					"primed activity of non-ready daemon",
+				);
+			} finally {
+				browser.close();
+			}
+		} finally {
+			await s.teardown();
+		}
+	});
+
+	const goneRuntimes: { name: string; mark: (registry: Registry, id: string) => void }[] = [
+		{ name: "goes asleep", mark: (registry, id) => registry.setStatus(id, "asleep") },
+		{ name: "errors", mark: (registry, id) => registry.setStatus(id, "error", "gave up") },
+		{
+			name: "relaunches",
+			mark: (registry, id) => registry.update(id, { lifecycleStage: "runtime" }),
+		},
+	];
+	for (const gone of goneRuntimes) {
+		test(`a daemon mid-turn with a dialog open resets to idle when its row ${gone.name}`, async () => {
+			const s = await setup();
+			try {
+				const { entry, daemon } = await s.addDaemon("died");
+				const browser = await s.browser();
+				daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+					type: "event",
+					event: { type: "agent_start" },
+				});
+				daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("r1"));
+				await waitFor(
+					() => (activityFrames(browser, entry.daemonId).at(-1)?.blocked === true ? "ok" : null),
+					3000,
+					"streaming and blocked",
+				);
+				expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({ streaming: true });
+
+				// The process is gone: no state frame will ever clear what it set.
+				gone.mark(s.registry, entry.daemonId);
+				await waitFor(
+					() => (activityFrames(browser, entry.daemonId).at(-1)?.blocked === false ? "ok" : null),
+					3000,
+					"reset broadcast",
+				);
+				expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({ streaming: false });
+
+				const late = await openBrowser(s.port);
+				try {
+					await late.waitForFrame(
+						(f) => f.type === "daemon_activity" && f.daemonId === entry.daemonId,
+						"primed activity",
+					);
+					expect(activityFrames(late, entry.daemonId)).toEqual([
+						expect.objectContaining({ streaming: false, blocked: false }),
+					]);
+				} finally {
+					late.close();
+				}
+			} finally {
+				await s.teardown();
+			}
+		});
+	}
+
+	test("a pair drop with a live runtime keeps the turn's activity", async () => {
+		const s = await setup();
+		try {
+			const { entry, daemon } = await s.addDaemon("blip");
+			const browser = await s.browser();
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+				type: "event",
+				event: { type: "agent_start" },
+			});
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).at(-1)?.streaming === true ? "ok" : null),
+				3000,
+				"streaming",
+			);
+			s.registry.setStatus(entry.daemonId, "reconnecting");
+			// Barrier: the next broadcast must still carry the running turn.
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("barrier"));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).at(-1)?.blocked === true ? "ok" : null),
+				3000,
+				"barrier",
+			);
+			expect(activityFrames(browser, entry.daemonId).map((f) => f.streaming)).not.toContain(false);
 		} finally {
 			await s.teardown();
 		}

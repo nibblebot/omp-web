@@ -496,8 +496,9 @@ export const [state, setState] = createStore({
 	// resets and reconnects); lets the sidebar tell boot priming from a new row.
 	rosterLoaded: false as boolean,
 	// Per-daemon realtime activity (streaming / blocked) fed by the edge's
-	// additive fleet-scoped `daemon_activity` frames (derived from each ready
-	// daemon's tapped stream). Survives resetSessionView / session switches
+	// additive fleet-scoped `daemon_activity` frames (derived from each
+	// daemon's tapped stream; primed for every known daemon whatever its
+	// status). Survives resetSessionView / session switches
 	// like daemonRoster; pruned on roster frames for ids that left the fleet.
 	daemonActivity: {} as Record<string, { streaming: boolean; blocked: boolean }>,
 	// Phase 5: first-class registered projects (registered_projects frame;
@@ -1526,7 +1527,7 @@ export function connect(): void {
 				applyRosterFrame(frame);
 				break;
 			case "daemon_activity": {
-				// Edge-generated, fleet-scoped realtime activity for ANY ready daemon.
+				// Edge-generated, fleet-scoped realtime activity for any managed daemon.
 				// It carries no sessionId, so it sails past the stale-frame guard above
 				// untouched (per-daemon, not per-attachment) and applies regardless of
 				// which daemon this tab is attached to.
