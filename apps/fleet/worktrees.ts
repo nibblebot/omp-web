@@ -706,7 +706,6 @@ export async function registerWorktreeEntry(
 			source: { local: project.path },
 			desiredState: "stopped",
 		},
-		labels: [],
 		status: "asleep",
 		template: host.resolveTemplateName(worktreePath),
 	});
@@ -716,7 +715,7 @@ export async function registerWorktreeEntry(
  * Register the DEFAULT WORKSPACE of a registered project: a roster entry for
  * the repo's main checkout, mapped to the repo CWD. The main checkout is the
  * repo itself, so this never creates anything under workspaceDir. With
- * opts.start the main checkout is spawned via the host runtime (template/labels
+ * opts.start the main checkout is spawned via the host runtime (template
  * passthrough) and the fresh entry is tagged with the projectId; otherwise it
  * is registered asleep (kind "direct") and wakeable via spawn_resume/attach;
  * a respawn with no lastSessionFile is a fresh start. An existing row for the
@@ -727,7 +726,7 @@ export async function registerProjectMainEntry(
 	registry: Registry,
 	host: HostSessions,
 	project: RegisteredProject,
-	opts: { start?: boolean; template?: string; labels?: string[]; realpaths?: Map<string, string> },
+	opts: { start?: boolean; template?: string; realpaths?: Map<string, string> },
 ): Promise<RegistryEntry> {
 	// Dedup: an entry already mapped to this repo's realpath IS the default
 	// workspace; reuse it, never create a second row for the same checkout.
@@ -750,7 +749,6 @@ export async function registerProjectMainEntry(
 		const entry = await host.spawnHost({
 			cwd: project.path,
 			template: opts.template,
-			labels: opts.labels,
 			reuse: true,
 		});
 		registry.update(entry.daemonId, { projectId: project.projectId });
@@ -766,7 +764,6 @@ export async function registerProjectMainEntry(
 		cwd: project.path,
 		project: project.name,
 		projectId: project.projectId,
-		labels: opts.labels ?? [],
 		status: "asleep",
 		template: host.resolveTemplateName(project.path, opts.template),
 	});

@@ -45,7 +45,6 @@ describe("CLI", () => {
 			name: "cli-smoke",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: ["env=test"],
 			status: "asleep",
 		});
 		registry.flush();
@@ -77,7 +76,8 @@ describe("CLI", () => {
 		expect(output).toContain("id");
 		expect(output).toContain(seeded.daemonId);
 		expect(output).toContain("cli-smoke");
-		expect(output).toContain("env=test");
+		expect(output).toContain("fake-proj");
+		expect(output).not.toContain("labels");
 	});
 
 	test("main with a refused connection exits 1 with the not-running message", async () => {

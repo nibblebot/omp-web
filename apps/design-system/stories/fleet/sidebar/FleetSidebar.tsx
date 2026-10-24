@@ -16,7 +16,6 @@ const addedWorktree: DaemonEntry = {
 	cwd: "/home/joshua/Repos/omp-web-worktrees/motion-polish",
 	branch: "feat/motion-polish",
 	git: { added: 0, modified: 0, deleted: 0, untracked: 0 },
-	labels: [],
 	sessionTitle: undefined,
 	lastSessionFile: undefined,
 };

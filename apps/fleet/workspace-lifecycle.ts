@@ -705,7 +705,6 @@ export class WorkspaceLifecycle {
 			cwd: "",
 			project: project.name,
 			projectId,
-			labels: [],
 			status: "asleep",
 		});
 		const daemonId = created.daemonId;
@@ -2736,7 +2735,6 @@ export class WorkspaceLifecycle {
 		cwd: string;
 		template?: string;
 		name?: string;
-		labels?: string[];
 		reuse?: boolean;
 	}): Promise<RegistryEntry> {
 		const registry = this.#deps.registry;
@@ -2768,7 +2766,6 @@ export class WorkspaceLifecycle {
 			cwd: init.cwd,
 			project,
 			...(worktreeOf !== undefined ? { worktreeOf } : {}),
-			labels: init.labels ?? [],
 			template: templateName,
 		});
 		await this.#serialized(entry.daemonId, () =>
@@ -3081,10 +3078,9 @@ export class WorkspaceLifecycle {
 		this.#setStage(daemonId, "runtime");
 		this.#deps.onEnrolled?.(daemonId);
 		// Every value interpolated into the template command is
-		// attacker-controlled at some call site (POST /ctl/spawn name/labels)
+		// attacker-controlled at some call site (POST /ctl/spawn name)
 		// and lands in `sh -c`; shell-quote each one so it can never break
 		// out into command execution (CVE-style injection defense).
-		const labelsArg = (entry.labels ?? []).map((label) => `--label ${shellQuote(label)}`).join(" ");
 		// resume = --resume <file>: default to the row's last session file;
 		// opts.resumeFile overrides it for a dropdown-picked session.
 		const resumeFile =
@@ -3103,7 +3099,6 @@ export class WorkspaceLifecycle {
 			cwd: shellQuote(entry.cwd),
 			fleet: "--fleet-stdin",
 			name: shellQuote(entry.name),
-			labels: labelsArg,
 			resume: resumeArg,
 		});
 		const stdin = fleetStdinPayload({ url: this.#deps.callbackUrl(), daemonId, enrollment }, token);

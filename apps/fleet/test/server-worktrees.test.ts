@@ -246,7 +246,6 @@ describe("worktree lifecycle routes", () => {
 			name: "clone-info",
 			cwd: join(workspaceDir, "clone-info"),
 			project: project.name,
-			labels: [],
 			template: "test",
 			status: "asleep",
 			projectId: project.projectId,
@@ -337,7 +336,6 @@ describe("worktree lifecycle routes", () => {
 			project: project.name,
 			projectId: project.projectId,
 			worktreeOf: project.name,
-			labels: [],
 			status: "asleep",
 		});
 		const sessions = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);

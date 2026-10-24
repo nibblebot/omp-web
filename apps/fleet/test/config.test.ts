@@ -349,7 +349,7 @@ describe("workspaceDir", () => {
 describe("DEFAULT_LOCAL_TEMPLATE", () => {
 	test("matches the contract command string", () => {
 		expect(DEFAULT_LOCAL_TEMPLATE).toEqual({
-			command: "omp-web session --cwd {cwd} --port 0 {fleet} --name {name} {labels} {resume}",
+			command: "omp-web session --cwd {cwd} --port 0 {fleet} --name {name} {resume}",
 		});
 	});
 });

@@ -243,7 +243,6 @@ describe("fetch a clone's branch into its project", () => {
 				cwd: fx.repoDir,
 				project: "repo",
 				projectId: fx.projectId,
-				labels: [],
 				status: "asleep",
 			});
 			expect((await fetchInto(fx, direct.daemonId)).status).toBe(400);

@@ -67,7 +67,6 @@ describe("runtime redial deadline", () => {
 			cwd: FAKE_CWD,
 			name: "redial-outage",
 			template: "local",
-			labels: [],
 		});
 		const { generation, credential } = enrollSessionCredential(
 			server.transport,

@@ -31,7 +31,6 @@ function entry(overrides: Partial<RegistryEntry> = {}): RegistryEntry {
 		name: "local-session",
 		cwd: "/tmp/local-project",
 		project: "local-project",
-		labels: [],
 		status: "ready",
 		registeredAt: 1,
 		...overrides,

@@ -129,7 +129,6 @@ async function connectRemote(rig: Rig, name: string): Promise<Remote> {
 		name,
 		cwd: `/${name}`,
 		project: name,
-		labels: [],
 		status: "connecting",
 	});
 	const token = randomBytes(32).toString("hex");
@@ -278,7 +277,6 @@ describe("edge pipe backpressure and replay", () => {
 				name: "x1",
 				cwd: "/x1",
 				project: "x1",
-				labels: [],
 				status: "connecting",
 			});
 			await slow.waitForEvent((ev) => tagOf(row.daemonId, ev.frame) === "create", "first delta");
@@ -345,7 +343,6 @@ describe("edge pipe backpressure and replay", () => {
 				name: "x1",
 				cwd: "/x1",
 				project: "x1",
-				labels: [],
 				status: "connecting",
 			});
 			const tag = (name: string): void => {
@@ -934,7 +931,6 @@ describe("edge pipe over one real session pair", () => {
 				name: "one-pair",
 				cwd: "/one-pair",
 				project: "one-pair",
-				labels: [],
 				status: "connecting",
 			});
 			const token = randomBytes(32).toString("hex");
@@ -1012,7 +1008,6 @@ describe("edge pipe over one real session pair", () => {
 				name: "big-history",
 				cwd: "/big-history",
 				project: "big-history",
-				labels: [],
 				status: "connecting",
 			});
 			const token = randomBytes(32).toString("hex");

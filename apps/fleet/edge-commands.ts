@@ -6,11 +6,11 @@
  * message. readEdgeArgs prefixes that message with the command name, so the
  * frame reads `<command>: <message>` exactly as the frames always have.
  *
- * Semantic rules (NUL and k=v labels, clone source shape) come from
- * operations.ts, the same rules the control API applies.
+ * Semantic rules (clone source shape) come from operations.ts, the same
+ * rules the control API applies.
  */
 
-import { checkSpawnLabels, OperationError, parseCloneSource } from "./operations";
+import { OperationError, parseCloneSource } from "./operations";
 
 export type EdgeArgs = Record<string, unknown>;
 
@@ -39,16 +39,6 @@ const integer: FieldRule = (key, value) => {
 /** `true` or absent; any other value reads as unset. */
 const flag: FieldRule = (_key, value) => (value === true ? true : undefined);
 
-/** Absent, or an array of k=v strings with no NUL. */
-const labels: FieldRule = (_key, value) => {
-	if (value === undefined) return undefined;
-	if (!Array.isArray(value) || !value.every((label) => typeof label === "string")) {
-		throw new OperationError(400, "labels must be an array of k=v strings");
-	}
-	checkSpawnLabels(value);
-	return value;
-};
-
 /** Absent, or the exactly-one-member clone source. */
 const source: FieldRule = (_key, value) =>
 	value === undefined ? undefined : parseCloneSource(value);
@@ -71,7 +61,7 @@ export const EDGE_COMMAND_FIELDS: Record<string, Record<string, FieldRule>> = {
 	list_daemon_sessions: { daemonId: required, limit: integer },
 	list_project_branches: { projectId: required, remote: optional },
 	sync_projects: {},
-	spawn: { cwd: required, template: optional, labels },
+	spawn: { cwd: required, template: optional },
 	spawn_resume: { daemonId: required, sessionFile: optional },
 	stop: { daemonId: required },
 	remove: { daemonId: required },

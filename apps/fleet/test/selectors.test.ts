@@ -23,7 +23,6 @@ function entry(overrides: Partial<RegistryEntryShape> = {}): RegistryEntryShape 
 		name: daemonId,
 		cwd: `/home/user/${daemonId}`,
 		project: "root",
-		labels: [],
 		status: "asleep",
 		registeredAt: 1,
 		...overrides,
@@ -54,29 +53,6 @@ describe("matchSelector", () => {
 			const byId = entry({ daemonId: "d3", name: "web" });
 			const byName = entry({ daemonId: "d1", name: "d3" });
 			expect(matchSelector([byId, byName], "d3")).toEqual([byId]);
-		});
-	});
-
-	describe("label:k=v / tag:k=v", () => {
-		test("matches entries carrying that exact label", () => {
-			const prod = entry({ labels: ["env=prod", "team=core"] });
-			const dev = entry({ labels: ["env=dev"] });
-			expect(matchSelector([prod, dev], "label:env=prod")).toEqual([prod]);
-			expect(matchSelector([prod, dev], "label:env=dev")).toEqual([dev]);
-			expect(matchSelector([prod, dev], "label:team=core")).toEqual([prod]);
-		});
-
-		test("tag is an alias for label", () => {
-			const prod = entry({ labels: ["env=prod"] });
-			const bare = entry({ labels: [] });
-			expect(matchSelector([prod, bare], "tag:env=prod")).toEqual([prod]);
-		});
-
-		test("label values are matched literally, not as globs", () => {
-			const star = entry({ labels: ["env=pr*"] });
-			const prod = entry({ labels: ["env=prod"] });
-			expect(matchSelector([star, prod], "label:env=pr*")).toEqual([star]);
-			expect(matchSelector([star, prod], "label:env=pr?")).toEqual([]);
 		});
 	});
 
@@ -154,10 +130,8 @@ describe("matchSelector", () => {
 
 	describe("no match", () => {
 		test("returns an empty array (not an error)", () => {
-			const a = entry({ name: "web", labels: ["env=prod"], project: "frontend" });
+			const a = entry({ name: "web", project: "frontend" });
 			expect(matchSelector([a], "d99")).toEqual([]);
-			expect(matchSelector([a], "label:env=dev")).toEqual([]);
-			expect(matchSelector([a], "tag:env=dev")).toEqual([]);
 			expect(matchSelector([a], "project:backend")).toEqual([]);
 			expect(matchSelector([a], "nope*")).toEqual([]);
 			expect(matchSelector([], "web")).toEqual([]);

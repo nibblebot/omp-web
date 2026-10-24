@@ -18,8 +18,8 @@
  *   omp-web sessions [--port n]
  *   omp-web projects [--port n]
  *   omp-web profiles [--port n]
- *   omp-web spawn <path> [--template t] [--name n] [--label k=v]…
- *   omp-web add-repo <path> [--start] [--template t] [--labels k=v,...]
+ *   omp-web spawn <path> [--template t] [--name n]
+ *   omp-web add-repo <path> [--start] [--template t]
  *   omp-web add-clone <project> <name> --profile <id>
  *                        [--local path | --remote url] [--revision rev]
  *                        [--branch b] [--no-start]
@@ -65,7 +65,6 @@ interface DaemonRow {
 	status: string;
 	project: string;
 	cwd?: string;
-	labels?: string[];
 }
 interface ProjectRow {
 	projectId: string;
@@ -94,7 +93,7 @@ interface ParsedArgs {
 }
 
 /** Flags that repeat and accumulate (each occurrence appends). */
-const MULTI_FLAGS: Record<string, true> = { label: true, "trusted-proxy": true };
+const MULTI_FLAGS: Record<string, true> = { "trusted-proxy": true };
 
 /** Flags that are bare booleans: presence = true (never consume a value); `--flag=true|false` also accepted. */
 const BOOLEAN_FLAGS: Record<string, true> = {
@@ -175,27 +174,11 @@ function flagNumber(flags: Map<string, FlagValue>, name: string): number | undef
 	return Number.isFinite(n) ? n : undefined;
 }
 
-function labelList(flags: Map<string, FlagValue>): string[] | undefined {
-	const value = flags.get("label");
-	return Array.isArray(value) ? value : undefined;
-}
-
 /** Every `--trusted-proxy` occurrence (repeatable); each value may itself be
- *  comma-splittable; loadConfig splits occurrences, mirroring `label`. */
+ *  comma-splittable; loadConfig splits occurrences. */
 function trustedProxyList(flags: Map<string, FlagValue>): string[] | undefined {
 	const value = flags.get("trusted-proxy");
 	return Array.isArray(value) ? value : undefined;
-}
-
-/** `--labels k=v,a=b` (comma-joined single flag) → array; absent/empty → undefined. */
-function labelsCsv(flags: Map<string, FlagValue>): string[] | undefined {
-	const value = flagString(flags, "labels");
-	if (value === undefined) return undefined;
-	const labels = value
-		.split(",")
-		.map((label) => label.trim())
-		.filter((label) => label !== "");
-	return labels.length > 0 ? labels : undefined;
 }
 
 /** Realpath of a CLI path argument, or null when it does not exist. */
@@ -427,15 +410,8 @@ async function sessionsCmd(port: number): Promise<number> {
 	if (!Array.isArray(body)) throw new CliError("unexpected sessions response");
 	const rows = (body as unknown[])
 		.filter(isDaemonRow)
-		.map((entry) => [
-			entry.daemonId,
-			entry.name,
-			entry.status,
-			entry.project,
-			entry.cwd ?? "",
-			(entry.labels ?? []).join(","),
-		]);
-	console.log(renderTable(["id", "name", "status", "project", "cwd", "labels"], rows));
+		.map((entry) => [entry.daemonId, entry.name, entry.status, entry.project, entry.cwd ?? ""]);
+	console.log(renderTable(["id", "name", "status", "project", "cwd"], rows));
 	return 0;
 }
 
@@ -492,7 +468,7 @@ async function spawnCmd(
 ): Promise<number> {
 	const cwd = positionals[0];
 	if (cwd === undefined)
-		throw new CliError("usage: omp-web spawn <path> [--template t] [--name n] [--label k=v]…");
+		throw new CliError("usage: omp-web spawn <path> [--template t] [--name n]");
 	const body = (await ctl(port, "/ctl/spawn", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -500,7 +476,6 @@ async function spawnCmd(
 			cwd,
 			template: flagString(flags, "template"),
 			name: flagString(flags, "name"),
-			labels: labelList(flags),
 		}),
 	})) as Record<string, unknown>;
 	console.log(
@@ -516,9 +491,7 @@ async function addRepoCmd(
 ): Promise<number> {
 	const path = positionals[0];
 	if (path === undefined) {
-		throw new CliError(
-			"usage: omp-web add-repo <path> [--start] [--template t] [--labels k=v,...]",
-		);
+		throw new CliError("usage: omp-web add-repo <path> [--start] [--template t]");
 	}
 	const body = (await ctl(port, "/ctl/projects", {
 		method: "POST",
@@ -527,7 +500,6 @@ async function addRepoCmd(
 			path,
 			start: flagBoolean(flags, "start"),
 			template: flagString(flags, "template"),
-			labels: labelsCsv(flags),
 		}),
 	})) as { project?: { projectId?: string; path?: string }; entry?: { daemonId?: string } };
 	const project = body.project;
@@ -864,8 +836,8 @@ commands:
   sessions                     list sessions
   projects                     list registered projects (id, name, path, worktrees, missing)
   profiles                     list provider profiles (secret-free catalog)
-  spawn <path> [--template t] [--name n] [--label k=v]…
-  add-repo <path> [--start] [--template t] [--labels k=v,...]
+  spawn <path> [--template t] [--name n]
+  add-repo <path> [--start] [--template t]
   add-clone <project> <name> --profile <id> [--local path | --remote url]
                                [--revision rev] [--branch b] [--no-start]
   start <selector>             ensure a clone workspace is running (wake)

@@ -645,11 +645,8 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-.daemon-chip--label {
-	color: var(--muted-2);
-}
 /* P8.1: clone rows carry a kind chip (accent-tinted) and the workspace's
-   provider-profile chip (like a label, but the fleet catalog entry id). */
+   provider-profile chip (the fleet catalog entry id). */
 .daemon-chip--kind {
 	color: var(--accent);
 	border-color: var(--accent);
@@ -1182,11 +1179,6 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-}
-.daemon-detail-labels {
-	display: flex;
-	flex-wrap: wrap;
-	gap: var(--space-1);
 }
 .daemon-detail-fact--error .daemon-detail-value {
 	color: var(--error-text);

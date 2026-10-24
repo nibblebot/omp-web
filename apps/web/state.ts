@@ -950,7 +950,7 @@ function mergeRosterDelta(delta: { upserted: DaemonEntry[]; removed: string[] })
 	return next;
 }
 
-/** Whether two row fields hold the same value; the only nested fields (`labels`, `git`) are small and flat, so a JSON compare is exact. */
+/** Whether two row fields hold the same value; the only nested field (`git`) is small and flat, so a JSON compare is exact. */
 function sameRosterField(a: unknown, b: unknown): boolean {
 	if (a === b) return true;
 	if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;

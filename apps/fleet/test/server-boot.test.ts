@@ -76,7 +76,6 @@ describe("boot reconciliation (#3)", () => {
 			name: "stale-ready",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: [],
 			template: "test",
 			status: "ready",
 			readyAt: Date.now() - 60_000,
@@ -86,7 +85,6 @@ describe("boot reconciliation (#3)", () => {
 			name: "stuck-spawning",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: [],
 			template: "test",
 			status: "spawning",
 		});
@@ -94,7 +92,6 @@ describe("boot reconciliation (#3)", () => {
 			name: "stale-connecting",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: [],
 			template: "test",
 			status: "connecting",
 		});
@@ -102,7 +99,6 @@ describe("boot reconciliation (#3)", () => {
 			name: "enrolled-ready",
 			cwd: "",
 			project: "",
-			labels: [],
 			status: "ready",
 			readyAt: Date.now() - 120_000,
 		});
@@ -124,7 +120,6 @@ describe("boot reconciliation (#3)", () => {
 				...fixture,
 				cwd: tmp,
 				project: "fake-proj",
-				labels: [],
 				template: "test",
 				status: "ready",
 				readyAt: Date.now() - 120_000,
@@ -138,7 +133,6 @@ describe("boot reconciliation (#3)", () => {
 			name: "unenrolled-ready",
 			cwd: "",
 			project: "",
-			labels: [],
 			status: "ready",
 			readyAt: Date.now() - 120_000,
 		});
@@ -146,14 +140,12 @@ describe("boot reconciliation (#3)", () => {
 			name: "stopped",
 			cwd: "",
 			project: "",
-			labels: [],
 			status: "asleep",
 		});
 		registry.create({
 			name: "terminal-error",
 			cwd: "",
 			project: "",
-			labels: [],
 			status: "error",
 			error: "daemon rejected the credential",
 		});

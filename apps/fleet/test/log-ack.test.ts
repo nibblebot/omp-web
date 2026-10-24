@@ -54,7 +54,6 @@ describe("fleet log_ack durability (kx3w)", () => {
 				name,
 				cwd: "",
 				project: "",
-				labels: [],
 				status: "asleep",
 			});
 			registry.updateWorkspace(entry.daemonId, { desiredState: "stopped" });

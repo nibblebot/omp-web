@@ -4,8 +4,6 @@
  * A selector names a set of registry entries:
  * - `all` selects every entry.
  * - A bare daemonId (`d3`) is an exact match; wins over glob interpretation.
- * - `label:k=v` (alias `tag:k=v`) selects entries whose `labels` array
- *   contains exactly `k=v`.
  * - `project:name` selects entries whose `project` equals `name` exactly.
  * - Anything else is a name glob: `*` matches any run (including empty),
  *   `?` matches exactly one character, and every other character is literal.
@@ -17,7 +15,6 @@
 
 import type { RegistryEntry } from "./registry";
 
-const LABEL_SELECTOR = /^(label|tag):(.+)$/;
 const PROJECT_SELECTOR = /^project:(.+)$/;
 
 /** Regex specials that must be escaped when a glob literal becomes a pattern. */
@@ -46,12 +43,6 @@ export function matchSelector(entries: RegistryEntry[], selector: string): Regis
 	// selector must not be picked up by the name fallthrough below.
 	const byId = entries.filter((e) => e.daemonId === selector);
 	if (byId.length > 0) return byId;
-
-	const label = LABEL_SELECTOR.exec(selector);
-	if (label) {
-		const want = label[2];
-		return entries.filter((e) => e.labels.includes(want));
-	}
 
 	const project = PROJECT_SELECTOR.exec(selector);
 	if (project) {

@@ -477,7 +477,8 @@ export interface SkillDetail extends SkillSummary {
  *  "Infra remediation" and "Performance and efficiency".
  *  5: every client connection (browser to fleet, direct client to a
  *  standalone session) is one WebSocket on `GET /ws` (lib/wire/browser-socket.ts)
- *  instead of `GET /events` SSE + `POST /command`. Frame shapes are unchanged. */
+ *  instead of `GET /events` SSE + `POST /command`. Same unreleased 5: workspace
+ *  labels are removed (`DaemonEntry.labels`, `spawn.labels`). */
 export const OMP_PROTO = 5;
 
 // --- Client connection constants (browser socket, shared by the session and the fleet) ---
@@ -650,7 +651,6 @@ export interface DaemonEntry {
 		linesAdded?: number;
 		linesDeleted?: number;
 	};
-	labels: string[];
 	status: DaemonStatus;
 	lastSessionFile?: string;
 	/** Title of the daemon's last session file (source: fleet edge roster, probed from the
@@ -1003,7 +1003,7 @@ export type ClientCommand =
 	| { type: "daemon_stop"; id: string; projectDir: string; name: string; timeoutMs?: number }
 	| { type: "daemon_restart"; id: string; projectDir: string; name: string }
 	// --- Fleet edge (browser → omp-fleet only; a bare omp-session rejects these) ---
-	| { type: "spawn"; id: string; cwd: string; template?: string; labels?: string[] }
+	| { type: "spawn"; id: string; cwd: string; template?: string }
 	// Resume this exact session file instead of the daemon's lastSessionFile;
 	// omitted = resume the last session (today's behavior). The fleet edge
 	// validates it against the daemon's worktree session listing.

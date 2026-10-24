@@ -118,7 +118,6 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 			path: repoDir,
 			start: true,
 			template: "test",
-			labels: ["env=prod"],
 		});
 		expect(res.status).toBe(201);
 		const body = (await res.json()) as {
@@ -129,7 +128,6 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 		expect(body.project.path).toBe(repoReal);
 		expect(body.entry.cwd).toBe(repoReal);
 		expect(body.entry.projectId).toBe(body.project.projectId);
-		expect(body.entry.labels).toEqual(["env=prod"]);
 
 		const payload = await dialAsSession();
 		expect(payload.v).toBe(1);

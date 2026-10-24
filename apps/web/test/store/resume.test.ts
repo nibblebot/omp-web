@@ -331,7 +331,6 @@ describe("owner resolution when resuming", () => {
 			name: daemonId,
 			cwd,
 			project: daemonId,
-			labels: [],
 			status: "asleep",
 			...extra,
 		};

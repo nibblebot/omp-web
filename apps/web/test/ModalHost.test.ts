@@ -120,7 +120,6 @@ function daemon(id: string): DaemonEntry {
 		name: id,
 		cwd: `/repos/${id}`,
 		project: id,
-		labels: [],
 		status: "ready",
 	};
 }

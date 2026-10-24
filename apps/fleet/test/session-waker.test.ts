@@ -124,7 +124,6 @@ function startFixture(opts: { redialGraceMs?: number; pairTimeoutMs?: number } =
 				name: `proj-${registry.list().length}`,
 				cwd: "/srv/proj",
 				project: "proj",
-				labels: [],
 				status: "ready",
 				...overrides,
 			});

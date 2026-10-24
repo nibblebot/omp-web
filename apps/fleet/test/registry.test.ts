@@ -20,7 +20,6 @@ function baseInit(overrides: Partial<CreateInit> = {}): CreateInit {
 		name: "demo",
 		cwd: "/tmp/proj-a",
 		project: "proj-a",
-		labels: [],
 		...overrides,
 	};
 }
@@ -49,7 +48,7 @@ describe("Registry", () => {
 		expect(entry.registeredAt).toBeGreaterThan(0);
 	});
 
-	test("create stores every field incl. labels/template", async () => {
+	test("create stores every field incl. template", async () => {
 		const registry = await loadedRegistry(tmpStatePath());
 		const entry = registry.create(
 			baseInit({
@@ -57,7 +56,6 @@ describe("Registry", () => {
 				cwd: "/srv/repos/web",
 				project: "web",
 				worktreeOf: "main",
-				labels: ["env=prod", "team=core"],
 				template: "local",
 				status: "ready",
 			}),
@@ -68,7 +66,6 @@ describe("Registry", () => {
 			cwd: "/srv/repos/web",
 			project: "web",
 			worktreeOf: "main",
-			labels: ["env=prod", "team=core"],
 			template: "local",
 			status: "ready",
 		});
@@ -80,7 +77,6 @@ describe("Registry", () => {
 		const a = registry.create(
 			baseInit({
 				name: "alpha",
-				labels: ["env=prod"],
 			}),
 		);
 		const b = registry.create(
@@ -196,6 +192,32 @@ describe("Registry", () => {
 		expect((await loadedRegistry(statePath)).list()).toEqual(registry.list());
 	});
 
+	test("a legacy `labels` key is dropped on load and does not survive the next write", async () => {
+		const statePath = tmpStatePath();
+		writeFileSync(
+			statePath,
+			JSON.stringify({
+				nextId: 2,
+				entries: [
+					{
+						...baseInit(),
+						daemonId: "d1",
+						registeredAt: 1,
+						status: "asleep",
+						labels: ["env=prod"],
+					},
+				],
+			}),
+		);
+		const registry = await loadedRegistry(statePath);
+		expect(registry.get("d1")).not.toHaveProperty("labels");
+		registry.update("d1", { name: "renamed" });
+		registry.flush();
+		const persisted = JSON.parse(readFileSync(statePath, "utf8"));
+		expect(persisted.entries[0].name).toBe("renamed");
+		expect(persisted.entries[0]).not.toHaveProperty("labels");
+	});
+
 	test("dN allocation is monotonic across remove and reload (no id reuse)", async () => {
 		const statePath = tmpStatePath();
 		const registry = await loadedRegistry(statePath);
@@ -216,7 +238,7 @@ describe("Registry", () => {
 		const statePath = tmpStatePath();
 		const registry = await loadedRegistry(statePath);
 		for (let i = 0; i < 5; i++) registry.create(baseInit({ name: `daemon-${i}` }));
-		registry.update("d1", { labels: ["a=b"] });
+		registry.update("d1", { name: "renamed" });
 		registry.setStatus("d2", "error", "boom");
 		registry.remove("d3");
 
@@ -327,7 +349,7 @@ describe("Registry", () => {
 		const statePath = tmpStatePath();
 		const registry = await loadedRegistry(statePath);
 		const entry = registry.create(baseInit({ name: "old" }));
-		const updated = registry.update(entry.daemonId, { name: "new", labels: ["x=1"] });
+		const updated = registry.update(entry.daemonId, { name: "new", branch: "feature/x" });
 		expect(updated).not.toBe(entry); // copy-on-update
 		expect(registry.get(entry.daemonId)).toBe(updated);
 		expect(registry.get(entry.daemonId)).toMatchObject({ name: "new", cwd: "/tmp/proj-a" });
@@ -439,7 +461,6 @@ describe("Registry", () => {
 						name: "x",
 						cwd: "/x",
 						project: "x",
-						labels: [],
 						status: "ready",
 						registeredAt: 1,
 					},
@@ -754,7 +775,6 @@ describe("Registry legacy state", () => {
 						name: "old",
 						cwd: "/tmp/old",
 						project: "old",
-						labels: [],
 						mode: "remote",
 						status: "asleep",
 						registeredAt: 1,

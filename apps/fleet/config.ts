@@ -113,15 +113,14 @@ export function resolveTemplateName(
 
 /**
  * Default local spawn template. `{fleet}` expands to `--fleet-stdin`: the fleet writes the
- * daemon's callback pair and listener token to its stdin, never to argv or env. `{labels}`
- * expands to repeated `--label k=v` args (empty string when no labels). `{resume}` expands to
- * `--resume <lastSessionFile>` when the daemon's file was persisted, else
+ * daemon's callback pair and listener token to its stdin, never to argv or env. `{resume}`
+ * expands to `--resume <lastSessionFile>` when the daemon's file was persisted, else
  * `--resume <lastSessionFile> --resume-unwritten` (a never-prompted session's path may not exist
  * yet); empty when the daemon has none. The other placeholders are filled from the registry
  * entry at spawn time.
  */
 export const DEFAULT_LOCAL_TEMPLATE: SpawnTemplate = {
-	command: "omp-web session --cwd {cwd} --port 0 {fleet} --name {name} {labels} {resume}",
+	command: "omp-web session --cwd {cwd} --port 0 {fleet} --name {name} {resume}",
 };
 
 /** Default worktree creation directory under the consolidated home data dir. */
@@ -186,8 +185,8 @@ export async function loadConfig(
 		config.templates = { ...config.templates, local: { command: localCommand } };
 	}
 	// Every template hands its daemon the callback pair and listener token on stdin (`{fleet}`):
-	// a `{token}` placeholder would put the listener token in argv, visible to every local user,
-	// and a template without `{fleet}` would start a daemon that never pairs.
+	// a `{token}` placeholder would put the listener token in argv, visible to every local user, and
+	// a template without `{fleet}` would start a daemon that never pairs.
 	for (const [name, template] of Object.entries(config.templates)) {
 		if (template.command.includes("{token}")) {
 			throw new Error(

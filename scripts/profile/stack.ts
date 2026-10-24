@@ -136,7 +136,7 @@ export class Stack {
 			templates[`s${slot + 1}`] = {
 				command:
 					`${scrub}PI_CODING_AGENT_DIR=${agentDir} PI_AUTH_NO_BORROW=1 PI_NO_TITLE=1 ${extraEnv} ${taskset}` +
-					`${bun} ${(opts.bunArgs?.session?.(slot) ?? []).join(" ")} ${join(repoRoot, SESSION_ENTRY)} --cwd {cwd} --port 0 {fleet} --name {name} {labels} {resume}`,
+					`${bun} ${(opts.bunArgs?.session?.(slot) ?? []).join(" ")} ${join(repoRoot, SESSION_ENTRY)} --cwd {cwd} --port 0 {fleet} --name {name} {resume}`,
 			};
 		}
 		const configPath = join(stateDir, "config.json");

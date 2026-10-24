@@ -116,7 +116,6 @@ async function connectRemote(
 		name,
 		cwd: `/${name}`,
 		project: name,
-		labels: [],
 		status: "connecting",
 	});
 	const token = randomBytes(32).toString("hex");

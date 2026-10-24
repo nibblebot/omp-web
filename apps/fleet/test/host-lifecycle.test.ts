@@ -2,7 +2,7 @@
  * Host runtime tests: the lifecycle's host section (WorkspaceLifecycle over
  * the in-process HostRuntimeProvider) driving main-checkout and worktree
  * sessions. A FAKE child script (sh) stands in for omp-session: it appends
- * its argv (the template-filled --fleet-stdin / labels / resume args) to a
+ * its argv (the template-filled --fleet-stdin / resume args) to a
  * file and captures the fleet stdin payload (the callback pair) to another,
  * optionally logs to stderr, then exits or idles. A real
  * DaemonTransportRegistry served over loopback HTTP receives the dial; tests
@@ -153,7 +153,7 @@ interface ChildScriptOpts {
 /**
  * Write a fake child script. It captures its stdin (the fleet payload) to
  * payloadFile first, appends "$@" (the template-filled --fleet-stdin /
- * labels / resume args) to argsFile, optionally dumps its OMP_SESSION_*
+ * resume args) to argsFile, optionally dumps its OMP_SESSION_*
  * environment, records its pid, prints stderr lines, then either exits with
  * `exitCode` or idles.
  */
@@ -185,10 +185,10 @@ function writeChildScript(dir: string, argsFile: string, opts: ChildScriptOpts =
 	return script;
 }
 
-/** Spawn template that fills {fleet} {labels} {resume} as argv for the fake child. */
+/** Spawn template that fills {fleet} {resume} as argv for the fake child. */
 function makeConfig(script: string): FleetConfig {
 	return {
-		templates: { test: { command: `sh ${script} {fleet} {labels} {resume}` } },
+		templates: { test: { command: `sh ${script} {fleet} {resume}` } },
 		defaultTemplate: "test",
 		workspaceDir: "/tmp/fleet-test-ws",
 		bind: "127.0.0.1",
@@ -203,8 +203,8 @@ function makeTierConfig(
 ): FleetConfig {
 	return {
 		templates: {
-			test: { command: `sh ${scriptDefault} {fleet} {labels} {resume}` },
-			other: { command: `sh ${scriptOverride} {fleet} {labels} {resume}` },
+			test: { command: `sh ${scriptDefault} {fleet} {resume}` },
+			other: { command: `sh ${scriptOverride} {fleet} {resume}` },
 		},
 		defaultTemplate: "test",
 		workspaceDir: "/tmp/fleet-test-ws",
@@ -362,7 +362,7 @@ describe("host runtime", () => {
 			{ onEnrolled: (daemonId) => enrolled.push(daemonId) },
 		);
 
-		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir, labels: ["env=prod"] });
+		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		expect(entry.project).toBe(basename(fx.dir));
 		const pair = await waitForPayload(fx.payloadFile, 1);
 		expect(pair.url).toBe(fx.callbackUrl);
@@ -396,7 +396,6 @@ describe("host runtime", () => {
 			paired: false,
 		});
 		const [line] = await waitForLaunches(fx.argsFile, 1);
-		expect(line).toContain("--label env=prod");
 		expect(line).toContain("--fleet-stdin");
 		expect(line).not.toContain(pair.token); // the credential never reaches argv
 	});
@@ -658,7 +657,6 @@ describe("host runtime", () => {
 			name: "placeholder",
 			cwd: fx.dir,
 			project: "placeholder",
-			labels: [],
 			status: "asleep",
 		});
 		expect(entry.template).toBeUndefined();
@@ -681,7 +679,6 @@ describe("host runtime", () => {
 			name: "checkout",
 			cwd: fx.dir,
 			project: "checkout",
-			labels: [],
 			status: "asleep",
 		});
 
@@ -709,7 +706,6 @@ describe("host runtime", () => {
 			name: "adopted",
 			cwd: fx.dir,
 			project: "adopted",
-			labels: [],
 			status: "reconnecting",
 			lastSessionFile,
 		});
@@ -718,24 +714,7 @@ describe("host runtime", () => {
 		expect(existsSync(fx.argsFile)).toBe(false);
 	}, 20_000);
 
-	test("spawn shell-quotes label/name values, a $(touch) payload stays inert", async () => {
-		const fx = await makeFixture("host-lifecycle-quote-", {}, { restartMax: 2 });
-
-		const pwn = join(fx.dir, "pwned");
-		await fx.lifecycle.spawnHost({
-			cwd: fx.dir,
-			labels: [`k=$(touch ${pwn})`, "q='quoted'", "sp ace"],
-		});
-		const [line] = await waitForLaunches(fx.argsFile, 1);
-		// The payloads arrived as literal argv text (sh stripped the outer
-		// quoting); none of the metacharacters was executed.
-		expect(line).toContain(`--label k=$(touch ${pwn})`);
-		expect(line).toContain(`--label q='quoted'`);
-		expect(line).toContain("--label sp ace");
-		expect(existsSync(pwn)).toBe(false);
-	});
-
-	test("quoted cwd/name/labels with metacharacters round-trip as single argv entries", async () => {
+	test("quoted cwd/name with metacharacters round-trip as single argv entries", async () => {
 		const projectDir = tempDir("host-lifecycle-roundtrip-");
 		// A REAL directory whose name contains spaces, quotes, $(), backticks,
 		// and a newline, the exact hostile value class the quoting must tame.
@@ -755,7 +734,7 @@ describe("host runtime", () => {
 		const config: FleetConfig = {
 			templates: {
 				test: {
-					command: `sh ${script} --cwd {cwd} {fleet} --name {name} {labels} {resume}`,
+					command: `sh ${script} --cwd {cwd} {fleet} --name {name} {resume}`,
 				},
 			},
 			defaultTemplate: "test",
@@ -764,12 +743,11 @@ describe("host runtime", () => {
 		};
 		const { lifecycle } = await makeHarness(config, { restartMax: 2 });
 
-		const trickyName = "na'me $(nope) `nope` with spaces\nand a newline";
 		const pwn = join(projectDir, "pwned");
+		const trickyName = `na'me $(touch ${pwn}) \`nope\` with spaces\nand a newline`;
 		await lifecycle.spawnHost({
 			cwd: weirdCwd,
 			name: trickyName,
-			labels: [`k=$(touch ${pwn})`],
 		});
 		await waitFor(() => (existsSync(argsFile) ? "written" : null), 5000, "args file");
 
@@ -782,8 +760,6 @@ describe("host runtime", () => {
 		expect(args[2]).toBe("--fleet-stdin");
 		expect(args[3]).toBe("--name");
 		expect(args[4]).toBe(trickyName);
-		expect(args[5]).toBe("--label");
-		expect(args[6]).toBe(`k=$(touch ${pwn})`);
 		expect(existsSync(pwn)).toBe(false);
 	});
 
@@ -1373,7 +1349,6 @@ describe("host runtime", () => {
 			name: basename(projectDir),
 			cwd: projectDir,
 			project: basename(projectDir),
-			labels: [],
 			status: "asleep",
 		});
 		expect(asleep.template).toBeUndefined();
@@ -1481,7 +1456,6 @@ describe("host boot reconciliation", () => {
 			name,
 			cwd: tempDir("host-lifecycle-boot-cwd-"),
 			project: "boot",
-			labels: [],
 			template: "test",
 			status: row.status,
 			readyAt: Date.now() - 60_000,
@@ -1653,7 +1627,6 @@ describe("host boot reconciliation", () => {
 			name: "clone",
 			cwd: tempDir("host-lifecycle-boot-clone-"),
 			project: "boot",
-			labels: [],
 			status: "ready",
 			readyAt: 5678,
 			pid: deadPid,

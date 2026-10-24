@@ -740,10 +740,12 @@ export class Registry {
 		// records existed get an in-memory record here; it persists on the
 		// entry's next mutation, never at boot.
 		for (const entry of entries) {
-			// Retired keys (`mode` on entries, `branchCreatedByOmpWeb` on records)
-			// are dropped silently: every entry is spawned now and branch deletion
-			// is guarded by the probed branch.
+			// Retired keys (`mode` and `labels` on entries, `branchCreatedByOmpWeb` on
+			// records) are dropped silently, so they do not survive the next write:
+			// every entry is spawned now, branch deletion is guarded by the probed
+			// branch, and workspace labels no longer exist.
 			Reflect.deleteProperty(entry, "mode");
+			Reflect.deleteProperty(entry, "labels");
 			if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
 			if (entry.workspace !== undefined)
 				Reflect.deleteProperty(entry.workspace, "branchCreatedByOmpWeb");

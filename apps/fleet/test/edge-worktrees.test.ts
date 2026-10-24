@@ -249,7 +249,6 @@ describe("edge worktree commands", () => {
 			name: "main",
 			cwd: repoDir,
 			project: project.name,
-			labels: [],
 			status: "asleep",
 			projectId: project.projectId,
 			workspace: {

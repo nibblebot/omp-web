@@ -83,7 +83,7 @@ const PROVIDER_ENV_SCRUB = PROVIDER_ENV_SCRUB_STR === "" ? "" : `env ${PROVIDER_
 
 /**
  * Built in beforeAll because the paths derive from the suite tmp dir. {name}
- * and {labels}/{resume} expand per daemon in the fleet templates. {fleet} expands
+ * and {resume} expand per daemon in the fleet templates. {fleet} expands
  * to --fleet-stdin: the host runtime writes the callback pair and listener token to
  * the child's stdin. Each template tees that payload to handoff-{name}.json (0600,
  * suite tmp dir) so the suite can read the enrolled credential without it ever
@@ -282,10 +282,10 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		// Hermetic per-daemon agent dir ({name} expands per daemon): no auth and
 		// no model cache, so no model is selectable and every prompt times out.
 		const hermeticEnv = `${PROVIDER_ENV_SCRUB}PI_CODING_AGENT_DIR=${join(tmp, "agent-{name}")} PI_AUTH_NO_BORROW=1`;
-		LOCAL_TEMPLATE = `umask 077; tee ${join(tmp, "handoff-{name}.json")} | ${hermeticEnv} bun ${SESSION_ENTRY} --cwd {cwd} --port 0 {fleet} --name {name} {labels} {resume}`;
+		LOCAL_TEMPLATE = `umask 077; tee ${join(tmp, "handoff-{name}.json")} | ${hermeticEnv} bun ${SESSION_ENTRY} --cwd {cwd} --port 0 {fleet} --name {name} {resume}`;
 		// Short-idle variant pins the test-only idle-check knob (500ms tick) so the
 		// idle lifecycle runs in seconds.
-		SHORTIDLE_TEMPLATE = `umask 077; tee ${join(tmp, "handoff-{name}.json")} | OMP_SESSION_TEST_IDLE_CHECK_MS=500 ${hermeticEnv} bun ${SESSION_ENTRY} --cwd {cwd} --port 0 {fleet} --name {name} --idle-timeout 2s {labels} {resume}`;
+		SHORTIDLE_TEMPLATE = `umask 077; tee ${join(tmp, "handoff-{name}.json")} | OMP_SESSION_TEST_IDLE_CHECK_MS=500 ${hermeticEnv} bun ${SESSION_ENTRY} --cwd {cwd} --port 0 {fleet} --name {name} --idle-timeout 2s {resume}`;
 		const projectsRoot = join(tmp, "projects");
 		projDirs = [
 			join(projectsRoot, "proj-a"),
@@ -365,7 +365,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 
 	test("spawns three real daemons; all reach ready once their callback pair forms", async () => {
 		const [r1, r2, r3] = await Promise.all([
-			postJson("/ctl/spawn", { cwd: projDirs[0], name: "d-one", labels: ["env=integration"] }),
+			postJson("/ctl/spawn", { cwd: projDirs[0], name: "d-one" }),
 			postJson("/ctl/spawn", { cwd: projDirs[1], name: "d-two" }),
 			postJson("/ctl/spawn", { cwd: projDirs[2], name: "d-three" }),
 		]);
@@ -375,7 +375,6 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		d1 = (await r1.json()) as DaemonEntry;
 		d2 = (await r2.json()) as DaemonEntry;
 		d3 = (await r3.json()) as DaemonEntry;
-		expect(d1.labels).toEqual(["env=integration"]);
 		for (const entry of [d1, d2, d3]) {
 			if (entry.pid !== undefined) trackedPids.add(entry.pid);
 		}

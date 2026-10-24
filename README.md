@@ -231,7 +231,7 @@ omp-web prompt <selector> <text> [--wait <ms>]
 omp-web relay --port <n> [--hostname h] [--max-guests n] [--max-rooms n]   # run the standalone collab relay
 ```
 
-`stop`, `remove`, and `prompt` selectors accept `all`, an exact daemon ID, `label:k=v` (also `tag:k=v`), `project:name`, or name globs with `*` and `?`; quote globs to prevent shell expansion. Project arguments accept a registered project ID, path/realpath, or basename. Control commands connect to loopback; `--port` or `OMP_FLEET_PORT` selects the fleet port (default 4722). `prompt` to an asleep session wakes it first.
+`stop`, `remove`, and `prompt` selectors accept `all`, an exact daemon ID, `project:name`, or name globs with `*` and `?`; quote globs to prevent shell expansion. Project arguments accept a registered project ID, path/realpath, or basename. Control commands connect to loopback; `--port` or `OMP_FLEET_PORT` selects the fleet port (default 4722). `prompt` to an asleep session wakes it first.
 
 `prompt` submits without waiting unless `--wait <ms>` supplies a result timeout.
 

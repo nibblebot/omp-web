@@ -108,7 +108,6 @@ describe("fleet control plane", () => {
 			cwd: realpathSync(repoDir),
 			project: basename(repoDir),
 			projectId: body.project!.projectId,
-			labels: [],
 			status: "asleep",
 		});
 		// The registered project shows up in GET /ctl/projects.
@@ -184,7 +183,6 @@ describe("fleet control plane", () => {
 			name: "row",
 			cwd: realpathSync(repoDir),
 			project: basename(repoDir),
-			labels: [],
 			template: "test",
 			status: "asleep",
 			projectId,
@@ -211,7 +209,6 @@ describe("fleet control plane", () => {
 			name: "clone",
 			cwd: realpathSync(repoDir),
 			project: basename(repoDir),
-			labels: [],
 			template: "test",
 			status: "asleep",
 			projectId,
@@ -400,27 +397,12 @@ describe("fleet control plane", () => {
 		expect(typeof body.error).toBe("string");
 	});
 
-	test("POST /ctl/spawn 400s when name/labels contain NUL", async () => {
+	test("POST /ctl/spawn 400s when name contains NUL", async () => {
 		const cwd = join(tmp, "spawn-cwd");
 		const resName = await postJson(server.port, "/ctl/spawn", { cwd, name: "a\u0000b" });
 		expect(resName.status).toBe(400);
 		const bodyName = (await resName.json()) as { error?: string };
 		expect(bodyName.error).toContain("NUL");
-		const resLabels = await postJson(server.port, "/ctl/spawn", {
-			cwd,
-			labels: ["k=v", "x\u0000y"],
-		});
-		expect(resLabels.status).toBe(400);
-		const bodyLabels = (await resLabels.json()) as { error?: string };
-		expect(bodyLabels.error).toContain("NUL");
-	});
-
-	test("POST /ctl/spawn 400s when a label is not k=v (same rule as the edge)", async () => {
-		const cwd = join(tmp, "spawn-cwd");
-		const res = await postJson(server.port, "/ctl/spawn", { cwd, labels: ["k=v", "bare"] });
-		expect(res.status).toBe(400);
-		const body = (await res.json()) as { error?: string };
-		expect(body.error).toBe("labels must be an array of k=v strings");
 	});
 
 	test("POST /ctl/add is gone (404)", async () => {
@@ -437,11 +419,9 @@ describe("fleet control plane", () => {
 			name: "enrolled",
 			cwd: join(tmp, "spawn-cwd"),
 			project: "fake-proj",
-			labels: ["env=test"],
 			template: "test",
 			status: "connecting",
 		});
-		expect(entry.labels).toEqual(["env=test"]);
 		expect(entry.status).toBe("connecting");
 	});
 
@@ -512,7 +492,6 @@ describe("fleet control plane", () => {
 			name: "removable",
 			cwd: join(tmp, "spawn-cwd"),
 			project: "fake-proj",
-			labels: [],
 			template: "test",
 			status: "asleep",
 		});

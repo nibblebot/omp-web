@@ -605,7 +605,6 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 		name: entry.name,
 		cwd: entry.cwd,
 		project: entry.project,
-		labels: [...entry.labels],
 		status: entry.status,
 		// An asleep daemon has no live process: omit the uptime rather than let
 		// the registeredAt fallback show a growing uptime for a dead daemon.
@@ -689,7 +688,6 @@ export class FleetEdge {
 				this.#ops.spawn({
 					cwd: a.cwd as string,
 					template: a.template as string | undefined,
-					labels: a.labels as string[] | undefined,
 				}),
 			),
 		spawn_resume: (stream, _id, a) =>

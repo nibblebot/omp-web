@@ -1733,7 +1733,6 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 			name: id,
 			cwd: `/repos/${id}`,
 			project: id,
-			labels: [],
 			status: "ready",
 			...extra,
 		};
@@ -2220,7 +2219,6 @@ describe("attached session reconciliation against roster truth", () => {
 			name: id,
 			cwd: `/repos/${id}`,
 			project: id,
-			labels: [],
 			status: "ready",
 			...extra,
 		};
@@ -2443,7 +2441,6 @@ describe("roster_delta frames", () => {
 			name: id,
 			cwd: `/repos/${id}`,
 			project: id,
-			labels: [],
 			status: "ready",
 			...extra,
 		};
@@ -2616,7 +2613,6 @@ describe("unread-dot tracking", () => {
 			name: id,
 			cwd: `/repos/${id}`,
 			project: id,
-			labels: [],
 			status: "ready",
 			...extra,
 		};
@@ -2673,7 +2669,6 @@ describe("daemon_activity frames", () => {
 			name: id,
 			cwd: `/repos/${id}`,
 			project: id,
-			labels: [],
 			status: "ready",
 			...extra,
 		};
@@ -2746,7 +2741,6 @@ describe("roster session dropdown", () => {
 			name: id,
 			cwd: `/repos/${id}`,
 			project: "x",
-			labels: [],
 			status: "ready",
 			...extra,
 		};
@@ -3339,7 +3333,6 @@ describe("transcript phase (session switch)", () => {
 			name: id,
 			cwd: `/repos/${id}`,
 			project: "x",
-			labels: [],
 			status: "ready",
 			...extra,
 		};
@@ -3586,7 +3579,6 @@ describe("the attached daemon is removed from the roster", () => {
 			cwd: `/repos/${id}`,
 			project: projectId,
 			projectId,
-			labels: [],
 			status: "ready",
 			...(main ? {} : { worktreeOf: projectId, branch: id }),
 			...extra,

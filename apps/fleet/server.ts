@@ -8,12 +8,12 @@
  *
  *   GET  /ctl/sessions {…}                         → DaemonEntry[]
  *   GET  /ctl/projects {…}                         → { projects: RegisteredProject[] }
- *   POST /ctl/projects {path, start?, template?, labels?} → 201 { project, entry? } | 200 { project, existing: true }
+ *   POST /ctl/projects {path, start?, template?}   → 201 { project, entry? } | 200 { project, existing: true }
  *   DELETE /ctl/projects/:projectId                → 200 { removed } | 409 { error }
  *   GET  /ctl/settings                             -> SettingsModel
  *   GET  /ctl/usage                               -> UsageReport[] (502 { error } on failure)
  *   GET  /ctl/worktrees/:daemonId/delete-info      -> worktree_delete_info payload
- *   POST /ctl/spawn    {cwd, template?, name?, labels?} -> DaemonEntry
+ *   POST /ctl/spawn    {cwd, template?, name?} -> DaemonEntry
  *   POST /ctl/stop     {selector}                  → { stopped: string[] }
  *   POST /ctl/remove   {selector}                  → { removed: string[] }
  *   POST /ctl/prompt   {selector, text, waitMs?}   → PromptResult[] | { submitted: string[] }
@@ -264,15 +264,6 @@ function optionalBoolean(body: Record<string, unknown>, key: string): boolean | 
 	if (value === undefined) return undefined;
 	if (typeof value !== "boolean") throw new HttpError(400, `invalid field: ${key}`);
 	return value;
-}
-
-function optionalLabels(body: Record<string, unknown>): string[] | undefined {
-	const value = body["labels"];
-	if (value === undefined) return undefined;
-	if (!Array.isArray(value) || !value.every((l) => typeof l === "string")) {
-		throw new HttpError(400, "labels must be an array of strings");
-	}
-	return value as string[];
 }
 
 function optionalWaitMs(body: Record<string, unknown>): number | undefined {
@@ -1455,21 +1446,20 @@ class FleetServerImpl implements FleetServer {
 				cwd,
 				template: optionalString(body, "template"),
 				name: optionalString(body, "name"),
-				labels: optionalLabels(body),
 			}),
 		);
 		return json(toRosterEntry(entry));
 	}
 
 	/**
-	 * POST /ctl/projects { path, start?, template?, labels? }: register the
+	 * POST /ctl/projects { path, start?, template? }: register the
 	 * main checkout behind `path`. resolveProjectRoot accepts a main checkout,
 	 * a linked worktree or a subdirectory; bare and non-git paths answer 400
 	 * with the reason. A checkout that is already registered answers
 	 * 200 { project, existing: true } and changes nothing. A new project
 	 * answers 201 { project, entry? }: its main-checkout roster entry comes
 	 * from registerProjectMainEntry, spawned only when start is true
-	 * (template/labels passthrough, returned as `entry`) and asleep otherwise.
+	 * (template passthrough, returned as `entry`) and asleep otherwise.
 	 * Staged: registration happens first, so a failed spawn reports 500
 	 * (stage named in the message) but the project stays registered.
 	 */
@@ -1478,10 +1468,7 @@ class FleetServerImpl implements FleetServer {
 		const path = requireString(body, "path");
 		const start = optionalBoolean(body, "start") ?? false;
 		const template = optionalString(body, "template");
-		const labels = optionalLabels(body);
-		const result = await this.#operate(() =>
-			this.#ops.addProject({ path, start, template, labels }),
-		);
+		const result = await this.#operate(() => this.#ops.addProject({ path, start, template }));
 		if (result.existing) return json({ project: result.project, existing: true });
 		return json(
 			{

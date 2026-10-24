@@ -51,7 +51,7 @@ import {
 // (details, Start/Restart, two-click stop, delete worktree; its tooltip names
 // the state). Under the top line, aligned with the branch text: the last
 // session's title (clamped to one line, or two with the sidebarSessionTitleLines
-// setting; absent when the session has no title), label chips, clone lifecycle
+// setting; absent when the session has no title), the clone profile chip, clone lifecycle
 // progress, and the git diffstat when there is one. A ready row carries a rail
 // on its right edge instead of a dot. Ready rows attach on click, asleep rows
 // wake-then-attach. The group header names the project; the full path lives in
@@ -637,26 +637,17 @@ export const WorkspaceRow: Component<{
 							</div>
 						)}
 					</Show>
-					<Show when={cloneProfile() !== undefined || d().labels.length > 0}>
-						<div class="daemon-chips">
-							<Show when={cloneProfile()}>
-								{(p) => (
-									<span
-										class="daemon-chip daemon-chip--profile"
-										title={`profile ${p().id} (${p().provider})`}
-									>
-										{p().id}
-									</span>
-								)}
-							</Show>
-							<For each={d().labels}>
-								{(l) => (
-									<span class="daemon-chip daemon-chip--label" title={`label ${l}`}>
-										{l}
-									</span>
-								)}
-							</For>
-						</div>
+					<Show when={cloneProfile()}>
+						{(p) => (
+							<div class="daemon-chips">
+								<span
+									class="daemon-chip daemon-chip--profile"
+									title={`profile ${p().id} (${p().provider})`}
+								>
+									{p().id}
+								</span>
+							</div>
+						)}
 					</Show>
 					{/* Provider lifecycle progress: preparation → runtime →
 					    callback → ready, shown while a clone workspace is being

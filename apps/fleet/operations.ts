@@ -3,8 +3,8 @@
  * mutation that both transports expose. The browser edge (command table in
  * edge-commands.ts, answered as frames) and the control API (`/ctl/*` in
  * server.ts, answered as HTTP) parse their own wire shapes, then call the
- * matching method here. Validation that has a semantic meaning (NUL and k=v
- * labels, clone source shape, linked/clean worktree guards, unknown ids,
+ * matching method here. Validation that has a semantic meaning (NUL in names,
+ * clone source shape, linked/clean worktree guards, unknown ids,
  * clone refusals), the stop/evict sequencing, and the result shapes live here
  * once, so a rule fixed for one transport cannot be missed on the other.
  *
@@ -48,23 +48,6 @@ export class OperationError extends Error {
 	constructor(status: number, message: string) {
 		super(message);
 		this.status = status;
-	}
-}
-
-/** A spawn label is `key=value` (contract: `^[^=]+=.*$`). Shared by the edge command table and the control API. */
-export const SPAWN_LABEL_RE = /^[^=]+=.*$/;
-
-/**
- * Semantic label check for spawn and add-project: no NUL (cannot appear in a
- * shell command string; keeps it out of wire and state, the real injection
- * defense is quoting in the host launch), then every entry is k=v.
- */
-export function checkSpawnLabels(labels: readonly string[]): void {
-	if (labels.some((label) => label.includes("\0"))) {
-		throw new OperationError(400, "labels must not contain NUL");
-	}
-	if (!labels.every((label) => SPAWN_LABEL_RE.test(label))) {
-		throw new OperationError(400, "labels must be an array of k=v strings");
 	}
 }
 
@@ -190,23 +173,16 @@ export class FleetOperations {
 	 * (main checkout or linked worktree) is tagged with that projectId so the
 	 * roster groups it; an unregistered path stays untagged.
 	 */
-	async spawn(input: {
-		cwd: string;
-		template?: string;
-		name?: string;
-		labels?: string[];
-	}): Promise<RegistryEntry> {
+	async spawn(input: { cwd: string; template?: string; name?: string }): Promise<RegistryEntry> {
 		if (input.name !== undefined && input.name.includes("\0")) {
 			throw new OperationError(400, "invalid field: name must not contain NUL");
 		}
-		if (input.labels !== undefined) checkSpawnLabels(input.labels);
 		const resolved = await validateProjectPath(input.cwd);
 		if (resolved === null) throw new OperationError(400, `not a directory: ${input.cwd}`);
 		const entry = await this.#lifecycle.spawnHost({
 			cwd: resolved,
 			template: input.template,
 			name: input.name,
-			labels: input.labels,
 		});
 		const projectId = await projectIdForCwd(this.#registry.projects(), resolved);
 		if (projectId !== undefined) this.#registry.update(entry.daemonId, { projectId });
@@ -259,9 +235,7 @@ export class FleetOperations {
 		path: string;
 		start?: boolean;
 		template?: string;
-		labels?: string[];
 	}): Promise<AddProjectResult> {
-		if (input.labels !== undefined) checkSpawnLabels(input.labels);
 		let mainPath: string;
 		try {
 			mainPath = await resolveProjectRoot(input.path);
@@ -284,7 +258,6 @@ export class FleetOperations {
 			entry = await registerProjectMainEntry(this.#registry, this.#lifecycle, project, {
 				start: input.start ?? false,
 				template: input.template,
-				labels: input.labels,
 			});
 		} catch (err) {
 			throw new OperationError(

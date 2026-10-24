@@ -90,7 +90,6 @@ function makeRig(): Rig {
 				name: "host-session",
 				cwd: dir,
 				project: "host-provider",
-				labels: [],
 				status: "connecting",
 				registeredAt: 1,
 				...entry,

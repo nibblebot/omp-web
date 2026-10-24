@@ -130,7 +130,6 @@ function startFixture(): Fixture {
 				name: `proj-${registry.list().length}`,
 				cwd: "/srv/proj",
 				project: "proj",
-				labels: [],
 				status: "ready",
 				...overrides,
 			});

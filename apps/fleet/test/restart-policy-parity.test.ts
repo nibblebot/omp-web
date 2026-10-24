@@ -84,7 +84,7 @@ async function hostRig(runtime: Partial<CloneRuntimePolicy>): Promise<Rig> {
 		].join("\n") + "\n",
 	);
 	const config: FleetConfig = {
-		templates: { test: { command: `sh ${script} {fleet} {labels} {resume}` } },
+		templates: { test: { command: `sh ${script} {fleet} {resume}` } },
 		defaultTemplate: "test",
 		workspaceDir: "/tmp/fleet-test-ws",
 		bind: "127.0.0.1",

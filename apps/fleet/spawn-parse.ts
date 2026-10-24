@@ -4,7 +4,7 @@
  *
  * - Templates are trusted config; `{key}` substitution is plain text
  *   replacement with NO shell escaping. The substituted VALUES are not
- *   trusted (control-plane spawn takes name/labels from HTTP JSON), so any
+ *   trusted (control-plane spawn takes name from HTTP JSON), so any
  *   caller interpolating them into a shell command MUST shell-quote every
  *   value first (see shellQuote; workspace-lifecycle.ts #launchHost does this).
  * - Sessions dial the control plane themselves (callback pair); nothing here
@@ -14,12 +14,11 @@
 /**
  * `{key}` substitution for spawn templates. Unknown keys are left verbatim
  * (a missing var is a template bug the caller should surface, not silent
- * data loss); `{labels}` in vars expands to whatever the caller built
- * (empty string when there are no labels).
+ * data loss).
  *
  * This is PURE text substitution: values are inserted verbatim with no
  * shell escaping. The template itself is trusted config, but the values
- * substituted at runtime may be attacker-controlled (e.g. name/labels from
+ * substituted at runtime may be attacker-controlled (e.g. name from
  * POST /ctl/spawn), so a caller that interpolates the result into a shell
  * command MUST run every value through {@link shellQuote} first;
  * workspace-lifecycle.ts #launchHost does exactly that.

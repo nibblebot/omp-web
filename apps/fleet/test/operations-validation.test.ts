@@ -1,11 +1,11 @@
 /**
- * Shared semantic validation (jgc5): the label and clone-source rules that
+ * Shared semantic validation (jgc5): the clone-source rule that
  * the edge command table and the REST control API both call. Both transports
  * must reject the same inputs with the same message.
  */
 
 import { describe, expect, test } from "bun:test";
-import { OperationError, checkSpawnLabels, parseCloneSource } from "../operations";
+import { OperationError, parseCloneSource } from "../operations";
 
 function errorOf(run: () => unknown): OperationError {
 	try {
@@ -16,30 +16,6 @@ function errorOf(run: () => unknown): OperationError {
 	}
 	throw new Error("expected an OperationError");
 }
-
-describe("checkSpawnLabels", () => {
-	test("accepts k=v labels, including an empty value", () => {
-		expect(() => checkSpawnLabels(["role=build", "empty="])).not.toThrow();
-		expect(() => checkSpawnLabels([])).not.toThrow();
-	});
-
-	test("rejects a label without '=' as a 400 with the pinned message", () => {
-		const err = errorOf(() => checkSpawnLabels(["role=build", "bare"]));
-		expect(err.status).toBe(400);
-		expect(err.message).toBe("labels must be an array of k=v strings");
-	});
-
-	test("rejects a label with an empty key", () => {
-		const err = errorOf(() => checkSpawnLabels(["=value"]));
-		expect(err.message).toBe("labels must be an array of k=v strings");
-	});
-
-	test("rejects NUL in a label before the k=v check", () => {
-		const err = errorOf(() => checkSpawnLabels(["bad\0=value"]));
-		expect(err.status).toBe(400);
-		expect(err.message).toBe("labels must not contain NUL");
-	});
-});
 
 describe("parseCloneSource", () => {
 	test("returns the single non-empty member", () => {

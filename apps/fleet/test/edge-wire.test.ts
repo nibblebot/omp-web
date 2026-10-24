@@ -113,8 +113,8 @@ describe("fleet edge", () => {
 	let streamA = "";
 	let streamB = "";
 	let respawns = 0;
-	/** lifecycle.spawnHost invocations captured by the wrapper (labels passthrough tests). */
-	let spawnInits: Array<{ cwd: string; template?: string; labels?: string[] }> = [];
+	/** lifecycle.spawnHost invocations captured by the wrapper (spawn passthrough test). */
+	let spawnInits: Array<{ cwd: string; template?: string }> = [];
 	/** The entry the wrapper's last spawn returned. */
 	let spawnedByEdge: RegistryEntry | null = null;
 	// Aggregated daemons panel tests (second daemon + its registered id).
@@ -164,7 +164,6 @@ describe("fleet edge", () => {
 			name,
 			cwd: FAKE_CWD,
 			project: basename(FAKE_CWD),
-			labels: [],
 			template: "local",
 			status: "asleep",
 		});
@@ -267,7 +266,6 @@ describe("fleet edge", () => {
 			name: "spawned",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: [],
 			template: "local",
 			status: "asleep",
 		});
@@ -276,7 +274,6 @@ describe("fleet edge", () => {
 			name: "spawned2",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: [],
 			template: "local",
 			status: "asleep",
 		});
@@ -294,16 +291,15 @@ describe("fleet edge", () => {
 			await origRespawn(daemonId, opts);
 			await pairSpawned(daemonId);
 		};
-		// Capture lifecycle.spawnHost inits for the labels-passthrough tests, and
+		// Capture lifecycle.spawnHost inits for the spawn passthrough test, and
 		// pair each spawned child as its dial would.
 		const origSpawn = server.lifecycle.spawnHost.bind(server.lifecycle);
 		server.lifecycle.spawnHost = async (init: {
 			cwd: string;
 			template?: string;
 			name?: string;
-			labels?: string[];
 		}) => {
-			spawnInits.push({ cwd: init.cwd, template: init.template, labels: init.labels });
+			spawnInits.push({ cwd: init.cwd, template: init.template });
 			spawnedByEdge = await origSpawn(init);
 			await pairSpawned(spawnedByEdge.daemonId);
 			return spawnedByEdge;
@@ -372,7 +368,6 @@ describe("fleet edge", () => {
 			cwd: FAKE_CWD,
 			name: "added",
 			template: "local",
-			labels: [],
 		});
 		remoteEntry = server.registry.get(entry.daemonId)!;
 		remoteDaemon = daemonsById.get(entry.daemonId)!;
@@ -408,14 +403,14 @@ describe("fleet edge", () => {
 			}
 		}
 		// A registry mutation broadcasts a roster_delta to every edge stream.
-		server.registry.update(remoteEntry.daemonId, { labels: ["env=test"] });
+		server.registry.update(remoteEntry.daemonId, { branch: "env-test-branch" });
 		const second = await browser.waitForFrame(
-			(f) => f.type === "roster_delta" && JSON.stringify(f).includes("env=test"),
+			(f) => f.type === "roster_delta" && JSON.stringify(f).includes("env-test-branch"),
 			"roster broadcast",
 		);
 		if (second.type !== "roster_delta") throw new Error("expected roster_delta frame");
 		const changed = second.upserted.find((d) => d.daemonId === remoteEntry.daemonId);
-		expect(changed?.labels).toContain("env=test");
+		expect(changed?.branch).toBe("env-test-branch");
 		expect(JSON.stringify(second)).not.toContain(FAKE_TOKEN);
 	});
 
@@ -700,7 +695,6 @@ describe("fleet edge", () => {
 			name: "retry-clone",
 			cwd: join(tmp, "retry-clone-workspace"),
 			project: "fake-proj",
-			labels: [],
 			template: "local",
 			status: "asleep",
 			workspace: {
@@ -739,12 +733,12 @@ describe("fleet edge", () => {
 		expect(frame.error).toContain("not a directory");
 	});
 
-	test("spawn passes valid labels through to lifecycle.spawnHost", async () => {
+	test("spawn passes the request to lifecycle.spawnHost and ignores unknown fields", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		const before = spawnInits.length;
 		spawnedByEdge = null; // the wait below must observe the NEW spawn
-		await browser.send({ type: "spawn", cwd: FAKE_CWD, labels: ["env=prod", "tag=api"] });
+		await browser.send({ type: "spawn", cwd: FAKE_CWD, unknownField: ["x"] });
 		// the real host runtime runs underneath: wait until the child pairs ready.
 		await waitFor(
 			() =>
@@ -752,50 +746,11 @@ describe("fleet edge", () => {
 					? "ready"
 					: null,
 			4000,
-			"labeled spawn ready",
+			"spawn ready",
 		);
 		expect(spawnInits.length).toBe(before + 1);
 		const init = spawnInits[spawnInits.length - 1];
-		expect(init.cwd).toBe(FAKE_CWD);
-		expect(init.template).toBeUndefined();
-		expect(init.labels).toEqual(["env=prod", "tag=api"]);
-		// The labels landed on the registry entry (roster surfaces them).
-		expect(server.registry.get(spawnedByEdge!.daemonId)?.labels).toEqual(["env=prod", "tag=api"]);
-	});
-
-	test("spawn rejects labels that are not k=v strings with an error frame", async () => {
-		const browser = await openBrowser(server.port);
-		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		const before = spawnInits.length;
-		for (const bad of [["nope"], "env=prod", ["env=prod", 42], [""], ["=x"]]) {
-			await browser.send({ type: "spawn", cwd: FAKE_CWD, labels: bad });
-			const frame = await browser.waitForFrame(
-				(f) => f.type === "error" && f.error === "spawn: labels must be an array of k=v strings",
-				`labels error for ${JSON.stringify(bad)}`,
-			);
-			expect(frame.type).toBe("error");
-		}
-		// None of the bad sends may have reached the host runtime.
-		expect(spawnInits).toHaveLength(before);
-	});
-
-	test("spawn without labels still spawns (labels stays undefined)", async () => {
-		const browser = await openBrowser(server.port);
-		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		const before = spawnInits.length;
-		spawnedByEdge = null; // the wait below must observe the NEW spawn
-		await browser.send({ type: "spawn", cwd: FAKE_CWD });
-		await waitFor(
-			() =>
-				spawnedByEdge && server.registry.get(spawnedByEdge.daemonId)?.status === "ready"
-					? "ready"
-					: null,
-			4000,
-			"unlabeled spawn ready",
-		);
-		expect(spawnInits.length).toBe(before + 1);
-		const init = spawnInits[spawnInits.length - 1];
-		expect(init.labels).toBeUndefined();
+		expect(init).toEqual({ cwd: FAKE_CWD, template: undefined });
 	});
 
 	test("commands outside the browser allowlist are rejected with the edge error frame", async () => {
@@ -1069,7 +1024,6 @@ describe("fleet edge", () => {
 			name: "spawned-fresh",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: [],
 			template: "local",
 			status: "asleep",
 		});
@@ -1116,7 +1070,6 @@ describe("fleet edge", () => {
 			name: "spawned-double-wake",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: [],
 			template: "local",
 			status: "asleep",
 		});
@@ -1168,7 +1121,6 @@ describe("fleet edge", () => {
 			name: "spawned-connecting-picked",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: [],
 			template: "local",
 			status: "connecting",
 		});
@@ -1201,7 +1153,6 @@ describe("fleet edge", () => {
 			name: "spawned-stale-refusal",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: [],
 			template: "local",
 			status: "asleep",
 		});
@@ -1311,7 +1262,6 @@ describe("fleet edge", () => {
 			name: "spawned-superseded",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: [],
 			template: "local",
 			status: "asleep",
 		});
@@ -1430,7 +1380,6 @@ describe("fleet edge", () => {
 				name: "spawned-picked",
 				cwd: FAKE_CWD,
 				project: "fake-proj",
-				labels: [],
 				template: "local",
 				status: "asleep",
 				lastSessionFile: join(sessionDir, "last.jsonl"),
@@ -1494,7 +1443,6 @@ describe("fleet edge", () => {
 				name: "spawned-oldest",
 				cwd: FAKE_CWD,
 				project: "fake-proj",
-				labels: [],
 				template: "local",
 				status: "asleep",
 				lastSessionFile: files[11],
@@ -1604,7 +1552,6 @@ describe("fleet edge", () => {
 			cwd: OTHER_CWD,
 			name: "daemons-b",
 			template: "local",
-			labels: [],
 		});
 		daemonsBId = spawnedB.daemonId;
 		const daemonB = daemonsById.get(daemonsBId)!;
@@ -1835,7 +1782,6 @@ describe("fleet edge", () => {
 			name: "stop-me-2",
 			cwd: FAKE_CWD,
 			project: "fake-proj",
-			labels: [],
 			template: "local",
 			status: "ready",
 			pid: 4321,
@@ -1959,7 +1905,6 @@ describe("fleet edge", () => {
 			name: "rm-live",
 			cwd: realpathSync(repoDir),
 			project: project.name,
-			labels: [],
 			template: "local",
 			status: "ready",
 			projectId: project.projectId,
@@ -1968,7 +1913,6 @@ describe("fleet edge", () => {
 			name: "rm-clone",
 			cwd: join(tmp, "rm-clone-workspace"),
 			project: project.name,
-			labels: [],
 			template: "local",
 			status: "asleep",
 			projectId: project.projectId,
@@ -2031,7 +1975,6 @@ describe("fleet edge", () => {
 			name: "rm-row",
 			cwd: realpathSync(repoDir),
 			project: project.name,
-			labels: [],
 			template: "local",
 			status: "asleep",
 			projectId: project.projectId,
@@ -2230,7 +2173,6 @@ describe("edge pure helpers", () => {
 			name: "n",
 			cwd: "/x",
 			project: "x",
-			labels: ["a=b"],
 			status: "ready",
 			template: "local",
 			registeredAt: now - 200_000,
@@ -2280,7 +2222,6 @@ describe("edge pure helpers", () => {
 			name: "n",
 			cwd: "/srv/repos/acme-wt-feature",
 			project: "acme",
-			labels: [],
 			status: "ready",
 			sessionTitle: "Fix the fleet sidebar",
 			registeredAt: Date.now(),
@@ -2297,7 +2238,6 @@ describe("edge pure helpers", () => {
 			name: "n",
 			cwd: "/srv/repos/acme-wt-feature",
 			project: "acme",
-			labels: [],
 			status: "ready",
 			registeredAt: Date.now(),
 		};
@@ -2314,7 +2254,6 @@ describe("edge pure helpers", () => {
 			name: "n",
 			cwd: "/some/root/repo/feature",
 			project: "x",
-			labels: [],
 			status: "asleep",
 			registeredAt: Date.now(),
 		};
@@ -2367,7 +2306,6 @@ describe("pair-loss grace", () => {
 			cwd: FAKE_CWD,
 			name,
 			template: "local",
-			labels: [],
 		});
 		const { generation, credential } = enrollSessionCredential(
 			server.transport,

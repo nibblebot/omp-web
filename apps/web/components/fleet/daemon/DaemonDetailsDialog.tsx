@@ -1,4 +1,4 @@
-import { For, Show, type Component } from "solid-js";
+import { Show, type Component } from "solid-js";
 import type { DaemonEntry } from "#lib/wire/protocol";
 import { formatDaemonUptime } from "../../../fleet-ui/daemon-ui";
 import { DaemonLog } from "./DaemonLog";
@@ -7,7 +7,7 @@ import type { RosterEntry } from "../sidebar/WorkspaceRow";
 
 // ---------------------------------------------------------------------------
 // Daemon detail popover: roster facts (cwd/mode/template/uptime/pid/session/
-// labels/error) plus the live stderr tail. The log lifecycle (fetch/loading/
+// error) plus the live stderr tail. The log lifecycle (fetch/loading/
 // error/tail/refresh) is the roster's DaemonLog component; the raw
 // /ctl/sessions/{id}/stderr fetch now lives in state's fetchDaemonStderr.
 // ---------------------------------------------------------------------------
@@ -73,16 +73,6 @@ export const DaemonDetailsDialog: Component<{ daemon: DaemonEntry; onClose: () =
 							</span>
 						</div>
 					)}
-				</Show>
-				<Show when={d().labels.length > 0}>
-					<div class="daemon-detail-fact">
-						<span class="daemon-detail-label">labels</span>
-						<span class="daemon-detail-value daemon-detail-labels">
-							<For each={d().labels}>
-								{(l) => <span class="daemon-chip daemon-chip--label">{l}</span>}
-							</For>
-						</span>
-					</div>
 				</Show>
 				<Show when={d().error}>
 					{(err) => (

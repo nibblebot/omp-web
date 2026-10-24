@@ -21,18 +21,6 @@ describe("fillTemplate", () => {
 		expect(fillTemplate("a {known} b {unknown}", { known: "x" })).toBe("a x b {unknown}");
 	});
 
-	test("expands {labels} to empty string when there are none", () => {
-		const out = fillTemplate("omp-session {labels} --name n", { labels: "" });
-		expect(out).toBe("omp-session  --name n");
-	});
-
-	test("expands {labels} to repeated --label args when present", () => {
-		const out = fillTemplate("omp-session {labels} --name n", {
-			labels: "--label team=web --label tier=prod",
-		});
-		expect(out).toBe("omp-session --label team=web --label tier=prod --name n");
-	});
-
 	test("replaces every occurrence of the same key", () => {
 		expect(fillTemplate("{k}-{k}", { k: "v" })).toBe("v-v");
 	});
@@ -68,22 +56,18 @@ describe("shellQuote", () => {
 describe("launch line composition", () => {
 	test("shell-quoting before substitution keeps metacharacters in argv, not in the shell", () => {
 		// host-provider.ts launch does exactly this: every value substituted into
-		// the template (cwd/name/labels arrive from HTTP JSON) is shell-quoted
+		// the template (cwd/name arrive from HTTP JSON) is shell-quoted
 		// first, then the composed line goes to `sh -c`. Probe it against a real
 		// shell whose sink prints one argv entry per line: if any value escaped
 		// its quotes, the payload would word-split, expand, or execute.
 		const cwd = "/srv/repo with spaces/$(touch /tmp/omp-spawn-parse-pwned);rm -rf /";
-		const name = "na'me;`id` $HOME";
-		const label = "k=$(touch /tmp/pwned) && echo pwned";
-		const line = fillTemplate("printf '%s\\n' --cwd {cwd} --name {name} {labels}", {
+		const name = "na'me;`id` $HOME && echo $(touch /tmp/pwned)";
+		const line = fillTemplate("printf '%s\\n' --cwd {cwd} --name {name}", {
 			cwd: shellQuote(cwd),
 			name: shellQuote(name),
-			labels: `--label ${shellQuote(label)}`,
 		});
 		const out = Bun.spawnSync(["sh", "-c", line], { stdout: "pipe", stderr: "pipe" });
 		expect(out.exitCode, `sh failed: ${out.stderr.toString()}`).toBe(0);
-		expect(out.stdout.toString()).toBe(
-			["--cwd", cwd, "--name", name, "--label", label, ""].join("\n"),
-		);
+		expect(out.stdout.toString()).toBe(["--cwd", cwd, "--name", name, ""].join("\n"));
 	});
 });

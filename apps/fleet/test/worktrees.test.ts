@@ -76,7 +76,6 @@ function worktreeEntry(path: string, repoPath?: string): RegistryEntry {
 		name: basename(path),
 		cwd: path,
 		project: "repo",
-		labels: [],
 		status: "asleep",
 		registeredAt: 0,
 		workspace: {
@@ -737,7 +736,6 @@ describe("registerWorktreeEntry", () => {
 					cwd,
 					project: projectFor(repo).name,
 					worktreeOf: projectFor(repo).name,
-					labels: [],
 					status: "connecting",
 				}),
 		} as unknown as HostSessions;
@@ -783,7 +781,6 @@ describe("registerProjectMainEntry", () => {
 			cwd: repo,
 			project: repo.split("/").pop(),
 			projectId: "p7",
-			labels: [],
 			status: "asleep",
 		});
 		// NO worktreeOf: the main checkout is the repo itself and stays
@@ -795,7 +792,7 @@ describe("registerProjectMainEntry", () => {
 		expect(registry.get(entry.daemonId)).toBeDefined();
 	});
 
-	test("start:false stores template/labels on the asleep entry when given", async () => {
+	test("start:false stores the template on the asleep entry when given", async () => {
 		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
 		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
@@ -806,10 +803,9 @@ describe("registerProjectMainEntry", () => {
 				resolveTemplateName: (_cwd: string, explicit?: string) => explicit ?? "test",
 			} as unknown as HostSessions,
 			projectFor(repo, "p7"),
-			{ start: false, template: "local", labels: ["env=prod"] },
+			{ start: false, template: "local" },
 		);
 		expect(entry.template).toBe("local");
-		expect(entry.labels).toEqual(["env=prod"]);
 		expect(entry.status).toBe("asleep");
 	});
 
@@ -842,7 +838,6 @@ describe("registerProjectMainEntry", () => {
 			name: "pre",
 			cwd: repo,
 			project: "pre",
-			labels: [],
 			status: "asleep",
 		});
 		expect(existing.projectId).toBeUndefined();
@@ -863,7 +858,6 @@ describe("registerProjectMainEntry", () => {
 			name: "pre",
 			cwd: repo,
 			project: "pre",
-			labels: [],
 			status: "asleep",
 			projectId: "p7",
 		});
@@ -881,27 +875,19 @@ describe("registerProjectMainEntry", () => {
 		expect(registry.list()).toHaveLength(1);
 	});
 
-	test("start:true spawns the main checkout with template/labels and tags the fresh entry", async () => {
+	test("start:true spawns the main checkout with the template and tags the fresh entry", async () => {
 		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
 		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
 		await registry.load();
-		let spawnInit:
-			| { cwd: string; template?: string; labels?: string[]; reuse?: boolean }
-			| undefined;
+		let spawnInit: { cwd: string; template?: string; reuse?: boolean } | undefined;
 		const host = {
-			spawnHost: async (init: {
-				cwd: string;
-				template?: string;
-				labels?: string[];
-				reuse?: boolean;
-			}) => {
+			spawnHost: async (init: { cwd: string; template?: string; reuse?: boolean }) => {
 				spawnInit = init;
 				return registry.create({
 					name: basename(init.cwd),
 					cwd: init.cwd,
 					project: basename(init.cwd),
-					labels: init.labels ?? [],
 					...(init.template !== undefined ? { template: init.template } : {}),
 				});
 			},
@@ -909,12 +895,10 @@ describe("registerProjectMainEntry", () => {
 		const entry = await registerProjectMainEntry(registry, host, projectFor(repo, "p7"), {
 			start: true,
 			template: "local",
-			labels: ["env=prod"],
 		});
 		expect(spawnInit).toEqual({
 			cwd: repo,
 			template: "local",
-			labels: ["env=prod"],
 			reuse: true,
 		});
 		expect(entry.projectId).toBe("p7");

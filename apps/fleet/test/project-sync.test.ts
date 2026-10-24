@@ -57,8 +57,8 @@ async function waitFor<T>(probe: () => T | null, timeoutMs: number, label: strin
 function makeConfig(script: string, projectTemplates?: Record<string, string>): FleetConfig {
 	return {
 		templates: {
-			test: { command: `sh ${script} {fleet} {labels} {resume}` },
-			other: { command: `sh ${script} {fleet} {labels} {resume}` },
+			test: { command: `sh ${script} {fleet} {resume}` },
+			other: { command: `sh ${script} {fleet} {resume}` },
 		},
 		defaultTemplate: "test",
 		workspaceDir: "/tmp/fleet-test-ws",
@@ -176,14 +176,12 @@ describe("backfillWorktrees", () => {
 			name: "wt",
 			cwd: wt,
 			project: basename(wt),
-			labels: [],
 			template: "test",
 		});
 		const mainEntry = registry.create({
 			name: "m",
 			cwd: main,
 			project: "main-repo",
-			labels: [],
 			template: "test",
 		});
 
@@ -200,14 +198,12 @@ describe("git-state polling", () => {
 			name: "l",
 			cwd: "/srv/repos/acme",
 			project: "acme",
-			labels: [],
 			template: "test",
 		});
 		registry.create({
 			name: "e",
 			cwd: "",
 			project: "",
-			labels: [],
 		});
 		let onChange = 0;
 		registry.onChange = () => {
@@ -256,7 +252,6 @@ describe("git-state polling", () => {
 			name: "l",
 			cwd: "/srv/repos/acme",
 			project: "acme",
-			labels: [],
 			template: "test",
 		});
 		let onChange = 0;
@@ -341,7 +336,6 @@ describe("git-state polling", () => {
 			name: "l",
 			cwd: "/srv/repos/acme",
 			project: "acme",
-			labels: [],
 			template: "test",
 			lastSessionFile: sessionFile,
 		});
@@ -401,7 +395,6 @@ describe("git-state polling", () => {
 			name: "l",
 			cwd: "/srv/repos/acme",
 			project: "acme",
-			labels: [],
 			template: "test",
 			lastSessionFile: sessionFile,
 		});
@@ -459,7 +452,6 @@ describe("git-state polling", () => {
 			name: "l",
 			cwd: "/srv/repos/acme",
 			project: "acme",
-			labels: [],
 			template: "test",
 		});
 		let onChange = 0;
@@ -558,7 +550,6 @@ describe("git-state polling", () => {
 			name: "wt",
 			cwd: ghost,
 			project: "acme",
-			labels: [],
 			template: "test",
 			worktreeOf: "acme",
 			branch: "main",
@@ -607,7 +598,6 @@ describe("git-state polling", () => {
 			name: "wt",
 			cwd,
 			project: "acme",
-			labels: [],
 			template: "test",
 			worktreeOf: "acme",
 		});
@@ -658,7 +648,6 @@ describe("git-state polling", () => {
 			name: "main",
 			cwd: ghost,
 			project: "acme",
-			labels: [],
 			template: "test",
 		});
 		const { exec, calls } = fakeGitPhases([
@@ -771,7 +760,7 @@ describe("project sync", () => {
 	test("syncNow coalesces requests that arrive during a pass into one follow-up pass", async () => {
 		const dir = tempDir("omp-session-sync-coalesce-");
 		const { registry, sync } = await makeIdleHarness();
-		registry.create({ name: "r", cwd: dir, project: "r", labels: [], status: "ready" });
+		registry.create({ name: "r", cwd: dir, project: "r", status: "ready" });
 		const { exec, calls } = fakeGitPhases([[okStatus, noDiff]]);
 		sync.startGitStatePolling({ exec, intervalMs: 60_000 });
 		sync.syncNow();
@@ -787,7 +776,7 @@ describe("project sync", () => {
 	test("passes never overlap: git calls from one pass finish before the next pass starts", async () => {
 		const dir = tempDir("omp-session-sync-overlap-");
 		const { registry, sync } = await makeIdleHarness();
-		registry.create({ name: "o", cwd: dir, project: "o", labels: [], status: "ready" });
+		registry.create({ name: "o", cwd: dir, project: "o", status: "ready" });
 		let inFlight = 0;
 		let maxInFlight = 0;
 		const calls: string[] = [];
@@ -812,8 +801,8 @@ describe("project sync", () => {
 		const asleepDir = tempDir("omp-session-sync-asleep-");
 		const liveDir = tempDir("omp-session-sync-live-");
 		const { registry, sync } = await makeIdleHarness();
-		registry.create({ name: "a", cwd: asleepDir, project: "a", labels: [], status: "asleep" });
-		registry.create({ name: "l", cwd: liveDir, project: "l", labels: [], status: "ready" });
+		registry.create({ name: "a", cwd: asleepDir, project: "a", status: "asleep" });
+		registry.create({ name: "l", cwd: liveDir, project: "l", status: "ready" });
 		const { exec, calls } = fakeGitPhases([[okStatus, noDiff]]);
 		sync.startGitStatePolling({ exec, intervalMs: 60_000 });
 		await waitFor(() => (calls.length === 2 ? true : null), 5000, "first pass");
@@ -848,7 +837,6 @@ describe("git-state probe: failure isolation, clone checkout, bounded concurrenc
 			name: "t",
 			cwd: dir,
 			project: "t",
-			labels: [],
 			status: "ready",
 			lastSessionFile: sessionFile,
 		});
@@ -870,7 +858,6 @@ describe("git-state probe: failure isolation, clone checkout, bounded concurrenc
 			name: "c",
 			cwd: volume,
 			project: "c",
-			labels: [],
 			status: "ready",
 			workspace: { kind: "clone", projectId: "p1", desiredState: "running" },
 		});
@@ -896,7 +883,6 @@ describe("git-state probe: failure isolation, clone checkout, bounded concurrenc
 			name: "e",
 			cwd: volume,
 			project: "e",
-			labels: [],
 			status: "ready",
 			workspace: { kind: "clone", projectId: "p1", desiredState: "running" },
 		});
@@ -915,7 +901,7 @@ describe("git-state probe: failure isolation, clone checkout, bounded concurrenc
 		const { registry, sync } = await makeIdleHarness();
 		for (let i = 0; i < 6; i++) {
 			const dir = tempDir(`omp-session-sup-conc-${i}-`);
-			registry.create({ name: `c${i}`, cwd: dir, project: `c${i}`, labels: [], status: "ready" });
+			registry.create({ name: `c${i}`, cwd: dir, project: `c${i}`, status: "ready" });
 		}
 		let inFlight = 0;
 		let maxInFlight = 0;
@@ -939,7 +925,7 @@ describe("git-state probe: failure isolation, clone checkout, bounded concurrenc
 	test("a spawn-time probe and a sync pass of the same row share one run", async () => {
 		const dir = tempDir("omp-session-sup-singleflight-");
 		const { registry, sync } = await makeIdleHarness();
-		const row = registry.create({ name: "s", cwd: dir, project: "s", labels: [], status: "ready" });
+		const row = registry.create({ name: "s", cwd: dir, project: "s", status: "ready" });
 		const inFlightByCwd = new Map<string, number>();
 		let maxSameRow = 0;
 		const exec: GitRunner = async (_args, cwd) => {

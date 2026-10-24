@@ -321,7 +321,7 @@ function buildChild(name: string): Child {
 				// and nothing is written into the repo. Config and the default
 				// worktree directory stay SHARED; clone storage is state-private.
 				OMP_FLEET_STATE: join(DEV_FLEET_DIR, "fleet-state.json"),
-				OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "apps", "session", "index.ts")} --cwd {cwd} --port 0 {fleet} --name {name} --control-grace ${DEV_SESSION_CONTROL_GRACE} {labels} {resume}`,
+				OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "apps", "session", "index.ts")} --cwd {cwd} --port 0 {fleet} --name {name} --control-grace ${DEV_SESSION_CONTROL_GRACE} {resume}`,
 			},
 		};
 	}

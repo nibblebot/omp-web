@@ -85,7 +85,6 @@ describe("fleet log retention routes", () => {
 				name,
 				cwd: "",
 				project: "",
-				labels: [],
 				status: "asleep",
 			});
 			registry.updateWorkspace(entry.daemonId, { desiredState: "stopped" });
