@@ -2,8 +2,9 @@ import { For, Show, type Component } from "solid-js";
 import type { JobDetailDto, JobDto } from "#lib/wire/protocol";
 import { JOB_STATUS_LABEL, jobElapsedMs } from "../../store/jobs";
 import { formatDuration } from "../../subagents/format";
+import { JobWidget } from "./JobWidget";
 
-/** What the sheet shows about the selected job beyond its row: facts, the full command and the output tail. */
+/** What the sheet shows about the selected job beyond its row: its widget, facts, the full command and the output tail. */
 export const JobDetail: Component<{
 	job: JobDto;
 	/** Undefined while the inspection loads, null once the daemon no longer lists the job. */
@@ -49,6 +50,13 @@ export const JobDetail: Component<{
 				>
 					{(detail) => (
 						<>
+							<Show when={detail().widget}>
+								{(view) => (
+									<div class="job-detail-widget">
+										<JobWidget view={view()} />
+									</div>
+								)}
+							</Show>
 							<dl class="job-facts">
 								<For each={facts()}>
 									{([name, value]) => (

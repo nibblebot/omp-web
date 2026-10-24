@@ -7,7 +7,7 @@ import {
 	Show,
 	type Component,
 } from "solid-js";
-import type { WireWaitJob } from "#lib/wire/protocol";
+import type { WireJobWidgetView, WireWaitJob } from "#lib/wire/protocol";
 import {
 	jobElapsedMs,
 	jobTitle,
@@ -20,6 +20,7 @@ import {
 } from "../../../chat/wait-details";
 import type { ToolItem } from "../../../state";
 import { formatDuration } from "../../../subagents/format";
+import { JobWidget } from "../../jobs/JobWidget";
 import { CollapsibleOutput, ToolCardShell } from "./ToolCardShell";
 
 const TILE_GLYPH: Record<WireWaitJob["status"], string> = {
@@ -61,11 +62,20 @@ const CompletionRing: Component<{ percent: number }> = (props) => {
 
 /**
  * One watched job: status glyph (pulsing while its call is live), name, id,
- * a subagent's completion ring and clock, then what it is doing (a subagent's
- * stage in its own words, else the failure's exit code). The job's live widget
- * (charts and figures) would sit between the head and the note.
+ * a subagent's completion ring and clock, then its widget's primary block when
+ * the settled call kept a live one (as the SDK's tiles do: a basic or still
+ * authoring widget holds only rates and the last line), then what it is doing
+ * (a subagent's stage in its own words, else the failure's exit code).
  */
 const WaitJobTile: Component<{ job: WireWaitJob; view: WaitView; now: number }> = (props) => {
+	// The tile's note already says the stage a widget repeats.
+	const widget = (): WireJobWidgetView | undefined => {
+		const view = props.view.widgets.get(props.job.id);
+		if (view?.state !== "live") return undefined;
+		if (view.stage === undefined || view.stage !== note()) return view;
+		const { stage: _repeated, ...rest } = view;
+		return rest;
+	};
 	const title = () => jobTitle(props.job);
 	const note = () => {
 		const label =
@@ -100,6 +110,7 @@ const WaitJobTile: Component<{ job: WireWaitJob; view: WaitView; now: number }> 
 				</span>
 				<span class="visually-hidden">{props.job.status}</span>
 			</div>
+			<Show when={widget()}>{(view) => <JobWidget view={view()} compact />}</Show>
 			<Show when={failure() || note()}>
 				<div class="wait-tile-note">
 					<Show when={failure()}>
@@ -183,7 +194,6 @@ export const WaitToolCard: Component<{ item: ToolItem }> = (props) => {
 			>
 				{(current) => (
 					<>
-						{/* A job widget area (JobWidgetView blocks) would render inside each tile, under its head. */}
 						<ul class="wait-tiles">
 							<For each={current().jobs.slice(0, WAIT_TILES_SHOWN)}>
 								{(job) => <WaitJobTile job={job} view={current()} now={now()} />}

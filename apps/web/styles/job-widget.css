@@ -1,0 +1,320 @@
+/* --- Job widgets: the SDK's live view of a background job (wait card, jobs panel, bars, rows) ---
+   Tones come from data-tone on the drawn element; --job-tone is read by whatever the tone colors. */
+.job-widget,
+.job-widget-glance {
+	--job-tone: var(--accent);
+}
+.job-widget [data-tone="neutral"],
+.job-widget-glance [data-tone="neutral"] {
+	--job-tone: var(--text);
+}
+.job-widget [data-tone="accent"],
+.job-widget-glance [data-tone="accent"] {
+	--job-tone: var(--accent);
+}
+.job-widget [data-tone="info"],
+.job-widget-glance [data-tone="info"] {
+	--job-tone: color-mix(in srgb, var(--accent) 65%, var(--text));
+}
+.job-widget [data-tone="success"],
+.job-widget-glance [data-tone="success"] {
+	--job-tone: var(--success);
+}
+.job-widget [data-tone="warning"],
+.job-widget-glance [data-tone="warning"] {
+	--job-tone: var(--warning);
+}
+.job-widget [data-tone="error"],
+.job-widget-glance [data-tone="error"] {
+	--job-tone: var(--error);
+}
+.job-widget [data-tone="pending"],
+.job-widget-glance [data-tone="pending"] {
+	--job-tone: color-mix(in srgb, var(--warning) 60%, var(--muted));
+}
+.job-widget [data-tone="muted"],
+.job-widget-glance [data-tone="muted"] {
+	--job-tone: var(--muted);
+}
+.job-widget [data-tone="user"],
+.job-widget-glance [data-tone="user"] {
+	--job-tone: var(--purple);
+}
+
+.job-widget {
+	display: grid;
+	gap: var(--space-3);
+	min-width: 0;
+	font-size: var(--fs-sm);
+}
+.job-widget-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--space-1) var(--space-4);
+	min-width: 0;
+}
+.job-widget-title {
+	min-width: 0;
+	overflow: hidden;
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.job-widget-state {
+	flex: none;
+	padding: 0 var(--space-3);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-pill);
+	font-size: var(--fs-micro);
+	color: var(--muted-3);
+}
+.job-widget[data-state="authoring"] .job-widget-state {
+	border-color: var(--accent-border);
+	color: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+	.job-widget[data-state="authoring"] .job-widget-state {
+		animation: job-widget-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+	}
+}
+@keyframes job-widget-pulse {
+	50% {
+		opacity: 0.45;
+	}
+}
+.job-widget-stage {
+	flex: 1 1 8rem;
+	min-width: 0;
+	overflow: hidden;
+	color: var(--muted-2);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.job-widget-headline,
+.job-widget-glance-figure {
+	display: inline-flex;
+	align-items: baseline;
+	gap: var(--space-2);
+	flex: none;
+	margin-left: auto;
+	white-space: nowrap;
+}
+.job-widget-headline-label {
+	color: var(--muted);
+}
+.job-widget-headline-text {
+	font-family: var(--font-mono);
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+.job-widget-trend {
+	color: var(--job-tone);
+	font-variant-numeric: tabular-nums;
+}
+
+/* Spark: area and line over the series, dashed reference lines, the latest value and the marks at its side. */
+.job-widget-spark {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	min-width: 0;
+}
+.job-widget-chart {
+	flex: 1 1 0;
+	min-width: 4rem;
+	height: 2.25rem;
+	overflow: hidden;
+	border-bottom: 1px solid var(--border);
+}
+.job-widget-area {
+	fill: color-mix(in srgb, var(--job-tone) 18%, transparent);
+	stroke: none;
+}
+.job-widget-line {
+	fill: none;
+	stroke: var(--job-tone);
+	stroke-width: 1.5;
+	stroke-linejoin: round;
+	vector-effect: non-scaling-stroke;
+}
+.job-widget-mark {
+	stroke: var(--job-tone, var(--muted));
+	stroke-width: 1;
+	stroke-dasharray: 3 3;
+	vector-effect: non-scaling-stroke;
+}
+.job-widget .job-widget-mark:not([data-tone]),
+.job-widget .job-widget-mark-key:not([data-tone]) {
+	--job-tone: var(--muted);
+}
+.job-widget-hit {
+	fill: transparent;
+	pointer-events: all;
+}
+.job-widget-side {
+	flex: none;
+	display: grid;
+	max-width: 40%;
+	min-width: 0;
+}
+.job-widget-last {
+	font-family: var(--font-mono);
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+.job-widget-side-label,
+.job-widget-mark-key {
+	overflow: hidden;
+	color: var(--muted);
+	font-size: var(--fs-micro);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.job-widget-mark-swatch {
+	display: inline-block;
+	width: 0.75rem;
+	margin-right: var(--space-2);
+	vertical-align: middle;
+	border-top: 1px dashed var(--job-tone, var(--muted));
+}
+
+/* Bars and meter: a label column, the bar, its figure. */
+.job-widget-bars,
+.job-widget-grid {
+	display: grid;
+	gap: var(--space-2);
+	min-width: 0;
+}
+.job-widget-caption {
+	overflow: hidden;
+	color: var(--muted-2);
+	font-size: var(--fs-micro);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.job-widget-row {
+	display: grid;
+	grid-template-columns: minmax(0, 12ch) minmax(3rem, 1fr) auto;
+	align-items: center;
+	gap: var(--space-4);
+	min-width: 0;
+}
+.job-widget-row-label {
+	overflow: hidden;
+	color: var(--muted);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.job-widget-row-text {
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.job-widget-row-text[data-tone] {
+	color: var(--job-tone);
+}
+.job-widget-meter {
+	display: block;
+	width: 100%;
+	height: 0.5rem;
+}
+.job-widget-meter-track {
+	fill: var(--border-strong);
+}
+.job-widget-meter-fill {
+	fill: var(--job-tone, var(--accent));
+}
+
+/* Stat: labelled figures on one line. */
+.job-widget-stat {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1) var(--space-5);
+	min-width: 0;
+}
+.job-widget-stat-item {
+	white-space: nowrap;
+}
+.job-widget-stat-label {
+	color: var(--muted);
+}
+.job-widget-stat-text {
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+}
+.job-widget-stat-text[data-tone] {
+	color: var(--job-tone);
+}
+.job-widget-stat-item > .job-widget-trend {
+	margin-left: var(--space-2);
+}
+
+/* Grid: one cell per key, tinted by its state. */
+.job-widget-cells {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+.job-widget-cell {
+	max-width: 100%;
+	overflow: hidden;
+	padding: 0 var(--space-3);
+	border: 1px solid color-mix(in srgb, var(--job-tone) 55%, transparent);
+	border-radius: var(--r-pill);
+	background: color-mix(in srgb, var(--job-tone) 14%, transparent);
+	color: var(--job-tone);
+	font-size: var(--fs-micro);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.job-widget-text {
+	overflow: hidden;
+	color: var(--muted-2);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.job-widget-waiting {
+	color: var(--muted);
+	font-style: italic;
+}
+
+/* Glance: mini chart then the figure, on one line. */
+.job-widget-glance {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	min-width: 0;
+	font-size: var(--fs-sm);
+}
+.job-widget-mini {
+	flex: none;
+	width: 4rem;
+	height: 1.25rem;
+}
+.job-widget-glance .job-widget-glance-figure {
+	margin-left: 0;
+	min-width: 0;
+}
+.job-widget-glance-note {
+	min-width: 0;
+	overflow: hidden;
+	color: var(--muted);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.job-widget-glance[data-state="authoring"] .job-widget-glance-note {
+	color: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+	.job-widget-glance[data-state="authoring"] .job-widget-glance-note {
+		animation: job-widget-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+	}
+}
+
+/* Inside a wait tile: the widget sits under the head, bordered off from it. */
+.wait-tile > .job-widget {
+	padding-top: var(--space-3);
+	border-top: 1px solid var(--border);
+}

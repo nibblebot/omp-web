@@ -1,5 +1,6 @@
 import { AgentsPanel } from "../../../web/components/subagents/AgentsPanel";
 import { setAgentsFilter } from "../../../web/store/dock";
+import { agentEntry, benchEntry, seedJobWidgets } from "../../fixtures/job-bars";
 import { DockFrame, seedAgentsDock, seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
 
@@ -30,6 +31,16 @@ export default defineStory({
 			description: "The dock at its narrowest: all four row lines fit without horizontal overflow.",
 			seed: () => seedAgentsDock("single"),
 			render: () => dock(420),
+		},
+		{
+			name: "Running agent with a job widget",
+			description:
+				"The running FixtureBuilder agent's task job reports a widget (its job id is the agent id), so its row gains a glance line: the plan's headline figure. Rows of agents with no widget, and every settled row, stay as they were.",
+			seed: () => {
+				seedAgentsDock("single");
+				seedJobWidgets(0, [agentEntry(), { ...benchEntry(), id: "unrelated-job" }]);
+			},
+			render: () => dock(520),
 		},
 		{
 			name: "Single mode, empty session",

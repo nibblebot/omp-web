@@ -1395,7 +1395,14 @@ export type SessionScopedFrame =
 	// answer settled the dialog elsewhere (the host or a writable guest).
 	| { type: "ui_request_end"; id: string; answeredBy?: string }
 	// Collab host status for the attached session (start/stop/live/error/off).
-	| { type: "collab_status"; status: CollabWireStatus };
+	| { type: "collab_status"; status: CollabWireStatus }
+	// The session's running background jobs, live: how many run (a subagent's task job counts with the
+	// agents, not here) and the glances of their widgets (the SDK's job widgets), the whole current set as
+	// an absolute snapshot, so applying one is idempotent and a later frame replaces an earlier one. Each
+	// view is cut to glance size (`glanceJobWidgetView`, its stage to 80 characters); a job that settled drops out of
+	// the next frame, and `running: 0` with no entries clears. Sent at most once a second, only on change
+	// and only while a client is attached; ringed like `state`, and primed on attach while any job runs.
+	| { type: "job_widgets"; running: number; entries: WireJobWidgetEntry[] };
 
 // Server → browser. Session-scoped frames on a bare omp-session carry NO
 // sessionId (one live session; connect = attached). The fleet edge STAMPS the
@@ -1780,6 +1787,138 @@ export interface TodoBoardDto {
 /** Lifecycle of an async background job (SDK `AsyncJob.status`). */
 export type JobStatus = "running" | "completed" | "failed" | "cancelled";
 
+/** Where a job widget's view stands (pi-tui `JobWidgetState`). */
+export type WireJobWidgetState =
+	/** The cheap model is writing the spec; the view holds the model-free fallback meanwhile. */
+	| "authoring"
+	/** The spec's rules drive the view. */
+	| "live"
+	/** No spec: the last line and rates only. */
+	| "fallback";
+
+/** pi-wire `TspTone`: the color family of a figure, bar, mark or cell. */
+export type WireJobWidgetTone =
+	| "neutral"
+	| "accent"
+	| "info"
+	| "success"
+	| "warning"
+	| "error"
+	| "pending"
+	| "muted"
+	| "user";
+
+/** A formatted number with the direction it moved (`▲ 15%`); `success` is toward better, `error` away from it. */
+export interface WireJobWidgetTrend {
+	text: string;
+	tone: "success" | "error" | "muted";
+}
+
+/** The one number a glance takes away (`186 tok/s`). */
+export interface WireJobWidgetHeadline {
+	/** Formatted value with its unit. */
+	text: string;
+	/** What the value is, when the title does not say it (`decode`, `p50`). */
+	label?: string;
+	trend?: WireJobWidgetTrend;
+}
+
+/** A time series, newest right, with optional reference lines. */
+export interface WireJobWidgetSparkBlock {
+	kind: "spark";
+	label: string;
+	/** Oldest first, at most 48. */
+	values: number[];
+	/** Domain of the chart. */
+	min: number;
+	max: number;
+	/** Horizontal reference lines in value units (a target, a baseline). */
+	marks?: { value: number; label: string; tone?: WireJobWidgetTone }[];
+	/** Latest value, formatted (`186 tok/s`). */
+	last: string;
+	/** Per-point tooltip text, same length as `values`. */
+	tips?: string[];
+	tone?: WireJobWidgetTone;
+}
+
+/** One bar per key: a value against a common maximum. */
+export interface WireJobWidgetBarsBlock {
+	kind: "bars";
+	label: string;
+	items: { label: string; value: number; text: string; tone?: WireJobWidgetTone }[];
+	/** The value a full bar stands for. */
+	max: number;
+}
+
+/** Progress of a countable whole (`7/9 trials`). */
+export interface WireJobWidgetMeterBlock {
+	kind: "meter";
+	label: string;
+	/** 0 to 1. */
+	value: number;
+	text: string;
+	tone?: WireJobWidgetTone;
+}
+
+/** A few labelled numbers on one line (`p50 41 ms · p99 212 ms`). */
+export interface WireJobWidgetStatBlock {
+	kind: "stat";
+	items: {
+		label: string;
+		text: string;
+		tone?: WireJobWidgetTone;
+		trend?: WireJobWidgetTrend;
+	}[];
+}
+
+/** One cell per key with its latest state (CI jobs, shards, workers). */
+export interface WireJobWidgetGridBlock {
+	kind: "grid";
+	label: string;
+	items: { label: string; text: string; tone: WireJobWidgetTone }[];
+}
+
+/** The latest line a rule captured (the test now running, the current phase). */
+export interface WireJobWidgetTextBlock {
+	kind: "text";
+	text: string;
+}
+
+export type WireJobWidgetBlock =
+	| WireJobWidgetSparkBlock
+	| WireJobWidgetBarsBlock
+	| WireJobWidgetMeterBlock
+	| WireJobWidgetStatBlock
+	| WireJobWidgetGridBlock
+	| WireJobWidgetTextBlock;
+
+/**
+ * One job's widget as the SDK's `JobWidgetView` (pi-tui tools/job-widget.ts)
+ * crosses the wire: plain JSON, a structural mirror the browser draws without
+ * the SDK. Every text is one clean line (`parseJobWidgetView`, lib/wire/job-widget.ts,
+ * cuts and sanitizes a view before it ships).
+ */
+export interface WireJobWidgetView {
+	/** Short name of what is being watched (`verb-bench · 3 models`). */
+	title: string;
+	headline?: WireJobWidgetHeadline;
+	/** What the job is doing now: a subagent's stage, or the last line of output. */
+	stage?: string;
+	/** Top to bottom; the first block is the primary one, and compact views show only it. */
+	blocks: WireJobWidgetBlock[];
+	state: WireJobWidgetState;
+	/** Epoch ms of the newest data the view reflects. */
+	updatedAt: number;
+}
+
+/** A running job's widget, as a list of live widgets names its job (pi-tui `JobWidgetEntry`). */
+export interface WireJobWidgetEntry {
+	id: string;
+	/** SDK job kind ("bash", "task", "eval"). */
+	type: string;
+	view: WireJobWidgetView;
+}
+
 /** A subagent that owns listed jobs, or an ancestor linking one to the viewing agent. */
 export interface JobAgentDto {
 	id: string;
@@ -1821,9 +1960,16 @@ export interface JobTreePlaceDto {
 	parent: boolean;
 }
 
-/** A job row (a task job also heads its subagent), or a header for a subagent whose task job is no longer listed. */
+/**
+ * A job row (a task job also heads its subagent), or a header for a subagent whose task job is no longer listed.
+ * A running job's row carries its widget cut to a glance (`glanceJobWidgetView`): the headline, stage and state
+ * plus the primary spark and meter, so a poll stays small; `getJobDetail` carries the whole view.
+ */
 export type JobTreeRowDto = JobTreePlaceDto &
-	({ kind: "job"; job: JobDto; agent?: JobAgentDto } | { kind: "agent"; agent: JobAgentDto });
+	(
+		| { kind: "job"; job: JobDto; agent?: JobAgentDto; widget?: WireJobWidgetView }
+		| { kind: "agent"; agent: JobAgentDto }
+	);
 
 /**
  * `getJobTree`: the viewing agent's background jobs and every subagent's below
@@ -1836,7 +1982,7 @@ export interface JobTreeDto {
 	rows: JobTreeRowDto[];
 }
 
-/** `getJobDetail`: what the jobs sheet shows about one job beyond its row (SDK `AsyncJobInspection`, without the widget). */
+/** `getJobDetail`: what the jobs sheet shows about one job beyond its row (SDK `AsyncJobInspection`; its widget view rides whole, absent while `async.widgets` is off or the job has none). */
 export interface JobDetailDto {
 	/** Full command line of a job that runs a process. */
 	command?: string;
@@ -1851,6 +1997,8 @@ export interface JobDetailDto {
 	outputTruncated?: boolean;
 	/** Artifact holding the full output when the SDK cut it. */
 	artifactId?: string;
+	/** The job's whole widget (SDK `AsyncJobInspection.widget`). */
+	widget?: WireJobWidgetView;
 }
 
 /** `cancelJob` answer: false when the job settled before the cancel landed. */

@@ -148,6 +148,8 @@ const RING_DELTAS: Record<string, true> = {
 	// dialog whose ui_response would silently no-op.
 	ui_request_end: true,
 	collab_status: true,
+	// Absolute snapshot of the running jobs' widget glances: a resumed or late client gets the latest one.
+	job_widgets: true,
 	ready: true,
 	daemons: true,
 	error: true,

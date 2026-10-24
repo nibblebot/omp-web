@@ -42,6 +42,7 @@ import {
 } from "./client-delivery";
 import { cancelEntryUiRequests } from "./ui-context";
 import { handleSubagentLifecycle, handleSubagentProgress } from "./subagent-mirror";
+import { wireJobWidgets } from "./job-widgets";
 import { buildUiContext } from "./ui-context";
 import { watchSkills } from "./skill-methods";
 import { ensureWorkerReviver } from "./worker-lifecycle";
@@ -320,6 +321,8 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, (data) => {
 			handleSubagentProgress(entry, data as SubagentProgressPayload);
 		});
+		// Running background jobs' widget glances ride `job_widgets` frames while a client is attached.
+		wireJobWidgets(entry);
 	}
 
 	async function createSession(sessionCwd: string): Promise<SessionEntry> {

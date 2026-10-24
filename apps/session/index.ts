@@ -104,6 +104,7 @@ import {
 	wakeDrainWaiter,
 } from "./client-delivery";
 import { clearSubagents } from "./subagent-mirror";
+import { jobWidgetPrimeFrames } from "./job-widgets";
 import {
 	pendingUiRequestFrames,
 	rejectEntryUiRequests,
@@ -337,6 +338,8 @@ function primingFrames(
 		},
 		// A dialog still open must reach a client that attaches after it was sent.
 		...pendingUiRequestFrames(entry),
+		// The running background jobs' widget glances (nothing while none runs).
+		...jobWidgetPrimeFrames(entry),
 		// Current collab status, so a client attaching to a live room sees it immediately.
 		{
 			type: "collab_status",

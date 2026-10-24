@@ -1,4 +1,5 @@
 import { WaitToolCard } from "../../../../web/components/chat/tools/WaitToolCard";
+import { waitWidgetsTool } from "../../../fixtures/job-widgets";
 import {
 	waitIdleTool,
 	waitManyTool,
@@ -23,6 +24,12 @@ export default defineStory({
 			description:
 				"Done, failed (with its exit code) and cancelled jobs sort after the running ones; subagents with no job row list below the tiles.",
 			render: () => <WaitToolCard item={waitSettledTool} />,
+		},
+		{
+			name: "Settled, with job widgets",
+			description:
+				"Each job's widget under its tile, as the settled result kept it: a benchmark's primary spark, a subagent's meter, a failed run's grid. A basic widget and a job with none draw nothing extra.",
+			render: () => <WaitToolCard item={waitWidgetsTool} />,
 		},
 		{
 			name: "Many jobs, nine tiles",

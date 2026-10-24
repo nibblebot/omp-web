@@ -12,12 +12,14 @@
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AsyncJobSnapshotItem } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { buildJobTree } from "@oh-my-pi/pi-tui/overlays/job-tree";
+import { glanceJobWidgetView, parseJobWidgetView } from "#lib/wire/job-widget";
 import type {
 	JobCancelResultDto,
 	JobDetailDto,
 	JobDto,
 	JobTreeDto,
 	JobTreeRowDto,
+	WireJobWidgetView,
 } from "#lib/wire/protocol";
 import type { SessionEntry } from "./session-entry";
 
@@ -65,6 +67,19 @@ function jobDto(item: AsyncJobSnapshotItem, rootId: string | undefined): JobDto 
 	};
 }
 
+/**
+ * A running job's widget view as the wire carries it, cut to a glance for a row.
+ * Reading it marks the widget shown, which lets the `widget` model role write its
+ * spec. Absent when `async.widgets` is off (the registry's `enabled()` is read per
+ * call), the job has no widget inputs, or the job is gone.
+ */
+function rowWidget(session: AgentSession, id: string): WireJobWidgetView | undefined {
+	const manager = session.asyncJobManager;
+	const job = manager?.getJob(id);
+	const view = job ? parseJobWidgetView(manager?.widgets?.view(job)) : undefined;
+	return view ? glanceJobWidgetView(view) : undefined;
+}
+
 /** The session's job tree as wire rows; null when the session has no async job manager. */
 export function jobTree(session: AgentSession, limit = DEFAULT_RECENT_LIMIT): JobTreeDto | null {
 	const tree = session.getAsyncJobTree({ recentLimit: limit });
@@ -75,14 +90,15 @@ export function jobTree(session: AgentSession, limit = DEFAULT_RECENT_LIMIT): Jo
 		tree.rootId,
 	).map((row) => {
 		const place = { depth: row.depth, rails: [...row.rails], last: row.last, parent: row.parent };
-		return row.kind === "job"
-			? {
-					...place,
-					kind: "job",
-					job: jobDto(row.job, tree.rootId),
-					...(row.agent ? { agent: row.agent } : {}),
-				}
-			: { ...place, kind: "agent", agent: row.agent };
+		if (row.kind !== "job") return { ...place, kind: "agent", agent: row.agent };
+		const widget = row.job.status === "running" ? rowWidget(session, row.job.id) : undefined;
+		return {
+			...place,
+			kind: "job",
+			job: jobDto(row.job, tree.rootId),
+			...(row.agent ? { agent: row.agent } : {}),
+			...(widget ? { widget } : {}),
+		};
 	});
 	return { ...(tree.rootId === undefined ? {} : { rootId: tree.rootId }), rows };
 }
@@ -92,6 +108,7 @@ export function jobDetail(session: AgentSession, id: string): JobDetailDto | nul
 	const inspection = session.inspectAsyncJob(id);
 	if (!inspection) return null;
 	const { output } = inspection;
+	const widget = parseJobWidgetView(inspection.widget);
 	const truncated = output !== undefined && output.length > JOB_OUTPUT_TAIL_CHARS;
 	return {
 		...(inspection.command === undefined ? {} : { command: inspection.command }),
@@ -103,6 +120,7 @@ export function jobDetail(session: AgentSession, id: string): JobDetailDto | nul
 			: { output: truncated ? output.slice(-JOB_OUTPUT_TAIL_CHARS) : output }),
 		...(truncated ? { outputTruncated: true } : {}),
 		...(inspection.artifactId === undefined ? {} : { artifactId: inspection.artifactId }),
+		...(widget ? { widget } : {}),
 	};
 }
 

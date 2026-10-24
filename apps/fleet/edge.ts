@@ -295,6 +295,7 @@ const SESSION_SCOPED_FRAME_LIST = [
 	// request, so a daemon switch guard applies the same way.
 	"ui_request_end",
 	"collab_status",
+	"job_widgets",
 ] as const satisfies readonly SessionScopedFrame["type"][];
 // Exhaustiveness pin (finding #63): same addition-direction guard as the
 // browser-command allowlist; a session-scoped frame added to the union
@@ -357,6 +358,8 @@ const EDGE_RING_DELTAS: Record<string, true> = {
 	// a resume replays request → end (dismissed), never a stale dialog.
 	ui_request_end: true,
 	collab_status: true,
+	// Forwarded as the daemon's own wire text, never parsed beyond the type: an absolute snapshot, ringed like state.
+	job_widgets: true,
 	ready: true,
 	daemons: true,
 	error: true,

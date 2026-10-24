@@ -1,3 +1,4 @@
+import { glanceJobWidgetView } from "#lib/wire/job-widget";
 import type {
 	JobAgentDto,
 	JobDetailDto,
@@ -5,8 +6,10 @@ import type {
 	JobStatus,
 	JobTreeDto,
 	JobTreeRowDto,
+	WireJobWidgetView,
 } from "#lib/wire/protocol";
 import type { CallHandlers } from "../daemon";
+import { authoringWidget, benchWidget, blockWidgets, subagentWidget } from "./job-widgets";
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
@@ -14,7 +17,9 @@ const ROOT = "Main";
 
 /** One node of a hand-written tree: a job (a task job heads its subagent) or a subagent header, and what nests under it. */
 interface TreeNode {
-	row: { kind: "job"; job: JobDto; agent?: JobAgentDto } | { kind: "agent"; agent: JobAgentDto };
+	row:
+		| { kind: "job"; job: JobDto; agent?: JobAgentDto; widget?: WireJobWidgetView }
+		| { kind: "agent"; agent: JobAgentDto };
 	children?: TreeNode[];
 }
 
@@ -72,6 +77,22 @@ export const JOB_IDS = {
 	reviewDiff: "job_review_diff",
 } as const;
 
+/** The widget each job has: a spec-driven benchmark, a subagent's plan, a dev command still being authored, a finished run. */
+const WIDGET_BY_JOB: Readonly<Record<string, WireJobWidgetView>> = {
+	[JOB_IDS.devServer]: benchWidget,
+	[JOB_IDS.explore]: subagentWidget,
+	[JOB_IDS.nestedTests]: authoringWidget,
+	[JOB_IDS.tests]: blockWidgets.meter,
+};
+
+/** A running job's row carries its widget cut to a glance, as the daemon's `getJobTree` sends it. */
+const withRowWidgets = (rows: JobTreeRowDto[]): JobTreeRowDto[] =>
+	rows.map((row) => {
+		const view =
+			row.kind === "job" && row.job.status === "running" ? WIDGET_BY_JOB[row.job.id] : undefined;
+		return row.kind === "job" && view ? { ...row, widget: glanceJobWidgetView(view) } : row;
+	});
+
 /** The job tree of a session whose subagents run their own background jobs; times are relative to `now`. */
 export function jobTreeFixture(now = Date.now()): JobTreeDto {
 	const explorer: JobAgentDto = { id: "Explorer", parentId: ROOT };
@@ -80,131 +101,135 @@ export function jobTreeFixture(now = Date.now()): JobTreeDto {
 	const opts = { now };
 	return {
 		rootId: ROOT,
-		rows: flatten([
-			{
-				row: {
-					kind: "job",
-					agent: explorer,
-					job: job(JOB_IDS.explore, "task", "Explore the auth module", "running", 134 * SECOND, {
-						...opts,
-						agentId: "Explorer",
-					}),
-				},
-				children: [
-					{
-						row: {
-							kind: "job",
-							agent: reader,
-							job: job(JOB_IDS.reader, "task", "Read the session store", "running", 96 * SECOND, {
-								...opts,
-								ownerId: "Explorer",
-								agentId: "Explorer.Reader",
-							}),
-						},
-						children: [
-							{
-								row: {
-									kind: "job",
-									job: job(
-										JOB_IDS.readerSearch,
-										"bash",
-										"rg -n 'token' src/auth",
-										"completed",
-										80 * SECOND,
-										{ ...opts, ownerId: "Explorer.Reader", ranFor: 2 * SECOND },
-									),
-								},
-							},
-						],
+		rows: withRowWidgets(
+			flatten([
+				{
+					row: {
+						kind: "job",
+						agent: explorer,
+						job: job(JOB_IDS.explore, "task", "Explore the auth module", "running", 134 * SECOND, {
+							...opts,
+							agentId: "Explorer",
+						}),
 					},
-					{
-						row: {
-							kind: "job",
-							job: job(
-								JOB_IDS.nestedTests,
-								"bash",
-								"bun test apps/auth --watch",
-								"running",
-								112 * SECOND,
-								{ ...opts, ownerId: "Explorer" },
-							),
-						},
-					},
-				],
-			},
-			{
-				row: { kind: "agent", agent: reviewer },
-				children: [
-					{
-						row: {
-							kind: "job",
-							job: job(
-								JOB_IDS.reviewDiff,
-								"bash",
-								"git diff --stat main...HEAD",
-								"completed",
-								5 * MINUTE,
-								{
+					children: [
+						{
+							row: {
+								kind: "job",
+								agent: reader,
+								job: job(JOB_IDS.reader, "task", "Read the session store", "running", 96 * SECOND, {
 									...opts,
-									ownerId: "Reviewer",
-									ranFor: 900,
+									ownerId: "Explorer",
+									agentId: "Explorer.Reader",
+								}),
+							},
+							children: [
+								{
+									row: {
+										kind: "job",
+										job: job(
+											JOB_IDS.readerSearch,
+											"bash",
+											"rg -n 'token' src/auth",
+											"completed",
+											80 * SECOND,
+											{ ...opts, ownerId: "Explorer.Reader", ranFor: 2 * SECOND },
+										),
+									},
 								},
-							),
+							],
 						},
+						{
+							row: {
+								kind: "job",
+								job: job(
+									JOB_IDS.nestedTests,
+									"bash",
+									"bun test apps/auth --watch",
+									"running",
+									112 * SECOND,
+									{ ...opts, ownerId: "Explorer" },
+								),
+							},
+						},
+					],
+				},
+				{
+					row: { kind: "agent", agent: reviewer },
+					children: [
+						{
+							row: {
+								kind: "job",
+								job: job(
+									JOB_IDS.reviewDiff,
+									"bash",
+									"git diff --stat main...HEAD",
+									"completed",
+									5 * MINUTE,
+									{
+										...opts,
+										ownerId: "Reviewer",
+										ranFor: 900,
+									},
+								),
+							},
+						},
+					],
+				},
+				{
+					row: {
+						kind: "job",
+						job: job(
+							JOB_IDS.devServer,
+							"bash",
+							"bun run dev",
+							"running",
+							14 * MINUTE + 2 * SECOND,
+							opts,
+						),
 					},
-				],
-			},
-			{
-				row: {
-					kind: "job",
-					job: job(
-						JOB_IDS.devServer,
-						"bash",
-						"bun run dev",
-						"running",
-						14 * MINUTE + 2 * SECOND,
-						opts,
-					),
 				},
-			},
-			{
-				row: {
-					kind: "job",
-					job: job(JOB_IDS.tail, "bash", "tail -f /var/log/app.log", "cancelled", 9 * MINUTE, {
-						...opts,
-						ranFor: 7 * MINUTE,
-					}),
+				{
+					row: {
+						kind: "job",
+						job: job(JOB_IDS.tail, "bash", "tail -f /var/log/app.log", "cancelled", 9 * MINUTE, {
+							...opts,
+							ranFor: 7 * MINUTE,
+						}),
+					},
 				},
-			},
-			{
-				row: {
-					kind: "job",
-					job: job(JOB_IDS.tests, "bash", "bun test", "completed", 6 * MINUTE, {
-						...opts,
-						ranFor: 73 * SECOND,
-					}),
+				{
+					row: {
+						kind: "job",
+						job: job(JOB_IDS.tests, "bash", "bun test", "completed", 6 * MINUTE, {
+							...opts,
+							ranFor: 73 * SECOND,
+						}),
+					},
 				},
-			},
-			{
-				row: {
-					kind: "job",
-					job: job(JOB_IDS.build, "bash", "make build", "failed", 3 * MINUTE, {
-						...opts,
-						ranFor: 41 * SECOND,
-					}),
+				{
+					row: {
+						kind: "job",
+						job: job(JOB_IDS.build, "bash", "make build", "failed", 3 * MINUTE, {
+							...opts,
+							ranFor: 41 * SECOND,
+						}),
+					},
 				},
-			},
-		]),
+			]),
+		),
 	};
 }
 
 /** The inspection of each job of `jobTreeFixture`. */
 export const jobDetails: Readonly<Record<string, JobDetailDto>> = {
 	[JOB_IDS.explore]: {
+		widget: subagentWidget,
 		pids: [],
 		output: "Reading apps/auth/session.ts\nTracing token refresh through the middleware chain\n",
 	},
 	[JOB_IDS.nestedTests]: {
+		widget: authoringWidget,
 		command: "bun test apps/auth --watch",
 		cwd: "/home/joshua/Repos/omp-web",
 		pids: [48211, 48219],
@@ -212,6 +237,7 @@ export const jobDetails: Readonly<Record<string, JobDetailDto>> = {
 			"apps/auth/session.test.ts:\n(pass) refresh keeps the cookie [4.1ms]\n(pass) expired token is rejected [1.3ms]\n\nWatching for file changes...\n",
 	},
 	[JOB_IDS.devServer]: {
+		widget: benchWidget,
 		command: "bun run dev",
 		cwd: "/home/joshua/Repos/omp-web",
 		pids: [47902],
@@ -227,6 +253,7 @@ export const jobDetails: Readonly<Record<string, JobDetailDto>> = {
 			"cc -o build/app src/main.c\nsrc/main.c:41: error: 'token_t' undeclared\nmake: *** [build] Error 1\n",
 	},
 	[JOB_IDS.tests]: {
+		widget: blockWidgets.meter,
 		command: "bun test",
 		cwd: "/home/joshua/Repos/omp-web",
 		pids: [],

@@ -1,5 +1,12 @@
 import { SubagentTreeRow } from "../../../web/components/subagents/SubagentTreeRow";
 import { subagentRegionDomId } from "../../../web/subagents/tree";
+import {
+	agentEntry,
+	authoringEntry,
+	benchEntry,
+	seedJobWidgets,
+	WIDGET_AGENT_ID,
+} from "../../fixtures/job-bars";
 import { agentNode, seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
 
@@ -37,6 +44,59 @@ export default defineStory({
 				"With no tool in flight the live line shows the last finished tool and its intent, in the error color when that call failed.",
 			seed: () => seedAgentTree({ display: true }),
 			render: () => row("FixtureBuilder.AdvisorA", 1),
+		},
+		{
+			name: "Running with a job widget, headline and meter",
+			description:
+				"The agent's task job shares its id, so the daemon's job widget for it shows as a glance row under the metrics: the headline figure with the agent's own progress.",
+			seed: () => {
+				seedAgentTree({ display: true });
+				seedJobWidgets(0, [agentEntry()]);
+			},
+			render: () => row("FixtureBuilder", 0),
+		},
+		{
+			name: "Running with a job widget, mini chart",
+			description:
+				"A widget with a time series draws its newest values as a mini chart before the figure and its trend.",
+			seed: () => {
+				seedAgentTree({ display: true });
+				seedJobWidgets(0, [{ ...benchEntry(), id: WIDGET_AGENT_ID, type: "task" }]);
+			},
+			render: () => row("FixtureBuilder", 0),
+		},
+		{
+			name: "Running, widget being written",
+			description:
+				"No figure yet while the widget model writes its spec: the glance says so instead of staying blank.",
+			seed: () => {
+				seedAgentTree({ display: true });
+				seedJobWidgets(0, [{ ...authoringEntry(), id: WIDGET_AGENT_ID, type: "task" }]);
+			},
+			render: () => row("FixtureBuilder", 0),
+		},
+		{
+			name: "Narrow with a job widget, 420px",
+			description: "At the narrowest dock width the glance truncates inside its row.",
+			seed: () => {
+				seedAgentTree({ display: true });
+				seedJobWidgets(0, [{ ...benchEntry(), id: WIDGET_AGENT_ID, type: "task" }]);
+			},
+			render: () => (
+				<div style={{ width: "420px", border: "1px dashed var(--border)" }}>
+					{row("FixtureBuilder", 0)}
+				</div>
+			),
+		},
+		{
+			name: "Settled agent with a stale widget",
+			description:
+				"A finished agent shows no glance even when the store still holds an entry for its id.",
+			seed: () => {
+				seedAgentTree({ display: true });
+				seedJobWidgets(0, [{ ...agentEntry(), id: "FixtureBuilder.ChatMap" }]);
+			},
+			render: () => row("FixtureBuilder.ChatMap", 1),
 		},
 		{
 			name: "Live preview off",

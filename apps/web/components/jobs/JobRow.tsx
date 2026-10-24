@@ -1,9 +1,10 @@
-import { For, Match, Show, Switch, type Component, type JSX } from "solid-js";
+import { For, Match, Show, Switch, type Component } from "solid-js";
 import type { JobDto, JobTreePlaceDto, JobTreeRowDto } from "#lib/wire/protocol";
 import { JOB_STATUS_LABEL, jobElapsedMs } from "../../store/jobs";
 import { formatDuration } from "../../subagents/format";
 import { ConfirmButton } from "../ui/ConfirmButton";
 import { BotIcon, LayersIcon, TerminalIcon } from "../ui/icons";
+import { JobWidgetGlance } from "./JobWidget";
 
 /** Rails of the enclosing levels, then the branch into this row; nothing at the top level. */
 const TreeGuide: Component<{ place: JobTreePlaceDto }> = (props) => (
@@ -39,9 +40,10 @@ function metaOf(job: JobDto, runsAgent: string | undefined): string[] {
 
 /**
  * One row of the jobs tree: the rails of its place in the tree, its status,
- * what it runs, its owner, how long it has run, and Cancel on this session's
- * own running jobs. A subagent's job is watch-only, and a header row names a
- * subagent whose task job is no longer listed.
+ * what it runs, its owner, how long it has run, Cancel on this session's
+ * own running jobs, and under them a running job's widget glance (a mini chart
+ * and its headline figure). A subagent's job is watch-only, and a header row
+ * names a subagent whose task job is no longer listed.
  */
 export const JobRow: Component<{
 	row: JobTreeRowDto;
@@ -52,8 +54,6 @@ export const JobRow: Component<{
 	cancelling?: boolean;
 	onSelect?: (jobId: string) => void;
 	onCancel?: (jobId: string) => void;
-	/** Reserved under the label for the job's widget glance (the SDK's job widget), which this build does not render. */
-	glance?: JSX.Element;
 }> = (props) => {
 	const job = (): JobDto | undefined => {
 		const row = props.row;
@@ -81,6 +81,10 @@ export const JobRow: Component<{
 					const row = props.row;
 					return row.kind === "job" ? row.agent?.id : undefined;
 				};
+				const widget = () => {
+					const row = props.row;
+					return row.kind === "job" ? row.widget : undefined;
+				};
 				return (
 					<div
 						class="job-row"
@@ -105,6 +109,13 @@ export const JobRow: Component<{
 								<span class="job-duration">{formatDuration(elapsed() ?? 0)}</span>
 							</Show>
 							<span class="job-meta">{metaOf(current(), runsAgent()).join(" · ")}</span>
+							<Show when={widget()}>
+								{(view) => (
+									<span class="job-row-glance">
+										<JobWidgetGlance view={view()} />
+									</span>
+								)}
+							</Show>
 						</button>
 						<Show when={current().own && current().status === "running"}>
 							<ConfirmButton
@@ -115,9 +126,6 @@ export const JobRow: Component<{
 								disabled={props.cancelling === true}
 								onConfirm={() => props.onCancel?.(current().id)}
 							/>
-						</Show>
-						<Show when={props.glance !== undefined}>
-							<div class="job-row-glance">{props.glance}</div>
 						</Show>
 					</div>
 				);

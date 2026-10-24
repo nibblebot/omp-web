@@ -1,10 +1,12 @@
 import { Show, type Component } from "solid-js";
+import { jobWidgetView } from "../../store/job-widgets";
 import { settingValue } from "../../store/settings";
 import type { SubagentNode } from "../../store/subagents";
 import { formatCost, formatDuration, formatTokens } from "../../subagents/format";
 import { createLiveElapsed } from "../../subagents/elapsed";
 import { formatLiveLine } from "../../subagents/progress";
 import { subagentRowDomId } from "../../subagents/tree";
+import { JobWidgetGlance } from "../jobs/JobWidget";
 import { ChevronDownIcon, ChevronRightIcon } from "../ui/icons";
 import { SubagentActionsMenu } from "./SubagentActionsMenu";
 import { SubagentStatusChip } from "./SubagentStatusChip";
@@ -33,6 +35,8 @@ export const SubagentTreeRow: Component<{
 		}
 		return formatLiveLine(live) || undefined;
 	};
+	/** The widget glance of the agent's task job (its job id is the agent id), only while the agent runs and the daemon reports one. */
+	const glance = () => (props.node.status === "running" ? jobWidgetView(props.node.id) : undefined);
 	return (
 		<div class="subagent-tree-row" data-selected={props.selected === true ? "" : undefined}>
 			<Show when={hasChildren()}>
@@ -95,6 +99,13 @@ export const SubagentTreeRow: Component<{
 							title={text()}
 						>
 							{text()}
+						</span>
+					)}
+				</Show>
+				<Show when={glance()}>
+					{(view) => (
+						<span class="subagent-tree-glance">
+							<JobWidgetGlance view={view()} />
 						</span>
 					)}
 				</Show>

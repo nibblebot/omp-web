@@ -6,6 +6,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createAgentSession, Settings } from "@oh-my-pi/pi-coding-agent";
 import type { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
+import { JobWidgets } from "@oh-my-pi/pi-coding-agent/job-widgets/registry";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -222,5 +223,69 @@ describe("cancelJob", () => {
 
 	test("needs a job id", async () => {
 		await expect(methods.cancelJob(entry, [])).rejects.toThrow("job id required");
+	});
+});
+
+describe("job widgets", () => {
+	let enabled = true;
+	beforeEach(() => {
+		enabled = true;
+		// Without an author the registry derives the model-free view from the job's output: lines and the last line.
+		jobs.widgets = new JobWidgets({ enabled: () => enabled });
+	});
+
+	/** A job whose output a widget can read. */
+	const watched = (label: string, text: string, options: RegisterOptions = {}) =>
+		hold("bash", label, {
+			widgetInputs: {
+				sources: () => [
+					{
+						id: "out",
+						label: "output",
+						read: (from) => ({ start: 0, end: text.length, text: text.slice(from), open: true }),
+					},
+				],
+				brief: () => ({ kind: "bash" }),
+			},
+			...options,
+		});
+	const rowWidget = async (id: string) => {
+		const row = (await tree()).rows.find((r) => r.kind === "job" && r.job.id === id);
+		return row?.kind === "job" ? row.widget : undefined;
+	};
+
+	test("a running job's row carries its widget cut to a glance, and its detail the whole view", async () => {
+		const job = watched("serve", "one\ntwo\nthree\n");
+		const glance = await rowWidget(job.id);
+		expect(glance).toMatchObject({ title: "serve", stage: "three", state: "fallback" });
+		expect(glance?.blocks).toEqual([]);
+		const whole = (await detail(job.id))?.widget;
+		expect(whole).toMatchObject({ title: "serve", stage: "three", state: "fallback" });
+		expect(whole?.blocks[0]).toMatchObject({
+			kind: "stat",
+			items: [{ label: "lines", text: "3" }, {}],
+		});
+		await job.finish();
+	});
+
+	test("a settled job's row carries none, its detail its last view", async () => {
+		const job = watched("build", "compiling\ndone\n");
+		await job.finish();
+		expect(await rowWidget(job.id)).toBeUndefined();
+		expect((await detail(job.id))?.widget).toMatchObject({ title: "build", stage: "done" });
+	});
+
+	test("neither carries a widget while async.widgets is off, nor for a job with nothing to watch", async () => {
+		const job = watched("serve", "one\n");
+		const plain = hold("bash", "sleep 60");
+		expect(await rowWidget(plain.id)).toBeUndefined();
+		expect((await detail(plain.id))?.widget).toBeUndefined();
+		enabled = false;
+		expect(await rowWidget(job.id)).toBeUndefined();
+		expect(await detail(job.id)).not.toHaveProperty("widget");
+		enabled = true;
+		expect(await rowWidget(job.id)).toBeDefined();
+		await job.finish();
+		await plain.finish();
 	});
 });

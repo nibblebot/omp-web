@@ -201,6 +201,14 @@
 	white-space: nowrap;
 }
 
+/* A running agent's job widget glance: its own full-width row under the three above, which exist only while it shows. */
+.subagent-tree-glance {
+	display: flex;
+	grid-column: 1 / -1;
+	min-width: 0;
+	overflow: hidden;
+}
+
 .subagent-status-chip {
 	flex: none;
 	padding: 1px 7px;

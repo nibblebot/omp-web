@@ -73,15 +73,15 @@ export default defineStory({
 			render: () => <JobRow row={rowOf(JOB_IDS.devServer)} now={NOW} cancelling />,
 		},
 		{
-			name: "Widget glance slot",
+			name: "With a widget glance",
 			description:
-				"The slot under the label that a job widget glance will fill; the sheet leaves it empty today.",
+				"A running job's widget under its label: the mini chart and the headline figure with its trend, a subagent's progress, and the state in words while the widget is still being authored. Settled rows carry none.",
 			render: () => (
-				<JobRow
-					row={rowOf(JOB_IDS.devServer)}
-					now={NOW}
-					glance={<span class="tool-collapsed-note">widget glance goes here</span>}
-				/>
+				<>
+					<JobRow row={rowOf(JOB_IDS.devServer)} now={NOW} />
+					<JobRow row={rowOf(JOB_IDS.explore)} now={NOW} />
+					<JobRow row={rowOf(JOB_IDS.nestedTests)} now={NOW} />
+				</>
 			),
 		},
 	],

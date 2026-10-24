@@ -223,4 +223,31 @@ describe("wait tiles", () => {
 		expect(jobTitle(byId(task!.id))).toBe("Trace");
 		expect(jobTitle(byId(fail!.id))).toBe("test");
 	});
+
+	test("a settled call keeps each job's widget as a clean view; a running call carries none", () => {
+		const widget = {
+			title: "bench \u001b[1mrun\u001b[0m",
+			state: "live",
+			updatedAt: 5,
+			blocks: [{ kind: "meter", label: "trials", value: 3, text: "7/9", tone: "bogus" }],
+		};
+		const withWidgets = [{ ...jobs[0]!, widget }, { ...jobs[1]!, widget: "nope" }, jobs[2]!];
+		const view = waitViewOf(item("wait", { details: { op: "wait", jobs: withWidgets } }));
+		expect([...view!.widgets.keys()]).toEqual(["bg_done"]);
+		expect(view!.widgets.get("bg_done")).toEqual({
+			title: "bench run",
+			blocks: [{ kind: "meter", label: "trials", value: 1, text: "7/9" }],
+			state: "live",
+			updatedAt: 5,
+		});
+		const live = {
+			kind: "wait" as const,
+			jobs: [{ ...jobs[1]!, type: "task" as const, status: "running" as const }],
+			at: 1,
+		};
+		expect(
+			waitViewOf(item("wait", { status: "running", live, details: { jobs: withWidgets } }))?.widgets
+				.size,
+		).toBe(0);
+	});
 });

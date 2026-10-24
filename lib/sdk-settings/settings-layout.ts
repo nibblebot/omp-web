@@ -104,9 +104,6 @@ export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"spelling.typoDetection": true,
 	"spelling.autocorrect": true,
 	"stream.redactPatterns": true,
-	// No web job-widget renderer yet. To show it, move this line to ADVANCED_SETTING_PATHS (or delete it) and
-	// trace it live ("sdk.ts:2289", JobWidgets enabled() reads cfgAsyncWidgets per call) in live-setting-trace.ts.
-	"async.widgets": true,
 };
 
 /** Rows absent from the inventory, shown in the Advanced group of their tab (66). Gated rows keep their condition. */

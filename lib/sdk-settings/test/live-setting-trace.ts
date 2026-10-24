@@ -289,6 +289,7 @@ export const LIVE_SETTING_TRACE: Readonly<Record<string, string>> = {
 	"tools.speculativeExecution.maxInFlight": "speculation/host.ts:338",
 	"tools.maxTimeout": "sdk.ts:4515",
 	"async.enabled": "sdk.ts:4957",
+	"async.widgets": "sdk.ts:2289",
 	"tools.xdev": "sdk.ts:4957",
 	"tools.xdevDocs": "sdk.ts:4917",
 	"tools.xdevInlineDevices": "sdk.ts:4917",

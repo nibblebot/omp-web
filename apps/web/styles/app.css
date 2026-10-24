@@ -242,7 +242,7 @@
 }
 /* Edge gutter for the column's fixed rows. The transcript scroller pads
    itself (chat.css) so its scrollbar stays on the column edge. */
-.app-main > :is(.queue-bar, .compaction-bar, .background-bars, .session-bar, .prompt-box) {
+.app-main > :is(.queue-bar, .compaction-bar, .composer-bar, .background-bars, .session-bar, .prompt-box) {
 	padding-inline: var(--space-5);
 }
 /* No live attached session (daemon stopped/removed or never

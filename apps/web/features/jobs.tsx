@@ -1,3 +1,4 @@
+import { JobsBar } from "../components/jobs/JobsBar";
 import { JobsButton } from "../components/jobs/JobsButton";
 import { JobsSheet } from "../components/jobs/JobsSheet";
 import "./jobs.css";
@@ -8,5 +9,6 @@ export default {
 	modals: {
 		jobs: (props) => <JobsSheet onClose={props.onClose} />,
 	},
+	composerBars: [JobsBar],
 	settingsAction: JobsButton,
 } satisfies FeatureModule;

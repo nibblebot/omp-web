@@ -18,11 +18,23 @@ export default defineStory({
 	variants: [
 		{
 			name: "Running command",
-			description: "Facts, the full command, live pids and the output so far.",
+			description:
+				"The job's whole widget (every block of a spec-driven benchmark), then facts, the full command, live pids and the output so far.",
 			render: () => (
 				<JobDetail
 					job={jobOf(JOB_IDS.devServer)}
 					detail={jobDetails[JOB_IDS.devServer]}
+					now={NOW}
+				/>
+			),
+		},
+		{
+			name: "Widget still being authored",
+			description: "The basic widget shows while the model writes the spec.",
+			render: () => (
+				<JobDetail
+					job={jobOf(JOB_IDS.nestedTests)}
+					detail={jobDetails[JOB_IDS.nestedTests]}
 					now={NOW}
 				/>
 			),

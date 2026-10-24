@@ -183,12 +183,14 @@ function tryEncode(payload: unknown): PreEncodedPayload | undefined {
  * `daemons`, `ui_request`/`ui_request_end` (blocked deltas between states), and prompt-fanout
  * correlation (`call_result`, `error`, and `event` message_end/agent_end/abort),
  * plus `event` agent_start (activity: turn start, which publishes no state).
- * Streaming deltas carry nothing any of them reads, and dominate the bytes.
+ * Streaming deltas carry nothing any of them reads, and dominate the bytes; the
+ * jobs' widget snapshots (`job_widgets`, up to one a second) are for browsers alone.
  */
 function isUnmirroredToControl(frame: Record<string, unknown>): boolean {
 	switch (frame.type) {
 		case "bash_chunk":
 		case "python_chunk":
+		case "job_widgets":
 			return true;
 		case "event": {
 			const event = frame.event;

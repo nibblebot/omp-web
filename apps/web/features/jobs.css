@@ -136,7 +136,8 @@
 	grid-template-columns: auto minmax(0, 1fr) auto;
 	grid-template-areas:
 		"status label duration"
-		". meta meta";
+		". meta meta"
+		". glance glance";
 	align-items: center;
 	column-gap: var(--space-4);
 	row-gap: var(--space-1);
@@ -239,11 +240,10 @@
 	opacity: 0.5;
 	cursor: default;
 }
-/* Under the label: the job's widget glance, once a build renders widgets. */
+/* Under the meta line, inside the row button: a running job's widget glance. */
 .job-row-glance {
-	flex: 0 0 100%;
+	grid-area: glance;
 	min-width: 0;
-	padding: var(--space-1) var(--space-4) var(--space-3);
 }
 .job-row-agent {
 	padding: var(--space-3) var(--space-4);
@@ -307,6 +307,13 @@
 	letter-spacing: var(--ls-micro);
 	color: var(--muted-2);
 }
+.job-detail-widget {
+	min-width: 0;
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	background: var(--bg-deep);
+}
 .job-facts {
 	display: flex;
 	flex-direction: column;
@@ -350,4 +357,44 @@
 	font-size: var(--fs-sm);
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+}
+
+/* --- Composer jobs bar: the running count and the latest widget's glance, one button that opens the sheet --- */
+.jobs-bar {
+	display: flex;
+	min-width: 0;
+	padding-block: var(--space-3) var(--space-1);
+}
+.jobs-bar-open {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	min-width: 0;
+	max-width: 100%;
+	padding: var(--space-1) var(--space-4);
+	background: var(--panel);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-pill);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+.jobs-bar-open:hover {
+	background: var(--hover);
+}
+.jobs-bar-icon {
+	flex: none;
+	width: 14px;
+	height: 14px;
+	color: var(--accent);
+}
+.jobs-bar-count {
+	flex: none;
+	white-space: nowrap;
+}
+.jobs-bar-glance {
+	display: flex;
+	min-width: 0;
+	overflow: hidden;
 }

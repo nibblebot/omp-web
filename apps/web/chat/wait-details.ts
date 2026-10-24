@@ -2,10 +2,13 @@
  * What a `wait` tool call's `details` give its card: the watched jobs as tiles
  * (id, type, status, label, run time, a subagent's stage and completion
  * estimate), plus running agents with no job row. The SDK's `CoordinationDetails`
- * (pi-tui tools/wait.ts) also carries each job's live widget and result text; the
- * card does not read them. Pure, so the parsing stays testable without a DOM.
+ * (pi-tui tools/wait.ts) also carries each job's widget and result text. A
+ * settled call's tiles draw the widgets (`widgets`, cut by `parseJobWidgetView`);
+ * the live frame never carries them. The result text is not read. Pure, so the
+ * parsing stays testable without a DOM.
  */
-import type { WireWaitJob } from "#lib/wire/protocol";
+import { parseJobWidgetView } from "#lib/wire/job-widget";
+import type { WireJobWidgetView, WireWaitJob } from "#lib/wire/protocol";
 import { slimWaitJobs } from "#lib/wire/tool-live";
 import { isRecord } from "#lib/wire/type-guards";
 import type { ToolItem } from "../state";
@@ -27,6 +30,8 @@ export interface WaitAgent {
 
 /** The parsed card input of one wait call. */
 export interface WaitView {
+	/** Each settled job's widget view by job id (only jobs whose widget is a view); empty for a running call. */
+	widgets: ReadonlyMap<string, WireJobWidgetView>;
 	jobs: WireWaitJob[];
 	agents: WaitAgent[];
 	/** Whether the jobs are a running call's live frame (their clocks advance from `at`). */
@@ -69,6 +74,18 @@ function parseAgents(details: unknown): WaitAgent[] {
 	return agents;
 }
 
+/** Each job's widget of a settled call's details (`jobs[].widget`), by job id. */
+function parseWidgets(details: unknown): Map<string, WireJobWidgetView> {
+	const widgets = new Map<string, WireJobWidgetView>();
+	if (!isRecord(details) || !Array.isArray(details.jobs)) return widgets;
+	for (const raw of details.jobs) {
+		if (!isRecord(raw) || typeof raw.id !== "string" || raw.widget === undefined) continue;
+		const view = parseJobWidgetView(raw.widget);
+		if (view) widgets.set(raw.id, view);
+	}
+	return widgets;
+}
+
 /**
  * The jobs a wait card shows: a running call's live frame, else the settled
  * details. Undefined when the call lists no job and no agent (the card then
@@ -86,6 +103,7 @@ export function waitViewOf(item: ToolItem): WaitView | undefined {
 	if (jobs.length === 0 && agents.length === 0) return undefined;
 	return {
 		jobs: sortWaitJobs(jobs),
+		widgets: item.status === "running" ? new Map() : parseWidgets(item.details),
 		agents,
 		live: live?.kind === "wait",
 		...(live?.kind === "wait" ? { at: live.at } : {}),

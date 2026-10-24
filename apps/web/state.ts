@@ -108,6 +108,8 @@ import { createResumeState } from "./store/resume";
 import { createCompactionState } from "./store/compaction";
 import { createWorkersState, requestRosterRefresh } from "./store/subagents";
 import { applyLifecycleFrame, applyProgressFrame } from "./store/subagent-frames";
+import { applyJobWidgets, clearJobWidgets } from "./store/job-widgets";
+import { createJobWidgetsState } from "./store/slices/job-widgets";
 import {
 	createBrowserUiState,
 	endBrowserUiRequest,
@@ -431,6 +433,8 @@ export const [state, setState] = createStore({
 	availableCommands: [] as AvailableSlashCommand[],
 	stats: null as SessionStats | null,
 	subagents: new Map<string, SubagentInfo>(),
+	// The attached session's running background jobs and their widget glances (`job_widgets` frames); see store/job-widgets.ts.
+	jobWidgets: createJobWidgetsState(),
 	connected: false,
 	// True from page load until the first browser socket opens (or the
 	// startup grace in connect() runs out): the strip stays hidden meanwhile,
@@ -1185,6 +1189,7 @@ function resetSessionView(): void {
 		items: [],
 		live: { active: false, blocks: [], rev: 0 },
 		subagents: new Map<string, SubagentInfo>(),
+		jobWidgets: createJobWidgetsState(),
 		stats: null,
 		...createGoalState(),
 		retryInfo: null,
@@ -1377,6 +1382,8 @@ export function connect(): void {
 			});
 			// The subagent forest is pulled afresh on every attach below.
 			setState("subagentsLoaded", { mirror: false, roster: false });
+			// The attach priming re-sends the running jobs' widgets (nothing when none run): drop the last attachment's.
+			clearJobWidgets();
 			setState("sessionDownId", "");
 			clearUnread(frame.sessionId);
 			// Every attach re-primes history from scratch: drop any in-flight
@@ -1730,6 +1737,9 @@ export function connect(): void {
 				break;
 			case "collab_status":
 				setState("collabStatus", frame.status);
+				break;
+			case "job_widgets":
+				applyJobWidgets(frame);
 				break;
 			case "error":
 				// Finding #28: an error frame is a GLOBAL uncorrelated broadcast
