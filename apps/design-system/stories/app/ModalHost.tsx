@@ -5,12 +5,7 @@ import { openResumePicker } from "../../../web/store/resume";
 import { pushToast } from "../../../web/store/toasts";
 import { answerCalls } from "../../daemon";
 import { answerBtwHistory, btwAnswered } from "../../fixtures/dialogs";
-import {
-	browserUiRequests,
-	downloadManifest,
-	foreignSessionPreviews,
-	resumeListReply,
-} from "../../fixtures/overlays";
+import { browserUiRequests, downloadManifest, resumeListReply } from "../../fixtures/overlays";
 import { rosterDaemon, rosterFleetState } from "../../fixtures/roster";
 import { chartScreenshot } from "../../fixtures/shared";
 import { extensionCalls } from "../../fixtures/extensions";
@@ -78,12 +73,9 @@ export default defineStory({
 		{
 			name: "Resume picker",
 			description:
-				"openResumePicker(): ResumePicker resolves a session by id or path and offers Claude/Codex imports.",
+				'openResumePicker(): `state.modal` becomes "sessions" and SessionPicker lists the resumable sessions.',
 			seed: () => {
-				answerCalls({
-					resumeList: () => resumeListReply,
-					foreignList: () => ({ sessions: foreignSessionPreviews }),
-				});
+				answerCalls({ resumeList: () => resumeListReply });
 				openResumePicker();
 			},
 			render: () => <ModalHost />,

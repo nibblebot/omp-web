@@ -7,13 +7,32 @@ import { rosterSessions } from "../../../fixtures/roster";
 import { screenSessionSeed } from "../../../fixtures/screen";
 import { defineStory } from "../../../registry";
 
+/**
+ * The workspace's earlier sessions as the daemon lists them: one failed turn (status dot),
+ * one unnamed session titled by its first prompt, and one empty session the screen hides.
+ */
+const recentSessions = (): SessionListEntry[] => {
+	const [latest, middle, unnamed] = rosterSessions(Date.now());
+	if (!latest || !middle || !unnamed) return [];
+	return [
+		{ ...latest, status: "complete" },
+		{ ...middle, status: "error" },
+		{
+			...unnamed,
+			firstMessage: "Why does the sidebar flash when a worktree wakes up?",
+			status: "complete",
+		},
+		{ ...unnamed, id: "sess_empty0000", path: `${unnamed.path}.empty`, messageCount: 0 },
+	];
+};
+
 /** A loaded session with no messages, answering the workspace's session list with `sessions`. */
 const seedEmpty = (sessions: () => SessionListEntry[] | null, synced = true) => {
 	answerCommands({
 		list_daemon_sessions: (cmd) => {
 			const list = sessions();
 			if (cmd.type === "list_daemon_sessions" && list !== null) {
-				settleDaemonSessions(cmd.daemonId, list);
+				settleDaemonSessions(cmd.daemonId, list, cmd.limit);
 			}
 		},
 	});
@@ -45,7 +64,7 @@ export default defineStory({
 			name: "Recent sessions",
 			description:
 				"A fresh worktree session: project, branch and model, key hints, and the workspace's earlier sessions to resume.",
-			seed: () => seedEmpty(() => rosterSessions(Date.now())),
+			seed: () => seedEmpty(recentSessions),
 			render: frame,
 		},
 		{
@@ -64,7 +83,7 @@ export default defineStory({
 			name: "Waiting for the model",
 			description:
 				"Before the state frame lands the model label is withheld; the rest of the header shows.",
-			seed: () => seedEmpty(() => rosterSessions(Date.now()), false),
+			seed: () => seedEmpty(recentSessions, false),
 			render: frame,
 		},
 	],

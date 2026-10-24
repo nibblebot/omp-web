@@ -21,7 +21,7 @@ import {
 	type WorkspaceSourceChoice,
 } from "../../../prefs/workspace-creation";
 import { state } from "../../../state";
-import { switchToDaemon } from "../../../store/roster";
+import { startDaemonNewSession } from "../../../store/roster";
 import {
 	createClone,
 	createWorktree,
@@ -291,9 +291,10 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 		}
 		if (row.status === "ready") {
 			setPhase({ kind: "attaching", daemonId: p.daemonId });
-			// switchToDaemon never rejects: a failed attach lands in the transcript's
-			// failed panel (with Retry), so the popover closes either way.
-			void switchToDaemon(p.daemonId).then(() => props.onClose());
+			// A new worktree starts a fresh session once attached. startDaemonNewSession never
+			// rejects: a failed attach lands in the transcript's failed panel (with Retry), so
+			// the popover closes either way.
+			void startDaemonNewSession(p.daemonId).then(() => props.onClose());
 		}
 	});
 

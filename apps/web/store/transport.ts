@@ -533,20 +533,12 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 		clearTimeout(pendingAttach.timer);
 		pendingAttach.resolve(state.currentSessionId);
 	}
-	// Phase 5: an armed picker gate (a start:true onboarding sender ran but
-	// could not know the spawned daemon's id) is stamped with the REAL
-	// daemonId now that the attach fires; the attach_result handler matches
-	// against exactly this.
-	if (state.pendingSessionPicker !== null) setState("pendingSessionPicker", cmd.sessionId);
 	const id = cmd.id;
 	const timer =
 		DAEMON_TIMEOUT_MS > 0
 			? window.setTimeout(() => {
 					if (pendingAttach?.id === id) {
 						pendingAttach = null;
-						// The armed gate's attach failed; disarm it.
-						if (state.pendingSessionPicker === cmd.sessionId)
-							setState("pendingSessionPicker", null);
 						reject(new Error("attach timed out"));
 					}
 				}, DAEMON_TIMEOUT_MS)
@@ -557,8 +549,6 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 			clearTimeout(pendingAttach.timer);
 			pendingAttach = null;
 		}
-		// The armed gate's attach failed; disarm it.
-		if (state.pendingSessionPicker === cmd.sessionId) setState("pendingSessionPicker", null);
 		reject(err instanceof Error ? err : new Error(String(err)));
 	});
 	return promise;
@@ -673,25 +663,9 @@ export function settleAttachResult(frame: Extract<ServerFrame, { type: "attach_r
 	if (frame.ok && frame.sessionId !== undefined) {
 		pending.resolve(frame.sessionId);
 		pushDebug("info", "transport", `attach ok: ${frame.sessionId}`);
-		// Phase 5: the onboarding daemon's attach settled; ask for
-		// its sessions to decide new-vs-resume; the sessions answer
-		// clears the gate (the flag stays set until then).
-		if (state.pendingSessionPicker === frame.sessionId) {
-			void sendCommand({
-				type: "list_sessions",
-				id: crypto.randomUUID(),
-			} satisfies ClientCommand).catch(() => {});
-		} else if (state.pendingSessionPicker !== null) {
-			// An armed gate settled against a DIFFERENT daemon: the
-			// onboarding attach was superseded, so disarm before it can
-			// fire the picker for the wrong daemon.
-			setState("pendingSessionPicker", null);
-		}
 	} else {
 		pending.reject(new Error(frame.error ?? "attach failed"));
 		pushDebug("warn", "transport", `attach failed: ${frame.error ?? "unknown error"}`);
-		// Phase 5: the armed gate's attach failed; disarm it.
-		setState("pendingSessionPicker", null);
 	}
 }
 

@@ -56,3 +56,15 @@ export function openDaemonDetails(daemonId: string): void {
 export function closeDaemonDetails(): void {
 	setState("daemonDetailsId", null);
 }
+
+/** Worktree session list dialog for one roster daemon (ModalHost mounts it for `state.modal === "worktree-sessions"`). */
+export function openWorktreeSessions(daemonId: string): void {
+	setState({ modal: "worktree-sessions", worktreeSessionsId: daemonId });
+}
+
+export function closeWorktreeSessions(): void {
+	setState({
+		worktreeSessionsId: null,
+		...(state.modal === "worktree-sessions" && { modal: null }),
+	});
+}

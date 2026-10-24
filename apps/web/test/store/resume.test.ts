@@ -5,7 +5,7 @@
  *
  * - "All projects" is sent with every list request and persists in localStorage
  * - pins are server-owned: they survive a store reload because the next list
- *   answer carries them, and a toggle reorders pinned-first
+ *   answer carries them
  * - rename normalizes the title client-side and applies the daemon's saved one
  * - delete refuses locally before any call, routes attached vs other sessions
  *   to different methods, and keeps the row when the daemon refuses
@@ -27,7 +27,6 @@ import {
 	searchResume,
 	sessionRowsFromResume,
 	setResumeAllProjects,
-	togglePin,
 } from "../../store/resume";
 import { openAddProject } from "../../store/projects";
 import {
@@ -197,42 +196,6 @@ describe("pins", () => {
 			["a", false],
 			["b", true],
 		]);
-	});
-
-	test("toggling a pin sends the session id and moves the row to the top", async () => {
-		const loaded = searchResume("");
-		await answer("resumeList", {
-			candidates: [candidate("a"), candidate("b"), candidate("c")],
-			pinnedIds: [],
-			total: 3,
-		});
-		await loaded;
-
-		togglePin("c");
-		expect(calls("resumePinToggle").at(-1)?.args).toEqual([{ sessionId: "c" }]);
-		await answer("resumePinToggle", { pinned: true, pinnedIds: ["c"] });
-		expect(resumeCandidates().map((c) => [c.id, c.pinned])).toEqual([
-			["c", true],
-			["a", false],
-			["b", false],
-		]);
-		expect(resumePinnedIds()).toEqual(["c"]);
-
-		togglePin("c");
-		await answer("resumePinToggle", { pinned: false, pinnedIds: [] });
-		expect(resumeCandidates().find((c) => c.id === "c")?.pinned).toBe(false);
-		expect(resumePinnedIds()).toEqual([]);
-	});
-
-	test("a rejected pin toggle surfaces the server error and leaves the mirror unchanged", async () => {
-		const loaded = searchResume("");
-		await answer("resumeList", { candidates: [candidate("a")], total: 1 });
-		await loaded;
-
-		togglePin("a");
-		await answer("resumePinToggle", undefined, false, "resume pins file is read-only");
-		expect(resumeError()).toBe("resume pins file is read-only");
-		expect(resumeCandidates().map((c) => c.pinned)).toEqual([false]);
 	});
 });
 

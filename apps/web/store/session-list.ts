@@ -1,12 +1,12 @@
-import type { DaemonStatus } from "#lib/wire/protocol";
+import type { DaemonStatus, SessionListEntry } from "#lib/wire/protocol";
 import { displayTitle } from "../components/ui/title-icons";
 
 // ---------------------------------------------------------------------------
 // Pure session-list logic shared by the resume picker, the fleet sidebar's
-// older-session dropdown and (later) Analysis: row shape, Pinned / Today /
-// Earlier grouping, title and subtitle fallbacks, search matching and the
-// client-side delete guard. No store state is read here; callers pass `now`
-// and context explicitly so everything is deterministic.
+// worktree session lists and (later) Analysis: row shape, Pinned / Today /
+// Earlier grouping, title fallbacks, search matching and the client-side
+// delete guard. No store state is read here; callers pass `now` and context
+// explicitly so everything is deterministic.
 // ---------------------------------------------------------------------------
 
 /** Outcome of a session log, as the daemon reports it; anything else is `unknown`. */
@@ -147,7 +147,6 @@ const GROUP_LABELS: Record<SessionGroupKey, string> = {
 
 const NO_MESSAGES = "(no messages)";
 const TITLE_MAX = 80;
-const SUBTITLE_MAX = 140;
 
 /** Start of the local calendar day containing `nowMs`. */
 function startOfLocalDay(nowMs: number): number {
@@ -216,13 +215,39 @@ export function sessionDisplayTitle(row: SessionRow): string {
 	return `Untitled · ${time}`;
 }
 
-/** The first-prompt line shown under the title, unless the title already is that prompt. */
-export function sessionSubtitle(row: SessionRow): string | undefined {
-	const title = explicitTitle(row);
-	if (!title) return undefined;
-	const prompt = promptLine(row);
-	if (!prompt || prompt === title) return undefined;
-	return prompt.length > SUBTITLE_MAX ? `${prompt.slice(0, SUBTITLE_MAX - 1).trimEnd()}…` : prompt;
+/**
+ * What an expanded row shows: the latest conversation, else the first prompt; "" when it
+ * has neither, or when the first prompt is already shown whole as the row's title.
+ */
+export function sessionExpandText(row: SessionRow): string {
+	const recent = row.recentText?.trim();
+	if (recent) return recent;
+	const prompt = row.firstMessage?.trim();
+	if (!prompt || prompt === NO_MESSAGES) return "";
+	const titledByPrompt = !explicitTitle(row) && prompt === promptLine(row);
+	return titledByPrompt && prompt.length <= TITLE_MAX ? "" : prompt;
+}
+
+/** A fleet `SessionListEntry` (list_daemon_sessions / EmptyTranscript) as a SessionRow; no pin state. */
+export function sessionRowFromListEntry(
+	entry: SessionListEntry,
+	currentFile: string | undefined,
+): SessionRow {
+	const status = sessionStatus(entry.status);
+	return {
+		id: entry.id,
+		file: entry.path,
+		...(entry.name ? { title: entry.name } : {}),
+		...(entry.firstMessage ? { firstMessage: entry.firstMessage } : {}),
+		...(status !== undefined ? { status } : {}),
+		cwd: entry.cwd,
+		projectLabel: projectLabelFromCwd(entry.cwd),
+		modifiedMs: entry.modifiedAt,
+		messageCount: entry.messageCount,
+		pinned: false,
+		scope: "local",
+		current: entry.path === currentFile,
+	};
 }
 
 /** Short project name for a cwd: its last path segment. */

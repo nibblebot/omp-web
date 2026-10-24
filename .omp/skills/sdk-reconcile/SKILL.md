@@ -86,7 +86,7 @@ The first line lists the versions whose sections contain `### Breaking Changes`.
 Map them onto what the repo actually uses:
 
 - SDK import sites: grep `from "@oh-my-pi/` across `apps lib scripts e2e`. Only symbols imported here can break the build. Behavior changes can still reach any code path that calls into the SDK at runtime: sessions, settings, auth, stats, compaction, session listing.
-- Version-anchored source comments: grep for the literal `$FROM` (and older pins) in `apps lib scripts`. Comments such as `apps/session/resume-import-adapter.ts` ("revalidate on bump") and `apps/session/compaction-adapter.ts` describe specific SDK behavior. Re-check each claim against the new code in `node_modules/@oh-my-pi/*/src`, fix the code if the behavior moved, then update the version literal.
+- Version-anchored source comments: grep for the literal `$FROM` (and older pins) in `apps lib scripts`. Comments such as `apps/session/resume-adapter.ts` ("revalidate on bump") and `apps/session/compaction-adapter.ts` describe specific SDK behavior. Re-check each claim against the new code in `node_modules/@oh-my-pi/*/src`, fix the code if the behavior moved, then update the version literal.
 
 ## 5. Gate, cheapest first
 

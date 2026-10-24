@@ -845,14 +845,8 @@ export type WebMethodName =
 	| "getResumeCapabilities"
 	| "resumeResolve"
 	| "resumeList"
-	| "resumePinToggle"
 	| "resumeRename"
 	| "resumeDelete"
-	| "foreignList"
-	| "foreignPreview"
-	| "foreignImport"
-	| "foreignUploadStage"
-	| "foreignUploadCancel"
 	| "btwList"
 	| "btwSearch"
 	| "btwPage"
@@ -933,8 +927,6 @@ export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> =
 	getResumeCapabilities: true,
 	resumeResolve: true,
 	resumeList: true,
-	foreignList: true,
-	foreignPreview: true,
 	gitStatus: true,
 	gitFileDiff: true,
 	getToolSchemas: true,
@@ -1012,8 +1004,9 @@ export type ClientCommand =
 	| { type: "stop"; id: string; daemonId: string }
 	// Fleet edge only: list sessions in a daemon's worktree (fleet-edge handled,
 	// answered with a unicast `daemon_sessions` frame; a bare omp-session
-	// rejects it like the other fleet-only commands).
-	| { type: "list_daemon_sessions"; id: string; daemonId: string }
+	// rejects it like the other fleet-only commands). `limit` (integer) is the
+	// row count: omitted = DAEMON_SESSIONS_DEFAULT_LIMIT, clamped to 1..DAEMON_SESSIONS_MAX_LIMIT.
+	| { type: "list_daemon_sessions"; id: string; daemonId: string; limit?: number }
 	// Stop the daemon AND evict it from the roster (registry removal).
 	| { type: "remove"; id: string; daemonId: string }
 	// Register a project. `path` may be the main checkout, a linked worktree,
@@ -1317,8 +1310,10 @@ export type ServerFrame =
 	// Unicast answer to list_sessions.
 	| { type: "sessions"; sessions: SessionListEntry[] }
 	// Unicast answer to list_daemon_sessions (the fleet edge answers it directly;
-	// NOT ringed; lost answers are re-sent like projects).
-	| { type: "daemon_sessions"; daemonId: string; sessions: SessionListEntry[] }
+	// NOT ringed; lost answers are re-sent like projects). `limit` echoes the
+	// effective (clamped) row count so the client can route the answer to the
+	// request that asked for that size.
+	| { type: "daemon_sessions"; daemonId: string; limit: number; sessions: SessionListEntry[] }
 	// Unicast answer to list_files.
 	| { type: "files"; files: string[] }
 	// Unicast: OAuth URL to open (during a login call).
@@ -1514,6 +1509,16 @@ export type DaemonInfo = {
 export const DAEMON_KEY_SEP = "\u0000";
 export function daemonsKey(info: { projectDir: string; name: string }): string {
 	return `${info.projectDir}${DAEMON_KEY_SEP}${info.name}`;
+}
+
+/** `list_daemon_sessions` row count when the command carries no `limit`. */
+export const DAEMON_SESSIONS_DEFAULT_LIMIT = 10;
+/** Largest `list_daemon_sessions` row count; larger requests clamp to it. */
+export const DAEMON_SESSIONS_MAX_LIMIT = 200;
+/** The effective `list_daemon_sessions` row count for an optional requested `limit`. */
+export function daemonSessionsLimit(limit: number | undefined): number {
+	if (limit === undefined) return DAEMON_SESSIONS_DEFAULT_LIMIT;
+	return Math.min(DAEMON_SESSIONS_MAX_LIMIT, Math.max(1, limit));
 }
 
 export type SessionListEntry = {

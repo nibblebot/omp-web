@@ -1,6 +1,8 @@
+import { daemonSessionsLimit, type SessionListEntry } from "#lib/wire/protocol";
 import { markUnread, pruneUnread } from "../../web/fleet-ui/unread";
 import { setState, type state } from "../../web/state";
 import { settleAddProject } from "../../web/store/projects";
+import { settleDaemonSessions } from "../../web/store/roster";
 import { type CommandHandlers, answerCommands } from "../daemon";
 import { rosterFleetState, rosterProjects } from "./roster";
 import { rosterFsBrowse } from "./roster-routes";
@@ -46,4 +48,22 @@ export function seedRosterFleet(
 	answerCommands({ ...projectCommands, ...commands });
 	setState({ ...structuredClone(rosterFleetState), ...structuredClone(extra) });
 	markUnread("dmn_b001");
+}
+
+/**
+ * seedRosterFleet plus a `list_daemon_sessions` answer for any daemon: `sessions()`
+ * cut to the request's limit, as the fleet does (the worktree dialog asks for 200).
+ * `null` never answers, so the list stays loading.
+ */
+export function seedRosterSessions(
+	sessions: () => SessionListEntry[] | null,
+	extra: Partial<typeof state> = {},
+): void {
+	seedRosterFleet(extra, {
+		list_daemon_sessions: (cmd) => {
+			const list = sessions();
+			if (cmd.type !== "list_daemon_sessions" || list === null) return;
+			settleDaemonSessions(cmd.daemonId, list.slice(0, daemonSessionsLimit(cmd.limit)), cmd.limit);
+		},
+	});
 }

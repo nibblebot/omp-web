@@ -1,4 +1,4 @@
-import type { ClientCommand, SessionListEntry } from "#lib/wire/protocol";
+import { daemonSessionsLimit, type ClientCommand, type SessionListEntry } from "#lib/wire/protocol";
 import { SIDEBAR_KEY, SIDEBAR_TITLE_LINES_KEY, TX_SIDEBAR_KEY, setState, state } from "../state";
 import { startNewSession } from "./chat";
 import { spawnResume } from "./projects";
@@ -55,35 +55,60 @@ export function resetPendingSessionsFiles(): void {
 }
 
 /**
- * Per-daemon latest-wins waiters for the roster dropdown's
- * list_daemon_sessions (answer: unicast `daemon_sessions` frame). Keyed by
- * daemonId so N open dropdowns never clobber each other; a superseded
+ * Latest-wins waiters for list_daemon_sessions (answer: unicast
+ * `daemon_sessions` frame echoing the effective limit). Keyed by daemonId and
+ * effective limit so a 200-row dialog request never supersedes the
+ * default-limit empty-screen request for the same daemon; a superseded
  * request resolves empty.
  */
 const pendingDaemonSessions = new Map<string, (sessions: SessionListEntry[]) => void>();
 
-/** Settle the per-daemon list_daemon_sessions waiter (mux "daemon_sessions" frame). */
-export function settleDaemonSessions(daemonId: string, sessions: SessionListEntry[]): void {
-	const resolve = pendingDaemonSessions.get(daemonId);
+function daemonSessionsKey(daemonId: string, limit: number | undefined): string {
+	return `${daemonId}\u0000${daemonSessionsLimit(limit)}`;
+}
+
+/**
+ * Settle the list_daemon_sessions waiter for `daemonId` at `limit` (the
+ * answer frame's effective limit; omitted = the default size).
+ */
+export function settleDaemonSessions(
+	daemonId: string,
+	sessions: SessionListEntry[],
+	limit?: number,
+): void {
+	const key = daemonSessionsKey(daemonId, limit);
+	const resolve = pendingDaemonSessions.get(key);
 	if (resolve !== undefined) {
-		pendingDaemonSessions.delete(daemonId);
+		pendingDaemonSessions.delete(key);
 		resolve(sessions);
 	}
 }
 
-/** Fetch a daemon's last sessions for its roster dropdown (newest-first). */
-export function requestDaemonSessions(daemonId: string): Promise<SessionListEntry[]> {
+/**
+ * Fetch a daemon's last sessions, newest-first. `limit` omitted = the fleet
+ * default (10); the fleet clamps to 1..200.
+ */
+export function requestDaemonSessions(
+	daemonId: string,
+	limit?: number,
+): Promise<SessionListEntry[]> {
 	const { promise, resolve } = Promise.withResolvers<SessionListEntry[]>();
 	if (!isConnected()) {
 		resolve([]);
 		return promise;
 	}
-	pendingDaemonSessions.get(daemonId)?.([]); // supersede an older request
-	pendingDaemonSessions.set(daemonId, resolve);
-	sendCommand({ type: "list_daemon_sessions", id: crypto.randomUUID(), daemonId }).catch(() => {
+	const key = daemonSessionsKey(daemonId, limit);
+	pendingDaemonSessions.get(key)?.([]); // supersede an older same-size request
+	pendingDaemonSessions.set(key, resolve);
+	sendCommand({
+		type: "list_daemon_sessions",
+		id: crypto.randomUUID(),
+		daemonId,
+		...(limit !== undefined && { limit }),
+	}).catch(() => {
 		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
-		if (pendingDaemonSessions.get(daemonId) === resolve) {
-			pendingDaemonSessions.delete(daemonId);
+		if (pendingDaemonSessions.get(key) === resolve) {
+			pendingDaemonSessions.delete(key);
 			resolve([]);
 		}
 	});
@@ -175,7 +200,7 @@ export async function switchToDaemon(daemonId: string): Promise<void> {
 }
 
 /**
- * Resume a specific session of a daemon from the roster dropdown.
+ * Resume a specific session of a daemon from the worktree sessions dialog.
  *
  * Asleep daemons wake with spawn_resume carrying the chosen session file
  * (the edge validates it belongs to the worktree) and then attach, even when

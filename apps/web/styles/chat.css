@@ -662,45 +662,29 @@ pre {
 }
 .chat-transcript-empty-recent-list {
 	list-style: none;
-	margin: 0;
+	/* Compact rows pad their button by --space-2: pull them out so the text lines up with the title. */
+	margin: 0 calc(var(--space-2) * -1);
 	padding: 0;
 }
-.chat-transcript-empty-recent-item {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: var(--space-5);
-	width: calc(100% + var(--space-4) * 2);
-	padding: var(--space-3) var(--space-4);
-	margin-inline: calc(var(--space-4) * -1);
-	box-sizing: border-box;
+.chat-transcript-empty-recent-all {
+	margin: var(--space-3) 0 0;
+	padding: 0;
 	background: none;
 	border: none;
-	border-radius: var(--r-md);
-	color: var(--text);
+	color: var(--muted);
 	font: inherit;
-	font-size: var(--fs-md);
-	text-align: left;
-	cursor: pointer;
-	transition: background var(--dur-fast) var(--ease-out);
-}
-.chat-transcript-empty-recent-item:hover {
-	background: var(--hover);
-}
-.chat-transcript-empty-recent-item:focus-visible {
-	outline: var(--focus-ring);
-	outline-offset: -2px;
-}
-.chat-transcript-empty-recent-name {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.chat-transcript-empty-recent-age {
-	flex: none;
 	font-size: var(--fs-sm);
-	color: var(--muted-2);
+	cursor: pointer;
+	transition: color var(--dur-fast) var(--ease-out);
+}
+.chat-transcript-empty-recent-all:hover {
+	color: var(--text);
+	text-decoration: underline;
+}
+.chat-transcript-empty-recent-all:focus-visible {
+	outline: var(--focus-ring);
+	outline-offset: 2px;
+	border-radius: var(--r-sm);
 }
 
 /* --- Inline images, eval/lsp/hub/ask tool cards --- */

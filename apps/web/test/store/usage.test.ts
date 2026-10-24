@@ -68,8 +68,6 @@ beforeEach(() => {
 		providerProfiles: [],
 		fleetConfigPath: null,
 		worktreeDeleteInfo: {},
-		pendingSessionPicker: null,
-		sessionPickerGate: null,
 		newWorkspaceProjectId: null,
 		highlightProjectId: null,
 		deleteWorkspaceTarget: null,

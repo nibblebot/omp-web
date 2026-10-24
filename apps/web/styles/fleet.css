@@ -397,9 +397,9 @@
 	/* What the row paints over: the fade behind the revealed controls matches it. */
 	--row-bg: var(--bg-deep);
 	/* sidebar-row defaults to a pointer cursor; the whole row is a resume
-	   target and the chevron a separate dropdown trigger. */
+	   target and the chevron a separate dialog trigger. */
 	cursor: default;
-	/* Containing block for the row-anchored session dropdown and the ready rail. */
+	/* Containing block for the ready rail. */
 	position: relative;
 	/* Full sidebar width: bleed over the list's side padding with square ends.
 	   The left padding puts the branch text at --sidebar-row-indent. */
@@ -470,7 +470,7 @@
 	min-height: 0;
 	overflow: hidden;
 }
-/* Settled rows must not clip their dropdowns (kebab menu, session picker);
+/* Settled rows must not clip their dropdowns (the kebab menu);
    the clip lifts once the expand finishes. */
 .row-motion[data-motion="open"] > .row-motion-clip {
 	overflow: visible;
@@ -499,7 +499,7 @@
 	background: var(--muted-2);
 }
 /* Corner slot: the state signal and the "⋯" row-actions trigger stack in one
-   grid cell. At rest the signal shows; row hover/focus or an open menu/dropdown
+   grid cell. At rest the signal shows; row hover/focus or an open menu
    crossfades it to the trigger (rules after .sidebar-menu-btn below). Touch
    keeps both, the signal as a badge on the trigger (trailing touch block). */
 .daemon-row-corner {
@@ -796,7 +796,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 /* Roster rows: the corner trigger, session toggle and "+" fade in on row
    hover, keyboard focus (focus-visible on the row or inside it; a mouse
    click focuses the row but must not pin the controls once the pointer
-   leaves), or while the row's menu or dropdown is open, and the state signal
+   leaves), or while the row's menu is open, and the state signal
    fades out under the trigger. Touch overrides (trailing touch block).
    Scoped under .daemon-row to outrank the global button:not(:disabled)
    transition. */
@@ -834,36 +834,6 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	z-index: var(--z-autocomplete);
 	display: flex;
 	flex-direction: column;
-}
-/* Session dropdown (the roster row's last-10-sessions resume picker): a
-   wider panel anchored to the bottom of the whole row, styled like the kebab
-   menu but spanning the row width. The row is the containing block via
-   `position: relative` on .daemon-row (merged into the rule above). */
-.daemon-session-menu {
-	position: absolute;
-	top: calc(100% + var(--space-1));
-	left: var(--space-3);
-	right: var(--space-3);
-	max-width: 40rem;
-	padding: var(--space-1);
-	background: var(--panel-2);
-	border: 1px solid var(--border-strong);
-	border-radius: var(--r-md);
-	z-index: var(--z-autocomplete);
-	display: flex;
-	flex-direction: column;
-}
-.daemon-session-menu-hint {
-	font-size: var(--fs-micro);
-	color: var(--muted-2);
-	padding: var(--space-1) var(--space-3);
-	text-transform: uppercase;
-	letter-spacing: 0.04em;
-}
-.daemon-session-note {
-	font-size: var(--fs-sm);
-	color: var(--muted-2);
-	padding: var(--space-2) var(--space-3);
 }
 .sidebar-menu-item {
 	display: flex;
@@ -1054,12 +1024,8 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .daemon-session-chevron {
 	transition: transform var(--dur-move-fast) var(--ease-out);
 }
-.daemon-session-toggle[aria-expanded="true"] .daemon-session-chevron {
-	transform: rotate(180deg);
-}
 .daemon-session-toggle:hover,
 .daemon-session-toggle:focus-visible,
-.daemon-session-toggle[aria-expanded="true"],
 .daemon-session-new:hover,
 .daemon-session-new:focus-visible {
 	color: var(--text);

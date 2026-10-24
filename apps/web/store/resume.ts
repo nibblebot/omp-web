@@ -34,33 +34,6 @@ export interface ResumeCandidate {
 	scope: "local" | "global";
 }
 
-export interface ForeignSessionPreview {
-	source: "claude" | "codex";
-	sourceName: string;
-	id: string;
-	path: string;
-	cwd: string;
-	title?: string;
-	createdMs: number;
-	modifiedMs: number;
-	messageCount: number;
-	firstMessage?: string;
-	staged?: boolean;
-}
-
-export interface ImportedForeignSession {
-	sessionId: string;
-	sessionFile: string;
-	provenance: {
-		source: string;
-		sourceName: string;
-		sourceId: string;
-		sourcePath: string;
-		sourceCwd: string;
-		stagedUpload: boolean;
-	};
-}
-
 export type ResumeResolveOutcome =
 	| { kind: "unique"; session: ResumeCandidate }
 	| { kind: "ambiguous"; candidates: ResumeCandidate[] }
@@ -136,28 +109,6 @@ function normalizeCandidates(data: unknown, pinnedIds: ReadonlySet<string>): Res
 	return out;
 }
 
-function normalizeForeignPreview(value: unknown): ForeignSessionPreview | null {
-	const r = asRecord(value);
-	if (r === null) return null;
-	const source = asString(r.source);
-	if (source !== "claude" && source !== "codex") return null;
-	const id = asString(r.id);
-	if (!id) return null;
-	return {
-		source,
-		sourceName: asString(r.sourceName) ?? (source === "claude" ? "Claude" : "Codex"),
-		id,
-		path: asString(r.path) ?? "",
-		cwd: asString(r.cwd) ?? "",
-		...(asString(r.title) !== undefined ? { title: asString(r.title) } : {}),
-		createdMs: asNumber(r.createdMs) ?? 0,
-		modifiedMs: asNumber(r.modifiedMs) ?? 0,
-		messageCount: asNumber(r.messageCount) ?? 0,
-		...(asString(r.firstMessage) !== undefined ? { firstMessage: asString(r.firstMessage) } : {}),
-		...(asBoolean(r.staged) === true ? { staged: true as const } : {}),
-	};
-}
-
 // ---------------------------------------------------------------------------
 // Mirrors in the application's one Solid store.
 // ---------------------------------------------------------------------------
@@ -168,19 +119,12 @@ export interface ResumeState {
 	query: string;
 	total: number;
 	allProjects: boolean;
-	pickerOpen: boolean;
 	ambiguous: ResumeCandidate[] | null;
 	loading: boolean;
 	error: string | null;
 	notice: string | null;
 	capabilities: Record<string, boolean> | null;
 	unavailable: string | null;
-	importSource: "claude" | "codex";
-	importCandidates: ForeignSessionPreview[];
-	importPreview: ForeignSessionPreview | null;
-	importLoading: boolean;
-	importError: string | null;
-	importStagedId: string | null;
 }
 
 export function createResumeState(): ResumeState {
@@ -190,19 +134,12 @@ export function createResumeState(): ResumeState {
 		query: "",
 		total: 0,
 		allProjects: readAllProjects(),
-		pickerOpen: false,
 		ambiguous: null as ResumeCandidate[] | null,
 		loading: false,
 		error: null as string | null,
 		notice: null as string | null,
 		capabilities: null as Record<string, boolean> | null,
 		unavailable: null as string | null,
-		importSource: "claude" as "claude" | "codex",
-		importCandidates: [] as ForeignSessionPreview[],
-		importPreview: null as ForeignSessionPreview | null,
-		importLoading: false,
-		importError: null as string | null,
-		importStagedId: null as string | null,
 	};
 }
 
@@ -235,19 +172,12 @@ function resumeField<K extends keyof ResumeState>(
 const [resumeCandidates, setResumeCandidates] = resumeField("candidates");
 const [resumePinnedIds, setResumePinnedIds] = resumeField("pinnedIds");
 const [resumeQuery, setResumeQuery] = resumeField("query");
-const [resumePickerOpen, setResumePickerOpen] = resumeField("pickerOpen");
 const [resumeAmbiguous, setResumeAmbiguous] = resumeField("ambiguous");
 const [resumeLoading, setResumeLoading] = resumeField("loading");
 const [resumeError, setResumeError] = resumeField("error");
 const [resumeNotice, setResumeNotice] = resumeField("notice");
 const [resumeCapabilities, setResumeCapabilities] = resumeField("capabilities");
 const [resumeUnavailable, setResumeUnavailable] = resumeField("unavailable");
-const [importSource, setImportSource] = resumeField("importSource");
-const [importCandidates, setImportCandidates] = resumeField("importCandidates");
-const [importPreview, setImportPreview] = resumeField("importPreview");
-const [importLoading, setImportLoading] = resumeField("importLoading");
-const [importError, setImportError] = resumeField("importError");
-const [importStagedId, setImportStagedId] = resumeField("importStagedId");
 export const [resumeAllProjects, setAllProjectsFlag] = resumeField("allProjects");
 export const [resumeTotal, setResumeTotal] = resumeField("total");
 
@@ -255,26 +185,19 @@ export {
 	resumeCandidates,
 	resumePinnedIds,
 	resumeQuery,
-	resumePickerOpen,
 	resumeAmbiguous,
 	resumeLoading,
 	resumeError,
 	resumeNotice,
 	resumeCapabilities,
 	resumeUnavailable,
-	importSource,
-	importCandidates,
-	importPreview,
-	importLoading,
-	importError,
-	importStagedId,
 };
 
 // ---------------------------------------------------------------------------
 // Resume actions
 // ---------------------------------------------------------------------------
 
-/** Capability probe: the server's resume-surface verdicts (manage, pins, ...). */
+/** Capability probe: the server's resume-surface verdicts (resolve, manage). */
 export function refreshResumeCapabilities(): void {
 	void call("getResumeCapabilities")
 		.then((data) => {
@@ -284,7 +207,7 @@ export function refreshResumeCapabilities(): void {
 				return;
 			}
 			const caps: Record<string, boolean> = {};
-			for (const key of ["resolve", "pins", "foreignImport", "manage"] as const) {
+			for (const key of ["resolve", "manage"] as const) {
 				const entry = asRecord(root[key]);
 				const available = entry !== null ? asBoolean(entry.available) : asBoolean(root[key]);
 				caps[key] = available ?? false;
@@ -364,44 +287,7 @@ export function setResumeAllProjects(on: boolean): Promise<void> {
 
 /** Close the picker; in-flight work keeps its own deadline, never forced. */
 export function closeResumePicker(): void {
-	setResumePickerOpen(false);
 	setResumeAmbiguous(null);
-	setImportPreview(null);
-}
-
-/** Hand off to the by-id / import dialog (ResumePicker). Closes the list first. */
-export function openResumeImport(): void {
-	setState("sessionPickerGate", null);
-	setState("modal", null);
-	setResumePickerOpen(true);
-	refreshResumeCapabilities();
-}
-
-/**
- * Toggle one resume-list pin. UI copy MUST say "resume-list pin": it only
- * orders this picker — it is NOT a credential/account pin (automatic OAuth
- * session stickiness) and it does NOT change what the model keeps in
- * context. Unknown-method servers keep the local mirror unchanged.
- */
-export function togglePin(sessionId: string): void {
-	if (!sessionId) return;
-	void call("resumePinToggle", [{ sessionId }])
-		.then((data) => {
-			const root = asRecord(data);
-			const pinned = asBoolean(root?.pinned);
-			setResumePinnedIds(asIdList(root?.pinnedIds));
-			if (pinned !== undefined) {
-				setResumeCandidates((prev) => {
-					const next = prev.map((c) => (c.id === sessionId ? { ...c, pinned } : c));
-					const top = next.filter((c) => c.pinned);
-					const rest = next.filter((c) => !c.pinned);
-					return [...top, ...rest];
-				});
-			}
-		})
-		.catch((err) => {
-			setResumeError(errText(err));
-		});
 }
 
 /**
@@ -441,7 +327,6 @@ export function chooseResumeTarget(arg: string, daemonId?: string): Promise<Resu
 				}
 				if (candidates.length > 1) {
 					setResumeAmbiguous(candidates);
-					setResumePickerOpen(false);
 					setState("modal", "sessions");
 					return { kind: "ambiguous", candidates } as ResumeResolveOutcome;
 				}
@@ -487,7 +372,6 @@ export function chooseResumeTarget(arg: string, daemonId?: string): Promise<Resu
 				const raw = root !== null && Array.isArray(root.candidates) ? root.candidates : [];
 				const candidates = normalizeCandidates(raw, pinned);
 				setResumeAmbiguous(candidates);
-				setResumePickerOpen(false);
 				setState("modal", "sessions");
 				const outcome: ResumeResolveOutcome = { kind: "ambiguous", candidates };
 				return outcome;
@@ -564,195 +448,6 @@ async function resumeViaRoster(session: ResumeCandidate, daemonId?: string): Pro
 			throw new Error("Session switch cancelled by extension");
 	}
 	closeResumePicker();
-}
-
-// ---------------------------------------------------------------------------
-// Foreign import actions
-// ---------------------------------------------------------------------------
-
-/** Switch the source picker (Claude/Codex); clears preview/selection. */
-export function setForeignSource(source: "claude" | "codex"): void {
-	cancelImport();
-	setImportSource(source);
-	setImportPreview(null);
-	setImportError(null);
-	setImportStagedId(null);
-	void listForeign(source);
-}
-
-/**
- * List foreign sessions (metadata only; authorized fleet-host roots or the
- * default source location).
- */
-export function listForeign(source: "claude" | "codex", root?: string): Promise<void> {
-	setImportLoading(true);
-	setImportError(null);
-	return call("foreignList", [root !== undefined ? { source, root } : { source }])
-		.then((data) => {
-			const rootRec = asRecord(data);
-			const list = rootRec !== null && Array.isArray(rootRec.sessions) ? rootRec.sessions : data;
-			const out: ForeignSessionPreview[] = [];
-			if (Array.isArray(list)) {
-				for (const item of list) {
-					const p = normalizeForeignPreview(item);
-					if (p !== null) out.push(p);
-				}
-			}
-			setImportCandidates(out);
-		})
-		.catch((err) => {
-			setImportError(errText(err));
-		})
-		.finally(() => setImportLoading(false));
-}
-
-/**
- * Preview one foreign session: title/cwd/created/modified/messageCount/
- * firstMessage only — the full transcript is never loaded for preview.
- */
-export function previewImport(id: string): void {
-	if (!id) return;
-	setImportLoading(true);
-	setImportError(null);
-	const source = importSource();
-	void call("foreignPreview", [{ source, id }])
-		.then((data) => {
-			const preview = normalizeForeignPreview(data);
-			if (preview === null) {
-				setImportError("The server returned an unusable foreign preview.");
-				return;
-			}
-			setImportPreview(preview);
-			if (preview.staged === true) setImportStagedId(preview.id);
-		})
-		.catch((err) => setImportError(errText(err)))
-		.finally(() => setImportLoading(false));
-}
-
-/**
- * Confirm the import: a NEW native session identity + a provenance line
- * (`foreign_session_import`: source/sourceId/sourcePath/sourceCwd). The
- * foreign original is never mutated; the new session resumes via the
- * existing switchSession path.
- */
-export function confirmImport(
-	id: string,
-	fallbackCwd?: string,
-): Promise<ImportedForeignSession | null> {
-	if (!id) return Promise.resolve(null);
-	setImportLoading(true);
-	setImportError(null);
-	const source = importSource();
-	return call("foreignImport", [
-		fallbackCwd !== undefined ? { source, id, fallbackCwd } : { source, id },
-	])
-		.then(async (data) => {
-			const root = asRecord(data);
-			const sessionId = asString(root?.sessionId);
-			const sessionFile = asString(root?.sessionFile);
-			if (root === null || !sessionId || !sessionFile) {
-				setImportError("The server returned an unusable import result.");
-				return null;
-			}
-			const prov = asRecord(root.provenance);
-			const imported: ImportedForeignSession = {
-				sessionId,
-				sessionFile,
-				provenance: {
-					source: asString(prov?.source) ?? source,
-					sourceName: asString(prov?.sourceName) ?? source,
-					sourceId: asString(prov?.sourceId) ?? id,
-					sourcePath: asString(prov?.sourcePath) ?? "",
-					sourceCwd: asString(prov?.sourceCwd) ?? "",
-					stagedUpload: asBoolean(prov?.stagedUpload) ?? false,
-				},
-			};
-			setImportStagedId(null);
-			setImportPreview(null);
-			setResumeNotice(
-				`Imported ${imported.provenance.sourceName} session as a new native session (provenance recorded).`,
-			);
-			await resumeViaRoster({
-				id: sessionId,
-				sessionFile,
-				cwd: "",
-				modifiedMs: Date.now(),
-				messageCount: 0,
-				pinned: false,
-				scope: "local",
-			});
-			return imported;
-		})
-		.catch((err) => {
-			setImportError(errText(err));
-			return null;
-		})
-		.finally(() => setImportLoading(false));
-}
-
-/** Cancel the in-flight import preview/selection (staged uploads discarded). */
-export function cancelImport(): void {
-	const stagedId = importStagedId();
-	setImportPreview(null);
-	setImportStagedId(null);
-	setImportError(null);
-	if (stagedId === null) return;
-	void call("foreignUploadCancel", [{ stagedId }]).catch((err) => setImportError(errText(err)));
-}
-/** Report local upload read failures without allocating a rejected payload. */
-export function reportImportError(message: string): void {
-	setImportError(message);
-}
-
-/**
- * Stage user-selected file bytes for upload import. Client-side pre-checks
- * (extension/size) mirror the server's authoritative validation; the server
- * re-validates (JSONL-ish, 64 MiB cap, no executables/symlinks).
- */
-export function stageUpload(
-	source: "claude" | "codex",
-	filename: string,
-	bytes: Uint8Array,
-): Promise<void> {
-	cancelImport();
-	const ext = filename.toLowerCase().slice(filename.toLowerCase().lastIndexOf("."));
-	if (ext !== ".jsonl" && ext !== ".json") {
-		setImportError(`Unsupported upload type "${ext || "(none)"}": expected .jsonl or .json.`);
-		return Promise.resolve();
-	}
-	if (bytes.length > 64 * 1024 * 1024) {
-		setImportError("Uploaded file exceeds the 64 MiB import cap.");
-		return Promise.resolve();
-	}
-	setImportLoading(true);
-	setImportError(null);
-	let bytesBase64 = "";
-	try {
-		let binary = "";
-		const chunk = 0x8000;
-		for (let i = 0; i < bytes.length; i += chunk) {
-			binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-		}
-		bytesBase64 = btoa(binary);
-	} catch {
-		setImportLoading(false);
-		setImportError("Could not read the selected file.");
-		return Promise.resolve();
-	}
-	return call("foreignUploadStage", [{ source, filename, bytesBase64 }])
-		.then((data) => {
-			const root = asRecord(data);
-			const stagedId = asString(root?.stagedId);
-			const preview = normalizeForeignPreview(root?.preview);
-			if (!stagedId || preview === null) {
-				setImportError("The server returned an unusable staged upload.");
-				return;
-			}
-			setImportStagedId(stagedId);
-			setImportPreview({ ...preview, staged: true });
-		})
-		.catch((err) => setImportError(errText(err)))
-		.finally(() => setImportLoading(false));
 }
 
 /** Request a daemon's last sessions for disambiguating cross-daemon picks. */

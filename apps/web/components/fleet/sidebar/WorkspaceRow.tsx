@@ -1,19 +1,5 @@
-import {
-	createEffect,
-	createMemo,
-	createSignal,
-	For,
-	onCleanup,
-	onMount,
-	Show,
-	type Component,
-} from "solid-js";
-import type {
-	DaemonEntry,
-	DaemonStatus,
-	LifecycleStage,
-	SessionListEntry,
-} from "#lib/wire/protocol";
+import { createMemo, createSignal, For, Show, type Component } from "solid-js";
+import type { DaemonEntry, DaemonStatus, LifecycleStage } from "#lib/wire/protocol";
 import { rowActivity } from "../../../fleet-ui/row-activity";
 import type { SessionActivity } from "../../../fleet-ui/session-activity";
 import { canStartRow, sessionChip } from "../../../fleet-ui/workspace-status";
@@ -22,8 +8,7 @@ import {
 	closeDrawers,
 	fetchCloneIntoProject,
 	openDaemonDetails,
-	requestDaemonSessions,
-	resumeDaemonSession,
+	openWorktreeSessions,
 	sendWorktreeDeleteInfo,
 	setState,
 	spawnResume,
@@ -35,15 +20,14 @@ import {
 import { deletePendingIds } from "../../../store/projects";
 import { switchToDaemon } from "../../../store/roster";
 import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
-import { projectLabelFromCwd, sessionStatus, type SessionRow } from "../../../store/session-list";
 import { pushToast, reportError } from "../../../store/toasts";
 import { isUserStopped } from "../../../store/user-stopped";
-import { SessionPickerRow } from "../../sessions/SessionPickerRow";
 import { ConfirmButton } from "../../ui/ConfirmButton";
 import { KebabMenu } from "../../ui/KebabMenu";
 import { useClickableRow } from "../../ui/PickerRow";
 import { displayTitle } from "../../ui/title-icons";
 import { RowSignal } from "./RowSignal";
+import { activatingIds, beginActivating, endActivating } from "../../../store/worktree-sessions";
 import {
 	ArrowDownIcon,
 	ChevronDownIcon,
@@ -139,26 +123,6 @@ const LIFECYCLE_LABEL: Record<NonNullable<RosterEntry["lifecycleStage"]>, string
  *  (ProjectGroups) on `project:<id>`. */
 export const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
 
-/** Which row's session dropdown (the last-10-sessions resume picker) is
- *  open, if any. Module-level for the same one-open-total semantics as
- *  menuOpenId: opening one row's dropdown closes any other. */
-export const [sessionsOpenId, setSessionsOpenId] = createSignal<string | null>(null);
-
-/** DaemonIds with a wake-attach in flight (asleep-row click → attach
- *  settles). Module-level so it survives a row unmounting mid-wake (the row
- *  leaving the roster, or a reconnect resetting the sidebar); per-row
- *  component signals would not survive that. */
-const [activatingIds, setActivatingIds] = createSignal<ReadonlySet<string>>(new Set());
-
-/** Clear a row's activating mark once its wake/attach/new-session settles. */
-function endActivating(id: string): void {
-	setActivatingIds((prev) => {
-		const next = new Set(prev);
-		next.delete(id);
-		return next;
-	});
-}
-
 export const WorkspaceRow: Component<{
 	daemon: DaemonEntry;
 	/** Rendered inside a registered-project group (ProjectGroups ProjectGroup):
@@ -183,31 +147,8 @@ export const WorkspaceRow: Component<{
 	/** The delete was submitted; the row dims now and collapses when the roster drops it. */
 	const deleting = createMemo(() => deletePendingIds().has(d().daemonId));
 	const menuOpen = createMemo(() => menuOpenId() === d().daemonId);
-	/** Whether THIS row's session dropdown is open (module-level open id). */
-	const sessionsOpen = createMemo(() => sessionsOpenId() === d().daemonId);
 	/** The session-title line text: the last session's title, absent when it has none. */
 	const sessionTitleText = createMemo(() => displayTitle(d().sessionTitle));
-	/** Row ref anchors the dropdown's outside-pointerdown dismissal. */
-	let rowRef!: HTMLDivElement;
-	// Dismiss the dropdown on outside pointerdown or Escape (KebabMenu's
-	// dismissal pattern, anchored to the whole row so clicks inside the
-	// dropdown stay open).
-	createEffect(() => {
-		if (!sessionsOpen()) return;
-		const close = () => setSessionsOpenId(null);
-		const onPointerDown = (e: PointerEvent) => {
-			if (!(e.target instanceof Element) || !rowRef.contains(e.target)) close();
-		};
-		const onKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape") close();
-		};
-		document.addEventListener("pointerdown", onPointerDown);
-		document.addEventListener("keydown", onKeyDown);
-		onCleanup(() => {
-			document.removeEventListener("pointerdown", onPointerDown);
-			document.removeEventListener("keydown", onKeyDown);
-		});
-	});
 
 	// Worktree sessions belong to a main checkout and read as branches, not
 	// dirs. The branch (or name fallback) becomes the title and the project
@@ -310,7 +251,7 @@ export const WorkspaceRow: Component<{
 	/** Start a row's session process, then attach so the pane follows it.
 	 *  The row pulses until the attach settles. */
 	const activateRow = (id: string, wake: () => Promise<boolean>) => {
-		setActivatingIds((prev) => new Set(prev).add(id));
+		beginActivating(id);
 		// The attach is posted only once the wake command is acked (see wakeAndAttach).
 		wakeAndAttach(id, wake())
 			.catch(reportError)
@@ -322,17 +263,13 @@ export const WorkspaceRow: Component<{
 	// process attaches; a stopped (asleep) one wakes then attaches (switchToDaemon
 	// covers both, and owns the transcript phase). The whole card is the resume
 	// target, leaving no dead space. The row highlights at once (switch-target.ts);
-	// the pane follows when the switch settles. The chevron is the dropdown
-	// trigger (sessionsToggleClick below); clicking an open dropdown's own entry
-	// resumes that session.
+	// the pane follows when the switch settles. The chevron opens the worktree's
+	// session dialog (sessionsToggleClick below).
 	const rowClick = () => {
 		if (activating() || deleting()) return;
 		// A pick changes the main pane: a drawer sidebar gets out of the way now
 		// instead of when the attach lands.
 		closeDrawers();
-		// Clicking the card is a resume action, so close any open dropdown (the
-		// chevron click stops propagation, so this never fights the trigger).
-		setSessionsOpenId(null);
 		const daemon = d();
 		if (paused()) {
 			pushToast(PAUSED_TOOLTIP.reconnecting);
@@ -350,7 +287,7 @@ export const WorkspaceRow: Component<{
 			return;
 		const id = daemon.daemonId;
 		// Asleep rows keep the waking pulse until the switch settles.
-		if (daemon.status === "asleep") setActivatingIds((prev) => new Set(prev).add(id));
+		if (daemon.status === "asleep") beginActivating(id);
 		void switchToDaemon(id).finally(() => endActivating(id));
 	};
 
@@ -359,13 +296,12 @@ export const WorkspaceRow: Component<{
 	const startRow = () => {
 		if (activating() || blocked()) return;
 		closeDrawers();
-		setSessionsOpenId(null);
 		setMenuOpenId(null);
 		const id = d().daemonId;
 		activateRow(id, () => spawnResume(id));
 	};
 
-	/** Toggle this row's session dropdown (the chevron only). */
+	/** The chevron: opens this worktree's session dialog. */
 	const sessionsToggleClick = () => {
 		if (activating()) return;
 		const daemon = d();
@@ -373,7 +309,7 @@ export const WorkspaceRow: Component<{
 		// The kebab menu closes so the two popups never stack; the card's
 		// resume handler is suppressed by the chevron's stopPropagation.
 		setMenuOpenId(null);
-		setSessionsOpenId(sessionsOpenId() === daemon.daemonId ? null : daemon.daemonId);
+		openWorktreeSessions(daemon.daemonId);
 	};
 
 	/** The "+" under the session chevron: start a fresh session in this
@@ -385,10 +321,9 @@ export const WorkspaceRow: Component<{
 			return;
 		}
 		closeDrawers();
-		setSessionsOpenId(null);
 		setMenuOpenId(null);
 		const id = d().daemonId;
-		setActivatingIds((prev) => new Set(prev).add(id));
+		beginActivating(id);
 		void startDaemonNewSession(id).finally(() => endActivating(id));
 	};
 
@@ -400,7 +335,6 @@ export const WorkspaceRow: Component<{
 	return (
 		<>
 			<div
-				ref={rowRef}
 				class="sidebar-row daemon-row"
 				data-roster-item
 				aria-busy={deleting() ? "true" : undefined}
@@ -452,20 +386,20 @@ export const WorkspaceRow: Component<{
 						</span>
 						{/* Session chevron and "+" (clickable rows only), beside the
 						    corner on the top line. Hidden at rest; row hover/focus (or an
-						    open menu/dropdown) reveals them with the "⋯" (always visible
-						    on touch). The chevron opens the last-10-sessions resume
-						    picker; the "+" starts a fresh session in this worktree. */}
+						    open menu) reveals them with the "⋯" (always visible on
+						    touch). The chevron opens this worktree's session dialog; the
+						    "+" starts a fresh session in this worktree. */}
 						<Show when={clickable()}>
 							<span class="daemon-row-actions">
 								<button
 									type="button"
 									class="daemon-session-toggle"
-									aria-expanded={sessionsOpen()}
+									aria-haspopup="dialog"
 									aria-label="Switch session"
 									title="Switch session"
 									onClick={(e) => {
 										// The card's resume must NOT fire when opening the
-										// dropdown.
+										// dialog.
 										e.stopPropagation();
 										sessionsToggleClick();
 									}}
@@ -489,7 +423,7 @@ export const WorkspaceRow: Component<{
 						</Show>
 						{/* Corner slot at the top-right. At rest it shows the state
 						    signal (spinner or dot; nothing for an idle ready or asleep
-						    row); on row hover/focus (or an open menu/dropdown) the signal
+						    row); on row hover/focus (or an open menu) the signal
 						    fades out and the "⋯" row-actions menu fades in over the same
 						    spot, its tooltip naming the state. On touch the menu is always
 						    shown and the signal rides on it as a badge (fleet.css). The
@@ -508,12 +442,7 @@ export const WorkspaceRow: Component<{
 								label="Row actions"
 								title={`Row actions\n${statusLabel()}\n${chip().title}`}
 								open={menuOpen()}
-								onOpenChange={(v) => {
-									setMenuOpenId(v ? d().daemonId : null);
-									// The two popups never stack: opening the kebab closes
-									// the session dropdown.
-									if (v) setSessionsOpenId(null);
-								}}
+								onOpenChange={(v) => setMenuOpenId(v ? d().daemonId : null)}
 							>
 								{/* Lifecycle first (start, stop), then details, destructive
 								    last. Stop keeps the two-click confirm inside the menu.
@@ -792,115 +721,7 @@ export const WorkspaceRow: Component<{
 						</div>
 					</Show>
 				</div>
-				{/* Session dropdown (last-10 in this worktree, newest-first); opens on
-				    row click and is anchored to the row. Clicking an entry resumes
-				    that session. Absent for non-clickable (transitional/error) rows. */}
-				<Show when={sessionsOpen()}>
-					<DaemonSessionsDropdown daemon={d()} onClose={() => setSessionsOpenId(null)} />
-				</Show>
 			</div>
 		</>
-	);
-};
-
-// ---------------------------------------------------------------------------
-// Session dropdown (DaemonSessionsDropdown): the worktree's last-10 sessions,
-// newest-first, anchored to the row. Fetch happens on mount through the fleet
-// edge (list_daemon_sessions); asleep/never-started daemons answer from disk
-// too, no live process needed. Clicking an entry resumes that session: asleep
-// rows wake with spawn_resume carrying the file, ready rows attach (if not
-// already) and switchSession to it.
-// ---------------------------------------------------------------------------
-
-const DaemonSessionsDropdown: Component<{
-	daemon: RosterEntry;
-	onClose: () => void;
-}> = (props) => {
-	const [sessions, setSessions] = createSignal<SessionListEntry[]>([]);
-	const [loading, setLoading] = createSignal(true);
-	const [error, setError] = createSignal<string | null>(null);
-	const nowMs = Date.now();
-
-	onMount(() => {
-		requestDaemonSessions(props.daemon.daemonId)
-			.then((list) => setSessions(list))
-			.catch((err) => setError(err instanceof Error ? err.message : String(err)))
-			.finally(() => setLoading(false));
-	});
-
-	/** The worktree's current session file (live file for the attached row). */
-	const currentFile =
-		props.daemon.daemonId === state.currentSessionId
-			? state.sessionFile
-			: props.daemon.lastSessionFile;
-
-	/** Dropdown rows in the shared SessionRow shape; this path carries no pin state. */
-	const rows = (): SessionRow[] =>
-		sessions().map((s) => {
-			const status = sessionStatus(s.status);
-			return {
-				id: s.id,
-				file: s.path,
-				...(s.name ? { title: s.name } : {}),
-				...(s.firstMessage ? { firstMessage: s.firstMessage } : {}),
-				...(status !== undefined ? { status } : {}),
-				cwd: s.cwd,
-				projectLabel: projectLabelFromCwd(s.cwd),
-				modifiedMs: s.modifiedAt,
-				messageCount: s.messageCount,
-				pinned: false,
-				scope: "local",
-				current: s.path === currentFile,
-			};
-		});
-
-	const resume = (path: string) => {
-		const id = props.daemon.daemonId;
-		const wasAsleep = props.daemon.status === "asleep";
-		// Wake pulse for an asleep row (mirrors the row-click wake): set the
-		// activating id before the resume, clear when the attach settles.
-		if (wasAsleep) setActivatingIds((prev) => new Set(prev).add(id));
-		const pending = resumeDaemonSession(id, path);
-		props.onClose();
-		closeDrawers();
-		if (wasAsleep) {
-			Promise.resolve(pending)
-				.catch(() => {})
-				.finally(() => endActivating(id));
-		}
-	};
-
-	return (
-		<div
-			class="daemon-session-menu"
-			role="group"
-			aria-label="Sessions in this worktree"
-			onClick={(e) => e.stopPropagation()}
-		>
-			{loading() ? (
-				<div class="daemon-session-note">loading sessions…</div>
-			) : error() !== null ? (
-				<div class="daemon-session-note">{error()}</div>
-			) : sessions().length === 0 ? (
-				<div class="daemon-session-note">no sessions yet</div>
-			) : (
-				<>
-					<div class="daemon-session-menu-hint">
-						Sessions in this worktree · last 10 · click to resume
-					</div>
-					<For each={rows()}>
-						{(row) => (
-							<SessionPickerRow
-								row={row}
-								active={false}
-								showProject={false}
-								nowMs={nowMs}
-								onChoose={() => resume(row.file)}
-							/>
-						)}
-					</For>
-				</>
-			)}
-		</div>
 	);
 };

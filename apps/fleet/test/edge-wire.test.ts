@@ -566,6 +566,7 @@ describe("fleet edge", () => {
 			);
 			if (frame.type !== "daemon_sessions") throw new Error("expected daemon_sessions");
 			expect(frame.daemonId).toBe(spawnedEntry.daemonId);
+			expect(frame.limit).toBe(10);
 			const [session] = frame.sessions;
 			expect(session).toBeDefined();
 			// The exact SessionListEntry shape listDaemonSessions builds.
@@ -586,6 +587,76 @@ describe("fleet edge", () => {
 			expect(session!.modifiedAt).toBeGreaterThan(0);
 			expect(typeof session!.name).toBe("string");
 			expect(session!.name).not.toBe("");
+			browser.close();
+		} finally {
+			for (const [key, value] of Object.entries(savedEnv)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+			__resetDirsFromEnvForTests();
+		}
+	});
+
+	test("list_daemon_sessions honors an optional limit (default 10, clamped 1..200)", async () => {
+		const agentDir = tempDir("omp-web-edge-ls-limit-agent-");
+		const savedEnv = {
+			PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+			OMP_PROFILE: process.env.OMP_PROFILE,
+			PI_PROFILE: process.env.PI_PROFILE,
+		};
+		setAgentDir(agentDir);
+		try {
+			const sessionDir = SessionManager.getDefaultSessionDir(
+				FAKE_CWD,
+				agentDir,
+				new FileSessionStorage(),
+			);
+			for (let i = 0; i < 12; i++) {
+				writeFileSync(
+					join(sessionDir, `s${i}.jsonl`),
+					`${JSON.stringify({ type: "session", id: `edge-lim-${i}`, cwd: FAKE_CWD })}\n`,
+				);
+			}
+			// id: [requested limit, effective limit echoed, rows returned]
+			const cases: [number | undefined, number, number][] = [
+				[undefined, 10, 10],
+				[3, 3, 3],
+				[200, 200, 12],
+				[9999, 200, 12],
+				[0, 1, 1],
+				[-5, 1, 1],
+			];
+			for (const [requested, effective, rows] of cases) {
+				// A fresh socket per ask keeps each answer unambiguous.
+				const asker = await openBrowser(server.port);
+				await asker.waitForFrame((f) => f.type === "roster", "roster");
+				await asker.send({
+					type: "list_daemon_sessions",
+					id: `lim-${requested}`,
+					daemonId: spawnedEntry.daemonId,
+					...(requested !== undefined && { limit: requested }),
+				});
+				const frame = await asker.waitForFrame(
+					(f) => f.type === "daemon_sessions",
+					"daemon_sessions frame",
+				);
+				if (frame.type !== "daemon_sessions") throw new Error("expected daemon_sessions");
+				expect(frame.limit).toBe(effective);
+				expect(frame.sessions).toHaveLength(rows);
+				asker.close();
+			}
+			const browser = await openBrowser(server.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			// A non-integer limit is refused, not coerced.
+			await browser.send({
+				type: "list_daemon_sessions",
+				id: "lim-bad",
+				daemonId: spawnedEntry.daemonId,
+				limit: 1.5,
+			} as never);
+			const bad = await browser.waitForFrame((f) => f.type === "error", "error frame");
+			if (bad.type !== "error") throw new Error("expected error");
+			expect(bad.error).toContain("limit must be an integer");
 			browser.close();
 		} finally {
 			for (const [key, value] of Object.entries(savedEnv)) {

@@ -6,7 +6,7 @@ import type { SettingsSection } from "../../web/components/settings/SettingsNav"
 import { settingsSectionId } from "../../web/prefs/settings-tabs";
 import type { BrowserUiRequest } from "../../web/store/browser-ui";
 import type { DownloadConsent, WebDownloadManifest } from "../../web/store/downloads";
-import type { ForeignSessionPreview, ResumeCandidate } from "../../web/store/resume";
+import type { ResumeCandidate } from "../../web/store/resume";
 import type { BrowserUiContribution } from "#lib/wire/browser-ui-contract";
 import type {
 	ContextUsageBreakdown,
@@ -438,10 +438,10 @@ export const modelInfos: ModelInfo[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Resume picker: local sessions and foreign (claude or codex) previews.
+// Resume picker: local sessions.
 // ---------------------------------------------------------------------------
 
-/** ResumeCandidate list: ResumePicker rows, pinned first. */
+/** ResumeCandidate list: SessionPicker rows, pinned first. */
 export const resumeCandidates: ResumeCandidate[] = [
 	{
 		id: "sess_9d2c",
@@ -479,33 +479,6 @@ export const resumeListReply = {
 	total: resumeCandidates.length,
 	allProjects: false,
 };
-
-/** ForeignSessionPreview list: Claude and Codex sessions offered for import. */
-export const foreignSessionPreviews: ForeignSessionPreview[] = [
-	{
-		source: "claude",
-		sourceName: "Claude Code",
-		id: "c1a9f0",
-		path: "/home/joshua/.claude/projects/omp-web/c1a9f0.jsonl",
-		cwd: "/home/joshua/Repos/omp-web",
-		title: "Refactor CopyButton",
-		createdMs: T0 - 3 * 24 * 60 * MIN,
-		modifiedMs: T0 - 3 * 24 * 60 * MIN + 45 * MIN,
-		messageCount: 22,
-		firstMessage: "Extract the clipboard helper out of CopyButton.",
-	},
-	{
-		source: "codex",
-		sourceName: "Codex CLI",
-		id: "cx_77b2",
-		path: "/home/joshua/.codex/sessions/cx_77b2.jsonl",
-		cwd: "/home/joshua/Repos/localaction",
-		createdMs: T0 - 5 * 24 * 60 * MIN,
-		modifiedMs: T0 - 5 * 24 * 60 * MIN + 10 * MIN,
-		messageCount: 6,
-		staged: true,
-	},
-];
 
 // ---------------------------------------------------------------------------
 // Integrations: MCP servers, skills, and plugins.

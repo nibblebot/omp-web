@@ -8,6 +8,7 @@ import type * as HostModule from "../ModalHost";
 import type * as ModalUiModule from "../components/ui/Modal";
 import type * as ShortcutsModule from "../components/app/ShortcutsDialog";
 import type * as DaemonDetailsModule from "../components/fleet/daemon/DaemonDetailsDialog";
+import type * as WorktreeSessionsModule from "../components/fleet/sidebar/WorktreeSessionsDialog";
 import type * as IntegrationsModule from "../components/settings/integrations/IntegrationsDialog";
 import type * as RegistryModule from "../features/registry";
 import type * as ModalsModule from "../store/modals";
@@ -51,11 +52,14 @@ let ModalHost: typeof HostModule.ModalHost;
 let ModalLayerContext: typeof ModalUiModule.ModalLayerContext;
 let ShortcutsDialog: typeof ShortcutsModule.ShortcutsDialog;
 let DaemonDetailsDialog: typeof DaemonDetailsModule.DaemonDetailsDialog;
+let WorktreeSessionsDialog: typeof WorktreeSessionsModule.WorktreeSessionsDialog;
 let IntegrationsDialog: typeof IntegrationsModule.IntegrationsDialog;
 let activateFeatures: typeof RegistryModule.activateFeatures;
 let featureModal: typeof RegistryModule.featureModal;
 let closeDaemonDetails: typeof ModalsModule.closeDaemonDetails;
+let closeWorktreeSessions: typeof ModalsModule.closeWorktreeSessions;
 let openDaemonDetails: typeof ModalsModule.openDaemonDetails;
+let openWorktreeSessions: typeof ModalsModule.openWorktreeSessions;
 let setState: typeof StateModule.setState;
 let state: typeof StateModule.state;
 
@@ -92,9 +96,11 @@ beforeAll(async () => {
 	({ ModalLayerContext } = await import("../components/ui/Modal"));
 	({ ShortcutsDialog } = await import("../components/app/ShortcutsDialog"));
 	({ DaemonDetailsDialog } = await import("../components/fleet/daemon/DaemonDetailsDialog"));
+	({ WorktreeSessionsDialog } = await import("../components/fleet/sidebar/WorktreeSessionsDialog"));
 	({ IntegrationsDialog } = await import("../components/settings/integrations/IntegrationsDialog"));
 	({ activateFeatures, featureModal } = await import("../features/registry"));
-	({ closeDaemonDetails, openDaemonDetails } = await import("../store/modals"));
+	({ closeDaemonDetails, closeWorktreeSessions, openDaemonDetails, openWorktreeSessions } =
+		await import("../store/modals"));
 	({ setState, state } = await import("../state"));
 });
 
@@ -147,6 +153,7 @@ beforeEach(async () => {
 		},
 	});
 	closeDaemonDetails();
+	closeWorktreeSessions();
 	setState("modal", null);
 	setState("daemonRoster", []);
 	await activateFeatures([]);
@@ -227,6 +234,33 @@ describe("ModalHost", () => {
 		openDaemonDetails("d1");
 		expect(renderHost()).not.toContain(DaemonDetailsDialog);
 		expect(state.daemonDetailsId).toBeNull();
+	});
+
+	test("renders the worktree session dialog while its daemon is in the roster", () => {
+		setState("daemonRoster", [daemon("d1")]);
+		openWorktreeSessions("d1");
+		expect(renderHost()).toContain(WorktreeSessionsDialog);
+		expect(state.modal).toBe("worktree-sessions");
+		expect(state.worktreeSessionsId).toBe("d1");
+	});
+
+	test("closes the worktree session dialog when its daemon leaves the roster", () => {
+		setState("daemonRoster", [daemon("d1"), daemon("d2")]);
+		openWorktreeSessions("d2");
+		renderHost();
+		// An unrelated daemon leaving changes nothing.
+		setState("daemonRoster", [daemon("d2")]);
+		expect(state.modal).toBe("worktree-sessions");
+		setState("daemonRoster", []);
+		expect(state.modal).toBeNull();
+		expect(state.worktreeSessionsId).toBeNull();
+	});
+
+	test("a stale worktree session id is cleared instead of mounting the dialog", () => {
+		openWorktreeSessions("d1");
+		expect(renderHost()).not.toContain(WorktreeSessionsDialog);
+		expect(state.modal).toBeNull();
+		expect(state.worktreeSessionsId).toBeNull();
 	});
 
 	describe("layers", () => {

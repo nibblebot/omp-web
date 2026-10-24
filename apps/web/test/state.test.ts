@@ -41,7 +41,6 @@ import {
 	setTxSidebarVisible,
 	isSwitching,
 	setView,
-	spawnResume,
 	stopDaemonById,
 	state,
 	updateSetting,
@@ -52,6 +51,7 @@ import {
 	type SubagentInfo,
 } from "../state";
 import { clearAllDeletePending, resetPendingProjects } from "../store/projects";
+import { activatingIds, resumeWorktreeSession } from "../store/worktree-sessions";
 import { settingValue } from "../store/settings";
 import { reportError } from "../store/toasts";
 import {
@@ -167,15 +167,13 @@ beforeEach(() => {
 		streaming: false,
 		workingIntent: undefined,
 		// Phase 5 fleet-scoped + modal state: reset for isolation like the rest
-		// (roster frames / picker-gate tests otherwise leak into each other).
+		// (roster frames otherwise leak into each other).
 		daemonRoster: [],
 		daemonActivity: {},
 		registeredProjects: [],
 		providerProfiles: [],
 		fleetConfigPath: null,
 		worktreeDeleteInfo: {},
-		pendingSessionPicker: null,
-		sessionPickerGate: null,
 		newWorkspaceProjectId: null,
 		highlightProjectId: null,
 		deleteWorkspaceTarget: null,
@@ -202,6 +200,8 @@ beforeEach(() => {
 // after `window` is gone.
 afterEach(() => {
 	rejectPendingCalls(new Error("test teardown"));
+	// An attach a test left in flight would otherwise gate the next test's roster reconciliation.
+	rejectPendingAttach(new Error("test teardown"));
 	restoreBrowserGlobals();
 });
 
@@ -2012,23 +2012,6 @@ describe("Phase 5: project/worktree command senders", () => {
 		await expect(bare).rejects.toThrow("bare repository: add a checkout instead");
 	});
 
-	test("addProject never arms the session picker gate", async () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-
-		const added = addProject("/repos/a");
-		expect(state.pendingSessionPicker).toBeNull();
-		dispatch({
-			type: "add_project_result",
-			id: lastCommandId(),
-			ok: true,
-			projectId: "p1",
-			existing: false,
-		});
-		await added;
-		expect(state.pendingSessionPicker).toBeNull();
-	});
-
 	test("sendRemoveProject posts remove_project", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
@@ -2155,206 +2138,6 @@ describe("Phase 5: project/worktree command senders", () => {
 		expect(posted).toEqual([
 			{ type: "worktree_delete_info", id: expect.any(String), daemonId: "d1" },
 		]);
-	});
-});
-
-// ---------------------------------------------------------------------------
-// Phase 5: post-attach session-picker gate. A start:true onboarding sender
-// arms the gate (daemonId unknown at send time); the onboarding attach stamps
-// the real daemonId; attach_result for that daemon asks list_sessions; the
-// sessions answer decides new-vs-resume and clears the gate.
-// ---------------------------------------------------------------------------
-describe("Phase 5: post-attach session-picker gate", () => {
-	function sessionEntry(id: string, cwd: string): SessionListEntry {
-		return { path: cwd, id, cwd, name: id, messageCount: 0, modifiedAt: 0 };
-	}
-
-	/** The attach command posted by the most recent attachSession() call. */
-	function lastAttachCmd(): Extract<ClientCommand, { type: "attach" }> {
-		const cmd = posted
-			.filter((c): c is Extract<ClientCommand, { type: "attach" }> => c.type === "attach")
-			.at(-1);
-		if (!cmd) throw new Error("expected an attach command");
-		return cmd;
-	}
-
-	/** Commands of one type as posted, oldest first. */
-	function postedOf<T extends ClientCommand["type"]>(
-		type: T,
-	): Array<Extract<ClientCommand, { type: T }>> {
-		return posted.filter((c): c is Extract<ClientCommand, { type: T }> => c.type === type);
-	}
-
-	test("armed gate: attach_result asks list_sessions; non-empty answer opens the picker with the daemon context", async () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-
-		// The sender arms the gate (it cannot know the spawned daemon's id).
-		const created = createWorktree("p1", { name: "feat" });
-		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d1" });
-		await expect(created).resolves.toEqual({ daemonId: "d1" });
-		expect(state.pendingSessionPicker).not.toBeNull();
-
-		// The onboarding attach stamps the REAL daemonId.
-		const attach = attachSession("d1");
-		expect(state.pendingSessionPicker).toBe("d1");
-
-		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: true, sessionId: "d1" });
-		await expect(attach).resolves.toBe("d1");
-		// The gate asked for sessions; the flag stays set until the answer.
-		expect(postedOf("list_sessions")).toHaveLength(1);
-		expect(state.pendingSessionPicker).toBe("d1");
-
-		// Non-empty answer: open the picker with the pending daemon context.
-		dispatch({ type: "sessions", sessions: [sessionEntry("s1", "/repos/a")] });
-		expect(state.pendingSessionPicker).toBeNull();
-		expect(state.sessionPickerGate).toEqual({ daemonId: "d1" });
-		expect(state.modal).toBe("sessions");
-	});
-
-	test("armed gate: empty sessions answer starts a new session and clears the gate (no picker)", async () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-
-		const created = createWorktree("p1", { name: "feat" });
-		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d2" });
-		await created;
-		const attach = attachSession("d2");
-		expect(state.pendingSessionPicker).toBe("d2");
-		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: true, sessionId: "d2" });
-		await expect(attach).resolves.toBe("d2");
-		expect(postedOf("list_sessions")).toHaveLength(1);
-
-		dispatch({ type: "sessions", sessions: [] });
-		expect(state.pendingSessionPicker).toBeNull();
-		expect(state.sessionPickerGate).toBeNull();
-		expect(state.modal).toBeNull();
-		// The daemon got the same new-session RPC /new uses.
-		const newSessionCalls = postedOf("call").filter((c) => c.method === "newSession");
-		expect(newSessionCalls).toHaveLength(1);
-	});
-
-	test("an attach failure disarms the gate", async () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-
-		const created = createWorktree("p1", { name: "feat", existingBranch: "feat" });
-		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d3" });
-		await created;
-		const attach = attachSession("d3");
-		expect(state.pendingSessionPicker).toBe("d3");
-		dispatch({
-			type: "attach_result",
-			id: lastAttachCmd().id,
-			ok: false,
-			error: "unknown daemon: d3",
-		});
-		await expect(attach).rejects.toThrow("unknown daemon: d3");
-		expect(state.pendingSessionPicker).toBeNull();
-		expect(postedOf("list_sessions")).toHaveLength(0);
-	});
-
-	test("a refused create disarms the gate before any attach", async () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-
-		const created = createWorktree("p1", { name: "feat" });
-		expect(state.pendingSessionPicker).not.toBeNull();
-		dispatch({
-			type: "workspace_create_result",
-			id: lastCommandId(),
-			ok: false,
-			error: "disk full",
-		});
-		await expect(created).rejects.toThrow("disk full");
-		expect(state.pendingSessionPicker).toBeNull();
-	});
-
-	test("a superseding attach re-points the gate to the latest daemon (latest-wins)", async () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-
-		const created = createClone("p1", { name: "clone-x", profileId: "prof" });
-		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d0" });
-		await created;
-		attachSession("d1");
-		expect(state.pendingSessionPicker).toBe("d1");
-		// A newer attach supersedes it before the first settles; the gate
-		// follows the LATEST attach (it gates whichever daemon onboarding
-		// ended up on).
-		attachSession("d9");
-		expect(state.pendingSessionPicker).toBe("d9");
-
-		// The superseded attach's keyed result is ignored (id mismatch) and
-		// the gate stays pointed at d9.
-		const firstCmd = postedOf("attach")[0];
-		dispatch({ type: "attach_result", id: firstCmd.id, ok: true, sessionId: "d1" });
-		expect(state.pendingSessionPicker).toBe("d9");
-		expect(postedOf("list_sessions")).toHaveLength(0);
-
-		// The current attach settles → the gate fires for d9.
-		const attach = attachSession("d9");
-		dispatch({
-			type: "attach_result",
-			id: postedOf("attach").at(-1)!.id,
-			ok: true,
-			sessionId: "d9",
-		});
-		await expect(attach).resolves.toBe("d9");
-		expect(postedOf("list_sessions")).toHaveLength(1);
-		expect(state.pendingSessionPicker).toBe("d9"); // armed until the answer
-
-		dispatch({ type: "sessions", sessions: [sessionEntry("s1", "/repos/a")] });
-		expect(state.sessionPickerGate).toEqual({ daemonId: "d9" });
-		expect(state.modal).toBe("sessions");
-	});
-
-	test("spawn_resume never arms the gate (routine asleep-row wake)", () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-
-		expect(state.pendingSessionPicker).toBeNull();
-		spawnResume("d9");
-		expect(posted).toEqual([{ type: "spawn_resume", id: expect.any(String), daemonId: "d9" }]);
-		expect(state.pendingSessionPicker).toBeNull();
-	});
-
-	test("no armed gate: attach + sessions answer open nothing", async () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-
-		const attach = attachSession("d4");
-		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: true, sessionId: "d4" });
-		await expect(attach).resolves.toBe("d4");
-		expect(postedOf("list_sessions")).toHaveLength(0);
-
-		// A sessions broadcast (e.g. the picker's own listSessions) with no
-		// gate must never open the picker on its own.
-		dispatch({ type: "sessions", sessions: [sessionEntry("s1", "/repos/a")] });
-		expect(state.modal).toBeNull();
-		expect(state.sessionPickerGate).toBeNull();
-	});
-
-	test("a switch to a different daemon disarms the gate; the onboarding daemon's own switch keeps it", async () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch(attached("daemon-a")); // already attached elsewhere
-
-		// Onboarding flow: armed, then attached to the new daemon.
-		const created = createWorktree("p1", { name: "feat" });
-		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d1" });
-		await created;
-		attachSession("d1");
-		expect(state.pendingSessionPicker).toBe("d1");
-
-		// The proxied attached frame for the gate's own daemon (a switch from
-		// daemon-a) must NOT disarm; the sessions answer still has to land.
-		dispatch(attached("d1"));
-		expect(state.pendingSessionPicker).toBe("d1");
-
-		// A switch to yet another daemon disarms it.
-		dispatch(attached("daemon-c"));
-		expect(state.pendingSessionPicker).toBeNull();
 	});
 });
 
@@ -3003,9 +2786,45 @@ describe("roster session dropdown", () => {
 		]);
 
 		// A frame for a DIFFERENT daemon must not settle it.
-		dispatch({ type: "daemon_sessions", daemonId: "other", sessions: [se("x")] });
-		dispatch({ type: "daemon_sessions", daemonId: "d9", sessions: [se("a"), se("b")] });
+		dispatch({ type: "daemon_sessions", daemonId: "other", limit: 10, sessions: [se("x")] });
+		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 10, sessions: [se("a"), se("b")] });
 		await expect(pending).resolves.toEqual([se("a"), se("b")]);
+	});
+
+	test("requestDaemonSessions sends the limit and keys waiters by daemon + effective limit", async () => {
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+
+		// A 200-row request and a default (10-row) request for one daemon coexist.
+		const dialog = requestDaemonSessions("d9", 200);
+		const dropdown = requestDaemonSessions("d9");
+		expect(postedOf("list_daemon_sessions")).toEqual([
+			{ type: "list_daemon_sessions", id: expect.any(String), daemonId: "d9", limit: 200 },
+			{ type: "list_daemon_sessions", id: expect.any(String), daemonId: "d9" },
+		]);
+
+		// Each answer settles only the request of its echoed size.
+		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 10, sessions: [se("a")] });
+		await expect(dropdown).resolves.toEqual([se("a")]);
+		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 200, sessions: [se("a"), se("b")] });
+		await expect(dialog).resolves.toEqual([se("a"), se("b")]);
+
+		// A same-size request still supersedes (resolves empty) the older one.
+		const first = requestDaemonSessions("d9", 200);
+		const second = requestDaemonSessions("d9", 200);
+		await expect(first).resolves.toEqual([]);
+		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 200, sessions: [se("c")] });
+		await expect(second).resolves.toEqual([se("c")]);
+
+		// An explicit limit equal to the default shares the default's slot (the
+		// answer echoes the effective limit), and out-of-range limits clamp to
+		// the echoed one.
+		const ten = requestDaemonSessions("d9", 10);
+		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 10, sessions: [se("d")] });
+		await expect(ten).resolves.toEqual([se("d")]);
+		const huge = requestDaemonSessions("d9", 9999);
+		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 200, sessions: [se("e")] });
+		await expect(huge).resolves.toEqual([se("e")]);
 	});
 
 	test("resumeDaemonSession wakes an asleep daemon with the chosen session then attaches", async () => {
@@ -3031,6 +2850,33 @@ describe("roster session dropdown", () => {
 		expect(postedOf("attach")).toHaveLength(0);
 		await flushWake();
 		expect(postedOf("attach")).toHaveLength(1);
+	});
+
+	test("resumeWorktreeSession pulses an asleep row until its attach settles", async () => {
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+
+		resumeWorktreeSession("d9", "/sessions/picked.jsonl");
+		expect(activatingIds().has("d9")).toBe(true);
+		expect(postedOf("spawn_resume")).toHaveLength(1);
+		await flushWake();
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		await flushWake();
+		expect(activatingIds().has("d9")).toBe(false);
+	});
+
+	test("resumeWorktreeSession leaves a ready row's pulse alone", () => {
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+
+		resumeWorktreeSession("d9", "/sessions/picked.jsonl");
+		expect(activatingIds().has("d9")).toBe(false);
 	});
 
 	test("resumeDaemonSession re-attaches the daemon the view is already on when its row is asleep (after a UI stop)", async () => {

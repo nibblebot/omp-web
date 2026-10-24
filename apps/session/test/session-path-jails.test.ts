@@ -1,6 +1,6 @@
 /**
  * Path-jail unit tests for the two adapters that hand a caller-supplied path to
- * the SDK: resume-import-adapter's resume resolver (realpath jail to the
+ * the SDK: resume-adapter's resume resolver (realpath jail to the
  * session dir, then membership against KNOWN session journals — recoverable
  * files are never invented) and lifecycle-adapter's durable deletion
  * (`canonical !== path`: a journal symlinked out of the owned sessions root is
@@ -17,7 +17,7 @@ import {
 	type LifecycleDeps,
 	validateSessionJournal,
 } from "../lifecycle-adapter";
-import { resolveResumeTarget } from "../resume-import-adapter";
+import { resolveResumeTarget } from "../resume-adapter";
 import type { SessionEntry } from "../session-entry";
 
 afterAll(cleanupTempDirs);
@@ -45,7 +45,7 @@ function resumeQuery(sessionsDir: string, agentDir: string) {
 	return { cwd: sessionsDir, sessionDir: sessionsDir, agentDir };
 }
 
-describe("resume-import-adapter path jails", () => {
+describe("resume-adapter path jails", () => {
 	test("a resume path outside the session directory is refused", async () => {
 		const sessionsDir = tempDir("omp-jail-resume-");
 		const outsideDir = tempDir("omp-jail-resume-out-");

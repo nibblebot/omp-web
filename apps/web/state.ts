@@ -45,7 +45,6 @@ import {
 	scheduleFlush,
 	notifyDesktop,
 	pushNotice,
-	startNewSession,
 } from "./store/chat";
 import { cancelUiRequest } from "./store/modals";
 import {
@@ -56,7 +55,6 @@ import {
 	settleProjectBranches,
 	settleWorkspaceCreate,
 } from "./store/projects";
-import { reportError } from "./store/toasts";
 import { clearUserStopped, isUserStopped, reconcileUserStopped } from "./store/user-stopped";
 import {
 	checkSession,
@@ -262,6 +260,9 @@ export type ModalName =
 	| "compaction"
 	| "btw"
 	| "share"
+	// Worktree session list (chevron on a roster row): the
+	// daemon it lists comes from state.worktreeSessionsId.
+	| "worktree-sessions"
 	| "palette";
 
 /** Unicast answer to sendWorktreeDeleteInfo: guard evidence for the
@@ -470,6 +471,9 @@ export const [state, setState] = createStore({
 	// daemonId whose details dialog is open (fleet-scoped: survives session
 	// switches; the dialog closes itself when the roster entry disappears).
 	daemonDetailsId: null as string | null,
+	// daemonId whose worktree session list dialog is open (state.modal
+	// "worktree-sessions"; ModalHost closes it when the roster entry disappears).
+	worktreeSessionsId: null as string | null,
 	// Image shown in the full-size lightbox (session content, so
 	// resetSessionView clears it).
 	lightboxImage: null as ImageArg | null,
@@ -512,16 +516,6 @@ export const [state, setState] = createStore({
 	// Phase 5: delete-worktree guard evidence (worktree_delete_info unicast),
 	// keyed by daemonId.
 	worktreeDeleteInfo: {} as Record<string, WorktreeDeleteInfo>,
-	// Phase 5: post-attach session-picker gate. Holds the daemonId
-	// awaiting the new-vs-resume decision (armed by start:true onboarding
-	// senders (add project / create worktree / create clone), stamped with
-	// the real daemonId when the attach fires, cleared by the sessions
-	// answer / attach failure / daemon switch). Fleet-scoped.
-	pendingSessionPicker: null as string | null,
-	// Phase 5: SessionPicker context when opened from the onboarding gate.
-	// Non-null makes the picker render its "New session" top item (Esc =
-	// new session). Cleared by the picker on close/new-session.
-	sessionPickerGate: null as { daemonId: string } | null,
 	// Drawer/docked split (see drawerMedia above); drives drawer-only rules in the store.
 	drawerViewport,
 	sidebarVisible: restoredVisibility(SIDEBAR_KEY, drawerViewport),
@@ -876,11 +870,7 @@ function teardownSocket(ws: WebSocket, plan: ReconnectPlan, code?: number, reaso
 	}
 	resetPendingSessionsFiles();
 	resetPendingProjects();
-	// Phase 5: a dead socket cannot complete the onboarding flow, so disarm
-	// the picker gate and drop any picker context.
 	rejectPendingAttach(new Error("Disconnected"));
-	setState("pendingSessionPicker", null);
-	setState("sessionPickerGate", null);
 	rejectPendingDaemons(new Error("Disconnected"));
 	if (plan === "now") connect();
 	else if (plan === "backoff") scheduleReconnect();
@@ -1188,9 +1178,6 @@ function resetSessionView(): void {
 		compacting: false,
 		workingIntent: undefined,
 		modal: null,
-		// Phase 5: picker context dies with the modal it belongs to; the
-		// component also clears it on close/new-session.
-		sessionPickerGate: null,
 		loginUrl: null,
 		loginCodeRequest: null,
 		uiRequest: null,
@@ -1407,13 +1394,6 @@ export function connect(): void {
 				// `ready` immediately; until then the composer stays gated and the
 				// roster hint shows the session's status.
 				setState("readyAt", undefined);
-				// Phase 5: a switch to a DIFFERENT daemon disarms the picker gate
-				// (the onboarding attach to the gate's own daemon is a switch too,
-				// but that one is kept so the sessions answer can still open the
-				// picker, per the attach_result → list_sessions → sessions order).
-				if (state.pendingSessionPicker !== null && state.pendingSessionPicker !== frame.sessionId) {
-					setState("pendingSessionPicker", null);
-				}
 			}
 			// Subagent mirror is per-session; pull on EVERY attach (first attach,
 			// switch, roster re-attach after reconnect). Calls are answered only
@@ -1527,27 +1507,11 @@ export function connect(): void {
 				break;
 			case "sessions":
 				settleSessions(frame.sessions);
-				// Phase 5: post-attach picker gate; the answer to the gate's
-				// list_sessions decides new-vs-resume for the daemon just
-				// attached. History exists → open the picker (its "New session"
-				// top item + Esc = new session are component-side); none →
-				// start a fresh session on the attached daemon directly.
-				if (state.pendingSessionPicker !== null) {
-					const daemonId = state.pendingSessionPicker;
-					setState("pendingSessionPicker", null);
-					if (frame.sessions.length > 0) {
-						setState("sessionPickerGate", { daemonId });
-						setState("modal", "sessions");
-					} else {
-						// Same path /new uses to start a new session.
-						void startNewSession().catch(reportError);
-					}
-				}
 				break;
 			case "daemon_sessions":
-				// Unicast answer to the roster dropdown's list_daemon_sessions
-				// (fleet-scoped: settle keyed by daemonId, no session guards).
-				settleDaemonSessions(frame.daemonId, frame.sessions);
+				// Unicast answer to list_daemon_sessions (fleet-scoped: settle keyed
+				// by daemonId + effective limit, no session guards).
+				settleDaemonSessions(frame.daemonId, frame.sessions, frame.limit);
 				break;
 			case "daemons":
 				setState(
@@ -1928,8 +1892,10 @@ export {
 } from "./store/projects";
 export {
 	closeDaemonDetails,
+	closeWorktreeSessions,
 	closeLightbox,
 	openDaemonDetails,
+	openWorktreeSessions,
 	openLightbox,
 	sendLoginCode,
 	sendUiResponse,

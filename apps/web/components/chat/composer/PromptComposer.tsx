@@ -147,7 +147,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		});
 	});
 
-	// A started session (/new, New session button, picker gate) and a finished
+	// A started session (/new, New session button, new workspace) and a finished
 	// session switch hand focus here; mayAutoFocusComposer keeps it from
 	// stealing the keyboard from a dialog or opening a touch keyboard.
 	createEffect(() => {

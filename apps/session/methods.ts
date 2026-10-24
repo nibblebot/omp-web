@@ -48,7 +48,7 @@ import { createPluginMethods } from "./plugin-methods";
 import { resolveSessionMainFile, MaterializeSessionError } from "./session-materialize";
 import os from "node:os";
 import { createDownloadMethods } from "./download-manifest";
-import { createResumeImportHandlers } from "./resume-import-adapter";
+import { createResumeHandlers } from "./resume-adapter";
 import { listWorkers, parkWorker, resolveTranscriptFile, reviveWorker } from "./worker-lifecycle";
 import {
 	getAdvisorOverview,
@@ -894,7 +894,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		}),
 		...Object.fromEntries(
 			Object.entries(
-				createResumeImportHandlers({
+				createResumeHandlers({
 					cwd: deps.cwd,
 					sessionsRoot: deps.sessionsDir,
 					lifecycleMirror: deps.lifecycleMirror,

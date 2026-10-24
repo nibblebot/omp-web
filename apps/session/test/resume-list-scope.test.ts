@@ -1,5 +1,5 @@
 /**
- * Resume list scope (resume-import-adapter.listResumeCandidates): without
+ * Resume list scope (resume-adapter.listResumeCandidates): without
  * `allProjects` only the local project dir is listed; with it every project
  * under the sessions root is listed, other projects' rows are "global", and the
  * search also matches conversation text beyond the first prompt.
@@ -8,7 +8,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { listResumeCandidates } from "../resume-import-adapter";
+import { listResumeCandidates } from "../resume-adapter";
 
 afterAll(cleanupTempDirs);
 

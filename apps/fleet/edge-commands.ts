@@ -27,6 +27,15 @@ const required: FieldRule = (key, value) => {
 const optional: FieldRule = (_key, value) =>
 	typeof value === "string" && value !== "" ? value : undefined;
 
+/** Absent, or an integer (range clamping is the handler's). */
+const integer: FieldRule = (key, value) => {
+	if (value === undefined) return undefined;
+	if (typeof value !== "number" || !Number.isInteger(value)) {
+		throw new OperationError(400, `${key} must be an integer`);
+	}
+	return value;
+};
+
 /** `true` or absent; any other value reads as unset. */
 const flag: FieldRule = (_key, value) => (value === true ? true : undefined);
 
@@ -59,7 +68,7 @@ const deleteBranch: FieldRule = (_key, value) => {
  * it is forwarded to the attached daemon.
  */
 export const EDGE_COMMAND_FIELDS: Record<string, Record<string, FieldRule>> = {
-	list_daemon_sessions: { daemonId: required },
+	list_daemon_sessions: { daemonId: required, limit: integer },
 	list_project_branches: { projectId: required, remote: optional },
 	sync_projects: {},
 	spawn: { cwd: required, template: optional, labels },

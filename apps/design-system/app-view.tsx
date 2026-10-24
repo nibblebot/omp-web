@@ -48,7 +48,7 @@ function captureSession(): AppSession {
  * (fixtures/command-bus.ts, over the fake socket) answers with `attached`, the store resets the
  * session view, and this view restores that daemon's transcript from
  * `appSessions` in place of the daemon's history priming. A row's session
- * dropdown lists that daemon's session, answered in the page (daemon.ts).
+ * chevron lists that daemon's session, answered in the page (daemon.ts).
  *
  * Prompts get the canned turn (canned-turns.ts). Leaving a session ends its
  * running turn and keeps its transcript for this page load, so switching back
@@ -68,7 +68,7 @@ export const AppView: Component = () => {
 	answerCommands({
 		list_daemon_sessions: (cmd) => {
 			if (cmd.type === "list_daemon_sessions")
-				settleDaemonSessions(cmd.daemonId, appDaemonSessions(cmd.daemonId));
+				settleDaemonSessions(cmd.daemonId, appDaemonSessions(cmd.daemonId), cmd.limit);
 		},
 	});
 

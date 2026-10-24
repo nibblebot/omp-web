@@ -55,7 +55,6 @@ import {
 	isDownloadBulkCommand,
 	serveDownloadBulk,
 } from "./download-manifest";
-import { discardAllStagedUploads } from "./resume-import-adapter";
 import { type ClientCredentials, httpAuthorized, socketRefusal } from "./client-auth";
 import { browserRequestAllowed } from "#lib/runtime/browser-guard";
 import {
@@ -1632,7 +1631,6 @@ async function shutdown(exitCode = 0): Promise<void> {
 		if (bootEntry) await closeSession(bootEntry, "server shutting down");
 		server?.stop();
 		discardAllStagedExports();
-		discardAllStagedUploads();
 		// Release session-file locks before the SDK postmortem cleanup runs so a
 		// crash-free exit never leaves a live lock behind.
 		for (const lock of sessionLocks) lock.release();

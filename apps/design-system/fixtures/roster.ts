@@ -99,7 +99,7 @@ const daemonFixtures: DaemonEntry = {
 	desiredState: "running",
 };
 
-/** DaemonEntry: asleep worktree whose session can be resumed from the row dropdown. */
+/** DaemonEntry: asleep worktree whose session can be resumed from the worktree sessions dialog. */
 const daemonAsleep: DaemonEntry = {
 	daemonId: "dmn_a003",
 	name: "review-anchors",
@@ -656,7 +656,7 @@ export const worktreeInfoNotLinked: WorktreeDeleteInfo = {
 	reason: "This is not a linked Git worktree omp-web can delete; its files stay on disk.",
 };
 
-/** SessionListEntry list per daemon for the row's session dropdown, newest first. */
+/** SessionListEntry list per daemon for the worktree sessions dialog, newest first. */
 export function rosterSessions(now: number): SessionListEntry[] {
 	return [
 		{

@@ -3,85 +3,110 @@ import {
 	formatSessionAge,
 	sessionDisplayTitle,
 	sessionStatusLabel,
-	sessionSubtitle,
 	type SessionRow,
+	type SessionStatus,
 } from "../../store/session-list";
-import { PickerRow } from "../ui/PickerRow";
+
+/** Outcomes worth a dot; a finished or unknown session shows none. */
+const ABNORMAL_STATUS: Readonly<Partial<Record<SessionStatus, true>>> = {
+	error: true,
+	interrupted: true,
+	aborted: true,
+	pending: true,
+};
 
 /**
- * One session line in a SessionListPicker group: status dot, title, first-prompt
- * subtitle, message count and age, and an optional pin toggle. The attached session is shown
- * but disabled (it is never a resume target). Props only; no store imports.
+ * One session as a single left-aligned line: status dot (abnormal outcomes only),
+ * title, pin glyph, `empty` tag, optional project, and a right-aligned age. The
+ * attached session is accent-coloured; a blocked row explains why, with an optional Add
+ * project action. A click resumes, so both are disabled, unless `selects` makes the
+ * click a selection (full lists, where resume is a separate action). `compact` is the
+ * tight density for the sidebar and empty screen (callers filter empty sessions out
+ * there). Props only; no store imports.
  */
 export const SessionPickerRow: Component<{
 	row: SessionRow;
-	active: boolean;
-	showProject: boolean;
+	size: "full" | "compact";
+	/** Keyboard or pointer highlight; with `selects`, the selected row. */
+	active?: boolean;
+	/** Append the project label (the "All projects" scope). */
+	showProject?: boolean;
 	nowMs: number;
+	/** Mouse enter: lets a list move its highlight with the pointer. */
 	onActivate?: () => void;
+	/** Click: resume this session, or select it when `selects` is set. */
 	onChoose: () => void;
-	onTogglePin?: () => void;
+	/** The click selects the row instead of resuming it, so attached and blocked rows stay clickable. */
+	selects?: boolean;
 	/** Opens Add project for a blocked row (no registered project owns its folder). */
 	onAddProject?: () => void;
 }> = (props) => {
-	const statusLabel = () => sessionStatusLabel(props.row.status);
+	const dotStatus = () => {
+		const status = props.row.status;
+		return status !== undefined && ABNORMAL_STATUS[status] === true ? status : undefined;
+	};
+	const title = () => sessionDisplayTitle(props.row);
 	return (
 		<div
-			class="picker-session-row"
-			classList={{ active: props.active, current: props.row.current === true }}
+			class="session-pick"
+			data-size={props.size}
+			classList={{
+				active: props.active === true,
+				current: props.row.current === true,
+				blocked: props.row.blocked !== undefined,
+			}}
 		>
-			<PickerRow
-				class="session-row-main"
-				classList={{ "session-row-pinned": props.row.pinned }}
-				onMouseEnter={props.onActivate}
-				onClick={props.onChoose}
-				disabled={props.row.current === true || props.row.blocked !== undefined}
-				title={`${props.row.cwd || "(no directory)"}\n${props.row.id}`}
-			>
-				<span
-					class={`session-status session-status-${props.row.status ?? "unknown"}`}
-					role="img"
-					aria-label={statusLabel()}
-					title={statusLabel()}
-				/>
-				<span class="session-row-text">
-					<span class="picker-label">{sessionDisplayTitle(props.row)}</span>
-					<Show when={sessionSubtitle(props.row)}>
-						{(subtitle) => <span class="session-row-sub">{subtitle()}</span>}
-					</Show>
-					<Show when={props.row.blocked}>
-						{(blocked) => <span class="session-row-blocked">{blocked().reason}</span>}
-					</Show>
-				</span>
-				<span class="picker-meta">
-					{props.row.messageCount} {props.row.messageCount === 1 ? "msg" : "msgs"} ·{" "}
-					{formatSessionAge(props.row.modifiedMs, props.nowMs)}
-					<Show when={props.showProject}> · {props.row.projectLabel}</Show>
-				</span>
-				<Show when={props.row.current}>
-					<span class="picker-chip">current</span>
-				</Show>
-			</PickerRow>
-			<Show when={props.onTogglePin !== undefined}>
+			<div class="session-pick-line">
 				<button
 					type="button"
-					class="session-pin"
-					aria-pressed={props.row.pinned}
-					aria-label={`${props.row.pinned ? "Unpin" : "Pin"} ${sessionDisplayTitle(props.row)}`}
-					title={
-						props.row.pinned
-							? "Unpin: remove from the top of the list"
-							: "Pin: keep at the top of the list"
+					class="session-pick-main"
+					onMouseEnter={() => props.onActivate?.()}
+					onClick={() => props.onChoose()}
+					disabled={
+						props.selects !== true &&
+						(props.row.current === true || props.row.blocked !== undefined)
 					}
-					onClick={() => props.onTogglePin?.()}
+					aria-expanded={props.selects === true ? props.active === true : undefined}
+					title={`${title()}\n${props.row.cwd || "(no directory)"}\n${props.row.id}`}
 				>
-					{props.row.pinned ? "★" : "☆"}
+					<Show when={dotStatus()}>
+						{(status) => (
+							<span
+								class="session-pick-dot"
+								data-status={status()}
+								role="img"
+								aria-label={sessionStatusLabel(status())}
+								title={sessionStatusLabel(status())}
+							/>
+						)}
+					</Show>
+					<span class="session-pick-title">{title()}</span>
+					<Show when={props.row.pinned}>
+						<span class="session-pick-pin" role="img" aria-label="Pinned" title="Pinned">
+							★
+						</span>
+					</Show>
+					<Show when={props.size === "full" && props.row.messageCount === 0}>
+						<span class="session-pick-tag">empty</span>
+					</Show>
+					<Show when={props.row.current}>
+						<span class="session-pick-current">current</span>
+					</Show>
+					<Show when={props.showProject}>
+						<span class="session-pick-project">{props.row.projectLabel}</span>
+					</Show>
+					<span class="session-pick-age">
+						{formatSessionAge(props.row.modifiedMs, props.nowMs)}
+					</span>
 				</button>
-			</Show>
-			<Show when={props.row.blocked !== undefined && props.onAddProject !== undefined}>
-				<button type="button" class="session-add-project" onClick={() => props.onAddProject?.()}>
-					Add project
-				</button>
+				<Show when={props.row.blocked !== undefined && props.onAddProject !== undefined}>
+					<button type="button" class="session-pick-add" onClick={() => props.onAddProject?.()}>
+						Add project
+					</button>
+				</Show>
+			</div>
+			<Show when={props.row.blocked}>
+				{(blocked) => <div class="session-pick-blocked">{blocked().reason}</div>}
 			</Show>
 		</div>
 	);

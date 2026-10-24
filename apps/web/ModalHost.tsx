@@ -18,13 +18,13 @@ import { AddProjectDialog } from "./components/fleet/workspaces/AddProjectDialog
 import { DeleteWorkspaceDialog } from "./components/fleet/workspaces/DeleteWorkspaceDialog";
 import { RemoveProjectDialog } from "./components/fleet/workspaces/RemoveProjectDialog";
 import { DaemonDetailsDialog } from "./components/fleet/daemon/DaemonDetailsDialog";
+import { WorktreeSessionsDialog } from "./components/fleet/sidebar/WorktreeSessionsDialog";
 import { ProviderLoginDialog } from "./components/models/ProviderLoginDialog";
 import { ModelPicker } from "./components/models/ModelPicker";
 import { ThinkingLevelPicker } from "./components/models/ThinkingLevelPicker";
 import { ExtensionUi } from "./components/requests/ExtensionUi";
 import { DangerConfirmDialog } from "./components/requests/DangerConfirmDialog";
 import { DownloadDialog } from "./components/requests/DownloadDialog";
-import { ResumePicker } from "./components/sessions/ResumePicker";
 import { BtwSheet } from "./components/requests/BtwSheet";
 import { SessionPicker } from "./components/sessions/SessionPicker";
 import { SettingsSheet } from "./components/settings/SettingsSheet";
@@ -36,8 +36,14 @@ import { UsageLimitsDialog } from "./components/usage/UsageLimitsDialog";
 import { ImageLightbox } from "./components/ui/ImageLightbox";
 import { createModalLayer, ModalLayerContext, type ModalLayer } from "./components/ui/Modal";
 import { featureModal, featureOverlays } from "./features/registry";
-import { closeDaemonDetails, closeLightbox, setState, state, type ModalName } from "./state";
-import { resumePickerOpen } from "./store/resume";
+import {
+	closeDaemonDetails,
+	closeLightbox,
+	closeWorktreeSessions,
+	setState,
+	state,
+	type ModalName,
+} from "./state";
 
 /**
  * Every overlay App mounts: the active `state.modal`, plus the dialogs that
@@ -58,6 +64,16 @@ export const ModalHost: Component = () => {
 	createEffect(() => {
 		const id = state.daemonDetailsId;
 		if (id !== null && !state.daemonRoster.some((d) => d.daemonId === id)) closeDaemonDetails();
+	});
+	// Same roster gate for the worktree session list dialog: it renders only
+	// while its daemon is in the roster, and a daemon that leaves closes it.
+	const worktreeSessionsDaemon = () => {
+		const id = state.worktreeSessionsId;
+		return id === null ? undefined : state.daemonRoster.find((d) => d.daemonId === id);
+	};
+	createEffect(() => {
+		if (state.modal === "worktree-sessions" && worktreeSessionsDaemon() === undefined)
+			closeWorktreeSessions();
 	});
 	// Renderer for a modal owned by an optional feature. Renders nothing when the
 	// feature is disabled on this page, so a stale `state.modal` cannot mount feature UI.
@@ -96,6 +112,11 @@ export const ModalHost: Component = () => {
 		compaction: () => <CompactionDialog onClose={close} />,
 		share: () => <ShareSheet onClose={close} />,
 		btw: () => <BtwSheet onClose={close} />,
+		"worktree-sessions": () => (
+			<Show when={worktreeSessionsDaemon()}>
+				{(daemon) => <WorktreeSessionsDialog daemon={daemon()} onClose={closeWorktreeSessions} />}
+			</Show>
+		),
 	} satisfies Record<ModalName, () => JSX.Element>;
 	// One layer per open `state.modal`. A side sheet keeps its layer mounted
 	// through its slide-out (Modal calls `hold()`), so a sheet that is closing
@@ -143,9 +164,6 @@ export const ModalHost: Component = () => {
 			<ExtensionUi placement="modal" />
 			<DownloadDialog />
 			<DangerConfirmDialog />
-			<Show when={resumePickerOpen()}>
-				<ResumePicker onClose={() => undefined} />
-			</Show>
 			<DeleteWorkspaceDialog />
 			<RemoveProjectDialog />
 			<Toasts />

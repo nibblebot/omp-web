@@ -973,7 +973,7 @@ function sessionFileTime(path: string): number {
 	return Date.parse(`${stamp[1]}T${stamp[2]}:${stamp[3]}:${stamp[4]}Z`);
 }
 
-/** The row dropdown's `daemon_sessions` answer: the daemon's one session, so picking it is a plain attach. */
+/** The worktree sessions dialog's `daemon_sessions` answer: the daemon's one session, so picking it is a plain attach. */
 export function appDaemonSessions(daemonId: string): SessionListEntry[] {
 	const session = appSessions[daemonId];
 	const daemon = rosterAppDaemons.find((entry) => entry.daemonId === daemonId);

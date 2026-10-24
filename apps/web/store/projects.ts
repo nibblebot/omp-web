@@ -251,10 +251,6 @@ export function settleAddProject(frame: {
 	}
 }
 
-/** Sentinel value of pendingSessionPicker between a start:true sender and the attach
- *  that follows; never equals a real daemonId. */
-const PICKER_GATE_ARMED = "__picker_gate_armed__";
-
 /** Settle the create_worktree / create_clone waiter (mux "workspace_create_result" frame). */
 export function settleWorkspaceCreate(frame: {
 	id: string;
@@ -268,36 +264,20 @@ export function settleWorkspaceCreate(frame: {
 	if (frame.ok && frame.daemonId !== undefined) {
 		waiter.resolve({ daemonId: frame.daemonId });
 	} else {
-		disarmPickerGate();
 		waiter.reject(new Error(frame.error ?? "workspace creation failed"));
 	}
 }
 
-/** Drop the picker gate a start:true sender armed, unless an attach already stamped it. */
-function disarmPickerGate(): void {
-	if (state.pendingSessionPicker === PICKER_GATE_ARMED) setState("pendingSessionPicker", null);
-}
-
-/** Send `cmd` and park a waiter under its id until the keyed result frame settles it.
- *  `armPickerGate` (start:true creates) arms the post-attach session picker: the spawned
- *  daemon's id is server-assigned, so the gate holds a sentinel until the attach that
- *  follows stamps the real daemonId (transport.ts requestAttach). */
-function sendKeyed<T>(
-	pending: Map<string, Waiter<T>>,
-	id: string,
-	cmd: ClientCommand,
-	armPickerGate = false,
-): Promise<T> {
+/** Send `cmd` and park a waiter under its id until the keyed result frame settles it. */
+function sendKeyed<T>(pending: Map<string, Waiter<T>>, id: string, cmd: ClientCommand): Promise<T> {
 	const { promise, resolve, reject } = Promise.withResolvers<T>();
 	if (!isConnected()) {
 		reject(new Error("Not connected"));
 		return promise;
 	}
-	if (armPickerGate) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	pending.set(id, { resolve, reject });
 	sendCommand(cmd).catch((err) => {
 		if (!pending.delete(id)) return;
-		disarmPickerGate();
 		reject(err instanceof Error ? err : new Error(String(err)));
 	});
 	return promise;
@@ -330,20 +310,15 @@ export function createWorktree(
 	opts: { name: string; baseRef?: string; existingBranch?: string },
 ): Promise<{ daemonId: string }> {
 	const id = crypto.randomUUID();
-	return sendKeyed(
-		pendingWorkspaceCreate,
+	return sendKeyed(pendingWorkspaceCreate, id, {
+		type: "create_worktree",
 		id,
-		{
-			type: "create_worktree",
-			id,
-			projectId,
-			name: opts.name,
-			...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
-			...(opts.existingBranch !== undefined ? { existingBranch: opts.existingBranch } : {}),
-			start: true,
-		},
-		true,
-	);
+		projectId,
+		name: opts.name,
+		...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
+		...(opts.existingBranch !== undefined ? { existingBranch: opts.existingBranch } : {}),
+		start: true,
+	});
 }
 
 /** Create a provider-managed clone workspace. `source` names one of the project's git
@@ -360,22 +335,17 @@ export function createClone(
 	},
 ): Promise<{ daemonId: string }> {
 	const id = crypto.randomUUID();
-	return sendKeyed(
-		pendingWorkspaceCreate,
+	return sendKeyed(pendingWorkspaceCreate, id, {
+		type: "create_clone",
 		id,
-		{
-			type: "create_clone",
-			id,
-			projectId,
-			name: opts.name,
-			profileId: opts.profileId,
-			...(opts.source !== undefined ? { source: opts.source } : {}),
-			...(opts.revision !== undefined ? { revision: opts.revision } : {}),
-			...(opts.branch !== undefined ? { branch: opts.branch } : {}),
-			start: true,
-		},
-		true,
-	);
+		projectId,
+		name: opts.name,
+		profileId: opts.profileId,
+		...(opts.source !== undefined ? { source: opts.source } : {}),
+		...(opts.revision !== undefined ? { revision: opts.revision } : {}),
+		...(opts.branch !== undefined ? { branch: opts.branch } : {}),
+		start: true,
+	});
 }
 
 /** Last `sync_projects` send; throttles the focus / group-expand triggers. */

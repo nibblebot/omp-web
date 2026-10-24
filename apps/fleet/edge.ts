@@ -91,6 +91,7 @@ import type { ServerWebSocket } from "bun";
 import { randomUUID } from "node:crypto";
 import {
 	COMMAND_DEDUP_WINDOW_MS,
+	daemonSessionsLimit,
 	OMP_PROTO,
 	CLIENT_BACKPRESSURE_BYTES,
 	CLIENT_STALL_MS,
@@ -157,8 +158,6 @@ const CLIENT_RECLAIM_MS = 60_000;
 /** Drain checkpoints merge until they span this many queued bytes (bounds the checkpoint list). */
 const CREDIT_GRAIN_BYTES = 32 * 1024;
 
-/** Roster-dropdown listing size: the last N sessions of a daemon's worktree. */
-const DROPDOWN_SESSION_LIMIT = 10;
 /** Picked-session membership: the whole worktree listing, never the dropdown page. */
 const RESUME_MEMBERSHIP_LIMIT = Number.POSITIVE_INFINITY;
 
@@ -668,7 +667,11 @@ export class FleetEdge {
 	/** Browser-command runners, keyed like EDGE_COMMAND_FIELDS; each receives the validated args. */
 	readonly #runners: Record<string, (stream: BrowserStream, id: string, args: EdgeArgs) => void> = {
 		list_daemon_sessions: (stream, _id, a) =>
-			void this.#handleListDaemonSessions(stream, a.daemonId as string),
+			void this.#handleListDaemonSessions(
+				stream,
+				a.daemonId as string,
+				a.limit as number | undefined,
+			),
 		list_project_branches: (stream, _id, a) =>
 			void this.#handleListProjectBranches(
 				stream,
@@ -1244,12 +1247,18 @@ export class FleetEdge {
 	// ---------------------------------------------------------------------
 
 	/**
-	 * Answer a roster-dropdown request: the last sessions of one daemon's
-	 * worktree, newest-first (the edge lists from disk, so asleep/never-started
-	 * daemons answer too, no live process needed). Unknown daemon → error.
+	 * Answer a session-list request: the last `limit` sessions of one daemon's
+	 * worktree (default 10, clamped to 1..200), newest-first (the edge lists
+	 * from disk, so asleep/never-started daemons answer too, no live process
+	 * needed). The answer echoes the effective limit. Unknown daemon → error.
 	 */
-	async #handleListDaemonSessions(stream: BrowserStream, daemonId: string): Promise<void> {
+	async #handleListDaemonSessions(
+		stream: BrowserStream,
+		daemonId: string,
+		requestedLimit: number | undefined,
+	): Promise<void> {
 		try {
+			const limit = daemonSessionsLimit(requestedLimit);
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
 				this.#sendError(stream, `unknown daemon: ${daemonId}`);
@@ -1261,9 +1270,9 @@ export class FleetEdge {
 			// never-started daemons answer too. Empty list when no store.
 			const sessions =
 				entry.workspace?.kind === "clone"
-					? await listCloneDaemonSessions(this.#logStore, daemonId, DROPDOWN_SESSION_LIMIT)
-					: await listDaemonSessions(entry.cwd ?? "", DROPDOWN_SESSION_LIMIT);
-			this.#sendAnswer(stream, { type: "daemon_sessions", daemonId, sessions });
+					? await listCloneDaemonSessions(this.#logStore, daemonId, limit)
+					: await listDaemonSessions(entry.cwd ?? "", limit);
+			this.#sendAnswer(stream, { type: "daemon_sessions", daemonId, limit, sessions });
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}

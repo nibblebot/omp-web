@@ -1,4 +1,4 @@
-/* Modals: modal/sheet, danger-confirm, btw panel, shortcuts, pickers, stats tables, ask dialog, session-new. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Modals: modal/sheet, danger-confirm, btw panel, shortcuts, pickers, stats tables, ask dialog, session lists. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 .modal-backdrop {
 	position: fixed;
@@ -712,9 +712,9 @@ button.picker-row.kbd-active {
 	color: var(--muted-2);
 }
 
-/* --- SessionListPicker (resume and session picker): grouped rows beside a
-   preview pane. Picker-scoped class names: tx.css owns the bare .session-row
-   and .session-list selectors, so those names are not reused here. --- */
+/* --- SessionListPicker (resume and worktree session lists): one column of grouped
+   rows; the active row expands in place. Picker-scoped class names: tx.css owns the
+   bare .session-row and .session-list selectors, so those names are not reused here. --- */
 .session-list-dialog {
 	width: min(820px, 94vw);
 }
@@ -735,218 +735,313 @@ button.picker-row.kbd-active {
 	gap: var(--space-2);
 }
 .session-list-search {
-	flex: 1 1 220px;
+	flex: 1 1 14rem;
 	min-width: 0;
 }
-.session-list-scope {
+/* "This project | All projects": a two-option segmented switch. */
+.session-scope {
 	display: inline-flex;
 	align-items: center;
-	gap: var(--space-1);
+	padding: 2px;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+}
+.session-scope-btn {
+	padding: var(--space-1) var(--space-3);
+	background: none;
+	border: none;
+	border-radius: var(--r-xs);
+	color: var(--muted-3);
 	font-size: var(--fs-sm);
-	color: var(--muted);
 	white-space: nowrap;
+}
+.session-scope-btn.selected,
+.session-scope-btn.selected:not(:disabled):not(.active):hover {
+	background: var(--settings-fill);
+	color: var(--text);
 }
 .session-list-count {
 	font-size: var(--fs-micro);
 	color: var(--muted-2);
-}
-.session-list-body {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-	gap: var(--space-3);
-	min-height: 0;
 }
 .session-list-rows {
 	min-width: 0;
 	max-height: min(60vh, 520px);
 	overflow-y: auto;
 }
-.session-group-title {
-	padding: var(--space-2) var(--space-1) var(--space-1);
+.session-list-group-title {
+	padding: var(--space-2) var(--space-3) var(--space-1);
 	font-size: var(--fs-micro);
-	letter-spacing: 0.04em;
+	letter-spacing: var(--ls-micro);
 	text-transform: uppercase;
 	color: var(--muted-2);
 }
-.picker-session-row {
-	display: flex;
-	align-items: center;
-	gap: var(--space-1);
+/* The selected row and its expansion read as one card. */
+.session-list-item[data-active="true"] {
+	background: var(--hover);
 	border-radius: var(--r-md);
 }
-.picker-session-row.active {
+.session-list-item .session-pick.active {
+	background: none;
+}
+/* Key legend under the list; hidden on touch, where there are no keys. */
+.session-list-keys {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-4);
+	padding: var(--space-2) var(--space-1) 0;
+	border-top: 1px solid var(--border);
+	color: var(--muted-2);
+	font-size: var(--fs-micro);
+}
+.session-list-keys span {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+}
+.session-list-keys kbd {
+	min-width: 1.5em;
+	padding: 0 var(--space-1);
+	border: 1px solid var(--border);
+	border-bottom-width: 2px;
+	border-radius: var(--r-sm);
+	background: var(--panel);
+	color: var(--muted-3);
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	line-height: 1.4;
+	text-align: center;
+}
+@media (pointer: coarse) {
+	.session-list-keys {
+		display: none;
+	}
+}
+
+/* --- SessionPickerRow: one left-aligned line per session. The main control is a real
+   <button>, so it carries its own full chrome reset (the global button rule would
+   otherwise paint a gray bordered centered button). --- */
+.session-pick {
+	min-width: 0;
+	border-radius: var(--r-md);
+}
+.session-pick.active {
 	background: var(--hover);
 }
-.picker-session-row.current {
-	opacity: 0.7;
+.session-pick:hover:not(.active, .current, .blocked) {
+	background: var(--hover);
 }
-.session-row-main {
-	flex: 1 1 auto;
-	min-width: 0;
+.session-pick-line {
+	display: flex;
 	align-items: center;
 	gap: var(--space-2);
-}
-.session-row-text {
-	display: flex;
-	flex: 1 1 auto;
-	flex-direction: column;
 	min-width: 0;
 }
-.session-row-text .picker-label,
-.session-row-sub {
+.session-pick-main {
+	display: flex;
+	flex: 1 1 auto;
+	align-items: center;
+	gap: var(--space-2);
+	width: 100%;
+	min-width: 0;
+	margin: 0;
+	padding: var(--space-2) var(--space-3);
+	background: none;
+	border: none;
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-md);
+	text-align: left;
+}
+.session-pick[data-size="compact"] .session-pick-main {
+	padding: var(--space-1) var(--space-2);
+	font-size: var(--fs-sm);
+}
+/* The attached and blocked rows are disabled but stay legible. */
+.session-pick-main:disabled {
+	opacity: 1;
+	cursor: default;
+}
+.session-pick.current .session-pick-main {
+	color: var(--accent);
+}
+.session-pick.blocked .session-pick-main {
+	color: var(--muted);
+}
+.session-pick-title {
+	flex: 0 1 auto;
+	min-width: 2rem;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.session-row-pinned .picker-label {
-	font-weight: 600;
-}
-.session-row-sub {
-	font-size: var(--fs-micro);
-	color: var(--muted-2);
-}
-.session-status {
+.session-pick-dot {
 	flex: none;
 	width: 8px;
 	height: 8px;
 	border-radius: 50%;
 	background: var(--muted-2);
 }
-.session-status-complete {
-	background: var(--success);
-}
-.session-status-pending {
+.session-pick-dot[data-status="pending"] {
 	background: var(--accent);
 }
-.session-status-interrupted,
-.session-status-aborted {
+.session-pick-dot[data-status="interrupted"],
+.session-pick-dot[data-status="aborted"] {
 	background: var(--warning);
 }
-.session-status-error {
+.session-pick-dot[data-status="error"] {
 	background: var(--error);
 }
-.session-pin {
+.session-pick-pin,
+.session-pick-current {
 	flex: none;
-	padding: var(--space-1);
-	background: none;
-	border: none;
-	font-size: var(--fs-sm);
-	color: var(--muted-2);
-	cursor: pointer;
-}
-.session-pin[aria-pressed="true"] {
 	color: var(--accent);
-}
-.session-pin:hover,
-.session-pin:focus-visible {
-	color: var(--text);
-}
-.session-row-blocked {
 	font-size: var(--fs-micro);
-	color: var(--warning);
 }
-.session-add-project {
+.session-pick-tag {
 	flex: none;
-	align-self: center;
+	padding: 0 var(--space-2);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	color: var(--muted-2);
+	font-size: var(--fs-micro);
+	line-height: 1.5;
+}
+.session-pick-project {
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 9rem;
+	overflow: hidden;
+	color: var(--muted-2);
+	font-size: var(--fs-micro);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.session-pick-age {
+	flex: none;
+	margin-left: auto;
+	color: var(--muted-2);
+	font-size: var(--fs-micro);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.session-pick-add {
+	flex: none;
+	margin-right: var(--space-2);
 	padding: var(--space-1) var(--space-2);
 	font-size: var(--fs-micro);
 }
-.session-preview {
+.session-pick-blocked {
+	padding: 0 var(--space-3) var(--space-2);
+	color: var(--warning);
+	font-size: var(--fs-micro);
+}
+.session-pick[data-size="compact"] .session-pick-blocked {
+	padding: 0 var(--space-2) var(--space-1);
+}
+
+/* --- The active row's in-place expansion: latest conversation, folder, actions. --- */
+.session-expand {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
 	min-width: 0;
-	max-height: min(60vh, 520px);
-	padding: var(--space-3);
-	overflow-y: auto;
-	background: var(--panel-2);
-	border: 1px solid var(--border);
-	border-radius: var(--r-md);
+	padding: var(--space-1) var(--space-3) var(--space-3);
 }
-.session-preview-title {
+.session-expand-text {
+	display: -webkit-box;
 	margin: 0;
-	font-size: var(--fs-md);
-	overflow-wrap: anywhere;
-}
-.session-preview-prompt {
-	margin: 0;
-	font-size: var(--fs-sm);
+	overflow: hidden;
 	color: var(--muted);
-}
-.session-preview-meta {
-	display: grid;
-	grid-template-columns: max-content minmax(0, 1fr);
-	gap: var(--space-1) var(--space-3);
-	margin: 0;
 	font-size: var(--fs-sm);
-}
-.session-preview-meta dt {
-	color: var(--muted-2);
-}
-.session-preview-meta dd {
-	margin: 0;
+	line-clamp: 3;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
 	overflow-wrap: anywhere;
-}
-.session-preview-section h4 {
-	margin: 0 0 var(--space-1);
-	font-size: var(--fs-micro);
-	letter-spacing: 0.04em;
-	text-transform: uppercase;
-	color: var(--muted-2);
-}
-.session-preview-text {
-	margin: 0;
-	font-size: var(--fs-sm);
 	white-space: pre-wrap;
+}
+.session-expand-folder {
+	margin: 0;
+	color: var(--muted-2);
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
 	overflow-wrap: anywhere;
 }
-.session-preview-actions {
+/* Expansion actions: quiet text buttons on the left, the one primary action (Resume,
+   Save title, Delete session) pushed to the right. */
+.session-expand-actions {
 	display: flex;
 	flex-wrap: wrap;
-	gap: var(--space-2);
+	align-items: center;
+	gap: var(--space-1);
 }
-.session-rename {
+.session-action {
+	padding: var(--space-1) var(--space-3);
+	border-radius: var(--r-sm);
+	font-size: var(--fs-sm);
+	line-height: 1.4;
+}
+.session-action.quiet {
+	background: none;
+	border-color: transparent;
+	color: var(--muted-3);
+}
+.session-action.quiet:not(:disabled):hover {
+	background: var(--panel);
+	color: var(--text);
+}
+.session-action.quiet.danger:not(:disabled):hover {
+	color: var(--error);
+}
+.session-action.primary,
+.session-action.danger:not(.quiet),
+.session-expand-note {
+	margin-left: auto;
+}
+.session-action.primary {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--bg);
+	font-weight: 600;
+}
+.session-action.primary:not(:disabled):hover {
+	background: color-mix(in srgb, var(--accent), var(--bg) 12%);
+	border-color: color-mix(in srgb, var(--accent), var(--bg) 12%);
+}
+.session-action.danger:not(.quiet) {
+	background: var(--error);
+	border-color: var(--error);
+	color: var(--bg);
+	font-weight: 600;
+}
+.session-action.danger:not(.quiet):not(:disabled):hover {
+	background: color-mix(in srgb, var(--error), var(--bg) 12%);
+}
+.session-expand-note {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+}
+.session-expand-rename {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
 }
-.session-rename-input {
+.session-expand-rename-input {
 	width: 100%;
 }
-.session-delete-confirm {
+.session-expand-confirm {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
 	padding: var(--space-2);
 	font-size: var(--fs-sm);
 	background: var(--error-bg);
-	border: 1px solid var(--error);
+	border: 1px solid var(--error-border);
 	border-radius: var(--r-md);
 }
-.session-delete-confirm p {
+.session-expand-confirm p {
 	margin: 0;
-}
-@media (max-width: 640px) {
-	.session-list-body {
-		grid-template-columns: minmax(0, 1fr);
-	}
-}
-
-/* --- SessionPicker gate mode ("New session" top item) --- */
-.session-new {
-	align-items: center;
-	border: 1px solid var(--accent-border);
-	border-radius: var(--r-md);
-	background: var(--accent-dim);
-	margin-bottom: var(--space-2);
-}
-.session-new:hover {
-	background: var(--hover);
-	border-color: var(--accent);
-}
-.session-new-label {
-	color: var(--accent);
-	font-weight: 600;
 }
 
 /* --- Toast stack (Toasts.tsx): app-scoped notifications and errors ---
@@ -1045,7 +1140,7 @@ button.picker-row.kbd-active {
 	.picker-back,
 	.graph-filter,
 	.ask-option,
-	.session-new,
+	.session-pick-main,
 	button.picker-row {
 		min-width: 44px;
 		min-height: 44px;

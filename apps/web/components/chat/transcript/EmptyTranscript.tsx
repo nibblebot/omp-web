@@ -10,10 +10,11 @@ import {
 } from "solid-js";
 import type { SessionListEntry } from "#lib/wire/protocol";
 import { requestDaemonSessions, resumeDaemonSession, state } from "../../../state";
+import { openResumePicker } from "../../../store/resume";
+import { sessionRowFromListEntry } from "../../../store/session-list";
 import { reportError } from "../../../store/toasts";
-import { formatTimeAgo } from "../../../text/time-ago";
+import { SessionPickerRow } from "../../sessions/SessionPickerRow";
 import { PackageIcon, WorktreeIcon } from "../../ui/icons";
-import { displayTitle } from "../../ui/title-icons";
 
 /** Most recent sessions listed under "Recent in this workspace". */
 const RECENT_LIMIT = 5;
@@ -29,8 +30,9 @@ export const EmptyTranscript: Component = () => {
 		state.daemonRoster.find((d) => d.daemonId === state.currentSessionId),
 	);
 
-	// requestDaemonSessions is latest-wins per daemon: a request superseded by
-	// another one (e.g. the row dropdown's) resolves empty, which hides the list.
+	// The default fleet page (10) leaves headroom for the current session and
+	// empty ones filtered out below. A superseded request resolves empty, which
+	// hides the list.
 	const [sessions, setSessions] = createSignal<SessionListEntry[]>([]);
 	createEffect(
 		on(
@@ -44,7 +46,9 @@ export const EmptyTranscript: Component = () => {
 				});
 				requestDaemonSessions(daemonId).then(
 					(list) => {
-						if (!stale) setSessions(list);
+						if (stale) return;
+						setNowMs(Date.now());
+						setSessions(list);
 					},
 					() => {},
 				);
@@ -54,8 +58,11 @@ export const EmptyTranscript: Component = () => {
 	const recent = createMemo(() =>
 		sessions()
 			.filter((s) => s.path !== state.sessionFile && s.messageCount > 0)
-			.slice(0, RECENT_LIMIT),
+			.slice(0, RECENT_LIMIT)
+			.map((s) => sessionRowFromListEntry(s, state.sessionFile)),
 	);
+	// Ages are relative to when the list landed; the empty screen is short-lived.
+	const [nowMs, setNowMs] = createSignal(Date.now());
 
 	return (
 		<div class="chat-transcript-empty">
@@ -109,28 +116,27 @@ export const EmptyTranscript: Component = () => {
 						</h3>
 						<ul class="chat-transcript-empty-recent-list">
 							<For each={recent()}>
-								{(entry) => (
+								{(row) => (
 									<li>
-										<button
-											type="button"
-											class="chat-transcript-empty-recent-item"
-											onClick={() =>
-												resumeDaemonSession(state.currentSessionId, entry.path).catch(reportError)
+										<SessionPickerRow
+											row={row}
+											size="compact"
+											nowMs={nowMs()}
+											onChoose={() =>
+												resumeDaemonSession(state.currentSessionId, row.file).catch(reportError)
 											}
-										>
-											<span class="chat-transcript-empty-recent-name">
-												{displayTitle(entry.name?.trim()) ||
-													entry.firstMessage?.trim().slice(0, 120) ||
-													"Untitled session"}
-											</span>
-											<span class="chat-transcript-empty-recent-age">
-												{formatTimeAgo(entry.modifiedAt)}
-											</span>
-										</button>
+										/>
 									</li>
 								)}
 							</For>
 						</ul>
+						<button
+							type="button"
+							class="chat-transcript-empty-recent-all"
+							onClick={() => openResumePicker()}
+						>
+							All sessions…
+						</button>
 					</section>
 				</Show>
 			</div>

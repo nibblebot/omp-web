@@ -1,6 +1,6 @@
 import { createEffect, createSignal, on, onCleanup, type Component, type JSX } from "solid-js";
 import { afterMotion, type PresencePhase } from "../../../motion/presence";
-import { setMenuOpenId, setSessionsOpenId, menuOpenId, sessionsOpenId } from "./WorkspaceRow";
+import { setMenuOpenId, menuOpenId } from "./WorkspaceRow";
 import type { RowMode } from "../../../fleet-ui/row-presence";
 
 /** An exiting row is inert, so it must leave the sidebar's roving tab-stop set
@@ -69,9 +69,8 @@ export const RowMotion: Component<{
 					});
 					return;
 				}
-				// A leaving row must not keep a menu or dropdown open on itself.
+				// A leaving row must not keep its menu open on itself.
 				if (menuOpenId() === props.id) setMenuOpenId(null);
-				if (sessionsOpenId() === props.id) setSessionsOpenId(null);
 				holdRosterItems(el, true);
 				setPhase("exit");
 				const gen = generation;

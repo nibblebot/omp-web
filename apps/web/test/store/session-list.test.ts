@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { DaemonStatus } from "#lib/wire/protocol";
+import type { DaemonStatus, SessionListEntry } from "#lib/wire/protocol";
 import {
 	type SessionRow,
 	formatSessionAge,
@@ -8,8 +8,9 @@ import {
 	normalizeSessionTitle,
 	resolveSessionOwner,
 	sessionDisplayTitle,
+	sessionExpandText,
+	sessionRowFromListEntry,
 	sessionStatus,
-	sessionSubtitle,
 	validateSessionDelete,
 } from "../../store/session-list";
 
@@ -60,18 +61,16 @@ describe("groupSessions", () => {
 	});
 });
 
-describe("sessionDisplayTitle and sessionSubtitle", () => {
-	test("uses the explicit title and shows the first prompt as subtitle", () => {
+describe("sessionDisplayTitle", () => {
+	test("uses the explicit title", () => {
 		const r = row({ id: "s1", title: "Refactor auth", firstMessage: "fix the login bug" });
 		expect(sessionDisplayTitle(r)).toBe("Refactor auth");
-		expect(sessionSubtitle(r)).toBe("fix the login bug");
 	});
 
 	test("untitled rows fall back to the first prompt line, never the raw id", () => {
 		const r = row({ id: "0123abcd-deadbeef", firstMessage: "  add dark mode\nsecond line" });
 		expect(sessionDisplayTitle(r)).toBe("add dark mode");
 		expect(sessionDisplayTitle(r)).not.toContain("0123abcd");
-		expect(sessionSubtitle(r)).toBeUndefined();
 	});
 
 	test("an id-valued title is ignored and '(no messages)' is not a prompt", () => {
@@ -81,16 +80,89 @@ describe("sessionDisplayTitle and sessionSubtitle", () => {
 		expect(title).not.toContain("abc");
 	});
 
-	test("subtitle is omitted when it would repeat the title", () => {
-		const r = row({ id: "s2", title: "same", firstMessage: "same" });
-		expect(sessionSubtitle(r)).toBeUndefined();
-	});
-
 	test("long prompts are truncated with an ellipsis", () => {
 		const long = "x".repeat(300);
 		const r = row({ id: "s3", firstMessage: long });
 		expect(sessionDisplayTitle(r).length).toBe(80);
 		expect(sessionDisplayTitle(r).endsWith("…")).toBe(true);
+	});
+});
+
+describe("sessionExpandText", () => {
+	test("prefers the latest conversation over the first prompt", () => {
+		expect(sessionExpandText(row({ id: "a", recentText: " tail ", firstMessage: "head" }))).toBe(
+			"tail",
+		);
+	});
+
+	test("falls back to the first prompt, and to nothing for '(no messages)'", () => {
+		expect(sessionExpandText(row({ id: "a", title: "Named", firstMessage: "head" }))).toBe("head");
+		expect(sessionExpandText(row({ id: "a", firstMessage: "(no messages)" }))).toBe("");
+		expect(sessionExpandText(row({ id: "a" }))).toBe("");
+	});
+
+	test("omits a first prompt the untitled row already shows whole as its title", () => {
+		expect(sessionExpandText(row({ id: "a", firstMessage: "fix the sidebar" }))).toBe("");
+		const multiLine = "fix the sidebar\nand the dropdown";
+		expect(sessionExpandText(row({ id: "a", firstMessage: multiLine }))).toBe(multiLine);
+		const long = "x".repeat(81);
+		expect(sessionExpandText(row({ id: "a", firstMessage: long }))).toBe(long);
+	});
+});
+
+describe("sessionRowFromListEntry", () => {
+	const entry: SessionListEntry = {
+		path: "/sessions/a.jsonl",
+		id: "a",
+		name: "Billing",
+		cwd: "/srv/payments",
+		modifiedAt: NOW,
+		messageCount: 4,
+		firstMessage: "migrate invoices",
+		status: "error",
+	};
+
+	test("maps the fleet entry to an unpinned local row and flags the current file", () => {
+		expect(sessionRowFromListEntry(entry, "/sessions/a.jsonl")).toEqual({
+			id: "a",
+			file: "/sessions/a.jsonl",
+			title: "Billing",
+			firstMessage: "migrate invoices",
+			status: "error",
+			cwd: "/srv/payments",
+			projectLabel: "payments",
+			modifiedMs: NOW,
+			messageCount: 4,
+			pinned: false,
+			scope: "local",
+			current: true,
+		});
+		expect(sessionRowFromListEntry(entry, undefined).current).toBe(false);
+	});
+
+	test("omits absent optional fields", () => {
+		const bare = sessionRowFromListEntry(
+			{ path: "/s/b.jsonl", id: "b", cwd: "/w/app", modifiedAt: 1, messageCount: 0 },
+			undefined,
+		);
+		expect(bare).not.toHaveProperty("title");
+		expect(bare).not.toHaveProperty("firstMessage");
+		expect(bare).not.toHaveProperty("status");
+	});
+
+	test("an unrecognized status string is dropped", () => {
+		const r = sessionRowFromListEntry(
+			{
+				path: "/s/c.jsonl",
+				id: "c",
+				cwd: "/w/app",
+				modifiedAt: 1,
+				messageCount: 1,
+				status: "bogus" as SessionListEntry["status"],
+			},
+			undefined,
+		);
+		expect(r).not.toHaveProperty("status");
 	});
 });
 

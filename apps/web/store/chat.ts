@@ -844,7 +844,7 @@ export function mayAutoFocusComposer(): boolean {
 	);
 }
 
-/** Start a fresh session (/new, New session button, picker gate) and focus the composer once it lands. */
+/** Start a fresh session (/new, New session button, new workspace) and focus the composer once it lands. */
 export function startNewSession(): Promise<void> {
 	if (!collabLive(state.collabStatus)) return startNewSessionNow();
 	requestDangerConfirm({
