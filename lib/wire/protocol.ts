@@ -887,7 +887,10 @@ export type WebMethodName =
 	| "vibeRehydrate"
 	| "downloadManifest"
 	| "dumpSessionArchive"
-	| "exportDownload";
+	| "exportDownload"
+	| "getJobTree"
+	| "getJobDetail"
+	| "cancelJob";
 
 /**
  * Methods that change no session state. The session skips the post-mutation
@@ -932,6 +935,8 @@ export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> =
 	vibeStatus: true,
 	downloadManifest: true,
 	getResumeCapabilities: true,
+	getJobTree: true,
+	getJobDetail: true,
 	resumeResolve: true,
 	resumeList: true,
 	gitStatus: true,
@@ -1718,6 +1723,87 @@ export interface TodoBoardDto {
 	phases: TodoPhase[];
 	revision: string;
 	selected?: { phase: number; task: number };
+}
+
+/** Lifecycle of an async background job (SDK `AsyncJob.status`). */
+export type JobStatus = "running" | "completed" | "failed" | "cancelled";
+
+/** A subagent that owns listed jobs, or an ancestor linking one to the viewing agent. */
+export interface JobAgentDto {
+	id: string;
+	parentId?: string;
+}
+
+/**
+ * One background job of `getJobTree`: the SDK's snapshot item without the full
+ * command line (`getJobDetail` carries it, so every poll stays small).
+ */
+export interface JobDto {
+	id: string;
+	/** SDK job kind ("bash", "task", "eval"); an unknown kind renders as a generic job. */
+	type: string;
+	status: JobStatus;
+	/** Short description, cut to 120 characters by the SDK. */
+	label: string;
+	/** Epoch ms. */
+	startTime: number;
+	/** Epoch ms; set once the job settled. */
+	endTime?: number;
+	/** The subagent a task job runs. */
+	agentId?: string;
+	/** Registry id of the agent that registered the job. */
+	ownerId?: string;
+	/** This session registered the job itself, so `cancelJob` may stop it; a subagent's job is watch-only. */
+	own: boolean;
+}
+
+/** Where a `getJobTree` row sits (SDK `JobTreePlace`). */
+export interface JobTreePlaceDto {
+	/** 0 for the top level. */
+	depth: number;
+	/** Per enclosing level below the top, whether that level's rail continues past this row. */
+	rails: boolean[];
+	/** The row is the last of its siblings. */
+	last: boolean;
+	/** Rows nest under this one. */
+	parent: boolean;
+}
+
+/** A job row (a task job also heads its subagent), or a header for a subagent whose task job is no longer listed. */
+export type JobTreeRowDto = JobTreePlaceDto &
+	({ kind: "job"; job: JobDto; agent?: JobAgentDto } | { kind: "agent"; agent: JobAgentDto });
+
+/**
+ * `getJobTree`: the viewing agent's background jobs and every subagent's below
+ * it, as rows in SDK display order (busiest branches first, depth first). The
+ * method answers null when the session has no async job manager.
+ */
+export interface JobTreeDto {
+	/** The agent the tree is for; its own jobs sit at the top level. */
+	rootId?: string;
+	rows: JobTreeRowDto[];
+}
+
+/** `getJobDetail`: what the jobs sheet shows about one job beyond its row (SDK `AsyncJobInspection`, without the widget). */
+export interface JobDetailDto {
+	/** Full command line of a job that runs a process. */
+	command?: string;
+	/** Directory that command started in. */
+	cwd?: string;
+	/** Live pids the job's command spawned. */
+	pids: number[];
+	exitCode?: number;
+	/** Output tail while running, the final result or error text once settled; cut to its last characters. */
+	output?: string;
+	/** `output` was cut from the front. */
+	outputTruncated?: boolean;
+	/** Artifact holding the full output when the SDK cut it. */
+	artifactId?: string;
+}
+
+/** `cancelJob` answer: false when the job settled before the cancel landed. */
+export interface JobCancelResultDto {
+	cancelled: boolean;
 }
 
 /** omp CLI, provider-auth, and default-model probe (GET /ctl/omp-setup). */

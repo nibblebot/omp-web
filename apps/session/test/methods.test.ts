@@ -562,6 +562,7 @@ describe("READ_ONLY classification", () => {
 		btwCancel: true,
 		btwFollowUp: true,
 		btwStart: true,
+		cancelJob: true,
 		clearModelRole: true,
 		clearQueue: true,
 		deleteModelPreset: true,

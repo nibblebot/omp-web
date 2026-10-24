@@ -21,7 +21,7 @@ export default [
 			{
 				name: "Sizes",
 				description:
-					"Sizes measured and the default features loaded: the summary lists them, and each row shows its own size. Toggles load or unload at once; Analysis Mode, Plan Mode, Git Review and Todos are marked In development with a disabled, unchecked toggle. The Debug Sheet row carries the Open Debug Sheet button.",
+					"Sizes measured and the default features loaded: the summary lists them, and each row shows its own size. Toggles load or unload at once; Analysis Mode, Plan Mode, Git Review, Todos and Background Jobs are marked In development with a disabled, unchecked toggle. The Debug Sheet row carries the Open Debug Sheet button.",
 				seed: () => {
 					featureSizesFixture.available = true;
 					resetFeatureSizes();

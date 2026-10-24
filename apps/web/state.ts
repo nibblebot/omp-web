@@ -257,6 +257,7 @@ export type ModalName =
 	| "plan-review"
 	| "annotations"
 	| "todos"
+	| "jobs"
 	| "compaction"
 	| "btw"
 	| "share"

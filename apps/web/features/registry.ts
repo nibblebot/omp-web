@@ -55,6 +55,7 @@ export const LOADERS: Record<FeatureId, Loader> = {
 	plan: () => import("./plan"),
 	git: () => import("./git"),
 	todos: () => import("./todos"),
+	jobs: () => import("./jobs"),
 	plugins: () => import("./plugins"),
 	debug: () => import("./debug"),
 };

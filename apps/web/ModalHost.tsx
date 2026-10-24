@@ -109,6 +109,7 @@ export const ModalHost: Component = () => {
 		"plan-review": () => featureModalHost("plan-review"),
 		annotations: () => featureModalHost("annotations"),
 		todos: () => featureModalHost("todos"),
+		jobs: () => featureModalHost("jobs"),
 		compaction: () => <CompactionDialog onClose={close} />,
 		share: () => <ShareSheet onClose={close} />,
 		btw: () => <BtwSheet onClose={close} />,

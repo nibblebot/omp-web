@@ -1,0 +1,178 @@
+import { createSignal } from "solid-js";
+import type {
+	JobDetailDto,
+	JobDto,
+	JobStatus,
+	JobTreeDto,
+	JobTreeRowDto,
+} from "#lib/wire/protocol";
+import { state } from "../state";
+import { call } from "./transport";
+
+/**
+ * Background-jobs domain (the Jobs feature): the attached session's job tree,
+ * the selected job's inspection, and the cancel of the session's own jobs.
+ *
+ * The sheet polls while it is open. The wire has no job frames, because the SDK
+ * announces no job status changes, and `getJobTree`/`getJobDetail` are
+ * read-only calls that never trigger a state broadcast, so a short poll costs
+ * one small answer per tick and needs no new frame type.
+ *
+ * Every answer is stamped with the session it was asked of and dropped when
+ * the attached session changed meanwhile, as in `store/plugins.ts`.
+ */
+
+/** Poll period while the sheet is open (the TUI redraws its sheet every 250 ms; a browser round trip does not need to). */
+export const JOBS_POLL_MS = 2000;
+
+interface TreeSnapshot {
+	sessionId: string;
+	/** Null when the session has no async job manager. */
+	tree: JobTreeDto | null;
+}
+
+interface DetailSnapshot {
+	sessionId: string;
+	jobId: string;
+	/** Null once the daemon no longer lists the job. */
+	detail: JobDetailDto | null;
+}
+
+const [snapshot, setSnapshot] = createSignal<TreeSnapshot | undefined>(undefined);
+const [detailSnapshot, setDetailSnapshot] = createSignal<DetailSnapshot | undefined>(undefined);
+const [selectedId, setSelectedId] = createSignal<string | null>(null);
+const [cancelling, setCancelling] = createSignal<string | null>(null);
+const [error, setError] = createSignal<string | null>(null);
+const [cancelError, setCancelError] = createSignal<string | null>(null);
+
+const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** The tree of the session attached now; an answer for a session left behind never shows. */
+const currentTree = (): TreeSnapshot | undefined => {
+	const current = snapshot();
+	return current?.sessionId === state.currentSessionId ? current : undefined;
+};
+
+/** `loading` until the first answer, `unavailable` when the session runs no async jobs, else `ready`. */
+export const jobsView = (): "loading" | "unavailable" | "ready" => {
+	const current = currentTree();
+	if (current === undefined) return "loading";
+	return current.tree === null ? "unavailable" : "ready";
+};
+
+export const jobRows = (): JobTreeRowDto[] => currentTree()?.tree?.rows ?? [];
+export const jobsError = error;
+/** Why the last Cancel failed (a refusal, a lost connection); cleared by the next Cancel. */
+export const jobCancelError = cancelError;
+export const selectedJobId = selectedId;
+export const cancellingJobId = cancelling;
+
+/** A job's status as the sheet names it. */
+export const JOB_STATUS_LABEL: Record<JobStatus, string> = {
+	running: "running",
+	completed: "done",
+	failed: "failed",
+	cancelled: "cancelled",
+};
+
+/** Stable identity of a tree row across polls, so the list keeps its rows (and a pending Cancel confirm) instead of remounting them. */
+export const jobRowKey = (row: JobTreeRowDto): string =>
+	row.kind === "job" ? `job:${row.job.id}` : `agent:${row.agent.id}`;
+
+/** Run time of a job: counting up while it runs, frozen once it settled, unknown for a cancelled job whose run has not ended yet. */
+export function jobElapsedMs(job: JobDto, now: number): number | undefined {
+	if (job.status === "running") return Math.max(0, now - job.startTime);
+	return job.endTime === undefined ? undefined : Math.max(0, job.endTime - job.startTime);
+}
+
+/** Every job row of the tree, in display order. */
+export const jobList = (): JobDto[] =>
+	jobRows().flatMap((row) => (row.kind === "job" ? [row.job] : []));
+
+export const selectedJob = (): JobDto | undefined =>
+	jobList().find((job) => job.id === selectedId());
+
+/** The selected job's inspection: undefined while it loads, null once the job is gone. */
+export const selectedJobDetail = (): JobDetailDto | null | undefined => {
+	const current = detailSnapshot();
+	return current?.sessionId === state.currentSessionId && current.jobId === selectedId()
+		? current.detail
+		: undefined;
+};
+
+async function loadDetail(sessionId: string, jobId: string): Promise<void> {
+	const detail = (await call("getJobDetail", [jobId])) as JobDetailDto | null;
+	if (sessionId !== state.currentSessionId || jobId !== selectedId()) return;
+	setDetailSnapshot({ sessionId, jobId, detail });
+}
+
+let refreshing: Promise<void> | undefined;
+
+/** Reload the tree and the selected job's detail; a refresh already in flight is joined, never stacked. */
+export function refreshJobs(): Promise<void> {
+	refreshing ??= (async () => {
+		const sessionId = state.currentSessionId;
+		try {
+			const tree = (await call("getJobTree", [])) as JobTreeDto | null;
+			if (sessionId !== state.currentSessionId) return;
+			setSnapshot({ sessionId, tree });
+			setError(null);
+			const jobId = selectedId();
+			if (jobId === null) return;
+			if (selectedJob() === undefined) {
+				// The row left the list (evicted after its retention window).
+				setSelectedId(null);
+				return;
+			}
+			await loadDetail(sessionId, jobId);
+		} catch (err) {
+			if (sessionId === state.currentSessionId) setError(message(err));
+		} finally {
+			refreshing = undefined;
+		}
+	})();
+	return refreshing;
+}
+
+/** Select a job row (or none) and fetch its inspection at once. */
+export function selectJob(jobId: string | null): void {
+	if (jobId === selectedId()) return;
+	setSelectedId(jobId);
+	setDetailSnapshot(undefined);
+	if (jobId === null) return;
+	const sessionId = state.currentSessionId;
+	loadDetail(sessionId, jobId).catch((err: unknown) => {
+		if (sessionId === state.currentSessionId) setError(message(err));
+	});
+}
+
+/** Cancel one of the session's own running jobs; the daemon refuses any other. The tree reloads either way. */
+export async function cancelOwnJob(jobId: string): Promise<void> {
+	const sessionId = state.currentSessionId;
+	setCancelling(jobId);
+	setCancelError(null);
+	try {
+		await call("cancelJob", [jobId]);
+	} catch (err) {
+		if (sessionId === state.currentSessionId) setCancelError(message(err));
+	} finally {
+		setCancelling(null);
+	}
+	await refreshJobs();
+}
+
+/** Poll while the sheet is open: one refresh now, then one per period, skipped while the page is hidden. Returns the stop function. */
+export function startJobsPolling(): () => void {
+	void refreshJobs();
+	const timer = setInterval(() => {
+		if (!document.hidden) void refreshJobs();
+	}, JOBS_POLL_MS);
+	return () => {
+		clearInterval(timer);
+		setSnapshot(undefined);
+		setSelectedId(null);
+		setDetailSnapshot(undefined);
+		setError(null);
+		setCancelError(null);
+	};
+}
