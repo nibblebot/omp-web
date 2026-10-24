@@ -493,40 +493,255 @@ export const genericImageTool: ToolItem = tool(
 	[terminalScreenshot],
 );
 
-// hub
-/** HubToolCard: message sent to a peer. */
-export const hubSendTool: ToolItem = tool(
-	"hub",
-	"done",
-	{
-		op: "send",
-		to: "ChatScreenStories",
-		message:
-			"fixtures/chat.ts now exports chatBashItems; rebase before editing the transcript story.",
+// eval details: printed views and status events
+const evalViewsCode = lines(
+	"import json, pandas as pd",
+	"df = pd.DataFrame(rows, columns=['component', 'lines', 'tests'])",
+	"print(df)",
+	"print(json.loads(Path('package.json').read_text())['scripts'])",
+	"print(Markdown(summary))",
+);
+const evalDataFrameText = lines(
+	"       component  lines  tests",
+	"0      ToolCard    212      4",
+	"1  TaskToolCard     48      2",
+	"2   EvalToolCard    131      6",
+);
+const evalScriptsText =
+	"{'dev': 'bun scripts/dev.ts', 'test': 'bun scripts/test.ts', 'lint': 'bun scripts/lint.ts'}";
+const evalMarkdownText = "Summary: 3 cards, 12 tests";
+/** EvalToolCard: a cell that printed a DataFrame, a dict and a Markdown object; each shows as a view in place of its text. */
+export const evalViewsTool: ToolItem = {
+	...tool(
+		"eval",
+		"done",
+		{ language: "python", code: evalViewsCode },
+		lines(evalDataFrameText, evalScriptsText, evalMarkdownText),
+	),
+	details: {
+		language: "python",
+		languages: ["python"],
+		cells: [
+			{
+				index: 0,
+				code: evalViewsCode,
+				language: "python",
+				status: "complete",
+				output: lines(evalDataFrameText, evalScriptsText, evalMarkdownText),
+				views: [
+					{
+						text: evalDataFrameText,
+						view: {
+							kind: "table",
+							columns: [
+								{ head: "", numeric: false },
+								{ head: "component", numeric: false },
+								{ head: "lines", numeric: true },
+								{ head: "tests", numeric: true },
+							],
+							rows: [
+								["0", "ToolCard", "212", "4"],
+								["1", "TaskToolCard", "48", "2"],
+								["2", "EvalToolCard", "131", "6"],
+							],
+						},
+					},
+					{
+						text: evalScriptsText,
+						view: {
+							kind: "json",
+							value: {
+								dev: "bun scripts/dev.ts",
+								test: "bun scripts/test.ts",
+								lint: "bun scripts/lint.ts",
+								nested: { workers: [1, 2, 3], retry: { max: 3, backoffMs: 250 } },
+							},
+						},
+					},
+					{
+						text: evalMarkdownText,
+						view: {
+							kind: "markdown",
+							text: "### Summary\n\n- **3** cards\n- **12** tests\n\n`bun scripts/test.ts` passes.",
+						},
+					},
+				],
+			},
+		],
 	},
-	"Delivered to ChatScreenStories",
-);
-/** HubToolCard: waiting for a peer reply. */
-export const hubWaitTool: ToolItem = tool(
-	"hub",
+};
+/** EvalToolCard: running cell; helpers logged status events and an MCP call reports progress (frame `live`). */
+export const evalStatusRunningTool: ToolItem = {
+	...tool(
+		"eval",
+		"running",
+		{
+			language: "python",
+			code: lines(
+				"issues = tool.linear_list_issues(team='OMP', limit=100)",
+				"log(f'fetched {len(issues)} issues')",
+			),
+		},
+		"scanning issues\n",
+	),
+	live: {
+		kind: "eval",
+		elided: 14,
+		status: [
+			{ op: "log", message: "scanning issues" },
+			{ op: "read", path: "package.json", chars: 1832 },
+			{ op: "agent", id: "Triage-1", status: "running", toolCount: 4 },
+			{
+				op: "mcp_progress",
+				id: "call-1",
+				tool: "linear/list_issues",
+				progress: 30,
+				total: 100,
+				message: "Fetching page 3",
+			},
+		],
+		at: Date.now(),
+	},
+};
+/** EvalToolCard: settled cell with its full status log; a helper's `preview` text never joins the line. */
+export const evalStatusDoneTool: ToolItem = {
+	...tool(
+		"eval",
+		"done",
+		{
+			language: "js",
+			code: "log('start');\nconst files = await ls('apps/web');\nlog(`${files.length} entries`);",
+		},
+		"12 entries",
+	),
+	details: {
+		languages: ["js"],
+		cells: [{ index: 0, code: "", language: "js", status: "complete", output: "12 entries" }],
+		statusEventsElided: 3,
+		statusEvents: [
+			{ op: "log", message: "start" },
+			{ op: "ls", path: "apps/web", count: 12 },
+			{ op: "read", path: "apps/web/state.ts", chars: 5120, preview: "export interface…" },
+			{ op: "log", message: "12 entries" },
+		],
+		notice: "Python is unavailable in this session; ran in the JavaScript backend.",
+	},
+};
+
+// generic: MCP progress while the call runs
+/** GenericToolCard: MCP call in flight; the output is the server's progress line. */
+export const genericMcpProgressTool: ToolItem = tool(
+	"mcp__linear_list_issues",
 	"running",
-	{ op: "wait", from: "RosterSubagentStories", timeout: 60 },
-	"",
+	issueArgs,
+	"Fetching issues (3/10)",
 );
-/** HubToolCard: poll that returned a reply. */
-export const hubPollTool: ToolItem = tool(
-	"hub",
-	"done",
-	{ op: "poll", name: "SharedStories" },
-	lines("From SharedStories:", "Modal stories need tabs: true."),
-);
-/** HubToolCard: send to a peer that is gone. */
-export const hubErrorTool: ToolItem = tool(
-	"hub",
-	"error",
-	{ op: "send", to: "TxStories", message: "Is routes.ts free to edit?" },
-	"Peer 'TxStories' is not registered.",
-);
+
+// wait
+const waitJobs = [
+	{
+		id: "TraceRetry",
+		type: "task",
+		status: "running",
+		label: "Trace the retry path through the outbox",
+		durationMs: 94_000,
+		stage: "Reading the outbox resend logic",
+		completionPercent: 62,
+	},
+	{
+		id: "bg_2",
+		type: "bash",
+		status: "running",
+		label: "bun run test --watch apps/web",
+		durationMs: 41_000,
+	},
+	{
+		id: "bg_1",
+		type: "eval",
+		status: "running",
+		label: "fetch and cache the issue list",
+		durationMs: 12_000,
+	},
+] as const;
+/** WaitToolCard: call in flight; live tiles for a subagent (stage and completion ring), a bash job and an eval job. */
+export const waitRunningTool: ToolItem = {
+	...tool("wait", "running", {}, ""),
+	live: { kind: "wait", jobs: waitJobs.map((job) => ({ ...job })), at: Date.now() },
+};
+const waitSettledJobs = [
+	{ id: "bg_3", type: "bash", status: "completed", label: "bun run build:web", durationMs: 38_000 },
+	{
+		id: "bg_4",
+		type: "bash",
+		status: "failed",
+		label: "bun scripts/test.ts apps/web/test/store",
+		durationMs: 21_000,
+		exitCode: 1,
+	},
+	{
+		id: "SweepCss",
+		type: "task",
+		status: "cancelled",
+		label: "Audit CSS for unused selectors",
+		durationMs: 7_000,
+	},
+	{
+		id: "TraceRetry",
+		type: "task",
+		status: "running",
+		label: "Trace the retry path through the outbox",
+		durationMs: 130_000,
+		stage: "Writing the failing test",
+		completionPercent: 80,
+	},
+] as const;
+/** WaitToolCard: settled call; the jobs as the wait left them, plus a subagent with no job row. */
+export const waitSettledTool: ToolItem = {
+	...tool(
+		"wait",
+		"done",
+		{},
+		"## Completed (3)\n\n### bg_3 [bash] - completed\nLabel: bun run build:web",
+	),
+	details: {
+		op: "wait",
+		jobs: waitSettledJobs.map((job) => ({ ...job, resultText: "(output kept by the model)" })),
+		agents: [
+			{
+				id: "PeerWoken",
+				parentId: "TraceRetry",
+				activity: "Replying to a question",
+				ageMs: 52_000,
+				live: true,
+			},
+			{ id: "Revived", ageMs: 311_000, live: false },
+		],
+	},
+};
+/** WaitToolCard: call that found nothing to wait for; the result text shows. */
+export const waitIdleTool: ToolItem = {
+	...tool(
+		"wait",
+		"done",
+		{},
+		"Nothing to wait for: no background job or service you started is running, and no agent you messaged this run owes a reply.",
+	),
+	details: { op: "wait", jobs: [] },
+};
+/** WaitToolCard: eleven watched jobs; nine tiles show and the rest are counted. */
+export const waitManyTool: ToolItem = {
+	...tool("wait", "done", {}, ""),
+	details: {
+		op: "wait",
+		jobs: Array.from({ length: 11 }, (_, i) => ({
+			id: `bg_${i + 10}`,
+			type: "bash",
+			status: i < 8 ? "completed" : "running",
+			label: `bun scripts/shard.ts --index ${i}`,
+			durationMs: 9_000 + i * 1_300,
+		})),
+	},
+};
 
 // lsp
 /** LspToolCard: definition lookup. */
@@ -1046,3 +1261,44 @@ export const multiFilePatchToolItem: ToolItem = {
 		],
 	},
 };
+
+// task: subagents reporting their current step
+/** TaskToolCard: delegated call whose running agents report a stage (from their completion probe). */
+export const taskStageTool: ToolItem = tool(
+	"task",
+	"running",
+	{ description: "Trace the retry path through the outbox" },
+	"",
+);
+
+const stageSub = (
+	index: number,
+	id: string,
+	description: string,
+	progress: NonNullable<SubagentInfo["progress"]>,
+): SubagentInfo => ({
+	id,
+	index,
+	agent: "task",
+	description,
+	status: "running",
+	lastUpdate: FIXTURE_NOW - 3_000,
+	parentToolCallId: taskStageTool.toolCallId,
+	progress: { status: "running", ...progress },
+});
+
+/** state.subagents patch for the stage variant: a stage with a tool in flight, and a stage alone. */
+export const taskStageSubagentMap: typeof state.subagents = new Map(
+	[
+		stageSub(0, "TraceRetry", "Trace the retry path", {
+			stage: "Reading the outbox resend logic",
+			currentTool: "grep",
+			currentToolIntent: "Find callers of resend",
+			durationMs: 94_000,
+		}),
+		stageSub(1, "SweepCss", "Audit CSS for unused selectors", {
+			stage: "Cross-checking selectors against the stories",
+			durationMs: 61_000,
+		}),
+	].map((info) => [info.id, info]),
+);

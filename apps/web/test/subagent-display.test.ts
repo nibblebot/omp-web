@@ -164,6 +164,19 @@ describe("liveLineOf", () => {
 		expect(formatLiveLine({ tool: "bash" })).toBe("bash");
 		expect(formatLiveLine({ intent: "Thinking" })).toBe("Thinking");
 	});
+
+	test("a reported stage leads the line and replaces the intent", () => {
+		const live = liveLineOf(
+			pickProgress({
+				currentTool: "grep",
+				currentToolIntent: "Find callers",
+				stage: "Tracing the retry path",
+			}),
+		);
+		expect(live).toEqual({ tool: "grep", intent: "Find callers", stage: "Tracing the retry path" });
+		expect(formatLiveLine(live!)).toBe("Tracing the retry path · grep");
+		expect(liveLineOf({ stage: "Waiting on tests" })).toEqual({ stage: "Waiting on tests" });
+	});
 });
 
 describe("displayTitle (title.icons)", () => {

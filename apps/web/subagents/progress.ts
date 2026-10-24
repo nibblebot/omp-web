@@ -15,6 +15,8 @@ export interface SubagentProgressView {
 	lastTool?: { tool: string; args?: string; intent?: string; isError?: boolean };
 	/** The agent's latest stated intent, kept after its tool call finishes. */
 	lastIntent?: string;
+	/** The agent's current step in its own words, from its periodic completion probe; preferred over `lastIntent` while running. */
+	stage?: string;
 	/** `<provider>/<id>`, suffixed with `:<level>` when the level was set explicitly. */
 	resolvedModel?: string;
 	/** Provider/id including routing, with no thinking suffix. */
@@ -46,6 +48,7 @@ export function pickProgress(raw: unknown): SubagentProgressView | undefined {
 		currentToolStartMs: typeof p.currentToolStartMs === "number" ? p.currentToolStartMs : undefined,
 		lastTool,
 		lastIntent: str(p.lastIntent),
+		stage: str(p.stage),
 		resolvedModel: str(p.resolvedModel),
 		resolvedModelIdentity: str(p.resolvedModelIdentity),
 		resolvedThinkingLevel: str(p.resolvedThinkingLevel),
@@ -108,21 +111,16 @@ export function modelView(
 // Live line
 // ---------------------------------------------------------------------------
 
-/** The live line of a running subagent: a tool and/or an intent, never its arguments. */
+/** The live line of a running subagent: its stage, and/or a tool and an intent; never arguments. */
 export interface SubagentLiveLine {
+	/** The agent's current step in its own words; replaces the intent in the formatted line. */
+	stage?: string;
 	tool?: string;
 	intent?: string;
 	isError?: boolean;
 }
 
-/**
- * Precedence: the in-flight tool with its intent; else the last finished tool with its intent
- * (flagged when it errored); else the last intent alone; else nothing.
- */
-export function liveLineOf(
-	progress: SubagentProgressView | undefined,
-): SubagentLiveLine | undefined {
-	if (!progress) return undefined;
+function toolLiveLine(progress: SubagentProgressView): SubagentLiveLine | undefined {
 	if (progress.currentTool !== undefined) {
 		return { tool: progress.currentTool, intent: progress.currentToolIntent };
 	}
@@ -137,7 +135,21 @@ export function liveLineOf(
 	return undefined;
 }
 
-/** `tool · intent`, skipping whichever part is missing. */
+/**
+ * Precedence: the in-flight tool with its intent; else the last finished tool with its intent
+ * (flagged when it errored); else the last intent alone; else nothing. A stage rides along
+ * and, in the formatted line, takes the intent's place.
+ */
+export function liveLineOf(
+	progress: SubagentProgressView | undefined,
+): SubagentLiveLine | undefined {
+	if (!progress) return undefined;
+	const live = toolLiveLine(progress);
+	return progress.stage === undefined ? live : { ...live, stage: progress.stage };
+}
+
+/** `stage · tool` when the agent reported a stage, else `tool · intent`, skipping whichever part is missing. */
 export function formatLiveLine(live: SubagentLiveLine): string {
-	return [live.tool, live.intent].filter((part) => part !== undefined && part !== "").join(" · ");
+	const parts = live.stage === undefined ? [live.tool, live.intent] : [live.stage, live.tool];
+	return parts.filter((part) => part !== undefined && part !== "").join(" · ");
 }

@@ -245,6 +245,121 @@ describe("running tool output on the wire", () => {
 	});
 });
 
+describe("live eval and wait status on the wire", () => {
+	const settle = (toolName: string, text: string, details: unknown): AgentSessionEvent =>
+		({
+			type: "tool_execution_end",
+			toolCallId: CALL,
+			toolName,
+			result: { content: [{ type: "text", text }], details },
+		}) as unknown as AgentSessionEvent;
+	/** The SDK's partial of an eval or wait call: the text so far and the call's details. */
+	const partial = (toolName: string, text: string, details: unknown): AgentSessionEvent =>
+		({
+			type: "tool_execution_update",
+			toolCallId: CALL,
+			toolName,
+			args: {},
+			partialResult: { content: [{ type: "text", text }], details },
+		}) as unknown as AgentSessionEvent;
+	const evalDetails = (statusEvents: unknown[]) => ({ cells: [], statusEvents });
+	const waitDetails = (durationMs: number, stage: string) => ({
+		op: "wait",
+		jobs: [
+			{
+				id: "Trace",
+				type: "task",
+				status: "running",
+				label: "Trace the retry path",
+				durationMs,
+				stage,
+				widget: { title: "a large widget view" },
+				resultText: "a long result",
+			},
+		],
+	});
+	function toolCard() {
+		const card = state.items.find((item) => item.kind === "tool");
+		if (card?.kind !== "tool") throw new Error("no tool card");
+		return card;
+	}
+
+	test("eval status events reach the card slimmed and only when they change; settling keeps the details", async () => {
+		const entry = freshEntry();
+		attachMidTool();
+		deliver(entry, start);
+		const log = { op: "log", message: "scanning", preview: "FILE BODY NEVER SENT" };
+		const first = deliver(entry, partial("eval", "out\n", evalDetails([log])));
+		await tick();
+		expect(first).toMatchObject({
+			live: { kind: "eval", status: [{ op: "log", message: "scanning" }] },
+		});
+		expect(JSON.stringify(first)).not.toContain("FILE BODY");
+		expect(toolCard().live).toMatchObject({ kind: "eval", status: [{ op: "log" }] });
+
+		// Same output and same status: nothing to send.
+		expect(deliver(entry, partial("eval", "out\n", evalDetails([log])))).toBeNull();
+
+		// A new event alone is an empty append: the output does not ride again.
+		const progress = { op: "mcp_progress", id: "c1", tool: "linear/list", progress: 1, total: 4 };
+		const next = deliver(entry, partial("eval", "out\n", evalDetails([log, progress])));
+		expect(next).toMatchObject({ output: "", append: true });
+		await tick();
+		expect(cardOutput()).toBe("out\n");
+		expect(toolCard().live).toMatchObject({
+			status: [{ op: "log" }, { op: "mcp_progress", progress: 1 }],
+		});
+
+		const settled = { cells: [], statusEvents: [log, progress] };
+		deliver(entry, settle("eval", "out\nmore\n", settled));
+		expect(toolCard()).toMatchObject({ status: "done", details: settled });
+		expect(toolCard().live).toBeUndefined();
+	});
+
+	test("a wait's tiles go out without widgets or results, and a clock tick alone is not sent", async () => {
+		const entry = freshEntry();
+		attachMidTool();
+		deliver(entry, start);
+		const first = deliver(entry, partial("wait", "", waitDetails(500, "reading")));
+		await tick();
+		expect(first).toMatchObject({
+			live: { kind: "wait", jobs: [{ id: "Trace", stage: "reading" }] },
+		});
+		expect(JSON.stringify(first)).not.toContain("widget");
+		expect(JSON.stringify(first)).not.toContain("a long result");
+		expect(toolCard().live).toMatchObject({ kind: "wait" });
+
+		expect(deliver(entry, partial("wait", "", waitDetails(1000, "reading")))).toBeNull();
+		const changed = deliver(entry, partial("wait", "", waitDetails(1500, "writing the test")));
+		expect(changed).toMatchObject({
+			live: { jobs: [{ stage: "writing the test", durationMs: 1500 }] },
+		});
+	});
+
+	test("a browser that attaches mid-call is primed with the live status, and a resync resends it", async () => {
+		const entry = freshEntry();
+		attachMidTool();
+		deliver(entry, start);
+		const details = evalDetails([{ op: "log", message: "scanning" }]);
+		deliver(entry, partial("eval", "", details));
+		await tick();
+
+		attachMidTool();
+		expect(toolCard().live).toBeUndefined();
+		for (const frame of streamingPrimeFrames(entry)) {
+			applyEvent(JSON.parse(JSON.stringify(frame.event)) as WireSessionEvent);
+		}
+		await tick();
+		expect(toolCard().live).toMatchObject({ kind: "eval", status: [{ op: "log" }] });
+
+		// The browsers rebuilt their cards from history: the next partial carries the status again.
+		await broadcastHistory(entry.handle, []);
+		attachMidTool();
+		const after = deliver(entry, partial("eval", "", details));
+		expect(after).toMatchObject({ live: { kind: "eval" } });
+	});
+});
+
 describe("wire cost of one tool call", () => {
 	const OUTPUT = "x".repeat(39_999) + "\n";
 

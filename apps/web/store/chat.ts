@@ -7,6 +7,7 @@ import type {
 	QueuedCommandRef,
 	QueuedMessageRef,
 	WireSessionEvent,
+	WireToolLive,
 } from "#lib/wire/protocol";
 import { extractText, scanImages } from "#lib/wire/tool-result";
 import { promptTimestamp } from "../chat/turn-usage";
@@ -314,7 +315,12 @@ export function clearPendingDeltas(): void {
 // (frames coalesce).
 const pendingToolUpdates = new Map<
 	string,
-	{ output: string; append: boolean; images: ImageArg[] | undefined }
+	{
+		output: string;
+		append: boolean;
+		images: ImageArg[] | undefined;
+		live: WireToolLive | undefined;
+	}
 >();
 const pendingBashChunks = new Map<number, string>();
 export const pendingEphemeral = new Map<number, string>();
@@ -444,10 +450,16 @@ function bumpLiveRev(): void {
 /** Apply a buffered tool partial to its card: replace the output, or append to it. */
 function applyToolUpdate(
 	item: ToolItem,
-	update: { output: string; append: boolean; images: ImageArg[] | undefined },
+	update: {
+		output: string;
+		append: boolean;
+		images: ImageArg[] | undefined;
+		live: WireToolLive | undefined;
+	},
 ): void {
 	item.output = capTail(update.append ? item.output + update.output : update.output, 8000);
 	if (update.images !== undefined) item.images = update.images;
+	if (update.live !== undefined) item.live = { ...update.live, at: Date.now() };
 }
 
 /** Apply a buffered tool partial for one card synchronously (drain on
@@ -705,8 +717,14 @@ export function applyEvent(e: WireSessionEvent): void {
 				if (e.append === true && pending !== undefined) {
 					pending.output = capTail(pending.output + output, 8000);
 					if (images !== undefined) pending.images = images;
+					if (e.live !== undefined) pending.live = e.live;
 				} else {
-					pendingToolUpdates.set(e.toolCallId, { output, append: e.append === true, images });
+					pendingToolUpdates.set(e.toolCallId, {
+						output,
+						append: e.append === true,
+						images,
+						live: e.live,
+					});
 				}
 				scheduleFlush();
 			}
@@ -734,6 +752,7 @@ export function applyEvent(e: WireSessionEvent): void {
 							const images = scanImages(e.result);
 							if (images.length > 0) item.images = images;
 							if (details !== undefined) item.details = details;
+							item.live = undefined;
 						}
 					}),
 				);

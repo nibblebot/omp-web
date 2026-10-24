@@ -1,6 +1,11 @@
 /** MCP tools are named `mcp__<server>_<tool>` (SDK mcp/tool-bridge.ts:428). */
 const MCP_PREFIX = "mcp__";
 
+/** Whether a tool name is an MCP bridge tool (`mcp__<server>_<tool>`). */
+export function isMcpTool(name: string): boolean {
+	return name.startsWith(MCP_PREFIX);
+}
+
 /**
  * Whether a tool result renders as Markdown under `mcp.renderMarkdownResults`.
  * Same rule as the TUI (pi-tui tools/mcp.ts:194): non-empty MCP text that is
@@ -8,7 +13,7 @@ const MCP_PREFIX = "mcp__";
  * eligible.
  */
 export function isMarkdownMcpResult(name: string, output: string): boolean {
-	if (!name.startsWith(MCP_PREFIX)) return false;
+	if (!isMcpTool(name)) return false;
 	const trimmed = output.trim();
 	if (trimmed.length === 0) return false;
 	if (trimmed.startsWith("{") || trimmed.startsWith("[")) {

@@ -1,4 +1,4 @@
-/* Tools: tool/bash card renderers, diff, todo, search, subagents, background bars, eval/lsp/hub/ask-tool cards. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Tools: tool/bash card renderers, diff, todo, search, subagents, background bars, eval/lsp/wait/ask-tool cards. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 .tool-status[data-status="running"] {
 	color: var(--warning);
@@ -526,10 +526,281 @@ pre.terminal.tool-code {
 .lsp-symbol-icon {
 	color: var(--accent);
 }
-.hub-message {
-	padding: 0 var(--space-4) var(--space-3);
+/* Eval: printed views (table, JSON tree, Markdown) stand in place of their text. */
+.eval-view {
+	padding: var(--space-3) var(--space-4);
+	border-top: 1px solid var(--border);
+	font-size: var(--fs-md);
+}
+.eval-table-scroll {
+	max-width: 100%;
+	overflow-x: auto;
+}
+.eval-table {
+	border-collapse: collapse;
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+}
+.eval-table th,
+.eval-table td {
+	padding: var(--space-1) var(--space-4);
+	border-bottom: 1px solid var(--border);
+	text-align: left;
+	white-space: nowrap;
+}
+.eval-table th {
 	color: var(--muted-2);
-	font-style: italic;
+	font-weight: 600;
+}
+.eval-table .eval-table-numeric {
+	text-align: right;
+}
+/* Eval: status events helpers logged, newest last. */
+.eval-status {
+	margin: 0;
+	padding: var(--space-3) var(--space-4);
+	border-top: 1px solid var(--border);
+	list-style: none;
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+}
+.eval-status-line {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1) var(--space-3);
+	overflow-wrap: anywhere;
+}
+.eval-status-earlier {
+	color: var(--muted-3);
+}
+.eval-status-op {
+	color: var(--accent);
+}
+.eval-status-key {
+	color: var(--muted-3);
+}
+.eval-status-progress {
+	color: var(--text);
+}
+/* MCP call in flight: the server's progress line. */
+.tool-progress {
+	padding: var(--space-3) var(--space-4);
+	font-family: var(--font-mono);
+	font-size: var(--fs-md);
+	color: var(--muted-2);
+	overflow-wrap: anywhere;
+}
+/* Collapsible JSON tree (ui/JsonTree). */
+.json-tree {
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	overflow-x: auto;
+}
+.json-entries {
+	margin: 0;
+	padding: 0 0 0 var(--space-5);
+	list-style: none;
+}
+.json-entry {
+	display: flex;
+	gap: var(--space-3);
+	align-items: baseline;
+}
+.json-entry > .json-node {
+	flex: 1;
+	min-width: 0;
+}
+.json-key {
+	flex: none;
+	color: var(--accent);
+}
+.json-key::after {
+	content: ":";
+	color: var(--muted-3);
+}
+.json-summary {
+	cursor: pointer;
+}
+.json-size,
+.json-null,
+.json-more {
+	color: var(--muted-3);
+}
+.json-string {
+	color: var(--success);
+	overflow-wrap: anywhere;
+}
+.json-number,
+.json-boolean {
+	color: var(--warning);
+}
+/* Wait: one tile per watched job. */
+.wait-counts {
+	display: inline-flex;
+	gap: var(--space-3);
+	font-size: var(--fs-sm);
+}
+.wait-count[data-status="completed"] {
+	color: var(--success);
+}
+.wait-count[data-status="failed"] {
+	color: var(--error);
+}
+.wait-count[data-status="cancelled"] {
+	color: var(--warning);
+}
+.wait-tiles,
+.wait-agents {
+	margin: 0;
+	padding: var(--space-3) var(--space-4);
+	list-style: none;
+}
+.wait-tiles {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+	gap: var(--space-3);
+}
+.wait-tile {
+	display: grid;
+	gap: var(--space-2);
+	min-width: 0;
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	background: var(--bg-deep);
+}
+.wait-tile[data-status="running"] {
+	border-color: var(--accent-border);
+}
+.wait-tile[data-status="completed"] {
+	border-color: var(--success-border);
+}
+.wait-tile[data-status="failed"] {
+	border-color: var(--error-border);
+}
+.wait-tile[data-status="cancelled"] {
+	border-color: var(--warning-border);
+}
+.wait-tile-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	min-width: 0;
+}
+.wait-tile-dot {
+	flex: none;
+	line-height: 1;
+}
+.wait-tile[data-status="running"] .wait-tile-dot {
+	color: var(--accent);
+}
+.wait-tile[data-status="completed"] .wait-tile-dot {
+	color: var(--success);
+}
+.wait-tile[data-status="failed"] .wait-tile-dot {
+	color: var(--error);
+}
+.wait-tile[data-status="cancelled"] .wait-tile-dot {
+	color: var(--warning);
+}
+@media (prefers-reduced-motion: no-preference) {
+	.wait-tile-dot[data-pulse] {
+		animation: wait-tile-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+	}
+}
+@keyframes wait-tile-pulse {
+	50% {
+		opacity: 0.25;
+	}
+}
+.wait-tile-title {
+	flex: 1;
+	min-width: 0;
+	font-family: var(--font-mono);
+	font-size: var(--fs-md);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wait-tile-id,
+.wait-tile-clock,
+.wait-agent-parent {
+	flex: none;
+	font-size: var(--fs-sm);
+	color: var(--muted-3);
+}
+.wait-tile-ring {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	transform: rotate(-90deg);
+}
+.wait-tile-ring-track,
+.wait-tile-ring-fill {
+	fill: none;
+	stroke-width: 3;
+}
+.wait-tile-ring-track {
+	stroke: var(--border-strong);
+}
+.wait-tile-ring-fill {
+	stroke: var(--accent);
+}
+.wait-tile-ring[data-band="1"] .wait-tile-ring-fill {
+	stroke: color-mix(in srgb, var(--success) 25%, var(--accent));
+}
+.wait-tile-ring[data-band="2"] .wait-tile-ring-fill {
+	stroke: color-mix(in srgb, var(--success) 50%, var(--accent));
+}
+.wait-tile-ring[data-band="3"] .wait-tile-ring-fill {
+	stroke: color-mix(in srgb, var(--success) 75%, var(--accent));
+}
+.wait-tile-ring[data-band="4"] .wait-tile-ring-fill {
+	stroke: var(--success);
+}
+.wait-tile-note {
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wait-tile-failure {
+	color: var(--error);
+}
+.wait-agents {
+	display: grid;
+	gap: var(--space-2);
+	padding-top: 0;
+}
+.wait-agent {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-3);
+	min-width: 0;
+	font-size: var(--fs-md);
+}
+.wait-agent-badge {
+	flex: none;
+	padding: 0 var(--space-3);
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-pill);
+	font-size: var(--fs-sm);
+	color: var(--accent);
+}
+.wait-agent-badge:not([data-live]) {
+	border-color: var(--warning-border);
+	color: var(--warning);
+}
+.wait-agent-id {
+	flex: none;
+	font-family: var(--font-mono);
+}
+.wait-agent-activity {
+	flex: 1;
+	min-width: 0;
+	color: var(--muted-2);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;

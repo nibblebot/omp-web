@@ -17,8 +17,10 @@ import {
 	type ServerFrame,
 	type SessionScopedFrame,
 	type WireSessionEvent,
+	type WireToolLive,
 } from "#lib/wire/protocol";
 import { ReplayRing } from "#lib/wire/replay-ring";
+import { sameToolLive, toolLiveOf } from "#lib/wire/tool-live";
 import { extractText, scanImages } from "#lib/wire/tool-result";
 import type { SessionEntry } from "./session-entry";
 
@@ -430,6 +432,8 @@ interface ToolProgress {
 	images: ImageArg[];
 	/** A history resync rebuilt the cards without their output: the next update is a full snapshot. */
 	resync: boolean;
+	/** Last live status sent (eval status events, wait job tiles); a partial without one keeps it. */
+	live: WireToolLive | undefined;
 }
 
 /** Running tool calls per session handle, keyed by toolCallId; cleared at tool end and agent end. */
@@ -444,7 +448,8 @@ export function streamingPrimeFrames(
 	if (message !== undefined)
 		frames.push({ type: "event", event: { type: "message_start", message } });
 	for (const [toolCallId, progress] of runningTools.get(entry.handle) ?? []) {
-		if (progress.output === "" && progress.images.length === 0) continue;
+		if (progress.output === "" && progress.images.length === 0 && progress.live === undefined)
+			continue;
 		frames.push({
 			type: "event",
 			event: {
@@ -453,6 +458,7 @@ export function streamingPrimeFrames(
 				toolName: progress.toolName,
 				output: progress.output,
 				...(progress.images.length > 0 ? { images: progress.images } : {}),
+				...(progress.live !== undefined ? { live: progress.live } : {}),
 			},
 		});
 	}
@@ -469,7 +475,9 @@ function sameImages(a: readonly ImageArg[], b: readonly ImageArg[]): boolean {
 /**
  * A tool partial as the wire carries it: the text appended since the call's
  * previous update when the output grew, the whole text when it changed any
- * other way, nothing (null) when it changes nothing the card shows.
+ * other way, nothing (null) when it changes nothing the card shows. An eval or
+ * wait partial's live status (see `toolLiveOf`) rides along when it changed;
+ * an update with no other news then carries an empty append.
  */
 function toolUpdateFrame(
 	handle: string,
@@ -483,13 +491,18 @@ function toolUpdateFrame(
 	const images =
 		scanned.length > 0 && !sameImages(scanned, sent?.images ?? []) ? scanned : undefined;
 	const previous = sent?.resync === true ? undefined : (sent?.output ?? "");
+	const live = toolLiveOf(event.toolName, event.partialResult?.details);
+	const liveChanged =
+		live !== undefined && (sent?.resync === true || !sameToolLive(live, sent?.live));
 	tools.set(event.toolCallId, {
 		toolName: event.toolName,
 		output,
 		images: images ?? sent?.images ?? [],
 		resync: false,
+		live: live ?? sent?.live,
 	});
-	if (output === previous && images === undefined) return null;
+	if (output === previous && images === undefined && !liveChanged) return null;
+	const liveOnly = output === previous && images === undefined;
 	const appended =
 		previous !== undefined &&
 		previous !== "" &&
@@ -501,9 +514,10 @@ function toolUpdateFrame(
 		type: "tool_execution_update",
 		toolCallId: event.toolCallId,
 		toolName: event.toolName,
-		output: appended ?? output,
-		...(appended !== undefined ? { append: true as const } : {}),
+		output: liveOnly ? "" : (appended ?? output),
+		...(appended !== undefined || liveOnly ? { append: true as const } : {}),
 		...(images !== undefined ? { images } : {}),
+		...(liveChanged ? { live } : {}),
 	};
 }
 
@@ -518,7 +532,9 @@ function toolUpdateFrame(
  *   ring, the control mirror and every browser stream. The full message goes
  *   out once, on `message_end`.
  * - `tool_execution_update` is the appended output (WireToolExecutionUpdate);
- *   the SDK repeats the whole output and args in each.
+ *   the SDK repeats the whole output and args in each. An eval or wait partial's
+ *   `details` never ship whole: only their slim `live` status (lib/wire/tool-live.ts),
+ *   and only when it changed.
  * - Tool-result `message_start`/`message_end` are dropped: `tool_execution_end`
  *   carries the same result and no consumer reads the message events.
  * - `turn_end` and `agent_end` lose the messages and tool results they repeat.

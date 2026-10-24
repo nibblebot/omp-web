@@ -37,7 +37,7 @@ const KINDS: Record<string, ToolKind> = {
 	web_search: { category: "search", icon: "globe" },
 	lsp: { category: "search", icon: "braces" },
 	task: { category: "agents", icon: "bot" },
-	hub: { category: "agents", icon: "messages-square" },
+	wait: { category: "agents", icon: "messages-square" },
 	ask: { category: "agents", icon: "message-circle-question" },
 	todo: { category: "agents", icon: "list-checks" },
 };

@@ -21,6 +21,7 @@ import type {
 	ServerFrame,
 	SettingsModel,
 	WebSessionState,
+	WireToolLive,
 } from "#lib/wire/protocol";
 import {
 	browserCloseFromCode,
@@ -176,6 +177,8 @@ export type ChatItem =
 			images?: ImageArg[];
 			/** Settled result details (edit diff, todo phase snapshot, file counts), so the card shows the call as it was; absent until settled. */
 			details?: unknown;
+			/** Live status of a running eval/wait call (frame `live`), with the arrival time so clocks can advance; dropped once the call settles. */
+			live?: WireToolLive & { at: number };
 	  }
 	| BashItem
 	| CompactionItem

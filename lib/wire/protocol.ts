@@ -1140,6 +1140,8 @@ export interface SubagentProgressFields {
 	/** Cumulative cost in USD. */
 	cost?: number;
 	completionPercent?: number;
+	/** The agent's current step in its own words (one line), from its periodic completion probe. */
+	stage?: string;
 	resolvedModel?: string;
 	resolvedModelIdentity?: string;
 	resolvedThinkingLevel?: string;
@@ -1212,6 +1214,50 @@ export interface WireMessageUpdate {
 }
 
 /**
+ * One eval status event on the wire (`EvalStatusEvent` slimmed): its scalar
+ * fields only, strings clipped, never the helper's `preview` text. See `slimEvalLive`
+ * (lib/wire/tool-live.ts).
+ */
+export type WireEvalStatusEvent = { op: string } & Record<string, string | number | boolean>;
+
+/**
+ * Live status of a running eval call: the newest status events (a `log()` loop,
+ * `mcp_progress`, `agent()` snapshots) and how many older ones the card leaves
+ * behind. Re-sent whole when it changes; settled calls carry the full log in
+ * the result details instead.
+ */
+export interface WireEvalLive {
+	kind: "eval";
+	status: WireEvalStatusEvent[];
+	/** Events older than `status`, dropped by the SDK's bounded log or by the newest-N cut. */
+	elided?: number;
+}
+
+/** One watched job of a running `wait` call (the SDK's `JobSnapshot` without results or widget). */
+export interface WireWaitJob {
+	id: string;
+	type: "bash" | "task" | "eval";
+	status: "running" | "completed" | "failed" | "cancelled";
+	label: string;
+	/** Run time when this frame was cut; a running job's clock is advanced by the receiver. */
+	durationMs: number;
+	exitCode?: number;
+	/** A task agent's current step in its own words. */
+	stage?: string;
+	/** A task agent's self-estimated completion, 0-100. */
+	completionPercent?: number;
+}
+
+/** Live job tiles of a running `wait` call; re-sent when a job's status, label, stage or completion changes (not on every clock tick). */
+export interface WireWaitLive {
+	kind: "wait";
+	jobs: WireWaitJob[];
+}
+
+/** The part of a running tool's partial `details` the card renders live; the settled `details` ride `tool_execution_end`. */
+export type WireToolLive = WireEvalLive | WireWaitLive;
+
+/**
  * `tool_execution_update` as it crosses the wire: what a running tool's card
  * shows, not the SDK's partial result. The SDK repeats the whole accumulated
  * output (and the call's args and details) in every update; here a growing
@@ -1232,6 +1278,12 @@ export interface WireToolExecutionUpdate {
 	append?: true;
 	/** Images of the partial result, replacing the card's; omitted while unchanged. */
 	images?: ImageArg[];
+	/**
+	 * Live status of an eval or wait call, replacing the card's; omitted while
+	 * unchanged (an update whose only news is `live` carries `output: ""` with
+	 * `append`). A late joiner is primed with the last one sent.
+	 */
+	live?: WireToolLive;
 }
 
 /** `turn_end` as it crosses the wire: a bare marker (the assistant message and tool results already went out as their own events). */

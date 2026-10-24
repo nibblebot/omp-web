@@ -48,6 +48,7 @@ export function projectProgress(progress: AgentProgress): SubagentProgressFields
 		contextWindow: progress.contextWindow,
 		cost: progress.cost,
 		completionPercent: progress.completionPercent,
+		stage: progress.stage,
 		resolvedModel: progress.resolvedModel,
 		resolvedModelIdentity: progress.resolvedModelIdentity,
 		resolvedThinkingLevel: progress.resolvedThinkingLevel,

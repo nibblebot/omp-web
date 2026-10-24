@@ -687,7 +687,7 @@ pre {
 	border-radius: var(--r-sm);
 }
 
-/* --- Inline images, eval/lsp/hub/ask tool cards --- */
+/* --- Inline images, eval/lsp/wait/ask tool cards --- */
 
 .img-scan {
 	display: flex;

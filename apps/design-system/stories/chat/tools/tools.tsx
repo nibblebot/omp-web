@@ -7,7 +7,6 @@ import {
 } from "../../../../web/components/chat/tools/ToolCardShell";
 import { EvalToolCard } from "../../../../web/components/chat/tools/EvalToolCard";
 import { GenericToolCard } from "../../../../web/components/chat/tools/GenericToolCard";
-import { HubToolCard } from "../../../../web/components/chat/tools/HubToolCard";
 import { LspToolCard } from "../../../../web/components/chat/tools/LspToolCard";
 import { ReadToolCard } from "../../../../web/components/chat/tools/ReadToolCard";
 import { SearchToolCard } from "../../../../web/components/chat/tools/SearchToolCard";
@@ -35,11 +34,15 @@ import {
 	evalErrorTool,
 	evalImageTool,
 	evalRunningTool,
+	evalStatusDoneTool,
+	evalStatusRunningTool,
+	evalViewsTool,
 	genericDoneTool,
 	genericErrorTool,
 	genericInterruptedTool,
 	genericImageTool,
 	genericLongTool,
+	genericMcpProgressTool,
 	genericRunningTool,
 	globDoneTool,
 	grepDoneTool,
@@ -47,10 +50,6 @@ import {
 	grepErrorTool,
 	grepLongTool,
 	grepRunningTool,
-	hubErrorTool,
-	hubPollTool,
-	hubSendTool,
-	hubWaitTool,
 	lspDefinitionTool,
 	lspDiagnosticsTool,
 	lspReferencesTool,
@@ -65,16 +64,20 @@ import {
 	taskErrorTool,
 	taskPendingTool,
 	taskRunningTool,
+	taskStageSubagentMap,
+	taskStageTool,
 	taskSubagentMap,
 	todoArgsTool,
 	todoEmptyTool,
 	todoItemsTool,
 	todoSnapshotTool,
+	waitSettledTool,
 	webSearchDoneTool,
 	webSearchErrorTool,
 	webSearchNoLinksTool,
 	webSearchRunningTool,
 } from "../../../fixtures/tools";
+import { agentSettingsModel } from "../../../fixtures/subagents";
 import { defineStory } from "../../../registry";
 import type { Story } from "../../../registry";
 
@@ -232,6 +235,24 @@ const stories: Story[] = [
 				description: "Click the chart thumbnail to open the full-size overlay.",
 				render: () => <EvalToolCard item={evalImageTool} />,
 			},
+			{
+				name: "Printed DataFrame, dict and Markdown",
+				description:
+					"The cell printed a DataFrame, a dict and a Markdown object: a table, a collapsible JSON tree and rendered Markdown take the place of their text.",
+				render: () => <EvalToolCard item={evalViewsTool} />,
+			},
+			{
+				name: "Running, live status events",
+				description:
+					"Helpers' status events and an MCP progress line list under the output, newest last, behind an earlier count.",
+				render: () => <EvalToolCard item={evalStatusRunningTool} />,
+			},
+			{
+				name: "Done, status log and notice",
+				description:
+					"The settled call's status log (a helper's preview text is left out) and the backend notice.",
+				render: () => <EvalToolCard item={evalStatusDoneTool} />,
+			},
 		],
 	}),
 	defineStory({
@@ -273,17 +294,12 @@ const stories: Story[] = [
 				seed: { toolsExpanded: true },
 				render: () => <GenericToolCard item={genericImageTool} />,
 			},
-		],
-	}),
-	defineStory({
-		id: "chat-tools-hub-tool-card",
-		title: "HubToolCard",
-		component: { file: "apps/web/components/chat/tools/HubToolCard.tsx", export: "HubToolCard" },
-		variants: [
-			{ name: "Send to a peer", render: () => <HubToolCard item={hubSendTool} /> },
-			{ name: "Waiting for a reply", render: () => <HubToolCard item={hubWaitTool} /> },
-			{ name: "Poll with reply", render: () => <HubToolCard item={hubPollTool} /> },
-			{ name: "Peer not registered", render: () => <HubToolCard item={hubErrorTool} /> },
+			{
+				name: "MCP call in flight, progress line",
+				description:
+					"While an MCP call runs its output is the server's progress (message and count), shown as a status line.",
+				render: () => <GenericToolCard item={genericMcpProgressTool} />,
+			},
 		],
 	}),
 	defineStory({
@@ -376,6 +392,13 @@ const stories: Story[] = [
 				description: "Spawn call with no tracked subagents: the call's own description only.",
 				render: () => <TaskToolCard item={taskPendingTool} />,
 			},
+			{
+				name: "Running, agents report their stage",
+				description:
+					"Each running row leads with the agent's own current step (from its periodic completion probe), then the tool in flight; needs the live preview display setting.",
+				seed: { subagents: taskStageSubagentMap, settingsModel: agentSettingsModel },
+				render: () => <TaskToolCard item={taskStageTool} />,
+			},
 		],
 	}),
 	defineStory({
@@ -456,7 +479,7 @@ const stories: Story[] = [
 						<ToolCard item={webSearchDoneTool} />,
 						<ToolCard item={lspDefinitionTool} />,
 						<ToolCard item={taskPendingTool} />,
-						<ToolCard item={hubSendTool} />,
+						<ToolCard item={waitSettledTool} />,
 						<ToolCard item={askDoneTool} />,
 						<ToolCard item={todoArgsTool} />,
 						<ToolCard item={genericDoneTool} />,

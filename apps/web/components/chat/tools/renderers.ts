@@ -4,12 +4,12 @@ import { AskToolCard } from "./AskToolCard";
 import { BashToolCard } from "./BashToolCard";
 import { DiffToolCard } from "./DiffToolCard";
 import { EvalToolCard } from "./EvalToolCard";
-import { HubToolCard } from "./HubToolCard";
 import { LspToolCard } from "./LspToolCard";
 import { ReadToolCard } from "./ReadToolCard";
 import { SearchToolCard } from "./SearchToolCard";
 import { TaskToolCard } from "./TaskToolCard";
 import { TodoToolCard } from "./TodoToolCard";
+import { WaitToolCard } from "./WaitToolCard";
 import { WebSearchToolCard } from "./WebSearchToolCard";
 
 /** Per-tool renderers; anything missing falls back to GenericToolCard. */
@@ -26,6 +26,6 @@ export const RENDERERS: Record<string, Component<{ item: ToolItem }>> = {
 	task: TaskToolCard,
 	eval: EvalToolCard,
 	lsp: LspToolCard,
-	hub: HubToolCard,
+	wait: WaitToolCard,
 	ask: AskToolCard,
 };
