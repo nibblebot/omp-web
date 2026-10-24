@@ -139,36 +139,6 @@
 	color: var(--text);
 }
 /* The sidebar header row (SidebarHeader.tsx) lives in shell.css. */
-/* Chat/Analysis segmented pair: the buttons share the .sidebar-icon-btn
-   base so hit targets, radius, and hover stay consistent; the pair reads
-   as grouped controls with the active side accented against the muted
-   inactive one. */
-.mode-switch {
-	display: flex;
-	align-items: center;
-	gap: var(--space-1);
-}
-.mode-switch .sidebar-icon-btn {
-	position: relative; /* scopes the activity dot to the Chat button */
-	color: var(--muted-2);
-}
-.mode-switch .sidebar-icon-btn.active {
-	background: var(--btn);
-	color: var(--accent);
-}
-/* Light-blue activity dot on the Chat button, shown while a turn ends in
-   Analysis (state.chatUnviewed). Same accent language as the roster's
-   unread status dots: --accent is the theme's light blue. */
-.mode-switch-dot {
-	position: absolute;
-	top: 0;
-	right: 0;
-	width: 6px;
-	height: 6px;
-	background: var(--accent);
-	box-shadow: 0 0 6px var(--accent);
-	border-radius: 50%;
-}
 .sidebar-list {
 	/* Row geometry shared with the group headers (ProjectGroups). The indent is
 	   where a row's branch text starts, measured from the sidebar's left edge: list

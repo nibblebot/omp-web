@@ -1,7 +1,6 @@
-import type { Component } from "solid-js";
+import type { Component, JSX } from "solid-js";
 import { buildInfo } from "../../build-info";
 import { OmpWebLogoIcon, PanelLeftIcon } from "../ui/icons";
-import { ViewSwitch } from "./ViewSwitch";
 
 const versionTitle = (): string => {
 	const parts = [buildInfo.version && `v${buildInfo.version}`, buildInfo.gitHash].filter(Boolean);
@@ -11,16 +10,18 @@ const versionTitle = (): string => {
 /**
  * Top row of both sidebars (Chat roster and Analysis transcripts): the
  * omp-web logo mark and wordmark (build version on hover) flush left, then
- * the Chat/Analysis switch and the sidebar toggle rightmost, which collapses
- * this sidebar.
+ * the sidebar's own `actions` (the roster passes its running-only filter) and
+ * the sidebar toggle rightmost, which collapses this sidebar.
  */
-export const SidebarHeader: Component<{ onCollapse: () => void }> = (props) => (
+export const SidebarHeader: Component<{ onCollapse: () => void; actions?: JSX.Element }> = (
+	props,
+) => (
 	<div class="sidebar-header">
 		<span class="sidebar-wordmark" title={versionTitle()}>
 			<OmpWebLogoIcon />
 			<span class="sidebar-wordmark-text">omp-web</span>
 		</span>
-		<ViewSwitch />
+		{props.actions}
 		<button
 			type="button"
 			class="sidebar-icon-btn"

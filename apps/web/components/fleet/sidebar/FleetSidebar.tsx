@@ -1,7 +1,8 @@
 import { createEffect, onCleanup, Show, type Component } from "solid-js";
-import { daemonsByProject, setSidebarVisible, state } from "../../../state";
+import { daemonsByProject, setSidebarRunningOnly, setSidebarVisible, state } from "../../../state";
 import { syncProjects } from "../../../store/projects";
 import { SidebarHeader } from "../../app/SidebarHeader";
+import { ListFilterIcon } from "../../ui/icons";
 import { moveRovingFocus, setRovingTabStop } from "../../ui/roving";
 import { ProjectGroups } from "./ProjectGroups";
 import { SidebarUsage } from "./SidebarUsage";
@@ -11,7 +12,7 @@ import { SidebarUsage } from "./SidebarUsage";
 // `state.view === "chat"` (the fleet is the only web UI runtime). Shell:
 // derives the project-first group list (daemonsByProject) and composes the
 // group rendering (ProjectGroups) under the shared SidebarHeader (wordmark,
-// view switch, collapse toggle).
+// the running-only filter toggle that hides asleep rows, collapse toggle).
 // Each registered project is one group: its rows are the checkouts (main checkout,
 // worktrees, clones). The group header carries a "+" (New workspace popover) and a
 // remove-project action, both shown on header hover. Rows without a registered
@@ -39,6 +40,7 @@ export const FleetSidebar: Component = () => {
 	};
 	createEffect(() => {
 		groups();
+		void state.sidebarRunningOnly;
 		queueMicrotask(syncRosterStop);
 	});
 	const onRosterFocusIn = (e: FocusEvent) => {
@@ -69,7 +71,26 @@ export const FleetSidebar: Component = () => {
 			>
 				{/* Fixed-width panel: the docked sidebar's width animates, the content inside does not reflow. */}
 				<div class="sidebar-panel">
-					<SidebarHeader onCollapse={() => setSidebarVisible(false)} />
+					<SidebarHeader
+						onCollapse={() => setSidebarVisible(false)}
+						actions={
+							<button
+								type="button"
+								class="sidebar-icon-btn"
+								classList={{ active: state.sidebarRunningOnly }}
+								onClick={() => setSidebarRunningOnly(!state.sidebarRunningOnly)}
+								title={
+									state.sidebarRunningOnly ? "Show all sessions" : "Show only running sessions"
+								}
+								aria-label={
+									state.sidebarRunningOnly ? "Show all sessions" : "Show only running sessions"
+								}
+								aria-pressed={state.sidebarRunningOnly}
+							>
+								<ListFilterIcon />
+							</button>
+						}
+					/>
 					<div
 						class="sidebar-list"
 						ref={roster}

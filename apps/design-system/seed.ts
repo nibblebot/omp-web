@@ -4,7 +4,7 @@ import { GROUPS_KEY } from "../web/components/fleet/sidebar/ProjectGroups";
 import { ENABLEABLE_FEATURE_IDS, FEATURES } from "../web/features/manifest";
 import { markFeaturesActive, setFeaturePreference } from "../web/features/preferences";
 import { cancelDangerConfirm } from "../web/prompt/danger-confirm";
-import { setState, state } from "../web/state";
+import { SIDEBAR_RUNNING_ONLY_KEY, setState, state } from "../web/state";
 import { closeDownload } from "../web/store/downloads";
 import { resetDaemon } from "./daemon";
 import type { StoreSeed } from "./registry";
@@ -24,7 +24,7 @@ const pristine = structuredClone(unwrap(state));
  * Restore every top-level store field to its import-time value, close the
  * self-mounting dialogs whose state lives in module signals outside the store
  * (danger confirm, download), restore manifest-default feature preferences
- * (persisted in localStorage, read by core UI such as the view switch) and the
+ * (persisted in localStorage, read by core UI such as the Analysis view) and the
  * page set that boot installs (every feature the app can enable; an
  * in-development feature is never active), and expand every project group
  * (collapse state is persisted in localStorage too), so one story's state
@@ -40,6 +40,8 @@ export function resetStore(): void {
 		markFeaturesActive(ENABLEABLE_FEATURE_IDS);
 		// Project groups collapse through localStorage: every story starts expanded.
 		localStorage.removeItem(GROUPS_KEY);
+		// The running-only filter persists through localStorage as well: every story starts unfiltered.
+		localStorage.removeItem(SIDEBAR_RUNNING_ONLY_KEY);
 	});
 }
 

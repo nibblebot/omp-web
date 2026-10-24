@@ -563,9 +563,6 @@ export function applyEvent(e: WireSessionEvent): void {
 			// answer as unviewed so the roster row shows the yellow unreviewed
 			// dot until the user scrolls to the live edge.
 			if (!state.chatPinned) setState("answerUnviewed", true);
-			// Chat-mode dot: the turn ended while the user is in Analysis; the
-			// Chat button lights up until setView("chat") clears it.
-			if (state.view === "analysis") setState("chatUnviewed", true);
 			// finding #P1: turn ended (streamed text itself is never announced).
 			announceIfReady("agent finished");
 			// Phase 11: desktop notification while the tab is hidden (OSC parity).

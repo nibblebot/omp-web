@@ -94,6 +94,17 @@ export function canStartRow(status: DaemonStatus, ctx: ChipContext = {}): boolea
 	return status === "asleep" || status === "error";
 }
 
+/**
+ * Whether a row stays in the sidebar while the "running only" filter is on:
+ * every row whose process is not asleep (ready, starting, reconnecting,
+ * crashed) stays, and so does a `pinned` asleep row. A row is pinned when it
+ * is the attached session or the target of a switch that is waking,
+ * attaching or has failed, so the selected row never vanishes under the user.
+ */
+export function shownWhenRunningOnly(status: DaemonStatus, pinned: boolean): boolean {
+	return status !== "asleep" || pinned;
+}
+
 /** Display name of a workspace, identical in rows, dialogs and the header. */
 export function workspaceName(d: Pick<DaemonEntry, "branch" | "name">): string {
 	return d.branch ?? d.name;

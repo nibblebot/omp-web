@@ -2,9 +2,20 @@ import type { DaemonEntry } from "#lib/wire/protocol";
 import type { JSX } from "solid-js";
 import { FleetSidebar } from "../../../../web/components/fleet/sidebar/FleetSidebar";
 import { GROUPS_KEY } from "../../../../web/components/fleet/sidebar/ProjectGroups";
-import { applyRosterFrame, sendDeleteWorktree, setState, state } from "../../../../web/state";
+import {
+	applyRosterFrame,
+	sendDeleteWorktree,
+	setSidebarRunningOnly,
+	setState,
+	state,
+} from "../../../../web/state";
 import { toggleSidebar } from "../../../../web/store/roster";
-import { rosterDaemon, rosterSidebarGroups } from "../../../fixtures/roster";
+import {
+	rosterAppDaemons,
+	rosterDaemon,
+	rosterDaemons,
+	rosterSidebarGroups,
+} from "../../../fixtures/roster";
 import { seedRosterFleet } from "../../../fixtures/roster-seed";
 import { defineStory } from "../../../registry";
 
@@ -80,6 +91,23 @@ export default defineStory({
 					GROUPS_KEY,
 					JSON.stringify(rosterSidebarGroups.map((g) => `project:${g.project.projectId}`)),
 				),
+			render: () => <Frame />,
+		},
+		{
+			name: "Running only",
+			description:
+				"The header filter is on (set through the real setSidebarRunningOnly): asleep rows are hidden, every other status stays, and nixos-config, whose only row is asleep, keeps its header and shows its summary.",
+			seed: () => {
+				seedRosterFleet({
+					daemonRoster: [
+						...rosterDaemons.filter((d) => d.projectId !== "proj_nixos_config"),
+						...rosterAppDaemons.filter(
+							(d) => d.projectId === "proj_nixos_config" && d.status === "asleep",
+						),
+					],
+				});
+				setSidebarRunningOnly(true);
+			},
 			render: () => <Frame />,
 		},
 		{

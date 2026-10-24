@@ -182,8 +182,8 @@ export const App: Component = () => {
 		)
 			closeDrawers();
 	});
-	// Switching Analysis off in Settings hides the mode switch at once, so
-	// leave Analysis immediately rather than strand the user until reload.
+	// Switching Analysis off in Settings leaves Analysis immediately rather
+	// than strand the user until reload.
 	createEffect(() => {
 		if (state.view === "analysis" && !featurePreferences().analysis) setView("chat");
 	});

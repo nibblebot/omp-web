@@ -3,6 +3,7 @@ import {
 	projectRollup,
 	rollupSummary,
 	canStartRow,
+	shownWhenRunningOnly,
 	sessionChip,
 	workspaceName,
 } from "../../fleet-ui/workspace-status";
@@ -51,6 +52,20 @@ describe("canStartRow", () => {
 		expect(canStartRow("spawning")).toBe(false);
 		expect(canStartRow("reconnecting")).toBe(false);
 		expect(canStartRow("asleep", { waking: true })).toBe(false);
+	});
+});
+
+describe("shownWhenRunningOnly", () => {
+	test("an asleep row is hidden unless it is pinned", () => {
+		expect(shownWhenRunningOnly("asleep", false)).toBe(false);
+		expect(shownWhenRunningOnly("asleep", true)).toBe(true);
+	});
+
+	test("every other status stays visible", () => {
+		expect(shownWhenRunningOnly("ready", false)).toBe(true);
+		expect(shownWhenRunningOnly("spawning", false)).toBe(true);
+		expect(shownWhenRunningOnly("reconnecting", false)).toBe(true);
+		expect(shownWhenRunningOnly("error", false)).toBe(true);
 	});
 });
 

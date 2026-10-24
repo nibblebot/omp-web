@@ -4,7 +4,7 @@
    touch targets under pointer: coarse. Part of the global stylesheet;
    cascade order is set by the @import manifest in src/styles.css. */
 
-/* --- Sidebar header: wordmark, view switch, collapse toggle --- */
+/* --- Sidebar header: wordmark, sidebar actions, collapse toggle --- */
 
 .sidebar-header {
 	flex: none;

@@ -285,21 +285,11 @@ export const TrashIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** Chat mode glyph (the live-conversation surface, ▸_), drawn with Lucide's terminal. */
+/** Terminal glyph, drawn with Lucide's terminal. */
 export const TerminalIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<polyline points="4 17 10 11 4 5" />
 		<line x1="12" x2="20" y1="19" y2="19" />
-	</Svg>
-);
-
-/** Analysis mode glyph (the transcripts/stats surface), drawn with Lucide's bar-chart-3. */
-export const BarChart3Icon: Component<IconProps> = (props) => (
-	<Svg class={props.class}>
-		<path d="M3 3v18h18" />
-		<path d="M18 17V9" />
-		<path d="M13 17V5" />
-		<path d="M8 17v-3" />
 	</Svg>
 );
 
@@ -381,6 +371,15 @@ export const ListIcon: Component<IconProps> = (props) => (
 		<path d="M8 12h13" />
 		<path d="M8 18h13" />
 		<path d="M8 6h13" />
+	</Svg>
+);
+
+/** Filter toggle: three lines of decreasing length (Lucide list-filter). */
+export const ListFilterIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M3 6h18" />
+		<path d="M7 12h10" />
+		<path d="M10 18h4" />
 	</Svg>
 );
 

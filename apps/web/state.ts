@@ -284,6 +284,9 @@ export const SIDEBAR_TITLE_LINES_KEY = "omp.sidebarSessionTitleLines";
 /** localStorage key for the title-first roster row layout ("true" when on). */
 export const SIDEBAR_TITLE_FIRST_KEY = "omp.sidebarTitleFirst";
 
+/** localStorage key for the roster-sidebar "running only" filter ("true" when on). */
+export const SIDEBAR_RUNNING_ONLY_KEY = "omp.sidebarRunningOnly";
+
 /** localStorage key for the persisted Chat/Analysis top-level view. */
 const VIEW_KEY = "omp.view";
 
@@ -535,11 +538,6 @@ export const [state, setState] = createStore({
 		typeof location !== "undefined" ? location.hash : "",
 		featurePreferences().analysis,
 	),
-	// Chat-button activity dot: a turn ENDED while the tab was in Analysis
-	// (agent_end in apps/web/store/chat.ts for the attached session, detached
-	// daemon_activity flips in the socket frame handler below). Ephemeral like
-	// answerUnviewed; cleared only by setView("chat").
-	chatUnviewed: false,
 	// Phase 6: in-flight OAuth login prompts (unicast frames).
 	loginUrl: null as { url: string; launchUrl?: string; instructions?: string } | null,
 	loginCodeRequest: null as { requestId: string; title: string; placeholder?: string } | null,
@@ -587,6 +585,10 @@ export const [state, setState] = createStore({
 	localStorage.getItem(SIDEBAR_TITLE_LINES_KEY) === "2"
 		? 2
 		: 1) as 1 | 2,
+	// Roster-sidebar "running only" filter (persisted toggle): hides asleep rows.
+	sidebarRunningOnly:
+		typeof localStorage !== "undefined" &&
+		localStorage.getItem(SIDEBAR_RUNNING_ONLY_KEY) === "true",
 	// Title-first roster rows: the last session title is the primary line and
 	// the branch moves down beside the diffstat (persisted; default off).
 	sidebarTitleFirst:
@@ -1553,9 +1555,6 @@ export function connect(): void {
 				// streams (remote live truth beats the unread latch).
 				if (wasStreaming && !frame.streaming && frame.daemonId !== state.currentSessionId) {
 					markUnread(frame.daemonId);
-					// Chat-dot: the turn ended while this tab sits in Analysis;
-					// setView("chat") clears it.
-					if (state.view === "analysis") setState("chatUnviewed", true);
 				}
 				break;
 			}
@@ -1872,6 +1871,7 @@ export {
 	requestDaemonSessions,
 	resumeDaemonSession,
 	setSidebarVisible,
+	setSidebarRunningOnly,
 	setSidebarSessionTitleLines,
 	setSidebarTitleFirst,
 	closeDrawers,

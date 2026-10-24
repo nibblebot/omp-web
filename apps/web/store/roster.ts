@@ -1,6 +1,7 @@
 import { daemonSessionsLimit, type ClientCommand, type SessionListEntry } from "#lib/wire/protocol";
 import {
 	SIDEBAR_KEY,
+	SIDEBAR_RUNNING_ONLY_KEY,
 	SIDEBAR_TITLE_FIRST_KEY,
 	SIDEBAR_TITLE_LINES_KEY,
 	TX_SIDEBAR_KEY,
@@ -429,6 +430,13 @@ export function toggleSidebar(): void {
 	setSidebarVisible(!state.sidebarVisible);
 }
 
+/** Persist + apply the roster-sidebar "running only" filter. */
+export function setSidebarRunningOnly(enabled: boolean): void {
+	if (typeof localStorage !== "undefined")
+		localStorage.setItem(SIDEBAR_RUNNING_ONLY_KEY, String(enabled));
+	setState("sidebarRunningOnly", enabled);
+}
+
 /** Persist + apply how many lines a roster row's session title may take. */
 export function setSidebarSessionTitleLines(lines: 1 | 2): void {
 	if (typeof localStorage !== "undefined")
@@ -451,7 +459,7 @@ export function closeDrawers(): void {
 /**
  * Top-level Chat/Analysis view. Persists omp.view; entering Chat also
  * clears an Analysis hash (#/s/<file>, #/stored/...; Analysis owns it while
- * active) and the Chat-button dot (chatUnviewed).
+ * active).
  */
 export function setView(view: "chat" | "analysis"): void {
 	closeDrawers();
@@ -467,7 +475,6 @@ export function setView(view: "chat" | "analysis"): void {
 			parseRoute(location.hash).kind === "analysis"
 		)
 			history.replaceState(null, "", location.pathname + location.search);
-		setState("chatUnviewed", false);
 	}
 }
 

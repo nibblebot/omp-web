@@ -181,10 +181,9 @@ beforeEach(() => {
 		lightboxImage: null,
 		daemonDetailsId: null,
 		modal: null,
-		// Top-level view mode + its UI flags (setView / setTxSidebarVisible /
-		// chatUnviewed); reset for isolation.
+		// Top-level view mode + its UI flags (setView / setTxSidebarVisible);
+		// reset for isolation.
 		view: "chat",
-		chatUnviewed: false,
 		txSidebarVisible: true,
 		modelSynced: false,
 		transcriptPhase: "idle",
@@ -1309,13 +1308,12 @@ describe("answerUnviewed (turn ended below the viewport)", () => {
 		expect(state.live.active).toBe(false);
 		expect(state.workingIntent).toBeUndefined();
 		expect(state.answerUnviewed).toBe(false);
-		expect(state.chatUnviewed).toBe(false);
 		expect(state.announcement).toBe("agent started");
 	});
 
 	test("a yielded turn awaiting background work still signals a completed answer", () => {
 		primeReady();
-		setState({ chatPinned: false, view: "analysis" });
+		setState({ chatPinned: false });
 		dispatchSeq(agentStart(), 1024);
 		dispatchSeq(
 			{
@@ -1331,75 +1329,7 @@ describe("answerUnviewed (turn ended below the viewport)", () => {
 		);
 		expect(state.streaming).toBe(false);
 		expect(state.answerUnviewed).toBe(true);
-		expect(state.chatUnviewed).toBe(true);
 		expect(state.announcement).toBe("agent finished");
-	});
-});
-
-describe("chatUnviewed (a turn ended while in Analysis)", () => {
-	/** A fully primed stream: attached, empty history, readiness gate cleared. */
-	function primeReady(): void {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch(attached("s1"));
-		dispatchSeq({ type: "history", messages: [] }, 3);
-		dispatch({ type: "ready", readyAt: 123 });
-	}
-	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
-	const agentEnd = (): ServerFrame => ({
-		type: "event",
-		event: { type: "agent_end" },
-	});
-
-	test("agent_end while the view is chat → not flagged", () => {
-		primeReady(); // view defaults chat
-		dispatchSeq(agentStart(), 1024);
-		dispatchSeq(agentEnd(), 1025);
-		expect(state.chatUnviewed).toBe(false);
-	});
-
-	test("agent_end while the view is analysis → flagged; setView(chat) clears it", () => {
-		setView("analysis");
-		primeReady();
-		dispatchSeq(agentStart(), 1024);
-		dispatchSeq(agentEnd(), 1025);
-		expect(state.chatUnviewed).toBe(true);
-
-		setView("chat");
-		expect(state.chatUnviewed).toBe(false);
-		// Staying in analysis keeps the flag (only entering chat clears it).
-		setState("chatUnviewed", true);
-		setView("analysis");
-		expect(state.chatUnviewed).toBe(true);
-	});
-
-	test("a detached daemon's streaming flip true→false while in analysis → flagged", () => {
-		// Prime the connected transport without an attached session so d2 is
-		// detached; then switch to analysis.
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setView("analysis");
-
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
-		expect(state.chatUnviewed).toBe(false);
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
-		expect(state.chatUnviewed).toBe(true);
-
-		// A detached daemon ending while in chat never flags.
-		setView("chat");
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
-		expect(state.chatUnviewed).toBe(false);
-	});
-
-	test("the ATTACHED daemon's turn end is not chatUnviewed either", () => {
-		connect();
-		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch(attached("d2")); // currentSessionId = d2
-		setView("analysis");
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
-		expect(state.chatUnviewed).toBe(false);
 	});
 });
 
@@ -1436,17 +1366,15 @@ describe("setView persistence and hash handling", () => {
 		expect(globalThis.localStorage.getItem("omp.sidebarVisible")).toBe("true");
 	});
 
-	test("entering chat clears the hash via history.replaceState and the chatUnviewed dot", () => {
+	test("entering chat clears the hash via history.replaceState", () => {
 		installLocalStorageShim();
 		setBrowserGlobal("history", {
 			replaceState: vi.fn(),
 		} as unknown as typeof history);
 		setBrowserGlobal("location", { hash: "#/s/x", pathname: "/app", search: "?a=1" } as Location);
-		setState("chatUnviewed", true);
 		setView("analysis");
 		setView("chat");
 		expect(history.replaceState).toHaveBeenCalledWith(null, "", "/app?a=1");
-		expect(state.chatUnviewed).toBe(false);
 	});
 
 	test("entering analysis keeps the hash untouched", () => {
@@ -1458,11 +1386,10 @@ describe("setView persistence and hash handling", () => {
 		expect(replaceState).not.toHaveBeenCalled();
 	});
 
-	test("defaults: txSidebarVisible true, view chat, dot false", () => {
+	test("defaults: txSidebarVisible true, view chat", () => {
 		installLocalStorageShim();
 		expect(state.txSidebarVisible).toBe(true);
 		expect(state.view).toBe("chat");
-		expect(state.chatUnviewed).toBe(false);
 	});
 });
 

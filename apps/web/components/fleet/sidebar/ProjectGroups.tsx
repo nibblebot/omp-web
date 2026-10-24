@@ -10,7 +10,11 @@ import {
 	type Component,
 } from "solid-js";
 import type { DaemonEntry, RegisteredProject } from "#lib/wire/protocol";
-import { projectRollup, rollupSummary } from "../../../fleet-ui/workspace-status";
+import {
+	projectRollup,
+	rollupSummary,
+	shownWhenRunningOnly,
+} from "../../../fleet-ui/workspace-status";
 import { rowActivity } from "../../../fleet-ui/row-activity";
 import { afterMotion } from "../../../motion/presence";
 import { setState, state } from "../../../state";
@@ -168,23 +172,44 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 			}),
 		);
 
+		// Rows the sidebar shows: all of them, or with "running only" on, those
+		// that are not asleep plus the pinned ones (the attached session and the
+		// target of a switch that is waking, attaching or failed, which the row's
+		// `selected` highlight follows). The roll-up above stays on every row.
+		const visibleDaemons = createMemo(() => {
+			if (!state.sidebarRunningOnly) return props.daemons;
+			const target = state.transcriptTarget;
+			const switching =
+				state.transcriptPhase === "waking" ||
+				state.transcriptPhase === "attaching" ||
+				state.transcriptPhase === "failed";
+			return props.daemons.filter((d) =>
+				shownWhenRunningOnly(
+					d.status,
+					d.daemonId === state.currentSessionId || (switching && d.daemonId === target),
+				),
+			);
+		});
+
 		// Rendered rows: the live ones plus rows still playing their exit. Seeded
 		// from the first render, so page load never animates; a row enters only
 		// when its daemonId was not rendered before. The roster counts as arrived
 		// only after the first roster frame (`armed` trails state.rosterLoaded by
 		// one run), so the frame that fills an initially empty list animates
 		// nothing. A collapsed group animates nothing either: expanding it never
-		// counts its rows as new.
+		// counts its rows as new. A row the filter hides exits like a removed one.
 		const [slots, setSlots] = createSignal<RowSlot<DaemonEntry>[]>(
-			initialRowSlots(props.daemons, (d) => d.daemonId),
+			initialRowSlots(visibleDaemons(), (d) => d.daemonId),
 		);
 		let armed = state.rosterLoaded;
 		createComputed(
 			on(
-				[() => props.daemons, open, () => state.rosterLoaded],
+				[visibleDaemons, open, () => state.rosterLoaded],
 				([daemons, isOpen, loaded]) => {
-					const live = new Set(daemons.map((d) => d.daemonId));
-					for (const slot of slots()) if (!live.has(slot.id)) clearDeletePending(slot.id);
+					// A pending delete clears only when the row left the roster, not
+					// when the filter merely hides it.
+					const inRoster = new Set(props.daemons.map((d) => d.daemonId));
+					for (const slot of slots()) if (!inRoster.has(slot.id)) clearDeletePending(slot.id);
 					setSlots((prev) => reconcileRowSlots(prev, daemons, (d) => d.daemonId, isOpen && armed));
 					armed = loaded;
 				},
@@ -234,12 +259,13 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 						</Show>
 					</button>
 					{/* Right tail, laid out like a row's right edge. The first slot holds
-					    the collapsed summary at rest and the "+" on header hover (one grid
-					    cell: no layout shift); the corner column holds the most urgent row
-					    signal at rest and the "⋯" menu on hover, as a row's corner does. */}
+					    the summary (collapsed, or open with every row filtered out) at rest
+					    and the "+" on header hover (one grid cell: no layout shift); the
+					    corner column holds the most urgent row signal at rest and the "⋯"
+					    menu on hover, as a row's corner does. */}
 					<span class="project-group-tail">
 						<span class="project-group-slot">
-							<Show when={!open() && rollup().total > 0}>
+							<Show when={rollup().total > 0 && (!open() || visibleDaemons().length === 0)}>
 								<span
 									class="project-group-summary"
 									role="img"
@@ -320,7 +346,7 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 									id={id}
 									mode={slot().mode}
 									onExited={(done) => {
-										clearDeletePending(done);
+										if (!props.daemons.some((d) => d.daemonId === done)) clearDeletePending(done);
 										setSlots((prev) => finishRowExit(prev, done));
 									}}
 								>

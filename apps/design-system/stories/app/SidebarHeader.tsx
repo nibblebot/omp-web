@@ -9,7 +9,7 @@ export default defineStory({
 		{
 			name: "Chat only",
 			description:
-				"Wordmark and the collapse toggle; no Chat/Analysis switch while Analysis Mode is in development.",
+				"Wordmark and the collapse toggle; each sidebar passes its own actions (the Chat roster passes the running-only filter).",
 			seed: { view: "chat", modal: null },
 			render: () => (
 				<aside class="sidebar open">
