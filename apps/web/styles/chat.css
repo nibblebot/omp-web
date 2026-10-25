@@ -376,9 +376,9 @@
 .msg-assistant.live {
 	opacity: 0.95;
 }
-/* In-progress shimmer under the stream: a bright band sweeping across the
-   label via a moving background gradient clipped to the glyphs. Colors come
-   from theme tokens so every palette gets a legible sweep for free. */
+/* In-progress shimmer under the stream: a highlight band sweeping across the
+   label via a moving background gradient clipped to the glyphs. The band is
+   --shimmer-band, which each palette keeps legible against --muted-2. */
 .live-shimmer {
 	align-self: stretch;
 	padding: var(--space-1) var(--space-5) var(--space-2);
@@ -392,7 +392,7 @@
 	background: linear-gradient(
 		100deg,
 		var(--muted-2) 40%,
-		var(--muted-3) 50%,
+		var(--shimmer-band) 50%,
 		var(--muted-2) 60%
 	);
 	background-size: 250% 100%;

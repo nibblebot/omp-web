@@ -25,6 +25,10 @@
 	--muted: #8b93a1;
 	--muted-2: #7f8896;
 	--muted-3: #aab2c0;
+	/* Working-label shimmer highlight: must differ visibly from --muted-2 (the
+	   label's base). Dark palettes brighten toward --muted-3; light palettes
+	   override it to lighten toward --bg, since their --muted-3 is darker. */
+	--shimmer-band: var(--muted-3);
 	--accent: #7cc7ff;
 	--success: #4ade80;
 	--warning: #facc15;
@@ -169,6 +173,7 @@
 	--muted: #5a6472;
 	--muted-2: #4b5563;
 	--muted-3: #3d4756;
+	--shimmer-band: color-mix(in srgb, var(--muted-2) 40%, var(--bg));
 	--accent: #1d4ed8;
 	--success: #15803d;
 	--warning: #92400e;
@@ -274,6 +279,7 @@
 	--muted: #575a6e;
 	--muted-2: #525567;
 	--muted-3: #5b5e74;
+	--shimmer-band: color-mix(in srgb, var(--muted-2) 40%, var(--bg));
 	--accent: #1a55d6;
 	--accent-border: rgba(30, 102, 245, 0.4);
 	--success: #256f1a;
@@ -370,6 +376,7 @@
 	--muted: oklch(47% 0.018 285);
 	--muted-2: oklch(50% 0.02 285);
 	--muted-3: oklch(42% 0.02 285);
+	--shimmer-band: color-mix(in srgb, var(--muted-2) 40%, var(--bg));
 	--accent: oklch(44% 0.18 348);
 	--accent-border: oklch(44% 0.18 348 / 0.4);
 	--success: oklch(46% 0.15 160);
