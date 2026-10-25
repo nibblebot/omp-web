@@ -10,6 +10,7 @@
  */
 import { state } from "../state";
 import { formatRoute, parseRoute, type Route } from "./route";
+import { applyActivitiesRoute } from "./activities";
 import { applyRouteDock, closeDock } from "./dock";
 import { requestWorkspaceSessions, resumeSession, setView, switchToSession } from "./roster";
 import { pushToast } from "./toasts";
@@ -110,8 +111,10 @@ async function restoreRoute(route: Route): Promise<void> {
 	// without one closes the dock of the workspace the user is already on
 	// (Back/Forward); after a switch to another workspace the dock saved for it
 	// was restored with the attach (store/dock.ts restoreDockLayout) and stays.
-	if (route.kind === "session" && route.dock !== undefined) applyRouteDock(route.dock);
-	else if (!switchedWorkspace || state.currentWorkspaceId !== workspaceId) closeDock();
+	if (route.dock !== undefined) {
+		if (route.dock.kind === "activities") applyActivitiesRoute(route.dock);
+		else applyRouteDock(route.dock);
+	} else if (!switchedWorkspace || state.currentWorkspaceId !== workspaceId) closeDock();
 	syncRouteToAttached(true);
 }
 

@@ -283,7 +283,7 @@ export const SDK_BUILTINS: readonly SdkBuiltin[] = [
 	},
 	{
 		name: "agents",
-		description: "Open the Agents dock (per-agent model, prewalk, and advisor)",
+		description: "Use the Activities panel (Alt+A)",
 		sdkHandled: false,
 	},
 	{
@@ -292,7 +292,7 @@ export const SDK_BUILTINS: readonly SdkBuiltin[] = [
 		hint: "[revision]",
 		sdkHandled: false,
 	},
-	{ name: "hub", description: "Open the Agents dock (Alt+A)", sdkHandled: false },
+	{ name: "hub", description: "Use the Activities panel (Alt+A)", sdkHandled: false },
 	{
 		name: "branch",
 		aliases: ["rewind"],

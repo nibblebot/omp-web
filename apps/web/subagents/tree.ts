@@ -50,16 +50,16 @@ export function isActiveSubagent(node: Pick<SubagentNode, "status">): boolean {
 }
 
 /**
- * Running filter: active nodes, `keepId`, and ancestors of anything kept. Returns new arrays;
- * never mutates input nodes' children arrays.
+ * Running filter: active nodes, nodes in `keepIds` (the expanded agents), and ancestors of anything
+ * kept. Returns new arrays; never mutates input nodes' children arrays.
  */
 export function filterActiveSubagentTree(
 	nodes: readonly SubagentNode[],
-	keepId?: string,
+	keepIds?: ReadonlySet<string>,
 ): SubagentNode[] {
 	return nodes.flatMap((node) => {
-		const children = filterActiveSubagentTree(node.children, keepId);
-		const kept = children.length > 0 || isActiveSubagent(node) || node.id === keepId;
+		const children = filterActiveSubagentTree(node.children, keepIds);
+		const kept = children.length > 0 || isActiveSubagent(node) || keepIds?.has(node.id) === true;
 		return kept ? [{ ...node, children }] : [];
 	});
 }

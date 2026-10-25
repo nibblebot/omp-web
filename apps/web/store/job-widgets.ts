@@ -1,5 +1,6 @@
 import type { WireJobWidgetView } from "#lib/wire/protocol";
 import { setState, state } from "../state";
+import { jobPollAttached, jobPollRunningChanged } from "./job-poll";
 import { observeRunningJobs, resetJobsBar } from "./jobs-bar";
 import { createJobWidgetsState, type JobWidgetsState } from "./slices/job-widgets";
 
@@ -13,14 +14,18 @@ import { createJobWidgetsState, type JobWidgetsState } from "./slices/job-widget
 
 /** Replace the set with the session's snapshot (never `reconcile`: it leaves a hole where a shrunk list lost entries). */
 export function applyJobWidgets(snapshot: JobWidgetsState): void {
+	const before = state.jobWidgets.running;
 	setState("jobWidgets", { running: snapshot.running, entries: [...snapshot.entries] });
 	observeRunningJobs(snapshot.running);
+	// A job started or ended: the shared job tree poll (store/job-poll.ts) re-asks at once.
+	if (snapshot.running !== before) jobPollRunningChanged();
 }
 
-/** Forget every job (an attach: the priming says what runs now). */
+/** Forget every job (an attach: the priming says what runs now) and restart the shared job tree poll for the attached workspace. */
 export function clearJobWidgets(): void {
 	setState("jobWidgets", createJobWidgetsState());
 	resetJobsBar();
+	jobPollAttached();
 }
 
 /** The glance of the widget of job `id` (a subagent's task job has the agent's id), or undefined while it has none. */

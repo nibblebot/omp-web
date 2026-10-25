@@ -11,6 +11,8 @@ export interface DockPaneProps {
 	maxWidth: number;
 	onWidth: (px: number) => void;
 	onClose: () => void;
+	/** Back button and Esc; defaults to `onClose`. The close button always calls `onClose`. */
+	onBack?: () => void;
 	actions?: JSX.Element;
 	/** Body without padding or scrolling, for a panel that lays out and scrolls itself (agent pane). */
 	flush?: boolean;
@@ -93,11 +95,12 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 		}
 	};
 
-	// Esc inside the pane closes it, unless an inner control already handled it.
+	// Esc inside the pane steps back (or closes), unless an inner control already handled it.
+	const back = () => (props.onBack ?? props.onClose)();
 	const onPaneKey = (event: KeyboardEvent) => {
 		if (event.key !== "Escape" || event.defaultPrevented) return;
 		event.preventDefault();
-		props.onClose();
+		back();
 	};
 
 	return (
@@ -128,7 +131,7 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 				onKeyDown={onSeparatorKey}
 			/>
 			<header class="dock-header">
-				<button type="button" class="dock-back" onClick={() => props.onClose()}>
+				<button type="button" class="dock-back" onClick={back}>
 					Back
 				</button>
 				<h2 class="dock-title">{props.title}</h2>

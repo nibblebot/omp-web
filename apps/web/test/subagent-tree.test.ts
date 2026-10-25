@@ -116,10 +116,11 @@ describe("filterActiveSubagentTree", () => {
 		expect(builder?.children.map((n) => n.id)).toEqual(["advisor", "lint"]);
 	});
 
-	test("keeps keepId even when finished, and its ancestors", () => {
-		const kept = filterActiveSubagentTree(forest(), "types");
+	test("keeps every expanded agent even when finished, and their ancestors", () => {
+		const kept = filterActiveSubagentTree(forest(), new Set(["types", "mapper"]));
 		expect(flattenSubagentTree(kept).map((n) => n.id)).toEqual([
 			"builder",
+			"mapper",
 			"advisor",
 			"lint",
 			"review",
@@ -135,7 +136,7 @@ describe("filterActiveSubagentTree", () => {
 	test("does not mutate the input", () => {
 		const input = forest();
 		const before = structuredClone(input);
-		filterActiveSubagentTree(input, "types");
+		filterActiveSubagentTree(input, new Set(["types"]));
 		expect(input).toEqual(before);
 	});
 });

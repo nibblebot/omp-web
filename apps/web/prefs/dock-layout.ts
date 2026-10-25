@@ -1,69 +1,120 @@
 /**
- * Per-workspace dock layout: which dock panel a workspace had open, its agents
- * mode and filter, the accordion's remembered expanded agent, and the agents whose
- * children are collapsed in the dock tree. Keyed by workspace id and persisted in
+ * Per-workspace dock layout: which dock panel a workspace had open and its
+ * Activities panel layout (mode, folded sections, expanded item ids, collapsed
+ * subagent-tree rows, filters, `lastFocused`). Keyed by workspace id and persisted in
  * one versioned localStorage record. The dock width stays global (prefs/dock.ts).
  *
  * Storage is read fresh on every call: the record is small, and a second tab
  * or a test reset can never leave a stale in-memory copy behind. Unknown or
- * corrupt shapes degrade to the default layout, never throw.
+ * corrupt shapes degrade to the default layout, never throw. The v1 record is
+ * deleted on load and never migrated.
  */
-export type AgentsMode = "single" | "accordion";
+import {
+	ACTIVITY_SECTIONS,
+	type ActivitiesMode,
+	type ActivityDetailRef,
+	type ActivityFilter,
+	type ActivitySectionId,
+} from "../store/slices/activities";
 
-/** Which agents the dock lists: every subagent, or only the active ones. */
-export type AgentsFilter = "all" | "running";
-
-/** An open dock panel: `kind` picks the panel, `id` an item inside it. */
+/** An open dock panel: `kind` picks the panel; `item` (route only, never persisted) names an item inside it. */
 export interface DockSelection {
 	kind: string;
-	id?: string;
+	item?: { type: string; id: string };
+}
+
+/** The Activities panel's persisted layout; the serializable twin of `ActivitiesSlice` (no detail, no focus request). */
+export interface ActivitiesLayout {
+	mode: ActivitiesMode;
+	collapsedSections: ActivitySectionId[];
+	expanded: { subagents: string[]; jobs: string[]; daemons: string[] };
+	treeCollapsed: string[];
+	filters: { subagents: ActivityFilter; jobs: ActivityFilter };
+	lastFocused?: ActivityDetailRef;
 }
 
 export interface DockLayout {
-	/** The open dock panel, or null when closed. */
-	dock: DockSelection | null;
-	mode: AgentsMode;
-	filter: AgentsFilter;
-	/** The accordion's remembered expanded agent (survives closing the dock). */
-	expanded?: string;
-	/** Agent ids whose children are collapsed in the dock tree. */
-	treeCollapsed: string[];
+	/** The open dock panel (its kind only), or null when closed. */
+	dock: { kind: string } | null;
+	activities: ActivitiesLayout;
 }
 
-const STORAGE_KEY = "omp-web:dock-layouts:v1";
+const STORAGE_KEY = "omp-web:dock-layouts:v2";
+const LEGACY_STORAGE_KEY = "omp-web:dock-layouts:v1";
 const DOCK_KIND = /^[a-z][a-z0-9-]*$/;
 
+export function defaultActivitiesLayout(): ActivitiesLayout {
+	return {
+		mode: "accordion",
+		collapsedSections: [],
+		expanded: { subagents: [], jobs: [], daemons: [] },
+		treeCollapsed: [],
+		filters: { subagents: "all", jobs: "all" },
+	};
+}
+
 export function defaultDockLayout(): DockLayout {
-	return { dock: null, mode: "single", filter: "all", treeCollapsed: [] };
+	return { dock: null, activities: defaultActivitiesLayout() };
 }
 
 function nonEmptyString(value: unknown): value is string {
 	return typeof value === "string" && value !== "";
 }
 
-function parseDock(value: unknown): DockSelection | null {
+function stringSet(value: unknown): string[] {
+	return Array.isArray(value) ? [...new Set(value.filter(nonEmptyString))] : [];
+}
+
+function parseDock(value: unknown): { kind: string } | null {
 	if (typeof value !== "object" || value === null) return null;
-	const { kind, id } = value as Record<string, unknown>;
-	if (typeof kind !== "string" || !DOCK_KIND.test(kind)) return null;
-	if (id === undefined) return { kind };
-	return nonEmptyString(id) ? { kind, id } : { kind };
+	const { kind } = value as Record<string, unknown>;
+	return typeof kind === "string" && DOCK_KIND.test(kind) ? { kind } : null;
+}
+
+function parseFocus(value: unknown): ActivityDetailRef | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const { section, id } = value as Record<string, unknown>;
+	if ((section !== "subagents" && section !== "jobs") || !nonEmptyString(id)) return undefined;
+	return { section, id };
+}
+
+function parseActivities(value: unknown): ActivitiesLayout {
+	const layout = defaultActivitiesLayout();
+	if (typeof value !== "object" || value === null) return layout;
+	const raw = value as Record<string, unknown>;
+	if (raw.mode === "detail") layout.mode = "detail";
+	layout.collapsedSections = stringSet(raw.collapsedSections).filter((s): s is ActivitySectionId =>
+		(ACTIVITY_SECTIONS as readonly string[]).includes(s),
+	);
+	const expanded = (
+		typeof raw.expanded === "object" && raw.expanded !== null ? raw.expanded : {}
+	) as Record<string, unknown>;
+	layout.expanded = {
+		subagents: stringSet(expanded.subagents),
+		jobs: stringSet(expanded.jobs),
+		daemons: stringSet(expanded.daemons),
+	};
+	layout.treeCollapsed = stringSet(raw.treeCollapsed);
+	const filters = (
+		typeof raw.filters === "object" && raw.filters !== null ? raw.filters : {}
+	) as Record<string, unknown>;
+	if (filters.subagents === "running") layout.filters.subagents = "running";
+	if (filters.jobs === "running") layout.filters.jobs = "running";
+	const lastFocused = parseFocus(raw.lastFocused);
+	if (lastFocused !== undefined) layout.lastFocused = lastFocused;
+	return layout;
 }
 
 function parseLayout(value: unknown): DockLayout {
-	const layout = defaultDockLayout();
-	if (typeof value !== "object" || value === null) return layout;
+	if (typeof value !== "object" || value === null) return defaultDockLayout();
 	const raw = value as Record<string, unknown>;
-	layout.dock = parseDock(raw.dock);
-	if (raw.mode === "accordion") layout.mode = "accordion";
-	if (raw.filter === "running") layout.filter = "running";
-	if (nonEmptyString(raw.expanded)) layout.expanded = raw.expanded;
-	if (Array.isArray(raw.treeCollapsed))
-		layout.treeCollapsed = [...new Set(raw.treeCollapsed.filter(nonEmptyString))];
-	return layout;
+	return { dock: parseDock(raw.dock), activities: parseActivities(raw.activities) };
 }
 
 function readAll(): Record<string, DockLayout> {
 	try {
+		// The v1 (agents dock) record is dropped, never migrated.
+		globalThis.localStorage?.removeItem(LEGACY_STORAGE_KEY);
 		const raw = globalThis.localStorage?.getItem(STORAGE_KEY);
 		if (raw === null || raw === undefined) return {};
 		const parsed: unknown = JSON.parse(raw);

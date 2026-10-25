@@ -1,0 +1,310 @@
+/* Activities dock panel (components/activities/): the sections list, the section frame, the shared
+   expanded-item body, the single-item detail view and the header toggles. Subagent rows and their
+   conversation live in components/subagents/subagents.css. */
+
+/* Flush dock column: it owns its inset. The list is the one scroller; detail mode swaps it for the detail. */
+.activities-panel {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+
+/* The scroller is also the size container the expanded item bodies take their height share from
+   (`cqh`), so an open body never outgrows the viewport it scrolls in. */
+.activities-list {
+	display: flex;
+	flex: 1 1 0;
+	flex-direction: column;
+	gap: var(--space-4);
+	min-height: 0;
+	padding: var(--space-2);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	container-type: size;
+}
+
+.activities-empty {
+	margin: 0;
+	padding: var(--space-5);
+	color: var(--muted);
+	font-size: var(--fs-md);
+}
+
+/* One section: a header row (collapse toggle, then the section's own actions) over its body. */
+.activity-section {
+	display: flex;
+	flex: none;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.activity-section-header {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	min-width: 0;
+}
+
+.activity-section-heading {
+	display: flex;
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0;
+	font: inherit;
+}
+
+.activity-section-toggle {
+	display: flex;
+	flex: 1 1 auto;
+	align-items: center;
+	gap: var(--space-3);
+	min-width: 0;
+	padding: var(--space-3) var(--space-3);
+	border: 0;
+	border-radius: var(--r-md);
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.activity-section-toggle:hover {
+	background: var(--hover);
+}
+
+.activity-section-toggle:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+.activity-section-chevron {
+	display: inline-grid;
+	flex: none;
+	place-items: center;
+	color: var(--muted);
+}
+
+.activity-section-name {
+	font-size: var(--fs-md);
+	font-weight: 600;
+}
+
+.activity-section-count {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	font-variant-numeric: tabular-nums;
+}
+
+.activity-section-actions {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: var(--space-3);
+	padding-right: var(--space-3);
+}
+
+.activity-section-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	min-width: 0;
+	padding-top: var(--space-2);
+}
+
+/* An expanded list item's body, in the row's tree item. About 60% of the list scroller, never under
+   16rem; `--fill` bodies (a conversation, which scrolls itself) take that height, the others (job
+   output) take their natural height up to it and scroll inside. The +9.5rem is two collapsed rows
+   (~4.75rem each); the cap keeps the open row (~5rem) and its body inside the scroller together. */
+.activity-item-body {
+	display: flex;
+	flex-direction: column;
+	--activity-item-cap: min(calc(max(60cqh, 16rem) + 9.5rem), calc(100cqh - 5rem));
+	max-height: var(--activity-item-cap);
+	margin: 0 0 var(--space-2);
+	border: 1px solid var(--accent);
+	border-top-color: var(--border);
+	border-radius: 0 0 var(--r-md) var(--r-md);
+	overflow: hidden auto;
+}
+
+.activity-item-body--fill {
+	height: var(--activity-item-cap);
+	overflow: hidden;
+}
+
+/* The open item: its row and body stay on top of the shared borders so the accent outline wins. */
+.activities-list .subagent-tree-row[data-selected] {
+	position: relative;
+	z-index: 1;
+	border-color: var(--accent);
+	border-bottom: 0;
+	border-radius: 0;
+}
+
+.activities-list .activity-item-body {
+	position: relative;
+	z-index: 1;
+	margin: 0;
+	border-radius: 0;
+}
+
+.activity-search {
+	flex: none;
+	width: 100%;
+	padding: 6px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	background: var(--bg-deep);
+	color: var(--text);
+	font: inherit;
+}
+
+.activity-search:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.activity-empty {
+	margin: 0;
+	padding: var(--space-4) var(--space-3);
+	color: var(--muted);
+	font-size: var(--fs-md);
+}
+
+/* Detail mode: one item fills the panel body under a Back strip. */
+.activity-detail {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+
+.activity-detail-bar {
+	display: flex;
+	flex: none;
+	align-items: center;
+	padding: var(--space-3) var(--space-5);
+	border-bottom: 1px solid var(--border);
+}
+
+.activity-detail-back {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-3);
+	padding: var(--space-2) var(--space-3);
+	border: 0;
+	border-radius: var(--r-md);
+	background: transparent;
+	color: var(--muted-3);
+	font: inherit;
+	font-size: var(--fs-md);
+	cursor: pointer;
+}
+
+.activity-detail-back:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+.activity-detail-back:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.activity-detail-body {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+
+/* The subagent detail: header (name, type, status, actions, title) over the conversation. */
+.subagent-detail {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+
+.subagent-detail-head {
+	display: flex;
+	flex: none;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-4) var(--space-5);
+	border-bottom: 1px solid var(--border);
+}
+
+.subagent-detail-id {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+}
+
+.subagent-detail-id .sidebar-menu-wrap {
+	margin-left: auto;
+}
+
+.subagent-detail-name {
+	margin: 0;
+	font-size: 16px;
+	overflow-wrap: anywhere;
+}
+
+.subagent-detail-title {
+	margin: 0;
+	color: var(--muted-3);
+	font-size: var(--fs-md);
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+.subagent-detail-missing {
+	padding: 12px;
+	color: var(--muted);
+}
+
+/* KebabMenu's trigger is sidebar-hover-only (fleet.css); the detail header has no hover row to reveal it. */
+.subagent-detail-id .sidebar-menu-btn {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+/* Dock header and section header segmented controls: accordion / detail view (icons) and the
+   All / Running filter (words). */
+.activities-mode-toggle,
+.activity-filter-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+}
+
+.activities-mode-toggle .segment-button,
+.activity-filter-toggle .segment-button {
+	display: inline-grid;
+	place-items: center;
+	cursor: pointer;
+}
+
+.activities-mode-toggle .segment-button.active,
+.activity-filter-toggle .segment-button.active {
+	color: var(--accent);
+}
+
+/* Narrow or touch: section toggles, the Back strip and the search box reach 44px. */
+@media (max-width: 768px), (pointer: coarse) {
+	.activity-section-toggle,
+	.activity-detail-back {
+		min-height: 44px;
+	}
+	.activity-search {
+		min-height: 44px;
+		font-size: max(1rem, 16px);
+	}
+}

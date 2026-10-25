@@ -232,7 +232,7 @@ export function reviveWorker(agentId: string): Promise<{ id: string; status: str
 }
 
 // ---------------------------------------------------------------------------
-// Component-layer glue: transient presentation helpers for the agents dock.
+// Component-layer glue: transient presentation helpers for the Activities panel.
 // Durable agent state stays server-side; this module never writes the
 // state.subagents mirror (the connect() mux owns it).
 // ---------------------------------------------------------------------------

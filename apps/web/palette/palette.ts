@@ -35,7 +35,7 @@ export const PALETTE_GROUP_ORDER: readonly PaletteGroup[] = [
 /** Overlays that have no slash command of their own. */
 export type PaletteOpenTarget =
 	| "settings"
-	| "subagents"
+	| "activities"
 	| "debug"
 	| "add-project"
 	| "sign-in"
@@ -247,10 +247,10 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 			},
 		),
 		openItem(
-			"subagents",
-			"Subagents",
-			"Running and finished subagents",
-			["agents", "tasks", "workers"],
+			"activities",
+			"Activities",
+			"Subagents, jobs, daemons and todos",
+			["agents", "tasks", "workers", "jobs", "daemons", "todos"],
 			{
 				hint: "Alt+A",
 			},

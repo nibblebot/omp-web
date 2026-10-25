@@ -1,6 +1,6 @@
 import type { BackgroundJob } from "./chat/background-job";
 import { reconcileBackgroundCards } from "./store/background-cards";
-import type { AgentsFilter, AgentsMode } from "./prefs/dock-layout";
+import { type ActivitiesSlice, createActivitiesState } from "./store/slices/activities";
 import { restoreDockLayout } from "./store/dock";
 import { readDockWidth } from "./prefs/dock";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -460,15 +460,12 @@ export const [state, setState] = createStore({
 	authExpiresAt: undefined as number | undefined,
 	modal: null as ModalName | null,
 	// Right-hand dock (U18): which panel is open, null when closed. Written only
-	// through store/dock.ts (openDock/closeDock); the route mirrors it.
-	dock: null as { kind: string; id?: string } | null,
-	// The attached workspace's agents-dock layout, live here and saved per
-	// workspace by store/dock.ts: the agents mode and filter, the accordion's remembered
-	// expanded agent, and the agents whose children are collapsed in the dock tree.
-	agentsMode: "single" as AgentsMode,
-	agentsFilter: "all" as AgentsFilter,
-	agentsExpanded: undefined as string | undefined,
-	agentTreeCollapsed: new Set<string>() as ReadonlySet<string>,
+	// through store/dock.ts (openDock/closeDock) and store/activities.ts; the
+	// route mirrors it. `item` is the Activities detail item, mirrored for the URL.
+	dock: null as { kind: string; item?: { type: string; id: string } } | null,
+	// The attached workspace's Activities panel layout, live here and saved per
+	// workspace by store/dock.ts (see store/slices/activities.ts for the shape).
+	activities: createActivitiesState() as ActivitiesSlice,
 	// True once the attached session's subagent forest is fully pulled (the
 	// live mirror and the worker roster); false from every attach until then.
 	// A saved agent id is only judged missing once both are in.

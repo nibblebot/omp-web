@@ -1,4 +1,4 @@
-/* Subagent tree, fan-out footer, agent pane, agents dock (list and accordion), and composer counter. */
+/* Subagent tree, fan-out footer, agent conversation, and composer counter. The Activities panel's own layout is styles/activities.css. */
 
 /* One rounded list, outlined like a card, with a light separator above each row. The children
    chevron sits inside the row and leaf rows reserve no space for it; nesting shows as an indent
@@ -95,20 +95,6 @@
 	background: var(--hover);
 }
 
-/* Accordion body under its row: the agent's conversation, about 60% of the list scroller
-   (a size container, see .agents-panel-list) plus two collapsed rows (~4.75rem each), capped so
-   the open row (~5rem) and its body still fit the scroller together. */
-.subagent-tree-body {
-	display: flex;
-	flex-direction: column;
-	height: min(calc(max(60cqh, 16rem) + 9.5rem), calc(100cqh - 5rem));
-	margin: 0 0 var(--space-2);
-	border: 1px solid var(--accent);
-	border-top-color: var(--border);
-	border-radius: 0 0 var(--r-md) var(--r-md);
-	overflow: hidden;
-}
-
 /* Inside the row: the list clips its rounded corners (overflow: hidden), so an outline drawn
    outside the row would be cut off at the list's edge. */
 .subagent-tree-open:focus-visible,
@@ -117,7 +103,6 @@
 	outline-offset: -2px;
 }
 
-.agents-panel-search:focus-visible,
 .running-agents-button:focus-visible {
 	outline: 2px solid var(--accent);
 	outline-offset: 2px;
@@ -310,55 +295,7 @@
 	min-height: 0;
 }
 
-/* Agent pane column: header, then the conversation. The dock body is flush and clips. */
-.subagent-panel {
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-	min-height: 0;
-}
-
-.subagent-panel-head {
-	display: flex;
-	flex: none;
-	flex-direction: column;
-	gap: var(--space-2);
-	padding: var(--space-4) var(--space-5);
-	border-bottom: 1px solid var(--border);
-}
-
-.subagent-panel-id {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: var(--space-3);
-}
-
-.subagent-panel-id .sidebar-menu-wrap {
-	margin-left: auto;
-}
-
-.subagent-panel-name {
-	margin: 0;
-	font-size: 16px;
-	overflow-wrap: anywhere;
-}
-
-.subagent-panel-title {
-	margin: 0;
-	color: var(--muted-3);
-	font-size: var(--fs-md);
-	overflow-wrap: anywhere;
-	white-space: pre-wrap;
-}
-
-.subagent-panel-missing {
-	padding: 12px;
-	color: var(--muted);
-}
-
-/* KebabMenu's trigger is sidebar-hover-only (fleet.css); the pane header and tree rows have no hover row to reveal it. */
-.subagent-panel-id .sidebar-menu-btn,
+/* KebabMenu's trigger is sidebar-hover-only (fleet.css); tree rows and the status bar have no hover row to reveal it. */
 .subagent-tree-row .sidebar-menu-btn,
 .subagent-status-bar .sidebar-menu-btn {
 	opacity: 1;
@@ -426,90 +363,6 @@
 	font-size: var(--fs-md);
 }
 
-/* Flush dock column: it owns its inset and gap. Search and footer are pinned; the list between
-   them is the one scroller. */
-.agents-panel {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-3);
-	min-width: 0;
-	min-height: 0;
-	padding: var(--space-2);
-}
-
-.agents-panel-list {
-	flex: 1 1 0;
-	min-height: 0;
-	overflow-y: auto;
-}
-
-/* The open agent: its row and body stay on top of the shared borders so the accent outline wins. */
-.agents-panel-list .subagent-tree-row[data-selected] {
-	position: relative;
-	z-index: 1;
-	border-color: var(--accent);
-	border-bottom: 0;
-	border-radius: 0;
-}
-
-.agents-panel-list .subagent-tree-body {
-	position: relative;
-	z-index: 1;
-	margin: 0;
-	border-radius: 0;
-}
-
-/* Accordion: the list scroller is the size container the expanded body's height is a share of. */
-.agents-panel[data-mode="accordion"] .agents-panel-list {
-	container-type: size;
-	overscroll-behavior: contain;
-}
-
-/* Dock header controls: the filter toggle, then the view toggle. */
-.agents-dock-actions {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--space-6);
-}
-
-/* Dock header segmented controls: Running / All filter (words), single agent view or accordion view (icons). */
-.agents-filter-toggle,
-.agents-mode-toggle {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--space-1);
-}
-
-.agents-filter-toggle .segment-button,
-.agents-mode-toggle .segment-button {
-	display: inline-grid;
-	place-items: center;
-	cursor: pointer;
-}
-
-.agents-filter-toggle .segment-button.active,
-.agents-mode-toggle .segment-button.active {
-	color: var(--accent);
-}
-
-.agents-panel-search {
-	flex: none;
-	width: 100%;
-	padding: 6px 10px;
-	border: 1px solid var(--border);
-	border-radius: 6px;
-	background: var(--bg-deep);
-	color: var(--text);
-	font: inherit;
-}
-
-.agents-panel-empty {
-	margin: 0;
-	padding: 12px 0;
-	color: var(--muted);
-	font-size: 13px;
-}
-
 .running-agents-button {
 	display: inline-flex;
 	align-items: center;
@@ -529,7 +382,7 @@
 	font-variant-numeric: tabular-nums;
 }
 
-/* Narrow or touch: tree rows, agents search, and the composer counter reach
+/* Narrow or touch: tree rows and the composer counter reach
    44px. */
 @media (max-width: 768px), (pointer: coarse) {
 	.subagent-tree-toggle {
@@ -538,10 +391,6 @@
 	}
 	.subagent-tree-open {
 		min-height: 44px;
-	}
-	.agents-panel-search {
-		min-height: 44px;
-		font-size: max(1rem, 16px);
 	}
 	.running-agents-button {
 		min-height: 44px;

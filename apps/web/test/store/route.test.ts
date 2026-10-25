@@ -34,7 +34,10 @@ describe("route parse/format", () => {
 			"#/w//s/x",
 			"#/w/d7/s",
 			"#/w/d7/s/",
-			"#/w/d7/s/x/extra/a/b",
+			"#/w/d7/s/x/extra/a/b/c",
+			"#/w/d7/s/x/activities/job/%E0%A4%A",
+			"#/w/d7/s/x/activities/Job/j1",
+			"#/w/d7/s/x/agents/a1",
 			"#/w/d7/s/x/Review",
 			"#/w/d7/s/x/review/%E0%A4%A",
 			"#/w/d7/s/x/",
@@ -66,27 +69,72 @@ describe("route parse/format", () => {
 		expect(parseRoute("#/stored")).toEqual({ kind: "none" });
 	});
 
-	test("a session route with extra segments and no session marker parses to none", () => {
-		expect(parseRoute("#/w/s/x")).toEqual({ kind: "none" });
-		expect(parseRoute("#/w/stored/x")).toEqual({ kind: "none" });
+	test("a workspace route with a dock-shaped tail is a dock, anything else without a session marker is none", () => {
+		// `#/w/s/x` is workspace "s" with dock "x": the session marker is only the third segment.
+		expect(parseRoute("#/w/s/x")).toEqual({
+			kind: "workspace",
+			workspaceId: "s",
+			dock: { kind: "x" },
+		});
+		expect(parseRoute("#/w/d7/x/y")).toEqual({ kind: "none" });
+		expect(parseRoute("#/w/d7/x/y/z/w")).toEqual({ kind: "none" });
+		expect(parseRoute("#/w/d7/s")).toEqual({ kind: "none" });
 	});
 
-	test("dock segments round trip with a kind and an optional id", () => {
+	test("a workspace-level dock route has no session segment and round trips", () => {
+		const bare: Route = { kind: "workspace", workspaceId: "d7", dock: { kind: "activities" } };
+		const item: Route = {
+			kind: "workspace",
+			workspaceId: "d7",
+			dock: { kind: "activities", item: { type: "job", id: "j 1" } },
+		};
+		expect(formatRoute(bare)).toBe("#/w/d7/activities");
+		expect(parseRoute("#/w/d7/activities")).toEqual(bare);
+		expect(formatRoute(item)).toBe("#/w/d7/activities/job/j%201");
+		expect(parseRoute("#/w/d7/activities/job/j%201")).toEqual(item);
+		expect(parseRoute("#/w/d7/activities/job")).toEqual({ kind: "none" });
+		expect(parseRoute("#/w/d7/agents/a1")).toEqual({ kind: "none" });
+	});
+
+	test("a dock segment round trips, with an optional item", () => {
 		const review: Route = {
 			kind: "session",
 			workspaceId: "d7",
 			sessionId: "x",
 			dock: { kind: "review" },
 		};
-		const agent: Route = {
+		const activities: Route = {
 			kind: "session",
 			workspaceId: "d7",
 			sessionId: "x",
-			dock: { kind: "agent", id: "a 1/2" },
+			dock: { kind: "activities" },
+		};
+		const subagent: Route = {
+			kind: "session",
+			workspaceId: "d7",
+			sessionId: "x",
+			dock: { kind: "activities", item: { type: "subagent", id: "a 1/2" } },
+		};
+		const job: Route = {
+			kind: "session",
+			workspaceId: "d7",
+			sessionId: "x",
+			dock: { kind: "activities", item: { type: "job", id: "j1" } },
 		};
 		expect(formatRoute(review)).toBe("#/w/d7/s/x/review");
 		expect(parseRoute("#/w/d7/s/x/review")).toEqual(review);
-		expect(formatRoute(agent)).toBe("#/w/d7/s/x/agent/a%201%2F2");
-		expect(parseRoute("#/w/d7/s/x/agent/a%201%2F2")).toEqual(agent);
+		expect(formatRoute(activities)).toBe("#/w/d7/s/x/activities");
+		expect(parseRoute("#/w/d7/s/x/activities")).toEqual(activities);
+		expect(formatRoute(subagent)).toBe("#/w/d7/s/x/activities/subagent/a%201%2F2");
+		expect(parseRoute("#/w/d7/s/x/activities/subagent/a%201%2F2")).toEqual(subagent);
+		expect(formatRoute(job)).toBe("#/w/d7/s/x/activities/job/j1");
+		expect(parseRoute("#/w/d7/s/x/activities/job/j1")).toEqual(job);
+	});
+
+	test("a dock segment with an item missing its id or with extra segments parses to none", () => {
+		expect(parseRoute("#/w/d7/s/x/activities/job")).toEqual({ kind: "none" });
+		expect(parseRoute("#/w/d7/s/x/activities/job/")).toEqual({ kind: "none" });
+		expect(parseRoute("#/w/d7/s/x/activities/job/j1/extra")).toEqual({ kind: "none" });
+		expect(parseRoute("#/w/d7/s/x/Activities")).toEqual({ kind: "none" });
 	});
 });

@@ -217,7 +217,9 @@ describe("attached-frame handling", () => {
 
 		// First attach: no switch, so the pull is issued and nothing is rejected.
 		dispatch(attached("session-a"));
-		expect(posted.map((c) => (c.type === "call" ? c.method : c.type))).toEqual([
+		expect(
+			posted.map((c) => (c.type === "call" ? c.method : c.type)).filter((m) => m !== "getJobTree"),
+		).toEqual([
 			"getSettings",
 			"getSubagents",
 			"getSettings", // attach re-pulls the settings model (refreshSettings)
@@ -233,8 +235,10 @@ describe("attached-frame handling", () => {
 		// A fresh getSubagents is issued AFTER the cleanup. The regression was
 		// rejectPendingCalls killing the just-registered pull (swallowed by its
 		// .catch), leaving the panel empty until a later lifecycle frame.
+		// The shared job poll asks `getJobTree` on attach by design; this test guards the settings/subagents calls.
 		const calls = posted.filter(
-			(c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call",
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method !== "getJobTree",
 		);
 		expect(calls.map((c) => c.method)).toEqual([
 			"getSettings",

@@ -5,18 +5,24 @@ import { subagentForest } from "../../../web/store/subagents";
 import { seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
 
-/** Accordion tree with local expansion: click a row to expand it, again to collapse. */
-const AccordionTree = (props: { initial?: string }) => {
-	const [expandedId, setExpandedId] = createSignal<string | undefined>(props.initial);
+/** Accordion tree with local expansion: click a row to expand it, again to collapse; any number stay open. */
+const AccordionTree = (props: { initial?: readonly string[] }) => {
+	const [expanded, setExpanded] = createSignal<ReadonlySet<string>>(new Set(props.initial));
 	return (
 		<div class="ds-frame ds-frame-tall">
 			<SubagentTree
 				nodes={subagentForest()}
 				label="Agents"
-				onOpen={(id) => setExpandedId((current) => (current === id ? undefined : id))}
+				onOpen={(id) =>
+					setExpanded((prev) => {
+						const next = new Set(prev);
+						if (!next.delete(id)) next.add(id);
+						return next;
+					})
+				}
 				accordion={{
-					get expandedId() {
-						return expandedId();
+					get expanded() {
+						return expanded();
 					},
 					body: (id) => <SubagentConversation id={id} />,
 				}}
@@ -96,7 +102,14 @@ export default defineStory({
 			description:
 				"The expanded row is highlighted with aria-selected true and aria-controls on its region; the region sits under the row inside the same tree item, and only this agent mounts a transcript.",
 			seed: () => seedAgentTree({ display: true }),
-			render: () => <AccordionTree initial="FixtureBuilder" />,
+			render: () => <AccordionTree initial={["FixtureBuilder"]} />,
+		},
+		{
+			name: "Accordion, several expanded",
+			description:
+				"Any number of rows can be expanded at once; the tree is aria-multiselectable and each body mounts its own transcript.",
+			seed: () => seedAgentTree({ display: true }),
+			render: () => <AccordionTree initial={["FixtureBuilder", "DocsSweep"]} />,
 		},
 		{
 			name: "Live preview off",

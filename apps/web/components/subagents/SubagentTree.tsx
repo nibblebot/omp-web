@@ -46,12 +46,12 @@ function onTreeKeyDown(e: KeyboardEvent, root: HTMLElement, toggle: (id: string)
 }
 
 /**
- * Accordion behavior of a tree: at most one agent is expanded, its `body`
+ * Accordion behavior of a tree: any number of agents are expanded, each `body`
  * renders in a region right under its row, and every treeitem reports
  * `aria-selected`. Rows offer Park and Revive in their kebab.
  */
 export interface SubagentTreeAccordion {
-	expandedId: string | undefined;
+	expanded: ReadonlySet<string>;
 	body: (id: string) => JSX.Element;
 }
 
@@ -68,9 +68,9 @@ const SubagentTreeNodes: Component<{
 	<Index each={props.nodes as SubagentNode[]}>
 		{(node) => {
 			const expanded = () => !props.collapsed.has(node().id);
-			const open = () => props.accordion?.expandedId === node().id;
+			const open = () => props.accordion?.expanded.has(node().id) === true;
 			return (
-				<li role="none" class="subagent-tree-item">
+				<li role="none" class="subagent-tree-item" data-activity-item={`subagents:${node().id}`}>
 					<SubagentTreeRow
 						node={node()}
 						level={props.level}
@@ -87,7 +87,7 @@ const SubagentTreeNodes: Component<{
 						{(id) => (
 							<div
 								role="region"
-								class="subagent-tree-body"
+								class="activity-item-body activity-item-body--fill"
 								id={subagentRegionDomId(id)}
 								aria-labelledby={subagentRowDomId(id)}
 							>
@@ -116,9 +116,9 @@ const SubagentTreeNodes: Component<{
 
 /**
  * Agent forest as a WAI-ARIA tree. Opening a row calls `onOpen` (the agent
- * pane, or the accordion toggle). Children collapse in local state unless the
+ * detail, or the accordion toggle). Children collapse in local state unless the
  * caller controls it with `collapsed` and `onToggleCollapsed` (the dock keeps
- * them per workspace); `accordion` turns on single-select inline expansion.
+ * them per workspace); `accordion` turns on multi-select inline expansion.
  */
 export const SubagentTree: Component<{
 	nodes: readonly SubagentNode[];
@@ -152,6 +152,7 @@ export const SubagentTree: Component<{
 			class="subagent-tree"
 			role="tree"
 			aria-label={props.label}
+			aria-multiselectable={props.accordion ? "true" : undefined}
 			onKeyDown={(e) => onTreeKeyDown(e, root, toggle)}
 		>
 			<SubagentTreeNodes

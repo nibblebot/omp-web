@@ -1,35 +1,31 @@
-import { createSignal } from "solid-js";
-import type {
-	JobDetailDto,
-	JobDto,
-	JobStatus,
-	JobTreeDto,
-	JobTreeRowDto,
-} from "#lib/wire/protocol";
+import { createSignal, untrack } from "solid-js";
+import type { JobDetailDto, JobDto, JobStatus, JobTreeRowDto } from "#lib/wire/protocol";
 import { setState, state } from "../state";
+import {
+	acquireJobPollFocus,
+	JOB_POLL_FOCUSED_MS,
+	jobPollCount,
+	jobPollError,
+	jobPollView,
+	jobTreeRows,
+	onJobTreeAnswer,
+	refreshJobTree,
+} from "./job-poll";
 import { call } from "./transport";
 
 /**
- * Background-jobs domain: the attached session's job tree,
- * the selected job's inspection, and the cancel of the session's own jobs.
+ * Background-jobs domain: the selected job's inspection and the cancel of the session's own jobs, over
+ * the job tree the shared poll (`store/job-poll.ts`) keeps.
  *
- * The sheet polls while it is open. The `job_widgets` frame carries only the running
- * count and widget glances, not the tree or a job's detail, and the SDK announces no
- * job status changes. `getJobTree`/`getJobDetail` are read-only calls that never
- * trigger a state broadcast, so a short poll costs one small answer per tick.
+ * The sheet holds the poll's faster period while it is open. `getJobDetail` is a read-only call that
+ * never triggers a state broadcast; the selected job's detail reloads with each tree answer.
  *
- * Every answer is stamped with the session it was asked of and dropped when
- * the attached session changed meanwhile, as in `store/plugins.ts`.
+ * Every answer is stamped with the session it was asked of and dropped when the attached session
+ * changed meanwhile, as in `store/plugins.ts`.
  */
 
-/** Poll period while the sheet is open (the TUI redraws its sheet every 250 ms; a browser round trip does not need to). */
-export const JOBS_POLL_MS = 2000;
-
-interface TreeSnapshot {
-	workspaceId: string;
-	/** Null when the session has no async job manager. */
-	tree: JobTreeDto | null;
-}
+/** Poll period while the sheet is open. */
+export const JOBS_POLL_MS = JOB_POLL_FOCUSED_MS;
 
 interface DetailSnapshot {
 	workspaceId: string;
@@ -38,30 +34,23 @@ interface DetailSnapshot {
 	detail: JobDetailDto | null;
 }
 
-const [snapshot, setSnapshot] = createSignal<TreeSnapshot | undefined>(undefined);
 const [detailSnapshot, setDetailSnapshot] = createSignal<DetailSnapshot | undefined>(undefined);
 const [selectedId, setSelectedId] = createSignal<string | null>(null);
 const [cancelling, setCancelling] = createSignal<string | null>(null);
-const [error, setError] = createSignal<string | null>(null);
+const [detailError, setDetailError] = createSignal<string | null>(null);
 const [cancelError, setCancelError] = createSignal<string | null>(null);
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-/** The tree of the session attached now; an answer for a session left behind never shows. */
-const currentTree = (): TreeSnapshot | undefined => {
-	const current = snapshot();
-	return current?.workspaceId === state.currentWorkspaceId ? current : undefined;
-};
-
 /** `loading` until the first answer, `unavailable` when the session runs no async jobs, else `ready`. */
 export const jobsView = (): "loading" | "unavailable" | "ready" => {
-	const current = currentTree();
-	if (current === undefined) return "loading";
-	return current.tree === null ? "unavailable" : "ready";
+	const phase = jobPollView().phase;
+	return phase === "unavailable" || phase === "ready" ? phase : "loading";
 };
 
-export const jobRows = (): JobTreeRowDto[] => currentTree()?.tree?.rows ?? [];
-export const jobsError = error;
+export const jobRows = (): JobTreeRowDto[] => [...jobTreeRows()];
+/** Why the tree or the selected job's detail could not load; cleared by the next good answer. */
+export const jobsError = (): string | null => jobPollError() ?? detailError();
 /** Why the last Cancel failed (a refusal, a lost connection); cleared by the next Cancel. */
 export const jobCancelError = cancelError;
 export const selectedJobId = selectedId;
@@ -107,52 +96,45 @@ async function loadDetail(workspaceId: string, jobId: string): Promise<void> {
 }
 
 /**
- * Bumped on every selection change. A tree requested before a job was selected cannot say the job is
- * gone (it may have started after that request), so only a tree asked for under the current selection
+ * The poll count when the selection last changed. A tree requested before a job was selected cannot say
+ * the job is gone (it may have started after that request), so only a tree asked for after the selection
  * may drop it.
  */
-let selectionStamp = 0;
+let selectionPoll = 0;
 
-let refreshing: Promise<void> | undefined;
-
-/** Reload the tree and the selected job's detail; a refresh already in flight is joined, never stacked. */
-export function refreshJobs(): Promise<void> {
-	refreshing ??= (async () => {
-		const workspaceId = state.currentWorkspaceId;
-		const stamp = selectionStamp;
-		try {
-			const tree = (await call("getJobTree", [])) as JobTreeDto | null;
-			if (workspaceId !== state.currentWorkspaceId) return;
-			setSnapshot({ workspaceId, tree });
-			setError(null);
-			const jobId = selectedId();
-			if (jobId === null) return;
-			if (selectedJob() === undefined) {
-				// The row left the list (evicted after its retention window); a tree asked for before the
-				// selection says nothing, so the next poll decides.
-				if (stamp === selectionStamp) setSelectedId(null);
-				return;
-			}
-			await loadDetail(workspaceId, jobId);
-		} catch (err) {
-			if (workspaceId === state.currentWorkspaceId) setError(message(err));
-		} finally {
-			refreshing = undefined;
-		}
-	})();
-	return refreshing;
+/** A tree answer arrived: drop the selection when its row left the list, else reload the selected job's detail. */
+async function syncSelectedJob(poll: number): Promise<void> {
+	const jobId = selectedId();
+	if (jobId === null) return;
+	const workspaceId = state.currentWorkspaceId;
+	if (selectedJob() === undefined) {
+		// The row left the list (evicted after its retention window); a tree asked for before the
+		// selection says nothing, so the next poll decides.
+		if (poll > selectionPoll) setSelectedId(null);
+		return;
+	}
+	try {
+		await loadDetail(workspaceId, jobId);
+		setDetailError(null);
+	} catch (err) {
+		if (workspaceId === state.currentWorkspaceId) setDetailError(message(err));
+	}
 }
+onJobTreeAnswer((poll) => untrack(() => syncSelectedJob(poll)));
+
+/** Reload the tree now (the shared poll; one already in flight is joined) and the selected job's detail with it. */
+export const refreshJobs = refreshJobTree;
 
 /** Select a job row (or none) and fetch its inspection at once. */
 export function selectJob(jobId: string | null): void {
 	if (jobId === selectedId()) return;
-	selectionStamp++;
+	selectionPoll = jobPollCount();
 	setSelectedId(jobId);
 	setDetailSnapshot(undefined);
 	if (jobId === null) return;
 	const workspaceId = state.currentWorkspaceId;
 	loadDetail(workspaceId, jobId).catch((err: unknown) => {
-		if (workspaceId === state.currentWorkspaceId) setError(message(err));
+		if (workspaceId === state.currentWorkspaceId) setDetailError(message(err));
 	});
 }
 
@@ -196,18 +178,15 @@ export async function cancelOwnJob(jobId: string): Promise<void> {
 	await refreshJobs();
 }
 
-/** Poll while the sheet is open: one refresh now, then one per period, skipped while the page is hidden. Returns the stop function. */
+/** The sheet is open: hold the poll's faster period and load the tree now. Returns the stop function, which also forgets the selection and errors. */
 export function startJobsPolling(): () => void {
-	void refreshJobs();
-	const timer = setInterval(() => {
-		if (!document.hidden) void refreshJobs();
-	}, JOBS_POLL_MS);
+	const release = acquireJobPollFocus();
+	void refreshJobTree();
 	return () => {
-		clearInterval(timer);
-		setSnapshot(undefined);
+		release();
 		setSelectedId(null);
 		setDetailSnapshot(undefined);
-		setError(null);
+		setDetailError(null);
 		setCancelError(null);
 	};
 }

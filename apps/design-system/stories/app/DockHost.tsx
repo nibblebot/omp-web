@@ -2,8 +2,9 @@ import type { Component } from "solid-js";
 import { DockHost } from "../../../web/components/app/DockHost";
 import { answerCalls } from "../../session";
 import { sessionGraphPage } from "../../fixtures/dialogs";
-import { closeDock, openAgents, openDock, setAgentsFilter } from "../../../web/store/dock";
-import { seedAgentsDock } from "../../fixtures/subagents";
+import { openActivities, setActivityFilter } from "../../../web/store/activities";
+import { closeDock, openDock } from "../../../web/store/dock";
+import { seedActivities } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
 
 /**
@@ -23,8 +24,8 @@ const DockStage: Component = () => (
 					<button type="button" onClick={() => openDock("tree")}>
 						Session tree
 					</button>
-					<button type="button" onClick={openAgents}>
-						Agents
+					<button type="button" onClick={() => openActivities()}>
+						Activities
 					</button>
 					<button type="button" onClick={closeDock}>
 						Close dock
@@ -55,34 +56,34 @@ export default defineStory({
 			render: () => <DockStage />,
 		},
 		{
-			name: "Agents open",
+			name: "Activities open",
 			description:
-				"The agents kind mounts the agents list (flush body, its own inset) with the Single agent / Accordion view toggle in the header. A row opens that agent's pane; Back returns here.",
-			seed: () => seedAgentsDock("single"),
+				"The activities kind mounts the Activities panel (flush body, its own inset) with the Accordion / Detail view toggle in the header. The Subagents section lists the forest; a row expands inline.",
+			seed: () => seedActivities("accordion"),
 			render: () => <DockStage />,
 		},
 		{
-			name: "Agents open, Running filter",
+			name: "Activities open, Running filter",
 			description:
-				"The header shows the Running / All filter left of the view toggle. With Running pressed the list keeps running and pending agents and the ancestors that hold them, and hides the finished ones; the footer still totals the whole forest.",
+				"The Subagents section header carries the Running / All filter. With Running pressed the list keeps running and pending agents and the ancestors that hold them; the footer still totals the whole forest.",
 			seed: () => {
-				seedAgentsDock("single");
-				setAgentsFilter("running");
+				seedActivities("accordion");
+				setActivityFilter("subagents", "running");
 			},
 			render: () => <DockStage />,
 		},
 		{
-			name: "Agent open (single view)",
+			name: "Activities accordion, agent expanded",
 			description:
-				"The agent kind mounts one agent's pane. The header toggle switches to the accordion and carries this agent along, expanded in the list.",
-			seed: () => seedAgentsDock("single", "FixtureBuilder"),
+				"The accordion view: clicking a row expands that agent under it, any number at once. The header toggle switches to the detail view and opens the last expanded agent in the panel.",
+			seed: () => seedActivities("accordion", "FixtureBuilder"),
 			render: () => <DockStage />,
 		},
 		{
-			name: "Agents accordion",
+			name: "Activities detail, agent open",
 			description:
-				"The accordion view: clicking a row expands that agent under it (one at a time), and the toggle switches back to the single view with the expanded agent open in its pane.",
-			seed: () => seedAgentsDock("accordion", "FixtureBuilder"),
+				"The detail view: one agent fills the panel under a Back strip. Back, or the dock's own Back and Esc, return to the list; the header toggle switches back to the accordion with the agent expanded.",
+			seed: () => seedActivities("detail", "FixtureBuilder"),
 			render: () => <DockStage />,
 		},
 	],

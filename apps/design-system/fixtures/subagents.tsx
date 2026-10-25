@@ -12,7 +12,7 @@ import type {
 	WorkerStatus,
 	WorkersState,
 } from "../../web/store/subagents";
-import { type AgentsMode, openAgent, openAgents, setAgentsMode } from "../../web/store/dock";
+import { type ActivitiesMode, openActivities, setActivitiesMode } from "../../web/store/activities";
 import { subagentForest, workerKey } from "../../web/store/subagents";
 import { flattenSubagentTree } from "../../web/subagents/tree";
 import { answerCalls, type CallHandlers } from "../session";
@@ -828,6 +828,8 @@ export function DockFrame(props: {
 	title: string;
 	width: number;
 	flush?: boolean;
+	/** Header controls beside the close button, as the dock kind supplies them. */
+	actions?: JSX.Element;
 	children: JSX.Element;
 }): JSX.Element {
 	return (
@@ -848,6 +850,7 @@ export function DockFrame(props: {
 				onWidth={() => undefined}
 				onClose={() => undefined}
 				flush={props.flush}
+				actions={props.actions}
 			>
 				{props.children}
 			</DockPane>
@@ -1178,15 +1181,14 @@ export function seedAgentTree(
 }
 
 /**
- * Seeds the agent forest and the attached workspace's agents dock: `mode`, and `agentId` opened the
- * way a row click does (its own pane in single, expanded in the list in accordion). No id leaves
- * the dock on the agents list.
+ * Seeds the agent forest and opens the Activities panel in `mode`, with the subagent `agentId`
+ * shown the way a row click does (expanded in the list in accordion, filling the panel in
+ * detail). No id leaves the panel on its list.
  */
-export function seedAgentsDock(mode: AgentsMode, agentId?: string): void {
+export function seedActivities(mode: ActivitiesMode, agentId?: string): void {
 	seedAgentTree({ display: true });
-	setAgentsMode(mode);
-	if (agentId === undefined) openAgents();
-	else openAgent(agentId);
+	setActivitiesMode(mode);
+	openActivities(agentId === undefined ? {} : { item: { section: "subagents", id: agentId } });
 }
 
 /** One node of the seeded forest by agent id. Call after `seedAgentTree`. Throws on an unknown id. */

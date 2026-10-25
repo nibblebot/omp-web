@@ -1,26 +1,24 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { SubagentInfo } from "../../state";
 import { connect, setState, state } from "../../state";
 import {
-	agentsFilter,
-	agentsMode,
-	agentTreeCollapsed,
-	applyRouteDock,
 	backFromDock,
 	closeDock,
-	expandedAgentId,
-	isAgentsShortcut,
-	openAgent,
-	openAgents,
+	isActivitiesShortcut,
 	openDock,
 	pruneDockLayoutsToRoster,
-	reconcileMissingAgent,
-	setAgentsFilter,
-	setAgentsMode,
-	toggleAgentExpanded,
-	toggleAgentTreeCollapsed,
+	restoreDockLayout,
+	setDockWidth,
 } from "../../store/dock";
-import { readDockLayout } from "../../prefs/dock-layout";
+import {
+	openActivities,
+	openItemDetail,
+	setActivityFilter,
+	setActivitiesMode,
+	toggleItemExpanded,
+	toggleSectionCollapsed,
+	toggleSubagentTreeRow,
+} from "../../store/activities";
+import { type DockLayout, readDockLayout } from "../../prefs/dock-layout";
 import {
 	attached,
 	dispatch,
@@ -35,194 +33,80 @@ function key(init: { key: string; altKey?: boolean; ctrlKey?: boolean; shiftKey?
 	return { altKey: false, ctrlKey: false, shiftKey: false, ...init };
 }
 
-const STORAGE_KEY = "omp-web:dock-layouts:v1";
+const STORAGE_KEY = "omp-web:dock-layouts:v2";
+const LEGACY_STORAGE_KEY = "omp-web:dock-layouts:v1";
 
-const layoutDefaults = {
-	dock: null,
-	agentsMode: "single" as const,
-	agentsFilter: "all" as const,
-	agentsExpanded: undefined,
-	agentTreeCollapsed: new Set<string>(),
-	subagentsLoaded: { mirror: false, roster: false },
-};
+let saved: Pick<typeof state, "currentWorkspaceId" | "sessionRoster">;
 
-let saved: Pick<typeof state, "currentWorkspaceId" | "subagents" | "sessionRoster">;
+/** A workspace with no saved layout restores the defaults: the closed dock and a fresh Activities slice. */
+function resetLive(): void {
+	restoreDockLayout("__no-such-workspace__");
+}
 
 beforeEach(() => {
 	installLocalStorageShim();
-	saved = {
-		currentWorkspaceId: state.currentWorkspaceId,
-		subagents: state.subagents,
-		sessionRoster: state.sessionRoster,
-	};
-	setState({ ...layoutDefaults, currentWorkspaceId: "d1" });
+	saved = { currentWorkspaceId: state.currentWorkspaceId, sessionRoster: state.sessionRoster };
+	resetLive();
+	setState("currentWorkspaceId", "d1");
 });
 
 afterEach(() => {
-	setState({
-		...layoutDefaults,
-		currentWorkspaceId: saved.currentWorkspaceId,
-		subagents: saved.subagents,
-		sessionRoster: saved.sessionRoster,
-	});
+	resetLive();
+	setState({ currentWorkspaceId: saved.currentWorkspaceId, sessionRoster: saved.sessionRoster });
 	restoreBrowserGlobals();
 });
 
-function agent(id: string): [string, SubagentInfo] {
-	return [id, { id, index: 0, agent: "task", status: "running", lastUpdate: 0 } as SubagentInfo];
-}
-
-function seedAgents(...ids: string[]): void {
-	setState("subagents", new Map(ids.map(agent)));
-}
-
-function loadForest(): void {
-	setState("subagentsLoaded", { mirror: true, roster: true });
-}
-
-describe("isAgentsShortcut (Alt+A)", () => {
+describe("isActivitiesShortcut (Alt+A)", () => {
 	test("matches Alt+A from anywhere, including a focused composer textarea", () => {
-		expect(isAgentsShortcut(key({ key: "a", altKey: true }))).toBe(true);
-		expect(isAgentsShortcut(key({ key: "A", altKey: true }))).toBe(true);
+		expect(isActivitiesShortcut(key({ key: "a", altKey: true }))).toBe(true);
+		expect(isActivitiesShortcut(key({ key: "A", altKey: true }))).toBe(true);
 	});
 
 	test("rejects the bare key and chords with other modifiers", () => {
-		expect(isAgentsShortcut(key({ key: "a" }))).toBe(false);
-		expect(isAgentsShortcut(key({ key: "a", altKey: true, ctrlKey: true }))).toBe(false);
-		expect(isAgentsShortcut(key({ key: "a", altKey: true, shiftKey: true }))).toBe(false);
+		expect(isActivitiesShortcut(key({ key: "a" }))).toBe(false);
+		expect(isActivitiesShortcut(key({ key: "a", altKey: true, ctrlKey: true }))).toBe(false);
+		expect(isActivitiesShortcut(key({ key: "a", altKey: true, shiftKey: true }))).toBe(false);
 	});
 
 	test("rejects Option+A on mac, which types a different character", () => {
-		expect(isAgentsShortcut(key({ key: "å", altKey: true }))).toBe(false);
+		expect(isActivitiesShortcut(key({ key: "å", altKey: true }))).toBe(false);
 	});
 });
 
-describe("backFromDock (Back and Esc on the dock)", () => {
-	test("an agent pane steps back to the agents list", () => {
-		setState("dock", { kind: "agent", id: "a1" });
-		backFromDock();
-		expect(state.dock?.id).toBeUndefined();
-		expect(state.dock?.kind).toBe("agents");
-	});
-
-	test("the agents list and other panels close", () => {
-		setState("dock", { kind: "agents" });
-		backFromDock();
-		expect(state.dock).toBeNull();
-		setState("dock", { kind: "tree" });
-		backFromDock();
-		expect(state.dock).toBeNull();
-	});
-
-	test("an expanded accordion row closes the dock and stays remembered", () => {
-		setAgentsMode("accordion");
-		openAgent("a1");
-		backFromDock();
-		expect(state.dock).toBeNull();
-		expect(state.agentsExpanded).toBe("a1");
-		openAgents();
-		expect(expandedAgentId()).toBe("a1");
-	});
-});
-
-describe("agents modes", () => {
-	test("a fresh workspace starts closed in single mode", () => {
-		expect(state.dock).toBeNull();
-		expect(agentsMode()).toBe("single");
-		expect(expandedAgentId()).toBeUndefined();
-		expect(agentTreeCollapsed().size).toBe(0);
-	});
-
-	test("openAgent opens the pane in single mode and expands the row in accordion mode", () => {
-		openAgent("a1");
-		expect(state.dock).toEqual({ kind: "agent", id: "a1" });
-		setAgentsMode("accordion");
-		expect(state.dock).toEqual({ kind: "agents", id: "a1" });
-		openAgent("a2");
-		expect(state.dock).toEqual({ kind: "agents", id: "a2" });
-		expect(expandedAgentId()).toBe("a2");
-	});
-
-	test("openAgents opens the list in single mode and the remembered row in accordion mode", () => {
-		openAgents();
-		expect(state.dock).toEqual({ kind: "agents" });
+describe("open, close and Back on the dock", () => {
+	test("openDock retargets the panel and closeDock closes it", () => {
+		openDock("review");
+		expect(state.dock).toEqual({ kind: "review" });
+		openDock("tree");
+		expect(state.dock).toEqual({ kind: "tree" });
 		closeDock();
-		setAgentsMode("accordion");
-		openAgents();
-		expect(state.dock).toEqual({ kind: "agents" });
-		toggleAgentExpanded("a1");
-		closeDock();
-		openAgents();
-		expect(state.dock).toEqual({ kind: "agents", id: "a1" });
+		expect(state.dock).toBeNull();
 	});
 
-	test("switching mode carries the selection both ways", () => {
-		openAgent("a1");
-		setAgentsMode("accordion");
-		expect(state.dock).toEqual({ kind: "agents", id: "a1" });
-		expect(expandedAgentId()).toBe("a1");
-		setAgentsMode("single");
-		expect(state.dock).toEqual({ kind: "agent", id: "a1" });
-		expect(agentsMode()).toBe("single");
-		expect(state.agentsExpanded).toBeUndefined();
+	test("Back in the Activities detail steps back to the list; the dock stays open", () => {
+		setActivitiesMode("detail");
+		openActivities({ item: { section: "subagents", id: "a1" } });
+		expect(state.activities.detail).toEqual({ section: "subagents", id: "a1" });
+		backFromDock();
+		expect(state.activities.detail).toBeUndefined();
+		expect(state.dock?.kind).toBe("activities");
+		backFromDock();
+		expect(state.dock).toBeNull();
 	});
 
-	test("switching mode with nothing selected keeps the list", () => {
-		openDock("agents");
-		setAgentsMode("accordion");
-		expect(state.dock).toEqual({ kind: "agents" });
-		setAgentsMode("single");
-		expect(state.dock).toEqual({ kind: "agents" });
+	test("Back on any other panel closes it", () => {
+		openDock("tree");
+		backFromDock();
+		expect(state.dock).toBeNull();
 	});
 
-	test("the accordion expands one agent at a time and collapses on a second click", () => {
-		setAgentsMode("accordion");
-		toggleAgentExpanded("a1");
-		toggleAgentExpanded("a2");
-		expect(expandedAgentId()).toBe("a2");
-		toggleAgentExpanded("a2");
-		expect(state.dock).toEqual({ kind: "agents" });
-		expect(expandedAgentId()).toBeUndefined();
-		expect(state.agentsExpanded).toBeUndefined();
-	});
-
-	test("the tree collapse set toggles per agent", () => {
-		toggleAgentTreeCollapsed("a1");
-		toggleAgentTreeCollapsed("a2");
-		expect([...agentTreeCollapsed()]).toEqual(["a1", "a2"]);
-		toggleAgentTreeCollapsed("a1");
-		expect([...agentTreeCollapsed()]).toEqual(["a2"]);
+	test("the dock width is clamped and global", () => {
+		setDockWidth(10_000);
+		expect(state.dockWidth).toBeLessThan(10_000);
 	});
 });
 
-describe("route dock segment", () => {
-	test("agent/<id> sets single mode and agents/<id> sets accordion mode", () => {
-		applyRouteDock({ kind: "agents", id: "a1" });
-		expect(agentsMode()).toBe("accordion");
-		expect(state.dock).toEqual({ kind: "agents", id: "a1" });
-		applyRouteDock({ kind: "agent", id: "a1" });
-		expect(agentsMode()).toBe("single");
-		expect(state.dock).toEqual({ kind: "agent", id: "a1" });
-	});
-
-	test("the bare agents list leaves the saved mode alone", () => {
-		setAgentsMode("accordion");
-		applyRouteDock({ kind: "agents" });
-		expect(agentsMode()).toBe("accordion");
-		expect(state.dock).toEqual({ kind: "agents" });
-	});
-
-	test("the mode set by the route is saved for the workspace", () => {
-		applyRouteDock({ kind: "agents", id: "a1" });
-		expect(readDockLayout("d1")).toMatchObject({
-			mode: "accordion",
-			dock: { kind: "agents", id: "a1" },
-			expanded: "a1",
-		});
-	});
-});
-
-describe("per-workspace dock layout", () => {
+describe("per-workspace dock layout (v2)", () => {
 	function attachWorkspace(id: string): void {
 		dispatch(attached(id));
 	}
@@ -238,86 +122,71 @@ describe("per-workspace dock layout", () => {
 		attachWorkspace("d1");
 		openDock("review");
 		expect(readDockLayout("d1").dock).toEqual({ kind: "review" });
-		setAgentsMode("accordion");
-		toggleAgentExpanded("a1");
-		toggleAgentTreeCollapsed("a2");
+		openActivities();
+		setActivitiesMode("detail");
+		setActivitiesMode("accordion");
+		toggleItemExpanded({ section: "subagents", id: "a1" });
+		toggleItemExpanded({ section: "jobs", id: "j1" });
+		toggleItemExpanded({ section: "daemons", id: "d9" });
+		toggleSubagentTreeRow("a2");
+		toggleSectionCollapsed("jobs");
+		setActivityFilter("jobs", "running");
 		expect(readDockLayout("d1")).toEqual({
-			dock: { kind: "agents", id: "a1" },
-			mode: "accordion",
-			filter: "all",
-			expanded: "a1",
-			treeCollapsed: ["a2"],
+			dock: { kind: "activities" },
+			activities: {
+				mode: "accordion",
+				collapsedSections: ["jobs"],
+				expanded: { subagents: ["a1"], jobs: ["j1"], daemons: ["d9"] },
+				treeCollapsed: ["a2"],
+				filters: { subagents: "all", jobs: "running" },
+				lastFocused: { section: "jobs", id: "j1" },
+			},
 		});
 		closeDock();
-		expect(readDockLayout("d1")).toMatchObject({ dock: null, expanded: "a1" });
+		expect(readDockLayout("d1").dock).toBeNull();
+		expect(readDockLayout("d1").activities.expanded.subagents).toEqual(["a1"]);
 	});
 
-	test("switching workspace restores that workspace's own dock, mode and tree state", () => {
+	test("the open detail is not saved; the URL carries it", () => {
 		attachWorkspace("d1");
-		openAgent("a1");
-		setAgentsMode("accordion");
-		toggleAgentTreeCollapsed("a2");
+		openActivities();
+		setActivitiesMode("detail");
+		openItemDetail({ section: "subagents", id: "a1" });
+		const layout = readDockLayout("d1");
+		expect(layout.dock).toEqual({ kind: "activities" });
+		expect(layout.activities.mode).toBe("detail");
+		expect(layout.activities.lastFocused).toEqual({ section: "subagents", id: "a1" });
+		expect(Object.keys(layout.activities)).not.toContain("detail");
+	});
+
+	test("switching workspace restores that workspace's own dock and layout", () => {
+		attachWorkspace("d1");
+		openActivities();
+		setActivitiesMode("detail");
+		toggleItemExpanded({ section: "subagents", id: "a1" });
+		toggleSubagentTreeRow("a2");
+		setActivityFilter("subagents", "running");
 
 		attachWorkspace("d2");
 		expect(state.dock).toBeNull();
-		expect(agentsMode()).toBe("single");
-		expect(state.agentsExpanded).toBeUndefined();
-		expect(agentTreeCollapsed().size).toBe(0);
+		expect(state.activities.mode).toBe("accordion");
+		expect(state.activities.expanded.subagents.size).toBe(0);
+		expect(state.activities.treeCollapsed.size).toBe(0);
+		expect(state.activities.filters.subagents).toBe("all");
+		expect(state.activities.lastFocused).toBeUndefined();
 		openDock("tree");
 
 		attachWorkspace("d1");
-		expect(state.dock).toEqual({ kind: "agents", id: "a1" });
-		expect(agentsMode()).toBe("accordion");
-		expect([...agentTreeCollapsed()]).toEqual(["a2"]);
+		expect(state.dock).toEqual({ kind: "activities" });
+		expect(state.activities.mode).toBe("detail");
+		expect([...state.activities.expanded.subagents]).toEqual(["a1"]);
+		expect([...state.activities.treeCollapsed]).toEqual(["a2"]);
+		expect(state.activities.filters.subagents).toBe("running");
+		expect(state.activities.lastFocused).toEqual({ section: "subagents", id: "a1" });
 
 		attachWorkspace("d2");
 		expect(state.dock).toEqual({ kind: "tree" });
-		expect(agentsMode()).toBe("single");
-	});
-
-	test("the agents filter is saved for the attached workspace", () => {
-		attachWorkspace("d1");
-		expect(agentsFilter()).toBe("all");
-		setAgentsFilter("running");
-		expect(agentsFilter()).toBe("running");
-		expect(readDockLayout("d1").filter).toBe("running");
-		expect(state.dock).toBeNull();
-	});
-
-	test("switching workspace restores each workspace's own filter", () => {
-		attachWorkspace("d1");
-		setAgentsFilter("running");
-
-		attachWorkspace("d2");
-		expect(agentsFilter()).toBe("all");
-		expect(readDockLayout("d2").filter).toBe("all");
-
-		attachWorkspace("d1");
-		expect(agentsFilter()).toBe("running");
-		setAgentsFilter("all");
-		attachWorkspace("d2");
-		setAgentsFilter("running");
-		attachWorkspace("d1");
-		expect(agentsFilter()).toBe("all");
-	});
-
-	test("a saved record without a filter reads as all", () => {
-		globalThis.localStorage.setItem(
-			STORAGE_KEY,
-			JSON.stringify({ d1: { dock: { kind: "tree" }, mode: "accordion", treeCollapsed: [] } }),
-		);
-		expect(readDockLayout("d1").filter).toBe("all");
-		attachWorkspace("d1");
-		expect(agentsFilter()).toBe("all");
-		expect(agentsMode()).toBe("accordion");
-	});
-
-	test("an unknown saved filter reads as all", () => {
-		globalThis.localStorage.setItem(
-			STORAGE_KEY,
-			JSON.stringify({ d1: { dock: null, mode: "single", filter: "bogus", treeCollapsed: [] } }),
-		);
-		expect(readDockLayout("d1").filter).toBe("all");
+		expect(state.activities.filters.subagents).toBe("all");
 	});
 
 	test("restoring does not write the previous workspace's dock over the new record", () => {
@@ -335,69 +204,23 @@ describe("per-workspace dock layout", () => {
 		expect(state.dock).toEqual({ kind: "review" });
 	});
 
-	test("a restored single agent id does not leak into a workspace with the plain list", () => {
-		attachWorkspace("d1");
-		openAgent("a1");
-		attachWorkspace("d2");
-		openDock("agents");
-		attachWorkspace("d1");
-		expect(state.dock).toEqual({ kind: "agent", id: "a1" });
-		attachWorkspace("d2");
-		expect(state.dock).toEqual({ kind: "agents" });
-		expect(state.dock?.id).toBeUndefined();
-	});
-
 	test("nothing is saved while no workspace is attached", () => {
+		setState("currentWorkspaceId", "");
 		openDock("review");
 		expect(globalThis.localStorage.getItem(STORAGE_KEY)).toBeNull();
 	});
-});
 
-describe("missing agent fallback", () => {
-	test("is not decided while the forest is still loading", () => {
-		openAgent("gone");
-		reconcileMissingAgent();
-		expect(state.dock).toEqual({ kind: "agent", id: "gone" });
-		setState("subagentsLoaded", { mirror: true, roster: false });
-		reconcileMissingAgent();
-		expect(state.dock).toEqual({ kind: "agent", id: "gone" });
-	});
-
-	test("single mode falls back to the list and clears the remembered id", () => {
-		openAgent("gone");
-		loadForest();
-		reconcileMissingAgent();
-		expect(state.dock).toEqual({ kind: "agents" });
-		expect(state.dock?.id).toBeUndefined();
-		expect(readDockLayout("d1").dock).toEqual({ kind: "agents" });
-	});
-
-	test("accordion mode collapses all rows and clears the remembered id", () => {
-		setAgentsMode("accordion");
-		openAgent("gone");
-		loadForest();
-		reconcileMissingAgent();
-		expect(state.dock).toEqual({ kind: "agents" });
-		expect(state.agentsExpanded).toBeUndefined();
-		expect(readDockLayout("d1").expanded).toBeUndefined();
-	});
-
-	test("a remembered id behind a closed dock is cleared too", () => {
-		setAgentsMode("accordion");
-		openAgent("gone");
-		closeDock();
-		loadForest();
-		reconcileMissingAgent();
-		expect(state.dock).toBeNull();
-		expect(state.agentsExpanded).toBeUndefined();
-	});
-
-	test("an agent that is in the forest stays open", () => {
-		seedAgents("a1");
-		openAgent("a1");
-		loadForest();
-		reconcileMissingAgent();
-		expect(state.dock).toEqual({ kind: "agent", id: "a1" });
+	test("the v1 record is deleted on load and never migrated", () => {
+		globalThis.localStorage.setItem(
+			LEGACY_STORAGE_KEY,
+			JSON.stringify({
+				d1: { dock: { kind: "agents" }, mode: "accordion", filter: "running", treeCollapsed: [] },
+			}),
+		);
+		const layout = readDockLayout("d1");
+		expect(globalThis.localStorage.getItem(LEGACY_STORAGE_KEY)).toBeNull();
+		expect(layout.dock).toBeNull();
+		expect(layout.activities.filters.subagents).toBe("all");
 	});
 });
 
@@ -433,49 +256,59 @@ describe("pruning on roster removal", () => {
 });
 
 describe("corrupt storage", () => {
+	const defaults: DockLayout = {
+		dock: null,
+		activities: {
+			mode: "accordion",
+			collapsedSections: [],
+			expanded: { subagents: [], jobs: [], daemons: [] },
+			treeCollapsed: [],
+			filters: { subagents: "all", jobs: "all" },
+		},
+	};
+
 	test("unparseable storage reads as the default layout", () => {
 		globalThis.localStorage.setItem(STORAGE_KEY, "{not json");
-		expect(readDockLayout("d1")).toEqual({
-			dock: null,
-			mode: "single",
-			filter: "all",
-			treeCollapsed: [],
-		});
+		expect(readDockLayout("d1")).toEqual(defaults);
 	});
 
 	test("unknown shapes fall back field by field", () => {
 		globalThis.localStorage.setItem(
 			STORAGE_KEY,
 			JSON.stringify({
-				d1: { dock: { kind: 7 }, mode: "wide", expanded: 4, treeCollapsed: "a1" },
+				d1: {
+					dock: { kind: 7 },
+					activities: { mode: "wide", expanded: 4, treeCollapsed: "a1", filters: 3 },
+				},
 				d2: {
-					dock: { kind: "agents", id: "a1" },
-					mode: "accordion",
-					expanded: "a1",
-					treeCollapsed: ["a2", 3, ""],
+					dock: { kind: "activities", id: "ignored" },
+					activities: {
+						mode: "detail",
+						collapsedSections: ["jobs", "bogus", 3],
+						expanded: { subagents: ["a1", "", 5, "a1"], jobs: "j1" },
+						treeCollapsed: ["a2", 3, ""],
+						filters: { subagents: "running", jobs: "bogus" },
+						lastFocused: { section: "subagents", id: "a1" },
+					},
 				},
 				d3: "nope",
+				d4: { activities: { lastFocused: { section: "daemons", id: "x" } } },
 			}),
 		);
-		expect(readDockLayout("d1")).toEqual({
-			dock: null,
-			mode: "single",
-			filter: "all",
-			treeCollapsed: [],
-		});
+		expect(readDockLayout("d1")).toEqual(defaults);
 		expect(readDockLayout("d2")).toEqual({
-			dock: { kind: "agents", id: "a1" },
-			mode: "accordion",
-			filter: "all",
-			expanded: "a1",
-			treeCollapsed: ["a2"],
+			dock: { kind: "activities" },
+			activities: {
+				mode: "detail",
+				collapsedSections: ["jobs"],
+				expanded: { subagents: ["a1"], jobs: [], daemons: [] },
+				treeCollapsed: ["a2"],
+				filters: { subagents: "running", jobs: "all" },
+				lastFocused: { section: "subagents", id: "a1" },
+			},
 		});
-		expect(readDockLayout("d3")).toEqual({
-			dock: null,
-			mode: "single",
-			filter: "all",
-			treeCollapsed: [],
-		});
+		expect(readDockLayout("d3")).toEqual(defaults);
+		expect(readDockLayout("d4").activities.lastFocused).toBeUndefined();
 	});
 
 	test("storage that is not an object reads as no layouts", () => {

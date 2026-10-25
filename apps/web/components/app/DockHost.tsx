@@ -11,19 +11,18 @@ import { Dynamic } from "solid-js/web";
 import { DockPane } from "../ui/DockPane";
 import { FEATURES } from "../../features/manifest";
 import { isFeatureEnabled } from "../../features/registry";
+import { ActivitiesModeToggle } from "../activities/ActivitiesModeToggle";
+import { ActivitiesPanel } from "../activities/ActivitiesPanel";
 import { ReviewPanel } from "../review/ReviewPanel";
 import { SessionTreePanel } from "../sessions/SessionTreePanel";
-import { AgentsDockActions } from "../subagents/AgentsDockActions";
-import { AgentsPanel } from "../subagents/AgentsPanel";
-import { SubagentPanel } from "../subagents/SubagentPanel";
 import { afterMotion, createPresence } from "../../motion/presence";
 import { applyDockWidth, DOCK_MAX_WIDTH, DOCK_MIN_WIDTH } from "../../prefs/dock";
-import { backFromDock, setDockWidth } from "../../store/dock";
+import { backFromDock, closeDock, setDockWidth } from "../../store/dock";
 import { state } from "../../state";
 
 interface DockKind {
 	title: string;
-	body: Component<{ id?: string }>;
+	body: Component;
 	/** The body scrolls and pads itself (see DockPane `flush`). */
 	flush?: boolean;
 	/** Header controls beside the close button (DockPane `actions`). */
@@ -34,24 +33,13 @@ interface DockKind {
 const DOCK_KINDS: Record<string, DockKind> = {
 	review: { title: "Git review", body: ReviewPanel },
 	tree: { title: "Session tree", body: SessionTreePanel },
-	agent: { title: "Agent", body: SubagentPanel, flush: true, actions: AgentsDockActions },
-	agents: { title: "Agents", body: AgentsPanel, flush: true, actions: AgentsDockActions },
+	activities: {
+		title: "Activities",
+		body: ActivitiesPanel,
+		flush: true,
+		actions: ActivitiesModeToggle,
+	},
 };
-
-/** Focus the agents-list row for `id` once the list has mounted. */
-function focusDockRow(id: string): void {
-	setTimeout(() =>
-		document
-			.querySelector<HTMLElement>(`.dock-pane [data-subagent-id="${CSS.escape(id)}"]`)
-			?.focus(),
-	);
-}
-
-/** What the dock shows: the panel kind and the id it was opened on. */
-interface Shown {
-	kind: DockKind;
-	id: string | undefined;
-}
 
 /**
  * Mounts the open dock panel beside the main pane. Unknown kinds render nothing.
@@ -61,10 +49,9 @@ interface Shown {
  * `--dock-w` (one reflow). Closing takes it out of the row first (the main
  * pane widens in one step underneath), then slides it out over the pane and
  * unmounts it. Switching panel kind while open fades the content out, swaps
- * it, and fades it in; the width never changes (one shared `--dock-w`). A
- * switch that comes with an agents-mode change (the view toggle carrying the
- * open agent between `agent` and `agents`) swaps at once: it is one panel
- * changing its view, not another panel.
+ * it, and fades it in; the width never changes (one shared `--dock-w`). The
+ * Activities panel's own view changes (mode toggle, detail) are not kind
+ * switches: the panel re-renders in place.
  */
 export const DockHost: Component = () => {
 	onMount(() => applyDockWidth(state.dockWidth));
@@ -81,43 +68,30 @@ export const DockHost: Component = () => {
 
 	// Content: the last open panel stays through the slide-out, and a kind
 	// switch lags the store by the fade-out. `swapId` drops stale async swaps.
-	const [shown, setShown] = createSignal<Shown | undefined>();
+	const [shown, setShown] = createSignal<DockKind | undefined>();
 	const [swapping, setSwapping] = createSignal(false);
 	let swapId = 0;
 	let body: HTMLElement | undefined;
-	let afterSwap: (() => void) | undefined;
 	createComputed(
-		on([entry, () => state.dock?.id, () => state.agentsMode], ([next, id, mode], prev) => {
-			if (next === undefined) {
-				afterSwap = undefined;
-				return;
-			}
-			const target = { kind: next, id };
+		on(entry, (next, prev) => {
+			if (next === undefined) return;
 			const current = shown();
-			if (prev?.[0] === undefined || current === undefined || prev[2] !== mode) {
-				// Opening: no fade, the slide is the motion. A view toggle: no motion.
+			if (prev === undefined || current === undefined) {
+				// Opening: no fade, the slide is the motion.
 				swapId++;
-				afterSwap = undefined;
 				setSwapping(false);
-				setShown(target);
+				setShown(next);
 				return;
 			}
-			if (next === current.kind && !swapping()) {
-				// Same panel retargeted (another agent): update in place.
-				setShown(target);
-				return;
-			}
+			if (next === current && !swapping()) return;
 			const mine = ++swapId;
 			setSwapping(true);
 			// After the fade-out reaches the DOM; the latest target wins.
 			queueMicrotask(async () => {
 				if (body) await afterMotion(body);
 				if (mine !== swapId) return;
-				setShown({ kind: entry() ?? next, id: state.dock?.id ?? id });
+				setShown(entry() ?? next);
 				setSwapping(false);
-				const focusAfter = afterSwap;
-				afterSwap = undefined;
-				if (focusAfter) setTimeout(focusAfter);
 			});
 		}),
 	);
@@ -141,29 +115,21 @@ export const DockHost: Component = () => {
 		}),
 	);
 
-	const onBack = () => {
-		// Read the id first: backFromDock merges into the same store object.
-		const agentId = state.dock?.kind === "agent" ? state.dock.id : undefined;
-		backFromDock();
-		// The agents list mounts after the content fade; focus its row then.
-		if (agentId !== undefined) afterSwap = () => focusDockRow(agentId);
-	};
 	return (
 		<Show when={presence.mounted() ? shown() : undefined}>
-			{(content) => (
+			{(kind) => (
 				<DockPane
-					title={content().kind.title}
+					title={kind().title}
 					width={state.dockWidth}
 					minWidth={DOCK_MIN_WIDTH}
 					maxWidth={DOCK_MAX_WIDTH}
 					onWidth={setDockWidth}
-					flush={content().kind.flush}
+					flush={kind().flush}
 					actions={
-						<Show when={content().kind.actions}>
-							{(actions) => <Dynamic component={actions()} />}
-						</Show>
+						<Show when={kind().actions}>{(actions) => <Dynamic component={actions()} />}</Show>
 					}
-					onClose={onBack}
+					onBack={backFromDock}
+					onClose={closeDock}
 					phase={presence.phase()}
 					overlay={!docked()}
 					swapping={swapping()}
@@ -173,7 +139,7 @@ export const DockHost: Component = () => {
 					}}
 					bodyRef={(el) => (body = el)}
 				>
-					<Dynamic component={content().kind.body} id={content().id} />
+					<Dynamic component={kind().body} />
 				</DockPane>
 			)}
 		</Show>

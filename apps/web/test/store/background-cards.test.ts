@@ -26,6 +26,7 @@ afterAll(() => {
 // Dynamic imports: the transport mock must be registered before the store modules bind to it.
 const { setState, state } = await import("../../state");
 const { applyEvent } = await import("../../store/chat");
+const { clearJobWidgets } = await import("../../store/job-widgets");
 const { reconcileBackgroundCards } = await import("../../store/background-cards");
 const originalSession = state.currentWorkspaceId;
 
@@ -76,8 +77,12 @@ function card(): ToolItem {
 	return item;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
 	calls = [];
+	// Detach, then attach: the previous test's job tree is gone (the connection is down, so the poll's own timer stays quiet).
+	setState("currentWorkspaceId", "");
+	clearJobWidgets();
+	await Promise.resolve();
 	setState("currentWorkspaceId", "sess-a");
 	setState("items", [parkedCard()]);
 });
@@ -90,6 +95,15 @@ describe("reconciling parked cards against the job list", () => {
 			status: "done",
 			background: { state: "completed", durationMs: 3500 },
 		});
+	});
+
+	test("reads a fresh list on each reload, not the earlier answer", async () => {
+		answer(treeOf(job("bg_1")));
+		await reconcileBackgroundCards();
+		expect(card().background).toMatchObject({ state: "running" });
+		answer(treeOf(job("bg_1", { status: "failed", startTime: 1000, endTime: 2000 })));
+		await reconcileBackgroundCards();
+		expect(card().background).toMatchObject({ state: "failed" });
 	});
 
 	test("a job still running keeps its card parked", async () => {

@@ -1,7 +1,7 @@
 import { createMemo, Show, type Component } from "solid-js";
 import { effectiveStatus } from "../../../chat/background-job";
 import type { ToolItem } from "../../../state";
-import { openAgent } from "../../../store/dock";
+import { openActivities } from "../../../store/activities";
 import { fanoutTotals, subagentTree } from "../../../store/subagents";
 import { SubagentFanoutTotals } from "../../subagents/SubagentFanoutTotals";
 import { SubagentTree } from "../../subagents/SubagentTree";
@@ -31,7 +31,11 @@ export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 			}
 		>
 			<Show when={forest().length > 0}>
-				<SubagentTree nodes={forest()} label="Agents spawned by this task" onOpen={openAgent} />
+				<SubagentTree
+					nodes={forest()}
+					label="Agents spawned by this task"
+					onOpen={(id) => openActivities({ item: { section: "subagents", id } })}
+				/>
 			</Show>
 		</ToolCardShell>
 	);

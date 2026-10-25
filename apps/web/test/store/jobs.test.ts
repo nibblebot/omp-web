@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test, vi } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { JobDetailDto, JobDto, JobTreeDto } from "#lib/wire/protocol";
 import * as transport from "../../store/transport";
 
@@ -17,8 +17,11 @@ afterAll(() => {
 
 // Dynamic imports: the transport mock must be registered before the store module binds to it.
 const jobs = await import("../../store/jobs");
+const poll = await import("../../store/job-poll");
+const { clearJobWidgets } = await import("../../store/job-widgets");
 const { setState, state } = await import("../../state");
 const originalSession = state.currentWorkspaceId;
+const originalConnected = state.connected;
 const originalModal = state.modal;
 
 const place = { depth: 0, rails: [] as boolean[], last: true, parent: false };
@@ -53,16 +56,23 @@ const answer = (answers: Record<string, unknown>) => {
 };
 
 let stop: (() => void) | undefined;
-beforeEach(() => {
+beforeEach(async () => {
 	stop?.();
 	stop = undefined;
 	calls = [];
+	// Detach, then attach: the previous test's tree and poll state are gone, and the poll itself stays
+	// quiet (the connection is down) so only the calls a test makes show.
+	setState("connected", false);
+	setState("currentWorkspaceId", "");
+	clearJobWidgets();
+	await settle();
 	setState("currentWorkspaceId", "sess-a");
 	jobs.selectJob(null);
 });
 afterAll(() => {
 	stop?.();
 	setState("currentWorkspaceId", originalSession);
+	setState("connected", originalConnected);
 	setState("modal", originalModal);
 });
 
@@ -89,12 +99,6 @@ describe("jobs tree", () => {
 		await refreshing;
 		expect(jobs.jobsView()).toBe("loading");
 		expect(jobs.jobList()).toEqual([]);
-	});
-
-	test("overlapping refreshes share one request", async () => {
-		answer({ getJobTree: treeOf(job("a")) });
-		await Promise.all([jobs.refreshJobs(), jobs.refreshJobs(), jobs.refreshJobs()]);
-		expect(calls.filter((c) => c.method === "getJobTree")).toHaveLength(1);
 	});
 
 	test("a failed refresh shows its error and the next good one clears it", async () => {
@@ -196,7 +200,7 @@ describe("cancelling an own job", () => {
 });
 
 describe("polling", () => {
-	test("loads at once, and stopping forgets the tree, selection and errors", async () => {
+	test("loads at once, and stopping forgets the selection and errors but not the shared tree", async () => {
 		answer({ getJobTree: treeOf(job("a")), getJobDetail: { pids: [] } });
 		stop = jobs.startJobsPolling();
 		await settle();
@@ -204,54 +208,9 @@ describe("polling", () => {
 		jobs.selectJob("a");
 		stop();
 		stop = undefined;
-		expect(jobs.jobsView()).toBe("loading");
 		expect(jobs.selectedJobId()).toBeNull();
 		expect(jobs.jobsError()).toBeNull();
-	});
-
-	describe("on a timer", () => {
-		const originalDocument = Reflect.get(globalThis, "document");
-		const treeCalls = () => calls.filter((c) => c.method === "getJobTree").length;
-
-		beforeEach(() => {
-			vi.useFakeTimers();
-			// Bun's test env has no DOM; the poll only reads `document.hidden`.
-			Reflect.set(globalThis, "document", { hidden: false });
-		});
-		afterEach(() => {
-			vi.useRealTimers();
-			Reflect.set(globalThis, "document", originalDocument);
-		});
-
-		test("refreshes every period, skips while the page is hidden, and stops with the sheet", async () => {
-			answer({ getJobTree: treeOf(job("a")) });
-			stop = jobs.startJobsPolling();
-			await settle();
-			expect(treeCalls()).toBe(1);
-
-			vi.advanceTimersByTime(jobs.JOBS_POLL_MS - 1);
-			await settle();
-			expect(treeCalls()).toBe(1);
-			vi.advanceTimersByTime(1);
-			await settle();
-			expect(treeCalls()).toBe(2);
-
-			Reflect.set(globalThis, "document", { hidden: true });
-			vi.advanceTimersByTime(jobs.JOBS_POLL_MS * 2);
-			await settle();
-			expect(treeCalls()).toBe(2);
-
-			Reflect.set(globalThis, "document", { hidden: false });
-			vi.advanceTimersByTime(jobs.JOBS_POLL_MS);
-			await settle();
-			expect(treeCalls()).toBe(3);
-
-			stop();
-			stop = undefined;
-			vi.advanceTimersByTime(jobs.JOBS_POLL_MS * 3);
-			await settle();
-			expect(treeCalls()).toBe(3);
-		});
+		expect(poll.jobPollView().phase).toBe("ready");
 	});
 });
 

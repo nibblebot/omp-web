@@ -1,5 +1,4 @@
 import { produce } from "solid-js/store";
-import type { JobTreeDto } from "#lib/wire/protocol";
 import {
 	reconcileBackgroundJobs,
 	runningBackgroundCards,
@@ -7,7 +6,7 @@ import {
 } from "../chat/background-job";
 import { setState, state, type ToolItem } from "../state";
 import { drainParkedToolUpdates } from "./chat";
-import { call } from "./transport";
+import { jobPollError, jobPollView, jobTreeRows, refreshJobTree } from "./job-poll";
 
 /**
  * The cards a reloaded transcript still shows parked on a running job (chat/history-items.ts
@@ -16,27 +15,26 @@ import { call } from "./transport";
  * longer has leaves the call a plain done card. Live frames take over from there.
  */
 
-/** The jobs of the session's job tree; undefined when the list cannot be read (no job manager, a failed call). */
+/**
+ * The jobs of the session's job tree, read from the shared poll after one fresh poll; undefined when the
+ * list cannot be read (no job manager, a failed call).
+ */
 async function listedJobs(): Promise<ListedJob[] | undefined> {
-	try {
-		const tree = (await call("getJobTree", [])) as JobTreeDto | null;
-		if (tree === null) return undefined;
-		return tree.rows.flatMap((row) =>
-			row.kind === "job"
-				? [
-						{
-							id: row.job.id,
-							...(row.job.agentId !== undefined ? { agentId: row.job.agentId } : {}),
-							status: row.job.status,
-							startTime: row.job.startTime,
-							...(row.job.endTime !== undefined ? { endTime: row.job.endTime } : {}),
-						},
-					]
-				: [],
-		);
-	} catch {
-		return undefined;
-	}
+	await refreshJobTree();
+	if (jobPollView().phase !== "ready" || jobPollError() !== null) return undefined;
+	return jobTreeRows().flatMap((row) =>
+		row.kind === "job"
+			? [
+					{
+						id: row.job.id,
+						...(row.job.agentId !== undefined ? { agentId: row.job.agentId } : {}),
+						status: row.job.status,
+						startTime: row.job.startTime,
+						...(row.job.endTime !== undefined ? { endTime: row.job.endTime } : {}),
+					},
+				]
+			: [],
+	);
 }
 
 /** Settle the transcript's parked cards against the session's job list; an answer for a session left behind is dropped. */

@@ -17,12 +17,8 @@ import {
 import { BackgroundDaemonsBar, FleetSidebar } from "./components/fleet";
 import { JobsBar } from "./components/jobs/JobsBar";
 import { ModalHost } from "./ModalHost";
-import {
-	isAgentsShortcut,
-	openAgents,
-	pruneDockLayoutsToRoster,
-	reconcileMissingAgent,
-} from "./store/dock";
+import { openActivities, reconcileMissingActivities } from "./store/activities";
+import { isActivitiesShortcut, pruneDockLayoutsToRoster } from "./store/dock";
 import {
 	bootAuth,
 	closeDrawers,
@@ -146,7 +142,7 @@ export const App: Component = () => {
 			e.preventDefault();
 			setState("modal", "palette");
 		});
-		// Ctrl+, opens Settings; Alt+A opens the agents dock from anywhere, composer included.
+		// Ctrl+, opens Settings; Alt+A opens the Activities panel from anywhere, composer included.
 		// Option+A on mac types "å", so the exact "a" key match already excludes it.
 		window.addEventListener("keydown", (e) => {
 			if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === ",") {
@@ -154,9 +150,9 @@ export const App: Component = () => {
 				setState("modal", "settings");
 				return;
 			}
-			if (!isAgentsShortcut(e)) return;
+			if (!isActivitiesShortcut(e)) return;
 			e.preventDefault();
-			openAgents();
+			openActivities();
 		});
 		// Alt+M opens Settings > Model; Alt+P opens the quick model picker.
 		window.addEventListener("keydown", (e) => {
@@ -212,9 +208,9 @@ export const App: Component = () => {
 			{ defer: true },
 		),
 	);
-	// A saved or opened agent that is not in the attached session falls back to
-	// the agents list; it waits until the session's forest has fully loaded.
-	createEffect(() => reconcileMissingAgent());
+	// A saved or opened subagent/job that is not in the attached session falls back to
+	// the list; it waits until the session's forest and the job poll have loaded.
+	createEffect(() => reconcileMissingActivities());
 	// Per-workspace dock layouts of workspaces that left the roster are dropped.
 	createEffect(
 		on(
