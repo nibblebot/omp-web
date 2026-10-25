@@ -1,33 +1,24 @@
-import { createMemo, Show, type Component } from "solid-js";
+import type { Component } from "solid-js";
 import { effectiveStatus } from "../../../chat/background-job";
 import type { ToolItem } from "../../../state";
-import { HighlightedText } from "./HighlightedText";
+import { ShellCommand } from "./ShellCommand";
 import { CollapsibleOutput, ToolCardShell } from "./ToolCardShell";
 
-/** Past this length the header arg is truncated, so the full command also shows in the body. */
-const HEADER_COMMAND_CHARS = 120;
-
-/** Bash tool: highlighted first command line in the header, full command above the terminal body when it is long or multi-line. */
-export const BashToolCard: Component<{ item: ToolItem }> = (props) => {
-	const command = createMemo(() => (props.item.args as { command?: string } | null)?.command ?? "");
-	const firstLine = createMemo(() => command().split("\n", 1)[0]!);
-	const showFull = createMemo(
-		() => command().includes("\n") || command().length > HEADER_COMMAND_CHARS,
-	);
-	return (
-		<ToolCardShell
-			name="bash"
-			arg={firstLine() ? <HighlightedText code={firstLine()} lang="bash" /> : undefined}
-			status={effectiveStatus(props.item)}
-			background={props.item.background}
-			class="bash-tool"
-		>
-			<Show when={showFull()}>
-				<pre class="terminal tool-code">
-					<HighlightedText code={command()} lang="bash" />
-				</pre>
-			</Show>
-			<CollapsibleOutput item={props.item} output={props.item.output} tail />
-		</ToolCardShell>
-	);
-};
+/** Bash tool: the `$ command` header wraps to show the whole command (row-capped), output below. */
+export const BashToolCard: Component<{ item: ToolItem }> = (props) => (
+	<ToolCardShell
+		name="bash"
+		title={
+			<ShellCommand
+				// "…" while the command is still streaming in, as the TUI shows it.
+				command={(props.item.args as { command?: string } | null)?.command || "…"}
+				lang="bash"
+			/>
+		}
+		status={effectiveStatus(props.item)}
+		background={props.item.background}
+		class="bash-tool"
+	>
+		<CollapsibleOutput item={props.item} output={props.item.output} tail />
+	</ToolCardShell>
+);

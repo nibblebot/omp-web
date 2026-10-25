@@ -17,6 +17,7 @@ import { WebSearchToolCard } from "../../../../web/components/chat/tools/WebSear
 import { ToolCard } from "../../../../web/components/chat/tools/ToolCard";
 import { HighlightedLine } from "../../../../web/components/chat/tools/HighlightedLine";
 import { HighlightedText } from "../../../../web/components/chat/tools/HighlightedText";
+import { ShellCommand } from "../../../../web/components/chat/tools/ShellCommand";
 import {
 	editToolItem,
 	askCustomTool,
@@ -26,6 +27,7 @@ import {
 	askRunningTool,
 	bashDoneTool,
 	bashErrorTool,
+	bashHeredocTool,
 	bashInterruptedTool,
 	bashLongCommandTool,
 	bashLongTool,
@@ -96,6 +98,9 @@ import type { Story } from "../../../registry";
 
 /** One tool card per status, side by side: running, done, error, interrupted. */
 const statusRow = (cards: JSX.Element[]): JSX.Element => <div class="ds-status-grid">{cards}</div>;
+
+/** ShellCommand: 40 one-line commands, past the 30-row cap. */
+const fortyRows = Array.from({ length: 40 }, (_, i) => `echo "row ${i + 1}"`).join("\n");
 
 const stories: Story[] = [
 	defineStory({
@@ -215,15 +220,19 @@ const stories: Story[] = [
 			},
 			{
 				name: "Multi-line command",
-				description:
-					"The header shows the first line; the full highlighted command sits above the output.",
+				description: "The header grows to show every line of the command.",
 				render: () => <BashToolCard item={bashMultilineTool} />,
 			},
 			{
 				name: "Very long command",
-				description:
-					"Truncated with an ellipsis in the header; shown in full (wrapped) above the output.",
+				description: "One long line soft-wraps across header rows instead of an ellipsis.",
 				render: () => <BashToolCard item={bashLongCommandTool} />,
+			},
+			{
+				name: "Command past the row cap",
+				description:
+					"A 63-line heredoc clamps to its first 30 rows behind Show full command; Ctrl+O lifts the cap.",
+				render: () => <BashToolCard item={bashHeredocTool} />,
 			},
 			{
 				name: "Background, running",
@@ -559,6 +568,29 @@ const stories: Story[] = [
 						<ToolCard item={genericDoneTool} />,
 						<ToolCard item={genericImageTool} />,
 					]),
+			},
+		],
+	}),
+	defineStory({
+		id: "chat-tools-shell-command",
+		title: "ShellCommand",
+		component: { file: "apps/web/components/chat/tools/ShellCommand.tsx", export: "ShellCommand" },
+		variants: [
+			{ name: "Bash", render: () => <ShellCommand command="git status --short" lang="bash" /> },
+			{
+				name: "Python",
+				render: () => <ShellCommand command={'print("hello")'} lang="python" />,
+			},
+			{
+				name: "Past the row cap",
+				description: "Clamps to its first 30 rows behind Show full command.",
+				render: () => <ShellCommand command={fortyRows} lang="bash" />,
+			},
+			{
+				name: "Past the row cap, expanded (Ctrl+O)",
+				description: "Ctrl+O shows the whole command with no toggle.",
+				seed: { toolsExpanded: true },
+				render: () => <ShellCommand command={fortyRows} lang="bash" />,
 			},
 		],
 	}),

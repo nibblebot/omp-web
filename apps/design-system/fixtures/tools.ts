@@ -327,7 +327,7 @@ export const bashInterruptedTool: ToolItem = tool(
 	{ command: "bun run build && bun run test" },
 	lines("$ bun run build", "building apps/web ...", "Aborted: operation interrupted"),
 );
-/** BashToolCard: multi-line command, so the full highlighted command shows above the output. */
+/** BashToolCard: multi-line command, wrapped in full in the header. */
 export const bashMultilineTool: ToolItem = tool(
 	"bash",
 	"done",
@@ -346,7 +346,7 @@ export const bashMultilineTool: ToolItem = tool(
 		"28",
 	),
 );
-/** BashToolCard: one very long line, truncated in the header and shown in full in the body. */
+/** BashToolCard: one very long line, soft-wrapped in the header. */
 export const bashLongCommandTool: ToolItem = tool(
 	"bash",
 	"done",
@@ -355,6 +355,20 @@ export const bashLongCommandTool: ToolItem = tool(
 			'git log --since="2 weeks ago" --author="joshua" --pretty=format:"%h %ad %s" --date=short -- apps/web/components/chat/tools apps/web/styles apps/design-system | grep -v "Merge" | head -n 40',
 	},
 	lines("a1b2c3d 2026-10-20 Tool card header redesign", "9f8e7d6 2026-10-18 Add highlight module"),
+);
+/** BashToolCard: a heredoc past the 30-row cap, so the header clamps behind "Show full command". */
+export const bashHeredocTool: ToolItem = tool(
+	"bash",
+	"done",
+	{
+		command: lines(
+			"cat > /tmp/tool-cards.md <<'EOF'",
+			...Array.from({ length: 60 }, (_, i) => `- card ${i + 1}: header, status slot, body`),
+			"EOF",
+			"wc -l /tmp/tool-cards.md",
+		),
+	},
+	lines("62 /tmp/tool-cards.md"),
 );
 /** BashToolCard: 46 lines of lint output, so the tail collapse note shows. */
 export const bashLongTool: ToolItem = tool(

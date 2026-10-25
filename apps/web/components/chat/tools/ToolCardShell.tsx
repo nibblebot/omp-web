@@ -53,6 +53,8 @@ interface ToolShellProps {
 	name: string;
 	/** One-line argument shown after the name, in the monospace arg slot (command, path, pattern...). */
 	arg?: JSX.Element;
+	/** Replaces the icon, name and arg with custom header content (bash shows its `$ command`). */
+	title?: JSX.Element;
 	/** Tool status ("running" | "done" | "error" | "interrupted"): drives the card border and the right-edge status slot. */
 	status?: string;
 	/** Extra card class, e.g. "bash-tool". */
@@ -115,12 +117,21 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 			}}
 			header={
 				<>
-					<span class="tool-kind" data-kind={kind().category}>
-						<Dynamic component={TOOL_ICONS[kind().icon]} />
-						<span class="tool-name">{props.name}</span>
-					</span>
-					<Show when={props.arg}>
-						<span class="tool-arg">{props.arg}</span>
+					<Show
+						when={props.title}
+						fallback={
+							<>
+								<span class="tool-kind" data-kind={kind().category}>
+									<Dynamic component={TOOL_ICONS[kind().icon]} />
+									<span class="tool-name">{props.name}</span>
+								</span>
+								<Show when={props.arg}>
+									<span class="tool-arg">{props.arg}</span>
+								</Show>
+							</>
+						}
+					>
+						{(title) => title()}
 					</Show>
 					{props.meta}
 					<Show when={props.background}>{(job) => <BackgroundBadge job={job()} />}</Show>

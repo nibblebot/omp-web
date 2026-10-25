@@ -13,12 +13,45 @@
 .dim-block {
 	opacity: 0.6;
 }
-.bash-cmd {
+/* Command header (ShellCommand: bash tool, user `!`/`$` commands): prompt glyph
+   plus command, wrapped to as many rows as it needs, clamped to its first 30
+   rows until expanded. */
+.shell-command {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--space-2);
+	flex: 1;
+	min-width: 0;
+}
+.shell-command-text {
+	align-self: stretch;
 	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
 	color: var(--text);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.shell-command--clamped > .shell-command-text {
+	max-height: calc(30 * 1lh);
 	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+}
+.shell-command-prompt {
+	color: var(--muted-2);
+	user-select: none;
+}
+.shell-command-toggle {
+	padding: 0;
+	background: none;
+	border: 0;
+	color: var(--muted);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+.shell-command-toggle:hover {
+	color: var(--text);
+	text-decoration: underline;
 }
 
 .exit-badge {
@@ -48,6 +81,14 @@
 
 .tool-card > .card-header {
 	align-items: center;
+}
+/* A multi-row command keeps the status slot and background badge level with its first row
+   (.bash-tool alone would also catch the eval card). */
+.tool-card > .card-header:has(> .shell-command) {
+	align-items: flex-start;
+}
+.tool-card > .card-header:has(> .shell-command) > .tool-state {
+	height: 1lh;
 }
 .tool-kind {
 	display: inline-flex;
@@ -1014,7 +1055,7 @@ pre.terminal.wait-job-output {
 	font-style: italic;
 }
 
-/* Touch: 44px targets for background-bar controls. */
+/* Touch: 44px targets for background-bar controls and the command toggle. */
 @media (pointer: coarse) {
 	.daemon-btn,
 	.background-bar-summary,
@@ -1028,10 +1069,12 @@ pre.terminal.wait-job-output {
 	}
 }
 
+	.shell-command-toggle {
+		min-height: 44px;
+	}
 /* Narrow (390/360px): tool headers wrap instead of pushing past the page,
    terminal output scrolls inside its card, and disclosure headers reach 44px. */
 @media (max-width: 767px) {
-	.bash-cmd,
 	.tool-card .tool-arg,
 	.tool-card .tool-name {
 		min-width: 0;

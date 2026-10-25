@@ -1,5 +1,6 @@
 import type { Component } from "solid-js";
 import { call, type ChatItem } from "../../../../state";
+import { ShellCommand } from "../../tools/ShellCommand";
 import { Card } from "../../../ui/Card";
 
 /**
@@ -17,10 +18,7 @@ export const UserCommandCard: Component<{ item: Extract<ChatItem, { kind: "bash"
 			classList={{ dimmed: bash().dimmed }}
 			header={
 				<>
-					<span class="bash-cmd">
-						{bash().lang === "python" ? ">>> " : "$ "}
-						{bash().command}
-					</span>
+					<ShellCommand command={bash().command} lang={bash().lang} />
 					{bash().status === "running" ? (
 						<>
 							<span class="tool-status" data-status="running">
