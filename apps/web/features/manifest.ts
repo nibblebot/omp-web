@@ -6,7 +6,7 @@ import type { ModalName } from "../state.ts";
  * feature's JS/CSS chunk is never fetched. Everything here must stay
  * import-free of feature modules (type-only imports are fine).
  */
-export type FeatureId = "analysis" | "plan" | "git" | "todos" | "jobs" | "plugins" | "debug";
+export type FeatureId = "analysis" | "plan" | "git" | "todos" | "plugins" | "debug";
 
 export type FeatureStatus = "stable" | "in-development";
 
@@ -71,17 +71,6 @@ export const FEATURES: readonly FeatureInfo[] = [
 		defaultEnabled: false,
 		commands: ["todo"],
 		modals: ["todos"],
-		docks: [],
-	},
-	{
-		id: "jobs",
-		label: "Background Jobs",
-		description:
-			"The job tree sheet: background jobs nested under the subagent that runs them, busiest branches first, with Cancel on this session's own jobs. /jobs keeps running the agent's own command meanwhile.",
-		status: "in-development",
-		defaultEnabled: false,
-		commands: [],
-		modals: ["jobs"],
 		docks: [],
 	},
 	{

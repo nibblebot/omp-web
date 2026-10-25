@@ -101,4 +101,25 @@ describe("subagent transcript tool status", () => {
 		await settle();
 		expect(statuses()).toEqual(["interrupted"]);
 	});
+	test("a call parked on a background job stays a plain done card once the agent settled", async () => {
+		const parkedResult = {
+			role: "toolResult",
+			toolCallId: "a",
+			toolName: "bash",
+			content: [{ type: "text", text: "Backgrounded as job bg_1" }],
+			isError: false,
+			details: { async: { state: "running", jobId: "bg_1", type: "bash" } },
+			timestamp: 5,
+		};
+		pages = [pageOf([assistantCalling("a"), parkedResult], 100), pageOf([], 100)];
+		setAgent("running", 1);
+		await settle();
+		const card = () => subagentTranscript(agent).items.find((item) => item.kind === "tool");
+		expect(card()?.kind === "tool" && card()?.background?.state).toBe("running");
+
+		setAgent("completed", 2);
+		await settle();
+		expect(statuses()).toEqual(["done"]);
+		expect(card()?.kind === "tool" && card()?.background).toBeUndefined();
+	});
 });

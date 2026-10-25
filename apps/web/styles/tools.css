@@ -108,6 +108,31 @@
 .tool-state[data-status="running"] {
 	color: var(--muted-2);
 }
+/* Badge of a call whose job runs in the background: label and clock, tinted by the job's state. */
+.tool-background {
+	display: inline-flex;
+	align-items: baseline;
+	gap: var(--space-3);
+	flex-shrink: 0;
+	padding: 0 var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+}
+.tool-background[data-state="running"] {
+	border-color: var(--muted-3);
+}
+.tool-background[data-state="failed"] {
+	color: var(--error);
+}
+.tool-background[data-state="cancelled"] {
+	color: var(--warning);
+}
+.tool-background-clock,
+.tool-background-exit {
+	font-variant-numeric: tabular-nums;
+}
 @media (prefers-reduced-motion: no-preference) {
 	.tool-spin {
 		animation: tool-spin var(--dur-spin) linear infinite;
@@ -635,11 +660,15 @@ pre.terminal.tool-code {
 .json-boolean {
 	color: var(--warning);
 }
-/* Wait: one tile per watched job. */
+/* Wait: one compact row per watched job under a summary header. */
 .wait-counts {
 	display: inline-flex;
+	flex-wrap: wrap;
 	gap: var(--space-3);
 	font-size: var(--fs-sm);
+}
+.wait-count[data-status="running"] {
+	color: var(--accent);
 }
 .wait-count[data-status="completed"] {
 	color: var(--success);
@@ -650,124 +679,232 @@ pre.terminal.tool-code {
 .wait-count[data-status="cancelled"] {
 	color: var(--warning);
 }
-.wait-tiles,
+.wait-count[data-status="waits"] {
+	color: var(--muted-2);
+}
+/* The slim segmented bar: done, failed, cancelled and running in proportion. */
+.wait-bar {
+	flex: none;
+	width: 56px;
+	height: 4px;
+	border-radius: var(--r-pill);
+	overflow: hidden;
+}
+.wait-bar-track {
+	fill: var(--border-strong);
+}
+.wait-bar-segment[data-status="completed"] {
+	fill: var(--success);
+}
+.wait-bar-segment[data-status="failed"] {
+	fill: var(--error);
+}
+.wait-bar-segment[data-status="cancelled"] {
+	fill: var(--warning);
+}
+.wait-bar-segment[data-status="running"] {
+	fill: var(--accent);
+}
+.wait-jobs,
 .wait-agents {
 	margin: 0;
-	padding: var(--space-3) var(--space-4);
+	padding: var(--space-2) var(--space-3);
 	list-style: none;
 }
-.wait-tiles {
+.wait-jobs {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
-	gap: var(--space-3);
+	gap: 1px;
 }
-.wait-tile {
-	display: grid;
-	gap: var(--space-2);
+.wait-job {
 	min-width: 0;
-	padding: var(--space-3) var(--space-4);
-	border: 1px solid var(--border);
 	border-radius: var(--r-md);
+}
+.wait-job[data-expanded] {
 	background: var(--bg-deep);
 }
-.wait-tile[data-status="running"] {
-	border-color: var(--accent-border);
+/* Every row reserves the jump arrow's column on the right, so the clocks line up whether or not a row has one. */
+.wait-job-line {
+	position: relative;
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	padding-right: 24px;
 }
-.wait-tile[data-status="completed"] {
-	border-color: var(--success-border);
-}
-.wait-tile[data-status="failed"] {
-	border-color: var(--error-border);
-}
-.wait-tile[data-status="cancelled"] {
-	border-color: var(--warning-border);
-}
-.wait-tile-head {
+/* A flat row-wide button: the global button chrome is reset so rows read as a list. */
+.wait-job-toggle {
+	flex: 1 1 0;
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
 	min-width: 0;
+	height: 28px;
+	padding: 0 var(--space-4);
+	border: 0;
+	background: transparent;
+	text-align: left;
 }
-.wait-tile-dot {
+.wait-job-dot {
 	flex: none;
+	width: 1ch;
 	line-height: 1;
+	text-align: center;
 }
-.wait-tile[data-status="running"] .wait-tile-dot {
+.wait-job[data-status="running"] .wait-job-dot {
 	color: var(--accent);
 }
-.wait-tile[data-status="completed"] .wait-tile-dot {
+.wait-job[data-status="completed"] .wait-job-dot {
 	color: var(--success);
 }
-.wait-tile[data-status="failed"] .wait-tile-dot {
+.wait-job[data-status="failed"] .wait-job-dot {
 	color: var(--error);
 }
-.wait-tile[data-status="cancelled"] .wait-tile-dot {
+.wait-job[data-status="cancelled"] .wait-job-dot {
 	color: var(--warning);
 }
 @media (prefers-reduced-motion: no-preference) {
-	.wait-tile-dot[data-pulse] {
-		animation: wait-tile-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+	.wait-job-dot[data-pulse] {
+		animation: wait-job-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 	}
 }
-@keyframes wait-tile-pulse {
+@keyframes wait-job-pulse {
 	50% {
 		opacity: 0.25;
 	}
 }
-.wait-tile-title {
-	flex: 1;
+.wait-job-type {
+	flex: none;
+	display: inline-flex;
+	color: var(--muted);
+}
+.wait-job-title {
+	flex: 0 1 auto;
 	min-width: 0;
+	max-width: 50%;
 	font-family: var(--font-mono);
 	font-size: var(--fs-md);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.wait-tile-id,
-.wait-tile-clock,
+.wait-job-id,
+.wait-job-clock,
 .wait-agent-parent {
 	flex: none;
+	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
+	color: var(--muted-2);
+}
+.wait-job-clock {
+	margin-left: auto;
 	color: var(--muted-3);
 }
-.wait-tile-ring {
+/* What the job is doing takes the room between the title and the clock. */
+.wait-job-glance,
+.wait-job-note-inline {
+	flex: 1 1 0;
+	min-width: 0;
+	overflow: hidden;
+}
+.wait-job-note-inline {
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.wait-job-failure {
+	flex: none;
+	font-size: var(--fs-sm);
+	color: var(--error);
+}
+.wait-job-chevron {
+	flex: none;
+	color: var(--muted-2);
+	transition: transform var(--dur-move-fast) var(--ease-out);
+}
+.wait-job-toggle[aria-expanded="true"] .wait-job-chevron {
+	transform: rotate(90deg);
+}
+.wait-job-jump {
+	position: absolute;
+	top: 50%;
+	right: 0;
+	display: inline-flex;
+	padding: var(--space-2);
+	border: 0;
+	background: transparent;
+	color: var(--muted-2);
+	transform: translateY(-50%);
+}
+.wait-job-ring {
 	flex: none;
 	width: 16px;
 	height: 16px;
 	transform: rotate(-90deg);
 }
-.wait-tile-ring-track,
-.wait-tile-ring-fill {
+.wait-job-ring-track,
+.wait-job-ring-fill {
 	fill: none;
 	stroke-width: 3;
 }
-.wait-tile-ring-track {
+.wait-job-ring-track {
 	stroke: var(--border-strong);
 }
-.wait-tile-ring-fill {
+.wait-job-ring-fill {
 	stroke: var(--accent);
 }
-.wait-tile-ring[data-band="1"] .wait-tile-ring-fill {
+.wait-job-ring[data-band="1"] .wait-job-ring-fill {
 	stroke: color-mix(in srgb, var(--success) 25%, var(--accent));
 }
-.wait-tile-ring[data-band="2"] .wait-tile-ring-fill {
+.wait-job-ring[data-band="2"] .wait-job-ring-fill {
 	stroke: color-mix(in srgb, var(--success) 50%, var(--accent));
 }
-.wait-tile-ring[data-band="3"] .wait-tile-ring-fill {
+.wait-job-ring[data-band="3"] .wait-job-ring-fill {
 	stroke: color-mix(in srgb, var(--success) 75%, var(--accent));
 }
-.wait-tile-ring[data-band="4"] .wait-tile-ring-fill {
+.wait-job-ring[data-band="4"] .wait-job-ring-fill {
 	stroke: var(--success);
 }
-.wait-tile-note {
+/* The expanded row: widget, output tail and actions under the line. */
+.wait-job-detail {
+	display: grid;
+	gap: var(--space-3);
+	min-width: 0;
+	padding: var(--space-2) var(--space-4) var(--space-4);
+}
+.wait-job-detail > .job-widget {
+	padding-top: var(--space-3);
+	border-top: 1px solid var(--border);
+}
+pre.terminal.wait-job-output {
+	max-height: 14rem;
+	margin: 0;
+	overflow: auto;
+	border-radius: var(--r-md);
+}
+.wait-job-note,
+.wait-marks {
 	font-size: var(--fs-sm);
 	color: var(--muted-2);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
 }
-.wait-tile-failure {
-	color: var(--error);
+.wait-marks {
+	padding: var(--space-2) var(--space-5) var(--space-4);
+}
+.wait-job-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-3);
+}
+.wait-job-action,
+.wait-more {
+	padding: var(--space-1) var(--space-4);
+	border-radius: var(--r-pill);
+	font-size: var(--fs-sm);
+}
+.wait-more {
+	margin: 0 var(--space-3) var(--space-3);
+	border-color: transparent;
+	background: transparent;
+	color: var(--muted-2);
 }
 .wait-agents {
 	display: grid;
@@ -804,6 +941,17 @@ pre.terminal.tool-code {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+/* Flash of a card the transcript jumped to (chat/tool-jump.ts releases the class when it ends). */
+.tool-card--jump {
+	outline: 1px solid var(--accent-border);
+	animation: tool-card-jump var(--dur-pulse) var(--ease-out) 2;
+}
+@keyframes tool-card-jump {
+	from {
+		background-color: var(--accent-dim);
+		outline-color: var(--accent);
+	}
 }
 .ask-tool-item {
 	display: grid;

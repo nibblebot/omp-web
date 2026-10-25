@@ -37,8 +37,6 @@ export interface FeatureModule {
 	modals?: Partial<Record<ModalName, Component<{ onClose: () => void }>>>;
 	/** Always-mounted overlays that render from their own store state. */
 	overlays?: readonly Component[];
-	/** Strips attached to the composer (`*Bar`), mounted by App above the prompt box while the feature is active. */
-	composerBars?: readonly Component[];
 	/** Slash commands handled locally. Names are declared in `manifest.ts`. */
 	commands?: Readonly<Record<string, FeatureCommand>>;
 	/** Analysis main view, mounted by App next to Chat. */
@@ -57,7 +55,6 @@ export const LOADERS: Record<FeatureId, Loader> = {
 	plan: () => import("./plan"),
 	git: () => import("./git"),
 	todos: () => import("./todos"),
-	jobs: () => import("./jobs"),
 	plugins: () => import("./plugins"),
 	debug: () => import("./debug"),
 };
@@ -187,11 +184,6 @@ export function featurePluginsTab(): Component | undefined {
 
 export function featureOverlays(): Component[] {
 	return allActiveModules().flatMap((mod) => [...(mod.overlays ?? [])]);
-}
-
-/** The composer bars of the active features, in manifest order. */
-export function featureComposerBars(): Component[] {
-	return allActiveModules().flatMap((mod) => [...(mod.composerBars ?? [])]);
 }
 
 /** The control a feature adds to its own row in Settings > Features, when the feature is active. */

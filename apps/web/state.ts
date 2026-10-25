@@ -1,3 +1,5 @@
+import type { BackgroundJob } from "./chat/background-job";
+import { reconcileBackgroundCards } from "./store/background-cards";
 import type { AgentsFilter, AgentsMode } from "./prefs/dock-layout";
 import { restoreDockLayout } from "./store/dock";
 import { readDockWidth } from "./prefs/dock";
@@ -181,6 +183,8 @@ export type ChatItem =
 			details?: unknown;
 			/** Live status of a running eval/wait call (frame `live`), with the arrival time so clocks can advance; dropped once the call settles. */
 			live?: WireToolLive & { at: number };
+			/** The background job a returned bash/eval/task call stays parked on (chat/background-job.ts); absent for every other call. */
+			background?: BackgroundJob;
 	  }
 	| BashItem
 	| CompactionItem
@@ -724,6 +728,8 @@ export function loadHistory(messages: AgentMessage[]): void {
 			? { transcriptPhase: "loaded" as const, transcriptError: null, transcriptTarget: null }
 			: {}),
 	});
+	// Calls still parked on a running job learn their outcome from the session's job list.
+	void reconcileBackgroundCards();
 }
 
 function applyState(s: WebSessionState, stats?: SessionStats): void {

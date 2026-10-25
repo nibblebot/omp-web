@@ -7,122 +7,24 @@ import {
 	Show,
 	type Component,
 } from "solid-js";
-import type { WireJobWidgetView, WireWaitJob } from "#lib/wire/protocol";
-import {
-	jobElapsedMs,
-	jobTitle,
-	waitCounts,
-	waitSummary,
-	waitViewOf,
-	WAIT_TILES_SHOWN,
-	type WaitAgent,
-	type WaitView,
-} from "../../../chat/wait-details";
-import type { ToolItem } from "../../../state";
+import type { WireWaitJob } from "#lib/wire/protocol";
+import { originCardOf } from "../../../chat/background-job";
+import { jumpToToolCard } from "../../../chat/tool-jump";
+import { waitCounts, type WaitAgent } from "../../../chat/wait-details";
+import { mergeWaitRun, waitMarksText, waitSummary } from "../../../chat/wait-runs";
+import type { ChatItem, ToolItem } from "../../../state";
+import { openJobsSheet } from "../../../store/jobs";
 import { formatDuration } from "../../../subagents/format";
-import { JobWidget } from "../../jobs/JobWidget";
-import { CollapsibleOutput, ToolCardShell } from "./ToolCardShell";
+import { CollapsibleOutput, ToolCallIdContext, ToolCardShell } from "./ToolCardShell";
+import { WaitJobRow } from "./WaitJobRow";
 
-const TILE_GLYPH: Record<WireWaitJob["status"], string> = {
-	running: "\u25cf",
-	completed: "\u2713",
-	failed: "\u2715",
-	cancelled: "\u25a0",
-};
+/** Job rows a card shows before it counts the rest; rows the reader opened stay visible regardless. */
+const ROWS_SHOWN = 8;
 
-/** Ring fill bands (0 to 4): the ring shifts from the accent toward the success color as the estimate grows. */
-const ringBand = (percent: number): number => Math.min(4, Math.floor(percent / 25));
+/** Progress bar segments, in the order they fill from the left. */
+const BAR_ORDER: readonly WireWaitJob["status"][] = ["completed", "failed", "cancelled", "running"];
 
-const RING_RADIUS = 8;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-
-/** A subagent's own completion estimate, as a ring. */
-const CompletionRing: Component<{ percent: number }> = (props) => {
-	const percent = () => Math.max(0, Math.min(100, Math.round(props.percent)));
-	return (
-		<svg
-			class="wait-tile-ring"
-			viewBox="0 0 20 20"
-			role="img"
-			aria-label={`Completion estimate ${percent()}%`}
-			data-band={ringBand(percent())}
-		>
-			<title>{`The agent's own completion estimate: ${percent()}%`}</title>
-			<circle class="wait-tile-ring-track" cx="10" cy="10" r={RING_RADIUS} />
-			<circle
-				class="wait-tile-ring-fill"
-				cx="10"
-				cy="10"
-				r={RING_RADIUS}
-				stroke-dasharray={`${(RING_CIRCUMFERENCE * percent()) / 100} ${RING_CIRCUMFERENCE}`}
-			/>
-		</svg>
-	);
-};
-
-/**
- * One watched job: status glyph (pulsing while its call is live), name, id,
- * a subagent's completion ring and clock, then its widget's primary block when
- * the settled call kept a live one (as the SDK's tiles do: a basic or still
- * authoring widget holds only rates and the last line), then what it is doing
- * (a subagent's stage in its own words, else the failure's exit code).
- */
-const WaitJobTile: Component<{ job: WireWaitJob; view: WaitView; now: number }> = (props) => {
-	// The tile's note already says the stage a widget repeats.
-	const widget = (): WireJobWidgetView | undefined => {
-		const view = props.view.widgets.get(props.job.id);
-		if (view?.state !== "live") return undefined;
-		if (view.stage === undefined || view.stage !== note()) return view;
-		const { stage: _repeated, ...rest } = view;
-		return rest;
-	};
-	const title = () => jobTitle(props.job);
-	const note = () => {
-		const label =
-			props.job.type === "task" ? (props.job.label.split(/\r?\n/, 1)[0]?.trim() ?? "") : "";
-		return props.job.stage ?? label;
-	};
-	const failure = () =>
-		props.job.exitCode !== undefined && props.job.exitCode !== 0
-			? `exit ${props.job.exitCode}`
-			: undefined;
-	return (
-		<li class="wait-tile" data-status={props.job.status}>
-			<div class="wait-tile-head">
-				<span
-					class="wait-tile-dot"
-					data-pulse={props.view.live && props.job.status === "running" ? "" : undefined}
-					aria-hidden="true"
-				>
-					{TILE_GLYPH[props.job.status]}
-				</span>
-				<span class="wait-tile-title" title={title()}>
-					{title()}
-				</span>
-				<Show when={props.job.id !== title()}>
-					<span class="wait-tile-id">{props.job.id}</span>
-				</Show>
-				<Show when={props.job.completionPercent !== undefined}>
-					<CompletionRing percent={props.job.completionPercent ?? 0} />
-				</Show>
-				<span class="wait-tile-clock">
-					{formatDuration(jobElapsedMs(props.job, props.view, props.now))}
-				</span>
-				<span class="visually-hidden">{props.job.status}</span>
-			</div>
-			<Show when={widget()}>{(view) => <JobWidget view={view()} compact />}</Show>
-			<Show when={failure() || note()}>
-				<div class="wait-tile-note">
-					<Show when={failure()}>
-						<span class="wait-tile-failure">{failure()}</span>
-					</Show>
-					{failure() && note() ? " \u00b7 " : ""}
-					{note()}
-				</div>
-			</Show>
-		</li>
-	);
-};
+const BAR_WIDTH = 100;
 
 const WaitAgentRow: Component<{ agent: WaitAgent }> = (props) => (
 	<li class="wait-agent">
@@ -136,16 +38,56 @@ const WaitAgentRow: Component<{ agent: WaitAgent }> = (props) => (
 		<Show when={props.agent.parentId}>
 			<span class="wait-agent-parent">{`\u2190 ${props.agent.parentId}`}</span>
 		</Show>
-		<span class="wait-tile-clock">{formatDuration(props.agent.ageMs)}</span>
+		<span class="wait-job-clock">{formatDuration(props.agent.ageMs)}</span>
 	</li>
 );
 
-/** Clock of a running call's tiles: ticks each second while a live job runs. */
-function createTileClock(view: () => WaitView | undefined): () => number {
+/** The jobs' outcome as one slim bar: done, failed, cancelled and running in proportion to the job count. */
+const WaitProgressBar: Component<{ counts: Record<WireWaitJob["status"], number> }> = (props) => {
+	const total = () => BAR_ORDER.reduce((sum, status) => sum + props.counts[status], 0);
+	const segments = () => {
+		let x = 0;
+		return BAR_ORDER.flatMap((status) => {
+			const count = props.counts[status];
+			if (count === 0) return [];
+			const width = (count / total()) * BAR_WIDTH;
+			const segment = { status, x, width };
+			x += width;
+			return [segment];
+		});
+	};
+	return (
+		<svg
+			class="wait-bar"
+			viewBox={`0 0 ${BAR_WIDTH} 4`}
+			preserveAspectRatio="none"
+			role="img"
+			aria-label={`${props.counts.completed} done, ${props.counts.failed} failed, ${props.counts.cancelled} cancelled, ${props.counts.running} running of ${total()} jobs`}
+		>
+			<rect class="wait-bar-track" width={BAR_WIDTH} height="4" />
+			<For each={segments()}>
+				{(segment) => (
+					<rect
+						class="wait-bar-segment"
+						data-status={segment.status}
+						x={segment.x}
+						width={segment.width}
+						height="4"
+					/>
+				)}
+			</For>
+		</svg>
+	);
+};
+
+/**
+ * Clock of a running call's rows: ticks each second while a job of the live
+ * frame runs, so a row's clock advances between frames.
+ */
+function createRowClock(ticking: () => boolean): () => number {
 	const [now, setNow] = createSignal(Date.now());
 	createEffect(() => {
-		const current = view();
-		if (!current?.live || !current.jobs.some((job) => job.status === "running")) return;
+		if (!ticking()) return;
 		setNow(Date.now());
 		const timer = setInterval(() => setNow(Date.now()), 1000);
 		onCleanup(() => clearInterval(timer));
@@ -154,67 +96,140 @@ function createTileClock(view: () => WaitView | undefined): () => number {
 }
 
 /**
- * wait tool: the jobs the agent is waiting on as a row of tiles (status, name,
- * what each is doing, a subagent's completion ring, clock), live while the call
- * runs and as the call settled with them. A wait with no job to show (nothing to
- * wait for, or a peer message ended it) shows its result text.
+ * wait tool: every job the agent waited on across consecutive wait calls, one
+ * compact row each (status, kind, title, glance, ring, clock), under a header
+ * with the summary, a segmented progress bar and the counts. A row opens in
+ * place to its widget, output tail and actions. The calls of a run are folded
+ * by `chat/wait-runs.ts`; the card renders at the first and stays mounted as
+ * the run grows. A wait that returned a peer message, or found nothing to
+ * wait for, shows its result text. `transcript` lets a row find the card that
+ * started its job.
  */
-export const WaitToolCard: Component<{ item: ToolItem }> = (props) => {
-	const view = createMemo(() => waitViewOf(props.item));
-	const now = createTileClock(view);
-	const counts = createMemo(() => waitCounts(view()?.jobs ?? []));
+export const WaitToolCard: Component<{
+	calls: readonly ToolItem[];
+	transcript?: readonly ChatItem[];
+}> = (props) => {
+	const view = createMemo(() => mergeWaitRun(props.calls));
+	const counts = createMemo(() => waitCounts(view().jobs.map((entry) => entry.job)));
+	const now = createRowClock(() =>
+		view().jobs.some((entry) => entry.job.status === "running" && entry.at !== undefined),
+	);
+	const [expanded, setExpanded] = createSignal<ReadonlySet<string>>(new Set());
+	const toggle = (id: string) =>
+		setExpanded((open) => {
+			const next = new Set(open);
+			if (!next.delete(id)) next.add(id);
+			return next;
+		});
+	const shown = createMemo(() =>
+		view()
+			.jobs.filter((entry, index) => index < ROWS_SHOWN || expanded().has(entry.job.id))
+			.map((entry) => entry.job.id),
+	);
+	const hidden = () => view().jobs.length - shown().length;
+	const entryOf = (id: string) => view().jobs.find((entry) => entry.job.id === id);
+	const origins = createMemo(() => {
+		const found = new Map<string, string>();
+		for (const id of shown()) {
+			const card = originCardOf(props.transcript ?? [], id);
+			if (card) found.set(id, card.toolCallId);
+		}
+		return found;
+	});
+	const hasRows = () => view().jobs.length > 0 || view().agents.length > 0;
+	const marks = () => waitMarksText(view());
+	const last = () => props.calls[props.calls.length - 1];
 	return (
-		<ToolCardShell
-			name="wait"
-			arg={view() ? waitSummary(view()!) : undefined}
-			status={props.item.status}
-			class="wait-tool"
-			meta={
-				<Show when={view()}>
-					<span class="wait-counts">
-						<Show when={counts().completed > 0}>
-							<span class="wait-count" data-status="completed">{`${counts().completed} done`}</span>
-						</Show>
-						<Show when={counts().failed > 0}>
-							<span class="wait-count" data-status="failed">{`${counts().failed} failed`}</span>
-						</Show>
-						<Show when={counts().cancelled > 0}>
-							<span
-								class="wait-count"
-								data-status="cancelled"
-							>{`${counts().cancelled} cancelled`}</span>
-						</Show>
-					</span>
-				</Show>
-			}
-		>
-			<Show
-				when={view()}
-				fallback={<CollapsibleOutput item={props.item} output={props.item.output} />}
+		<ToolCallIdContext.Provider value={props.calls[0]?.toolCallId}>
+			<ToolCardShell
+				name="wait"
+				arg={hasRows() ? waitSummary(view()) : undefined}
+				status={last()?.status}
+				class="wait-tool"
+				meta={
+					<Show when={view().jobs.length > 0}>
+						<WaitProgressBar counts={counts()} />
+						<span class="wait-counts">
+							<Show when={counts().running > 0}>
+								<span
+									class="wait-count"
+									data-status="running"
+								>{`${counts().running} running`}</span>
+							</Show>
+							<Show when={counts().completed > 0}>
+								<span
+									class="wait-count"
+									data-status="completed"
+								>{`${counts().completed} done`}</span>
+							</Show>
+							<Show when={counts().failed > 0}>
+								<span class="wait-count" data-status="failed">{`${counts().failed} failed`}</span>
+							</Show>
+							<Show when={counts().cancelled > 0}>
+								<span
+									class="wait-count"
+									data-status="cancelled"
+								>{`${counts().cancelled} cancelled`}</span>
+							</Show>
+							<Show when={view().waits > 1}>
+								<span class="wait-count" data-status="waits">{`${view().waits} waits`}</span>
+							</Show>
+						</span>
+					</Show>
+				}
 			>
-				{(current) => (
-					<>
-						<ul class="wait-tiles">
-							<For each={current().jobs.slice(0, WAIT_TILES_SHOWN)}>
-								{(job) => <WaitJobTile job={job} view={current()} now={now()} />}
+				<Show
+					when={hasRows()}
+					fallback={
+						<Show
+							when={props.calls.length === 1 && props.calls[0]}
+							fallback={
+								<Show when={marks()}>{(text) => <div class="wait-marks">{text()}</div>}</Show>
+							}
+						>
+							{(call) => <CollapsibleOutput item={call()} output={call().output} />}
+						</Show>
+					}
+				>
+					<Show when={view().jobs.length > 0}>
+						<ul class="wait-jobs">
+							<For each={shown()}>
+								{(id) => (
+									<Show when={entryOf(id)}>
+										{(entry) => (
+											<WaitJobRow
+												entry={entry()}
+												now={now()}
+												expanded={expanded().has(id)}
+												onToggle={() => toggle(id)}
+												onJump={
+													origins().has(id)
+														? () => {
+																const callId = origins().get(id);
+																if (callId !== undefined) jumpToToolCard(callId);
+															}
+														: undefined
+												}
+											/>
+										)}
+									</Show>
+								)}
 							</For>
 						</ul>
-						<Show when={current().jobs.length > WAIT_TILES_SHOWN}>
-							<div class="tool-collapsed-note">
-								{`+${current().jobs.length - WAIT_TILES_SHOWN} more ${current().jobs.length - WAIT_TILES_SHOWN === 1 ? "job" : "jobs"}`}
-							</div>
+						<Show when={hidden() > 0}>
+							<button type="button" class="wait-more" onClick={() => openJobsSheet()}>
+								{`+${hidden()} more ${hidden() === 1 ? "job" : "jobs"}, open the jobs list`}
+							</button>
 						</Show>
-						<Show when={current().agents.length > 0}>
-							<ul class="wait-agents">
-								<For each={current().agents}>{(agent) => <WaitAgentRow agent={agent} />}</For>
-							</ul>
-						</Show>
-						<Show when={current().interrupted}>
-							<div class="tool-meta">Interrupted by a message</div>
-						</Show>
-					</>
-				)}
-			</Show>
-		</ToolCardShell>
+					</Show>
+					<Show when={view().agents.length > 0}>
+						<ul class="wait-agents">
+							<For each={view().agents}>{(agent) => <WaitAgentRow agent={agent} />}</For>
+						</ul>
+					</Show>
+					<Show when={marks()}>{(text) => <div class="wait-marks">{text()}</div>}</Show>
+				</Show>
+			</ToolCardShell>
+		</ToolCallIdContext.Provider>
 	);
 };

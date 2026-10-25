@@ -106,10 +106,13 @@ export function splitEvalOutput(output: string, views: readonly EvalViewEntry[])
 
 /**
  * The status log a card shows: the running call's live frame, else the settled
- * details' bounded log. Undefined when nothing was logged.
+ * details' bounded log. A call backgrounded with its job keeps the job's newest
+ * frame, which is newer than the details it returned with. Undefined when nothing was logged.
  */
 export function evalStatusOf(item: ToolItem): WireEvalLive | undefined {
-	if (item.status === "running") return item.live?.kind === "eval" ? item.live : undefined;
+	const live = item.live?.kind === "eval" ? item.live : undefined;
+	if (item.status === "running") return live;
+	if (item.background !== undefined && live !== undefined) return live;
 	return slimEvalStatus(item.details, SETTLED_STATUS_EVENTS);
 }
 

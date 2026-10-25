@@ -1,4 +1,5 @@
-/* --- Background jobs sheet (Modal sheet variant): the job tree and the selected job's detail --- */
+/* Jobs: background jobs sheet (job tree and selected job detail) and the composer jobs bar. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+
 .jobs-body {
 	flex: 1;
 	min-height: 0;
@@ -359,11 +360,51 @@
 	overflow-wrap: anywhere;
 }
 
-/* --- Composer jobs bar: the running count and the latest widget's glance, one button that opens the sheet --- */
+/* --- Composer jobs bar: the running count and the latest widget's glance, one button that opens the sheet ---
+   After the last job ends it lingers as a quiet "N jobs finished · view" note (data-phase="finished").
+   Enter/exit (JobsBar presence): the grid track animates the height 0fr <-> 1fr, the clip holds the pill
+   while collapsed, the shell fades and slides 4px. Movement uses the move tokens, the fade the plain ones.
+   data-motion enter/exit = hidden state, open = shown. */
 .jobs-bar {
+	display: grid;
+	grid-template-rows: 1fr;
+	min-width: 0;
+	opacity: 1;
+	transform: none;
+	transition:
+		grid-template-rows var(--dur-move-base) var(--ease-out),
+		transform var(--dur-move-base) var(--ease-out),
+		opacity var(--dur-base) var(--ease-out);
+}
+.jobs-bar[data-motion="enter"],
+.jobs-bar[data-motion="exit"] {
+	grid-template-rows: 0fr;
+	opacity: 0;
+	transform: translateY(4px);
+	pointer-events: none;
+}
+.jobs-bar-clip {
+	min-height: 0;
+	min-width: 0;
+	overflow: hidden;
+}
+/* A settled bar must not clip the button's focus ring; the clip lifts once the expand finishes. */
+.jobs-bar[data-motion="open"] > .jobs-bar-clip {
+	overflow: visible;
+	transition: overflow 0s var(--dur-move-base) allow-discrete;
+}
+.jobs-bar-body {
 	display: flex;
 	min-width: 0;
 	padding-block: var(--space-3) var(--space-1);
+}
+/* Reduced motion: no height or slide, only the short fade. */
+@media (prefers-reduced-motion: reduce) {
+	.jobs-bar[data-motion="enter"],
+	.jobs-bar[data-motion="exit"] {
+		grid-template-rows: 1fr;
+		transform: none;
+	}
 }
 .jobs-bar-open {
 	display: flex;
@@ -397,4 +438,20 @@
 	display: flex;
 	min-width: 0;
 	overflow: hidden;
+}
+/* Finished: the same pill, quieter (no accent icon, muted text), with a "view" cue at the end. */
+.jobs-bar[data-phase="finished"] .jobs-bar-open {
+	color: var(--muted);
+}
+.jobs-bar[data-phase="finished"] .jobs-bar-icon {
+	color: var(--muted-2);
+}
+.jobs-bar-action {
+	flex: none;
+	color: var(--accent);
+}
+.jobs-bar-action::before {
+	content: "\00b7";
+	margin-right: var(--space-3);
+	color: var(--muted-2);
 }

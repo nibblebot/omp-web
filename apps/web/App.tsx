@@ -1,13 +1,4 @@
-import {
-	createEffect,
-	createSignal,
-	For,
-	on,
-	onCleanup,
-	onMount,
-	Show,
-	type Component,
-} from "solid-js";
+import { createEffect, createSignal, on, onCleanup, onMount, Show, type Component } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { ConnectionBar } from "./components/app/ConnectionBar";
 import { MainHeader } from "./components/app/MainHeader";
@@ -24,6 +15,7 @@ import {
 	ToolCardsMenu,
 } from "./components/chat";
 import { BackgroundDaemonsBar, FleetSidebar } from "./components/fleet";
+import { JobsBar } from "./components/jobs/JobsBar";
 import { ModalHost } from "./ModalHost";
 import {
 	isAgentsShortcut,
@@ -48,7 +40,7 @@ import {
 import { openModelPicker, openModelSettings } from "./store/models";
 import { initTheme } from "./prefs/theme";
 import { trackViewportHeight } from "./prefs/viewport";
-import { featureComposerBars, featureView } from "./features/registry";
+import { featureView } from "./features/registry";
 import { featurePreferences } from "./features/preferences";
 import { displayTitle } from "./components/ui/title-icons";
 import { onHashChange, restoreInitialRoute, syncRouteToAttached } from "./store/deep-link";
@@ -87,7 +79,7 @@ const ChatMode: Component = () => (
 							/>
 						</Show>
 						<CompactionBar />
-						<For each={featureComposerBars()}>{(Bar) => <Bar />}</For>
+						<JobsBar />
 						{/* Composer: the prompt box, with the session config bar (model, thinking, meters) as its bottom row. */}
 						<PromptBox />
 						<SessionConfigBar />

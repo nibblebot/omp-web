@@ -1,4 +1,6 @@
 import type {
+	WireAsyncFrame,
+	WireAsyncState,
 	WireEvalLive,
 	WireEvalStatusEvent,
 	WireToolLive,
@@ -141,4 +143,33 @@ function liveKey(live: WireToolLive): unknown {
 	return live.kind === "wait"
 		? { kind: live.kind, jobs: live.jobs.map(({ durationMs: _clock, ...job }) => job) }
 		: live;
+}
+
+const ASYNC_STATES: Record<string, WireAsyncState> = {
+	running: "running",
+	completed: "completed",
+	failed: "failed",
+	cancelled: "cancelled",
+};
+
+/**
+ * The job frame of a backgrounded call's partial `details` (`async.state`, and the
+ * `exitCode` a failed command reports). Undefined for a call that is not a background job's card.
+ */
+export function slimAsyncFrame(details: unknown): WireAsyncFrame | undefined {
+	if (!isRecord(details) || !isRecord(details.async)) return undefined;
+	const raw = details.async.state;
+	const state = typeof raw === "string" ? ASYNC_STATES[raw] : undefined;
+	if (state === undefined) return undefined;
+	const exitCode = finite(details.exitCode);
+	return { state, ...(exitCode !== undefined ? { exitCode } : {}) };
+}
+
+/** Whether two job frames say the same thing. */
+export function sameAsyncFrame(
+	a: WireAsyncFrame | undefined,
+	b: WireAsyncFrame | undefined,
+): boolean {
+	if (a === undefined || b === undefined) return a === b;
+	return a.state === b.state && a.exitCode === b.exitCode;
 }

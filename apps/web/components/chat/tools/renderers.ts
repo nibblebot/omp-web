@@ -9,10 +9,9 @@ import { ReadToolCard } from "./ReadToolCard";
 import { SearchToolCard } from "./SearchToolCard";
 import { TaskToolCard } from "./TaskToolCard";
 import { TodoToolCard } from "./TodoToolCard";
-import { WaitToolCard } from "./WaitToolCard";
 import { WebSearchToolCard } from "./WebSearchToolCard";
 
-/** Per-tool renderers; anything missing falls back to GenericToolCard. */
+/** Per-tool renderers; anything missing falls back to GenericToolCard. `wait` is not here: consecutive waits fold into one `WaitToolCard` that TranscriptStream renders itself. */
 export const RENDERERS: Record<string, Component<{ item: ToolItem }>> = {
 	bash: BashToolCard,
 	edit: DiffToolCard,
@@ -26,6 +25,5 @@ export const RENDERERS: Record<string, Component<{ item: ToolItem }>> = {
 	task: TaskToolCard,
 	eval: EvalToolCard,
 	lsp: LspToolCard,
-	wait: WaitToolCard,
 	ask: AskToolCard,
 };

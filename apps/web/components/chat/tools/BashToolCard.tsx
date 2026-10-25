@@ -1,4 +1,5 @@
 import { createMemo, Show, type Component } from "solid-js";
+import { effectiveStatus } from "../../../chat/background-job";
 import type { ToolItem } from "../../../state";
 import { HighlightedText } from "./HighlightedText";
 import { CollapsibleOutput, ToolCardShell } from "./ToolCardShell";
@@ -17,7 +18,8 @@ export const BashToolCard: Component<{ item: ToolItem }> = (props) => {
 		<ToolCardShell
 			name="bash"
 			arg={firstLine() ? <HighlightedText code={firstLine()} lang="bash" /> : undefined}
-			status={props.item.status}
+			status={effectiveStatus(props.item)}
+			background={props.item.background}
 			class="bash-tool"
 		>
 			<Show when={showFull()}>

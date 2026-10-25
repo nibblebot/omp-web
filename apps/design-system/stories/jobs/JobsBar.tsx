@@ -1,9 +1,16 @@
 import { JobsBar } from "../../../web/components/jobs/JobsBar";
-import { authoringEntry, agentEntry, benchEntry, seedJobWidgets } from "../../fixtures/job-bars";
+import {
+	authoringEntry,
+	agentEntry,
+	benchEntry,
+	seedFinishedJobs,
+	seedJobWidgets,
+} from "../../fixtures/job-bars";
 import { defineStory } from "../../registry";
 
-// The Jobs feature is in development, so the app cannot mount this bar; the stories render it directly.
-// Clicking it sets state.modal to "jobs", which ModalHost renders through the feature registry.
+// The app mounts this bar in App above the prompt box while background jobs run.
+// Clicking it sets state.modal to "jobs", which ModalHost renders as the core JobsSheet.
+// After the last job ends it lingers as a quiet "finished" note (JOBS_FINISHED_LINGER_MS), then hides.
 const NEWER = benchEntry().view.updatedAt + 5_000;
 
 export default defineStory({
@@ -22,6 +29,20 @@ export default defineStory({
 			name: "One job",
 			description: "The count is singular for one job.",
 			seed: () => seedJobWidgets(1, [benchEntry()]),
+			render: () => <JobsBar />,
+		},
+		{
+			name: "Subagent task widget",
+			description:
+				"Two jobs run besides a subagent whose task widget saw data last. The count leaves the subagent out, so the glance does too: it shows the newest widget of a counted job.",
+			seed: () => seedJobWidgets(2, [benchEntry(), agentEntry(NEWER)]),
+			render: () => <JobsBar />,
+		},
+		{
+			name: "Finished",
+			description:
+				"The last job ended. The bar stays as a quiet note with a view cue, so the sheet's recent jobs remain one click away; it hides 30s after the last job ended (Reopen replays it).",
+			seed: () => seedFinishedJobs(2),
 			render: () => <JobsBar />,
 		},
 		{

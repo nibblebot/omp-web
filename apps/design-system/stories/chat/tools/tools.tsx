@@ -12,6 +12,7 @@ import { ReadToolCard } from "../../../../web/components/chat/tools/ReadToolCard
 import { SearchToolCard } from "../../../../web/components/chat/tools/SearchToolCard";
 import { TaskToolCard } from "../../../../web/components/chat/tools/TaskToolCard";
 import { TodoToolCard } from "../../../../web/components/chat/tools/TodoToolCard";
+import { WaitToolCard } from "../../../../web/components/chat/tools/WaitToolCard";
 import { WebSearchToolCard } from "../../../../web/components/chat/tools/WebSearchToolCard";
 import { ToolCard } from "../../../../web/components/chat/tools/ToolCard";
 import { HighlightedLine } from "../../../../web/components/chat/tools/HighlightedLine";
@@ -77,6 +78,18 @@ import {
 	webSearchNoLinksTool,
 	webSearchRunningTool,
 } from "../../../fixtures/tools";
+import {
+	bashBackgroundCancelledTool,
+	bashBackgroundCompletedTool,
+	bashBackgroundFailedTool,
+	bashBackgroundRunningTool,
+	evalBackgroundCompletedTool,
+	evalBackgroundFailedTool,
+	evalBackgroundRunningTool,
+	taskBackgroundCompletedTool,
+	taskBackgroundFailedTool,
+	taskBackgroundRunningTool,
+} from "../../../fixtures/background-tools";
 import { agentSettingsModel } from "../../../fixtures/subagents";
 import { defineStory } from "../../../registry";
 import type { Story } from "../../../registry";
@@ -134,6 +147,18 @@ const stories: Story[] = [
 			{
 				name: "Interrupted status, no body",
 				render: () => <ToolCardShell name="bash" arg="sleep 600" status="interrupted" />,
+			},
+			{
+				name: "Running in the background",
+				description: "A badge with the job's run time sits before the status slot.",
+				render: () => (
+					<ToolCardShell
+						name="bash"
+						arg="bun run dev"
+						status="running"
+						background={bashBackgroundRunningTool.background}
+					/>
+				),
 			},
 		],
 	}),
@@ -200,6 +225,27 @@ const stories: Story[] = [
 					"Truncated with an ellipsis in the header; shown in full (wrapped) above the output.",
 				render: () => <BashToolCard item={bashLongCommandTool} />,
 			},
+			{
+				name: "Background, running",
+				description:
+					"The call returned while its job keeps running: the badge counts the job's run time, the spinner stays and the job's output fills the card.",
+				render: () => <BashToolCard item={bashBackgroundRunningTool} />,
+			},
+			{
+				name: "Background, completed",
+				description: "The job finished: a done card with the job's result and its run time.",
+				render: () => <BashToolCard item={bashBackgroundCompletedTool} />,
+			},
+			{
+				name: "Background, failed",
+				description: "The job failed: an error card, the badge names the exit code.",
+				render: () => <BashToolCard item={bashBackgroundFailedTool} />,
+			},
+			{
+				name: "Background, cancelled",
+				description: "The job was cancelled: an interrupted card that keeps the output it got to.",
+				render: () => <BashToolCard item={bashBackgroundCancelledTool} />,
+			},
 		],
 	}),
 	defineStory({
@@ -252,6 +298,20 @@ const stories: Story[] = [
 				description:
 					"The settled call's status log (a helper's preview text is left out) and the backend notice.",
 				render: () => <EvalToolCard item={evalStatusDoneTool} />,
+			},
+			{
+				name: "Background, running",
+				description:
+					"The cell returned while its job runs: the badge counts its run time and its output keeps filling the card.",
+				render: () => <EvalToolCard item={evalBackgroundRunningTool} />,
+			},
+			{
+				name: "Background, completed",
+				render: () => <EvalToolCard item={evalBackgroundCompletedTool} />,
+			},
+			{
+				name: "Background, failed",
+				render: () => <EvalToolCard item={evalBackgroundFailedTool} />,
 			},
 		],
 	}),
@@ -399,6 +459,20 @@ const stories: Story[] = [
 				seed: { subagents: taskStageSubagentMap, settingsModel: agentSettingsModel },
 				render: () => <TaskToolCard item={taskStageTool} />,
 			},
+			{
+				name: "Background, running",
+				description:
+					"The spawn call returned while its agents run: the badge counts the job's run time and the card stays running until every agent settled.",
+				render: () => <TaskToolCard item={taskBackgroundRunningTool} />,
+			},
+			{
+				name: "Background, completed",
+				render: () => <TaskToolCard item={taskBackgroundCompletedTool} />,
+			},
+			{
+				name: "Background, failed",
+				render: () => <TaskToolCard item={taskBackgroundFailedTool} />,
+			},
 		],
 	}),
 	defineStory({
@@ -479,7 +553,7 @@ const stories: Story[] = [
 						<ToolCard item={webSearchDoneTool} />,
 						<ToolCard item={lspDefinitionTool} />,
 						<ToolCard item={taskPendingTool} />,
-						<ToolCard item={waitSettledTool} />,
+						<WaitToolCard calls={[waitSettledTool]} />,
 						<ToolCard item={askDoneTool} />,
 						<ToolCard item={todoArgsTool} />,
 						<ToolCard item={genericDoneTool} />,

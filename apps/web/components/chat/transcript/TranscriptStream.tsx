@@ -2,15 +2,18 @@ import { createMemo, For, Match, Show, Switch, type Component, type JSX } from "
 import { openLightbox, state, type ChatItem } from "../../../state";
 import { ArrowDownIcon } from "../../ui/icons";
 import { ToolCard } from "../tools/ToolCard";
+import { WaitToolCard } from "../tools/WaitToolCard";
 import {
 	cacheMissMarker,
 	hideThinkingBlock,
 	hideToolActivity,
+	proseOnlyThinking,
 	shimmerMode,
 	showTokenUsage,
 	showTurnTime,
 } from "../../../chat/display-prefs";
 import { buildTurnMeta } from "../../../chat/turn-usage";
+import { buildWaitRuns, type WaitRun } from "../../../chat/wait-runs";
 import { useStickyScroll } from "./useStickyScroll";
 import { StreamingBlock } from "./StreamingBlock";
 import {
@@ -22,6 +25,9 @@ import {
 	UserCard,
 	UserCommandCard,
 } from "./cards";
+
+/** The runs of a stream with tool activity hidden: none, so the hidden waits stay hidden. */
+const NO_WAIT_RUNS: ReadonlyMap<number, WaitRun> = new Map();
 
 /**
  * The sticky-scrolling message stream over one list of chat items: the same
@@ -54,6 +60,17 @@ export const TranscriptStream: Component<{
 			cacheMiss: cacheMissMarker(),
 		}),
 	);
+	// Consecutive wait calls with nothing visible between them fold into one
+	// card, drawn at the run's first call. Derived from the items alone (never
+	// from a live-only field), so a history reload folds as the stream did.
+	const waitRuns = createMemo<ReadonlyMap<number, WaitRun>>(() =>
+		hideToolActivity()
+			? NO_WAIT_RUNS
+			: buildWaitRuns(props.items, {
+					hideThinking: hideThinkingBlock(),
+					proseOnlyThinking: proseOnlyThinking(),
+				}),
+	);
 	return (
 		<div class={props.class ? `chat-transcript-wrap ${props.class}` : "chat-transcript-wrap"}>
 			<div class="chat-transcript" ref={containerRef}>
@@ -82,6 +99,15 @@ export const TranscriptStream: Component<{
 											thinking
 											meta={turnMeta().get(assistant().id)}
 										/>
+									)}
+								</Match>
+								<Match
+									when={item.kind === "tool" && item.name === "wait" && waitRuns().get(item.id)}
+								>
+									{(run) => (
+										<Show when={run().items[0]?.id === item.id}>
+											<WaitToolCard calls={run().items} transcript={props.items} />
+										</Show>
 									)}
 								</Match>
 								<Match when={item.kind === "tool" && !hideToolActivity() && item}>

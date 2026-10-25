@@ -19,6 +19,7 @@ afterAll(() => {
 const jobs = await import("../../store/jobs");
 const { setState, state } = await import("../../state");
 const originalSession = state.currentSessionId;
+const originalModal = state.modal;
 
 const place = { depth: 0, rails: [] as boolean[], last: true, parent: false };
 const job = (id: string, over: Partial<JobDto> = {}): JobDto => ({
@@ -62,6 +63,7 @@ beforeEach(() => {
 afterAll(() => {
 	stop?.();
 	setState("currentSessionId", originalSession);
+	setState("modal", originalModal);
 });
 
 describe("jobs tree", () => {
@@ -205,5 +207,91 @@ describe("polling", () => {
 		expect(jobs.jobsView()).toBe("loading");
 		expect(jobs.selectedJobId()).toBeNull();
 		expect(jobs.jobsError()).toBeNull();
+	});
+});
+
+describe("opening the sheet", () => {
+	const detail: JobDetailDto = { pids: [], command: "sleep 9", output: "tick" };
+
+	test("opens the modal, and with a job preselects it once the tree lists it", async () => {
+		answer({ getJobTree: treeOf(job("a"), job("b")), getJobDetail: detail });
+		setState("modal", null);
+		jobs.openJobsSheet("b");
+		expect(state.modal).toBe("jobs");
+		expect(jobs.selectedJobId()).toBe("b");
+		await settle();
+		expect(jobs.selectedJobDetail()).toEqual(detail);
+
+		// The sheet's polling then loads the tree: the row exists and stays selected.
+		stop = jobs.startJobsPolling();
+		await settle();
+		expect(jobs.selectedJob()?.id).toBe("b");
+		expect(jobs.selectedJobId()).toBe("b");
+	});
+
+	test("without a job it only opens the modal and leaves the selection alone", () => {
+		answer({ getJobTree: treeOf(job("a")), getJobDetail: detail });
+		setState("modal", null);
+		jobs.selectJob("a");
+		jobs.openJobsSheet();
+		expect(state.modal).toBe("jobs");
+		expect(jobs.selectedJobId()).toBe("a");
+	});
+
+	test("an open sheet switches to the asked job", async () => {
+		answer({ getJobTree: treeOf(job("a"), job("b")), getJobDetail: detail });
+		stop = jobs.startJobsPolling();
+		await settle();
+		jobs.selectJob("a");
+		jobs.openJobsSheet("b");
+		await settle();
+		expect(jobs.selectedJobId()).toBe("b");
+		expect(jobs.selectedJob()?.id).toBe("b");
+	});
+
+	test("a job the tree no longer lists ends up unselected", async () => {
+		answer({ getJobTree: treeOf(job("a")), getJobDetail: null });
+		jobs.openJobsSheet("gone");
+		await jobs.refreshJobs();
+		expect(jobs.selectedJobId()).toBeNull();
+	});
+
+	test("a tree requested before the selection cannot drop it", async () => {
+		const pending = held<JobTreeDto>();
+		handler = () => pending.promise;
+		const refreshing = jobs.refreshJobs();
+		jobs.openJobsSheet("late");
+		pending.resolve(treeOf(job("a")));
+		await refreshing;
+		expect(jobs.selectedJobId()).toBe("late");
+	});
+});
+
+describe("fetching one job's detail", () => {
+	const detail: JobDetailDto = { pids: [], command: "make", output: "ok" };
+
+	test("returns the inspection without touching the sheet's selection", async () => {
+		answer({ getJobDetail: detail });
+		jobs.selectJob(null);
+		expect(await jobs.fetchJobDetail("a")).toEqual(detail);
+		expect(calls.at(-1)).toEqual({ method: "getJobDetail", args: ["a"] });
+		expect(jobs.selectedJobId()).toBeNull();
+	});
+
+	test("is null when the daemon no longer knows the job or the call fails", async () => {
+		answer({ getJobDetail: null });
+		expect(await jobs.fetchJobDetail("a")).toBeNull();
+		answer({ getJobDetail: new Error("socket closed") });
+		expect(await jobs.fetchJobDetail("a")).toBeNull();
+		expect(jobs.jobsError()).toBeNull();
+	});
+
+	test("is null when the session changed while it was in flight", async () => {
+		const pending = held<JobDetailDto>();
+		handler = () => pending.promise;
+		const fetching = jobs.fetchJobDetail("a");
+		setState("currentSessionId", "sess-b");
+		pending.resolve(detail);
+		expect(await fetching).toBeNull();
 	});
 });

@@ -7,7 +7,9 @@ import { describe, expect, test } from "bun:test";
 import {
 	EVAL_LIVE_EVENTS,
 	LIVE_TEXT_CHARS,
+	sameAsyncFrame,
 	sameToolLive,
+	slimAsyncFrame,
 	slimEvalStatus,
 	slimWaitJobs,
 	toolLiveOf,
@@ -137,5 +139,36 @@ describe("toolLiveOf and sameToolLive", () => {
 		expect(sameToolLive(at(1_000, "x"), at(1_000, "y"))).toBe(false);
 		expect(sameToolLive(undefined, at(0, "x"))).toBe(false);
 		expect(sameToolLive(undefined, undefined)).toBe(true);
+	});
+});
+
+describe("slimAsyncFrame", () => {
+	test("keeps the job state and a failed command's exit code, nothing else of the details", () => {
+		expect(
+			slimAsyncFrame({
+				async: { state: "failed", jobId: "bg_1", type: "bash" },
+				exitCode: 2,
+				meta: {},
+			}),
+		).toEqual({ state: "failed", exitCode: 2 });
+		expect(slimAsyncFrame({ async: { state: "running", jobId: "bg_1" } })).toEqual({
+			state: "running",
+		});
+	});
+
+	test("is undefined for details that are not a job frame", () => {
+		expect(slimAsyncFrame(undefined)).toBeUndefined();
+		expect(slimAsyncFrame({})).toBeUndefined();
+		expect(slimAsyncFrame({ async: { state: "paused" } })).toBeUndefined();
+		expect(slimAsyncFrame({ async: "running" })).toBeUndefined();
+	});
+
+	test("two frames are the same when state and exit code match", () => {
+		expect(sameAsyncFrame({ state: "running" }, { state: "running" })).toBe(true);
+		expect(sameAsyncFrame({ state: "failed", exitCode: 1 }, { state: "failed", exitCode: 2 })).toBe(
+			false,
+		);
+		expect(sameAsyncFrame(undefined, { state: "running" })).toBe(false);
+		expect(sameAsyncFrame(undefined, undefined)).toBe(true);
 	});
 });

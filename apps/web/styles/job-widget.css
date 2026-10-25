@@ -312,9 +312,3 @@
 		animation: job-widget-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 	}
 }
-
-/* Inside a wait tile: the widget sits under the head, bordered off from it. */
-.wait-tile > .job-widget {
-	padding-top: var(--space-3);
-	border-top: 1px solid var(--border);
-}

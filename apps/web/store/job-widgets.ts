@@ -1,5 +1,6 @@
 import type { WireJobWidgetView } from "#lib/wire/protocol";
 import { setState, state } from "../state";
+import { observeRunningJobs, resetJobsBar } from "./jobs-bar";
 import { createJobWidgetsState, type JobWidgetsState } from "./slices/job-widgets";
 
 /**
@@ -13,11 +14,13 @@ import { createJobWidgetsState, type JobWidgetsState } from "./slices/job-widget
 /** Replace the set with the daemon's snapshot (never `reconcile`: it leaves a hole where a shrunk list lost entries). */
 export function applyJobWidgets(snapshot: JobWidgetsState): void {
 	setState("jobWidgets", { running: snapshot.running, entries: [...snapshot.entries] });
+	observeRunningJobs(snapshot.running);
 }
 
 /** Forget every job (an attach: the priming says what runs now). */
 export function clearJobWidgets(): void {
 	setState("jobWidgets", createJobWidgetsState());
+	resetJobsBar();
 }
 
 /** The glance of the widget of job `id` (a subagent's task job has the agent's id), or undefined while it has none. */

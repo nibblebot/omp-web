@@ -1,4 +1,5 @@
 import { createMemo, Show, type Component } from "solid-js";
+import { effectiveStatus } from "../../../chat/background-job";
 import type { ToolItem } from "../../../state";
 import { openAgent } from "../../../store/dock";
 import { fanoutTotals, subagentTree } from "../../../store/subagents";
@@ -20,7 +21,8 @@ export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 		<ToolCardShell
 			name="task"
 			arg={description()}
-			status={props.item.status}
+			status={effectiveStatus(props.item)}
+			background={props.item.background}
 			class="task-tool"
 			meta={
 				<Show when={forest().length > 0}>

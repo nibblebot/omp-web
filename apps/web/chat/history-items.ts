@@ -1,9 +1,11 @@
+import { applyAsyncResults, asyncResultJobsOf, backgroundOf } from "./background-job";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ChatItem, ToolItem } from "../state";
 import { advisorNotesOf } from "../store/slices/advisor";
 import { guestPromptOf } from "../store/slices/collab";
 import { compactionItemOf } from "../store/compaction-view";
 import { extractText, scanImages } from "#lib/wire/tool-result";
+import { slimWaitJobs } from "#lib/wire/tool-live";
 import { isAbortRelabelable, toolResultStatus } from "./tool-interrupt";
 import { assistantBlocks, capTail, tabsToSpaces, userText } from "../store/chat";
 import type { UsageLike } from "../usage/usage";
@@ -118,8 +120,11 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 						item.status = status;
 						if (images.length > 0) item.images = images;
 						item.details = msg.details;
+						const parked = backgroundOf(item.name, msg.details, msg.timestamp);
+						if (parked !== undefined) item.background = parked;
 						if (!fresh.has(item)) patched.add(item);
 					} else {
+						const parkedUnmatched = backgroundOf(msg.toolName, msg.details, msg.timestamp);
 						const unmatched: ToolItem = {
 							kind: "tool",
 							id: nextId(),
@@ -130,10 +135,24 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 							output,
 							...(images.length > 0 ? { images } : {}),
 							details: msg.details,
+							...(parkedUnmatched !== undefined ? { background: parkedUnmatched } : {}),
 						};
 						tools.set(msg.toolCallId, unmatched);
 						fresh.add(unmatched);
 						items.push(unmatched);
+					}
+					// Jobs a `wait` consumed get no async-result message: the wait's settled jobs report them.
+					if (msg.toolName === "wait") {
+						const waited = (slimWaitJobs(msg.details)?.jobs ?? []).flatMap((job) =>
+							job.status === "running"
+								? []
+								: [{ jobId: job.id, state: job.status, durationMs: job.durationMs }],
+						);
+						if (waited.length > 0) {
+							for (const card of applyAsyncResults(tools.values(), waited)) {
+								if (!fresh.has(card)) patched.add(card);
+							}
+						}
 					}
 				} else if (msg.role === "bashExecution" || msg.role === "pythonExecution") {
 					// `!`/`$` runs: the same card the live call renders, settled.
@@ -159,6 +178,13 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 					if (notes !== null) items.push({ kind: "advisor", id: nextId(), notes });
 					const guest = guestPromptOf(msg);
 					if (guest !== null) items.push({ kind: "guestPrompt", id: nextId(), ...guest });
+					// A job that settled after its call returned: the delivery settles the parked card.
+					const delivered = asyncResultJobsOf(msg);
+					if (delivered.length > 0) {
+						for (const card of applyAsyncResults(tools.values(), delivered)) {
+							if (!fresh.has(card)) patched.add(card);
+						}
+					}
 				}
 			}
 			return { items, patched: [...patched] };

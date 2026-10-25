@@ -2,6 +2,7 @@ import { batch, createSignal, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { SubagentImageResult, SubagentMessagesResult } from "#lib/wire/protocol";
 import type { SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { isBackgroundRunning } from "../chat/background-job";
 import { createHistoryBuilder, type HistoryBuilder } from "../chat/history-items";
 import { metricsOf, normalizeStatus, type UsageFallback } from "./subagent-frames";
 import { call } from "./transport";
@@ -685,16 +686,25 @@ function lastIndexOfId(items: readonly ChatItem[], id: number): number {
  * an agent that is no longer running the call is unfinished: it never reported
  * an outcome, so it reads as interrupted (main's settleRunningTools does the
  * same for an idle turn). A result that shows up later still patches the item.
+ * A call parked on a background job is not waiting on a frame either: a transcript
+ * has no live frames, so its job's outcome is unknowable and it stays a plain done card.
  */
 function settleRunningTranscriptTools(key: string): void {
 	const items = transcripts[key]?.items;
-	if (!items?.some((item) => item.kind === "tool" && item.status === "running")) return;
+	if (
+		!items?.some(
+			(item) => item.kind === "tool" && (item.status === "running" || isBackgroundRunning(item)),
+		)
+	)
+		return;
 	setTranscripts(
 		key,
 		"items",
 		produce((draft) => {
 			for (const item of draft) {
-				if (item.kind === "tool" && item.status === "running") item.status = "interrupted";
+				if (item.kind !== "tool") continue;
+				if (item.status === "running") item.status = "interrupted";
+				else if (isBackgroundRunning(item)) item.background = undefined;
 			}
 		}),
 	);
@@ -724,6 +734,7 @@ function applyTranscriptPage(key: string, agentId: string, res: SubagentMessages
 					target.status = patched.status;
 					target.output = patched.output;
 					target.details = patched.details;
+					target.background = patched.background ? { ...patched.background } : undefined;
 					if (patched.images) target.images = patched.images;
 				}
 				// Copies: the builder keeps mutating its own ToolItems, which must not alias store targets.

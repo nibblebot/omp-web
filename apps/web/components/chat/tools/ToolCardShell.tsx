@@ -1,4 +1,5 @@
 import {
+	createContext,
 	createEffect,
 	createMemo,
 	createSignal,
@@ -7,13 +8,16 @@ import {
 	on,
 	Show,
 	Switch,
+	useContext,
 	type Component,
 	type JSX,
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
+import type { BackgroundJob } from "../../../chat/background-job";
 import { toolKind, type ToolIconKey } from "../../../chat/tool-kinds";
 import { state, type ToolItem } from "../../../state";
 import { Card } from "../../ui/Card";
+import { BackgroundBadge } from "./BackgroundBadge";
 import {
 	BotIcon,
 	BracesIcon,
@@ -41,6 +45,9 @@ export const COLLAPSED_LINES = 20;
 export const toolExpanded = (item: ToolItem): boolean =>
 	state.toolsExpanded || item.status === "running";
 
+/** The tool call a card renders; `ToolCardShell` stamps it on the card root as `data-tool-call-id` so a jump from elsewhere in the transcript finds the card (`chat/tool-jump.ts`). */
+export const ToolCallIdContext = createContext<string>();
+
 interface ToolShellProps {
 	/** Tool name: the header label, also the key for the category color and icon (chat/tool-kinds.ts). */
 	name: string;
@@ -52,6 +59,8 @@ interface ToolShellProps {
 	class?: string;
 	/** Extra header content between the arg and the status slot (diff +n −m). */
 	meta?: JSX.Element;
+	/** The job this call handed its card to: a badge with its clock sits before the status slot (chat/background-job.ts). */
+	background?: BackgroundJob;
 	/** Render as a <details> that stays open while running (GenericToolCard). */
 	collapsible?: boolean;
 	children?: JSX.Element;
@@ -89,10 +98,12 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 	);
 	const cardClass = () => (props.class ? `tool-card ${props.class}` : "tool-card");
 	const kind = createMemo(() => toolKind(props.name));
+	const toolCallId = useContext(ToolCallIdContext);
 	return (
 		<Card
 			class={cardClass()}
 			status={props.status}
+			data={{ "tool-call-id": toolCallId }}
 			collapsible={props.collapsible}
 			open={userOpen() ?? (state.toolsExpanded || props.status === "running")}
 			onToggle={(e) => {
@@ -112,6 +123,7 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 						<span class="tool-arg">{props.arg}</span>
 					</Show>
 					{props.meta}
+					<Show when={props.background}>{(job) => <BackgroundBadge job={job()} />}</Show>
 					<Show when={props.status}>
 						<span class="tool-state" data-status={props.status} title={props.status}>
 							<Switch>

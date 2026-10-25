@@ -28,3 +28,9 @@ export const authoringEntry = (): WireJobWidgetEntry => entry("bg_2", "bash", au
 export function seedJobWidgets(running: number, entries: readonly WireJobWidgetEntry[]): void {
 	applyJobWidgets({ running, entries: [...entries] });
 }
+
+/** The last of `count` jobs just ended: the snapshots a session sends as the bar drops to its finished note. */
+export function seedFinishedJobs(count: number): void {
+	seedJobWidgets(count, [benchEntry()]);
+	applyJobWidgets({ running: 0, entries: [] });
+}

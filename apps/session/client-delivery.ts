@@ -16,11 +16,12 @@ import {
 	CLIENT_RING_BYTES,
 	type ServerFrame,
 	type SessionScopedFrame,
+	type WireAsyncFrame,
 	type WireSessionEvent,
 	type WireToolLive,
 } from "#lib/wire/protocol";
 import { ReplayRing } from "#lib/wire/replay-ring";
-import { sameToolLive, toolLiveOf } from "#lib/wire/tool-live";
+import { sameAsyncFrame, sameToolLive, slimAsyncFrame, toolLiveOf } from "#lib/wire/tool-live";
 import { extractText, scanImages } from "#lib/wire/tool-result";
 import type { SessionEntry } from "./session-entry";
 
@@ -436,9 +437,11 @@ interface ToolProgress {
 	resync: boolean;
 	/** Last live status sent (eval status events, wait job tiles); a partial without one keeps it. */
 	live: WireToolLive | undefined;
+	/** Last job frame sent (a backgrounded call's `details.async`); a partial without one keeps it. */
+	async: WireAsyncFrame | undefined;
 }
 
-/** Running tool calls per session handle, keyed by toolCallId; cleared at tool end and agent end. */
+/** Running tool calls per session handle, keyed by toolCallId; cleared at tool end (a backgrounded call's, at its job's last frame) and agent end. */
 const runningTools = new Map<string, Map<string, ToolProgress>>();
 
 /** Priming for a late joiner: the in-progress assistant message and every running tool's output so far. */
@@ -450,7 +453,12 @@ export function streamingPrimeFrames(
 	if (message !== undefined)
 		frames.push({ type: "event", event: { type: "message_start", message } });
 	for (const [toolCallId, progress] of runningTools.get(entry.handle) ?? []) {
-		if (progress.output === "" && progress.images.length === 0 && progress.live === undefined)
+		if (
+			progress.output === "" &&
+			progress.images.length === 0 &&
+			progress.live === undefined &&
+			progress.async === undefined
+		)
 			continue;
 		frames.push({
 			type: "event",
@@ -461,6 +469,7 @@ export function streamingPrimeFrames(
 				output: progress.output,
 				...(progress.images.length > 0 ? { images: progress.images } : {}),
 				...(progress.live !== undefined ? { live: progress.live } : {}),
+				...(progress.async !== undefined ? { async: progress.async } : {}),
 			},
 		});
 	}
@@ -478,8 +487,11 @@ function sameImages(a: readonly ImageArg[], b: readonly ImageArg[]): boolean {
  * A tool partial as the wire carries it: the text appended since the call's
  * previous update when the output grew, the whole text when it changed any
  * other way, nothing (null) when it changes nothing the card shows. An eval or
- * wait partial's live status (see `toolLiveOf`) rides along when it changed;
- * an update with no other news then carries an empty append.
+ * wait partial's live status (see `toolLiveOf`) rides along when it changed,
+ * and so does the job frame of a backgrounded call (see `slimAsyncFrame`);
+ * an update with no other news then carries an empty append. A call returns
+ * while its background job keeps reporting, so these updates arrive after
+ * `tool_execution_end`; a job's terminal frame is its last, and ends its entry.
  */
 function toolUpdateFrame(
 	handle: string,
@@ -496,15 +508,21 @@ function toolUpdateFrame(
 	const live = toolLiveOf(event.toolName, event.partialResult?.details);
 	const liveChanged =
 		live !== undefined && (sent?.resync === true || !sameToolLive(live, sent?.live));
-	tools.set(event.toolCallId, {
-		toolName: event.toolName,
-		output,
-		images: images ?? sent?.images ?? [],
-		resync: false,
-		live: live ?? sent?.live,
-	});
-	if (output === previous && images === undefined && !liveChanged) return null;
-	const liveOnly = output === previous && images === undefined;
+	const job = slimAsyncFrame(event.partialResult?.details);
+	const asyncChanged =
+		job !== undefined && (sent?.resync === true || !sameAsyncFrame(job, sent?.async));
+	if (job !== undefined && job.state !== "running") tools.delete(event.toolCallId);
+	else
+		tools.set(event.toolCallId, {
+			toolName: event.toolName,
+			output,
+			images: images ?? sent?.images ?? [],
+			resync: false,
+			live: live ?? sent?.live,
+			async: job ?? sent?.async,
+		});
+	if (output === previous && images === undefined && !liveChanged && !asyncChanged) return null;
+	const metaOnly = output === previous && images === undefined;
 	const appended =
 		previous !== undefined &&
 		previous !== "" &&
@@ -516,10 +534,11 @@ function toolUpdateFrame(
 		type: "tool_execution_update",
 		toolCallId: event.toolCallId,
 		toolName: event.toolName,
-		output: liveOnly ? "" : (appended ?? output),
-		...(appended !== undefined || liveOnly ? { append: true as const } : {}),
+		output: metaOnly ? "" : (appended ?? output),
+		...(appended !== undefined || metaOnly ? { append: true as const } : {}),
 		...(images !== undefined ? { images } : {}),
 		...(liveChanged ? { live } : {}),
+		...(asyncChanged ? { async: job } : {}),
 	};
 }
 
@@ -536,7 +555,9 @@ function toolUpdateFrame(
  * - `tool_execution_update` is the appended output (WireToolExecutionUpdate);
  *   the SDK repeats the whole output and args in each. An eval or wait partial's
  *   `details` never ship whole: only their slim `live` status (lib/wire/tool-live.ts),
- *   and only when it changed.
+ *   and only when it changed. A backgrounded bash, eval or task call keeps sending
+ *   updates after `tool_execution_end`; each carries the job's `async` frame
+ *   (state, exit code) when that changed, the last one ending the call's entry.
  * - Tool-result `message_start`/`message_end` are dropped: `tool_execution_end`
  *   carries the same result and no consumer reads the message events.
  * - `turn_end` and `agent_end` lose the messages and tool results they repeat.

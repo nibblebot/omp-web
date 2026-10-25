@@ -1,10 +1,10 @@
 import { JobsSheet } from "../../../web/components/jobs/JobsSheet";
-import { selectJob } from "../../../web/store/jobs";
+import { openJobsSheet, selectJob } from "../../../web/store/jobs";
 import { answerCalls } from "../../daemon";
 import { JOB_IDS, jobCalls } from "../../fixtures/jobs";
 import { defineStory } from "../../registry";
 
-// The Jobs feature is in development, so the app cannot open this sheet; the stories render it directly.
+// ModalHost renders this sheet as a core modal when state.modal is "jobs".
 export default defineStory({
 	id: "jobs-jobs-sheet",
 	title: "JobsSheet",
@@ -25,6 +25,16 @@ export default defineStory({
 			seed: () => {
 				answerCalls(jobCalls());
 				selectJob(JOB_IDS.nestedTests);
+			},
+			render: (ctx) => <JobsSheet onClose={ctx.close} />,
+		},
+		{
+			name: "Opened on a job",
+			description:
+				"A card elsewhere (the wait card, a backgrounded tool) opens the sheet on one job through openJobsSheet: the detail loads at once and the dev server row is selected once the tree arrives.",
+			seed: () => {
+				answerCalls(jobCalls());
+				openJobsSheet(JOB_IDS.devServer);
 			},
 			render: (ctx) => <JobsSheet onClose={ctx.close} />,
 		},

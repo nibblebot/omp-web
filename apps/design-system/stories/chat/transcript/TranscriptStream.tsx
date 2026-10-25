@@ -1,8 +1,10 @@
 import { TranscriptStream } from "../../../../web/components/chat/transcript/TranscriptStream";
 import { state, type ChatItem } from "../../../../web/state";
 import { assistantBlocks } from "../../../../web/store/chat";
+import { answerCalls } from "../../../daemon";
 import { screenItems, screenSessionSeed } from "../../../fixtures/screen";
 import { subagentTranscriptItems } from "../../../fixtures/subagents";
+import { waitJobDetail, waitRunItems } from "../../../fixtures/tools";
 import { defineStory } from "../../../registry";
 
 const idleLive = { active: false, blocks: [], rev: 0 };
@@ -93,6 +95,17 @@ export default defineStory({
 			render: () => (
 				<div class="ds-frame ds-frame-tall ds-frame-column">
 					<TranscriptStream items={state.items} variant="session" />
+				</div>
+			),
+		},
+		{
+			name: "Session: folded wait run",
+			description:
+				"The turn starts a build in the background and then waits four times, with assistant turns that draw nothing between the waits. The four calls fold into one wait card at the first (the build row's arrow jumps to the bash card that started it); the closing message ends the run.",
+			seed: () => answerCalls({ getJobDetail: () => structuredClone(waitJobDetail) }),
+			render: () => (
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<TranscriptStream items={waitRunItems} variant="session" />
 				</div>
 			),
 		},

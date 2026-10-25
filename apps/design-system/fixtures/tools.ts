@@ -1,5 +1,5 @@
-import type { ImageArg } from "#lib/wire/protocol";
-import type { SubagentInfo, ToolItem, state } from "../../web/state";
+import type { ImageArg, JobDetailDto, WireWaitJob } from "#lib/wire/protocol";
+import type { ChatItem, SubagentInfo, ToolItem, state } from "../../web/state";
 import { FIXTURE_NOW } from "./session";
 
 /** Tool item defaults; every fixture overrides what it needs. */
@@ -663,7 +663,7 @@ const waitJobs = [
 		durationMs: 12_000,
 	},
 ] as const;
-/** WaitToolCard: call in flight; live tiles for a subagent (stage and completion ring), a bash job and an eval job. */
+/** WaitToolCard: call in flight; live rows for a subagent (stage and completion ring), a bash job and an eval job. */
 export const waitRunningTool: ToolItem = {
 	...tool("wait", "running", {}, ""),
 	live: { kind: "wait", jobs: waitJobs.map((job) => ({ ...job })), at: Date.now() },
@@ -728,7 +728,7 @@ export const waitIdleTool: ToolItem = {
 	),
 	details: { op: "wait", jobs: [] },
 };
-/** WaitToolCard: eleven watched jobs; nine tiles show and the rest are counted. */
+/** WaitToolCard: eleven watched jobs; eight rows show and the rest are counted. */
 export const waitManyTool: ToolItem = {
 	...tool("wait", "done", {}, ""),
 	details: {
@@ -741,6 +741,170 @@ export const waitManyTool: ToolItem = {
 			durationMs: 9_000 + i * 1_300,
 		})),
 	},
+};
+/** WaitToolCard: no job, but two running agents (a peer-woken and a revived subagent). */
+export const waitAgentsTool: ToolItem = {
+	...tool("wait", "done", {}, ""),
+	details: {
+		op: "wait",
+		jobs: [],
+		agents: [
+			{
+				id: "PeerWoken",
+				parentId: "TraceRetry",
+				activity: "Replying to a question",
+				ageMs: 52_000,
+				live: true,
+			},
+			{ id: "Revived", ageMs: 311_000, live: false },
+		],
+	},
+};
+const runJob = (
+	id: string,
+	type: WireWaitJob["type"],
+	status: WireWaitJob["status"],
+	label: string,
+	durationMs: number,
+	extra: Partial<WireWaitJob> = {},
+): WireWaitJob => ({ id, type, status, label, durationMs, ...extra });
+const buildJob = (status: "running" | "completed", durationMs: number) =>
+	runJob("bg_build", "bash", status, "bun run build:web", durationMs);
+const testJob = (status: "running" | "failed", durationMs: number) =>
+	runJob("bg_test", "bash", status, "bun scripts/test.ts apps/web/test/chat", durationMs, {
+		...(status === "failed" ? { exitCode: 1 } : {}),
+	});
+const lintJob = (status: "running" | "completed", durationMs: number) =>
+	runJob("bg_lint", "bash", status, "bunx oxlint apps/web", durationMs);
+const traceJob = (
+	status: "running" | "completed",
+	durationMs: number,
+	stage: string,
+	completionPercent: number,
+) =>
+	runJob("TraceRetry", "task", status, "Trace the retry path through the outbox", durationMs, {
+		stage,
+		...(status === "running" ? { completionPercent } : {}),
+	});
+/** One wait call of a run: `details` as the SDK leaves them. */
+const waitCall = (details: Record<string, unknown>): ToolItem => ({
+	...tool("wait", "done", {}, ""),
+	details: { op: "wait", ...details },
+});
+/**
+ * WaitToolCard: four settled waits of one run. The build settles first; the second wait is cut
+ * short by a message; the tests fail in the third (exit 1) while the lint passes; the subagent is
+ * the last to finish.
+ */
+export const waitRunTools: ToolItem[] = [
+	waitCall({
+		jobs: [
+			buildJob("completed", 38_000),
+			testJob("running", 21_000),
+			traceJob("running", 94_000, "Reading the outbox resend logic", 40),
+			lintJob("running", 9_000),
+		],
+	}),
+	waitCall({
+		interrupted: true,
+		jobs: [
+			testJob("running", 45_000),
+			traceJob("running", 118_000, "Writing the failing test", 62),
+			lintJob("running", 33_000),
+		],
+	}),
+	waitCall({
+		jobs: [
+			testJob("failed", 61_000),
+			traceJob("running", 160_000, "Fixing the resend ordering", 80),
+			lintJob("completed", 47_000),
+		],
+	}),
+	waitCall({ jobs: [traceJob("completed", 211_000, "Done", 100)] }),
+];
+/**
+ * WaitToolCard: a run still going. The first wait settled with the build done; the last is in
+ * flight with a live frame, so its jobs run and the build keeps its earlier outcome.
+ */
+export const waitLiveRunTools: ToolItem[] = [
+	waitRunTools[0]!,
+	{
+		...tool("wait", "running", {}, ""),
+		live: {
+			kind: "wait",
+			jobs: [
+				testJob("running", 54_000),
+				traceJob("running", 127_000, "Writing the failing test", 62),
+				lintJob("running", 42_000),
+			],
+			at: Date.now(),
+		},
+	},
+];
+/**
+ * TranscriptStream: a session turn that starts background jobs and then waits four times
+ * (assistant turns between the waits draw nothing), so the four waits fold into one card at the
+ * first. The bash call that started the build is the card the build row jumps to.
+ */
+export const waitRunItems: ChatItem[] = [
+	{
+		kind: "user",
+		id: 9200,
+		text: "Build the web app, run the chat tests and lint it in the background, and have an agent trace the retry bug.",
+	},
+	{
+		kind: "assistant",
+		id: 9201,
+		blocks: [
+			{ kind: "text", text: "Starting the build, the tests and the lint, and the tracing agent." },
+		],
+	},
+	{
+		kind: "tool",
+		id: 9202,
+		toolCallId: "call_bash_build",
+		name: "bash",
+		args: { command: "bun run build:web", async: true },
+		status: "done",
+		output: "Started background job bg_build.",
+		details: { async: { state: "running", jobId: "bg_build", type: "bash" } },
+	},
+	{ kind: "assistant", id: 9203, blocks: [] },
+	waitRunTools[0]!,
+	{ kind: "assistant", id: 9204, blocks: [] },
+	waitRunTools[1]!,
+	{ kind: "assistant", id: 9205, blocks: [] },
+	waitRunTools[2]!,
+	waitRunTools[3]!,
+	{
+		kind: "assistant",
+		id: 9206,
+		blocks: [
+			{
+				kind: "text",
+				text: "The build and the lint passed and the agent finished the trace; `bg_test` failed with exit 1.",
+			},
+		],
+	},
+];
+/** WaitJobRow and WaitToolCard: what `getJobDetail` answers for an opened row (a failed test run's output tail). */
+export const waitJobDetail: JobDetailDto = {
+	command: "bun scripts/test.ts apps/web/test/chat",
+	cwd: "/home/joshua/Repos/omp-web",
+	pids: [],
+	exitCode: 1,
+	output: [
+		"apps/web/test/chat/wait-runs.test.ts:",
+		"(pass) boundaries > a user item ends the run [0.4ms]",
+		"(pass) boundaries > an empty assistant does not [0.2ms]",
+		"(fail) merge > a running last wait overrides from its live frame [1.9ms]",
+		"  error: expect(received).toBe(expected)",
+		"  Expected: 4",
+		"  Received: 3",
+		"",
+		" 2 pass",
+		" 1 fail",
+	].join("\n"),
 };
 
 // lsp

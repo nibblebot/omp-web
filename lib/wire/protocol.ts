@@ -1257,6 +1257,21 @@ export interface WireWaitLive {
 /** The part of a running tool's partial `details` the card renders live; the settled `details` ride `tool_execution_end`. */
 export type WireToolLive = WireEvalLive | WireWaitLive;
 
+/** A background job's state as the SDK reports it in a backgrounded call's frames (`details.async.state`). */
+export type WireAsyncState = "running" | "completed" | "failed" | "cancelled";
+
+/**
+ * The job frame of a backgrounded bash, eval or task call: a call that returned
+ * with `details.async.state === "running"` keeps receiving updates as its job
+ * runs, the last one carrying the job's terminal state. The partial `details`
+ * never ship whole, so this is the only part of them the card needs.
+ */
+export interface WireAsyncFrame {
+	state: WireAsyncState;
+	/** Exit code of a failed command (`details.exitCode`), when the SDK reports one. */
+	exitCode?: number;
+}
+
 /**
  * `tool_execution_update` as it crosses the wire: what a running tool's card
  * shows, not the SDK's partial result. The SDK repeats the whole accumulated
@@ -1284,6 +1299,12 @@ export interface WireToolExecutionUpdate {
 	 * `append`). A late joiner is primed with the last one sent.
 	 */
 	live?: WireToolLive;
+	/**
+	 * The job frame of a call that returned while its background job keeps running
+	 * (see `WireAsyncFrame`); omitted while unchanged. An update whose only news is
+	 * the job's state carries `output: ""` with `append`. A late joiner is primed with the last one sent.
+	 */
+	async?: WireAsyncFrame;
 }
 
 /** `turn_end` as it crosses the wire: a bare marker (the assistant message and tool results already went out as their own events). */

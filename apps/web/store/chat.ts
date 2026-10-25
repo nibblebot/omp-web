@@ -7,11 +7,20 @@ import type {
 	QueuedCommandRef,
 	QueuedMessageRef,
 	WireSessionEvent,
+	WireAsyncFrame,
 	WireToolLive,
 } from "#lib/wire/protocol";
 import { extractText, scanImages } from "#lib/wire/tool-result";
 import { promptTimestamp } from "../chat/turn-usage";
 import { abortedTools, toolResultStatus } from "../chat/tool-interrupt";
+import {
+	applyAsyncResults,
+	asyncResultJobsOf,
+	backgroundOf,
+	isBackgroundRunning,
+	settleBackground,
+	type AsyncResultJob,
+} from "../chat/background-job";
 import { smoothStreaming } from "../chat/display-prefs";
 import type { UsageLike } from "../usage/usage";
 import {
@@ -300,7 +309,15 @@ const pendingDeltas = new Map<number, { kind: Block["kind"]; text: string }>();
 export function clearPendingDeltas(): void {
 	pendingDeltas.clear();
 	pendingToolUpdates.clear();
+	earlyJobFrames.clear();
 }
+
+/**
+ * A job's last frame (and the output the card showed with it) that arrived while its call
+ * had not yet returned. The buffered partial may flush before the end event, so the frame
+ * is kept here until `tool_execution_end` decides whether the call parks on that job.
+ */
+const earlyJobFrames = new Map<string, { job: WireAsyncFrame; output: string }>();
 
 // Phase 1: Socket-frame text writes share the same rAF flush, coalescing N
 // frames between flushes into 1 store write per target key. Keys are stable
@@ -313,15 +330,7 @@ export function clearPendingDeltas(): void {
 // snapshot) or APPENDS to it (`append` frames); a snapshot buffered before an
 // append keeps the pair a snapshot. Bash/python chunks and btw deltas APPEND
 // (frames coalesce).
-const pendingToolUpdates = new Map<
-	string,
-	{
-		output: string;
-		append: boolean;
-		images: ImageArg[] | undefined;
-		live: WireToolLive | undefined;
-	}
->();
+const pendingToolUpdates = new Map<string, PendingToolUpdate>();
 const pendingBashChunks = new Map<number, string>();
 export const pendingEphemeral = new Map<number, string>();
 let rafId = 0;
@@ -382,7 +391,8 @@ function flushDeltas(): void {
 				for (const [toolCallId, update] of pendingToolUpdates) {
 					const item =
 						items[items.findIndex((it) => it.kind === "tool" && it.toolCallId === toolCallId)];
-					if (item?.kind !== "tool" || item.status !== "running") continue;
+					if (item?.kind !== "tool" || !(item.status === "running" || isBackgroundRunning(item)))
+						continue;
 					applyToolUpdate(item, update);
 				}
 			}),
@@ -447,19 +457,32 @@ function bumpLiveRev(): void {
 	setState("live", "rev", (rev) => rev + 1);
 }
 
-/** Apply a buffered tool partial to its card: replace the output, or append to it. */
-function applyToolUpdate(
-	item: ToolItem,
-	update: {
-		output: string;
-		append: boolean;
-		images: ImageArg[] | undefined;
-		live: WireToolLive | undefined;
-	},
-): void {
+/** A buffered tool partial: what the card shows next. */
+interface PendingToolUpdate {
+	output: string;
+	append: boolean;
+	images: ImageArg[] | undefined;
+	live: WireToolLive | undefined;
+	/** The job frame of a call that returned while its job runs; the newest one wins. */
+	job: WireAsyncFrame | undefined;
+}
+
+/**
+ * Apply a buffered tool partial to its card: replace the output, or append to it. A
+ * job frame also settles the card parked on that job.
+ */
+function applyToolUpdate(item: ToolItem, update: PendingToolUpdate): void {
 	item.output = capTail(update.append ? item.output + update.output : update.output, 8000);
 	if (update.images !== undefined) item.images = update.images;
 	if (update.live !== undefined) item.live = { ...update.live, at: Date.now() };
+	const job = update.job;
+	if (job !== undefined && job.state !== "running" && item.background !== undefined) {
+		settleBackground(item, {
+			state: job.state,
+			...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}),
+			durationMs: Math.max(0, Date.now() - item.background.startedAt),
+		});
+	}
 }
 
 /** Apply a buffered tool partial for one card synchronously (drain on
@@ -475,6 +498,27 @@ function drainToolUpdate(toolCallId: string, index: number): void {
 			const item = items[index];
 			if (item?.kind !== "tool") return;
 			applyToolUpdate(item, update);
+		}),
+	);
+}
+
+/**
+ * An `async-result` delivery reports background jobs settled: finish the cards parked
+ * on them. The card's own frames normally did already; this settles one that missed
+ * them (a reload, a dropped frame). A buffered frame lands first, so the job's last
+ * output wins over the text the call returned with.
+ */
+function settleDeliveredJobs(jobs: readonly AsyncResultJob[]): void {
+	state.items.forEach((item, index) => {
+		if (item.kind === "tool" && isBackgroundRunning(item)) drainToolUpdate(item.toolCallId, index);
+	});
+	setState(
+		"items",
+		produce((items) => {
+			applyAsyncResults(
+				items.filter((item): item is ToolItem => item.kind === "tool"),
+				jobs,
+			);
 		}),
 	);
 }
@@ -678,6 +722,9 @@ export function applyEvent(e: WireSessionEvent): void {
 				});
 				setState("live", "active", false);
 			} else {
+				// A background job settled after its call returned: finish the cards parked on it.
+				const delivered = asyncResultJobsOf(msg);
+				if (delivered.length > 0) settleDeliveredJobs(delivered);
 				// Advisor cards (steered or preserved) settle as custom messages.
 				const notes = advisorNotesOf(msg);
 				if (notes !== null) pushItem({ kind: "advisor", id: nextId++, notes });
@@ -714,17 +761,49 @@ export function applyEvent(e: WireSessionEvent): void {
 				const output = tabsToSpaces(e.output);
 				const images = e.images !== undefined && e.images.length > 0 ? e.images : undefined;
 				const pending = pendingToolUpdates.get(e.toolCallId);
-				if (e.append === true && pending !== undefined) {
+				const job = e.async ?? pending?.job;
+				if (e.async?.state === "cancelled") {
+					// A cancelled job's last frame is the cancellation text, not output: the card keeps
+					// the output it got to, buffered chunks included.
+					if (pending !== undefined) pending.job = job;
+					else
+						pendingToolUpdates.set(e.toolCallId, {
+							output: "",
+							append: true,
+							images: undefined,
+							live: e.live,
+							job,
+						});
+				} else if (e.append === true && pending !== undefined) {
 					pending.output = capTail(pending.output + output, 8000);
 					if (images !== undefined) pending.images = images;
 					if (e.live !== undefined) pending.live = e.live;
+					pending.job = job;
 				} else {
 					pendingToolUpdates.set(e.toolCallId, {
 						output,
 						append: e.append === true,
 						images,
 						live: e.live,
+						job,
 					});
+				}
+				const card = state.items[index];
+				if (
+					e.async !== undefined &&
+					e.async.state !== "running" &&
+					card?.kind === "tool" &&
+					card.status === "running"
+				) {
+					// The job ended before its call returned: what the card shows now is the job's result.
+					const buffered = pendingToolUpdates.get(e.toolCallId);
+					const shown =
+						buffered === undefined
+							? card.output
+							: buffered.append
+								? card.output + buffered.output
+								: buffered.output;
+					earlyJobFrames.set(e.toolCallId, { job: e.async, output: capTail(shown, 8000) });
 				}
 				scheduleFlush();
 			}
@@ -741,6 +820,9 @@ export function applyEvent(e: WireSessionEvent): void {
 				// Synchronous transition: a buffered partial lands first so the
 				// authoritative final result replaces ALL partial text. A late
 				// flush must never clobber the settled output.
+				// A job frame that beat the end event: the call's job is already over.
+				const early = earlyJobFrames.get(e.toolCallId);
+				earlyJobFrames.delete(e.toolCallId);
 				drainToolUpdate(e.toolCallId, index);
 				setState(
 					"items",
@@ -753,6 +835,17 @@ export function applyEvent(e: WireSessionEvent): void {
 							if (images.length > 0) item.images = images;
 							if (details !== undefined) item.details = details;
 							item.live = undefined;
+							// A call that returned while its job runs stays parked on the job (its later frames fill the card).
+							const parked = backgroundOf(e.toolName, details, Date.now());
+							if (parked !== undefined) item.background = parked;
+							if (parked !== undefined && early !== undefined) {
+								// The job's last frame is the call's result, as the TUI settles a parked card.
+								if (early.output !== "") item.output = early.output;
+								settleBackground(item, {
+									state: early.job.state === "running" ? "completed" : early.job.state,
+									...(early.job.exitCode !== undefined ? { exitCode: early.job.exitCode } : {}),
+								});
+							}
 						}
 					}),
 				);

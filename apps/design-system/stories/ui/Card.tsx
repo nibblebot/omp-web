@@ -46,5 +46,20 @@ export default defineStory({
 				</div>
 			),
 		},
+		{
+			name: "With data attributes",
+			description:
+				"`data` adds `data-*` attributes to the root (here `data-tool-call-id`, the anchor a jump to a tool card finds); undefined values are omitted.",
+			render: () => (
+				<div class="ds-frame">
+					<Card
+						data={{ "tool-call-id": "call_12", skipped: undefined }}
+						header={<span>Anchored</span>}
+					>
+						Inspect the root: it carries data-tool-call-id.
+					</Card>
+				</div>
+			),
+		},
 	],
 });

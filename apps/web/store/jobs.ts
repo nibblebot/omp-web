@@ -6,11 +6,11 @@ import type {
 	JobTreeDto,
 	JobTreeRowDto,
 } from "#lib/wire/protocol";
-import { state } from "../state";
+import { setState, state } from "../state";
 import { call } from "./transport";
 
 /**
- * Background-jobs domain (the Jobs feature): the attached session's job tree,
+ * Background-jobs domain: the attached session's job tree,
  * the selected job's inspection, and the cancel of the session's own jobs.
  *
  * The sheet polls while it is open. The wire has no job frames, because the SDK
@@ -106,12 +106,20 @@ async function loadDetail(sessionId: string, jobId: string): Promise<void> {
 	setDetailSnapshot({ sessionId, jobId, detail });
 }
 
+/**
+ * Bumped on every selection change. A tree requested before a job was selected cannot say the job is
+ * gone (it may have started after that request), so only a tree asked for under the current selection
+ * may drop it.
+ */
+let selectionStamp = 0;
+
 let refreshing: Promise<void> | undefined;
 
 /** Reload the tree and the selected job's detail; a refresh already in flight is joined, never stacked. */
 export function refreshJobs(): Promise<void> {
 	refreshing ??= (async () => {
 		const sessionId = state.currentSessionId;
+		const stamp = selectionStamp;
 		try {
 			const tree = (await call("getJobTree", [])) as JobTreeDto | null;
 			if (sessionId !== state.currentSessionId) return;
@@ -120,8 +128,9 @@ export function refreshJobs(): Promise<void> {
 			const jobId = selectedId();
 			if (jobId === null) return;
 			if (selectedJob() === undefined) {
-				// The row left the list (evicted after its retention window).
-				setSelectedId(null);
+				// The row left the list (evicted after its retention window); a tree asked for before the
+				// selection says nothing, so the next poll decides.
+				if (stamp === selectionStamp) setSelectedId(null);
 				return;
 			}
 			await loadDetail(sessionId, jobId);
@@ -137,6 +146,7 @@ export function refreshJobs(): Promise<void> {
 /** Select a job row (or none) and fetch its inspection at once. */
 export function selectJob(jobId: string | null): void {
 	if (jobId === selectedId()) return;
+	selectionStamp++;
 	setSelectedId(jobId);
 	setDetailSnapshot(undefined);
 	if (jobId === null) return;
@@ -144,6 +154,31 @@ export function selectJob(jobId: string | null): void {
 	loadDetail(sessionId, jobId).catch((err: unknown) => {
 		if (sessionId === state.currentSessionId) setError(message(err));
 	});
+}
+
+/**
+ * Open the jobs sheet (ModalHost renders it) and, given a job, select its row: the detail loads at once
+ * and the row highlights once the tree has it, whether the sheet was closed or is open already. A job the
+ * tree no longer lists (evicted) leaves nothing selected.
+ */
+export function openJobsSheet(jobId?: string): void {
+	if (jobId !== undefined) selectJob(jobId);
+	setState("modal", "jobs");
+}
+
+/**
+ * One-off inspection of a job of the attached session, for a surface outside the sheet. Resolves null when
+ * the daemon no longer lists the job, the call fails, or the session changed meanwhile; never touches the
+ * sheet's selection.
+ */
+export async function fetchJobDetail(jobId: string): Promise<JobDetailDto | null> {
+	const sessionId = state.currentSessionId;
+	try {
+		const detail = (await call("getJobDetail", [jobId])) as JobDetailDto | null | undefined;
+		return sessionId === state.currentSessionId ? (detail ?? null) : null;
+	} catch {
+		return null;
+	}
 }
 
 /** Cancel one of the session's own running jobs; the daemon refuses any other. The tree reloads either way. */

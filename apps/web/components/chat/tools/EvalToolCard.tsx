@@ -1,4 +1,5 @@
 import { createMemo, For, Show, type Component, type JSX } from "solid-js";
+import { effectiveStatus } from "../../../chat/background-job";
 import {
 	describeStatusEvent,
 	EVAL_STATUS_COLLAPSED,
@@ -54,9 +55,11 @@ export const EvalToolCard: Component<{ item: ToolItem }> = (props) => {
 	const args = () => (props.item.args as { code?: string; language?: string } | null) ?? {};
 	const code = () => args().code ?? "";
 	const language = () => args().language ?? "";
-	// Views exist only once the cell settled; a running card shows the live tail as text.
+	// Views exist only once the cell settled with its own result; a running card shows the live tail as text,
+	// and a backgrounded call's output is its job's, not the one its returned details describe.
 	const parts = createMemo((): EvalOutputPart[] | undefined => {
-		if (props.item.status === "running") return undefined;
+		if (effectiveStatus(props.item) === "running" || props.item.background !== undefined)
+			return undefined;
 		const views = evalViews(props.item.details);
 		return views.length > 0 ? splitEvalOutput(props.item.output, views) : undefined;
 	});
@@ -76,7 +79,8 @@ export const EvalToolCard: Component<{ item: ToolItem }> = (props) => {
 		<ToolCardShell
 			name="eval"
 			arg={language() ? `(${language()})` : undefined}
-			status={props.item.status}
+			status={effectiveStatus(props.item)}
+			background={props.item.background}
 			class="bash-tool"
 		>
 			<Show when={code()}>

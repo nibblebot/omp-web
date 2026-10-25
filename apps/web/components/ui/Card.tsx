@@ -13,17 +13,28 @@ interface CardProps {
 	classList?: Record<string, boolean | undefined>;
 	/** Reflected as `data-status` on the card root for status-driven styling. */
 	status?: string;
+	/** Extra `data-*` attributes on the card root, keyed without the `data-` prefix (`{ "tool-call-id": id }`); undefined values are omitted. */
+	data?: Record<string, string | undefined>;
 	children?: JSX.Element;
 }
 
 /** Bordered panel surface with an optional header row; domain-free. */
 export const Card: Component<CardProps> = (props) => {
 	const cardClass = () => (props.class ? `card ${props.class}` : "card");
+	const dataAttrs = () =>
+		Object.fromEntries(
+			Object.entries(props.data ?? {}).map(([key, value]) => [`data-${key}`, value]),
+		);
 	return (
 		<Show
 			when={props.collapsible}
 			fallback={
-				<div class={cardClass()} data-status={props.status} classList={props.classList}>
+				<div
+					class={cardClass()}
+					data-status={props.status}
+					classList={props.classList}
+					{...dataAttrs()}
+				>
 					<Show when={props.header}>
 						<div class="card-header">{props.header}</div>
 					</Show>
@@ -35,6 +46,7 @@ export const Card: Component<CardProps> = (props) => {
 				class={cardClass()}
 				data-status={props.status}
 				classList={props.classList}
+				{...dataAttrs()}
 				open={props.open}
 				onToggle={(e) => props.onToggle?.(e)}
 			>

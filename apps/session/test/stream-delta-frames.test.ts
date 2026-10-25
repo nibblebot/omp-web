@@ -139,3 +139,107 @@ describe("streamingPrimeFrames", () => {
 		expect(streamingPrimeFrames(entry)).toEqual([]);
 	});
 });
+
+/** A backgrounded call: it returned (`tool_execution_end`) while its job keeps reporting frames. */
+describe("backgrounded tool calls", () => {
+	const job = (state: string, extra: Record<string, unknown> = {}) => ({
+		...extra,
+		async: { state, jobId: "bg_1", type: "bash" },
+	});
+	const returned = {
+		type: "tool_execution_end",
+		toolCallId: "c1",
+		toolName: "bash",
+		result: {
+			content: [{ type: "text", text: "Backgrounded as job bg_1" }],
+			details: job("running"),
+		},
+	} as unknown as AgentSessionEvent;
+	const frame = (text: string, details: unknown) =>
+		({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			args: {},
+			partialResult: { content: [{ type: "text", text }], details },
+		}) as unknown as AgentSessionEvent;
+
+	test("frames after tool_execution_end reach the browsers with the job's state", () => {
+		const handle = "bg-forward";
+		toWireEvent(handle, returned);
+		expect(toWireEvent(handle, frame("line 1\n", job("running")))).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			output: "line 1\n",
+			async: { state: "running" },
+		});
+		// Same state, more output: only the appended text rides.
+		expect(toWireEvent(handle, frame("line 1\nline 2\n", job("running")))).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			output: "line 2\n",
+			append: true,
+		});
+		// The job's last frame names its state and the exit code of a failed command.
+		expect(toWireEvent(handle, frame("boom", job("failed", { exitCode: 2 })))).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			output: "boom",
+			async: { state: "failed", exitCode: 2 },
+		});
+	});
+
+	test("a new state alone is news, an empty append", () => {
+		const handle = "bg-state-only";
+		toWireEvent(handle, returned);
+		toWireEvent(handle, frame("same", job("running")));
+		expect(toWireEvent(handle, frame("same", job("completed")))).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			output: "",
+			append: true,
+			async: { state: "completed" },
+		});
+	});
+
+	test("an unchanged frame sends nothing", () => {
+		const handle = "bg-quiet";
+		toWireEvent(handle, returned);
+		toWireEvent(handle, frame("same", job("running")));
+		expect(toWireEvent(handle, frame("same", job("running")))).toBeNull();
+	});
+
+	test("a late joiner is primed with the job's state, and a settled job leaves no priming", () => {
+		const entry = { handle: "bg-prime" } as SessionEntry;
+		toWireEvent(entry.handle, returned);
+		toWireEvent(entry.handle, frame("so far", job("running")));
+		expect(streamingPrimeFrames(entry)).toEqual([
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_update",
+					toolCallId: "c1",
+					toolName: "bash",
+					output: "so far",
+					async: { state: "running" },
+				},
+			},
+		]);
+		toWireEvent(entry.handle, frame("done", job("completed")));
+		expect(streamingPrimeFrames(entry)).toEqual([]);
+	});
+
+	test("a partial without a job frame carries none", () => {
+		const handle = "bg-plain";
+		expect(toWireEvent(handle, frame("x", {}))).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			output: "x",
+		});
+	});
+});
