@@ -509,7 +509,7 @@ button.settings-toggle:not(:disabled):hover {
 	min-width: 4ch;
 	text-align: center;
 	font-family: var(--font-mono);
-	font-size: var(--fs-lg);
+	font-size: var(--fs-sm);
 	color: var(--text);
 	background: none;
 	border: none;

@@ -121,6 +121,7 @@
 }
 .tool-arg {
 	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
 	font-weight: 400;
 	color: var(--text);
 	min-width: 0;
@@ -216,7 +217,7 @@ pre.terminal {
 }
 .diff-view {
 	font-family: var(--font-mono);
-	font-size: var(--fs-md);
+	font-size: var(--fs-sm);
 	padding: var(--space-2) 0;
 	overflow-x: auto;
 }
@@ -268,7 +269,7 @@ pre.terminal {
 .write-view,
 .read-body {
 	font-family: var(--font-mono);
-	font-size: var(--fs-md);
+	font-size: var(--fs-sm);
 	padding: var(--space-2) 0;
 	overflow-x: auto;
 }
@@ -310,7 +311,7 @@ pre.terminal {
 }
 .search-body {
 	font-family: var(--font-mono);
-	font-size: var(--fs-md);
+	font-size: var(--fs-sm);
 	padding: var(--space-2) var(--space-5) var(--space-4);
 	max-height: 320px;
 	overflow-y: auto;
@@ -578,7 +579,7 @@ pre.terminal.tool-code {
 	font-family: var(--font-mono);
 	padding: 0 var(--space-4) var(--space-3);
 	color: var(--muted-3);
-	font-size: var(--fs-md);
+	font-size: var(--fs-sm);
 	display: flex;
 	gap: var(--space-4);
 	overflow: hidden;
@@ -653,7 +654,7 @@ pre.terminal.tool-code {
 .tool-progress {
 	padding: var(--space-3) var(--space-4);
 	font-family: var(--font-mono);
-	font-size: var(--fs-md);
+	font-size: var(--fs-sm);
 	color: var(--muted-2);
 	overflow-wrap: anywhere;
 }
@@ -822,7 +823,7 @@ pre.terminal.tool-code {
 	min-width: 0;
 	max-width: 50%;
 	font-family: var(--font-mono);
-	font-size: var(--fs-md);
+	font-size: var(--fs-sm);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -974,6 +975,7 @@ pre.terminal.wait-job-output {
 .wait-agent-id {
 	flex: none;
 	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
 }
 .wait-agent-activity {
 	flex: 1;
@@ -1067,11 +1069,11 @@ pre.terminal.wait-job-output {
 		min-height: 44px;
 		align-items: center;
 	}
-}
-
 	.shell-command-toggle {
 		min-height: 44px;
 	}
+}
+
 /* Narrow (390/360px): tool headers wrap instead of pushing past the page,
    terminal output scrolls inside its card, and disclosure headers reach 44px. */
 @media (max-width: 767px) {

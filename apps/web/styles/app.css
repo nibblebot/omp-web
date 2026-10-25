@@ -83,6 +83,13 @@
 	font-size: var(--fs-md);
 	white-space: nowrap;
 }
+/* Monospace segments use the app's monospace size (fs-sm, as in the sidebar); after .segment so it wins. */
+.model-segment,
+.thinking-segment,
+.stats-segment,
+.context-segment {
+	font-size: var(--fs-sm);
+}
 .segment-button {
 	background: none;
 	border: none;

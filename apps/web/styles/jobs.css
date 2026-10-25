@@ -258,6 +258,7 @@
 }
 .job-agent-name {
 	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;

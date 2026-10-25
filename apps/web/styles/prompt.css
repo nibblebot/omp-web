@@ -411,7 +411,7 @@ button.stop:not(:disabled):hover {
 .autocomplete-label {
 	color: var(--accent);
 	font-family: var(--font-mono);
-	font-size: var(--fs-md);
+	font-size: var(--fs-sm);
 	white-space: nowrap;
 }
 .autocomplete-detail {
@@ -458,6 +458,7 @@ button.stop:not(:disabled):hover {
 .msg-notice-echo {
 	color: var(--accent);
 	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
 }
 .history-popover-list {
 	display: flex;
