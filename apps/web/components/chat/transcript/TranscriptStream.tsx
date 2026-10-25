@@ -1,4 +1,15 @@
-import { createMemo, For, Match, Show, Switch, type Component, type JSX } from "solid-js";
+import {
+	createComputed,
+	createEffect,
+	createMemo,
+	For,
+	Match,
+	on,
+	Show,
+	Switch,
+	type Component,
+	type JSX,
+} from "solid-js";
 import { openLightbox, state, type ChatItem } from "../../../state";
 import { ArrowDownIcon } from "../../ui/icons";
 import { ToolCard } from "../tools/ToolCard";
@@ -8,12 +19,18 @@ import {
 	hideThinkingBlock,
 	hideToolActivity,
 	proseOnlyThinking,
-	shimmerMode,
 	showTokenUsage,
 	showTurnTime,
 } from "../../../chat/display-prefs";
 import { buildTurnMeta } from "../../../chat/turn-usage";
 import { buildWaitRuns, type WaitRun } from "../../../chat/wait-runs";
+import { transcriptItemsFor } from "../../../chat/activity-cards";
+import {
+	captureScrollAnchors,
+	restoreScrollAnchor,
+	type ScrollAnchor,
+} from "../../../chat/scroll-anchor";
+import { isActivitiesOpen } from "../../../store/activities";
 import { useStickyScroll } from "./useStickyScroll";
 import { StreamingBlock } from "./StreamingBlock";
 import {
@@ -73,15 +90,59 @@ export const TranscriptStream: Component<{
 					turnMeta: turnMeta(),
 				}),
 	);
+	// The main transcript drops the cards the open Activities panel shows
+	// instead. Runs and turn metadata above stay computed on the full list.
+	// A subagent's own stream (inside the panel's detail) keeps all its cards.
+	const shownItems = createMemo(() =>
+		transcriptItemsFor(props.items, session() && isActivitiesOpen()),
+	);
+	// An unpinned viewport keeps its on-screen content where it is while cards
+	// above it hide or return: capture before the list's DOM changes (a computed
+	// runs before render effects), restore once it has (a user effect runs after).
+	// A pinned viewport needs nothing: the sticky-scroll observer re-snaps it.
+	let scroller!: HTMLDivElement;
+	let content!: HTMLDivElement;
+	let anchors: ScrollAnchor[] = [];
+	createComputed(
+		on(
+			shownItems,
+			() => {
+				anchors = jumpVisible() ? captureScrollAnchors(scroller, content.children) : [];
+			},
+			{ defer: true },
+		),
+	);
+	createEffect(
+		on(
+			shownItems,
+			() => {
+				restoreScrollAnchor(scroller, anchors);
+				anchors = [];
+			},
+			{ defer: true },
+		),
+	);
 	return (
 		<div class={props.class ? `chat-transcript-wrap ${props.class}` : "chat-transcript-wrap"}>
-			<div class="chat-transcript" ref={containerRef}>
+			<div
+				class="chat-transcript"
+				ref={(el) => {
+					scroller = el;
+					containerRef(el);
+				}}
+			>
 				{/* Observed by useStickyScroll's ResizeObserver: any growth here
 				    (streamed text, tool output, mode switches, run toggles, image
 				    decodes) re-pins a pinned viewport. The zoom overlay stays
 				    outside since it's position:fixed and must not count as content. */}
-				<div class="chat-transcript-content" ref={contentRef}>
-					<For each={props.items}>
+				<div
+					class="chat-transcript-content"
+					ref={(el) => {
+						content = el;
+						contentRef(el);
+					}}
+				>
+					<For each={shownItems()}>
 						{(item, index) => (
 							<Switch>
 								<Match when={item.kind === "user" && item}>
@@ -149,15 +210,6 @@ export const TranscriptStream: Component<{
 									)
 								}
 							</For>
-						</div>
-					</Show>
-					{/* In-progress shimmer: spans the whole agent turn (tool gaps included),
-		    not just the live message card. Label tracks the latest tool-call
-		    intent like the TUI working message; the TUI's default phrase
-		    ("Working…") applies until the first intent lands. */}
-					<Show when={session() && state.streaming}>
-						<div class="live-shimmer" data-shimmer={shimmerMode()} aria-hidden="true">
-							<span class="shimmer-text">{state.workingIntent ?? "Working…"}</span>
 						</div>
 					</Show>
 					{props.children}

@@ -1,6 +1,6 @@
 import { Show, type Component } from "solid-js";
 import type { RosterEntry } from "#lib/wire/protocol";
-import { formatDaemonUptime } from "../../../fleet-ui/session-ui";
+import { formatUptime } from "../../../text/uptime";
 import { SessionLog } from "./SessionLog";
 import { Modal } from "../../ui/Modal";
 import type { DetailedRosterEntry } from "../sidebar/WorkspaceRow";
@@ -52,7 +52,7 @@ export const SessionDetailsDialog: Component<{ session: RosterEntry; onClose: ()
 				<Show when={alive() && d().uptime !== undefined}>
 					<div class="session-detail-fact">
 						<span class="session-detail-label">uptime</span>
-						<span class="session-detail-value">{formatDaemonUptime((d().uptime ?? 0) * 1000)}</span>
+						<span class="session-detail-value">{formatUptime((d().uptime ?? 0) * 1000)}</span>
 					</div>
 				</Show>
 				<Show when={alive() && d().pid !== undefined}>

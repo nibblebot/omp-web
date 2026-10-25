@@ -4,8 +4,16 @@ import { assistantBlocks } from "../../../../web/store/chat";
 import { answerCalls } from "../../../session";
 import { screenItems, screenSessionSeed } from "../../../fixtures/screen";
 import { subagentTranscriptItems } from "../../../fixtures/subagents";
-import { waitJobDetail, waitRunItems } from "../../../fixtures/tools";
+import {
+	bashDoneTool,
+	taskDoneTool,
+	todoArgsTool,
+	waitJobDetail,
+	waitRunItems,
+} from "../../../fixtures/tools";
 import { defineStory } from "../../../registry";
+import { closeDock } from "../../../../web/store/dock";
+import { openActivities } from "../../../../web/store/activities";
 
 const idleLive = { active: false, blocks: [], rev: 0 };
 
@@ -34,6 +42,45 @@ const narrationItems: ChatItem[] = [
 			{ type: "text", text: "Renamed `fetchUser` to `loadUser` in all 4 callers." },
 		]),
 	},
+];
+
+/**
+ * One turn mixing visible cards (a short bash call, assistant replies) with every card the open
+ * Activities panel hides: a task, a todo update, a backgrounded bash call and a wait run.
+ */
+const activityCardItems: ChatItem[] = [
+	{ kind: "user", id: 9300, text: "Plan the migration, build in the background and wait for it." },
+	{
+		kind: "assistant",
+		id: 9301,
+		blocks: [{ kind: "text", text: "Checking the tree, then splitting the work." }],
+	},
+	{ ...bashDoneTool, id: 9302, toolCallId: "call_ac_status" },
+	{ ...todoArgsTool, id: 9303, toolCallId: "call_ac_todo" },
+	{ ...taskDoneTool, id: 9304, toolCallId: "call_ac_task" },
+	{
+		kind: "assistant",
+		id: 9305,
+		blocks: [{ kind: "text", text: "Agents finished; starting the build in the background." }],
+	},
+	{
+		kind: "tool",
+		id: 9306,
+		toolCallId: "call_ac_bash_bg",
+		name: "bash",
+		args: { command: "bun run build:web", async: true },
+		status: "done",
+		output: "Started background job bg_build.",
+		details: { async: { state: "running", jobId: "bg_build", type: "bash" } },
+		background: {
+			jobId: "bg_build",
+			type: "bash",
+			state: "running",
+			jobIds: ["bg_build"],
+			startedAt: Date.now() - 90_000,
+		},
+	},
+	...waitRunItems.slice(3).map((item, index) => ({ ...item, id: 9310 + index })),
 ];
 
 export default defineStory({
@@ -106,6 +153,28 @@ export default defineStory({
 			render: () => (
 				<div class="ds-frame ds-frame-tall ds-frame-column">
 					<TranscriptStream items={waitRunItems} variant="session" />
+				</div>
+			),
+		},
+		{
+			name: "Session: Activities panel open",
+			description:
+				"With the Activities panel open the main transcript hides the cards it shows as sections: the task call, the todo update, the backgrounded bash call and the whole wait run. The short bash call and the messages stay. Close restores them in place; the stream keeps its scroll position.",
+			seed: () => {
+				answerCalls({ getJobDetail: () => structuredClone(waitJobDetail) });
+				openActivities();
+			},
+			render: () => (
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<div class="review-actions">
+						<button type="button" onClick={() => openActivities()}>
+							Open Activities
+						</button>
+						<button type="button" onClick={closeDock}>
+							Close
+						</button>
+					</div>
+					<TranscriptStream items={activityCardItems} variant="session" />
 				</div>
 			),
 		},

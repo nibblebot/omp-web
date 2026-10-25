@@ -106,7 +106,7 @@ export default defineStory({
 		{
 			name: "Failed, opened",
 			description:
-				"A non-zero exit shows in the error tone. Opened, the row adds the output tail the session answers with, and the Open in jobs action; the jump arrow scrolls to the card that started the job.",
+				"A non-zero exit shows in the error tone. Opened, the row adds the output tail the session answers with, and the Open in Activities action; the jump arrow scrolls to the card that started the job.",
 			seed: () => answerCalls({ getJobDetail: () => structuredClone(waitJobDetail) }),
 			render: () => (
 				<div class="ds-frame">

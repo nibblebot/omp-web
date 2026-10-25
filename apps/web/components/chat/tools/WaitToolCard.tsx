@@ -13,7 +13,7 @@ import { jumpToToolCard } from "../../../chat/tool-jump";
 import { waitCounts, type WaitAgent } from "../../../chat/wait-details";
 import { mergeWaitRun, waitMarksText, waitSummary } from "../../../chat/wait-runs";
 import type { ChatItem, ToolItem } from "../../../state";
-import { openJobsSheet } from "../../../store/jobs";
+import { openActivities } from "../../../store/activities";
 import { formatDuration } from "../../../subagents/format";
 import { CollapsibleOutput, ToolCallIdContext, ToolCardShell } from "./ToolCardShell";
 import { WaitJobRow } from "./WaitJobRow";
@@ -217,8 +217,12 @@ export const WaitToolCard: Component<{
 							</For>
 						</ul>
 						<Show when={hidden() > 0}>
-							<button type="button" class="wait-more" onClick={() => openJobsSheet()}>
-								{`+${hidden()} more ${hidden() === 1 ? "job" : "jobs"}, open the jobs list`}
+							<button
+								type="button"
+								class="wait-more"
+								onClick={() => openActivities({ section: "jobs" })}
+							>
+								{`+${hidden()} more ${hidden() === 1 ? "job" : "jobs"}, open Activities`}
 							</button>
 						</Show>
 					</Show>

@@ -29,6 +29,19 @@ export default defineStory({
 			),
 		},
 		{
+			name: "Own running job with Cancel",
+			description:
+				"The detail view of the Activities panel passes onCancel: this session's own running job gets Cancel (two clicks) in the header, right-aligned. A job it does not own, or a settled one, has none.",
+			render: () => (
+				<JobDetail
+					job={jobOf(JOB_IDS.devServer)}
+					detail={jobDetails[JOB_IDS.devServer]}
+					now={NOW}
+					onCancel={() => undefined}
+				/>
+			),
+		},
+		{
 			name: "Widget still being authored",
 			description: "The basic widget shows while the model writes the spec.",
 			render: () => (

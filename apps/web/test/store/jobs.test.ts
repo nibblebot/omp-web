@@ -1,6 +1,7 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { JobDetailDto, JobDto, JobTreeDto } from "#lib/wire/protocol";
 import * as transport from "../../store/transport";
+import { installLocalStorageShim, restoreBrowserGlobals } from "../web.testkit";
 
 // The transport is mocked per test; the store module is imported after the mock so it binds to it.
 let handler: (method: string, args: unknown[]) => Promise<unknown> = async () => undefined;
@@ -17,12 +18,13 @@ afterAll(() => {
 
 // Dynamic imports: the transport mock must be registered before the store module binds to it.
 const jobs = await import("../../store/jobs");
+const activities = await import("../../store/activities");
+const { restoreDockLayout } = await import("../../store/dock");
 const poll = await import("../../store/job-poll");
 const { clearJobWidgets } = await import("../../store/job-widgets");
 const { setState, state } = await import("../../state");
 const originalSession = state.currentWorkspaceId;
 const originalConnected = state.connected;
-const originalModal = state.modal;
 
 const place = { depth: 0, rails: [] as boolean[], last: true, parent: false };
 const job = (id: string, over: Partial<JobDto> = {}): JobDto => ({
@@ -55,10 +57,14 @@ const answer = (answers: Record<string, unknown>) => {
 	};
 };
 
-let stop: (() => void) | undefined;
+const releases: Array<() => void> = [];
+const watch = (jobId: string) => {
+	const release = jobs.watchJobDetail(jobId);
+	releases.push(release);
+	return release;
+};
 beforeEach(async () => {
-	stop?.();
-	stop = undefined;
+	for (const release of releases.splice(0)) release();
 	calls = [];
 	// Detach, then attach: the previous test's tree and poll state are gone, and the poll itself stays
 	// quiet (the connection is down) so only the calls a test makes show.
@@ -67,46 +73,20 @@ beforeEach(async () => {
 	clearJobWidgets();
 	await settle();
 	setState("currentWorkspaceId", "sess-a");
-	jobs.selectJob(null);
 });
 afterAll(() => {
-	stop?.();
+	for (const release of releases.splice(0)) release();
 	setState("currentWorkspaceId", originalSession);
 	setState("connected", originalConnected);
-	setState("modal", originalModal);
 });
 
 describe("jobs tree", () => {
-	test("loads the session's job tree and reports when the session has no job manager", async () => {
-		answer({ getJobTree: treeOf(job("a"), job("b", { status: "completed", endTime: 4000 })) });
-		expect(jobs.jobsView()).toBe("loading");
-		await jobs.refreshJobs();
-		expect(jobs.jobsView()).toBe("ready");
-		expect(jobs.jobList().map((j) => j.id)).toEqual(["a", "b"]);
-
-		answer({ getJobTree: null });
-		await jobs.refreshJobs();
-		expect(jobs.jobsView()).toBe("unavailable");
-		expect(jobs.jobRows()).toEqual([]);
-	});
-
-	test("an answer for a session the page has left never shows", async () => {
-		const pending = held<JobTreeDto>();
-		handler = () => pending.promise;
-		const refreshing = jobs.refreshJobs();
-		setState("currentWorkspaceId", "sess-b");
-		pending.resolve(treeOf(job("old")));
-		await refreshing;
-		expect(jobs.jobsView()).toBe("loading");
-		expect(jobs.jobList()).toEqual([]);
-	});
-
-	test("a failed refresh shows its error and the next good one clears it", async () => {
+	test("a failed poll shows its error and the next good one clears it", async () => {
 		answer({ getJobTree: new Error("socket closed") });
-		await jobs.refreshJobs();
+		await poll.refreshJobTree();
 		expect(jobs.jobsError()).toBe("socket closed");
 		answer({ getJobTree: treeOf(job("a")) });
-		await jobs.refreshJobs();
+		await poll.refreshJobTree();
 		expect(jobs.jobsError()).toBeNull();
 	});
 
@@ -119,40 +99,91 @@ describe("jobs tree", () => {
 	});
 });
 
-describe("selected job", () => {
+describe("a watched job's detail", () => {
 	const detail: JobDetailDto = { pids: [42], command: "sleep 9", output: "tick" };
+	const detailCalls = () => calls.filter((c) => c.method === "getJobDetail").length;
 
-	test("selecting a job fetches its inspection, and each refresh updates it", async () => {
+	test("loads at once and reloads with each tree answer while the job runs", async () => {
 		answer({ getJobTree: treeOf(job("a")), getJobDetail: detail });
-		await jobs.refreshJobs();
-		jobs.selectJob("a");
-		expect(jobs.selectedJobDetail()).toBeUndefined();
+		await poll.refreshJobTree();
+		watch("a");
+		expect(jobs.jobDetailOf("a")).toBeUndefined();
 		await settle();
 		expect(calls.at(-1)).toEqual({ method: "getJobDetail", args: ["a"] });
-		expect(jobs.selectedJobDetail()).toEqual(detail);
+		expect(jobs.jobDetailOf("a")).toEqual(detail);
 
 		answer({ getJobTree: treeOf(job("a")), getJobDetail: { ...detail, output: "tock" } });
-		await jobs.refreshJobs();
-		expect(jobs.selectedJobDetail()?.output).toBe("tock");
+		await poll.refreshJobTree();
+		expect(jobs.jobDetailOf("a")?.output).toBe("tock");
 	});
 
-	test("a job that leaves the list drops the selection", async () => {
+	test("a job that settles is read once more, then left alone", async () => {
 		answer({ getJobTree: treeOf(job("a")), getJobDetail: detail });
-		await jobs.refreshJobs();
-		jobs.selectJob("a");
+		await poll.refreshJobTree();
+		watch("a");
 		await settle();
-		answer({ getJobTree: treeOf(job("b")) });
-		await jobs.refreshJobs();
-		expect(jobs.selectedJobId()).toBeNull();
-		expect(jobs.selectedJob()).toBeUndefined();
+		const done = job("a", { status: "completed", endTime: 3000 });
+		answer({ getJobTree: treeOf(done), getJobDetail: { ...detail, exitCode: 0, output: "bye" } });
+		await poll.refreshJobTree();
+		expect(jobs.jobDetailOf("a")?.output).toBe("bye");
+
+		const before = detailCalls();
+		await poll.refreshJobTree();
+		expect(detailCalls()).toBe(before);
 	});
 
 	test("a job the session no longer inspects reads as gone", async () => {
 		answer({ getJobTree: treeOf(job("a")), getJobDetail: null });
-		await jobs.refreshJobs();
-		jobs.selectJob("a");
+		await poll.refreshJobTree();
+		watch("a");
 		await settle();
-		expect(jobs.selectedJobDetail()).toBeNull();
+		expect(jobs.jobDetailOf("a")).toBeNull();
+	});
+
+	test("a job the tree does not list yet keeps what it has, so a poll asked before it started cannot drop it", async () => {
+		answer({ getJobTree: treeOf(job("other")), getJobDetail: detail });
+		await poll.refreshJobTree();
+		watch("a");
+		await settle();
+		const before = detailCalls();
+		await poll.refreshJobTree();
+		expect(detailCalls()).toBe(before);
+		expect(jobs.jobDetailOf("a")).toEqual(detail);
+	});
+
+	test("two surfaces share one fetch, and the last release forgets the job", async () => {
+		answer({ getJobTree: treeOf(job("a")), getJobDetail: detail });
+		await poll.refreshJobTree();
+		const first = watch("a");
+		const second = watch("a");
+		await settle();
+		expect(detailCalls()).toBe(1);
+		first();
+		first();
+		expect(jobs.jobDetailOf("a")).toEqual(detail);
+		second();
+		expect(jobs.jobDetailOf("a")).toBeUndefined();
+	});
+
+	test("a detail asked for another workspace never shows", async () => {
+		const pending = held<JobDetailDto>();
+		handler = () => pending.promise;
+		watch("a");
+		setState("currentWorkspaceId", "sess-b");
+		pending.resolve(detail);
+		await settle();
+		expect(jobs.jobDetailOf("a")).toBeUndefined();
+	});
+
+	test("a failed read shows its error, and the next good one clears it", async () => {
+		answer({ getJobTree: treeOf(job("a")), getJobDetail: new Error("session busy") });
+		await poll.refreshJobTree();
+		watch("a");
+		await settle();
+		expect(jobs.jobsError()).toBe("session busy");
+		answer({ getJobTree: treeOf(job("a")), getJobDetail: detail });
+		await poll.refreshJobTree();
+		expect(jobs.jobsError()).toBeNull();
 	});
 });
 
@@ -171,14 +202,14 @@ describe("cancelling an own job", () => {
 			}
 			return tree;
 		};
-		await jobs.refreshJobs();
+		await poll.refreshJobTree();
 		const cancel = jobs.cancelOwnJob("a");
 		expect(jobs.cancellingJobId()).toBe("a");
 		cancelling.resolve(undefined);
 		await cancel;
 		expect(jobs.cancellingJobId()).toBeNull();
 		expect(calls.map((c) => c.method)).toEqual(["getJobTree", "cancelJob", "getJobTree"]);
-		expect(jobs.jobList()[0]?.status).toBe("cancelled");
+		expect(poll.jobTreeRows()[0]).toMatchObject({ job: { status: "cancelled" } });
 	});
 
 	test("a refusal shows until the next cancel, and the tree still reloads", async () => {
@@ -191,95 +222,29 @@ describe("cancelling an own job", () => {
 		await jobs.cancelOwnJob("a");
 		expect(jobs.jobCancelError()).toContain("belongs to Explorer");
 		expect(jobs.jobsError()).toBeNull();
-		expect(jobs.jobList().map((j) => j.id)).toEqual(["a"]);
+		expect(poll.jobTreeRows()).toHaveLength(1);
 
 		answer({ getJobTree: treeOf(job("a")), cancelJob: { cancelled: true } });
 		await jobs.cancelOwnJob("a");
 		expect(jobs.jobCancelError()).toBeNull();
 	});
-});
 
-describe("polling", () => {
-	test("loads at once, and stopping forgets the selection and errors but not the shared tree", async () => {
-		answer({ getJobTree: treeOf(job("a")), getJobDetail: { pids: [] } });
-		stop = jobs.startJobsPolling();
-		await settle();
-		expect(jobs.jobsView()).toBe("ready");
-		jobs.selectJob("a");
-		stop();
-		stop = undefined;
-		expect(jobs.selectedJobId()).toBeNull();
-		expect(jobs.jobsError()).toBeNull();
-		expect(poll.jobPollView().phase).toBe("ready");
-	});
-});
-
-describe("opening the sheet", () => {
-	const detail: JobDetailDto = { pids: [], command: "sleep 9", output: "tick" };
-
-	test("opens the modal, and with a job preselects it once the tree lists it", async () => {
-		answer({ getJobTree: treeOf(job("a"), job("b")), getJobDetail: detail });
-		setState("modal", null);
-		jobs.openJobsSheet("b");
-		expect(state.modal).toBe("jobs");
-		expect(jobs.selectedJobId()).toBe("b");
-		await settle();
-		expect(jobs.selectedJobDetail()).toEqual(detail);
-
-		// The sheet's polling then loads the tree: the row exists and stays selected.
-		stop = jobs.startJobsPolling();
-		await settle();
-		expect(jobs.selectedJob()?.id).toBe("b");
-		expect(jobs.selectedJobId()).toBe("b");
-	});
-
-	test("without a job it only opens the modal and leaves the selection alone", () => {
-		answer({ getJobTree: treeOf(job("a")), getJobDetail: detail });
-		setState("modal", null);
-		jobs.selectJob("a");
-		jobs.openJobsSheet();
-		expect(state.modal).toBe("jobs");
-		expect(jobs.selectedJobId()).toBe("a");
-	});
-
-	test("an open sheet switches to the asked job", async () => {
-		answer({ getJobTree: treeOf(job("a"), job("b")), getJobDetail: detail });
-		stop = jobs.startJobsPolling();
-		await settle();
-		jobs.selectJob("a");
-		jobs.openJobsSheet("b");
-		await settle();
-		expect(jobs.selectedJobId()).toBe("b");
-		expect(jobs.selectedJob()?.id).toBe("b");
-	});
-
-	test("a job the tree no longer lists ends up unselected", async () => {
-		answer({ getJobTree: treeOf(job("a")), getJobDetail: null });
-		jobs.openJobsSheet("gone");
-		await jobs.refreshJobs();
-		expect(jobs.selectedJobId()).toBeNull();
-	});
-
-	test("a tree requested before the selection cannot drop it", async () => {
-		const pending = held<JobTreeDto>();
-		handler = () => pending.promise;
-		const refreshing = jobs.refreshJobs();
-		jobs.openJobsSheet("late");
-		pending.resolve(treeOf(job("a")));
-		await refreshing;
-		expect(jobs.selectedJobId()).toBe("late");
+	test("the surface that showed a refusal can clear it", async () => {
+		answer({ getJobTree: treeOf(job("a")), cancelJob: new Error("refused") });
+		await jobs.cancelOwnJob("a");
+		jobs.clearJobCancelError();
+		expect(jobs.jobCancelError()).toBeNull();
 	});
 });
 
 describe("fetching one job's detail", () => {
 	const detail: JobDetailDto = { pids: [], command: "make", output: "ok" };
 
-	test("returns the inspection without touching the sheet's selection", async () => {
+	test("returns the inspection without watching the job", async () => {
 		answer({ getJobDetail: detail });
-		jobs.selectJob(null);
 		expect(await jobs.fetchJobDetail("a")).toEqual(detail);
 		expect(calls.at(-1)).toEqual({ method: "getJobDetail", args: ["a"] });
-		expect(jobs.selectedJobId()).toBeNull();
+		expect(jobs.jobDetailOf("a")).toBeUndefined();
 	});
 
 	test("is null when the session no longer knows the job or the call fails", async () => {
@@ -297,5 +262,37 @@ describe("fetching one job's detail", () => {
 		setState("currentWorkspaceId", "sess-b");
 		pending.resolve(detail);
 		expect(await fetching).toBeNull();
+	});
+});
+
+describe("opening a job from outside the panel", () => {
+	beforeEach(() => {
+		installLocalStorageShim();
+		restoreDockLayout("__no-such-workspace__");
+	});
+	afterEach(() => {
+		restoreDockLayout("__no-such-workspace__");
+		restoreBrowserGlobals();
+	});
+
+	test("a wait card's job opens the panel on that job, in the saved mode", async () => {
+		answer({ getJobTree: treeOf(job("a"), job("b")), getJobDetail: { pids: [] } });
+		await poll.refreshJobTree();
+		activities.openActivities({ section: "jobs", item: { section: "jobs", id: "b" } });
+		expect(state.dock?.kind).toBe("activities");
+		expect(state.activities.expanded.jobs.has("b")).toBe(true);
+		expect(state.activities.expanded.jobs.has("a")).toBe(false);
+		expect(state.activities.focusRequest?.target).toEqual({ section: "jobs", id: "b" });
+
+		activities.setActivitiesMode("detail");
+		activities.openActivities({ section: "jobs", item: { section: "jobs", id: "a" } });
+		expect(state.activities.detail).toEqual({ section: "jobs", id: "a" });
+	});
+
+	test("a wait card's overflow control opens the Jobs section without choosing a job", () => {
+		activities.openActivities({ section: "jobs" });
+		expect(state.dock?.kind).toBe("activities");
+		expect(state.activities.focusRequest?.target).toBe("jobs");
+		expect(state.activities.detail).toBeUndefined();
 	});
 });

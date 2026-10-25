@@ -19,7 +19,6 @@ import { DeleteWorkspaceDialog } from "./components/fleet/workspaces/DeleteWorks
 import { RemoveProjectDialog } from "./components/fleet/workspaces/RemoveProjectDialog";
 import { SessionDetailsDialog } from "./components/fleet/session/SessionDetailsDialog";
 import { WorktreeSessionsDialog } from "./components/fleet/sidebar/WorktreeSessionsDialog";
-import { JobsSheet } from "./components/jobs/JobsSheet";
 import { ProviderLoginDialog } from "./components/models/ProviderLoginDialog";
 import { ModelPicker } from "./components/models/ModelPicker";
 import { ThinkingLevelPicker } from "./components/models/ThinkingLevelPicker";
@@ -111,7 +110,6 @@ export const ModalHost: Component = () => {
 		"plan-review": () => featureModalHost("plan-review"),
 		annotations: () => featureModalHost("annotations"),
 		todos: () => featureModalHost("todos"),
-		jobs: () => <JobsSheet onClose={close} />,
 		compaction: () => <CompactionDialog onClose={close} />,
 		share: () => <ShareSheet onClose={close} />,
 		btw: () => <BtwSheet onClose={close} />,

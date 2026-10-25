@@ -335,6 +335,30 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 	display: flex;
 	flex-direction: column;
 }
+/* The composer column's bottom edge for the activity bar: the strip sits at the frame's foot like it does
+ * above the composer, so its popovers have room above. `-top` puts it at the head instead. */
+.ds-frame-bar {
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+	height: 320px;
+}
+.ds-frame-bar-top {
+	justify-content: flex-start;
+}
+/* Popover story host: the anchor on one side of the frame. */
+.ds-popover-host {
+	align-items: flex-start;
+	padding: var(--space-5);
+}
+.ds-popover-host[data-x="end"] {
+	align-items: flex-end;
+}
+.ds-popover-note {
+	margin: 0;
+	padding: var(--space-4);
+	max-width: 30ch;
+}
 /* A dialog-body panel in a frame: the panel surface and padding the Modal would give it. */
 .ds-frame-panel {
 	padding: var(--space-5);

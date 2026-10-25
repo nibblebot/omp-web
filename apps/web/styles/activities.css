@@ -297,14 +297,607 @@
 	color: var(--accent);
 }
 
+/* Daemons section: one outlined list like the subagent tree; a row is the summary (toggle) and its
+   restart / kill. The expanded log sits under its row inside the same item. */
+.daemon-list {
+	display: grid;
+	margin: 0;
+	padding: 0;
+	min-width: 0;
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	overflow: hidden;
+	list-style: none;
+}
+
+.daemon-item {
+	min-width: 0;
+	border-top: 1px solid var(--border);
+}
+
+.daemon-item:first-child {
+	border-top: 0;
+}
+
+.daemon-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	min-width: 0;
+	padding-right: var(--space-3);
+}
+
+.daemon-row:hover {
+	background: var(--hover);
+}
+
+.daemon-row--open {
+	background: var(--hover);
+}
+
+.daemon-summary {
+	display: flex;
+	flex: 1 1 auto;
+	align-items: center;
+	gap: var(--space-3);
+	min-width: 0;
+	padding: var(--space-3) var(--space-4);
+	font-size: var(--fs-md);
+}
+
+.daemon-toggle {
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	font-size: var(--fs-md);
+	text-align: left;
+	cursor: pointer;
+}
+
+.daemon-toggle:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+.daemon-chevron {
+	display: inline-grid;
+	flex: none;
+	place-items: center;
+	color: var(--muted);
+}
+
+.daemon-glyph[data-state="ready"] {
+	color: var(--success);
+}
+
+.daemon-glyph[data-state="failed"],
+.daemon-glyph[data-state="exited"] {
+	color: var(--error);
+}
+
+.daemon-glyph[data-state="starting"],
+.daemon-glyph[data-state="running"],
+.daemon-glyph[data-state="restarting"] {
+	color: var(--warning);
+}
+
+.daemon-glyph[data-state="stopping"] {
+	color: var(--muted-2);
+}
+
+/* Row priority when narrow: the name keeps a readable minimum, the endpoint and uptime give way
+   first, and the actions never shrink or clip. */
+.daemon-name {
+	flex: 0 1 auto;
+	min-width: min(10ch, 40%);
+	color: var(--accent);
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.daemon-glyph,
+.daemon-state {
+	flex: none;
+}
+
+.daemon-state {
+	color: var(--muted-2);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+}
+
+.daemon-port {
+	min-width: 0;
+	color: var(--success);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	font-variant-numeric: tabular-nums;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.daemon-uptime {
+	flex: 1 1 0;
+	min-width: 0;
+	margin-left: auto;
+	color: var(--muted);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	text-align: right;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.daemon-actions {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: var(--space-2);
+}
+
+.daemon-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: 1px var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	background: transparent;
+	color: var(--muted);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+
+.daemon-btn:hover {
+	border-color: var(--accent);
+	color: var(--text);
+}
+
+.daemon-btn:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.daemon-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.daemon-btn--kill:hover {
+	border-color: var(--error);
+	color: var(--error);
+}
+
+.daemon-log-bar {
+	position: sticky;
+	top: 0;
+	display: flex;
+	flex: none;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+	padding: var(--space-2) var(--space-4);
+	border-bottom: 1px solid var(--border);
+	background: var(--bg-deep);
+}
+
+.daemon-log-title {
+	color: var(--muted-3);
+	font-size: var(--fs-sm);
+	font-weight: 600;
+}
+
+.daemon-log-text {
+	margin: 0;
+	padding: var(--space-3) var(--space-4);
+	color: var(--text);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+.daemon-log-note,
+.daemon-log-error {
+	margin: 0;
+	padding: var(--space-3) var(--space-4);
+	font-size: var(--fs-sm);
+}
+
+.daemon-log-note {
+	color: var(--muted);
+}
+
+.daemon-log-error {
+	color: var(--error);
+}
+
+/* Todo section: the phased checklist (phase and item rules are shared with the Todo tool card, tools.css). */
+.todo-checklist {
+	padding: 0 var(--space-3) var(--space-2);
+}
+
+.todo-checklist .todo-phase-name {
+	margin-top: var(--space-2);
+}
+
+.todo-checklist .todo-item[data-status="completed"] .todo-text,
+.todo-checklist .todo-item[data-status="abandoned"] .todo-text {
+	color: var(--muted-2);
+	text-decoration: line-through;
+}
+
+.todo-checklist .todo-item[data-status="blocked"] .todo-text {
+	color: var(--error);
+}
+
+.todo-checklist .todo-text {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
 /* Narrow or touch: section toggles, the Back strip and the search box reach 44px. */
 @media (max-width: 768px), (pointer: coarse) {
 	.activity-section-toggle,
-	.activity-detail-back {
+	.activity-detail-back,
+	.daemon-summary,
+	.daemon-btn {
 		min-height: 44px;
 	}
 	.activity-search {
 		min-height: 44px;
 		font-size: max(1rem, 16px);
 	}
+}
+
+/* --- Activity bar (components/activities/ActivityBar.tsx): the status line above the composer ---
+   Left the progress text, right one button per section with items. Enter/exit (presence): the grid
+   track animates the height 0fr <-> 1fr, the clip holds the row while collapsed, the shell fades and
+   slides 4px. Movement uses the move tokens, the fade the plain ones. data-motion enter/exit = hidden. */
+.activity-bar {
+	display: grid;
+	grid-template-rows: 1fr;
+	min-width: 0;
+	opacity: 1;
+	transform: none;
+	transition:
+		grid-template-rows var(--dur-move-base) var(--ease-out),
+		transform var(--dur-move-base) var(--ease-out),
+		opacity var(--dur-base) var(--ease-out);
+}
+
+.activity-bar[data-motion="enter"],
+.activity-bar[data-motion="exit"] {
+	grid-template-rows: 0fr;
+	opacity: 0;
+	transform: translateY(4px);
+	pointer-events: none;
+}
+
+.activity-bar-clip {
+	min-height: 0;
+	min-width: 0;
+	overflow: hidden;
+}
+
+/* A settled bar must not clip a button's focus ring; the clip lifts once the expand finishes. */
+.activity-bar[data-motion="open"] > .activity-bar-clip {
+	overflow: visible;
+	transition: overflow 0s var(--dur-move-base) allow-discrete;
+}
+
+.activity-bar-body {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	min-width: 0;
+	padding-block: var(--space-3) var(--space-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.activity-bar[data-motion="enter"],
+	.activity-bar[data-motion="exit"] {
+		grid-template-rows: 1fr;
+		transform: none;
+	}
+}
+
+/* One line, ellipsis. The shimmer label keeps its own look (chat.css .shimmer-text, data-shimmer). */
+.activity-bar-status {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	font-size: var(--fs-md);
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.activity-bar-status[data-kind="working"] {
+	font-style: italic;
+}
+
+.activity-bar-buttons {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: var(--space-2);
+	margin-left: auto;
+}
+
+.activity-bar-button {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-3);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-pill);
+	background: var(--panel);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-sm);
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+}
+
+.activity-bar-button:hover,
+.activity-bar-button[data-open] {
+	background: var(--hover);
+}
+
+.activity-bar-button:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.activity-bar-icon {
+	flex: none;
+	width: 14px;
+	height: 14px;
+	color: var(--accent);
+}
+
+/* Everything in the section has settled: the same pill, quieter. */
+.activity-bar-button[data-muted] {
+	color: var(--muted);
+}
+
+.activity-bar-button[data-muted] .activity-bar-icon {
+	color: var(--muted-2);
+}
+
+/* --- Activity popovers (ActivityPopover.tsx over ui/Popover): a header with the popout icon, condensed rows, "+N more" --- */
+.activity-popover-head {
+	display: flex;
+	flex: none;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+	padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
+}
+
+.activity-popover-title {
+	font-weight: 600;
+}
+
+.activity-popover-popout {
+	display: inline-grid;
+	place-items: center;
+	padding: var(--space-2);
+	border: 0;
+	border-radius: var(--r-sm);
+	background: transparent;
+	color: var(--muted);
+	cursor: pointer;
+}
+
+.activity-popover-popout:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+.activity-popover-popout:focus-visible,
+.activity-popover-row:focus-visible,
+.activity-popover-more:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+.activity-popover-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
+.activity-popover-list {
+	display: grid;
+	margin: 0;
+	padding: 0 0 var(--space-2);
+	list-style: none;
+}
+
+/* Grid items default to their content width; a wide row must shrink to the popover instead of clipping. */
+.activity-popover-list > li {
+	min-width: 0;
+}
+
+/* A subagent/job row is a button; daemon rows are the shared DaemonRow in its compact form. */
+.activity-popover-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	width: 100%;
+	min-width: 0;
+	padding: var(--space-2) var(--space-4);
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.activity-popover-row:hover {
+	background: var(--hover);
+}
+
+.activity-popover-glyph {
+	display: inline-grid;
+	flex: none;
+	place-items: center;
+	color: var(--muted);
+}
+
+.activity-popover-glyph[data-status="running"] {
+	color: var(--accent);
+}
+
+.activity-popover-glyph[data-status="done"],
+.activity-popover-glyph[data-status="completed"] {
+	color: var(--success);
+}
+
+.activity-popover-glyph[data-status="failed"] {
+	color: var(--error);
+}
+
+.activity-popover-glyph[data-status="aborted"],
+.activity-popover-glyph[data-status="cancelled"],
+.activity-popover-glyph[data-status="parked"] {
+	color: var(--warning);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.activity-popover-glyph[data-status="running"] .icon {
+		animation: tool-spin var(--dur-spin) linear infinite;
+	}
+}
+
+.activity-popover-name {
+	flex: 0 1 auto;
+	min-width: min(8ch, 40%);
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.activity-popover-detail {
+	flex: 1 1 0;
+	min-width: 0;
+	color: var(--muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.activity-popover-state {
+	flex: none;
+	color: var(--muted-2);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+}
+
+.activity-popover-more {
+	flex: none;
+	padding: var(--space-3) var(--space-4);
+	border: 0;
+	border-top: 1px solid var(--border);
+	background: transparent;
+	color: var(--accent);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.activity-popover-more:hover {
+	background: var(--hover);
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+	.activity-bar-button,
+	.activity-popover-popout,
+	.activity-popover-row,
+	.activity-popover-more {
+		min-height: 44px;
+	}
+}
+
+/* Jobs section: one flat list of job rows (components/jobs/JobRow). An open row takes the accent outline
+   of an open subagent row, with its detail in `.activity-item-body` under it. */
+.activity-job-list {
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.activity-job-item {
+	min-width: 0;
+	border-top: 1px solid var(--border);
+}
+
+.activity-job-item:first-child {
+	border-top: 0;
+}
+
+/* The open item is one outlined box (row, its Cancel, and the body), so the body lines up with the row. */
+.activity-job-item[data-open] {
+	position: relative;
+	z-index: 1;
+	border: 1px solid var(--accent);
+	border-radius: var(--r-md);
+	background: var(--hover);
+}
+
+.activity-job-item[data-open] > .job-row > .job-row-main {
+	border-color: transparent;
+	background: transparent;
+}
+
+.activity-job-item[data-open] > .activity-item-body {
+	border: 0;
+	border-top: 1px solid var(--border);
+	border-radius: 0 0 var(--r-md) var(--r-md);
+	background: var(--bg);
+}
+
+/* Inside an open body the detail is plain content: the body scrolls it. */
+.activity-item-body .job-detail {
+	padding: var(--space-4);
+	border-top: 0;
+	overflow: visible;
+}
+
+.activity-item-body > .job-detail-note {
+	margin: 0;
+	padding: var(--space-4);
+}
+
+.job-detail-head .job-cancel {
+	margin-left: auto;
+}
+
+/* Detail mode: the job fills the body under the Back strip and scrolls with it. */
+.activity-detail-body > .job-detail {
+	flex: 1 1 auto;
+	padding: var(--space-5);
+	border-top: 0;
+}
+
+.activity-detail-body > .jobs-error,
+.activity-detail-body > .job-detail-note {
+	margin: var(--space-4) var(--space-5) 0;
+}
+
+.activity-detail-body .job-command,
+.activity-detail-body .job-output {
+	max-height: none;
 }

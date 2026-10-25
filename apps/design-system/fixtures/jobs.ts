@@ -8,7 +8,8 @@ import type {
 	JobTreeRowDto,
 	WireJobWidgetView,
 } from "#lib/wire/protocol";
-import type { CallHandlers } from "../session";
+import { refreshJobTree } from "../../web/store/job-poll";
+import { addCalls, type CallHandlers } from "../session";
 import { authoringWidget, benchWidget, blockWidgets, subagentWidget } from "./job-widgets";
 
 const SECOND = 1000;
@@ -310,4 +311,15 @@ export function jobCalls(options: JobCallOptions = {}): CallHandlers {
 			return { cancelled: true };
 		},
 	};
+}
+
+/**
+ * Answer the job calls beside the handlers a story already installed and ask for the tree now, as the
+ * app does when a workspace attaches (the shared poll then keeps it fresh). The workspace must be set.
+ */
+export function seedJobs(options: JobCallOptions = {}): void {
+	addCalls(jobCalls(options));
+	// Seeds run in one batch that may re-run (a variant re-seeds); ask once they have settled, so the
+	// call meets the final handlers and not a set a later reset clears.
+	setTimeout(() => void refreshJobTree(), 0);
 }

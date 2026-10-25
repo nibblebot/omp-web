@@ -109,6 +109,12 @@ export function answerCalls(next: CallHandlers): void {
 	ensureStoryLink();
 }
 
+/** Answer these `call()` methods in addition to the handlers already installed (a later one for the same method wins). */
+export function addCalls(next: CallHandlers): void {
+	calls = { ...calls, ...next };
+	ensureStoryLink();
+}
+
 /** Answer these plain command types (run after a short delay, like a frame arriving). */
 export function answerCommands(next: CommandHandlers): void {
 	commands = next;
@@ -178,6 +184,12 @@ const fleet: Fleet = {
 			const handler = calls[cmd.method];
 			if (handler !== undefined) {
 				answerCall(cmd, handler, answer);
+				return null;
+			}
+			// The shared job poll asks whenever a workspace is attached: a session a story gave no job
+			// fixture has no async job manager, which is the answer `getJobTree` gives then.
+			if (cmd.method === "getJobTree") {
+				answerCall(cmd, () => null, answer);
 				return null;
 			}
 		} else {

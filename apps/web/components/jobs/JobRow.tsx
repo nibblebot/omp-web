@@ -40,6 +40,9 @@ export const JobRow: Component<{
 	/** Epoch ms the running jobs count their run time up to. */
 	now: number;
 	selected?: boolean;
+	/** The row opens a body under it (Activities accordion): it reports `aria-expanded` and names the body it controls. */
+	expanded?: boolean;
+	controlsId?: string;
 	/** Cancel for this job is in flight. */
 	cancelling?: boolean;
 	onSelect?: (jobId: string) => void;
@@ -85,7 +88,9 @@ export const JobRow: Component<{
 						<button
 							type="button"
 							class="job-row-main"
-							aria-current={props.selected ? "true" : undefined}
+							aria-current={props.expanded === undefined && props.selected ? "true" : undefined}
+							aria-expanded={props.expanded}
+							aria-controls={props.expanded ? props.controlsId : undefined}
 							onClick={() => props.onSelect?.(current().id)}
 						>
 							<span class="job-status" data-status={current().status}>

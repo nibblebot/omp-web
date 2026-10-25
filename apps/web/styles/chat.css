@@ -44,11 +44,11 @@
 }
 /* Each item skips layout/paint while far off-screen (auto size remembers the last
    measured height). Paint containment clips an item to its box, so nothing inside
-   may poke out of it (see .msg-toolbar); the live turn and its shimmer sit at the
-   stream's end and stay uncontained. The clip margin leaves room for the global
+   may poke out of it (see .msg-toolbar); the live turn sits at the
+   stream's end and stays uncontained. The clip margin leaves room for the global
    focus ring (2px + 1px offset) of controls near the edge, where the browser
    supports it; summaries flush with the edge also draw their ring inside. */
-.chat-transcript-content > :not(.live, .live-shimmer) {
+.chat-transcript-content > :not(.live) {
 	content-visibility: auto;
 	contain-intrinsic-size: auto 130px;
 	overflow-clip-margin: 4px;
@@ -374,18 +374,9 @@
 .msg-assistant.live {
 	opacity: 0.95;
 }
-/* In-progress shimmer under the stream: a highlight band sweeping across the
-   label via a moving background gradient clipped to the glyphs. The band is
+/* Shimmer text (the activity bar's progress label, activity-bar-status): a highlight band sweeping
+   across the label via a moving background gradient clipped to the glyphs. The band is
    --shimmer-band, which each palette keeps legible against --muted-2. */
-.live-shimmer {
-	align-self: stretch;
-	padding: var(--space-1) var(--space-5) var(--space-2);
-	/* Body-size and semibold: the working label is the turn's primary status,
-	   not a caption; this matches the TUI's bold-crest shimmer emphasis. */
-	font-size: var(--fs-base);
-	font-weight: 600;
-	font-style: italic;
-}
 .shimmer-text {
 	background: linear-gradient(
 		100deg,

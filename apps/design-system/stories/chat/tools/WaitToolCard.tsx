@@ -64,7 +64,7 @@ export default defineStory({
 		{
 			name: "Many jobs, eight rows",
 			description:
-				"Eleven watched jobs: eight rows, then a +3 more control that opens the jobs list. A row you open stays visible.",
+				"Eleven watched jobs: eight rows, then a +3 more control that opens the Jobs section of the Activities panel. A row you open stays visible.",
 			render: () => <WaitToolCard calls={[waitManyTool]} />,
 		},
 		{

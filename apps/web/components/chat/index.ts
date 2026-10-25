@@ -4,7 +4,6 @@ export { Transcript } from "./transcript/Transcript";
 export { ToolCardsMenu } from "./transcript/ToolCardsMenu";
 export { PromptBox } from "./composer/PromptBox";
 export { QueueBar } from "./composer/QueueBar";
-export { CompactionBar } from "./composer/CompactionBar";
 export { SessionConfigBar } from "./status/SessionConfigBar";
 export { SessionTitle } from "./status/SessionTitle";
 export { ToolCard } from "./tools/ToolCard";

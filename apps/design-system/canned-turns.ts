@@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { WireSessionEvent } from "#lib/wire/protocol";
 import { applyEvent, setState, state } from "../web/state";
+import { jobCalls } from "./fixtures/jobs";
 import { answerCalls } from "./session";
 import { type CannedStep, cannedTurn } from "./fixtures/canned-turn";
 
@@ -36,6 +37,7 @@ export function answerCannedTurns(): void {
 		return undefined;
 	};
 	answerCalls({
+		...jobCalls(),
 		prompt: accept,
 		steer: accept,
 		followUp: accept,

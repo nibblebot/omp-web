@@ -4,7 +4,8 @@ import { jobWidgetGlance } from "../../../chat/job-widget";
 import { jobTitle } from "../../../chat/wait-details";
 import { jobElapsedMs, type RunJob } from "../../../chat/wait-runs";
 import { jobWidgetView } from "../../../store/job-widgets";
-import { fetchJobDetail, openJobsSheet } from "../../../store/jobs";
+import { openActivities } from "../../../store/activities";
+import { fetchJobDetail } from "../../../store/jobs";
 import { formatDuration } from "../../../subagents/format";
 import { JobTypeIcon } from "../../jobs/JobTypeIcon";
 import { JobWidget, JobWidgetGlance } from "../../jobs/JobWidget";
@@ -73,6 +74,8 @@ function rowWidget(entry: RunJob): WireJobWidgetView | undefined {
 const WaitJobDetail: Component<{ entry: RunJob; onJump?: () => void }> = (props) => {
 	const [detail] = createResource(() => props.entry.job.id, fetchJobDetail);
 	const widget = () => rowWidget(props.entry) ?? detail()?.widget;
+	// A task job is a subagent (it carries the agent's id): the Jobs section lists the rest.
+	const section = () => (props.entry.job.type === "task" ? "subagents" : "jobs");
 	const output = () => {
 		const text = detail()?.output?.trimEnd();
 		if (!text) return undefined;
@@ -105,9 +108,14 @@ const WaitJobDetail: Component<{ entry: RunJob; onJump?: () => void }> = (props)
 				<button
 					type="button"
 					class="wait-job-action"
-					onClick={() => openJobsSheet(props.entry.job.id)}
+					onClick={() =>
+						openActivities({
+							section: section(),
+							item: { section: section(), id: props.entry.job.id },
+						})
+					}
 				>
-					Open in jobs
+					Open in Activities
 				</button>
 				<Show when={props.onJump}>
 					{(jump) => (

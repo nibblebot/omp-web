@@ -68,6 +68,17 @@ export default defineStory({
 			render: () => <JobRow row={rowOf(JOB_IDS.devServer)} now={NOW} selected />,
 		},
 		{
+			name: "Expanded",
+			description:
+				"An accordion row with its body open reports aria-expanded true (and names the body it controls) in place of aria-current; collapsed it reports aria-expanded false.",
+			render: () => (
+				<>
+					<JobRow row={rowOf(JOB_IDS.devServer)} now={NOW} selected expanded controlsId="body" />
+					<JobRow row={rowOf(JOB_IDS.tests)} now={NOW} expanded={false} />
+				</>
+			),
+		},
+		{
 			name: "Cancelling",
 			description: "The cancel request is in flight, so Cancel is disabled.",
 			render: () => <JobRow row={rowOf(JOB_IDS.devServer)} now={NOW} cancelling />,

@@ -1,0 +1,69 @@
+import { createMemo, createSignal, For, onCleanup, onMount, type Component } from "solid-js";
+import { activeFirst, capRows } from "../../activities/bar";
+import { activityJobRows } from "../../activities/summary";
+import { openActivities } from "../../store/activities";
+import { acquireJobPollFocus } from "../../store/job-poll";
+import { JOB_STATUS_LABEL, jobElapsedMs } from "../../store/jobs";
+import { formatDuration } from "../../subagents/format";
+import { JobTypeIcon } from "../jobs/JobTypeIcon";
+import { ActivityPopover } from "./ActivityPopover";
+
+/**
+ * Condensed job list above the bar's Jobs button: type icon, label, elapsed, state. A row
+ * opens that job in the panel. While open it marks the shared job poll focused (2 s cadence).
+ */
+export const JobsPopover: Component<{ anchor: HTMLElement; onClose: () => void }> = (props) => {
+	const [now, setNow] = createSignal(Date.now());
+	onMount(() => {
+		const release = acquireJobPollFocus();
+		const timer = setInterval(() => setNow(Date.now()), 1000);
+		onCleanup(() => {
+			release();
+			clearInterval(timer);
+		});
+	});
+	const rows = createMemo(() =>
+		capRows(activeFirst(activityJobRows(), (row) => row.job.status === "running")),
+	);
+	return (
+		<ActivityPopover
+			section="jobs"
+			title="Jobs"
+			anchor={props.anchor}
+			onClose={props.onClose}
+			more={rows().more}
+		>
+			<ul class="activity-popover-list">
+				<For each={rows().shown}>
+					{(row) => {
+						const elapsed = () => {
+							const ms = jobElapsedMs(row.job, now());
+							return ms === undefined ? "" : formatDuration(ms);
+						};
+						return (
+							<li>
+								<button
+									type="button"
+									class="activity-popover-row"
+									onClick={() => {
+										openActivities({ item: { section: "jobs", id: row.job.id } });
+										props.onClose();
+									}}
+								>
+									<span class="activity-popover-glyph" data-status={row.job.status}>
+										<JobTypeIcon type={row.job.type} />
+									</span>
+									<span class="activity-popover-name" title={row.job.label}>
+										{row.job.label}
+									</span>
+									<span class="activity-popover-detail">{elapsed()}</span>
+									<span class="activity-popover-state">{JOB_STATUS_LABEL[row.job.status]}</span>
+								</button>
+							</li>
+						);
+					}}
+				</For>
+			</ul>
+		</ActivityPopover>
+	);
+};

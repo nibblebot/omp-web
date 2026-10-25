@@ -39,7 +39,7 @@ const rosterHint = (): string => {
 /** Session-send configuration (model, preset, thinking) plus the session resource
  *  meters (ctx fill, cumulative stats), attached directly below the composer
  *  as its bottom row. Per-turn badges (starting, retry, plan) lead the row and
- *  show only while active; compaction shows in CompactionBar above the composer. */
+ *  show only while active; compaction shows in the activity bar above the composer. */
 export const SessionConfigBar: Component = () => (
 	<div class="session-bar">
 		{/* Boot readiness gate pill (the connection strip covers disconnects):

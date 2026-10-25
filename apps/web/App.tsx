@@ -6,7 +6,6 @@ import { NoActiveSessionPane } from "./components/app/NoActiveSessionPane";
 import { DockHost } from "./components/app/DockHost";
 import { StoppedSessionStrip } from "./components/app/StoppedSessionStrip";
 import {
-	CompactionBar,
 	PromptBox,
 	QueueBar,
 	SessionConfigBar,
@@ -14,8 +13,8 @@ import {
 	Transcript,
 	ToolCardsMenu,
 } from "./components/chat";
-import { BackgroundDaemonsBar, FleetSidebar } from "./components/fleet";
-import { JobsBar } from "./components/jobs/JobsBar";
+import { FleetSidebar } from "./components/fleet";
+import { ActivityBar } from "./components/activities/ActivityBar";
 import { ModalHost } from "./ModalHost";
 import { openActivities, reconcileMissingActivities } from "./store/activities";
 import { isActivitiesShortcut, pruneDockLayoutsToRoster } from "./store/dock";
@@ -66,17 +65,13 @@ const ChatMode: Component = () => (
 					<main class="app-main">
 						<Transcript />
 						<QueueBar />
-						<div class="background-bars">
-							<BackgroundDaemonsBar />
-						</div>
 						<Show when={isUserStopped(state.currentWorkspaceId)}>
 							<StoppedSessionStrip
 								onRestart={() => void restartSessionById(state.currentWorkspaceId)}
 							/>
 						</Show>
-						<CompactionBar />
-						<JobsBar />
-						{/* Composer: the prompt box, with the session config bar (model, thinking, meters) as its bottom row. */}
+						{/* Composer: the activity bar (progress text, Activities buttons), the prompt box, and the session config bar (model, thinking, meters) as its bottom row. */}
+						<ActivityBar />
 						<PromptBox />
 						<SessionConfigBar />
 					</main>

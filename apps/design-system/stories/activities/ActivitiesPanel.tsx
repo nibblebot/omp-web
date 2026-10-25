@@ -1,12 +1,14 @@
 import { ActivitiesModeToggle } from "../../../web/components/activities/ActivitiesModeToggle";
 import { ActivitiesPanel } from "../../../web/components/activities/ActivitiesPanel";
 import {
+	openActivities,
 	openItemDetail,
 	setActivityFilter,
 	toggleItemExpanded,
 	toggleSectionCollapsed,
 } from "../../../web/store/activities";
 import { agentEntry, benchEntry, seedJobWidgets } from "../../fixtures/job-bars";
+import { JOB_IDS, seedJobs } from "../../fixtures/jobs";
 import { DockFrame, seedActivities, seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
 
@@ -141,6 +143,48 @@ export default defineStory({
 				openItemDetail({ section: "subagents", id: "DocsSweep" });
 			},
 			render: () => dock(420),
+		},
+		{
+			name: "Accordion, subagents and jobs",
+			description:
+				"Subagents above Jobs, each with its own header, count and filter, in the one scroller. The Jobs section appears once the shared job poll answers with jobs that are not subagents' task jobs.",
+			seed: () => {
+				seedActivities("accordion");
+				seedJobs();
+			},
+			render: () => dock(520),
+		},
+		{
+			name: "Accordion, job expanded",
+			description:
+				"A job opened from elsewhere (a wait card's Open in Activities) scrolls to the top of the list with its detail under the row.",
+			seed: () => {
+				seedActivities("accordion");
+				seedJobs();
+				openActivities({ section: "jobs", item: { section: "jobs", id: JOB_IDS.devServer } });
+			},
+			render: () => dock(520),
+		},
+		{
+			name: "Detail mode, job open",
+			description:
+				"One job fills the panel body under a Back strip: widget, facts, command and output, with Cancel on this session's own running job. Back returns to the list at the scroll position it left.",
+			seed: () => {
+				seedActivities("detail");
+				seedJobs();
+				openItemDetail({ section: "jobs", id: JOB_IDS.devServer });
+			},
+			render: () => dock(520),
+		},
+		{
+			name: "Jobs filtered to running",
+			description: "The Jobs filter is independent of the Subagents one.",
+			seed: () => {
+				seedActivities("accordion");
+				seedJobs();
+				setActivityFilter("jobs", "running");
+			},
+			render: () => dock(520),
 		},
 		{
 			name: "Empty session",

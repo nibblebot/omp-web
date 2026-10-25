@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { isLiveDaemon } from "../state";
-import { formatDaemonUptime } from "../fleet-ui/session-ui";
+import { formatUptime } from "../text/uptime";
 import type { DaemonInfo } from "#lib/wire/protocol";
 
 function daemon(state: string): DaemonInfo {
@@ -37,17 +37,17 @@ describe("isLiveDaemon", () => {
 	});
 });
 
-describe("formatDaemonUptime", () => {
+describe("formatUptime", () => {
 	test("sub-minute uptime", () => {
-		expect(formatDaemonUptime(0)).toBe("0s");
-		expect(formatDaemonUptime(45_000)).toBe("45s");
+		expect(formatUptime(0)).toBe("0s");
+		expect(formatUptime(45_000)).toBe("45s");
 	});
 
 	test("minute and second uptime", () => {
-		expect(formatDaemonUptime(90_000)).toBe("1m 30s");
+		expect(formatUptime(90_000)).toBe("1m 30s");
 	});
 
 	test("hour and minute uptime", () => {
-		expect(formatDaemonUptime(3_661_000)).toBe("1h 1m");
+		expect(formatUptime(3_661_000)).toBe("1h 1m");
 	});
 });

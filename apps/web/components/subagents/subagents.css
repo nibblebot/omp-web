@@ -103,11 +103,6 @@
 	outline-offset: -2px;
 }
 
-.running-agents-button:focus-visible {
-	outline: 2px solid var(--accent);
-	outline-offset: 2px;
-}
-
 .subagent-tree-line {
 	display: flex;
 	grid-area: line;
@@ -363,36 +358,13 @@
 	font-size: var(--fs-md);
 }
 
-.running-agents-button {
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-	padding: 0 6px;
-	border: 1px solid var(--accent-dim);
-	background: transparent;
-	color: var(--accent);
-	font: inherit;
-	font-size: var(--fs-2xl);
-	cursor: pointer;
-}
-
-.running-agents-count {
-	font-size: var(--fs-sm);
-	font-weight: 700;
-	font-variant-numeric: tabular-nums;
-}
-
-/* Narrow or touch: tree rows and the composer counter reach
-   44px. */
+/* Narrow or touch: tree rows reach 44px. */
 @media (max-width: 768px), (pointer: coarse) {
 	.subagent-tree-toggle {
 		width: 44px;
 		height: 44px;
 	}
 	.subagent-tree-open {
-		min-height: 44px;
-	}
-	.running-agents-button {
 		min-height: 44px;
 	}
 }

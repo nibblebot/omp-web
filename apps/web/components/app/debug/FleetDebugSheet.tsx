@@ -2,7 +2,7 @@ import { createSignal, For, onCleanup, onMount, Show, type Component } from "sol
 import { buildInfo } from "../../../build-info";
 import { clientId, state } from "../../../state";
 import { fetchFleetDebug, fmtPair, fmtTime, type FleetDebug } from "../../../fleet-ui/fleet-debug";
-import { formatDaemonUptime } from "../../../fleet-ui/session-ui";
+import { formatUptime } from "../../../text/uptime";
 import { Modal } from "../../ui/Modal";
 import { OmpLogoIcon } from "../../ui/icons";
 import { LastFrameClock } from "./LastFrameClock";
@@ -139,7 +139,7 @@ export const FleetDebugSheet: Component<{ onClose: () => void }> = (props) => {
 											<span class="debug-label">uptime</span>
 											<span class="debug-value">
 												{fl()?.uptimeSec !== undefined
-													? formatDaemonUptime(fl()!.uptimeSec! * 1000)
+													? formatUptime(fl()!.uptimeSec! * 1000)
 													: "-"}
 											</span>
 										</div>
@@ -195,7 +195,7 @@ export const FleetDebugSheet: Component<{ onClose: () => void }> = (props) => {
 																<td>{s.pid ?? "-"}</td>
 																<td>
 																	{s.uptimeSec !== undefined
-																		? formatDaemonUptime(s.uptimeSec * 1000)
+																		? formatUptime(s.uptimeSec * 1000)
 																		: "-"}
 																</td>
 																<td class="debug-cell-mono">{s.pair ? fmtPair(s.pair) : "-"}</td>

@@ -6,7 +6,8 @@ import { markFeaturesActive, setFeaturePreference } from "../web/features/prefer
 import { cancelDangerConfirm } from "../web/prompt/danger-confirm";
 import { SIDEBAR_RUNNING_ONLY_KEY, setState, state } from "../web/state";
 import { closeDownload } from "../web/store/downloads";
-import { resetJobsBar } from "../web/store/jobs-bar";
+import { jobPollAttached } from "../web/store/job-poll";
+import { clearJobCancelError } from "../web/store/jobs";
 import { resetSession } from "./session";
 import type { StoreSeed } from "./registry";
 
@@ -24,7 +25,7 @@ const pristine = structuredClone(unwrap(state));
 /**
  * Restore every top-level store field to its import-time value, close the
  * self-mounting dialogs whose state lives in module signals outside the store
- * (danger confirm, download, the jobs bar's finished note), restore manifest-default feature preferences
+ * (danger confirm, download, the shared job poll's answer), restore manifest-default feature preferences
  * (persisted in localStorage, read by core UI such as the Analysis view) and the
  * page set that boot installs (every feature the app can enable; an
  * in-development feature is never active), and expand every project group
@@ -36,8 +37,9 @@ export function resetStore(): void {
 		setState(structuredClone(pristine));
 		cancelDangerConfirm();
 		closeDownload();
-		// The jobs bar's finished note lives in module state outside the store.
-		resetJobsBar();
+		// The job poll and a Cancel refusal live in module signals too: forget them as a fresh attach does.
+		jobPollAttached();
+		clearJobCancelError();
 		for (const feature of FEATURES) setFeaturePreference(feature.id, feature.defaultEnabled);
 		// The page boots with every enableable feature active; a story that narrows the set must not leak it.
 		markFeaturesActive(ENABLEABLE_FEATURE_IDS);

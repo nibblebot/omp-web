@@ -678,11 +678,11 @@ export function settleAttachResult(frame: Extract<ServerFrame, { type: "attach_r
 // ---------------------------------------------------------------------------
 
 let nextDaemonCallId = 1;
-export const pendingDaemonLogs = new Map<
+const pendingDaemonLogs = new Map<
 	string,
 	{ resolve: (r: DaemonLogsResult) => void; reject: (err: Error) => void; timer: number }
 >();
-export const pendingDaemonControl = new Map<
+const pendingDaemonControl = new Map<
 	string,
 	{ resolve: (d: DaemonInfo) => void; reject: (err: Error) => void; timer: number }
 >();
@@ -701,6 +701,38 @@ export function rejectPendingDaemons(err: Error): void {
 		pendingDaemonControl.delete(id);
 		outbox.delete(id);
 	}
+}
+
+/** Settle the id-keyed daemon_logs_result unicast. Unknown id = timed out or stale: ignore. */
+export function settleDaemonLogs(
+	frame: Extract<ServerFrame, { type: "daemon_logs_result" }>,
+): void {
+	const pending = pendingDaemonLogs.get(frame.id);
+	if (!pending) return;
+	pendingDaemonLogs.delete(frame.id);
+	clearTimeout(pending.timer);
+	if (
+		frame.ok &&
+		frame.text !== undefined &&
+		frame.cursor !== undefined &&
+		frame.state !== undefined
+	) {
+		pending.resolve({ text: frame.text, cursor: frame.cursor, state: frame.state });
+	} else {
+		pending.reject(new Error(frame.error ?? "daemon logs failed"));
+	}
+}
+
+/** Settle the id-keyed daemon_control_result unicast. Unknown id = timed out or stale: ignore. */
+export function settleDaemonControl(
+	frame: Extract<ServerFrame, { type: "daemon_control_result" }>,
+): void {
+	const pending = pendingDaemonControl.get(frame.id);
+	if (!pending) return;
+	pendingDaemonControl.delete(frame.id);
+	clearTimeout(pending.timer);
+	if (frame.ok && frame.daemon) pending.resolve(frame.daemon);
+	else pending.reject(new Error(frame.error ?? "daemon control failed"));
 }
 
 type DaemonLogsCmd = Extract<ClientCommand, { type: "daemon_logs" }>;

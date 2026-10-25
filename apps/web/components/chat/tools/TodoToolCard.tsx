@@ -1,24 +1,8 @@
 import { For, type Component } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import {
-	BanIcon,
-	LoaderIcon,
-	SquareCheckIcon,
-	SquareIcon,
-	XIcon,
-	type IconProps,
-} from "../../ui/icons";
 import type { ToolItem } from "../../../state";
+import { todoIcon } from "../../activities/todo-icons";
 import { ToolCardShell } from "./ToolCardShell";
-
-const TODO_ICON: Record<string, Component<IconProps>> = {
-	done: SquareCheckIcon,
-	completed: SquareCheckIcon,
-	in_progress: LoaderIcon,
-	pending: SquareIcon,
-	abandoned: BanIcon,
-	blocked: XIcon,
-};
 
 interface TodoTask {
 	content: string;
@@ -78,7 +62,7 @@ export const TodoToolCard: Component<{ item: ToolItem }> = (props) => {
 								{(task) => (
 									<div class="todo-item" data-status={task.status}>
 										<span class="todo-glyph">
-											<Dynamic component={TODO_ICON[task.status] ?? SquareIcon} />
+											<Dynamic component={todoIcon(task.status)} />
 										</span>
 										<span class="todo-text">{task.content}</span>
 									</div>

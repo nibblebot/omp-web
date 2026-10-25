@@ -389,7 +389,7 @@ export const rosterSidebarGroups: ProjectGroupsData = [
 	{ project: nixosConfig, sessions: [sessionErrorEntry, sessionBlocked] },
 ];
 
-/** Supervised process rows for BackgroundDaemonsBar, anchored to `now` since the strip renders `Date.now() - startedAt`.
+/** Supervised process rows for the Daemons section, anchored to `now` since a row renders `Date.now() - startedAt`.
     Each row's projectDir and `reportedBy` match the roster session whose broker reports it: the
     design-fixtures worktree (dmn_a002, the seeded selection) and localaction main (dmn_b001). */
 export function rosterDaemonInfos(now: number): DaemonInfo[] {
@@ -691,7 +691,7 @@ export const rosterFleetState = {
 	},
 } satisfies Partial<typeof state>;
 
-/** Map of supervised processes keyed like state.daemons, for BackgroundDaemonsBar seeds. */
+/** Map of supervised processes keyed like state.daemons, for the Daemons section seeds. */
 export function rosterDaemonMap(now: number): Map<string, DaemonInfo> {
 	return new Map(rosterDaemonInfos(now).map((info) => [daemonsKey(info), info]));
 }

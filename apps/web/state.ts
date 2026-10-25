@@ -87,8 +87,6 @@ import {
 	call,
 	clientId,
 	pendingAttachTarget,
-	pendingDaemonControl,
-	pendingDaemonLogs,
 	pushDebug,
 	rejectPendingAttach,
 	rejectPendingCalls,
@@ -104,6 +102,8 @@ import {
 	resetUplink,
 	setUplink,
 	settleAttachResult,
+	settleDaemonControl,
+	settleDaemonLogs,
 	settleAttachmentState,
 	settleCallResult,
 } from "./store/transport";
@@ -271,7 +271,6 @@ export type ModalName =
 	| "plan-review"
 	| "annotations"
 	| "todos"
-	| "jobs"
 	| "compaction"
 	| "btw"
 	| "share"
@@ -1652,32 +1651,12 @@ export function connect(): void {
 				announce(text);
 				break;
 			}
-			case "daemon_logs_result": {
-				const pending = pendingDaemonLogs.get(frame.id);
-				if (!pending) break; // unknown id (timed out or stale): ignore
-				pendingDaemonLogs.delete(frame.id);
-				clearTimeout(pending.timer);
-				if (
-					frame.ok &&
-					frame.text !== undefined &&
-					frame.cursor !== undefined &&
-					frame.state !== undefined
-				) {
-					pending.resolve({ text: frame.text, cursor: frame.cursor, state: frame.state });
-				} else {
-					pending.reject(new Error(frame.error ?? "daemon logs failed"));
-				}
+			case "daemon_logs_result":
+				settleDaemonLogs(frame);
 				break;
-			}
-			case "daemon_control_result": {
-				const pending = pendingDaemonControl.get(frame.id);
-				if (!pending) break; // unknown id (timed out or stale): ignore
-				pendingDaemonControl.delete(frame.id);
-				clearTimeout(pending.timer);
-				if (frame.ok && frame.daemon) pending.resolve(frame.daemon);
-				else pending.reject(new Error(frame.error ?? "daemon control failed"));
+			case "daemon_control_result":
+				settleDaemonControl(frame);
 				break;
-			}
 			case "files":
 				settleFiles(frame.files);
 				break;

@@ -1468,3 +1468,24 @@ button.picker-row.kbd-active {
 .btw-turn-live .btw-reply {
 	min-height: 1lh;
 }
+
+/* Anchored popover surface (ui/Popover.tsx): portaled, placed by inline left/top|bottom/width/max-height
+   computed from the anchor. Content brings its own layout class. */
+.popover {
+	position: fixed;
+	z-index: var(--z-autocomplete);
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	box-shadow: var(--shadow-2);
+	color: var(--text);
+	font-size: var(--fs-sm);
+	text-align: left;
+}
+.popover:focus {
+	outline: none;
+}

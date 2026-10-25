@@ -46,7 +46,7 @@ export interface ClickableRowProps {
  * Keyboard contract for composite clickable rows that cannot be real
  * <button>s because they contain nested interactive children (subagent
  * steer/abort controls, session stop/remove/detail icons): role="button" +
- * tabindex + Enter/Space activation, matching the BackgroundBar row pattern.
+ * tabindex + Enter/Space activation.
  * Spread the result onto the row div. Events that originate on a nested
  * control are left untouched so child buttons keep their own Space/Enter
  * semantics. `enabled` gates click, role, and tab order (a non-clickable

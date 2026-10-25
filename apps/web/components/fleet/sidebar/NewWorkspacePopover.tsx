@@ -4,14 +4,10 @@ import {
 	createResource,
 	createSignal,
 	For,
-	onCleanup,
-	onMount,
 	Show,
 	type Component,
-	type JSX,
 	type Resource,
 } from "solid-js";
-import { Portal } from "solid-js/web";
 import type { ProjectBranch, PublicProviderProfile } from "#lib/wire/protocol";
 import { slugifyWorktreeName, worktreeBranchName } from "#lib/wire/worktree-name";
 import {
@@ -29,6 +25,7 @@ import {
 	type ProjectBranchesResult,
 } from "../../../store/projects";
 import { PickerRow } from "../../ui/PickerRow";
+import { Popover } from "../../ui/Popover";
 import { moveRovingFocus, setRovingTabStop } from "../../ui/roving";
 
 export interface NewWorkspacePopoverProps {
@@ -57,13 +54,6 @@ type Pick =
 			revision?: string;
 	  };
 
-const POPOVER_WIDTH = 320;
-/** Gap between the anchor and the popover, and the minimum distance to the viewport edge. */
-const GAP = 4;
-const MARGIN = 8;
-/** Below this much room under the anchor the popover opens upward when more room is above. */
-const MIN_BELOW = 240;
-
 /** The short kind name shown next to a profile id in the "Run on" switch. */
 const PROVIDER_KIND_LABEL: Record<PublicProviderProfile["provider"], string> = {
 	bwrap: "bwrap",
@@ -86,7 +76,6 @@ function listingOf(res: Resource<ProjectBranchesResult>): ProjectBranchesResult 
  */
 export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) => {
 	const remembered = currentWorkspaceCreationPrefs(props.projectId);
-	let root: HTMLDivElement | undefined;
 	let inputEl: HTMLInputElement | undefined;
 	let listEl: HTMLDivElement | undefined;
 
@@ -344,241 +333,191 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 		moveRovingFocus(e, items, current, "vertical");
 	};
 
-	const [place, setPlace] = createSignal<JSX.CSSProperties>({});
-	/** Anchored placement: below the anchor, flipped above when the room below is short. */
-	const reposition = () => {
-		const r = props.anchor.getBoundingClientRect();
-		const left = Math.max(MARGIN, Math.min(r.left, window.innerWidth - POPOVER_WIDTH - MARGIN));
-		const below = window.innerHeight - r.bottom - GAP - MARGIN;
-		const above = r.top - GAP - MARGIN;
-		setPlace(
-			below < MIN_BELOW && above > below
-				? {
-						left: `${left}px`,
-						bottom: `${window.innerHeight - r.top + GAP}px`,
-						"max-height": `${above}px`,
-					}
-				: { left: `${left}px`, top: `${r.bottom + GAP}px`, "max-height": `${below}px` },
-		);
-	};
-
-	onMount(() => {
-		reposition();
-		// Portal content mounts after this callback; focus once it exists.
-		queueMicrotask(() => inputEl?.focus());
-		const onPointerDown = (e: PointerEvent) => {
-			const target = e.target as Node | null;
-			if (target && (root?.contains(target) || props.anchor.contains(target))) return;
-			props.onClose();
-		};
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== "Escape") return;
-			e.preventDefault();
-			// Restore focus to the owning "+" only when focus was inside the popover.
-			const wasInside = root?.contains(document.activeElement) ?? false;
-			props.onClose();
-			if (wasInside) props.anchor.focus();
-		};
-		document.addEventListener("pointerdown", onPointerDown);
-		document.addEventListener("keydown", onKey);
-		window.addEventListener("resize", reposition);
-		document.addEventListener("scroll", reposition, true);
-		onCleanup(() => {
-			document.removeEventListener("pointerdown", onPointerDown);
-			document.removeEventListener("keydown", onKey);
-			window.removeEventListener("resize", reposition);
-			document.removeEventListener("scroll", reposition, true);
-		});
-	});
-
 	return (
-		<Portal>
-			<div
-				ref={root}
-				class="new-workspace"
-				role="dialog"
-				aria-label={`New workspace in ${project()?.name ?? "project"}`}
-				style={place()}
+		<Popover
+			anchor={props.anchor}
+			onClose={props.onClose}
+			class="new-workspace"
+			side="below"
+			label={`New workspace in ${project()?.name ?? "project"}`}
+			initialFocus={() => inputEl}
+		>
+			<header class="new-workspace-head">
+				<span class="new-workspace-title">New workspace</span>
+				<Show when={project()}>{(p) => <span class="new-workspace-project">{p().name}</span>}</Show>
+			</header>
+			<Show
+				when={!missing()}
+				fallback={
+					<p class="new-workspace-note" role="status">
+						The main checkout is missing, so workspaces cannot start here.
+					</p>
+				}
 			>
-				<header class="new-workspace-head">
-					<span class="new-workspace-title">New workspace</span>
-					<Show when={project()}>
-						{(p) => <span class="new-workspace-project">{p().name}</span>}
-					</Show>
-				</header>
-				<Show
-					when={!missing()}
-					fallback={
-						<p class="new-workspace-note" role="status">
-							The main checkout is missing, so workspaces cannot start here.
-						</p>
-					}
-				>
-					<Show when={state.providerProfiles.length > 0}>
-						<div class="new-workspace-field">
-							<div class="new-workspace-segments" role="group" aria-label="Run on">
-								<button
-									type="button"
-									class="new-workspace-segment"
-									aria-pressed={runOn() === null}
-									disabled={busy()}
-									onClick={() => setRunOn(null)}
-								>
-									This machine
-								</button>
-								<For each={state.providerProfiles}>
-									{(p) => (
-										<button
-											type="button"
-											class="new-workspace-segment"
-											aria-pressed={runOn() === p.id}
-											disabled={busy()}
-											onClick={() => setRunOn(p.id)}
-										>
-											{`${p.id} · ${PROVIDER_KIND_LABEL[p.provider]}`}
-										</button>
-									)}
-								</For>
-							</div>
-						</div>
-					</Show>
-					<Show when={cloning()}>
-						<div class="new-workspace-field">
-							<div class="new-workspace-segments" role="group" aria-label="Source">
-								<Show when={profile()?.preparation !== "provider"}>
+				<Show when={state.providerProfiles.length > 0}>
+					<div class="new-workspace-field">
+						<div class="new-workspace-segments" role="group" aria-label="Run on">
+							<button
+								type="button"
+								class="new-workspace-segment"
+								aria-pressed={runOn() === null}
+								disabled={busy()}
+								onClick={() => setRunOn(null)}
+							>
+								This machine
+							</button>
+							<For each={state.providerProfiles}>
+								{(p) => (
 									<button
 										type="button"
 										class="new-workspace-segment"
-										aria-pressed={source() === "local"}
+										aria-pressed={runOn() === p.id}
 										disabled={busy()}
-										onClick={() => setSourceChoice("local")}
+										onClick={() => setRunOn(p.id)}
 									>
-										Local
+										{`${p.id} · ${PROVIDER_KIND_LABEL[p.provider]}`}
 									</button>
-								</Show>
+								)}
+							</For>
+						</div>
+					</div>
+				</Show>
+				<Show when={cloning()}>
+					<div class="new-workspace-field">
+						<div class="new-workspace-segments" role="group" aria-label="Source">
+							<Show when={profile()?.preparation !== "provider"}>
 								<button
 									type="button"
 									class="new-workspace-segment"
-									aria-pressed={source() === "remote"}
+									aria-pressed={source() === "local"}
 									disabled={busy()}
-									onClick={() => setSourceChoice("remote")}
+									onClick={() => setSourceChoice("local")}
 								>
-									Remote
+									Local
 								</button>
-							</div>
-							<Show when={remoteMode() && remotes().length > 1}>
-								<select
-									class="new-workspace-remote"
-									aria-label="Remote"
-									disabled={busy()}
-									value={activeRemote()}
-									onChange={(e) => setRemoteChoice(e.currentTarget.value)}
-								>
-									<For each={remotes()}>{(name) => <option value={name}>{name}</option>}</For>
-								</select>
 							</Show>
-						</div>
-					</Show>
-					<input
-						ref={inputEl}
-						type="search"
-						class="new-workspace-search"
-						placeholder="Search branches or name a new one"
-						aria-label="Branch or new workspace name"
-						value={text()}
-						onInput={(e) => setText(e.currentTarget.value)}
-						onKeyDown={onSearchKey}
-					/>
-					<div
-						class="new-workspace-list"
-						role="group"
-						aria-label="Branches"
-						ref={listEl}
-						onKeyDown={onListKey}
-					>
-						<Show when={createAvailable()}>
-							<PickerRow
-								class="new-workspace-row new-workspace-create"
-								disabled={!canPick() || slug() === ""}
-								onClick={() => void pickNew()}
+							<button
+								type="button"
+								class="new-workspace-segment"
+								aria-pressed={source() === "remote"}
+								disabled={busy()}
+								onClick={() => setSourceChoice("remote")}
 							>
-								<span class="new-workspace-row-name">{`Create branch "${newBranch()}"`}</span>
-								<span class="new-workspace-row-meta">{createMeta()}</span>
-							</PickerRow>
-						</Show>
-						<For each={shownBranches()}>
-							{(b) => {
-								const checkedOut = !cloning() && b.checkedOut;
-								return (
-									<PickerRow
-										class="new-workspace-row"
-										disabled={!canPick() || checkedOut}
-										title={
-											checkedOut
-												? `checked out in ${b.worktreePath ?? "another worktree"}`
-												: undefined
-										}
-										onClick={() => void pickExisting(b)}
-									>
-										<span class="new-workspace-row-name">{b.name}</span>
-										<span class="new-workspace-row-meta">{branchMeta(b)}</span>
-									</PickerRow>
-								);
-							}}
-						</For>
-						<Show
-							when={
-								!listingLoading() &&
-								listingFailure() === null &&
-								!createAvailable() &&
-								shownBranches().length === 0
-							}
-						>
-							<p class="new-workspace-note">
-								{remoteMode() && remotes().length === 0
-									? "This project has no git remotes."
-									: "No branches to show."}
-							</p>
+								Remote
+							</button>
+						</div>
+						<Show when={remoteMode() && remotes().length > 1}>
+							<select
+								class="new-workspace-remote"
+								aria-label="Remote"
+								disabled={busy()}
+								value={activeRemote()}
+								onChange={(e) => setRemoteChoice(e.currentTarget.value)}
+							>
+								<For each={remotes()}>{(name) => <option value={name}>{name}</option>}</For>
+							</select>
 						</Show>
 					</div>
-					<Show when={listingLoading()}>
-						<p class="new-workspace-note" role="status">
-							Loading branches…
-						</p>
-					</Show>
-					<Show when={listingFailure()}>
-						{(message) => (
-							<div class="new-workspace-note new-workspace-failure" role="alert">
-								<span>{message()}</span>
-								<button
-									type="button"
-									class="new-workspace-retry"
-									onClick={() => (remoteMode() ? refetchRemote() : refetchLocal())}
-								>
-									Retry
-								</button>
-							</div>
-						)}
-					</Show>
-					<Show when={remoteMode() && listing()?.cached}>
-						<p class="new-workspace-note">
-							Remote unreachable: showing branches cached from its last fetch.
-						</p>
-					</Show>
-					<Show when={busy()}>
-						<p class="new-workspace-progress" role="status">
-							{progressText()}
-						</p>
-					</Show>
-					<Show when={error()}>
-						{(message) => (
-							<p class="new-workspace-error" role="alert">
-								{message()}
-							</p>
-						)}
-					</Show>
 				</Show>
-			</div>
-		</Portal>
+				<input
+					ref={inputEl}
+					type="search"
+					class="new-workspace-search"
+					placeholder="Search branches or name a new one"
+					aria-label="Branch or new workspace name"
+					value={text()}
+					onInput={(e) => setText(e.currentTarget.value)}
+					onKeyDown={onSearchKey}
+				/>
+				<div
+					class="new-workspace-list"
+					role="group"
+					aria-label="Branches"
+					ref={listEl}
+					onKeyDown={onListKey}
+				>
+					<Show when={createAvailable()}>
+						<PickerRow
+							class="new-workspace-row new-workspace-create"
+							disabled={!canPick() || slug() === ""}
+							onClick={() => void pickNew()}
+						>
+							<span class="new-workspace-row-name">{`Create branch "${newBranch()}"`}</span>
+							<span class="new-workspace-row-meta">{createMeta()}</span>
+						</PickerRow>
+					</Show>
+					<For each={shownBranches()}>
+						{(b) => {
+							const checkedOut = !cloning() && b.checkedOut;
+							return (
+								<PickerRow
+									class="new-workspace-row"
+									disabled={!canPick() || checkedOut}
+									title={
+										checkedOut
+											? `checked out in ${b.worktreePath ?? "another worktree"}`
+											: undefined
+									}
+									onClick={() => void pickExisting(b)}
+								>
+									<span class="new-workspace-row-name">{b.name}</span>
+									<span class="new-workspace-row-meta">{branchMeta(b)}</span>
+								</PickerRow>
+							);
+						}}
+					</For>
+					<Show
+						when={
+							!listingLoading() &&
+							listingFailure() === null &&
+							!createAvailable() &&
+							shownBranches().length === 0
+						}
+					>
+						<p class="new-workspace-note">
+							{remoteMode() && remotes().length === 0
+								? "This project has no git remotes."
+								: "No branches to show."}
+						</p>
+					</Show>
+				</div>
+				<Show when={listingLoading()}>
+					<p class="new-workspace-note" role="status">
+						Loading branches…
+					</p>
+				</Show>
+				<Show when={listingFailure()}>
+					{(message) => (
+						<div class="new-workspace-note new-workspace-failure" role="alert">
+							<span>{message()}</span>
+							<button
+								type="button"
+								class="new-workspace-retry"
+								onClick={() => (remoteMode() ? refetchRemote() : refetchLocal())}
+							>
+								Retry
+							</button>
+						</div>
+					)}
+				</Show>
+				<Show when={remoteMode() && listing()?.cached}>
+					<p class="new-workspace-note">
+						Remote unreachable: showing branches cached from its last fetch.
+					</p>
+				</Show>
+				<Show when={busy()}>
+					<p class="new-workspace-progress" role="status">
+						{progressText()}
+					</p>
+				</Show>
+				<Show when={error()}>
+					{(message) => (
+						<p class="new-workspace-error" role="alert">
+							{message()}
+						</p>
+					)}
+				</Show>
+			</Show>
+		</Popover>
 	);
 };

@@ -2,15 +2,23 @@ import { Index, Show, type Component } from "solid-js";
 import type { JobDetailDto, JobDto } from "#lib/wire/protocol";
 import { JOB_STATUS_LABEL, jobElapsedMs } from "../../store/jobs";
 import { formatDuration } from "../../subagents/format";
+import { ConfirmButton } from "../ui/ConfirmButton";
 import { JobWidget } from "./JobWidget";
 
-/** What the sheet shows about the selected job beyond its row: its widget, facts, the full command and the output tail. */
+/**
+ * What the Activities panel shows about an open job beyond its row: its widget, facts, the full command and
+ * the output tail. `onCancel` adds Cancel to the header for the session's own running job (a row already
+ * carries it where the detail sits under the row).
+ */
 export const JobDetail: Component<{
 	job: JobDto;
 	/** Undefined while the inspection loads, null once the session no longer lists the job. */
 	detail: JobDetailDto | null | undefined;
 	/** Epoch ms a running job counts its run time up to. */
 	now: number;
+	/** Cancel for this job is in flight. */
+	cancelling?: boolean;
+	onCancel?: (jobId: string) => void;
 }> = (props) => {
 	const facts = (): Array<[string, string]> => {
 		const elapsed = jobElapsedMs(props.job, props.now);
@@ -39,6 +47,16 @@ export const JobDetail: Component<{
 				<h3 class="job-detail-title" title={props.job.label}>
 					{props.job.label}
 				</h3>
+				<Show when={props.onCancel && props.job.own && props.job.status === "running"}>
+					<ConfirmButton
+						class="job-cancel"
+						label="Cancel"
+						confirmLabel="Confirm"
+						title={`Cancel ${props.job.label}`}
+						disabled={props.cancelling === true}
+						onConfirm={() => props.onCancel?.(props.job.id)}
+					/>
+				</Show>
 			</header>
 			<Show
 				when={props.detail !== undefined}

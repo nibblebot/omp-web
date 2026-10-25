@@ -92,13 +92,6 @@
 	padding: var(--space-4) 0 0;
 	border-top: 1px solid var(--border);
 }
-/* Above the composer while the session compacts; the shimmer label reads as
-   activity, not a warning. */
-.compaction-bar {
-	padding: var(--space-3) 0 var(--space-1);
-	font-size: var(--fs-md);
-	font-weight: 600;
-}
 .queue-chip {
 	display: inline-flex;
 	align-items: center;

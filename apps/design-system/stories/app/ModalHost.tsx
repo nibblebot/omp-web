@@ -9,7 +9,6 @@ import { browserUiRequests, downloadManifest, resumeListReply } from "../../fixt
 import { rosterEntry, rosterFleetState } from "../../fixtures/roster";
 import { chartScreenshot } from "../../fixtures/shared";
 import { extensionCalls } from "../../fixtures/extensions";
-import { jobCalls } from "../../fixtures/jobs";
 import { defineStory } from "../../registry";
 
 /**
@@ -37,16 +36,6 @@ export default defineStory({
 			seed: () => {
 				answerCalls(extensionCalls());
 				setState("modal", "integrations");
-			},
-			render: () => <ModalHost />,
-		},
-		{
-			name: "Background jobs",
-			description:
-				'`state.modal` is "jobs" (the composer jobs bar): ModalHost renders the job tree sheet as a core modal.',
-			seed: () => {
-				answerCalls(jobCalls());
-				setState("modal", "jobs");
 			},
 			render: () => <ModalHost />,
 		},

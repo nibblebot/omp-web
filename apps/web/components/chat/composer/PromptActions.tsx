@@ -12,7 +12,6 @@ import {
 	stopTurn,
 } from "../../../state";
 import { ArrowUpIcon, CornerDownRightIcon, StopIcon } from "../../ui/icons";
-import { RunningAgentsButton } from "./RunningAgentsButton";
 
 interface PromptActionsProps {
 	message: () => string;
@@ -21,15 +20,13 @@ interface PromptActionsProps {
 	submit: (mode: InputMode) => void;
 }
 
-/** Icon buttons beside the composer textarea: running-agents counter, Stop
- *  (only while streaming), and Send/Steer. Passed to PromptComposer's
- *  `actions` slot. */
+/** Icon buttons beside the composer textarea: Stop (only while streaming) and
+ *  Send/Steer. Passed to PromptComposer's `actions` slot. */
 export const PromptActions: Component<PromptActionsProps> = (props) => {
 	const paused = () => connectionState() !== "connected";
 
 	return (
 		<div class="prompt-actions">
-			<RunningAgentsButton />
 			<Show when={state.streaming}>
 				<button
 					type="button"

@@ -9,8 +9,12 @@ import { createFocusRequest, createListScrollMemory } from "../../activities/foc
 import { state } from "../../state";
 import { closeItemDetail } from "../../store/activities";
 import { ArrowLeftIcon } from "../ui/icons";
+import { ActivityJobDetail } from "./ActivityJobDetail";
+import { DaemonsSection } from "./DaemonsSection";
+import { JobsSection } from "./JobsSection";
 import { SubagentDetail } from "./SubagentDetail";
 import { SubagentsSection } from "./SubagentsSection";
+import { TodosSection } from "./TodosSection";
 
 /**
  * The Activities dock panel: sections in a fixed order (Subagents, Jobs, Daemons, Todo), each
@@ -40,9 +44,15 @@ export const ActivitiesPanel: Component = () => {
 						<Show when={subagentsSummary().total > 0}>
 							<SubagentsSection />
 						</Show>
-						{/* jobs section: 82w5 */}
-						{/* daemons section: vz6m */}
-						{/* todos section: vz6m */}
+						<Show when={jobsSummary().total > 0}>
+							<JobsSection />
+						</Show>
+						<Show when={daemonsSummary().total > 0}>
+							<DaemonsSection />
+						</Show>
+						<Show when={todosSummary().total > 0}>
+							<TodosSection />
+						</Show>
 						<Show when={!anyItems()}>
 							<p class="activities-empty">
 								Nothing here yet. Subagents, jobs, daemons and todos appear when the session has
@@ -67,7 +77,9 @@ export const ActivitiesPanel: Component = () => {
 										<Match when={item().section === "subagents"}>
 											<SubagentDetail id={item().id} />
 										</Match>
-										{/* jobs detail: 82w5 */}
+										<Match when={item().section === "jobs"}>
+											<ActivityJobDetail id={item().id} standalone />
+										</Match>
 									</Switch>
 								</div>
 							)}
