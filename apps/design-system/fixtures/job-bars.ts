@@ -29,8 +29,8 @@ export function seedJobWidgets(running: number, entries: readonly WireJobWidgetE
 	applyJobWidgets({ running, entries: [...entries] });
 }
 
-/** The last of `count` jobs just ended: the snapshots a session sends as the bar drops to its finished note. */
-export function seedFinishedJobs(count: number): void {
-	seedJobWidgets(count, [benchEntry()]);
+/** The last running job just ended: the snapshots a session sends as the bar drops to its finished note. */
+export function seedFinishedJobs(): void {
+	seedJobWidgets(1, [benchEntry()]);
 	applyJobWidgets({ running: 0, entries: [] });
 }

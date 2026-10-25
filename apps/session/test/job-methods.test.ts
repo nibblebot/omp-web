@@ -3,13 +3,14 @@
  * AsyncJobManager: the tree the SDK builds, the inspection a row opens, and the
  * cancel that only reaches the session's own jobs.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createAgentSession, Settings } from "@oh-my-pi/pi-coding-agent";
 import type { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { JobWidgets } from "@oh-my-pi/pi-coding-agent/job-widgets/registry";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type {
 	JobCancelResultDto,
@@ -22,6 +23,16 @@ import { createJobMethods, JOB_OUTPUT_TAIL_CHARS } from "../job-methods";
 import type { SessionEntry } from "../session-entry";
 
 afterAll(cleanupTempDirs);
+
+// A real session reads the agent dir (auth storage, model catalog); keep it off the real one.
+const previousEnv = process.env.PI_CODING_AGENT_DIR;
+const previousDir = getAgentDir();
+beforeAll(() => setAgentDir(tempDir("omp-jobs-agent-")));
+afterAll(() => {
+	setAgentDir(previousDir);
+	if (previousEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = previousEnv;
+});
 
 type RegisterOptions = NonNullable<Parameters<AsyncJobManager["register"]>[3]>;
 

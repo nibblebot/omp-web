@@ -233,6 +233,25 @@ describe("backgrounded tool calls", () => {
 		expect(streamingPrimeFrames(entry)).toEqual([]);
 	});
 
+	test("a job that has shown no output yet is primed as an empty append", () => {
+		const entry = { handle: "bg-prime-empty" } as SessionEntry;
+		toWireEvent(entry.handle, returned);
+		toWireEvent(entry.handle, frame("", job("running")));
+		expect(streamingPrimeFrames(entry)).toEqual([
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_update",
+					toolCallId: "c1",
+					toolName: "bash",
+					output: "",
+					append: true,
+					async: { state: "running" },
+				},
+			},
+		]);
+	});
+
 	test("a partial without a job frame carries none", () => {
 		const handle = "bg-plain";
 		expect(toWireEvent(handle, frame("x", {}))).toEqual({

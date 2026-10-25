@@ -5,9 +5,9 @@ import { state } from "../state";
  * What the composer jobs bar shows: the running jobs while any run, then a quiet "finished" note so the
  * sheet (and the recent jobs it lists) stays reachable after the last one ends.
  *
- * The daemon's `job_widgets` frames carry only the running count, so the finished count is derived here:
- * every drop of the count adds the jobs that ended, and an episode (0 -> some -> 0 running) is what
- * "N finished" names. The note lingers for {@link JOBS_FINISHED_LINGER_MS}, then the bar hides.
+ * The daemon's `job_widgets` frames carry only the running count, which says when the last job ended but
+ * not how many ran (a job that starts and ends between two frames is never seen), so the note names no
+ * count. It lingers for {@link JOBS_FINISHED_LINGER_MS}, then the bar hides.
  *
  * The episode belongs to the attached session: an answer or timer for another session never shows, and
  * an attach starts over (`resetJobsBar`, from `clearJobWidgets`).
@@ -22,23 +22,18 @@ import { state } from "../state";
 export const JOBS_FINISHED_LINGER_MS = 30_000;
 
 /** What the bar draws; undefined hides it. */
-export type JobsBarView =
-	| { phase: "running"; running: number }
-	| { phase: "finished"; finished: number };
+export type JobsBarView = { phase: "running"; running: number } | { phase: "finished" };
 
 interface Episode {
 	sessionId: string;
 	/** Running count of the last frame. */
 	running: number;
-	/** Jobs seen to end since the count last left zero. */
-	finished: number;
 }
 
 let episode: Episode | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
-const [lingering, setLingering] = createSignal<{ sessionId: string; finished: number } | undefined>(
-	undefined,
-);
+/** The session whose finished note is lingering. */
+const [lingering, setLingering] = createSignal<string | undefined>(undefined);
 
 function stopLinger(): void {
 	clearTimeout(timer);
@@ -57,27 +52,20 @@ export function observeRunningJobs(running: number): void {
 	const sessionId = state.currentSessionId;
 	if (episode?.sessionId !== sessionId) {
 		stopLinger();
-		episode = { sessionId, running: 0, finished: 0 };
+		episode = { sessionId, running: 0 };
 	}
 	const current = episode;
 	if (running > 0) {
-		if (current.running === 0) {
-			// A new episode: the old note, if any, is superseded.
-			stopLinger();
-			current.finished = 0;
-		}
-		if (running < current.running) current.finished += current.running - running;
+		// A new episode: the old note, if any, is superseded.
+		if (current.running === 0) stopLinger();
 		current.running = running;
 		return;
 	}
 	const ended = current.running;
 	current.running = 0;
 	if (ended === 0) return;
-	current.finished += ended;
-	const finished = current.finished;
-	current.finished = 0;
 	clearTimeout(timer);
-	setLingering({ sessionId, finished });
+	setLingering(sessionId);
 	timer = setTimeout(() => {
 		timer = undefined;
 		setLingering(undefined);
@@ -89,6 +77,6 @@ export function jobsBarView(): JobsBarView | undefined {
 	const running = state.jobWidgets.running;
 	if (running > 0) return { phase: "running", running };
 	const note = lingering();
-	if (note === undefined || note.sessionId !== state.currentSessionId) return undefined;
-	return { phase: "finished", finished: note.finished };
+	if (note === undefined || note !== state.currentSessionId) return undefined;
+	return { phase: "finished" };
 }

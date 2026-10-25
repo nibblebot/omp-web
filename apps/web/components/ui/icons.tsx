@@ -494,7 +494,7 @@ export const BracesIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** Hub tool glyph, drawn with Lucide's messages-square. */
+/** Wait tool glyph, drawn with Lucide's messages-square. */
 export const MessagesSquareIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />

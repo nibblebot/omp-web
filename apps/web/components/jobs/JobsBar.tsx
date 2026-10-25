@@ -10,7 +10,7 @@ import { JobWidgetGlance } from "./JobWidget";
 /**
  * Strip above the composer while background jobs run: how many run and the
  * glance of the widget that saw data last (the TUI status line's jobs segment).
- * Once the last one ends it stays as a quiet "N jobs finished" note for a short
+ * Once the last one ends it stays as a quiet "jobs finished" note for a short
  * while, so the sheet's recent jobs remain one click away (store/jobs-bar.ts).
  * It reads the daemon's live `job_widgets` snapshot, so it needs no polling, and
  * opens the jobs sheet, which ModalHost renders (a trigger only sets state).
@@ -24,10 +24,6 @@ export const JobsBar: Component = () => {
 	const running = () => {
 		const view = shown();
 		return view?.phase === "running" ? view.running : undefined;
-	};
-	const finished = () => {
-		const view = shown();
-		return view?.phase === "finished" ? view.finished : undefined;
 	};
 	const latest = () => latestJobWidget(state.jobWidgets.entries.filter(isCountedJobWidget));
 	return (
@@ -65,15 +61,9 @@ export const JobsBar: Component = () => {
 										</>
 									)}
 								</Match>
-								<Match when={finished()}>
-									{(count) => (
-										<>
-											<span class="jobs-bar-count">
-												{count()} {count() === 1 ? "job" : "jobs"} finished
-											</span>
-											<span class="jobs-bar-action">view</span>
-										</>
-									)}
+								<Match when={shown()?.phase === "finished"}>
+									<span class="jobs-bar-count">jobs finished</span>
+									<span class="jobs-bar-action">view</span>
 								</Match>
 							</Switch>
 						</button>

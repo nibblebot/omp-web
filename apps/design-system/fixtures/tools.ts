@@ -1117,7 +1117,7 @@ export const globDoneTool: ToolItem = tool(
 		"apps/web/components/chat/tools/DiffToolCard.tsx",
 		"apps/web/components/chat/tools/EvalToolCard.tsx",
 		"apps/web/components/chat/tools/GenericToolCard.tsx",
-		"apps/web/components/chat/tools/HubToolCard.tsx",
+		"apps/web/components/chat/tools/LspToolCard.tsx",
 	),
 );
 /** SearchToolCard: search in flight with no results yet. */

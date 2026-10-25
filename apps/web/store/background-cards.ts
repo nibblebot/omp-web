@@ -6,6 +6,7 @@ import {
 	type ListedJob,
 } from "../chat/background-job";
 import { setState, state, type ToolItem } from "../state";
+import { drainParkedToolUpdates } from "./chat";
 import { call } from "./transport";
 
 /**
@@ -44,6 +45,7 @@ export async function reconcileBackgroundCards(): Promise<void> {
 	const sessionId = state.currentSessionId;
 	const jobs = await listedJobs();
 	if (sessionId !== state.currentSessionId) return;
+	drainParkedToolUpdates();
 	setState(
 		"items",
 		produce((items) => {

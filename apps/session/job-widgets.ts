@@ -1,10 +1,10 @@
 // Live publication of the running background jobs and their widget glances (`job_widgets` frames).
 //
-// The SDK keeps one widget view per shown job and announces no job start or end, only (through the
-// registry's `subscribe`) that a shown view changed. So the publisher is poked by the session events a job
-// can start under (a tool call, a turn) and by the registry, reads the running count and
+// The SDK keeps one widget view per shown job and announces no job start or end. So the publisher is
+// poked by the session events a job can start under (a tool call, a turn), reads the running count and
 // `getRunningJobWidgets()` (which marks a widget shown, as the TUI status line does, and so lets the
-// `widget` model role author its spec), and keeps sampling once a second for as long as a job runs. Each
+// `widget` model role author its spec), and keeps sampling once a second for as long as a job runs (the
+// registry's `subscribe` is held meanwhile only so its own refresh timer keeps running). Each
 // sample goes out only when it differs from the last frame sent, and never more often than once a second,
 // so a quiet job costs nothing and a chatty one costs one small absolute snapshot a second. A job that
 // settled leaves the next snapshot. Nothing is read while no client is attached; an attach primes from a
@@ -141,7 +141,9 @@ export function createJobWidgetPublisher(options: JobWidgetPublisherOptions): Jo
 			options.emit(frame);
 		}
 		if (frame.running > 0 || frame.entries.length > 0) {
-			unsubscribe ??= options.subscribe(() => poke());
+			// The listener does nothing: the subscription only keeps the SDK registry's own refresh timer alive.
+			// This sampler's timer (below) is what publishes, so a change notice has nothing to add.
+			unsubscribe ??= options.subscribe(() => {});
 			timer = schedule(run, JOB_WIDGETS_INTERVAL_MS);
 		} else {
 			unlisten();

@@ -69,6 +69,8 @@ export const TranscriptStream: Component<{
 			: buildWaitRuns(props.items, {
 					hideThinking: hideThinkingBlock(),
 					proseOnlyThinking: proseOnlyThinking(),
+					showTokenUsage: showTokenUsage(),
+					turnMeta: turnMeta(),
 				}),
 	);
 	return (

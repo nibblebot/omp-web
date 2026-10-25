@@ -100,7 +100,6 @@ export interface WorkerRecord {
 		contextWindow?: number;
 	};
 	artifactAvailability: "available" | "missing" | "unknown";
-	unavailableReason?: string;
 	sessionFile: string | null;
 	hasHistory: boolean;
 	lastActivity: number;
@@ -185,7 +184,6 @@ function coerceWorkerRow(row: unknown, sessionId: string): WorkerRecord | null {
 		artifactAvailability:
 			r.hasHistory === false ? "missing" : r.hasHistory === true ? "available" : "unknown",
 		sessionFile,
-		unavailableReason: asString(r.unavailableReason),
 		hasHistory: asBoolean(r.hasHistory) ?? sessionFile !== null,
 		lastActivity: asNumber(r.lastActivity) ?? asNumber(r.lastUpdate) ?? 0,
 		createdAt: asNumber(r.createdAt) ?? 0,

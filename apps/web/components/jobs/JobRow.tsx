@@ -1,9 +1,10 @@
-import { For, Match, Show, Switch, type Component } from "solid-js";
+import { For, Show, type Component } from "solid-js";
 import type { JobDto, JobTreePlaceDto, JobTreeRowDto } from "#lib/wire/protocol";
 import { JOB_STATUS_LABEL, jobElapsedMs } from "../../store/jobs";
 import { formatDuration } from "../../subagents/format";
 import { ConfirmButton } from "../ui/ConfirmButton";
-import { BotIcon, LayersIcon, TerminalIcon } from "../ui/icons";
+import { BotIcon } from "../ui/icons";
+import { JobTypeIcon } from "./JobTypeIcon";
 import { JobWidgetGlance } from "./JobWidget";
 
 /** Rails of the enclosing levels, then the branch into this row; nothing at the top level. */
@@ -16,17 +17,6 @@ const TreeGuide: Component<{ place: JobTreePlaceDto }> = (props) => (
 			<span class="job-branch" data-last={props.place.last ? "" : undefined} />
 		</span>
 	</Show>
-);
-
-const TypeIcon: Component<{ type: string }> = (props) => (
-	<Switch fallback={<LayersIcon class="job-type-icon" />}>
-		<Match when={props.type === "bash"}>
-			<TerminalIcon class="job-type-icon" />
-		</Match>
-		<Match when={props.type === "task"}>
-			<BotIcon class="job-type-icon" />
-		</Match>
-	</Switch>
 );
 
 /** A job's meta line: what kind it is, the subagent it runs, and the agent that owns it when that is not this session. */
@@ -102,7 +92,7 @@ export const JobRow: Component<{
 								{JOB_STATUS_LABEL[current().status]}
 							</span>
 							<span class="job-label" title={current().label}>
-								<TypeIcon type={current().type} />
+								<JobTypeIcon type={current().type} class="job-type-icon" />
 								{current().label}
 							</span>
 							<Show when={elapsed() !== undefined}>

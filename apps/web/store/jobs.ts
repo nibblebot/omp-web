@@ -13,10 +13,10 @@ import { call } from "./transport";
  * Background-jobs domain: the attached session's job tree,
  * the selected job's inspection, and the cancel of the session's own jobs.
  *
- * The sheet polls while it is open. The wire has no job frames, because the SDK
- * announces no job status changes, and `getJobTree`/`getJobDetail` are
- * read-only calls that never trigger a state broadcast, so a short poll costs
- * one small answer per tick and needs no new frame type.
+ * The sheet polls while it is open. The `job_widgets` frame carries only the running
+ * count and widget glances, not the tree or a job's detail, and the SDK announces no
+ * job status changes. `getJobTree`/`getJobDetail` are read-only calls that never
+ * trigger a state broadcast, so a short poll costs one small answer per tick.
  *
  * Every answer is stamped with the session it was asked of and dropped when
  * the attached session changed meanwhile, as in `store/plugins.ts`.

@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test, vi } from "bun:test";
 import type { JobDetailDto, JobDto, JobTreeDto } from "#lib/wire/protocol";
 import * as transport from "../../store/transport";
 
@@ -207,6 +207,51 @@ describe("polling", () => {
 		expect(jobs.jobsView()).toBe("loading");
 		expect(jobs.selectedJobId()).toBeNull();
 		expect(jobs.jobsError()).toBeNull();
+	});
+
+	describe("on a timer", () => {
+		const originalDocument = Reflect.get(globalThis, "document");
+		const treeCalls = () => calls.filter((c) => c.method === "getJobTree").length;
+
+		beforeEach(() => {
+			vi.useFakeTimers();
+			// Bun's test env has no DOM; the poll only reads `document.hidden`.
+			Reflect.set(globalThis, "document", { hidden: false });
+		});
+		afterEach(() => {
+			vi.useRealTimers();
+			Reflect.set(globalThis, "document", originalDocument);
+		});
+
+		test("refreshes every period, skips while the page is hidden, and stops with the sheet", async () => {
+			answer({ getJobTree: treeOf(job("a")) });
+			stop = jobs.startJobsPolling();
+			await settle();
+			expect(treeCalls()).toBe(1);
+
+			vi.advanceTimersByTime(jobs.JOBS_POLL_MS - 1);
+			await settle();
+			expect(treeCalls()).toBe(1);
+			vi.advanceTimersByTime(1);
+			await settle();
+			expect(treeCalls()).toBe(2);
+
+			Reflect.set(globalThis, "document", { hidden: true });
+			vi.advanceTimersByTime(jobs.JOBS_POLL_MS * 2);
+			await settle();
+			expect(treeCalls()).toBe(2);
+
+			Reflect.set(globalThis, "document", { hidden: false });
+			vi.advanceTimersByTime(jobs.JOBS_POLL_MS);
+			await settle();
+			expect(treeCalls()).toBe(3);
+
+			stop();
+			stop = undefined;
+			vi.advanceTimersByTime(jobs.JOBS_POLL_MS * 3);
+			await settle();
+			expect(treeCalls()).toBe(3);
+		});
 	});
 });
 

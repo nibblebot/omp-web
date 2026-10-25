@@ -1,4 +1,4 @@
-import { createResource, Match, Show, Switch, type Component } from "solid-js";
+import { createResource, Show, type Component } from "solid-js";
 import type { WireJobWidgetView, WireWaitJob } from "#lib/wire/protocol";
 import { jobWidgetGlance } from "../../../chat/job-widget";
 import { jobTitle } from "../../../chat/wait-details";
@@ -6,8 +6,9 @@ import { jobElapsedMs, type RunJob } from "../../../chat/wait-runs";
 import { jobWidgetView } from "../../../store/job-widgets";
 import { fetchJobDetail, openJobsSheet } from "../../../store/jobs";
 import { formatDuration } from "../../../subagents/format";
+import { JobTypeIcon } from "../../jobs/JobTypeIcon";
 import { JobWidget, JobWidgetGlance } from "../../jobs/JobWidget";
-import { ArrowUpIcon, BotIcon, ChevronRightIcon, CodeIcon, TerminalIcon } from "../../ui/icons";
+import { ArrowUpIcon, ChevronRightIcon } from "../../ui/icons";
 
 /** Lines of a job's output the expanded row keeps (the tail). */
 const OUTPUT_TAIL_LINES = 12;
@@ -49,17 +50,10 @@ const CompletionRing: Component<{ percent: number }> = (props) => {
 	);
 };
 
-/** What the job runs, as a small icon: a subagent, a script, or a shell command. */
-const JobTypeIcon: Component<{ type: WireWaitJob["type"] }> = (props) => (
+/** The job's kind as a small icon, with its name for screen readers and a tooltip. */
+const WaitJobType: Component<{ type: WireWaitJob["type"] }> = (props) => (
 	<span class="wait-job-type" title={props.type}>
-		<Switch fallback={<TerminalIcon />}>
-			<Match when={props.type === "task"}>
-				<BotIcon />
-			</Match>
-			<Match when={props.type === "eval"}>
-				<CodeIcon />
-			</Match>
-		</Switch>
+		<JobTypeIcon type={props.type} />
 		<span class="visually-hidden">{props.type}</span>
 	</span>
 );
@@ -173,7 +167,7 @@ export const WaitJobRow: Component<{
 					>
 						{STATUS_GLYPH[job().status]}
 					</span>
-					<JobTypeIcon type={job().type} />
+					<WaitJobType type={job().type} />
 					<span class="wait-job-title" title={title()}>
 						{title()}
 					</span>

@@ -1,4 +1,4 @@
-import { For, Show, type Component } from "solid-js";
+import { Index, Show, type Component } from "solid-js";
 import type { JobDetailDto, JobDto } from "#lib/wire/protocol";
 import { JOB_STATUS_LABEL, jobElapsedMs } from "../../store/jobs";
 import { formatDuration } from "../../subagents/format";
@@ -58,14 +58,15 @@ export const JobDetail: Component<{
 								)}
 							</Show>
 							<dl class="job-facts">
-								<For each={facts()}>
-									{([name, value]) => (
+								{/* Index keys rows by position, so the 1 s tick and polls update the text nodes in place and a selection inside a fact survives. */}
+								<Index each={facts()}>
+									{(fact) => (
 										<div class="job-fact">
-											<dt>{name}</dt>
-											<dd title={value}>{value}</dd>
+											<dt>{fact()[0]}</dt>
+											<dd title={fact()[1]}>{fact()[1]}</dd>
 										</div>
 									)}
-								</For>
+								</Index>
 							</dl>
 							<Show when={detail().command}>
 								{(command) => (

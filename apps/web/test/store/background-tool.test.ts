@@ -377,7 +377,7 @@ describe("a reloaded transcript", () => {
 	test("a job nothing reports on stays a done card with its start text, never a made-up state", async () => {
 		loadHistory([user, assistant, startResult]);
 		expect(card().background?.state).toBe("running");
-		// The job list cannot be read here (no connection): the outcome is unknowable.
+		// This file never mocks the transport, so the job list call fails offline and the outcome is unknowable.
 		for (let i = 0; i < 10; i++) await Promise.resolve();
 		expect(card()).toMatchObject({ status: "done", output: "Backgrounded as job bg_1" });
 		expect(card().background).toBeUndefined();

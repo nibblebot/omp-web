@@ -57,7 +57,7 @@ export default defineStory({
 		{
 			name: "Settled, with job widgets",
 			description:
-				"Each row glances its job's widget as the settled result kept it: a benchmark's headline and chart, a subagent's figure, a failed run's grid. A basic widget and a job with none draw only the line; open a row for the whole widget.",
+				"Each row glances its job's widget as the settled result kept it: a benchmark's headline and chart, a subagent's figure, a failed run's headline. A running job with a basic widget shows its stage; a settled basic widget and a job with no widget draw only the line. Open a row for the whole widget.",
 			seed: answerJobDetail,
 			render: () => <WaitToolCard calls={[waitWidgetsTool]} />,
 		},

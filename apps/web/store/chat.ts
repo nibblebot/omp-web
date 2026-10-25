@@ -503,15 +503,23 @@ function drainToolUpdate(toolCallId: string, index: number): void {
 }
 
 /**
+ * Apply every buffered frame of the cards parked on a background job now, so a card
+ * about to settle keeps the job's last output instead of losing it to the next flush.
+ */
+export function drainParkedToolUpdates(): void {
+	state.items.forEach((item, index) => {
+		if (item.kind === "tool" && isBackgroundRunning(item)) drainToolUpdate(item.toolCallId, index);
+	});
+}
+
+/**
  * An `async-result` delivery reports background jobs settled: finish the cards parked
  * on them. The card's own frames normally did already; this settles one that missed
  * them (a reload, a dropped frame). A buffered frame lands first, so the job's last
  * output wins over the text the call returned with.
  */
 function settleDeliveredJobs(jobs: readonly AsyncResultJob[]): void {
-	state.items.forEach((item, index) => {
-		if (item.kind === "tool" && isBackgroundRunning(item)) drainToolUpdate(item.toolCallId, index);
-	});
+	drainParkedToolUpdates();
 	setState(
 		"items",
 		produce((items) => {
@@ -783,8 +791,8 @@ export function applyEvent(e: WireSessionEvent): void {
 					pendingToolUpdates.set(e.toolCallId, {
 						output,
 						append: e.append === true,
-						images,
-						live: e.live,
+						images: images ?? pending?.images,
+						live: e.live ?? pending?.live,
 						job,
 					});
 				}

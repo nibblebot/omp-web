@@ -37,9 +37,9 @@ describe("jobs bar presence", () => {
 		frame(1);
 		expect(jobsBarView()).toEqual({ phase: "running", running: 1 });
 		frame(0);
-		expect(jobsBarView()).toEqual({ phase: "finished", finished: 2 });
+		expect(jobsBarView()).toEqual({ phase: "finished" });
 		vi.advanceTimersByTime(JOBS_FINISHED_LINGER_MS - 1);
-		expect(jobsBarView()).toEqual({ phase: "finished", finished: 2 });
+		expect(jobsBarView()).toEqual({ phase: "finished" });
 		vi.advanceTimersByTime(1);
 		expect(jobsBarView()).toBeUndefined();
 	});
@@ -47,15 +47,15 @@ describe("jobs bar presence", () => {
 	test("a new job during the linger replaces the note, and its end starts a fresh window", () => {
 		frame(1);
 		frame(0);
-		expect(jobsBarView()).toEqual({ phase: "finished", finished: 1 });
+		expect(jobsBarView()).toEqual({ phase: "finished" });
 		vi.advanceTimersByTime(JOBS_FINISHED_LINGER_MS / 2);
 		frame(1);
 		expect(jobsBarView()).toEqual({ phase: "running", running: 1 });
 		// The superseded note's timer must not hide the later one early.
 		frame(0);
-		expect(jobsBarView()).toEqual({ phase: "finished", finished: 1 });
+		expect(jobsBarView()).toEqual({ phase: "finished" });
 		vi.advanceTimersByTime(JOBS_FINISHED_LINGER_MS - 1);
-		expect(jobsBarView()).toEqual({ phase: "finished", finished: 1 });
+		expect(jobsBarView()).toEqual({ phase: "finished" });
 		vi.advanceTimersByTime(1);
 		expect(jobsBarView()).toBeUndefined();
 	});
@@ -73,12 +73,12 @@ describe("jobs bar presence", () => {
 	test("another session's note never shows, and its frames start a fresh episode", () => {
 		frame(3);
 		frame(0);
-		expect(jobsBarView()).toEqual({ phase: "finished", finished: 3 });
+		expect(jobsBarView()).toEqual({ phase: "finished" });
 		setState("currentSessionId", "sess-b");
 		expect(jobsBarView()).toBeUndefined();
 		frame(1);
 		expect(jobsBarView()).toEqual({ phase: "running", running: 1 });
 		frame(0);
-		expect(jobsBarView()).toEqual({ phase: "finished", finished: 1 });
+		expect(jobsBarView()).toEqual({ phase: "finished" });
 	});
 });

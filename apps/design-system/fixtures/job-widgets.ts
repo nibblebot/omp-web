@@ -177,7 +177,7 @@ export const subagentWidget: WireJobWidgetView = {
 	updatedAt: UPDATED_AT,
 };
 
-/** A wait card that settled with widgets: a live benchmark, a live subagent, a basic one (not drawn), a job without one. */
+/** A wait card that settled with widgets: a live benchmark, a live subagent, a still-running job's basic widget (its stage is drawn), a failed run's headline, a job without a widget. */
 export const waitWidgetsTool: ToolItem = {
 	kind: "tool",
 	id: 9100,
@@ -222,7 +222,15 @@ export const waitWidgetsTool: ToolItem = {
 				label: "gh run watch",
 				durationMs: 88_000,
 				exitCode: 1,
-				widget: { ...blockWidgets.grid, state: "live" },
+				widget: {
+					...blockWidgets.grid,
+					headline: {
+						text: "1 of 10 failed",
+						label: "shards",
+						trend: { text: "types", tone: "error" },
+					},
+					state: "live",
+				},
 			},
 			{
 				id: "bg_plain",

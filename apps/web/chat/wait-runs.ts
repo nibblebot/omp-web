@@ -9,6 +9,7 @@
 import type { WireJobWidgetView, WireWaitJob } from "#lib/wire/protocol";
 import type { ChatItem, ToolItem } from "../state";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "./thinking";
+import type { TurnMeta } from "./turn-usage";
 import { waitCallOf, type WaitAgent } from "./wait-details";
 
 /** The calls of one run, oldest first; the card renders at the first. */
@@ -22,14 +23,20 @@ export interface WaitFoldOptions {
 	hideThinking: boolean;
 	/** `proseOnlyThinking`: fenced code in thinking is elided (may leave a block with nothing to show). */
 	proseOnlyThinking: boolean;
+	/** `display.showTokenUsage`: an assistant item with usage draws a usage row. */
+	showTokenUsage: boolean;
+	/** Per-assistant display metadata; an item with a cache-miss marker draws it. */
+	turnMeta: ReadonlyMap<number, TurnMeta>;
 }
 
-/** Whether an assistant item draws anything: text, thinking that shows under `options`, or an interruption footer. */
+/** Whether an assistant item draws anything: text, thinking that shows under `options`, a usage row or cache-miss marker, or an interruption footer. */
 export function assistantShowsContent(
 	item: Extract<ChatItem, { kind: "assistant" }>,
 	options: WaitFoldOptions,
 ): boolean {
 	if (item.interrupted) return true;
+	if (options.showTokenUsage && item.usage !== undefined) return true;
+	if (options.turnMeta.get(item.id)?.cacheMissTokens) return true;
 	for (const block of item.blocks) {
 		if (block.kind === "text") {
 			if (block.text.trim() !== "") return true;

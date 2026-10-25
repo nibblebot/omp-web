@@ -8,19 +8,17 @@ import { createComponent } from "solid-js";
 import * as solidWeb from "solid-js/web";
 import type { WireJobWidgetEntry } from "#lib/wire/protocol";
 import { JobsBar } from "../components/jobs/JobsBar";
-import { setState, state } from "../state";
+import { setState } from "../state";
 import { applyJobWidgets, clearJobWidgets } from "../store/job-widgets";
 import { JOBS_FINISHED_LINGER_MS } from "../store/jobs-bar";
 import { installJsxShim, restoreJsxShim } from "./web.testkit";
-
-const saved = { jobWidgets: state.jobWidgets };
 
 beforeAll(() => {
 	installJsxShim();
 });
 
 afterAll(() => {
-	setState("jobWidgets", saved.jobWidgets);
+	clearJobWidgets();
 	restoreJsxShim();
 });
 
@@ -83,13 +81,12 @@ describe("JobsBar after the last job ends", () => {
 
 	const draw = () => solidWeb.renderToString(() => createComponent(JobsBar, {}));
 
-	test("keeps a quiet finished note that opens the sheet, then hides", () => {
+	test("keeps a quiet finished note, then hides", () => {
 		vi.useFakeTimers();
 		clearJobWidgets();
 		applyJobWidgets({ running: 2, entries: [] });
 		applyJobWidgets({ running: 0, entries: [] });
 		const html = draw();
-		expect(html).toContain("2 jobs finished");
 		expect(html).toContain('data-phase="finished"');
 		expect(html).not.toContain("running");
 		vi.advanceTimersByTime(JOBS_FINISHED_LINGER_MS);

@@ -13,7 +13,7 @@ import {
 	type JSX,
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import type { BackgroundJob } from "../../../chat/background-job";
+import { effectiveStatus, type BackgroundJob } from "../../../chat/background-job";
 import { toolKind, type ToolIconKey } from "../../../chat/tool-kinds";
 import { state, type ToolItem } from "../../../state";
 import { Card } from "../../ui/Card";
@@ -41,9 +41,9 @@ import {
 /** Lines of tool output shown while collapsed; Ctrl+O (toolsExpanded) reveals the rest. */
 export const COLLAPSED_LINES = 20;
 
-/** Cards stay expanded while running or when the user toggles Ctrl+O. */
+/** Cards stay expanded while running (a call parked on a background job counts) or when the user toggles Ctrl+O. */
 export const toolExpanded = (item: ToolItem): boolean =>
-	state.toolsExpanded || item.status === "running";
+	state.toolsExpanded || effectiveStatus(item) === "running";
 
 /** The tool call a card renders; `ToolCardShell` stamps it on the card root as `data-tool-call-id` so a jump from elsewhere in the transcript finds the card (`chat/tool-jump.ts`). */
 export const ToolCallIdContext = createContext<string>();

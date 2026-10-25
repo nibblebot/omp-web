@@ -42,7 +42,7 @@ export default defineStory({
 			name: "Finished",
 			description:
 				"The last job ended. The bar stays as a quiet note with a view cue, so the sheet's recent jobs remain one click away; it hides 30s after the last job ended (Reopen replays it).",
-			seed: () => seedFinishedJobs(2),
+			seed: seedFinishedJobs,
 			render: () => <JobsBar />,
 		},
 		{

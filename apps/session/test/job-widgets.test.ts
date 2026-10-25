@@ -100,7 +100,6 @@ function harness(options: { viewers?: boolean } = {}) {
 		setViewers(next: boolean) {
 			viewers = next;
 		},
-		notify: () => listener?.(),
 		get reads() {
 			return reads;
 		},
@@ -295,21 +294,36 @@ describe("createJobWidgetPublisher", () => {
 		expect(h.publisher.primeFrames()).toEqual([]);
 	});
 
-	test("the registry's change notice pokes a sample, and the subscription lives only while widgets run", () => {
+	test("the registry subscription lives only while widgets run", () => {
 		const h = harness();
 		h.set([raw("bg_1")]);
 		h.publisher.poke();
 		h.advance(0);
 		expect(h.subscribed).toBe(true);
-		h.advance(500);
-		h.set([raw("bg_1", 2, "190 tok/s")]);
-		h.notify();
-		h.advance(JOB_WIDGETS_INTERVAL_MS - 500);
-		expect(h.frames).toHaveLength(2);
 		h.set([]);
 		h.advance(JOB_WIDGETS_INTERVAL_MS);
 		expect(h.subscribed).toBe(false);
 		expect(h.subscribes).toBe(h.unsubscribes);
+	});
+
+	test("a poke after sampling went idle waits out the interval since the last sample", () => {
+		const h = harness();
+		h.set([raw("bg_1")]);
+		h.publisher.poke();
+		h.advance(0);
+		h.set([]);
+		h.advance(JOB_WIDGETS_INTERVAL_MS); // idle sample at t=1000: the sampler stops
+		const reads = h.reads;
+		h.advance(300);
+		h.set([raw("bg_1", 5, "210 tok/s")]);
+		h.publisher.poke(); // t=1300: due at t=2000, not now
+		h.advance(0);
+		expect(h.reads).toBe(reads);
+		h.advance(JOB_WIDGETS_INTERVAL_MS - 300 - 1);
+		expect(h.reads).toBe(reads);
+		h.advance(1);
+		expect(h.reads).toBe(reads + 1);
+		expect(h.frames.at(-1)?.entries.map((entry: WireJobWidgetEntry) => entry.id)).toEqual(["bg_1"]);
 	});
 
 	test("dispose stops sampling and listening", () => {
@@ -347,12 +361,16 @@ describe("wireJobWidgets", () => {
 	test("a tool call ending pokes the session's widgets onto the wire, and an attach is primed with them", () => {
 		let sessionListener: ((event: AgentSessionEvent) => void) | undefined;
 		let widgets: RawJobWidget[] = [];
+		let widgetReads = 0;
 		const session = {
 			subscribe: (listener: (event: AgentSessionEvent) => void) => {
 				sessionListener = listener;
 				return () => {};
 			},
-			getRunningJobWidgets: () => widgets,
+			getRunningJobWidgets: () => {
+				widgetReads++;
+				return widgets;
+			},
 			getAsyncJobSnapshot: () => ({
 				running: [
 					...widgets.map((widget) => ({ id: widget.id, type: widget.type })),
@@ -369,6 +387,7 @@ describe("wireJobWidgets", () => {
 		sessionListener?.({ type: "turn_start" } as AgentSessionEvent);
 		vi.advanceTimersByTime(JOB_WIDGETS_INTERVAL_MS);
 		expect(tapped).toHaveLength(0);
+		expect(widgetReads).toBe(0);
 
 		widgets = [raw("bg_1")];
 		sessionListener?.({ type: "tool_execution_end" } as AgentSessionEvent);

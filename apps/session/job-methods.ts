@@ -1,5 +1,5 @@
 /**
- * Background-job RPCs for the jobs sheet (the Jobs feature): the SDK's job tree
+ * Background-job RPCs for the jobs sheet: the SDK's job tree
  * of the attached session and its subagents, one job's inspection, and the
  * cancel the TUI's jobs sheet offers on the session's own jobs only.
  *

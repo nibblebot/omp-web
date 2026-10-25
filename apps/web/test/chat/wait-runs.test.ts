@@ -17,7 +17,21 @@ import {
 	type WaitFoldOptions,
 } from "../../chat/wait-runs";
 
-const SHOWN: WaitFoldOptions = { hideThinking: false, proseOnlyThinking: true };
+const SHOWN: WaitFoldOptions = {
+	hideThinking: false,
+	proseOnlyThinking: true,
+	showTokenUsage: false,
+	turnMeta: new Map(),
+};
+
+const USAGE = {
+	input: 10,
+	output: 5,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 15,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
 
 let nextId = 1;
 
@@ -196,6 +210,21 @@ describe("run boundaries", () => {
 		const thought = plain([{ kind: "thinking", text: "Considering the retry path." }]);
 		expect(assistantShowsContent(thought, SHOWN)).toBe(true);
 		expect(assistantShowsContent(thought, { ...SHOWN, hideThinking: true })).toBe(false);
+	});
+
+	test("a turn that draws a usage row ends the run only while token usage is shown", () => {
+		const [a, b] = [wait([job("x", "running")]), wait([job("x", "completed")])];
+		const metered = { ...assistant(), usage: USAGE } as ChatItem;
+		expect(groups([a, metered, b])).toEqual([[a.id, b.id]]);
+		expect(groups([a, metered, b], { ...SHOWN, showTokenUsage: true })).toEqual([[a.id], [b.id]]);
+	});
+
+	test("a turn that draws a cache-miss marker ends the run", () => {
+		const [a, b] = [wait([job("x", "running")]), wait([job("x", "completed")])];
+		const cold = assistant();
+		const turnMeta = new Map([[cold.id, { cacheMissTokens: 4000 }]]);
+		expect(groups([a, cold, b])).toEqual([[a.id, b.id]]);
+		expect(groups([a, cold, b], { ...SHOWN, turnMeta })).toEqual([[a.id], [b.id]]);
 	});
 });
 

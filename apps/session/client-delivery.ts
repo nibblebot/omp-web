@@ -467,6 +467,7 @@ export function streamingPrimeFrames(
 				toolCallId,
 				toolName: progress.toolName,
 				output: progress.output,
+				...(progress.output === "" ? { append: true as const } : {}),
 				...(progress.images.length > 0 ? { images: progress.images } : {}),
 				...(progress.live !== undefined ? { live: progress.live } : {}),
 				...(progress.async !== undefined ? { async: progress.async } : {}),
@@ -511,6 +512,9 @@ function toolUpdateFrame(
 	const job = slimAsyncFrame(event.partialResult?.details);
 	const asyncChanged =
 		job !== undefined && (sent?.resync === true || !sameAsyncFrame(job, sent?.async));
+	// A task call mixing blocking and background spawns can report a settled job before its
+	// tool_execution_end; its later updates then go out as snapshots and it is not primed until the end.
+	// Harmless: the web handles an early terminal frame.
 	if (job !== undefined && job.state !== "running") tools.delete(event.toolCallId);
 	else
 		tools.set(event.toolCallId, {

@@ -510,7 +510,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 	}
 
 	/**
-	 * Abort mirrors the hub tool's cancel path (tools/hub/jobs.ts executeCancel): kill the async job
+	 * Abort mirrors the SDK's cancel path (async/job-control.ts executeCancel): kill the async job
 	 * first, since bare session.abort() only interrupts the in-flight turn and the executor keeps
 	 * the job running. Jobless registrations (pre-job spawn, idle/parked zombies) die via abort +
 	 * lifecycle release.

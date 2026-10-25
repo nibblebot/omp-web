@@ -49,7 +49,6 @@ export interface SubagentFixture extends SubagentInfo {
 	patch?: string;
 	changedFiles?: string[];
 	output?: string;
-	unavailableReason?: string;
 	artifactAvailability: "available" | "missing";
 	hasHistory: boolean;
 	revivable: boolean;
@@ -522,7 +521,6 @@ export const subagentInfos: SubagentFixture[] = [
 		cost: 0.052,
 		output:
 			"Error: session file rotated before the review pass finished. The artifact is missing, so no transcript can be replayed.",
-		unavailableReason: "artifact missing",
 		artifactAvailability: "missing",
 		hasHistory: false,
 		revivable: false,
@@ -606,7 +604,6 @@ function workerRecord(sub: SubagentFixture): WorkerRecord {
 						contextWindow: sub.contextWindow,
 					},
 		artifactAvailability: sub.artifactAvailability,
-		unavailableReason: sub.unavailableReason,
 		sessionFile: sub.sessionFile ?? null,
 		hasHistory: sub.hasHistory,
 		lastActivity: sub.lastUpdate,

@@ -174,6 +174,24 @@ describe("running tool output on the wire", () => {
 		expect(card).toMatchObject({ output: "shot taken", images: [image] });
 	});
 
+	test("an image and the first text in one flush window both reach the card", async () => {
+		const entry = freshEntry();
+		attachMidTool();
+		deliver(entry, start);
+		const image = { type: "image", data: "aGk=", mimeType: "image/png" };
+		const frame = (text: string) =>
+			({
+				...update(text),
+				partialResult: { content: [{ type: "text", text }, image] },
+			}) as unknown as AgentSessionEvent;
+		// The image alone arrives first; the text after it is a snapshot that does not repeat it.
+		deliver(entry, frame(""));
+		deliver(entry, frame("shot"));
+		await tick();
+		const card = state.items.find((item) => item.kind === "tool");
+		expect(card).toMatchObject({ output: "shot", images: [image] });
+	});
+
 	test("a browser that attaches mid-tool is primed with the output so far, then follows the appends", async () => {
 		const entry = freshEntry();
 		// Browser A watches the whole call.
@@ -314,6 +332,20 @@ describe("live eval and wait status on the wire", () => {
 		deliver(entry, settle("eval", "out\nmore\n", settled));
 		expect(toolCard()).toMatchObject({ status: "done", details: settled });
 		expect(toolCard().live).toBeUndefined();
+	});
+
+	test("a status frame and the first output in one flush window both reach the card", async () => {
+		const entry = freshEntry();
+		attachMidTool();
+		deliver(entry, start);
+		const log = { op: "log", message: "scanning" };
+		// The status alone goes out as an empty append; the first output after it as a snapshot
+		// without the status (it did not change). No flush between the two.
+		deliver(entry, partial("eval", "", evalDetails([log])));
+		deliver(entry, partial("eval", "out\n", evalDetails([log])));
+		await tick();
+		expect(cardOutput()).toBe("out\n");
+		expect(toolCard().live).toMatchObject({ kind: "eval", status: [{ op: "log" }] });
 	});
 
 	test("a wait's tiles go out without widgets or results, and a clock tick alone is not sent", async () => {
