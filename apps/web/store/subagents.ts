@@ -577,11 +577,6 @@ export function fanoutTotals(toolCallId: string): {
 	};
 }
 
-/** Every agent the dock lists: roster (survives reload) merged with the live mirror. */
-export function subagentCount(): number {
-	return flatten(buildForest()).length;
-}
-
 /** Running or pending agents at every depth (the composer button's count; matches the dock's Running filter). */
 export function runningSubagentCount(): number {
 	return flatten(buildForest()).filter(isActiveSubagent).length;

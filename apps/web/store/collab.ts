@@ -40,7 +40,7 @@ export function stopCollabRoom(): void {
 	);
 }
 
-/** Open the ShareSheet (header button). */
+/** Open the ShareSheet (header kebab). */
 export function openShareSheet(): void {
 	setState("modal", "share");
 }

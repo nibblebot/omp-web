@@ -119,12 +119,6 @@
 	background: var(--hover);
 	color: var(--text);
 }
-.main-header-subagents {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--space-2);
-	white-space: nowrap;
-}
 /* Thin strip under the main header: transport state while not connected.
    Replaces the old header pill; the sticky error toast collapses into it. */
 .connection-bar {
@@ -146,15 +140,12 @@
 	white-space: nowrap;
 }
 
-/* Compact header: badges drop to icon + count and the goal badge narrows
-   before the title gives up any more room. */
+/* Compact header: the goal badge narrows before the title gives up any more
+   room. */
 @media (max-width: 767px) {
 	.main-header {
 		gap: var(--space-2);
 		padding-left: var(--space-4);
-	}
-	.main-header-label {
-		display: none;
 	}
 	.main-header .goal-badge {
 		max-width: 9rem;

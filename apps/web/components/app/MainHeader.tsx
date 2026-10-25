@@ -1,23 +1,20 @@
 import { Show, type Component, type JSX } from "solid-js";
 import { GoalBadge } from "../chat/status/GoalBadge";
-import { subagentCount } from "../../store/subagents";
-import { openAgents } from "../../store/dock";
-import { openShareSheet } from "../../store/collab";
 import { setSidebarVisible, setState, setTxSidebarVisible, state } from "../../state";
-import { LayersIcon, PanelLeftIcon, SettingsIcon } from "../ui/icons";
+import { PanelLeftIcon, SettingsIcon } from "../ui/icons";
 
 /**
  * Main pane header, shared by Chat (live session and the no-session pane) and
  * Analysis. Left: the sidebar open toggle (only while the current view's
- * sidebar is closed) and the title slot. Right: the actions slot, the
- * session badges (goal, subagents, share) when `session` is set, the disconnected
- * pill, and the settings gear, always rightmost. Below 768px the badges
- * compact to icons first (shell.css); the title shrinks last.
+ * sidebar is closed) and the title slot. Right: the actions slot, the goal
+ * badge when `session` is set, and the settings gear, always rightmost.
+ * Below 768px the goal badge compacts first (shell.css); the title shrinks
+ * last.
  */
 export const MainHeader: Component<{
 	title?: JSX.Element;
 	actions?: JSX.Element;
-	/** Show session-scoped badges (goal, subagents). */
+	/** Show the session goal badge. */
 	session?: boolean;
 }> = (props) => (
 	<header class="main-header">
@@ -40,35 +37,6 @@ export const MainHeader: Component<{
 			{props.actions}
 			<Show when={props.session}>
 				<GoalBadge />
-				<Show when={subagentCount() > 0}>
-					<button
-						type="button"
-						class="segment segment-button main-header-subagents"
-						onClick={openAgents}
-						title={`${subagentCount()} subagents`}
-						aria-label={`${subagentCount()} subagents`}
-					>
-						<LayersIcon />
-						<span class="main-header-label">subagents</span>
-						<span>{subagentCount()}</span>
-					</button>
-				</Show>
-				<button
-					type="button"
-					class="segment segment-button main-header-share"
-					onClick={() => openShareSheet()}
-					title={
-						state.collabStatus.state === "live"
-							? "Shared session: open the share sheet"
-							: "Share this session"
-					}
-				>
-					<span class="main-header-label">
-						{state.collabStatus.state === "live"
-							? `Live · ${state.collabStatus.participants.filter((p) => p.role === "guest").length}`
-							: "Share"}
-					</span>
-				</button>
 			</Show>
 			<button
 				type="button"

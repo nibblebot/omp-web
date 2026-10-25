@@ -9,7 +9,6 @@ import {
 	runningSubagentCount,
 	subagentById,
 	subagentCapabilities,
-	subagentCount,
 	subagentForest,
 	subagentTree,
 	type WorkerRecord,
@@ -507,21 +506,5 @@ describe("agent pane actions", () => {
 
 	test("unknown agents offer no actions", () => {
 		expect(agentPaneActions(subagentCapabilities("missing"))).toEqual([]);
-	});
-});
-
-describe("subagentCount", () => {
-	test("counts roster agents that have no live mirror entry, e.g. after a reload", () => {
-		seed([
-			{ id: "a", status: "parked" },
-			{ id: "b", status: "done", startedAt: 1, endedAt: 2 },
-		]);
-		setState("subagents", new Map<string, SubagentInfo>());
-		expect(subagentCount()).toBe(2);
-	});
-
-	test("is zero when no agents exist", () => {
-		setState("subagents", new Map<string, SubagentInfo>());
-		expect(subagentCount()).toBe(0);
 	});
 });
