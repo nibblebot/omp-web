@@ -158,6 +158,7 @@ Fleet, session, and wire fixes from the infra audit (`kfg5`). Wire is OMP_PROTO 
 
 ### Fixes
 - Chat: the "Working…" shimmer sweeps visibly in the light, Catppuccin Latte and omp light themes; their highlight band was as dark as the label, so the label looked static. Each palette now sets a `--shimmer-band` token.
+- Chat: an assistant message's copy action is a clipboard icon at the right end of a footer row under the message (left of the per-turn usage summary when shown) instead of a "copy" button floating over the top-right of its text. Hovering the message shows it faintly; it reaches full contrast under the pointer or keyboard focus. A copy flips it to a check mark for 1.2 s, with "Message copied" beside it where the row has room (on narrow screens, where the usage summary fills the row, the check shows alone), without moving or covering anything. It copies the message's text blocks and is offered only on messages that have text.
 - MCP: `/mcp reauth` works from the web. SDK 18.12.6 runs it headlessly (18.11.0 answered it as terminal-only), and a successful reauth now reconnects the server and rebinds its tools without restarting the session.
 - MCP: Test, Inspect and OAuth revoke no longer spawn or connect to a server declared only in the project config while `mcp.enableProjectConfig` is off; they report that the project config is off, as the SDK no longer loads it.
 - Tool approvals: an approval prompt keeps its line breaks, so the one-argument-per-line prompts of SDK 18.12 read as the terminal shows them instead of collapsing onto one line.

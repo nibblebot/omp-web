@@ -41,18 +41,6 @@ export const AssistantCard: Component<{
 	if (!props.thinking && text().length === 0 && !props.assistant.interrupted) return null;
 	return (
 		<div class="msg-assistant">
-			<div class="msg-toolbar">
-				<CopyButton
-					class="msg-copy-btn"
-					title="Copy message markdown"
-					text={() => {
-						const visible = blocks().filter((b) => b.kind !== "thinking");
-						return (visible.length > 0 ? visible : props.assistant.blocks)
-							.map((b) => b.text)
-							.join("\n\n");
-					}}
-				/>
-			</div>
 			<For each={blocks()}>
 				{(block) =>
 					block.kind === "thinking" ? (
@@ -84,26 +72,43 @@ export const AssistantCard: Component<{
 					</div>
 				)}
 			</Show>
-			<Show when={showTokenUsage() && props.assistant.usage}>
-				{(u) => {
-					const row = buildUsageRow(u(), props.assistant.ttft, props.assistant.duration);
-					if (!row) return null;
-					const turn = props.meta?.turnMs;
-					const at = props.assistant.completedAt;
-					const summary = [
-						at !== undefined ? formatTurnStamp(at, Date.now()) : null,
-						turn !== undefined ? `Δ ${formatDurationMs(turn)}` : null,
-						formatUsageRow(row),
-					]
-						.filter((part) => part !== null)
-						.join(" · ");
-					return (
-						<div class="usage-row" title="per-turn usage">
-							{summary}
-						</div>
-					);
-				}}
-			</Show>
+			<div class="msg-footer" data-copy-feedback-bounds>
+				<Show when={text().length > 0}>
+					<div class="msg-toolbar">
+						<CopyButton
+							class="msg-copy-btn msg-copy-btn--icon"
+							title="Copy message markdown"
+							icon
+							copiedLabel="Message copied"
+							text={() =>
+								text()
+									.map((b) => b.text)
+									.join("\n\n")
+							}
+						/>
+					</div>
+				</Show>
+				<Show when={showTokenUsage() && props.assistant.usage}>
+					{(u) => {
+						const row = buildUsageRow(u(), props.assistant.ttft, props.assistant.duration);
+						if (!row) return null;
+						const turn = props.meta?.turnMs;
+						const at = props.assistant.completedAt;
+						const summary = [
+							at !== undefined ? formatTurnStamp(at, Date.now()) : null,
+							turn !== undefined ? `Δ ${formatDurationMs(turn)}` : null,
+							formatUsageRow(row),
+						]
+							.filter((part) => part !== null)
+							.join(" · ");
+						return (
+							<div class="usage-row" title="per-turn usage">
+								{summary}
+							</div>
+						);
+					}}
+				</Show>
+			</div>
 		</div>
 	);
 };

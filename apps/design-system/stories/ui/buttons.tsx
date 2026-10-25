@@ -75,12 +75,26 @@ export default defineStory({
 			render: () => <CopyButton text="omp --resume 2026-10-09T11-42-17Z_a1b2c3.jsonl" />,
 		},
 		{
-			name: "CopyButton: message toolbar",
-			description: "The production styling used on chat message cards.",
+			name: "CopyButton: user message toolbar",
+			description: "The text styling used on user message cards.",
 			render: () => (
 				<CopyButton
 					class="msg-copy-btn"
 					title="Copy message markdown"
+					text={() => "Resolved at click time, so streaming text is never stale."}
+				/>
+			),
+		},
+		{
+			name: "CopyButton: assistant message footer",
+			description:
+				'Icon mode used in assistant card footers; the clipboard flips to a check and "Message copied" for 1.2s.',
+			render: () => (
+				<CopyButton
+					class="msg-copy-btn msg-copy-btn--icon"
+					title="Copy message markdown"
+					icon
+					copiedLabel="Message copied"
 					text={() => "Resolved at click time, so streaming text is never stale."}
 				/>
 			),

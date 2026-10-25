@@ -370,8 +370,6 @@
 }
 .msg-assistant {
 	align-self: stretch;
-	/* Anchors the per-message hover/focus toolbar above the content. */
-	position: relative;
 }
 .msg-assistant.live {
 	opacity: 0.95;
@@ -788,6 +786,66 @@ pre {
 .msg-branch-btn:hover {
 	background: var(--hover);
 	color: var(--text);
+}
+/* Assistant cards keep their copy action in an in-flow footer under the text,
+   right-aligned beside the usage summary, so it never covers the message and
+   stays out of the left edge the eye returns to on every line. */
+.msg-footer {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: var(--space-4);
+	margin-top: var(--space-2);
+}
+.msg-footer:empty {
+	display: none;
+}
+.msg-footer .msg-toolbar {
+	position: static;
+}
+/* The pointer rests on the message while reading, so card hover shows the icon
+   faintly; it reaches full contrast under the pointer or keyboard focus, and
+   stays fully visible while its "Message copied" feedback shows, even if the
+   pointer leaves the message. Hover-capable devices only: a touch tap leaves a
+   sticky :hover behind. */
+@media (hover: hover) {
+	.msg-assistant:hover .msg-footer .msg-toolbar:not(:hover, :focus-within, :has([data-copied])) {
+		opacity: 0.4;
+	}
+}
+.msg-footer .msg-toolbar:has([data-copied]) {
+	opacity: 1;
+}
+.msg-footer .usage-row {
+	margin-top: 0;
+}
+.msg-copy-btn--icon {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: var(--space-1);
+	background: none;
+	border-color: transparent;
+	font-size: var(--fs-base);
+}
+/* Out of flow, so copying moves nothing: the button keeps its size and the
+   check lands exactly where the clipboard was. CopyButton measures on copy:
+   the label shows only when it fits in the footer's free space left of the
+   button. On narrow cards a wrapped usage summary fills the row and the button
+   sits at its start; there the label stays hidden (visibility, so it keeps its
+   width for the next measurement) and the check alone confirms the copy. */
+.copy-feedback-label {
+	position: absolute;
+	top: 50%;
+	right: 100%;
+	transform: translateY(-50%);
+	white-space: nowrap;
+	pointer-events: none;
+	font-size: var(--fs-sm);
+}
+.copy-feedback-label[data-overflow] {
+	visibility: hidden;
 }
 /* Touch: no hover, so the per-message toolbar sits in flow under its message
    with 44px targets. Jump-to-bottom and the cards toggle get touch targets too. */
