@@ -1684,7 +1684,7 @@ export type DaemonInfo = {
  * Daemon names are unique per projectDir and several omp-sessions can share
  * a projectDir, so the server's broker poll (refreshDaemons), the fleet
  * edge's aggregator (daemons-aggregator.ts) and the client (state.ts /
- * BackgroundDaemonsBar) all key daemon entries by this composite. Single-sourced
+ * the Activities Daemons section) all key daemon entries by this composite. Single-sourced
  * here so the three layers cannot drift; the NUL separator cannot appear in
  * paths, which keeps the prefix-cleanup check in refreshDaemons unambiguous.
  */
