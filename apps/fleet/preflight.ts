@@ -533,7 +533,7 @@ async function checkCallbackUrl(
 	}
 	return fail(
 		`TCP connect failed for ${url.hostname}:${port} (tried ${addresses.join(", ")})`,
-		`the callback server must be reachable from the daemon host: start it (omp-web on the ` +
+		`the callback server must be reachable from the session host: start it (omp-web on the ` +
 			`reachable bind), open firewall port ${port}, or fix the callback URL`,
 	);
 }

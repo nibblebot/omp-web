@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { DaemonStatus } from "#lib/wire/protocol";
+import type { SessionStatus } from "#lib/wire/protocol";
 import { sessionActivity } from "../../fleet-ui/session-activity";
 
 /** Attached session, idle stream. */
@@ -46,10 +46,9 @@ const DETACHED = {
  * attached session, which is ready by definition when it is streaming).
  */
 describe("sessionActivity non-ready statuses → null", () => {
-	const statuses: DaemonStatus[] = [
+	const statuses: SessionStatus[] = [
 		"spawning",
 		"connecting",
-		"session",
 		"resolving",
 		"asleep",
 		"reconnecting",
@@ -130,7 +129,7 @@ describe("sessionActivity unread", () => {
 	});
 });
 
-describe("sessionActivity remote realtime activity (daemon_activity frames)", () => {
+describe("sessionActivity remote realtime activity (session_activity frames)", () => {
 	const REMOTE_STREAMING = { streaming: true, blocked: false };
 	const REMOTE_BLOCKED = { streaming: true, blocked: true };
 	const REMOTE_IDLE = { streaming: false, blocked: false };

@@ -66,7 +66,7 @@ export default defineStory({
 		},
 		{
 			name: "No longer listed",
-			description: "The daemon evicted the job after its retention window.",
+			description: "The session process evicted the job after its retention window.",
 			render: () => <JobDetail job={jobOf(JOB_IDS.tests)} detail={null} now={NOW} />,
 		},
 	],

@@ -30,11 +30,11 @@ function loadedRegistry(statePath: string): Promise<Registry> {
 }
 
 /** Status of one entry as the state file holds it (not the in-memory copy). */
-function onDiskStatus(statePath: string, daemonId: string): string | undefined {
+function onDiskStatus(statePath: string, workspaceId: string): string | undefined {
 	const { entries } = JSON.parse(readFileSync(statePath, "utf8")) as {
-		entries: Array<{ daemonId: string; status: string }>;
+		entries: Array<{ workspaceId: string; status: string }>;
 	};
-	return entries.find((e) => e.daemonId === daemonId)?.status;
+	return entries.find((e) => e.workspaceId === workspaceId)?.status;
 }
 
 describe("Registry", () => {
@@ -43,7 +43,7 @@ describe("Registry", () => {
 		expect(registry.list()).toEqual([]);
 		expect(registry.get("d1")).toBeUndefined();
 		const entry = registry.create(baseInit());
-		expect(entry.daemonId).toBe("d1");
+		expect(entry.workspaceId).toBe("d1");
 		expect(entry.status).toBe("spawning");
 		expect(entry.registeredAt).toBeGreaterThan(0);
 	});
@@ -60,8 +60,8 @@ describe("Registry", () => {
 				status: "ready",
 			}),
 		);
-		expect(registry.get(entry.daemonId)).toEqual(entry);
-		expect(registry.get(entry.daemonId)).toMatchObject({
+		expect(registry.get(entry.workspaceId)).toEqual(entry);
+		expect(registry.get(entry.workspaceId)).toMatchObject({
 			name: "alpha",
 			cwd: "/srv/repos/web",
 			project: "web",
@@ -86,13 +86,13 @@ describe("Registry", () => {
 				project: "proj-b",
 			}),
 		);
-		registry.setStatus(a.daemonId, "ready");
-		registry.setStatus(b.daemonId, "error", "connect refused");
+		registry.setStatus(a.workspaceId, "ready");
+		registry.setStatus(b.workspaceId, "error", "connect refused");
 
 		registry.flush();
 		const reloaded = await loadedRegistry(statePath);
 		expect(reloaded.list()).toEqual(registry.list());
-		expect(reloaded.list().map((e) => e.daemonId)).toEqual(["d1", "d2"]);
+		expect(reloaded.list().map((e) => e.workspaceId)).toEqual(["d1", "d2"]);
 		// nextId is persisted too.
 		expect(JSON.parse(readFileSync(statePath, "utf8")).nextId).toBe(3);
 	});
@@ -121,10 +121,10 @@ describe("Registry", () => {
 				},
 			}),
 		);
-		registry.updateWorkspace(entry.daemonId, { desiredState: "stopped" });
+		registry.updateWorkspace(entry.workspaceId, { desiredState: "stopped" });
 		registry.flush();
 		const reloaded = await loadedRegistry(statePath);
-		expect(reloaded.get(entry.daemonId)?.workspace).toEqual({
+		expect(reloaded.get(entry.workspaceId)?.workspace).toEqual({
 			kind: "worktree",
 			projectId: "p1",
 			desiredState: "stopped",
@@ -157,7 +157,7 @@ describe("Registry", () => {
 			nextId: 7,
 			entries: fixtures.map((init, index) => ({
 				...init,
-				daemonId: `d${index + 1}`,
+				workspaceId: `d${index + 1}`,
 				registeredAt: 1,
 				status: "asleep",
 			})),
@@ -171,8 +171,8 @@ describe("Registry", () => {
 		await registry.load();
 		expect(changes).toBe(0);
 		expect(readFileSync(statePath, "utf8")).toBe(original);
-		for (const daemonId of ["d1", "d2", "d3", "d4"]) {
-			expect(registry.get(daemonId)?.workspace?.kind).toBe("worktree");
+		for (const workspaceId of ["d1", "d2", "d3", "d4"]) {
+			expect(registry.get(workspaceId)?.workspace?.kind).toBe("worktree");
 		}
 		expect(registry.get("d5")?.workspace).toEqual({
 			kind: "direct",
@@ -201,7 +201,7 @@ describe("Registry", () => {
 				entries: [
 					{
 						...baseInit(),
-						daemonId: "d1",
+						workspaceId: "d1",
 						registeredAt: 1,
 						status: "asleep",
 						labels: ["env=prod"],
@@ -221,23 +221,23 @@ describe("Registry", () => {
 	test("dN allocation is monotonic across remove and reload (no id reuse)", async () => {
 		const statePath = tmpStatePath();
 		const registry = await loadedRegistry(statePath);
-		expect(registry.create(baseInit()).daemonId).toBe("d1");
-		expect(registry.create(baseInit()).daemonId).toBe("d2");
+		expect(registry.create(baseInit()).workspaceId).toBe("d1");
+		expect(registry.create(baseInit()).workspaceId).toBe("d2");
 		expect(registry.remove("d1")).toBe(true);
 		// Same instance: the counter already advanced.
-		expect(registry.create(baseInit()).daemonId).toBe("d3");
+		expect(registry.create(baseInit()).workspaceId).toBe("d3");
 
 		// Reload from disk: d1 stays gone and the counter stays advanced.
 		registry.flush();
 		const reloaded = await loadedRegistry(statePath);
-		expect(reloaded.list().map((e) => e.daemonId)).toEqual(["d2", "d3"]);
-		expect(reloaded.create(baseInit()).daemonId).toBe("d4");
+		expect(reloaded.list().map((e) => e.workspaceId)).toEqual(["d2", "d3"]);
+		expect(reloaded.create(baseInit()).workspaceId).toBe("d4");
 	});
 
 	test("atomic save: disk always holds complete JSON and never leaves tmp files", async () => {
 		const statePath = tmpStatePath();
 		const registry = await loadedRegistry(statePath);
-		for (let i = 0; i < 5; i++) registry.create(baseInit({ name: `daemon-${i}` }));
+		for (let i = 0; i < 5; i++) registry.create(baseInit({ name: `session-${i}` }));
 		registry.update("d1", { name: "renamed" });
 		registry.setStatus("d2", "error", "boom");
 		registry.remove("d3");
@@ -264,14 +264,14 @@ describe("Registry", () => {
 		// surfaces from flush(), and the real state file keeps the last complete
 		// snapshot.
 		failRename = true;
-		expect(registry.create(baseInit({ name: "lost" })).daemonId).toBe("d2");
+		expect(registry.create(baseInit({ name: "lost" })).workspaceId).toBe("d2");
 		expect(registry.get("d2")?.name).toBe("lost");
 		expect(() => registry.flush()).toThrow("injected save failure");
 		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as {
 			nextId: number;
-			entries: Array<{ daemonId: string; name: string; status: string }>;
+			entries: Array<{ workspaceId: string; name: string; status: string }>;
 		};
-		expect(onDisk.entries.map((e) => e.daemonId)).toEqual(["d1"]);
+		expect(onDisk.entries.map((e) => e.workspaceId)).toEqual(["d1"]);
 		expect(onDisk.entries.map((e) => e.name)).toEqual(["kept"]);
 		expect(onDisk.entries[0]?.status).toBe("ready");
 		expect(onDisk.nextId).toBe(2);
@@ -282,9 +282,9 @@ describe("Registry", () => {
 		registry.flush();
 		const recovered = JSON.parse(readFileSync(statePath, "utf8")) as {
 			nextId: number;
-			entries: Array<{ daemonId: string; name: string }>;
+			entries: Array<{ workspaceId: string; name: string }>;
 		};
-		expect(recovered.entries.map((e) => e.daemonId)).toEqual(["d1", "d2"]);
+		expect(recovered.entries.map((e) => e.workspaceId)).toEqual(["d1", "d2"]);
 		expect(recovered.entries.map((e) => e.name)).toEqual(["kept", "lost"]);
 		expect(recovered.nextId).toBe(3);
 		// The stale tmp file from the failed attempt is replaced and renamed.
@@ -323,15 +323,15 @@ describe("Registry", () => {
 		const registry = await loadedRegistry(statePath);
 		const entry = registry.create(baseInit());
 		registry.flush();
-		registry.setStatus(entry.daemonId, "ready");
-		registry.setStatus(entry.daemonId, "asleep");
-		registry.setStatus(entry.daemonId, "ready");
+		registry.setStatus(entry.workspaceId, "ready");
+		registry.setStatus(entry.workspaceId, "asleep");
+		registry.setStatus(entry.workspaceId, "ready");
 		// Volatile-only changes wait for the 200 ms timer: the state file still
 		// holds the status from the last write.
-		expect(registry.get(entry.daemonId)?.status).toBe("ready");
-		expect(onDiskStatus(statePath, entry.daemonId)).toBe("spawning");
+		expect(registry.get(entry.workspaceId)?.status).toBe("ready");
+		expect(onDiskStatus(statePath, entry.workspaceId)).toBe("spawning");
 		registry.flush();
-		expect(onDiskStatus(statePath, entry.daemonId)).toBe("ready");
+		expect(onDiskStatus(statePath, entry.workspaceId)).toBe("ready");
 	});
 
 	test("close() persists a pending volatile change", async () => {
@@ -339,20 +339,20 @@ describe("Registry", () => {
 		const registry = await loadedRegistry(statePath);
 		const entry = registry.create(baseInit());
 		registry.flush();
-		registry.setStatus(entry.daemonId, "ready");
-		expect(onDiskStatus(statePath, entry.daemonId)).toBe("spawning");
+		registry.setStatus(entry.workspaceId, "ready");
+		expect(onDiskStatus(statePath, entry.workspaceId)).toBe("spawning");
 		registry.close();
-		expect(onDiskStatus(statePath, entry.daemonId)).toBe("ready");
+		expect(onDiskStatus(statePath, entry.workspaceId)).toBe("ready");
 	});
 
 	test("update applies a partial patch, persists, and throws on unknown id", async () => {
 		const statePath = tmpStatePath();
 		const registry = await loadedRegistry(statePath);
 		const entry = registry.create(baseInit({ name: "old" }));
-		const updated = registry.update(entry.daemonId, { name: "new", branch: "feature/x" });
+		const updated = registry.update(entry.workspaceId, { name: "new", branch: "feature/x" });
 		expect(updated).not.toBe(entry); // copy-on-update
-		expect(registry.get(entry.daemonId)).toBe(updated);
-		expect(registry.get(entry.daemonId)).toMatchObject({ name: "new", cwd: "/tmp/proj-a" });
+		expect(registry.get(entry.workspaceId)).toBe(updated);
+		expect(registry.get(entry.workspaceId)).toMatchObject({ name: "new", cwd: "/tmp/proj-a" });
 		expect(() => registry.update("d99", { name: "x" })).toThrow("d99");
 
 		registry.flush();
@@ -365,27 +365,27 @@ describe("Registry", () => {
 		const registry = await loadedRegistry(statePath);
 		const entry = registry.create(baseInit());
 
-		registry.setStatus(entry.daemonId, "error", "spawn failed: port busy");
-		expect(registry.get(entry.daemonId)).toMatchObject({
+		registry.setStatus(entry.workspaceId, "error", "spawn failed: port busy");
+		expect(registry.get(entry.workspaceId)).toMatchObject({
 			status: "error",
 			error: "spawn failed: port busy",
 		});
 
 		// Any non-error transition clears the error.
-		registry.setStatus(entry.daemonId, "ready");
-		expect(registry.get(entry.daemonId)?.status).toBe("ready");
-		expect(registry.get(entry.daemonId)?.error).toBeUndefined();
+		registry.setStatus(entry.workspaceId, "ready");
+		expect(registry.get(entry.workspaceId)?.status).toBe("ready");
+		expect(registry.get(entry.workspaceId)?.error).toBeUndefined();
 
 		// "error" without a message clears a previous error too.
-		registry.setStatus(entry.daemonId, "error", "boom");
-		registry.setStatus(entry.daemonId, "error");
-		expect(registry.get(entry.daemonId)?.error).toBeUndefined();
+		registry.setStatus(entry.workspaceId, "error", "boom");
+		registry.setStatus(entry.workspaceId, "error");
+		expect(registry.get(entry.workspaceId)?.error).toBeUndefined();
 
 		// Status and cleared error survive a reload.
 		registry.flush();
 		const reloaded = await loadedRegistry(statePath);
-		expect(reloaded.get(entry.daemonId)?.status).toBe("error");
-		expect(reloaded.get(entry.daemonId)?.error).toBeUndefined();
+		expect(reloaded.get(entry.workspaceId)?.status).toBe("error");
+		expect(reloaded.get(entry.workspaceId)?.error).toBeUndefined();
 
 		expect(() => registry.setStatus("d99", "ready")).toThrow("d99");
 	});
@@ -396,13 +396,13 @@ describe("Registry", () => {
 		const a = registry.create(baseInit({ name: "a" }));
 		registry.create(baseInit({ name: "b" }));
 		expect(registry.remove("d99")).toBe(false);
-		expect(registry.remove(a.daemonId)).toBe(true);
-		expect(registry.get(a.daemonId)).toBeUndefined();
-		expect(registry.list().map((e) => e.daemonId)).toEqual(["d2"]);
+		expect(registry.remove(a.workspaceId)).toBe(true);
+		expect(registry.get(a.workspaceId)).toBeUndefined();
+		expect(registry.list().map((e) => e.workspaceId)).toEqual(["d2"]);
 
 		registry.flush();
 		const reloaded = await loadedRegistry(statePath);
-		expect(reloaded.list().map((e) => e.daemonId)).toEqual(["d2"]);
+		expect(reloaded.list().map((e) => e.workspaceId)).toEqual(["d2"]);
 	});
 
 	test("list returns a defensive copy", async () => {
@@ -423,12 +423,12 @@ describe("Registry", () => {
 		const entry = registry.create(baseInit()); // 1
 		expect(changes[0]?.upserted).toEqual([entry]);
 		expect(changes[0]?.removed).toEqual([]);
-		registry.update(entry.daemonId, { name: "x" }); // 2
-		registry.setStatus(entry.daemonId, "ready"); // 3
+		registry.update(entry.workspaceId, { name: "x" }); // 2
+		registry.setStatus(entry.workspaceId, "ready"); // 3
 		expect(registry.remove("d99")).toBe(false); // not a mutation
-		registry.remove(entry.daemonId); // 4
+		registry.remove(entry.workspaceId); // 4
 		expect(changes[3]?.upserted).toEqual([]);
-		expect(changes[3]?.removed).toEqual([entry.daemonId]);
+		expect(changes[3]?.removed).toEqual([entry.workspaceId]);
 		await registry.load(); // initialization, not a mutation
 		registry.create(baseInit()); // 5
 		expect(changes).toHaveLength(5);
@@ -444,7 +444,7 @@ describe("Registry", () => {
 
 		writeFileSync(
 			statePath,
-			JSON.stringify({ nextId: 1, entries: [{ name: "missing-daemonId" }] }),
+			JSON.stringify({ nextId: 1, entries: [{ name: "missing-workspaceId" }] }),
 		);
 		await expect(new Registry(statePath).load()).rejects.toThrow(statePath);
 	});
@@ -457,7 +457,7 @@ describe("Registry", () => {
 				nextId: 2,
 				entries: [
 					{
-						daemonId: "d5",
+						workspaceId: "d5",
 						name: "x",
 						cwd: "/x",
 						project: "x",
@@ -468,7 +468,7 @@ describe("Registry", () => {
 			}),
 		);
 		const registry = await loadedRegistry(statePath);
-		expect(registry.create(baseInit()).daemonId).toBe("d6");
+		expect(registry.create(baseInit()).workspaceId).toBe("d6");
 	});
 });
 
@@ -603,7 +603,7 @@ describe("registered projects (Phase 2)", () => {
 		const repoB = await makeRepo();
 		registry.addProject(repoA);
 		const b = registry.addProject(repoB).project;
-		// A local daemon tagged with a project id persists too.
+		// A local session tagged with a project id persists too.
 		registry.create(baseInit({ projectId: b.projectId }));
 
 		registry.flush();
@@ -648,9 +648,12 @@ describe("registered projects (Phase 2)", () => {
 		);
 		const other = registry.addProject(await makeRepo()).project;
 		const unrelated = registry.create(baseInit({ projectId: other.projectId }));
-		expect(registry.removeProject(project.projectId)).toEqual([main.daemonId, linked.daemonId]);
+		expect(registry.removeProject(project.projectId)).toEqual([
+			main.workspaceId,
+			linked.workspaceId,
+		]);
 		expect(registry.projects().map((p) => p.projectId)).toEqual([other.projectId]);
-		expect(registry.list().map((e) => e.daemonId)).toEqual([unrelated.daemonId]);
+		expect(registry.list().map((e) => e.workspaceId)).toEqual([unrelated.workspaceId]);
 		expect(() => registry.removeProject(project.projectId)).toThrow(
 			`unknown project id: ${project.projectId}`,
 		);
@@ -667,11 +670,11 @@ describe("registered projects (Phase 2)", () => {
 			}),
 		);
 		expect(() => registry.removeProject(project.projectId)).toThrow(
-			`project ${project.projectId} has clone workspaces: ${clone.daemonId}`,
+			`project ${project.projectId} has clone workspaces: ${clone.workspaceId}`,
 		);
 		expect(registry.projects()).toHaveLength(1);
-		expect(registry.get(main.daemonId)).toBeDefined();
-		expect(registry.get(clone.daemonId)).toBeDefined();
+		expect(registry.get(main.workspaceId)).toBeDefined();
+		expect(registry.get(clone.workspaceId)).toBeDefined();
 	});
 
 	test("setProjectMissing persists the flag across reload and clears it", async () => {
@@ -699,7 +702,7 @@ describe("registered projects (Phase 2)", () => {
 		expect(reloaded.addProject(await makeRepo()).project.projectId).toBe("p3");
 	});
 
-	test("addProject/removeProject fire onChange AND onProjectsChange; daemon mutations fire only onChange; projects() is a defensive copy", async () => {
+	test("addProject/removeProject fire onChange AND onProjectsChange; session mutations fire only onChange; projects() is a defensive copy", async () => {
 		const registry = await loadedRegistry(tmpStatePath());
 		let fired = 0;
 		let projectFired = 0;
@@ -713,13 +716,13 @@ describe("registered projects (Phase 2)", () => {
 		const { project } = registry.addProject(repo); // both hooks
 		expect(fired).toBe(1);
 		expect(projectFired).toBe(1);
-		// A daemon mutation fires onChange only; project broadcasts stay off
+		// A session mutation fires onChange only; project broadcasts stay off
 		// the hot path (the edge's registered_projects frame rides
 		// onProjectsChange).
 		registry.create(baseInit({ projectId: project.projectId }));
 		expect(fired).toBe(2);
 		expect(projectFired).toBe(1);
-		registry.remove("d1"); // daemon mutation: onChange only
+		registry.remove("d1"); // session mutation: onChange only
 		expect(fired).toBe(3);
 		expect(projectFired).toBe(1);
 		registry.removeProject(project.projectId); // both hooks
@@ -771,7 +774,7 @@ describe("Registry legacy state", () => {
 				nextId: 2,
 				entries: [
 					{
-						daemonId: "d1",
+						workspaceId: "d1",
 						name: "old",
 						cwd: "/tmp/old",
 						project: "old",
@@ -793,5 +796,69 @@ describe("Registry legacy state", () => {
 		expect(entry).toBeDefined();
 		expect(entry).not.toHaveProperty("mode");
 		expect(entry?.workspace).not.toHaveProperty("branchCreatedByOmpWeb");
+	});
+
+	test("a pre-rename fleet-state.json (entries[].daemonId) loads and is rewritten with workspaceId only", async () => {
+		const statePath = tmpStatePath();
+		writeFileSync(
+			statePath,
+			JSON.stringify({
+				nextId: 4,
+				entries: [
+					{
+						daemonId: "d1",
+						name: "old-a",
+						cwd: "/tmp/old-a",
+						project: "old",
+						status: "asleep",
+						registeredAt: 1,
+					},
+					{
+						daemonId: "d3",
+						name: "old-b",
+						cwd: "/tmp/old-b",
+						project: "old",
+						status: "asleep",
+						registeredAt: 2,
+					},
+				],
+			}),
+		);
+		const registry = await loadedRegistry(statePath);
+		expect(registry.list().map((e) => e.workspaceId)).toEqual(["d1", "d3"]);
+		expect(registry.get("d3")?.name).toBe("old-b");
+		expect(registry.get("d1")).not.toHaveProperty("daemonId");
+		// Ids stay monotonic past the legacy rows.
+		expect(registry.create(baseInit({ name: "fresh" })).workspaceId).toBe("d4");
+		registry.flush();
+		const persisted = JSON.parse(readFileSync(statePath, "utf8")) as {
+			entries: Array<Record<string, unknown>>;
+		};
+		expect(persisted.entries.map((e) => e.workspaceId)).toEqual(["d1", "d3", "d4"]);
+		for (const row of persisted.entries) expect(row).not.toHaveProperty("daemonId");
+	});
+
+	test("workspaceId wins when an entry carries both keys", async () => {
+		const statePath = tmpStatePath();
+		writeFileSync(
+			statePath,
+			JSON.stringify({
+				nextId: 2,
+				entries: [
+					{
+						workspaceId: "d1",
+						daemonId: "d9",
+						name: "both",
+						cwd: "/tmp/both",
+						project: "p",
+						status: "asleep",
+						registeredAt: 1,
+					},
+				],
+			}),
+		);
+		const registry = await loadedRegistry(statePath);
+		expect(registry.list().map((e) => e.workspaceId)).toEqual(["d1"]);
+		expect(registry.get("d1")).not.toHaveProperty("daemonId");
 	});
 });

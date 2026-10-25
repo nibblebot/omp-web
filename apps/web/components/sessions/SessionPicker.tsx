@@ -35,7 +35,7 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 	);
 	/** The attached session's folder: an expanded row shows its own folder only when it differs. */
 	const currentCwd = () =>
-		state.daemonRoster.find((daemon) => daemon.daemonId === state.currentSessionId)?.cwd;
+		state.sessionRoster.find((session) => session.workspaceId === state.currentWorkspaceId)?.cwd;
 
 	onMount(() => {
 		// Ambiguous matches are already the list; do not replace them with a fresh search.

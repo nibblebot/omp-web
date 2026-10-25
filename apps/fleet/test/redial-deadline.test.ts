@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import { startFleet, type FleetServer } from "../server";
 import { enrollSessionCredential } from "../session-credential";
-import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
+import { type CallbackSession, startCallbackSession } from "./callback-session.testkit";
 import { FAKE_CWD, cleanupTempDirs, stopSpawnedRows, waitFor } from "./edge.testkit";
 import { hermeticStatsConfig } from "./server.testkit";
 
@@ -22,7 +22,7 @@ describe("runtime redial deadline", () => {
 	const tmp = tempDir("omp-web-redial-deadline-");
 	const statePath = join(tmp, "state.json");
 	const configPath = join(tmp, "config.json");
-	const daemons: CallbackDaemon[] = [];
+	const sessions: CallbackSession[] = [];
 	let server: FleetServer;
 
 	// Same dev-runner hermeticity as the pair-loss suite: a shell that ran
@@ -53,7 +53,7 @@ describe("runtime redial deadline", () => {
 	});
 
 	afterAll(async () => {
-		for (const daemon of daemons) daemon.stop();
+		for (const session of sessions) session.stop();
 		try {
 			await stopSpawnedRows(server);
 		} finally {
@@ -71,36 +71,36 @@ describe("runtime redial deadline", () => {
 		const { generation, credential } = enrollSessionCredential(
 			server.transport,
 			server.registry,
-			entry.daemonId,
+			entry.workspaceId,
 		);
 		// A redial delay longer than the test window: the pair stays down.
-		const daemon = startCallbackDaemon({
+		const session = startCallbackSession({
 			url: `http://127.0.0.1:${server.port}`,
-			workspaceId: entry.daemonId,
+			workspaceId: entry.workspaceId,
 			generation,
 			token: credential,
 			redialMinMs: 60_000,
 			redialMaxMs: 60_000,
 		});
-		daemons.push(daemon);
-		await daemon.waitConnected(10_000);
+		sessions.push(session);
+		await session.waitConnected(10_000);
 		await waitFor(
-			() => (server.registry.get(entry.daemonId)?.status === "ready" ? true : null),
+			() => (server.registry.get(entry.workspaceId)?.status === "ready" ? true : null),
 			5000,
 			"redial-outage ready",
 		);
 
-		daemon.dropLegs();
+		session.dropLegs();
 		await waitFor(
-			() => (server.registry.get(entry.daemonId)?.status === "reconnecting" ? true : null),
+			() => (server.registry.get(entry.workspaceId)?.status === "reconnecting" ? true : null),
 			PAIR_LOSS_GRACE_MS + 3000,
 			"reconnecting after pair-loss grace",
 		);
 		await waitFor(
-			() => (server.registry.get(entry.daemonId)?.status === "asleep" ? true : null),
+			() => (server.registry.get(entry.workspaceId)?.status === "asleep" ? true : null),
 			REDIAL_GRACE_MS + 3000,
 			"asleep after redial grace",
 		);
-		expect(server.transport.pairStatus(entry.daemonId).paired).toBe(false);
+		expect(server.transport.pairStatus(entry.workspaceId).paired).toBe(false);
 	}, 20_000);
 });

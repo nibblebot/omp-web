@@ -581,7 +581,7 @@ async function openBtwHistory(
 	return new BtwHistoryService(store, sessionId);
 }
 
-/** Per-session service cache for the METHODS wiring (one daemon process owns
+/** Per-session service cache for the METHODS wiring (one session process owns
  * many sessions over its lifetime; each scope keeps its own store/leases).
  * Stale on session-id rotation: the entry is reopened when the live manager's
  * session id no longer matches the cached scope. */

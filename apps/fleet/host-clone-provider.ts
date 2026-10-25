@@ -19,9 +19,9 @@
  * pidfile `<stateDir>/provider.pid.json` records its pid and start time, so
  * liveness and stop prove a generation terminated by identity, never by a
  * reusable pid, and survive a fleet restart (the runtime is detached and
- * outlives it). Output goes to `<stateDir>/daemon.log` through a detached
+ * outlives it). Output goes to `<stateDir>/session.log` through a detached
  * log relay (log-relay.ts, the shared SessionLog writer) that keeps the file
- * under the 1 MiB cap for the whole run, rotating to `daemon.log.1`, as the
+ * under the 1 MiB cap for the whole run, rotating to `session.log.1`, as the
  * bwrap supervisor does. The runtime is therefore a descendant of the launched
  * shell, found by its token. The shell writes the runtime's exit status to
  * `<stateDir>/runtime.status` (the launcher's own exit code is the relay's), and
@@ -62,7 +62,7 @@ import {
 import { signalProcessGroup, spawnDetached } from "./host-provider";
 import type { ExecutableRequest, RuntimeProvider } from "./runtime-provider";
 import { cloneRuntimeLaunch, logRelayLaunch } from "./runtime-launch";
-import { PROVIDER_DAEMON_LOG, readSessionLogTail, rotateSessionLog } from "./session-log";
+import { PROVIDER_SESSION_LOG, readSessionLogTail, rotateSessionLog } from "./session-log";
 
 /** The runtime's exit status, written by the launcher shell beside the pidfile. */
 const RUNTIME_STATUS_FILE = "runtime.status";
@@ -125,7 +125,7 @@ function rejectNonHost(request: ExecutableRequest): ProviderErrorResponse | null
 	);
 }
 
-/** The daemon's `--fleet-stdin` payload for a handed-over callback pair, or undefined when the handoff carries none. */
+/** The session's `--fleet-stdin` payload for a handed-over callback pair, or undefined when the handoff carries none. */
 function fleetStdinFor(callbackEnv: Record<string, string>): string | undefined {
 	if (!FLEET_CALLBACK_ENV_KEYS.some((key) => callbackEnv[key] !== undefined)) return undefined;
 	return buildFleetStdinPayload(callbackEnv);
@@ -185,7 +185,7 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 	const runtime = cloneRuntimeLaunch();
 	const fleetStdin = fleetStdinFor(callbackEnv);
 	const workspaceToken = randomUUID().replace(/-/g, "");
-	const logPath = join(stateDir, PROVIDER_DAEMON_LOG);
+	const logPath = join(stateDir, PROVIDER_SESSION_LOG);
 	// A launch failure quotes only this run's output: rotate now, then remember where it starts.
 	rotateSessionLog(logPath);
 	const logStart = logSize(logPath);
@@ -196,7 +196,7 @@ async function ensureRunning(request: ExecutableRequest): Promise<Response> {
 				runtime.bin,
 				runtime.entry,
 				...runtime.args,
-				// The callback pair reaches the daemon over stdin, never its environment.
+				// The callback pair reaches the session over stdin, never its environment.
 				...(fleetStdin === undefined ? [] : ["--fleet-stdin"]),
 				`--omp-workspace-token=${workspaceToken}`,
 			],

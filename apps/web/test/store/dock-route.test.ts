@@ -6,12 +6,12 @@
  * workspace's saved dock without the route sync clobbering it.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import type { ClientCommand, DaemonEntry } from "#lib/wire/protocol";
+import type { ClientCommand, RosterEntry } from "#lib/wire/protocol";
 import { connect, setState, state } from "../../state";
 import { onHashChange, restoreInitialRoute } from "../../store/deep-link";
 import { persistDockLayout } from "../../prefs/dock-layout";
 import { openDock } from "../../store/dock";
-import { settleDaemonSessions } from "../../store/roster";
+import { settleWorkspaceSessions } from "../../store/roster";
 import {
 	attached,
 	callResult,
@@ -53,22 +53,22 @@ async function navigate(hash: string): Promise<void> {
 }
 
 /** Answer the attach the navigation posted: the proxied `attached` frame, then the id-keyed result. */
-async function settleAttach(daemonId: string): Promise<void> {
+async function settleAttach(workspaceId: string): Promise<void> {
 	const attach = await untilPosted(
-		(c): c is AttachCommand => c.type === "attach" && c.sessionId === daemonId,
+		(c): c is AttachCommand => c.type === "attach" && c.workspaceId === workspaceId,
 	);
 	if (attach.type !== "attach") throw new Error("not an attach command");
-	dispatch(attached(daemonId));
-	dispatch({ type: "attach_result", id: attach.id, ok: true, sessionId: daemonId });
+	dispatch(attached(workspaceId));
+	dispatch({ type: "attach_result", id: attach.id, ok: true, workspaceId: workspaceId });
 	await drain();
 }
 
 function seedLayout(
-	daemonId: string,
+	workspaceId: string,
 	dock: { kind: string; id?: string },
 	mode: "single" | "accordion",
 ) {
-	persistDockLayout(daemonId, {
+	persistDockLayout(workspaceId, {
 		dock,
 		mode,
 		filter: "all",
@@ -93,7 +93,7 @@ beforeEach(() => {
 		pushState: (_: unknown, __: string, url: string) => written.push(`push ${url}`),
 		replaceState: (_: unknown, __: string, url: string) => written.push(`replace ${url}`),
 	} as unknown as History);
-	setState({ currentSessionId: "" });
+	setState({ currentWorkspaceId: "" });
 	connect();
 	FakeWebSocket.instances.at(-1)?.onopen?.();
 	setState({
@@ -103,8 +103,8 @@ beforeEach(() => {
 		agentsMode: "single",
 		agentsExpanded: undefined,
 		agentTreeCollapsed: new Set<string>(),
-		daemonRoster: ["d1", "d2"].map(
-			(daemonId) => ({ daemonId, status: "ready" }) as unknown as DaemonEntry,
+		sessionRoster: ["d1", "d2"].map(
+			(workspaceId) => ({ workspaceId, status: "ready" }) as unknown as RosterEntry,
 		),
 	});
 	// Attached to d1 on session s1, as after a normal load.
@@ -114,7 +114,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	setState({
-		currentSessionId: "",
+		currentWorkspaceId: "",
 		sessionId: "",
 		dock: null,
 		agentsMode: "single",
@@ -126,55 +126,55 @@ afterEach(() => {
 describe("within the attached workspace", () => {
 	test("a route without a dock segment closes the dock", async () => {
 		openDock("review");
-		await navigate("#/d/d1/s/s1");
+		await navigate("#/w/d1/s/s1");
 		expect(state.dock).toBeNull();
 	});
 
 	test("a route with agents/<id> opens the accordion with that agent", async () => {
-		await navigate("#/d/d1/s/s1/agents/a1");
+		await navigate("#/w/d1/s/s1/agents/a1");
 		expect(state.dock).toEqual({ kind: "agents", id: "a1" });
 		expect(state.agentsMode).toBe("accordion");
 	});
 
 	test("a route with agent/<id> opens the single pane and sets single mode", async () => {
 		setState("agentsMode", "accordion");
-		await navigate("#/d/d1/s/s1/agent/a1");
+		await navigate("#/w/d1/s/s1/agent/a1");
 		expect(state.dock).toEqual({ kind: "agent", id: "a1" });
 		expect(state.agentsMode).toBe("single");
 	});
 
 	test("a bare agents route leaves the saved mode alone", async () => {
 		setState("agentsMode", "accordion");
-		await navigate("#/d/d1/s/s1/agents");
+		await navigate("#/w/d1/s/s1/agents");
 		expect(state.dock).toEqual({ kind: "agents" });
 		expect(state.agentsMode).toBe("accordion");
 	});
 });
 
 describe("switching to another workspace", () => {
-	test("a dock-less daemon route restores the saved dock and mode of the target", async () => {
+	test("a dock-less session route restores the saved dock and mode of the target", async () => {
 		openDock("review");
 		seedLayout("d2", { kind: "agents", id: "a7" }, "accordion");
-		await navigate("#/d/d2");
+		await navigate("#/w/d2");
 		await settleAttach("d2");
-		expect(state.currentSessionId).toBe("d2");
+		expect(state.currentWorkspaceId).toBe("d2");
 		expect(state.dock).toEqual({ kind: "agents", id: "a7" });
 		expect(state.agentsMode).toBe("accordion");
 	});
 
 	test("the saved dock of a workspace without one stays closed", async () => {
 		openDock("review");
-		await navigate("#/d/d2");
+		await navigate("#/w/d2");
 		await settleAttach("d2");
 		expect(state.dock).toBeNull();
 	});
 
 	test("a route that carries a dock overrides the saved one and sets the mode", async () => {
 		seedLayout("d2", { kind: "agents", id: "a7" }, "accordion");
-		await navigate("#/d/d2/s/s2/agent/a1");
-		const list = await untilPosted((c) => c.type === "list_daemon_sessions");
-		expect(list).toMatchObject({ daemonId: "d2" });
-		settleDaemonSessions("d2", [{ id: "s2", path: "/sessions/s2.jsonl" } as never]);
+		await navigate("#/w/d2/s/s2/agent/a1");
+		const list = await untilPosted((c) => c.type === "list_workspace_sessions");
+		expect(list).toMatchObject({ workspaceId: "d2" });
+		settleWorkspaceSessions("d2", [{ id: "s2", path: "/sessions/s2.jsonl" } as never]);
 		await settleAttach("d2");
 		const sw = await untilPosted((c) => c.type === "call" && c.method === "switchSession");
 		if (sw.type !== "call") throw new Error("switchSession was not a call");

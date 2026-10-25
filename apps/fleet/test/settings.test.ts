@@ -13,7 +13,7 @@ await Settings.init({ inMemory: true });
 // Every test injects the provider registry: the default source lazily opens
 // the REAL agent auth DB (discoverAuthStorage(getAgentDir()) → agent.db),
 // which these tests must never touch. The default branch is thin glue over
-// the same ModelRegistry code the daemon boots with; the injected and
+// the same ModelRegistry code the session boots with; the injected and
 // degraded paths below cover the contract.
 const emptyRegistry = async (): Promise<ReadonlyArray<{ provider: string }>> => [];
 

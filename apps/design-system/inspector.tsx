@@ -16,7 +16,7 @@ export function clampInspectorWidth(px: number): number {
 /**
  * Right-hand sidebar for one component. Shows its graph facts, links to its
  * neighbours (picking one retargets the inspector), and renders its story in an
- * isolated `/?embed=<storyId>` iframe with its own store and fake daemon.
+ * isolated `/?embed=<storyId>` iframe with its own store and fake session.
  */
 export const Inspector: Component<{
 	id: string;

@@ -177,12 +177,12 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 		if (rePinRaf !== 0) cancelAnimationFrame(rePinRaf);
 	});
 	// Session switches re-pin: a fresh transcript starts at the bottom no
-	// matter where the previous session was scrolled (currentSessionId changes
+	// matter where the previous session was scrolled (currentWorkspaceId changes
 	// on every attach/switch; the effect above then owns the snap as history
 	// frames land).
-	let lastSessionId = state.currentSessionId;
+	let lastSessionId = state.currentWorkspaceId;
 	createEffect(() => {
-		const id = state.currentSessionId;
+		const id = state.currentWorkspaceId;
 		if (id === lastSessionId) return;
 		lastSessionId = id;
 		setPinned(true);

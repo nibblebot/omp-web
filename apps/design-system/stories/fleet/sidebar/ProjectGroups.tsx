@@ -1,20 +1,20 @@
-import type { DaemonEntry } from "#lib/wire/protocol";
+import type { RosterEntry } from "#lib/wire/protocol";
 import {
 	GROUPS_KEY,
 	ProjectGroups,
 	type ProjectGroupsData,
 } from "../../../../web/components/fleet/sidebar/ProjectGroups";
-import { rosterDaemon, rosterSidebarGroups } from "../../../fixtures/roster";
+import { rosterEntry, rosterSidebarGroups } from "../../../fixtures/roster";
 import { seedRosterFleet } from "../../../fixtures/roster-seed";
 import { defineStory } from "../../../registry";
 
 const [ompWebGroup, localactionGroup, nixosGroup] = rosterSidebarGroups;
 const project = ompWebGroup!.project;
 
-/** Further asleep worktrees, so a group can hold several of them (rows are keyed by daemonId). */
-const asleepWorktree = (n: number): DaemonEntry => ({
-	...rosterDaemon.asleep,
-	daemonId: `dmn_story_asleep${n}`,
+/** Further asleep worktrees, so a group can hold several of them (rows are keyed by workspaceId). */
+const asleepWorktree = (n: number): RosterEntry => ({
+	...rosterEntry.asleep,
+	workspaceId: `dmn_story_asleep${n}`,
 	name: `asleep-${n}`,
 	branch: `chore/asleep-${n}`,
 });
@@ -31,19 +31,19 @@ const inList = (groups: ProjectGroupsData) => (
 
 /** Nothing live: two asleep worktrees. */
 const allAsleep: ProjectGroupsData = [
-	{ project, daemons: [rosterDaemon.asleep, rosterDaemon.registeredWorktree] },
+	{ project, sessions: [rosterEntry.asleep, rosterEntry.registeredWorktree] },
 ];
 
 /** 3 of 5 live; the main checkout is mid-turn (dmn_a001), so the corner shows the spinner. */
 const mixedWorking: ProjectGroupsData = [
 	{
 		project,
-		daemons: [
-			rosterDaemon.main,
-			rosterDaemon.cloneLocal,
-			rosterDaemon.worktree,
-			rosterDaemon.asleep,
-			rosterDaemon.registeredWorktree,
+		sessions: [
+			rosterEntry.main,
+			rosterEntry.cloneLocal,
+			rosterEntry.worktree,
+			rosterEntry.asleep,
+			rosterEntry.registeredWorktree,
 		],
 	},
 ];
@@ -52,10 +52,10 @@ const mixedWorking: ProjectGroupsData = [
 const mixedBlocked: ProjectGroupsData = [
 	{
 		project,
-		daemons: [
-			rosterDaemon.blocked,
-			rosterDaemon.cloneLocal,
-			rosterDaemon.asleep,
+		sessions: [
+			rosterEntry.blocked,
+			rosterEntry.cloneLocal,
+			rosterEntry.asleep,
 			asleepWorktree(1),
 			asleepWorktree(2),
 		],

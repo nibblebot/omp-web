@@ -11,7 +11,7 @@
  */
 
 /** Loopback peer test for a socket address: 127.0.0.0/8, ::1, and IPv4-mapped
- *  IPv6 of the same (strict numeric parts, same rule as the daemon R14 gate). */
+ *  IPv6 of the same (strict numeric parts, same rule as the session R14 gate). */
 export function isLoopbackIp(address: string | null | undefined): boolean {
 	if (address === null || address === undefined) return false;
 	const a = address.toLowerCase();

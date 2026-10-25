@@ -72,7 +72,7 @@ function projectFor(repoPath: string, projectId = "p1"): RegisteredProject {
 
 function worktreeEntry(path: string, repoPath?: string): RegistryEntry {
 	return {
-		daemonId: "d1",
+		workspaceId: "d1",
 		name: basename(path),
 		cwd: path,
 		project: "repo",
@@ -719,7 +719,7 @@ describe("registerWorktreeEntry", () => {
 		// The resolved template name is stored like spawn() stores it, since
 		// respawn() keys off entry.template.
 		expect(entry.template).toBe("test");
-		expect(registry.get(entry.daemonId)).toBeDefined();
+		expect(registry.get(entry.workspaceId)).toBeDefined();
 	});
 
 	test("registration records the worktree workspace both asleep and started", async () => {
@@ -755,7 +755,7 @@ describe("registerWorktreeEntry", () => {
 			registry.flush();
 			const reloaded = new Registry(statePath);
 			await reloaded.load();
-			expect(reloaded.get(entry.daemonId)?.workspace).toMatchObject({
+			expect(reloaded.get(entry.workspaceId)?.workspace).toMatchObject({
 				kind: "worktree",
 				desiredState: start ? "running" : "stopped",
 				source: { local: repo },
@@ -789,7 +789,7 @@ describe("registerProjectMainEntry", () => {
 		expect(entry.worktreeOf).toBeUndefined();
 		// The resolved template name is always stored (respawn keys off it).
 		expect(entry.template).toBe("test");
-		expect(registry.get(entry.daemonId)).toBeDefined();
+		expect(registry.get(entry.workspaceId)).toBeDefined();
 	});
 
 	test("start:false stores the template on the asleep entry when given", async () => {
@@ -844,9 +844,9 @@ describe("registerProjectMainEntry", () => {
 		const entry = await registerProjectMainEntry(registry, {} as never, projectFor(repo, "p7"), {
 			start: false,
 		});
-		expect(entry.daemonId).toBe(existing.daemonId);
+		expect(entry.workspaceId).toBe(existing.workspaceId);
 		expect(registry.list()).toHaveLength(1);
-		expect(registry.get(existing.daemonId)?.projectId).toBe("p7");
+		expect(registry.get(existing.workspaceId)?.projectId).toBe("p7");
 	});
 
 	test("dedup + start:true on an asleep pre-existing entry respawns it instead of spawning a second row", async () => {
@@ -863,15 +863,15 @@ describe("registerProjectMainEntry", () => {
 		});
 		let respawnedId: string | undefined;
 		const host = {
-			start: async (daemonId: string) => {
-				respawnedId = daemonId;
+			start: async (workspaceId: string) => {
+				respawnedId = workspaceId;
 			},
 		} as unknown as HostSessions;
 		const entry = await registerProjectMainEntry(registry, host, projectFor(repo, "p7"), {
 			start: true,
 		});
-		expect(respawnedId).toBe(existing.daemonId);
-		expect(entry.daemonId).toBe(existing.daemonId);
+		expect(respawnedId).toBe(existing.workspaceId);
+		expect(entry.workspaceId).toBe(existing.workspaceId);
 		expect(registry.list()).toHaveLength(1);
 	});
 
@@ -902,7 +902,7 @@ describe("registerProjectMainEntry", () => {
 			reuse: true,
 		});
 		expect(entry.projectId).toBe("p7");
-		expect(registry.get(entry.daemonId)?.projectId).toBe("p7");
+		expect(registry.get(entry.workspaceId)?.projectId).toBe("p7");
 		expect(registry.list()).toHaveLength(1);
 	});
 });

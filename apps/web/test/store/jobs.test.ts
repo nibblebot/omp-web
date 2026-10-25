@@ -18,7 +18,7 @@ afterAll(() => {
 // Dynamic imports: the transport mock must be registered before the store module binds to it.
 const jobs = await import("../../store/jobs");
 const { setState, state } = await import("../../state");
-const originalSession = state.currentSessionId;
+const originalSession = state.currentWorkspaceId;
 const originalModal = state.modal;
 
 const place = { depth: 0, rails: [] as boolean[], last: true, parent: false };
@@ -57,12 +57,12 @@ beforeEach(() => {
 	stop?.();
 	stop = undefined;
 	calls = [];
-	setState("currentSessionId", "sess-a");
+	setState("currentWorkspaceId", "sess-a");
 	jobs.selectJob(null);
 });
 afterAll(() => {
 	stop?.();
-	setState("currentSessionId", originalSession);
+	setState("currentWorkspaceId", originalSession);
 	setState("modal", originalModal);
 });
 
@@ -84,7 +84,7 @@ describe("jobs tree", () => {
 		const pending = held<JobTreeDto>();
 		handler = () => pending.promise;
 		const refreshing = jobs.refreshJobs();
-		setState("currentSessionId", "sess-b");
+		setState("currentWorkspaceId", "sess-b");
 		pending.resolve(treeOf(job("old")));
 		await refreshing;
 		expect(jobs.jobsView()).toBe("loading");
@@ -143,7 +143,7 @@ describe("selected job", () => {
 		expect(jobs.selectedJob()).toBeUndefined();
 	});
 
-	test("a job the daemon no longer inspects reads as gone", async () => {
+	test("a job the session no longer inspects reads as gone", async () => {
 		answer({ getJobTree: treeOf(job("a")), getJobDetail: null });
 		await jobs.refreshJobs();
 		jobs.selectJob("a");
@@ -153,7 +153,7 @@ describe("selected job", () => {
 });
 
 describe("cancelling an own job", () => {
-	test("asks the daemon, marks the job busy meanwhile, and reloads the tree", async () => {
+	test("asks the session, marks the job busy meanwhile, and reloads the tree", async () => {
 		const cancelling = held<unknown>();
 		const running = treeOf(job("a"));
 		const settled = treeOf(job("a", { status: "cancelled", endTime: 3000 }));
@@ -323,7 +323,7 @@ describe("fetching one job's detail", () => {
 		expect(jobs.selectedJobId()).toBeNull();
 	});
 
-	test("is null when the daemon no longer knows the job or the call fails", async () => {
+	test("is null when the session no longer knows the job or the call fails", async () => {
 		answer({ getJobDetail: null });
 		expect(await jobs.fetchJobDetail("a")).toBeNull();
 		answer({ getJobDetail: new Error("socket closed") });
@@ -335,7 +335,7 @@ describe("fetching one job's detail", () => {
 		const pending = held<JobDetailDto>();
 		handler = () => pending.promise;
 		const fetching = jobs.fetchJobDetail("a");
-		setState("currentSessionId", "sess-b");
+		setState("currentWorkspaceId", "sess-b");
 		pending.resolve(detail);
 		expect(await fetching).toBeNull();
 	});

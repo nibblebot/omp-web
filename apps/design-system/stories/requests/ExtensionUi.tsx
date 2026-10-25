@@ -32,7 +32,7 @@ export default defineStory({
 			seed: {
 				browserUi: {
 					requests: [belowEditorRequest],
-					error: "Could not answer checks.summary: the daemon is not connected.",
+					error: "Could not answer checks.summary: the session process is not connected.",
 				},
 			},
 			render: () => <ExtensionUi placement="belowEditor" />,

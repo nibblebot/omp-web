@@ -4,7 +4,7 @@
  * components/app/DockHost.tsx; this module only owns state. `state.dock` is
  * mirrored into the URL by store/deep-link.ts.
  *
- * The dock layout is per workspace (daemon id): `state.dock`, `agentsMode`, `agentsFilter`,
+ * The dock layout is per workspace (workspace id): `state.dock`, `agentsMode`, `agentsFilter`,
  * `agentsExpanded` and `agentTreeCollapsed` are the live truth for the attached
  * workspace; every change here saves them to that workspace's record
  * (prefs/dock-layout.ts), and `restoreDockLayout` loads a record back when the
@@ -33,10 +33,10 @@ function showDock(selection: DockSelection | null): void {
 
 /** Save the live layout into the attached workspace's record; nothing is attached, nothing to save. */
 function persistLayout(): void {
-	const daemonId = state.currentSessionId;
-	if (daemonId === "") return;
+	const workspaceId = state.currentWorkspaceId;
+	if (workspaceId === "") return;
 	const dock = state.dock;
-	persistDockLayout(daemonId, {
+	persistDockLayout(workspaceId, {
 		dock:
 			dock === null ? null : { kind: dock.kind, ...(dock.id === undefined ? {} : { id: dock.id }) },
 		mode: state.agentsMode,
@@ -166,11 +166,11 @@ export function applyRouteDock(route: DockRoute): void {
 /**
  * Load a workspace's saved layout into the live state. Called when the
  * attached workspace changes (the `attached` frame, inside the same batch that
- * writes `currentSessionId`), so the route sync never sees the previous
+ * writes `currentWorkspaceId`), so the route sync never sees the previous
  * workspace's dock under the new id. Never writes the record: it is the source.
  */
-export function restoreDockLayout(daemonId: string): void {
-	const saved = readDockLayout(daemonId);
+export function restoreDockLayout(workspaceId: string): void {
+	const saved = readDockLayout(workspaceId);
 	batch(() => {
 		showDock(saved.dock);
 		setState("agentsMode", saved.mode);
@@ -189,7 +189,7 @@ export function restoreDockLayout(daemonId: string): void {
  */
 export function reconcileMissingAgent(): void {
 	const { mirror, roster } = state.subagentsLoaded;
-	if (!mirror || !roster || state.currentSessionId === "") return;
+	if (!mirror || !roster || state.currentWorkspaceId === "") return;
 	const dock = state.dock;
 	const dockAgent = dock?.kind === "agent" || dock?.kind === "agents" ? dock.id : undefined;
 	const missingDock = dockAgent !== undefined && subagentById(dockAgent) === undefined;
@@ -205,8 +205,8 @@ export function reconcileMissingAgent(): void {
 
 /** Forget the saved layouts of workspaces that left the roster; waits for a non-empty roster. */
 export function pruneDockLayoutsToRoster(): void {
-	if (state.daemonRoster.length === 0) return;
-	pruneDockLayouts(new Set(state.daemonRoster.map((d) => d.daemonId)));
+	if (state.sessionRoster.length === 0) return;
+	pruneDockLayouts(new Set(state.sessionRoster.map((d) => d.workspaceId)));
 }
 
 /** Set and persist the dock width (clamped to the allowed range). */

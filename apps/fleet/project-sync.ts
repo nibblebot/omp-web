@@ -103,12 +103,12 @@ export class ProjectSync {
 	#syncing: Promise<void> | null = null;
 	/** A sync request arrived mid-pass: exactly one follow-up pass runs. */
 	#syncQueued = false;
-	/** Last probe time per daemonId; asleep rows wait ASLEEP_SYNC_INTERVAL_MS. */
+	/** Last probe time per workspaceId; asleep rows wait ASLEEP_SYNC_INTERVAL_MS. */
 	#lastProbeAt = new Map<string, number>();
-	/** In-flight probe per daemonId: a sync pass and a spawn-time probe share one run. */
+	/** In-flight probe per workspaceId: a sync pass and a spawn-time probe share one run. */
 	#probing = new Map<string, Promise<void>>();
 	/** Lifecycle-event hook (server.ts wires it to the fleet event ring). */
-	#onEvent: ((level: FleetLogLevel, message: string, daemonId?: string) => void) | undefined;
+	#onEvent: ((level: FleetLogLevel, message: string, workspaceId?: string) => void) | undefined;
 	/**
 	 * Worktree-vanished hook: fired during git-state polling when a tagged
 	 * worktree's cwd no longer exists on disk (probe failed AND the
@@ -123,7 +123,7 @@ export class ProjectSync {
 		registry: Registry,
 		host: HostSessions,
 		opts?: {
-			onEvent?: (level: FleetLogLevel, message: string, daemonId?: string) => void;
+			onEvent?: (level: FleetLogLevel, message: string, workspaceId?: string) => void;
 			onWorktreeRemoved?: (entry: RegistryEntry) => void;
 		},
 	) {
@@ -142,8 +142,8 @@ export class ProjectSync {
 		for (const entry of this.#registry.list()) {
 			if (entry.worktreeOf !== undefined || entry.cwd === "") continue;
 			const worktreeOf = await resolveWorktreeOf(entry.cwd);
-			if (worktreeOf !== undefined && this.#registry.get(entry.daemonId)) {
-				this.#registry.update(entry.daemonId, { worktreeOf });
+			if (worktreeOf !== undefined && this.#registry.get(entry.workspaceId)) {
+				this.#registry.update(entry.workspaceId, { worktreeOf });
 			}
 		}
 	}
@@ -177,13 +177,13 @@ export class ProjectSync {
 	}
 
 	/**
-	 * One-off git-state probe for one daemon (fire-and-forget). A host spawn
+	 * One-off git-state probe for one session (fire-and-forget). A host spawn
 	 * calls this right after entry creation so a fresh session shows its
 	 * branch and dirty counts before the next poll tick. Uses the exec
 	 * injected via startGitStatePolling (real git before that).
 	 */
-	probeGitState(daemonId: string): void {
-		const entry = this.#registry.get(daemonId);
+	probeGitState(workspaceId: string): void {
+		const entry = this.#registry.get(workspaceId);
 		if (!entry) return;
 		void this.#probeEntry(entry);
 	}
@@ -218,10 +218,10 @@ export class ProjectSync {
 		}
 		const now = Date.now();
 		const due = this.#registry.list().filter((entry) => this.#probeDue(entry, now));
-		for (const entry of due) this.#lastProbeAt.set(entry.daemonId, now);
+		for (const entry of due) this.#lastProbeAt.set(entry.workspaceId, now);
 		await forEachLimit(due, SYNC_PROBE_CONCURRENCY, (entry) => this.#probeEntry(entry));
-		for (const daemonId of this.#lastProbeAt.keys()) {
-			if (!this.#registry.get(daemonId)) this.#lastProbeAt.delete(daemonId);
+		for (const workspaceId of this.#lastProbeAt.keys()) {
+			if (!this.#registry.get(workspaceId)) this.#lastProbeAt.delete(workspaceId);
 		}
 	}
 
@@ -252,7 +252,7 @@ export class ProjectSync {
 				}));
 			const locked = block.locked ? true : undefined;
 			if (row.worktreeLocked !== locked) {
-				this.#registry.update(row.daemonId, { worktreeLocked: locked });
+				this.#registry.update(row.workspaceId, { worktreeLocked: locked });
 			}
 		}
 	}
@@ -262,7 +262,7 @@ export class ProjectSync {
 	 * rows are probed on every pass), or when its asleep interval has elapsed.
 	 */
 	#probeDue(entry: RegistryEntry, now: number): boolean {
-		const last = this.#lastProbeAt.get(entry.daemonId);
+		const last = this.#lastProbeAt.get(entry.workspaceId);
 		if (last === undefined || entry.status !== "asleep") return true;
 		return now - last >= ASLEEP_SYNC_INTERVAL_MS;
 	}
@@ -274,10 +274,10 @@ export class ProjectSync {
 	 */
 	#probeEntry(entry: RegistryEntry): Promise<void> {
 		if (entry.cwd === "") return Promise.resolve();
-		const inflight = this.#probing.get(entry.daemonId);
+		const inflight = this.#probing.get(entry.workspaceId);
 		if (inflight) return inflight;
-		const run = this.#probeRow(entry).finally(() => this.#probing.delete(entry.daemonId));
-		this.#probing.set(entry.daemonId, run);
+		const run = this.#probeRow(entry).finally(() => this.#probing.delete(entry.workspaceId));
+		this.#probing.set(entry.workspaceId, run);
 		return run;
 	}
 
@@ -288,7 +288,7 @@ export class ProjectSync {
 	 */
 	async #probeRow(entry: RegistryEntry): Promise<void> {
 		const result = await this.#probeGitOf(entry);
-		const current = this.#registry.get(entry.daemonId);
+		const current = this.#registry.get(entry.workspaceId);
 		if (!current) return; // removed while probing
 		if (result === undefined) {
 			// Probe failure (spawn error / nonzero exit / unparseable). The repo
@@ -308,7 +308,7 @@ export class ProjectSync {
 				current.git !== undefined ||
 				current.detachedAt !== undefined
 			) {
-				this.#registry.update(current.daemonId, {
+				this.#registry.update(current.workspaceId, {
 					branch: undefined,
 					git: undefined,
 					detachedAt: undefined,
@@ -319,13 +319,13 @@ export class ProjectSync {
 			current.detachedAt !== result.detachedAt ||
 			!sameGitState(current.git, result.git)
 		) {
-			this.#registry.update(current.daemonId, {
+			this.#registry.update(current.workspaceId, {
 				branch: result.branch,
 				git: result.git,
 				detachedAt: result.detachedAt,
 			});
 		}
-		await this.#probeSessionInfo(this.#registry.get(entry.daemonId) ?? entry);
+		await this.#probeSessionInfo(this.#registry.get(entry.workspaceId) ?? entry);
 	}
 
 	/**
@@ -356,11 +356,11 @@ export class ProjectSync {
 	async #probeSessionInfo(entry: RegistryEntry): Promise<void> {
 		if (entry.cwd === "" || !entry.lastSessionFile) return;
 		const { title, empty } = await readSessionInfo(entry.lastSessionFile);
-		const current = this.#registry.get(entry.daemonId);
+		const current = this.#registry.get(entry.workspaceId);
 		if (!current) return; // removed while probing
 		const wantEmpty = title === undefined && empty ? true : undefined;
 		if (current.sessionTitle !== title || current.sessionEmpty !== wantEmpty) {
-			this.#registry.update(current.daemonId, {
+			this.#registry.update(current.workspaceId, {
 				sessionTitle: title,
 				sessionEmpty: wantEmpty,
 			});

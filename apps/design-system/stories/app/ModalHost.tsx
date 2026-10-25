@@ -3,10 +3,10 @@ import { setState } from "../../../web/state";
 import { openDownloadConsent } from "../../../web/store/downloads";
 import { openResumePicker } from "../../../web/store/resume";
 import { pushToast } from "../../../web/store/toasts";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { answerBtwHistory, btwAnswered } from "../../fixtures/dialogs";
 import { browserUiRequests, downloadManifest, resumeListReply } from "../../fixtures/overlays";
-import { rosterDaemon, rosterFleetState } from "../../fixtures/roster";
+import { rosterEntry, rosterFleetState } from "../../fixtures/roster";
 import { chartScreenshot } from "../../fixtures/shared";
 import { extensionCalls } from "../../fixtures/extensions";
 import { jobCalls } from "../../fixtures/jobs";
@@ -22,7 +22,7 @@ export default defineStory({
 	title: "ModalHost",
 	component: { file: "apps/web/ModalHost.tsx", export: "ModalHost" },
 	tabs: true,
-	seed: { currentSessionId: "sess_09a41c" },
+	seed: { currentWorkspaceId: "sess_09a41c" },
 	variants: [
 		{
 			name: "state.modal: help",
@@ -51,10 +51,10 @@ export default defineStory({
 			render: () => <ModalHost />,
 		},
 		{
-			name: "Daemon details",
+			name: "Session details",
 			description:
-				"`state.daemonDetailsId` names a roster daemon: DaemonDetailsDialog renders while that daemon is in the roster.",
-			seed: { ...rosterFleetState, daemonDetailsId: rosterDaemon.main.daemonId },
+				"`state.sessionDetailsId` names a roster session: SessionDetailsDialog renders while that session is in the roster.",
+			seed: { ...rosterFleetState, sessionDetailsId: rosterEntry.main.workspaceId },
 			render: () => <ModalHost />,
 		},
 		{

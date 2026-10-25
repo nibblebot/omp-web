@@ -65,7 +65,7 @@ function makeEntry(snapshotStatus: SubagentSnapshot["status"] | undefined): Sess
 	};
 	// Test double: the fields above are the complete surface worker-lifecycle reads.
 	const typed = entry as unknown as SessionEntry;
-	// Same wiring the daemon performs for every session (collab-session.ts createSession).
+	// Same wiring the session performs for every session (collab-session.ts createSession).
 	ensureWorkerReviver(typed, stubDeps);
 	return typed;
 }

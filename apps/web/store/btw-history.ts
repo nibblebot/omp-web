@@ -414,7 +414,7 @@ function previewPromoteBtw(recordId: string): void {
 
 /**
  * Server-owned promotion: the client sends only the record id. On success the
- * daemon branches this Q/A pair into the session transcript and every tab
+ * session branches this Q/A pair into the session transcript and every tab
  * resyncs. Resolves true when the transcript changed.
  */
 export async function promoteBtw(recordId: string): Promise<boolean> {

@@ -80,7 +80,7 @@ One JSON object. Every field is validated by `validateProviderRequest`, which re
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `op` | one of `PROVIDER_OPS` | The operation. |
-| `workspaceId` | string | The workspace's stable id (the roster `daemonId`). |
+| `workspaceId` | string | The workspace's stable id (the roster `workspaceId`). |
 | `generation` | positive safe integer | The desired runtime generation. Monotonic per workspace, never reused. |
 | `workspaceDir` | string | The workspace's checkout directory (`<volume>/.checkout`). |
 | `homeDir` | string | The workspace's private writable home (`<volume>/.home`). |
@@ -202,7 +202,8 @@ Every clone has a private **volume** at `<clones>/<workspaceId>/` (the `clones/`
 <stateDir>/
   callback-env.json          the callback env handoff (0600), rewritten before each ensure-running
   provider.pid.json          bwrap and host identity; provider.k8s.json for kubernetes
-  daemon.log, daemon.log.1   bwrap and host: the runtime's combined stdout and stderr, rotated at the 1 MiB cap
+  session.log, session.log.1 bwrap and host: the runtime's combined stdout and stderr, rotated at the 1 MiB cap
+                             (readers fall back to daemon.log for clones created before the rename)
 ```
 
 **Fleet preparation** (`preparation: "fleet"`): the fleet resolves the source to a full commit once and persists it, clones into `.checkout` with `--no-hardlinks` (committed history only; the source repo is never shared), verifies the checkout, writes the marker, and seeds a sanitized subset of the operator's agent config into `.home/agent`. A retry reuses the persisted pin. The provider only needs the directories to exist: `ensure-running` creates `homeDir/agent` if missing.

@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import { OMP_PROTO } from "#lib/wire/protocol";
 import type {
 	ClientCommand,
-	DaemonEntry,
+	RosterEntry,
 	RegisteredProject,
 	ServerFrame,
 	SessionListEntry,
@@ -23,7 +23,7 @@ import {
 	connect,
 	createClone,
 	createWorktree,
-	daemonsByProject,
+	sessionsByProject,
 	deleteQueuedMessage,
 	hasLiveSession,
 	initialView,
@@ -31,7 +31,7 @@ import {
 	listProjectBranches,
 	pushNotice,
 	refreshSettings,
-	restartDaemonById,
+	restartSessionById,
 	sendDeleteWorktree,
 	sendRemoveProject,
 	sendWorktreeDeleteInfo,
@@ -41,13 +41,13 @@ import {
 	setTxSidebarVisible,
 	isSwitching,
 	setView,
-	stopDaemonById,
+	stopSessionById,
 	state,
 	updateSetting,
-	requestDaemonSessions,
-	resumeDaemonSession,
-	startDaemonNewSession,
-	switchToDaemon,
+	requestWorkspaceSessions,
+	resumeSession,
+	startWorkspaceNewSession,
+	switchToSession,
 	type SubagentInfo,
 } from "../state";
 import { clearAllDeletePending, resetPendingProjects } from "../store/projects";
@@ -142,7 +142,7 @@ afterAll(() => {
 beforeEach(() => {
 	installTransportStubs();
 	setState({
-		currentSessionId: "",
+		currentWorkspaceId: "",
 		sessionScope: undefined,
 		connected: false,
 		readyAt: undefined,
@@ -168,8 +168,8 @@ beforeEach(() => {
 		workingIntent: undefined,
 		// Phase 5 fleet-scoped + modal state: reset for isolation like the rest
 		// (roster frames otherwise leak into each other).
-		daemonRoster: [],
-		daemonActivity: {},
+		sessionRoster: [],
+		sessionActivity: {},
 		registeredProjects: [],
 		providerProfiles: [],
 		fleetConfigPath: null,
@@ -179,7 +179,7 @@ beforeEach(() => {
 		deleteWorkspaceTarget: null,
 		removeProjectTarget: null,
 		lightboxImage: null,
-		daemonDetailsId: null,
+		sessionDetailsId: null,
 		modal: null,
 		// Top-level view mode + its UI flags (setView / setTxSidebarVisible);
 		// reset for isolation.
@@ -205,7 +205,7 @@ afterEach(() => {
 });
 
 describe("attached-frame handling", () => {
-	test("daemon switch rejects the old session's calls but the fresh getSubagents pull survives", async () => {
+	test("session switch rejects the old session's calls but the fresh getSubagents pull survives", async () => {
 		connect();
 		const es = FakeWebSocket.instances.at(-1);
 		expect(es).toBeDefined();
@@ -254,7 +254,7 @@ describe("attached-frame handling", () => {
 		dispatch(callResult(freshId, [sub("running")]));
 		await flushMicrotasks();
 		expect(state.subagents.get("s1")?.status).toBe("running");
-		expect(state.currentSessionId).toBe("session-b");
+		expect(state.currentWorkspaceId).toBe("session-b");
 	});
 
 	test("a re-attach of the same session drops the previous generation's scope before the on-attach calls", () => {
@@ -270,7 +270,7 @@ describe("attached-frame handling", () => {
 		});
 		expect(state.sessionScope?.generation).toBe("1");
 
-		// A UI stop keeps the view; waking the row re-attaches the SAME daemon
+		// A UI stop keeps the view; waking the row re-attaches the SAME session
 		// (generation 2 on the session side), so this is not a switched attach.
 		posted.length = 0;
 		dispatch(attached("d9"));
@@ -505,13 +505,13 @@ describe("attach correlation (finding #28)", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.(); // connected = true
 
-		const attach = attachSession("daemon-a");
+		const attach = attachSession("workspace-a");
 		const { id } = lastAttach();
 
-		// A global error (e.g. ANOTHER daemon's pipe lost, or a spawn failure)
+		// A global error (e.g. ANOTHER session's pipe lost, or a spawn failure)
 		// while this attach is in flight must not reject it; global errors are
 		// uncorrelated broadcasts; only the id-keyed attach_result settles it.
-		dispatch({ type: "error", error: "daemon connection lost" });
+		dispatch({ type: "error", error: "session connection lost" });
 		let settled = false;
 		void attach.then(
 			() => {
@@ -524,19 +524,19 @@ describe("attach correlation (finding #28)", () => {
 		await flushMicrotasks();
 		expect(settled).toBe(false);
 
-		dispatch({ type: "attach_result", id, ok: true, sessionId: "daemon-a" });
-		await expect(attach).resolves.toBe("daemon-a");
+		dispatch({ type: "attach_result", id, ok: true, workspaceId: "workspace-a" });
+		await expect(attach).resolves.toBe("workspace-a");
 	});
 
 	test("a keyed attach_result failure rejects the attach", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 
-		const attach = attachSession("daemon-b");
+		const attach = attachSession("workspace-b");
 		const { id } = lastAttach();
 
-		dispatch({ type: "attach_result", id, ok: false, error: "unknown daemon: d9" });
-		await expect(attach).rejects.toThrow("unknown daemon: d9");
+		dispatch({ type: "attach_result", id, ok: false, error: "unknown session: d9" });
+		await expect(attach).rejects.toThrow("unknown session: d9");
 	});
 
 	test("a stale attach_result for a superseded attach never settles the new waiter", async () => {
@@ -545,15 +545,15 @@ describe("attach correlation (finding #28)", () => {
 
 		// Latest-wins: the second attach supersedes the first (which resolves
 		// immediately with whatever session is current, still "" here).
-		const first = attachSession("daemon-a");
+		const first = attachSession("workspace-a");
 		const firstCmd = lastAttach();
-		const second = attachSession("daemon-b");
+		const second = attachSession("workspace-b");
 		const secondCmd = lastAttach();
 		expect(firstCmd.id).not.toBe(secondCmd.id);
 		await expect(first).resolves.toBe("");
 
 		// The superseded attach's keyed result must not settle the second waiter.
-		dispatch({ type: "attach_result", id: firstCmd.id, ok: true, sessionId: "daemon-a" });
+		dispatch({ type: "attach_result", id: firstCmd.id, ok: true, workspaceId: "workspace-a" });
 		let settled = false;
 		void second.then(
 			() => {
@@ -566,8 +566,8 @@ describe("attach correlation (finding #28)", () => {
 		await flushMicrotasks();
 		expect(settled).toBe(false);
 
-		dispatch({ type: "attach_result", id: secondCmd.id, ok: true, sessionId: "daemon-b" });
-		await expect(second).resolves.toBe("daemon-b");
+		dispatch({ type: "attach_result", id: secondCmd.id, ok: true, workspaceId: "workspace-b" });
+		await expect(second).resolves.toBe("workspace-b");
 	});
 });
 
@@ -780,10 +780,10 @@ describe("client debug ring (transport observability)", () => {
 	test("the ring is capped at 300 entries, oldest dropped", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		// daemon_status frames land one ring entry each; distinct daemon ids
+		// session_status frames land one ring entry each; distinct workspace ids
 		// make the cap's drop boundary observable in the messages.
 		for (let i = 0; i < 320; i++) {
-			dispatch({ type: "daemon_status", daemonId: `d${i}`, status: "ready" });
+			dispatch({ type: "session_status", workspaceId: `d${i}`, status: "ready" });
 		}
 		expect(state.debugLog.length).toBe(300);
 		expect(state.debugLog[0].message).toContain("d20");
@@ -794,28 +794,33 @@ describe("client debug ring (transport observability)", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 
-		dispatch(attached("daemon-a"));
-		expect(state.debugLog.at(-1)?.message).toBe("attached daemon-a");
+		dispatch(attached("workspace-a"));
+		expect(state.debugLog.at(-1)?.message).toBe("attached workspace-a");
 
-		dispatch({ type: "error", error: "daemon connection lost" });
-		expect(state.debugLog.at(-1)?.message).toBe("error frame: daemon connection lost");
+		dispatch({ type: "error", error: "session connection lost" });
+		expect(state.debugLog.at(-1)?.message).toBe("error frame: session connection lost");
 		expect(state.debugLog.at(-1)?.level).toBe("error");
 
-		const attach = attachSession("daemon-a");
-		dispatch({ type: "attach_result", id: lastAttachId(), ok: true, sessionId: "daemon-a" });
-		expect(state.debugLog.at(-1)?.message).toBe("attach ok: daemon-a");
-		await expect(attach).resolves.toBe("daemon-a");
+		const attach = attachSession("workspace-a");
+		dispatch({ type: "attach_result", id: lastAttachId(), ok: true, workspaceId: "workspace-a" });
+		expect(state.debugLog.at(-1)?.message).toBe("attach ok: workspace-a");
+		await expect(attach).resolves.toBe("workspace-a");
 
 		// A failed attach writes a warn entry and rejects the caller.
-		const bad = attachSession("daemon-b");
-		dispatch({ type: "attach_result", id: lastAttachId(), ok: false, error: "unknown daemon: d9" });
-		expect(state.debugLog.at(-1)?.message).toBe("attach failed: unknown daemon: d9");
+		const bad = attachSession("workspace-b");
+		dispatch({
+			type: "attach_result",
+			id: lastAttachId(),
+			ok: false,
+			error: "unknown session: d9",
+		});
+		expect(state.debugLog.at(-1)?.message).toBe("attach failed: unknown session: d9");
 		expect(state.debugLog.at(-1)?.level).toBe("warn");
-		await expect(bad).rejects.toThrow("unknown daemon: d9");
+		await expect(bad).rejects.toThrow("unknown session: d9");
 	});
 });
 
-describe("fleet settings fallback (no daemon attached)", () => {
+describe("fleet settings fallback (no session attached)", () => {
 	const model: SettingsModel = { tabs: [] };
 
 	/** Drain the async fetch/.then/.finally chain (each hop is one microtask); the write queue adds a few. */
@@ -848,7 +853,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 
 	test("refreshSettings GETs /ctl/settings and stores the model (nothing sent in band)", async () => {
 		setState({
-			currentSessionId: "",
+			currentWorkspaceId: "",
 			settingsModel: null,
 			settingsLoading: false,
 			error: null,
@@ -867,7 +872,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 
 	test("updateSetting POSTs /ctl/settings/set with {path, value} and stores the response model", async () => {
 		setState({
-			currentSessionId: "",
+			currentWorkspaceId: "",
 			settingsModel: null,
 			settingsLoading: false,
 			error: null,
@@ -887,7 +892,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 
 	test("a non-ok /ctl/settings/set response surfaces the server {error} message in state.error", async () => {
 		setState({
-			currentSessionId: "",
+			currentWorkspaceId: "",
 			settingsModel: null,
 			settingsLoading: false,
 			error: null,
@@ -903,7 +908,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 
 	test("a revision-conflict 409 on /ctl/settings/set refetches the settings model so the next write is current", async () => {
 		setState({
-			currentSessionId: "",
+			currentWorkspaceId: "",
 			settingsModel: null,
 			settingsLoading: false,
 			error: null,
@@ -927,7 +932,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 
 	test("a non-ok /ctl/settings response surfaces the server error and leaves the model null", async () => {
 		setState({
-			currentSessionId: "",
+			currentWorkspaceId: "",
 			settingsModel: null,
 			settingsLoading: false,
 			error: null,
@@ -944,7 +949,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 
 	test("with a session attached, updateSetting stays on the in-band call path (no /ctl fetch)", async () => {
 		setState({
-			currentSessionId: "",
+			currentWorkspaceId: "",
 			settingsModel: null,
 			settingsLoading: false,
 			error: null,
@@ -954,7 +959,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		FakeWebSocket.instances.at(-1)!.onopen?.(); // connected = true so call() posts
 		// Flip to an attached state AFTER the stream opens. onopen's boot refresh
 		// is a GET /ctl/settings, which the assertion below excludes.
-		setState({ currentSessionId: "daemon-a" });
+		setState({ currentWorkspaceId: "workspace-a" });
 
 		updateSetting("agent.model", "gpt-5");
 		await settle();
@@ -977,11 +982,11 @@ describe("fleet settings fallback (no daemon attached)", () => {
 	});
 
 	test("a revision-reply write applies the pushed model and does not refetch when it arrived", async () => {
-		setState({ currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		setState({ currentWorkspaceId: "", settingsModel: null, settingsLoading: false, error: null });
 		stubFetch(() => ({ status: 200, body: model }));
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState({ currentSessionId: "daemon-a" });
+		setState({ currentWorkspaceId: "workspace-a" });
 
 		updateSetting("agent.model", "gpt-5");
 		await settle();
@@ -1004,11 +1009,11 @@ describe("fleet settings fallback (no daemon attached)", () => {
 	});
 
 	test("a revision reply ahead of the pushed model refetches the full model", async () => {
-		setState({ currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		setState({ currentWorkspaceId: "", settingsModel: null, settingsLoading: false, error: null });
 		stubFetch(() => ({ status: 200, body: model }));
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState({ currentSessionId: "daemon-a" });
+		setState({ currentWorkspaceId: "workspace-a" });
 
 		updateSetting("agent.model", "gpt-5");
 		await settle();
@@ -1030,7 +1035,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 
 	test("queued writes run one at a time, each sending the revision the previous response produced", async () => {
 		setState({
-			currentSessionId: "",
+			currentWorkspaceId: "",
 			settingsModel: { tabs: [], revision: 7 },
 			settingsLoading: false,
 			error: null,
@@ -1059,7 +1064,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 
 	test("a rejected session write surfaces its message once, without a doubled Error prefix", async () => {
 		setState({
-			currentSessionId: "",
+			currentWorkspaceId: "",
 			settingsModel: null,
 			settingsLoading: false,
 			error: null,
@@ -1067,7 +1072,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		stubFetch(() => ({ status: 200, body: model }));
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState({ currentSessionId: "daemon-a" });
+		setState({ currentWorkspaceId: "workspace-a" });
 
 		updateSetting("display.hideToolActivity", true, 3);
 		await settle();
@@ -1115,7 +1120,7 @@ describe("settings_changed revision guard and settingValue()", () => {
 	test("an older settings_changed frame is ignored; a newer one applies", () => {
 		// Attached before connect(): the onopen boot refresh is for the fleet
 		// path and must not run here.
-		setState({ currentSessionId: "daemon-a", settingsModel: null });
+		setState({ currentWorkspaceId: "workspace-a", settingsModel: null });
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 
@@ -1132,7 +1137,7 @@ describe("settings_changed revision guard and settingValue()", () => {
 	});
 
 	test("settingValue reads the current model and follows replacements", () => {
-		setState({ currentSessionId: "daemon-a", settingsModel: null });
+		setState({ currentWorkspaceId: "workspace-a", settingsModel: null });
 		expect(settingValue("agent.model")).toBeUndefined();
 
 		setState({ settingsModel: modelAt(1, "gpt-5") });
@@ -1213,7 +1218,7 @@ describe("state-frame application (model-role picker state)", () => {
 		expect(state.planReviewPending).toBe(false);
 	});
 
-	test("a frame without role state clears the prior mirror (session-scoped, unlike the daemon roster)", () => {
+	test("a frame without role state clears the prior mirror (session-scoped, unlike the session roster)", () => {
 		connect();
 		dispatch(
 			stateFrame({
@@ -1238,7 +1243,7 @@ describe("state-frame application (model-role picker state)", () => {
 		connect();
 		// Priming sends history BEFORE state: on first attach the model is
 		// still unknown, so nothing may render a (fallback) character yet.
-		dispatch(attached("daemon-a"));
+		dispatch(attached("workspace-a"));
 		dispatch({ type: "history", messages: [] });
 		expect(state.modelSynced).toBe(false);
 		dispatch(stateFrame({ model: model("gpt-5") }));
@@ -1252,8 +1257,8 @@ describe("state-frame application (model-role picker state)", () => {
 		dispatch(stateFrame({ model: model("claude-opus-5-5") }));
 		expect(state.modelSynced).toBe(true);
 
-		// A daemon switch drops the sync before the new daemon's priming.
-		dispatch(attached("daemon-b"));
+		// A session switch drops the sync before the new session's priming.
+		dispatch(attached("workspace-b"));
 		expect(state.modelSynced).toBe(false);
 	});
 });
@@ -1429,9 +1434,9 @@ describe("initialView (boot view resolution)", () => {
 		expect(initialView("chat", "#/stored/d7/sess-1", false)).toBe("chat");
 	});
 
-	test("a session route (#/d/<daemonId>[/s/<sessionId>]) boots into chat, even over a persisted analysis", () => {
-		expect(initialView("analysis", "#/d/d7", true)).toBe("chat");
-		expect(initialView("analysis", "#/d/d7/s/sess-1", true)).toBe("chat");
+	test("a session route (#/w/<workspaceId>[/s/<sessionId>]) boots into chat, even over a persisted analysis", () => {
+		expect(initialView("analysis", "#/w/d7", true)).toBe("chat");
+		expect(initialView("analysis", "#/w/d7/s/sess-1", true)).toBe("chat");
 	});
 });
 
@@ -1637,7 +1642,7 @@ describe("workingIntent (dynamic shimmer label)", () => {
 		primeReady();
 		dispatchSeq(agentStart(), 1024);
 		dispatchSeq(toolStart("t1", { intent: "Reading config files" }), 1025);
-		// Reconnect primed against an idle daemon: the state frame says the turn
+		// Reconnect primed against an idle session: the state frame says the turn
 		// is over, so the last intent must not linger under the shimmer.
 		dispatch({ type: "state", state: { isStreaming: false } as unknown as WebSessionState });
 		expect(state.workingIntent).toBeUndefined();
@@ -1646,7 +1651,7 @@ describe("workingIntent (dynamic shimmer label)", () => {
 
 // ---------------------------------------------------------------------------
 // Phase 5: project-first sidebar state: registered_projects frame handling
-// (fleet-scoped, survives session resets) + daemonsByProject grouping.
+// (fleet-scoped, survives session resets) + sessionsByProject grouping.
 // ---------------------------------------------------------------------------
 describe("Phase 5: registered projects and project-first grouping", () => {
 	const p1: RegisteredProject = { projectId: "p1", path: "/repos/a", name: "a", addedAt: 1 };
@@ -1654,9 +1659,9 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 	const p3: RegisteredProject = { projectId: "p3", path: "/repos/c", name: "c", addedAt: 3 };
 
 	/** Minimal roster entry; extra fields (projectId/worktreeOf/…) ride along. */
-	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+	function session(id: string, extra: Partial<RosterEntry> = {}): RosterEntry {
 		return {
-			daemonId: id,
+			workspaceId: id,
 			name: id,
 			cwd: `/repos/${id}`,
 			project: id,
@@ -1672,11 +1677,11 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		dispatch({ type: "registered_projects", projects: [p1, p2, p3] });
 		expect(state.registeredProjects).toEqual([p1, p2, p3]);
 
-		// A daemon switch runs resetSessionView (session-scoped cleanup); the
+		// A session switch runs resetSessionView (session-scoped cleanup); the
 		// project registry is fleet-scoped and must come through intact.
-		dispatch(attached("daemon-a"));
-		dispatch(attached("daemon-b")); // switch → resetSessionView
-		expect(state.currentSessionId).toBe("daemon-b");
+		dispatch(attached("workspace-a"));
+		dispatch(attached("workspace-b")); // switch → resetSessionView
+		expect(state.currentWorkspaceId).toBe("workspace-b");
 		expect(state.registeredProjects).toEqual([p1, p2, p3]);
 	});
 
@@ -1716,14 +1721,14 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 			projects: [p1],
 			configPath: "/home/u/.omp-web/config.json",
 		});
-		dispatch(attached("daemon-a"));
-		dispatch(attached("daemon-b")); // switch → resetSessionView
-		expect(state.currentSessionId).toBe("daemon-b");
+		dispatch(attached("workspace-a"));
+		dispatch(attached("workspace-b")); // switch → resetSessionView
+		expect(state.currentWorkspaceId).toBe("workspace-b");
 		expect(state.registeredProjects).toEqual([p1]);
 		expect(state.fleetConfigPath).toBe("/home/u/.omp-web/config.json");
 	});
 
-	test("daemonsByProject: registry order, zero-daemon projects present, main-checkout rows first", () => {
+	test("sessionsByProject: registry order, zero-session projects present, main-checkout rows first", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 
@@ -1731,41 +1736,41 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		dispatch({ type: "registered_projects", projects: [p2, p1, p3] });
 		dispatch({
 			type: "roster",
-			daemons: [
-				daemon("b-main", { projectId: "p2" }),
-				daemon("a-wt", { projectId: "p1", worktreeOf: "a" }),
-				daemon("a-main", { projectId: "p1" }),
+			entries: [
+				session("b-main", { projectId: "p2" }),
+				session("a-wt", { projectId: "p1", worktreeOf: "a" }),
+				session("a-main", { projectId: "p1" }),
 			],
 		});
 
-		const groups = daemonsByProject();
+		const groups = sessionsByProject();
 		expect(groups.map((g) => g.project.projectId)).toEqual(["p2", "p1", "p3"]);
-		expect(groups[0].daemons.map((d) => d.daemonId)).toEqual(["b-main"]);
+		expect(groups[0].sessions.map((d) => d.workspaceId)).toEqual(["b-main"]);
 		// Main-checkout row first, then worktrees, regardless of roster order.
-		expect(groups[1].daemons.map((d) => d.daemonId)).toEqual(["a-main", "a-wt"]);
-		expect(groups[2].daemons).toEqual([]); // zero-daemon project still renders
+		expect(groups[1].sessions.map((d) => d.workspaceId)).toEqual(["a-main", "a-wt"]);
+		expect(groups[2].sessions).toEqual([]); // zero-session project still renders
 	});
 
-	test("daemonsByProject drops entries without a projectId and orders each group main, worktrees by branch, clones", () => {
+	test("sessionsByProject drops entries without a projectId and orders each group main, worktrees by branch, clones", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch({ type: "registered_projects", projects: [p1] });
 		dispatch({
 			type: "roster",
-			daemons: [
+			entries: [
 				// Unregistered: no projectId, so no group shows it.
-				daemon("zeta-main", { project: "zeta" }),
-				daemon("clone-b", { projectId: "p1", workspaceKind: "clone", name: "clone-b" }),
-				daemon("wt-zed", { projectId: "p1", worktreeOf: "a", branch: "zed" }),
-				daemon("wt-alpha", { projectId: "p1", worktreeOf: "a", branch: "alpha" }),
-				daemon("a-main", { projectId: "p1", workspaceKind: "direct" }),
-				daemon("clone-a", { projectId: "p1", workspaceKind: "clone", name: "clone-a" }),
+				session("zeta-main", { project: "zeta" }),
+				session("clone-b", { projectId: "p1", workspaceKind: "clone", name: "clone-b" }),
+				session("wt-zed", { projectId: "p1", worktreeOf: "a", branch: "zed" }),
+				session("wt-alpha", { projectId: "p1", worktreeOf: "a", branch: "alpha" }),
+				session("a-main", { projectId: "p1", workspaceKind: "direct" }),
+				session("clone-a", { projectId: "p1", workspaceKind: "clone", name: "clone-a" }),
 			],
 		});
 
-		const groups = daemonsByProject();
+		const groups = sessionsByProject();
 		expect(groups.map((g) => g.project.projectId)).toEqual(["p1"]);
-		expect(groups[0].daemons.map((d) => d.daemonId)).toEqual([
+		expect(groups[0].sessions.map((d) => d.workspaceId)).toEqual([
 			"a-main",
 			"wt-alpha",
 			"wt-zed",
@@ -1774,13 +1779,13 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		]);
 	});
 
-	test("worktree_delete_info answers populate the daemonId-keyed evidence map (fleet-scoped)", () => {
+	test("worktree_delete_info answers populate the workspaceId-keyed evidence map (fleet-scoped)", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 
 		dispatch({
 			type: "worktree_delete_info",
-			daemonId: "d1",
+			workspaceId: "d1",
 			linked: true,
 			dirty: true,
 			git: { added: 1, modified: 0, deleted: 0, untracked: 2 },
@@ -1790,7 +1795,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		});
 		dispatch({
 			type: "worktree_delete_info",
-			daemonId: "d1",
+			workspaceId: "d1",
 			linked: true,
 			dirty: false,
 			branch: "feat",
@@ -1799,7 +1804,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		});
 		dispatch({
 			type: "worktree_delete_info",
-			daemonId: "d2",
+			workspaceId: "d2",
 			linked: false,
 			dirty: false,
 			reason: "not a linked worktree",
@@ -1816,9 +1821,9 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 			reason: "not a linked worktree",
 		});
 
-		// Fleet-scoped: survives the reset of a daemon switch.
-		dispatch(attached("daemon-a"));
-		dispatch(attached("daemon-b"));
+		// Fleet-scoped: survives the reset of a session switch.
+		dispatch(attached("workspace-a"));
+		dispatch(attached("workspace-b"));
 		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({
 			linked: false,
 			dirty: false,
@@ -1945,7 +1950,7 @@ describe("Phase 5: project/worktree command senders", () => {
 		expect(posted).toEqual([{ type: "remove_project", id: expect.any(String), projectId: "p1" }]);
 	});
 
-	test("createWorktree posts create_worktree (start:true) and resolves with the daemonId from workspace_create_result", async () => {
+	test("createWorktree posts create_worktree (start:true) and resolves with the workspaceId from workspace_create_result", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 
@@ -1960,8 +1965,8 @@ describe("Phase 5: project/worktree command senders", () => {
 				start: true,
 			},
 		]);
-		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d7" });
-		await expect(created).resolves.toEqual({ daemonId: "d7" });
+		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, workspaceId: "d7" });
+		await expect(created).resolves.toEqual({ workspaceId: "d7" });
 	});
 
 	test("createWorktree with an existing branch posts existingBranch; a refusal rejects with the fleet's message", async () => {
@@ -2010,8 +2015,8 @@ describe("Phase 5: project/worktree command senders", () => {
 				start: true,
 			},
 		]);
-		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, daemonId: "d8" });
-		await expect(cloned).resolves.toEqual({ daemonId: "d8" });
+		dispatch({ type: "workspace_create_result", id: lastCommandId(), ok: true, workspaceId: "d8" });
+		await expect(cloned).resolves.toEqual({ workspaceId: "d8" });
 	});
 
 	test("resetPendingProjects (stream teardown) rejects in-flight add and create waiters with Disconnected", async () => {
@@ -2049,27 +2054,29 @@ describe("Phase 5: project/worktree command senders", () => {
 
 		sendDeleteWorktree("d1", { deleteBranch: "feat" });
 		expect(posted).toEqual([
-			{ type: "delete_worktree", id: expect.any(String), daemonId: "d1", deleteBranch: "feat" },
+			{ type: "delete_worktree", id: expect.any(String), workspaceId: "d1", deleteBranch: "feat" },
 		]);
 
 		posted.length = 0;
 		sendDeleteWorktree("d1");
-		expect(posted).toEqual([{ type: "delete_worktree", id: expect.any(String), daemonId: "d1" }]);
+		expect(posted).toEqual([
+			{ type: "delete_worktree", id: expect.any(String), workspaceId: "d1" },
+		]);
 	});
 
-	test("sendWorktreeDeleteInfo posts worktree_delete_info for the daemon", () => {
+	test("sendWorktreeDeleteInfo posts worktree_delete_info for the session", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 		sendWorktreeDeleteInfo("d1");
 		expect(posted).toEqual([
-			{ type: "worktree_delete_info", id: expect.any(String), daemonId: "d1" },
+			{ type: "worktree_delete_info", id: expect.any(String), workspaceId: "d1" },
 		]);
 	});
 });
 
 // ---------------------------------------------------------------------------
 // worktree_removed: poll-detected on-disk worktree removal (the fleet evicted
-// the daemon and broadcasts). One toast per eviction + an aria-live announce;
+// the session and broadcasts). One toast per eviction + an aria-live announce;
 // fleet-edge-only like registered_projects, so no session guard is applied.
 // ---------------------------------------------------------------------------
 describe("worktree_removed (on-disk removal toast)", () => {
@@ -2084,7 +2091,7 @@ describe("worktree_removed (on-disk removal toast)", () => {
 		prime();
 		dispatch({
 			type: "worktree_removed",
-			daemonId: "d1",
+			workspaceId: "d1",
 			name: "feat-x",
 			path: "/repos/proj/worktrees/feat-x",
 		} as ServerFrame);
@@ -2098,13 +2105,13 @@ describe("worktree_removed (on-disk removal toast)", () => {
 		prime();
 		dispatch({
 			type: "worktree_removed",
-			daemonId: "d1",
+			workspaceId: "d1",
 			name: "feat-x",
 			path: "/repos/proj/worktrees/feat-x",
 		} as ServerFrame);
 		dispatch({
 			type: "worktree_removed",
-			daemonId: "d2",
+			workspaceId: "d2",
 			name: "feat-y",
 			path: "/repos/proj/worktrees/feat-y",
 		} as ServerFrame);
@@ -2119,7 +2126,7 @@ describe("worktree_removed (on-disk removal toast)", () => {
 		const longPath = `/repos/proj/worktrees/feat-${"segment/".repeat(20)}tail`;
 		dispatch({
 			type: "worktree_removed",
-			daemonId: "d1",
+			workspaceId: "d1",
 			name: "feat",
 			path: longPath,
 		} as ServerFrame);
@@ -2133,16 +2140,16 @@ describe("worktree_removed (on-disk removal toast)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Roster truth vs. the attached chat column: a roster/daemon_status frame
-// marking the attached daemon dead (asleep/error) or removing it clears the
-// session view, but MUST NOT fire while that daemon's attach is in flight
-// (a freshly waking daemon reads as "asleep" in lagging roster frames).
+// Roster truth vs. the attached chat column: a roster/session_status frame
+// marking the attached session dead (asleep/error) or removing it clears the
+// session view, but MUST NOT fire while that session's attach is in flight
+// (a freshly waking session reads as "asleep" in lagging roster frames).
 // ---------------------------------------------------------------------------
 describe("attached session reconciliation against roster truth", () => {
 	/** Minimal roster entry; status/extra fields ride along. */
-	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+	function session(id: string, extra: Partial<RosterEntry> = {}): RosterEntry {
 		return {
-			daemonId: id,
+			workspaceId: id,
 			name: id,
 			cwd: `/repos/${id}`,
 			project: id,
@@ -2151,72 +2158,72 @@ describe("attached session reconciliation against roster truth", () => {
 		};
 	}
 
-	test("a re-dialing attached daemon reaches the strip only after the grace window", () => {
+	test("a re-dialing attached session reaches the strip only after the grace window", () => {
 		vi.useFakeTimers();
 		try {
 			attachAndPrime();
-			dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "reconnecting" })] });
+			dispatch({ type: "roster", entries: [session("workspace-a", { status: "reconnecting" })] });
 			expect(connectionState()).toBe("connected");
 			vi.advanceTimersByTime(1_600);
 			expect(connectionState()).toBe("reconnecting");
-			dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
+			dispatch({ type: "roster", entries: [session("workspace-a", { status: "ready" })] });
 			expect(connectionState()).toBe("connected");
 		} finally {
 			vi.useRealTimers();
 		}
 	});
 
-	/** Connect + attach to a daemon with an empty-transcript prime in place. */
+	/** Connect + attach to a session with an empty-transcript prime in place. */
 	function attachAndPrime(): void {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch(attached("daemon-a"));
+		dispatch(attached("workspace-a"));
 		dispatchSeq({ type: "history", messages: [userMsg("q"), assistantMsg("a")] } as ServerFrame, 3);
 		setState("readyAt", 123);
 	}
 
-	test("a roster frame marking the attached daemon asleep clears the session view (roster survives)", () => {
+	test("a roster frame marking the attached session asleep clears the session view (roster survives)", () => {
 		attachAndPrime();
-		expect(state.currentSessionId).toBe("daemon-a");
+		expect(state.currentWorkspaceId).toBe("workspace-a");
 		expect(state.readyAt).toBe(123);
 		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
 
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "asleep" })] });
 
-		expect(state.currentSessionId).toBe("");
+		expect(state.currentWorkspaceId).toBe("");
 		expect(state.readyAt).toBeUndefined();
 		expect(state.items).toEqual([]);
 		// Fleet-scoped roster data survives the session clear.
-		expect(state.daemonRoster.map((d) => d.daemonId)).toEqual(["daemon-a"]);
+		expect(state.sessionRoster.map((d) => d.workspaceId)).toEqual(["workspace-a"]);
 		expect(hasLiveSession()).toBe(false);
 	});
 
-	test("a roster_delta marking the attached daemon asleep clears the session view (roster survives)", () => {
+	test("a roster_delta marking the attached session asleep clears the session view (roster survives)", () => {
 		attachAndPrime();
-		expect(state.currentSessionId).toBe("daemon-a");
+		expect(state.currentWorkspaceId).toBe("workspace-a");
 		expect(state.readyAt).toBe(123);
 		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
 
 		dispatch({
 			type: "roster_delta",
-			upserted: [daemon("daemon-a", { status: "asleep" })],
+			upserted: [session("workspace-a", { status: "asleep" })],
 			removed: [],
 		});
 
-		expect(state.currentSessionId).toBe("");
+		expect(state.currentWorkspaceId).toBe("");
 		expect(state.readyAt).toBeUndefined();
 		expect(state.items).toEqual([]);
 		// Fleet-scoped roster data survives the session clear.
-		expect(state.daemonRoster.map((d) => d.daemonId)).toEqual(["daemon-a"]);
+		expect(state.sessionRoster.map((d) => d.workspaceId)).toEqual(["workspace-a"]);
 		expect(hasLiveSession()).toBe(false);
 	});
 
-	test("a roster frame keeping the attached daemon ready does NOT clear", () => {
+	test("a roster frame keeping the attached session ready does NOT clear", () => {
 		attachAndPrime();
 
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "ready" })] });
 
-		expect(state.currentSessionId).toBe("daemon-a");
+		expect(state.currentWorkspaceId).toBe("workspace-a");
 		expect(state.readyAt).toBe(123);
 		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
 		expect(hasLiveSession()).toBe(true);
@@ -2225,21 +2232,21 @@ describe("attached session reconciliation against roster truth", () => {
 	test("removing the attached entry from the roster clears the session view", () => {
 		attachAndPrime();
 
-		dispatch({ type: "roster", daemons: [] });
+		dispatch({ type: "roster", entries: [] });
 
-		expect(state.currentSessionId).toBe("");
+		expect(state.currentWorkspaceId).toBe("");
 		expect(state.readyAt).toBeUndefined();
 		expect(state.items).toEqual([]);
 		expect(hasLiveSession()).toBe(false);
 	});
 
-	test("a daemon_status asleep frame for the attached daemon clears the session view", () => {
+	test("a session_status asleep frame for the attached session clears the session view", () => {
 		attachAndPrime();
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "ready" })] });
 
-		dispatch({ type: "daemon_status", daemonId: "daemon-a", status: "asleep" });
+		dispatch({ type: "session_status", workspaceId: "workspace-a", status: "asleep" });
 
-		expect(state.currentSessionId).toBe("");
+		expect(state.currentWorkspaceId).toBe("");
 		expect(state.readyAt).toBeUndefined();
 		expect(state.items).toEqual([]);
 		expect(hasLiveSession()).toBe(false);
@@ -2247,124 +2254,124 @@ describe("attached session reconciliation against roster truth", () => {
 
 	test("RACE: a lagging 'asleep' roster frame does not clear while the attach is in flight", async () => {
 		attachAndPrime();
-		// The proxied attached frame already set currentSessionId, but the
+		// The proxied attached frame already set currentWorkspaceId, but the
 		// id-keyed attach_result has not settled yet (finding #28: priming
-		// rides the daemon pipe, which may be mid-redial); the wake-attach
+		// rides the session pipe, which may be mid-redial); the wake-attach
 		// is still in flight, so the lagging roster must not clear.
-		const attach = attachSession("daemon-a");
+		const attach = attachSession("workspace-a");
 		const cmd = posted.at(-1);
 		if (!cmd || cmd.type !== "attach") throw new Error("expected an attach command");
 
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
-		expect(state.currentSessionId).toBe("daemon-a");
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "asleep" })] });
+		expect(state.currentWorkspaceId).toBe("workspace-a");
 		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
 		expect(hasLiveSession()).toBe(true);
 
 		// Once the attach settles, the same asleep roster frame IS truth.
-		dispatch({ type: "attach_result", id: cmd.id, ok: true, sessionId: "daemon-a" });
-		await expect(attach).resolves.toBe("daemon-a");
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
-		expect(state.currentSessionId).toBe("");
+		dispatch({ type: "attach_result", id: cmd.id, ok: true, workspaceId: "workspace-a" });
+		await expect(attach).resolves.toBe("workspace-a");
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "asleep" })] });
+		expect(state.currentWorkspaceId).toBe("");
 		expect(hasLiveSession()).toBe(false);
 	});
 
-	test("the in-flight guard only protects the attach target (a different dead daemon clears)", async () => {
+	test("the in-flight guard only protects the attach target (a different dead session clears)", async () => {
 		attachAndPrime();
-		// Attaching to daemon-b must not shield a daemon-a that died.
-		const attach = attachSession("daemon-b");
+		// Attaching to workspace-b must not shield a workspace-a that died.
+		const attach = attachSession("workspace-b");
 		const cmd = posted.at(-1);
 		if (!cmd || cmd.type !== "attach") throw new Error("expected an attach command");
 
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
-		expect(state.currentSessionId).toBe("");
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "asleep" })] });
+		expect(state.currentWorkspaceId).toBe("");
 
-		dispatch({ type: "attach_result", id: cmd.id, ok: true, sessionId: "daemon-b" });
-		await expect(attach).resolves.toBe("daemon-b");
+		dispatch({ type: "attach_result", id: cmd.id, ok: true, workspaceId: "workspace-b" });
+		await expect(attach).resolves.toBe("workspace-b");
 	});
 
 	test("hasLiveSession: transitional wake statuses stay live, terminal-dead statuses gate the pane", () => {
 		attachAndPrime();
 		// A transitional wake status is never dead.
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "connecting" })] });
-		expect(state.currentSessionId).toBe("daemon-a");
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "connecting" })] });
+		expect(state.currentWorkspaceId).toBe("workspace-a");
 		expect(hasLiveSession()).toBe(true);
 
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "error" })] });
-		expect(state.currentSessionId).toBe("");
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "error" })] });
+		expect(state.currentWorkspaceId).toBe("");
 		expect(hasLiveSession()).toBe(false);
 	});
 
 	test("a user stop keeps the attached transcript behind the stopped strip; restart clears the mark", () => {
 		attachAndPrime();
-		stopDaemonById("daemon-a");
-		expect(isUserStopped("daemon-a")).toBe(true);
+		stopSessionById("workspace-a");
+		expect(isUserStopped("workspace-a")).toBe(true);
 
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "asleep" })] });
 
-		expect(state.currentSessionId).toBe("daemon-a");
+		expect(state.currentWorkspaceId).toBe("workspace-a");
 		expect(state.readyAt).toBeUndefined();
 		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
 		expect(hasLiveSession()).toBe(true);
 
-		restartDaemonById("daemon-a");
-		expect(isUserStopped("daemon-a")).toBe(false);
+		restartSessionById("workspace-a");
+		expect(isUserStopped("workspace-a")).toBe(false);
 	});
 
 	test("an attached session that goes asleep mid-compaction drops the compacting badge", () => {
 		// The last state frame said compacting; the dead process never sends the frame that clears it.
 		attachAndPrime();
 		setState("compacting", true);
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
-		expect(state.currentSessionId).toBe("");
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "asleep" })] });
+		expect(state.currentWorkspaceId).toBe("");
 		expect(state.compacting).toBe(false);
 	});
 
 	test("a user stop mid-compaction keeps the transcript but drops the compacting badge", () => {
 		attachAndPrime();
 		setState("compacting", true);
-		stopDaemonById("daemon-a");
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
-		expect(state.currentSessionId).toBe("daemon-a");
+		stopSessionById("workspace-a");
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "asleep" })] });
+		expect(state.currentWorkspaceId).toBe("workspace-a");
 		expect(state.compacting).toBe(false);
-		restartDaemonById("daemon-a");
+		restartSessionById("workspace-a");
 	});
 
 	test("restarting a ready process waits for the roster to show it asleep before waking", () => {
 		attachAndPrime();
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
-		restartDaemonById("daemon-a");
-		expect(isUserStopped("daemon-a")).toBe(true);
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "ready" })] });
+		restartSessionById("workspace-a");
+		expect(isUserStopped("workspace-a")).toBe(true);
 
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
-		expect(isUserStopped("daemon-a")).toBe(true);
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "ready" })] });
+		expect(isUserStopped("workspace-a")).toBe(true);
 
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
-		expect(isUserStopped("daemon-a")).toBe(false);
+		dispatch({ type: "roster", entries: [session("workspace-a", { status: "asleep" })] });
+		expect(isUserStopped("workspace-a")).toBe(false);
 	});
 
-	test("a user-stopped attached daemon removed from the roster clears the view and its mark", () => {
+	test("a user-stopped attached session removed from the roster clears the view and its mark", () => {
 		attachAndPrime();
-		stopDaemonById("daemon-a");
+		stopSessionById("workspace-a");
 
-		dispatch({ type: "roster", daemons: [] });
+		dispatch({ type: "roster", entries: [] });
 
-		expect(state.currentSessionId).toBe("");
+		expect(state.currentWorkspaceId).toBe("");
 		expect(state.items).toEqual([]);
 		expect(hasLiveSession()).toBe(false);
-		expect(isUserStopped("daemon-a")).toBe(false);
+		expect(isUserStopped("workspace-a")).toBe(false);
 	});
 });
 
 // ---------------------------------------------------------------------------
 // roster_delta: the edge sends the full roster once on open and then only the
-// rows each registry mutation changed. A delta patches state.daemonRoster in
-// place (by daemonId), appends new rows, and drops removed ids.
+// rows each registry mutation changed. A delta patches state.sessionRoster in
+// place (by workspaceId), appends new rows, and drops removed ids.
 // ---------------------------------------------------------------------------
 describe("roster_delta frames", () => {
 	/** Minimal roster entry; status/extra fields ride along. */
-	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+	function session(id: string, extra: Partial<RosterEntry> = {}): RosterEntry {
 		return {
-			daemonId: id,
+			workspaceId: id,
 			name: id,
 			cwd: `/repos/${id}`,
 			project: id,
@@ -2373,13 +2380,13 @@ describe("roster_delta frames", () => {
 		};
 	}
 
-	const rosterIds = (): string[] => state.daemonRoster.map((d) => d.daemonId);
+	const rosterIds = (): string[] => state.sessionRoster.map((d) => d.workspaceId);
 
-	/** Open the stream and seed the roster with daemons A and B. */
+	/** Open the stream and seed the roster with sessions A and B. */
 	function seedAB(): void {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch({ type: "roster", daemons: [daemon("a"), daemon("b")] });
+		dispatch({ type: "roster", entries: [session("a"), session("b")] });
 		expect(rosterIds()).toEqual(["a", "b"]);
 	}
 
@@ -2388,19 +2395,19 @@ describe("roster_delta frames", () => {
 
 		dispatch({
 			type: "roster_delta",
-			upserted: [daemon("a", { status: "asleep" })],
+			upserted: [session("a", { status: "asleep" })],
 			removed: [],
 		});
 
 		expect(rosterIds()).toEqual(["a", "b"]);
-		expect(state.daemonRoster[0]?.status).toBe("asleep");
-		expect(state.daemonRoster[1]?.status).toBe("ready");
+		expect(state.sessionRoster[0]?.status).toBe("asleep");
+		expect(state.sessionRoster[1]?.status).toBe("ready");
 	});
 
 	test("an upserted row with a new id is appended after the existing rows", () => {
 		seedAB();
 
-		dispatch({ type: "roster_delta", upserted: [daemon("c")], removed: [] });
+		dispatch({ type: "roster_delta", upserted: [session("c")], removed: [] });
 
 		expect(rosterIds()).toEqual(["a", "b", "c"]);
 	});
@@ -2411,80 +2418,80 @@ describe("roster_delta frames", () => {
 		dispatch({ type: "roster_delta", upserted: [], removed: ["b"] });
 
 		expect(rosterIds()).toEqual(["a"]);
-		expect(state.daemonRoster[0]?.status).toBe("ready");
+		expect(state.sessionRoster[0]?.status).toBe("ready");
 	});
 
 	test("a full roster frame with identical ids keeps every row's store object", () => {
 		seedAB();
-		const [a, b] = [state.daemonRoster[0]!, state.daemonRoster[1]!];
+		const [a, b] = [state.sessionRoster[0]!, state.sessionRoster[1]!];
 
 		dispatch({
 			type: "roster",
-			daemons: [daemon("a", { name: "renamed" }), daemon("b")],
+			entries: [session("a", { name: "renamed" }), session("b")],
 		});
 
-		expect(state.daemonRoster[0]).toBe(a);
-		expect(state.daemonRoster[1]).toBe(b);
+		expect(state.sessionRoster[0]).toBe(a);
+		expect(state.sessionRoster[1]).toBe(b);
 		expect(a.name).toBe("renamed");
 	});
 
 	test("a full roster frame drops absent ids and deletes fields the frame no longer carries", () => {
 		seedAB();
-		dispatch({ type: "roster", daemons: [daemon("a", { error: "boom" }), daemon("b")] });
-		const a = state.daemonRoster[0]!;
+		dispatch({ type: "roster", entries: [session("a", { error: "boom" }), session("b")] });
+		const a = state.sessionRoster[0]!;
 		expect(a.error).toBe("boom");
 
-		dispatch({ type: "roster", daemons: [daemon("a")] });
+		dispatch({ type: "roster", entries: [session("a")] });
 
 		expect(rosterIds()).toEqual(["a"]);
-		expect(state.daemonRoster[0]).toBe(a);
+		expect(state.sessionRoster[0]).toBe(a);
 		expect("error" in a).toBe(false);
 	});
 
 	test("a roster_delta upsert keeps the row's store object and updates the changed field", () => {
 		seedAB();
-		const [a, b] = [state.daemonRoster[0]!, state.daemonRoster[1]!];
+		const [a, b] = [state.sessionRoster[0]!, state.sessionRoster[1]!];
 
 		dispatch({
 			type: "roster_delta",
-			upserted: [daemon("a", { status: "asleep" })],
+			upserted: [session("a", { status: "asleep" })],
 			removed: [],
 		});
 
-		expect(state.daemonRoster[0]).toBe(a);
-		expect(state.daemonRoster[1]).toBe(b);
+		expect(state.sessionRoster[0]).toBe(a);
+		expect(state.sessionRoster[1]).toBe(b);
 		expect(a.status).toBe("asleep");
 		expect(b.status).toBe("ready");
 	});
 
 	test("a roster_delta removal keeps the surviving rows' store objects", () => {
 		seedAB();
-		dispatch({ type: "roster_delta", upserted: [daemon("c")], removed: [] });
-		const [a, c] = [state.daemonRoster[0]!, state.daemonRoster[2]!];
+		dispatch({ type: "roster_delta", upserted: [session("c")], removed: [] });
+		const [a, c] = [state.sessionRoster[0]!, state.sessionRoster[2]!];
 
 		dispatch({ type: "roster_delta", upserted: [], removed: ["b"] });
 
 		expect(rosterIds()).toEqual(["a", "c"]);
-		expect(state.daemonRoster[0]).toBe(a);
-		expect(state.daemonRoster[1]).toBe(c);
+		expect(state.sessionRoster[0]).toBe(a);
+		expect(state.sessionRoster[1]).toBe(c);
 	});
 
-	test("a daemon_status frame patches status and error without replacing the row", () => {
+	test("a session_status frame patches status and error without replacing the row", () => {
 		seedAB();
-		const [a, b] = [state.daemonRoster[0]!, state.daemonRoster[1]!];
+		const [a, b] = [state.sessionRoster[0]!, state.sessionRoster[1]!];
 
-		dispatch({ type: "daemon_status", daemonId: "a", status: "error", error: "spawn failed" });
+		dispatch({ type: "session_status", workspaceId: "a", status: "error", error: "spawn failed" });
 
-		expect(state.daemonRoster[0]).toBe(a);
-		expect(state.daemonRoster[1]).toBe(b);
+		expect(state.sessionRoster[0]).toBe(a);
+		expect(state.sessionRoster[1]).toBe(b);
 		expect(a.status).toBe("error");
 		expect(a.error).toBe("spawn failed");
 		expect(b.status).toBe("ready");
 
 		// No error on the next frame clears the field (deleted, not left stale).
-		dispatch({ type: "daemon_status", daemonId: "a", status: "ready" });
+		dispatch({ type: "session_status", workspaceId: "a", status: "ready" });
 
-		expect(state.daemonRoster[0]).toBe(a);
+		expect(state.sessionRoster[0]).toBe(a);
 		expect(a.status).toBe("ready");
 		expect("error" in a).toBe(false);
 	});
@@ -2528,15 +2535,15 @@ describe("reportError", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Unread-dot tracking: a detached daemon's daemon_activity flip true→false
+// Unread-dot tracking: a detached session's session_activity flip true→false
 // marks it unread; the row is cleared on attach; dead roster entries are
 // pruned. All client-side.
 // ---------------------------------------------------------------------------
 describe("unread-dot tracking", () => {
 	/** Minimal roster entry (mirrors the reconciliation describe). */
-	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+	function session(id: string, extra: Partial<RosterEntry> = {}): RosterEntry {
 		return {
-			daemonId: id,
+			workspaceId: id,
 			name: id,
 			cwd: `/repos/${id}`,
 			project: id,
@@ -2545,10 +2552,10 @@ describe("unread-dot tracking", () => {
 		};
 	}
 
-	/** A turn ending on a detached daemon: the edge observed streaming → idle. */
+	/** A turn ending on a detached session: the edge observed streaming → idle. */
 	function detachedTurnEnd(id: string): void {
-		dispatch({ type: "daemon_activity", daemonId: id, streaming: true, blocked: false });
-		dispatch({ type: "daemon_activity", daemonId: id, streaming: false, blocked: false });
+		dispatch({ type: "session_activity", workspaceId: id, streaming: true, blocked: false });
+		dispatch({ type: "session_activity", workspaceId: id, streaming: false, blocked: false });
 	}
 
 	beforeEach(() => {
@@ -2559,40 +2566,40 @@ describe("unread-dot tracking", () => {
 	test("attaching to a marked session clears its unread dot", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch(attached("daemon-b")); // daemon-a is detached
-		detachedTurnEnd("daemon-a");
-		expect(unreadIds().has("daemon-a")).toBe(true);
+		dispatch(attached("workspace-b")); // workspace-a is detached
+		detachedTurnEnd("workspace-a");
+		expect(unreadIds().has("workspace-a")).toBe(true);
 
-		dispatch(attached("daemon-a"));
+		dispatch(attached("workspace-a"));
 
-		expect(unreadIds().has("daemon-a")).toBe(false);
+		expect(unreadIds().has("workspace-a")).toBe(false);
 	});
 
-	test("a roster frame prunes unread ids for daemons that left", () => {
+	test("a roster frame prunes unread ids for sessions that left", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch(attached("daemon-b"));
-		detachedTurnEnd("daemon-a");
-		expect(unreadIds().has("daemon-a")).toBe(true);
+		dispatch(attached("workspace-b"));
+		detachedTurnEnd("workspace-a");
+		expect(unreadIds().has("workspace-a")).toBe(true);
 
-		dispatch({ type: "roster", daemons: [daemon("daemon-b")] });
+		dispatch({ type: "roster", entries: [session("workspace-b")] });
 
-		expect(unreadIds().has("daemon-a")).toBe(false);
+		expect(unreadIds().has("workspace-a")).toBe(false);
 	});
 });
 
 // ---------------------------------------------------------------------------
-// daemon_activity: the fleet edge's realtime per-daemon stream (streaming /
-// blocked) for EVERY ready daemon, delivered as additive fleet-scoped frames.
-// It carries no sessionId, so it passes the stale-frame guard untouched. Fed
-// into state.daemonActivity and pruned on roster frames like unread; a
-// detached daemon's observed streaming flip true→false marks it unread.
+// session_activity: the fleet edge's realtime per-session stream (streaming /
+// blocked) for EVERY ready session, delivered as additive fleet-scoped frames.
+// It carries a workspaceId as payload (not a stamp), so it passes the stale-frame guard untouched. Fed
+// into state.sessionActivity and pruned on roster frames like unread; a
+// detached session's observed streaming flip true→false marks it unread.
 // ---------------------------------------------------------------------------
-describe("daemon_activity frames", () => {
+describe("session_activity frames", () => {
 	/** Minimal roster entry (mirrors the unread/reconciliation describes). */
-	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+	function session(id: string, extra: Partial<RosterEntry> = {}): RosterEntry {
 		return {
-			daemonId: id,
+			workspaceId: id,
 			name: id,
 			cwd: `/repos/${id}`,
 			project: id,
@@ -2606,65 +2613,114 @@ describe("daemon_activity frames", () => {
 		pruneUnread(new Set());
 	});
 
-	test("stores per-daemon activity; an identical repeat is idempotent", () => {
+	test("stores per-session activity; an identical repeat is idempotent", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
-		expect(state.daemonActivity["d2"]).toEqual({ streaming: true, blocked: false });
+		dispatch({ type: "session_activity", workspaceId: "d2", streaming: true, blocked: false });
+		expect(state.sessionActivity["d2"]).toEqual({ streaming: true, blocked: false });
 
 		// Same values again → no change.
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
-		expect(state.daemonActivity["d2"]).toEqual({ streaming: true, blocked: false });
+		dispatch({ type: "session_activity", workspaceId: "d2", streaming: true, blocked: false });
+		expect(state.sessionActivity["d2"]).toEqual({ streaming: true, blocked: false });
 
-		// A later frame for the same daemon updates both fields.
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: true });
-		expect(state.daemonActivity["d2"]).toEqual({ streaming: false, blocked: true });
+		// A later frame for the same session updates both fields.
+		dispatch({ type: "session_activity", workspaceId: "d2", streaming: false, blocked: true });
+		expect(state.sessionActivity["d2"]).toEqual({ streaming: false, blocked: true });
 	});
 
-	test("a detached daemon's streaming flip true→false marks it unread", () => {
+	test("a detached session's streaming flip true→false marks it unread", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		dispatch({ type: "session_activity", workspaceId: "d2", streaming: true, blocked: false });
 		expect(unreadIds().has("d2")).toBe(false);
 
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+		dispatch({ type: "session_activity", workspaceId: "d2", streaming: false, blocked: false });
 		expect(unreadIds().has("d2")).toBe(true);
 	});
 
-	test("the ATTACHED daemon's turn end is NOT marked unread", () => {
+	test("the ATTACHED session's turn end is NOT marked unread", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch(attached("d2")); // currentSessionId = d2
+		dispatch(attached("d2")); // currentWorkspaceId = d2
 
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+		dispatch({ type: "session_activity", workspaceId: "d2", streaming: true, blocked: false });
+		dispatch({ type: "session_activity", workspaceId: "d2", streaming: false, blocked: false });
 
 		expect(unreadIds().has("d2")).toBe(false);
 	});
 
-	test("a roster frame without d2 prunes its daemonActivity entry", () => {
+	test("a roster frame without d2 prunes its sessionActivity entry", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		dispatch({ type: "session_activity", workspaceId: "d2", streaming: true, blocked: false });
 
-		dispatch({ type: "roster", daemons: [daemon("d1")] });
+		dispatch({ type: "roster", entries: [session("d1")] });
 
-		expect(state.daemonActivity["d2"]).toBeUndefined();
+		expect(state.sessionActivity["d2"]).toBeUndefined();
 
 		// An id still on the roster survives a later roster frame (no flush).
-		dispatch({ type: "daemon_activity", daemonId: "d1", streaming: true, blocked: false });
-		dispatch({ type: "roster", daemons: [daemon("d1")] });
-		expect(state.daemonActivity["d1"]).toEqual({ streaming: true, blocked: false });
+		dispatch({ type: "session_activity", workspaceId: "d1", streaming: true, blocked: false });
+		dispatch({ type: "roster", entries: [session("d1")] });
+		expect(state.sessionActivity["d1"]).toEqual({ streaming: true, blocked: false });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Stale-frame guard scope. The edge stamps `workspaceId` only on session-scoped
+// frames (isSessionScopedFrameType) and on `attached`; fleet-scoped frames carry
+// a workspaceId as PAYLOAD naming a row other than the attached one, and must
+// never be dropped by the guard.
+// ---------------------------------------------------------------------------
+describe("stale-frame guard scope", () => {
+	test("a fleet-scoped frame carrying another workspace's workspaceId is applied; a session-scoped frame stamped with it is dropped", () => {
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		dispatch(attached("d1"));
+		setState("sessionRoster", [
+			{ workspaceId: "d1", name: "d1", cwd: "/repos/d1", project: "d1", status: "ready" },
+			{ workspaceId: "d2", name: "d2", cwd: "/repos/d2", project: "d2", status: "ready" },
+		]);
+		setState("collabStatus", { state: "off" });
+
+		// Fleet-scoped: describes d2 while the tab views d1; every one applies.
+		dispatch({ type: "session_status", workspaceId: "d2", status: "error", error: "boom" });
+		expect(state.sessionRoster[1]).toMatchObject({ status: "error", error: "boom" });
+		dispatch({ type: "session_activity", workspaceId: "d2", streaming: true, blocked: false });
+		expect(state.sessionActivity["d2"]).toEqual({ streaming: true, blocked: false });
+		dispatch({
+			type: "worktree_delete_info",
+			workspaceId: "d2",
+			linked: false,
+			dirty: false,
+			reason: "not a linked worktree",
+		});
+		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({ linked: false });
+
+		// Session-scoped and stamped for d2 while viewing d1: a stale in-flight frame.
+		dispatch({
+			type: "collab_status",
+			workspaceId: "d2",
+			status: { state: "starting" },
+		});
+		expect(state.collabStatus).toEqual({ state: "off" });
+
+		// The same frame stamped for the viewed workspace applies.
+		dispatch({
+			type: "collab_status",
+			workspaceId: "d1",
+			status: { state: "starting" },
+		});
+		expect(state.collabStatus).toEqual({ state: "starting" });
 	});
 });
 
 describe("roster session dropdown", () => {
 	/** Minimal roster entry with a worktree cwd. */
-	function rosterDaemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+	function rosterEntry(id: string, extra: Partial<RosterEntry> = {}): RosterEntry {
 		return {
-			daemonId: id,
+			workspaceId: id,
 			name: id,
 			cwd: `/repos/${id}`,
 			project: "x",
@@ -2697,73 +2753,83 @@ describe("roster session dropdown", () => {
 		modifiedAt: 1,
 	});
 
-	test("daemon_sessions frame settles the per-daemon dropdown request", async () => {
+	test("workspace_sessions frame settles the per-session dropdown request", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 
-		const pending = requestDaemonSessions("d9");
-		expect(postedOf("list_daemon_sessions")).toEqual([
-			{ type: "list_daemon_sessions", id: expect.any(String), daemonId: "d9" },
+		const pending = requestWorkspaceSessions("d9");
+		expect(postedOf("list_workspace_sessions")).toEqual([
+			{ type: "list_workspace_sessions", id: expect.any(String), workspaceId: "d9" },
 		]);
 
-		// A frame for a DIFFERENT daemon must not settle it.
-		dispatch({ type: "daemon_sessions", daemonId: "other", limit: 10, sessions: [se("x")] });
-		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 10, sessions: [se("a"), se("b")] });
+		// A frame for a DIFFERENT session must not settle it.
+		dispatch({ type: "workspace_sessions", workspaceId: "other", limit: 10, sessions: [se("x")] });
+		dispatch({
+			type: "workspace_sessions",
+			workspaceId: "d9",
+			limit: 10,
+			sessions: [se("a"), se("b")],
+		});
 		await expect(pending).resolves.toEqual([se("a"), se("b")]);
 	});
 
-	test("requestDaemonSessions sends the limit and keys waiters by daemon + effective limit", async () => {
+	test("requestWorkspaceSessions sends the limit and keys waiters by session + effective limit", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 
-		// A 200-row request and a default (10-row) request for one daemon coexist.
-		const dialog = requestDaemonSessions("d9", 200);
-		const dropdown = requestDaemonSessions("d9");
-		expect(postedOf("list_daemon_sessions")).toEqual([
-			{ type: "list_daemon_sessions", id: expect.any(String), daemonId: "d9", limit: 200 },
-			{ type: "list_daemon_sessions", id: expect.any(String), daemonId: "d9" },
+		// A 200-row request and a default (10-row) request for one session coexist.
+		const dialog = requestWorkspaceSessions("d9", 200);
+		const dropdown = requestWorkspaceSessions("d9");
+		expect(postedOf("list_workspace_sessions")).toEqual([
+			{ type: "list_workspace_sessions", id: expect.any(String), workspaceId: "d9", limit: 200 },
+			{ type: "list_workspace_sessions", id: expect.any(String), workspaceId: "d9" },
 		]);
 
 		// Each answer settles only the request of its echoed size.
-		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 10, sessions: [se("a")] });
+		dispatch({ type: "workspace_sessions", workspaceId: "d9", limit: 10, sessions: [se("a")] });
 		await expect(dropdown).resolves.toEqual([se("a")]);
-		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 200, sessions: [se("a"), se("b")] });
+		dispatch({
+			type: "workspace_sessions",
+			workspaceId: "d9",
+			limit: 200,
+			sessions: [se("a"), se("b")],
+		});
 		await expect(dialog).resolves.toEqual([se("a"), se("b")]);
 
 		// A same-size request still supersedes (resolves empty) the older one.
-		const first = requestDaemonSessions("d9", 200);
-		const second = requestDaemonSessions("d9", 200);
+		const first = requestWorkspaceSessions("d9", 200);
+		const second = requestWorkspaceSessions("d9", 200);
 		await expect(first).resolves.toEqual([]);
-		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 200, sessions: [se("c")] });
+		dispatch({ type: "workspace_sessions", workspaceId: "d9", limit: 200, sessions: [se("c")] });
 		await expect(second).resolves.toEqual([se("c")]);
 
 		// An explicit limit equal to the default shares the default's slot (the
 		// answer echoes the effective limit), and out-of-range limits clamp to
 		// the echoed one.
-		const ten = requestDaemonSessions("d9", 10);
-		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 10, sessions: [se("d")] });
+		const ten = requestWorkspaceSessions("d9", 10);
+		dispatch({ type: "workspace_sessions", workspaceId: "d9", limit: 10, sessions: [se("d")] });
 		await expect(ten).resolves.toEqual([se("d")]);
-		const huge = requestDaemonSessions("d9", 9999);
-		dispatch({ type: "daemon_sessions", daemonId: "d9", limit: 200, sessions: [se("e")] });
+		const huge = requestWorkspaceSessions("d9", 9999);
+		dispatch({ type: "workspace_sessions", workspaceId: "d9", limit: 200, sessions: [se("e")] });
 		await expect(huge).resolves.toEqual([se("e")]);
 	});
 
-	test("resumeDaemonSession wakes an asleep daemon with the chosen session then attaches", async () => {
+	test("resumeSession wakes an asleep session with the chosen session then attaches", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("daemonRoster", [
-			rosterDaemon("d9", {
+		setState("sessionRoster", [
+			rosterEntry("d9", {
 				status: "asleep",
 				lastSessionFile: "/sessions/current.jsonl",
 			}),
 		]);
 
-		resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		resumeSession("d9", "/sessions/picked.jsonl");
 		expect(postedOf("spawn_resume")).toEqual([
 			{
 				type: "spawn_resume",
 				id: expect.any(String),
-				daemonId: "d9",
+				workspaceId: "d9",
 				sessionFile: "/sessions/picked.jsonl",
 			},
 		]);
@@ -2776,15 +2842,15 @@ describe("roster session dropdown", () => {
 	test("resumeWorktreeSession pulses an asleep row until its attach settles", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("daemonRoster", [
-			rosterDaemon("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		setState("sessionRoster", [
+			rosterEntry("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 
 		resumeWorktreeSession("d9", "/sessions/picked.jsonl");
 		expect(activatingIds().has("d9")).toBe(true);
 		expect(postedOf("spawn_resume")).toHaveLength(1);
 		await flushWake();
-		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, workspaceId: "d9" });
 		await flushWake();
 		expect(activatingIds().has("d9")).toBe(false);
 	});
@@ -2792,77 +2858,77 @@ describe("roster session dropdown", () => {
 	test("resumeWorktreeSession leaves a ready row's pulse alone", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("daemonRoster", [
-			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		setState("sessionRoster", [
+			rosterEntry("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 
 		resumeWorktreeSession("d9", "/sessions/picked.jsonl");
 		expect(activatingIds().has("d9")).toBe(false);
 	});
 
-	test("resumeDaemonSession re-attaches the daemon the view is already on when its row is asleep (after a UI stop)", async () => {
-		// A UI stop keeps currentSessionId on the stopped daemon (the edge closed
+	test("resumeSession re-attaches the session the view is already on when its row is asleep (after a UI stop)", async () => {
+		// A UI stop keeps currentWorkspaceId on the stopped session (the edge closed
 		// its pipe); a dropdown pick wakes it on the picked file and must attach
 		// again, or the page sits on "No active session".
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("daemonRoster", [
-			rosterDaemon("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		setState("sessionRoster", [
+			rosterEntry("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
-		setState("currentSessionId", "d1");
+		setState("currentWorkspaceId", "d1");
 
-		const resumed = resumeDaemonSession("d1", "/sessions/picked.jsonl");
+		const resumed = resumeSession("d1", "/sessions/picked.jsonl");
 		expect(postedOf("spawn_resume")).toEqual([
 			{
 				type: "spawn_resume",
 				id: expect.any(String),
-				daemonId: "d1",
+				workspaceId: "d1",
 				sessionFile: "/sessions/picked.jsonl",
 			},
 		]);
 		expect(postedOf("attach")).toHaveLength(0);
 		await flushWake();
 		expect(postedOf("attach")).toEqual([
-			{ type: "attach", id: expect.any(String), sessionId: "d1" },
+			{ type: "attach", id: expect.any(String), workspaceId: "d1" },
 		]);
-		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d1" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, workspaceId: "d1" });
 		await resumed;
 	});
 
 	test("picking the asleep session the view is already on from the palette wakes and attaches it", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("daemonRoster", [
-			rosterDaemon("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		setState("sessionRoster", [
+			rosterEntry("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
-		setState("currentSessionId", "d1");
+		setState("currentWorkspaceId", "d1");
 
 		runPaletteItem({
 			id: "session:d:d1",
 			group: "Sessions",
 			label: "d1",
 			keywords: [],
-			action: { kind: "daemon-session", daemonId: "d1" },
+			action: { kind: "workspace-session", workspaceId: "d1" },
 		});
 		await flushWake();
 		expect(postedOf("spawn_resume")).toHaveLength(1);
 		expect(postedOf("attach")).toEqual([
-			{ type: "attach", id: expect.any(String), sessionId: "d1" },
+			{ type: "attach", id: expect.any(String), workspaceId: "d1" },
 		]);
 	});
 
-	test("resumeDaemonSession sends the attach only after the spawn_resume is acked, and none when it is refused", async () => {
+	test("resumeSession sends the attach only after the spawn_resume is acked, and none when it is refused", async () => {
 		// The edge registers its pending resume before acking the spawn_resume,
 		// so an attach sent after that ack can never overtake the pick.
 		const held = holdCommands("spawn_resume");
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("daemonRoster", [
-			rosterDaemon("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
-			rosterDaemon("d8", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		setState("sessionRoster", [
+			rosterEntry("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+			rosterEntry("d8", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 
-		const resumed = resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		const resumed = resumeSession("d9", "/sessions/picked.jsonl");
 		await flushMicrotasks();
 		expect(postedOf("spawn_resume")).toHaveLength(1);
 		expect(postedOf("attach")).toHaveLength(0);
@@ -2870,13 +2936,13 @@ describe("roster session dropdown", () => {
 		held[0]!.settle(true);
 		await flushWake();
 		expect(postedOf("attach")).toEqual([
-			{ type: "attach", id: expect.any(String), sessionId: "d9" },
+			{ type: "attach", id: expect.any(String), workspaceId: "d9" },
 		]);
-		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, workspaceId: "d9" });
 		await resumed;
 
 		// A refused spawn_resume never sends its attach; the failure toasts.
-		const failed = resumeDaemonSession("d8", "/sessions/picked.jsonl");
+		const failed = resumeSession("d8", "/sessions/picked.jsonl");
 		await flushMicrotasks();
 		held[1]!.settle(false);
 		await failed;
@@ -2891,40 +2957,40 @@ describe("roster session dropdown", () => {
 		const held = holdCommands("spawn_resume");
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("daemonRoster", [
-			rosterDaemon("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
-			rosterDaemon("d7", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		setState("sessionRoster", [
+			rosterEntry("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+			rosterEntry("d7", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 
-		const woken = resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		const woken = resumeSession("d9", "/sessions/picked.jsonl");
 		await flushMicrotasks();
 		const other = attachSession("d7");
 		expect(postedOf("attach")).toEqual([
-			{ type: "attach", id: expect.any(String), sessionId: "d7" },
+			{ type: "attach", id: expect.any(String), workspaceId: "d7" },
 		]);
-		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d7" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, workspaceId: "d7" });
 		await other;
 
 		held[0]!.settle(true);
 		await flushWake();
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["d7"]);
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["d7"]);
 		// Superseded, the wake settles without an attach of its own.
 		await woken;
 	});
 
-	test("resumeDaemonSession retries a switch swept by its own attach's supersession, never banners", async () => {
+	test("resumeSession retries a switch swept by its own attach's supersession, never banners", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		// Attached to d1; resume a session on a DIFFERENT ready daemon (d9).
+		// Attached to d1; resume a session on a DIFFERENT ready session (d9).
 		// the switch lands in-flight while the d9 attach's `attached` frame
 		// sweeps pending calls with "session switched".
-		setState("currentSessionId", "d1");
-		setState("daemonRoster", [
-			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		setState("currentWorkspaceId", "d1");
+		setState("sessionRoster", [
+			rosterEntry("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 
-		resumeDaemonSession("d9", "/sessions/picked.jsonl");
-		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		resumeSession("d9", "/sessions/picked.jsonl");
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, workspaceId: "d9" });
 		await Promise.resolve();
 		await Promise.resolve();
 		// The first switchSession is in flight when the proxied attached frame
@@ -2933,12 +2999,12 @@ describe("roster session dropdown", () => {
 		dispatch(attached("d9"));
 		await Promise.resolve();
 		await Promise.resolve();
-		// The superseded switch retries ONCE against the now-current daemon.
+		// The superseded switch retries ONCE against the now-current session.
 		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(2);
 		expect(state.error).toBeNull(); // the supersession is never a banner
 	});
 
-	test("attachForPanel opens Open review when the attach lands, or a superseded attach left this daemon current", async () => {
+	test("attachForPanel opens Open review when the attach lands, or a superseded attach left this session current", async () => {
 		setBrowserGlobal(
 			"fetch",
 			(async () =>
@@ -2951,9 +3017,9 @@ describe("roster session dropdown", () => {
 		);
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("currentSessionId", "d1");
+		setState("currentWorkspaceId", "d1");
 		const opened = attachForPanel("d9");
-		setState("currentSessionId", "d9");
+		setState("currentWorkspaceId", "d9");
 		rejectPendingAttach(new Error("session switched"));
 		await expect(opened).resolves.toBe(true);
 		expect(state.error).toBeNull();
@@ -2972,26 +3038,26 @@ describe("roster session dropdown", () => {
 		);
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("currentSessionId", "d1");
+		setState("currentWorkspaceId", "d1");
 		const opened = attachForPanel("d9");
-		setState("currentSessionId", "d2");
+		setState("currentWorkspaceId", "d2");
 		rejectPendingAttach(new Error("session switched"));
 		await expect(opened).resolves.toBe(false);
 		expect(state.error).toBeNull();
 	});
 
-	test("resumeDaemonSession on a ready detached daemon attaches first, then switches to the picked session", async () => {
+	test("resumeSession on a ready detached session attaches first, then switches to the picked session", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("daemonRoster", [
-			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		setState("sessionRoster", [
+			rosterEntry("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 
-		resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		resumeSession("d9", "/sessions/picked.jsonl");
 		expect(postedOf("attach")).toHaveLength(1);
 		// The switch is issued only AFTER the attach settles.
 		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
-		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, workspaceId: "d9" });
 		await Promise.resolve();
 		await Promise.resolve();
 		expect(postedOf("call").filter((c) => c.method === "switchSession")).toEqual([
@@ -3005,28 +3071,28 @@ describe("roster session dropdown", () => {
 		expect(state.error).toBeNull();
 	});
 
-	test("resumeDaemonSession to the already-current session on a ready daemon only attaches", async () => {
+	test("resumeSession to the already-current session on a ready session only attaches", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("daemonRoster", [
-			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		setState("sessionRoster", [
+			rosterEntry("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 
-		resumeDaemonSession("d9", "/sessions/current.jsonl");
+		resumeSession("d9", "/sessions/current.jsonl");
 		expect(postedOf("attach")).toHaveLength(1);
 		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
 	});
 
-	/** A state frame stamping `daemonId`'s attachment scope for `generation`. */
-	const stateFrame = (daemonId: string, generation: string): ServerFrame => ({
+	/** A state frame stamping `workspaceId`'s attachment scope for `generation`. */
+	const stateFrame = (workspaceId: string, generation: string): ServerFrame => ({
 		type: "state",
 		state: {
-			sessionId: daemonId,
-			sessionScope: { workspaceId: "w1", sessionId: daemonId, generation },
+			sessionId: workspaceId,
+			sessionScope: { workspaceId: "w1", sessionId: workspaceId, generation },
 		} as WebSessionState,
 	});
 
-	test("startDaemonNewSession wakes an asleep daemon, attaches, then starts a new session", async () => {
+	test("startWorkspaceNewSession wakes an asleep session, attaches, then starts a new session", async () => {
 		// The extra ticks the wake POST adds let the settings pull's fetch resolve;
 		// the default stub has no body reader for it.
 		setBrowserGlobal(
@@ -3041,22 +3107,22 @@ describe("roster session dropdown", () => {
 		);
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("daemonRoster", [
-			rosterDaemon("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		setState("sessionRoster", [
+			rosterEntry("d9", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 
-		const started = startDaemonNewSession("d9");
+		const started = startWorkspaceNewSession("d9");
 		// Wakes on its last session (no explicit file), then attaches.
 		expect(postedOf("spawn_resume")).toEqual([
-			{ type: "spawn_resume", id: expect.any(String), daemonId: "d9" },
+			{ type: "spawn_resume", id: expect.any(String), workspaceId: "d9" },
 		]);
 		expect(postedOf("attach")).toHaveLength(0);
 		await flushWake();
 		expect(postedOf("attach")).toHaveLength(1);
-		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, workspaceId: "d9" });
 		await flushMicrotasks();
 		// The proxied attached frame trails attach_result and would sweep a call
-		// posted now after the daemon ran it: newSession waits for the frame and
+		// posted now after the session ran it: newSession waits for the frame and
 		// the attachment's first state frame.
 		expect(newSessionCalls()).toHaveLength(0);
 		dispatch(attached("d9"));
@@ -3071,9 +3137,9 @@ describe("roster session dropdown", () => {
 		expect(state.error).toBeNull();
 	});
 
-	test("startDaemonNewSession on a stopped current row posts newSession only under the new attachment's scope", async () => {
-		// A UI stop keeps currentSessionId and the old generation's scope on the
-		// stopped daemon. attach_result lands before the proxied attached/state
+	test("startWorkspaceNewSession on a stopped current row posts newSession only under the new attachment's scope", async () => {
+		// A UI stop keeps currentWorkspaceId and the old generation's scope on the
+		// stopped session. attach_result lands before the proxied attached/state
 		// frames; a newSession posted in that gap carries the old scope and the
 		// session rejects it as stale.
 		setBrowserGlobal(
@@ -3088,20 +3154,20 @@ describe("roster session dropdown", () => {
 		);
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("daemonRoster", [
-			rosterDaemon("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
+		setState("sessionRoster", [
+			rosterEntry("d1", { status: "asleep", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 		dispatch(attached("d1"));
 		dispatch(stateFrame("d1", "1"));
 		expect(state.sessionScope?.generation).toBe("1");
 		posted.length = 0;
 
-		const started = startDaemonNewSession("d1");
+		const started = startWorkspaceNewSession("d1");
 		await flushWake();
 		expect(postedOf("attach")).toHaveLength(1);
-		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d1" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, workspaceId: "d1" });
 		await flushMicrotasks();
-		// currentSessionId is already d1 and the scope is still generation 1.
+		// currentWorkspaceId is already d1 and the scope is still generation 1.
 		expect(newSessionCalls()).toHaveLength(0);
 		dispatch(attached("d1"));
 		await flushMicrotasks();
@@ -3121,31 +3187,31 @@ describe("roster session dropdown", () => {
 		expect(state.error).toBeNull();
 	});
 
-	test("startDaemonNewSession drops the new session when another session gets attached first", async () => {
+	test("startWorkspaceNewSession drops the new session when another session gets attached first", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("currentSessionId", "d1");
-		setState("daemonRoster", [rosterDaemon("d9", { status: "ready" })]);
+		setState("currentWorkspaceId", "d1");
+		setState("sessionRoster", [rosterEntry("d9", { status: "ready" })]);
 
-		const started = startDaemonNewSession("d9");
+		const started = startWorkspaceNewSession("d9");
 		expect(postedOf("spawn_resume")).toHaveLength(0);
-		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, workspaceId: "d9" });
 		await flushMicrotasks();
 		// The user picked d2 before d9's attached frame landed.
 		dispatch(attached("d2"));
 		await started;
-		// Never a new session on the daemon the user switched to, never a banner.
+		// Never a new session on the session the user switched to, never a banner.
 		expect(newSessionCalls()).toHaveLength(0);
 		expect(state.error).toBeNull();
 	});
 
-	test("startDaemonNewSession on the attached ready daemon starts at once", async () => {
+	test("startWorkspaceNewSession on the attached ready session starts at once", async () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		setState("currentSessionId", "d9");
-		setState("daemonRoster", [rosterDaemon("d9", { status: "ready" })]);
+		setState("currentWorkspaceId", "d9");
+		setState("sessionRoster", [rosterEntry("d9", { status: "ready" })]);
 
-		void startDaemonNewSession("d9");
+		void startWorkspaceNewSession("d9");
 		await flushMicrotasks();
 		expect(postedOf("attach")).toHaveLength(0);
 		expect(newSessionCalls()).toHaveLength(1);
@@ -3154,14 +3220,14 @@ describe("roster session dropdown", () => {
 
 describe("call delivery: a lost answer is recovered by re-sending the command", () => {
 	/**
-	 * Fake daemon over FakeWebSocket. It EXECUTES each command id once and
+	 * Fake session over FakeWebSocket. It EXECUTES each command id once and
 	 * records the answer, but the first answer never rides the downlink:
-	 * call_result is a non-ringed unicast, so a frame dropped on the daemon
+	 * call_result is a non-ringed unicast, so a frame dropped on the session
 	 * pipe (a redial, backpressure drop-and-resume) is gone for good. A re-send
 	 * of the SAME id is acked again, deduped (no second execution), and REPLAYS
-	 * the recorded answer, exactly like the daemon's command dedup.
+	 * the recorded answer, exactly like the session's command dedup.
 	 */
-	function startLostAnswerDaemon(answerFor: (id: string) => ServerFrame): {
+	function startLostAnswerSession(answerFor: (id: string) => ServerFrame): {
 		executed: string[];
 		posts: string[];
 	} {
@@ -3188,7 +3254,7 @@ describe("call delivery: a lost answer is recovered by re-sending the command", 
 		try {
 			connect();
 			FakeWebSocket.instances.at(-1)!.onopen?.(); // connected = true
-			const daemon = startLostAnswerDaemon((id) => ({
+			const session = startLostAnswerSession((id) => ({
 				type: "call_result",
 				id,
 				ok: true,
@@ -3201,33 +3267,33 @@ describe("call delivery: a lost answer is recovered by re-sending the command", 
 				(err) => outcomes.push(`rejected: ${String(err)}`),
 			);
 			await flushMicrotasks();
-			expect(daemon.posts).toHaveLength(1);
-			expect(daemon.executed).toHaveLength(1);
+			expect(session.posts).toHaveLength(1);
+			expect(session.executed).toHaveLength(1);
 
 			// The answer was lost: the call is still pending, so the replay
 			// re-sends the SAME command (same id, the dedup key).
 			vi.advanceTimersByTime(5_000);
 			await flushMicrotasks();
-			expect(daemon.posts).toHaveLength(2);
-			expect(daemon.posts[0]).toBe(daemon.posts[1]);
+			expect(session.posts).toHaveLength(2);
+			expect(session.posts[0]).toBe(session.posts[1]);
 
-			// The replayed answer settles it exactly once, and the daemon never
+			// The replayed answer settles it exactly once, and the session never
 			// executed the prompt a second time.
 			await pending;
 			expect(outcomes).toEqual(["resolved"]);
-			expect(daemon.executed).toHaveLength(1);
-			expect(daemon.posts).toHaveLength(2); // settled: the replay cadence stops
+			expect(session.executed).toHaveLength(1);
+			expect(session.posts).toHaveLength(2); // settled: the replay cadence stops
 		} finally {
 			vi.useRealTimers();
 		}
 	});
 
-	test("prompt: a replayed failure answer rejects with the daemon's real error, never a fake success", async () => {
+	test("prompt: a replayed failure answer rejects with the session's real error, never a fake success", async () => {
 		vi.useFakeTimers();
 		try {
 			connect();
 			FakeWebSocket.instances.at(-1)!.onopen?.();
-			const daemon = startLostAnswerDaemon((id) => ({
+			const session = startLostAnswerSession((id) => ({
 				type: "call_result",
 				id,
 				ok: false,
@@ -3242,11 +3308,11 @@ describe("call delivery: a lost answer is recovered by re-sending the command", 
 			await flushMicrotasks();
 			vi.advanceTimersByTime(5_000);
 			await flushMicrotasks();
-			expect(daemon.posts).toHaveLength(2); // the lost answer was re-sent
+			expect(session.posts).toHaveLength(2); // the lost answer was re-sent
 
 			await pending;
 			expect(outcomes).toEqual(["Error: not_ready"]);
-			expect(daemon.executed).toHaveLength(1);
+			expect(session.executed).toHaveLength(1);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -3254,9 +3320,9 @@ describe("call delivery: a lost answer is recovered by re-sending the command", 
 });
 
 describe("transcript phase (session switch)", () => {
-	function rosterDaemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+	function rosterEntry(id: string, extra: Partial<RosterEntry> = {}): RosterEntry {
 		return {
-			daemonId: id,
+			workspaceId: id,
 			name: id,
 			cwd: `/repos/${id}`,
 			project: "x",
@@ -3285,7 +3351,7 @@ describe("transcript phase (session switch)", () => {
 	function onD1(): void {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
-		dispatch({ type: "roster", daemons: [rosterDaemon("d1"), rosterDaemon("d2")] });
+		dispatch({ type: "roster", entries: [rosterEntry("d1"), rosterEntry("d2")] });
 		dispatch(attached("d1"));
 		dispatch({ type: "history", messages: [] });
 		posted.length = 0;
@@ -3303,10 +3369,10 @@ describe("transcript phase (session switch)", () => {
 		onD1();
 		expect(state.transcriptPhase).toBe("loaded");
 
-		const switched = switchToDaemon("d2");
+		const switched = switchToSession("d2");
 		// Written synchronously: the row highlight reads it on click.
 		expect(phase()).toEqual({ phase: "attaching", target: "d2", error: null });
-		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, sessionId: "d2" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, workspaceId: "d2" });
 		await switched;
 		expect(state.transcriptPhase).toBe("attaching");
 
@@ -3318,7 +3384,7 @@ describe("transcript phase (session switch)", () => {
 
 	test("the final chunk of a multi-frame history loads, the partial ones do not", () => {
 		onD1();
-		void switchToDaemon("d2");
+		void switchToSession("d2");
 		dispatch(attached("d2"));
 		dispatch({ type: "history", messages: [userMsg("a")], final: false } as ServerFrame);
 		expect(state.transcriptPhase).toBe("attaching");
@@ -3326,17 +3392,17 @@ describe("transcript phase (session switch)", () => {
 		expect(state.transcriptPhase).toBe("loaded");
 	});
 
-	test("an asleep daemon wakes first (waking), then attaches (attaching), then loads", async () => {
+	test("an asleep session wakes first (waking), then attaches (attaching), then loads", async () => {
 		onD1();
-		setState("daemonRoster", [rosterDaemon("d1"), rosterDaemon("d2", { status: "asleep" })]);
+		setState("sessionRoster", [rosterEntry("d1"), rosterEntry("d2", { status: "asleep" })]);
 
-		const switched = switchToDaemon("d2");
+		const switched = switchToSession("d2");
 		expect(phase()).toEqual({ phase: "waking", target: "d2", error: null });
 		expect(postedOf("spawn_resume")).toHaveLength(1);
 		await flushWake();
 		expect(postedOf("attach")).toHaveLength(1);
 		expect(state.transcriptPhase).toBe("waking");
-		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, sessionId: "d2" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, workspaceId: "d2" });
 		await switched;
 		expect(state.transcriptPhase).toBe("attaching");
 		dispatch(attached("d2"));
@@ -3346,7 +3412,7 @@ describe("transcript phase (session switch)", () => {
 
 	test("a failed attach lands in failed with the reason; the promise still resolves", async () => {
 		onD1();
-		const switched = switchToDaemon("d2");
+		const switched = switchToSession("d2");
 		dispatch({
 			type: "attach_result",
 			id: postedOf("attach")[0]!.id,
@@ -3360,17 +3426,17 @@ describe("transcript phase (session switch)", () => {
 			error: "session exited with code 78",
 		});
 		// The old session is still attached underneath, so the composer gate holds.
-		expect(state.currentSessionId).toBe("d1");
+		expect(state.currentWorkspaceId).toBe("d1");
 		expect(isSwitching()).toBe(true);
 	});
 
 	test("a refused wake lands in failed", async () => {
 		onD1();
-		setState("daemonRoster", [rosterDaemon("d1"), rosterDaemon("d2", { status: "asleep" })]);
+		setState("sessionRoster", [rosterEntry("d1"), rosterEntry("d2", { status: "asleep" })]);
 		FakeWebSocket.reply = (cmd, ws) =>
 			cmd.type === "spawn_resume" ? ws.nack(cmd.id, 500, "refused") : ws.ack(cmd.id);
 
-		await switchToDaemon("d2");
+		await switchToSession("d2");
 		expect(state.transcriptPhase).toBe("failed");
 		expect(state.transcriptTarget).toBe("d2");
 		expect(postedOf("attach")).toHaveLength(0);
@@ -3380,11 +3446,11 @@ describe("transcript phase (session switch)", () => {
 		onD1();
 		dispatch({
 			type: "roster",
-			daemons: [rosterDaemon("d1"), rosterDaemon("d2"), rosterDaemon("d3")],
+			entries: [rosterEntry("d1"), rosterEntry("d2"), rosterEntry("d3")],
 		});
-		const a = switchToDaemon("d2");
+		const a = switchToSession("d2");
 		const attachA = postedOf("attach")[0]!;
-		const b = switchToDaemon("d3");
+		const b = switchToSession("d3");
 		expect(phase()).toEqual({ phase: "attaching", target: "d3", error: null });
 		// A's attach settled as superseded (it resolves with the current session).
 		await a;
@@ -3401,28 +3467,28 @@ describe("transcript phase (session switch)", () => {
 	test("a wake superseded by a later click never flips that click's phase", async () => {
 		const held = holdCommands("spawn_resume");
 		onD1();
-		setState("daemonRoster", [
-			rosterDaemon("d1"),
-			rosterDaemon("d2", { status: "asleep" }),
-			rosterDaemon("d3"),
+		setState("sessionRoster", [
+			rosterEntry("d1"),
+			rosterEntry("d2", { status: "asleep" }),
+			rosterEntry("d3"),
 		]);
 
-		const a = switchToDaemon("d2");
+		const a = switchToSession("d2");
 		expect(state.transcriptPhase).toBe("waking");
-		const b = switchToDaemon("d3");
+		const b = switchToSession("d3");
 		expect(phase()).toEqual({ phase: "attaching", target: "d3", error: null });
 		// A's wake is refused AFTER B took over: A must stay silent.
 		held[0]!.settle(false);
 		await a;
 		expect(phase()).toEqual({ phase: "attaching", target: "d3", error: null });
-		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, sessionId: "d3" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, workspaceId: "d3" });
 		await b;
 		expect(state.transcriptPhase).toBe("attaching");
 	});
 
 	test("a history frame of the old session during a switch does not end its wait", () => {
 		onD1();
-		void switchToDaemon("d2");
+		void switchToSession("d2");
 		dispatch({ type: "history", messages: [userMsg("old")] });
 		expect(phase()).toEqual({ phase: "attaching", target: "d2", error: null });
 	});
@@ -3430,7 +3496,7 @@ describe("transcript phase (session switch)", () => {
 	test("a reconnect re-attach of the same session keeps it loaded", () => {
 		onD1();
 		FakeWebSocket.instances.at(-1)!.onopen?.(); // the stream came back
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["d1"]);
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["d1"]);
 		expect(state.transcriptPhase).toBe("loaded");
 		dispatch(attached("d1"));
 		expect(state.transcriptPhase).toBe("loaded");
@@ -3438,48 +3504,48 @@ describe("transcript phase (session switch)", () => {
 		expect(phase()).toEqual({ phase: "loaded", target: null, error: null });
 	});
 
-	test("re-attaching the attached daemon is no transition; clicking it clears a failed attempt elsewhere", async () => {
+	test("re-attaching the attached session is no transition; clicking it clears a failed attempt elsewhere", async () => {
 		onD1();
-		await switchToDaemon("d1");
+		await switchToSession("d1");
 		expect(postedOf("attach")).toHaveLength(0);
 		expect(state.transcriptPhase).toBe("loaded");
 
 		setState({ transcriptPhase: "failed", transcriptTarget: "d2", transcriptError: "boom" });
-		await switchToDaemon("d1");
+		await switchToSession("d1");
 		expect(phase()).toEqual({ phase: "loaded", target: null, error: null });
 		expect(postedOf("attach")).toHaveLength(0);
 	});
 
-	test("waking the stopped daemon the view is on is quiet (no transition)", async () => {
+	test("waking the stopped session the view is on is quiet (no transition)", async () => {
 		onD1();
-		setState("daemonRoster", [rosterDaemon("d1", { status: "asleep" }), rosterDaemon("d2")]);
-		const switched = switchToDaemon("d1");
+		setState("sessionRoster", [rosterEntry("d1", { status: "asleep" }), rosterEntry("d2")]);
+		const switched = switchToSession("d1");
 		expect(state.transcriptPhase).toBe("loaded");
 		await flushWake();
-		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, sessionId: "d1" });
+		dispatch({ type: "attach_result", id: postedOf("attach")[0]!.id, ok: true, workspaceId: "d1" });
 		await switched;
 		expect(state.transcriptPhase).toBe("loaded");
 	});
 
-	test("the session being cleared goes idle (attached daemon removed from the roster)", () => {
+	test("the session being cleared goes idle (attached session removed from the roster)", () => {
 		onD1();
-		dispatch({ type: "roster", daemons: [rosterDaemon("d2")] });
-		expect(state.currentSessionId).toBe("");
+		dispatch({ type: "roster", entries: [rosterEntry("d2")] });
+		expect(state.currentWorkspaceId).toBe("");
 		expect(phase()).toEqual({ phase: "idle", target: null, error: null });
 	});
 
-	test("a cleared session does not clobber a switch already in flight to another daemon", () => {
+	test("a cleared session does not clobber a switch already in flight to another session", () => {
 		onD1();
-		void switchToDaemon("d2");
-		dispatch({ type: "roster", daemons: [rosterDaemon("d2")] });
-		expect(state.currentSessionId).toBe("");
+		void switchToSession("d2");
+		dispatch({ type: "roster", entries: [rosterEntry("d2")] });
+		expect(state.currentWorkspaceId).toBe("");
 		expect(phase()).toEqual({ phase: "attaching", target: "d2", error: null });
 	});
 
-	test("resuming a session on an asleep daemon runs the same switch machinery", async () => {
+	test("resuming a session on an asleep session runs the same switch machinery", async () => {
 		onD1();
-		setState("daemonRoster", [rosterDaemon("d1"), rosterDaemon("d2", { status: "asleep" })]);
-		const resumed = resumeDaemonSession("d2", "/sessions/picked.jsonl");
+		setState("sessionRoster", [rosterEntry("d1"), rosterEntry("d2", { status: "asleep" })]);
+		const resumed = resumeSession("d2", "/sessions/picked.jsonl");
 		expect(phase()).toEqual({ phase: "waking", target: "d2", error: null });
 		await flushWake();
 		dispatch({
@@ -3493,15 +3559,15 @@ describe("transcript phase (session switch)", () => {
 	});
 });
 
-describe("the attached daemon is removed from the roster", () => {
+describe("the attached session is removed from the roster", () => {
 	const p1: RegisteredProject = { projectId: "p1", path: "/repos/a", name: "a", addedAt: 1 };
 	const p2: RegisteredProject = { projectId: "p2", path: "/repos/b", name: "b", addedAt: 2 };
 
 	/** Worktree rows sort by branch after the main checkout, so the ids below read in sidebar order. */
-	function row(id: string, projectId: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+	function row(id: string, projectId: string, extra: Partial<RosterEntry> = {}): RosterEntry {
 		const main = id.endsWith("main");
 		return {
-			daemonId: id,
+			workspaceId: id,
 			name: id,
 			cwd: `/repos/${id}`,
 			project: projectId,
@@ -3523,13 +3589,13 @@ describe("the attached daemon is removed from the roster", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch({ type: "registered_projects", projects: [p1, p2] });
-		dispatch({ type: "roster", daemons: rows });
+		dispatch({ type: "roster", entries: rows });
 		dispatch(attached(on));
 		dispatch({ type: "history", messages: [] });
 		posted.length = 0;
 	}
 
-	function defaultRows(): DaemonEntry[] {
+	function defaultRows(): RosterEntry[] {
 		return [
 			row("a-main", "p1"),
 			row("a-wt1", "p1"),
@@ -3540,10 +3606,10 @@ describe("the attached daemon is removed from the roster", () => {
 	}
 
 	/** The roster frame after the rows with these ids vanish (and `patch` applies). */
-	function without(ids: string[], patch: Record<string, Partial<DaemonEntry>> = {}): DaemonEntry[] {
+	function without(ids: string[], patch: Record<string, Partial<RosterEntry>> = {}): RosterEntry[] {
 		return defaultRows()
-			.filter((d) => !ids.includes(d.daemonId))
-			.map((d) => ({ ...d, ...patch[d.daemonId] }));
+			.filter((d) => !ids.includes(d.workspaceId))
+			.map((d) => ({ ...d, ...patch[d.workspaceId] }));
 	}
 
 	afterEach(() => {
@@ -3554,9 +3620,9 @@ describe("the attached daemon is removed from the roster", () => {
 
 	test("the middle row switches to the row before it, with no offline state", () => {
 		attachedTo("a-wt1");
-		dispatch({ type: "roster", daemons: without(["a-wt1"]) });
+		dispatch({ type: "roster", entries: without(["a-wt1"]) });
 
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["a-main"]);
 		expect(state.transcriptTarget).toBe("a-main");
 		expect(state.transcriptPhase).toBe("attaching");
 		expect(state.sessionDownId).toBe("");
@@ -3565,48 +3631,48 @@ describe("the attached daemon is removed from the roster", () => {
 
 	test("the first row switches to the next row", () => {
 		attachedTo("a-main");
-		dispatch({ type: "roster", daemons: without(["a-main"]) });
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-wt1"]);
+		dispatch({ type: "roster", entries: without(["a-main"]) });
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["a-wt1"]);
 		expect(state.transcriptTarget).toBe("a-wt1");
 		expect(state.sessionDownId).toBe("");
 	});
 
 	test("the target attaches and loads like any switch", () => {
 		attachedTo("a-wt1");
-		dispatch({ type: "roster", daemons: without(["a-wt1"]) });
+		dispatch({ type: "roster", entries: without(["a-wt1"]) });
 		dispatch({
 			type: "attach_result",
 			id: postedOf("attach")[0]!.id,
 			ok: true,
-			sessionId: "a-main",
+			workspaceId: "a-main",
 		});
 		dispatch(attached("a-main"));
 		dispatch({ type: "history", messages: [] });
-		expect(state.currentSessionId).toBe("a-main");
+		expect(state.currentWorkspaceId).toBe("a-main");
 		expect(state.transcriptPhase).toBe("loaded");
 		expect(state.transcriptTarget).toBeNull();
 	});
 
 	test("an asleep neighbour is skipped for a farther ready row, and never woken", () => {
 		attachedTo("a-wt2");
-		dispatch({ type: "roster", daemons: without(["a-wt2"], { "a-wt1": { status: "asleep" } }) });
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+		dispatch({ type: "roster", entries: without(["a-wt2"], { "a-wt1": { status: "asleep" } }) });
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["a-main"]);
 		expect(postedOf("spawn_resume")).toHaveLength(0);
 	});
 
 	test("the row before is preferred over the row after", () => {
 		attachedTo("a-wt1");
-		dispatch({ type: "roster", daemons: without(["a-wt1"]) });
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+		dispatch({ type: "roster", entries: without(["a-wt1"]) });
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["a-main"]);
 	});
 
 	test("every other row asleep (after a restart): idle, no attach, no wake, no offline strip", () => {
 		const asleep = defaultRows().map((d) => ({ ...d, status: "asleep" as const }));
 		attachedTo("a-wt1");
-		dispatch({ type: "roster", daemons: asleep.filter((d) => d.daemonId !== "a-wt1") });
+		dispatch({ type: "roster", entries: asleep.filter((d) => d.workspaceId !== "a-wt1") });
 		expect(postedOf("attach")).toHaveLength(0);
 		expect(postedOf("spawn_resume")).toHaveLength(0);
-		expect(state.currentSessionId).toBe("");
+		expect(state.currentWorkspaceId).toBe("");
 		expect(state.transcriptPhase).toBe("idle");
 		expect(state.sessionDownId).toBe("");
 		expect(connectionState()).toBe("connected");
@@ -3614,68 +3680,68 @@ describe("the attached daemon is removed from the roster", () => {
 
 	test("an error neighbour is skipped for a farther active row", () => {
 		attachedTo("a-wt2");
-		dispatch({ type: "roster", daemons: without(["a-wt2"], { "a-wt1": { status: "error" } }) });
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+		dispatch({ type: "roster", entries: without(["a-wt2"], { "a-wt1": { status: "error" } }) });
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["a-main"]);
 	});
 
 	test("a reconnecting neighbour is chosen and attached without a wake", () => {
 		attachedTo("a-wt2");
 		dispatch({
 			type: "roster",
-			daemons: without(["a-wt2"], { "a-wt1": { status: "reconnecting" } }),
+			entries: without(["a-wt2"], { "a-wt1": { status: "reconnecting" } }),
 		});
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-wt1"]);
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["a-wt1"]);
 		expect(postedOf("spawn_resume")).toHaveLength(0);
 	});
 
 	test("neighbours of a missing project are skipped", () => {
 		attachedTo("b-main");
 		dispatch({ type: "registered_projects", projects: [{ ...p1, missing: true }, p2] });
-		dispatch({ type: "roster", daemons: without(["b-main"]) });
+		dispatch({ type: "roster", entries: without(["b-main"]) });
 		// Everything before it is p1 (missing), so the next row after it opens.
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-wt1"]);
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["b-wt1"]);
 	});
 
 	test("with nothing active before it, the scan turns around and takes the next one after", () => {
 		attachedTo("a-wt2");
 		dispatch({
 			type: "roster",
-			daemons: without(["a-wt2"], { "a-wt1": { status: "error" }, "a-main": { status: "error" } }),
+			entries: without(["a-wt2"], { "a-wt1": { status: "error" }, "a-main": { status: "error" } }),
 		});
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-main"]);
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["b-main"]);
 	});
 
 	test("the order runs across project groups", () => {
 		// b-main is first of group p2; the row before it is the last of p1 (a-wt2).
 		attachedTo("b-main");
-		dispatch({ type: "roster", daemons: without(["b-main"]) });
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-wt2"]);
+		dispatch({ type: "roster", entries: without(["b-main"]) });
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["a-wt2"]);
 	});
 
 	test("forward across a group boundary when nothing before is openable", () => {
 		attachedTo("a-main");
 		dispatch({
 			type: "roster",
-			daemons: without(["a-main"], {
+			entries: without(["a-main"], {
 				"a-wt1": { status: "error" },
 				"a-wt2": { status: "error" },
 			}),
 		});
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-main"]);
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["b-main"]);
 	});
 
 	test("no active row left clears to the idle no-session state without attaching", () => {
 		attachedTo("a-wt1");
 		dispatch({
 			type: "roster",
-			daemons: [
+			entries: [
 				row("a-main", "p1", { status: "asleep" }),
 				row("b-main", "p2", { status: "error" }),
 				row("b-wt1", "p2", { status: "connecting" }),
 			],
 		});
 		expect(postedOf("attach")).toHaveLength(0);
-		expect(state.currentSessionId).toBe("");
+		expect(state.currentWorkspaceId).toBe("");
 		expect(state.transcriptPhase).toBe("idle");
 		expect(state.transcriptTarget).toBeNull();
 		expect(state.sessionDownId).toBe("");
@@ -3686,29 +3752,29 @@ describe("the attached daemon is removed from the roster", () => {
 		attachedTo("a-wt2");
 		sendDeleteWorktree("a-wt1");
 		posted.length = 0;
-		dispatch({ type: "roster", daemons: without(["a-wt2"]) });
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+		dispatch({ type: "roster", entries: without(["a-wt2"]) });
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["a-main"]);
 	});
 
 	test("rows vanishing in the same frame are never the target", () => {
 		attachedTo("a-wt2");
-		dispatch({ type: "roster", daemons: without(["a-wt2", "a-wt1"]) });
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["a-main"]);
+		dispatch({ type: "roster", entries: without(["a-wt2", "a-wt1"]) });
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["a-main"]);
 	});
 
 	test("a user switch already in flight is not overridden", () => {
 		attachedTo("a-wt1");
-		void switchToDaemon("b-wt1");
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-wt1"]);
-		dispatch({ type: "roster", daemons: without(["a-wt1"]) });
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-wt1"]);
+		void switchToSession("b-wt1");
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["b-wt1"]);
+		dispatch({ type: "roster", entries: without(["a-wt1"]) });
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["b-wt1"]);
 		expect(state.transcriptTarget).toBe("b-wt1");
 		expect(state.sessionDownId).toBe("");
 	});
 
-	test("an asleep or errored attached daemon still goes offline", () => {
+	test("an asleep or errored attached session still goes offline", () => {
 		attachedTo("a-wt1");
-		dispatch({ type: "roster", daemons: without([], { "a-wt1": { status: "asleep" } }) });
+		dispatch({ type: "roster", entries: without([], { "a-wt1": { status: "asleep" } }) });
 		expect(state.sessionDownId).toBe("a-wt1");
 		expect(connectionState()).toBe("offline");
 		expect(postedOf("attach")).toHaveLength(0);
@@ -3718,19 +3784,19 @@ describe("the attached daemon is removed from the roster", () => {
 		attachedTo("a-wt1");
 		dispatch({
 			type: "roster",
-			daemons: without([], { "a-wt1": { status: "asleep" }, "b-main": { status: "asleep" } }),
+			entries: without([], { "a-wt1": { status: "asleep" }, "b-main": { status: "asleep" } }),
 		});
 		expect(state.sessionDownId).toBe("a-wt1");
 
-		const switched = switchToDaemon("b-main");
-		expect(postedOf("spawn_resume").map((c) => c.daemonId)).toEqual(["b-main"]);
+		const switched = switchToSession("b-main");
+		expect(postedOf("spawn_resume").map((c) => c.workspaceId)).toEqual(["b-main"]);
 		for (let i = 0; i < 4; i++) await flushMicrotasks();
-		expect(postedOf("attach").map((c) => c.sessionId)).toEqual(["b-main"]);
+		expect(postedOf("attach").map((c) => c.workspaceId)).toEqual(["b-main"]);
 		dispatch({
 			type: "attach_result",
 			id: postedOf("attach")[0]!.id,
 			ok: true,
-			sessionId: "b-main",
+			workspaceId: "b-main",
 		});
 		await switched;
 		dispatch(attached("b-main"));
@@ -3750,7 +3816,7 @@ describe("skills_changed frame", () => {
 	});
 
 	test("applies the broadcast inventory and bumps the revision the open detail reloads on", () => {
-		setState({ currentSessionId: "daemon-a" });
+		setState({ currentWorkspaceId: "workspace-a" });
 		setState("integrations", {
 			skills: [entry("pdf", true)],
 			skillWarnings: [],

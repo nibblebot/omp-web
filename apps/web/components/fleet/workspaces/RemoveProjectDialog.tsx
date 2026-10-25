@@ -21,7 +21,7 @@ export const RemoveProjectDialog: Component = () => {
 	/** Running session processes the removal stops (asleep rows are just dropped;
 	 *  clones block the removal instead). */
 	const running = createMemo(() =>
-		state.daemonRoster.filter(
+		state.sessionRoster.filter(
 			(d) => d.projectId === target() && d.workspaceKind !== "clone" && d.status !== "asleep",
 		),
 	);

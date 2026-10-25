@@ -1,9 +1,9 @@
 /**
- * Daemon selector resolution for the fleet control plane.
+ * Session selector resolution for the fleet control plane.
  *
  * A selector names a set of registry entries:
  * - `all` selects every entry.
- * - A bare daemonId (`d3`) is an exact match; wins over glob interpretation.
+ * - A bare workspaceId (`d3`) is an exact match; wins over glob interpretation.
  * - `project:name` selects entries whose `project` equals `name` exactly.
  * - Anything else is a name glob: `*` matches any run (including empty),
  *   `?` matches exactly one character, and every other character is literal.
@@ -39,9 +39,9 @@ function compileGlob(pattern: string): RegExp {
 export function matchSelector(entries: RegistryEntry[], selector: string): RegistryEntry[] {
 	if (selector === "all") return [...entries];
 
-	// Exact daemonId first: a name that merely glob-matches a daemonId-shaped
+	// Exact workspaceId first: a name that merely glob-matches a workspaceId-shaped
 	// selector must not be picked up by the name fallthrough below.
-	const byId = entries.filter((e) => e.daemonId === selector);
+	const byId = entries.filter((e) => e.workspaceId === selector);
 	if (byId.length > 0) return byId;
 
 	const project = PROJECT_SELECTOR.exec(selector);

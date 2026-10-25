@@ -31,7 +31,7 @@ export const s4Subagents: Scenario = {
 		const repo = await env.newRepo("s4");
 		const handle = await env.stack.addSession({ label: "s4", slot: 3 }, repo);
 		const client = await ProfileClient.connect(env.adapter, env.stack.baseUrl);
-		await client.attach(handle.daemonId, handle.label);
+		await client.attach(handle.workspaceId, handle.label);
 		return {
 			async rep(): Promise<RepOutcome> {
 				const notes: string[] = [];

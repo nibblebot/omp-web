@@ -1,22 +1,22 @@
-import type { DaemonStatus } from "#lib/wire/protocol";
+import type { SessionStatus } from "#lib/wire/protocol";
 
 /**
  * Roster-row session activity, derived from the ATTACHED session's live
- * signals plus, for ready rows, the fleet edge's per-daemon realtime
- * activity (`daemon_activity` frames). Pure logic, no JSX, no Solid, so
+ * signals plus, for ready rows, the fleet edge's per-session realtime
+ * activity (`session_activity` frames). Pure logic, no JSX, no Solid, so
  * the precedence table stays unit-testable.
  *
- * Only a READY daemon gets an activity dot: every other status keeps the
+ * Only a READY session gets an activity dot: every other status keeps the
  * existing status-dot ladder and asleep shows nothing at all.
  *
- * WHY detached rows can report live blocked/in-progress: every paired daemon
+ * WHY detached rows can report live blocked/in-progress: every paired session
  * mirrors the frames it emits (`state`, `ui_request`/`ui_request_end`, the
- * `agent_start` event) on its callback control stream; the fleet derives `{streaming, blocked}` per daemon
- * from those and broadcasts them as additive fleet-scoped `daemon_activity`
+ * `agent_start` event) on its callback control stream; the fleet derives `{streaming, blocked}` per session
+ * from those and broadcasts them as additive fleet-scoped `session_activity`
  * frames (`remote` here), whichever session a browser has open. A browser
- * attached to a session keeps that daemon alive (idle exit is suppressed); a
+ * attached to a session keeps that session alive (idle exit is suppressed); a
  * browser connected to the fleet but attached elsewhere does not. `remote` is
- * undefined when the edge predates this feature or the daemon is not paired;
+ * undefined when the edge predates this feature or the session is not paired;
  * such rows simply read idle when not unread.
  *
  * Git dirtiness is deliberately NOT part of this indicator: uncommitted
@@ -35,15 +35,15 @@ import type { DaemonStatus } from "#lib/wire/protocol";
  *   1. attached && uiPending          → "blocked"     (extension-UI dialog open)
  *   2. attached && streaming          → "in_progress" (a turn is streaming)
  *   3. attached && unreviewed         → "unreviewed"  (answer finished below the viewport)
- *   4. !attached && remote?.blocked   → "blocked"     (edge: dialog open on that daemon)
- *   5. !attached && remote?.streaming → "in_progress" (edge: that daemon is mid-turn)
+ *   4. !attached && remote?.blocked   → "blocked"     (edge: dialog open on that session)
+ *   5. !attached && remote?.streaming → "in_progress" (edge: that session is mid-turn)
  *   6. !attached && unread            → "unread"      (its turn finished while unattended)
  *   7. otherwise                      → "idle"
  *
- * Remote live truth beats the unread latch: a daemon streaming right now
+ * Remote live truth beats the unread latch: a session streaming right now
  * shows the spinner even if previously marked unread; the light-blue dot
- * appears when it finishes (see the daemon_activity handler in apps/web/state.ts,
- * which marks unread on the observed true→false flip for a detached daemon).
+ * appears when it finishes (see the session_activity handler in apps/web/state.ts,
+ * which marks unread on the observed true→false flip for a detached session).
  *
  * Rendering maps blocked → red dot, in_progress → spinning green comet ring,
  * unreviewed and unread → light blue (one look; they clear differently), idle → nothing.
@@ -51,7 +51,7 @@ import type { DaemonStatus } from "#lib/wire/protocol";
 export type SessionActivity = "in_progress" | "blocked" | "unread" | "unreviewed" | "idle";
 
 export function sessionActivity(
-	entry: { status: DaemonStatus },
+	entry: { status: SessionStatus },
 	live: {
 		attached: boolean;
 		streaming: boolean;
@@ -60,8 +60,8 @@ export function sessionActivity(
 		 *  session only; mirrors state.answerUnviewed, cleared on re-pin/prompt/switch). */
 		unreviewed: boolean;
 		unread: boolean;
-		/** Per-daemon realtime activity broadcast by the fleet edge
-		 *  (`daemon_activity` frames). Undefined for a daemon whose stream is
+		/** Per-session realtime activity broadcast by the fleet edge
+		 *  (`session_activity` frames). Undefined for a session whose stream is
 		 *  down or whose activity is not known yet, and for the attached row
 		 *  (its own live signals win). */
 		remote?: { streaming: boolean; blocked: boolean };
@@ -74,15 +74,15 @@ export function sessionActivity(
 	// Attached and idle: the finished answer sits below the viewport (the
 	// user is scrolled up), light blue until they scroll to the live edge.
 	if (live.attached && live.unreviewed) return "unreviewed";
-	// Detached row: fall back to the edge's realtime per-daemon reading
+	// Detached row: fall back to the edge's realtime per-session reading
 	// (undefined while the stream is down or activity is unknown; then only
 	// the unread latch below can paint a dot). Remote blocked is checked
-	// before remote streaming so a daemon with an open dialog reads "blocked"
+	// before remote streaming so a session with an open dialog reads "blocked"
 	// even mid-turn.
 	if (!live.attached && live.remote?.blocked) return "blocked";
 	if (!live.attached && live.remote?.streaming) return "in_progress";
 	// Unread is detached-only and secondary to the live readings above: the
-	// flag is cleared on attach, and a daemon streaming right now shows the
+	// flag is cleared on attach, and a session streaming right now shows the
 	// spinner (the blue dot appears only once it finishes).
 	if (!live.attached && live.unread) return "unread";
 	return "idle";

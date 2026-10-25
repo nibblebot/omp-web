@@ -15,7 +15,7 @@ import type { CallbackErrorCode } from "#lib/wire/callback-protocol";
 import type { CallbackSendResult } from "./fleet-callback";
 
 /**
- * Continuous session-log tailer, daemon half. Tails the full session
+ * Continuous session-log tailer, session half. Tails the full session
  * lineage subtree of an
  * agent sessions dir: main session JSONL, subagent/advisor recorders,
  * metadata JSONL and blobs, and streams raw bytes to the fleet as `frame`
@@ -37,12 +37,12 @@ import type { CallbackSendResult } from "./fleet-callback";
  * Wire contract (frozen):
  * - LogChunk payload `{offset, generation, data(base64), eof}`; `kind` stays
  *   `frame`; eof=true only on the final chunk of a closed session file.
- * - Fleet→daemon control: `{type:"log_ack", offsets}` (an
+ * - Fleet→session control: `{type:"log_ack", offsets}` (an
  *   ack is durability; the fleet fsynced before it) and
  *   `{type:"log_gap", from, to}` (repair request: re-stream `[from, to)` of
  *   the named stream). Both arrive via handleControl() from FleetCallback's
  *   onEnvelope/onControl routing in index.ts.
- * - Resume: after a daemon restart the acked watermarks come back through
+ * - Resume: after a session restart the acked watermarks come back through
  *   `opts.restore` and each file is streamed from its last acked offset; the
  *   fleet ignores re-sends below its acked offset.
  * - Generations: per-file identity counter. dev+ino change (the SDK's atomic
@@ -89,7 +89,7 @@ export interface LogChunk {
 /** Send leg handed in by the integration: one frame envelope per log chunk. */
 export type LogTailerSend = (streamId: string, payload: LogChunk) => CallbackSendResult;
 
-/** Acked watermark + generation for one stream, restored after a daemon restart. */
+/** Acked watermark + generation for one stream, restored after a session restart. */
 export interface LogTailerRestoreEntry {
 	offset: number;
 	generation: number;
@@ -98,7 +98,7 @@ export interface LogTailerRestoreEntry {
 /**
  * On-disk sidecar record (ACK_SIDECAR_NAME): the restore shape plus the file
  * identity (dev/ino) that produced the watermark, so the first post-restart
- * stat can detect a rewrite that happened while the daemon was down.
+ * stat can detect a rewrite that happened while the session was down.
  */
 interface AckSidecarEntry extends LogTailerRestoreEntry {
 	dev?: number;
@@ -110,7 +110,7 @@ export interface LogTailerOptions {
 	sessionsDir: string;
 	/** Frame-emitting send leg; identity/seq stamping stays in the callback client. */
 	send: LogTailerSend;
-	/** Acked offsets per streamId to resume from after a daemon restart. */
+	/** Acked offsets per streamId to resume from after a session restart. */
 	restore?: Map<string, LogTailerRestoreEntry>;
 }
 
@@ -123,14 +123,14 @@ const POLL_INTERVAL_MS = 1_000;
 /** Backup rescan cadence while the recursive watcher is healthy; watch events drive the live path. */
 const WATCHED_BACKUP_INTERVAL_MS = 15_000;
 /**
- * Ack-watermark persistence (daemon half): an ack is fleet-side
- * durability, so a daemon restart resumes each lineage stream from its last
+ * Ack-watermark persistence (session half): an ack is fleet-side
+ * durability, so a session restart resumes each lineage stream from its last
  * acked offset instead of re-streaming. Watermarks live in a sidecar next to
  * the sessions dir, a plain streamId → {offset, generation} map, rewritten
  * atomically (same-dir temp + rename). Writes are debounced (~1s, coalesced,
  * unref'd) while running and flushed synchronously on stop() so a graceful
  * shutdown never loses the final acks. dev/ino ride along in each entry so a
- * first stat after restart can detect a file the SDK rewrote while the daemon
+ * first stat after restart can detect a file the SDK rewrote while the session
  * was down (atomic full-file rewrite) and resync under a fresh generation
  * instead of splicing new content onto an old watermark.
  */
@@ -419,7 +419,7 @@ export class SessionLogTailer {
 	// ------------------------------------------------------------- control legs
 
 	/**
-	 * One fleet→daemon control envelope. `log_ack` carries a batch
+	 * One fleet→session control envelope. `log_ack` carries a batch
 	 * of durable offsets keyed by streamId; `log_gap` requests re-streaming
 	 * `[from, to)` of the stream named by the envelope's streamId. Malformed
 	 * payloads are recorded as typed errors and ignored, never throws.
@@ -777,7 +777,7 @@ export class SessionLogTailer {
 		// Identity: dev+ino change (SDK atomic temp+rename rewrite) or size
 		// shrink bumps the generation and resyncs from offset 0. On the first
 		// stat after a restart with a restore watermark, a file smaller than
-		// the acked offset means it was rewritten while the daemon was down,
+		// the acked offset means it was rewritten while the session was down,
 		// same divergence rule, resync under a fresh generation.
 		const identityChanged = stream.dev !== -1 && (st.dev !== stream.dev || st.ino !== stream.ino);
 		const shrunk = stream.size > 0 && st.size < stream.size;
@@ -797,7 +797,7 @@ export class SessionLogTailer {
 
 		// Restored-watermark divergence (restart path): the sidecar recorded
 		// the file identity that produced the acked offset. When that identity
-		// differs from the file now on disk (an atomic rewrite while the daemon
+		// differs from the file now on disk (an atomic rewrite while the session
 		// was down, or a new file reusing a streamId after a clean close), the
 		// watermark belongs to a dead file; resync from 0 under a fresh
 		// generation. No-op when the sidecar carried no identity (watermarkDev

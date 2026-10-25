@@ -177,7 +177,7 @@ export const ADVANCED_SETTING_PATHS: Readonly<Record<string, true>> = {
 };
 
 /**
- * Terminal capability gates forced true for the web client. A headless daemon has no
+ * Terminal capability gates forced true for the web client. A headless session has no
  * terminal, so these probes can be false there (verified with an empty environment).
  * Keyed by row path, valued by the SDK condition name it overrides.
  */

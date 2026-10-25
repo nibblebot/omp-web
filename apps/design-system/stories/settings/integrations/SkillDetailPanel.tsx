@@ -2,10 +2,10 @@ import type { Component } from "solid-js";
 import { SkillDetailPanel } from "../../../../web/components/settings/integrations/SkillDetailPanel";
 import { setState, state } from "../../../../web/state";
 import { loadSkillDetail } from "../../../../web/store/integrations";
-import { answerCalls } from "../../../daemon";
+import { answerCalls } from "../../../session";
 import { extensionCalls, skillsStateFixture } from "../../../fixtures/extensions";
 import { defineStory } from "../../../registry";
-import type { CallHandlers } from "../../../daemon";
+import type { CallHandlers } from "../../../session";
 
 /** The panel shows the store's row for `name`, as the tab passes it. */
 const Panel: Component<{ name: string }> = (props) => {
@@ -30,7 +30,7 @@ export default defineStory({
 		file: "apps/web/components/settings/integrations/SkillDetailPanel.tsx",
 		export: "SkillDetailPanel",
 	},
-	seed: { currentSessionId: "sess_09a41c" },
+	seed: { currentWorkspaceId: "sess_09a41c" },
 	variants: [
 		{
 			name: "Enabled skill",

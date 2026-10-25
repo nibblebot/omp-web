@@ -105,7 +105,7 @@ beforeEach(() => {
 	HASH_B = hex("b");
 	HASH_C = hex("c");
 	agent = `agent-${counter}`;
-	setState("currentSessionId", `session-${counter}`);
+	setState("currentWorkspaceId", `session-${counter}`);
 });
 
 /** Bump the agent's lastUpdate so syncSubagentTranscript reads the next page. */

@@ -1,6 +1,6 @@
 import type { Component } from "solid-js";
 import { DockHost } from "../../../web/components/app/DockHost";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { sessionGraphPage } from "../../fixtures/dialogs";
 import { closeDock, openAgents, openDock, setAgentsFilter } from "../../../web/store/dock";
 import { seedAgentsDock } from "../../fixtures/subagents";

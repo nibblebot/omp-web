@@ -28,7 +28,7 @@ describe("classifyCommand", () => {
 	];
 
 	test("log-relay (the fleet's internal capped log relay) routes to itself", () => {
-		expect(classifyCommand(["log-relay", "/tmp/daemon.log"])).toBe("log-relay");
+		expect(classifyCommand(["log-relay", "/tmp/session.log"])).toBe("log-relay");
 	});
 
 	test("routes argv to its target", () => {
@@ -37,7 +37,7 @@ describe("classifyCommand", () => {
 		}
 	});
 
-	test("routes the daemon token to session", () => {
+	test("routes the session command to the session process", () => {
 		expect(classifyCommand(["session"])).toBe("session");
 		expect(classifyCommand(["session", "--port", "0"])).toBe("session");
 	});

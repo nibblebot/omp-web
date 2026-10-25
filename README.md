@@ -2,7 +2,7 @@
 
 omp-web is a **web UI for running multiple oh-my-pi sessions, across all your repos and worktrees**: one installed command, one browser UI, N agent sessions.
 
-Because it drives the agent through the SDK instead of the RPC, omp-web has full daemon and subagent control; RPC-based GUIs don't.
+Because it drives the agent through the SDK instead of the RPC, omp-web has full session and subagent control; RPC-based GUIs don't.
 
 <img id="omp-web-demo" src="docs/screenshots/omp-web-demo.gif" alt="omp-web UI demo" width="800">
 
@@ -11,13 +11,13 @@ Because it drives the agent through the SDK instead of the RPC, omp-web has full
 
 ## Features
 
-- **Multiple Repos and Worktrees, one UI.** Start, monitor, and chat with one agent daemon per worktree across every repo.
+- **Multiple Repos and Worktrees, one UI.** Start, monitor, and chat with one agent session per worktree across every repo.
 - **A full web UI, not a terminal wrapper.** Live-streamed responses, rendered markdown and diffs, tool output, slash commands, prompt history and autocomplete, per-session context/usage meters, and a transcripts/stats view.
-- **Custom wire protocol for full SDK control.** One WebSocket per browser tab (`GET /ws`) carries the full SDK surface, including daemon and subagent control the RPC doesn't expose.
-- **Manage repos and worktrees from the UI.** Register projects (deduped by realpath); create worktrees. Deletion removes a local linked worktree only when its tree is clean, with `git branch -d` and no `--force`. As with `git worktree remove`, it also deletes the worktree's Git-ignored files (for example `.env` and `node_modules`). Removing a local daemon preserves its files.
-- **CLI for automation.** Spawn, stop, remove, inspect, and fan a prompt out to many daemons from the terminal, the same fleet the browser talks to.
+- **Custom wire protocol for full SDK control.** One WebSocket per browser tab (`GET /ws`) carries the full SDK surface, including session and subagent control the RPC doesn't expose.
+- **Manage repos and worktrees from the UI.** Register projects (deduped by realpath); create worktrees. Deletion removes a local linked worktree only when its tree is clean, with `git branch -d` and no `--force`. As with `git worktree remove`, it also deletes the worktree's Git-ignored files (for example `.env` and `node_modules`). Removing a local session preserves its files.
+- **CLI for automation.** Spawn, stop, remove, inspect, and fan a prompt out to many sessions from the terminal, the same fleet the browser talks to.
 - **Self-updating.** `omp-web update` checks GitHub Releases and installs a newer release when available.
-- **Self-healing.** Sessions dial out to the control plane and redial it after a restart or a dropped connection; a session with no control plane for 10 minutes shuts itself down. Idle daemons exit after 30 minutes by default and are respawned on demand; crashed daemons restart with bounded backoff; browsers re-attach automatically.
+- **Self-healing.** Sessions dial out to the control plane and redial it after a restart or a dropped connection; a session with no control plane for 10 minutes shuts itself down. Idle sessions exit after 30 minutes by default and are respawned on demand; crashed sessions restart with bounded backoff; browsers re-attach automatically.
 
 ## Runtime
 
@@ -35,7 +35,7 @@ Behind a reverse proxy, the proxy must set the browser origin: the public origin
 
 A proxy listed in `trustedProxies` must append the connecting client to `X-Forwarded-For` (or overwrite the header); the fleet reads the header right to left and takes the first hop that is not a trusted proxy. A proxy that forwards a client-supplied `X-Forwarded-For` unchanged lets that client claim any address, including loopback, which skips sign-in.
 
-Sessions dial out: each session daemon connects to the control plane over the callback pair (one WebSocket, `/callback/ws`; a reverse proxy in front of the control plane must pass the WebSocket upgrade), and the control plane never opens a connection into a session. Sessions behind NAT, in a sandbox, or in a Kubernetes pod with no inbound traffic work the same way. Ctrl+C on `omp-web` or `omp-web control` stops the control plane only; sessions keep running, including a turn in progress, and redial the next control plane with the same credential. Restart the control plane on the same port: a session keeps dialing the address it was given. After a restart, entries show `reconnecting`, then `ready` once their session redials; one that has not redialed within 45 seconds is shown `asleep`. A session with no control plane for 10 minutes (`--control-grace`, or `OMP_SESSION_CONTROL_GRACE`; `0` disables) shuts itself down gracefully, and one whose credential the fleet rejects (revoked, or superseded by a newer generation) shuts down at once. A spawned session that is asleep wakes on attach or prompt, resuming its last transcript; if the previous process is still alive somewhere (for example dialing an old port), the wake fails with "locked by another omp-session" until that process exits or is stopped. `omp-web stop <selector>` asks a session to shut down, terminates a local one, and revokes its credential.
+Sessions dial out: each session process connects to the control plane over the callback pair (one WebSocket, `/callback/ws`; a reverse proxy in front of the control plane must pass the WebSocket upgrade), and the control plane never opens a connection into a session. Sessions behind NAT, in a sandbox, or in a Kubernetes pod with no inbound traffic work the same way. Ctrl+C on `omp-web` or `omp-web control` stops the control plane only; sessions keep running, including a turn in progress, and redial the next control plane with the same credential. Restart the control plane on the same port: a session keeps dialing the address it was given. After a restart, entries show `reconnecting`, then `ready` once their session redials; one that has not redialed within 45 seconds is shown `asleep`. A session with no control plane for 10 minutes (`--control-grace`, or `OMP_SESSION_CONTROL_GRACE`; `0` disables) shuts itself down gracefully, and one whose credential the fleet rejects (revoked, or superseded by a newer generation) shuts down at once. A spawned session that is asleep wakes on attach or prompt, resuming its last transcript; if the previous process is still alive somewhere (for example dialing an old port), the wake fails with "locked by another omp-session" until that process exits or is stopped. `omp-web stop <selector>` asks a session to shut down, terminates a local one, and revokes its credential.
 
 **Reverse proxy or ingress in front of the control plane.** Every session reaches the control plane through `GET /callback/ws`, one long-lived WebSocket per session (there is no renewal and no per-connection byte cap). Anything between a session and the control plane (nginx, Caddy, Envoy, an Istio or Kubernetes ingress, a cloud load balancer, a corporate proxy) must:
 
@@ -87,13 +87,13 @@ The other direction: a session that has to leave its network through a proxy res
 
 Check the path before launching clones: `OMP_FLEET_CALLBACK_URL=https://control.example.com omp-web preflight --profile <id>` opens a real WebSocket upgrade to `<url>/callback/ws` (through the proxy resolved from the fleet's own `HTTP(S)_PROXY` / `NO_PROXY`, as a session with that environment would), carrying no credential. The `callback-ws` row passes when the control plane answers with its typed refusal for the missing credential, and fails with the proxy or ingress setting to fix when the upgrade is refused, never answered, or answered by something that is not the fleet. A host-local session and the fleet's own derived callback URL (`http://<bind>:<port>`) need none of this.
 
-A `--resume` session file that is missing exits 78 before bind (`omp-session: --resume <file>: session file not found`) and is never created. The fleet passes plain `--resume` only for a file the daemon has reported persisted, so a transcript that was written and later deleted fails with 78 and its row parks asleep with that reason. A file the fleet never saw persisted (a session that had no messages yet) relaunches with `--resume <file> --resume-unwritten`, which adopts that path as the same not-yet-written session. An explicitly picked file always resumes strictly. A transcript that exists but cannot be restored exits 78 instead of starting empty; its row stays asleep with the daemon's reason and is never restarted. A provider-managed clone wake resumes the same way through `OMP_SESSION_RESUME` (strict; `OMP_SESSION_RESUME_UNWRITTEN=1` for a file not known to be written): a bwrap clone gets the host path of the newest session, a Kubernetes clone the in-pod path of the session its runtime last reported (or an explicitly picked stored session), and a first start gets none.
+A `--resume` session file that is missing exits 78 before bind (`omp-session: --resume <file>: session file not found`) and is never created. The fleet passes plain `--resume` only for a file the session has reported persisted, so a transcript that was written and later deleted fails with 78 and its row parks asleep with that reason. A file the fleet never saw persisted (a session that had no messages yet) relaunches with `--resume <file> --resume-unwritten`, which adopts that path as the same not-yet-written session. An explicitly picked file always resumes strictly. A transcript that exists but cannot be restored exits 78 instead of starting empty; its row stays asleep with the session's reason and is never restarted. A provider-managed clone wake resumes the same way through `OMP_SESSION_RESUME` (strict; `OMP_SESSION_RESUME_UNWRITTEN=1` for a file not known to be written): a bwrap clone gets the host path of the newest session, a Kubernetes clone the in-pod path of the session its runtime last reported (or an explicitly picked stored session), and a first start gets none.
 
-`omp-web session` runs one session daemon (one process, one bound directory, one live agent session, wire API only, no web UI). The fleet spawns sessions with the default local template. Callback URLs must be https, except loopback http, which the fleet enables for its own loopback bind (the daemon reads `callback.allowHttp` from its `--fleet-stdin` payload). Non-loopback fleet service requires browser authentication. A standalone session (started without `--fleet-stdin`) also serves the browser socket itself on `GET /ws` for direct clients: loopback peers need no token but a cross-site dial (foreign `Host`, `Origin` or `Sec-Fetch-Site`) is closed 4403, and an off-loopback client passes the token as the `token` query parameter or an `Authorization: Bearer` header. A fleet-managed session binds no listener.
+`omp-web session` runs one session process (one process, one bound directory, one live agent session, wire API only, no web UI). The fleet spawns sessions with the default local template. Callback URLs must be https, except loopback http, which the fleet enables for its own loopback bind (the session reads `callback.allowHttp` from its `--fleet-stdin` payload). Non-loopback fleet service requires browser authentication. A standalone session (started without `--fleet-stdin`) also serves the browser socket itself on `GET /ws` for direct clients: loopback peers need no token but a cross-site dial (foreign `Host`, `Origin` or `Sec-Fetch-Site`) is closed 4403, and an off-loopback client passes the token as the `token` query parameter or an `Authorization: Bearer` header. A fleet-managed session binds no listener.
 
 Local sessions are not mirrored: their transcripts stay on this host (`OMP_SESSION_LOG_MIRROR=0`).
 
-Session daemons are disposable processes; the durable truth is the session `.jsonl` transcript on disk.
+Session processes are disposable; the durable truth is the session `.jsonl` transcript on disk.
 
 ## Architecture
 
@@ -105,17 +105,17 @@ flowchart TB
   model["Model provider"]
   log["session .jsonl, durable truth"]
 
-  subgraph daemons["agent daemons"]
-    daemon1["<b>omp-web session</b> <br/>omp SDK daemon"]
+  subgraph sessions["agent sessions"]
+    session1["<b>omp-web session</b> <br/>omp SDK session"]
     dots["…"]
   end
 
   browser <-->|"WebSocket /ws"| fleet
   browser <-.->|"split form"| uiproc
   uiproc <-.->|"WebSocket /ws"| fleet
-  daemons -->|"callback pair (session dials out)"| fleet
-  daemons <--> model
-  daemons -.-> log
+  sessions -->|"callback pair (session dials out)"| fleet
+  sessions <--> model
+  sessions -.-> log
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for how the browser, fleet and session protocols fit together over time, and [`AGENTS.md`](AGENTS.md) for the engineering map, wire contract, and import, state, and security boundaries.
@@ -160,14 +160,14 @@ omp-web update --force --version x.y.z  # reinstall or downgrade to a specific r
 - `fleet-state.json`: roster and registered projects as pretty-printed JSON, written atomically with the file and its directory fsynced, under an exclusive lifetime pidfile lock. Each write keeps the state it replaces as `fleet-state.json.bak`; if the main file is corrupt at startup, the fleet loads the backup, logs that it did, and rewrites the main file on the next change. Writes are coalesced (a burst of status changes shares one write, pending changes flush on shutdown). Defaults beside the selected config; `OMP_FLEET_STATE` selects another path.
 - `workspaces/`: default creation destination for local worktrees, created as needed or during accepted first-run setup. `--workspace-dir`, `OMP_FLEET_WORKSPACE_DIR`, or config `workspaceDir` select another directory independently of config and state. Worktrees use `<workspaceDir>/<repo-basename>/<slug(name)>` directly, with no repository marker or hash disambiguation; an existing target is rejected.
 - `logs/` beside the state file: durable lineage-file mirrors streamed over enrolled callback pairs when the fleet log store is available. Local spawned sessions are not mirrored; their transcripts stay in their SDK session directory.
-- `session-logs/<daemonId>.log` beside the state file: stdout and stderr of each locally spawned session, appended across restarts. A launch that finds the file above 1 MiB renames it to `<daemonId>.log.1` (one older generation kept, replaced on the next rotation), and a single run rotates the same way at 1 MiB. `/ctl/sessions/<id>/stderr` and the Debug panel show the last 64 KiB of the file. Deleting or pruning a session removes both generations; the next launch recreates the file.
+- `session-logs/<workspaceId>.log` beside the state file: stdout and stderr of each locally spawned session, appended across restarts. A launch that finds the file above 1 MiB renames it to `<workspaceId>.log.1` (one older generation kept, replaced on the next rotation), and a single run rotates the same way at 1 MiB. `/ctl/sessions/<id>/stderr` and the Debug panel show the last 64 KiB of the file. Deleting or pruning a session removes both generations; the next launch recreates the file.
 - `clones/` beside the selected state file: private volumes for new provider-managed clones. Existing clones keep their persisted volume location and provider administration directory even when `workspaceDir` changes; no automatic move occurs.
 
 Interactive first run can choose a data home and write `config.json` there. If you choose a non-default location, set `OMP_FLEET_CONFIG` to that file for subsequent launches. Config, state, and workspace paths can be configured separately; installed code remains in its installation prefix.
 
-`omp-web remove` stops and unregisters the daemon without deleting files or the Git worktree. Linked worktrees of a registered project offer disk deletion, with clean-tree checks, no force, and removal of their Git-ignored files. Provider-managed clones retain their separate verified-deletion lifecycle.
+`omp-web remove` stops and unregisters the session without deleting files or the Git worktree. Linked worktrees of a registered project offer disk deletion, with clean-tree checks, no force, and removal of their Git-ignored files. Provider-managed clones retain their separate verified-deletion lifecycle.
 
-Clones cut from the project's local path on a fleet-readable volume (bwrap or host) have a **Fetch into project** row action, also `POST /ctl/clones/<daemonId>/fetch-into-project`. It fetches the clone's own branch (the branch named after the workspace) from its checkout into the project's main repo: a missing branch is created and an existing one is fast-forwarded, never overwritten. The fleet refuses, and leaves the project untouched, when the project's branch has commits the clone's lacks (not a fast-forward) or is checked out in any worktree of the project (switch that checkout away first). Only committed work travels; uncommitted changes stay in the clone. Remote-source and Kubernetes clones push upstream from inside their runtime and do not offer the action.
+Clones cut from the project's local path on a fleet-readable volume (bwrap or host) have a **Fetch into project** row action, also `POST /ctl/clones/<workspaceId>/fetch-into-project`. It fetches the clone's own branch (the branch named after the workspace) from its checkout into the project's main repo: a missing branch is created and an existing one is fast-forwarded, never overwritten. The fleet refuses, and leaves the project untouched, when the project's branch has commits the clone's lacks (not a fast-forward) or is checked out in any worktree of the project (switch that checkout away first). Only committed work travels; uncommitted changes stay in the clone. Remote-source and Kubernetes clones push upstream from inside their runtime and do not offer the action.
 
 Provider-managed clones run on a provider profile from the config file's `providerProfiles` map, offered as the **Run on** choice of the New workspace popover. The profile `provider` is one of `bwrap` (a bubblewrap sandbox on the fleet host), `kubernetes` (a pod with a persistent volume claim), or `host`. A `host` profile has no `executable` and no limits, only an optional `secretRefs`:
 
@@ -193,7 +193,7 @@ The web UI's optional features can be turned on or off per browser in **Settings
 bun run dev                # bun install, first-run setup if unconfigured, then Vite HMR + fleet; open the printed ui URL
 ```
 
-Dev opens the browser only when run from an interactive local terminal with a display and without `--host`; `--no-open` disables it. Use the printed `ui` URL, not the fleet's potentially stale `dist/` UI. Dev-spawned sessions run with a 2s `--control-grace` (production keeps 10 minutes), so they shut themselves down about 2 seconds after dev stops, however it stops. The dev fleet listens on a stable per-worktree port, so a dev restart within that window lets them redial; if that port is taken it picks a free one and says so, and the surviving sessions then exit at the end of their grace. Restart dev-spawned daemons after server edits (stop them from the UI, or restart dev and wait out the grace); they are not watched.
+Dev opens the browser only when run from an interactive local terminal with a display and without `--host`; `--no-open` disables it. Use the printed `ui` URL, not the fleet's potentially stale `dist/` UI. Dev-spawned sessions run with a 2s `--control-grace` (production keeps 10 minutes), so they shut themselves down about 2 seconds after dev stops, however it stops. The dev fleet listens on a stable per-worktree port, so a dev restart within that window lets them redial; if that port is taken it picks a free one and says so, and the surviving sessions then exit at the end of their grace. Restart dev-spawned sessions after server edits (stop them from the UI, or restart dev and wait out the grace); they are not watched.
 
 `bun run dev --host` serves Vite on the LAN. Vite's proxy re-presents each LAN page's same-origin request to the loopback fleet, so dev needs no browser origin; `--allow-hosts` still decides which Host names Vite accepts. Only same-origin requests are re-presented: a cross-site Origin still reaches the fleet unchanged and is refused.
 
@@ -212,26 +212,26 @@ bun run demo               # App demo on http://localhost:4798/ (OMP_DEMO_PORT o
 
 The two are standalone pages that do not link to each other, and each opens in the default browser on start when run from an interactive local terminal with a display, never when an agent or CI runs it (same rule as `omp-web`). `bun run design` serves the stories: a sidebar of every component story, with routes under `#/stories` (`#/stories/coverage`, `#/stories/<storyId>`). `bun run demo` serves the App view: the real app in Chat Mode with fixture data. Hold Shift to label the component under the pointer and its ancestors (Ctrl+Shift labels every component), then click a label to inspect it in an isolated iframe.
 
-`apps/design-system/` is a standalone Bun server that bundles the real `apps/web` components (Babel with `babel-preset-solid`) and shows each one with fixture data. No fleet runs behind it: control-plane fetches (`/ctl`, `/auth`) are answered from `apps/design-system/fixtures/routes.ts`, daemon commands and `call()` answers come from story handlers in `apps/design-system/daemon.ts`, and stories seed the shared store through `seed`. The store, the fake daemon, and module-level dialog state reset before every story and variant. On the stories page the sidebar is computed from the component graph (`graph.ts`): it starts at `App` and drills down through what each component renders, opening the path to the current story. Where a component renders several pieces from another feature folder, they sit under a folder row for that feature (`chat/`), split again by subfolder (`status/`), so App and ModalHost show a few big pieces rather than every component; `ui/` primitives and the Icons page are listed below the tree, and exported components nothing renders are listed under "Not rendered by App". The search box replaces the tree with a flat list of matches. `#/stories/coverage` lists every exported component and whether it has a story. Refresh the page to rebuild after source edits; restart the server after editing `server.ts` or fixture routes. Add a story by creating `apps/design-system/stories/<feature>/<subfolder>/<Name>.tsx`, mirroring the component's folder, whose default export is a `defineStory(...)` (or an array of them); see `registry.ts` for the contract.
+`apps/design-system/` is a standalone Bun server that bundles the real `apps/web` components (Babel with `babel-preset-solid`) and shows each one with fixture data. No fleet runs behind it: control-plane fetches (`/ctl`, `/auth`) are answered from `apps/design-system/fixtures/routes.ts`, session commands and `call()` answers come from story handlers in `apps/design-system/session.ts`, and stories seed the shared store through `seed`. The store, the fake session, and module-level dialog state reset before every story and variant. On the stories page the sidebar is computed from the component graph (`graph.ts`): it starts at `App` and drills down through what each component renders, opening the path to the current story. Where a component renders several pieces from another feature folder, they sit under a folder row for that feature (`chat/`), split again by subfolder (`status/`), so App and ModalHost show a few big pieces rather than every component; `ui/` primitives and the Icons page are listed below the tree, and exported components nothing renders are listed under "Not rendered by App". The search box replaces the tree with a flat list of matches. `#/stories/coverage` lists every exported component and whether it has a story. Refresh the page to rebuild after source edits; restart the server after editing `server.ts` or fixture routes. Add a story by creating `apps/design-system/stories/<feature>/<subfolder>/<Name>.tsx`, mirroring the component's folder, whose default export is a `defineStory(...)` (or an array of them); see `registry.ts` for the contract.
 
 ## Advanced
 
 ```sh
-omp-web session [options]            # run a single-session agent daemon
+omp-web session [options]            # run a single-session agent process
 omp-web sessions                    # roster
 omp-web projects                    # registered projects
-omp-web spawn <path>                 # start a daemon on a directory
+omp-web spawn <path>                 # start a session on a directory
 omp-web add-repo <path> [--start]    # register a project (deduped on realpath)
 omp-web add-worktree <project> <name> [--no-start]      # create a worktree
 omp-web stop <selector>
 omp-web remove <selector>
 omp-web rm-project <project>
-omp-web rm-worktree <daemon-id> [--delete-branch <name>]
+omp-web rm-worktree <workspace-id> [--delete-branch <name>]
 omp-web prompt <selector> <text> [--wait <ms>]
 omp-web relay --port <n> [--hostname h] [--max-guests n] [--max-rooms n]   # run the standalone collab relay
 ```
 
-`stop`, `remove`, and `prompt` selectors accept `all`, an exact daemon ID, `project:name`, or name globs with `*` and `?`; quote globs to prevent shell expansion. Project arguments accept a registered project ID, path/realpath, or basename. Control commands connect to loopback; `--port` or `OMP_FLEET_PORT` selects the fleet port (default 4722). `prompt` to an asleep session wakes it first.
+`stop`, `remove`, and `prompt` selectors accept `all`, an exact workspace ID, `project:name`, or name globs with `*` and `?`; quote globs to prevent shell expansion. Project arguments accept a registered project ID, path/realpath, or basename. Control commands connect to loopback; `--port` or `OMP_FLEET_PORT` selects the fleet port (default 4722). `prompt` to an asleep session wakes it first.
 
 `prompt` submits without waiting unless `--wait <ms>` supplies a result timeout.
 

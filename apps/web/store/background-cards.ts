@@ -42,9 +42,9 @@ async function listedJobs(): Promise<ListedJob[] | undefined> {
 /** Settle the transcript's parked cards against the session's job list; an answer for a session left behind is dropped. */
 export async function reconcileBackgroundCards(): Promise<void> {
 	if (runningBackgroundCards(state.items).length === 0) return;
-	const sessionId = state.currentSessionId;
+	const workspaceId = state.currentWorkspaceId;
 	const jobs = await listedJobs();
-	if (sessionId !== state.currentSessionId) return;
+	if (workspaceId !== state.currentWorkspaceId) return;
 	drainParkedToolUpdates();
 	setState(
 		"items",

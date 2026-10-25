@@ -1,5 +1,5 @@
 /**
- * CPU profiling of the fleet and session daemons via Bun's own profiler, and
+ * CPU profiling of the fleet and session processes via Bun's own profiler, and
  * the bucketing of the resulting `.cpuprofile` files.
  *
  * PERTURBATION: profiling perturbs timings. Bun's `--cpu-prof` runs a sampling
@@ -21,9 +21,9 @@
  * only 15 fleet samples in a 2.5 s window; use `intervalUs: 100` for the fleet.
  *
  * WHEN THE FILE IS WRITTEN (verified on Bun 1.4.2, fleet launched as
- * `bun <flags> apps/fleet/cli.ts control` and session daemons through the
+ * `bun <flags> apps/fleet/cli.ts control` and session processes through the
  * spawn template):
- * - `POST /ctl/stop {selector}` on a session: written (the daemon exits via
+ * - `POST /ctl/stop {selector}` on a session: written (the session exits via
  *   its normal shutdown path), process gone ~44 ms later (28 ms unprofiled).
  * - SIGTERM on a session or on the fleet: written; the fleet exits in ~5 ms
  *   with or without the profiler. Sessions outlive a SIGTERMed fleet by design.
@@ -238,7 +238,7 @@ const STREAM_NATIVE =
  * lib/wire/callback-protocol.ts `encodeEnvelopeAround`, plus the TextEncoder /
  * TextDecoder natives. The actual socket write (`ws.send`) is a native and
  * lands in `stream-enqueue-write` with the other write natives. edge.ts
- * `#enqueue`, daemon-transport.ts `#writeDown` and fleet-callback.ts `#pump`
+ * `#enqueue`, session-transport.ts `#writeDown` and fleet-callback.ts `#pump`
  * are the enqueue loops (fleet-callback.ts `#enqueue` is the pending queue and
  * is NOT one). pi-utils json.ts `stringifyJson` is the session persistence
  * stringify.
@@ -255,7 +255,11 @@ const JS_RULES: Array<{ bucket: BucketName; url: RegExp; fn: RegExp }> = [
 		fn: /^encodeEnvelopeAround$/,
 	},
 	{ bucket: "stream-enqueue-write", url: /apps\/fleet\/edge\.ts$/, fn: /^#enqueue$/ },
-	{ bucket: "stream-enqueue-write", url: /apps\/fleet\/daemon-transport\.ts$/, fn: /^#writeDown$/ },
+	{
+		bucket: "stream-enqueue-write",
+		url: /apps\/fleet\/session-transport\.ts$/,
+		fn: /^#writeDown$/,
+	},
 	{ bucket: "stream-enqueue-write", url: /apps\/session\/fleet-callback\.ts$/, fn: /^#pump$/ },
 	{ bucket: "json-stringify-parse", url: /pi-utils\/src\/json\.ts$/, fn: /^stringifyJson$/ },
 ];

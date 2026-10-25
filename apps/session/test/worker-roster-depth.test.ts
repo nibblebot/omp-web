@@ -1,7 +1,7 @@
 /**
  * Nested Task subagents (a subagent spawning a subagent) must reach the root session's worker roster.
  * The SDK routes a spawn tree's lifecycle frames to `subagentEventBus`; a depth-2 spawn emits on its
- * parent's own bus plus that shared bus. The daemon must listen on the same bus the tree emits to.
+ * parent's own bus plus that shared bus. The session must listen on the same bus the tree emits to.
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -104,10 +104,10 @@ describe("worker roster depth", () => {
 			});
 			const entry = await collab.createSession(dir);
 
-			// The SDK's spawn tree emits to `subagentEventBus`; when the daemon passes none, the SDK
-			// makes a private one that the daemon never subscribes to.
+			// The SDK's spawn tree emits to `subagentEventBus`; when the session passes none, the SDK
+			// makes a private one that the session never subscribes to.
 			const spawnBus = options?.subagentEventBus ?? new EventBus();
-			// Root's Task tool: its own bus is the daemon's, plus the spawn-tree bus.
+			// Root's Task tool: its own bus is the session's, plus the spawn-tree bus.
 			emitSubagentFrame(
 				options?.eventBus,
 				spawnBus,

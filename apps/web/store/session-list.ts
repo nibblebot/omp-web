@@ -1,4 +1,4 @@
-import type { DaemonStatus, SessionListEntry } from "#lib/wire/protocol";
+import type { SessionStatus as ProcessStatus, SessionListEntry } from "#lib/wire/protocol";
 import { displayTitle } from "../components/ui/title-icons";
 
 // ---------------------------------------------------------------------------
@@ -9,7 +9,7 @@ import { displayTitle } from "../components/ui/title-icons";
 // explicitly so everything is deterministic.
 // ---------------------------------------------------------------------------
 
-/** Outcome of a session log, as the daemon reports it; anything else is `unknown`. */
+/** Outcome of a stored session, as the session process reports it; anything else is `unknown`. */
 export type SessionStatus =
 	| "complete"
 	| "interrupted"
@@ -60,7 +60,7 @@ export interface SessionRow {
 	modifiedMs: number;
 	messageCount: number;
 	status?: SessionStatus;
-	/** First user prompt (<= 500 chars; the daemon may send "(no messages)"). */
+	/** First user prompt (<= 500 chars; the session may send "(no messages)"). */
 	firstMessage?: string;
 	/** Tail of the conversation text, shown in the preview pane. */
 	recentText?: string;
@@ -72,11 +72,11 @@ export interface SessionRow {
 	blocked?: { reason: string; addProjectPath: string };
 }
 
-/** A roster daemon as owner resolution sees it. */
-export interface SessionOwnerDaemon {
-	daemonId: string;
+/** A roster session as owner resolution sees it. */
+export interface SessionOwnerEntry {
+	workspaceId: string;
 	cwd: string;
-	status: DaemonStatus;
+	status: ProcessStatus;
 }
 
 /** A registered project as owner resolution sees it. */
@@ -85,10 +85,10 @@ export interface SessionOwnerProject {
 	path: string;
 }
 
-/** Who a session's folder resolves to: a daemon, several (ambiguous), a registered project, or nobody. */
+/** Who a session's folder resolves to: a session, several (ambiguous), a registered project, or nobody. */
 export type SessionOwner =
-	| { kind: "daemon"; daemonId: string }
-	| { kind: "ambiguous"; daemonIds: string[] }
+	| { kind: "workspace"; workspaceId: string }
+	| { kind: "ambiguous"; workspaceIds: string[] }
 	| { kind: "project"; projectId: string; path: string }
 	| { kind: "none" };
 
@@ -97,22 +97,22 @@ export function trimTrailingSlashes(path: string): string {
 }
 
 /**
- * Resolve the owner of a session folder. A daemon on the exact folder wins; several
- * daemons on it stay `ambiguous` so the caller keeps the explicit choice. Otherwise the
+ * Resolve the owner of a session folder. A session on the exact folder wins; several
+ * sessions on it stay `ambiguous` so the caller keeps the explicit choice. Otherwise the
  * longest registered project that is the folder or one of its parents owns it (it is
  * started on resume). A sibling prefix (`/work/foobar` vs `/work/foo`) never matches.
  */
 export function resolveSessionOwner(
 	cwd: string,
-	ctx: { roster: readonly SessionOwnerDaemon[]; projects: readonly SessionOwnerProject[] },
+	ctx: { roster: readonly SessionOwnerEntry[]; projects: readonly SessionOwnerProject[] },
 ): SessionOwner {
 	const folder = trimTrailingSlashes(cwd);
 	if (folder === "") return { kind: "none" };
-	const onFolder = ctx.roster.filter((daemon) => trimTrailingSlashes(daemon.cwd) === folder);
+	const onFolder = ctx.roster.filter((session) => trimTrailingSlashes(session.cwd) === folder);
 	const [only] = onFolder;
-	if (only && onFolder.length === 1) return { kind: "daemon", daemonId: only.daemonId };
+	if (only && onFolder.length === 1) return { kind: "workspace", workspaceId: only.workspaceId };
 	if (onFolder.length > 1)
-		return { kind: "ambiguous", daemonIds: onFolder.map((daemon) => daemon.daemonId) };
+		return { kind: "ambiguous", workspaceIds: onFolder.map((session) => session.workspaceId) };
 	let owner: SessionOwnerProject | undefined;
 	for (const project of ctx.projects) {
 		const root = trimTrailingSlashes(project.path);
@@ -228,7 +228,7 @@ export function sessionExpandText(row: SessionRow): string {
 	return titledByPrompt && prompt.length <= TITLE_MAX ? "" : prompt;
 }
 
-/** A fleet `SessionListEntry` (list_daemon_sessions / EmptyTranscript) as a SessionRow; no pin state. */
+/** A fleet `SessionListEntry` (list_workspace_sessions / EmptyTranscript) as a SessionRow; no pin state. */
 export function sessionRowFromListEntry(
 	entry: SessionListEntry,
 	currentFile: string | undefined,
@@ -292,7 +292,7 @@ export function normalizeSessionTitle(raw: string): string | null {
 export interface SessionDeleteContext {
 	/** The session file attached to this browser, if any. */
 	attachedFile: string | null;
-	/** The daemon advertises rename/delete of non-attached sessions. */
+	/** The session advertises rename/delete of non-attached sessions. */
 	manageAvailable: boolean;
 }
 
@@ -304,8 +304,8 @@ export type SessionDeleteCheck =
 	| { ok: false; reason: string };
 
 /**
- * Client-side guard the store consults before it asks the daemon to delete.
- * The daemon stays authoritative (realpath jail, listing membership, header
+ * Client-side guard the store consults before it asks the session to delete.
+ * The session stays authoritative (realpath jail, listing membership, header
  * id, writer lock); this only refuses what can never be valid.
  */
 export function validateSessionDelete(

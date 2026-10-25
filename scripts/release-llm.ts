@@ -14,7 +14,7 @@
  *   would only keep timing out).
  * - Each turn is a one-shot `omp -p --no-pty --no-session [--profile <p>]`
  *   subprocess call with the prompt as its argument; stdout is the assistant
- *   text. The binary resolves via `Bun.which("omp")`. No session daemon, no
+ *   text. The binary resolves via `Bun.which("omp")`. No session process, no
  *   auth storage, no model registry.
  * - Chunking exists because a single turn cannot reliably emit one polished
  *   bullet per commit for hundreds of commits (long structured JSON output

@@ -67,10 +67,10 @@ export function defaultRuntimeLaunch(
 
 /**
  * The launch of a clone session runtime (bwrap sandbox or host runtime).
- * Clone daemons dial OUT over the callback channel; nobody dials in. The
- * daemon still binds its HTTP listener at boot, and where the runtime shares
+ * Clone sessions dial OUT over the callback channel; nobody dials in. The
+ * session still binds its HTTP listener at boot, and where the runtime shares
  * the host network namespace (a host-network bwrap profile, the host kind)
- * the default port 4721 collides with any other local daemon: an instant,
+ * the default port 4721 collides with any other local session: an instant,
  * silent death ("Failed to start server. Is port 4721 in use?"). Always bind
  * an ephemeral port unless the operator pinned one (env flag mapping is 1:1).
  */
@@ -97,7 +97,7 @@ export function defaultDenyRoots(
 }
 
 /**
- * The command that copies a clone runtime's output into its capped daemon log
+ * The command that copies a clone runtime's output into its capped session log
  * (log-relay.ts, reached as the CLI's internal `log-relay` subcommand). It must
  * outlive the fleet with the runtime, so it is its own process: the source tree
  * runs the CLI entry, the installed bundle runs itself. Append the log path.

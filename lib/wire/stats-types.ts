@@ -241,7 +241,7 @@ export interface StoredFileInfo {
 	bytes: number;
 	/** Last durable append offset recorded in the index sidecar. */
 	ackedBytes: number;
-	/** True when the daemon closed the stream. */
+	/** True when the session closed the stream. */
 	eof: boolean;
 	/** "missing" = indexed but absent on disk; unavailable, never a broken link. */
 	status: StoredFileStatus;

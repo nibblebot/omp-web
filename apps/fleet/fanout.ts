@@ -5,7 +5,7 @@
  * SessionWaker: a stuck reconnecting/ready row is respawned after the redial
  * grace; clone → lifecycle ensure), wait for the pair, send a fire-and-forget
  * `{type:"call", method:"prompt"}` over the pair's control stream, and
- * correlate the daemon's frames:
+ * correlate the session's frames:
  *
  *  - resolve on the `agent_end` event of OUR turn; the result text is the
  *    LAST assistant message's joined text parts (from `message_end` events
@@ -16,17 +16,17 @@
  *    timeout (default 120s → error "timeout").
  *
  * Correlation is scoped to OUR call (audit #21): the control stream carries
- * every turn on the daemon, so `agent_end`/`message_end`/abort events and
+ * every turn on the session, so `agent_end`/`message_end`/abort events and
  * broadcast `{type:"error"}` frames from concurrent turns (browser-driven
  * prompts, other fan-outs) must never settle this promise. Only the
  * `call_result` for our call id gates acceptance; before it arrives every
  * turn frame is ignored, and broadcast error frames (which carry no call id)
  * are never fatal. Per-call failures arrive as id-matched
- * `call_result{ok:false}`; a prompt the daemon never answers settles on the
+ * `call_result{ok:false}`; a prompt the session never answers settles on the
  * timeout.
  *
- * Fan-out prompts are also serialized per daemon (a per-daemonId promise
- * queue): concurrent fan-outs to one daemon can never interleave turns, so
+ * Fan-out prompts are also serialized per session (a per-workspaceId promise
+ * queue): concurrent fan-outs to one session can never interleave turns, so
  * each fan-out's own `call_result` → events → `agent_end` sequence is
  * contiguous on the stream.
  *
@@ -41,7 +41,7 @@ import type { Registry, RegistryEntry } from "./registry";
 import type { SessionWaker } from "./session-waker";
 
 export interface PromptResult {
-	daemonId: string;
+	workspaceId: string;
 	ok: boolean;
 	text?: string;
 	usage?: unknown;
@@ -50,17 +50,17 @@ export interface PromptResult {
 
 /**
  * Minimal transport/lifecycle surfaces the fan-out needs (structural
- * conformance: the server wires the real DaemonTransportRegistry and
+ * conformance: the server wires the real SessionTransportRegistry and
  * WorkspaceLifecycle; fan-out never imports them to avoid a cycle).
  */
 export interface FanoutTransport {
 	pairStatus(workspaceId: string): { paired: boolean };
 	onPairChange(workspaceId: string, cb: (status: { paired: boolean }) => void): () => void;
-	sendToDaemon(
+	sendToSession(
 		workspaceId: string,
 		draft: { streamId: string; kind: "command"; payload: unknown },
 	): Promise<unknown>;
-	onDaemonEnvelope(
+	onSessionEnvelope(
 		workspaceId: string,
 		cb: (envelope: { kind: string; streamId: string; payload: unknown }) => void,
 	): () => void;
@@ -77,10 +77,10 @@ export interface FanoutDeps {
 const DEFAULT_WAIT_MS = 120_000;
 
 /**
- * Per-daemon serialization (audit #21): one fan-out prompt turn in flight per
- * daemon. Each promptEntry chains its whole wake → send → correlate run
- * behind the previous one for the same daemonId, so two concurrent fan-outs
- * to one daemon cannot interleave turns on the control stream. Entries are
+ * Per-session serialization (audit #21): one fan-out prompt turn in flight per
+ * session. Each promptEntry chains its whole wake → send → correlate run
+ * behind the previous one for the same workspaceId, so two concurrent fan-outs
+ * to one session cannot interleave turns on the control stream. Entries are
  * dropped once idle so the map stays bounded by live/queued turns.
  */
 const promptQueues = new Map<string, Promise<unknown>>();
@@ -91,20 +91,20 @@ export async function promptEntry(
 	text: string,
 	waitMs?: number,
 ): Promise<PromptResult> {
-	const daemonId = entry.daemonId;
-	const previous = promptQueues.get(daemonId) ?? Promise.resolve();
+	const workspaceId = entry.workspaceId;
+	const previous = promptQueues.get(workspaceId) ?? Promise.resolve();
 	const run = async (): Promise<PromptResult> => {
-		const current = deps.registry.get(daemonId) ?? entry;
+		const current = deps.registry.get(workspaceId) ?? entry;
 		return await promptSession(deps, current, text, waitMs);
 	};
-	// Run only after the previous turn for this daemon fully settles; a
+	// Run only after the previous turn for this session fully settles; a
 	// rejected predecessor must not block the queue (promptEntry resolves
 	// normally in practice, but a stray throw would otherwise stall it).
 	const turn = previous.then(run, run);
 	const tail = turn.catch(() => {});
-	promptQueues.set(daemonId, tail);
+	promptQueues.set(workspaceId, tail);
 	void tail.then(() => {
-		if (promptQueues.get(daemonId) === tail) promptQueues.delete(daemonId);
+		if (promptQueues.get(workspaceId) === tail) promptQueues.delete(workspaceId);
 	});
 	return turn;
 }
@@ -112,7 +112,7 @@ export async function promptEntry(
 /**
  * Prompt one session over its callback pair: wake it when the pair is down,
  * then send kind:"command" on the transport control stream and correlate the
- * frames the daemon mirrors there. No offline queue and no blind
+ * frames the session mirrors there. No offline queue and no blind
  * retry: a missing transport or an unpairable session answers a typed
  * failure immediately.
  */
@@ -122,35 +122,35 @@ async function promptSession(
 	text: string,
 	waitMs?: number,
 ): Promise<PromptResult> {
-	const daemonId = entry.daemonId;
+	const workspaceId = entry.workspaceId;
 	const transport = deps.transport;
 	if (!transport) {
-		return { daemonId, ok: false, error: "prompt is unavailable: no callback transport" };
+		return { workspaceId, ok: false, error: "prompt is unavailable: no callback transport" };
 	}
 	try {
 		await deps.waker.wake(entry);
-		await deps.waker.waitForPair(daemonId);
+		await deps.waker.waitForPair(workspaceId);
 	} catch (err) {
-		return { daemonId, ok: false, error: (err as Error).message };
+		return { workspaceId, ok: false, error: (err as Error).message };
 	}
 	const id = randomUUID();
 	const cmd: ClientCommand = { type: "call", id, method: "prompt", args: [text] };
-	const correlation = correlate(daemonId, id, waitMs, (cb) =>
-		transport.onDaemonEnvelope(daemonId, (envelope) => {
+	const correlation = correlate(workspaceId, id, waitMs, (cb) =>
+		transport.onSessionEnvelope(workspaceId, (envelope) => {
 			if (envelope.kind !== "frame" || envelope.streamId !== CALLBACK_CONTROL_STREAM_ID) return;
 			const payload = envelope.payload;
 			if (typeof payload === "object" && payload !== null) cb(payload as ServerFrame);
 		}),
 	);
 	try {
-		await transport.sendToDaemon(daemonId, {
+		await transport.sendToSession(workspaceId, {
 			streamId: CALLBACK_CONTROL_STREAM_ID,
 			kind: "command",
 			payload: cmd,
 		});
 	} catch {
 		correlation.cancel();
-		return { daemonId, ok: false, error: "daemon not connected" };
+		return { workspaceId, ok: false, error: "session not connected" };
 	}
 	return await correlation.promise;
 }
@@ -178,7 +178,7 @@ export async function fanOut(
  * fatal; our own call failures arrive as id-matched `call_result{ok:false}`.
  */
 function correlate(
-	daemonId: string,
+	workspaceId: string,
 	callId: string,
 	waitMs: number | undefined,
 	subscribe: (cb: (frame: ServerFrame) => void) => () => void,
@@ -190,7 +190,7 @@ function correlate(
 	let usage: unknown;
 	let unsubscribe: () => void = () => {};
 	const timeoutMs = waitMs ?? DEFAULT_WAIT_MS;
-	const timer = setTimeout(() => settle({ daemonId, ok: false, error: "timeout" }), timeoutMs);
+	const timer = setTimeout(() => settle({ workspaceId, ok: false, error: "timeout" }), timeoutMs);
 	unsubscribe = subscribe(handleFrame);
 	const cancel = (): void => {
 		if (settled) return;
@@ -211,7 +211,7 @@ function correlate(
 		// Our call's acceptance verdict gates everything that follows.
 		if (frame.type === "call_result" && frame.id === callId) {
 			if (frame.ok === false) {
-				settle({ daemonId, ok: false, error: frame.error ?? "prompt call failed" });
+				settle({ workspaceId, ok: false, error: frame.error ?? "prompt call failed" });
 				return;
 			}
 			accepted = true;
@@ -229,7 +229,7 @@ function correlate(
 		if (typeof ev !== "object" || ev === null || !("type" in ev) || typeof ev.type !== "string")
 			return;
 		if (ev.type.includes("abort")) {
-			settle({ daemonId, ok: false, error: "aborted" });
+			settle({ workspaceId, ok: false, error: "aborted" });
 			return;
 		}
 		if (ev.type === "message_end" && "message" in ev) {
@@ -260,7 +260,7 @@ function correlate(
 		}
 		if (ev.type === "agent_end") {
 			if ("usage" in ev) usage = ev.usage;
-			const result: PromptResult = { daemonId, ok: true };
+			const result: PromptResult = { workspaceId, ok: true };
 			if (lastText !== undefined) result.text = lastText;
 			if (usage !== undefined) result.usage = usage;
 			settle(result);

@@ -11,7 +11,7 @@ export interface SubagentProgressView {
 	currentToolArgs?: string;
 	currentToolIntent?: string;
 	currentToolStartMs?: number;
-	/** The newest finished tool call (the daemon's wire projection; no bulk history). */
+	/** The newest finished tool call (the session's wire projection; no bulk history). */
 	lastTool?: { tool: string; args?: string; intent?: string; isError?: boolean };
 	/** The agent's latest stated intent, kept after its tool call finishes. */
 	lastIntent?: string;

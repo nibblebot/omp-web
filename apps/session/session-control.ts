@@ -13,11 +13,11 @@ import type { StreamResyncControl } from "#lib/wire/callback-protocol";
 import { isRingedDeltaType } from "./client-delivery";
 
 /**
- * Daemon control broker: virtual streams over the callback pair
+ * Session control broker: virtual streams over the callback pair
  * (Transport/Lifecycle 2026-09-06 contracts).
  *
- * The daemon dials the callback pair; the fleet manages per-browser virtual
- * streams and fleet-to-daemon controls. This module owns the daemon half:
+ * The session dials the callback pair; the fleet manages per-browser virtual
+ * streams and fleet-to-session controls. This module owns the session half:
  *
  * - Browser streams: per `browser/<connId>` replay ring of emitted frame
  *   envelopes. stream_open (lastSeq = replay floor) replays ring frames with
@@ -51,7 +51,7 @@ import { isRingedDeltaType } from "./client-delivery";
 
 // ── deps ───────────────────────────────────────────────────────────────────
 
-export interface DaemonControlDeps {
+export interface SessionControlDeps {
 	/** Mounted command dispatch; returns the answer payload or undefined. */
 	handleCommand: (command: unknown) => Promise<unknown>;
 	/**
@@ -145,7 +145,7 @@ interface BrowserStream {
 	roomWaiters: Set<() => void>;
 }
 
-export interface DaemonControlStatus {
+export interface SessionControlStatus {
 	streams: Array<{ streamId: string; lastSeq: number; ringEntries: number; ringBytes: number }>;
 }
 
@@ -202,7 +202,7 @@ function isUnmirroredToControl(frame: Record<string, unknown>): boolean {
 	}
 }
 
-export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
+export function createSessionControl(deps: SessionControlDeps): SessionControl {
 	const streams = new Map<string, BrowserStream>();
 	let stopped = false;
 	/** connectionId of the callback pair the fleet is currently driving. */
@@ -592,7 +592,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		deps.onBrowserStreamsChange?.(0);
 	};
 
-	const status = (): DaemonControlStatus => ({
+	const status = (): SessionControlStatus => ({
 		streams: [...streams.values()].map((s) => ({
 			streamId: s.streamId,
 			lastSeq: s.lastSeq,
@@ -647,8 +647,8 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	};
 }
 
-export interface DaemonControl {
-	/** Route one fleet-to-daemon envelope (kind command/control) to its handler. */
+export interface SessionControl {
+	/** Route one fleet-to-session envelope (kind command/control) to its handler. */
 	handleEnvelope(envelope: CallbackEnvelope): void;
 	/** Mirror a session-scoped frame onto streamId "control" + browser streams (verbatim payload). */
 	mirror(frame: Record<string, unknown>): void;
@@ -657,7 +657,7 @@ export interface DaemonControl {
 	/** Publish a frame directly to one stream; ringed deltas ring on browser streams. */
 	publish(streamId: string, frame: Record<string, unknown>): void;
 	stop(): void;
-	status(): DaemonControlStatus;
+	status(): SessionControlStatus;
 	/**
 	 * Live callback-pair browser streams (virtual; not ClientConsumers). 0 while
 	 * the pair is down: the streams survive a drop and re-prime on the new

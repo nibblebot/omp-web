@@ -4,8 +4,8 @@
  * patterns) never matches `*.testkit.ts`, so this never runs as a suite.
  *
  * Everything here exercises loopback HTTP against a real fleet server. No
- * omp-session children are spawned; tests that need a daemon's side of the
- * callback pair use callback-daemon.testkit.ts.
+ * omp-session children are spawned; tests that need a session's side of the
+ * callback pair use callback-session.testkit.ts.
  */
 
 import { expect } from "bun:test";

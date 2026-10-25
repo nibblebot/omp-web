@@ -150,16 +150,16 @@ describe("drafts (text-file chips)", () => {
 
 describe("drafts (per-session partitions)", () => {
 	test("each attached session gets its own slot; none while its id is pending", () => {
-		const prior = { currentSessionId: state.currentSessionId, sessionId: state.sessionId };
+		const prior = { currentWorkspaceId: state.currentWorkspaceId, sessionId: state.sessionId };
 		try {
-			setState({ currentSessionId: "d1", sessionId: "s1" });
+			setState({ currentWorkspaceId: "d1", sessionId: "s1" });
 			const first = currentDraftKey();
-			setState({ currentSessionId: "d2", sessionId: "s1" });
-			const otherDaemon = currentDraftKey();
-			setState({ currentSessionId: "d1", sessionId: "s2" });
+			setState({ currentWorkspaceId: "d2", sessionId: "s1" });
+			const otherWorkspace = currentDraftKey();
+			setState({ currentWorkspaceId: "d1", sessionId: "s2" });
 			const otherSession = currentDraftKey();
 			expect(first).not.toBeNull();
-			expect(new Set([first, otherDaemon, otherSession].map((k) => k?.sessionId)).size).toBe(3);
+			expect(new Set([first, otherWorkspace, otherSession].map((k) => k?.sessionId)).size).toBe(3);
 			setState({ sessionId: "" });
 			expect(currentDraftKey()).toBeNull();
 		} finally {

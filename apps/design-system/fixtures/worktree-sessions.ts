@@ -52,7 +52,7 @@ export function worktreeSessions(now: number): SessionListEntry[] {
 
 const TOPICS = [
 	"Migrate roster rows to content height",
-	"Settle list_daemon_sessions waiters per limit",
+	"Settle list_workspace_sessions waiters per limit",
 	"Resume picker keyboard navigation",
 	"Anchor migration for stale annotations",
 	"Fix the sidebar scroll jump on wake",

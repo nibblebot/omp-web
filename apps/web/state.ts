@@ -10,12 +10,17 @@ import type { UsageReport } from "@oh-my-pi/pi-ai";
 import type { TextAttachment } from "./prompt/attachments";
 import { batch } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import { OMP_PROTO, CLIENT_SILENCE_DEADLINE_MS, daemonsKey } from "#lib/wire/protocol";
+import {
+	OMP_PROTO,
+	CLIENT_SILENCE_DEADLINE_MS,
+	daemonsKey,
+	isSessionScopedFrameType,
+} from "#lib/wire/protocol";
 import type {
 	AvailableSlashCommand,
-	DaemonEntry,
+	RosterEntry,
 	DaemonInfo,
-	DaemonStatus,
+	SessionStatus,
 	ImageArg,
 	ModelBrowserEntry,
 	PublicProviderProfile,
@@ -53,7 +58,7 @@ import { cancelUiRequest } from "./store/modals";
 import {
 	resetPendingProjects,
 	deletePendingIds,
-	resumeRestartedDaemons,
+	resumeRestartedSessions,
 	settleAddProject,
 	settleProjectBranches,
 	settleWorkspaceCreate,
@@ -69,11 +74,11 @@ import {
 import { applySettingsModel, refreshSettings } from "./store/settings";
 import {
 	resetPendingSessionsFiles,
-	settleDaemonSessions,
+	settleWorkspaceSessions,
 	settleFiles,
 	settleProjectWakes,
 	settleSessions,
-	switchToDaemon,
+	switchToSession,
 } from "./store/roster";
 import { dismissToast, pushToast, type ToastAction } from "./store/toasts";
 import { parseRoute } from "./store/route";
@@ -271,7 +276,7 @@ export type ModalName =
 	| "btw"
 	| "share"
 	// Worktree session list (chevron on a roster row): the
-	// daemon it lists comes from state.worktreeSessionsId.
+	// session it lists comes from state.worktreeSessionsId.
 	| "worktree-sessions"
 	| "palette";
 
@@ -320,7 +325,7 @@ export function initialView(
 ): "chat" | "analysis" {
 	if (!analysisEnabled) return "chat";
 	// Analysis deep links (#/s/<file>, #/stored/<workspaceId>/<sessionId>) boot
-	// into Analysis; session routes (#/d/<daemonId>[/s/<sessionId>]) boot into
+	// into Analysis; session routes (#/w/<workspaceId>[/s/<sessionId>]) boot into
 	// Chat. Both override the persisted Chat/Analysis choice.
 	const route = parseRoute(hash);
 	if (route.kind === "analysis") return "analysis";
@@ -400,17 +405,17 @@ export const [state, setState] = createStore({
 	// Phase 2: server-assigned handle of the live session this tab is attached
 	// to (distinct from sessionId above, the agent's own id, which changes on
 	// switchSession). Session-scoped frames for any other handle are dropped.
-	currentSessionId: "",
+	currentWorkspaceId: "",
 	// What the transcript pane is doing for a session switch (C3). `waking` /
 	// `attaching` / `failed` are written only by the switch in store/roster.ts
-	// (switchToDaemon and the paths that share it), `loaded` only by loadHistory,
+	// (switchToSession and the paths that share it), `loaded` only by loadHistory,
 	// `idle` when no session is selected. The boot session is always "" (a
 	// remembered route attaches through the switch once the roster lands).
 	transcriptPhase: "idle" as TranscriptPhase,
 	// Why the switch failed; null unless `transcriptPhase` is `failed`.
 	transcriptError: null as string | null,
-	// The daemon the in-flight (or failed) switch targets; null when the pane is
-	// loaded/idle, and for a re-attach of the attached daemon (no transition).
+	// The session the in-flight (or failed) switch targets; null when the pane is
+	// loaded/idle, and for a re-attach of the attached session (no transition).
 	transcriptTarget: null as string | null,
 	sessionFile: undefined as string | undefined,
 	contextUsage: undefined as WebSessionState["contextUsage"],
@@ -449,7 +454,7 @@ export const [state, setState] = createStore({
 	protoMismatch: false,
 	// Browser-auth state: mirrored from apps/web/store/auth.ts by
 	// subscribeAuth. "unknown" until the first session probe; "disabled"
-	// (fleet/daemon without browser auth) behaves exactly as before this
+	// (fleet/session without browser auth) behaves exactly as before this
 	// integration. signedOut opens the sign-in modal.
 	authStatus: "unknown" as "unknown" | "signedOut" | "signedIn" | "disabled",
 	authExpiresAt: undefined as number | undefined,
@@ -481,15 +486,15 @@ export const [state, setState] = createStore({
 	// Search text the Settings sheet opens with (`/settings <query>`); set
 	// alongside modal "settings" on every open, so a bare open passes "".
 	settingsQuery: "" as string,
-	// daemonId the delete-workspace confirm dialog targets (worktree guard
+	// workspaceId the delete-workspace confirm dialog targets (worktree guard
 	// evidence or clone verified-delete).
 	deleteWorkspaceTarget: null as string | null,
 	// projectId the remove-project confirm targets.
 	removeProjectTarget: null as string | null,
-	// daemonId whose details dialog is open (fleet-scoped: survives session
+	// workspaceId whose details dialog is open (fleet-scoped: survives session
 	// switches; the dialog closes itself when the roster entry disappears).
-	daemonDetailsId: null as string | null,
-	// daemonId whose worktree session list dialog is open (state.modal
+	sessionDetailsId: null as string | null,
+	// workspaceId whose worktree session list dialog is open (state.modal
 	// "worktree-sessions"; ModalHost closes it when the roster entry disappears).
 	worktreeSessionsId: null as string | null,
 	// Image shown in the full-size lightbox (session content, so
@@ -506,22 +511,22 @@ export const [state, setState] = createStore({
 	// the sheet clears it on mount. Null = the default tab.
 	settingsTab: null as string | null,
 	// Fleet edge roster (roster frame). Patched in place by
-	// daemon_status frames; NOT cleared by resetSessionView (it is
+	// session_status frames; NOT cleared by resetSessionView (it is
 	// fleet-scoped, not session-scoped). Entries carry projectId
 	// (Phase 5: project-first grouping + linked-worktree eligibility).
-	daemonRoster: [] as DaemonEntry[],
+	sessionRoster: [] as RosterEntry[],
 	// True once the first roster frame landed (never reset: it survives session
 	// resets and reconnects); lets the sidebar tell boot priming from a new row.
 	rosterLoaded: false as boolean,
-	// Per-daemon realtime activity (streaming / blocked) fed by the edge's
-	// additive fleet-scoped `daemon_activity` frames (derived from each
-	// daemon's tapped stream; primed for every known daemon whatever its
+	// Per-session realtime activity (streaming / blocked) fed by the edge's
+	// additive fleet-scoped `session_activity` frames (derived from each
+	// session's tapped stream; primed for every known session whatever its
 	// status). Survives resetSessionView / session switches
-	// like daemonRoster; pruned on roster frames for ids that left the fleet.
-	daemonActivity: {} as Record<string, { streaming: boolean; blocked: boolean }>,
+	// like sessionRoster; pruned on roster frames for ids that left the fleet.
+	sessionActivity: {} as Record<string, { streaming: boolean; blocked: boolean }>,
 	// Phase 5: first-class registered projects (registered_projects frame;
-	// fleet-scoped like daemonRoster; it survives session resets, and
-	// zero-daemon projects still render).
+	// fleet-scoped like sessionRoster; it survives session resets, and
+	// zero-session projects still render).
 	registeredProjects: [] as RegisteredProject[],
 	// Secret-free provider profile catalog (optional
 	// registered_projects.providerProfiles; omitted when the fleet has none
@@ -533,7 +538,7 @@ export const [state, setState] = createStore({
 	// above; it survives session resets.
 	fleetConfigPath: null as string | null,
 	// Phase 5: delete-worktree guard evidence (worktree_delete_info unicast),
-	// keyed by daemonId.
+	// keyed by workspaceId.
 	worktreeDeleteInfo: {} as Record<string, WorktreeDeleteInfo>,
 	// Drawer/docked split (see drawerMedia above); drives drawer-only rules in the store.
 	drawerViewport,
@@ -571,12 +576,12 @@ export const [state, setState] = createStore({
 	// Delay (ms) of the next scheduled manual reconnect; 0 = stream open (no
 	// retry pending). Mirrors the module-level backoff ladder for the panel.
 	reconnectDelay: 0,
-	// The attached daemon id whose session process stopped or crashed (asleep/error:
+	// The attached workspace id whose session process stopped or crashed (asleep/error:
 	// the view was cleared by reconcileAttachedSession and Restart makes sense);
-	// "" when nothing is down. A daemon REMOVED from the roster never sets it: the
+	// "" when nothing is down. A session REMOVED from the roster never sets it: the
 	// view moves to a neighbouring session instead (see switchAwayFromRemoved).
 	sessionDownId: "",
-	// True once the attached daemon has stayed "reconnecting" past the grace
+	// True once the attached session has stayed "reconnecting" past the grace
 	// window: a routine renewal or brief re-dial never shows the strip.
 	attachedReconnecting: false,
 	// Phase 11: desktop notifications on turn completion while hidden
@@ -621,7 +626,7 @@ export const [state, setState] = createStore({
 	// text so a burst of the same transition doesn't re-announce.
 	announcement: "",
 	// Fleet/app-scoped ephemeral notifications (worktree_removed on-disk
-	// eviction toasts); survives session resets like daemonRoster.
+	// eviction toasts); survives session resets like sessionRoster.
 	toasts: [] as { id: number; text: string; action?: ToastAction }[],
 });
 
@@ -649,15 +654,15 @@ export type DaemonLogsResult = { text: string; cursor: number; state: string };
 // Dev-only inspection handle (tests drive the UI through it).
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__ompState = state;
 
-/** finding #P1: announce a daemon's transition to a terminal rung (ready/error).
+/** finding #P1: announce a session's transition to a terminal rung (ready/error).
  *  First sighting (boot priming) and repeated identical statuses are silent.
  *  Deliberately NOT gated on session readiness; the roster is fleet-scoped,
- *  so a tab with no attached session still hears its daemons come
+ *  so a tab with no attached session still hears its sessions come
  *  up or fall over. */
-function announceDaemonStatus(
-	prev: DaemonEntry | undefined,
+function announceSessionStatus(
+	prev: RosterEntry | undefined,
 	name: string,
-	status: DaemonStatus,
+	status: SessionStatus,
 ): void {
 	if (!prev || prev.status === status) return;
 	if (status === "ready" || status === "error") announce(`${name} ${status}`);
@@ -723,8 +728,8 @@ export function loadHistory(messages: AgentMessage[]): void {
 		workingIntent: undefined,
 		modelSynced: false,
 		// A history frame of the OLD session landing while a switch to another
-		// daemon is pending must not end that switch's wait.
-		...(state.transcriptTarget === null || state.transcriptTarget === state.currentSessionId
+		// session is pending must not end that switch's wait.
+		...(state.transcriptTarget === null || state.transcriptTarget === state.currentWorkspaceId
 			? { transcriptPhase: "loaded" as const, transcriptError: null, transcriptTarget: null }
 			: {}),
 	});
@@ -939,12 +944,12 @@ export function resetBrowserSocket(): void {
 	setState("protoMismatch", false);
 }
 
-/** The fleet roster with no daemon attached yet: settings go through the
+/** The fleet roster with no session attached yet: settings go through the
  *  roster's /ctl relay until an attach lands. Once attached, settings go
  *  through the session RPC for per-session option lists and live side
  *  effects. */
 export function fleetSettingsActive(): boolean {
-	return state.currentSessionId === "";
+	return state.currentWorkspaceId === "";
 }
 
 // ---------------------------------------------------------------------------
@@ -955,11 +960,11 @@ export function fleetSettingsActive(): boolean {
 // ---------------------------------------------------------------------------
 
 /** The roster after one row-level delta: removed rows dropped, upserted rows replacing their id's row or appended in arrival order. */
-function mergeRosterDelta(delta: { upserted: DaemonEntry[]; removed: string[] }): DaemonEntry[] {
+function mergeRosterDelta(delta: { upserted: RosterEntry[]; removed: string[] }): RosterEntry[] {
 	const removed = new Set(delta.removed);
-	const next = unwrap(state.daemonRoster).filter((d) => !removed.has(d.daemonId));
+	const next = unwrap(state.sessionRoster).filter((d) => !removed.has(d.workspaceId));
 	for (const row of delta.upserted) {
-		const at = next.findIndex((d) => d.daemonId === row.daemonId);
+		const at = next.findIndex((d) => d.workspaceId === row.workspaceId);
 		if (at === -1) next.push(row);
 		else next[at] = row;
 	}
@@ -974,7 +979,7 @@ function sameRosterField(a: unknown, b: unknown): boolean {
 }
 
 /** The fields of `prev` that `row` changes, absent ones as `undefined` (a store set of `undefined` deletes the key); undefined when nothing differs. */
-function rosterRowPatch(prev: DaemonEntry, row: DaemonEntry): Partial<DaemonEntry> | undefined {
+function rosterRowPatch(prev: RosterEntry, row: RosterEntry): Partial<RosterEntry> | undefined {
 	const patch: Record<string, unknown> = {};
 	let changed = false;
 	const before = prev as unknown as Record<string, unknown>;
@@ -984,11 +989,11 @@ function rosterRowPatch(prev: DaemonEntry, row: DaemonEntry): Partial<DaemonEntr
 		patch[key] = after[key];
 		changed = true;
 	}
-	return changed ? (patch as Partial<DaemonEntry>) : undefined;
+	return changed ? (patch as Partial<RosterEntry>) : undefined;
 }
 
 /**
- * Replace the roster with `next` while every surviving daemonId keeps its
+ * Replace the roster with `next` while every surviving workspaceId keeps its
  * store object (same proxy, only changed fields notify), so keyed <For>
  * consumers (sidebar rows) stay mounted across roster frames. Rows with new
  * ids adopt the frame's object into the store; removed ids drop out; the
@@ -998,44 +1003,44 @@ function rosterRowPatch(prev: DaemonEntry, row: DaemonEntry): Partial<DaemonEntr
  * run on implements `reconcile` as an index-wise merge (no keying, holes on
  * shrink), so identity could neither be guaranteed nor tested there.
  */
-function applyRoster(next: readonly DaemonEntry[]): void {
-	const current = unwrap(state.daemonRoster);
-	const before = new Map(current.map((d) => [d.daemonId, d]));
+function applyRoster(next: readonly RosterEntry[]): void {
+	const current = unwrap(state.sessionRoster);
+	const before = new Map(current.map((d) => [d.workspaceId, d]));
 	batch(() => {
 		const rows = next.map((row) => {
-			const prev = before.get(row.daemonId);
+			const prev = before.get(row.workspaceId);
 			if (prev === undefined || prev === row) return row;
 			const patch = rosterRowPatch(prev, row);
 			if (patch !== undefined) {
-				setState("daemonRoster", (d) => d.daemonId === row.daemonId, patch);
+				setState("sessionRoster", (d) => d.workspaceId === row.workspaceId, patch);
 			}
 			return prev;
 		});
 		if (rows.length !== current.length || rows.some((r, i) => r !== current[i])) {
-			setState("daemonRoster", rows);
+			setState("sessionRoster", rows);
 		}
 	});
 }
 
 /** Sort rank of a checkout row: main checkout, worktree, then clone. */
-function checkoutRank(d: DaemonEntry): number {
+function checkoutRank(d: RosterEntry): number {
 	if (d.workspaceKind === "clone") return 2;
 	if (d.workspaceKind === "worktree" || d.worktreeOf !== undefined) return 1;
 	return 0;
 }
 
-export function daemonsByProject(): { project: RegisteredProject; daemons: DaemonEntry[] }[] {
+export function sessionsByProject(): { project: RegisteredProject; sessions: RosterEntry[] }[] {
 	const groups = state.registeredProjects.map((project) => ({
 		project,
-		daemons: [] as DaemonEntry[],
+		sessions: [] as RosterEntry[],
 	}));
 	const byProjectId = new Map(state.registeredProjects.map((p, i) => [p.projectId, i]));
-	for (const d of state.daemonRoster) {
+	for (const d of state.sessionRoster) {
 		const index = d.projectId !== undefined ? byProjectId.get(d.projectId) : undefined;
-		if (index !== undefined) groups[index].daemons.push(d);
+		if (index !== undefined) groups[index].sessions.push(d);
 	}
 	for (const g of groups) {
-		g.daemons.sort((a, b) => {
+		g.sessions.sort((a, b) => {
 			const rank = checkoutRank(a) - checkoutRank(b);
 			if (rank !== 0) return rank;
 			if (checkoutRank(a) === 1) return (a.branch ?? "").localeCompare(b.branch ?? "");
@@ -1045,20 +1050,20 @@ export function daemonsByProject(): { project: RegisteredProject; daemons: Daemo
 	return groups;
 }
 
-/** Roster statuses that mean the daemon is definitively not serving a
+/** Roster statuses that mean the session is definitively not serving a
  *  session: the attached chat column must yield to the empty pane. */
-const DEAD_DAEMON_STATUSES = new Set<DaemonStatus>(["asleep", "error"]);
+const DEAD_SESSION_STATUSES = new Set<SessionStatus>(["asleep", "error"]);
 
 /** True when the roster entry is missing or its status is terminal-dead.
- *  Transitional statuses ("connecting"/"session"/"resolving") and "ready"
- *  are NEVER dead; a waking daemon passes through them. */
-export function isDaemonDead(entry: DaemonEntry | undefined): boolean {
-	return entry === undefined || DEAD_DAEMON_STATUSES.has(entry.status);
+ *  Transitional statuses ("connecting"/"resolving") and "ready"
+ *  are NEVER dead; a waking session passes through them. */
+export function isSessionDead(entry: RosterEntry | undefined): boolean {
+	return entry === undefined || DEAD_SESSION_STATUSES.has(entry.status);
 }
 
 /** Transport state for the header strip and the session-bound action gate:
  *  the browser socket is up (connected); the stream is retrying, or the
- *  attached daemon is re-dialing (reconnecting); the attached session process
+ *  attached session is re-dialing (reconnecting); the attached session process
  *  is gone (offline). Session-bound actions run only when connected. */
 export type ConnectionState = "connected" | "reconnecting" | "offline";
 
@@ -1073,9 +1078,9 @@ export function connectionState(): ConnectionState {
 const RECONNECT_GRACE_MS = 1500;
 let reconnectGraceTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** Track the attached daemon's "reconnecting" status through the grace window. */
+/** Track the attached session's "reconnecting" status through the grace window. */
 function syncAttachedReconnecting(): void {
-	const current = state.daemonRoster.find((d) => d.daemonId === state.currentSessionId);
+	const current = state.sessionRoster.find((d) => d.workspaceId === state.currentWorkspaceId);
 	if (current?.status !== "reconnecting") {
 		clearTimeout(reconnectGraceTimer);
 		reconnectGraceTimer = undefined;
@@ -1085,21 +1090,21 @@ function syncAttachedReconnecting(): void {
 	if (state.attachedReconnecting || reconnectGraceTimer !== undefined) return;
 	reconnectGraceTimer = setTimeout(() => {
 		reconnectGraceTimer = undefined;
-		const still = state.daemonRoster.find((d) => d.daemonId === state.currentSessionId);
+		const still = state.sessionRoster.find((d) => d.workspaceId === state.currentWorkspaceId);
 		if (still?.status === "reconnecting") setState("attachedReconnecting", true);
 	}, RECONNECT_GRACE_MS);
 }
 
 /** True when this tab has a live attached session to render. The attached
- *  roster entry must exist and not be dead; a daemon with an attach in
+ *  roster entry must exist and not be dead; a session with an attach in
  *  flight counts as live (the roster lags a wake). */
 export function hasLiveSession(): boolean {
-	if (state.currentSessionId === "") return false;
-	const entry = state.daemonRoster.find((d) => d.daemonId === state.currentSessionId);
-	if (!isDaemonDead(entry)) return true;
+	if (state.currentWorkspaceId === "") return false;
+	const entry = state.sessionRoster.find((d) => d.workspaceId === state.currentWorkspaceId);
+	if (!isSessionDead(entry)) return true;
 	// A user stop keeps the transcript behind the stopped strip (App.tsx); a removed entry still clears.
-	if (entry !== undefined && isUserStopped(state.currentSessionId)) return true;
-	return pendingAttachTarget() === state.currentSessionId;
+	if (entry !== undefined && isUserStopped(state.currentWorkspaceId)) return true;
+	return pendingAttachTarget() === state.currentWorkspaceId;
 }
 
 /** True while the transcript is waking, attaching or showing a failed switch: the
@@ -1116,58 +1121,58 @@ export function applyRosterFrame(
 	// A delta patches the current roster; the reconciliation below runs on
 	// the full list either way, so both frames settle identically. The
 	// store applies it with a keyed reconcile (below), so rows keep identity.
-	const daemons = frame.type === "roster" ? frame.daemons : mergeRosterDelta(frame);
+	const sessions = frame.type === "roster" ? frame.entries : mergeRosterDelta(frame);
 	// finding #P1: diff the replacement roster against what we had.
 	// First sighting is boot priming (silent); later transitions to
 	// ready/error announce.
-	const rosterBefore = state.daemonRoster;
-	for (const entry of daemons) {
-		announceDaemonStatus(
-			rosterBefore.find((d) => d.daemonId === entry.daemonId),
+	const rosterBefore = state.sessionRoster;
+	for (const entry of sessions) {
+		announceSessionStatus(
+			rosterBefore.find((d) => d.workspaceId === entry.workspaceId),
 			entry.name,
 			entry.status,
 		);
 	}
-	// The fleet edge's daemon roster (sidebar swaps to the session
+	// The fleet edge's session roster (sidebar swaps to the session
 	// list).
 	// Phase 5: entries carry projectId (project-first grouping and
-	// linked-worktree eligibility). DaemonEntry owns those fields, so they
+	// linked-worktree eligibility). RosterEntry owns those fields, so they
 	// flow through wholesale with the list.
-	// Surviving daemonIds keep their store object (fields patched, absent
+	// Surviving workspaceIds keep their store object (fields patched, absent
 	// ones deleted), so keyed rows stay mounted across roster frames.
-	switchAwayFromRemoved(daemons);
-	idleBeforeSessionDies(daemons.find((d) => d.daemonId === state.currentSessionId));
-	applyRoster(daemons);
+	switchAwayFromRemoved(sessions);
+	idleBeforeSessionDies(sessions.find((d) => d.workspaceId === state.currentWorkspaceId));
+	applyRoster(sessions);
 	if (!state.rosterLoaded) setState("rosterLoaded", true);
 	settleProjectWakes();
-	resumeRestartedDaemons(daemons);
-	// Removed daemons never reuse ids, but don't let the set grow unbounded.
-	pruneUnread(new Set(daemons.map((d) => d.daemonId)));
-	// Same for daemonActivity: drop entries whose id left the roster.
+	resumeRestartedSessions(sessions);
+	// Removed sessions never reuse ids, but don't let the set grow unbounded.
+	pruneUnread(new Set(sessions.map((d) => d.workspaceId)));
+	// Same for sessionActivity: drop entries whose id left the roster.
 	// setState MERGES plain-object values, so a shrunken record would
 	// never delete keys. Reconcile diffs to the pruned record instead.
 	// Skip it when nothing dropped (no useless store notification).
 	{
-		const kept = new Set(daemons.map((d) => d.daemonId));
-		const current = state.daemonActivity;
+		const kept = new Set(sessions.map((d) => d.workspaceId));
+		const current = state.sessionActivity;
 		let dropped = false;
 		const next: Record<string, { streaming: boolean; blocked: boolean }> = {};
 		for (const id of Object.keys(current)) {
 			if (kept.has(id)) next[id] = current[id]!;
 			else dropped = true;
 		}
-		if (dropped) setState("daemonActivity", reconcile(next));
+		if (dropped) setState("sessionActivity", reconcile(next));
 	}
 	// Persisted user-stop marks are confirmed (or dropped) against the roster first.
-	reconcileUserStopped(daemons);
-	// Roster truth wins over the attached chat: if the daemon we were
+	reconcileUserStopped(sessions);
+	// Roster truth wins over the attached chat: if the session we were
 	// attached to vanished or went asleep, drop the session view (the
 	// roster itself is fleet-scoped and survives).
 	reconcileAttachedSession();
 	pushDebug(
 		"info",
 		"roster",
-		`roster frame: ${daemons.length} session process${daemons.length === 1 ? "" : "es"}`,
+		`roster frame: ${sessions.length} session process${sessions.length === 1 ? "" : "es"}`,
 	);
 }
 
@@ -1176,7 +1181,7 @@ function resetSessionView(): void {
 	setState("review", resetReviewState(state.review));
 	resetBrowserUiRequests();
 	setState({
-		// Unknown until the new daemon's state frame lands; deep-link URL sync relies on it.
+		// Unknown until the new session's state frame lands; deep-link URL sync relies on it.
 		sessionId: "",
 		subagentsLoaded: { mirror: false, roster: false },
 		sessionScope: undefined,
@@ -1212,24 +1217,24 @@ function resetSessionView(): void {
 }
 
 /** Roster truth wins over the attached chat column: after a roster or
- *  daemon_status update, if the daemon we are attached to is missing or
+ *  session_status update, if the session we are attached to is missing or
  *  terminal-dead (asleep/error), drop the session view. Only asleep/error mark the
  *  session down (`sessionDownId`, the offline strip with Restart); a removed entry
  *  just clears the view to the no-session pane, after switchAwayFromRemoved had its
  *  chance to move to a neighbour. The roster itself is fleet-scoped and survives. Race guard: the clear MUST NOT fire while
- *  an attach to that daemon is in flight, since a freshly waking daemon reads
+ *  an attach to that session is in flight, since a freshly waking session reads
  *  as "asleep" in lagging roster frames right after wake-attach; the entry and
  *  in-flight state are re-checked against the POST-frame roster here. */
 function reconcileAttachedSession(): void {
 	syncAttachedReconnecting();
 	const downId = state.sessionDownId;
-	if (downId !== "" && !isDaemonDead(state.daemonRoster.find((d) => d.daemonId === downId)))
+	if (downId !== "" && !isSessionDead(state.sessionRoster.find((d) => d.workspaceId === downId)))
 		setState("sessionDownId", "");
-	const id = state.currentSessionId;
+	const id = state.currentWorkspaceId;
 	if (id === "") return;
 	if (pendingAttachTarget() === id) return;
-	const entry = state.daemonRoster.find((d) => d.daemonId === id);
-	if (!isDaemonDead(entry)) return;
+	const entry = state.sessionRoster.find((d) => d.workspaceId === id);
+	if (!isSessionDead(entry)) return;
 	// A removed entry is not a stop: drop its mark; the view clears without going offline.
 	if (entry === undefined) clearUserStopped(id);
 	// A user stop keeps the transcript behind the stopped strip; readiness drops,
@@ -1240,11 +1245,11 @@ function reconcileAttachedSession(): void {
 	}
 	// Phase first: the transcript view is still mounted and reads it to fade
 	// the session out before the writes below empty it. A switch in flight to
-	// another daemon owns the phase (and still hides the old content).
+	// another session owns the phase (and still hides the old content).
 	if (state.transcriptTarget === null)
 		setState({ transcriptPhase: "idle", transcriptError: null, transcriptTarget: null });
 	if (entry !== undefined) setState("sessionDownId", id);
-	setState("currentSessionId", "");
+	setState("currentWorkspaceId", "");
 	setState("readyAt", undefined);
 	resetSessionView();
 	pushDebug(
@@ -1288,8 +1293,8 @@ export function bootAuth(): void {
 		}
 	});
 }
-/** The roster frame `next` is about to remove the attached daemon: open the nearest
- *  ACTIVE session before it in the sidebar order (`daemonsByProject`: groups, then
+/** The roster frame `next` is about to remove the attached session: open the nearest
+ *  ACTIVE session before it in the sidebar order (`sessionsByProject`: groups, then
  *  rows), else the nearest after it. Active = `ready` or `reconnecting` (a live pair
  *  re-dialing) in `next`, so opening it is a plain attach: a session is never woken
  *  here. Skipped: asleep, error and transitional rows, rows of a missing project
@@ -1300,16 +1305,16 @@ export function bootAuth(): void {
  *  from the pre-removal roster, and the switch's phase write keeps the transcript
  *  pane mounted so the removed session fades out. A user switch already in flight
  *  (phase target or pending attach) wins. */
-function switchAwayFromRemoved(next: readonly DaemonEntry[]): void {
-	const id = state.currentSessionId;
-	if (id === "" || next.some((d) => d.daemonId === id)) return;
+function switchAwayFromRemoved(next: readonly RosterEntry[]): void {
+	const id = state.currentWorkspaceId;
+	if (id === "" || next.some((d) => d.workspaceId === id)) return;
 	if (state.transcriptTarget !== null || pendingAttachTarget() !== null) return;
-	const rows = daemonsByProject().flatMap((g) =>
-		g.daemons.map((d) => ({ id: d.daemonId, projectMissing: g.project.missing === true })),
+	const rows = sessionsByProject().flatMap((g) =>
+		g.sessions.map((d) => ({ id: d.workspaceId, projectMissing: g.project.missing === true })),
 	);
 	const at = rows.findIndex((r) => r.id === id);
 	if (at === -1) return;
-	const byId = new Map(next.map((d) => [d.daemonId, d]));
+	const byId = new Map(next.map((d) => [d.workspaceId, d]));
 	const active = (r: { id: string; projectMissing: boolean }): boolean => {
 		const status = byId.get(r.id)?.status;
 		return (
@@ -1319,18 +1324,18 @@ function switchAwayFromRemoved(next: readonly DaemonEntry[]): void {
 		);
 	};
 	const target = rows.slice(0, at).reverse().find(active) ?? rows.slice(at + 1).find(active);
-	if (target !== undefined) void switchToDaemon(target.id);
+	if (target !== undefined) void switchToSession(target.id);
 }
 
-/** The roster is about to say the attached daemon is gone or dead (`next` is its entry
+/** The roster is about to say the attached session is gone or dead (`next` is its entry
  *  after the frame): the chat pane unmounts as soon as hasLiveSession() flips, i.e. with
  *  the roster write itself, so the phase must already be idle by then for the
  *  transcript to fade the session out. reconcileAttachedSession clears the session
  *  right after. A switch in flight owns the phase and is left alone. */
-function idleBeforeSessionDies(next: DaemonEntry | undefined): void {
-	const id = state.currentSessionId;
+function idleBeforeSessionDies(next: RosterEntry | undefined): void {
+	const id = state.currentWorkspaceId;
 	if (id === "" || state.transcriptTarget !== null || pendingAttachTarget() === id) return;
-	if (!isDaemonDead(next) || (next !== undefined && isUserStopped(id))) return;
+	if (!isSessionDead(next) || (next !== undefined && isUserStopped(id))) return;
 	setState({ transcriptPhase: "idle", transcriptError: null, transcriptTarget: null });
 }
 
@@ -1378,20 +1383,21 @@ export function connect(): void {
 	// seq, null when the server sent it unsequenced.
 	const handleFrame = (frame: ServerFrame, frameSeq: number | null): void => {
 		if (frame.type === "attached") {
-			pushDebug("info", "transport", `attached ${frame.sessionId}`);
-			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
+			pushDebug("info", "transport", `attached ${frame.workspaceId}`);
+			const switched =
+				state.currentWorkspaceId !== "" && state.currentWorkspaceId !== frame.workspaceId;
 			// One batch: the incoming workspace's saved dock lands together with
 			// its id, so no effect ever sees the previous workspace's dock under the new id.
 			batch(() => {
-				if (state.currentSessionId !== frame.sessionId) restoreDockLayout(frame.sessionId);
-				setState("currentSessionId", frame.sessionId);
+				if (state.currentWorkspaceId !== frame.workspaceId) restoreDockLayout(frame.workspaceId);
+				setState("currentWorkspaceId", frame.workspaceId);
 			});
 			// The subagent forest is pulled afresh on every attach below.
 			setState("subagentsLoaded", { mirror: false, roster: false });
 			// The attach priming re-sends the running jobs' widgets (nothing when none run): drop the last attachment's.
 			clearJobWidgets();
 			setState("sessionDownId", "");
-			clearUnread(frame.sessionId);
+			clearUnread(frame.workspaceId);
 			// Every attach re-primes history from scratch: drop any in-flight
 			// chunked-series accumulation from the previous attach/session.
 			pendingHistory = null;
@@ -1399,7 +1405,7 @@ export function connect(): void {
 			// (seqs restart per connection, see seenFrameSeqs).
 			seenFrameSeqs.clear();
 			// Every attach starts a new attachment generation on the session side,
-			// even a re-attach of the SAME daemon (wake after a UI stop keeps the
+			// even a re-attach of the SAME session (wake after a UI stop keeps the
 			// view, so it is not a switch). The scope of the previous generation
 			// would make the on-attach calls below fail the session's stale-scope
 			// check; drop it so they go out unscoped (the session accepts calls
@@ -1408,7 +1414,7 @@ export function connect(): void {
 			setState("sessionScope", undefined);
 			// Finding #28: the attach waiter settles from the edge's id-keyed
 			// attach_result, never from this PROXIED frame; the priming rides
-			// the daemon pipe, which may be mid-redial when the attach lands.
+			// the session pipe, which may be mid-redial when the attach lands.
 			if (switched) {
 				// In-flight calls belonged to the previous session; their results
 				// are stale now and would be filtered out below. Clean up BEFORE
@@ -1416,8 +1422,8 @@ export function connect(): void {
 				// fresh call too (and resetSessionView wipes its populated result).
 				rejectPendingCalls(new Error("session switched"));
 				resetSessionView();
-				// Phase 3 daemon switch: drop readiness too. The edge only pipes
-				// daemons that passed waitReady, so the proxied priming re-delivers
+				// Phase 3 session switch: drop readiness too. The edge only pipes
+				// sessions that passed waitReady, so the proxied priming re-delivers
 				// `ready` immediately; until then the composer stays gated and the
 				// roster hint shows the session's status.
 				setState("readyAt", undefined);
@@ -1443,20 +1449,22 @@ export function connect(): void {
 			requestRosterRefresh();
 			refreshSettings();
 			// Watchers for this attachment (watchAttachment) wait for its first `state` frame.
-			settleAttachedFrame(frame.sessionId);
+			settleAttachedFrame(frame.workspaceId);
 			return;
 		}
-		// Stale-frame guard: session-scoped frames for a handle this tab no
-		// longer views (in flight during a switch) are dropped. Frames WITHOUT
-		// a sessionId (fleet-scoped roster and daemon frames; a daemon with one
-		// live session stamps everything it sends) always pass; there is
-		// nothing to mismatch. attach_result is a unicast
-		// answer whose sessionId is the ATTACHED daemonId (finding #28) and must
-		// pass too, since id-matching against pendingAttach handles staleness.
+		// Stale-frame guard: session-scoped frames for a workspace this tab no
+		// longer views (in flight during a switch) are dropped. Only session-scoped
+		// types carry the edge's stamp (isSessionScopedFrameType); fleet-scoped
+		// frames (session_status, workspace_sessions, worktree_removed, ...) carry a
+		// workspaceId as PAYLOAD naming another row and always pass. A session-scoped
+		// frame WITHOUT a stamp (a bare session) passes too; there is nothing to
+		// mismatch. attach_result is a unicast answer (not session-scoped) whose
+		// workspaceId is the ATTACHED workspaceId (finding #28); id-matching against
+		// pendingAttach handles its staleness.
 		if (
-			frame.type !== "attach_result" &&
-			"sessionId" in frame &&
-			frame.sessionId !== state.currentSessionId
+			isSessionScopedFrameType(frame.type) &&
+			"workspaceId" in frame &&
+			frame.workspaceId !== state.currentWorkspaceId
 		)
 			return;
 		// Replay-dedup guard (finding #2): a delta live-delivered during the
@@ -1535,10 +1543,10 @@ export function connect(): void {
 			case "sessions":
 				settleSessions(frame.sessions);
 				break;
-			case "daemon_sessions":
-				// Unicast answer to list_daemon_sessions (fleet-scoped: settle keyed
-				// by daemonId + effective limit, no session guards).
-				settleDaemonSessions(frame.daemonId, frame.sessions, frame.limit);
+			case "workspace_sessions":
+				// Unicast answer to list_workspace_sessions (fleet-scoped: settle keyed
+				// by workspaceId + effective limit, no session guards).
+				settleWorkspaceSessions(frame.workspaceId, frame.sessions, frame.limit);
 				break;
 			case "daemons":
 				setState(
@@ -1552,40 +1560,44 @@ export function connect(): void {
 			case "roster_delta":
 				applyRosterFrame(frame);
 				break;
-			case "daemon_activity": {
-				// Edge-generated, fleet-scoped realtime activity for any managed daemon.
-				// It carries no sessionId, so it sails past the stale-frame guard above
-				// untouched (per-daemon, not per-attachment) and applies regardless of
-				// which daemon this tab is attached to.
-				// Snapshot the boolean BEFORE setState: state.daemonActivity[...] is a
+			case "session_activity": {
+				// Edge-generated, fleet-scoped realtime activity for any managed session.
+				// It carries no workspaceId, so it sails past the stale-frame guard above
+				// untouched (per-session, not per-attachment) and applies regardless of
+				// which session this tab is attached to.
+				// Snapshot the boolean BEFORE setState: state.sessionActivity[...] is a
 				// live store proxy, so reading prev.streaming after the set would see
 				// the NEW value and the completion edge would never fire.
-				const wasStreaming = state.daemonActivity[frame.daemonId]?.streaming === true;
-				setState("daemonActivity", frame.daemonId, {
+				const wasStreaming = state.sessionActivity[frame.workspaceId]?.streaming === true;
+				setState("sessionActivity", frame.workspaceId, {
 					streaming: frame.streaming,
 					blocked: frame.blocked,
 				});
 				// Unread-on-completion: a detached turn's END is observable in
 				// realtime (in_progress → idle while unfocused). Skip the attached
-				// daemon (its live signals are on-screen anyway); the precedence in
-				// session-activity hides an unread latch while the daemon still
+				// session (its live signals are on-screen anyway); the precedence in
+				// session-activity hides an unread latch while the session still
 				// streams (remote live truth beats the unread latch).
-				if (wasStreaming && !frame.streaming && frame.daemonId !== state.currentSessionId) {
-					markUnread(frame.daemonId);
+				if (wasStreaming && !frame.streaming && frame.workspaceId !== state.currentWorkspaceId) {
+					markUnread(frame.workspaceId);
 				}
 				break;
 			}
-			case "daemon_status": {
+			case "session_status": {
 				// finding #P1: announce the transition to a terminal rung
 				// (ready/error) before patching the entry.
-				const daemonBefore = state.daemonRoster.find((d) => d.daemonId === frame.daemonId);
-				announceDaemonStatus(daemonBefore, daemonBefore?.name ?? frame.daemonId, frame.status);
-				if (frame.daemonId === state.currentSessionId)
-					idleBeforeSessionDies(daemonBefore && { ...daemonBefore, status: frame.status });
+				const sessionBefore = state.sessionRoster.find((d) => d.workspaceId === frame.workspaceId);
+				announceSessionStatus(
+					sessionBefore,
+					sessionBefore?.name ?? frame.workspaceId,
+					frame.status,
+				);
+				if (frame.workspaceId === state.currentWorkspaceId)
+					idleBeforeSessionDies(sessionBefore && { ...sessionBefore, status: frame.status });
 				// Path-patch only the matching entry: its store object keeps identity and
 				// only status/error notify. Setting `error: undefined` deletes the field,
 				// so it clears unless the frame carries a fresh one.
-				setState("daemonRoster", (d) => d.daemonId === frame.daemonId, {
+				setState("sessionRoster", (d) => d.workspaceId === frame.workspaceId, {
 					status: frame.status,
 					error: frame.error,
 				});
@@ -1593,9 +1605,9 @@ export function connect(): void {
 				pushDebug(
 					frame.status === "error" || frame.error !== undefined ? "error" : "info",
 					"roster",
-					`session process ${frame.daemonId.slice(0, 8)} → ${frame.status}${frame.error !== undefined ? `: ${frame.error}` : ""}`,
+					`session process ${frame.workspaceId.slice(0, 8)} → ${frame.status}${frame.error !== undefined ? `: ${frame.error}` : ""}`,
 				);
-				// Same reconcile as the roster frame: the attached daemon just
+				// Same reconcile as the roster frame: the attached session just
 				// went asleep/error, so clear the session view (race-guarded).
 				reconcileAttachedSession();
 				break;
@@ -1613,8 +1625,8 @@ export function connect(): void {
 				break;
 			case "registered_projects":
 				// Phase 5: first-class project registry broadcast (fleet-scoped
-				// like the roster; it survives session resets, and zero-daemon
-				// projects still render via daemonsByProject).
+				// like the roster; it survives session resets, and zero-session
+				// projects still render via sessionsByProject).
 				setState("registeredProjects", frame.projects);
 				// Secret-free provider profile catalog rides the same
 				// frame (optional; missing = no catalog).
@@ -1626,13 +1638,13 @@ export function connect(): void {
 				break;
 			case "worktree_delete_info":
 				// Phase 5: unicast guard evidence for the delete-worktree
-				// confirm, keyed by daemonId (latest-wins like the frames
+				// confirm, keyed by workspaceId (latest-wins like the frames
 				// above; fleet-scoped).
-				setState("worktreeDeleteInfo", (prev) => ({ ...prev, [frame.daemonId]: frame }));
+				setState("worktreeDeleteInfo", (prev) => ({ ...prev, [frame.workspaceId]: frame }));
 				break;
 			case "worktree_removed": {
 				// The fleet detected a worktree's directory vanished on disk and
-				// evicted its daemon, so each eviction yields one toast plus an
+				// evicted its session, so each eviction yields one toast plus an
 				// aria-live announcement (same text, reusing the finding #P1
 				// announce helper). Broadcast, fleet-edge-only like
 				// registered_projects: no session guard (a bare omp-session
@@ -1656,7 +1668,7 @@ export function connect(): void {
 				) {
 					pending.resolve({ text: frame.text, cursor: frame.cursor, state: frame.state });
 				} else {
-					pending.reject(new Error(frame.error ?? "session process logs failed"));
+					pending.reject(new Error(frame.error ?? "daemon logs failed"));
 				}
 				break;
 			}
@@ -1666,7 +1678,7 @@ export function connect(): void {
 				pendingDaemonControl.delete(frame.id);
 				clearTimeout(pending.timer);
 				if (frame.ok && frame.daemon) pending.resolve(frame.daemon);
-				else pending.reject(new Error(frame.error ?? "session process control failed"));
+				else pending.reject(new Error(frame.error ?? "daemon control failed"));
 				break;
 			}
 			case "files":
@@ -1675,7 +1687,7 @@ export function connect(): void {
 			case "subagent_lifecycle": {
 				const payload = frame.payload;
 				setState("subagents", (prev) => applyLifecycleFrame(prev, payload, Date.now()));
-				// Parked and revivable state lives in the daemon roster: refetch it on lifecycle edges (SUB-10).
+				// Parked and revivable state lives in the session roster: refetch it on lifecycle edges (SUB-10).
 				requestRosterRefresh();
 				break;
 			}
@@ -1750,7 +1762,7 @@ export function connect(): void {
 			case "error":
 				// Finding #28: an error frame is a GLOBAL uncorrelated broadcast
 				// (fire-and-forget spawn failures, a lost pipe for ANOTHER
-				// daemon, "not attached" answers). It must never settle an
+				// session, "not attached" answers). It must never settle an
 				// in-flight attach. Attach failures arrive as id-keyed
 				// attach_result frames; global errors only display.
 				setState("error", frame.error);
@@ -1758,11 +1770,11 @@ export function connect(): void {
 				break;
 			case "hello_ok":
 				// Finding #61: the browser enforces OMP_PROTO too. A bare
-				// session daemon leads its priming with hello_ok; the fleet edge
+				// session leads its priming with hello_ok; the fleet edge
 				// forwards the (pipe-gated) hello_ok. A mismatch is terminal;
 				// fail closed: surface the error, tear the socket down, and do
 				// NOT reconnect (the backoff loop would otherwise hot-loop
-				// against an undrivable daemon).
+				// against an undrivable session).
 				if (frame.proto !== OMP_PROTO) {
 					failProtoMismatch(ws, `session process speaks OMP_PROTO ${String(frame.proto)}`);
 					return;
@@ -1787,10 +1799,10 @@ export function connect(): void {
 		setState("reconnectDelay", 0);
 		pushDebug("info", "transport", "stream open");
 		// No boot-time calls: the fleet edge answers every call with "not
-		// attached" until the browser picks a daemon. The attached handler
+		// attached" until the browser picks a session. The attached handler
 		// pulls getSubagents. On a RECONNECT the edge has no attach
-		// memory, so re-attach to the daemon we were viewing.
-		if (state.currentSessionId) void attachSession(state.currentSessionId).catch(() => {});
+		// memory, so re-attach to the session we were viewing.
+		if (state.currentWorkspaceId) void attachSession(state.currentWorkspaceId).catch(() => {});
 		else refreshSettings(); // boot with no session: the fleet /ctl model backs the panel
 		// After the re-attach request, so a re-sent command that needs the
 		// attachment follows it on the wire.
@@ -1889,15 +1901,15 @@ export {
 export {
 	listSessions,
 	listFiles,
-	requestDaemonSessions,
-	resumeDaemonSession,
+	requestWorkspaceSessions,
+	resumeSession,
 	setSidebarVisible,
 	setSidebarRunningOnly,
 	setSidebarSessionTitleLines,
 	setSidebarTitleFirst,
 	closeDrawers,
-	startDaemonNewSession,
-	switchToDaemon,
+	startWorkspaceNewSession,
+	switchToSession,
 	wakeAndAttach,
 	setTxSidebarVisible,
 	setView,
@@ -1905,9 +1917,9 @@ export {
 } from "./store/roster";
 export {
 	listProjectBranches,
-	restartDaemonById,
+	restartSessionById,
 	spawnResume,
-	stopDaemonById,
+	stopSessionById,
 	addProject,
 	sendRemoveProject,
 	createWorktree,
@@ -1921,10 +1933,10 @@ export {
 	fetchCloneIntoProject,
 } from "./store/projects";
 export {
-	closeDaemonDetails,
+	closeSessionDetails,
 	closeWorktreeSessions,
 	closeLightbox,
-	openDaemonDetails,
+	openSessionDetails,
 	openWorktreeSessions,
 	openLightbox,
 	sendLoginCode,
@@ -1938,7 +1950,7 @@ export {
 	DEBUG_RING_CAP,
 	fetchCtlDebug,
 	fetchCtlTemplates,
-	fetchDaemonStderr,
+	fetchSessionStderr,
 	requestDaemonLogs,
 	stopDaemon,
 	restartDaemon,

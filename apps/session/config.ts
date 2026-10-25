@@ -58,7 +58,7 @@ export interface SessionConfig {
 	 * host (isLoopbackHost). Set only from `--fleet-stdin`.
 	 */
 	callbackUrl?: string;
-	/** Roster daemonId the callback pair is bound to. */
+	/** Roster workspaceId the callback pair is bound to. */
 	callbackWorkspace?: string;
 	/** Authorized generation for the pair. */
 	callbackGeneration?: number;
@@ -229,9 +229,9 @@ export function parseConfig(argv: string[], fleet?: FleetStdinPayload): SessionC
 }
 
 /**
- * The pair identity and listener token the fleet hands a daemon on stdin (`--fleet-stdin`): one
+ * The pair identity and listener token the fleet hands a session on stdin (`--fleet-stdin`): one
  * JSON object read to EOF at boot. Neither the callback credential nor the listener token is in
- * the daemon's environment or argv, so agent tool subprocesses and other local users cannot read
+ * the session's environment or argv, so agent tool subprocesses and other local users cannot read
  * them.
  */
 export interface FleetStdinPayload {

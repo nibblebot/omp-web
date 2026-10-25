@@ -101,7 +101,7 @@ function parsed(message: string): { seq: number | null; frame: ServerFrame } {
 }
 
 describe("sequencing and the replay ring", () => {
-	test("deltas ring under daemon-global seqs; answers are sequenced but never ringed", () => {
+	test("deltas ring under session-global seqs; answers are sequenced but never ringed", () => {
 		const { consumer, socket } = attach();
 		const floor = snapshotDeltaSeq() - 1;
 		broadcast(errorFrame("first"));

@@ -10,7 +10,7 @@ const advisorSettingsModule = path.join(
 	"node_modules/@oh-my-pi/pi-coding-agent/src/advisor/settings.ts",
 );
 
-// A daemon-like process: boots settings with the real helper, then reports each time the
+// A session-like process: boots settings with the real helper, then reports each time the
 // advisor switch reads true. Settings is process-global, so this runs in its own process.
 const CHILD = `
 const { initSettings } = await import(${JSON.stringify(bootModule)});

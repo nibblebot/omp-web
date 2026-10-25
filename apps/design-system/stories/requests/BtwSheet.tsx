@@ -1,7 +1,7 @@
 import { BtwSheet } from "../../../web/components/requests/BtwSheet";
 import { setState } from "../../../web/state";
 import { selectBtwRecord } from "../../../web/store/btw-history";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { answerBtwHistory, btwAnswered, btwFailed, btwStreaming } from "../../fixtures/dialogs";
 import { defineStory } from "../../registry";
 
@@ -9,7 +9,7 @@ import { defineStory } from "../../registry";
  * The /btw sheet: saved side questions on the left, the live answer, the
  * selected thread, and its actions on the right, and the ask/follow-up box
  * at the bottom. Each variant seeds the live answer (`state.btw`) and the
- * daemon answers the sheet reads (list, thread page, promote preview).
+ * session answers the sheet reads (list, thread page, promote preview).
  */
 export default defineStory({
 	id: "requests-btw-sheet",

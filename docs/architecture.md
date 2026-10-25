@@ -1,12 +1,12 @@
 # Architecture: browser, fleet, session
 
-omp-web has three tiers. The **browser** runs the Solid UI. The **fleet** (`omp-web`, or `omp-web control`) is the control plane: roster, workspace lifecycle, and the browser edge. Each **session** (`omp-web session`) is one daemon process that runs one in-process SDK agent against one project directory. The durable record of what an agent did is the session's `.jsonl` transcript; the fleet holds no agent state.
+omp-web has three tiers. The **browser** runs the Solid UI. The **fleet** (`omp-web`, or `omp-web control`) is the control plane: roster, workspace lifecycle, and the browser edge. Each **session** (`omp-web session`) is one session process that runs one in-process SDK agent against one project directory. The durable record of what an agent did is the session's `.jsonl` transcript; the fleet holds no agent state.
 
 There are two protocol hops, versioned separately:
 
 | Hop | Transport | Version | Source of truth |
 |---|---|---|---|
-| Browser to fleet | One WebSocket, `GET /ws`: frames down, commands up, acks and nacks | `OMP_PROTO` 5 | `lib/wire/browser-socket.ts`, `lib/wire/protocol.ts` |
+| Browser to fleet | One WebSocket, `GET /ws`: frames down, commands up, acks and nacks | `OMP_PROTO` 6 | `lib/wire/browser-socket.ts`, `lib/wire/protocol.ts` |
 | Fleet to session (the callback pair) | One WebSocket, `GET /callback/ws`, dialed by the session; `POST /callback/bulk/<id>` for large transfers | `OMP_CALLBACK_PROTO` 2 | `lib/wire/callback-protocol.ts` |
 
 ## Components
@@ -18,8 +18,8 @@ flowchart LR
   end
 
   subgraph cp["Fleet control plane (omp-web / omp-web control)"]
-    edge["Browser edge (edge.ts)<br/>per-client replay ring, command routing,<br/>sessionId stamping"]
-    transport["Callback transport (daemon-transport.ts)<br/>pair auth, virtual streams, credit"]
+    edge["Browser edge (edge.ts)<br/>per-client replay ring, command routing,<br/>workspaceId stamping"]
+    transport["Callback transport (session-transport.ts)<br/>pair auth, virtual streams, credit"]
     lifecycle["Workspace lifecycle (workspace-lifecycle.ts)<br/>start, stop, restart, generations"]
     registry["Registry (fleet-state.json)<br/>roster, projects, enrollment digests"]
   end
@@ -29,7 +29,7 @@ flowchart LR
   subgraph runtimes["Session runtimes (host process, bwrap, kubernetes)"]
     subgraph sess["omp-web session"]
       cb["Callback client (fleet-callback.ts)<br/>dial, send gates, redial"]
-      dc["Daemon control (daemon-control.ts)<br/>virtual streams, replay ring, pacing"]
+      dc["Session control (session-control.ts)<br/>virtual streams, replay ring, pacing"]
       sdk["SDK agent session<br/>(client-delivery.ts slims events)"]
     end
   end
@@ -55,7 +55,7 @@ flowchart LR
 - **The fleet never dials a session.** Every session dials out to `/callback/ws` with its workspace id, generation, connection id, credential and protocol version in the upgrade headers. That way a session can run on the fleet host, in a bwrap sandbox, or in a pod behind NAT. In the split form (`omp-web ui` in front of `omp-web control`), the UI process forwards the browser routes, the browser socket (`/ws`) and the session WebSocket to the control plane on loopback.
 - **Each launch gets a fresh credential.** The lifecycle mints a new credential and generation for every launch and passes them on stdin (`--fleet-stdin`), never in argv or the environment. The fleet stores only the credential's digest. A refused dial is upgraded and then closed with a typed code (4000 + HTTP status). The session stops for good on `unauthorized`, `invalid_identity`, `generation_obsolete` or `proto_unsupported`, and redials on anything else.
 - **Virtual streams multiplex one pair.** `transport` carries the fleet's own controls (`pair_ready`, `pair_credit`, heartbeats). `control` carries the session's state mirror, which the fleet taps for roster activity. Each attached browser gets its own `browser/<connId>` stream.
-- **The session primes every stream it is asked to open.** The edge relays those frames to the browser's socket, stamping `sessionId`. Answers to commands go only to the browser socket that sent them. The upgrade is origin-checked when browser auth is on, which is what stands in for a per-command CSRF token.
+- **The session primes every stream it is asked to open.** The edge relays those frames to the browser's socket, stamping `workspaceId`. Answers to commands go only to the browser socket that sent them. The upgrade is origin-checked when browser auth is on, which is what stands in for a per-command CSRF token.
 
 ## One session's life over time
 
@@ -80,14 +80,14 @@ sequenceDiagram
 
   rect rgba(128,128,128,0.08)
   Note over B,E: Browser connects and attaches
-  B->>E: GET /ws?client=id&proto=5 (WebSocket upgrade)
-  E-->>B: roster, daemons, projects (priming, seq 1..k)
+  B->>E: GET /ws?client=id&proto=6 (WebSocket upgrade)
+  E-->>B: roster, entries, projects (priming, seq 1..k)
   B->>E: cmd attach
   E-->>B: ack
   E->>S: stream_open (lastSeq) on browser/connId
   E-->>B: attach_result (id-keyed)
   S->>E: hello_ok, attached, history chunks, state, available_commands, ready
-  E-->>B: frames (sessionId stamped)
+  E-->>B: frames (workspaceId stamped)
   E->>S: stream_ack as the browser's queue drains (at most 3 MiB unacked per stream)
   T->>S: pair_credit every 512 KiB consumed (at most 8 MiB in flight per pair)
   end
@@ -104,14 +104,14 @@ sequenceDiagram
   S->>E: call_result (id)
   E-->>B: call_result, to the originating browser only
   S->>T: state on "control" (streaming, blocked)
-  E-->>B: daemon_activity (on change)
+  E-->>B: session_activity (on change)
   end
 
   rect rgba(128,128,128,0.08)
   Note over B,S: Idle, drops and recovery
   S->>T: heartbeat every 15 s while idle (both directions, 30 s silence deadline)
   Note over B,E: Socket drop: browser reconnects with<br/>after=last seq, edge replays its ring. The browser re-sends<br/>unacked commands with the same id.
-  Note over T,S: Pair drop: session redials (backoff 1 s to 30 s).<br/>Roster shows reconnecting after 5 s. Browser streams<br/>end with "daemon connection lost" and re-attach.
+  Note over T,S: Pair drop: session redials (backoff 1 s to 30 s).<br/>Roster shows reconnecting after 5 s. Browser streams<br/>end with "session connection lost" and re-attach.
   Note over T,S: Crash: lifecycle revokes the generation, backs off,<br/>restarts with generation + 1 and --resume
   end
 ```
@@ -132,6 +132,6 @@ Four bounds keep any slow party from holding unbounded memory elsewhere:
 - `lib/wire/protocol.ts` and `lib/wire/callback-protocol.ts`: frame and envelope shapes, constants, and the header comments that define each hop.
 - `lib/wire/browser-socket.ts`: the browser socket wire (query, messages, close codes, keepalive).
 - `apps/fleet/edge.ts`: browser routing, priming, ring and backpressure rules.
-- `apps/fleet/daemon-transport.ts` and `apps/session/fleet-callback.ts`: the two halves of the pair.
+- `apps/fleet/session-transport.ts` and `apps/session/fleet-callback.ts`: the two halves of the pair.
 - `docs/provider-protocol.md`: how runtime providers launch clones that dial this pair.
 - `scripts/profile/results/`: measurements behind the transport choices.

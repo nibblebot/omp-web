@@ -3,7 +3,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import {
+	LEGACY_PROVIDER_LOG,
+	PROVIDER_SESSION_LOG,
 	pumpToSessionLog,
+	readProviderLogTail,
 	removeSessionLog,
 	SESSION_LOG_MAX_BYTES,
 	SessionLog,
@@ -79,5 +82,33 @@ describe("session log retention", () => {
 		expect(existsSync(path)).toBe(false);
 		expect(existsSync(`${path}.1`)).toBe(false);
 		expect(() => removeSessionLog(path)).not.toThrow();
+	});
+});
+
+describe("provider clone log reader", () => {
+	test("reads session.log when it exists, ignoring a stale legacy daemon.log", () => {
+		const dir = tempDir("omp-session-log-provider-current-");
+		writeFileSync(join(dir, LEGACY_PROVIDER_LOG), "old-run\n");
+		writeFileSync(join(dir, PROVIDER_SESSION_LOG), "new-run\n");
+		expect(readProviderLogTail(dir, 1024)).toBe("new-run\n");
+	});
+
+	test("falls back to daemon.log for a clone whose stateDir predates the rename", () => {
+		const dir = tempDir("omp-session-log-provider-legacy-");
+		writeFileSync(join(dir, "daemon.log"), "line-1\nline-2\n");
+		expect(PROVIDER_SESSION_LOG).toBe("session.log");
+		expect(readProviderLogTail(dir, 1024)).toBe("line-1\nline-2\n");
+		expect(readProviderLogTail(dir, 7)).toBe("line-2\n");
+	});
+
+	test("an existing but empty session.log does not fall back", () => {
+		const dir = tempDir("omp-session-log-provider-empty-");
+		writeFileSync(join(dir, "daemon.log"), "old\n");
+		writeFileSync(join(dir, PROVIDER_SESSION_LOG), "");
+		expect(readProviderLogTail(dir, 1024)).toBe("");
+	});
+
+	test("is empty when neither log exists", () => {
+		expect(readProviderLogTail(tempDir("omp-session-log-provider-none-"), 1024)).toBe("");
 	});
 });

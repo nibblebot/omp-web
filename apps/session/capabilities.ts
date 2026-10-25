@@ -1,5 +1,5 @@
 /**
- * Server capability advertisement. The daemon tells the browser which runtime
+ * Server capability advertisement. The session tells the browser which runtime
  * verdicts it has, via `WebSessionState.capabilities` on the attach priming and
  * every state frame.
  *

@@ -74,7 +74,7 @@ describe("CLI", () => {
 		}
 		const output = logs.join("\n");
 		expect(output).toContain("id");
-		expect(output).toContain(seeded.daemonId);
+		expect(output).toContain(seeded.workspaceId);
 		expect(output).toContain("cli-smoke");
 		expect(output).toContain("fake-proj");
 		expect(output).not.toContain("labels");
@@ -179,7 +179,7 @@ describe("CLI", () => {
 			const errText = await readAll(sessions.stderr);
 			const exit = await sessions.exited;
 			expect(exit).toBe(0);
-			expect(out).toContain(seeded.daemonId);
+			expect(out).toContain(seeded.workspaceId);
 			expect(out).toContain("cli-smoke");
 			expect(errText).toBe("");
 		} finally {
@@ -218,7 +218,7 @@ describe("CLI", () => {
 			});
 			const out = await readAll(sessions.stdout);
 			expect(await sessions.exited).toBe(0);
-			expect(out).toContain(seeded.daemonId);
+			expect(out).toContain(seeded.workspaceId);
 		} finally {
 			control.kill("SIGKILL");
 			await control.exited;

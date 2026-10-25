@@ -8,7 +8,7 @@
  * into model text, so transcripts stay free of profiling markers.
  *
  * Every builder takes a `route`: the label the caller uses for the session it is
- * about to prompt (for example the daemon id). The fake model stamps it on every
+ * about to prompt (for example the workspace id). The fake model stamps it on every
  * send-log line, and the client uses the same label when it joins received
  * deltas back (see `joinLatency` in `../latency.ts`). Subagents spawned by a
  * `subagentTurn` get the route `<route>/sub<k>`.

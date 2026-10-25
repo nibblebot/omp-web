@@ -1,6 +1,6 @@
 import { PlanReviewPanel } from "../../../web/components/review/PlanReviewPanel";
 import { planCalls, reviewPlanChangesRequested } from "../../fixtures/review";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
 export default defineStory({
@@ -40,7 +40,8 @@ export default defineStory({
 		},
 		{
 			name: "Decision refused",
-			description: "Press approve or request changes to see the daemon refuse a stale decision.",
+			description:
+				"Press approve or request changes to see the session process refuse a stale decision.",
 			seed: () =>
 				answerCalls(
 					planCalls({ decisionError: "plan version 3 is stale; reload before deciding" }),

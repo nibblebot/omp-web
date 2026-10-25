@@ -34,7 +34,7 @@ const TARGET = "dmn_probe";
 
 const CLEAN: WorktreeDeleteInfo = {
 	type: "worktree_delete_info",
-	daemonId: TARGET,
+	workspaceId: TARGET,
 	linked: true,
 	dirty: false,
 	branch: "feat/clean",
@@ -44,7 +44,7 @@ const CLEAN: WorktreeDeleteInfo = {
 
 const UNPROVEN: WorktreeDeleteInfo = {
 	type: "worktree_delete_info",
-	daemonId: TARGET,
+	workspaceId: TARGET,
 	linked: true,
 	dirty: false,
 	probeFailed: true,
@@ -53,7 +53,7 @@ const UNPROVEN: WorktreeDeleteInfo = {
 
 const DIRTY: WorktreeDeleteInfo = {
 	type: "worktree_delete_info",
-	daemonId: TARGET,
+	workspaceId: TARGET,
 	linked: true,
 	dirty: true,
 	branch: "feat/dirty",

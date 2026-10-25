@@ -1,7 +1,7 @@
 import { DeleteWorkspaceDialog } from "../../../../web/components/fleet/workspaces/DeleteWorkspaceDialog";
 import { setState } from "../../../../web/state";
 import {
-	rosterDaemon,
+	rosterEntry,
 	worktreeInfoClean,
 	worktreeInfoDirty,
 	worktreeInfoNotLinked,
@@ -23,8 +23,8 @@ export default defineStory({
 			name: "Clean linked worktree",
 			seed: () =>
 				seedRosterFleet({
-					deleteWorkspaceTarget: worktreeInfoClean.daemonId,
-					worktreeDeleteInfo: { [worktreeInfoClean.daemonId]: worktreeInfoClean },
+					deleteWorkspaceTarget: worktreeInfoClean.workspaceId,
+					worktreeDeleteInfo: { [worktreeInfoClean.workspaceId]: worktreeInfoClean },
 				}),
 			render: () => <DeleteWorkspaceDialog />,
 		},
@@ -32,8 +32,8 @@ export default defineStory({
 			name: "Dirty linked worktree refused",
 			seed: () =>
 				seedRosterFleet({
-					deleteWorkspaceTarget: worktreeInfoDirty.daemonId,
-					worktreeDeleteInfo: { [worktreeInfoDirty.daemonId]: worktreeInfoDirty },
+					deleteWorkspaceTarget: worktreeInfoDirty.workspaceId,
+					worktreeDeleteInfo: { [worktreeInfoDirty.workspaceId]: worktreeInfoDirty },
 				}),
 			render: () => <DeleteWorkspaceDialog />,
 		},
@@ -41,9 +41,9 @@ export default defineStory({
 			name: "Existing branch not pre-checked",
 			seed: () =>
 				seedRosterFleet({
-					deleteWorkspaceTarget: worktreeInfoClean.daemonId,
+					deleteWorkspaceTarget: worktreeInfoClean.workspaceId,
 					worktreeDeleteInfo: {
-						[worktreeInfoClean.daemonId]: {
+						[worktreeInfoClean.workspaceId]: {
 							...worktreeInfoClean,
 							hasUpstream: false,
 						},
@@ -55,11 +55,11 @@ export default defineStory({
 			name: "Unreadable git state refused",
 			seed: () =>
 				seedRosterFleet({
-					deleteWorkspaceTarget: worktreeInfoClean.daemonId,
+					deleteWorkspaceTarget: worktreeInfoClean.workspaceId,
 					worktreeDeleteInfo: {
-						[worktreeInfoClean.daemonId]: {
+						[worktreeInfoClean.workspaceId]: {
 							type: "worktree_delete_info",
-							daemonId: worktreeInfoClean.daemonId,
+							workspaceId: worktreeInfoClean.workspaceId,
 							linked: true,
 							dirty: false,
 							probeFailed: true,
@@ -73,15 +73,15 @@ export default defineStory({
 			name: "Not a linked worktree refused",
 			seed: () =>
 				seedRosterFleet({
-					deleteWorkspaceTarget: worktreeInfoNotLinked.daemonId,
-					worktreeDeleteInfo: { [worktreeInfoNotLinked.daemonId]: worktreeInfoNotLinked },
+					deleteWorkspaceTarget: worktreeInfoNotLinked.workspaceId,
+					worktreeDeleteInfo: { [worktreeInfoNotLinked.workspaceId]: worktreeInfoNotLinked },
 				}),
 			render: () => <DeleteWorkspaceDialog />,
 		},
 		{
 			name: "Clone delete refused by server",
 			seed: () => {
-				seedRosterFleet({ deleteWorkspaceTarget: rosterDaemon.cloneFailed.daemonId });
+				seedRosterFleet({ deleteWorkspaceTarget: rosterEntry.cloneFailed.workspaceId });
 				// A refusal frame that lands after the dialog opens, as the server sends it.
 				setTimeout(
 					() => setState("error", "verified delete refused: clone has uncommitted work"),

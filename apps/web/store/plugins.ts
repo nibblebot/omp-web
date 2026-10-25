@@ -9,7 +9,7 @@ import { call } from "./transport";
 /**
  * Installed-plugins domain. Fleet mode talks to /ctl/plugins/*; a session talks
  * to its plugin wire methods. Both write the same omp-plugins.lock.json.
- * Enabling a plugin runs its code with daemon permissions, so enable is
+ * Enabling a plugin runs its code with session permissions, so enable is
  * trust-gated exactly like installs in the Extensions dialog.
  */
 
@@ -49,12 +49,12 @@ async function fleetRequest<T>(path: string, body?: Record<string, unknown>): Pr
 }
 
 // Responses to a superseded session or mode are dropped, as in store/settings.ts.
-function stillCurrent(sessionId: typeof state.currentSessionId, fleet: boolean): boolean {
-	return sessionId === state.currentSessionId && fleet === fleetSettingsActive();
+function stillCurrent(workspaceId: typeof state.currentWorkspaceId, fleet: boolean): boolean {
+	return workspaceId === state.currentWorkspaceId && fleet === fleetSettingsActive();
 }
 
 export function refreshPlugins(): void {
-	const sessionId = state.currentSessionId;
+	const workspaceId = state.currentWorkspaceId;
 	const fleet = fleetSettingsActive();
 	setLoading(true);
 	const load = fleet
@@ -62,16 +62,16 @@ export function refreshPlugins(): void {
 		: call("listPlugins", []).then((list) => list as PluginSummary[]);
 	load
 		.then((list) => {
-			if (stillCurrent(sessionId, fleet)) setSummaries(list);
+			if (stillCurrent(workspaceId, fleet)) setSummaries(list);
 		})
 		.catch((err: unknown) => {
-			if (stillCurrent(sessionId, fleet)) setError(String(err));
+			if (stillCurrent(workspaceId, fleet)) setError(String(err));
 		})
 		.finally(() => setLoading(false));
 }
 
 export function openPlugin(name: string): void {
-	const sessionId = state.currentSessionId;
+	const workspaceId = state.currentWorkspaceId;
 	const fleet = fleetSettingsActive();
 	setError(null);
 	setDetail(null);
@@ -80,10 +80,10 @@ export function openPlugin(name: string): void {
 		: call("getPluginConfig", [name]).then((next) => next as PluginDetail);
 	load
 		.then((next) => {
-			if (stillCurrent(sessionId, fleet)) setDetail(next);
+			if (stillCurrent(workspaceId, fleet)) setDetail(next);
 		})
 		.catch((err: unknown) => {
-			if (stillCurrent(sessionId, fleet)) setError(String(err));
+			if (stillCurrent(workspaceId, fleet)) setError(String(err));
 		});
 }
 
@@ -99,7 +99,7 @@ function writePlugin(
 	method: "setPluginEnabled" | "setPluginFeatures" | "setPluginSetting",
 	args: unknown[],
 ): void {
-	const sessionId = state.currentSessionId;
+	const workspaceId = state.currentWorkspaceId;
 	const fleet = fleetSettingsActive();
 	setError(null);
 	const write = fleet
@@ -107,12 +107,12 @@ function writePlugin(
 		: call(method, args).then((next) => next as PluginDetail);
 	write
 		.then((next) => {
-			if (!stillCurrent(sessionId, fleet)) return;
+			if (!stillCurrent(workspaceId, fleet)) return;
 			setDetail(next);
 			refreshPlugins();
 		})
 		.catch((err: unknown) => {
-			if (stillCurrent(sessionId, fleet)) setError(String(err));
+			if (stillCurrent(workspaceId, fleet)) setError(String(err));
 		});
 }
 

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Session process log view (DaemonLog) helpers: pure logic, no JSX, no Solid.
+// Session process log view (SessionLog) helpers: pure logic, no JSX, no Solid.
 // The stderr tail is a plain string; the view filters it to triage lines and
 // follows the newest line. Kept here so the filter is testable without a DOM.
 // ---------------------------------------------------------------------------

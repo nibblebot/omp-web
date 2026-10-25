@@ -15,7 +15,7 @@ import type {
 import { type AgentsMode, openAgent, openAgents, setAgentsMode } from "../../web/store/dock";
 import { subagentForest, workerKey } from "../../web/store/subagents";
 import { flattenSubagentTree } from "../../web/subagents/tree";
-import { answerCalls, type CallHandlers } from "../daemon";
+import { answerCalls, type CallHandlers } from "../session";
 
 /** Subagent fixtures for the session `sess_9d2c` on the omp-web repo (base 2026-10-09 10:00 UTC). */
 
@@ -1169,7 +1169,7 @@ export function seedAgentTree(
 	seedSubagents(
 		{ workerList: () => workers },
 		{
-			currentSessionId: SESSION_ID,
+			currentWorkspaceId: SESSION_ID,
 			workers: workersStateOf(workers),
 			subagents: subagentMapOf(infos),
 			settingsModel: options.display === true ? agentSettingsModel : null,

@@ -1,6 +1,6 @@
 import { App } from "../../../web/App";
 import { setState } from "../../../web/state";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { belowEditorRequest } from "../../fixtures/dialogs";
 import { askUiRequest } from "../../fixtures/overlays";
 import {
@@ -71,8 +71,8 @@ export default defineStory({
 		},
 		{
 			name: "No active session",
-			description: "The daemon is connected but no session is attached.",
-			seed: { currentSessionId: "", items: [] },
+			description: "The session process is connected but no session is attached.",
+			seed: { currentWorkspaceId: "", items: [] },
 			render: () => (
 				<div class="ds-frame ds-frame-tall">
 					<App />

@@ -26,7 +26,7 @@ import { extractText, scanImages } from "#lib/wire/tool-result";
 import type { SessionEntry } from "./session-entry";
 
 // ---------------------------------------------------------------------------
-// Browser-socket delivery. Live deltas carry daemon-global seqs
+// Browser-socket delivery. Live deltas carry session-global seqs
 // (≥ DELTA_SEQ_START) and are kept in a bounded ring so a reconnecting
 // socket can resume from its `after` seq. Priming frames and unicast
 // answers are NOT ringed: priming is always re-derived fresh on open, and a
@@ -48,7 +48,7 @@ export interface ClientSocketData {
 /**
  * One live GET /ws consumer (agent-driving transport). Each consumer is a
  * connection: it primes on open (hello_ok → attached → …), then receives live
- * deltas (daemon-global seqs ≥ DELTA_SEQ_START) and unicast answers. It is
+ * deltas (session-global seqs ≥ DELTA_SEQ_START) and unicast answers. It is
  * also the per-connection key for pending code inputs and UI requests.
  */
 export interface ClientConsumer {
@@ -65,7 +65,7 @@ export interface ClientConsumer {
 	stall?: { since: number; buffered: number };
 }
 
-/** Every live browser socket. The daemon boot (index.ts) adds/removes consumers and reads the size. */
+/** Every live browser socket. The session boot (index.ts) adds/removes consumers and reads the size. */
 export const streams = new Set<ClientConsumer>();
 
 /**
@@ -663,7 +663,7 @@ export async function broadcastHistory(handle: string, frames: HistoryFrame[]): 
  * termination, or shutdown). Sessions outlive sockets: pending code inputs
  * and UI requests that only this socket could answer are rejected. The
  * socket-owned UI-request rejection runs in the boot-registered
- * onConsumerDetached hook (the requests live on the daemon's session state).
+ * onConsumerDetached hook (the requests live on the session process's state).
  */
 export function detachConsumer(consumer: ClientConsumer, reason: string): void {
 	streams.delete(consumer);
@@ -703,7 +703,7 @@ export function notifyEvent(
 // Keepalive: a `{"ping":ms}` message (pingMessage, deliberately unsequenced,
 // so it never advances a client's resume counter) on every open browser
 // socket that has been idle for half a CLIENT_KEEPALIVE_MS. A socket therefore
-// hears from the daemon at least every 1.5 sweeps (22.5 s), inside
+// hears from the session at least every 1.5 sweeps (22.5 s), inside
 // CLIENT_SILENCE_DEADLINE_MS, the point where clients treat total silence as a
 // dead peer and reconnect.
 //
@@ -756,8 +756,8 @@ export function stopKeepalive(): void {
 	keepaliveTimer = undefined;
 }
 
-// Daemon-boot wiring (index.ts registers these once): the delivery module
-// stays free of daemon-level state (the daemon-roster poll, the attached
+// Session-boot wiring (index.ts registers these once): the delivery module
+// stays free of session-level state (the daemon-roster poll, the attached
 // session's pending UI requests) while preserving detach ordering.
 let onStreamsEmpty: () => void = () => {};
 export function setOnStreamsEmpty(fn: () => void): void {

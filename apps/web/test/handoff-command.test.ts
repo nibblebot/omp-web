@@ -63,7 +63,7 @@ beforeEach(async () => {
 afterEach(() => {
 	mock.restore();
 	rejectPendingCalls(new Error("test reset"));
-	setState({ connected: false, sessionDownId: "", currentSessionId: "", error: "" });
+	setState({ connected: false, sessionDownId: "", currentWorkspaceId: "", error: "" });
 });
 
 afterAll(() => {

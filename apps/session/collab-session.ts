@@ -48,7 +48,7 @@ import { watchSkills } from "./skill-methods";
 import { ensureWorkerReviver } from "./worker-lifecycle";
 
 // ---------------------------------------------------------------------------
-// Collab session port (Slice C): the daemon's per-session surface the collab
+// Collab session port (Slice C): the session's per-session surface the collab
 // host adapter drives: session getters, event/entry/bus taps, guest prompt
 // injection, agent roster/control, and transcript resolution. Also owns the
 // slash runtime and the session factory itself (createSession).
@@ -365,7 +365,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		entry.slashRuntime = buildSlashRuntime(entry);
 		// Feeds the tool UI context; without hasUI the ask tool never registers.
 		result.setToolUIContext(buildUiContext(entry), true);
-		// LSP follows the CLI default (main.ts: sessionOptions.enableLsp ?? true); daemon sessions set no override.
+		// LSP follows the CLI default (main.ts: sessionOptions.enableLsp ?? true); omp-session sessions set no override.
 		ensureWorkerReviver(entry, {
 			authStorage: deps.authStorage,
 			modelRegistry: deps.modelRegistry,

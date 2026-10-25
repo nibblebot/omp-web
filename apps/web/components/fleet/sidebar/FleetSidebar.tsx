@@ -1,5 +1,5 @@
 import { createEffect, onCleanup, Show, type Component } from "solid-js";
-import { daemonsByProject, setSidebarRunningOnly, setSidebarVisible, state } from "../../../state";
+import { sessionsByProject, setSidebarRunningOnly, setSidebarVisible, state } from "../../../state";
 import { syncProjects } from "../../../store/projects";
 import { SidebarHeader } from "../../app/SidebarHeader";
 import { ListFilterIcon } from "../../ui/icons";
@@ -10,7 +10,7 @@ import { SidebarUsage } from "./SidebarUsage";
 // ---------------------------------------------------------------------------
 // Fleet-edge roster sidebar (Phase 5). Rendered by App.tsx whenever
 // `state.view === "chat"` (the fleet is the only web UI runtime). Shell:
-// derives the project-first group list (daemonsByProject) and composes the
+// derives the project-first group list (sessionsByProject) and composes the
 // group rendering (ProjectGroups) under the shared SidebarHeader (wordmark,
 // the running-only filter toggle that hides asleep rows, collapse toggle).
 // Each registered project is one group: its rows are the checkouts (main checkout,
@@ -18,7 +18,7 @@ import { SidebarUsage } from "./SidebarUsage";
 // remove-project action, both shown on header hover. Rows without a registered
 // projectId are not shown. The list ends with an "Add project" row (opens the Add
 // project dialog). Row interactions live in
-// WorkspaceRow/DaemonDetailsDialog; collapse state persists per project in
+// WorkspaceRow/SessionDetailsDialog; collapse state persists per project in
 // localStorage (ProjectGroups). The registry re-syncs on window focus (throttled).
 // Below 1024px the sidebar is a
 // layout drawer, not a ModalHost overlay: it owns its .sidebar-scrim (tap
@@ -26,8 +26,8 @@ import { SidebarUsage } from "./SidebarUsage";
 // ---------------------------------------------------------------------------
 
 export const FleetSidebar: Component = () => {
-	/** One group per registered project, in registry order (zero-daemon projects included). */
-	const groups = () => daemonsByProject();
+	/** One group per registered project, in registry order (zero-session projects included). */
+	const groups = () => sessionsByProject();
 	// Roster rows (`data-roster-item`: project toggles and workspace rows) share
 	// one tab stop; arrows, Home and End move between them (listbox-style).
 	let roster!: HTMLDivElement;

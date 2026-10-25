@@ -117,7 +117,7 @@ export const settingThinkingLevelGlobal: SettingsItem = {
 	},
 };
 
-/** SettingsItem: boolean that the daemon warns about. */
+/** SettingsItem: boolean that the session warns about. */
 export const settingAutoCompact: SettingsItem = {
 	path: "compaction.auto",
 	label: "Auto-compact",

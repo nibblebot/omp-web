@@ -1,12 +1,12 @@
 /**
  * A WorkspaceLifecycle for tests that drive host (main-checkout and worktree)
- * sessions over a real registry and a real DaemonTransportRegistry, without a
+ * sessions over a real registry and a real SessionTransportRegistry, without a
  * full fleet server: no log store, no clone provider, a no-op resource deleter.
  */
 
 import { dirname, join } from "node:path";
 import type { FleetConfig } from "../config";
-import type { DaemonTransportRegistry } from "../daemon-transport";
+import type { SessionTransportRegistry } from "../session-transport";
 import { FleetEventLog } from "../events";
 import type { Registry } from "../registry";
 import { WorkspaceLifecycle, type CloneRuntimePolicy } from "../workspace-lifecycle";
@@ -14,15 +14,15 @@ import { WorkspaceLifecycle, type CloneRuntimePolicy } from "../workspace-lifecy
 export interface HostLifecycleOptions {
 	registry: Registry;
 	config: FleetConfig;
-	transport: DaemonTransportRegistry;
+	transport: SessionTransportRegistry;
 	/** The fleet state file; session logs live beside it under session-logs/. */
 	statePath: string;
 	callbackUrl: () => string;
 	/** Restart budget and backoff overrides (shared restart-policy.ts shape). */
 	runtime?: Partial<CloneRuntimePolicy>;
 	pairTimeoutMs?: number;
-	onEnrolled?: (daemonId: string) => void;
-	onSpawned?: (daemonId: string) => void;
+	onEnrolled?: (workspaceId: string) => void;
+	onSpawned?: (workspaceId: string) => void;
 	eventLog?: FleetEventLog;
 }
 

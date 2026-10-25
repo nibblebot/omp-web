@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show, type JSX } from "solid-js";
-import { filterStderr } from "../../../fleet-ui/daemon-log";
-import { fetchDaemonStderr, state } from "../../../state";
+import { filterStderr } from "../../../fleet-ui/session-log";
+import { fetchSessionStderr, state } from "../../../state";
 
 /** Refresh cadence while the log is open for a live session process. */
 const LIVE_POLL_MS = 2000;
@@ -12,10 +12,10 @@ const FOLLOW_SLACK_PX = 8;
  *  following ("jump to latest" resumes it). Live processes re-poll the tail
  *  silently; asleep/errored ones show their last-run capture and do not poll.
  *  "errors only" narrows the tail to triage lines; copy takes the visible text.
- *  Refetches when `daemonId` changes (the id is stable across roster broadcasts
+ *  Refetches when `workspaceId` changes (the id is stable across roster broadcasts
  *  even though the entry object is replaced). */
-export function DaemonLog(props: {
-	daemonId: string;
+export function SessionLog(props: {
+	workspaceId: string;
 	/** Header label; default "stderr". */
 	label?: string;
 	/** Text shown when the log tail is empty; default "(no stderr output yet)". */
@@ -30,10 +30,12 @@ export function DaemonLog(props: {
 
 	// The roster entry is the status source of truth; read it reactively so a
 	// stop/wake broadcast flips the "historical tail" note without a refetch
-	// (the daemonId is stable across roster broadcasts, unlike the entry
-	// object; an asleep/errored daemon's tail is the capture from its last
+	// (the workspaceId is stable across roster broadcasts, unlike the entry
+	// object; an asleep/errored session's tail is the capture from its last
 	// run, not a live stream).
-	const entry = createMemo(() => state.daemonRoster.find((d) => d.daemonId === props.daemonId));
+	const entry = createMemo(() =>
+		state.sessionRoster.find((d) => d.workspaceId === props.workspaceId),
+	);
 	const dead = () => {
 		const status = entry()?.status;
 		return status === "asleep" || status === "error";
@@ -49,7 +51,7 @@ export function DaemonLog(props: {
 		setLoading(true);
 		setError(null);
 		setText(null);
-		fetchDaemonStderr(props.daemonId)
+		fetchSessionStderr(props.workspaceId)
 			.then((data) => setText(data.text))
 			.catch((err) => setError(err instanceof Error ? err.message : String(err)))
 			.finally(() => setLoading(false));
@@ -58,15 +60,15 @@ export function DaemonLog(props: {
 	// Silent live refresh: keeps the visible tail while the new one loads.
 	const poll = () => {
 		if (dead() || loading()) return;
-		fetchDaemonStderr(props.daemonId)
+		fetchSessionStderr(props.workspaceId)
 			.then((data) => setText(data.text))
 			.catch(() => {});
 	};
 
-	// Reload only when the SHOWN daemon changes (daemonId is stable across
+	// Reload only when the SHOWN session changes (workspaceId is stable across
 	// roster broadcasts, unlike the entry object itself).
 	createEffect(() => {
-		void props.daemonId;
+		void props.workspaceId;
 		load();
 	});
 
@@ -96,11 +98,11 @@ export function DaemonLog(props: {
 
 	return (
 		<>
-			<div class="daemon-stderr-head">
-				<span class="daemon-detail-label">{props.label ?? "stderr"}</span>
+			<div class="session-stderr-head">
+				<span class="session-detail-label">{props.label ?? "stderr"}</span>
 				<button
 					type="button"
-					class="daemon-row-btn"
+					class="roster-row-btn"
 					aria-pressed={errorsOnly()}
 					onClick={() => setErrorsOnly(!errorsOnly())}
 				>
@@ -108,7 +110,7 @@ export function DaemonLog(props: {
 				</button>
 				<button
 					type="button"
-					class="daemon-row-btn"
+					class="roster-row-btn"
 					disabled={text() === null || shown() === ""}
 					onClick={() => void copyTail()}
 				>
@@ -116,7 +118,7 @@ export function DaemonLog(props: {
 				</button>
 				<button
 					type="button"
-					class="daemon-row-btn"
+					class="roster-row-btn"
 					disabled={loading()}
 					onClick={() => void load()}
 				>
@@ -124,15 +126,15 @@ export function DaemonLog(props: {
 				</button>
 			</div>
 			<Show when={dead()}>
-				<div class="daemon-stderr-note">{note()}</div>
+				<div class="session-stderr-note">{note()}</div>
 			</Show>
 			<Show when={loading()}>
-				<div class="daemon-stderr-empty">loading stderr…</div>
+				<div class="session-stderr-empty">loading stderr…</div>
 			</Show>
 			<Show when={!loading() && text() !== null}>
-				<div class="daemon-stderr-wrap">
+				<div class="session-stderr-wrap">
 					<pre
-						class="daemon-stderr"
+						class="session-stderr"
 						ref={setPreEl}
 						tabindex="0"
 						aria-label={`${props.label ?? "stderr"} tail`}
@@ -147,7 +149,7 @@ export function DaemonLog(props: {
 					<Show when={!following()}>
 						<button
 							type="button"
-							class="daemon-row-btn daemon-stderr-jump"
+							class="roster-row-btn session-stderr-jump"
 							onClick={() => setFollowing(true)}
 						>
 							jump to latest ↓
@@ -156,7 +158,7 @@ export function DaemonLog(props: {
 				</div>
 			</Show>
 			<Show when={error()}>
-				{(err) => <div class="msg-notice daemon-stderr-error">{err()}</div>}
+				{(err) => <div class="msg-notice session-stderr-error">{err()}</div>}
 			</Show>
 		</>
 	);

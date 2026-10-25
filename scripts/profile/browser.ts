@@ -60,8 +60,8 @@ const BROWSER_ARGS = [
 export interface BrowserPassOptions {
 	/** Fleet origin that serves the UI (bare fleet, see the file header). */
 	baseUrl: string;
-	/** Daemon id of the session to attach and prompt. */
-	sessionDaemonId: string;
+	/** Workspace id of the session to attach and prompt. */
+	workspaceId: string;
 	/** Latency route label: the `route` the directive prompt carries. */
 	route: string;
 	/** Fake model send log (NDJSON), joined after the turn. */
@@ -187,7 +187,7 @@ function wallMsToNs(ms: number): bigint {
 	return BigInt(whole) * NS_PER_MS + BigInt(Math.round((ms - whole) * 1e6));
 }
 
-async function sessionCwd(baseUrl: string, daemonId: string): Promise<string> {
+async function sessionCwd(baseUrl: string, workspaceId: string): Promise<string> {
 	const res = await fetch(`${baseUrl}/ctl/sessions`);
 	if (!res.ok) throw new Error(`GET /ctl/sessions -> ${res.status}`);
 	const rows: unknown = await res.json();
@@ -196,15 +196,15 @@ async function sessionCwd(baseUrl: string, daemonId: string): Promise<string> {
 		if (
 			typeof row === "object" &&
 			row !== null &&
-			"daemonId" in row &&
-			row.daemonId === daemonId &&
+			"workspaceId" in row &&
+			row.workspaceId === workspaceId &&
 			"cwd" in row &&
 			typeof row.cwd === "string"
 		) {
 			return row.cwd;
 		}
 	}
-	throw new Error(`session ${daemonId} is not in the fleet roster`);
+	throw new Error(`session ${workspaceId} is not in the fleet roster`);
 }
 
 async function assertUiServed(baseUrl: string): Promise<void> {
@@ -243,7 +243,7 @@ export async function runBrowserPass(opts: BrowserPassOptions): Promise<BrowserP
 	const timeoutMs = opts.timeoutMs ?? 120_000;
 	const notes: string[] = [];
 	await assertUiServed(opts.baseUrl);
-	const cwd = await sessionCwd(opts.baseUrl, opts.sessionDaemonId);
+	const cwd = await sessionCwd(opts.baseUrl, opts.workspaceId);
 	const found = await resolveChromium(opts.chromiumPath);
 	if (found.rejected.length > 0) {
 		notes.push(`skipped Chromium candidates: ${found.rejected.join("; ")}`);
@@ -297,14 +297,14 @@ export async function runBrowserPass(opts: BrowserPassOptions): Promise<BrowserP
 		await opts.onLaunch?.(rootPid);
 
 		const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1 });
-		const probeConfig: ProbeConfig = { sessionId: opts.sessionDaemonId, key: PROBE_KEY };
+		const probeConfig: ProbeConfig = { workspaceId: opts.workspaceId, key: PROBE_KEY };
 		await context.addInitScript(installProbe, probeConfig);
 		const page = await context.newPage();
 		const pageErrors: string[] = [];
 		page.on("pageerror", (err) => pageErrors.push(err.message));
 		await page.goto(opts.baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
 
-		const row = page.locator(`.daemon-row-title[title=${JSON.stringify(cwd)}]`);
+		const row = page.locator(`.roster-row-title[title=${JSON.stringify(cwd)}]`);
 		await row.waitFor({ state: "visible", timeout: timeoutMs });
 		for (const pid of chromiumPins(rootPid)) seenPids.add(pid);
 		await opts.onPageReady?.(rootPid);

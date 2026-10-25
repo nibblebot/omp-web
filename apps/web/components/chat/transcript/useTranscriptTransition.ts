@@ -53,7 +53,7 @@ export interface TranscriptElements {
  * A vanished session (phase loaded to idle with the session still set) gets the
  * same snapshot fade, and holds the chat pane mounted until it ends.
  *
- * A re-attach of the attached daemon never changes the phase, so it has no
+ * A re-attach of the attached session never changes the phase, so it has no
  * transition at all.
  */
 export function useTranscriptTransition(els: TranscriptElements): {
@@ -165,7 +165,7 @@ export function useTranscriptTransition(els: TranscriptElements): {
 		on(
 			() => state.transcriptPhase,
 			(phase, prev) => {
-				if (phase !== "idle" || prev !== "loaded" || state.currentSessionId === "") return;
+				if (phase !== "idle" || prev !== "loaded" || state.currentWorkspaceId === "") return;
 				const fading = snapshot();
 				if (fading === null) return;
 				setTranscriptExiting(true);

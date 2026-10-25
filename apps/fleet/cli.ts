@@ -4,7 +4,7 @@
  *
  * Bare `omp-web` (no verb, flags allowed) runs the control plane and the UI
  * on one port (foreground). `control` runs the control plane alone; `ui` runs
- * the UI daemon (static UI plus a reverse proxy to the control plane) on its
+ * the UI server (static UI plus a reverse proxy to the control plane) on its
  * own port. `help` prints usage. Every other subcommand is a thin loopback
  * HTTP client against the control plane:
  *
@@ -28,7 +28,7 @@
  *   omp-web remove <selector>
  *   omp-web rm-project <selector>
  *   omp-web add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]
- *   omp-web rm-worktree <daemon-id> [--delete-branch <name>]
+ *   omp-web rm-worktree <workspace-id> [--delete-branch <name>]
  *   omp-web prompt <selector> <text> [--wait <ms>]
  *
  * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722. For `ui`,
@@ -58,8 +58,8 @@ import { DEFAULT_UI_PORT, startUiServer, type UiServer } from "./ui-server";
 const NOT_RUNNING_MESSAGE = "omp-web not running. Start it: omp-web";
 
 /** Wire shapes the CLI renders (subsets of RegistryEntry / RegisteredProject). */
-interface DaemonRow {
-	daemonId: string;
+interface SessionRow {
+	workspaceId: string;
 	name: string;
 	projectId?: string;
 	status: string;
@@ -254,11 +254,11 @@ function renderTable(headers: string[], rows: string[][]): string {
 	return [format(headers), ...rows.map(format)].join("\n");
 }
 
-function isDaemonRow(value: unknown): value is DaemonRow {
+function isSessionRow(value: unknown): value is SessionRow {
 	if (typeof value !== "object" || value === null) return false;
 	const row = value as Record<string, unknown>;
 	return (
-		typeof row.daemonId === "string" &&
+		typeof row.workspaceId === "string" &&
 		typeof row.name === "string" &&
 		typeof row.status === "string"
 	);
@@ -331,8 +331,9 @@ export async function serveLoop(server: FleetServer, opts: ServeLoopOptions): Pr
 	// verbose); each stands on its message alone.
 	server.eventLog.onEntry = (entry) => {
 		if (!opts.verbose && entry.level === "info") return;
-		const daemon = entry.daemonId !== undefined ? server.registry.get(entry.daemonId) : undefined;
-		const parts = [entry.daemonId, daemon?.name, entry.message];
+		const session =
+			entry.workspaceId !== undefined ? server.registry.get(entry.workspaceId) : undefined;
+		const parts = [entry.workspaceId, session?.name, entry.message];
 		const shown = parts.filter((part): part is string => part !== undefined && part !== "");
 		console.log(`omp-web: ${shown.join(" ")}`);
 	};
@@ -355,7 +356,7 @@ export async function serveLoop(server: FleetServer, opts: ServeLoopOptions): Pr
 }
 
 /**
- * `omp-web ui`: the UI daemon (static UI + reverse proxy to the control
+ * `omp-web ui`: the UI server (static UI + reverse proxy to the control
  * plane) in the foreground until SIGINT/SIGTERM. `port` is the UI listen
  * port; `controlPort` is where the control plane listens.
  */
@@ -409,8 +410,8 @@ async function sessionsCmd(port: number): Promise<number> {
 	const body = await ctl(port, "/ctl/sessions");
 	if (!Array.isArray(body)) throw new CliError("unexpected sessions response");
 	const rows = (body as unknown[])
-		.filter(isDaemonRow)
-		.map((entry) => [entry.daemonId, entry.name, entry.status, entry.project, entry.cwd ?? ""]);
+		.filter(isSessionRow)
+		.map((entry) => [entry.workspaceId, entry.name, entry.status, entry.project, entry.cwd ?? ""]);
 	console.log(renderTable(["id", "name", "status", "project", "cwd"], rows));
 	return 0;
 }
@@ -422,7 +423,7 @@ async function projectsCmd(port: number): Promise<number> {
 	const worktrees = new Map<string, number>();
 	if (Array.isArray(roster)) {
 		for (const row of roster) {
-			if (!isDaemonRow(row) || row.projectId === undefined) continue;
+			if (!isSessionRow(row) || row.projectId === undefined) continue;
 			worktrees.set(row.projectId, (worktrees.get(row.projectId) ?? 0) + 1);
 		}
 	}
@@ -479,7 +480,7 @@ async function spawnCmd(
 		}),
 	})) as Record<string, unknown>;
 	console.log(
-		`spawned ${String(body.daemonId)} (${String(body.name)}), status ${String(body.status)}`,
+		`spawned ${String(body.workspaceId)} (${String(body.name)}), status ${String(body.status)}`,
 	);
 	return 0;
 }
@@ -501,11 +502,11 @@ async function addRepoCmd(
 			start: flagBoolean(flags, "start"),
 			template: flagString(flags, "template"),
 		}),
-	})) as { project?: { projectId?: string; path?: string }; entry?: { daemonId?: string } };
+	})) as { project?: { projectId?: string; path?: string }; entry?: { workspaceId?: string } };
 	const project = body.project;
 	const registered = `${project?.projectId ?? "?"} (${project?.path ?? path})`;
-	if (body.entry?.daemonId !== undefined) {
-		console.log(`registered ${registered}, spawned ${body.entry.daemonId}`);
+	if (body.entry?.workspaceId !== undefined) {
+		console.log(`registered ${registered}, spawned ${body.entry.workspaceId}`);
 	} else {
 		console.log(`registered ${registered}`);
 	}
@@ -571,10 +572,10 @@ async function addWorktreeCmd(
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({ name, baseRef: base, existingBranch: branch, start }),
-	})) as { entry?: { daemonId?: string; cwd?: string; status?: string } };
+	})) as { entry?: { workspaceId?: string; cwd?: string; status?: string } };
 	const entry = body.entry ?? {};
 	console.log(
-		`created worktree ${String(entry.cwd ?? name)} (${String(entry.daemonId ?? "?")})${start ? `, status ${String(entry.status ?? "?")}` : ", not started"}`,
+		`created worktree ${String(entry.cwd ?? name)} (${String(entry.workspaceId ?? "?")})${start ? `, status ${String(entry.status ?? "?")}` : ", not started"}`,
 	);
 	return 0;
 }
@@ -623,12 +624,14 @@ async function addCloneCmd(
 			branch: flagString(flags, "branch"),
 			start,
 		}),
-	})) as { entry?: { daemonId?: string; cwd?: string; status?: string; lifecycleStage?: string } };
+	})) as {
+		entry?: { workspaceId?: string; cwd?: string; status?: string; lifecycleStage?: string };
+	};
 	const entry = body.entry ?? {};
 	const where = String(entry.cwd ?? name);
 	const stage = entry.lifecycleStage !== undefined ? ` ${entry.lifecycleStage}` : "";
 	console.log(
-		`created clone ${where} (${String(entry.daemonId ?? "?")})${start ? `, status ${String(entry.status ?? "?")}${stage}` : ", not started"}`,
+		`created clone ${where} (${String(entry.workspaceId ?? "?")})${start ? `, status ${String(entry.status ?? "?")}${stage}` : ", not started"}`,
 	);
 	return 0;
 }
@@ -676,7 +679,7 @@ async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
 	return result.ok ? 0 : 1;
 }
 
-/** rm-worktree <daemon-id> [--delete-branch <name>]: stop + evict + git worktree
+/** rm-worktree <workspace-id> [--delete-branch <name>]: stop + evict + git worktree
  *  remove (worktree kind), or the verify-at-deletion gate for clone
  *  workspaces (same DELETE route; the server dispatches by kind). */
 async function rmWorktreeCmd(
@@ -684,11 +687,11 @@ async function rmWorktreeCmd(
 	flags: Map<string, FlagValue>,
 	port: number,
 ): Promise<number> {
-	const daemonId = positionals[0];
-	if (daemonId === undefined)
-		throw new CliError("usage: omp-web rm-worktree <daemon-id> [--delete-branch <name>]");
+	const workspaceId = positionals[0];
+	if (workspaceId === undefined)
+		throw new CliError("usage: omp-web rm-worktree <workspace-id> [--delete-branch <name>]");
 	const deleteBranch = flagString(flags, "delete-branch");
-	const body = (await ctl(port, `/ctl/worktrees/${encodeURIComponent(daemonId)}`, {
+	const body = (await ctl(port, `/ctl/worktrees/${encodeURIComponent(workspaceId)}`, {
 		method: "DELETE",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(deleteBranch === undefined ? {} : { deleteBranch }),
@@ -700,8 +703,8 @@ async function rmWorktreeCmd(
 	].filter((part) => part !== "");
 	const removedLabel =
 		body.verified !== undefined
-			? `removed clone workspace daemon ${String(body.removed ?? daemonId)} (verified ${(body.verified as unknown[]).length} session${(body.verified as unknown[]).length === 1 ? "" : "s"})`
-			: `removed worktree daemon ${String(body.removed ?? daemonId)}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`;
+			? `removed clone workspace session ${String(body.removed ?? workspaceId)} (verified ${(body.verified as unknown[]).length} session${(body.verified as unknown[]).length === 1 ? "" : "s"})`
+			: `removed worktree session ${String(body.removed ?? workspaceId)}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`;
 	console.log(removedLabel);
 	return 0;
 }
@@ -710,7 +713,7 @@ async function rmWorktreeCmd(
  * start <selector>: fleet-side start of any workspace, a provider clone or a
  * main-checkout/worktree session (POST /ctl/start, server alias of /ctl/wake):
  * the lifecycle's one start verb picks the runtime by kind. The route accepts
- * a daemon id only, so the selector (id or exact roster name) is resolved
+ * a workspace id only, so the selector (id or exact roster name) is resolved
  * client-side against /ctl/sessions first.
  */
 async function startCmd(
@@ -723,22 +726,22 @@ async function startCmd(
 	const roster = await ctl(port, "/ctl/sessions");
 	if (!Array.isArray(roster)) throw new CliError("unexpected sessions response");
 	const matches = (roster as unknown[])
-		.filter(isDaemonRow)
-		.filter((row) => row.daemonId === selector || row.name === selector);
+		.filter(isSessionRow)
+		.filter((row) => row.workspaceId === selector || row.name === selector);
 	if (matches.length === 0) {
 		throw new CliError(`no session matches selector: ${selector}`);
 	}
 	const first = matches[0];
-	if (matches.some((row) => row.daemonId !== first.daemonId)) {
-		throw new CliError(`selector ${selector} matches multiple daemons; use a daemon id`);
+	if (matches.some((row) => row.workspaceId !== first.workspaceId)) {
+		throw new CliError(`selector ${selector} matches multiple sessions; use a workspace id`);
 	}
 	const body = (await ctl(port, "/ctl/start", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ daemonId: first.daemonId }),
+		body: JSON.stringify({ workspaceId: first.workspaceId }),
 	})) as { observed?: string; pid?: number };
 	console.log(
-		`started ${first.daemonId}, observed ${String(body.observed ?? "?")}` +
+		`started ${first.workspaceId}, observed ${String(body.observed ?? "?")}` +
 			(body.pid !== undefined ? ` (pid ${body.pid})` : ""),
 	);
 	return 0;
@@ -779,7 +782,7 @@ async function removeCmd(
 }
 
 interface PromptResultRow {
-	daemonId: string;
+	workspaceId: string;
 	ok: boolean;
 	text?: string;
 	error?: string;
@@ -820,7 +823,7 @@ async function promptCmd(
 	});
 	if (!Array.isArray(body)) throw new CliError("unexpected prompt response");
 	for (const result of body as PromptResultRow[]) {
-		console.log(`== ${result.daemonId} ==`);
+		console.log(`== ${result.workspaceId} ==`);
 		if (result.ok) console.log(result.text ?? "");
 		else console.log(`error: ${result.error ?? "unknown error"}`);
 	}
@@ -832,7 +835,7 @@ const USAGE = `usage: omp-web [options] | omp-web <command> [options]
 commands:
   (none)                       control plane + UI on one port
   control                      control plane only; no UI on this port
-  ui                           UI daemon: static UI + proxy to the control plane
+  ui                           UI server: static UI + proxy to the control plane
   sessions                     list sessions
   projects                     list registered projects (id, name, path, worktrees, missing)
   profiles                     list provider profiles (secret-free catalog)
@@ -846,7 +849,7 @@ commands:
   rm-project <selector>
   preflight --profile <id>
   add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]
-  rm-worktree <daemon-id> [--delete-branch <name>]
+  rm-worktree <workspace-id> [--delete-branch <name>]
   prompt <selector> <text> [--wait <ms>]
 
 options:

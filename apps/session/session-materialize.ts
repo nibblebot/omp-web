@@ -1,7 +1,7 @@
 /**
- * Daemon-side wake materialization.
+ * Session-side wake materialization.
  * When a session transcript is cold or missing in the agent dir and a fleet
- * callback pair is active, the daemon requests the stored lineage bytes from
+ * callback pair is active, the session requests the stored lineage bytes from
  * the fleet log store over the bulk channel and writes them into the agent
  * sessions layout BEFORE the existing resume path runs.
  *
@@ -17,7 +17,7 @@
  * final file of a transfer may straddle the boundary. A straddled file is
  * accumulated in a same-dir temp file across transfers and committed only
  * when its declared size is reached, so memory stays bounded regardless of
- * file size. Every file record carries the FULL-file sha256; the daemon
+ * file size. Every file record carries the FULL-file sha256; the session
  * re-hashes the accumulated bytes at completion and verifies size + digest
  * BEFORE the temp is renamed over the target. Files are fsynced before
  * rename; parents are fsynced on first creation.
@@ -406,7 +406,7 @@ function transferError(error: unknown, sessionId: string): MaterializeSessionErr
 }
 
 /** True when the sessions tree already has ANY file for this session (main
- * file or artifact dir); the daemon skips materialization when warm. */
+ * file or artifact dir); the session skips materialization when warm. */
 export function sessionTreeExists(sessionsDir: string, sessionId: string): boolean {
 	const probes = [join(sessionsDir, `${sessionId}.jsonl`), join(sessionsDir, sessionId)];
 	let entries;

@@ -4,7 +4,7 @@ Profiling summary for the client hop: browser to fleet (H1) and a direct client 
 
 ## Method
 
-- **Harness:** `bun run profile --browser`, 5 reps x 20 s per scenario, 1 warmup. The isolated fleet runs real session daemons against the fake model. The harness client speaks the wire under test: the `sse-post` adapter in the baseline and the `ws` adapter after. Command RTT is measured from send to the answer frame in both, and does not count the ack.
+- **Harness:** `bun run profile --browser`, 5 reps x 20 s per scenario, 1 warmup. The isolated fleet runs real session processes against the fake model. The harness client speaks the wire under test: the `sse-post` adapter in the baseline and the `ws` adapter after. Command RTT is measured from send to the answer frame in both, and does not count the ack.
 - **Host:** i9-13900KF, Bun 1.4.2, with the default pinning (fleet on cpu 0, sessions on 2/4/6/8, Chromium on 10/12, fake model on 16-23, harness on 24-31). Every run holds `flock /tmp/omp-web-profile.lock`.
 - **Noise band:** 3 x MAD (floored), as `--compare` applies it. Anything flagged was rerun A-B-A, with the same-code drift sized by a rerun of the baseline code.
 - **Attribution-only runs:** `--heap` was used only to find causes, never as a decision number.

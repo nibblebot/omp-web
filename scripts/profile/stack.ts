@@ -1,7 +1,7 @@
 /**
  * The system under test: one out-of-process fleet (`omp-web control` entry,
  * own state/config/workspace dirs and port) whose sessions are real
- * `apps/session/index.ts` daemons spawned through the normal fleet path
+ * `apps/session/index.ts` sessions spawned through the normal fleet path
  * (spawn templates). Models come from a fake OpenAI-compatible server the
  * harness runs; every session and the fleet share one isolated agent dir, as
  * production sessions share ~/.omp/agent.
@@ -15,7 +15,7 @@ import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
-import type { DaemonEntry } from "#lib/wire/protocol";
+import type { RosterEntry } from "#lib/wire/protocol";
 import { writeAgentDir } from "./fake-model/config";
 import { descendantPids, isAlive, pidsByCmdline } from "./proc";
 import { ensureAffinity } from "./pinning";
@@ -52,12 +52,12 @@ export interface SessionHandle {
 	cpus: string | undefined;
 	repo: string;
 	projectId: string;
-	daemonId: string;
+	workspaceId: string;
 	name: string;
-	/** Daemon pid the fleet reported (may be the sh wrapper). */
+	/** Session pid the fleet reported (may be the sh wrapper). */
 	rootPid: number;
-	/** The bun session daemon pids (self only, not tool subprocesses). */
-	daemonPids(): number[];
+	/** The bun session process pids (self only, not tool subprocesses). */
+	sessionPids(): number[];
 	/** Every process under the root pid, tool subprocesses included. */
 	treePids(): number[];
 }
@@ -219,8 +219,8 @@ export class Stack {
 		return [...this.#sessions.values()];
 	}
 
-	roster(): Promise<DaemonEntry[]> {
-		return this.ctl<DaemonEntry[]>("GET", "/ctl/sessions");
+	roster(): Promise<RosterEntry[]> {
+		return this.ctl<RosterEntry[]>("GET", "/ctl/sessions");
 	}
 
 	/** The session directory the SDK uses for `cwd` under this stack's agent dir. */
@@ -241,7 +241,7 @@ export class Stack {
 		const start = opts.start ?? true;
 		const res = await this.ctl<{
 			project: { projectId: string };
-			entry?: DaemonEntry;
+			entry?: RosterEntry;
 			existing?: boolean;
 		}>("POST", "/ctl/projects", { path: repo, start, template: `s${spec.slot + 1}` });
 		if (res.existing) throw new Error(`project ${repo} already registered`);
@@ -254,10 +254,10 @@ export class Stack {
 			cpus: this.#opts.pin.enabled ? this.#opts.pin.sessions[spec.slot] : undefined,
 			repo,
 			projectId: res.project.projectId,
-			daemonId: row.daemonId,
+			workspaceId: row.workspaceId,
 			name: row.name,
 			rootPid: row.pid ?? 0,
-			daemonPids: () => this.#daemonPids(row.name, handle.rootPid),
+			sessionPids: () => this.#sessionPids(row.name, handle.rootPid),
 			treePids: () => (handle.rootPid > 0 ? descendantPids(handle.rootPid) : []),
 		};
 		this.#sessions.set(spec.label, handle);
@@ -265,7 +265,7 @@ export class Stack {
 		return handle;
 	}
 
-	#daemonPids(name: string, rootPid: number): number[] {
+	#sessionPids(name: string, rootPid: number): number[] {
 		const tree = new Set(rootPid > 0 ? descendantPids(rootPid) : []);
 		const out = pidsByCmdline(
 			(argv) =>
@@ -276,11 +276,11 @@ export class Stack {
 	}
 
 	/** Wait for the roster row to be `ready` with a session file, refreshing the pid. */
-	async waitReady(handle: SessionHandle, timeoutMs = 60_000): Promise<DaemonEntry> {
+	async waitReady(handle: SessionHandle, timeoutMs = 60_000): Promise<RosterEntry> {
 		const deadline = Date.now() + timeoutMs;
-		let last: DaemonEntry | undefined;
+		let last: RosterEntry | undefined;
 		while (Date.now() < deadline) {
-			last = (await this.roster()).find((d) => d.daemonId === handle.daemonId);
+			last = (await this.roster()).find((d) => d.workspaceId === handle.workspaceId);
 			if (last?.status === "ready" && last.lastSessionFile !== undefined) {
 				if (last.pid !== undefined) handle.rootPid = last.pid;
 				return last;
@@ -311,7 +311,7 @@ export class Stack {
 	 * deletes it with the session, and it is the evidence when a run misbehaves.
 	 */
 	#saveSessionLog(handle: SessionHandle): void {
-		const source = join(this.#opts.outDir, "fleet", "session-logs", `${handle.daemonId}.log`);
+		const source = join(this.#opts.outDir, "fleet", "session-logs", `${handle.workspaceId}.log`);
 		if (!existsSync(source)) return;
 		const dir = join(this.#opts.outDir, "session-logs");
 		mkdirSync(dir, { recursive: true });
@@ -336,7 +336,7 @@ export class Stack {
 		this.#stopped = true;
 		for (const handle of this.#sessions.values()) {
 			this.#saveSessionLog(handle);
-			await this.ctl("POST", "/ctl/stop", { selector: handle.daemonId }).catch(() => undefined);
+			await this.ctl("POST", "/ctl/stop", { selector: handle.workspaceId }).catch(() => undefined);
 		}
 		this.#sessions.clear();
 		if (this.#fleet.exitCode === null) {

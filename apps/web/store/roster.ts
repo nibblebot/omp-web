@@ -1,4 +1,8 @@
-import { daemonSessionsLimit, type ClientCommand, type SessionListEntry } from "#lib/wire/protocol";
+import {
+	workspaceSessionsLimit,
+	type ClientCommand,
+	type SessionListEntry,
+} from "#lib/wire/protocol";
 import {
 	SIDEBAR_KEY,
 	SIDEBAR_RUNNING_ONLY_KEY,
@@ -28,7 +32,7 @@ import { reportError } from "./toasts";
  * Fleet-roster domain (Phase 3 store facade split): session/file listing
  * (latest-wins pulls answered by unicast frames) and the persisted roster
  * sidebar visibility toggle. The roster mirror itself
- * (daemonsByProject, roster frame handling, daemon status announcements)
+ * (sessionsByProject, roster frame handling, session status announcements)
  * stays in state.ts alongside the mux.
  */
 
@@ -58,46 +62,46 @@ export function resetPendingSessionsFiles(): void {
 	pendingSessions = null;
 	pendingFiles?.([]);
 	pendingFiles = null;
-	for (const resolve of pendingDaemonSessions.values()) resolve([]);
-	pendingDaemonSessions.clear();
+	for (const resolve of pendingWorkspaceSessions.values()) resolve([]);
+	pendingWorkspaceSessions.clear();
 }
 
 /**
- * Latest-wins waiters for list_daemon_sessions (answer: unicast
- * `daemon_sessions` frame echoing the effective limit). Keyed by daemonId and
+ * Latest-wins waiters for list_workspace_sessions (answer: unicast
+ * `workspace_sessions` frame echoing the effective limit). Keyed by workspaceId and
  * effective limit so a 200-row dialog request never supersedes the
- * default-limit empty-screen request for the same daemon; a superseded
+ * default-limit empty-screen request for the same session; a superseded
  * request resolves empty.
  */
-const pendingDaemonSessions = new Map<string, (sessions: SessionListEntry[]) => void>();
+const pendingWorkspaceSessions = new Map<string, (sessions: SessionListEntry[]) => void>();
 
-function daemonSessionsKey(daemonId: string, limit: number | undefined): string {
-	return `${daemonId}\u0000${daemonSessionsLimit(limit)}`;
+function workspaceSessionsKey(workspaceId: string, limit: number | undefined): string {
+	return `${workspaceId}\u0000${workspaceSessionsLimit(limit)}`;
 }
 
 /**
- * Settle the list_daemon_sessions waiter for `daemonId` at `limit` (the
+ * Settle the list_workspace_sessions waiter for `workspaceId` at `limit` (the
  * answer frame's effective limit; omitted = the default size).
  */
-export function settleDaemonSessions(
-	daemonId: string,
+export function settleWorkspaceSessions(
+	workspaceId: string,
 	sessions: SessionListEntry[],
 	limit?: number,
 ): void {
-	const key = daemonSessionsKey(daemonId, limit);
-	const resolve = pendingDaemonSessions.get(key);
+	const key = workspaceSessionsKey(workspaceId, limit);
+	const resolve = pendingWorkspaceSessions.get(key);
 	if (resolve !== undefined) {
-		pendingDaemonSessions.delete(key);
+		pendingWorkspaceSessions.delete(key);
 		resolve(sessions);
 	}
 }
 
 /**
- * Fetch a daemon's last sessions, newest-first. `limit` omitted = the fleet
+ * Fetch a session's last sessions, newest-first. `limit` omitted = the fleet
  * default (10); the fleet clamps to 1..200.
  */
-export function requestDaemonSessions(
-	daemonId: string,
+export function requestWorkspaceSessions(
+	workspaceId: string,
 	limit?: number,
 ): Promise<SessionListEntry[]> {
 	const { promise, resolve } = Promise.withResolvers<SessionListEntry[]>();
@@ -105,18 +109,18 @@ export function requestDaemonSessions(
 		resolve([]);
 		return promise;
 	}
-	const key = daemonSessionsKey(daemonId, limit);
-	pendingDaemonSessions.get(key)?.([]); // supersede an older same-size request
-	pendingDaemonSessions.set(key, resolve);
+	const key = workspaceSessionsKey(workspaceId, limit);
+	pendingWorkspaceSessions.get(key)?.([]); // supersede an older same-size request
+	pendingWorkspaceSessions.set(key, resolve);
 	sendCommand({
-		type: "list_daemon_sessions",
+		type: "list_workspace_sessions",
 		id: crypto.randomUUID(),
-		daemonId,
+		workspaceId,
 		...(limit !== undefined && { limit }),
 	}).catch(() => {
 		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
-		if (pendingDaemonSessions.get(key) === resolve) {
-			pendingDaemonSessions.delete(key);
+		if (pendingWorkspaceSessions.get(key) === resolve) {
+			pendingWorkspaceSessions.delete(key);
 			resolve([]);
 		}
 	});
@@ -124,7 +128,7 @@ export function requestDaemonSessions(
 }
 
 /**
- * Attach `daemonId`, first waiting for its wake when `woke` is given (the
+ * Attach `workspaceId`, first waiting for its wake when `woke` is given (the
  * spawn_resume command, see spawnResume). The browser posts the two as independent
  * fetches whose arrival order at the edge is not guaranteed; an attach that
  * overtakes the wake would wake the row on lastSessionFile and fail the pick, so
@@ -138,24 +142,24 @@ export function requestDaemonSessions(
  * This is the one writer of the transcript's switch phases (`waking`,
  * `attaching`, `failed`), each only while its attach intent is still the
  * latest: a superseded switch never touches the pane the newer one owns.
- * Re-attaching the daemon the view is already on is no transition and writes
+ * Re-attaching the session the view is already on is no transition and writes
  * nothing (the caller reports its failure). `loaded` comes from the history
  * frame (loadHistory), never from here.
  */
 export function wakeAndAttach(
-	daemonId: string,
+	workspaceId: string,
 	woke: Promise<boolean> | null = null,
 ): Promise<string | null> {
-	const quiet = state.currentSessionId === daemonId;
+	const quiet = state.currentWorkspaceId === workspaceId;
 	let intent = claimAttachIntent();
 	const writePhase = (phase: "waking" | "attaching" | "failed", error: string | null = null) => {
 		if (quiet || !isLatestAttachIntent(intent)) return;
-		setState({ transcriptPhase: phase, transcriptTarget: daemonId, transcriptError: error });
+		setState({ transcriptPhase: phase, transcriptTarget: workspaceId, transcriptError: error });
 	};
 	const attach = (): Promise<string> => {
 		// The attach request claims its own intent; the phase writes ride it. They
 		// hang off a side branch so the caller's chain keeps its microtask timing.
-		const attached = attachSession(daemonId);
+		const attached = attachSession(workspaceId);
 		intent = currentAttachIntent();
 		attached.then(
 			() => {
@@ -176,31 +180,32 @@ export function wakeAndAttach(
 			writePhase("failed", "The session could not be started.");
 			return null;
 		}
-		if (!isLatestAttachIntent(intent)) return state.currentSessionId;
+		if (!isLatestAttachIntent(intent)) return state.currentWorkspaceId;
 		return attach();
 	});
 }
 
 /**
- * Switch the transcript to `daemonId` (a row click, the new-workspace attach, the
- * palette, a deep link): asleep/stopped daemons wake then attach, everything else
+ * Switch the transcript to `workspaceId` (a row click, the new-workspace attach, the
+ * palette, a deep link): asleep/stopped sessions wake then attach, everything else
  * attaches. Claims the attach intent, so a later click supersedes this one and
  * only the latest writes `transcriptPhase`. Never rejects: a failure lands in
  * phase `failed` with `transcriptError` (the transcript shows it with Retry).
  * Resolves when the switch settled or was superseded; the history frame, not
- * this promise, marks the transcript loaded. Clicking the attached daemon is a
- * no-op, except that it dismisses a failed attempt at another daemon.
+ * this promise, marks the transcript loaded. Clicking the attached session is a
+ * no-op, except that it dismisses a failed attempt at another session.
  */
-export async function switchToDaemon(daemonId: string): Promise<void> {
-	const asleep = state.daemonRoster.find((d) => d.daemonId === daemonId)?.status === "asleep";
-	if (!asleep && state.currentSessionId === daemonId) {
+export async function switchToSession(workspaceId: string): Promise<void> {
+	const asleep =
+		state.sessionRoster.find((d) => d.workspaceId === workspaceId)?.status === "asleep";
+	if (!asleep && state.currentWorkspaceId === workspaceId) {
 		if (state.transcriptPhase === "failed")
 			setState({ transcriptPhase: "loaded", transcriptError: null, transcriptTarget: null });
 		return;
 	}
-	const quiet = state.currentSessionId === daemonId;
+	const quiet = state.currentWorkspaceId === workspaceId;
 	try {
-		await wakeAndAttach(daemonId, asleep ? spawnResume(daemonId) : null);
+		await wakeAndAttach(workspaceId, asleep ? spawnResume(workspaceId) : null);
 	} catch (err) {
 		// A quiet re-attach has no pane to show the failure in.
 		if (quiet) reportError(err);
@@ -208,76 +213,77 @@ export async function switchToDaemon(daemonId: string): Promise<void> {
 }
 
 /**
- * Resume a specific session of a daemon from the worktree sessions dialog.
+ * Resume a specific session of a session from the worktree sessions dialog.
  *
- * Asleep daemons wake with spawn_resume carrying the chosen session file
+ * Asleep sessions wake with spawn_resume carrying the chosen session file
  * (the edge validates it belongs to the worktree) and then attach, even when
- * the view is already on that daemon: a UI stop keeps currentSessionId on the
- * stopped daemon while the edge closes its browser pipe, so only a fresh
+ * the view is already on that session: a UI stop keeps currentWorkspaceId on the
+ * stopped session while the edge closes its browser pipe, so only a fresh
  * attach rebinds the stream (the edge closes any previous pipe first, so
- * re-attaching the same daemon never double-primes). Ready daemons attach
+ * re-attaching the same session never double-primes). Ready sessions attach
  * (when not already attached) and switch to the session if it is not the one
  * currently live. Resolves when the attach settles / the command is issued,
  * so the caller can end its waking pulse. NEVER surfaces a "session
  * switched" supersession as an error; see switchSessionRetry.
  */
-export function resumeDaemonSession(daemonId: string, sessionFile: string): Promise<void> {
-	const back = state.daemonRoster.find((d) => d.daemonId === daemonId);
+export function resumeSession(workspaceId: string, sessionFile: string): Promise<void> {
+	const back = state.sessionRoster.find((d) => d.workspaceId === workspaceId);
 	const currentFile =
-		state.currentSessionId === daemonId ? state.sessionFile : back?.lastSessionFile;
+		state.currentWorkspaceId === workspaceId ? state.sessionFile : back?.lastSessionFile;
 	if (back?.status === "asleep") {
 		// Wake then attach (mirrors the old asleep-row click): the edge wakes
 		// first and answers the attach once the session is ready.
-		const woke = spawnResume(daemonId, sessionFile);
-		return wakeAndAttach(daemonId, woke).then(
+		const woke = spawnResume(workspaceId, sessionFile);
+		return wakeAndAttach(workspaceId, woke).then(
 			() => undefined,
 			(err) => {
 				reportError(err);
 			},
 		);
 	}
-	// Ready daemon. Attach FIRST when not already attached; a switchSession
-	// dispatched before the attach settles routes to the wrong/no daemon and
+	// Ready session. Attach FIRST when not already attached; a switchSession
+	// dispatched before the attach settles routes to the wrong/no session and
 	// is swept by the attach's "session switched" supersession. The switch
-	// only ever runs once the current daemon is (or is already) attached.
+	// only ever runs once the current session is (or is already) attached.
 	const attach =
-		state.currentSessionId === daemonId
+		state.currentWorkspaceId === workspaceId
 			? Promise.resolve()
-			: wakeAndAttach(daemonId).then(
+			: wakeAndAttach(workspaceId).then(
 					() => undefined,
 					(err) => {
 						reportError(err);
 					},
 				);
-	// Picking the live file on a ready daemon is a pure attach (no switch).
+	// Picking the live file on a ready session is a pure attach (no switch).
 	if (sessionFile === currentFile) return attach;
-	return attach.then(() => switchSessionRetry(daemonId, sessionFile));
+	return attach.then(() => switchSessionRetry(workspaceId, sessionFile));
 }
 
 /**
- * Start a fresh session in a daemon's worktree (the roster row's "+" under
- * its session switcher). Asleep daemons wake first (respawn --resume
- * lastSessionFile, as a row click does); the daemon attaches when it is not
+ * Start a fresh session in a session's worktree (the roster row's "+" under
+ * its session switcher). Asleep sessions wake first (respawn --resume
+ * lastSessionFile, as a row click does); the session attaches when it is not
  * already the live attached session; then, once THIS attach's `attached` frame
  * has installed it and the attachment's first `state` frame has set the new
  * scope (see watchAttachment), the session runs the same newSession path /new
  * uses (collab-share confirm included). A wake keeps the view on a stopped
- * current row, so currentSessionId alone never proves the new attachment is
+ * current row, so currentWorkspaceId alone never proves the new attachment is
  * live: posting earlier would carry the previous generation's scope and be
  * rejected as stale. Never retried: a duplicate would start two sessions.
  * When the user moves to another session meanwhile, the attempt is dropped
  * silently, never banners.
  */
-export async function startDaemonNewSession(daemonId: string): Promise<void> {
-	const asleep = state.daemonRoster.find((d) => d.daemonId === daemonId)?.status === "asleep";
-	if (asleep || state.currentSessionId !== daemonId) {
+export async function startWorkspaceNewSession(workspaceId: string): Promise<void> {
+	const asleep =
+		state.sessionRoster.find((d) => d.workspaceId === workspaceId)?.status === "asleep";
+	if (asleep || state.currentWorkspaceId !== workspaceId) {
 		// Registered before the attach is posted: a fast frame is never missed.
-		const watch = watchAttachment(daemonId);
+		const watch = watchAttachment(workspaceId);
 		try {
 			// A superseded attach resolves with whichever session is current; a
 			// refused wake resolves null (already reported): nothing to start on.
-			const attach = wakeAndAttach(daemonId, asleep ? spawnResume(daemonId) : null);
-			if ((await attach) !== daemonId) {
+			const attach = wakeAndAttach(workspaceId, asleep ? spawnResume(workspaceId) : null);
+			if ((await attach) !== workspaceId) {
 				watch.cancel();
 				return;
 			}
@@ -292,43 +298,43 @@ export async function startDaemonNewSession(daemonId: string): Promise<void> {
 }
 
 /**
- * Attach `daemonId` for a panel that opens once the daemon is live (Open
+ * Attach `workspaceId` for a panel that opens once the session is live (Open
  * review). Resolves true when the panel should open, which is only once the
  * attachment's first `state` frame has set the new scope (see watchAttachment):
  * the panel's reads would otherwise carry the previous attachment's scope and
  * be rejected as stale. A superseded attach is never an error: when another
- * session took over meanwhile, the attach only still counts if THIS daemon is
+ * session took over meanwhile, the attach only still counts if THIS session is
  * now the attached session (the same rule as switchSessionRetry); otherwise the
  * user has moved on and the panel stays closed.
  */
-export async function attachForPanel(daemonId: string): Promise<boolean> {
-	const watch = watchAttachment(daemonId);
+export async function attachForPanel(workspaceId: string): Promise<boolean> {
+	const watch = watchAttachment(workspaceId);
 	let attached: string | null;
 	try {
-		attached = await wakeAndAttach(daemonId);
+		attached = await wakeAndAttach(workspaceId);
 	} catch (err) {
 		watch.cancel();
 		if (!isSessionSwitchSupersession(err)) {
 			reportError(err);
 			return false;
 		}
-		return state.currentSessionId === daemonId;
+		return state.currentWorkspaceId === workspaceId;
 	}
-	if (attached !== daemonId) {
+	if (attached !== workspaceId) {
 		watch.cancel();
-		return state.currentSessionId === daemonId;
+		return state.currentWorkspaceId === workspaceId;
 	}
 	return watch.done();
 }
 
 /**
- * A registered project with no daemon yet: folder → the session file to resume once
- * the daemon started for that folder is ready. Cleared when that daemon errors.
+ * A registered project with no session yet: folder → the session file to resume once
+ * the session started for that folder is ready. Cleared when that session errors.
  */
 const pendingProjectWakes = new Map<string, string>();
 
 /**
- * Start a daemon for a registered project's folder, then resume `sessionFile` in it
+ * Start a session for a registered project's folder, then resume `sessionFile` in it
  * once it is ready (see settleProjectWakes). The roster mirror shows it spawning.
  */
 export function spawnProjectSession(cwd: string, sessionFile: string): void {
@@ -341,23 +347,23 @@ export function spawnProjectSession(cwd: string, sessionFile: string): void {
 	);
 }
 
-/** Resume each pending project wake whose daemon is now ready; called on roster changes. */
+/** Resume each pending project wake whose session is now ready; called on roster changes. */
 export function settleProjectWakes(): void {
 	for (const [cwd, sessionFile] of pendingProjectWakes) {
-		const daemon = state.daemonRoster.find((d) => d.cwd === cwd);
-		if (daemon?.status === "error") pendingProjectWakes.delete(cwd);
-		if (daemon?.status !== "ready") continue;
+		const session = state.sessionRoster.find((d) => d.cwd === cwd);
+		if (session?.status === "error") pendingProjectWakes.delete(cwd);
+		if (session?.status !== "ready") continue;
 		pendingProjectWakes.delete(cwd);
-		void resumeDaemonSession(daemon.daemonId, sessionFile);
+		void resumeSession(session.workspaceId, sessionFile);
 	}
 }
 /**
  * Switch to `sessionFile`, retrying once when the attach's own supersession
- * swept the first call. The rejection means the daemon JUST became attached
+ * swept the first call. The rejection means the session JUST became attached
  * (our own pick), so the retry posts to the now-current session and settles
  * cleanly. A superseded switch is never an error banner.
  */
-function switchSessionRetry(daemonId: string, sessionFile: string): Promise<void> {
+function switchSessionRetry(workspaceId: string, sessionFile: string): Promise<void> {
 	return call("switchSession", [sessionFile])
 		.then(() => undefined)
 		.catch((err: unknown) => {
@@ -366,10 +372,10 @@ function switchSessionRetry(daemonId: string, sessionFile: string): Promise<void
 				return undefined;
 			}
 			// The switch was swept by a session switch. Retry only while THIS
-			// daemon is still the attached session (the rejection means it just
+			// session is still the attached session (the rejection means it just
 			// became attached, our own pick); a superseded resume is dropped
-			// silently, never applied to a different daemon.
-			if (state.currentSessionId !== daemonId) return undefined;
+			// silently, never applied to a different session.
+			if (state.currentWorkspaceId !== workspaceId) return undefined;
 			return call("switchSession", [sessionFile]).then(
 				() => undefined,
 				(err2: unknown) => reportError(err2),
@@ -468,7 +474,7 @@ export function setView(view: "chat" | "analysis"): void {
 	if (view === "chat") {
 		// Clear an Analysis deep-link hash without firing a hashchange event;
 		// Analysis re-owns the hash on its next selection. Session routes
-		// (#/d/...) stay: the URL mirrors the attached session.
+		// (#/w/...) stay: the URL mirrors the attached session.
 		if (
 			typeof history !== "undefined" &&
 			typeof location !== "undefined" &&

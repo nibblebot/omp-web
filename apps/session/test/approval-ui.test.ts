@@ -81,7 +81,7 @@ afterAll(() => {
 	setCallbackBrowserStreamCount(null);
 });
 
-describe("approve over the daemon's browser UI context", () => {
+describe("approve over the session's browser UI context", () => {
 	test("sends the prompt as an approve request without the compact rendering", async () => {
 		const ui = buildUiContext(entry);
 		await withBrowser(

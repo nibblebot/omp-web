@@ -524,7 +524,7 @@ const AskConfirm: Component<{ id: string; title: string; message: string }> = (p
 /**
  * Tool approval: the prompt's title line, its details (monospace, whitespace
  * preserved, scrolls on its own) and one row per answer. Digit keys, Up/Down + Enter or a
- * click answers; Esc and Cancel answer nothing, which the daemon reads as Deny.
+ * click answers; Esc and Cancel answer nothing, which the session reads as Deny.
  * PageUp/PageDown scroll the details while the keys above own the arrows.
  */
 const AskApproval: Component<{ id: string; prompt: UiApprovalParams }> = (props) => {

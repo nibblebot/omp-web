@@ -53,7 +53,7 @@
 	opacity: 0.5;
 	cursor: default;
 }
-/* Key/value facts (mirror of the daemon-detail fact rows). */
+/* Key/value facts (mirror of the session-detail fact rows). */
 .debug-facts {
 	display: flex;
 	flex-direction: column;
@@ -144,7 +144,7 @@
 .debug-table .debug-cell-mono {
 	max-width: 150px;
 }
-/* Per-status text colors (the sidebar's retired .daemon-row-state used the
+/* Per-status text colors (the sidebar's retired .roster-row-state used the
    same vocabulary; the status dot keeps it there). */
 .debug-status {
 	font-size: var(--fs-micro);
@@ -155,7 +155,6 @@
 }
 .debug-status[data-status="spawning"],
 .debug-status[data-status="connecting"],
-.debug-status[data-status="session"],
 .debug-status[data-status="resolving"] {
 	color: var(--accent);
 }

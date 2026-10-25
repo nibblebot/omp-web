@@ -178,7 +178,7 @@ try {
 	//    apps/session/; the kubernetes provider needs an operator-built image,
 	//    and this copy is how an install carries its definition (onboarding
 	//    E2E asserts it). The list is explicit because apps/session/ is flat:
-	//    a directory copy would ship the whole daemon source. image-README.md
+	//    a directory copy would ship the whole session source. image-README.md
 	//    is renamed to README.md to keep the packaged layout unchanged.
 	for (const file of IMAGE_FILES) {
 		if (!existsSync(join(IMAGE_SRC, file))) {

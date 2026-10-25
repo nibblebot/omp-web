@@ -1,7 +1,7 @@
 /**
  * Per-workspace dock layout: which dock panel a workspace had open, its agents
  * mode and filter, the accordion's remembered expanded agent, and the agents whose
- * children are collapsed in the dock tree. Keyed by daemon id and persisted in
+ * children are collapsed in the dock tree. Keyed by workspace id and persisted in
  * one versioned localStorage record. The dock width stays global (prefs/dock.ts).
  *
  * Storage is read fresh on every call: the record is small, and a second tab
@@ -69,7 +69,8 @@ function readAll(): Record<string, DockLayout> {
 		const parsed: unknown = JSON.parse(raw);
 		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
 		const out: Record<string, DockLayout> = {};
-		for (const [daemonId, value] of Object.entries(parsed)) out[daemonId] = parseLayout(value);
+		for (const [workspaceId, value] of Object.entries(parsed))
+			out[workspaceId] = parseLayout(value);
 		return out;
 	} catch {
 		return {};
@@ -86,23 +87,23 @@ function writeAll(layouts: Record<string, DockLayout>): void {
 }
 
 /** The saved layout of one workspace; the default layout when none was saved or the record is corrupt. */
-export function readDockLayout(daemonId: string): DockLayout {
-	return readAll()[daemonId] ?? defaultDockLayout();
+export function readDockLayout(workspaceId: string): DockLayout {
+	return readAll()[workspaceId] ?? defaultDockLayout();
 }
 
-export function persistDockLayout(daemonId: string, layout: DockLayout): void {
+export function persistDockLayout(workspaceId: string, layout: DockLayout): void {
 	const all = readAll();
-	all[daemonId] = layout;
+	all[workspaceId] = layout;
 	writeAll(all);
 }
 
 /** Drop the layouts of workspaces that left the roster. */
-export function pruneDockLayouts(liveDaemonIds: ReadonlySet<string>): void {
+export function pruneDockLayouts(liveWorkspaceIds: ReadonlySet<string>): void {
 	const all = readAll();
 	let changed = false;
-	for (const daemonId of Object.keys(all)) {
-		if (liveDaemonIds.has(daemonId)) continue;
-		delete all[daemonId];
+	for (const workspaceId of Object.keys(all)) {
+		if (liveWorkspaceIds.has(workspaceId)) continue;
+		delete all[workspaceId];
 		changed = true;
 	}
 	if (changed) writeAll(all);

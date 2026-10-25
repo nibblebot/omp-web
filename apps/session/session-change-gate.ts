@@ -6,7 +6,7 @@ import { SESSION_REPLACING_METHODS } from "#lib/wire/protocol";
  *
  * The SDK mints the new session id partway through such a call and keeps
  * working on the new session (system prompt rebuild, memory reset, hooks)
- * before it returns, and the daemon only broadcasts the new identity after
+ * before it returns, and the session only broadcasts the new identity after
  * that. A prompt that arrives in between either lands before the id flips and
  * runs on the session being torn down (the resync then wipes it, leaving a
  * blank turn with no error), or lands after and is refused as a stale

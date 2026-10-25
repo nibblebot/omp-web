@@ -10,7 +10,7 @@ export default defineStory({
 	variants: [
 		{
 			name: "Ready",
-			description: "Idle session with the daemon ready for the next prompt.",
+			description: "Idle session with the session process ready for the next prompt.",
 			render: () => (
 				<div class="ds-frame">
 					<PromptBox />
@@ -29,7 +29,8 @@ export default defineStory({
 		},
 		{
 			name: "Starting up",
-			description: "Connected, but the daemon has not reported ready yet; sending is gated.",
+			description:
+				"Connected, but the session process has not reported ready yet; sending is gated.",
 			seed: { readyAt: undefined },
 			render: () => (
 				<div class="ds-frame">

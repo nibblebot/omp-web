@@ -16,7 +16,7 @@ import { PluginDetailView } from "./PluginDetail";
 import "./plugins.css";
 
 /**
- * Plugins: installs stay in the terminal (code runs with daemon permissions);
+ * Plugins: installs stay in the terminal (code runs with session permissions);
  * enable, disable, and configure here. Plugins come from the shared lock file,
  * one flat settings row each with Configure, which expands the plugin's detail
  * inline under its row. The list reloads whenever the target changes (session
@@ -28,7 +28,7 @@ export const PluginsTab: Component = () => {
 
 	createEffect(
 		on(
-			() => `${state.currentSessionId ?? ""}|${fleetSettingsActive()}`,
+			() => `${state.currentWorkspaceId ?? ""}|${fleetSettingsActive()}`,
 			() => {
 				setSelected(null);
 				closePlugin();

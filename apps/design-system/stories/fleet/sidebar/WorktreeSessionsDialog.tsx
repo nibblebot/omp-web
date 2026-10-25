@@ -1,5 +1,5 @@
 import { WorktreeSessionsDialog } from "../../../../web/components/fleet/sidebar/WorktreeSessionsDialog";
-import { rosterDaemon } from "../../../fixtures/roster";
+import { rosterEntry } from "../../../fixtures/roster";
 import { seedRosterSessions } from "../../../fixtures/roster-seed";
 import { worktreeSessions, worktreeSessionsMax } from "../../../fixtures/worktree-sessions";
 import { defineStory } from "../../../registry";
@@ -22,21 +22,21 @@ export default defineStory({
 				seedRosterSessions(() => sessions, { sessionFile: sessions[0]?.path });
 			},
 			render: (ctx) => (
-				<WorktreeSessionsDialog daemon={rosterDaemon.worktree} onClose={ctx.close} />
+				<WorktreeSessionsDialog session={rosterEntry.worktree} onClose={ctx.close} />
 			),
 		},
 		{
 			name: "Asleep worktree",
 			description: "Listed from disk: resuming a row wakes the worktree on that session.",
 			seed: () => seedRosterSessions(() => worktreeSessions(Date.now())),
-			render: (ctx) => <WorktreeSessionsDialog daemon={rosterDaemon.asleep} onClose={ctx.close} />,
+			render: (ctx) => <WorktreeSessionsDialog session={rosterEntry.asleep} onClose={ctx.close} />,
 		},
 		{
 			name: "Clone",
 			description: "A clone titles the dialog with its name, not a branch.",
 			seed: () => seedRosterSessions(() => worktreeSessions(Date.now())),
 			render: (ctx) => (
-				<WorktreeSessionsDialog daemon={rosterDaemon.cloneLocal} onClose={ctx.close} />
+				<WorktreeSessionsDialog session={rosterEntry.cloneLocal} onClose={ctx.close} />
 			),
 		},
 		{
@@ -44,7 +44,7 @@ export default defineStory({
 			description: "The fleet's maximum came back, so the list says it may be cut off.",
 			seed: () => seedRosterSessions(() => worktreeSessionsMax(Date.now())),
 			render: (ctx) => (
-				<WorktreeSessionsDialog daemon={rosterDaemon.worktree} onClose={ctx.close} />
+				<WorktreeSessionsDialog session={rosterEntry.worktree} onClose={ctx.close} />
 			),
 		},
 		{
@@ -52,14 +52,14 @@ export default defineStory({
 			description: "The list request is still in flight.",
 			seed: () => seedRosterSessions(() => null),
 			render: (ctx) => (
-				<WorktreeSessionsDialog daemon={rosterDaemon.worktree} onClose={ctx.close} />
+				<WorktreeSessionsDialog session={rosterEntry.worktree} onClose={ctx.close} />
 			),
 		},
 		{
 			name: "No sessions",
 			seed: () => seedRosterSessions(() => []),
 			render: (ctx) => (
-				<WorktreeSessionsDialog daemon={rosterDaemon.worktree} onClose={ctx.close} />
+				<WorktreeSessionsDialog session={rosterEntry.worktree} onClose={ctx.close} />
 			),
 		},
 	],

@@ -16,7 +16,7 @@ import { broadcastTo } from "./client-delivery";
 import type { SessionEntry } from "./session-entry";
 import { hasBrowserUiClient } from "./ui-context";
 
-/** Shortest time between two samples, so at most one frame per interval leaves the daemon. */
+/** Shortest time between two samples, so at most one frame per interval leaves the session. */
 export const JOB_WIDGETS_INTERVAL_MS = 1000;
 /** Characters of a stage a glance keeps: it names what the job does when no figure exists yet. */
 export const JOB_WIDGETS_STAGE_CHARS = 80;

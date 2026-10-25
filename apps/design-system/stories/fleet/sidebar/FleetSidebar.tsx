@@ -1,4 +1,4 @@
-import type { DaemonEntry } from "#lib/wire/protocol";
+import type { RosterEntry } from "#lib/wire/protocol";
 import type { JSX } from "solid-js";
 import { FleetSidebar } from "../../../../web/components/fleet/sidebar/FleetSidebar";
 import { GROUPS_KEY } from "../../../../web/components/fleet/sidebar/ProjectGroups";
@@ -11,18 +11,18 @@ import {
 } from "../../../../web/state";
 import { toggleSidebar } from "../../../../web/store/roster";
 import {
-	rosterAppDaemons,
-	rosterDaemon,
-	rosterDaemons,
+	rosterAppEntries,
+	rosterEntry,
+	rosterEntries,
 	rosterSidebarGroups,
 } from "../../../fixtures/roster";
 import { seedRosterFleet } from "../../../fixtures/roster-seed";
 import { defineStory } from "../../../registry";
 
 /** A worktree that is not in the seeded roster: the row the add/remove variants bring and take away. */
-const addedWorktree: DaemonEntry = {
-	...rosterDaemon.worktree,
-	daemonId: "dmn_story_new",
+const addedWorktree: RosterEntry = {
+	...rosterEntry.worktree,
+	workspaceId: "dmn_story_new",
 	name: "motion-polish",
 	cwd: "/home/joshua/Repos/omp-web-worktrees/motion-polish",
 	branch: "feat/motion-polish",
@@ -35,7 +35,7 @@ const addedWorktree: DaemonEntry = {
 const addRow = () =>
 	applyRosterFrame({ type: "roster_delta", upserted: [addedWorktree], removed: [] });
 const removeRow = () =>
-	applyRosterFrame({ type: "roster_delta", upserted: [], removed: [addedWorktree.daemonId] });
+	applyRosterFrame({ type: "roster_delta", upserted: [], removed: [addedWorktree.workspaceId] });
 
 /** Story drivers sit above the frame so they stay reachable while the sidebar is hidden. */
 const Drivers = (props: { children: JSX.Element }) => (
@@ -49,7 +49,7 @@ const Frame = () => (
 );
 
 /** The pending-delete row: an asleep worktree the fleet edge deletes ("succeeds") or refuses. */
-const deletable = rosterDaemon.asleep;
+const deletable = rosterEntry.asleep;
 let deleteOutcome: "succeeds" | "refused" = "succeeds";
 const DELETE_ANSWER_MS = 1500;
 
@@ -62,7 +62,7 @@ const deleteCommands = {
 				setState("error", "Delete refused: the worktree has unpushed commits");
 				return;
 			}
-			applyRosterFrame({ type: "roster_delta", upserted: [], removed: [deletable.daemonId] });
+			applyRosterFrame({ type: "roster_delta", upserted: [], removed: [deletable.workspaceId] });
 		}, DELETE_ANSWER_MS);
 	},
 };
@@ -99,9 +99,9 @@ export default defineStory({
 				"The header filter is on (set through the real setSidebarRunningOnly): asleep rows are hidden, every other status stays, and nixos-config, whose only row is asleep, keeps its header and shows its summary.",
 			seed: () => {
 				seedRosterFleet({
-					daemonRoster: [
-						...rosterDaemons.filter((d) => d.projectId !== "proj_nixos_config"),
-						...rosterAppDaemons.filter(
+					sessionRoster: [
+						...rosterEntries.filter((d) => d.projectId !== "proj_nixos_config"),
+						...rosterAppEntries.filter(
 							(d) => d.projectId === "proj_nixos_config" && d.status === "asleep",
 						),
 					],
@@ -118,7 +118,8 @@ export default defineStory({
 		{
 			name: "First run, no projects",
 			description: "The empty hint with the Add project row right under it.",
-			seed: () => seedRosterFleet({ registeredProjects: [], daemonRoster: [], daemons: new Map() }),
+			seed: () =>
+				seedRosterFleet({ registeredProjects: [], sessionRoster: [], daemons: new Map() }),
 			render: () => <Frame />,
 		},
 		{
@@ -155,7 +156,7 @@ export default defineStory({
 							type="button"
 							onClick={() => {
 								deleteOutcome = "succeeds";
-								sendDeleteWorktree(deletable.daemonId);
+								sendDeleteWorktree(deletable.workspaceId);
 							}}
 						>
 							Delete {deletable.name} (succeeds)
@@ -164,7 +165,7 @@ export default defineStory({
 							type="button"
 							onClick={() => {
 								deleteOutcome = "refused";
-								sendDeleteWorktree(deletable.daemonId);
+								sendDeleteWorktree(deletable.workspaceId);
 							}}
 						>
 							Delete {deletable.name} (refused)

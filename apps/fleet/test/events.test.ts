@@ -19,9 +19,9 @@ describe("FleetEventLog", () => {
 			"exit code=1",
 			"request failed",
 		]);
-		expect(list[0]).toMatchObject({ level: "info", source: "server", daemonId: "d1" });
+		expect(list[0]).toMatchObject({ level: "info", source: "server", workspaceId: "d1" });
 		expect(list[2]?.level).toBe("error");
-		expect(list[2]?.daemonId).toBeUndefined();
+		expect(list[2]?.workspaceId).toBeUndefined();
 		// The returned array is a copy: mutating it must not affect the ring.
 		list.shift();
 		expect(log.list()).toHaveLength(3);
@@ -33,7 +33,7 @@ describe("FleetEventLog", () => {
 		const list = log.list();
 		expect(list).toHaveLength(3);
 		expect(list.map((entry) => entry.message)).toEqual(["event 7", "event 8", "event 9"]);
-		expect(list.map((entry) => entry.daemonId)).toEqual(["d7", "d8", "d9"]);
+		expect(list.map((entry) => entry.workspaceId)).toEqual(["d7", "d8", "d9"]);
 	});
 
 	test("onEntry mirrors every added entry as it lands", () => {
@@ -59,7 +59,7 @@ describe("FleetEventLog", () => {
 		const seen: string[] = [];
 		log.onEntry = (entry) => seen.push(`${entry.level}:${entry.message}`);
 		const added = log.add("warn", "server", "respawning", "d4");
-		expect(added).toMatchObject({ level: "warn", source: "server", daemonId: "d4" });
+		expect(added).toMatchObject({ level: "warn", source: "server", workspaceId: "d4" });
 		expect(log.list()).toEqual([]);
 		expect(seen).toEqual(["warn:respawning"]);
 	});

@@ -76,7 +76,7 @@ export interface WebSessionState {
 	/**
 	 * Ids of the ui_requests pending on the session (the `id` carried by the
 	 * `ui_request`/`ui_request_end` frames). Lets the fleet edge rebuild a
-	 * daemon's blocked state from any state frame, notably the one published at
+	 * session's blocked state from any state frame, notably the one published at
 	 * every pair-up, which the delta-only control mirror cannot replay.
 	 */
 	pendingUiRequestIds?: string[];
@@ -361,7 +361,7 @@ export interface McpServerSummary {
 	toolCount?: number;
 	/** Last connection failure. */
 	error?: string;
-	/** File mcpEnable / mcpDisable write: the config declaring the server, or the user mcp.json denylist. Absent from older daemons. */
+	/** File mcpEnable / mcpDisable write: the config declaring the server, or the user mcp.json denylist. Absent from older sessions. */
 	toggleFile?: string;
 }
 
@@ -409,7 +409,7 @@ export interface McpToolParameter {
 export interface McpInspection {
 	/** Implementation the server reported at initialize. */
 	server?: { name: string; version?: string };
-	/** `parameters` is absent from older daemons. */
+	/** `parameters` is absent from older sessions. */
 	tools: Array<{
 		name: string;
 		title?: string;
@@ -457,13 +457,13 @@ export interface SkillDetail extends SkillSummary {
 // the upgrade (R14): loopback exempt, off-loopback bearer via the Authorization
 // header or the `token` query; a refusal is an upgrade followed by a typed
 // close code (4401/4403/4426), not an HTTP status. hello_ok is the
-// FIRST frame on every socket open (daemon identity), followed by the attach
+// FIRST frame on every socket open (session identity), followed by the attach
 // priming (attached → history → state → collab_status → available_commands →
 // ready).
 // ---------------------------------------------------------------------------
 
 /** Bump on any breaking frame change.
- *  3: project/worktree redesign (remote enrollment, `DaemonEntry.mode`,
+ *  3: project/worktree redesign (remote enrollment, `RosterEntry.mode`,
  *  `list_projects`/`projects`, `add_worktree` removed).
  *  4: infra remediation (kata kfg5). Adds per-block streaming deltas,
  *  `roster_delta`, `getToolSchemas`, and a 32 MiB command cap. Removes the
@@ -478,8 +478,9 @@ export interface SkillDetail extends SkillSummary {
  *  5: every client connection (browser to fleet, direct client to a
  *  standalone session) is one WebSocket on `GET /ws` (lib/wire/browser-socket.ts)
  *  instead of `GET /events` SSE + `POST /command`. Same unreleased 5: workspace
- *  labels are removed (`DaemonEntry.labels`, `spawn.labels`). */
-export const OMP_PROTO = 5;
+ *  labels are removed (`RosterEntry.labels`, `spawn.labels`).
+ *  6: sense-A "daemon" renamed: process ids are workspaceId (frame stamp, attach, attach_result, attached), DaemonEntry->RosterEntry, DaemonStatus->SessionStatus (dead "session" literal removed), daemon_status->session_status, daemon_activity->session_activity, daemon_sessions->workspace_sessions, list_daemon_sessions->list_workspace_sessions, roster.daemons->roster.entries, stream_reset reason session_resync. */
+export const OMP_PROTO = 6;
 
 // --- Client connection constants (browser socket, shared by the session and the fleet) ---
 
@@ -491,7 +492,7 @@ export const CLIENT_KEEPALIVE_MS = 15_000;
  * ping never trips it.
  */
 export const CLIENT_SILENCE_DEADLINE_MS = 30_000;
-/** Bounded replay ring of recent deltas, per daemon / per browser client. */
+/** Bounded replay ring of recent deltas, per session / per browser client. */
 export const CLIENT_RING_CAP = 10_000;
 /**
  * Byte budget for one replay ring (finding #5): a ring must be bounded in
@@ -505,10 +506,10 @@ export const CLIENT_RING_CAP = 10_000;
  */
 export const CLIENT_RING_BYTES = 8 * 1024 * 1024;
 /**
- * First seq assigned to post-priming deltas (a daemon-global counter).
+ * First seq assigned to post-priming deltas (a session-global counter).
  * Priming frames carry seqs 1..k (k < DELTA_SEQ_START) per connection, so a
  * resume point (`after`) below this value means "stale/empty client: priming
- * already carries full current state". The daemon replays ring deltas with
+ * already carries full current state". The session replays ring deltas with
  * seq > max(after, snapshotSeq-1). The snapshot mark (the next delta
  * seq captured before the priming snapshot is built) bounds the overlap, so
  * a resume never re-delivers deltas whose effects are inside the fresh
@@ -548,15 +549,15 @@ export const OMP_SESSION_PREFIX = "OMP_SESSION|";
 /**
  * omp-session exit code when its session file is locked by another live
  * omp-session (e.g. the same session open in a second fleet). Deterministic:
- * a spawner must not retry it; the daemon's last stderr line names the file
+ * a spawner must not retry it; the session's last stderr line names the file
  * and the holder. Same value as the fleet's own state-lock conflict exit.
  */
 export const OMP_SESSION_EXIT_SESSION_LOCKED = 77;
 
 /**
  * omp-session exit code when `--resume <file>` names a durable session the
- * daemon cannot restore (file missing, unreadable, or recorded under another
- * cwd). Deterministic: a spawner must not retry it, and the daemon never boots
+ * session cannot restore (file missing, unreadable, or recorded under another
+ * cwd). Deterministic: a spawner must not retry it, and the session never boots
  * a fresh session in its place; the last stderr line names the file and the
  * reason.
  */
@@ -567,24 +568,23 @@ export const OMP_SESSION_EXIT_RESUME_FAILED = 78;
  * direct listener prints `listening` immediately after bind, before session
  * creation. A fleet-managed session (started with `--fleet-stdin`) binds no
  * listener and prints no listening line. The line is informational for whoever
- * launched the daemon (the terminal, a supervisor, or the session log); the
+ * launched the session (the terminal, a supervisor, or the session log); the
  * fleet does not parse it.
  */
 export type StdoutContractLine = { event: "listening"; bind: string; port: number };
 
-/** Daemon lifecycle as surfaced by omp-fleet (daemon_status frame). */
-export type DaemonStatus =
+/** Session lifecycle as surfaced by omp-fleet (session_status frame). */
+export type SessionStatus =
 	| "spawning"
 	| "connecting"
-	| "session"
 	| "resolving"
 	| "ready"
 	| "asleep"
 	| "reconnecting"
 	| "error";
 
-// --- Clone workspace identity: workspace/daemon lifecycle facts the fleet
-// edge surfaces on the roster (optional DaemonEntry fields).
+// --- Clone workspace identity: workspace/session lifecycle facts the fleet
+// edge surfaces on the roster (optional RosterEntry fields).
 
 /** How a workspace's checkout was produced. */
 export type WorkspaceKind = "worktree" | "clone" | "direct";
@@ -623,15 +623,15 @@ export interface PublicProviderProfile {
 	secretRefNames?: string[];
 }
 
-/** One daemon in the omp-fleet roster (roster frame). */
-export interface DaemonEntry {
-	daemonId: string;
+/** One session in the omp-fleet roster (roster frame). */
+export interface RosterEntry {
+	workspaceId: string;
 	name: string;
 	cwd: string;
 	project: string;
 	worktreeOf?: string;
 	/**
-	 * The registered project this daemon belongs to (source: fleet edge
+	 * The registered project this session belongs to (source: fleet edge
 	 * roster). Absent only for a CLI spawn outside every registered project;
 	 * the web sidebar does not show such rows.
 	 */
@@ -651,12 +651,12 @@ export interface DaemonEntry {
 		linesAdded?: number;
 		linesDeleted?: number;
 	};
-	status: DaemonStatus;
+	status: SessionStatus;
 	lastSessionFile?: string;
-	/** Title of the daemon's last session file (source: fleet edge roster, probed from the
+	/** Title of the session's last session file (source: fleet edge roster, probed from the
 	 *  lastSessionFile JSONL title slot). */
 	sessionTitle?: string;
-	/** True when the daemon's current/last session file has no messages (a new/empty
+	/** True when the session's current/last session file has no messages (a new/empty
 	 *  session); fleet-probed like sessionTitle. */
 	sessionEmpty?: boolean;
 	readyAt?: number;
@@ -664,13 +664,13 @@ export interface DaemonEntry {
 	pid?: number;
 	error?: string;
 	// --- Clone workspace identity (additive; older edges omit these) ---
-	/** How the daemon's checkout was produced (source: fleet edge roster; absent for legacy entries). */
+	/** How the session's checkout was produced (source: fleet edge roster; absent for legacy entries). */
 	workspaceKind?: WorkspaceKind;
-	/** Fleet-side desired state of the daemon's workspace (source: fleet edge roster; absent = legacy). */
+	/** Fleet-side desired state of the session's workspace (source: fleet edge roster; absent = legacy). */
 	desiredState?: DesiredState;
-	/** Provider profile the daemon's workspace runs under (source: fleet edge roster; absent = unmanaged/legacy). */
+	/** Provider profile the session's workspace runs under (source: fleet edge roster; absent = unmanaged/legacy). */
 	providerProfileId?: string;
-	/** Provider lifecycle stage of the daemon's workspace (source: fleet edge roster; absent = legacy/local daemon). */
+	/** Provider lifecycle stage of the session's workspace (source: fleet edge roster; absent = legacy/local session). */
 	lifecycleStage?: LifecycleStage;
 	/** Last workspace lifecycle failure detail (source: fleet edge roster; present only after a failed stage). */
 	lifecycleError?: string;
@@ -682,9 +682,9 @@ export interface DaemonEntry {
 	localSource?: true;
 }
 
-/** POST /ctl/clones/:daemonId/fetch-into-project answer: the clone's branch now in the project's main repo. */
+/** POST /ctl/clones/:workspaceId/fetch-into-project answer: the clone's branch now in the project's main repo. */
 export interface CloneFetchResult {
-	daemonId: string;
+	workspaceId: string;
 	/** Short branch name fetched (the clone's own branch). */
 	branch: string;
 	/** Main checkout the branch was fetched into. */
@@ -711,7 +711,7 @@ export interface ProjectBranch {
  * One first-class project registered with the fleet (registered_projects
  * frame). Projects are realpath-keyed, deduped on registration, and persist
  * in the fleet state file; `path` is always the realpath of the main
- * checkout and `name` its basename. Local daemons carry the matching
+ * checkout and `name` its basename. Local sessions carry the matching
  * `projectId` on the roster.
  */
 export interface RegisteredProject {
@@ -949,7 +949,7 @@ export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> =
 /**
  * Methods that replace the attached session's identity (a new session id and
  * transcript). The SDK mints the new id partway through the call, so until the
- * call's answer lands the daemon's identity runs ahead of the `sessionScope`
+ * call's answer lands the session's identity runs ahead of the `sessionScope`
  * every client last received: a call sent in that gap carries the old scope.
  * The server answers these only after the history and state resync; clients
  * hold their own sends while one is pending.
@@ -968,7 +968,7 @@ export const SESSION_REPLACING_METHODS = [
 // Routing is by STREAM ATTACHMENT: on omp-session a /ws socket is attached
 // to the single live session from open (connect = attached), so call/
 // login_code/ui_response implicitly target it. `attach` exists only at the
-// fleet edge, where it selects the daemon to proxy.
+// fleet edge, where it selects the session to proxy.
 // Every command carries a client-supplied `id` for idempotency: the
 // server dedups within a window (COMMAND_DEDUP_WINDOW_MS), remembering ids up
 // to COMMAND_DEDUP_ID_CAP and replayable answers up to COMMAND_DEDUP_ANSWER_CAP,
@@ -987,9 +987,9 @@ export type ClientCommand =
 	| { type: "ui_response"; id: string; result?: unknown; error?: string }
 	| { type: "list_sessions"; id: string }
 	| { type: "list_files"; id: string; query: string; limit?: number }
-	// Fleet edge only: attach this stream to the daemon with this id
+	// Fleet edge only: attach this stream to the session with this id
 	// (the edge proxies it through; a bare omp-session never receives attach).
-	| { type: "attach"; id: string; sessionId: string }
+	| { type: "attach"; id: string; workspaceId: string }
 	// Collab: start/stop the collab room for the stream's ATTACHED session.
 	// relayUrl overrides collab.relayUrl for this room only (ShareSheet's explicit relay choice).
 	| { type: "collab_start"; id: string; relayUrl?: string; access?: "view" | "control" }
@@ -1009,18 +1009,18 @@ export type ClientCommand =
 	| { type: "daemon_restart"; id: string; projectDir: string; name: string }
 	// --- Fleet edge (browser → omp-fleet only; a bare omp-session rejects these) ---
 	| { type: "spawn"; id: string; cwd: string; template?: string }
-	// Resume this exact session file instead of the daemon's lastSessionFile;
+	// Resume this exact session file instead of the session's lastSessionFile;
 	// omitted = resume the last session (today's behavior). The fleet edge
-	// validates it against the daemon's worktree session listing.
-	| { type: "spawn_resume"; id: string; daemonId: string; sessionFile?: string }
-	| { type: "stop"; id: string; daemonId: string }
-	// Fleet edge only: list sessions in a daemon's worktree (fleet-edge handled,
-	// answered with a unicast `daemon_sessions` frame; a bare omp-session
+	// validates it against the session's worktree session listing.
+	| { type: "spawn_resume"; id: string; workspaceId: string; sessionFile?: string }
+	| { type: "stop"; id: string; workspaceId: string }
+	// Fleet edge only: list sessions in a session's worktree (fleet-edge handled,
+	// answered with a unicast `workspace_sessions` frame; a bare omp-session
 	// rejects it like the other fleet-only commands). `limit` (integer) is the
-	// row count: omitted = DAEMON_SESSIONS_DEFAULT_LIMIT, clamped to 1..DAEMON_SESSIONS_MAX_LIMIT.
-	| { type: "list_daemon_sessions"; id: string; daemonId: string; limit?: number }
-	// Stop the daemon AND evict it from the roster (registry removal).
-	| { type: "remove"; id: string; daemonId: string }
+	// row count: omitted = WORKSPACE_SESSIONS_DEFAULT_LIMIT, clamped to 1..WORKSPACE_SESSIONS_MAX_LIMIT.
+	| { type: "list_workspace_sessions"; id: string; workspaceId: string; limit?: number }
+	// Stop the session AND evict it from the roster (registry removal).
+	| { type: "remove"; id: string; workspaceId: string }
 	// Register a project. `path` may be the main checkout, a linked worktree,
 	// or a subdirectory: the fleet registers the main checkout (bare repos
 	// and non-git paths are refused). Registration never spawns; the fleet
@@ -1032,7 +1032,7 @@ export type ClientCommand =
 	| { type: "remove_project"; id: string; projectId: string }
 	// Worktree creation (projectId from the registered_projects frame):
 	// a new branch from baseRef, or an existing local branch. start:true also
-	// spawns a daemon on the worktree; progress rides the roster/daemon_status
+	// spawns a session on the worktree; progress rides the roster/session_status
 	// broadcasts. Answered by workspace_create_result.
 	| {
 			type: "create_worktree";
@@ -1062,14 +1062,14 @@ export type ClientCommand =
 			branch?: string;
 			start?: boolean;
 	  }
-	// Stop the daemon, evict it from the roster, and remove the linked
+	// Stop the session, evict it from the roster, and remove the linked
 	// worktree (clean only). deleteBranch names the branch to `git branch -d`;
 	// it is deleted only when it is still the worktree's checked-out branch
 	// and not protected (default/base branch, main checkout's branch).
-	| { type: "delete_worktree"; id: string; daemonId: string; deleteBranch?: string }
+	| { type: "delete_worktree"; id: string; workspaceId: string; deleteBranch?: string }
 	// Guard evidence for the delete confirmation (linked/dirty/branch state);
 	// answered by the unicast worktree_delete_info frame.
-	| { type: "worktree_delete_info"; id: string; daemonId: string }
+	| { type: "worktree_delete_info"; id: string; workspaceId: string }
 	// Branch picker for the New workspace popover: local branches of a
 	// registered project (remote omitted), or the branches of one of its git
 	// remotes via `git ls-remote` (falls back to cached refs). Answered by
@@ -1117,7 +1117,7 @@ export interface SubagentLastTool {
  * The slice of the SDK's `AgentProgress` that rides the wire: status, the
  * current/last tool, per-agent metrics (U04 renders these), and the resolved
  * model. The SDK's bulk `recentOutput` / `recentTools` arrays never leave the
- * daemon; `lastTool` is the one entry the web reads.
+ * session; `lastTool` is the one entry the web reads.
  */
 export interface SubagentProgressFields {
 	id: string;
@@ -1162,7 +1162,7 @@ export interface SubagentUsageFields {
 }
 
 /**
- * `subagent_progress` payload. The daemon sends at most one per agent per
+ * `subagent_progress` payload. The session sends at most one per agent per
  * second. The first frame of an agent is full (`task`/`assignment` included);
  * every later frame has `delta: true` and `progress` carries `id` plus only the
  * fields that changed since the previous frame. An absent field is unchanged;
@@ -1378,7 +1378,8 @@ export type UiApprovalAnswer =
 
 /**
  * Session-scoped frames as the server composes them, before broadcastTo
- * stamps the session handle. On the wire they always carry sessionId.
+ * stamps the session handle. A bare omp-session sends them unstamped; the
+ * fleet edge adds the roster `workspaceId` when proxying.
  */
 export type SessionScopedFrame =
 	// History: a small transcript ships as ONE frame with no `final` field (the
@@ -1425,20 +1426,70 @@ export type SessionScopedFrame =
 	// and only while a client is attached; ringed like `state`, and primed on attach while any job runs.
 	| { type: "job_widgets"; running: number; entries: WireJobWidgetEntry[] };
 
+/**
+ * Session-scoped frame types (SessionScopedFrame's `type` values). The fleet
+ * edge stamps the roster `workspaceId` on exactly these (plus `attached`, whose
+ * workspaceId is REQUIRED), and a client's stale-frame guard reads that stamp
+ * only on these types. Fleet-scoped frames (`session_status`,
+ * `session_activity`, `workspace_sessions`, `worktree_removed`, ...) also carry a
+ * `workspaceId`, but as PAYLOAD naming the row they describe, not as a stamp:
+ * a guard that compared it to the attached workspace would drop them.
+ */
+export const SESSION_SCOPED_FRAME_LIST = [
+	"history",
+	"state",
+	"event",
+	"bash_chunk",
+	"python_chunk",
+	"ephemeral_delta",
+	"command_echo",
+	"call_result",
+	"available_commands",
+	"settings_changed",
+	"skills_changed",
+	"subagent_lifecycle",
+	"subagent_progress",
+	"ui_request",
+	// Finding #16: the dialog's settle marker rides the session scope like the
+	// request, so a session switch guard applies the same way.
+	"ui_request_end",
+	"collab_status",
+	"job_widgets",
+] as const satisfies readonly SessionScopedFrame["type"][];
+// Exhaustiveness pin (finding #63): addition-direction guard; a session-scoped
+// frame added to the union without a row above would otherwise be forwarded
+// UNSTAMPED (no workspaceId), which the client's stale-frame guard would let
+// through on a session switch.
+const _sessionScopedFrameListExhaustive: Record<
+	Exclude<SessionScopedFrame["type"], (typeof SESSION_SCOPED_FRAME_LIST)[number]>,
+	never
+> = {};
+void _sessionScopedFrameListExhaustive;
+const SESSION_SCOPED_FRAME_TYPES: Record<string, true> = Object.fromEntries(
+	SESSION_SCOPED_FRAME_LIST.map((type) => [type, true]),
+);
+/** Whether a frame `type` is session-scoped (the edge stamps it; the client guards on the stamp). */
+export function isSessionScopedFrameType(type: string): boolean {
+	return SESSION_SCOPED_FRAME_TYPES[type] === true;
+}
+
 // Server → browser. Session-scoped frames on a bare omp-session carry NO
-// sessionId (one live session; connect = attached). The fleet edge STAMPS the
-// daemonId as sessionId when proxying, so clients proxied through the edge
-// can guard daemon switches. The rest are global broadcasts or unicast
-// answers (noted per variant).
+// workspaceId (one live session; connect = attached). The fleet edge STAMPS the
+// roster workspaceId on them when proxying (SESSION_SCOPED_FRAME_LIST plus
+// `attached`), so clients proxied through the edge can guard session switches.
+// The stamp is ONLY meaningful on those types: fleet frames (`session_status`,
+// `workspace_sessions`, `worktree_removed`, ...) carry `workspaceId` as payload
+// naming the row they describe and must never be stamp-guarded. The rest are
+// global broadcasts or unicast answers (noted per variant).
 export type ServerFrame =
-	| (SessionScopedFrame & { sessionId?: string })
+	| (SessionScopedFrame & { workspaceId?: string })
 	// Unicast answer to list_sessions.
 	| { type: "sessions"; sessions: SessionListEntry[] }
-	// Unicast answer to list_daemon_sessions (the fleet edge answers it directly;
+	// Unicast answer to list_workspace_sessions (the fleet edge answers it directly;
 	// NOT ringed; lost answers are re-sent like projects). `limit` echoes the
 	// effective (clamped) row count so the client can route the answer to the
 	// request that asked for that size.
-	| { type: "daemon_sessions"; daemonId: string; limit: number; sessions: SessionListEntry[] }
+	| { type: "workspace_sessions"; workspaceId: string; limit: number; sessions: SessionListEntry[] }
 	// Unicast answer to list_files.
 	| { type: "files"; files: string[] }
 	// Unicast: OAuth URL to open (during a login call).
@@ -1448,8 +1499,8 @@ export type ServerFrame =
 	// Unicast: socket is now attached to this handle; history, state and
 	// available_commands follow immediately (in that order). The fleet
 	// sidebar's state is signaled by the fleet edge's roster frame, never by
-	// attached (the edge proxies the daemon's frame through unchanged).
-	| { type: "attached"; sessionId: string }
+	// attached (the edge proxies the session's frame through unchanged).
+	| { type: "attached"; workspaceId: string }
 	// Project-wide daemon broker roster (hub launch processes); global broadcast.
 	| { type: "daemons"; daemons: DaemonInfo[] }
 	// Unicast answer to daemon_logs.
@@ -1465,16 +1516,16 @@ export type ServerFrame =
 	// Unicast answer to daemon_stop / daemon_restart.
 	| { type: "daemon_control_result"; id: string; ok: boolean; daemon?: DaemonInfo; error?: string }
 	// Unicast answer to attach (fleet edge): settles the client's pending
-	// attach by command id. Success carries the daemonId as sessionId;
+	// attach by command id. Success carries the workspaceId;
 	// failure carries the error. Added additively; an older edge
 	// that ignores the attach id never sends this frame, and the client's
 	// pending-map timeout backstops it.
-	| { type: "attach_result"; id: string; ok: boolean; sessionId?: string; error?: string }
+	| { type: "attach_result"; id: string; ok: boolean; workspaceId?: string; error?: string }
 	// --- omp-session readiness (R8) ---
 	// Broadcast once the SDK session is live AND provider/model/auth has
 	// resolved. Before it, prompt-family calls fail with a not_ready error.
 	| { type: "ready"; readyAt: number }
-	// --- Daemon identity (omp-session → any /ws consumer) ---
+	// --- Session identity (omp-session → any /ws consumer) ---
 	// FIRST frame on every /ws socket open (upgrade-time auth replaced the
 	// hello handshake); the attach priming follows immediately.
 	| {
@@ -1488,36 +1539,36 @@ export type ServerFrame =
 	  }
 	// --- Stream lifecycle (fleet edge → the one stream being re-primed) ---
 	// Sent when a session's own outbound buffer dropped frames and the edge
-	// mirrors its resync (`daemon_resync`): the stream is ALIVE and a fresh
+	// mirrors its resync (`session_resync`): the stream is ALIVE and a fresh
 	// snapshot follows, so consumers re-prime instead of treating a gap as a
-	// dormant daemon. A browser socket that is itself too slow is closed with
+	// dormant session. A browser socket that is itself too slow is closed with
 	// the typed 4503 instead (resume via `after`). Per-stream only, never ringed.
 	| { type: "stream_reset"; reason: string }
 	// --- Fleet edge (omp-fleet → browser; a bare omp-session never sends these) ---
 	// Global broadcast + unicast answer; the fleet sidebar's source.
-	| { type: "roster"; daemons: DaemonEntry[] }
+	| { type: "roster"; entries: RosterEntry[] }
 	// Row-level roster change from one registry mutation: changed rows (appended
-	// when new, replaced in place otherwise) and removed daemonIds. Ringed like
+	// when new, replaced in place otherwise) and removed workspaceIds. Ringed like
 	// `roster`; the full roster still rides each stream's priming frame.
-	| { type: "roster_delta"; upserted: DaemonEntry[]; removed: string[] }
-	| { type: "daemon_status"; daemonId: string; status: DaemonStatus; error?: string }
-	// Edge-generated, fleet-scoped realtime activity for a ready daemon
+	| { type: "roster_delta"; upserted: RosterEntry[]; removed: string[] }
+	| { type: "session_status"; workspaceId: string; status: SessionStatus; error?: string }
+	// Edge-generated, fleet-scoped realtime activity for a ready session
 	// (streaming / dialog-blocked). Derived by the fleet edge from the tapped
-	// daemon frame stream and broadcast ONLY on change; primed once per known
-	// daemon when a browser stream opens. Never carries a sessionId (it is
-	// per-daemon, not per-attachment), never persisted, and never carries
-	// tokens/endpoints; daemons never send it, so the edge's pipe forwarder
+	// session frame stream and broadcast ONLY on change; primed once per known
+	// session when a browser stream opens. Never carries the edge's attachment stamp (it is
+	// per-session, not per-attachment), never persisted, and never carries
+	// tokens/endpoints; sessions never send it, so the edge's pipe forwarder
 	// strips it like `daemons` broker rosters.
 	| {
-			type: "daemon_activity";
-			daemonId: string;
+			type: "session_activity";
+			workspaceId: string;
 			streaming: boolean;
 			blocked: boolean;
 	  }
 	// Global broadcast: first-class registered projects. Sent when the
 	// registry's project set changes (same trigger as the roster broadcast)
 	// AND during new-stream priming (near the roster frame), so project
-	// groups with zero daemons still render. Never carries tokens/endpoints.
+	// groups with zero sessions still render. Never carries tokens/endpoints.
 	// `configPath` (additive, Phase 4) is the resolved fleet config path,
 	// null when no config file exists (defaults apply); the roster's
 	// first-run signal. Older edges omit it; clients treat it as null.
@@ -1534,13 +1585,13 @@ export type ServerFrame =
 			providerProfiles?: PublicProviderProfile[];
 	  }
 	// Global broadcast: a poll-detected, on-disk worktree removal (the
-	// daemon's cwd vanished between git-state poll ticks). Ringed so an
+	// session's cwd vanished between git-state poll ticks). Ringed so an
 	// `after` resume within the reclaim window still delivers the
 	// toast once (client-side ring dedup guards the replay). Fleet-edge-only
 	// (a bare omp-session never sends it) and never carries tokens/endpoints,
-	// just daemonId + display name + the vanished path. Never sent for
+	// just workspaceId + display name + the vanished path. Never sent for
 	// UI-initiated delete_worktree/remove.
-	| { type: "worktree_removed"; daemonId: string; name: string; path: string }
+	| { type: "worktree_removed"; workspaceId: string; name: string; path: string }
 	// Unicast answer to add_project. `existing`: the resolved main checkout
 	// was already registered (nothing changed).
 	| {
@@ -1552,8 +1603,14 @@ export type ServerFrame =
 			error?: string;
 	  }
 	// Unicast answer to create_worktree / create_clone: the new row's id, or
-	// the failure. Runtime progress rides the roster/daemon_status broadcasts.
-	| { type: "workspace_create_result"; id: string; ok: boolean; daemonId?: string; error?: string }
+	// the failure. Runtime progress rides the roster/session_status broadcasts.
+	| {
+			type: "workspace_create_result";
+			id: string;
+			ok: boolean;
+			workspaceId?: string;
+			error?: string;
+	  }
 	// Unicast answer to list_project_branches. `remotes` lists the project's
 	// git remote names (origin first). `defaultBase` is the base a new branch
 	// starts from (local: resolveBaseRef; remote: the remote's HEAD branch).
@@ -1573,7 +1630,7 @@ export type ServerFrame =
 	// probeFailed (additive): the state is unproven, so deletion is refused.
 	| {
 			type: "worktree_delete_info";
-			daemonId: string;
+			workspaceId: string;
 			linked: boolean;
 			dirty: boolean;
 			probeFailed?: boolean;
@@ -1615,7 +1672,7 @@ export type DaemonInfo = {
 	persist: boolean;
 	detached: boolean;
 	/**
-	 * Fleet daemonIds whose session broker listed this process, stamped by the
+	 * Fleet workspace ids whose session broker listed this process, stamped by the
 	 * fleet edge's merge (daemons-aggregator.ts); a session's own roster frame
 	 * omits it. The web strip shows only entries the selected session reported.
 	 */
@@ -1636,14 +1693,14 @@ export function daemonsKey(info: { projectDir: string; name: string }): string {
 	return `${info.projectDir}${DAEMON_KEY_SEP}${info.name}`;
 }
 
-/** `list_daemon_sessions` row count when the command carries no `limit`. */
-export const DAEMON_SESSIONS_DEFAULT_LIMIT = 10;
-/** Largest `list_daemon_sessions` row count; larger requests clamp to it. */
-export const DAEMON_SESSIONS_MAX_LIMIT = 200;
-/** The effective `list_daemon_sessions` row count for an optional requested `limit`. */
-export function daemonSessionsLimit(limit: number | undefined): number {
-	if (limit === undefined) return DAEMON_SESSIONS_DEFAULT_LIMIT;
-	return Math.min(DAEMON_SESSIONS_MAX_LIMIT, Math.max(1, limit));
+/** `list_workspace_sessions` row count when the command carries no `limit`. */
+export const WORKSPACE_SESSIONS_DEFAULT_LIMIT = 10;
+/** Largest `list_workspace_sessions` row count; larger requests clamp to it. */
+export const WORKSPACE_SESSIONS_MAX_LIMIT = 200;
+/** The effective `list_workspace_sessions` row count for an optional requested `limit`. */
+export function workspaceSessionsLimit(limit: number | undefined): number {
+	if (limit === undefined) return WORKSPACE_SESSIONS_DEFAULT_LIMIT;
+	return Math.min(WORKSPACE_SESSIONS_MAX_LIMIT, Math.max(1, limit));
 }
 
 export type SessionListEntry = {
@@ -1653,9 +1710,9 @@ export type SessionListEntry = {
 	cwd: string;
 	modifiedAt: number;
 	messageCount: number;
-	/** First user prompt, capped at 500 chars (picker subtitle). Absent on older daemons. */
+	/** First user prompt, capped at 500 chars (picker subtitle). Absent on older sessions. */
 	firstMessage?: string;
-	/** Session outcome for the picker status dot. Absent on older daemons. */
+	/** Session outcome for the picker status dot. Absent on older sessions. */
 	status?: "complete" | "interrupted" | "aborted" | "error" | "pending" | "unknown";
 };
 // ---------------------------------------------------------------------------
@@ -1701,7 +1758,7 @@ export interface SettingView {
 	/**
 	 * When an edit applies: `live` to the running session, `next-session` only to
 	 * sessions started afterwards. `restart` is no longer produced; an older
-	 * daemon may still send it, and clients treat it as `live`.
+	 * session may still send it, and clients treat it as `live`.
 	 */
 	effect: "live" | "next-session" | "restart";
 }
@@ -1729,7 +1786,7 @@ export type ReviewAnchor =
 
 /**
  * C02: server-advertised capability map carried on the attach priming and state
- * frames. Only verdicts the daemon computes at runtime appear here. Absent map or
+ * frames. Only verdicts the session computes at runtime appear here. Absent map or
  * absent key means unavailable (never guess from version); unknown keys are ignored.
  */
 export interface ServerCapabilities {
@@ -1742,7 +1799,7 @@ export interface ServerCapabilities {
 // the P3 service factories and gate behind the keys above. Absent = unavailable.
 // ---------------------------------------------------------------------------
 
-/** One changed path in the daemon-bound repository adapter snapshot (G02). */
+/** One changed path in the session-bound repository adapter snapshot (G02). */
 export interface GitPathEntry {
 	path: string;
 	origPath?: string;

@@ -9,7 +9,7 @@ import {
 	Show,
 	type Component,
 } from "solid-js";
-import type { DaemonEntry, RegisteredProject } from "#lib/wire/protocol";
+import type { RosterEntry, RegisteredProject } from "#lib/wire/protocol";
 import {
 	projectRollup,
 	rollupSummary,
@@ -75,10 +75,10 @@ function readCollapsedGroups(): Set<string> {
 	}
 }
 
-/** Project-first group list as derived by the shell (daemonsByProject). */
+/** Project-first group list as derived by the shell (sessionsByProject). */
 export type ProjectGroupsData = {
 	project: RegisteredProject;
-	daemons: DaemonEntry[];
+	sessions: RosterEntry[];
 }[];
 
 /** Empty roster: the add hint, plus a sign-in prompt when no model provider
@@ -137,8 +137,8 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 	/** One registered-project group: collapsible header (caret, name, and a
 	 *  right tail: roll-up summary and signal while collapsed, the "+" New
 	 *  workspace trigger and the "⋯" menu carrying Remove project on header
-	 *  hover), then one row per checkout in daemonsByProject order. */
-	const ProjectGroup: Component<{ project: RegisteredProject; daemons: DaemonEntry[] }> = (
+	 *  hover), then one row per checkout in sessionsByProject order. */
+	const ProjectGroup: Component<{ project: RegisteredProject; sessions: RosterEntry[] }> = (
 		props,
 	) => {
 		const gkey = `project:${props.project.projectId}`;
@@ -146,7 +146,7 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 		/** One entry per checkout: its status and, for a ready one, its activity
 		 *  (the same derivation the row uses, so group and rows always agree). */
 		const rollup = createMemo(() =>
-			projectRollup(props.daemons.map((d) => ({ status: d.status, activity: rowActivity(d) }))),
+			projectRollup(props.sessions.map((d) => ({ status: d.status, activity: rowActivity(d) }))),
 		);
 		// Id-scoped read of the shared open-menu signal: the menu closes only
 		// when THIS project's key changes, so other groups' toggles don't
@@ -176,41 +176,43 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 		// that are not asleep plus the pinned ones (the attached session and the
 		// target of a switch that is waking, attaching or failed, which the row's
 		// `selected` highlight follows). The roll-up above stays on every row.
-		const visibleDaemons = createMemo(() => {
-			if (!state.sidebarRunningOnly) return props.daemons;
+		const visibleSessions = createMemo(() => {
+			if (!state.sidebarRunningOnly) return props.sessions;
 			const target = state.transcriptTarget;
 			const switching =
 				state.transcriptPhase === "waking" ||
 				state.transcriptPhase === "attaching" ||
 				state.transcriptPhase === "failed";
-			return props.daemons.filter((d) =>
+			return props.sessions.filter((d) =>
 				shownWhenRunningOnly(
 					d.status,
-					d.daemonId === state.currentSessionId || (switching && d.daemonId === target),
+					d.workspaceId === state.currentWorkspaceId || (switching && d.workspaceId === target),
 				),
 			);
 		});
 
 		// Rendered rows: the live ones plus rows still playing their exit. Seeded
 		// from the first render, so page load never animates; a row enters only
-		// when its daemonId was not rendered before. The roster counts as arrived
+		// when its workspaceId was not rendered before. The roster counts as arrived
 		// only after the first roster frame (`armed` trails state.rosterLoaded by
 		// one run), so the frame that fills an initially empty list animates
 		// nothing. A collapsed group animates nothing either: expanding it never
 		// counts its rows as new. A row the filter hides exits like a removed one.
-		const [slots, setSlots] = createSignal<RowSlot<DaemonEntry>[]>(
-			initialRowSlots(visibleDaemons(), (d) => d.daemonId),
+		const [slots, setSlots] = createSignal<RowSlot<RosterEntry>[]>(
+			initialRowSlots(visibleSessions(), (d) => d.workspaceId),
 		);
 		let armed = state.rosterLoaded;
 		createComputed(
 			on(
-				[visibleDaemons, open, () => state.rosterLoaded],
-				([daemons, isOpen, loaded]) => {
+				[visibleSessions, open, () => state.rosterLoaded],
+				([sessions, isOpen, loaded]) => {
 					// A pending delete clears only when the row left the roster, not
 					// when the filter merely hides it.
-					const inRoster = new Set(props.daemons.map((d) => d.daemonId));
+					const inRoster = new Set(props.sessions.map((d) => d.workspaceId));
 					for (const slot of slots()) if (!inRoster.has(slot.id)) clearDeletePending(slot.id);
-					setSlots((prev) => reconcileRowSlots(prev, daemons, (d) => d.daemonId, isOpen && armed));
+					setSlots((prev) =>
+						reconcileRowSlots(prev, sessions, (d) => d.workspaceId, isOpen && armed),
+					);
 					armed = loaded;
 				},
 				{ defer: true },
@@ -265,7 +267,7 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 					    menu on hover, as a row's corner does. */}
 					<span class="project-group-tail">
 						<span class="project-group-slot">
-							<Show when={rollup().total > 0 && (!open() || visibleDaemons().length === 0)}>
+							<Show when={rollup().total > 0 && (!open() || visibleSessions().length === 0)}>
 								<span
 									class="project-group-summary"
 									role="img"
@@ -295,10 +297,10 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 								<PlusIcon />
 							</button>
 						</span>
-						<span class="daemon-row-corner project-group-corner">
+						<span class="roster-row-corner project-group-corner">
 							<Show when={!open() ? rollup().signal : null}>
 								{(signal) => (
-									<span class="daemon-row-status" aria-hidden="true">
+									<span class="roster-row-status" aria-hidden="true">
 										<RowSignal status={signal().status} activity={signal().activity} />
 									</span>
 								)}
@@ -335,7 +337,7 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 					)}
 				</Show>
 				<Show when={open()}>
-					{/* Keyed by daemonId: slots are rebuilt on every roster change and a
+					{/* Keyed by workspaceId: slots are rebuilt on every roster change and a
 					    row must keep its DOM (and any open menu) across them. */}
 					<For each={rowIds()}>
 						{(id) => {
@@ -346,11 +348,12 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 									id={id}
 									mode={slot().mode}
 									onExited={(done) => {
-										if (!props.daemons.some((d) => d.daemonId === done)) clearDeletePending(done);
+										if (!props.sessions.some((d) => d.workspaceId === done))
+											clearDeletePending(done);
 										setSlots((prev) => finishRowExit(prev, done));
 									}}
 								>
-									<WorkspaceRow daemon={slot().item} inProjectGroup projectMissing={missing()} />
+									<WorkspaceRow session={slot().item} inProjectGroup projectMissing={missing()} />
 								</RowMotion>
 							);
 						}}
@@ -365,13 +368,13 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 			<Show when={props.groups.length === 0}>
 				<EmptyProjects />
 			</Show>
-			{/* Keyed by projectId: daemonsByProject() rebuilds group objects on every
+			{/* Keyed by projectId: sessionsByProject() rebuilds group objects on every
 			    roster change, and keying by object would remount each group (and any
 			    open New workspace popover with its in-flight create). */}
 			<For each={props.groups.map((g) => g.project.projectId)}>
 				{(projectId) => (
 					<Show when={props.groups.find((g) => g.project.projectId === projectId)}>
-						{(g) => <ProjectGroup project={g().project} daemons={g().daemons} />}
+						{(g) => <ProjectGroup project={g().project} sessions={g().sessions} />}
 					</Show>
 				)}
 			</For>

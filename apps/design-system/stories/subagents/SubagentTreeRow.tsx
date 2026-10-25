@@ -48,7 +48,7 @@ export default defineStory({
 		{
 			name: "Running with a job widget, headline and meter",
 			description:
-				"The agent's task job shares its id, so the daemon's job widget for it shows as a glance row under the metrics: the headline figure with the agent's own progress.",
+				"The agent's task job shares its id, so the session process's job widget for it shows as a glance row under the metrics: the headline figure with the agent's own progress.",
 			seed: () => {
 				seedAgentTree({ display: true });
 				seedJobWidgets(0, [agentEntry()]);

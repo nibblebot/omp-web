@@ -1,5 +1,5 @@
 import { SessionSettings } from "../../../web/components/settings/SessionSettings";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
 export default defineStory({
@@ -9,7 +9,7 @@ export default defineStory({
 		file: "apps/web/components/settings/SessionSettings.tsx",
 		export: "SessionSettings",
 	},
-	seed: { currentSessionId: "sess_09a41c" },
+	seed: { currentWorkspaceId: "sess_09a41c" },
 	variants: [
 		{
 			name: "Defaults",

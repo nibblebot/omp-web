@@ -3,7 +3,7 @@
  *
  * The session-scoped getSettings/setSetting RPCs need a live AgentSession
  * and fail unattached ("Settings unavailable"). This service backs the
- * settings panel while the fleet edge has no daemon attached: it lazily
+ * settings panel while the fleet edge has no session attached: it lazily
  * initializes the process-global Settings singleton (the SAME instance a
  * session would read; any fleet settings path MUST use Settings.init, never
  * loadIsolated, or values render from the wrong instance), builds the wire

@@ -34,7 +34,7 @@ import {
 	setState,
 	setView,
 	state,
-	restartDaemonById,
+	restartSessionById,
 	toggleToolsExpanded,
 } from "./state";
 import { openModelPicker, openModelSettings } from "./store/models";
@@ -57,7 +57,7 @@ initTheme();
 const ChatMode: Component = () => (
 	<>
 		<FleetSidebar />
-		{/* No live session (stopped/removed daemon, or none picked yet): the
+		{/* No live session (stopped/removed session, or none picked yet): the
 		    empty pane replaces the chat column. A switch in flight (or failed)
 		    and a vanished session's fade-out keep the chat column, which shows
 		    their skeleton / failed panel / fade. */}
@@ -73,9 +73,9 @@ const ChatMode: Component = () => (
 						<div class="background-bars">
 							<BackgroundDaemonsBar />
 						</div>
-						<Show when={isUserStopped(state.currentSessionId)}>
+						<Show when={isUserStopped(state.currentWorkspaceId)}>
 							<StoppedSessionStrip
-								onRestart={() => void restartDaemonById(state.currentSessionId)}
+								onRestart={() => void restartSessionById(state.currentWorkspaceId)}
 							/>
 						</Show>
 						<CompactionBar />
@@ -171,14 +171,14 @@ export const App: Component = () => {
 	// Drawer sidebars (below 1024px) get out of the way once the main pane
 	// changes (attach, session switch) or any dialog/sheet opens over it.
 	createEffect(
-		on([() => state.currentSessionId, () => state.sessionFile], () => closeDrawers(), {
+		on([() => state.currentWorkspaceId, () => state.sessionFile], () => closeDrawers(), {
 			defer: true,
 		}),
 	);
 	createEffect(() => {
 		if (
 			state.modal !== null ||
-			state.daemonDetailsId !== null ||
+			state.sessionDetailsId !== null ||
 			state.deleteWorkspaceTarget !== null ||
 			state.removeProjectTarget !== null
 		)
@@ -193,14 +193,14 @@ export const App: Component = () => {
 	// the hash, so a reload lands back on the same session.
 	createEffect(
 		on(
-			() => state.daemonRoster,
+			() => state.sessionRoster,
 			(roster) => {
 				if (roster.length > 0) restoreInitialRoute();
 			},
 		),
 	);
 	createEffect(
-		on([() => state.currentSessionId, () => state.sessionId], () => syncRouteToAttached(), {
+		on([() => state.currentWorkspaceId, () => state.sessionId], () => syncRouteToAttached(), {
 			defer: true,
 		}),
 	);
@@ -218,13 +218,13 @@ export const App: Component = () => {
 	// Per-workspace dock layouts of workspaces that left the roster are dropped.
 	createEffect(
 		on(
-			() => JSON.stringify(state.daemonRoster.map((d) => d.daemonId)),
+			() => JSON.stringify(state.sessionRoster.map((d) => d.workspaceId)),
 			() => pruneDockLayoutsToRoster(),
 		),
 	);
 	// Tab title names the attached session.
 	createEffect(() => {
-		const title = state.currentSessionId === "" ? "" : displayTitle(state.sessionName);
+		const title = state.currentWorkspaceId === "" ? "" : displayTitle(state.sessionName);
 		document.title = title ? `${title} · omp web` : "omp web";
 	});
 	return (

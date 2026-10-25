@@ -5,7 +5,7 @@
  * view moves to a neighbouring session or clears to the no-session pane.
  *
  * Store path: a roster frame drives reconcileAttachedSession, which sets
- * sessionDownId (asleep/error only) and clears currentSessionId. Component path: ConnectionBar,
+ * sessionDownId (asleep/error only) and clears currentWorkspaceId. Component path: ConnectionBar,
  * SessionTitle (New session) and PromptActions (Send) render through solid's
  * SSR runtime (see the shared JSX shim).
  */
@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { createComponent } from "solid-js";
 import * as solidWeb from "solid-js/web";
 import { browserCloseFor } from "#lib/wire/browser-socket";
-import type { DaemonEntry, ServerFrame } from "#lib/wire/protocol";
+import type { RosterEntry, ServerFrame } from "#lib/wire/protocol";
 import { ConnectionBar } from "../components/app/ConnectionBar";
 import { WorkspaceRow, setMenuOpenId } from "../components/fleet/sidebar/WorkspaceRow";
 import { PromptActions } from "../components/chat/composer/PromptActions";
@@ -30,9 +30,9 @@ import {
 	restoreJsxShim,
 } from "./web.testkit";
 
-function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+function row(id: string, extra: Partial<RosterEntry> = {}): RosterEntry {
 	return {
-		daemonId: id,
+		workspaceId: id,
 		name: id,
 		cwd: `/repos/${id}`,
 		project: id,
@@ -41,21 +41,21 @@ function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
 	};
 }
 
-/** Attach to daemon-a with its priming series done and the composer ready. */
+/** Attach to workspace-a with its priming series done and the composer ready. */
 function attachReady(): void {
 	connect();
 	FakeWebSocket.instances.at(-1)!.onopen?.();
-	dispatch({ type: "roster", daemons: [daemon("daemon-a")] });
-	dispatch(attached("daemon-a"));
+	dispatch({ type: "roster", entries: [row("workspace-a")] });
+	dispatch(attached("workspace-a"));
 	dispatchSeq({ type: "history", messages: [] } as ServerFrame, 3);
 	setState("readyAt", 123);
 }
 
 /** A row's kebab menu, open, rendered as it is in the current state. */
-function renderRowMenu(entry: DaemonEntry): string {
-	setMenuOpenId(entry.daemonId);
+function renderRowMenu(entry: RosterEntry): string {
+	setMenuOpenId(entry.workspaceId);
 	try {
-		return solidWeb.renderToString(() => createComponent(WorkspaceRow, { daemon: entry }));
+		return solidWeb.renderToString(() => createComponent(WorkspaceRow, { session: entry }));
 	} finally {
 		setMenuOpenId(null);
 	}
@@ -89,8 +89,8 @@ afterEach(() => {
 		connected: false,
 		transportStartup: true,
 		sessionDownId: "",
-		currentSessionId: "",
-		daemonRoster: [],
+		currentWorkspaceId: "",
+		sessionRoster: [],
 		readyAt: undefined,
 	});
 });
@@ -102,7 +102,7 @@ afterAll(() => {
 
 describe("transport strip", () => {
 	test("stays hidden while the page's first stream is opening, and shows once a connected stream drops", () => {
-		setState({ connected: false, transportStartup: true, currentSessionId: "" });
+		setState({ connected: false, transportStartup: true, currentWorkspaceId: "" });
 		expect(connectionState()).toBe("reconnecting");
 		expect(renderChrome().strip).not.toContain("connection-bar");
 		// After the first open (or the startup grace), a down stream is a real reconnect.
@@ -111,7 +111,7 @@ describe("transport strip", () => {
 	});
 
 	test("a proto mismatch close asks for a reload instead of showing a reconnect that never comes", () => {
-		const { code, reason } = browserCloseFor("proto_mismatch", "server speaks OMP_PROTO 6");
+		const { code, reason } = browserCloseFor("proto_mismatch", "server speaks OMP_PROTO 7");
 		FakeWebSocket.instances.at(-1)!.serverClose(code, reason);
 		const { strip } = renderChrome();
 		expect(strip).toContain("Reload to reconnect");
@@ -132,10 +132,10 @@ describe("killed attached session process", () => {
 	test.each(["asleep", "error"] as const)(
 		"a roster status of %s moves the view to offline and shows the strip",
 		(status) => {
-			dispatch({ type: "roster", daemons: [daemon("daemon-a", { status })] });
+			dispatch({ type: "roster", entries: [row("workspace-a", { status })] });
 
-			expect(state.sessionDownId).toBe("daemon-a");
-			expect(state.currentSessionId).toBe("");
+			expect(state.sessionDownId).toBe("workspace-a");
+			expect(state.currentWorkspaceId).toBe("");
 			expect(connectionState()).toBe("offline");
 
 			const { strip, title, actions } = renderChrome();
@@ -147,19 +147,19 @@ describe("killed attached session process", () => {
 	);
 
 	test("a removed roster entry with no session left clears the view without the offline strip", () => {
-		dispatch({ type: "roster", daemons: [] });
+		dispatch({ type: "roster", entries: [] });
 		expect(state.sessionDownId).toBe("");
-		expect(state.currentSessionId).toBe("");
+		expect(state.currentWorkspaceId).toBe("");
 		expect(state.transcriptPhase).toBe("idle");
 		expect(connectionState()).toBe("connected");
 		expect(renderChrome().strip).not.toContain("connection-bar");
 	});
 
 	test("a fresh attach after the kill clears the offline strip", () => {
-		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		dispatch({ type: "roster", entries: [row("workspace-a", { status: "asleep" })] });
 		expect(connectionState()).toBe("offline");
-		dispatch({ type: "roster", daemons: [daemon("daemon-a")] });
-		dispatch(attached("daemon-a"));
+		dispatch({ type: "roster", entries: [row("workspace-a")] });
+		dispatch(attached("workspace-a"));
 		expect(state.sessionDownId).toBe("");
 		expect(connectionState()).toBe("connected");
 		expect(renderChrome().strip).not.toContain("connection-bar");
@@ -172,10 +172,10 @@ describe("killed attached session process", () => {
 		["asleep", /Start session/],
 		["removed", /Start session/],
 	] as const)("an attached session that went %s leaves other rows startable", (how, item) => {
-		const other = daemon("daemon-b", { status: "asleep" });
+		const other = row("workspace-b", { status: "asleep" });
 		dispatch({
 			type: "roster",
-			daemons: how === "removed" ? [other] : [daemon("daemon-a", { status: "asleep" }), other],
+			entries: how === "removed" ? [other] : [row("workspace-a", { status: "asleep" }), other],
 		});
 		expect(connectionState()).toBe(how === "removed" ? "connected" : "offline");
 		const menu = renderRowMenu(other);
@@ -185,8 +185,8 @@ describe("killed attached session process", () => {
 	});
 
 	test("a dropped browser socket still pauses row actions", () => {
-		const other = daemon("daemon-b", { status: "asleep" });
-		dispatch({ type: "roster", daemons: [daemon("daemon-a"), other] });
+		const other = row("workspace-b", { status: "asleep" });
+		dispatch({ type: "roster", entries: [row("workspace-a"), other] });
 		setState("connected", false);
 		const button = renderRowMenu(other).match(
 			/<button[^>]*>(?:(?!<\/button>).)*Start session/,

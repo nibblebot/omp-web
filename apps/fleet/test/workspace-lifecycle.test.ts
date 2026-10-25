@@ -110,9 +110,12 @@ interface OpsRecord {
 }
 
 /** Durable provider-op records from a workspace's provider state dir. */
-function providerOps(workspaceDir: string, daemonId: string): OpsRecord[] {
+function providerOps(workspaceDir: string, workspaceId: string): OpsRecord[] {
 	try {
-		const raw = readFileSync(join(workspaceDir, ".provider-state", daemonId, "ops.jsonl"), "utf8");
+		const raw = readFileSync(
+			join(workspaceDir, ".provider-state", workspaceId, "ops.jsonl"),
+			"utf8",
+		);
 		return raw
 			.trim()
 			.split("\n")
@@ -124,11 +127,14 @@ function providerOps(workspaceDir: string, daemonId: string): OpsRecord[] {
 }
 
 /** Persisted provider delete attempts (survives fleet restarts). */
-function deleteCount(workspaceDir: string, daemonId: string): number {
+function deleteCount(workspaceDir: string, workspaceId: string): number {
 	try {
 		return (
 			Number.parseInt(
-				readFileSync(join(workspaceDir, ".provider-state", daemonId, "delete-count.json"), "utf8"),
+				readFileSync(
+					join(workspaceDir, ".provider-state", workspaceId, "delete-count.json"),
+					"utf8",
+				),
 				10,
 			) || 0
 		);
@@ -207,7 +213,7 @@ if (op === "ensure-running") {
 
 /**
  * JSONL session transcript: a title slot, a session header, then one
- * assistant message line, all newline-terminated. Matches the daemon's
+ * assistant message line, all newline-terminated. Matches the session's
  * streamed lineage layout (`<sessionDir>/<sessionId>.jsonl`).
  */
 const SESSION_ID = "s1";
@@ -230,13 +236,16 @@ function sha256Hex(text: string): string {
 }
 
 /** Store-side `readonly.json` marker for a verified workspace. */
-function readOnlyMarker(logsDir: string, daemonId: string): string {
-	return join(logsDir, daemonId, "readonly.json");
+function readOnlyMarker(logsDir: string, workspaceId: string): string {
+	return join(logsDir, workspaceId, "readonly.json");
 }
 
 /** Volumes: the workspace volume root and its session tree root. */
-function volumePaths(workspaceDir: string, daemonId: string): { root: string; sessions: string } {
-	const root = join(workspaceDir, daemonId);
+function volumePaths(
+	workspaceDir: string,
+	workspaceId: string,
+): { root: string; sessions: string } {
+	const root = join(workspaceDir, workspaceId);
 	return { root, sessions: join(root, ".home", "agent", "sessions") };
 }
 
@@ -249,18 +258,18 @@ function volumePaths(workspaceDir: string, daemonId: string): { root: string; se
 function seedSession(
 	logsDir: string,
 	workspaceDir: string,
-	daemonId: string,
+	workspaceId: string,
 	opts: { ackedOffset?: number },
 ): void {
 	const bytes = transcriptJsonl();
-	const storeDir = join(logsDir, daemonId, SESSION_ID);
+	const storeDir = join(logsDir, workspaceId, SESSION_ID);
 	mkdirSync(storeDir, { recursive: true });
 	writeFileSync(join(storeDir, `${SESSION_ID}.jsonl`), bytes);
 	writeFileSync(
 		join(storeDir, "index.json"),
 		JSON.stringify({
 			version: 1,
-			workspaceId: daemonId,
+			workspaceId,
 			sessionId: SESSION_ID,
 			streams: {
 				[`${SESSION_ID}.jsonl`]: {
@@ -271,7 +280,7 @@ function seedSession(
 			},
 		}),
 	);
-	const volumeDir = join(volumePaths(workspaceDir, daemonId).sessions, SESSION_ID);
+	const volumeDir = join(volumePaths(workspaceDir, workspaceId).sessions, SESSION_ID);
 	mkdirSync(volumeDir, { recursive: true });
 	writeFileSync(join(volumeDir, `${SESSION_ID}.jsonl`), bytes);
 }
@@ -314,7 +323,7 @@ async function bootFleet(
 	return { server, paths, workspaceDir, cloneRoot, logsDir, repoDir };
 }
 
-/** Create a clone of the registered repo, returning its daemonId. */
+/** Create a clone of the registered repo, returning its workspaceId. */
 async function createClone(server: FleetServer, repoDir: string, name: string): Promise<string> {
 	const { project } = server.registry.addProject(repoDir);
 	const res = await postJson(server.port, "/ctl/clones", {
@@ -324,13 +333,13 @@ async function createClone(server: FleetServer, repoDir: string, name: string): 
 		start: false,
 	});
 	expect(res.status).toBe(201);
-	const body = (await res.json()) as { entry: { daemonId: string } };
-	return body.entry.daemonId;
+	const body = (await res.json()) as { entry: { workspaceId: string } };
+	return body.entry.workspaceId;
 }
 
 /** DELETE /ctl/worktrees/:id on the given fleet. */
-function deleteWorkspace(port: number, daemonId: string): Promise<Response> {
-	return fetch(`http://127.0.0.1:${port}/ctl/worktrees/${daemonId}`, { method: "DELETE" });
+function deleteWorkspace(port: number, workspaceId: string): Promise<Response> {
+	return fetch(`http://127.0.0.1:${port}/ctl/worktrees/${workspaceId}`, { method: "DELETE" });
 }
 
 test(
@@ -353,13 +362,13 @@ test(
 			expect(firstVolume).toBe(join(first.cloneRoot, firstId));
 			expect(secondVolume).toBe(join(second.cloneRoot, secondId));
 			expect(firstVolume).not.toBe(secondVolume);
-			expect((await postJson(first.server.port, "/ctl/start", { daemonId: firstId })).status).toBe(
-				200,
-			);
+			expect(
+				(await postJson(first.server.port, "/ctl/start", { workspaceId: firstId })).status,
+			).toBe(200);
 			expect(providerOps(first.cloneRoot, firstId)).toHaveLength(1);
 			expect(providerOps(second.cloneRoot, secondId)).toHaveLength(0);
 			expect(
-				(await postJson(second.server.port, "/ctl/start", { daemonId: secondId })).status,
+				(await postJson(second.server.port, "/ctl/start", { workspaceId: secondId })).status,
 			).toBe(200);
 			expect(providerOps(second.cloneRoot, secondId)).toHaveLength(1);
 			expect(existsSync(join(first.workspaceDir, firstId))).toBe(false);
@@ -380,12 +389,12 @@ test(
 			deleteFailures: 0,
 		});
 		try {
-			const daemonId = await createClone(server, repoDir, "missing-location");
-			server.registry.update(daemonId, { cwd: "" });
-			const start = await postJson(server.port, "/ctl/start", { daemonId });
+			const workspaceId = await createClone(server, repoDir, "missing-location");
+			server.registry.update(workspaceId, { cwd: "" });
+			const start = await postJson(server.port, "/ctl/start", { workspaceId });
 			expect(start.status).toBe(503);
-			expect(providerOps(cloneRoot, daemonId)).toHaveLength(0);
-			expect(server.registry.get(daemonId)!.cwd).toBe("");
+			expect(providerOps(cloneRoot, workspaceId)).toHaveLength(0);
+			expect(server.registry.get(workspaceId)!.cwd).toBe("");
 		} finally {
 			await server.close();
 		}
@@ -403,33 +412,33 @@ describe("clone workspace deletion lifecycle", () => {
 				deleteFailures: 0,
 			});
 			try {
-				const daemonId = await createClone(server, repoDir, "live");
+				const workspaceId = await createClone(server, repoDir, "live");
 				// Start: desired running, gen 1, enrollment persisted.
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				const running = server.registry.get(daemonId)!;
+				const running = server.registry.get(workspaceId)!;
 				expect(running.status).toBe("ready");
 				expect(running.workspace?.desiredState).toBe("running");
 				expect(running.workspace?.enrollment?.generation).toBe(1);
 
 				// The provider reports a live sandbox → the admission gate
 				// refuses (activity is not observable fleet-side for clones).
-				const del1 = await deleteWorkspace(server.port, daemonId);
+				const del1 = await deleteWorkspace(server.port, workspaceId);
 				expect(del1.status).toBe(409); // writer_active maps to 409
 				// A second delete (through the SAME verified gate) is refused
 				// again; no state change, no bypass, no accidental delete.
-				const del2 = await deleteWorkspace(server.port, daemonId);
+				const del2 = await deleteWorkspace(server.port, workspaceId);
 				expect(del2.status).toBe(409);
 
 				// Everything retained: roster entry present, volume present,
 				// no provider delete op, still enrolled at gen 1.
-				const after = server.registry.get(daemonId)!;
+				const after = server.registry.get(workspaceId)!;
 				expect(after.status).toBe("ready");
 				expect(after.workspace?.desiredState).toBe("running");
 				expect(after.workspace?.enrollment?.generation).toBe(1);
 				expect(after.workspace?.deletion).toBeUndefined();
 				expect(existsSync(join(after.cwd ?? "", ".checkout", ".git"))).toBe(true);
-				expect(providerOps(cloneRoot, daemonId).some((o) => o.op === "delete")).toBe(false);
+				expect(providerOps(cloneRoot, workspaceId).some((o) => o.op === "delete")).toBe(false);
 			} finally {
 				await server.close();
 			}
@@ -446,17 +455,17 @@ describe("clone workspace deletion lifecycle", () => {
 				deleteFailures: 0,
 			});
 			try {
-				const daemonId = await createClone(server, repoDir, "concurrent-start");
+				const workspaceId = await createClone(server, repoDir, "concurrent-start");
 				const [a, b] = await Promise.all([
-					postJson(server.port, "/ctl/start", { daemonId }),
-					postJson(server.port, "/ctl/start", { daemonId }),
+					postJson(server.port, "/ctl/start", { workspaceId }),
+					postJson(server.port, "/ctl/start", { workspaceId }),
 				]);
 				expect(a.status).toBe(200);
 				expect(b.status).toBe(200);
 				// Unserialized, both starts computed generation 1 and both
 				// enrolled; the loser's enrollment was then revoked. Serialized,
 				// the second start reattaches to the first generation.
-				const entry = server.registry.get(daemonId)!;
+				const entry = server.registry.get(workspaceId)!;
 				expect(entry.workspace?.authorizedGeneration).toBe(1);
 				expect(entry.workspace?.enrollment?.generation).toBe(1);
 				expect(entry.workspace?.desiredState).toBe("running");
@@ -476,20 +485,20 @@ describe("clone workspace deletion lifecycle", () => {
 				deleteFailures: 0,
 			});
 			try {
-				const daemonId = await createClone(server, repoDir, "serial");
+				const workspaceId = await createClone(server, repoDir, "serial");
 				// Start (gen 1, live compute) then stop: the workspace has
 				// provider history, so a delete runs the provider delete op.
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				const stop = await postJson(server.port, "/ctl/stop", { selector: daemonId });
+				const stop = await postJson(server.port, "/ctl/stop", { selector: workspaceId });
 				expect(stop.status).toBe(200);
-				expect(server.registry.get(daemonId)!.workspace?.desiredState).toBe("stopped");
+				expect(server.registry.get(workspaceId)!.workspace?.desiredState).toBe("stopped");
 				// Both deletes fire before either resolves; the #deleting gate
 				// serializes them (the winner's whole gate runs, the loser is
 				// refused with a typed conflict).
 				const [a, b] = await Promise.all([
-					deleteWorkspace(server.port, daemonId),
-					deleteWorkspace(server.port, daemonId),
+					deleteWorkspace(server.port, workspaceId),
+					deleteWorkspace(server.port, workspaceId),
 				]);
 				// Exactly one destroy completed; the loser is refused with a
 				// typed client error (409 conflict while the winner's gate is
@@ -504,9 +513,11 @@ describe("clone workspace deletion lifecycle", () => {
 				expect(loser.status).toBeGreaterThanOrEqual(400);
 				// The roster is gone, the volume is gone, and the provider saw
 				// exactly ONE delete op.
-				expect(server.registry.get(daemonId)).toBeUndefined();
-				expect(existsSync(join(cloneRoot, daemonId))).toBe(false);
-				expect(providerOps(cloneRoot, daemonId).filter((o) => o.op === "delete")).toHaveLength(1);
+				expect(server.registry.get(workspaceId)).toBeUndefined();
+				expect(existsSync(join(cloneRoot, workspaceId))).toBe(false);
+				expect(providerOps(cloneRoot, workspaceId).filter((o) => o.op === "delete")).toHaveLength(
+					1,
+				);
 			} finally {
 				await server.close();
 			}
@@ -523,19 +534,19 @@ describe("clone workspace deletion lifecycle", () => {
 				deleteFailures: 0,
 			});
 			try {
-				const daemonId = await createClone(server, repoDir, "incomplete");
+				const workspaceId = await createClone(server, repoDir, "incomplete");
 				// Seed the fleet log store with an INCOMPLETE session: the
 				// streamed file's final byte was never acked (index ackedOffset
 				// is one short of the durable length). The volume carries the
 				// same session tree, so only the store's offset-contiguity
 				// check fails, the exact interrupted-stream condition.
-				seedSession(logsDir, cloneRoot, daemonId, {
+				seedSession(logsDir, cloneRoot, workspaceId, {
 					ackedOffset: Buffer.byteLength(transcriptJsonl(), "utf8") - 1,
 				});
 
-				const del = await deleteWorkspace(server.port, daemonId);
+				const del = await deleteWorkspace(server.port, workspaceId);
 				expect(del.status).toBe(409); // archive_conflict maps to 409
-				const entry = server.registry.get(daemonId)!;
+				const entry = server.registry.get(workspaceId)!;
 				expect(entry).toBeDefined(); // roster entry retained
 				// The gate persisted the typed failure: deletion is pending
 				// retry, not silently cleared.
@@ -543,16 +554,18 @@ describe("clone workspace deletion lifecycle", () => {
 				expect(entry.workspace?.deletion?.error?.code).toBe("conflict");
 				// Volume retained; store retained and still writable (no
 				// read-only marker, verification never passed).
-				expect(existsSync(join(cloneRoot, daemonId))).toBe(true);
-				expect(existsSync(readOnlyMarker(logsDir, daemonId))).toBe(false);
+				expect(existsSync(join(cloneRoot, workspaceId))).toBe(true);
+				expect(existsSync(readOnlyMarker(logsDir, workspaceId))).toBe(false);
 				// The provider never saw a delete (the gate stopped at the
 				// verification step).
-				expect(providerOps(cloneRoot, daemonId).filter((o) => o.op === "delete")).toHaveLength(0);
+				expect(providerOps(cloneRoot, workspaceId).filter((o) => o.op === "delete")).toHaveLength(
+					0,
+				);
 				// A refusal that ran nothing destructive does not strand the
 				// row: Start abandons the pending delete.
-				const wake = await postJson(server.port, "/ctl/start", { daemonId });
+				const wake = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(wake.status).toBe(200);
-				expect(server.registry.get(daemonId)?.workspace?.deletion).toBeUndefined();
+				expect(server.registry.get(workspaceId)?.workspace?.deletion).toBeUndefined();
 			} finally {
 				await server.close();
 			}
@@ -587,10 +600,10 @@ describe("clone workspace deletion lifecycle", () => {
 				await startTestFleet({ statePath: paths.statePath, configPath: paths.configPath }, config, {
 					workspaceDir: config.workspaceDir,
 				});
-			let daemonId: string;
+			let workspaceId: string;
 			{
 				const id = await createClone(server, repoDir, "verified-retry");
-				daemonId = id;
+				workspaceId = id;
 				mkdirSync(workspaceDir, { recursive: true });
 				renameSync(server.registry.get(id)!.cwd!, join(cloneRoot, id));
 				server.registry.update(id, { cwd: join(cloneRoot, id) });
@@ -600,35 +613,35 @@ describe("clone workspace deletion lifecycle", () => {
 				// workspace has provider compute history, so the delete gate's
 				// quiesce (provider stop) and post-verification provider
 				// delete paths actually run.
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				expect(server.registry.get(daemonId)!.workspace?.authorizedGeneration).toBe(1);
-				const stop = await postJson(server.port, "/ctl/stop", { selector: daemonId });
+				expect(server.registry.get(workspaceId)!.workspace?.authorizedGeneration).toBe(1);
+				const stop = await postJson(server.port, "/ctl/stop", { selector: workspaceId });
 				expect(stop.status).toBe(200);
-				expect(server.registry.get(daemonId)!.workspace?.desiredState).toBe("stopped");
+				expect(server.registry.get(workspaceId)!.workspace?.desiredState).toBe("stopped");
 
 				// Verified, stopped clone with a real stored session (valid
 				// JSONL, offset-contiguous index) mirrored on the volume.
-				seedSession(logsDir, cloneRoot, daemonId, {});
+				seedSession(logsDir, cloneRoot, workspaceId, {});
 
 				// First delete: verification passes, the store flips read-only,
 				// then the provider delete FAILS → delete-pending-retry with
 				// remainingResources (a retryable partial failure), and the
 				// entry + volume + verified store are all retained.
-				const del1 = await deleteWorkspace(server.port, daemonId);
+				const del1 = await deleteWorkspace(server.port, workspaceId);
 				expect(del1.status).toBe(500); // provider_failed maps to 500
-				const entry = server.registry.get(daemonId)!;
+				const entry = server.registry.get(workspaceId)!;
 				expect(entry).toBeDefined(); // never dropped early
 				expect(entry.workspace?.deletion?.state).toBe("delete-pending-retry");
 				expect(entry.workspace?.deletion?.error?.code).toBe("provider_failed");
 				expect(entry.workspace?.deletion?.remainingResources?.length).toBeGreaterThan(0);
 				// Verified: the store flipped read-only and stays; the volume
 				// is retained until the retry destroys it.
-				expect(existsSync(readOnlyMarker(logsDir, daemonId))).toBe(true);
-				expect(existsSync(join(cloneRoot, daemonId))).toBe(true);
-				expect(deleteCount(cloneRoot, daemonId)).toBe(1); // exactly ONE failed attempt
+				expect(existsSync(readOnlyMarker(logsDir, workspaceId))).toBe(true);
+				expect(existsSync(join(cloneRoot, workspaceId))).toBe(true);
+				expect(deleteCount(cloneRoot, workspaceId)).toBe(1); // exactly ONE failed attempt
 				// Past the read-only flip the row stays quarantined: Start is refused.
-				const blockedStart = await postJson(server.port, "/ctl/start", { daemonId });
+				const blockedStart = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(blockedStart.status).toBe(409);
 
 				// FLEET RESTART on the same state, then the RETRY: the retry
@@ -636,21 +649,21 @@ describe("clone workspace deletion lifecycle", () => {
 				await server.close();
 				const server2 = await boot();
 				try {
-					const del2 = await deleteWorkspace(server2.port, daemonId);
+					const del2 = await deleteWorkspace(server2.port, workspaceId);
 					expect(del2.status).toBe(200);
 					const body = (await del2.json()) as { removed?: string; verified?: string[] };
-					expect(body.removed).toBe(daemonId);
+					expect(body.removed).toBe(workspaceId);
 					expect(body.verified).toEqual([SESSION_ID]);
 					// The registry identity is gone, the volume is gone, the
 					// verified store (read-only) is retained for Retention.
-					expect(server2.registry.get(daemonId)).toBeUndefined();
-					expect(existsSync(join(cloneRoot, daemonId))).toBe(false);
-					expect(existsSync(readOnlyMarker(logsDir, daemonId))).toBe(true);
+					expect(server2.registry.get(workspaceId)).toBeUndefined();
+					expect(existsSync(join(cloneRoot, workspaceId))).toBe(false);
+					expect(existsSync(readOnlyMarker(logsDir, workspaceId))).toBe(true);
 					// The durable provider record shows the failed delete AND
 					// the successful retry, exactly two attempts total across
 					// both fleet lifetimes, no double destroy after success.
-					expect(deleteCount(cloneRoot, daemonId)).toBe(2);
-					const deletes = providerOps(cloneRoot, daemonId).filter((o) => o.op === "delete");
+					expect(deleteCount(cloneRoot, workspaceId)).toBe(2);
+					const deletes = providerOps(cloneRoot, workspaceId).filter((o) => o.op === "delete");
 					expect(deletes).toHaveLength(2);
 					expect(deletes[0]!.handle).toBeDefined();
 					expect(deletes[1]!.handle).toBe(deletes[0]!.handle);
@@ -685,16 +698,16 @@ test(
 				start: true,
 			});
 			expect(response.status).toBe(201);
-			const body = (await response.json()) as { entry: { daemonId: string } };
-			const daemonId = body.entry.daemonId;
-			const entry = server.registry.get(daemonId)!;
+			const body = (await response.json()) as { entry: { workspaceId: string } };
+			const workspaceId = body.entry.workspaceId;
+			const entry = server.registry.get(workspaceId)!;
 			// Prove the omitted facts actually exist; lifecycle assertions must
 			// read private state in-process, not depend on a private HTTP shape.
 			expect(entry.workspace?.source).toEqual({ local: repoDir });
 			expect(entry.workspace?.providerHandle).toBe("h");
 			expect(entry.workspace?.enrollment?.credentialHash).toBeDefined();
 			expect(body.entry).toMatchObject({
-				daemonId,
+				workspaceId,
 				name: "private-clone",
 				workspaceKind: "clone",
 				desiredState: "running",
@@ -714,10 +727,10 @@ test(
 			expect(JSON.stringify(body)).not.toContain(repoDir);
 			expect(JSON.stringify(body)).not.toContain(entry.workspace!.enrollment!.credentialHash);
 			for (const route of ["/ctl/start", "/ctl/wake"]) {
-				const started = await postJson(server.port, route, { daemonId });
+				const started = await postJson(server.port, route, { workspaceId });
 				expect(started.status).toBe(200);
-				expect(await started.json()).toEqual({ daemonId, observed: "running" });
-				expect(server.registry.get(daemonId)!.workspace?.providerHandle).toBe("h");
+				expect(await started.json()).toEqual({ workspaceId, observed: "running" });
+				expect(server.registry.get(workspaceId)!.workspace?.providerHandle).toBe("h");
 			}
 		} finally {
 			await server.close();
@@ -755,15 +768,15 @@ describe("clone source validation over /ctl/clones", () => {
 						start: false,
 					});
 					expect(res.status).toBe(201);
-					const body = (await res.json()) as { entry: { daemonId: string } };
-					const daemonId = body.entry.daemonId;
-					const entry = server.registry.get(daemonId)!;
+					const body = (await res.json()) as { entry: { workspaceId: string } };
+					const workspaceId = body.entry.workspaceId;
+					const entry = server.registry.get(workspaceId)!;
 					expect(entry.workspace?.kind).toBe("clone");
 					// Independent checkout is private to the selected fleet state,
 					// never allocated in the configured worktree destination.
-					expect(entry.cwd).toBe(join(dirname(paths.statePath), "clones", daemonId));
-					expect(existsSync(join(workspaceDir, daemonId))).toBe(false);
-					const checkout = join(cloneRoot, daemonId, ".checkout");
+					expect(entry.cwd).toBe(join(dirname(paths.statePath), "clones", workspaceId));
+					expect(existsSync(join(workspaceDir, workspaceId))).toBe(false);
+					const checkout = join(cloneRoot, workspaceId, ".checkout");
 					expect(existsSync(join(checkout, ".git"))).toBe(true);
 					expect(existsSync(join(checkout, "readme.md"))).toBe(true);
 					if (kind === "local") {
@@ -772,9 +785,9 @@ describe("clone source validation over /ctl/clones", () => {
 							readFileSync(join(entry.cwd!, ".omp-workspace-init.json"), "utf8"),
 						) as { source: { local: string } };
 						expect(marker.source.local).toBe(repoDir);
-						const deletion = await deleteWorkspace(server.port, daemonId);
+						const deletion = await deleteWorkspace(server.port, workspaceId);
 						expect(deletion.status).toBe(200);
-						expect(server.registry.get(daemonId)).toBeUndefined();
+						expect(server.registry.get(workspaceId)).toBeUndefined();
 						expect(existsSync(entry.cwd!)).toBe(false);
 					}
 				} finally {
@@ -847,8 +860,8 @@ describe("clone source remoteName over /ctl/clones", () => {
 				start: false,
 			});
 			expect(res.status).toBe(201);
-			const body = (await res.json()) as { entry: { daemonId: string } };
-			const checkout = join(cloneRoot, body.entry.daemonId, ".checkout");
+			const body = (await res.json()) as { entry: { workspaceId: string } };
+			const checkout = join(cloneRoot, body.entry.workspaceId, ".checkout");
 			expect(existsSync(join(checkout, "readme.md"))).toBe(true);
 		} finally {
 			await server.close();
@@ -962,8 +975,8 @@ describe("clone source remoteName over /ctl/clones", () => {
 				start: false,
 			});
 			expect(res.status).toBe(201);
-			const body = (await res.json()) as { entry: { daemonId: string } };
-			const record = server.registry.get(body.entry.daemonId)?.workspace;
+			const body = (await res.json()) as { entry: { workspaceId: string } };
+			const record = server.registry.get(body.entry.workspaceId)?.workspace;
 			expect(record?.source).toEqual({ remote: originUrl });
 			expect(record?.pinnedRevision).toBe(head);
 		} finally {
@@ -985,7 +998,7 @@ describe("clone source remoteName over /ctl/clones", () => {
 // ---------------------------------------------------------------------------
 
 interface GuardFixture extends FleetFixture {
-	daemonId: string;
+	workspaceId: string;
 	checkoutDir: string;
 	volume: { root: string; sessions: string };
 }
@@ -1005,18 +1018,18 @@ async function bootStoppedClone(
 		deleteFailures: 0,
 		...(listSessions !== undefined ? { listSessions } : {}),
 	});
-	const daemonId = await createClone(fixture.server, fixture.repoDir, name);
-	const start = await postJson(fixture.server.port, "/ctl/start", { daemonId });
+	const workspaceId = await createClone(fixture.server, fixture.repoDir, name);
+	const start = await postJson(fixture.server.port, "/ctl/start", { workspaceId });
 	expect(start.status).toBe(200);
-	const stop = await postJson(fixture.server.port, "/ctl/stop", { selector: daemonId });
+	const stop = await postJson(fixture.server.port, "/ctl/stop", { selector: workspaceId });
 	expect(stop.status).toBe(200);
-	const volume = volumePaths(fixture.cloneRoot, daemonId);
-	return { ...fixture, daemonId, checkoutDir: join(volume.root, ".checkout"), volume };
+	const volume = volumePaths(fixture.cloneRoot, workspaceId);
+	return { ...fixture, workspaceId, checkoutDir: join(volume.root, ".checkout"), volume };
 }
 
 /** Stored main transcript of the seeded session: `logs/<id>/<session>/<session>.jsonl`. */
-function storedSessionPath(logsDir: string, daemonId: string): string {
-	return join(logsDir, daemonId, SESSION_ID, `${SESSION_ID}.jsonl`);
+function storedSessionPath(logsDir: string, workspaceId: string): string {
+	return join(logsDir, workspaceId, SESSION_ID, `${SESSION_ID}.jsonl`);
 }
 
 /** Raw `git -C <cwd> <args>` exit code (never throws). */
@@ -1047,7 +1060,7 @@ async function expectRefusedWithRetention(
 ): Promise<void> {
 	const retainedVolumeRoot = opts.retainedVolumeRoot ?? fixture.volume.root;
 	expect(response.status).toBe(409);
-	const entry = fixture.server.registry.get(fixture.daemonId)!;
+	const entry = fixture.server.registry.get(fixture.workspaceId)!;
 	expect(entry.workspace?.deletion?.state).toBe("delete-pending-retry");
 	expect(entry.workspace?.deletion?.error?.code).toBe(code);
 	const body = (await response.json()) as { error?: string };
@@ -1055,14 +1068,18 @@ async function expectRefusedWithRetention(
 	expect(existsSync(join(retainedVolumeRoot, ".checkout"))).toBe(true);
 	expect(existsSync(retainedVolumeRoot)).toBe(true);
 	if (opts.storedSession !== false) {
-		expect(existsSync(storedSessionPath(fixture.logsDir, fixture.daemonId))).toBe(true);
+		expect(existsSync(storedSessionPath(fixture.logsDir, fixture.workspaceId))).toBe(true);
 	}
-	expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.daemonId))).toBe(false);
+	expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.workspaceId))).toBe(false);
 	expect(
-		providerOps(dirname(retainedVolumeRoot), fixture.daemonId).filter((op) => op.op === "delete"),
+		providerOps(dirname(retainedVolumeRoot), fixture.workspaceId).filter(
+			(op) => op.op === "delete",
+		),
 	).toHaveLength(0);
 	// Still listed: a refusal is retry-able, never a silent roster eviction.
-	expect(fixture.server.registry.list().some((e) => e.daemonId === fixture.daemonId)).toBe(true);
+	expect(fixture.server.registry.list().some((e) => e.workspaceId === fixture.workspaceId)).toBe(
+		true,
+	);
 }
 
 /** Errno thrown for a path, or undefined when it stats cleanly (never suppresses). */
@@ -1086,14 +1103,14 @@ describe("clone deletion git guard", () => {
 			const fixture = await bootStoppedClone("git-dirty");
 			try {
 				// The store/volume are deletion-ready: only the checkout blocks.
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				const readme = join(fixture.checkoutDir, "readme.md");
 				writeFileSync(readme, "tampered\n");
 				expect(await git(fixture.checkoutDir, ["status", "--porcelain=v1"])).not.toBe("");
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"conflict",
 				);
 				// Retained as-is: the uncommitted edit was not reset or stashed.
@@ -1110,7 +1127,7 @@ describe("clone deletion git guard", () => {
 		async () => {
 			const fixture = await bootStoppedClone("git-untracked");
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				const stray = join(fixture.checkoutDir, "scratch.md");
 				writeFileSync(stray, "notes\n");
 				expect(await git(fixture.checkoutDir, ["status", "--porcelain=v1"])).toContain(
@@ -1119,7 +1136,7 @@ describe("clone deletion git guard", () => {
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"conflict",
 				);
 				expect(existsSync(stray)).toBe(true); // never deleted with the volume
@@ -1135,7 +1152,7 @@ describe("clone deletion git guard", () => {
 		async () => {
 			const fixture = await bootStoppedClone("git-stash");
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				writeFileSync(join(fixture.checkoutDir, "readme.md"), "stashed work\n");
 				await git(fixture.checkoutDir, ["stash", "push", "-m", "unpreserved"]);
 				// A clean tree with one stash: the stash alone blocks.
@@ -1144,7 +1161,7 @@ describe("clone deletion git guard", () => {
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"conflict",
 				);
 				// The refusal never drops the stash.
@@ -1161,7 +1178,7 @@ describe("clone deletion git guard", () => {
 		async () => {
 			const fixture = await bootStoppedClone("git-local-commit");
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				writeFileSync(join(fixture.checkoutDir, "local.md"), "local work\n");
 				await git(fixture.checkoutDir, ["add", "local.md"]);
 				await git(fixture.checkoutDir, ["commit", "-q", "-m", "unpreserved local work"]);
@@ -1180,7 +1197,7 @@ describe("clone deletion git guard", () => {
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"conflict",
 				);
 				// The unpreserved commit survives the refusal (nothing pushed
@@ -1198,7 +1215,7 @@ describe("clone deletion git guard", () => {
 		async () => {
 			const fixture = await bootStoppedClone("git-unusable");
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				// `.git` still EXISTS (so the guard cannot skip a never-prepared
 				// clone) but is not a repository: every git read fails, so the
 				// checkout's safety is unknowable and deletion must block.
@@ -1210,7 +1227,7 @@ describe("clone deletion git guard", () => {
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"conflict",
 				);
 				// Nothing was repaired or removed: the unusable state is intact.
@@ -1234,7 +1251,7 @@ describe("clone deletion volume/store cross-check", () => {
 		async () => {
 			const fixture = await bootStoppedClone("volume-missing-file");
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				// The store verifies by itself; the volume carries a lineage file
 				// the store never received (logs were not fully streamed).
 				const unstreamed = join(fixture.volume.sessions, SESSION_ID, "extra.jsonl");
@@ -1242,7 +1259,7 @@ describe("clone deletion volume/store cross-check", () => {
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"archive_conflict",
 				);
 				// The unstreamed bytes are retained, not deleted with the volume.
@@ -1259,20 +1276,20 @@ describe("clone deletion volume/store cross-check", () => {
 		async () => {
 			const fixture = await bootStoppedClone("volume-truncated");
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
-				const storedBytes = readFileSync(storedSessionPath(fixture.logsDir, fixture.daemonId));
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
+				const storedBytes = readFileSync(storedSessionPath(fixture.logsDir, fixture.workspaceId));
 				const truncated = storedBytes.subarray(0, storedBytes.length - 8);
 				writeFileSync(volumeMain(fixture), truncated);
 				expect(readFileSync(volumeMain(fixture)).length).toBeLessThan(storedBytes.length);
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"archive_conflict",
 				);
 				// Both sides retained byte-for-byte: nothing rewritten or healed.
 				expect(readFileSync(volumeMain(fixture)).length).toBe(truncated.length);
-				expect(readFileSync(storedSessionPath(fixture.logsDir, fixture.daemonId))).toEqual(
+				expect(readFileSync(storedSessionPath(fixture.logsDir, fixture.workspaceId))).toEqual(
 					storedBytes,
 				);
 			} finally {
@@ -1287,7 +1304,7 @@ describe("clone deletion volume/store cross-check", () => {
 		async () => {
 			const fixture = await bootStoppedClone("volume-rewritten");
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				const original = readFileSync(volumeMain(fixture), "utf8");
 				const rewritten = original.replace('"text":"hi"', '"text":"yo"');
 				// Same length: only the sha256 comparison can catch this rewrite.
@@ -1297,7 +1314,7 @@ describe("clone deletion volume/store cross-check", () => {
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"archive_conflict",
 				);
 				expect(readFileSync(volumeMain(fixture), "utf8")).toBe(rewritten);
@@ -1313,7 +1330,7 @@ describe("clone deletion volume/store cross-check", () => {
 		async () => {
 			const fixture = await bootStoppedClone("volume-bounds");
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				// 10k files is the shared export/verify ceiling; the bound check
 				// runs BEFORE any per-file comparison, so this refusal is the
 				// bound (the store itself verifies: one contiguous session).
@@ -1325,7 +1342,7 @@ describe("clone deletion volume/store cross-check", () => {
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"archive_conflict",
 				);
 				// The oversized tree is retained (never partially reaped).
@@ -1355,7 +1372,7 @@ describe("clone deletion volume/store cross-check", () => {
 				// readability test, and with no stored sessions to compare, the
 				// workspace's completeness is unprovable — an ever-started
 				// workspace is refused rather than inferred complete.
-				const detached = join(fixture.cloneRoot, `${fixture.daemonId}.detached`);
+				const detached = join(fixture.cloneRoot, `${fixture.workspaceId}.detached`);
 				renameSync(fixture.volume.root, detached);
 				expect(existsSync(fixture.volume.root)).toBe(false);
 				// Genuinely removed (ENOENT), NOT unreadable: this must stay on
@@ -1372,7 +1389,7 @@ describe("clone deletion volume/store cross-check", () => {
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"archive_conflict",
 					{ retainedVolumeRoot: detached, storedSession: false },
 				);
@@ -1390,13 +1407,13 @@ describe("clone deletion volume/store cross-check", () => {
 		async () => {
 			const fixture = await bootStoppedClone("volume-root-unverifiable");
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				// The recorded root is replaced by a symlink that resolves
 				// through a regular file: statSync(volumeRoot) fails with
 				// ENOTDIR (deterministic, no permissions involved), while the
 				// volume's PARENT stays a usable directory so the provider
 				// state dir the gate's quiesce writes to still works.
-				const relocated = join(fixture.cloneRoot, `${fixture.daemonId}.relocated`);
+				const relocated = join(fixture.cloneRoot, `${fixture.workspaceId}.relocated`);
 				renameSync(fixture.volume.root, relocated);
 				const regularFile = join(fixture.cloneRoot, "not-a-directory");
 				writeFileSync(regularFile, "regular file\n");
@@ -1406,18 +1423,18 @@ describe("clone deletion volume/store cross-check", () => {
 				// the ENOTDIR and reported the root as absent.
 				expect(pathErrorCode(fixture.volume.root)).toBe("ENOTDIR");
 				expect(existsSync(fixture.volume.root)).toBe(false);
-				expect(existsSync(storedSessionPath(fixture.logsDir, fixture.daemonId))).toBe(true);
+				expect(existsSync(storedSessionPath(fixture.logsDir, fixture.workspaceId))).toBe(true);
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"archive_conflict",
 					{ retainedVolumeRoot: relocated },
 				);
 				// The relocated volume (checkout + session tree) is untouched;
 				// the provider state dir stayed beside it (the helper's
 				// delete-op check reads it via dirname(retainedVolumeRoot)).
-				expect(providerOps(fixture.cloneRoot, fixture.daemonId).length).toBeGreaterThan(0);
+				expect(providerOps(fixture.cloneRoot, fixture.workspaceId).length).toBeGreaterThan(0);
 				expect(existsSync(join(relocated, ".checkout", ".git"))).toBe(true);
 				expect(existsSync(join(relocated, ".home", "agent", "sessions", SESSION_ID))).toBe(true);
 			} finally {
@@ -1432,7 +1449,7 @@ describe("clone deletion volume/store cross-check", () => {
 		async () => {
 			const fixture = await bootStoppedClone("volume-tree-not-enumerable");
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				// Replacing the session root with a regular file is the
 				// permission-independent way to make it unenumerable: the path
 				// exists, `readdirSync` fails (ENOTDIR), and the fleet must not
@@ -1443,7 +1460,7 @@ describe("clone deletion volume/store cross-check", () => {
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"archive_conflict",
 				);
 				// The substituted path is retained: nothing repaired or deleted.
@@ -1461,7 +1478,7 @@ describe("clone deletion volume/store cross-check", () => {
 			const fixture = await bootStoppedClone("volume-subtree-not-enumerable");
 			const sessionDir = join(fixture.volume.sessions, SESSION_ID);
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				// A session dir the fleet cannot read (EACCES for this suite's
 				// non-root user; the ENOTDIR case above is the
 				// permission-independent mechanism). The tree still holds the
@@ -1472,7 +1489,7 @@ describe("clone deletion volume/store cross-check", () => {
 
 				await expectRefusedWithRetention(
 					fixture,
-					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					await deleteWorkspace(fixture.server.port, fixture.workspaceId),
 					"archive_conflict",
 				);
 			} finally {
@@ -1494,32 +1511,32 @@ describe("clone deletion volume/store cross-check", () => {
 				deleteFailures: 0,
 			});
 			try {
-				const daemonId = await createClone(fixture.server, fixture.repoDir, "never-started");
+				const workspaceId = await createClone(fixture.server, fixture.repoDir, "never-started");
 				// Same unenumerable tree as the refusal case, but this clone
 				// never ran compute: there is no retained provider history, and
 				// a never-started clone has no volume sessions to lose, so the
 				// deletion proceeds (the strict rule is gated on everStarted).
 				expect(
-					fixture.server.registry.get(daemonId)!.workspace?.authorizedGeneration,
+					fixture.server.registry.get(workspaceId)!.workspace?.authorizedGeneration,
 				).toBeUndefined();
-				expect(fixture.server.registry.get(daemonId)!.workspace?.providerHandle).toBeUndefined();
-				seedSession(fixture.logsDir, fixture.cloneRoot, daemonId, {});
-				const volume = volumePaths(fixture.cloneRoot, daemonId);
+				expect(fixture.server.registry.get(workspaceId)!.workspace?.providerHandle).toBeUndefined();
+				seedSession(fixture.logsDir, fixture.cloneRoot, workspaceId, {});
+				const volume = volumePaths(fixture.cloneRoot, workspaceId);
 				rmSync(volume.sessions, { recursive: true, force: true });
 				writeFileSync(volume.sessions, "not a directory\n");
 				expect(() => readdirSync(volume.sessions)).toThrow();
 
-				const response = await deleteWorkspace(fixture.server.port, daemonId);
+				const response = await deleteWorkspace(fixture.server.port, workspaceId);
 				expect(response.status).toBe(200);
 				const body = (await response.json()) as { removed?: string; verified?: string[] };
-				expect(body.removed).toBe(daemonId);
+				expect(body.removed).toBe(workspaceId);
 				expect(body.verified).toEqual([SESSION_ID]);
-				expect(fixture.server.registry.get(daemonId)).toBeUndefined();
+				expect(fixture.server.registry.get(workspaceId)).toBeUndefined();
 				expect(existsSync(volume.root)).toBe(false);
 				// Never started: the provider saw no stop and no delete.
-				expect(providerOps(fixture.cloneRoot, daemonId)).toHaveLength(0);
-				expect(existsSync(storedSessionPath(fixture.logsDir, daemonId))).toBe(true);
-				expect(existsSync(readOnlyMarker(fixture.logsDir, daemonId))).toBe(true);
+				expect(providerOps(fixture.cloneRoot, workspaceId)).toHaveLength(0);
+				expect(existsSync(storedSessionPath(fixture.logsDir, workspaceId))).toBe(true);
+				expect(existsSync(readOnlyMarker(fixture.logsDir, workspaceId))).toBe(true);
 			} finally {
 				await fixture.server.close();
 			}
@@ -1559,21 +1576,21 @@ describe("clone deletion volume/store cross-check", () => {
 			async () => {
 				const fixture = await bootStoppedClone("volume-empty-or-absent", { files: [] });
 				try {
-					seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+					seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 					prepare(fixture);
 
-					const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+					const response = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 					expect(response.status).toBe(200);
 					const body = (await response.json()) as { removed?: string; verified?: string[] };
-					expect(body.removed).toBe(fixture.daemonId);
+					expect(body.removed).toBe(fixture.workspaceId);
 					expect(body.verified).toEqual([SESSION_ID]);
-					expect(fixture.server.registry.get(fixture.daemonId)).toBeUndefined();
+					expect(fixture.server.registry.get(fixture.workspaceId)).toBeUndefined();
 					expect(existsSync(fixture.volume.root)).toBe(false);
 					// The store is the retained artifact and flipped read-only.
-					expect(existsSync(storedSessionPath(fixture.logsDir, fixture.daemonId))).toBe(true);
-					expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.daemonId))).toBe(true);
+					expect(existsSync(storedSessionPath(fixture.logsDir, fixture.workspaceId))).toBe(true);
+					expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.workspaceId))).toBe(true);
 					expect(
-						providerOps(fixture.cloneRoot, fixture.daemonId).filter((op) => op.op === "delete"),
+						providerOps(fixture.cloneRoot, fixture.workspaceId).filter((op) => op.op === "delete"),
 					).toHaveLength(1);
 				} finally {
 					await fixture.server.close();
@@ -1587,7 +1604,7 @@ describe("clone deletion volume/store cross-check", () => {
 describe("clone deletion of a volume the fleet cannot read (provider session inventory)", () => {
 	/** Make the volume invisible fleet-side, as a kubernetes claim always is. */
 	function detachVolume(fixture: GuardFixture): string {
-		const detached = join(fixture.cloneRoot, `${fixture.daemonId}.detached`);
+		const detached = join(fixture.cloneRoot, `${fixture.workspaceId}.detached`);
 		renameSync(fixture.volume.root, detached);
 		return detached;
 	}
@@ -1600,13 +1617,13 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 			const fixture = await bootStoppedClone("k8s-no-transcript", { files: [] });
 			try {
 				detachVolume(fixture);
-				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const response = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 				expect(response.status).toBe(200);
 				const body = (await response.json()) as { removed?: string; verified?: string[] };
-				expect(body.removed).toBe(fixture.daemonId);
+				expect(body.removed).toBe(fixture.workspaceId);
 				expect(body.verified).toEqual([]);
-				expect(fixture.server.registry.get(fixture.daemonId)).toBeUndefined();
-				const ops = providerOps(fixture.cloneRoot, fixture.daemonId).map((o) => o.op);
+				expect(fixture.server.registry.get(fixture.workspaceId)).toBeUndefined();
+				const ops = providerOps(fixture.cloneRoot, fixture.workspaceId).map((o) => o.op);
 				expect(ops).toContain("list-sessions");
 				expect(ops.filter((op) => op === "delete")).toHaveLength(1);
 			} finally {
@@ -1624,13 +1641,13 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 				files: [{ path: mainPath, size, sha256: sha256Hex(transcriptJsonl()) }],
 			});
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				detachVolume(fixture);
-				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const response = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 				expect(response.status).toBe(200);
 				const body = (await response.json()) as { removed?: string; verified?: string[] };
 				expect(body.verified).toEqual([SESSION_ID]);
-				expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.daemonId))).toBe(true);
+				expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.workspaceId))).toBe(true);
 			} finally {
 				await fixture.server.close();
 			}
@@ -1646,7 +1663,7 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 			});
 			try {
 				const detached = detachVolume(fixture);
-				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const response = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 				const refusal = response.clone();
 				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
 					retainedVolumeRoot: detached,
@@ -1657,15 +1674,17 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 				expect(body.error).toContain("missing from the fleet store");
 
 				// Retry delete is still available (and still refused for the same reason).
-				const retry = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const retry = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 				expect(retry.status).toBe(409);
 
 				// Nothing destructive ran, so Start abandons the pending delete.
 				const start = await postJson(fixture.server.port, "/ctl/start", {
-					daemonId: fixture.daemonId,
+					workspaceId: fixture.workspaceId,
 				});
 				expect(start.status).toBe(200);
-				expect(fixture.server.registry.get(fixture.daemonId)?.workspace?.deletion).toBeUndefined();
+				expect(
+					fixture.server.registry.get(fixture.workspaceId)?.workspace?.deletion,
+				).toBeUndefined();
 			} finally {
 				await fixture.server.close();
 			}
@@ -1681,9 +1700,9 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 				files: [{ path: mainPath, size: size + 10, sha256: "0".repeat(64) }],
 			});
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				const detached = detachVolume(fixture);
-				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const response = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 				const refusal = response.clone();
 				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
 					retainedVolumeRoot: detached,
@@ -1705,9 +1724,9 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 				files: [{ path: mainPath, size: size - 1, sha256: "0".repeat(64) }],
 			});
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				const detached = detachVolume(fixture);
-				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const response = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 				const refusal = response.clone();
 				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
 					retainedVolumeRoot: detached,
@@ -1733,9 +1752,9 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 				files: [{ path: mainPath, size, sha256: sha256Hex(rewritten) }],
 			});
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				const detached = detachVolume(fixture);
-				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const response = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 				const refusal = response.clone();
 				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
 					retainedVolumeRoot: detached,
@@ -1757,9 +1776,9 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 				files: [{ path: mainPath, size }],
 			});
 			try {
-				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 				const detached = detachVolume(fixture);
-				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const response = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 				const refusal = response.clone();
 				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
 					retainedVolumeRoot: detached,
@@ -1782,7 +1801,7 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 			});
 			try {
 				const detached = detachVolume(fixture);
-				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const response = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 				const refusal = response.clone();
 				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
 					retainedVolumeRoot: detached,
@@ -1803,7 +1822,7 @@ describe("clone deletion of a volume the fleet cannot read (provider session inv
 			const fixture = await bootStoppedClone("k8s-unsupported-op");
 			try {
 				const detached = detachVolume(fixture);
-				const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+				const response = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 				const refusal = response.clone();
 				await expectRefusedWithRetention(fixture, response, "archive_conflict", {
 					retainedVolumeRoot: detached,
@@ -1825,23 +1844,23 @@ test(
 	async () => {
 		const fixture = await bootStoppedClone("guards-satisfied");
 		try {
-			seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+			seedSession(fixture.logsDir, fixture.cloneRoot, fixture.workspaceId, {});
 			expect(await git(fixture.checkoutDir, ["status", "--porcelain=v1"])).toBe("");
 
-			const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+			const response = await deleteWorkspace(fixture.server.port, fixture.workspaceId);
 			expect(response.status).toBe(200);
 			const body = (await response.json()) as { removed?: string; verified?: string[] };
-			expect(body.removed).toBe(fixture.daemonId);
+			expect(body.removed).toBe(fixture.workspaceId);
 			expect(body.verified).toEqual([SESSION_ID]);
 			// Identity + volume destroyed exactly once; the verified store is
 			// retained read-only for Retention.
-			expect(fixture.server.registry.get(fixture.daemonId)).toBeUndefined();
+			expect(fixture.server.registry.get(fixture.workspaceId)).toBeUndefined();
 			expect(existsSync(fixture.volume.root)).toBe(false);
-			expect(existsSync(storedSessionPath(fixture.logsDir, fixture.daemonId))).toBe(true);
-			expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.daemonId))).toBe(true);
-			expect(deleteCount(fixture.cloneRoot, fixture.daemonId)).toBe(1);
+			expect(existsSync(storedSessionPath(fixture.logsDir, fixture.workspaceId))).toBe(true);
+			expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.workspaceId))).toBe(true);
+			expect(deleteCount(fixture.cloneRoot, fixture.workspaceId)).toBe(1);
 			expect(
-				providerOps(fixture.cloneRoot, fixture.daemonId).filter((op) => op.op === "delete"),
+				providerOps(fixture.cloneRoot, fixture.workspaceId).filter((op) => op.op === "delete"),
 			).toHaveLength(1);
 		} finally {
 			await fixture.server.close();

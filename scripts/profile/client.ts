@@ -186,7 +186,7 @@ export class ProfileClient {
 	#liveAssistant = 0;
 	readonly #offsets = new Map<string, number>();
 	/** The session this client is attached to; recovery re-attaches it. */
-	#attachedTo: { daemonId: string; route: string } | undefined;
+	#attachedTo: { workspaceId: string; route: string } | undefined;
 	#recovering: Promise<void> | undefined;
 	#fatal: RecoveryFailed | undefined;
 	#recoveries = 0;
@@ -275,7 +275,12 @@ export class ProfileClient {
 				await this.#open(this.#conn.lastSeq);
 				const target = this.#attachedTo;
 				if (target !== undefined) {
-					await this.attach(target.daemonId, target.route, RECOVERY_ATTACH_TIMEOUT_MS, "recovery");
+					await this.attach(
+						target.workspaceId,
+						target.route,
+						RECOVERY_ATTACH_TIMEOUT_MS,
+						"recovery",
+					);
 				}
 				record.recoveryMs = nsToMs(monotonicNs() - t0);
 				record.attempts = attempt;
@@ -541,9 +546,9 @@ export class ProfileClient {
 		};
 	}
 
-	/** Attach to `daemonId` (fleet edge) and measure priming. `route` labels latency records. */
+	/** Attach to `workspaceId` (fleet edge) and measure priming. `route` labels latency records. */
 	async attach(
-		daemonId: string,
+		workspaceId: string,
 		route: string,
 		timeoutMs = 60_000,
 		owner: Waiter["owner"] = "user",
@@ -575,7 +580,7 @@ export class ProfileClient {
 			const primed = this.waitFrame(
 				(r) => r.frame.type === "available_commands" && historyNs !== undefined,
 				timeoutMs,
-				`attach priming of ${daemonId}`,
+				`attach priming of ${workspaceId}`,
 				owner,
 			);
 			primed.catch(() => undefined);
@@ -587,14 +592,14 @@ export class ProfileClient {
 			);
 			result.catch(() => undefined);
 			const t0 = monotonicNs();
-			await this.#conn.send({ type: "attach", id, sessionId: daemonId });
+			await this.#conn.send({ type: "attach", id, workspaceId });
 			const acceptNs = monotonicNs();
 			const attachResult = await result;
 			if (attachResult.frame.ok !== true) {
-				throw new Error(`attach ${daemonId} failed: ${String(attachResult.frame.error)}`);
+				throw new Error(`attach ${workspaceId} failed: ${String(attachResult.frame.error)}`);
 			}
 			const end = await primed;
-			this.#attachedTo = { daemonId, route };
+			this.#attachedTo = { workspaceId, route };
 			return {
 				acceptMs: nsToMs(acceptNs - t0),
 				ttffMs: nsToMs((attachedNs ?? end.recvNs) - t0),
@@ -710,7 +715,7 @@ export class ProfileClient {
 	 * Network-loss drill: terminate the socket, redial with `after` (the last seq
 	 * seen), then re-attach (the edge keeps no attach memory across a reconnect).
 	 */
-	async reconnect(daemonId: string, route: string): Promise<ReconnectTimings> {
+	async reconnect(workspaceId: string, route: string): Promise<ReconnectTimings> {
 		const lastSeq = this.#conn.lastSeq;
 		const lastSeen = lastSeq ?? -1;
 		const previous = this.#conn;
@@ -732,7 +737,7 @@ export class ProfileClient {
 		try {
 			await this.#open(lastSeq);
 			const openedNs = monotonicNs();
-			const attach = await this.attach(daemonId, route);
+			const attach = await this.attach(workspaceId, route);
 			void attach;
 			const primedNs = monotonicNs();
 			return {

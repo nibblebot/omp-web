@@ -1,5 +1,5 @@
 /**
- * listDaemonSessions tests: newest-first ordering, friendly display names
+ * listWorkspaceSessions tests: newest-first ordering, friendly display names
  * (title → first message → timestamp), the size limit, and hermeticity.
  * The agent dir is injected through the module's optional seam so the tests
  * never depend on (or mutate) the process environment. The session dir is
@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { listDaemonSessions } from "../daemon-sessions";
+import { listWorkspaceSessions } from "../workspace-sessions";
 
 afterAll(cleanupTempDirs);
 
@@ -36,7 +36,7 @@ function sessionDirFor(agentDir: string, cwd: string): string {
 	return SessionManager.getDefaultSessionDir(cwd, agentDir, new FileSessionStorage());
 }
 
-describe("listDaemonSessions", () => {
+describe("listWorkspaceSessions", () => {
 	test("lists a real SDK-produced journal with its title and messages", async () => {
 		const agentDir = tempDir("omp-session-list-produced-");
 		const cwd = join(agentDir, "repo");
@@ -53,7 +53,7 @@ describe("listDaemonSessions", () => {
 		});
 		try {
 			await persisted.flush();
-			const result = await listDaemonSessions(cwd, 10, agentDir);
+			const result = await listWorkspaceSessions(cwd, 10, agentDir);
 			expect(result).toHaveLength(1);
 			expect(result[0]).toMatchObject({
 				path: persisted.getSessionFile(),
@@ -79,7 +79,7 @@ describe("listDaemonSessions", () => {
 			utimesSync(file, new Date(ts), new Date(ts));
 		}
 
-		const result = await listDaemonSessions(cwd, 10, agentDir);
+		const result = await listWorkspaceSessions(cwd, 10, agentDir);
 		expect(result).toHaveLength(10);
 		// Newest (highest mtime) first: Task 11 is the newest, then Task 10.
 		expect(result[0]).toMatchObject({ name: "Task 11" });
@@ -101,7 +101,7 @@ describe("listDaemonSessions", () => {
 		writeFileSync(empty, headerLine());
 		utimesSync(empty, new Date(1_700_000_000_000 + 120_000), new Date(1_700_000_000_000 + 120_000));
 
-		const result = await listDaemonSessions(cwd, 10, agentDir);
+		const result = await listWorkspaceSessions(cwd, 10, agentDir);
 		// Timestamp rendering is locale/timezone dependent, so assert the prefix.
 		expect(result[0].name).toMatch(/^Untitled · /);
 		expect(result[1].name).toBe("fix the sidebar crash");
@@ -111,7 +111,7 @@ describe("listDaemonSessions", () => {
 	test("missing session dirs degrade to an empty list, never throw", async () => {
 		const agentDir = tempDir("omp-session-list-agent-missing-");
 		const cwd = join(agentDir, "never-used");
-		const result = await listDaemonSessions(cwd, 10, agentDir);
+		const result = await listWorkspaceSessions(cwd, 10, agentDir);
 		expect(result).toEqual([]);
 	});
 });

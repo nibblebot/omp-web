@@ -3,19 +3,19 @@
  * deep-link grammar; there is no router, so everything that reads or writes
  * `location.hash` for Chat goes through `parseRoute` / `formatRoute`.
  *
- *   #/d/<daemonId>                    a daemon (its current session)
- *   #/d/<daemonId>/s/<sessionId>      one session of that daemon
+ *   #/w/<workspaceId>                    a workspace (its current session)
+ *   #/w/<workspaceId>/s/<sessionId>      one session of that workspace
  *   #/s/<file>, #/stored/<ws>/<id>    Analysis deep links (owned by tx/, kept verbatim)
  *
  * IDs are one `encodeURIComponent` segment each. Extend by adding a variant
- * to `Route` and one arm to each function (`#/d/<id>/agent/<agentId>`, U04);
+ * to `Route` and one arm to each function (`#/w/<id>/agent/<agentId>`, U04);
  * unknown shapes parse to `none`, never to a partial match, so an older tab
  * ignores a newer link instead of misreading it.
  */
 export type Route =
 	| { kind: "none" }
-	| { kind: "daemon"; daemonId: string }
-	| { kind: "session"; daemonId: string; sessionId: string; dock?: DockRoute }
+	| { kind: "workspace"; workspaceId: string }
+	| { kind: "session"; workspaceId: string; sessionId: string; dock?: DockRoute }
 	/** A legacy Analysis hash, carried verbatim (`hash` includes the leading `#`). */
 	| { kind: "analysis"; hash: string };
 
@@ -52,16 +52,16 @@ function parseDock(segments: string[]): DockRoute | null {
 export function parseRoute(hash: string): Route {
 	if (ANALYSIS_HASH.test(hash)) return { kind: "analysis", hash };
 	const parts = hash.replace(/^#\/?/, "").split("/");
-	if (parts[0] !== "d") return { kind: "none" };
-	const daemonId = decodeSegment(parts[1] ?? "");
-	if (daemonId === null) return { kind: "none" };
-	if (parts.length === 2) return { kind: "daemon", daemonId };
+	if (parts[0] !== "w") return { kind: "none" };
+	const workspaceId = decodeSegment(parts[1] ?? "");
+	if (workspaceId === null) return { kind: "none" };
+	if (parts.length === 2) return { kind: "workspace", workspaceId };
 	if (parts.length >= 4 && parts[2] === "s") {
 		const sessionId = decodeSegment(parts[3]!);
 		if (sessionId === null) return { kind: "none" };
-		if (parts.length === 4) return { kind: "session", daemonId, sessionId };
+		if (parts.length === 4) return { kind: "session", workspaceId, sessionId };
 		const dock = parseDock(parts.slice(4));
-		if (dock !== null) return { kind: "session", daemonId, sessionId, dock };
+		if (dock !== null) return { kind: "session", workspaceId, sessionId, dock };
 	}
 	return { kind: "none" };
 }
@@ -71,10 +71,10 @@ export function formatRoute(route: Route): string {
 	switch (route.kind) {
 		case "none":
 			return "";
-		case "daemon":
-			return `#/d/${encodeURIComponent(route.daemonId)}`;
+		case "workspace":
+			return `#/w/${encodeURIComponent(route.workspaceId)}`;
 		case "session": {
-			const base = `#/d/${encodeURIComponent(route.daemonId)}/s/${encodeURIComponent(route.sessionId)}`;
+			const base = `#/w/${encodeURIComponent(route.workspaceId)}/s/${encodeURIComponent(route.sessionId)}`;
 			const dock = route.dock;
 			if (dock === undefined) return base;
 			const id = dock.id === undefined ? "" : `/${encodeURIComponent(dock.id)}`;

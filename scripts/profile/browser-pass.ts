@@ -114,7 +114,7 @@ export async function runBrowserScenario(ctx: BrowserPassContext): Promise<Brows
 			const chars = Math.round((ctx.durationMs / 1000) * DELTAS_PER_SEC * CHUNK_CHARS);
 			const result = await runBrowserPass({
 				baseUrl: stack.baseUrl,
-				sessionDaemonId: handle.daemonId,
+				workspaceId: handle.workspaceId,
 				route: handle.label,
 				sendLog: ctx.sendLog,
 				directivePrompt: textTurn({

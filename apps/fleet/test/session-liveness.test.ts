@@ -27,7 +27,7 @@ beforeAll(async () => {
 
 function entry(overrides: Partial<RegistryEntry> = {}): RegistryEntry {
 	return {
-		daemonId: "d1",
+		workspaceId: "d1",
 		name: "local-session",
 		cwd: "/tmp/local-project",
 		project: "local-project",

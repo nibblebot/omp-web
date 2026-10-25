@@ -22,7 +22,7 @@ const entry: SettingsEntry = {
 };
 
 describe("settings publish", () => {
-	test("a session toggle rebroadcasts the model at the revision the daemon now holds", async () => {
+	test("a session toggle rebroadcasts the model at the revision the session now holds", async () => {
 		const sent: SettingsModel[] = [];
 		const bundle = createSettingsMethods({
 			settings: Settings.instance,
@@ -69,7 +69,7 @@ describe("settings publish", () => {
 			undefined,
 			"revision",
 		])) as { revision: number };
-		// Like the config watcher reloading the file this daemon just wrote: the SDK
+		// Like the config watcher reloading the file this session just wrote: the SDK
 		// rebuilds its merged settings (its own counter moves) but persisted content is unchanged.
 		const sdkBefore = Settings.instance.revision;
 		Settings.instance.writeValue(lookup("compaction.thresholdPercent")!, 84, "override");

@@ -9,7 +9,7 @@ import {
 	type Component,
 } from "solid-js";
 import type { SessionListEntry } from "#lib/wire/protocol";
-import { requestDaemonSessions, resumeDaemonSession, state } from "../../../state";
+import { requestWorkspaceSessions, resumeSession, state } from "../../../state";
 import { openResumePicker } from "../../../store/resume";
 import { sessionRowFromListEntry } from "../../../store/session-list";
 import { reportError } from "../../../store/toasts";
@@ -26,8 +26,8 @@ const RECENT_LIMIT = 5;
  * until it has rows, so nothing flashes while it loads.
  */
 export const EmptyTranscript: Component = () => {
-	const daemon = createMemo(() =>
-		state.daemonRoster.find((d) => d.daemonId === state.currentSessionId),
+	const entry = createMemo(() =>
+		state.sessionRoster.find((d) => d.workspaceId === state.currentWorkspaceId),
 	);
 
 	// The default fleet page (10) leaves headroom for the current session and
@@ -36,15 +36,15 @@ export const EmptyTranscript: Component = () => {
 	const [sessions, setSessions] = createSignal<SessionListEntry[]>([]);
 	createEffect(
 		on(
-			() => state.currentSessionId,
-			(daemonId) => {
+			() => state.currentWorkspaceId,
+			(workspaceId) => {
 				setSessions([]);
-				if (daemonId === "") return;
+				if (workspaceId === "") return;
 				let stale = false;
 				onCleanup(() => {
 					stale = true;
 				});
-				requestDaemonSessions(daemonId).then(
+				requestWorkspaceSessions(workspaceId).then(
 					(list) => {
 						if (stale) return;
 						setNowMs(Date.now());
@@ -67,7 +67,7 @@ export const EmptyTranscript: Component = () => {
 	return (
 		<div class="chat-transcript-empty">
 			<div class="chat-transcript-empty-body">
-				<Show when={daemon()}>
+				<Show when={entry()}>
 					{(d) => (
 						<>
 							<h2 class="chat-transcript-empty-title">{d().project}</h2>
@@ -123,7 +123,7 @@ export const EmptyTranscript: Component = () => {
 											size="compact"
 											nowMs={nowMs()}
 											onChoose={() =>
-												resumeDaemonSession(state.currentSessionId, row.file).catch(reportError)
+												resumeSession(state.currentWorkspaceId, row.file).catch(reportError)
 											}
 										/>
 									</li>

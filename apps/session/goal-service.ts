@@ -134,7 +134,7 @@ export function previewLoop(argsText: string): LoopPreview {
 }
 
 /**
- * Daemon-owned execution survives browser reconnects. Policy is a read model,
+ * Session-owned execution survives browser reconnects. Policy is a read model,
  * not permission to submit another prompt from the browser.
  */
 export function getLoopPolicy(entry: SessionEntry): {

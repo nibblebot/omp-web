@@ -1,5 +1,5 @@
 /**
- * The web client's side of the browser socket (OMP_PROTO 5): the dial, the
+ * The web client's side of the browser socket (OMP_PROTO 6): the dial, the
  * reconnect ladder, resume with `after`, in-band command retry across a drop,
  * the typed close codes, and the silence deadline. The server is the
  * FakeWebSocket from web.testkit: each test plays the server's half.
@@ -64,7 +64,7 @@ function echoCount(text: string): number {
 beforeEach(() => {
 	installTransportStubs();
 	setState({
-		currentSessionId: "",
+		currentWorkspaceId: "",
 		connected: false,
 		transportStartup: true,
 		lastFrameAt: 0,
@@ -196,7 +196,7 @@ describe("resume after a drop", () => {
 		expect(new URL(current().url).searchParams.get("after")).toBe("1030");
 	});
 
-	test("a reconnect re-attaches the daemon the tab was viewing", () => {
+	test("a reconnect re-attaches the session the tab was viewing", () => {
 		vi.useFakeTimers();
 		const first = openSocket();
 		dispatch(attached("session-a"));
@@ -205,7 +205,7 @@ describe("resume after a drop", () => {
 		posted.length = 0;
 		current().onopen?.();
 		expect(posted.filter((c) => c.type === "attach")).toMatchObject([
-			{ type: "attach", sessionId: "session-a" },
+			{ type: "attach", workspaceId: "session-a" },
 		]);
 	});
 
@@ -312,9 +312,9 @@ describe("commands in band", () => {
 	test("a command goes out as {cmd}, and its ack resolves it", async () => {
 		const ws = openSocket();
 		FakeWebSocket.autoAck = false;
-		const done = sendCommand({ type: "stop", id: "cmd-1", daemonId: "d1" });
+		const done = sendCommand({ type: "stop", id: "cmd-1", workspaceId: "d1" });
 		expect(JSON.parse(ws.sent.at(-1)!)).toEqual({
-			cmd: { type: "stop", id: "cmd-1", daemonId: "d1" },
+			cmd: { type: "stop", id: "cmd-1", workspaceId: "d1" },
 		});
 		let settled = false;
 		void done.then(() => (settled = true));
@@ -327,11 +327,11 @@ describe("commands in band", () => {
 	test("a nack rejects with the command and status; 413 surfaces the server's size error", async () => {
 		const ws = openSocket();
 		FakeWebSocket.autoAck = false;
-		const refused = sendCommand({ type: "stop", id: "cmd-2", daemonId: "d1" });
+		const refused = sendCommand({ type: "stop", id: "cmd-2", workspaceId: "d1" });
 		ws.nack("cmd-2", 503, "busy");
 		await expect(refused).rejects.toThrow('command "stop" rejected (HTTP 503)');
 
-		const big = sendCommand({ type: "stop", id: "cmd-3", daemonId: "d1" });
+		const big = sendCommand({ type: "stop", id: "cmd-3", workspaceId: "d1" });
 		ws.nack("cmd-3", 413, "this request is 40.0 MiB, over the 32.0 MiB per-message limit");
 		await expect(big).rejects.toThrow("over the 32.0 MiB per-message limit");
 	});
@@ -342,7 +342,7 @@ describe("commands in band", () => {
 		try {
 			const ws = openSocket();
 			FakeWebSocket.autoAck = false;
-			const refused = sendCommand({ type: "stop", id: "cmd-4", daemonId: "d1" });
+			const refused = sendCommand({ type: "stop", id: "cmd-4", workspaceId: "d1" });
 			ws.nack("cmd-4", 401, "unauthorized");
 			await expect(refused).rejects.toThrow("HTTP 401");
 			expect(state.authStatus).toBe("signedOut");
@@ -356,7 +356,7 @@ describe("commands in band", () => {
 		vi.useFakeTimers();
 		const first = openSocket();
 		first.serverClose(1006);
-		const queued = sendCommand({ type: "stop", id: "cmd-5", daemonId: "d1" });
+		const queued = sendCommand({ type: "stop", id: "cmd-5", workspaceId: "d1" });
 		expect(posted).toHaveLength(0);
 		vi.advanceTimersByTime(state.reconnectDelay);
 		current().onopen?.();
@@ -368,7 +368,7 @@ describe("commands in band", () => {
 		vi.useFakeTimers();
 		const first = openSocket();
 		FakeWebSocket.autoAck = false;
-		const done = sendCommand({ type: "stop", id: "cmd-6", daemonId: "d1" });
+		const done = sendCommand({ type: "stop", id: "cmd-6", workspaceId: "d1" });
 		expect(posted.map((c) => c.id)).toEqual(["cmd-6"]);
 
 		first.serverClose(1006); // the ack never came
@@ -393,7 +393,7 @@ describe("commands in band", () => {
 		spyOn(Date, "now").mockImplementation(() => now);
 		const first = openSocket();
 		FakeWebSocket.autoAck = false;
-		const done = sendCommand({ type: "stop", id: "cmd-7", daemonId: "d1" });
+		const done = sendCommand({ type: "stop", id: "cmd-7", workspaceId: "d1" });
 		first.serverClose(1006);
 		now += COMMAND_DEDUP_WINDOW_MS + 1; // a re-send now could execute twice
 		vi.advanceTimersByTime(state.reconnectDelay);
@@ -420,7 +420,7 @@ describe("commands in band", () => {
 
 		vi.advanceTimersByTime(state.reconnectDelay);
 		current().onopen?.();
-		expect(posted.filter((c) => c.id === id)).toHaveLength(2); // same id: the daemon dedups it
+		expect(posted.filter((c) => c.id === id)).toHaveLength(2); // same id: the session dedups it
 		dispatch(callResult(id, ["answer"]));
 		await pending;
 		expect(outcome.value).toEqual(["answer"]);
@@ -500,10 +500,10 @@ describe("typed closes", () => {
 			() => "resolved",
 			(error: Error) => error.message,
 		);
-		closeTyped(ws, "proto_mismatch", "this server speaks OMP_PROTO 6");
+		closeTyped(ws, "proto_mismatch", "this server speaks OMP_PROTO 7");
 		expect(state.error).toContain("proto mismatch");
 		expect(state.error).toContain(`expected ${OMP_PROTO}`);
-		expect(state.error).toContain("OMP_PROTO 6");
+		expect(state.error).toContain("OMP_PROTO 7");
 		expect(state.connected).toBe(false);
 		vi.advanceTimersByTime(10 * 60_000);
 		expect(FakeWebSocket.instances).toHaveLength(1);

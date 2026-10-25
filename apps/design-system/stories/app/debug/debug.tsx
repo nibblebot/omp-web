@@ -20,7 +20,7 @@ export default [
 				name: "Connected with log",
 				seed: {
 					connected: true,
-					currentSessionId: "sess_9d2c",
+					currentWorkspaceId: "sess_9d2c",
 					reconnectDelay: 0,
 					debugLog: debugLogEntries,
 				},
@@ -30,7 +30,7 @@ export default [
 				name: "Reconnecting",
 				seed: {
 					connected: false,
-					currentSessionId: "sess_9d2c",
+					currentWorkspaceId: "sess_9d2c",
 					reconnectDelay: 4000,
 					debugLog: debugLogReconnecting,
 				},
@@ -38,7 +38,7 @@ export default [
 			},
 			{
 				name: "No session attached",
-				seed: { connected: false, currentSessionId: "", reconnectDelay: 0, debugLog: [] },
+				seed: { connected: false, currentWorkspaceId: "", reconnectDelay: 0, debugLog: [] },
 				render: (ctx) => <FleetDebugSheet onClose={ctx.close} />,
 			},
 		],

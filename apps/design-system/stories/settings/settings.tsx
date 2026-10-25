@@ -29,7 +29,7 @@ import {
 	settingsModelSections,
 	settingsWebUiSections,
 } from "../../fixtures/overlays";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
 export default [
@@ -38,7 +38,7 @@ export default [
 		title: "SettingsSheet",
 		component: { file: "apps/web/components/settings/SettingsSheet.tsx", export: "SettingsSheet" },
 		tabs: true,
-		seed: { currentSessionId: "sess_09a41c" },
+		seed: { currentWorkspaceId: "sess_09a41c" },
 		variants: [
 			{
 				name: "Session attached",
@@ -68,7 +68,7 @@ export default [
 				description:
 					"The fleet fallback: no This Session tab, no Login row, changes save to config.yml.",
 				seed: () => {
-					setState("currentSessionId", "");
+					setState("currentWorkspaceId", "");
 					setState("settingsModel", settingsModel);
 				},
 				render: (ctx) => <SettingsSheet onClose={ctx.close} />,

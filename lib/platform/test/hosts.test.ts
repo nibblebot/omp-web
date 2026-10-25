@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { isLoopbackHost } from "#lib/platform/hosts";
 
-// isLoopbackHost gates the daemon's R14 token requirement, the fleet's
+// isLoopbackHost gates the session's R14 token requirement, the fleet's
 // non-loopback bind refusal, and the callback HTTP-loopback exception:
 // a false positive skips an auth gate.
 describe("isLoopbackHost", () => {

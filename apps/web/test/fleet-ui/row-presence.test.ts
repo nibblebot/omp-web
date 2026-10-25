@@ -7,11 +7,11 @@ import {
 } from "../../fleet-ui/row-presence";
 
 interface Row {
-	daemonId: string;
+	workspaceId: string;
 	n?: number;
 }
-const idOf = (r: Row) => r.daemonId;
-const rows = (...ids: string[]): Row[] => ids.map((daemonId) => ({ daemonId }));
+const idOf = (r: Row) => r.workspaceId;
+const rows = (...ids: string[]): Row[] => ids.map((workspaceId) => ({ workspaceId }));
 const summary = (slots: RowSlot<Row>[]) => slots.map((s) => `${s.id}:${s.mode}`);
 
 describe("row presence", () => {
@@ -25,7 +25,7 @@ describe("row presence", () => {
 
 	test("a roster refresh with the same ids animates nothing", () => {
 		const first = initialRowSlots(rows("a", "b"), idOf);
-		const next = reconcileRowSlots(first, [{ daemonId: "a", n: 1 }, ...rows("b")], idOf, true);
+		const next = reconcileRowSlots(first, [{ workspaceId: "a", n: 1 }, ...rows("b")], idOf, true);
 		expect(summary(next)).toEqual(["a:open", "b:open"]);
 	});
 
@@ -42,7 +42,10 @@ describe("row presence", () => {
 	});
 
 	test("a removed row exits in place, keeping its last item, until the exit finishes", () => {
-		const first = initialRowSlots([{ daemonId: "a" }, { daemonId: "b", n: 7 }, ...rows("c")], idOf);
+		const first = initialRowSlots(
+			[{ workspaceId: "a" }, { workspaceId: "b", n: 7 }, ...rows("c")],
+			idOf,
+		);
 		const exiting = reconcileRowSlots(first, rows("a", "c"), idOf, true);
 		expect(summary(exiting)).toEqual(["a:open", "b:exit", "c:open"]);
 		expect(exiting[1]!.item.n).toBe(7);

@@ -1,7 +1,7 @@
 /**
  * Direct coverage for the wake materialization wire contract
  * (lib/session-files/wake-materialize.ts): the record parser/encoder shared
- * by the fleet's bulk response and the daemon's callback reader, the
+ * by the fleet's bulk response and the session's callback reader, the
  * fleet-side store walk that declares a session subtree, and the
  * transfer emitter that splits it across correlations.
  *
@@ -446,7 +446,7 @@ describe("emitMaterializeTransfer", () => {
 		const emitted = split.lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8"), 0);
 		expect(emitted).toBeLessThanOrEqual(budget);
 
-		// The daemon resumes from that cursor: the declaration is re-emitted at
+		// The session resumes from that cursor: the declaration is re-emitted at
 		// the cursor offset and the concatenated halves are the stored file.
 		const resumed = emitTransfer(plan, SESSION_ID, {
 			path: "proj/big.jsonl",

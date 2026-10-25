@@ -62,8 +62,8 @@ export interface ProbeData {
 }
 
 export interface ProbeConfig {
-	/** Daemon id of the session under test; frames carrying another sessionId are ignored. */
-	sessionId: string;
+	/** Workspace id of the session under test; frames carrying another workspaceId are ignored. */
+	workspaceId: string;
 	/** Name of the window property the probe state lives under. */
 	key: string;
 }
@@ -71,7 +71,7 @@ export interface ProbeConfig {
 export function installProbe(cfg: ProbeConfig): void {
 	interface WireFrame {
 		type?: string;
-		sessionId?: string;
+		workspaceId?: string;
 		final?: boolean;
 		messages?: Array<{ role?: string }>;
 		event?: {
@@ -178,7 +178,7 @@ export function installProbe(cfg: ProbeConfig): void {
 		const envelope: { frame?: WireFrame } = JSON.parse(data);
 		const frame = envelope.frame;
 		if (frame === undefined) return;
-		if (frame.sessionId !== undefined && frame.sessionId !== cfg.sessionId) return;
+		if (frame.workspaceId !== undefined && frame.workspaceId !== cfg.workspaceId) return;
 		switch (frame.type) {
 			case "attached":
 				if (state.attachedAtWallMs === undefined) state.attachedAtWallMs = at;

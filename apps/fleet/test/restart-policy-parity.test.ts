@@ -13,9 +13,9 @@
  *   - an explicit stop cancels a restart that is backing off.
  *
  * The host rig runs a real fake child (sh) under the in-process host provider
- * and a real DaemonTransportRegistry; the clone rig is a real fleet with a
+ * and a real SessionTransportRegistry; the clone rig is a real fleet with a
  * scripted fake provider (clone-crash.testkit.ts). Both pair a real callback
- * daemon with the credential of the current launch.
+ * session with the credential of the current launch.
  */
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
@@ -24,10 +24,10 @@ import { join } from "node:path";
 import type { Server } from "bun";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
+import { SessionTransportRegistry, type CallbackSocketData } from "../session-transport";
 import { Registry, type RegistryEntry } from "../registry";
 import type { CloneRuntimePolicy } from "../workspace-lifecycle";
-import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
+import { type CallbackSession, startCallbackSession } from "./callback-session.testkit";
 import {
 	FAST_CLONE_RUNTIME,
 	bootCloneCrashFixture,
@@ -50,10 +50,10 @@ interface Launch {
 /** The kind-specific half of a test: everything else runs through this one interface. */
 interface Rig {
 	entry(): RegistryEntry;
-	/** Pair a real callback daemon with the CURRENT launch's credential and wait for the roster to see it. */
-	pairUp(): Promise<CallbackDaemon>;
+	/** Pair a real callback session with the CURRENT launch's credential and wait for the roster to see it. */
+	pairUp(): Promise<CallbackSession>;
 	/** The runtime dies after its pair came up; `exitCode` is what its owner observes (the child's, or the provider's report). */
-	crash(daemon: CallbackDaemon, exitCode?: number): Promise<void>;
+	crash(session: CallbackSession, exitCode?: number): Promise<void>;
 	/** Every replacement runtime from now on is dead on arrival. */
 	poisonReplacements(): void;
 	launches(): Launch[];
@@ -92,7 +92,7 @@ async function hostRig(runtime: Partial<CloneRuntimePolicy>): Promise<Rig> {
 	const statePath = join(tempDir("restart-parity-state-"), "state.json");
 	const registry = new Registry(statePath);
 	await registry.load();
-	const transport = new DaemonTransportRegistry();
+	const transport = new SessionTransportRegistry();
 	const server: Server<CallbackSocketData> = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -112,9 +112,9 @@ async function hostRig(runtime: Partial<CloneRuntimePolicy>): Promise<Rig> {
 		callbackUrl: () => `${base}/callback`,
 		runtime: { ...FAST_CLONE_RUNTIME, ...runtime },
 	});
-	const daemons: CallbackDaemon[] = [];
+	const sessions: CallbackSession[] = [];
 	const spawned = await lifecycle.spawnHost({ cwd: dir });
-	const daemonId = spawned.daemonId;
+	const workspaceId = spawned.workspaceId;
 	const launches = (): Launch[] => {
 		if (!existsSync(payloadFile)) return [];
 		return readFileSync(payloadFile, "utf8")
@@ -126,31 +126,31 @@ async function hostRig(runtime: Partial<CloneRuntimePolicy>): Promise<Rig> {
 			});
 	};
 	return {
-		entry: () => registry.get(daemonId)!,
+		entry: () => registry.get(workspaceId)!,
 		async pairUp() {
 			await waitFor(() => launches().length > 0, 5_000, "launch payload");
 			const current = launches().at(-1)!;
-			const daemon = startCallbackDaemon({
+			const session = startCallbackSession({
 				url: base,
-				workspaceId: daemonId,
+				workspaceId,
 				generation: current.generation,
 				token: current.token,
 			});
-			daemons.push(daemon);
-			await daemon.waitConnected(5_000);
-			return daemon;
+			sessions.push(session);
+			await session.waitConnected(5_000);
+			return session;
 		},
-		async crash(daemon, exitCode = 1) {
+		async crash(session, exitCode = 1) {
 			writeFileSync(crashFile, String(exitCode));
-			await daemon.stop();
+			await session.stop();
 		},
 		poisonReplacements: () => writeFileSync(poisonFile, "1"),
 		launches,
-		stop: () => lifecycle.stop(daemonId),
-		start: () => lifecycle.start(daemonId),
+		stop: () => lifecycle.stop(workspaceId),
+		start: () => lifecycle.start(workspaceId),
 		async teardown() {
-			for (const daemon of daemons) await daemon.stop().catch(() => undefined);
-			await lifecycle.stop(daemonId);
+			for (const session of sessions) await session.stop().catch(() => undefined);
+			await lifecycle.stop(workspaceId);
 			lifecycle.close();
 			transport.close();
 			await server.stop(true);
@@ -176,33 +176,35 @@ async function cloneRig(runtime: Partial<CloneRuntimePolicy>): Promise<Rig> {
 	};
 	record();
 	return {
-		entry: () => fx.server.registry.get(fx.daemonId)!,
+		entry: () => fx.server.registry.get(fx.workspaceId)!,
 		async pairUp() {
 			record();
-			const daemon = await fx.pairUp();
+			const session = await fx.pairUp();
 			await waitForCloneRoster(
 				fx,
-				() => fx.server.registry.get(fx.daemonId)?.lifecycleStage === "ready",
+				() => fx.server.registry.get(fx.workspaceId)?.lifecycleStage === "ready",
 				5_000,
 				"pair-up ready",
 			);
-			return daemon;
+			return session;
 		},
-		async crash(daemon, exitCode) {
+		async crash(session, exitCode) {
 			await fx.kill(
-				daemon,
+				session,
 				exitCode === undefined ? undefined : { exitCode, detail: REASON(exitCode) },
 			);
 		},
 		poisonReplacements: () => writeFileSync(join(fx.stateDir, "die-on-ensure"), "1"),
 		launches,
 		stop: async () => {
-			const response = await postJson(fx.server.port, "/ctl/stop", { selector: fx.daemonId });
+			const response = await postJson(fx.server.port, "/ctl/stop", { selector: fx.workspaceId });
 			expect(response.status).toBe(200);
 		},
 		start: async () => {
 			rmSync(join(fx.stateDir, "dead"), { force: true });
-			const response = await postJson(fx.server.port, "/ctl/start", { daemonId: fx.daemonId });
+			const response = await postJson(fx.server.port, "/ctl/start", {
+				workspaceId: fx.workspaceId,
+			});
 			expect(response.status).toBe(200);
 		},
 		teardown: () => teardownCloneCrashFixture(fx),
@@ -231,9 +233,9 @@ async function boot(
 describe.each(KINDS)("one crash policy: %s runtime", (_kind, make) => {
 	test("a crash after pair-up revokes the dead generation first, then restarts at generation + 1 with a fresh credential", async () => {
 		const rig = await boot(make, { backoffMinMs: 400, backoffMaxMs: 400 });
-		const daemon = await rig.pairUp();
+		const session = await rig.pairUp();
 		expect(rig.entry().workspace?.enrollment?.generation).toBe(1);
-		await rig.crash(daemon);
+		await rig.crash(session);
 
 		// Backing off: the roster says reconnecting and the dead credential is already revoked.
 		await waitFor(() => rig.entry().status === "reconnecting", 5_000, "restart backing off");
@@ -257,9 +259,9 @@ describe.each(KINDS)("one crash policy: %s runtime", (_kind, make) => {
 
 	test("a crash loop past the cap gives up as status error + lifecycleStage failed with the reason", async () => {
 		const rig = await boot(make, { restartMax: 2 });
-		const daemon = await rig.pairUp();
+		const session = await rig.pairUp();
 		rig.poisonReplacements();
-		await rig.crash(daemon);
+		await rig.crash(session);
 
 		await waitFor(() => rig.entry().lifecycleStage === "failed", 10_000, "failed after the cap");
 		const entry = rig.entry();
@@ -289,8 +291,8 @@ describe.each(KINDS)("one crash policy: %s runtime", (_kind, make) => {
 	for (const code of [77, 78]) {
 		test(`exit ${code} never restarts: the row goes asleep with the reason and an explicit start brings it back`, async () => {
 			const rig = await boot(make);
-			const daemon = await rig.pairUp();
-			await rig.crash(daemon, code);
+			const session = await rig.pairUp();
+			await rig.crash(session, code);
 
 			await waitFor(() => rig.entry().status === "asleep", 8_000, `asleep after exit ${code}`);
 			expect(rig.entry().error).toContain(REASON(code));
@@ -307,8 +309,8 @@ describe.each(KINDS)("one crash policy: %s runtime", (_kind, make) => {
 
 	test("an explicit stop cancels a restart that is backing off", async () => {
 		const rig = await boot(make, { backoffMinMs: 600, backoffMaxMs: 600 });
-		const daemon = await rig.pairUp();
-		await rig.crash(daemon);
+		const session = await rig.pairUp();
+		await rig.crash(session);
 		await waitFor(() => rig.entry().status === "reconnecting", 5_000, "restart backing off");
 
 		await rig.stop();

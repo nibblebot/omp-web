@@ -1,8 +1,8 @@
 /**
- * Behavioral proof for the advertised `capabilities` map: a real daemon is
+ * Behavioral proof for the advertised `capabilities` map: a real session is
  * spawned on a real cwd, a fresh browser-socket (`/ws`) attach is opened, and
  * the `state` frame that the attach priming carries is inspected. Git availability is a
- * runtime fact about the session cwd, so the same daemon build must answer
+ * runtime fact about the session cwd, so the same session build must answer
  * differently for a repository and for a plain directory.
  */
 import { afterAll, expect, test } from "bun:test";
@@ -26,7 +26,7 @@ afterAll(() => {
 	for (const child of children) child.kill();
 });
 
-/** A `state` frame as the daemon serializes it. */
+/** A `state` frame as the session serializes it. */
 type StateFrame = { type?: string; state?: WebSessionState };
 
 /** Read stdout up to the first newline and return that line. */
@@ -36,14 +36,14 @@ async function firstStdoutLine(stream: ReadableStream<Uint8Array>): Promise<stri
 	let buffer = "";
 	while (!buffer.includes("\n")) {
 		const { value, done } = await reader.read();
-		if (done) throw new Error(`daemon exited before its listening line: ${buffer}`);
+		if (done) throw new Error(`session exited before its listening line: ${buffer}`);
 		buffer += decoder.decode(value, { stream: true });
 	}
 	reader.releaseLock();
 	return buffer.slice(0, buffer.indexOf("\n"));
 }
 
-/** Spawn a daemon on `cwd`, attach to /ws, and return the first state snapshot. */
+/** Spawn a session on `cwd`, attach to /ws, and return the first state snapshot. */
 async function attachedState(cwd: string): Promise<WebSessionState> {
 	const child = Bun.spawn(["bun", "apps/session/index.ts", "--cwd", cwd], {
 		cwd: repoRoot,

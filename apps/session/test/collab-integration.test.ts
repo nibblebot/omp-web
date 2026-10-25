@@ -1,5 +1,5 @@
 /**
- * Slice C integration test: the REAL daemon server wired end-to-end with the
+ * Slice C integration test: the REAL session server wired end-to-end with the
  * collab relay (the standalone `omp-web relay` server, run in-process) and host adapter.
  *
  * Spawns apps/session/index.ts as a subprocess (ephemeral port via OMP_SESSION_PORT=0),
@@ -12,7 +12,7 @@
  * down, {cmd} messages up, acked in-band);
  * the guest's relay socket is the collab protocol and stays WebSocket.
  * The subprocess is killed with SIGTERM at the end; the in-process server is
- * NEVER stopped from the test (the daemon subprocess would exit the whole test run).
+ * NEVER stopped from the test (the session subprocess would exit the whole test run).
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -114,11 +114,11 @@ const guestSockets: CollabSocket[] = [];
 /**
  * Seed a hermetic agent dir with the real ~/.omp/agent state (minus the
  * multi-GB regenerable caches). The collab flow runs a REAL model prompt, so
- * the daemon needs the user's auth credentials and model selection; with
- * PI_CODING_AGENT_DIR pointing at the seeded copy, all daemon writes land in
+ * the session needs the user's auth credentials and model selection; with
+ * PI_CODING_AGENT_DIR pointing at the seeded copy, all session writes land in
  * the tmpdir (reaped by the testkit afterAll) and never touch ~/.omp. A
  * missing real dir leaves the fresh empty dir: the prompt then fails exactly
- * as it would when booting a real daemon with no agent state.
+ * as it would when booting a real session with no agent state.
  */
 function seedAgentDir(agentDir: string): void {
 	const realAgentDir = path.join(os.homedir(), ".omp", "agent");
@@ -146,7 +146,7 @@ afterAll(async () => {
 	if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 });
 
-// Reap tempDir dirs (incl. the seeded agent dir) AFTER the daemon child is
+// Reap tempDir dirs (incl. the seeded agent dir) AFTER the session child is
 // killed above: removing the agent dir while the server is still alive races
 // its writes, and rmSync can leave dirs behind.
 afterAll(cleanupTempDirs);
@@ -198,7 +198,7 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 		10_000,
 		"attached frame",
 	);
-	expect(attached.sessionId).toBe("s1");
+	expect(attached.workspaceId).toBe("s1");
 
 	// Start collab; collect frames until live (fail fast on an error status).
 	webFrames.length = 0;

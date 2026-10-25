@@ -1,6 +1,6 @@
 import { AnnotationsPanel } from "../../../web/components/review/AnnotationsPanel";
 import { annotationCalls } from "../../fixtures/review";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
 export default defineStory({
@@ -43,10 +43,10 @@ export default defineStory({
 		},
 		{
 			name: "Load error",
-			description: "The daemon refused the list request, so the sidebar shows the error.",
+			description: "The session process refused the list request, so the sidebar shows the error.",
 			seed: () =>
 				answerCalls(
-					annotationCalls({ loadError: "annotation store is locked by another session" }),
+					annotationCalls({ loadError: "annotation store is locked by another session process" }),
 				),
 			render: () => (
 				<div class="ds-frame-tall">

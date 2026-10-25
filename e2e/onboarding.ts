@@ -665,30 +665,30 @@ try {
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({ cwd: repoDir }),
 	});
-	const spawnBody = (await spawnRes.json()) as { daemonId?: string };
+	const spawnBody = (await spawnRes.json()) as { workspaceId?: string };
 	check(
 		"spawn accepted",
-		spawnRes.ok && typeof spawnBody.daemonId === "string",
+		spawnRes.ok && typeof spawnBody.workspaceId === "string",
 		JSON.stringify(spawnBody),
 	);
-	const daemonId = spawnBody.daemonId ?? "";
+	const workspaceId = spawnBody.workspaceId ?? "";
 	const readyDeadline = Date.now() + 60_000;
-	let sessions: { daemonId: string; status: string; cwd?: string; projectId?: string }[] = [];
+	let sessions: { workspaceId: string; status: string; cwd?: string; projectId?: string }[] = [];
 	while (Date.now() < readyDeadline) {
 		await sleep(500);
 		const s = await fetchJson(`http://127.0.0.1:${OMP_PORT}/ctl/sessions`);
-		sessions = (s.body as { daemonId: string; status: string; cwd?: string }[]) ?? [];
-		if (sessions.some((e) => e.daemonId === daemonId && e.status === "ready")) break;
+		sessions = (s.body as { workspaceId: string; status: string; cwd?: string }[]) ?? [];
+		if (sessions.some((e) => e.workspaceId === workspaceId && e.status === "ready")) break;
 	}
-	const entry = sessions.find((e) => e.daemonId === daemonId);
-	check("spawned daemon reaches ready", entry?.status === "ready", JSON.stringify(entry));
-	check("daemon cwd matches project", entry?.cwd === repoDir, entry?.cwd);
+	const entry = sessions.find((e) => e.workspaceId === workspaceId);
+	check("spawned session reaches ready", entry?.status === "ready", JSON.stringify(entry));
+	check("session cwd matches project", entry?.cwd === repoDir, entry?.cwd);
 	// The spawn route stamps projectId (apps/fleet/worktrees.ts projectIdForCwd) so
-	// the roster groups the daemon under the registered project.
-	const projectEntry = sessions.find((e) => e.daemonId === daemonId);
+	// the roster groups the session under the registered project.
+	const projectEntry = sessions.find((e) => e.workspaceId === workspaceId);
 	const p1 = projectsBody?.projects?.[0];
 	check(
-		"daemon tagged with the registered projectId",
+		"session tagged with the registered projectId",
 		projectEntry?.projectId === p1?.projectId,
 		`entry=${JSON.stringify(projectEntry)} project=${JSON.stringify(p1)}`,
 	);
@@ -697,11 +697,11 @@ try {
 	const stopRes = await fetch(`http://127.0.0.1:${OMP_PORT}/ctl/stop`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ selector: daemonId }),
+		body: JSON.stringify({ selector: workspaceId }),
 	});
 	const stopped = await fetchJson(`http://127.0.0.1:${OMP_PORT}/ctl/sessions`);
-	const stoppedEntry = (stopped.body as { daemonId: string; status: string }[]).find(
-		(e) => e.daemonId === daemonId,
+	const stoppedEntry = (stopped.body as { workspaceId: string; status: string }[]).find(
+		(e) => e.workspaceId === workspaceId,
 	);
 	check(
 		"stop ends the session (entry asleep)",

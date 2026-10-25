@@ -24,7 +24,7 @@ export function transcriptHistoryFrames(
 }
 
 /**
- * True when a settings RPC changes what the transcript shows, so the daemon
+ * True when a settings RPC changes what the transcript shows, so the session
  * resyncs history to every attached stream (the same path as HISTORY_RELOAD).
  */
 export function settingWriteReloadsHistory(

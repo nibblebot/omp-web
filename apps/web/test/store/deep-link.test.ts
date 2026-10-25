@@ -1,14 +1,14 @@
 /**
  * Store tests for the URL-to-session wiring (store/deep-link.ts). A fresh load
- * on a session hash must reattach that daemon and must not rewrite the URL to
- * the bare daemon route (that rewrite is what left the pane on "No active
+ * on a session hash must reattach that session and must not rewrite the URL to
+ * the bare session route (that rewrite is what left the pane on "No active
  * session" and forced a re-pick from the resume list after a reload).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { ClientCommand, DaemonEntry } from "#lib/wire/protocol";
+import type { ClientCommand, RosterEntry } from "#lib/wire/protocol";
 import { connect, setState } from "../../state";
 import { restoreInitialRoute } from "../../store/deep-link";
-import { settleDaemonSessions } from "../../store/roster";
+import { settleWorkspaceSessions } from "../../store/roster";
 import {
 	FakeWebSocket,
 	callResult,
@@ -45,20 +45,20 @@ beforeEach(() => {
 		origin: "http://localhost",
 		pathname: "/",
 		search: "",
-		hash: "#/d/d1/s/s1",
+		hash: "#/w/d1/s/s1",
 	} as Location);
 	setBrowserGlobal("history", {
 		pushState: (_: unknown, __: string, url: string) => written.push(`push ${url}`),
 		replaceState: (_: unknown, __: string, url: string) => written.push(`replace ${url}`),
 	} as unknown as History);
 	// A reloaded page has no attached session yet: the socket's open must not re-attach one a sibling file left.
-	setState({ currentSessionId: "" });
+	setState({ currentWorkspaceId: "" });
 	connect();
 	FakeWebSocket.instances.at(-1)?.onopen?.();
 	setState({
 		modal: null,
 		view: "chat",
-		daemonRoster: [{ daemonId: "d1", status: "ready" } as unknown as DaemonEntry],
+		sessionRoster: [{ workspaceId: "d1", status: "ready" } as unknown as RosterEntry],
 	});
 });
 
@@ -67,31 +67,31 @@ afterEach(() => {
 });
 
 describe("reload on a session hash", () => {
-	test("reattaches the hashed daemon and keeps the session route", async () => {
+	test("reattaches the hashed session and keeps the session route", async () => {
 		restoreInitialRoute();
 		await flushMicrotasks();
-		const list = posted.find((c) => c.type === "list_daemon_sessions");
-		expect(list).toMatchObject({ daemonId: "d1" });
+		const list = posted.find((c) => c.type === "list_workspace_sessions");
+		expect(list).toMatchObject({ workspaceId: "d1" });
 
-		settleDaemonSessions("d1", [{ id: "s1", path: "/sessions/app/s1.jsonl" } as never]);
+		settleWorkspaceSessions("d1", [{ id: "s1", path: "/sessions/app/s1.jsonl" } as never]);
 		await flushMicrotasks();
 		await flushMicrotasks();
 
 		const attach = posted.find((c): c is AttachCommand => c.type === "attach");
-		expect(attach?.sessionId).toBe("d1");
+		expect(attach?.workspaceId).toBe("d1");
 		if (attach === undefined) throw new Error("no attach command was posted");
-		dispatch({ type: "attach_result", id: attach.id, ok: true, sessionId: "d1" });
+		dispatch({ type: "attach_result", id: attach.id, ok: true, workspaceId: "d1" });
 		await flushMicrotasks();
-		// Attaching the session file re-attaches the daemon: answer that second attach too.
+		// Attaching the session file re-attaches the session: answer that second attach too.
 		const second = await untilPosted((c) => c.type === "attach" && c.id !== attach.id);
 		if (second.type !== "attach") throw new Error("second attach was not an attach");
-		dispatch({ type: "attach_result", id: second.id, ok: true, sessionId: "d1" });
+		dispatch({ type: "attach_result", id: second.id, ok: true, workspaceId: "d1" });
 		const sw = await untilPosted((c) => c.type === "call" && c.method === "switchSession");
 		if (sw.type !== "call") throw new Error("switchSession was not a call");
 		dispatch(callResult(sw.id, undefined));
 		// Drain the restore chain before afterEach restores location.
 		for (let i = 0; i < 10; i++) await flushMicrotasks();
 
-		expect(written.filter((url) => url.endsWith("#/d/d1"))).toEqual([]);
+		expect(written.filter((url) => url.endsWith("#/w/d1"))).toEqual([]);
 	});
 });

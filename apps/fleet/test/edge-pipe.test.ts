@@ -1,6 +1,6 @@
 /**
  * Fleet edge pipe tests: standalone (per-test) mounts of the edge over a
- * callback-pair daemon (callback-daemon.testkit.ts). Covers backpressure
+ * callback-pair session (callback-session.testkit.ts). Covers backpressure
  * overflow + ring replay, attach priming and stream lifecycle over the pair,
  * id-keyed answers reaching only the originating browser, replay refused
  * across a generation change, and delta-ring filtering / byte-bound eviction.
@@ -18,15 +18,15 @@ import {
 } from "#lib/wire/callback-protocol";
 import { OMP_PROTO, DELTA_SEQ_START, type ServerFrame } from "#lib/wire/protocol";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
-import { createDaemonControl, type DaemonControl } from "../../session/daemon-control";
+import { createSessionControl, type SessionControl } from "../../session/session-control";
 import { FleetCallback } from "../../session/fleet-callback";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry } from "../daemon-transport";
+import { SessionTransportRegistry } from "../session-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
 import { ProjectSync } from "../project-sync";
 import { Registry } from "../registry";
-import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
+import { type CallbackSession, startCallbackSession } from "./callback-session.testkit";
 import { makeHostLifecycle } from "./host-lifecycle.testkit";
 import { RawBrowserSocket } from "./raw-browser-socket.testkit";
 import {
@@ -55,16 +55,16 @@ const CONFIG: FleetConfig = {
 
 interface Rig {
 	registry: Registry;
-	transport: DaemonTransportRegistry;
+	transport: SessionTransportRegistry;
 	edge: FleetEdge;
 	port: number;
-	daemons: CallbackDaemon[];
+	sessions: CallbackSession[];
 	close(): Promise<void>;
 }
 
 interface Remote {
-	daemonId: string;
-	daemon: CallbackDaemon;
+	workspaceId: string;
+	session: CallbackSession;
 }
 
 /** One edge on loopback with the callback routes mounted, plus its registry and transport. */
@@ -75,7 +75,7 @@ async function startRig(
 	const statePath = join(dir, "state.json");
 	const registry = new Registry(statePath);
 	await registry.load();
-	const transport = new DaemonTransportRegistry();
+	const transport = new SessionTransportRegistry();
 	let callbackBase = "";
 	const { lifecycle } = makeHostLifecycle({
 		registry,
@@ -106,15 +106,15 @@ async function startRig(
 	);
 	const served = serveEdge(edge, transport);
 	callbackBase = `http://127.0.0.1:${served.port}`;
-	const daemons: CallbackDaemon[] = [];
+	const sessions: CallbackSession[] = [];
 	return {
 		registry,
 		transport,
 		edge,
 		port: served.port,
-		daemons,
+		sessions,
 		async close() {
-			for (const daemon of daemons) await daemon.stop();
+			for (const session of sessions) await session.stop();
 			edge.close();
 			lifecycle.close();
 			transport.close();
@@ -132,37 +132,37 @@ async function connectRemote(rig: Rig, name: string): Promise<Remote> {
 		status: "connecting",
 	});
 	const token = randomBytes(32).toString("hex");
-	await rig.transport.enrollWorkspace(entry.daemonId, 1, token);
-	const daemon = startCallbackDaemon({
+	await rig.transport.enrollWorkspace(entry.workspaceId, 1, token);
+	const session = startCallbackSession({
 		url: `http://127.0.0.1:${rig.port}`,
-		workspaceId: entry.daemonId,
+		workspaceId: entry.workspaceId,
 		generation: 1,
 		token,
 	});
-	rig.daemons.push(daemon);
-	await daemon.waitConnected(5000);
-	return { daemonId: entry.daemonId, daemon };
+	rig.sessions.push(session);
+	await session.waitConnected(5000);
+	return { workspaceId: entry.workspaceId, session };
 }
 
 /** Enroll generation 2 for the same workspace (no revoke) and dial it; generation 1 stops first. */
-async function advanceGeneration(rig: Rig, remote: Remote): Promise<CallbackDaemon> {
-	await remote.daemon.stop();
+async function advanceGeneration(rig: Rig, remote: Remote): Promise<CallbackSession> {
+	await remote.session.stop();
 	const token = randomBytes(32).toString("hex");
-	await rig.transport.enrollWorkspace(remote.daemonId, 2, token);
-	const daemon = startCallbackDaemon({
+	await rig.transport.enrollWorkspace(remote.workspaceId, 2, token);
+	const session = startCallbackSession({
 		url: `http://127.0.0.1:${rig.port}`,
-		workspaceId: remote.daemonId,
+		workspaceId: remote.workspaceId,
 		generation: 2,
 		token,
 	});
-	rig.daemons.push(daemon);
-	await daemon.waitConnected(5000);
-	return daemon;
+	rig.sessions.push(session);
+	await session.waitConnected(5000);
+	return session;
 }
 
-/** Attach a browser to a daemon with a correlation id and wait for the ok attach_result. */
-async function attach(browser: BrowserSocket, daemonId: string, id: string): Promise<void> {
-	await browser.send({ type: "attach", id, sessionId: daemonId });
+/** Attach a browser to a session with a correlation id and wait for the ok attach_result. */
+async function attach(browser: BrowserSocket, workspaceId: string, id: string): Promise<void> {
+	await browser.send({ type: "attach", id, workspaceId });
 	await browser.waitForFrame(
 		(f) => f.type === "attach_result" && f.id === id && f.ok,
 		`attach_result ${id}`,
@@ -175,15 +175,15 @@ function controlType(env: CallbackEnvelope): string | undefined {
 	return typeof payload.type === "string" ? payload.type : undefined;
 }
 
-function controlFrames(daemon: CallbackDaemon, type: string): CallbackEnvelope[] {
-	return daemon.received().filter((env) => env.kind === "control" && controlType(env) === type);
+function controlFrames(session: CallbackSession, type: string): CallbackEnvelope[] {
+	return session.received().filter((env) => env.kind === "control" && controlType(env) === type);
 }
 
 /** Wait until at least `count` browser streams have been opened over the pair; return their stream ids in open order. */
-async function awaitStreams(daemon: CallbackDaemon, count: number): Promise<string[]> {
+async function awaitStreams(session: CallbackSession, count: number): Promise<string[]> {
 	return waitFor(
 		() => {
-			const streams = controlFrames(daemon, "stream_open").map((env) => env.streamId);
+			const streams = controlFrames(session, "stream_open").map((env) => env.streamId);
 			return streams.length >= count ? streams : null;
 		},
 		3000,
@@ -191,11 +191,11 @@ async function awaitStreams(daemon: CallbackDaemon, count: number): Promise<stri
 	);
 }
 
-/** Wait until the daemon has received at least `count` command envelopes carrying `id`. */
-async function awaitCommand(daemon: CallbackDaemon, id: string, count = 1): Promise<void> {
+/** Wait until the session has received at least `count` command envelopes carrying `id`. */
+async function awaitCommand(session: CallbackSession, id: string, count = 1): Promise<void> {
 	await waitFor(
 		() => {
-			const seen = commandsWithId(daemon, id);
+			const seen = commandsWithId(session, id);
 			return seen.length >= count ? true : null;
 		},
 		3000,
@@ -203,9 +203,9 @@ async function awaitCommand(daemon: CallbackDaemon, id: string, count = 1): Prom
 	);
 }
 
-/** Command envelopes a daemon received carrying `id`. */
-function commandsWithId(daemon: CallbackDaemon, id: string): CallbackEnvelope[] {
-	return daemon.received().filter((env) => {
+/** Command envelopes a session received carrying `id`. */
+function commandsWithId(session: CallbackSession, id: string): CallbackEnvelope[] {
+	return session.received().filter((env) => {
 		const payload = env.payload;
 		return (
 			env.kind === "command" &&
@@ -225,14 +225,14 @@ function commandsWithId(daemon: CallbackDaemon, id: string): CallbackEnvelope[] 
  */
 function tagOf(rowId: string, frame: ServerFrame): string | undefined {
 	if (frame.type !== "roster_delta") return undefined;
-	const entry = frame.upserted.find((d) => d.daemonId === rowId);
+	const entry = frame.upserted.find((d) => d.workspaceId === rowId);
 	return entry === undefined ? undefined : (entry.error?.split(":")[0] ?? "create");
 }
 
-/** Highest wire seq the edge acknowledged (stream_ack) on one browser stream of a daemon. */
-function ackedThrough(daemon: CallbackDaemon, streamId: string): number {
+/** Highest wire seq the edge acknowledged (stream_ack) on one browser stream of a session. */
+function ackedThrough(session: CallbackSession, streamId: string): number {
 	let acked = 0;
-	for (const env of daemon.received()) {
+	for (const env of session.received()) {
 		if (env.kind !== "control" || env.streamId !== streamId || controlType(env) !== "stream_ack") {
 			continue;
 		}
@@ -265,47 +265,47 @@ describe("edge pipe backpressure and replay", () => {
 			const remote = await connectRemote(rig, "slow-drop");
 			await slow.open();
 			await slow.waitForFrame((f) => f.type === "roster", "priming roster");
-			slow.send({ type: "attach", id: "a1", sessionId: remote.daemonId });
+			slow.send({ type: "attach", id: "a1", workspaceId: remote.workspaceId });
 			await slow.waitForFrame(
 				(f) => f.type === "attach_result" && f.id === "a1" && f.ok,
 				"attach_result",
 			);
-			// The attached daemon stream is the test's drop detector: the edge
+			// The attached session stream is the test's drop detector: the edge
 			// sends stream_close the moment it drops the socket.
-			await awaitStreams(remote.daemon, 1);
+			await awaitStreams(remote.session, 1);
 			const row = rig.registry.create({
 				name: "x1",
 				cwd: "/x1",
 				project: "x1",
 				status: "connecting",
 			});
-			await slow.waitForEvent((ev) => tagOf(row.daemonId, ev.frame) === "create", "first delta");
+			await slow.waitForEvent((ev) => tagOf(row.workspaceId, ev.frame) === "create", "first delta");
 			slow.pause();
 			// Ringed deltas, 64 KiB each, until the socket's send buffer (kernel
 			// plus the edge's queue) passes the cap and the edge drops it.
 			const pad = "p".repeat(64 * 1024);
 			const emittedTags = ["create"];
-			while (controlFrames(remote.daemon, "stream_close").length === 0) {
+			while (controlFrames(remote.session, "stream_close").length === 0) {
 				if (emittedTags.length > 1500) throw new Error("the edge never dropped the slow client");
 				const tag = `v${emittedTags.length}`;
 				emittedTags.push(tag);
-				rig.registry.update(row.daemonId, { error: `${tag}:${pad}` });
+				rig.registry.update(row.workspaceId, { error: `${tag}:${pad}` });
 				await sleep(1);
 			}
 			// While it is gone: a ringed delta, an unringed frame (consumes a seq,
 			// never replayed), a ringed delta.
 			emittedTags.push("post1");
-			rig.registry.update(row.daemonId, { error: "post1:" });
+			rig.registry.update(row.workspaceId, { error: "post1:" });
 			rig.registry.addProject(fakeRepoDir("slow-drop-repo"));
 			emittedTags.push("post2");
-			rig.registry.update(row.daemonId, { error: "post2:" });
+			rig.registry.update(row.workspaceId, { error: "post2:" });
 			// The client reads again: what was buffered arrives, then the typed close.
 			slow.resume();
 			const closed = await slow.end(15_000);
 			expect(closed?.code).toBe(4503);
 			expect(closed?.reason).toStartWith("slow_consumer");
-			const received = slow.events.filter((ev) => tagOf(row.daemonId, ev.frame) !== undefined);
-			const receivedTags = received.map((ev) => tagOf(row.daemonId, ev.frame));
+			const received = slow.events.filter((ev) => tagOf(row.workspaceId, ev.frame) !== undefined);
+			const receivedTags = received.map((ev) => tagOf(row.workspaceId, ev.frame));
 			// It got a contiguous prefix of the deltas, and not all of them.
 			expect(receivedTags).toEqual(emittedTags.slice(0, receivedTags.length));
 			expect(receivedTags.length).toBeLessThan(emittedTags.length - 2);
@@ -314,11 +314,14 @@ describe("edge pipe backpressure and replay", () => {
 			const again = new BrowserSocket(rig.port, slow.clientId, { after: lastSeq });
 			allBrowsers.push(again);
 			await again.open();
-			await again.waitForEvent((ev) => tagOf(row.daemonId, ev.frame) === "post2", "replayed post2");
+			await again.waitForEvent(
+				(ev) => tagOf(row.workspaceId, ev.frame) === "post2",
+				"replayed post2",
+			);
 			const replayed = again.events.filter((ev) => ev.id >= DELTA_SEQ_START);
 			// Exactly the ringed deltas it missed: none lost, none twice, in order, the
 			// unringed registered_projects absent (it is in the priming instead).
-			expect(replayed.map((ev) => tagOf(row.daemonId, ev.frame))).toEqual(
+			expect(replayed.map((ev) => tagOf(row.workspaceId, ev.frame))).toEqual(
 				emittedTags.slice(receivedTags.length),
 			);
 			const ids = replayed.map((ev) => ev.id);
@@ -346,11 +349,11 @@ describe("edge pipe backpressure and replay", () => {
 				status: "connecting",
 			});
 			const tag = (name: string): void => {
-				rig.registry.update(row.daemonId, { error: `${name}:` });
+				rig.registry.update(row.workspaceId, { error: `${name}:` });
 			};
 			tag("m1");
 			tag("m2");
-			await browser.waitForEvent((ev) => tagOf(row.daemonId, ev.frame) === "m2", "m2");
+			await browser.waitForEvent((ev) => tagOf(row.workspaceId, ev.frame) === "m2", "m2");
 			const after = browser.lastSeq;
 			expect(after).toBeGreaterThanOrEqual(DELTA_SEQ_START);
 			browser.close();
@@ -362,7 +365,7 @@ describe("edge pipe backpressure and replay", () => {
 			tag("m4");
 			const seen = browser.events.length;
 			await browser.reopen();
-			await browser.waitForEvent((ev) => tagOf(row.daemonId, ev.frame) === "m4", "replayed m4");
+			await browser.waitForEvent((ev) => tagOf(row.workspaceId, ev.frame) === "m4", "replayed m4");
 			const events = browser.events.slice(seen);
 			expect(events.filter((ev) => ev.id < DELTA_SEQ_START).map((ev) => ev.frame.type)).toEqual([
 				"roster",
@@ -370,7 +373,7 @@ describe("edge pipe backpressure and replay", () => {
 				"registered_projects",
 			]);
 			const replayed = events.filter((ev) => ev.id >= DELTA_SEQ_START);
-			expect(replayed.map((ev) => tagOf(row.daemonId, ev.frame))).toEqual(["m3", "m4"]);
+			expect(replayed.map((ev) => tagOf(row.workspaceId, ev.frame))).toEqual(["m3", "m4"]);
 			// The seqs the edge assigned at emission: m3 right after `after`, the
 			// unringed frame took the next one, m4 the one after.
 			expect(replayed.map((ev) => ev.id)).toEqual([after! + 1, after! + 3]);
@@ -387,11 +390,11 @@ describe("edge pipe backpressure and replay", () => {
 			await fresh.open();
 			await fresh.waitForFrame((f) => f.type === "roster", "priming roster");
 			tag("m5");
-			await fresh.waitForEvent((ev) => tagOf(row.daemonId, ev.frame) === "m5", "live m5");
+			await fresh.waitForEvent((ev) => tagOf(row.workspaceId, ev.frame) === "m5", "live m5");
 			expect(
 				fresh.events
 					.filter((ev) => ev.id >= DELTA_SEQ_START)
-					.map((ev) => tagOf(row.daemonId, ev.frame)),
+					.map((ev) => tagOf(row.workspaceId, ev.frame)),
 			).toEqual(["m5"]);
 			fresh.close();
 		} finally {
@@ -399,21 +402,21 @@ describe("edge pipe backpressure and replay", () => {
 		}
 	});
 
-	test("a slow client is dropped (4503) without stalling the healthy client or the daemon, whose credit keeps flowing", async () => {
+	test("a slow client is dropped (4503) without stalling the healthy client or the session, whose credit keeps flowing", async () => {
 		const rig = await startRig({ keepaliveMs: 100 });
 		const slow = new RawBrowserSocket(rig.port);
 		try {
 			const remote = await connectRemote(rig, "slow-vs-healthy");
 			const healthy = await openBrowser(rig.port);
 			await healthy.waitForFrame((f) => f.type === "roster", "healthy roster");
-			await attach(healthy, remote.daemonId, "h1");
-			const [healthyStream] = await awaitStreams(remote.daemon, 1);
+			await attach(healthy, remote.workspaceId, "h1");
+			const [healthyStream] = await awaitStreams(remote.session, 1);
 			await slow.open();
 			slow.pause();
-			slow.send({ type: "attach", id: "s1", sessionId: remote.daemonId });
-			const [, slowStream] = await awaitStreams(remote.daemon, 2);
+			slow.send({ type: "attach", id: "s1", workspaceId: remote.workspaceId });
+			const [, slowStream] = await awaitStreams(remote.session, 2);
 			// 24 MiB per stream: far past the 4 MiB cap plus every kernel buffer.
-			// The daemon honors the healthy stream's credit window (as a session
+			// The session honors the healthy stream's credit window (as a session
 			// does) and ignores the slow one's (the burst that must hit the cap).
 			const BURST = 48;
 			const pad = "x".repeat(512 * 1024);
@@ -422,12 +425,12 @@ describe("edge pipe backpressure and replay", () => {
 				event: { type: "notice", level: "info", message: `${tag}${i}:${pad}` },
 			});
 			const slowClosed = (): boolean =>
-				controlFrames(remote.daemon, "stream_close").some((env) => env.streamId === slowStream);
+				controlFrames(remote.session, "stream_close").some((env) => env.streamId === slowStream);
 			const healthySeqs: number[] = [];
 			for (let i = 0; i < BURST; i++) {
 				await waitFor(
 					() => {
-						const acked = ackedThrough(remote.daemon, healthyStream!);
+						const acked = ackedThrough(remote.session, healthyStream!);
 						const unacked = healthySeqs.filter((seq) => seq > acked).length;
 						return (unacked + 1) * pad.length + ENVELOPE_MAX_BYTES <= STREAM_ACK_WINDOW_BYTES
 							? true
@@ -436,8 +439,8 @@ describe("edge pipe backpressure and replay", () => {
 					10_000,
 					"healthy stream credit",
 				);
-				healthySeqs.push(remote.daemon.send(healthyStream!, "frame", notice("h", i)));
-				if (!slowClosed()) remote.daemon.send(slowStream!, "frame", notice("s", i));
+				healthySeqs.push(remote.session.send(healthyStream!, "frame", notice("h", i)));
+				if (!slowClosed()) remote.session.send(slowStream!, "frame", notice("s", i));
 				await sleep(1);
 			}
 			// The healthy client has every frame, in order, while the slow one is
@@ -454,17 +457,17 @@ describe("edge pipe backpressure and replay", () => {
 				.map((f) => eventMessage(f)!.split(":")[0]);
 			expect(healthyTags).toEqual(Array.from({ length: BURST }, (_, i) => `h${i}`));
 			await waitFor(() => (slowClosed() ? true : null), 10_000, "stream_close for the slow client");
-			// The daemon's pair is untouched and the healthy stream was never cut;
+			// The session's pair is untouched and the healthy stream was never cut;
 			// its credit kept flowing right through to the last frame.
-			expect(remote.daemon.connected()).toBe(true);
-			expect(remote.daemon.dials()).toBe(1);
+			expect(remote.session.connected()).toBe(true);
+			expect(remote.session.dials()).toBe(1);
 			expect(
-				controlFrames(remote.daemon, "stream_close").filter(
+				controlFrames(remote.session, "stream_close").filter(
 					(env) => env.streamId === healthyStream,
 				),
 			).toHaveLength(0);
 			await waitFor(
-				() => (ackedThrough(remote.daemon, healthyStream!) >= healthySeqs.at(-1)! ? true : null),
+				() => (ackedThrough(remote.session, healthyStream!) >= healthySeqs.at(-1)! ? true : null),
 				10_000,
 				"stream_ack through the last healthy frame",
 			);
@@ -509,20 +512,20 @@ describe("edge pipe attach and answers over the callback pair", () => {
 			const remote = await connectRemote(rig, "primed");
 			const browser = await openBrowser(rig.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await attach(browser, remote.daemonId, "a1");
-			const [stream] = await awaitStreams(remote.daemon, 1);
+			await attach(browser, remote.workspaceId, "a1");
+			const [stream] = await awaitStreams(remote.session, 1);
 			expect(stream?.startsWith("browser/")).toBe(true);
-			// Daemon frames on the browser stream reach the browser, stamped with the daemon id.
-			remote.daemon.send(stream!, "frame", { type: "history", messages: [], final: true });
+			// Session frames on the browser stream reach the browser, stamped with the workspace id.
+			remote.session.send(stream!, "frame", { type: "history", messages: [], final: true });
 			await browser.waitForFrame(
-				(f) => f.type === "history" && f.sessionId === remote.daemonId,
-				"priming history stamped with the daemon id",
+				(f) => f.type === "history" && f.workspaceId === remote.workspaceId,
+				"priming history stamped with the workspace id",
 			);
 			// Detach: closing the browser stream tears down the pair stream.
 			await browser.close();
 			const closed = await waitFor(
 				() =>
-					controlFrames(remote.daemon, "stream_close").find((env) => env.streamId === stream) ??
+					controlFrames(remote.session, "stream_close").find((env) => env.streamId === stream) ??
 					null,
 				3000,
 				"stream_close",
@@ -539,21 +542,31 @@ describe("edge pipe attach and answers over the callback pair", () => {
 			const remote = await connectRemote(rig, "origin");
 			const a = await openBrowser(rig.port);
 			await a.waitForFrame((f) => f.type === "roster", "roster A");
-			await attach(a, remote.daemonId, "a1");
-			const [streamA] = await awaitStreams(remote.daemon, 1);
+			await attach(a, remote.workspaceId, "a1");
+			const [streamA] = await awaitStreams(remote.session, 1);
 			const b = await openBrowser(rig.port);
 			await b.waitForFrame((f) => f.type === "roster", "roster B");
-			await attach(b, remote.daemonId, "b1");
-			const [, streamB] = await awaitStreams(remote.daemon, 2);
+			await attach(b, remote.workspaceId, "b1");
+			const [, streamB] = await awaitStreams(remote.session, 2);
 			const answersFor = (browser: BrowserSocket) =>
 				browser.frames.filter((f) => f.type === "call_result" && f.id === "c1");
 
-			// A issues c1. The daemon answers on both streams; the copy on B's
+			// A issues c1. The session answers on both streams; the copy on B's
 			// stream is consumed by the origin record and must never reach B.
 			await a.send({ type: "call", id: "c1", method: "prompt", args: ["from A"] });
-			await awaitCommand(remote.daemon, "c1");
-			remote.daemon.send(streamA!, "frame", { type: "call_result", id: "c1", ok: true, data: "A" });
-			remote.daemon.send(streamB!, "frame", { type: "call_result", id: "c1", ok: true, data: "A" });
+			await awaitCommand(remote.session, "c1");
+			remote.session.send(streamA!, "frame", {
+				type: "call_result",
+				id: "c1",
+				ok: true,
+				data: "A",
+			});
+			remote.session.send(streamB!, "frame", {
+				type: "call_result",
+				id: "c1",
+				ok: true,
+				data: "A",
+			});
 			await a.waitForFrame((f) => f.type === "call_result" && f.id === "c1", "A's answer");
 			await sleep(300); // real time: a fan-out copy would land in this window
 			expect(answersFor(a)).toHaveLength(1);
@@ -561,9 +574,19 @@ describe("edge pipe attach and answers over the callback pair", () => {
 
 			// B reuses the id c1 for its own command; only B settles from it.
 			await b.send({ type: "call", id: "c1", method: "prompt", args: ["from B"] });
-			await awaitCommand(remote.daemon, "c1", 2);
-			remote.daemon.send(streamA!, "frame", { type: "call_result", id: "c1", ok: true, data: "B" });
-			remote.daemon.send(streamB!, "frame", { type: "call_result", id: "c1", ok: true, data: "B" });
+			await awaitCommand(remote.session, "c1", 2);
+			remote.session.send(streamA!, "frame", {
+				type: "call_result",
+				id: "c1",
+				ok: true,
+				data: "B",
+			});
+			remote.session.send(streamB!, "frame", {
+				type: "call_result",
+				id: "c1",
+				ok: true,
+				data: "B",
+			});
 			await b.waitForFrame((f) => f.type === "call_result" && f.id === "c1", "B's answer");
 			await sleep(300);
 			expect(answersFor(b)).toHaveLength(1);
@@ -579,11 +602,11 @@ describe("edge pipe attach and answers over the callback pair", () => {
 			const remote = await connectRemote(rig, "gen");
 			const browser = await openBrowser(rig.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await attach(browser, remote.daemonId, "a1");
-			await awaitStreams(remote.daemon, 1);
+			await attach(browser, remote.workspaceId, "a1");
+			await awaitStreams(remote.session, 1);
 			await browser.send({ type: "call", id: "r1", method: "prompt", args: ["lost"] });
-			await awaitCommand(remote.daemon, "r1");
-			// The daemon goes away before answering; generation 2 replaces it.
+			await awaitCommand(remote.session, "r1");
+			// The session goes away before answering; generation 2 replaces it.
 			const next = await advanceGeneration(rig, remote);
 			expect(next.connected()).toBe(true);
 			// Replay of the same command id must fail, not re-run on the new generation.
@@ -596,7 +619,7 @@ describe("edge pipe attach and answers over the callback pair", () => {
 			expect(refusal).toMatchObject({ ok: false, error: expect.stringContaining("generation 1") });
 			// The first generation saw the call exactly once, and the replay
 			// never reached the new generation.
-			expect(commandsWithId(remote.daemon, "r1")).toHaveLength(1);
+			expect(commandsWithId(remote.session, "r1")).toHaveLength(1);
 			expect(next.received().some((env) => env.kind === "command")).toBe(false);
 		} finally {
 			await rig.close();
@@ -611,36 +634,36 @@ describe("edge pipe delta ring", () => {
 			const remote = await connectRemote(rig, "ring-filter");
 			const browser = await openBrowser(rig.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await attach(browser, remote.daemonId, "a1");
-			const [stream] = await awaitStreams(remote.daemon, 1);
+			await attach(browser, remote.workspaceId, "a1");
+			const [stream] = await awaitStreams(remote.session, 1);
 			// Priming history gives a stable replay floor below the live frames.
-			remote.daemon.send(stream!, "frame", { type: "history", messages: [], final: true });
+			remote.session.send(stream!, "frame", { type: "history", messages: [], final: true });
 			const primingHistory = await browser.waitForEvent(
 				(ev) => ev.frame.type === "history",
 				"priming history",
 			);
 			// Live frames, oldest first: a transcript history, a call_result,
 			// a stream_reset, and a ringed event. All four must ARRIVE.
-			remote.daemon.send(stream!, "frame", {
+			remote.session.send(stream!, "frame", {
 				type: "history",
 				messages: [{ role: "user", content: "transcript body", timestamp: 0 }],
 				final: true,
 			});
-			remote.daemon.send(stream!, "frame", {
+			remote.session.send(stream!, "frame", {
 				type: "call_result",
 				id: "r1",
 				ok: true,
 				data: { huge: "y".repeat(5000) },
 			});
-			remote.daemon.send(stream!, "frame", { type: "stream_reset", reason: "test" });
-			remote.daemon.send(stream!, "frame", {
+			remote.session.send(stream!, "frame", { type: "stream_reset", reason: "test" });
+			remote.session.send(stream!, "frame", {
 				type: "event",
 				event: { type: "notice", level: "info", message: "ring-me" },
 			});
 			await browser.waitForFrame(
 				(f) =>
 					f.type === "history" &&
-					f.sessionId === remote.daemonId &&
+					f.workspaceId === remote.workspaceId &&
 					Array.isArray(f.messages) &&
 					f.messages.length === 1,
 				"live history",
@@ -686,13 +709,13 @@ describe("edge pipe delta ring", () => {
 			const remote = await connectRemote(rig, "ring-bytes");
 			const browser = await openBrowser(rig.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await attach(browser, remote.daemonId, "a1");
-			const [stream] = await awaitStreams(remote.daemon, 1);
+			await attach(browser, remote.workspaceId, "a1");
+			const [stream] = await awaitStreams(remote.session, 1);
 			// A burst of large ringed deltas: each block is ~700 bytes, so 20
 			// of them blow well past the 2500-byte budget and evict the head.
 			const N = 20;
 			for (let i = 0; i < N; i++) {
-				remote.daemon.send(stream!, "frame", {
+				remote.session.send(stream!, "frame", {
 					type: "event",
 					event: { type: "notice", level: "info", message: `evict-${i}` + "x".repeat(600) },
 				});
@@ -744,8 +767,8 @@ describe("edge pipe session file over the callback pair", () => {
 		try {
 			const remote = await connectRemote(rig, "session-file");
 			const sessionFileOf = (): string | undefined =>
-				rig.registry.get(remote.daemonId)?.lastSessionFile;
-			remote.daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+				rig.registry.get(remote.workspaceId)?.lastSessionFile;
+			remote.session.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
 				type: "state",
 				state: { sessionFile: "/sessions/first.jsonl" },
 			});
@@ -754,7 +777,7 @@ describe("edge pipe session file over the callback pair", () => {
 				3000,
 				"lastSessionFile first",
 			);
-			remote.daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+			remote.session.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
 				type: "state",
 				state: { sessionFile: "/sessions/second.jsonl" },
 			});
@@ -772,28 +795,28 @@ describe("edge pipe session file over the callback pair", () => {
 		const rig = await startRig();
 		try {
 			const remote = await connectRemote(rig, "session-persisted");
-			remote.daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+			remote.session.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
 				type: "state",
 				state: { sessionFile: "/sessions/kept.jsonl", sessionPersisted: true },
 			});
 			await waitFor(
-				() => (rig.registry.get(remote.daemonId)?.lastSessionPersisted === true ? true : null),
+				() => (rig.registry.get(remote.workspaceId)?.lastSessionPersisted === true ? true : null),
 				3000,
 				"lastSessionPersisted kept",
 			);
-			remote.daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+			remote.session.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
 				type: "state",
 				state: { sessionFile: "/sessions/other.jsonl" },
 			});
 			await waitFor(
 				() =>
-					rig.registry.get(remote.daemonId)?.lastSessionFile === "/sessions/other.jsonl"
+					rig.registry.get(remote.workspaceId)?.lastSessionFile === "/sessions/other.jsonl"
 						? true
 						: null,
 				3000,
 				"lastSessionFile other",
 			);
-			expect(rig.registry.get(remote.daemonId)?.lastSessionPersisted).toBeUndefined();
+			expect(rig.registry.get(remote.workspaceId)?.lastSessionPersisted).toBeUndefined();
 		} finally {
 			await rig.close();
 		}
@@ -803,9 +826,9 @@ describe("edge pipe session file over the callback pair", () => {
 		const rig = await startRig();
 		try {
 			const remote = await connectRemote(rig, "dl-cap");
-			const first = rig.transport.createBulkCorrelation(remote.daemonId, { capture: true });
-			const second = rig.transport.createBulkCorrelation(remote.daemonId, { capture: true });
-			const url = `http://127.0.0.1:${rig.port}/ctl/sessions/${remote.daemonId}/download?path=a.txt`;
+			const first = rig.transport.createBulkCorrelation(remote.workspaceId, { capture: true });
+			const second = rig.transport.createBulkCorrelation(remote.workspaceId, { capture: true });
+			const url = `http://127.0.0.1:${rig.port}/ctl/sessions/${remote.workspaceId}/download?path=a.txt`;
 			const refused = await fetch(url);
 			expect(refused.status).toBe(503);
 			expect(await refused.json()).toEqual({
@@ -824,9 +847,9 @@ describe("edge pipe session file over the callback pair", () => {
 		const rig = await startRig();
 		try {
 			const remote = await connectRemote(rig, "dl-abort");
-			const url = `http://127.0.0.1:${rig.port}/ctl/sessions/${remote.daemonId}/download?path=a.txt`;
+			const url = `http://127.0.0.1:${rig.port}/ctl/sessions/${remote.workspaceId}/download?path=a.txt`;
 			const downloadCommands = (): number =>
-				remote.daemon.received().filter((env) => {
+				remote.session.received().filter((env) => {
 					const payload = env.payload;
 					return (
 						env.kind === "command" &&
@@ -847,7 +870,9 @@ describe("edge pipe session file over the callback pair", () => {
 			await waitFor(
 				() => {
 					try {
-						rig.transport.createBulkCorrelation(remote.daemonId, { capture: true }).cancel("probe");
+						rig.transport
+							.createBulkCorrelation(remote.workspaceId, { capture: true })
+							.cancel("probe");
 						return true;
 					} catch {
 						return null;
@@ -871,25 +896,25 @@ function liveIndex(frame: object): number {
 
 interface LiveSession {
 	callback: FleetCallback;
-	control: DaemonControl;
+	control: SessionControl;
 }
 
 describe("edge pipe over one real session pair", () => {
-	/** A real session half: FleetCallback + daemon control, answering every command ok. */
+	/** A real session half: FleetCallback + session control, answering every command ok. */
 	function startSession(
 		rig: Rig,
-		daemonId: string,
+		workspaceId: string,
 		token: string,
 		priming: Record<string, unknown>[] = [
 			{ type: "hello_ok", proto: OMP_PROTO },
 			{ type: "history", messages: [], final: true },
 		],
 	): LiveSession {
-		let control!: DaemonControl;
+		let control!: SessionControl;
 		const callback = new FleetCallback(
 			{
 				url: `http://127.0.0.1:${rig.port}`,
-				workspaceId: daemonId,
+				workspaceId,
 				generation: 1,
 				token,
 				allowHttp: true,
@@ -901,7 +926,7 @@ describe("edge pipe over one real session pair", () => {
 				onControl: (envelope) => control.handleEnvelope(envelope),
 			},
 		);
-		control = createDaemonControl({
+		control = createSessionControl({
 			handleCommand: async (command) => {
 				const id =
 					typeof command === "object" && command !== null && "id" in command ? command.id : "";
@@ -934,18 +959,18 @@ describe("edge pipe over one real session pair", () => {
 				status: "connecting",
 			});
 			const token = randomBytes(32).toString("hex");
-			await rig.transport.enrollWorkspace(entry.daemonId, 1, token);
+			await rig.transport.enrollWorkspace(entry.workspaceId, 1, token);
 			const PAD = 8 * 1024;
-			session = startSession(rig, entry.daemonId, token);
+			session = startSession(rig, entry.workspaceId, token);
 			await session.callback.start();
 			const pairs: Array<string | null> = [];
-			const unsubscribe = rig.transport.onPairChange(entry.daemonId, (status) =>
+			const unsubscribe = rig.transport.onPairChange(entry.workspaceId, (status) =>
 				pairs.push(status.paired ? status.connectionId : null),
 			);
 
 			const browser = await openBrowser(rig.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await attach(browser, entry.daemonId, "a1");
+			await attach(browser, entry.workspaceId, "a1");
 			await browser.waitForFrame((f) => f.type === "history", "priming history");
 
 			// Live traffic and commands interleaved over the one pair (about 1.9 MiB
@@ -1011,11 +1036,11 @@ describe("edge pipe over one real session pair", () => {
 				status: "connecting",
 			});
 			const token = randomBytes(32).toString("hex");
-			await rig.transport.enrollWorkspace(entry.daemonId, 1, token);
+			await rig.transport.enrollWorkspace(entry.workspaceId, 1, token);
 			const CHUNKS = 24;
 			const priming: Record<string, unknown>[] = [
 				{ type: "hello_ok", proto: OMP_PROTO },
-				{ type: "attached", sessionId: "x" },
+				{ type: "attached", workspaceId: "x" },
 				...Array.from({ length: CHUNKS }, (_, i) => ({
 					type: "history",
 					messages: [],
@@ -1025,12 +1050,12 @@ describe("edge pipe over one real session pair", () => {
 				})),
 				{ type: "ready" },
 			];
-			session = startSession(rig, entry.daemonId, token, priming);
+			session = startSession(rig, entry.workspaceId, token, priming);
 			await session.callback.start();
 
 			const browser = await openBrowser(rig.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await attach(browser, entry.daemonId, "a1");
+			await attach(browser, entry.workspaceId, "a1");
 			await browser.waitForFrame((f) => f.type === "ready", "end of priming", 20_000);
 			await sleep(300); // real time: a restarted prime would deliver a second copy in this window
 
@@ -1055,7 +1080,7 @@ describe("edge pipe relays the session's own frame text", () => {
 	function viaStringify(text: string, stamp: string | null): ServerFrame {
 		const frame = JSON.parse(text) as Record<string, unknown>;
 		return JSON.parse(
-			JSON.stringify(stamp === null ? frame : { ...frame, sessionId: stamp }),
+			JSON.stringify(stamp === null ? frame : { ...frame, workspaceId: stamp }),
 		) as ServerFrame;
 	}
 
@@ -1063,12 +1088,12 @@ describe("edge pipe relays the session's own frame text", () => {
 		const remote = await connectRemote(rig, name);
 		const browser = await openBrowser(rig.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		await attach(browser, remote.daemonId, "a1");
-		const [stream] = await awaitStreams(remote.daemon, 1);
+		await attach(browser, remote.workspaceId, "a1");
+		const [stream] = await awaitStreams(remote.session, 1);
 		return { remote, browser, stream: stream! };
 	}
 
-	test("relayed frames deep-equal what the re-serializing path produced: non-ASCII, with and without a sessionId key, unscoped", async () => {
+	test("relayed frames deep-equal what the re-serializing path produced: non-ASCII, with and without a workspaceId key, unscoped", async () => {
 		const rig = await startRig();
 		try {
 			const { remote, browser, stream } = await attached(rig, "relay-parity");
@@ -1088,16 +1113,16 @@ describe("edge pipe relays the session's own frame text", () => {
 					stamp: true,
 				},
 				{
-					text: '{"type":"event","sessionId":"spoofed","event":{"type":"notice","level":"info","message":"has id"}}',
+					text: '{"type":"event","workspaceId":"spoofed","event":{"type":"notice","level":"info","message":"has id"}}',
 					stamp: true,
 				},
 				{ text: '{"type": "state" , "state": {"x": [1, 2.5, null, true]}}', stamp: true },
-				{ text: '{"type":"attached","sessionId":"s1"}', stamp: true },
+				{ text: '{"type":"attached","workspaceId":"s1"}', stamp: true },
 				{ text: '{"type":"ready","marker":"unscoped"}', stamp: false },
 				{ text: '{"type":"ready"}', stamp: false },
 			];
-			for (const { text } of cases) remote.daemon.sendRaw(stream, "frame", text);
-			remote.daemon.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
+			for (const { text } of cases) remote.session.sendRaw(stream, "frame", text);
+			remote.session.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
 			await browser.waitForFrame((f) => markerOf(f) === "done", "last relayed frame");
 			const received = browser.frames.filter(
 				(f) => f.type !== "roster" && f.type !== "attach_result" && markerOf(f) !== "done",
@@ -1105,9 +1130,9 @@ describe("edge pipe relays the session's own frame text", () => {
 			// The browser also saw priming (roster, daemons); compare only the relayed frames.
 			const relayed = received.slice(-cases.length);
 			expect(relayed).toEqual(
-				cases.map(({ text, stamp }) => viaStringify(text, stamp ? remote.daemonId : null)),
+				cases.map(({ text, stamp }) => viaStringify(text, stamp ? remote.workspaceId : null)),
 			);
-			expect(relayed[2]).toMatchObject({ sessionId: remote.daemonId });
+			expect(relayed[2]).toMatchObject({ workspaceId: remote.workspaceId });
 		} finally {
 			await rig.close();
 		}
@@ -1119,23 +1144,23 @@ describe("edge pipe relays the session's own frame text", () => {
 			const remote = await connectRemote(rig, "relay-answer");
 			const a = await openBrowser(rig.port);
 			await a.waitForFrame((f) => f.type === "roster", "roster A");
-			await attach(a, remote.daemonId, "a1");
-			const [streamA] = await awaitStreams(remote.daemon, 1);
+			await attach(a, remote.workspaceId, "a1");
+			const [streamA] = await awaitStreams(remote.session, 1);
 			const b = await openBrowser(rig.port);
 			await b.waitForFrame((f) => f.type === "roster", "roster B");
-			await attach(b, remote.daemonId, "b1");
-			const [, streamB] = await awaitStreams(remote.daemon, 2);
+			await attach(b, remote.workspaceId, "b1");
+			const [, streamB] = await awaitStreams(remote.session, 2);
 			await a.send({ type: "call", id: "c9", method: "prompt", args: ["x"] });
-			await awaitCommand(remote.daemon, "c9");
+			await awaitCommand(remote.session, "c9");
 			const text = '{"type": "call_result", "id": "c9", "ok": true, "data": "é日本"}';
-			remote.daemon.sendRaw(streamA!, "frame", text);
-			remote.daemon.sendRaw(streamB!, "frame", text);
+			remote.session.sendRaw(streamA!, "frame", text);
+			remote.session.sendRaw(streamB!, "frame", text);
 			const answer = await a.waitForFrame(
 				(f) => f.type === "call_result" && f.id === "c9",
 				"answer",
 			);
 			await sleep(300);
-			expect(answer).toEqual(viaStringify(text, remote.daemonId));
+			expect(answer).toEqual(viaStringify(text, remote.workspaceId));
 			expect(a.frames.filter((f) => f.type === "call_result")).toHaveLength(1);
 			expect(b.frames.filter((f) => f.type === "call_result")).toHaveLength(0);
 		} finally {
@@ -1151,21 +1176,21 @@ describe("edge pipe relays the session's own frame text", () => {
 				'{\n  "type": "event",\r\n  "event": {"type":"notice","level":"info","message":"nl é"}\n}';
 			const compact =
 				'{"type":"event","event":{"type":"notice","level":"info","message":"padded"}}';
-			remote.daemon.sendRaw(stream, "frame", pretty);
-			remote.daemon.sendRaw(stream, "frame", compact, { padded: true });
-			remote.daemon.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
+			remote.session.sendRaw(stream, "frame", pretty);
+			remote.session.sendRaw(stream, "frame", compact, { padded: true });
+			remote.session.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
 			await browser.waitForFrame((f) => markerOf(f) === "done", "last frame");
 			// Parsed, the relayed frame equals the re-serialized one.
 			expect(browser.frames.find((f) => f.type === "event" && eventMessage(f) === "nl é")).toEqual(
-				viaStringify(pretty, remote.daemonId),
+				viaStringify(pretty, remote.workspaceId),
 			);
 			expect(
 				browser.frames.find((f) => f.type === "event" && eventMessage(f) === "padded"),
-			).toMatchObject({ sessionId: remote.daemonId });
+			).toMatchObject({ workspaceId: remote.workspaceId });
 			// On the wire the session's own text is spliced in verbatim (its raw
 			// CR/LF kept, JSON allows them between tokens), the stamp appended
 			// before the closing brace, all inside one `{"seq":N,"frame":...}` message.
-			const stamp = `,"sessionId":${JSON.stringify(remote.daemonId)}}}`;
+			const stamp = `,"workspaceId":${JSON.stringify(remote.workspaceId)}}}`;
 			for (const text of [pretty, compact]) {
 				const message = browser.messages.find((m) => m.endsWith(`${text.slice(0, -1)}${stamp}`));
 				expect(message).toMatch(/^\{"seq":\d+,"frame":\{/);
@@ -1181,36 +1206,36 @@ describe("edge pipe relays the session's own frame text", () => {
 		try {
 			const { remote, browser, stream } = await attached(rig, "relay-hostile");
 			// Parses as `daemons`: tapped and never forwarded, whatever the first `type` says.
-			remote.daemon.sendRaw(
+			remote.session.sendRaw(
 				stream,
 				"frame",
 				'{"type":"history","messages":[],"final":true,"hostile":"HOSTILE-ONE","type":"daemons","daemons":[]}',
 			);
 			// Parses as `history`: forwarded and stamped, whatever the first `type` says.
-			remote.daemon.sendRaw(
+			remote.session.sendRaw(
 				stream,
 				"frame",
 				'{"type":"daemons","daemons":[],"type":"history","messages":[],"final":true,"hostile":"HOSTILE-TWO"}',
 			);
 			// Parses as the unscoped `ready`: forwarded WITHOUT a stamp.
-			remote.daemon.sendRaw(
+			remote.session.sendRaw(
 				stream,
 				"frame",
 				'{"type":"state","state":{},"type":"ready","hostile":"HOSTILE-THREE"}',
 			);
-			// Parses as `daemon_activity`: stripped like a broker roster.
-			remote.daemon.sendRaw(
+			// Parses as `session_activity`: stripped like a broker roster.
+			remote.session.sendRaw(
 				stream,
 				"frame",
-				'{"type":"ready","type":"daemon_activity","hostile":"HOSTILE-FOUR"}',
+				'{"type":"ready","type":"session_activity","hostile":"HOSTILE-FOUR"}',
 			);
-			remote.daemon.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
+			remote.session.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
 			await browser.waitForFrame((f) => markerOf(f) === "done", "last frame");
 			const hostile = browser.frames.filter((f) => typeof hostileOf(f) === "string");
 			expect(hostile.map((f) => hostileOf(f))).toEqual(["HOSTILE-TWO", "HOSTILE-THREE"]);
-			expect(hostile[0]).toMatchObject({ type: "history", sessionId: remote.daemonId });
+			expect(hostile[0]).toMatchObject({ type: "history", workspaceId: remote.workspaceId });
 			expect(hostile[1]).toMatchObject({ type: "ready" });
-			expect(hostile[1]).not.toHaveProperty("sessionId");
+			expect(hostile[1]).not.toHaveProperty("workspaceId");
 			// The session's own text went out (duplicate keys intact), not a re-serialization.
 			expect(browser.rawText).toContain('"type":"daemons","daemons":[],"type":"history"');
 			expect(browser.rawText).not.toContain("HOSTILE-ONE");

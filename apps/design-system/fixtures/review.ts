@@ -6,7 +6,7 @@ import type {
 	TodoBoardDto,
 } from "#lib/wire/protocol";
 import type { GitReviewDiff, TodoReviewOp } from "../../web/store/slices/review";
-import type { CallHandlers } from "../daemon";
+import type { CallHandlers } from "../session";
 import { FIXTURE_NOW } from "./session";
 
 const T0 = Date.parse("2026-10-09T10:00:00Z");
@@ -103,7 +103,7 @@ export const reviewPlan: PlanReviewDto = {
 	planFilePath: "/home/joshua/.omp/plans/design-fixtures.md",
 	title: "Design-system fixture modules",
 	content:
-		"# Design-system fixture modules\n\n1. Export one typed fixture per DTO.\n2. Keep stories on the shared seed.\n\n- No live daemon in stories.",
+		"# Design-system fixture modules\n\n1. Export one typed fixture per DTO.\n2. Keep stories on the shared seed.\n\n- No live session in stories.",
 	contentHash: "h_5e21",
 	version: 3,
 	status: "waiting",
@@ -335,7 +335,7 @@ export interface PlanCallOptions {
 	pending?: boolean;
 }
 
-/** Plan methods over a mutable copy of the plan; decisions refuse a stale version, as the daemon does. */
+/** Plan methods over a mutable copy of the plan; decisions refuse a stale version, as the session does. */
 export function planCalls(options: PlanCallOptions = {}): CallHandlers {
 	let plan = structuredClone(options.plan === undefined ? reviewPlan : options.plan);
 	const setStatus = (args: unknown[], status: PlanReviewDto["status"]): boolean => {
@@ -414,7 +414,7 @@ export interface TodoCallOptions {
 	pending?: boolean;
 }
 
-/** Todo methods over a mutable copy of the board; applying ops checks the base revision, as the daemon does. */
+/** Todo methods over a mutable copy of the board; applying ops checks the base revision, as the session does. */
 export function todoCalls(options: TodoCallOptions = {}): CallHandlers {
 	const board = structuredClone(options.board ?? reviewTodoBoard);
 	return {

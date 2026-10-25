@@ -5,8 +5,8 @@
  * its argv (the template-filled --fleet-stdin / resume args) to a
  * file and captures the fleet stdin payload (the callback pair) to another,
  * optionally logs to stderr, then exits or idles. A real
- * DaemonTransportRegistry served over loopback HTTP receives the dial; tests
- * that need a live pair start the callback-daemon testkit with the pair the
+ * SessionTransportRegistry served over loopback HTTP receives the dial; tests
+ * that need a live pair start the callback-session testkit with the pair the
  * child was launched with. Covers spawn (generation, stdin payload, no secret
  * on the entry or in argv/env), pair timeout, respawn (generation bump,
  * --resume), stop (ShutdownControl, revoke, asleep), close (children and
@@ -28,19 +28,19 @@ import {
 	OMP_SESSION_EXIT_SESSION_LOCKED,
 } from "#lib/wire/protocol";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
+import { SessionTransportRegistry, type CallbackSocketData } from "../session-transport";
 import type { FleetEventLog } from "../events";
 import { Registry, type RegistryEntry } from "../registry";
 import type { WorkspaceLifecycle, CloneRuntimePolicy } from "../workspace-lifecycle";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
+import { type CallbackSession, startCallbackSession } from "./callback-session.testkit";
 import { makeHostLifecycle } from "./host-lifecycle.testkit";
 
 afterAll(cleanupTempDirs);
 
 // Every fixture a test creates registers its teardown here so it runs even
 // when a test fails mid-body (the children are real processes). Cleanups run
-// in reverse creation order: daemons first, then the lifecycle's children,
+// in reverse creation order: sessions first, then the lifecycle's children,
 // the transport, and the HTTP server.
 const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -215,11 +215,11 @@ function makeTierConfig(
 
 interface Harness {
 	registry: Registry;
-	transport: DaemonTransportRegistry;
+	transport: SessionTransportRegistry;
 	lifecycle: WorkspaceLifecycle;
 	eventLog: FleetEventLog;
 	statePath: string;
-	/** The base URL the callback daemon testkit dials (no /callback suffix). */
+	/** The base URL the callback session testkit dials (no /callback suffix). */
 	base: string;
 	/** The callback URL the child receives in its stdin payload. */
 	callbackUrl: string;
@@ -227,11 +227,11 @@ interface Harness {
 
 interface HarnessDeps {
 	pairTimeoutMs?: number;
-	onEnrolled?: (daemonId: string) => void;
+	onEnrolled?: (workspaceId: string) => void;
 }
 
 /**
- * A host lifecycle over a real registry and a real DaemonTransportRegistry
+ * A host lifecycle over a real registry and a real SessionTransportRegistry
  * served on an ephemeral loopback port. Teardown stops every entry (killing
  * its child, which close() deliberately leaves running), then closes the
  * lifecycle, the transport, and the server.
@@ -244,7 +244,7 @@ async function makeHarness(
 	const statePath = join(tempDir("host-lifecycle-state-"), "state.json");
 	const registry = new Registry(statePath);
 	await registry.load();
-	const transport = new DaemonTransportRegistry();
+	const transport = new SessionTransportRegistry();
 	const server: Server<CallbackSocketData> = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -269,7 +269,7 @@ async function makeHarness(
 	cleanups.push(async () => {
 		for (const entry of registry.list()) {
 			// A clone's runtime goes through the clone lifecycle, never the host verbs.
-			if (entry.workspace?.kind !== "clone") await lifecycle.stop(entry.daemonId);
+			if (entry.workspace?.kind !== "clone") await lifecycle.stop(entry.workspaceId);
 		}
 		lifecycle.close();
 		transport.close();
@@ -303,20 +303,20 @@ async function makeFixture(
 	return { ...harness, dir, argsFile, envFile, pidFile, payloadFile };
 }
 
-/** Start the daemon half of the pair with the callback pair the child received on stdin; waits for the pair. */
-async function pairDaemon(
+/** Start the session half of the pair with the callback pair the child received on stdin; waits for the pair. */
+async function pairSession(
 	harness: Harness,
 	pair: FleetPayload["callback"],
-): Promise<CallbackDaemon> {
-	const daemon = startCallbackDaemon({
+): Promise<CallbackSession> {
+	const session = startCallbackSession({
 		url: harness.base,
 		workspaceId: pair.workspace,
 		generation: pair.generation,
 		token: pair.token,
 	});
-	cleanups.push(() => daemon.stop());
-	await daemon.waitConnected(5000);
-	return daemon;
+	cleanups.push(() => session.stop());
+	await session.waitConnected(5000);
+	return session;
 }
 
 /** Run a real git command, throwing on failure. */
@@ -359,14 +359,14 @@ describe("host runtime", () => {
 			"host-lifecycle-env-",
 			{},
 			{ restartMax: 2 },
-			{ onEnrolled: (daemonId) => enrolled.push(daemonId) },
+			{ onEnrolled: (workspaceId) => enrolled.push(workspaceId) },
 		);
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		expect(entry.project).toBe(basename(fx.dir));
 		const pair = await waitForPayload(fx.payloadFile, 1);
 		expect(pair.url).toBe(fx.callbackUrl);
-		expect(pair.workspace).toBe(entry.daemonId);
+		expect(pair.workspace).toBe(entry.workspaceId);
 		expect(pair.generation).toBe(1);
 		expect(pair.token).toMatch(/^[0-9a-f]{64}$/);
 		expect(pair.allowHttp).toBe(true); // loopback http callback
@@ -379,9 +379,9 @@ describe("host runtime", () => {
 		expect(envDump).toContain("OMP_SESSION_LOG_MIRROR=0");
 		expect(envDump).not.toMatch(/OMP_SESSION_CALLBACK_/);
 		expect(envDump).not.toMatch(/OMP_SESSION_TOKEN=/);
-		expect(enrolled).toEqual([entry.daemonId]);
+		expect(enrolled).toEqual([entry.workspaceId]);
 
-		const current = fx.registry.get(entry.daemonId)!;
+		const current = fx.registry.get(entry.workspaceId)!;
 		expect(current.status).toBe("connecting");
 		expect(current.pid).toBeTypeOf("number");
 		// The registry keeps only the credential's digest, never the credential.
@@ -390,7 +390,7 @@ describe("host runtime", () => {
 		expect(current.workspace?.enrollment?.generation).toBe(1);
 		expect(current.workspace?.enrollment?.credentialHash).not.toBe(pair.token);
 		expect(current.workspace?.authorizedGeneration).toBe(1);
-		expect(fx.transport.pairStatus(entry.daemonId)).toMatchObject({
+		expect(fx.transport.pairStatus(entry.workspaceId)).toMatchObject({
 			enrolled: true,
 			authorizedGeneration: 1,
 			paired: false,
@@ -400,20 +400,20 @@ describe("host runtime", () => {
 		expect(line).not.toContain(pair.token); // the credential never reaches argv
 	});
 
-	test("a daemon dialing with the child's credential pairs with the transport", async () => {
+	test("a session dialing with the child's credential pairs with the transport", async () => {
 		const fx = await makeFixture("host-lifecycle-pair-", {}, { restartMax: 2 });
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const pair = await waitForPayload(fx.payloadFile, 1);
-		const daemon = await pairDaemon(fx, pair);
+		const session = await pairSession(fx, pair);
 
-		expect(daemon.connected()).toBe(true);
-		expect(fx.transport.pairStatus(entry.daemonId)).toMatchObject({
+		expect(session.connected()).toBe(true);
+		expect(fx.transport.pairStatus(entry.workspaceId)).toMatchObject({
 			enrolled: true,
 			authorizedGeneration: 1,
 			paired: true,
 		});
-		expect(fx.lifecycle.hostSnapshot()[entry.daemonId]?.restarts).toBe(0);
+		expect(fx.lifecycle.hostSnapshot()[entry.workspaceId]?.restarts).toBe(0);
 	});
 
 	test("no pair within pairTimeoutMs errors the entry, revokes the credential, and kills the child", async () => {
@@ -428,7 +428,7 @@ describe("host runtime", () => {
 		const pid = await waitForPid(fx.pidFile);
 		const failed = await waitFor(
 			() => {
-				const current = fx.registry.get(entry.daemonId);
+				const current = fx.registry.get(entry.workspaceId);
 				return current?.status === "error" ? current : null;
 			},
 			5000,
@@ -436,7 +436,7 @@ describe("host runtime", () => {
 		);
 		expect(failed.error).toContain("no callback pair");
 		await waitFor(() => (isAlive(pid) ? null : true), 5000, "child killed");
-		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+		expect(fx.transport.pairStatus(entry.workspaceId).enrolled).toBe(false);
 		// The timeout owns the aftermath: the killed child is not restarted.
 		await sleep(150);
 		expect(readLines(fx.argsFile)).toHaveLength(1);
@@ -447,7 +447,7 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitForPayload(fx.payloadFile, 1);
-		const snap = fx.lifecycle.hostSnapshot()[entry.daemonId];
+		const snap = fx.lifecycle.hostSnapshot()[entry.workspaceId];
 		expect(snap).toBeDefined();
 		expect(snap?.restarts).toBe(0);
 		expect(typeof snap?.pid).toBe("number");
@@ -462,11 +462,11 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitFor(
-			() => (fx.registry.get(entry.daemonId)?.status === "error" ? "error" : null),
+			() => (fx.registry.get(entry.workspaceId)?.status === "error" ? "error" : null),
 			10_000,
 			"error status",
 		);
-		const snap = fx.lifecycle.hostSnapshot()[entry.daemonId];
+		const snap = fx.lifecycle.hostSnapshot()[entry.workspaceId];
 		expect(snap).toBeDefined();
 		expect(snap?.restarts).toBe(1); // one restart consumed before the cap hit
 		expect(snap?.pid).toBeUndefined(); // no live child
@@ -481,7 +481,7 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitFor(
-			() => (fx.registry.get(entry.daemonId)?.status === "error" ? "error" : null),
+			() => (fx.registry.get(entry.workspaceId)?.status === "error" ? "error" : null),
 			10_000,
 			"error status",
 		);
@@ -490,14 +490,15 @@ describe("host runtime", () => {
 				.list()
 				.some(
 					(event) =>
-						event.daemonId === entry.daemonId && event.message.startsWith("spawn template="),
+						event.workspaceId === entry.workspaceId && event.message.startsWith("spawn template="),
 				),
 		).toBe(true);
 		expect(
 			fx.eventLog
 				.list()
 				.some(
-					(event) => event.daemonId === entry.daemonId && event.message.includes("exit code=1"),
+					(event) =>
+						event.workspaceId === entry.workspaceId && event.message.includes("exit code=1"),
 				),
 		).toBe(true);
 		expect(
@@ -519,9 +520,9 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitForPayload(fx.payloadFile, 1);
-		await fx.lifecycle.start(entry.daemonId);
+		await fx.lifecycle.start(entry.workspaceId);
 		await waitForPayload(fx.payloadFile, 2);
-		await fx.lifecycle.delete(entry.daemonId);
+		await fx.lifecycle.delete(entry.workspaceId);
 		await waitFor(
 			() =>
 				fx.eventLog
@@ -538,43 +539,47 @@ describe("host runtime", () => {
 		expect(
 			fx.eventLog
 				.list()
-				.some((event) => event.daemonId === entry.daemonId && event.message.startsWith("respawn")),
+				.some(
+					(event) => event.workspaceId === entry.workspaceId && event.message.startsWith("respawn"),
+				),
 		).toBe(true);
 		expect(
 			fx.eventLog
 				.list()
-				.some((event) => event.daemonId === entry.daemonId && event.message.startsWith("stop (")),
+				.some(
+					(event) => event.workspaceId === entry.workspaceId && event.message.startsWith("stop ("),
+				),
 		).toBe(true);
 		expect(
 			fx.eventLog
 				.list()
-				.some((event) => event.daemonId === entry.daemonId && event.message === "delete"),
+				.some((event) => event.workspaceId === entry.workspaceId && event.message === "delete"),
 		).toBe(true);
 	});
 
-	test("respawn bumps the generation to 2 with a fresh credential and the daemon pairs at it", async () => {
+	test("respawn bumps the generation to 2 with a fresh credential and the session pairs at it", async () => {
 		const fx = await makeFixture("host-lifecycle-regen-", {}, { restartMax: 2 });
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const pair1 = await waitForPayload(fx.payloadFile, 1);
-		const first = await pairDaemon(fx, pair1);
+		const first = await pairSession(fx, pair1);
 
-		await fx.lifecycle.start(entry.daemonId);
+		await fx.lifecycle.start(entry.workspaceId);
 		const pair2 = await waitForPayload(fx.payloadFile, 2);
-		expect(pair2.workspace).toBe(entry.daemonId);
+		expect(pair2.workspace).toBe(entry.workspaceId);
 		expect(pair2.token).toMatch(/^[0-9a-f]{64}$/);
 		expect(pair2.token).not.toBe(pair1.token);
 		// Enrolling generation 2 revoked generation 1: the old pair is refused on redial.
 		await waitFor(() => first.rejection(), 5000, "generation 1 rejection");
 		expect(first.connected()).toBe(false);
 
-		await pairDaemon(fx, pair2);
-		expect(fx.transport.pairStatus(entry.daemonId)).toMatchObject({
+		await pairSession(fx, pair2);
+		expect(fx.transport.pairStatus(entry.workspaceId)).toMatchObject({
 			enrolled: true,
 			authorizedGeneration: 2,
 			paired: true,
 		});
-		const current = fx.registry.get(entry.daemonId)!;
+		const current = fx.registry.get(entry.workspaceId)!;
 		expect(current.workspace?.enrollment?.generation).toBe(2);
 		expect(current.workspace?.authorizedGeneration).toBe(2);
 	});
@@ -584,9 +589,9 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitForLaunches(fx.argsFile, 1);
-		fx.registry.update(entry.daemonId, { lastSessionFile: "/srv/proj/sess.jsonl" });
+		fx.registry.update(entry.workspaceId, { lastSessionFile: "/srv/proj/sess.jsonl" });
 
-		await fx.lifecycle.start(entry.daemonId);
+		await fx.lifecycle.start(entry.workspaceId);
 		const lines = await waitForLaunches(fx.argsFile, 2);
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toBe("--fleet-stdin"); // first spawn: no resume, bare fleet flag
@@ -603,12 +608,12 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitForLaunches(fx.argsFile, 1);
-		fx.registry.update(entry.daemonId, { lastSessionFile: "/srv/proj/sess.jsonl" });
+		fx.registry.update(entry.workspaceId, { lastSessionFile: "/srv/proj/sess.jsonl" });
 
 		// Dropdown-picked session: the lifecycle takes the file verbatim (the
 		// edge validates membership); this test proves the argv actually carries
 		// the chosen path rather than the entry's lastSessionFile.
-		await fx.lifecycle.start(entry.daemonId, {
+		await fx.lifecycle.start(entry.workspaceId, {
 			resume: "/chosen/other-session.jsonl",
 		});
 		const lines = await waitForLaunches(fx.argsFile, 2);
@@ -623,24 +628,24 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitForLaunches(fx.argsFile, 1);
-		fx.registry.update(entry.daemonId, { lastSessionFile: "/srv/proj/sess.jsonl" });
+		fx.registry.update(entry.workspaceId, { lastSessionFile: "/srv/proj/sess.jsonl" });
 
-		await fx.lifecycle.start(entry.daemonId);
+		await fx.lifecycle.start(entry.workspaceId);
 		const lines = await waitForLaunches(fx.argsFile, 2);
 		expect(lines[1]).toContain("--resume /srv/proj/sess.jsonl --resume-unwritten");
 	});
 
-	test("respawn of a lastSessionFile the daemon reported persisted resumes strictly (plain --resume)", async () => {
+	test("respawn of a lastSessionFile the session reported persisted resumes strictly (plain --resume)", async () => {
 		const fx = await makeFixture("host-lifecycle-persisted-", {}, { restartMax: 2 });
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitForLaunches(fx.argsFile, 1);
-		fx.registry.update(entry.daemonId, {
+		fx.registry.update(entry.workspaceId, {
 			lastSessionFile: "/srv/proj/sess.jsonl",
 			lastSessionPersisted: true,
 		});
 
-		await fx.lifecycle.start(entry.daemonId);
+		await fx.lifecycle.start(entry.workspaceId);
 		const lines = await waitForLaunches(fx.argsFile, 2);
 		expect(lines[1]).toContain("--resume /srv/proj/sess.jsonl");
 		expect(lines[1]).not.toContain("--resume-unwritten");
@@ -661,14 +666,14 @@ describe("host runtime", () => {
 		});
 		expect(entry.template).toBeUndefined();
 
-		await fx.lifecycle.start(entry.daemonId);
+		await fx.lifecycle.start(entry.workspaceId);
 		const lines = await waitForLaunches(fx.argsFile, 1);
-		expect(fx.registry.get(entry.daemonId)?.template).toBe("test"); // healed with the resolved name
+		expect(fx.registry.get(entry.workspaceId)?.template).toBe("test"); // healed with the resolved name
 		expect(lines).toHaveLength(1);
 		expect(lines[0]).toBe("--fleet-stdin"); // no lastSessionFile → fresh start, no --resume
 		expect(lines[0]).not.toContain("--resume");
 		const pair = await waitForPayload(fx.payloadFile, 1);
-		expect(pair.workspace).toBe(entry.daemonId);
+		expect(pair.workspace).toBe(entry.workspaceId);
 	});
 
 	test("spawn with reuse wakes the checkout's existing row; a plain spawn adds a session", async () => {
@@ -683,13 +688,13 @@ describe("host runtime", () => {
 		});
 
 		const reused = await fx.lifecycle.spawnHost({ cwd: fx.dir, reuse: true });
-		expect(reused.daemonId).toBe(asleep.daemonId);
+		expect(reused.workspaceId).toBe(asleep.workspaceId);
 		expect(fx.registry.list()).toHaveLength(1);
 		await waitForLaunches(fx.argsFile, 1); // the asleep row was woken
 
 		// Several sessions per folder stay a deliberate CLI capability.
 		const extra = await fx.lifecycle.spawnHost({ cwd: fx.dir });
-		expect(extra.daemonId).not.toBe(asleep.daemonId);
+		expect(extra.workspaceId).not.toBe(asleep.workspaceId);
 		expect(fx.registry.list()).toHaveLength(2);
 	});
 
@@ -710,7 +715,7 @@ describe("host runtime", () => {
 			lastSessionFile,
 		});
 
-		await expect(fx.lifecycle.start(adopted.daemonId)).rejects.toThrow("still holds its lock");
+		await expect(fx.lifecycle.start(adopted.workspaceId)).rejects.toThrow("still holds its lock");
 		expect(existsSync(fx.argsFile)).toBe(false);
 	}, 20_000);
 
@@ -782,12 +787,12 @@ describe("host runtime", () => {
 
 		const entry = await lifecycle.spawnHost({ cwd: projectDir });
 		await waitForLaunches(argsFile, 1);
-		registry.update(entry.daemonId, { lastSessionFile: "/srv/proj/sess.jsonl" });
+		registry.update(entry.workspaceId, { lastSessionFile: "/srv/proj/sess.jsonl" });
 
 		// Two overlapping respawns (no await between the calls): both must
 		// coalesce onto ONE launch. Exactly one replacement child is launched,
 		// and the original is terminated rather than orphaned.
-		await Promise.all([lifecycle.start(entry.daemonId), lifecycle.start(entry.daemonId)]);
+		await Promise.all([lifecycle.start(entry.workspaceId), lifecycle.start(entry.workspaceId)]);
 		await waitForLaunches(argsFile, 2);
 		await sleep(150); // a double-launch would have landed by now
 
@@ -801,7 +806,7 @@ describe("host runtime", () => {
 
 		// stop() kills the tracked (only) child; the pre-respawn child was
 		// terminated by the respawn, so no orphan survives.
-		await lifecycle.stop(entry.daemonId);
+		await lifecycle.stop(entry.workspaceId);
 		for (const pid of pids) expect(isAlive(pid)).toBe(false);
 	});
 
@@ -812,7 +817,7 @@ describe("host runtime", () => {
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const failed = await waitFor(
 			() => {
-				const current = fx.registry.get(entry.daemonId);
+				const current = fx.registry.get(entry.workspaceId);
 				return current?.status === "error" ? current : null;
 			},
 			10_000,
@@ -825,7 +830,7 @@ describe("host runtime", () => {
 		expect(payloads[0]?.callback.token).not.toBe(payloads[1]?.callback.token); // fresh credential across attempts
 		expect(readLines(fx.argsFile)).toHaveLength(2);
 		// The exhausted entry holds no live credential; the generation stays monotonic.
-		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+		expect(fx.transport.pairStatus(entry.workspaceId).enrolled).toBe(false);
 		expect(failed.workspace?.authorizedGeneration).toBe(2);
 	});
 
@@ -839,7 +844,7 @@ describe("host runtime", () => {
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const failed = await waitFor(
 			() => {
-				const current = fx.registry.get(entry.daemonId);
+				const current = fx.registry.get(entry.workspaceId);
 				return current?.status === "error" ? current : null;
 			},
 			10_000,
@@ -860,18 +865,18 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const pair1 = await waitForPayload(fx.payloadFile, 1);
-		await pairDaemon(fx, pair1);
+		await pairSession(fx, pair1);
 
 		// The paired child crashes once; its restart is generation 2 and pairs.
 		writeFileSync(crashFlag, "");
 		const pair2 = await waitForPayload(fx.payloadFile, 2);
-		await pairDaemon(fx, pair2);
+		await pairSession(fx, pair2);
 		await waitFor(
-			() => (fx.lifecycle.hostSnapshot()[entry.daemonId]?.restarts === 0 ? "reset" : null),
+			() => (fx.lifecycle.hostSnapshot()[entry.workspaceId]?.restarts === 0 ? "reset" : null),
 			5000,
 			"stable pair refilled the restart budget",
 		);
-		expect(fx.registry.get(entry.daemonId)?.status).not.toBe("error");
+		expect(fx.registry.get(entry.workspaceId)?.status).not.toBe("error");
 	}, 20_000);
 
 	test("a pair-then-crash loop exhausts the restart budget and errors", async () => {
@@ -886,13 +891,13 @@ describe("host runtime", () => {
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		for (const generation of [1, 2, 3]) {
 			const pair = await waitForPayload(fx.payloadFile, generation);
-			await pairDaemon(fx, pair);
+			await pairSession(fx, pair);
 			// The paired child crashes on its next tick.
 			writeFileSync(crashFlag, "");
 		}
 		const failed = await waitFor(
 			() => {
-				const current = fx.registry.get(entry.daemonId);
+				const current = fx.registry.get(entry.workspaceId);
 				return current?.status === "error" ? current : null;
 			},
 			10_000,
@@ -912,16 +917,16 @@ describe("host runtime", () => {
 		);
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
-		await pairDaemon(fx, await waitForPayload(fx.payloadFile, 1));
+		await pairSession(fx, await waitForPayload(fx.payloadFile, 1));
 		// Replace the entry's log file with a directory: the restart cannot open it.
-		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.daemonId}.log`);
+		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.workspaceId}.log`);
 		rmSync(logPath);
 		mkdirSync(logPath);
 		writeFileSync(crashFlag, "");
 
 		const failed = await waitFor(
 			() => {
-				const current = fx.registry.get(entry.daemonId);
+				const current = fx.registry.get(entry.workspaceId);
 				return current?.status === "error" ? current : null;
 			},
 			10_000,
@@ -940,16 +945,16 @@ describe("host runtime", () => {
 		);
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
-		await pairDaemon(fx, await waitForPayload(fx.payloadFile, 1));
+		await pairSession(fx, await waitForPayload(fx.payloadFile, 1));
 		// The exit reason reads the log tail, which now throws (EISDIR).
-		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.daemonId}.log`);
+		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.workspaceId}.log`);
 		rmSync(logPath);
 		mkdirSync(logPath);
 		writeFileSync(crashFlag, "");
 
 		const failed = await waitFor(
 			() => {
-				const current = fx.registry.get(entry.daemonId);
+				const current = fx.registry.get(entry.workspaceId);
 				return current?.status === "error" ? current : null;
 			},
 			10_000,
@@ -978,7 +983,7 @@ describe("host runtime", () => {
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const asleep = await waitFor(
 			() => {
-				const current = fx.registry.get(entry.daemonId);
+				const current = fx.registry.get(entry.workspaceId);
 				return current?.status === "asleep" ? current : null;
 			},
 			10_000,
@@ -991,7 +996,7 @@ describe("host runtime", () => {
 		expect(fx.eventLog.list().some((e) => /restart \d+\//.test(e.message))).toBe(false);
 		await sleep(150);
 		expect(readLines(fx.argsFile)).toHaveLength(1);
-		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+		expect(fx.transport.pairStatus(entry.workspaceId).enrolled).toBe(false);
 	}, 20_000);
 
 	test("exit 78 (resume failed) never restarts: the entry sleeps carrying the child's last log line", async () => {
@@ -1013,7 +1018,7 @@ describe("host runtime", () => {
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const asleep = await waitFor(
 			() => {
-				const current = fx.registry.get(entry.daemonId);
+				const current = fx.registry.get(entry.workspaceId);
 				return current?.status === "asleep" ? current : null;
 			},
 			10_000,
@@ -1024,7 +1029,7 @@ describe("host runtime", () => {
 		expect(fx.eventLog.list().some((e) => /restart \d+\//.test(e.message))).toBe(false);
 		await sleep(150);
 		expect(readLines(fx.argsFile)).toHaveLength(1);
-		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+		expect(fx.transport.pairStatus(entry.workspaceId).enrolled).toBe(false);
 	}, 20_000);
 
 	test("a clean exit 0 puts the entry asleep without a restart", async () => {
@@ -1036,13 +1041,13 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitFor(
-			() => (fx.registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null),
+			() => (fx.registry.get(entry.workspaceId)?.status === "asleep" ? "asleep" : null),
 			10_000,
 			"asleep status",
 		);
 		await sleep(150);
 		expect(readLines(fx.argsFile)).toHaveLength(1);
-		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+		expect(fx.transport.pairStatus(entry.workspaceId).enrolled).toBe(false);
 	});
 
 	test("stop on a paired child sends ShutdownControl, revokes the credential, kills the child, and sets asleep", async () => {
@@ -1051,23 +1056,23 @@ describe("host runtime", () => {
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const pair = await waitForPayload(fx.payloadFile, 1);
 		const pid = await waitForPid(fx.pidFile);
-		const daemon = await pairDaemon(fx, pair);
+		const session = await pairSession(fx, pair);
 
-		await fx.lifecycle.stop(entry.daemonId);
+		await fx.lifecycle.stop(entry.workspaceId);
 
 		const shutdown = await waitFor(
 			() =>
-				daemon
+				session
 					.received()
 					.find((e) => e.streamId === CALLBACK_TRANSPORT_STREAM_ID && e.kind === "control") ?? null,
 			3000,
 			"ShutdownControl",
 		);
 		expect(shutdown.payload).toEqual({ type: "shutdown", reason: "stop" });
-		const stopped = fx.registry.get(entry.daemonId)!;
+		const stopped = fx.registry.get(entry.workspaceId)!;
 		expect(stopped.status).toBe("asleep");
 		expect(stopped.workspace?.enrollment).toBeUndefined();
-		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+		expect(fx.transport.pairStatus(entry.workspaceId).enrolled).toBe(false);
 		expect(isAlive(pid)).toBe(false);
 	});
 
@@ -1078,8 +1083,8 @@ describe("host runtime", () => {
 		// The first child exits ~instantly and schedules a restart at >=500ms;
 		// stop() within that window must cancel it.
 		await waitForLaunches(fx.argsFile, 1);
-		await fx.lifecycle.stop(entry.daemonId);
-		expect(fx.registry.get(entry.daemonId)?.status).toBe("asleep");
+		await fx.lifecycle.stop(entry.workspaceId);
+		expect(fx.registry.get(entry.workspaceId)?.status).toBe("asleep");
 		await sleep(2200); // the 1s-min backoff would have fired by now if not cancelled
 		expect(readLines(fx.argsFile)).toHaveLength(1);
 	});
@@ -1089,21 +1094,21 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const pair = await waitForPayload(fx.payloadFile, 1);
-		await pairDaemon(fx, pair);
-		fx.registry.setStatus(entry.daemonId, "ready");
+		await pairSession(fx, pair);
+		fx.registry.setStatus(entry.workspaceId, "ready");
 		// The shutdown request reads the pair state first; making that throw fails the stop for real.
 		const pairStatus = fx.transport.pairStatus.bind(fx.transport);
 		fx.transport.pairStatus = () => {
 			throw new Error("stop boom");
 		};
 		try {
-			await expect(fx.lifecycle.stop(entry.daemonId)).rejects.toThrow("stop boom");
+			await expect(fx.lifecycle.stop(entry.workspaceId)).rejects.toThrow("stop boom");
 		} finally {
 			fx.transport.pairStatus = pairStatus;
 		}
-		expect(fx.registry.get(entry.daemonId)?.status).toBe("asleep");
+		expect(fx.registry.get(entry.workspaceId)?.status).toBe("asleep");
 		// The failed stop left the child up; a later stop ends it.
-		await fx.lifecycle.stop(entry.daemonId);
+		await fx.lifecycle.stop(entry.workspaceId);
 	});
 
 	test("close leaves the child running and its enrollment in place", async () => {
@@ -1112,7 +1117,7 @@ describe("host runtime", () => {
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const pair = await waitForPayload(fx.payloadFile, 1);
 		const pid = await waitForPid(fx.pidFile);
-		const daemon = await pairDaemon(fx, pair);
+		const session = await pairSession(fx, pair);
 
 		fx.lifecycle.close();
 		await sleep(150);
@@ -1120,13 +1125,13 @@ describe("host runtime", () => {
 		// Sessions outlive the control plane: the child and its pair survive
 		// (the harness teardown kills the child).
 		expect(isAlive(pid)).toBe(true);
-		expect(daemon.connected()).toBe(true);
-		expect(fx.transport.pairStatus(entry.daemonId)).toMatchObject({
+		expect(session.connected()).toBe(true);
+		expect(fx.transport.pairStatus(entry.workspaceId)).toMatchObject({
 			enrolled: true,
 			authorizedGeneration: 1,
 			paired: true,
 		});
-		expect(fx.registry.get(entry.daemonId)?.workspace?.enrollment?.generation).toBe(1);
+		expect(fx.registry.get(entry.workspaceId)?.workspace?.enrollment?.generation).toBe(1);
 	});
 
 	test("sessionLogTail returns the tail of the session log file, bounded to 64 KiB", async () => {
@@ -1150,7 +1155,7 @@ describe("host runtime", () => {
 		const entry = await lifecycle.spawnHost({ cwd: projectDir });
 		const tail = await waitFor(
 			() => {
-				const text = lifecycle.sessionLogTail(entry.daemonId);
+				const text = lifecycle.sessionLogTail(entry.workspaceId);
 				return text.includes("tail-marker") ? text : null;
 			},
 			5000,
@@ -1161,7 +1166,7 @@ describe("host runtime", () => {
 		expect(tail.endsWith("tail-marker\n")).toBe(true);
 	});
 
-	test("delete drops the per-daemon runtime state and deletes its session log", async () => {
+	test("delete drops the per-session runtime state and deletes its session log", async () => {
 		const fx = await makeFixture(
 			"host-lifecycle-delete-",
 			{ stderrLines: ["delete-boom"] },
@@ -1170,20 +1175,21 @@ describe("host runtime", () => {
 
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitFor(
-			() => (fx.lifecycle.sessionLogTail(entry.daemonId).includes("delete-boom") ? "logged" : null),
+			() =>
+				fx.lifecycle.sessionLogTail(entry.workspaceId).includes("delete-boom") ? "logged" : null,
 			5000,
 			"child log",
 		);
-		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.daemonId}.log`);
+		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.workspaceId}.log`);
 		writeFileSync(`${logPath}.1`, "rotated\n");
-		expect(fx.lifecycle.hostSnapshot()[entry.daemonId]).toBeDefined();
+		expect(fx.lifecycle.hostSnapshot()[entry.workspaceId]).toBeDefined();
 
-		await fx.lifecycle.delete(entry.daemonId);
-		expect(fx.registry.get(entry.daemonId)?.status).toBe("asleep");
-		expect(fx.lifecycle.hostSnapshot()[entry.daemonId]).toBeUndefined();
-		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+		await fx.lifecycle.delete(entry.workspaceId);
+		expect(fx.registry.get(entry.workspaceId)?.status).toBe("asleep");
+		expect(fx.lifecycle.hostSnapshot()[entry.workspaceId]).toBeUndefined();
+		expect(fx.transport.pairStatus(entry.workspaceId).enrolled).toBe(false);
 		// Delete removes the session log and its rotated generation.
-		expect(fx.lifecycle.sessionLogTail(entry.daemonId)).toBe("");
+		expect(fx.lifecycle.sessionLogTail(entry.workspaceId)).toBe("");
 		expect(existsSync(logPath)).toBe(false);
 		expect(existsSync(`${logPath}.1`)).toBe(false);
 		// The child stays dead; no restart fires from the deleted state.
@@ -1191,7 +1197,7 @@ describe("host runtime", () => {
 		expect(readLines(fx.argsFile)).toHaveLength(1);
 	});
 
-	test("respawn rotates an over-cap session log to <daemonId>.log.1", async () => {
+	test("respawn rotates an over-cap session log to <workspaceId>.log.1", async () => {
 		const fx = await makeFixture(
 			"host-lifecycle-rotate-",
 			{ stderrLines: ["rotate-boom"] },
@@ -1199,24 +1205,25 @@ describe("host runtime", () => {
 		);
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		await waitFor(
-			() => (fx.lifecycle.sessionLogTail(entry.daemonId).includes("rotate-boom") ? "logged" : null),
+			() =>
+				fx.lifecycle.sessionLogTail(entry.workspaceId).includes("rotate-boom") ? "logged" : null,
 			5000,
 			"child log",
 		);
-		await fx.lifecycle.stop(entry.daemonId);
-		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.daemonId}.log`);
+		await fx.lifecycle.stop(entry.workspaceId);
+		const logPath = join(dirname(fx.statePath), "session-logs", `${entry.workspaceId}.log`);
 		const oversized = "x".repeat(1024 * 1024 + 1);
 		writeFileSync(logPath, oversized);
-		await fx.lifecycle.start(entry.daemonId);
+		await fx.lifecycle.start(entry.workspaceId);
 		expect(readFileSync(`${logPath}.1`, "utf8")).toBe(oversized);
 		const relaunched = await waitFor(
 			() =>
-				fx.lifecycle.sessionLogTail(entry.daemonId).includes("rotate-boom") ? "relogged" : null,
+				fx.lifecycle.sessionLogTail(entry.workspaceId).includes("rotate-boom") ? "relogged" : null,
 			5000,
 			"relaunch log",
 		);
 		expect(relaunched).toBe("relogged");
-		await fx.lifecycle.stop(entry.daemonId);
+		await fx.lifecycle.stop(entry.workspaceId);
 	});
 
 	test("unknown template rejects and creates nothing", async () => {
@@ -1257,7 +1264,7 @@ describe("host runtime", () => {
 
 		const entry = await lifecycle.spawnHost({ cwd: projectDir });
 		const [line] = await waitForLaunches(argsOverride, 1);
-		expect(registry.get(entry.daemonId)?.template).toBe("other");
+		expect(registry.get(entry.workspaceId)?.template).toBe("other");
 		expect(line).toBe("--fleet-stdin");
 		// The default-template child must never have launched.
 		expect(existsSync(argsDefault)).toBe(false);
@@ -1273,7 +1280,7 @@ describe("host runtime", () => {
 
 		const entry = await lifecycle.spawnHost({ cwd: projectDir, template: "test" });
 		await waitForLaunches(argsDefault, 1);
-		expect(registry.get(entry.daemonId)?.template).toBe("test");
+		expect(registry.get(entry.workspaceId)?.template).toBe("test");
 		expect(existsSync(argsOverride)).toBe(false);
 	});
 
@@ -1288,7 +1295,7 @@ describe("host runtime", () => {
 
 		const entry = await lifecycle.spawnHost({ cwd: projectDir });
 		await waitForLaunches(argsDefault, 1);
-		expect(registry.get(entry.daemonId)?.template).toBe("test");
+		expect(registry.get(entry.workspaceId)?.template).toBe("test");
 		expect(existsSync(argsOverride)).toBe(false);
 	});
 
@@ -1353,13 +1360,13 @@ describe("host runtime", () => {
 		});
 		expect(asleep.template).toBeUndefined();
 
-		await lifecycle.start(asleep.daemonId);
+		await lifecycle.start(asleep.workspaceId);
 		// The OVERRIDE template's child ran, never the default's; the
 		// fallback resolved projectTemplates.
 		expect(await waitForLaunches(argsOverride, 1)).toHaveLength(1);
 		expect(existsSync(argsDefault)).toBe(false);
 		// The resolved name was healed onto the entry for later respawns.
-		expect(registry.get(asleep.daemonId)?.template).toBe("other");
+		expect(registry.get(asleep.workspaceId)?.template).toBe("other");
 	});
 });
 
@@ -1374,7 +1381,7 @@ describe("host restart policy is the lifecycle's runtime policy", () => {
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const failed = await waitFor(
 			() => {
-				const current = fx.registry.get(entry.daemonId);
+				const current = fx.registry.get(entry.workspaceId);
 				return current?.status === "error" ? current : null;
 			},
 			10_000,
@@ -1402,7 +1409,7 @@ describe("host restart policy is the lifecycle's runtime policy", () => {
 		const entry = await fx.lifecycle.spawnHost({ cwd: fx.dir });
 		const failed = await waitFor(
 			() => {
-				const current = fx.registry.get(entry.daemonId);
+				const current = fx.registry.get(entry.workspaceId);
 				return current?.status === "error" ? current : null;
 			},
 			10_000,
@@ -1463,12 +1470,12 @@ describe("host boot reconciliation", () => {
 			...(row.pid !== undefined ? { pid: row.pid } : {}),
 		});
 		if (row.enrolled) {
-			fx.registry.setWorkspaceEnrollment(entry.daemonId, {
+			fx.registry.setWorkspaceEnrollment(entry.workspaceId, {
 				credentialHash: "a".repeat(64),
 				generation: 1,
 			});
 		}
-		return fx.registry.get(entry.daemonId)!;
+		return fx.registry.get(entry.workspaceId)!;
 	}
 
 	function sessionFileWithLock(holderPid: number | null): string {
@@ -1514,7 +1521,7 @@ describe("host boot reconciliation", () => {
 		expect(fx.lifecycle.reconcileHostBoot()).toEqual([]);
 
 		for (const seeded of [stale, free, deadRecorded, spawning]) {
-			const row = fx.registry.get(seeded.daemonId)!;
+			const row = fx.registry.get(seeded.workspaceId)!;
 			expect(row.status).toBe("asleep");
 			expect(row.readyAt).toBeUndefined();
 			expect(row.pid).toBeUndefined();
@@ -1524,7 +1531,7 @@ describe("host boot reconciliation", () => {
 				.list()
 				.some(
 					(event) =>
-						event.daemonId === stale.daemonId &&
+						event.workspaceId === stale.workspaceId &&
 						event.message === "boot reconcile: ready → asleep (local session dead)",
 				),
 		).toBe(true);
@@ -1555,10 +1562,10 @@ describe("host boot reconciliation", () => {
 		const reconnecting = fx.lifecycle.reconcileHostBoot();
 
 		expect(reconnecting.sort()).toEqual(
-			[held, unknown, noEvidence, alreadyReconnecting].map((row) => row.daemonId).sort(),
+			[held, unknown, noEvidence, alreadyReconnecting].map((row) => row.workspaceId).sort(),
 		);
 		for (const seeded of [held, unknown, noEvidence, alreadyReconnecting]) {
-			const row = fx.registry.get(seeded.daemonId)!;
+			const row = fx.registry.get(seeded.workspaceId)!;
 			expect(row.status).toBe("reconnecting");
 			expect(row.readyAt).toBeUndefined(); // stale facts cleared
 			expect(row.pid).toBeUndefined();
@@ -1569,7 +1576,7 @@ describe("host boot reconciliation", () => {
 				.list()
 				.some(
 					(event) =>
-						event.daemonId === held.daemonId &&
+						event.workspaceId === held.workspaceId &&
 						event.message === "boot reconcile: ready → reconnecting (local session alive)",
 				),
 		).toBe(true);
@@ -1578,7 +1585,7 @@ describe("host boot reconciliation", () => {
 				.list()
 				.some(
 					(event) =>
-						event.daemonId === unknown.daemonId &&
+						event.workspaceId === unknown.workspaceId &&
 						event.message === "boot reconcile: connecting → reconnecting (liveness unknown)",
 				),
 		).toBe(true);
@@ -1600,7 +1607,7 @@ describe("host boot reconciliation", () => {
 		expect(fx.lifecycle.reconcileHostBoot()).toEqual([]);
 
 		for (const seeded of [heldUnenrolled, unenrolledConnecting]) {
-			const row = fx.registry.get(seeded.daemonId)!;
+			const row = fx.registry.get(seeded.workspaceId)!;
 			expect(row.status).toBe("asleep");
 			expect(row.readyAt).toBeUndefined();
 			expect(row.pid).toBeUndefined();
@@ -1610,7 +1617,7 @@ describe("host boot reconciliation", () => {
 				.list()
 				.some(
 					(event) =>
-						event.daemonId === heldUnenrolled.daemonId &&
+						event.workspaceId === heldUnenrolled.workspaceId &&
 						event.message === "boot reconcile: ready → asleep (not enrolled)",
 				),
 		).toBe(true);
@@ -1619,10 +1626,10 @@ describe("host boot reconciliation", () => {
 	test("asleep and error rows and clone rows are left untouched", async () => {
 		const fx = await bootHarness();
 		const asleep = seedHostRow(fx, "asleep", { status: "asleep", enrolled: true });
-		fx.registry.setStatus(asleep.daemonId, "asleep", "stopped by operator");
+		fx.registry.setStatus(asleep.workspaceId, "asleep", "stopped by operator");
 		const errored = seedHostRow(fx, "errored", { status: "error", enrolled: true });
-		fx.registry.setStatus(errored.daemonId, "error", "daemon rejected the credential");
-		fx.registry.update(errored.daemonId, { readyAt: 1234, pid: deadPid });
+		fx.registry.setStatus(errored.workspaceId, "error", "session rejected the credential");
+		fx.registry.update(errored.workspaceId, { readyAt: 1234, pid: deadPid });
 		const clone = fx.registry.create({
 			name: "clone",
 			cwd: tempDir("host-lifecycle-boot-clone-"),
@@ -1632,7 +1639,7 @@ describe("host boot reconciliation", () => {
 			pid: deadPid,
 			workspace: { kind: "clone", projectId: "p1", desiredState: "running" },
 		});
-		fx.registry.setWorkspaceEnrollment(clone.daemonId, {
+		fx.registry.setWorkspaceEnrollment(clone.workspaceId, {
 			credentialHash: "b".repeat(64),
 			generation: 1,
 		});
@@ -1641,13 +1648,13 @@ describe("host boot reconciliation", () => {
 		expect(fx.lifecycle.reconcileHostBoot()).toEqual([]);
 
 		expect(fx.registry.list()).toEqual(before);
-		expect(fx.registry.get(errored.daemonId)).toMatchObject({
+		expect(fx.registry.get(errored.workspaceId)).toMatchObject({
 			status: "error",
-			error: "daemon rejected the credential",
+			error: "session rejected the credential",
 			readyAt: 1234,
 			pid: deadPid,
 		});
-		expect(fx.registry.get(clone.daemonId)).toMatchObject({ status: "ready", readyAt: 5678 });
+		expect(fx.registry.get(clone.workspaceId)).toMatchObject({ status: "ready", readyAt: 5678 });
 		expect(
 			fx.eventLog.list().filter((event) => event.message.startsWith("boot reconcile")),
 		).toEqual([]);

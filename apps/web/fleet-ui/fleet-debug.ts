@@ -16,7 +16,7 @@ type FleetLogEntry = {
 	level: FleetLevel;
 	source: string;
 	message: string;
-	daemonId?: string;
+	workspaceId?: string;
 };
 
 type FleetPair = {
@@ -26,7 +26,7 @@ type FleetPair = {
 };
 
 type FleetSession = {
-	daemonId?: string;
+	workspaceId?: string;
 	name?: string;
 	status?: string;
 	mode?: string;
@@ -79,7 +79,7 @@ function normalizeFleet(raw: unknown): FleetDebug | null {
 			if (!r) continue;
 			const pair = asRecord(r.pair);
 			sessions.push({
-				daemonId: asString(r.daemonId),
+				workspaceId: asString(r.workspaceId),
 				name: asString(r.name),
 				status: asString(r.status),
 				mode: asString(r.mode),
@@ -109,13 +109,13 @@ function normalizeFleet(raw: unknown): FleetDebug | null {
 			if (level !== "info" && level !== "warn" && level !== "error") continue;
 			const message = asString(r.message);
 			if (message === undefined) continue;
-			const daemonId = asString(r.daemonId);
+			const workspaceId = asString(r.workspaceId);
 			log.push({
 				ts: asNumber(r.ts) ?? 0,
 				level,
 				source: asString(r.source) ?? "fleet",
 				message,
-				...(daemonId !== undefined ? { daemonId } : {}),
+				...(workspaceId !== undefined ? { workspaceId } : {}),
 			});
 		}
 	}

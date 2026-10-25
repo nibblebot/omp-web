@@ -1,4 +1,4 @@
-# Session runtime image (P5.4): the containerized omp-session daemon for the
+# Session runtime image (P5.4): the containerized omp-session process for the
 # kubernetes provider (apps/fleet/kubernetes-provider.ts).
 #
 # Build from the repo root (the COPY sources are context-relative):
@@ -11,13 +11,13 @@
 #   - /workspace holds the per-workspace PVC volume. Layout matches the
 #     fleet-local volume:
 #     .omp-workspace-init.json, .checkout/, .home/.
-#   - The daemon is started by entrypoint.sh, which execs the SAME runtime
+#   - The session is started by entrypoint.sh, which execs the SAME runtime
 #     entry the bwrap provider runs fleet-side (apps/session/index.ts) so
 #     behavior matches across providers.
 #   - No secret material is baked in: model/tool credentials arrive as
 #     secretKeyRef env (profile.secretRefs) and the fleet callback
 #     enrollment arrives as pod env from callback-env.json and is handed to
-#     the daemon on stdin (--fleet-stdin). Kubernetes
+#     the session on stdin (--fleet-stdin). Kubernetes
 #     credentials (service-account tokens) are not mounted.
 #   - The container is unprivileged: read-only rootfs, no capabilities,
 #     runAsUser 10001, /workspace + /tmp writable. The PVC is chowned to
@@ -40,7 +40,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/omp-web
 COPY --from=deps /opt/omp-web/node_modules ./node_modules
-# Session sources the daemon needs: root metadata for version lookup and #lib
+# Session sources the session needs: root metadata for version lookup and #lib
 # package imports, with the apps/ and closed lib/ directory layouts preserved.
 # (fleet bwrap parity: the entry is apps/session/index.ts.)
 COPY package.json ./

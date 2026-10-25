@@ -3,7 +3,7 @@
  * (listing only; explicit navigation into a dot-dir still works), hasGit
  * for `.git` as directory AND file, the truncation cap (stubbed via the
  * cap option), `~` expansion, missing/not-a-directory errors, and symlink
- * canonicalization. No git, no daemons.
+ * canonicalization. No git, no sessions.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";

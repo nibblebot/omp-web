@@ -4,7 +4,7 @@ import { OMP_PROTO } from "#lib/wire/protocol";
 
 /**
  * R14 gate of the standalone session's listener, pure so every refusal is
- * testable without a non-loopback peer. Loopback peers are exempt; a daemon
+ * testable without a non-loopback peer. Loopback peers are exempt; a session
  * started without a token is open (it refuses to bind off-loopback without
  * one); otherwise the peer must present the token.
  */
@@ -32,7 +32,7 @@ export function bearerHeaderOk(header: string | null, token: string): boolean {
 export interface ClientCredentials {
 	/** True when the socket peer address is loopback (127.0.0.0/8, ::1). */
 	loopback: boolean;
-	/** The daemon's token; undefined = none configured. */
+	/** The session's token; undefined = none configured. */
 	token: string | undefined;
 	/** The request's Authorization header. */
 	authorization: string | null;

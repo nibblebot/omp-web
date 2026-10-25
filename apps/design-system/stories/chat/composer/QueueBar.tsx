@@ -1,6 +1,6 @@
 import { QueueBar } from "../../../../web/components/chat/composer/QueueBar";
 import { setState } from "../../../../web/state";
-import { answerCalls } from "../../../daemon";
+import { answerCalls } from "../../../session";
 import {
 	screenPausedQueue,
 	screenQueuedMessages,

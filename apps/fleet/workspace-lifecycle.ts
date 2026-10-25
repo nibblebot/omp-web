@@ -87,7 +87,7 @@ import {
 	OMP_SESSION_EXIT_RESUME_FAILED,
 	OMP_SESSION_EXIT_SESSION_LOCKED,
 	type CloneFetchResult,
-	type DaemonStatus,
+	type SessionStatus,
 	type LifecycleStage,
 	type RegisteredProject,
 } from "#lib/wire/protocol";
@@ -101,7 +101,7 @@ import {
 	type ProviderCapabilities,
 } from "#lib/runtime/provider-protocol";
 import { readCallbackEnv } from "#lib/runtime/provider-callback-env";
-import type { DaemonTransportRegistry } from "./daemon-transport";
+import type { SessionTransportRegistry } from "./session-transport";
 import type { FleetLogStore } from "./log-store";
 import type { FleetEventLog } from "./events";
 import type { WorkspaceResourceDeleter } from "./server";
@@ -116,7 +116,7 @@ import {
 	releaseSessionCredential,
 	requestSessionShutdown,
 } from "./session-credential";
-import { PROVIDER_DAEMON_LOG, readSessionLogTail } from "./session-log";
+import { readProviderLogTail, readSessionLogTail } from "./session-log";
 import { fillTemplate, shellQuote } from "./spawn-parse";
 import { realpathOf } from "./worktrees";
 import {
@@ -193,7 +193,7 @@ interface WorkspaceLifecycleDeps {
 	statePath: string;
 	/** Private volume allocation root beside this fleet's selected state file. */
 	cloneRoot: string;
-	transport: DaemonTransportRegistry;
+	transport: SessionTransportRegistry;
 	/** Fleet log store; null when the logs dir was unwritable at boot. */
 	logStore: FleetLogStore | null;
 	/** Post-verification volume deleter (default = local volume removal). */
@@ -206,7 +206,7 @@ interface WorkspaceLifecycleDeps {
 	 * the void.
 	 */
 	attachLogTap(workspaceId: string): void;
-	/** Fleet callback base URL the sandbox daemon dials (http loopback dev). */
+	/** Fleet callback base URL the sandbox session dials (http loopback dev). */
 	callbackUrl(): string;
 	/** Runtime supervision overrides (defaults: restart-policy.ts, registry PAIR_LOSS_GRACE_MS). */
 	runtime?: Partial<CloneRuntimePolicy>;
@@ -214,9 +214,9 @@ interface WorkspaceLifecycleDeps {
 	 * Fired after each host start enrolls the row's callback credential, so the
 	 * server can watch the row's pair for status (covers edge-initiated spawns).
 	 */
-	onEnrolled?: (daemonId: string) => void;
+	onEnrolled?: (workspaceId: string) => void;
 	/** Fired once a host spawn created a row, so the server can probe its git state before the next poll tick. */
-	onSpawned?: (daemonId: string) => void;
+	onSpawned?: (workspaceId: string) => void;
 	/** Overrides PAIR_TIMEOUT_MS (tests). */
 	pairTimeoutMs?: number;
 }
@@ -569,7 +569,7 @@ export class WorkspaceLifecycle {
 	readonly #deps: WorkspaceLifecycleDeps;
 	/** Workspaces with a verified delete gate in flight (serializes DELETEs). */
 	readonly #deleting = new Set<string>();
-	/** Per-daemon FIFO tails: lifecycle ops on one clone run strictly in order. */
+	/** Per-session FIFO tails: lifecycle ops on one clone run strictly in order. */
 	readonly #queues = new Map<string, Promise<void>>();
 	/** Runtime watches: one per desired-running clone (tick or restart-backoff timer each). */
 	readonly #watches = new Map<string, RuntimeWatch>();
@@ -586,16 +586,16 @@ export class WorkspaceLifecycle {
 		this.#hostProvider = new HostRuntimeProvider((exit) => this.#onHostExit(exit));
 	}
 
-	/** Runs `fn` after every earlier lifecycle op queued for this daemon. */
-	#serialized<T>(daemonId: string, fn: () => Promise<T>): Promise<T> {
-		const run = (this.#queues.get(daemonId) ?? Promise.resolve()).then(fn);
+	/** Runs `fn` after every earlier lifecycle op queued for this session. */
+	#serialized<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
+		const run = (this.#queues.get(workspaceId) ?? Promise.resolve()).then(fn);
 		const tail = run.then(
 			() => undefined,
 			() => undefined,
 		);
-		this.#queues.set(daemonId, tail);
+		this.#queues.set(workspaceId, tail);
 		void tail.then(() => {
-			if (this.#queues.get(daemonId) === tail) this.#queues.delete(daemonId);
+			if (this.#queues.get(workspaceId) === tail) this.#queues.delete(workspaceId);
 		});
 		return run;
 	}
@@ -707,8 +707,8 @@ export class WorkspaceLifecycle {
 			projectId,
 			status: "asleep",
 		});
-		const daemonId = created.daemonId;
-		const volumeRoot = join(this.#deps.cloneRoot, daemonId);
+		const workspaceId = created.workspaceId;
+		const volumeRoot = join(this.#deps.cloneRoot, workspaceId);
 
 		// Persist source/profile/desiredState BEFORE any retry-prone step.
 		const record: WorkspaceRecord = {
@@ -719,17 +719,17 @@ export class WorkspaceLifecycle {
 			profileId,
 			desiredState: start ? "running" : "stopped",
 		};
-		registry.update(daemonId, {
+		registry.update(workspaceId, {
 			cwd: volumeRoot,
 			lifecycleStage: "preparation",
 			lifecycleError: undefined,
 		});
-		registry.setWorkspace(daemonId, record);
+		registry.setWorkspace(workspaceId, record);
 		this.#deps.eventLog.add(
 			"info",
 			"server",
-			`clone ${daemonId} created (${profile.provider})`,
-			daemonId,
+			`clone ${workspaceId} created (${profile.provider})`,
+			workspaceId,
 		);
 
 		// Resolve the pin ONCE, for EVERY profile (fleet-owned pin
@@ -755,10 +755,10 @@ export class WorkspaceLifecycle {
 			// Nothing streamed and nothing retained: drop the fresh entry +
 			// volume (no preparation happened yet); the typed failure is the
 			// whole story.
-			this.#removeEntryAndVolume(daemonId, volumeRoot);
+			this.#removeEntryAndVolume(workspaceId, volumeRoot);
 			throw new CloneLifecycleError(code, `cannot resolve clone pin: ${message}`);
 		}
-		registry.updateWorkspace(daemonId, { pinnedRevision });
+		registry.updateWorkspace(workspaceId, { pinnedRevision });
 
 		// Preparation. Profiles whose capability is fleet preparation (bwrap, host)
 		// prepare the volume here; provider-prepared profiles (kubernetes)
@@ -768,7 +768,7 @@ export class WorkspaceLifecycle {
 		if (PROVIDER_CAPABILITIES[profile.provider].preparation === "fleet") {
 			try {
 				await prepareWorkspace({
-					workspaceId: daemonId,
+					workspaceId,
 					workspaceRoot: volumeRoot,
 					source,
 					branch,
@@ -785,7 +785,7 @@ export class WorkspaceLifecycle {
 				const message = err instanceof Error ? err.message : String(err);
 				// Nothing streamed and nothing retained: drop the partial
 				// entry + volume; the typed failure is the whole story.
-				this.#removeEntryAndVolume(daemonId, volumeRoot);
+				this.#removeEntryAndVolume(workspaceId, volumeRoot);
 				throw new CloneLifecycleError(
 					code === "invalid_request" || code === "conflict" || code === "provider_failed"
 						? code
@@ -801,21 +801,21 @@ export class WorkspaceLifecycle {
 			// transient "preparation" so the roster never shows an eternal
 			// pulsing stage for a deliberately parked clone (start will set
 			// preparation→runtime→callback→ready on wake).
-			registry.update(daemonId, { lifecycleStage: undefined, lifecycleError: undefined });
+			registry.update(workspaceId, { lifecycleStage: undefined, lifecycleError: undefined });
 			this.#deps.eventLog.add(
 				"info",
 				"server",
-				`clone ${daemonId} prepared at ${pinnedRevision} (stopped)`,
-				daemonId,
+				`clone ${workspaceId} prepared at ${pinnedRevision} (stopped)`,
+				workspaceId,
 			);
-			return registry.get(daemonId) ?? created;
+			return registry.get(workspaceId) ?? created;
 		}
 
 		// Start immediately: run the ensure path. A start failure after a
 		// successful preparation keeps the entry (typed failed stage): the
 		// volume + pin are durable and expensive; start retries in place.
 		try {
-			await this.#ensure(registry.get(daemonId) ?? registry.update(daemonId, {}), {
+			await this.#ensure(registry.get(workspaceId) ?? registry.update(workspaceId, {}), {
 				firstStart: true,
 			});
 		} catch (err) {
@@ -826,20 +826,20 @@ export class WorkspaceLifecycle {
 						? this.#codeForEnsureFailure(err)
 						: "provider_failed";
 			const message = err instanceof Error ? err.message : String(err);
-			this.#setStage(daemonId, "failed", `${code}: ${message}`);
-			registry.updateWorkspace(daemonId, { desiredState: "stopped" });
+			this.#setStage(workspaceId, "failed", `${code}: ${message}`);
+			registry.updateWorkspace(workspaceId, { desiredState: "stopped" });
 			this.#deps.eventLog.add(
 				"warn",
 				"server",
-				`clone ${daemonId} start after create failed (${code}): ${message}`,
-				daemonId,
+				`clone ${workspaceId} start after create failed (${code}): ${message}`,
+				workspaceId,
 			);
 			throw new CloneLifecycleError(
 				code,
-				`clone ${daemonId} prepared but start failed (${code}): ${message}; retry with start, or delete to remove it`,
+				`clone ${workspaceId} prepared but start failed (${code}): ${message}; retry with start, or delete to remove it`,
 			);
 		}
-		return registry.get(daemonId) ?? created;
+		return registry.get(workspaceId) ?? created;
 	}
 
 	// ------------------------------------------------------------------
@@ -857,10 +857,10 @@ export class WorkspaceLifecycle {
 	 * host session, a stored session id or file for a clone); absent = the
 	 * workspace's own last session.
 	 */
-	start(daemonId: string, opts?: StartOptions): Promise<void> {
-		const entry = this.#require(daemonId);
+	start(workspaceId: string, opts?: StartOptions): Promise<void> {
+		const entry = this.#require(workspaceId);
 		if (entry.workspace?.kind === "clone") {
-			return this.#startClone(daemonId, { resumeSessionId: opts?.resume });
+			return this.#startClone(workspaceId, { resumeSessionId: opts?.resume });
 		}
 		return this.#ensureHostRunning(entry, { resumeFile: opts?.resume });
 	}
@@ -875,16 +875,17 @@ export class WorkspaceLifecycle {
 	 * fails still flips the row to asleep before the error surfaces (never
 	 * left "ready" over a dead child).
 	 */
-	async stop(daemonId: string): Promise<void> {
-		const entry = this.#require(daemonId);
+	async stop(workspaceId: string): Promise<void> {
+		const entry = this.#require(workspaceId);
 		if (entry.workspace?.kind === "clone") {
-			await this.#serialized(daemonId, () => this.#stopClone(daemonId));
+			await this.#serialized(workspaceId, () => this.#stopClone(workspaceId));
 			return;
 		}
 		try {
-			await this.#serialized(daemonId, () => this.#stopHost(daemonId));
+			await this.#serialized(workspaceId, () => this.#stopHost(workspaceId));
 		} catch (err) {
-			if (this.#deps.registry.get(daemonId)) this.#deps.registry.setStatus(daemonId, "asleep");
+			if (this.#deps.registry.get(workspaceId))
+				this.#deps.registry.setStatus(workspaceId, "asleep");
 			throw err;
 		}
 	}
@@ -898,11 +899,11 @@ export class WorkspaceLifecycle {
 	 * caller's, because the worktree guards (worktrees.ts deleteWorktree: linked,
 	 * clean, no force, `git branch -d`) and the pair/orphan bookkeeping wrap it.
 	 */
-	async delete(daemonId: string): Promise<{ removed: string; verified: string[] }> {
-		const entry = this.#require(daemonId);
-		if (entry.workspace?.kind === "clone") return await this.#deleteGate(daemonId);
-		await this.#deleteHost(daemonId);
-		return { removed: daemonId, verified: [] };
+	async delete(workspaceId: string): Promise<{ removed: string; verified: string[] }> {
+		const entry = this.#require(workspaceId);
+		if (entry.workspace?.kind === "clone") return await this.#deleteGate(workspaceId);
+		await this.#deleteHost(workspaceId);
+		return { removed: workspaceId, verified: [] };
 	}
 
 	/**
@@ -915,7 +916,7 @@ export class WorkspaceLifecycle {
 	 * should boot into (the edge pre-validates it against the fleet store
 	 * listing). Fleet-visible volumes (bwrap, host): the wake materializes that
 	 * session's cold/missing stored transcripts into the volume and hands the
-	 * daemon the resolved main-file path as OMP_SESSION_RESUME (the runtime
+	 * session the resolved main-file path as OMP_SESSION_RESUME (the runtime
 	 * sees the host path). Volumes the fleet cannot read (kubernetes): the
 	 * hint is an in-pod path from the session's own report
 	 * (`lastSessionFile`) or the store lineage, and the pod validates it at
@@ -927,12 +928,12 @@ export class WorkspaceLifecycle {
 	 * EXPLICIT id that exists nowhere is a typed `unavailable`, never a
 	 * silent fresh boot.
 	 */
-	async #startClone(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void> {
-		await this.#serialized(daemonId, () => this.#ensureRunning(daemonId, opts));
+	async #startClone(workspaceId: string, opts?: { resumeSessionId?: string }): Promise<void> {
+		await this.#serialized(workspaceId, () => this.#ensureRunning(workspaceId, opts));
 	}
 
-	async #ensureRunning(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void> {
-		let entry = this.#requireClone(daemonId, "start");
+	async #ensureRunning(workspaceId: string, opts?: { resumeSessionId?: string }): Promise<void> {
+		let entry = this.#requireClone(workspaceId, "start");
 		const deletion = entry.workspace?.deletion;
 		if (deletion !== undefined) {
 			// A refused delete that ran no destructive step (no read-only store
@@ -942,26 +943,26 @@ export class WorkspaceLifecycle {
 			// retry completes.
 			const destructive =
 				deletion.remainingResources !== undefined ||
-				this.#deps.logStore?.isReadOnly(daemonId) === true;
+				this.#deps.logStore?.isReadOnly(workspaceId) === true;
 			if (deletion.state !== "delete-pending-retry" || destructive) {
 				throw new CloneLifecycleError(
 					deletion.state === "delete-pending-retry" ? "archive_pending" : "conflict",
-					`workspace ${daemonId} is being deleted (${deletion.state}); cannot start`,
+					`workspace ${workspaceId} is being deleted (${deletion.state}); cannot start`,
 				);
 			}
-			this.#deps.registry.clearWorkspaceDeletion(daemonId);
-			entry = this.#deps.registry.get(daemonId) ?? entry;
+			this.#deps.registry.clearWorkspaceDeletion(workspaceId);
+			entry = this.#deps.registry.get(workspaceId) ?? entry;
 		}
 		await this.#ensure(entry, { firstStart: false, resumeSessionId: opts?.resumeSessionId });
 	}
 
-	async #stopClone(daemonId: string): Promise<void> {
-		const entry = this.#requireClone(daemonId, "stop");
+	async #stopClone(workspaceId: string): Promise<void> {
+		const entry = this.#requireClone(workspaceId, "stop");
 		const record = entry.workspace;
 		if (record?.deletion?.state !== undefined) {
 			throw new CloneLifecycleError(
 				"conflict",
-				`workspace ${daemonId} is being deleted (${record.deletion.state}); stop is not available`,
+				`workspace ${workspaceId} is being deleted (${record.deletion.state}); stop is not available`,
 			);
 		}
 		const generation = record?.authorizedGeneration;
@@ -969,34 +970,34 @@ export class WorkspaceLifecycle {
 		if (generation !== undefined) {
 			// #runCloneOp throws a typed CloneLifecycleError on provider
 			// failure; an ok response here proves the generation terminated.
-			const response = await this.#runCloneOp(entry.daemonId, "stop", handle);
+			const response = await this.#runCloneOp(entry.workspaceId, "stop", handle);
 			if (response.observed === "running") {
 				// The provider failed to prove termination: a running
 				// process would violate the desired stopped state.
 				throw new CloneLifecycleError(
 					"conflict",
-					`stop of ${daemonId} could not prove termination (observed running)`,
+					`stop of ${workspaceId} could not prove termination (observed running)`,
 				);
 			}
 		}
-		this.#deps.registry.updateWorkspace(daemonId, { desiredState: "stopped" });
-		this.#disposeWatch(daemonId);
-		this.#deps.registry.setStatus(daemonId, "asleep");
+		this.#deps.registry.updateWorkspace(workspaceId, { desiredState: "stopped" });
+		this.#disposeWatch(workspaceId);
+		this.#deps.registry.setStatus(workspaceId, "asleep");
 		// A stopped workspace has no active lifecycle stage (stop cleared
 		// it): start/wake re-runs preparation→runtime→callback→ready.
-		this.#deps.registry.update(daemonId, {
+		this.#deps.registry.update(workspaceId, {
 			lifecycleStage: undefined,
 			lifecycleError: undefined,
 		});
 		if (generation !== undefined) {
-			this.#deps.transport.revokeEnrollment(daemonId, generation);
-			this.#deps.registry.clearWorkspaceEnrollment(daemonId, generation);
+			this.#deps.transport.revokeEnrollment(workspaceId, generation);
+			this.#deps.registry.clearWorkspaceEnrollment(workspaceId, generation);
 		}
 		this.#deps.eventLog.add(
 			"info",
 			"server",
-			`clone ${daemonId} stopped (gen ${generation ?? "never-started"})`,
-			daemonId,
+			`clone ${workspaceId} stopped (gen ${generation ?? "never-started"})`,
+			workspaceId,
 		);
 	}
 
@@ -1010,31 +1011,31 @@ export class WorkspaceLifecycle {
 	 * checked out in any worktree of the project, or the update is not a
 	 * fast-forward. Only committed work travels: a dirty tree stays behind.
 	 */
-	async fetchCloneIntoProject(daemonId: string): Promise<CloneFetchResult> {
-		return await this.#serialized(daemonId, () => this.#fetchIntoProject(daemonId));
+	async fetchCloneIntoProject(workspaceId: string): Promise<CloneFetchResult> {
+		return await this.#serialized(workspaceId, () => this.#fetchIntoProject(workspaceId));
 	}
 
-	async #fetchIntoProject(daemonId: string): Promise<CloneFetchResult> {
-		const entry = this.#requireClone(daemonId, "fetch into project");
+	async #fetchIntoProject(workspaceId: string): Promise<CloneFetchResult> {
+		const entry = this.#requireClone(workspaceId, "fetch into project");
 		const record = entry.workspace;
 		if (record?.deletion?.state !== undefined) {
 			throw new CloneLifecycleError(
 				"conflict",
-				`workspace ${daemonId} is being deleted (${record.deletion.state}); fetch is not available`,
+				`workspace ${workspaceId} is being deleted (${record.deletion.state}); fetch is not available`,
 			);
 		}
 		const { profile } = this.#cloneProfile(entry);
 		if (!PROVIDER_CAPABILITIES[profile.provider].volumeFleetVisible) {
 			throw new CloneLifecycleError(
 				"invalid_request",
-				`clone ${daemonId} runs on a ${profile.provider} provider whose volume the fleet cannot read; its work leaves through its remote`,
+				`clone ${workspaceId} runs on a ${profile.provider} provider whose volume the fleet cannot read; its work leaves through its remote`,
 			);
 		}
 		const sourceLocal = record?.source?.local;
 		if (sourceLocal === undefined) {
 			throw new CloneLifecycleError(
 				"invalid_request",
-				`clone ${daemonId} has a remote source; it pushes upstream from inside its runtime`,
+				`clone ${workspaceId} has a remote source; it pushes upstream from inside its runtime`,
 			);
 		}
 		const project = this.#deps.registry.projects().find((p) => p.projectId === record?.projectId);
@@ -1050,12 +1051,12 @@ export class WorkspaceLifecycle {
 		if (realpathOrResolve(sourceLocal) !== realpathOrResolve(project.path)) {
 			throw new CloneLifecycleError(
 				"invalid_request",
-				`clone ${daemonId} was cloned from ${sourceLocal}, not the project's local path ${project.path}`,
+				`clone ${workspaceId} was cloned from ${sourceLocal}, not the project's local path ${project.path}`,
 			);
 		}
 		const branch = record?.branch;
 		if (branch === undefined || branch === "") {
-			throw new CloneLifecycleError("invalid_request", `clone ${daemonId} records no branch`);
+			throw new CloneLifecycleError("invalid_request", `clone ${workspaceId} records no branch`);
 		}
 		const ref = `refs/heads/${branch}`;
 		const valid = await runGit(["check-ref-format", ref], project.path);
@@ -1066,14 +1067,14 @@ export class WorkspaceLifecycle {
 		if (!existsSync(join(checkoutDir, ".git"))) {
 			throw new CloneLifecycleError(
 				"unavailable",
-				`clone ${daemonId} has no prepared checkout to fetch from`,
+				`clone ${workspaceId} has no prepared checkout to fetch from`,
 			);
 		}
 		const cloneTip = await gitTip(checkoutDir, ref);
 		if (cloneTip === undefined) {
 			throw new CloneLifecycleError(
 				"conflict",
-				`clone ${daemonId} has no local branch "${branch}" (its checkout is on another branch or the branch was renamed)`,
+				`clone ${workspaceId} has no local branch "${branch}" (its checkout is on another branch or the branch was renamed)`,
 			);
 		}
 
@@ -1096,7 +1097,7 @@ export class WorkspaceLifecycle {
 		const projectTip = await gitTip(project.path, ref);
 		if (projectTip === cloneTip) {
 			return {
-				daemonId,
+				workspaceId,
 				branch,
 				projectPath: project.path,
 				outcome: "up-to-date",
@@ -1136,17 +1137,17 @@ export class WorkspaceLifecycle {
 			const detail = fetched.stderr.trim().split("\n")[0] ?? "";
 			throw new CloneLifecycleError(
 				"provider_failed",
-				`git fetch of "${branch}" from clone ${daemonId} failed (exit ${fetched.exitCode})${detail !== "" ? `: ${detail}` : ""}`,
+				`git fetch of "${branch}" from clone ${workspaceId} failed (exit ${fetched.exitCode})${detail !== "" ? `: ${detail}` : ""}`,
 			);
 		}
 		const commit = (await gitTip(project.path, ref)) ?? cloneTip;
 		this.#log(
 			"info",
-			`clone ${daemonId} branch ${branch} fetched into ${project.path} (${projectTip === undefined ? "created" : "fast-forward"} ${commit.slice(0, 12)})`,
-			daemonId,
+			`clone ${workspaceId} branch ${branch} fetched into ${project.path} (${projectTip === undefined ? "created" : "fast-forward"} ${commit.slice(0, 12)})`,
+			workspaceId,
 		);
 		return {
-			daemonId,
+			workspaceId,
 			branch,
 			projectPath: project.path,
 			outcome: projectTip === undefined ? "created" : "updated",
@@ -1175,20 +1176,20 @@ export class WorkspaceLifecycle {
 	async reconcile(): Promise<void> {
 		for (const entry of this.#deps.registry.list()) {
 			if (entry.workspace?.kind !== "clone") continue;
-			await this.#serialized(entry.daemonId, () => this.#reconcileOne(entry.daemonId));
+			await this.#serialized(entry.workspaceId, () => this.#reconcileOne(entry.workspaceId));
 		}
 	}
 
-	/** One clone's boot reconcile; runs under its per-daemon queue. */
-	async #reconcileOne(daemonId: string): Promise<void> {
-		const entry = this.#deps.registry.get(daemonId);
+	/** One clone's boot reconcile; runs under its per-session queue. */
+	async #reconcileOne(workspaceId: string): Promise<void> {
+		const entry = this.#deps.registry.get(workspaceId);
 		if (entry?.workspace?.kind !== "clone") return;
 		const record = entry.workspace;
 		// A persisted "deleting" state describes an in-flight gate of a
 		// previous fleet process; nothing is running now, so it
 		// reconciles to delete-pending-retry (retry by deleting again).
 		if (record.deletion?.state === "deleting") {
-			this.#deps.registry.setWorkspaceDeletion(entry.daemonId, {
+			this.#deps.registry.setWorkspaceDeletion(entry.workspaceId, {
 				state: "delete-pending-retry",
 				requestedAt: record.deletion.requestedAt,
 				error: {
@@ -1206,58 +1207,58 @@ export class WorkspaceLifecycle {
 		try {
 			// #runCloneOp throws a typed CloneLifecycleError on provider
 			// failure; an ok response here is a trustworthy observation.
-			response = await this.#runCloneOp(entry.daemonId, "inspect", this.#handleOf(entry));
+			response = await this.#runCloneOp(entry.workspaceId, "inspect", this.#handleOf(entry));
 		} catch (err) {
 			this.#log(
 				"warn",
-				`clone boot reconcile: inspect failed for ${entry.daemonId}: ${err instanceof Error ? err.message : String(err)}`,
-				entry.daemonId,
+				`clone boot reconcile: inspect failed for ${entry.workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
+				entry.workspaceId,
 			);
 			return;
 		}
 		if (response.observed === "running") {
 			// Reattach: same generation, refresh handle, surface liveness.
-			this.#deps.registry.updateWorkspace(entry.daemonId, { providerHandle: response.handle });
-			this.#deps.registry.setStatus(entry.daemonId, "ready");
-			this.#setStage(entry.daemonId, "ready");
-			this.#armRuntimeWatch(entry.daemonId, { restartable: true, resume: false });
+			this.#deps.registry.updateWorkspace(entry.workspaceId, { providerHandle: response.handle });
+			this.#deps.registry.setStatus(entry.workspaceId, "ready");
+			this.#setStage(entry.workspaceId, "ready");
+			this.#armRuntimeWatch(entry.workspaceId, { restartable: true, resume: false });
 			this.#log(
 				"info",
-				`clone boot reconcile: ${entry.daemonId} reattached (running)`,
-				entry.daemonId,
+				`clone boot reconcile: ${entry.workspaceId} reattached (running)`,
+				entry.workspaceId,
 			);
 			return;
 		}
 		// stopped | missing: desired state decides.
 		if (desired === "running") {
 			try {
-				await this.#ensure(this.#deps.registry.get(entry.daemonId) ?? entry, {
+				await this.#ensure(this.#deps.registry.get(entry.workspaceId) ?? entry, {
 					firstStart: false,
 				});
 				this.#log(
 					"info",
-					`clone boot reconcile: ${entry.daemonId} recreated (${response.observed} → ensure-running)`,
-					entry.daemonId,
+					`clone boot reconcile: ${entry.workspaceId} recreated (${response.observed} → ensure-running)`,
+					entry.workspaceId,
 				);
 			} catch (err) {
 				this.#log(
 					"warn",
-					`clone boot reconcile: ensure-running failed for ${entry.daemonId}: ${err instanceof Error ? err.message : String(err)}`,
-					entry.daemonId,
+					`clone boot reconcile: ensure-running failed for ${entry.workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
+					entry.workspaceId,
 				);
 			}
 		} else {
 			this.#log(
 				"info",
-				`clone boot reconcile: ${entry.daemonId} left ${response.observed} (desired stopped)`,
-				entry.daemonId,
+				`clone boot reconcile: ${entry.workspaceId} left ${response.observed} (desired stopped)`,
+				entry.workspaceId,
 			);
 		}
 	}
 
 	/** Cancel timers (server close()); never stops provider compute. */
 	close(): void {
-		for (const daemonId of [...this.#watches.keys()]) this.#disposeWatch(daemonId);
+		for (const workspaceId of [...this.#watches.keys()]) this.#disposeWatch(workspaceId);
 		// Host sessions outlive the control plane: timers and subscriptions end,
 		// children keep running and their enrollments persist.
 		for (const runtime of this.#hostRuntimes.values()) this.#disposeHostRuntime(runtime);
@@ -1271,7 +1272,7 @@ export class WorkspaceLifecycle {
 	/**
 	 * Ensure-running. Inspect-before-act, then:
 	 *   - running + persisted binding at the current generation → reattach:
-	 *     reuse the daemon's own credential (recovered from the state file),
+	 *     reuse the session's own credential (recovered from the state file),
 	 *     no generation bump, no replacement;
 	 *   - running + NO recoverable binding → replacement: prove the
 	 *     predecessor terminated (provider stop), THEN bump the generation
@@ -1288,12 +1289,12 @@ export class WorkspaceLifecycle {
 		entry: RegistryEntry,
 		opts: { firstStart: boolean; resumeSessionId?: string; recovery?: boolean },
 	): Promise<ProviderOkResponse> {
-		const daemonId = entry.daemonId;
+		const workspaceId = entry.workspaceId;
 		const record = entry.workspace;
 		if (record?.kind !== "clone") {
 			throw new CloneLifecycleError(
 				"invalid_request",
-				`daemon ${daemonId} is not a clone workspace (kind ${record?.kind ?? "legacy"}); start a worktree/direct session through /ctl/spawn`,
+				`session ${workspaceId} is not a clone workspace (kind ${record?.kind ?? "legacy"}); start a worktree/direct session through /ctl/spawn`,
 			);
 		}
 		// A workspace mid-deletion must not re-enroll (admission
@@ -1301,12 +1302,12 @@ export class WorkspaceLifecycle {
 		if (record.deletion?.state !== undefined) {
 			throw new CloneLifecycleError(
 				record.deletion.state === "delete-pending-retry" ? "archive_pending" : "conflict",
-				`workspace ${daemonId} is being deleted (${record.deletion.state}); cannot start`,
+				`workspace ${workspaceId} is being deleted (${record.deletion.state}); cannot start`,
 			);
 		}
 		const currentGen = record.authorizedGeneration;
 		const handle = this.#handleOf(entry);
-		this.#setStage(daemonId, "runtime");
+		this.#setStage(workspaceId, "runtime");
 
 		// Inspect first: a live sandbox must never be blindly recreated.
 		// #runCloneOp throws a typed CloneLifecycleError on provider failure
@@ -1314,7 +1315,7 @@ export class WorkspaceLifecycle {
 		let inspect: ProviderOkResponse | null = null;
 		if (currentGen !== undefined || handle !== undefined) {
 			try {
-				inspect = await this.#runCloneOp(entry.daemonId, "inspect", handle);
+				inspect = await this.#runCloneOp(entry.workspaceId, "inspect", handle);
 			} catch (err) {
 				// Inspect unavailable is NOT a license to recreate: an
 				// unknown predecessor blocks replacement.
@@ -1322,7 +1323,7 @@ export class WorkspaceLifecycle {
 					? err
 					: new CloneLifecycleError(
 							"unavailable",
-							`cannot inspect ${daemonId} before start: ${err instanceof Error ? err.message : String(err)}`,
+							`cannot inspect ${workspaceId} before start: ${err instanceof Error ? err.message : String(err)}`,
 						);
 			}
 		}
@@ -1332,7 +1333,7 @@ export class WorkspaceLifecycle {
 		if (inspect !== null && inspect.observed === "running" && currentGen !== undefined) {
 			// Reattach path. If the persisted binding matches this
 			// generation AND the state-file token is recoverable, reuse it:
-			// the daemon's live pair keeps its original credential.
+			// the session's live pair keeps its original credential.
 			if (record.enrollment !== undefined && record.enrollment.generation === currentGen) {
 				try {
 					reuseToken = this.#persistedCallbackToken(entry, currentGen);
@@ -1348,11 +1349,11 @@ export class WorkspaceLifecycle {
 				// predecessor terminated FIRST, then bump the generation.
 				// (#runCloneOp throws on a non-ok stop; observed running
 				// after an ok stop means termination is unproven.)
-				const stop = await this.#runCloneOp(entry.daemonId, "stop", handle);
+				const stop = await this.#runCloneOp(entry.workspaceId, "stop", handle);
 				if (stop.observed === "running") {
 					throw new CloneLifecycleError(
 						"conflict",
-						`cannot replace ${daemonId}: predecessor termination is uncertain (stop did not prove); no new writer admitted`,
+						`cannot replace ${workspaceId}: predecessor termination is uncertain (stop did not prove); no new writer admitted`,
 					);
 				}
 				generation = currentGen + 1;
@@ -1367,11 +1368,11 @@ export class WorkspaceLifecycle {
 		}
 		const reattached = reuseToken !== undefined && generation === currentGen;
 
-		// Wake resume: when this wake is spawning a NEW daemon process
+		// Wake resume: when this wake is spawning a NEW session process
 		// (not the reattach path), compute the resume target (fleet-visible volumes: also
 		// materialize cold/missing transcripts into the volume BEFORE the
 		// provider runs). The resume hint rides the callback-env handoff
-		// (OMP_SESSION_RESUME, allowlisted by the providers) so the daemon's
+		// (OMP_SESSION_RESUME, allowlisted by the providers) so the session's
 		// existing boot switchSession(config.resume) resumes it. Fleet-visible
 		// volumes (bwrap, host) get the host path the runtime sees; kubernetes gets
 		// the in-pod path (the provider injects the handoff as pod env) and the
@@ -1384,20 +1385,20 @@ export class WorkspaceLifecycle {
 				: await this.#resolveWakeResume(entry, opts);
 
 		// Enroll + persist the binding BEFORE ensure-running (a live
-		// credential must exist for the daemon's pair). Attach the log tap
+		// credential must exist for the session's pair). Attach the log tap
 		// at the same time so a fresh clone never streams into the void.
 		// Fencing: when the generation is BUMPED (predecessor proven
 		// terminated), revoke the OLD generation's enrollment first so a
 		// stale credential can never authenticate against the new runtime.
 		if (currentGen !== undefined && generation > currentGen) {
-			this.#deps.transport.revokeEnrollment(daemonId, currentGen);
-			this.#deps.registry.clearWorkspaceEnrollment(daemonId, currentGen);
+			this.#deps.transport.revokeEnrollment(workspaceId, currentGen);
+			this.#deps.registry.clearWorkspaceEnrollment(workspaceId, currentGen);
 		}
 		const credentialHex = reuseToken ?? randomBytes(ENROLLMENT_KEY_BYTES).toString("hex");
-		const digest = this.#deps.transport.enrollWorkspace(daemonId, generation, credentialHex);
-		this.#deps.registry.setWorkspaceEnrollment(daemonId, { credentialHash: digest, generation });
+		const digest = this.#deps.transport.enrollWorkspace(workspaceId, generation, credentialHex);
+		this.#deps.registry.setWorkspaceEnrollment(workspaceId, { credentialHash: digest, generation });
 		this.#writeCallbackEnv(entry, generation, credentialHex, resumeFile);
-		this.#deps.attachLogTap(daemonId);
+		this.#deps.attachLogTap(workspaceId);
 
 		try {
 			// #runCloneOp throws on a non-ok provider response; an ok
@@ -1406,34 +1407,39 @@ export class WorkspaceLifecycle {
 			// enrolled above but authorizedGeneration persists only after
 			// ensure succeeds; without it the request would carry the stale
 			// pre-bump generation and the provider would fence it.
-			const response = await this.#runCloneOp(entry.daemonId, "ensure-running", handle, generation);
-			this.#deps.registry.updateWorkspace(daemonId, {
+			const response = await this.#runCloneOp(
+				entry.workspaceId,
+				"ensure-running",
+				handle,
+				generation,
+			);
+			this.#deps.registry.updateWorkspace(workspaceId, {
 				providerHandle: response.handle,
 				authorizedGeneration: generation,
 				desiredState: "running",
 			});
 			if (response.observed === "running") {
-				this.#deps.registry.setStatus(daemonId, "ready");
-				this.#setStage(daemonId, "callback");
+				this.#deps.registry.setStatus(workspaceId, "ready");
+				this.#setStage(workspaceId, "callback");
 				// Runtime watch: callback → ready when the pair is observed
 				// live, and a runtime that later dies restarts (never blocks
 				// the caller). A reattached runtime already held a pair.
-				this.#armRuntimeWatch(daemonId, {
+				this.#armRuntimeWatch(workspaceId, {
 					restartable: reattached,
 					resume: opts.recovery === true,
 				});
 			}
 			this.#log(
 				"info",
-				`clone ${daemonId} ensured running (gen ${generation}, observed ${response.observed})`,
-				daemonId,
+				`clone ${workspaceId} ensured running (gen ${generation}, observed ${response.observed})`,
+				workspaceId,
 			);
 			return response;
 		} catch (err) {
 			// A failed start must not leave a live enrollment credential or
 			// a running desired state behind.
-			this.#deps.transport.revokeEnrollment(daemonId, generation);
-			this.#deps.registry.clearWorkspaceEnrollment(daemonId, generation);
+			this.#deps.transport.revokeEnrollment(workspaceId, generation);
+			this.#deps.registry.clearWorkspaceEnrollment(workspaceId, generation);
 			throw err;
 		}
 	}
@@ -1464,38 +1470,38 @@ export class WorkspaceLifecycle {
 	 * Any failure before verification persists delete-pending-retry with a
 	 * typed error and retains the workspace, its volume, and its store.
 	 */
-	async #deleteGate(daemonId: string): Promise<{ removed: string; verified: string[] }> {
-		const entry0 = this.#deps.registry.get(daemonId);
+	async #deleteGate(workspaceId: string): Promise<{ removed: string; verified: string[] }> {
+		const entry0 = this.#deps.registry.get(workspaceId);
 		if (!entry0) {
-			throw new CloneLifecycleError("invalid_request", `unknown daemon: ${daemonId}`);
+			throw new CloneLifecycleError("invalid_request", `unknown session: ${workspaceId}`);
 		}
 		if (entry0.workspace?.kind !== "clone") {
 			throw new CloneLifecycleError(
 				"invalid_request",
-				`daemon ${daemonId} is not a clone workspace; deletion routes by kind and this gate only owns clones`,
+				`session ${workspaceId} is not a clone workspace; deletion routes by kind and this gate only owns clones`,
 			);
 		}
-		if (this.#deleting.has(daemonId)) {
+		if (this.#deleting.has(workspaceId)) {
 			throw new CloneLifecycleError(
 				"conflict",
-				`deletion already in progress for workspace ${daemonId}`,
+				`deletion already in progress for workspace ${workspaceId}`,
 			);
 		}
-		this.#deleting.add(daemonId);
+		this.#deleting.add(workspaceId);
 		try {
-			return await this.#serialized(daemonId, () => this.#deleteAdmitted(daemonId));
+			return await this.#serialized(workspaceId, () => this.#deleteAdmitted(workspaceId));
 		} finally {
-			this.#deleting.delete(daemonId);
+			this.#deleting.delete(workspaceId);
 		}
 	}
 
-	/** Admission + gate for one clone, run under its per-daemon queue. */
-	async #deleteAdmitted(daemonId: string): Promise<{ removed: string; verified: string[] }> {
+	/** Admission + gate for one clone, run under its per-session queue. */
+	async #deleteAdmitted(workspaceId: string): Promise<{ removed: string; verified: string[] }> {
 		// Reconcile a persisted "deleting" from a crashed previous fleet.
-		let entry = this.#require(daemonId);
+		let entry = this.#require(workspaceId);
 		const previous = entry.workspace?.deletion;
 		if (previous?.state === "deleting") {
-			this.#deps.registry.setWorkspaceDeletion(daemonId, {
+			this.#deps.registry.setWorkspaceDeletion(workspaceId, {
 				state: "delete-pending-retry",
 				requestedAt: previous.requestedAt,
 				error: {
@@ -1503,7 +1509,7 @@ export class WorkspaceLifecycle {
 					message: "deletion was interrupted before verification completed; retry the delete",
 				},
 			});
-			entry = this.#deps.registry.get(daemonId) ?? entry;
+			entry = this.#deps.registry.get(workspaceId) ?? entry;
 		}
 
 		// Admission. For clones, "active work" is not derivable fleet-side:
@@ -1512,31 +1518,31 @@ export class WorkspaceLifecycle {
 		// message instead of risking mid-turn deletion. Explicitly stopped
 		// workspaces (asleep, desired stopped, enrollment revoked) pass.
 		const record = entry.workspace;
-		const pair = this.#deps.transport.pairStatus(daemonId);
+		const pair = this.#deps.transport.pairStatus(workspaceId);
 		const live =
 			entry.status === "ready" &&
 			(record?.desiredState === "running" || pair.enrolled || pair.paired);
 		if (live) {
 			throw new CloneLifecycleError(
 				"writer_active",
-				`workspace ${daemonId} is live with unobservable activity; stop current work (explicit stop) before deleting`,
+				`workspace ${workspaceId} is live with unobservable activity; stop current work (explicit stop) before deleting`,
 			);
 		}
 
-		return await this.#gate(daemonId);
+		return await this.#gate(workspaceId);
 	}
 
 	/** The gate body (runs under the #deleting serialization). */
-	async #gate(daemonId: string): Promise<{ removed: string; verified: string[] }> {
+	async #gate(workspaceId: string): Promise<{ removed: string; verified: string[] }> {
 		const { registry, logStore, eventLog } = this.#deps;
 		const requestedAt = Date.now();
-		let entry = this.#require(daemonId);
+		let entry = this.#require(workspaceId);
 		const previous = entry.workspace?.deletion;
 
 		// Durable "deleting" before ANY destructive step (registry identity is
 		// never removed early; cleanup state survives restart). Re-entry from delete-pending-retry keeps remaining
 		// resources across the retry.
-		registry.setWorkspaceDeletion(daemonId, {
+		registry.setWorkspaceDeletion(workspaceId, {
 			state: "deleting",
 			requestedAt,
 			...(previous?.remainingResources !== undefined
@@ -1551,15 +1557,15 @@ export class WorkspaceLifecycle {
 		// may still run while verification reads.
 		if (entry.workspace?.enrollment !== undefined) {
 			const gen = entry.workspace.enrollment.generation;
-			this.#deps.transport.revokeEnrollment(daemonId, gen);
-			registry.clearWorkspaceEnrollment(daemonId, gen);
+			this.#deps.transport.revokeEnrollment(workspaceId, gen);
+			registry.clearWorkspaceEnrollment(workspaceId, gen);
 		}
 		const gen = entry.workspace?.authorizedGeneration;
 		const everStarted = gen !== undefined || entry.workspace?.providerHandle !== undefined;
 		if (everStarted) {
 			let stop: ProviderOkResponse;
 			try {
-				stop = await this.#runCloneOp(entry.daemonId, "stop", this.#handleOf(entry));
+				stop = await this.#runCloneOp(entry.workspaceId, "stop", this.#handleOf(entry));
 			} catch (err) {
 				// #runCloneOp throws a typed CloneLifecycleError on provider
 				// failure; persist delete-pending-retry and retain everything.
@@ -1569,7 +1575,7 @@ export class WorkspaceLifecycle {
 					code: code === "conflict" ? "conflict" : "provider_failed",
 					message: `cannot quiesce compute before verification: ${message}`,
 				};
-				registry.setWorkspaceDeletion(daemonId, {
+				registry.setWorkspaceDeletion(workspaceId, {
 					state: "delete-pending-retry",
 					requestedAt,
 					error,
@@ -1577,13 +1583,13 @@ export class WorkspaceLifecycle {
 				eventLog.add(
 					"warn",
 					"server",
-					`delete ${daemonId} blocked: quiesce stop failed (${error.code}): ${error.message}`,
-					daemonId,
+					`delete ${workspaceId} blocked: quiesce stop failed (${error.code}): ${error.message}`,
+					workspaceId,
 				);
 				throw new CloneLifecycleError(error.code, error.message);
 			}
 			if (stop.observed === "running") {
-				registry.setWorkspaceDeletion(daemonId, {
+				registry.setWorkspaceDeletion(workspaceId, {
 					state: "delete-pending-retry",
 					requestedAt,
 					error: {
@@ -1593,25 +1599,25 @@ export class WorkspaceLifecycle {
 				});
 				throw new CloneLifecycleError(
 					"conflict",
-					`workspace ${daemonId} compute could not be proven terminated; deletion blocked`,
+					`workspace ${workspaceId} compute could not be proven terminated; deletion blocked`,
 				);
 			}
 			// The stopped generation is proven gone: persist the desired
 			// stopped state so no boot reconcile races the gate.
-			registry.updateWorkspace(daemonId, { desiredState: "stopped" });
-			registry.setStatus(daemonId, "asleep");
-			registry.update(daemonId, { lifecycleStage: undefined, lifecycleError: undefined });
-			entry = registry.get(daemonId) ?? entry;
+			registry.updateWorkspace(workspaceId, { desiredState: "stopped" });
+			registry.setStatus(workspaceId, "asleep");
+			registry.update(workspaceId, { lifecycleStage: undefined, lifecycleError: undefined });
+			entry = registry.get(workspaceId) ?? entry;
 		}
 
 		// Git guard, writers stopped: reject dirty files, untracked
 		// files, stashes, and unpreserved local history. No force override.
-		await this.#runGitGuard(daemonId);
+		await this.#runGitGuard(workspaceId);
 
 		// Store verification. When the fleet log store is absent, deletion
 		// cannot be verified and is blocked (everything retained).
 		if (logStore === null) {
-			registry.setWorkspaceDeletion(daemonId, {
+			registry.setWorkspaceDeletion(workspaceId, {
 				state: "delete-pending-retry",
 				requestedAt,
 				error: {
@@ -1621,16 +1627,16 @@ export class WorkspaceLifecycle {
 			});
 			throw new CloneLifecycleError(
 				"unavailable",
-				`workspace ${daemonId} cannot be verified (log store unavailable); deletion blocked`,
+				`workspace ${workspaceId} cannot be verified (log store unavailable); deletion blocked`,
 			);
 		}
 
-		const record = registry.get(daemonId)?.workspace;
+		const record = registry.get(workspaceId)?.workspace;
 		// Deferred appends are acked only after commit(); verify reads the index.
-		logStore.commit(daemonId);
+		logStore.commit(workspaceId);
 		const verify = await verifyWorkspaceLogs({
 			logsRoot: logStore.rootDir,
-			workspaceId: daemonId,
+			workspaceId,
 			// Additive provenance: yields the store-side manifest (per-file
 			// sha256/size/sessionId) used by the volume cross-check.
 			registry: {
@@ -1646,7 +1652,7 @@ export class WorkspaceLifecycle {
 				message: verify.message,
 				...(verify.path !== undefined ? { path: verify.path } : {}),
 			};
-			registry.setWorkspaceDeletion(daemonId, {
+			registry.setWorkspaceDeletion(workspaceId, {
 				state: "delete-pending-retry",
 				requestedAt,
 				error,
@@ -1654,25 +1660,25 @@ export class WorkspaceLifecycle {
 			eventLog.add(
 				"warn",
 				"server",
-				`delete ${daemonId} blocked: store verification failed (${verify.code}${verify.path ? ` at ${verify.path}` : ""}): ${verify.message}`,
-				daemonId,
+				`delete ${workspaceId} blocked: store verification failed (${verify.code}${verify.path ? ` at ${verify.path}` : ""}): ${verify.message}`,
+				workspaceId,
 			);
 			throw new CloneLifecycleError(
 				verify.code === "invalid_request" ? "invalid_request" : "archive_conflict",
-				`workspace ${daemonId} store verification failed (${verify.code}): ${verify.message}`,
+				`workspace ${workspaceId} store verification failed (${verify.code}): ${verify.message}`,
 			);
 		}
 
 		// Independent completeness cross-check (never infer completeness
 		// from an empty store): the workspace volume's own session tree must
 		// be byte-identical to the verified store.
-		const volumeCheck = await this.#verifyVolumeAgainstStore(daemonId, verify.manifest);
+		const volumeCheck = await this.#verifyVolumeAgainstStore(workspaceId, verify.manifest);
 		if (!volumeCheck.ok) {
 			const error: DeletionGateError = {
 				code: "archive_conflict",
 				message: volumeCheck.message,
 			};
-			registry.setWorkspaceDeletion(daemonId, {
+			registry.setWorkspaceDeletion(workspaceId, {
 				state: "delete-pending-retry",
 				requestedAt,
 				error,
@@ -1680,8 +1686,8 @@ export class WorkspaceLifecycle {
 			eventLog.add(
 				"warn",
 				"server",
-				`delete ${daemonId} blocked: volume/store mismatch (${volumeCheck.message})`,
-				daemonId,
+				`delete ${workspaceId} blocked: volume/store mismatch (${volumeCheck.message})`,
+				workspaceId,
 			);
 			throw new CloneLifecycleError("archive_conflict", volumeCheck.message);
 		}
@@ -1690,7 +1696,7 @@ export class WorkspaceLifecycle {
 		// (a never-streamed workspace leaves no store subtree to flip).
 		const retained = verify.sessions.length > 0;
 		if (retained) {
-			logStore.markWorkspaceReadOnly(daemonId);
+			logStore.markWorkspaceReadOnly(workspaceId);
 		}
 
 		// Provider deletion (stop-proof + provider state clear), then volume
@@ -1698,40 +1704,40 @@ export class WorkspaceLifecycle {
 		// the flip records remaining resources and stays retry-able.
 		if (everStarted) {
 			try {
-				await this.#deleteProvider(registry.get(daemonId) ?? entry);
+				await this.#deleteProvider(registry.get(workspaceId) ?? entry);
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
-				registry.setWorkspaceDeletion(daemonId, {
+				registry.setWorkspaceDeletion(workspaceId, {
 					state: "delete-pending-retry",
 					requestedAt,
 					error: { code: "provider_failed", message },
 					remainingResources: [
-						typeof registry.get(daemonId)?.workspace?.providerHandle === "string"
-							? (registry.get(daemonId)?.workspace?.providerHandle as string)
+						typeof registry.get(workspaceId)?.workspace?.providerHandle === "string"
+							? (registry.get(workspaceId)?.workspace?.providerHandle as string)
 							: (entry.cwd ?? ""),
 					],
 				});
 				eventLog.add(
 					"warn",
 					"server",
-					`delete ${daemonId}: store verified + read-only, provider deletion failed (${message}); resources remain`,
-					daemonId,
+					`delete ${workspaceId}: store verified + read-only, provider deletion failed (${message}); resources remain`,
+					workspaceId,
 				);
 				throw new CloneLifecycleError(
 					"provider_failed",
-					`workspace ${daemonId} verified read-only, but provider deletion failed: ${message}`,
+					`workspace ${workspaceId} verified read-only, but provider deletion failed: ${message}`,
 				);
 			}
 		}
 
 		// Volume removal (LocalCloneResourceDeleter or a provider hook).
 		try {
-			const current = registry.get(daemonId) ?? entry;
-			await this.#deps.resourceDeleter.deleteWorkspaceResources(daemonId, current);
+			const current = registry.get(workspaceId) ?? entry;
+			await this.#deps.resourceDeleter.deleteWorkspaceResources(workspaceId, current);
 		} catch (err) {
 			void record; // kept for the remainingResources fallback below.
 			const message = err instanceof Error ? err.message : String(err);
-			registry.setWorkspaceDeletion(daemonId, {
+			registry.setWorkspaceDeletion(workspaceId, {
 				state: "delete-pending-retry",
 				requestedAt,
 				error: { code: "provider_failed", message },
@@ -1740,20 +1746,20 @@ export class WorkspaceLifecycle {
 			eventLog.add(
 				"warn",
 				"server",
-				`delete ${daemonId}: store verified + read-only, volume removal failed (${message}); resources remain`,
-				daemonId,
+				`delete ${workspaceId}: store verified + read-only, volume removal failed (${message}); resources remain`,
+				workspaceId,
 			);
 			throw new CloneLifecycleError(
 				"provider_failed",
-				`workspace ${daemonId} verified read-only, but volume removal failed: ${message}`,
+				`workspace ${workspaceId} verified read-only, but volume removal failed: ${message}`,
 			);
 		}
 
 		// Finalize: roster identity removed (verified read-only store is
 		// Retention's). No orphan marker: verification passed.
-		registry.remove(daemonId);
-		eventLog.add("info", "server", `workspace ${daemonId} deleted (verified)`, daemonId);
-		return { removed: daemonId, verified: verify.sessions.map((s) => s.sessionId) };
+		registry.remove(workspaceId);
+		eventLog.add("info", "server", `workspace ${workspaceId} deleted (verified)`, workspaceId);
+		return { removed: workspaceId, verified: verify.sessions.map((s) => s.sessionId) };
 	}
 
 	// ------------------------------------------------------------------
@@ -1766,15 +1772,15 @@ export class WorkspaceLifecycle {
 		// #runCloneOp throws a typed CloneLifecycleError on provider failure;
 		// the gate's caller converts it to delete-pending-retry + remaining
 		// resources.
-		const response = await this.#runCloneOp(entry.daemonId, "delete", this.#handleOf(entry));
+		const response = await this.#runCloneOp(entry.workspaceId, "delete", this.#handleOf(entry));
 		if (generation !== undefined) {
-			this.#deps.transport.revokeEnrollment(entry.daemonId, generation);
-			this.#deps.registry.clearWorkspaceEnrollment(entry.daemonId, generation);
+			this.#deps.transport.revokeEnrollment(entry.workspaceId, generation);
+			this.#deps.registry.clearWorkspaceEnrollment(entry.workspaceId, generation);
 		}
 		this.#log(
 			"info",
-			`clone ${entry.daemonId} provider deleted (gen ${generation ?? "never-started"}, observed ${response.observed})`,
-			entry.daemonId,
+			`clone ${entry.workspaceId} provider deleted (gen ${generation ?? "never-started"}, observed ${response.observed})`,
+			entry.workspaceId,
 		);
 		return response;
 	}
@@ -1786,8 +1792,8 @@ export class WorkspaceLifecycle {
 	 * force override, no transcript-as-source-backup claim. Unreachable git
 	 * or an unreadable checkout blocks (unknown verification status).
 	 */
-	async #runGitGuard(daemonId: string): Promise<void> {
-		const entry = this.#require(daemonId);
+	async #runGitGuard(workspaceId: string): Promise<void> {
+		const entry = this.#require(workspaceId);
 		const { checkoutDir } = this.#clonePaths(entry);
 		if (!existsSync(join(checkoutDir, ".git"))) {
 			// A never-prepared/never-started clone has no checkout to guard;
@@ -1795,7 +1801,7 @@ export class WorkspaceLifecycle {
 			return;
 		}
 		const fail = (message: string): never => {
-			this.#deps.registry.setWorkspaceDeletion(daemonId, {
+			this.#deps.registry.setWorkspaceDeletion(workspaceId, {
 				state: "delete-pending-retry",
 				requestedAt: Date.now(),
 				error: { code: "conflict", message },
@@ -1807,7 +1813,7 @@ export class WorkspaceLifecycle {
 		const status = await runGit(["status", "--porcelain=v1"], checkoutDir);
 		if (status.exitCode !== 0) {
 			return fail(
-				`cannot verify git state for ${daemonId} (status exited ${status.exitCode}): preserve the checkout manually and retry`,
+				`cannot verify git state for ${workspaceId} (status exited ${status.exitCode}): preserve the checkout manually and retry`,
 			);
 		}
 		if (status.stdout.trim() !== "") {
@@ -1817,14 +1823,14 @@ export class WorkspaceLifecycle {
 				.map((l) => l.slice(3))
 				.join(", ");
 			return fail(
-				`workspace ${daemonId} has uncommitted or untracked files (${lines.length}): ${sample}…; commit/push or stash them before deletion (session transcripts are not source backup)`,
+				`workspace ${workspaceId} has uncommitted or untracked files (${lines.length}): ${sample}…; commit/push or stash them before deletion (session transcripts are not source backup)`,
 			);
 		}
 		// Stashes.
 		const stash = await runGit(["stash", "list"], checkoutDir);
 		if (stash.exitCode === 0 && stash.stdout.trim() !== "") {
 			return fail(
-				`workspace ${daemonId} has ${stash.stdout.trim().split("\n").length} stash(es); drop or apply them before deletion`,
+				`workspace ${workspaceId} has ${stash.stdout.trim().split("\n").length} stash(es); drop or apply them before deletion`,
 			);
 		}
 		// Unpreserved local history: refresh origin remote-tracking refs
@@ -1840,13 +1846,13 @@ export class WorkspaceLifecycle {
 		);
 		if (unpushed.exitCode !== 0) {
 			return fail(
-				`cannot verify history preservation for ${daemonId} (rev-list exited ${unpushed.exitCode}); preserve manually and retry`,
+				`cannot verify history preservation for ${workspaceId} (rev-list exited ${unpushed.exitCode}); preserve manually and retry`,
 			);
 		}
 		const count = Number.parseInt(unpushed.stdout.trim(), 10);
 		if (Number.isFinite(count) && count > 0) {
 			return fail(
-				`workspace ${daemonId} has ${count} commit(s) not preserved on its configured remote; push them first (no force override)`,
+				`workspace ${workspaceId} has ${count} commit(s) not preserved on its configured remote; push them first (no force override)`,
 			);
 		}
 	}
@@ -1866,10 +1872,10 @@ export class WorkspaceLifecycle {
 	 * empty volume.
 	 */
 	async #verifyVolumeAgainstStore(
-		daemonId: string,
+		workspaceId: string,
 		storeManifest: ArchiveManifest | undefined,
 	): Promise<{ ok: true } | { ok: false; message: string }> {
-		const entry = this.#require(daemonId);
+		const entry = this.#require(workspaceId);
 		const record = entry.workspace;
 		const { volumeRoot, homeDir } = this.#clonePaths(entry);
 		const sessionsDir = join(homeDir, "agent", "sessions");
@@ -1927,7 +1933,7 @@ export class WorkspaceLifecycle {
 		if (unreadable !== undefined && everStarted) {
 			return {
 				ok: false,
-				message: `workspace ${daemonId} ${unreadable.subject} cannot be verified (${unreadable.reason}); deletion blocked (an unreadable volume is not an empty one)`,
+				message: `workspace ${workspaceId} ${unreadable.subject} cannot be verified (${unreadable.reason}); deletion blocked (an unreadable volume is not an empty one)`,
 			};
 		}
 
@@ -1942,12 +1948,12 @@ export class WorkspaceLifecycle {
 			// volume): the provider proves its session inventory. A
 			// never-started workspace has no volume sessions to lose.
 			if (!everStarted) return { ok: true };
-			return await this.#verifyProviderInventory(daemonId, storeManifest);
+			return await this.#verifyProviderInventory(workspaceId, storeManifest);
 		}
 		if (!bounded) {
 			return {
 				ok: false,
-				message: `session tree for ${daemonId} exceeds verification bounds (${MAX_EXPORT_FILES} files / ${MAX_EXPORT_BYTES} bytes); deletion blocked`,
+				message: `session tree for ${workspaceId} exceeds verification bounds (${MAX_EXPORT_FILES} files / ${MAX_EXPORT_BYTES} bytes); deletion blocked`,
 			};
 		}
 		if (files.length === 0) {
@@ -1956,7 +1962,7 @@ export class WorkspaceLifecycle {
 		if (storeManifest === undefined) {
 			return {
 				ok: false,
-				message: `workspace ${daemonId} has ${files.length} session file(s) on its volume but the store verification produced no manifest`,
+				message: `workspace ${workspaceId} has ${files.length} session file(s) on its volume but the store verification produced no manifest`,
 			};
 		}
 		// Index the store manifest by (sessionId, path).
@@ -1971,13 +1977,13 @@ export class WorkspaceLifecycle {
 			if (side === undefined) {
 				return {
 					ok: false,
-					message: `workspace ${daemonId} session ${file.sessionId} file ${file.relpath} (${file.size} bytes) is missing from the fleet store; deletion blocked (logs were not fully streamed)`,
+					message: `workspace ${workspaceId} session ${file.sessionId} file ${file.relpath} (${file.size} bytes) is missing from the fleet store; deletion blocked (logs were not fully streamed)`,
 				};
 			}
 			if (side.size !== file.size) {
 				return {
 					ok: false,
-					message: `workspace ${daemonId} session ${file.sessionId} file ${file.relpath} is truncated in the fleet store (${side.size}/${file.size} bytes); deletion blocked`,
+					message: `workspace ${workspaceId} session ${file.sessionId} file ${file.relpath} is truncated in the fleet store (${side.size}/${file.size} bytes); deletion blocked`,
 				};
 			}
 			const absolute = join(volumeRoot, ".home", "agent", "sessions", file.sessionId, file.relpath);
@@ -1985,7 +1991,7 @@ export class WorkspaceLifecycle {
 			if (sha !== side.sha256) {
 				return {
 					ok: false,
-					message: `workspace ${daemonId} session ${file.sessionId} file ${file.relpath} differs from its stored bytes; deletion blocked (rewrite not re-streamed)`,
+					message: `workspace ${workspaceId} session ${file.sessionId} file ${file.relpath} differs from its stored bytes; deletion blocked (rewrite not re-streamed)`,
 				};
 			}
 		}
@@ -2008,19 +2014,19 @@ export class WorkspaceLifecycle {
 	 * nothing: deletion is refused.
 	 */
 	async #verifyProviderInventory(
-		daemonId: string,
+		workspaceId: string,
 		storeManifest: ArchiveManifest | undefined,
 	): Promise<{ ok: true } | { ok: false; message: string }> {
 		const unverifiable = (reason: string): { ok: false; message: string } => ({
 			ok: false,
-			message: `cannot verify store completeness for ${daemonId}: volume is not fleet-readable and ${reason}`,
+			message: `cannot verify store completeness for ${workspaceId}: volume is not fleet-readable and ${reason}`,
 		});
 		let inventory: ProviderOkResponse;
 		try {
 			inventory = await this.#runCloneOp(
-				daemonId,
+				workspaceId,
 				"list-sessions",
-				this.#handleOf(this.#require(daemonId)),
+				this.#handleOf(this.#require(workspaceId)),
 			);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
@@ -2032,7 +2038,7 @@ export class WorkspaceLifecycle {
 		if (inventory.complete !== true) {
 			return {
 				ok: false,
-				message: `session tree for ${daemonId} exceeds verification bounds (${MAX_EXPORT_FILES} files / ${MAX_EXPORT_BYTES} bytes); deletion blocked`,
+				message: `session tree for ${workspaceId} exceeds verification bounds (${MAX_EXPORT_FILES} files / ${MAX_EXPORT_BYTES} bytes); deletion blocked`,
 			};
 		}
 		const stored = new Map<string, { size: number; sha256: string }>();
@@ -2051,25 +2057,25 @@ export class WorkspaceLifecycle {
 			if (side === undefined) {
 				return {
 					ok: false,
-					message: `workspace ${daemonId} session ${sessionId} file ${relpath} (${file.size} bytes) is on its volume but missing from the fleet store; deletion blocked (logs were not fully streamed)`,
+					message: `workspace ${workspaceId} session ${sessionId} file ${relpath} (${file.size} bytes) is on its volume but missing from the fleet store; deletion blocked (logs were not fully streamed)`,
 				};
 			}
 			if (file.sha256 === undefined) {
 				return {
 					ok: false,
-					message: `workspace ${daemonId} session ${sessionId} file ${relpath} came back from the provider without a sha256; deletion blocked (its bytes cannot be proven identical to the store)`,
+					message: `workspace ${workspaceId} session ${sessionId} file ${relpath} came back from the provider without a sha256; deletion blocked (its bytes cannot be proven identical to the store)`,
 				};
 			}
 			if (side.size !== file.size) {
 				return {
 					ok: false,
-					message: `workspace ${daemonId} session ${sessionId} file ${relpath} is ${side.size < file.size ? "truncated" : "longer"} in the fleet store (${side.size}/${file.size} bytes); deletion blocked`,
+					message: `workspace ${workspaceId} session ${sessionId} file ${relpath} is ${side.size < file.size ? "truncated" : "longer"} in the fleet store (${side.size}/${file.size} bytes); deletion blocked`,
 				};
 			}
 			if (side.sha256 !== file.sha256) {
 				return {
 					ok: false,
-					message: `workspace ${daemonId} session ${sessionId} file ${relpath} differs from its stored bytes; deletion blocked (rewrite not re-streamed)`,
+					message: `workspace ${workspaceId} session ${sessionId} file ${relpath} differs from its stored bytes; deletion blocked (rewrite not re-streamed)`,
 				};
 			}
 		}
@@ -2089,14 +2095,14 @@ export class WorkspaceLifecycle {
 		if (entry.workspace?.kind !== "clone" || profileId === undefined) {
 			throw new CloneLifecycleError(
 				"invalid_request",
-				`clone workspace ${entry.daemonId} is missing a provider profile (kind ${entry.workspace?.kind ?? "legacy"})`,
+				`clone workspace ${entry.workspaceId} is missing a provider profile (kind ${entry.workspace?.kind ?? "legacy"})`,
 			);
 		}
 		const profile = this.#deps.config.providerProfiles?.[profileId];
 		if (profile === undefined) {
 			throw new CloneLifecycleError(
 				"unavailable",
-				`clone workspace ${entry.daemonId} has no resolvable provider profile "${profileId}" (no matching providerProfiles entry)`,
+				`clone workspace ${entry.workspaceId} has no resolvable provider profile "${profileId}" (no matching providerProfiles entry)`,
 			);
 		}
 		return { profileId, profile };
@@ -2113,14 +2119,14 @@ export class WorkspaceLifecycle {
 		if (!volumeRoot || !isAbsolute(volumeRoot)) {
 			throw new CloneLifecycleError(
 				"unavailable",
-				`clone workspace ${entry.daemonId} has no persisted absolute volume location`,
+				`clone workspace ${entry.workspaceId} has no persisted absolute volume location`,
 			);
 		}
 		return {
 			volumeRoot,
 			checkoutDir: cloneCheckoutDir(volumeRoot),
 			homeDir: join(volumeRoot, ".home"),
-			stateDir: join(dirname(volumeRoot), ".provider-state", entry.daemonId),
+			stateDir: join(dirname(volumeRoot), ".provider-state", entry.workspaceId),
 		};
 	}
 
@@ -2133,7 +2139,7 @@ export class WorkspaceLifecycle {
 
 	/**
 	 * One provider operation invocation, typed. Re-reads the CURRENT
-	 * registry entry by daemonId so every op builds its request from ONE
+	 * registry entry by workspaceId so every op builds its request from ONE
 	 * consistent snapshot; a stale caller entry can never send a request
 	 * carrying an old generation against a freshly enrolled one (fencing). `generationOverride` is
 	 * REQUIRED on the ensure-running call after a generation bump: the bump is computed and enrolled BEFORE the
@@ -2144,12 +2150,12 @@ export class WorkspaceLifecycle {
 	 * with caller-safe messages.
 	 */
 	async #runCloneOp(
-		daemonId: string,
+		workspaceId: string,
 		op: "ensure-running" | "inspect" | "stop" | "delete" | "list-sessions",
 		handle: string | undefined,
 		generationOverride?: number,
 	): Promise<ProviderOkResponse> {
-		const entry = this.#require(daemonId);
+		const entry = this.#require(workspaceId);
 		const { profile } = this.#cloneProfile(entry);
 		const { checkoutDir, homeDir, stateDir } = this.#clonePaths(entry);
 		const generation = generationOverride ?? entry.workspace?.authorizedGeneration ?? 1;
@@ -2161,7 +2167,7 @@ export class WorkspaceLifecycle {
 		// lib/runtime/provider-protocol.ts ProviderRequest.
 		const request = {
 			op,
-			workspaceId: daemonId,
+			workspaceId,
 			generation,
 			workspaceDir: checkoutDir,
 			homeDir,
@@ -2181,7 +2187,7 @@ export class WorkspaceLifecycle {
 		if (response.ok) return response;
 		throw new CloneLifecycleError(
 			this.#codeForProviderError(response.error.code),
-			`provider ${op} failed for ${entry.daemonId} (${response.error.code}): ${response.error.message}`,
+			`provider ${op} failed for ${entry.workspaceId} (${response.error.code}): ${response.error.message}`,
 		);
 	}
 
@@ -2205,8 +2211,8 @@ export class WorkspaceLifecycle {
 	}
 
 	/**
-	 * Wake resume: compute the resume target for a NEW daemon spawn.
-	 * Returns the env hint to hand the daemon (OMP_SESSION_RESUME, plus
+	 * Wake resume: compute the resume target for a NEW session spawn.
+	 * Returns the env hint to hand the session (OMP_SESSION_RESUME, plus
 	 * OMP_SESSION_RESUME_UNWRITTEN when the file may not exist yet), or
 	 * undefined when the wake should boot fresh. Fleet-visible volumes
 	 * materialize cold/missing transcripts first; volumes the fleet cannot
@@ -2218,7 +2224,7 @@ export class WorkspaceLifecycle {
 	 *   - implicit wake → newest session (volume ∪ store) so a stopped
 	 *     clone wake continues its last session.
 	 * Fill-missing-only materialization: existing volume files are never
-	 * overwritten (the volume may hold a newer unacked tail; the daemon's
+	 * overwritten (the volume may hold a newer unacked tail; the session's
 	 * tailer re-streams it once booted). Throws CloneLifecycleError
 	 * `unavailable` when an explicit target cannot be materialized.
 	 */
@@ -2226,15 +2232,15 @@ export class WorkspaceLifecycle {
 		entry: RegistryEntry,
 		opts: { firstStart: boolean; resumeSessionId?: string },
 	): Promise<Record<string, string> | undefined> {
-		const daemonId = entry.daemonId;
+		const workspaceId = entry.workspaceId;
 		const { profile } = this.#cloneProfile(entry);
-		const record = this.#deps.registry.get(daemonId)?.workspace;
+		const record = this.#deps.registry.get(workspaceId)?.workspace;
 		const everStarted =
 			record?.authorizedGeneration !== undefined ||
 			record?.providerHandle !== undefined ||
 			record?.enrollment !== undefined;
 		if (!PROVIDER_CAPABILITIES[profile.provider].volumeFleetVisible) {
-			return this.#resolvePodWakeResume(daemonId, opts, everStarted);
+			return this.#resolvePodWakeResume(workspaceId, opts, everStarted);
 		}
 		const store = this.#deps.logStore;
 		const { volumeRoot } = this.#clonePaths(entry);
@@ -2248,7 +2254,7 @@ export class WorkspaceLifecycle {
 					? undefined
 					: pickNewestSessionId({
 							sessionsDir,
-							...(store !== null ? { store, workspaceId: daemonId } : {}),
+							...(store !== null ? { store, workspaceId } : {}),
 						});
 		if (target === undefined) return undefined; // Nothing to resume: fresh boot.
 
@@ -2256,7 +2262,7 @@ export class WorkspaceLifecycle {
 			try {
 				await materializeMissingSessionFiles({
 					store,
-					workspaceId: daemonId,
+					workspaceId,
 					sessionId: target,
 					sessionsDir,
 				});
@@ -2267,11 +2273,11 @@ export class WorkspaceLifecycle {
 					throw err instanceof WakeMaterializeError
 						? new CloneLifecycleError(
 								err.code === "invalid_request" ? "invalid_request" : "unavailable",
-								`cannot materialize session ${target} for wake of ${daemonId}: ${err.message}`,
+								`cannot materialize session ${target} for wake of ${workspaceId}: ${err.message}`,
 							)
 						: new CloneLifecycleError(
 								"unavailable",
-								`cannot materialize session ${target} for wake of ${daemonId}: ${err instanceof Error ? err.message : String(err)}`,
+								`cannot materialize session ${target} for wake of ${workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
 							);
 				}
 				// Implicit pick + materialize failure: fall back to whatever
@@ -2284,7 +2290,7 @@ export class WorkspaceLifecycle {
 			if (resolveMainSessionFile(sessionsDir, target) === null) {
 				throw new CloneLifecycleError(
 					"unavailable",
-					`cannot resume session ${target} for ${daemonId}: no fleet log store and the session is not on the volume`,
+					`cannot resume session ${target} for ${workspaceId}: no fleet log store and the session is not on the volume`,
 				);
 			}
 		}
@@ -2294,7 +2300,7 @@ export class WorkspaceLifecycle {
 			if (explicit !== undefined) {
 				throw new CloneLifecycleError(
 					"unavailable",
-					`cannot resume session ${target} for ${daemonId}: no transcript on the volume or in the fleet store`,
+					`cannot resume session ${target} for ${workspaceId}: no transcript on the volume or in the fleet store`,
 				);
 			}
 			return undefined; // Implicit target vanished; boot fresh.
@@ -2308,7 +2314,7 @@ export class WorkspaceLifecycle {
 		// wake only reaches here after the predecessor generation is PROVEN
 		// terminated (stop proof precedes the generation bump), so any
 		// lock beside the resume target is definitionally stale: clear it
-		// before the daemon spawns. Best-effort (a missing lock is fine).
+		// before the session spawns. Best-effort (a missing lock is fine).
 		// This is NOT the SDK's identity-scoped session ownership lease: that
 		// native OS lock is released on process death, and its flock sidecars
 		// must never be unlinked (doing so can split ownership across inodes).
@@ -2326,22 +2332,22 @@ export class WorkspaceLifecycle {
 	 * session itself reported (`lastSessionFile`, from the `state` frame of its
 	 * last pair-up) or, for a session known only to the fleet store, the
 	 * store's main relpath under the in-pod sessions root. The pod is the
-	 * authority on whether the file exists: the daemon boots strictly and exits
-	 * 78 when it is missing, never booting fresh. A reported file the daemon
+	 * authority on whether the file exists: the session boots strictly and exits
+	 * 78 when it is missing, never booting fresh. A reported file the session
 	 * has not confirmed on disk (a never-prompted session) carries
-	 * OMP_SESSION_RESUME_UNWRITTEN, so the daemon adopts the path instead.
+	 * OMP_SESSION_RESUME_UNWRITTEN, so the session adopts the path instead.
 	 * The fleet-side validation is the same as for bwrap's explicit pick: an
 	 * explicit id that is neither the reported session nor in the store is a
 	 * typed `unavailable`. (A helper-pod `list-sessions` would add a pod
 	 * schedule to every Start and conflicts with a terminated pod's corpse.)
 	 */
 	#resolvePodWakeResume(
-		daemonId: string,
+		workspaceId: string,
 		opts: { firstStart: boolean; resumeSessionId?: string },
 		everStarted: boolean,
 	): Record<string, string> | undefined {
 		const store = this.#deps.logStore;
-		const entry = this.#deps.registry.get(daemonId);
+		const entry = this.#deps.registry.get(workspaceId);
 		const reportedRelpath = podSessionRelpath(entry?.lastSessionFile);
 		const reportedHint =
 			reportedRelpath === undefined
@@ -2351,7 +2357,7 @@ export class WorkspaceLifecycle {
 						...(entry?.lastSessionPersisted === true ? {} : { OMP_SESSION_RESUME_UNWRITTEN: "1" }),
 					};
 		const storedHint = (sessionId: string): Record<string, string> | undefined => {
-			const relpath = store?.storedLineage(daemonId, sessionId)?.mainRelpath;
+			const relpath = store?.storedLineage(workspaceId, sessionId)?.mainRelpath;
 			return relpath !== undefined && isNormalizedPosixRelativePath(relpath)
 				? { OMP_SESSION_RESUME: `${KUBERNETES_POD_LAYOUT.sessionsDir}/${relpath}` }
 				: undefined;
@@ -2362,7 +2368,7 @@ export class WorkspaceLifecycle {
 			if (!SESSION_DIR_NAME.test(explicit)) {
 				throw new CloneLifecycleError(
 					"invalid_request",
-					`cannot resume session ${JSON.stringify(explicit)} for ${daemonId}: not a session id`,
+					`cannot resume session ${JSON.stringify(explicit)} for ${workspaceId}: not a session id`,
 				);
 			}
 			if (reportedRelpath?.split("/").pop() === `${explicit}.jsonl`) return reportedHint;
@@ -2370,14 +2376,14 @@ export class WorkspaceLifecycle {
 			if (stored !== undefined) return stored;
 			throw new CloneLifecycleError(
 				"unavailable",
-				`cannot resume session ${explicit} for ${daemonId}: it is neither the session the runtime last reported nor in the fleet store`,
+				`cannot resume session ${explicit} for ${workspaceId}: it is neither the session the runtime last reported nor in the fleet store`,
 			);
 		}
 		if (opts.firstStart && !everStarted) return undefined; // Never started: nothing to resume.
 		if (reportedHint !== undefined) return reportedHint;
 		// No reported session (the runtime never paired): the newest stored one.
 		let newest: { sessionId: string; mtimeMs: number } | undefined;
-		for (const session of store?.listStoredSessions(daemonId) ?? []) {
+		for (const session of store?.listStoredSessions(workspaceId) ?? []) {
 			if (session.mainRelpath === undefined) continue;
 			if (newest === undefined || session.mtimeMs > newest.mtimeMs) newest = session;
 		}
@@ -2397,7 +2403,7 @@ export class WorkspaceLifecycle {
 		const allowHttp = url.startsWith("http://") ? "1" : undefined;
 		const env: Record<string, string> = {
 			OMP_SESSION_CALLBACK_URL: url,
-			OMP_SESSION_CALLBACK_WORKSPACE: entry.daemonId,
+			OMP_SESSION_CALLBACK_WORKSPACE: entry.workspaceId,
 			OMP_SESSION_CALLBACK_GENERATION: String(generation),
 			OMP_SESSION_CALLBACK_TOKEN: credentialHex,
 		};
@@ -2415,7 +2421,7 @@ export class WorkspaceLifecycle {
 				env[key] = value;
 			}
 		}
-		const payload = JSON.stringify({ version: 1, workspaceId: entry.daemonId, generation, env });
+		const payload = JSON.stringify({ version: 1, workspaceId: entry.workspaceId, generation, env });
 		const path = join(stateDir, "callback-env.json");
 		// Mode 0600 exactly: an explicit 0600 fd so umask can never loosen it.
 		const fd = openSync(path, "w", 0o600);
@@ -2428,7 +2434,7 @@ export class WorkspaceLifecycle {
 
 	/**
 	 * Recover the raw enrollment token from the provider state file so a
-	 * re-ensure on the SAME generation keeps the credential the daemon
+	 * re-ensure on the SAME generation keeps the credential the session
 	 * already holds (restart-safe; only the digest is ever persisted).
 	 */
 	#persistedCallbackToken(entry: RegistryEntry, generation: number): string {
@@ -2436,12 +2442,12 @@ export class WorkspaceLifecycle {
 		const token = readCallbackEnv(
 			"fleet",
 			stateDir,
-			entry.daemonId,
+			entry.workspaceId,
 			generation,
 		)?.OMP_SESSION_CALLBACK_TOKEN;
 		if (token === undefined || token.length === 0) {
 			throw new Error(
-				`cannot recover callback token for ${entry.daemonId} generation ${generation} from the persisted state file`,
+				`cannot recover callback token for ${entry.workspaceId} generation ${generation} from the persisted state file`,
 			);
 		}
 		return token;
@@ -2452,10 +2458,10 @@ export class WorkspaceLifecycle {
 	// ------------------------------------------------------------------
 
 	/** Write lifecycleStage (+ optional error) and broadcast via onChange. */
-	#setStage(daemonId: string, stage: LifecycleStage | undefined, error?: string): void {
-		const entry = this.#deps.registry.get(daemonId);
+	#setStage(workspaceId: string, stage: LifecycleStage | undefined, error?: string): void {
+		const entry = this.#deps.registry.get(workspaceId);
 		if (!entry) return;
-		this.#deps.registry.update(daemonId, {
+		this.#deps.registry.update(workspaceId, {
 			lifecycleStage: stage,
 			...(error !== undefined ? { lifecycleError: error } : { lifecycleError: undefined }),
 		});
@@ -2466,9 +2472,9 @@ export class WorkspaceLifecycle {
 	 * kind: status "error" and lifecycleStage "failed", both carrying `reason`.
 	 * An explicit start retries.
 	 */
-	#markFailed(daemonId: string, reason: string): void {
-		this.#setStage(daemonId, "failed", reason);
-		this.#deps.registry.setStatus(daemonId, "error", reason);
+	#markFailed(workspaceId: string, reason: string): void {
+		this.#setStage(workspaceId, "failed", reason);
+		this.#deps.registry.setStatus(workspaceId, "error", reason);
 	}
 
 	/**
@@ -2476,12 +2482,12 @@ export class WorkspaceLifecycle {
 	 * binding, so it stays dead through the backoff window (the replacement
 	 * enrolls generation + 1). Idempotent; the first step of every restart.
 	 */
-	#revokePredecessor(daemonId: string): void {
-		const workspace = this.#deps.registry.get(daemonId)?.workspace;
+	#revokePredecessor(workspaceId: string): void {
+		const workspace = this.#deps.registry.get(workspaceId)?.workspace;
 		const generation = workspace?.enrollment?.generation ?? workspace?.authorizedGeneration;
 		if (generation === undefined) return;
-		this.#deps.transport.revokeEnrollment(daemonId, generation);
-		this.#deps.registry.clearWorkspaceEnrollment(daemonId, generation);
+		this.#deps.transport.revokeEnrollment(workspaceId, generation);
+		this.#deps.registry.clearWorkspaceEnrollment(workspaceId, generation);
 	}
 
 	/**
@@ -2491,7 +2497,7 @@ export class WorkspaceLifecycle {
 	 *   1. the dead generation's credential is revoked first;
 	 *   2. the runtime's `RestartBudget` is claimed: a jittered 1s-30s backoff
 	 *      is armed and the row shows stage "runtime" + status "reconnecting";
-	 *   3. after the backoff, `hooks.restart` runs on the daemon's op queue
+	 *   3. after the backoff, `hooks.restart` runs on the session's op queue
 	 *      (fresh credential, generation + 1, predecessor proven gone) unless
 	 *      `hooks.live` says an explicit stop/delete won the race;
 	 *   4. a restart that throws takes the same path again, so provider flaps
@@ -2500,35 +2506,35 @@ export class WorkspaceLifecycle {
 	 *      status "error" + stage "failed" with the reason, then `hooks.giveUp`.
 	 */
 	#restartOrGiveUp(
-		daemonId: string,
+		workspaceId: string,
 		budget: RestartBudget,
 		reason: string,
 		hooks: { live(): boolean; restart(): Promise<void>; giveUp(): void },
 	): void {
-		this.#revokePredecessor(daemonId);
+		this.#revokePredecessor(workspaceId);
 		const claim = budget.schedule(() => {
 			if (!hooks.live()) return;
-			void this.#serialized(daemonId, async () => {
+			void this.#serialized(workspaceId, async () => {
 				if (hooks.live()) await hooks.restart();
 			}).catch((err: unknown) => {
 				if (!hooks.live()) return;
 				const message = err instanceof Error ? err.message : String(err);
-				this.#restartOrGiveUp(daemonId, budget, `restart failed: ${message}`, hooks);
+				this.#restartOrGiveUp(workspaceId, budget, `restart failed: ${message}`, hooks);
 			});
 		});
 		if (claim === null) {
 			const message = `${reason}; restart budget exhausted (${budget.restartMax} restarts allowed since the last stable pair); stop and start to retry`;
-			this.#markFailed(daemonId, message);
-			this.#log("error", message, daemonId);
+			this.#markFailed(workspaceId, message);
+			this.#log("error", message, workspaceId);
 			hooks.giveUp();
 			return;
 		}
-		this.#setStage(daemonId, "runtime");
-		this.#deps.registry.setStatus(daemonId, "reconnecting");
+		this.#setStage(workspaceId, "runtime");
+		this.#deps.registry.setStatus(workspaceId, "reconnecting");
 		this.#log(
 			"warn",
 			`${reason}; restart ${claim.attempt + 1}/${budget.restartMax} in ${claim.delayMs}ms`,
-			daemonId,
+			workspaceId,
 		);
 	}
 
@@ -2555,13 +2561,13 @@ export class WorkspaceLifecycle {
 	 * existing watch (and its budget) across a restart's own #ensure; any other
 	 * arm starts a fresh watch. Explicit stop disposes the watch.
 	 */
-	#armRuntimeWatch(daemonId: string, opts: { restartable: boolean; resume: boolean }): void {
-		let watch = this.#watches.get(daemonId);
+	#armRuntimeWatch(workspaceId: string, opts: { restartable: boolean; resume: boolean }): void {
+		let watch = this.#watches.get(workspaceId);
 		if (watch !== undefined && opts.resume) {
 			clearTimeout(watch.timer);
 			watch.restartable = true; // A restart chain stays restartable.
 		} else {
-			this.#disposeWatch(daemonId);
+			this.#disposeWatch(workspaceId);
 			const created: RuntimeWatch = {
 				budget: new RestartBudget(this.#policy),
 				restartable: opts.restartable,
@@ -2570,54 +2576,54 @@ export class WorkspaceLifecycle {
 				timer: undefined,
 				unsubscribe: () => {},
 			};
-			created.unsubscribe = this.#deps.transport.onPairChange(daemonId, (status) => {
+			created.unsubscribe = this.#deps.transport.onPairChange(workspaceId, (status) => {
 				if (status.paired) created.restartable = true;
 			});
 			watch = created;
-			this.#watches.set(daemonId, watch);
+			this.#watches.set(workspaceId, watch);
 		}
 		watch.paired = false;
 		watch.nextInspectAt = Date.now() + this.#policy.inspectEveryMs;
-		this.#scheduleTick(daemonId, watch);
+		this.#scheduleTick(workspaceId, watch);
 	}
 
-	#scheduleTick(daemonId: string, watch: RuntimeWatch): void {
-		watch.timer = setTimeout(() => void this.#tick(daemonId, watch), this.#policy.tickMs);
+	#scheduleTick(workspaceId: string, watch: RuntimeWatch): void {
+		watch.timer = setTimeout(() => void this.#tick(workspaceId, watch), this.#policy.tickMs);
 	}
 
 	/** Stop watching (explicit stop, close, failure); an `only` watch that was already replaced is left alone. */
-	#disposeWatch(daemonId: string, only?: RuntimeWatch): void {
-		const watch = this.#watches.get(daemonId);
+	#disposeWatch(workspaceId: string, only?: RuntimeWatch): void {
+		const watch = this.#watches.get(workspaceId);
 		if (watch === undefined || (only !== undefined && watch !== only)) return;
 		clearTimeout(watch.timer);
 		watch.unsubscribe();
 		watch.budget.dispose();
-		this.#watches.delete(daemonId);
+		this.#watches.delete(workspaceId);
 	}
 
 	/** The entry while `watch` is still the clone's current watch and the clone is desired-running and not being deleted. */
-	#watchLive(daemonId: string, watch: RuntimeWatch): RegistryEntry | undefined {
-		const entry = this.#deps.registry.get(daemonId);
-		if (this.#watches.get(daemonId) !== watch) return undefined;
+	#watchLive(workspaceId: string, watch: RuntimeWatch): RegistryEntry | undefined {
+		const entry = this.#deps.registry.get(workspaceId);
+		if (this.#watches.get(workspaceId) !== watch) return undefined;
 		const record = entry?.workspace;
 		if (record?.desiredState !== "running" || record.deletion?.state !== undefined)
 			return undefined;
 		return entry;
 	}
 
-	async #tick(daemonId: string, watch: RuntimeWatch): Promise<void> {
+	async #tick(workspaceId: string, watch: RuntimeWatch): Promise<void> {
 		watch.timer = undefined;
-		if (this.#watchLive(daemonId, watch) === undefined) {
-			this.#disposeWatch(daemonId, watch);
+		if (this.#watchLive(workspaceId, watch) === undefined) {
+			this.#disposeWatch(workspaceId, watch);
 			return;
 		}
-		const pair = this.#deps.transport.pairStatus(daemonId);
+		const pair = this.#deps.transport.pairStatus(workspaceId);
 		if (pair.paired && pair.enrolled) {
 			if (!watch.paired) {
 				watch.paired = true;
 				watch.restartable = true;
 				watch.budget.paired();
-				this.#setStage(daemonId, "ready");
+				this.#setStage(workspaceId, "ready");
 			}
 		} else {
 			if (watch.paired) {
@@ -2627,23 +2633,23 @@ export class WorkspaceLifecycle {
 			}
 			if (Date.now() >= watch.nextInspectAt) {
 				watch.nextInspectAt = Date.now() + this.#policy.inspectEveryMs;
-				await this.#serialized(daemonId, () => this.#inspectWatched(daemonId, watch));
+				await this.#serialized(workspaceId, () => this.#inspectWatched(workspaceId, watch));
 			}
 		}
 		// Re-arm unless the watch ended or a restart backoff took the timer.
-		if (this.#watches.get(daemonId) === watch && !watch.budget.pending) {
-			this.#scheduleTick(daemonId, watch);
+		if (this.#watches.get(workspaceId) === watch && !watch.budget.pending) {
+			this.#scheduleTick(workspaceId, watch);
 		}
 	}
 
 	/** One provider inspect for a pair-down watch; runs on the clone's op queue. */
-	async #inspectWatched(daemonId: string, watch: RuntimeWatch): Promise<void> {
-		const entry = this.#watchLive(daemonId, watch);
+	async #inspectWatched(workspaceId: string, watch: RuntimeWatch): Promise<void> {
+		const entry = this.#watchLive(workspaceId, watch);
 		if (entry === undefined) return;
-		if (this.#deps.transport.pairStatus(daemonId).paired) return; // Re-paired while queued.
+		if (this.#deps.transport.pairStatus(workspaceId).paired) return; // Re-paired while queued.
 		let response: ProviderOkResponse;
 		try {
-			response = await this.#runCloneOp(daemonId, "inspect", this.#handleOf(entry));
+			response = await this.#runCloneOp(workspaceId, "inspect", this.#handleOf(entry));
 		} catch {
 			// Inspect failed (provider unavailable or a typed conflict): keep
 			// polling; the next inspect retries. A genuinely dead runtime
@@ -2658,41 +2664,41 @@ export class WorkspaceLifecycle {
 			// Exit 77/78 is a refusal retrying cannot fix: no restart, and the row
 			// is handled exactly like a host child's (asleep, startable again, the
 			// reason on the row). Desired state follows, so boot never retries it.
-			this.#revokePredecessor(daemonId);
+			this.#revokePredecessor(workspaceId);
 			const reason =
 				response.detail ?? `${DETERMINISTIC_EXIT_FALLBACK} (exit ${response.exitCode})`;
-			this.#deps.registry.updateWorkspace(daemonId, { desiredState: "stopped" });
-			this.#disposeWatch(daemonId, watch);
-			this.#setStage(daemonId, undefined);
-			this.#deps.registry.setStatus(daemonId, "asleep", reason);
-			this.#log("error", `clone ${daemonId} ${reason}`, daemonId);
+			this.#deps.registry.updateWorkspace(workspaceId, { desiredState: "stopped" });
+			this.#disposeWatch(workspaceId, watch);
+			this.#setStage(workspaceId, undefined);
+			this.#deps.registry.setStatus(workspaceId, "asleep", reason);
+			this.#log("error", `clone ${workspaceId} ${reason}`, workspaceId);
 			return;
 		}
 		if (!watch.restartable) {
 			// A start whose pair never came up is the operator's to retry, never
 			// an eternal "callback" stage over a dead runtime.
-			this.#revokePredecessor(daemonId);
+			this.#revokePredecessor(workspaceId);
 			const message = `sandbox stopped before the callback pair established (observed ${response.observed})${died}; stop and start to retry`;
-			this.#markFailed(daemonId, message);
-			this.#disposeWatch(daemonId, watch);
-			this.#log("warn", `clone ${daemonId} ${message}`, daemonId);
+			this.#markFailed(workspaceId, message);
+			this.#disposeWatch(workspaceId, watch);
+			this.#log("warn", `clone ${workspaceId} ${message}`, workspaceId);
 			return;
 		}
 		this.#restartOrGiveUp(
-			daemonId,
+			workspaceId,
 			watch.budget,
 			`runtime ${response.observed} after its pair came up${died}`,
 			{
-				live: () => this.#watchLive(daemonId, watch) !== undefined,
-				restart: () => this.#restartRuntime(daemonId, watch),
-				giveUp: () => this.#disposeWatch(daemonId, watch),
+				live: () => this.#watchLive(workspaceId, watch) !== undefined,
+				restart: () => this.#restartRuntime(workspaceId, watch),
+				giveUp: () => this.#disposeWatch(workspaceId, watch),
 			},
 		);
 	}
 
 	/** The restart itself: the ordinary ensure (inspect-proven predecessor, revoke, fresh credential, generation + 1). */
-	async #restartRuntime(daemonId: string, watch: RuntimeWatch): Promise<void> {
-		const entry = this.#watchLive(daemonId, watch);
+	async #restartRuntime(workspaceId: string, watch: RuntimeWatch): Promise<void> {
+		const entry = this.#watchLive(workspaceId, watch);
 		if (entry === undefined) return; // Explicit stop/delete won the race.
 		const response = await this.#ensure(entry, { firstStart: false, recovery: true });
 		if (response.observed !== "running") {
@@ -2758,7 +2764,7 @@ export class WorkspaceLifecycle {
 				if (existing.status === "asleep" || existing.status === "error") {
 					await this.#ensureHostRunning(existing);
 				}
-				return registry.get(existing.daemonId) ?? existing;
+				return registry.get(existing.workspaceId) ?? existing;
 			}
 		}
 		const entry = registry.create({
@@ -2768,11 +2774,11 @@ export class WorkspaceLifecycle {
 			...(worktreeOf !== undefined ? { worktreeOf } : {}),
 			template: templateName,
 		});
-		await this.#serialized(entry.daemonId, () =>
+		await this.#serialized(entry.workspaceId, () =>
 			this.#startHost(entry, template, { resume: false }),
 		);
-		this.#deps.onSpawned?.(entry.daemonId);
-		return registry.get(entry.daemonId) ?? entry;
+		this.#deps.onSpawned?.(entry.workspaceId);
+		return registry.get(entry.workspaceId) ?? entry;
 	}
 
 	/**
@@ -2788,10 +2794,10 @@ export class WorkspaceLifecycle {
 	 * row instead.
 	 */
 	#ensureHostRunning(entry: RegistryEntry, opts?: { resumeFile?: string }): Promise<void> {
-		const daemonId = entry.daemonId;
-		const runtime = this.#hostRuntime(daemonId);
+		const workspaceId = entry.workspaceId;
+		const runtime = this.#hostRuntime(workspaceId);
 		if (runtime.ensureInFlight !== null) return runtime.ensureInFlight;
-		const tracked: Promise<void> = this.#serialized(daemonId, () =>
+		const tracked: Promise<void> = this.#serialized(workspaceId, () =>
 			this.#ensureHost(entry, opts?.resumeFile),
 		).finally(() => {
 			// Only clear when this call still owns the slot.
@@ -2803,7 +2809,7 @@ export class WorkspaceLifecycle {
 
 	async #ensureHost(entry: RegistryEntry, resumeFile?: string): Promise<void> {
 		const registry = this.#deps.registry;
-		const current = registry.get(entry.daemonId) ?? entry;
+		const current = registry.get(entry.workspaceId) ?? entry;
 		// Fallback for template-less rows (registered asleep, or state files
 		// written before rows stored the resolved name): resolve the same name
 		// spawnHost would for the cwd.
@@ -2812,8 +2818,8 @@ export class WorkspaceLifecycle {
 		if (!template) throw new Error(`unknown spawn template: ${templateName}`);
 		// Heal the persisted row so later starts skip the fallback.
 		if (current.template === undefined)
-			registry.update(current.daemonId, { template: templateName });
-		const runtime = this.#hostRuntime(current.daemonId);
+			registry.update(current.workspaceId, { template: templateName });
+		const runtime = this.#hostRuntime(current.workspaceId);
 		// An explicit start is the operator's retry: spent restarts are forgiven.
 		runtime.budget.reset();
 		// A session this process did not launch has no child handle here, so it
@@ -2824,7 +2830,7 @@ export class WorkspaceLifecycle {
 			await this.#awaitLockRelease(current);
 		}
 		runtime.stopped = false;
-		await this.#startHost(registry.get(current.daemonId) ?? current, template, {
+		await this.#startHost(registry.get(current.workspaceId) ?? current, template, {
 			resume: true,
 			resumeFile,
 		});
@@ -2837,7 +2843,7 @@ export class WorkspaceLifecycle {
 		opts: { resume: boolean; resumeFile?: string },
 	): Promise<void> {
 		const refusal = await this.#launchHost(entry, template, opts);
-		if (refusal !== undefined) this.#markFailed(entry.daemonId, refusal);
+		if (refusal !== undefined) this.#markFailed(entry.workspaceId, refusal);
 	}
 
 	/**
@@ -2846,7 +2852,7 @@ export class WorkspaceLifecycle {
 	 * A dead or unknown session passes.
 	 */
 	async #awaitLockRelease(entry: RegistryEntry): Promise<void> {
-		await requestSessionShutdown(this.#deps.transport, entry.daemonId, "respawn");
+		await requestSessionShutdown(this.#deps.transport, entry.workspaceId, "respawn");
 		const deadline = Date.now() + RESPAWN_KILL_GRACE_MS;
 		while (this.#hostProvider.inspect(this.#hostRequest("inspect", entry)).observed === "running") {
 			if (Date.now() >= deadline) {
@@ -2865,14 +2871,14 @@ export class WorkspaceLifecycle {
 	 * lastSessionFile kept). A session adopted from a previous fleet process is
 	 * asked to exit and its enrollment revoked; it is never signalled.
 	 */
-	async #stopHost(daemonId: string): Promise<void> {
-		const runtime = this.#hostRuntimes.get(daemonId);
+	async #stopHost(workspaceId: string): Promise<void> {
+		const runtime = this.#hostRuntimes.get(workspaceId);
 		if (runtime !== undefined) {
 			runtime.stopped = true;
 			this.#clearHostTimers(runtime);
 		}
-		await requestSessionShutdown(this.#deps.transport, daemonId, "stop");
-		const entry = this.#deps.registry.get(daemonId);
+		await requestSessionShutdown(this.#deps.transport, workspaceId, "stop");
+		const entry = this.#deps.registry.get(workspaceId);
 		const response =
 			entry === undefined
 				? undefined
@@ -2880,16 +2886,16 @@ export class WorkspaceLifecycle {
 						this.#hostRequest("stop", entry, { killGraceMs: STOP_SIGTERM_GRACE_MS }),
 					);
 		if (response !== undefined && !response.ok) {
-			throw new Error(`stop of ${daemonId} failed: ${response.error.message}`);
+			throw new Error(`stop of ${workspaceId} failed: ${response.error.message}`);
 		}
-		releaseSessionCredential(this.#deps.transport, this.#deps.registry, daemonId);
-		if (entry !== undefined && this.#deps.registry.get(daemonId)) {
-			this.#deps.registry.setStatus(daemonId, "asleep");
+		releaseSessionCredential(this.#deps.transport, this.#deps.registry, workspaceId);
+		if (entry !== undefined && this.#deps.registry.get(workspaceId)) {
+			this.#deps.registry.setStatus(workspaceId, "asleep");
 		}
 		// One line per stop that actually ended a child (stopping an already
 		// asleep row, e.g. on fleet shutdown, is a no-op and stays quiet).
 		if (response?.ok && response.exit !== undefined) {
-			this.#log("info", `stop (${response.exit})`, daemonId);
+			this.#log("info", `stop (${response.exit})`, workspaceId);
 		}
 	}
 
@@ -2902,17 +2908,17 @@ export class WorkspaceLifecycle {
 	 * run in the eviction's `removal` step around this, and the row is dropped
 	 * only once they pass. Idempotent for rows never started here.
 	 */
-	async #deleteHost(daemonId: string): Promise<void> {
-		await this.#serialized(daemonId, async () => {
-			await this.#stopHost(daemonId);
-			const runtime = this.#hostRuntimes.get(daemonId);
+	async #deleteHost(workspaceId: string): Promise<void> {
+		await this.#serialized(workspaceId, async () => {
+			await this.#stopHost(workspaceId);
+			const runtime = this.#hostRuntimes.get(workspaceId);
 			if (runtime !== undefined) this.#disposeHostRuntime(runtime);
-			this.#hostRuntimes.delete(daemonId);
-			const entry = this.#deps.registry.get(daemonId);
+			this.#hostRuntimes.delete(workspaceId);
+			const entry = this.#deps.registry.get(workspaceId);
 			if (entry !== undefined) {
 				await this.#hostProvider.run(this.#hostRequest("delete", entry));
 			}
-			this.#log("info", "delete", daemonId);
+			this.#log("info", "delete", workspaceId);
 		});
 	}
 
@@ -2933,7 +2939,7 @@ export class WorkspaceLifecycle {
 			const enrolled = entry.workspace?.enrollment !== undefined;
 			const observed = this.#hostProvider.inspect(this.#hostRequest("inspect", entry)).observed;
 			const previousStatus = entry.status;
-			const target: DaemonStatus = !enrolled || observed === "stopped" ? "asleep" : "reconnecting";
+			const target: SessionStatus = !enrolled || observed === "stopped" ? "asleep" : "reconnecting";
 			const reason = !enrolled
 				? "not enrolled"
 				: observed === "stopped"
@@ -2941,14 +2947,14 @@ export class WorkspaceLifecycle {
 					: observed === "running"
 						? "local session alive"
 						: "liveness unknown";
-			this.#deps.registry.update(entry.daemonId, { readyAt: undefined, pid: undefined });
-			this.#deps.registry.setStatus(entry.daemonId, target);
+			this.#deps.registry.update(entry.workspaceId, { readyAt: undefined, pid: undefined });
+			this.#deps.registry.setStatus(entry.workspaceId, target);
 			this.#log(
 				"info",
 				`boot reconcile: ${previousStatus} → ${target} (${reason})`,
-				entry.daemonId,
+				entry.workspaceId,
 			);
-			if (target === "reconnecting") reconnecting.push(entry.daemonId);
+			if (target === "reconnecting") reconnecting.push(entry.workspaceId);
 		}
 		return reconnecting;
 	}
@@ -2959,11 +2965,11 @@ export class WorkspaceLifecycle {
 	 */
 	hostSnapshot(): Record<string, { pid?: number; restarts: number }> {
 		const out: Record<string, { pid?: number; restarts: number }> = {};
-		for (const [daemonId, runtime] of this.#hostRuntimes) {
+		for (const [workspaceId, runtime] of this.#hostRuntimes) {
 			const info: { pid?: number; restarts: number } = { restarts: runtime.budget.used };
-			const pid = this.#hostProvider.pidOf(daemonId);
+			const pid = this.#hostProvider.pidOf(workspaceId);
 			if (pid !== undefined) info.pid = pid;
-			out[daemonId] = info;
+			out[workspaceId] = info;
 		}
 		return out;
 	}
@@ -2972,20 +2978,20 @@ export class WorkspaceLifecycle {
 	 * The runtime's log tail (stdout and stderr of a host session, appended per
 	 * launch): the last 64 KiB as text, empty when it never logged. Read from the
 	 * file, so it survives a fleet restart. A provider-managed clone logs to its
-	 * own daemon.log instead.
+	 * own session.log instead.
 	 */
-	sessionLogTail(daemonId: string): string {
-		const local = readSessionLogTail(this.#hostLogPath(daemonId), STDERR_TAIL_BYTES);
-		const entry = this.#deps.registry.get(daemonId);
+	sessionLogTail(workspaceId: string): string {
+		const local = readSessionLogTail(this.#hostLogPath(workspaceId), STDERR_TAIL_BYTES);
+		const entry = this.#deps.registry.get(workspaceId);
 		if (local !== "" || entry?.workspace === undefined || entry.cwd === undefined) return local;
 		// Mirrors the provider's clone layout (#clonePaths): state dir =
-		// <dirname(clone root)>/.provider-state/<daemonId>.
-		const stateDir = join(dirname(entry.cwd), ".provider-state", daemonId);
-		return readSessionLogTail(join(stateDir, PROVIDER_DAEMON_LOG), STDERR_TAIL_BYTES);
+		// <dirname(clone root)>/.provider-state/<workspaceId>.
+		const stateDir = join(dirname(entry.cwd), ".provider-state", workspaceId);
+		return readProviderLogTail(stateDir, STDERR_TAIL_BYTES);
 	}
 
-	#hostLogPath(daemonId: string): string {
-		return join(dirname(this.#deps.statePath), "session-logs", `${daemonId}.log`);
+	#hostLogPath(workspaceId: string): string {
+		return join(dirname(this.#deps.statePath), "session-logs", `${workspaceId}.log`);
 	}
 
 	#hostRequest(
@@ -2995,16 +3001,16 @@ export class WorkspaceLifecycle {
 	): HostRequest {
 		return {
 			op,
-			workspaceId: entry.daemonId,
+			workspaceId: entry.workspaceId,
 			generation: entry.workspace?.authorizedGeneration ?? 0,
 			entry,
-			logPath: this.#hostLogPath(entry.daemonId),
+			logPath: this.#hostLogPath(entry.workspaceId),
 			...extra,
 		};
 	}
 
-	#hostRuntime(daemonId: string): HostRuntime {
-		let runtime = this.#hostRuntimes.get(daemonId);
+	#hostRuntime(workspaceId: string): HostRuntime {
+		let runtime = this.#hostRuntimes.get(workspaceId);
 		if (runtime === undefined) {
 			const created: HostRuntime = {
 				budget: new RestartBudget(this.#policy),
@@ -3016,7 +3022,7 @@ export class WorkspaceLifecycle {
 			};
 			// A pair that holds for the stable window refills the restart budget, so
 			// restartMax bounds crash LOOPS (pair, crash, pair, crash), not lifetime restarts.
-			created.unsubscribe = this.#deps.transport.onPairChange(daemonId, (status) => {
+			created.unsubscribe = this.#deps.transport.onPairChange(workspaceId, (status) => {
 				if (!status.paired) {
 					created.budget.unpaired();
 					return;
@@ -3027,11 +3033,11 @@ export class WorkspaceLifecycle {
 				}
 				created.budget.paired();
 				// A paired session is past its start (or restart): no lifecycle stage to show.
-				if (this.#deps.registry.get(daemonId)?.lifecycleStage !== undefined) {
-					this.#setStage(daemonId, undefined);
+				if (this.#deps.registry.get(workspaceId)?.lifecycleStage !== undefined) {
+					this.#setStage(workspaceId, undefined);
 				}
 			});
-			this.#hostRuntimes.set(daemonId, created);
+			this.#hostRuntimes.set(workspaceId, created);
 			runtime = created;
 		}
 		return runtime;
@@ -3065,18 +3071,18 @@ export class WorkspaceLifecycle {
 		opts: { resume: boolean; resumeFile?: string },
 	): Promise<string | undefined> {
 		const { registry, transport } = this.#deps;
-		const daemonId = entry.daemonId;
-		const runtime = this.#hostRuntime(daemonId);
+		const workspaceId = entry.workspaceId;
+		const runtime = this.#hostRuntime(workspaceId);
 		runtime.stopped = false;
 		if (runtime.pairTimer !== null) {
 			clearTimeout(runtime.pairTimer);
 			runtime.pairTimer = null;
 		}
 		const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
-		const enrollment = enrollSessionCredential(transport, registry, daemonId);
+		const enrollment = enrollSessionCredential(transport, registry, workspaceId);
 		runtime.generation = enrollment.generation;
-		this.#setStage(daemonId, "runtime");
-		this.#deps.onEnrolled?.(daemonId);
+		this.#setStage(workspaceId, "runtime");
+		this.#deps.onEnrolled?.(workspaceId);
 		// Every value interpolated into the template command is
 		// attacker-controlled at some call site (POST /ctl/spawn name)
 		// and lands in `sh -c`; shell-quote each one so it can never break
@@ -3085,9 +3091,9 @@ export class WorkspaceLifecycle {
 		// opts.resumeFile overrides it for a dropdown-picked session.
 		const resumeFile =
 			opts.resumeFile && opts.resumeFile.trim() !== "" ? opts.resumeFile : entry.lastSessionFile;
-		// Strict unless the file is known unwritten: an explicit pick, or a file the daemon
+		// Strict unless the file is known unwritten: an explicit pick, or a file the session
 		// reported persisted, must exist (a missing one exits 78). Otherwise a never-prompted
-		// session's recorded path may not exist yet, so the daemon adopts it (identity kept).
+		// session's recorded path may not exist yet, so the session adopts it (identity kept).
 		const resumeStrict =
 			(opts.resumeFile !== undefined && opts.resumeFile.trim() !== "") ||
 			entry.lastSessionPersisted === true;
@@ -3101,50 +3107,53 @@ export class WorkspaceLifecycle {
 			name: shellQuote(entry.name),
 			resume: resumeArg,
 		});
-		const stdin = fleetStdinPayload({ url: this.#deps.callbackUrl(), daemonId, enrollment }, token);
+		const stdin = fleetStdinPayload(
+			{ url: this.#deps.callbackUrl(), workspaceId, enrollment },
+			token,
+		);
 		const response = await this.#hostProvider.run(
-			this.#hostRequest("ensure-running", registry.get(daemonId) ?? entry, {
+			this.#hostRequest("ensure-running", registry.get(workspaceId) ?? entry, {
 				generation: enrollment.generation,
 				launch: { command, stdin },
 				killGraceMs: RESPAWN_KILL_GRACE_MS,
 			}),
 		);
 		if (!response.ok) {
-			releaseSessionCredential(transport, registry, daemonId);
-			this.#log("error", response.error.message, daemonId);
+			releaseSessionCredential(transport, registry, workspaceId);
+			this.#log("error", response.error.message, workspaceId);
 			return response.error.message;
 		}
 		// The replaced predecessor's death is expected, not a crash.
-		if (response.exit !== undefined) this.#log("info", `${response.exit} (replaced)`, daemonId);
+		if (response.exit !== undefined) this.#log("info", `${response.exit} (replaced)`, workspaceId);
 		// One line per launch: spawn vs respawn (resume) and the template.
 		const verb = opts.resume ? `respawn${resumeArg !== "" ? " --resume" : ""}` : "spawn";
-		this.#log("info", `${verb} template=${entry.template ?? "?"}`, daemonId);
-		registry.update(daemonId, { pid: response.pid });
-		registry.setStatus(daemonId, "connecting");
+		this.#log("info", `${verb} template=${entry.template ?? "?"}`, workspaceId);
+		registry.update(workspaceId, { pid: response.pid });
+		registry.setStatus(workspaceId, "connecting");
 		// No pair within the window: error and end the child (a session that
 		// cannot reach the control plane never becomes ready).
 		const generation = enrollment.generation;
 		runtime.pairTimer = setTimeout(() => {
 			runtime.pairTimer = null;
-			void this.#serialized(daemonId, () => this.#onPairTimeout(daemonId, generation)).catch(
-				(err: unknown) => this.#failHostRuntime(daemonId, "pair timeout handling failed", err),
+			void this.#serialized(workspaceId, () => this.#onPairTimeout(workspaceId, generation)).catch(
+				(err: unknown) => this.#failHostRuntime(workspaceId, "pair timeout handling failed", err),
 			);
 		}, this.#pairTimeoutMs);
 		return undefined;
 	}
 
 	/** The launch's pair window elapsed without a pair: fail the row and end the child (no restart). */
-	async #onPairTimeout(daemonId: string, generation: number): Promise<void> {
-		const runtime = this.#hostRuntimes.get(daemonId);
-		const entry = this.#deps.registry.get(daemonId);
+	async #onPairTimeout(workspaceId: string, generation: number): Promise<void> {
+		const runtime = this.#hostRuntimes.get(workspaceId);
+		const entry = this.#deps.registry.get(workspaceId);
 		if (runtime === undefined || entry === undefined) return;
 		if (runtime.stopped || runtime.generation !== generation) return;
-		if (this.#hostProvider.pidOf(daemonId) === undefined) return; // The child already exited; its exit owns the aftermath.
-		if (this.#deps.transport.pairStatus(daemonId).paired) return;
+		if (this.#hostProvider.pidOf(workspaceId) === undefined) return; // The child already exited; its exit owns the aftermath.
+		if (this.#deps.transport.pairStatus(workspaceId).paired) return;
 		const message = `no callback pair within ${this.#pairTimeoutMs / 1000}s`;
-		releaseSessionCredential(this.#deps.transport, this.#deps.registry, daemonId);
-		this.#markFailed(daemonId, message);
-		this.#log("error", message, daemonId);
+		releaseSessionCredential(this.#deps.transport, this.#deps.registry, workspaceId);
+		this.#markFailed(workspaceId, message);
+		this.#log("error", message, workspaceId);
 		await this.#hostProvider.run(
 			this.#hostRequest("stop", entry, { killGraceMs: STOP_SIGTERM_GRACE_MS }),
 		);
@@ -3168,11 +3177,11 @@ export class WorkspaceLifecycle {
 	 * Something threw while handling a runtime event: the row would otherwise
 	 * keep its last status with no restart and no reason.
 	 */
-	#failHostRuntime(daemonId: string, what: string, err: unknown): void {
-		releaseSessionCredential(this.#deps.transport, this.#deps.registry, daemonId);
+	#failHostRuntime(workspaceId: string, what: string, err: unknown): void {
+		releaseSessionCredential(this.#deps.transport, this.#deps.registry, workspaceId);
 		const message = `${what}: ${err instanceof Error ? err.message : String(err)}`;
-		this.#markFailed(daemonId, message);
-		this.#log("error", message, daemonId);
+		this.#markFailed(workspaceId, message);
+		this.#log("error", message, workspaceId);
 	}
 
 	/**
@@ -3185,49 +3194,49 @@ export class WorkspaceLifecycle {
 	 * one crash policy (#restartOrGiveUp), shared with every provider clone.
 	 */
 	#applyExitPolicy(runtime: HostRuntime, exit: HostExit): void {
-		const daemonId = exit.workspaceId;
+		const workspaceId = exit.workspaceId;
 		const { registry, transport } = this.#deps;
 		if (runtime.stopped || runtime.generation !== exit.generation) return;
-		if (!registry.get(daemonId)) return;
+		if (!registry.get(workspaceId)) return;
 		const summary = describeExit(exit.exitCode, exit.signalCode);
 		if (isDeterministicExit(exit.exitCode)) {
 			// Deterministic refusals: another omp-session holds the session file
 			// (77), or --resume names a session that cannot be restored (78).
-			const reason = this.#deterministicExitReason(daemonId);
-			releaseSessionCredential(transport, registry, daemonId);
-			this.#setStage(daemonId, undefined);
-			registry.setStatus(daemonId, "asleep", reason);
-			this.#log("error", reason, daemonId);
+			const reason = this.#deterministicExitReason(workspaceId);
+			releaseSessionCredential(transport, registry, workspaceId);
+			this.#setStage(workspaceId, undefined);
+			registry.setStatus(workspaceId, "asleep", reason);
+			this.#log("error", reason, workspaceId);
 			return;
 		}
 		if (exit.exitCode === 0 && exit.signalCode === null) {
 			// The session shut itself down cleanly (e.g. its control grace
 			// expired, or a credential it held was revoked): dormant, not restarted.
-			releaseSessionCredential(transport, registry, daemonId);
-			this.#setStage(daemonId, undefined);
-			registry.setStatus(daemonId, "asleep");
-			this.#log("info", `${summary} clean → asleep`, daemonId);
+			releaseSessionCredential(transport, registry, workspaceId);
+			this.#setStage(workspaceId, undefined);
+			registry.setStatus(workspaceId, "asleep");
+			this.#log("info", `${summary} clean → asleep`, workspaceId);
 			return;
 		}
-		this.#restartOrGiveUp(daemonId, runtime.budget, `child exited (${summary})`, {
-			live: () => this.#hostLive(daemonId, runtime),
-			restart: () => this.#restartHost(daemonId),
+		this.#restartOrGiveUp(workspaceId, runtime.budget, `child exited (${summary})`, {
+			live: () => this.#hostLive(workspaceId, runtime),
+			restart: () => this.#restartHost(workspaceId),
 			giveUp: () => {},
 		});
 	}
 
 	/** The host runtime is still the row's current one and no explicit stop or delete ended it. */
-	#hostLive(daemonId: string, runtime: HostRuntime): boolean {
+	#hostLive(workspaceId: string, runtime: HostRuntime): boolean {
 		return (
 			!runtime.stopped &&
-			this.#hostRuntimes.get(daemonId) === runtime &&
-			this.#deps.registry.get(daemonId) !== undefined
+			this.#hostRuntimes.get(workspaceId) === runtime &&
+			this.#deps.registry.get(workspaceId) !== undefined
 		);
 	}
 
 	/** The crash restart itself: a resume start with a fresh credential and generation. */
-	async #restartHost(daemonId: string): Promise<void> {
-		const current = this.#deps.registry.get(daemonId);
+	async #restartHost(workspaceId: string): Promise<void> {
+		const current = this.#deps.registry.get(workspaceId);
 		if (!current) return;
 		const template = this.#deps.config.templates[current.template ?? ""];
 		if (!template) throw new Error(`unknown spawn template: ${current.template}`);
@@ -3236,8 +3245,8 @@ export class WorkspaceLifecycle {
 	}
 
 	/** The child's last non-empty log line (its refusal reason), without the omp-session prefix. */
-	#deterministicExitReason(daemonId: string): string {
-		const lastLine = this.sessionLogTail(daemonId)
+	#deterministicExitReason(workspaceId: string): string {
+		const lastLine = this.sessionLogTail(workspaceId)
 			.split("\n")
 			.map((line) => line.trim())
 			.filter((line) => line !== "")
@@ -3249,35 +3258,35 @@ export class WorkspaceLifecycle {
 	// Internal plumbing
 	// ------------------------------------------------------------------
 
-	#require(daemonId: string): RegistryEntry {
-		const entry = this.#deps.registry.get(daemonId);
-		if (!entry) throw new CloneLifecycleError("invalid_request", `unknown daemon: ${daemonId}`);
+	#require(workspaceId: string): RegistryEntry {
+		const entry = this.#deps.registry.get(workspaceId);
+		if (!entry) throw new CloneLifecycleError("invalid_request", `unknown session: ${workspaceId}`);
 		return entry;
 	}
 
-	#requireClone(daemonId: string, verb: string): RegistryEntry {
-		const entry = this.#require(daemonId);
+	#requireClone(workspaceId: string, verb: string): RegistryEntry {
+		const entry = this.#require(workspaceId);
 		if (entry.workspace?.kind !== "clone") {
 			throw new CloneLifecycleError(
 				"invalid_request",
-				`daemon ${daemonId} is not a clone workspace (kind ${entry.workspace?.kind ?? "legacy"}); ${verb} a worktree/direct session through its own path`,
+				`session ${workspaceId} is not a clone workspace (kind ${entry.workspace?.kind ?? "legacy"}); ${verb} a worktree/direct session through its own path`,
 			);
 		}
 		return entry;
 	}
 
-	#log(level: "info" | "warn" | "error", message: string, daemonId?: string): void {
-		this.#deps.eventLog.add(level, "server", message, daemonId);
+	#log(level: "info" | "warn" | "error", message: string, workspaceId?: string): void {
+		this.#deps.eventLog.add(level, "server", message, workspaceId);
 	}
 
 	/** Remove a just-created (never-streamed) entry + its partial volume. */
-	#removeEntryAndVolume(daemonId: string, volumeRoot: string): void {
+	#removeEntryAndVolume(workspaceId: string, volumeRoot: string): void {
 		try {
 			rmSync(volumeRoot, { recursive: true, force: true });
 		} catch {
 			// Best-effort: the volume may be mid-write; the registry removal
 			// below is the durable part.
 		}
-		this.#deps.registry.remove(daemonId);
+		this.#deps.registry.remove(workspaceId);
 	}
 }

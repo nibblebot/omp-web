@@ -1,5 +1,5 @@
 import { Show, type Component } from "solid-js";
-import type { DaemonStatus } from "#lib/wire/protocol";
+import type { SessionStatus } from "#lib/wire/protocol";
 import type { SessionActivity } from "../../../fleet-ui/session-activity";
 
 // ---------------------------------------------------------------------------
@@ -12,36 +12,35 @@ import type { SessionActivity } from "../../../fleet-ui/session-activity";
 //            reconnecting (amber), unreviewed and unread (light blue).
 //   nothing: ready + idle and asleep. A ready row is marked by the right-edge
 //            rail instead (.sidebar-list --ready-rail-*), never by a dot.
-// Styling is the .daemon-status-dot family in fleet.css, keyed by data-status
+// Styling is the .session-status-dot family in fleet.css, keyed by data-status
 // and data-activity.
 // ---------------------------------------------------------------------------
 
 /** Process statuses that show the starting spinner. */
-const TRANSITIONAL: Partial<Record<DaemonStatus, true>> = {
+const TRANSITIONAL: Partial<Record<SessionStatus, true>> = {
 	spawning: true,
 	connecting: true,
-	session: true,
 	resolving: true,
 };
 
 /** Attributes of the signal element, or undefined when nothing shows. */
 function signalAttrs(
-	status: DaemonStatus,
+	status: SessionStatus,
 	activity: SessionActivity | undefined,
-): { status: DaemonStatus; activity?: SessionActivity } | undefined {
+): { status: SessionStatus; activity?: SessionActivity } | undefined {
 	if (TRANSITIONAL[status]) return { status, activity: "in_progress" };
 	if (status === "reconnecting" || status === "error") return { status };
 	if (status !== "ready" || activity === undefined || activity === "idle") return undefined;
 	return { status, activity };
 }
 
-export const RowSignal: Component<{ status: DaemonStatus; activity?: SessionActivity }> = (
+export const RowSignal: Component<{ status: SessionStatus; activity?: SessionActivity }> = (
 	props,
 ) => (
 	<Show when={signalAttrs(props.status, props.activity)}>
 		{(attrs) => (
 			<span
-				class="daemon-status-dot"
+				class="session-status-dot"
 				data-status={attrs().status}
 				data-activity={attrs().activity}
 			/>

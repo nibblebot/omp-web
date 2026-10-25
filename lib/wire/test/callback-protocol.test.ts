@@ -231,7 +231,7 @@ describe("pair upload credit", () => {
 			CALLBACK_WS_MAX_PAYLOAD_BYTES,
 		);
 		expect(CALLBACK_WS_MAX_PAYLOAD_BYTES).toBeGreaterThanOrEqual(ENVELOPE_MAX_BYTES);
-		// The daemon's own queue cap: a full queue never waits on more than it can hold.
+		// The session's own queue cap: a full queue never waits on more than it can hold.
 		expect(PAIR_CREDIT_WINDOW_BYTES).toBe(CONNECTION_MAX_BYTES);
 	});
 

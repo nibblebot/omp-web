@@ -1,5 +1,5 @@
 // Fleet log store: durable, append-only mirror of the session lineage
-// logs that daemons continuously stream over the callback pair. Contracts are summarized below:
+// logs that sessions continuously stream over the callback pair. Contracts are summarized below:
 //   - Layout under the fleet state dir: logs/<workspaceId>/<sessionId>/<relpath>
 //     holds raw bytes, byte-identical to the streamed lineage file.
 //   - Per-session sidecar index.json (atomic tmp -> rename -> parent fsync) is
@@ -13,7 +13,7 @@
 //     result (log_gap repair); lower is a post-reconnect resend and is dropped.
 //   - Generations: per-file identity counter. An older generation is dropped;
 //     a newer one truncates the stored bytes and resyncs from 0.
-//   - Retention: purgeSession is driven by the daemon's additive
+//   - Retention: purgeSession is driven by the session's additive
 //     `session_deleted` control notice (the workspace deleted the session; the
 //     fleet copy follows) or explicitly by purgeSession/purgeWorkspace, e.g.
 //     for orphaned or verified read-only logs, plus listOrphans against a
@@ -45,7 +45,7 @@ import {
 import type { Dirent } from "node:fs";
 import { dirname, join } from "node:path";
 
-/** Log chunk frame payload streamed by the daemon (frozen contract shape). */
+/** Log chunk frame payload streamed by the session (frozen contract shape). */
 export interface LogChunk {
 	/** Byte offset of this chunk in the file at `generation`. */
 	offset: number;
@@ -169,7 +169,7 @@ export interface StoredFileInfo {
 	bytes: number;
 	/** Last durable append offset recorded in the index sidecar. */
 	ackedBytes: number;
-	/** True when the daemon closed the stream (final chunk with eof). */
+	/** True when the session closed the stream (final chunk with eof). */
 	eof: boolean;
 	status: StoredFileStatus;
 }
@@ -692,7 +692,7 @@ function treeBytes(dir: string): number {
 }
 
 /**
- * Durable store of daemon-streamed session logs. See the module header for
+ * Durable store of session-streamed session logs. See the module header for
  * the frozen contract. One FleetLogStore instance owns the whole logs/ tree
  * under `rootDir`; process state lives in memory and is rebuilt by load().
  */
@@ -761,7 +761,7 @@ export class FleetLogStore {
 	 * Makes every pending ingestDeferred() append for the workspace durable:
 	 * fsyncs each touched file (and the directory of each new file), then
 	 * rewrites each touched session index. On failure the in-memory stream
-	 * state of the pending appends is rolled back, so the daemon's resend is
+	 * state of the pending appends is rolled back, so the session's resend is
 	 * re-applied, and the error is rethrown. No-op when nothing is pending.
 	 */
 	commit(workspaceId: string): void {
@@ -818,7 +818,7 @@ export class FleetLogStore {
 				// Older generation: bytes of a dead file identity, dropped.
 				return { status: "obsolete" };
 			} else if (chunk.generation > stream.generation) {
-				// Atomic daemon-side rewrite replaced the file: stored bytes are
+				// Atomic session-side rewrite replaced the file: stored bytes are
 				// stale. Truncate and resync from 0 under the new generation.
 				if (existsSync(file)) truncateFile(file, 0);
 				stream.generation = chunk.generation;
@@ -850,7 +850,7 @@ export class FleetLogStore {
 			if (chunk.offset < stream.ackedOffset) {
 				// Post-reconnect resend of a chunk whose start lies below the durable
 				// offset. Bytes up to the acked offset are already on disk and are
-				// ignored; recovery can heal the file forward past the daemon's last
+				// ignored; recovery can heal the file forward past the session's last
 				// ack (torn tail cut to the last newline), so a chunk may extend past
 				// ackedOffset. Same generation means the same file identity, so the
 				// suffix is exactly the file's continuation and is appended.
@@ -1029,7 +1029,7 @@ export class FleetLogStore {
 
 	// -------------------------------------------------------------------------
 	// Read-only surface. Every method below is a pure disk read:
-	// never mutates, never repairs, never touches a daemon or the SDK, and
+	// never mutates, never repairs, never touches a session or the SDK, and
 	// never throws across the API boundary. Sessions not present in the
 	// in-memory map are restored from disk on demand (constructor-only usage).
 	// -------------------------------------------------------------------------
@@ -1113,7 +1113,7 @@ export class FleetLogStore {
 
 	/**
 	 * Reads one stored file's bytes, or null when the file is absent or the
-	 * ids/relpath are unsafe. Bytes are exactly what the daemon streamed
+	 * ids/relpath are unsafe. Bytes are exactly what the session streamed
 	 * (the store never rewrites). Read-only: never repairs or truncates.
 	 */
 	readStored(workspaceId: string, sessionId: string, relpath: string): Buffer | null {
@@ -1144,7 +1144,7 @@ export class FleetLogStore {
 	 * durable/indexed bytes, eof, and availability. Returns null for an
 	 * unknown workspace/session. Every file status is reconciled against
 	 * disk at call time, so "missing" reflects reality, not a stale index.
-	 * Materialization consumers (daemon-transport bulk downloads, resume-
+	 * Materialization consumers (session-transport bulk downloads, resume-
 	 * onto-fresh-clone) copy files with status "stored" in this order.
 	 */
 	storedLineage(workspaceId: string, sessionId: string): StoredSessionInfo | null {
@@ -1367,7 +1367,7 @@ export class FleetLogStore {
 		}
 
 		// Files on disk without an index entry: a crash between the append fsync
-		// and the index rename. Adopt them at full-line length so the daemon's
+		// and the index rename. Adopt them at full-line length so the session's
 		// resends below the adopted offset are dropped, never double-applied.
 		const adopt = (prefix: string): void => {
 			const abs = prefix ? join(dir, prefix) : dir;

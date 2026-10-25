@@ -69,7 +69,7 @@ describe("browser socket refusal (off-loopback peer)", () => {
 		expect(socketRefusal(credentials({ authorization: "bearer sekret" }), params())).toBeNull();
 	});
 
-	test("loopback needs no credential, and a daemon with no token is open", () => {
+	test("loopback needs no credential, and a session with no token is open", () => {
 		expect(socketRefusal(credentials({ loopback: true }), params())).toBeNull();
 		expect(
 			socketRefusal(credentials({ token: undefined }), params({ token: "anything" })),
@@ -99,7 +99,7 @@ describe("browser socket refusal (off-loopback peer)", () => {
 		expect(socketRefusal(credentials({ loopback: true }), params({ proto: null }))?.code).toBe(
 			4426,
 		);
-		// An unauthenticated peer learns nothing about the daemon's proto: auth wins.
+		// An unauthenticated peer learns nothing about the session's proto: auth wins.
 		expect(socketRefusal(credentials(), params({ proto: OMP_PROTO - 1 }))?.code).toBe(4401);
 	});
 });

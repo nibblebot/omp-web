@@ -32,7 +32,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import type { DaemonEntry } from "#lib/wire/protocol";
+import type { RosterEntry } from "#lib/wire/protocol";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { startFakeModel, type FakeModel } from "../scripts/profile/fake-model/server";
 import { writeAgentDir } from "../scripts/profile/fake-model/config";
@@ -73,7 +73,7 @@ function procsNaming(root: string): number[] {
 }
 
 interface PromptResultWire {
-	daemonId: string;
+	workspaceId: string;
 	ok: boolean;
 	text?: string;
 	error?: string;
@@ -83,7 +83,7 @@ describe.skipIf(!bwrapUsable())("e2e: bwrap clone pairs over the WebSocket callb
 	let tmp: string;
 	let server!: FleetServer;
 	let model!: FakeModel;
-	let entry!: DaemonEntry;
+	let entry!: RosterEntry;
 	const savedFleetEnv: Record<string, string | undefined> = {};
 
 	const base = (): string => `http://127.0.0.1:${server.port}`;
@@ -94,25 +94,25 @@ describe.skipIf(!bwrapUsable())("e2e: bwrap clone pairs over the WebSocket callb
 			body: JSON.stringify(body),
 		});
 
-	async function getEntry(): Promise<DaemonEntry | undefined> {
+	async function getEntry(): Promise<RosterEntry | undefined> {
 		const res = await fetch(`${base()}/ctl/sessions`);
-		const entries = (await res.json()) as DaemonEntry[];
-		return entries.find((row) => row.daemonId === entry.daemonId);
+		const entries = (await res.json()) as RosterEntry[];
+		return entries.find((row) => row.workspaceId === entry.workspaceId);
 	}
 
 	async function waitForEntry(
-		predicate: (row: DaemonEntry) => boolean,
+		predicate: (row: RosterEntry) => boolean,
 		timeoutMs: number,
 		what: string,
-	): Promise<DaemonEntry> {
+	): Promise<RosterEntry> {
 		const deadline = Date.now() + timeoutMs;
-		let last: DaemonEntry | undefined;
+		let last: RosterEntry | undefined;
 		while (Date.now() < deadline) {
 			last = await getEntry();
 			if (last !== undefined) {
 				if (predicate(last)) return last;
 				if (last.status === "error") {
-					const tail = server.lifecycle.sessionLogTail(entry.daemonId);
+					const tail = server.lifecycle.sessionLogTail(entry.workspaceId);
 					throw new Error(
 						`clone entered error: ${last.error ?? "unknown"}\nlog tail: ${tail ?? ""}`,
 					);
@@ -120,7 +120,7 @@ describe.skipIf(!bwrapUsable())("e2e: bwrap clone pairs over the WebSocket callb
 			}
 			await sleep(60);
 		}
-		const tail = server.lifecycle.sessionLogTail(entry.daemonId);
+		const tail = server.lifecycle.sessionLogTail(entry.workspaceId);
 		throw new Error(
 			`timed out waiting for the clone to ${what} (${timeoutMs}ms); last status ${last?.status ?? "absent"}\nlog tail: ${tail ?? ""}`,
 		);
@@ -128,9 +128,9 @@ describe.skipIf(!bwrapUsable())("e2e: bwrap clone pairs over the WebSocket callb
 
 	/** A prompt through POST /ctl/prompt; the fake model streams `chars` characters back. */
 	async function prompt(chars: number): Promise<PromptResultWire> {
-		const text = textTurn({ route: entry.daemonId, chars, chunkChars: 16, deltasPerSec: 0 });
+		const text = textTurn({ route: entry.workspaceId, chars, chunkChars: 16, deltasPerSec: 0 });
 		const res = await postJson("/ctl/prompt", {
-			selector: entry.daemonId,
+			selector: entry.workspaceId,
 			text,
 			waitMs: 60_000,
 		});
@@ -142,7 +142,7 @@ describe.skipIf(!bwrapUsable())("e2e: bwrap clone pairs over the WebSocket callb
 
 	/** The one live pair the fleet holds for the clone, with proof it is a WebSocket pair. */
 	function livePair(): { connectionId: string; envelopes: number } {
-		const status = server.transport.pairStatus(entry.daemonId);
+		const status = server.transport.pairStatus(entry.workspaceId);
 		expect(status.paired).toBe(true);
 		expect(status.connectionId).not.toBeNull();
 		return { connectionId: status.connectionId!, envelopes: status.envelopesReceived };
@@ -191,7 +191,7 @@ describe.skipIf(!bwrapUsable())("e2e: bwrap clone pairs over the WebSocket callb
 			else process.env[key] = value;
 		}
 		if (entry !== undefined && server !== undefined) {
-			await postJson("/ctl/stop", { selector: entry.daemonId }).catch(() => undefined);
+			await postJson("/ctl/stop", { selector: entry.workspaceId }).catch(() => undefined);
 		}
 		if (server !== undefined) await server.close();
 		if (model !== undefined) await model.close();
@@ -227,18 +227,18 @@ describe.skipIf(!bwrapUsable())("e2e: bwrap clone pairs over the WebSocket callb
 			start: false,
 		});
 		expect(created.status).toBe(201);
-		entry = ((await created.json()) as { entry: DaemonEntry }).entry;
+		entry = ((await created.json()) as { entry: RosterEntry }).entry;
 
 		// The clone's private home lives in its volume; point its agent dir at the fake model.
 		const state = JSON.parse(readFileSync(join(tmp, "state.json"), "utf8")) as {
-			entries: Array<{ daemonId: string; cwd?: string }>;
+			entries: Array<{ workspaceId: string; cwd?: string }>;
 		};
-		const volume = state.entries.find((row) => row.daemonId === entry.daemonId)!.cwd!;
+		const volume = state.entries.find((row) => row.workspaceId === entry.workspaceId)!.cwd!;
 		const agentDir = join(volume, ".home", "agent");
 		mkdirSync(agentDir, { recursive: true });
 		await writeAgentDir(agentDir, model.url);
 
-		const started = await postJson("/ctl/start", { daemonId: entry.daemonId });
+		const started = await postJson("/ctl/start", { workspaceId: entry.workspaceId });
 		expect(started.status).toBe(200);
 		await waitForEntry(
 			(row) => row.status === "ready" && row.lifecycleStage === "ready",
@@ -270,13 +270,13 @@ describe.skipIf(!bwrapUsable())("e2e: bwrap clone pairs over the WebSocket callb
 		const first = livePair();
 		const sessionFile = (await getEntry())?.lastSessionFile;
 		expect(sessionFile).toBeDefined();
-		const generationBefore = server.transport.pairStatus(entry.daemonId).authorizedGeneration;
-		const stopped = await postJson("/ctl/stop", { selector: entry.daemonId });
+		const generationBefore = server.transport.pairStatus(entry.workspaceId).authorizedGeneration;
+		const stopped = await postJson("/ctl/stop", { selector: entry.workspaceId });
 		expect(stopped.status).toBe(200);
 		await waitForEntry((row) => row.status === "asleep", 60_000, "park asleep");
-		expect(server.transport.pairStatus(entry.daemonId).paired).toBe(false);
+		expect(server.transport.pairStatus(entry.workspaceId).paired).toBe(false);
 
-		const restarted = await postJson("/ctl/start", { daemonId: entry.daemonId });
+		const restarted = await postJson("/ctl/start", { workspaceId: entry.workspaceId });
 		expect(restarted.status).toBe(200);
 		await waitForEntry(
 			(row) => row.status === "ready" && row.lifecycleStage === "ready",
@@ -287,7 +287,7 @@ describe.skipIf(!bwrapUsable())("e2e: bwrap clone pairs over the WebSocket callb
 		// Wake resumed the same session transcript instead of starting a new one.
 		expect((await getEntry())?.lastSessionFile).toBe(sessionFile);
 		expect(second.connectionId).not.toBe(first.connectionId);
-		expect(server.transport.pairStatus(entry.daemonId).authorizedGeneration).toBeGreaterThan(
+		expect(server.transport.pairStatus(entry.workspaceId).authorizedGeneration).toBeGreaterThan(
 			generationBefore ?? 0,
 		);
 		const result = await prompt(1_000);

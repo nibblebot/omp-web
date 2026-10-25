@@ -659,7 +659,7 @@ export type HostSessions = Pick<WorkspaceLifecycle, "spawnHost" | "start" | "res
 
 /**
  * Register a roster entry for an existing worktree path and optionally spawn
- * a daemon on it (start:true). Shared by the /ctl route, the edge command
+ * a session on it (start:true). Shared by the /ctl route, the edge command
  * handler, and the sync pass (which adopts worktrees created outside
  * omp-web). The entry is tagged with the project's projectId and name; when
  * start:false it is registered asleep (wakeable via spawn_resume; the
@@ -676,7 +676,7 @@ export async function registerWorktreeEntry(
 		// host.spawnHost creates the entry (worktreeOf auto-resolved from
 		// git) and launches the child; tag the project id right after.
 		const entry = await host.spawnHost({ cwd: worktreePath, reuse: true });
-		registry.update(entry.daemonId, {
+		registry.update(entry.workspaceId, {
 			projectId: project.projectId,
 			worktreeOf: project.name,
 			workspace: {
@@ -687,7 +687,7 @@ export async function registerWorktreeEntry(
 				desiredState: "running",
 			},
 		});
-		return registry.get(entry.daemonId) ?? entry;
+		return registry.get(entry.workspaceId) ?? entry;
 	}
 	// Mirror spawnHost's field shape (name/project = worktree
 	// basename) so a started and an unstarted worktree render identically
@@ -735,12 +735,12 @@ export async function registerProjectMainEntry(
 		.find((entry) => realpathOf(entry.cwd, opts.realpaths) === project.path);
 	if (existing !== undefined) {
 		if (existing.projectId === undefined) {
-			registry.update(existing.daemonId, { projectId: project.projectId });
+			registry.update(existing.workspaceId, { projectId: project.projectId });
 		}
 		if (opts.start && existing.status === "asleep") {
-			await host.start(existing.daemonId);
+			await host.start(existing.workspaceId);
 		}
-		return registry.get(existing.daemonId) ?? existing;
+		return registry.get(existing.workspaceId) ?? existing;
 	}
 	if (opts.start) {
 		// host.spawnHost creates the entry (resolveWorktreeOf leaves main
@@ -751,8 +751,8 @@ export async function registerProjectMainEntry(
 			template: opts.template,
 			reuse: true,
 		});
-		registry.update(entry.daemonId, { projectId: project.projectId });
-		return registry.get(entry.daemonId) ?? entry;
+		registry.update(entry.workspaceId, { projectId: project.projectId });
+		return registry.get(entry.workspaceId) ?? entry;
 	}
 	// Mirror spawnHost's field shape for the main checkout (name and
 	// project = the repo name) so a started and an unstarted default

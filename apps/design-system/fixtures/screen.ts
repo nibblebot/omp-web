@@ -14,7 +14,7 @@ import type {
 import type { UsageLike } from "../../web/usage/usage";
 import type { AdvisorItem } from "../../web/store/slices/advisor";
 import { FIXTURE_NOW } from "./session";
-import { rosterAppDaemons, rosterProjects } from "./roster";
+import { rosterAppEntries, rosterProjects } from "./roster";
 import { sessionModel } from "./overlays";
 import type { AppSessionView } from "./app-sessions";
 import {
@@ -31,11 +31,11 @@ import {
 /** Screen fixtures: one coherent coding-agent session on this repo (the CopyButton work). */
 
 // ---------------------------------------------------------------------------
-// Session identity: the attached daemon is `dmn_a002` (design-fixtures, ready) from roster.ts.
+// Session identity: the attached session is `dmn_a002` (design-fixtures, ready) from roster.ts.
 // ---------------------------------------------------------------------------
 
-/** Roster id of the daemon the screen is attached to (the ready, attached row). */
-export const SCREEN_DAEMON_ID = "dmn_a002";
+/** Roster id of the session the screen is attached to (the ready, attached row). */
+export const SCREEN_WORKSPACE_ID = "dmn_a002";
 
 const MIN = 60_000;
 
@@ -113,10 +113,10 @@ export const screenSessionView: AppSessionView = {
 /** Store patch describing a ready, attached session with model, context and stats. */
 export const screenSessionSeed: Partial<typeof state> = {
 	connected: true,
-	currentSessionId: SCREEN_DAEMON_ID,
+	currentWorkspaceId: SCREEN_WORKSPACE_ID,
 	...screenSessionView,
 	availableCommands: screenSlashCommands,
-	daemonRoster: rosterAppDaemons,
+	sessionRoster: rosterAppEntries,
 	registeredProjects: rosterProjects,
 	authStatus: "disabled",
 };

@@ -1,6 +1,6 @@
 import { SessionTreePanel } from "../../../web/components/sessions/SessionTreePanel";
 import { sessionGraphPage, sessionGraphPageMore } from "../../fixtures/dialogs";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
 export default defineStory({

@@ -1,5 +1,5 @@
 /**
- * `ws` transport adapter: the browser socket (OMP_PROTO 5, `GET /ws`) driven
+ * `ws` transport adapter: the browser socket (OMP_PROTO 6, `GET /ws`) driven
  * from Bun's client WebSocket, the same wire apps/web speaks.
  *
  * Dial: `browserSocketUrl(baseUrl, { clientId, after, proto: OMP_PROTO, token: null })`.

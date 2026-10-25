@@ -27,7 +27,7 @@ function reportCommandFailure(err: unknown): void {
 
 /**
  * Projects domain (Phase 3 store facade split): fleet-edge project/worktree/
- * daemon senders. Results arrive as roster / registered_projects /
+ * session senders. Results arrive as roster / registered_projects /
  * worktree_delete_info broadcasts and error frames; add_project, create_worktree,
  * create_clone and list_project_branches answer with unicast frames that settle
  * the promises below. The registered-projects / worktreeDeleteInfo mirrors live in
@@ -74,19 +74,19 @@ export function settleProjectBranches(frame: {
 	for (const waiter of waiters) waiter.resolve(result);
 }
 
-/** DaemonIds whose delete was submitted and whose roster removal has not arrived yet.
+/** WorkspaceIds whose delete was submitted and whose roster removal has not arrived yet.
  *  Module-level (like WorkspaceRow's activatingIds) so the dim survives a row
  *  unmounting (collapsed group) and is readable by the delete dialog's sender. The row
- *  dims at once (`.daemon-row--deleting`) and collapses only when the roster drops it. */
+ *  dims at once (`.roster-row--deleting`) and collapses only when the roster drops it. */
 const [deletePendingIds, setDeletePendingIds] = createSignal<ReadonlySet<string>>(new Set());
 export { deletePendingIds };
 
 /** Forget a pending delete: the delete failed, or the roster removal arrived. */
-export function clearDeletePending(daemonId: string): void {
-	if (!deletePendingIds().has(daemonId)) return;
+export function clearDeletePending(workspaceId: string): void {
+	if (!deletePendingIds().has(workspaceId)) return;
 	setDeletePendingIds((prev) => {
 		const next = new Set(prev);
-		next.delete(daemonId);
+		next.delete(workspaceId);
 		return next;
 	});
 }
@@ -152,20 +152,20 @@ export function openAddProject(path?: string): void {
 }
 
 /**
- * Wake an asleep daemon (spawned → respawn --resume; attached/remote → redial), on
+ * Wake an asleep session (spawned → respawn --resume; attached/remote → redial), on
  * `sessionFile` when picked. Resolves true once the edge acked the command: it
  * registers its pending resume before acking, so an attach posted after this
  * resolves can never overtake the wake. Resolves false when refused (not
  * connected) or the command was refused (reported as a toast); never rejects. Callers that
  * attach next MUST await it and skip the attach on false (see wakeAndAttach).
  */
-export function spawnResume(daemonId: string, sessionFile?: string): Promise<boolean> {
+export function spawnResume(workspaceId: string, sessionFile?: string): Promise<boolean> {
 	if (refuseIfDisconnected()) return Promise.resolve(false);
-	clearUserStopped(daemonId);
+	clearUserStopped(workspaceId);
 	return sendCommand({
 		type: "spawn_resume",
 		id: crypto.randomUUID(),
-		daemonId,
+		workspaceId,
 		...(sessionFile !== undefined ? { sessionFile } : {}),
 	} satisfies ClientCommand).then(
 		() => true,
@@ -176,19 +176,19 @@ export function spawnResume(daemonId: string, sessionFile?: string): Promise<boo
 	);
 }
 
-/** Stop a daemon (spawned → terminate child; attached/remote → drop + asleep).
+/** Stop a session (spawned → terminate child; attached/remote → drop + asleep).
  *  Marked user-stopped so the attached chat keeps its transcript behind the stopped strip. */
-export function stopDaemonById(daemonId: string): void {
+export function stopSessionById(workspaceId: string): void {
 	if (refuseIfDisconnected()) return;
-	markUserStopped(daemonId);
+	markUserStopped(workspaceId);
 	void sendCommand({
 		type: "stop",
 		id: crypto.randomUUID(),
-		daemonId,
+		workspaceId,
 	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
-/** Daemons whose restart stop is in flight; each is woken once the roster shows it asleep. */
+/** Sessions whose restart stop is in flight; each is woken once the roster shows it asleep. */
 const restartAwaitingAsleep = new Set<string>();
 
 /** Restart a session process. A ready one is stopped first (marks it), and its wake
@@ -197,24 +197,26 @@ const restartAwaitingAsleep = new Set<string>();
  *  attach: the edge answers the attached frame on wake when this is the attached session.
  *  Resolves like spawnResume when it wakes at once; a ready row has no wake command to
  *  order an attach after (the later wake rides the roster), so it resolves true. */
-export function restartDaemonById(daemonId: string): Promise<boolean> {
-	const entry = state.daemonRoster.find((d) => d.daemonId === daemonId);
-	if (entry?.status !== "ready") return spawnResume(daemonId);
-	restartAwaitingAsleep.add(daemonId);
-	stopDaemonById(daemonId);
+export function restartSessionById(workspaceId: string): Promise<boolean> {
+	const entry = state.sessionRoster.find((d) => d.workspaceId === workspaceId);
+	if (entry?.status !== "ready") return spawnResume(workspaceId);
+	restartAwaitingAsleep.add(workspaceId);
+	stopSessionById(workspaceId);
 	return Promise.resolve(true);
 }
 
-/** Called on every roster frame: wake each restarting daemon that now reads asleep, and
- *  forget restarts whose daemon left the roster. */
-export function resumeRestartedDaemons(roster: Array<{ daemonId: string; status: string }>): void {
-	for (const daemonId of restartAwaitingAsleep) {
-		const entry = roster.find((d) => d.daemonId === daemonId);
+/** Called on every roster frame: wake each restarting session that now reads asleep, and
+ *  forget restarts whose session left the roster. */
+export function resumeRestartedSessions(
+	roster: Array<{ workspaceId: string; status: string }>,
+): void {
+	for (const workspaceId of restartAwaitingAsleep) {
+		const entry = roster.find((d) => d.workspaceId === workspaceId);
 		if (entry === undefined) {
-			restartAwaitingAsleep.delete(daemonId);
+			restartAwaitingAsleep.delete(workspaceId);
 		} else if (entry.status === "asleep") {
-			restartAwaitingAsleep.delete(daemonId);
-			void spawnResume(daemonId);
+			restartAwaitingAsleep.delete(workspaceId);
+			void spawnResume(workspaceId);
 		}
 	}
 }
@@ -231,7 +233,7 @@ interface Waiter<T> {
 }
 
 const pendingAddProject = new Map<string, Waiter<{ projectId: string; existing: boolean }>>();
-const pendingWorkspaceCreate = new Map<string, Waiter<{ daemonId: string }>>();
+const pendingWorkspaceCreate = new Map<string, Waiter<{ workspaceId: string }>>();
 
 /** Settle the add_project waiter (mux "add_project_result" frame); unknown ids are ignored. */
 export function settleAddProject(frame: {
@@ -255,14 +257,14 @@ export function settleAddProject(frame: {
 export function settleWorkspaceCreate(frame: {
 	id: string;
 	ok: boolean;
-	daemonId?: string;
+	workspaceId?: string;
 	error?: string;
 }): void {
 	const waiter = pendingWorkspaceCreate.get(frame.id);
 	if (waiter === undefined) return;
 	pendingWorkspaceCreate.delete(frame.id);
-	if (frame.ok && frame.daemonId !== undefined) {
-		waiter.resolve({ daemonId: frame.daemonId });
+	if (frame.ok && frame.workspaceId !== undefined) {
+		waiter.resolve({ workspaceId: frame.workspaceId });
 	} else {
 		waiter.reject(new Error(frame.error ?? "workspace creation failed"));
 	}
@@ -304,11 +306,11 @@ export function sendRemoveProject(projectId: string): void {
 }
 
 /** Create a worktree workspace (start:true: the fleet spawns a session on it). Resolves
- *  with the new row's daemonId once the fleet accepted it; rejects with the fleet's reason. */
+ *  with the new row's workspaceId once the fleet accepted it; rejects with the fleet's reason. */
 export function createWorktree(
 	projectId: string,
 	opts: { name: string; baseRef?: string; existingBranch?: string },
-): Promise<{ daemonId: string }> {
+): Promise<{ workspaceId: string }> {
 	const id = crypto.randomUUID();
 	return sendKeyed(pendingWorkspaceCreate, id, {
 		type: "create_worktree",
@@ -333,7 +335,7 @@ export function createClone(
 		revision?: string;
 		branch?: string;
 	},
-): Promise<{ daemonId: string }> {
+): Promise<{ workspaceId: string }> {
 	const id = crypto.randomUUID();
 	return sendKeyed(pendingWorkspaceCreate, id, {
 		type: "create_clone",
@@ -380,35 +382,38 @@ export function highlightProject(projectId: string): void {
 	setState("highlightProjectId", projectId);
 }
 
-/** Stop + evict the worktree's daemon and git-remove the linked worktree. `deleteBranch`
+/** Stop + evict the worktree's session and git-remove the linked worktree. `deleteBranch`
  *  names the branch to also delete (the fleet re-checks it is still the checked-out,
  *  unprotected branch). Clean only; a refusal surfaces as an error frame. */
-export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: string } = {}): void {
+export function sendDeleteWorktree(
+	workspaceId: string,
+	opts: { deleteBranch?: string } = {},
+): void {
 	if (refuseIfDisconnected()) return;
 	// A refusal arrives as an uncorrelated error frame that only registers when the text
 	// changes: drop the stale one so this delete's own refusal always registers (it clears
 	// the pending dim below via ProjectGroups, and fills the clone dialog's refusal).
 	setState("error", null);
-	setDeletePendingIds((prev) => new Set(prev).add(daemonId));
+	setDeletePendingIds((prev) => new Set(prev).add(workspaceId));
 	void sendCommand({
 		type: "delete_worktree",
 		id: crypto.randomUUID(),
-		daemonId,
+		workspaceId,
 		...(opts.deleteBranch !== undefined ? { deleteBranch: opts.deleteBranch } : {}),
 	} satisfies ClientCommand).catch((err: unknown) => {
-		clearDeletePending(daemonId);
+		clearDeletePending(workspaceId);
 		reportCommandFailure(err);
 	});
 }
 
 /** Pull guard evidence for the delete-worktree confirm; the answer lands in
- *  state.worktreeDeleteInfo[daemonId] (worktree_delete_info unicast). */
-export function sendWorktreeDeleteInfo(daemonId: string): void {
+ *  state.worktreeDeleteInfo[workspaceId] (worktree_delete_info unicast). */
+export function sendWorktreeDeleteInfo(workspaceId: string): void {
 	if (refuseIfDisconnected()) return;
 	void sendCommand({
 		type: "worktree_delete_info",
 		id: crypto.randomUUID(),
-		daemonId,
+		workspaceId,
 	} satisfies ClientCommand).catch(reportCommandFailure);
 }
 
@@ -429,10 +434,10 @@ function fetchOutcomeText(result: CloneFetchResult): string {
  *  its project's main repo (create or fast-forward only; the fleet refuses anything
  *  else). Success and the fleet's refusal reason both surface as toasts. Resolves
  *  true when the branch landed (or was already there). */
-export async function fetchCloneIntoProject(daemonId: string): Promise<boolean> {
+export async function fetchCloneIntoProject(workspaceId: string): Promise<boolean> {
 	try {
 		const res = await (state.authStatus !== "disabled" ? authedFetch : fetch)(
-			`/ctl/clones/${encodeURIComponent(daemonId)}/fetch-into-project`,
+			`/ctl/clones/${encodeURIComponent(workspaceId)}/fetch-into-project`,
 			{ method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
 		);
 		if (!res.ok) {

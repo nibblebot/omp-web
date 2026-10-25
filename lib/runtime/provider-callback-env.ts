@@ -24,10 +24,10 @@ import {
 export const CALLBACK_ENV_FILE = "callback-env.json";
 const CALLBACK_ENV_VERSION = 1;
 
-/** Wake-resume hint keys (not callback keys, but allowlisted and daemon-consumed
+/** Wake-resume hint keys (not callback keys, but allowlisted and session-consumed
  *  at boot): `OMP_SESSION_RESUME` is a fleet-written absolute main-session path
  *  as the runtime sees it; `OMP_SESSION_RESUME_UNWRITTEN=1` marks it as possibly
- *  not yet on disk (a never-prompted session), so the daemon adopts the path
+ *  not yet on disk (a never-prompted session), so the session adopts the path
  *  instead of failing when it is missing. Without it a missing file exits 78. */
 const RESUME_ENV_KEYS: readonly string[] = ["OMP_SESSION_RESUME", "OMP_SESSION_RESUME_UNWRITTEN"];
 
@@ -37,7 +37,7 @@ const MAX_REQUEST_BYTES = 1024 * 1024;
 /**
  * Read the fleet's callback enrollment handoff (`<stateDir>/callback-env.json`,
  * written 0600 before ensure-running). Returns the callback pair as the
- * `OMP_SESSION_CALLBACK_*` env shape (converted to the daemon's `--fleet-stdin`
+ * `OMP_SESSION_CALLBACK_*` env shape (converted to the session's `--fleet-stdin`
  * payload at spawn), or null when the file is absent (a spawn without a pair is
  * still allowed, stop-only management must not break).
  *
@@ -124,7 +124,7 @@ export function readCallbackEnv(
 		}
 		env[key] = entry;
 	}
-	// A partial pair must never reach the daemon: validate the whole pair here.
+	// A partial pair must never reach the session: validate the whole pair here.
 	if (FLEET_CALLBACK_ENV_KEYS.some((key) => env[key] !== undefined)) {
 		try {
 			buildFleetStdinPayload(env);

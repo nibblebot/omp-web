@@ -16,7 +16,7 @@ import { mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node
 import { basename, join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry } from "../daemon-transport";
+import { SessionTransportRegistry } from "../session-transport";
 import type { GitResult, GitRunner } from "../discovery";
 import { ProjectSync } from "../project-sync";
 import { Registry, type RegistryEntry } from "../registry";
@@ -86,7 +86,7 @@ async function makeHarness(
 	const statePath = join(tempDir("omp-session-sync-state-"), "state.json");
 	const registry = new Registry(statePath);
 	await registry.load();
-	const transport = new DaemonTransportRegistry();
+	const transport = new SessionTransportRegistry();
 	// The lifecycle's spawn hook probes the fresh row, as the server wires it.
 	let sync: ProjectSync | undefined;
 	const { lifecycle } = makeHostLifecycle({
@@ -96,12 +96,12 @@ async function makeHarness(
 		statePath,
 		callbackUrl: () => "http://127.0.0.1:1/callback",
 		runtime: { restartMax: 0 },
-		onSpawned: (daemonId) => sync?.probeGitState(daemonId),
+		onSpawned: (workspaceId) => sync?.probeGitState(workspaceId),
 	});
 	sync = new ProjectSync(registry, lifecycle, opts);
 	cleanups.push(async () => {
 		for (const entry of registry.list()) {
-			if (entry.workspace?.kind !== "clone") await lifecycle.stop(entry.daemonId);
+			if (entry.workspace?.kind !== "clone") await lifecycle.stop(entry.workspaceId);
 		}
 		sync.close();
 		lifecycle.close();
@@ -186,8 +186,8 @@ describe("backfillWorktrees", () => {
 		});
 
 		await sync.backfillWorktrees();
-		expect(registry.get(spawned.daemonId)!.worktreeOf).toBe("main-repo");
-		expect(registry.get(mainEntry.daemonId)!.worktreeOf).toBeUndefined();
+		expect(registry.get(spawned.workspaceId)!.worktreeOf).toBe("main-repo");
+		expect(registry.get(mainEntry.workspaceId)!.worktreeOf).toBeUndefined();
 	});
 });
 
@@ -220,7 +220,7 @@ describe("git-state polling", () => {
 		sync.startGitStatePolling({ exec, intervalMs: 25 });
 
 		await waitFor(
-			() => (registry.get(local.daemonId)?.git !== undefined ? "probed" : null),
+			() => (registry.get(local.workspaceId)?.git !== undefined ? "probed" : null),
 			5000,
 			"first probe",
 		);
@@ -228,7 +228,7 @@ describe("git-state polling", () => {
 		// roster broadcast (every update fires onChange).
 		await waitFor(() => (calls.length >= 4 ? "ticks" : null), 5000, "multiple ticks");
 		expect(onChange).toBe(1);
-		expect(registry.get(local.daemonId)).toMatchObject({
+		expect(registry.get(local.workspaceId)).toMatchObject({
 			branch: "main",
 			git: { added: 0, modified: 0, deleted: 0, untracked: 1, linesAdded: 10, linesDeleted: 2 },
 		});
@@ -278,11 +278,11 @@ describe("git-state polling", () => {
 		sync.startGitStatePolling({ exec, intervalMs: 25 });
 
 		await waitFor(
-			() => (registry.get(local.daemonId)?.branch !== undefined ? "clean" : null),
+			() => (registry.get(local.workspaceId)?.branch !== undefined ? "clean" : null),
 			5000,
 			"clean state",
 		);
-		expect(registry.get(local.daemonId)!.git).toEqual({
+		expect(registry.get(local.workspaceId)!.git).toEqual({
 			added: 0,
 			modified: 0,
 			deleted: 0,
@@ -291,7 +291,7 @@ describe("git-state polling", () => {
 			linesDeleted: 0,
 		});
 		await waitFor(
-			() => (registry.get(local.daemonId)?.git?.untracked === 1 ? "dirty" : null),
+			() => (registry.get(local.workspaceId)?.git?.untracked === 1 ? "dirty" : null),
 			5000,
 			"dirty state",
 		);
@@ -310,7 +310,7 @@ describe("git-state polling", () => {
 		});
 		const reloaded = new Registry(statePath);
 		await reloaded.load();
-		expect(reloaded.get(local.daemonId)).toMatchObject({
+		expect(reloaded.get(local.workspaceId)).toMatchObject({
 			branch: "main",
 			git: { added: 0, modified: 0, deleted: 0, untracked: 1 },
 		});
@@ -354,7 +354,7 @@ describe("git-state polling", () => {
 
 		await waitFor(
 			() =>
-				registry.get(local.daemonId)?.sessionTitle === "The dashboard title" ? "filled" : null,
+				registry.get(local.workspaceId)?.sessionTitle === "The dashboard title" ? "filled" : null,
 			5000,
 			"sessionTitle filled",
 		);
@@ -375,7 +375,7 @@ describe("git-state polling", () => {
 
 		unlinkSync(sessionFile);
 		await waitFor(
-			() => (registry.get(local.daemonId)?.sessionTitle === undefined ? "cleared" : null),
+			() => (registry.get(local.workspaceId)?.sessionTitle === undefined ? "cleared" : null),
 			5000,
 			"sessionTitle cleared",
 		);
@@ -412,13 +412,13 @@ describe("git-state polling", () => {
 		sync.startGitStatePolling({ exec, intervalMs: 25 });
 
 		await waitFor(
-			() => (registry.get(local.daemonId)?.sessionEmpty === true ? "empty" : null),
+			() => (registry.get(local.workspaceId)?.sessionEmpty === true ? "empty" : null),
 			5000,
 			"sessionEmpty flagged",
 		);
 		// Untitled+empty: title stays undefined, empty flag true. Two
 		// broadcasts total (branch fill + the empty flag), with no title churn.
-		expect(registry.get(local.daemonId)?.sessionTitle).toBeUndefined();
+		expect(registry.get(local.workspaceId)?.sessionTitle).toBeUndefined();
 		expect(onChange).toBe(2);
 		registry.flush();
 		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
@@ -438,11 +438,11 @@ describe("git-state polling", () => {
 				"\n",
 		);
 		await waitFor(
-			() => (registry.get(local.daemonId)?.sessionTitle === "Now titled" ? "titled" : null),
+			() => (registry.get(local.workspaceId)?.sessionTitle === "Now titled" ? "titled" : null),
 			5000,
 			"title filled",
 		);
-		expect(registry.get(local.daemonId)?.sessionEmpty).toBeUndefined();
+		expect(registry.get(local.workspaceId)?.sessionEmpty).toBeUndefined();
 		expect(onChange).toBe(3); // branch fill, empty flag, title+clear-empty; one each
 	});
 
@@ -476,16 +476,16 @@ describe("git-state polling", () => {
 		sync.startGitStatePolling({ exec, intervalMs: 250 });
 
 		await waitFor(
-			() => (registry.get(local.daemonId)?.git?.modified === 1 ? "set" : null),
+			() => (registry.get(local.workspaceId)?.git?.modified === 1 ? "set" : null),
 			5000,
 			"state set",
 		);
 		await waitFor(
-			() => (registry.get(local.daemonId)?.git === undefined ? "cleared" : null),
+			() => (registry.get(local.workspaceId)?.git === undefined ? "cleared" : null),
 			5000,
 			"state cleared",
 		);
-		expect(registry.get(local.daemonId)!.branch).toBeUndefined();
+		expect(registry.get(local.workspaceId)!.branch).toBeUndefined();
 		expect(onChange).toBe(2); // set, then clear
 		// Repeated failures must not re-update (nothing stale left to clear).
 		const clearedAt = calls.length;
@@ -525,11 +525,11 @@ describe("git-state polling", () => {
 		sync.startGitStatePolling({ exec, intervalMs: 60_000 });
 		const entry = await lifecycle.spawnHost({ cwd: projectDir });
 		await waitFor(
-			() => (registry.get(entry.daemonId)?.git !== undefined ? "probed" : null),
+			() => (registry.get(entry.workspaceId)?.git !== undefined ? "probed" : null),
 			5000,
 			"one-off probe",
 		);
-		expect(registry.get(entry.daemonId)).toMatchObject({
+		expect(registry.get(entry.workspaceId)).toMatchObject({
 			branch: "main",
 			git: { added: 0, modified: 0, deleted: 0, untracked: 1, linesAdded: 7, linesDeleted: 4 },
 		});
@@ -567,20 +567,20 @@ describe("git-state polling", () => {
 
 		await waitFor(() => (fired.length > 0 ? "fired" : null), 5000, "worktree-removed hook");
 		expect(fired[0]).toMatchObject({
-			daemonId: entry.daemonId,
+			workspaceId: entry.workspaceId,
 			name: "wt",
 			cwd: ghost,
 			worktreeOf: "acme",
 		});
 		// Detection only: the sync itself never removes the entry, and
 		// the hook path returned BEFORE the branch/git clearing.
-		expect(registry.get(entry.daemonId)).toBeDefined();
-		expect(registry.get(entry.daemonId)?.branch).toBe("main");
+		expect(registry.get(entry.workspaceId)).toBeDefined();
+		expect(registry.get(entry.workspaceId)?.branch).toBe("main");
 		// Simulate the server's eviction (prune/drop + registry.remove): with
 		// the entry gone, later poll ticks must NOT re-fire, since the hook is at
 		// most meaningful once per entry. The polls keep ticking (250ms) but
 		// the roster no longer contains the entry, so nothing is probed.
-		registry.remove(entry.daemonId);
+		registry.remove(entry.workspaceId);
 		await sleep(400); // well past the next interval tick
 		expect(fired).toHaveLength(1);
 	});
@@ -620,20 +620,20 @@ describe("git-state polling", () => {
 		sync.startGitStatePolling({ exec, intervalMs: 250 });
 
 		await waitFor(
-			() => (registry.get(entry.daemonId)?.git?.modified === 1 ? "set" : null),
+			() => (registry.get(entry.workspaceId)?.git?.modified === 1 ? "set" : null),
 			5000,
 			"state set",
 		);
 		await waitFor(
-			() => (registry.get(entry.daemonId)?.git === undefined ? "cleared" : null),
+			() => (registry.get(entry.workspaceId)?.git === undefined ? "cleared" : null),
 			5000,
 			"state cleared",
 		);
-		expect(registry.get(entry.daemonId)!.branch).toBeUndefined();
+		expect(registry.get(entry.workspaceId)!.branch).toBeUndefined();
 		expect(onChange).toBe(2); // set, then clear
 		expect(fired).toHaveLength(0);
 		// The entry stays (no eviction without a vanished cwd).
-		expect(registry.get(entry.daemonId)).toBeDefined();
+		expect(registry.get(entry.workspaceId)).toBeDefined();
 	});
 
 	test("a vanished cwd on an UNTAGGED entry never fires onWorktreeRemoved", async () => {
@@ -843,7 +843,7 @@ describe("git-state probe: failure isolation, clone checkout, bounded concurrenc
 		const failing: GitRunner = async () => ({ exitCode: 128, stderr: "not a repo", stdout: "" });
 		sync.startGitStatePolling({ exec: failing, intervalMs: 60_000 });
 		await waitFor(
-			() => (registry.get(row.daemonId)?.sessionTitle === "Survives git failure" ? true : null),
+			() => (registry.get(row.workspaceId)?.sessionTitle === "Survives git failure" ? true : null),
 			5000,
 			"title filled despite git failure",
 		);
@@ -868,7 +868,7 @@ describe("git-state probe: failure isolation, clone checkout, bounded concurrenc
 		};
 		sync.startGitStatePolling({ exec, intervalMs: 60_000 });
 		await waitFor(
-			() => (registry.get(row.daemonId)?.branch === "main" ? true : null),
+			() => (registry.get(row.workspaceId)?.branch === "main" ? true : null),
 			5000,
 			"clone branch",
 		);
@@ -894,7 +894,7 @@ describe("git-state probe: failure isolation, clone checkout, bounded concurrenc
 		sync.startGitStatePolling({ exec, intervalMs: 60_000 });
 		await sleep(200);
 		expect(calls).toHaveLength(0);
-		expect(registry.get(row.daemonId)?.branch).toBeUndefined();
+		expect(registry.get(row.workspaceId)?.branch).toBeUndefined();
 	});
 
 	test("a sync pass probes rows concurrently, bounded at 4 in flight", async () => {
@@ -937,10 +937,10 @@ describe("git-state probe: failure isolation, clone checkout, bounded concurrenc
 			return okStatus;
 		};
 		sync.startGitStatePolling({ exec, intervalMs: 60_000 });
-		sync.probeGitState(row.daemonId);
+		sync.probeGitState(row.workspaceId);
 		sync.syncNow();
 		await waitFor(
-			() => (registry.get(row.daemonId)?.branch === "main" ? true : null),
+			() => (registry.get(row.workspaceId)?.branch === "main" ? true : null),
 			5000,
 			"row probed",
 		);

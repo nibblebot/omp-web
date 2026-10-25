@@ -1,9 +1,9 @@
 import type { CollabWireStatus } from "#lib/wire/protocol";
 
-/** Collab host status pushed by the daemon as `collab_status` frames. */
+/** Collab host status pushed by the session as `collab_status` frames. */
 export type CollabStatus = CollabWireStatus;
 
-/** Before the daemon reports anything, the session is not shared. */
+/** Before the session reports anything, the session is not shared. */
 export const COLLAB_OFF: CollabStatus = { state: "off" };
 
 /** `customType` of guest prompts the collab host injects (pi-wire COLLAB_PROMPT_MESSAGE_TYPE). */

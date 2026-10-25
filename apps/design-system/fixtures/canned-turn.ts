@@ -3,7 +3,7 @@ import type { WireAssistantMessageEvent, WireSessionEvent } from "#lib/wire/prot
 import { claude } from "./screen";
 
 /**
- * The App view's one canned agent turn, as the SDK event stream a daemon
+ * The App view's one canned agent turn, as the SDK event stream a session
  * sends for a prompt: the user message, a first assistant message (thinking,
  * a short note, two tool calls), both tool executions, then a second
  * assistant message with the markdown answer. Every prompt in every session

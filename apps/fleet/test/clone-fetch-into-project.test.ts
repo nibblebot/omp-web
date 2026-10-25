@@ -84,7 +84,7 @@ async function createClone(
 	fx: Fixture,
 	name: string,
 	source?: { local?: string; remote?: string },
-): Promise<{ daemonId: string; branch: string; checkout: string }> {
+): Promise<{ workspaceId: string; branch: string; checkout: string }> {
 	const res = await postJson(fx.server.port, "/ctl/clones", {
 		projectId: fx.projectId,
 		name,
@@ -93,17 +93,17 @@ async function createClone(
 		start: false,
 	});
 	expect(res.status).toBe(201);
-	const { entry } = (await res.json()) as { entry: { daemonId: string } };
-	const record = fx.server.registry.get(entry.daemonId)!;
+	const { entry } = (await res.json()) as { entry: { workspaceId: string } };
+	const record = fx.server.registry.get(entry.workspaceId)!;
 	return {
-		daemonId: entry.daemonId,
+		workspaceId: entry.workspaceId,
 		branch: record.workspace!.branch!,
 		checkout: join(record.cwd!, ".checkout"),
 	};
 }
 
-function fetchInto(fx: Fixture, daemonId: string): Promise<Response> {
-	return postJson(fx.server.port, `/ctl/clones/${daemonId}/fetch-into-project`, {});
+function fetchInto(fx: Fixture, workspaceId: string): Promise<Response> {
+	return postJson(fx.server.port, `/ctl/clones/${workspaceId}/fetch-into-project`, {});
 }
 
 describe("fetch a clone's branch into its project", () => {
@@ -115,7 +115,7 @@ describe("fetch a clone's branch into its project", () => {
 			const work = await commitFile(clone.checkout, "a.txt", "a\n");
 			const mainBefore = await tip(fx.repoDir, "refs/heads/main");
 
-			const res = await fetchInto(fx, clone.daemonId);
+			const res = await fetchInto(fx, clone.workspaceId);
 			expect(res.status).toBe(200);
 			const body = (await res.json()) as { outcome: string; commit: string; branch: string };
 			expect(body).toMatchObject({ outcome: "created", commit: work, branch: clone.branch });
@@ -125,7 +125,7 @@ describe("fetch a clone's branch into its project", () => {
 			expect(existsSync(join(fx.repoDir, "a.txt"))).toBe(false);
 
 			// Nothing new in the clone: the same commit is reported, not refetched.
-			const again = await fetchInto(fx, clone.daemonId);
+			const again = await fetchInto(fx, clone.workspaceId);
 			expect(again.status).toBe(200);
 			expect(((await again.json()) as { outcome: string }).outcome).toBe("up-to-date");
 		} finally {
@@ -138,10 +138,10 @@ describe("fetch a clone's branch into its project", () => {
 		try {
 			const clone = await createClone(fx, "feat-ff");
 			const first = await commitFile(clone.checkout, "a.txt", "a\n");
-			expect((await fetchInto(fx, clone.daemonId)).status).toBe(200);
+			expect((await fetchInto(fx, clone.workspaceId)).status).toBe(200);
 			const second = await commitFile(clone.checkout, "b.txt", "b\n");
 
-			const res = await fetchInto(fx, clone.daemonId);
+			const res = await fetchInto(fx, clone.workspaceId);
 			expect(res.status).toBe(200);
 			expect(await res.json()).toMatchObject({
 				outcome: "updated",
@@ -159,14 +159,14 @@ describe("fetch a clone's branch into its project", () => {
 		try {
 			const clone = await createClone(fx, "feat-diverge");
 			await commitFile(clone.checkout, "a.txt", "a\n");
-			expect((await fetchInto(fx, clone.daemonId)).status).toBe(200);
+			expect((await fetchInto(fx, clone.workspaceId)).status).toBe(200);
 			// The project's branch moves on its own, then the clone moves too.
 			await git(fx.repoDir, ["checkout", "-q", clone.branch]);
 			const projectWork = await commitFile(fx.repoDir, "p.txt", "p\n");
 			await git(fx.repoDir, ["checkout", "-q", "main"]);
 			await commitFile(clone.checkout, "b.txt", "b\n");
 
-			const res = await fetchInto(fx, clone.daemonId);
+			const res = await fetchInto(fx, clone.workspaceId);
 			expect(res.status).toBe(409);
 			expect(((await res.json()) as { error: string }).error).toContain("fast-forward");
 			expect(await tip(fx.repoDir, `refs/heads/${clone.branch}`)).toBe(projectWork);
@@ -180,12 +180,12 @@ describe("fetch a clone's branch into its project", () => {
 		try {
 			const clone = await createClone(fx, "feat-checked-out");
 			await commitFile(clone.checkout, "a.txt", "a\n");
-			expect((await fetchInto(fx, clone.daemonId)).status).toBe(200);
+			expect((await fetchInto(fx, clone.workspaceId)).status).toBe(200);
 			await commitFile(clone.checkout, "b.txt", "b\n");
 			await git(fx.repoDir, ["checkout", "-q", clone.branch]);
 			const before = await tip(fx.repoDir, `refs/heads/${clone.branch}`);
 
-			const res = await fetchInto(fx, clone.daemonId);
+			const res = await fetchInto(fx, clone.workspaceId);
 			expect(res.status).toBe(409);
 			expect(((await res.json()) as { error: string }).error).toContain("checked out");
 			expect(await tip(fx.repoDir, `refs/heads/${clone.branch}`)).toBe(before);
@@ -199,21 +199,21 @@ describe("fetch a clone's branch into its project", () => {
 		try {
 			const local = await createClone(fx, "feat-local");
 			const remote = await createClone(fx, "feat-remote", { remote: `file://${fx.repoDir}` });
-			expect(fx.server.registry.get(remote.daemonId)!.workspace!.source).toEqual({
+			expect(fx.server.registry.get(remote.workspaceId)!.workspace!.source).toEqual({
 				remote: `file://${fx.repoDir}`,
 			});
 			await commitFile(remote.checkout, "a.txt", "a\n");
 
-			const res = await fetchInto(fx, remote.daemonId);
+			const res = await fetchInto(fx, remote.workspaceId);
 			expect(res.status).toBe(400);
 			expect(((await res.json()) as { error: string }).error).toContain("remote source");
 			expect(await tip(fx.repoDir, `refs/heads/${remote.branch}`)).toBeNull();
 
 			const roster = (await (
 				await fetch(`http://127.0.0.1:${fx.server.port}/ctl/sessions`)
-			).json()) as Array<{ daemonId: string; localSource?: true }>;
-			expect(roster.find((r) => r.daemonId === local.daemonId)?.localSource).toBe(true);
-			expect(roster.find((r) => r.daemonId === remote.daemonId)?.localSource).toBeUndefined();
+			).json()) as Array<{ workspaceId: string; localSource?: true }>;
+			expect(roster.find((r) => r.workspaceId === local.workspaceId)?.localSource).toBe(true);
+			expect(roster.find((r) => r.workspaceId === remote.workspaceId)?.localSource).toBeUndefined();
 		} finally {
 			await fx.server.close();
 		}
@@ -224,9 +224,9 @@ describe("fetch a clone's branch into its project", () => {
 		try {
 			const clone = await createClone(fx, "feat-k8s");
 			await commitFile(clone.checkout, "a.txt", "a\n");
-			fx.server.registry.updateWorkspace(clone.daemonId, { profileId: "remote" });
+			fx.server.registry.updateWorkspace(clone.workspaceId, { profileId: "remote" });
 
-			const res = await fetchInto(fx, clone.daemonId);
+			const res = await fetchInto(fx, clone.workspaceId);
 			expect(res.status).toBe(400);
 			expect(((await res.json()) as { error: string }).error).toContain("kubernetes");
 			expect(await tip(fx.repoDir, `refs/heads/${clone.branch}`)).toBeNull();
@@ -235,7 +235,7 @@ describe("fetch a clone's branch into its project", () => {
 		}
 	}, 30_000);
 
-	test("refuses a non-clone row and an unknown daemon", async () => {
+	test("refuses a non-clone row and an unknown session", async () => {
 		const fx = await bootFleet();
 		try {
 			const direct = fx.server.registry.create({
@@ -245,7 +245,7 @@ describe("fetch a clone's branch into its project", () => {
 				projectId: fx.projectId,
 				status: "asleep",
 			});
-			expect((await fetchInto(fx, direct.daemonId)).status).toBe(400);
+			expect((await fetchInto(fx, direct.workspaceId)).status).toBe(400);
 			expect((await fetchInto(fx, "d999")).status).toBe(404);
 		} finally {
 			await fx.server.close();

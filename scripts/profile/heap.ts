@@ -1,5 +1,5 @@
 /**
- * Opt-in end-of-rep JS heap measurement of the fleet and the session daemons
+ * Opt-in end-of-rep JS heap measurement of the fleet and the session processes
  * without touching production code: the process is started with Bun's
  * inspector (`--inspect=127.0.0.1:<port>/heap`) and the harness speaks the
  * WebKit inspector protocol over a WebSocket after the rep.
@@ -7,7 +7,7 @@
  * Verified on Bun 1.4.2:
  * - `--inspect=host:port/<path>` serves `ws://host:port/<path>` only; without
  *   a path Bun invents a random UUID path and prints it to stderr, which a
- *   harness cannot read for session daemons. A fixed path makes the endpoint
+ *   harness cannot read for session processes. A fixed path makes the endpoint
  *   predictable (`/` and other paths are refused).
  * - Supported: `Heap.gc` (full collection, works without `Heap.enable`) and
  *   `Runtime.evaluate` (sync expressions; `awaitPromise` is ignored, and

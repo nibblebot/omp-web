@@ -1,7 +1,7 @@
 import { TranscriptStream } from "../../../../web/components/chat/transcript/TranscriptStream";
 import { state, type ChatItem } from "../../../../web/state";
 import { assistantBlocks } from "../../../../web/store/chat";
-import { answerCalls } from "../../../daemon";
+import { answerCalls } from "../../../session";
 import { screenItems, screenSessionSeed } from "../../../fixtures/screen";
 import { subagentTranscriptItems } from "../../../fixtures/subagents";
 import { waitJobDetail, waitRunItems } from "../../../fixtures/tools";

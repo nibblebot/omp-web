@@ -3,7 +3,7 @@
  * switchSession, ...) is pending.
  *
  * The SDK mints the new session id partway through such a call, and the
- * daemon answers only after the history and state resync. Until then the
+ * session answers only after the history and state resync. Until then the
  * `sessionScope` the tab stamps on every call is the OLD session's, so a prompt
  * sent in that gap is rejected "Stale session attachment" (or, when it lands
  * before the id flips, runs on the session that is being torn down and is
@@ -84,7 +84,7 @@ afterEach(() => {
 	setState({
 		connected: false,
 		sessionDownId: "",
-		currentSessionId: "",
+		currentWorkspaceId: "",
 		sessionScope: undefined,
 		readyAt: undefined,
 	});
@@ -101,7 +101,7 @@ describe("session change gate", () => {
 		expect(sendButton()).not.toMatch(/\bdisabled\b/);
 
 		const started = call("newSession");
-		// The daemon's SDK has minted s2 by now; this tab still holds s1.
+		// The session's SDK has minted s2 by now; this tab still holds s1.
 		expect(state.sessionScope?.sessionId).toBe("s1");
 		expect(isSessionChanging()).toBe(true);
 		expect(sendButton()).toMatch(/\bdisabled\b/);
@@ -112,7 +112,7 @@ describe("session change gate", () => {
 		void call("prompt", ["Reply with the single word X."]).catch(() => {});
 		expect(lastCall("prompt").scope?.sessionId).toBe("s1");
 
-		// The daemon resyncs before answering: state frame first, then the answer.
+		// The session resyncs before answering: state frame first, then the answer.
 		dispatch(stateFrame("s2"));
 		expect(isSessionChanging()).toBe(true);
 		dispatch(answer(lastCall("newSession").id));

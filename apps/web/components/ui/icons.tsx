@@ -2,7 +2,7 @@
  *  with no icon font dependency. Strokes follow currentColor so icons tint with
  *  their surrounding text/status color; the base .icon rule (src/styles/base.css)
  *  sizes them to 1em, and a `class` prop layers site-specific overrides
- *  (e.g. .daemon-worktree-icon). */
+ *  (e.g. .session-worktree-icon). */
 import { createUniqueId, type Component, type JSX } from "solid-js";
 
 export type IconProps = { class?: string };
@@ -113,7 +113,7 @@ export const ExpandIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** Changed-files glyph on daemon git rows, drawn with Lucide's file. */
+/** Changed-files glyph on session git rows, drawn with Lucide's file. */
 export const FileIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />

@@ -41,7 +41,7 @@ export interface SessionListPickerProps {
 	currentCwd?: string;
 	/** `"resume"`: the expansion offers Resume only (worktree mode). Default `"full"`. */
 	actions?: "full" | "resume";
-	/** Rename and delete are offered only when the daemon advertises them. */
+	/** Rename and delete are offered only when the session advertises them. */
 	canManage: boolean;
 	/** Clock for ages; defaults to Date.now. */
 	now?: () => number;

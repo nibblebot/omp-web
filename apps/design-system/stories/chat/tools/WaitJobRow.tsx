@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import type { RunJob } from "../../../../web/chat/wait-runs";
 import { WaitJobRow } from "../../../../web/components/chat/tools/WaitJobRow";
-import { answerCalls } from "../../../daemon";
+import { answerCalls } from "../../../session";
 import { benchEntry, seedJobWidgets } from "../../../fixtures/job-bars";
 import { benchWidget } from "../../../fixtures/job-widgets";
 import { waitJobDetail } from "../../../fixtures/tools";

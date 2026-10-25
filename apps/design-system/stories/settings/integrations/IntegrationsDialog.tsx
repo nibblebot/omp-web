@@ -2,7 +2,7 @@ import { IntegrationsDialog } from "../../../../web/components/settings/integrat
 import { markFeaturesActive } from "../../../../web/features/preferences";
 import { setState } from "../../../../web/state";
 import { selectExtension } from "../../../../web/store/integrations";
-import { answerCalls } from "../../../daemon";
+import { answerCalls } from "../../../session";
 import { extensionCalls, mcpStateFixture, skillsStateFixture } from "../../../fixtures/extensions";
 import { mcpTestFailed, mcpTestPassed } from "../../../fixtures/overlays";
 import { defineStory } from "../../../registry";
@@ -26,7 +26,7 @@ export default [
 			export: "IntegrationsDialog",
 		},
 		tabs: true,
-		seed: { currentSessionId: "sess_09a41c" },
+		seed: { currentWorkspaceId: "sess_09a41c" },
 		variants: [
 			{
 				name: "Extensions",
@@ -101,7 +101,9 @@ export default [
 					answerCalls(
 						extensionCalls({
 							getMcpState: () =>
-								Promise.reject(new Error("Could not read the MCP inventory from the daemon.")),
+								Promise.reject(
+									new Error("Could not read the MCP inventory from the session process."),
+								),
 							getSkillsState: () => Promise.reject(new Error("Skill index could not be read.")),
 						}),
 					),

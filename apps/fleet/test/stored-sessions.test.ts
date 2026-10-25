@@ -12,7 +12,7 @@
  * (dispatchRequest, no HTTP server) exactly like the stats app tests. The
  * final suite boots a real fleet (server.testkit startTestFleet) over a
  * stored-only workspace to prove the routes cannot spawn, respawn, or touch a
- * daemon pair.
+ * session pair.
  *
  * Assertions are the frozen wire contract only: status, envelope, wire rows,
  * exact stored bytes, and page offsets. Store internals (index framing, the
@@ -682,10 +682,10 @@ describe("stored-history reads never wake compute", () => {
 		line({ type: "session", id: SESS_1, cwd: "/srv/stored" }) +
 		line({ type: "message", id: "m1", timestamp: 1 });
 
-	test("browsing sessions and transcripts spawns nothing, respawns nothing, and enrolls no daemon", async () => {
+	test("browsing sessions and transcripts spawns nothing, respawns nothing, and enrolls no session", async () => {
 		const paths = fleetPaths("omp-stored-wake-");
 		// Seed a stored-only workspace: history on disk, no registry entry and
-		// no daemon (the store lives at dirname(statePath)/logs, exactly where
+		// no session (the store lives at dirname(statePath)/logs, exactly where
 		// the booting fleet loads it from).
 		const seeder = new FleetLogStore({ rootDir: join(paths.tmp, "logs") });
 		const seeded = seeder.ingest(
@@ -700,10 +700,10 @@ describe("stored-history reads never wake compute", () => {
 		try {
 			// The observables (the real-server analogue of fanout.test.ts's
 			// `respawned` recorder): spawnHost/start are the ONLY
-			// fleet paths that create a daemon, and a daemon is the only thing
-			// that can dial in (daemons dial OUT; the fleet never dials, and
-			// sendToDaemon is the only fleet→daemon push). A stored-only
-			// workspace can therefore acquire a live daemon, a resume, or a
+			// fleet paths that create a session, and a session is the only thing
+			// that can dial in (sessions dial OUT; the fleet never dials, and
+			// sendToSession is the only fleet→session push). A stored-only
+			// workspace can therefore acquire a live session, a resume, or a
 			// pair ONLY through these three; all stay empty below while every
 			// route answers real stored data, which proves browsing woke
 			// nothing. The wrappers throw so a wrong wake fails loudly instead
@@ -715,13 +715,13 @@ describe("stored-history reads never wake compute", () => {
 				spawned.push(init.cwd);
 				throw new Error("stored browsing must not spawn");
 			};
-			server.lifecycle.start = async (daemonId) => {
-				respawned.push(daemonId);
+			server.lifecycle.start = async (workspaceId) => {
+				respawned.push(workspaceId);
 				throw new Error("stored browsing must not respawn");
 			};
-			server.transport.sendToDaemon = async (workspaceId) => {
+			server.transport.sendToSession = async (workspaceId) => {
 				pushed.push(workspaceId);
-				throw new Error("stored browsing must not touch a daemon");
+				throw new Error("stored browsing must not touch a session");
 			};
 
 			const base = `http://127.0.0.1:${server.port}/ctl/stored`;

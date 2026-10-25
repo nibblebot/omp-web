@@ -366,7 +366,7 @@ describe("fleet template handoff", () => {
 		await expect(loadConfig(file)).rejects.toThrow("replace `--token {token}` with {fleet}");
 	});
 
-	test("rejects a template without {fleet} (the daemon would never pair)", async () => {
+	test("rejects a template without {fleet} (the session would never pair)", async () => {
 		const file = join(tmpDir(), "config.json");
 		writeFileSync(
 			file,

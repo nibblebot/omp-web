@@ -117,7 +117,7 @@ describe("fleet control plane", () => {
 		expect(merged.projects.some((p) => p.projectId === body.project!.projectId)).toBe(true);
 		// Cleanup: the never-started default workspace is a provably-empty
 		// placeholder, so the DELETE drops it with the project: a straight 200,
-		// not the 409 a real referencing daemon gets.
+		// not the 409 a real referencing session gets.
 		const del = await fetch(
 			`http://127.0.0.1:${server.port}/ctl/projects/${body.project!.projectId}`,
 			{ method: "DELETE" },
@@ -194,7 +194,7 @@ describe("fleet control plane", () => {
 		const delBody = (await del.json()) as { removed?: unknown };
 		expect(delBody.removed).toBe(projectId);
 		expect(server.registry.projects().some((p) => p.projectId === projectId)).toBe(false);
-		expect(server.registry.get(row.daemonId)).toBeUndefined();
+		expect(server.registry.get(row.workspaceId)).toBeUndefined();
 	});
 
 	test("DELETE /ctl/projects/:id 409s naming clone workspaces and changes nothing", async () => {
@@ -221,12 +221,12 @@ describe("fleet control plane", () => {
 			expect(del.status).toBe(409);
 			const delBody = (await del.json()) as { error?: string };
 			expect(delBody.error).toContain(
-				`project ${projectId} has clone workspaces: ${clone.daemonId}`,
+				`project ${projectId} has clone workspaces: ${clone.workspaceId}`,
 			);
 			expect(server.registry.projects().some((p) => p.projectId === projectId)).toBe(true);
-			expect(server.registry.get(clone.daemonId)).toBeDefined();
+			expect(server.registry.get(clone.workspaceId)).toBeDefined();
 		} finally {
-			server.registry.remove(clone.daemonId);
+			server.registry.remove(clone.workspaceId);
 			try {
 				server.registry.removeProject(projectId);
 			} catch {
@@ -429,7 +429,7 @@ describe("fleet control plane", () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as RegistryEntry[];
-		const found = body.find((e) => e.daemonId === entry.daemonId);
+		const found = body.find((e) => e.workspaceId === entry.workspaceId);
 		expect(found).toBeDefined();
 		expect(found?.name).toBe("enrolled");
 		expect(found?.status).toBe("connecting");
@@ -455,10 +455,10 @@ describe("fleet control plane", () => {
 		// Sessions carry the live entry plus its pair and host internals.
 		const sessions = body.sessions as Array<Record<string, unknown>>;
 		expect(Array.isArray(sessions)).toBe(true);
-		const found = sessions.find((session) => session.daemonId === entry.daemonId);
+		const found = sessions.find((session) => session.workspaceId === entry.workspaceId);
 		expect(found).toBeDefined();
 		expect(found?.status).toBe("connecting");
-		expect(found?.registeredAt).toBe(server.registry.get(entry.daemonId)?.registeredAt);
+		expect(found?.registeredAt).toBe(server.registry.get(entry.workspaceId)?.registeredAt);
 		expect(found?.uptimeSec).toBeGreaterThanOrEqual(0);
 		expect(found?.pair).toMatchObject({ enrolled: false, paired: false });
 		expect(Array.isArray(body.log)).toBe(true);
@@ -475,11 +475,11 @@ describe("fleet control plane", () => {
 	});
 
 	test("POST /ctl/stop marks a registered entry asleep", async () => {
-		const res = await postJson(server.port, "/ctl/stop", { selector: entry.daemonId });
+		const res = await postJson(server.port, "/ctl/stop", { selector: entry.workspaceId });
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { stopped?: unknown };
-		expect(body.stopped).toEqual([entry.daemonId]);
-		expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
+		expect(body.stopped).toEqual([entry.workspaceId]);
+		expect(server.registry.get(entry.workspaceId)?.status).toBe("asleep");
 	});
 
 	test("POST /ctl/remove 404s on an unknown selector", async () => {
@@ -495,11 +495,11 @@ describe("fleet control plane", () => {
 			template: "test",
 			status: "asleep",
 		});
-		const del = await postJson(server.port, "/ctl/remove", { selector: added.daemonId });
+		const del = await postJson(server.port, "/ctl/remove", { selector: added.workspaceId });
 		expect(del.status).toBe(200);
 		const body = (await del.json()) as { removed?: unknown };
-		expect(body.removed).toEqual([added.daemonId]);
-		expect(server.registry.get(added.daemonId)).toBeUndefined();
+		expect(body.removed).toEqual([added.workspaceId]);
+		expect(server.registry.get(added.workspaceId)).toBeUndefined();
 	});
 
 	test("unknown route 404s", async () => {

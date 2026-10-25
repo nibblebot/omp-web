@@ -21,7 +21,7 @@ const REPLACING: Record<string, true> = Object.fromEntries(
 
 /**
  * True while this tab has a session-replacing call (newSession, switchSession,
- * ...) in flight. The daemon's identity moves ahead of the `sessionScope` this
+ * ...) in flight. The session's identity moves ahead of the `sessionScope` this
  * tab holds the moment the SDK mints the new session id, and the tab only learns
  * the new one from the resync that precedes the call's answer, so a send in
  * between would carry the old scope and be refused as a stale attachment (or run

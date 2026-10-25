@@ -38,7 +38,7 @@ afterEach(() => {
 describe("fetchCloneIntoProject", () => {
 	test("POSTs the clone's fetch route and toasts what landed", async () => {
 		const requests = stubFetch(200, {
-			daemonId: "d7",
+			workspaceId: "d7",
 			branch: "feat-x",
 			projectPath: "/repo",
 			outcome: "updated",

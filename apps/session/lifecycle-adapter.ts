@@ -24,7 +24,7 @@ export interface LifecycleDeps {
 	sessionsDir: string;
 	hasCallbackPair(): boolean;
 	mirror?: LifecycleMirror;
-	/** Reject stale scope/read-only lineage, even on an unpaired daemon. */
+	/** Reject stale scope/read-only lineage, even on an unpaired session. */
 	assertWritable(entry: SessionEntry): Promise<void>;
 	/** Cancel host dialogs/ephemeral work and drain foreground bash/python wrappers. */
 	settleHostWork(entry: SessionEntry): Promise<void>;

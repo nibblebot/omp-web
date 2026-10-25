@@ -42,8 +42,8 @@ import {
 // (title slot, header, newline-terminated entries, no trailing partial),
 // against the store layout logs/<workspaceId>/<sessionId>/<relpath> plus the
 // per-session index.json sidecar. Path/type validation is independent of
-// daemon trust: traversal, symlinks, non-regular files, and an index
-// inconsistent with the stored tree are rejected. The daemon streams every
+// session trust: traversal, symlinks, non-regular files, and an index
+// inconsistent with the stored tree are rejected. The session streams every
 // lineage file (main JSONL plus its artifact subtree, subagent/advisor
 // transcripts and raw blobs) under one session id, so a session directory is
 // one self-contained lineage tree and index↔disk equality over that tree IS
@@ -171,7 +171,7 @@ function isSafeId(name: string): boolean {
 }
 
 /**
- * Stream-relpath safety independent of daemon trust: manifest path rules via
+ * Stream-relpath safety independent of session trust: manifest path rules via
  * the shared predicate (normalized POSIX-relative, no traversal) plus the
  * store's own conventions (no NUL, no sidecar collision, no tmp suffix).
  */
@@ -528,7 +528,7 @@ async function verifySession(
  * Kind classification and lineage parentPath follow the shared rule
  * (export-sessions.classifyLineageEntry) applied to the store's relpaths:
  * the session-dir root IS the lineage subtree of the session's main JSONL
- * (the daemon streams one session id per subtree); mains at depth 1
+ * (the session streams one session id per subtree); mains at depth 1
  * (`<sessionId>.jsonl`), artifacts nested below. Entries are sorted by
  * relpath for deterministic export ids.
  */

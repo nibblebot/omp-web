@@ -6,7 +6,7 @@ import {
 	type CompactionSnapshot,
 	type CompactionState,
 } from "../../web/store/compaction";
-import { answerCalls } from "../daemon";
+import { answerCalls } from "../session";
 import type { GraphNode, GraphPage } from "../../web/store/graph";
 import type { UiApprovalParams, WebSessionState } from "#lib/wire/protocol";
 import type { DebugEntry, state } from "../../web/state";
@@ -110,7 +110,7 @@ export const askLongQuestions: AskQuestion[] = [
 	},
 ];
 
-/** Ask tool request, as the daemon pushes it: method "askDialog" carries the question list. */
+/** Ask tool request, as the session pushes it: method "askDialog" carries the question list. */
 export function askDialogRequest(id: string, questions: AskQuestion[]): UiRequest {
 	return { id, method: "askDialog", params: { questions } };
 }
@@ -250,7 +250,7 @@ export const btwFailed: BtwSheetState = {
 };
 
 // ---------------------------------------------------------------------------
-// /btw history: daemon answers for btwList and btwPage.
+// /btw history: session answers for btwList and btwPage.
 // ---------------------------------------------------------------------------
 
 export const btwHistoryRecords: BtwRecordView[] = [
@@ -330,7 +330,7 @@ export function btwTranscriptFor(recordId: string): BtwTranscriptTurnView[] {
 }
 
 /**
- * Answers the daemon calls the /btw sheet makes on open and on selection:
+ * Answers the session calls the /btw sheet makes on open and on selection:
  * the saved list, search, a thread page, and the promote preview (eligible
  * only for a single complete turn, as the server decides).
  */
@@ -365,7 +365,7 @@ export function answerBtwHistory(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Session tree (SessionTreePanel): daemon answer for getSessionGraph.
+// Session tree (SessionTreePanel): session answer for getSessionGraph.
 // ---------------------------------------------------------------------------
 
 function node(
@@ -421,7 +421,7 @@ export const sessionGraphPageMore: GraphPage = {
 };
 
 // ---------------------------------------------------------------------------
-// Compaction: daemon answer for compactionSnapshot, plus store slice builders.
+// Compaction: session answer for compactionSnapshot, plus store slice builders.
 // ---------------------------------------------------------------------------
 
 const softOk = { eligible: true } as const;
@@ -510,35 +510,35 @@ export const fleetLogEntries: FleetDebug["log"] = [
 		level: "info",
 		source: "roster",
 		message: "session process d_7f3a attached",
-		daemonId: "d_7f3a",
+		workspaceId: "d_7f3a",
 	},
 	{
 		ts: at(20),
 		level: "info",
 		source: "roster",
 		message: "session process d_b201 attached",
-		daemonId: "d_b201",
+		workspaceId: "d_b201",
 	},
 	{
 		ts: at(11),
 		level: "warn",
 		source: "roster",
 		message: "session process d_b201 missed a heartbeat",
-		daemonId: "d_b201",
+		workspaceId: "d_b201",
 	},
 	{
 		ts: at(10),
 		level: "info",
 		source: "roster",
 		message: "session process d_b201 heartbeat restored",
-		daemonId: "d_b201",
+		workspaceId: "d_b201",
 	},
 	{
 		ts: at(3),
 		level: "error",
 		source: "roster",
 		message: "session process d_c4e9 refused attach: wrong token",
-		daemonId: "d_c4e9",
+		workspaceId: "d_c4e9",
 	},
 ];
 

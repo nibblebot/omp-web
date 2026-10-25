@@ -3,7 +3,7 @@
  * auth (R14), readiness gate (R8), idle auto-exit (R11), command idempotency, and
  * the removed-mux-command fallthrough. Spawns apps/session/index.ts as a subprocess on
  * an ephemeral port (OMP_SESSION_PORT=0) with a hermetic tmp cwd; connects over
- * loopback and, wherever the host owns an interface the daemon is reachable on,
+ * loopback and, wherever the host owns an interface the session is reachable on,
  * from that off-loopback address too (the token gate decides from the socket
  * peer address, so only a real peer address exercises its off-loopback half)
  * using the agent-driving transport (one `GET /ws` WebSocket: frames down,
@@ -170,7 +170,7 @@ async function spawnSession(
 }
 
 /**
- * Spawn a daemon expected to refuse at boot (before bind, so it never prints
+ * Spawn a session expected to refuse at boot (before bind, so it never prints
  * its listening line) and collect its exit code and full output.
  */
 async function spawnRefusedSession(
@@ -214,14 +214,14 @@ function nonLoopbackIpv4s(): string[] {
 }
 
 /**
- * Origins on `port` that reach the daemon from off-loopback: one per interface
+ * Origins on `port` that reach the session from off-loopback: one per interface
  * this host can actually source a connection from, probed with `token` (the
- * daemon these gates run against is bound off-loopback with it) so a down or
+ * session these gates run against is bound off-loopback with it) so a down or
  * unroutable interface is not mistaken for a usable peer address. Empty on a
  * loopback-only host, which cannot produce an off-loopback peer at all: the R14
  * gate reads the SOCKET peer address, so a loopback-bound client always
  * resolves as 127.0.0.1. The gate tests below therefore always assert their
- * loopback half (the daemon's own default peer) and add the off-loopback half
+ * loopback half (the session's own default peer) and add the off-loopback half
  * for every interface this returns.
  */
 async function offLoopbackOrigins(port: number, token: string): Promise<string[]> {
@@ -248,9 +248,9 @@ afterAll(async () => {
 	await Promise.all(running.map((p) => p.cleanup()));
 });
 
-// Reap tempDir dirs AFTER the daemon cleanup above: removing agent dirs while
-// a spawned daemon is still alive races its writes (rmSync can miss files the
-// daemon creates mid-walk), leaving leaked dirs.
+// Reap tempDir dirs AFTER the session cleanup above: removing agent dirs while
+// a spawned session is still alive races its writes (rmSync can miss files the
+// session creates mid-walk), leaving leaked dirs.
 afterAll(cleanupTempDirs);
 
 /**
@@ -337,7 +337,7 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 	const loopbackBase = `http://127.0.0.1:${port}`;
 	const offLoopback = (await offLoopbackOrigins(port, "sekret"))[0];
 
-	// Loopback is exempt on every route (the daemon's own default peer): the
+	// Loopback is exempt on every route (the session's own default peer): the
 	// socket primes with no credential, commands are acked, and the doc route
 	// answers its plain-text 404 instead of the gate's 401.
 	const loopback = await openBrowserSocket(loopbackBase);
@@ -352,7 +352,7 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 	const loopbackRoot = await fetch(`${loopbackBase}/`);
 	expect(loopbackRoot.status).toBe(404);
 	expect(loopbackRoot.headers.get("content-type")).toContain("text/plain");
-	expect(await loopbackRoot.text()).toContain("this is a session daemon (no web UI)");
+	expect(await loopbackRoot.text()).toContain("this is a session process (no web UI)");
 
 	// Off-loopback peers need the token. The gate reads the socket peer address,
 	// so this half runs over the interfaces this host can source a connection
@@ -385,7 +385,7 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 		expect((await wrongAndStale.closed).code).toBe(4401);
 
 		// The `token` query param (all a browser can send) authenticates: the
-		// socket primes hello_ok with the daemon identity and acks commands.
+		// socket primes hello_ok with the session identity and acks commands.
 		const queryStream = await openBrowserSocket(base, { token: "sekret" });
 		const queryHello = await waitForFrame(queryStream.frames, "hello_ok", 10_000, "query hello_ok");
 		expect(queryHello.proto).toBe(OMP_PROTO);
@@ -407,7 +407,7 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 			await headerStream.command({ type: "call", id: "c-h1", method: "getSettings", args: [] }),
 		).toEqual({ ok: true });
 
-		// The non-wire routes stay gated off-loopback, and the daemon serves no
+		// The non-wire routes stay gated off-loopback, and the session serves no
 		// HTML: an authenticated "/" is the plain-text 404 pointing at the fleet,
 		// and so are the removed SSE/POST routes.
 		const unauthRoot = await fetch(`${base}/`);
@@ -416,7 +416,7 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 		const authedRoot = await fetch(`${base}/`, { headers: { authorization: "Bearer sekret" } });
 		expect(authedRoot.status).toBe(404);
 		expect(authedRoot.headers.get("content-type")).toContain("text/plain");
-		expect(await authedRoot.text()).toContain("this is a session daemon (no web UI)");
+		expect(await authedRoot.text()).toContain("this is a session process (no web UI)");
 		expect(
 			(await fetch(`${base}/events`, { headers: { authorization: "Bearer sekret" } })).status,
 		).toBe(404);
@@ -440,7 +440,7 @@ test("OMP_SESSION| listening line is the first stdout line and parses as StdoutC
 	await proc.cleanup();
 }, 30_000);
 
-test("loopback /ws opens with hello_ok as the FIRST frame, carrying the daemon identity", async () => {
+test("loopback /ws opens with hello_ok as the FIRST frame, carrying the session identity", async () => {
 	const proc = await spawnSession({});
 	running.push(proc);
 	const { child, tmp, port, cleanup } = proc;
@@ -455,7 +455,7 @@ test("loopback /ws opens with hello_ok as the FIRST frame, carrying the daemon i
 	// priming is sequenced 1..k below the delta era.
 	expect(socket.frames[0].type).toBe("hello_ok");
 	const attached = await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
-	expect(attached.sessionId).toBe("s1");
+	expect(attached.workspaceId).toBe("s1");
 	// `ready` is priming when the gate already cleared, else a live delta: wait for it, then
 	// every frame below the delta era is priming and numbered 1..k with no gap.
 	await waitForFrame(socket.frames, "ready", 20_000, "ready frame");
@@ -494,7 +494,7 @@ test("a non-upgrade request to /ws is a 400; the old /events and /command routes
 	expect((await fetch(`${base}/ws?proto=${OMP_PROTO}`)).status).toBe(400);
 	const events = await fetch(`${base}/events`);
 	expect(events.status).toBe(404);
-	expect(await events.text()).toContain("this is a session daemon (no web UI)");
+	expect(await events.text()).toContain("this is a session process (no web UI)");
 	const command = await fetch(`${base}/command`, {
 		method: "POST",
 		body: JSON.stringify({ type: "call", id: "gone", method: "getSettings", args: [] }),
@@ -520,7 +520,7 @@ test("idle auto-exit: --idle-timeout 1s exits the process via shutdown", async (
 	await proc.cleanup();
 }, 30_000);
 
-test("an open socket suppresses idle auto-exit; closing it lets the daemon exit", async () => {
+test("an open socket suppresses idle auto-exit; closing it lets the session exit", async () => {
 	const proc = await spawnSession({
 		args: ["--idle-timeout", "1s"],
 		env: { OMP_SESSION_TEST_IDLE_CHECK_MS: "250" },
@@ -554,7 +554,7 @@ test("prompt-family calls fail with not_ready until the readiness gate clears", 
 	// The open auto-attaches; the priming arrives with the constant guard
 	// token (Phase 6: de-muxed, so the client hides the sessions sidebar).
 	const attached = await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
-	expect(attached.sessionId).toBe("s1");
+	expect(attached.workspaceId).toBe("s1");
 	// The gate is still closed: prompt is rejected with not_ready, not a model error.
 	const resp = await socket.command({
 		type: "call",
@@ -596,13 +596,13 @@ test("removed mux commands fall through to the unknown-command error; read-only 
 	const socket = await openBrowserSocket(base);
 	// The attached frame carries the constant guard token.
 	const attached = await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
-	expect(attached.sessionId).toBe("s1");
+	expect(attached.workspaceId).toBe("s1");
 
 	// The four removed mux commands (plus attach/detach, which only exist at
 	// the fleet edge) fall through to the generic unknown-command error; a
 	// benign read-only call probe still answers with call_result.
 	await socket.command({ type: "create_session", cwd: "/tmp", id: "m1" });
-	await socket.command({ type: "attach", sessionId: "s1", id: "m2" });
+	await socket.command({ type: "attach", workspaceId: "s1", id: "m2" });
 	await socket.command({ type: "detach", id: "m3" });
 	await socket.command({ type: "close_session", sessionId: "s1", id: "m4" });
 	await socket.command({ type: "list_live_sessions", id: "m5" });
@@ -643,7 +643,7 @@ test("removed mux commands fall through to the unknown-command error; read-only 
 
 	// Fleet-edge commands are rejected on a bare omp-session.
 	await socket.command({ type: "spawn", cwd: "/tmp", id: "m7" });
-	await socket.command({ type: "stop", daemonId: "d1", id: "m8" });
+	await socket.command({ type: "stop", workspaceId: "d1", id: "m8" });
 	await waitFor(
 		() =>
 			socket.frames.filter((f) => f.type === "error" && f.error === "fleet-only command").length >=
@@ -695,7 +695,7 @@ test("a command id re-sent on the same socket is acked again and replays the rec
 	expect(resyncs).toHaveLength(1);
 
 	// A FAILED dispatch replays its real error the same way: the recovery must
-	// report the daemon's failure, never a fabricated success.
+	// report the session's failure, never a fabricated success.
 	const bad = { type: "call", id: "dup-err", method: "no-such-method", args: [] };
 	await socket.command(bad);
 	await socket.command(bad);
@@ -870,9 +870,9 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 		}
 		await writeFile(fixture, entries.join("\n") + "\n");
 
-		// The daemon's project dir is spawn-bound and the transcript records its
+		// The session's project dir is spawn-bound and the transcript records its
 		// own cwd in the session header: 18.2.6 refuses a resume whose recorded
-		// cwd differs from the daemon's, so the daemon exits 78 instead of
+		// cwd differs from the session's, so the session exits 78 instead of
 		// booting fresh. The fixture's dir becomes the session cwd.
 		const proc = await spawnSession({
 			args: ["--resume", fixture],
@@ -940,11 +940,11 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 }, 60_000);
 
 test("--resume of a transcript recorded under another cwd exits 78 and names both cwds, never booting fresh", async () => {
-	// 18.2.6 refuses a switch whose recorded cwd differs from the daemon's
+	// 18.2.6 refuses a switch whose recorded cwd differs from the session's
 	// project dir (SESSION_CWD_CHANGE_REJECTED → switchSession false). The
-	// daemon's own project dir is spawn-bound, so this is unfixable from the
+	// session's own project dir is spawn-bound, so this is unfixable from the
 	// resume flag alone: the message has to say which two cwds disagree, and
-	// the daemon has to refuse rather than start an empty session in its place.
+	// the session has to refuse rather than start an empty session in its place.
 	const foreignDir = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-foreign-"));
 	try {
 		const fixture = path.join(foreignDir, "foreign.jsonl");
@@ -974,7 +974,7 @@ test("--resume of a transcript recorded under another cwd exits 78 and names bot
 		expect(refused.exitCode).toBe(OMP_SESSION_EXIT_RESUME_FAILED);
 		expect(refused.stderr).toContain(`--resume ${fixture}: session switch returned false`);
 		expect(refused.stderr).toContain(`the session was recorded under ${foreignDir}`);
-		expect(refused.stderr).toMatch(/this daemon runs \/tmp\/omp-session-test-[^)]+/);
+		expect(refused.stderr).toMatch(/this session runs \/tmp\/omp-session-test-[^)]+/);
 		expect(refused.stderr).toContain("refusing to start fresh");
 	} finally {
 		await rm(foreignDir, { recursive: true, force: true });
@@ -993,15 +993,15 @@ test("small transcripts keep the single-frame history shape (no `final` field)",
 	await cleanup();
 }, 30_000);
 
-test("backpressure drop is a typed close: a socket buffering past the cap closes 4503; the daemon stays alive for resume", async () => {
+test("backpressure drop is a typed close: a socket buffering past the cap closes 4503; the session stays alive for resume", async () => {
 	// A socket whose peer stops reading must not read as a dormant close: the
-	// daemon closes it with the typed 4503 slow_consumer (the retired SSE path had to
+	// session closes it with the typed 4503 slow_consumer (the retired SSE path had to
 	// mark the drop with an in-band stream_reset frame, because a chunked body
 	// cannot carry a close reason). The cap is CLIENT_BACKPRESSURE_BYTES of
 	// buffered amount; the test overflows it with several >4 MiB answer
 	// frames (formatSessionAsText serializes the whole resumed transcript as
 	// ONE frame) toward a raw TCP peer that has stopped reading, and proves
-	// the typed close arrives after the buffered data and the daemon serves a
+	// the typed close arrives after the buffered data and the session serves a
 	// fresh socket right after.
 	const bigDir = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-bpres-"));
 	try {
@@ -1030,7 +1030,7 @@ test("backpressure drop is a typed close: a socket buffering past the cap closes
 		await writeFile(fixture, entries.join("\n") + "\n");
 
 		// Same cwd alignment as the chunked-history fixture above: the resumed
-		// transcript must record the daemon's project dir or it loads empty.
+		// transcript must record the session's project dir or it loads empty.
 		const proc = await spawnSession({
 			args: ["--resume", fixture],
 			env: { OMP_SESSION_CWD: bigDir },
@@ -1038,7 +1038,7 @@ test("backpressure drop is a typed close: a socket buffering past the cap closes
 		running.push(proc);
 		const { port, cleanup } = proc;
 		const base = `http://127.0.0.1:${port}`;
-		// A peer that primes, then stops reading, then asks for answers the daemon
+		// A peer that primes, then stops reading, then asks for answers the session
 		// cannot get out: its send buffer grows past the cap.
 		const stalled = await openRawBrowserSocket(port);
 		await waitFor(
@@ -1048,7 +1048,7 @@ test("backpressure drop is a typed close: a socket buffering past the cap closes
 		);
 		stalled.pause();
 		// Each answer serializes the whole 5.4 MB transcript in one frame; the
-		// daemon checks the socket's buffered amount before every send, so the
+		// session checks the socket's buffered amount before every send, so the
 		// sends that find it over the cap close the socket instead of queueing.
 		for (let i = 0; i < 6; i++) {
 			stalled.sendCommand({ type: "call", id: `bp-${i}`, method: "formatSessionAsText", args: [] });
@@ -1062,7 +1062,7 @@ test("backpressure drop is a typed close: a socket buffering past the cap closes
 		expect(closed.kind).toBe("slow_consumer");
 		expect(closed.reason).toContain("backpressure");
 		stalled.destroy();
-		// The daemon is ALIVE: a fresh socket attaches and answers commands.
+		// The session is ALIVE: a fresh socket attaches and answers commands.
 		const resumed = await openBrowserSocket(base);
 		const hello2 = await waitForFrame(resumed.frames, "hello_ok", 10_000, "hello_ok after drop");
 		expect(hello2.proto).toBe(OMP_PROTO);
@@ -1174,7 +1174,7 @@ test("resume with a delta-era `after` replays no snapshot-era deltas (finding #2
 	const resumedState = await waitForFrame(resumed.frames, "state", 10_000, "resumed state");
 	expect(stateSessionName(resumedState)).toBe("ringed delta");
 	// The re-primed socket must contain no delta-era frame: the snapshot-era
-	// delta was not replayed and the idle daemon emitted no new deltas during
+	// delta was not replayed and the idle session emitted no new deltas during
 	// the prime. The replay (pre-fix) is sent synchronously right after
 	// the last priming frame, so a short real wait observes the subprocess's
 	// delivery; fake timers cannot drive another process (same convention as
@@ -1326,10 +1326,10 @@ test("a settled ui_request is never a stale dialog: resumers see end-after-reque
 }, 30_000);
 
 // ---------------------------------------------------------------------------
-// Session-file locking: a second daemon on the same --resume file fails loudly
+// Session-file locking: a second session on the same --resume file fails loudly
 // (exit 1) while the holder is alive, and a crash-left stale lock is broken so
-// the same file starts again. The fixture lives OUTSIDE the daemons' tmp cwds
-// so daemon cleanup never deletes it mid-test.
+// the same file starts again. The fixture lives OUTSIDE the sessions' tmp cwds
+// so session cleanup never deletes it mid-test.
 // ---------------------------------------------------------------------------
 
 /** Build a minimal valid resumed session file; returns its dir and absolute path. */
@@ -1356,7 +1356,7 @@ async function writeResumeFixture(): Promise<{ dir: string; fixture: string }> {
 	return { dir, fixture };
 }
 
-/** Wait for a spawned daemon to exit; asserts the exact exit code (137 = SIGKILL). */
+/** Wait for a spawned session to exit; asserts the exact exit code (137 = SIGKILL). */
 async function expectExitCode(
 	child: Subprocess<"ignore", "pipe", "pipe">,
 	code: number,
@@ -1381,7 +1381,7 @@ test("a second omp-session on the same --resume file refuses before bind with th
 			a.child.pid,
 		);
 
-		// Daemon B on the same absolute --resume fails at the lock BEFORE
+		// Session B on the same absolute --resume fails at the lock BEFORE
 		// bind: no listening line (a spawner never resolves an endpoint for
 		// it), the deterministic lock exit code, and the documented message.
 		const b = await spawnRefusedSession({ args: ["--resume", fixture] });
@@ -1633,7 +1633,7 @@ test("SDK persistence relocation updates live state and locks its new journal", 
 			}),
 		).toBe(true);
 		// The relocation callback must protect the new path just as boot does:
-		// another real daemon cannot resume it while this process owns it.
+		// another real session cannot resume it while this process owns it.
 		const contender = await spawnRefusedSession({
 			args: ["--resume", sessionFile],
 			env: { OMP_SESSION_CWD: dir },
@@ -1702,7 +1702,7 @@ test("an answer goes only to the socket whose command produced it", async () => 
 		10_000,
 		"call_result on A",
 	);
-	// A daemon-wide answer (fleet-only error) is an answer too: it stays with its asker.
+	// A session-wide answer (fleet-only error) is an answer too: it stays with its asker.
 	expect(await b.command({ type: "spawn", cwd: "/tmp", id: "only-b" })).toEqual({ ok: true });
 	await waitFor(
 		() =>

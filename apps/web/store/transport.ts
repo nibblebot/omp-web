@@ -204,11 +204,11 @@ export function resendUnsettled(): void {
 
 /**
  * Replay cadence for a call whose answer never arrived. call_result is a
- * non-ringed unicast answer, so when the edge-to-daemon pipe drops it (an
+ * non-ringed unicast answer, so when the edge-to-session pipe drops it (an
  * emission while the pipe is mid-redial) or the socket drops it (drop-and-
  * resume backpressure), nothing else replays it and the pending call would
  * hang until its own timeout. Re-sending the SAME command id recovers
- * it: the daemon dedups the id within COMMAND_DEDUP_WINDOW_MS (never
+ * it: the session dedups the id within COMMAND_DEDUP_WINDOW_MS (never
  * re-dispatching) and replays the answer it recorded, so a replay can neither
  * execute the command twice nor report a different outcome. A socket drop is
  * covered at the next open by resendUnsettled.
@@ -302,7 +302,7 @@ function scheduleCallReplay(id: string): void {
 		const current = pendingCalls.get(id);
 		if (!current) return;
 		current.replayTimer = 0;
-		// At-most-once bound: past the dedup window the daemon no longer
+		// At-most-once bound: past the dedup window the session no longer
 		// remembers the id, so a re-send could EXECUTE the command again.
 		if (Date.now() - current.firstPostAt > COMMAND_DEDUP_WINDOW_MS) {
 			if (current.awaitingAttach || current.awaitingState) {
@@ -320,7 +320,7 @@ function scheduleCallReplay(id: string): void {
 		// call at the next open, and this chain only bounds it by the window.
 		if (uplink !== null && !isParkedMutation(current)) {
 			// A failed replay is not fatal: the call keeps its own deadline, and
-			// the next tick re-sends again (the daemon replays its answer).
+			// the next tick re-sends again (the session replays its answer).
 			void sendCommand(current.cmd).catch(() => {});
 		}
 		scheduleCallReplay(id);
@@ -365,7 +365,7 @@ function sendCall(id: string): void {
 /**
  * Re-send each call the edge answered NOT_ATTACHED. Runs on every `attached`
  * frame, so a call parked while the tab was detached goes out again under the
- * same id (the daemon dedups it and never ran the first copy). A parked read
+ * same id (the session dedups it and never ran the first copy). A parked read
  * goes out at once, without scope. A parked mutation keeps its scope and waits
  * for the attachment's first `state` frame (resumeParkedMutations). A call past
  * COMMAND_DEDUP_WINDOW_MS fails instead: a re-send could execute twice.
@@ -417,7 +417,7 @@ export function resumeParkedMutations(scope: SessionScope | undefined): void {
 }
 
 /**
- * True when a rejected call was superseded by a session/daemon switch. The
+ * True when a rejected call was superseded by a session/workspace switch. The
  * in-flight call's result is stale by design (state.ts rejects pending calls
  * with this message when an `attached` frame lands for another session).
  * Switching sessions is expected control flow, NEVER a user-facing error.
@@ -444,7 +444,7 @@ export function call(
 		reject(new Error("Not connected"));
 		return promise;
 	}
-	// Page-unique: ids from two tabs must never collide. The daemon dedups
+	// Page-unique: ids from two tabs must never collide. The session dedups
 	// commands by id alone, so a shared id would swallow the other tab's command
 	// and a replayed answer would settle the wrong tab's pending call.
 	const id = `c${crypto.randomUUID()}`;
@@ -485,18 +485,18 @@ export function call(
 
 // ---------------------------------------------------------------------------
 // Fleet-edge attach. The edge answers `attach` with an id-keyed unicast
-// `attach_result` frame (finding #28): the sessionId is the daemonId, and
-// the daemon's own priming (history/state/available_commands) follows the
+// `attach_result` frame (finding #28): the workspaceId is the roster id, and
+// the session's own priming (history/state/available_commands) follows the
 // proxied attached frame. A bare omp-session never receives attach (its
 // sockets are attached from upgrade). An attach that never gets its keyed
-// answer is settled by the DAEMON_TIMEOUT_MS backstop (#31-style pending
+// answer is settled by the ANSWER_TIMEOUT_MS backstop (#31-style pending
 // map).
 // ---------------------------------------------------------------------------
 let pendingAttach: {
 	id: string;
-	/** The roster daemonId this attach targets (race guard for session clearing). */
-	sessionId: string;
-	resolve: (sessionId: string) => void;
+	/** The roster workspaceId this attach targets (race guard for session clearing). */
+	workspaceId: string;
+	resolve: (workspaceId: string) => void;
 	reject: (err: Error) => void;
 	timer: number;
 } | null = null;
@@ -531,19 +531,19 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 	// Latest-wins: a superseded attach resolves to whatever session is current.
 	if (pendingAttach) {
 		clearTimeout(pendingAttach.timer);
-		pendingAttach.resolve(state.currentSessionId);
+		pendingAttach.resolve(state.currentWorkspaceId);
 	}
 	const id = cmd.id;
 	const timer =
-		DAEMON_TIMEOUT_MS > 0
+		ANSWER_TIMEOUT_MS > 0
 			? window.setTimeout(() => {
 					if (pendingAttach?.id === id) {
 						pendingAttach = null;
 						reject(new Error("attach timed out"));
 					}
-				}, DAEMON_TIMEOUT_MS)
+				}, ANSWER_TIMEOUT_MS)
 			: 0;
-	pendingAttach = { id, sessionId: cmd.sessionId, resolve, reject, timer };
+	pendingAttach = { id, workspaceId: cmd.workspaceId, resolve, reject, timer };
 	sendCommand(cmd).catch((err) => {
 		if (pendingAttach?.id === id) {
 			clearTimeout(pendingAttach.timer);
@@ -554,17 +554,17 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 	return promise;
 }
 
-/** Attach this tab to a daemon in the roster; resolves with its handle. */
-export function attachSession(sessionId: string): Promise<string> {
-	return requestAttach({ type: "attach", id: crypto.randomUUID(), sessionId });
+/** Attach this tab to a session in the roster; resolves with its handle. */
+export function attachSession(workspaceId: string): Promise<string> {
+	return requestAttach({ type: "attach", id: crypto.randomUUID(), workspaceId });
 }
 
-/** The roster daemonId of the in-flight attach, or null when idle. Used as
- *  the race guard for session clearing: a freshly waking daemon reads as
+/** The roster workspaceId of the in-flight attach, or null when idle. Used as
+ *  the race guard for session clearing: a freshly waking session reads as
  *  "asleep" in lagging roster frames right after the user clicks wake-attach,
  *  so the clear must not fire while its attach is still settling. */
 export function pendingAttachTarget(): string | null {
-	return pendingAttach?.sessionId ?? null;
+	return pendingAttach?.workspaceId ?? null;
 }
 
 /** Reject the in-flight attach waiter (stream teardown in state.ts); the
@@ -582,8 +582,8 @@ export function rejectPendingAttach(err: Error): void {
 
 /** An attachment watch (see watchAttachment). */
 interface AttachmentWatch {
-	daemonId: string;
-	/** The proxied `attached` frame for the daemon has landed. */
+	workspaceId: string;
+	/** The proxied `attached` frame for the session has landed. */
 	attached: boolean;
 	settle: (ready: boolean) => void;
 }
@@ -591,28 +591,28 @@ interface AttachmentWatch {
 const attachmentWatches = new Set<AttachmentWatch>();
 
 /**
- * Watch for the NEXT attachment of `daemonId` to become usable. `done()`
- * resolves true once the proxied `attached` frame for the daemon has landed
+ * Watch for the NEXT attachment of `workspaceId` to become usable. `done()`
+ * resolves true once the proxied `attached` frame for the session has landed
  * AND that attachment's first `state` frame has set `state.sessionScope`, so a
  * call posted afterwards carries the new generation's scope. The attach_result
  * answer can land before both frames, and a call posted in that gap carries
- * the previous attachment's scope (a re-attach of the same daemon, such as a
+ * the previous attachment's scope (a re-attach of the same session, such as a
  * wake after a UI stop, keeps the view) or is swept by the frame's "session
- * switched" rejection after the daemon already ran it; a non-idempotent call
+ * switched" rejection after the session already ran it; a non-idempotent call
  * (newSession) waits here instead of retrying. Register the watch BEFORE the
  * attach is posted so a fast frame is not missed. `done()` arms the
- * DAEMON_TIMEOUT_MS deadline, so a slow wake before it never counts against
+ * ANSWER_TIMEOUT_MS deadline, so a slow wake before it never counts against
  * the wait; it resolves false when an `attached` frame for another session
  * lands first, the stream tears down, the deadline passes, or `cancel()` ran.
  */
-export function watchAttachment(daemonId: string): {
+export function watchAttachment(workspaceId: string): {
 	done: () => Promise<boolean>;
 	cancel: () => void;
 } {
 	const { promise, resolve } = Promise.withResolvers<boolean>();
 	let timer = 0;
 	const watch: AttachmentWatch = {
-		daemonId,
+		workspaceId,
 		attached: false,
 		settle: (ready) => {
 			attachmentWatches.delete(watch);
@@ -625,7 +625,7 @@ export function watchAttachment(daemonId: string): {
 		done: () => {
 			if (attachmentWatches.has(watch)) {
 				clearTimeout(timer);
-				timer = window.setTimeout(() => watch.settle(false), DAEMON_TIMEOUT_MS);
+				timer = window.setTimeout(() => watch.settle(false), ANSWER_TIMEOUT_MS);
 			}
 			return promise;
 		},
@@ -633,14 +633,14 @@ export function watchAttachment(daemonId: string): {
 	};
 }
 
-/** An `attached` frame landed (state.ts, after it updated currentSessionId and
+/** An `attached` frame landed (state.ts, after it updated currentWorkspaceId and
  *  cleared the scope): a watch for another session gives up, a watch for this
  *  one now waits for the attachment's first `state` frame. "" = stream teardown,
  *  which ends every watch. */
-export function settleAttachedFrame(sessionId: string): void {
+export function settleAttachedFrame(workspaceId: string): void {
 	// Each watch deletes only itself, which Set iteration tolerates.
 	for (const watch of attachmentWatches) {
-		if (sessionId !== "" && sessionId === watch.daemonId) watch.attached = true;
+		if (workspaceId !== "" && workspaceId === watch.workspaceId) watch.attached = true;
 		else watch.settle(false);
 	}
 }
@@ -660,9 +660,9 @@ export function settleAttachResult(frame: Extract<ServerFrame, { type: "attach_r
 	clearTimeout(pendingAttach.timer);
 	const pending = pendingAttach;
 	pendingAttach = null;
-	if (frame.ok && frame.sessionId !== undefined) {
-		pending.resolve(frame.sessionId);
-		pushDebug("info", "transport", `attach ok: ${frame.sessionId}`);
+	if (frame.ok && frame.workspaceId !== undefined) {
+		pending.resolve(frame.workspaceId);
+		pushDebug("info", "transport", `attach ok: ${frame.workspaceId}`);
 	} else {
 		pending.reject(new Error(frame.error ?? "attach failed"));
 		pushDebug("warn", "transport", `attach failed: ${frame.error ?? "unknown error"}`);
@@ -709,7 +709,7 @@ type DaemonPending<T> = Map<
 	{ resolve: (v: T) => void; reject: (err: Error) => void; timer: number }
 >;
 
-const DAEMON_TIMEOUT_MS = 30_000;
+const ANSWER_TIMEOUT_MS = 30_000;
 
 function registerDaemonPending<T>(
 	resolve: (v: T) => void,
@@ -718,11 +718,11 @@ function registerDaemonPending<T>(
 ): { id: string; timer: number } {
 	const id = `d${nextDaemonCallId++}`;
 	const timer =
-		DAEMON_TIMEOUT_MS > 0
+		ANSWER_TIMEOUT_MS > 0
 			? window.setTimeout(() => {
 					map.delete(id);
 					reject(new Error("session process command timed out"));
-				}, DAEMON_TIMEOUT_MS)
+				}, ANSWER_TIMEOUT_MS)
 			: 0;
 	map.set(id, { resolve, reject, timer });
 	return { id, timer };
@@ -852,10 +852,10 @@ export async function fetchCtlDebug(): Promise<unknown> {
 	return (await res.json()) as unknown;
 }
 
-/** GET /ctl/sessions/{id}/stderr, a daemon's captured stderr tail. */
-export async function fetchDaemonStderr(daemonId: string): Promise<{ text: string }> {
+/** GET /ctl/sessions/{id}/stderr, a session's captured stderr tail. */
+export async function fetchSessionStderr(workspaceId: string): Promise<{ text: string }> {
 	const res = await ctlFetch(
-		`/ctl/sessions/${encodeURIComponent(daemonId)}/stderr`,
+		`/ctl/sessions/${encodeURIComponent(workspaceId)}/stderr`,
 		"fleet control plane unreachable, no fleet server on :4722",
 		(s) =>
 			s === 404

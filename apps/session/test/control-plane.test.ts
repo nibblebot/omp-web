@@ -1,6 +1,6 @@
 /**
- * Session daemon lifecycle against a fake control plane. The daemon dials OUT
- * to the fake fleet over the callback pair; the fake never dials the daemon.
+ * Session session lifecycle against a fake control plane. The session dials OUT
+ * to the fake fleet over the callback pair; the fake never dials the session.
  *
  * Grace periods, idle timeouts, and quiet-time checks are process-level
  * behavior measured against the platform clock in a real subprocess, so those
@@ -24,21 +24,21 @@ const WORKSPACE = "ws-control-plane";
 const GENERATION = 1;
 const TOKEN = "ab".repeat(32);
 
-/** The fake fleet the daemon dials, over the shared WebSocket fake (fake-fleet.testkit.ts). */
+/** The fake fleet the session dials, over the shared WebSocket fake (fake-fleet.testkit.ts). */
 interface FakeFleet {
 	url: string;
-	/** Resolves when the daemon's pair socket has been sent pair_ready. */
+	/** Resolves when the session's pair socket has been sent pair_ready. */
 	paired: Promise<void>;
-	/** Envelopes the daemon sent on the pair, in arrival order. */
+	/** Envelopes the session sent on the pair, in arrival order. */
 	up: CallbackEnvelope[];
 	/** Resolves once `count` uploaded envelopes satisfy `match`. */
 	waitForUp(match: (envelope: CallbackEnvelope) => boolean, count: number): Promise<void>;
 	/** Sends one envelope on the current pair. */
 	send(streamId: string, kind: CallbackKind, payload: unknown): void;
-	/** Resolves once the daemon has dialed `count` times (a refused pair dials again after its backoff). */
+	/** Resolves once the session has dialed `count` times (a refused pair dials again after its backoff). */
 	whenDials(count: number): Promise<void>;
 	stop(): void;
-	/** Closes the current pair socket (network loss); the daemon redials and a new pair forms. */
+	/** Closes the current pair socket (network loss); the session redials and a new pair forms. */
 	dropPair(): void;
 }
 
@@ -165,7 +165,7 @@ function trackFleet(options: { refuse?: FakeRefusal } = {}): FakeFleet {
 	return fleet;
 }
 
-function spawnDaemon(
+function spawnSession(
 	callbackUrl: string,
 	extra: Record<string, string> = {},
 	stdout: "ignore" | "pipe" = "ignore",
@@ -215,21 +215,21 @@ function exitWithin(child: Subprocess, timeoutMs: number): Promise<number | null
 
 test("a ShutdownControl from the fleet stops the session with exit 0", async () => {
 	const fleet = trackFleet();
-	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
 	await fleet.paired;
 	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });
 
 test("a session with no reachable control plane exits after the grace period", async () => {
-	const child = spawnDaemon(closedPortUrl(), { OMP_SESSION_CONTROL_GRACE: "2s" });
+	const child = spawnSession(closedPortUrl(), { OMP_SESSION_CONTROL_GRACE: "2s" });
 	const started = Date.now();
 	expect(await exitWithin(child, 30_000)).toBe(0);
 	expect(Date.now() - started).toBeGreaterThanOrEqual(1500);
 });
 
 test("a fleet-managed session binds no listener and prints no listening line", async () => {
-	const child = spawnDaemon(closedPortUrl(), { OMP_SESSION_CONTROL_GRACE: "2s" }, "pipe");
+	const child = spawnSession(closedPortUrl(), { OMP_SESSION_CONTROL_GRACE: "2s" }, "pipe");
 	const stdout = await new Response(child.stdout as ReadableStream<Uint8Array>).text();
 	expect(await exitWithin(child, 30_000)).toBe(0);
 	expect(stdout).not.toContain("OMP_SESSION|");
@@ -237,7 +237,7 @@ test("a fleet-managed session binds no listener and prints no listening line", a
 
 test("a credential the fleet rejects shuts the session down without waiting for the grace period", async () => {
 	const fleet = trackFleet({ refuse: REFUSALS.unauthorized });
-	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
+	const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });
 
@@ -246,7 +246,7 @@ test("a credential the fleet rejects exits 0 even while postmortem teardown is s
 	// surface as an unhandled rejection, which postmortem would turn into exit 1 when
 	// the shutdown's async teardown is still running at that moment.
 	const fleet = trackFleet({ refuse: REFUSALS.unauthorized });
-	const child = spawnDaemon(fleet.url, {
+	const child = spawnSession(fleet.url, {
 		OMP_SESSION_CONTROL_GRACE: "10m",
 		BUN_OPTIONS: `--preload=${repoRoot}apps/session/test/teardown-probe.preload.ts`,
 		OMP_SESSION_TEST_TEARDOWN: "slow",
@@ -256,11 +256,11 @@ test("a credential the fleet rejects exits 0 even while postmortem teardown is s
 
 test("a fleet generation_obsolete shuts the session down without waiting for the grace period", async () => {
 	// The fleet announces a superseded generation with a typed refusal close
-	// (apps/fleet/test/daemon-transport.test.ts). Like a rejected credential, it is
+	// (apps/fleet/test/session-transport.test.ts). Like a rejected credential, it is
 	// terminal: the session must not keep dialing a pair the fleet has already
 	// replaced, and it must not sit out the grace window.
 	const fleet = trackFleet({ refuse: REFUSALS.generationObsolete });
-	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
+	const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });
 
@@ -270,7 +270,7 @@ test("an invalid_identity or proto_unsupported refusal shuts the session down at
 	// instead of redialing a fleet that will never serve it.
 	for (const refusal of [REFUSALS.invalidIdentity, REFUSALS.protoUnsupported]) {
 		const fleet = trackFleet({ refuse: refusal });
-		const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
+		const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
 		expect(await exitWithin(child, 20_000)).toBe(0);
 	}
 }, 60_000);
@@ -278,11 +278,11 @@ test("an invalid_identity or proto_unsupported refusal shuts the session down at
 test("a 409 that is not a terminal refusal leaves the session dialing", async () => {
 	// Only a credential rejection, a superseded generation and an unsupported protocol
 	// stop the transport; every other refusal (a typed conflict, or a 4409 close whose
-	// reason names no code) is retried on the backoff, so the daemon keeps dialing
+	// reason names no code) is retried on the backoff, so the session keeps dialing
 	// instead of exiting.
 	for (const refusal of [REFUSALS.conflict, REFUSALS.plainConflict]) {
 		const fleet = trackFleet({ refuse: refusal });
-		const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
+		const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
 		await fleet.whenDials(2);
 		expect(await exitWithin(child, 2_000)).toBeNull();
 		child.kill();
@@ -291,7 +291,7 @@ test("a 409 that is not a terminal refusal leaves the session dialing", async ()
 
 test("a live pair keeps the session up past the grace period", async () => {
 	const fleet = trackFleet();
-	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "2s" });
+	const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "2s" });
 	await fleet.paired;
 	// Real time: the grace window must elapse for this to prove anything.
 	expect(await exitWithin(child, 4_000)).toBeNull();
@@ -301,7 +301,7 @@ test("a live pair keeps the session up past the grace period", async () => {
 
 test("a command repeated over the pair is dispatched once and its answer replayed", async () => {
 	const fleet = trackFleet();
-	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
 	await fleet.paired;
 	const command = { type: "call", id: "dup-cmd", method: "setSessionName", args: ["dup-name"] };
 	// The retry follows the recorded answer: a duplicate that races the first dispatch
@@ -321,7 +321,7 @@ test("a command repeated over the pair is dispatched once and its answer replaye
 
 test("an open browser stream keeps the idle timeout from stopping the session", async () => {
 	const fleet = trackFleet();
-	const child = spawnDaemon(fleet.url, {
+	const child = spawnSession(fleet.url, {
 		OMP_SESSION_CONTROL_GRACE: "0",
 		OMP_SESSION_IDLE_TIMEOUT: "3s",
 		OMP_SESSION_TEST_IDLE_CHECK_MS: "200",
@@ -336,7 +336,7 @@ test("an open browser stream keeps the idle timeout from stopping the session", 
 
 test("every pair-up publishes the session file on the control stream, including after a redial", async () => {
 	const fleet = trackFleet();
-	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
 	await fleet.paired;
 	// No browser stream is open: the state frame must not depend on one.
 	await fleet.waitForUp((e) => stateFrameSessionFile(e) !== undefined, 1);
@@ -353,7 +353,7 @@ test("every pair-up publishes the session file on the control stream, including 
 
 test("browser streams prime the transcript and get the history resync after newSession", async () => {
 	const fleet = trackFleet();
-	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
 	await fleet.paired;
 	const frames = (streamId: string) =>
 		fleet.up.map((e) => streamFrame(e, streamId)).filter((f) => f !== undefined);
@@ -400,9 +400,9 @@ test("browser streams prime the transcript and get the history resync after newS
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });
 
-test("agent subprocesses do not inherit the daemon's callback pair", async () => {
+test("agent subprocesses do not inherit the session's callback pair", async () => {
 	const fleet = trackFleet();
-	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
+	const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
 	await fleet.paired;
 	const dump = `${tempDir("omp-session-cp-env-")}/env.txt`;
 	fleet.send("browser/env", "control", { type: "stream_open" });
@@ -424,7 +424,7 @@ test("agent subprocesses do not inherit the daemon's callback pair", async () =>
 
 test("a history-reload call resyncs the transcript before its answer", async () => {
 	const fleet = trackFleet();
-	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
 	await fleet.paired;
 	// The transcript resync is browser-stream-only (the fleet's control mirror
 	// never carries history), so the call is driven over the pair's control
@@ -459,7 +459,7 @@ test("a history-reload call resyncs the transcript before its answer", async () 
 
 test("a read-only call broadcasts no state; a mutating call does", async () => {
 	const fleet = trackFleet();
-	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	const child = spawnSession(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
 	await fleet.paired;
 	fleet.send("browser/state", "control", { type: "stream_open" });
 	// Wait for the snapshot to carry the readiness stamp: the gate clearing is
@@ -508,16 +508,16 @@ test("a read-only call broadcasts no state; a mutating call does", async () => {
 test("a pair-attached browser with no local /ws consumer answers a ui_request", async () => {
 	// Locks the presence check to the callback pair: production browsers ride
 	// the pair as `browser/<connId>` virtual streams and never enter the
-	// daemon's own /ws consumer set, so a local-only check rejected every
+	// session's own /ws consumer set, so a local-only check rejected every
 	// dialog with "No connected client to answer the UI request" (the
 	// regression users saw in the ask card).
 	const fleet = trackFleet();
-	const child = spawnDaemon(fleet.url, {
+	const child = spawnSession(fleet.url, {
 		OMP_SESSION_CONTROL_GRACE: "0",
 		OMP_SESSION_TEST_UI_REQUEST: "1",
 	});
 	await fleet.paired;
-	// Pair only: nothing here opens a local /ws socket, so the daemon's
+	// Pair only: nothing here opens a local /ws socket, so the session's
 	// `streams` set stays empty for the whole test.
 	fleet.send("browser/one", "control", { type: "stream_open" });
 	await fleet.waitForUp((e) => streamFrame(e, "browser/one")?.type === "state", 1);
@@ -552,11 +552,11 @@ test("a pair-attached browser with no local /ws consumer answers a ui_request", 
 });
 
 test("a state snapshot carries the ids of the ui_requests pending at that moment", async () => {
-	// The fleet rebuilds a daemon's blocked flag from this field on every state
+	// The fleet rebuilds a session's blocked flag from this field on every state
 	// frame (notably the pair-up one), so the stream_open priming snapshot is
 	// the observable seam: it must list the open dialog, then list none once settled.
 	const fleet = trackFleet();
-	const child = spawnDaemon(fleet.url, {
+	const child = spawnSession(fleet.url, {
 		OMP_SESSION_CONTROL_GRACE: "0",
 		OMP_SESSION_TEST_UI_REQUEST: "1",
 	});

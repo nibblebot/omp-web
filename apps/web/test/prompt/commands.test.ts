@@ -311,7 +311,7 @@ beforeEach(() => {
 	timers.length = 0;
 	installClock();
 	setState({
-		currentSessionId: "",
+		currentWorkspaceId: "",
 		connected: false,
 		readyAt: undefined,
 		subagents: new Map(),
@@ -362,7 +362,7 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 	test("long-running bash streams past 30s and resolves when the late call_result arrives", async () => {
 		const { call: bashCall, item } = startBang("!sleep 60", "bash");
 		// Streamed commands have no deadline, but transport recovery still
-		// replays the same id while the daemon's dedup record is valid.
+		// replays the same id while the session's dedup record is valid.
 		expect(timers.map((timer) => timer.ms)).toEqual([5_000]);
 		expect(item()?.status).toBe("running");
 

@@ -1,7 +1,7 @@
 /**
  * Large-history transcript fixture for scenario S1. Generated once, cached
  * under `<outRoot>/fixtures/`, copied per run into the session directory the
- * fleet's session daemon resumes from. Records follow the SDK's session JSONL
+ * fleet's session process resumes from. Records follow the SDK's session JSONL
  * v3 shapes (header, then a parent-linked chain of `message` entries) so the
  * real resume path (`--resume <file>`, history priming, listing) runs.
  */

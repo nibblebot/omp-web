@@ -18,7 +18,7 @@ function compact<T extends object>(value: T): T {
 
 /**
  * Wire projection of the SDK's AgentProgress. The bulk arrays (`recentTools`,
- * `recentOutput`) stay on the daemon; the wire carries only the newest tool.
+ * `recentOutput`) stay on the session; the wire carries only the newest tool.
  */
 export function projectProgress(progress: AgentProgress): SubagentProgressFields {
 	const latest = progress.recentTools[0];

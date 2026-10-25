@@ -29,7 +29,7 @@ export default defineStory({
 			description:
 				"The trigger reveals when its row is hovered, as in the session list. Click it to open; Down or Enter opens with the first item focused, Up opens on the last. Arrows, Home and End move between items; Escape closes and returns focus to the trigger; an outside click closes it.",
 			render: () => (
-				<div class="daemon-row">
+				<div class="roster-row">
 					<KebabMenu label="Session actions">{sessionMenuItems()}</KebabMenu>
 				</div>
 			),

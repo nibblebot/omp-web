@@ -9,7 +9,7 @@ export const DebugLog: Component<{
 		level: string;
 		source: string;
 		message: string;
-		daemonId?: string;
+		workspaceId?: string;
 	}>;
 	empty: string;
 }> = (props) => {
@@ -35,7 +35,7 @@ export const DebugLog: Component<{
 						<span class="debug-log-level">{e.level}</span>
 						<span class="debug-log-source">
 							{e.source}
-							{e.daemonId !== undefined ? `/${e.daemonId.slice(0, 8)}` : ""}
+							{e.workspaceId !== undefined ? `/${e.workspaceId.slice(0, 8)}` : ""}
 						</span>
 						<span class="debug-log-msg" title={e.message}>
 							{e.message}

@@ -9,7 +9,7 @@ import {
 } from "#lib/wire/browser-socket";
 
 /**
- * A minimal fake fleet edge speaking the browser socket (`GET /ws`, OMP_PROTO 5) for the
+ * A minimal fake fleet edge speaking the browser socket (`GET /ws`, OMP_PROTO 6) for the
  * profile harness tests. It implements exactly what `adapters/ws.ts` documents it expects:
  * the upgrade (`client`, `after`, `proto` query), sequenced frames with a replay ring, one
  * ack/nack per command, and typed closes. It answers nothing on its own except what the
@@ -21,7 +21,7 @@ export interface PostedCommand {
 	id: string;
 	method: string;
 	args: unknown[];
-	sessionId?: string;
+	workspaceId?: string;
 }
 
 export type Frame = Record<string, unknown> & { type: string };
@@ -169,7 +169,7 @@ export class FakeFleet {
 	prime(isStreaming: boolean): void {
 		this.#primes++;
 		this.push(
-			{ type: "attached", sessionId: "s1" },
+			{ type: "attached", workspaceId: "s1" },
 			{ type: "state", state: { isStreaming } },
 			{ type: "history", messages: [], final: true },
 			{ type: "available_commands", commands: [] },

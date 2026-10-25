@@ -1,6 +1,6 @@
 /**
  * Busy policy for forwarded slash commands (jx0b, CMD-08). The browser and the
- * daemon share it: a command runs while a turn streams only when it is known to
+ * session share it: a command runs while a turn streams only when it is known to
  * be read-only; a destructive command refuses; everything else queues, so a new
  * SDK builtin, extension, skill or file command is safe by default.
  */

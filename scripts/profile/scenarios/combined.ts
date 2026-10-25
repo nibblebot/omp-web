@@ -27,7 +27,7 @@ const CHUNK_CHARS = 8;
 const PROBE_INTERVAL_MS = 200;
 
 interface PromptAnswer {
-	daemonId: string;
+	workspaceId: string;
 	ok: boolean;
 	error?: string;
 }
@@ -35,7 +35,7 @@ interface PromptAnswer {
 /** Drive a session with no browser attached through the control API until `stopAt`. */
 async function ctlLoop(
 	env: RunEnv,
-	daemonId: string,
+	workspaceId: string,
 	stopAt: number,
 	prompt: () => string,
 	failures: string[],
@@ -46,11 +46,11 @@ async function ctlLoop(
 	do {
 		await beforeTurn?.(turns);
 		const answers = await env.stack.ctl<PromptAnswer[]>("POST", "/ctl/prompt", {
-			selector: daemonId,
+			selector: workspaceId,
 			text: prompt(),
 			waitMs: 120_000,
 		});
-		for (const a of answers) if (!a.ok) failures.push(`${a.daemonId}: ${a.error ?? "failed"}`);
+		for (const a of answers) if (!a.ok) failures.push(`${a.workspaceId}: ${a.error ?? "failed"}`);
 		turns++;
 		if (pauseMs > 0) await Bun.sleep(pauseMs);
 	} while (Date.now() < stopAt);
@@ -64,7 +64,7 @@ export const combined: Scenario = {
 		"All four shapes run on one fleet at the same time, each on its own pinned core: s1 holds the large-history session " +
 		"(resumed from the cached fixture, driven with idle turns), s2 streams high-rate text, s3 runs tool-heavy turns, s4 fans out " +
 		"subagents. The ONE browser client attaches to s2 only: it receives s2's full stream plus the fleet-global frames " +
-		"(roster/daemon_activity) the other sessions cause, and probes command RTT; stream latency is s2's. The other sessions are " +
+		"(roster/session_activity) the other sessions cause, and probes command RTT; stream latency is s2's. The other sessions are " +
 		"driven through POST /ctl/prompt and observed externally (per-session CPU/RSS, H2 socket bytes). One mid-stream " +
 		"browser-socket drop + redial with `after` + re-attach runs after the window while the others keep working. s3 keeps the same bounded history as s3-tools: its session is replaced " +
 		`(newSession, issued through a short-lived client attached just for that call) before its first turn and then every ${TOOL_TURNS_PER_SESSION} turns, ` +
@@ -89,16 +89,16 @@ export const combined: Scenario = {
 		await client.send({
 			type: "spawn_resume",
 			id: crypto.randomUUID(),
-			daemonId: h1.daemonId,
+			workspaceId: h1.workspaceId,
 			sessionFile,
 		});
 		await stack.waitReady(h1, 120_000);
-		await client.attach(h2.daemonId, h2.label);
+		await client.attach(h2.workspaceId, h2.label);
 		/** newSession on s3 through a client attached only for the call (the control API has no such verb). */
 		const replaceS3Session = async (): Promise<void> => {
 			const brief = await ProfileClient.connect(env.adapter, stack.baseUrl, { resilient: false });
 			try {
-				await brief.attach(h3.daemonId, h3.label, 60_000);
+				await brief.attach(h3.workspaceId, h3.label, 60_000);
 				await freshSession(brief);
 			} finally {
 				await brief.close();
@@ -128,10 +128,10 @@ export const combined: Scenario = {
 						}),
 						env.durationMs + 120_000,
 					),
-					ctlLoop(env, h1.daemonId, stopAt, () => idleTurn({ route: h1.label }), failures, 1000),
+					ctlLoop(env, h1.workspaceId, stopAt, () => idleTurn({ route: h1.label }), failures, 1000),
 					ctlLoop(
 						env,
-						h3.daemonId,
+						h3.workspaceId,
 						stopAt,
 						() =>
 							toolTurn({
@@ -149,7 +149,7 @@ export const combined: Scenario = {
 					),
 					ctlLoop(
 						env,
-						h4.daemonId,
+						h4.workspaceId,
 						stopAt,
 						() => subagentTurn({ route: h4.label, agents: 4, textChars: 6000 }),
 						failures,
@@ -185,7 +185,7 @@ export const combined: Scenario = {
 				);
 				interrupted.catch(() => undefined);
 				await Bun.sleep(400);
-				Object.assign(metrics, reconnectMetrics(await client.reconnect(h2.daemonId, h2.label)));
+				Object.assign(metrics, reconnectMetrics(await client.reconnect(h2.workspaceId, h2.label)));
 				await interrupted;
 				client.resetCounters();
 				return { metrics, notes, affinity };

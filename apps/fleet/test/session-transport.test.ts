@@ -1,13 +1,13 @@
 /**
  * Fleet-side callback transport controlled-peer regressions over the REAL
- * DaemonTransportRegistry: the WebSocket pair (OMP_CALLBACK_PROTO 2) with typed
+ * SessionTransportRegistry: the WebSocket pair (OMP_CALLBACK_PROTO 2) with typed
  * refusals as close codes, pair_ready first, strictly monotonic seq per
  * direction, replacement by a newer socket, no duplicate acceptance, stale and
  * revoked generation rejection, bounded virtual-stream delivery (ordered per
  * stream, streams independent of each other),
  * send-side flow control that never drops silently, the silence sweep, and bulk
  * multi-part sequencing. Every scenario drives the actual registry over real
- * loopback HTTP/WebSocket with controlled daemon sockets, no mock transport,
+ * loopback HTTP/WebSocket with controlled session sockets, no mock transport,
  * no source assertions, except the two flow-control cases that must make Bun's
  * `send()` report a drop or a full buffer, which no real socket does on demand:
  * those drive the registry's own `websocket` handler with a scripted socket.
@@ -48,7 +48,7 @@ import {
 	type CallbackEnvelope,
 	type PairCreditControl,
 } from "#lib/wire/callback-protocol";
-import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
+import { SessionTransportRegistry, type CallbackSocketData } from "../session-transport";
 
 const sleep = (ms: number): Promise<void> => Bun.sleep(ms);
 
@@ -80,13 +80,13 @@ async function waitFor<T>(
 }
 
 interface Fixture {
-	registry: DaemonTransportRegistry;
+	registry: SessionTransportRegistry;
 	url: string;
 	stop(): void;
 }
 
 /** Mount one registry on an ephemeral loopback port, exactly as fleet/server.ts does. */
-function serve(registry: DaemonTransportRegistry): Fixture {
+function serve(registry: SessionTransportRegistry): Fixture {
 	const server = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -136,19 +136,19 @@ interface CloseInfo {
 	reason: string;
 }
 
-/** One controlled daemon pair socket: a WebSocket dialed at /callback/ws. */
+/** One controlled session pair socket: a WebSocket dialed at /callback/ws. */
 interface PairClient {
 	readonly connectionId: string;
 	/** Envelopes observed on the live socket, in order. */
 	seen(): CallbackEnvelope[];
-	/** Push one daemon->fleet envelope; the registry stamps nothing (up seq is the daemon's). */
+	/** Push one session->fleet envelope; the registry stamps nothing (up seq is the session's). */
 	push(streamId: string, kind: CallbackEnvelope["kind"], payload: unknown): CallbackEnvelope;
 	/** Send one raw message as-is (text or binary). */
 	sendRaw(data: string | Uint8Array): void;
-	/** Stop reading from the socket: a daemon whose receive side cannot keep up. */
+	/** Stop reading from the socket: a session whose receive side cannot keep up. */
 	pause(): void;
 	resume(): void;
-	/** Daemon-side close (a normal one). */
+	/** Session-side close (a normal one). */
 	close(): void;
 	/** Resolves with the close the socket ended with; rejects on deadline. */
 	closed(timeoutMs?: number): Promise<CloseInfo>;
@@ -249,11 +249,11 @@ const SWEEP_TTL_MS = 10 * 60_000;
  * sweep (pair silence, bulk expiry) with no wall-clock wait. The default
  * Date.now + 5 s cadence are what production runs. */
 function clockedRegistry(): {
-	registry: DaemonTransportRegistry;
+	registry: SessionTransportRegistry;
 	advance: (ms: number) => void;
 } {
 	let clock = Date.now();
-	const registry = new DaemonTransportRegistry({
+	const registry = new SessionTransportRegistry({
 		now: () => clock,
 		sweepIntervalMs: 25,
 	});
@@ -291,9 +291,9 @@ function scriptedSocket(
 	return { ws, sent, closes };
 }
 
-describe("daemon transport pair: establishment and refusal", () => {
+describe("session transport pair: establishment and refusal", () => {
 	test("pair_ready is the first message; down seq starts at 1 and stays strictly monotonic; a new socket restarts the space", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-ready";
 		const gen = 1;
 		const cred = randomBytes(32).toString("hex");
@@ -315,12 +315,12 @@ describe("daemon transport pair: establishment and refusal", () => {
 				connectionId: client.connectionId,
 			});
 
-			const c1 = await fixture.registry.sendToDaemon(ws, {
+			const c1 = await fixture.registry.sendToSession(ws, {
 				streamId: "control",
 				kind: "command",
 				payload: { type: "do", id: "c1" },
 			});
-			const c2 = await fixture.registry.sendToDaemon(ws, {
+			const c2 = await fixture.registry.sendToSession(ws, {
 				streamId: "control",
 				kind: "command",
 				payload: { type: "do", id: "c2" },
@@ -351,7 +351,7 @@ describe("daemon transport pair: establishment and refusal", () => {
 	});
 
 	test("every refusal arrives as a typed close code: 4401 wrong credential, 4409 superseded generation, 4410 wrong or missing protocol", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-refuse";
 		const cred1 = randomBytes(32).toString("hex");
 		const cred2 = randomBytes(32).toString("hex");
@@ -409,7 +409,7 @@ describe("daemon transport pair: establishment and refusal", () => {
 	});
 
 	test("a connectionId already live for another workspace is refused 4401; a request that is no upgrade gets a typed 400; the wrong method 405", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace("ws-owner", 1, cred);
 		fixture.registry.enrollWorkspace("ws-thief", 1, cred);
@@ -437,7 +437,7 @@ describe("daemon transport pair: establishment and refusal", () => {
 	});
 
 	test("revoking a generation closes its live pair; the revoked credential is then refused and a new generation pairs", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-revoke";
 		const cred1 = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred1);
@@ -449,7 +449,7 @@ describe("daemon transport pair: establishment and refusal", () => {
 			expect(fixture.registry.pairStatus(ws).paired).toBe(false);
 			expect((await g1.closed()).code).toBe(1000);
 			await expectUnavailable(
-				fixture.registry.sendToDaemon(ws, { streamId: "control", kind: "command", payload: {} }),
+				fixture.registry.sendToSession(ws, { streamId: "control", kind: "command", payload: {} }),
 			);
 
 			// The revoked credential is denied outright (the record is gone, so no
@@ -460,7 +460,7 @@ describe("daemon transport pair: establishment and refusal", () => {
 			const cred2 = randomBytes(32).toString("hex");
 			fixture.registry.enrollWorkspace(ws, 2, cred2);
 			const g2 = await dialReady(fixture, ws, 2, cred2);
-			const cmd = await fixture.registry.sendToDaemon(ws, {
+			const cmd = await fixture.registry.sendToSession(ws, {
 				streamId: "control",
 				kind: "command",
 				payload: { type: "do", id: "gen2" },
@@ -477,9 +477,9 @@ describe("daemon transport pair: establishment and refusal", () => {
 	});
 });
 
-describe("daemon transport pair: replacement", () => {
+describe("session transport pair: replacement", () => {
 	test("a newer socket of a workspace becomes its live pair; sends go to it; an older socket still open is the live pair again once it closes", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-replace";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -491,7 +491,7 @@ describe("daemon transport pair: replacement", () => {
 			expect(fixture.registry.pairStatus(ws).connectionId).toBe(newer.connectionId);
 			expect(changes).toEqual([older.connectionId, newer.connectionId]);
 
-			const cmd = await fixture.registry.sendToDaemon(ws, {
+			const cmd = await fixture.registry.sendToSession(ws, {
 				streamId: "control",
 				kind: "command",
 				payload: { type: "do", id: "to-newer" },
@@ -522,13 +522,13 @@ describe("daemon transport pair: replacement", () => {
 	});
 
 	test("with three open sockets the newest is live; closing a middle one keeps it, closing the newest falls back to the newest remaining, and with none open sends throw unavailable", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-replace-three";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
 		const live = (): string | null => fixture.registry.pairStatus(ws).connectionId;
 		const sendTo = async (id: string, client: PairClient): Promise<void> => {
-			const cmd = await fixture.registry.sendToDaemon(ws, {
+			const cmd = await fixture.registry.sendToSession(ws, {
 				streamId: "control",
 				kind: "command",
 				payload: { type: "do", id },
@@ -565,7 +565,7 @@ describe("daemon transport pair: replacement", () => {
 				"down",
 			);
 			await expectUnavailable(
-				fixture.registry.sendToDaemon(ws, { streamId: "control", kind: "command", payload: {} }),
+				fixture.registry.sendToSession(ws, { streamId: "control", kind: "command", payload: {} }),
 			);
 		} finally {
 			fixture.stop();
@@ -573,15 +573,15 @@ describe("daemon transport pair: replacement", () => {
 	});
 });
 
-describe("daemon transport pair: receive path", () => {
-	test("daemon envelopes reach the tap and their sink in arrival order and are counted; a repeated seq closes the pair 4400", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+describe("session transport pair: receive path", () => {
+	test("session envelopes reach the tap and their sink in arrival order and are counted; a repeated seq closes the pair 4400", async () => {
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-up-order";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
 		const tapped: string[] = [];
 		const sunk: string[] = [];
-		fixture.registry.onDaemonEnvelope(ws, (e) => tapped.push(String(commandId(e))));
+		fixture.registry.onSessionEnvelope(ws, (e) => tapped.push(String(commandId(e))));
 		fixture.registry.attachVirtualStream(ws, "control", {
 			deliver: (e) => {
 				sunk.push(String(commandId(e)));
@@ -626,7 +626,7 @@ describe("daemon transport pair: receive path", () => {
 	});
 
 	test("an envelope naming another workspace, generation or connectionId closes the pair typed and is never delivered", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-identity";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -664,7 +664,7 @@ describe("daemon transport pair: receive path", () => {
 	test("bad messages (not JSON, binary, over the envelope cap) are dropped, counted and logged; the pair stays live and ordered", async () => {
 		const dropped: string[] = [];
 		const fixture = serve(
-			new DaemonTransportRegistry({ onDroppedMessage: (m) => dropped.push(m) }),
+			new SessionTransportRegistry({ onDroppedMessage: (m) => dropped.push(m) }),
 		);
 		const ws = "ws-bad-messages";
 		const cred = randomBytes(32).toString("hex");
@@ -689,7 +689,7 @@ describe("daemon transport pair: receive path", () => {
 			expect(dropped).toHaveLength(3);
 			expect(dropped.join("\n")).toContain("binary message");
 			expect(fixture.registry.pairStatus(ws).paired).toBe(true);
-			const cmd = await fixture.registry.sendToDaemon(ws, {
+			const cmd = await fixture.registry.sendToSession(ws, {
 				streamId: "control",
 				kind: "command",
 				payload: { type: "do", id: "after-bad" },
@@ -707,7 +707,7 @@ describe("daemon transport pair: receive path", () => {
 	});
 
 	test("a long-lived pair keeps accepting envelopes past CONNECTION_MAX_BYTES of cumulative traffic", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-up-lifetime";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -745,7 +745,7 @@ describe("daemon transport pair: receive path", () => {
 	});
 
 	test("a stream whose sink returns a slow promise delays only its own later envelopes, in arrival order; other streams and a sibling workspace are unaffected", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const wsSlow = "ws-slow-sink";
 		const wsOther = "ws-other-sink";
 		const cred = randomBytes(32).toString("hex");
@@ -808,7 +808,7 @@ describe("daemon transport pair: receive path", () => {
 	});
 
 	test("a sink gets the payload's own JSON text for canonically framed envelopes, also from its lane queue; padded or re-keyed framing gets none", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-payload-json";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -865,7 +865,7 @@ describe("daemon transport pair: receive path", () => {
 	});
 
 	test("each stream is delivered in strict arrival order under interleaving, whether its sink is sync, async or mixed", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-stream-order";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -908,8 +908,8 @@ describe("daemon transport pair: receive path", () => {
 		}
 	});
 
-	test("a stuck sink's backlog is bounded by the credit window: a daemon that sends past it is closed invalid_request (4400) instead of growing it", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+	test("a stuck sink's backlog is bounded by the credit window: a session that sends past it is closed invalid_request (4400) instead of growing it", async () => {
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-backlog";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -940,7 +940,7 @@ describe("daemon transport pair: receive path", () => {
 	});
 
 	test("the credit window is pair-wide: several stuck streams that are each under it together close the pair 4400", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-backlog-streams";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -985,8 +985,8 @@ describe("daemon transport pair: receive path", () => {
 				.filter((e) => e.kind === "control" && payloadField(e, "type") === "pair_credit")
 				.map((e) => (e.payload as PairCreditControl).consumed);
 
-		test("grants the cumulative consumed bytes once per step, exactly in the UTF-8 length of what the daemon sent", async () => {
-			const fixture = serve(new DaemonTransportRegistry());
+		test("grants the cumulative consumed bytes once per step, exactly in the UTF-8 length of what the session sent", async () => {
+			const fixture = serve(new SessionTransportRegistry());
 			const ws = "ws-credit-grants";
 			const cred = randomBytes(32).toString("hex");
 			fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -1020,8 +1020,8 @@ describe("daemon transport pair: receive path", () => {
 			}
 		});
 
-		test("a daemon that waits for credit sends several windows' worth on one pair and is never closed", async () => {
-			const fixture = serve(new DaemonTransportRegistry());
+		test("a session that waits for credit sends several windows' worth on one pair and is never closed", async () => {
+			const fixture = serve(new SessionTransportRegistry());
 			const ws = "ws-credit-obedient";
 			const cred = randomBytes(32).toString("hex");
 			fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -1065,8 +1065,8 @@ describe("daemon transport pair: receive path", () => {
 			}
 		});
 
-		test("credit comes only from the real consumer: a stuck sink holds its bytes, an obedient daemon stops at the window and resumes once the sink drains", async () => {
-			const fixture = serve(new DaemonTransportRegistry());
+		test("credit comes only from the real consumer: a stuck sink holds its bytes, an obedient session stops at the window and resumes once the sink drains", async () => {
+			const fixture = serve(new SessionTransportRegistry());
 			const ws = "ws-credit-stuck";
 			const cred = randomBytes(32).toString("hex");
 			fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -1119,8 +1119,8 @@ describe("daemon transport pair: receive path", () => {
 		});
 	});
 
-	test("a daemon download_bulk_failed control fails its own capture correlation at once; a foreign workspace's id is ignored", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+	test("a session download_bulk_failed control fails its own capture correlation at once; a foreign workspace's id is ignored", async () => {
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-bulk-failed";
 		const wsOther = "ws-bulk-failed-other";
 		const cred = randomBytes(32).toString("hex");
@@ -1160,9 +1160,9 @@ describe("daemon transport pair: receive path", () => {
 	});
 });
 
-describe("daemon transport pair: send flow control", () => {
+describe("session transport pair: send flow control", () => {
 	test("a paused reader still receives every envelope, in order, once it resumes: nothing is dropped", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-paused-reader";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -1174,7 +1174,7 @@ describe("daemon transport pair: send flow control", () => {
 			const sent: CallbackEnvelope[] = [];
 			for (let i = 0; i < 15; i++) {
 				sent.push(
-					await fixture.registry.sendToDaemon(ws, {
+					await fixture.registry.sendToSession(ws, {
 						streamId: "browser/x",
 						kind: "frame",
 						payload: { blob, i },
@@ -1204,7 +1204,7 @@ describe("daemon transport pair: send flow control", () => {
 	});
 
 	test("a reader that never drains trips the bounded teardown: the pair closes and nothing further is accepted", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-down-bound";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -1217,7 +1217,7 @@ describe("daemon transport pair: send flow control", () => {
 			const floodPayload = { type: "frame", blob: "y".repeat(500_000) };
 			for (let i = 0; i < 200; i++) {
 				try {
-					const env = await fixture.registry.sendToDaemon(ws, {
+					const env = await fixture.registry.sendToSession(ws, {
 						streamId: "browser/x",
 						kind: "frame",
 						payload: floodPayload,
@@ -1235,7 +1235,7 @@ describe("daemon transport pair: send flow control", () => {
 			);
 			expect(sentSeqs.length).toBeGreaterThan(0);
 			await expectUnavailable(
-				fixture.registry.sendToDaemon(ws, {
+				fixture.registry.sendToSession(ws, {
 					streamId: "browser/x",
 					kind: "frame",
 					payload: floodPayload,
@@ -1253,7 +1253,7 @@ describe("daemon transport pair: send flow control", () => {
 	});
 
 	test("nothing is handed to a socket above the high-water mark; envelopes wait in order and flush on drain", async () => {
-		const registry = new DaemonTransportRegistry();
+		const registry = new SessionTransportRegistry();
 		const ws = "ws-high-water";
 		const cred = randomBytes(32).toString("hex");
 		registry.enrollWorkspace(ws, 1, cred);
@@ -1272,12 +1272,12 @@ describe("daemon transport pair: send flow control", () => {
 			});
 
 			buffered = CALLBACK_WS_SEND_HIGH_WATER_BYTES + 1;
-			const c1 = await registry.sendToDaemon(ws, {
+			const c1 = await registry.sendToSession(ws, {
 				streamId: "c",
 				kind: "command",
 				payload: { n: 1 },
 			});
-			const c2 = await registry.sendToDaemon(ws, {
+			const c2 = await registry.sendToSession(ws, {
 				streamId: "c",
 				kind: "command",
 				payload: { n: 2 },
@@ -1298,7 +1298,7 @@ describe("daemon transport pair: send flow control", () => {
 
 	test("the fleet heartbeats on the transport stream every HEARTBEAT_INTERVAL_MS, in the pair's seq space", () => {
 		vi.useFakeTimers();
-		const registry = new DaemonTransportRegistry();
+		const registry = new SessionTransportRegistry();
 		try {
 			const ws = "ws-heartbeat";
 			const connectionId = randomUUID();
@@ -1328,7 +1328,7 @@ describe("daemon transport pair: send flow control", () => {
 	});
 
 	test("a send() that reports a drop (0) closes the pair retryable instead of losing the envelope silently", async () => {
-		const registry = new DaemonTransportRegistry();
+		const registry = new SessionTransportRegistry();
 		const ws = "ws-send-dropped";
 		const cred = randomBytes(32).toString("hex");
 		registry.enrollWorkspace(ws, 1, cred);
@@ -1342,13 +1342,13 @@ describe("daemon transport pair: send flow control", () => {
 			registry.websocket.open!(socket.ws);
 			expect(registry.pairStatus(ws).paired).toBe(true);
 			drop = true;
-			await registry.sendToDaemon(ws, { streamId: "c", kind: "command", payload: {} });
+			await registry.sendToSession(ws, { streamId: "c", kind: "command", payload: {} });
 			expect(registry.pairStatus(ws).paired).toBe(false);
 			expect(socket.closes).toHaveLength(1);
 			expect(socket.closes[0]!.code).toBe(4503);
 			expect(socket.closes[0]!.reason).toStartWith("retryable: ");
 			await expectUnavailable(
-				registry.sendToDaemon(ws, { streamId: "c", kind: "command", payload: {} }),
+				registry.sendToSession(ws, { streamId: "c", kind: "command", payload: {} }),
 			);
 		} finally {
 			registry.close();
@@ -1356,7 +1356,7 @@ describe("daemon transport pair: send flow control", () => {
 	});
 });
 
-describe("daemon transport pair: liveness sweep", () => {
+describe("session transport pair: liveness sweep", () => {
 	test("a pair silent past SILENCE_DEADLINE_MS is closed 4503 and reports down; close() ends the rest with 1001", async () => {
 		const { registry, advance } = clockedRegistry();
 		const fixture = serve(registry);
@@ -1374,7 +1374,7 @@ describe("daemon transport pair: liveness sweep", () => {
 			expect(paired.lastEnvelopeAt).not.toBeNull();
 			expect(typeof paired.lastDownSendAt).toBe("number");
 
-			// Any daemon message (here a heartbeat) restarts the silence clock.
+			// Any session message (here a heartbeat) restarts the silence clock.
 			advance(SILENCE_DEADLINE_MS - 1_000);
 			client.push("control", "heartbeat", {});
 			await waitFor(
@@ -1387,7 +1387,7 @@ describe("daemon transport pair: liveness sweep", () => {
 			expect(registry.pairStatus(ws).paired).toBe(true);
 
 			// Quiet past the deadline: the sweep closes the socket and reports the
-			// pair down. A dead daemon must not look paired (the roster would stay
+			// pair down. A dead session must not look paired (the roster would stay
 			// "ready" and commands would be accepted into a zombie socket).
 			advance(2_000);
 			await waitFor(
@@ -1405,7 +1405,7 @@ describe("daemon transport pair: liveness sweep", () => {
 			expect(closed.reason).toContain("silence deadline");
 			// No live pair: sends fail `unavailable`, never queued offline.
 			await expectUnavailable(
-				registry.sendToDaemon(ws, { streamId: "control", kind: "command", payload: {} }),
+				registry.sendToSession(ws, { streamId: "control", kind: "command", payload: {} }),
 			);
 
 			// Fleet shutdown closes live pairs with 1001 (going away).
@@ -1438,9 +1438,9 @@ describe("daemon transport pair: liveness sweep", () => {
 	});
 });
 
-describe("daemon transport bulk", () => {
+describe("session transport bulk", () => {
 	test("bulk multi-part uploads concatenate exactly once; holes, out-of-order starts, and reuse fail the whole transfer without data", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-bulk";
 		const wsOther = "ws-bulk-other";
 		const cred = randomBytes(32).toString("hex");
@@ -1547,7 +1547,7 @@ describe("daemon transport bulk", () => {
 	});
 
 	test("cancel settles a capture correlation failed with its reason; a late part is refused and a second cancel changes nothing", async () => {
-		const fixture = serve(new DaemonTransportRegistry());
+		const fixture = serve(new SessionTransportRegistry());
 		const ws = "ws-bulk-cancel";
 		const cred = randomBytes(32).toString("hex");
 		fixture.registry.enrollWorkspace(ws, 1, cred);
@@ -1581,7 +1581,7 @@ describe("daemon transport bulk", () => {
 	});
 
 	test("capture downloads are capped at BULK_CAPTURE_MAX_OPEN open transfers; settling one frees its slot, and plain bulk is uncapped", async () => {
-		const registry = new DaemonTransportRegistry();
+		const registry = new SessionTransportRegistry();
 		const ws = "ws-bulk-cap";
 		try {
 			const a = registry.createBulkCorrelation(ws, { capture: true });

@@ -11,7 +11,7 @@ import { ensureThemeSync } from "@oh-my-pi/pi-tui/theme";
  *   fails the whole tool call with `undefined is not an object (evaluating
  *   'theme.status')`;
  * - ask notifications write OSC/BEL bytes straight to stdout, which this
- *   daemon reserves for OMP_SESSION| contract lines (`<state dir>/session-logs`
+ *   session reserves for OMP_SESSION| contract lines (`<state dir>/session-logs`
  *   captures it), so terminal notifications stay suppressed here; the SDK's own
  *   RPC mode does the same for its stdout protocol channel, and the browser
  *   has its own notification path (apps/web/store/chat.ts).

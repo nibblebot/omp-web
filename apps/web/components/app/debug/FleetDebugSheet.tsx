@@ -2,7 +2,7 @@ import { createSignal, For, onCleanup, onMount, Show, type Component } from "sol
 import { buildInfo } from "../../../build-info";
 import { clientId, state } from "../../../state";
 import { fetchFleetDebug, fmtPair, fmtTime, type FleetDebug } from "../../../fleet-ui/fleet-debug";
-import { formatDaemonUptime } from "../../../fleet-ui/daemon-ui";
+import { formatDaemonUptime } from "../../../fleet-ui/session-ui";
 import { Modal } from "../../ui/Modal";
 import { OmpLogoIcon } from "../../ui/icons";
 import { LastFrameClock } from "./LastFrameClock";
@@ -44,7 +44,7 @@ export const FleetDebugSheet: Component<{ onClose: () => void }> = (props) => {
 			});
 	};
 
-	// Fetch on open, then auto-poll ~2s while the panel stays open (DaemonDetail
+	// Fetch on open, then auto-poll ~2s while the panel stays open (SessionDetail
 	// fetch+refresh pattern, plus the poll so a booting fleet appears live).
 	// The 1s clock tick lives in LastFrameClock, scoped so it re-renders only
 	// the "last frame" readout.
@@ -91,8 +91,8 @@ export const FleetDebugSheet: Component<{ onClose: () => void }> = (props) => {
 						</div>
 						<div class="debug-fact">
 							<span class="debug-label">session</span>
-							<span class="debug-value" title={state.currentSessionId}>
-								{state.currentSessionId === "" ? "-" : state.currentSessionId.slice(0, 8)}
+							<span class="debug-value" title={state.currentWorkspaceId}>
+								{state.currentWorkspaceId === "" ? "-" : state.currentWorkspaceId.slice(0, 8)}
 							</span>
 						</div>
 						<div class="debug-fact">
@@ -179,8 +179,8 @@ export const FleetDebugSheet: Component<{ onClose: () => void }> = (props) => {
 													<For each={f().sessions}>
 														{(s) => (
 															<tr>
-																<td class="debug-cell-name" title={s.daemonId}>
-																	{s.name ?? s.daemonId?.slice(0, 8) ?? "-"}
+																<td class="debug-cell-name" title={s.workspaceId}>
+																	{s.name ?? s.workspaceId?.slice(0, 8) ?? "-"}
 																</td>
 																<td>
 																	<span

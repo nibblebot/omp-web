@@ -1,7 +1,7 @@
 import { DownloadDialog } from "../../../web/components/requests/DownloadDialog";
 import { openDownloadConsent } from "../../../web/store/downloads";
 import { downloadManifest } from "../../fixtures/overlays";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
 export default [

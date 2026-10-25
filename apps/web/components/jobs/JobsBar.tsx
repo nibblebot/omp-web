@@ -12,7 +12,7 @@ import { JobWidgetGlance } from "./JobWidget";
  * glance of the widget that saw data last (the TUI status line's jobs segment).
  * Once the last one ends it stays as a quiet "jobs finished" note for a short
  * while, so the sheet's recent jobs remain one click away (store/jobs-bar.ts).
- * It reads the daemon's live `job_widgets` snapshot, so it needs no polling, and
+ * It reads the session's live `job_widgets` snapshot, so it needs no polling, and
  * opens the jobs sheet, which ModalHost renders (a trigger only sets state).
  * The glance skips subagents' task widgets: the count leaves those jobs out.
  */

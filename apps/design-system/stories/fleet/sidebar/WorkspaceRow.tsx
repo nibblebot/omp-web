@@ -1,7 +1,7 @@
-import type { DaemonEntry } from "#lib/wire/protocol";
+import type { RosterEntry } from "#lib/wire/protocol";
 import type { JSX } from "solid-js";
 import { WorkspaceRow, setMenuOpenId } from "../../../../web/components/fleet/sidebar/WorkspaceRow";
-import { rosterDaemon } from "../../../fixtures/roster";
+import { rosterEntry } from "../../../fixtures/roster";
 import { seedRosterFleet } from "../../../fixtures/roster-seed";
 import { defineStory } from "../../../registry";
 
@@ -14,13 +14,13 @@ const Column = (props: { children: JSX.Element }) => (
 
 /** One row in the sidebar column. */
 const Row = (props: {
-	daemon: DaemonEntry;
+	session: RosterEntry;
 	inProjectGroup?: boolean;
 	projectMissing?: boolean;
 }) => (
 	<Column>
 		<WorkspaceRow
-			daemon={props.daemon}
+			session={props.session}
 			inProjectGroup={props.inProjectGroup}
 			projectMissing={props.projectMissing}
 		/>
@@ -31,8 +31,8 @@ const LONG_TITLE =
 	"Migrate the roster sidebar rows to content height and move the session controls onto the top line";
 
 /** The attached worktree (ready, idle) with a different last-session title. */
-const withTitle = (sessionTitle: string | undefined): DaemonEntry => ({
-	...rosterDaemon.worktree,
+const withTitle = (sessionTitle: string | undefined): RosterEntry => ({
+	...rosterEntry.worktree,
 	sessionTitle,
 });
 
@@ -46,71 +46,71 @@ export default defineStory({
 			name: "Active row, ready and idle (rail, no dot)",
 			description:
 				"The attached worktree: accent fill without borders, the ready rail on the right edge, and no corner dot because it is idle.",
-			render: () => <Row daemon={rosterDaemon.worktree} />,
+			render: () => <Row session={rosterEntry.worktree} />,
 		},
 		{
 			name: "Working (spinner)",
 			description:
 				"A detached main checkout mid-turn: the corner spinner, the rail, and the diffstat line because it has local changes.",
-			render: () => <Row daemon={rosterDaemon.main} />,
+			render: () => <Row session={rosterEntry.main} />,
 		},
 		{
 			name: "Pre-existing linked worktree",
 			description: "Asleep and no session yet: one line, a dimmed branch, no rail.",
-			render: () => <Row daemon={rosterDaemon.registeredWorktree} />,
+			render: () => <Row session={rosterEntry.registeredWorktree} />,
 		},
 		{
 			name: "Worktree in project group",
-			render: () => <Row daemon={rosterDaemon.worktree} inProjectGroup />,
+			render: () => <Row session={rosterEntry.worktree} inProjectGroup />,
 		},
 		{
 			name: "Asleep worktree (dimmed)",
-			render: () => <Row daemon={rosterDaemon.asleep} />,
+			render: () => <Row session={rosterEntry.asleep} />,
 		},
 		{
 			name: "Starting (spinner)",
-			render: () => <Row daemon={rosterDaemon.starting} />,
+			render: () => <Row session={rosterEntry.starting} />,
 		},
 		{
 			name: "Clone preparing",
-			render: () => <Row daemon={rosterDaemon.clonePreparing} />,
+			render: () => <Row session={rosterEntry.clonePreparing} />,
 		},
 		{
 			name: "Clone failed",
-			render: () => <Row daemon={rosterDaemon.cloneFailed} />,
+			render: () => <Row session={rosterEntry.cloneFailed} />,
 		},
 		{
 			name: "Local-source clone, actions menu (Fetch into project)",
-			seed: () => setMenuOpenId(rosterDaemon.cloneLocal.daemonId),
-			render: () => <Row daemon={rosterDaemon.cloneLocal} />,
+			seed: () => setMenuOpenId(rosterEntry.cloneLocal.workspaceId),
+			render: () => <Row session={rosterEntry.cloneLocal} />,
 		},
 		{
 			name: "Remote-source clone, actions menu (no fetch action)",
-			seed: () => setMenuOpenId(rosterDaemon.cloneFailed.daemonId),
-			render: () => <Row daemon={rosterDaemon.cloneFailed} />,
+			seed: () => setMenuOpenId(rosterEntry.cloneFailed.workspaceId),
+			render: () => <Row session={rosterEntry.cloneFailed} />,
 		},
 		{
 			name: "Unread output (dot)",
-			render: () => <Row daemon={rosterDaemon.localactionMain} />,
+			render: () => <Row session={rosterEntry.localactionMain} />,
 		},
 		{
 			name: "Reconnecting (dot)",
-			render: () => <Row daemon={rosterDaemon.reconnecting} />,
+			render: () => <Row session={rosterEntry.reconnecting} />,
 		},
 		{
 			name: "Session error (dot)",
-			render: () => <Row daemon={rosterDaemon.sessionError} />,
+			render: () => <Row session={rosterEntry.sessionError} />,
 		},
 		{
 			name: "Blocked (dot)",
-			render: () => <Row daemon={rosterDaemon.blocked} />,
+			render: () => <Row session={rosterEntry.blocked} />,
 		},
 		{
 			name: "No session title (one line)",
 			description: "A ready, idle worktree with no last-session title and no git changes.",
 			render: () => (
 				<Row
-					daemon={{
+					session={{
 						...withTitle(undefined),
 						git: { added: 0, modified: 0, deleted: 0, untracked: 0 },
 					}}
@@ -120,26 +120,26 @@ export default defineStory({
 		{
 			name: "Long title, one line (default)",
 			description: "A long session title clamps to one line with an ellipsis.",
-			render: () => <Row daemon={withTitle(LONG_TITLE)} />,
+			render: () => <Row session={withTitle(LONG_TITLE)} />,
 		},
 		{
 			name: "Long title, two lines (setting on)",
 			description: "With two-line session titles on, a long title takes two lines.",
 			seed: { sidebarSessionTitleLines: 2 },
-			render: () => <Row daemon={withTitle(LONG_TITLE)} />,
+			render: () => <Row session={withTitle(LONG_TITLE)} />,
 		},
 		{
 			name: "Short title, two-line setting on",
 			description: "A short title still takes one line; no blank line is reserved.",
 			seed: { sidebarSessionTitleLines: 2 },
-			render: () => <Row daemon={withTitle("Fixture modules")} />,
+			render: () => <Row session={withTitle("Fixture modules")} />,
 		},
 		{
 			name: "Title first, with diffstat (setting on)",
 			description:
 				"The session title leads the top line, flush left; the branch sits in small gray text before the diffstat.",
 			seed: { sidebarTitleFirst: true },
-			render: () => <Row daemon={rosterDaemon.main} />,
+			render: () => <Row session={rosterEntry.main} />,
 		},
 		{
 			name: "Title first, long title and branch (setting on)",
@@ -148,8 +148,8 @@ export default defineStory({
 			seed: { sidebarTitleFirst: true },
 			render: () => (
 				<Row
-					daemon={{
-						...rosterDaemon.main,
+					session={{
+						...rosterEntry.main,
 						sessionTitle: LONG_TITLE,
 						branch: "feat/design-fixtures-for-every-sidebar-state-and-more",
 						detachedAt: undefined,
@@ -164,8 +164,8 @@ export default defineStory({
 			seed: { sidebarTitleFirst: true },
 			render: () => (
 				<Row
-					daemon={{
-						...rosterDaemon.worktree,
+					session={{
+						...rosterEntry.worktree,
 						worktreeLocked: true,
 						git: { added: 0, modified: 0, deleted: 0, untracked: 0 },
 					}}
@@ -176,15 +176,15 @@ export default defineStory({
 			name: "Title first, no session title (setting on)",
 			description: "A row without a session title keeps the branch on the top line.",
 			seed: { sidebarTitleFirst: true },
-			render: () => <Row daemon={withTitle(undefined)} />,
+			render: () => <Row session={withTitle(undefined)} />,
 		},
 		{
 			name: "Long branch name",
 			description: "The branch truncates with an ellipsis before the right-hand controls.",
 			render: () => (
 				<Row
-					daemon={{
-						...rosterDaemon.worktree,
+					session={{
+						...rosterEntry.worktree,
 						branch: "feat/design-fixtures-for-every-sidebar-state-and-more",
 					}}
 				/>
@@ -193,16 +193,16 @@ export default defineStory({
 		{
 			name: "Detached worktree",
 			render: () => (
-				<Row daemon={{ ...rosterDaemon.worktree, branch: undefined, detachedAt: "3f9c2a1" }} />
+				<Row session={{ ...rosterEntry.worktree, branch: undefined, detachedAt: "3f9c2a1" }} />
 			),
 		},
 		{
 			name: "Locked worktree",
-			render: () => <Row daemon={{ ...rosterDaemon.worktree, worktreeLocked: true }} />,
+			render: () => <Row session={{ ...rosterEntry.worktree, worktreeLocked: true }} />,
 		},
 		{
 			name: "Project missing",
-			render: () => <Row daemon={rosterDaemon.localactionMain} projectMissing />,
+			render: () => <Row session={rosterEntry.localactionMain} projectMissing />,
 		},
 	],
 });

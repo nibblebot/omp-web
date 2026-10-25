@@ -30,7 +30,7 @@ export const TopBar: Component<{ brand: string; demo?: boolean; children?: JSX.E
 		<Show when={props.demo}>
 			<span
 				class="ds-demo-badge"
-				title="Demo: fixture data only; no fleet, daemon, or model runs behind it"
+				title="Demo: fixture data only; no fleet, session, or model runs behind it"
 			>
 				Demo
 			</span>

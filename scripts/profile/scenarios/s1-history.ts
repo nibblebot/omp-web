@@ -69,7 +69,7 @@ function build(variant: Variant): Scenario {
 			await bootstrap.send({
 				type: "spawn_resume",
 				id: crypto.randomUUID(),
-				daemonId: handle.daemonId,
+				workspaceId: handle.workspaceId,
 				sessionFile,
 			});
 			await stack.waitReady(handle, 120_000);
@@ -102,7 +102,9 @@ function build(variant: Variant): Scenario {
 						last = client;
 						attempts++;
 						try {
-							timings.push(await client.attach(handle.daemonId, handle.label, ATTACH_TIMEOUT_MS));
+							timings.push(
+								await client.attach(handle.workspaceId, handle.label, ATTACH_TIMEOUT_MS),
+							);
 						} catch (err) {
 							// The edge ended the browser stream mid-priming (backpressure drop-and-resume).
 							if (!(err instanceof DownlinkEnded)) throw err;
@@ -194,7 +196,7 @@ function build(variant: Variant): Scenario {
 						try {
 							Object.assign(
 								metrics,
-								reconnectMetrics(await target.reconnect(handle.daemonId, handle.label)),
+								reconnectMetrics(await target.reconnect(handle.workspaceId, handle.label)),
 							);
 						} catch (err) {
 							if (!(err instanceof DownlinkEnded)) throw err;

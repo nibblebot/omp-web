@@ -5,7 +5,7 @@ import { state } from "../state";
  * What the composer jobs bar shows: the running jobs while any run, then a quiet "finished" note so the
  * sheet (and the recent jobs it lists) stays reachable after the last one ends.
  *
- * The daemon's `job_widgets` frames carry only the running count, which says when the last job ended but
+ * The session's `job_widgets` frames carry only the running count, which says when the last job ended but
  * not how many ran (a job that starts and ends between two frames is never seen), so the note names no
  * count. It lingers for {@link JOBS_FINISHED_LINGER_MS}, then the bar hides.
  *
@@ -25,7 +25,7 @@ export const JOBS_FINISHED_LINGER_MS = 30_000;
 export type JobsBarView = { phase: "running"; running: number } | { phase: "finished" };
 
 interface Episode {
-	sessionId: string;
+	workspaceId: string;
 	/** Running count of the last frame. */
 	running: number;
 }
@@ -49,10 +49,10 @@ export function resetJobsBar(): void {
 
 /** Feed the running count of a `job_widgets` frame for the attached session. */
 export function observeRunningJobs(running: number): void {
-	const sessionId = state.currentSessionId;
-	if (episode?.sessionId !== sessionId) {
+	const workspaceId = state.currentWorkspaceId;
+	if (episode?.workspaceId !== workspaceId) {
 		stopLinger();
-		episode = { sessionId, running: 0 };
+		episode = { workspaceId, running: 0 };
 	}
 	const current = episode;
 	if (running > 0) {
@@ -65,7 +65,7 @@ export function observeRunningJobs(running: number): void {
 	current.running = 0;
 	if (ended === 0) return;
 	clearTimeout(timer);
-	setLingering(sessionId);
+	setLingering(workspaceId);
 	timer = setTimeout(() => {
 		timer = undefined;
 		setLingering(undefined);
@@ -77,6 +77,6 @@ export function jobsBarView(): JobsBarView | undefined {
 	const running = state.jobWidgets.running;
 	if (running > 0) return { phase: "running", running };
 	const note = lingering();
-	if (note === undefined || note !== state.currentSessionId) return undefined;
+	if (note === undefined || note !== state.currentWorkspaceId) return undefined;
 	return { phase: "finished" };
 }

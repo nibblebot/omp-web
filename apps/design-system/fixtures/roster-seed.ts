@@ -1,9 +1,9 @@
-import { daemonSessionsLimit, type SessionListEntry } from "#lib/wire/protocol";
+import { workspaceSessionsLimit, type SessionListEntry } from "#lib/wire/protocol";
 import { markUnread, pruneUnread } from "../../web/fleet-ui/unread";
 import { setState, type state } from "../../web/state";
 import { settleAddProject } from "../../web/store/projects";
-import { settleDaemonSessions } from "../../web/store/roster";
-import { type CommandHandlers, answerCommands } from "../daemon";
+import { settleWorkspaceSessions } from "../../web/store/roster";
+import { type CommandHandlers, answerCommands } from "../session";
 import { rosterFleetState, rosterProjects } from "./roster";
 import { rosterFsBrowse } from "./roster-routes";
 
@@ -34,7 +34,7 @@ const projectCommands: CommandHandlers = {
 
 /**
  * Function seed for roster stories: resets the module-level unread set (it
- * lives outside the store), marks the transport connected (daemon.ts), applies
+ * lives outside the store), marks the transport connected (session.ts), applies
  * `rosterFleetState` with `extra` on
  * top, and marks the finished-while-away session unread. `commands` adds story
  * answers for further command types (the sidebar story answers delete_worktree). Browser-only: kept
@@ -51,7 +51,7 @@ export function seedRosterFleet(
 }
 
 /**
- * seedRosterFleet plus a `list_daemon_sessions` answer for any daemon: `sessions()`
+ * seedRosterFleet plus a `list_workspace_sessions` answer for any session: `sessions()`
  * cut to the request's limit, as the fleet does (the worktree dialog asks for 200).
  * `null` never answers, so the list stays loading.
  */
@@ -60,10 +60,14 @@ export function seedRosterSessions(
 	extra: Partial<typeof state> = {},
 ): void {
 	seedRosterFleet(extra, {
-		list_daemon_sessions: (cmd) => {
+		list_workspace_sessions: (cmd) => {
 			const list = sessions();
-			if (cmd.type !== "list_daemon_sessions" || list === null) return;
-			settleDaemonSessions(cmd.daemonId, list.slice(0, daemonSessionsLimit(cmd.limit)), cmd.limit);
+			if (cmd.type !== "list_workspace_sessions" || list === null) return;
+			settleWorkspaceSessions(
+				cmd.workspaceId,
+				list.slice(0, workspaceSessionsLimit(cmd.limit)),
+				cmd.limit,
+			);
 		},
 	});
 }

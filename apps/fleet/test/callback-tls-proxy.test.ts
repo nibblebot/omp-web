@@ -12,7 +12,7 @@
  *     signing). The same session without the CA must fail to connect, which
  *     proves verification is really on. The server side is NOT the real
  *     `startFleet`: it has no TLS option (it is plain Bun.serve behind an
- *     operator's reverse proxy), so DaemonTransportRegistry is mounted exactly
+ *     operator's reverse proxy), so SessionTransportRegistry is mounted exactly
  *     as apps/fleet/server.ts mounts it (idleTimeout 0, `websocket:
  *     registry.websocket`, `registry.handleFetch` in `fetch`), under a TLS
  *     Bun.serve. Everything past the socket is the real registry.
@@ -31,7 +31,7 @@ import {
 	type CallbackEnvelope,
 } from "#lib/wire/callback-protocol";
 import { FleetCallback } from "../../session/fleet-callback";
-import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
+import { SessionTransportRegistry, type CallbackSocketData } from "../session-transport";
 import { BRIDGE_MAX_BYTES, startUiServer, type BridgeSample } from "../ui-server";
 import {
 	VOLUME_BYTES,
@@ -75,7 +75,7 @@ afterAll(async () => {
 });
 
 interface ControlPlane {
-	registry: DaemonTransportRegistry;
+	registry: SessionTransportRegistry;
 	port: number;
 	credential: string;
 	/** Volume frames the registry saw, in order, and every ordering or size violation. */
@@ -89,7 +89,7 @@ async function startControlPlane(tls?: {
 	cert: Bun.BunFile;
 	key: Bun.BunFile;
 }): Promise<ControlPlane> {
-	const registry = new DaemonTransportRegistry();
+	const registry = new SessionTransportRegistry();
 	const server = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -104,7 +104,7 @@ async function startControlPlane(tls?: {
 	const credential = randomBytes(32).toString("hex");
 	await registry.enrollWorkspace(WORKSPACE, GENERATION, credential);
 	const volume = { frames: 0, bytes: 0, problems: [] as string[] };
-	registry.onDaemonEnvelope(WORKSPACE, (envelope: CallbackEnvelope) => {
+	registry.onSessionEnvelope(WORKSPACE, (envelope: CallbackEnvelope) => {
 		if (envelope.streamId !== VOLUME_STREAM) return;
 		const payload = envelope.payload as { i: number; pad: string };
 		if (payload.i !== volume.frames) {
@@ -126,7 +126,7 @@ async function startControlPlane(tls?: {
 }
 
 function sendDownCommand(plane: ControlPlane): Promise<CallbackEnvelope> {
-	return plane.registry.sendToDaemon(WORKSPACE, {
+	return plane.registry.sendToSession(WORKSPACE, {
 		streamId: VOLUME_STREAM,
 		kind: "command",
 		payload: { type: "call", id: "down-1" },

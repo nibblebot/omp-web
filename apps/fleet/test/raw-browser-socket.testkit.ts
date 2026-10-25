@@ -1,5 +1,5 @@
 /**
- * A browser socket (`/ws`, OMP_PROTO 5) on a raw TCP connection, for tests
+ * A browser socket (`/ws`, OMP_PROTO 6) on a raw TCP connection, for tests
  * that must control when the client reads. `pause()` stops reading the kernel
  * socket (a tab that stopped draining: its receive window fills, then the
  * edge's send queue), `resume()` reads again. The HTTP upgrade is written by

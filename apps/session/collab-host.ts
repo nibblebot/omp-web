@@ -1,10 +1,10 @@
 /**
- * Per-session collab HOST adapter for the omp-web daemon.
+ * Per-session collab HOST adapter for the omp-web session.
  *
  * Mirrors `@oh-my-pi/pi-coding-agent/src/collab/host.ts` (CollabHost) wire
- * behavior against a slim `CollabSessionPort` abstraction over the daemon's
+ * behavior against a slim `CollabSessionPort` abstraction over the session's
  * SDK sessions, minus all TUI concerns. Guests (real `omp join` clients)
- * connect through the daemon's relay room; this adapter taps the session's
+ * connect through the session's relay room; this adapter taps the session's
  * event stream and append chokepoint and broadcasts entries/events/state to
  * them, and routes guest prompts/aborts/agent-cmds/ui-responses/transcript
  * fetches into the port.
@@ -128,7 +128,7 @@ export interface CollabAgentRef {
 }
 
 /**
- * The daemon's per-session surface the collab host adapter drives. The web
+ * The session's per-session surface the collab host adapter drives. The web
  * server (Slice C) implements this against a live SDK session; tests use a
  * fake.
  */

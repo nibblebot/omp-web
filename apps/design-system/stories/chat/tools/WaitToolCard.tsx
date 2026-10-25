@@ -1,5 +1,5 @@
 import { WaitToolCard } from "../../../../web/components/chat/tools/WaitToolCard";
-import { answerCalls } from "../../../daemon";
+import { answerCalls } from "../../../session";
 import { seedJobWidgets, benchEntry } from "../../../fixtures/job-bars";
 import { waitWidgetsTool } from "../../../fixtures/job-widgets";
 import {

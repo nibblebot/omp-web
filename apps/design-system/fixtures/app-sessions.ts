@@ -2,11 +2,11 @@ import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { SessionListEntry } from "#lib/wire/protocol";
 import type { ChatItem, state, ToolItem } from "../../web/state";
-import { rosterAppDaemons } from "./roster";
-import { claude, screenItems, screenSessionView, SCREEN_DAEMON_ID, turnUsage } from "./screen";
+import { rosterAppEntries } from "./roster";
+import { claude, screenItems, screenSessionView, SCREEN_WORKSPACE_ID, turnUsage } from "./screen";
 import { FIXTURE_NOW } from "./session";
 
-/** Per-session store fields restored on attach (no fleet-scoped fields like daemonRoster, connected, availableModels). */
+/** Per-session store fields restored on attach (no fleet-scoped fields like sessionRoster, connected, availableModels). */
 export type AppSessionView = Pick<
 	typeof state,
 	| "readyAt"
@@ -26,13 +26,13 @@ export interface AppSession {
 	items: ChatItem[];
 }
 
-type RosterDaemon = (typeof rosterAppDaemons)[number];
+type RosterAppEntry = (typeof rosterAppEntries)[number];
 
-/** The roster row for `daemonId`, so names, branches and times come from one place. */
-function rosterDaemon(daemonId: string): RosterDaemon {
-	const daemon = rosterAppDaemons.find((entry) => entry.daemonId === daemonId);
-	if (!daemon) throw new Error(`app-sessions: ${daemonId} is not in rosterAppDaemons`);
-	return daemon;
+/** The roster row for `workspaceId`, so names, branches and times come from one place. */
+function rosterEntry(workspaceId: string): RosterAppEntry {
+	const row = rosterAppEntries.find((entry) => entry.workspaceId === workspaceId);
+	if (!row) throw new Error(`app-sessions: ${workspaceId} is not in rosterAppEntries`);
+	return row;
 }
 
 /** Joins lines the way a tool result carries them. */
@@ -53,10 +53,10 @@ const tool = (id: number, name: string, args: unknown, output: string): ToolItem
 const CONTEXT_WINDOW = 200_000;
 
 /** Derives stats, context and message count from the transcript, so the counts always match it. */
-function sessionView(daemonId: string, sessionId: string, items: ChatItem[]): AppSessionView {
-	const daemon = rosterDaemon(daemonId);
-	const sessionFile = daemon.lastSessionFile;
-	if (!sessionFile) throw new Error(`app-sessions: ${daemonId} has no lastSessionFile`);
+function sessionView(workspaceId: string, sessionId: string, items: ChatItem[]): AppSessionView {
+	const row = rosterEntry(workspaceId);
+	const sessionFile = row.lastSessionFile;
+	if (!sessionFile) throw new Error(`app-sessions: ${workspaceId} has no lastSessionFile`);
 
 	const tokens = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
 	let userMessages = 0;
@@ -105,9 +105,9 @@ function sessionView(daemonId: string, sessionId: string, items: ChatItem[]): Ap
 		cost: Math.round(dollars * 100) / 100,
 	};
 	return {
-		readyAt: daemon.readyAt ?? FIXTURE_NOW,
+		readyAt: row.readyAt ?? FIXTURE_NOW,
 		sessionId,
-		sessionName: daemon.sessionTitle,
+		sessionName: row.sessionTitle,
 		sessionFile,
 		model: claude,
 		thinkingLevel: "medium" as Effort,
@@ -122,8 +122,8 @@ function sessionView(daemonId: string, sessionId: string, items: ChatItem[]): Ap
 }
 
 /** A roster session: its store view derived from the transcript, and the transcript itself. */
-const session = (daemonId: string, sessionId: string, items: ChatItem[]): AppSession => ({
-	view: sessionView(daemonId, sessionId, items),
+const session = (workspaceId: string, sessionId: string, items: ChatItem[]): AppSession => ({
+	view: sessionView(workspaceId, sessionId, items),
 	items,
 });
 
@@ -954,9 +954,9 @@ const nixosFlake: ChatItem[] = [
 	},
 ];
 
-/** Every App view session, keyed by roster daemonId; `dmn_a002` restores the rich screen transcript unchanged. */
+/** Every App view session, keyed by roster workspaceId; `dmn_a002` restores the rich screen transcript unchanged. */
 export const appSessions: Record<string, AppSession> = {
-	[SCREEN_DAEMON_ID]: { view: screenSessionView, items: screenItems },
+	[SCREEN_WORKSPACE_ID]: { view: screenSessionView, items: screenItems },
 	dmn_a001: session("dmn_a001", "sess_4b7e10", ompWebMain),
 	dmn_a003: session("dmn_a003", "sess_c2d918", ompWebReview),
 	dmn_b001: session("dmn_b001", "sess_e61a3f", localactionMain),
@@ -973,11 +973,11 @@ function sessionFileTime(path: string): number {
 	return Date.parse(`${stamp[1]}T${stamp[2]}:${stamp[3]}:${stamp[4]}Z`);
 }
 
-/** The worktree sessions dialog's `daemon_sessions` answer: the daemon's one session, so picking it is a plain attach. */
-export function appDaemonSessions(daemonId: string): SessionListEntry[] {
-	const session = appSessions[daemonId];
-	const daemon = rosterAppDaemons.find((entry) => entry.daemonId === daemonId);
-	if (session === undefined || daemon === undefined) return [];
+/** The worktree sessions dialog's `workspace_sessions` answer: the session's one session, so picking it is a plain attach. */
+export function appWorkspaceSessions(workspaceId: string): SessionListEntry[] {
+	const session = appSessions[workspaceId];
+	const row = rosterAppEntries.find((entry) => entry.workspaceId === workspaceId);
+	if (session === undefined || row === undefined) return [];
 	const { sessionFile, sessionId, sessionName, messageCount } = session.view;
 	if (sessionFile === undefined || sessionId === undefined) return [];
 	return [
@@ -985,7 +985,7 @@ export function appDaemonSessions(daemonId: string): SessionListEntry[] {
 			path: sessionFile,
 			id: sessionId,
 			name: sessionName,
-			cwd: daemon.cwd,
+			cwd: row.cwd,
 			modifiedAt: sessionFileTime(sessionFile),
 			messageCount,
 		},

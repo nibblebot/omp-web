@@ -63,7 +63,7 @@ beforeEach(() => {
 	counter += 1;
 	next = 0;
 	agent = `agent-${counter}`;
-	setState("currentSessionId", `session-${counter}`);
+	setState("currentWorkspaceId", `session-${counter}`);
 });
 
 function setAgent(status: string, lastUpdate: number): void {

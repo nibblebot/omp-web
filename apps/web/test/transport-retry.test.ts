@@ -100,7 +100,7 @@ beforeEach(() => {
 afterEach(() => {
 	mock.restore();
 	rejectPendingCalls(new Error("test reset"));
-	setState({ connected: false, sessionDownId: "", currentSessionId: "" });
+	setState({ connected: false, sessionDownId: "", currentWorkspaceId: "" });
 });
 
 afterAll(() => {
@@ -184,7 +184,7 @@ describe("not-attached retry (SUB-02)", () => {
 	test("the attached frame re-sends parked calls under their original id", () => {
 		const { id } = start();
 		settleCallResult(answer(id, false, undefined, "not attached"));
-		dispatch(attached("daemon-a"));
+		dispatch(attached("workspace-a"));
 		expect(copies(id)).toBe(2);
 	});
 
@@ -194,18 +194,18 @@ describe("not-attached retry (SUB-02)", () => {
 		dispatch({
 			type: "hello_ok",
 			proto: OMP_PROTO,
-			name: "daemon-a",
+			name: "workspace-a",
 			cwd: "/x",
 			pid: 1,
 			version: "0.0.0",
 		});
-		dispatch(attached("daemon-a"));
+		dispatch(attached("workspace-a"));
 		expect(copies(id)).toBe(2);
 		settleCallResult(answer(id, true, { ok: 2 }));
 		await flushMicrotasks();
 		expect(outcome.value).toEqual({ ok: 2 });
 		// The answered call is no longer parked: another attached frame sends nothing.
-		dispatch(attached("daemon-a"));
+		dispatch(attached("workspace-a"));
 		expect(copies(id)).toBe(2);
 	});
 
@@ -306,18 +306,18 @@ describe("connectionState()", () => {
 	});
 
 	test("connected while the stream is up and no session is down", () => {
-		setState({ connected: true, sessionDownId: "", currentSessionId: "daemon-a" });
+		setState({ connected: true, sessionDownId: "", currentWorkspaceId: "workspace-a" });
 		expect(connectionState()).toBe("connected");
 	});
 
 	test("offline once the attached session process is down", () => {
-		setState({ connected: true, sessionDownId: "daemon-a" });
+		setState({ connected: true, sessionDownId: "workspace-a" });
 		expect(connectionState()).toBe("offline");
 	});
 
 	test("an attached frame clears the offline state", () => {
-		setState({ connected: true, sessionDownId: "daemon-a" });
-		dispatch(attached("daemon-b"));
+		setState({ connected: true, sessionDownId: "workspace-a" });
+		dispatch(attached("workspace-b"));
 		expect(state.sessionDownId).toBe("");
 		expect(connectionState()).toBe("connected");
 	});

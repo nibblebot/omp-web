@@ -1,6 +1,6 @@
 /**
  * Fleet log-store coverage for /ctl/stats. Everything here is a pure
- * disk read over FleetLogStore: never a daemon, the SDK, or compute.
+ * disk read over FleetLogStore: never a session, the SDK, or compute.
  *
  * Rows joined by STABLE SESSION IDENTITY (the store sessionId ↔ a
  * fleet-local session header id). Main-streamed sessions that survive on

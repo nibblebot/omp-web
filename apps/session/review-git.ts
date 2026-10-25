@@ -1,9 +1,9 @@
-// G02: narrow daemon-bound repository adapter over the native VCS layer.
+// G02: narrow session-bound repository adapter over the native VCS layer.
 //
 // Boundaries:
 // - Reuses nonvisual `GitModel` porcelain semantics (staged/unstaged split,
 //   rename/conflict mapping) but never constructs the TUI model: this adapter
-//   binds to the daemon cwd, owns one cached snapshot, and gates every
+//   binds to the session cwd, owns one cached snapshot, and gates every
 //   mutation on a caller-supplied fingerprint (drift/index-lock/external
 //   change -> typed stale refusal, never a stale stage or hidden commit).
 // - Hunk staging goes through the bounded native `stageHunks` patch adapter
@@ -213,7 +213,7 @@ async function worktreeBytes(
 }
 
 /**
- * Narrow daemon-bound repository adapter. One instance per daemon cwd;
+ * Narrow session-bound repository adapter. One instance per session cwd;
  * snapshot state is cached only to detect drift (callers always re-read
  * before mutating). All methods throw plain Errors naming at most the cwd
  * tail and git's own stderr (never tokens, never absolute host paths beyond

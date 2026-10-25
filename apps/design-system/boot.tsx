@@ -6,7 +6,7 @@ import { activateFeatures } from "../web/features/registry";
 // Same global stylesheet production loads (index.tsx), then the showcase chrome.
 import "../web/styles.css";
 import "./showcase.css";
-import { installDaemon } from "./daemon";
+import { installSession } from "./session";
 
 /**
  * Shared boot for both standalone pages (`stories.tsx`, `demo.tsx`); each entry
@@ -16,12 +16,12 @@ import { installDaemon } from "./daemon";
  * onMount opens the browser socket and probes /auth/session. The pages import
  * components and the (side-effect free) store module; only the demo and the App
  * story mount App, against the in-page fake socket (fake-socket.ts) that
- * `installDaemon` installs at boot.
+ * `installSession` installs at boot.
  */
 export function boot(title: string, page: () => JSX.Element): void {
 	document.title = title;
 	initTheme();
-	installDaemon();
+	installSession();
 	// Only what the app can enable: an in-development feature (Analysis) is never active here.
 	void activateFeatures(ENABLEABLE_FEATURE_IDS).then(() =>
 		render(page, document.getElementById("root")!),

@@ -119,10 +119,13 @@ if (op === "ensure-running") {
 /** Recorded provider ops from a workspace's state dir. */
 function providerOps(
 	workspaceDir: string,
-	daemonId: string,
+	workspaceId: string,
 ): Array<{ op: string; generation: number }> {
 	try {
-		const raw = readFileSync(join(workspaceDir, ".provider-state", daemonId, "ops.jsonl"), "utf8");
+		const raw = readFileSync(
+			join(workspaceDir, ".provider-state", workspaceId, "ops.jsonl"),
+			"utf8",
+		);
 		return raw
 			.trim()
 			.split("\n")
@@ -165,7 +168,7 @@ async function bootFleet(
 	return { server, paths, workspaceDir, cloneRoot, repoDir };
 }
 
-/** Create a clone (no start), returning its daemonId. */
+/** Create a clone (no start), returning its workspaceId. */
 async function createClone(server: FleetServer, repoDir: string, name: string): Promise<string> {
 	const { project } = server.registry.addProject(repoDir);
 	const res = await postJson(server.port, "/ctl/clones", {
@@ -175,8 +178,8 @@ async function createClone(server: FleetServer, repoDir: string, name: string): 
 		start: false,
 	});
 	expect(res.status).toBe(201);
-	const body = (await res.json()) as { entry: { daemonId: string } };
-	return body.entry.daemonId;
+	const body = (await res.json()) as { entry: { workspaceId: string } };
+	return body.entry.workspaceId;
 }
 
 describe("clone recovery: restart durable boundaries + races", () => {
@@ -185,22 +188,22 @@ describe("clone recovery: restart durable boundaries + races", () => {
 		async () => {
 			const { server, paths, workspaceDir, repoDir } = await bootFleet("reattach-running");
 			try {
-				const daemonId = await createClone(server, repoDir, "reattach");
+				const workspaceId = await createClone(server, repoDir, "reattach");
 				// Model a clone allocated by an older fleet in the shared destination.
-				const legacyVolume = join(workspaceDir, daemonId);
+				const legacyVolume = join(workspaceDir, workspaceId);
 				mkdirSync(workspaceDir, { recursive: true });
-				renameSync(server.registry.get(daemonId)!.cwd!, legacyVolume);
-				server.registry.update(daemonId, { cwd: legacyVolume });
+				renameSync(server.registry.get(workspaceId)!.cwd!, legacyVolume);
+				server.registry.update(workspaceId, { cwd: legacyVolume });
 				// Start (gen 1, desired running, enrollment + authorizedGeneration
 				// persisted; the fake sandbox stays "running" across restart).
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				let entry = server.registry.get(daemonId)!;
+				let entry = server.registry.get(workspaceId)!;
 				expect(entry.workspace?.authorizedGeneration).toBe(1);
 				expect(entry.workspace?.desiredState).toBe("running");
 				expect(entry.workspace?.enrollment?.generation).toBe(1);
 				const enrollment = entry.workspace?.enrollment;
-				const handoffPath = join(workspaceDir, ".provider-state", daemonId, "callback-env.json");
+				const handoffPath = join(workspaceDir, ".provider-state", workspaceId, "callback-env.json");
 				const handoff = JSON.parse(readFileSync(handoffPath, "utf8")) as {
 					workspaceId: string;
 					generation: number;
@@ -235,16 +238,16 @@ describe("clone recovery: restart durable boundaries + races", () => {
 					// provider inspect confirms the sandbox is live.
 					await waitFor(
 						() => {
-							const ops = providerOps(workspaceDir, daemonId);
+							const ops = providerOps(workspaceDir, workspaceId);
 							return (
 								ops.some((o) => o.op === "inspect") &&
-								server2.registry.get(daemonId)?.lifecycleStage === "ready"
+								server2.registry.get(workspaceId)?.lifecycleStage === "ready"
 							);
 						},
 						5_000,
 						"reconcile reattach after restart",
 					);
-					entry = server2.registry.get(daemonId)!;
+					entry = server2.registry.get(workspaceId)!;
 					expect(entry.status).toBe("ready");
 					expect(entry.workspace?.authorizedGeneration).toBe(1); // NO bump
 					expect(entry.workspace?.desiredState).toBe("running");
@@ -257,19 +260,19 @@ describe("clone recovery: restart durable boundaries + races", () => {
 					expect(recoveredHandoff.env.OMP_SESSION_CALLBACK_TOKEN).toBe(
 						handoff.env.OMP_SESSION_CALLBACK_TOKEN,
 					);
-					expect(existsSync(join(changedDestination, daemonId))).toBe(false);
+					expect(existsSync(join(changedDestination, workspaceId))).toBe(false);
 					// The provider saw exactly ONE ensure (gen 1) across both
 					// fleet lifetimes; reattach is inspect-only, never a second
 					// ensure (no duplicate writer).
-					const ops = providerOps(workspaceDir, daemonId);
+					const ops = providerOps(workspaceDir, workspaceId);
 					const ensures = ops.filter((o) => o.op === "ensure-running");
 					expect(ensures).toHaveLength(1);
 					expect(ensures[0]!.generation).toBe(1);
 					const inspects = ops.filter((o) => o.op === "inspect");
 					expect(inspects.length).toBeGreaterThanOrEqual(1);
-					const stop = await postJson(server2.port, "/ctl/stop", { selector: daemonId });
+					const stop = await postJson(server2.port, "/ctl/stop", { selector: workspaceId });
 					expect(stop.status).toBe(200);
-					expect(providerOps(workspaceDir, daemonId).some((o) => o.op === "stop")).toBe(true);
+					expect(providerOps(workspaceDir, workspaceId).some((o) => o.op === "stop")).toBe(true);
 					expect(existsSync(join(legacyVolume, ".checkout", ".git"))).toBe(true);
 				} finally {
 					await server2.close();
@@ -288,10 +291,10 @@ describe("clone recovery: restart durable boundaries + races", () => {
 		async () => {
 			const { server, paths, cloneRoot, repoDir } = await bootFleet("stopped");
 			try {
-				const daemonId = await createClone(server, repoDir, "dead-restart");
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				const workspaceId = await createClone(server, repoDir, "dead-restart");
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				expect(server.registry.get(daemonId)!.workspace?.authorizedGeneration).toBe(1);
+				expect(server.registry.get(workspaceId)!.workspace?.authorizedGeneration).toBe(1);
 
 				// Simulate the sandbox dying between the stop and the restart:
 				// the provider's inspect reports stopped/missing from boot.
@@ -316,11 +319,11 @@ describe("clone recovery: restart durable boundaries + races", () => {
 					// ensure-running with a bumped generation (1 → 2), fencing the
 					// old enrollment. Wait for the recreate.
 					await waitFor(
-						() => server2.registry.get(daemonId)?.workspace?.authorizedGeneration === 2,
+						() => server2.registry.get(workspaceId)?.workspace?.authorizedGeneration === 2,
 						5_000,
 						"gen-2 recreate after restart",
 					);
-					const entry = server2.registry.get(daemonId)!;
+					const entry = server2.registry.get(workspaceId)!;
 					expect(entry.workspace?.authorizedGeneration).toBe(2);
 					expect(entry.workspace?.enrollment?.generation).toBe(2);
 					expect(entry.workspace?.desiredState).toBe("running");
@@ -328,7 +331,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 					// Exactly TWO ensures total (gen 1 pre-restart, gen 2 post) and
 					// the gen-2 ensure request carried generation 2, never the
 					// stale gen 1 (the fencing regression Main observed).
-					const ops = providerOps(cloneRoot, daemonId);
+					const ops = providerOps(cloneRoot, workspaceId);
 					const ensures = ops.filter((o) => o.op === "ensure-running");
 					expect(ensures).toHaveLength(2);
 					expect(ensures[0]!.generation).toBe(1);
@@ -350,27 +353,27 @@ describe("clone recovery: restart durable boundaries + races", () => {
 		async () => {
 			const { server, cloneRoot, repoDir } = await bootFleet("uncertain");
 			try {
-				const daemonId = await createClone(server, repoDir, "uncertain");
+				const workspaceId = await createClone(server, repoDir, "uncertain");
 				// Manually persist a gen-1 authorized state (as a previous fleet
 				// would have): the provider now answers inspect with conflict.
-				server.registry.updateWorkspace(daemonId, {
+				server.registry.updateWorkspace(workspaceId, {
 					desiredState: "running",
 					authorizedGeneration: 1,
 					providerHandle: "h-1",
 				});
-				server.registry.setStatus(daemonId, "ready");
+				server.registry.setStatus(workspaceId, "ready");
 				// Start/wake must refuse: the inspect conflict means the
 				// predecessor's termination is uncertain; no new writer may be
 				// admitted.
-				const wake = await postJson(server.port, "/ctl/start", { daemonId });
+				const wake = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(wake.status).toBe(409);
 				const body = (await wake.json()) as { error?: string };
 				expect(body.error ?? "").toContain("uncertain");
-				const after = server.registry.get(daemonId)!;
+				const after = server.registry.get(workspaceId)!;
 				expect(after.workspace?.authorizedGeneration).toBe(1); // never moved
 				// The provider NEVER saw an ensure or stop (inspect conflict
 				// blocks before any mutation).
-				const ops = providerOps(cloneRoot, daemonId);
+				const ops = providerOps(cloneRoot, workspaceId);
 				expect(ops.some((o) => o.op === "ensure-running")).toBe(false);
 			} finally {
 				await server.close();
@@ -384,10 +387,10 @@ describe("clone recovery: restart durable boundaries + races", () => {
 		async () => {
 			const { server, repoDir } = await bootFleet("dead-after-ensure");
 			try {
-				const daemonId = await createClone(server, repoDir, "dead-pid");
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				const workspaceId = await createClone(server, repoDir, "dead-pid");
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				let entry = server.registry.get(daemonId)!;
+				let entry = server.registry.get(workspaceId)!;
 				expect(entry.status).toBe("ready");
 				expect(entry.lifecycleStage).toBe("callback");
 				// The sandbox is dead (later inspects report stopped): the
@@ -396,11 +399,11 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				// poller (1s ticks, inspect every 10th); there is no event to
 				// await, so waitFor polls the observable transition.
 				await waitFor(
-					() => server.registry.get(daemonId)?.lifecycleStage === "failed",
+					() => server.registry.get(workspaceId)?.lifecycleStage === "failed",
 					15_000,
 					"watchdog failed flip",
 				);
-				entry = server.registry.get(daemonId)!;
+				entry = server.registry.get(workspaceId)!;
 				expect(entry.lifecycleStage).toBe("failed");
 				expect(entry.status).toBe("error");
 				expect(entry.error ?? "").toContain("callback");
@@ -419,19 +422,19 @@ describe("clone recovery: restart durable boundaries + races", () => {
 		async () => {
 			const { server, cloneRoot, repoDir } = await bootFleet("stopped");
 			try {
-				const daemonId = await createClone(server, repoDir, "stop-preserve");
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				const workspaceId = await createClone(server, repoDir, "stop-preserve");
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				const entryBefore = server.registry.get(daemonId)!;
+				const entryBefore = server.registry.get(workspaceId)!;
 				expect(entryBefore.workspace?.desiredState).toBe("running");
 				// The provider saw one ensure at gen 1.
 				expect(
-					providerOps(cloneRoot, daemonId).filter((o) => o.op === "ensure-running"),
+					providerOps(cloneRoot, workspaceId).filter((o) => o.op === "ensure-running"),
 				).toHaveLength(1);
 
-				const stop = await postJson(server.port, "/ctl/stop", { selector: daemonId });
+				const stop = await postJson(server.port, "/ctl/stop", { selector: workspaceId });
 				expect(stop.status).toBe(200);
-				const entry = server.registry.get(daemonId)!;
+				const entry = server.registry.get(workspaceId)!;
 				expect(entry.workspace?.desiredState).toBe("stopped");
 				expect(entry.status).toBe("asleep");
 				expect(entry.workspace?.enrollment).toBeUndefined(); // revoked

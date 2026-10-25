@@ -2,7 +2,7 @@
  * FleetEventLog: the fleet's capped lifecycle-event ring.
  *
  * Every meaningful fleet transition is appended here so /ctl/debug and the
- * serve-mode CLI can show what the fleet has been doing: daemon status
+ * serve-mode CLI can show what the fleet has been doing: session status
  * changes, spawn/exit/respawn, and control-route failures. The ring is
  * capped (default 500 entries; the oldest fall off) and MUST never hold
  * secrets: callers strip bearer tokens before logging.
@@ -20,8 +20,8 @@ export interface FleetLogEntry {
 	/** The emitting subsystem: "server", … */
 	source: string;
 	message: string;
-	/** The daemon the event concerns, when daemon-scoped. */
-	daemonId?: string;
+	/** The session the event concerns, when session-scoped. */
+	workspaceId?: string;
 }
 
 /** Fleet-wide facts surfaced by /ctl/debug and the serve startup banner. */
@@ -50,9 +50,9 @@ export class FleetEventLog {
 	}
 
 	/** Append one entry (dropping the oldest past the cap) and mirror it. */
-	add(level: FleetLogLevel, source: string, message: string, daemonId?: string): FleetLogEntry {
+	add(level: FleetLogLevel, source: string, message: string, workspaceId?: string): FleetLogEntry {
 		const entry: FleetLogEntry = { ts: Date.now(), level, source, message };
-		if (daemonId !== undefined) entry.daemonId = daemonId;
+		if (workspaceId !== undefined) entry.workspaceId = workspaceId;
 		this.#entries.push(entry);
 		if (this.#entries.length > this.#cap) {
 			this.#entries.splice(0, this.#entries.length - this.#cap);

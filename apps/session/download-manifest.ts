@@ -1,4 +1,4 @@
-// G17 daemon-side download manifest + authorized-path resolution.
+// G17 session-side download manifest + authorized-path resolution.
 //
 // Owns the server half of direct exports/downloads/main-plus-worker archives:
 // inspecting the live session's actual artifacts (advisor recorders,
@@ -238,11 +238,11 @@ function insideRoots(canonical: string, roots: readonly string[]): boolean {
 }
 
 /**
- * Authorize a daemon-produced dump path and derive its browser filename.
+ * Authorize a session-produced dump path and derive its browser filename.
  * Browser filenames are NEVER server paths: the clientFilename is built from
  * the stable session id + kind, never from the server path. The serverPath
  * must realpath-resolve inside one of the caller's canonical roots
- * (tmpdir/cwd/session-dir; the daemon passes its canonicalRoots()).
+ * (tmpdir/cwd/session-dir; the session passes its canonicalRoots()).
  * Throws ExportError with a ledger code: invalid_request (empty),
  * unavailable (not found / not a file), forbidden (jail escape).
  */
@@ -257,16 +257,16 @@ export function resolveDownloadPath(
 	try {
 		canonical = realpathSync(opts.serverPath);
 	} catch {
-		throw new ExportError("unavailable", `download ${kind}: file not found on this daemon`);
+		throw new ExportError("unavailable", `download ${kind}: file not found on this session`);
 	}
 	let regular = false;
 	try {
 		regular = statSync(canonical).isFile();
 	} catch {
-		throw new ExportError("unavailable", `download ${kind}: file not found on this daemon`);
+		throw new ExportError("unavailable", `download ${kind}: file not found on this session`);
 	}
 	if (!regular) {
-		throw new ExportError("unavailable", `download ${kind}: not a file on this daemon`);
+		throw new ExportError("unavailable", `download ${kind}: not a file on this session`);
 	}
 	if (opts.roots.length === 0 || !insideRoots(canonical, opts.roots)) {
 		throw new ExportError("forbidden", `download ${kind}: path escapes the authorized roots`);
@@ -310,7 +310,7 @@ export interface DownloadBulkPayload {
 	sessionId?: string;
 }
 
-/** Type guard for the index.ts/daemon-control patch: kind "command" envelopes carrying download_bulk. */
+/** Type guard for the index.ts/session-control patch: kind "command" envelopes carrying download_bulk. */
 export function isDownloadBulkCommand(payload: unknown): payload is DownloadBulkPayload {
 	if (typeof payload !== "object" || payload === null) return false;
 	if (!("type" in payload) || !("correlationId" in payload) || !("path" in payload)) return false;
@@ -334,9 +334,9 @@ export interface DownloadBulkServeDeps {
 	correlationId: string;
 	/** Opaque server path from the fleet (validated against the jail here, at read time). */
 	path: string;
-	/** Daemon cwd for relative-path resolution (mirrors the download jail: cwd, then process.cwd()). */
+	/** Session cwd for relative-path resolution (mirrors the download jail: cwd, then process.cwd()). */
 	cwd: string;
-	/** Canonical (realpath) authorized roots from the daemon's canonicalRoots(). */
+	/** Canonical (realpath) authorized roots from the session's canonicalRoots(). */
 	roots: readonly string[];
 	uploadParts: (input: {
 		correlationId: string;
@@ -349,7 +349,7 @@ export interface DownloadBulkServeDeps {
 /**
  * Export files staged under tmpdir for one pending bulk fetch (html,
  * html-themed, text, request, archive), keyed by the canonical path the client
- * receives. This daemon owns those files: a fetch deletes its file once the
+ * receives. This session owns those files: a fetch deletes its file once the
  * transfer ends, and leftovers are swept on the next export and at shutdown.
  */
 const stagedExports = new Set<string>();
@@ -372,7 +372,7 @@ function sweepStagedExports(): void {
 	}
 }
 
-/** Shutdown: delete every staged export this daemon still holds. */
+/** Shutdown: delete every staged export this session still holds. */
 export function discardAllStagedExports(): void {
 	for (const path of stagedExports) discardStagedExport(path);
 }
@@ -399,7 +399,7 @@ export async function serveDownloadBulk(deps: DownloadBulkServeDeps): Promise<vo
  * time (same rules as the download jail), enforce the 64 MiB aggregate cap
  * BEFORE streaming, then upload in 4 MiB parts. Every failure reports via
  * DownloadBulkFailedControl and fails the whole correlation; nothing throws
- * to the caller (the daemon-control dispatch must stay alive).
+ * to the caller (the session-control dispatch must stay alive).
  */
 async function streamDownloadBulk(deps: DownloadBulkServeDeps): Promise<void> {
 	const fail = (code: CallbackErrorCode, message: string): void => {
@@ -428,7 +428,7 @@ async function streamDownloadBulk(deps: DownloadBulkServeDeps): Promise<void> {
 		}
 	}
 	if (canonical === null) {
-		fail("unavailable", "download not found on this daemon");
+		fail("unavailable", "download not found on this session");
 		return;
 	}
 	const resolved = canonical;
@@ -436,12 +436,12 @@ async function streamDownloadBulk(deps: DownloadBulkServeDeps): Promise<void> {
 	try {
 		const st = statSync(resolved);
 		if (!st.isFile()) {
-			fail("unavailable", "download not found on this daemon");
+			fail("unavailable", "download not found on this session");
 			return;
 		}
 		size = st.size;
 	} catch {
-		fail("unavailable", "download not found on this daemon");
+		fail("unavailable", "download not found on this session");
 		return;
 	}
 	if (deps.roots.length === 0 || !insideRoots(resolved, deps.roots)) {
@@ -554,7 +554,7 @@ export function createDownloadMethods(deps: DownloadMethodsDeps) {
 		sweepStagedExports();
 		const input = deps.manifestDeps(entry);
 		const manifest = buildDownloadManifest(input, args);
-		// Set as soon as this daemon owns a file, so any later failure removes it.
+		// Set as soon as this session owns a file, so any later failure removes it.
 		let path: string | undefined;
 		try {
 			if (kind === "html" || kind === "html-themed") {

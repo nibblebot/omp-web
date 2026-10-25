@@ -1,13 +1,13 @@
-import type { DaemonStatus } from "#lib/wire/protocol";
+import type { SessionStatus } from "#lib/wire/protocol";
 import { RowSignal } from "../../../../web/components/fleet/sidebar/RowSignal";
 import type { SessionActivity } from "../../../../web/fleet-ui/session-activity";
 import { defineStory } from "../../../registry";
 
 /** The signal in the sidebar's corner-slot wrapper, so the dot and spinner take their row sizing. */
-const Signal = (props: { status: DaemonStatus; activity?: SessionActivity }) => (
+const Signal = (props: { status: SessionStatus; activity?: SessionActivity }) => (
 	<div class="ds-frame-sidebar">
 		<div class="sidebar-list">
-			<span class="daemon-row-status">
+			<span class="roster-row-status">
 				<RowSignal status={props.status} activity={props.activity} />
 			</span>
 		</div>

@@ -102,7 +102,7 @@ describe("boot reconciliation (#3)", () => {
 			status: "ready",
 			readyAt: Date.now() - 120_000,
 		});
-		registry.setWorkspaceEnrollment(enrolled.daemonId, {
+		registry.setWorkspaceEnrollment(enrolled.workspaceId, {
 			credentialHash: createHash("sha256").update(BOOT_CREDENTIAL).digest("hex"),
 			generation: 1,
 		});
@@ -124,7 +124,7 @@ describe("boot reconciliation (#3)", () => {
 				status: "ready",
 				readyAt: Date.now() - 120_000,
 			});
-			registry.setWorkspaceEnrollment(local.daemonId, {
+			registry.setWorkspaceEnrollment(local.workspaceId, {
 				credentialHash: createHash("sha256").update(BOOT_CREDENTIAL).digest("hex"),
 				generation: 1,
 			});
@@ -147,7 +147,7 @@ describe("boot reconciliation (#3)", () => {
 			cwd: "",
 			project: "",
 			status: "error",
-			error: "daemon rejected the credential",
+			error: "session rejected the credential",
 		});
 		registry.flush();
 		server = await startFleet({
@@ -216,21 +216,21 @@ describe("boot reconciliation (#3)", () => {
 	test("an enrolled local entry with a live session lock becomes asleep after the redial grace", async () => {
 		const entry = server.registry.list().find((e) => e.name === "enrolled-live-local")!;
 		await waitFor(
-			() => server.registry.get(entry.daemonId)?.status === "asleep",
+			() => server.registry.get(entry.workspaceId)?.status === "asleep",
 			TEST_REDIAL_GRACE_MS + 2_000,
 			"redial grace expiry",
 		);
-		expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
+		expect(server.registry.get(entry.workspaceId)?.status).toBe("asleep");
 	}, 10_000);
 
 	test("an enrolled entry becomes asleep after the redial grace", async () => {
 		const entry = server.registry.list().find((e) => e.name === "enrolled-ready")!;
 		await waitFor(
-			() => server.registry.get(entry.daemonId)?.status === "asleep",
+			() => server.registry.get(entry.workspaceId)?.status === "asleep",
 			TEST_REDIAL_GRACE_MS + 2_000,
 			"redial grace expiry",
 		);
-		expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
+		expect(server.registry.get(entry.workspaceId)?.status).toBe("asleep");
 	}, 10_000);
 
 	test("intentionally stopped and terminal-error entries are left untouched", () => {

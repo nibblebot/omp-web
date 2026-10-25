@@ -1,7 +1,7 @@
 import { createSignal, onCleanup, type JSX } from "solid-js";
 
 /** Arming state for a two-click confirm (extracted from FleetSidebar's
- *  armDaemon/disarmDaemon and the subagent abort confirm). The
+ *  armSession/disarmSession and the subagent abort confirm). The
  *  first click arms (the trigger relabels), a second click fires the action;
  *  auto-disarms after `timeoutMs` (default 4000, matching FleetSidebar's
  *  ARM_DISARM_MS) and on unmount. */
@@ -34,7 +34,7 @@ export function useConfirmArm(timeoutMs = 4000): ConfirmArm {
  *  in for the armed state) so consumers keep their row/menu styling. */
 export function ConfirmButton(props: {
 	onConfirm: () => void;
-	/** Unarmed label, e.g. "Stop daemon". */
+	/** Unarmed label, e.g. "Stop session". */
 	label: string;
 	/** Armed relabel, e.g. "Confirm stop"; defaults to "Confirm". */
 	confirmLabel?: string;

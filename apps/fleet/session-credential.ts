@@ -12,7 +12,7 @@ import {
 	ENROLLMENT_KEY_BYTES,
 	type ShutdownControl,
 } from "#lib/wire/callback-protocol";
-import type { DaemonTransportRegistry } from "./daemon-transport";
+import type { SessionTransportRegistry } from "./session-transport";
 import type { Registry } from "./registry";
 
 /** A session's callback credential for one generation (the raw token is handed to the child once). */
@@ -30,36 +30,36 @@ export interface SessionEnrollment {
  * (which clears the enrollment). The registry keeps only the digest.
  */
 export function enrollSessionCredential(
-	transport: DaemonTransportRegistry,
+	transport: SessionTransportRegistry,
 	registry: Registry,
-	daemonId: string,
+	workspaceId: string,
 ): SessionEnrollment {
-	const entry = registry.get(daemonId);
-	if (!entry) throw new Error(`unknown daemon ${daemonId}`);
+	const entry = registry.get(workspaceId);
+	if (!entry) throw new Error(`unknown session ${workspaceId}`);
 	const previous = entry.workspace?.enrollment;
 	if (previous !== undefined) {
-		transport.revokeEnrollment(daemonId, previous.generation);
-		registry.clearWorkspaceEnrollment(daemonId, previous.generation);
+		transport.revokeEnrollment(workspaceId, previous.generation);
+		registry.clearWorkspaceEnrollment(workspaceId, previous.generation);
 	}
 	const generation =
 		Math.max(previous?.generation ?? 0, entry.workspace?.authorizedGeneration ?? 0) + 1;
 	const credential = randomBytes(ENROLLMENT_KEY_BYTES).toString("hex");
-	const digest = transport.enrollWorkspace(daemonId, generation, credential);
-	registry.setWorkspaceEnrollment(daemonId, { credentialHash: digest, generation });
-	registry.updateWorkspace(daemonId, { authorizedGeneration: generation });
+	const digest = transport.enrollWorkspace(workspaceId, generation, credential);
+	registry.setWorkspaceEnrollment(workspaceId, { credentialHash: digest, generation });
+	registry.updateWorkspace(workspaceId, { authorizedGeneration: generation });
 	return { generation, credential };
 }
 
 /** Revoke the entry's live callback enrollment and clear its binding (no-op when none). */
 export function releaseSessionCredential(
-	transport: DaemonTransportRegistry,
+	transport: SessionTransportRegistry,
 	registry: Registry,
-	daemonId: string,
+	workspaceId: string,
 ): void {
-	const enrollment = registry.get(daemonId)?.workspace?.enrollment;
+	const enrollment = registry.get(workspaceId)?.workspace?.enrollment;
 	if (enrollment === undefined) return;
-	transport.revokeEnrollment(daemonId, enrollment.generation);
-	registry.clearWorkspaceEnrollment(daemonId, enrollment.generation);
+	transport.revokeEnrollment(workspaceId, enrollment.generation);
+	registry.clearWorkspaceEnrollment(workspaceId, enrollment.generation);
 }
 
 /**
@@ -68,14 +68,14 @@ export function releaseSessionCredential(
  * live or the send is refused; callers tear the session down regardless.
  */
 export async function requestSessionShutdown(
-	transport: DaemonTransportRegistry,
-	daemonId: string,
+	transport: SessionTransportRegistry,
+	workspaceId: string,
 	reason: string,
 ): Promise<boolean> {
-	if (!transport.pairStatus(daemonId).paired) return false;
+	if (!transport.pairStatus(workspaceId).paired) return false;
 	const control: ShutdownControl = { type: "shutdown", reason };
 	try {
-		await transport.sendToDaemon(daemonId, {
+		await transport.sendToSession(workspaceId, {
 			streamId: CALLBACK_TRANSPORT_STREAM_ID,
 			kind: "control",
 			payload: control,
@@ -89,12 +89,12 @@ export async function requestSessionShutdown(
 }
 
 /**
- * The `--fleet-stdin` payload for one child: the daemon's only source of its callback pair and
+ * The `--fleet-stdin` payload for one child: the session's only source of its callback pair and
  * listener token, so neither reaches its argv or environment. `allowHttp` is set only for an http
- * callback URL (the daemon honors it for loopback hosts only).
+ * callback URL (the session honors it for loopback hosts only).
  */
 export function fleetStdinPayload(
-	callback: { url: string; daemonId: string; enrollment: SessionEnrollment },
+	callback: { url: string; workspaceId: string; enrollment: SessionEnrollment },
 	listenerToken: string,
 ): string {
 	const httpCallback = new URL(callback.url).protocol === "http:";
@@ -102,7 +102,7 @@ export function fleetStdinPayload(
 		v: 1,
 		callback: {
 			url: callback.url,
-			workspace: callback.daemonId,
+			workspace: callback.workspaceId,
 			generation: callback.enrollment.generation,
 			token: callback.enrollment.credential,
 			...(httpCallback ? { allowHttp: true } : {}),

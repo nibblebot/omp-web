@@ -333,7 +333,7 @@ describe("FleetCallback liveness", () => {
 		expect(status.lastError?.message).toBe("callback socket silent");
 	}, 20_000);
 
-	test("fleet heartbeats keep the pair past the silence deadline; the daemon mirrors its own while idle", async () => {
+	test("fleet heartbeats keep the pair past the silence deadline; the session mirrors its own while idle", async () => {
 		const fleet = makeFleet({ heartbeatMs: 40 });
 		const callback = makeCallback(fleet, { heartbeatMs: 40, silenceMs: 200 });
 		await callback.start();

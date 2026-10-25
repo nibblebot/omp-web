@@ -2,7 +2,7 @@
  * Hermetic tests for fleet/discovery.ts: validateProjectPath (incl. `~`
  * expansion), resolveWorktreeOf against an injected fake git and real
  * tmp-dir repositories, and the probeGitState porcelain/numstat parsers.
- * No live daemons, no filesystem root scanning (removed with `roots`).
+ * No live sessions, no filesystem root scanning (removed with `roots`).
  */
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";

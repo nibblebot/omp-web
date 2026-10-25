@@ -1,7 +1,7 @@
 /**
  * The background daemons strip lists only the selected session's workspace processes: the
- * fleet's merged roster stamps `reportedBy` with the daemonIds whose broker listed each
- * process, and the strip keeps the ones reported by `state.currentSessionId`.
+ * fleet's merged roster stamps `reportedBy` with the workspaceIds whose broker listed each
+ * process, and the strip keeps the ones reported by `state.currentWorkspaceId`.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createComponent } from "solid-js";
@@ -11,14 +11,14 @@ import { BackgroundDaemonsBar } from "../components/fleet/daemon/BackgroundDaemo
 import { setState, state } from "../state";
 import { installJsxShim, restoreJsxShim } from "./web.testkit";
 
-const saved = { daemons: state.daemons, currentSessionId: state.currentSessionId };
+const saved = { daemons: state.daemons, currentWorkspaceId: state.currentWorkspaceId };
 
 beforeAll(() => {
 	installJsxShim();
 });
 
 afterAll(() => {
-	setState({ daemons: saved.daemons, currentSessionId: saved.currentSessionId });
+	setState({ daemons: saved.daemons, currentWorkspaceId: saved.currentWorkspaceId });
 	restoreJsxShim();
 });
 
@@ -37,8 +37,8 @@ function proc(name: string, projectDir: string, reportedBy?: string[]): DaemonIn
 	};
 }
 
-function render(currentSessionId: string, procs: DaemonInfo[]): string {
-	setState({ currentSessionId, daemons: new Map(procs.map((d) => [daemonsKey(d), d])) });
+function render(currentWorkspaceId: string, procs: DaemonInfo[]): string {
+	setState({ currentWorkspaceId, daemons: new Map(procs.map((d) => [daemonsKey(d), d])) });
 	return solidWeb.renderToString(() => createComponent(BackgroundDaemonsBar, {}));
 }
 

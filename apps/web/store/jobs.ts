@@ -26,15 +26,15 @@ import { call } from "./transport";
 export const JOBS_POLL_MS = 2000;
 
 interface TreeSnapshot {
-	sessionId: string;
+	workspaceId: string;
 	/** Null when the session has no async job manager. */
 	tree: JobTreeDto | null;
 }
 
 interface DetailSnapshot {
-	sessionId: string;
+	workspaceId: string;
 	jobId: string;
-	/** Null once the daemon no longer lists the job. */
+	/** Null once the session no longer lists the job. */
 	detail: JobDetailDto | null;
 }
 
@@ -50,7 +50,7 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
 /** The tree of the session attached now; an answer for a session left behind never shows. */
 const currentTree = (): TreeSnapshot | undefined => {
 	const current = snapshot();
-	return current?.sessionId === state.currentSessionId ? current : undefined;
+	return current?.workspaceId === state.currentWorkspaceId ? current : undefined;
 };
 
 /** `loading` until the first answer, `unavailable` when the session runs no async jobs, else `ready`. */
@@ -95,15 +95,15 @@ export const selectedJob = (): JobDto | undefined =>
 /** The selected job's inspection: undefined while it loads, null once the job is gone. */
 export const selectedJobDetail = (): JobDetailDto | null | undefined => {
 	const current = detailSnapshot();
-	return current?.sessionId === state.currentSessionId && current.jobId === selectedId()
+	return current?.workspaceId === state.currentWorkspaceId && current.jobId === selectedId()
 		? current.detail
 		: undefined;
 };
 
-async function loadDetail(sessionId: string, jobId: string): Promise<void> {
+async function loadDetail(workspaceId: string, jobId: string): Promise<void> {
 	const detail = (await call("getJobDetail", [jobId])) as JobDetailDto | null;
-	if (sessionId !== state.currentSessionId || jobId !== selectedId()) return;
-	setDetailSnapshot({ sessionId, jobId, detail });
+	if (workspaceId !== state.currentWorkspaceId || jobId !== selectedId()) return;
+	setDetailSnapshot({ workspaceId, jobId, detail });
 }
 
 /**
@@ -118,12 +118,12 @@ let refreshing: Promise<void> | undefined;
 /** Reload the tree and the selected job's detail; a refresh already in flight is joined, never stacked. */
 export function refreshJobs(): Promise<void> {
 	refreshing ??= (async () => {
-		const sessionId = state.currentSessionId;
+		const workspaceId = state.currentWorkspaceId;
 		const stamp = selectionStamp;
 		try {
 			const tree = (await call("getJobTree", [])) as JobTreeDto | null;
-			if (sessionId !== state.currentSessionId) return;
-			setSnapshot({ sessionId, tree });
+			if (workspaceId !== state.currentWorkspaceId) return;
+			setSnapshot({ workspaceId, tree });
 			setError(null);
 			const jobId = selectedId();
 			if (jobId === null) return;
@@ -133,9 +133,9 @@ export function refreshJobs(): Promise<void> {
 				if (stamp === selectionStamp) setSelectedId(null);
 				return;
 			}
-			await loadDetail(sessionId, jobId);
+			await loadDetail(workspaceId, jobId);
 		} catch (err) {
-			if (sessionId === state.currentSessionId) setError(message(err));
+			if (workspaceId === state.currentWorkspaceId) setError(message(err));
 		} finally {
 			refreshing = undefined;
 		}
@@ -150,9 +150,9 @@ export function selectJob(jobId: string | null): void {
 	setSelectedId(jobId);
 	setDetailSnapshot(undefined);
 	if (jobId === null) return;
-	const sessionId = state.currentSessionId;
-	loadDetail(sessionId, jobId).catch((err: unknown) => {
-		if (sessionId === state.currentSessionId) setError(message(err));
+	const workspaceId = state.currentWorkspaceId;
+	loadDetail(workspaceId, jobId).catch((err: unknown) => {
+		if (workspaceId === state.currentWorkspaceId) setError(message(err));
 	});
 }
 
@@ -168,28 +168,28 @@ export function openJobsSheet(jobId?: string): void {
 
 /**
  * One-off inspection of a job of the attached session, for a surface outside the sheet. Resolves null when
- * the daemon no longer lists the job, the call fails, or the session changed meanwhile; never touches the
+ * the session no longer lists the job, the call fails, or the session changed meanwhile; never touches the
  * sheet's selection.
  */
 export async function fetchJobDetail(jobId: string): Promise<JobDetailDto | null> {
-	const sessionId = state.currentSessionId;
+	const workspaceId = state.currentWorkspaceId;
 	try {
 		const detail = (await call("getJobDetail", [jobId])) as JobDetailDto | null | undefined;
-		return sessionId === state.currentSessionId ? (detail ?? null) : null;
+		return workspaceId === state.currentWorkspaceId ? (detail ?? null) : null;
 	} catch {
 		return null;
 	}
 }
 
-/** Cancel one of the session's own running jobs; the daemon refuses any other. The tree reloads either way. */
+/** Cancel one of the session's own running jobs; the session refuses any other. The tree reloads either way. */
 export async function cancelOwnJob(jobId: string): Promise<void> {
-	const sessionId = state.currentSessionId;
+	const workspaceId = state.currentWorkspaceId;
 	setCancelling(jobId);
 	setCancelError(null);
 	try {
 		await call("cancelJob", [jobId]);
 	} catch (err) {
-		if (sessionId === state.currentSessionId) setCancelError(message(err));
+		if (workspaceId === state.currentWorkspaceId) setCancelError(message(err));
 	} finally {
 		setCancelling(null);
 	}

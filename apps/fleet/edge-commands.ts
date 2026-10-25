@@ -55,16 +55,16 @@ const deleteBranch: FieldRule = (_key, value) => {
 /**
  * The edge's command table: command name → its fields, in the order the
  * checks run. A command absent from this table is not answered by the edge;
- * it is forwarded to the attached daemon.
+ * it is forwarded to the attached session.
  */
 export const EDGE_COMMAND_FIELDS: Record<string, Record<string, FieldRule>> = {
-	list_daemon_sessions: { daemonId: required, limit: integer },
+	list_workspace_sessions: { workspaceId: required, limit: integer },
 	list_project_branches: { projectId: required, remote: optional },
 	sync_projects: {},
 	spawn: { cwd: required, template: optional },
-	spawn_resume: { daemonId: required, sessionFile: optional },
-	stop: { daemonId: required },
-	remove: { daemonId: required },
+	spawn_resume: { workspaceId: required, sessionFile: optional },
+	stop: { workspaceId: required },
+	remove: { workspaceId: required },
 	add_project: { path: required },
 	remove_project: { projectId: required },
 	create_clone: {
@@ -83,9 +83,9 @@ export const EDGE_COMMAND_FIELDS: Record<string, Record<string, FieldRule>> = {
 		existingBranch: optional,
 		start: flag,
 	},
-	delete_worktree: { daemonId: required, deleteBranch },
-	worktree_delete_info: { daemonId: required },
-	attach: { sessionId: required },
+	delete_worktree: { workspaceId: required, deleteBranch },
+	worktree_delete_info: { workspaceId: required },
+	attach: { workspaceId: required },
 };
 
 /**

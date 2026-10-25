@@ -19,7 +19,7 @@ import {
 	OMP_CALLBACK_PROTO,
 } from "#lib/wire/callback-protocol";
 import { FleetCallback } from "../../session/fleet-callback";
-import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
+import { SessionTransportRegistry, type CallbackSocketData } from "../session-transport";
 import { waitFor } from "./edge.testkit";
 
 /** Bun's WebSocket client with its upgrade-header options; the DOM lib types hide them. */
@@ -38,13 +38,13 @@ afterAll(async () => {
 });
 
 interface Rig {
-	registry: DaemonTransportRegistry;
+	registry: SessionTransportRegistry;
 	url: string;
 	cred: string;
 }
 
 function startRig(opts: { onDroppedMessage?: (message: string) => void } = {}): Rig {
-	const registry = new DaemonTransportRegistry(opts);
+	const registry = new SessionTransportRegistry(opts);
 	const server = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -147,7 +147,7 @@ describe("oversize commands on the callback pair", () => {
 			["big-1", 1_300_000],
 			["big-4", 4 * MIB],
 		] as const) {
-			await rig.registry.sendToDaemon(WORKSPACE, bigCommand(id, bytes));
+			await rig.registry.sendToSession(WORKSPACE, bigCommand(id, bytes));
 			const delivered = await session.arrived(`browser/${id}`);
 			expect(blobOf(delivered).length).toBe(bytes);
 		}
@@ -163,13 +163,13 @@ describe("oversize commands on the callback pair", () => {
 		await session.callback.start();
 		const connectionId = session.callback.status().connectionId;
 
-		const error = await rig.registry.sendToDaemon(WORKSPACE, bigCommand("over", 33 * MIB)).then(
+		const error = await rig.registry.sendToSession(WORKSPACE, bigCommand("over", 33 * MIB)).then(
 			() => undefined,
 			(caught: unknown) => caught,
 		);
 		expect(error instanceof CallbackError ? error.code : error).toBe("payload_too_large");
 
-		await rig.registry.sendToDaemon(WORKSPACE, bigCommand("small", 1024));
+		await rig.registry.sendToSession(WORKSPACE, bigCommand("small", 1024));
 		await session.arrived("browser/small");
 
 		expect(session.callback.status().connectionId).toBe(connectionId);
@@ -183,7 +183,7 @@ describe("oversize commands on the callback pair", () => {
 		const connectionId = session.callback.status().connectionId;
 
 		const error = await rig.registry
-			.sendToDaemon(WORKSPACE, {
+			.sendToSession(WORKSPACE, {
 				streamId: "browser/frame",
 				kind: "frame",
 				payload: { blob: "F".repeat(ENVELOPE_MAX_BYTES + 1024) },
@@ -269,8 +269,8 @@ describe("oversize commands on the callback pair", () => {
 	});
 });
 
-describe("daemon messages drop without tearing down the pair", () => {
-	/** A raw daemon socket dialed at the rig, open and past pair_ready. */
+describe("session messages drop without tearing down the pair", () => {
+	/** A raw session socket dialed at the rig, open and past pair_ready. */
 	async function dialRaw(rig: Rig): Promise<{ socket: Bun.WebSocket; connectionId: string }> {
 		const connectionId = randomUUID();
 		const socket = new BunWebSocket(`${rig.url.replace(/^http/, "ws")}${CALLBACK_WS_PATH}`, {
@@ -312,7 +312,7 @@ describe("daemon messages drop without tearing down the pair", () => {
 		const dropped: string[] = [];
 		const rig = startRig({ onDroppedMessage: (m) => dropped.push(m) });
 		const seen: CallbackEnvelope[] = [];
-		rig.registry.onDaemonEnvelope(WORKSPACE, (env) => seen.push(env));
+		rig.registry.onSessionEnvelope(WORKSPACE, (env) => seen.push(env));
 		const { socket, connectionId } = await dialRaw(rig);
 
 		socket.send("{not json");
@@ -331,7 +331,7 @@ describe("daemon messages drop without tearing down the pair", () => {
 		const dropped: string[] = [];
 		const rig = startRig({ onDroppedMessage: (m) => dropped.push(m) });
 		const seen: CallbackEnvelope[] = [];
-		rig.registry.onDaemonEnvelope(WORKSPACE, (env) => seen.push(env));
+		rig.registry.onSessionEnvelope(WORKSPACE, (env) => seen.push(env));
 		const { socket, connectionId } = await dialRaw(rig);
 
 		// Above the envelope cap, below the socket's 2 MiB message cap.
@@ -351,7 +351,7 @@ describe("daemon messages drop without tearing down the pair", () => {
 		const dropped: string[] = [];
 		const rig = startRig({ onDroppedMessage: (m) => dropped.push(m) });
 		const seen: CallbackEnvelope[] = [];
-		rig.registry.onDaemonEnvelope(WORKSPACE, (env) => seen.push(env));
+		rig.registry.onSessionEnvelope(WORKSPACE, (env) => seen.push(env));
 		const { socket, connectionId } = await dialRaw(rig);
 
 		socket.send(new Uint8Array([0x7b, 0xff, 0xfe, 0x7d]));

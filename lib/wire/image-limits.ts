@@ -1,5 +1,5 @@
 /**
- * Per-image size limit shared by the web composer and the daemon queue, so an
+ * Per-image size limit shared by the web composer and the session queue, so an
  * image accepted by the composer is never refused by a queue that holds it.
  */
 export const MAX_IMAGE_BYTES = 10_000_000;

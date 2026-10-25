@@ -28,7 +28,7 @@ function runBtwTurn(method: "btwStart" | "btwFollowUp", args: unknown[], questio
 	const streamId = nextBtwStreamId++;
 	const scope = state.sessionId;
 	setState("btw", { question, reply: "", streaming: true, streamId });
-	// Long-running side turn: no timeout (0). The daemon settles the record
+	// Long-running side turn: no timeout (0). The session settles the record
 	// (complete, cancelled or error) and returns it.
 	void call(method, args, 0, streamId)
 		.then((result) => {

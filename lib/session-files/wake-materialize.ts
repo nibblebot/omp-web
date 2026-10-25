@@ -1,10 +1,10 @@
 /**
  * Wake materialization wire contract.
  * A cold or missing session transcript is materialized from the
- * fleet log store into the daemon's agent dir BEFORE the existing resume path
- * runs. The transfer rides the bulk channel: the daemon initiates
+ * fleet log store into the session's agent dir BEFORE the existing resume path
+ * runs. The transfer rides the bulk channel: the session initiates
  * `POST /callback/bulk/<correlationId>` with a small JSON
- * {@link MaterializeRequest} body under a fresh daemon-minted correlation id,
+ * {@link MaterializeRequest} body under a fresh session-minted correlation id,
  * and the fleet serves the stored bytes as an `application/x-ndjson` response
  * of {@link MaterializeRecord}s under that correlation. One transfer is
  * bounded by BULK_MAX_BYTES (64 MiB); larger transcripts split across
@@ -15,7 +15,7 @@
  * `logs/<workspaceId>/<sessionId>/<relpath>`. The session subtree roots at
  * the SDK project dir that owns the session: relpaths like
  * `<encoded-cwd-dir>/<session>.jsonl`, `<encoded-cwd-dir>/<session>/…`, or
- * `<session>/…` for session-root artifacts. The daemon writes each received
+ * `<session>/…` for session-root artifacts. The session writes each received
  * file to `<agentDir>/sessions/<relpath>`, recreating the owning project dir
  * on demand, so the store subtree maps 1:1 onto the tailer's sessionKey
  * layout (apps/session/log-tailer.ts). Materialization therefore restores exactly
@@ -27,7 +27,7 @@
  *
  * Typed failures reuse the frozen vocabulary only: `invalid_request` for
  * malformed requests/records, `unavailable` when the fleet lacks the session
- * (or no pair exists daemon-side). No new error names.
+ * (or no pair exists session-side). No new error names.
  */
 import { createHash } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync } from "node:fs";
@@ -38,7 +38,7 @@ import { BULK_MAX_BYTES, callbackError } from "#lib/wire/callback-protocol";
 /** Request type literal for the materialization branch of the bulk route. */
 export const MATERIALIZE_REQUEST_TYPE = "materialize_session";
 
-/** Cap on the small JSON request body the daemon POSTs per transfer. */
+/** Cap on the small JSON request body the session POSTs per transfer. */
 export const MATERIALIZE_REQUEST_MAX_BYTES = 64 * 1024;
 
 /**
@@ -56,7 +56,7 @@ export interface MaterializeCursor {
 	offset: number;
 }
 
-/** Daemon → fleet request body of one bulk transfer. */
+/** Session → fleet request body of one bulk transfer. */
 export interface MaterializeRequest {
 	type: typeof MATERIALIZE_REQUEST_TYPE;
 	/** SDK SessionHeader.id whose stored lineage subtree is requested. */
@@ -74,9 +74,9 @@ export interface MaterializeSessionRecord {
 
 /**
  * File declaration. `relpath` is POSIX-relative to the requested session
- * subtree (normalized: no `..`, no absolute, no `.` segments); the daemon
+ * subtree (normalized: no `..`, no absolute, no `.` segments); the session
  * validates it with isNormalizedPosixRelativePath and refuses anything else.
- * `sha256` covers the FULL file bytes; the daemon verifies it after
+ * `sha256` covers the FULL file bytes; the session verifies it after
  * reassembling every chunk of the file (which may span transfers).
  */
 export interface MaterializeFileRecord {
@@ -432,7 +432,7 @@ function storedFileSha256(
  * would exceed the budget, the transfer ends with `end {more:true, cursor}`
  * whose cursor resumes at the exact byte the next transfer continues from
  * (files already fully sent are skipped; the straddled file re-emits its
- * `file` record and resumes at `cursor.offset`). The daemon reassembles by
+ * `file` record and resumes at `cursor.offset`). The session reassembles by
  * relpath+offset and verifies the sha256 after each file completes.
  * A record is admitted only while the terminal `end` record that would close
  * the transfer right after it still fits, so the stream always ends with an

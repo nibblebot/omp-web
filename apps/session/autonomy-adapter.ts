@@ -38,7 +38,7 @@ export interface AutonomyAdapter {
 
 const adapters = new WeakMap<SessionEntry, AutonomyAdapter>();
 
-/** One daemon owner per entry; browser reconnects read it, never create another scheduler. */
+/** One session owner per entry; browser reconnects read it, never create another scheduler. */
 export function getAutonomyAdapter(entry: SessionEntry) {
 	let adapter = adapters.get(entry);
 	if (!adapter) {
@@ -76,7 +76,7 @@ export function createAutonomyAdapter(entry: SessionEntry): AutonomyAdapter {
 					status: "paused",
 					iteration: data.iteration,
 					nextRunAt: undefined,
-					stopReason: "Daemon restarted; explicit resume required",
+					stopReason: "Session restarted; explicit resume required",
 				};
 			}
 		}

@@ -3,7 +3,7 @@ import { UsageLimitsDialog } from "../../../web/components/usage/UsageLimitsDial
 import { setState } from "../../../web/state";
 import { contextBreakdown, sessionStatsSummary } from "../../fixtures/overlays";
 import { rosterUsageReports } from "../../fixtures/roster";
-import { answerCalls, answerRoutes } from "../../daemon";
+import { answerCalls, answerRoutes } from "../../session";
 import { defineStory } from "../../registry";
 
 const pending = () => Promise.withResolvers<unknown>().promise;
@@ -17,7 +17,7 @@ export default [
 			export: "SessionStatsDialog",
 		},
 		tabs: true,
-		seed: { currentSessionId: "sess_09a41c", autoCompactionEnabled: true },
+		seed: { currentWorkspaceId: "sess_09a41c", autoCompactionEnabled: true },
 		variants: [
 			{
 				name: "Session totals",

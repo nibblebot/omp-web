@@ -107,13 +107,13 @@ describe("MCP switch", () => {
 		handler = async (method) => {
 			if (method === "getMcpState")
 				return mcpState([server("filesystem", true), server("postgres", false)]);
-			throw new Error("daemon unreachable");
+			throw new Error("session unreachable");
 		};
 		integrations.setMcpServerEnabled("filesystem", false);
 		expect(state.integrations.mcpServers[0].enabled).toBe(false);
 		await Bun.sleep(0);
 		expect(state.integrations.mcpServers[0].enabled).toBe(true);
-		expect(integrations.mcpError()).toBe("daemon unreachable");
+		expect(integrations.mcpError()).toBe("session unreachable");
 	});
 });
 

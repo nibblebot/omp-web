@@ -20,7 +20,7 @@ export function relayConfigured(): boolean {
 
 /**
  * Start sharing the attached session. Omitting `relayUrl` uses the configured
- * relay; the daemon refuses (collab_status error) when none is configured.
+ * relay; the session refuses (collab_status error) when none is configured.
  */
 export function startCollabRoom(access: "view" | "control", relayUrl?: string): void {
 	if (!isConnected()) return;
@@ -32,7 +32,7 @@ export function startCollabRoom(access: "view" | "control", relayUrl?: string): 
 	} satisfies ClientCommand).catch(() => {});
 }
 
-/** End the attached session's room. The daemon answers with collab_status off. */
+/** End the attached session's room. The session answers with collab_status off. */
 export function stopCollabRoom(): void {
 	if (!isConnected()) return;
 	void sendCommand({ type: "collab_stop", id: crypto.randomUUID() } satisfies ClientCommand).catch(

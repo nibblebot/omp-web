@@ -2,7 +2,7 @@
  * Fixtures for clone runtimes that die after their callback pair came up: a
  * real git repo, a scripted fake provider whose liveness is a marker file in
  * its state dir, a real fleet boot with shrunken watch timings, and a real
- * callback daemon dialing the fleet with the credential from the provider's
+ * callback session dialing the fleet with the credential from the provider's
  * callback-env handoff.
  *
  * Fake provider: inspect reports `stopped` while `<stateDir>/dead` exists, else
@@ -18,7 +18,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { CloneRuntimePolicy } from "../workspace-lifecycle";
 import type { FleetServer } from "../server";
-import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
+import { type CallbackSession, startCallbackSession } from "./callback-session.testkit";
 import { fleetPaths, gitInit, postJson, startTestFleet, waitFor } from "./server.testkit";
 
 /** Fast watch timings; the budget and backoff are overridden per test. */
@@ -88,13 +88,13 @@ export interface RuntimeExit {
 
 export interface CloneCrashFixture {
 	server: FleetServer;
-	daemonId: string;
+	workspaceId: string;
 	stateDir: string;
-	daemons: CallbackDaemon[];
-	/** Dial a callback daemon with the credential of the CURRENT handoff. */
-	pairUp(): Promise<CallbackDaemon>;
+	sessions: CallbackSession[];
+	/** Dial a callback session with the credential of the CURRENT handoff. */
+	pairUp(): Promise<CallbackSession>;
 	/** The runtime dies: the marker flips inspect to stopped (reporting `exit`) and the pair, if any, drops. */
-	kill(daemon: CallbackDaemon | undefined, exit?: RuntimeExit): Promise<void>;
+	kill(session: CallbackSession | undefined, exit?: RuntimeExit): Promise<void>;
 	ops(): Array<{ op: string; generation: number }>;
 	ensureGenerations(): number[];
 	/** The generation and callback token of the current handoff (the file the provider reads). */
@@ -130,11 +130,16 @@ export async function bootCloneCrashFixture(
 		start: false,
 	});
 	expect(created.status).toBe(201);
-	const daemonId = ((await created.json()) as { entry: { daemonId: string } }).entry.daemonId;
-	const started = await postJson(server.port, "/ctl/start", { daemonId });
+	const workspaceId = ((await created.json()) as { entry: { workspaceId: string } }).entry
+		.workspaceId;
+	const started = await postJson(server.port, "/ctl/start", { workspaceId });
 	expect(started.status).toBe(200);
-	const stateDir = join(dirname(server.registry.get(daemonId)!.cwd!), ".provider-state", daemonId);
-	const daemons: CallbackDaemon[] = [];
+	const stateDir = join(
+		dirname(server.registry.get(workspaceId)!.cwd!),
+		".provider-state",
+		workspaceId,
+	);
+	const sessions: CallbackSession[] = [];
 	const handoff = (): { generation: number; env: Record<string, string> } =>
 		JSON.parse(readFileSync(join(stateDir, "callback-env.json"), "utf8")) as {
 			generation: number;
@@ -147,25 +152,25 @@ export async function bootCloneCrashFixture(
 			.map((line) => JSON.parse(line) as { op: string; generation: number });
 	return {
 		server,
-		daemonId,
+		workspaceId,
 		stateDir,
-		daemons,
+		sessions,
 		async pairUp() {
 			const current = handoff();
-			const daemon = startCallbackDaemon({
+			const session = startCallbackSession({
 				url: current.env.OMP_SESSION_CALLBACK_URL!,
-				workspaceId: daemonId,
+				workspaceId,
 				generation: current.generation,
 				token: current.env.OMP_SESSION_CALLBACK_TOKEN!,
 			});
-			daemons.push(daemon);
-			await daemon.waitConnected(5_000);
-			return daemon;
+			sessions.push(session);
+			await session.waitConnected(5_000);
+			return session;
 		},
-		async kill(daemon, exit) {
+		async kill(session, exit) {
 			if (exit !== undefined) writeFileSync(join(stateDir, "exit.json"), JSON.stringify(exit));
 			writeFileSync(join(stateDir, "dead"), "1");
-			await daemon?.stop();
+			await session?.stop();
 		},
 		ops,
 		ensureGenerations: () =>
@@ -180,7 +185,7 @@ export async function bootCloneCrashFixture(
 }
 
 export async function teardownCloneCrashFixture(fx: CloneCrashFixture): Promise<void> {
-	for (const daemon of fx.daemons) await daemon.stop().catch(() => undefined);
+	for (const session of fx.sessions) await session.stop().catch(() => undefined);
 	await fx.server.close();
 }
 
@@ -194,7 +199,7 @@ export async function waitForCloneRoster(
 	try {
 		await waitFor(predicate, timeoutMs, what);
 	} catch (err) {
-		const entry = fx.server.registry.get(fx.daemonId);
+		const entry = fx.server.registry.get(fx.workspaceId);
 		const state = {
 			status: entry?.status,
 			stage: entry?.lifecycleStage,

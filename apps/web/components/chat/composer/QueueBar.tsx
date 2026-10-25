@@ -71,7 +71,7 @@ export const QueueBar: Component = () => {
 		else setQueue(EMPTY);
 	});
 
-	/** Chip fields for one queued message; `raw` keeps the composed text that identifies it to the daemon. */
+	/** Chip fields for one queued message; `raw` keeps the composed text that identifies it to the session. */
 	const messageChip = (kind: Chip["kind"], raw: string, imageCount: number | undefined) => {
 		const { text, files } = splitTextAttachments(raw);
 		return { kind, text, files: files.map((file) => file.name), imageCount: imageCount ?? 0 };

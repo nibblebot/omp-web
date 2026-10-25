@@ -523,7 +523,7 @@ function baselineEnv(
 	return options?.env ?? (process.env as Record<string, string | undefined>);
 }
 
-/** Env names that switch a sandboxed daemon into auth-broker mode. Both must be present (URL without token is a boot error in the SDK, not a fallback). */
+/** Env names that switch a sandboxed session into auth-broker mode. Both must be present (URL without token is a boot error in the SDK, not a fallback). */
 const BROKER_ENV_KEYS = ["OMP_AUTH_BROKER_URL", "OMP_AUTH_BROKER_TOKEN"] as const;
 
 interface CatalogEnvInfo {

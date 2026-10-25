@@ -4,7 +4,7 @@
  *
  * bun's default `--parallel` uses the logical CPU count (nproc), which on
  * hyperthreaded / hybrid machines oversubscribes the physical cores. This
- * suite's daemon-spawning files thrash at 32 logical workers (~69s on an
+ * suite's session-spawning files thrash at 32 logical workers (~69s on an
  * 8P+16E machine) but run flat at 8-26 (~26s). One worker per physical core
  * sits in that flat zone on any machine; detect it from /proc/cpuinfo
  * (unique package/core pairs) and fall back to the logical count where
@@ -15,7 +15,7 @@
  *
  * Inherited `OMP_SESSION_*` variables are stripped: a shell inside an
  * omp-web session carries that session's callback pair
- * (`OMP_SESSION_CALLBACK_*`), and every daemon a test spawns with
+ * (`OMP_SESSION_CALLBACK_*`), and every session a test spawns with
  * `...process.env` would otherwise dial the live fleet as that session.
  * Tests set the session variables they need explicitly.
  *

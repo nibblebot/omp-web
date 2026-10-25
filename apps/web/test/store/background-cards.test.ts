@@ -20,14 +20,14 @@ afterAll(() => {
 	// mock.restore() leaves module mocks installed; reinstall the real exports for later files.
 	mock.module("../../store/transport", () => originalTransport);
 	setState("items", []);
-	setState("currentSessionId", originalSession);
+	setState("currentWorkspaceId", originalSession);
 });
 
 // Dynamic imports: the transport mock must be registered before the store modules bind to it.
 const { setState, state } = await import("../../state");
 const { applyEvent } = await import("../../store/chat");
 const { reconcileBackgroundCards } = await import("../../store/background-cards");
-const originalSession = state.currentSessionId;
+const originalSession = state.currentWorkspaceId;
 
 const place = { depth: 0, rails: [] as boolean[], last: true, parent: false };
 const job = (id: string, over: Partial<JobDto> = {}): JobDto => ({
@@ -78,7 +78,7 @@ function card(): ToolItem {
 
 beforeEach(() => {
 	calls = [];
-	setState("currentSessionId", "sess-a");
+	setState("currentWorkspaceId", "sess-a");
 	setState("items", [parkedCard()]);
 });
 
@@ -113,7 +113,7 @@ describe("reconciling parked cards against the job list", () => {
 		const pending = held<JobTreeDto>();
 		handler = () => pending.promise;
 		const reconciling = reconcileBackgroundCards();
-		setState("currentSessionId", "sess-b");
+		setState("currentWorkspaceId", "sess-b");
 		pending.resolve(treeOf(job("bg_1", { status: "completed", endTime: 2000 })));
 		await reconciling;
 		expect(card().background).toMatchObject({ state: "running" });

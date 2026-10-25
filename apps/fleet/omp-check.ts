@@ -6,7 +6,7 @@
  * installed, at least one provider with usable auth, and a default model
  * selected. Providers and the default model are read through the SDK's own
  * runtime: discoverAuthStorage + ModelRegistry + Settings.loadReadOnly, the
- * same trio the omp-session daemon boots with, so the check reflects exactly
+ * same trio the omp-session process boots with, so the check reflects exactly
  * what prompts will see, regardless of SDK version or config layout.
  *
  * The SDK is imported LAZILY inside the probe: the fleet is otherwise SDK-free

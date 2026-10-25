@@ -24,7 +24,11 @@ export const SessionTitle: Component = () => {
 	return (
 		<div class="session-header">
 			<Show
-				when={activeWorkspace(state.daemonRoster, state.registeredProjects, state.currentSessionId)}
+				when={activeWorkspace(
+					state.sessionRoster,
+					state.registeredProjects,
+					state.currentWorkspaceId,
+				)}
 				keyed
 			>
 				{(w) => (

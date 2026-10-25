@@ -130,7 +130,7 @@ function assertModelRoleId(role: string): void {
 const THINKING_LEVEL_VALUES = Object.values(ThinkingLevel);
 
 /**
- * The session's currently active role per the same cycle order the daemon
+ * The session's currently active role per the same cycle order the session
  * broker's state snapshot uses: built-in roles in canonical order, then
  * custom roles from settings. Undefined when no role cycle resolves.
  */
@@ -163,9 +163,9 @@ export interface WebMethodsDeps {
 	) => Promise<{ files: number; bytes: number } | { alreadyPresent: true }>;
 	/** Blob store holding the sessions' externalized images; defaults to the agent directory's shared store. */
 	blobStore?: BlobStore;
-	/** Agent sessions root the daemon writes into (boot-time constant). */
+	/** Agent sessions root the session writes into (boot-time constant). */
 	sessionsDir: string;
-	/** Daemon bound cwd (resume scoping); entry.cwd matches it on this daemon. */
+	/** Session bound cwd (resume scoping); entry.cwd matches it on this session. */
 	cwd: string;
 	/** True when a fleet callback pair is active (clone workspaces). A live
 	 * pair is the ONLY way a bare session id can be resolved against the
@@ -281,7 +281,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			// bare id (slash-free, non-.jsonl, not an existing file) against
 			// the fleet store FIRST: materialize-if-cold via the callback
 			// pair, then switch to the resolved main JSONL. Only when a pair
-			// is active; direct/worktree daemons pass real paths and keep
+			// is active; direct/worktree sessions pass real paths and keep
 			// the SDK path semantics unchanged.
 			const target = await resolveSwitchSessionTarget(entry, arg);
 			await exitPlanMode(entry);

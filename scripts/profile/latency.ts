@@ -11,7 +11,7 @@
  *
  * - `route`: the label the scenario passed to the directive builder
  *   (`textTurn({ route, ... })` in `./fake-model/directives.ts`) for the session
- *   it prompted, usually the daemon id. The client knows it because it chose it.
+ *   it prompted, usually the workspace id. The client knows it because it chose it.
  * - `req`: 0-based ordinal of the assistant message in the session transcript.
  *   The fake model computes it from the request as the number of assistant
  *   messages already in `messages`. The client counts assistant messages the

@@ -1,5 +1,5 @@
 /**
- * Daemon control broker replay regression: per-browser virtual
+ * Session control broker replay regression: per-browser virtual
  * stream_open ring-hit replay vs ring-miss re-prime. The observed defect:
  * openStream's ring-miss guard was logically unreachable (`live > 0 &&
  * replay.length === 0 && newest > lastSeq` cannot fire; the newest live
@@ -24,11 +24,15 @@
  * the browser, and re-primes it fresh. A stream the fleet does not re-open on
  * a new pair is an orphan and is dropped.
  *
- * Pure unit: createDaemonControl with a stub deps whose send() assigns
+ * Pure unit: createSessionControl with a stub deps whose send() assigns
  * synthetic wire seqs (like the real transport) and records every emit.
  */
 import { describe, expect, test, vi } from "bun:test";
-import { createDaemonControl, type DaemonControl, type DaemonControlDeps } from "../daemon-control";
+import {
+	createSessionControl,
+	type SessionControl,
+	type SessionControlDeps,
+} from "../session-control";
 import {
 	PreEncodedPayload,
 	type CallbackEnvelope,
@@ -45,7 +49,7 @@ interface Sent {
 }
 
 /** Narrow a sent payload to an object with a string `type` (control/frame
- * vocabulary; the only shape daemon-control emits). */
+ * vocabulary; the only shape session-control emits). */
 function typeOf(payload: unknown): string | undefined {
 	if (typeof payload !== "object" || payload === null) return undefined;
 	if (!("type" in payload)) return undefined;
@@ -68,7 +72,7 @@ function makeHarness(
 	streamConfirmMs?: number,
 	onDrain: (listener: () => void) => () => void = () => () => {},
 ): {
-	control: DaemonControl;
+	control: SessionControl;
 	sent: Sent[];
 	primes: string[];
 	/** Resolves once `count` envelopes have been sent in total. */
@@ -78,7 +82,7 @@ function makeHarness(
 	const primes: string[] = [];
 	const waiters: Array<{ count: number; resolve: () => void }> = [];
 	let wireSeq = 1024;
-	const send: DaemonControlDeps["send"] = (streamId, kind, payload, onEmittedSeq): string => {
+	const send: SessionControlDeps["send"] = (streamId, kind, payload, onEmittedSeq): string => {
 		let seq: number | null = null;
 		if (onEmittedSeq !== undefined && streamId.startsWith("browser/") && kind === "frame") {
 			seq = ++wireSeq;
@@ -98,7 +102,7 @@ function makeHarness(
 		else waiters.push({ count, resolve });
 		return promise;
 	};
-	const deps: DaemonControlDeps = {
+	const deps: SessionControlDeps = {
 		handleCommand: async () => undefined,
 		preparePriming: async () => {
 			primes.push("prime");
@@ -112,12 +116,12 @@ function makeHarness(
 		onBrowserStreamsChange,
 		streamConfirmMs,
 	};
-	const control = createDaemonControl(deps);
+	const control = createSessionControl(deps);
 	return { control, sent, primes, sentCount };
 }
 
 /** Open the stream (stream_open control) with an optional lastSeq. */
-function openStream(control: DaemonControl, lastSeq?: number): void {
+function openStream(control: SessionControl, lastSeq?: number): void {
 	control.handleEnvelope({
 		version: 2,
 		workspaceId: "w1",
@@ -135,7 +139,7 @@ function openStream(control: DaemonControl, lastSeq?: number): void {
 }
 
 /** The fleet's stream_ack: every frame up to wire seq `seq` has drained. */
-function ackStream(control: DaemonControl, seq: number): void {
+function ackStream(control: SessionControl, seq: number): void {
 	control.handleEnvelope({
 		version: 2,
 		workspaceId: "w1",
@@ -150,12 +154,12 @@ function ackStream(control: DaemonControl, seq: number): void {
 }
 
 /** Ringed-delta frame on a browser stream via mirror (state is ringed). */
-function emitState(control: DaemonControl): void {
+function emitState(control: SessionControl): void {
 	control.mirror({ type: "state", state: { streaming: true } });
 }
 
 /** Non-ringed frame on a browser stream via publish (priming burst). */
-function emitPrimeFrame(control: DaemonControl): void {
+function emitPrimeFrame(control: SessionControl): void {
 	control.publish(STREAM, { type: "history", messages: [] });
 }
 
@@ -175,7 +179,7 @@ const resyncSent = (sent: Sent[], from: number): boolean =>
 				s.payload.type === "stream_resync",
 		);
 
-describe("daemon-control stream_open replay", () => {
+describe("session-control stream_open replay", () => {
 	test("a fresh stream primes; subsequent ringed deltas ring with wire seqs", () => {
 		const { control, sent, primes } = makeHarness();
 		openStream(control); // brand-new: prime
@@ -336,8 +340,8 @@ describe("daemon-control stream_open replay", () => {
 	});
 });
 
-describe("daemon-control browser-stream orphan GC (SXP-03)", () => {
-	const open = (control: DaemonControl, streamId: string, connectionId: string): void => {
+describe("session-control browser-stream orphan GC (SXP-03)", () => {
+	const open = (control: SessionControl, streamId: string, connectionId: string): void => {
 		control.handleEnvelope({
 			version: 2,
 			workspaceId: "w1",
@@ -402,16 +406,16 @@ describe("daemon-control browser-stream orphan GC (SXP-03)", () => {
 	});
 });
 
-describe("daemon-control browser-stream priming", () => {
+describe("session-control browser-stream priming", () => {
 	test("frames mirrored after the priming snapshot arrive after the prime, in order", async () => {
-		let control!: DaemonControl;
+		let control!: SessionControl;
 		const harness = makeHarness(() => {
 			// A live frame published the instant the snapshot is taken: its
 			// effect is not in the snapshot, so it must follow the history.
 			control.mirror({ type: "event", event: { type: "turn_start" } });
 			return [
 				{ type: "hello_ok" },
-				{ type: "attached", sessionId: "s1" },
+				{ type: "attached", workspaceId: "d1" },
 				{ type: "history", messages: [] },
 				{ type: "state", state: {} },
 			];
@@ -460,7 +464,7 @@ describe("daemon-control browser-stream priming", () => {
 	});
 });
 
-describe("daemon-control browser-stream count (FLEET-05)", () => {
+describe("session-control browser-stream count (FLEET-05)", () => {
 	test("onBrowserStreamsChange reports each browser stream open/close and 0 on stop", () => {
 		const counts: number[] = [];
 		const { control } = makeHarness(undefined, undefined, (count) => counts.push(count));
@@ -579,7 +583,7 @@ test("sustained output with a full-speed client primes without a reset loop", as
 	control.stop();
 });
 
-describe("daemon-control replay ring releases evicted frames (WIRE-18)", () => {
+describe("session-control replay ring releases evicted frames (WIRE-18)", () => {
 	test("frames evicted from the replay ring become unreachable", async () => {
 		const { control } = makeHarness(undefined, undefined, undefined, undefined, false);
 		openStream(control);
@@ -634,13 +638,13 @@ describe("daemon-control replay ring releases evicted frames (WIRE-18)", () => {
 	});
 });
 
-describe("daemon-control paced priming waits on drain (SXP-16)", () => {
+describe("session-control paced priming waits on drain (SXP-16)", () => {
 	test("a paced prime parks on the pair's drain and resumes when it fires", async () => {
 		let queued = Number.MAX_SAFE_INTEGER; // no room: every priming frame waits
 		const subscribed = Promise.withResolvers<void>();
 		let wake = (): void => {};
 		const harness = makeHarness(
-			() => [{ type: "hello_ok" }, { type: "attached", sessionId: "s1" }],
+			() => [{ type: "hello_ok" }, { type: "attached", workspaceId: "d1" }],
 			() => true,
 			undefined,
 			() => ({ stream: queued, connection: queued }),
@@ -667,7 +671,7 @@ describe("daemon-control paced priming waits on drain (SXP-16)", () => {
 	});
 });
 
-describe("daemon-control ack-paced priming (fleet drain credit)", () => {
+describe("session-control ack-paced priming (fleet drain credit)", () => {
 	const PAD = 700 * 1024;
 	const FRAMES = 6;
 	const snapshot = (): Record<string, unknown>[] =>
@@ -738,7 +742,7 @@ describe("daemon-control ack-paced priming (fleet drain credit)", () => {
 	});
 });
 
-describe("daemon-control control mirror carries only what the fleet reads", () => {
+describe("session-control control mirror carries only what the fleet reads", () => {
 	const messageUpdate = (text: string) => ({
 		type: "event",
 		event: {

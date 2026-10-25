@@ -1,6 +1,6 @@
 import { Transcript } from "../../../../web/components/chat/transcript/Transcript";
 import {
-	SCREEN_DAEMON_ID,
+	SCREEN_WORKSPACE_ID,
 	screenItems,
 	screenLiveBlocks,
 	screenSessionSeed,
@@ -78,13 +78,14 @@ export default defineStory({
 			name: "Waking: skeleton",
 			description:
 				"An asleep session is being woken for a switch: the old content has faded out and, after 250ms, the skeleton shows with 'Waking <name>…'.",
-			seed: { items: [], transcriptPhase: "waking", transcriptTarget: SCREEN_DAEMON_ID },
+			seed: { items: [], transcriptPhase: "waking", transcriptTarget: SCREEN_WORKSPACE_ID },
 			render: frame,
 		},
 		{
 			name: "Attaching: skeleton",
-			description: "The daemon is attached and its history is loading: 'Loading history…'.",
-			seed: { items: [], transcriptPhase: "attaching", transcriptTarget: SCREEN_DAEMON_ID },
+			description:
+				"The session process is attached and its history is loading: 'Loading history…'.",
+			seed: { items: [], transcriptPhase: "attaching", transcriptTarget: SCREEN_WORKSPACE_ID },
 			render: frame,
 		},
 		{
@@ -94,7 +95,7 @@ export default defineStory({
 			seed: {
 				items: [],
 				transcriptPhase: "failed",
-				transcriptTarget: SCREEN_DAEMON_ID,
+				transcriptTarget: SCREEN_WORKSPACE_ID,
 				transcriptError: "attach failed: session exited with code 78",
 			},
 			render: frame,

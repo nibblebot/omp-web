@@ -1,6 +1,6 @@
 /**
- * Daemon registry for the omp-fleet: the persistent, insertion-ordered
- * roster of daemons with monotonic `dN` id allocation that survives
+ * Session registry for the omp-fleet: the persistent, insertion-ordered
+ * roster of sessions with monotonic `dN` id allocation that survives
  * restarts, plus the first-class registered `projects[]` (realpath-keyed,
  * `pN` ids) that project groups hang off.
  *
@@ -39,8 +39,8 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type {
-	DaemonEntry,
-	DaemonStatus,
+	RosterEntry,
+	SessionStatus,
 	DesiredState,
 	RegisteredProject,
 	WorkspaceKind,
@@ -66,7 +66,7 @@ export const PAIR_LOSS_GRACE_MS = 5_000;
 /**
  * Workspace identity unions, re-exported for fleet/registry consumers. The
  * canonical definitions live in lib/wire/protocol.ts, the shared leaf that
- * already feeds DaemonEntry/RegisteredProject to this file. Defining them
+ * already feeds RosterEntry/RegisteredProject to this file. Defining them
  * here instead would make the wire types (or this file's importers) depend
  * on a fleet-internal module; re-exporting keeps one source and the
  * registry-facing export surface.
@@ -173,8 +173,8 @@ export interface WorkspaceRecord {
 	enrollment?: WorkspaceEnrollment;
 }
 
-/** A roster entry: DaemonEntry plus fleet-side registration data. */
-export interface RegistryEntry extends DaemonEntry {
+/** A roster entry: RosterEntry plus fleet-side registration data. */
+export interface RegistryEntry extends RosterEntry {
 	/** Current git branch of the session cwd for local entries; set by ProjectSync's git-state polling. */
 	branch?: string;
 	/** git dirty-state file counts; set by ProjectSync's git-state polling (absent until the first successful probe). */
@@ -186,13 +186,13 @@ export interface RegistryEntry extends DaemonEntry {
 		linesAdded?: number;
 		linesDeleted?: number;
 	};
-	/** Title of the daemon's last session file; set by ProjectSync's git-state polling probe. */
+	/** Title of the session's last session file; set by ProjectSync's git-state polling probe. */
 	sessionTitle?: string;
-	/** True when the daemon's last session file has no messages (new/empty session);
+	/** True when the session's last session file has no messages (new/empty session);
 	 *  set alongside sessionTitle by ProjectSync's git-state polling probe. */
 	sessionEmpty?: boolean;
 	/**
-	 * True once the daemon reported (`state.sessionPersisted`) that `lastSessionFile`
+	 * True once the session reported (`state.sessionPersisted`) that `lastSessionFile`
 	 * is on disk. Absent means unknown or not yet written: a relaunch then adopts the
 	 * path (`--resume-unwritten`) instead of failing strictly. Reset whenever
 	 * lastSessionFile changes.
@@ -229,7 +229,7 @@ interface RegistryFile {
 export interface RegistryChange {
 	/** Rows created or changed, as they now stand in the registry. */
 	upserted: RegistryEntry[];
-	/** daemonIds removed from the registry. */
+	/** workspaceIds removed from the registry. */
 	removed: string[];
 }
 
@@ -306,7 +306,7 @@ export class Registry {
 	onChange: ((change: RegistryChange) => void) | null = null;
 	/**
 	 * Fired after PROJECT-set mutations only (addProject/removeProject), not
-	 * daemon mutations; set by the edge server for registered_projects
+	 * session mutations; set by the edge server for registered_projects
 	 * broadcasts. Projects are rare mutations and the frame is re-derivable
 	 * from stream priming, so broadcasts ride this dedicated hook instead of
 	 * the every-mutation onChange.
@@ -407,16 +407,18 @@ export class Registry {
 		return [...this.entries];
 	}
 
-	get(daemonId: string): RegistryEntry | undefined {
-		return this.entries.find((entry) => entry.daemonId === daemonId);
+	get(workspaceId: string): RegistryEntry | undefined {
+		return this.entries.find((entry) => entry.workspaceId === workspaceId);
 	}
 
 	create(
-		init: Omit<RegistryEntry, "daemonId" | "registeredAt" | "status"> & { status?: DaemonStatus },
+		init: Omit<RegistryEntry, "workspaceId" | "registeredAt" | "status"> & {
+			status?: SessionStatus;
+		},
 	): RegistryEntry {
 		const entry: RegistryEntry = {
 			...init,
-			daemonId: `d${this.nextId++}`,
+			workspaceId: `d${this.nextId++}`,
 			registeredAt: Date.now(),
 			status: init.status ?? "spawning",
 		};
@@ -429,8 +431,8 @@ export class Registry {
 		return entry;
 	}
 
-	update(daemonId: string, patch: Partial<RegistryEntry>): RegistryEntry {
-		const index = this.#indexOf(daemonId);
+	update(workspaceId: string, patch: Partial<RegistryEntry>): RegistryEntry {
+		const index = this.#indexOf(workspaceId);
 		const entry = { ...this.entries[index], ...patch };
 		this.entries[index] = entry;
 		this.#mutated(
@@ -442,10 +444,10 @@ export class Registry {
 
 	/**
 	 * Replaces the fleet-private workspace record and persists. Throws on an
-	 * unknown daemon id.
+	 * unknown workspace id.
 	 */
-	setWorkspace(daemonId: string, record: WorkspaceRecord): RegistryEntry {
-		const entry = this.#require(daemonId);
+	setWorkspace(workspaceId: string, record: WorkspaceRecord): RegistryEntry {
+		const entry = this.#require(workspaceId);
 		entry.workspace = record;
 		this.#mutated({ upserted: [entry], removed: [] }, true);
 		return entry;
@@ -456,10 +458,10 @@ export class Registry {
 	 * top-level keys replace wholesale (deletion/providerHandle are not
 	 * deep-merged; use the dedicated deletion accessors for deletion-state
 	 * transitions). Entries without a persisted record get the legacy-
-	 * inferred base first. Throws on an unknown daemon id.
+	 * inferred base first. Throws on an unknown workspace id.
 	 */
-	updateWorkspace(daemonId: string, patch: Partial<WorkspaceRecord>): RegistryEntry {
-		const entry = this.#require(daemonId);
+	updateWorkspace(workspaceId: string, patch: Partial<WorkspaceRecord>): RegistryEntry {
+		const entry = this.#require(workspaceId);
 		entry.workspace = { ...(entry.workspace ?? inferWorkspaceRecord(entry)), ...patch };
 		this.#mutated({ upserted: [entry], removed: [] }, true);
 		return entry;
@@ -468,11 +470,11 @@ export class Registry {
 	/**
 	 * Replaces the deletion state on the workspace record and persists. The
 	 * roster identity is never removed by deletion: the record stays on the
-	 * entry so Retention/state survive restart. Throws on an unknown daemon
+	 * entry so Retention/state survive restart. Throws on an unknown session
 	 * id or an entry without a workspace record.
 	 */
-	setWorkspaceDeletion(daemonId: string, deletion: WorkspaceDeletion): RegistryEntry {
-		const entry = this.#require(daemonId);
+	setWorkspaceDeletion(workspaceId: string, deletion: WorkspaceDeletion): RegistryEntry {
+		const entry = this.#require(workspaceId);
 		const workspace = entry.workspace ?? inferWorkspaceRecord(entry);
 		entry.workspace = { ...workspace, deletion };
 		this.#mutated({ upserted: [entry], removed: [] }, true);
@@ -483,8 +485,8 @@ export class Registry {
 	 * Drops the deletion state (a refused delete the operator abandoned by
 	 * starting the workspace again) and persists. Throws on an unknown id.
 	 */
-	clearWorkspaceDeletion(daemonId: string): RegistryEntry {
-		const entry = this.#require(daemonId);
+	clearWorkspaceDeletion(workspaceId: string): RegistryEntry {
+		const entry = this.#require(workspaceId);
 		if (entry.workspace?.deletion === undefined) return entry;
 		const next = { ...entry.workspace };
 		delete next.deletion;
@@ -498,10 +500,10 @@ export class Registry {
 	 * record and persists. The binding carries ONLY the SHA-256 hex digest
 	 * of the credential (never the raw credential) so a fleet restart can
 	 * re-enroll the transport without re-issuing. Throws on an unknown
-	 * daemon id.
+	 * workspace id.
 	 */
-	setWorkspaceEnrollment(daemonId: string, enrollment: WorkspaceEnrollment): RegistryEntry {
-		const entry = this.#require(daemonId);
+	setWorkspaceEnrollment(workspaceId: string, enrollment: WorkspaceEnrollment): RegistryEntry {
+		const entry = this.#require(workspaceId);
 		const workspace = entry.workspace ?? inferWorkspaceRecord(entry);
 		entry.workspace = { ...workspace, enrollment };
 		this.#mutated({ upserted: [entry], removed: [] }, true);
@@ -512,10 +514,10 @@ export class Registry {
 	 * Clears the persisted callback-enrollment binding and persists. When
 	 * `generation` is given, clears ONLY a binding at that generation; a
 	 * stale-generation revocation must not wipe a newer binding. Returns
-	 * whether a binding was cleared; throws on an unknown daemon id.
+	 * whether a binding was cleared; throws on an unknown workspace id.
 	 */
-	clearWorkspaceEnrollment(daemonId: string, generation?: number): boolean {
-		const entry = this.#require(daemonId);
+	clearWorkspaceEnrollment(workspaceId: string, generation?: number): boolean {
+		const entry = this.#require(workspaceId);
 		const workspace = entry.workspace;
 		if (workspace?.enrollment === undefined) return false;
 		if (generation !== undefined && workspace.enrollment.generation !== generation) {
@@ -537,7 +539,7 @@ export class Registry {
 		for (const entry of this.entries) {
 			const enrollment = entry.workspace?.enrollment;
 			if (enrollment !== undefined) {
-				out.push({ workspaceId: entry.daemonId, enrollment: { ...enrollment } });
+				out.push({ workspaceId: entry.workspaceId, enrollment: { ...enrollment } });
 			}
 		}
 		return out;
@@ -599,8 +601,8 @@ export class Registry {
 	 * e.g. a session lock) and is cleared on every other transition (or when
 	 * no message is supplied).
 	 */
-	setStatus(daemonId: string, status: DaemonStatus, error?: string): void {
-		const entry = this.#require(daemonId);
+	setStatus(workspaceId: string, status: SessionStatus, error?: string): void {
+		const entry = this.#require(workspaceId);
 		entry.status = status;
 		if (status === "error" || status === "asleep") {
 			if (error === undefined) delete entry.error;
@@ -608,7 +610,7 @@ export class Registry {
 		} else {
 			delete entry.error;
 		}
-		// An asleep daemon has no live process: stale liveness facts must not
+		// An asleep session has no live process: stale liveness facts must not
 		// leak into the roster (no pid, no uptime growing since readyAt). The
 		// registry is the roster truth, so clearing here covers every stop path
 		// (edge stop, lifecycle stop, idle exit, ctl stop) in one place; the
@@ -620,11 +622,11 @@ export class Registry {
 		this.#mutated({ upserted: [entry], removed: [] }, false);
 	}
 
-	remove(daemonId: string): boolean {
-		const index = this.entries.findIndex((entry) => entry.daemonId === daemonId);
+	remove(workspaceId: string): boolean {
+		const index = this.entries.findIndex((entry) => entry.workspaceId === workspaceId);
 		if (index === -1) return false;
 		this.entries.splice(index, 1);
-		this.#mutated({ upserted: [], removed: [daemonId] }, true);
+		this.#mutated({ upserted: [], removed: [workspaceId] }, true);
 		return true;
 	}
 
@@ -673,7 +675,7 @@ export class Registry {
 	 * verified deletion gate, so any clone of the project refuses
 	 * the whole removal with `project <id> has clone workspaces: <ids>`
 	 * (nothing is removed on refusal). Unknown ids also throw. Returns the
-	 * removed daemon ids.
+	 * removed workspace ids.
 	 */
 	removeProject(projectId: string): string[] {
 		const index = this.projectList.findIndex((project) => project.projectId === projectId);
@@ -682,10 +684,10 @@ export class Registry {
 		const clones = owned.filter((entry) => entry.workspace?.kind === "clone");
 		if (clones.length > 0) {
 			throw new Error(
-				`project ${projectId} has clone workspaces: ${clones.map((entry) => entry.daemonId).join(", ")}`,
+				`project ${projectId} has clone workspaces: ${clones.map((entry) => entry.workspaceId).join(", ")}`,
 			);
 		}
-		const removed = owned.map((entry) => entry.daemonId);
+		const removed = owned.map((entry) => entry.workspaceId);
 		this.entries = this.entries.filter((entry) => entry.projectId !== projectId);
 		this.projectList.splice(index, 1);
 		this.#mutated({ upserted: [], removed }, true);
@@ -729,10 +731,18 @@ export class Registry {
 		}
 		let maxIndex = 0;
 		for (const entry of file.entries) {
-			if (typeof entry !== "object" || entry === null || typeof entry.daemonId !== "string") {
-				throw new Error(`registry state corrupt at ${path}: entry missing daemonId`);
+			// Files written before the daemon -> session rename persist the id as
+			// `daemonId`. Adopt it when `workspaceId` is absent; the legacy key is
+			// dropped below, so the next write persists `workspaceId` only.
+			if (typeof entry === "object" && entry !== null && entry.workspaceId === undefined) {
+				if ("daemonId" in entry && typeof entry.daemonId === "string") {
+					entry.workspaceId = entry.daemonId;
+				}
 			}
-			const n = Number.parseInt(entry.daemonId.slice(1), 10);
+			if (typeof entry !== "object" || entry === null || typeof entry.workspaceId !== "string") {
+				throw new Error(`registry state corrupt at ${path}: entry missing workspaceId`);
+			}
+			const n = Number.parseInt(entry.workspaceId.slice(1), 10);
 			if (Number.isFinite(n) && n > maxIndex) maxIndex = n;
 		}
 		const entries = [...file.entries];
@@ -741,11 +751,12 @@ export class Registry {
 		// entry's next mutation, never at boot.
 		for (const entry of entries) {
 			// Retired keys (`mode` and `labels` on entries, `branchCreatedByOmpWeb` on
-			// records) are dropped silently, so they do not survive the next write:
-			// every entry is spawned now, branch deletion is guarded by the probed
-			// branch, and workspace labels no longer exist.
+			// records, the pre-rename `daemonId`) are dropped silently, so they do not
+			// survive the next write: every entry is spawned now, branch deletion is
+			// guarded by the probed branch, and workspace labels no longer exist.
 			Reflect.deleteProperty(entry, "mode");
 			Reflect.deleteProperty(entry, "labels");
+			Reflect.deleteProperty(entry, "daemonId");
 			if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
 			if (entry.workspace !== undefined)
 				Reflect.deleteProperty(entry.workspace, "branchCreatedByOmpWeb");
@@ -795,14 +806,14 @@ export class Registry {
 		};
 	}
 
-	#indexOf(daemonId: string): number {
-		const index = this.entries.findIndex((entry) => entry.daemonId === daemonId);
-		if (index === -1) throw new Error(`unknown daemon id: ${daemonId}`);
+	#indexOf(workspaceId: string): number {
+		const index = this.entries.findIndex((entry) => entry.workspaceId === workspaceId);
+		if (index === -1) throw new Error(`unknown workspace id: ${workspaceId}`);
 		return index;
 	}
 
-	#require(daemonId: string): RegistryEntry {
-		return this.entries[this.#indexOf(daemonId)];
+	#require(workspaceId: string): RegistryEntry {
+		return this.entries[this.#indexOf(workspaceId)];
 	}
 
 	/** Write any pending state now and stop the coalesced-write timer. The fleet server calls it on close. */

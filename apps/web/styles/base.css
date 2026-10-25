@@ -29,7 +29,7 @@ body {
 }
 /* Base sizing for the vendored Lucide icons (src/icons.tsx): 1em so icons
  * track the surrounding font-size exactly like the glyphs they replaced.
- * Site classes (e.g. .daemon-worktree-icon) override width/height later. */
+ * Site classes (e.g. .session-worktree-icon) override width/height later. */
 .icon {
 	width: 1em;
 	height: 1em;
@@ -75,7 +75,7 @@ button:not(:disabled):not(.active):hover {
 @media (pointer: coarse), (max-width: 767px) {
 	/* Selectors doubled for specificity: the base rules sit later in the
 	   file and would otherwise win the cascade at equal specificity. */
-	.daemon-icon-btn.daemon-icon-btn,
+	.session-icon-btn.session-icon-btn,
 	.segment-button.segment-button,
 	.image-remove.image-remove,
 	.queue-pop.queue-pop,

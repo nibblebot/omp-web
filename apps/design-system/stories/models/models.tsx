@@ -5,7 +5,7 @@ import { ThinkingLevelPicker } from "../../../web/components/models/ThinkingLeve
 import { setState } from "../../../web/state";
 import { seedRecentModels } from "../../../web/store/models";
 import { modelInfos, sessionModel } from "../../fixtures/overlays";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
 /** Browser rows: every fixture model usable, except row 3 locked to show the disabled state. */
@@ -25,7 +25,7 @@ export default [
 		],
 		tabs: true,
 		seed: {
-			currentSessionId: "sess_09a41c",
+			currentWorkspaceId: "sess_09a41c",
 			model: sessionModel,
 		},
 		variants: [
@@ -70,7 +70,7 @@ export default [
 			{
 				name: "Medium selected",
 				seed: {
-					currentSessionId: "sess_09a41c",
+					currentWorkspaceId: "sess_09a41c",
 					model: sessionModel,
 					thinkingSelectors: thinkingLadder,
 					thinkingLevel: "medium" as ThinkingLevel,
@@ -80,7 +80,7 @@ export default [
 			{
 				name: "High selected",
 				seed: {
-					currentSessionId: "sess_09a41c",
+					currentWorkspaceId: "sess_09a41c",
 					model: sessionModel,
 					thinkingSelectors: thinkingLadder,
 					thinkingLevel: "high" as ThinkingLevel,
@@ -90,7 +90,7 @@ export default [
 			{
 				name: "Auto thinking",
 				seed: {
-					currentSessionId: "sess_09a41c",
+					currentWorkspaceId: "sess_09a41c",
 					model: sessionModel,
 					thinkingSelectors: thinkingLadder,
 					autoThinking: true,
@@ -100,7 +100,7 @@ export default [
 			{
 				name: "No thinking dial",
 				seed: {
-					currentSessionId: "sess_09a41c",
+					currentWorkspaceId: "sess_09a41c",
 					model: sessionModel,
 					thinkingSelectors: [],
 				},

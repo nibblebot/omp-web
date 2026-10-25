@@ -30,10 +30,10 @@ const ContextSegment: Component = () => {
 
 /** Roster-derived status for the attached session while the composer is gated. */
 const rosterHint = (): string => {
-	const daemon = state.daemonRoster.find((x) => x.daemonId === state.currentSessionId);
-	if (!daemon) return "no workspace attached, pick one in the sidebar";
-	if (daemon.status === "ready") return "attaching to session process…";
-	return `session process ${daemon.status}…`;
+	const entry = state.sessionRoster.find((x) => x.workspaceId === state.currentWorkspaceId);
+	if (!entry) return "no workspace attached, pick one in the sidebar";
+	if (entry.status === "ready") return "attaching to session process…";
+	return `session process ${entry.status}…`;
 };
 
 /** Session-send configuration (model, preset, thinking) plus the session resource
@@ -55,7 +55,7 @@ export const SessionConfigBar: Component = () => (
 		<Show when={state.connected && isReady() && isSessionChanging()}>
 			<span
 				class="segment badge ready-pill"
-				title="The daemon is replacing the session; sending resumes once the new session is shown."
+				title="The session process is replacing the session; sending resumes once the new session is shown."
 			>
 				starting new session…
 			</span>

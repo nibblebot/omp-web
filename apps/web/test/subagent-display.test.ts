@@ -66,7 +66,7 @@ describe("pickProgress", () => {
 		expect(view?.advisor).toBe(true);
 	});
 
-	test("ignores a bulk recentTools array the daemon no longer sends", () => {
+	test("ignores a bulk recentTools array the session no longer sends", () => {
 		const view = pickProgress({
 			status: "running",
 			recentTools: [{ tool: "read", args: "a.ts" }],

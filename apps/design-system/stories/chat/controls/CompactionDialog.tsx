@@ -5,7 +5,7 @@ import {
 	compactionSnapshotReady,
 	compactionSnapshotRemoteBlocked,
 } from "../../../fixtures/dialogs";
-import { answerCalls } from "../../../daemon";
+import { answerCalls } from "../../../session";
 import { defineStory } from "../../../registry";
 
 const ready = (): void => answerCalls({ compactionSnapshot: () => compactionSnapshotReady });
@@ -82,7 +82,7 @@ export default defineStory({
 			seed: () => {
 				answerCalls({
 					compactionSnapshot: () => {
-						throw new Error("compaction service unavailable: daemon d_7f3a is busy");
+						throw new Error("compaction service unavailable: session d_7f3a is busy");
 					},
 				});
 			},

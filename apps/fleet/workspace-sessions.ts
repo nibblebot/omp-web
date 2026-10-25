@@ -1,6 +1,6 @@
 /**
  * Fleet-side session listing for the roster dropdown: the last N sessions of
- * a daemon's worktree, newest-first.
+ * a session's worktree, newest-first.
  *
  * The listing goes through the SDK's own SessionManager (a LAZY dynamic
  * import, the same "fleet stays SDK-free at static-import time" rule as
@@ -11,9 +11,9 @@
  * Agent-dir resolution: `agentDir` is an OPTIONAL test seam. Production never
  * passes it, so the SDK derives the dir from the fleet process env
  * (`PI_CODING_AGENT_DIR` or the platform default), which matches production
- * spawns, since the DEFAULT_LOCAL_TEMPLATE spawns daemons inheriting the
+ * spawns, since the DEFAULT_LOCAL_TEMPLATE spawns sessions inheriting the
  * fleet's environment. Dev/test templates that override the agent dir per
- * daemon are out of scope here.
+ * session are out of scope here.
  */
 
 import type { SessionListEntry } from "#lib/wire/protocol";
@@ -51,7 +51,7 @@ export interface StoredSessionInfo {
  * Never throws: a missing store or workspace returns an empty list so the
  * roster dropdown degrades to "no sessions".
  */
-export async function listCloneDaemonSessions(
+export async function listCloneWorkspaceSessions(
 	store: CloneSessionStore | undefined,
 	workspaceId: string,
 	limit = 10,
@@ -119,7 +119,7 @@ function sessionDisplayName(info: {
  * an empty list so the roster dropdown degrades to "no sessions" instead of
  * erroring the whole row.
  */
-export async function listDaemonSessions(
+export async function listWorkspaceSessions(
 	cwd: string,
 	limit = 10,
 	agentDir?: string,

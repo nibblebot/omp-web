@@ -22,7 +22,7 @@ import {
 import { answerBusCommand, primingFrames } from "./fixtures/command-bus";
 
 /**
- * Fake daemon for stories. Components reach the daemon through the browser
+ * Fake session process for stories. Components reach the session process through the browser
  * socket (`{"cmd":...}` messages); `call()` answers arrive as `call_result`
  * frames on it, and plain commands (list_sessions, list_project_branches, ...)
  * settle store waiters from their frames. Stories have no server, so the fake
@@ -31,12 +31,12 @@ import { answerBusCommand, primingFrames } from "./fixtures/command-bus";
  * and the demo dial it like a browser (`/ws`, replaced at boot); a story that
  * installs handlers gets a bare link instead (no priming, so its seeded store
  * stays as seeded) that carries commands out and acks/answers back, and
- * `resetDaemon` closes it. Anything without a handler falls through to the
+ * `resetSession` closes it. Anything without a handler falls through to the
  * App fleet's own commands (fixtures/command-bus.ts), else a nack 404.
  * Control-plane fetches are answered by the design server from
  * fixtures/routes.ts unless a story overrides the route (`answerRoutes`).
  *
- * `applySeeds` calls `resetDaemon()` before every story/variant seed, so
+ * `applySeeds` calls `resetSession()` before every story/variant seed, so
  * handlers, the socket and the connected flag never leak from one story into
  * the next.
  */
@@ -62,7 +62,7 @@ const cleanups: Array<() => void> = [];
 let generation = 0;
 
 /** Forget every handler, close the socket and mark the transport disconnected (the pristine state). */
-export function resetDaemon(): void {
+export function resetSession(): void {
 	generation++;
 	calls = {};
 	commands = {};
@@ -193,7 +193,7 @@ const fleet: Fleet = {
 };
 
 /** Install the route hook and the fake browser socket once, at boot (boot.tsx). */
-export function installDaemon(): void {
+export function installSession(): void {
 	const nativeFetch = window.fetch.bind(window);
 	const answering = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
 		const url = new URL(input instanceof Request ? input.url : String(input), location.href);

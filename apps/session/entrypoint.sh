@@ -15,11 +15,11 @@
 #
 # Initialization runs ONLY for a new workspace: prepare-workspace writes the
 # verified .omp-workspace-init.json last, so a pod replacement on the same
-# PVC skips preparation and goes straight to the daemon. A pod that starts
+# PVC skips preparation and goes straight to the session. A pod that starts
 # on a claim already holding the marker never re-clones and never re-resolves
 # the pin (retry/replacement safety). The fleet's callback enrollment rides
-# OMP_SESSION_CALLBACK_* pod env and is handed to the daemon on stdin
-# (--fleet-stdin), never kept in its environment; daemon stdout/stderr go to
+# OMP_SESSION_CALLBACK_* pod env and is handed to the session on stdin
+# (--fleet-stdin), never kept in its environment; session stdout/stderr go to
 # the pod log.
 set -eu
 
@@ -33,9 +33,9 @@ if [ -z "${OMP_WORKSPACE_ID:-}" ] || [ -z "${OMP_WORKSPACE_GENERATION:-}" ]; the
 fi
 
 # The fleet's callback pair arrives as pod env (a pod has no stdin). Convert it
-# to the daemon's --fleet-stdin payload and remove it from this environment
-# before any other step runs, so neither workspace prep nor the daemon carries
-# it. The helper prints nothing when the pod has no pair (the daemon then gets
+# to the session's --fleet-stdin payload and remove it from this environment
+# before any other step runs, so neither workspace prep nor the session carries
+# it. The helper prints nothing when the pod has no pair (the session then gets
 # no --fleet-stdin flag); it exits 1 on a partial or invalid pair.
 fleet_stdin="$(bun /opt/omp-web/apps/session/fleet-stdin-inpod.ts)"
 fleet_flag=""
@@ -49,7 +49,7 @@ unset OMP_SESSION_CALLBACK_URL OMP_SESSION_CALLBACK_WORKSPACE \
 : "${OMP_PREP_SOURCE_REMOTE:-}"
 
 # The workspace volume is owned by the pod's fsGroup; ensure the runtime
-# user can write the private home before the daemon starts.
+# user can write the private home before the session starts.
 mkdir -p "$OMP_WORKSPACE_ROOT" "$HOME" "$PI_CODING_AGENT_DIR"
 
 MARKER="$OMP_WORKSPACE_ROOT/.omp-workspace-init.json"
@@ -74,19 +74,19 @@ fi
 # (an in-pod path). The provider proves the predecessor pod gone before this
 # pod exists and the claim is ReadWriteOnce, so a pidfile lock beside the
 # resume target is a leftover of an ungracefully terminated pod: its pid is
-# namespace-relative and can match a live process here (even the daemon
+# namespace-relative and can match a live process here (even the session
 # itself), which would refuse the boot as "locked". Clear it, exactly as the
 # bwrap wake does fleet-side. Only a target inside the agent sessions dir.
 case "${OMP_SESSION_RESUME:-}" in
 "$PI_CODING_AGENT_DIR"/sessions/*) rm -f -- "$OMP_SESSION_RESUME.lock" ;;
 esac
 
-# The daemon is bound to its process cwd (the bwrap provider chdirs into the
+# The session is bound to its process cwd (the bwrap provider chdirs into the
 # checkout the same way): run it in the prepared checkout, never the image
 # WORKDIR holding the runtime sources.
 cd "${OMP_WORKSPACE_DIR:-$OMP_WORKSPACE_ROOT/.checkout}"
 
-# The daemon reads its launch env at apps/session/index.ts boot;
+# The session reads its launch env at apps/session/index.ts boot;
 # apps/session/index.ts argv is parsed (session-config) and tolerates trailing
 # flags, so --omp-workspace-token stays argv-visible for host-side identity
 # checks. (Kubernetes identity is pod/API-based, not pid/cmdline-based; the

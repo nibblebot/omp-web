@@ -2,7 +2,7 @@ import type { JSX } from "solid-js";
 import { ExtensionsTab } from "../../../../web/components/settings/integrations/ExtensionsTab";
 import { setState } from "../../../../web/state";
 import { selectExtension } from "../../../../web/store/integrations";
-import { answerCalls } from "../../../daemon";
+import { answerCalls } from "../../../session";
 import { extensionCalls, mcpStateFixture, skillsStateFixture } from "../../../fixtures/extensions";
 import { defineStory } from "../../../registry";
 
@@ -33,7 +33,7 @@ export default [
 			file: "apps/web/components/settings/integrations/ExtensionsTab.tsx",
 			export: "ExtensionsTab",
 		},
-		seed: { currentSessionId: "sess_09a41c" },
+		seed: { currentWorkspaceId: "sess_09a41c" },
 		variants: [
 			{
 				name: "List",

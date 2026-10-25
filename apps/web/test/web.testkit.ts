@@ -81,8 +81,8 @@ export class FakeWebSocket {
 	}
 }
 
-export function attached(sessionId: string): ServerFrame {
-	return { type: "attached", sessionId };
+export function attached(workspaceId: string): ServerFrame {
+	return { type: "attached", workspaceId };
 }
 
 export function callResult(id: string, data: unknown, ok = true, error?: string): ServerFrame {

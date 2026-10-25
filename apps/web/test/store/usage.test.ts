@@ -47,7 +47,7 @@ beforeEach(() => {
 	installTransportStubs();
 	installLocalStorageShim();
 	setState({
-		currentSessionId: "",
+		currentWorkspaceId: "",
 		connected: false,
 		readyAt: undefined,
 		subagents: new Map(),
@@ -62,8 +62,8 @@ beforeEach(() => {
 		items: [],
 		streaming: false,
 		workingIntent: undefined,
-		daemonRoster: [],
-		daemonActivity: {},
+		sessionRoster: [],
+		sessionActivity: {},
 		registeredProjects: [],
 		providerProfiles: [],
 		fleetConfigPath: null,
@@ -73,7 +73,7 @@ beforeEach(() => {
 		deleteWorkspaceTarget: null,
 		removeProjectTarget: null,
 		lightboxImage: null,
-		daemonDetailsId: null,
+		sessionDetailsId: null,
 		modal: null,
 		usageReports: null,
 		usageLoading: false,

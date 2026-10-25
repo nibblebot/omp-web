@@ -1,6 +1,6 @@
 /**
  * Browser-socket client for the session's server tests: dials `GET /ws`
- * (OMP_PROTO 5) the way a direct client does and collects what the daemon
+ * (OMP_PROTO 6) the way a direct client does and collects what the session
  * sends. Frames, their seqs, keepalive pings, acks/nacks and the close are all
  * observable; commands go up in-band and settle on their ack/nack.
  *
@@ -18,7 +18,7 @@ import {
 } from "#lib/wire/browser-socket";
 import { OMP_PROTO, type ClientCommand } from "#lib/wire/protocol";
 
-/** One frame as the daemon serialized it (the variant is asserted by the test, not typed here). */
+/** One frame as the session serialized it (the variant is asserted by the test, not typed here). */
 export type WireFrame = { type: string; [key: string]: unknown };
 
 /** How a command settled: acked (the old 202) or nacked with an HTTP-like status. */
@@ -44,7 +44,7 @@ export interface BrowserSocketClient {
 	command: (command: Record<string, unknown>) => Promise<CommandOutcome>;
 	/** Send raw text as one client message (for malformed-message tests). */
 	sendRaw: (text: string) => void;
-	/** Send one binary message (a protocol violation: the daemon closes 4400). */
+	/** Send one binary message (a protocol violation: the session closes 4400). */
 	sendBinary: (bytes: Uint8Array<ArrayBuffer>) => void;
 	/** Close the socket from the client side (1000). */
 	close: () => void;
@@ -72,7 +72,7 @@ const HeaderWebSocket = WebSocket as unknown as new (
 const OPEN_TIMEOUT_MS = 15_000;
 const COMMAND_TIMEOUT_MS = 15_000;
 
-/** `ws:` URL of a daemon's browser socket for an http origin. */
+/** `ws:` URL of a session's browser socket for an http origin. */
 export function socketUrlFor(baseUrl: string, options: OpenBrowserSocketOptions = {}): string {
 	return browserSocketUrl(baseUrl, {
 		clientId: options.clientId ?? null,
@@ -84,7 +84,7 @@ export function socketUrlFor(baseUrl: string, options: OpenBrowserSocketOptions 
 
 /**
  * Open a browser socket; resolves once the upgrade completes (a dial the
- * daemon refuses is upgraded and closed at once, so it still resolves; read
+ * session refuses is upgraded and closed at once, so it still resolves; read
  * `closed`). Rejects when the dial itself fails.
  */
 export function openBrowserSocket(
@@ -183,10 +183,10 @@ export interface RawBrowserSocket {
 	sendCommand: (command: Record<string, unknown>) => void;
 	/** Frame types read so far (sniffed from each frame's head; the payload is not parsed). */
 	types: ReadonlySet<string>;
-	/** Stop reading: kernel buffers fill and the daemon's own send buffer grows. */
+	/** Stop reading: kernel buffers fill and the session's own send buffer grows. */
 	pause: () => void;
 	/**
-	 * Resume reading and resolve with the close frame the daemon sends after
+	 * Resume reading and resolve with the close frame the session sends after
 	 * whatever it had buffered (`bytes` counts every payload byte read).
 	 */
 	drainToClose: () => Promise<SocketClose & { frames: number; bytes: number }>;

@@ -1,11 +1,11 @@
 /**
- * Shared controlled daemon for the fleet suites: a session-side callback pair
+ * Shared controlled session for the fleet suites: a session-side callback pair
  * (one WebSocket on /callback/ws, OMP_CALLBACK_PROTO 2) dialed OUT to a real
- * DaemonTransportRegistry over loopback HTTP, exactly as
- * apps/session/fleet-callback.ts dials it. The fleet never dials the daemon,
+ * SessionTransportRegistry over loopback HTTP, exactly as
+ * apps/session/fleet-callback.ts dials it. The fleet never dials the session,
  * so this fake only ever dials.
  *
- * Behaviour mirrors the daemon half: the pair is live once pair_ready arrives
+ * Behaviour mirrors the session half: the pair is live once pair_ready arrives
  * as the first message; a dropped socket (network loss) or a transport error
  * redials after a backoff on a fresh connectionId with a fresh seq space (the
  * fleet never resumes a socket; browser-stream replay is application level).
@@ -28,7 +28,7 @@ import {
 	OMP_CALLBACK_PROTO,
 } from "#lib/wire/callback-protocol";
 
-export interface CallbackDaemonOpts {
+export interface CallbackSessionOpts {
 	/** Fleet callback base URL, no /callback suffix (the --fleet-stdin callback.url). */
 	url: string;
 	workspaceId: string;
@@ -47,7 +47,7 @@ export interface CallbackRejection {
 	error: string;
 }
 
-export interface CallbackDaemon {
+export interface CallbackSession {
 	/** connectionId of the current (or last) socket; each dial mints a fresh one. */
 	readonly connectionId: string;
 	/** pair_ready arrived and the socket is still open. */
@@ -58,7 +58,7 @@ export interface CallbackDaemon {
 	dials(): number;
 	/** Every down envelope received, in order (heartbeats and pair_ready excluded). */
 	received(): CallbackEnvelope[];
-	/** Push one daemon->fleet envelope on the live socket and return its wire seq; throws when not connected. */
+	/** Push one session->fleet envelope on the live socket and return its wire seq; throws when not connected. */
 	send(streamId: string, kind: CallbackEnvelope["kind"], payload: unknown): number;
 	/**
 	 * Like send, but the payload is the given JSON text verbatim (it may carry
@@ -71,7 +71,7 @@ export interface CallbackDaemon {
 		payloadJson: string,
 		opts?: { padded?: boolean },
 	): number;
-	/** Drop the socket (network loss); the daemon redials on a fresh connectionId. */
+	/** Drop the socket (network loss); the session redials on a fresh connectionId. */
 	dropLegs(): void;
 	/** Resolves once connected(); rejects after timeoutMs or on a rejection. */
 	waitConnected(timeoutMs?: number): Promise<void>;
@@ -99,7 +99,7 @@ function isPairReady(env: CallbackEnvelope): boolean {
 	return typeof p === "object" && p !== null && "type" in p && p.type === CALLBACK_PAIR_READY_TYPE;
 }
 
-export function startCallbackDaemon(opts: CallbackDaemonOpts): CallbackDaemon {
+export function startCallbackSession(opts: CallbackSessionOpts): CallbackSession {
 	const wsUrl = `${opts.url.replace(/\/+$/, "").replace(/^http/, "ws")}${CALLBACK_WS_PATH}`;
 	const minMs = opts.redialMinMs ?? 25;
 	const maxMs = opts.redialMaxMs ?? 250;
@@ -131,7 +131,7 @@ export function startCallbackDaemon(opts: CallbackDaemonOpts): CallbackDaemon {
 		const { promise, resolve } = Promise.withResolvers<void>();
 		ws.addEventListener("message", (event) => {
 			const { data } = event as unknown as MessageEvent<string | ArrayBuffer>;
-			if (typeof data !== "string") throw new Error("callback daemon got a binary message");
+			if (typeof data !== "string") throw new Error("callback session got a binary message");
 			const env = decodeEnvelope(data);
 			if (isPairReady(env)) paired = true;
 			else if (env.kind !== HEARTBEAT_KIND) seen.push(env);
@@ -171,7 +171,7 @@ export function startCallbackDaemon(opts: CallbackDaemonOpts): CallbackDaemon {
 		received: () => seen.slice(),
 		send(streamId, kind, payload) {
 			const ws = live();
-			if (ws === null) throw new Error("callback daemon is not connected");
+			if (ws === null) throw new Error("callback session is not connected");
 			upSeq += 1;
 			const envelope: CallbackEnvelope = {
 				version: OMP_CALLBACK_PROTO,
@@ -189,7 +189,7 @@ export function startCallbackDaemon(opts: CallbackDaemonOpts): CallbackDaemon {
 		},
 		sendRaw(streamId, kind, payloadJson, rawOpts) {
 			const ws = live();
-			if (ws === null) throw new Error("callback daemon is not connected");
+			if (ws === null) throw new Error("callback session is not connected");
 			upSeq += 1;
 			const { head, tail } = envelopeFraming({
 				version: OMP_CALLBACK_PROTO,
@@ -212,10 +212,10 @@ export function startCallbackDaemon(opts: CallbackDaemonOpts): CallbackDaemon {
 			for (;;) {
 				if (live() !== null) return;
 				if (rejected !== null) {
-					throw new Error(`callback daemon rejected: ${rejected.status} ${rejected.error}`);
+					throw new Error(`callback session rejected: ${rejected.status} ${rejected.error}`);
 				}
 				if (Date.now() >= deadline)
-					throw new Error(`callback daemon not connected within ${timeoutMs}ms`);
+					throw new Error(`callback session not connected within ${timeoutMs}ms`);
 				await Bun.sleep(10);
 			}
 		},

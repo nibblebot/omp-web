@@ -28,7 +28,7 @@ export async function ctlError(res: Response): Promise<string> {
 // authoritative model. A session write asks for its revision only (the
 // "revision" reply option): the full model is pushed once on settings_changed
 // to every attached tab, and the write refetches it only if that push is behind
-// the reply. With no daemon attached the /ctl settings endpoints back the panel
+// the reply. With no session attached the /ctl settings endpoints back the panel
 // instead (config.yml writes apply to new sessions); the session RPC resumes
 // once a session is attached.
 // ---------------------------------------------------------------------------
@@ -70,7 +70,7 @@ let loadId = 0;
 
 export function refreshSettings(): void {
 	const id = ++loadId;
-	const sessionId = state.currentSessionId;
+	const workspaceId = state.currentWorkspaceId;
 	const fleet = fleetSettingsActive();
 	setState("settingsLoading", true);
 	const load = fleet
@@ -81,7 +81,7 @@ export function refreshSettings(): void {
 		: call("getSettings", []).then((m) => m as SettingsModel);
 	load
 		.then((model) => {
-			if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
+			if (workspaceId === state.currentWorkspaceId && fleet === fleetSettingsActive()) {
 				applySettingsModel(model);
 			}
 		})
@@ -111,7 +111,7 @@ function writeSetting(
 	expectedRevision: number | undefined,
 	layer?: string,
 ): Promise<boolean> {
-	const sessionId = state.currentSessionId;
+	const workspaceId = state.currentWorkspaceId;
 	const fleet = fleetSettingsActive();
 	const result = writeQueue
 		.then(() => {
@@ -141,16 +141,16 @@ function writeSetting(
 					).then((ack) => ack as SettingsRevisionAck);
 			return request
 				.then((result) => {
-					if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
+					if (workspaceId === state.currentWorkspaceId && fleet === fleetSettingsActive()) {
 						if (isRevisionAck(result)) {
-							// The daemon emits the pushed model before this reply; if it was lost in transit, refetch.
+							// The session emits the pushed model before this reply; if it was lost in transit, refetch.
 							if ((state.settingsModel?.revision ?? -1) < result.revision) refreshSettings();
 						} else applySettingsModel(result);
 					}
 					return true;
 				})
 				.catch((err) => {
-					if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
+					if (workspaceId === state.currentWorkspaceId && fleet === fleetSettingsActive()) {
 						reportError(err);
 						// A rejected write (a revision conflict, for one) leaves this page's model stale; resync so the next write is current.
 						refreshSettings();

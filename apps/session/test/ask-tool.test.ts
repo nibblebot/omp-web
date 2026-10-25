@@ -1,20 +1,20 @@
 /**
- * Regression guard for the daemon's terminal-global bootstrap: the web host
+ * Regression guard for the session's terminal-global bootstrap: the web host
  * runs the pinned SDK in-process with a browser UI context and no TUI, so
  * nothing else initializes pi-tui's theme singleton. apps/session/sdk-tui-globals.ts
  * (called once at boot by index.ts) does, and the ask tool is the case that
  * regressed: AskTool.execute reads theme.status.success for its "Done selecting"
  * row before it opens any dialog (uninitialized: `undefined is not an object
  * (evaluating 'theme.status')`), and its waiting notification writes OSC bytes
- * to stdout, which this daemon reserves for OMP_SESSION| contract lines.
+ * to stdout, which this session reserves for OMP_SESSION| contract lines.
  *
  * The ask tool's dialog must reach whichever browser is attached. Production
- * browsers ride the callback pair as virtual streams (apps/session/daemon-control.ts
- * `browserStreamCount`, wired into ui-context by index.ts), which the daemon's
+ * browsers ride the callback pair as virtual streams (apps/session/session-control.ts
+ * `browserStreamCount`, wired into ui-context by index.ts), which the session's
  * local `/ws` consumer set never sees, so presence and delivery are covered
  * over a local stream, over the callback pair alone, and with nothing attached
  * (a reject, never a hang). This file runs the real pinned AskTool against the
- * daemon's browser UI context with a frame tap playing the browser: it answers
+ * session's browser UI context with a frame tap playing the browser: it answers
  * the askDialog ui_request exactly like index.ts's ui_response dispatch.
  *
  * initSdkTuiGlobals is idempotent and pi-tui's theme singleton has no reset, so
@@ -34,7 +34,7 @@ import {
 import { setOnFrameTap, streams, type ClientConsumer } from "../client-delivery";
 import type { SessionEntry } from "../session-entry";
 
-// initSdkTuiGlobals sets PI_NOTIFICATIONS=off process-globally (the daemon's
+// initSdkTuiGlobals sets PI_NOTIFICATIONS=off process-globally (the session's
 // own boot call). `bun run test:isolated` runs every file in one process, so
 // hand back the value this file found instead of leaking suppression into the
 // files that run after it.
@@ -119,10 +119,10 @@ async function withBrowserPresence(
 /**
  * Run the real pinned AskTool over the shipped browser UI context with stdout
  * captured: the tool writes OSC/BEL notification bytes there while it waits,
- * and this daemon reserves stdout for OMP_SESSION| contract lines.
+ * and this session reserves stdout for OMP_SESSION| contract lines.
  */
 async function runAskTool(): Promise<{ texts: string[]; stdoutChunks: string[] }> {
-	// The daemon's boot call (index.ts): theme singleton + suppressed
+	// The session's boot call (index.ts): theme singleton + suppressed
 	// terminal notifications. Without it the tool call below throws with
 	// `undefined is not an object (evaluating 'theme.status')`.
 	initSdkTuiGlobals();
@@ -178,7 +178,7 @@ afterAll(() => {
 	else process.env.PI_NOTIFICATIONS = originalNotifications;
 });
 
-describe("ask tool over the daemon's browser UI context", () => {
+describe("ask tool over the session's browser UI context", () => {
 	test("runs the pinned ask tool over the browser UI context", async () => {
 		await withBrowserPresence({ localStream: true, callbackBrowsers: 0 }, async () => {
 			const { texts, stdoutChunks } = await runAskTool();
@@ -189,11 +189,11 @@ describe("ask tool over the daemon's browser UI context", () => {
 			expect(question.question).toBe("Pick one?");
 			expect(question.options.map((option) => option.label)).toEqual(["alpha", "beta"]);
 
-			// The daemon-shaped answer reached the real tool.
+			// The session-shaped answer reached the real tool.
 			expect(texts).toContain("User selected: alpha");
 			expect(entry.pendingUiRequests.size).toBe(0);
 
-			// Terminal notifications must never land on this daemon's stdout
+			// Terminal notifications must never land on this session's stdout
 			// (OMP_SESSION| contract lines only): PI_NOTIFICATIONS=off is set by
 			// initSdkTuiGlobals, exactly like the SDK's own RPC mode does. Cheap
 			// guard: bun may already suppress notifications under test.
@@ -202,7 +202,7 @@ describe("ask tool over the daemon's browser UI context", () => {
 	});
 
 	test("a browser attached through the callback pair answers without a local stream", async () => {
-		// Production: the fleet dials the daemon, so no /ws consumer is
+		// Production: the fleet dials the session, so no /ws consumer is
 		// attached and the browser exists only as a pair-side virtual stream.
 		await withBrowserPresence({ localStream: false, callbackBrowsers: 1 }, async () => {
 			const { texts } = await runAskTool();

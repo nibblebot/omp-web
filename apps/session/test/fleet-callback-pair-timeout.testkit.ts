@@ -3,13 +3,13 @@
  * `bun` started with BUN_CONFIG_HTTP_IDLE_TIMEOUT=1 (Bun reads it at process
  * start), which shrinks the native HTTP client timeout from minutes to ~8 s and
  * makes a default-timeout cut of the session's pair observable in seconds. A
- * real FleetCallback pair dials a real DaemonTransportRegistry over loopback
+ * real FleetCallback pair dials a real SessionTransportRegistry over loopback
  * WebSocket, is held for holdMs with heartbeats flowing both ways, and the
  * outcome is printed as ONE JSON line on stdout.
  *
  * argv: <holdMs> <heartbeatMs>
  */
-import { DaemonTransportRegistry } from "../../fleet/daemon-transport";
+import { SessionTransportRegistry } from "../../fleet/session-transport";
 import { FleetCallback, type FleetCallbackStatus } from "../fleet-callback";
 
 const WORKSPACE = "ws-pair-timeout";
@@ -19,7 +19,7 @@ const TOKEN = "b".repeat(64);
 const holdMs = Number(process.argv[2]);
 const heartbeatMs = Number(process.argv[3]);
 
-const registry = new DaemonTransportRegistry();
+const registry = new SessionTransportRegistry();
 registry.enrollWorkspace(WORKSPACE, GENERATION, TOKEN);
 // The server's own idle timeout is pinned: only the CLIENT side is under test.
 const server = Bun.serve({

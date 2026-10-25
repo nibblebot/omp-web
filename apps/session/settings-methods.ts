@@ -68,7 +68,7 @@ export function createSettingsMethods(deps: SettingsMethodsDeps): SettingsMethod
 			assertRevision(revision);
 			if (layer === "project") {
 				throw new Error(
-					"Project-layer settings are read-only in this daemon: the SDK exposes no per-setting project write surface (only model-role project values persist); edit the project config file directly.",
+					"Project-layer settings are read-only in this session: the SDK exposes no per-setting project write surface (only model-role project values persist); edit the project config file directly.",
 				);
 			} else {
 				if (unset) setting.unset(deps.settings);

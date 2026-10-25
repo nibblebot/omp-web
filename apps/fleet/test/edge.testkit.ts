@@ -1,14 +1,14 @@
 /**
  * Shared harness for the split fleet edge suites (edge-wire, edge-pipe,
  * edge-worktrees): a browser socket (`/ws`) client, ring replay collection, wire
- * fixtures, and polling helpers. The controlled daemon lives in
- * callback-daemon.testkit.ts (a session-side callback pair dialed out to the
+ * fixtures, and polling helpers. The controlled session lives in
+ * callback-session.testkit.ts (a session-side callback pair dialed out to the
  * fleet; the fleet never dials a session). Named *.testkit.ts so bun test
  * discovery never picks it up as a suite.
  */
 import { join } from "node:path";
 import { DELTA_SEQ_START, OMP_PROTO } from "#lib/wire/protocol";
-import type { DaemonEntry, DaemonInfo, ServerFrame } from "#lib/wire/protocol";
+import type { DaemonInfo, RosterEntry, ServerFrame } from "#lib/wire/protocol";
 import {
 	BROWSER_SOCKET_PATH,
 	browserSocketUrl,
@@ -16,7 +16,7 @@ import {
 } from "#lib/wire/browser-socket";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { EdgeEvictionHooks, FleetEdge } from "../edge";
-import type { DaemonTransportRegistry } from "../daemon-transport";
+import type { SessionTransportRegistry } from "../session-transport";
 import { fleetWebSocket, type FleetSocketData } from "../fleet-websocket";
 import type { Registry } from "../registry";
 import type { LifecycleApi } from "../workspace-lifecycle";
@@ -82,7 +82,7 @@ export async function stopSpawnedRows(server: {
 }): Promise<void> {
 	const rows = server.registry.list().filter((entry) => entry.template !== undefined);
 	const results = await Promise.allSettled(
-		rows.map((entry) => server.lifecycle.stop(entry.daemonId)),
+		rows.map((entry) => server.lifecycle.stop(entry.workspaceId)),
 	);
 	const failures = results.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
 	if (failures.length > 0) throw new AggregateError(failures, "stopSpawnedRows: a stop failed");
@@ -342,12 +342,12 @@ export async function openBrowser(port: number): Promise<BrowserSocket> {
 /**
  * Mount a standalone edge on an ephemeral loopback port for direct tests
  * (no browser auth: every `/ws` dial is admitted). Pass the transport the
- * edge was built with to also serve /callback/* so a callback-daemon.testkit
- * daemon can dial the pair.
+ * edge was built with to also serve /callback/* so a callback-session.testkit
+ * session can dial the pair.
  */
 export function serveEdge(
 	edge: FleetEdge,
-	transport?: DaemonTransportRegistry,
+	transport?: SessionTransportRegistry,
 ): { port: number; stop(): void } {
 	const server = Bun.serve<FleetSocketData>({
 		hostname: "127.0.0.1",
@@ -407,7 +407,7 @@ export function eventMessage(frame: ServerFrame & { type: "event" }): string | u
 	return (frame.event as { message?: string }).message;
 }
 
-export function asRoster(frame: ServerFrame): { type: "roster"; daemons: DaemonEntry[] } {
+export function asRoster(frame: ServerFrame): { type: "roster"; entries: RosterEntry[] } {
 	if (frame.type !== "roster") throw new Error("expected roster frame");
 	return frame;
 }
@@ -422,16 +422,16 @@ export function testEviction(
 	lifecycle: Pick<LifecycleApi, "delete">,
 ): EdgeEvictionHooks {
 	return {
-		async evictRow(daemonId, removal) {
-			await lifecycle.delete(daemonId);
+		async evictRow(workspaceId, removal) {
+			await lifecycle.delete(workspaceId);
 			const result = await removal();
-			registry.remove(daemonId);
+			registry.remove(workspaceId);
 			return result;
 		},
 		async evictProject(projectId) {
 			for (const entry of registry.list()) {
 				if (entry.projectId === projectId && entry.status !== "asleep") {
-					await lifecycle.delete(entry.daemonId);
+					await lifecycle.delete(entry.workspaceId);
 				}
 			}
 			registry.removeProject(projectId);
@@ -446,7 +446,7 @@ export function testEviction(
 export function testWaker(
 	registry: Registry,
 	lifecycle: Pick<LifecycleApi, "start">,
-	transport: DaemonTransportRegistry | undefined,
+	transport: SessionTransportRegistry | undefined,
 ): SessionWaker {
 	return new SessionWaker({ registry, lifecycle, transport });
 }

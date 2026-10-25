@@ -1,10 +1,12 @@
 import { createMemo, onMount, Show, type Component } from "solid-js";
 import { createPresence } from "../../../motion/presence";
-import { state, switchToDaemon } from "../../../state";
+import { state, switchToSession } from "../../../state";
 
 /** The roster entry the switch in flight (or failed) is aimed at. */
 function useTarget() {
-	return createMemo(() => state.daemonRoster.find((d) => d.daemonId === state.transcriptTarget));
+	return createMemo(() =>
+		state.sessionRoster.find((d) => d.workspaceId === state.transcriptTarget),
+	);
 }
 
 /**
@@ -75,7 +77,7 @@ export const TranscriptFailed: Component = () => {
 					type="button"
 					class="chat-transcript-failed-retry"
 					onClick={() => {
-						if (state.transcriptTarget !== null) void switchToDaemon(state.transcriptTarget);
+						if (state.transcriptTarget !== null) void switchToSession(state.transcriptTarget);
 					}}
 				>
 					Retry

@@ -3,11 +3,11 @@ import type { McpServerSummary } from "#lib/wire/protocol";
 import { McpServerDetailPanel } from "../../../../web/components/settings/integrations/McpServerDetailPanel";
 import { setState, state } from "../../../../web/state";
 import { inspectMcp } from "../../../../web/store/integrations";
-import { answerCalls } from "../../../daemon";
+import { answerCalls } from "../../../session";
 import { extensionCalls, mcpStateFixture } from "../../../fixtures/extensions";
 import { mcpTestFailed, mcpTestPassed } from "../../../fixtures/overlays";
 import { defineStory } from "../../../registry";
-import type { CallHandlers } from "../../../daemon";
+import type { CallHandlers } from "../../../session";
 
 /** The panel shows the store's row for `name`; Edit echoes the server the panel asked to edit. */
 const Panel: Component<{ name: string }> = (props) => {
@@ -35,7 +35,7 @@ export default defineStory({
 		file: "apps/web/components/settings/integrations/McpServerDetailPanel.tsx",
 		export: "McpServerDetailPanel",
 	},
-	seed: { currentSessionId: "sess_09a41c" },
+	seed: { currentWorkspaceId: "sess_09a41c" },
 	variants: [
 		{
 			name: "Connected, many tools",

@@ -15,7 +15,7 @@
  *  3. resolveMainSessionFile finds depth-1 and depth-2 mains; pickNewest
  *     union (volume ∪ store) returns the newest mtime.
  *  4. An explicit resumeSessionId wake materializes the stored transcript
- *     into the volume and hands the daemon OMP_SESSION_RESUME (bwrap
+ *     into the volume and hands the session OMP_SESSION_RESUME (bwrap
  *     profile), checked via the callback-env handoff the fake provider
  *     records; a never-started clone wake writes NO resume env.
  *  5. A k8s-shaped profile wake hands the pod the session it last reported
@@ -305,10 +305,13 @@ if (op === "ensure-running") {
 	return executable;
 }
 
-function envSeen(workspaceDir: string, daemonId: string): { env?: Record<string, string> } | null {
+function envSeen(
+	workspaceDir: string,
+	workspaceId: string,
+): { env?: Record<string, string> } | null {
 	try {
 		return JSON.parse(
-			readFileSync(join(workspaceDir, ".provider-state", daemonId, "env-seen.json"), "utf8"),
+			readFileSync(join(workspaceDir, ".provider-state", workspaceId, "env-seen.json"), "utf8"),
 		) as { env?: Record<string, string> };
 	} catch {
 		return null;
@@ -362,8 +365,8 @@ async function createClone(server: FleetServer, repoDir: string, name: string): 
 		start: false,
 	});
 	expect(res.status).toBe(201);
-	const body = (await res.json()) as { entry: { daemonId: string } };
-	return body.entry.daemonId;
+	const body = (await res.json()) as { entry: { workspaceId: string } };
+	return body.entry.workspaceId;
 }
 
 describe("clone wake resume", () => {
@@ -372,12 +375,12 @@ describe("clone wake resume", () => {
 		async () => {
 			const { server, paths, workspaceDir, repoDir } = await bootFleet();
 			try {
-				const daemonId = await createClone(server, repoDir, "wake-resume");
+				const workspaceId = await createClone(server, repoDir, "wake-resume");
 				const legacyRoot = join(paths.tmp, "legacy-clones");
-				const volumeRoot = join(legacyRoot, daemonId);
+				const volumeRoot = join(legacyRoot, workspaceId);
 				mkdirSync(legacyRoot, { recursive: true });
-				renameSync(server.registry.get(daemonId)!.cwd!, volumeRoot);
-				server.registry.update(daemonId, { cwd: volumeRoot });
+				renameSync(server.registry.get(workspaceId)!.cwd!, volumeRoot);
+				server.registry.update(workspaceId, { cwd: volumeRoot });
 				// Populate the fleet store for this workspace as if a prior
 				// lifetime streamed a session. The fleet store lives next to
 				// the state file under dirname(statePath)/logs.
@@ -385,7 +388,7 @@ describe("clone wake resume", () => {
 				const store = new FleetLogStore({ rootDir: storeRoot });
 				ingestAcked(
 					store,
-					daemonId,
+					workspaceId,
 					SESSION,
 					MAIN_RELPATH,
 					chunkAt(0, 1, sessionBody(SESSION), true),
@@ -394,19 +397,19 @@ describe("clone wake resume", () => {
 				// Explicit wake with the store-validated session id, the
 				// same call the edge's spawn_resume makes after membership
 				// validation. The /ctl/start route intentionally takes only
-				// daemonId (implicit wake); the explicit id rides the
+				// workspaceId (implicit wake); the explicit id rides the
 				// lifecycle call the edge owns.
-				await server.lifecycle.start(daemonId, { resume: SESSION });
+				await server.lifecycle.start(workspaceId, { resume: SESSION });
 
 				// Volume got the materialized main file.
 				const volumeMain = join(volumeRoot, ".home", "agent", "sessions", MAIN_RELPATH);
 				expect(existsSync(volumeMain)).toBe(true);
 				expect(readFileSync(volumeMain, "utf8")).toBe(sessionBody(SESSION));
 				// The provider observed OMP_SESSION_RESUME in the handoff.
-				const seen = envSeen(legacyRoot, daemonId);
+				const seen = envSeen(legacyRoot, workspaceId);
 				expect(seen).not.toBeNull();
 				expect(seen?.env?.OMP_SESSION_RESUME).toBe(volumeMain);
-				expect(existsSync(join(workspaceDir, daemonId))).toBe(false);
+				expect(existsSync(join(workspaceDir, workspaceId))).toBe(false);
 			} finally {
 				await server.close();
 			}
@@ -419,10 +422,10 @@ describe("clone wake resume", () => {
 		async () => {
 			const { server, cloneRoot, repoDir } = await bootFleet();
 			try {
-				const daemonId = await createClone(server, repoDir, "fresh");
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				const workspaceId = await createClone(server, repoDir, "fresh");
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				const seen = envSeen(cloneRoot, daemonId);
+				const seen = envSeen(cloneRoot, workspaceId);
 				expect(seen?.env?.OMP_SESSION_RESUME).toBeUndefined();
 			} finally {
 				await server.close();
@@ -436,10 +439,10 @@ describe("clone wake resume", () => {
 		async () => {
 			const { server, cloneRoot, repoDir } = await bootFleet("k8s");
 			try {
-				const daemonId = await createClone(server, repoDir, "k8s-fresh");
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				const workspaceId = await createClone(server, repoDir, "k8s-fresh");
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				const seen = envSeen(cloneRoot, daemonId);
+				const seen = envSeen(cloneRoot, workspaceId);
 				expect(seen?.env?.OMP_SESSION_RESUME).toBeUndefined();
 				expect(seen?.env?.OMP_SESSION_RESUME_UNWRITTEN).toBeUndefined();
 			} finally {
@@ -454,14 +457,17 @@ describe("clone wake resume", () => {
 		async () => {
 			const { server, cloneRoot, repoDir } = await bootFleet("k8s");
 			try {
-				const daemonId = await createClone(server, repoDir, "k8s-wake");
+				const workspaceId = await createClone(server, repoDir, "k8s-wake");
 				const podFile = `${K8S_POD_SESSIONS}/--workspace-.checkout--/${SESSION}.jsonl`;
-				server.registry.update(daemonId, { lastSessionFile: podFile, lastSessionPersisted: true });
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				server.registry.update(workspaceId, {
+					lastSessionFile: podFile,
+					lastSessionPersisted: true,
+				});
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				const seen = envSeen(cloneRoot, daemonId);
+				const seen = envSeen(cloneRoot, workspaceId);
 				expect(seen?.env?.OMP_SESSION_RESUME).toBe(podFile);
-				// Persisted: the daemon must fail (78) if the file is gone, not adopt it.
+				// Persisted: the session must fail (78) if the file is gone, not adopt it.
 				expect(seen?.env?.OMP_SESSION_RESUME_UNWRITTEN).toBeUndefined();
 			} finally {
 				await server.close();
@@ -475,12 +481,12 @@ describe("clone wake resume", () => {
 		async () => {
 			const { server, cloneRoot, repoDir } = await bootFleet("k8s");
 			try {
-				const daemonId = await createClone(server, repoDir, "k8s-unwritten");
+				const workspaceId = await createClone(server, repoDir, "k8s-unwritten");
 				const podFile = `${K8S_POD_SESSIONS}/${SESSION}.jsonl`;
-				server.registry.update(daemonId, { lastSessionFile: podFile });
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				server.registry.update(workspaceId, { lastSessionFile: podFile });
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				const seen = envSeen(cloneRoot, daemonId);
+				const seen = envSeen(cloneRoot, workspaceId);
 				expect(seen?.env?.OMP_SESSION_RESUME).toBe(podFile);
 				expect(seen?.env?.OMP_SESSION_RESUME_UNWRITTEN).toBe("1");
 			} finally {
@@ -495,11 +501,11 @@ describe("clone wake resume", () => {
 		async () => {
 			const { server, cloneRoot, repoDir } = await bootFleet("k8s");
 			try {
-				const daemonId = await createClone(server, repoDir, "k8s-foreign");
-				server.registry.update(daemonId, { lastSessionFile: "/etc/passwd.jsonl" });
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				const workspaceId = await createClone(server, repoDir, "k8s-foreign");
+				server.registry.update(workspaceId, { lastSessionFile: "/etc/passwd.jsonl" });
+				const start = await postJson(server.port, "/ctl/start", { workspaceId });
 				expect(start.status).toBe(200);
-				expect(envSeen(cloneRoot, daemonId)?.env?.OMP_SESSION_RESUME).toBeUndefined();
+				expect(envSeen(cloneRoot, workspaceId)?.env?.OMP_SESSION_RESUME).toBeUndefined();
 			} finally {
 				await server.close();
 			}
@@ -512,17 +518,17 @@ describe("clone wake resume", () => {
 		async () => {
 			const { server, paths, cloneRoot, repoDir } = await bootFleet("k8s");
 			try {
-				const daemonId = await createClone(server, repoDir, "k8s-explicit");
+				const workspaceId = await createClone(server, repoDir, "k8s-explicit");
 				const store = new FleetLogStore({ rootDir: join(paths.statePath, "..", "logs") });
 				ingestAcked(
 					store,
-					daemonId,
+					workspaceId,
 					SESSION,
 					MAIN_RELPATH,
 					chunkAt(0, 1, sessionBody(SESSION), true),
 				);
-				await server.lifecycle.start(daemonId, { resume: SESSION });
-				const seen = envSeen(cloneRoot, daemonId);
+				await server.lifecycle.start(workspaceId, { resume: SESSION });
+				const seen = envSeen(cloneRoot, workspaceId);
 				expect(seen?.env?.OMP_SESSION_RESUME).toBe(`${K8S_POD_SESSIONS}/${MAIN_RELPATH}`);
 				expect(seen?.env?.OMP_SESSION_RESUME_UNWRITTEN).toBeUndefined();
 			} finally {
@@ -537,16 +543,16 @@ describe("clone wake resume", () => {
 		async () => {
 			const { server, cloneRoot, repoDir } = await bootFleet("k8s");
 			try {
-				const daemonId = await createClone(server, repoDir, "k8s-unknown");
-				server.registry.update(daemonId, {
+				const workspaceId = await createClone(server, repoDir, "k8s-unknown");
+				server.registry.update(workspaceId, {
 					lastSessionFile: `${K8S_POD_SESSIONS}/${SESSION}.jsonl`,
 				});
 				await expect(
-					server.lifecycle.start(daemonId, { resume: "no-such-session" }),
+					server.lifecycle.start(workspaceId, { resume: "no-such-session" }),
 				).rejects.toMatchObject({ code: "unavailable" });
 				// Refused before the provider ran: no handoff, no enrollment left behind.
-				expect(envSeen(cloneRoot, daemonId)).toBeNull();
-				expect(server.registry.get(daemonId)?.workspace?.enrollment).toBeUndefined();
+				expect(envSeen(cloneRoot, workspaceId)).toBeNull();
+				expect(server.registry.get(workspaceId)?.workspace?.enrollment).toBeUndefined();
 			} finally {
 				await server.close();
 			}

@@ -5,13 +5,13 @@ import { createJobWidgetsState, type JobWidgetsState } from "./slices/job-widget
 
 /**
  * The attached session's running background jobs and their widget glances (the SDK's job widgets), kept from
- * the daemon's `job_widgets` frames. Each frame is the whole current set, so applying one replaces the set
+ * the session's `job_widgets` frames. Each frame is the whole current set, so applying one replaces the set
  * and a job that settled is gone. The set belongs to the attachment: `state.ts` drops it on every attach (the
  * priming re-sends it) and ignores frames stamped for a session the tab no longer views, so nothing of a
  * session left behind shows.
  */
 
-/** Replace the set with the daemon's snapshot (never `reconcile`: it leaves a hole where a shrunk list lost entries). */
+/** Replace the set with the session's snapshot (never `reconcile`: it leaves a hole where a shrunk list lost entries). */
 export function applyJobWidgets(snapshot: JobWidgetsState): void {
 	setState("jobWidgets", { running: snapshot.running, entries: [...snapshot.entries] });
 	observeRunningJobs(snapshot.running);

@@ -95,7 +95,7 @@ const fleetDebug: FleetDebug = {
 	},
 	sessions: [
 		{
-			daemonId: "d-1",
+			workspaceId: "d-1",
 			name: "omp-web",
 			status: "ready",
 			mode: "spawned",
@@ -111,15 +111,15 @@ const fleetDebug: FleetDebug = {
 			ts: FIXTURE_NOW - 60_000,
 			level: "info",
 			source: "server",
-			message: "daemon d-1 ready",
-			daemonId: "d-1",
+			message: "session d-1 ready",
+			workspaceId: "d-1",
 		},
 		{
 			ts: FIXTURE_NOW - 30_000,
 			level: "warn",
 			source: "server",
 			message: "reconnecting",
-			daemonId: "d-1",
+			workspaceId: "d-1",
 		},
 	],
 };
@@ -246,7 +246,6 @@ export const fixtureRoutes: FixtureRoute[] = [
 		method: "POST",
 		path: "/ctl/stored/workspaces/:workspaceId/resume",
 		respond: ({ params, body }) => ({
-			daemonId: "d-resumed",
 			workspaceId: params.workspaceId,
 			sessionId: (body as { sessionId?: string } | undefined)?.sessionId ?? null,
 		}),
@@ -262,9 +261,9 @@ export const fixtureRoutes: FixtureRoute[] = [
 	},
 	{
 		method: "GET",
-		path: "/ctl/sessions/:daemonId/stderr",
+		path: "/ctl/sessions/:workspaceId/stderr",
 		respond: ({ params }) => ({
-			text: `[${params.daemonId}] warn: provider rate limit near, backing off 2s\n[${params.daemonId}] info: resumed\n`,
+			text: `[${params.workspaceId}] warn: provider rate limit near, backing off 2s\n[${params.workspaceId}] info: resumed\n`,
 		}),
 	},
 	{
@@ -303,9 +302,9 @@ export const fixtureRoutes: FixtureRoute[] = [
 	// --- store/projects.ts: fetch a local-source clone's branch into its project ---
 	{
 		method: "POST",
-		path: "/ctl/clones/:daemonId/fetch-into-project",
+		path: "/ctl/clones/:workspaceId/fetch-into-project",
 		respond: ({ params }) => ({
-			daemonId: params.daemonId,
+			workspaceId: params.workspaceId,
 			branch: "local-clone",
 			projectPath: "/home/joshua/Repos/omp-web",
 			outcome: "created",

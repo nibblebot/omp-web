@@ -1,5 +1,5 @@
 import { PluginsTab } from "../../../../web/components/settings/integrations/PluginsTab";
-import { answerCalls } from "../../../daemon";
+import { answerCalls } from "../../../session";
 import { pluginDetail, pluginSummaries } from "../../../fixtures/plugins";
 import { defineStory } from "../../../registry";
 
@@ -11,7 +11,7 @@ export default [
 			file: "apps/web/components/settings/integrations/PluginsTab.tsx",
 			export: "PluginsTab",
 		},
-		seed: { currentSessionId: "sess_09a41c" },
+		seed: { currentWorkspaceId: "sess_09a41c" },
 		variants: [
 			{
 				name: "Plugins",

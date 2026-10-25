@@ -1,7 +1,7 @@
 /**
  * Capped log relay for a clone runtime that outlives the fleet (the host clone
  * kind): copies its stdin, the runtime's combined stdout and stderr, into the
- * workspace's daemon log through the shared SessionLog writer, which rotates
+ * workspace's session log through the shared SessionLog writer, which rotates
  * at the cap mid-run exactly like the bwrap supervisor's log (session-log.ts).
  *
  * It is its own detached process because a pipe whose reader is the fleet

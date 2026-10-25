@@ -113,10 +113,10 @@ export function resolveTemplateName(
 
 /**
  * Default local spawn template. `{fleet}` expands to `--fleet-stdin`: the fleet writes the
- * daemon's callback pair and listener token to its stdin, never to argv or env. `{resume}`
- * expands to `--resume <lastSessionFile>` when the daemon's file was persisted, else
+ * session's callback pair and listener token to its stdin, never to argv or env. `{resume}`
+ * expands to `--resume <lastSessionFile>` when the session's file was persisted, else
  * `--resume <lastSessionFile> --resume-unwritten` (a never-prompted session's path may not exist
- * yet); empty when the daemon has none. The other placeholders are filled from the registry
+ * yet); empty when the session has none. The other placeholders are filled from the registry
  * entry at spawn time.
  */
 export const DEFAULT_LOCAL_TEMPLATE: SpawnTemplate = {
@@ -184,9 +184,9 @@ export async function loadConfig(
 	if (localCommand !== undefined && localCommand !== "") {
 		config.templates = { ...config.templates, local: { command: localCommand } };
 	}
-	// Every template hands its daemon the callback pair and listener token on stdin (`{fleet}`):
+	// Every template hands its session the callback pair and listener token on stdin (`{fleet}`):
 	// a `{token}` placeholder would put the listener token in argv, visible to every local user, and
-	// a template without `{fleet}` would start a daemon that never pairs.
+	// a template without `{fleet}` would start a session that never pairs.
 	for (const [name, template] of Object.entries(config.templates)) {
 		if (template.command.includes("{token}")) {
 			throw new Error(
@@ -195,7 +195,7 @@ export async function loadConfig(
 		}
 		if (!template.command.includes("{fleet}")) {
 			throw new Error(
-				`fleet template "${name}" lacks {fleet}; add {fleet} (expands to --fleet-stdin) so the daemon reads its callback pair from stdin`,
+				`fleet template "${name}" lacks {fleet}; add {fleet} (expands to --fleet-stdin) so the session reads its callback pair from stdin`,
 			);
 		}
 	}

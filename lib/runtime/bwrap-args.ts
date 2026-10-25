@@ -125,7 +125,7 @@ export interface BwrapArgsOutput {
 /**
  * Callback-pair env keys (the fleet's `OMP_SESSION_CALLBACK_*` handoff). They
  * NEVER enter a sandbox environment: the provider converts them into the
- * daemon's `--fleet-stdin` payload (lib/runtime/fleet-stdin.ts), so the daemon
+ * session's `--fleet-stdin` payload (lib/runtime/fleet-stdin.ts), so the session
  * process never carries them in its env. Providers also gate their handoff
  * files on this list.
  */
@@ -155,7 +155,7 @@ export const ENV_ALLOW_KEYS: readonly string[] = [
 	"TZ",
 	"NO_COLOR",
 	"OMP_SESSION",
-	// Wake-resume: fleet-written absolute main-session path; the daemon
+	// Wake-resume: fleet-written absolute main-session path; the session
 	// resumes it at boot (apps/session/config.ts reads OMP_SESSION_RESUME). Rides
 	// the callback-env handoff, never the ambient environment.
 	"OMP_SESSION_RESUME",
@@ -542,7 +542,7 @@ export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 	}
 
 	// The runtime package root is bound AFTER the deny masks so the sandbox
-	// can reach the daemon even when a dev checkout lives under the operator
+	// can reach the session process even when a dev checkout lives under the operator
 	// home (the masks are re-covered by this bind at the same path).
 	mountRoot(runtimeRoot);
 	if (!mountedReal.has(runtimeRoot)) {

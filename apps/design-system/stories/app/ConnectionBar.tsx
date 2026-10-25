@@ -1,7 +1,7 @@
 import { ConnectionBar } from "../../../web/components/app/ConnectionBar";
 import { ModalHost } from "../../../web/ModalHost";
 import { Toasts } from "../../../web/components/app/Toasts";
-import { dialClient } from "../../daemon";
+import { dialClient } from "../../session";
 import { defineStory } from "../../registry";
 
 export default defineStory({
@@ -34,7 +34,7 @@ export default defineStory({
 			name: "Proto mismatch",
 			description:
 				"The edge closes the socket 4426: the client records the mismatch error and stops reconnecting. The strip asks for a reload; Toasts holds the error back while the strip is up.",
-			seed: () => dialClient({ close: "proto_mismatch", message: "server speaks OMP_PROTO 6" }),
+			seed: () => dialClient({ close: "proto_mismatch", message: "server speaks OMP_PROTO 7" }),
 			render: () => (
 				<>
 					<ConnectionBar />
@@ -46,7 +46,7 @@ export default defineStory({
 			name: "Offline",
 			description:
 				"The attached session process is down: the strip says actions are paused until the session restarts.",
-			seed: { connected: true, sessionDownId: "daemon-a", view: "chat", sidebarVisible: false },
+			seed: { connected: true, sessionDownId: "workspace-a", view: "chat", sidebarVisible: false },
 			render: () => <ConnectionBar />,
 		},
 	],

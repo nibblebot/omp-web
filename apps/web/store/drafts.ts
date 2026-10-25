@@ -283,10 +283,10 @@ export function stashUnsent(text = "", images: ImageArg[] = []): void {
  *  is always `agentId: "main"` so worker focus never overwrites it (G04 focus
  *  contract). Null while no session is attached or its id has not landed. */
 export function currentDraftKey(): DraftKey | null {
-	if (state.currentSessionId === "" || state.sessionId === "") return null;
+	if (state.currentWorkspaceId === "" || state.sessionId === "") return null;
 	return {
 		origin: "local",
-		sessionId: `${state.currentSessionId}:${state.sessionId}`,
+		sessionId: `${state.currentWorkspaceId}:${state.sessionId}`,
 		branchId: "main",
 		agentId: "main",
 	};

@@ -8,12 +8,12 @@ import {
  * Callback transport protocol (OMP_CALLBACK_PROTO = 2), separately versioned
  * from OMP_PROTO. This module is the single source of truth for the
  * envelope shape, route paths, and parsing rules shared by the fleet and the
- * daemon callback client.
+ * session callback client.
  *
  * Pure module: no I/O, no ambient state. Shared by the fleet (server routes,
- * edge) and the daemon's callback client.
+ * edge) and the session's callback client.
  *
- * Pair: one daemon-initiated WebSocket, `GET /callback/ws` upgrade, carrying
+ * Pair: one session-initiated WebSocket, `GET /callback/ws` upgrade, carrying
  *       envelopes both ways. Identity, credential and protocol version ride
  *       the upgrade request HEADERS, never the URL. One text message is one
  *       canonical-JSON envelope of at most ENVELOPE_MAX_BYTES; larger payloads
@@ -23,17 +23,17 @@ import {
  *       never resumed. No per-connection byte cap and no renewal: a pair lives
  *       until either side closes it or its silence deadline passes.
  *       perMessageDeflate stays off on both ends.
- * Credit: the daemon's uploads are paced by a pair-level credit window
+ * Credit: the session's uploads are paced by a pair-level credit window
  *       (PairCreditControl, PAIR_CREDIT_WINDOW_BYTES): the fleet grants as it
- *       consumes, a daemon never has more than the window outstanding, and
+ *       consumes, a session never has more than the window outstanding, and
  *       the fleet closes a pair that ignores it. This, not a size guess,
  *       bounds what a forwarder or reverse proxy holds for one pair.
  * Refusal: the fleet authenticates the upgrade request, but a WebSocket
  *       client cannot read a non-101 status, so a refused dial is upgraded
  *       and immediately closed with a refusal close code
- *       ({@link callbackCloseFor}); the daemon maps it back with
+ *       ({@link callbackCloseFor}); the session maps it back with
  *       {@link callbackErrorFromClose}.
- * Bulk: daemon-initiated POST /callback/bulk/<correlationId>, 64 MiB cap,
+ * Bulk: session-initiated POST /callback/bulk/<correlationId>, 64 MiB cap,
  *       on its own HTTP request so a transfer never blocks the pair;
  *       completion is never archive acceptance.
  */
@@ -46,7 +46,7 @@ export const CALLBACK_WS_PATH = "/callback/ws";
 /** Bulk transfer route prefix (HTTP POST). */
 export const CALLBACK_BULK_PATH_PREFIX = "/callback/bulk/";
 /**
- * Upgrade request header naming the daemon's OMP_CALLBACK_PROTO. The fleet
+ * Upgrade request header naming the session's OMP_CALLBACK_PROTO. The fleet
  * refuses an upgrade without it or with another value (`proto_unsupported`).
  */
 export const CALLBACK_PROTO_HEADER = "x-omp-callback-proto";
@@ -56,7 +56,7 @@ export const CALLBACK_PROTO_HEADER = "x-omp-callback-proto";
  *
  * - CALLBACK_TRANSPORT_STREAM_ID: streamId the fleet uses for its own
  *   envelopes (pair_ready, heartbeats).
- * - CALLBACK_CONTROL_STREAM_ID: streamId the daemon uses for its transport
+ * - CALLBACK_CONTROL_STREAM_ID: streamId the session uses for its transport
  *   heartbeats on the up stream.
  * - CALLBACK_PAIR_READY_TYPE: payload.type of the single control envelope
  *   the fleet sends first on an accepted socket, once it registered the
@@ -70,7 +70,7 @@ export const CALLBACK_PAIR_READY_TYPE = "pair_ready";
 export const CALLBACK_BROWSER_STREAM_PREFIX = "browser/";
 
 /**
- * Bulk multi-part upload headers (daemon → fleet, POST /callback/bulk/<id>).
+ * Bulk multi-part upload headers (session → fleet, POST /callback/bulk/<id>).
  * Parts are 0-based, strictly sequential, no gaps/overlaps; the final part
  * carries BULK_FINAL_HEADER: 1. The AGGREGATE across all parts stays capped
  * at BULK_MAX_BYTES (64 MiB); multi-part exists so neither side buffers the
@@ -87,7 +87,7 @@ export const BULK_FINAL_HEADER = "x-omp-bulk-final";
 // ---------------------------------------------------------------------------
 
 /**
- * daemon→fleet, kind "control", on the affected stream: the daemon could not
+ * session→fleet, kind "control", on the affected stream: the session could not
  * honor replay (ring underflow, foreign connection, or an outbound buffer
  * drop) and a full re-prime burst follows on that stream. Forward-transparent
  * to the browser.
@@ -97,8 +97,8 @@ export interface StreamResyncControl {
 }
 
 /**
- * fleet→daemon, kind "control", on a `browser/<connId>` stream: (re)open it.
- * `lastSeq` is the replay floor (absent after a pair replacement). The daemon
+ * fleet→session, kind "control", on a `browser/<connId>` stream: (re)open it.
+ * `lastSeq` is the replay floor (absent after a pair replacement). The session
  * paces the stream's priming and history resyncs by the fleet's drain: it
  * keeps at most STREAM_ACK_WINDOW_BYTES of frames the fleet has not yet
  * acknowledged with StreamAckControl, instead of pacing against its own
@@ -110,8 +110,8 @@ export interface StreamOpenControl {
 }
 
 /**
- * fleet→daemon, kind "control", on a `browser/<connId>` stream: every frame the
- * daemon sent on this stream with wire seq at or below `seq` has left the
+ * fleet→session, kind "control", on a `browser/<connId>` stream: every frame the
+ * session sent on this stream with wire seq at or below `seq` has left the
  * fleet's memory for the browser's socket (the fleet's per-browser queue
  * drained past it). Cumulative; stale or repeated values are harmless.
  */
@@ -121,7 +121,7 @@ export interface StreamAckControl {
 }
 
 /**
- * Unacknowledged bytes a daemon may hold in flight per browser stream
+ * Unacknowledged bytes a session may hold in flight per browser stream
  * (sent, or queued for sending, and not yet covered by a stream_ack). A
  * sender also keeps one maximal envelope (ENVELOPE_MAX_BYTES) of headroom
  * inside it, so the fleet's per-browser queue (CLIENT_BACKPRESSURE_BYTES) always
@@ -132,20 +132,20 @@ export const STREAM_ACK_WINDOW_BYTES = 3 * 1024 * 1024;
 export const STREAM_ACK_STEP_BYTES = 512 * 1024;
 
 /**
- * fleet→daemon, kind "control", streamId "transport": pair upload credit. The
+ * fleet→session, kind "control", streamId "transport": pair upload credit. The
  * fleet has consumed (parsed, routed, handed to its sinks) `consumed` bytes of
- * everything the daemon sent on this socket since it opened. Cumulative, in
+ * everything the session sent on this socket since it opened. Cumulative, in
  * the UTF-8 length of each text message, so a stale or repeated value is
  * harmless and a lost grant is repaired by the next.
  *
- * A daemon hands the socket a message only while the bytes it has sent beyond
+ * A session hands the socket a message only while the bytes it has sent beyond
  * the last grant, plus that message, fit PAIR_CREDIT_WINDOW_BYTES. The fleet
  * counts every message it receives (dropped and binary ones too) and closes a
  * pair that is more than PAIR_CREDIT_WINDOW_BYTES ahead of the credit it has
  * granted: `invalid_request`, retryable (4400, like the other per-pair protocol
  * violations; the redial starts a fresh window). The fleet's receive side is
  * thereby bounded exactly: never more than the window sits between the
- * daemon's `send()` and the fleet's consumer, in the socket buffers, a
+ * session's `send()` and the fleet's consumer, in the socket buffers, a
  * forwarder (`omp-web ui`) and a reverse proxy alike, because a grant is only
  * issued by the real consumer at the end of the path.
  */
@@ -167,9 +167,9 @@ export function isPairCreditControl(payload: unknown): payload is PairCreditCont
 }
 
 /**
- * Bytes a daemon may have on the wire towards the fleet beyond the credit it
+ * Bytes a session may have on the wire towards the fleet beyond the credit it
  * has seen: sent, in the socket buffers, in a forwarder, or received and not
- * yet consumed. 8 MiB, the daemon's own per-connection queue cap
+ * yet consumed. 8 MiB, the session's own per-connection queue cap
  * (CONNECTION_MAX_BYTES), so a full queue never waits on more than it can hold.
  * It must admit a maximal message beside the ungranted tail the grant cadence
  * leaves behind: window - PAIR_CREDIT_STEP_BYTES must be at least
@@ -181,7 +181,7 @@ export const PAIR_CREDIT_WINDOW_BYTES = 8 * 1024 * 1024;
 export const PAIR_CREDIT_STEP_BYTES = 512 * 1024;
 
 /**
- * fleet→daemon, kind "command", streamId "control": stream a server-side file
+ * fleet→session, kind "command", streamId "control": stream a server-side file
  * to the fleet as multi-part raw bytes under the given bulk correlation. Same
  * realpath jail + authorization rules as the session's canonicalRoots; failures are reported
  * via DownloadBulkFailedControl and the fleet fails the whole correlation.
@@ -193,14 +193,14 @@ export interface DownloadBulkCommand {
 	sessionId?: string;
 }
 
-/** daemon→fleet, kind "control", streamId "control": a correlated bulk upload failed mid-transfer. */
+/** session→fleet, kind "control", streamId "control": a correlated bulk upload failed mid-transfer. */
 export interface DownloadBulkFailedControl {
 	type: "download_bulk_failed";
 	correlationId: string;
 	error: { code: CallbackErrorCode; message: string };
 }
 
-/** fleet→daemon, kind "control", streamId "transport": graceful shutdown; the daemon acks, then exits 0. */
+/** fleet→session, kind "control", streamId "transport": graceful shutdown; the session acks, then exits 0. */
 export interface ShutdownControl {
 	type: "shutdown";
 	reason?: string;
@@ -230,9 +230,9 @@ export const CALLBACK_WS_MAX_PAYLOAD_BYTES = 2 * ENVELOPE_MAX_BYTES;
  * message silently past `backpressureLimit`.
  */
 export const CALLBACK_WS_SEND_HIGH_WATER_BYTES = 1024 * 1024;
-/** Wait for the daemon's pair-ready confirmation (60 s). */
+/** Wait for the session's pair-ready confirmation (60 s). */
 export const PAIR_READY_TIMEOUT_MS = 60_000;
-/** Wait for a parked/suspended daemon to wake (60 s). */
+/** Wait for a parked/suspended session to wake (60 s). */
 export const WAKE_TIMEOUT_MS = 60_000;
 /** Reconnect backoff ramp, jittered (1 s → 30 s). */
 export const RECONNECT_BACKOFF_MIN_MS = 1_000;

@@ -3,11 +3,11 @@ import { formatRoute, parseRoute, type Route } from "../../store/route";
 
 describe("route parse/format", () => {
 	const roundTrips: Array<[Route, string]> = [
-		[{ kind: "daemon", daemonId: "d7" }, "#/d/d7"],
-		[{ kind: "session", daemonId: "d7", sessionId: "0192-abc" }, "#/d/d7/s/0192-abc"],
+		[{ kind: "workspace", workspaceId: "d7" }, "#/w/d7"],
+		[{ kind: "session", workspaceId: "d7", sessionId: "0192-abc" }, "#/w/d7/s/0192-abc"],
 		[
-			{ kind: "session", daemonId: "d 1/x", sessionId: "a/b?c#d%" },
-			"#/d/d%201%2Fx/s/a%2Fb%3Fc%23d%25",
+			{ kind: "session", workspaceId: "d 1/x", sessionId: "a/b?c#d%" },
+			"#/w/d%201%2Fx/s/a%2Fb%3Fc%23d%25",
 		],
 		[{ kind: "none" }, ""],
 	];
@@ -19,7 +19,7 @@ describe("route parse/format", () => {
 	}
 
 	test("the leading slash is optional on parse", () => {
-		expect(parseRoute("#d/d7/s/x")).toEqual({ kind: "session", daemonId: "d7", sessionId: "x" });
+		expect(parseRoute("#w/d7/s/x")).toEqual({ kind: "session", workspaceId: "d7", sessionId: "x" });
 	});
 
 	test("unknown or malformed shapes parse to none, never throw", () => {
@@ -27,18 +27,20 @@ describe("route parse/format", () => {
 			"",
 			"#",
 			"#/",
-			"#/d",
-			"#/d/",
-			"#/d//s/x",
-			"#/d/d7/s",
-			"#/d/d7/s/",
-			"#/d/d7/s/x/extra/a/b",
-			"#/d/d7/s/x/Review",
-			"#/d/d7/s/x/review/%E0%A4%A",
-			"#/d/d7/s/x/",
-			"#/d/d7/agent/a1",
-			"#/d/%E0%A4%A/s/x",
-			"#/d/d7/s/%E0%A4%A",
+			"#/d/d7",
+			"#/d/d7/s/x",
+			"#/w",
+			"#/w/",
+			"#/w//s/x",
+			"#/w/d7/s",
+			"#/w/d7/s/",
+			"#/w/d7/s/x/extra/a/b",
+			"#/w/d7/s/x/Review",
+			"#/w/d7/s/x/review/%E0%A4%A",
+			"#/w/d7/s/x/",
+			"#/w/d7/agent/a1",
+			"#/w/%E0%A4%A/s/x",
+			"#/w/d7/s/%E0%A4%A",
 			"#/nope/d7",
 			"#/stories/coverage",
 		]) {
@@ -64,27 +66,27 @@ describe("route parse/format", () => {
 		expect(parseRoute("#/stored")).toEqual({ kind: "none" });
 	});
 
-	test("a daemon route with extra segments and no session marker parses to none", () => {
-		expect(parseRoute("#/d/s/x")).toEqual({ kind: "none" });
-		expect(parseRoute("#/d/stored/x")).toEqual({ kind: "none" });
+	test("a session route with extra segments and no session marker parses to none", () => {
+		expect(parseRoute("#/w/s/x")).toEqual({ kind: "none" });
+		expect(parseRoute("#/w/stored/x")).toEqual({ kind: "none" });
 	});
 
 	test("dock segments round trip with a kind and an optional id", () => {
 		const review: Route = {
 			kind: "session",
-			daemonId: "d7",
+			workspaceId: "d7",
 			sessionId: "x",
 			dock: { kind: "review" },
 		};
 		const agent: Route = {
 			kind: "session",
-			daemonId: "d7",
+			workspaceId: "d7",
 			sessionId: "x",
 			dock: { kind: "agent", id: "a 1/2" },
 		};
-		expect(formatRoute(review)).toBe("#/d/d7/s/x/review");
-		expect(parseRoute("#/d/d7/s/x/review")).toEqual(review);
-		expect(formatRoute(agent)).toBe("#/d/d7/s/x/agent/a%201%2F2");
-		expect(parseRoute("#/d/d7/s/x/agent/a%201%2F2")).toEqual(agent);
+		expect(formatRoute(review)).toBe("#/w/d7/s/x/review");
+		expect(parseRoute("#/w/d7/s/x/review")).toEqual(review);
+		expect(formatRoute(agent)).toBe("#/w/d7/s/x/agent/a%201%2F2");
+		expect(parseRoute("#/w/d7/s/x/agent/a%201%2F2")).toEqual(agent);
 	});
 });

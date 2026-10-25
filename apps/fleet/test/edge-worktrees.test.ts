@@ -9,10 +9,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { DaemonEntry, RegisteredProject, ServerFrame } from "#lib/wire/protocol";
+import type { RosterEntry, RegisteredProject, ServerFrame } from "#lib/wire/protocol";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry } from "../daemon-transport";
+import { SessionTransportRegistry } from "../session-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
 import { ProjectSync } from "../project-sync";
@@ -33,21 +33,21 @@ afterAll(cleanupTempDirs);
 
 /** A roster broadcast: the priming `roster`, or a mutation's `roster_delta`. */
 const isRosterFrame = (f: ServerFrame): boolean => f.type === "roster" || f.type === "roster_delta";
-/** Rows a post-mutation broadcast carries: a delta's upserted rows, or a full roster's daemons. */
-function rowsOf(f: ServerFrame): DaemonEntry[] {
+/** Rows a post-mutation broadcast carries: a delta's upserted rows, or a full roster's entries. */
+function rowsOf(f: ServerFrame): RosterEntry[] {
 	if (f.type === "roster_delta") return f.upserted;
-	return f.type === "roster" ? f.daemons : [];
+	return f.type === "roster" ? f.entries : [];
 }
-/** True when a roster broadcast drops the daemon: a delta removing it, or a full roster without it. */
-function dropsRow(f: ServerFrame, daemonId: string): boolean {
-	if (f.type === "roster_delta") return f.removed.includes(daemonId);
-	return f.type === "roster" && !f.daemons.some((d) => d.daemonId === daemonId);
+/** True when a roster broadcast drops the session: a delta removing it, or a full roster without it. */
+function dropsRow(f: ServerFrame, workspaceId: string): boolean {
+	if (f.type === "roster_delta") return f.removed.includes(workspaceId);
+	return f.type === "roster" && !f.entries.some((d) => d.workspaceId === workspaceId);
 }
 
 describe("edge worktree commands", () => {
 	let tmp: string;
 	let registry: Registry;
-	let transport: DaemonTransportRegistry;
+	let transport: SessionTransportRegistry;
 	let config: FleetConfig;
 	let lifecycle: WorkspaceLifecycle;
 	let edge: FleetEdge;
@@ -80,7 +80,7 @@ describe("edge worktree commands", () => {
 			workspaceDir: join(tmp, "workspaces"),
 			bind: "127.0.0.1",
 		};
-		transport = new DaemonTransportRegistry();
+		transport = new SessionTransportRegistry();
 		({ lifecycle } = makeHostLifecycle({
 			registry,
 			config,
@@ -164,10 +164,10 @@ describe("edge worktree commands", () => {
 		await browser.send({
 			type: "worktree_delete_info",
 			id: "attached-info",
-			daemonId: entry.daemonId,
+			workspaceId: entry.workspaceId,
 		});
 		const info = await browser.waitForFrame(
-			(f) => f.type === "worktree_delete_info" && f.daemonId === entry.daemonId,
+			(f) => f.type === "worktree_delete_info" && f.workspaceId === entry.workspaceId,
 			"attached worktree_delete_info",
 		);
 		if (info.type !== "worktree_delete_info") throw new Error("expected worktree_delete_info");
@@ -179,13 +179,13 @@ describe("edge worktree commands", () => {
 		await browser.send({
 			type: "delete_worktree",
 			id: "attached-delete",
-			daemonId: entry.daemonId,
+			workspaceId: entry.workspaceId,
 		});
 		await browser.waitForEvent(
-			(ev) => ev.id > floorId && dropsRow(ev.frame, entry.daemonId),
+			(ev) => ev.id > floorId && dropsRow(ev.frame, entry.workspaceId),
 			"roster without the attached worktree",
 		);
-		expect(registry.get(entry.daemonId)).toBeUndefined();
+		expect(registry.get(entry.workspaceId)).toBeUndefined();
 		await waitFor(
 			() => (existsSync(outside) ? null : "removed"),
 			5000,
@@ -196,9 +196,9 @@ describe("edge worktree commands", () => {
 	test("worktree_delete_info answers with the unicast guard-evidence frame", async () => {
 		const target = managedWorktreePath(config.workspaceDir, project.path, "My Branch");
 		const entry = registry.list().find((e) => e.cwd === target)!;
-		await browser.send({ type: "worktree_delete_info", id: "wt3", daemonId: entry.daemonId });
+		await browser.send({ type: "worktree_delete_info", id: "wt3", workspaceId: entry.workspaceId });
 		const frame = await browser.waitForFrame(
-			(f) => f.type === "worktree_delete_info" && f.daemonId === entry.daemonId,
+			(f) => f.type === "worktree_delete_info" && f.workspaceId === entry.workspaceId,
 			"worktree_delete_info",
 		);
 		if (frame.type !== "worktree_delete_info") throw new Error("expected worktree_delete_info");
@@ -208,11 +208,11 @@ describe("edge worktree commands", () => {
 		expect(frame.merged).toBe(true);
 		expect(frame.unpushed).toBe(false);
 		expect(JSON.stringify(frame)).not.toContain("token");
-		// Unknown daemon: an error frame, never a fabricated evidence payload.
-		await browser.send({ type: "worktree_delete_info", id: "wt4", daemonId: "d999" });
+		// Unknown session: an error frame, never a fabricated evidence payload.
+		await browser.send({ type: "worktree_delete_info", id: "wt4", workspaceId: "d999" });
 		const err = await browser.waitForFrame(
-			(f) => f.type === "error" && f.error.includes("unknown daemon"),
-			"unknown-daemon error",
+			(f) => f.type === "error" && f.error.includes("unknown session"),
+			"unknown-session error",
 		);
 		if (err.type !== "error") throw new Error("expected error");
 		expect(err.error).toContain("d999");
@@ -228,12 +228,12 @@ describe("edge worktree commands", () => {
 		const originalRoot = config.workspaceDir;
 		config.workspaceDir = join(tmp, "replacement-workspaces");
 		try {
-			await browser.send({ type: "delete_worktree", id: "wt5", daemonId: entry.daemonId });
+			await browser.send({ type: "delete_worktree", id: "wt5", workspaceId: entry.workspaceId });
 			await browser.waitForEvent(
-				(ev) => ev.id > floorId && dropsRow(ev.frame, entry.daemonId),
+				(ev) => ev.id > floorId && dropsRow(ev.frame, entry.workspaceId),
 				"roster without the deleted worktree",
 			);
-			expect(registry.get(entry.daemonId)).toBeUndefined();
+			expect(registry.get(entry.workspaceId)).toBeUndefined();
 			// registry.remove broadcasts before Git removal finishes.
 			await waitFor(() => (existsSync(target) ? null : "removed"), 5000, "worktree removed");
 			expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(
@@ -259,15 +259,19 @@ describe("edge worktree commands", () => {
 			},
 		});
 		try {
-			await browser.send({ type: "delete_worktree", id: "reject-main", daemonId: main.daemonId });
+			await browser.send({
+				type: "delete_worktree",
+				id: "reject-main",
+				workspaceId: main.workspaceId,
+			});
 			await browser.waitForFrame(
 				(f) => f.type === "error" && f.error.includes("not a linked Git worktree"),
 				"main checkout refusal",
 			);
-			expect(registry.get(main.daemonId)).toBeDefined();
+			expect(registry.get(main.workspaceId)).toBeDefined();
 			expect(existsSync(repoDir)).toBe(true);
 		} finally {
-			registry.remove(main.daemonId);
+			registry.remove(main.workspaceId);
 		}
 	});
 
@@ -285,14 +289,14 @@ describe("edge worktree commands", () => {
 		);
 		const entry = rowsOf(created).find((d) => d.cwd === target)!;
 		writeFileSync(join(entry.cwd, "scratch.txt"), "x\n");
-		await browser.send({ type: "delete_worktree", id: "wt7", daemonId: entry.daemonId });
+		await browser.send({ type: "delete_worktree", id: "wt7", workspaceId: entry.workspaceId });
 		const err = await browser.waitForFrame(
 			(f) => f.type === "error" && f.error.includes("uncommitted changes"),
 			"dirty refusal",
 		);
 		if (err.type !== "error") throw new Error("expected error");
 		expect(err.error).toContain("uncommitted changes");
-		expect(registry.get(entry.daemonId)).toBeDefined();
+		expect(registry.get(entry.workspaceId)).toBeDefined();
 		expect(existsSync(target)).toBe(true);
 	});
 
@@ -313,19 +317,23 @@ describe("edge worktree commands", () => {
 		// `git worktree remove` refuse, the removal that runs after the stop.
 		expect((await gitIn(repoDir, ["worktree", "lock", target])).exitCode).toBe(0);
 		try {
-			await browser.send({ type: "delete_worktree", id: "wt-locked-2", daemonId: entry.daemonId });
+			await browser.send({
+				type: "delete_worktree",
+				id: "wt-locked-2",
+				workspaceId: entry.workspaceId,
+			});
 			await browser.waitForFrame(
 				(f) => f.type === "error" && f.error.includes("locked"),
 				"git refusal of the locked worktree",
 			);
-			expect(registry.get(entry.daemonId)).toMatchObject({ status: "asleep" });
+			expect(registry.get(entry.workspaceId)).toMatchObject({ status: "asleep" });
 			expect(existsSync(target)).toBe(true);
 		} finally {
 			await gitIn(repoDir, ["worktree", "unlock", target]);
 		}
 	});
 
-	test("create_worktree with start:true spawns a daemon on the worktree (project-tagged)", async () => {
+	test("create_worktree with start:true spawns a session on the worktree (project-tagged)", async () => {
 		const target = managedWorktreePath(config.workspaceDir, project.path, "Started");
 		// The spawn's own create broadcast precedes the projectId tag; wait
 		// for a NEWER roster that carries the tag.
@@ -349,7 +357,7 @@ describe("edge worktree commands", () => {
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
 		// Stop the idling child (`sleep 30`) so the suite ends clean.
-		await lifecycle.stop(entry.daemonId);
+		await lifecycle.stop(entry.workspaceId);
 	});
 
 	test("create_worktree refuses an existing branch checked out elsewhere", async () => {

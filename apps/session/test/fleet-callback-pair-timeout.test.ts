@@ -9,7 +9,7 @@
  * reproduce it. Bun reads BUN_CONFIG_HTTP_IDLE_TIMEOUT (seconds) at process
  * start, so a child `bun` started with it set to 1 s cuts a default-timeout
  * request at ~8 s. The child (fleet-callback-pair-timeout.testkit.ts) holds a
- * real FleetCallback pair against a real DaemonTransportRegistry for longer
+ * real FleetCallback pair against a real SessionTransportRegistry for longer
  * than that and reports whether the pair was ever replaced.
  */
 import { afterAll, describe, expect, test } from "bun:test";

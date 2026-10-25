@@ -1,7 +1,7 @@
 import { ProviderLoginDialog } from "../../../web/components/models/ProviderLoginDialog";
 import { setState } from "../../../web/state";
 import { loginBrowserUrl, loginCodePrompt, loginProviders } from "../../fixtures/dialogs";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
 const answerProviders = (): void => answerCalls({ getLoginProviders: () => loginProviders });
@@ -41,7 +41,7 @@ export default defineStory({
 			seed: () => {
 				answerCalls({
 					getLoginProviders: () => {
-						throw new Error("auth store is locked by another daemon");
+						throw new Error("auth store is locked by another session process");
 					},
 				});
 			},

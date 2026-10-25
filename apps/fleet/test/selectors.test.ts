@@ -1,27 +1,27 @@
 /**
  * Tests for fleet selector resolution (fleet/selectors.ts).
  *
- * Pure and hermetic: entries are constructed inline against the DaemonEntry
+ * Pure and hermetic: entries are constructed inline against the RosterEntry
  * shape from lib/wire/protocol.ts (plus the RegistryEntry-only `registeredAt`
  * field) instead of importing ./registry, so this suite runs standalone
  * before the registry slice lands.
  */
 
 import { describe, expect, test } from "bun:test";
-import type { DaemonEntry } from "#lib/wire/protocol";
+import type { RosterEntry } from "#lib/wire/protocol";
 import { matchSelector } from "../selectors";
 
-type RegistryEntryShape = DaemonEntry & { registeredAt: number };
+type RegistryEntryShape = RosterEntry & { registeredAt: number };
 
 let nextId = 0;
 
 /** Build a RegistryEntry-shaped literal with sane defaults. */
 function entry(overrides: Partial<RegistryEntryShape> = {}): RegistryEntryShape {
-	const daemonId = overrides.daemonId ?? `d${++nextId}`;
+	const workspaceId = overrides.workspaceId ?? `d${++nextId}`;
 	return {
-		daemonId,
-		name: daemonId,
-		cwd: `/home/user/${daemonId}`,
+		workspaceId,
+		name: workspaceId,
+		cwd: `/home/user/${workspaceId}`,
 		project: "root",
 		status: "asleep",
 		registeredAt: 1,
@@ -41,17 +41,17 @@ describe("matchSelector", () => {
 		});
 	});
 
-	describe("bare daemonId", () => {
+	describe("bare workspaceId", () => {
 		test("matches exactly", () => {
 			const a = entry({ name: "web" });
 			const b = entry({ name: "api" });
-			expect(matchSelector([a, b], a.daemonId)).toEqual([a]);
+			expect(matchSelector([a, b], a.workspaceId)).toEqual([a]);
 			expect(matchSelector([a, b], "d999")).toEqual([]);
 		});
 
-		test("exact daemonId wins over glob interpretation of the name", () => {
-			const byId = entry({ daemonId: "d3", name: "web" });
-			const byName = entry({ daemonId: "d1", name: "d3" });
+		test("exact workspaceId wins over glob interpretation of the name", () => {
+			const byId = entry({ workspaceId: "d3", name: "web" });
+			const byName = entry({ workspaceId: "d1", name: "d3" });
 			expect(matchSelector([byId, byName], "d3")).toEqual([byId]);
 		});
 	});

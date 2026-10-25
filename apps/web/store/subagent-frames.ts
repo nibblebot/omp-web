@@ -12,7 +12,7 @@ import type { SubagentMetrics, SubagentStatus } from "./subagents";
 
 type Json = Record<string, unknown>;
 
-/** Usage read from the daemon roster when no live progress record exists. */
+/** Usage read from the session roster when no live progress record exists. */
 export interface UsageFallback {
 	tokens?: number;
 	cost?: number;

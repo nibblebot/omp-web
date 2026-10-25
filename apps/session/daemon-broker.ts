@@ -58,7 +58,7 @@ export function createDaemonRosterGate(
 export interface DaemonBrokerDeps {
 	/** Bound project root: the daemon-poll target and roster scoping. */
 	config: SessionConfig;
-	/** Read the boot readiness timestamp (R8); set by the daemon boot once provider/model/auth resolution completes. */
+	/** Read the boot readiness timestamp (R8); set by the session boot once provider/model/auth resolution completes. */
 	getReadyAt: () => number | null;
 	/** Additive host-owned capability and attachment binding snapshot. */
 	getWebState?: (session: AgentSession) => Pick<WebSessionState, "capabilities" | "sessionScope">;

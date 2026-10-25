@@ -2,12 +2,12 @@
  * Edge priming pace (kata 0tas): a browser attach whose history is far past the
  * edge's byte cap is paced by the browser's drain (stream_open ack pacing,
  * stream_ack) instead of being cut mid-priming when the browser drains slower
- * than the daemon writes, while a browser that stopped reading is still dropped
- * and the daemon's burst stays parked upstream (memory in the fleet stays
+ * than the session writes, while a browser that stopped reading is still dropped
+ * and the session's burst stays parked upstream (memory in the fleet stays
  * bounded).
  *
- * The daemon is the callback-daemon testkit driving a session-shaped sender that
- * honors the credit window exactly as apps/session/daemon-control.ts does. The
+ * The session is the callback-session testkit driving a session-shaped sender that
+ * honors the credit window exactly as apps/session/session-control.ts does. The
  * browser is a raw socket so the test controls when it reads (pause/resume), so
  * nothing depends on a sleep length. Real sockets are the point: the stall and
  * drain behavior under test is the platform's, not something fake timers reach.
@@ -22,12 +22,12 @@ import {
 } from "#lib/wire/callback-protocol";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry } from "../daemon-transport";
+import { SessionTransportRegistry } from "../session-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
 import { ProjectSync } from "../project-sync";
 import { Registry } from "../registry";
-import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
+import { type CallbackSession, startCallbackSession } from "./callback-session.testkit";
 import {
 	cleanupTempDirs,
 	serveEdge,
@@ -54,10 +54,10 @@ const FRAME_BYTES = 512 * 1024;
 
 interface Rig {
 	registry: Registry;
-	transport: DaemonTransportRegistry;
+	transport: SessionTransportRegistry;
 	edge: FleetEdge;
 	port: number;
-	daemons: CallbackDaemon[];
+	sessions: CallbackSession[];
 	close(): Promise<void>;
 }
 
@@ -66,7 +66,7 @@ async function startRig(opts: { stallMs?: number; keepaliveMs?: number } = {}): 
 	const statePath = join(dir, "state.json");
 	const registry = new Registry(statePath);
 	await registry.load();
-	const transport = new DaemonTransportRegistry();
+	const transport = new SessionTransportRegistry();
 	let callbackBase = "";
 	const { lifecycle } = makeHostLifecycle({
 		registry,
@@ -91,15 +91,15 @@ async function startRig(opts: { stallMs?: number; keepaliveMs?: number } = {}): 
 	);
 	const served = serveEdge(edge, transport);
 	callbackBase = `http://127.0.0.1:${served.port}`;
-	const daemons: CallbackDaemon[] = [];
+	const sessions: CallbackSession[] = [];
 	return {
 		registry,
 		transport,
 		edge,
 		port: served.port,
-		daemons,
+		sessions,
 		async close() {
-			for (const daemon of daemons) await daemon.stop();
+			for (const session of sessions) await session.stop();
 			edge.close();
 			lifecycle.close();
 			transport.close();
@@ -111,7 +111,7 @@ async function startRig(opts: { stallMs?: number; keepaliveMs?: number } = {}): 
 async function connectRemote(
 	rig: Rig,
 	name: string,
-): Promise<{ daemonId: string; daemon: CallbackDaemon }> {
+): Promise<{ workspaceId: string; session: CallbackSession }> {
 	const entry = rig.registry.create({
 		name,
 		cwd: `/${name}`,
@@ -119,16 +119,16 @@ async function connectRemote(
 		status: "connecting",
 	});
 	const token = randomBytes(32).toString("hex");
-	await rig.transport.enrollWorkspace(entry.daemonId, 1, token);
-	const daemon = startCallbackDaemon({
+	await rig.transport.enrollWorkspace(entry.workspaceId, 1, token);
+	const session = startCallbackSession({
 		url: `http://127.0.0.1:${rig.port}`,
-		workspaceId: entry.daemonId,
+		workspaceId: entry.workspaceId,
 		generation: 1,
 		token,
 	});
-	rig.daemons.push(daemon);
-	await daemon.waitConnected(5000);
-	return { daemonId: entry.daemonId, daemon };
+	rig.sessions.push(session);
+	await session.waitConnected(5000);
+	return { workspaceId: entry.workspaceId, session };
 }
 
 function controlType(env: CallbackEnvelope): string | undefined {
@@ -150,17 +150,17 @@ function ackedSeq(env: CallbackEnvelope): number {
 	return seq;
 }
 
-function controls(daemon: CallbackDaemon, streamId: string, type: string): CallbackEnvelope[] {
-	return daemon
+function controls(session: CallbackSession, streamId: string, type: string): CallbackEnvelope[] {
+	return session
 		.received()
 		.filter((e) => e.kind === "control" && e.streamId === streamId && controlType(e) === type);
 }
 
 /** The stream_open the edge sent for the single browser stream: its id. */
-async function openedStream(daemon: CallbackDaemon): Promise<{ streamId: string }> {
+async function openedStream(session: CallbackSession): Promise<{ streamId: string }> {
 	const open = await waitFor(
 		() =>
-			daemon.received().find((e) => e.kind === "control" && controlType(e) === "stream_open") ??
+			session.received().find((e) => e.kind === "control" && controlType(e) === "stream_open") ??
 			null,
 		5000,
 		"stream_open",
@@ -171,11 +171,11 @@ async function openedStream(daemon: CallbackDaemon): Promise<{ streamId: string 
 /**
  * A session-shaped priming burst: `FRAMES` history frames and a closing `ready`.
  * With `honorCredit` it keeps at most the credit window of unacknowledged frames
- * in flight, exactly as the session's paced prime does; without it (a daemon that
+ * in flight, exactly as the session's paced prime does; without it (a session that
  * ignores the credit window) it writes everything at once. `parked` resolves the first time the
  * sender had to wait for credit.
  */
-function startPrimer(daemon: CallbackDaemon, streamId: string, honorCredit: boolean) {
+function startPrimer(session: CallbackSession, streamId: string, honorCredit: boolean) {
 	const parked = Promise.withResolvers<void>();
 	const inflight: Array<{ seq: number; bytes: number }> = [];
 	let acked = 0;
@@ -184,11 +184,11 @@ function startPrimer(daemon: CallbackDaemon, streamId: string, honorCredit: bool
 	let stopped = false;
 	const pad = "x".repeat(FRAME_BYTES);
 	const refresh = (): void => {
-		for (const env of controls(daemon, streamId, "stream_ack")) {
+		for (const env of controls(session, streamId, "stream_ack")) {
 			acked = Math.max(acked, ackedSeq(env));
 		}
 		while (inflight.length > 0 && inflight[0]!.seq <= acked) inflight.shift();
-		if (controls(daemon, streamId, "stream_close").length > 0) stopped = true;
+		if (controls(session, streamId, "stream_close").length > 0) stopped = true;
 	};
 	const run = (async () => {
 		try {
@@ -209,11 +209,11 @@ function startPrimer(daemon: CallbackDaemon, streamId: string, honorCredit: bool
 				}
 				if (stopped) return;
 			}
-			const seq = daemon.send(streamId, "frame", { type: "history", chunk: i, pad });
+			const seq = session.send(streamId, "frame", { type: "history", chunk: i, pad });
 			inflight.push({ seq, bytes: FRAME_BYTES });
 			sentBytes += FRAME_BYTES;
 		}
-		if (!stopped) daemon.send(streamId, "frame", { type: "ready" });
+		if (!stopped) session.send(streamId, "frame", { type: "ready" });
 	}
 	return {
 		parked: parked.promise,
@@ -231,23 +231,23 @@ function startPrimer(daemon: CallbackDaemon, streamId: string, honorCredit: bool
 }
 
 describe("edge priming pace", () => {
-	test("a browser that is not reading holds the daemon's burst at the credit window instead of being cut; it then receives every frame", async () => {
+	test("a browser that is not reading holds the session's burst at the credit window instead of being cut; it then receives every frame", async () => {
 		const rig = await startRig();
 		const browser = new RawBrowserSocket(rig.port);
 		try {
 			await browser.open();
-			const { daemonId, daemon } = await connectRemote(rig, "paced");
+			const { workspaceId, session } = await connectRemote(rig, "paced");
 			browser.pause();
-			browser.send({ type: "attach", sessionId: daemonId });
-			const { streamId } = await openedStream(daemon);
-			const primer = startPrimer(daemon, streamId, true);
+			browser.send({ type: "attach", workspaceId });
+			const { streamId } = await openedStream(session);
+			const primer = startPrimer(session, streamId, true);
 			// The burst runs into the credit window while the browser reads nothing:
 			// upstream backpressure, not an edge-side queue growing toward the cap.
 			await primer.parked;
 			expect(primer.finished).toBe(false);
 			expect(primer.sentBytes).toBeLessThan(FRAMES * FRAME_BYTES);
 			expect(browser.isClosed).toBe(false);
-			expect(controls(daemon, streamId, "stream_close")).toHaveLength(0);
+			expect(controls(session, streamId, "stream_close")).toHaveLength(0);
 			// The browser starts reading: the whole priming arrives, the socket is never closed.
 			browser.resume();
 			await primer.run;
@@ -256,9 +256,9 @@ describe("edge priming pace", () => {
 			expect(browser.closeInfo).toBeNull();
 			expect(browser.bytes).toBeGreaterThanOrEqual(FRAMES * FRAME_BYTES);
 			expect(browser.frames.filter((f) => f.type === "history")).toHaveLength(FRAMES);
-			expect(controls(daemon, streamId, "stream_close")).toHaveLength(0);
+			expect(controls(session, streamId, "stream_close")).toHaveLength(0);
 			// The edge acknowledged as the queue drained, cumulatively and in order.
-			const seqs = controls(daemon, streamId, "stream_ack").map(ackedSeq);
+			const seqs = controls(session, streamId, "stream_ack").map(ackedSeq);
 			expect(seqs.length).toBeGreaterThan(FRAMES / 4);
 			expect([...seqs].sort((a, b) => a - b)).toEqual(seqs);
 		} finally {
@@ -267,20 +267,20 @@ describe("edge priming pace", () => {
 		}
 	}, 60_000);
 
-	test("a browser that stops reading is dropped after the stall limit, while the daemon's burst stays parked", async () => {
+	test("a browser that stops reading is dropped after the stall limit, while the session's burst stays parked", async () => {
 		const rig = await startRig({ stallMs: 150, keepaliveMs: 25 });
 		const browser = new RawBrowserSocket(rig.port);
 		try {
 			await browser.open();
-			const { daemonId, daemon } = await connectRemote(rig, "stuck");
+			const { workspaceId, session } = await connectRemote(rig, "stuck");
 			browser.pause();
-			browser.send({ type: "attach", sessionId: daemonId });
-			const { streamId } = await openedStream(daemon);
-			const primer = startPrimer(daemon, streamId, true);
+			browser.send({ type: "attach", workspaceId });
+			const { streamId } = await openedStream(session);
+			const primer = startPrimer(session, streamId, true);
 			await primer.parked;
-			// The edge ends the stream and tells the daemon; nothing keeps it open.
+			// The edge ends the stream and tells the session; nothing keeps it open.
 			await waitFor(
-				() => (controls(daemon, streamId, "stream_close").length > 0 ? true : null),
+				() => (controls(session, streamId, "stream_close").length > 0 ? true : null),
 				10_000,
 				"stream_close after the stall limit",
 			);
@@ -298,19 +298,19 @@ describe("edge priming pace", () => {
 		}
 	}, 60_000);
 
-	test("a daemon that ignores the credit window still hits the cap drop", async () => {
+	test("a session that ignores the credit window still hits the cap drop", async () => {
 		const rig = await startRig();
 		const browser = new RawBrowserSocket(rig.port);
 		try {
 			await browser.open();
-			const { daemonId, daemon } = await connectRemote(rig, "ignoring");
+			const { workspaceId, session } = await connectRemote(rig, "ignoring");
 			browser.pause();
-			browser.send({ type: "attach", sessionId: daemonId });
-			const { streamId } = await openedStream(daemon);
-			const primer = startPrimer(daemon, streamId, false);
+			browser.send({ type: "attach", workspaceId });
+			const { streamId } = await openedStream(session);
+			const primer = startPrimer(session, streamId, false);
 			await primer.run;
 			await waitFor(
-				() => (controls(daemon, streamId, "stream_close").length > 0 ? true : null),
+				() => (controls(session, streamId, "stream_close").length > 0 ? true : null),
 				10_000,
 				"stream_close after the cap drop",
 			);

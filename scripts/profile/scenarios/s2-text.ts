@@ -35,7 +35,7 @@ export const s2Text: Scenario = {
 		const repo = await env.newRepo("s2");
 		const handle = await env.stack.addSession({ label: "s2", slot: 1 }, repo);
 		const client = await ProfileClient.connect(env.adapter, env.stack.baseUrl);
-		await client.attach(handle.daemonId, handle.label);
+		await client.attach(handle.workspaceId, handle.label);
 		return {
 			async rep(): Promise<RepOutcome> {
 				const notes: string[] = [];
@@ -93,7 +93,7 @@ export const s2Text: Scenario = {
 				await Bun.sleep(400);
 				Object.assign(
 					metrics,
-					reconnectMetrics(await client.reconnect(handle.daemonId, handle.label)),
+					reconnectMetrics(await client.reconnect(handle.workspaceId, handle.label)),
 				);
 				await interrupted;
 				client.resetCounters();

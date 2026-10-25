@@ -1,8 +1,8 @@
 /**
- * Targeted resume and resume-list pins: daemon-side adapter.
+ * Targeted resume and resume-list pins: session-side adapter.
  *
  * OWNERSHIP: this module is the ONLY place that composes the SDK resume /
- * pins surface for browser-driven resume. Daemon method wiring in methods.ts
+ * pins surface for browser-driven resume. Session method wiring in methods.ts
  * calls {@link createResumeHandlers}; the fleet edge, protocol, state and web
  * prompt command table are NEVER touched here.
  *
@@ -18,7 +18,7 @@
  *   across restart) + `sortPinnedFirst` (stable pinned-first; unknown ids
  *   no-op).
  * - session/session-paths.ts: `computeDefaultSessionDir` (canonical
- *   cwd-derived dir, same derivation the daemon's list_sessions uses).
+ *   cwd-derived dir, same derivation the session's list_sessions uses).
  *
  * SECURITY: ID/prefix/allowed-host-paths only. Path-shaped args are
  * realpath-jailed to the session dir and must resolve to a KNOWN session
@@ -94,7 +94,7 @@ export type ResolveResumeTarget =
 /** Cap on ambiguous-choice lists (ID prefixes can match many sessions). */
 export const AMBIGUOUS_CAP = 20;
 
-/** Default/max rows for resumeList. Mirrors the daemon list_sessions ceiling. */
+/** Default/max rows for resumeList. Mirrors the session list_sessions ceiling. */
 export const RESUME_LIST_DEFAULT_LIMIT = 100;
 export const RESUME_LIST_MAX_LIMIT = 200;
 
@@ -172,8 +172,8 @@ async function tryRealpath(candidate: string): Promise<string | null> {
  * Resolve a resume argument to a unique session, an explicit ambiguous
  * choice list, a scoped miss, or a refusal. Bare/empty input is a miss (the
  * web store opens the picker instead). Wrong profile/workspace/cwd scoping
- * beyond this daemon is refused roster-side by the web store (wake/switch of
- * the owning daemon via the existing spawn_resume+attach path) — this
+ * beyond this session is refused roster-side by the web store (wake/switch of
+ * the owning session via the existing spawn_resume+attach path) — this
  * adapter never spawns a parallel attachment.
  */
 export async function resolveResumeTarget(
@@ -366,7 +366,7 @@ export async function toggleResumePin(
 export interface ResumeContext extends ResumeQuery {
 	/** Agent sessions root (every project dir); cross-project listing. */
 	sessionsRoot?: string;
-	/** Fleet mirror for acknowledged deletion; absent on unpaired daemons. */
+	/** Fleet mirror for acknowledged deletion; absent on unpaired sessions. */
 	lifecycleMirror?: LifecycleMirror;
 }
 
@@ -388,7 +388,7 @@ export type ResumeHandlers = Record<
 >;
 
 /**
- * Build the daemon `call` handlers methods.ts publishes. Each handler takes the raw
+ * Build the session `call` handlers methods.ts publishes. Each handler takes the raw
  * `args` array and returns JSON-safe values; throws carry typed
  * invalid_request/unavailable messages to the caller (duplicate call ids
  * replay the recorded answer via the existing dedup window — no new

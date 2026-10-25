@@ -1,6 +1,6 @@
 import type { WireJobWidgetEntry } from "#lib/wire/protocol";
 
-/** The attached session's running background jobs, as the daemon's `job_widgets` frames report them. */
+/** The attached session's running background jobs, as the session's `job_widgets` frames report them. */
 export interface JobWidgetsState {
 	/** How many background jobs run (a subagent's task job counts with the agents). */
 	running: number;
@@ -8,7 +8,7 @@ export interface JobWidgetsState {
 	entries: WireJobWidgetEntry[];
 }
 
-/** Before the daemon reports anything, no job runs. */
+/** Before the session reports anything, no job runs. */
 export function createJobWidgetsState(): JobWidgetsState {
 	return { running: 0, entries: [] };
 }

@@ -1,6 +1,6 @@
 import { JobsSheet } from "../../../web/components/jobs/JobsSheet";
 import { openJobsSheet, selectJob } from "../../../web/store/jobs";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { JOB_IDS, jobCalls } from "../../fixtures/jobs";
 import { defineStory } from "../../registry";
 
@@ -51,7 +51,7 @@ export default defineStory({
 		{
 			name: "Cancel refused",
 			description:
-				"The daemon answers the cancel with an error: Cancel then Confirm on the dev server row shows it under the header, and the tree stays as it was.",
+				"The session process answers the cancel with an error: Cancel then Confirm on the dev server row shows it under the header, and the tree stays as it was.",
 			seed: () =>
 				answerCalls(jobCalls({ cancelError: "Cancel failed: the job runner is shutting down" })),
 			render: (ctx) => <JobsSheet onClose={ctx.close} />,
@@ -63,7 +63,7 @@ export default defineStory({
 		},
 		{
 			name: "Unavailable",
-			description: "The session runs no async job manager, so the daemon answers null.",
+			description: "The session runs no async job manager, so the session process answers null.",
 			seed: () => answerCalls(jobCalls({ unavailable: true })),
 			render: (ctx) => <JobsSheet onClose={ctx.close} />,
 		},
@@ -75,7 +75,9 @@ export default defineStory({
 		{
 			name: "Load error",
 			seed: () =>
-				answerCalls(jobCalls({ loadError: "daemon restarted while reading the job tree" })),
+				answerCalls(
+					jobCalls({ loadError: "session process restarted while reading the job tree" }),
+				),
 			render: (ctx) => <JobsSheet onClose={ctx.close} />,
 		},
 	],

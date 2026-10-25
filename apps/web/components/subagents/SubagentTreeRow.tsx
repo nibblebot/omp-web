@@ -35,7 +35,7 @@ export const SubagentTreeRow: Component<{
 		}
 		return formatLiveLine(live) || undefined;
 	};
-	/** The widget glance of the agent's task job (its job id is the agent id), only while the agent runs and the daemon reports one. */
+	/** The widget glance of the agent's task job (its job id is the agent id), only while the agent runs and the session reports one. */
 	const glance = () => (props.node.status === "running" ? jobWidgetView(props.node.id) : undefined);
 	return (
 		<div class="subagent-tree-row" data-selected={props.selected === true ? "" : undefined}>

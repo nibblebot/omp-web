@@ -63,7 +63,7 @@ export function KebabMenu(props: {
 		<div class="sidebar-menu-wrap" ref={wrap}>
 			<button
 				type="button"
-				class="daemon-icon-btn sidebar-menu-btn"
+				class="session-icon-btn sidebar-menu-btn"
 				title={props.title ?? props.label}
 				aria-label={props.label}
 				aria-haspopup="menu"

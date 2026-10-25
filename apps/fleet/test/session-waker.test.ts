@@ -1,9 +1,9 @@
 /**
  * Session wake tests (FLC-23): the one rule set in SessionWaker, exercised
  * through its consumer-visible surface. Sessions are controlled callback
- * daemons dialing OUT to a real DaemonTransportRegistry served over loopback
+ * sessions dialing OUT to a real SessionTransportRegistry served over loopback
  * HTTP; the fleet never dials. The respawn stand-in starts the same dialing
- * daemon the real child would, without waiting for it to connect.
+ * session the real child would, without waiting for it to connect.
  */
 
 import { randomBytes } from "node:crypto";
@@ -11,32 +11,32 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { Server } from "bun";
 import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
-import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
+import { SessionTransportRegistry, type CallbackSocketData } from "../session-transport";
 import { promptEntry, type FanoutDeps } from "../fanout";
 import { Registry, type RegistryEntry } from "../registry";
 import { SessionWaker } from "../session-waker";
 import type { StartOptions } from "../workspace-lifecycle";
-import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
+import { startCallbackSession, type CallbackSession } from "./callback-session.testkit";
 import { sleep, waitFor } from "./edge.testkit";
 
 type CreateInit = Parameters<Registry["create"]>[0];
 
 interface Fixture {
 	registry: Registry;
-	transport: DaemonTransportRegistry;
+	transport: SessionTransportRegistry;
 	waker: SessionWaker;
-	/** daemonIds of local sessions the start stand-in was asked to wake, in order (refused attempts included). */
+	/** workspaceIds of local sessions the start stand-in was asked to wake, in order (refused attempts included). */
 	respawned: string[];
 	/** Every lifecycle.start call, clone or local session, with its options. */
-	starts: Array<{ daemonId: string; opts?: StartOptions }>;
+	starts: Array<{ workspaceId: string; opts?: StartOptions }>;
 	/** Respawn attempts still to refuse with "launch refused". */
 	refusals: { remaining: number };
 	/** Register a spawned entry in the registry. */
 	create(overrides?: Partial<CreateInit>): RegistryEntry;
-	/** Enroll the entry and start its daemon dialing out (does not wait for the pair). */
-	dial(entry: RegistryEntry): CallbackDaemon;
-	/** Resolves with the daemon once one exists for the entry (dialed by the test or by respawn). */
-	daemonFor(daemonId: string): Promise<CallbackDaemon>;
+	/** Enroll the entry and start its session dialing out (does not wait for the pair). */
+	dial(entry: RegistryEntry): CallbackSession;
+	/** Resolves with the session once one exists for the entry (dialed by the test or by respawn). */
+	sessionFor(workspaceId: string): Promise<CallbackSession>;
 }
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -48,7 +48,7 @@ afterEach(async () => {
 function startFixture(opts: { redialGraceMs?: number; pairTimeoutMs?: number } = {}): Fixture {
 	const dir = tempDir("omp-web-session-waker-");
 	const registry = new Registry(`${dir}/state.json`);
-	const transport = new DaemonTransportRegistry();
+	const transport = new SessionTransportRegistry();
 	const server: Server<CallbackSocketData> = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -61,39 +61,39 @@ function startFixture(opts: { redialGraceMs?: number; pairTimeoutMs?: number } =
 	});
 	const url = `http://127.0.0.1:${server.port}`;
 	const respawned: string[] = [];
-	const starts: Array<{ daemonId: string; opts?: StartOptions }> = [];
+	const starts: Array<{ workspaceId: string; opts?: StartOptions }> = [];
 	const refusals = { remaining: 0 };
-	const daemons = new Map<string, PromiseWithResolvers<CallbackDaemon>>();
-	const slot = (daemonId: string): PromiseWithResolvers<CallbackDaemon> => {
-		let existing = daemons.get(daemonId);
+	const sessions = new Map<string, PromiseWithResolvers<CallbackSession>>();
+	const slot = (workspaceId: string): PromiseWithResolvers<CallbackSession> => {
+		let existing = sessions.get(workspaceId);
 		if (!existing) {
-			existing = Promise.withResolvers<CallbackDaemon>();
-			daemons.set(daemonId, existing);
+			existing = Promise.withResolvers<CallbackSession>();
+			sessions.set(workspaceId, existing);
 		}
 		return existing;
 	};
-	const dial = (entry: RegistryEntry): CallbackDaemon => {
+	const dial = (entry: RegistryEntry): CallbackSession => {
 		const token = randomBytes(32).toString("hex");
-		transport.enrollWorkspace(entry.daemonId, 1, token);
-		const daemon = startCallbackDaemon({
+		transport.enrollWorkspace(entry.workspaceId, 1, token);
+		const session = startCallbackSession({
 			url,
-			workspaceId: entry.daemonId,
+			workspaceId: entry.workspaceId,
 			generation: 1,
 			token,
 		});
-		cleanups.push(() => daemon.stop());
-		slot(entry.daemonId).resolve(daemon);
-		return daemon;
+		cleanups.push(() => session.stop());
+		slot(entry.workspaceId).resolve(session);
+		return session;
 	};
 	// The real lifecycle launches a child that dials out (or boots a provider
 	// clone); the stand-in records the call and, for a local session, starts the
-	// same dialing daemon without waiting for it to connect.
+	// same dialing session without waiting for it to connect.
 	const lifecycle = {
-		start: async (daemonId: string, startOpts?: StartOptions) => {
-			starts.push({ daemonId, opts: startOpts });
-			const entry = registry.get(daemonId)!;
+		start: async (workspaceId: string, startOpts?: StartOptions) => {
+			starts.push({ workspaceId, opts: startOpts });
+			const entry = registry.get(workspaceId)!;
 			if (entry.workspace?.kind === "clone") return;
-			respawned.push(daemonId);
+			respawned.push(workspaceId);
 			if (refusals.remaining > 0) {
 				refusals.remaining -= 1;
 				throw new Error("launch refused");
@@ -129,18 +129,18 @@ function startFixture(opts: { redialGraceMs?: number; pairTimeoutMs?: number } =
 			});
 		},
 		dial,
-		daemonFor: (daemonId) => slot(daemonId).promise,
+		sessionFor: (workspaceId) => slot(workspaceId).promise,
 	};
 }
 
-/** The nth `prompt` call the daemon has received on its down leg. */
+/** The nth `prompt` call the session has received on its down leg. */
 async function nthPrompt(
-	daemon: CallbackDaemon,
+	session: CallbackSession,
 	n: number,
 ): Promise<{ id: string; args: unknown[] }> {
 	return await waitFor(
 		() => {
-			const commands = daemon.received().filter((env) => env.kind === "command");
+			const commands = session.received().filter((env) => env.kind === "command");
 			const payload = commands[n]?.payload;
 			if (
 				typeof payload === "object" &&
@@ -163,22 +163,22 @@ async function nthPrompt(
 	);
 }
 
-function frame(daemon: CallbackDaemon, payload: unknown): void {
-	daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", payload);
+function frame(session: CallbackSession, payload: unknown): void {
+	session.send(CALLBACK_CONTROL_STREAM_ID, "frame", payload);
 }
 
 /** One accepted turn: call_result ok, one assistant message, agent_end. */
-function answerTurn(daemon: CallbackDaemon, callId: string, text: string): void {
-	frame(daemon, { type: "call_result", id: callId, ok: true });
-	frame(daemon, {
+function answerTurn(session: CallbackSession, callId: string, text: string): void {
+	frame(session, { type: "call_result", id: callId, ok: true });
+	frame(session, {
 		type: "event",
-		sessionId: "s1",
+		workspaceId: "s1",
 		event: {
 			type: "message_end",
 			message: { role: "assistant", content: [{ type: "text", text }] },
 		},
 	});
-	frame(daemon, { type: "event", sessionId: "s1", event: { type: "agent_end", messages: [] } });
+	frame(session, { type: "event", workspaceId: "s1", event: { type: "agent_end", messages: [] } });
 }
 
 describe("SessionWaker.wake: stuck non-clone sessions", () => {
@@ -187,8 +187,8 @@ describe("SessionWaker.wake: stuck non-clone sessions", () => {
 			const fx = startFixture({ redialGraceMs: 50 });
 			const entry = fx.create({ status });
 			await fx.waker.wake(entry);
-			expect(fx.respawned).toEqual([entry.daemonId]);
-			expect(fx.transport.pairStatus(entry.daemonId).paired).toBe(true);
+			expect(fx.respawned).toEqual([entry.workspaceId]);
+			expect(fx.transport.pairStatus(entry.workspaceId).paired).toBe(true);
 		});
 	}
 
@@ -208,12 +208,12 @@ describe("prompt to a stuck session", () => {
 		const entry = fx.create({ status: "reconnecting" });
 		const deps: FanoutDeps = { registry: fx.registry, transport: fx.transport, waker: fx.waker };
 		const result = promptEntry(deps, entry, "wake up", 5000);
-		const daemon = await fx.daemonFor(entry.daemonId);
-		expect(fx.respawned).toEqual([entry.daemonId]);
-		const call = await nthPrompt(daemon, 0);
+		const session = await fx.sessionFor(entry.workspaceId);
+		expect(fx.respawned).toEqual([entry.workspaceId]);
+		const call = await nthPrompt(session, 0);
 		expect(call.args).toEqual(["wake up"]);
-		answerTurn(daemon, call.id, "Awake");
-		expect(await result).toEqual({ daemonId: entry.daemonId, ok: true, text: "Awake" });
+		answerTurn(session, call.id, "Awake");
+		expect(await result).toEqual({ workspaceId: entry.workspaceId, ok: true, text: "Awake" });
 	});
 });
 
@@ -224,9 +224,9 @@ describe("concurrent and failed wakes", () => {
 		const first = fx.waker.wake(entry);
 		const second = fx.waker.wake(entry);
 		await second;
-		expect(fx.transport.pairStatus(entry.daemonId).paired).toBe(true);
+		expect(fx.transport.pairStatus(entry.workspaceId).paired).toBe(true);
 		await first;
-		expect(fx.respawned).toEqual([entry.daemonId]);
+		expect(fx.respawned).toEqual([entry.workspaceId]);
 	});
 
 	test("a failed wake rejects every concurrent caller, and the next wake retries from scratch", async () => {
@@ -238,8 +238,8 @@ describe("concurrent and failed wakes", () => {
 		await expect(first).rejects.toThrow("launch refused");
 		await expect(second).rejects.toThrow("launch refused");
 		await fx.waker.wake(entry);
-		expect(fx.transport.pairStatus(entry.daemonId).paired).toBe(true);
-		expect(fx.respawned).toEqual([entry.daemonId, entry.daemonId]);
+		expect(fx.transport.pairStatus(entry.workspaceId).paired).toBe(true);
+		expect(fx.respawned).toEqual([entry.workspaceId, entry.workspaceId]);
 	});
 });
 
@@ -254,11 +254,11 @@ describe("clone wake", () => {
 		await fx.waker.wake(entry, { resumeFile: "   " });
 		await fx.waker.wake(entry, { resumeFile: "sess-42" });
 		expect(fx.starts).toEqual([
-			{ daemonId: entry.daemonId, opts: undefined },
-			{ daemonId: entry.daemonId, opts: undefined },
-			{ daemonId: entry.daemonId, opts: { resume: "sess-42" } },
+			{ workspaceId: entry.workspaceId, opts: undefined },
+			{ workspaceId: entry.workspaceId, opts: undefined },
+			{ workspaceId: entry.workspaceId, opts: { resume: "sess-42" } },
 		]);
-		expect(fx.transport.pairStatus(entry.daemonId).paired).toBe(false);
+		expect(fx.transport.pairStatus(entry.workspaceId).paired).toBe(false);
 	});
 
 	test("a local session wake passes its resume pick through the same start verb", async () => {
@@ -266,7 +266,7 @@ describe("clone wake", () => {
 		const entry = fx.create({ status: "asleep" });
 		await fx.waker.wake(entry, { resumeFile: "/srv/proj/picked.jsonl" });
 		expect(fx.starts).toEqual([
-			{ daemonId: entry.daemonId, opts: { resume: "/srv/proj/picked.jsonl" } },
+			{ workspaceId: entry.workspaceId, opts: { resume: "/srv/proj/picked.jsonl" } },
 		]);
 	});
 });

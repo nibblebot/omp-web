@@ -1,5 +1,5 @@
 import { createMemo, createSignal, For, Show, type Component } from "solid-js";
-import type { DaemonEntry, DaemonStatus, LifecycleStage } from "#lib/wire/protocol";
+import type { RosterEntry, SessionStatus, LifecycleStage } from "#lib/wire/protocol";
 import { rowActivity } from "../../../fleet-ui/row-activity";
 import type { SessionActivity } from "../../../fleet-ui/session-activity";
 import { canStartRow, sessionChip } from "../../../fleet-ui/workspace-status";
@@ -7,18 +7,18 @@ import {
 	call,
 	closeDrawers,
 	fetchCloneIntoProject,
-	openDaemonDetails,
+	openSessionDetails,
 	openWorktreeSessions,
 	sendWorktreeDeleteInfo,
 	setState,
 	spawnResume,
-	startDaemonNewSession,
+	startWorkspaceNewSession,
 	state,
-	stopDaemonById,
+	stopSessionById,
 	wakeAndAttach,
 } from "../../../state";
 import { deletePendingIds } from "../../../store/projects";
-import { switchToDaemon } from "../../../store/roster";
+import { switchToSession } from "../../../store/roster";
 import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
 import { pushToast, reportError } from "../../../store/toasts";
 import { isUserStopped } from "../../../store/user-stopped";
@@ -63,11 +63,11 @@ import {
 
 /** Roster entries may carry a template name, the last-session title, and
  *  per-repo git facts (branch + porcelain counts + numstat line counts)
- *  that the fleet edge may serialize; protocol.ts DaemonEntry is frozen so
+ *  that the fleet edge may serialize; protocol.ts RosterEntry is frozen so
  *  read all of them tolerantly. */
-export type RosterEntry = DaemonEntry & {
+export type DetailedRosterEntry = RosterEntry & {
 	template?: string;
-	/** Title of the daemon's last session file (probed by the fleet edge's
+	/** Title of the session's last session file (probed by the fleet edge's
 	 *  git-state poll from the lastSessionFile JSONL title slot; absent until
 	 *  there is a title to probe). */
 	sessionTitle?: string;
@@ -96,10 +96,9 @@ const ACTIVITY_TITLE: Record<SessionActivity, string> = {
 	idle: "idle",
 };
 
-const STATUS_TITLE: Record<DaemonStatus, string> = {
+const STATUS_TITLE: Record<SessionStatus, string> = {
 	spawning: "starting the session process…",
 	connecting: "connecting to the session process…",
-	session: "session created…",
 	resolving: "resolving provider/model…",
 	ready: "ready, click to attach",
 	asleep: "asleep, click to wake and attach",
@@ -109,7 +108,7 @@ const STATUS_TITLE: Record<DaemonStatus, string> = {
 
 /** Provider lifecycle stage copy for clone rows (only stages that need
  *  row presence render; "ready" is implied by the row's ready rail). */
-const LIFECYCLE_LABEL: Record<NonNullable<RosterEntry["lifecycleStage"]>, string> = {
+const LIFECYCLE_LABEL: Record<NonNullable<DetailedRosterEntry["lifecycleStage"]>, string> = {
 	preparation: "preparing workspace",
 	runtime: "starting runtime",
 	callback: "connecting channel",
@@ -120,14 +119,14 @@ const LIFECYCLE_LABEL: Record<NonNullable<RosterEntry["lifecycleStage"]>, string
 /** Which row's "⋯" actions menu is open, if any. Module-level so there is
  *  one open menu total across all rows (opening one closes another) and the
  *  state is readable outside a row (ProjectGroups headers share it). Rows no
- *  longer remount on roster frames (the roster reconciles by daemonId), but a
+ *  longer remount on roster frames (the roster reconciles by workspaceId), but a
  *  row that leaves the roster still releases its menu through this one
- *  signal. Daemon rows key on the daemonId, project-group headers
+ *  signal. Session rows key on the workspaceId, project-group headers
  *  (ProjectGroups) on `project:<id>`. */
 export const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
 
 export const WorkspaceRow: Component<{
-	daemon: DaemonEntry;
+	session: RosterEntry;
 	/** Rendered inside a registered-project group (ProjectGroups ProjectGroup):
 	 *  the group header carries the project name, so an untagged row here is
 	 *  the main worktree and distills to the root profile. */
@@ -135,7 +134,7 @@ export const WorkspaceRow: Component<{
 	/** The project's main checkout is missing on disk: rows cannot start. */
 	projectMissing?: boolean;
 }> = (props) => {
-	const d = () => props.daemon as RosterEntry;
+	const d = () => props.session as DetailedRosterEntry;
 	// Row actions go to the fleet, not to the attached session: only a dropped
 	// browser socket pauses them. A dead attached session ("offline") must not,
 	// since starting, stopping or switching rows is the way out of it.
@@ -146,10 +145,10 @@ export const WorkspaceRow: Component<{
 	// row. Each derived memo re-runs when the module signal changes but only
 	// notifies the row when ITS OWN membership flips, so one row's menu-open
 	// wake no longer re-renders the whole roster.
-	const activating = createMemo(() => activatingIds().has(d().daemonId));
+	const activating = createMemo(() => activatingIds().has(d().workspaceId));
 	/** The delete was submitted; the row dims now and collapses when the roster drops it. */
-	const deleting = createMemo(() => deletePendingIds().has(d().daemonId));
-	const menuOpen = createMemo(() => menuOpenId() === d().daemonId);
+	const deleting = createMemo(() => deletePendingIds().has(d().workspaceId));
+	const menuOpen = createMemo(() => menuOpenId() === d().workspaceId);
 	/** The session-title line text: the last session's title, absent when it has none. */
 	const sessionTitleText = createMemo(() => displayTitle(d().sessionTitle));
 	/** Title-first layout (setting): the session title leads the top line and the
@@ -192,15 +191,15 @@ export const WorkspaceRow: Component<{
 	 *  the head of the diffstat line in the title-first one. */
 	const branchLabel = () => (
 		<>
-			<span class="daemon-kind-icon" role="img" aria-label={kindLabel()} title={kindLabel()}>
+			<span class="session-kind-icon" role="img" aria-label={kindLabel()} title={kindLabel()}>
 				<Show when={isClone()} fallback={<WorktreeIcon />}>
 					<PackageIcon />
 				</Show>
 			</span>
-			<span class="daemon-row-branch">{primaryText()}</span>
+			<span class="roster-row-branch">{primaryText()}</span>
 			<Show when={d().worktreeLocked === true}>
 				<span
-					class="daemon-lock-icon"
+					class="session-lock-icon"
 					role="img"
 					aria-label="locked worktree"
 					title="locked worktree"
@@ -216,16 +215,16 @@ export const WorkspaceRow: Component<{
 		const st = d().lifecycleStage;
 		return isClone() && st !== undefined && st !== "ready" ? st : undefined;
 	};
-	const isAttached = () => d().daemonId === state.currentSessionId;
+	const isAttached = () => d().workspaceId === state.currentWorkspaceId;
 	/** Selected row: the switch target while its switch is waking/attaching or failed (the
-	 *  old session is still attached underneath a failed one, so currentSessionId alone
+	 *  old session is still attached underneath a failed one, so currentWorkspaceId alone
 	 *  would snap the highlight back); otherwise the attached session. A superseded or
 	 *  cancelled switch clears the target and the highlight returns to the attached row. */
 	const selected = createMemo(() => {
 		const phase = state.transcriptPhase;
 		const target = state.transcriptTarget;
 		if (target !== null && (phase === "waking" || phase === "attaching" || phase === "failed"))
-			return target === d().daemonId;
+			return target === d().workspaceId;
 		return isAttached();
 	});
 	/** Activity for THIS row (blocked, in progress, unreviewed, unread, idle),
@@ -243,14 +242,17 @@ export const WorkspaceRow: Component<{
 
 	const clickable = () =>
 		!blocked() && !deleting() && (d().status === "ready" || d().status === "asleep");
-	/** Loading phase: activating but the daemon isn't ready yet. Renders with
+	/** Loading phase: activating but the session isn't ready yet. Renders with
 	 *  the transitional ("resolving") spinner. */
 	const waking = () => activating() && d().status !== "ready";
 	/** Process state behind the status announcer, the "⋯" tooltip and the kebab's
 	 *  Start/Restart item. Both read the user-stopped mark so a stopped
 	 *  process reads Stopped, not Asleep. */
 	const chip = createMemo(() =>
-		sessionChip(d().status, { waking: activating(), stoppedByUser: isUserStopped(d().daemonId) }),
+		sessionChip(d().status, {
+			waking: activating(),
+			stoppedByUser: isUserStopped(d().workspaceId),
+		}),
 	);
 	/** Status label: the process state, plus the activity when non-idle. */
 	const statusLabel = createMemo(() => {
@@ -287,8 +289,8 @@ export const WorkspaceRow: Component<{
 	};
 
 	// Clicking the row CARD (anything but the chevron, "+" and kebab buttons,
-	// title line included) resumes the daemon's current session: a ready session
-	// process attaches; a stopped (asleep) one wakes then attaches (switchToDaemon
+	// title line included) resumes the session's current session: a ready session
+	// process attaches; a stopped (asleep) one wakes then attaches (switchToSession
 	// covers both, and owns the transcript phase). The whole card is the resume
 	// target, leaving no dead space. The row highlights at once (switch-target.ts);
 	// the pane follows when the switch settles. The chevron opens the worktree's
@@ -298,25 +300,25 @@ export const WorkspaceRow: Component<{
 		// A pick changes the main pane: a drawer sidebar gets out of the way now
 		// instead of when the attach lands.
 		closeDrawers();
-		const daemon = d();
+		const session = d();
 		if (paused()) {
 			pushToast(PAUSED_TOOLTIP.reconnecting);
 			return;
 		}
-		if (daemon.status !== "ready" && daemon.status !== "asleep") return;
+		if (session.status !== "ready" && session.status !== "asleep") return;
 		// Already the attached session: clicking its card is a no-op (a
 		// redundant attach round-trip would also reset the chat view). A failed
 		// switch to this row leaves the old session attached, so it still retries.
 		if (
-			daemon.status === "ready" &&
-			daemon.daemonId === state.currentSessionId &&
+			session.status === "ready" &&
+			session.workspaceId === state.currentWorkspaceId &&
 			state.transcriptPhase === "loaded"
 		)
 			return;
-		const id = daemon.daemonId;
+		const id = session.workspaceId;
 		// Asleep rows keep the waking pulse until the switch settles.
-		if (daemon.status === "asleep") beginActivating(id);
-		void switchToDaemon(id).finally(() => endActivating(id));
+		if (session.status === "asleep") beginActivating(id);
+		void switchToSession(id).finally(() => endActivating(id));
 	};
 
 	/** The kebab's Start item: spawn the session process, then attach so the
@@ -325,19 +327,19 @@ export const WorkspaceRow: Component<{
 		if (activating() || blocked()) return;
 		closeDrawers();
 		setMenuOpenId(null);
-		const id = d().daemonId;
+		const id = d().workspaceId;
 		activateRow(id, () => spawnResume(id));
 	};
 
 	/** The chevron: opens this worktree's session dialog. */
 	const sessionsToggleClick = () => {
 		if (activating()) return;
-		const daemon = d();
-		if (daemon.status !== "ready" && daemon.status !== "asleep") return;
+		const session = d();
+		if (session.status !== "ready" && session.status !== "asleep") return;
 		// The kebab menu closes so the two popups never stack; the card's
 		// resume handler is suppressed by the chevron's stopPropagation.
 		setMenuOpenId(null);
-		openWorktreeSessions(daemon.daemonId);
+		openWorktreeSessions(session.workspaceId);
 	};
 
 	/** The "+" under the session chevron: start a fresh session in this
@@ -350,34 +352,34 @@ export const WorkspaceRow: Component<{
 		}
 		closeDrawers();
 		setMenuOpenId(null);
-		const id = d().daemonId;
+		const id = d().workspaceId;
 		beginActivating(id);
-		void startDaemonNewSession(id).finally(() => endActivating(id));
+		void startWorkspaceNewSession(id).finally(() => endActivating(id));
 	};
 
 	const doStop = () => {
-		stopDaemonById(d().daemonId);
+		stopSessionById(d().workspaceId);
 		setMenuOpenId(null);
 	};
 
 	return (
 		<>
 			<div
-				class="sidebar-row daemon-row"
+				class="sidebar-row roster-row"
 				data-roster-item
 				aria-busy={deleting() ? "true" : undefined}
 				classList={{
 					active: selected() || activating(),
 					clickable: clickable() && !activating(),
-					"daemon-row--deleting": deleting(),
-					"daemon-row--worktree": isWorktree(),
-					"daemon-row--root": isRoot(),
-					"daemon-row--clone": isClone(),
-					"daemon-row--title-first": titleFirst(),
+					"roster-row--deleting": deleting(),
+					"roster-row--worktree": isWorktree(),
+					"roster-row--root": isRoot(),
+					"roster-row--clone": isClone(),
+					"roster-row--title-first": titleFirst(),
 					// Ready rows wear the right-edge rail; asleep ones dim their title
 					// (until a wake is in flight).
-					"daemon-row--ready": d().status === "ready",
-					"daemon-row--asleep": d().status === "asleep" && !activating(),
+					"roster-row--ready": d().status === "ready",
+					"roster-row--asleep": d().status === "asleep" && !activating(),
 				}}
 				{...useClickableRow(rowClick, clickable())}
 				title={
@@ -390,13 +392,13 @@ export const WorkspaceRow: Component<{
 			>
 				<div class="sidebar-row-main">
 					<div class="sidebar-row-top">
-						<span class="sidebar-row-title daemon-row-title" title={d().cwd}>
+						<span class="sidebar-row-title roster-row-title" title={d().cwd}>
 							<Show when={titleFirst() ? sessionTitleText() : undefined} fallback={branchLabel()}>
 								{(title) => (
 									<span
-										class="daemon-row-session"
+										class="roster-row-session"
 										classList={{
-											"daemon-session-title--two-line": state.sidebarSessionTitleLines === 2,
+											"roster-session-title--two-line": state.sidebarSessionTitleLines === 2,
 										}}
 										title={title()}
 									>
@@ -411,10 +413,10 @@ export const WorkspaceRow: Component<{
 						    touch). The chevron opens this worktree's session dialog; the
 						    "+" starts a fresh session in this worktree. */}
 						<Show when={clickable()}>
-							<span class="daemon-row-actions">
+							<span class="roster-row-actions">
 								<button
 									type="button"
-									class="daemon-session-toggle"
+									class="roster-session-toggle"
 									aria-haspopup="dialog"
 									aria-label="Switch session"
 									title="Switch session"
@@ -425,11 +427,11 @@ export const WorkspaceRow: Component<{
 										sessionsToggleClick();
 									}}
 								>
-									<ChevronDownIcon class="daemon-session-chevron" />
+									<ChevronDownIcon class="roster-session-chevron" />
 								</button>
 								<button
 									type="button"
-									class="daemon-session-new"
+									class="roster-session-new"
 									aria-label="New session in this worktree"
 									title="New session in this worktree"
 									onClick={(e) => {
@@ -438,7 +440,7 @@ export const WorkspaceRow: Component<{
 										newSessionClick();
 									}}
 								>
-									<PlusIcon class="daemon-session-new-icon" />
+									<PlusIcon class="roster-session-new-icon" />
 								</button>
 							</span>
 						</Show>
@@ -451,9 +453,9 @@ export const WorkspaceRow: Component<{
 						    status announcer always names the state, signal or not. Stop
 						    keeps the two-click confirm inside the menu; the first click
 						    arms (menu stays open), the second executes and closes. */}
-						<span class="daemon-row-corner">
+						<span class="roster-row-corner">
 							<span
-								class="daemon-row-status"
+								class="roster-row-status"
 								role="status"
 								aria-label={`${statusLabel()}. ${chip().title}`}
 							>
@@ -463,7 +465,7 @@ export const WorkspaceRow: Component<{
 								label="Row actions"
 								title={`Row actions\n${statusLabel()}\n${chip().title}`}
 								open={menuOpen()}
-								onOpenChange={(v) => setMenuOpenId(v ? d().daemonId : null)}
+								onOpenChange={(v) => setMenuOpenId(v ? d().workspaceId : null)}
 							>
 								{/* Lifecycle first (start, stop), then details, destructive
 								    last. Stop keeps the two-click confirm inside the menu.
@@ -500,7 +502,7 @@ export const WorkspaceRow: Component<{
 										disabled={paused()}
 										onClick={() => {
 											setMenuOpenId(null);
-											void spawnResume(d().daemonId);
+											void spawnResume(d().workspaceId);
 										}}
 									>
 										<ChevronRightIcon />
@@ -549,7 +551,7 @@ export const WorkspaceRow: Component<{
 									class="sidebar-menu-item"
 									onClick={() => {
 										setMenuOpenId(null);
-										openDaemonDetails(d().daemonId);
+										openSessionDetails(d().workspaceId);
 									}}
 								>
 									<InfoIcon />
@@ -564,8 +566,8 @@ export const WorkspaceRow: Component<{
 										disabled={deleting()}
 										onClick={() => {
 											setMenuOpenId(null);
-											sendWorktreeDeleteInfo(d().daemonId);
-											setState("deleteWorkspaceTarget", d().daemonId);
+											sendWorktreeDeleteInfo(d().workspaceId);
+											setState("deleteWorkspaceTarget", d().workspaceId);
 										}}
 									>
 										<TrashIcon />
@@ -587,7 +589,7 @@ export const WorkspaceRow: Component<{
 										disabled={paused()}
 										onClick={() => {
 											setMenuOpenId(null);
-											void fetchCloneIntoProject(d().daemonId);
+											void fetchCloneIntoProject(d().workspaceId);
 										}}
 									>
 										<ArrowDownIcon />
@@ -607,7 +609,7 @@ export const WorkspaceRow: Component<{
 										disabled={paused() || deleting()}
 										onClick={() => {
 											setMenuOpenId(null);
-											setState("deleteWorkspaceTarget", d().daemonId);
+											setState("deleteWorkspaceTarget", d().workspaceId);
 										}}
 									>
 										<TrashIcon />
@@ -627,9 +629,9 @@ export const WorkspaceRow: Component<{
 					<Show when={titleFirst() ? undefined : sessionTitleText()}>
 						{(title) => (
 							<div
-								class="daemon-session-title"
+								class="roster-session-title"
 								classList={{
-									"daemon-session-title--two-line": state.sidebarSessionTitleLines === 2,
+									"roster-session-title--two-line": state.sidebarSessionTitleLines === 2,
 								}}
 								title={title()}
 							>
@@ -639,9 +641,9 @@ export const WorkspaceRow: Component<{
 					</Show>
 					<Show when={cloneProfile()}>
 						{(p) => (
-							<div class="daemon-chips">
+							<div class="session-chips">
 								<span
-									class="daemon-chip daemon-chip--profile"
+									class="session-chip session-chip--profile"
 									title={`profile ${p().id} (${p().provider})`}
 								>
 									{p().id}
@@ -660,17 +662,17 @@ export const WorkspaceRow: Component<{
 					<Show when={activeStage()}>
 						{(stage) => (
 							<div
-								class="daemon-stage"
-								classList={{ "daemon-stage--failed": stage() === "failed" }}
+								class="session-stage"
+								classList={{ "session-stage--failed": stage() === "failed" }}
 								role="status"
 							>
 								<Show when={stage() === "failed"}>
-									<span class="daemon-stage-error">
+									<span class="session-stage-error">
 										{d().lifecycleError ?? "workspace lifecycle failed"}
 									</span>
 									<button
 										type="button"
-										class="daemon-stage-retry"
+										class="session-stage-retry"
 										title={
 											paused()
 												? PAUSED_TOOLTIP.reconnecting
@@ -679,14 +681,14 @@ export const WorkspaceRow: Component<{
 										disabled={paused()}
 										onClick={(e) => {
 											e.stopPropagation();
-											void spawnResume(d().daemonId);
+											void spawnResume(d().workspaceId);
 										}}
 									>
 										Retry
 									</button>
 								</Show>
 								<Show when={stage() !== "failed"}>
-									<span class="daemon-stage-label">{LIFECYCLE_LABEL[stage()]}…</span>
+									<span class="session-stage-label">{LIFECYCLE_LABEL[stage()]}…</span>
 								</Show>
 							</div>
 						)}
@@ -697,14 +699,14 @@ export const WorkspaceRow: Component<{
 					    "⋯" menu on the top row. Rendered only when there is
 					    something to show. */}
 					<Show when={titleFirst() || hasGitStats()}>
-						<div class="daemon-git">
+						<div class="session-git">
 							<Show when={titleFirst()}>
-								<span class="daemon-git-branch">{branchLabel()}</span>
+								<span class="session-git-branch">{branchLabel()}</span>
 							</Show>
 							<Show when={filesChanged()}>
 								{(n) => (
 									<span
-										class="daemon-git-dirty"
+										class="session-git-dirty"
 										data-kind="files"
 										title={`${plural(n(), "file")} changed`}
 									>
@@ -716,7 +718,7 @@ export const WorkspaceRow: Component<{
 							<Show when={linesAdded()}>
 								{(n) => (
 									<span
-										class="daemon-git-dirty"
+										class="session-git-dirty"
 										data-kind="added"
 										title={`${plural(n(), "line")} added`}
 									>
@@ -727,7 +729,7 @@ export const WorkspaceRow: Component<{
 							<Show when={linesDeleted()}>
 								{(n) => (
 									<span
-										class="daemon-git-dirty"
+										class="session-git-dirty"
 										data-kind="deleted"
 										title={`${plural(n(), "line")} deleted`}
 									>

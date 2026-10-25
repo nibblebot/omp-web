@@ -4,7 +4,7 @@ Profiling summary for the transport between fleet and session (the callback pair
 
 ## Method
 
-- **Harness:** `bun run profile --browser` with 5 reps x 20 s per scenario, 1 warmup, and an isolated fleet with real session daemons and a fake model.
+- **Harness:** `bun run profile --browser` with 5 reps x 20 s per scenario, 1 warmup, and an isolated fleet with real session processes and a fake model.
 - **Host:** i9-13900KF, Bun 1.4.2, SDK 18.11.0. Pinning: fleet on cpu 0, sessions on 2/4/6/8, fake model on 16-23, harness on 24-31.
 - **Noise band:** 3 x MAD (floored), the rule `--compare` applies. Two 5-rep runs of identical code differed by up to 12% CPU and 73% on p99 latency, so read single-run deltas near the band as unconfirmed.
 - **Attribution-only runs:** `--heap` and `--cpuprofile` runs were used only to find causes, never as decision numbers.

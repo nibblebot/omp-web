@@ -1,4 +1,4 @@
-import type { DaemonEntry, DaemonStatus, RegisteredProject } from "#lib/wire/protocol";
+import type { RosterEntry, SessionStatus, RegisteredProject } from "#lib/wire/protocol";
 import type { SessionActivity } from "./session-activity";
 
 // ---------------------------------------------------------------------------
@@ -10,10 +10,9 @@ import type { SessionActivity } from "./session-activity";
 // ---------------------------------------------------------------------------
 
 /** Statuses of a session process that is on its way up. */
-const STARTING_STATUSES: Partial<Record<DaemonStatus, true>> = {
+const STARTING_STATUSES: Partial<Record<SessionStatus, true>> = {
 	spawning: true,
 	connecting: true,
-	session: true,
 	resolving: true,
 };
 
@@ -66,7 +65,7 @@ export interface ChipContext {
 }
 
 /** The process state for a roster status (label + explanatory tooltip). */
-export function sessionChip(status: DaemonStatus, ctx: ChipContext = {}): SessionChip {
+export function sessionChip(status: SessionStatus, ctx: ChipContext = {}): SessionChip {
 	if (ctx.waking === true && status !== "ready") return CHIPS.starting;
 	switch (status) {
 		case "ready":
@@ -89,7 +88,7 @@ export function sessionChip(status: DaemonStatus, ctx: ChipContext = {}): Sessio
  * (starting, reconnecting, waking) offer nothing: acting on a process
  * mid-transition races the supervisor.
  */
-export function canStartRow(status: DaemonStatus, ctx: ChipContext = {}): boolean {
+export function canStartRow(status: SessionStatus, ctx: ChipContext = {}): boolean {
 	if (ctx.waking === true) return false;
 	return status === "asleep" || status === "error";
 }
@@ -101,26 +100,26 @@ export function canStartRow(status: DaemonStatus, ctx: ChipContext = {}): boolea
  * is the attached session or the target of a switch that is waking,
  * attaching or has failed, so the selected row never vanishes under the user.
  */
-export function shownWhenRunningOnly(status: DaemonStatus, pinned: boolean): boolean {
+export function shownWhenRunningOnly(status: SessionStatus, pinned: boolean): boolean {
 	return status !== "asleep" || pinned;
 }
 
 /** Display name of a workspace, identical in rows, dialogs and the header. */
-export function workspaceName(d: Pick<DaemonEntry, "branch" | "name">): string {
+export function workspaceName(d: Pick<RosterEntry, "branch" | "name">): string {
 	return d.branch ?? d.name;
 }
 
 /** What one row contributes to a project roll-up: its roster status and, for a
  *  ready row, its session activity (`rowActivity`). */
 export interface RollupRow {
-	status: DaemonStatus;
+	status: SessionStatus;
 	activity?: SessionActivity | null;
 }
 
 /** The single row signal a collapsed project shows in the row-corner column
  *  (the props of RowSignal): a status, plus the activity for a ready row. */
 export interface RollupSignal {
-	status: DaemonStatus;
+	status: SessionStatus;
 	activity?: SessionActivity;
 }
 
@@ -248,12 +247,12 @@ export interface ActiveWorkspace {
  * session belongs to, so two projects that both have a "main" stay apart.
  */
 export function activeWorkspace(
-	roster: ReadonlyArray<DaemonEntry>,
+	roster: ReadonlyArray<RosterEntry>,
 	projects: ReadonlyArray<RegisteredProject>,
-	sessionId: string,
+	workspaceId: string,
 ): ActiveWorkspace | null {
-	if (sessionId === "") return null;
-	const entry = roster.find((d) => d.daemonId === sessionId);
+	if (workspaceId === "") return null;
+	const entry = roster.find((d) => d.workspaceId === workspaceId);
 	if (entry === undefined) return null;
 	const project =
 		entry.projectId !== undefined

@@ -60,7 +60,7 @@ export default defineStory({
 		{
 			name: "Error",
 			description: "state.error renders as a sticky error toast until dismissed or replaced.",
-			seed: { error: 'command "attach" rejected: unknown daemon: d9' },
+			seed: { error: 'command "attach" rejected: unknown session: d9' },
 			render: () => (
 				<div class="ds-frame">
 					<Toasts />

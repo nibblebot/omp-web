@@ -17,7 +17,7 @@ import { GoalDialog } from "./components/chat/controls/GoalDialog";
 import { AddProjectDialog } from "./components/fleet/workspaces/AddProjectDialog";
 import { DeleteWorkspaceDialog } from "./components/fleet/workspaces/DeleteWorkspaceDialog";
 import { RemoveProjectDialog } from "./components/fleet/workspaces/RemoveProjectDialog";
-import { DaemonDetailsDialog } from "./components/fleet/daemon/DaemonDetailsDialog";
+import { SessionDetailsDialog } from "./components/fleet/session/SessionDetailsDialog";
 import { WorktreeSessionsDialog } from "./components/fleet/sidebar/WorktreeSessionsDialog";
 import { JobsSheet } from "./components/jobs/JobsSheet";
 import { ProviderLoginDialog } from "./components/models/ProviderLoginDialog";
@@ -38,7 +38,7 @@ import { ImageLightbox } from "./components/ui/ImageLightbox";
 import { createModalLayer, ModalLayerContext, type ModalLayer } from "./components/ui/Modal";
 import { featureModal, featureOverlays } from "./features/registry";
 import {
-	closeDaemonDetails,
+	closeSessionDetails,
 	closeLightbox,
 	closeWorktreeSessions,
 	setState,
@@ -50,30 +50,31 @@ import {
  * Every overlay App mounts: the active `state.modal`, plus the dialogs that
  * mount once and render nothing until their own store state asks for them
  * (agent ask/confirm/download requests, extension UI, resume, fleet
- * confirmations, daemon details, the image lightbox, toasts). Overlays owned
+ * confirmations, session details, the image lightbox, toasts). Overlays owned
  * by an enabled feature come from the feature registry.
  */
 export const ModalHost: Component = () => {
 	const close = () => setState("modal", null);
-	// Roster-gated slot: the details dialog renders only while its daemon is in
-	// the roster, and a daemon that leaves the fleet clears the slot (mirrors
+	// Roster-gated slot: the details dialog renders only while its session is in
+	// the roster, and a session that leaves the fleet clears the slot (mirrors
 	// RemoveProjectDialog's project lookup).
-	const daemonDetails = () => {
-		const id = state.daemonDetailsId;
-		return id === null ? undefined : state.daemonRoster.find((d) => d.daemonId === id);
+	const sessionDetails = () => {
+		const id = state.sessionDetailsId;
+		return id === null ? undefined : state.sessionRoster.find((d) => d.workspaceId === id);
 	};
 	createEffect(() => {
-		const id = state.daemonDetailsId;
-		if (id !== null && !state.daemonRoster.some((d) => d.daemonId === id)) closeDaemonDetails();
+		const id = state.sessionDetailsId;
+		if (id !== null && !state.sessionRoster.some((d) => d.workspaceId === id))
+			closeSessionDetails();
 	});
 	// Same roster gate for the worktree session list dialog: it renders only
-	// while its daemon is in the roster, and a daemon that leaves closes it.
-	const worktreeSessionsDaemon = () => {
+	// while its session is in the roster, and a session that leaves closes it.
+	const worktreeSessionsEntry = () => {
 		const id = state.worktreeSessionsId;
-		return id === null ? undefined : state.daemonRoster.find((d) => d.daemonId === id);
+		return id === null ? undefined : state.sessionRoster.find((d) => d.workspaceId === id);
 	};
 	createEffect(() => {
-		if (state.modal === "worktree-sessions" && worktreeSessionsDaemon() === undefined)
+		if (state.modal === "worktree-sessions" && worktreeSessionsEntry() === undefined)
 			closeWorktreeSessions();
 	});
 	// Renderer for a modal owned by an optional feature. Renders nothing when the
@@ -115,8 +116,10 @@ export const ModalHost: Component = () => {
 		share: () => <ShareSheet onClose={close} />,
 		btw: () => <BtwSheet onClose={close} />,
 		"worktree-sessions": () => (
-			<Show when={worktreeSessionsDaemon()}>
-				{(daemon) => <WorktreeSessionsDialog daemon={daemon()} onClose={closeWorktreeSessions} />}
+			<Show when={worktreeSessionsEntry()}>
+				{(session) => (
+					<WorktreeSessionsDialog session={session()} onClose={closeWorktreeSessions} />
+				)}
 			</Show>
 		),
 	} satisfies Record<ModalName, () => JSX.Element>;
@@ -159,8 +162,8 @@ export const ModalHost: Component = () => {
 			<Show when={state.lightboxImage} keyed>
 				{(img) => <ImageLightbox image={img} onClose={closeLightbox} />}
 			</Show>
-			<Show when={daemonDetails()}>
-				{(daemon) => <DaemonDetailsDialog daemon={daemon()} onClose={closeDaemonDetails} />}
+			<Show when={sessionDetails()}>
+				{(session) => <SessionDetailsDialog session={session()} onClose={closeSessionDetails} />}
 			</Show>
 			<For each={featureOverlays()}>{(Overlay) => <Overlay />}</For>
 			<ExtensionUi placement="modal" />

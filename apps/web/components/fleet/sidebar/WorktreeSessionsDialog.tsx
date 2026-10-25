@@ -1,10 +1,10 @@
 import { createMemo, createSignal, onMount, Show, type Component } from "solid-js";
 import {
-	DAEMON_SESSIONS_MAX_LIMIT as LIST_LIMIT,
-	type DaemonEntry,
+	WORKSPACE_SESSIONS_MAX_LIMIT as LIST_LIMIT,
+	type RosterEntry,
 	type SessionListEntry,
 } from "#lib/wire/protocol";
-import { requestDaemonSessions, state } from "../../../state";
+import { requestWorkspaceSessions, state } from "../../../state";
 import {
 	matchSessionRow,
 	sessionRowFromListEntry,
@@ -13,20 +13,20 @@ import {
 import { resumeWorktreeSession } from "../../../store/worktree-sessions";
 import { SessionListPicker } from "../../sessions/SessionListPicker";
 import { Modal } from "../../ui/Modal";
-import type { RosterEntry } from "./WorkspaceRow";
+import type { DetailedRosterEntry } from "./WorkspaceRow";
 
 // ---------------------------------------------------------------------------
 // Dialog variant of a roster row's session list: every recent session of one
 // worktree (the latest 200) as a searchable list, titled with the worktree's
 // branch. Mounted by ModalHost for `state.modal === "worktree-sessions"`. The
-// fleet edge answers from disk, so asleep and never-started daemons list too.
+// fleet edge answers from disk, so asleep and never-started sessions list too.
 // Search filters the loaded rows on the client; Resume is the only action
 // (no scope switch, no rename, pin or delete) and goes through
 // resumeWorktreeSession.
 // ---------------------------------------------------------------------------
 
 export const WorktreeSessionsDialog: Component<{
-	daemon: DaemonEntry;
+	session: RosterEntry;
 	onClose: () => void;
 }> = (props) => {
 	const [sessions, setSessions] = createSignal<SessionListEntry[]>([]);
@@ -35,7 +35,7 @@ export const WorktreeSessionsDialog: Component<{
 	const [query, setQuery] = createSignal("");
 
 	onMount(() => {
-		requestDaemonSessions(props.daemon.daemonId, LIST_LIMIT)
+		requestWorkspaceSessions(props.session.workspaceId, LIST_LIMIT)
 			.then((list) => setSessions(list))
 			.catch((err) => setError(err instanceof Error ? err.message : String(err)))
 			.finally(() => setLoading(false));
@@ -43,17 +43,17 @@ export const WorktreeSessionsDialog: Component<{
 
 	/** Same naming as the roster row: clone name, detached sha, else branch. */
 	const title = (): string => {
-		const daemon = props.daemon as RosterEntry;
-		if (daemon.workspaceKind === "clone") return daemon.name;
-		if (daemon.detachedAt !== undefined) return `detached @ ${daemon.detachedAt}`;
-		return daemon.branch ?? daemon.name;
+		const session = props.session as DetailedRosterEntry;
+		if (session.workspaceKind === "clone") return session.name;
+		if (session.detachedAt !== undefined) return `detached @ ${session.detachedAt}`;
+		return session.branch ?? session.name;
 	};
 
 	/** The worktree's current session file (live file for the attached row). */
 	const currentFile = () =>
-		props.daemon.daemonId === state.currentSessionId
+		props.session.workspaceId === state.currentWorkspaceId
 			? state.sessionFile
-			: props.daemon.lastSessionFile;
+			: props.session.lastSessionFile;
 
 	const rows = createMemo((): SessionRow[] =>
 		sessions()
@@ -62,7 +62,7 @@ export const WorktreeSessionsDialog: Component<{
 	);
 
 	const choose = (row: SessionRow) => {
-		resumeWorktreeSession(props.daemon.daemonId, row.file);
+		resumeWorktreeSession(props.session.workspaceId, row.file);
 		props.onClose();
 	};
 
@@ -77,7 +77,7 @@ export const WorktreeSessionsDialog: Component<{
 				onQuery={setQuery}
 				loading={loading()}
 				actions="resume"
-				currentCwd={props.daemon.cwd}
+				currentCwd={props.session.cwd}
 				canManage={false}
 				emptyText={query() ? "No sessions match this search." : "No sessions in this worktree yet."}
 				onChoose={choose}

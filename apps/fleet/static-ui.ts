@@ -1,6 +1,6 @@
 /**
  * Static UI serving shared by the combined process (FleetEdge) and the UI
- * daemon (ui-server.ts): dist/ from the process cwd, then the bundle embedded
+ * session (ui-server.ts): dist/ from the process cwd, then the bundle embedded
  * by build:omp-web, then a tiny placeholder page.
  */
 

@@ -33,7 +33,7 @@ export default defineStory({
 		{
 			name: "Another workspace selected",
 			seed: () =>
-				seedRosterFleet({ currentSessionId: "dmn_b001", daemons: rosterDaemonMap(Date.now()) }),
+				seedRosterFleet({ currentWorkspaceId: "dmn_b001", daemons: rosterDaemonMap(Date.now()) }),
 			render: () => (
 				<div class="ds-frame">
 					<BackgroundDaemonsBar />

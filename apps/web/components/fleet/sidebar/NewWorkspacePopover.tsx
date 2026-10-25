@@ -21,7 +21,7 @@ import {
 	type WorkspaceSourceChoice,
 } from "../../../prefs/workspace-creation";
 import { state } from "../../../state";
-import { startDaemonNewSession } from "../../../store/roster";
+import { startWorkspaceNewSession } from "../../../store/roster";
 import {
 	createClone,
 	createWorktree,
@@ -42,8 +42,8 @@ export interface NewWorkspacePopoverProps {
 type Phase =
 	| { kind: "idle" }
 	| { kind: "submitting"; label: string }
-	| { kind: "starting"; daemonId: string }
-	| { kind: "attaching"; daemonId: string };
+	| { kind: "starting"; workspaceId: string }
+	| { kind: "attaching"; workspaceId: string };
 
 /** One create request, built from a pick (existing branch or typed name). */
 type Pick =
@@ -221,11 +221,11 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 				props.onClose();
 				return;
 			}
-			const { daemonId } = await createWorktree(props.projectId, {
+			const { workspaceId } = await createWorktree(props.projectId, {
 				name: pick.name,
 				existingBranch: pick.existingBranch,
 			});
-			setPhase({ kind: "starting", daemonId });
+			setPhase({ kind: "starting", workspaceId });
 		} catch (err) {
 			setPhase({ kind: "idle" });
 			setError(messageOf(err));
@@ -277,7 +277,7 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 	createEffect(() => {
 		const p = phase();
 		if (p.kind !== "starting") return;
-		const row = state.daemonRoster.find((d) => d.daemonId === p.daemonId);
+		const row = state.sessionRoster.find((d) => d.workspaceId === p.workspaceId);
 		if (!row) return;
 		if (row.status === "error") {
 			setPhase({ kind: "idle" });
@@ -290,11 +290,11 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 			return;
 		}
 		if (row.status === "ready") {
-			setPhase({ kind: "attaching", daemonId: p.daemonId });
-			// A new worktree starts a fresh session once attached. startDaemonNewSession never
+			setPhase({ kind: "attaching", workspaceId: p.workspaceId });
+			// A new worktree starts a fresh session once attached. startWorkspaceNewSession never
 			// rejects: a failed attach lands in the transcript's failed panel (with Retry), so
 			// the popover closes either way.
-			void startDaemonNewSession(p.daemonId).then(() => props.onClose());
+			void startWorkspaceNewSession(p.workspaceId).then(() => props.onClose());
 		}
 	});
 

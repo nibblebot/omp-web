@@ -6,7 +6,7 @@ import {
 	reviewGitDiffBinary,
 	reviewGitStatusUnavailable,
 } from "../../fixtures/review";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
 export default defineStory({

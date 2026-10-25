@@ -41,7 +41,7 @@ export const s3Tools: Scenario = {
 		const repo = await env.newRepo("s3");
 		const handle = await env.stack.addSession({ label: "s3", slot: 2 }, repo);
 		const client = await ProfileClient.connect(env.adapter, env.stack.baseUrl);
-		await client.attach(handle.daemonId, handle.label);
+		await client.attach(handle.workspaceId, handle.label);
 		return {
 			async rep(): Promise<RepOutcome> {
 				const notes: string[] = [];

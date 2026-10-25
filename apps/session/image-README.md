@@ -26,17 +26,17 @@ imports; flattening either directory breaks runtime resolution.
 
 `apps/session/entrypoint.sh` (tini PID 1) runs preparation exactly once per
 PVC, only when the verified marker is absent, via
-`apps/session/prepare-inpod.ts`, then execs the session daemon. The fleet
+`apps/session/prepare-inpod.ts`, then execs the session process. The fleet
 callback pair arrives as pod env (a pod has no stdin); the entrypoint converts
-it through `apps/session/fleet-stdin-inpod.ts` into the daemon's `--fleet-stdin`
-payload on stdin and unsets the env first, so the daemon never carries it.
+it through `apps/session/fleet-stdin-inpod.ts` into the session's `--fleet-stdin`
+payload on stdin and unsets the env first, so the session never carries it.
 
 ## Files
 
 - `Containerfile`: two-stage build (lockfile-pinned deps → lean runtime).
-- `entrypoint.sh`: new-workspace preparation gate + daemon exec.
+- `entrypoint.sh`: new-workspace preparation gate + session exec.
 - `prepare-inpod.ts`: in-pod wrapper over `lib/runtime/prepare-workspace.ts`.
-- `fleet-stdin-inpod.ts`: converts the pod's callback pair into the daemon's `--fleet-stdin` payload.
+- `fleet-stdin-inpod.ts`: converts the pod's callback pair into the session's `--fleet-stdin` payload.
 
 ## Build prerequisites (reported by provider preflight, never auto-provisioned)
 
@@ -52,11 +52,11 @@ payload on stdin and unsets the env first, so the daemon never carries it.
 
 ## Transport to the fleet (operator prerequisite)
 
-Sandboxed and in-pod session daemons have no inbound service: the daemon dials
+Sandboxed and in-pod session processes have no inbound service: the session dials
 the fleet's callback pair outbound, so the fleet's callback endpoint must be
 reachable from inside the sandbox or pod. The callback pair requires HTTPS
 except the explicit loopback-HTTP developer exception (bwrap profiles with
-`network: "host"` for dev only). The daemon learns the callback URL through
+`network: "host"` for dev only). The session learns the callback URL through
 `callback-env.json` written by the provider at launch, with the workspace
 enrollment credential and generation; the enrollment token is readable by
 anyone with pod `get` permission in the profile namespace, so scope the
@@ -68,7 +68,7 @@ gateway. The gateway or ingress must pass the WebSocket upgrade on
 idle for more than 30 s (the pair heartbeats every 15 s and closes after 30 s
 of silence), and accept `POST /callback/bulk/<id>` bodies up to 64 MiB; see the
 README section "Reverse proxy or ingress in front of the control plane". The
-daemon honors the `HTTP(S)_PROXY` / `NO_PROXY` in its own pod environment itself
+session honors the `HTTP(S)_PROXY` / `NO_PROXY` in its own pod environment itself
 (for the WebSocket too, via `CONNECT`; the fleet does not set them). `OMP_FLEET_CALLBACK_URL=<url> omp-web preflight
 --profile <id>` proves the upgrade passes from the fleet host. Real same-origin TLS gateway streaming and Kubernetes lifecycle
 evidence is pending operator setup, not a shipped claim.

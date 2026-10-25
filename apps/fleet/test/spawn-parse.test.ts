@@ -11,9 +11,9 @@ describe("fillTemplate", () => {
 		const out = fillTemplate("omp-session --cwd {cwd} --port {port} --name {name}", {
 			cwd: "/tmp/repo",
 			port: "4721",
-			name: "my-daemon",
+			name: "my-session",
 		});
-		expect(out).toBe("omp-session --cwd /tmp/repo --port 4721 --name my-daemon");
+		expect(out).toBe("omp-session --cwd /tmp/repo --port 4721 --name my-session");
 	});
 
 	test("leaves unknown keys verbatim", () => {

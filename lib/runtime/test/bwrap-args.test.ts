@@ -443,7 +443,7 @@ describe("buildBwrapArgv", () => {
 				OMP_SESSION_CALLBACK_ALLOW_HTTP: "1",
 			},
 		});
-		// The pair travels via `--fleet-stdin`, never the daemon environment.
+		// The pair travels via `--fleet-stdin`, never the session environment.
 		for (const key of FLEET_CALLBACK_ENV_KEYS) expect(env[key]).toBeUndefined();
 		expect(Object.values(env)).not.toContain("secret-256-bit-enrollment");
 	});

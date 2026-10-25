@@ -3,7 +3,7 @@
  * NOT a test file: the `.testkit.ts` suffix keeps it out of Bun discovery.
  *
  * Deliberately minimal: hermetic per-suite stats locations only. No fake
- * daemons, no SDK singletons, no Bun-test imports — those stay in
+ * sessions, no SDK singletons, no Bun-test imports — those stay in
  * apps/fleet/test/*.testkit.ts with the suites that need them.
  */
 import { dirname, join } from "node:path";

@@ -113,7 +113,7 @@ export interface DetachedLaunch {
 	cwd?: string;
 	/** The child's whole environment. */
 	env: Record<string, string>;
-	/** Written to the child's stdin, which is then closed (the daemon reads its payload to EOF). */
+	/** Written to the child's stdin, which is then closed (the session reads its payload to EOF). */
 	stdin: string;
 	/** The file the child appends its combined stdout and stderr to; rotated above the cap on each launch. */
 	logPath: string;

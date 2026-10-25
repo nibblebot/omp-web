@@ -1,5 +1,5 @@
 import type { McpInspection, SkillsState } from "#lib/wire/protocol";
-import type { CallHandlers } from "../daemon";
+import type { CallHandlers } from "../session";
 import {
 	mcpInspectionFewTools,
 	mcpInspectionTools,

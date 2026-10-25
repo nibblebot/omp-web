@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { filterStderr } from "../../fleet-ui/daemon-log";
+import { filterStderr } from "../../fleet-ui/session-log";
 
 const TAIL = [
 	'OMP_SESSION|{"event":"listening"}',

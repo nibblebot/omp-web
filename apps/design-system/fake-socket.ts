@@ -36,7 +36,7 @@ import {
  *   recorded answers, never re-dispatching.
  * - A ping every CLIENT_KEEPALIVE_MS, so the client's silence deadline never fires.
  *
- * The behaviour behind it (roster, handlers) is injected by daemon.ts.
+ * The behaviour behind it (roster, handlers) is injected by session.ts.
  */
 
 /** Why a command is refused: becomes `nack` with this HTTP-like status. */
@@ -45,7 +45,7 @@ export interface Refusal {
 	error: string;
 }
 
-/** What the fake edge serves; supplied by daemon.ts. */
+/** What the fake edge serves; supplied by session.ts. */
 export interface Fleet {
 	/** Priming frames for a fresh dial, in wire order (seq 1..k). */
 	priming(): ServerFrame[];

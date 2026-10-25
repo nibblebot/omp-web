@@ -13,7 +13,7 @@
  * cwd tagging): undefined for a main checkout or when git can't tell.
  *
  * `probeGitState` + `parseGitStatePorcelain` + `parseNumstat` parse one
- * repo's dirty state for worktree-delete evidence and daemon git polling.
+ * repo's dirty state for worktree-delete evidence and session git polling.
  */
 
 import { realpath, stat } from "node:fs/promises";

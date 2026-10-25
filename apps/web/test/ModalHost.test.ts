@@ -7,14 +7,14 @@ import { FEATURE_IDS } from "../features/manifest";
 import type * as HostModule from "../ModalHost";
 import type * as ModalUiModule from "../components/ui/Modal";
 import type * as ShortcutsModule from "../components/app/ShortcutsDialog";
-import type * as DaemonDetailsModule from "../components/fleet/daemon/DaemonDetailsDialog";
+import type * as SessionDetailsModule from "../components/fleet/session/SessionDetailsDialog";
 import type * as WorktreeSessionsModule from "../components/fleet/sidebar/WorktreeSessionsDialog";
 import type * as IntegrationsModule from "../components/settings/integrations/IntegrationsDialog";
 import type * as RegistryModule from "../features/registry";
 import type * as ModalsModule from "../store/modals";
 import type * as StateModule from "../state";
 import { installJsxShim, restoreJsxShim } from "./web.testkit";
-import type { DaemonEntry } from "#lib/wire/protocol";
+import type { RosterEntry } from "#lib/wire/protocol";
 
 // ---------------------------------------------------------------------------
 // Harness: run the real ModalHost body without a DOM.
@@ -51,14 +51,14 @@ const flow = new Set<unknown>();
 let ModalHost: typeof HostModule.ModalHost;
 let ModalLayerContext: typeof ModalUiModule.ModalLayerContext;
 let ShortcutsDialog: typeof ShortcutsModule.ShortcutsDialog;
-let DaemonDetailsDialog: typeof DaemonDetailsModule.DaemonDetailsDialog;
+let SessionDetailsDialog: typeof SessionDetailsModule.SessionDetailsDialog;
 let WorktreeSessionsDialog: typeof WorktreeSessionsModule.WorktreeSessionsDialog;
 let IntegrationsDialog: typeof IntegrationsModule.IntegrationsDialog;
 let activateFeatures: typeof RegistryModule.activateFeatures;
 let featureModal: typeof RegistryModule.featureModal;
-let closeDaemonDetails: typeof ModalsModule.closeDaemonDetails;
+let closeSessionDetails: typeof ModalsModule.closeSessionDetails;
 let closeWorktreeSessions: typeof ModalsModule.closeWorktreeSessions;
-let openDaemonDetails: typeof ModalsModule.openDaemonDetails;
+let openSessionDetails: typeof ModalsModule.openSessionDetails;
 let openWorktreeSessions: typeof ModalsModule.openWorktreeSessions;
 let setState: typeof StateModule.setState;
 let state: typeof StateModule.state;
@@ -77,7 +77,7 @@ beforeAll(async () => {
 	const [reactiveState, reactiveSetState] = store.createStore({
 		...originalState.state,
 		// Roster updates belong only to this suite, not the shared SSR singleton.
-		daemonRoster: [...originalState.state.daemonRoster],
+		sessionRoster: [...originalState.state.sessionRoster],
 	});
 	mock.module("../state", () => ({
 		...originalState,
@@ -95,11 +95,11 @@ beforeAll(async () => {
 	({ ModalHost } = await import("../ModalHost"));
 	({ ModalLayerContext } = await import("../components/ui/Modal"));
 	({ ShortcutsDialog } = await import("../components/app/ShortcutsDialog"));
-	({ DaemonDetailsDialog } = await import("../components/fleet/daemon/DaemonDetailsDialog"));
+	({ SessionDetailsDialog } = await import("../components/fleet/session/SessionDetailsDialog"));
 	({ WorktreeSessionsDialog } = await import("../components/fleet/sidebar/WorktreeSessionsDialog"));
 	({ IntegrationsDialog } = await import("../components/settings/integrations/IntegrationsDialog"));
 	({ activateFeatures, featureModal } = await import("../features/registry"));
-	({ closeDaemonDetails, closeWorktreeSessions, openDaemonDetails, openWorktreeSessions } =
+	({ closeSessionDetails, closeWorktreeSessions, openSessionDetails, openWorktreeSessions } =
 		await import("../store/modals"));
 	({ setState, state } = await import("../state"));
 });
@@ -114,9 +114,9 @@ afterAll(async () => {
 });
 
 /** Minimal roster entry, same shape the fleet edge puts in a roster frame. */
-function daemon(id: string): DaemonEntry {
+function session(id: string): RosterEntry {
 	return {
-		daemonId: id,
+		workspaceId: id,
 		name: id,
 		cwd: `/repos/${id}`,
 		project: id,
@@ -151,10 +151,10 @@ beforeEach(async () => {
 			return { value: { type, props } };
 		},
 	});
-	closeDaemonDetails();
+	closeSessionDetails();
 	closeWorktreeSessions();
 	setState("modal", null);
-	setState("daemonRoster", []);
+	setState("sessionRoster", []);
 	await activateFeatures([]);
 });
 
@@ -208,49 +208,49 @@ describe("ModalHost", () => {
 		expect(dialogs(renderHost())).toEqual(withoutModal);
 	});
 
-	test("renders the daemon details dialog while its daemon is in the roster", () => {
-		setState("daemonRoster", [daemon("d1")]);
-		openDaemonDetails("d1");
-		expect(renderHost()).toContain(DaemonDetailsDialog);
-		expect(state.daemonDetailsId).toBe("d1");
+	test("renders the session details dialog while its session is in the roster", () => {
+		setState("sessionRoster", [session("d1")]);
+		openSessionDetails("d1");
+		expect(renderHost()).toContain(SessionDetailsDialog);
+		expect(state.sessionDetailsId).toBe("d1");
 	});
 
-	test("clears the daemon details slot when its daemon leaves the roster", () => {
-		setState("daemonRoster", [daemon("d1"), daemon("d2")]);
-		openDaemonDetails("d2");
-		expect(renderHost()).toContain(DaemonDetailsDialog);
-		// An unrelated daemon leaving changes nothing.
-		setState("daemonRoster", [daemon("d2")]);
-		expect(state.daemonDetailsId).toBe("d2");
-		// The daemon the slot names is gone: the open dialog closes itself and
+	test("clears the session details slot when its session leaves the roster", () => {
+		setState("sessionRoster", [session("d1"), session("d2")]);
+		openSessionDetails("d2");
+		expect(renderHost()).toContain(SessionDetailsDialog);
+		// An unrelated session leaving changes nothing.
+		setState("sessionRoster", [session("d2")]);
+		expect(state.sessionDetailsId).toBe("d2");
+		// The session the slot names is gone: the open dialog closes itself and
 		// the next mount renders nothing for the stale id.
-		setState("daemonRoster", []);
-		expect(state.daemonDetailsId).toBeNull();
-		expect(renderHost()).not.toContain(DaemonDetailsDialog);
+		setState("sessionRoster", []);
+		expect(state.sessionDetailsId).toBeNull();
+		expect(renderHost()).not.toContain(SessionDetailsDialog);
 	});
 
-	test("a stale daemon details id is cleared instead of mounting the dialog", () => {
-		openDaemonDetails("d1");
-		expect(renderHost()).not.toContain(DaemonDetailsDialog);
-		expect(state.daemonDetailsId).toBeNull();
+	test("a stale session details id is cleared instead of mounting the dialog", () => {
+		openSessionDetails("d1");
+		expect(renderHost()).not.toContain(SessionDetailsDialog);
+		expect(state.sessionDetailsId).toBeNull();
 	});
 
-	test("renders the worktree session dialog while its daemon is in the roster", () => {
-		setState("daemonRoster", [daemon("d1")]);
+	test("renders the worktree session dialog while its session is in the roster", () => {
+		setState("sessionRoster", [session("d1")]);
 		openWorktreeSessions("d1");
 		expect(renderHost()).toContain(WorktreeSessionsDialog);
 		expect(state.modal).toBe("worktree-sessions");
 		expect(state.worktreeSessionsId).toBe("d1");
 	});
 
-	test("closes the worktree session dialog when its daemon leaves the roster", () => {
-		setState("daemonRoster", [daemon("d1"), daemon("d2")]);
+	test("closes the worktree session dialog when its session leaves the roster", () => {
+		setState("sessionRoster", [session("d1"), session("d2")]);
 		openWorktreeSessions("d2");
 		renderHost();
-		// An unrelated daemon leaving changes nothing.
-		setState("daemonRoster", [daemon("d2")]);
+		// An unrelated session leaving changes nothing.
+		setState("sessionRoster", [session("d2")]);
 		expect(state.modal).toBe("worktree-sessions");
-		setState("daemonRoster", []);
+		setState("sessionRoster", []);
 		expect(state.modal).toBeNull();
 		expect(state.worktreeSessionsId).toBeNull();
 	});

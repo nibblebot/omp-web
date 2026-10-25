@@ -1,9 +1,9 @@
 /**
  * Session-file reader for the fleet's git-state poll: extracts the title of
- * a daemon's last session file from its head WITHOUT parsing the whole
+ * a session's last session file from its head WITHOUT parsing the whole
  * transcript, and reports whether the file holds any messages (a new/empty
  * session, untitled and rendered "New session" in the roster). Runs on a 10s
- * poll loop over N daemons, so reads are bounded to a small head chunk and
+ * poll loop over N sessions, so reads are bounded to a small head chunk and
  * cached by (path, mtimeMs, size); unchanged files cost one stat per poll,
  * exactly the head-cache pattern of stats-sessions.ts `readHead`.
  *

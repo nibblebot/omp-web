@@ -1,5 +1,5 @@
 /**
- * UI daemon for the split setup (`omp-web ui`): serves the static UI and
+ * UI server for the split setup (`omp-web ui`): serves the static UI and
  * reverse-proxies the data routes (/ctl, /auth, /callback) to the
  * control plane on loopback. The control plane runs with serveUi off, so
  * this process is the only one that answers for static paths.
@@ -18,7 +18,7 @@
  * fleet-unreachable notice.
  *
  * WebSocket: a session's pair socket (GET /callback/ws upgrade) and a
- * browser's socket (GET /ws upgrade, OMP_PROTO 5, same path and query
+ * browser's socket (GET /ws upgrade, OMP_PROTO 6, same path and query
  * upstream) are bridged to the control plane message for message (see
  * BridgeData); the callback pair forwards frames opaquely, text or binary, the
  * browser socket is text only. The upgrade request's end-to-end headers,

@@ -23,7 +23,7 @@ import { setPromptInsert } from "./chat";
 import { openModelPicker, recentModels, switchSessionModel } from "./models";
 import { openAddProject, openNewWorkspace } from "./projects";
 import { chooseResumeTarget, searchAllProjectSessions, sessionRowsFromResume } from "./resume";
-import { switchToDaemon } from "./roster";
+import { switchToSession } from "./roster";
 import { reportError } from "./toasts";
 
 const RECENTS_KEY = "omp-web:palette-recents";
@@ -60,7 +60,7 @@ export function paletteSources(query: string, stored: readonly PaletteItem[]): P
 			pluginsEnabled: isFeatureEnabled("plugins"),
 			projects: state.registeredProjects,
 		}),
-		sessions: [...rosterSessionItems(state.daemonRoster, state.currentSessionId), ...stored],
+		sessions: [...rosterSessionItems(state.sessionRoster, state.currentWorkspaceId), ...stored],
 		settings: settingItems(
 			state.settingsModel,
 			visibleSettingsTabs(state.settingsModel, !fleetSettingsActive()),
@@ -80,7 +80,7 @@ export function paletteSources(query: string, stored: readonly PaletteItem[]): P
 export async function searchStoredSessions(query: string): Promise<PaletteItem[]> {
 	const candidates = await searchAllProjectSessions(query);
 	const covered = new Set(
-		state.daemonRoster.flatMap((d) => (d.lastSessionFile ? [d.lastSessionFile] : [])),
+		state.sessionRoster.flatMap((d) => (d.lastSessionFile ? [d.lastSessionFile] : [])),
 	);
 	return storedSessionItems(
 		sessionRowsFromResume(candidates, state.sessionFile),
@@ -99,10 +99,10 @@ export function runPaletteItem(item: PaletteItem): void {
 			if (action.fill) setPromptInsert({ text: action.text });
 			else dispatchInput(action.text, undefined, "enter");
 			return;
-		case "daemon-session": {
+		case "workspace-session": {
 			// The attached session is a no-op, unless its process is stopped (a UI stop keeps
 			// the view on it): then the pick wakes it and attaches again.
-			void switchToDaemon(action.daemonId);
+			void switchToSession(action.workspaceId);
 			return;
 		}
 		case "stored-session":

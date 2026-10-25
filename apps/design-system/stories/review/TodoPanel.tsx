@@ -1,6 +1,6 @@
 import { TodoPanel } from "../../../web/components/review/TodoPanel";
 import { todoCalls } from "../../fixtures/review";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
 export default defineStory({

@@ -2,7 +2,7 @@
  * Session wake: the one rule set for bringing a session's callback pair up
  * before an attach or a prompt (FLC-23).
  *
- * Every daemon dials the fleet, so the fleet only ever waits on the pair; it
+ * Every session dials the fleet, so the fleet only ever waits on the pair; it
  * never dials. The rules, shared by the browser edge and fan-out prompts:
  *
  *  - A paired session returns at once.
@@ -20,8 +20,8 @@
  * stuck reconnecting/ready row after the grace; fan-out only waited on it and
  * timed out forever). The edge's stricter rules were chosen: never replace a
  * process that may still redial, and never return before an in-flight wake
- * settles. Wakes are serialized per daemon: a concurrent wake awaits the SAME
- * promise (shared outcome, failure included), so a daemon is never respawned
+ * settles. Wakes are serialized per session: a concurrent wake awaits the SAME
+ * promise (shared outcome, failure included), so a session is never respawned
  * twice and no caller proceeds before the pair is up. The entry is dropped
  * when the wake settles; a back-to-back wake after success is covered by the
  * `paired` check, and after failure it retries from scratch.
@@ -30,10 +30,10 @@
 import { REDIAL_GRACE_MS, type Registry, type RegistryEntry } from "./registry";
 import { PAIR_TIMEOUT_MS, type LifecycleApi, type StartOptions } from "./workspace-lifecycle";
 
-/** The slice of the callback transport the waker reads (structural; the real DaemonTransportRegistry conforms). */
+/** The slice of the callback transport the waker reads (structural; the real SessionTransportRegistry conforms). */
 export interface WakeTransport {
-	pairStatus(daemonId: string): { paired: boolean };
-	onPairChange(daemonId: string, cb: (status: { paired: boolean }) => void): () => void;
+	pairStatus(workspaceId: string): { paired: boolean };
+	onPairChange(workspaceId: string, cb: (status: { paired: boolean }) => void): () => void;
 }
 
 export interface SessionWakerDeps {
@@ -59,7 +59,7 @@ export class SessionWaker {
 	readonly #transport: WakeTransport | undefined;
 	readonly #redialGraceMs: number;
 	readonly #pairTimeoutMs: number;
-	/** In-flight wake per daemonId; concurrent wakes share its outcome. */
+	/** In-flight wake per workspaceId; concurrent wakes share its outcome. */
 	readonly #inflight = new Map<string, Promise<void>>();
 
 	constructor(deps: SessionWakerDeps) {
@@ -74,12 +74,12 @@ export class SessionWaker {
 	 * Bring the session's pair up per the class rules. Resolves once a
 	 * non-clone session is paired (a clone once its lifecycle ensure
 	 * resolved); throws the reason it cannot be. A wake already in flight for
-	 * the daemon is awaited instead of starting another, so a later call's
+	 * the session is awaited instead of starting another, so a later call's
 	 * resumeFile is ignored.
 	 */
 	wake(entry: RegistryEntry, opts?: { resumeFile?: string }): Promise<void> {
-		const daemonId = entry.daemonId;
-		const existing = this.#inflight.get(daemonId);
+		const workspaceId = entry.workspaceId;
+		const existing = this.#inflight.get(workspaceId);
 		if (existing !== undefined) return existing;
 		const resumeFile = opts?.resumeFile;
 		// The one kind-dependent choice left is WHAT to wait on, not which verb to
@@ -91,16 +91,16 @@ export class SessionWaker {
 				? this.#wakeClone(entry, resumeFile)
 				: this.#wakeSession(entry, resumeFile);
 		const tracked: Promise<void> = run.finally(() => {
-			if (this.#inflight.get(daemonId) === tracked) this.#inflight.delete(daemonId);
+			if (this.#inflight.get(workspaceId) === tracked) this.#inflight.delete(workspaceId);
 		});
-		this.#inflight.set(daemonId, tracked);
+		this.#inflight.set(workspaceId, tracked);
 		return tracked;
 	}
 
 	/** Resolve once the session's pair is up; reject when it is not up within timeoutMs (default pairTimeoutMs). */
-	async waitForPair(daemonId: string, timeoutMs: number = this.#pairTimeoutMs): Promise<void> {
-		if (!(await this.#awaitPair(daemonId, timeoutMs))) {
-			throw new Error(`callback pair for ${daemonId} not ready within ${timeoutMs} ms`);
+	async waitForPair(workspaceId: string, timeoutMs: number = this.#pairTimeoutMs): Promise<void> {
+		if (!(await this.#awaitPair(workspaceId, timeoutMs))) {
+			throw new Error(`callback pair for ${workspaceId} not ready within ${timeoutMs} ms`);
 		}
 	}
 
@@ -110,35 +110,35 @@ export class SessionWaker {
 	 * for the pair; callers that need it use waitForPair.
 	 */
 	async #wakeClone(entry: RegistryEntry, resumeFile: string | undefined): Promise<void> {
-		const daemonId = entry.daemonId;
-		if (this.#transport?.pairStatus(daemonId).paired === true) return;
+		const workspaceId = entry.workspaceId;
+		if (this.#transport?.pairStatus(workspaceId).paired === true) return;
 		if (this.#transport === undefined) {
 			throw new Error("clone wake is unavailable: no transport wired");
 		}
-		await this.#lifecycle.start(daemonId, startOptions(resumeFile));
+		await this.#lifecycle.start(workspaceId, startOptions(resumeFile));
 	}
 
 	async #wakeSession(entry: RegistryEntry, resumeFile: string | undefined): Promise<void> {
-		const daemonId = entry.daemonId;
+		const workspaceId = entry.workspaceId;
 		const transport = this.#transport;
 		if (transport === undefined) {
 			throw new Error("session wake is unavailable: no transport wired");
 		}
-		if (transport.pairStatus(daemonId).paired) return;
+		if (transport.pairStatus(workspaceId).paired) return;
 		// A reconnecting session, or a ready one that just lost its pair, is
 		// redialing on its own: give it the grace window before deciding it
 		// needs a respawn.
-		const initial = this.#registry.get(daemonId)?.status ?? entry.status;
+		const initial = this.#registry.get(workspaceId)?.status ?? entry.status;
 		const redialing = initial === "reconnecting" || initial === "ready";
-		if (redialing && (await this.#awaitPair(daemonId, this.#redialGraceMs))) {
+		if (redialing && (await this.#awaitPair(workspaceId, this.#redialGraceMs))) {
 			return;
 		}
 		// The status may have changed during the wait; respect the live value.
-		const status = this.#registry.get(daemonId)?.status ?? entry.status;
+		const status = this.#registry.get(workspaceId)?.status ?? entry.status;
 		if (status !== "connecting") {
-			await this.#lifecycle.start(daemonId, startOptions(resumeFile));
+			await this.#lifecycle.start(workspaceId, startOptions(resumeFile));
 		}
-		if (!(await this.#awaitPair(daemonId, this.#pairTimeoutMs))) {
+		if (!(await this.#awaitPair(workspaceId, this.#pairTimeoutMs))) {
 			throw new Error(
 				`session ${entry.name} did not connect within ${this.#pairTimeoutMs / 1000}s`,
 			);
@@ -149,17 +149,17 @@ export class SessionWaker {
 	 * Resolve true once the session's pair is up, false after timeoutMs. The
 	 * pair subscription is released on either outcome.
 	 */
-	#awaitPair(daemonId: string, timeoutMs: number): Promise<boolean> {
+	#awaitPair(workspaceId: string, timeoutMs: number): Promise<boolean> {
 		const transport = this.#transport;
 		if (transport === undefined) return Promise.resolve(false);
-		if (transport.pairStatus(daemonId).paired) return Promise.resolve(true);
+		if (transport.pairStatus(workspaceId).paired) return Promise.resolve(true);
 		const { promise, resolve } = Promise.withResolvers<boolean>();
 		let unsubscribe: () => void = () => {};
 		const timer = setTimeout(() => {
 			unsubscribe();
 			resolve(false);
 		}, timeoutMs);
-		unsubscribe = transport.onPairChange(daemonId, (status) => {
+		unsubscribe = transport.onPairChange(workspaceId, (status) => {
 			if (!status.paired) return;
 			clearTimeout(timer);
 			unsubscribe();

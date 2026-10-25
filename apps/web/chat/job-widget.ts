@@ -76,7 +76,7 @@ export function latestJobWidget<T extends { view: WireJobWidgetView }>(
 }
 
 /**
- * Whether a widget belongs to a job the composer bar counts. The daemon counts a subagent's task job with
+ * Whether a widget belongs to a job the composer bar counts. The session counts a subagent's task job with
  * the agents, not with the jobs (`runningBackgroundJobs`), and a task job always runs a subagent, so its
  * widget (the agent's progress) stays out of the bar's glance too.
  */

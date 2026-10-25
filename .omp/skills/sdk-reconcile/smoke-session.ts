@@ -1,15 +1,15 @@
 #!/usr/bin/env bun
 /**
- * Boots a real omp-session daemon from a checkout against the operator's own
+ * Boots a real omp-session process from a checkout against the operator's own
  * SDK config (agent dir, auth, models) and reads its browser-socket (`/ws`,
- * OMP_PROTO 5) priming through
+ * OMP_PROTO 6) priming through
  * `ready`. This exercises in-process SDK session creation with real settings,
  * which the hermetic test suites deliberately avoid.
  *
- *   bun .omp/skills/sdk-reconcile/smoke-daemon.ts [--root <checkout>] [--timeout-ms 60000]
+ *   bun .omp/skills/sdk-reconcile/smoke-session.ts [--root <checkout>] [--timeout-ms 60000]
  *
  * Prints one JSON line on stdout: { ok, sdkModel, frames, sessionFile, ... }.
- * Exit 0 only when hello_ok, state, and ready all arrived. The daemon is bound
+ * Exit 0 only when hello_ok, state, and ready all arrived. The session is bound
  * to a fresh temp dir, never the checkout, and is killed before exit.
  */
 import { mkdtempSync, rmdirSync, rmSync } from "node:fs";
@@ -60,7 +60,7 @@ try {
 		}
 	}
 	if (base === undefined)
-		throw new Error("daemon exited before printing its OMP_SESSION| listening line");
+		throw new Error("session exited before printing its OMP_SESSION| listening line");
 
 	const url = browserSocketUrl(base, {
 		clientId: null,

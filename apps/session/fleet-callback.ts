@@ -48,7 +48,7 @@ import {
 import { isLoopbackHost } from "#lib/platform/hosts";
 
 /**
- * Callback transport, daemon half (OMP_CALLBACK_PROTO 2). The daemon dials OUT
+ * Callback transport, session half (OMP_CALLBACK_PROTO 2). The session dials OUT
  * to the fleet and keeps one WebSocket per workspace+generation:
  *
  *   GET <base>/callback/ws   upgrade; one text message = one canonical-JSON envelope
@@ -77,11 +77,11 @@ import { isLoopbackHost } from "#lib/platform/hosts";
  *     envelope, or an outbound backlog that never drains within the silence
  *     deadline replaces the pair after jittered 1 s to 30 s backoff.
  *   - The fleet emits 15 s `heartbeat` envelopes (streamId "transport"); the
- *     daemon mirrors 15 s heartbeats (streamId "control") while idle. Liveness
+ *     session mirrors 15 s heartbeats (streamId "control") while idle. Liveness
  *     is this envelope deadline, never WebSocket ping/pong.
  *   - A fresh socket is a fresh connectionId and a fresh inbound seq space;
- *     nothing is resumed. The daemon's own seq stays monotonic across pairs so
- *     the fleet floor and the daemon replay rings share one space.
+ *     nothing is resumed. The session's own seq stays monotonic across pairs so
+ *     the fleet floor and the session replay rings share one space.
  *   - A message that is binary or fails envelope validation is dropped,
  *     counted (status.badMessages) and reported through onError; it never ends
  *     the pair.
@@ -125,7 +125,7 @@ export const CALLBACK_IDENTITY_HEADERS = {
 	connectionId: "x-omp-connection-id",
 } as const;
 
-// The control-plane wire literals (transport streamId, daemon heartbeat
+// The control-plane wire literals (transport streamId, session heartbeat
 // streamId, pair_ready payload type) live in lib/wire/callback-protocol.ts;
 // re-export so the FleetCallback public surface for Main's wiring is stable.
 export { CALLBACK_TRANSPORT_STREAM_ID, CALLBACK_CONTROL_STREAM_ID, CALLBACK_PAIR_READY_TYPE };
@@ -153,7 +153,7 @@ const TERMINAL_REFUSALS: Record<string, true> = {
 
 export type FleetCallbackState = "idle" | "connecting" | "ready" | "reconnecting" | "stopped";
 
-/** Outbound envelope the daemon hands the pair; identity/seq/at are stamped at emit. */
+/** Outbound envelope the session hands the pair; identity/seq/at are stamped at emit. */
 export interface CallbackSendInput {
 	/** Logical per-browser/control stream within the connection. */
 	streamId: string;
@@ -430,7 +430,7 @@ export class FleetCallback {
 	#badMessages = 0;
 	#reconnects = 0;
 	#readyCount = 0;
-	/** Highest seq assigned on any pair. Seq stays monotonic across pair replacements so the fleet floor and the daemon ring share one space. */
+	/** Highest seq assigned on any pair. Seq stays monotonic across pair replacements so the fleet floor and the session ring share one space. */
 	#seqHigh = 0;
 	#backoffAttempt = 0;
 	#backoffTimer: ReturnType<typeof setTimeout> | null = null;
@@ -587,7 +587,7 @@ export class FleetCallback {
 
 	/**
 	 * POST a materialization request over the bulk channel (wake): the
-	 * daemon mints a fresh correlation id and asks the fleet to serve the
+	 * session mints a fresh correlation id and asks the fleet to serve the
 	 * workspace's stored session lineage bytes as NDJSON. Requires a READY
 	 * pair (a reconnecting or stopped pair has no live identity headers).
 	 * Returns null when the fleet lacks the session, and throws
@@ -597,7 +597,7 @@ export class FleetCallback {
 		const pair = this.#pair;
 		if (!this.#started || this.#stopped || pair === null || !pair.open || this.#state !== "ready") {
 			throw callbackError("unavailable", "materialization unavailable: no ready callback pair", {
-				detail: "the daemon has no live fleet pair to request the stored session from",
+				detail: "the session has no live fleet pair to request the stored session from",
 			});
 		}
 		const correlationId = randomUUID();
@@ -643,7 +643,7 @@ export class FleetCallback {
 		}
 		// Typed fleet error body ({error, message, detail?}) or the HTTP
 		// status mapping. A missing stored session surfaces as `unavailable`
-		// (HTTP 503 via the frozen status map); the daemon reports it typed
+		// (HTTP 503 via the frozen status map); the session reports it typed
 		// and the caller decides.
 		const { code, message, detail } = parseRefusal(res.status, text);
 		throw callbackError(code, message ?? `materialization refused: HTTP ${res.status}`, {
@@ -654,7 +654,7 @@ export class FleetCallback {
 	/**
 	 * Upload one file to the fleet as strictly-sequential multi-part raw bytes
 	 * over the bulk channel (Transport/Lifecycle 2026-09-06 contract). The
-	 * daemon streams each part via `readable` to
+	 * session streams each part via `readable` to
 	 * POST /callback/bulk/<correlationId> with the usual identity headers plus
 	 * `x-omp-bulk-part: <n>` (0-based) and `x-omp-bulk-final: 1` on the last
 	 * part. The AGGREGATE stays capped at the ledger's BULK_MAX_BYTES (64 MiB);
@@ -679,7 +679,7 @@ export class FleetCallback {
 		const pair = this.#pair;
 		if (!this.#started || this.#stopped || pair === null || !pair.open || this.#state !== "ready") {
 			throw callbackError("unavailable", "bulk upload unavailable: no ready callback pair", {
-				detail: "the daemon has no live fleet pair to upload to",
+				detail: "the session has no live fleet pair to upload to",
 			});
 		}
 		if (input.totalBytes < 0 || input.totalBytes > BULK_MAX_BYTES) {

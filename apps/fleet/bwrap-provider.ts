@@ -67,7 +67,7 @@ import {
 	type LaunchRecord,
 } from "./bwrap-identity";
 import { cloneRuntimeLaunch, defaultDenyRoots } from "./runtime-launch";
-import { SessionLog, PROVIDER_DAEMON_LOG, pumpToSessionLog } from "./session-log";
+import { SessionLog, PROVIDER_SESSION_LOG, pumpToSessionLog } from "./session-log";
 
 /**
  * Pull the concrete secret-env values for the recorded key names out of the
@@ -194,8 +194,8 @@ function recordSuperviseError(stateDir: string, message: string): void {
 }
 
 /**
- * The daemon's `--fleet-stdin` payload for a handed-over callback pair, or
- * undefined when the handoff carries no pair (the daemon then gets no flag).
+ * The session's `--fleet-stdin` payload for a handed-over callback pair, or
+ * undefined when the handoff carries no pair (the session then gets no flag).
  */
 function fleetStdinFor(callbackEnv: Record<string, string>): string | undefined {
 	if (!FLEET_CALLBACK_ENV_KEYS.some((key) => callbackEnv[key] !== undefined)) return undefined;
@@ -218,8 +218,8 @@ async function runSupervisor(stateDir: string): Promise<number> {
 	let built;
 	let fleetStdin: string | undefined;
 	try {
-		// The callback pair reaches the daemon over stdin (--fleet-stdin), never
-		// its environment. No pair means no flag, and the daemon never reads stdin.
+		// The callback pair reaches the session over stdin (--fleet-stdin), never
+		// its environment. No pair means no flag, and the session never reads stdin.
 		fleetStdin = fleetStdinFor(spec.callbackEnv);
 		built = buildBwrapArgv({
 			workspaceDir: request.workspaceDir,
@@ -247,15 +247,15 @@ async function runSupervisor(stateDir: string): Promise<number> {
 		return 1;
 	}
 
-	// Child stdout and stderr go to one daemon.log in the state dir, capped per
+	// Child stdout and stderr go to one session.log in the state dir, capped per
 	// SessionLog. stdin is always a pipe: the payload is written, then closed (EOF
-	// when there is no pair). The daemon reads it only when started with --fleet-stdin.
-	const logPath = join(stateDir, PROVIDER_DAEMON_LOG);
+	// when there is no pair). The session reads it only when started with --fleet-stdin.
+	const logPath = join(stateDir, PROVIDER_SESSION_LOG);
 	let log: SessionLog;
 	try {
 		log = new SessionLog(logPath);
 	} catch (cause) {
-		const message = `cannot open ${PROVIDER_DAEMON_LOG}: ${String(cause)}`;
+		const message = `cannot open ${PROVIDER_SESSION_LOG}: ${String(cause)}`;
 		console.error(`bwrap-provider: supervise: ${message}`);
 		recordSuperviseError(stateDir, message);
 		return 1;

@@ -2,14 +2,14 @@
 //
 // Actions stream files through the existing fleet proxy
 // (`/ctl/sessions/{id}/download?path=...`, same-origin fetch with
-// credentials); the browser NEVER dials a daemon directly, NEVER bypasses
+// credentials); the browser NEVER dials a session directly, NEVER bypasses
 // the proxy, and NEVER puts tokens in URLs (cookie session + the existing
-// gate carry auth; the fleet holds the daemon bearer server-side).
+// gate carry auth; the fleet holds the session bearer server-side).
 //
 // Flow per download: (1) fetch the download manifest first (`downloadManifest`
 // call); (2) open the consent dialog with the
 // manifest's inclusions/warnings/provenance; (3) on confirm, produce the
-// server path via exportDownload (one daemon call per kind; the daemon stages it under its jail) and stream
+// server path via exportDownload (one session call per kind; the session stages it under its jail) and stream
 // GET /ctl/.../download?path=<serverPath> to a blob -> anchor download with
 // the manifest/clientFilename (browser filenames are never server paths).
 // Streaming uses ReadableStream -> Blob where available with a plain-blob
@@ -26,7 +26,7 @@ import { authedFetch } from "./auth";
 import { call } from "./transport";
 import { pushToast } from "./toasts";
 
-/** Additive download kinds (mirrors the daemon DownloadKind). */
+/** Additive download kinds (mirrors the session DownloadKind). */
 export type WebDownloadKind = "html" | "html-themed" | "text" | "request" | "archive";
 
 /** Consent dialog data: inclusions, warnings, provenance from the manifest. */
@@ -73,8 +73,8 @@ export function closeDownload(): void {
 	setProgress(null);
 }
 
-function daemonIdOrThrow(): string {
-	const id = state.currentSessionId;
+function workspaceIdOrThrow(): string {
+	const id = state.currentWorkspaceId;
 	if (!id) throw new Error("No session attached; attach a session before downloading.");
 	return id;
 }
@@ -195,7 +195,7 @@ function triggerAnchor(url: string, filename: string): void {
 	window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
-/** Stage one file on the daemon via exportDownload; the daemon jails it and names it. */
+/** Stage one file on the session via exportDownload; the session jails it and names it. */
 async function produceServerPath(
 	kind: Exclude<WebDownloadKind, "text">,
 	consent: DownloadConsent,
@@ -220,7 +220,7 @@ async function produceServerPath(
 
 /** Fetch one fleet-proxied file and save it; verifies bytes before any success signal. */
 async function fetchProxied(
-	daemonId: string,
+	workspaceId: string,
 	serverPath: string,
 	filename: string,
 ): Promise<number> {
@@ -229,7 +229,7 @@ async function fetchProxied(
 	progressAbort = controller;
 	setProgress({ phase: "fetching", receivedBytes: 0 });
 	const res = await authedFetch(
-		`/ctl/sessions/${encodeURIComponent(daemonId)}/download?path=${encodeURIComponent(serverPath)}`,
+		`/ctl/sessions/${encodeURIComponent(workspaceId)}/download?path=${encodeURIComponent(serverPath)}`,
 		{ signal: controller.signal },
 	);
 	if (!res.ok) {
@@ -243,7 +243,7 @@ async function fetchProxied(
 }
 
 async function runDownload(kind: WebDownloadKind, consent: DownloadConsent): Promise<void> {
-	const daemonId = daemonIdOrThrow();
+	const workspaceId = workspaceIdOrThrow();
 	try {
 		if (kind === "text") {
 			setProgress({ phase: "producing" });
@@ -258,7 +258,7 @@ async function runDownload(kind: WebDownloadKind, consent: DownloadConsent): Pro
 		}
 		setProgress({ phase: "producing" });
 		const produced = await produceServerPath(kind, consent);
-		const bytes = await fetchProxied(daemonId, produced.serverPath, produced.clientFilename);
+		const bytes = await fetchProxied(workspaceId, produced.serverPath, produced.clientFilename);
 		setProgress({ phase: "done", filename: produced.clientFilename, bytes });
 	} catch (err) {
 		const code = failureCodeOf(err);

@@ -6,14 +6,14 @@
  * browser WebSocket edge (GET /ws) on the same server. Wires the
  * persistent Registry, the callback transport and the workspace lifecycle:
  *
- *   GET  /ctl/sessions {…}                         → DaemonEntry[]
+ *   GET  /ctl/sessions {…}                         → RosterEntry[]
  *   GET  /ctl/projects {…}                         → { projects: RegisteredProject[] }
  *   POST /ctl/projects {path, start?, template?}   → 201 { project, entry? } | 200 { project, existing: true }
  *   DELETE /ctl/projects/:projectId                → 200 { removed } | 409 { error }
  *   GET  /ctl/settings                             -> SettingsModel
  *   GET  /ctl/usage                               -> UsageReport[] (502 { error } on failure)
- *   GET  /ctl/worktrees/:daemonId/delete-info      -> worktree_delete_info payload
- *   POST /ctl/spawn    {cwd, template?, name?} -> DaemonEntry
+ *   GET  /ctl/worktrees/:workspaceId/delete-info      -> worktree_delete_info payload
+ *   POST /ctl/spawn    {cwd, template?, name?} -> RosterEntry
  *   POST /ctl/stop     {selector}                  → { stopped: string[] }
  *   POST /ctl/remove   {selector}                  → { removed: string[] }
  *   POST /ctl/prompt   {selector, text, waitMs?}   → PromptResult[] | { submitted: string[] }
@@ -25,8 +25,8 @@
  *   POST /ctl/plugins/:name/features {features|null}  -> detail after feature selection
  *   POST /ctl/plugins/:name/setting {key, value|null} -> detail after setting write (null clears)
  *   POST /ctl/projects/:id/worktrees {name, baseRef?, existingBranch?, start?} -> 201 { entry }
- *   POST /ctl/clones/:daemonId/fetch-into-project -> CloneFetchResult | 400/409/503 { error } (local-source clones on a fleet-visible volume only; fast-forward or create, never overwrite)
- *   DELETE /ctl/worktrees/:daemonId {deleteBranch?: string} -> worktree: stop -> remove entry -> git worktree remove
+ *   POST /ctl/clones/:workspaceId/fetch-into-project -> CloneFetchResult | 400/409/503 { error } (local-source clones on a fleet-visible volume only; fast-forward or create, never overwrite)
+ *   DELETE /ctl/worktrees/:workspaceId {deleteBranch?: string} -> worktree: stop -> remove entry -> git worktree remove
  *                    (clone workspace: verify-at-deletion gate)
  *   GET  /ctl/logs/orphans                         -> orphaned log-store subtrees
  *   POST /ctl/logs/purge {workspaceId}             -> explicit manual purge
@@ -45,7 +45,7 @@
  * additionally need X-Omp-Csrf + an allowed Origin. Loopback peers stay exempt
  * (the CLI precedent, R14). With no token
  * configured every route behaves exactly as before. /callback/* is NEVER
- * gated by browser auth: the DaemonTransportRegistry authenticates it with
+ * gated by browser auth: the SessionTransportRegistry authenticates it with
  * the workspace enrollment credentials (mounted first for that prefix).
  *
  * Errors: 400 invalid JSON / validation failure, 404 empty selector match,
@@ -60,7 +60,7 @@
 import type { Server } from "bun";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { DaemonStatus, PublicProviderProfile } from "#lib/wire/protocol";
+import type { SessionStatus, PublicProviderProfile } from "#lib/wire/protocol";
 import type { FleetConfig } from "./config";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { checkOmpSetup } from "./omp-check";
@@ -96,7 +96,7 @@ import type { StatsConfig } from "./stats-config";
 import { BrowserAuthStore, clearSessionCookie } from "./browser-auth";
 import { browserRequestAllowed, isLoopbackIp } from "#lib/runtime/browser-guard";
 import { isJsonRequest, PRE_AUTH_IDLE_TIMEOUT_S } from "./browser-guard";
-import { DaemonTransportRegistry } from "./daemon-transport";
+import { SessionTransportRegistry } from "./session-transport";
 import { fleetWebSocket, type FleetSocketData } from "./fleet-websocket";
 import { BROWSER_SOCKET_PATH } from "#lib/wire/browser-socket";
 import { FleetAuthGate, isLoopbackBind, BrowserAuthError } from "./fleet-auth-gate";
@@ -154,8 +154,8 @@ export interface FleetServer {
 	sync: ProjectSync;
 	/** Workspace lifecycle owner: clone and host (main-checkout/worktree) runtimes. */
 	lifecycle: WorkspaceLifecycle;
-	/** Daemon transport registry (callback pairs); tests drive sessions through it. */
-	transport: DaemonTransportRegistry;
+	/** Session transport registry (callback pairs); tests drive sessions through it. */
+	transport: SessionTransportRegistry;
 	/** Fleet lifecycle-event ring (backing /ctl/debug; CLI mirrors it to stdout). */
 	eventLog: FleetEventLog;
 	/** Durable log store (null when the fleet boots without one); the stored-session and log routes read it. */
@@ -291,7 +291,7 @@ function settingsWriteGuards(body: Record<string, unknown>): {
 	return { expectedRevision, layer };
 }
 
-/** Worktree route patterns (daemon ids / project ids are [^/]+ segments). */
+/** Worktree route patterns (workspace ids / project ids are [^/]+ segments). */
 const PROJECT_WORKTREES_ROUTE = /^\/ctl\/projects\/([^/]+)\/worktrees$/;
 const WORKTREE_DELETE_ROUTE = /^\/ctl\/worktrees\/([^/]+)$/;
 const CLONE_FETCH_ROUTE = /^\/ctl\/clones\/([^/]+)\/fetch-into-project$/;
@@ -310,7 +310,7 @@ class LocalCloneResourceDeleter implements WorkspaceResourceDeleter {
 		const cwd = entry.cwd ?? "";
 		if (cwd === "") return; // No volume to remove (a placeholder).
 		const workspace = entry.workspace;
-		if (workspace?.kind !== "clone" || workspaceId !== entry.daemonId) {
+		if (workspace?.kind !== "clone" || workspaceId !== entry.workspaceId) {
 			throw new Error(`refusing to delete non-clone volume: ${workspaceId}`);
 		}
 		const realCwd = realpathOf(cwd);
@@ -356,9 +356,9 @@ class FleetServerImpl implements FleetServer {
 	/** Optional browser-session auth; null when disabled (no token
 	 *  configured). Loopback peer exemptions + CSRF/origin live behind this. */
 	readonly authGate: FleetAuthGate | null;
-	/** Callback enrollment for roster daemons (mirrors the
-	 *  daemon-half enrollment the lifecycle hands out). */
-	readonly transport: DaemonTransportRegistry;
+	/** Callback enrollment for roster sessions (mirrors the
+	 *  session-half enrollment the lifecycle hands out). */
+	readonly transport: SessionTransportRegistry;
 	/** Fleet log store; null when the logs dir is not writable at boot.
 	 *  Loaded after the state lock is held; closed only in close(). */
 	readonly logStore: FleetLogStore | null;
@@ -405,7 +405,7 @@ class FleetServerImpl implements FleetServer {
 	readonly #browserOrigin: string | undefined;
 
 	/**
-	 * daemonIds mid-eviction for a poll-detected, vanished worktree. The
+	 * workspaceIds mid-eviction for a poll-detected, vanished worktree. The
 	 * project sync can fire per poll tick; the first report wins and the set
 	 * is cleared when the eviction settles.
 	 */
@@ -442,10 +442,10 @@ class FleetServerImpl implements FleetServer {
 			configPath: facts.configPath,
 			bind: config.bind,
 		};
-		this.transport = new DaemonTransportRegistry();
+		this.transport = new SessionTransportRegistry();
 		// Fleet log store: loaded under the state lock (the state dir is
 		// this fleet's alone) so restarts rebuild in-memory offset state from
-		// the durable index before any daemon pair streams. A boot-time logs
+		// the durable index before any session pair streams. A boot-time logs
 		// dir that cannot be created/made writable is logged and disables log
 		// streaming for this process; it must not take the whole fleet down.
 		let logStore: FleetLogStore | null = null;
@@ -510,7 +510,7 @@ class FleetServerImpl implements FleetServer {
 		// Boot re-enrollment: enrollments are NOT memory-only. Every roster
 		// entry whose workspace record persists a callback-enrollment binding
 		// (digest + generation only) is re-enrolled before anything else
-		// acts on the roster, so a fleet restart accepts daemon redials with
+		// acts on the roster, so a fleet restart accepts session redials with
 		// their original credential; the raw credential never survives the
 		// process, only its sha-256 digest.
 		for (const { workspaceId, enrollment } of this.registry.workspaceEnrollments()) {
@@ -565,12 +565,13 @@ class FleetServerImpl implements FleetServer {
 			attachLogTap: (workspaceId) => this.#attachLogStoreTap(workspaceId),
 			callbackUrl: () => this.#callbackUrl(),
 			runtime: { pairLossGraceMs, ...cloneRuntime },
-			onEnrolled: (daemonId) => this.#watchPair(daemonId),
-			onSpawned: (daemonId) => this.sync.probeGitState(daemonId),
+			onEnrolled: (workspaceId) => this.#watchPair(workspaceId),
+			onSpawned: (workspaceId) => this.sync.probeGitState(workspaceId),
 		});
 		// Git-state polling and project sync: observes rows, never runs them.
 		this.sync = new ProjectSync(registry, this.lifecycle, {
-			onEvent: (level, message, daemonId) => this.eventLog.add(level, "server", message, daemonId),
+			onEvent: (level, message, workspaceId) =>
+				this.eventLog.add(level, "server", message, workspaceId),
 			onWorktreeRemoved: (entry) => void this.#onWorktreeVanished(entry),
 		});
 		this.cloneApi = new CloneControlApi({
@@ -593,7 +594,7 @@ class FleetServerImpl implements FleetServer {
 			config,
 			eventLog: this.eventLog,
 			eviction: {
-				evictRow: (daemonId, removal) => this.#evictRow(daemonId, removal),
+				evictRow: (workspaceId, removal) => this.#evictRow(workspaceId, removal),
 				evictProject: (projectId) => this.#evictProject(projectId),
 			},
 		});
@@ -610,7 +611,7 @@ class FleetServerImpl implements FleetServer {
 			transport: this.transport,
 			waker: this.#waker,
 			eviction: {
-				evictRow: (daemonId, removal) => this.#evictRow(daemonId, removal),
+				evictRow: (workspaceId, removal) => this.#evictRow(workspaceId, removal),
 				evictProject: (projectId) => this.#evictProject(projectId),
 			},
 			logStore: this.logStore ?? undefined,
@@ -641,7 +642,7 @@ class FleetServerImpl implements FleetServer {
 			hostname: config.bind,
 			port,
 			// Long-lived HTTP responses (a fleet-proxied download waits on its
-			// daemon's bulk transfer) are quiet for longer than Bun's default 10s
+			// session's bulk transfer) are quiet for longer than Bun's default 10s
 			// fetch idleTimeout. (The WebSocket idle timeout, for the callback pair
 			// and the browser socket, lives in `websocket`.)
 			idleTimeout: 0,
@@ -667,10 +668,10 @@ class FleetServerImpl implements FleetServer {
 		// bytes over the bulk channel from this store.
 		if (this.logStore !== null) {
 			this.transport.setMaterializeStore(this.logStore);
-			// Log taps ride the daemon callback pairs. Enrollment is the tap's
+			// Log taps ride the session callback pairs. Enrollment is the tap's
 			// gate (the transport authenticates every envelope against it).
 			// Boot enrollments above include persisted re-enrollments (a fleet
-			// restart accepts daemon redials with their original credential),
+			// restart accepts session redials with their original credential),
 			// so the static attach below covers every tap the fleet will ever
 			// need; runtime attach happens on enrollment.
 			for (const workspaceId of this.transport.enrolledWorkspaceIds()) {
@@ -735,27 +736,27 @@ class FleetServerImpl implements FleetServer {
 	// --- fleet log store ---
 
 	/**
-	 * Per-workspace log-frame tap: durability-append daemon log chunks and
+	 * Per-workspace log-frame tap: durability-append session log chunks and
 	 * ack via batched transport controls. Attached at startup for every
 	 * enrolled workspace (transport enrollments are never revoked at
 	 * runtime today, so the static attach covers the live fleet). Unknown
 	 * workspaces never reach here: the transport gates every envelope by
 	 * enrollment. Also fire-and-forget (a slow disk must not stall the
-	 * daemon connection pump); the daemon's ring window absorbs slack and
+	 * session connection pump); the session's ring window absorbs slack and
 	 * its acked-offset resume point is only ever advanced by acked chunks.
 	 */
 	#attachLogStoreTap(workspaceId: string): void {
 		if (this.#logTaps.has(workspaceId)) return;
 		const store = this.logStore;
 		if (store === null) return;
-		const unsubscribe = this.transport.onDaemonEnvelope(workspaceId, (envelope) => {
+		const unsubscribe = this.transport.onSessionEnvelope(workspaceId, (envelope) => {
 			this.#onLogEnvelope(store, workspaceId, envelope);
 		});
 		this.#logTaps.set(workspaceId, unsubscribe);
 	}
 
 	/**
-	 * One daemon callback envelope on a log-tapped workspace. Frame chunks
+	 * One session callback envelope on a log-tapped workspace. Frame chunks
 	 * append to the store; a `control` envelope carrying the additive
 	 * workspace-side session-deletion notice purges that session's
 	 * fleet copy; the workspace wins. Read-only workspaces refuse the purge
@@ -804,25 +805,25 @@ class FleetServerImpl implements FleetServer {
 			this.#armLogAckFlush(workspaceId);
 			if (pending.size >= LOG_ACK_BATCH_MAX) this.#flushLogAcks(workspaceId);
 		} else if (result.status === "gap") {
-			// The daemon owns repair: it re-streams [from, to) once this
+			// The session owns repair: it re-streams [from, to) once this
 			// lands. Sent immediately; the gap is a stall, not chatter.
 			// The envelope's streamId names the AFFECTED log stream (the
-			// daemon half's handleControl requires it: controls on the
+			// session half's handleControl requires it: controls on the
 			// reserved transport stream carry the target in the payload or
 			// the envelope, and a missing target is an invalid_request; a
 			// mid-file hole would otherwise gap-lock permanently).
 			void this.transport
-				.sendToDaemon(workspaceId, {
+				.sendToSession(workspaceId, {
 					streamId,
 					kind: "control",
 					payload: { type: "log_gap", from: result.from, to: result.to },
 				})
 				.then(
 					() => {
-						// Sent; the daemon repairs.
+						// Sent; the session repairs.
 					},
 					() => {
-						// No live pair; the daemon's ring/continuity check
+						// No live pair; the session's ring/continuity check
 						// will re-raise the same gap after reconnect.
 					},
 				);
@@ -850,7 +851,7 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * Send one batched control envelope to the daemon with every pending
+	 * Send one batched control envelope to the session with every pending
 	 * acked offset, then clear the batch. Never throws.
 	 */
 	#flushLogAcks(workspaceId: string): void {
@@ -864,7 +865,7 @@ class FleetServerImpl implements FleetServer {
 		this.#logAckChunks.delete(workspaceId);
 		// An ack names only durable offsets: group-commit the deferred appends
 		// first. On failure the batch is dropped and the store rolled the
-		// streams back, so the daemon's resend (or a log_gap) heals them.
+		// streams back, so the session's resend (or a log_gap) heals them.
 		try {
 			this.logStore?.commit(workspaceId);
 		} catch (err) {
@@ -876,7 +877,7 @@ class FleetServerImpl implements FleetServer {
 		const offsets: Record<string, number> = {};
 		for (const [streamId, offset] of pending) offsets[streamId] = offset;
 		void this.transport
-			.sendToDaemon(workspaceId, {
+			.sendToSession(workspaceId, {
 				streamId: CALLBACK_TRANSPORT_STREAM_ID,
 				kind: "control",
 				payload: { type: "log_ack", offsets },
@@ -887,7 +888,7 @@ class FleetServerImpl implements FleetServer {
 				},
 				() => {
 					// No live down half (reconnect in progress): the batch is
-					// dropped; the daemon re-streams from its last acked
+					// dropped; the session re-streams from its last acked
 					// offset once the pair is live again, so nothing is lost.
 				},
 			);
@@ -904,26 +905,26 @@ class FleetServerImpl implements FleetServer {
 
 	/**
 	 * Watch one entry's callback pair. Idempotent: the watch lives until
-	 * close(), so re-enrolling the same daemon keeps its subscription.
+	 * close(), so re-enrolling the same session keeps its subscription.
 	 */
-	#watchPair(daemonId: string): void {
-		if (this.#pairWatches.has(daemonId)) return;
+	#watchPair(workspaceId: string): void {
+		if (this.#pairWatches.has(workspaceId)) return;
 		this.#pairWatches.set(
-			daemonId,
-			this.transport.onPairChange(daemonId, (status) =>
-				this.#onPairChange(daemonId, status.paired),
+			workspaceId,
+			this.transport.onPairChange(workspaceId, (status) =>
+				this.#onPairChange(workspaceId, status.paired),
 			),
 		);
 	}
 
 	/** Drops a removed entry's pair watch and any pending redial grace. */
-	#forgetPair(daemonId: string): void {
-		this.#pairWatches.get(daemonId)?.();
-		this.#pairWatches.delete(daemonId);
-		this.#logTaps.get(daemonId)?.();
-		this.#logTaps.delete(daemonId);
-		this.#clearRedialGrace(daemonId);
-		this.#clearPairLossGrace(daemonId);
+	#forgetPair(workspaceId: string): void {
+		this.#pairWatches.get(workspaceId)?.();
+		this.#pairWatches.delete(workspaceId);
+		this.#logTaps.get(workspaceId)?.();
+		this.#logTaps.delete(workspaceId);
+		this.#clearRedialGrace(workspaceId);
+		this.#clearPairLossGrace(workspaceId);
 	}
 
 	/**
@@ -934,73 +935,73 @@ class FleetServerImpl implements FleetServer {
 	 * grace becomes "reconnecting". Connecting/asleep/error belong to the
 	 * lifecycle's host runtime, so pair loss in those states changes nothing here.
 	 */
-	#onPairChange(daemonId: string, paired: boolean): void {
-		const entry = this.registry.get(daemonId);
+	#onPairChange(workspaceId: string, paired: boolean): void {
+		const entry = this.registry.get(workspaceId);
 		if (entry === undefined || entry.workspace?.kind === "clone") return;
 		if (paired) {
-			this.#clearRedialGrace(daemonId);
-			this.#clearPairLossGrace(daemonId);
+			this.#clearRedialGrace(workspaceId);
+			this.#clearPairLossGrace(workspaceId);
 			if (entry.status === "ready") return;
-			this.registry.update(daemonId, { readyAt: Date.now() });
-			this.#setDaemonStatus(daemonId, "ready");
-		} else if (entry.status === "ready" && !this.#pairLossTimers.has(daemonId)) {
-			this.#armPairLossGrace(daemonId);
+			this.registry.update(workspaceId, { readyAt: Date.now() });
+			this.#setSessionStatus(workspaceId, "ready");
+		} else if (entry.status === "ready" && !this.#pairLossTimers.has(workspaceId)) {
+			this.#armPairLossGrace(workspaceId);
 		}
 	}
 
 	/**
 	 * Status transition driven by the callback pair: registry write, the
-	 * `daemon_status` broadcast, and the event ring.
+	 * `session_status` broadcast, and the event ring.
 	 */
-	#setDaemonStatus(daemonId: string, status: DaemonStatus, error?: string): void {
-		this.registry.setStatus(daemonId, status, error);
-		const entry = this.registry.get(daemonId);
+	#setSessionStatus(workspaceId: string, status: SessionStatus, error?: string): void {
+		this.registry.setStatus(workspaceId, status, error);
+		const entry = this.registry.get(workspaceId);
 		if (entry === undefined) return;
-		this.edge.onDaemonStatus(entry);
+		this.edge.onSessionStatus(entry);
 		this.eventLog.add(
 			status === "error" ? "error" : status === "reconnecting" ? "warn" : "info",
 			"server",
 			status === "error" ? `error: ${error ?? "error"}` : status,
-			daemonId,
+			workspaceId,
 		);
 	}
 
 	/** Redial grace: a reconnecting enrolled session not re-paired by the deadline is shown asleep. Armed at boot and on every pair-loss transition to reconnecting. */
-	#armRedialGrace(daemonId: string): void {
-		this.#clearRedialGrace(daemonId);
+	#armRedialGrace(workspaceId: string): void {
+		this.#clearRedialGrace(workspaceId);
 		const timer = setTimeout(() => {
-			this.#redialTimers.delete(daemonId);
-			if (this.registry.get(daemonId)?.status !== "reconnecting") return;
-			this.#setDaemonStatus(daemonId, "asleep");
+			this.#redialTimers.delete(workspaceId);
+			if (this.registry.get(workspaceId)?.status !== "reconnecting") return;
+			this.#setSessionStatus(workspaceId, "asleep");
 		}, this.#redialGraceMs);
-		this.#redialTimers.set(daemonId, timer);
+		this.#redialTimers.set(workspaceId, timer);
 	}
 
-	#clearRedialGrace(daemonId: string): void {
-		const timer = this.#redialTimers.get(daemonId);
+	#clearRedialGrace(workspaceId: string): void {
+		const timer = this.#redialTimers.get(workspaceId);
 		if (timer === undefined) return;
 		clearTimeout(timer);
-		this.#redialTimers.delete(daemonId);
+		this.#redialTimers.delete(workspaceId);
 	}
 
 	/** Pair-loss grace: a ready session still unpaired at the deadline is shown reconnecting. */
-	#armPairLossGrace(daemonId: string): void {
+	#armPairLossGrace(workspaceId: string): void {
 		const timer = setTimeout(() => {
-			this.#pairLossTimers.delete(daemonId);
-			const entry = this.registry.get(daemonId);
+			this.#pairLossTimers.delete(workspaceId);
+			const entry = this.registry.get(workspaceId);
 			if (entry?.status !== "ready") return;
-			if (this.transport.pairStatus(daemonId).paired) return;
-			this.#setDaemonStatus(daemonId, "reconnecting");
-			this.#armRedialGrace(daemonId);
+			if (this.transport.pairStatus(workspaceId).paired) return;
+			this.#setSessionStatus(workspaceId, "reconnecting");
+			this.#armRedialGrace(workspaceId);
 		}, this.#pairLossGraceMs);
-		this.#pairLossTimers.set(daemonId, timer);
+		this.#pairLossTimers.set(workspaceId, timer);
 	}
 
-	#clearPairLossGrace(daemonId: string): void {
-		const timer = this.#pairLossTimers.get(daemonId);
+	#clearPairLossGrace(workspaceId: string): void {
+		const timer = this.#pairLossTimers.get(workspaceId);
 		if (timer === undefined) return;
 		clearTimeout(timer);
-		this.#pairLossTimers.delete(daemonId);
+		this.#pairLossTimers.delete(workspaceId);
 	}
 
 	/**
@@ -1015,13 +1016,13 @@ class FleetServerImpl implements FleetServer {
 	#reconcileBootStatuses(): void {
 		for (const entry of this.registry.list()) {
 			if (entry.workspace?.kind === "clone") continue;
-			if (entry.workspace?.enrollment !== undefined) this.#watchPair(entry.daemonId);
+			if (entry.workspace?.enrollment !== undefined) this.#watchPair(entry.workspaceId);
 		}
-		for (const daemonId of this.lifecycle.reconcileHostBoot()) this.#armRedialGrace(daemonId);
+		for (const workspaceId of this.lifecycle.reconcileHostBoot()) this.#armRedialGrace(workspaceId);
 	}
 
 	/**
-	 * POST /ctl/start {daemonId} (alias POST /ctl/wake): the fleet-side start
+	 * POST /ctl/start {workspaceId} (alias POST /ctl/wake): the fleet-side start
 	 * for ANY workspace through the lifecycle's one start verb (a provider
 	 * clone ensure-running, or a host session's launch; the lifecycle picks by
 	 * kind). A row whose pair is already up answers running without touching
@@ -1031,16 +1032,17 @@ class FleetServerImpl implements FleetServer {
 	 */
 	async #handleStart(req: Request): Promise<Response> {
 		const body = await readJson(req);
-		const daemonId = requireString(body, "daemonId");
-		if (!this.registry.get(daemonId)) throw new HttpError(404, `unknown daemon: ${daemonId}`);
+		const workspaceId = requireString(body, "workspaceId");
+		if (!this.registry.get(workspaceId))
+			throw new HttpError(404, `unknown session: ${workspaceId}`);
 		// Never HTTP-self-fetch; resolves when the runtime is up (clone: provider
 		// confirms compute + enrollment persisted; host: child launched).
 		// callback→ready rides the roster. Typed lifecycle failures map onto the
 		// same frozen HTTP statuses as create/remove/delete (an
 		// uncertain-predecessor conflict is a 409, never an untyped 500).
-		if (!this.transport.pairStatus(daemonId).paired) {
+		if (!this.transport.pairStatus(workspaceId).paired) {
 			try {
-				await this.lifecycle.start(daemonId);
+				await this.lifecycle.start(workspaceId);
 			} catch (err) {
 				if (err instanceof CloneLifecycleError) {
 					throw new HttpError(lifecycleStatus(err.code), err.message);
@@ -1052,7 +1054,7 @@ class FleetServerImpl implements FleetServer {
 			}
 		}
 		return json({
-			daemonId,
+			workspaceId,
 			observed: "running",
 		});
 	}
@@ -1068,10 +1070,10 @@ class FleetServerImpl implements FleetServer {
 		};
 	}
 
-	/** Fleet callback base URL the sandbox daemon dials for the pair. */
+	/** Fleet callback base URL the sandbox session dials for the pair. */
 	#callbackUrl(): string {
 		// Explicit operator override wins; otherwise derive from the fleet's
-		// own bind+port (loopback http for a loopback bind, which the daemon
+		// own bind+port (loopback http for a loopback bind, which the session
 		// accepts when its --fleet-stdin payload sets callback.allowHttp).
 		const explicit = process.env.OMP_FLEET_CALLBACK_URL;
 		if (explicit !== undefined && explicit !== "") return explicit.replace(/\/+$/, "");
@@ -1079,7 +1081,7 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * GET /ws: admit one browser socket (OMP_PROTO 5). Admission follows the
+	 * GET /ws: admit one browser socket (OMP_PROTO 6). Admission follows the
 	 * rules the retired SSE downlink had: with browser auth enabled a non-loopback
 	 * client (the socket peer, or the trusted proxy's X-Forwarded-For client
 	 * hop) must hold a live session cookie, and the upgrade must also pass
@@ -1141,7 +1143,7 @@ class FleetServerImpl implements FleetServer {
 		// /callback/* is the transport's, mounted BEFORE everything else and
 		// NEVER gated by browser auth: the registry authenticates with the
 		// workspace enrollment credentials (the callback pair from the fleet's
-		// host daemon in this pass; daemon-session pairs later).
+		// host session in this pass; session pairs later).
 		if (path0.startsWith("/callback")) {
 			const transportHandled = await this.transport.handleFetch(req, server);
 			if (transportHandled !== null) return transportHandled;
@@ -1211,7 +1213,7 @@ class FleetServerImpl implements FleetServer {
 				if (storedHandled !== null) return storedHandled;
 			}
 			if (req.method === "GET") {
-				// Delete-confirmation evidence for one worktree daemon.
+				// Delete-confirmation evidence for one worktree session.
 				const infoMatch = WORKTREE_INFO_ROUTE.exec(path);
 				if (infoMatch) return await this.#handleWorktreeDeleteInfo(infoMatch[1]);
 				// Installed-plugin detail: GET /ctl/plugins/:name (name URI-encoded).
@@ -1266,8 +1268,8 @@ class FleetServerImpl implements FleetServer {
 				// Fetch a local-source clone's branch into its project (lifecycle-owned git).
 				const cloneFetchMatch = CLONE_FETCH_ROUTE.exec(path);
 				if (cloneFetchMatch) {
-					const daemonId = decodeURIComponent(cloneFetchMatch[1]);
-					return json(await this.#operate(() => this.#ops.fetchCloneIntoProject(daemonId)));
+					const workspaceId = decodeURIComponent(cloneFetchMatch[1]);
+					return json(await this.#operate(() => this.#ops.fetchCloneIntoProject(workspaceId)));
 				}
 				// Installed-plugin writes: POST /ctl/plugins/:name/{enabled|features|setting}.
 				const pluginWriteMatch = PLUGIN_WRITE_ROUTE.exec(path);
@@ -1310,7 +1312,7 @@ class FleetServerImpl implements FleetServer {
 			if (req.method === "DELETE") {
 				const projectMatch = /^\/ctl\/projects\/([^/]+)$/.exec(path);
 				if (projectMatch) return await this.#handleRemoveProject(projectMatch[1]);
-				// DELETE /ctl/worktrees/:daemonId. Worktree workspaces keep the
+				// DELETE /ctl/worktrees/:workspaceId. Worktree workspaces keep the
 				// legacy path (stop → remove entry → git worktree remove)
 				// UNCHANGED. Clone workspaces run the verify-at-deletion gate
 				// Admission refusal on active work, writer
@@ -1495,17 +1497,17 @@ class FleetServerImpl implements FleetServer {
 		const body = await readJson(req);
 		const selector = requireString(body, "selector");
 		const matches = matchSelector(this.registry.list(), selector);
-		if (matches.length === 0) throw new HttpError(404, `no daemon matches selector: ${selector}`);
+		if (matches.length === 0) throw new HttpError(404, `no session matches selector: ${selector}`);
 		const stopped: string[] = [];
 		for (const entry of matches) {
-			await this.#operate(() => this.#ops.stop(entry.daemonId));
-			stopped.push(entry.daemonId);
+			await this.#operate(() => this.#ops.stop(entry.workspaceId));
+			stopped.push(entry.workspaceId);
 		}
 		return json({ stopped });
 	}
 
 	/**
-	 * A poll-detected, on-disk worktree removal: the daemon's cwd vanished
+	 * A poll-detected, on-disk worktree removal: the session's cwd vanished
 	 * between git-state poll ticks (git worktree remove run outside the
 	 * fleet). Mirror #handleRemove's eviction: prune/drop + registry.remove
 	 * (the roster broadcast rides registry.onChange automatically), then
@@ -1522,16 +1524,16 @@ class FleetServerImpl implements FleetServer {
 		// Dedup: consecutive poll ticks can report the same vanished worktree
 		// before the eviction settles, and a concurrent UI delete_worktree/
 		// remove may have already evicted the entry (presence check below).
-		if (this.#evictingWorktrees.has(entry.daemonId)) return;
-		if (!this.registry.get(entry.daemonId)) return;
-		this.#evictingWorktrees.add(entry.daemonId);
+		if (this.#evictingWorktrees.has(entry.workspaceId)) return;
+		if (!this.registry.get(entry.workspaceId)) return;
+		this.#evictingWorktrees.add(entry.workspaceId);
 		try {
-			await this.#evictRow(entry.daemonId, async () => {});
+			await this.#evictRow(entry.workspaceId, async () => {});
 			this.eventLog.add(
 				"info",
 				"server",
 				`worktree vanished on disk: ${entry.cwd}`,
-				entry.daemonId,
+				entry.workspaceId,
 			);
 			// `this.edge` is assigned AFTER the sync in the constructor,
 			// but this hook can only fire during git-state polling, which
@@ -1541,13 +1543,13 @@ class FleetServerImpl implements FleetServer {
 			// stays silent; only a row with a session gets the toast.
 			if (entry.lastSessionFile !== undefined) {
 				this.edge?.announceWorktreeRemoved({
-					daemonId: entry.daemonId,
+					workspaceId: entry.workspaceId,
 					name: entry.name,
 					cwd: entry.cwd,
 				});
 			}
 		} finally {
-			this.#evictingWorktrees.delete(entry.daemonId);
+			this.#evictingWorktrees.delete(entry.workspaceId);
 		}
 	}
 
@@ -1562,7 +1564,7 @@ class FleetServerImpl implements FleetServer {
 	#markStoreOrphanIfStored(entry: RegistryEntry): void {
 		const store = this.logStore;
 		if (store === null) return;
-		const workspaceId = entry.daemonId;
+		const workspaceId = entry.workspaceId;
 		if (store.isReadOnly(workspaceId)) return; // Verified; not an orphan.
 		// Only mark when a subtree actually exists (a store with no data has
 		// nothing to retain).
@@ -1584,14 +1586,14 @@ class FleetServerImpl implements FleetServer {
 	 * and the row dropped. A rejecting `removal` leaves the row registered
 	 * (asleep) with its resume state, and rejects with its error.
 	 */
-	async #evictRow<T>(daemonId: string, removal: () => Promise<T>): Promise<T> {
-		const entry = this.registry.get(daemonId);
-		if (entry === undefined) throw new Error(`unknown daemon: ${daemonId}`);
-		await this.lifecycle.delete(daemonId);
+	async #evictRow<T>(workspaceId: string, removal: () => Promise<T>): Promise<T> {
+		const entry = this.registry.get(workspaceId);
+		if (entry === undefined) throw new Error(`unknown session: ${workspaceId}`);
+		await this.lifecycle.delete(workspaceId);
 		const result = await removal();
-		this.#forgetPair(daemonId);
+		this.#forgetPair(workspaceId);
 		this.#markStoreOrphanIfStored(entry);
-		this.registry.remove(daemonId);
+		this.registry.remove(workspaceId);
 		return result;
 	}
 
@@ -1599,8 +1601,8 @@ class FleetServerImpl implements FleetServer {
 	async #evictProject(projectId: string): Promise<void> {
 		for (const entry of this.registry.list()) {
 			if (entry.projectId !== projectId) continue;
-			if (entry.status !== "asleep") await this.lifecycle.delete(entry.daemonId);
-			this.#forgetPair(entry.daemonId);
+			if (entry.status !== "asleep") await this.lifecycle.delete(entry.workspaceId);
+			this.#forgetPair(entry.workspaceId);
 			this.#markStoreOrphanIfStored(entry);
 		}
 		this.registry.removeProject(projectId);
@@ -1610,15 +1612,15 @@ class FleetServerImpl implements FleetServer {
 		const body = await readJson(req);
 		const selector = requireString(body, "selector");
 		const matches = matchSelector(this.registry.list(), selector);
-		if (matches.length === 0) throw new HttpError(404, `no daemon matches selector: ${selector}`);
+		if (matches.length === 0) throw new HttpError(404, `no session matches selector: ${selector}`);
 		const removed: string[] = [];
 		const verified: string[] = [];
 		for (const entry of matches) {
 			// A clone takes the verified delete gate; anything else is evicted
 			// through the single path (#evictRow). Both run in the shared operation.
-			const result = await this.#operate(() => this.#ops.remove(entry.daemonId));
+			const result = await this.#operate(() => this.#ops.remove(entry.workspaceId));
 			verified.push(...result.verified);
-			removed.push(entry.daemonId);
+			removed.push(entry.workspaceId);
 		}
 		return json({ removed, ...(verified.length > 0 ? { verified } : {}) });
 	}
@@ -1629,14 +1631,14 @@ class FleetServerImpl implements FleetServer {
 		const text = requireString(body, "text");
 		const waitMs = optionalWaitMs(body);
 		const matches = matchSelector(this.registry.list(), selector);
-		if (matches.length === 0) throw new HttpError(404, `no daemon matches selector: ${selector}`);
+		if (matches.length === 0) throw new HttpError(404, `no session matches selector: ${selector}`);
 		if (waitMs === undefined) {
 			// Fire-and-forget: dispatch to each match without awaiting turn
 			// completion; the caller gets the target list back immediately.
 			void fanOut(this.#fanoutDeps(), matches, text, undefined).catch((err: unknown) =>
 				console.error("fleet: background prompt failed", err),
 			);
-			return json({ submitted: matches.map((entry) => entry.daemonId) });
+			return json({ submitted: matches.map((entry) => entry.workspaceId) });
 		}
 		const results = await fanOut(this.#fanoutDeps(), matches, text, waitMs);
 		return json(results);
@@ -1724,27 +1726,29 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * GET /ctl/worktrees/:daemonId/delete-info: guard evidence for the
+	 * GET /ctl/worktrees/:workspaceId/delete-info: guard evidence for the
 	 * delete confirmation (worktree_delete_info payload). Never deletes.
 	 */
-	async #handleWorktreeDeleteInfo(daemonId: string): Promise<Response> {
-		const info = await this.#operate(() => this.#ops.worktreeDeleteInfo(daemonId));
-		return json({ daemonId, ...info });
+	async #handleWorktreeDeleteInfo(workspaceId: string): Promise<Response> {
+		const info = await this.#operate(() => this.#ops.worktreeDeleteInfo(workspaceId));
+		return json({ workspaceId, ...info });
 	}
 
 	/**
-	 * DELETE /ctl/worktrees/:daemonId {deleteBranch?}. A clone runs the shared
+	 * DELETE /ctl/worktrees/:workspaceId {deleteBranch?}. A clone runs the shared
 	 * verify-at-deletion gate; any other workspace is a worktree removal whose
 	 * guards (403 not linked / 409 dirty, never --force) run before any
 	 * mutation. The body is optional and applies to worktrees only.
 	 */
-	async #handleDeleteWorkspace(req: Request, daemonId: string): Promise<Response> {
+	async #handleDeleteWorkspace(req: Request, workspaceId: string): Promise<Response> {
 		const raw = await req.text();
-		if (this.registry.get(daemonId)?.workspace?.kind === "clone") {
-			return json(await this.#operate(() => this.#ops.deleteWorkspace(daemonId)));
+		if (this.registry.get(workspaceId)?.workspace?.kind === "clone") {
+			return json(await this.#operate(() => this.#ops.deleteWorkspace(workspaceId)));
 		}
 		const deleteBranch = this.#parseDeleteBody(raw);
-		return json(await this.#operate(() => this.#ops.deleteWorkspace(daemonId, { deleteBranch })));
+		return json(
+			await this.#operate(() => this.#ops.deleteWorkspace(workspaceId, { deleteBranch })),
+		);
 	}
 
 	/**
@@ -1753,7 +1757,7 @@ class FleetServerImpl implements FleetServer {
 	async #handleLogOrphans(): Promise<unknown> {
 		const store = this.logStore;
 		if (store === null) return { orphans: [] };
-		const live = new Set(this.registry.list().map((entry) => entry.daemonId));
+		const live = new Set(this.registry.list().map((entry) => entry.workspaceId));
 		const orphans = store.listOrphans([...live]);
 		// Orphaned workspaces carry a registry-level storeOrphan marker
 		// (deleted without verification); surface it with the listing.
@@ -1855,7 +1859,7 @@ export async function startFleet(
 		// Browser auth + non-loopback binds: opening the bind address must
 		// never create an unauthenticated control plane. A
 		// non-loopback bind without browser auth configured is a startup
-		// error, mirroring the daemon's R14 rule.
+		// error, mirroring the session's R14 rule.
 		if (!isLoopbackHost(config.bind) && config.browserAccessTokenHash === undefined) {
 			throw new Error(
 				`refusing to bind non-loopback address "${config.bind}" without browser auth; ` +

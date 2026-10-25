@@ -1,7 +1,7 @@
 /**
- * Fleet stdin payload: the callback pair a session daemon reads at boot when
+ * Fleet stdin payload: the callback pair a session process reads at boot when
  * started with `--fleet-stdin` (apps/session/config.ts parses it; this module
- * only produces it). The pair travels over stdin, never the daemon's
+ * only produces it). The pair travels over stdin, never the session's
  * environment: `/proc/<pid>/environ` and every child inherit env.
  *
  * Providers hold the pair as the `OMP_SESSION_CALLBACK_*` env shape in the
@@ -10,7 +10,7 @@
  *   {"v":1,"callback":{"url","workspace","generation","token","allowHttp"?:true,"proxy"?}}
  */
 
-/** The callback pair as the daemon consumes it. */
+/** The callback pair as the session consumes it. */
 export interface FleetCallbackPayload {
 	url: string;
 	workspace: string;
@@ -51,7 +51,7 @@ export function buildFleetStdinPayload(env: Readonly<Record<string, string | und
 		generation,
 		token: requiredValue(env, "OMP_SESSION_CALLBACK_TOKEN"),
 	};
-	// The daemon accepts plain http only when the flag is exactly "1".
+	// The session accepts plain http only when the flag is exactly "1".
 	if (env.OMP_SESSION_CALLBACK_ALLOW_HTTP === "1") callback.allowHttp = true;
 	const proxy = env.OMP_SESSION_CALLBACK_PROXY;
 	if (proxy !== undefined && proxy !== "") callback.proxy = proxy;

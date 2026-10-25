@@ -1,13 +1,13 @@
 /**
  * Fan-out prompt correlation tests over the callback pair. Every session is a
- * controlled callback daemon (callback-daemon.testkit.ts) dialing OUT to a
- * real DaemonTransportRegistry served over loopback HTTP; the fleet never
- * dials. The daemon plays the session half: it reads the `prompt` call off
+ * controlled callback session (callback-session.testkit.ts) dialing OUT to a
+ * real SessionTransportRegistry served over loopback HTTP; the fleet never
+ * dials. The session plays the session half: it reads the `prompt` call off
  * its down leg, answers with call_result and mirrors turn frames on the
- * control stream, exactly like the real daemon (the call_result for a call
+ * control stream, exactly like the real session (the call_result for a call
  * precedes that call's turn frames; it is the acceptance verdict that scopes
  * correlation, audit #21). Covers promptEntry's correlation contract (own-turn
- * agent_end only, unrelated frames ignored), per-daemon serialization of
+ * agent_end only, unrelated frames ignored), per-session serialization of
  * concurrent fan-outs, fanOut's order preservation across mixed outcomes, and
  * the wake path: spawned asleep entries respawn and wait for the pair,
  * unpaired entries fail with a typed error.
@@ -19,12 +19,12 @@ import type { Server } from "bun";
 import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
 import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
+import { SessionTransportRegistry, type CallbackSocketData } from "../session-transport";
 import { fanOut, promptEntry, type FanoutDeps } from "../fanout";
 import { Registry, type RegistryEntry } from "../registry";
 import { SessionWaker } from "../session-waker";
 import type { WorkspaceLifecycle } from "../workspace-lifecycle";
-import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
+import { startCallbackSession, type CallbackSession } from "./callback-session.testkit";
 import { sleep, waitFor } from "./edge.testkit";
 import { makeHostLifecycle } from "./host-lifecycle.testkit";
 
@@ -33,17 +33,17 @@ type CreateInit = Parameters<Registry["create"]>[0];
 interface Fixture {
 	deps: FanoutDeps;
 	registry: Registry;
-	transport: DaemonTransportRegistry;
+	transport: SessionTransportRegistry;
 	/** The lifecycle the fixture's waker wakes through (tests may override start). */
 	lifecycle: WorkspaceLifecycle;
-	/** daemonIds the stubbed lifecycle.start was asked to wake, in order. */
+	/** workspaceIds the stubbed lifecycle.start was asked to wake, in order. */
 	respawned: string[];
 	/** Register a spawned entry in the registry. */
 	create(overrides?: Partial<CreateInit>): RegistryEntry;
-	/** Enroll the entry and start its daemon dialing out (does not wait for the pair). */
-	dial(entry: RegistryEntry): CallbackDaemon;
-	/** Resolves with the daemon once one exists for the entry (dialed by the test or by respawn). */
-	daemonFor(daemonId: string): Promise<CallbackDaemon>;
+	/** Enroll the entry and start its session dialing out (does not wait for the pair). */
+	dial(entry: RegistryEntry): CallbackSession;
+	/** Resolves with the session once one exists for the entry (dialed by the test or by respawn). */
+	sessionFor(workspaceId: string): Promise<CallbackSession>;
 }
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -56,7 +56,7 @@ function startFixture(): Fixture {
 	const dir = tempDir("omp-web-fanout-");
 	const statePath = `${dir}/state.json`;
 	const registry = new Registry(statePath);
-	const transport = new DaemonTransportRegistry();
+	const transport = new SessionTransportRegistry();
 	const server: Server<CallbackSocketData> = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -82,33 +82,33 @@ function startFixture(): Fixture {
 		callbackUrl: () => `${url}/callback`,
 	});
 	const respawned: string[] = [];
-	const daemons = new Map<string, PromiseWithResolvers<CallbackDaemon>>();
-	const slot = (daemonId: string): PromiseWithResolvers<CallbackDaemon> => {
-		let existing = daemons.get(daemonId);
+	const sessions = new Map<string, PromiseWithResolvers<CallbackSession>>();
+	const slot = (workspaceId: string): PromiseWithResolvers<CallbackSession> => {
+		let existing = sessions.get(workspaceId);
 		if (!existing) {
-			existing = Promise.withResolvers<CallbackDaemon>();
-			daemons.set(daemonId, existing);
+			existing = Promise.withResolvers<CallbackSession>();
+			sessions.set(workspaceId, existing);
 		}
 		return existing;
 	};
-	const dial = (entry: RegistryEntry): CallbackDaemon => {
+	const dial = (entry: RegistryEntry): CallbackSession => {
 		const token = randomBytes(32).toString("hex");
-		transport.enrollWorkspace(entry.daemonId, 1, token);
-		const daemon = startCallbackDaemon({
+		transport.enrollWorkspace(entry.workspaceId, 1, token);
+		const session = startCallbackSession({
 			url,
-			workspaceId: entry.daemonId,
+			workspaceId: entry.workspaceId,
 			generation: 1,
 			token,
 		});
-		cleanups.push(() => daemon.stop());
-		slot(entry.daemonId).resolve(daemon);
-		return daemon;
+		cleanups.push(() => session.stop());
+		slot(entry.workspaceId).resolve(session);
+		return session;
 	};
 	// The real lifecycle launches a child that dials out; the stand-in starts
-	// the same dialing daemon without waiting for it to connect.
-	lifecycle.start = async (daemonId) => {
-		respawned.push(daemonId);
-		dial(registry.get(daemonId)!);
+	// the same dialing session without waiting for it to connect.
+	lifecycle.start = async (workspaceId) => {
+		respawned.push(workspaceId);
+		dial(registry.get(workspaceId)!);
 	};
 	cleanups.push(async () => {
 		lifecycle.close();
@@ -135,30 +135,30 @@ function startFixture(): Fixture {
 			});
 		},
 		dial,
-		daemonFor: (daemonId) => slot(daemonId).promise,
+		sessionFor: (workspaceId) => slot(workspaceId).promise,
 	};
 }
 
-/** Dial the entry's daemon and wait until the fleet sees the pair. */
-async function pair(fx: Fixture, entry: RegistryEntry): Promise<CallbackDaemon> {
-	const daemon = fx.dial(entry);
-	await daemon.waitConnected(5000);
+/** Dial the entry's session and wait until the fleet sees the pair. */
+async function pair(fx: Fixture, entry: RegistryEntry): Promise<CallbackSession> {
+	const session = fx.dial(entry);
+	await session.waitConnected(5000);
 	await waitFor(
-		() => (fx.transport.pairStatus(entry.daemonId).paired ? true : null),
+		() => (fx.transport.pairStatus(entry.workspaceId).paired ? true : null),
 		5000,
 		"pair up",
 	);
-	return daemon;
+	return session;
 }
 
-/** The nth `prompt` call the daemon has received on its down leg. */
+/** The nth `prompt` call the session has received on its down leg. */
 async function nthPrompt(
-	daemon: CallbackDaemon,
+	session: CallbackSession,
 	n: number,
 ): Promise<{ id: string; args: unknown[] }> {
 	return await waitFor(
 		() => {
-			const commands = daemon.received().filter((env) => env.kind === "command");
+			const commands = session.received().filter((env) => env.kind === "command");
 			const payload = commands[n]?.payload;
 			if (
 				typeof payload === "object" &&
@@ -181,38 +181,38 @@ async function nthPrompt(
 	);
 }
 
-function frame(daemon: CallbackDaemon, payload: unknown): void {
-	daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", payload);
+function frame(session: CallbackSession, payload: unknown): void {
+	session.send(CALLBACK_CONTROL_STREAM_ID, "frame", payload);
 }
 
-function sendEvent(daemon: CallbackDaemon, event: Record<string, unknown>): void {
-	frame(daemon, { type: "event", sessionId: "s1", event });
+function sendEvent(session: CallbackSession, event: Record<string, unknown>): void {
+	frame(session, { type: "event", workspaceId: "s1", event });
 }
 
-function assistantText(daemon: CallbackDaemon, text: string): void {
-	sendEvent(daemon, {
+function assistantText(session: CallbackSession, text: string): void {
+	sendEvent(session, {
 		type: "message_end",
 		message: { role: "assistant", content: [{ type: "text", text }] },
 	});
 }
 
 /** One accepted turn: call_result ok, one assistant message, agent_end. */
-function answerTurn(daemon: CallbackDaemon, callId: string, text: string): void {
-	frame(daemon, { type: "call_result", id: callId, ok: true });
-	assistantText(daemon, text);
-	sendEvent(daemon, { type: "agent_end", messages: [] });
+function answerTurn(session: CallbackSession, callId: string, text: string): void {
+	frame(session, { type: "call_result", id: callId, ok: true });
+	assistantText(session, text);
+	sendEvent(session, { type: "agent_end", messages: [] });
 }
 
 describe("promptEntry", () => {
-	test("happy path: last assistant text + usage from agent_end; the prompt call reaches the daemon", async () => {
+	test("happy path: last assistant text + usage from agent_end; the prompt call reaches the session", async () => {
 		const fx = startFixture();
 		const entry = fx.create();
-		const daemon = await pair(fx, entry);
+		const session = await pair(fx, entry);
 		const result = promptEntry(fx.deps, entry, "hi", 5000);
-		const call = await nthPrompt(daemon, 0);
+		const call = await nthPrompt(session, 0);
 		expect(call.args).toEqual(["hi"]);
-		frame(daemon, { type: "call_result", id: call.id, ok: true });
-		sendEvent(daemon, {
+		frame(session, { type: "call_result", id: call.id, ok: true });
+		sendEvent(session, {
 			type: "message_end",
 			message: {
 				role: "assistant",
@@ -223,10 +223,10 @@ describe("promptEntry", () => {
 				],
 			},
 		});
-		assistantText(daemon, "Final answer");
-		sendEvent(daemon, { type: "agent_end", usage: { tokens: 42 }, messages: [] });
+		assistantText(session, "Final answer");
+		sendEvent(session, { type: "agent_end", usage: { tokens: 42 }, messages: [] });
 		expect(await result).toEqual({
-			daemonId: entry.daemonId,
+			workspaceId: entry.workspaceId,
 			ok: true,
 			text: "Final answer",
 			usage: { tokens: 42 },
@@ -240,43 +240,43 @@ describe("promptEntry", () => {
 		// settle our prompt, even after our call_result acceptance.
 		const fx = startFixture();
 		const entry = fx.create();
-		const daemon = await pair(fx, entry);
+		const session = await pair(fx, entry);
 		const result = promptEntry(fx.deps, entry, "hi", 5000);
-		const call = await nthPrompt(daemon, 0);
-		frame(daemon, { type: "call_result", id: call.id, ok: true });
-		frame(daemon, { type: "error", error: "another turn blew up" });
-		assistantText(daemon, "Survived");
-		sendEvent(daemon, { type: "agent_end", messages: [] });
-		expect(await result).toEqual({ daemonId: entry.daemonId, ok: true, text: "Survived" });
+		const call = await nthPrompt(session, 0);
+		frame(session, { type: "call_result", id: call.id, ok: true });
+		frame(session, { type: "error", error: "another turn blew up" });
+		assistantText(session, "Survived");
+		sendEvent(session, { type: "agent_end", messages: [] });
+		expect(await result).toEqual({ workspaceId: entry.workspaceId, ok: true, text: "Survived" });
 	});
 
 	test("rejects on abort events after our call is accepted", async () => {
 		const fx = startFixture();
 		const entry = fx.create();
-		const daemon = await pair(fx, entry);
+		const session = await pair(fx, entry);
 		const result = promptEntry(fx.deps, entry, "hi", 5000);
-		const call = await nthPrompt(daemon, 0);
-		frame(daemon, { type: "call_result", id: call.id, ok: true });
-		sendEvent(daemon, { type: "abort_turn_started", reason: "user" });
-		expect(await result).toEqual({ daemonId: entry.daemonId, ok: false, error: "aborted" });
+		const call = await nthPrompt(session, 0);
+		frame(session, { type: "call_result", id: call.id, ok: true });
+		sendEvent(session, { type: "abort_turn_started", reason: "user" });
+		expect(await result).toEqual({ workspaceId: entry.workspaceId, ok: false, error: "aborted" });
 	});
 
-	test("times out with error 'timeout' when the daemon never answers", async () => {
+	test("times out with error 'timeout' when the session never answers", async () => {
 		const fx = startFixture();
 		const entry = fx.create();
 		await pair(fx, entry);
 		const result = await promptEntry(fx.deps, entry, "hi", 100);
-		expect(result).toEqual({ daemonId: entry.daemonId, ok: false, error: "timeout" });
+		expect(result).toEqual({ workspaceId: entry.workspaceId, ok: false, error: "timeout" });
 	});
 
 	test("rejects on call_result ok:false for our call id", async () => {
 		const fx = startFixture();
 		const entry = fx.create();
-		const daemon = await pair(fx, entry);
+		const session = await pair(fx, entry);
 		const result = promptEntry(fx.deps, entry, "hi", 5000);
-		const call = await nthPrompt(daemon, 0);
-		frame(daemon, { type: "call_result", id: call.id, ok: false, error: "not_ready" });
-		expect(await result).toEqual({ daemonId: entry.daemonId, ok: false, error: "not_ready" });
+		const call = await nthPrompt(session, 0);
+		frame(session, { type: "call_result", id: call.id, ok: false, error: "not_ready" });
+		expect(await result).toEqual({ workspaceId: entry.workspaceId, ok: false, error: "not_ready" });
 	});
 
 	test("a browser-driven agent_end before our call_result acceptance does not settle", async () => {
@@ -286,47 +286,47 @@ describe("promptEntry", () => {
 		// turn's agent_end.
 		const fx = startFixture();
 		const entry = fx.create();
-		const daemon = await pair(fx, entry);
+		const session = await pair(fx, entry);
 		const result = promptEntry(fx.deps, entry, "hi", 5000);
-		const call = await nthPrompt(daemon, 0);
-		assistantText(daemon, "Browser turn");
-		sendEvent(daemon, { type: "agent_end", messages: [] });
-		answerTurn(daemon, call.id, "Our turn");
-		expect(await result).toEqual({ daemonId: entry.daemonId, ok: true, text: "Our turn" });
+		const call = await nthPrompt(session, 0);
+		assistantText(session, "Browser turn");
+		sendEvent(session, { type: "agent_end", messages: [] });
+		answerTurn(session, call.id, "Our turn");
+		expect(await result).toEqual({ workspaceId: entry.workspaceId, ok: true, text: "Our turn" });
 	});
 
-	test("serializes concurrent prompts to one daemon; each settles on its own turn", async () => {
-		// Regression (audit #21): two concurrent fan-outs to the same daemon
-		// must not both settle on the FIRST agent_end. The per-daemon queue
+	test("serializes concurrent prompts to one session; each settles on its own turn", async () => {
+		// Regression (audit #21): two concurrent fan-outs to the same session
+		// must not both settle on the FIRST agent_end. The per-session queue
 		// sends the second call only after the first turn fully settles.
 		const fx = startFixture();
 		const entry = fx.create();
-		const daemon = await pair(fx, entry);
+		const session = await pair(fx, entry);
 		const first = promptEntry(fx.deps, entry, "one", 5000);
 		const second = promptEntry(fx.deps, entry, "two", 5000);
-		const firstCall = await nthPrompt(daemon, 0);
+		const firstCall = await nthPrompt(session, 0);
 		expect(firstCall.args).toEqual(["one"]);
 		// Give a mis-serialized second call time to arrive; it must not.
 		await sleep(100);
-		expect(daemon.received().filter((env) => env.kind === "command")).toHaveLength(1);
-		answerTurn(daemon, firstCall.id, "First turn");
-		expect(await first).toEqual({ daemonId: entry.daemonId, ok: true, text: "First turn" });
-		const secondCall = await nthPrompt(daemon, 1);
+		expect(session.received().filter((env) => env.kind === "command")).toHaveLength(1);
+		answerTurn(session, firstCall.id, "First turn");
+		expect(await first).toEqual({ workspaceId: entry.workspaceId, ok: true, text: "First turn" });
+		const secondCall = await nthPrompt(session, 1);
 		expect(secondCall.args).toEqual(["two"]);
-		answerTurn(daemon, secondCall.id, "Second turn");
-		expect(await second).toEqual({ daemonId: entry.daemonId, ok: true, text: "Second turn" });
+		answerTurn(session, secondCall.id, "Second turn");
+		expect(await second).toEqual({ workspaceId: entry.workspaceId, ok: true, text: "Second turn" });
 	});
 
 	test("an asleep spawned entry is respawned and the prompt waits for its pair", async () => {
 		const fx = startFixture();
 		const entry = fx.create({ status: "asleep" });
 		const result = promptEntry(fx.deps, entry, "wake up", 5000);
-		const daemon = await fx.daemonFor(entry.daemonId);
-		expect(fx.respawned).toEqual([entry.daemonId]);
-		const call = await nthPrompt(daemon, 0);
+		const session = await fx.sessionFor(entry.workspaceId);
+		expect(fx.respawned).toEqual([entry.workspaceId]);
+		const call = await nthPrompt(session, 0);
 		expect(call.args).toEqual(["wake up"]);
-		answerTurn(daemon, call.id, "Awake");
-		expect(await result).toEqual({ daemonId: entry.daemonId, ok: true, text: "Awake" });
+		answerTurn(session, call.id, "Awake");
+		expect(await result).toEqual({ workspaceId: entry.workspaceId, ok: true, text: "Awake" });
 	});
 
 	test("a spawned entry already connecting is waited on, not respawned", async () => {
@@ -334,10 +334,10 @@ describe("promptEntry", () => {
 		const entry = fx.create({ status: "connecting" });
 		const result = promptEntry(fx.deps, entry, "hi", 5000);
 		await sleep(50);
-		const daemon = fx.dial(entry);
-		const call = await nthPrompt(daemon, 0);
-		answerTurn(daemon, call.id, "Arrived");
-		expect(await result).toEqual({ daemonId: entry.daemonId, ok: true, text: "Arrived" });
+		const session = fx.dial(entry);
+		const call = await nthPrompt(session, 0);
+		answerTurn(session, call.id, "Arrived");
+		expect(await result).toEqual({ workspaceId: entry.workspaceId, ok: true, text: "Arrived" });
 		expect(fx.respawned).toEqual([]);
 	});
 
@@ -348,7 +348,7 @@ describe("promptEntry", () => {
 		};
 		const entry = fx.create({ status: "asleep" });
 		const result = await promptEntry(fx.deps, entry, "hi", 500);
-		expect(result).toEqual({ daemonId: entry.daemonId, ok: false, error: "launch refused" });
+		expect(result).toEqual({ workspaceId: entry.workspaceId, ok: false, error: "launch refused" });
 	});
 
 	test("without a callback transport the prompt fails with a typed error", async () => {
@@ -358,7 +358,7 @@ describe("promptEntry", () => {
 		const result = await promptEntry(deps, entry, "hi", 500);
 		expect(result.ok).toBe(false);
 		expect(typeof result.error).toBe("string");
-		expect(result.daemonId).toBe(entry.daemonId);
+		expect(result.workspaceId).toBe(entry.workspaceId);
 	});
 });
 
@@ -367,24 +367,28 @@ describe("fanOut", () => {
 		const fx = startFixture();
 		const paired = fx.create({ name: "paired" });
 		const asleep = fx.create({ name: "asleep", status: "asleep" });
-		const pairedDaemon = await pair(fx, paired);
+		const pairedSession = await pair(fx, paired);
 		const results = fanOut(fx.deps, [paired, asleep], "hi", 5000);
 
-		const pairedCall = await nthPrompt(pairedDaemon, 0);
-		frame(pairedDaemon, {
+		const pairedCall = await nthPrompt(pairedSession, 0);
+		frame(pairedSession, {
 			type: "call_result",
 			id: pairedCall.id,
 			ok: false,
 			error: "first failed",
 		});
-		const asleepDaemon = await fx.daemonFor(asleep.daemonId);
-		const asleepCall = await nthPrompt(asleepDaemon, 0);
-		answerTurn(asleepDaemon, asleepCall.id, "Second ok");
+		const asleepSession = await fx.sessionFor(asleep.workspaceId);
+		const asleepCall = await nthPrompt(asleepSession, 0);
+		answerTurn(asleepSession, asleepCall.id, "Second ok");
 
 		const settled = await results;
-		expect(settled.map((r) => r.daemonId)).toEqual([paired.daemonId, asleep.daemonId]);
-		expect(settled[0]).toEqual({ daemonId: paired.daemonId, ok: false, error: "first failed" });
-		expect(settled[1]).toEqual({ daemonId: asleep.daemonId, ok: true, text: "Second ok" });
-		expect(fx.respawned).toEqual([asleep.daemonId]);
+		expect(settled.map((r) => r.workspaceId)).toEqual([paired.workspaceId, asleep.workspaceId]);
+		expect(settled[0]).toEqual({
+			workspaceId: paired.workspaceId,
+			ok: false,
+			error: "first failed",
+		});
+		expect(settled[1]).toEqual({ workspaceId: asleep.workspaceId, ok: true, text: "Second ok" });
+		expect(fx.respawned).toEqual([asleep.workspaceId]);
 	});
 });

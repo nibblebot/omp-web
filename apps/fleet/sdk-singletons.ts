@@ -31,10 +31,10 @@ export function ensureSettings(): Promise<Settings> {
 			try {
 				return Settings.instance;
 			} catch {
-				// Not yet initialized in this process (no daemon/session
+				// Not yet initialized in this process (no session/session
 				// has run): boot the singleton against the agent dir.
 				const settings = await Settings.init({ agentDir: getAgentDir() });
-				// Edits to config.yml made by daemons or by hand must reach this view; the SDK CLI starts the same watch.
+				// Edits to config.yml made by sessions or by hand must reach this view; the SDK CLI starts the same watch.
 				settings.startWatching();
 				return settings;
 			}

@@ -1,14 +1,14 @@
 /**
  * Fleet-side callback transport: the fleet half of the OMP_CALLBACK_PROTO 2
  * outbound callback pair. Wire vocabulary comes from lib/wire/callback-protocol.ts.
- * Daemons dial OUT to the fleet; the fleet never dials in, and there is NO
- * durable offline command queue: sendToDaemon with no live pair fails
+ * Sessions dial OUT to the fleet; the fleet never dials in, and there is NO
+ * durable offline command queue: sendToSession with no live pair fails
  * `unavailable`, never buffers.
  *
  * Routes (mounted by handleFetch; identity rides HEADERS ONLY; the URL
  * alone never enrolls, authenticates, or authorizes anything):
  *
- *   GET  /callback/ws                    The pair: ONE daemon-dialed WebSocket
+ *   GET  /callback/ws                    The pair: ONE session-dialed WebSocket
  *                                        carrying envelopes both ways. One
  *                                        text message is one canonical-JSON
  *                                        envelope of at most ENVELOPE_MAX_BYTES;
@@ -22,12 +22,12 @@
  *                                        connectionId (x-omp-connection-id,
  *                                        fresh per socket) and a seq space per
  *                                        direction (strictly monotonic, first
- *                                        daemon seq >= 1, the fleet's starts
+ *                                        session seq >= 1, the fleet's starts
  *                                        at 1); it is never resumed. It lives
  *                                        until either side closes it or its
  *                                        silence deadline passes: no byte
  *                                        budget, no renewal.
- *   POST /callback/bulk/<correlationId>  Daemon-initiated bounded bulk
+ *   POST /callback/bulk/<correlationId>  Session-initiated bounded bulk
  *                                        transfer (64 MiB cap) on its own
  *                                        HTTP request, so a transfer never
  *                                        blocks the pair, correlated to a
@@ -48,10 +48,10 @@
  *
  * Pair establishment: an accepted socket is registered as the workspace's
  * live pair and the fleet sends ONE control envelope first (streamId
- * "transport", payload {type:"pair_ready", connectionId, generation}); a daemon
+ * "transport", payload {type:"pair_ready", connectionId, generation}); a session
  * resolves start() on it (PAIR_READY_TIMEOUT_MS deadline). Transport-generated
  * envelopes (pair_ready, heartbeats) carry streamId "transport" so they pass
- * validateEnvelope on the daemon side. A newer socket of a workspace replaces
+ * validateEnvelope on the session side. A newer socket of a workspace replaces
  * its older pair as the live one (sends go to the newest); the older socket
  * lives until its own close or silence deadline.
  *
@@ -73,7 +73,7 @@
  * never wait on it). What a stuck stream can pile up is bounded by the upload
  * credit below.
  *
- * Upload credit: the daemon may have PAIR_CREDIT_WINDOW_BYTES of messages
+ * Upload credit: the session may have PAIR_CREDIT_WINDOW_BYTES of messages
  * outstanding beyond the credit the fleet granted (PairCreditControl on
  * "transport"). Every message received on a socket, dropped or binary ones
  * included, counts its UTF-8 bytes into `bytesIn`. Once at least
@@ -85,7 +85,7 @@
  * socket whose `bytesIn` runs more than the window ahead of the credit already
  * granted has ignored it: it is closed `invalid_request` (4400, retryable like
  * the other per-pair protocol violations; a redial starts a fresh window)
- * before the message is processed. No slack is needed: a daemon that obeys the
+ * before the message is processed. No slack is needed: a session that obeys the
  * window has at most the window beyond the credit it SAW, which never exceeds
  * what the fleet granted. This one bound replaces a separate cap on lane backlog.
  *
@@ -96,13 +96,13 @@
  * credential is stored, scoped to workspace+generation; comparison is
  * timing-safe (crypto.timingSafeEqual over fixed-size digests). A verified
  * credential at a superseded generation is 409 `generation_obsolete`
- * (actionable for a stale daemon); anything unverified is 401 (no
+ * (actionable for a stale session); anything unverified is 401 (no
  * existence oracle). Statuses come from the frozen
  * CALLBACK_ERROR_HTTP_STATUS map; the only non-map statuses are routing
  * responses (405 method mismatch, 404-shaped unknown-correlation
  * invalid_request).
  *
- * Virtual streams: a daemon envelope carries the logical streamId of its
+ * Virtual streams: a session envelope carries the logical streamId of its
  * consumer (one per browser/control client). attachVirtualStream binds a
  * sink per (workspaceId, streamId). Each envelope is handed to its sink in
  * arrival order. An envelope for a streamId with no attached sink is dropped
@@ -300,7 +300,7 @@ interface OutboxItem {
 	bytes: number;
 }
 
-/** One daemon envelope waiting behind its stream's unsettled sink. */
+/** One session envelope waiting behind its stream's unsettled sink. */
 interface PendingDelivery {
 	sink: VirtualStreamSink;
 	envelope: CallbackEnvelope;
@@ -321,7 +321,7 @@ interface PairConnection {
 	ws: ServerWebSocket<CallbackSocketData>;
 	/** Last fleet-assigned down seq; strictly monotonic per socket. */
 	downSeq: number;
-	/** Last accepted daemon seq. */
+	/** Last accepted session seq. */
 	lastSeq: number;
 	/** UTF-8 bytes of every message received on this socket (the unit of the upload credit). */
 	bytesIn: number;
@@ -330,7 +330,7 @@ interface PairConnection {
 	envelopes: number;
 	/** Bad messages dropped on this socket (each logged; the socket stays up). */
 	droppedMessages: number;
-	/** Last message of any kind from the daemon: the silence deadline's clock. */
+	/** Last message of any kind from the session: the silence deadline's clock. */
 	lastDataAt: number;
 	lastSendAt: number;
 	heartbeatTimer: Timer;
@@ -390,7 +390,7 @@ export interface PairStatus {
 }
 
 /** Registry-issued bulk transfer handle. `done` never rejects: a failed
- * upload (cap exceeded, aborted, expired, cancelled, daemon-reported)
+ * upload (cap exceeded, aborted, expired, cancelled, session-reported)
  * settles as state "failed". */
 export interface BulkCorrelation {
 	correlationId: string;
@@ -411,13 +411,13 @@ export interface BulkResult {
 	chunks?: Uint8Array[];
 }
 
-/** sendToDaemon input: streamId/kind/payload required; version, workspaceId,
+/** sendToSession input: streamId/kind/payload required; version, workspaceId,
  * generation, connectionId, seq and at are owned by the registry (supplied
  * values for those are ignored). */
 export type CallbackEnvelopeInput = Partial<CallbackEnvelope> &
 	Pick<CallbackEnvelope, "streamId" | "kind" | "payload">;
 
-export class DaemonTransportRegistry {
+export class SessionTransportRegistry {
 	/**
 	 * The pair's WebSocket handler: hand it to `Bun.serve({ websocket })` next
 	 * to a `fetch` that calls {@link handleFetch}, or compose it with other
@@ -626,7 +626,7 @@ export class DaemonTransportRegistry {
 				`enrollment credential rejected for workspace ${workspaceId} generation ${generation}`,
 			);
 		}
-		// Verified but superseded: the actionable 409 lets a stale daemon die
+		// Verified but superseded: the actionable 409 lets a stale session die
 		// with a reason instead of retrying forever.
 		const maxGeneration = this.#authorizedMax.get(workspaceId) ?? null;
 		if (maxGeneration !== null && generation < maxGeneration) {
@@ -711,7 +711,7 @@ export class DaemonTransportRegistry {
 					);
 				}
 				// Wake materialization: a bulk POST whose body is a small
-				// MaterializeRequest is a DOWNLOAD request; the daemon mints
+				// MaterializeRequest is a DOWNLOAD request; the session mints
 				// the correlation id (never issued by the fleet, so no bulk
 				// record exists) and the fleet serves the workspace's stored
 				// session bytes as an NDJSON response. Fleet-issued upload
@@ -719,7 +719,7 @@ export class DaemonTransportRegistry {
 				// therefore the discriminator, checked BEFORE any body read:
 				// a known upload correlation goes straight to #handleBulk
 				// (never peeked, never cancelled); only an UNKNOWN correlation
-				// (daemon-minted materialize id) reads its small bounded body
+				// (session-minted materialize id) reads its small bounded body
 				// to confirm the request. Authentication is the same
 				// enrollment as any callback request, so unknown correlations
 				// cannot be probed.
@@ -860,10 +860,10 @@ export class DaemonTransportRegistry {
 		if (pair !== undefined) this.#teardownPair(pair);
 	}
 
-	// --- up: daemon -> fleet messages ---------------------------------------------------
+	// --- up: session -> fleet messages ---------------------------------------------------
 
 	/**
-	 * One daemon message. A bad message (binary, not JSON, over the envelope cap,
+	 * One session message. A bad message (binary, not JSON, over the envelope cap,
 	 * failing validation) is dropped, counted and logged; identity and seq
 	 * violations close the pair with their typed code: they are not bad bytes.
 	 */
@@ -927,7 +927,7 @@ export class DaemonTransportRegistry {
 	}
 
 	/**
-	 * Tell the daemon how much of its upload this fleet has consumed, once a step
+	 * Tell the session how much of its upload this fleet has consumed, once a step
 	 * more than the last grant has been. Consumed is what was received less what
 	 * still waits in a lane behind a stuck sink: credit comes back only from the
 	 * real consumer, and a stream that cannot drain holds its share of the window.
@@ -1000,12 +1000,15 @@ export class DaemonTransportRegistry {
 		this.#deliver(pair, sink, envelope, canonicalPayloadJson(message, envelope), bytes);
 	}
 
-	// --- down: fleet -> daemon messages ---------------------------------------------------
+	// --- down: fleet -> session messages ---------------------------------------------------
 
-	/** Fleet → daemon envelope. Returns the registry-stamped envelope (down
+	/** Fleet → session envelope. Returns the registry-stamped envelope (down
 	 * seq assigned) once it is queued for the socket.
 	 * No live pair: throws `unavailable`; never queues offline work. */
-	async sendToDaemon(workspaceId: string, draft: CallbackEnvelopeInput): Promise<CallbackEnvelope> {
+	async sendToSession(
+		workspaceId: string,
+		draft: CallbackEnvelopeInput,
+	): Promise<CallbackEnvelope> {
 		const pair = this.#pairsByWorkspace.get(workspaceId)?.at(-1);
 		if (!pair) {
 			throw callbackError(
@@ -1183,7 +1186,7 @@ export class DaemonTransportRegistry {
 		}
 	}
 
-	/** Close the pair with the typed refusal frame for `error`; the daemon redials. */
+	/** Close the pair with the typed refusal frame for `error`; the session redials. */
 	#failPair(pair: PairConnection, error: CallbackError): void {
 		this.#teardownPair(pair, callbackCloseFor(error));
 	}
@@ -1222,7 +1225,7 @@ export class DaemonTransportRegistry {
 	 * nothing (a lane exists only while a stream has an unsettled promise). The
 	 * receive side cannot pause a server socket, so what a stuck stream can pile
 	 * up is bounded by the upload credit instead: bytes parked in a lane are not
-	 * consumed (see #grantCredit), the daemon stops at PAIR_CREDIT_WINDOW_BYTES,
+	 * consumed (see #grantCredit), the session stops at PAIR_CREDIT_WINDOW_BYTES,
 	 * and one that sends past it closes the pair. A sink error never fails the pair.
 	 */
 	#deliver(
@@ -1294,7 +1297,7 @@ export class DaemonTransportRegistry {
 
 	// --- bulk: POST /callback/bulk/<correlationId> ---------------------------------
 
-	/** Issue a workspace-scoped correlation id for one daemon-initiated bulk
+	/** Issue a workspace-scoped correlation id for one session-initiated bulk
 	 * transfer (single- or multi-part; unused or stalled correlations expire as
 	 * failed). `capture: true` (fleet download requests) keeps the received
 	 * parts so the fleet can serve them without reassembling a second copy;
@@ -1361,7 +1364,7 @@ export class DaemonTransportRegistry {
 			this.#failBulk(record, record.bytes, "bulk upload had no body");
 			throw callbackError("invalid_request", "bulk upload requires a body");
 		}
-		// Multi-part transfers (downloads): a daemon streams one logical
+		// Multi-part transfers (downloads): a session streams one logical
 		// payload as sequential POSTs to the SAME correlation: headers
 		// x-omp-bulk-part:<n> (0-based, strictly sequential, no gaps/overlaps)
 		// and x-omp-bulk-final:1 on the last part. Neither side buffers the
@@ -1465,7 +1468,7 @@ export class DaemonTransportRegistry {
 	/**
 	 * Serve one workspace's stored session lineage bytes as an NDJSON
 	 * response under a bulk correlation. Called for EVERY bulk POST
-	 * whose correlation id is NOT fleet-issued (a daemon-minted materialize
+	 * whose correlation id is NOT fleet-issued (a session-minted materialize
 	 * pull; fleet-issued upload correlations are routed to #handleBulk
 	 * before any body read). Reads at most MATERIALIZE_REQUEST_MAX_BYTES:
 	 * when the body parses as a MaterializeRequest the fleet answers with
@@ -1479,7 +1482,7 @@ export class DaemonTransportRegistry {
 	 * `unavailable`, never an approximation. One transfer is bounded by
 	 * MATERIALIZE_TRANSFER_MAX_BYTES; larger transcripts split across
 	 * sequential correlation ids via the `end` cursor (see
-	 * lib/session-files/wake-materialize.ts emitMaterializeTransfer). The daemon's own
+	 * lib/session-files/wake-materialize.ts emitMaterializeTransfer). The session's own
 	 * verifier (size + sha256, carried per file) is the acceptance check.
 	 */
 	async #maybeHandleMaterialize(req: Request): Promise<Response | null> {
@@ -1525,11 +1528,11 @@ export class DaemonTransportRegistry {
 			MATERIALIZE_TRANSFER_MAX_BYTES,
 			auth.workspaceId,
 		);
-		// One record per pull: the body is produced as the daemon reads it, so
+		// One record per pull: the body is produced as the session reads it, so
 		// a slow reader holds at most one encoded record and the file fd stays
 		// open only while the transfer is in flight (cancel closes it).
 		// The fleet-issued bulk record never exists for this correlation (the
-		// daemon minted it), so there is no record to settle; the HTTP 200 with
+		// session minted it), so there is no record to settle; the HTTP 200 with
 		// the full NDJSON body IS the transport receipt.
 		const body = new ReadableStream<Uint8Array>({
 			pull: (controller) => {
@@ -1603,7 +1606,7 @@ export class DaemonTransportRegistry {
 		});
 	}
 
-	/** Daemon-reported transfer failure (download_bulk_failed control): fail that
+	/** Session-reported transfer failure (download_bulk_failed control): fail that
 	 * correlation now rather than waiting for the idle expiry. */
 	#applyDownloadBulkFailed(workspaceId: string, payload: unknown): void {
 		if (typeof payload !== "object" || payload === null) return;
@@ -1619,14 +1622,14 @@ export class DaemonTransportRegistry {
 			typeof payload.error.message === "string"
 				? payload.error.message.slice(0, 500)
 				: "";
-		this.#failBulk(record, record.bytes, message || "the daemon reported a failed transfer");
+		this.#failBulk(record, record.bytes, message || "the session reported a failed transfer");
 	}
 
 	// --- observation ---------------------------------------------------------------
 
-	/** Observe every non-heartbeat daemon envelope for a workspace (raw tap,
+	/** Observe every non-heartbeat session envelope for a workspace (raw tap,
 	 * independent of virtual stream attachment). Returns an unsubscribe. */
-	onDaemonEnvelope(workspaceId: string, cb: (envelope: CallbackEnvelope) => void): () => void {
+	onSessionEnvelope(workspaceId: string, cb: (envelope: CallbackEnvelope) => void): () => void {
 		let taps = this.#taps.get(workspaceId);
 		if (!taps) {
 			taps = new Set();
@@ -1642,7 +1645,7 @@ export class DaemonTransportRegistry {
 
 	/** Observe pair-ready announcements and pair teardowns for one workspace.
 	 * Fires with the CURRENT PairStatus after either transition: a consumer
-	 * re-sends its per-stream open controls on every paired:true (the daemon
+	 * re-sends its per-stream open controls on every paired:true (the session
 	 * re-primes each still-open stream) and learns pair loss via paired:false.
 	 * Returns an unsubscribe. */
 	onPairChange(workspaceId: string, cb: (status: PairStatus) => void): () => void {
@@ -1701,9 +1704,9 @@ export class DaemonTransportRegistry {
 
 	#sweep(): void {
 		const now = this.#now();
-		// The daemon's heartbeat is the fleet's liveness evidence for a socket: past
+		// The session's heartbeat is the fleet's liveness evidence for a socket: past
 		// the silence deadline the pair is dead, and leaving it registered would
-		// report a dead daemon as paired and accept commands into a zombie.
+		// report a dead session as paired and accept commands into a zombie.
 		for (const pair of [...this.#pairs.values()]) {
 			if (now - pair.lastDataAt > SILENCE_DEADLINE_MS) {
 				this.#failPair(

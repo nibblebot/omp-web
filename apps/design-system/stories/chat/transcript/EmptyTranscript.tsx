@@ -1,14 +1,14 @@
 import type { SessionListEntry } from "#lib/wire/protocol";
 import { EmptyTranscript } from "../../../../web/components/chat/transcript/EmptyTranscript";
 import { setState } from "../../../../web/state";
-import { settleDaemonSessions } from "../../../../web/store/roster";
-import { answerCommands } from "../../../daemon";
+import { settleWorkspaceSessions } from "../../../../web/store/roster";
+import { answerCommands } from "../../../session";
 import { rosterSessions } from "../../../fixtures/roster";
 import { screenSessionSeed } from "../../../fixtures/screen";
 import { defineStory } from "../../../registry";
 
 /**
- * The workspace's earlier sessions as the daemon lists them: one failed turn (status dot),
+ * The workspace's earlier sessions as the session lists them: one failed turn (status dot),
  * one unnamed session titled by its first prompt, and one empty session the screen hides.
  */
 const recentSessions = (): SessionListEntry[] => {
@@ -29,10 +29,10 @@ const recentSessions = (): SessionListEntry[] => {
 /** A loaded session with no messages, answering the workspace's session list with `sessions`. */
 const seedEmpty = (sessions: () => SessionListEntry[] | null, synced = true) => {
 	answerCommands({
-		list_daemon_sessions: (cmd) => {
+		list_workspace_sessions: (cmd) => {
 			const list = sessions();
-			if (cmd.type === "list_daemon_sessions" && list !== null) {
-				settleDaemonSessions(cmd.daemonId, list, cmd.limit);
+			if (cmd.type === "list_workspace_sessions" && list !== null) {
+				settleWorkspaceSessions(cmd.workspaceId, list, cmd.limit);
 			}
 		},
 	});

@@ -1,6 +1,6 @@
 import type { ProjectBranch } from "#lib/wire/protocol";
 import { settleProjectBranches, settleWorkspaceCreate } from "../../web/store/projects";
-import { answerCommands } from "../daemon";
+import { answerCommands } from "../session";
 import { rosterProjectBranches } from "./roster";
 
 const REMOTE_BRANCHES: ProjectBranch[] = [
@@ -49,7 +49,7 @@ export function answerNewWorkspaceCommands(options: NewWorkspaceAnswers = {}): v
 				});
 				return;
 			}
-			settleWorkspaceCreate({ id: cmd.id, ok: true, daemonId: "dmn_new_worktree" });
+			settleWorkspaceCreate({ id: cmd.id, ok: true, workspaceId: "dmn_new_worktree" });
 		},
 		create_clone: (cmd) => {
 			if (cmd.type !== "create_clone" || create === "hang") return;
@@ -61,7 +61,7 @@ export function answerNewWorkspaceCommands(options: NewWorkspaceAnswers = {}): v
 				});
 				return;
 			}
-			settleWorkspaceCreate({ id: cmd.id, ok: true, daemonId: "dmn_new_clone" });
+			settleWorkspaceCreate({ id: cmd.id, ok: true, workspaceId: "dmn_new_clone" });
 		},
 	});
 }

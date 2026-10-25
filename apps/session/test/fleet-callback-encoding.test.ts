@@ -1,5 +1,5 @@
 /**
- * Outbound wire encoding: the daemon serializes each payload once (or takes the
+ * Outbound wire encoding: the session serializes each payload once (or takes the
  * sender's PreEncodedPayload) and assembles the text message around it. The
  * message on the wire must stay exactly what a whole-envelope JSON.stringify
  * produced, the 1 MiB envelope cap must still be judged against that canonical

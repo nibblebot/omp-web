@@ -61,8 +61,8 @@ function fakeSession(models: Model[] = MODELS) {
 	return { session, live };
 }
 
-/** Two running sessions: daemon processes sharing one config.yml, each pinned at boot. */
-async function twoDaemons() {
+/** Two running sessions: session processes sharing one config.yml, each pinned at boot. */
+async function twoSessions() {
 	const dir = tempDir("omp-model-pin-");
 	writeFileSync(join(dir, "config.yml"), CONFIG);
 	const a = await Settings.loadIsolated({ agentDir: dir, cwd: dir });
@@ -74,7 +74,7 @@ async function twoDaemons() {
 
 describe("model role pin", () => {
 	test("a preset applied in one session persists without moving another running session", async () => {
-		const { dir, a, b } = await twoDaemons();
+		const { dir, a, b } = await twoSessions();
 		const { session, live } = fakeSession();
 
 		const result = await applyPinnedModelPreset(a, session, "fast");
@@ -97,7 +97,7 @@ describe("model role pin", () => {
 	});
 
 	test("a role this session unset stays unset through reloads and its own role edits", async () => {
-		const { a, b } = await twoDaemons();
+		const { a, b } = await twoSessions();
 		await applyPinnedModelPreset(a, fakeSession().session, "fast");
 		await a.flush();
 
@@ -117,7 +117,7 @@ describe("model role pin", () => {
 	});
 
 	test("a refused apply leaves the session's pin in place", async () => {
-		const { a, b } = await twoDaemons();
+		const { a, b } = await twoSessions();
 		await applyPinnedModelPreset(b, fakeSession().session, "fast");
 		await b.flush();
 		await a.reloadFromDisk();
@@ -135,7 +135,7 @@ describe("model role pin", () => {
 	});
 
 	test("an apply that throws keeps the session's pin", async () => {
-		const { a, b } = await twoDaemons();
+		const { a, b } = await twoSessions();
 		const { session } = fakeSession();
 		const throwing = { ...session, scopedModels: null } as unknown as ModelPresetSession;
 		await expect(applyPinnedModelPreset(a, throwing, "fast")).rejects.toThrow();
@@ -146,8 +146,8 @@ describe("model role pin", () => {
 		expect(a.getModelRoles()).toEqual(BASE_ROLES);
 	});
 
-	test("a new session in a running daemon re-pins to the persisted preset", async () => {
-		const { a, b } = await twoDaemons();
+	test("a new conversation in a running session process re-pins to the persisted preset", async () => {
+		const { a, b } = await twoSessions();
 		await applyPinnedModelPreset(a, fakeSession().session, "fast");
 		await a.flush();
 		await b.reloadFromDisk();

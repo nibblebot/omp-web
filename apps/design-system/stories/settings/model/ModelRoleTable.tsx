@@ -3,7 +3,7 @@ import { ModelRoleTable } from "../../../../web/components/settings/ModelRoleTab
 import { setState } from "../../../../web/state";
 import { modelInfos, modelRoleCatalog } from "../../../fixtures/overlays";
 import { defineStory } from "../../../registry";
-import { answerCalls } from "../../../daemon";
+import { answerCalls } from "../../../session";
 
 const thinkingSelectors = ["off", "minimal", "low", "medium", "high", "xhigh"];
 

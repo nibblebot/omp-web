@@ -1,6 +1,6 @@
 import type { SessionListEntry } from "#lib/wire/protocol";
 import { call, state, setState } from "../state";
-import { requestDaemonSessions, resumeDaemonSession, spawnProjectSession } from "./roster";
+import { requestWorkspaceSessions, resumeSession, spawnProjectSession } from "./roster";
 import {
 	type SessionRow,
 	type SessionStatus,
@@ -235,7 +235,7 @@ export function openResumePicker(): void {
 }
 
 /**
- * ID/prefix search, pinned-first. The daemon owns ordering (the pins file
+ * ID/prefix search, pinned-first. The session owns ordering (the pins file
  * is server-owned); this mirror only renders what the server returns.
  */
 let resumeSearchSequence = 0;
@@ -292,18 +292,21 @@ export function closeResumePicker(): void {
 
 /**
  * Resolve `arg` then wake/switch via the EXISTING roster path (never a
- * parallel attachment): unique -> resumeDaemonSession/switchSession;
+ * parallel attachment): unique -> resumeSession/switchSession;
  * ambiguous -> show the choice list; refused/missing -> show the reason.
  * Bare/empty input opens the picker (G20.1).
  */
-export function chooseResumeTarget(arg: string, daemonId?: string): Promise<ResumeResolveOutcome> {
+export function chooseResumeTarget(
+	arg: string,
+	workspaceId?: string,
+): Promise<ResumeResolveOutcome> {
 	const trimmed = arg.trim();
 	if (trimmed.length === 0) {
 		openResumePicker();
 		return Promise.resolve({ kind: "unknown", message: "Opened the resume picker." });
 	}
-	if (daemonId) {
-		return requestDaemonSessions(daemonId)
+	if (workspaceId) {
+		return requestWorkspaceSessions(workspaceId)
 			.then(async (rows) => {
 				const q = trimmed.toLowerCase();
 				const matches = rows.filter((row) => {
@@ -322,7 +325,7 @@ export function chooseResumeTarget(arg: string, daemonId?: string): Promise<Resu
 				});
 				const candidates = normalizeCandidates(matches, new Set(resumePinnedIds()));
 				if (candidates.length === 1 && candidates[0]) {
-					await resumeViaRoster(candidates[0], daemonId);
+					await resumeViaRoster(candidates[0], workspaceId);
 					return { kind: "unique", session: candidates[0] } as ResumeResolveOutcome;
 				}
 				if (candidates.length > 1) {
@@ -342,7 +345,7 @@ export function chooseResumeTarget(arg: string, daemonId?: string): Promise<Resu
 	}
 	// resumeResolve runs inside an attached session. With none attached the edge answers
 	// "not attached" and the call parks until its 30 s deadline, so fail at once with the cause.
-	if (state.currentSessionId === "") {
+	if (state.currentWorkspaceId === "") {
 		const message =
 			"No workspace is open. Open a workspace in Chat first, then resume this session.";
 		setResumeError(message);
@@ -364,7 +367,7 @@ export function chooseResumeTarget(arg: string, daemonId?: string): Promise<Resu
 					return outcome;
 				}
 				setResumeAmbiguous(null);
-				await resumeViaRoster(session, daemonId);
+				await resumeViaRoster(session, workspaceId);
 				const outcome: ResumeResolveOutcome = { kind: "unique", session };
 				return outcome;
 			}
@@ -406,29 +409,29 @@ export function chooseResumeTarget(arg: string, daemonId?: string): Promise<Resu
 }
 
 /**
- * Wake/switch through the existing roster path: an asleep daemon wakes via
+ * Wake/switch through the existing roster path: an asleep session wakes via
  * spawn_resume + attach; a ready one attaches then switchSession. A folder that
- * only a registered project owns starts that project's daemon first
+ * only a registered project owns starts that project's session first
  * (spawnProjectSession). A folder no registered project owns is refused with a
  * pointer to Add project. No new attachment mechanism, no parallel session.
  */
-async function resumeViaRoster(session: ResumeCandidate, daemonId?: string): Promise<void> {
-	if (daemonId) {
-		const chosen = state.daemonRoster.find((entry) => entry.daemonId === daemonId);
+async function resumeViaRoster(session: ResumeCandidate, workspaceId?: string): Promise<void> {
+	if (workspaceId) {
+		const chosen = state.sessionRoster.find((entry) => entry.workspaceId === workspaceId);
 		if (!chosen || (session.cwd && chosen.cwd !== session.cwd)) {
 			throw new Error(
 				"Select the owning profile/workspace/directory in the roster before resuming this session.",
 			);
 		}
-		await resumeDaemonSession(chosen.daemonId, session.sessionFile);
+		await resumeSession(chosen.workspaceId, session.sessionFile);
 	} else if (session.cwd) {
 		const owner = resolveSessionOwner(session.cwd, {
-			roster: state.daemonRoster,
+			roster: state.sessionRoster,
 			projects: state.registeredProjects,
 		});
 		switch (owner.kind) {
-			case "daemon":
-				await resumeDaemonSession(owner.daemonId, session.sessionFile);
+			case "workspace":
+				await resumeSession(owner.workspaceId, session.sessionFile);
 				break;
 			case "project":
 				spawnProjectSession(session.cwd, session.sessionFile);
@@ -450,9 +453,9 @@ async function resumeViaRoster(session: ResumeCandidate, daemonId?: string): Pro
 	closeResumePicker();
 }
 
-/** Request a daemon's last sessions for disambiguating cross-daemon picks. */
-export function requestResumeDaemonSessions(daemonId: string): Promise<SessionListEntry[]> {
-	return requestDaemonSessions(daemonId);
+/** Request a session's last sessions for disambiguating cross-session picks. */
+export function requestResumeWorkspaceSessions(workspaceId: string): Promise<SessionListEntry[]> {
+	return requestWorkspaceSessions(workspaceId);
 }
 
 /** Picker rows from the mirrored candidates; `current` marks the attached session. */
@@ -486,7 +489,7 @@ export function sessionRowsFromResume(
 function unownedFolderBlock(cwd: string): SessionRow["blocked"] | undefined {
 	if (!cwd) return undefined;
 	const owner = resolveSessionOwner(cwd, {
-		roster: state.daemonRoster,
+		roster: state.sessionRoster,
 		projects: state.registeredProjects,
 	});
 	if (owner.kind !== "none") return undefined;
@@ -498,9 +501,9 @@ function unownedFolderBlock(cwd: string): SessionRow["blocked"] | undefined {
 
 /**
  * Delete one session the user confirmed. The attached session goes through
- * `deleteSession` (the daemon replaces it); any other session goes through
- * `resumeDelete`, which the daemon validates (jail, listing, header id, writer
- * lease). Client refusals and daemon errors surface as the picker error.
+ * `deleteSession` (the session replaces it); any other session goes through
+ * `resumeDelete`, which the session validates (jail, listing, header id, writer
+ * lease). Client refusals and session errors surface as the picker error.
  */
 export function deleteResumeSession(
 	row: Pick<SessionRow, "id" | "file" | "current">,
@@ -535,7 +538,7 @@ export function deleteResumeSession(
 }
 
 /**
- * Rename one session. The daemon trims and validates the title and handles the
+ * Rename one session. The session trims and validates the title and handles the
  * attached session and every other session alike.
  */
 export function renameResumeSession(

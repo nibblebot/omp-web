@@ -16,8 +16,8 @@
  *   reuses it; initialization runs only when the verified init marker is
  *   absent (new workspace), enforced by the image entrypoint.
  * - A single Pod mounts the claim at /workspace and runs the session
- *   daemon with `restartPolicy: "Never"` so identity is never masked by a
- *   kubelet restart. No Service/Ingress is created: the daemon dials the
+ *   session with `restartPolicy: "Never"` so identity is never masked by a
+ *   kubelet restart. No Service/Ingress is created: the session dials the
  *   fleet callback pair outbound (no inbound pod service required).
  * - No cluster mutation beyond these two namespaced objects, ever. The
  *   provider never creates namespaces, RBAC, StorageClasses, Secrets, or
@@ -57,7 +57,7 @@
  *   `OMP_SESSION_RESUME_UNWRITTEN=1` when the file may not be on disk yet);
  *   like the callback pair it is rendered as pod env, with no additional
  *   request field. The image entrypoint clears a leftover pidfile lock beside
- *   it and the daemon exits 78 when the file is missing; the provider never
+ *   it and the session exits 78 when the file is missing; the provider never
  *   lists the volume for a wake.
  *
  * Restart rediscovery: pod/PVC names are deterministic from workspaceId
@@ -81,7 +81,7 @@
  * - callback enrollment: the fleet-written `<stateDir>/callback-env.json`
  *   handoff (same contract as bwrap-provider) is injected as pod env. A pod
  *   has no stdin, so apps/session/entrypoint.sh converts that env into the
- *   daemon's `--fleet-stdin` payload and unsets it before exec: the daemon
+ *   session's `--fleet-stdin` payload and unsets it before exec: the session
  *   process never carries it in its environment. The pod spec still exposes
  *   the token to anyone with pod get permission in the operator-approved
  *   namespace; the namespace must be scoped accordingly (RBAC is
@@ -1572,7 +1572,7 @@ const LIST_SESSIONS_ENTRY_OVERHEAD = 120;
 /**
  * The short-lived inventory pod: mounts the workspace claim READ-ONLY, runs
  * {@link LIST_SESSIONS_SCRIPT} with the session image's own `sh` + `find`
- * (entrypoint overridden: no preparation, no daemon, no callback env, no
+ * (entrypoint overridden: no preparation, no session, no callback env, no
  * secrets), restartPolicy Never, same hardened security context as the
  * workspace pod. Labeled and annotated as fleet-owned so the provider only
  * ever touches helpers it created.

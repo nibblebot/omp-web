@@ -114,7 +114,7 @@ import {
 } from "./ui-context";
 import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
 import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
-import { createDaemonControl, type DaemonControl } from "./daemon-control";
+import { createSessionControl, type SessionControl } from "./session-control";
 import { setOnFrameTap, setOnHistoryTap, streamingPrimeFrames } from "./client-delivery";
 import { settingWriteReloadsHistory, transcriptHistoryFrames } from "./transcript-history";
 import { initSdkTuiGlobals } from "./sdk-tui-globals";
@@ -128,7 +128,7 @@ import { pinModelRoles } from "./model-role-pin";
 // open (connect = attached), which routes call/login_code/ui_response and
 // all session-scoped frames. The constant handle "s1" survives only as the
 // attached frame's client guard token; session-scoped frames carry no
-// sessionId on the wire.
+// workspaceId stamp on the wire.
 // ---------------------------------------------------------------------------
 
 let config: SessionConfig;
@@ -169,7 +169,7 @@ let bootEntry: SessionEntry | null = null;
 const version = await resolveVersion();
 
 // Idle auto-exit (R11): a 15s tick (default; the OMP_SESSION_TEST_IDLE_CHECK_MS
-// env hook overrides it for tests) exits via shutdown() when the daemon has
+// env hook overrides it for tests) exits via shutdown() when the session has
 // been continuously idle for config.idleTimeoutMs (0 disables).
 let lastActivityAt = Date.now();
 let idleTimer: ReturnType<typeof setInterval> | undefined;
@@ -292,7 +292,7 @@ const sessionChangeGate = createSessionChangeGate(NOT_READY_GATED);
 setOnStreamsEmpty(() => {
 	// Callback-pair browsers are virtual streams outside this set; keep the
 	// daemon roster poll alive while any of them remain.
-	if ((daemonControl?.browserStreamCount() ?? 0) === 0) daemonBroker.stopDaemonPoll();
+	if ((sessionControl?.browserStreamCount() ?? 0) === 0) daemonBroker.stopDaemonPoll();
 });
 setOnConsumerDetached((stream, reason) => {
 	// A UI request dies only when every stream it was shown to is gone.
@@ -308,7 +308,7 @@ setOnConsumerDetached((stream, reason) => {
 let nextConsumerId = 1;
 
 /**
- * The attach priming frames, in order: hello_ok (daemon identity), attached,
+ * The attach priming frames, in order: hello_ok (session identity), attached,
  * history (one frame, or byte-bounded chunks), state, collab_status,
  * available_commands (when built), ready (once the boot session is ready).
  * One builder for both transports, so a direct /ws socket and a callback
@@ -328,7 +328,7 @@ function primingFrames(
 			version,
 			...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
 		},
-		{ type: "attached", sessionId: BOOT_HANDLE },
+		{ type: "attached", workspaceId: BOOT_HANDLE },
 		...transcriptHistoryFrames(entry.session),
 		...streamingPrimeFrames(entry),
 		{
@@ -355,7 +355,7 @@ function primingFrames(
 }
 
 /**
- * Prime a fresh browser socket: hello_ok first (daemon identity; HTTP-level
+ * Prime a fresh browser socket: hello_ok first (session identity; HTTP-level
  * auth replaced the WS hello handshake), then the attach priming (attached →
  * history → state → collab_status → available_commands → ready), seqs 1..k
  * (k < DELTA_SEQ_START). `commands` is built BEFORE the socket upgrades so
@@ -1006,7 +1006,7 @@ function capRemembered<K, V>(map: Map<K, V>, cap: number): void {
 
 /**
  * Record one id-keyed answer so a later duplicate command can replay it, then
- * broadcast it. Every answer the daemon emits for a command id goes through
+ * broadcast it. Every answer the session emits for a command id goes through
  * here: the replay must return the ORIGINAL outcome (success data or the real
  * dispatch error), never a re-execution.
  */
@@ -1100,14 +1100,14 @@ if (
 }
 // Lock the --resume session file BEFORE bind, so a second omp-session
 // pointed at the same file exits before printing its listening line: a
-// spawner never resolves an endpoint (or dials) for a daemon that cannot
+// spawner never resolves an endpoint (or dials) for a session that cannot
 // own its session. Only absolute paths are locked here; the live file
 // (which may be identical) is locked right after createSession below.
 if (config.resume && path.isAbsolute(config.resume)) acquireSessionLock(config.resume);
 
 // A fleet-managed session (--fleet-stdin, so callbackUrl is set) binds no
 // listener: the fleet reaches it only over the callback WebSocket. A bare
-// daemon binds the direct listener: the browser socket (GET /ws, OMP_PROTO 5)
+// session binds the direct listener: the browser socket (GET /ws, OMP_PROTO 6)
 // and nothing else; every other route answers the 404 pointer to the fleet.
 const server =
 	config.callbackUrl === undefined
@@ -1127,13 +1127,13 @@ const server =
 					// in-band commands up (ack/nack replaces the old 202/4xx).
 					if (url.pathname === BROWSER_SOCKET_PATH) return upgradeClient(req, srv, url);
 					// Off-loopback peers need the bearer header on every non-wire route too,
-					// so a tokened daemon answers no unauthenticated peer, not even its 404.
+					// so a tokened session answers no unauthenticated peer, not even its 404.
 					if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });
-					// No static or HTML route: the daemon serves the wire API only, so
+					// No static or HTML route: the session serves the wire API only, so
 					// everything else (including "/") points at the fleet, the only
 					// web UI server.
 					return new Response(
-						"omp-web: this is a session daemon (no web UI). Start the fleet with `omp-web` and open the Web UI URL it prints.\n",
+						"omp-web: this is a session process (no web UI). Start the fleet with `omp-web` and open the Web UI URL it prints.\n",
 						{ status: 404, headers: { "content-type": "text/plain; charset=utf-8" } },
 					);
 				},
@@ -1145,7 +1145,7 @@ const server =
 // R6b: the OMP_SESSION| listening contract line goes to STDOUT immediately after
 // bind, BEFORE session creation. Only a session with a direct listener prints it
 // (a fleet-managed session binds none). The fleet does not parse it; it is
-// informational for whoever launched the daemon. Human logs go to stderr.
+// informational for whoever launched the session. Human logs go to stderr.
 // ---------------------------------------------------------------------------
 
 if (server !== null) {
@@ -1175,7 +1175,7 @@ process.on("SIGHUP", () => void shutdown());
 
 /**
  * Diagnostic note for a refused `--resume`: the SDK rejects a switch whose
- * recorded cwd differs from this process's (the daemon's project dir is
+ * recorded cwd differs from this process's (the session's project dir is
  * spawn-bound), and that is the one refusal an operator can neither guess nor
  * fix from a bare "returned false". Reads the file's head for the session
  * header, compares resolved paths, and returns an empty string when there is
@@ -1193,7 +1193,7 @@ async function resumeCwdNote(file: string, cwd: string): Promise<string> {
 				const header = JSON.parse(line) as { cwd?: unknown };
 				if (typeof header.cwd !== "string" || header.cwd === "") return "";
 				if (path.resolve(header.cwd) === path.resolve(cwd)) return "";
-				return ` (the session was recorded under ${header.cwd}, this daemon runs ${cwd})`;
+				return ` (the session was recorded under ${header.cwd}, this session runs ${cwd})`;
 			}
 			return "";
 		} finally {
@@ -1237,7 +1237,7 @@ const CALLBACK_DRAIN_MS = 1_000;
 // Hard ceiling on a graceful shutdown: the callback drain (CALLBACK_DRAIN_MS,
 // twice at most), the postmortem cleanup (its own 10 s deadline), and
 // closeSession must all fit inside it. A step that never settles cannot keep
-// the daemon alive past this point.
+// the session alive past this point.
 const SHUTDOWN_DEADLINE_MS = 20_000;
 /** No-control-plane shutdown timer (C4): armed while no callback pair is ready. */
 let controlGraceTimer: Timer | undefined;
@@ -1246,7 +1246,7 @@ let controlGraceTimer: Timer | undefined;
  * command routing, and control mirror. Created
  * only when the callback pair exists; null otherwise.
  */
-let daemonControl: DaemonControl | null = null;
+let sessionControl: SessionControl | null = null;
 
 /**
  * Wake: materialize a session's stored transcripts from the fleet log
@@ -1342,7 +1342,7 @@ if (config.resume) {
 }
 // collab.autoStart: host the boot session through the relay. Refused with a reason
 // (logged and sent to clients) when no collab.relayUrl is set. Not awaited, so a slow
-// or dead relay cannot hold the daemon's readiness gate.
+// or dead relay cannot hold the session's readiness gate.
 const autoDecision = decideAutoStart(
 	cfgCollabAutoStart.get(settings),
 	chooseRelayUrl(
@@ -1399,7 +1399,7 @@ if (config.callbackUrl !== undefined) {
 			);
 			return;
 		}
-		daemonControl?.handleEnvelope(envelope);
+		sessionControl?.handleEnvelope(envelope);
 	};
 
 	const callbackSend = (
@@ -1437,12 +1437,12 @@ if (config.callbackUrl !== undefined) {
 				if (status.state === "ready") {
 					clearControlGrace();
 					// Every pair-up (first pair, redial, a new control plane)
-					// tells the fleet which session file this daemon is on: the
+					// tells the fleet which session file this session is on: the
 					// boot state broadcast predates the pair, and respawn resumes
 					// the fleet's recorded lastSessionFile.
 					const entry = bootEntry;
-					if (daemonControl !== null && entry !== null) {
-						daemonControl.publish("control", {
+					if (sessionControl !== null && entry !== null) {
+						sessionControl.publish("control", {
 							type: "state",
 							state: daemonBroker.buildStateSnapshot(entry),
 							stats: entry.session.getSessionStats(),
@@ -1491,7 +1491,7 @@ if (config.callbackUrl !== undefined) {
 	// command dispatch over the pair. Command answers flow through the
 	// broadcast mirror (the frame tap), so handleCommand resolves undefined
 	// and the tap forwards the answer frames.
-	daemonControl = createDaemonControl({
+	sessionControl = createSessionControl({
 		handleCommand: async (command: unknown) => {
 			const cmd = parseClientCommand(command);
 			markActivity();
@@ -1534,19 +1534,19 @@ if (config.callbackUrl !== undefined) {
 	});
 	// Browser presence for dialog/contribution guards: production browsers ride
 	// the pair as virtual streams, invisible to the local /ws consumer set.
-	setCallbackBrowserStreamCount(() => daemonControl?.browserStreamCount() ?? 0);
+	setCallbackBrowserStreamCount(() => sessionControl?.browserStreamCount() ?? 0);
 	// Register the mirror tap: every broadcast/broadcastAnswer/broadcastTo
 	// frame is forwarded verbatim: to the "control" stream (fleet activity +
 	// fanout correlation) AND every open browser stream (ringed deltas ring
 	// for reconnect replay). Tap must never throw into delivery.
 	setOnFrameTap((frame) => {
-		const ctl = daemonControl;
+		const ctl = sessionControl;
 		if (ctl !== null) ctl.mirror(frame as Record<string, unknown>);
 	});
 	// History resyncs reach the pair's browser streams through their own tap:
 	// paced, and never onto the control stream.
 	setOnHistoryTap(async (frames) => {
-		await daemonControl?.publishHistory(frames);
+		await sessionControl?.publishHistory(frames);
 	});
 	// Once the pair is ready (fleet pair_ready observed) start streaming
 	// session logs over it; tailer start() is sync (initial scan + watcher).
@@ -1557,14 +1557,14 @@ if (config.callbackUrl !== undefined) {
 		() => {
 			// stop() or supervisor exit before readiness. Both are already reported
 			// through onError/onRejected, so the rejection is handled here; left
-			// unhandled it would exit the daemon with status 1 during teardown.
+			// unhandled it would exit the session with status 1 during teardown.
 		},
 	);
 }
 
 // ---------------------------------------------------------------------------
 // Idle auto-exit (R11): a 15s tick (default; the OMP_SESSION_TEST_IDLE_CHECK_MS
-// env hook overrides it for tests) exits via shutdown() once the daemon has
+// env hook overrides it for tests) exits via shutdown() once the session has
 // been continuously idle for config.idleTimeoutMs (0 disables). Idle = ALL
 // suppression conditions false; any socket message or suppression resets the
 // activity clock.
@@ -1572,7 +1572,7 @@ if (config.callbackUrl !== undefined) {
 
 function isIdleSuppressed(): boolean {
 	if (streams.size > 0) return true;
-	if (daemonControl !== null && daemonControl.status().streams.length > 0) return true;
+	if (sessionControl !== null && sessionControl.status().streams.length > 0) return true;
 	if (getInFlightBash() > 0 || getInFlightPython() > 0) return true;
 	if (bootEntry) {
 		if (bootEntry.session.isStreaming) return true;
@@ -1628,7 +1628,7 @@ async function shutdown(exitCode = 0): Promise<void> {
 		// give queued envelopes (the ShutdownControl ack, final frames) a bounded
 		// window to reach the wire before the pair closes.
 		if (logTailer !== null) logTailer.stop();
-		if (daemonControl !== null) daemonControl.stop();
+		if (sessionControl !== null) sessionControl.stop();
 		if (fleetCallback !== null) await fleetCallback.drain(CALLBACK_DRAIN_MS);
 		if (fleetCallback !== null) fleetCallback.stop();
 		if (bootEntry) await closeSession(bootEntry, "server shutting down");

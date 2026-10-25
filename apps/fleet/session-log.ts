@@ -1,5 +1,5 @@
 /**
- * Retention for fleet daemon logs, shared by the host runtime and the
+ * Retention for fleet session logs, shared by the host runtime and the
  * bwrap provider. A log is `<name>.log` plus one rotated generation
  * `<name>.log.1`. Rotation renames an over-cap file to `.1`, replacing the
  * previous generation, so the disk footprint stays near two caps. Removal
@@ -7,6 +7,7 @@
  */
 import {
 	closeSync,
+	existsSync,
 	fstatSync,
 	mkdirSync,
 	openSync,
@@ -16,12 +17,19 @@ import {
 	statSync,
 	writeSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 /** Cap per log generation (bytes). */
 export const SESSION_LOG_MAX_BYTES = 1024 * 1024;
-/** File name of a provider-managed clone daemon's combined stdout and stderr. */
-export const PROVIDER_DAEMON_LOG = "daemon.log";
+/** File name of a provider-managed clone session's combined stdout and stderr. */
+export const PROVIDER_SESSION_LOG = "session.log";
+
+/**
+ * Pre-rename name of the clone log. A clone launched before the rename still has this file in
+ * its stateDir (its supervisor may even still be appending to it), so readers fall back to it
+ * when `session.log` is absent. Writers never use it.
+ */
+export const LEGACY_PROVIDER_LOG = "daemon.log";
 
 /** Rename `path` to `path.1` when it exceeds the cap. A missing file is left alone. */
 export function rotateSessionLog(path: string): void {
@@ -60,7 +68,20 @@ export function readSessionLogTail(path: string, bytes: number): string {
 }
 
 /**
- * Append-only writer for one daemon log. Rotates at the cap mid-run, so a
+ * The last `bytes` bytes of a provider-managed clone's combined log in `stateDir`:
+ * `session.log`, or the legacy `daemon.log` when `session.log` does not exist (a clone
+ * whose stateDir predates the rename). "" when neither exists.
+ */
+export function readProviderLogTail(stateDir: string, bytes: number): string {
+	const current = join(stateDir, PROVIDER_SESSION_LOG);
+	return readSessionLogTail(
+		existsSync(current) ? current : join(stateDir, LEGACY_PROVIDER_LOG),
+		bytes,
+	);
+}
+
+/**
+ * Append-only writer for one session log. Rotates at the cap mid-run, so a
  * single long-lived child cannot grow the file without bound. One writer is
  * shared by every pump of the same child, so rotation never splits one
  * stream across two files.

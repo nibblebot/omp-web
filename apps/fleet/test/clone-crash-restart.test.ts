@@ -34,7 +34,7 @@ describe("clone runtime that dies after pair-up", () => {
 				const first = await fx.pairUp();
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.lifecycleStage === "ready",
+					() => fx.server.registry.get(fx.workspaceId)?.lifecycleStage === "ready",
 					5_000,
 					"pair-up ready",
 				);
@@ -47,13 +47,13 @@ describe("clone runtime that dies after pair-up", () => {
 				await waitForRoster(
 					fx,
 					() => {
-						const entry = fx.server.registry.get(fx.daemonId);
+						const entry = fx.server.registry.get(fx.workspaceId);
 						return entry?.workspace?.authorizedGeneration === 2 && entry.status === "ready";
 					},
 					8_000,
 					"restart at generation 2",
 				);
-				const entry = fx.server.registry.get(fx.daemonId)!;
+				const entry = fx.server.registry.get(fx.workspaceId)!;
 				expect(entry.workspace?.desiredState).toBe("running");
 				expect(entry.workspace?.enrollment?.generation).toBe(2);
 				expect(fx.ensureGenerations()).toEqual([1, 2]);
@@ -71,7 +71,7 @@ describe("clone runtime that dies after pair-up", () => {
 				await fx.pairUp();
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.lifecycleStage === "ready",
+					() => fx.server.registry.get(fx.workspaceId)?.lifecycleStage === "ready",
 					5_000,
 					"gen-2 pair-up ready",
 				);
@@ -87,19 +87,19 @@ describe("clone runtime that dies after pair-up", () => {
 		async () => {
 			const fx = await boot({});
 			try {
-				const daemon = await fx.pairUp();
+				const session = await fx.pairUp();
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.lifecycleStage === "ready",
+					() => fx.server.registry.get(fx.workspaceId)?.lifecycleStage === "ready",
 					5_000,
 					"pair-up ready",
 				);
-				await daemon.stop(); // Pair gone, runtime (marker) alive.
+				await session.stop(); // Pair gone, runtime (marker) alive.
 				// Several pair-loss graces and inspect cadences pass.
 				await Bun.sleep(1_000);
 				expect(fx.ensureGenerations()).toEqual([1]);
 				expect(fx.ops().some((o) => o.op === "stop")).toBe(false);
-				const entry = fx.server.registry.get(fx.daemonId)!;
+				const entry = fx.server.registry.get(fx.workspaceId)!;
 				expect(entry.workspace?.authorizedGeneration).toBe(1);
 				expect(entry.status).toBe("ready");
 			} finally {
@@ -117,7 +117,7 @@ describe("clone runtime that dies after pair-up", () => {
 				const first = await fx.pairUp();
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.lifecycleStage === "ready",
+					() => fx.server.registry.get(fx.workspaceId)?.lifecycleStage === "ready",
 					5_000,
 					"pair-up ready",
 				);
@@ -127,11 +127,11 @@ describe("clone runtime that dies after pair-up", () => {
 
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.lifecycleStage === "failed",
+					() => fx.server.registry.get(fx.workspaceId)?.lifecycleStage === "failed",
 					8_000,
 					"failed after the restart budget",
 				);
-				const entry = fx.server.registry.get(fx.daemonId)!;
+				const entry = fx.server.registry.get(fx.workspaceId)!;
 				expect(entry.status).toBe("error");
 				expect(entry.error ?? "").toContain("restart budget exhausted");
 				expect(entry.error ?? "").toContain("2 restarts allowed");
@@ -158,7 +158,7 @@ describe("clone runtime that dies after pair-up", () => {
 				await fx.kill(first);
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.workspace?.authorizedGeneration === 2,
+					() => fx.server.registry.get(fx.workspaceId)?.workspace?.authorizedGeneration === 2,
 					8_000,
 					"first restart",
 				);
@@ -168,11 +168,11 @@ describe("clone runtime that dies after pair-up", () => {
 				await fx.kill(second);
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.workspace?.authorizedGeneration === 3,
+					() => fx.server.registry.get(fx.workspaceId)?.workspace?.authorizedGeneration === 3,
 					8_000,
 					"second restart after a stable pair",
 				);
-				expect(fx.server.registry.get(fx.daemonId)!.lifecycleStage).not.toBe("failed");
+				expect(fx.server.registry.get(fx.workspaceId)!.lifecycleStage).not.toBe("failed");
 			} finally {
 				await teardown(fx);
 			}
@@ -185,27 +185,27 @@ describe("clone runtime that dies after pair-up", () => {
 		async () => {
 			const fx = await boot({ backoffMinMs: 600, backoffMaxMs: 600 });
 			try {
-				const daemon = await fx.pairUp();
+				const session = await fx.pairUp();
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.lifecycleStage === "ready",
+					() => fx.server.registry.get(fx.workspaceId)?.lifecycleStage === "ready",
 					5_000,
 					"pair-up ready",
 				);
-				await fx.kill(daemon);
+				await fx.kill(session);
 				// The runtime death is observed and a restart is queued behind its backoff.
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.status === "reconnecting",
+					() => fx.server.registry.get(fx.workspaceId)?.status === "reconnecting",
 					5_000,
 					"restart backing off",
 				);
-				const stop = await postJson(fx.server.port, "/ctl/stop", { selector: fx.daemonId });
+				const stop = await postJson(fx.server.port, "/ctl/stop", { selector: fx.workspaceId });
 				expect(stop.status).toBe(200);
 				// Well past the backoff window.
 				await Bun.sleep(1_200);
 				expect(fx.ensureGenerations()).toEqual([1]);
-				const entry = fx.server.registry.get(fx.daemonId)!;
+				const entry = fx.server.registry.get(fx.workspaceId)!;
 				expect(entry.workspace?.desiredState).toBe("stopped");
 				expect(entry.status).toBe("asleep");
 				rmSync(join(fx.stateDir, "dead"), { force: true });
@@ -229,11 +229,11 @@ describe("clone runtime exit reported by the provider", () => {
 				});
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.lifecycleStage === "failed",
+					() => fx.server.registry.get(fx.workspaceId)?.lifecycleStage === "failed",
 					5_000,
 					"failed before the pair",
 				);
-				const entry = fx.server.registry.get(fx.daemonId)!;
+				const entry = fx.server.registry.get(fx.workspaceId)!;
 				expect(entry.status).toBe("error");
 				expect(entry.error ?? "").toContain("before the callback pair established");
 				expect(entry.error ?? "").toContain("container exited 1 (Error): boom while booting");
@@ -254,7 +254,7 @@ describe("clone runtime exit reported by the provider", () => {
 				const first = await fx.pairUp();
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.lifecycleStage === "ready",
+					() => fx.server.registry.get(fx.workspaceId)?.lifecycleStage === "ready",
 					5_000,
 					"pair-up ready",
 				);
@@ -262,11 +262,11 @@ describe("clone runtime exit reported by the provider", () => {
 				await fx.kill(first, { exitCode: 137, detail: "container exited 137 (OOMKilled)" });
 				await waitForRoster(
 					fx,
-					() => fx.server.registry.get(fx.daemonId)?.lifecycleStage === "failed",
+					() => fx.server.registry.get(fx.workspaceId)?.lifecycleStage === "failed",
 					8_000,
 					"failed after the restart budget",
 				);
-				const entry = fx.server.registry.get(fx.daemonId)!;
+				const entry = fx.server.registry.get(fx.workspaceId)!;
 				expect(entry.error ?? "").toContain("container exited 137 (OOMKilled)");
 				expect(entry.error ?? "").toContain("restart budget exhausted");
 			} finally {
@@ -282,24 +282,24 @@ describe("clone runtime exit reported by the provider", () => {
 			async () => {
 				const fx = await boot({});
 				try {
-					const daemon = await fx.pairUp();
+					const session = await fx.pairUp();
 					await waitForRoster(
 						fx,
-						() => fx.server.registry.get(fx.daemonId)?.lifecycleStage === "ready",
+						() => fx.server.registry.get(fx.workspaceId)?.lifecycleStage === "ready",
 						5_000,
 						"pair-up ready",
 					);
-					await fx.kill(daemon, {
+					await fx.kill(session, {
 						exitCode: code,
 						detail: `container exited ${code} (Error): session file not found`,
 					});
 					await waitForRoster(
 						fx,
-						() => fx.server.registry.get(fx.daemonId)?.status === "asleep",
+						() => fx.server.registry.get(fx.workspaceId)?.status === "asleep",
 						5_000,
 						"asleep after a deterministic exit",
 					);
-					const entry = fx.server.registry.get(fx.daemonId)!;
+					const entry = fx.server.registry.get(fx.workspaceId)!;
 					expect(entry.error).toBe(`container exited ${code} (Error): session file not found`);
 					expect(entry.lifecycleStage).toBeUndefined();
 					expect(entry.workspace?.desiredState).toBe("stopped");
@@ -310,7 +310,9 @@ describe("clone runtime exit reported by the provider", () => {
 					// An explicit start brings it back at the next generation.
 					rmSync(join(fx.stateDir, "dead"), { force: true });
 					rmSync(join(fx.stateDir, "exit.json"), { force: true });
-					const started = await postJson(fx.server.port, "/ctl/start", { daemonId: fx.daemonId });
+					const started = await postJson(fx.server.port, "/ctl/start", {
+						workspaceId: fx.workspaceId,
+					});
 					expect(started.status).toBe(200);
 					expect(fx.ensureGenerations()).toEqual([1, 2]);
 					expect(readFileSync(join(fx.stateDir, "callback-env.json"), "utf8")).toContain(

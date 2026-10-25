@@ -3,8 +3,8 @@
  * (Bun's websocket config is server-wide), told apart by `ws.data.kind`:
  *
  *   - "callback": a session's pair socket (`/callback/ws`), owned by the
- *     DaemonTransportRegistry.
- *   - "browser": a client's `/ws` socket (OMP_PROTO 5), owned by the FleetEdge.
+ *     SessionTransportRegistry.
+ *   - "browser": a client's `/ws` socket (OMP_PROTO 6), owned by the FleetEdge.
  *
  * The server-wide limits are the union of both kinds' needs:
  *
@@ -29,7 +29,7 @@
 import type { ServerWebSocket, WebSocketHandler } from "bun";
 import { BROWSER_SOCKET_MAX_PAYLOAD_BYTES } from "#lib/wire/browser-socket";
 import { CLIENT_BACKPRESSURE_BYTES } from "#lib/wire/protocol";
-import type { CallbackSocketData, DaemonTransportRegistry } from "./daemon-transport";
+import type { CallbackSocketData, SessionTransportRegistry } from "./session-transport";
 import type { BrowserSocketData, FleetEdge } from "./edge";
 
 /** Every `ws.data` shape the fleet's Bun.serve hands its `websocket` handler. */
@@ -53,7 +53,7 @@ function isBrowserSocket(
  * callback socket can exist, so only the browser kind is served.
  */
 export function fleetWebSocket(
-	transport: DaemonTransportRegistry | undefined,
+	transport: SessionTransportRegistry | undefined,
 	edge: FleetEdge,
 ): WebSocketHandler<FleetSocketData> {
 	const pair = transport?.websocket;

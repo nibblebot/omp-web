@@ -19,7 +19,7 @@ const LOOP_MODES: LoopMode[] = ["count", "duration", "until", "while"];
 /**
  * Loops tab body for the Goal dialog (shell-less). Preview is read-only;
  * start, cancel are consent-gated and nothing runs until confirmed. Loops
- * cannot start while goal mode is on (the daemon rejects it), so the start
+ * cannot start while goal mode is on (the session rejects it), so the start
  * control shows the reason instead.
  */
 export const LoopPanel: Component = () => {

@@ -7,7 +7,7 @@ import { JobWidget } from "./JobWidget";
 /** What the sheet shows about the selected job beyond its row: its widget, facts, the full command and the output tail. */
 export const JobDetail: Component<{
 	job: JobDto;
-	/** Undefined while the inspection loads, null once the daemon no longer lists the job. */
+	/** Undefined while the inspection loads, null once the session no longer lists the job. */
 	detail: JobDetailDto | null | undefined;
 	/** Epoch ms a running job counts its run time up to. */
 	now: number;

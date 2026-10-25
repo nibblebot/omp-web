@@ -7,13 +7,13 @@ import { setState, state } from "../../state";
 import { applyJobWidgets, clearJobWidgets } from "../../store/job-widgets";
 import { JOBS_FINISHED_LINGER_MS, jobsBarView } from "../../store/jobs-bar";
 
-const originalSession = state.currentSessionId;
+const originalSession = state.currentWorkspaceId;
 
 const frame = (running: number) => applyJobWidgets({ running, entries: [] });
 
 beforeEach(() => {
 	vi.useFakeTimers();
-	setState("currentSessionId", "sess-a");
+	setState("currentWorkspaceId", "sess-a");
 	clearJobWidgets();
 });
 afterEach(() => {
@@ -21,7 +21,7 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 afterAll(() => {
-	setState("currentSessionId", originalSession);
+	setState("currentWorkspaceId", originalSession);
 });
 
 describe("jobs bar presence", () => {
@@ -74,7 +74,7 @@ describe("jobs bar presence", () => {
 		frame(3);
 		frame(0);
 		expect(jobsBarView()).toEqual({ phase: "finished" });
-		setState("currentSessionId", "sess-b");
+		setState("currentWorkspaceId", "sess-b");
 		expect(jobsBarView()).toBeUndefined();
 		frame(1);
 		expect(jobsBarView()).toEqual({ phase: "running", running: 1 });

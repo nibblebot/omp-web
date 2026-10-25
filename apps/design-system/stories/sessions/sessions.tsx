@@ -14,7 +14,7 @@ import {
 import { pushToast } from "../../../web/store/toasts";
 import { setState } from "../../../web/state";
 import { resumeCandidates, resumeListReply, T0 } from "../../fixtures/overlays";
-import { answerCalls } from "../../daemon";
+import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
 const pending = () => Promise.withResolvers<unknown>().promise;
@@ -169,7 +169,7 @@ export default [
 		title: "SessionPicker",
 		component: { file: "apps/web/components/sessions/SessionPicker.tsx", export: "SessionPicker" },
 		tabs: true,
-		seed: { currentSessionId: "sess_09a41c" },
+		seed: { currentWorkspaceId: "sess_09a41c" },
 		variants: [
 			{
 				name: "Resume session",
@@ -185,7 +185,7 @@ export default [
 			{
 				name: "Before the list arrives",
 				description:
-					"The daemon has not answered yet; the list shows its loading state until it does.",
+					"The session process has not answered yet; the list shows its loading state until it does.",
 				seed: () => {
 					answerCalls({ resumeList: pending });
 					void searchResume("");
@@ -228,7 +228,7 @@ export default [
 			{
 				name: "Read only",
 				description:
-					"The daemon does not advertise rename and delete, so those actions are hidden.",
+					"The session process does not advertise rename and delete, so those actions are hidden.",
 				render: () => (
 					<div class="ds-frame ds-frame-panel">
 						<SessionListStory rows={listRows()} canManage={false} scope currentCwd={PROJECT_CWD} />
@@ -252,7 +252,8 @@ export default [
 			},
 			{
 				name: "Truncated list",
-				description: "The daemon matched more sessions than it sent: the count line says so.",
+				description:
+					"The session process matched more sessions than it sent: the count line says so.",
 				render: () => (
 					<div class="ds-frame ds-frame-panel">
 						<SessionListStory rows={listRows()} total={240} canManage currentCwd={PROJECT_CWD} />

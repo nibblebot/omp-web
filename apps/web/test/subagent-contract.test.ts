@@ -82,13 +82,13 @@ function seed(agents: Seed[]): void {
 		} as WorkerRecord;
 		order.push(key);
 	}
-	setState("currentSessionId", SESSION);
+	setState("currentWorkspaceId", SESSION);
 	setState("subagents", live);
 	setState("workers", { ...createWorkersState(), records, order });
 }
 
 beforeEach(() => {
-	setState("currentSessionId", SESSION);
+	setState("currentWorkspaceId", SESSION);
 	setState("subagents", new Map<string, SubagentInfo>());
 	setState("workers", createWorkersState());
 });

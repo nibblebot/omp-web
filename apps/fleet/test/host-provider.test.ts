@@ -86,7 +86,7 @@ function makeRig(): Rig {
 			workspaceId: id,
 			generation: 1,
 			entry: {
-				daemonId: id,
+				workspaceId: id,
 				name: "host-session",
 				cwd: dir,
 				project: "host-provider",

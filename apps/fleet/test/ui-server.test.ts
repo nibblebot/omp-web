@@ -1,5 +1,5 @@
 /**
- * UI daemon wire tests: startUiServer in front of a real control plane
+ * UI server wire tests: startUiServer in front of a real control plane
  * (startFleet) and in front of fake upstreams (a stand-in /ws and
  * /callback/ws control plane). Covers static serving, proxied JSON, the
  * forwarded-header rewrite, upstream status passthrough, the 502 when the
@@ -29,7 +29,7 @@ import {
 } from "#lib/wire/callback-protocol";
 import { OMP_PROTO } from "#lib/wire/protocol";
 import type { FleetConfig } from "../config";
-import { DaemonTransportRegistry } from "../daemon-transport";
+import { SessionTransportRegistry } from "../session-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
 import { ProjectSync } from "../project-sync";
@@ -61,7 +61,7 @@ async function mountEdge(tmp: string, serveUi?: boolean) {
 		workspaceDir: join(tmp, "ws"),
 		bind: "127.0.0.1",
 	};
-	const transport = new DaemonTransportRegistry();
+	const transport = new SessionTransportRegistry();
 	const { lifecycle } = makeHostLifecycle({
 		registry,
 		config,
@@ -83,7 +83,7 @@ async function mountEdge(tmp: string, serveUi?: boolean) {
 	return serveEdge(edge);
 }
 
-describe("ui daemon proxy", () => {
+describe("ui server proxy", () => {
 	let fleet: FleetServer;
 	let ui: UiServer;
 
@@ -124,7 +124,7 @@ describe("ui daemon proxy", () => {
 	});
 });
 
-describe("ui daemon when the control plane is down", () => {
+describe("ui server when the control plane is down", () => {
 	test("answers 502 JSON naming the control port", async () => {
 		const fleet = await startTestFleet(fleetPaths(), {});
 		const controlPort = fleet.port;
@@ -142,7 +142,7 @@ describe("ui daemon when the control plane is down", () => {
 	});
 });
 
-describe("ui daemon auth gate", () => {
+describe("ui server auth gate", () => {
 	let fleet: FleetServer;
 	let ui: UiServer;
 
@@ -178,7 +178,7 @@ describe("serveUi on the edge", () => {
 	});
 });
 
-describe("ui daemon proxy forwarded headers and upstream status", () => {
+describe("ui server proxy forwarded headers and upstream status", () => {
 	let upstream: Server<undefined>;
 	let ui: UiServer;
 	let seen: Headers | null = null;
@@ -263,7 +263,7 @@ interface DialedSession {
 	closed: Promise<{ code: number; reason: string }>;
 }
 
-describe("ui daemon callback WebSocket bridge", () => {
+describe("ui server callback WebSocket bridge", () => {
 	const FLOOD_MESSAGES = 64;
 	const FLOOD_BYTES = 1024 * 1024;
 	let upstream: Server<UpstreamSocket>;
@@ -574,7 +574,7 @@ describe("ui daemon callback WebSocket bridge", () => {
 	});
 });
 
-describe("ui daemon browser WebSocket bridge", () => {
+describe("ui server browser WebSocket bridge", () => {
 	/** 64 MiB in 64 KiB frames: more than the kernel buffers on the path, so the burst only fits if the forwarder absorbs it. */
 	const FLOOD_CHUNK_BYTES = 64 * 1024;
 	const FLOOD_MESSAGES = 1024;

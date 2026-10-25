@@ -7,7 +7,7 @@ import { cancelDangerConfirm } from "../web/prompt/danger-confirm";
 import { SIDEBAR_RUNNING_ONLY_KEY, setState, state } from "../web/state";
 import { closeDownload } from "../web/store/downloads";
 import { resetJobsBar } from "../web/store/jobs-bar";
-import { resetDaemon } from "./daemon";
+import { resetSession } from "./session";
 import type { StoreSeed } from "./registry";
 
 /**
@@ -55,13 +55,13 @@ function applySeed(seed: StoreSeed | undefined): void {
 }
 
 /**
- * Reset the store and the fake daemon (daemon.ts), then apply each seed in
+ * Reset the store and the fake session (session.ts), then apply each seed in
  * order (story first, variant second).
  */
 export function applySeeds(...seeds: Array<StoreSeed | undefined>): void {
 	batch(() => {
 		resetStore();
-		resetDaemon();
+		resetSession();
 		for (const seed of seeds) applySeed(seed);
 	});
 }

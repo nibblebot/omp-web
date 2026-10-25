@@ -1,6 +1,6 @@
 /**
  * Aggregated daemons panel (Phase 4/5): pure merge/cache semantics of
- * fleet/daemons-aggregator.ts, covering cross-daemon merging keyed by
+ * fleet/daemons-aggregator.ts, covering cross-session merging keyed by
  * `${projectDir}\u0000${name}`, same-projectDir preference, latest-wins
  * tie-breaks, full-replace ingest, and removal eviction. The browser-facing
  * integration (broadcast on update/open, pipe stripping, registry-removal
@@ -46,7 +46,7 @@ describe("mergeDaemonRosters", () => {
 		expect(mergeDaemonRosters(new Map())).toEqual([]);
 	});
 
-	test("disjoint rosters are unioned across daemons", () => {
+	test("disjoint rosters are unioned across sessions", () => {
 		const merged = mergeDaemonRosters(
 			new Map([
 				["d1", source("/a", 10, info("hub-a", "/a", { pid: 1 }), info("x", "/a", { pid: 2 }))],
@@ -56,7 +56,7 @@ describe("mergeDaemonRosters", () => {
 		expect(merged.map((d) => d.name).sort()).toEqual(["hub-a", "hub-b", "x"]);
 	});
 
-	test("same key prefers the daemon whose cwd equals the projectDir over a newer arrival", () => {
+	test("same key prefers the session whose cwd equals the projectDir over a newer arrival", () => {
 		const merged = mergeDaemonRosters(
 			new Map([
 				// d1 owns /a: its "shared" is older but authoritative.
@@ -69,7 +69,7 @@ describe("mergeDaemonRosters", () => {
 		expect(merged[0].pid).toBe(111);
 	});
 
-	test("two daemons sharing a projectDir: latest arrival among owners wins", () => {
+	test("two sessions sharing a projectDir: latest arrival among owners wins", () => {
 		const merged = mergeDaemonRosters(
 			new Map([
 				["d1", source("/a", 10, info("shared", "/a", { pid: 111 }))],
@@ -79,7 +79,7 @@ describe("mergeDaemonRosters", () => {
 		expect(merged[0].pid).toBe(333);
 	});
 
-	test("no daemon owns the projectDir: latest arrival wins", () => {
+	test("no session owns the projectDir: latest arrival wins", () => {
 		const merged = mergeDaemonRosters(
 			new Map([
 				["d1", source("/a", 10, info("shared", "/z", { pid: 111 }))],
@@ -89,7 +89,7 @@ describe("mergeDaemonRosters", () => {
 		expect(merged[0].pid).toBe(222);
 	});
 
-	test("duplicate keys within one daemon's roster: the later entry wins", () => {
+	test("duplicate keys within one session's roster: the later entry wins", () => {
 		const merged = mergeDaemonRosters(
 			new Map([
 				[
@@ -114,7 +114,7 @@ describe("mergeDaemonRosters", () => {
 		expect(merged[0].pid).toBe(111);
 	});
 
-	test("each merged entry lists exactly the daemons whose roster reported its key", () => {
+	test("each merged entry lists exactly the sessions whose roster reported its key", () => {
 		const merged = mergeDaemonRosters(
 			new Map([
 				["d1", source("/a", 10, info("shared", "/a"), info("only-a", "/a"))],
@@ -127,7 +127,7 @@ describe("mergeDaemonRosters", () => {
 });
 
 describe("DaemonsAggregator", () => {
-	test("ingest is full-replace per daemon: dropped entries disappear from the merge", () => {
+	test("ingest is full-replace per session: dropped entries disappear from the merge", () => {
 		const agg = new DaemonsAggregator();
 		agg.ingest("d1", [info("a", "/a"), info("b", "/a")], "/a", 10);
 		agg.ingest("d2", [info("c", "/b")], "/b", 20);
@@ -147,7 +147,7 @@ describe("DaemonsAggregator", () => {
 		).toEqual(["a", "c"]);
 	});
 
-	test("remove evicts a daemon's cached roster", () => {
+	test("remove evicts a session's cached roster", () => {
 		const agg = new DaemonsAggregator();
 		agg.ingest("d1", [info("a", "/a")], "/a", 10);
 		agg.ingest("d2", [info("c", "/b")], "/b", 20);

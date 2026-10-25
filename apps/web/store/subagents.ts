@@ -139,7 +139,7 @@ function coerceWorkerStatus(value: unknown): WorkerStatus {
 	}
 }
 
-/** Usage the daemon retained for a finished worker; undefined when it reported none. */
+/** Usage the session retained for a finished worker; undefined when it reported none. */
 function coerceRosterUsage(value: unknown): WorkerRecord["usage"] {
 	const usage = asRecord(value);
 	if (!usage) return undefined;
@@ -194,13 +194,13 @@ function coerceWorkerRow(row: unknown, sessionId: string): WorkerRecord | null {
 
 /** Failures reject: an unavailable roster must not look like an empty success. */
 export async function listWorkers(): Promise<WorkerRecord[]> {
-	const sessionId = state.currentSessionId;
+	const sessionId = state.currentWorkspaceId;
 	if (!sessionId) throw new Error("No session attached");
 	const data = await call("workerList", []);
 	const field = asRecord(data)?.workers;
 	const list = Array.isArray(data) ? data : Array.isArray(field) ? field : null;
 	if (!list) throw new Error("Invalid worker roster");
-	if (state.currentSessionId !== sessionId)
+	if (state.currentWorkspaceId !== sessionId)
 		throw new Error("Session switched during worker discovery");
 	setState("workers", (previous) => normalizeWorkerSnapshot(previous, sessionId, list));
 	setState("subagentsLoaded", "roster", true);
@@ -291,7 +291,7 @@ export function ensureAnalysisSessionsDir(): void {
  * session, or null when the "Open in Analysis" action must be hidden.
  */
 export function subagentAnalysisHref(id: string, analysisEnabled: boolean): string | null {
-	const record = state.workers.records[workerKey(state.currentSessionId, id)];
+	const record = state.workers.records[workerKey(state.currentWorkspaceId, id)];
 	return subagentAnalysisHash({
 		analysisEnabled,
 		sessionsDir: analysisSessionsDir(),
@@ -342,7 +342,7 @@ export function getWorkerInfo(
 	agentId: string,
 ): WorkerInfo | SubagentInfo | null {
 	const record = state.workers.records[workerKey(sessionId, agentId)];
-	const live = sessionId === state.currentSessionId ? state.subagents.get(agentId) : undefined;
+	const live = sessionId === state.currentWorkspaceId ? state.subagents.get(agentId) : undefined;
 	if (!record) return live ?? null;
 	const base: SubagentInfo = live ?? {
 		id: agentId,
@@ -368,7 +368,7 @@ export function getSessionWorkerInfos(sessionId: string): Array<WorkerInfo | Sub
 			.filter((record) => record.sessionId === sessionId)
 			.map((record) => record.agentId),
 	);
-	if (sessionId === state.currentSessionId) for (const id of state.subagents.keys()) ids.add(id);
+	if (sessionId === state.currentWorkspaceId) for (const id of state.subagents.keys()) ids.add(id);
 	return [...ids].flatMap((id) => {
 		const info = getWorkerInfo(sessionId, id);
 		return info ? [info] : [];
@@ -435,14 +435,14 @@ function scheduleRoster(attempt: number, generation: number): void {
 	}, ROSTER_RETRY_MS[attempt]);
 }
 
-/** Coalesced roster refetch on lifecycle edges (SUB-10). Retries with backoff while the daemon is unreachable. */
+/** Coalesced roster refetch on lifecycle edges (SUB-10). Retries with backoff while the session is unreachable. */
 export function requestRosterRefresh(): void {
 	rosterGeneration += 1;
 	scheduleRoster(0, rosterGeneration);
 }
 
 function rosterOfSession(): WorkerRecord[] {
-	const sessionId = state.currentSessionId;
+	const sessionId = state.currentWorkspaceId;
 	return state.workers.order
 		.map((key) => state.workers.records[key])
 		.filter(
@@ -659,7 +659,7 @@ const [transcripts, setTranscripts] = createStore<Record<string, TranscriptSlot>
 const builders = new Map<string, HistoryBuilder>();
 
 function transcriptKey(agentId: string): string {
-	return JSON.stringify([state.currentSessionId, agentId]);
+	return JSON.stringify([state.currentWorkspaceId, agentId]);
 }
 
 /** True once the agent can no longer be running a tool (terminal or parked); unknown agents are not settled. */

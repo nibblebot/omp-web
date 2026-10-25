@@ -1,7 +1,7 @@
 /**
  * SessionLogTailer regression: a fleet log_gap control whose envelope
  * streamId NAMES the affected log stream must repair that stream; the
- * daemon's handleControl requires the target when the control does not ride
+ * session's handleControl requires the target when the control does not ride
  * the reserved transport stream (fleet sends log_gap on the target stream;
  * a missing target used to gap-lock mid-file holes permanently).
  */

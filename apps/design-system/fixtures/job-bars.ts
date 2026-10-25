@@ -6,7 +6,7 @@ import { authoringWidget, benchWidget, subagentWidget } from "./job-widgets";
 /** The running agent of the subagent fixtures, whose task job shares its id. */
 export const WIDGET_AGENT_ID = "FixtureBuilder";
 
-/** A running job's widget as the daemon's `job_widgets` frame carries it: cut to a glance. */
+/** A running job's widget as the session's `job_widgets` frame carries it: cut to a glance. */
 const entry = (id: string, type: string, view: WireJobWidgetView): WireJobWidgetEntry => ({
 	id,
 	type,
@@ -24,7 +24,7 @@ export const agentEntry = (updatedAt = subagentWidget.updatedAt): WireJobWidgetE
 /** A dev server whose widget spec is still being written: no figure yet, so a glance says so. */
 export const authoringEntry = (): WireJobWidgetEntry => entry("bg_2", "bash", authoringWidget);
 
-/** What the daemon's `job_widgets` snapshot leaves in the store, through the real action. */
+/** What the session's `job_widgets` snapshot leaves in the store, through the real action. */
 export function seedJobWidgets(running: number, entries: readonly WireJobWidgetEntry[]): void {
 	applyJobWidgets({ running, entries: [...entries] });
 }

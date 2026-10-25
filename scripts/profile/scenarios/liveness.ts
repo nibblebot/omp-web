@@ -24,7 +24,7 @@ export async function checkLiveness(env: RunEnv): Promise<LivenessReport> {
 	const handle = await env.stack.addSession({ label: "s2", slot: 1 }, repo);
 	const client = await ProfileClient.connect(env.adapter, env.stack.baseUrl);
 	try {
-		await client.attach(handle.daemonId, handle.label, DEADLINE_MS);
+		await client.attach(handle.workspaceId, handle.label, DEADLINE_MS);
 		if (client.frames === 0) throw new LivenessError("no frames reached the client after attach");
 		let textDeltas = 0;
 		const off = client.onFrame((r) => {

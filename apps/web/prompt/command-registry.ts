@@ -11,7 +11,7 @@ import { SDK_BUILTINS, type SdkBuiltin } from "./sdk-builtins";
  * Every entry is classified:
  * - `local`: the browser handles it (a `LOCAL_COMMANDS` handler or a feature
  *   route); it is never sent to the agent as text.
- * - `forwarded`: the daemon runs it through `prompt` (SDK builtin with a
+ * - `forwarded`: the session runs it through `prompt` (SDK builtin with a
  *   headless handler, skill, extension, custom or file command).
  * - `tui-only`: only the terminal UI implements it; the browser shows a local
  *   notice and never sends it to the model.
@@ -58,7 +58,7 @@ export interface CommandEntry {
 export interface CommandRegistryInput {
 	/** Names handled by `LOCAL_COMMANDS` (the browser-local handler table). */
 	localNames: Iterable<string>;
-	/** The daemon's advertised list (`available_commands` frame). */
+	/** The session's advertised list (`available_commands` frame). */
 	remote: readonly AvailableSlashCommand[];
 	/** Owning feature of a slash name, with its live enabled flag. */
 	featureOf: (name: string) => CommandFeature | undefined;

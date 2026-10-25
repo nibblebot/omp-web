@@ -8,7 +8,7 @@ import type {
 	JobTreeRowDto,
 	WireJobWidgetView,
 } from "#lib/wire/protocol";
-import type { CallHandlers } from "../daemon";
+import type { CallHandlers } from "../session";
 import { authoringWidget, benchWidget, blockWidgets, subagentWidget } from "./job-widgets";
 
 const SECOND = 1000;
@@ -23,7 +23,7 @@ interface TreeNode {
 	children?: TreeNode[];
 }
 
-/** Rows in display order with their places, as the daemon's `buildJobTree` hands them out (depth first, rails continue past non-last siblings). */
+/** Rows in display order with their places, as the session's `buildJobTree` hands them out (depth first, rails continue past non-last siblings). */
 function flatten(
 	nodes: readonly TreeNode[],
 	depth = 0,
@@ -85,7 +85,7 @@ const WIDGET_BY_JOB: Readonly<Record<string, WireJobWidgetView>> = {
 	[JOB_IDS.tests]: blockWidgets.meter,
 };
 
-/** A running job's row carries its widget cut to a glance, as the daemon's `getJobTree` sends it. */
+/** A running job's row carries its widget cut to a glance, as the session's `getJobTree` sends it. */
 const withRowWidgets = (rows: JobTreeRowDto[]): JobTreeRowDto[] =>
 	rows.map((row) => {
 		const view =
@@ -280,7 +280,7 @@ export interface JobCallOptions {
 	cancelError?: string;
 }
 
-/** Job methods over a mutable copy of the tree: Cancel settles an own running job as the daemon does, and refuses any other. */
+/** Job methods over a mutable copy of the tree: Cancel settles an own running job as the session does, and refuses any other. */
 export function jobCalls(options: JobCallOptions = {}): CallHandlers {
 	const tree = structuredClone(options.tree ?? jobTreeFixture());
 	const find = (id: unknown) =>

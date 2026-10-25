@@ -13,9 +13,9 @@
  * control API answers with it). Anything else is unexpected and propagates.
  *
  * Browser pipe teardown is announced here, not performed: a method that stops,
- * removes or deletes a daemon calls the {@link FleetOperations.onDetach}
+ * removes or deletes a session calls the {@link FleetOperations.onDetach}
  * listeners at the point a browser attached to it must drop its pipe (a
- * stopped pair would otherwise surface a phantom "daemon connection lost").
+ * stopped pair would otherwise surface a phantom "session connection lost").
  */
 
 import type { CloneCreateInput } from "./workspace-lifecycle";
@@ -59,7 +59,7 @@ export class OperationError extends Error {
  * (FLC-21: a rejecting `removal` leaves the row registered).
  */
 export interface RowEvictionHooks {
-	evictRow<T>(daemonId: string, removal: () => Promise<T>): Promise<T>;
+	evictRow<T>(workspaceId: string, removal: () => Promise<T>): Promise<T>;
 	evictProject(projectId: string): Promise<void>;
 }
 
@@ -135,7 +135,7 @@ export class FleetOperations {
 	readonly #config: Pick<FleetConfig, "workspaceDir">;
 	readonly #eventLog: FleetEventLog;
 	readonly #eviction: RowEvictionHooks;
-	readonly #detachListeners = new Set<(daemonId: string) => void>();
+	readonly #detachListeners = new Set<(workspaceId: string) => void>();
 
 	constructor(deps: OperationsDeps) {
 		this.#registry = deps.registry;
@@ -147,24 +147,24 @@ export class FleetOperations {
 	}
 
 	/**
-	 * Subscribe to "stop talking to this daemon" notices (browser pipes). Fired
+	 * Subscribe to "stop talking to this session" notices (browser pipes). Fired
 	 * by stop, remove, delete and remove-project at the point a browser attached
-	 * to the daemon must drop its pipe. Returns the unsubscribe function.
+	 * to the session must drop its pipe. Returns the unsubscribe function.
 	 */
-	onDetach(listener: (daemonId: string) => void): () => void {
+	onDetach(listener: (workspaceId: string) => void): () => void {
 		this.#detachListeners.add(listener);
 		return () => {
 			this.#detachListeners.delete(listener);
 		};
 	}
 
-	#detach(daemonId: string): void {
-		for (const listener of this.#detachListeners) listener(daemonId);
+	#detach(workspaceId: string): void {
+		for (const listener of this.#detachListeners) listener(workspaceId);
 	}
 
-	#entry(daemonId: string): RegistryEntry {
-		const entry = this.#registry.get(daemonId);
-		if (!entry) throw new OperationError(404, `unknown daemon: ${daemonId}`);
+	#entry(workspaceId: string): RegistryEntry {
+		const entry = this.#registry.get(workspaceId);
+		if (!entry) throw new OperationError(404, `unknown session: ${workspaceId}`);
 		return entry;
 	}
 
@@ -185,41 +185,41 @@ export class FleetOperations {
 			name: input.name,
 		});
 		const projectId = await projectIdForCwd(this.#registry.projects(), resolved);
-		if (projectId !== undefined) this.#registry.update(entry.daemonId, { projectId });
-		return this.#registry.get(entry.daemonId) ?? entry;
+		if (projectId !== undefined) this.#registry.update(entry.workspaceId, { projectId });
+		return this.#registry.get(entry.workspaceId) ?? entry;
 	}
 
 	/**
-	 * Stop a daemon, leaving its row asleep, through the lifecycle's stop verb
+	 * Stop a session, leaving its row asleep, through the lifecycle's stop verb
 	 * (the same call for every kind; the lifecycle picks the proof-bearing
 	 * provider stop or the host child stop and keeps a failed stop from
 	 * leaving the row "ready"). Browsers detach first.
 	 */
-	async stop(daemonId: string): Promise<void> {
-		this.#entry(daemonId);
-		this.#detach(daemonId);
-		await this.#lifecycle.stop(daemonId);
+	async stop(workspaceId: string): Promise<void> {
+		this.#entry(workspaceId);
+		this.#detach(workspaceId);
+		await this.#lifecycle.stop(workspaceId);
 	}
 
 	/**
-	 * Remove a daemon's row. A clone routes through the verified deletion gate
+	 * Remove a session's row. A clone routes through the verified deletion gate
 	 * (never registry.remove: dropping the roster identity unverified would
 	 * orphan or lose the volume/store silently); its browsers detach only after
 	 * the gate passes, so a refusal keeps live attachments. Anything else is
 	 * detached, stopped and evicted through the single eviction path (the guards
 	 * and the row removal around `lifecycle.delete`).
 	 */
-	async remove(daemonId: string): Promise<{ verified: string[] }> {
-		const entry = this.#entry(daemonId);
+	async remove(workspaceId: string): Promise<{ verified: string[] }> {
+		const entry = this.#entry(workspaceId);
 		let verified: string[] = [];
 		if (entry.workspace?.kind === "clone") {
-			verified = (await this.#lifecycle.delete(daemonId)).verified;
-			this.#detach(daemonId);
+			verified = (await this.#lifecycle.delete(workspaceId)).verified;
+			this.#detach(workspaceId);
 		} else {
-			this.#detach(daemonId);
-			await this.#eviction.evictRow(daemonId, async () => {});
+			this.#detach(workspaceId);
+			await this.#eviction.evictRow(workspaceId, async () => {});
 		}
-		this.#eventLog.add("info", "server", "removed", daemonId);
+		this.#eventLog.add("info", "server", "removed", workspaceId);
 		return { verified };
 	}
 
@@ -282,14 +282,14 @@ export class FleetOperations {
 		const rows = this.#registry.list().filter((entry) => entry.projectId === projectId);
 		const cloneIds = rows
 			.filter((entry) => entry.workspace?.kind === "clone")
-			.map((entry) => entry.daemonId);
+			.map((entry) => entry.workspaceId);
 		if (cloneIds.length > 0) {
 			throw new OperationError(
 				409,
 				`project ${projectId} has clone workspaces: ${cloneIds.join(", ")}`,
 			);
 		}
-		for (const row of rows) this.#detach(row.daemonId);
+		for (const row of rows) this.#detach(row.workspaceId);
 		await this.#eviction.evictProject(projectId);
 	}
 
@@ -333,7 +333,7 @@ export class FleetOperations {
 			"info",
 			"server",
 			`worktree created ${created.path} (${created.branch})`,
-			entry.daemonId,
+			entry.workspaceId,
 		);
 		return entry;
 	}
@@ -344,8 +344,8 @@ export class FleetOperations {
 	 * checkout is a provider volume, not a fleet-local cwd): its evidence rides
 	 * the roster's lifecycleStage/lifecycleError, so this answers 400 for it.
 	 */
-	async worktreeDeleteInfo(daemonId: string): Promise<WorktreeDeleteInfo> {
-		const entry = this.#entry(daemonId);
+	async worktreeDeleteInfo(workspaceId: string): Promise<WorktreeDeleteInfo> {
+		const entry = this.#entry(workspaceId);
 		if (entry.workspace?.kind === "clone") {
 			throw new OperationError(
 				400,
@@ -360,20 +360,20 @@ export class FleetOperations {
 	 * (never the git guards, which reason about a fleet-local cwd). Anything
 	 * else is a worktree: the linked-worktree and clean-tree guards (403 not
 	 * linked / 409 dirty; never --force) run BEFORE any mutation, so a refusal
-	 * leaves the daemon and roster untouched. Then the daemon is detached,
+	 * leaves the session and roster untouched. Then the session is detached,
 	 * stopped, git-removed (optionally `git branch -d`), and evicted only once
 	 * the removal succeeded. Transcripts live under the agent dir and survive.
 	 */
 	async deleteWorkspace(
-		daemonId: string,
+		workspaceId: string,
 		opts: { deleteBranch?: string } = {},
 	): Promise<DeleteWorkspaceResult> {
-		const entry = this.#entry(daemonId);
+		const entry = this.#entry(workspaceId);
 		if (entry.workspace?.kind === "clone") {
 			// The verified gate (never the git guards, which reason about a
 			// fleet-local cwd), then the browsers detach.
-			const result = await this.#lifecycle.delete(daemonId);
-			this.#detach(daemonId);
+			const result = await this.#lifecycle.delete(workspaceId);
+			this.#detach(workspaceId);
 			return result;
 		}
 		const path = entry.cwd ?? "";
@@ -384,10 +384,10 @@ export class FleetOperations {
 		if (info.dirty) {
 			throw new OperationError(409, info.reason ?? `worktree has uncommitted changes: ${path}`);
 		}
-		this.#detach(daemonId);
+		this.#detach(workspaceId);
 		let deleted: DeleteWorktreeResult;
 		try {
-			deleted = await this.#eviction.evictRow(daemonId, () =>
+			deleted = await this.#eviction.evictRow(workspaceId, () =>
 				deleteWorktree(entry, { deleteBranch: opts.deleteBranch }),
 			);
 		} catch (err) {
@@ -401,9 +401,9 @@ export class FleetOperations {
 			"info",
 			"server",
 			`worktree deleted ${deleted.path}${deleted.branch !== undefined ? ` (${deleted.branch})` : ""}`,
-			daemonId,
+			workspaceId,
 		);
-		return { removed: daemonId, worktree: deleted };
+		return { removed: workspaceId, worktree: deleted };
 	}
 
 	/**
@@ -415,7 +415,7 @@ export class FleetOperations {
 	 */
 	async createClone(input: CloneCreateInput): Promise<RegistryEntry> {
 		const entry = await this.#lifecycle.createClone(input);
-		this.#eventLog.add("info", "server", `clone created ${entry.daemonId}`, entry.daemonId);
+		this.#eventLog.add("info", "server", `clone created ${entry.workspaceId}`, entry.workspaceId);
 		return entry;
 	}
 
@@ -424,8 +424,8 @@ export class FleetOperations {
 	 * lifecycle (git runs only there, never in a handler). Refusals
 	 * (CloneLifecycleError) propagate for each transport to map.
 	 */
-	async fetchCloneIntoProject(daemonId: string): Promise<CloneFetchResult> {
-		this.#entry(daemonId);
-		return await this.#lifecycle.fetchCloneIntoProject(daemonId);
+	async fetchCloneIntoProject(workspaceId: string): Promise<CloneFetchResult> {
+		this.#entry(workspaceId);
+		return await this.#lifecycle.fetchCloneIntoProject(workspaceId);
 	}
 }

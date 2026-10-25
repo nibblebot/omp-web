@@ -5,7 +5,7 @@
  * files are never invented) and lifecycle-adapter's durable deletion
  * (`canonical !== path`: a journal symlinked out of the owned sessions root is
  * refused before any SDK call). Real filesystem fixtures; the wire behavior is
- * covered by the daemon suite.
+ * covered by the session suite.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";

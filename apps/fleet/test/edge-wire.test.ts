@@ -1,9 +1,9 @@
 /**
  * Fleet edge wire-contract tests: the browser socket (/ws) edge and
  * the /ctl routes against the real server mount (startFleet). Every session
- * daemon is a fake that dials the callback pair (startCallbackDaemon); the
+ * session is a fake that dials the callback pair (startCallbackSession); the
  * fleet never dials a session. Order-dependent shared fixtures (browserA,
- * respawn counter, spawn capture, the second daemon for aggregated-daemons)
+ * respawn counter, spawn capture, the second session for aggregated-daemons)
  * stay together here.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -23,7 +23,7 @@ import { Registry } from "../registry";
 import { startFleet, type FleetServer } from "../server";
 import { enrollSessionCredential } from "../session-credential";
 import type { StartOptions } from "../workspace-lifecycle";
-import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
+import { type CallbackSession, startCallbackSession } from "./callback-session.testkit";
 import {
 	FAKE_CWD,
 	FAKE_STATE,
@@ -42,7 +42,7 @@ import { hermeticStatsConfig } from "./server.testkit";
 
 afterAll(cleanupTempDirs);
 
-/** Second daemon's cwd, a different projectDir for cross-daemon merge tests. */
+/** Second session's cwd, a different projectDir for cross-session merge tests. */
 const OTHER_CWD = join(tempDir("omp-web-edge-other-cwd-"), "other-proj");
 
 function controlType(payload: unknown): string | undefined {
@@ -58,16 +58,16 @@ function hasId(payload: unknown, id: string): boolean {
 	return typeof payload === "object" && payload !== null && "id" in payload && payload.id === id;
 }
 
-/** Control envelopes of one type the fleet sent down to a daemon. */
-function controlsOf(daemon: CallbackDaemon, type: string): CallbackEnvelope[] {
-	return daemon
+/** Control envelopes of one type the fleet sent down to a session. */
+function controlsOf(session: CallbackSession, type: string): CallbackEnvelope[] {
+	return session
 		.received()
 		.filter((env) => env.kind === "control" && controlType(env.payload) === type);
 }
 
-/** Commands a daemon received for one browser command id. */
-function commandsWithId(daemon: CallbackDaemon, id: string): CallbackEnvelope[] {
-	return daemon.received().filter((env) => env.kind === "command" && hasId(env.payload, id));
+/** Commands a session received for one browser command id. */
+function commandsWithId(session: CallbackSession, id: string): CallbackEnvelope[] {
+	return session.received().filter((env) => env.kind === "command" && hasId(env.payload, id));
 }
 
 /** Run git in `cwd`, throwing on failure; a fixed identity keeps commits hermetic. */
@@ -106,7 +106,7 @@ describe("fleet edge", () => {
 	let browseDir: string;
 	let server: FleetServer;
 	let remoteEntry: RegistryEntry;
-	let remoteDaemon: CallbackDaemon;
+	let remoteSession: CallbackSession;
 	let spawnedEntry: RegistryEntry;
 	let browserA: BrowserSocket;
 	let browserB: BrowserSocket;
@@ -117,49 +117,49 @@ describe("fleet edge", () => {
 	let spawnInits: Array<{ cwd: string; template?: string }> = [];
 	/** The entry the wrapper's last spawn returned. */
 	let spawnedByEdge: RegistryEntry | null = null;
-	// Aggregated daemons panel tests (second daemon + its registered id).
-	let daemonsBId = "";
+	// Aggregated daemons panel tests (second session + its registered id).
+	let sessionsBId = "";
 	let daemonsBrowser: BrowserSocket;
-	/** Every callback daemon this suite started, keyed by daemonId. */
-	const daemonsById = new Map<string, CallbackDaemon>();
+	/** Every callback session this suite started, keyed by workspaceId. */
+	const sessionsById = new Map<string, CallbackSession>();
 
 	const fleetUrl = () => `http://127.0.0.1:${server.port}`;
 
-	/** Mint a daemon's pair credential and dial it. */
-	async function connectDaemon(
-		daemonId: string,
+	/** Mint a session's pair credential and dial it. */
+	async function connectSession(
+		workspaceId: string,
 		generation: number,
 		token: string,
-	): Promise<CallbackDaemon> {
-		daemonsById.get(daemonId)?.stop();
-		const daemon = startCallbackDaemon({
+	): Promise<CallbackSession> {
+		sessionsById.get(workspaceId)?.stop();
+		const session = startCallbackSession({
 			url: fleetUrl(),
-			workspaceId: daemonId,
+			workspaceId,
 			generation,
 			token,
 		});
-		daemonsById.set(daemonId, daemon);
-		await daemon.waitConnected(10_000);
-		return daemon;
+		sessionsById.set(workspaceId, session);
+		await session.waitConnected(10_000);
+		return session;
 	}
 
 	/** Pair a host-launched child: the test plays the child's callback dial. */
-	async function pairSpawned(daemonId: string): Promise<void> {
+	async function pairSpawned(workspaceId: string): Promise<void> {
 		const { generation, credential } = enrollSessionCredential(
 			server.transport,
 			server.registry,
-			daemonId,
+			workspaceId,
 		);
-		await connectDaemon(daemonId, generation, credential);
+		await connectSession(workspaceId, generation, credential);
 	}
 
-	function dropDaemon(daemonId: string): void {
-		daemonsById.get(daemonId)?.stop();
-		daemonsById.delete(daemonId);
+	function dropSession(workspaceId: string): void {
+		sessionsById.get(workspaceId)?.stop();
+		sessionsById.delete(workspaceId);
 	}
 
 	/** Register an asleep row and mint its pair credential; nothing dials it yet. */
-	function enrollRow(name: string): { daemonId: string; generation: number; token: string } {
+	function enrollRow(name: string): { workspaceId: string; generation: number; token: string } {
 		const entry = server.registry.create({
 			name,
 			cwd: FAKE_CWD,
@@ -170,16 +170,16 @@ describe("fleet edge", () => {
 		const { generation, credential } = enrollSessionCredential(
 			server.transport,
 			server.registry,
-			entry.daemonId,
+			entry.workspaceId,
 		);
-		return { daemonId: entry.daemonId, generation, token: credential };
+		return { workspaceId: entry.workspaceId, generation, token: credential };
 	}
 
-	/** Wait for the fleet to open a new browser stream on this daemon. */
-	async function awaitNewStream(daemon: CallbackDaemon, seen: number): Promise<string> {
+	/** Wait for the fleet to open a new browser stream on this session. */
+	async function awaitNewStream(session: CallbackSession, seen: number): Promise<string> {
 		return waitFor(
 			() => {
-				const opens = controlsOf(daemon, "stream_open");
+				const opens = controlsOf(session, "stream_open");
 				return opens.length > seen ? opens[opens.length - 1].streamId : null;
 			},
 			5000,
@@ -188,44 +188,44 @@ describe("fleet edge", () => {
 	}
 
 	/** Prime a browser stream the way a session does after stream_open (hello_ok, attached, then priming). */
-	function primeStream(daemon: CallbackDaemon, streamId: string): void {
-		daemon.send(streamId, "frame", { type: "hello_ok", proto: OMP_PROTO });
-		daemon.send(streamId, "frame", { type: "attached", sessionId: "s1" });
-		daemon.send(streamId, "frame", { type: "history", entries: [] });
-		daemon.send(streamId, "frame", { type: "state", state: FAKE_STATE });
-		daemon.send(streamId, "frame", { type: "available_commands", commands: [] });
-		daemon.send(streamId, "frame", { type: "ready" });
+	function primeStream(session: CallbackSession, streamId: string): void {
+		session.send(streamId, "frame", { type: "hello_ok", proto: OMP_PROTO });
+		session.send(streamId, "frame", { type: "attached", workspaceId: "s1" });
+		session.send(streamId, "frame", { type: "history", entries: [] });
+		session.send(streamId, "frame", { type: "state", state: FAKE_STATE });
+		session.send(streamId, "frame", { type: "available_commands", commands: [] });
+		session.send(streamId, "frame", { type: "ready" });
 	}
 
-	/** Attach a browser to a daemon, prime its pipe, and wait for the attached frame. Returns the stream id. */
+	/** Attach a browser to a session, prime its pipe, and wait for the attached frame. Returns the stream id. */
 	async function attachBrowser(
 		browser: BrowserSocket,
-		daemon: CallbackDaemon,
-		daemonId: string,
+		session: CallbackSession,
+		workspaceId: string,
 	): Promise<string> {
-		const seen = controlsOf(daemon, "stream_open").length;
-		await browser.send({ type: "attach", sessionId: daemonId });
-		const streamId = await awaitNewStream(daemon, seen);
-		primeStream(daemon, streamId);
+		const seen = controlsOf(session, "stream_open").length;
+		await browser.send({ type: "attach", workspaceId });
+		const streamId = await awaitNewStream(session, seen);
+		primeStream(session, streamId);
 		await browser.waitForFrame(
-			(f) => f.type === "attached" && f.sessionId === daemonId,
-			`attached ${daemonId}`,
+			(f) => f.type === "attached" && f.workspaceId === workspaceId,
+			`attached ${workspaceId}`,
 		);
 		return streamId;
 	}
 
 	/** Attach through a respawn: wait for the pair the respawn creates, then prime its stream and wait for attached. */
-	async function primeAttach(browser: BrowserSocket, daemonId: string): Promise<string> {
-		const daemon = await waitFor(
-			() => daemonsById.get(daemonId) ?? null,
+	async function primeAttach(browser: BrowserSocket, workspaceId: string): Promise<string> {
+		const session = await waitFor(
+			() => sessionsById.get(workspaceId) ?? null,
 			5000,
-			`pair for ${daemonId}`,
+			`pair for ${workspaceId}`,
 		);
-		const streamId = await awaitNewStream(daemon, 0);
-		primeStream(daemon, streamId);
+		const streamId = await awaitNewStream(session, 0);
+		primeStream(session, streamId);
 		await browser.waitForFrame(
-			(f) => f.type === "attached" && f.sessionId === daemonId,
-			`attached ${daemonId}`,
+			(f) => f.type === "attached" && f.workspaceId === workspaceId,
+			`attached ${workspaceId}`,
 		);
 		return streamId;
 	}
@@ -286,10 +286,10 @@ describe("fleet edge", () => {
 		});
 		// Count lifecycle.start calls and pair the woken child, as its dial would.
 		const origRespawn = server.lifecycle.start.bind(server.lifecycle);
-		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
+		server.lifecycle.start = async (workspaceId: string, opts?: StartOptions) => {
 			respawns++;
-			await origRespawn(daemonId, opts);
-			await pairSpawned(daemonId);
+			await origRespawn(workspaceId, opts);
+			await pairSpawned(workspaceId);
 		};
 		// Capture lifecycle.spawnHost inits for the spawn passthrough test, and
 		// pair each spawned child as its dial would.
@@ -301,14 +301,14 @@ describe("fleet edge", () => {
 		}) => {
 			spawnInits.push({ cwd: init.cwd, template: init.template });
 			spawnedByEdge = await origSpawn(init);
-			await pairSpawned(spawnedByEdge.daemonId);
+			await pairSpawned(spawnedByEdge.workspaceId);
 			return spawnedByEdge;
 		};
 	});
 
 	afterAll(async () => {
 		for (const browser of allBrowsers) browser.close();
-		for (const daemon of daemonsById.values()) daemon.stop();
+		for (const session of sessionsById.values()) session.stop();
 		try {
 			if (server !== undefined) await stopSpawnedRows(server);
 		} finally {
@@ -356,7 +356,7 @@ describe("fleet edge", () => {
 		expect(fileBody.error).toContain("not a directory");
 	});
 
-	test("GET /ctl/sessions/{id}/stderr 404s for unknown daemons", async () => {
+	test("GET /ctl/sessions/{id}/stderr 404s for unknown sessions", async () => {
 		const res = await fetch(`${fleetUrl()}/ctl/sessions/d999/stderr`);
 		expect(res.status).toBe(404);
 	});
@@ -369,12 +369,12 @@ describe("fleet edge", () => {
 			name: "added",
 			template: "local",
 		});
-		remoteEntry = server.registry.get(entry.daemonId)!;
-		remoteDaemon = daemonsById.get(entry.daemonId)!;
+		remoteEntry = server.registry.get(entry.workspaceId)!;
+		remoteSession = sessionsById.get(entry.workspaceId)!;
 		await waitFor(
-			() => (server.registry.get(remoteEntry.daemonId)?.status === "ready" ? "ready" : null),
+			() => (server.registry.get(remoteEntry.workspaceId)?.status === "ready" ? "ready" : null),
 			5000,
-			"daemon ready",
+			"session ready",
 		);
 	});
 
@@ -383,16 +383,16 @@ describe("fleet edge", () => {
 		const roster = asRoster(
 			await browser.waitForFrame((f) => f.type === "roster", "initial roster"),
 		);
-		const ids = roster.daemons.map((d) => d.daemonId);
-		expect(ids).toContain(remoteEntry.daemonId);
-		expect(ids).toContain(spawnedEntry.daemonId);
+		const ids = roster.entries.map((d) => d.workspaceId);
+		expect(ids).toContain(remoteEntry.workspaceId);
+		expect(ids).toContain(spawnedEntry.workspaceId);
 		expect(JSON.stringify(roster)).not.toContain(FAKE_TOKEN);
-		for (const d of roster.daemons) {
+		for (const d of roster.entries) {
 			expect(d).not.toHaveProperty("token");
 			expect(d).not.toHaveProperty("endpoint");
 			expect(d).not.toHaveProperty("registeredAt");
 			expect(d).not.toHaveProperty("template");
-			// Alive daemons carry an uptime; asleep ones must not (no pid,
+			// Alive sessions carry an uptime; asleep ones must not (no pid,
 			// no uptime growing since a dead process's readyAt).
 			if (d.status === "asleep") {
 				expect(d.uptime).toBeUndefined();
@@ -403,13 +403,13 @@ describe("fleet edge", () => {
 			}
 		}
 		// A registry mutation broadcasts a roster_delta to every edge stream.
-		server.registry.update(remoteEntry.daemonId, { branch: "env-test-branch" });
+		server.registry.update(remoteEntry.workspaceId, { branch: "env-test-branch" });
 		const second = await browser.waitForFrame(
 			(f) => f.type === "roster_delta" && JSON.stringify(f).includes("env-test-branch"),
 			"roster broadcast",
 		);
 		if (second.type !== "roster_delta") throw new Error("expected roster_delta frame");
-		const changed = second.upserted.find((d) => d.daemonId === remoteEntry.daemonId);
+		const changed = second.upserted.find((d) => d.workspaceId === remoteEntry.workspaceId);
 		expect(changed?.branch).toBe("env-test-branch");
 		expect(JSON.stringify(second)).not.toContain(FAKE_TOKEN);
 	});
@@ -523,7 +523,7 @@ describe("fleet edge", () => {
 		}
 	});
 
-	test("list_daemon_sessions answers a per-daemon sessions frame (asleep daemon included)", async () => {
+	test("list_workspace_sessions answers a workspace_sessions frame (asleep session included)", async () => {
 		// The asleep spawned entry lists from disk, so no live process is
 		// needed; seed one session file in its (temp) session dir and pin the
 		// edge to that dir for the duration of the test.
@@ -533,7 +533,7 @@ describe("fleet edge", () => {
 			OMP_PROFILE: process.env.OMP_PROFILE,
 			PI_PROFILE: process.env.PI_PROFILE,
 		};
-		// listDaemonSessions resolves the agent dir from the SDK's process-level
+		// listWorkspaceSessions resolves the agent dir from the SDK's process-level
 		// state (the edge has no per-call seam), so point it at the temp dir for
 		// this test only and restore it exactly afterwards.
 		setAgentDir(agentDir);
@@ -551,20 +551,20 @@ describe("fleet edge", () => {
 			const browser = await openBrowser(server.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
 			await browser.send({
-				type: "list_daemon_sessions",
+				type: "list_workspace_sessions",
 				id: "ls1",
-				daemonId: spawnedEntry.daemonId,
+				workspaceId: spawnedEntry.workspaceId,
 			});
 			const frame = await browser.waitForFrame(
-				(f) => f.type === "daemon_sessions" && f.sessions.length === 1,
-				"daemon_sessions frame",
+				(f) => f.type === "workspace_sessions" && f.sessions.length === 1,
+				"workspace_sessions frame",
 			);
-			if (frame.type !== "daemon_sessions") throw new Error("expected daemon_sessions");
-			expect(frame.daemonId).toBe(spawnedEntry.daemonId);
+			if (frame.type !== "workspace_sessions") throw new Error("expected workspace_sessions");
+			expect(frame.workspaceId).toBe(spawnedEntry.workspaceId);
 			expect(frame.limit).toBe(10);
 			const [session] = frame.sessions;
 			expect(session).toBeDefined();
-			// The exact SessionListEntry shape listDaemonSessions builds.
+			// The exact SessionListEntry shape listWorkspaceSessions builds.
 			expect(Object.keys(session!).sort()).toEqual([
 				"cwd",
 				"firstMessage",
@@ -592,7 +592,7 @@ describe("fleet edge", () => {
 		}
 	});
 
-	test("list_daemon_sessions honors an optional limit (default 10, clamped 1..200)", async () => {
+	test("list_workspace_sessions honors an optional limit (default 10, clamped 1..200)", async () => {
 		const agentDir = tempDir("omp-web-edge-ls-limit-agent-");
 		const savedEnv = {
 			PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
@@ -626,16 +626,16 @@ describe("fleet edge", () => {
 				const asker = await openBrowser(server.port);
 				await asker.waitForFrame((f) => f.type === "roster", "roster");
 				await asker.send({
-					type: "list_daemon_sessions",
+					type: "list_workspace_sessions",
 					id: `lim-${requested}`,
-					daemonId: spawnedEntry.daemonId,
+					workspaceId: spawnedEntry.workspaceId,
 					...(requested !== undefined && { limit: requested }),
 				});
 				const frame = await asker.waitForFrame(
-					(f) => f.type === "daemon_sessions",
-					"daemon_sessions frame",
+					(f) => f.type === "workspace_sessions",
+					"workspace_sessions frame",
 				);
-				if (frame.type !== "daemon_sessions") throw new Error("expected daemon_sessions");
+				if (frame.type !== "workspace_sessions") throw new Error("expected workspace_sessions");
 				expect(frame.limit).toBe(effective);
 				expect(frame.sessions).toHaveLength(rows);
 				asker.close();
@@ -644,9 +644,9 @@ describe("fleet edge", () => {
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
 			// A non-integer limit is refused, not coerced.
 			await browser.send({
-				type: "list_daemon_sessions",
+				type: "list_workspace_sessions",
 				id: "lim-bad",
-				daemonId: spawnedEntry.daemonId,
+				workspaceId: spawnedEntry.workspaceId,
 				limit: 1.5,
 			} as never);
 			const bad = await browser.waitForFrame((f) => f.type === "error", "error frame");
@@ -662,13 +662,13 @@ describe("fleet edge", () => {
 		}
 	});
 
-	test("list_daemon_sessions rejects an unknown daemon", async () => {
+	test("list_workspace_sessions rejects an unknown session", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		await browser.send({ type: "list_daemon_sessions", id: "ls2", daemonId: "d-ghost" });
+		await browser.send({ type: "list_workspace_sessions", id: "ls2", workspaceId: "d-ghost" });
 		const frame = await browser.waitForFrame((f) => f.type === "error", "error frame");
 		if (frame.type !== "error") throw new Error("expected error");
-		expect(frame.error).toContain("unknown daemon");
+		expect(frame.error).toContain("unknown session");
 	});
 
 	test("spawn_resume with a session file outside the worktree is refused", async () => {
@@ -678,14 +678,14 @@ describe("fleet edge", () => {
 		await browser.send({
 			type: "spawn_resume",
 			id: "sr1",
-			daemonId: spawnedEntry.daemonId,
+			workspaceId: spawnedEntry.workspaceId,
 			sessionFile: "/etc/passwd",
 		});
 		const frame = await browser.waitForFrame((f) => f.type === "error", "error frame");
 		if (frame.type !== "error") throw new Error("expected error");
 		expect(frame.error).toContain("not in this worktree");
-		// Refused: the daemon stays asleep.
-		expect(server.registry.get(spawnedEntry.daemonId)?.status).toBe("asleep");
+		// Refused: the session stays asleep.
+		expect(server.registry.get(spawnedEntry.workspaceId)?.status).toBe("asleep");
 	});
 
 	test("spawn_resume retries a clone whose callback never established (status error, stage failed)", async () => {
@@ -704,15 +704,15 @@ describe("fleet edge", () => {
 				desiredState: "running",
 			},
 		});
-		server.registry.update(clone.daemonId, {
+		server.registry.update(clone.workspaceId, {
 			lifecycleStage: "failed",
 			lifecycleError: "sandbox stopped before the callback pair established",
 		});
-		server.registry.setStatus(clone.daemonId, "error", "stop and start to retry");
+		server.registry.setStatus(clone.workspaceId, "error", "stop and start to retry");
 		const browser = await openBrowser(server.port);
 		try {
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await browser.send({ type: "spawn_resume", id: "sr-retry", daemonId: clone.daemonId });
+			await browser.send({ type: "spawn_resume", id: "sr-retry", workspaceId: clone.workspaceId });
 			const frame = await browser.waitForFrame((f) => f.type === "error", "error frame");
 			if (frame.type !== "error") throw new Error("expected error");
 			// Past the status gate: the wake reached the lifecycle service.
@@ -720,7 +720,7 @@ describe("fleet edge", () => {
 			expect(frame.error).toContain("no resolvable provider profile");
 		} finally {
 			browser.close();
-			server.registry.remove(clone.daemonId);
+			server.registry.remove(clone.workspaceId);
 		}
 	});
 
@@ -742,7 +742,7 @@ describe("fleet edge", () => {
 		// the real host runtime runs underneath: wait until the child pairs ready.
 		await waitFor(
 			() =>
-				spawnedByEdge && server.registry.get(spawnedByEdge.daemonId)?.status === "ready"
+				spawnedByEdge && server.registry.get(spawnedByEdge.workspaceId)?.status === "ready"
 					? "ready"
 					: null,
 			4000,
@@ -758,7 +758,7 @@ describe("fleet edge", () => {
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		// The mux-era commands and detach were removed from the protocol. A
 		// stale client sending them, or any other non-allowlisted type, must
-		// get the edge rejection instead of a daemon forward. The removed type
+		// get the edge rejection instead of a session forward. The removed type
 		// names are assembled so the identifiers never appear in this file.
 		const removedMuxTypes = ["create_", "close_", "list_live_"].map((prefix) =>
 			prefix === "list_live_" ? `${prefix}sessions` : `${prefix}session`,
@@ -773,21 +773,21 @@ describe("fleet edge", () => {
 		}
 	});
 
-	test("attach primes over the callback pair with sessionId rewritten, and forwards calls verbatim", async () => {
+	test("attach primes over the callback pair with workspaceId rewritten, and forwards calls verbatim", async () => {
 		browserA = await openBrowser(server.port);
 		await browserA.waitForFrame((f) => f.type === "roster", "roster");
-		streamA = await attachBrowser(browserA, remoteDaemon, remoteEntry.daemonId);
-		// Priming is forwarded with the sessionId rewritten to the daemonId.
+		streamA = await attachBrowser(browserA, remoteSession, remoteEntry.workspaceId);
+		// Priming is forwarded with the workspaceId rewritten to the workspaceId.
 		await browserA.waitForFrame(
-			(f) => f.type === "history" && f.sessionId === remoteEntry.daemonId,
+			(f) => f.type === "history" && f.workspaceId === remoteEntry.workspaceId,
 			"history",
 		);
 		await browserA.waitForFrame(
-			(f) => f.type === "state" && f.sessionId === remoteEntry.daemonId,
+			(f) => f.type === "state" && f.workspaceId === remoteEntry.workspaceId,
 			"state",
 		);
 		await browserA.waitForFrame(
-			(f) => f.type === "available_commands" && f.sessionId === remoteEntry.daemonId,
+			(f) => f.type === "available_commands" && f.workspaceId === remoteEntry.workspaceId,
 			"available_commands",
 		);
 		await browserA.waitForFrame((f) => f.type === "ready", "ready");
@@ -795,19 +795,19 @@ describe("fleet edge", () => {
 		// check runs on the edge stream too.
 		const hello = await browserA.waitForFrame((f) => f.type === "hello_ok", "hello_ok");
 		expect((hello as { proto?: unknown }).proto).toBe(OMP_PROTO);
-		// Every forwarded session-scoped frame carries the daemonId.
+		// Every forwarded session-scoped frame carries the workspaceId.
 		for (const f of browserA.frames) {
-			if ("sessionId" in f) expect(f.sessionId).toBe(remoteEntry.daemonId);
+			if ("workspaceId" in f) expect(f.workspaceId).toBe(remoteEntry.workspaceId);
 		}
 
-		// The call reaches the daemon once, on this browser's stream, verbatim.
+		// The call reaches the session once, on this browser's stream, verbatim.
 		await browserA.send({ type: "call", id: "c1", method: "prompt", args: ["hello"] });
 		await waitFor(
-			() => (commandsWithId(remoteDaemon, "c1").length > 0 ? "c1" : null),
+			() => (commandsWithId(remoteSession, "c1").length > 0 ? "c1" : null),
 			5000,
-			"call c1 at daemon",
+			"call c1 at session",
 		);
-		const forwarded = commandsWithId(remoteDaemon, "c1");
+		const forwarded = commandsWithId(remoteSession, "c1");
 		expect(forwarded).toHaveLength(1);
 		expect(forwarded[0].streamId).toBe(streamA);
 		expect(forwarded[0].payload).toEqual({
@@ -816,7 +816,7 @@ describe("fleet edge", () => {
 			method: "prompt",
 			args: ["hello"],
 		});
-		remoteDaemon.send(streamA, "frame", { type: "call_result", id: "c1", ok: true });
+		remoteSession.send(streamA, "frame", { type: "call_result", id: "c1", ok: true });
 		const result = await browserA.waitForFrame(
 			(f) => f.type === "call_result" && f.id === "c1",
 			"call_result c1",
@@ -827,8 +827,8 @@ describe("fleet edge", () => {
 		expect(browserA.frames.filter((f) => f.type === "call_result" && f.id === "c1")).toHaveLength(
 			1,
 		);
-		// A live skills_changed push reaches the browser stamped with the daemon id.
-		remoteDaemon.send(streamA, "frame", {
+		// A live skills_changed push reaches the browser stamped with the workspace id.
+		remoteSession.send(streamA, "frame", {
 			type: "skills_changed",
 			state: { skills: [], warnings: [] },
 		});
@@ -836,16 +836,16 @@ describe("fleet edge", () => {
 			(f) => f.type === "skills_changed",
 			"skills_changed",
 		);
-		expect("sessionId" in skills ? skills.sessionId : undefined).toBe(remoteEntry.daemonId);
+		expect("workspaceId" in skills ? skills.workspaceId : undefined).toBe(remoteEntry.workspaceId);
 	});
 
 	test("a second browser gets an independent pipe, and answers reach only the browser that forwarded the command", async () => {
 		browserB = await openBrowser(server.port);
 		await browserB.waitForFrame((f) => f.type === "roster", "roster");
-		streamB = await attachBrowser(browserB, remoteDaemon, remoteEntry.daemonId);
+		streamB = await attachBrowser(browserB, remoteSession, remoteEntry.workspaceId);
 		expect(streamB).not.toBe(streamA);
 		await browserB.waitForFrame(
-			(f) => f.type === "history" && f.sessionId === remoteEntry.daemonId,
+			(f) => f.type === "history" && f.workspaceId === remoteEntry.workspaceId,
 			"history B",
 		);
 
@@ -853,19 +853,19 @@ describe("fleet edge", () => {
 		await browserB.send({ type: "call", id: "b2", method: "getQueuedMessages" });
 		await waitFor(
 			() =>
-				commandsWithId(remoteDaemon, "a2").length > 0 &&
-				commandsWithId(remoteDaemon, "b2").length > 0
+				commandsWithId(remoteSession, "a2").length > 0 &&
+				commandsWithId(remoteSession, "b2").length > 0
 					? "both"
 					: null,
 			5000,
-			"a2 and b2 at daemon",
+			"a2 and b2 at session",
 		);
-		// The daemon broadcasts its answer to every stream it has open, the way
-		// a real daemon does; the fleet must still deliver a2's answer only to A.
+		// The session broadcasts its answer to every stream it has open, the way
+		// a real session does; the fleet must still deliver a2's answer only to A.
 		const answerA2 = { type: "call_result", id: "a2", ok: true };
-		remoteDaemon.send(streamA, "frame", answerA2);
-		remoteDaemon.send(streamB, "frame", answerA2);
-		remoteDaemon.send(streamB, "frame", { type: "call_result", id: "b2", ok: true });
+		remoteSession.send(streamA, "frame", answerA2);
+		remoteSession.send(streamB, "frame", answerA2);
+		remoteSession.send(streamB, "frame", { type: "call_result", id: "b2", ok: true });
 		await browserA.waitForFrame((f) => f.type === "call_result" && f.id === "a2", "a2 result");
 		await browserB.waitForFrame((f) => f.type === "call_result" && f.id === "b2", "b2 result");
 		await sleep(200);
@@ -880,25 +880,25 @@ describe("fleet edge", () => {
 		browserA.close();
 		await waitFor(
 			() =>
-				controlsOf(remoteDaemon, "stream_close").some((e) => e.streamId === streamA)
+				controlsOf(remoteSession, "stream_close").some((e) => e.streamId === streamA)
 					? "closed"
 					: null,
 			5000,
 			"stream_close for closed browser",
 		);
 		expect(
-			browserA.frames.some((f) => f.type === "error" && f.error === "daemon connection lost"),
+			browserA.frames.some((f) => f.type === "error" && f.error === "session connection lost"),
 		).toBe(false);
 		// The other browser still forwards and receives over its own stream.
 		await browserB.send({ type: "call", id: "b3", method: "getQueuedMessages" });
 		await waitFor(
-			() => (commandsWithId(remoteDaemon, "b3").length > 0 ? "b3" : null),
+			() => (commandsWithId(remoteSession, "b3").length > 0 ? "b3" : null),
 			5000,
-			"b3 at daemon",
+			"b3 at session",
 		);
-		remoteDaemon.send(streamB, "frame", { type: "call_result", id: "b3", ok: true });
+		remoteSession.send(streamB, "frame", { type: "call_result", id: "b3", ok: true });
 		await browserB.waitForFrame((f) => f.type === "call_result" && f.id === "b3", "b3 result");
-		expect(controlsOf(remoteDaemon, "stream_close").some((e) => e.streamId === streamB)).toBe(
+		expect(controlsOf(remoteSession, "stream_close").some((e) => e.streamId === streamB)).toBe(
 			false,
 		);
 	});
@@ -906,7 +906,7 @@ describe("fleet edge", () => {
 	test("an unattached call fails fast with an id-keyed call_result, not a bare error frame", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		// No attach: the daemon-less forward must answer the call BY ID so the
+		// No attach: the session-less forward must answer the call BY ID so the
 		// client's pending call() promise settles instead of hanging 30s.
 		await browser.send({ type: "call", id: "c-unattached", method: "prompt", args: ["hi"] });
 		const result = await browser.waitForFrame(
@@ -928,9 +928,9 @@ describe("fleet edge", () => {
 		// same id. "not attached" would read as "not applied"; the outcome is
 		// unknown and the answer must say so.
 		const row = enrollRow("late-replay");
-		const id = row.daemonId;
+		const id = row.workspaceId;
 		// A long redial backoff keeps the pair down while the replay is sent.
-		const daemon = startCallbackDaemon({
+		const session = startCallbackSession({
 			url: fleetUrl(),
 			workspaceId: id,
 			generation: row.generation,
@@ -938,21 +938,21 @@ describe("fleet edge", () => {
 			redialMinMs: 3000,
 			redialMaxMs: 3000,
 		});
-		daemonsById.set(id, daemon);
-		await daemon.waitConnected(10_000);
+		sessionsById.set(id, session);
+		await session.waitConnected(10_000);
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		await attachBrowser(browser, daemon, id);
+		await attachBrowser(browser, session, id);
 
 		const call = { type: "call", id: "late-stage-1", method: "gitStage", args: [{ paths: ["a"] }] };
 		await browser.send(call);
 		await waitFor(
-			() => (commandsWithId(daemon, "late-stage-1").length > 0 ? "sent" : null),
+			() => (commandsWithId(session, "late-stage-1").length > 0 ? "sent" : null),
 			5000,
 			"late-stage-1 at the session",
 		);
 		// The pair drops before the session's answer reaches the fleet.
-		daemon.dropLegs();
+		session.dropLegs();
 		await waitFor(
 			() => (server.transport.pairStatus(id).paired ? null : "down"),
 			5000,
@@ -968,7 +968,7 @@ describe("fleet edge", () => {
 		expect(result.error).not.toContain("not attached");
 		expect(result.error).toContain("may have been applied");
 		// The replay never re-dispatched: the session saw the command exactly once.
-		expect(commandsWithId(daemon, "late-stage-1")).toHaveLength(1);
+		expect(commandsWithId(session, "late-stage-1")).toHaveLength(1);
 	});
 
 	test("clientId rebind closes the previous live stream and broadcasts the roster exactly once", async () => {
@@ -977,7 +977,7 @@ describe("fleet edge", () => {
 		allBrowsers.push(oldBrowser);
 		await oldBrowser.open();
 		await oldBrowser.waitForFrame((f) => f.type === "roster", "roster");
-		const oldStream = await attachBrowser(oldBrowser, remoteDaemon, remoteEntry.daemonId);
+		const oldStream = await attachBrowser(oldBrowser, remoteSession, remoteEntry.workspaceId);
 
 		// Rebind: a SECOND /ws dial with the SAME clientId while the old
 		// socket is still live.
@@ -990,7 +990,7 @@ describe("fleet edge", () => {
 		expect((await oldBrowser.end(5000)).code).toBe(1000);
 		await waitFor(
 			() =>
-				controlsOf(remoteDaemon, "stream_close").some((e) => e.streamId === oldStream)
+				controlsOf(remoteSession, "stream_close").some((e) => e.streamId === oldStream)
 					? "closed"
 					: null,
 			5000,
@@ -1002,7 +1002,7 @@ describe("fleet edge", () => {
 		// priming only), so count exactly those.
 		const oldFramesAtEnd = oldBrowser.frames.length;
 		const seenBefore = newBrowser.frames.length;
-		server.registry.update(remoteEntry.daemonId, {});
+		server.registry.update(remoteEntry.workspaceId, {});
 		await waitFor(
 			() => newBrowser.frames.slice(seenBefore).find((f) => f.type === "roster_delta") ?? null,
 			5000,
@@ -1017,7 +1017,7 @@ describe("fleet edge", () => {
 		newBrowser.close();
 	});
 
-	test("attach to an asleep spawned daemon respawns it, waits for the pair, then pipes", async () => {
+	test("attach to an asleep spawned session respawns it, waits for the pair, then pipes", async () => {
 		// Its own asleep entry: spawnedEntry carries a refused pick from the
 		// test above, and a refused pick blocks any attach that would wake it.
 		const fresh = server.registry.create({
@@ -1030,24 +1030,24 @@ describe("fleet edge", () => {
 		const browserC = await openBrowser(server.port);
 		await browserC.waitForFrame((f) => f.type === "roster", "roster");
 		const respawnsBefore = respawns;
-		const daemon = daemonsById.get(fresh.daemonId);
-		// Nothing has paired this entry yet: the daemon is created by the respawn.
-		expect(daemon).toBeUndefined();
-		await browserC.send({ type: "attach", sessionId: fresh.daemonId });
-		await primeAttach(browserC, fresh.daemonId);
+		const session = sessionsById.get(fresh.workspaceId);
+		// Nothing has paired this entry yet: the session is created by the respawn.
+		expect(session).toBeUndefined();
+		await browserC.send({ type: "attach", workspaceId: fresh.workspaceId });
+		await primeAttach(browserC, fresh.workspaceId);
 		expect(respawns).toBe(respawnsBefore + 1);
-		expect(server.registry.get(fresh.daemonId)?.status).toBe("ready");
-		const paired = daemonsById.get(fresh.daemonId);
-		if (!paired) throw new Error("spawned daemon did not pair");
+		expect(server.registry.get(fresh.workspaceId)?.status).toBe("ready");
+		const paired = sessionsById.get(fresh.workspaceId);
+		if (!paired) throw new Error("spawned session did not pair");
 		await awaitNewStream(paired, 0);
 		await browserC.waitForFrame(
-			(f) => f.type === "history" && f.sessionId === fresh.daemonId,
+			(f) => f.type === "history" && f.workspaceId === fresh.workspaceId,
 			"history C",
 		);
 		browserC.close();
 	});
 
-	test("spawn_resume then attach wakes an asleep spawned daemon exactly once", async () => {
+	test("spawn_resume then attach wakes an asleep spawned session exactly once", async () => {
 		const entry = server.registry.list().find((e) => e.name === "spawned2");
 		if (!entry) throw new Error("spawned2 missing");
 		expect(entry.status).toBe("asleep");
@@ -1055,11 +1055,11 @@ describe("fleet edge", () => {
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		const respawnsBefore = respawns;
 		// The roster UI sends these back-to-back; the edge must serialize them.
-		await browser.send({ type: "spawn_resume", daemonId: entry.daemonId });
-		await browser.send({ type: "attach", sessionId: entry.daemonId });
-		await primeAttach(browser, entry.daemonId);
+		await browser.send({ type: "spawn_resume", workspaceId: entry.workspaceId });
+		await browser.send({ type: "attach", workspaceId: entry.workspaceId });
+		await primeAttach(browser, entry.workspaceId);
 		expect(respawns).toBe(respawnsBefore + 1);
-		expect(server.registry.get(entry.daemonId)?.status).toBe("ready");
+		expect(server.registry.get(entry.workspaceId)?.status).toBe("ready");
 	});
 
 	test("a second no-pick spawn_resume while the first wake is connecting is idempotent: no error, one start", async () => {
@@ -1079,28 +1079,28 @@ describe("fleet edge", () => {
 		const gate = new Promise<void>((resolve) => {
 			release = resolve;
 		});
-		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
+		server.lifecycle.start = async (workspaceId: string, opts?: StartOptions) => {
 			starts++;
 			// The lifecycle publishes "connecting" while the host boots.
-			server.registry.setStatus(daemonId, "connecting");
+			server.registry.setStatus(workspaceId, "connecting");
 			await gate;
-			await origStart.call(server.lifecycle, daemonId, opts);
+			await origStart.call(server.lifecycle, workspaceId, opts);
 		};
 		const browser = await openBrowser(server.port);
 		try {
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await browser.send({ type: "spawn_resume", id: "dw1", daemonId: entry.daemonId });
+			await browser.send({ type: "spawn_resume", id: "dw1", workspaceId: entry.workspaceId });
 			await waitFor(
-				() => (server.registry.get(entry.daemonId)?.status === "connecting" ? true : null),
+				() => (server.registry.get(entry.workspaceId)?.status === "connecting" ? true : null),
 				5000,
 				"first wake connecting",
 			);
-			await browser.send({ type: "spawn_resume", id: "dw2", daemonId: entry.daemonId });
+			await browser.send({ type: "spawn_resume", id: "dw2", workspaceId: entry.workspaceId });
 			await sleep(200);
 			expect(browser.frames.filter((f) => f.type === "error")).toEqual([]);
 			release();
 			await waitFor(
-				() => (server.registry.get(entry.daemonId)?.status === "ready" ? true : null),
+				() => (server.registry.get(entry.workspaceId)?.status === "ready" ? true : null),
 				5000,
 				"woken ready",
 			);
@@ -1110,7 +1110,7 @@ describe("fleet edge", () => {
 		} finally {
 			release();
 			server.lifecycle.start = origStart;
-			dropDaemon(entry.daemonId);
+			dropSession(entry.workspaceId);
 			browser.close();
 		}
 	});
@@ -1131,15 +1131,15 @@ describe("fleet edge", () => {
 			await browser.send({
 				type: "spawn_resume",
 				id: "pc1",
-				daemonId: entry.daemonId,
+				workspaceId: entry.workspaceId,
 				sessionFile: "/etc/passwd",
 			});
 			const frame = await browser.waitForFrame((f) => f.type === "error", "error frame");
 			if (frame.type !== "error") throw new Error("expected error");
-			expect(frame.error).toBe(`daemon ${entry.daemonId} is not asleep (status connecting)`);
+			expect(frame.error).toBe(`session ${entry.workspaceId} is not asleep (status connecting)`);
 			expect(respawns).toBe(respawnsBefore);
 		} finally {
-			server.registry.remove(entry.daemonId);
+			server.registry.remove(entry.workspaceId);
 			browser.close();
 		}
 	});
@@ -1162,32 +1162,32 @@ describe("fleet edge", () => {
 			release = resolve;
 		});
 		let starts = 0;
-		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
+		server.lifecycle.start = async (workspaceId: string, opts?: StartOptions) => {
 			starts++;
-			server.registry.setStatus(daemonId, "connecting");
+			server.registry.setStatus(workspaceId, "connecting");
 			await gate;
-			await origStart.call(server.lifecycle, daemonId, opts);
+			await origStart.call(server.lifecycle, workspaceId, opts);
 		};
 		const browser = await openBrowser(server.port);
 		try {
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
 			// The first wake is an attach (not tracked as a pending spawn_resume),
 			// so the pick below is judged against the connecting row at once.
-			await browser.send({ type: "attach", id: "at-first", sessionId: entry.daemonId });
+			await browser.send({ type: "attach", id: "at-first", workspaceId: entry.workspaceId });
 			await waitFor(
-				() => (server.registry.get(entry.daemonId)?.status === "connecting" ? true : null),
+				() => (server.registry.get(entry.workspaceId)?.status === "connecting" ? true : null),
 				5000,
 				"first wake connecting",
 			);
 			await browser.send({
 				type: "spawn_resume",
 				id: "sr2",
-				daemonId: entry.daemonId,
+				workspaceId: entry.workspaceId,
 				sessionFile: "/etc/passwd",
 			});
 			const frame = await browser.waitForFrame((f) => f.type === "error", "error frame");
 			if (frame.type !== "error") throw new Error("expected error");
-			expect(frame.error).toBe(`daemon ${entry.daemonId} is not asleep (status connecting)`);
+			expect(frame.error).toBe(`session ${entry.workspaceId} is not asleep (status connecting)`);
 			release();
 			// "ready" is published by the lifecycle before the test plays the child's
 			// dial, so it does not mean the wake finished. The first attach's wake
@@ -1196,8 +1196,8 @@ describe("fleet edge", () => {
 			// (waiting out its pair timeout), and the later attach would join it.
 			const first = await waitFor(
 				() =>
-					server.transport.pairStatus(entry.daemonId).paired
-						? (daemonsById.get(entry.daemonId) ?? null)
+					server.transport.pairStatus(entry.workspaceId).paired
+						? (sessionsById.get(entry.workspaceId) ?? null)
 						: null,
 				5000,
 				"first wake paired",
@@ -1208,18 +1208,18 @@ describe("fleet edge", () => {
 			// dropping the test's socket and flipping the status would race the
 			// edge noticing the close: the waker still sees the stale pair as
 			// paired, returns without a start, and the attach never wakes anything.
-			await browser.send({ type: "stop", id: "sr-stop", daemonId: entry.daemonId });
+			await browser.send({ type: "stop", id: "sr-stop", workspaceId: entry.workspaceId });
 			await waitFor(
 				() =>
-					server.registry.get(entry.daemonId)?.status === "asleep" &&
-					!server.transport.pairStatus(entry.daemonId).paired
+					server.registry.get(entry.workspaceId)?.status === "asleep" &&
+					!server.transport.pairStatus(entry.workspaceId).paired
 						? true
 						: null,
 				5000,
 				"stopped: asleep with the pair down",
 			);
-			dropDaemon(entry.daemonId);
-			await browser.send({ type: "attach", id: "at-stale", sessionId: entry.daemonId });
+			dropSession(entry.workspaceId);
+			await browser.send({ type: "attach", id: "at-stale", workspaceId: entry.workspaceId });
 			try {
 				await waitFor(
 					() => {
@@ -1227,7 +1227,7 @@ describe("fleet edge", () => {
 							(f) => f.type === "attach_result" && f.id === "at-stale" && !f.ok,
 						);
 						if (failed) throw new Error(`attach refused: ${JSON.stringify(failed)}`);
-						return daemonsById.has(entry.daemonId) ? true : null;
+						return sessionsById.has(entry.workspaceId) ? true : null;
 					},
 					5000,
 					"attach to wake the stopped session",
@@ -1241,7 +1241,7 @@ describe("fleet edge", () => {
 					}),
 				);
 				throw new Error(
-					`${(err as Error).message}; status=${server.registry.get(entry.daemonId)?.status} starts=${starts} paired=${server.transport.pairStatus(entry.daemonId).paired} frames=[${frames.join(", ")}]`,
+					`${(err as Error).message}; status=${server.registry.get(entry.workspaceId)?.status} starts=${starts} paired=${server.transport.pairStatus(entry.workspaceId).paired} frames=[${frames.join(", ")}]`,
 				);
 			}
 			// The wake started the host a second time, on the plain attach.
@@ -1249,12 +1249,12 @@ describe("fleet edge", () => {
 		} finally {
 			release();
 			server.lifecycle.start = origStart;
-			dropDaemon(entry.daemonId);
+			dropSession(entry.workspaceId);
 			browser.close();
 		}
 	});
 
-	test("a later attach supersedes an earlier attach whose wake is still in flight: the browser ends on the later daemon", async () => {
+	test("a later attach supersedes an earlier attach whose wake is still in flight: the browser ends on the later session", async () => {
 		// Click an asleep row, then a ready row before the first wake finishes.
 		// The first attach's wake completes last; it must not open its pipe on
 		// the same browser stream, or the browser would end on the wrong session.
@@ -1270,28 +1270,28 @@ describe("fleet edge", () => {
 		const gate = new Promise<void>((resolve) => {
 			release = resolve;
 		});
-		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
-			server.registry.setStatus(daemonId, "connecting");
+		server.lifecycle.start = async (workspaceId: string, opts?: StartOptions) => {
+			server.registry.setStatus(workspaceId, "connecting");
 			await gate;
-			await origStart.call(server.lifecycle, daemonId, opts);
+			await origStart.call(server.lifecycle, workspaceId, opts);
 		};
 		const browser = await openBrowser(server.port);
 		try {
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await browser.send({ type: "attach", id: "sup-a", sessionId: asleep.daemonId });
+			await browser.send({ type: "attach", id: "sup-a", workspaceId: asleep.workspaceId });
 			await waitFor(
-				() => (server.registry.get(asleep.daemonId)?.status === "connecting" ? true : null),
+				() => (server.registry.get(asleep.workspaceId)?.status === "connecting" ? true : null),
 				5000,
 				"first wake connecting",
 			);
 			// The user's last choice: an already paired row, attached at once.
-			const seen = controlsOf(remoteDaemon, "stream_open").length;
-			await browser.send({ type: "attach", id: "sup-b", sessionId: remoteEntry.daemonId });
-			const streamId = await awaitNewStream(remoteDaemon, seen);
-			primeStream(remoteDaemon, streamId);
+			const seen = controlsOf(remoteSession, "stream_open").length;
+			await browser.send({ type: "attach", id: "sup-b", workspaceId: remoteEntry.workspaceId });
+			const streamId = await awaitNewStream(remoteSession, seen);
+			primeStream(remoteSession, streamId);
 			await browser.waitForFrame(
-				(f) => f.type === "attached" && f.sessionId === remoteEntry.daemonId,
-				`attached ${remoteEntry.daemonId}`,
+				(f) => f.type === "attached" && f.workspaceId === remoteEntry.workspaceId,
+				`attached ${remoteEntry.workspaceId}`,
 			);
 			// Now the first wake completes.
 			release();
@@ -1304,7 +1304,7 @@ describe("fleet edge", () => {
 					JSON.stringify({
 						type: f.type,
 						id: "id" in f ? f.id : undefined,
-						sessionId: "sessionId" in f ? f.sessionId : undefined,
+						workspaceId: "workspaceId" in f ? f.workspaceId : undefined,
 						ok: "ok" in f ? f.ok : undefined,
 						error: "error" in f ? f.error : undefined,
 					}),
@@ -1318,28 +1318,28 @@ describe("fleet edge", () => {
 			});
 			// The superseded wake still completes, but never binds a pipe to the browser.
 			await waitFor(
-				() => (daemonsById.has(asleep.daemonId) ? true : null),
+				() => (sessionsById.has(asleep.workspaceId) ? true : null),
 				5000,
 				"superseded wake paired",
 			);
 			await sleep(200);
-			const woken = daemonsById.get(asleep.daemonId)!;
+			const woken = sessionsById.get(asleep.workspaceId)!;
 			expect(controlsOf(woken, "stream_open")).toHaveLength(0);
 			const attached = browser.frames
 				.filter((f) => f.type === "attached")
-				.map((f) => (f.type === "attached" ? f.sessionId : undefined));
-			expect(attached).toEqual([remoteEntry.daemonId]);
-			// The browser's pipe is still B's: a call reaches B's daemon.
+				.map((f) => (f.type === "attached" ? f.workspaceId : undefined));
+			expect(attached).toEqual([remoteEntry.workspaceId]);
+			// The browser's pipe is still B's: a call reaches B's session.
 			await browser.send({ type: "call", id: "sup-call", method: "getQueuedMessages" });
 			await waitFor(
-				() => (commandsWithId(remoteDaemon, "sup-call").length > 0 ? true : null),
+				() => (commandsWithId(remoteSession, "sup-call").length > 0 ? true : null),
 				5000,
-				"call sup-call at the later daemon",
+				"call sup-call at the later session",
 			);
 		} finally {
 			release();
 			server.lifecycle.start = origStart;
-			dropDaemon(asleep.daemonId);
+			dropSession(asleep.workspaceId);
 			browser.close();
 		}
 	});
@@ -1355,15 +1355,15 @@ describe("fleet edge", () => {
 			OMP_PROFILE: process.env.OMP_PROFILE,
 			PI_PROFILE: process.env.PI_PROFILE,
 		};
-		// listDaemonSessions resolves the agent dir from the SDK's process-level
+		// listWorkspaceSessions resolves the agent dir from the SDK's process-level
 		// state (the edge has no per-call seam), so point it at the temp dir for
 		// this test only and restore it exactly afterwards.
 		setAgentDir(agentDir);
 		const origRespawn = server.lifecycle.start;
 		const resumeFiles: Array<string | undefined> = [];
-		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
+		server.lifecycle.start = async (workspaceId: string, opts?: StartOptions) => {
 			resumeFiles.push(opts?.resume);
-			await origRespawn.call(server.lifecycle, daemonId, opts);
+			await origRespawn.call(server.lifecycle, workspaceId, opts);
 		};
 		try {
 			const sessionDir = SessionManager.getDefaultSessionDir(
@@ -1386,13 +1386,17 @@ describe("fleet edge", () => {
 			});
 			const browser = await openBrowser(server.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await browser.send({ type: "spawn_resume", daemonId: entry.daemonId, sessionFile: picked });
-			await browser.send({ type: "attach", sessionId: entry.daemonId });
-			await primeAttach(browser, entry.daemonId);
+			await browser.send({
+				type: "spawn_resume",
+				workspaceId: entry.workspaceId,
+				sessionFile: picked,
+			});
+			await browser.send({ type: "attach", workspaceId: entry.workspaceId });
+			await primeAttach(browser, entry.workspaceId);
 			// Exactly one respawn, and on the PICKED file rather than lastSessionFile.
 			expect(resumeFiles).toEqual([picked]);
-			expect(server.registry.get(entry.daemonId)?.status).toBe("ready");
-			dropDaemon(entry.daemonId);
+			expect(server.registry.get(entry.workspaceId)?.status).toBe("ready");
+			dropSession(entry.workspaceId);
 		} finally {
 			server.lifecycle.start = origRespawn;
 			for (const [key, value] of Object.entries(savedEnv)) {
@@ -1406,7 +1410,7 @@ describe("fleet edge", () => {
 	test("resuming the OLDEST of 12 sessions resumes that session; a refused pick fails the attach", async () => {
 		// The picker lists up to 200 sessions but spawn_resume used to validate
 		// against the 10 newest: an older pick was refused, then the attach woke
-		// the daemon on lastSessionFile (a different session).
+		// the session on lastSessionFile (a different session).
 		const agentDir = tempDir("omp-web-edge-agentdir-");
 		const savedEnv = {
 			PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
@@ -1416,9 +1420,9 @@ describe("fleet edge", () => {
 		setAgentDir(agentDir);
 		const origRespawn = server.lifecycle.start;
 		const resumeFiles: Array<string | undefined> = [];
-		server.lifecycle.start = async (daemonId: string, opts?: StartOptions) => {
+		server.lifecycle.start = async (workspaceId: string, opts?: StartOptions) => {
 			resumeFiles.push(opts?.resume);
-			await origRespawn.call(server.lifecycle, daemonId, opts);
+			await origRespawn.call(server.lifecycle, workspaceId, opts);
 		};
 		try {
 			const sessionDir = SessionManager.getDefaultSessionDir(
@@ -1452,10 +1456,10 @@ describe("fleet edge", () => {
 			// A refused pick fails the attach that follows; it must not wake lastSessionFile.
 			await browser.send({
 				type: "spawn_resume",
-				daemonId: entry.daemonId,
+				workspaceId: entry.workspaceId,
 				sessionFile: "/etc/passwd",
 			});
-			await browser.send({ type: "attach", id: "at-refused", sessionId: entry.daemonId });
+			await browser.send({ type: "attach", id: "at-refused", workspaceId: entry.workspaceId });
 			const failed = await browser.waitForFrame(
 				(f) => f.type === "attach_result" && f.id === "at-refused",
 				"refused attach result",
@@ -1463,10 +1467,14 @@ describe("fleet edge", () => {
 			expect(failed).toMatchObject({ ok: false });
 			expect(JSON.stringify(failed)).toContain("not in this worktree");
 			expect(resumeFiles).toEqual([]);
-			expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
+			expect(server.registry.get(entry.workspaceId)?.status).toBe("asleep");
 			// A second attach after the refused pick must fail the same way: it
-			// must not wake the daemon on lastSessionFile.
-			await browser.send({ type: "attach", id: "at-refused-again", sessionId: entry.daemonId });
+			// must not wake the session on lastSessionFile.
+			await browser.send({
+				type: "attach",
+				id: "at-refused-again",
+				workspaceId: entry.workspaceId,
+			});
 			const again = await browser.waitForFrame(
 				(f) => f.type === "attach_result" && f.id === "at-refused-again",
 				"second refused attach result",
@@ -1474,13 +1482,17 @@ describe("fleet edge", () => {
 			expect(again).toMatchObject({ ok: false });
 			expect(JSON.stringify(again)).toContain("not in this worktree");
 			expect(resumeFiles).toEqual([]);
-			expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
+			expect(server.registry.get(entry.workspaceId)?.status).toBe("asleep");
 			// The oldest session is a valid pick: it resumes exactly that file.
-			await browser.send({ type: "spawn_resume", daemonId: entry.daemonId, sessionFile: files[0] });
-			await browser.send({ type: "attach", id: "at-oldest", sessionId: entry.daemonId });
-			await primeAttach(browser, entry.daemonId);
+			await browser.send({
+				type: "spawn_resume",
+				workspaceId: entry.workspaceId,
+				sessionFile: files[0],
+			});
+			await browser.send({ type: "attach", id: "at-oldest", workspaceId: entry.workspaceId });
+			await primeAttach(browser, entry.workspaceId);
 			expect(resumeFiles).toEqual([files[0]]);
-			dropDaemon(entry.daemonId);
+			dropSession(entry.workspaceId);
 		} finally {
 			server.lifecycle.start = origRespawn;
 			for (const [key, value] of Object.entries(savedEnv)) {
@@ -1492,8 +1504,8 @@ describe("fleet edge", () => {
 	});
 
 	test("GET /ctl/sessions/{id}/stderr returns text for every known row", async () => {
-		for (const daemonId of [spawnedEntry.daemonId, remoteEntry.daemonId]) {
-			const res = await fetch(`${fleetUrl()}/ctl/sessions/${daemonId}/stderr`);
+		for (const workspaceId of [spawnedEntry.workspaceId, remoteEntry.workspaceId]) {
+			const res = await fetch(`${fleetUrl()}/ctl/sessions/${workspaceId}/stderr`);
 			expect(res.status).toBe(200);
 			const body = (await res.json()) as { text?: unknown };
 			expect(typeof body.text).toBe("string");
@@ -1505,8 +1517,8 @@ describe("fleet edge", () => {
 		expect(rosters.length).toBeGreaterThan(0);
 		for (const frame of rosters) {
 			expect(JSON.stringify(frame)).not.toContain(FAKE_TOKEN);
-			const { daemons } = asRoster(frame);
-			for (const d of daemons) {
+			const { entries } = asRoster(frame);
+			for (const d of entries) {
 				expect(d).not.toHaveProperty("token");
 				expect(d).not.toHaveProperty("endpoint");
 			}
@@ -1529,14 +1541,14 @@ describe("fleet edge", () => {
 		const text = await res.text();
 		const body = JSON.parse(text) as {
 			sessions: Array<{
-				daemonId: string;
+				workspaceId: string;
 				pair?: { enrolled: boolean; paired: boolean; authorizedGeneration: number | null };
 			}>;
 		};
-		const paired = body.sessions.find((s) => s.daemonId === remoteEntry.daemonId);
+		const paired = body.sessions.find((s) => s.workspaceId === remoteEntry.workspaceId);
 		expect(paired?.pair).toMatchObject({ enrolled: true, paired: true });
 		expect(typeof paired?.pair?.authorizedGeneration).toBe("number");
-		const unpaired = body.sessions.find((s) => s.daemonId === pending.daemonId);
+		const unpaired = body.sessions.find((s) => s.workspaceId === pending.workspaceId);
 		expect(unpaired?.pair).toMatchObject({ enrolled: true, paired: false });
 		expect(text).not.toContain(pending.token);
 		expect(text).not.toContain(FAKE_TOKEN);
@@ -1547,32 +1559,32 @@ describe("fleet edge", () => {
 	});
 
 	test("aggregated daemons: merged frames are broadcast on update and on browser open", async () => {
-		// A second spawned daemon with a different cwd; the spawn override pairs it.
+		// A second spawned session with a different cwd; the spawn override pairs it.
 		const spawnedB = await server.lifecycle.spawnHost({
 			cwd: OTHER_CWD,
 			name: "daemons-b",
 			template: "local",
 		});
-		daemonsBId = spawnedB.daemonId;
-		const daemonB = daemonsById.get(daemonsBId)!;
+		sessionsBId = spawnedB.workspaceId;
+		const sessionB = sessionsById.get(sessionsBId)!;
 		await waitFor(
-			() => (server.registry.get(daemonsBId)?.status === "ready" ? "ready" : null),
+			() => (server.registry.get(sessionsBId)?.status === "ready" ? "ready" : null),
 			5000,
-			"second daemon ready",
+			"second session ready",
 		);
 		// A browser open BEFORE the rosters arrive observes the update broadcast.
 		const funnel = await openBrowser(server.port);
 		await funnel.waitForFrame((f) => f.type === "roster", "roster");
-		// The first daemon (cwd FAKE_CWD) reports its own roster; the second
+		// The first session (cwd FAKE_CWD) reports its own roster; the second
 		// (cwd OTHER_CWD) reports its own PLUS a cross-cwd entry for FAKE_CWD.
-		remoteDaemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+		remoteSession.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
 			type: "daemons",
 			daemons: [
 				daemonInfo("hub-a", FAKE_CWD, { pid: 1111 }),
 				daemonInfo("shared", FAKE_CWD, { pid: 1112 }),
 			],
 		});
-		daemonB.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+		sessionB.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
 			type: "daemons",
 			daemons: [
 				daemonInfo("hub-b", OTHER_CWD, { pid: 2221 }),
@@ -1585,7 +1597,7 @@ describe("fleet edge", () => {
 			"merged daemons frame on update",
 		);
 		if (updated.type !== "daemons") throw new Error("expected daemons");
-		// Cross-daemon merge on the wire: both daemons' entries land in ONE frame.
+		// Cross-session merge on the wire: both sessions' entries land in ONE frame.
 		expect(updated.daemons.map((d) => d.name).sort()).toEqual([
 			"hub-a",
 			"hub-b",
@@ -1608,13 +1620,13 @@ describe("fleet edge", () => {
 		]);
 	});
 
-	test("aggregated daemons: per-daemon frames are stripped from proxy pipes", async () => {
+	test("aggregated daemons: per-session frames are stripped from proxy pipes", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		await attachBrowser(browser, remoteDaemon, remoteEntry.daemonId);
-		// The first daemon refreshes its broker roster with a new entry; its pipe
+		await attachBrowser(browser, remoteSession, remoteEntry.workspaceId);
+		// The first session refreshes its broker roster with a new entry; its pipe
 		// carries it too, but the browser must only see the merged broadcast.
-		remoteDaemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+		remoteSession.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
 			type: "daemons",
 			daemons: [
 				daemonInfo("hub-a", FAKE_CWD, { pid: 1111 }),
@@ -1630,8 +1642,8 @@ describe("fleet edge", () => {
 		const names = new Set(frame.daemons.map((d) => d.name));
 		expect(names.has("hub-c")).toBe(true);
 		expect(names.has("hub-b")).toBe(true);
-		// No raw per-daemon frame leaked: every daemons frame this browser saw
-		// carries the second daemon's entry (a forwarded first-daemon-only frame would not).
+		// No raw per-session frame leaked: every daemons frame this browser saw
+		// carries the second session's entry (a forwarded first-session-only frame would not).
 		for (const f of browser.frames) {
 			if (f.type !== "daemons") continue;
 			expect(f.daemons.some((d) => d.name === "hub-b")).toBe(true);
@@ -1649,14 +1661,14 @@ describe("fleet edge", () => {
 			daemonInfo("hub-c", FAKE_CWD, { pid: 1113 }),
 			daemonInfo("hub-x", FAKE_CWD, { pid: 1114 }),
 		];
-		remoteDaemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", { type: "daemons", daemons: withX });
+		remoteSession.send(CALLBACK_CONTROL_STREAM_ID, "frame", { type: "daemons", daemons: withX });
 		await browser.waitForFrame(
 			(f) => f.type === "daemons" && f.daemons.some((d) => d.name === "hub-x"),
 			"roster with hub-x",
 		);
 		// An identical re-delivery (the control tap and any browser pipe both carry it), then a real change.
-		remoteDaemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", { type: "daemons", daemons: withX });
-		remoteDaemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+		remoteSession.send(CALLBACK_CONTROL_STREAM_ID, "frame", { type: "daemons", daemons: withX });
+		remoteSession.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
 			type: "daemons",
 			daemons: [...withX, daemonInfo("hub-y", FAKE_CWD, { pid: 1115 })],
 		});
@@ -1668,15 +1680,15 @@ describe("fleet edge", () => {
 		browser.close();
 	});
 
-	test("aggregated daemons: registry removal evicts the second daemon from the cache", async () => {
+	test("aggregated daemons: registry removal evicts the second session from the cache", async () => {
 		// Integration, not the pure merge: a registry removal must evict the
-		// daemon's cached roster AND broadcast the shrunken merged frame (the
+		// session's cached roster AND broadcast the shrunken merged frame (the
 		// pure eviction semantics live in daemons-aggregator.test.ts, which
 		// cannot reach the registry -> edge wiring asserted here).
 		// Dropping the row straight from the registry (not through the lifecycle)
 		// orphans its host child, which afterAll's row sweep can no longer see: end it here.
-		const childPid = server.registry.get(daemonsBId)?.pid;
-		expect(server.registry.remove(daemonsBId)).toBe(true);
+		const childPid = server.registry.get(sessionsBId)?.pid;
+		expect(server.registry.remove(sessionsBId)).toBe(true);
 		try {
 			const frame = await daemonsBrowser.waitForFrame(
 				(f) => f.type === "daemons" && !f.daemons.some((d) => d.name === "hub-b"),
@@ -1688,21 +1700,21 @@ describe("fleet edge", () => {
 			expect(names.has("hub-c")).toBe(true);
 			expect(names.has("hub-b")).toBe(false);
 			expect(names.has("only-b")).toBe(false);
-			dropDaemon(daemonsBId);
+			dropSession(sessionsBId);
 		} finally {
 			if (childPid !== undefined) signalProcessGroup(childPid, "SIGKILL");
 		}
 	});
 
-	test("remove evicts a daemon and broadcasts a roster_delta that removes it", async () => {
+	test("remove evicts a session and broadcasts a roster_delta that removes it", async () => {
 		// A fresh entry so the shared remoteEntry fixture stays intact for earlier tests.
-		const removableId = enrollRow("removable").daemonId;
+		const removableId = enrollRow("removable").workspaceId;
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame(
-			(f) => f.type === "roster" && f.daemons.some((d) => d.daemonId === removableId),
+			(f) => f.type === "roster" && f.entries.some((d) => d.workspaceId === removableId),
 			"roster with removable",
 		);
-		await browser.send({ type: "remove", daemonId: removableId });
+		await browser.send({ type: "remove", workspaceId: removableId });
 		const delta = await browser.waitForFrame(
 			(f) => f.type === "roster_delta" && f.removed.includes(removableId),
 			"roster delta removing removable",
@@ -1712,20 +1724,20 @@ describe("fleet edge", () => {
 		expect(server.registry.get(removableId)).toBeUndefined();
 	});
 
-	test("remove of an unknown daemon answers an error frame", async () => {
+	test("remove of an unknown session answers an error frame", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		await browser.send({ type: "remove", daemonId: "d999" });
+		await browser.send({ type: "remove", workspaceId: "d999" });
 		const frame = await browser.waitForFrame(
 			(f) =>
-				f.type === "error" && typeof f.error === "string" && f.error.includes("unknown daemon"),
+				f.type === "error" && typeof f.error === "string" && f.error.includes("unknown session"),
 			"remove unknown error",
 		);
 		if (frame.type !== "error") throw new Error("expected error");
-		expect(frame.error).toContain("unknown daemon");
+		expect(frame.error).toContain("unknown session");
 	});
 
-	test("stop of an attached spawned daemon closes its pipe, broadcasts asleep with no pid/uptime, and reports no connection loss", async () => {
+	test("stop of an attached spawned session closes its pipe, broadcasts asleep with no pid/uptime, and reports no connection loss", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		spawnedByEdge = null; // the wait below must observe the NEW spawn
@@ -1733,25 +1745,25 @@ describe("fleet edge", () => {
 		const spawned = await waitFor(
 			() => {
 				const e = spawnedByEdge;
-				return e && server.registry.get(e.daemonId)?.status === "ready" ? e : null;
+				return e && server.registry.get(e.workspaceId)?.status === "ready" ? e : null;
 			},
 			4000,
 			"stop-test spawn ready",
 		);
-		const id = spawned.daemonId;
-		const daemon = daemonsById.get(id);
-		if (!daemon) throw new Error("spawned daemon did not pair");
-		const streamId = await attachBrowser(browser, daemon, id);
+		const id = spawned.workspaceId;
+		const session = sessionsById.get(id);
+		if (!session) throw new Error("spawned session did not pair");
+		const streamId = await attachBrowser(browser, session, id);
 
-		await browser.send({ type: "stop", daemonId: id });
+		await browser.send({ type: "stop", workspaceId: id });
 		const delta = await browser.waitForFrame(
 			(f) =>
 				f.type === "roster_delta" &&
-				f.upserted.some((d) => d.daemonId === id && d.status === "asleep"),
+				f.upserted.some((d) => d.workspaceId === id && d.status === "asleep"),
 			"asleep roster delta",
 		);
 		if (delta.type !== "roster_delta") throw new Error("expected roster_delta frame");
-		const entry = delta.upserted.find((d) => d.daemonId === id)!;
+		const entry = delta.upserted.find((d) => d.workspaceId === id)!;
 		expect(entry.status).toBe("asleep");
 		expect(entry.pid).toBeUndefined();
 		expect(entry.uptime).toBeUndefined();
@@ -1761,19 +1773,19 @@ describe("fleet edge", () => {
 		expect(reg.status).toBe("asleep");
 		expect(reg.pid).toBeUndefined();
 		expect(reg.readyAt).toBeUndefined();
-		// The browser's pipe is closed on the daemon at stop time, with no
-		// phantom "daemon connection lost" on the browser.
+		// The browser's pipe is closed on the session at stop time, with no
+		// phantom "session connection lost" on the browser.
 		await waitFor(
 			() =>
-				controlsOf(daemon, "stream_close").some((e) => e.streamId === streamId) ? "closed" : null,
+				controlsOf(session, "stream_close").some((e) => e.streamId === streamId) ? "closed" : null,
 			5000,
 			"stream_close on stop",
 		);
 		await sleep(100);
 		expect(
-			browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost"),
+			browser.frames.some((f) => f.type === "error" && f.error === "session connection lost"),
 		).toBe(false);
-		dropDaemon(id);
+		dropSession(id);
 		browser.close();
 	});
 
@@ -1794,7 +1806,7 @@ describe("fleet edge", () => {
 		try {
 			const browser = await openBrowser(server.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await browser.send({ type: "stop", daemonId: stopMe2.daemonId });
+			await browser.send({ type: "stop", workspaceId: stopMe2.workspaceId });
 			const error = await browser.waitForFrame(
 				(f) => f.type === "error" && String(f.error).includes("stop boom"),
 				"stop error frame",
@@ -1920,9 +1932,9 @@ describe("fleet edge", () => {
 		});
 		const pruned: string[] = [];
 		const origPrune = server.lifecycle.delete.bind(server.lifecycle);
-		server.lifecycle.delete = async (daemonId: string) => {
-			pruned.push(daemonId);
-			return await origPrune(daemonId);
+		server.lifecycle.delete = async (workspaceId: string) => {
+			pruned.push(workspaceId);
+			return await origPrune(workspaceId);
 		};
 		const browser = await openBrowser(server.port);
 		try {
@@ -1936,17 +1948,17 @@ describe("fleet edge", () => {
 				"remove_project clone refusal",
 			);
 			if (err.type !== "error") throw new Error("expected error");
-			expect(err.error).toContain(clone.daemonId);
+			expect(err.error).toContain(clone.workspaceId);
 			// Refused before anything was stopped or dropped.
 			expect(pruned).toEqual([]);
-			expect(server.registry.get(live.daemonId)?.status).toBe("ready");
-			expect(server.registry.get(clone.daemonId)).toBeDefined();
+			expect(server.registry.get(live.workspaceId)?.status).toBe("ready");
+			expect(server.registry.get(clone.workspaceId)).toBeDefined();
 			expect(server.registry.projects().some((p) => p.projectId === project.projectId)).toBe(true);
 		} finally {
 			server.lifecycle.delete = origPrune;
 			browser.close();
-			server.registry.remove(live.daemonId);
-			server.registry.remove(clone.daemonId);
+			server.registry.remove(live.workspaceId);
+			server.registry.remove(clone.workspaceId);
 			try {
 				server.registry.removeProject(project.projectId);
 			} catch {
@@ -1990,10 +2002,10 @@ describe("fleet edge", () => {
 				"registered_projects after remove",
 			);
 			expect(server.registry.projects().some((p) => p.projectId === project.projectId)).toBe(false);
-			expect(server.registry.get(row.daemonId)).toBeUndefined();
+			expect(server.registry.get(row.workspaceId)).toBeUndefined();
 		} finally {
 			browser.close();
-			server.registry.remove(row.daemonId);
+			server.registry.remove(row.workspaceId);
 			try {
 				server.registry.removeProject(project.projectId);
 			} catch {
@@ -2059,21 +2071,21 @@ describe("fleet edge", () => {
 		}
 	});
 
-	test("a daemon hello_ok with a different proto ends the attach with the proto mismatch error frame", async () => {
+	test("a session hello_ok with a different proto ends the attach with the proto mismatch error frame", async () => {
 		const row = enrollRow("proto-mismatch");
-		const daemon = await connectDaemon(row.daemonId, row.generation, row.token);
+		const session = await connectSession(row.workspaceId, row.generation, row.token);
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		const seen = controlsOf(daemon, "stream_open").length;
-		await browser.send({ type: "attach", sessionId: row.daemonId });
-		const streamId = await awaitNewStream(daemon, seen);
-		daemon.send(streamId, "frame", { type: "hello_ok", proto: OMP_PROTO - 1 });
+		const seen = controlsOf(session, "stream_open").length;
+		await browser.send({ type: "attach", workspaceId: row.workspaceId });
+		const streamId = await awaitNewStream(session, seen);
+		session.send(streamId, "frame", { type: "hello_ok", proto: OMP_PROTO - 1 });
 		const error = await browser.waitForFrame(
 			(f) => f.type === "error" && f.error.startsWith("proto mismatch"),
 			"proto mismatch error",
 		);
 		expect(error).toMatchObject({
-			error: `proto mismatch: daemon speaks OMP_PROTO ${OMP_PROTO - 1}, expected ${OMP_PROTO}`,
+			error: `proto mismatch: session speaks OMP_PROTO ${OMP_PROTO - 1}, expected ${OMP_PROTO}`,
 		});
 		// The mismatched hello_ok never reaches the browser and the stream is
 		// terminal: the socket itself stays open for the next attach.
@@ -2091,22 +2103,22 @@ describe("fleet edge", () => {
 
 	test("answers reach only the originating client, and a re-sent id after a reconnect is acked again with its replayed answer landing on the new socket only", async () => {
 		const row = enrollRow("answer-routing");
-		const daemon = await connectDaemon(row.daemonId, row.generation, row.token);
+		const session = await connectSession(row.workspaceId, row.generation, row.token);
 		const a = await openBrowser(server.port);
 		const b = await openBrowser(server.port);
 		await a.waitForFrame((f) => f.type === "roster", "roster A");
 		await b.waitForFrame((f) => f.type === "roster", "roster B");
-		const streamA = await attachBrowser(a, daemon, row.daemonId);
-		const streamB = await attachBrowser(b, daemon, row.daemonId);
+		const streamA = await attachBrowser(a, session, row.workspaceId);
+		const streamB = await attachBrowser(b, session, row.workspaceId);
 
 		const call = { type: "call", id: "route-1", method: "getQueuedMessages" };
 		await a.send(call);
 		await waitFor(
-			() => (commandsWithId(daemon, "route-1").length > 0 ? "sent" : null),
+			() => (commandsWithId(session, "route-1").length > 0 ? "sent" : null),
 			5000,
 			"route-1 at the session",
 		);
-		expect(commandsWithId(daemon, "route-1").map((env) => env.streamId)).toEqual([streamA]);
+		expect(commandsWithId(session, "route-1").map((env) => env.streamId)).toEqual([streamA]);
 
 		// A's tab drops before the answer. The session (which broadcasts to every
 		// stream it has open) answers B's pipe: B must not see A's answer.
@@ -2114,11 +2126,11 @@ describe("fleet edge", () => {
 		await a.end();
 		await waitFor(
 			() =>
-				controlsOf(daemon, "stream_close").some((e) => e.streamId === streamA) ? "closed" : null,
+				controlsOf(session, "stream_close").some((e) => e.streamId === streamA) ? "closed" : null,
 			5000,
 			"A's pipe closed",
 		);
-		daemon.send(streamB, "frame", { type: "call_result", id: "route-1", ok: true });
+		session.send(streamB, "frame", { type: "call_result", id: "route-1", ok: true });
 
 		// A redials as the same client with its resume point, re-attaches, and
 		// re-sends the same command id: acked again (the dedup memory survived
@@ -2127,31 +2139,31 @@ describe("fleet edge", () => {
 		allBrowsers.push(a2);
 		await a2.open();
 		await a2.waitForFrame((f) => f.type === "registered_projects", "priming on the new socket");
-		const streamA2 = await attachBrowser(a2, daemon, row.daemonId);
+		const streamA2 = await attachBrowser(a2, session, row.workspaceId);
 		expect(streamA2).not.toBe(streamA);
 		await a2.send(call);
 		expect(a2.acks).toContain("route-1");
 		await waitFor(
-			() => (commandsWithId(daemon, "route-1").length > 1 ? "resent" : null),
+			() => (commandsWithId(session, "route-1").length > 1 ? "resent" : null),
 			5000,
 			"route-1 re-sent at the session",
 		);
-		expect(commandsWithId(daemon, "route-1").map((env) => env.streamId)).toEqual([
+		expect(commandsWithId(session, "route-1").map((env) => env.streamId)).toEqual([
 			streamA,
 			streamA2,
 		]);
 
 		// The session's dedup replays the answer on every open stream. Order on
 		// B's own pipe proves B never got it: B's later sentinel arrives after.
-		daemon.send(streamA2, "frame", { type: "call_result", id: "route-1", ok: true });
-		daemon.send(streamB, "frame", { type: "call_result", id: "route-1", ok: true });
+		session.send(streamA2, "frame", { type: "call_result", id: "route-1", ok: true });
+		session.send(streamB, "frame", { type: "call_result", id: "route-1", ok: true });
 		await b.send({ type: "call", id: "route-b", method: "getQueuedMessages" });
 		await waitFor(
-			() => (commandsWithId(daemon, "route-b").length > 0 ? "sent" : null),
+			() => (commandsWithId(session, "route-b").length > 0 ? "sent" : null),
 			5000,
 			"route-b at the session",
 		);
-		daemon.send(streamB, "frame", { type: "call_result", id: "route-b", ok: true });
+		session.send(streamB, "frame", { type: "call_result", id: "route-b", ok: true });
 		await b.waitForFrame((f) => f.type === "call_result" && f.id === "route-b", "route-b result");
 		await a2.waitForFrame((f) => f.type === "call_result" && f.id === "route-1", "route-1 result");
 
@@ -2169,7 +2181,7 @@ describe("edge pure helpers", () => {
 	test("toRosterEntry strips token/endpoint and computes uptime + pid", () => {
 		const now = Date.now();
 		const entry: RegistryEntry = {
-			daemonId: "d1",
+			workspaceId: "d1",
 			name: "n",
 			cwd: "/x",
 			project: "x",
@@ -2182,7 +2194,7 @@ describe("edge pure helpers", () => {
 			git: { added: 2, modified: 3, deleted: 1, untracked: 4 },
 		};
 		const roster = toRosterEntry(entry);
-		expect(roster.daemonId).toBe("d1");
+		expect(roster.workspaceId).toBe("d1");
 		expect(roster.pid).toBe(1234);
 		expect(roster.uptime).toBeGreaterThanOrEqual(49);
 		expect(roster.uptime).toBeLessThanOrEqual(51);
@@ -2198,8 +2210,8 @@ describe("edge pure helpers", () => {
 		const bare = toRosterEntry({ ...entry, branch: undefined, git: undefined });
 		expect(bare).not.toHaveProperty("branch");
 		expect(bare).not.toHaveProperty("git");
-		// An asleep daemon has no live process: the roster must not carry a
-		// pid or an uptime growing since registeredAt for a dead daemon.
+		// An asleep session has no live process: the roster must not carry a
+		// pid or an uptime growing since registeredAt for a dead session.
 		const asleep = toRosterEntry({ ...entry, readyAt: undefined, status: "asleep" });
 		expect(asleep.uptime).toBeUndefined();
 		expect(asleep.pid).toBeUndefined();
@@ -2218,7 +2230,7 @@ describe("edge pure helpers", () => {
 
 	test("toRosterEntry serializes sessionTitle when present, omits when absent", () => {
 		const entry: RegistryEntry = {
-			daemonId: "d4",
+			workspaceId: "d4",
 			name: "n",
 			cwd: "/srv/repos/acme-wt-feature",
 			project: "acme",
@@ -2234,7 +2246,7 @@ describe("edge pure helpers", () => {
 
 	test("toRosterEntry serializes sessionEmpty only when true", () => {
 		const base: RegistryEntry = {
-			daemonId: "d4b",
+			workspaceId: "d4b",
 			name: "n",
 			cwd: "/srv/repos/acme-wt-feature",
 			project: "acme",
@@ -2250,7 +2262,7 @@ describe("edge pure helpers", () => {
 
 	test("toRosterEntry never emits managed, workspace, or ownership fields", () => {
 		const base: RegistryEntry = {
-			daemonId: "d9",
+			workspaceId: "d9",
 			name: "n",
 			cwd: "/some/root/repo/feature",
 			project: "x",
@@ -2285,14 +2297,16 @@ describe("pair-loss grace", () => {
 	const tmp = tempDir("omp-web-pair-grace-");
 	const statePath = join(tmp, "state.json");
 	const configPath = join(tmp, "config.json");
-	const daemons: CallbackDaemon[] = [];
+	const sessions: CallbackSession[] = [];
 	let server: FleetServer;
 
 	const fleetUrl = () => `http://127.0.0.1:${server.port}`;
 
-	/** Did the fleet log a reconnecting transition for this daemon? */
-	const reconnectingLogged = (daemonId: string): boolean =>
-		server.eventLog.list().some((e) => e.daemonId === daemonId && e.message === "reconnecting");
+	/** Did the fleet log a reconnecting transition for this session? */
+	const reconnectingLogged = (workspaceId: string): boolean =>
+		server.eventLog
+			.list()
+			.some((e) => e.workspaceId === workspaceId && e.message === "reconnecting");
 
 	/**
 	 * Spawn a row (the production path that installs the pair watch), then play
@@ -2301,7 +2315,7 @@ describe("pair-loss grace", () => {
 	async function pairRow(
 		name: string,
 		redialMs: number,
-	): Promise<{ daemonId: string; daemon: CallbackDaemon }> {
+	): Promise<{ workspaceId: string; session: CallbackSession }> {
 		const entry = await server.lifecycle.spawnHost({
 			cwd: FAKE_CWD,
 			name,
@@ -2310,24 +2324,24 @@ describe("pair-loss grace", () => {
 		const { generation, credential } = enrollSessionCredential(
 			server.transport,
 			server.registry,
-			entry.daemonId,
+			entry.workspaceId,
 		);
-		const daemon = startCallbackDaemon({
+		const session = startCallbackSession({
 			url: fleetUrl(),
-			workspaceId: entry.daemonId,
+			workspaceId: entry.workspaceId,
 			generation,
 			token: credential,
 			redialMinMs: redialMs,
 			redialMaxMs: redialMs,
 		});
-		daemons.push(daemon);
-		await daemon.waitConnected(10_000);
+		sessions.push(session);
+		await session.waitConnected(10_000);
 		await waitFor(
-			() => (server.registry.get(entry.daemonId)?.status === "ready" ? true : null),
+			() => (server.registry.get(entry.workspaceId)?.status === "ready" ? true : null),
 			5000,
 			`${name} ready`,
 		);
-		return { daemonId: entry.daemonId, daemon };
+		return { workspaceId: entry.workspaceId, session };
 	}
 
 	// Same dev-runner hermeticity as the suite above: a shell that ran
@@ -2357,7 +2371,7 @@ describe("pair-loss grace", () => {
 	});
 
 	afterAll(async () => {
-		for (const daemon of daemons) daemon.stop();
+		for (const session of sessions) session.stop();
 		try {
 			await stopSpawnedRows(server);
 		} finally {
@@ -2367,32 +2381,32 @@ describe("pair-loss grace", () => {
 	});
 
 	test("a pair drop that re-pairs inside the grace never shows reconnecting", async () => {
-		const { daemonId, daemon } = await pairRow("grace-blip", 25);
-		daemon.dropLegs();
+		const { workspaceId, session } = await pairRow("grace-blip", 25);
+		session.dropLegs();
 		await waitFor(
-			() => (server.transport.pairStatus(daemonId).paired ? null : true),
+			() => (server.transport.pairStatus(workspaceId).paired ? null : true),
 			2000,
 			"pair down",
 		);
 		await waitFor(
-			() => (server.transport.pairStatus(daemonId).paired ? true : null),
+			() => (server.transport.pairStatus(workspaceId).paired ? true : null),
 			5000,
 			"pair back",
 		);
 		await sleep(PAIR_LOSS_GRACE_MS * 3);
-		expect(server.registry.get(daemonId)?.status).toBe("ready");
-		expect(reconnectingLogged(daemonId)).toBe(false);
+		expect(server.registry.get(workspaceId)?.status).toBe("ready");
+		expect(reconnectingLogged(workspaceId)).toBe(false);
 	});
 
 	test("a pair drop that outlasts the grace shows reconnecting", async () => {
-		const { daemonId, daemon } = await pairRow("grace-outage", 60_000);
-		daemon.dropLegs();
+		const { workspaceId, session } = await pairRow("grace-outage", 60_000);
+		session.dropLegs();
 		await waitFor(
-			() => (server.registry.get(daemonId)?.status === "reconnecting" ? true : null),
+			() => (server.registry.get(workspaceId)?.status === "reconnecting" ? true : null),
 			PAIR_LOSS_GRACE_MS + 3000,
 			"reconnecting after grace",
 		);
-		expect(server.transport.pairStatus(daemonId).paired).toBe(false);
-		expect(reconnectingLogged(daemonId)).toBe(true);
+		expect(server.transport.pairStatus(workspaceId).paired).toBe(false);
+		expect(reconnectingLogged(workspaceId)).toBe(true);
 	});
 });

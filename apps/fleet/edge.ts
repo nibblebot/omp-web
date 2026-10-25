@@ -4,25 +4,25 @@
  * Mounted by fleet/server.ts on the same loopback Bun.serve as the
  * /ctl control API:
  *
- *   - GET /ws is the browser socket (OMP_PROTO 5), one WebSocket per client
+ *   - GET /ws is the browser socket (OMP_PROTO 6), one WebSocket per client
  *     (lib/wire/browser-socket.ts is the wire). Every open socket gets an
  *     immediate roster + merged-daemons + registered-projects priming
  *     (edge-local seqs 1..k, k < DELTA_SEQ_START); live `roster_delta` /
- *     `daemon_status` / `daemons` / `registered_projects` broadcasts and
- *     proxied daemon frames follow as `{"seq":N,"frame":…}` messages with
+ *     `session_status` / `daemons` / `registered_projects` broadcasts and
+ *     proxied session frames follow as `{"seq":N,"frame":…}` messages with
  *     edge-local monotonic seqs from DELTA_SEQ_START, kept in a
  *     per-client ReplayRing (cap CLIENT_RING_CAP, byte budget CLIENT_RING_BYTES) for
  *     `after` resume: N ≥ DELTA_SEQ_START replays ring.after(N)
  *     after priming, anything below skips replay (priming already carries
- *     full current state). Only daemon DELTA types are ringed (mirror of the
- *     daemon's RING_DELTAS, finding #5): priming frames (history,
+ *     full current state). Only session DELTA types are ringed (mirror of the
+ *     session's RING_DELTAS, finding #5): priming frames (history,
  *     available_commands) and unicast answers (call_result) ride the live
  *     socket with a seq but no ring entry, re-derivable by re-attach
- *     priming / a re-sent command, exactly like the daemon. The daemon
+ *     priming / a re-sent command, exactly like the session. The session
  *     broadcasts an answer to every stream it has, so an id-keyed answer is
  *     additionally routed to the ONE browser whose command asked for it (the
  *     pipe's copy is dropped otherwise), never fanned out to browsers that
- *     share nothing with the command but the daemon. Frames are spliced
+ *     share nothing with the command but the session. Frames are spliced
  *     (relayJson into seqFrameMessage), never re-stringified on the relay path.
  *   - Commands arrive in band as `{"cmd":…}` messages on that socket: acked
  *     (`{"ack":id}`, was 202) or nacked (`{"nack":id,"status":S,…}`, was
@@ -33,23 +33,23 @@
  *     session's own cache) survives the disconnect. Fleet-level commands
  *     (add_project / sync_projects / spawn / spawn_resume / stop / remove /
  *     attach) are handled here; attached-session commands (call / login_code
- *     / ui_response / collab_* / daemon_* / list_*) ride the daemon's
+ *     / ui_response / collab_* / daemon_* / list_*) ride the session's
  *     callback pair. Anything outside the browser-command allowlist is
  *     rejected with an error frame. The upgrade is origin-checked whenever
  *     browser auth is enabled (see server.ts), which replaces `requireCsrf`
  *     for commands.
  *   - PAIR ATTACH: one callback virtual stream PER BROWSER ("browser/<connId>"
- *     on the daemon's pair). The daemon primes every new stream, so
+ *     on the session's pair). The session primes every new stream, so
  *     hello_ok → attached → history → state → available_commands → ready come
- *     from the session itself. The edge stamps the daemonId as sessionId on
+ *     from the session itself. The edge stamps the workspaceId on
  *     every session-scoped frame and on `attached` (omp-session no longer
- *     sends one). Every daemon dials the fleet, so the edge never dials: an
- *     asleep spawned daemon is woken through the shared SessionWaker
+ *     sends one). Every session dials the fleet, so the edge never dials: an
+ *     asleep spawned session is woken through the shared SessionWaker
  *     (session-waker.ts: respawn and pair wait, with a redial grace for a
- *     reconnecting or ready-but-unpaired daemon), and an unpaired
- *     remote daemon is refused.
+ *     reconnecting or ready-but-unpaired session), and an unpaired
+ *     remote session is refused.
  *     A pair replacement re-primes the stream from zero. A dropped pair ends
- *     the browser's stream with the "daemon connection lost" error frame.
+ *     the browser's stream with the "session connection lost" error frame.
  *     Attach is answered with an id-keyed attach_result frame (finding #28)
  *     so unrelated global error frames never settle a browser's in-flight
  *     attach.
@@ -58,32 +58,32 @@
  *     that buffers bytes with no drain for CLIENT_STALL_MS (a browser that
  *     stopped reading) is closed 4503 (drop-and-resume): the browser
  *     reconnects with `after` and the edge replays its ring. One slow
- *     browser never stalls the daemon stream or other browsers. The daemon's
+ *     browser never stalls the session stream or other browsers. The session's
  *     priming and history bursts are paced by the browser's drain, not
  *     counted against the cap: stream_open puts the stream on ack pacing,
  *     and the edge answers with stream_ack controls as the socket's buffer
  *     drains (`drain` events and every send), so at most
  *     STREAM_ACK_WINDOW_BYTES of a burst sit in the edge (a slow browser
  *     slows its own priming; a stuck one is dropped by the stall rule).
- *   - Real-time daemon activity: the daemon's control-stream envelopes are
- *     tapped and derive per-daemon {streaming, blocked} from state /
+ *   - Real-time session activity: the session's control-stream envelopes are
+ *     tapped and derive per-session {streaming, blocked} from state /
  *     the agent_start event (the session sends no state frame at turn start) /
  *     ui_request / ui_request_end (a state frame's pendingUiRequestIds, when
  *     present, replaces the delta-built open-dialog set, so every pair-up
  *     resyncs `blocked`), broadcasting an edge-generated
- *     {type:"daemon_activity"} frame ONLY on change (never ringed,
- *     re-derivable from the next open's priming). Daemons hold their own
+ *     {type:"session_activity"} frame ONLY on change (never ringed,
+ *     re-derivable from the next open's priming). Sessions hold their own
  *     pair, so no browser presence is needed to keep activity live.
- *     daemon_activity is stripped from callback streams like `daemons`
+ *     session_activity is stripped from callback streams like `daemons`
  *     broker rosters.
- *   - Aggregated daemons: every daemon's control-stream envelopes are tapped
- *     for {type:"daemons"} broker rosters. The latest roster per daemonId is
+ *   - Aggregated daemons: every session's control-stream envelopes are tapped
+ *     for {type:"daemons"} broker rosters. The latest roster per workspaceId is
  *     cached (full-replace), merged across daemons, and broadcast as ONE
  *     {type:"daemons"} frame to every edge stream, also on browser open.
- *     Per-daemon daemons frames are stripped from callback streams (the
- *     merged frame is the only one browsers see), and removing a daemon from
+ *     Per-session daemons frames are stripped from callback streams (the
+ *     merged frame is the only one browsers see), and removing a session from
  *     the registry evicts its cache (see daemons-aggregator.ts).
- *   - Static dist/ serving lives in static-ui.ts (shared with the UI daemon);
+ *   - Static dist/ serving lives in static-ui.ts (shared with the UI server);
  *     with serveUi false the edge answers 404 JSON for static paths instead.
  *
  * Roster serialization never leaks credentials (enrollment tokens and digests)
@@ -94,7 +94,7 @@ import type { ServerWebSocket } from "bun";
 import { randomUUID } from "node:crypto";
 import {
 	COMMAND_DEDUP_WINDOW_MS,
-	daemonSessionsLimit,
+	workspaceSessionsLimit,
 	OMP_PROTO,
 	CLIENT_BACKPRESSURE_BYTES,
 	CLIENT_STALL_MS,
@@ -103,11 +103,11 @@ import {
 	CLIENT_RING_CAP,
 	CLIENT_RING_BYTES,
 	type ClientCommand,
-	type DaemonEntry,
+	type RosterEntry,
 	type DaemonInfo,
 	type PublicProviderProfile,
 	type ServerFrame,
-	type SessionScopedFrame,
+	isSessionScopedFrameType,
 } from "#lib/wire/protocol";
 import {
 	ackMessage,
@@ -139,14 +139,14 @@ import { listRecentRoots } from "./recent-roots";
 import { DaemonsAggregator } from "./daemons-aggregator";
 import type {
 	BulkCorrelation,
-	DaemonTransportRegistry,
+	SessionTransportRegistry,
 	VirtualStreamSink,
-} from "./daemon-transport";
+} from "./session-transport";
 import {
-	listCloneDaemonSessions,
-	listDaemonSessions,
+	listCloneWorkspaceSessions,
+	listWorkspaceSessions,
 	type CloneSessionStore,
-} from "./daemon-sessions";
+} from "./workspace-sessions";
 import { type Registry, type RegistryChange, type RegistryEntry } from "./registry";
 import type { ProjectSync } from "./project-sync";
 import type { SessionWaker } from "./session-waker";
@@ -175,20 +175,20 @@ const ATTACH_SUPERSEDED = "attach superseded";
 class NotAsleepError extends Error {}
 
 /**
- * Per-daemon realtime activity, derived by the edge from the raw tapped
- * daemon frames (state → isStreaming, an agent_start event → streaming; ui_request / ui_request_end, and a
+ * Per-session realtime activity, derived by the edge from the raw tapped
+ * session frames (state → isStreaming, an agent_start event → streaming; ui_request / ui_request_end, and a
  * state frame's pendingUiRequestIds snapshot → the open-dialog set that
  * drives `blocked`), and reset to idle when the row's process is gone or
- * relaunching (#resetActivityOfGoneRuntime). Starts UNKNOWN per daemon
+ * relaunching (#resetActivityOfGoneRuntime). Starts UNKNOWN per session
  * (`known: false`, nothing derived) until the first derivable frame
  * arrives. Never carries credentials.
  */
-interface DaemonActivity {
+interface SessionActivity {
 	/** True once at least one derivable frame has been observed (unknown→known is itself a change). */
 	known: boolean;
 	streaming: boolean;
 	blocked: boolean;
-	/** ui_request ids currently open on the daemon; `blocked` = size > 0. */
+	/** ui_request ids currently open on the session; `blocked` = size > 0. */
 	openDialogIds: Set<string>;
 }
 
@@ -210,7 +210,7 @@ const DOWNLOAD_ROUTE = /^\/ctl\/sessions\/([^/]+)\/download$/;
 /**
  * Error frame for any browser command outside the allowlist. Phase 6: the
  * mux-era commands and `detach` are gone from ClientCommand, so an unknown
- * command (or plain garbage) must not reach the daemon; the edge rejects it
+ * command (or plain garbage) must not reach the session; the edge rejects it
  * with this instead.
  */
 const UNKNOWN_COMMAND_MESSAGE = "fleet edge: use spawn/stop/roster";
@@ -218,7 +218,7 @@ const UNKNOWN_COMMAND_MESSAGE = "fleet edge: use spawn/stop/roster";
 /**
  * Browser-command allowlist, checked on the RAW parsed frame before any
  * dispatch: edge-handled commands plus the ClientCommand variants forwarded
- * to the attached daemon. `hello` is gone from the protocol (daemon auth is
+ * to the attached session. `hello` is gone from the protocol (session auth is
  * HTTP-level, the bearer header). Anything else is rejected
  * with UNKNOWN_COMMAND_MESSAGE. Typed against ClientCommand so a removed
  * variant stops compiling instead of silently broadening the allowlist.
@@ -227,7 +227,7 @@ const BROWSER_COMMAND_LIST = [
 	// Handled at the edge.
 	"list_project_branches",
 	"sync_projects",
-	"list_daemon_sessions",
+	"list_workspace_sessions",
 	"spawn",
 	"spawn_resume",
 	"stop",
@@ -241,7 +241,7 @@ const BROWSER_COMMAND_LIST = [
 	"create_worktree",
 	"delete_worktree",
 	"worktree_delete_info",
-	// Forwarded to the attached daemon over its callback pair.
+	// Forwarded to the attached session over its callback pair.
 	"call",
 	"login_code",
 	"ui_response",
@@ -269,52 +269,11 @@ const BROWSER_COMMAND_TYPES: Record<string, true> = Object.fromEntries(
 );
 
 /**
- * Session-scoped frame types (protocol's SessionScopedFrame). omp-session
- * no longer stamps a sessionId on these; the pipe forwarder adds the
- * daemonId unconditionally so clients proxied through the edge can guard
- * daemon switches. `attached` is handled alongside: its sessionId is REQUIRED
- * ("s1" from omp-session) and must read as the daemonId when it comes
- * through the edge.
- */
-const SESSION_SCOPED_FRAME_LIST = [
-	"history",
-	"state",
-	"event",
-	"bash_chunk",
-	"python_chunk",
-	"ephemeral_delta",
-	"command_echo",
-	"call_result",
-	"available_commands",
-	"settings_changed",
-	"skills_changed",
-	"subagent_lifecycle",
-	"subagent_progress",
-	"ui_request",
-	// Finding #16: the dialog's settle marker rides the session scope like the
-	// request, so a daemon switch guard applies the same way.
-	"ui_request_end",
-	"collab_status",
-	"job_widgets",
-] as const satisfies readonly SessionScopedFrame["type"][];
-// Exhaustiveness pin (finding #63): same addition-direction guard as the
-// browser-command allowlist; a session-scoped frame added to the union
-// without a row here would otherwise be forwarded UNSTAMPED (no daemonId),
-// which the client's stale-frame guard would drop on a daemon switch.
-const _sessionScopedFrameListExhaustive: Record<
-	Exclude<SessionScopedFrame["type"], (typeof SESSION_SCOPED_FRAME_LIST)[number]>,
-	never
-> = {};
-const SESSION_SCOPED_FRAME_TYPES: Record<string, true> = Object.fromEntries(
-	SESSION_SCOPED_FRAME_LIST.map((type) => [type, true]),
-);
-
-/**
  * The JSON text for a relayed session frame, taken from the frame's own
  * wire text instead of re-serialized, or undefined when the caller must
  * stringify the parsed frame. The edge decided on JSON.parse(payloadJson); the
  * browser JSON.parses the text this returns, so both see one value. With
- * `sessionId`, the stamp `{ ...frame, sessionId }` is spliced in as the last
+ * `workspaceId`, the stamp `{ ...frame, workspaceId }` is spliced in as the last
  * member (JSON.parse is last-key-wins, so it overrides an existing key, as the
  * spread does). Only stamped frame types reach the splice, and those carry a
  * `type` member, so the object is never empty. Declined (undefined) when the
@@ -322,22 +281,22 @@ const SESSION_SCOPED_FRAME_TYPES: Record<string, true> = Object.fromEntries(
  * message (seqFrameMessage): JSON tolerates whitespace and line breaks
  * between tokens, so nothing else needs declining.
  */
-function relayJson(payloadJson: string, sessionId: string | undefined): string | undefined {
+function relayJson(payloadJson: string, workspaceId: string | undefined): string | undefined {
 	if (payloadJson.charCodeAt(0) !== 0x7b || payloadJson.charCodeAt(payloadJson.length - 1) !== 0x7d)
 		return undefined;
-	if (sessionId === undefined) return payloadJson;
-	const member = `"sessionId":${JSON.stringify(sessionId)}`;
+	if (workspaceId === undefined) return payloadJson;
+	const member = `"workspaceId":${JSON.stringify(workspaceId)}`;
 	return `${payloadJson.slice(0, -1)},${member}}`;
 }
 
 /**
- * Daemon frame types the edge RINGS per client (finding #5). MUST mirror
- * server/index.ts RING_DELTAS: a frame the daemon does not ring (priming:
+ * Session frame types the edge RINGS per client (finding #5). MUST mirror
+ * server/index.ts RING_DELTAS: a frame the session does not ring (priming:
  * hello_ok/attached/history/available_commands; unicast answers:
  * call_result; per-stream lifecycle: stream_reset) is forwarded live but
  * never ringed; it is re-derivable by re-attach priming or a re-sent
  * command. Ringed deltas are the frames an `after` resume actually
- * needs; everything else merely consumes a seq, exactly like the daemon's
+ * needs; everything else merely consumes a seq, exactly like the session's
  * delta counter, so ring replay has the same deliberate gaps and a
  * resuming consumer tolerates them (after() returns only ringed entries
  * newer than the id).
@@ -358,7 +317,7 @@ const EDGE_RING_DELTAS: Record<string, true> = {
 	// a resume replays request → end (dismissed), never a stale dialog.
 	ui_request_end: true,
 	collab_status: true,
-	// Forwarded as the daemon's own wire text, never parsed beyond the type: an absolute snapshot, ringed like state.
+	// Forwarded as the session's own wire text, never parsed beyond the type: an absolute snapshot, ringed like state.
 	job_widgets: true,
 	ready: true,
 	daemons: true,
@@ -378,7 +337,7 @@ const ANSWERED_FORWARD_TYPES: Record<string, true> = {
 	daemon_restart: true,
 };
 
-/** The daemon's id-keyed unicast answers (one pipe copy per attached browser). */
+/** The session's id-keyed unicast answers (one pipe copy per attached browser). */
 const ANSWER_FRAME_TYPES: Record<string, true> = {
 	call_result: true,
 	daemon_logs_result: true,
@@ -398,7 +357,7 @@ const REFUSED_ANSWER_TYPES: Record<string, string> = {
 	daemon_restart: "daemon_control_result",
 };
 
-/** Cap on remembered forward origins (the daemon's answer cache is capped the same way). */
+/** Cap on remembered forward origins (the session's answer cache is capped the same way). */
 const FORWARD_ORIGIN_CAP = 256;
 
 /**
@@ -406,15 +365,15 @@ const FORWARD_ORIGIN_CAP = 256;
  */
 interface ForwardOrigin {
 	clientId: string;
-	/** The daemon the command was forwarded to (the answer must come back from the same one). */
-	daemonId: string;
-	/** The daemon's authorized enrollment generation at forward time; a changed generation means a new process. */
+	/** The session the command was forwarded to (the answer must come back from the same one). */
+	workspaceId: string;
+	/** The session's authorized enrollment generation at forward time; a changed generation means a new process. */
 	generation: number | null;
 	/** The answer reached the origin: later pipe copies of it are consumed, not fanned out. */
 	delivered: boolean;
 	/** An earlier forward of this id was accepted onto the pair, so the session may have applied the command. */
 	sent: boolean;
-	/** Insertion time, for the TTL sweep (the daemon's dedup window). */
+	/** Insertion time, for the TTL sweep (the session's dedup window). */
 	at: number;
 }
 
@@ -426,7 +385,7 @@ interface ForwardOrigin {
  * `removal` resolves; a rejecting `removal` leaves the row registered (FLC-21).
  */
 export interface EdgeEvictionHooks {
-	evictRow<T>(daemonId: string, removal: () => Promise<T>): Promise<T>;
+	evictRow<T>(workspaceId: string, removal: () => Promise<T>): Promise<T>;
 	evictProject(projectId: string): Promise<void>;
 }
 
@@ -442,11 +401,11 @@ export interface EdgeDeps {
 	/** Fleet-wide facts (port/startedAt/state paths) surfaced by /ctl/debug. */
 	fleet: FleetFacts;
 	/**
-	 * Callback transport: every daemon dials the fleet and attaches,
+	 * Callback transport: every session dials the fleet and attaches,
 	 * commands, and downloads over its pair. Absent (test construction) =
-	 * daemon rows report typed unavailability.
+	 * session rows report typed unavailability.
 	 */
-	transport?: DaemonTransportRegistry;
+	transport?: SessionTransportRegistry;
 	/** Non-clone row eviction (FLC-22). Required: the server owns pair/log-tap/orphan cleanup. */
 	eviction: EdgeEvictionHooks;
 	/** Session wake (FLC-23): brings a session's callback pair up before an attach or prompt. Required; the server owns it. */
@@ -513,8 +472,8 @@ export interface BrowserStream {
 	closed: boolean;
 	/** The client this socket belongs to (ring/seq live there). */
 	client: BrowserClient;
-	/** This browser's dedicated daemon channel: a callback virtual stream
-	 * ("browser/<connId>" on the daemon's pair). Null while unattached. */
+	/** This browser's dedicated session channel: a callback virtual stream
+	 * ("browser/<connId>" on the session's pair). Null while unattached. */
 	pipe: CallbackPipeState | null;
 	/** Bumped by every attach on this socket; an attach whose value moved on is superseded. */
 	attachSeq: number;
@@ -530,14 +489,14 @@ export interface BrowserStream {
 
 /**
  * One callback virtual stream: a browser's dedicated "browser/<connId>" pair
- * to a daemon. Daemons dial the fleet, so no inbound dial ever exists. The
- * daemon primes + replays per stream; the edge only forwards envelopes and
+ * to a session. Sessions dial the fleet, so no inbound dial ever exists. The
+ * session primes + replays per stream; the edge only forwards envelopes and
  * re-sends stream_open after every pair replacement. Never redials: pair
  * liveness is the transport's job; a dropped pair surfaces as a
- * "daemon connection lost" error frame.
+ * "session connection lost" error frame.
  */
 interface CallbackPipeState {
-	daemonId: string;
+	workspaceId: string;
 	/** Edge-chosen browser connection id, the "browser/<connId>" stream's suffix. */
 	connId: string;
 	/** Intentional teardown (browser close / re-attach / clone stopped/removed). */
@@ -549,7 +508,7 @@ interface CallbackPipeState {
 	/** Unsubscribe the pair-change observer; idempotent, safe after close(). */
 	unsubscribePair: () => void;
 	/**
-	 * Drain checkpoints for the daemon envelopes this stream consumed, in wire-seq
+	 * Drain checkpoints for the session envelopes this stream consumed, in wire-seq
 	 * order: each covers the stream's `enqueuedBytes` in (start, end]. Slots
 	 * before `creditHead` are consumed. Adjacent small envelopes merge, so the
 	 * list is bounded by the queue's bytes, not its frame count.
@@ -586,7 +545,7 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
 }
 
 /**
- * the DaemonEntry fields of a registry entry (never credentials, template,
+ * the RosterEntry fields of a registry entry (never credentials, template,
  * or registeredAt) plus a live uptime in seconds since
  * readyAt (or registeredAt when never ready) and pid.
  *
@@ -602,15 +561,15 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
  * future workspace field must be mapped here explicitly (or added to the
  * RegisteredProject shape) before it can appear on the wire.
  */
-export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
-	const roster: DaemonEntry = {
-		daemonId: entry.daemonId,
+export function toRosterEntry(entry: RegistryEntry): RosterEntry {
+	const roster: RosterEntry = {
+		workspaceId: entry.workspaceId,
 		name: entry.name,
 		cwd: entry.cwd,
 		project: entry.project,
 		status: entry.status,
-		// An asleep daemon has no live process: omit the uptime rather than let
-		// the registeredAt fallback show a growing uptime for a dead daemon.
+		// An asleep session has no live process: omit the uptime rather than let
+		// the registeredAt fallback show a growing uptime for a dead session.
 		...(entry.status === "asleep"
 			? {}
 			: {
@@ -631,7 +590,7 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 	// The empty flag is meaningful only when true; a false/undefined is the same,
 	// so it stays off the wire (mirrors the title-cleared rule above).
 	if (entry.sessionEmpty === true) roster.sessionEmpty = true;
-	// Liveness facts are meaningless for an asleep daemon; keep them off the
+	// Liveness facts are meaningless for an asleep session; keep them off the
 	// roster even if the registry entry transiently carries stale ones (e.g.
 	// mid-respawn, when the lifecycle writes the pid before the child readies).
 	if (entry.status !== "asleep") {
@@ -666,17 +625,17 @@ export class FleetEdge {
 	readonly #eventLog: FleetEventLog;
 	readonly #fleet: FleetFacts;
 	/** Callback transport: clone attach/commands/downloads ride it; undefined = clone rows answer typed unavailability. */
-	readonly #transport: DaemonTransportRegistry | undefined;
+	readonly #transport: SessionTransportRegistry | undefined;
 	/** Session wake (FLC-23): one rule set shared with fan-out prompts, so every wake follows it. */
 	readonly #waker: SessionWaker;
 	/** Shared clone/worktree/project mutations (operations.ts): the same calls the control API makes. */
 	readonly #ops: FleetOperations;
 	/** Browser-command runners, keyed like EDGE_COMMAND_FIELDS; each receives the validated args. */
 	readonly #runners: Record<string, (stream: BrowserStream, id: string, args: EdgeArgs) => void> = {
-		list_daemon_sessions: (stream, _id, a) =>
-			void this.#handleListDaemonSessions(
+		list_workspace_sessions: (stream, _id, a) =>
+			void this.#handleListWorkspaceSessions(
 				stream,
-				a.daemonId as string,
+				a.workspaceId as string,
 				a.limit as number | undefined,
 			),
 		list_project_branches: (stream, _id, a) =>
@@ -696,13 +655,13 @@ export class FleetEdge {
 		spawn_resume: (stream, _id, a) =>
 			void this.#handleSpawnResume(
 				stream,
-				a.daemonId as string,
+				a.workspaceId as string,
 				a.sessionFile as string | undefined,
 			),
 		stop: (stream, _id, a) =>
-			void this.#runOperation(stream, () => this.#ops.stop(a.daemonId as string)),
+			void this.#runOperation(stream, () => this.#ops.stop(a.workspaceId as string)),
 		remove: (stream, _id, a) =>
-			void this.#runOperation(stream, () => this.#ops.remove(a.daemonId as string)),
+			void this.#runOperation(stream, () => this.#ops.remove(a.workspaceId as string)),
 		add_project: (stream, id, a) => void this.#handleAddProject(stream, id, a.path as string),
 		remove_project: (stream, _id, a) =>
 			void this.#runOperation(stream, () => this.#ops.removeProject(a.projectId as string)),
@@ -729,17 +688,17 @@ export class FleetEdge {
 			),
 		delete_worktree: (stream, _id, a) =>
 			void this.#runOperation(stream, () =>
-				this.#ops.deleteWorkspace(a.daemonId as string, {
+				this.#ops.deleteWorkspace(a.workspaceId as string, {
 					deleteBranch: a.deleteBranch as string | undefined,
 				}),
 			),
 		worktree_delete_info: (stream, _id, a) =>
 			void this.#runOperation(stream, async () => {
-				const daemonId = a.daemonId as string;
-				const info = await this.#ops.worktreeDeleteInfo(daemonId);
-				this.#sendAnswer(stream, { type: "worktree_delete_info", daemonId, ...info });
+				const workspaceId = a.workspaceId as string;
+				const info = await this.#ops.worktreeDeleteInfo(workspaceId);
+				this.#sendAnswer(stream, { type: "worktree_delete_info", workspaceId, ...info });
 			}),
-		attach: (stream, id, a) => void this.#handleAttach(stream, a.sessionId as string, id),
+		attach: (stream, id, a) => void this.#handleAttach(stream, a.workspaceId as string, id),
 	};
 	/** Boot-static secret-free provider catalog, published on registered_projects. */
 	readonly #providerProfiles: PublicProviderProfile[] | undefined;
@@ -758,36 +717,36 @@ export class FleetEdge {
 	readonly #clients = new Map<string, BrowserClient>();
 	/**
 	 * Forwarded command id → the browser that asked (per-origin correlation).
-	 * The daemon broadcasts each unicast answer to ALL its streams, so with one
+	 * The session broadcasts each unicast answer to ALL its streams, so with one
 	 * pipe per browser every browser would otherwise receive every other
 	 * browser's answer; a replayed answer could then settle a pending call in
 	 * the wrong tab. Answers are delivered to the recorded origin only, and a
 	 * duplicate pipe copy of a delivered answer is consumed instead of fanned
-	 * out. Entries expire with the daemon's own dedup window.
+	 * out. Entries expire with the session's own dedup window.
 	 */
 	readonly #forwardOrigins = new Map<string, ForwardOrigin>();
 	/**
-	 * In-flight spawn_resume work per daemonId, registered synchronously before
+	 * In-flight spawn_resume work per workspaceId, registered synchronously before
 	 * its first await so a concurrently arriving attach can await the pick
 	 * validation instead of racing past it and waking on lastSessionFile.
 	 */
 	readonly #pendingResumes = new Map<string, Promise<void>>();
 	/**
-	 * Reason the last picked spawn_resume for a daemonId failed validation or
+	 * Reason the last picked spawn_resume for a workspaceId failed validation or
 	 * its wake. Set on that failure, cleared on a successful pick or an
 	 * explicit no-pick spawn_resume. While set, an attach that would wake the
-	 * daemon fails with this reason instead of waking on lastSessionFile. A
+	 * session fails with this reason instead of waking on lastSessionFile. A
 	 * status rejection (NotAsleepError) is never recorded: the row is running.
 	 */
 	readonly #refusedResumes = new Map<string, string>();
-	/** Cached broker rosters per daemonId, merged into the broadcast daemons frame. */
+	/** Cached broker rosters per workspaceId, merged into the broadcast daemons frame. */
 	readonly #daemonsAggregator = new DaemonsAggregator();
 	/** Serialized merged roster last broadcast, so an unchanged roster is not re-sent. */
 	#lastDaemonsRoster: string | undefined;
-	/** Control-socket taps per daemonId (unsubscribe fns), reconciled on registry change. */
+	/** Control-socket taps per workspaceId (unsubscribe fns), reconciled on registry change. */
 	readonly #daemonTaps = new Map<string, () => void>();
-	/** Per-daemon realtime activity, derived in the control-socket tap (browser-gated). */
-	readonly #daemonActivity = new Map<string, DaemonActivity>();
+	/** Per-session realtime activity, derived in the control-socket tap (browser-gated). */
+	readonly #sessionActivity = new Map<string, SessionActivity>();
 	/** Keepalive/stall sweep: pings idle browser sockets every CLIENT_KEEPALIVE_MS. */
 	#keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 	/** False on the split-setup control plane: static paths answer 404 JSON instead of the UI. */
@@ -796,7 +755,7 @@ export class FleetEdge {
 
 	/** Bound once so close() can unset registry.onChange without clobbering a replacement. */
 	readonly #onRegistryChange = (change: RegistryChange): void => {
-		// New daemons get a daemons-frame tap; removed ones lose it and their
+		// New sessions get a sessions-frame tap; removed ones lose it and their
 		// cached rosters are evicted (broadcast so browsers drop the entries).
 		this.#reconcileDaemonTaps();
 		this.#broadcastRosterDelta(change);
@@ -837,11 +796,11 @@ export class FleetEdge {
 			eventLog: deps.eventLog,
 			eviction: deps.eviction,
 		});
-		// A detached daemon's browser pipes drop before its row is stopped,
+		// A detached session's browser pipes drop before its row is stopped,
 		// removed or deleted (FleetOperations.onDetach).
-		this.#ops.onDetach((daemonId) => {
+		this.#ops.onDetach((workspaceId) => {
 			for (const s of this.#browsers) {
-				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
+				if (s.pipe?.workspaceId === workspaceId) this.#closePipe(s);
 			}
 		});
 		this.#providerProfiles = deps.providerProfiles;
@@ -856,7 +815,7 @@ export class FleetEdge {
 		// Project-set mutations are rare and the frame is re-derivable from
 		// priming, so they broadcast via a dedicated hook, never ringed.
 		deps.registry.onProjectsChange = this.#onProjectsChange;
-		// Tap daemons that already exist at construction (state.json load).
+		// Tap sessions that already exist at construction (state.json load).
 		this.#reconcileDaemonTaps();
 	}
 
@@ -909,11 +868,11 @@ export class FleetEdge {
 		}
 	}
 
-	/** Session status transition → daemon_status broadcast (wired by server.ts). */
-	onDaemonStatus(entry: RegistryEntry): void {
+	/** Session status transition → session_status broadcast (wired by server.ts). */
+	onSessionStatus(entry: RegistryEntry): void {
 		const frame: ServerFrame = {
-			type: "daemon_status",
-			daemonId: entry.daemonId,
+			type: "session_status",
+			workspaceId: entry.workspaceId,
 			status: entry.status,
 			...(entry.error !== undefined ? { error: entry.error } : {}),
 		};
@@ -922,16 +881,16 @@ export class FleetEdge {
 
 	/**
 	 * Global broadcast: a poll-detected, on-disk worktree removal (the
-	 * daemon's cwd vanished between git-state poll ticks). Ringed (default)
+	 * session's cwd vanished between git-state poll ticks). Ringed (default)
 	 * so a browser whose socket was down at emit time still gets the toast
 	 * once via `after` resume; the client's per-connection seq dedup drops
 	 * the replay of one it already saw. Never sent for UI-initiated
 	 * delete_worktree/remove.
 	 */
-	announceWorktreeRemoved(entry: { daemonId: string; name: string; cwd: string }): void {
+	announceWorktreeRemoved(entry: { workspaceId: string; name: string; cwd: string }): void {
 		this.#broadcast({
 			type: "worktree_removed",
-			daemonId: entry.daemonId,
+			workspaceId: entry.workspaceId,
 			name: entry.name,
 			path: entry.cwd,
 		});
@@ -1060,7 +1019,7 @@ export class FleetEdge {
 				seq++,
 				JSON.stringify({
 					type: "roster",
-					daemons: this.#registry.list().map((entry) => toRosterEntry(entry)),
+					entries: this.#registry.list().map((entry) => toRosterEntry(entry)),
 				}),
 			),
 		);
@@ -1087,25 +1046,25 @@ export class FleetEdge {
 				}),
 			),
 		);
-		// Real-time activity priming: one daemon_activity frame per managed
-		// daemon with KNOWN derived activity, whatever its roster status
+		// Real-time activity priming: one session_activity frame per managed
+		// session with KNOWN derived activity, whatever its roster status
 		// (unknown ones are omitted; their first derivable frame broadcasts
-		// live right after the dial below). Non-ready daemons are primed too:
+		// live right after the dial below). Non-ready sessions are primed too:
 		// broadcasts are never ringed, so a browser offline when a turn ended
-		// holds a stale streaming:true, and a daemon asleep at reconnect
+		// holds a stale streaming:true, and a session asleep at reconnect
 		// would otherwise never correct it (its pair-up state equals the
 		// stored value and broadcasts nothing). The client ignores activity
 		// for non-ready rows. Edge-local seq, like the rest of the priming group.
-		for (const [daemonId, activity] of this.#daemonActivity) {
+		for (const [workspaceId, activity] of this.#sessionActivity) {
 			if (!activity.known) continue;
-			if (!this.#registry.get(daemonId)) continue;
+			if (!this.#registry.get(workspaceId)) continue;
 			this.#send(
 				stream,
 				seqFrameMessage(
 					seq++,
 					JSON.stringify({
-						type: "daemon_activity",
-						daemonId,
+						type: "session_activity",
+						workspaceId,
 						streaming: activity.streaming,
 						blocked: activity.blocked,
 					}),
@@ -1131,7 +1090,7 @@ export class FleetEdge {
 
 	/**
 	 * Bun `websocket.drain`: the socket took its buffered bytes. The stall
-	 * clock moves and the daemon is acknowledged how far its burst drained.
+	 * clock moves and the session is acknowledged how far its burst drained.
 	 */
 	onBrowserDrain(ws: ServerWebSocket<BrowserSocketData>): void {
 		const stream = ws.data.stream;
@@ -1208,9 +1167,9 @@ export class FleetEdge {
 	 * command the edge cannot take is a nack carrying an HTTP-like status
 	 * (400, 409, 413, 429, 503, ...). The socket's client selects the browser the
 	 * command acts on (edge-level commands answer there; attached-session
-	 * commands proxy to that browser's daemon pipe). The ack follows any
+	 * commands proxy to that browser's session pipe). The ack follows any
 	 * answer frame the dispatch produced synchronously (an unknown command's
-	 * error frame, an attach to an unknown daemon): a client settles
+	 * error frame, an attach to an unknown session): a client settles
 	 * commands from their id-keyed answers and must not assume ack-first.
 	 * A re-sent id after a reconnect is acked again and re-forwarded; the
 	 * session's own dedup replays its answer, never re-dispatches (see
@@ -1229,7 +1188,7 @@ export class FleetEdge {
 		try {
 			// Phase 6: the mux-era commands and detach are gone from
 			// ClientCommand. Any type outside the browser allowlist, whether a
-			// removed command or plain garbage, is rejected here so the daemon
+			// removed command or plain garbage, is rejected here so the session
 			// never sees a command it no longer understands.
 			if (BROWSER_COMMAND_TYPES[type] !== true) {
 				this.#sendError(stream, UNKNOWN_COMMAND_MESSAGE);
@@ -1259,32 +1218,32 @@ export class FleetEdge {
 	// ---------------------------------------------------------------------
 
 	/**
-	 * Answer a session-list request: the last `limit` sessions of one daemon's
+	 * Answer a session-list request: the last `limit` sessions of one session's
 	 * worktree (default 10, clamped to 1..200), newest-first (the edge lists
-	 * from disk, so asleep/never-started daemons answer too, no live process
-	 * needed). The answer echoes the effective limit. Unknown daemon → error.
+	 * from disk, so asleep/never-started sessions answer too, no live process
+	 * needed). The answer echoes the effective limit. Unknown session → error.
 	 */
-	async #handleListDaemonSessions(
+	async #handleListWorkspaceSessions(
 		stream: BrowserStream,
-		daemonId: string,
+		workspaceId: string,
 		requestedLimit: number | undefined,
 	): Promise<void> {
 		try {
-			const limit = daemonSessionsLimit(requestedLimit);
-			const entry = this.#registry.get(daemonId);
+			const limit = workspaceSessionsLimit(requestedLimit);
+			const entry = this.#registry.get(workspaceId);
 			if (!entry) {
-				this.#sendError(stream, `unknown daemon: ${daemonId}`);
+				this.#sendError(stream, `unknown session: ${workspaceId}`);
 				return;
 			}
 			// Clone sessions list from the fleet transcript store (the
-			// owning daemon's session dir lives in the provider volume, never
+			// owning session's session dir lives in the provider volume, never
 			// a fleet-local cwd); non-clone sessions list from disk so asleep/
-			// never-started daemons answer too. Empty list when no store.
+			// never-started sessions answer too. Empty list when no store.
 			const sessions =
 				entry.workspace?.kind === "clone"
-					? await listCloneDaemonSessions(this.#logStore, daemonId, limit)
-					: await listDaemonSessions(entry.cwd ?? "", limit);
-			this.#sendAnswer(stream, { type: "daemon_sessions", daemonId, limit, sessions });
+					? await listCloneWorkspaceSessions(this.#logStore, workspaceId, limit)
+					: await listWorkspaceSessions(entry.cwd ?? "", limit);
+			this.#sendAnswer(stream, { type: "workspace_sessions", workspaceId, limit, sessions });
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
@@ -1331,7 +1290,7 @@ export class FleetEdge {
 		}
 	}
 
-	/** Run one workspace create for `id`: workspace_create_result carries the new daemonId or the refusal text. */
+	/** Run one workspace create for `id`: workspace_create_result carries the new workspaceId or the refusal text. */
 	async #runWorkspaceCreate(
 		stream: BrowserStream,
 		id: string,
@@ -1339,7 +1298,7 @@ export class FleetEdge {
 	): Promise<void> {
 		try {
 			const entry = await run();
-			this.#answerWorkspaceCreate(stream, id, { daemonId: entry.daemonId });
+			this.#answerWorkspaceCreate(stream, id, { workspaceId: entry.workspaceId });
 		} catch (err) {
 			this.#answerWorkspaceCreate(stream, id, {
 				error: err instanceof Error ? err.message : String(err),
@@ -1372,22 +1331,22 @@ export class FleetEdge {
 		}
 	}
 
-	/** Unicast workspace_create_result: the new row's daemonId, or the failure text. */
+	/** Unicast workspace_create_result: the new row's workspaceId, or the failure text. */
 	#answerWorkspaceCreate(
 		stream: BrowserStream,
 		id: string,
-		outcome: { daemonId: string } | { error: string },
+		outcome: { workspaceId: string } | { error: string },
 	): void {
 		this.#sendAnswer(
 			stream,
-			"daemonId" in outcome
-				? { type: "workspace_create_result", id, ok: true, daemonId: outcome.daemonId }
+			"workspaceId" in outcome
+				? { type: "workspace_create_result", id, ok: true, workspaceId: outcome.workspaceId }
 				: { type: "workspace_create_result", id, ok: false, error: outcome.error },
 		);
 	}
 
 	/**
-	 * spawn_resume: wake an asleep (or failed) daemon, optionally on a picked
+	 * spawn_resume: wake an asleep (or failed) session, optionally on a picked
 	 * session. A no-pick request on a row already connecting, ready or
 	 * reconnecting is idempotent (it joins the in-flight wake and sends no
 	 * error), so a reload's restore racing a wake click, or a second tab, does
@@ -1395,20 +1354,20 @@ export class FleetEdge {
 	 */
 	async #handleSpawnResume(
 		stream: BrowserStream,
-		daemonId: string,
+		workspaceId: string,
 		sessionFile?: string,
 	): Promise<void> {
 		// An explicit no-pick request supersedes an earlier refusal.
-		if (sessionFile === undefined) this.#refusedResumes.delete(daemonId);
+		if (sessionFile === undefined) this.#refusedResumes.delete(workspaceId);
 		// Registered BEFORE the first await, so it is in place before this
 		// spawn_resume is acked. The browser sends its attach only
 		// after that ack, so the attach always finds this entry and waits for
-		// the validation instead of waking the daemon on lastSessionFile and
+		// the validation instead of waking the session on lastSessionFile and
 		// silently dropping the pick. The synchronous registration is what makes
 		// that ordering sufficient.
-		const run = this.#runSpawnResume(daemonId, sessionFile).then(
+		const run = this.#runSpawnResume(workspaceId, sessionFile).then(
 			() => {
-				if (sessionFile !== undefined) this.#refusedResumes.delete(daemonId);
+				if (sessionFile !== undefined) this.#refusedResumes.delete(workspaceId);
 			},
 			(err: unknown) => {
 				const reason = err instanceof Error ? err.message : String(err);
@@ -1420,15 +1379,15 @@ export class FleetEdge {
 				// pick is pending, and a stale reason would fail the wake attach after
 				// the session sleeps again.
 				if (sessionFile !== undefined && !(err instanceof NotAsleepError)) {
-					this.#refusedResumes.set(daemonId, reason);
+					this.#refusedResumes.set(workspaceId, reason);
 				}
 			},
 		);
-		this.#pendingResumes.set(daemonId, run);
+		this.#pendingResumes.set(workspaceId, run);
 		try {
 			await run;
 		} finally {
-			if (this.#pendingResumes.get(daemonId) === run) this.#pendingResumes.delete(daemonId);
+			if (this.#pendingResumes.get(workspaceId) === run) this.#pendingResumes.delete(workspaceId);
 		}
 	}
 
@@ -1439,7 +1398,7 @@ export class FleetEdge {
 	 *
 	 * A no-pick request is idempotent: on a row already being woken or up
 	 * (connecting, ready, reconnecting: the states #handleAttach also wakes
-	 * through) it joins the wake via #waker.wake, which serializes per daemon
+	 * through) it joins the wake via #waker.wake, which serializes per session
 	 * and returns at once when paired. A reload's deep-link restore and the
 	 * row's wake click (or a second tab) race exactly this way. A PICKED
 	 * request on such a row is an error: a running session cannot honor a
@@ -1448,16 +1407,16 @@ export class FleetEdge {
 	 * #refusedResumes: the row is running, so no pick is pending for a later
 	 * attach to protect.
 	 */
-	async #runSpawnResume(daemonId: string, sessionFile?: string): Promise<void> {
+	async #runSpawnResume(workspaceId: string, sessionFile?: string): Promise<void> {
 		// Read synchronously, before any await: once this run yields,
 		// #handleSpawnResume replaces the slot with this run's own promise.
-		const previous = this.#pendingResumes.get(daemonId);
+		const previous = this.#pendingResumes.get(workspaceId);
 		// A back-to-back spawn_resume may still be validating its pick or
 		// starting the wake; re-read the entry after it (entries are REPLACED
 		// on update, so a pre-wait object can carry a stale status).
 		await previous;
-		const entry = this.#registry.get(daemonId);
-		if (!entry) throw new Error(`unknown daemon: ${daemonId}`);
+		const entry = this.#registry.get(workspaceId);
+		if (!entry) throw new Error(`unknown session: ${workspaceId}`);
 		// A workspace the lifecycle gave up on (status "error", lifecycleStage
 		// "failed": any kind) is retried in place by the same start the Retry
 		// button sends.
@@ -1469,7 +1428,7 @@ export class FleetEdge {
 			return;
 		}
 		if (entry.status !== "asleep" && !failed) {
-			throw new NotAsleepError(`daemon ${daemonId} is not asleep (status ${entry.status})`);
+			throw new NotAsleepError(`session ${workspaceId} is not asleep (status ${entry.status})`);
 		}
 		// A dropdown-picked session must belong to this worktree's session
 		// listing; never let an arbitrary path/id reach resume. Clones
@@ -1478,16 +1437,16 @@ export class FleetEdge {
 		let resumeFile: string | undefined;
 		if (sessionFile !== undefined) {
 			if (entry.workspace?.kind === "clone") {
-				const listed = await listCloneDaemonSessions(
+				const listed = await listCloneWorkspaceSessions(
 					this.#logStore,
-					daemonId,
+					workspaceId,
 					RESUME_MEMBERSHIP_LIMIT,
 				);
 				const ok = listed.some((s) => s.id === sessionFile || s.path === sessionFile);
 				if (!ok) throw new Error(`session not in this clone's fleet store: ${sessionFile}`);
 				resumeFile = sessionFile;
 			} else {
-				const listed = await listDaemonSessions(entry.cwd ?? "", RESUME_MEMBERSHIP_LIMIT);
+				const listed = await listWorkspaceSessions(entry.cwd ?? "", RESUME_MEMBERSHIP_LIMIT);
 				const resolved = realpathOf(sessionFile);
 				const ok = listed.some((s) => realpathOf(s.path) === resolved);
 				if (!ok) throw new Error(`session file not in this worktree: ${sessionFile}`);
@@ -1513,36 +1472,40 @@ export class FleetEdge {
 	 * replaces the stream object; the old handler then reaches #openPipe,
 	 * which skips a stream no longer in #browsers.
 	 */
-	async #handleAttach(stream: BrowserStream, daemonId: string, commandId: string): Promise<void> {
+	async #handleAttach(
+		stream: BrowserStream,
+		workspaceId: string,
+		commandId: string,
+	): Promise<void> {
 		const seq = ++stream.attachSeq;
-		if (!this.#registry.get(daemonId)) {
-			this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });
+		if (!this.#registry.get(workspaceId)) {
+			this.#sendAttachOutcome(stream, commandId, { error: `unknown session: ${workspaceId}` });
 			return;
 		}
-		// Re-attach (same or another daemon) closes the previous pipe first.
+		// Re-attach (same or another session) closes the previous pipe first.
 		this.#closePipe(stream);
 		try {
 			// A back-to-back spawn_resume may still be validating its picked
 			// session. Await it, then re-read the entry: registry entries are
 			// REPLACED on update, so a pre-wait object can carry a stale status.
-			await this.#pendingResumes.get(daemonId);
+			await this.#pendingResumes.get(workspaceId);
 			if (stream.attachSeq !== seq) {
 				this.#sendAttachOutcome(stream, commandId, { error: ATTACH_SUPERSEDED });
 				return;
 			}
-			const entry = this.#registry.get(daemonId);
+			const entry = this.#registry.get(workspaceId);
 			if (!entry) {
-				this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });
+				this.#sendAttachOutcome(stream, commandId, { error: `unknown session: ${workspaceId}` });
 				return;
 			}
 			// A refused or failed pick is recorded in #refusedResumes: waking now
 			// would resume lastSessionFile, not the session the user picked.
-			const refused = this.#refusedResumes.get(daemonId);
+			const refused = this.#refusedResumes.get(workspaceId);
 			if (refused !== undefined && entry.status === "asleep") {
 				this.#sendAttachOutcome(stream, commandId, { error: refused });
 				return;
 			}
-			// #waker.wake resolves once the daemon's callback pair is up (or it
+			// #waker.wake resolves once the session's callback pair is up (or it
 			// throws the reason it cannot be); #openPipe then primes the stream.
 			await this.#waker.wake(entry);
 			if (stream.attachSeq !== seq) {
@@ -1555,9 +1518,9 @@ export class FleetEdge {
 			});
 			return;
 		}
-		const current = this.#registry.get(daemonId);
+		const current = this.#registry.get(workspaceId);
 		if (!current) {
-			this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });
+			this.#sendAttachOutcome(stream, commandId, { error: `unknown session: ${workspaceId}` });
 			return;
 		}
 		// #openPipe answers the attach: ok once the callback stream is underway
@@ -1572,7 +1535,7 @@ export class FleetEdge {
 	/**
 	 * Open this browser's dedicated session channel and answer the attach:
 	 * bind a callback virtual stream ("browser/<connId>") on the session's
-	 * pair. The daemon primes and replays per stream, and the edge re-sends
+	 * pair. The session primes and replays per stream, and the edge re-sends
 	 * stream_open after every pair replacement (finding #28), so the attach
 	 * survives drops without a separate dial.
 	 */
@@ -1586,28 +1549,28 @@ export class FleetEdge {
 	}
 
 	/**
-	 * Bind a browser's attach to a daemon's callback virtual stream
-	 * ("browser/<connId>"). The daemon primes + replays per stream: the edge
+	 * Bind a browser's attach to a session's callback virtual stream
+	 * ("browser/<connId>"). The session primes + replays per stream: the edge
 	 * sends stream_open on bind and after every pair replacement, then
-	 * forwards the daemon's frame envelopes verbatim (priming included) to
+	 * forwards the session's frame envelopes verbatim (priming included) to
 	 * this browser. Slow browsers are dropped by #send's cap (drop-and-resume:
 	 * the ring and `after` resume close the gap).
-	 * A torn-down pair surfaces as the terminal "daemon connection lost"
+	 * A torn-down pair surfaces as the terminal "session connection lost"
 	 * error frame; the edge never redials.
 	 */
 	#openCallbackPipe(stream: BrowserStream, entry: RegistryEntry, commandId: string): void {
-		const daemonId = entry.daemonId;
+		const workspaceId = entry.workspaceId;
 		const transport = this.#transport;
 		if (!transport) {
 			this.#sendAttachOutcome(stream, commandId, {
-				error: `daemon ${daemonId} attach is unavailable: no callback transport wired`,
+				error: `session ${workspaceId} attach is unavailable: no callback transport wired`,
 			});
 			return;
 		}
 		const connId = randomUUID();
 		const streamId = `${CALLBACK_BROWSER_STREAM_PREFIX}${connId}`;
 		const pipe: CallbackPipeState = {
-			daemonId,
+			workspaceId,
 			connId,
 			closed: false,
 			pairConnectionId: null,
@@ -1619,18 +1582,18 @@ export class FleetEdge {
 			detach: () => {},
 			unsubscribePair: () => {},
 		};
-		const unsubscribePair = transport.onPairChange(daemonId, () => {
+		const unsubscribePair = transport.onPairChange(workspaceId, () => {
 			if (stream.pipe !== pipe || pipe.closed) return;
 			this.#sendStreamOpen(stream, pipe);
 		});
 		pipe.unsubscribePair = unsubscribePair;
-		pipe.detach = () => transport.detachVirtualStream(daemonId, streamId);
+		pipe.detach = () => transport.detachVirtualStream(workspaceId, streamId);
 		stream.pipe = pipe;
 		// Attach accepted: the stream is bound below, and from here the
 		// transport owns pair liveness (stream_open re-sends on pair change);
 		// the browser is attached. Progress rides the lifecycleStage roster
 		// broadcasts; attach_result acknowledges the attach as accepted.
-		this.#sendAttachOutcome(stream, commandId, { sessionId: daemonId });
+		this.#sendAttachOutcome(stream, commandId, { workspaceId });
 		const sink: VirtualStreamSink = {
 			deliver: (envelope, payloadJson) => {
 				if (stream.pipe !== pipe || pipe.closed) return;
@@ -1639,7 +1602,7 @@ export class FleetEdge {
 				this.#recordCredit(stream, pipe, before, envelope.seq);
 			},
 		};
-		transport.attachVirtualStream(daemonId, streamId, sink);
+		transport.attachVirtualStream(workspaceId, streamId, sink);
 		if (stream.pipe !== pipe || pipe.closed) {
 			pipe.detach();
 			pipe.unsubscribePair();
@@ -1647,23 +1610,23 @@ export class FleetEdge {
 		}
 		// Pair already live at bind: prime now; onPairChange handles later
 		// replacements (and the very first pair-ready when ensure returned
-		// before the daemon dialed).
-		if (transport.pairStatus(daemonId).paired) this.#sendStreamOpen(stream, pipe);
+		// before the session dialed).
+		if (transport.pairStatus(workspaceId).paired) this.#sendStreamOpen(stream, pipe);
 	}
 
 	/**
 	 * Send stream_open on this browser's callback stream (prime / re-prime), once
-	 * per daemon pair. Every pair has its own connectionId (one socket, never
-	 * resumed), so each new pair is a fresh session pipe: the daemon re-primes it.
+	 * per session pair. Every pair has its own connectionId (one socket, never
+	 * resumed), so each new pair is a fresh session pipe: the session re-primes it.
 	 */
 	#sendStreamOpen(stream: BrowserStream, pipe: CallbackPipeState): void {
 		const transport = this.#transport;
 		if (!transport || pipe.closed) return;
-		const status = transport.pairStatus(pipe.daemonId);
+		const status = transport.pairStatus(pipe.workspaceId);
 		if (!status.paired || status.connectionId === null) return;
 		if (pipe.pairConnectionId === status.connectionId) return;
 		pipe.pairConnectionId = status.connectionId;
-		// Every stream_open restarts the daemon's credit ledger (and ours): frames
+		// Every stream_open restarts the session's credit ledger (and ours): frames
 		// it sent before this open are never acknowledged.
 		pipe.credits = [];
 		pipe.creditHead = 0;
@@ -1672,7 +1635,7 @@ export class FleetEdge {
 		pipe.ackedDrained = stream.enqueuedBytes - this.#bufferedBytes(stream);
 		const open: StreamOpenControl = { type: "stream_open" };
 		transport
-			.sendToDaemon(pipe.daemonId, {
+			.sendToSession(pipe.workspaceId, {
 				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
 				kind: "control",
 				payload: open,
@@ -1684,7 +1647,7 @@ export class FleetEdge {
 	}
 
 	/** Route one callback envelope from a browser's clone stream: frame
-	 * envelopes forward verbatim (daemon priming + deltas); stream_resync
+	 * envelopes forward verbatim (session priming + deltas); stream_resync
 	 * controls surface as a stream_reset so the client re-primes; command /
 	 * heartbeat are ignored (wrong-direction or transport liveness). */
 	#onCallbackEnvelope(
@@ -1698,10 +1661,10 @@ export class FleetEdge {
 			const payload = envelope.payload;
 			if (typeof payload === "object" && payload !== null && "type" in payload) {
 				if (payload.type === "stream_resync") {
-					// The daemon dropped frames on ITS outbound buffer and pushes a
+					// The session dropped frames on ITS outbound buffer and pushes a
 					// fresh snapshot after this marker; mirror the callback pipe's
 					// stream_reset so the client re-primes (never a silent gap).
-					this.#sendDelta(stream, { type: "stream_reset", reason: "daemon_resync" });
+					this.#sendDelta(stream, { type: "stream_reset", reason: "session_resync" });
 				}
 			}
 			return;
@@ -1714,19 +1677,19 @@ export class FleetEdge {
 	/**
 	 * Forward a session frame: proto-gate then forward hello_ok, since the
 	 * browser's own gate needs it when proxied through the edge (finding #61);
-	 * tap and strip per-daemon broker rosters; STAMP sessionId = daemonId on
+	 * tap and strip per-session broker rosters; STAMP workspaceId on
 	 * every session-scoped frame (omp-session no longer sends one) and on
-	 * `attached` (its required "s1" must read as the daemonId through the
+	 * `attached` (its required "s1" must read as the workspaceId through the
 	 * edge). Global frames pass unchanged. Every forwarded frame is an
 	 * edge-local delta for this browser (a fresh seq; RINGED only for the
-	 * daemon's delta types, see #sendDelta, and recoverable via `after`;
+	 * session's delta types, see #sendDelta, and recoverable via `after`;
 	 * unringed priming/answer frames are re-derived on re-attach). The
 	 * payload is the already-parsed frame object (an envelope payload is
 	 * verbatim JSON); every decision (gate, strip, stamp, answer routing, ring
 	 * class) reads that parsed view. When `payloadJson` (the frame's own wire
 	 * text, which the browser will JSON.parse) is present, it is forwarded
 	 * instead of re-serializing the parsed frame: every transform here is the
-	 * identity or the sessionId stamp, which relayJson splices into the text
+	 * identity or the workspaceId stamp, which relayJson splices into the text
 	 * (last key wins, as with the spread). Shared by every session stream so
 	 * session semantics stay identical.
 	 */
@@ -1737,19 +1700,19 @@ export class FleetEdge {
 		payloadJson?: string,
 	): void {
 		if (frame.type === "hello_ok") {
-			// Proto gate: a daemon speaking a different OMP_PROTO is not
+			// Proto gate: a session speaking a different OMP_PROTO is not
 			// drivable, so the stream is terminal. The transport owns the pair;
 			// surface the error to the browser and detach this stream.
 			if (Number(frame.proto) !== OMP_PROTO) {
 				this.#callbackLost(
 					stream,
 					pipe,
-					`proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`,
+					`proto mismatch: session speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`,
 				);
 				return;
 			}
 			// Finding #61: the gate above proved proto === OMP_PROTO, so
-			// forwarding the daemon's REAL hello_ok gives the browser's own
+			// forwarding the session's REAL hello_ok gives the browser's own
 			// proto check something to run against on the edge stream too (the
 			// edge's priming is roster + daemons only). Falls through to the
 			// stamping + #sendDelta below like any other global frame.
@@ -1759,24 +1722,24 @@ export class FleetEdge {
 			// NEVER forwarded: browsers only ever see the edge's single
 			// merged frame (#broadcastDaemons).
 			if (Array.isArray(frame.daemons))
-				this.#ingestDaemons(pipe.daemonId, frame.daemons as DaemonInfo[]);
+				this.#ingestDaemons(pipe.workspaceId, frame.daemons as DaemonInfo[]);
 			return;
 		}
-		if (frame.type === "daemon_activity") {
-			// daemon_activity is edge-generated and fleet-scoped: daemons never
+		if (frame.type === "session_activity") {
+			// session_activity is edge-generated and fleet-scoped: sessions never
 			// send it, but strip it like `daemons` broker rosters if one ever
 			// does; the edge owns the only activity frame browsers see.
 			return;
 		}
-		const stamp =
-			SESSION_SCOPED_FRAME_TYPES[String(frame.type)] === true || frame.type === "attached";
+		const stamp = isSessionScopedFrameType(String(frame.type)) || frame.type === "attached";
 		const json =
 			payloadJson === undefined
 				? undefined
-				: relayJson(payloadJson, stamp ? pipe.daemonId : undefined);
-		const outgoing = json === undefined && stamp ? { ...frame, sessionId: pipe.daemonId } : frame;
+				: relayJson(payloadJson, stamp ? pipe.workspaceId : undefined);
+		const outgoing =
+			json === undefined && stamp ? { ...frame, workspaceId: pipe.workspaceId } : frame;
 		// Id-keyed answers go to the browser that asked, not to every browser
-		// whose pipe happens to carry the daemon's broadcast copy. The stamp
+		// whose pipe happens to carry the session's broadcast copy. The stamp
 		// never touches `id` or `type`, so routing reads the same on either view.
 		if (this.#routeAnswer(frame, outgoing, json)) return;
 		this.#sendDelta(stream, outgoing, json);
@@ -1786,7 +1749,7 @@ export class FleetEdge {
 	#callbackLost(
 		stream: BrowserStream,
 		pipe: CallbackPipeState,
-		message = "daemon connection lost",
+		message = "session connection lost",
 	): void {
 		if (pipe.closed) return; // intentional teardown already released
 		pipe.closed = true;
@@ -1796,18 +1759,18 @@ export class FleetEdge {
 		this.#sendError(stream, message);
 	}
 
-	/** Intentional stream teardown (browser close / re-attach / removal): tell the daemon the stream closed, then detach. */
+	/** Intentional stream teardown (browser close / re-attach / removal): tell the session the stream closed, then detach. */
 	#closePipe(stream: BrowserStream): void {
 		const pipe = stream.pipe;
 		if (!pipe) return;
 		stream.pipe = null;
 		pipe.closed = true;
-		// Callback: tell the daemon the stream closed, then unbind. Best
+		// Callback: tell the session the stream closed, then unbind. Best
 		// effort. A missing pair (stop/delete already tore it down) makes
-		// sendToDaemon throw, which is fine: the detach below is the
-		// authority, and the daemon GCs orphan streams itself.
+		// sendToSession throw, which is fine: the detach below is the
+		// authority, and the session GCs orphan streams itself.
 		this.#transport
-			?.sendToDaemon(pipe.daemonId, {
+			?.sendToSession(pipe.workspaceId, {
 				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
 				kind: "control",
 				payload: { type: "stream_close" },
@@ -1862,8 +1825,8 @@ export class FleetEdge {
 		// waiting for exactly this frame type.
 		const refusal = this.#recordForwardOrigin(
 			stream.client.clientId,
-			pipe.daemonId,
-			transport.pairStatus(pipe.daemonId).authorizedGeneration,
+			pipe.workspaceId,
+			transport.pairStatus(pipe.workspaceId).authorizedGeneration,
 			commandId,
 			String(cmd.type),
 		);
@@ -1878,7 +1841,7 @@ export class FleetEdge {
 		}
 		const origin = this.#forwardOrigins.get(commandId);
 		transport
-			.sendToDaemon(pipe.daemonId, {
+			.sendToSession(pipe.workspaceId, {
 				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
 				kind: "command",
 				payload: cmd,
@@ -1905,7 +1868,7 @@ export class FleetEdge {
 	 */
 	#recordForwardOrigin(
 		clientId: string | null,
-		daemonId: string,
+		workspaceId: string,
 		generation: number | null,
 		id: string,
 		type: string,
@@ -1915,9 +1878,9 @@ export class FleetEdge {
 		const now = Date.now();
 		const existing = this.#forwardOrigins.get(id);
 		if (existing !== undefined && !existing.delivered) {
-			if (existing.daemonId === daemonId && existing.generation !== generation) {
+			if (existing.workspaceId === workspaceId && existing.generation !== generation) {
 				this.#forwardOrigins.delete(id);
-				return `daemon restarted before this command was answered (generation ${String(existing.generation)} → ${String(generation)}); re-issue it`;
+				return `session restarted before this command was answered (generation ${String(existing.generation)} → ${String(generation)}); re-issue it`;
 			}
 			// Still the same generation: refresh the TTL so routing survives as
 			// long as the client keeps replaying, and keep the FIRST origin.
@@ -1929,7 +1892,7 @@ export class FleetEdge {
 		}
 		this.#forwardOrigins.set(id, {
 			clientId,
-			daemonId,
+			workspaceId,
 			generation,
 			delivered: false,
 			sent: existing?.sent === true,
@@ -1947,9 +1910,9 @@ export class FleetEdge {
 	}
 
 	/**
-	 * Route one id-keyed answer from a daemon pipe to the browser that asked.
+	 * Route one id-keyed answer from a session pipe to the browser that asked.
 	 * Returns true when the frame was consumed: delivered to the origin, or a
-	 * duplicate copy of an answer that already reached it (the daemon
+	 * duplicate copy of an answer that already reached it (the session
 	 * broadcasts to every pipe, so every browser's pipe sees every answer).
 	 * False leaves the frame to normal forwarding: an answer this edge never
 	 * forwarded a command for has no origin to correlate with.
@@ -2014,7 +1977,7 @@ export class FleetEdge {
 	/**
 	 * Note how far the browser's socket has drained this stream's queue: move
 	 * the stall clock, retire the drain checkpoints it passed, and acknowledge
-	 * the daemon (stream_ack) once STREAM_ACK_STEP_BYTES more drained, or at
+	 * the session (stream_ack) once STREAM_ACK_STEP_BYTES more drained, or at
 	 * once with `flush` (the periodic sweep, so a tail below the step is never
 	 * left unacknowledged).
 	 */
@@ -2045,7 +2008,7 @@ export class FleetEdge {
 		pipe.ackedDrained = drained;
 		const ack: StreamAckControl = { type: "stream_ack", seq: pipe.drainedSeq };
 		this.#transport
-			?.sendToDaemon(pipe.daemonId, {
+			?.sendToSession(pipe.workspaceId, {
 				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
 				kind: "control",
 				payload: ack,
@@ -2056,7 +2019,7 @@ export class FleetEdge {
 	}
 
 	/**
-	 * Record that the daemon envelope `seq` was consumed into this stream's queue
+	 * Record that the session envelope `seq` was consumed into this stream's queue
 	 * (forwarded, consumed, or dropped alike): it is acknowledged once the queue
 	 * has drained past the bytes enqueued so far. `start` is the queue's byte
 	 * total before the envelope was processed.
@@ -2074,12 +2037,12 @@ export class FleetEdge {
 	}
 
 	/**
-	 * One live daemon-pipe frame as an edge-local delta: RINGED only when the
-	 * daemon would ring it (mirror of its RING_DELTAS, finding #5); priming
+	 * One live session-pipe frame as an edge-local delta: RINGED only when the
+	 * session would ring it (mirror of its RING_DELTAS, finding #5); priming
 	 * frames (hello_ok, attached, history, available_commands), unicast
 	 * answers (call_result) and per-stream lifecycle (stream_reset) are
 	 * re-derivable (re-attach priming / re-sent command) and consume a seq but
-	 * no ring entry, exactly like the daemon's delta counter. A resuming
+	 * no ring entry, exactly like the session's delta counter. A resuming
 	 * browser's ring replay therefore has the same deliberate gaps and is
 	 * still correct: after() returns only ringed entries newer than `after`,
 	 * and the client re-attaches on every reconnect open, re-deriving
@@ -2124,13 +2087,13 @@ export class FleetEdge {
 	#sendAttachOutcome(
 		stream: BrowserStream,
 		commandId: string,
-		outcome: { sessionId: string } | { error: string },
+		outcome: { workspaceId: string } | { error: string },
 	): void {
 		this.#sendAnswer(
 			stream,
 			"error" in outcome
 				? { type: "attach_result", id: commandId, ok: false, error: outcome.error }
-				: { type: "attach_result", id: commandId, ok: true, sessionId: outcome.sessionId },
+				: { type: "attach_result", id: commandId, ok: true, workspaceId: outcome.workspaceId },
 		);
 	}
 
@@ -2294,38 +2257,38 @@ export class FleetEdge {
 	// ---------------------------------------------------------------------
 
 	/**
-	 * Keep a frame tap on every registered daemon and drop taps for removed
-	 * ones (evicting their cached rosters). Every daemon is tapped on its
+	 * Keep a frame tap on every registered session and drop taps for removed
+	 * ones (evicting their cached rosters). Every session is tapped on its
 	 * callback pair's mirrored "control" stream. Idempotent; runs on every
 	 * registry change and once at construction.
 	 */
 	#reconcileDaemonTaps(): void {
-		const live = new Set(this.#registry.list().map((entry) => entry.daemonId));
+		const live = new Set(this.#registry.list().map((entry) => entry.workspaceId));
 		let evicted = false;
-		for (const [daemonId, unsubscribe] of this.#daemonTaps) {
-			if (live.has(daemonId)) continue;
+		for (const [workspaceId, unsubscribe] of this.#daemonTaps) {
+			if (live.has(workspaceId)) continue;
 			unsubscribe();
-			this.#daemonTaps.delete(daemonId);
-			this.#daemonsAggregator.remove(daemonId);
-			// A removed daemon's activity is gone too: never primed, never broadcast.
-			this.#daemonActivity.delete(daemonId);
+			this.#daemonTaps.delete(workspaceId);
+			this.#daemonsAggregator.remove(workspaceId);
+			// A removed session's activity is gone too: never primed, never broadcast.
+			this.#sessionActivity.delete(workspaceId);
 			evicted = true;
 		}
 		for (const entry of this.#registry.list()) {
-			if (this.#daemonTaps.has(entry.daemonId)) continue;
+			if (this.#daemonTaps.has(entry.workspaceId)) continue;
 			const handleFrame = (frame: ServerFrame): void => {
-				// Derive realtime activity from the RAW daemon frames; the tap
-				// sees them BEFORE the edge stamps sessionId on proxy pipes, and
-				// never reads daemon_activity back (daemons never send it; the
+				// Derive realtime activity from the RAW session frames; the tap
+				// sees them BEFORE the edge stamps workspaceId on proxy pipes, and
+				// never reads session_activity back (sessions never send it; the
 				// pipe forwarder strips it like `daemons` broker rosters).
 				switch (frame.type) {
 					case "daemons":
-						if (Array.isArray(frame.daemons)) this.#ingestDaemons(entry.daemonId, frame.daemons);
+						if (Array.isArray(frame.daemons)) this.#ingestDaemons(entry.workspaceId, frame.daemons);
 						break;
 					case "state": {
 						// A state snapshot carrying the session's pending ui_request ids is
 						// authoritative for the open-dialog set: the control mirror is not
-						// replayed across a pair drop and a restarted daemon never sends
+						// replayed across a pair drop and a restarted session never sends
 						// ui_request_end for the dead process's dialogs, so deltas alone can
 						// stick or miss `blocked`. The session publishes state at every
 						// pair-up. Older sessions omit the field: deltas only.
@@ -2334,30 +2297,30 @@ export class FleetEdge {
 							streaming: frame.state?.isStreaming === true,
 						};
 						if (Array.isArray(pending)) {
-							const openDialogIds = this.#ensureActivity(entry.daemonId).openDialogIds;
+							const openDialogIds = this.#ensureActivity(entry.workspaceId).openDialogIds;
 							openDialogIds.clear();
 							for (const id of pending) if (typeof id === "string") openDialogIds.add(id);
 							patch.blocked = openDialogIds.size > 0;
 						}
-						this.#setActivity(entry.daemonId, patch);
-						// The session file the daemon is on is what respawn resumes
+						this.#setActivity(entry.workspaceId, patch);
+						// The session file the session is on is what respawn resumes
 						// (`--resume <lastSessionFile>`); record it whenever it changes.
-						// lastSessionPersisted is the daemon's report that the SDK has
+						// lastSessionPersisted is the session's report that the SDK has
 						// written that file: sticky for it, reset when the file changes.
 						const state = frame.state as
 							| { sessionFile?: unknown; sessionPersisted?: unknown }
 							| undefined;
 						const sessionFile = state?.sessionFile;
 						if (typeof sessionFile === "string" && sessionFile !== "") {
-							const current = this.#registry.get(entry.daemonId);
+							const current = this.#registry.get(entry.workspaceId);
 							const persisted = state?.sessionPersisted === true;
 							if (current?.lastSessionFile !== sessionFile) {
-								this.#registry.update(entry.daemonId, {
+								this.#registry.update(entry.workspaceId, {
 									lastSessionFile: sessionFile,
 									lastSessionPersisted: persisted ? true : undefined,
 								});
 							} else if (persisted && current?.lastSessionPersisted !== true) {
-								this.#registry.update(entry.daemonId, { lastSessionPersisted: true });
+								this.#registry.update(entry.workspaceId, { lastSessionPersisted: true });
 							}
 						}
 						break;
@@ -2369,19 +2332,19 @@ export class FleetEdge {
 						// send none), so the mirrored agent_start event is what flips a
 						// detached row to working. The next state frame stays authoritative.
 						if (frame.event?.type === "agent_start")
-							this.#setActivity(entry.daemonId, { streaming: true });
+							this.#setActivity(entry.workspaceId, { streaming: true });
 						break;
 					case "ui_request": {
-						const activity = this.#ensureActivity(entry.daemonId);
+						const activity = this.#ensureActivity(entry.workspaceId);
 						if (activity.openDialogIds.has(frame.id)) break; // replay of the same open
 						activity.openDialogIds.add(frame.id);
-						this.#setActivity(entry.daemonId, { blocked: true });
+						this.#setActivity(entry.workspaceId, { blocked: true });
 						break;
 					}
 					case "ui_request_end": {
-						const activity = this.#daemonActivity.get(entry.daemonId);
+						const activity = this.#sessionActivity.get(entry.workspaceId);
 						if (activity && activity.openDialogIds.delete(frame.id)) {
-							this.#setActivity(entry.daemonId, { blocked: activity.openDialogIds.size > 0 });
+							this.#setActivity(entry.workspaceId, { blocked: activity.openDialogIds.size > 0 });
 						}
 						break;
 					}
@@ -2391,11 +2354,11 @@ export class FleetEdge {
 			};
 			const transport = this.#transport;
 			if (!transport) continue;
-			// Daemons mirror their session frames onto the callback pair's
+			// Sessions mirror their session frames onto the callback pair's
 			// control stream; the unsubscribe tears the tap down on eviction.
 			this.#daemonTaps.set(
-				entry.daemonId,
-				transport.onDaemonEnvelope(entry.daemonId, (envelope) => {
+				entry.workspaceId,
+				transport.onSessionEnvelope(entry.workspaceId, (envelope) => {
 					if (envelope.kind !== "frame" || envelope.streamId !== CALLBACK_CONTROL_STREAM_ID) return;
 					const payload = envelope.payload;
 					if (typeof payload === "object" && payload !== null) {
@@ -2407,24 +2370,24 @@ export class FleetEdge {
 		if (evicted) this.#broadcastDaemons();
 	}
 
-	/** Get-or-create a daemon's activity state (starts UNKNOWN). */
-	#ensureActivity(daemonId: string): DaemonActivity {
-		let activity = this.#daemonActivity.get(daemonId);
+	/** Get-or-create a session's activity state (starts UNKNOWN). */
+	#ensureActivity(workspaceId: string): SessionActivity {
+		let activity = this.#sessionActivity.get(workspaceId);
 		if (!activity) {
 			activity = { known: false, streaming: false, blocked: false, openDialogIds: new Set() };
-			this.#daemonActivity.set(daemonId, activity);
+			this.#sessionActivity.set(workspaceId, activity);
 		}
 		return activity;
 	}
 
 	/**
-	 * Merge one dimension of a daemon's activity and broadcast ONLY on an
+	 * Merge one dimension of a session's activity and broadcast ONLY on an
 	 * actual change (unknown→known counts as a change so the first derivable
 	 * frame always surfaces). Not broadcast on removal; the roster status
 	 * change dominates the row client-side.
 	 */
-	#setActivity(daemonId: string, patch: { streaming?: boolean; blocked?: boolean }): void {
-		const activity = this.#ensureActivity(daemonId);
+	#setActivity(workspaceId: string, patch: { streaming?: boolean; blocked?: boolean }): void {
+		const activity = this.#ensureActivity(workspaceId);
 		const changed =
 			!activity.known ||
 			(patch.streaming !== undefined && patch.streaming !== activity.streaming) ||
@@ -2433,14 +2396,14 @@ export class FleetEdge {
 		if (patch.blocked !== undefined) activity.blocked = patch.blocked;
 		activity.known = true;
 		if (!changed) return;
-		this.#broadcastActivity(daemonId);
+		this.#broadcastActivity(workspaceId);
 	}
 
 	/**
 	 * A row whose process is gone (asleep, error) or is being launched again
 	 * (stage preparation/runtime: a restart proves its predecessor dead first)
 	 * has no turn and no open dialog. Only a live process's state frame clears
-	 * what agent_start or ui_request set, so without this a daemon that died
+	 * what agent_start or ui_request set, so without this a session that died
 	 * mid-turn would prime a stale spinner until its next pair-up state.
 	 */
 	#resetActivityOfGoneRuntime(entry: RegistryEntry): void {
@@ -2450,28 +2413,28 @@ export class FleetEdge {
 			entry.lifecycleStage === "preparation" ||
 			entry.lifecycleStage === "runtime";
 		if (!gone) return;
-		const activity = this.#daemonActivity.get(entry.daemonId);
+		const activity = this.#sessionActivity.get(entry.workspaceId);
 		if (!activity?.known) return;
 		activity.openDialogIds.clear();
-		this.#setActivity(entry.daemonId, { streaming: false, blocked: false });
+		this.#setActivity(entry.workspaceId, { streaming: false, blocked: false });
 	}
 
 	/**
-	 * Broadcast one daemon_activity frame to every edge stream. NEVER ringed
+	 * Broadcast one session_activity frame to every edge stream. NEVER ringed
 	 * (like registered_projects): the frame is re-derivable from the next
 	 * open's priming, and a ring replay after priming would regress the
 	 * client to a stale value.
 	 */
-	#broadcastActivity(daemonId: string): void {
-		const activity = this.#daemonActivity.get(daemonId);
+	#broadcastActivity(workspaceId: string): void {
+		const activity = this.#sessionActivity.get(workspaceId);
 		if (!activity) return;
-		// A removed daemon's tap is gone, but be defensive: never broadcast
+		// A removed session's tap is gone, but be defensive: never broadcast
 		// activity for an id the edge no longer manages.
-		if (!this.#registry.get(daemonId)) return;
+		if (!this.#registry.get(workspaceId)) return;
 		this.#broadcast(
 			{
-				type: "daemon_activity",
-				daemonId,
+				type: "session_activity",
+				workspaceId,
 				streaming: activity.streaming,
 				blocked: activity.blocked,
 			},
@@ -2481,20 +2444,20 @@ export class FleetEdge {
 
 	/**
 	 * Delete-gate admission signal: the derived realtime activity of
-	 * one daemon. UNKNOWN (known:false) until the first derivable frame; a
-	 * daemon with no observed activity cannot be proven idle, so callers
-	 * refuse deletion while it is live. `live` reports whether the daemon's
-	 * callback pair is currently up (the fleet observes every daemon's
+	 * one session. UNKNOWN (known:false) until the first derivable frame; a
+	 * session with no observed activity cannot be proven idle, so callers
+	 * refuse deletion while it is live. `live` reports whether the session's
+	 * callback pair is currently up (the fleet observes every session's
 	 * accepted work only through that pair). Read-only: never mutates.
 	 */
-	daemonActivity(daemonId: string): {
+	sessionActivity(workspaceId: string): {
 		streaming: boolean;
 		blocked: boolean;
 		known: boolean;
 		live: boolean;
 	} {
-		const live = this.#transport?.pairStatus(daemonId).paired ?? false;
-		const activity = this.#daemonActivity.get(daemonId);
+		const live = this.#transport?.pairStatus(workspaceId).paired ?? false;
+		const activity = this.#sessionActivity.get(workspaceId);
 		if (!activity) return { streaming: false, blocked: false, known: false, live };
 		return {
 			streaming: activity.streaming,
@@ -2504,14 +2467,14 @@ export class FleetEdge {
 		};
 	}
 
-	/** Cache a daemon's latest broker roster and broadcast the merged frame. */
-	#ingestDaemons(daemonId: string, entries: DaemonInfo[]): void {
-		// Removed daemons' frames are ignored: eviction is final even when a
+	/** Cache a session's latest broker roster and broadcast the merged frame. */
+	#ingestDaemons(workspaceId: string, entries: DaemonInfo[]): void {
+		// Removed sessions' frames are ignored: eviction is final even when a
 		// stale browser pipe keeps delivering (registry removal unsubscribes
 		// the control tap; pipes are only closed on browser close/re-attach).
-		const entry = this.#registry.get(daemonId);
+		const entry = this.#registry.get(workspaceId);
 		if (!entry) return;
-		this.#daemonsAggregator.ingest(daemonId, entries, entry.cwd);
+		this.#daemonsAggregator.ingest(workspaceId, entries, entry.cwd);
 		this.#broadcastDaemons();
 	}
 
@@ -2530,26 +2493,26 @@ export class FleetEdge {
 	// ---------------------------------------------------------------------
 
 	/** GET /ctl/sessions/{id}/stderr: 404 for unknown/non-spawned entries. */
-	#handleStderr(daemonId: string): Response {
-		const entry = this.#registry.get(daemonId);
+	#handleStderr(workspaceId: string): Response {
+		const entry = this.#registry.get(workspaceId);
 		if (!entry) {
 			return json({ error: "not found" }, 404);
 		}
-		return json({ text: this.#lifecycle.sessionLogTail(daemonId) });
+		return json({ text: this.#lifecycle.sessionLogTail(workspaceId) });
 	}
 
 	/**
 	 * GET /ctl/sessions/{id}/download?path=…: session-file download over the
 	 * session's callback pair. The fleet issues a capture bulk correlation and
-	 * a download_bulk command on the transport control stream; the daemon
+	 * a download_bulk command on the transport control stream; the session
 	 * streams the file back over POST /callback/bulk (multi-part under the 64
 	 * MiB aggregate cap). Rides the server-level auth gate (BrowserAuth) and
-	 * never touches the fleet's own filesystem. Unknown daemon → 404; missing
+	 * never touches the fleet's own filesystem. Unknown session → 404; missing
 	 * transport → 503; no live pair or too many concurrent downloads → 503; a
-	 * failed transfer (daemon-reported, cancelled, expired) → 502 with the reason.
+	 * failed transfer (session-reported, cancelled, expired) → 502 with the reason.
 	 */
-	async #handleDownload(req: Request, daemonId: string): Promise<Response> {
-		if (!this.#registry.get(daemonId)) return json({ error: "not found" }, 404);
+	async #handleDownload(req: Request, workspaceId: string): Promise<Response> {
+		if (!this.#registry.get(workspaceId)) return json({ error: "not found" }, 404);
 		const path = new URL(req.url).searchParams.get("path");
 		if (typeof path !== "string" || path === "") {
 			return json({ error: "download requires a ?path=" }, 400);
@@ -2560,25 +2523,28 @@ export class FleetEdge {
 		}
 		let correlation: BulkCorrelation;
 		try {
-			correlation = transport.createBulkCorrelation(daemonId, { capture: true });
+			correlation = transport.createBulkCorrelation(workspaceId, { capture: true });
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : "bulk transport busy";
 			return json({ error: `download unavailable: ${reason}` }, 503);
 		}
-		// A browser that goes away, or a daemon that never took the command,
+		// A browser that goes away, or a session that never took the command,
 		// fails the transfer now instead of holding its buffered parts until expiry.
 		const onAbort = (): void => correlation.cancel("download request aborted");
 		req.signal.addEventListener("abort", onAbort, { once: true });
 		try {
 			try {
-				await transport.sendToDaemon(daemonId, {
+				await transport.sendToSession(workspaceId, {
 					streamId: CALLBACK_CONTROL_STREAM_ID,
 					kind: "command",
 					payload: { type: "download_bulk", correlationId: correlation.correlationId, path },
 				});
 			} catch {
 				correlation.cancel("download command not delivered");
-				return json({ error: `download unavailable: ${daemonId} has no live callback pair` }, 503);
+				return json(
+					{ error: `download unavailable: ${workspaceId} has no live callback pair` },
+					503,
+				);
 			}
 			const result = await correlation.done;
 			if (result.state !== "received" || result.chunks === undefined) {
@@ -2620,9 +2586,9 @@ export class FleetEdge {
 		const hostSnap = this.#lifecycle.hostSnapshot();
 		const sessions = this.#registry.list().map((entry) => {
 			const uptimeBase = entry.readyAt ?? entry.registeredAt;
-			const status = this.#transport?.pairStatus(entry.daemonId);
+			const status = this.#transport?.pairStatus(entry.workspaceId);
 			const session: Record<string, unknown> = {
-				daemonId: entry.daemonId,
+				workspaceId: entry.workspaceId,
 				name: entry.name,
 				status: entry.status,
 				registeredAt: entry.registeredAt,
@@ -2636,7 +2602,7 @@ export class FleetEdge {
 			if (entry.pid !== undefined) session.pid = entry.pid;
 			if (entry.readyAt !== undefined) session.readyAt = entry.readyAt;
 			if (entry.error !== undefined) session.error = entry.error;
-			const hostRuntime = hostSnap[entry.daemonId];
+			const hostRuntime = hostSnap[entry.workspaceId];
 			if (hostRuntime) session.host = hostRuntime;
 			return session;
 		});

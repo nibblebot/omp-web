@@ -1,7 +1,7 @@
 /**
  * FleetLogStore durable-behavior regressions (callback safety
  * surface): contiguous append and post-reconnect duplicate replay, gap
- * repair without byte loss, daemon-side rewrite forcing resync from zero,
+ * repair without byte loss, session-side rewrite forcing resync from zero,
  * reload after crash-partial record/index disagreement, the remaining
  * load() repair kinds (stale tmp removal, complete-line forward adoption,
  * invalid index keys, unsafe dirs, vanished files), read-only rejection, and
@@ -159,7 +159,7 @@ describe("FleetLogStore contiguous append and duplicate replay", () => {
 		);
 
 		// A resend that starts below the acked offset but extends past it (the
-		// daemon's file is ahead of its last ack) appends ONLY the missing
+		// session's file is ahead of its last ack) appends ONLY the missing
 		// suffix: the already-durable prefix must never be written twice.
 		const l3 = recordLine("main", 3);
 		const heal = store.ingest(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(0, 1, l1 + l2 + l3));
@@ -208,7 +208,7 @@ describe("FleetLogStore gap repair without byte loss", () => {
 			Buffer.from(l1 + l2, "utf8"),
 		);
 
-		// The repair: the daemon re-streams from the acked offset (log_gap
+		// The repair: the session re-streams from the acked offset (log_gap
 		// repair). Every byte of the intended stream must be present exactly
 		// once afterward, across a reload too.
 		const o3 = ingestAcked(afterGap, MAIN_RELPATH, chunkAt(o2, 1, l3));
@@ -231,7 +231,7 @@ describe("FleetLogStore rewrite resync from zero", () => {
 		const oldEnd = ingestAcked(store, MAIN_RELPATH, chunkAt(0, 1, gen1a));
 		ingestAcked(store, MAIN_RELPATH, chunkAt(oldEnd, 1, gen1b));
 
-		// Daemon-side atomic rewrite: new file identity arrives at generation 2
+		// Session-side atomic rewrite: new file identity arrives at generation 2
 		// starting at offset 0. The stored gen-1 bytes must be truncated: a
 		// resync from zero, never a mixed old+new file.
 		const r1 = recordLine("rewritten", 1);
@@ -323,7 +323,7 @@ describe("FleetLogStore reload after crash-partial disagreement", () => {
 		const o1 = ingestAcked(store, MAIN_RELPATH, chunkAt(0, 1, l1));
 		const o2 = ingestAcked(store, MAIN_RELPATH, chunkAt(o1, 1, l2));
 
-		// Crash after the daemon fsynced a complete l3 record but before the
+		// Crash after the session fsynced a complete l3 record but before the
 		// index rename, with a torn partial l4 write on top: the file is longer
 		// than the index and ends without a newline.
 		const l4Partial = '{"type":"message","id":"main-4","seq":4,"pad":"' + "y".repeat(37); // no newline
@@ -344,7 +344,7 @@ describe("FleetLogStore reload after crash-partial disagreement", () => {
 		const after = FleetLogStore.load(rootDir);
 		expect(after.loadReport.repairs).toEqual([]);
 
-		// The daemon re-streams the dropped l4 from the healed acked offset:
+		// The session re-streams the dropped l4 from the healed acked offset:
 		// appends cleanly, nothing duplicated, nothing valid lost.
 		const healed = o2 + l3.length;
 		const o4 = ingestAcked(after, MAIN_RELPATH, chunkAt(healed, 1, l4));
@@ -382,7 +382,7 @@ describe("FleetLogStore reload after crash-partial disagreement", () => {
 		);
 		expect(repair).toMatchObject({ from: acked, to: durable });
 
-		// The daemon re-streams the missing tail from the healed offset: full
+		// The session re-streams the missing tail from the healed offset: full
 		// byte restoration, no duplication of the surviving prefix.
 		const restored = ingestAcked(reloaded, MAIN_RELPATH, chunkAt(durable, 1, l3));
 		expect(restored).toBe(acked);
@@ -674,7 +674,7 @@ describe("FleetLogStore load repair sweep", () => {
 		const store = new FleetLogStore({ rootDir });
 		ingestAcked(store, MAIN_RELPATH, chunkAt(0, 1, l1));
 
-		// Crash after the daemon fsynced a complete l2 but before the index
+		// Crash after the session fsynced a complete l2 but before the index
 		// rename: the file ends with a newline (no torn tail to cut back).
 		appendFileSync(storedFile(rootDir, MAIN_RELPATH), l2);
 
@@ -694,7 +694,7 @@ describe("FleetLogStore load repair sweep", () => {
 			Buffer.from(l1 + l2, "utf8"),
 		);
 
-		// The adopted bytes were persisted into the index: the daemon's resend
+		// The adopted bytes were persisted into the index: the session's resend
 		// of the same l2 chunk is a duplicate, never a second append, and a
 		// fresh load confirms nothing drifted.
 		expect(reloaded.ingest(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(l1.length, 1, l2))).toEqual({
@@ -854,7 +854,7 @@ describe("FleetLogStore load repair sweep", () => {
 			Buffer.from(main, "utf8"),
 		);
 
-		// The reset offset is the resume point: the daemon's re-stream from 0
+		// The reset offset is the resume point: the session's re-stream from 0
 		// is acked and restores the file byte-identically.
 		expect(ingestAcked(reloaded, SUBAGENT_RELPATH, chunkAt(0, 1, sub))).toBe(sub.length);
 		expectBuffersEqual(
@@ -988,7 +988,7 @@ describe("FleetLogStore kx3w: payload decode and deferred group commit", () => {
 		);
 	});
 
-	test("a failed commit() rolls back the pending ack; the daemon resend is re-acked after recovery", () => {
+	test("a failed commit() rolls back the pending ack; the session resend is re-acked after recovery", () => {
 		const rootDir = tempDir("omp-logstore-commitfail-");
 		const l1 = recordLine("main", 1);
 		const l2 = recordLine("main", 2);
@@ -999,7 +999,7 @@ describe("FleetLogStore kx3w: payload decode and deferred group commit", () => {
 		mkdirSync(blocker, { recursive: true });
 		expect(() => store.commit(WORKSPACE)).toThrow();
 
-		// The daemon never got an ack for l1, so it resends from 0 once the
+		// The session never got an ack for l1, so it resends from 0 once the
 		// store recovers; the resend is not reported as durable until commit().
 		rmSync(blocker, { recursive: true, force: true });
 		const resend = store.ingestDeferred(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(0, 1, l1));

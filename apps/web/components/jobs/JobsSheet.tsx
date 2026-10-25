@@ -33,7 +33,7 @@ import { JobRow } from "./JobRow";
 
 /**
  * Background jobs sheet: the session's jobs and its subagents' as a tree
- * (busiest branches first, the daemon's SDK order), with the selected job's
+ * (busiest branches first, the session's SDK order), with the selected job's
  * detail underneath. Polls while it is open (store/jobs.ts); Cancel appears
  * only on the session's own running jobs.
  */

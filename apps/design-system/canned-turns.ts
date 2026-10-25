@@ -2,7 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { WireSessionEvent } from "#lib/wire/protocol";
 import { applyEvent, setState, state } from "../web/state";
-import { answerCalls } from "./daemon";
+import { answerCalls } from "./session";
 import { type CannedStep, cannedTurn } from "./fixtures/canned-turn";
 
 /**
@@ -15,7 +15,7 @@ import { type CannedStep, cannedTurn } from "./fixtures/canned-turn";
  */
 
 interface Run {
-	sessionId: string;
+	workspaceId: string;
 	timers: number[];
 	/** Tool calls started and not yet ended, for abort. */
 	openTools: Map<string, string>;
@@ -27,7 +27,7 @@ let active: Run | null = null;
 const queued: string[] = [];
 let runCount = 0;
 
-/** Answer the prompt-family and abort calls; call after `applySeeds` (it resets daemon handlers). */
+/** Answer the prompt-family and abort calls; call after `applySeeds` (it resets session handlers). */
 export function answerCannedTurns(): void {
 	const accept = (args: unknown[]): undefined => {
 		const text = typeof args[0] === "string" ? args[0] : "";
@@ -75,7 +75,7 @@ export function abortCannedTurn(): void {
 
 function start(prompt: string): void {
 	const run: Run = {
-		sessionId: state.currentSessionId,
+		workspaceId: state.currentWorkspaceId,
 		timers: [],
 		openTools: new Map(),
 		streaming: null,
@@ -135,7 +135,7 @@ function track(run: Run, event: WireSessionEvent): void {
 	}
 }
 
-/** What a daemon's `state` frame would carry after a settled message: counts, tokens, cost, context. */
+/** What a session's `state` frame would carry after a settled message: counts, tokens, cost, context. */
 function settleStats(message: AgentMessage): void {
 	setState("messageCount", (n) => n + 1);
 	const stats = state.stats;

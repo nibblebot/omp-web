@@ -48,18 +48,18 @@ export function closeLightbox(): void {
 	setState("lightboxImage", null);
 }
 
-/** Daemon details dialog (ModalHost mounts it while the id resolves to a roster entry). */
-export function openDaemonDetails(daemonId: string): void {
-	setState("daemonDetailsId", daemonId);
+/** Session details dialog (ModalHost mounts it while the id resolves to a roster entry). */
+export function openSessionDetails(workspaceId: string): void {
+	setState("sessionDetailsId", workspaceId);
 }
 
-export function closeDaemonDetails(): void {
-	setState("daemonDetailsId", null);
+export function closeSessionDetails(): void {
+	setState("sessionDetailsId", null);
 }
 
-/** Worktree session list dialog for one roster daemon (ModalHost mounts it for `state.modal === "worktree-sessions"`). */
-export function openWorktreeSessions(daemonId: string): void {
-	setState({ modal: "worktree-sessions", worktreeSessionsId: daemonId });
+/** Worktree session list dialog for one roster session (ModalHost mounts it for `state.modal === "worktree-sessions"`). */
+export function openWorktreeSessions(workspaceId: string): void {
+	setState({ modal: "worktree-sessions", worktreeSessionsId: workspaceId });
 }
 
 export function closeWorktreeSessions(): void {

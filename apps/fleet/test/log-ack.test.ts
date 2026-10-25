@@ -12,7 +12,7 @@ import { CALLBACK_TRANSPORT_STREAM_ID } from "#lib/wire/callback-protocol";
 import type { FleetLogStore } from "../log-store";
 import { Registry } from "../registry";
 import type { FleetServer } from "../server";
-import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
+import { type CallbackSession, startCallbackSession } from "./callback-session.testkit";
 import { fleetPaths, pinSettingsInMemory, startTestFleet, waitFor } from "./server.testkit";
 
 afterAll(cleanupTempDirs);
@@ -28,9 +28,9 @@ interface SeededWorkspace {
 	generation: number;
 }
 
-/** Every log_ack offsets map the daemon received on the reserved stream. */
-function ackOffsets(daemon: CallbackDaemon): Array<Record<string, number>> {
-	return daemon.received().flatMap((envelope) => {
+/** Every log_ack offsets map the session received on the reserved stream. */
+function ackOffsets(session: CallbackSession): Array<Record<string, number>> {
+	return session.received().flatMap((envelope) => {
 		if (envelope.kind !== "control" || envelope.streamId !== CALLBACK_TRANSPORT_STREAM_ID) {
 			return [];
 		}
@@ -41,7 +41,7 @@ function ackOffsets(daemon: CallbackDaemon): Array<Record<string, number>> {
 
 describe("fleet log_ack durability (kx3w)", () => {
 	let server: FleetServer;
-	const daemons: CallbackDaemon[] = [];
+	const sessions: CallbackSession[] = [];
 	const seeded = new Map<string, SeededWorkspace>();
 
 	beforeAll(async () => {
@@ -56,12 +56,12 @@ describe("fleet log_ack durability (kx3w)", () => {
 				project: "",
 				status: "asleep",
 			});
-			registry.updateWorkspace(entry.daemonId, { desiredState: "stopped" });
-			registry.setWorkspaceEnrollment(entry.daemonId, {
+			registry.updateWorkspace(entry.workspaceId, { desiredState: "stopped" });
+			registry.setWorkspaceEnrollment(entry.workspaceId, {
 				credentialHash: createHash("sha256").update(Buffer.from(credential, "hex")).digest("hex"),
 				generation: 1,
 			});
-			seeded.set(name, { workspaceId: entry.daemonId, credential, generation: 1 });
+			seeded.set(name, { workspaceId: entry.workspaceId, credential, generation: 1 });
 		}
 		registry.flush();
 		server = await startTestFleet(
@@ -73,8 +73,8 @@ describe("fleet log_ack durability (kx3w)", () => {
 	});
 
 	afterAll(async () => {
-		for (const daemon of daemons) await daemon.stop();
-		daemons.length = 0;
+		for (const session of sessions) await session.stop();
+		sessions.length = 0;
 		if (server !== undefined) await server.close();
 	});
 
@@ -84,27 +84,27 @@ describe("fleet log_ack durability (kx3w)", () => {
 		return loaded;
 	}
 
-	async function pair(name: string): Promise<{ workspaceId: string; daemon: CallbackDaemon }> {
+	async function pair(name: string): Promise<{ workspaceId: string; session: CallbackSession }> {
 		const seed = seeded.get(name);
 		if (seed === undefined) throw new Error(`workspace ${name} was not seeded before boot`);
-		const daemon = startCallbackDaemon({
+		const session = startCallbackSession({
 			url: `http://127.0.0.1:${server.port}`,
 			workspaceId: seed.workspaceId,
 			generation: seed.generation,
 			token: seed.credential,
 		});
-		daemons.push(daemon);
-		await daemon.waitConnected();
-		return { workspaceId: seed.workspaceId, daemon };
+		sessions.push(session);
+		await session.waitConnected();
+		return { workspaceId: seed.workspaceId, session };
 	}
 
 	function sendFrame(
-		daemon: CallbackDaemon,
+		session: CallbackSession,
 		streamId: string,
 		offset: number,
 		content: string,
 	): void {
-		daemon.send(streamId, "frame", {
+		session.send(streamId, "frame", {
 			offset,
 			generation: 1,
 			data: Buffer.from(content, "utf8").toString("base64"),
@@ -113,12 +113,12 @@ describe("fleet log_ack durability (kx3w)", () => {
 	}
 
 	test("log_ack carries the durable offset once the batch is committed", async () => {
-		const { workspaceId, daemon } = await pair("ack-ok");
+		const { workspaceId, session } = await pair("ack-ok");
 		const streamId = "logs/sess-ok/sess-ok.jsonl";
 		const content = '{"type":"message","id":"ok-1"}\n';
-		sendFrame(daemon, streamId, 0, content);
+		sendFrame(session, streamId, 0, content);
 		await waitFor(
-			() => ackOffsets(daemon).some((offsets) => offsets[streamId] === content.length),
+			() => ackOffsets(session).some((offsets) => offsets[streamId] === content.length),
 			5000,
 			"log_ack for ok stream",
 		);
@@ -127,7 +127,7 @@ describe("fleet log_ack durability (kx3w)", () => {
 	});
 
 	test("a failed group commit withholds the ack; the next chunk acks the full durable length", async () => {
-		const { workspaceId, daemon } = await pair("ack-blocked");
+		const { workspaceId, session } = await pair("ack-blocked");
 		const streamId = "logs/sess-blk/sess-blk.jsonl";
 		const first = '{"type":"message","id":"blk-1"}\n';
 		const second = '{"type":"message","id":"blk-2"}\n';
@@ -135,9 +135,9 @@ describe("fleet log_ack durability (kx3w)", () => {
 
 		// Clean frame first: creates the session and its index.json, so the
 		// next commit is an ordinary append batch rather than a new session.
-		sendFrame(daemon, streamId, 0, first);
+		sendFrame(session, streamId, 0, first);
 		await waitFor(
-			() => ackOffsets(daemon).some((offsets) => offsets[streamId] === first.length),
+			() => ackOffsets(session).some((offsets) => offsets[streamId] === first.length),
 			5000,
 			"log_ack for first frame",
 		);
@@ -151,7 +151,7 @@ describe("fleet log_ack durability (kx3w)", () => {
 			logged.push(args.map(String).join(" "));
 		};
 		try {
-			sendFrame(daemon, streamId, first.length, second);
+			sendFrame(session, streamId, first.length, second);
 			await waitFor(
 				() => logged.some((line) => line.includes("log commit failed")),
 				5000,
@@ -161,15 +161,15 @@ describe("fleet log_ack durability (kx3w)", () => {
 			console.error = original;
 		}
 		// The batch containing `second` must not be acked.
-		expect(ackOffsets(daemon).some((offsets) => (offsets[streamId] ?? 0) > first.length)).toBe(
+		expect(ackOffsets(session).some((offsets) => (offsets[streamId] ?? 0) > first.length)).toBe(
 			false,
 		);
 
 		rmSync(blocker, { recursive: true, force: true });
-		sendFrame(daemon, streamId, first.length + second.length, third);
+		sendFrame(session, streamId, first.length + second.length, third);
 		const total = first.length + second.length + third.length;
 		await waitFor(
-			() => ackOffsets(daemon).some((offsets) => offsets[streamId] === total),
+			() => ackOffsets(session).some((offsets) => offsets[streamId] === total),
 			5000,
 			"log_ack after recovery",
 		);

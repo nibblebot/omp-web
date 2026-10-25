@@ -64,7 +64,7 @@ export default defineConfig({
 		port: 4713,
 		allowedHosts,
 		proxy: {
-			// The browser socket (OMP_PROTO 5): one WebSocket per tab carries the
+			// The browser socket (OMP_PROTO 6): one WebSocket per tab carries the
 			// downlink and the command uplink. ws: true makes http-proxy tunnel the
 			// upgrade; fleetProxy re-presents the Origin on it via proxyReqWs.
 			"/ws": { ...fleetProxy(), ws: true },

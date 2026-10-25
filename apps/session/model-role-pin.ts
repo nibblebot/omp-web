@@ -11,7 +11,7 @@ import { cfgDefaultThinkingLevel } from "@oh-my-pi/pi-coding-agent/session/setti
 
 /**
  * Model roles are sticky per running session, like its live model. Every
- * daemon watches config.yml (`initSettings`), so a role or preset written by
+ * session watches config.yml (`initSettings`), so a role or preset written by
  * one session would otherwise move the roles, and the reported active preset,
  * of every session already running. A pin copies this process's effective roles
  * into its runtime override layer, which outranks every config layer: a `null`
@@ -35,7 +35,7 @@ function writePin(settings: Settings, roles: Record<string, string | null>): voi
 }
 
 /** Pin this process to the roles config.yml gives now, and its default thinking level.
- * Called at daemon boot, before any session exists. */
+ * Called at session boot, before any session exists. */
 export function pinModelRoles(settings: Settings): void {
 	cfgModelRoles.clearOverride(settings);
 	const effective = settings.getModelRoles();
@@ -50,7 +50,7 @@ export function pinModelRoles(settings: Settings): void {
 	});
 }
 
-/** A new session in a pinned daemon starts from config.yml like a new daemon does. */
+/** A new conversation in a pinned session process starts from config.yml like a new session process does. */
 export function retakeModelRolePin(settings: Settings): void {
 	if (pins.has(settings)) pinModelRoles(settings);
 }

@@ -4,7 +4,7 @@ import { commandTooLargeMessage, MAX_COMMAND_BYTES } from "./command-limits";
 import type { ClientCommand, ServerFrame } from "./protocol";
 
 /**
- * The browser socket (OMP_PROTO 5): the one connection every client holds,
+ * The browser socket (OMP_PROTO 6): the one connection every client holds,
  * a browser to the fleet edge (H1), the `omp-web ui` forwarder, or a direct
  * client to a standalone `omp-web session` (H3). Pure: shared by the edge,
  * the session, the web client, the profile harness and the design system.

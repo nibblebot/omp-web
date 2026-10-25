@@ -2,7 +2,7 @@
  * Mirror of the pinned SDK's `BUILTIN_SLASH_COMMANDS_INTERNAL`
  * (`@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry`): one row per
  * top-level builtin. `sdkHandled` is true when the SDK dispatches the command
- * headlessly (`handle`), so the daemon can run it from a `prompt` call; false
+ * headlessly (`handle`), so the session can run it from a `prompt` call; false
  * means a terminal-UI-only handler that falls through to the model as text.
  * The browser cannot import the SDK registry, so `sdk-builtins.test.ts`
  * re-reads the SDK and fails when this table drifts after an SDK bump.

@@ -1,5 +1,5 @@
 /**
- * The jobs sheet's daemon methods against a real AgentSession and its real
+ * The jobs sheet's session methods against a real AgentSession and its real
  * AsyncJobManager: the tree the SDK builds, the inspection a row opens, and the
  * cancel that only reaches the session's own jobs.
  */

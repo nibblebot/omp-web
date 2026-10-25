@@ -7,7 +7,7 @@ import type { RunOptions } from "./types";
 export const USAGE = `bun run profile: baseline CPU, RSS, latency and throughput of the real omp-web stack
 
 Boots an isolated out-of-process fleet (own state, port, workspace dir under
-.profile-out/run-<ts>/), real session daemons, a deterministic fake OpenAI
+.profile-out/run-<ts>/), real session processes, a deterministic fake OpenAI
 model and a synthetic browser client (ws: the browser socket, GET /ws), pins every process to its own
 core, runs the scenarios, and writes summary.json + summary.md.
 

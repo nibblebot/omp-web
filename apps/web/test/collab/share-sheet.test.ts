@@ -1,6 +1,6 @@
 /**
  * ShareSheet and guest prompt card render branches: the browser link and its
- * QR appear only when the daemon supplies one (self-hosted relays do not),
+ * QR appear only when the session supplies one (self-hosted relays do not),
  * the public-relay opt-in shows until a relay is chosen, and a guest prompt
  * renders with its sender. Rendered through solid's SSR runtime; the Modal
  * shell is intercepted so only the sheet body is asserted.
@@ -63,7 +63,7 @@ function renderSheet(status: CollabWireStatus, relayUrl: string): string {
 }
 
 describe("ShareSheet browser link", () => {
-	test("shows the browser link and its QR when the daemon supplies one", () => {
+	test("shows the browser link and its QR when the session supplies one", () => {
 		const html = renderSheet(
 			live({ browserLink: "https://web.example/#wss://relay.example/r/1#control" }),
 			RELAY,

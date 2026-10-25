@@ -4,7 +4,7 @@
  * fleet writes one JSON payload (callback pair plus listener token) to the child's
  * stdin. The fake child appends that payload to a file, records its env, and
  * sleeps. The test parses the payload and dials the fleet with the callback test
- * daemon, the way a real session would, so an entry reaches "ready" through the
+ * session, the way a real session would, so an entry reaches "ready" through the
  * pair path. No real omp process runs.
  */
 
@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import type { RegistryEntry } from "../registry";
 import type { FleetServer } from "../server";
-import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
+import { type CallbackSession, startCallbackSession } from "./callback-session.testkit";
 import {
 	cleanupTempDirs,
 	fleetPaths,
@@ -56,7 +56,7 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 	let envFile: string;
 	let payloadFile: string;
 	const spawned: string[] = [];
-	const daemons: CallbackDaemon[] = [];
+	const sessions: CallbackSession[] = [];
 
 	beforeAll(async () => {
 		({ tmp, statePath, configPath } = fleetPaths());
@@ -83,8 +83,8 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 	});
 
 	afterAll(async () => {
-		for (const daemon of daemons) await daemon.stop();
-		for (const daemonId of spawned) await server.lifecycle.stop(daemonId);
+		for (const session of sessions) await session.stop();
+		for (const workspaceId of spawned) await server.lifecycle.stop(workspaceId);
 		if (server !== undefined) await server.close();
 	});
 
@@ -101,14 +101,14 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 		);
 		const lastLine = readFileSync(payloadFile, "utf8").trim().split("\n").at(-1)!;
 		const payload = JSON.parse(lastLine) as FleetPayload;
-		const daemon = startCallbackDaemon({
+		const session = startCallbackSession({
 			url: payload.callback.url,
 			workspaceId: payload.callback.workspace,
 			generation: payload.callback.generation,
 			token: payload.callback.token,
 		});
-		daemons.push(daemon);
-		await daemon.waitConnected(5000);
+		sessions.push(session);
+		await session.waitConnected(5000);
 		return payload;
 	}
 
@@ -124,14 +124,14 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 			project: { projectId: string; path: string };
 			entry: RegistryEntry;
 		};
-		spawned.push(body.entry.daemonId);
+		spawned.push(body.entry.workspaceId);
 		expect(body.project.path).toBe(repoReal);
 		expect(body.entry.cwd).toBe(repoReal);
 		expect(body.entry.projectId).toBe(body.project.projectId);
 
 		const payload = await dialAsSession();
 		expect(payload.v).toBe(1);
-		expect(payload.callback.workspace).toBe(body.entry.daemonId);
+		expect(payload.callback.workspace).toBe(body.entry.workspaceId);
 		expect(typeof payload.callback.generation).toBe("number");
 		expect(payload.callback.token).toMatch(/^[0-9a-f]{64}$/);
 		// The pair and listener token travel on stdin only: never in the child's env.
@@ -140,11 +140,11 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 		expect(childEnv).not.toMatch(/OMP_SESSION_CALLBACK_/);
 		expect(childEnv).not.toMatch(/OMP_SESSION_TOKEN=/);
 		await waitFor(
-			() => server.registry.get(body.entry.daemonId)?.status === "ready",
+			() => server.registry.get(body.entry.workspaceId)?.status === "ready",
 			5000,
 			"spawned entry ready",
 		);
-		expect(server.registry.get(body.entry.daemonId)?.projectId).toBe(body.project.projectId);
+		expect(server.registry.get(body.entry.workspaceId)?.projectId).toBe(body.project.projectId);
 	});
 
 	test("start:true with an unknown template 500s but the project stays registered", async () => {
@@ -163,7 +163,7 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 		// The project stays registered (staged: registration happens first).
 		expect(server.registry.projects().some((p) => p.path === realpathSync(otherDir))).toBe(true);
 		expect(server.registry.projects().length).toBe(before + 1);
-		// No daemon entry was created for the failed spawn.
+		// No session entry was created for the failed spawn.
 		const project = server.registry.projects().find((p) => p.path === realpathSync(otherDir));
 		expect(server.registry.list().some((e) => e.projectId === project?.projectId)).toBe(false);
 	});
@@ -173,12 +173,12 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 		const res = await postJson(server.port, "/ctl/spawn", { cwd: repoReal, template: "test" });
 		expect(res.status).toBe(200);
 		const entry = (await res.json()) as RegistryEntry;
-		spawned.push(entry.daemonId);
+		spawned.push(entry.workspaceId);
 		// The response carries the stamped entry; the registry agrees.
-		expect(entry.daemonId).toBeTruthy();
+		expect(entry.workspaceId).toBeTruthy();
 		expect(entry.projectId).toBe(project.projectId);
-		expect(server.registry.get(entry.daemonId)?.projectId).toBe(project.projectId);
-		// The project's other daemons (the start:true one) are untouched.
+		expect(server.registry.get(entry.workspaceId)?.projectId).toBe(project.projectId);
+		// The project's other sessions (the start:true one) are untouched.
 		expect(
 			server.registry
 				.list()
@@ -192,23 +192,23 @@ describe("spawn with start:true and POST /ctl/spawn", () => {
 		const row = server.registry
 			.list()
 			.find((e) => e.projectId === project.projectId && e.status === "ready")!;
-		const stopped = await postJson(server.port, "/ctl/stop", { selector: row.daemonId });
+		const stopped = await postJson(server.port, "/ctl/stop", { selector: row.workspaceId });
 		expect(stopped.status).toBe(200);
-		expect(server.registry.get(row.daemonId)?.status).toBe("asleep");
+		expect(server.registry.get(row.workspaceId)?.status).toBe("asleep");
 
 		const launches = (): string[] => readFileSync(payloadFile, "utf8").trim().split("\n");
 		const before = launches().length;
-		const started = await postJson(server.port, "/ctl/start", { daemonId: row.daemonId });
+		const started = await postJson(server.port, "/ctl/start", { workspaceId: row.workspaceId });
 		expect(started.status).toBe(200);
-		expect(await started.json()).toEqual({ daemonId: row.daemonId, observed: "running" });
+		expect(await started.json()).toEqual({ workspaceId: row.workspaceId, observed: "running" });
 		await waitFor(() => launches().length === before + 1, 5000, "child relaunched by start");
 		const relaunch = JSON.parse(launches().at(-1)!) as FleetPayload;
-		expect(relaunch.callback.workspace).toBe(row.daemonId);
+		expect(relaunch.callback.workspace).toBe(row.workspaceId);
 		// A fresh generation: the stop revoked the first credential.
 		expect(relaunch.callback.generation).toBeGreaterThan(1);
-		expect(server.registry.get(row.daemonId)?.status).toBe("connecting");
+		expect(server.registry.get(row.workspaceId)?.status).toBe("connecting");
 
-		const unknown = await postJson(server.port, "/ctl/start", { daemonId: "no-such-daemon" });
+		const unknown = await postJson(server.port, "/ctl/start", { workspaceId: "no-such-session" });
 		expect(unknown.status).toBe(404);
 	});
 });

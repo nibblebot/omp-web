@@ -1,13 +1,13 @@
 import { createSignal } from "solid-js";
 import { state } from "../state";
-import { closeDrawers, resumeDaemonSession } from "./roster";
+import { closeDrawers, resumeSession } from "./roster";
 
 /**
  * Worktree session list domain: the roster row's waking pulse and the resume
  * path used by the dialog (components/fleet/sidebar).
  */
 
-/** DaemonIds with a wake-attach in flight (asleep-row click or resume → attach
+/** WorkspaceIds with a wake-attach in flight (asleep-row click or resume → attach
  *  settles). Module-level so it survives a row unmounting mid-wake (the row
  *  leaving the roster, or a reconnect resetting the sidebar); per-row
  *  component signals would not survive that. */
@@ -34,14 +34,15 @@ export function endActivating(id: string): void {
  * wake), and the sidebar drawers close so the transcript is visible. The
  * caller closes its own surface.
  */
-export function resumeWorktreeSession(daemonId: string, sessionFile: string): void {
-	const wasAsleep = state.daemonRoster.find((d) => d.daemonId === daemonId)?.status === "asleep";
-	if (wasAsleep) beginActivating(daemonId);
-	const pending = resumeDaemonSession(daemonId, sessionFile);
+export function resumeWorktreeSession(workspaceId: string, sessionFile: string): void {
+	const wasAsleep =
+		state.sessionRoster.find((d) => d.workspaceId === workspaceId)?.status === "asleep";
+	if (wasAsleep) beginActivating(workspaceId);
+	const pending = resumeSession(workspaceId, sessionFile);
 	closeDrawers();
 	if (wasAsleep) {
 		Promise.resolve(pending)
 			.catch(() => {})
-			.finally(() => endActivating(daemonId));
+			.finally(() => endActivating(workspaceId));
 	}
 }

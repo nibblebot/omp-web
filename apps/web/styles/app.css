@@ -252,7 +252,7 @@
 .app-main > :is(.queue-bar, .compaction-bar, .composer-bar, .background-bars, .session-bar, .prompt-box) {
 	padding-inline: var(--space-5);
 }
-/* No live attached session (daemon stopped/removed or never
+/* No live attached session (session stopped/removed or never
    picked): the chat column is replaced by a quiet centered hint. */
 .roster-empty-pane {
 	flex: 1;

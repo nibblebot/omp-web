@@ -1,4 +1,4 @@
-/* Fleet: sidebar, collab rows, daemon roster, project/worktree modals. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Fleet: sidebar, collab rows, session roster, project/worktree modals. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 .sidebar {
 	/* Docked left column: participates in .app-body layout, so the chat
@@ -95,11 +95,11 @@
 /* Phones: sidebar labels at body size and 44px tap targets for its controls. */
 @media (max-width: 767px) {
 	.sidebar .sidebar-row,
-	.sidebar .daemon-session-title {
+	.sidebar .roster-session-title {
 		font-size: var(--fs-md);
 	}
 	.sidebar .project-group-toggle,
-	.sidebar .daemon-row-btn {
+	.sidebar .roster-row-btn {
 		min-height: 44px;
 	}
 	.sidebar .sidebar-icon-btn {
@@ -118,7 +118,7 @@
 	.new-workspace-segment,
 	.workspace-source-mode,
 	.new-workspace-row,
-	.daemon-row-btn {
+	.roster-row-btn {
 		min-height: 44px;
 	}
 }
@@ -296,7 +296,7 @@
 	align-items: flex-start;
 	flex-wrap: wrap;
 	gap: var(--space-4);
-	/* Vertical padding only sizes the row around its content; .daemon-row sets
+	/* Vertical padding only sizes the row around its content; .roster-row sets
 	   the horizontal padding from the shared sidebar geometry. */
 	padding: var(--space-3);
 	border-radius: var(--r-md);
@@ -358,7 +358,7 @@
 
 /* --- Session roster sidebar (fleet edge, Phase 3) --- */
 
-.daemon-row {
+.roster-row {
 	/* The kind icon sits in a fixed-width box (the caret's 1em) so every row's
 	   icon and branch text start on the same x; the session title, chips and
 	   diffstat indent by the box plus its gap to sit under the branch text. */
@@ -377,16 +377,16 @@
 	border-radius: 0;
 	padding-inline: calc(var(--sidebar-row-indent) - var(--row-text-inset)) var(--sidebar-row-edge);
 }
-.daemon-row:hover {
+.roster-row:hover {
 	--row-bg: var(--hover);
 }
-.daemon-row.active {
+.roster-row.active {
 	--row-bg: var(--accent-dim);
 }
 /* Ready rail: a thin rounded bar on the row's right edge marks every ready
    row, whatever it is doing. Inset vertically so consecutive ready rows stay
    separate bars; the corner signal tells activity, never readiness. */
-.daemon-row--ready::after {
+.roster-row--ready::after {
 	content: "";
 	position: absolute;
 	top: var(--space-2);
@@ -397,12 +397,12 @@
 	background: var(--ready-rail-color);
 	pointer-events: none;
 }
-.daemon-row.clickable {
+.roster-row.clickable {
 	cursor: pointer;
 }
 /* Delete submitted: the row dims at once and collapses when the roster drops
    it (RowMotion). A refused delete clears the class again. */
-.daemon-row--deleting {
+.roster-row--deleting {
 	opacity: 0.5;
 }
 /* Row enter/exit shell (RowMotion.tsx): the grid track animates the height
@@ -412,7 +412,7 @@
 .row-motion {
 	display: grid;
 	grid-template-rows: 1fr;
-	/* The full-sidebar-width bleed of .daemon-row lives here: the clip below
+	/* The full-sidebar-width bleed of .roster-row lives here: the clip below
 	   would cut a row that bleeds on its own. */
 	margin-inline: calc(-1 * var(--space-3));
 	margin-top: 0;
@@ -424,7 +424,7 @@
 		transform var(--dur-move-base) var(--ease-out),
 		opacity var(--dur-base) var(--ease-out);
 }
-.row-motion .daemon-row {
+.row-motion .roster-row {
 	margin-inline: 0;
 }
 .row-motion[data-motion="enter"],
@@ -455,12 +455,12 @@
 		transform: none;
 	}
 }
-/* Status dot (RowSignal and the daemon details title): ready = green glow
+/* Status dot (RowSignal and the session details title): ready = green glow
    (details only; a roster row marks ready with its rail), asleep = flat grey
    (details only), reconnecting = amber, error = red. Roster signals: a dot for
    blocked/unreviewed/unread/reconnecting/error, a comet ring (below) for
    working and for a process on its way up. */
-.daemon-status-dot {
+.session-status-dot {
 	width: 8px;
 	height: 8px;
 	border-radius: 50%;
@@ -472,7 +472,7 @@
    grid cell. At rest the signal shows; row hover/focus or an open menu
    crossfades it to the trigger (rules after .sidebar-menu-btn below). Touch
    keeps both, the signal as a badge on the trigger (trailing touch block). */
-.daemon-row-corner {
+.roster-row-corner {
 	flex: none;
 	display: grid;
 	/* One track the slot's size; a wider hit area overflows it evenly. */
@@ -482,13 +482,13 @@
 	height: var(--row-control-size);
 	margin-left: auto;
 }
-.daemon-row-corner > * {
+.roster-row-corner > * {
 	grid-area: 1 / 1;
 }
-.daemon-row-corner .sidebar-menu-wrap {
+.roster-row-corner .sidebar-menu-wrap {
 	margin-left: 0;
 }
-.daemon-row-corner .sidebar-menu-btn {
+.roster-row-corner .sidebar-menu-btn {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -496,13 +496,13 @@
 	height: var(--row-control-hit);
 	padding: 0;
 }
-.daemon-row-corner .sidebar-menu-btn .icon {
+.roster-row-corner .sidebar-menu-btn .icon {
 	width: var(--row-control-glyph);
 	height: var(--row-control-glyph);
 }
 /* The status announcer: no tooltip of its own (the trigger's names the
    state), never a pointer target. */
-.daemon-row-status {
+.roster-row-status {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -510,38 +510,37 @@
 	height: 100%;
 	pointer-events: none;
 }
-.daemon-row-status .daemon-status-dot {
+.roster-row-status .session-status-dot {
 	margin-top: 0;
 }
-.daemon-status-dot[data-status="ready"] {
+.session-status-dot[data-status="ready"] {
 	background: var(--success);
 	box-shadow: var(--shadow-glow-success);
 }
-.daemon-status-dot[data-status="asleep"] {
+.session-status-dot[data-status="asleep"] {
 	background: var(--muted-2);
 	box-shadow: inset 0 0 0 1px var(--border-strong);
 }
-.daemon-status-dot[data-status="reconnecting"] {
+.session-status-dot[data-status="reconnecting"] {
 	background: var(--warning);
 	box-shadow: 0 0 6px var(--warning);
 }
-.daemon-status-dot[data-status="error"] {
+.session-status-dot[data-status="error"] {
 	background: var(--error);
 	box-shadow: 0 0 6px var(--error);
 }
-.daemon-status-dot[data-status="spawning"],
-.daemon-status-dot[data-status="connecting"],
-.daemon-status-dot[data-status="session"],
-.daemon-status-dot[data-status="resolving"] {
+.session-status-dot[data-status="spawning"],
+.session-status-dot[data-status="connecting"],
+.session-status-dot[data-status="resolving"] {
 	background: var(--accent);
 	box-shadow: 0 0 6px var(--accent);
-	animation: daemon-dot-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+	animation: session-dot-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 }
 /* Activity cases repaint the status dot (single dot, no separate badge):
    presence of any colored dot means alive. These override the green
    ready dot; at the same specificity, the later rule in the cascade wins. A
    stopped (asleep) row has no data-activity, and ready+idle keeps green. */
-.daemon-status-dot[data-activity="blocked"] {
+.session-status-dot[data-activity="blocked"] {
 	background: var(--error);
 	box-shadow: 0 0 6px var(--error);
 }
@@ -550,15 +549,15 @@
    while another was in view; cleared on attach) and unreviewed (the attached
    session's turn ended while the transcript was scrolled away from the live
    edge; cleared on re-pin, prompt or switch). */
-.daemon-status-dot[data-activity="unread"],
-.daemon-status-dot[data-activity="unreviewed"] {
+.session-status-dot[data-activity="unread"],
+.session-status-dot[data-activity="unreviewed"] {
 	background: var(--accent);
 	box-shadow: 0 0 6px var(--accent);
 }
 /* Busy: a comet ring, a conic tail masked to a ring, spinning. Green while the
    session works; accent while its process is starting (transitional status),
    so the two read apart. */
-.daemon-status-dot[data-activity="in_progress"] {
+.session-status-dot[data-activity="in_progress"] {
 	--spinner-color: var(--success);
 	width: 11px;
 	height: 11px;
@@ -566,17 +565,17 @@
 	mask: radial-gradient(farthest-side, transparent calc(100% - 2.2px), #000 calc(100% - 2px));
 	box-shadow: none;
 	filter: drop-shadow(0 0 2px var(--spinner-color));
-	animation: daemon-activity-spin var(--dur-spin) linear infinite;
+	animation: session-activity-spin var(--dur-spin) linear infinite;
 }
-.daemon-status-dot[data-activity="in_progress"]:not([data-status="ready"]) {
+.session-status-dot[data-activity="in_progress"]:not([data-status="ready"]) {
 	--spinner-color: var(--accent);
 }
-@keyframes daemon-activity-spin {
+@keyframes session-activity-spin {
 	to {
 		transform: rotate(1turn);
 	}
 }
-@keyframes daemon-dot-pulse {
+@keyframes session-dot-pulse {
 	0%,
 	100% {
 		opacity: 0.4;
@@ -589,20 +588,20 @@
 }
 /* Reduced motion: the loops hold still. The comet becomes a full ring. */
 @media (prefers-reduced-motion: reduce) {
-	.daemon-status-dot[data-status] {
+	.session-status-dot[data-status] {
 		animation: none;
 	}
-	.daemon-status-dot[data-activity="in_progress"] {
+	.session-status-dot[data-activity="in_progress"] {
 		animation: none;
 		background: var(--spinner-color);
 	}
 }
-.daemon-chips {
+.session-chips {
 	display: flex;
 	flex-wrap: wrap;
 	gap: var(--space-1);
 }
-.daemon-chip {
+.session-chip {
 	font-family: var(--font-mono);
 	font-size: var(--fs-micro);
 	color: var(--muted);
@@ -617,16 +616,16 @@
 }
 /* P8.1: clone rows carry a kind chip (accent-tinted) and the workspace's
    provider-profile chip (the fleet catalog entry id). */
-.daemon-chip--kind {
+.session-chip--kind {
 	color: var(--accent);
 	border-color: var(--accent);
 }
-.daemon-chip--profile {
+.session-chip--profile {
 	color: var(--muted-2);
 }
 /* P8.1: provider lifecycle progress on clone rows (preparation → runtime →
    callback; a failed stage shows its error + Retry in place of the label). */
-.daemon-stage {
+.session-stage {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
@@ -635,20 +634,20 @@
 	color: var(--muted-2);
 	padding: var(--space-2) 0 0;
 }
-.daemon-stage-label {
-	animation: daemon-dot-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+.session-stage-label {
+	animation: session-dot-pulse var(--dur-pulse) var(--ease-in-out) infinite;
 }
-.daemon-stage--failed {
+.session-stage--failed {
 	color: var(--error-text);
 	font-style: normal;
 	align-items: flex-start;
 	flex-direction: column;
 	gap: var(--space-2);
 }
-.daemon-stage-error {
+.session-stage-error {
 	word-break: break-word;
 }
-.daemon-stage-retry {
+.session-stage-retry {
 	background: none;
 	border: 1px solid var(--border);
 	border-radius: var(--r-sm);
@@ -658,7 +657,7 @@
 	padding: var(--space-1) var(--space-3);
 	cursor: pointer;
 }
-.daemon-stage-retry:hover {
+.session-stage-retry:hover {
 	border-color: var(--accent);
 	color: var(--accent);
 }
@@ -732,7 +731,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	font-size: var(--fs-micro);
 	color: var(--muted-3);
 }
-.daemon-cwd {
+.session-cwd {
 	font-size: var(--fs-micro);
 	color: var(--muted-2);
 	white-space: nowrap;
@@ -763,27 +762,27 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
    click focuses the row but must not pin the controls once the pointer
    leaves), or while the row's menu is open, and the state signal
    fades out under the trigger. Touch overrides (trailing touch block).
-   Scoped under .daemon-row to outrank the global button:not(:disabled)
+   Scoped under .roster-row to outrank the global button:not(:disabled)
    transition. */
-.daemon-row .daemon-row-status,
-.daemon-row .sidebar-menu-btn,
-.daemon-row .daemon-session-toggle,
-.daemon-row .daemon-session-new {
+.roster-row .roster-row-status,
+.roster-row .sidebar-menu-btn,
+.roster-row .roster-session-toggle,
+.roster-row .roster-session-new {
 	transition:
 		opacity var(--dur-fast) var(--ease-out),
 		color var(--dur-fast) var(--ease-out);
 }
-.daemon-row:is(:hover, :focus-visible, :has(:focus-visible), :has([aria-expanded="true"]))
-	:is(.sidebar-menu-btn, .daemon-session-toggle, .daemon-session-new) {
+.roster-row:is(:hover, :focus-visible, :has(:focus-visible), :has([aria-expanded="true"]))
+	:is(.sidebar-menu-btn, .roster-session-toggle, .roster-session-new) {
 	opacity: 1;
 	pointer-events: auto;
 }
-.daemon-row:is(:hover, :focus-visible, :has(:focus-visible), :has([aria-expanded="true"]))
-	.daemon-row-actions::before {
+.roster-row:is(:hover, :focus-visible, :has(:focus-visible), :has([aria-expanded="true"]))
+	.roster-row-actions::before {
 	opacity: 1;
 }
-.daemon-row:is(:hover, :focus-visible, :has(:focus-visible), :has([aria-expanded="true"]))
-	.daemon-row-status {
+.roster-row:is(:hover, :focus-visible, :has(:focus-visible), :has([aria-expanded="true"]))
+	.roster-row-status {
 	opacity: 0;
 }
 /* Dropdown: compact action list anchored under the trigger. */
@@ -833,7 +832,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	color: var(--error-text);
 }
 /* Bare icon actions: no button chrome, just the glyph. */
-.daemon-icon-btn {
+.session-icon-btn {
 	background: none;
 	border: none;
 	padding: 0 var(--space-1);
@@ -846,13 +845,13 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	flex: none;
 	border-radius: var(--r-sm);
 }
-.daemon-icon-btn:hover {
+.session-icon-btn:hover {
 	color: var(--text);
 }
 /* Diffstat line (changed-file count, numstat +/- line counts) in compact mono,
    under the branch text; rendered only when git stats exist. Row actions live
    in the "⋯" menu on the top line, so nothing is right-aligned here. */
-.daemon-git {
+.session-git {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
@@ -862,17 +861,17 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	min-width: 0;
 }
 /* Everything under the top line starts at the branch text, past the kind icon. */
-.daemon-session-title,
-.daemon-chips,
-.daemon-stage,
-.daemon-git {
+.roster-session-title,
+.session-chips,
+.session-stage,
+.session-git {
 	padding-left: var(--row-text-inset);
 }
 /* Title-first layout (setting): the branch heads the diffstat line in the
    line's small gray text, its kind icon shrunk to the text size, and gives way
    to the stats when the row is narrow. Everything under the top line starts
    flush left with the title, which takes the kind icon's spot. */
-.daemon-git-branch {
+.session-git-branch {
 	display: inline-flex;
 	align-items: center;
 	gap: var(--space-1);
@@ -880,22 +879,22 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	min-width: 0;
 	overflow: hidden;
 }
-.daemon-git-branch .daemon-kind-icon {
+.session-git-branch .session-kind-icon {
 	width: auto;
 	margin-right: 0;
 }
-.daemon-row--title-first .daemon-git {
+.roster-row--title-first .session-git {
 	flex-wrap: nowrap;
 }
-.daemon-row--title-first .daemon-session-title,
-.daemon-row--title-first .daemon-chips,
-.daemon-row--title-first .daemon-stage,
-.daemon-row--title-first .daemon-git {
+.roster-row--title-first .roster-session-title,
+.roster-row--title-first .session-chips,
+.roster-row--title-first .session-stage,
+.roster-row--title-first .session-git {
 	padding-left: 0;
 }
 /* The session title as the top line: prose in the sans face at the row title
    size, clamped like the under-line title (one line, or two with the setting). */
-.daemon-row-session {
+.roster-row-session {
 	font-family: var(--font-sans);
 	white-space: normal;
 	display: -webkit-box;
@@ -905,27 +904,27 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	overflow-wrap: anywhere;
 	min-width: 0;
 }
-.daemon-git-dirty {
+.session-git-dirty {
 	flex: none;
 	font-variant-numeric: tabular-nums;
 }
 /* Changed-file count: file icon + total, tight inline pair. */
-.daemon-git-dirty[data-kind="files"] {
+.session-git-dirty[data-kind="files"] {
 	display: inline-flex;
 	align-items: center;
 	gap: 2px;
 	color: var(--text);
 }
 /* Numstat line counts. */
-.daemon-git-dirty[data-kind="added"] {
+.session-git-dirty[data-kind="added"] {
 	color: var(--success);
 }
-.daemon-git-dirty[data-kind="deleted"] {
+.session-git-dirty[data-kind="deleted"] {
 	color: var(--error);
 }
 /* Top line: kind icon + branch (+ lock) on the left, the session chevron and
    "+" and the corner slot on the right. Asleep rows dim the title. */
-.daemon-row-title {
+.roster-row-title {
 	display: inline-flex;
 	align-items: center;
 	flex: 1;
@@ -933,18 +932,18 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 }
 /* Asleep rows dim the title by opacity: a muted color is nearly the text
    color in some light palettes, so it would not read as dimmed. */
-.daemon-row--asleep .daemon-row-title {
+.roster-row--asleep .roster-row-title {
 	opacity: 0.65;
 }
 /* The icon sits in a fixed-width box so every row's icon and branch text line up. */
-.daemon-kind-icon {
+.session-kind-icon {
 	flex: none;
 	display: inline-flex;
 	align-items: center;
 	width: var(--row-kind-box);
 	margin-right: var(--space-2);
 }
-.daemon-row-branch {
+.roster-row-branch {
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -955,7 +954,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
    sans face, muted. One line by default; with the "two-line session titles"
    setting it takes up to two but only the lines it needs. The full string is on
    the tooltip. */
-.daemon-session-title {
+.roster-session-title {
 	font-family: var(--font-sans);
 	font-size: var(--fs-micro);
 	line-height: 1.5;
@@ -966,7 +965,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	overflow: hidden;
 	overflow-wrap: anywhere;
 }
-.daemon-session-title--two-line {
+.roster-session-title--two-line {
 	-webkit-line-clamp: 2;
 }
 /* Chevron and "+" (clickable rows) overlay the right end of the top line,
@@ -974,7 +973,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
    fade behind them (the row's own background) keeps the text they cover from
    showing through; both appear with the "⋯" on row hover/focus. The container
    offset puts the "+" one hit area left of the corner's hit area. */
-.daemon-row-actions {
+.roster-row-actions {
 	position: absolute;
 	top: 0;
 	bottom: 0;
@@ -983,7 +982,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	align-items: center;
 	pointer-events: none;
 }
-.daemon-row-actions::before {
+.roster-row-actions::before {
 	content: "";
 	position: absolute;
 	top: 0;
@@ -994,8 +993,8 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	opacity: 0;
 	transition: opacity var(--dur-fast) var(--ease-out);
 }
-.daemon-session-toggle,
-.daemon-session-new {
+.roster-session-toggle,
+.roster-session-new {
 	position: relative;
 	flex: none;
 	width: var(--row-control-hit);
@@ -1012,18 +1011,18 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	opacity: 0;
 	pointer-events: none;
 }
-.daemon-session-chevron,
-.daemon-session-new-icon {
+.roster-session-chevron,
+.roster-session-new-icon {
 	width: var(--row-control-glyph);
 	height: var(--row-control-glyph);
 }
-.daemon-session-chevron {
+.roster-session-chevron {
 	transition: transform var(--dur-move-fast) var(--ease-out);
 }
-.daemon-session-toggle:hover,
-.daemon-session-toggle:focus-visible,
-.daemon-session-new:hover,
-.daemon-session-new:focus-visible {
+.roster-session-toggle:hover,
+.roster-session-toggle:focus-visible,
+.roster-session-new:hover,
+.roster-session-new:focus-visible {
 	color: var(--text);
 }
 /* Touch and phones: no hover, so the row controls always show at 44px (the
@@ -1037,35 +1036,35 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 		--row-control-size: 44px;
 		--row-control-hit: 44px;
 	}
-	.daemon-row-actions {
+	.roster-row-actions {
 		position: static;
 		flex: none;
 	}
-	.daemon-row-actions::before {
+	.roster-row-actions::before {
 		display: none;
 	}
-	.daemon-row .daemon-row-corner .daemon-row-status {
+	.roster-row .roster-row-corner .roster-row-status {
 		opacity: 1;
 		z-index: 1;
 	}
-	.daemon-row-corner .daemon-row-status .daemon-status-dot {
+	.roster-row-corner .roster-row-status .session-status-dot {
 		position: relative;
 		left: calc(var(--row-control-glyph) / 2);
 		top: calc(var(--row-control-glyph) / -2);
 		width: 6px;
 		height: 6px;
 	}
-	.daemon-row-corner .daemon-row-status .daemon-status-dot[data-activity="in_progress"] {
+	.roster-row-corner .roster-row-status .session-status-dot[data-activity="in_progress"] {
 		width: 9px;
 		height: 9px;
 	}
-	.daemon-session-toggle.daemon-session-toggle,
-	.daemon-session-new.daemon-session-new {
+	.roster-session-toggle.roster-session-toggle,
+	.roster-session-new.roster-session-new {
 		opacity: 1;
 		pointer-events: auto;
 	}
 }
-.daemon-row-btn {
+.roster-row-btn {
 	background: none;
 	border: 1px solid var(--border);
 	border-radius: var(--r-sm);
@@ -1075,28 +1074,28 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	cursor: pointer;
 	flex: none;
 }
-.daemon-row-btn:hover {
+.roster-row-btn:hover {
 	color: var(--text);
 	border-color: var(--accent);
 }
-.daemon-row-btn:disabled {
+.roster-row-btn:disabled {
 	opacity: 0.5;
 	cursor: default;
 }
 /* Detail popover (Modal): roster facts + stderr tail. */
-.daemon-detail {
+.session-detail {
 	width: min(480px, 92vw);
 }
-.daemon-detail-header {
+.session-detail-header {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
 	margin-bottom: var(--space-4);
 }
-.daemon-detail-header .daemon-status-dot {
+.session-detail-header .session-status-dot {
 	margin-top: 0;
 }
-.daemon-detail-name {
+.session-detail-name {
 	flex: 1;
 	min-width: 0;
 	font-weight: 600;
@@ -1105,7 +1104,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.daemon-detail-close {
+.session-detail-close {
 	flex: none;
 	background: none;
 	border: none;
@@ -1116,23 +1115,23 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	padding: 0 var(--space-2);
 	border-radius: var(--r-sm);
 }
-.daemon-detail-close:hover {
+.session-detail-close:hover {
 	background: var(--btn);
 	color: var(--text);
 }
-.daemon-detail-facts {
+.session-detail-facts {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
 	margin-bottom: var(--space-5);
 }
-.daemon-detail-fact {
+.session-detail-fact {
 	display: flex;
 	align-items: baseline;
 	gap: var(--space-3);
 	min-width: 0;
 }
-.daemon-detail-label {
+.session-detail-label {
 	flex: none;
 	font-size: var(--fs-micro);
 	text-transform: uppercase;
@@ -1140,7 +1139,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	color: var(--muted-2);
 	width: 72px;
 }
-.daemon-detail-value {
+.session-detail-value {
 	flex: 1;
 	min-width: 0;
 	font-family: var(--font-mono);
@@ -1150,18 +1149,18 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.daemon-detail-fact--error .daemon-detail-value {
+.session-detail-fact--error .session-detail-value {
 	color: var(--error-text);
 	white-space: normal;
 	word-break: break-word;
 }
-.daemon-stderr-head {
+.session-stderr-head {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
 	margin-bottom: var(--space-2);
 }
-.daemon-stderr {
+.session-stderr {
 	font-family: var(--font-mono);
 	font-size: var(--fs-micro);
 	line-height: 1.5;
@@ -1177,16 +1176,16 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	word-break: break-word;
 	color: var(--muted-3);
 }
-.daemon-stderr-empty {
+.session-stderr-empty {
 	font-size: var(--fs-sm);
 	font-style: italic;
 	color: var(--muted-2);
 	padding: var(--space-2) 0;
 }
-.daemon-stderr-error {
+.session-stderr-error {
 	margin: var(--space-2) 0 0;
 }
-.daemon-stderr-note {
+.session-stderr-note {
 	font-size: var(--fs-micro);
 	font-style: italic;
 	color: var(--muted-2);
@@ -1574,10 +1573,10 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 }
 /* The dialog's guard evidence still uses per-kind porcelain file counts
    (the sidebar's same class now renders diffstat: files/+lines/-lines). */
-.worktree-evidence .daemon-git-dirty[data-kind="modified"] {
+.worktree-evidence .session-git-dirty[data-kind="modified"] {
 	color: var(--warning);
 }
-.worktree-evidence .daemon-git-dirty[data-kind="untracked"] {
+.worktree-evidence .session-git-dirty[data-kind="untracked"] {
 	color: var(--muted-3);
 }
 .worktree-evidence-path {
@@ -1667,7 +1666,7 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 	cursor: not-allowed;
 }
 /* Header tail, laid out like a row's right edge: a slot for the collapsed
-   summary / "+" and the corner column (.daemon-row-corner, shared with rows)
+   summary / "+" and the corner column (.roster-row-corner, shared with rows)
    for the urgent signal / "⋯". */
 .project-group-tail {
 	flex: none;
@@ -1713,7 +1712,7 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 	pointer-events: none;
 }
 .project-group .project-group-summary,
-.project-group .daemon-row-status,
+.project-group .roster-row-status,
 .project-group .project-new-btn,
 .project-group .sidebar-menu-btn {
 	transition: opacity var(--dur-fast) var(--ease-out);
@@ -1740,7 +1739,7 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 		:has(:focus-visible),
 		:has(.project-new-btn[aria-expanded="true"], .sidebar-menu-btn[aria-expanded="true"])
 	)
-	:is(.project-group-summary, .daemon-row-status) {
+	:is(.project-group-summary, .roster-row-status) {
 	opacity: 0;
 }
 /* Touch and phones: no hover, so "+" and "⋯" always show (base.css shows the
@@ -1758,7 +1757,7 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 		opacity: 0.4;
 	}
 	/* Doubled so the touch rules outrank the hover swap (a tap leaves :hover stuck). */
-	.project-group.project-group .daemon-row-corner .daemon-row-status {
+	.project-group.project-group .roster-row-corner .roster-row-status {
 		opacity: 1;
 		z-index: 1;
 	}
@@ -1849,12 +1848,12 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 }
 
 /* FLEET-16: session process log wrapper with jump-to-latest affordance. */
-.daemon-stderr-wrap {
+.session-stderr-wrap {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-3);
 }
-.daemon-stderr-jump {
+.session-stderr-jump {
 	align-self: flex-end;
 	font-size: var(--fs-micro);
 }

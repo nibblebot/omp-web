@@ -2,7 +2,7 @@
  * Resume-picker rename/delete (resume-manage.ts). Real filesystem fixtures
  * under a temp sessions root; the lease is process-local on Linux, so holding
  * it in-test exercises the "owned by another writer" refusal. Wire behavior is
- * covered by the daemon suite.
+ * covered by the session suite.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";

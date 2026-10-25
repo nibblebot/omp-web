@@ -1,4 +1,4 @@
-import type { DaemonEntry } from "#lib/wire/protocol";
+import type { RosterEntry } from "#lib/wire/protocol";
 import { createEffect, createSignal, For, Show, type Component } from "solid-js";
 import { sendDeleteWorktree, setState, state } from "../../../state";
 import { isFeatureEnabled } from "../../../features/registry";
@@ -8,7 +8,7 @@ import { attachForPanel } from "../../../store/roster";
 import { openDock } from "../../../store/dock";
 
 // Delete-workspace confirm (Phase 5 close-out): one self-mounting
-// dialog for BOTH workspace kinds, dispatched on the target daemon's kind.
+// dialog for BOTH workspace kinds, dispatched on the target session's kind.
 //
 // Worktree targets keep the guard-evidence flow: the sidebar row asked for
 // the evidence on open, this dialog shows dirty counts and branch merge/push
@@ -47,13 +47,13 @@ export const DeleteWorkspaceDialog: Component = () => {
 
 	const target = () => state.deleteWorkspaceTarget;
 	const info = () => (target() !== null ? state.worktreeDeleteInfo[target()!] : undefined);
-	const daemon = () =>
-		target() !== null ? state.daemonRoster.find((d) => d.daemonId === target()!) : undefined;
-	const isClone = () => daemon()?.workspaceKind === "clone";
+	const entry = () =>
+		target() !== null ? state.sessionRoster.find((d) => d.workspaceId === target()!) : undefined;
+	const isClone = () => entry()?.workspaceKind === "clone";
 	/** The roster entry when the target is a clone, else undefined; Show
 	 *  narrows the child callback to the entry (never to `true`). */
-	const cloneDaemon = (): DaemonEntry | undefined =>
-		isClone() && daemon() !== undefined ? daemon() : undefined;
+	const cloneSession = (): RosterEntry | undefined =>
+		isClone() && entry() !== undefined ? entry() : undefined;
 
 	// Fresh checkbox default per open (the sidebar row already asked for the
 	// guard evidence when it opened this dialog).
@@ -78,9 +78,9 @@ export const DeleteWorkspaceDialog: Component = () => {
 			errorAtOpen = state.error;
 			setRefusal(null);
 		}
-		// The entry left the roster; the delete finished (or the daemon was
+		// The entry left the roster; the delete finished (or the session was
 		// evicted another way): dismiss.
-		if (daemon() === undefined) {
+		if (entry() === undefined) {
 			setState("deleteWorkspaceTarget", null);
 			return;
 		}
@@ -140,7 +140,7 @@ export const DeleteWorkspaceDialog: Component = () => {
 	const openReview = () => {
 		const id = target();
 		if (id === null) return;
-		const attached = id === state.currentSessionId;
+		const attached = id === state.currentWorkspaceId;
 		close();
 		if (attached) {
 			openDock("review");
@@ -177,9 +177,9 @@ export const DeleteWorkspaceDialog: Component = () => {
 		<Show when={target() !== null}>
 			<Modal title={isClone() ? "Delete clone workspace" : "Delete worktree"} onClose={close}>
 				{/* Clone variant: verified-delete copy + in-dialog typed refusals.
-				    cloneDaemon() narrows the Show callback to the roster entry
+				    cloneSession() narrows the Show callback to the roster entry
 				    (the gate is a value, so the child never sees `true`). */}
-				<Show when={cloneDaemon()}>
+				<Show when={cloneSession()}>
 					{(clone) => (
 						<>
 							<p class="danger-confirm-body">
@@ -237,7 +237,7 @@ export const DeleteWorkspaceDialog: Component = () => {
 								<span class="worktree-evidence">
 									<For each={dirtyKinds()}>
 										{(k) => (
-											<span class="daemon-git-dirty" data-kind={k.kind}>
+											<span class="session-git-dirty" data-kind={k.kind}>
 												{DIRTY_GLYPHS[k.kind]}
 												{k.n}
 											</span>
@@ -284,10 +284,10 @@ export const DeleteWorkspaceDialog: Component = () => {
 					<Show when={info() !== undefined && info()!.linked && !info()!.dirty && !unproven()}>
 						<p class="danger-confirm-body">
 							Delete the worktree
-							{daemon() ? (
+							{entry() ? (
 								<>
 									{" "}
-									at <span class="worktree-evidence-path">{daemon()!.cwd}</span>
+									at <span class="worktree-evidence-path">{entry()!.cwd}</span>
 								</>
 							) : null}
 							? This stops the session process, removes it from the roster, and deletes its files

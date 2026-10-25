@@ -2,7 +2,7 @@
  * The callback rows of the production-profile preflight: `callback-url` (DNS +
  * TCP, or the proxy the session would dial through) and `callback-ws`, a real
  * credential-less WebSocket upgrade to `/callback/ws`. Success is a real
- * DaemonTransportRegistry answering with its typed refusal, directly and
+ * SessionTransportRegistry answering with its typed refusal, directly and
  * through the CONNECT proxy testkit; failures are a server that never
  * upgrades, a WebSocket endpoint that is not the fleet, a silent upgrade, and
  * a closed port. Only the two callback rows are asserted: the provider rows
@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { startConnectProxy } from "#lib/testkit/connect-proxy.testkit";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { BwrapProfile, PreflightCheck } from "#lib/runtime/provider-protocol";
-import { DaemonTransportRegistry, type CallbackSocketData } from "../daemon-transport";
+import { SessionTransportRegistry, type CallbackSocketData } from "../session-transport";
 import { runProfilePreflight } from "../preflight";
 
 afterAll(cleanupTempDirs);
@@ -62,7 +62,7 @@ async function callbackRows(
 
 /** A real fleet callback registry mounted the way fleet/server.ts mounts it. */
 function startFleet(): { url: string } {
-	const registry = new DaemonTransportRegistry();
+	const registry = new SessionTransportRegistry();
 	const server = Bun.serve<CallbackSocketData>({
 		hostname: "127.0.0.1",
 		port: 0,

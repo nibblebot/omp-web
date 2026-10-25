@@ -4,7 +4,7 @@
  * refusals, the archive export's pre-read lstat recheck, and the
  * `download_bulk` read-time recheck + 64 MiB aggregate cap. Every refusal must
  * land as an ExportError code (or a typed DownloadBulkFailedControl) BEFORE any
- * bytes are handed to a transfer; the wire behavior is covered by the daemon
+ * bytes are handed to a transfer; the wire behavior is covered by the session
  * suite, these pin the jails with real filesystem fixtures.
  */
 

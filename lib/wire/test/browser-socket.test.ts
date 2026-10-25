@@ -24,7 +24,7 @@ describe("server messages", () => {
 	const frame = {
 		type: "event",
 		event: { type: "message_update", text: 'quote " newline \n tab \t unicode é 🙂' },
-		sessionId: "d1",
+		workspaceId: "d1",
 	};
 	const frameJson = JSON.stringify(frame);
 

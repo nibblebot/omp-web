@@ -3,13 +3,13 @@ import { unwrap } from "solid-js/store";
 import { App } from "../web/App";
 import { type ChatItem, setState, state } from "../web/state";
 import { nextChatId, resetChatIds } from "../web/store/chat";
-import { settleDaemonSessions } from "../web/store/roster";
+import { settleWorkspaceSessions } from "../web/store/roster";
 import { abortCannedTurn, answerCannedTurns } from "./canned-turns";
-import { answerCommands } from "./daemon";
+import { answerCommands } from "./session";
 import { setInspecting } from "./inspect-runtime";
 import { Inspector, clampInspectorWidth } from "./inspector";
 import { Labels } from "./labels";
-import { type AppSession, appDaemonSessions, appSessions } from "./fixtures/app-sessions";
+import { type AppSession, appWorkspaceSessions, appSessions } from "./fixtures/app-sessions";
 import { screenItems, screenSessionSeed } from "./fixtures/screen";
 import { applySeeds } from "./seed";
 
@@ -40,15 +40,15 @@ function captureSession(): AppSession {
 
 /**
  * The App view (the demo page, `bun run demo`): the real `<App />` in Chat Mode, seeded with the screen
- * fixtures and answered by the fake daemon. Holding Shift labels the component
+ * fixtures and answered by the fake session. Holding Shift labels the component
  * under the pointer and its ancestors, Ctrl+Shift every mounted component; a
  * label opens its component in the inspector sidebar.
  *
  * Clicking a sidebar row attaches like the real fleet: the command bus
  * (fixtures/command-bus.ts, over the fake socket) answers with `attached`, the store resets the
- * session view, and this view restores that daemon's transcript from
- * `appSessions` in place of the daemon's history priming. A row's session
- * chevron lists that daemon's session, answered in the page (daemon.ts).
+ * session view, and this view restores that session's transcript from
+ * `appSessions` in place of the session's history priming. A row's session
+ * chevron lists that session's session, answered in the page (session.ts).
  *
  * Prompts get the canned turn (canned-turns.ts). Leaving a session ends its
  * running turn and keeps its transcript for this page load, so switching back
@@ -66,19 +66,19 @@ export const AppView: Component = () => {
 	});
 	answerCannedTurns();
 	answerCommands({
-		list_daemon_sessions: (cmd) => {
-			if (cmd.type === "list_daemon_sessions")
-				settleDaemonSessions(cmd.daemonId, appDaemonSessions(cmd.daemonId), cmd.limit);
+		list_workspace_sessions: (cmd) => {
+			if (cmd.type === "list_workspace_sessions")
+				settleWorkspaceSessions(cmd.workspaceId, appWorkspaceSessions(cmd.workspaceId), cmd.limit);
 		},
 	});
 
 	const visited = new Map<string, AppSession>();
 	// `on`'s previous-input argument is unset on the first run after `defer`,
 	// so the attached id is tracked here.
-	let attached = state.currentSessionId;
+	let attached = state.currentWorkspaceId;
 	createEffect(
 		on(
-			() => state.currentSessionId,
+			() => state.currentWorkspaceId,
 			(id) => {
 				// This runs as the `attached` handler switches the id, before it
 				// resets the view: settle and save the session being left.
@@ -90,11 +90,11 @@ export const AppView: Component = () => {
 				if (left !== "" && left !== id) visited.set(left, captureSession());
 				if (id === "") return;
 				const session = visited.get(id) ?? appSessions[id];
-				// Restore once the handler's reset has run. It stands in for the daemon's
+				// Restore once the handler's reset has run. It stands in for the session's
 				// history priming, so it also ends the switch's wait (loaded), even when
 				// there is no transcript to restore.
 				queueMicrotask(() => {
-					if (state.currentSessionId !== id) return;
+					if (state.currentWorkspaceId !== id) return;
 					if (session !== undefined) {
 						const { view, items } = structuredClone(session);
 						setState({ ...view, items: renumber(items), streaming: false });

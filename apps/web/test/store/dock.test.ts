@@ -29,7 +29,7 @@ import {
 	installTransportStubs,
 	restoreBrowserGlobals,
 } from "../web.testkit";
-import type { DaemonEntry } from "#lib/wire/protocol";
+import type { RosterEntry } from "#lib/wire/protocol";
 
 function key(init: { key: string; altKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean }) {
 	return { altKey: false, ctrlKey: false, shiftKey: false, ...init };
@@ -46,24 +46,24 @@ const layoutDefaults = {
 	subagentsLoaded: { mirror: false, roster: false },
 };
 
-let saved: Pick<typeof state, "currentSessionId" | "subagents" | "daemonRoster">;
+let saved: Pick<typeof state, "currentWorkspaceId" | "subagents" | "sessionRoster">;
 
 beforeEach(() => {
 	installLocalStorageShim();
 	saved = {
-		currentSessionId: state.currentSessionId,
+		currentWorkspaceId: state.currentWorkspaceId,
 		subagents: state.subagents,
-		daemonRoster: state.daemonRoster,
+		sessionRoster: state.sessionRoster,
 	};
-	setState({ ...layoutDefaults, currentSessionId: "d1" });
+	setState({ ...layoutDefaults, currentWorkspaceId: "d1" });
 });
 
 afterEach(() => {
 	setState({
 		...layoutDefaults,
-		currentSessionId: saved.currentSessionId,
+		currentWorkspaceId: saved.currentWorkspaceId,
 		subagents: saved.subagents,
-		daemonRoster: saved.daemonRoster,
+		sessionRoster: saved.sessionRoster,
 	});
 	restoreBrowserGlobals();
 });
@@ -229,7 +229,7 @@ describe("per-workspace dock layout", () => {
 
 	beforeEach(() => {
 		installTransportStubs();
-		setState({ currentSessionId: "" });
+		setState({ currentWorkspaceId: "" });
 		connect();
 		FakeWebSocket.instances.at(-1)?.onopen?.();
 	});
@@ -404,13 +404,13 @@ describe("missing agent fallback", () => {
 describe("pruning on roster removal", () => {
 	function roster(...ids: string[]): void {
 		setState(
-			"daemonRoster",
-			ids.map((daemonId) => ({ daemonId, status: "ready" }) as unknown as DaemonEntry),
+			"sessionRoster",
+			ids.map((workspaceId) => ({ workspaceId, status: "ready" }) as unknown as RosterEntry),
 		);
 	}
 
-	function saveFor(daemonId: string, kind = "review"): void {
-		setState("currentSessionId", daemonId);
+	function saveFor(workspaceId: string, kind = "review"): void {
+		setState("currentWorkspaceId", workspaceId);
 		openDock(kind);
 	}
 

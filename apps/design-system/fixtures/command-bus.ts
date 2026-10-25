@@ -1,7 +1,7 @@
-import type { ClientCommand, DaemonEntry, ServerFrame } from "#lib/wire/protocol";
+import type { ClientCommand, RosterEntry, ServerFrame } from "#lib/wire/protocol";
 import { OMP_PROTO } from "#lib/wire/protocol";
 import { publish } from "../fake-socket";
-import { rosterAppDaemons } from "./roster";
+import { rosterAppEntries } from "./roster";
 
 /**
  * The App screen's fleet: the priming a fresh browser socket gets and the
@@ -11,17 +11,17 @@ import { rosterAppDaemons } from "./roster";
  * broadcast to every connection. Attach answers like the edge: an id-keyed
  * `attach_result` to the asker, then the proxied `attached`; the session's
  * transcript is restored in the page (app-view.tsx). `call()` answers for
- * stories come from the page instead (daemon.ts).
+ * stories come from the page instead (session.ts).
  */
 
 /** The App's roster; asleep entries turn ready when woken. Reset on every fresh priming (a page load). */
-let roster: DaemonEntry[] = structuredClone(rosterAppDaemons);
+let roster: RosterEntry[] = structuredClone(rosterAppEntries);
 
 /** Priming for a fresh dial: the roster, then hello_ok. Resets the roster to its fixture state. */
 export function primingFrames(): ServerFrame[] {
-	roster = structuredClone(rosterAppDaemons);
+	roster = structuredClone(rosterAppEntries);
 	return [
-		{ type: "roster", daemons: roster },
+		{ type: "roster", entries: roster },
 		{
 			type: "hello_ok",
 			proto: OMP_PROTO,
@@ -33,19 +33,19 @@ export function primingFrames(): ServerFrame[] {
 	];
 }
 
-/** Wake an asleep daemon the way spawn_resume does, and broadcast the new roster. */
-function wake(daemonId: string): void {
-	const entry = roster.find((d) => d.daemonId === daemonId);
+/** Wake an asleep session the way spawn_resume does, and broadcast the new roster. */
+function wake(workspaceId: string): void {
+	const entry = roster.find((d) => d.workspaceId === workspaceId);
 	if (entry === undefined || entry.status !== "asleep") return;
 	const now = Date.now();
 	roster = roster.map((d) =>
 		d === entry ? { ...d, status: "ready", desiredState: "running", readyAt: now, uptime: 0 } : d,
 	);
-	publish({ type: "roster", daemons: roster });
+	publish({ type: "roster", entries: roster });
 }
 
-/** The entry after its daemon process stops: asleep, with no live process fields. */
-function asleep(entry: DaemonEntry): DaemonEntry {
+/** The entry after its session process stops: asleep, with no live process fields. */
+function asleep(entry: RosterEntry): RosterEntry {
 	const { readyAt: _readyAt, uptime: _uptime, pid: _pid, ...rest } = entry;
 	return { ...rest, status: "asleep", desiredState: "stopped" };
 }
@@ -59,38 +59,38 @@ export function answerBusCommand(
 	answer: (frame: ServerFrame) => void,
 ): boolean {
 	if (cmd.type === "spawn_resume") {
-		wake(cmd.daemonId);
+		wake(cmd.workspaceId);
 		return true;
 	}
 	if (cmd.type === "stop") {
-		const { daemonId } = cmd;
-		if (!roster.some((d) => d.daemonId === daemonId)) {
-			publish({ type: "error", error: `unknown daemon: ${daemonId}` });
+		const { workspaceId } = cmd;
+		if (!roster.some((d) => d.workspaceId === workspaceId)) {
+			publish({ type: "error", error: `unknown session: ${workspaceId}` });
 			return true;
 		}
 		// Local only: the roster changes, no process is touched. The broadcast
-		// drives the web's own reconcile (a stopped attached daemon clears the
+		// drives the web's own reconcile (a stopped attached session clears the
 		// chat column), as the edge's registry change does.
-		roster = roster.map((d) => (d.daemonId === daemonId ? asleep(d) : d));
-		const row = roster.find((d) => d.daemonId === daemonId);
+		roster = roster.map((d) => (d.workspaceId === workspaceId ? asleep(d) : d));
+		const row = roster.find((d) => d.workspaceId === workspaceId);
 		publish({ type: "roster_delta", upserted: row ? [row] : [], removed: [] });
 		return true;
 	}
 	if (cmd.type === "attach") {
-		const { sessionId } = cmd;
-		if (!roster.some((d) => d.daemonId === sessionId)) {
+		const { workspaceId } = cmd;
+		if (!roster.some((d) => d.workspaceId === workspaceId)) {
 			answer({
 				type: "attach_result",
 				id: cmd.id,
 				ok: false,
-				error: `unknown daemon: ${sessionId}`,
+				error: `unknown session: ${workspaceId}`,
 			});
 			return true;
 		}
-		// The edge wakes a stopped daemon before answering its attach.
-		wake(sessionId);
-		answer({ type: "attach_result", id: cmd.id, ok: true, sessionId });
-		publish({ type: "attached", sessionId });
+		// The edge wakes a stopped session before answering its attach.
+		wake(workspaceId);
+		answer({ type: "attach_result", id: cmd.id, ok: true, workspaceId });
+		publish({ type: "attached", workspaceId });
 		return true;
 	}
 	return false;

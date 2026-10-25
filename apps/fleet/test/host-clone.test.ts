@@ -34,7 +34,7 @@ import { SESSION_LOG_MAX_BYTES } from "../session-log";
 import type { ExecutableRequest } from "../runtime-provider";
 import type { FleetServer } from "../server";
 import type { CloneRuntimePolicy } from "../workspace-lifecycle";
-import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
+import { startCallbackSession, type CallbackSession } from "./callback-session.testkit";
 import {
 	cleanupTempDirs,
 	fleetPaths,
@@ -162,7 +162,7 @@ interface Fixture {
 	tmp: string;
 	repoDir: string;
 	projectId: string;
-	daemons: CallbackDaemon[];
+	sessions: CallbackSession[];
 }
 
 async function bootFleet(cloneRuntime?: Partial<CloneRuntimePolicy>): Promise<Fixture> {
@@ -178,24 +178,24 @@ async function bootFleet(cloneRuntime?: Partial<CloneRuntimePolicy>): Promise<Fi
 		{ workspaceDir: join(paths.tmp, "workspaces"), ...(cloneRuntime ? { cloneRuntime } : {}) },
 	);
 	const { project } = server.registry.addProject(repoDir);
-	return { server, tmp: paths.tmp, repoDir, projectId: project.projectId, daemons: [] };
+	return { server, tmp: paths.tmp, repoDir, projectId: project.projectId, sessions: [] };
 }
 
 async function teardown(fx: Fixture): Promise<void> {
-	for (const daemon of fx.daemons) await daemon.stop().catch(() => undefined);
+	for (const session of fx.sessions) await session.stop().catch(() => undefined);
 	for (const entry of fx.server.registry.list()) {
 		if (entry.workspace?.kind !== "clone") continue;
 		await fetch(`http://127.0.0.1:${fx.server.port}/ctl/stop`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ selector: entry.daemonId }),
+			body: JSON.stringify({ selector: entry.workspaceId }),
 		}).catch(() => undefined);
 	}
 	await fx.server.close();
 }
 
 interface Clone {
-	daemonId: string;
+	workspaceId: string;
 	volume: string;
 	checkout: string;
 	home: string;
@@ -203,15 +203,15 @@ interface Clone {
 	stateDir: string;
 }
 
-function cloneOf(fx: Fixture, daemonId: string): Clone {
-	const volume = fx.server.registry.get(daemonId)!.cwd!;
+function cloneOf(fx: Fixture, workspaceId: string): Clone {
+	const volume = fx.server.registry.get(workspaceId)!.cwd!;
 	return {
-		daemonId,
+		workspaceId,
 		volume,
 		checkout: join(volume, ".checkout"),
 		home: join(volume, ".home"),
 		sessions: join(volume, ".home", "agent", "sessions"),
-		stateDir: join(dirname(volume), ".provider-state", daemonId),
+		stateDir: join(dirname(volume), ".provider-state", workspaceId),
 	};
 }
 
@@ -228,16 +228,18 @@ async function createClone(
 		start: opts.start ?? false,
 	});
 	expect(res.status).toBe(201);
-	const { entry } = (await res.json()) as { entry: { daemonId: string } };
-	return cloneOf(fx, entry.daemonId);
+	const { entry } = (await res.json()) as { entry: { workspaceId: string } };
+	return cloneOf(fx, entry.workspaceId);
 }
 
 const start = (fx: Fixture, clone: Clone): Promise<Response> =>
-	postJson(fx.server.port, "/ctl/start", { daemonId: clone.daemonId });
+	postJson(fx.server.port, "/ctl/start", { workspaceId: clone.workspaceId });
 const stop = (fx: Fixture, clone: Clone): Promise<Response> =>
-	postJson(fx.server.port, "/ctl/stop", { selector: clone.daemonId });
+	postJson(fx.server.port, "/ctl/stop", { selector: clone.workspaceId });
 const remove = (fx: Fixture, clone: Clone): Promise<Response> =>
-	fetch(`http://127.0.0.1:${fx.server.port}/ctl/worktrees/${clone.daemonId}`, { method: "DELETE" });
+	fetch(`http://127.0.0.1:${fx.server.port}/ctl/worktrees/${clone.workspaceId}`, {
+		method: "DELETE",
+	});
 
 function boots(clone: Clone): Boot[] {
 	try {
@@ -268,35 +270,35 @@ function recordedPid(clone: Clone): number {
 	return record.pid;
 }
 
-/** Dial a callback daemon with the credential of the clone's CURRENT handoff. */
-async function pairUp(fx: Fixture, clone: Clone): Promise<CallbackDaemon> {
+/** Dial a callback session with the credential of the clone's CURRENT handoff. */
+async function pairUp(fx: Fixture, clone: Clone): Promise<CallbackSession> {
 	const handoff = JSON.parse(readFileSync(join(clone.stateDir, "callback-env.json"), "utf8")) as {
 		generation: number;
 		env: Record<string, string>;
 	};
-	const daemon = startCallbackDaemon({
+	const session = startCallbackSession({
 		url: handoff.env.OMP_SESSION_CALLBACK_URL!,
-		workspaceId: clone.daemonId,
+		workspaceId: clone.workspaceId,
 		generation: handoff.generation,
 		token: handoff.env.OMP_SESSION_CALLBACK_TOKEN!,
 	});
-	fx.daemons.push(daemon);
-	await daemon.waitConnected(5_000);
-	return daemon;
+	fx.sessions.push(session);
+	await session.waitConnected(5_000);
+	return session;
 }
 
 /** Mirror the volume's transcripts into the fleet log store, as the session's log mirror does. */
 function storeVolumeTranscripts(fx: Fixture, clone: Clone): void {
 	for (const sessionId of readdirSync(clone.sessions)) {
 		const bytes = readFileSync(join(clone.sessions, sessionId, `${sessionId}.jsonl`), "utf8");
-		const storeDir = join(fx.tmp, "logs", clone.daemonId, sessionId);
+		const storeDir = join(fx.tmp, "logs", clone.workspaceId, sessionId);
 		mkdirSync(storeDir, { recursive: true });
 		writeFileSync(join(storeDir, `${sessionId}.jsonl`), bytes);
 		writeFileSync(
 			join(storeDir, "index.json"),
 			JSON.stringify({
 				version: 1,
-				workspaceId: clone.daemonId,
+				workspaceId: clone.workspaceId,
 				sessionId,
 				streams: {
 					[`${sessionId}.jsonl`]: {
@@ -311,7 +313,7 @@ function storeVolumeTranscripts(fx: Fixture, clone: Clone): void {
 }
 
 const stageOf = (fx: Fixture, clone: Clone) =>
-	fx.server.registry.get(clone.daemonId)?.lifecycleStage;
+	fx.server.registry.get(clone.workspaceId)?.lifecycleStage;
 
 describe("host clone workspace", () => {
 	test("local source: create, start, launch layout, transcripts, stop, wake resume, verified delete", async () => {
@@ -321,9 +323,9 @@ describe("host clone workspace", () => {
 			// Fleet-side preparation: the volume is a real checkout on the workspace branch.
 			expect(existsSync(join(clone.checkout, ".git"))).toBe(true);
 			expect(await git(clone.checkout, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe(
-				fx.server.registry.get(clone.daemonId)!.workspace!.branch!,
+				fx.server.registry.get(clone.workspaceId)!.workspace!.branch!,
 			);
-			expect(fx.server.registry.get(clone.daemonId)!.workspace!.source).toEqual({
+			expect(fx.server.registry.get(clone.workspaceId)!.workspace!.source).toEqual({
 				local: fx.repoDir,
 			});
 
@@ -370,14 +372,14 @@ describe("host clone workspace", () => {
 			await waitFor(() => !alive(pid), 5_000, "the runtime to exit");
 			expect(existsSync(clone.checkout)).toBe(true);
 			expect(existsSync(transcript)).toBe(true);
-			expect(fx.server.registry.get(clone.daemonId)!.workspace!.desiredState).toBe("stopped");
+			expect(fx.server.registry.get(clone.workspaceId)!.workspace!.desiredState).toBe("stopped");
 
 			// Wake resumes the transcript the previous run left on the volume.
 			expect((await start(fx, clone)).status).toBe(200);
 			await waitFor(() => boots(clone).length === 2, 10_000, "the second boot");
 			expect(boots(clone)[1]!.env.OMP_SESSION_RESUME).toBe(transcript);
 			expect(boots(clone)[1]!.pid).not.toBe(pid);
-			expect(fx.server.registry.get(clone.daemonId)!.workspace!.authorizedGeneration).toBe(2);
+			expect(fx.server.registry.get(clone.workspaceId)!.workspace!.authorizedGeneration).toBe(2);
 			expect((await stop(fx, clone)).status).toBe(200);
 			await waitFor(() => !alive(boots(clone)[1]!.pid), 5_000, "the second run to exit");
 
@@ -390,12 +392,12 @@ describe("host clone workspace", () => {
 			const deleted = await remove(fx, clone);
 			expect(deleted.status).toBe(200);
 			expect(await deleted.json()).toMatchObject({
-				removed: clone.daemonId,
+				removed: clone.workspaceId,
 				verified: [SESSION_ID],
 			});
 			expect(existsSync(clone.volume)).toBe(false);
 			expect(existsSync(clone.stateDir)).toBe(false);
-			expect(fx.server.registry.get(clone.daemonId)).toBeUndefined();
+			expect(fx.server.registry.get(clone.workspaceId)).toBeUndefined();
 		} finally {
 			await teardown(fx);
 		}
@@ -406,7 +408,7 @@ describe("host clone workspace", () => {
 		try {
 			const remote = `file://${fx.repoDir}`;
 			const clone = await createClone(fx, "remote-host", { source: { remote }, start: true });
-			expect(fx.server.registry.get(clone.daemonId)!.workspace!.source).toEqual({ remote });
+			expect(fx.server.registry.get(clone.workspaceId)!.workspace!.source).toEqual({ remote });
 			expect(readFileSync(join(clone.checkout, "readme.md"), "utf8")).toBe("hello\n");
 			await waitFor(() => boots(clone).length === 1, 10_000, "the runtime to boot");
 			expect(boots(clone)[0]!.cwd).toBe(clone.checkout);
@@ -438,24 +440,24 @@ describe("host clone workspace", () => {
 		try {
 			const clone = await createClone(fx, "exit78-host", { start: true });
 			await waitFor(() => boots(clone).length === 1, 10_000, "the runtime to boot");
-			const daemon = await pairUp(fx, clone);
+			const session = await pairUp(fx, clone);
 			await waitFor(() => stageOf(fx, clone) === "ready", 5_000, "ready");
 
 			// The runtime refuses to resume and exits 78; its pair drops with it.
 			writeFileSync(join(clone.home, "exit-with"), "78");
-			await daemon.stop();
+			await session.stop();
 			await waitFor(
-				() => fx.server.registry.get(clone.daemonId)?.status === "asleep",
+				() => fx.server.registry.get(clone.workspaceId)?.status === "asleep",
 				10_000,
 				"asleep after exit 78",
 			);
-			const entry = fx.server.registry.get(clone.daemonId)!;
+			const entry = fx.server.registry.get(clone.workspaceId)!;
 			expect(entry.error).toContain("rc 78");
 			expect(entry.error).toContain("session file not found");
 			expect(entry.workspace?.enrollment).toBeUndefined();
 			await Bun.sleep(500); // Several backoffs and watch cadences.
 			expect(boots(clone)).toHaveLength(1);
-			expect(fx.server.registry.get(clone.daemonId)!.workspace!.authorizedGeneration).toBe(1);
+			expect(fx.server.registry.get(clone.workspaceId)!.workspace!.authorizedGeneration).toBe(1);
 		} finally {
 			await teardown(fx);
 		}
@@ -473,15 +475,15 @@ describe("host clone workspace", () => {
 		try {
 			const clone = await createClone(fx, "crash-host", { start: true });
 			await waitFor(() => boots(clone).length === 1, 10_000, "the runtime to boot");
-			const daemon = await pairUp(fx, clone);
+			const session = await pairUp(fx, clone);
 			await waitFor(() => stageOf(fx, clone) === "ready", 5_000, "ready");
 
 			writeFileSync(join(clone.home, "exit-with"), "1");
-			await daemon.stop();
+			await session.stop();
 			await waitFor(() => boots(clone).length === 2, 15_000, "the restarted runtime");
 			// The generation persists after the provider answers, so wait for it rather than race it.
 			await waitFor(
-				() => fx.server.registry.get(clone.daemonId)?.workspace?.authorizedGeneration === 2,
+				() => fx.server.registry.get(clone.workspaceId)?.workspace?.authorizedGeneration === 2,
 				10_000,
 				"generation 2",
 			);
@@ -494,7 +496,7 @@ describe("host clone workspace", () => {
 		const fx = await bootFleet();
 		try {
 			const clone = await createClone(fx, "fetch-host");
-			const branch = fx.server.registry.get(clone.daemonId)!.workspace!.branch!;
+			const branch = fx.server.registry.get(clone.workspaceId)!.workspace!.branch!;
 			writeFileSync(join(clone.checkout, "a.txt"), "a\n");
 			await git(clone.checkout, ["add", "a.txt"]);
 			await git(clone.checkout, ["commit", "-q", "-m", "add a"]);
@@ -502,7 +504,7 @@ describe("host clone workspace", () => {
 
 			const res = await postJson(
 				fx.server.port,
-				`/ctl/clones/${clone.daemonId}/fetch-into-project`,
+				`/ctl/clones/${clone.workspaceId}/fetch-into-project`,
 				{},
 			);
 			expect(res.status).toBe(200);
@@ -600,19 +602,19 @@ describe("host clone provider ops", () => {
 		try {
 			okOf(await run(requestFor(root, "ensure-running")));
 			expect(await observedAfterExit(root)).toBe("stopped");
-			// The runtime's own output reaches the clone's daemon log through the relay.
-			const log = join(root, "state", "daemon.log");
+			// The runtime's own output reaches the clone's session log through the relay.
+			const log = join(root, "state", "session.log");
 			await waitFor(
 				() => existsSync(log) && readFileSync(log, "utf8").includes("runtime says goodbye"),
 				10_000,
-				"the runtime's output in daemon.log",
+				"the runtime's output in session.log",
 			);
 		} finally {
 			process.env.OMP_RUNTIME_ENTRY = previous;
 		}
 	}, 30_000);
 
-	test("daemon.log stays under the cap for the whole run, rotating to daemon.log.1", async () => {
+	test("session.log stays under the cap for the whole run, rotating to session.log.1", async () => {
 		const root = scratch();
 		const loud = join(root, "loud.js");
 		// Writes ~3.5 MiB across stdout and stderr in 64 KiB lines, then idles until stopped.
@@ -627,14 +629,14 @@ setInterval(() => {}, 1000);
 		);
 		const previous = process.env.OMP_RUNTIME_ENTRY;
 		process.env.OMP_RUNTIME_ENTRY = loud;
-		const log = join(root, "state", "daemon.log");
+		const log = join(root, "state", "session.log");
 		const size = (path: string): number => (existsSync(path) ? statSync(path).size : 0);
 		try {
 			okOf(await run(requestFor(root, "ensure-running")));
 			await waitFor(
 				() => existsSync(log) && readFileSync(log, "utf8").includes("LAST-LINE"),
 				15_000,
-				"the runtime's last line in daemon.log",
+				"the runtime's last line in session.log",
 			);
 			// The runtime is still running, yet the live file is bounded and the older output rotated.
 			expect(okOf(await run(requestFor(root, "inspect"))).observed).toBe("running");

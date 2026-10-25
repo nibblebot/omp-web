@@ -1,4 +1,4 @@
-import type { DaemonEntry, ModelBrowserEntry, SettingsModel } from "#lib/wire/protocol";
+import type { RosterEntry, ModelBrowserEntry, SettingsModel } from "#lib/wire/protocol";
 import { fuzzyRank } from "../prompt/autocomplete";
 import {
 	commandLiveState,
@@ -50,7 +50,7 @@ export type PaletteOpenTarget =
 export type PaletteAction =
 	/** `fill`: put `text` in the composer for the user to finish; otherwise run it as if typed. */
 	| { kind: "command"; text: string; fill: boolean }
-	| { kind: "daemon-session"; daemonId: string }
+	| { kind: "workspace-session"; workspaceId: string }
 	| { kind: "stored-session"; sessionId: string }
 	/** Open Settings on `tabId`; `query` (a row label) pre-fills its search so the row shows. */
 	| { kind: "setting"; tabId: string; query?: string }
@@ -257,7 +257,9 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 		),
 	];
 	if (context.debugEnabled)
-		items.push(openItem("debug", "Debug", "Fleet and daemon diagnostics", ["logs", "diagnostics"]));
+		items.push(
+			openItem("debug", "Debug", "Fleet and session diagnostics", ["logs", "diagnostics"]),
+		);
 	items.push(
 		openItem("skills", "Skills", "Turn skills on or off and read their instructions", [
 			"extensions",
@@ -306,22 +308,22 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 
 /** One row per fleet session that can be attached (ready or asleep), across every project. */
 export function rosterSessionItems(
-	roster: readonly DaemonEntry[],
-	currentDaemonId: string,
+	roster: readonly RosterEntry[],
+	currentWorkspaceId: string,
 ): PaletteItem[] {
 	const rows: PaletteItem[] = [];
 	for (const d of roster) {
 		if (d.status !== "ready" && d.status !== "asleep") continue;
 		const title = d.sessionTitle?.trim() || (d.sessionEmpty === true ? "New session" : d.name);
 		const where = d.branch ? `${d.project} · ${d.branch}` : d.project;
-		const current = d.daemonId === currentDaemonId;
+		const current = d.workspaceId === currentWorkspaceId;
 		rows.push({
-			id: `session:d:${d.daemonId}`,
+			id: `session:d:${d.workspaceId}`,
 			group: "Sessions",
 			label: title,
 			detail: where,
 			...(current ? { chip: "current" } : d.status === "asleep" ? { chip: "asleep" } : {}),
-			action: { kind: "daemon-session", daemonId: d.daemonId },
+			action: { kind: "workspace-session", workspaceId: d.workspaceId },
 			keywords: [d.project, d.name, d.branch ?? "", d.cwd],
 		});
 	}

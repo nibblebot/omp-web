@@ -1,13 +1,13 @@
 /**
  * Log retention on the fleet control plane (apps/fleet/server.ts):
- *   - the daemon's additive `session_deleted` control notice purges that
+ *   - the session's additive `session_deleted` control notice purges that
  *     session's fleet copy (the workspace wins), is refused on a verified
  *     read-only workspace, and ignores an empty/non-string sessionId;
  *   - GET /ctl/logs/orphans flags store-orphaned subtrees, and only those;
  *   - POST /ctl/logs/purge refuses a live writable workspace and otherwise
  *     removes the bytes and clears the storeOrphan marker.
  *
- * The notice is driven over a REAL callback pair (startCallbackDaemon)
+ * The notice is driven over a REAL callback pair (startCallbackSession)
  * against a workspace enrolled BEFORE boot: the boot re-enrollment attaches
  * the fleet's per-workspace log tap (a runtime enrollment has no tap yet).
  * The control envelope rides the HTTP up-leg on the reserved `transport`
@@ -24,7 +24,7 @@ import { CALLBACK_TRANSPORT_STREAM_ID, type CallbackEnvelope } from "#lib/wire/c
 import type { FleetLogStore } from "../log-store";
 import { Registry } from "../registry";
 import type { FleetServer } from "../server";
-import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
+import { type CallbackSession, startCallbackSession } from "./callback-session.testkit";
 import {
 	cleanupTempDirs,
 	fleetPaths,
@@ -41,7 +41,7 @@ afterAll(cleanupTempDirs);
 // Pin the process-global Settings singleton in-memory (see the testkit).
 await pinSettingsInMemory();
 
-/** Complete-line JSONL bodies, as the daemon streams closed session files. */
+/** Complete-line JSONL bodies, as the session streams closed session files. */
 const MAIN_CONTENT = '{"type":"session","id":"s1"}\n{"type":"message","id":"m1"}\n';
 const SUBAGENT_CONTENT = '{"type":"session","id":"s1-sub"}\n{"type":"message","id":"m2"}\n';
 const SIBLING_CONTENT = '{"type":"session","id":"s2"}\n';
@@ -69,7 +69,7 @@ describe("fleet log retention routes", () => {
 	let statePath: string;
 	let configPath: string;
 	let server: FleetServer;
-	const daemons: CallbackDaemon[] = [];
+	const sessions: CallbackSession[] = [];
 	const unwatch: Array<() => void> = [];
 	const seeded = new Map<string, SeededWorkspace>();
 
@@ -87,13 +87,13 @@ describe("fleet log retention routes", () => {
 				project: "",
 				status: "asleep",
 			});
-			registry.updateWorkspace(entry.daemonId, { desiredState: "stopped" });
-			registry.setWorkspaceEnrollment(entry.daemonId, {
+			registry.updateWorkspace(entry.workspaceId, { desiredState: "stopped" });
+			registry.setWorkspaceEnrollment(entry.workspaceId, {
 				// The transport digests the decoded 32 bytes of the hex credential.
 				credentialHash: createHash("sha256").update(Buffer.from(credential, "hex")).digest("hex"),
 				generation: 1,
 			});
-			seeded.set(name, { workspaceId: entry.daemonId, credential, generation: 1 });
+			seeded.set(name, { workspaceId: entry.workspaceId, credential, generation: 1 });
 		}
 		registry.flush();
 		server = await startTestFleet(
@@ -109,8 +109,8 @@ describe("fleet log retention routes", () => {
 	afterAll(async () => {
 		for (const stop of unwatch) stop();
 		unwatch.length = 0;
-		for (const daemon of daemons) await daemon.stop();
-		daemons.length = 0;
+		for (const session of sessions) await session.stop();
+		sessions.length = 0;
 		if (server !== undefined) await server.close();
 	});
 
@@ -128,8 +128,8 @@ describe("fleet log retention routes", () => {
 
 	interface PairedWorkspace {
 		workspaceId: string;
-		daemon: CallbackDaemon;
-		/** Every daemon->fleet envelope the fleet dispatched for this workspace. */
+		session: CallbackSession;
+		/** Every session->fleet envelope the fleet dispatched for this workspace. */
 		seen: CallbackEnvelope[];
 	}
 
@@ -142,25 +142,25 @@ describe("fleet log retention routes", () => {
 	async function enrollAndPair(name: string): Promise<PairedWorkspace> {
 		const seed = seeded.get(name);
 		if (seed === undefined) throw new Error(`workspace ${name} was not seeded before boot`);
-		const daemon = startCallbackDaemon({
+		const session = startCallbackSession({
 			url: `http://127.0.0.1:${server.port}`,
 			workspaceId: seed.workspaceId,
 			generation: seed.generation,
 			token: seed.credential,
 		});
-		daemons.push(daemon);
-		await daemon.waitConnected();
+		sessions.push(session);
+		await session.waitConnected();
 		const seen: CallbackEnvelope[] = [];
 		unwatch.push(
-			server.transport.onDaemonEnvelope(seed.workspaceId, (envelope) => {
+			server.transport.onSessionEnvelope(seed.workspaceId, (envelope) => {
 				seen.push(envelope);
 			}),
 		);
-		return { workspaceId: seed.workspaceId, daemon, seen };
+		return { workspaceId: seed.workspaceId, session, seen };
 	}
 
 	/**
-	 * Stream one complete (eof) file as the daemon does — streamId
+	 * Stream one complete (eof) file as the session does — streamId
 	 * `logs/<sessionId>/<relpath>`, LogChunk payload — and wait until the
 	 * durable bytes are readable.
 	 */
@@ -171,7 +171,7 @@ describe("fleet log retention routes", () => {
 		content: string,
 	): Promise<void> {
 		const bytes = Buffer.from(content, "utf8");
-		workspace.daemon.send(`logs/${sessionId}/${relpath}`, "frame", {
+		workspace.session.send(`logs/${sessionId}/${relpath}`, "frame", {
 			offset: 0,
 			generation: 1,
 			data: bytes.toString("base64"),
@@ -191,7 +191,7 @@ describe("fleet log retention routes", () => {
 		);
 	}
 
-	/** The daemon's additive session-deletion notice on the reserved stream. */
+	/** The session's additive session-deletion notice on the reserved stream. */
 	function isSessionDeletedNotice(envelope: CallbackEnvelope): boolean {
 		if (envelope.kind !== "control" || envelope.streamId !== CALLBACK_TRANSPORT_STREAM_ID) {
 			return false;
@@ -225,7 +225,7 @@ describe("fleet log retention routes", () => {
 	async function orphanThroughRemoveRoute(name: string, sessionId: string): Promise<string> {
 		const workspace = await enrollAndPair(name);
 		await storeStream(workspace, sessionId, `${sessionId}.jsonl`, MAIN_CONTENT);
-		await workspace.daemon.stop();
+		await workspace.session.stop();
 		const res = await postJson(server.port, "/ctl/remove", { selector: workspace.workspaceId });
 		expect(res.status).toBe(200);
 		return workspace.workspaceId;
@@ -238,8 +238,8 @@ describe("fleet log retention routes", () => {
 			await storeStream(workspace, "sess-a", "sess-a/sub-1.jsonl", SUBAGENT_CONTENT);
 			await storeStream(workspace, "sess-b", "sess-b.jsonl", SIBLING_CONTENT);
 
-			// The daemon's additive deletion notice (workspace wins).
-			workspace.daemon.send(CALLBACK_TRANSPORT_STREAM_ID, "control", {
+			// The session's additive deletion notice (workspace wins).
+			workspace.session.send(CALLBACK_TRANSPORT_STREAM_ID, "control", {
 				type: "session_deleted",
 				sessionId: "sess-a",
 			});
@@ -264,7 +264,7 @@ describe("fleet log retention routes", () => {
 			store().markWorkspaceReadOnly(workspace.workspaceId);
 			expect(store().isReadOnly(workspace.workspaceId)).toBe(true);
 
-			workspace.daemon.send(CALLBACK_TRANSPORT_STREAM_ID, "control", {
+			workspace.session.send(CALLBACK_TRANSPORT_STREAM_ID, "control", {
 				type: "session_deleted",
 				sessionId: "sess-ro",
 			});
@@ -294,7 +294,7 @@ describe("fleet log retention routes", () => {
 				{ type: "session_deleted", sessionId: "../escape" },
 			];
 			for (const payload of payloads) {
-				workspace.daemon.send(CALLBACK_TRANSPORT_STREAM_ID, "control", payload);
+				workspace.session.send(CALLBACK_TRANSPORT_STREAM_ID, "control", payload);
 			}
 			await waitFor(
 				() => workspace.seen.filter(isSessionDeletedNotice).length >= payloads.length,
@@ -327,7 +327,7 @@ describe("fleet log retention routes", () => {
 		test("does not flag a surviving subtree with no storeOrphan marker", async () => {
 			const workspace = await enrollAndPair("orphan-unmarked");
 			await storeStream(workspace, "kept-sess", "kept-sess.jsonl", MAIN_CONTENT);
-			await workspace.daemon.stop();
+			await workspace.session.stop();
 			// An eviction that never ran the store-orphan marking: the tree
 			// survives, no marker exists.
 			expect(server.registry.remove(workspace.workspaceId)).toBe(true);

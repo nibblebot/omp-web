@@ -12,8 +12,8 @@
  *           add-worktree|rm-worktree|prompt|preflight
  *                                     → fleet control-plane CLI (apps/fleet/cli.ts;
  *                                       bare = control plane + UI)
- *   omp-web session [options]         → the omp-session daemon (apps/session/index.ts;
- *                                       the dynamic import IS the daemon; wire
+ *   omp-web session [options]         → the omp-session process (apps/session/index.ts;
+ *                                       the dynamic import IS the session process; wire
  *                                       API only, no web UI)
  *   omp-web relay --port <n>          → standalone collab relay (apps/cli/relay.ts)
  *   omp-web update [options]          → self-update from the release channel
@@ -23,7 +23,7 @@
  * stdout contract: nothing is printed to stdout before delegating. Bare
  * `omp-web`, `control`, and `ui` print their banner as the first stdout line
  * (`omp-web listening on ...`, `omp-web control listening on ...`,
- * `omp-web ui listening on ...`); the daemon's `OMP_SESSION|` line stays
+ * `omp-web ui listening on ...`); the session's `OMP_SESSION|` line stays
  * parseable by spawners.
  */
 
@@ -81,7 +81,7 @@ const USAGE = `usage: omp-web [options] | omp-web <command> [options]
   (bare)                       control plane + UI on one port (default 4722);
                                first run with no config on a TTY offers setup
   control                      control plane only, no UI (default port 4722)
-  ui                           UI daemon: static UI + proxy to the control plane
+  ui                           UI server: static UI + proxy to the control plane
                                (default port 4723)
   sessions | projects          list sessions / registered projects
   profiles                     list provider profiles
@@ -89,7 +89,7 @@ const USAGE = `usage: omp-web [options] | omp-web <command> [options]
   rm-project | add-worktree | rm-worktree | prompt | preflight
                                fleet control plane (missing arguments print
                                the command's usage)
-  session [options]            run one agent session daemon (no web UI)
+  session [options]            run one agent session process (no web UI)
   relay --port <n> [options]   run the collab relay that sessions publish rooms to
   update [--check] [--force] [--version x.y.z]
                                self-update from the release channel
@@ -148,7 +148,7 @@ if (import.meta.main) {
 			// Drop the `session` token so the session config's parseConfig sees
 			// exactly what `bun apps/session/index.ts` would see, then hand the
 			// process over. Static import is impossible here: apps/session/index.ts
-			// is top-level-executed (boots the daemon at module evaluation), so
+			// is top-level-executed (boots the session at module evaluation), so
 			// loading it must stay deferred until the subcommand selects it.
 			process.argv = [...process.argv.slice(0, 2), ...argv.slice(1)];
 			await import("../session/index");

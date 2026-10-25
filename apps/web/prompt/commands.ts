@@ -95,7 +95,7 @@ function recordCommandUse(name: string): void {
 	}
 }
 
-/** Every name the composer can run now: local handlers, feature routes, and the daemon's advertised list. */
+/** Every name the composer can run now: local handlers, feature routes, and the session's advertised list. */
 export function currentCommandRegistry(): CommandEntry[] {
 	return buildCommandRegistry({
 		localNames: Object.keys(LOCAL_COMMANDS),
@@ -111,7 +111,7 @@ export function currentCommandRegistry(): CommandEntry[] {
 }
 
 /**
- * Sends a daemon-run command after echoing it. While a turn streams, the busy
+ * Sends a session-run command after echoing it. While a turn streams, the busy
  * policy decides (jx0b, CMD-08): read-only builtins run now, `/session delete`
  * is refused with a notice, and everything else queues as a command chip.
  */
@@ -320,7 +320,7 @@ function dumpRoute(args: string): void {
 
 /**
  * P0.4: cwd-mutating workspace commands are refused explicitly while the
- * daemon/fleet assumes an immutable checkout. `/move` and `/wt` would
+ * session/fleet assumes an immutable checkout. `/move` and `/wt` would
  * desynchronize the roster, session files, and artifact roots; refusing with
  * a named alternative beats a silent desync. The ACP handlers stay reachable
  * via agent-side dispatch for non-attached contexts.

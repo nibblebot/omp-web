@@ -1,17 +1,17 @@
 /**
  * Store tests for the resume picker slice (store/resume.ts): the behavior the
  * picker components consume. The browser socket transport is the shared fake; every
- * daemon answer is dispatched by hand, so nothing touches the network.
+ * session answer is dispatched by hand, so nothing touches the network.
  *
  * - "All projects" is sent with every list request and persists in localStorage
  * - pins are server-owned: they survive a store reload because the next list
  *   answer carries them
- * - rename normalizes the title client-side and applies the daemon's saved one
+ * - rename normalizes the title client-side and applies the session's saved one
  * - delete refuses locally before any call, routes attached vs other sessions
- *   to different methods, and keeps the row when the daemon refuses
+ *   to different methods, and keeps the row when the session refuses
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { ClientCommand, DaemonEntry, RegisteredProject } from "#lib/wire/protocol";
+import type { ClientCommand, RosterEntry, RegisteredProject } from "#lib/wire/protocol";
 import { connect, setState, state } from "../../state";
 import {
 	chooseResumeTarget,
@@ -70,7 +70,7 @@ function candidate(id: string, overrides: Record<string, unknown> = {}): Record<
 function reset(): void {
 	setState("resume", createResumeState());
 	setState("sessionFile", undefined);
-	setState("currentSessionId", "");
+	setState("currentWorkspaceId", "");
 }
 
 beforeEach(() => {
@@ -78,7 +78,7 @@ beforeEach(() => {
 	installLocalStorageShim();
 	connect();
 	FakeWebSocket.instances.at(-1)?.onopen?.();
-	setState({ modal: null, daemonRoster: [] });
+	setState({ modal: null, sessionRoster: [] });
 	reset();
 });
 
@@ -178,8 +178,8 @@ describe("pins", () => {
 			["b", true],
 		]);
 
-		// "Reload": the mirror is empty until the daemon answers again. Pins live in
-		// the daemon's pins file, so the same answer restores them.
+		// "Reload": the mirror is empty until the session answers again. Pins live in
+		// the session's pins file, so the same answer restores them.
 		reset();
 		expect(resumeCandidates()).toEqual([]);
 		expect(resumePinnedIds()).toEqual([]);
@@ -206,7 +206,7 @@ describe("rename", () => {
 		await loaded;
 	}
 
-	test("sends the trimmed title for the file and applies the daemon's saved title", async () => {
+	test("sends the trimmed title for the file and applies the session's saved title", async () => {
 		await load();
 		const done = renameResumeSession({ id: "a", file: "/sessions/app/a.jsonl" }, "  Auth rework  ");
 		expect(calls("resumeRename").at(-1)?.args).toEqual([
@@ -218,7 +218,7 @@ describe("rename", () => {
 		expect(resumeCandidates().find((c) => c.id === "b")?.title).toBeUndefined();
 	});
 
-	test("an empty or over-long title never reaches the daemon", async () => {
+	test("an empty or over-long title never reaches the session", async () => {
 		await load();
 		expect(await renameResumeSession({ id: "a", file: "/sessions/app/a.jsonl" }, "   ")).toBe(
 			false,
@@ -240,7 +240,7 @@ describe("rename", () => {
 		expect(await done).toBe(true);
 	});
 
-	test("a daemon refusal surfaces as the picker error and keeps the old title", async () => {
+	test("a session refusal surfaces as the picker error and keeps the old title", async () => {
 		await load();
 		const done = renameResumeSession({ id: "a", file: "/sessions/app/a.jsonl" }, "New name");
 		await answer("resumeRename", undefined, false, "Session is owned by another writer");
@@ -303,11 +303,11 @@ describe("delete", () => {
 		expect(calls("resumeDelete")).toEqual([]);
 		await answer("deleteSession", { deleted: true });
 		expect(await done).toBe(true);
-		// The daemon replaced the session, so the list is re-fetched, not trusted locally.
+		// The session replaced the session, so the list is re-fetched, not trusted locally.
 		expect(calls("resumeList")).toHaveLength(2);
 	});
 
-	test("a daemon refusal (not in the owning listing) keeps the row and shows the reason", async () => {
+	test("a session refusal (not in the owning listing) keeps the row and shows the reason", async () => {
 		await load();
 		const done = deleteResumeSession({ id: "c", file: "/sessions/app/c.jsonl" });
 		await answer("resumeDelete", undefined, false, "Session file is not in the session listing");
@@ -322,15 +322,15 @@ describe("owner resolution when resuming", () => {
 	const sessionFile = "/sessions/other/s1.jsonl";
 
 	beforeEach(() => {
-		setState("currentSessionId", "d-app");
+		setState("currentWorkspaceId", "d-app");
 	});
 
-	function daemon(daemonId: string, cwd: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+	function entry(workspaceId: string, cwd: string, extra: Partial<RosterEntry> = {}): RosterEntry {
 		return {
-			daemonId,
-			name: daemonId,
+			workspaceId,
+			name: workspaceId,
 			cwd,
-			project: daemonId,
+			project: workspaceId,
 			status: "asleep",
 			...extra,
 		};
@@ -352,7 +352,7 @@ describe("owner resolution when resuming", () => {
 		};
 	}
 
-	/** Start a by-id resume; the daemon's resolve answers with one unique session in `cwd`. */
+	/** Start a by-id resume; the session's resolve answers with one unique session in `cwd`. */
 	function resolveUnique(cwd: string): Promise<unknown> {
 		const pending = chooseResumeTarget("s1");
 		void answer("resumeResolve", {
@@ -362,24 +362,24 @@ describe("owner resolution when resuming", () => {
 		return pending;
 	}
 
-	test("an asleep daemon on the folder wakes with the chosen file and nothing is refused", async () => {
+	test("an asleep session on the folder wakes with the chosen file and nothing is refused", async () => {
 		setState({
-			daemonRoster: [
-				daemon("d-app", "/work/app", { status: "ready" }),
-				daemon("d-other", "/work/other"),
+			sessionRoster: [
+				entry("d-app", "/work/app", { status: "ready" }),
+				entry("d-other", "/work/other"),
 			],
 			registeredProjects: [project("p1", "/work/other")],
 		});
 		void resolveUnique("/work/other");
 		await flushMicrotasks();
 		expect(posted.filter((c) => c.type === "spawn_resume")).toEqual([
-			expect.objectContaining({ daemonId: "d-other", sessionFile }),
+			expect.objectContaining({ workspaceId: "d-other", sessionFile }),
 		]);
 		expect(resumeError()).toBeNull();
 	});
 
-	test("two daemons on one folder keep the explicit choice and wake nothing", async () => {
-		setState({ daemonRoster: [daemon("d-1", "/work/other"), daemon("d-2", "/work/other")] });
+	test("two sessions on one folder keep the explicit choice and wake nothing", async () => {
+		setState({ sessionRoster: [entry("d-1", "/work/other"), entry("d-2", "/work/other")] });
 		await resolveUnique("/work/other");
 		expect(resumeError()).toBe(
 			"Select the owning profile/workspace/directory in the roster before resuming this session.",
@@ -387,9 +387,9 @@ describe("owner resolution when resuming", () => {
 		expect(posted.filter((c) => c.type === "spawn_resume")).toEqual([]);
 	});
 
-	test("a registered project with no daemon is started, then resumes once its daemon is ready", async () => {
+	test("a registered project with no session is started, then resumes once its session is ready", async () => {
 		setState({
-			daemonRoster: [daemon("d-app", "/work/app", { status: "ready" })],
+			sessionRoster: [entry("d-app", "/work/app", { status: "ready" })],
 			registeredProjects: [project("p1", "/work/other")],
 		});
 		void resolveUnique("/work/other");
@@ -402,9 +402,9 @@ describe("owner resolution when resuming", () => {
 
 		dispatch({
 			type: "roster",
-			daemons: [
-				daemon("d-app", "/work/app", { status: "ready" }),
-				daemon("d-new", "/work/other", { status: "spawning" }),
+			entries: [
+				entry("d-app", "/work/app", { status: "ready" }),
+				entry("d-new", "/work/other", { status: "spawning" }),
 			],
 		});
 		await flushMicrotasks();
@@ -412,22 +412,22 @@ describe("owner resolution when resuming", () => {
 
 		dispatch({
 			type: "roster",
-			daemons: [
-				daemon("d-app", "/work/app", { status: "ready" }),
-				daemon("d-new", "/work/other", { status: "ready" }),
+			entries: [
+				entry("d-app", "/work/app", { status: "ready" }),
+				entry("d-new", "/work/other", { status: "ready" }),
 			],
 		});
 		await flushMicrotasks();
 		const attach = posted.filter((c) => c.type === "attach").at(-1);
-		expect(attach).toEqual(expect.objectContaining({ sessionId: "d-new" }));
+		expect(attach).toEqual(expect.objectContaining({ workspaceId: "d-new" }));
 		if (attach?.type !== "attach") throw new Error("expected an attach command");
-		dispatch({ type: "attach_result", id: attach.id, ok: true, sessionId: "d-new" });
+		dispatch({ type: "attach_result", id: attach.id, ok: true, workspaceId: "d-new" });
 		await flushMicrotasks();
 		expect(calls("switchSession").at(-1)?.args).toEqual([sessionFile]);
 	});
 
 	test("with no session attached it refuses at once instead of parking the call until it times out (Open in Chat)", async () => {
-		setState("currentSessionId", "");
+		setState("currentWorkspaceId", "");
 		const outcome = await chooseResumeTarget("s1");
 		expect(outcome.kind).toBe("refused");
 		expect(resumeError()).toContain("Open a workspace in Chat first");
@@ -436,7 +436,7 @@ describe("owner resolution when resuming", () => {
 
 	test("a folder no registered project owns is refused with the path, and nothing starts", async () => {
 		setState({
-			daemonRoster: [daemon("d-app", "/work/app", { status: "ready" })],
+			sessionRoster: [entry("d-app", "/work/app", { status: "ready" })],
 			registeredProjects: [project("p1", "/work/app")],
 		});
 		const outcome = chooseResumeTarget("s1");
@@ -455,7 +455,7 @@ describe("owner resolution when resuming", () => {
 
 	test("rows in a folder no registered project owns are blocked with the reason and the path to add", () => {
 		setState({
-			daemonRoster: [daemon("d-app", "/work/app", { status: "ready" })],
+			sessionRoster: [entry("d-app", "/work/app", { status: "ready" })],
 			registeredProjects: [project("p1", "/work/app"), project("p2", "/work/asleep")],
 		});
 		const rows = sessionRowsFromResume(

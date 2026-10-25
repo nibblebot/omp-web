@@ -5,7 +5,7 @@ import { isLiveDaemon, restartDaemon, setState, state, stopDaemon } from "../../
 import { reportError } from "../../../store/toasts";
 import { BackgroundBar } from "../../ui/BackgroundBar";
 import { LoaderIcon } from "../../ui/icons";
-import { formatDaemonUptime } from "../../../fleet-ui/daemon-ui";
+import { formatDaemonUptime } from "../../../fleet-ui/session-ui";
 import { DAEMON_ICON } from "./daemon-icons";
 
 /** One live daemon in the strip: glyph, name, state, ready endpoint (if
@@ -48,7 +48,7 @@ const BackgroundDaemonRow: Component<{ d: DaemonInfo }> = (props) => {
 				<button
 					class="daemon-btn"
 					type="button"
-					title="Restart session process"
+					title="Restart daemon"
 					disabled={busy()}
 					onClick={() => void act(() => restartDaemon(props.d.projectDir, props.d.name))}
 				>
@@ -57,7 +57,7 @@ const BackgroundDaemonRow: Component<{ d: DaemonInfo }> = (props) => {
 				<button
 					class="daemon-btn daemon-btn--kill"
 					type="button"
-					title="Stop session process"
+					title="Stop daemon"
 					disabled={busy()}
 					onClick={() => void act(() => stopDaemon(props.d.projectDir, props.d.name))}
 				>
@@ -75,10 +75,10 @@ const BackgroundDaemonRow: Component<{ d: DaemonInfo }> = (props) => {
 export const BackgroundDaemonsBar: Component = () => {
 	const live = () =>
 		[...state.daemons.values()]
-			.filter((d) => isLiveDaemon(d) && d.reportedBy?.includes(state.currentSessionId) === true)
+			.filter((d) => isLiveDaemon(d) && d.reportedBy?.includes(state.currentWorkspaceId) === true)
 			.sort((a, b) => a.startedAt - b.startedAt);
 	return (
-		<BackgroundBar items={live()} label="Background session processes">
+		<BackgroundBar items={live()} label="Background daemons">
 			{(d) => <BackgroundDaemonRow d={d} />}
 		</BackgroundBar>
 	);

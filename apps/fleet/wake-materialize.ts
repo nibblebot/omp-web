@@ -4,10 +4,10 @@
  * When a clone workspace wakes and the resume-target session's transcript
  * is cold or missing in the volume agent dir, the FLEET fills the missing
  * stored lineage files from its log store into the volume's sessions dir
- * BEFORE the daemon spawns with the resume hint. This is the fleet-local
- * (bwrap) counterpart of the daemon-side bulk materialization
+ * BEFORE the session spawns with the resume hint. This is the fleet-local
+ * (bwrap) counterpart of the session-side bulk materialization
  * (server/session-materialize.ts, which rides the callback pair and covers
- * LIVE daemons); it also backs the lifecycle wake of a clone onto a fresh
+ * LIVE sessions); it also backs the lifecycle wake of a clone onto a fresh
  * volume (workspace-lifecycle.ts).
  *
  * Layout contract (mirrors apps/session/log-tailer.ts discovery and
@@ -22,7 +22,7 @@
  * Fill-missing-only rule: the store may LAG the volume (a stop can leave an
  * unacknowledged tail on the volume that never streamed). This helper never
  * overwrites a local file at least as long as the store copy; the volume is
- * the fresher truth and the daemon's tailer re-streams any local tail once
+ * the fresher truth and the session's tailer re-streams any local tail once
  * booted. A cold file, or a local file shorter than the store copy (a
  * truncated fill), is (re)filled from the store, atomically: the copy goes to
  * `<target>.part` and is renamed into place, so a crash mid-copy never leaves

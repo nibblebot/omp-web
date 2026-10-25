@@ -1,5 +1,5 @@
 /**
- * Collab relay choice and autoStart policy. Pure: the daemon feeds in the
+ * Collab relay choice and autoStart policy. Pure: the session feeds in the
  * settings it read and acts on the decision; tests drive the decisions directly.
  */
 

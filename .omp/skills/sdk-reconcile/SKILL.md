@@ -1,6 +1,6 @@
 ---
 name: sdk-reconcile
-description: Reconcile omp-web with the latest upstream @oh-my-pi SDK release. Bumps the seven pinned @oh-my-pi/* packages together in an isolated git worktree, triages every upstream changelog entry (breaking changes, removals, deprecations, fixes, features) plus a snapshot diff of the SDK surface omp-web mirrors (settings, builtin slash commands, tools), adapts repo code, decides with the user which new capabilities and settings get web surface, runs the release gate plus a real-daemon smoke, updates docs and changelog, and commits on a local branch. Use for "reconcile SDK", "bump SDK pins", "upgrade @oh-my-pi", or periodic SDK maintenance runs.
+description: Reconcile omp-web with the latest upstream @oh-my-pi SDK release. Bumps the seven pinned @oh-my-pi/* packages together in an isolated git worktree, triages every upstream changelog entry (breaking changes, removals, deprecations, fixes, features) plus a snapshot diff of the SDK surface omp-web mirrors (settings, builtin slash commands, tools), adapts repo code, decides with the user which new capabilities and settings get web surface, runs the release gate plus a real-session smoke, updates docs and changelog, and commits on a local branch. Use for "reconcile SDK", "bump SDK pins", "upgrade @oh-my-pi", or periodic SDK maintenance runs.
 ---
 
 # SDK reconcile
@@ -139,10 +139,10 @@ bun run format:check
 bun run build:web
 bun run test > "$OUT/test.log" 2>&1   # read failures back from the log; never pipe to tail/head
 bun e2e/onboarding.ts
-bun "$SKILL_DIR/smoke-daemon.ts" --root "$WT"
+bun "$SKILL_DIR/smoke-session.ts" --root "$WT"
 ```
 
-This is the release gate (`GATE_COMMANDS` in `scripts/release.ts`; re-read it in case it changed) plus lint and a real-daemon smoke. `smoke-daemon.ts` boots `apps/session/index.ts` against the operator's real agent dir and auth (the suites are hermetic and never do), reads the `/ws` browser-socket priming through `ready`, and prints JSON with `ok`, `frames`, and `sdkModel`. `sdkModel: null` means no default model resolved under the new SDK. Treat that as a regression if the same smoke on the invoking checkout returns a model.
+This is the release gate (`GATE_COMMANDS` in `scripts/release.ts`; re-read it in case it changed) plus lint and a real-session smoke. `smoke-session.ts` boots `apps/session/index.ts` against the operator's real agent dir and auth (the suites are hermetic and never do), reads the `/ws` browser-socket priming through `ready`, and prints JSON with `ok`, `frames`, and `sdkModel`. `sdkModel: null` means no default model resolved under the new SDK. Treat that as a regression if the same smoke on the invoking checkout returns a model.
 
 Attribute every failure before fixing it. A failure the base commit also has is pre-existing: list it in the report and leave it alone. To check a failing test file against the base without touching the invoking checkout:
 
@@ -247,7 +247,7 @@ Settings:      <new rows → visible/advanced/hidden; removed rows; other manife
 Surface:       <adopted items with commits; new in-development features>
 Decisions:     <each question asked → answer; each headless default taken>
 Gate:          <each command → pass/fail; pre-existing failures named>
-Smoke:         <smoke-daemon JSON ok/sdkModel/frames>
+Smoke:         <smoke-session JSON ok/sdkModel/frames>
 Docs:          <AGENTS.md / CHANGELOG / docs pages touched>
 Follow-ups:    <tracked kata issues; deferred capabilities with value/size; blockers with evidence>
 Next:          git -C <invoking checkout> merge <BRANCH>   |   git worktree remove <WT> && git branch -D <BRANCH>

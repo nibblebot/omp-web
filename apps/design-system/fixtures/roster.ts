@@ -1,7 +1,7 @@
 import type { UsageReport } from "@oh-my-pi/pi-ai";
 import {
 	daemonsKey,
-	type DaemonEntry,
+	type RosterEntry,
 	type DaemonInfo,
 	type ProjectBranch,
 	type PublicProviderProfile,
@@ -37,7 +37,7 @@ const localaction: RegisteredProject = {
 	addedAt: T0 - 30 * DAY,
 };
 
-/** A registered project with no daemons yet: its group shows the "start a session" chevron. */
+/** A registered project with no sessions yet: its group shows the "start a session" chevron. */
 const nixosConfig: RegisteredProject = {
 	projectId: "proj_nixos_config",
 	path: NIXOS_CONFIG,
@@ -58,9 +58,9 @@ export const rosterProjectBranches: ProjectBranch[] = [
 	{ name: "release/0.3", checkedOut: false },
 ];
 
-/** DaemonEntry: the omp-web main checkout, ready and mid-turn according to the fleet edge. */
-const daemonMain: DaemonEntry = {
-	daemonId: "dmn_a001",
+/** RosterEntry: the omp-web main checkout, ready and mid-turn according to the fleet edge. */
+const sessionMain: RosterEntry = {
+	workspaceId: "dmn_a001",
 	name: "omp-web",
 	cwd: OMP_WEB,
 	project: "omp-web",
@@ -77,9 +77,9 @@ const daemonMain: DaemonEntry = {
 	desiredState: "running",
 };
 
-/** DaemonEntry: linked worktree, ready, with local changes; the row the browser is attached to. */
-const daemonFixtures: DaemonEntry = {
-	daemonId: "dmn_a002",
+/** RosterEntry: linked worktree, ready, with local changes; the row the browser is attached to. */
+const sessionFixtures: RosterEntry = {
+	workspaceId: "dmn_a002",
 	name: "design-fixtures",
 	cwd: `${WORKTREES}/design-fixtures`,
 	project: "omp-web",
@@ -97,9 +97,9 @@ const daemonFixtures: DaemonEntry = {
 	desiredState: "running",
 };
 
-/** DaemonEntry: asleep worktree whose session can be resumed from the worktree sessions dialog. */
-const daemonAsleep: DaemonEntry = {
-	daemonId: "dmn_a003",
+/** RosterEntry: asleep worktree whose session can be resumed from the worktree sessions dialog. */
+const sessionAsleep: RosterEntry = {
+	workspaceId: "dmn_a003",
 	name: "review-anchors",
 	cwd: `${WORKTREES}/review-anchors`,
 	project: "omp-web",
@@ -114,10 +114,10 @@ const daemonAsleep: DaemonEntry = {
 	desiredState: "stopped",
 };
 
-/** DaemonEntry: registered linked worktree in the default creation directory; deletable like any other. */
-const daemonRegisteredWorktree: DaemonEntry = {
-	...daemonAsleep,
-	daemonId: "dmn_a007",
+/** RosterEntry: registered linked worktree in the default creation directory; deletable like any other. */
+const sessionRegisteredWorktree: RosterEntry = {
+	...sessionAsleep,
+	workspaceId: "dmn_a007",
 	name: "adopted-review",
 	cwd: `${WORKTREES}/adopted-review`,
 	branch: "review/external",
@@ -125,9 +125,9 @@ const daemonRegisteredWorktree: DaemonEntry = {
 	sessionTitle: undefined,
 };
 
-/** DaemonEntry: worktree whose daemon is still resolving provider and model (transitional status). */
-const daemonStarting: DaemonEntry = {
-	daemonId: "dmn_a004",
+/** RosterEntry: worktree whose session is still resolving provider and model (transitional status). */
+const sessionStarting: RosterEntry = {
+	workspaceId: "dmn_a004",
 	name: "tx-pagination",
 	cwd: `${WORKTREES}/tx-pagination`,
 	project: "omp-web",
@@ -140,9 +140,9 @@ const daemonStarting: DaemonEntry = {
 	desiredState: "running",
 };
 
-/** DaemonEntry: provider-run clone workspace still preparing its checkout. */
-const daemonClonePreparing: DaemonEntry = {
-	daemonId: "dmn_a005",
+/** RosterEntry: provider-run clone workspace still preparing its checkout. */
+const sessionClonePreparing: RosterEntry = {
+	workspaceId: "dmn_a005",
 	name: "bench-clone",
 	cwd: "/home/joshua/.omp/clones/bench-clone",
 	project: "omp-web",
@@ -155,9 +155,9 @@ const daemonClonePreparing: DaemonEntry = {
 	lifecycleStage: "runtime",
 };
 
-/** DaemonEntry: clone workspace whose lifecycle failed; the row offers Retry. */
-const daemonCloneFailed: DaemonEntry = {
-	daemonId: "dmn_a006",
+/** RosterEntry: clone workspace whose lifecycle failed; the row offers Retry. */
+const sessionCloneFailed: RosterEntry = {
+	workspaceId: "dmn_a006",
 	name: "k8s-trial",
 	cwd: "/home/joshua/.omp/clones/k8s-trial",
 	project: "omp-web",
@@ -172,9 +172,9 @@ const daemonCloneFailed: DaemonEntry = {
 		"PersistentVolumeClaim omp-k8s-trial stayed Pending for 120s (no fast-ssd capacity)",
 };
 
-/** DaemonEntry: ready clone cut from the project's local path; its row offers "Fetch into project". */
-const daemonCloneLocal: DaemonEntry = {
-	daemonId: "dmn_a008",
+/** RosterEntry: ready clone cut from the project's local path; its row offers "Fetch into project". */
+const sessionCloneLocal: RosterEntry = {
+	workspaceId: "dmn_a008",
 	name: "local-clone",
 	cwd: "/home/joshua/.omp/clones/local-clone",
 	project: "omp-web",
@@ -190,9 +190,9 @@ const daemonCloneLocal: DaemonEntry = {
 	uptime: 12 * 60,
 };
 
-/** DaemonEntry: localaction main checkout, ready; its turn finished while the user was elsewhere (unread). */
-const daemonLocalactionMain: DaemonEntry = {
-	daemonId: "dmn_b001",
+/** RosterEntry: localaction main checkout, ready; its turn finished while the user was elsewhere (unread). */
+const sessionLocalactionMain: RosterEntry = {
+	workspaceId: "dmn_b001",
 	name: "localaction",
 	cwd: LOCALACTION,
 	project: "localaction",
@@ -209,9 +209,9 @@ const daemonLocalactionMain: DaemonEntry = {
 	desiredState: "running",
 };
 
-/** DaemonEntry: attached daemon whose socket dropped; the status dot pulses while it redials. */
-const daemonReconnecting: DaemonEntry = {
-	daemonId: "dmn_b002",
+/** RosterEntry: attached session whose socket dropped; the status dot pulses while it redials. */
+const sessionReconnecting: RosterEntry = {
+	workspaceId: "dmn_b002",
 	name: "job-matrix",
 	cwd: `${LOCALACTION_WORKTREES}/job-matrix`,
 	project: "localaction",
@@ -225,9 +225,9 @@ const daemonReconnecting: DaemonEntry = {
 	desiredState: "running",
 };
 
-/** DaemonEntry: daemon whose session file could not be found; an error row with a failed lifecycle stage. */
-const daemonSessionError: DaemonEntry = {
-	daemonId: "dmn_c001",
+/** RosterEntry: session whose session file could not be found; an error row with a failed lifecycle stage. */
+const sessionErrorEntry: RosterEntry = {
+	workspaceId: "dmn_c001",
 	name: "localaction-bench",
 	cwd: "/srv/work/localaction",
 	project: "nixos-config",
@@ -240,9 +240,9 @@ const daemonSessionError: DaemonEntry = {
 	lifecycleError: "bwrap exited with status 1",
 };
 
-/** DaemonEntry: daemon waiting on an extension dialog (blocked activity). */
-const daemonBlocked: DaemonEntry = {
-	daemonId: "dmn_c002",
+/** RosterEntry: session waiting on an extension dialog (blocked activity). */
+const sessionBlocked: RosterEntry = {
+	workspaceId: "dmn_c002",
 	name: "release-bot",
 	cwd: "/srv/work/release",
 	project: "nixos-config",
@@ -254,41 +254,41 @@ const daemonBlocked: DaemonEntry = {
 	uptime: 8 * 60,
 };
 
-/** DaemonEntry list: everything the roster renders, across statuses and workspace kinds. */
-export const rosterDaemons: DaemonEntry[] = [
-	daemonMain,
-	daemonFixtures,
-	daemonAsleep,
-	daemonRegisteredWorktree,
-	daemonStarting,
-	daemonClonePreparing,
-	daemonCloneFailed,
-	daemonCloneLocal,
-	daemonLocalactionMain,
-	daemonReconnecting,
-	daemonSessionError,
-	daemonBlocked,
+/** RosterEntry list: everything the roster renders, across statuses and workspace kinds. */
+export const rosterEntries: RosterEntry[] = [
+	sessionMain,
+	sessionFixtures,
+	sessionAsleep,
+	sessionRegisteredWorktree,
+	sessionStarting,
+	sessionClonePreparing,
+	sessionCloneFailed,
+	sessionCloneLocal,
+	sessionLocalactionMain,
+	sessionReconnecting,
+	sessionErrorEntry,
+	sessionBlocked,
 ];
 
 /** Individual entries, for stories that show one row or one detail view. */
-export const rosterDaemon = {
-	main: daemonMain,
-	worktree: daemonFixtures,
-	asleep: daemonAsleep,
-	registeredWorktree: daemonRegisteredWorktree,
-	starting: daemonStarting,
-	clonePreparing: daemonClonePreparing,
-	cloneFailed: daemonCloneFailed,
-	cloneLocal: daemonCloneLocal,
-	localactionMain: daemonLocalactionMain,
-	reconnecting: daemonReconnecting,
-	sessionError: daemonSessionError,
-	blocked: daemonBlocked,
-} satisfies Record<string, DaemonEntry>;
+export const rosterEntry = {
+	main: sessionMain,
+	worktree: sessionFixtures,
+	asleep: sessionAsleep,
+	registeredWorktree: sessionRegisteredWorktree,
+	starting: sessionStarting,
+	clonePreparing: sessionClonePreparing,
+	cloneFailed: sessionCloneFailed,
+	cloneLocal: sessionCloneLocal,
+	localactionMain: sessionLocalactionMain,
+	reconnecting: sessionReconnecting,
+	sessionError: sessionErrorEntry,
+	blocked: sessionBlocked,
+} satisfies Record<string, RosterEntry>;
 
-/** DaemonEntry: localaction linked worktree, ready and idle; the App view's healthy counterpart of `daemonReconnecting`. */
-const daemonJobMatrix: DaemonEntry = {
-	daemonId: "dmn_b003",
+/** RosterEntry: localaction linked worktree, ready and idle; the App view's healthy counterpart of `sessionReconnecting`. */
+const sessionJobMatrix: RosterEntry = {
+	workspaceId: "dmn_b003",
 	name: "job-matrix",
 	cwd: `${LOCALACTION_WORKTREES}/job-matrix`,
 	project: "localaction",
@@ -306,9 +306,9 @@ const daemonJobMatrix: DaemonEntry = {
 	desiredState: "running",
 };
 
-/** DaemonEntry: asleep localaction worktree from yesterday (App view only). */
-const daemonArtifactPaths: DaemonEntry = {
-	daemonId: "dmn_b004",
+/** RosterEntry: asleep localaction worktree from yesterday (App view only). */
+const sessionArtifactPaths: RosterEntry = {
+	workspaceId: "dmn_b004",
 	name: "artifact-paths",
 	cwd: `${LOCALACTION_WORKTREES}/artifact-paths`,
 	project: "localaction",
@@ -323,9 +323,9 @@ const daemonArtifactPaths: DaemonEntry = {
 	desiredState: "stopped",
 };
 
-/** DaemonEntry: nixos-config main checkout, ready with uncommitted host changes (App view only). */
-const daemonNixosMain: DaemonEntry = {
-	daemonId: "dmn_d001",
+/** RosterEntry: nixos-config main checkout, ready with uncommitted host changes (App view only). */
+const sessionNixosMain: RosterEntry = {
+	workspaceId: "dmn_d001",
 	name: "nixos-config",
 	cwd: NIXOS_CONFIG,
 	project: "nixos-config",
@@ -342,9 +342,9 @@ const daemonNixosMain: DaemonEntry = {
 	desiredState: "running",
 };
 
-/** DaemonEntry: asleep nixos-config worktree for a flake input bump (App view only). */
-const daemonFlakeUpdate: DaemonEntry = {
-	daemonId: "dmn_d002",
+/** RosterEntry: asleep nixos-config worktree for a flake input bump (App view only). */
+const sessionFlakeUpdate: RosterEntry = {
+	workspaceId: "dmn_d002",
 	name: "flake-update",
 	cwd: `${NIXOS_CONFIG_WORKTREES}/flake-update`,
 	project: "nixos-config",
@@ -359,34 +359,34 @@ const daemonFlakeUpdate: DaemonEntry = {
 	desiredState: "stopped",
 };
 
-/** DaemonEntry list for the App view (`/`): a plausible working sidebar, with no clone, failed, transitional, or reconnecting rows. */
-export const rosterAppDaemons: DaemonEntry[] = [
-	daemonMain,
-	daemonFixtures,
-	daemonAsleep,
-	daemonLocalactionMain,
-	daemonJobMatrix,
-	daemonArtifactPaths,
-	daemonNixosMain,
-	daemonFlakeUpdate,
+/** RosterEntry list for the App view (`/`): a plausible working sidebar, with no clone, failed, transitional, or reconnecting rows. */
+export const rosterAppEntries: RosterEntry[] = [
+	sessionMain,
+	sessionFixtures,
+	sessionAsleep,
+	sessionLocalactionMain,
+	sessionJobMatrix,
+	sessionArtifactPaths,
+	sessionNixosMain,
+	sessionFlakeUpdate,
 ];
 
-/** ProjectGroupsData: grouped daemons per project for ProjectGroups; main checkouts first, then worktrees and clones. */
+/** ProjectGroupsData: grouped sessions per project for ProjectGroups; main checkouts first, then worktrees and clones. */
 export const rosterSidebarGroups: ProjectGroupsData = [
 	{
 		project: ompWeb,
-		daemons: [
-			daemonMain,
-			daemonClonePreparing,
-			daemonCloneFailed,
-			daemonCloneLocal,
-			daemonFixtures,
-			daemonAsleep,
-			daemonStarting,
+		sessions: [
+			sessionMain,
+			sessionClonePreparing,
+			sessionCloneFailed,
+			sessionCloneLocal,
+			sessionFixtures,
+			sessionAsleep,
+			sessionStarting,
 		],
 	},
-	{ project: localaction, daemons: [daemonLocalactionMain, daemonReconnecting] },
-	{ project: nixosConfig, daemons: [daemonSessionError, daemonBlocked] },
+	{ project: localaction, sessions: [sessionLocalactionMain, sessionReconnecting] },
+	{ project: nixosConfig, sessions: [sessionErrorEntry, sessionBlocked] },
 ];
 
 /** Supervised process rows for BackgroundDaemonsBar, anchored to `now` since the strip renders `Date.now() - startedAt`.
@@ -602,7 +602,7 @@ export const rosterUsageReports: UsageReport[] = [
 /** WorktreeDeleteInfo: clean, merged, linked worktree; the dialog offers branch deletion. */
 export const worktreeInfoClean: WorktreeDeleteInfo = {
 	type: "worktree_delete_info",
-	daemonId: "dmn_a003",
+	workspaceId: "dmn_a003",
 	linked: true,
 	dirty: false,
 	branch: "fix/review-anchors",
@@ -614,7 +614,7 @@ export const worktreeInfoClean: WorktreeDeleteInfo = {
 /** WorktreeDeleteInfo: dirty worktree, so the dialog refuses and lists the change counts. */
 export const worktreeInfoDirty: WorktreeDeleteInfo = {
 	type: "worktree_delete_info",
-	daemonId: "dmn_a002",
+	workspaceId: "dmn_a002",
 	linked: true,
 	dirty: true,
 	git: { added: 2, modified: 5, deleted: 0, untracked: 3, linesAdded: 412, linesDeleted: 18 },
@@ -635,13 +635,13 @@ export const worktreeInfoDirty: WorktreeDeleteInfo = {
 /** WorktreeDeleteInfo: not a linked Git worktree; the dialog refuses it. */
 export const worktreeInfoNotLinked: WorktreeDeleteInfo = {
 	type: "worktree_delete_info",
-	daemonId: "dmn_a007",
+	workspaceId: "dmn_a007",
 	linked: false,
 	dirty: false,
 	reason: "This is not a linked Git worktree omp-web can delete; its files stay on disk.",
 };
 
-/** SessionListEntry list per daemon for the worktree sessions dialog, newest first. */
+/** SessionListEntry list per session for the worktree sessions dialog, newest first. */
 export function rosterSessions(now: number): SessionListEntry[] {
 	return [
 		{
@@ -676,16 +676,16 @@ export const rosterFleetState = {
 	authStatus: "disabled",
 	sidebarVisible: true,
 	registeredProjects: rosterProjects,
-	daemonRoster: rosterDaemons,
+	sessionRoster: rosterEntries,
 	// The seeded roster is the first roster frame: rows present now never animate in.
 	rosterLoaded: true,
 	providerProfiles: rosterProviderProfiles,
 	fleetConfigPath: "/home/joshua/.config/omp-web/fleet.json",
-	currentSessionId: "dmn_a002",
+	currentWorkspaceId: "dmn_a002",
 	usageReports: rosterUsageReports,
 	sidebarUsage: true,
 	// dmn_a001 is mid-turn, dmn_c002 waits on a dialog; dmn_b001 is marked unread by seedRosterFleet (roster-seed.ts).
-	daemonActivity: {
+	sessionActivity: {
 		dmn_a001: { streaming: true, blocked: false },
 		dmn_c002: { streaming: false, blocked: true },
 	},
