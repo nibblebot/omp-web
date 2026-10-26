@@ -5,7 +5,7 @@ import { call } from "./transport";
 
 /**
  * The one `getJobTree` poll of the web. Every job surface (the Activities bar, popovers and panel, the
- * jobs sheet, the background-card reconcile) reads this snapshot; none calls `getJobTree` itself.
+ * background-card reconcile) reads this snapshot; none calls `getJobTree` itself.
  *
  * The `job_widgets` frame carries only the running count and widget glances, not the tree, and the SDK
  * announces no job status changes, so the tree is polled. `getJobTree` is a read-only call that never
@@ -14,8 +14,11 @@ import { call } from "./transport";
  * It runs only while a workspace is attached and connected and the page is visible (a tab nobody looks at
  * asks nothing). Period: {@link JOB_POLL_FOCUSED_MS} while any consumer holds focus (a surface showing the
  * list is open), else {@link JOB_POLL_IDLE_MS}. A `job_widgets` frame that changes the running count polls
- * at once (a job started or ended), and so does the page becoming visible. Calls never overlap: a poll in
- * flight is joined. Every answer is stamped with the workspace asked and dropped when the attached
+ * at once (a job started or ended), and so does the page becoming visible. Requests never overlap: a plain
+ * poll joins the one in flight. A poll that needs an answer newer than the request in flight (the running
+ * count changed, or a refresh after a mutation) marks that request stale instead: its answer is dropped
+ * and one more request follows, so the poll resolves with an answer asked after the change. Every answer is
+ * stamped with the workspace asked and dropped when the attached
  * workspace changed meanwhile, as in `store/plugins.ts`.
  *
  * Imperative on purpose: no module-level effect (the store has no owner, and a test runs against the
@@ -76,13 +79,12 @@ export function jobPollError(): string | null {
 }
 
 /** Called after each answer kept for the attached workspace; the poll resolves once every listener settled. */
-export type JobTreeListener = (poll: number) => void | Promise<void>;
+export type JobTreeListener = () => void | Promise<void>;
 const listeners = new Set<JobTreeListener>();
 
 /**
- * Observe the answers (for a consumer that derives work from each one, such as the sheet's selected-job
- * detail). `poll` is the ordinal of the poll that produced the answer, comparable to {@link jobPollCount}
- * read earlier: a larger one started later. Returns the unsubscribe.
+ * Observe the answers (for a consumer that derives work from each one, such as the Activities job
+ * detail). Returns the unsubscribe.
  */
 export function onJobTreeAnswer(listener: JobTreeListener): () => void {
 	listeners.add(listener);
@@ -91,12 +93,11 @@ export function onJobTreeAnswer(listener: JobTreeListener): () => void {
 	};
 }
 
-let started = 0;
-/** Polls started so far. */
-export const jobPollCount = (): number => started;
-
 interface Flight {
 	workspaceId: string;
+	/** Set when an answer newer than the request in flight is needed; that request's answer is dropped. */
+	stale: boolean;
+	/** Resolves when the last request of the flight (the follow-up of a stale one included) settled. */
 	done: Promise<void>;
 }
 let flight: Flight | undefined;
@@ -114,24 +115,25 @@ const visible = (): boolean =>
 	typeof document === "undefined" || document.visibilityState === "visible";
 const interval = (): number => (holders > 0 ? JOB_POLL_FOCUSED_MS : JOB_POLL_IDLE_MS);
 
-/** Ask for the tree now, joining a call in flight for the attached workspace; a no-op with no workspace. */
-function poll(): Promise<void> {
+/**
+ * Ask for the tree now for the attached workspace; a no-op with no workspace. A request in flight is
+ * joined, or with `fresh` marked stale so that one more request follows it and this resolves after that.
+ */
+function poll(fresh = false): Promise<void> {
 	const workspaceId = state.currentWorkspaceId;
 	if (workspaceId === "") return Promise.resolve();
-	if (flight?.workspaceId === workspaceId) return flight.done;
-	const ordinal = ++started;
-	const mine: Flight = { workspaceId, done: Promise.resolve() };
+	if (flight?.workspaceId === workspaceId) {
+		if (fresh) flight.stale = true;
+		return flight.done;
+	}
+	const mine: Flight = { workspaceId, stale: false, done: Promise.resolve() };
 	flight = mine;
 	mine.done = (async () => {
 		try {
-			const tree = (await call("getJobTree", [])) as JobTreeDto | null;
-			if (workspaceId !== state.currentWorkspaceId) return;
-			setAnswer({ workspaceId, tree, at: Date.now() });
-			setFailure(undefined);
-			await Promise.all([...listeners].map((listener) => listener(ordinal)));
-		} catch (err) {
-			if (workspaceId === state.currentWorkspaceId)
-				setFailure({ workspaceId, message: message(err) });
+			do {
+				mine.stale = false;
+				await request(workspaceId, mine);
+			} while (mine.stale && workspaceId === state.currentWorkspaceId);
 		} finally {
 			if (flight === mine) flight = undefined;
 			// A call of a workspace left behind paces and re-arms nothing.
@@ -142,6 +144,20 @@ function poll(): Promise<void> {
 		}
 	})();
 	return mine.done;
+}
+
+/** One `getJobTree` request of a flight: keep its answer (or failure) unless the workspace changed or it went stale. */
+async function request(workspaceId: string, mine: Flight): Promise<void> {
+	try {
+		const tree = (await call("getJobTree", [])) as JobTreeDto | null;
+		if (workspaceId !== state.currentWorkspaceId || mine.stale) return;
+		setAnswer({ workspaceId, tree, at: Date.now() });
+		setFailure(undefined);
+		await Promise.all([...listeners].map((listener) => listener()));
+	} catch (err) {
+		if (workspaceId === state.currentWorkspaceId && !mine.stale)
+			setFailure({ workspaceId, message: message(err) });
+	}
 }
 
 /**
@@ -187,9 +203,13 @@ function watchVisibility(): void {
 }
 watchVisibility();
 
-/** Immediate poll; joins one in flight. Resolves without asking when no workspace is attached. */
-export function refreshJobTree(): Promise<void> {
-	return poll();
+/**
+ * Immediate poll; joins one in flight. With `fresh` the answer is one asked after this call (for a
+ * refresh after a mutation), so a request in flight is followed by another. Resolves without asking when no
+ * workspace is attached.
+ */
+export function refreshJobTree(options: { fresh?: boolean } = {}): Promise<void> {
+	return poll(options.fresh === true);
 }
 
 /**
@@ -222,5 +242,5 @@ export function jobPollAttached(): void {
 
 /** A `job_widgets` frame changed the running count: a job started or ended, so the tree changed. */
 export function jobPollRunningChanged(): void {
-	if (visible() && attached()) void poll();
+	if (visible() && attached()) void poll(true);
 }

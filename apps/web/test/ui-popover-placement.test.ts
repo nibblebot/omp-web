@@ -61,4 +61,17 @@ describe("placePopover", () => {
 		const clamped = placePopover(anchorAt(600, 100), viewport, { ...opts, align: "end" });
 		expect(clamped.left).toBe(8);
 	});
+
+	test("a viewport narrower than the popover shrinks it to fit between the margins", () => {
+		const phone = { width: 375, height: 700 };
+		const wide = { ...opts, width: 440, align: "end" as const };
+		const p = placePopover(anchorAt(600, 340), phone, wide);
+		expect(p.width).toBe(375 - 2 * 8);
+		expect(p.left).toBe(8);
+		expect(p.left + p.width).toBeLessThanOrEqual(phone.width - 8);
+	});
+
+	test("the requested width is kept when the viewport has room", () => {
+		expect(placePopover(anchorAt(600), viewport, opts).width).toBe(320);
+	});
 });

@@ -236,6 +236,53 @@ describe("job_widgets running count", () => {
 		await settle();
 		expect(calls).toBe(1);
 	});
+
+	describe("with a request already in flight", () => {
+		const rowIds = () => poll.jobTreeRows().map((row) => (row.kind === "job" ? row.job.id : ""));
+		let pending: Array<PromiseWithResolvers<JobTreeDto>> = [];
+		beforeEach(() => {
+			pending = [];
+			handler = () => {
+				calls++;
+				const next = Promise.withResolvers<JobTreeDto>();
+				pending.push(next);
+				return next.promise;
+			};
+		});
+
+		test("a change asks again once the first settles, and the older answer never shows", async () => {
+			await attach("sess-a");
+			expect(calls).toBe(1);
+			applyJobWidgets({ running: 1, entries: [] });
+			await settle();
+			// Requests never overlap.
+			expect(calls).toBe(1);
+			pending[0]?.resolve(treeOf(job("old")));
+			await settle();
+			expect(calls).toBe(2);
+			expect(rowIds()).toEqual([]);
+			pending[1]?.resolve(treeOf(job("new")));
+			await settle();
+			expect(calls).toBe(2);
+			expect(rowIds()).toEqual(["new"]);
+		});
+
+		test("a refresh after a mutation resolves with an answer asked after it", async () => {
+			await attach("sess-a");
+			let resolved = false;
+			const refreshed = poll.refreshJobTree({ fresh: true }).then(() => {
+				resolved = true;
+			});
+			pending[0]?.resolve(treeOf(job("old")));
+			await settle();
+			expect(resolved).toBe(false);
+			expect(calls).toBe(2);
+			pending[1]?.resolve(treeOf(job("new")));
+			await refreshed;
+			expect(rowIds()).toEqual(["new"]);
+			expect(calls).toBe(2);
+		});
+	});
 });
 
 describe("answers and workspaces", () => {

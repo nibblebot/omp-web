@@ -16,10 +16,14 @@ mock.module("../../store/transport", () => ({
 	call: (method: string, args: unknown[]) => handler(method, args),
 }));
 
-afterAll(() => {
+afterAll(async () => {
 	// mock.restore() leaves module mocks installed; reinstall the real exports for later files.
 	mock.module("../../store/transport", () => originalTransport);
 	setState("items", []);
+	// Detach so the poll drops the re-armed timer the file's refreshes left behind, then hand the id back.
+	setState("currentWorkspaceId", "");
+	clearJobWidgets();
+	await Promise.resolve();
 	setState("currentWorkspaceId", originalSession);
 });
 

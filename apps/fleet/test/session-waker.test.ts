@@ -172,7 +172,6 @@ function answerTurn(session: CallbackSession, callId: string, text: string): voi
 	frame(session, { type: "call_result", id: callId, ok: true });
 	frame(session, {
 		type: "event",
-		workspaceId: "s1",
 		event: {
 			type: "message_end",
 			message: { role: "assistant", content: [{ type: "text", text }] },

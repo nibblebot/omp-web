@@ -80,7 +80,7 @@ One JSON object. Every field is validated by `validateProviderRequest`, which re
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `op` | one of `PROVIDER_OPS` | The operation. |
-| `workspaceId` | string | The workspace's stable id (the roster `workspaceId`). |
+| `workspaceId` | string | The id of the clone workspace the operation acts on. Stable for the workspace's life and never reused; it is the roster row's id. |
 | `generation` | positive safe integer | The desired runtime generation. Monotonic per workspace, never reused. |
 | `workspaceDir` | string | The workspace's checkout directory (`<volume>/.checkout`). |
 | `homeDir` | string | The workspace's private writable home (`<volume>/.home`). |

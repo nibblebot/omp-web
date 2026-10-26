@@ -4,8 +4,9 @@
  * subagents and jobs the attached session no longer has.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import type { JobDto, JobTreeDto } from "#lib/wire/protocol";
+import { daemonsKey, type DaemonInfo, type JobDto, type JobTreeDto } from "#lib/wire/protocol";
 import type { SubagentInfo } from "../../state";
+import type { WorkerRecord } from "../../store/subagents";
 import { installLocalStorageShim, restoreBrowserGlobals } from "../web.testkit";
 
 // The shared job poll is replaced by a settable answer; the store modules are imported after the mock so they bind to it.
@@ -37,8 +38,11 @@ const {
 	setActivitiesMode,
 	toggleItemExpanded,
 	toggleSectionCollapsed,
+	toggleSubagentTreeRow,
 } = await import("../../store/activities");
 const { readDockLayout } = await import("../../prefs/dock-layout");
+// Not part of the job poll mock: imported with the other store modules.
+const { createWorkersState, workerKey } = await import("../../store/subagents");
 
 const sub = (id: string) => ({ section: "subagents" as const, id });
 const job = (id: string) => ({ section: "jobs" as const, id });
@@ -76,7 +80,10 @@ function pollReady(...ids: string[]): void {
 	pollView = { phase: "ready", tree, at: 1 };
 }
 
-let saved: Pick<typeof state, "currentWorkspaceId" | "subagents" | "subagentsLoaded">;
+let saved: Pick<
+	typeof state,
+	"currentWorkspaceId" | "subagents" | "subagentsLoaded" | "workers" | "daemons" | "daemonsLoaded"
+>;
 
 beforeEach(() => {
 	installLocalStorageShim();
@@ -84,6 +91,9 @@ beforeEach(() => {
 		currentWorkspaceId: state.currentWorkspaceId,
 		subagents: state.subagents,
 		subagentsLoaded: state.subagentsLoaded,
+		workers: state.workers,
+		daemons: state.daemons,
+		daemonsLoaded: state.daemonsLoaded,
 	};
 	restoreDockLayout("__no-such-workspace__");
 	setState({ currentWorkspaceId: "d1", subagentsLoaded: { mirror: false, roster: false } });
@@ -164,6 +174,57 @@ describe("opening", () => {
 		expect(state.activities.expanded.daemons.has("d8")).toBe(true);
 		expect(state.activities.detail).toBeUndefined();
 		expect(state.activities.lastFocused).toEqual(sub("a1"));
+	});
+
+	describe("a nested subagent under a collapsed tree row", () => {
+		/** a1 > a2 > a3, plus an unrelated root b1, all from the worker roster of the attached session. */
+		function seedRoster(): void {
+			const parents: Record<string, string | undefined> = {
+				a1: undefined,
+				a2: "a1",
+				a3: "a2",
+				b1: undefined,
+			};
+			const records: Record<string, WorkerRecord> = {};
+			const order: string[] = [];
+			for (const [id, parentAgentId] of Object.entries(parents)) {
+				const key = workerKey("d1", id);
+				records[key] = {
+					id,
+					agentId: id,
+					sessionId: "d1",
+					displayName: "task",
+					status: "running",
+					parentAgentId,
+					lastActivity: 0,
+					createdAt: 0,
+					revivable: false,
+				} as WorkerRecord;
+				order.push(key);
+			}
+			setState("workers", { ...createWorkersState(), records, order });
+		}
+
+		test("is revealed by opening the rows above it, in the accordion", () => {
+			seedRoster();
+			for (const id of ["a1", "a2", "b1"]) toggleSubagentTreeRow(id);
+			openActivities({ item: sub("a3") });
+			expect(state.activities.treeCollapsed.has("a1")).toBe(false);
+			expect(state.activities.treeCollapsed.has("a2")).toBe(false);
+			// Rows that do not hide the item keep their fold.
+			expect(state.activities.treeCollapsed.has("b1")).toBe(true);
+			expect(state.activities.expanded.subagents.has("a3")).toBe(true);
+			expect(readDockLayout("d1").activities.treeCollapsed).toEqual(["b1"]);
+		});
+
+		test("is revealed in the list behind a detail too", () => {
+			seedRoster();
+			toggleSubagentTreeRow("a1");
+			setActivitiesMode("detail");
+			openActivities({ item: sub("a2") });
+			expect(state.activities.detail).toEqual(sub("a2"));
+			expect(state.activities.treeCollapsed.has("a1")).toBe(false);
+		});
 	});
 });
 
@@ -346,6 +407,30 @@ describe("missing subagent and job fallback", () => {
 		reconcileMissingActivities();
 		expect([...state.activities.expanded.jobs]).toEqual(["j1"]);
 		expect(state.activities.lastFocused).toEqual(job("j1"));
+	});
+
+	test("saved daemon rows the fleet no longer lists are pruned once a daemons frame has landed", () => {
+		const vite: DaemonInfo = {
+			name: "vite",
+			id: "id-vite",
+			projectDir: "/work",
+			state: "running",
+			createdAt: 0,
+			startedAt: 0,
+			restartCount: 0,
+			persist: false,
+			detached: false,
+			reportedBy: ["w1"],
+		};
+		toggleItemExpanded(daemon(daemonsKey(vite)));
+		toggleItemExpanded(daemon("/work\0gone"));
+		// Before the first frame the roster is only the empty initial one: nothing is judged.
+		reconcileMissingActivities();
+		expect(state.activities.expanded.daemons.size).toBe(2);
+		setState({ daemons: new Map([[daemonsKey(vite), vite]]), daemonsLoaded: true });
+		reconcileMissingActivities();
+		expect([...state.activities.expanded.daemons]).toEqual([daemonsKey(vite)]);
+		expect(readDockLayout("d1").activities.expanded.daemons).toEqual([daemonsKey(vite)]);
 	});
 
 	test("a task job is not a Jobs item", () => {

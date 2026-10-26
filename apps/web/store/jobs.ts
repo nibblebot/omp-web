@@ -150,7 +150,7 @@ export async function fetchJobDetail(jobId: string): Promise<JobDetailDto | null
 	}
 }
 
-/** Cancel one of the session's own running jobs; the session refuses any other. The tree reloads either way. */
+/** Cancel one of the session's own running jobs; the session refuses any other. The tree reloads either way, from a request asked after the cancel. */
 export async function cancelOwnJob(jobId: string): Promise<void> {
 	const workspaceId = state.currentWorkspaceId;
 	setCancelling(jobId);
@@ -162,7 +162,7 @@ export async function cancelOwnJob(jobId: string): Promise<void> {
 	} finally {
 		setCancelling(null);
 	}
-	await refreshJobTree();
+	await refreshJobTree({ fresh: true });
 }
 
 /** Forget a Cancel refusal once the surface that showed it is gone. */

@@ -29,7 +29,7 @@ import {
 	type ActivitySectionId,
 	type ActivitiesMode,
 } from "./slices/activities";
-import { subagentForest } from "./subagents";
+import { type SubagentNode, subagentForest } from "./subagents";
 
 export type {
 	ActivitiesMode,
@@ -122,8 +122,33 @@ function revealSection(section: ActivitySectionId): void {
 	requestFocus(section);
 }
 
+/** The ids above `id` in the subagent forest (root first); empty for a root or an unknown id. */
+function subagentAncestors(id: string): string[] {
+	const walk = (nodes: readonly SubagentNode[], path: string[]): string[] | undefined => {
+		for (const node of nodes) {
+			if (node.id === id) return path;
+			const found = walk(node.children, [...path, node.id]);
+			if (found !== undefined) return found;
+		}
+		return undefined;
+	};
+	return walk(subagentForest(), []) ?? [];
+}
+
+/** Open the tree rows above a subagent so its row is drawn (SubagentTree hides the children of collapsed rows). */
+function revealSubagentRow(id: string): void {
+	const hidden = subagentAncestors(id).filter((ancestor) =>
+		state.activities.treeCollapsed.has(ancestor),
+	);
+	if (hidden.length === 0) return;
+	const next = new Set(state.activities.treeCollapsed);
+	for (const ancestor of hidden) next.delete(ancestor);
+	setState("activities", "treeCollapsed", next);
+}
+
 function revealItem(item: ActivityItemRef): void {
 	unfold(item.section);
+	if (item.section === "subagents") revealSubagentRow(item.id);
 	const focus = detailRefOf(item);
 	if (focus !== undefined) setState("activities", "lastFocused", focus);
 	if (state.activities.mode === "detail" && focus !== undefined) {
@@ -252,11 +277,11 @@ export function applyActivitiesRoute(route: DockRoute): void {
 }
 
 /**
- * Drop subagent and job ids the attached session no longer has (after /new,
- * a resume, or a job leaving the poll): expanded rows, `lastFocused`, and the
- * open detail (which falls back to the list). Subagents are judged only once
- * the forest is fully loaded, jobs only once the shared poll has answered,
- * never while an attach is still filling them.
+ * Drop ids the attached session or fleet no longer has (after /new, a resume, a job leaving the poll, a
+ * daemon leaving the roster): expanded rows, `lastFocused`, and the open detail (which falls back to the
+ * list). Subagents are judged only once the forest is fully loaded, jobs only once the shared poll has
+ * answered, daemons only once a `daemons` frame has been applied, never while an attach is still filling
+ * them.
  */
 export function reconcileMissingActivities(): void {
 	if (state.currentWorkspaceId === "") return;
@@ -266,13 +291,13 @@ export function reconcileMissingActivities(): void {
 		known.subagents = new Set(flattenSubagentTree(subagentForest()).map((n) => n.id));
 	if (jobPollView().phase === "ready")
 		known.jobs = new Set(activityJobRows().map((row) => row.job.id));
+	const daemonKeys = state.daemonsLoaded ? new Set(state.daemons.keys()) : undefined;
 	const gone = (section: "subagents" | "jobs" | "daemons", id: string): boolean => {
-		if (section === "daemons") return false;
-		const ids = known[section];
+		const ids = section === "daemons" ? daemonKeys : known[section];
 		return ids !== undefined && !ids.has(id);
 	};
 	const a = state.activities;
-	const missingExpanded = (["subagents", "jobs"] as const).flatMap((section) =>
+	const missingExpanded = (["subagents", "jobs", "daemons"] as const).flatMap((section) =>
 		[...a.expanded[section]].filter((id) => gone(section, id)).map((id) => ({ section, id })),
 	);
 	const lastGone = a.lastFocused !== undefined && gone(a.lastFocused.section, a.lastFocused.id);

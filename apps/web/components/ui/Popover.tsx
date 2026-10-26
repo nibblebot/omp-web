@@ -10,7 +10,7 @@ export interface PopoverProps {
 	label: string;
 	/** Extra class on the surface, for the content's own layout. */
 	class?: string;
-	/** Surface width in px; also what the viewport clamp uses. */
+	/** Surface width in px; shrinks to fit a viewport narrower than it plus the margins. */
 	width?: number;
 	/** Preferred side of the anchor; the popover flips when that side is short of room. */
 	side?: "above" | "below";
@@ -40,6 +40,7 @@ export const Popover: Component<PopoverProps> = (props) => {
 	const [place, setPlace] = createSignal<PopoverPlacement>({
 		side: props.side ?? "above",
 		left: 0,
+		width: width(),
 		offset: 0,
 		maxHeight: 0,
 	});
@@ -64,7 +65,7 @@ export const Popover: Component<PopoverProps> = (props) => {
 		const p = place();
 		return {
 			left: `${p.left}px`,
-			width: `${width()}px`,
+			width: `${p.width}px`,
 			"max-height": `${p.maxHeight}px`,
 			...(p.side === "above" ? { bottom: `${p.offset}px` } : { top: `${p.offset}px` }),
 		};

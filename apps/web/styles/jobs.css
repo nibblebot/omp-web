@@ -1,4 +1,4 @@
-/* Jobs: the job row and detail of the Activities Jobs section, and the composer jobs bar. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Jobs: the job row and detail of the Activities Jobs section. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 .jobs-error {
 	font-size: var(--fs-sm);

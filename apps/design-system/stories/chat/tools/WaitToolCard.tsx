@@ -1,6 +1,6 @@
 import { WaitToolCard } from "../../../../web/components/chat/tools/WaitToolCard";
 import { answerCalls } from "../../../session";
-import { seedJobWidgets, benchEntry } from "../../../fixtures/job-bars";
+import { seedJobWidgets, benchEntry } from "../../../fixtures/job-widget-entries";
 import { waitWidgetsTool } from "../../../fixtures/job-widgets";
 import {
 	waitAgentsTool,

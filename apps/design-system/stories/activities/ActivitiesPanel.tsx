@@ -7,7 +7,7 @@ import {
 	toggleItemExpanded,
 	toggleSectionCollapsed,
 } from "../../../web/store/activities";
-import { agentEntry, benchEntry, seedJobWidgets } from "../../fixtures/job-bars";
+import { agentEntry, benchEntry, seedJobWidgets } from "../../fixtures/job-widget-entries";
 import { JOB_IDS, seedJobs } from "../../fixtures/jobs";
 import { DockFrame, seedActivities, seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";

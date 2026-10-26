@@ -262,8 +262,8 @@
 	z-index: var(--z-autocomplete);
 }
 /* Short viewports (phone landscape, open keyboard): the composer never
-   shrinks and the transcript keeps a readable minimum; the queue and
-   background bars fold to summary lines (prompt.css, tools.css). */
+   shrinks and the transcript keeps a readable minimum; the queue bar
+   folds to a summary line (prompt.css). */
 @media (max-height: 599px) {
 	.chat-transcript-wrap {
 		min-height: min(120px, 25dvh);

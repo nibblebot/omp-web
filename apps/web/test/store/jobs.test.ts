@@ -74,8 +74,12 @@ beforeEach(async () => {
 	await settle();
 	setState("currentWorkspaceId", "sess-a");
 });
-afterAll(() => {
+afterAll(async () => {
 	for (const release of releases.splice(0)) release();
+	// Detach so the poll drops the re-armed timer the file's refreshes left behind, then hand the state back.
+	setState("currentWorkspaceId", "");
+	clearJobWidgets();
+	await settle();
 	setState("currentWorkspaceId", originalSession);
 	setState("connected", originalConnected);
 });
@@ -209,6 +213,30 @@ describe("cancelling an own job", () => {
 		await cancel;
 		expect(jobs.cancellingJobId()).toBeNull();
 		expect(calls.map((c) => c.method)).toEqual(["getJobTree", "cancelJob", "getJobTree"]);
+		expect(poll.jobTreeRows()[0]).toMatchObject({ job: { status: "cancelled" } });
+	});
+
+	test("a tree request already in flight when the cancel lands does not stand for the reload", async () => {
+		const stale = held<JobTreeDto>();
+		let tree = treeOf(job("a"));
+		let first = true;
+		handler = async (method, args) => {
+			calls.push({ method, args });
+			if (method === "cancelJob") {
+				tree = treeOf(job("a", { status: "cancelled", endTime: 3000 }));
+				return { cancelled: true };
+			}
+			if (first) {
+				first = false;
+				return stale.promise;
+			}
+			return tree;
+		};
+		const inFlight = poll.refreshJobTree();
+		const cancel = jobs.cancelOwnJob("a");
+		await settle();
+		stale.resolve(treeOf(job("a")));
+		await Promise.all([inFlight, cancel]);
 		expect(poll.jobTreeRows()[0]).toMatchObject({ job: { status: "cancelled" } });
 	});
 

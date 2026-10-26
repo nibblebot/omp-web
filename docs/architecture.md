@@ -81,7 +81,7 @@ sequenceDiagram
   rect rgba(128,128,128,0.08)
   Note over B,E: Browser connects and attaches
   B->>E: GET /ws?client=id&proto=6 (WebSocket upgrade)
-  E-->>B: roster, entries, projects (priming, seq 1..k)
+  E-->>B: roster, daemons, registered_projects (priming, seq 1..k)
   B->>E: cmd attach
   E-->>B: ack
   E->>S: stream_open (lastSeq) on browser/connId

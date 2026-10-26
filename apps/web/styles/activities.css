@@ -774,8 +774,9 @@
 	color: var(--warning);
 }
 
+/* Only the subagent popover's running loader turns; a job's type icon keeps still. */
 @media (prefers-reduced-motion: no-preference) {
-	.activity-popover-glyph[data-status="running"] .icon {
+	.activity-popover-glyph--spin .icon {
 		animation: tool-spin var(--dur-spin) linear infinite;
 	}
 }

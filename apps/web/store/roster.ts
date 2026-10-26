@@ -97,7 +97,7 @@ export function settleWorkspaceSessions(
 }
 
 /**
- * Fetch a session's last sessions, newest-first. `limit` omitted = the fleet
+ * Fetch a workspace's last sessions, newest-first. `limit` omitted = the fleet
  * default (10); the fleet clamps to 1..200.
  */
 export function requestWorkspaceSessions(
@@ -213,7 +213,7 @@ export async function switchToSession(workspaceId: string): Promise<void> {
 }
 
 /**
- * Resume a specific session of a session from the worktree sessions dialog.
+ * Resume a specific session of a workspace from the worktree sessions dialog.
  *
  * Asleep sessions wake with spawn_resume carrying the chosen session file
  * (the edge validates it belongs to the worktree) and then attach, even when
@@ -260,7 +260,7 @@ export function resumeSession(workspaceId: string, sessionFile: string): Promise
 }
 
 /**
- * Start a fresh session in a session's worktree (the roster row's "+" under
+ * Start a fresh session in a workspace's worktree (the roster row's "+" under
  * its session switcher). Asleep sessions wake first (respawn --resume
  * lastSessionFile, as a row click does); the session attaches when it is not
  * already the live attached session; then, once THIS attach's `attached` frame

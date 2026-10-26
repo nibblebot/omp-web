@@ -453,7 +453,7 @@ async function resumeViaRoster(session: ResumeCandidate, workspaceId?: string): 
 	closeResumePicker();
 }
 
-/** Request a session's last sessions for disambiguating cross-session picks. */
+/** Request a workspace's last sessions for disambiguating cross-session picks. */
 export function requestResumeWorkspaceSessions(workspaceId: string): Promise<SessionListEntry[]> {
 	return requestWorkspaceSessions(workspaceId);
 }

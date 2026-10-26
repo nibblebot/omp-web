@@ -1,6 +1,5 @@
 import type { UsageReport } from "@oh-my-pi/pi-ai";
 import {
-	daemonsKey,
 	type RosterEntry,
 	type DaemonInfo,
 	type ProjectBranch,
@@ -690,8 +689,3 @@ export const rosterFleetState = {
 		dmn_c002: { streaming: false, blocked: true },
 	},
 } satisfies Partial<typeof state>;
-
-/** Map of supervised processes keyed like state.daemons, for the Daemons section seeds. */
-export function rosterDaemonMap(now: number): Map<string, DaemonInfo> {
-	return new Map(rosterDaemonInfos(now).map((info) => [daemonsKey(info), info]));
-}

@@ -3,7 +3,7 @@
  * Subagents, daemons are the ones this workspace's session reported, todos count done/total.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import type { DaemonInfo, JobDto, JobTreeRowDto } from "#lib/wire/protocol";
+import { daemonsKey, type DaemonInfo, type JobDto, type JobTreeRowDto } from "#lib/wire/protocol";
 import type { SubagentInfo } from "../../state";
 
 // The shared job poll is replaced by a settable answer; the summary is imported after the mock so it binds to it.
@@ -54,7 +54,7 @@ function daemon(name: string, patch: Partial<DaemonInfo> = {}): DaemonInfo {
 }
 
 function seedDaemons(...list: DaemonInfo[]): void {
-	setState("daemons", new Map(list.map((d) => [`${d.projectDir}\0${d.name}`, d])));
+	setState("daemons", new Map(list.map((d) => [daemonsKey(d), d])));
 }
 
 function subagent(id: string, status: string): [string, SubagentInfo] {

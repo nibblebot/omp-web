@@ -1,4 +1,4 @@
-import { Show, type Component, type JSX } from "solid-js";
+import { children, Show, type Component, type JSX } from "solid-js";
 import { state } from "../../state";
 import { toggleSectionCollapsed, type ActivitySectionId } from "../../store/activities";
 import { ChevronDownIcon, ChevronRightIcon } from "../ui/icons";
@@ -21,6 +21,8 @@ export const ActivitySection: Component<{
 	actions?: JSX.Element;
 	children: JSX.Element;
 }> = (props) => {
+	// Resolved once: reading the JSX prop in both the Show condition and the slot could build the element twice.
+	const actions = children(() => props.actions);
 	const collapsed = () => state.activities.collapsedSections.has(props.id);
 	const bodyId = () => `activity-section-body-${props.id}`;
 	const countText = () => {
@@ -53,8 +55,8 @@ export const ActivitySection: Component<{
 						</span>
 					</button>
 				</h3>
-				<Show when={props.actions}>
-					<div class="activity-section-actions">{props.actions}</div>
+				<Show when={actions()}>
+					<div class="activity-section-actions">{actions()}</div>
 				</Show>
 			</div>
 			<Show when={!collapsed()}>

@@ -22,7 +22,7 @@ export const SubagentTreeRow: Component<{
 	selected?: boolean;
 	/** DOM id of the expanded region this row controls (`aria-controls`); omit while collapsed. */
 	controlsId?: string;
-	/** The Open in Analysis kebab at the row's end; on unless the host turns it off (the agents dock). */
+	/** The Open in Analysis kebab at the row's end; on unless the host turns it off (the Activities panel). */
 	menu?: boolean;
 }> = (props) => {
 	const hasChildren = () => props.node.children.length > 0;

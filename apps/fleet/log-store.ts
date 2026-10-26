@@ -692,7 +692,7 @@ function treeBytes(dir: string): number {
 }
 
 /**
- * Durable store of session-streamed session logs. See the module header for
+ * Durable store of the session lineage logs that sessions stream over the callback pair. See the module header for
  * the frozen contract. One FleetLogStore instance owns the whole logs/ tree
  * under `rootDir`; process state lives in memory and is rebuilt by load().
  */

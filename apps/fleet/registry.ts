@@ -470,8 +470,7 @@ export class Registry {
 	/**
 	 * Replaces the deletion state on the workspace record and persists. The
 	 * roster identity is never removed by deletion: the record stays on the
-	 * entry so Retention/state survive restart. Throws on an unknown session
-	 * id or an entry without a workspace record.
+	 * entry so Retention/state survive restart. Throws on an unknown workspace id.
 	 */
 	setWorkspaceDeletion(workspaceId: string, deletion: WorkspaceDeletion): RegistryEntry {
 		const entry = this.#require(workspaceId);

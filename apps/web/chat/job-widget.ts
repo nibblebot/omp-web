@@ -75,13 +75,6 @@ export function latestJobWidget<T extends { view: WireJobWidgetView }>(
 	return latest;
 }
 
-/**
- * Whether a widget belongs to a job the composer bar counts. The session counts a subagent's task job with
- * the agents, not with the jobs (`runningBackgroundJobs`), and a task job always runs a subagent, so its
- * widget (the agent's progress) stays out of the bar's glance too.
- */
-export const isCountedJobWidget = (entry: { type: string }): boolean => entry.type !== "task";
-
 /** The widget as one plain line for tooltips: `verb-bench · 3 models: decode 186 tok/s ▲ 15%`. */
 export function jobWidgetSummary(view: WireJobWidgetView): string {
 	const glance = jobWidgetGlance(view);

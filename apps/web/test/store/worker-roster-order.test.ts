@@ -1,6 +1,6 @@
 /**
  * After a reload the agent surfaces (header "N subagents" button, fanout rows,
- * agent dock) read the session's workers through `state.workers.order`. A
+ * Activities panel) read the session's workers through `state.workers.order`. A
  * snapshot that fills `records` but not `order` leaves them all empty.
  */
 import { describe, expect, test } from "bun:test";

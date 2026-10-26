@@ -1142,8 +1142,8 @@ class FleetServerImpl implements FleetServer {
 		const path0 = url0.pathname;
 		// /callback/* is the transport's, mounted BEFORE everything else and
 		// NEVER gated by browser auth: the registry authenticates with the
-		// workspace enrollment credentials (the callback pair from the fleet's
-		// host session in this pass; session pairs later).
+		// workspace enrollment credentials (the callback pair every session, host
+		// or clone, dials out with).
 		if (path0.startsWith("/callback")) {
 			const transportHandled = await this.transport.handleFetch(req, server);
 			if (transportHandled !== null) return transportHandled;

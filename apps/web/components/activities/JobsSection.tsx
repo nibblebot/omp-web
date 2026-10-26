@@ -1,7 +1,8 @@
 import { createEffect, createMemo, For, onCleanup, Show, type Component } from "solid-js";
 import { createNow } from "../../activities/clock";
 import { flatJobRow, visibleJobRows } from "../../activities/jobs";
-import { activityJobRows, jobsSummary, type ActivityJobRow } from "../../activities/summary";
+import { createKeyedRows } from "../../activities/keyed-rows";
+import { activityJobRows, jobsSummary } from "../../activities/summary";
 import { state } from "../../state";
 import { openItemDetail, toggleItemExpanded } from "../../store/activities";
 import { acquireJobPollFocus } from "../../store/job-poll";
@@ -39,8 +40,8 @@ export const JobsSection: Component = () => {
 	);
 	// Rows render by id, not by object: every poll hands over new row objects, and remounting the list
 	// would drop focus and a pending Cancel confirm on each tick.
-	const byId = createMemo(() => new Map(shown().map((row) => [row.job.id, row])));
-	const ids = createMemo(() => shown().map((row) => row.job.id));
+	const keyed = createKeyedRows(shown, (row) => row.job.id);
+	const ids = keyed.ids;
 	const onOpen = (id: string) => {
 		const ref = { section: "jobs", id } as const;
 		if (inline()) toggleItemExpanded(ref);
@@ -59,8 +60,7 @@ export const JobsSection: Component = () => {
 				<ol class="activity-job-list" aria-label="Jobs">
 					<For each={ids()}>
 						{(id) => {
-							let last = byId().get(id) as ActivityJobRow;
-							const row = () => (last = byId().get(id) ?? last);
+							const row = keyed.row(id);
 							const open = () => inline() && expanded().has(id);
 							return (
 								<li

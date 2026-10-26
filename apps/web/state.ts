@@ -500,6 +500,9 @@ export const [state, setState] = createStore({
 	// Daemon broker roster (hub/launch long-running processes); project-scoped,
 	// so resetSessionView must NOT clear it.
 	daemons: new Map<string, DaemonInfo>(),
+	// True once a `daemons` frame has been applied on this page, so a consumer never judges a saved
+	// daemon key missing against the empty initial roster. Fleet-scoped like `daemons`.
+	daemonsLoaded: false,
 	// Settings model (getSettings/setSetting + settings_changed frames).
 	settingsModel: null as SettingsModel | null,
 	settingsLoading: false,
@@ -1545,12 +1548,12 @@ export function connect(): void {
 				settleWorkspaceSessions(frame.workspaceId, frame.sessions, frame.limit);
 				break;
 			case "daemons":
-				setState(
-					"daemons",
-					new Map(
+				setState({
+					daemons: new Map(
 						((frame.daemons as DaemonInfo[] | undefined) ?? []).map((d) => [daemonsKey(d), d]),
 					),
-				);
+					daemonsLoaded: true,
+				});
 				break;
 			case "roster":
 			case "roster_delta":
@@ -1558,9 +1561,10 @@ export function connect(): void {
 				break;
 			case "session_activity": {
 				// Edge-generated, fleet-scoped realtime activity for any managed session.
-				// It carries no workspaceId, so it sails past the stale-frame guard above
-				// untouched (per-session, not per-attachment) and applies regardless of
-				// which session this tab is attached to.
+				// It names the row in its payload `workspaceId`, but it is not a session-scoped frame
+				// type (not in SESSION_SCOPED_FRAME_LIST) and never carries the edge's `scope` stamp, so
+				// the stale-frame guard above lets it through (per-session, not per-attachment) and it
+				// applies regardless of which session this tab is attached to.
 				// Snapshot the boolean BEFORE setState: state.sessionActivity[...] is a
 				// live store proxy, so reading prev.streaming after the set would see
 				// the NEW value and the completion edge would never fire.

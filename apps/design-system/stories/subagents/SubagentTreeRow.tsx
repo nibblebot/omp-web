@@ -6,7 +6,7 @@ import {
 	benchEntry,
 	seedJobWidgets,
 	WIDGET_AGENT_ID,
-} from "../../fixtures/job-bars";
+} from "../../fixtures/job-widget-entries";
 import { agentNode, seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
 
@@ -163,7 +163,7 @@ export default defineStory({
 		{
 			name: "Selected, accordion row",
 			description:
-				"The expanded agent's row in the accordion: hover background, accent card outline (in the agents dock), aria-selected true, and aria-controls naming its region.",
+				"The expanded agent's row in the accordion: hover background, accent card outline (in the Activities panel), aria-selected true, and aria-controls naming its region.",
 			seed: () => seedAgentTree({ display: true }),
 			render: () => (
 				<SubagentTreeRow
@@ -181,7 +181,7 @@ export default defineStory({
 		{
 			name: "Not selected, accordion row",
 			description:
-				"Another row of the accordion: aria-selected false, and no kebab (the agents dock turns row menus off).",
+				"Another row of the accordion: aria-selected false, and no kebab (the Activities panel turns row menus off).",
 			seed: () => seedAgentTree({ display: true }),
 			render: () => (
 				<SubagentTreeRow

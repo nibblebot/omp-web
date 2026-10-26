@@ -1676,7 +1676,7 @@ export type DaemonInfo = {
 	/**
 	 * Fleet workspace ids whose session broker listed this process, stamped by the
 	 * fleet edge's merge (daemons-aggregator.ts); a session's own roster frame
-	 * omits it. The web strip shows only entries the selected session reported.
+	 * omits it. The Activities Daemons section shows only entries the attached session reported.
 	 */
 	reportedBy?: string[];
 };
@@ -2062,7 +2062,7 @@ export interface JobTreeDto {
 	rows: JobTreeRowDto[];
 }
 
-/** `getJobDetail`: what the jobs sheet shows about one job beyond its row (SDK `AsyncJobInspection`; its widget view rides whole, absent while `async.widgets` is off or the job has none). */
+/** `getJobDetail`: what the Activities job detail shows about one job beyond its row (SDK `AsyncJobInspection`; its widget view rides whole, absent while `async.widgets` is off or the job has none). */
 export interface JobDetailDto {
 	/** Full command line of a job that runs a process. */
 	command?: string;

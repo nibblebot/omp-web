@@ -80,7 +80,7 @@
  *     broker rosters.
  *   - Aggregated daemons: every session's control-stream envelopes are tapped
  *     for {type:"daemons"} broker rosters. The latest roster per workspaceId is
- *     cached (full-replace), merged across daemons, and broadcast as ONE
+ *     cached (full-replace), merged across sessions, and broadcast as ONE
  *     {type:"daemons"} frame to every edge stream, also on browser open.
  *     Per-session daemons frames are stripped from callback streams (the
  *     merged frame is the only one browsers see), and removing a session from
@@ -746,8 +746,11 @@ export class FleetEdge {
 	readonly #daemonsAggregator = new DaemonsAggregator();
 	/** Serialized merged roster last broadcast, so an unchanged roster is not re-sent. */
 	#lastDaemonsRoster: string | undefined;
-	/** Control-socket taps per workspaceId (unsubscribe fns), reconciled on registry change. */
-	readonly #daemonTaps = new Map<string, () => void>();
+	/**
+	 * Per-workspace control-stream taps (unsubscribe fns), reconciled on registry change. Each tap
+	 * derives the workspace's activity and `lastSessionFile` and ingests its broker roster.
+	 */
+	readonly #controlTaps = new Map<string, () => void>();
 	/** Per-session realtime activity, derived in the control-socket tap (browser-gated). */
 	readonly #sessionActivity = new Map<string, SessionActivity>();
 	/** Keepalive/stall sweep: pings idle browser sockets every CLIENT_KEEPALIVE_MS. */
@@ -760,7 +763,7 @@ export class FleetEdge {
 	readonly #onRegistryChange = (change: RegistryChange): void => {
 		// New sessions get a sessions-frame tap; removed ones lose it and their
 		// cached rosters are evicted (broadcast so browsers drop the entries).
-		this.#reconcileDaemonTaps();
+		this.#reconcileControlTaps();
 		this.#broadcastRosterDelta(change);
 		for (const entry of change.upserted) this.#resetActivityOfGoneRuntime(entry);
 	};
@@ -819,7 +822,7 @@ export class FleetEdge {
 		// priming, so they broadcast via a dedicated hook, never ringed.
 		deps.registry.onProjectsChange = this.#onProjectsChange;
 		// Tap sessions that already exist at construction (state.json load).
-		this.#reconcileDaemonTaps();
+		this.#reconcileControlTaps();
 	}
 
 	/**
@@ -907,8 +910,8 @@ export class FleetEdge {
 		if (this.#registry.onProjectsChange === this.#onProjectsChange) {
 			this.#registry.onProjectsChange = null;
 		}
-		for (const unsubscribe of this.#daemonTaps.values()) unsubscribe();
-		this.#daemonTaps.clear();
+		for (const unsubscribe of this.#controlTaps.values()) unsubscribe();
+		this.#controlTaps.clear();
 		this.#stopKeepalive();
 		for (const client of this.#clients.values()) {
 			if (client.gcTimer) clearTimeout(client.gcTimer);
@@ -2264,20 +2267,20 @@ export class FleetEdge {
 	 * callback pair's mirrored "control" stream. Idempotent; runs on every
 	 * registry change and once at construction.
 	 */
-	#reconcileDaemonTaps(): void {
+	#reconcileControlTaps(): void {
 		const live = new Set(this.#registry.list().map((entry) => entry.workspaceId));
 		let evicted = false;
-		for (const [workspaceId, unsubscribe] of this.#daemonTaps) {
+		for (const [workspaceId, unsubscribe] of this.#controlTaps) {
 			if (live.has(workspaceId)) continue;
 			unsubscribe();
-			this.#daemonTaps.delete(workspaceId);
+			this.#controlTaps.delete(workspaceId);
 			this.#daemonsAggregator.remove(workspaceId);
 			// A removed session's activity is gone too: never primed, never broadcast.
 			this.#sessionActivity.delete(workspaceId);
 			evicted = true;
 		}
 		for (const entry of this.#registry.list()) {
-			if (this.#daemonTaps.has(entry.workspaceId)) continue;
+			if (this.#controlTaps.has(entry.workspaceId)) continue;
 			const handleFrame = (frame: ServerFrame): void => {
 				// Derive realtime activity from the RAW session frames; the tap
 				// sees them BEFORE the edge stamps `scope` on proxy pipes, and
@@ -2358,7 +2361,7 @@ export class FleetEdge {
 			if (!transport) continue;
 			// Sessions mirror their session frames onto the callback pair's
 			// control stream; the unsubscribe tears the tap down on eviction.
-			this.#daemonTaps.set(
+			this.#controlTaps.set(
 				entry.workspaceId,
 				transport.onSessionEnvelope(entry.workspaceId, (envelope) => {
 					if (envelope.kind !== "frame" || envelope.streamId !== CALLBACK_CONTROL_STREAM_ID) return;

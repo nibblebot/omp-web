@@ -48,7 +48,7 @@ function captureSession(): AppSession {
  * (fixtures/command-bus.ts, over the fake socket) answers with `attached`, the store resets the
  * session view, and this view restores that session's transcript from
  * `appSessions` in place of the session's history priming. A row's session
- * chevron lists that session's session, answered in the page (session.ts).
+ * chevron lists that workspace's sessions, answered by the `list_workspace_sessions` handler below.
  *
  * Prompts get the canned turn (canned-turns.ts). Leaving a session ends its
  * running turn and keeps its transcript for this page load, so switching back

@@ -51,6 +51,7 @@ import {
 	type SubagentInfo,
 } from "../state";
 import { clearAllDeletePending, resetPendingProjects } from "../store/projects";
+import { COLLAB_OFF } from "../store/slices/collab";
 import { activatingIds, resumeWorktreeSession } from "../store/worktree-sessions";
 import { settingValue } from "../store/settings";
 import { reportError } from "../store/toasts";
@@ -128,15 +129,19 @@ function sub(status: string): SubagentInfo {
 
 let baselineToasts: typeof state.toasts;
 let baselinePlanModeEnabled: typeof state.planModeEnabled;
+let baselineTodoPhases: typeof state.todoPhases;
 
 beforeAll(() => {
 	baselineToasts = [...state.toasts];
 	baselinePlanModeEnabled = state.planModeEnabled;
+	baselineTodoPhases = state.todoPhases;
 });
 
 afterAll(() => {
 	setState("toasts", baselineToasts);
 	setState("planModeEnabled", baselinePlanModeEnabled);
+	setState("todoPhases", baselineTodoPhases);
+	setState("collabStatus", COLLAB_OFF);
 });
 
 beforeEach(() => {
@@ -188,6 +193,8 @@ beforeEach(() => {
 		modelSynced: false,
 		transcriptPhase: "idle",
 		transcriptError: null,
+		collabStatus: COLLAB_OFF,
+		todoPhases: [],
 		transcriptTarget: null,
 	});
 });

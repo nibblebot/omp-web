@@ -15,8 +15,8 @@
  *   (docs/provider-protocol.md, "Preparation layout"). Stop retains the claim; replacement
  *   reuses it; initialization runs only when the verified init marker is
  *   absent (new workspace), enforced by the image entrypoint.
- * - A single Pod mounts the claim at /workspace and runs the session
- *   session with `restartPolicy: "Never"` so identity is never masked by a
+ * - A single Pod mounts the claim at /workspace and runs the session process
+ *   with `restartPolicy: "Never"` so identity is never masked by a
  *   kubelet restart. No Service/Ingress is created: the session dials the
  *   fleet callback pair outbound (no inbound pod service required).
  * - No cluster mutation beyond these two namespaced objects, ever. The

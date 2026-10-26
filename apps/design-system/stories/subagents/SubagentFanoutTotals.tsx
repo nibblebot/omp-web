@@ -31,7 +31,7 @@ export default defineStory({
 		{
 			name: "Footer, with failures",
 			description:
-				"The agents panel's bottom strip: totals across the forest; the failed count appears beside the running count.",
+				"The Activities panel's Subagents section footer: totals across the forest; the failed count appears beside the running count.",
 			render: () => <SubagentFanoutTotals totals={withFailures} placement="footer" />,
 		},
 		{

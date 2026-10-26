@@ -34,9 +34,14 @@ export default defineStory({
 		},
 		{
 			name: "Starting (spinner)",
-			description:
-				"The process is on its way up (connecting, or a row waking after a click): an accent comet ring.",
+			description: "The process is on its way up (spawning or connecting): an accent comet ring.",
 			render: () => <Signal status="connecting" />,
+		},
+		{
+			name: "Waking (spinner)",
+			description:
+				"A row waking after a click, before its session is ready (web-only status): the same accent comet ring as starting.",
+			render: () => <Signal status="waking" />,
 		},
 		{
 			name: "Blocked (dot)",

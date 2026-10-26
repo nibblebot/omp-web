@@ -898,7 +898,7 @@ export function seedSubagents(calls: CallHandlers = {}, patch: Partial<typeof st
 }
 
 // ---------------------------------------------------------------------------
-// Agent tree: the session forest read by the subagent tree, agents panel,
+// Agent tree: the session forest read by the subagent tree, Activities panel,
 // agent pane and activity bar. Parent links come from the roster.
 // ---------------------------------------------------------------------------
 

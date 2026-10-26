@@ -52,8 +52,8 @@ const NO_WAIT_RUNS: ReadonlyMap<number, WaitRun> = new Map();
  * a subagent. Owns useStickyScroll, so the hook's setup and onMount run when
  * the stream mounts.
  *
- * `variant` selects what is main-only. "session": the live streaming turn and
- * working shimmer, branch-from-here on user cards, and pin state mirrored into
+ * `variant` selects what is main-only. "session": the live streaming turn,
+ * branch-from-here on user cards, and pin state mirrored into
  * the store. "agent": none of those, and the first user message (the agent's
  * assignment) is folded behind a Show all toggle. `children` render after the
  * items, inside the observed content (status lines grow the stream like items).
