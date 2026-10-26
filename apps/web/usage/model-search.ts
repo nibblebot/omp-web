@@ -46,15 +46,6 @@ export function thinkingLabel(selector: string): string {
 	return selector === "minimal" ? "min" : selector;
 }
 
-/** Position of `level` in the ordered selector list; `index` is -1 when absent. */
-export function thinkingOrdinal(
-	selectors: readonly string[],
-	level: string | undefined,
-): { index: number; count: number } {
-	const index = level === undefined ? -1 : selectors.indexOf(level);
-	return { index, count: selectors.length };
-}
-
 /**
  * Rank the browser list for the quick picker. Empty query: usable recent rows
  * first (recent order), then the rest in provider/id order. Query: fuzzy order

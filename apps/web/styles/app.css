@@ -33,7 +33,6 @@
 	flex: none;
 }
 .model-segment {
-	font-family: var(--font-mono);
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -83,11 +82,11 @@
 	font-size: var(--fs-md);
 	white-space: nowrap;
 }
-/* Monospace segments use the app's monospace size (fs-sm, as in the sidebar); after .segment so it wins. */
-.model-segment,
-.thinking-segment,
-.stats-segment,
-.context-segment {
+/* Every status bar element (segments and badges) is monospace at the app's monospace
+   size (fs-sm, as in the sidebar). Subagent status bars are session bars too. After
+   .segment so it wins. */
+.session-bar .segment {
+	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
 }
 .segment-button {
@@ -103,37 +102,9 @@
 	background: var(--hover);
 }
 .thinking-segment {
-	font-family: var(--font-mono);
 	color: var(--muted);
 }
-/* Thinking dropdown ordinal bar: one segment per supported level, filled up to the active one. */
-.thinking-ordinal {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-	margin-bottom: var(--space-3);
-	font-family: var(--font-mono);
-	font-size: var(--fs-sm);
-	color: var(--muted-2);
-}
-.thinking-ordinal-seg {
-	flex: 1;
-	height: 4px;
-	border-radius: var(--r-sm);
-	background: var(--btn);
-}
-.thinking-ordinal-seg.filled {
-	background: var(--accent);
-}
-.thinking-ordinal-text {
-	margin-left: var(--space-2);
-	white-space: nowrap;
-}
 /* Status-bar dropdowns (ThinkingLevelPopover, ModelPresetPopover) over ui/Popover. */
-.status-menu-head {
-	flex: none;
-	margin: var(--space-3) var(--space-4) 0;
-}
 .status-menu-list {
 	display: flex;
 	flex-direction: column;
@@ -201,10 +172,6 @@
 		min-height: 44px;
 	}
 }
-/* Session resource meters (cost/tokens) in machine numbers. */
-.stats-segment {
-	font-family: var(--font-mono);
-}
 /* Muted "ctx" label prefix inside the context segment; the percent keeps
    the data-level coloring from .context-segment[data-level]. */
 .context-prefix {
@@ -217,9 +184,6 @@
 	border-radius: var(--r-pill);
 	padding: var(--space-1) var(--space-4);
 	font-size: var(--fs-sm);
-}
-.context-segment {
-	font-family: var(--font-mono);
 }
 .context-segment[data-level="normal"] {
 	color: var(--success);

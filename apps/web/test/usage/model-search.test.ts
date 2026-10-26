@@ -1,11 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelBrowserEntry, ModelLockReason } from "#lib/wire/protocol";
-import {
-	rankModels,
-	splitSelectorThinking,
-	thinkingLabel,
-	thinkingOrdinal,
-} from "../../usage/model-search";
+import { rankModels, splitSelectorThinking, thinkingLabel } from "../../usage/model-search";
 
 /** Browser row fixture; only the fields the ranking reads are set. */
 function entry(provider: string, id: string, locked?: ModelLockReason): ModelBrowserEntry {
@@ -66,17 +61,6 @@ describe("rankModels", () => {
 			"openai/sonnet-a",
 		);
 		expect(ranked[0]?.selector).toBe("openai/sonnet-a");
-	});
-});
-
-describe("thinkingOrdinal", () => {
-	test("reports index and count of a present level", () => {
-		expect(thinkingOrdinal(["off", "low", "high"], "low")).toEqual({ index: 1, count: 3 });
-	});
-
-	test("reports -1 when the level is absent or undefined", () => {
-		expect(thinkingOrdinal(["off", "low", "high"], "xhigh").index).toBe(-1);
-		expect(thinkingOrdinal(["off", "low", "high"], undefined).index).toBe(-1);
 	});
 });
 

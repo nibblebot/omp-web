@@ -58,9 +58,8 @@ button.plan-badge:hover {
 	background: var(--warning-bg);
 	border-color: var(--warning-border);
 }
-/* Auto-retry countdown badge. */
+/* Auto-retry countdown badge (monospace like the rest of the session bar). */
 .retry-badge {
-	font-family: var(--font-mono);
 	font-variant-numeric: tabular-nums;
 }
 .goal-panel {

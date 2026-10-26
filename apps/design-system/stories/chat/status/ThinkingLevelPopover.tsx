@@ -20,7 +20,7 @@ export default defineStory({
 		{
 			name: "Medium selected",
 			description:
-				"The levels the model supports, the current one checked, with its place on the ladder above (4 of 6). Arrow keys move, Enter picks, Escape closes and returns focus to the chip.",
+				"The levels the model supports, the current one checked. Arrow keys move, Enter picks, Escape closes and returns focus to the chip.",
 			seed: {
 				currentWorkspaceId: "sess_09a41c",
 				model: sessionModel,
