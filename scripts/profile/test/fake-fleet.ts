@@ -169,7 +169,7 @@ export class FakeFleet {
 	prime(isStreaming: boolean): void {
 		this.#primes++;
 		this.push(
-			{ type: "attached", workspaceId: "s1" },
+			{ type: "attached", scope: "s1" },
 			{ type: "state", state: { isStreaming } },
 			{ type: "history", messages: [], final: true },
 			{ type: "available_commands", commands: [] },

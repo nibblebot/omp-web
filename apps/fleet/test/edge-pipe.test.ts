@@ -515,10 +515,10 @@ describe("edge pipe attach and answers over the callback pair", () => {
 			await attach(browser, remote.workspaceId, "a1");
 			const [stream] = await awaitStreams(remote.session, 1);
 			expect(stream?.startsWith("browser/")).toBe(true);
-			// Session frames on the browser stream reach the browser, stamped with the workspace id.
+			// Session frames on the browser stream reach the browser, stamped with the scope (the workspace id).
 			remote.session.send(stream!, "frame", { type: "history", messages: [], final: true });
 			await browser.waitForFrame(
-				(f) => f.type === "history" && f.workspaceId === remote.workspaceId,
+				(f) => f.type === "history" && f.scope === remote.workspaceId,
 				"priming history stamped with the workspace id",
 			);
 			// Detach: closing the browser stream tears down the pair stream.
@@ -663,7 +663,7 @@ describe("edge pipe delta ring", () => {
 			await browser.waitForFrame(
 				(f) =>
 					f.type === "history" &&
-					f.workspaceId === remote.workspaceId &&
+					f.scope === remote.workspaceId &&
 					Array.isArray(f.messages) &&
 					f.messages.length === 1,
 				"live history",
@@ -1040,7 +1040,7 @@ describe("edge pipe over one real session pair", () => {
 			const CHUNKS = 24;
 			const priming: Record<string, unknown>[] = [
 				{ type: "hello_ok", proto: OMP_PROTO },
-				{ type: "attached", workspaceId: "x" },
+				{ type: "attached", scope: "x" },
 				...Array.from({ length: CHUNKS }, (_, i) => ({
 					type: "history",
 					messages: [],
@@ -1080,7 +1080,7 @@ describe("edge pipe relays the session's own frame text", () => {
 	function viaStringify(text: string, stamp: string | null): ServerFrame {
 		const frame = JSON.parse(text) as Record<string, unknown>;
 		return JSON.parse(
-			JSON.stringify(stamp === null ? frame : { ...frame, workspaceId: stamp }),
+			JSON.stringify(stamp === null ? frame : { ...frame, scope: stamp }),
 		) as ServerFrame;
 	}
 
@@ -1093,7 +1093,7 @@ describe("edge pipe relays the session's own frame text", () => {
 		return { remote, browser, stream: stream! };
 	}
 
-	test("relayed frames deep-equal what the re-serializing path produced: non-ASCII, with and without a workspaceId key, unscoped", async () => {
+	test("relayed frames deep-equal what the re-serializing path produced: non-ASCII, with and without a scope key, unscoped", async () => {
 		const rig = await startRig();
 		try {
 			const { remote, browser, stream } = await attached(rig, "relay-parity");
@@ -1113,11 +1113,11 @@ describe("edge pipe relays the session's own frame text", () => {
 					stamp: true,
 				},
 				{
-					text: '{"type":"event","workspaceId":"spoofed","event":{"type":"notice","level":"info","message":"has id"}}',
+					text: '{"type":"event","scope":"spoofed","event":{"type":"notice","level":"info","message":"has id"}}',
 					stamp: true,
 				},
 				{ text: '{"type": "state" , "state": {"x": [1, 2.5, null, true]}}', stamp: true },
-				{ text: '{"type":"attached","workspaceId":"s1"}', stamp: true },
+				{ text: '{"type":"attached","scope":"s1"}', stamp: true },
 				{ text: '{"type":"ready","marker":"unscoped"}', stamp: false },
 				{ text: '{"type":"ready"}', stamp: false },
 			];
@@ -1132,7 +1132,34 @@ describe("edge pipe relays the session's own frame text", () => {
 			expect(relayed).toEqual(
 				cases.map(({ text, stamp }) => viaStringify(text, stamp ? remote.workspaceId : null)),
 			);
-			expect(relayed[2]).toMatchObject({ workspaceId: remote.workspaceId });
+			expect(relayed[2]).toMatchObject({ scope: remote.workspaceId });
+		} finally {
+			await rig.close();
+		}
+	});
+
+	test("a session-scoped frame whose payload carries its own workspaceId keeps it; only `scope` is stamped", async () => {
+		const rig = await startRig();
+		try {
+			const { remote, browser, stream } = await attached(rig, "relay-payload-id");
+			// Spliced path: the session's own wire text.
+			remote.session.sendRaw(
+				stream,
+				"frame",
+				'{"type":"event","workspaceId":"payload-row","event":{"type":"notice","level":"info","message":"raw"}}',
+			);
+			// Parsed path: an object payload, stamped through the spread.
+			remote.session.send(stream, "frame", {
+				type: "event",
+				workspaceId: "payload-row",
+				event: { type: "notice", level: "info", message: "object" },
+			});
+			remote.session.sendRaw(stream, "frame", '{"type":"ready","marker":"done"}');
+			await browser.waitForFrame((f) => markerOf(f) === "done", "last relayed frame");
+			for (const message of ["raw", "object"]) {
+				const frame = browser.frames.find((f) => f.type === "event" && eventMessage(f) === message);
+				expect(frame).toMatchObject({ workspaceId: "payload-row", scope: remote.workspaceId });
+			}
 		} finally {
 			await rig.close();
 		}
@@ -1186,11 +1213,11 @@ describe("edge pipe relays the session's own frame text", () => {
 			);
 			expect(
 				browser.frames.find((f) => f.type === "event" && eventMessage(f) === "padded"),
-			).toMatchObject({ workspaceId: remote.workspaceId });
+			).toMatchObject({ scope: remote.workspaceId });
 			// On the wire the session's own text is spliced in verbatim (its raw
 			// CR/LF kept, JSON allows them between tokens), the stamp appended
 			// before the closing brace, all inside one `{"seq":N,"frame":...}` message.
-			const stamp = `,"workspaceId":${JSON.stringify(remote.workspaceId)}}}`;
+			const stamp = `,"scope":${JSON.stringify(remote.workspaceId)}}}`;
 			for (const text of [pretty, compact]) {
 				const message = browser.messages.find((m) => m.endsWith(`${text.slice(0, -1)}${stamp}`));
 				expect(message).toMatch(/^\{"seq":\d+,"frame":\{/);
@@ -1233,9 +1260,9 @@ describe("edge pipe relays the session's own frame text", () => {
 			await browser.waitForFrame((f) => markerOf(f) === "done", "last frame");
 			const hostile = browser.frames.filter((f) => typeof hostileOf(f) === "string");
 			expect(hostile.map((f) => hostileOf(f))).toEqual(["HOSTILE-TWO", "HOSTILE-THREE"]);
-			expect(hostile[0]).toMatchObject({ type: "history", workspaceId: remote.workspaceId });
+			expect(hostile[0]).toMatchObject({ type: "history", scope: remote.workspaceId });
 			expect(hostile[1]).toMatchObject({ type: "ready" });
-			expect(hostile[1]).not.toHaveProperty("workspaceId");
+			expect(hostile[1]).not.toHaveProperty("scope");
 			// The session's own text went out (duplicate keys intact), not a re-serialization.
 			expect(browser.rawText).toContain('"type":"daemons","daemons":[],"type":"history"');
 			expect(browser.rawText).not.toContain("HOSTILE-ONE");

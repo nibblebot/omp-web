@@ -58,5 +58,5 @@ export interface SessionEntry {
 	skillsUnlisten?: () => void;
 }
 
-/** The single boot session's constant handle: the attached frame's client guard token. */
+/** The single boot session's constant handle: an opaque attachment token, sent as `attached.scope`. */
 export const BOOT_HANDLE = "s1";

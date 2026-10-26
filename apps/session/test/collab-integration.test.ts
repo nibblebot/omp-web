@@ -198,7 +198,7 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 		10_000,
 		"attached frame",
 	);
-	expect(attached.workspaceId).toBe("s1");
+	expect(attached.scope).toBe("s1");
 
 	// Start collab; collect frames until live (fail fast on an error status).
 	webFrames.length = 0;

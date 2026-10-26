@@ -186,7 +186,7 @@ function frame(session: CallbackSession, payload: unknown): void {
 }
 
 function sendEvent(session: CallbackSession, event: Record<string, unknown>): void {
-	frame(session, { type: "event", workspaceId: "s1", event });
+	frame(session, { type: "event", event });
 }
 
 function assistantText(session: CallbackSession, text: string): void {

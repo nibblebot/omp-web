@@ -1379,21 +1379,20 @@ export function connect(): void {
 	// seq, null when the server sent it unsequenced.
 	const handleFrame = (frame: ServerFrame, frameSeq: number | null): void => {
 		if (frame.type === "attached") {
-			pushDebug("info", "transport", `attached ${frame.workspaceId}`);
-			const switched =
-				state.currentWorkspaceId !== "" && state.currentWorkspaceId !== frame.workspaceId;
+			pushDebug("info", "transport", `attached ${frame.scope}`);
+			const switched = state.currentWorkspaceId !== "" && state.currentWorkspaceId !== frame.scope;
 			// One batch: the incoming workspace's saved dock lands together with
 			// its id, so no effect ever sees the previous workspace's dock under the new id.
 			batch(() => {
-				if (state.currentWorkspaceId !== frame.workspaceId) restoreDockLayout(frame.workspaceId);
-				setState("currentWorkspaceId", frame.workspaceId);
+				if (state.currentWorkspaceId !== frame.scope) restoreDockLayout(frame.scope);
+				setState("currentWorkspaceId", frame.scope);
 			});
 			// The subagent forest is pulled afresh on every attach below.
 			setState("subagentsLoaded", { mirror: false, roster: false });
 			// The attach priming re-sends the running jobs' widgets (nothing when none run): drop the last attachment's.
 			clearJobWidgets();
 			setState("sessionDownId", "");
-			clearUnread(frame.workspaceId);
+			clearUnread(frame.scope);
 			// Every attach re-primes history from scratch: drop any in-flight
 			// chunked-series accumulation from the previous attach/session.
 			pendingHistory = null;
@@ -1445,22 +1444,23 @@ export function connect(): void {
 			requestRosterRefresh();
 			refreshSettings();
 			// Watchers for this attachment (watchAttachment) wait for its first `state` frame.
-			settleAttachedFrame(frame.workspaceId);
+			settleAttachedFrame(frame.scope);
 			return;
 		}
 		// Stale-frame guard: session-scoped frames for a workspace this tab no
-		// longer views (in flight during a switch) are dropped. Only session-scoped
-		// types carry the edge's stamp (isSessionScopedFrameType); fleet-scoped
-		// frames (session_status, workspace_sessions, worktree_removed, ...) carry a
-		// workspaceId as PAYLOAD naming another row and always pass. A session-scoped
-		// frame WITHOUT a stamp (a bare session) passes too; there is nothing to
-		// mismatch. attach_result is a unicast answer (not session-scoped) whose
-		// workspaceId is the ATTACHED workspaceId (finding #28); id-matching against
-		// pendingAttach handles its staleness.
+		// longer views (in flight during a switch) are dropped. The edge stamps
+		// `scope` on session-scoped types only (isSessionScopedFrameType; the type
+		// check stays as a belt). Fleet-scoped frames (session_status,
+		// workspace_sessions, worktree_removed, ...) carry `workspaceId` as
+		// PAYLOAD naming another row, a different key from the stamp, and always
+		// pass. A session-scoped frame WITHOUT a stamp (a bare session) passes
+		// too; there is nothing to mismatch. attach_result is a unicast answer
+		// (not session-scoped) whose workspaceId is the ATTACHED workspaceId
+		// (finding #28); id-matching against pendingAttach handles its staleness.
 		if (
 			isSessionScopedFrameType(frame.type) &&
-			"workspaceId" in frame &&
-			frame.workspaceId !== state.currentWorkspaceId
+			"scope" in frame &&
+			frame.scope !== state.currentWorkspaceId
 		)
 			return;
 		// Replay-dedup guard (finding #2): a delta live-delivered during the

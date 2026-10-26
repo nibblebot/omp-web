@@ -90,7 +90,7 @@ export function answerBusCommand(
 		// The edge wakes a stopped session before answering its attach.
 		wake(workspaceId);
 		answer({ type: "attach_result", id: cmd.id, ok: true, workspaceId });
-		publish({ type: "attached", workspaceId });
+		publish({ type: "attached", scope: workspaceId });
 		return true;
 	}
 	return false;

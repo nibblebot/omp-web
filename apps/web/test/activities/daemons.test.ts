@@ -35,7 +35,7 @@ beforeEach(() => {
 	setState("daemons", new Map([[daemonsKey(vite), vite]]));
 	connect();
 	FakeWebSocket.instances.at(-1)!.onopen?.();
-	dispatch({ type: "attached", workspaceId: "w1" });
+	dispatch({ type: "attached", scope: "w1" });
 });
 
 afterEach(() => {

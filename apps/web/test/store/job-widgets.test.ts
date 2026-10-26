@@ -27,11 +27,11 @@ const entry = (id: string, last: string, type = "bash"): WireJobWidgetEntry => (
 });
 
 /** A `job_widgets` frame as the fleet edge stamps it. */
-const frame = (workspaceId: string, ...entries: WireJobWidgetEntry[]): ServerFrame => ({
+const frame = (scope: string, ...entries: WireJobWidgetEntry[]): ServerFrame => ({
 	type: "job_widgets",
 	running: entries.length,
 	entries,
-	workspaceId,
+	scope,
 });
 
 beforeEach(() => {
@@ -59,7 +59,7 @@ describe("job_widgets frames", () => {
 
 	test("a job without a widget still counts as running", () => {
 		dispatch(attached("a"));
-		dispatch({ type: "job_widgets", running: 2, entries: [], workspaceId: "a" });
+		dispatch({ type: "job_widgets", running: 2, entries: [], scope: "a" });
 		expect(state.jobWidgets.running).toBe(2);
 		expect(state.jobWidgets.entries).toEqual([]);
 	});

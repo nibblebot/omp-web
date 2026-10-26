@@ -455,7 +455,7 @@ test("loopback /ws opens with hello_ok as the FIRST frame, carrying the session 
 	// priming is sequenced 1..k below the delta era.
 	expect(socket.frames[0].type).toBe("hello_ok");
 	const attached = await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
-	expect(attached.workspaceId).toBe("s1");
+	expect(attached.scope).toBe("s1");
 	// `ready` is priming when the gate already cleared, else a live delta: wait for it, then
 	// every frame below the delta era is priming and numbered 1..k with no gap.
 	await waitForFrame(socket.frames, "ready", 20_000, "ready frame");
@@ -554,7 +554,7 @@ test("prompt-family calls fail with not_ready until the readiness gate clears", 
 	// The open auto-attaches; the priming arrives with the constant guard
 	// token (Phase 6: de-muxed, so the client hides the sessions sidebar).
 	const attached = await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
-	expect(attached.workspaceId).toBe("s1");
+	expect(attached.scope).toBe("s1");
 	// The gate is still closed: prompt is rejected with not_ready, not a model error.
 	const resp = await socket.command({
 		type: "call",
@@ -596,7 +596,7 @@ test("removed mux commands fall through to the unknown-command error; read-only 
 	const socket = await openBrowserSocket(base);
 	// The attached frame carries the constant guard token.
 	const attached = await waitForFrame(socket.frames, "attached", 10_000, "attached frame");
-	expect(attached.workspaceId).toBe("s1");
+	expect(attached.scope).toBe("s1");
 
 	// The four removed mux commands (plus attach/detach, which only exist at
 	// the fleet edge) fall through to the generic unknown-command error; a

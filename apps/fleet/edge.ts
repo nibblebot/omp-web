@@ -41,9 +41,11 @@
  *   - PAIR ATTACH: one callback virtual stream PER BROWSER ("browser/<connId>"
  *     on the session's pair). The session primes every new stream, so
  *     hello_ok → attached → history → state → available_commands → ready come
- *     from the session itself. The edge stamps the workspaceId on
- *     every session-scoped frame and on `attached` (omp-session no longer
- *     sends one). Every session dials the fleet, so the edge never dials: an
+ *     from the session itself. The edge stamps `scope` (the attached roster
+ *     workspace id) on every session-scoped frame and on `attached`
+ *     (omp-session no longer sends one; a standalone session's `attached.scope`
+ *     is its opaque BOOT_HANDLE, which the edge overwrites). Every session
+ *     dials the fleet, so the edge never dials: an
  *     asleep spawned session is woken through the shared SessionWaker
  *     (session-waker.ts: respawn and pair wait, with a redial grace for a
  *     reconnecting or ready-but-unpaired session), and an unpaired
@@ -273,19 +275,20 @@ const BROWSER_COMMAND_TYPES: Record<string, true> = Object.fromEntries(
  * wire text instead of re-serialized, or undefined when the caller must
  * stringify the parsed frame. The edge decided on JSON.parse(payloadJson); the
  * browser JSON.parses the text this returns, so both see one value. With
- * `workspaceId`, the stamp `{ ...frame, workspaceId }` is spliced in as the last
+ * `scope`, the stamp `{ ...frame, scope }` is spliced in as the last
  * member (JSON.parse is last-key-wins, so it overrides an existing key, as the
- * spread does). Only stamped frame types reach the splice, and those carry a
+ * spread does). The stamp key is `scope`, never `workspaceId`, so a session-scoped
+ * frame whose payload names its own `workspaceId` keeps it. Only stamped frame types reach the splice, and those carry a
  * `type` member, so the object is never empty. Declined (undefined) when the
  * text is not a bare object. The text lands inside a `{"seq":N,"frame":…}`
  * message (seqFrameMessage): JSON tolerates whitespace and line breaks
  * between tokens, so nothing else needs declining.
  */
-function relayJson(payloadJson: string, workspaceId: string | undefined): string | undefined {
+function relayJson(payloadJson: string, scope: string | undefined): string | undefined {
 	if (payloadJson.charCodeAt(0) !== 0x7b || payloadJson.charCodeAt(payloadJson.length - 1) !== 0x7d)
 		return undefined;
-	if (workspaceId === undefined) return payloadJson;
-	const member = `"workspaceId":${JSON.stringify(workspaceId)}`;
+	if (scope === undefined) return payloadJson;
+	const member = `"scope":${JSON.stringify(scope)}`;
 	return `${payloadJson.slice(0, -1)},${member}}`;
 }
 
@@ -1677,10 +1680,10 @@ export class FleetEdge {
 	/**
 	 * Forward a session frame: proto-gate then forward hello_ok, since the
 	 * browser's own gate needs it when proxied through the edge (finding #61);
-	 * tap and strip per-session broker rosters; STAMP workspaceId on
-	 * every session-scoped frame (omp-session no longer sends one) and on
-	 * `attached` (its required "s1" must read as the workspaceId through the
-	 * edge). Global frames pass unchanged. Every forwarded frame is an
+	 * tap and strip per-session broker rosters; STAMP `scope` (the roster
+	 * workspace id) on every session-scoped frame (omp-session no longer sends
+	 * one) and on `attached` (its required BOOT_HANDLE is replaced by the
+	 * roster workspace id through the edge). Global frames pass unchanged. Every forwarded frame is an
 	 * edge-local delta for this browser (a fresh seq; RINGED only for the
 	 * session's delta types, see #sendDelta, and recoverable via `after`;
 	 * unringed priming/answer frames are re-derived on re-attach). The
@@ -1689,7 +1692,7 @@ export class FleetEdge {
 	 * class) reads that parsed view. When `payloadJson` (the frame's own wire
 	 * text, which the browser will JSON.parse) is present, it is forwarded
 	 * instead of re-serializing the parsed frame: every transform here is the
-	 * identity or the workspaceId stamp, which relayJson splices into the text
+	 * identity or the scope stamp, which relayJson splices into the text
 	 * (last key wins, as with the spread). Shared by every session stream so
 	 * session semantics stay identical.
 	 */
@@ -1736,8 +1739,7 @@ export class FleetEdge {
 			payloadJson === undefined
 				? undefined
 				: relayJson(payloadJson, stamp ? pipe.workspaceId : undefined);
-		const outgoing =
-			json === undefined && stamp ? { ...frame, workspaceId: pipe.workspaceId } : frame;
+		const outgoing = json === undefined && stamp ? { ...frame, scope: pipe.workspaceId } : frame;
 		// Id-keyed answers go to the browser that asked, not to every browser
 		// whose pipe happens to carry the session's broadcast copy. The stamp
 		// never touches `id` or `type`, so routing reads the same on either view.
@@ -2278,7 +2280,7 @@ export class FleetEdge {
 			if (this.#daemonTaps.has(entry.workspaceId)) continue;
 			const handleFrame = (frame: ServerFrame): void => {
 				// Derive realtime activity from the RAW session frames; the tap
-				// sees them BEFORE the edge stamps workspaceId on proxy pipes, and
+				// sees them BEFORE the edge stamps `scope` on proxy pipes, and
 				// never reads session_activity back (sessions never send it; the
 				// pipe forwarder strips it like `daemons` broker rosters).
 				switch (frame.type) {

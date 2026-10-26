@@ -178,7 +178,7 @@ function answerTurn(session: CallbackSession, callId: string, text: string): voi
 			message: { role: "assistant", content: [{ type: "text", text }] },
 		},
 	});
-	frame(session, { type: "event", workspaceId: "s1", event: { type: "agent_end", messages: [] } });
+	frame(session, { type: "event", event: { type: "agent_end", messages: [] } });
 }
 
 describe("SessionWaker.wake: stuck non-clone sessions", () => {

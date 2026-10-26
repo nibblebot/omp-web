@@ -479,7 +479,7 @@ export interface SkillDetail extends SkillSummary {
  *  standalone session) is one WebSocket on `GET /ws` (lib/wire/browser-socket.ts)
  *  instead of `GET /events` SSE + `POST /command`. Same unreleased 5: workspace
  *  labels are removed (`RosterEntry.labels`, `spawn.labels`).
- *  6: sense-A "daemon" renamed: process ids are workspaceId (frame stamp, attach, attach_result, attached), DaemonEntry->RosterEntry, DaemonStatus->SessionStatus (dead "session" literal removed), daemon_status->session_status, daemon_activity->session_activity, daemon_sessions->workspace_sessions, list_daemon_sessions->list_workspace_sessions, roster.daemons->roster.entries, stream_reset reason session_resync. */
+ *  6: sense-A "daemon" renamed: process ids are workspaceId (attach, attach_result, fleet frames and commands), the edge's per-frame attachment stamp on session-scoped frames is `scope` (also `attached.scope`), DaemonEntry->RosterEntry, DaemonStatus->SessionStatus (dead "session" literal removed), daemon_status->session_status, daemon_activity->session_activity, daemon_sessions->workspace_sessions, list_daemon_sessions->list_workspace_sessions, roster.daemons->roster.entries, stream_reset reason session_resync. */
 export const OMP_PROTO = 6;
 
 // --- Client connection constants (browser socket, shared by the session and the fleet) ---
@@ -1379,7 +1379,7 @@ export type UiApprovalAnswer =
 /**
  * Session-scoped frames as the server composes them, before broadcastTo
  * stamps the session handle. A bare omp-session sends them unstamped; the
- * fleet edge adds the roster `workspaceId` when proxying.
+ * fleet edge adds the roster workspace id as `scope` when proxying.
  */
 export type SessionScopedFrame =
 	// History: a small transcript ships as ONE frame with no `final` field (the
@@ -1428,12 +1428,12 @@ export type SessionScopedFrame =
 
 /**
  * Session-scoped frame types (SessionScopedFrame's `type` values). The fleet
- * edge stamps the roster `workspaceId` on exactly these (plus `attached`, whose
- * workspaceId is REQUIRED), and a client's stale-frame guard reads that stamp
- * only on these types. Fleet-scoped frames (`session_status`,
- * `session_activity`, `workspace_sessions`, `worktree_removed`, ...) also carry a
- * `workspaceId`, but as PAYLOAD naming the row they describe, not as a stamp:
- * a guard that compared it to the attached workspace would drop them.
+ * edge stamps `scope` (the attached roster workspace id) on exactly these (plus
+ * `attached`, whose `scope` is REQUIRED), and a client's stale-frame guard
+ * reads that stamp only on these types. Fleet-scoped frames (`session_status`,
+ * `session_activity`, `workspace_sessions`, `worktree_removed`, ...) carry
+ * `workspaceId` as PAYLOAD naming the row they describe; the stamp is a
+ * different key precisely so it can never clobber that payload.
  */
 export const SESSION_SCOPED_FRAME_LIST = [
 	"history",
@@ -1458,7 +1458,7 @@ export const SESSION_SCOPED_FRAME_LIST = [
 ] as const satisfies readonly SessionScopedFrame["type"][];
 // Exhaustiveness pin (finding #63): addition-direction guard; a session-scoped
 // frame added to the union without a row above would otherwise be forwarded
-// UNSTAMPED (no workspaceId), which the client's stale-frame guard would let
+// UNSTAMPED (no scope), which the client's stale-frame guard would let
 // through on a session switch.
 const _sessionScopedFrameListExhaustive: Record<
 	Exclude<SessionScopedFrame["type"], (typeof SESSION_SCOPED_FRAME_LIST)[number]>,
@@ -1474,15 +1474,16 @@ export function isSessionScopedFrameType(type: string): boolean {
 }
 
 // Server → browser. Session-scoped frames on a bare omp-session carry NO
-// workspaceId (one live session; connect = attached). The fleet edge STAMPS the
-// roster workspaceId on them when proxying (SESSION_SCOPED_FRAME_LIST plus
-// `attached`), so clients proxied through the edge can guard session switches.
-// The stamp is ONLY meaningful on those types: fleet frames (`session_status`,
-// `workspace_sessions`, `worktree_removed`, ...) carry `workspaceId` as payload
-// naming the row they describe and must never be stamp-guarded. The rest are
-// global broadcasts or unicast answers (noted per variant).
+// `scope` (one live session; connect = attached). The fleet edge STAMPS
+// `scope` (the roster workspace id) on them when proxying
+// (SESSION_SCOPED_FRAME_LIST plus `attached`), so clients proxied through the
+// edge can guard session switches. The stamp is ONLY meaningful on those
+// types: fleet frames (`session_status`, `workspace_sessions`,
+// `worktree_removed`, ...) carry `workspaceId` as payload naming the row they
+// describe and are never stamp-guarded. The rest are global broadcasts or
+// unicast answers (noted per variant).
 export type ServerFrame =
-	| (SessionScopedFrame & { workspaceId?: string })
+	| (SessionScopedFrame & { scope?: string })
 	// Unicast answer to list_sessions.
 	| { type: "sessions"; sessions: SessionListEntry[] }
 	// Unicast answer to list_workspace_sessions (the fleet edge answers it directly;
@@ -1496,11 +1497,13 @@ export type ServerFrame =
 	| { type: "login_url"; url: string; launchUrl?: string; instructions?: string }
 	// Unicast: provider needs a pasted code to finish login.
 	| { type: "login_code_request"; requestId: string; title: string; placeholder?: string }
-	// Unicast: socket is now attached to this handle; history, state and
-	// available_commands follow immediately (in that order). The fleet
+	// Unicast: socket is now attached to this scope; history, state and
+	// available_commands follow immediately (in that order). Through the fleet
+	// edge `scope` is the attached roster workspace id; a standalone session
+	// sends its BOOT_HANDLE, an opaque attachment token. The fleet
 	// sidebar's state is signaled by the fleet edge's roster frame, never by
 	// attached (the edge proxies the session's frame through unchanged).
-	| { type: "attached"; workspaceId: string }
+	| { type: "attached"; scope: string }
 	// Project-wide daemon broker roster (hub launch processes); global broadcast.
 	| { type: "daemons"; daemons: DaemonInfo[] }
 	// Unicast answer to daemon_logs.

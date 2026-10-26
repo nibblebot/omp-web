@@ -415,7 +415,7 @@ describe("session-control browser-stream priming", () => {
 			control.mirror({ type: "event", event: { type: "turn_start" } });
 			return [
 				{ type: "hello_ok" },
-				{ type: "attached", workspaceId: "d1" },
+				{ type: "attached", scope: "d1" },
 				{ type: "history", messages: [] },
 				{ type: "state", state: {} },
 			];
@@ -644,7 +644,7 @@ describe("session-control paced priming waits on drain (SXP-16)", () => {
 		const subscribed = Promise.withResolvers<void>();
 		let wake = (): void => {};
 		const harness = makeHarness(
-			() => [{ type: "hello_ok" }, { type: "attached", workspaceId: "d1" }],
+			() => [{ type: "hello_ok" }, { type: "attached", scope: "d1" }],
 			() => true,
 			undefined,
 			() => ({ stream: queued, connection: queued }),

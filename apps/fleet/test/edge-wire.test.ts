@@ -190,7 +190,7 @@ describe("fleet edge", () => {
 	/** Prime a browser stream the way a session does after stream_open (hello_ok, attached, then priming). */
 	function primeStream(session: CallbackSession, streamId: string): void {
 		session.send(streamId, "frame", { type: "hello_ok", proto: OMP_PROTO });
-		session.send(streamId, "frame", { type: "attached", workspaceId: "s1" });
+		session.send(streamId, "frame", { type: "attached", scope: "s1" });
 		session.send(streamId, "frame", { type: "history", entries: [] });
 		session.send(streamId, "frame", { type: "state", state: FAKE_STATE });
 		session.send(streamId, "frame", { type: "available_commands", commands: [] });
@@ -208,7 +208,7 @@ describe("fleet edge", () => {
 		const streamId = await awaitNewStream(session, seen);
 		primeStream(session, streamId);
 		await browser.waitForFrame(
-			(f) => f.type === "attached" && f.workspaceId === workspaceId,
+			(f) => f.type === "attached" && f.scope === workspaceId,
 			`attached ${workspaceId}`,
 		);
 		return streamId;
@@ -224,7 +224,7 @@ describe("fleet edge", () => {
 		const streamId = await awaitNewStream(session, 0);
 		primeStream(session, streamId);
 		await browser.waitForFrame(
-			(f) => f.type === "attached" && f.workspaceId === workspaceId,
+			(f) => f.type === "attached" && f.scope === workspaceId,
 			`attached ${workspaceId}`,
 		);
 		return streamId;
@@ -773,21 +773,21 @@ describe("fleet edge", () => {
 		}
 	});
 
-	test("attach primes over the callback pair with workspaceId rewritten, and forwards calls verbatim", async () => {
+	test("attach primes over the callback pair with the scope stamp applied, and forwards calls verbatim", async () => {
 		browserA = await openBrowser(server.port);
 		await browserA.waitForFrame((f) => f.type === "roster", "roster");
 		streamA = await attachBrowser(browserA, remoteSession, remoteEntry.workspaceId);
-		// Priming is forwarded with the workspaceId rewritten to the workspaceId.
+		// Priming is forwarded with the edge's scope stamp (the roster workspace id).
 		await browserA.waitForFrame(
-			(f) => f.type === "history" && f.workspaceId === remoteEntry.workspaceId,
+			(f) => f.type === "history" && f.scope === remoteEntry.workspaceId,
 			"history",
 		);
 		await browserA.waitForFrame(
-			(f) => f.type === "state" && f.workspaceId === remoteEntry.workspaceId,
+			(f) => f.type === "state" && f.scope === remoteEntry.workspaceId,
 			"state",
 		);
 		await browserA.waitForFrame(
-			(f) => f.type === "available_commands" && f.workspaceId === remoteEntry.workspaceId,
+			(f) => f.type === "available_commands" && f.scope === remoteEntry.workspaceId,
 			"available_commands",
 		);
 		await browserA.waitForFrame((f) => f.type === "ready", "ready");
@@ -795,9 +795,9 @@ describe("fleet edge", () => {
 		// check runs on the edge stream too.
 		const hello = await browserA.waitForFrame((f) => f.type === "hello_ok", "hello_ok");
 		expect((hello as { proto?: unknown }).proto).toBe(OMP_PROTO);
-		// Every forwarded session-scoped frame carries the workspaceId.
+		// Every forwarded session-scoped frame carries the scope stamp.
 		for (const f of browserA.frames) {
-			if ("workspaceId" in f) expect(f.workspaceId).toBe(remoteEntry.workspaceId);
+			if ("scope" in f) expect(f.scope).toBe(remoteEntry.workspaceId);
 		}
 
 		// The call reaches the session once, on this browser's stream, verbatim.
@@ -836,7 +836,7 @@ describe("fleet edge", () => {
 			(f) => f.type === "skills_changed",
 			"skills_changed",
 		);
-		expect("workspaceId" in skills ? skills.workspaceId : undefined).toBe(remoteEntry.workspaceId);
+		expect("scope" in skills ? skills.scope : undefined).toBe(remoteEntry.workspaceId);
 	});
 
 	test("a second browser gets an independent pipe, and answers reach only the browser that forwarded the command", async () => {
@@ -845,7 +845,7 @@ describe("fleet edge", () => {
 		streamB = await attachBrowser(browserB, remoteSession, remoteEntry.workspaceId);
 		expect(streamB).not.toBe(streamA);
 		await browserB.waitForFrame(
-			(f) => f.type === "history" && f.workspaceId === remoteEntry.workspaceId,
+			(f) => f.type === "history" && f.scope === remoteEntry.workspaceId,
 			"history B",
 		);
 
@@ -1041,7 +1041,7 @@ describe("fleet edge", () => {
 		if (!paired) throw new Error("spawned session did not pair");
 		await awaitNewStream(paired, 0);
 		await browserC.waitForFrame(
-			(f) => f.type === "history" && f.workspaceId === fresh.workspaceId,
+			(f) => f.type === "history" && f.scope === fresh.workspaceId,
 			"history C",
 		);
 		browserC.close();
@@ -1290,7 +1290,7 @@ describe("fleet edge", () => {
 			const streamId = await awaitNewStream(remoteSession, seen);
 			primeStream(remoteSession, streamId);
 			await browser.waitForFrame(
-				(f) => f.type === "attached" && f.workspaceId === remoteEntry.workspaceId,
+				(f) => f.type === "attached" && f.scope === remoteEntry.workspaceId,
 				`attached ${remoteEntry.workspaceId}`,
 			);
 			// Now the first wake completes.
@@ -1305,6 +1305,7 @@ describe("fleet edge", () => {
 						type: f.type,
 						id: "id" in f ? f.id : undefined,
 						workspaceId: "workspaceId" in f ? f.workspaceId : undefined,
+						scope: "scope" in f ? f.scope : undefined,
 						ok: "ok" in f ? f.ok : undefined,
 						error: "error" in f ? f.error : undefined,
 					}),
@@ -1327,7 +1328,7 @@ describe("fleet edge", () => {
 			expect(controlsOf(woken, "stream_open")).toHaveLength(0);
 			const attached = browser.frames
 				.filter((f) => f.type === "attached")
-				.map((f) => (f.type === "attached" ? f.workspaceId : undefined));
+				.map((f) => (f.type === "attached" ? f.scope : undefined));
 			expect(attached).toEqual([remoteEntry.workspaceId]);
 			// The browser's pipe is still B's: a call reaches B's session.
 			await browser.send({ type: "call", id: "sup-call", method: "getQueuedMessages" });

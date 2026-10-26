@@ -2595,7 +2595,7 @@ describe("unread-dot tracking", () => {
 // ---------------------------------------------------------------------------
 // session_activity: the fleet edge's realtime per-session stream (streaming /
 // blocked) for EVERY ready session, delivered as additive fleet-scoped frames.
-// It carries a workspaceId as payload (not a stamp), so it passes the stale-frame guard untouched. Fed
+// It carries a workspaceId as payload (not the `scope` stamp), so it passes the stale-frame guard untouched. Fed
 // into state.sessionActivity and pruned on roster frames like unread; a
 // detached session's observed streaming flip true→false marks it unread.
 // ---------------------------------------------------------------------------
@@ -2672,13 +2672,13 @@ describe("session_activity frames", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Stale-frame guard scope. The edge stamps `workspaceId` only on session-scoped
+// Stale-frame guard scope. The edge stamps `scope` only on session-scoped
 // frames (isSessionScopedFrameType) and on `attached`; fleet-scoped frames carry
 // a workspaceId as PAYLOAD naming a row other than the attached one, and must
 // never be dropped by the guard.
 // ---------------------------------------------------------------------------
 describe("stale-frame guard scope", () => {
-	test("a fleet-scoped frame carrying another workspace's workspaceId is applied; a session-scoped frame stamped with it is dropped", () => {
+	test("a fleet-scoped frame carrying another workspace's workspaceId is applied; a session-scoped frame stamped with another scope is dropped", () => {
 		connect();
 		FakeWebSocket.instances.at(-1)!.onopen?.();
 		dispatch(attached("d1"));
@@ -2705,7 +2705,7 @@ describe("stale-frame guard scope", () => {
 		// Session-scoped and stamped for d2 while viewing d1: a stale in-flight frame.
 		dispatch({
 			type: "collab_status",
-			workspaceId: "d2",
+			scope: "d2",
 			status: { state: "starting" },
 		});
 		expect(state.collabStatus).toEqual({ state: "off" });
@@ -2713,7 +2713,7 @@ describe("stale-frame guard scope", () => {
 		// The same frame stamped for the viewed workspace applies.
 		dispatch({
 			type: "collab_status",
-			workspaceId: "d1",
+			scope: "d1",
 			status: { state: "starting" },
 		});
 		expect(state.collabStatus).toEqual({ state: "starting" });

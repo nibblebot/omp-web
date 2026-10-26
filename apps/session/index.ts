@@ -127,8 +127,8 @@ import { pinModelRoles } from "./model-role-pin";
 // de-muxed (Phase 6): every /ws socket is attached to that one session from
 // open (connect = attached), which routes call/login_code/ui_response and
 // all session-scoped frames. The constant handle "s1" survives only as the
-// attached frame's client guard token; session-scoped frames carry no
-// workspaceId stamp on the wire.
+// attached frame's client guard token (`attached.scope`); session-scoped
+// frames carry no `scope` stamp on the wire.
 // ---------------------------------------------------------------------------
 
 let config: SessionConfig;
@@ -328,7 +328,7 @@ function primingFrames(
 			version,
 			...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
 		},
-		{ type: "attached", workspaceId: BOOT_HANDLE },
+		{ type: "attached", scope: BOOT_HANDLE },
 		...transcriptHistoryFrames(entry.session),
 		...streamingPrimeFrames(entry),
 		{

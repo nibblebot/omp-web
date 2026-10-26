@@ -18,7 +18,7 @@ flowchart LR
   end
 
   subgraph cp["Fleet control plane (omp-web / omp-web control)"]
-    edge["Browser edge (edge.ts)<br/>per-client replay ring, command routing,<br/>workspaceId stamping"]
+    edge["Browser edge (edge.ts)<br/>per-client replay ring, command routing,<br/>scope stamping"]
     transport["Callback transport (session-transport.ts)<br/>pair auth, virtual streams, credit"]
     lifecycle["Workspace lifecycle (workspace-lifecycle.ts)<br/>start, stop, restart, generations"]
     registry["Registry (fleet-state.json)<br/>roster, projects, enrollment digests"]
@@ -55,7 +55,7 @@ flowchart LR
 - **The fleet never dials a session.** Every session dials out to `/callback/ws` with its workspace id, generation, connection id, credential and protocol version in the upgrade headers. That way a session can run on the fleet host, in a bwrap sandbox, or in a pod behind NAT. In the split form (`omp-web ui` in front of `omp-web control`), the UI process forwards the browser routes, the browser socket (`/ws`) and the session WebSocket to the control plane on loopback.
 - **Each launch gets a fresh credential.** The lifecycle mints a new credential and generation for every launch and passes them on stdin (`--fleet-stdin`), never in argv or the environment. The fleet stores only the credential's digest. A refused dial is upgraded and then closed with a typed code (4000 + HTTP status). The session stops for good on `unauthorized`, `invalid_identity`, `generation_obsolete` or `proto_unsupported`, and redials on anything else.
 - **Virtual streams multiplex one pair.** `transport` carries the fleet's own controls (`pair_ready`, `pair_credit`, heartbeats). `control` carries the session's state mirror, which the fleet taps for roster activity. Each attached browser gets its own `browser/<connId>` stream.
-- **The session primes every stream it is asked to open.** The edge relays those frames to the browser's socket, stamping `workspaceId`. Answers to commands go only to the browser socket that sent them. The upgrade is origin-checked when browser auth is on, which is what stands in for a per-command CSRF token.
+- **The session primes every stream it is asked to open.** The edge relays those frames to the browser's socket, stamping `scope` (the roster workspace id) on session-scoped frames and on `attached`. Answers to commands go only to the browser socket that sent them. The upgrade is origin-checked when browser auth is on, which is what stands in for a per-command CSRF token.
 
 ## One session's life over time
 
@@ -87,7 +87,7 @@ sequenceDiagram
   E->>S: stream_open (lastSeq) on browser/connId
   E-->>B: attach_result (id-keyed)
   S->>E: hello_ok, attached, history chunks, state, available_commands, ready
-  E-->>B: frames (workspaceId stamped)
+  E-->>B: frames (scope stamped)
   E->>S: stream_ack as the browser's queue drains (at most 3 MiB unacked per stream)
   T->>S: pair_credit every 512 KiB consumed (at most 8 MiB in flight per pair)
   end
