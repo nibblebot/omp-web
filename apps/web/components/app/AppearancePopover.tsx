@@ -85,6 +85,7 @@ export const AppearancePopover: Component<{
 			side="below"
 			align="end"
 		>
+			<h2 class="appearance-popover-title">Appearance</h2>
 			<div class="appearance-popover-body">
 				<SettingsGroup title="Theme & text">
 					<SettingsRowLayout label="Theme" compact>
@@ -119,7 +120,7 @@ export const AppearancePopover: Component<{
 				</SettingsGroup>
 				<SettingsGroup title="Transcript">
 					{/* Browser display rows of this group (Width, Tool cards, Advisor) go here, above the SDK rows. */}
-					<SettingsRowLayout label="Width" compact>
+					<SettingsRowLayout label="Width" compact stacked>
 						<SettingSegmented
 							label="Width"
 							options={TRANSCRIPT_WIDTHS.map((value) => ({
@@ -137,6 +138,7 @@ export const AppearancePopover: Component<{
 						label="Tool Cards"
 						description="Collapsed shows header-only cards, Consolidated one row per run of tool calls, Expanded the full cards. Ctrl+O shows everything for now."
 						compact
+						stacked
 					>
 						<SettingSegmented
 							label="Tool Cards"
@@ -156,6 +158,7 @@ export const AppearancePopover: Component<{
 							label="Tool Output Rows"
 							description="Rows of output an expanded tool card shows before the rest is hidden."
 							compact
+							stacked
 						>
 							<SettingSegmented
 								label="Tool Output Rows"
@@ -171,7 +174,7 @@ export const AppearancePopover: Component<{
 							/>
 						</SettingsRowLayout>
 					</Show>
-					<SettingsRowLayout label="Advisor" compact>
+					<SettingsRowLayout label="Advisor" compact stacked>
 						<SettingSegmented
 							label="Advisor"
 							options={[

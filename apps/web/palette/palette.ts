@@ -11,6 +11,8 @@ import {
 import {
 	APPEARANCE_MENU_TAB,
 	appearanceSettingGroup,
+	settingDescription,
+	settingLabel,
 	type WebUiSearchRow,
 } from "../prefs/settings";
 import type { SettingsTabMeta } from "../prefs/settings-tabs";
@@ -410,16 +412,16 @@ export function settingItems(
 				items.push({
 					id: `setting:row:${row.path}`,
 					group: "Settings",
-					label: row.label,
+					label: settingLabel(row),
 					detail:
 						popoverGroup === undefined
 							? `${tabLabel}${group.name ? ` · ${group.name}` : ""}`
 							: `Appearance menu · ${popoverGroup}`,
 					action:
 						popoverGroup === undefined
-							? { kind: "setting", tabId: tab.id, query: row.label }
+							? { kind: "setting", tabId: tab.id, query: settingLabel(row) }
 							: { kind: "open", target: "appearance" },
-					keywords: [row.description, row.path, group.name],
+					keywords: [row.label, settingDescription(row), row.path, group.name],
 				});
 			}
 		}

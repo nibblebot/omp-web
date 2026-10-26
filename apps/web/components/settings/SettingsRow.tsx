@@ -1,5 +1,12 @@
 import { Show, Switch, Match, type JSX } from "solid-js";
-import { displayOptionValue, effectNote, unmetDependency } from "../../prefs/settings";
+import {
+	displayOptionValue,
+	effectNote,
+	isInvertedSetting,
+	settingDescription,
+	settingLabel,
+	unmetDependency,
+} from "../../prefs/settings";
 import { asRecord, controlKind, hasWideSelection, itemOptions } from "../../prefs/setting-controls";
 import { settingValue, unsetSetting, updateSetting } from "../../store/settings";
 import { state } from "../../state";
@@ -16,7 +23,8 @@ import type { SettingsItem } from "#lib/wire/protocol";
 
 /**
  * Shared row layout: label (with changed dot), help text and an optional amber
- * warning on the left; the control, plus Reset when given, on the right.
+ * warning on the left; the control, plus Reset when given, on the right. A
+ * `disabled` row dims its label and shows `disabled` as its tooltip.
  */
 export function SettingsRowLayout(props: {
 	label: string;
@@ -31,17 +39,25 @@ export function SettingsRowLayout(props: {
 	stacked?: boolean;
 	/** For a row in a popover (the Appearance menu): tighter spacing and smaller type, and the description moves to a tooltip so the row stays one line. */
 	compact?: boolean;
+	/** Why the row's control is disabled (an unmet dependency): dims the row, shown as its tooltip. */
+	disabled?: string;
 	children: JSX.Element;
 	reset?: JSX.Element;
 }) {
 	return (
 		<div
 			class="settings-item"
-			classList={{ changed: props.changed, stacked: props.stacked, compact: props.compact }}
+			classList={{
+				changed: props.changed,
+				stacked: props.stacked,
+				compact: props.compact,
+				disabled: !!props.disabled,
+			}}
+			title={props.disabled || undefined}
 		>
 			<div
 				class="settings-item-text"
-				title={props.compact ? props.description || undefined : undefined}
+				title={props.compact && !props.disabled ? props.description || undefined : undefined}
 			>
 				<Show when={props.warning}>
 					<WarningIcon class="settings-item-warning-icon" />
@@ -96,12 +112,14 @@ export function SettingsRow(props: { item: SettingsItem; compact?: boolean }) {
 		return item().warning ? `${item().warning} ${note}` : note;
 	};
 	const blocked = () => unmetDependency(item().path, settingValue);
+	const inverted = () => isInvertedSetting(item().path);
 
 	return (
 		<SettingsRowLayout
-			label={item().label}
-			description={item().description}
-			warning={blocked() ?? rowWarning()}
+			label={settingLabel(item())}
+			description={settingDescription(item())}
+			warning={rowWarning()}
+			disabled={blocked() ?? undefined}
 			changed={item().changed}
 			compact={props.compact}
 			setByProject={setByProject()}
@@ -131,10 +149,10 @@ export function SettingsRow(props: { item: SettingsItem; compact?: boolean }) {
 			<Switch>
 				<Match when={kind() === "toggle"}>
 					<SettingToggle
-						label={item().label}
-						checked={item().value === true}
+						label={settingLabel(item())}
+						checked={(item().value === true) !== inverted()}
 						disabled={setByProject() || blocked() !== null}
-						onChange={(checked) => updateSetting(item().path, checked)}
+						onChange={(checked) => updateSetting(item().path, checked !== inverted())}
 					/>
 				</Match>
 				<Match when={kind() === "segmented"}>

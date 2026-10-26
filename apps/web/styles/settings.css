@@ -430,6 +430,15 @@ button.settings-toggle:not(:disabled):hover {
 	opacity: 0.5;
 	cursor: default;
 }
+/* A row whose dependency is unmet: muted label, and a gray track whatever the stored value,
+   so an "on" switch that does nothing never reads as active. */
+.settings-item.disabled .settings-item-label {
+	color: var(--muted);
+	opacity: 0.7;
+}
+.settings-item.disabled .settings-toggle {
+	--toggle-track: var(--settings-track-off);
+}
 .settings-segmented {
 	display: inline-flex;
 	align-items: center;
@@ -896,18 +905,61 @@ button.settings-toggle:not(:disabled):hover {
 }
 
 /* --- Appearance popover (app/AppearancePopover.tsx), anchored to the header's Appearance button; the surface is ui/Popover --- */
+.appearance-popover {
+	/* Wider gutters than the sheet: the changed dot sits in the left one. */
+	--settings-row-x: var(--space-6);
+}
+/* The menu's title, above the scrolling groups: a step larger and bolder than a group heading. */
+.appearance-popover-title {
+	flex: none;
+	margin: 0;
+	padding: var(--space-5) var(--settings-row-x) var(--space-4);
+	border-bottom: 1px solid var(--settings-line);
+	color: var(--settings-title);
+	font-size: var(--fs-2xl);
+	font-weight: 700;
+	line-height: 1.2;
+}
 .appearance-popover-body {
 	flex: 1 1 auto;
 	min-height: 0;
 	overflow-y: auto;
 	overscroll-behavior: contain;
-	padding: var(--space-3) 0;
+	padding: var(--space-2) 0 var(--space-4);
 }
 .appearance-popover .settings-block {
-	margin-bottom: var(--space-4);
-}
-.appearance-popover .settings-block:last-child {
+	gap: 0;
 	margin-bottom: 0;
+}
+/* Group headings lead their rows: sentence case, larger and bolder than a row label, set apart by space above. */
+.appearance-popover .settings-group-title {
+	padding-top: var(--space-6);
+	padding-bottom: var(--space-3);
+	color: var(--settings-title);
+	font-size: var(--fs-lg);
+	font-weight: 650;
+	letter-spacing: 0;
+	text-transform: none;
+}
+.appearance-popover .settings-block:first-child .settings-group-title {
+	padding-top: var(--space-4);
+}
+/* Row labels sit a step below the headings: halfway to muted, still readable on every palette. */
+.appearance-popover .settings-item-label {
+	white-space: nowrap;
+	color: color-mix(in srgb, var(--text) 50%, var(--muted));
+}
+/* Segmented rows put the control on its own line, spanning the row in equal segments. */
+.appearance-popover .settings-item.stacked {
+	gap: var(--space-3);
+}
+.appearance-popover .settings-item.stacked .settings-segmented {
+	display: flex;
+	width: 100%;
+}
+.appearance-popover .settings-item.stacked .settings-segment {
+	flex: 1 1 0;
+	padding-inline: var(--space-2);
 }
 .appearance-popover-note {
 	margin: 0;

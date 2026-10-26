@@ -48,7 +48,7 @@ export function filterSettings(model: SettingsModel, query: string): SettingsMat
 	for (const tab of model.tabs) {
 		for (const group of tab.groups) {
 			for (const item of group.items) {
-				const haystack = [item.label, item.description, group.name, item.path]
+				const haystack = [settingLabel(item), item.label, item.description, group.name, item.path]
 					.join("\n")
 					.toLowerCase();
 				if (haystack.includes(q)) matches.push({ tab, group, item });
@@ -105,11 +105,57 @@ export function appearanceSettingGroup(path: string): string | undefined {
  */
 export const APPEARANCE_MENU_TAB = "appearance-menu";
 
-/** Settings that do nothing until another setting is on: path -> controlling path and the reason shown while it is off. */
-const DEPENDENCIES: Record<string, { on: string; reason: string }> = {
+/**
+ * SDK "hide" flags the web shows in their positive "show" form, like every other display
+ * switch: path -> label and help text shown. The stored value stays the SDK's; the switch
+ * is inverted.
+ */
+const INVERTED_SETTINGS: Record<string, { label: string; description: string }> = {
+	hideThinkingBlock: {
+		label: "Show Thinking Blocks",
+		description: "Show thinking blocks in assistant responses",
+	},
+	"display.hideToolActivity": {
+		label: "Show Tool Activity",
+		description: "Show model-initiated tool calls and results in the transcript",
+	},
+};
+
+/** Whether a boolean setting's switch shows the opposite of its stored value. */
+export function isInvertedSetting(path: string): boolean {
+	return path in INVERTED_SETTINGS;
+}
+
+/** The label the web shows for a setting: the positive form for an inverted flag, else the SDK label. */
+export function settingLabel(item: Pick<SettingsItem, "path" | "label">): string {
+	return INVERTED_SETTINGS[item.path]?.label ?? item.label;
+}
+
+/** The help text the web shows for a setting, matching `settingLabel`. */
+export function settingDescription(item: Pick<SettingsItem, "path" | "description">): string {
+	return INVERTED_SETTINGS[item.path]?.description ?? item.description;
+}
+
+/**
+ * Settings that do nothing unless another (boolean) setting is on or off: path -> controlling
+ * path, the state it needs, and the reason shown (as a tooltip on the disabled row) while it is not.
+ * An unset controller counts as off, as its switch shows it.
+ */
+const DEPENDENCIES: Record<string, { on: string; value: boolean; reason: string }> = {
 	"display.showTurnTime": {
 		on: "display.showTokenUsage",
+		value: true,
 		reason: "Turn on Show Token Usage to use turn time.",
+	},
+	expandThinkingBlocks: {
+		on: "hideThinkingBlock",
+		value: false,
+		reason: "Turn on Show Thinking Blocks to expand them.",
+	},
+	proseOnlyThinking: {
+		on: "hideThinkingBlock",
+		value: false,
+		reason: "Turn on Show Thinking Blocks to use prose-only thinking.",
 	},
 };
 
@@ -117,7 +163,7 @@ const DEPENDENCIES: Record<string, { on: string; reason: string }> = {
 export function unmetDependency(path: string, valueOf: (path: string) => unknown): string | null {
 	const dep = DEPENDENCIES[path];
 	if (!dep) return null;
-	return valueOf(dep.on) === true ? null : dep.reason;
+	return (valueOf(dep.on) === true) === dep.value ? null : dep.reason;
 }
 
 /** Muted suffix for settings whose change applies only at session start; null otherwise (live, and the legacy `restart`). */
@@ -268,7 +314,7 @@ export function searchSheetSettings(
 			...filterWebUiSettings(query, context),
 			...matches
 				.filter((match) => isAppearanceSetting(match.item.path))
-				.map((match) => ({ label: match.item.label, tabId: APPEARANCE_MENU_TAB })),
+				.map((match) => ({ label: settingLabel(match.item), tabId: APPEARANCE_MENU_TAB })),
 		],
 	};
 }

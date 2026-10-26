@@ -11,6 +11,7 @@ import {
 	isAppearanceSetting,
 	searchSheetSettings,
 	sheetGroups,
+	settingLabel,
 	unmetDependency,
 } from "../../prefs/settings";
 
@@ -177,11 +178,47 @@ describe("unmetDependency and effectNote", () => {
 		expect(unmetDependency("display.showTokenUsage", off)).toBeNull();
 	});
 
+	test("expanding thinking blocks needs thinking blocks shown", () => {
+		const hidden = (path: string) => path === "hideThinkingBlock";
+		expect(unmetDependency("expandThinkingBlocks", hidden)).toBe(
+			"Turn on Show Thinking Blocks to expand them.",
+		);
+		expect(unmetDependency("expandThinkingBlocks", () => false)).toBeNull();
+		// Unset reads as off, as the Show Thinking Blocks switch shows it.
+		expect(unmetDependency("expandThinkingBlocks", () => undefined)).toBeNull();
+		expect(unmetDependency("expandThinkingBlocks", () => null)).toBeNull();
+		expect(unmetDependency("display.showTurnTime", () => undefined)).not.toBeNull();
+		expect(unmetDependency("proseOnlyThinking", hidden)).toBe(
+			"Turn on Show Thinking Blocks to use prose-only thinking.",
+		);
+		expect(unmetDependency("proseOnlyThinking", () => undefined)).toBeNull();
+	});
+
 	test("notes only next-session effects", () => {
 		expect(effectNote("next-session")).not.toBeNull();
 		expect(effectNote("live")).toBeNull();
 		expect(effectNote("restart")).toBeNull();
 		expect(effectNote(undefined)).toBeNull();
+	});
+});
+
+describe("inverted hide flags", () => {
+	test("show as their positive form, and search finds that form", () => {
+		const hide = item({
+			type: "boolean",
+			path: "hideThinkingBlock",
+			label: "Hide Thinking Blocks",
+		});
+		expect(settingLabel(hide)).toBe("Show Thinking Blocks");
+		expect(settingLabel(item({ type: "boolean", path: "display.shimmer", label: "Shimmer" }))).toBe(
+			"Shimmer",
+		);
+		const model = {
+			tabs: [{ id: "appearance", label: "Display", groups: [{ name: "", items: [hide] }] }],
+		} as unknown as SettingsModel;
+		expect(filterSettings(model, "show thinking").map((m) => m.item.path)).toEqual([
+			"hideThinkingBlock",
+		]);
 	});
 });
 
