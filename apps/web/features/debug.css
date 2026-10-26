@@ -154,8 +154,7 @@
 	color: var(--success);
 }
 .debug-status[data-status="spawning"],
-.debug-status[data-status="connecting"],
-.debug-status[data-status="resolving"] {
+.debug-status[data-status="connecting"] {
 	color: var(--accent);
 }
 .debug-status[data-status="reconnecting"] {

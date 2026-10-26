@@ -531,7 +531,7 @@
 }
 .session-status-dot[data-status="spawning"],
 .session-status-dot[data-status="connecting"],
-.session-status-dot[data-status="resolving"] {
+.session-status-dot[data-status="waking"] {
 	background: var(--accent);
 	box-shadow: 0 0 6px var(--accent);
 	animation: session-dot-pulse var(--dur-pulse) var(--ease-in-out) infinite;

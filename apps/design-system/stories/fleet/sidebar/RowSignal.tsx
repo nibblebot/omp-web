@@ -1,10 +1,12 @@
-import type { SessionStatus } from "#lib/wire/protocol";
-import { RowSignal } from "../../../../web/components/fleet/sidebar/RowSignal";
+import {
+	RowSignal,
+	type RowSignalStatus,
+} from "../../../../web/components/fleet/sidebar/RowSignal";
 import type { SessionActivity } from "../../../../web/fleet-ui/session-activity";
 import { defineStory } from "../../../registry";
 
 /** The signal in the sidebar's corner-slot wrapper, so the dot and spinner take their row sizing. */
-const Signal = (props: { status: SessionStatus; activity?: SessionActivity }) => (
+const Signal = (props: { status: RowSignalStatus; activity?: SessionActivity }) => (
 	<div class="ds-frame-sidebar">
 		<div class="sidebar-list">
 			<span class="roster-row-status">
@@ -32,8 +34,9 @@ export default defineStory({
 		},
 		{
 			name: "Starting (spinner)",
-			description: "The process is on its way up (resolving): an accent comet ring.",
-			render: () => <Signal status="resolving" />,
+			description:
+				"The process is on its way up (connecting, or a row waking after a click): an accent comet ring.",
+			render: () => <Signal status="connecting" />,
 		},
 		{
 			name: "Blocked (dot)",

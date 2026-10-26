@@ -479,7 +479,7 @@ export interface SkillDetail extends SkillSummary {
  *  standalone session) is one WebSocket on `GET /ws` (lib/wire/browser-socket.ts)
  *  instead of `GET /events` SSE + `POST /command`. Same unreleased 5: workspace
  *  labels are removed (`RosterEntry.labels`, `spawn.labels`).
- *  6: sense-A "daemon" renamed: process ids are workspaceId (attach, attach_result, fleet frames and commands), the edge's per-frame attachment stamp on session-scoped frames is `scope` (also `attached.scope`), DaemonEntry->RosterEntry, DaemonStatus->SessionStatus (dead "session" literal removed), daemon_status->session_status, daemon_activity->session_activity, daemon_sessions->workspace_sessions, list_daemon_sessions->list_workspace_sessions, roster.daemons->roster.entries, stream_reset reason session_resync. */
+ *  6: sense-A "daemon" renamed: process ids are workspaceId (attach, attach_result, fleet frames and commands), the edge's per-frame attachment stamp on session-scoped frames is `scope` (also `attached.scope`), DaemonEntry->RosterEntry, DaemonStatus->SessionStatus (never-produced "session" and "resolving" literals removed), daemon_status->session_status, daemon_activity->session_activity, daemon_sessions->workspace_sessions, list_daemon_sessions->list_workspace_sessions, roster.daemons->roster.entries, stream_reset reason session_resync. */
 export const OMP_PROTO = 6;
 
 // --- Client connection constants (browser socket, shared by the session and the fleet) ---
@@ -577,7 +577,6 @@ export type StdoutContractLine = { event: "listening"; bind: string; port: numbe
 export type SessionStatus =
 	| "spawning"
 	| "connecting"
-	| "resolving"
 	| "ready"
 	| "asleep"
 	| "reconnecting"

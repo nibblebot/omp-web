@@ -125,7 +125,7 @@ const sessionRegisteredWorktree: RosterEntry = {
 	sessionTitle: undefined,
 };
 
-/** RosterEntry: worktree whose session is still resolving provider and model (transitional status). */
+/** RosterEntry: worktree whose session process is still connecting (transitional status). */
 const sessionStarting: RosterEntry = {
 	workspaceId: "dmn_a004",
 	name: "tx-pagination",
@@ -134,7 +134,7 @@ const sessionStarting: RosterEntry = {
 	projectId: "proj_omp_web",
 	worktreeOf: OMP_WEB,
 	branch: "feat/tx-pagination",
-	status: "resolving",
+	status: "connecting",
 	sessionEmpty: true,
 	workspaceKind: "worktree",
 	desiredState: "running",

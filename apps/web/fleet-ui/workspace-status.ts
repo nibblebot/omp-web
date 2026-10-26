@@ -13,7 +13,6 @@ import type { SessionActivity } from "./session-activity";
 const STARTING_STATUSES: Partial<Record<SessionStatus, true>> = {
 	spawning: true,
 	connecting: true,
-	resolving: true,
 };
 
 export type SessionChipKind =

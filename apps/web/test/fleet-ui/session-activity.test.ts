@@ -46,14 +46,7 @@ const DETACHED = {
  * attached session, which is ready by definition when it is streaming).
  */
 describe("sessionActivity non-ready statuses → null", () => {
-	const statuses: SessionStatus[] = [
-		"spawning",
-		"connecting",
-		"resolving",
-		"asleep",
-		"reconnecting",
-		"error",
-	];
+	const statuses: SessionStatus[] = ["spawning", "connecting", "asleep", "reconnecting", "error"];
 	for (const status of statuses) {
 		test(`${status} → null`, () => {
 			expect(sessionActivity({ status }, ATTACHED_BLOCKED)).toBeNull();

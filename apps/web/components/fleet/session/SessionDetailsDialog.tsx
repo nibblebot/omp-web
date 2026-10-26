@@ -20,8 +20,7 @@ export const SessionDetailsDialog: Component<{ session: RosterEntry; onClose: ()
 	// errored, and such an entry may still carry pid/readyAt from the last run,
 	// so render them defensively off status, not field presence. The roster
 	// entry's status is the single source of truth.
-	const alive = () =>
-		d().status === "ready" || d().status === "connecting" || d().status === "resolving";
+	const alive = () => d().status === "ready" || d().status === "connecting";
 	return (
 		<Modal
 			class="session-detail"

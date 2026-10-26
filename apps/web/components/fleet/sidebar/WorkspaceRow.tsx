@@ -99,7 +99,6 @@ const ACTIVITY_TITLE: Record<SessionActivity, string> = {
 const STATUS_TITLE: Record<SessionStatus, string> = {
 	spawning: "starting the session process…",
 	connecting: "connecting to the session process…",
-	resolving: "resolving provider/model…",
 	ready: "ready, click to attach",
 	asleep: "asleep, click to wake and attach",
 	reconnecting: "reconnecting…",
@@ -243,7 +242,7 @@ export const WorkspaceRow: Component<{
 	const clickable = () =>
 		!blocked() && !deleting() && (d().status === "ready" || d().status === "asleep");
 	/** Loading phase: activating but the session isn't ready yet. Renders with
-	 *  the transitional ("resolving") spinner. */
+	 *  the row signal's web-only `waking` spinner. */
 	const waking = () => activating() && d().status !== "ready";
 	/** Process state behind the status announcer, the "⋯" tooltip and the kebab's
 	 *  Start/Restart item. Both read the user-stopped mark so a stopped
@@ -459,7 +458,7 @@ export const WorkspaceRow: Component<{
 								role="status"
 								aria-label={`${statusLabel()}. ${chip().title}`}
 							>
-								<RowSignal status={waking() ? "resolving" : d().status} activity={activityDot()} />
+								<RowSignal status={waking() ? "waking" : d().status} activity={activityDot()} />
 							</span>
 							<KebabMenu
 								label="Row actions"

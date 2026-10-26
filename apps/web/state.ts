@@ -1051,7 +1051,7 @@ export function sessionsByProject(): { project: RegisteredProject; sessions: Ros
 const DEAD_SESSION_STATUSES = new Set<SessionStatus>(["asleep", "error"]);
 
 /** True when the roster entry is missing or its status is terminal-dead.
- *  Transitional statuses ("connecting"/"resolving") and "ready"
+ *  Transitional statuses ("spawning"/"connecting") and "ready"
  *  are NEVER dead; a waking session passes through them. */
 export function isSessionDead(entry: RosterEntry | undefined): boolean {
 	return entry === undefined || DEAD_SESSION_STATUSES.has(entry.status);
