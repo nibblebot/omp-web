@@ -5,6 +5,7 @@ import type { AskQuestion, UiRequest } from "../../web/prompt/ask-types";
 import type { SettingsSection } from "../../web/components/settings/SettingsNav";
 import { settingsSectionId } from "../../web/prefs/settings-tabs";
 import type { BrowserUiRequest } from "../../web/store/browser-ui";
+import { appearanceSettingsModel } from "./appearance";
 import type { DownloadConsent, WebDownloadManifest } from "../../web/store/downloads";
 import type { ResumeCandidate } from "../../web/store/resume";
 import type { BrowserUiContribution } from "#lib/wire/browser-ui-contract";
@@ -81,9 +82,9 @@ export const settingsModelSections: SettingsSection[] = [
 	{ id: settingsSectionId("model", "Providers"), label: "Providers" },
 ];
 
-/** Sidebar sections under the Appearance (client) tab while signed in. */
+/** Sidebar sections under the Browser (client) tab while signed in. */
 export const settingsWebUiSections: SettingsSection[] = [
-	{ id: settingsSectionId("web-ui", "Interface"), label: "Interface" },
+	{ id: settingsSectionId("web-ui", "Notifications"), label: "Notifications" },
 	{ id: settingsSectionId("web-ui", "Account"), label: "Account" },
 ];
 
@@ -255,6 +256,8 @@ export const settingsModel: SettingsModel = {
 			id: "appearance",
 			label: "Appearance",
 			groups: [
+				// The Appearance popover owns these rows: the sheet filters them out of its Display tab.
+				...appearanceSettingsModel().tabs.flatMap((tab) => tab.groups),
 				{
 					name: "Images",
 					items: [

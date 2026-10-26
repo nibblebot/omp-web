@@ -3,6 +3,7 @@ import { reconcileBackgroundCards } from "./store/background-cards";
 import { type ActivitiesSlice, createActivitiesState } from "./store/slices/activities";
 import { restoreDockLayout } from "./store/dock";
 import { readDockWidth } from "./prefs/dock";
+import { loadDisplayPrefs } from "./prefs/display";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AdvisorItem } from "./store/slices/advisor";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
@@ -560,9 +561,12 @@ export const [state, setState] = createStore({
 	// Phase 3: pending server-pushed ExtensionUIContext dialog (ui_request
 	// frame); answered via sendUiResponse/cancelUiRequest.
 	uiRequest: null as { id: string; method: string; params: unknown } | null,
-	// Display toggle (SettingsPanel checkbox): soften fades the fresh tail.
-	// Paced reveal is display.smoothStreaming, read via chat/display-prefs.
-	soften: false,
+	// Browser-local display preferences (omp.display.* in localStorage; prefs/display.ts
+	// owns the table, setDisplayPref writes). Paced reveal is display.smoothStreaming,
+	// read via chat/display-prefs.
+	display: loadDisplayPrefs(),
+	// The header's Appearance popover is open (openAppearance/closeAppearance; MainHeader mounts it).
+	appearanceOpen: false,
 	error: null as string | null,
 	collabStatus: COLLAB_OFF,
 	// Client-side debug ring (Debug panel): one entry per transport lifecycle
@@ -1912,6 +1916,12 @@ export {
 	sendWorktreeDeleteInfo,
 	fetchCloneIntoProject,
 } from "./store/projects";
+export {
+	applyDisplayAttributes,
+	closeAppearance,
+	openAppearance,
+	setDisplayPref,
+} from "./store/display";
 export {
 	closeSessionDetails,
 	closeWorktreeSessions,

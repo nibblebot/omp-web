@@ -252,15 +252,6 @@
 	background: var(--hover);
 	box-shadow: var(--shadow-2);
 }
-/* KebabMenu reveals its trigger on row hover in the sidebar; in the header it
-   is the only route to these toggles, so it always shows. */
-.tool-cards-menu .sidebar-menu-btn {
-	opacity: 1;
-	pointer-events: auto;
-}
-.tool-cards-menu .sidebar-menu {
-	z-index: var(--z-autocomplete);
-}
 /* Short viewports (phone landscape, open keyboard): the composer never
    shrinks and the transcript keeps a readable minimum; the queue bar
    folds to a summary line (prompt.css). */
@@ -289,6 +280,7 @@
 }
 .run-row.open {
 	border-radius: var(--r-lg);
+	align-self: stretch;
 	flex-direction: column;
 	align-items: flex-start;
 	gap: var(--space-2);
@@ -348,15 +340,12 @@
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
-	align-items: flex-start;
+	align-items: stretch;
 	width: 100%;
 }
 .run-row .thinking-block {
 	margin: 0;
 	font-size: var(--fs-sm);
-}
-.run-row .msg-assistant {
-	margin: 0;
 }
 .msg-user {
 	align-self: flex-end;
@@ -564,7 +553,7 @@ pre {
 
 /* --- Empty state: orientation before the first message --- */
 
-/* Left-aligned to the 820px column (.app-main); ::before holds the content's top
+/* Left-aligned to the chat column (.app-main); ::before holds the content's top
    at ~38% of the transcript height and shrinks first on short viewports. */
 .chat-transcript-empty {
 	flex: 1;
@@ -736,6 +725,7 @@ pre {
 @media (max-width: 767px) {
 	.img-thumb,
 	.advisor-open,
+	.advisor-summary,
 	.code-copy-btn {
 		min-width: 44px;
 		min-height: 44px;
@@ -911,12 +901,19 @@ pre {
 .advisor-sev-blocker .advisor-badge {
 	color: var(--error);
 }
-.advisor-toggle {
-	align-self: flex-start;
+.advisor-summary {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: 0.3em;
 	background: none;
 	border: none;
 	padding: 0;
-	color: var(--muted);
-	font-size: var(--fs-sm);
+	color: inherit;
+	font: inherit;
+	text-align: left;
 	cursor: pointer;
+}
+.advisor-summary:hover .advisor-label {
+	text-decoration: underline;
 }

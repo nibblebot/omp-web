@@ -1,11 +1,12 @@
 import { createMemo, For, Show, type Component } from "solid-js";
+import { capRows } from "../../../chat/tool-rows";
 import { type ToolItem } from "../../../state";
 import { settingValue } from "../../../store/settings";
 import { highlightLines, languageForPath } from "../../../text/highlight";
 import { Markdown } from "../../ui/Markdown";
 import { HighlightedLine } from "./HighlightedLine";
 import { isMarkitDocument, parseReadOutput } from "./read-view";
-import { COLLAPSED_LINES, toolExpanded, ToolCardShell } from "./ToolCardShell";
+import { toolExpanded, toolRowCap, ToolCardShell } from "./ToolCardShell";
 
 /**
  * Read tool: path header and body. Settings gate the view:
@@ -37,8 +38,9 @@ export const ReadToolCard: Component<{ item: ToolItem }> = (props) => {
 		return all.map((row) => ({ ...row, html: row.code ? (html?.[k++] ?? null) : null }));
 	});
 	const expanded = () => toolExpanded(props.item);
-	const shown = () => (expanded() ? rows() : rows().slice(0, COLLAPSED_LINES));
-	const hidden = () => Math.max(0, rows().length - COLLAPSED_LINES);
+	const capped = () => capRows(rows(), toolRowCap(), "head");
+	const shown = () => (expanded() ? rows() : capped().shown);
+	const hidden = () => capped().hidden;
 
 	const ReadRows: Component = () => {
 		return (

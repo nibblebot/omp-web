@@ -83,8 +83,10 @@ export const Popover: Component<PopoverProps> = (props) => {
 			if (e.key !== "Escape") return;
 			e.preventDefault();
 			const wasInside = root?.contains(document.activeElement) ?? false;
+			// Read before onClose: a caller's unmount turns a `<Show>` accessor stale.
+			const anchor = props.anchor;
 			props.onClose();
-			if (wasInside) props.anchor.focus();
+			if (wasInside) anchor.focus();
 		};
 		document.addEventListener("pointerdown", onPointerDown);
 		document.addEventListener("keydown", onKey);

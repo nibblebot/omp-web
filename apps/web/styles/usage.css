@@ -254,6 +254,18 @@ button.plan-badge:hover {
 	color: var(--muted);
 	font-variant-numeric: tabular-nums;
 }
+/* Live share: main-header "Live · N" badge (LiveShareBadge); opens the ShareSheet. */
+.live-share-badge {
+	cursor: pointer;
+	flex: none;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+	color: var(--success);
+}
+.live-share-badge:hover {
+	background: var(--success-bg);
+	border-color: var(--success-border);
+}
 /* Goal dialog tabs. */
 .goal-tabs {
 	display: flex;

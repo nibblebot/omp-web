@@ -8,7 +8,11 @@ import {
 	type CommandEntry,
 	type CommandLiveSource,
 } from "../prompt/command-registry";
-import type { WebUiSearchRow } from "../prefs/settings";
+import {
+	APPEARANCE_MENU_TAB,
+	appearanceSettingGroup,
+	type WebUiSearchRow,
+} from "../prefs/settings";
 import type { SettingsTabMeta } from "../prefs/settings-tabs";
 import { formatSessionAge, sessionDisplayTitle, type SessionRow } from "../store/session-list";
 
@@ -35,7 +39,11 @@ export const PALETTE_GROUP_ORDER: readonly PaletteGroup[] = [
 /** Overlays that have no slash command of their own. */
 export type PaletteOpenTarget =
 	| "settings"
+	/** The header's Appearance popover (theme, text, transcript, status, motion, sidebar). */
+	| "appearance"
 	| "activities"
+	/** ShareSheet: start, stop or copy links for the attached session's room. */
+	| "share"
 	| "debug"
 	| "add-project"
 	| "sign-in"
@@ -247,6 +255,12 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 			},
 		),
 		openItem(
+			"appearance",
+			"Appearance",
+			"Theme, text size, transcript, status, motion and sidebar display",
+			["theme", "font", "display", "width", "colors"],
+		),
+		openItem(
 			"activities",
 			"Activities",
 			"Subagents, jobs, daemons and todos",
@@ -255,6 +269,13 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 				hint: "Alt+A",
 			},
 		),
+		openItem("share", "Share session", "Invite guests to watch or drive this session", [
+			"collab",
+			"invite",
+			"guests",
+			"link",
+			"live",
+		]),
 	];
 	if (context.debugEnabled)
 		items.push(
@@ -384,24 +405,37 @@ export function settingItems(
 		const tabLabel = tabs.find((meta) => meta.id === tab.id)?.label ?? tab.label;
 		for (const group of tab.groups) {
 			for (const row of group.items) {
+				// A row the Appearance popover owns opens the popover, not its old tab.
+				const popoverGroup = appearanceSettingGroup(row.path);
 				items.push({
 					id: `setting:row:${row.path}`,
 					group: "Settings",
 					label: row.label,
-					detail: `${tabLabel}${group.name ? ` · ${group.name}` : ""}`,
-					action: { kind: "setting", tabId: tab.id, query: row.label },
+					detail:
+						popoverGroup === undefined
+							? `${tabLabel}${group.name ? ` · ${group.name}` : ""}`
+							: `Appearance menu · ${popoverGroup}`,
+					action:
+						popoverGroup === undefined
+							? { kind: "setting", tabId: tab.id, query: row.label }
+							: { kind: "open", target: "appearance" },
 					keywords: [row.description, row.path, group.name],
 				});
 			}
 		}
 	}
 	for (const { label, tabId } of webRows) {
+		const inPopover = tabId === APPEARANCE_MENU_TAB;
 		items.push({
 			id: `setting:web:${label}`,
 			group: "Settings",
 			label,
-			detail: tabs.find((tab) => tab.id === tabId)?.label ?? tabId,
-			action: { kind: "setting", tabId, query: label },
+			detail: inPopover
+				? "Appearance menu"
+				: (tabs.find((tab) => tab.id === tabId)?.label ?? tabId),
+			action: inPopover
+				? { kind: "open", target: "appearance" }
+				: { kind: "setting", tabId, query: label },
 			keywords: [],
 		});
 	}

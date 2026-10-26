@@ -16,8 +16,9 @@ import {
 	storedSessionItems,
 } from "../palette/palette";
 import { commandUsage, currentCommandRegistry, dispatchInput } from "../prompt/commands";
-import { fleetSettingsActive, hasLiveSession, setState, state } from "../state";
+import { fleetSettingsActive, hasLiveSession, openAppearance, setState, state } from "../state";
 import { openActivities } from "./activities";
+import { openShareSheet } from "./collab";
 import { openIntegrations } from "./integrations";
 import { setPromptInsert } from "./chat";
 import { openModelPicker, recentModels, switchSessionModel } from "./models";
@@ -126,6 +127,14 @@ export function runPaletteItem(item: PaletteItem): void {
 			}
 			if (action.target === "activities") {
 				openActivities();
+				return;
+			}
+			if (action.target === "appearance") {
+				openAppearance();
+				return;
+			}
+			if (action.target === "share") {
+				openShareSheet();
 				return;
 			}
 			if (action.target === "skills" || action.target === "mcp" || action.target === "plugins") {

@@ -15,6 +15,7 @@ import {
 import { Dynamic } from "solid-js/web";
 import { effectiveStatus, type BackgroundJob } from "../../../chat/background-job";
 import { toolKind, type ToolIconKey } from "../../../chat/tool-kinds";
+import { capRows, toolRowLimit } from "../../../chat/tool-rows";
 import { state, type ToolItem } from "../../../state";
 import { Card } from "../../ui/Card";
 import { BackgroundBadge } from "./BackgroundBadge";
@@ -38,8 +39,8 @@ import {
 	type IconProps,
 } from "../../ui/icons";
 
-/** Lines of tool output shown while collapsed; Ctrl+O (toolsExpanded) reveals the rest. */
-export const COLLAPSED_LINES = 20;
+/** Rows of tool output a card shows before its "hidden lines" note (the Appearance menu's Rows choice); Ctrl+O (toolsExpanded) reveals the rest. */
+export const toolRowCap = (): number => toolRowLimit(state.display.toolRows);
 
 /** Cards stay expanded while running (a call parked on a background job counts) or when the user toggles Ctrl+O. */
 export const toolExpanded = (item: ToolItem): boolean =>
@@ -47,6 +48,9 @@ export const toolExpanded = (item: ToolItem): boolean =>
 
 /** The tool call a card renders; `ToolCardShell` stamps it on the card root as `data-tool-call-id` so a jump from elsewhere in the transcript finds the card (`chat/tool-jump.ts`). */
 export const ToolCallIdContext = createContext<string>();
+
+/** Provided as true by a consolidated run row: its cards draw header-only and open on click, as in Collapsed mode. */
+export const RunMemberContext = createContext(false);
 
 interface ToolShellProps {
 	/** Tool name: the header label, also the key for the category color and icon (chat/tool-kinds.ts). */
@@ -89,7 +93,7 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 	// User intent for the <details> toggle. A trusted toggle that differs from
 	// the reactive default is a user click; the browser also fires trusted
 	// toggles for our own open changes (running → done), which match the default
-	// and are ignored. Ctrl+O / the header kebab clears the intent on every card.
+	// and are ignored. Ctrl+O clears the intent on every card.
 	const [userOpen, setUserOpen] = createSignal<boolean | null>(null);
 	createEffect(
 		on(
@@ -101,12 +105,16 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 	const cardClass = () => (props.class ? `tool-card ${props.class}` : "tool-card");
 	const kind = createMemo(() => toolKind(props.name));
 	const toolCallId = useContext(ToolCallIdContext);
+	// Collapsed mode, and a consolidated run's cards, draw every card header-only: a
+	// <details> closed until clicked (or running, or Ctrl+O), whatever the card's body.
+	const inRun = useContext(RunMemberContext);
+	const headerOnly = () => inRun || state.display.toolCards === "collapsed";
 	return (
 		<Card
 			class={cardClass()}
 			status={props.status}
 			data={{ "tool-call-id": toolCallId }}
-			collapsible={props.collapsible}
+			collapsible={props.collapsible || headerOnly()}
 			open={userOpen() ?? (state.toolsExpanded || props.status === "running")}
 			onToggle={(e) => {
 				if (
@@ -175,12 +183,12 @@ interface CollapsiblePreProps {
 
 /** Terminal output body with the shared "N hidden lines (Ctrl+O to expand)" tail. */
 export const CollapsibleOutput: Component<CollapsiblePreProps> = (props) => {
-	const max = () => props.maxLines ?? COLLAPSED_LINES;
+	const limit = () => props.maxLines ?? toolRowCap();
 	const expanded = () => toolExpanded(props.item);
-	const lines = () => props.output.split("\n");
-	const shown = () =>
-		expanded() ? lines() : props.tail ? lines().slice(-max()) : lines().slice(0, max());
-	const hidden = () => Math.max(0, lines().length - max());
+	const lines = createMemo(() => props.output.split("\n"));
+	const capped = () => capRows(lines(), limit(), props.tail ? "tail" : "head");
+	const shown = () => (expanded() ? lines() : capped().shown);
+	const hidden = () => capped().hidden;
 	return (
 		<Show when={props.output}>
 			<Show when={props.numbered} fallback={<pre class="terminal">{shown().join("\n")}</pre>}>

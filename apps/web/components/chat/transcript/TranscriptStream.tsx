@@ -23,6 +23,7 @@ import {
 	showTurnTime,
 } from "../../../chat/display-prefs";
 import { buildTurnMeta } from "../../../chat/turn-usage";
+import { indexToolRuns } from "../../../chat/tool-runs";
 import { buildWaitRuns, type WaitRun } from "../../../chat/wait-runs";
 import { transcriptItemsFor } from "../../../chat/activity-cards";
 import {
@@ -39,6 +40,7 @@ import {
 	CompactionCard,
 	GuestPromptCard,
 	NoticeCard,
+	ToolRunRow,
 	UserCard,
 	UserCommandCard,
 } from "./cards";
@@ -95,6 +97,17 @@ export const TranscriptStream: Component<{
 	// A subagent's own stream (inside the panel's detail) keeps all its cards.
 	const shownItems = createMemo(() =>
 		transcriptItemsFor(props.items, session() && isActivitiesOpen()),
+	);
+	// Consolidated tool cards: each run of consecutive calls draws as one row at
+	// its first call, and the thinking it folded leaves its assistant card. Built
+	// on the drawn items so a run never leads with a card the panel hides. The
+	// other modes get an empty index without scanning the items.
+	const toolRuns = createMemo(() =>
+		indexToolRuns(shownItems(), {
+			consolidated: state.display.toolCards === "consolidated",
+			hideToolActivity: hideToolActivity(),
+			waitRuns: waitRuns(),
+		}),
 	);
 	// An unpinned viewport keeps its on-screen content where it is while cards
 	// above it hide or return: capture before the list's DOM changes (a computed
@@ -159,9 +172,16 @@ export const TranscriptStream: Component<{
 									{(assistant) => (
 										<AssistantCard
 											assistant={assistant()}
-											thinking
+											thinking={!toolRuns().consumedAssistantIds.has(assistant().id)}
 											meta={turnMeta().get(assistant().id)}
 										/>
+									)}
+								</Match>
+								<Match when={item.kind === "tool" && toolRuns().runOf.get(item.id)}>
+									{(run) => (
+										<Show when={run().key === item.id}>
+											<ToolRunRow run={run()} waitRuns={waitRuns()} transcript={props.items} />
+										</Show>
 									)}
 								</Match>
 								<Match

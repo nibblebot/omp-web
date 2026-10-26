@@ -3,8 +3,9 @@ import { unwrap } from "solid-js/store";
 import { GROUPS_KEY } from "../web/components/fleet/sidebar/ProjectGroups";
 import { ENABLEABLE_FEATURE_IDS, FEATURES } from "../web/features/manifest";
 import { markFeaturesActive, setFeaturePreference } from "../web/features/preferences";
+import { defaultDisplayPrefs, DISPLAY_PREFS } from "../web/prefs/display";
 import { cancelDangerConfirm } from "../web/prompt/danger-confirm";
-import { SIDEBAR_RUNNING_ONLY_KEY, setState, state } from "../web/state";
+import { applyDisplayAttributes, SIDEBAR_RUNNING_ONLY_KEY, setState, state } from "../web/state";
 import { closeDownload } from "../web/store/downloads";
 import { jobPollAttached } from "../web/store/job-poll";
 import { clearJobCancelError } from "../web/store/jobs";
@@ -28,9 +29,9 @@ const pristine = structuredClone(unwrap(state));
  * (danger confirm, download, the shared job poll's answer), restore manifest-default feature preferences
  * (persisted in localStorage, read by core UI such as the Analysis view) and the
  * page set that boot installs (every feature the app can enable; an
- * in-development feature is never active), and expand every project group
- * (collapse state is persisted in localStorage too), so one story's state
- * never shows in the next.
+ * in-development feature is never active), expand every project group
+ * (collapse state is persisted in localStorage too) and reset the display
+ * preferences (persisted as well), so one story's state never shows in the next.
  */
 export function resetStore(): void {
 	batch(() => {
@@ -47,6 +48,10 @@ export function resetStore(): void {
 		localStorage.removeItem(GROUPS_KEY);
 		// The running-only filter persists through localStorage as well: every story starts unfiltered.
 		localStorage.removeItem(SIDEBAR_RUNNING_ONLY_KEY);
+		// Display preferences persist through localStorage too: every story starts from the defaults.
+		for (const pref of Object.values(DISPLAY_PREFS)) localStorage.removeItem(pref.key);
+		setState("display", defaultDisplayPrefs());
+		applyDisplayAttributes();
 	});
 }
 

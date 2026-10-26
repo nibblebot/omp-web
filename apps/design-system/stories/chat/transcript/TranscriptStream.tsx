@@ -1,11 +1,18 @@
 import { TranscriptStream } from "../../../../web/components/chat/transcript/TranscriptStream";
-import { state, type ChatItem } from "../../../../web/state";
+import type { DisplayPrefs } from "../../../../web/prefs/display";
+import { setState, state, type ChatItem } from "../../../../web/state";
 import { assistantBlocks } from "../../../../web/store/chat";
 import { answerCalls } from "../../../session";
 import { screenItems, screenSessionSeed } from "../../../fixtures/screen";
 import { subagentTranscriptItems } from "../../../fixtures/subagents";
 import {
 	bashDoneTool,
+	bashErrorTool,
+	bashRunningTool,
+	editToolItem,
+	globDoneTool,
+	grepDoneTool,
+	readDoneTool,
 	taskDoneTool,
 	todoArgsTool,
 	waitJobDetail,
@@ -82,6 +89,56 @@ const activityCardItems: ChatItem[] = [
 	},
 	...waitRunItems.slice(3).map((item, index) => ({ ...item, id: 9310 + index })),
 ];
+
+/**
+ * One turn of tool calls for the tool card modes: reasoning and a note, five calls (one failing; a
+ * message of reasoning only sits between two of them), a closing message, a second run that ends on a call still running, then the user's next message.
+ */
+const toolRunItems: ChatItem[] = [
+	{
+		kind: "user",
+		id: 9400,
+		text: "Find where COPY_FEEDBACK_MS is used and tighten the copy button.",
+	},
+	{
+		kind: "assistant",
+		id: 9401,
+		duration: 4200,
+		blocks: [
+			{
+				kind: "thinking",
+				text: "I should grep for the constant, list the tool cards, then read the button before editing.",
+			},
+			{ kind: "text", text: "Searching the tree first." },
+		],
+	},
+	{ ...readDoneTool, id: 9402, toolCallId: "call_tr_read" },
+	{
+		kind: "assistant",
+		id: 9410,
+		duration: 1800,
+		blocks: [{ kind: "thinking", text: "Now the usages of the constant." }],
+	},
+	{ ...grepDoneTool, id: 9403, toolCallId: "call_tr_grep" },
+	{ ...globDoneTool, id: 9404, toolCallId: "call_tr_glob" },
+	{ ...editToolItem, id: 9405, toolCallId: "call_tr_edit" },
+	{ ...bashErrorTool, id: 9406, toolCallId: "call_tr_bash_err" },
+	{
+		kind: "assistant",
+		id: 9407,
+		blocks: [
+			{ kind: "text", text: "The type check failed; checking git state and re-running it." },
+		],
+	},
+	{ ...bashDoneTool, id: 9408, toolCallId: "call_tr_bash" },
+	{ ...bashRunningTool, id: 9409, toolCallId: "call_tr_bash_run" },
+];
+
+/** The session seed over the tool call turn, with the Appearance menu's tool card choices applied. */
+function seedToolRuns(display: Partial<DisplayPrefs>): void {
+	setState({ ...screenSessionSeed, items: toolRunItems, live: idleLive, streaming: false });
+	setState("display", display);
+}
 
 export default defineStory({
 	id: "chat-transcript-transcript-stream",
@@ -175,6 +232,39 @@ export default defineStory({
 						</button>
 					</div>
 					<TranscriptStream items={activityCardItems} variant="session" />
+				</div>
+			),
+		},
+		{
+			name: "Session: tool cards collapsed",
+			description:
+				"Tool cards Collapsed: every call is a header-only card, specialised ones included. A click opens one; the running call stays open.",
+			seed: () => seedToolRuns({ toolCards: "collapsed" }),
+			render: () => (
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<TranscriptStream items={state.items} variant="session" />
+				</div>
+			),
+		},
+		{
+			name: "Session: tool cards consolidated",
+			description:
+				"Tool cards Consolidated: each run of consecutive calls is one summary row. The first run folds the reasoning of the message before it (its text stays); the second run's running call shows under its row until it finishes. A click opens a run to header-only cards.",
+			seed: () => seedToolRuns({ toolCards: "consolidated" }),
+			render: () => (
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<TranscriptStream items={state.items} variant="session" />
+				</div>
+			),
+		},
+		{
+			name: "Session: tool cards expanded, 10 rows",
+			description:
+				"Tool cards Expanded with the Rows choice at 10: output past 10 rows hides behind the Ctrl+O note (the tail for bash and eval, the head for read).",
+			seed: () => seedToolRuns({ toolCards: "expanded", toolRows: "10" }),
+			render: () => (
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<TranscriptStream items={state.items} variant="session" />
 				</div>
 			),
 		},

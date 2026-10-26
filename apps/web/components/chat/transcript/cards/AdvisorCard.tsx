@@ -3,18 +3,17 @@ import type { AdvisorItem } from "../../../../store/slices/advisor";
 import { setState, state } from "../../../../state";
 import { Card } from "../../../ui/Card";
 
-/** Notes shown while collapsed; matches the TUI advisor card (COLLAPSED_NOTES). */
-const COLLAPSED_NOTES = 3;
-
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
  * Advisor card: notes the advisor injected into the primary session, rendered
  * inline like the TUI's `createAdvisorMessageCard`. Header `Advisor · N notes
  * [· K blockers]`, one severity-tinted rail per note with badge, advisor
- * attribution (non-default advisors only) and `T-n` age. Expansion follows the
- * transcript-wide tool-output toggle (Ctrl+O); a local toggle overrides it
- * until the global toggle changes again.
+ * attribution (non-default advisors only) and `T-n` age. Collapsed shows the
+ * header alone; expanded adds every note. The Appearance menu's Advisor
+ * preference (`state.display.advisor`) picks the mode, independent of the
+ * Ctrl+O tool-output toggle; clicking the header flips this card until the
+ * preference changes again.
  */
 export const AdvisorCard: Component<{ item: AdvisorItem }> = (props) => {
 	const notes = () => props.item.notes;
@@ -22,28 +21,32 @@ export const AdvisorCard: Component<{ item: AdvisorItem }> = (props) => {
 	const [override, setOverride] = createSignal<boolean | undefined>(undefined);
 	createEffect(
 		on(
-			() => state.toolsExpanded,
+			() => state.display.advisor,
 			() => setOverride(undefined),
 			{ defer: true },
 		),
 	);
-	const collapsible = () => notes().length > COLLAPSED_NOTES;
-	const expanded = () => override() ?? state.toolsExpanded;
-	const shown = () => (collapsible() && !expanded() ? notes().slice(0, COLLAPSED_NOTES) : notes());
-	const hidden = () => notes().length - shown().length;
+	const expanded = () => override() ?? state.display.advisor === "expanded";
 	return (
 		<Card class="advisor-item" classList={{ "advisor-has-blocker": blockers() > 0 }}>
 			<div class="advisor-head">
-				<span class="advisor-label">Advisor</span>
-				<span class="advisor-meta"> · {plural(notes().length, "note")}</span>
-				<Show when={blockers() > 0}>
-					<span class="advisor-blockers"> · {plural(blockers(), "blocker")}</span>
-				</Show>
+				<button
+					type="button"
+					class="advisor-summary"
+					aria-expanded={expanded()}
+					onClick={() => setOverride(!expanded())}
+				>
+					<span class="advisor-label">Advisor</span>
+					<span class="advisor-meta"> · {plural(notes().length, "note")}</span>
+					<Show when={blockers() > 0}>
+						<span class="advisor-blockers"> · {plural(blockers(), "blocker")}</span>
+					</Show>
+				</button>
 				<button class="advisor-open" onClick={() => setState("modal", "advisor")}>
 					Open advisor
 				</button>
 			</div>
-			<For each={shown()}>
+			<For each={expanded() ? notes() : []}>
 				{(n) => (
 					<div class={`advisor-note advisor-sev-${n.severity ?? "none"}`}>
 						<Show when={n.severity}>
@@ -59,11 +62,6 @@ export const AdvisorCard: Component<{ item: AdvisorItem }> = (props) => {
 					</div>
 				)}
 			</For>
-			<Show when={collapsible()}>
-				<button class="advisor-toggle" onClick={() => setOverride(!expanded())}>
-					{hidden() > 0 ? `… +${plural(hidden(), "more note")}` : "show fewer"}
-				</button>
-			</Show>
 		</Card>
 	);
 };

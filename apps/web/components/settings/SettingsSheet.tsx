@@ -14,7 +14,12 @@ import {
 	type Component,
 } from "solid-js";
 import type { SettingsTab } from "#lib/wire/protocol";
-import { filterSettings, filterWebUiSettings, type SettingsMatch } from "../../prefs/settings";
+import {
+	APPEARANCE_MENU_TAB,
+	searchSheetSettings,
+	sheetGroups,
+	type SettingsMatch,
+} from "../../prefs/settings";
 import {
 	changedCountsByTab,
 	defaultSettingsTabId,
@@ -27,7 +32,7 @@ import {
 } from "../../prefs/settings-tabs";
 import { searchAutofocus } from "../../store/integrations";
 import { consumeSettingsTab } from "../../store/models";
-import { fleetSettingsActive, refreshSettings, setState, state } from "../../state";
+import { fleetSettingsActive, openAppearance, refreshSettings, setState, state } from "../../state";
 import { SearchIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
 import { FeaturesSettings, searchFeatures } from "./FeaturesSettings";
@@ -66,7 +71,7 @@ interface ScrollTarget {
  * vertical sidebar on wide screens (a section picker on narrow), and one
  * continuous scroll stream of every tab body under a small heading each: This
  * Session while a session is attached, then the SDK tabs (`omp`), then
- * Appearance and Features (`omp-web`). Server calls go through
+ * Browser and Features (`omp-web`). Server calls go through
  * refreshSettings / updateSetting; the returned model is authoritative and
  * settings_changed frames keep every tab in sync.
  *
@@ -111,11 +116,12 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	const signedIn = () => state.authStatus === "signedIn";
 
 	// Sections listed under a tab: named SDK groups (plus the login group on
-	// Providers while a session is attached), and for Appearance the
-	// Interface group plus Account while signed in.
+	// Providers while a session is attached), and for Browser the
+	// Notifications group plus Account while signed in.
 	const sectionsOf = (tab: SettingsTabMeta): SettingsSection[] => {
 		if (tab.kind === "sdk") {
-			const named = (schemaTab(tab.id)?.groups ?? [])
+			const schema = schemaTab(tab.id);
+			const named = (schema ? sheetGroups(schema) : [])
 				.filter((g) => g.name)
 				.map((g) => ({ id: settingsSectionId(tab.id, g.name), label: g.name }));
 			return tab.id === "providers" && sessionAttached()
@@ -124,7 +130,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		}
 		if (tab.id === "web-ui") {
 			return [
-				{ id: settingsSectionId("web-ui", "Interface"), label: "Interface" },
+				{ id: settingsSectionId("web-ui", "Notifications"), label: "Notifications" },
 				...(signedIn() ? [{ id: settingsSectionId("web-ui", "Account"), label: "Account" }] : []),
 			];
 		}
@@ -132,14 +138,17 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	};
 
 	const searching = () => query().trim() !== "";
-	const results = () => {
-		const m = model();
-		return m && searching() ? filterSettings(m, query()) : [];
-	};
-	const webHits = () =>
+	// SDK rows the sheet renders, and the rows it only points to: a tab, or the Appearance popover.
+	const hits = createMemo(() =>
 		searching()
-			? filterWebUiSettings(query(), { sessionAttached: sessionAttached(), signedIn: signedIn() })
-			: [];
+			? searchSheetSettings(model(), query(), {
+					sessionAttached: sessionAttached(),
+					signedIn: signedIn(),
+				})
+			: { sdk: [], pointers: [] },
+	);
+	const results = () => hits().sdk;
+	const webHits = () => hits().pointers;
 	const featureHits = () => (searching() ? searchFeatures(query()) : []);
 	const noMatches = () =>
 		searching() &&
@@ -160,15 +169,27 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		}
 		return [...byTitle.entries()];
 	};
-	// Non-model hits grouped by the tab that renders them.
+	// Non-model hits grouped by the tab (or the Appearance popover) that renders them.
 	const webGroups = () => {
 		const byTab = new Map<string, string[]>();
 		for (const row of webHits()) byTab.set(row.tabId, [...(byTab.get(row.tabId) ?? []), row.label]);
 		return [...byTab.entries()].map(([tabId, labels]) => ({
 			tabId,
-			title: settingsTabMeta(tabId)?.label ?? tabId,
+			title:
+				tabId === APPEARANCE_MENU_TAB
+					? "Appearance menu"
+					: (settingsTabMeta(tabId)?.label ?? tabId),
 			labels,
 		}));
+	};
+	// A pointer row's Open: the popover (the sheet closes first, it would cover the popover), or the tab.
+	const openHit = (tabId: string) => {
+		if (tabId !== APPEARANCE_MENU_TAB) {
+			selectTab(tabId);
+			return;
+		}
+		props.onClose();
+		openAppearance();
 	};
 
 	// The tab the stream is scrolled to; a position that is no longer visible
@@ -183,7 +204,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	const searchTabId = () => {
 		const hits = new Set<string>([
 			...results().map((m) => m.tab.id),
-			...webHits().map((r) => r.tabId),
+			...webHits().flatMap((r) => (r.tabId === APPEARANCE_MENU_TAB ? [] : [r.tabId])),
 			...(featureHits().length > 0 ? ["features"] : []),
 		]);
 		return tabs().find((t) => hits.has(t.id))?.id ?? streamTabId();
@@ -481,7 +502,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 												<button
 													type="button"
 													class="settings-control-btn"
-													onClick={() => selectTab(group().tabId)}
+													onClick={() => openHit(group().tabId)}
 												>
 													Open
 												</button>
@@ -545,7 +566,7 @@ const SettingsTabBody: Component<{
 			</Show>
 			<Show when={props.schema}>
 				{(schema) => (
-					<Index each={schema().groups}>
+					<Index each={sheetGroups(schema())}>
 						{(group) => (
 							<SettingsGroup
 								title={group().name}

@@ -5,20 +5,14 @@ import { MainHeader } from "./components/app/MainHeader";
 import { NoActiveSessionPane } from "./components/app/NoActiveSessionPane";
 import { DockHost } from "./components/app/DockHost";
 import { StoppedSessionStrip } from "./components/app/StoppedSessionStrip";
-import {
-	PromptBox,
-	QueueBar,
-	SessionConfigBar,
-	SessionTitle,
-	Transcript,
-	ToolCardsMenu,
-} from "./components/chat";
+import { PromptBox, QueueBar, SessionConfigBar, SessionTitle, Transcript } from "./components/chat";
 import { FleetSidebar } from "./components/fleet";
 import { ActivityBar } from "./components/activities/ActivityBar";
 import { ModalHost } from "./ModalHost";
 import { openActivities, reconcileMissingActivities } from "./store/activities";
 import { isActivitiesShortcut, pruneDockLayoutsToRoster } from "./store/dock";
 import {
+	applyDisplayAttributes,
 	bootAuth,
 	closeDrawers,
 	connect,
@@ -43,6 +37,7 @@ import { transcriptExiting } from "./components/chat/transcript/useTranscriptTra
 import { installWindowFileDrop } from "./prompt/file-drop";
 // Apply persisted theme/font-size before first render to avoid a dark flash.
 initTheme();
+applyDisplayAttributes();
 
 /**
  * Chat mode: the roster sidebar (it owns its own narrow-viewport scrim, first
@@ -60,7 +55,7 @@ const ChatMode: Component = () => (
 			when={!(hasLiveSession() || isSwitching() || transcriptExiting())}
 			fallback={
 				<div class="main-pane">
-					<MainHeader title={<SessionTitle />} actions={<ToolCardsMenu />} session />
+					<MainHeader title={<SessionTitle />} session />
 					<ConnectionBar />
 					<main class="app-main">
 						<Transcript />

@@ -55,6 +55,11 @@ let itemIndex = new Map<string, SettingsItem>();
  * through the store items, so callers in a tracking scope stay reactive.
  */
 export function settingValue<T = unknown>(path: string): T | undefined {
+	return settingItem(path)?.value as T | undefined;
+}
+
+/** The model item behind a path; undefined until the model loads or for an unknown path. Reactive like `settingValue`. */
+export function settingItem(path: string): SettingsItem | undefined {
 	const tabs = state.settingsModel?.tabs;
 	if (tabs !== indexedTabs) {
 		itemIndex = new Map();
@@ -63,7 +68,7 @@ export function settingValue<T = unknown>(path: string): T | undefined {
 				for (const item of group.items) itemIndex.set(item.path, item);
 		indexedTabs = tabs;
 	}
-	return itemIndex.get(path)?.value as T | undefined;
+	return itemIndex.get(path);
 }
 
 let loadId = 0;

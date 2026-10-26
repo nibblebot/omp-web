@@ -1,7 +1,6 @@
 export { AutocompletePopup } from "./composer/AutocompletePopup";
 export type { AcItem } from "./composer/AutocompletePopup";
 export { Transcript } from "./transcript/Transcript";
-export { ToolCardsMenu } from "./transcript/ToolCardsMenu";
 export { PromptBox } from "./composer/PromptBox";
 export { QueueBar } from "./composer/QueueBar";
 export { SessionConfigBar } from "./status/SessionConfigBar";

@@ -58,6 +58,53 @@ export function filterSettings(model: SettingsModel, query: string): SettingsMat
 	return matches;
 }
 
+/**
+ * SDK display settings that live in the header's Appearance popover instead of the settings
+ * sheet, by popover group, in the order the popover shows them. The sheet's Display tab,
+ * its search and the palette route these paths to the popover.
+ */
+export const APPEARANCE_SDK_SETTINGS = {
+	Transcript: [
+		"hideThinkingBlock",
+		"expandThinkingBlocks",
+		"proseOnlyThinking",
+		"display.hideToolActivity",
+		"terminal.showImages",
+	],
+	Status: ["display.showTokenUsage", "display.showTurnTime", "display.cacheMissMarker"],
+	Motion: ["display.smoothStreaming", "display.shimmer"],
+} as const satisfies Record<string, readonly string[]>;
+
+const APPEARANCE_SDK_PATHS: ReadonlySet<string> = new Set(
+	Object.values(APPEARANCE_SDK_SETTINGS).flat(),
+);
+
+/** A model tab's groups as the sheet renders them: popover-owned rows removed, groups left empty dropped. */
+export function sheetGroups(tab: SettingsTab): SettingsGroup[] {
+	return tab.groups.flatMap((group) => {
+		const items = group.items.filter((item) => !isAppearanceSetting(item.path));
+		return items.length === 0 ? [] : [{ ...group, items }];
+	});
+}
+
+/** Whether a settings path is rendered by the Appearance popover, not the settings sheet. */
+export function isAppearanceSetting(path: string): boolean {
+	return APPEARANCE_SDK_PATHS.has(path);
+}
+
+/** The popover group an SDK setting appears under, or undefined for a path the sheet owns. */
+export function appearanceSettingGroup(path: string): string | undefined {
+	return Object.entries(APPEARANCE_SDK_SETTINGS).find(([, paths]) =>
+		(paths as readonly string[]).includes(path),
+	)?.[0];
+}
+
+/**
+ * Pseudo tab id of a search row that lives in the Appearance popover: settings search and the
+ * palette open the popover for it instead of scrolling the sheet to a tab.
+ */
+export const APPEARANCE_MENU_TAB = "appearance-menu";
+
 /** Settings that do nothing until another setting is on: path -> controlling path and the reason shown while it is off. */
 const DEPENDENCIES: Record<string, { on: string; reason: string }> = {
 	"display.showTurnTime": {
@@ -80,7 +127,8 @@ export function effectNote(effect: SettingView["effect"] | undefined): string | 
 
 /**
  * Browser-local and session-scoped rows outside the SDK model, so settings search reaches them here.
- * Each names the tab that renders it and its label matches the row's label. `session` rows render only
+ * Each names the tab that renders it (`APPEARANCE_MENU_TAB` for a row in the Appearance popover; a new
+ * popover row adds one here) and its label matches the row's label. `session` rows render only
  * with a session attached; `signedIn` rows only after sign-in.
  */
 const WEB_UI_SEARCH_ROWS: {
@@ -90,24 +138,60 @@ const WEB_UI_SEARCH_ROWS: {
 	session?: boolean;
 	signedIn?: boolean;
 }[] = [
-	{ label: "Theme", keywords: "theme dark light color appearance", tabId: "web-ui" },
-	{ label: "Font Size", keywords: "text size zoom larger smaller", tabId: "web-ui" },
+	{
+		label: "Theme",
+		keywords: "theme dark light color appearance",
+		tabId: APPEARANCE_MENU_TAB,
+	},
+	{
+		label: "Font Size",
+		keywords: "text size zoom larger smaller",
+		tabId: APPEARANCE_MENU_TAB,
+	},
 	{
 		label: "Browser Notification Permission",
 		keywords: "notify notifications desktop alert os permission",
 		tabId: "web-ui",
 	},
-	{ label: "Soft Fade", keywords: "fade transcript smooth streaming", tabId: "web-ui" },
-	{ label: "Usage in Sidebar", keywords: "usage sidebar tokens cost", tabId: "web-ui" },
+	{
+		label: "Width",
+		keywords: "transcript column width narrow default wide full composer layout",
+		tabId: APPEARANCE_MENU_TAB,
+	},
+	{
+		label: "Tool Cards",
+		keywords: "tool cards collapsed consolidated expanded calls runs summary header transcript",
+		tabId: APPEARANCE_MENU_TAB,
+	},
+	{
+		label: "Tool Output Rows",
+		keywords: "tool output rows lines 10 20 40 all hidden lines cap terminal read",
+		tabId: APPEARANCE_MENU_TAB,
+	},
+	{
+		label: "Advisor",
+		keywords: "advisor notes collapsed expanded transcript card",
+		tabId: APPEARANCE_MENU_TAB,
+	},
+	{
+		label: "Soft Fade",
+		keywords: "fade transcript smooth streaming",
+		tabId: APPEARANCE_MENU_TAB,
+	},
+	{
+		label: "Usage in Sidebar",
+		keywords: "usage sidebar tokens cost",
+		tabId: APPEARANCE_MENU_TAB,
+	},
 	{
 		label: "Two-Line Session Titles",
 		keywords: "session title sidebar roster row lines wrap",
-		tabId: "web-ui",
+		tabId: APPEARANCE_MENU_TAB,
 	},
 	{
 		label: "Title-First Workspace Rows",
 		keywords: "session title branch sidebar roster row layout workspace",
-		tabId: "web-ui",
+		tabId: APPEARANCE_MENU_TAB,
 	},
 	{
 		label: "Sign Out",
@@ -163,4 +247,28 @@ export function filterWebUiSettings(query: string, context: WebUiContext): WebUi
 			(row.signedIn !== true || context.signedIn) &&
 			`${row.label} ${row.keywords}`.toLowerCase().includes(q),
 	).map(({ label, tabId }) => ({ label, tabId }));
+}
+
+/** Settings sheet search hits: the SDK rows the sheet renders, and the rows it only points to (a tab, or the Appearance popover). */
+export interface SheetSearchHits {
+	sdk: SettingsMatch[];
+	pointers: WebUiSearchRow[];
+}
+
+/** Global search for the sheet. SDK rows owned by the Appearance popover become pointers into it, never rendered rows. */
+export function searchSheetSettings(
+	model: SettingsModel | null,
+	query: string,
+	context: WebUiContext,
+): SheetSearchHits {
+	const matches = model ? filterSettings(model, query) : [];
+	return {
+		sdk: matches.filter((match) => !isAppearanceSetting(match.item.path)),
+		pointers: [
+			...filterWebUiSettings(query, context),
+			...matches
+				.filter((match) => isAppearanceSetting(match.item.path))
+				.map((match) => ({ label: match.item.label, tabId: APPEARANCE_MENU_TAB })),
+		],
+	};
 }

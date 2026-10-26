@@ -42,7 +42,8 @@ export default [
 		variants: [
 			{
 				name: "Session attached",
-				description: "Current-session target, every section populated, This Session tab first.",
+				description:
+					"Current-session target, every section populated, This Session tab first. The Display tab omits the rows the Appearance popover owns.",
 				seed: () => {
 					answerCalls({
 						getSettings: () => settingsModelCurrentSession,
@@ -121,7 +122,7 @@ export default [
 				),
 			},
 			{
-				name: "Appearance selected",
+				name: "Browser selected",
 				render: () => (
 					<SettingsNav
 						tabs={SETTINGS_TABS}
@@ -174,7 +175,7 @@ export default [
 				),
 			},
 			{
-				name: "Appearance selected, before the first section",
+				name: "Browser selected, before the first section",
 				render: () => (
 					<SettingsSectionPicker
 						tabs={SETTINGS_TABS}
@@ -242,6 +243,12 @@ export default [
 				name: "List editor",
 				render: () => <SettingsRow item={settingSkillPaths} />,
 			},
+			{
+				name: "Compact (Appearance popover)",
+				description:
+					"The popover's row: tighter spacing and smaller type, the description in a tooltip, the effect note kept.",
+				render: () => <SettingsRow item={settingThinkingLevelGlobal} compact />,
+			},
 		],
 	}),
 	defineStory({
@@ -307,6 +314,15 @@ export default [
 				),
 			},
 			{
+				name: "Compact",
+				description: "Popover rows: one line each; the description moves to a tooltip.",
+				render: () => (
+					<SettingsRowLayout label="Soft Fade" description="Fades in new text." compact>
+						<SettingToggle label="Soft Fade" checked onChange={() => undefined} />
+					</SettingsRowLayout>
+				),
+			},
+			{
 				name: "Note without description",
 				render: () => (
 					<SettingsRowLayout label="Default Thinking Level" note="New sessions only.">
@@ -322,26 +338,15 @@ export default [
 		component: { file: "apps/web/components/settings/WebUiSettings.tsx", export: "WebUiSettings" },
 		variants: [
 			{
-				name: "Interface only",
-				description: "Signed out or auth disabled: no Account group.",
+				name: "Notifications only",
+				description:
+					"Signed out or auth disabled: no Account group. Display preferences live in the header's Appearance popover.",
 				render: () => <WebUiSettings />,
 			},
 			{
-				name: "Interface and Account",
+				name: "Notifications and Account",
 				description: "Signed in: Sign Out sits under Account.",
 				seed: { authStatus: "signedIn" },
-				render: () => <WebUiSettings />,
-			},
-			{
-				name: "Two-line session titles on",
-				description: "Roster rows may show two lines of the last session title.",
-				seed: { sidebarSessionTitleLines: 2 },
-				render: () => <WebUiSettings />,
-			},
-			{
-				name: "Title-first workspace rows on",
-				description: "Roster rows lead with the last session title.",
-				seed: { sidebarTitleFirst: true },
 				render: () => <WebUiSettings />,
 			},
 		],

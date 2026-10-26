@@ -1,4 +1,5 @@
 import type { JSX } from "solid-js";
+import { setState } from "../../../../web/state";
 import { AskToolCard } from "../../../../web/components/chat/tools/AskToolCard";
 import { BashToolCard } from "../../../../web/components/chat/tools/BashToolCard";
 import {
@@ -146,6 +147,22 @@ const stories: Story[] = [
 				),
 			},
 			{
+				name: "Collapsed mode, header-only",
+				description:
+					"Tool cards Collapsed: a card with a body that is normally always open becomes a header closed until clicked. Running cards stay open.",
+				seed: () => setState("display", { toolCards: "collapsed" }),
+				render: () => (
+					<>
+						<ToolCardShell name="bash" arg="bun run lint" status="done" class="bash-tool">
+							<pre>{"$ bun run lint\nFound 0 warnings and 0 errors."}</pre>
+						</ToolCardShell>
+						<ToolCardShell name="bash" arg="bun run check:types" status="running" class="bash-tool">
+							<pre>{"checking apps/web ..."}</pre>
+						</ToolCardShell>
+					</>
+				),
+			},
+			{
 				name: "Error status, no body",
 				render: () => <ToolCardShell name="read" arg="apps/web/missing.ts" status="error" />,
 			},
@@ -184,6 +201,24 @@ const stories: Story[] = [
 			{
 				name: "Expanded (Ctrl+O)",
 				seed: { toolsExpanded: true },
+				render: () => <CollapsibleOutput item={bashLongTool} output={bashLongTool.output} />,
+			},
+			{
+				name: "Rows: 10",
+				description: "The Appearance menu's Rows choice sets how many lines show before the note.",
+				seed: () => setState("display", { toolRows: "10" }),
+				render: () => <CollapsibleOutput item={bashLongTool} output={bashLongTool.output} />,
+			},
+			{
+				name: "Rows: 10, tail",
+				description: "Terminal output keeps its last rows.",
+				seed: () => setState("display", { toolRows: "10" }),
+				render: () => <CollapsibleOutput item={bashLongTool} output={bashLongTool.output} tail />,
+			},
+			{
+				name: "Rows: All",
+				description: "No cap, so no hidden-lines note.",
+				seed: () => setState("display", { toolRows: "all" }),
 				render: () => <CollapsibleOutput item={bashLongTool} output={bashLongTool.output} />,
 			},
 			{
@@ -411,6 +446,17 @@ const stories: Story[] = [
 			{
 				name: "Long file, offset 40",
 				description: "26 lines, starting mid-file; numbers follow the tool's offset.",
+				render: () => <ReadToolCard item={readLongTool} />,
+			},
+			{
+				name: "Rows: 10",
+				description: "Reads keep the head of the file; the Rows choice sets how many rows show.",
+				seed: () => setState("display", { toolRows: "10" }),
+				render: () => <ReadToolCard item={readLongTool} />,
+			},
+			{
+				name: "Rows: All",
+				seed: () => setState("display", { toolRows: "all" }),
 				render: () => <ReadToolCard item={readLongTool} />,
 			},
 			{ name: "File not found", render: () => <ReadToolCard item={readErrorTool} /> },

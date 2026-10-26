@@ -73,7 +73,7 @@ export function shouldUnpinOnScroll(m: ScrollUnpinInput): boolean {
  * Observing the CONTENT element catches every growth source with one
  * mechanism: reveal-paced live text (each rAF flush grows the tail),
  * streamed tool/bash output (in-place item mutations that never change
- * items.length), Ctrl+O and the header expand-all toggle, image
+ * items.length), Ctrl+O, image
  * decodes, font reflows, StreamingTail's 160ms soften re-parse. Observing the
  * CONTAINER catches viewport resizes (window/sidebar) that change
  * clientHeight without touching content. RO callbacks run after layout,

@@ -24,7 +24,7 @@ function appendFresh(root: HTMLElement, text: string): void {
 	node.appendChild(span);
 }
 
-// Renders the live tail like Markdown, but when `soften` is on, the characters
+// Renders the live tail like Markdown, but when Soft fade (state.display.softFade) is on, the characters
 // appended since the previous frame are excluded from the markdown parse and
 // shown in a single fading span instead (re-parsed into real markdown next frame).
 const StreamingTail: Component<{ text: string }> = (props) => {
@@ -32,7 +32,7 @@ const StreamingTail: Component<{ text: string }> = (props) => {
 	let prevLen = 0;
 	createEffect(() => {
 		const text = props.text;
-		const freshCount = state.soften ? text.length - prevLen : 0;
+		const freshCount = state.display.softFade ? text.length - prevLen : 0;
 		prevLen = text.length;
 		const cut = Math.min(Math.max(freshCount, 0), text.length);
 		// Skip the fresh span when there is no stable text to anchor it to

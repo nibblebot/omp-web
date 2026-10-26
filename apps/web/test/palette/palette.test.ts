@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { APPEARANCE_MENU_TAB } from "../../prefs/settings";
 import {
 	flattenPalette,
 	openItems,
 	searchPalette,
+	settingItems,
 	type PaletteItem,
 	type PaletteSources,
 } from "../../palette/palette";
@@ -100,5 +102,62 @@ describe("searchPalette", () => {
 		);
 		expect(names).toContain("Sign in");
 		expect(names).not.toContain("Settings");
+	});
+});
+
+describe("settingItems", () => {
+	const model = {
+		tabs: [
+			{
+				id: "appearance",
+				label: "Appearance",
+				groups: [
+					{
+						name: "Display",
+						items: [
+							{
+								path: "display.showTokenUsage",
+								label: "Show Token Usage",
+								description: "",
+								type: "boolean" as const,
+								value: false,
+								changed: false,
+							},
+							{
+								path: "images.autoResize",
+								label: "Auto-resize images",
+								description: "",
+								type: "boolean" as const,
+								value: true,
+								changed: false,
+							},
+						],
+					},
+				],
+			},
+		],
+	};
+	const byLabel = (items: PaletteItem[], label: string) =>
+		items.find((item) => item.label === label);
+
+	test("rows the Appearance popover owns open it instead of a settings tab", () => {
+		const items = settingItems(model, [], [{ label: "Soft Fade", tabId: APPEARANCE_MENU_TAB }]);
+		expect(byLabel(items, "Show Token Usage")?.action).toEqual({
+			kind: "open",
+			target: "appearance",
+		});
+		expect(byLabel(items, "Show Token Usage")?.detail).toBe("Appearance menu · Status");
+		expect(byLabel(items, "Soft Fade")?.action).toEqual({ kind: "open", target: "appearance" });
+		expect(byLabel(items, "Soft Fade")?.detail).toBe("Appearance menu");
+		expect(byLabel(items, "Auto-resize images")?.action).toEqual({
+			kind: "setting",
+			tabId: "appearance",
+			query: "Auto-resize images",
+		});
+	});
+
+	test("Appearance is an Open entry that a query finds", () => {
+		const open = openItems({ debugEnabled: false, pluginsEnabled: false, projects: [] });
+		expect(labels(sourcesWith(open), "theme")).toContain("Appearance");
 	});
 });

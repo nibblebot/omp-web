@@ -1,10 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import type { SettingsItem, SettingsModel, SettingsTab } from "#lib/wire/protocol";
 import {
+	APPEARANCE_MENU_TAB,
+	APPEARANCE_SDK_SETTINGS,
+	appearanceSettingGroup,
 	displayOptionValue,
 	effectNote,
 	filterSettings,
 	filterWebUiSettings,
+	isAppearanceSetting,
+	searchSheetSettings,
+	sheetGroups,
 	unmetDependency,
 } from "../../prefs/settings";
 
@@ -176,5 +182,71 @@ describe("unmetDependency and effectNote", () => {
 		expect(effectNote("live")).toBeNull();
 		expect(effectNote("restart")).toBeNull();
 		expect(effectNote(undefined)).toBeNull();
+	});
+});
+
+describe("Appearance popover ownership", () => {
+	const attached = { sessionAttached: true, signedIn: true };
+	const tab: SettingsTab = {
+		id: "appearance",
+		label: "Appearance",
+		groups: [
+			{
+				name: "Display",
+				items: [
+					item({ type: "boolean", path: "display.showTokenUsage", label: "Show Token Usage" }),
+					item({ type: "boolean", path: "display.compactTools", label: "Compact tools" }),
+				],
+			},
+			{
+				name: "Images",
+				items: [item({ type: "boolean", path: "terminal.showImages", label: "Show images" })],
+			},
+		],
+	};
+	const model: SettingsModel = { tabs: [tab] };
+
+	test("names every popover SDK path once, with its group", () => {
+		const paths = Object.values(APPEARANCE_SDK_SETTINGS).flat();
+		expect(new Set(paths).size).toBe(paths.length);
+		expect(isAppearanceSetting("hideThinkingBlock")).toBe(true);
+		expect(isAppearanceSetting("display.shimmer")).toBe(true);
+		expect(isAppearanceSetting("display.compactTools")).toBe(false);
+		expect(appearanceSettingGroup("display.showTurnTime")).toBe("Status");
+		expect(appearanceSettingGroup("terminal.showImages")).toBe("Transcript");
+		expect(appearanceSettingGroup("images.autoResize")).toBeUndefined();
+	});
+
+	test("the sheet's groups drop popover rows and groups left empty", () => {
+		const groups = sheetGroups(tab);
+		expect(groups.map((group) => group.name)).toEqual(["Display"]);
+		expect(groups[0]?.items.map((row) => row.path)).toEqual(["display.compactTools"]);
+	});
+
+	test("moved web rows point at the popover, not a tab", () => {
+		for (const label of ["Theme", "Font Size", "Soft Fade", "Usage in Sidebar"]) {
+			expect(filterWebUiSettings(label, attached)).toContainEqual({
+				label,
+				tabId: APPEARANCE_MENU_TAB,
+			});
+		}
+		expect(filterWebUiSettings("two-line", attached)).toEqual([
+			{ label: "Two-Line Session Titles", tabId: APPEARANCE_MENU_TAB },
+		]);
+	});
+
+	test("sheet search renders only sheet-owned SDK rows and points at the popover for the rest", () => {
+		const hits = searchSheetSettings(model, "show", attached);
+		expect(hits.sdk.map((match) => match.item.path)).toEqual([]);
+		expect(hits.pointers).toEqual([
+			{ label: "Show Token Usage", tabId: APPEARANCE_MENU_TAB },
+			{ label: "Show images", tabId: APPEARANCE_MENU_TAB },
+		]);
+		const compact = searchSheetSettings(model, "compact tools", attached);
+		expect(compact.sdk.map((match) => match.item.path)).toEqual(["display.compactTools"]);
+		expect(compact.pointers).toEqual([]);
+		expect(searchSheetSettings(null, "theme", attached).pointers).toEqual([
+			{ label: "Theme", tabId: APPEARANCE_MENU_TAB },
+		]);
 	});
 });

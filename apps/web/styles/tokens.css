@@ -102,6 +102,16 @@
 	/* Breakpoints (documentation only; CSS custom properties cannot drive
 	   @media): drawer sidebar below 1024px, docked at 1024px and up; compact
 	   chat column below 768px. */
+	/* Chat column cap (.app-main: transcript and composer). Default is today's
+	   820px at the 18px root; the Appearance popover's Width preference sets
+	   data-width on the root (store/display.ts), which picks the cap below.
+	   Rem-based so it scales with the font size. Below 768px the column is
+	   full width whatever the preset (app.css). */
+	--col-w-narrow: 38rem;
+	--col-w-default: 46rem;
+	--col-w-wide: 64rem;
+	--col-w-full: none;
+	--col-w: var(--col-w-default);
 	--shadow-1: 0 1px 2px rgb(0 0 0 / 0.25);
 	--shadow-2: 0 8px 24px rgb(0 0 0 / 0.35);
 	--shadow-glow-success: 0 0 6px var(--success);
@@ -157,6 +167,15 @@
 		--sidebar-w: 280px;
 		--main-header-h: 56px;
 	}
+}
+:root[data-width="narrow"] {
+	--col-w: var(--col-w-narrow);
+}
+:root[data-width="wide"] {
+	--col-w: var(--col-w-wide);
+}
+:root[data-width="full"] {
+	--col-w: var(--col-w-full);
 }
 :root[data-theme="light"] {
 	color-scheme: light;

@@ -6,9 +6,12 @@ import { NoticeCard } from "../../../web/components/chat/transcript/cards/Notice
 import { UserCard } from "../../../web/components/chat/transcript/cards/UserCard";
 import { UserCommandCard } from "../../../web/components/chat/transcript/cards/UserCommandCard";
 import { ToolCard } from "../../../web/components/chat/tools/ToolCard";
+import { ToolRunRow } from "../../../web/components/chat/transcript/cards/ToolRunRow";
+import { groupToolRuns } from "../../../web/chat/tool-runs";
 import { StreamingBlock } from "../../../web/components/chat/transcript/StreamingBlock";
 import { StatusSegment } from "../../../web/components/chat/status/StatusSegment";
 import type { ImageArg } from "#lib/wire/protocol";
+import { setState } from "../../../web/state";
 import type { ChatItem } from "../../../web/state";
 import {
 	chatAdvisorBlockerItem,
@@ -59,6 +62,15 @@ const UserWithZoom = (props: {
 		</>
 	);
 };
+
+const settledRun = groupToolRuns([
+	chatAssistantThinkingItem,
+	chatReadTool,
+	chatEditTool,
+	chatFailedBashTool,
+])[0]!;
+const runningRun = groupToolRuns([chatReadTool, chatRunningBashTool])[0]!;
+const noWaitRuns = new Map();
 
 const stories: Story[] = [
 	defineStory({
@@ -232,11 +244,30 @@ const stories: Story[] = [
 		},
 		variants: [
 			{
-				name: "Batched notes, mixed severity",
+				name: "Expanded, mixed severity",
+				description: "Expanded (the default): every note shows under the header.",
+				seed: () => setState("display", "advisor", "expanded"),
 				render: () => <AdvisorCard item={chatAdvisorItem} />,
 			},
 			{
-				name: "Blocker from a named advisor",
+				name: "Expanded, blocker from a named advisor",
+				seed: () => setState("display", "advisor", "expanded"),
+				render: () => <AdvisorCard item={chatAdvisorBlockerItem} />,
+			},
+			{
+				name: "Collapsed, mixed severity",
+				description:
+					"Collapsed: the one-line header alone. Click it to open this card; the card closes again with another click, and a preference change resets it.",
+				seed: () => setState("display", "advisor", "collapsed"),
+				render: () => <AdvisorCard item={chatAdvisorItem} />,
+			},
+			{
+				name: "Collapsed, blocker count in the header",
+				description: "Ctrl+O (tool output expanded) does not open an advisor card.",
+				seed: () => {
+					setState("toolsExpanded", true);
+					setState("display", "advisor", "collapsed");
+				},
 				render: () => <AdvisorCard item={chatAdvisorBlockerItem} />,
 			},
 		],
@@ -251,8 +282,50 @@ const stories: Story[] = [
 			{ name: "edit (diff renderer)", render: () => <ToolCard item={chatEditTool} /> },
 			{ name: "bash failed", render: () => <ToolCard item={chatFailedBashTool} /> },
 			{
+				name: "Collapsed mode (read)",
+				description:
+					"Tool cards Collapsed: even the dedicated renderers draw header-only and open on click.",
+				seed: () => setState("display", { toolCards: "collapsed" }),
+				render: () => <ToolCard item={chatReadTool} />,
+			},
+			{
+				name: "Collapsed mode (bash running)",
+				description: "A running call stays open.",
+				seed: () => setState("display", { toolCards: "collapsed" }),
+				render: () => <ToolCard item={chatRunningBashTool} />,
+			},
+			{
 				name: "Unknown tool (generic fallback)",
 				render: () => <ToolCard item={genericDoneTool} />,
+			},
+		],
+	}),
+	defineStory({
+		id: "chat-transcript-cards-tool-run-row",
+		title: "ToolRunRow",
+		component: {
+			file: "apps/web/components/chat/transcript/cards/ToolRunRow.tsx",
+			export: "ToolRunRow",
+		},
+		variants: [
+			{
+				name: "Closed",
+				description:
+					"Consolidated tool cards: one row per run, counted by tool, with the thinking folded from the message before it and the err/req/duration/turns meta.",
+				render: () => <ToolRunRow run={settledRun} waitRuns={noWaitRuns} transcript={[]} />,
+			},
+			{
+				name: "Running call under a closed run",
+				description:
+					"A call that is still running shows open under its row, and folds back in when it finishes.",
+				render: () => <ToolRunRow run={runningRun} waitRuns={noWaitRuns} transcript={[]} />,
+			},
+			{
+				name: "Open (Ctrl+O)",
+				description:
+					"Show-everything opens the run (a click on the row does too): the folded thinking, then the run's calls as header-only cards that each open on their own click. Ctrl+O opens those as well.",
+				seed: { toolsExpanded: true },
+				render: () => <ToolRunRow run={settledRun} waitRuns={noWaitRuns} transcript={[]} />,
 			},
 		],
 	}),

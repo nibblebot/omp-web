@@ -15,7 +15,7 @@ export const ShellCommand: Component<{ command: string; lang: keyof typeof PROMP
 	let textRef!: HTMLSpanElement;
 	const [userExpanded, setUserExpanded] = createSignal(false);
 	const [hiddenRows, setHiddenRows] = createSignal(0);
-	// Ctrl+O / the header kebab resets the per-command choice, as ToolCardShell does for cards.
+	// Ctrl+O resets the per-command choice, as ToolCardShell does for cards.
 	createEffect(
 		on(
 			() => state.toolsExpanded,

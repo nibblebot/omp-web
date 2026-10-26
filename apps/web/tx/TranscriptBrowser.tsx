@@ -162,7 +162,7 @@ export function TranscriptBrowser() {
 				/>
 			</Show>
 			<div class="main-pane">
-				<MainHeader />
+				<MainHeader analysis />
 				<main class="tx-main">
 					<HealthBanner health={healthSafe} />
 					<Show when={storedRoute()} keyed>

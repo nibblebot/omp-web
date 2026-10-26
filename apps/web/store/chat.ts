@@ -184,7 +184,7 @@ export function notifyDesktop(kind: NotifyKind, title: string, body: string): vo
 	}
 }
 
-/** Ctrl+O and the header kebab: expand or collapse every tool card at once. */
+/** Ctrl+O: expand or collapse every tool card at once. */
 export function toggleToolsExpanded(): void {
 	setState("toolsExpanded", (v) => !v);
 }

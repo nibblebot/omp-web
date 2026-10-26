@@ -1,4 +1,5 @@
 import type { SettingsModel } from "#lib/wire/protocol";
+import { isAppearanceSetting } from "./settings";
 
 /**
  * Settings sheet tab metadata (display contract for the sidebar, the stream
@@ -8,7 +9,7 @@ import type { SettingsModel } from "#lib/wire/protocol";
  * Three kinds of tab share one sidebar and one scroll stream:
  * - "session": rows that act on the attached session only; absent without one.
  * - "sdk": a tab of the settings model; `id` matches `SettingsTab.id`.
- * - "client": browser-local preferences (Appearance, Features).
+ * - "client": browser-local preferences (Browser, Features).
  *
  * Each tab belongs to a `section`: `session` (the attached session), `omp`
  * (the SDK's own settings) or `omp-web` (this web UI). The sidebar labels the
@@ -125,7 +126,7 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 	},
 	{
 		id: "web-ui",
-		label: "Appearance",
+		label: "Browser",
 		icon: "monitor",
 		kind: "client",
 		section: "omp-web",
@@ -220,7 +221,7 @@ export function scrollSpyIndex(
 
 /**
  * Changed-setting count per model tab id (`item.changed`, every group,
- * including Advanced). Tabs absent from the model are absent from the map;
+ * including Advanced; rows owned by the Appearance popover are not counted). Tabs absent from the model are absent from the map;
  * read it with tabBadgeCount, which defaults to 0.
  */
 export function changedCountsByTab(model: SettingsModel | null): Map<string, number> {
@@ -229,7 +230,8 @@ export function changedCountsByTab(model: SettingsModel | null): Map<string, num
 	for (const tab of model.tabs) {
 		let changed = 0;
 		for (const group of tab.groups) {
-			for (const item of group.items) if (item.changed) changed++;
+			for (const item of group.items)
+				if (item.changed && !isAppearanceSetting(item.path)) changed++;
 		}
 		counts.set(tab.id, changed);
 	}

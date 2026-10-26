@@ -6,6 +6,7 @@ import {
 	proseOnlyThinking,
 	showTokenUsage,
 } from "../../../../chat/display-prefs";
+import { isProseless } from "../../../../chat/tool-runs";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "../../../../chat/thinking";
 import type { TurnMeta } from "../../../../chat/turn-usage";
 import { formatTokens } from "../../../../usage/context";
@@ -19,14 +20,15 @@ import { CopyButton } from "../../../ui/CopyButton";
 import { Markdown } from "../../../ui/Markdown";
 
 /** Thinking text as displayed, or null when nothing displayable remains. */
-function thinkingView(text: string): string | null {
+export function thinkingView(text: string): string | null {
 	const formatted = formatThinkingForDisplay(text, proseOnlyThinking());
 	return hasDisplayableThinking(text, formatted) ? formatted : null;
 }
 
-/** Assistant message card. With `thinking` false, thinking blocks are omitted
- *  and a card with no text blocks then renders nothing. `display.hideThinkingBlock`
- *  omits them the same way. */
+/** Assistant message card. With `thinking` false (a tool run consumed the
+ *  message), thinking blocks are omitted and a card without prose or an
+ *  interruption footer renders nothing at all, stats footer included.
+ *  `display.hideThinkingBlock` omits thinking the same way. */
 export const AssistantCard: Component<{
 	assistant: Extract<ChatItem, { kind: "assistant" }>;
 	thinking: boolean;
@@ -38,77 +40,80 @@ export const AssistantCard: Component<{
 			? props.assistant.blocks
 			: props.assistant.blocks.filter((b) => b.kind !== "thinking");
 	const text = () => blocks().filter((b) => b.kind === "text");
-	if (!props.thinking && text().length === 0 && !props.assistant.interrupted) return null;
+	// Reactive: a tool run can consume the message after the card first drew.
+	const empty = () => !props.thinking && isProseless(props.assistant);
 	return (
-		<div class="msg-assistant">
-			<For each={blocks()}>
-				{(block) =>
-					block.kind === "thinking" ? (
-						<Show when={thinkingView(block.text)} keyed>
-							{(formatted) => (
-								<details class="thinking-block" open={expandThinkingBlocks()}>
-									<summary>thinking</summary>
-									<Markdown src={formatted} />
-								</details>
-							)}
-						</Show>
-					) : (
-						<Markdown src={block.text} />
-					)
-				}
-			</For>
-			<Show when={props.assistant.interrupted}>
-				<div class="interrupted-footer" role="status">
-					Interrupted
+		<Show when={!empty()}>
+			<div class="msg-assistant">
+				<For each={blocks()}>
+					{(block) =>
+						block.kind === "thinking" ? (
+							<Show when={thinkingView(block.text)} keyed>
+								{(formatted) => (
+									<details class="thinking-block" open={expandThinkingBlocks()}>
+										<summary>thinking</summary>
+										<Markdown src={formatted} />
+									</details>
+								)}
+							</Show>
+						) : (
+							<Markdown src={block.text} />
+						)
+					}
+				</For>
+				<Show when={props.assistant.interrupted}>
+					<div class="interrupted-footer" role="status">
+						Interrupted
+					</div>
+				</Show>
+				<Show when={props.meta?.cacheMissTokens}>
+					{(tokens) => (
+						<div
+							class="cache-miss-marker"
+							title="The prompt cache went cold this turn; the prefix was re-processed"
+						>
+							⊘ cache miss · {formatTokens(tokens())} tokens
+						</div>
+					)}
+				</Show>
+				<div class="msg-footer" data-copy-feedback-bounds>
+					<Show when={text().length > 0}>
+						<div class="msg-toolbar">
+							<CopyButton
+								class="msg-copy-btn msg-copy-btn--icon"
+								title="Copy message markdown"
+								icon
+								copiedLabel="Message copied"
+								text={() =>
+									text()
+										.map((b) => b.text)
+										.join("\n\n")
+								}
+							/>
+						</div>
+					</Show>
+					<Show when={showTokenUsage() && props.assistant.usage}>
+						{(u) => {
+							const row = buildUsageRow(u(), props.assistant.ttft, props.assistant.duration);
+							if (!row) return null;
+							const turn = props.meta?.turnMs;
+							const at = props.assistant.completedAt;
+							const summary = [
+								at !== undefined ? formatTurnStamp(at, Date.now()) : null,
+								turn !== undefined ? `Δ ${formatDurationMs(turn)}` : null,
+								formatUsageRow(row),
+							]
+								.filter((part) => part !== null)
+								.join(" · ");
+							return (
+								<div class="usage-row" title="per-turn usage">
+									{summary}
+								</div>
+							);
+						}}
+					</Show>
 				</div>
-			</Show>
-			<Show when={props.meta?.cacheMissTokens}>
-				{(tokens) => (
-					<div
-						class="cache-miss-marker"
-						title="The prompt cache went cold this turn; the prefix was re-processed"
-					>
-						⊘ cache miss · {formatTokens(tokens())} tokens
-					</div>
-				)}
-			</Show>
-			<div class="msg-footer" data-copy-feedback-bounds>
-				<Show when={text().length > 0}>
-					<div class="msg-toolbar">
-						<CopyButton
-							class="msg-copy-btn msg-copy-btn--icon"
-							title="Copy message markdown"
-							icon
-							copiedLabel="Message copied"
-							text={() =>
-								text()
-									.map((b) => b.text)
-									.join("\n\n")
-							}
-						/>
-					</div>
-				</Show>
-				<Show when={showTokenUsage() && props.assistant.usage}>
-					{(u) => {
-						const row = buildUsageRow(u(), props.assistant.ttft, props.assistant.duration);
-						if (!row) return null;
-						const turn = props.meta?.turnMs;
-						const at = props.assistant.completedAt;
-						const summary = [
-							at !== undefined ? formatTurnStamp(at, Date.now()) : null,
-							turn !== undefined ? `Δ ${formatDurationMs(turn)}` : null,
-							formatUsageRow(row),
-						]
-							.filter((part) => part !== null)
-							.join(" · ");
-						return (
-							<div class="usage-row" title="per-turn usage">
-								{summary}
-							</div>
-						);
-					}}
-				</Show>
 			</div>
-		</div>
+		</Show>
 	);
 };

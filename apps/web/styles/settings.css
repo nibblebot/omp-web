@@ -878,3 +878,40 @@ button.settings-toggle:not(:disabled):hover {
 	font-size: 0.85em;
 	opacity: 0.75;
 }
+
+/* --- Compact rows (SettingsRow compact), used in the Appearance popover --- */
+.settings-item.compact {
+	gap: var(--space-4);
+	padding: var(--space-3) var(--settings-row-x);
+}
+.settings-item.compact .settings-item-label {
+	font-size: var(--fs-md);
+}
+.settings-item.compact .settings-item-desc,
+.settings-item.compact .settings-item-warning {
+	font-size: var(--fs-sm);
+}
+.settings-item.compact .changed-dot {
+	top: calc(var(--space-3) + 0.45em);
+}
+
+/* --- Appearance popover (app/AppearancePopover.tsx), anchored to the header's Appearance button; the surface is ui/Popover --- */
+.appearance-popover-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: var(--space-3) 0;
+}
+.appearance-popover .settings-block {
+	margin-bottom: var(--space-4);
+}
+.appearance-popover .settings-block:last-child {
+	margin-bottom: 0;
+}
+.appearance-popover-note {
+	margin: 0;
+	padding: var(--space-3) var(--settings-row-x);
+	color: var(--muted);
+	font-size: var(--fs-sm);
+}

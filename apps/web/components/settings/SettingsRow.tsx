@@ -29,12 +29,20 @@ export function SettingsRowLayout(props: {
 	note?: string;
 	/** Text, secret, JSON and ordered-list rows: the control drops below the help text. */
 	stacked?: boolean;
+	/** For a row in a popover (the Appearance menu): tighter spacing and smaller type, and the description moves to a tooltip so the row stays one line. */
+	compact?: boolean;
 	children: JSX.Element;
 	reset?: JSX.Element;
 }) {
 	return (
-		<div class="settings-item" classList={{ changed: props.changed, stacked: props.stacked }}>
-			<div class="settings-item-text">
+		<div
+			class="settings-item"
+			classList={{ changed: props.changed, stacked: props.stacked, compact: props.compact }}
+		>
+			<div
+				class="settings-item-text"
+				title={props.compact ? props.description || undefined : undefined}
+			>
 				<Show when={props.warning}>
 					<WarningIcon class="settings-item-warning-icon" />
 				</Show>
@@ -49,11 +57,11 @@ export function SettingsRowLayout(props: {
 						{props.warning}
 					</p>
 				</Show>
-				<Show when={props.description || props.note}>
+				<Show when={(!props.compact && props.description) || props.note}>
 					<p class="settings-item-desc">
-						{props.description}
+						{props.compact ? null : props.description}
 						<Show when={props.note}>
-							{props.description ? " · " : null}
+							{props.description && !props.compact ? " · " : null}
 							<span class="settings-item-note">{props.note}</span>
 						</Show>
 					</p>
@@ -73,8 +81,9 @@ export function SettingsRowLayout(props: {
 /**
  * One settings row: the control is chosen by `controlKind`, and every write goes
  * through the store, which resolves the revision when it dispatches the write.
+ * `compact` tightens the layout for a popover; the write target is the same.
  */
-export function SettingsRow(props: { item: SettingsItem }) {
+export function SettingsRow(props: { item: SettingsItem; compact?: boolean }) {
 	const item = () => props.item;
 	const kind = () => controlKind(item());
 	const setByProject = () => item().view?.source === "project";
@@ -94,6 +103,7 @@ export function SettingsRow(props: { item: SettingsItem }) {
 			description={item().description}
 			warning={blocked() ?? rowWarning()}
 			changed={item().changed}
+			compact={props.compact}
 			setByProject={setByProject()}
 			note={effectNote(item().view?.effect) ?? undefined}
 			stacked={

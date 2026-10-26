@@ -56,6 +56,10 @@ describe("SETTINGS_TABS", () => {
 		expect(client.every((tab) => tab.section === "omp-web")).toBe(true);
 	});
 
+	test("the client tab labelled Browser holds what is left after display settings moved to the popover", () => {
+		expect(settingsTabMeta("web-ui")?.label).toBe("Browser");
+	});
+
 	test("SDK tab ids are unchanged by the label split", () => {
 		expect(settingsTabMeta("appearance")?.kind).toBe("sdk");
 		expect(settingsTabMeta("web-ui")?.kind).toBe("client");
@@ -74,7 +78,7 @@ describe("settingsTabMeta", () => {
 describe("settingsSectionId and settingsTabHeadingId", () => {
 	test("builds a per-tab id from the section name, slugged", () => {
 		expect(settingsSectionId("model", "Status Line")).toBe("settings-model-status-line");
-		expect(settingsSectionId("web-ui", "Interface")).toBe("settings-web-ui-interface");
+		expect(settingsSectionId("web-ui", "Notifications")).toBe("settings-web-ui-notifications");
 	});
 
 	test("ids differ across tabs for the same section name", () => {
@@ -84,7 +88,7 @@ describe("settingsSectionId and settingsTabHeadingId", () => {
 	test("heading ids are per tab and never collide with section ids", () => {
 		const headings = SETTINGS_TABS.map((tab) => settingsTabHeadingId(tab.id));
 		expect(new Set(headings).size).toBe(headings.length);
-		expect(headings).not.toContain(settingsSectionId("web-ui", "Interface"));
+		expect(headings).not.toContain(settingsSectionId("web-ui", "Notifications"));
 	});
 });
 
@@ -152,6 +156,24 @@ describe("changedCountsByTab and tabBadgeCount", () => {
 		expect(counts.get("appearance")).toBe(2);
 		expect(counts.get("model")).toBe(2);
 		expect(counts.get("context")).toBe(0);
+	});
+
+	test("rows owned by the Appearance popover are not counted", () => {
+		const moved: SettingsModel = {
+			tabs: [
+				{
+					id: "appearance",
+					label: "Appearance",
+					groups: [
+						{
+							name: "Display",
+							items: [item("display.showTokenUsage", true), item("images.autoResize", true)],
+						},
+					],
+				},
+			],
+		};
+		expect(changedCountsByTab(moved).get("appearance")).toBe(1);
 	});
 
 	test("an absent model yields no counts", () => {
