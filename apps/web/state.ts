@@ -24,6 +24,7 @@ import type {
 	SessionStatus,
 	ImageArg,
 	ModelBrowserEntry,
+	ModelPresetDetail,
 	PublicProviderProfile,
 	RegisteredProject,
 	ServerFrame,
@@ -249,12 +250,14 @@ export function isLiveDaemon(d: DaemonInfo): boolean {
 	return LIVE_DAEMON_STATES.has(d.state);
 }
 
+/** Tabs of the Models dialog (`ModalName` "model"). */
+export type ModelDialogTab = "presets" | "roles" | "all";
+
 /** Names of the modals the store can summon; components render on match. */
 export type ModalName =
 	| "help"
 	| "hotkeys"
 	| "model"
-	| "thinking"
 	| "stats"
 	| "settings"
 	| "sessions"
@@ -388,9 +391,16 @@ export const [state, setState] = createStore({
 	modelSynced: false,
 	thinkingLevel: undefined as WebSessionState["thinkingLevel"],
 	autoThinking: false,
-	/** Quick model picker rows (`getModelBrowser`); `modelPickerTask` opens it in Task-model mode. */
+	/** Models dialog: `modelBrowser` rows (`getModelBrowser`) feed the Roles and All models tabs. */
 	modelBrowser: [] as ModelBrowserEntry[],
+	/** All models tab Task toggle: pick the Task subagent model instead of switching the session. */
 	modelPickerTask: false,
+	/** Models dialog tab; every entry point opens it via `openModelDialog`. */
+	modelDialogTab: "presets" as ModelDialogTab,
+	/** Role selected in the Models dialog Roles tab. */
+	modelDialogRole: undefined as string | undefined,
+	/** Preset detail for the Presets tab (`getModelPresets`); undefined until loaded. */
+	modelPresetDetails: undefined as ModelPresetDetail[] | undefined,
 	/** Server-owned thinking selectors the active model supports (no silent clamping). */
 	thinkingSelectors: undefined as WebSessionState["thinkingSelectors"],
 	modelPresets: undefined as WebSessionState["modelPresets"],

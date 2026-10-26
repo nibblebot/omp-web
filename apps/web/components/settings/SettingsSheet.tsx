@@ -31,12 +31,11 @@ import {
 	type SettingsTabMeta,
 } from "../../prefs/settings-tabs";
 import { searchAutofocus } from "../../store/integrations";
-import { consumeSettingsTab } from "../../store/models";
+import { consumeSettingsTab, openModelDialog } from "../../store/models";
 import { fleetSettingsActive, openAppearance, refreshSettings, setState, state } from "../../state";
 import { SearchIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
 import { FeaturesSettings, searchFeatures } from "./FeaturesSettings";
-import { ModelRoleTable } from "./ModelRoleTable";
 import { SessionSettings } from "./SessionSettings";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsNav, SettingsSectionPicker, type SettingsSection } from "./SettingsNav";
@@ -378,7 +377,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		});
 	};
 
-	// A deep link (Alt+M, /model, a palette pick) names a
+	// A deep link (a palette pick) names a
 	// tab to scroll to; consume it once. The first one lands instantly. While
 	// a search is showing it waits for the search to clear.
 	createEffect(() => {
@@ -562,7 +561,17 @@ const SettingsTabBody: Component<{
 		</Match>
 		<Match when={props.tab.kind === "sdk"}>
 			<Show when={props.tab.id === "model"}>
-				<ModelRoleTable />
+				<SettingsGroup title="Model roles" id={settingsSectionId("model", "Model roles")}>
+					<SettingsRowLayout label="Model roles">
+						<button
+							type="button"
+							class="settings-control-btn"
+							onClick={() => openModelDialog("roles")}
+						>
+							Edit in Models dialog
+						</button>
+					</SettingsRowLayout>
+				</SettingsGroup>
 			</Show>
 			<Show when={props.schema}>
 				{(schema) => (

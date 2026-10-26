@@ -1,6 +1,6 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
-import type { ResolvedAnthropicCompat } from "@oh-my-pi/pi-catalog/types";
+import type { ModelKind, ResolvedAnthropicCompat } from "@oh-my-pi/pi-catalog/types";
 import type { AskQuestion, UiRequest } from "../../web/prompt/ask-types";
 import type { SettingsSection } from "../../web/components/settings/SettingsNav";
 import { settingsSectionId } from "../../web/prefs/settings-tabs";
@@ -365,15 +365,18 @@ export const sessionModel: Model = {
 	compat: firstPartyCompat,
 };
 
-/** ModelRoleCatalogEntry list: role rows with project and global assignments, an unassigned role, and hidden roles. */
+/** ModelRoleCatalogEntry list: role rows with project and global assignments, an unassigned role, a role
+ * whose configured model is unavailable, and hidden roles. */
 export const modelRoleCatalog: ModelRoleCatalogEntry[] = [
 	{
 		role: "default",
 		name: "Default",
+		tag: "DEFAULT",
 		hidden: false,
 		provider: "anthropic",
 		id: "claude-opus-4-1",
 		thinkingLevel: "high",
+		value: "anthropic/claude-opus-4-1:high",
 		source: "project",
 	},
 	{
@@ -383,6 +386,7 @@ export const modelRoleCatalog: ModelRoleCatalogEntry[] = [
 		hidden: false,
 		provider: "anthropic",
 		id: "claude-haiku-5-5",
+		value: "anthropic/claude-haiku-5-5",
 		source: "global",
 	},
 	{
@@ -393,27 +397,40 @@ export const modelRoleCatalog: ModelRoleCatalogEntry[] = [
 		provider: "openai",
 		id: "gpt-5.2",
 		thinkingLevel: "medium",
+		value: "openai/gpt-5.2:medium",
 		source: "global",
 	},
-	{ role: "slow", name: "Slow", tag: "SLOW", hidden: false, source: "default" },
-	{ role: "vision", name: "Vision", hidden: true, source: "default" },
+	{
+		role: "slow",
+		name: "Slow",
+		tag: "SLOW",
+		hidden: false,
+		value: "local/kokoro",
+		source: "global",
+	},
+	{ role: "vision", name: "Vision", tag: "VISION", hidden: true, source: "default" },
 	{
 		role: "commit",
 		name: "Commit",
+		tag: "COMMIT",
 		hidden: true,
 		provider: "anthropic",
 		id: "claude-haiku-5-5",
+		value: "anthropic/claude-haiku-5-5",
 		source: "global",
 	},
 ];
 
-type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
+type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking"> & {
+	kind: ModelKind;
+};
 
 /** ModelInfo list: catalog rows across providers, with and without controllable thinking. */
 export const modelInfos: ModelInfo[] = [
 	{
 		provider: "anthropic",
 		id: "claude-opus-4-1",
+		kind: "chat",
 		contextWindow: 200_000,
 		reasoning: true,
 		thinking: {
@@ -421,11 +438,24 @@ export const modelInfos: ModelInfo[] = [
 			efforts: ["low", "medium", "high", "xhigh"] as Effort[],
 		},
 	},
-	{ provider: "anthropic", id: "claude-sonnet-4", contextWindow: 200_000, reasoning: false },
-	{ provider: "anthropic", id: "claude-haiku-5-5", contextWindow: 200_000, reasoning: false },
+	{
+		provider: "anthropic",
+		id: "claude-sonnet-4",
+		kind: "chat",
+		contextWindow: 200_000,
+		reasoning: false,
+	},
+	{
+		provider: "anthropic",
+		id: "claude-haiku-5-5",
+		kind: "chat",
+		contextWindow: 200_000,
+		reasoning: false,
+	},
 	{
 		provider: "openai",
 		id: "gpt-5.2",
+		kind: "chat",
 		contextWindow: 400_000,
 		reasoning: true,
 		thinking: { mode: "effort", efforts: ["minimal", "low", "medium", "high"] as Effort[] },
@@ -433,11 +463,20 @@ export const modelInfos: ModelInfo[] = [
 	{
 		provider: "google",
 		id: "gemini-3-pro",
+		kind: "chat",
 		contextWindow: 1_048_576,
 		reasoning: true,
 		thinking: { mode: "google-level", efforts: ["low", "high"] as Effort[] },
 	},
-	{ provider: "opencode-go", id: "deepseek-v4-flash", contextWindow: 128_000, reasoning: false },
+	{
+		provider: "opencode-go",
+		id: "deepseek-v4-flash",
+		kind: "chat",
+		contextWindow: 128_000,
+		reasoning: false,
+	},
+	{ provider: "web", id: "exa", kind: "search", contextWindow: 0, reasoning: false },
+	{ provider: "local", id: "kokoro", kind: "tts", contextWindow: 0, reasoning: false },
 ];
 
 // ---------------------------------------------------------------------------

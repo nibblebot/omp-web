@@ -106,7 +106,7 @@
 	font-family: var(--font-mono);
 	color: var(--muted);
 }
-/* Thinking picker ordinal bar: one segment per supported level, filled up to the active one. */
+/* Thinking dropdown ordinal bar: one segment per supported level, filled up to the active one. */
 .thinking-ordinal {
 	display: flex;
 	align-items: center;
@@ -128,6 +128,78 @@
 .thinking-ordinal-text {
 	margin-left: var(--space-2);
 	white-space: nowrap;
+}
+/* Status-bar dropdowns (ThinkingLevelPopover, ModelPresetPopover) over ui/Popover. */
+.status-menu-head {
+	flex: none;
+	margin: var(--space-3) var(--space-4) 0;
+}
+.status-menu-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: var(--space-2);
+}
+.status-menu-item {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	width: 100%;
+	min-width: 0;
+	padding: var(--space-2) var(--space-3);
+	border: 0;
+	border-radius: var(--r-sm);
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	transition: background-color var(--dur-fast) var(--ease-out);
+}
+.status-menu-item:hover {
+	background: var(--hover);
+}
+.status-menu-item:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+.status-menu-item[aria-pressed="true"] {
+	background: var(--accent-dim);
+}
+.status-menu-check {
+	display: inline-grid;
+	flex: none;
+	place-items: center;
+	width: 1em;
+	height: 1em;
+	color: var(--accent);
+}
+.status-menu-label {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Actions that follow the choices ("Manage presets…") sit apart under a rule. */
+.status-menu-manage {
+	margin-top: var(--space-2);
+	border-top: 1px solid var(--border);
+	border-radius: 0 0 var(--r-sm) var(--r-sm);
+	color: var(--accent);
+}
+.status-menu-empty {
+	margin: 0;
+	padding: var(--space-3) var(--space-4);
+	color: var(--muted-2);
+}
+@media (max-width: 768px), (pointer: coarse) {
+	.status-menu-item {
+		min-height: 44px;
+	}
 }
 /* Session resource meters (cost/tokens) in machine numbers. */
 .stats-segment {

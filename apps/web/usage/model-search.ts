@@ -106,3 +106,11 @@ export function rankModels(
 		recent: isRecent,
 	}));
 }
+
+/** The thinking selector the session runs: `auto` while auto-thinking, else the level or `inherit`. */
+export function currentThinkingSelector(
+	autoThinking: boolean | undefined,
+	level: string | undefined,
+): string {
+	return autoThinking ? "auto" : (level ?? "inherit");
+}

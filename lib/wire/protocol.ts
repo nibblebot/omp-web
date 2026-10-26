@@ -1,5 +1,6 @@
 import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, AssistantMessageEvent, Model, ToolExample } from "@oh-my-pi/pi-ai";
+import type { ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { ContextUsage } from "@oh-my-pi/pi-coding-agent";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
@@ -25,9 +26,35 @@ export type ModelLockReason = "credentials" | "disabled";
 
 /** A model-browser row: every registry model, with the reason it cannot be used when it cannot. */
 export type ModelBrowserEntry = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning"> & {
+	/** SDK `modelKind(model)`: "chat" for session-switchable models; others (search, tts, ...) only fill roles. */
+	kind: ModelKind;
 	/** Absent = usable. */
 	locked?: ModelLockReason;
+	/** Concrete thinking efforts the model supports, SDK order; absent when the model does not reason. */
+	thinkingEfforts?: string[];
 };
+
+/** Settings layer that owns a model preset's effective definition. */
+export type ModelPresetSource = "global" | "project" | "overlay" | "runtime";
+
+/** One saved model preset with its contents, as listed by `getModelPresets`. */
+export interface ModelPresetDetail {
+	name: string;
+	/** Layer owning the effective preset; only "global" can be deleted or overwritten from the web. */
+	source: ModelPresetSource;
+	/** role -> "provider/id" or "provider/id:level"; {} when invalid. */
+	modelRoles: Record<string, string>;
+	defaultThinkingLevel?: string;
+	/** Parse error for a malformed hand-edited preset; absent when valid. */
+	invalid?: string;
+}
+
+/** `getModelPresets` answer: sorted names, the active (matching) preset, and per-preset details. */
+export interface ModelPresetsAnswer {
+	names: string[];
+	active?: string;
+	presets: ModelPresetDetail[];
+}
 
 /** Where a role assignment persists: global config.yml or project .omp/config.yml. */
 export type ModelRoleStorage = "global" | "project";
@@ -49,6 +76,9 @@ export interface ModelRoleCatalogEntry {
 	id?: string;
 	/** Explicit thinking selector baked into the role value (`provider/model:level`); absent = inherit. */
 	thinkingLevel?: string;
+	/** Role value exactly as configured (what a preset stores and matches against); present
+	 * whenever the role is configured, even when it resolves to no available model. */
+	value?: string;
 	/** Persisted layer owning the effective assignment. */
 	source: "project" | "global" | "default";
 }

@@ -20,8 +20,7 @@ import { RemoveProjectDialog } from "./components/fleet/workspaces/RemoveProject
 import { SessionDetailsDialog } from "./components/fleet/session/SessionDetailsDialog";
 import { WorktreeSessionsDialog } from "./components/fleet/sidebar/WorktreeSessionsDialog";
 import { ProviderLoginDialog } from "./components/models/ProviderLoginDialog";
-import { ModelPicker } from "./components/models/ModelPicker";
-import { ThinkingLevelPicker } from "./components/models/ThinkingLevelPicker";
+import { ModelDialog } from "./components/models/ModelDialog";
 import { ExtensionUi } from "./components/requests/ExtensionUi";
 import { DangerConfirmDialog } from "./components/requests/DangerConfirmDialog";
 import { DownloadDialog } from "./components/requests/DownloadDialog";
@@ -88,9 +87,8 @@ export const ModalHost: Component = () => {
 	const modals = {
 		help: () => <ShortcutsDialog initialTab="commands" onClose={close} />,
 		hotkeys: () => <ShortcutsDialog initialTab="shortcuts" onClose={close} />,
-		model: () => <ModelPicker onClose={close} />,
+		model: () => <ModelDialog onClose={close} />,
 		palette: () => <CommandPalettePicker onClose={close} />,
-		thinking: () => <ThinkingLevelPicker onClose={close} />,
 		stats: () => <SessionStatsDialog onClose={close} />,
 		settings: () => <SettingsSheet onClose={close} />,
 		sessions: () => <SessionPicker onClose={close} />,

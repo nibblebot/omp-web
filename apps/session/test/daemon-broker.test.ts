@@ -3,7 +3,7 @@ import { Settings, settings } from "@oh-my-pi/pi-coding-agent";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { cfgModelRoles, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { buildModelRoleCatalog, createDaemonRosterGate } from "../daemon-broker";
+import { buildModelRoleCatalog, createDaemonRosterGate, roleCatalogModels } from "../daemon-broker";
 import type { DaemonInfo } from "#lib/wire/protocol";
 
 // The catalog builder reads/writes the shared Settings singleton (role
@@ -95,6 +95,51 @@ describe("buildModelRoleCatalog", () => {
 			id: "claude-3-5-sonnet",
 		});
 		expect(entries.find((entry) => entry.role === "vision")).not.toHaveProperty("thinkingLevel");
+	});
+
+	test("carries the configured value even when it resolves to no available model", () => {
+		settings.setModelRole("smol", "anthropic/claude-3-5-sonnet:high");
+		settings.setModelRole("slow", "web/exa");
+		const entries = catalog({ current: STUB_MODELS[0] })!;
+		expect(entries.find((entry) => entry.role === "smol")?.value).toBe(
+			"anthropic/claude-3-5-sonnet:high",
+		);
+		expect(entries.find((entry) => entry.role === "slow")).toMatchObject({ value: "web/exa" });
+		expect(entries.find((entry) => entry.role === "slow")).not.toHaveProperty("provider");
+		// The default role's fallback to the current model is not a configured value.
+		expect(entries.find((entry) => entry.role === "default")).not.toHaveProperty("value");
+	});
+
+	test("resolves a role assigned to a non-chat model to provider/id", () => {
+		const exa = { provider: "web", id: "exa", kind: "search" } as unknown as Model;
+		settings.setModelRole("slow", "web/exa");
+		const entry = catalog({ models: [...STUB_MODELS, exa] })!.find((e) => e.role === "slow");
+		expect(entry).toMatchObject({ provider: "web", id: "exa", value: "web/exa" });
+	});
+
+	test("chat roles stay inside enabledModels while kind roles resolve from every kind", () => {
+		const exa = { provider: "web", id: "exa", kind: "search" } as unknown as Model;
+		// `enabledModels` admits only gpt-4o: the session's chat list is that one model,
+		// while the registry's all-kinds pool has every authed model.
+		const session = {
+			getAvailableModels: () => [STUB_MODELS[0]],
+			modelRegistry: {
+				getAvailable: (kind?: string) => (kind === "all" ? [...STUB_MODELS, exa] : STUB_MODELS),
+			},
+		} as unknown as Parameters<typeof roleCatalogModels>[0];
+		settings.setModelRole("smol", "anthropic/claude-3-5-sonnet");
+		settings.setModelRole("plan", "openai/gpt-4o");
+		settings.setModelRole("web", "web/exa");
+		const entries = catalog({ models: roleCatalogModels(session) })!;
+		expect(entries.find((e) => e.role === "smol")).toMatchObject({
+			value: "anthropic/claude-3-5-sonnet",
+		});
+		expect(entries.find((e) => e.role === "smol")).not.toHaveProperty("provider");
+		expect(entries.find((e) => e.role === "plan")).toMatchObject({
+			provider: "openai",
+			id: "gpt-4o",
+		});
+		expect(entries.find((e) => e.role === "web")).toMatchObject({ provider: "web", id: "exa" });
 	});
 
 	test("maps source to the persisted layer owning the assignment", () => {

@@ -26,7 +26,7 @@ import {
 	type ModalName,
 } from "../state";
 import {
-	openModelSettings,
+	openModelDialog,
 	runModelPresetCommand,
 	switchSessionModel,
 	type ModelPresetAction,
@@ -197,21 +197,21 @@ function resumeRoute(args: string): void {
 }
 
 /**
- * `/model [selector]`: bare opens Settings on the Model tab; a selector
+ * `/model [selector]`: bare opens the Models dialog on Roles; a selector
  * switches the session model (session-only, roles unchanged). The selector
  * grammar, fuzzy matching and `:level` suffix resolve server-side. Never
  * forwards to the agent as text.
  */
 export function modelDispatch(
 	args: string,
-): { kind: "settings" } | { kind: "select"; selector: string } {
+): { kind: "dialog" } | { kind: "select"; selector: string } {
 	const selector = args.trim();
-	return selector ? { kind: "select", selector } : { kind: "settings" };
+	return selector ? { kind: "select", selector } : { kind: "dialog" };
 }
 
 function modelRoute(args: string): void {
 	const d = modelDispatch(args);
-	if (d.kind === "settings") openModelSettings();
+	if (d.kind === "dialog") openModelDialog("roles");
 	else void switchSessionModel(d.selector);
 }
 

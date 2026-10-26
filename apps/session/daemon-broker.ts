@@ -1,4 +1,5 @@
 import type { Model } from "@oh-my-pi/pi-ai";
+import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import {
 	MODEL_ROLE_IDS,
 	getKnownRoleIds,
@@ -80,8 +81,24 @@ export interface DaemonBroker {
 /** Structural slice of the session the catalog builder needs (kept narrow for testability). */
 export interface ModelRoleCatalogContext {
 	settings: AgentSession["settings"];
+	/** Every available model of every kind: roles may name search/tts/judge models, not only chat ones. */
 	availableModels: Model[];
 	currentModel: Model | undefined;
+}
+
+/**
+ * Models role values resolve against: the session's chat models, which keep its
+ * `enabledModels` scope, plus every available model of another kind (search, tts,
+ * judge, ...). The registry's default availability is chat-only, so without the
+ * second part a role pointing at an authed `web/exa` would read as unavailable.
+ */
+export function roleCatalogModels(
+	session: Pick<AgentSession, "getAvailableModels" | "modelRegistry">,
+): Model[] {
+	return [
+		...session.getAvailableModels(),
+		...session.modelRegistry.getAvailable("all").filter((model) => modelKind(model) !== "chat"),
+	];
 }
 
 /**
@@ -110,6 +127,8 @@ export function buildModelRoleCatalog(
 		// Tag-first label parity with the TUI roles panel (model-hub.ts):
 		// built-ins carry an uppercase tag; custom roles leave it unset.
 		if (info.tag !== undefined) entry.tag = info.tag;
+		const configured = settings.getModelRole(role);
+		if (configured) entry.value = configured;
 		// The default role falls back to the active model when unassigned
 		// (same fallback the SDK's getRoleModelCycle uses).
 		const value =
@@ -166,7 +185,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			modelRoles: buildModelRoles(session),
 			modelRoleCatalog: buildModelRoleCatalog({
 				settings: session.settings,
-				availableModels: session.getAvailableModels(),
+				availableModels: roleCatalogModels(session),
 				currentModel: session.model,
 			}),
 			modelRoleStorage: cfgModelRoleStorage.get(session.settings),

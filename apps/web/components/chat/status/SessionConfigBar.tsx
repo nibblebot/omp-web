@@ -1,11 +1,59 @@
-import { Show, type Component } from "solid-js";
+import { createSignal, Show, type Component } from "solid-js";
 import { featureCommand } from "../../../features/registry";
-import { cycleModelPreset, openModelPicker, openThinkingPicker } from "../../../store/models";
+import { openModelDialog } from "../../../store/models";
 import { formatTokens, getContextUsageLevel } from "../../../usage/context";
+import { presetSegmentLabel } from "../../../usage/model-roles";
+import { currentThinkingSelector } from "../../../usage/model-search";
 import { isReady, isSessionChanging, setState, state } from "../../../state";
 import { ArrowDownIcon, ArrowUpIcon } from "../../ui/icons";
+import { ModelPresetPopover } from "./ModelPresetPopover";
 import { RetryBadge } from "./RetryBadge";
 import { StatusSegment } from "./StatusSegment";
+import { ThinkingLevelPopover } from "./ThinkingLevelPopover";
+
+/** The preset chip: opens the preset dropdown above it; the chip owns the dropdown's open state. */
+const PresetSegment: Component = () => {
+	const [anchor, setAnchor] = createSignal<HTMLElement>();
+	const [open, setOpen] = createSignal(false);
+	return (
+		<>
+			<StatusSegment
+				class="preset-segment"
+				ref={setAnchor}
+				popover={{ expanded: open() }}
+				onClick={() => setOpen(!open())}
+				title="Model presets"
+			>
+				{presetSegmentLabel(state.modelPresets)}
+			</StatusSegment>
+			<Show when={open() ? anchor() : undefined}>
+				{(el) => <ModelPresetPopover anchor={el()} onClose={() => setOpen(false)} />}
+			</Show>
+		</>
+	);
+};
+
+/** The thinking chip: opens the level dropdown above it; the chip owns the dropdown's open state. */
+const ThinkingSegment: Component = () => {
+	const [anchor, setAnchor] = createSignal<HTMLElement>();
+	const [open, setOpen] = createSignal(false);
+	return (
+		<>
+			<StatusSegment
+				class="thinking-segment"
+				ref={setAnchor}
+				popover={{ expanded: open() }}
+				onClick={() => setOpen(!open())}
+				title="Thinking level"
+			>
+				{currentThinkingSelector(state.autoThinking, state.thinkingLevel)}
+			</StatusSegment>
+			<Show when={open() ? anchor() : undefined}>
+				{(el) => <ThinkingLevelPopover anchor={el()} onClose={() => setOpen(false)} />}
+			</Show>
+		</>
+	);
+};
 
 const ContextSegment: Component = () => {
 	const usage = () => state.contextUsage;
@@ -89,31 +137,13 @@ export const SessionConfigBar: Component = () => (
 		<RetryBadge />
 		<StatusSegment
 			class="model-segment"
-			onClick={() => openModelPicker()}
-			title="Switch model (Alt+P). Session-only."
+			onClick={() => openModelDialog("roles")}
+			title="Models: roles, presets and all models (Alt+M)"
 		>
 			{state.model ? `${state.model.provider}/${state.model.id}` : "no model"}
 		</StatusSegment>
-		<Show when={(state.modelPresets?.names.length ?? 0) > 0}>
-			<StatusSegment
-				class="preset-segment"
-				onClick={() => void cycleModelPreset()}
-				title="Cycle model presets (/modelpreset)"
-			>
-				{state.modelPresets?.active ?? "preset"}
-			</StatusSegment>
-		</Show>
-		<StatusSegment
-			class="thinking-segment"
-			onClick={() => openThinkingPicker()}
-			onContextMenu={(e) => {
-				e.preventDefault();
-				openThinkingPicker();
-			}}
-			title="Thinking level (Shift+Tab cycles). Right-click or click to pick."
-		>
-			{state.autoThinking ? "auto" : (state.thinkingLevel ?? "inherit")}
-		</StatusSegment>
+		<PresetSegment />
+		<ThinkingSegment />
 		<span class="status-spacer" />
 		<ContextSegment />
 		<Show when={state.stats}>

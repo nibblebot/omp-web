@@ -12,6 +12,10 @@ export const StatusSegment: Component<{
 	active?: boolean;
 	readOnly?: boolean;
 	onClick?: () => void;
+	/** The button element, for a popover anchored to the segment. */
+	ref?: (el: HTMLButtonElement) => void;
+	/** Marks the segment as the trigger of an anchored popover; `expanded` reports whether it is open. */
+	popover?: { expanded: boolean };
 	onContextMenu?: (e: MouseEvent) => void;
 	children: JSX.Element;
 }> = (props) =>
@@ -28,6 +32,9 @@ export const StatusSegment: Component<{
 		<button
 			class={props.class ? `segment segment-button ${props.class}` : "segment segment-button"}
 			classList={{ active: !!props.active }}
+			ref={props.ref}
+			aria-haspopup={props.popover ? "dialog" : undefined}
+			aria-expanded={props.popover?.expanded}
 			data-level={props.dataLevel}
 			title={props.title}
 			aria-label={props.ariaLabel}

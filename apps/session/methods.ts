@@ -3,6 +3,8 @@ import { getBlobsDir } from "@oh-my-pi/pi-utils";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { getAvailableThemes, type Settings } from "@oh-my-pi/pi-coding-agent";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
@@ -705,20 +707,26 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			const { session } = entry;
 			await session.modelRegistry.awaitBackgroundRefresh();
 			const usable = new Set(
-				session.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`),
+				// "all": role assignments may name non-chat models (search, tts, ...), which the chat-only default hides.
+				session.modelRegistry.getAvailable("all").map((model) => `${model.provider}/${model.id}`),
 			);
 			const disabled = disabledProviderIds(session.settings);
-			return session.modelRegistry.getAll().map(({ provider, id, contextWindow, reasoning }) => {
+			return session.modelRegistry.getAll().map((model) => {
+				const { provider, id, contextWindow, reasoning } = model;
 				const locked: ModelLockReason | undefined = disabled.has(provider)
 					? "disabled"
 					: usable.has(`${provider}/${id}`)
 						? undefined
 						: "credentials";
+				// Same set the session derives for an active model, minus off/auto.
+				const thinkingEfforts = getSupportedEfforts(model);
 				return {
 					provider,
 					id,
 					contextWindow,
 					reasoning,
+					kind: modelKind(model),
+					...(thinkingEfforts.length > 0 ? { thinkingEfforts: [...thinkingEfforts] } : {}),
 					...(locked ? { locked } : {}),
 				};
 			});

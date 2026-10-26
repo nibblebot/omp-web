@@ -141,10 +141,10 @@ describe("advisor sheet actions follow real state", () => {
 		expect(html).toMatch(/>enable</);
 		expect(html).not.toMatch(/>disable</);
 		expect(html).not.toMatch(/stop advisories/);
-		expect(html).not.toMatch(/Settings (&gt;|>) Model/);
+		expect(html).not.toMatch(/Assign in Models dialog/);
 	});
 
-	test("disabled without an advisor role model: reason and Settings > Model link, no Enable", async () => {
+	test("disabled without an advisor role model: reason and Models dialog link, no Enable", async () => {
 		const html = await renderPanel({
 			configured: false,
 			active: false,
@@ -153,7 +153,7 @@ describe("advisor sheet actions follow real state", () => {
 		});
 		expect(html).not.toMatch(/>enable</);
 		expect(html).toMatch(/No model is assigned to the advisor role/);
-		expect(html).toMatch(/Settings (&gt;|>) Model/);
+		expect(html).toMatch(/Assign in Models dialog/);
 	});
 
 	test("running: Disable and Stop advisories, no Enable", async () => {
@@ -166,7 +166,7 @@ describe("advisor sheet actions follow real state", () => {
 		expect(html).not.toMatch(/>enable</);
 		expect(html).toMatch(/>disable</);
 		expect(html).toMatch(/>stop advisories</);
-		expect(html).not.toMatch(/Settings (&gt;|>) Model/);
+		expect(html).not.toMatch(/Assign in Models dialog/);
 	});
 
 	test("enabled without an advisor role model: reason, link and Disable; no Enable or Stop", async () => {
@@ -180,6 +180,6 @@ describe("advisor sheet actions follow real state", () => {
 		expect(html).not.toMatch(/stop advisories/);
 		expect(html).toMatch(/>disable</);
 		expect(html).toMatch(/No model is assigned to the advisor role/);
-		expect(html).toMatch(/Settings (&gt;|>) Model/);
+		expect(html).toMatch(/Assign in Models dialog/);
 	});
 });

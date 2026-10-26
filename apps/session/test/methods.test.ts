@@ -249,6 +249,39 @@ describe("getModelBrowser", () => {
 		expect(rows[1]!.locked).toBe("credentials");
 	});
 
+	test("carries each row's kind and marks a keyed non-chat model usable", async () => {
+		const chat = { provider: "anthropic", id: "opus", contextWindow: 1, reasoning: true };
+		const search = {
+			provider: "web",
+			id: "exa",
+			kind: "search",
+			contextWindow: 0,
+			reasoning: false,
+		};
+		const asked: unknown[] = [];
+		const entry = {
+			session: {
+				settings: Settings.isolated(),
+				modelRegistry: {
+					awaitBackgroundRefresh: async () => {},
+					getAll: () => [chat, search],
+					// Mirrors the registry: the chat-only default hides keyed non-chat models.
+					getAvailable: (kind: unknown = "chat") => {
+						asked.push(kind);
+						return kind === "all" ? [chat, search] : [chat];
+					},
+				},
+			},
+		} as unknown as SessionEntry;
+		const rows = (await methodsTable().getModelBrowser!(entry, [])) as Array<
+			Record<string, unknown>
+		>;
+		expect(asked).toEqual(["all"]);
+		expect(rows[0]!.kind).toBe("chat");
+		expect(rows[1]!.kind).toBe("search");
+		expect(rows[1]).not.toHaveProperty("locked");
+	});
+
 	test("answers a full registry inside one callback envelope", async () => {
 		// Full SDK rows with compat tables ran past the 1 MiB cap; the browser
 		// projects each row to provider/id/context/reasoning plus a lock code.
@@ -273,6 +306,158 @@ describe("getModelBrowser", () => {
 		const rows = (await methodsTable().getModelBrowser!(entry, [])) as unknown[];
 		expect(rows).toHaveLength(5000);
 		expect(JSON.stringify(rows).length).toBeLessThan(ENVELOPE_MAX_BYTES);
+	});
+});
+
+describe("getModelBrowser thinkingEfforts", () => {
+	test("lists the model's own efforts in SDK order for reasoning models only", async () => {
+		const reasoning = {
+			provider: "anthropic",
+			id: "opus",
+			contextWindow: 1,
+			reasoning: true,
+			thinking: { mode: "effort", efforts: ["low", "medium", "high", "xhigh"] },
+		};
+		const plain = { provider: "openai", id: "gpt", contextWindow: 1, reasoning: false };
+		// A non-reasoning model never offers efforts, even if stale metadata lists some.
+		const stale = {
+			provider: "openai",
+			id: "old",
+			contextWindow: 1,
+			reasoning: false,
+			thinking: { mode: "effort", efforts: ["low"] },
+		};
+		const entry = {
+			session: {
+				settings: Settings.isolated(),
+				modelRegistry: {
+					awaitBackgroundRefresh: async () => {},
+					getAll: () => [reasoning, plain, stale],
+					getAvailable: () => [reasoning, plain, stale],
+				},
+			},
+		} as unknown as SessionEntry;
+		const rows = (await methodsTable().getModelBrowser!(entry, [])) as Array<
+			Record<string, unknown>
+		>;
+		expect(rows[0]!.thinkingEfforts).toEqual(["low", "medium", "high", "xhigh"]);
+		expect(rows[1]).not.toHaveProperty("thinkingEfforts");
+		expect(rows[2]).not.toHaveProperty("thinkingEfforts");
+	});
+
+	test("every emitted effort is a level setModelRole accepts", async () => {
+		const efforts = ["minimal", "low", "medium", "high", "xhigh", "max"];
+		const model = {
+			provider: "a",
+			id: "m",
+			contextWindow: 1,
+			reasoning: true,
+			thinking: { mode: "effort", efforts },
+		};
+		const settings = Settings.isolated();
+		const entry = {
+			session: {
+				settings,
+				getAvailableModels: () => [model],
+				setModel: async () => ({ switched: true }),
+				setThinkingLevel: () => {},
+				getRoleModelCycle: () => undefined,
+				modelRegistry: {
+					awaitBackgroundRefresh: async () => {},
+					getAll: () => [model],
+					getAvailable: () => [model],
+				},
+			},
+		} as unknown as SessionEntry;
+		const rows = (await methodsTable().getModelBrowser!(entry, [])) as Array<{
+			thinkingEfforts?: string[];
+		}>;
+		expect(rows[0]!.thinkingEfforts).toEqual(efforts);
+		for (const level of rows[0]!.thinkingEfforts!) {
+			await methodsTable().setModelRole!(entry, ["smol", "a", "m", level]);
+			expect(settings.getModelRole("smol")).toBe(`a/m:${level}`);
+		}
+	});
+});
+
+describe("getModelPresets", () => {
+	test("lists contents with the owning layer and the SDK reason for a malformed preset", async () => {
+		const agentDir = tempDir("omp-presets-agent-");
+		const cwd = tempDir("omp-presets-cwd-");
+		writeFileSync(
+			join(agentDir, "config.yml"),
+			`modelRoles:
+  default: a/one
+defaultThinkingLevel: high
+modelPresets:
+  base:
+    modelRoles:
+      default: a/one
+      smol: a/small:low
+    defaultThinkingLevel: high
+  broken:
+    modelRoles: nope
+  shadowed:
+    modelRoles:
+      default: g/global
+`,
+		);
+		mkdirSync(join(cwd, ".omp"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".omp", "config.yml"),
+			`modelPresets:
+  team:
+    modelRoles:
+      default: p/proj
+  shadowed:
+    modelRoles:
+      default: p/project
+`,
+		);
+		const settings = await Settings.loadIsolated({ agentDir, cwd });
+		const entry = { session: { settings } } as unknown as SessionEntry;
+		const answer = (await methodsTable().getModelPresets!(entry, [])) as {
+			names: string[];
+			active?: string;
+			presets: Array<Record<string, unknown>>;
+		};
+		expect(answer.names).toEqual(["base", "broken", "shadowed", "team"]);
+		expect(answer.presets.map((p) => p.name)).toEqual(answer.names);
+		const byName = Object.fromEntries(answer.presets.map((p) => [p.name as string, p]));
+		expect(byName.base).toEqual({
+			name: "base",
+			source: "global",
+			modelRoles: { default: "a/one", smol: "a/small:low" },
+			defaultThinkingLevel: "high",
+		});
+		expect(byName.team).toEqual({
+			name: "team",
+			source: "project",
+			modelRoles: { default: "p/proj" },
+		});
+		expect(byName.shadowed).toMatchObject({
+			source: "project",
+			modelRoles: { default: "p/project" },
+		});
+		expect(byName.broken).toEqual({
+			name: "broken",
+			source: "global",
+			modelRoles: {},
+			invalid: "`modelRoles` is missing or not a mapping",
+		});
+	});
+
+	test("reports a runtime-layer preset as runtime", async () => {
+		const settings = Settings.isolated({
+			modelPresets: { live: { modelRoles: { default: "r/one" } } },
+		});
+		const entry = { session: { settings } } as unknown as SessionEntry;
+		const answer = (await methodsTable().getModelPresets!(entry, [])) as {
+			presets: Array<Record<string, unknown>>;
+		};
+		expect(answer.presets).toEqual([
+			{ name: "live", source: "runtime", modelRoles: { default: "r/one" } },
+		]);
 	});
 });
 

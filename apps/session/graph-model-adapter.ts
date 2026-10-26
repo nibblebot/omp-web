@@ -5,12 +5,37 @@ import {
 	deleteModelPreset,
 	describeShadowedRoles,
 	formatModelPresetSwitch,
+	getModelPreset,
 	getModelPresetNames,
 	modelPresetSavedMessage,
 	saveModelPreset,
 } from "@oh-my-pi/pi-coding-agent/config/model-presets";
+import type { Settings } from "@oh-my-pi/pi-coding-agent";
+import type { ModelPresetDetail, ModelPresetsAnswer } from "#lib/wire/protocol";
 import { activeModelPreset, applyPinnedModelPreset } from "./model-role-pin";
 import type { SessionEntry } from "./session-entry";
+
+function presetDetail(settings: Settings, name: string): ModelPresetDetail {
+	// getModelPresetNames only lists names with an owning layer, so a miss is a bug.
+	const owned = settings.getOwnedModelPreset(name);
+	if (!owned) throw new Error(`Model preset "${name}" is listed but has no owning layer`);
+	const lookup = getModelPreset(settings, name);
+	switch (lookup.kind) {
+		case "found":
+			return {
+				name,
+				source: owned.source,
+				modelRoles: { ...lookup.preset.modelRoles },
+				...(lookup.preset.defaultThinkingLevel !== undefined
+					? { defaultThinkingLevel: lookup.preset.defaultThinkingLevel }
+					: {}),
+			};
+		case "invalid":
+			return { name, source: owned.source, modelRoles: {}, invalid: lookup.reason };
+		case "missing":
+			throw new Error(`Model preset "${name}" is listed but could not be read`);
+	}
+}
 
 export interface GraphQuery {
 	cursor?: string;
@@ -251,10 +276,13 @@ export function createGraphModelHandlers(deps: {
 			session.resumeAfterAskReanswer();
 			return { resumed: true };
 		},
-		getModelPresets(entry: SessionEntry) {
+		getModelPresets(entry: SessionEntry): ModelPresetsAnswer {
+			const { settings } = entry.session;
+			const names = getModelPresetNames(settings);
 			return {
-				names: getModelPresetNames(entry.session.settings),
-				active: activeModelPreset(entry.session.settings),
+				names,
+				active: activeModelPreset(settings),
+				presets: names.map((name) => presetDetail(settings, name)),
 			};
 		},
 		saveModelPreset(entry: SessionEntry, name: string) {

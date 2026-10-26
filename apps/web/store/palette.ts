@@ -21,7 +21,7 @@ import { openActivities } from "./activities";
 import { openShareSheet } from "./collab";
 import { openIntegrations } from "./integrations";
 import { setPromptInsert } from "./chat";
-import { openModelPicker, recentModels, switchSessionModel } from "./models";
+import { openModelDialog, recentModels, switchSessionModel } from "./models";
 import { openAddProject, openNewWorkspace } from "./projects";
 import { chooseResumeTarget, searchAllProjectSessions, sessionRowsFromResume } from "./resume";
 import { switchToSession } from "./roster";
@@ -118,7 +118,7 @@ export function runPaletteItem(item: PaletteItem): void {
 			void switchSessionModel(action.selector);
 			return;
 		case "model-picker":
-			openModelPicker();
+			openModelDialog("roles");
 			return;
 		case "open":
 			if (action.target === "add-project") {

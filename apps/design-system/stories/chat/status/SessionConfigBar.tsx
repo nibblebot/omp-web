@@ -33,9 +33,16 @@ export default defineStory({
 			render: () => <SessionConfigBar />,
 		},
 		{
-			name: "Model presets",
-			description: "Presets saved: the preset chip shows the active one; click cycles.",
+			name: "Active preset",
+			description:
+				"Presets saved: the preset chip shows the active one; click opens the preset dropdown.",
 			seed: { modelPresets: { names: ["review-heavy", "fast"], active: "review-heavy" } },
+			render: () => <SessionConfigBar />,
+		},
+		{
+			name: "Custom roles",
+			description: "Presets exist but the current roles match none: the chip reads custom.",
+			seed: { modelPresets: { names: ["review-heavy", "fast"] } },
 			render: () => <SessionConfigBar />,
 		},
 		{

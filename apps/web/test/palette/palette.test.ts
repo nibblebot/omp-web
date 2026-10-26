@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { APPEARANCE_MENU_TAB } from "../../prefs/settings";
 import {
 	flattenPalette,
+	modelItems,
 	openItems,
 	searchPalette,
 	settingItems,
 	type PaletteItem,
 	type PaletteSources,
 } from "../../palette/palette";
+import type { ModelBrowserEntry } from "#lib/wire/protocol";
 
 const sourcesWith = (open: PaletteItem[]): PaletteSources => ({
 	commands: null,
@@ -159,5 +161,31 @@ describe("settingItems", () => {
 	test("Appearance is an Open entry that a query finds", () => {
 		const open = openItems({ debugEnabled: false, pluginsEnabled: false, projects: [] });
 		expect(labels(sourcesWith(open), "theme")).toContain("Appearance");
+	});
+});
+
+describe("modelItems", () => {
+	const row = (
+		provider: string,
+		id: string,
+		kind: ModelBrowserEntry["kind"],
+	): ModelBrowserEntry => ({
+		provider,
+		id,
+		kind,
+		contextWindow: 1,
+		reasoning: false,
+	});
+
+	test("offers only chat rows for session switching", () => {
+		const catalog = [
+			row("anthropic", "opus", "chat"),
+			row("web", "exa", "search"),
+			row("local", "kokoro", "tts"),
+		];
+		const ids = modelItems(catalog, ["web/exa", "anthropic/opus"], undefined, true).map(
+			(item) => item.id,
+		);
+		expect(ids).toEqual(["model:picker", "model:anthropic/opus"]);
 	});
 });

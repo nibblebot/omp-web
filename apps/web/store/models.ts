@@ -1,13 +1,7 @@
 import { createSignal } from "solid-js";
-import type { ModelBrowserEntry } from "#lib/wire/protocol";
+import type { ModelBrowserEntry, ModelPresetsAnswer } from "#lib/wire/protocol";
 import { call, pushNotice, setState, state } from "../state";
-
-/** Persisted model preset (`config.yml` `modelPresets`). */
-export interface ModelPreset {
-	name: string;
-	modelRoles: Record<string, string>;
-	defaultThinkingLevel?: string;
-}
+import type { ModelDialogTab } from "../state";
 
 export interface ModelMention {
 	agent: string;
@@ -58,8 +52,8 @@ export function expandTagsForEdit(text: string, mentions: ModelMention[]): strin
 	});
 }
 
-/** Session-only model switching, Task model override, presets, thinking
- * picks and Settings > Model role writes. Every action reports its outcome
+/** Models dialog state, session-only model switching, Task model override,
+ * presets, thinking picks and role writes. Every action reports its outcome
  * as a transcript notice; failures carry the server's real error text. */
 
 const RECENT_KEY = "omp-web.recentModels";
@@ -101,14 +95,33 @@ function errorText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
-/** Open the quick model picker; `task` starts it in Task-model mode. */
-export function openModelPicker(task = false): void {
-	setState({ modelPickerTask: task, modal: "model" });
+/** Open the Models dialog on `tab`. The Roles tab selects `role` (default: `default`). */
+export function openModelDialog(tab: ModelDialogTab, role?: string): void {
+	setState({
+		modal: "model",
+		modelDialogTab: tab,
+		modelDialogRole: tab === "roles" ? (role ?? "default") : undefined,
+		modelPickerTask: false,
+	});
 	void loadModelBrowser();
+	void loadModelPresets();
 }
 
-export function closeModelPicker(): void {
+export function closeModelDialog(): void {
 	setState("modal", null);
+}
+
+export function selectModelDialogTab(tab: ModelDialogTab): void {
+	setState("modelDialogTab", tab);
+}
+
+export function selectModelDialogRole(role: string): void {
+	setState("modelDialogRole", role);
+}
+
+/** All models tab: pick the Task subagent model instead of switching the session. */
+export function setModelPickerTask(on: boolean): void {
+	setState("modelPickerTask", on);
 }
 
 export async function loadModelBrowser(): Promise<void> {
@@ -184,22 +197,6 @@ export async function applyModelPreset(name: string): Promise<boolean> {
 	}
 }
 
-/** Step to the next (or previous) configured preset after the active one. */
-export async function cycleModelPreset(backward = false): Promise<boolean> {
-	const names = state.modelPresets?.names ?? [];
-	if (names.length === 0) {
-		pushNotice("info", "No model presets configured.");
-		return false;
-	}
-	const active = state.modelPresets?.active;
-	const at = active ? names.indexOf(active) : -1;
-	const next =
-		at < 0
-			? names[backward ? names.length - 1 : 0]
-			: names[(at + (backward ? -1 : 1) + names.length) % names.length];
-	return applyModelPreset(next ?? names[0]);
-}
-
 export type ModelPresetAction = "list" | "save" | "apply" | "delete";
 
 /** `/modelpreset [list|save|apply|delete] [name]`: every outcome is a notice. */
@@ -243,12 +240,71 @@ export async function runModelPresetCommand(
 	}
 }
 
-export function openThinkingPicker(): void {
-	setState("modal", "thinking");
+/** Preset details for the Models dialog Presets tab. */
+export async function loadModelPresets(): Promise<void> {
+	try {
+		const data = (await call("getModelPresets", [])) as ModelPresetsAnswer;
+		setState("modelPresetDetails", data.presets);
+	} catch (err) {
+		pushNotice("error", `Could not load presets: ${errorText(err)}`);
+	}
 }
 
-export function closeThinkingPicker(): void {
-	setState("modal", null);
+/** Mirror of the SDK's `isValidModelPresetName`. */
+const PRESET_NAME_RE = /^[a-zA-Z][\w-]*$/;
+
+/** Inline validation for a new preset name; undefined when acceptable. */
+export function presetNameError(name: string, existing: readonly string[]): string | undefined {
+	if (name === "") return "Enter a name";
+	if (!PRESET_NAME_RE.test(name)) return "Use a letter, then letters, digits, - or _";
+	if (existing.includes(name)) return `A preset named "${name}" already exists`;
+	return undefined;
+}
+
+/** Snapshot the current roles under a new name (server also overwrites a same-name global preset).
+ * Resolves to undefined on success, else the server's error text (also posted as a notice). */
+export async function saveModelPreset(name: string): Promise<string | undefined> {
+	try {
+		const data = (await call("saveModelPreset", [name])) as { message: string };
+		pushNotice("info", data.message);
+		await loadModelPresets();
+		return undefined;
+	} catch (err) {
+		const text = errorText(err);
+		pushNotice("error", `Preset save failed: ${text}`);
+		return text;
+	}
+}
+
+/** Overwrite an existing global preset with the current roles. */
+export async function updateModelPreset(name: string): Promise<boolean> {
+	try {
+		await call("saveModelPreset", [name]);
+		pushNotice("info", `Updated preset "${name}" from current roles.`);
+		await loadModelPresets();
+		return true;
+	} catch (err) {
+		pushNotice("error", `Preset update failed: ${errorText(err)}`);
+		return false;
+	}
+}
+
+/** True only when the preset was deleted; project/overlay and missing presets warn. */
+export async function deleteModelPreset(name: string): Promise<boolean> {
+	try {
+		const data = (await call("deleteModelPreset", [name])) as {
+			result: "deleted" | "project" | "missing";
+		};
+		if (data.result === "missing") pushNotice("warning", `No preset named "${name}".`);
+		else if (data.result === "project") {
+			pushNotice("warning", `Preset "${name}" lives in a project/overlay config; remove it there.`);
+		} else pushNotice("info", `Deleted preset "${name}".`);
+		await loadModelPresets();
+		return data.result === "deleted";
+	} catch (err) {
+		pushNotice("error", `Preset delete failed: ${errorText(err)}`);
+		return false;
+	}
 }
 
 /** Set the session thinking level. The server rejects unsupported levels;
@@ -264,12 +320,7 @@ export async function setThinkingSelector(level: string): Promise<boolean> {
 	}
 }
 
-/** `/model` bare: open Settings on the Model tab (the role editor). */
-export function openModelSettings(): void {
-	setState({ settingsTab: "model", modal: "settings" });
-}
-
-/** Read and clear the Settings tab requested by `openModelSettings`. */
+/** Read and clear the Settings tab requested through `state.settingsTab`. */
 export function consumeSettingsTab(): string | null {
 	const tab = state.settingsTab;
 	if (tab !== null) setState("settingsTab", null);

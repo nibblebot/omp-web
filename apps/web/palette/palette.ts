@@ -445,8 +445,10 @@ export function settingItems(
 }
 
 /**
- * "Switch model…" plus model rows: recents always, the whole usable catalog
- * when `all` (a query is typed). The current model is never offered; locked
+ * "Edit model roles…" (opens the Models dialog on Roles) plus session-switch
+ * rows: recents always, the whole usable chat catalog when `all` (a query is
+ * typed). Only `kind === "chat"` rows are offered: other kinds fill roles but
+ * cannot be the session model. The current model is never offered; locked
  * models are offered only when they are in the recents list and the catalog
  * is unknown (`catalog` null).
  */
@@ -460,16 +462,17 @@ export function modelItems(
 		{
 			id: "model:picker",
 			group: "Models",
-			label: "Switch model…",
-			detail: "Pick from every available model",
-			hint: "Alt+P",
+			label: "Edit model roles…",
+			detail: "Open the Models dialog on Roles",
+			hint: "Alt+M",
 			action: { kind: "model-picker" },
 			keywords: ["change", "llm", "provider"],
 		},
 	];
 	const usable = new Set<string>();
 	for (const entry of catalog ?? [])
-		if (entry.locked === undefined) usable.add(`${entry.provider}/${entry.id}`);
+		if (entry.locked === undefined && entry.kind === "chat")
+			usable.add(`${entry.provider}/${entry.id}`);
 	const seen = new Set<string>();
 	const push = (selector: string, isRecent: boolean): void => {
 		if (selector === current || seen.has(selector)) return;

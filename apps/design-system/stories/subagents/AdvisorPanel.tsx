@@ -41,7 +41,7 @@ export default defineStory({
 		{
 			name: "No advisor model",
 			description:
-				"Enable is withheld: the advisor role has no available model, so the panel links to Settings > Model.",
+				"Enable is withheld: the advisor role has no available model, so the panel links to the Models dialog.",
 			seed: () =>
 				seedSubagents({
 					advisorGetStatus: (args) =>

@@ -1,5 +1,5 @@
 import { createResource, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
-import { openModelSettings } from "../../store/models";
+import { openModelDialog } from "../../store/models";
 import { pushNotice } from "../../state";
 import {
 	getAdvisorHistory,
@@ -116,8 +116,8 @@ export const AdvisorPanel: Component = () => {
 								<Show when={actions.noModel}>
 									<div class="msg-notice">
 										No model is assigned to the advisor role.{" "}
-										<button type="button" onClick={() => openModelSettings()}>
-											{"Settings > Model"}
+										<button type="button" onClick={() => openModelDialog("roles", "advisor")}>
+											{"Assign in Models dialog"}
 										</button>
 									</div>
 								</Show>

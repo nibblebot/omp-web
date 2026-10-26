@@ -1,0 +1,395 @@
+/* Models dialog (ModelDialog.tsx and its tabs). Reuses picker-chip, picker-detail,
+   picker-filter, picker-back, picker-row-action, settings-control-btn and
+   settings-select from the shared stylesheets. Presets and Roles are a sidebar
+   plus a detail pane; below 768px the sidebar fills the dialog and the detail
+   replaces it (data-pane on .model-dialog-split), with a Back button. */
+
+/* The wide Modal has a fixed height so the sidebar, the detail and the model list scroll inside it. */
+.modal.model-dialog {
+	display: flex;
+	flex-direction: column;
+	height: min(720px, 80dvh);
+	overflow: hidden;
+}
+/* The tab bar scrolls sideways (overflow-x), which lets a flex column shrink it to nothing. */
+.modal.model-dialog .ui-tabs {
+	flex: none;
+}
+.model-dialog-panel {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-height: 0;
+}
+.model-dialog-split {
+	display: grid;
+	grid-template-columns: minmax(220px, 360px) minmax(0, 1fr);
+	flex: 1 1 auto;
+	gap: var(--space-5);
+	min-height: 0;
+}
+
+/* Sidebar */
+.model-dialog-side {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	min-height: 0;
+	padding-right: var(--space-4);
+	border-right: 1px solid var(--border);
+}
+.model-dialog-list {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-height: 0;
+	margin: 0;
+	padding: 0;
+	overflow-y: auto;
+	list-style: none;
+}
+.model-dialog-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-1);
+	border: 1px solid transparent;
+	border-radius: var(--r-md);
+	transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.model-dialog-row:hover {
+	background: var(--hover);
+}
+.model-dialog-row.selected {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+}
+.model-dialog-row.hidden {
+	opacity: 0.6;
+}
+.model-dialog-row-main {
+	display: flex;
+	flex: 1 1 auto;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-1) var(--space-3);
+	min-width: 0;
+	padding: var(--space-1) var(--space-3);
+	border: 0;
+	background: none;
+	color: var(--text);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.model-dialog-row-name {
+	font-size: var(--fs-lg);
+	overflow-wrap: anywhere;
+}
+/* Roles sidebar: one line per role, with TAG, model and an explicit thinking level in
+   three columns shared by every row (subgrid), so they line up down the list. A long
+   custom role name caps its column and ellipsizes; the model ellipsizes too. Roles
+   that inherit their thinking level leave the last cell empty. */
+.model-dialog-list.model-dialog-roles {
+	display: grid;
+	grid-template-columns: fit-content(40%) minmax(0, 1fr) max-content;
+	align-content: start;
+	column-gap: var(--space-3);
+}
+.model-dialog-roles > .model-dialog-row,
+.model-dialog-roles .model-dialog-role-main {
+	display: grid;
+	grid-column: 1 / -1;
+	grid-template-columns: subgrid;
+	column-gap: var(--space-3);
+}
+.model-dialog-role-label {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-width: 0;
+}
+.model-dialog-role-label .model-dialog-row-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.model-dialog-role-label .picker-chip {
+	flex: none;
+}
+.model-dialog-row-model {
+	flex: 1 1 0;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.model-dialog-row-thinking {
+	white-space: nowrap;
+}
+.model-dialog-warn {
+	display: inline-flex;
+	color: var(--warning);
+}
+.model-dialog-icon-btn {
+	display: inline-grid;
+	flex: none;
+	place-items: center;
+	padding: var(--space-2);
+	border: 0;
+	background: none;
+	color: var(--muted-2);
+	cursor: pointer;
+}
+.model-dialog-icon-btn:hover:not(:disabled) {
+	color: var(--error);
+}
+.model-dialog-icon-btn:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+.model-dialog-tip {
+	display: inline-flex;
+}
+
+/* Inline confirm (delete a preset, overwrite a preset): replaces the control, never a stacked modal. */
+.model-dialog-confirm {
+	display: flex;
+	flex: 1 1 auto;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2) var(--space-3);
+	min-width: 0;
+	padding: var(--space-2) var(--space-3);
+}
+.model-dialog-confirm-text {
+	flex: 1 1 auto;
+	overflow-wrap: anywhere;
+}
+.model-dialog-danger {
+	color: var(--error-text);
+	background: var(--error-bg);
+}
+
+/* Inline save field */
+.model-dialog-side-foot {
+	flex: none;
+}
+.model-dialog-save-open {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.model-dialog-save {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.model-dialog-save .picker-filter {
+	margin-bottom: 0;
+}
+.model-dialog-error {
+	min-height: 1.2em;
+	margin: 0;
+	color: var(--error-text);
+	font-size: var(--fs-sm);
+}
+.model-dialog-error:empty {
+	display: none;
+}
+
+/* Detail pane */
+.model-dialog-detail {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+	min-width: 0;
+	min-height: 0;
+	overflow-y: auto;
+}
+.model-dialog-detail > p {
+	margin: 0;
+}
+.model-dialog-detail-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+}
+.model-dialog-detail-title {
+	margin: 0;
+	font-size: var(--fs-xl);
+	overflow-wrap: anywhere;
+}
+.model-dialog-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+}
+.model-dialog-primary:not(:disabled) {
+	background: var(--accent-dim);
+	border: 1px solid var(--accent-border);
+	color: var(--text);
+}
+.model-dialog-primary:disabled {
+	opacity: 0.7;
+	cursor: default;
+}
+.model-dialog-field {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+.model-dialog-back {
+	display: none;
+	align-items: center;
+	gap: var(--space-2);
+	align-self: flex-start;
+}
+.model-dialog-empty {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+.model-dialog-empty-title {
+	margin: 0;
+	font-size: var(--fs-lg);
+}
+.model-dialog-invalid {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--space-3);
+	margin: 0;
+	padding: var(--space-4) var(--space-5);
+	color: var(--warning);
+	background: var(--warning-bg);
+	border: 1px solid var(--warning-border);
+	border-radius: var(--r-lg);
+	overflow-wrap: anywhere;
+}
+
+/* Preset roles (read-only) */
+.model-dialog-role-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.model-dialog-role-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--space-2) var(--space-4);
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+}
+.model-dialog-role-name {
+	min-width: 4.5rem;
+	font-size: var(--fs-lg);
+}
+.model-dialog-role-model {
+	font-family: var(--font-mono);
+	font-size: var(--fs-md);
+	overflow-wrap: anywhere;
+}
+.model-dialog-diff {
+	margin-left: auto;
+	color: var(--warning);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	overflow-wrap: anywhere;
+}
+
+/* Fill the rest of a pane with the model list. */
+.model-dialog-grow {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-height: 12rem;
+}
+.model-dialog-grow .model-search {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-height: 0;
+}
+.model-dialog-grow .model-picker-list {
+	flex: 1 1 auto;
+	max-height: none;
+	min-height: 0;
+}
+/* Spacer padding changes as the window moves; browser scroll anchoring would answer
+   each change by shifting scrollTop, which moves the window again. */
+.model-picker-list {
+	overflow-anchor: none;
+}
+/* ModelSearchList mounts only the rows near its viewport (padding stands in for the
+   rest), so every row is one line at the same height. The model id keeps its width;
+   a trailing lock reason takes only the space left and truncates first. */
+.model-picker-window {
+	display: flex;
+	flex: none;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+.model-picker-list .model-row {
+	flex-wrap: nowrap;
+	white-space: nowrap;
+	overflow: hidden;
+}
+.model-picker-list .model-row > * {
+	flex: none;
+}
+.model-picker-list .model-row > .picker-label {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.model-picker-list .model-row > .picker-detail:last-child {
+	flex: 1 1 0;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.model-dialog-all {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: var(--space-3);
+	min-height: 0;
+}
+.model-dialog-all > p {
+	margin: 0;
+}
+
+/* Narrow: the dialog fills the viewport and each pane replaces the other. */
+@media (max-width: 767px) {
+	.modal.model-dialog {
+		width: 100vw;
+		min-width: 0;
+		height: 100dvh;
+		max-height: none;
+		border-radius: 0;
+		border: none;
+	}
+	.model-dialog-split {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.model-dialog-side {
+		padding-right: 0;
+		border-right: 0;
+	}
+	.model-dialog-split[data-pane="list"] > .model-dialog-detail,
+	.model-dialog-split[data-pane="detail"] > .model-dialog-side {
+		display: none;
+	}
+	.model-dialog-back {
+		display: inline-flex;
+	}
+}
