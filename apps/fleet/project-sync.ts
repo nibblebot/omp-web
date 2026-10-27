@@ -7,8 +7,10 @@
  * project is a git repo (its directory has a `.git`) is in-memory state in the
  * registry (`isProjectGit`, reported as `RegisteredProject.git === false`):
  * computed at boot, then kept by per-project watchers (non-recursive fs.watch
- * on the project directory reacting only to `.git`, and for git projects on
- * `.git/worktrees` and `.git` entries named `worktrees`). Events debounce per
+ * on the project directory reacting only to `.git` and to the directory
+ * itself vanishing or being replaced, and for git projects on `.git/worktrees`,
+ * each `.git/worktrees/<name>` (lock/unlock/move) and `.git` entries named
+ * `worktrees`). Events debounce per
  * project, then one project sync runs: a `.git` that appeared or vanished
  * flips the project's git state (a vanished `.git` is NOT missing), a
  * vanished directory marks the project missing, and a git project runs one
@@ -17,7 +19,9 @@
  * cannot start or errors falls back to a 60s poll of the same sync.
  * Non-git projects never run git: they only need their directory and a main
  * row. Their linked worktree rows (left over from a `.git` that was deleted)
- * are evicted once asleep; a running one stays until it stops.
+ * are evicted once asleep; a running one stays until it stops. Every pass
+ * also evicts asleep worktree rows whose directory no longer exists (an
+ * existsSync each, no git). A project's main row is never evicted.
  *
  * Per row (startGitStatePolling) it keeps branch, dirty counts, the detached
  * short sha, and the last-session-file title fresh for the roster. Rows that
@@ -28,7 +32,7 @@
  * close() stops the poll and every watcher; it never touches sessions.
  */
 
-import { existsSync, statSync, watch, type FSWatcher } from "node:fs";
+import { existsSync, readdirSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, join } from "node:path";
 import type { RegisteredProject } from "#lib/wire/protocol";
 import { hasGitEntry, probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
@@ -53,14 +57,46 @@ const FALLBACK_POLL_MS = 60_000;
 /** Max git probes in flight during one sync pass (rows probe in parallel). */
 const SYNC_PROBE_CONCURRENCY = 4;
 
+/**
+ * Opens a non-recursive watch on `path` (`filename` is null when the platform
+ * does not report one). ProjectSync defaults to fs.watch; tests inject a
+ * recording factory to observe which handles are opened and closed.
+ */
+export type WatchFactory = (
+	path: string,
+	listener: (event: string, filename: string | null) => void,
+) => FSWatcher;
+
+const fsWatch: WatchFactory = (path, listener) => watch(path, { persistent: false }, listener);
+
+/** `dev:inode` of a path, or null when it cannot be stat'ed (gone). */
+function dirIdentity(path: string): string | null {
+	try {
+		const stat = statSync(path);
+		return `${stat.dev}:${stat.ino}`;
+	} catch {
+		return null;
+	}
+}
+
+/** A path that vanished between listing and opening it. */
+function isGone(err: unknown): boolean {
+	const code = (err as NodeJS.ErrnoException).code;
+	return code === "ENOENT" || code === "ENOTDIR";
+}
+
 /** Per-project watcher state (all handles are null while the project is not watched). */
 interface ProjectWatch {
-	/** Directory watch: reacts to `.git` and to the directory itself disappearing. */
+	/** Directory watch: reacts to `.git` and to the directory itself disappearing or being replaced. */
 	dir: FSWatcher | null;
+	/** Identity (`dev:inode`) of the directory `dir` was armed on; a different one means the watchers sit on a dead inode. */
+	dirId: string | null;
 	/** `.git` watch (git projects): reacts to the `worktrees` entry only. */
 	gitDir: FSWatcher | null;
 	/** `.git/worktrees` watch (git projects, while that directory exists): any entry. */
 	worktrees: FSWatcher | null;
+	/** One watch per `.git/worktrees/<name>`: reacts to lock/unlock (`locked`) and move (`gitdir`). */
+	worktreeEntries: FSWatcher[];
 	/** Pending debounce timer. */
 	debounce: ReturnType<typeof setTimeout> | null;
 	/** Fallback poll (watchers failed or the directory is gone). */
@@ -160,14 +196,19 @@ export class ProjectSync {
 	/** Lifecycle-event hook (server.ts wires it to the fleet event ring). */
 	#onEvent: ((level: FleetLogLevel, message: string, workspaceId?: string) => void) | undefined;
 	/**
-	 * Worktree-vanished hook: fired during git-state polling when a tagged
-	 * worktree's cwd no longer exists on disk (probe failed AND the
-	 * directory is gone). Detection only; eviction orchestration
-	 * (prune/drop, registry.remove, roster broadcast, toast) is the caller's
-	 * job. At most meaningful once per entry: the server dedups in-flight
-	 * evictions and the entry is gone from the registry after the first.
+	 * Worktree-vanished hook: fired for a tagged, non-clone, asleep worktree
+	 * row that is stale: its cwd no longer exists on disk (swept on every
+	 * pass, so `git worktree remove` or `rm -rf` outside omp-web is noticed
+	 * without a probe), or its project lost `.git` (orphan sweep). A running
+	 * row is only reported by git-state polling, when its probe failed AND
+	 * its cwd is gone. A project's main row is never reported. Detection
+	 * only; eviction orchestration (prune/drop, registry.remove, roster
+	 * broadcast, toast) is the caller's job. At most meaningful once per
+	 * entry: the server dedups in-flight evictions and the entry is gone
+	 * from the registry after the first.
 	 */
 	#onWorktreeRemoved: ((entry: RegistryEntry) => void) | undefined;
+	#watch: WatchFactory;
 
 	constructor(
 		registry: Registry,
@@ -175,22 +216,29 @@ export class ProjectSync {
 		opts?: {
 			onEvent?: (level: FleetLogLevel, message: string, workspaceId?: string) => void;
 			onWorktreeRemoved?: (entry: RegistryEntry) => void;
+			/** Watch opener (default fs.watch); tests inject a recorder. */
+			watch?: WatchFactory;
 		},
 	) {
 		this.#registry = registry;
 		this.#host = host;
 		this.#onEvent = opts?.onEvent;
 		this.#onWorktreeRemoved = opts?.onWorktreeRemoved;
+		this.#watch = opts?.watch ?? fsWatch;
 	}
 
 	/**
 	 * Backfill worktreeOf on local entries registered before spawn-time
 	 * tagging existed (fired once at server start). An unresolvable cwd
-	 * leaves the entry untouched; entries removed mid-scan are skipped.
+	 * leaves the entry untouched; entries removed mid-scan are skipped. A
+	 * project's own directory is its main row and stays untagged even when it
+	 * sits inside another repo (a plain folder under a git repo).
 	 */
 	async backfillWorktrees(): Promise<void> {
+		const projectPaths = new Set(this.#registry.projects().map((project) => project.path));
 		for (const entry of this.#registry.list()) {
 			if (entry.worktreeOf !== undefined || entry.cwd === "") continue;
+			if (projectPaths.has(realpathOf(entry.cwd))) continue;
 			const worktreeOf = await resolveWorktreeOf(entry.cwd);
 			if (worktreeOf !== undefined && this.#registry.get(entry.workspaceId)) {
 				this.#registry.update(entry.workspaceId, { worktreeOf });
@@ -296,7 +344,7 @@ export class ProjectSync {
 		for (const project of this.#registry.projects()) {
 			if (full || due.has(project.projectId)) await this.#syncProject(project, realpaths);
 		}
-		this.#evictOrphanedWorktrees();
+		this.#evictStaleWorktrees(realpaths);
 		const now = Date.now();
 		const probes = this.#registry.list().filter((entry) => this.#probeDue(entry));
 		for (const entry of probes) this.#lastProbeAt.set(entry.workspaceId, now);
@@ -336,7 +384,11 @@ export class ProjectSync {
 		const git = hasGitEntry(project.path);
 		const flipped = git !== this.#registry.isProjectGit(projectId);
 		if (flipped) this.#registry.setProjectGit(projectId, git);
-		if (watched && (flipped || watched.gitEvent || watched.dir === null)) {
+		// The directory was replaced (deleted and recreated, or swapped by a rename):
+		// the watchers sit on the old inode and would never fire again.
+		const id = dirIdentity(project.path);
+		const replaced = watched?.dirId != null && id !== null && id !== watched.dirId;
+		if (watched && (flipped || watched.gitEvent || watched.dir === null || replaced)) {
 			watched.gitEvent = false;
 			this.#rearmWatchers(project, watched);
 		}
@@ -388,17 +440,27 @@ export class ProjectSync {
 	}
 
 	/**
-	 * Linked worktree rows of a project that lost its `.git` are stale: their git
-	 * metadata went with it, so they never come back. Asleep ones are evicted
-	 * through onWorktreeRemoved (transcripts kept); a running one stays until it
-	 * stops, and the next pass evicts it. In-memory only, no filesystem access.
+	 * Stale worktree rows, reported through onWorktreeRemoved (transcripts
+	 * kept; the caller evicts). Only asleep, tagged, non-clone rows qualify; a
+	 * running one stays until it stops (its probe reports a vanished cwd), and
+	 * the next pass evicts it. A row is stale when
+	 * - its cwd no longer exists (`git worktree remove`, or `rm -rf`, outside
+	 *   omp-web; one existsSync per row, no git), or
+	 * - its project lost `.git`: the git metadata went with it, so the
+	 *   worktree never comes back.
+	 * A row at the project's own directory is the main row and is never
+	 * evicted, however it is tagged.
 	 */
-	#evictOrphanedWorktrees(): void {
+	#evictStaleWorktrees(realpaths: Map<string, string>): void {
 		if (!this.#onWorktreeRemoved) return;
 		for (const entry of this.#registry.list()) {
 			if (entry.worktreeOf === undefined || entry.workspace?.kind === "clone") continue;
-			if (entry.status !== "asleep" || entry.projectId === undefined) continue;
-			if (this.#registry.isProjectGit(entry.projectId)) continue;
+			if (entry.status !== "asleep" || entry.cwd === "") continue;
+			const orphaned =
+				entry.projectId !== undefined && !this.#registry.isProjectGit(entry.projectId);
+			if (!orphaned && existsSync(entry.cwd)) continue;
+			const project = this.#registry.projects().find((p) => p.projectId === entry.projectId);
+			if (project !== undefined && realpathOf(entry.cwd, realpaths) === project.path) continue;
 			this.#onWorktreeRemoved(entry);
 		}
 	}
@@ -430,8 +492,10 @@ export class ProjectSync {
 			if (this.#watches.has(project.projectId)) continue;
 			const watchState: ProjectWatch = {
 				dir: null,
+				dirId: null,
 				gitDir: null,
 				worktrees: null,
+				worktreeEntries: [],
 				debounce: null,
 				poll: null,
 				gitEvent: false,
@@ -446,27 +510,33 @@ export class ProjectSync {
 
 	/**
 	 * Arm the project's watchers for its current git state: the directory
-	 * watch always, the `.git` and `.git/worktrees` watches for a git project.
-	 * Any failure (inotify limit, network fs, `.git` not a directory, directory
-	 * gone) leaves the project on the fallback poll; the reason is logged once.
+	 * watch always, the `.git`, `.git/worktrees` and per-worktree watches for
+	 * a git project. Any failure (inotify limit, network fs, `.git` not a
+	 * directory, directory gone) leaves the project on the fallback poll; the
+	 * reason is logged once.
+	 *
+	 * An event named like the directory itself is either the directory
+	 * vanishing or being replaced (a self event) or a child entry that merely
+	 * shares the name (`myapp/myapp`): it signals only when the directory is
+	 * gone or its inode changed.
 	 */
 	#armWatchers(project: RegisteredProject, state: ProjectWatch): void {
 		const { projectId, path } = project;
 		const dirName = basename(path);
 		try {
-			state.dir = watch(path, { persistent: false }, (_event, filename) => {
-				const name = filename?.toString();
-				if (name === ".git") state.gitEvent = true;
-				if (name === undefined || name === ".git" || name === dirName) this.#signal(projectId);
+			state.dirId = dirIdentity(path);
+			state.dir = this.#watch(path, (_event, filename) => {
+				if (filename === ".git") state.gitEvent = true;
+				if (filename === null || filename === ".git") this.#signal(projectId);
+				else if (filename === dirName && this.#replaced(path, state)) this.#signal(projectId);
 			});
 			state.dir.on("error", (err) => this.#watchFailed(project, state, err));
 			if (this.#registry.isProjectGit(projectId)) {
 				if (!statSync(join(path, ".git")).isDirectory()) {
 					throw new Error(".git is not a directory (separate git dir?)");
 				}
-				state.gitDir = watch(join(path, ".git"), { persistent: false }, (_event, filename) => {
-					const name = filename?.toString();
-					if (name === undefined || name === "worktrees") this.#signal(projectId);
+				state.gitDir = this.#watch(join(path, ".git"), (_event, filename) => {
+					if (filename === null || filename === "worktrees") this.#signal(projectId);
 				});
 				state.gitDir.on("error", (err) => this.#watchFailed(project, state, err));
 				this.#openWorktreesWatch(project, state);
@@ -481,17 +551,22 @@ export class ProjectSync {
 		}
 	}
 
+	/** The watched directory is gone or is no longer the one the watchers were armed on. */
+	#replaced(path: string, state: ProjectWatch): boolean {
+		const id = dirIdentity(path);
+		return id === null || id !== state.dirId;
+	}
+
 	/** Close and re-open every watcher of a project (a stale `.git` inode, or a git-state flip). */
 	#rearmWatchers(project: RegisteredProject, state: ProjectWatch): void {
 		this.#closeWatchers(state);
 		this.#armWatchers(project, state);
 	}
 
-	/** Re-open the `.git/worktrees` watch (the directory may have been deleted and recreated since). */
+	/** Re-open the `.git/worktrees` watches (the directory may have been deleted and recreated, entries added or removed). */
 	#refreshWorktreesWatch(project: RegisteredProject, state: ProjectWatch): void {
 		if (state.gitDir === null) return;
-		state.worktrees?.close();
-		state.worktrees = null;
+		this.#closeWorktreesWatches(state);
 		try {
 			this.#openWorktreesWatch(project, state);
 		} catch (err) {
@@ -499,12 +574,40 @@ export class ProjectSync {
 		}
 	}
 
-	/** Watch `.git/worktrees` (any entry) while it exists; git removes it with its last worktree. */
+	/**
+	 * Watch `.git/worktrees` (any entry) while it exists (git removes it with
+	 * its last worktree), and each `.git/worktrees/<name>` for the files that
+	 * change when a worktree is locked, unlocked or moved (`locked`, `gitdir`);
+	 * the parent watch cannot see inside its entries. An entry that vanishes
+	 * while being opened is skipped: the parent watch already signaled.
+	 */
 	#openWorktreesWatch(project: RegisteredProject, state: ProjectWatch): void {
+		const { projectId } = project;
 		const dir = join(project.path, ".git", "worktrees");
-		if (!existsSync(dir)) return;
-		state.worktrees = watch(dir, { persistent: false }, () => this.#signal(project.projectId));
+		let names: string[];
+		try {
+			names = readdirSync(dir);
+		} catch (err) {
+			if (isGone(err)) return;
+			throw err;
+		}
+		state.worktrees = this.#watch(dir, () => this.#signal(projectId));
 		state.worktrees.on("error", (err) => this.#watchFailed(project, state, err));
+		for (const name of names) {
+			let handle: FSWatcher;
+			try {
+				handle = this.#watch(join(dir, name), (_event, filename) => {
+					if (filename === null || filename === "locked" || filename === "gitdir") {
+						this.#signal(projectId);
+					}
+				});
+			} catch (err) {
+				if (isGone(err)) continue;
+				throw err;
+			}
+			handle.on("error", (err) => this.#watchFailed(project, state, err));
+			state.worktreeEntries.push(handle);
+		}
 	}
 
 	/**
@@ -547,10 +650,18 @@ export class ProjectSync {
 	#closeWatchers(state: ProjectWatch): void {
 		state.dir?.close();
 		state.gitDir?.close();
-		state.worktrees?.close();
+		this.#closeWorktreesWatches(state);
 		state.dir = null;
+		state.dirId = null;
 		state.gitDir = null;
+	}
+
+	/** Close the `.git/worktrees` watch and every per-worktree watch. */
+	#closeWorktreesWatches(state: ProjectWatch): void {
+		state.worktrees?.close();
+		for (const handle of state.worktreeEntries) handle.close();
 		state.worktrees = null;
+		state.worktreeEntries = [];
 	}
 
 	/** Close everything a project holds: watchers, debounce, poll. */

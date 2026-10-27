@@ -234,6 +234,12 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 			openNewWorkspace(props.project.projectId);
 		};
 
+		// The "+" is gone once the project turns plain-folder: its popover would
+		// stay anchored to a detached button and every submit would be refused.
+		createEffect(() => {
+			if (props.project.git === false && popoverOpen()) closeNewWorkspace();
+		});
+
 		return (
 			<>
 				<div
@@ -334,7 +340,7 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 						</span>
 					</span>
 				</div>
-				<Show when={popoverOpen() ? plusEl() : undefined}>
+				<Show when={popoverOpen() && props.project.git !== false ? plusEl() : undefined}>
 					{(anchor) => (
 						<NewWorkspacePopover
 							projectId={props.project.projectId}

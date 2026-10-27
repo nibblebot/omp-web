@@ -140,12 +140,13 @@
 }
 /* The sidebar header row (SidebarHeader.tsx) lives in shell.css. */
 .sidebar-list {
-	/* Row geometry shared with the group headers (ProjectGroups). The caret and
-	   the add-project plus sit on the scan line, --gutter from the sidebar's left
-	   edge (list padding + their own left padding). The indent is where a row's
-	   branch text starts: the scan line + caret (1em) + toggle gap, i.e. the x of
-	   the project-name text in the header above, so branch and project names
-	   align. The edge is how far a row's corner slot sits from the right edge. */
+	/* Row geometry shared with the group headers (ProjectGroups). The folder icon
+	   and the add-project plus sit on the scan line, --gutter from the sidebar's
+	   left edge (list padding + their own left padding). The indent is where a
+	   row's branch text starts: the scan line + folder icon (1em) + toggle gap,
+	   i.e. the x of the project-name text in the header above, so branch and
+	   project names align. The edge is how far a row's corner slot sits from the
+	   right edge. */
 	--sidebar-row-indent: calc(var(--gutter) + var(--fs-sm) + var(--space-2));
 	--sidebar-row-edge: var(--gutter);
 	/* Right-edge rail of a ready row (and the matching mark in a collapsed
@@ -360,7 +361,7 @@
 /* --- Session roster sidebar (fleet edge, Phase 3) --- */
 
 .roster-row {
-	/* The kind icon sits in a fixed-width box (the caret's 1em) so every row's
+	/* The kind icon sits in a fixed-width box (the folder icon's 1em) so every row's
 	   icon and branch text start on the same x; the session title, chips and
 	   diffstat indent by the box plus its gap to sit under the branch text. */
 	--row-kind-box: var(--fs-sm);
@@ -1696,7 +1697,9 @@
 }
 /* Header hover/focus (or an open popover/menu) swaps summary and signal for
    "+" and "⋯". Open state is read from the two triggers, not the group toggle,
-   whose aria-expanded is the collapse state. Always shown on touch (below). */
+   whose aria-expanded is the collapse state. Always shown on touch (below). A
+   plain-folder header has no "+", so its summary stays put (the :where keeps
+   the rule's specificity level with the touch override below). */
 .project-group .project-new-btn {
 	opacity: 0;
 	pointer-events: none;
@@ -1729,7 +1732,16 @@
 		:has(:focus-visible),
 		:has(.project-new-btn[aria-expanded="true"], .sidebar-menu-btn[aria-expanded="true"])
 	)
-	:is(.project-group-summary, .roster-row-status) {
+	.roster-row-status {
+	opacity: 0;
+}
+.project-group:is(
+		:hover,
+		:has(:focus-visible),
+		:has(.project-new-btn[aria-expanded="true"], .sidebar-menu-btn[aria-expanded="true"])
+	)
+	:where(.project-group-slot:has(.project-new-btn))
+	.project-group-summary {
 	opacity: 0;
 }
 /* Touch and phones: no hover, so "+" and "⋯" always show (base.css shows the
@@ -1767,7 +1779,7 @@
 	}
 }
 /* "Add project": a text row closing the project list; the plus sits on the
-   caret's scan line and the label on the project names'. */
+   folder icon's scan line and the label on the project names'. */
 .sidebar-add-project {
 	display: flex;
 	align-items: center;

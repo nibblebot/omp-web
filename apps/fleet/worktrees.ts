@@ -29,6 +29,7 @@ import type { ProjectBranch, RegisteredProject } from "#lib/wire/protocol";
 import { slugifyWorktreeName, worktreeBranchName } from "#lib/wire/worktree-name";
 import {
 	findGitRoot,
+	isInsideGitDirectory,
 	parseWorktreeList,
 	probeGitState,
 	runGit,
@@ -326,17 +327,23 @@ export async function listWorktreeBlocks(path: string): Promise<WorktreeBlock[] 
  * a subdirectory of either) resolves to the MAIN checkout's realpath. A path
  * with no `.git` at or above it is a non-git project and resolves to its own
  * realpath. Throws a user-facing Error for a missing path, an unreadable
- * repository (`.git` present but git cannot read it), or a bare repository (it has no main working tree to register).
+ * repository (`.git` present but git cannot read it), or a bare repository
+ * (it has no main working tree to register), including a bare repository
+ * git cannot read (detected from the git-directory layout on disk).
  */
 export async function resolveProjectRoot(path: string): Promise<string> {
 	const resolved = await validateProjectPath(path);
 	if (resolved === null) throw new Error(`not a directory: ${path}`);
 	const main = (await listWorktreeBlocks(resolved))?.[0];
 	if (main === undefined) {
-		// git cannot tell: a plain directory when no `.git` exists at or above it
-		// (a bare repo is answered by git above, so it never lands here).
-		if (findGitRoot(resolved) === null) return resolved;
-		throw new Error(`not a git repository: ${path}`);
+		// git cannot tell: a plain directory only when no `.git` exists at or
+		// above it and the path is not inside a git directory (a bare repo git
+		// cannot read must still be refused, not registered as a plain folder).
+		if (findGitRoot(resolved) !== null) throw new Error(`not a git repository: ${path}`);
+		if (isInsideGitDirectory(resolved)) {
+			throw new Error(`bare repository has no main checkout to register: ${path}`);
+		}
+		return resolved;
 	}
 	if (main.bare || main.path === undefined) {
 		throw new Error(`bare repository has no main checkout to register: ${path}`);
@@ -725,14 +732,14 @@ export async function registerWorktreeEntry(
 
 /**
  * Register the DEFAULT WORKSPACE of a registered project: a roster entry for
- * the repo's main checkout, mapped to the repo CWD. The main checkout is the
- * repo itself, so this never creates anything under workspaceDir. With
- * opts.start the main checkout is spawned via the host runtime (template
- * passthrough) and the fresh entry is tagged with the projectId; otherwise it
- * is registered asleep (kind "direct") and wakeable via spawn_resume/attach;
- * a respawn with no lastSessionFile is a fresh start. An existing row for the
- * checkout (realpath match) is reused. Shared by the /ctl route, the edge
- * command handler, and the sync pass.
+ * the project's directory (a repo's main checkout, or the folder itself for a
+ * plain non-git project), mapped to that CWD. This never creates anything
+ * under workspaceDir. With opts.start the host is spawned via the host
+ * runtime (template passthrough) and the fresh entry is tagged with the
+ * projectId; otherwise it is registered asleep (kind "direct") and wakeable
+ * via spawn_resume/attach; a respawn with no lastSessionFile is a fresh
+ * start. An existing row for the directory (realpath match) is reused.
+ * Shared by the /ctl route, the edge command handler, and the sync pass.
  */
 export async function registerProjectMainEntry(
 	registry: Registry,
@@ -766,11 +773,11 @@ export async function registerProjectMainEntry(
 		registry.update(entry.workspaceId, { projectId: project.projectId });
 		return registry.get(entry.workspaceId) ?? entry;
 	}
-	// Mirror spawnHost's field shape for the main checkout (name and
-	// project = the repo name) so a started and an unstarted default
-	// workspace render identically except status, including the resolved
-	// template NAME (respawn keys off entry.template). NO worktreeOf: main
-	// checkouts stay untagged; SidebarGroups' hasMain depends on that.
+	// Mirror spawnHost's field shape for the default workspace (name and
+	// project = the project's directory name) so a started and an unstarted
+	// default workspace render identically except status, including the
+	// resolved template NAME (respawn keys off entry.template). NO worktreeOf:
+	// main checkouts stay untagged; SidebarGroups' hasMain depends on that.
 	return registry.create({
 		name: project.name,
 		cwd: project.path,

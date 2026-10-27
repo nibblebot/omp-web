@@ -1053,10 +1053,13 @@ export type ClientCommand =
 	| { type: "list_workspace_sessions"; id: string; workspaceId: string; limit?: number }
 	// Stop the session AND evict it from the roster (registry removal).
 	| { type: "remove"; id: string; workspaceId: string }
-	// Register a project. `path` may be the main checkout, a linked worktree,
-	// or a subdirectory: the fleet registers the main checkout (bare repos
-	// and non-git paths are refused). Registration never spawns; the fleet
-	// sync adds one asleep row per checkout. Answered by add_project_result.
+	// Register a project. `path` may be a repo's main checkout, a linked
+	// worktree, or a subdirectory: the fleet registers the main checkout. A
+	// path with no `.git` at or above it registers as itself, a plain folder
+	// (`git: false` on its registered_projects entry); bare repos are refused.
+	// Registration never spawns; the fleet sync adds one asleep row per
+	// checkout (one default row for a plain folder). Answered by
+	// add_project_result.
 	| { type: "add_project"; id: string; path: string }
 	// Deregister a project and drop all of its rows (running sessions are
 	// stopped, transcripts kept, disk untouched). Refused while a clone
@@ -1627,8 +1630,8 @@ export type ServerFrame =
 	// just workspaceId + display name + the vanished path. Never sent for
 	// UI-initiated delete_worktree/remove.
 	| { type: "worktree_removed"; workspaceId: string; name: string; path: string }
-	// Unicast answer to add_project. `existing`: the resolved main checkout
-	// was already registered (nothing changed).
+	// Unicast answer to add_project. `existing`: the resolved project
+	// directory was already registered (nothing changed).
 	| {
 			type: "add_project_result";
 			id: string;

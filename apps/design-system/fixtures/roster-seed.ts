@@ -10,7 +10,7 @@ import { rosterFsBrowse } from "./roster-routes";
 /**
  * Project commands the sidebar and the Add project dialog send. A registered
  * path answers `existing`; any directory the fixture browser can list registers a new
- * project, git or not (a plain folder registers as non-git); any other path is refused as
+ * project, git or not; any other path is refused as
  * not a directory. remove_project and sync_projects change
  * nothing, so the seeded roster stays as it is.
  */

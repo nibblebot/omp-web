@@ -342,6 +342,24 @@ describe("resolveProjectRoot", () => {
 			`bare repository has no main checkout to register: ${bare}`,
 		);
 	});
+
+	test("refuses a bare repo (and a path inside one) even when git cannot read it", async () => {
+		const bareParent = tempDir("omp-web-worktrees-");
+		const bare = join(bareParent, "bare.git");
+		await gitOk(bareParent, ["init", "-q", "--bare", bare]);
+		const inside = join(bare, "refs", "heads");
+		// A corrupt config makes every git invocation fail (as an untrusted
+		// owner or a missing git binary would) while the directory still
+		// looks like a git directory.
+		writeFileSync(join(bare, "config"), "[core\n\tbare = true\n");
+		expect(await listWorktreeBlocks(bare)).toBeUndefined();
+		await expect(resolveProjectRoot(bare)).rejects.toThrow(
+			`bare repository has no main checkout to register: ${bare}`,
+		);
+		await expect(resolveProjectRoot(inside)).rejects.toThrow(
+			`bare repository has no main checkout to register: ${inside}`,
+		);
+	});
 });
 
 describe("listProjectBranches", () => {

@@ -16,7 +16,7 @@
  * repo's dirty state for worktree-delete evidence and session git polling.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
@@ -170,6 +170,44 @@ export function findGitRoot(dir: string): string | null {
 		const parent = dirname(cur);
 		if (parent === cur) return null;
 		cur = parent;
+	}
+}
+
+/**
+ * True when `dir` or an ancestor is a git directory by git's own test: a
+ * `HEAD` file plus `objects/` and `refs/` directories. A bare repository
+ * (which has no `.git` entry) is one; so is a path inside a `.git` directory.
+ * Filesystem-only, so it answers even when git itself fails to read the repo.
+ */
+export function isInsideGitDirectory(dir: string): boolean {
+	let cur = dir;
+	for (;;) {
+		if (
+			isFile(join(cur, "HEAD")) &&
+			isDirectory(join(cur, "objects")) &&
+			isDirectory(join(cur, "refs"))
+		) {
+			return true;
+		}
+		const parent = dirname(cur);
+		if (parent === cur) return false;
+		cur = parent;
+	}
+}
+
+function isFile(path: string): boolean {
+	try {
+		return statSync(path).isFile();
+	} catch {
+		return false;
+	}
+}
+
+function isDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
 	}
 }
 

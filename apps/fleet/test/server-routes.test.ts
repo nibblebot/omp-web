@@ -181,6 +181,16 @@ describe("fleet control plane", () => {
 			expect(((await wt.json()) as { error?: string }).error).toContain(
 				"project is not a git repository",
 			);
+			// Clones need a git source: the same refusal, before any provider work.
+			const clone = await postJson(server.port, "/ctl/clones", {
+				projectId: body.project.projectId,
+				name: "plain-clone",
+				profileId: "local",
+			});
+			expect(clone.status).toBe(400);
+			// Test-owned route answer: the 400 body is `{ error: string }`.
+			const cloneBody: { error?: string } = await clone.json();
+			expect(cloneBody.error).toContain("project is not a git repository");
 		} finally {
 			server.registry.removeProject(body.project.projectId);
 		}

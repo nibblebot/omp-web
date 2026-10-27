@@ -306,7 +306,8 @@ export class Registry {
 	 */
 	onChange: ((change: RegistryChange) => void) | null = null;
 	/**
-	 * Fired after PROJECT-set mutations only (addProject/removeProject), not
+	 * Fired after PROJECT-set mutations only (addProject/removeProject, and
+	 * setProjectGit when a project's git flag flips), not
 	 * session mutations; set by the edge server for registered_projects
 	 * broadcasts. Projects are rare mutations and the frame is re-derivable
 	 * from stream priming, so broadcasts ride this dedicated hook instead of
@@ -698,8 +699,8 @@ export class Registry {
 
 	/**
 	 * Remove a registered project and every NON-CLONE row that belongs to it
-	 * (main checkout, linked worktrees, and any never-started placeholder
-	 * alike: rows are a derived view of git state, so dropping them touches
+	 * (default workspace, linked worktrees, and any never-started placeholder
+	 * alike: rows are a derived view of the directory's git state, so dropping them touches
 	 * no disk and no transcript). The CALLER stops running rows first
 	 * (shutdown/stop + forgetPair); this method only edits the registry.
 	 * Clone workspaces own provider-managed volumes that must go through the

@@ -96,7 +96,7 @@ export interface OperationsDeps {
 	eviction: RowEvictionHooks;
 }
 
-/** Result of addProject: `entry` is the new main-checkout row (absent for an already registered checkout). */
+/** Result of addProject: `entry` is the new default-workspace row (absent for an already registered project). */
 export interface AddProjectResult {
 	project: RegisteredProject;
 	existing: boolean;
@@ -274,7 +274,8 @@ export class FleetOperations {
 	 * Deregister a project and drop all of its rows (never touches disk).
 	 * Running rows are shut down and their pair revoked; transcripts are kept.
 	 * Refused (409) while a clone workspace still belongs to the project; that
-	 * check runs before any row is stopped.
+	 * check runs before any row is stopped. A sync pass follows so the
+	 * project's watchers and timers close now instead of on the next tick.
 	 */
 	async removeProject(projectId: string): Promise<void> {
 		if (!this.#registry.projects().some((p) => p.projectId === projectId)) {
@@ -292,6 +293,7 @@ export class FleetOperations {
 		}
 		for (const row of rows) this.#detach(row.workspaceId);
 		await this.#eviction.evictProject(projectId);
+		this.#sync.syncNow();
 	}
 
 	/**

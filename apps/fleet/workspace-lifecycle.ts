@@ -69,7 +69,6 @@
 import { randomBytes } from "node:crypto";
 import {
 	closeSync,
-	existsSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
@@ -125,7 +124,7 @@ import {
 	prepareWorkspace,
 	resolveWorkspacePin,
 } from "#lib/runtime/prepare-workspace";
-import { NOT_GIT_PROJECT_MESSAGE, resolveWorktreeOf, runGit } from "./discovery";
+import { NOT_GIT_PROJECT_MESSAGE, hasGitEntry, resolveWorktreeOf, runGit } from "./discovery";
 import { sha256OfFile } from "#lib/session-files/file-sha256";
 import { verifyWorkspaceLogs } from "./verify-store";
 import { MAX_EXPORT_BYTES, MAX_EXPORT_FILES } from "#lib/session-files/export-sessions";
@@ -1067,7 +1066,7 @@ export class WorkspaceLifecycle {
 			throw new CloneLifecycleError("invalid_request", `"${branch}" is not a valid branch name`);
 		}
 		const { checkoutDir } = this.#clonePaths(entry);
-		if (!existsSync(join(checkoutDir, ".git"))) {
+		if (!hasGitEntry(checkoutDir)) {
 			throw new CloneLifecycleError(
 				"unavailable",
 				`clone ${workspaceId} has no prepared checkout to fetch from`,
@@ -1798,7 +1797,7 @@ export class WorkspaceLifecycle {
 	async #runGitGuard(workspaceId: string): Promise<void> {
 		const entry = this.#require(workspaceId);
 		const { checkoutDir } = this.#clonePaths(entry);
-		if (!existsSync(join(checkoutDir, ".git"))) {
+		if (!hasGitEntry(checkoutDir)) {
 			// A never-prepared/never-started clone has no checkout to guard;
 			// the store/volume checks below are authoritative.
 			return;

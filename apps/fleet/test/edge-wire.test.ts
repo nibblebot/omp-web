@@ -1892,28 +1892,45 @@ describe("fleet edge", () => {
 		await browser.send({ type: "add_project", id: "ap-plain", path: plainDir });
 		const plain = await awaitAddProjectResult(browser, "ap-plain");
 		expect(plain.ok).toBe(true);
-		const plainProject = server.registry.projects().find((p) => p.projectId === plain.projectId);
-		expect(plainProject).toMatchObject({ path: realpathSync(plainDir), git: false });
-		expect(server.registry.list().filter((e) => e.cwd === realpathSync(plainDir))).toHaveLength(1);
-		// A path that is not a directory answers ok:false with the reason and
-		// registers nothing.
-		const missingDir = join(tmp, "edge-add-project-missing");
-		await browser.send({ type: "add_project", id: "ap-missing", path: missingDir });
-		const failed = await awaitAddProjectResult(browser, "ap-missing");
-		expect(failed.ok).toBe(false);
-		expect(failed.error).toContain("not a directory");
-		expect(failed.projectId).toBeUndefined();
-		expect(server.registry.projects().filter((p) => p.path === realpathSync(repoDir))).toHaveLength(
-			1,
-		);
-		expect(server.registry.projects().some((p) => p.path === missingDir)).toBe(false);
-		server.registry.removeProject(plain.projectId!);
 		try {
-			server.registry.removeProject(project.projectId);
-		} catch {
-			// Already clean.
+			const plainProject = server.registry.projects().find((p) => p.projectId === plain.projectId);
+			expect(plainProject).toMatchObject({ path: realpathSync(plainDir), git: false });
+			expect(server.registry.list().filter((e) => e.cwd === realpathSync(plainDir))).toHaveLength(
+				1,
+			);
+			// A path that is not a directory answers ok:false with the reason and
+			// registers nothing.
+			const missingDir = join(tmp, "edge-add-project-missing");
+			await browser.send({ type: "add_project", id: "ap-missing", path: missingDir });
+			const failed = await awaitAddProjectResult(browser, "ap-missing");
+			expect(failed.ok).toBe(false);
+			expect(failed.error).toContain("not a directory");
+			expect(failed.projectId).toBeUndefined();
+			expect(
+				server.registry.projects().filter((p) => p.path === realpathSync(repoDir)),
+			).toHaveLength(1);
+			expect(server.registry.projects().some((p) => p.path === missingDir)).toBe(false);
+			// Branch listing is git-only: a plain project answers with the refusal.
+			await browser.send({
+				type: "list_project_branches",
+				id: "br-plain",
+				projectId: plain.projectId!,
+			});
+			const refusal = await browser.waitForFrame(
+				(f) => f.type === "error" && f.error === "project is not a git repository",
+				"non-git branch listing refusal",
+			);
+			expect(refusal.type).toBe("error");
+		} finally {
+			for (const projectId of [plain.projectId!, project.projectId]) {
+				try {
+					server.registry.removeProject(projectId);
+				} catch {
+					// Already clean.
+				}
+			}
+			browser.close();
 		}
-		browser.close();
 	});
 
 	test("remove_project refuses with a clone workspace and stops nothing", async () => {
