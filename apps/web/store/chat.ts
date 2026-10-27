@@ -36,6 +36,7 @@ import {
 import { splitTextAttachments } from "../prompt/attachments";
 import { isReady } from "./session";
 import { call } from "./transport";
+import { currentNotifyPermission } from "./notify";
 import { reportError } from "./toasts";
 import { advisorNotesOf } from "./slices/advisor";
 import { collabLive, guestPromptOf } from "./slices/collab";
@@ -152,20 +153,25 @@ export function toggleToolsExpanded(): void {
 	setState("toolsExpanded", (v) => !v);
 }
 
-/** Persisted browser-notifications toggle; requests permission on first enable. */
-export function setNotifyEnabled(enabled: boolean): void {
-	if (typeof localStorage !== "undefined") localStorage.setItem(NOTIFY_KEY, String(enabled));
-	setState("notifyEnabled", enabled);
-	if (enabled && typeof Notification !== "undefined" && Notification.permission === "default") {
-		// Denied is handled by the caller not getting notifications;
-		// the request promise can reject in non-secure contexts.
-		void Notification.requestPermission().catch(() => {});
-	}
+/** Re-read the browser's notification permission into the store (it changes in site settings, outside the page). */
+export function refreshNotifyPermission(): void {
+	setState("notifyPermission", currentNotifyPermission());
 }
 
-/** True when the browser has denied notification permission, so the toggle cannot take effect. */
-export function notificationsBlocked(): boolean {
-	return typeof Notification !== "undefined" && Notification.permission === "denied";
+/**
+ * Persisted browser-notifications toggle. Turning it on asks the browser
+ * when permission is still undecided and stays on only once permission is
+ * granted; a dismissed or denied prompt leaves it off. Off is always allowed.
+ */
+export async function setNotifyEnabled(enabled: boolean): Promise<void> {
+	if (enabled && currentNotifyPermission() === "default") {
+		// Resolves "default" when the prompt is dismissed; can reject outside a secure context.
+		await Notification.requestPermission().catch(() => undefined);
+	}
+	refreshNotifyPermission();
+	const on = enabled && state.notifyPermission === "granted";
+	if (typeof localStorage !== "undefined") localStorage.setItem(NOTIFY_KEY, String(on));
+	setState("notifyEnabled", on);
 }
 
 export function pushItem(item: ChatItem): void {

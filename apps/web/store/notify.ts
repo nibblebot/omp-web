@@ -11,6 +11,14 @@
 import type { WireTurnOutcome } from "#lib/wire/protocol";
 import { truncateHead } from "./chat";
 
+/** The browser's notification permission, or `unsupported` where the API is absent (plain HTTP, old browsers). */
+export type NotifyPermission = NotificationPermission | "unsupported";
+
+/** Read the live permission; never prompts. */
+export function currentNotifyPermission(): NotifyPermission {
+	return typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+}
+
 export type NotifyKind = "completion" | "error" | "ask";
 
 /** Settings path that decides whether an event kind notifies. */

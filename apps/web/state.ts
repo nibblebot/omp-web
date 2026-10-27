@@ -82,7 +82,7 @@ import {
 	notifySession,
 	switchToSession,
 } from "./store/roster";
-import { outcomeNotice } from "./store/notify";
+import { currentNotifyPermission, outcomeNotice } from "./store/notify";
 import { dismissToast, pushToast, type ToastAction } from "./store/toasts";
 import { parseRoute } from "./store/route";
 import {
@@ -598,12 +598,15 @@ export const [state, setState] = createStore({
 	// True once the attached session has stayed "reconnecting" past the grace
 	// window: a routine renewal or brief re-dial never shows the strip.
 	attachedReconnecting: false,
-	// Browser notifications for sessions other than the attached one (persisted
-	// toggle; firing is gated on Notification support + permission).
+	// Browser notifications for sessions other than the attached one: the
+	// persisted toggle, true only once the browser granted permission.
 	notifyEnabled:
 		typeof localStorage !== "undefined" && typeof Notification !== "undefined"
 			? localStorage.getItem(NOTIFY_KEY) === "true"
 			: false,
+	// The browser's live notification permission ("unsupported" off a secure
+	// context), refreshed by refreshNotifyPermission so the toggle can show it.
+	notifyPermission: currentNotifyPermission(),
 	// Phase 12: condensed usage panel pinned above the roster footer buttons
 	// (persisted toggle; data comes from the fleet GET /ctl/usage via refreshUsageReports).
 	sidebarUsage:
