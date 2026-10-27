@@ -525,6 +525,17 @@ pre {
 	font-size: var(--fs-md);
 	border-collapse: collapse;
 }
+/* Cells wrap only between words: `.md`'s `overflow-wrap: anywhere` would
+   shrink each column's min-content to one character and let auto layout
+   split words. A table wider than the column scrolls instead. */
+.md th,
+.md td {
+	padding: var(--space-1) var(--space-4);
+	border: 1px solid var(--border);
+	overflow-wrap: normal;
+	word-break: normal;
+	vertical-align: top;
+}
 .md th {
 	font-weight: 600;
 	text-align: left;
