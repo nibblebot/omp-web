@@ -26,7 +26,10 @@ import {
 	sendCommand,
 	watchAttachment,
 } from "./transport";
+import { NOTIFY_SETTING_PATH, notifyKindEnabled, type NotifyKind } from "./notify";
+import { settingValue } from "./settings";
 import { reportError } from "./toasts";
+import { displayTitle } from "../components/ui/title-icons";
 
 /**
  * Fleet-roster domain (Phase 3 store facade split): session/file listing
@@ -209,6 +212,34 @@ export async function switchToSession(workspaceId: string): Promise<void> {
 	} catch (err) {
 		// A quiet re-attach has no pane to show the failure in.
 		if (quiet) reportError(err);
+	}
+}
+
+/**
+ * Browser notification for a session other than the attached one. Gated by the
+ * local permission toggle, Notification support + granted permission, and the
+ * SDK setting for `kind`. Not gated on tab visibility: the user is looking at
+ * a different session. The title is what the sidebar row shows: the session
+ * title, else the branch, else the roster name; `tag` makes a
+ * session's repeats replace each other. Clicking focuses the window, switches
+ * to the session and closes the notification. Non-secure contexts
+ * (`Notification` undefined) and revoked permission are silent no-ops.
+ */
+export function notifySession(workspaceId: string, kind: NotifyKind, body: string): void {
+	if (!state.notifyEnabled) return;
+	if (!notifyKindEnabled(kind, settingValue(NOTIFY_SETTING_PATH[kind]))) return;
+	if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+	const entry = state.sessionRoster.find((d) => d.workspaceId === workspaceId);
+	const title = displayTitle(entry?.sessionTitle) ?? entry?.branch ?? entry?.name ?? workspaceId;
+	try {
+		const notification = new Notification(title, { body, tag: `omp-session-${workspaceId}` });
+		notification.onclick = () => {
+			window.focus();
+			void switchToSession(workspaceId);
+			notification.close();
+		};
+	} catch {
+		// Permission revoked between checks: silent no-op.
 	}
 }
 

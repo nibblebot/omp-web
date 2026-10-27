@@ -2679,6 +2679,215 @@ describe("session_activity frames", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Browser notifications: only sessions other than the attached one notify, on
+// the session_activity edge (turn end carries `endedTurn`; blocked false→true
+// is an ask). Delivery needs the toggle, a granted permission, and the SDK
+// setting for the event kind.
+// ---------------------------------------------------------------------------
+describe("session_activity notifications (sessions other than the attached one)", () => {
+	/** Records every constructed notification, with its options and handlers. */
+	class FakeNotification {
+		static permission = "granted";
+		static instances: FakeNotification[] = [];
+		onclick: (() => void) | null = null;
+		closed = 0;
+		constructor(
+			readonly title: string,
+			readonly options?: NotificationOptions,
+		) {
+			FakeNotification.instances.push(this);
+		}
+		close(): void {
+			this.closed++;
+		}
+	}
+
+	const hadNotification = Reflect.has(globalThis, "Notification");
+	const originalNotification: unknown = Reflect.get(globalThis, "Notification");
+	let baselineNotifyEnabled: boolean;
+
+	function session(id: string, extra: Partial<RosterEntry> = {}): RosterEntry {
+		return {
+			workspaceId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: id,
+			status: "ready",
+			...extra,
+		};
+	}
+
+	/** Seed the SDK notify settings the way the settings model delivers them. */
+	function seedNotifySettings(values: Record<string, "on" | "off">): void {
+		const items = Object.entries(values).map(([path, value]) => ({ path, value }));
+		setState("settingsModel", { tabs: [{ id: "notifications", groups: [{ items }] }] } as never);
+	}
+
+	/** Attached to d1; d2 is a detached session named "Fix parser". */
+	function attachD1(): void {
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		dispatch(attached("d1"));
+		setState("sessionRoster", [session("d1"), session("d2", { name: "Fix parser" })]);
+	}
+
+	function activity(
+		id: string,
+		streaming: boolean,
+		blocked = false,
+		endedTurn?: Extract<ServerFrame, { type: "session_activity" }>["endedTurn"],
+	): void {
+		dispatch({
+			type: "session_activity",
+			workspaceId: id,
+			streaming,
+			blocked,
+			...(endedTurn === undefined ? {} : { endedTurn }),
+		});
+	}
+
+	beforeAll(() => {
+		baselineNotifyEnabled = state.notifyEnabled;
+	});
+
+	afterAll(() => {
+		setState("notifyEnabled", baselineNotifyEnabled);
+		setState("settingsModel", null as never);
+		if (hadNotification) Reflect.set(globalThis, "Notification", originalNotification);
+		else Reflect.deleteProperty(globalThis, "Notification");
+	});
+
+	beforeEach(() => {
+		pruneUnread(new Set());
+		FakeNotification.instances = [];
+		FakeNotification.permission = "granted";
+		Reflect.set(globalThis, "Notification", FakeNotification);
+		setState("notifyEnabled", true);
+		setState("settingsModel", null as never);
+		// Unknown activity per test: the first frame for a session is priming, not an edge.
+		setState("sessionActivity", { d1: undefined, d2: undefined } as never);
+	});
+
+	test("a detached turn end notifies once, titled with the session name", () => {
+		attachD1();
+		activity("d2", true);
+		expect(FakeNotification.instances).toHaveLength(0);
+
+		activity("d2", false, false, { stopReason: "stop" });
+
+		expect(FakeNotification.instances).toHaveLength(1);
+		const [n] = FakeNotification.instances;
+		expect(n!.title).toBe("Fix parser");
+		expect(n!.options).toEqual({ body: "Complete", tag: "omp-session-d2" });
+		expect(unreadIds().has("d2")).toBe(true);
+	});
+
+	test("an aborted turn notifies as Aborted under the completion setting", () => {
+		attachD1();
+		activity("d2", true);
+		activity("d2", false, false, { stopReason: "aborted" });
+		expect(FakeNotification.instances.map((n) => n.options?.body)).toEqual(["Aborted"]);
+
+		FakeNotification.instances = [];
+		seedNotifySettings({ "completion.notify": "off" });
+		activity("d2", true);
+		activity("d2", false, false, { stopReason: "aborted" });
+		expect(FakeNotification.instances).toHaveLength(0);
+	});
+
+	test("the attached session never notifies, on a turn end or when it blocks", () => {
+		attachD1();
+		activity("d1", true);
+		activity("d1", false, false, { stopReason: "stop" });
+		activity("d1", false, true);
+		expect(FakeNotification.instances).toHaveLength(0);
+	});
+
+	test("a streaming flip without endedTurn does not notify but still marks unread", () => {
+		attachD1();
+		activity("d2", true);
+		activity("d2", false);
+		expect(FakeNotification.instances).toHaveLength(0);
+		expect(unreadIds().has("d2")).toBe(true);
+	});
+
+	test("an errored turn is silent by default and notifies when error.notify is on", () => {
+		attachD1();
+		const failed = { stopReason: "error", errorMessage: "rate limited" } as const;
+		activity("d2", true);
+		activity("d2", false, false, failed);
+		expect(FakeNotification.instances).toHaveLength(0);
+
+		seedNotifySettings({ "error.notify": "on" });
+		activity("d2", true);
+		activity("d2", false, false, failed);
+		expect(FakeNotification.instances).toHaveLength(1);
+		expect(FakeNotification.instances[0]!.options).toEqual({
+			body: "Stopped with error: rate limited",
+			tag: "omp-session-d2",
+		});
+	});
+
+	test("a detached session blocking notifies Waiting for input, once per edge", () => {
+		attachD1();
+		activity("d2", false, false);
+		activity("d2", false, true);
+		expect(FakeNotification.instances.map((n) => n.options?.body)).toEqual(["Waiting for input"]);
+
+		activity("d2", false, true);
+		expect(FakeNotification.instances).toHaveLength(1);
+
+		seedNotifySettings({ "ask.notify": "off" });
+		activity("d2", false, false);
+		activity("d2", false, true);
+		expect(FakeNotification.instances).toHaveLength(1);
+	});
+
+	test("a session already waiting when its activity is first seen does not notify", () => {
+		attachD1();
+		activity("d2", false, true);
+		expect(FakeNotification.instances).toHaveLength(0);
+	});
+
+	test("nothing is delivered with the toggle off, permission not granted, or no Notification API", () => {
+		attachD1();
+		const end = () => {
+			activity("d2", true);
+			activity("d2", false, false, { stopReason: "stop" });
+		};
+
+		setState("notifyEnabled", false);
+		end();
+		setState("notifyEnabled", true);
+		FakeNotification.permission = "denied";
+		end();
+		FakeNotification.permission = "granted";
+		Reflect.deleteProperty(globalThis, "Notification");
+		end();
+
+		expect(FakeNotification.instances).toHaveLength(0);
+	});
+
+	test("clicking focuses the window, switches to the session and closes the notification", () => {
+		attachD1();
+		let focused = 0;
+		Reflect.set(window, "focus", () => {
+			focused++;
+		});
+		activity("d2", true);
+		activity("d2", false, false, { stopReason: "stop" });
+		const n = FakeNotification.instances[0]!;
+		expect(n.onclick).not.toBeNull();
+
+		n.onclick!();
+
+		expect(focused).toBe(1);
+		expect(n.closed).toBe(1);
+		expect(state.transcriptTarget).toBe("d2");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Stale-frame guard scope. The edge stamps `scope` only on session-scoped
 // frames (isSessionScopedFrameType) and on `attached`; fleet-scoped frames carry
 // a workspaceId as PAYLOAD naming a row other than the attached one, and must

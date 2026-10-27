@@ -74,7 +74,11 @@
  *     present, replaces the delta-built open-dialog set, so every pair-up
  *     resyncs `blocked`), broadcasting an edge-generated
  *     {type:"session_activity"} frame ONLY on change (never ringed,
- *     re-derivable from the next open's priming). Sessions hold their own
+ *     re-derivable from the next open's priming). A yielded agent_end event
+ *     (not an SDK-internal continuation, not a non-terminal error pause)
+ *     stashes the turn's outcome; the state frame that then flips streaming
+ *     to false carries it as `endedTurn` on that one live broadcast (never
+ *     primed, never set by a runtime-gone reset). Sessions hold their own
  *     pair, so no browser presence is needed to keep activity live.
  *     session_activity is stripped from callback streams like `daemons`
  *     broker rosters.
@@ -109,6 +113,7 @@ import {
 	type DaemonInfo,
 	type PublicProviderProfile,
 	type ServerFrame,
+	type WireTurnOutcome,
 	isSessionScopedFrameType,
 } from "#lib/wire/protocol";
 import {
@@ -181,7 +186,9 @@ class NotAsleepError extends Error {}
  * Per-session realtime activity, derived by the edge from the raw tapped
  * session frames (state → isStreaming, an agent_start event → streaming; ui_request / ui_request_end, and a
  * state frame's pendingUiRequestIds snapshot → the open-dialog set that
- * drives `blocked`), and reset to idle when the row's process is gone or
+ * drives `blocked`; a yielded agent_end event → `pendingTurn`, the outcome
+ * the next streaming true→false broadcast reports as `endedTurn`), and reset
+ * to idle when the row's process is gone or
  * relaunching (#resetActivityOfGoneRuntime). Starts UNKNOWN per session
  * (`known: false`, nothing derived) until the first derivable frame
  * arrives. Never carries credentials.
@@ -193,6 +200,13 @@ interface SessionActivity {
 	blocked: boolean;
 	/** ui_request ids currently open on the session; `blocked` = size > 0. */
 	openDialogIds: Set<string>;
+	/**
+	 * Outcome of the last observed turn end (a yielded agent_end), stashed
+	 * until the state frame that flips `streaming` true→false consumes it as
+	 * that one broadcast's `endedTurn`. Cleared by agent_start, by any other
+	 * streaming update, and by a runtime-gone reset; never primed.
+	 */
+	pendingTurn?: WireTurnOutcome;
 }
 
 /**
@@ -2342,8 +2356,33 @@ export class FleetEdge {
 						// before SDK admission, and wakes, follow-ups and continuations
 						// send none), so the mirrored agent_start event is what flips a
 						// detached row to working. The next state frame stays authoritative.
-						if (frame.event?.type === "agent_start")
+						if (frame.event?.type === "agent_start") {
+							this.#ensureActivity(entry.workspaceId).pendingTurn = undefined;
 							this.#setActivity(entry.workspaceId, { streaming: true });
+						} else if (frame.event?.type === "agent_end") {
+							// Turn end. yielded === false: the agent continues its own work
+							// (retry, compaction continuation, stop reminders). A non-terminal
+							// error is a scheduling pause the SDK does not report as a
+							// failure. Neither is a turn end. Frames are untrusted JSON, so
+							// copy only well-typed outcome fields.
+							const end = frame.event as {
+								yielded?: unknown;
+								isTerminal?: unknown;
+								lastAssistant?: unknown;
+							};
+							const last: { stopReason?: unknown; errorMessage?: unknown } | null =
+								typeof end.lastAssistant === "object" && end.lastAssistant !== null
+									? end.lastAssistant
+									: null;
+							if (end.yielded === false) break;
+							if (end.isTerminal === false && last?.stopReason === "error") break;
+							const outcome: WireTurnOutcome = {};
+							if (typeof last?.stopReason === "string") {
+								outcome.stopReason = last.stopReason as WireTurnOutcome["stopReason"];
+							}
+							if (typeof last?.errorMessage === "string") outcome.errorMessage = last.errorMessage;
+							this.#ensureActivity(entry.workspaceId).pendingTurn = outcome;
+						}
 						break;
 					case "ui_request": {
 						const activity = this.#ensureActivity(entry.workspaceId);
@@ -2403,11 +2442,20 @@ export class FleetEdge {
 			!activity.known ||
 			(patch.streaming !== undefined && patch.streaming !== activity.streaming) ||
 			(patch.blocked !== undefined && patch.blocked !== activity.blocked);
+		// The stashed outcome rides ONLY the broadcast of the streaming
+		// true→false flip it ended; any other streaming update (a false→false
+		// state, a new turn) makes it stale. A true→true state keeps it: the
+		// turn end's own state frame has not arrived yet.
+		const endedTurn =
+			activity.streaming && patch.streaming === false ? activity.pendingTurn : undefined;
+		if (patch.streaming !== undefined && !(activity.streaming && patch.streaming)) {
+			activity.pendingTurn = undefined;
+		}
 		if (patch.streaming !== undefined) activity.streaming = patch.streaming;
 		if (patch.blocked !== undefined) activity.blocked = patch.blocked;
 		activity.known = true;
 		if (!changed) return;
-		this.#broadcastActivity(workspaceId);
+		this.#broadcastActivity(workspaceId, endedTurn);
 	}
 
 	/**
@@ -2427,6 +2475,7 @@ export class FleetEdge {
 		const activity = this.#sessionActivity.get(entry.workspaceId);
 		if (!activity?.known) return;
 		activity.openDialogIds.clear();
+		activity.pendingTurn = undefined;
 		this.#setActivity(entry.workspaceId, { streaming: false, blocked: false });
 	}
 
@@ -2434,9 +2483,10 @@ export class FleetEdge {
 	 * Broadcast one session_activity frame to every edge stream. NEVER ringed
 	 * (like registered_projects): the frame is re-derivable from the next
 	 * open's priming, and a ring replay after priming would regress the
-	 * client to a stale value.
+	 * client to a stale value. `endedTurn` is passed only by the one
+	 * streaming true→false flip a yielded agent_end caused.
 	 */
-	#broadcastActivity(workspaceId: string): void {
+	#broadcastActivity(workspaceId: string, endedTurn?: WireTurnOutcome): void {
 		const activity = this.#sessionActivity.get(workspaceId);
 		if (!activity) return;
 		// A removed session's tap is gone, but be defensive: never broadcast
@@ -2448,6 +2498,7 @@ export class FleetEdge {
 				workspaceId,
 				streaming: activity.streaming,
 				blocked: activity.blocked,
+				...(endedTurn ? { endedTurn } : {}),
 			},
 			{ ring: false },
 		);

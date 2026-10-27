@@ -23,7 +23,7 @@ export function WebUiSettings() {
 			<SettingsGroup title="Notifications" id={settingsSectionId("web-ui", "Notifications")}>
 				<SettingsRowLayout
 					label="Browser Notification Permission"
-					description="Grants this browser permission to show OS notifications while the tab is hidden. Which events notify is set by Completion, Error and Ask Notification."
+					description="Grants this browser permission to show OS notifications for sessions other than the one open in this tab. Completion Notification covers finished and aborted turns, Error Notification failed turns, and Ask Notification a session waiting for input. Clicking a notification switches to that session."
 					warning={
 						notifyBlocked
 							? "Blocked in this browser. Allow notifications for this site in the browser's site settings to turn this on."

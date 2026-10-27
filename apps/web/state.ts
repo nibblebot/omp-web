@@ -53,7 +53,6 @@ import {
 	resetChatIds,
 	settleRunningTools,
 	scheduleFlush,
-	notifyDesktop,
 	pushNotice,
 } from "./store/chat";
 import { cancelUiRequest } from "./store/modals";
@@ -80,8 +79,10 @@ import {
 	settleFiles,
 	settleProjectWakes,
 	settleSessions,
+	notifySession,
 	switchToSession,
 } from "./store/roster";
+import { outcomeNotice } from "./store/notify";
 import { dismissToast, pushToast, type ToastAction } from "./store/toasts";
 import { parseRoute } from "./store/route";
 import {
@@ -597,8 +598,8 @@ export const [state, setState] = createStore({
 	// True once the attached session has stayed "reconnecting" past the grace
 	// window: a routine renewal or brief re-dial never shows the strip.
 	attachedReconnecting: false,
-	// Phase 11: desktop notifications on turn completion while hidden
-	// (persisted toggle; firing is gated on Notification support + permission).
+	// Browser notifications for sessions other than the attached one (persisted
+	// toggle; firing is gated on Notification support + permission).
 	notifyEnabled:
 		typeof localStorage !== "undefined" && typeof Notification !== "undefined"
 			? localStorage.getItem(NOTIFY_KEY) === "true"
@@ -1579,21 +1580,37 @@ export function connect(): void {
 				// type (not in SESSION_SCOPED_FRAME_LIST) and never carries the edge's `scope` stamp, so
 				// the stale-frame guard above lets it through (per-session, not per-attachment) and it
 				// applies regardless of which session this tab is attached to.
-				// Snapshot the boolean BEFORE setState: state.sessionActivity[...] is a
-				// live store proxy, so reading prev.streaming after the set would see
-				// the NEW value and the completion edge would never fire.
-				const wasStreaming = state.sessionActivity[frame.workspaceId]?.streaming === true;
+				// Snapshot streaming AND blocked BEFORE setState: state.sessionActivity[...]
+				// is a live store proxy, so reading prev.* after the set would see the
+				// NEW values and neither edge would ever fire.
+				const prev = state.sessionActivity[frame.workspaceId];
+				const wasStreaming = prev?.streaming === true;
+				const wasBlocked = prev?.blocked === true;
 				setState("sessionActivity", frame.workspaceId, {
 					streaming: frame.streaming,
 					blocked: frame.blocked,
 				});
+				// The attached session never notifies or latches unread (its live
+				// signals are on-screen anyway).
+				if (frame.workspaceId === state.currentWorkspaceId) break;
 				// Unread-on-completion: a detached turn's END is observable in
-				// realtime (in_progress → idle while unfocused). Skip the attached
-				// session (its live signals are on-screen anyway); the precedence in
+				// realtime (in_progress → idle while unfocused). The precedence in
 				// session-activity hides an unread latch while the session still
 				// streams (remote live truth beats the unread latch).
-				if (wasStreaming && !frame.streaming && frame.workspaceId !== state.currentWorkspaceId) {
+				if (wasStreaming && !frame.streaming) {
 					markUnread(frame.workspaceId);
+					// Only an observed turn end (endedTurn) notifies; a flip from a
+					// runtime reset or a resync carries none.
+					if (frame.endedTurn !== undefined) {
+						const notice = outcomeNotice(frame.endedTurn);
+						notifySession(frame.workspaceId, notice.kind, notice.body);
+					}
+				}
+				// A dialog opening on a session whose activity was already known. The
+				// first frame for a session (stream priming at page load) is not an
+				// edge, so already-waiting sessions do not notify in a burst.
+				if (prev !== undefined && !wasBlocked && frame.blocked) {
+					notifySession(frame.workspaceId, "ask", "Waiting for input");
 				}
 				break;
 			}
@@ -1717,9 +1734,6 @@ export function connect(): void {
 						cancelUiRequest(state.uiRequest.id);
 					}
 					setState("uiRequest", { id: frame.id, method: frame.method, params: frame.params });
-					// Ask-tool dialogs notify where the SDK does (tools/ask.ts #sendAskNotification).
-					if (frame.method === "askDialog") notifyDesktop("ask", "omp", "Waiting for input");
-					if (frame.method === "approve") notifyDesktop("ask", "omp", "Waiting for approval");
 				}
 				break;
 			case "ui_request_end":

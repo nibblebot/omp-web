@@ -11,6 +11,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
+import type { WireTurnOutcome } from "#lib/wire/protocol";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
 import { SessionTransportRegistry } from "../session-transport";
@@ -57,6 +58,10 @@ function dialogOpen(id: string) {
 
 function dialogEnd(id: string) {
 	return { type: "ui_request_end", id };
+}
+
+function agentEnd(fields: Record<string, unknown>) {
+	return { type: "event", event: { type: "agent_end", ...fields } };
 }
 
 describe("edge realtime session activity (callback control stream)", () => {
@@ -580,19 +585,198 @@ describe("edge realtime session activity (callback control stream)", () => {
 		}
 	});
 
-	test("session_activity frames carry only workspaceId, streaming, and blocked", async () => {
+	test("session_activity frames without a turn end carry only workspaceId, streaming, and blocked", async () => {
 		const s = await setup();
 		try {
 			const { entry, session } = await s.addSession("shape");
 			const browser = await s.browser();
 			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true));
-			await browser.waitForFrame(
-				(f) => f.type === "session_activity" && f.workspaceId === entry.workspaceId,
-				"activity",
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", agentEnd({ yielded: false }));
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(false));
+			await waitFor(
+				() => (activityFrames(browser, entry.workspaceId).length === 2 ? "ok" : null),
+				3000,
+				"streaming then idle activity",
 			);
 			for (const frame of activityFrames(browser, entry.workspaceId)) {
 				expect(Object.keys(frame).sort()).toEqual(["blocked", "streaming", "type", "workspaceId"]);
 			}
+		} finally {
+			await s.teardown();
+		}
+	});
+
+	const turnOutcomes: { name: string; lastAssistant?: unknown; expected: WireTurnOutcome }[] = [
+		{ name: "complete", lastAssistant: { stopReason: "stop" }, expected: { stopReason: "stop" } },
+		{
+			name: "error with its message",
+			lastAssistant: { stopReason: "error", errorMessage: "boom" },
+			expected: { stopReason: "error", errorMessage: "boom" },
+		},
+		{
+			name: "aborted",
+			lastAssistant: { stopReason: "aborted" },
+			expected: { stopReason: "aborted" },
+		},
+		{ name: "a run with no assistant message", expected: {} },
+		{
+			name: "an untrusted outcome (only well-typed outcome fields are forwarded)",
+			lastAssistant: { stopReason: 7, errorMessage: { x: 1 }, content: "secret" },
+			expected: {},
+		},
+	];
+	for (const outcome of turnOutcomes) {
+		test(`the turn-end flip carries endedTurn for ${outcome.name}`, async () => {
+			const s = await setup();
+			try {
+				const { entry, session } = await s.addSession("ended");
+				const browser = await s.browser();
+				session.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+					type: "event",
+					event: { type: "agent_start" },
+				});
+				// The real order: the agent_end event, then the async state frame.
+				session.send(
+					CALLBACK_CONTROL_STREAM_ID,
+					"frame",
+					agentEnd({ yielded: true, isTerminal: true, lastAssistant: outcome.lastAssistant }),
+				);
+				session.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(false));
+				await waitFor(
+					() => (activityFrames(browser, entry.workspaceId).length === 2 ? "ok" : null),
+					3000,
+					"turn-end flip",
+				);
+				const [start, end] = activityFrames(browser, entry.workspaceId);
+				expect(start).not.toHaveProperty("endedTurn");
+				expect(end).toEqual({
+					type: "session_activity",
+					workspaceId: entry.workspaceId,
+					streaming: false,
+					blocked: false,
+					endedTurn: outcome.expected,
+				});
+			} finally {
+				await s.teardown();
+			}
+		});
+	}
+
+	test("a yielded:false agent_end, or a non-terminal error pause, is not a turn end", async () => {
+		const s = await setup();
+		try {
+			const { entry, session } = await s.addSession("continues");
+			const browser = await s.browser();
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+				type: "event",
+				event: { type: "agent_start" },
+			});
+			session.send(
+				CALLBACK_CONTROL_STREAM_ID,
+				"frame",
+				agentEnd({ yielded: false, lastAssistant: { stopReason: "stop" } }),
+			);
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(false));
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+				type: "event",
+				event: { type: "agent_start" },
+			});
+			session.send(
+				CALLBACK_CONTROL_STREAM_ID,
+				"frame",
+				agentEnd({
+					isTerminal: false,
+					lastAssistant: { stopReason: "error", errorMessage: "paused" },
+				}),
+			);
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(false));
+			await waitFor(
+				() => (activityFrames(browser, entry.workspaceId).length === 4 ? "ok" : null),
+				3000,
+				"two idle flips",
+			);
+			for (const frame of activityFrames(browser, entry.workspaceId)) {
+				expect(frame).not.toHaveProperty("endedTurn");
+			}
+		} finally {
+			await s.teardown();
+		}
+	});
+
+	test("priming never carries endedTurn, even after a turn-end flip", async () => {
+		const s = await setup();
+		try {
+			const { entry, session } = await s.addSession("late");
+			const browser = await s.browser();
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+				type: "event",
+				event: { type: "agent_start" },
+			});
+			session.send(
+				CALLBACK_CONTROL_STREAM_ID,
+				"frame",
+				agentEnd({ yielded: true, lastAssistant: { stopReason: "stop" } }),
+			);
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(false));
+			await waitFor(
+				() => (activityFrames(browser, entry.workspaceId).length === 2 ? "ok" : null),
+				3000,
+				"turn-end flip",
+			);
+			expect(activityFrames(browser, entry.workspaceId).at(-1)).toHaveProperty("endedTurn");
+
+			// A browser opening afterwards is primed with the idle value only.
+			const late = await openBrowser(s.port);
+			try {
+				await late.waitForFrame(
+					(f) => f.type === "session_activity" && f.workspaceId === entry.workspaceId,
+					"primed activity",
+				);
+				const primed = activityFrames(late, entry.workspaceId);
+				expect(primed).toHaveLength(1);
+				expect(Object.keys(primed[0] ?? {}).sort()).toEqual([
+					"blocked",
+					"streaming",
+					"type",
+					"workspaceId",
+				]);
+			} finally {
+				late.close();
+			}
+		} finally {
+			await s.teardown();
+		}
+	});
+
+	test("a runtime-gone reset after a stashed turn end carries no endedTurn", async () => {
+		const s = await setup();
+		try {
+			const { entry, session } = await s.addSession("died-after-end");
+			const browser = await s.browser();
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
+				type: "event",
+				event: { type: "agent_start" },
+			});
+			// The turn ended but its state frame never arrived: the process died.
+			session.send(
+				CALLBACK_CONTROL_STREAM_ID,
+				"frame",
+				agentEnd({ yielded: true, lastAssistant: { stopReason: "stop" } }),
+			);
+			await waitFor(
+				() => (activityFrames(browser, entry.workspaceId).length === 1 ? "ok" : null),
+				3000,
+				"streaming activity",
+			);
+			s.registry.setStatus(entry.workspaceId, "asleep");
+			await waitFor(
+				() => (activityFrames(browser, entry.workspaceId).length === 2 ? "ok" : null),
+				3000,
+				"reset broadcast",
+			);
+			const reset = activityFrames(browser, entry.workspaceId).at(-1);
+			expect(reset).toMatchObject({ streaming: false });
+			expect(reset).not.toHaveProperty("endedTurn");
 		} finally {
 			await s.teardown();
 		}

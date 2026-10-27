@@ -1,12 +1,15 @@
 /**
- * Which web events raise a desktop notification. The SDK settings decide per
- * event, mirroring the TUI consumers: `completion.notify` and `error.notify`
+ * Which web events raise a browser notification. Only sessions other than the
+ * attached one notify (state.ts `session_activity`, delivered by roster.ts
+ * `notifySession`). The SDK settings decide per event kind, mirroring the TUI
+ * consumers: `completion.notify` and `error.notify`
  * (modes/controllers/event-controller.ts sendCompletionNotification /
  * sendErrorNotification) and `ask.notify` (tools/ask.ts #sendAskNotification).
  * The client-local `omp.notifyEnabled` toggle is only the browser-permission
- * grant: it gates delivery in chat.ts `notifyDesktop`, never the event choice.
+ * grant: it gates delivery, never the event choice.
  */
 import type { WireTurnOutcome } from "#lib/wire/protocol";
+import { truncateHead } from "./chat";
 
 export type NotifyKind = "completion" | "error" | "ask";
 
@@ -30,26 +33,22 @@ export function notifyKindEnabled(kind: NotifyKind, value: unknown): boolean {
 	return effective === "on";
 }
 
-/**
- * A settled turn counts as complete unless its last assistant message stopped
- * in error or abort, matching sendCompletionNotification (those turns are
- * covered by the error notification, or by nothing when aborted).
- */
-export function turnCompleted(last?: WireTurnOutcome): boolean {
-	return last?.stopReason !== "aborted" && last?.stopReason !== "error";
-}
+/** Longest `errorMessage` excerpt carried in a notification body. */
+const ERROR_BODY_MAX = 80;
 
 /**
- * Desktop error text for a settled turn, or undefined when
- * sendErrorNotification stays silent: a non-terminal agent_end, a retry still
- * pending, or a last assistant message that did not stop in error. The text is
- * that message's errorMessage.
+ * Notification kind and body for a detached session's settled turn: an
+ * errored last assistant message notifies as `error` ("Stopped with error",
+ * plus its errorMessage when non-empty), an aborted one as `completion`
+ * ("Aborted"; the SDK has no abort setting), anything else, a missing
+ * stopReason included, as `completion` ("Complete").
  */
-export function turnFailure(
-	last: WireTurnOutcome | undefined,
-	{ terminal = true, retryPending = false }: { terminal?: boolean; retryPending?: boolean } = {},
-): string | undefined {
-	if (!terminal || retryPending) return undefined;
-	if (last?.stopReason !== "error") return undefined;
-	return last.errorMessage ?? "";
+export function outcomeNotice(outcome: WireTurnOutcome): { kind: NotifyKind; body: string } {
+	if (outcome.stopReason === "error") {
+		const message = outcome.errorMessage?.trim() ?? "";
+		const body = message === "" ? "" : `: ${truncateHead(message, ERROR_BODY_MAX)}`;
+		return { kind: "error", body: `Stopped with error${body}` };
+	}
+	if (outcome.stopReason === "aborted") return { kind: "completion", body: "Aborted" };
+	return { kind: "completion", body: "Complete" };
 }

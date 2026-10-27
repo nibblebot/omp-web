@@ -1,10 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-	NOTIFY_SETTING_PATH,
-	notifyKindEnabled,
-	turnCompleted,
-	turnFailure,
-} from "../store/notify";
+import { NOTIFY_SETTING_PATH, notifyKindEnabled, outcomeNotice } from "../store/notify";
 
 describe("notifyKindEnabled (SDK setting decides per event kind)", () => {
 	test("explicit on/off values are honoured for every kind", () => {
@@ -31,40 +26,45 @@ describe("notifyKindEnabled (SDK setting decides per event kind)", () => {
 	});
 });
 
-describe("turnCompleted (completion skips errored or aborted turns)", () => {
-	test("a turn ending in a normal stop counts as complete", () => {
-		expect(turnCompleted({ stopReason: "stop" })).toBe(true);
+describe("outcomeNotice (kind and body by turn outcome)", () => {
+	test("a normal stop or a missing stopReason is a Complete completion", () => {
+		expect(outcomeNotice({ stopReason: "stop" })).toEqual({ kind: "completion", body: "Complete" });
+		expect(outcomeNotice({})).toEqual({ kind: "completion", body: "Complete" });
+		expect(outcomeNotice({ stopReason: "toolUse" })).toEqual({
+			kind: "completion",
+			body: "Complete",
+		});
 	});
 
-	test("an errored or aborted last assistant message does not count", () => {
-		expect(turnCompleted({ stopReason: "error" })).toBe(false);
-		expect(turnCompleted({ stopReason: "aborted" })).toBe(false);
+	test("an aborted turn is an Aborted completion (no abort setting exists)", () => {
+		expect(outcomeNotice({ stopReason: "aborted", errorMessage: "ignored" })).toEqual({
+			kind: "completion",
+			body: "Aborted",
+		});
 	});
 
-	test("a turn with no assistant message counts as complete", () => {
-		expect(turnCompleted(undefined)).toBe(true);
-	});
-});
-
-describe("turnFailure (error notification mirrors sendErrorNotification)", () => {
-	test("a settled turn whose last assistant stopped in error returns its errorMessage", () => {
-		expect(turnFailure({ stopReason: "error", errorMessage: "boom" })).toBe("boom");
-	});
-
-	test("a missing errorMessage yields an empty body rather than silence", () => {
-		expect(turnFailure({ stopReason: "error" })).toBe("");
-	});
-
-	test("normal stop, aborted, or no assistant message stays silent", () => {
-		expect(turnFailure({ stopReason: "stop" })).toBeUndefined();
-		expect(turnFailure({ stopReason: "aborted", errorMessage: "x" })).toBeUndefined();
-		expect(turnFailure(undefined)).toBeUndefined();
+	test("an errored turn is an error notice carrying its message when non-empty", () => {
+		expect(outcomeNotice({ stopReason: "error", errorMessage: "boom" })).toEqual({
+			kind: "error",
+			body: "Stopped with error: boom",
+		});
+		expect(outcomeNotice({ stopReason: "error" })).toEqual({
+			kind: "error",
+			body: "Stopped with error",
+		});
+		expect(outcomeNotice({ stopReason: "error", errorMessage: "  " })).toEqual({
+			kind: "error",
+			body: "Stopped with error",
+		});
 	});
 
-	test("non-terminal agent_end or a pending retry stays silent", () => {
-		const last = { stopReason: "error", errorMessage: "boom" } as const;
-		expect(turnFailure(last, { terminal: false })).toBeUndefined();
-		expect(turnFailure(last, { retryPending: true })).toBeUndefined();
-		expect(turnFailure(last)).toBe("boom");
+	test("the error message is capped at 80 characters", () => {
+		const prefix = "Stopped with error: ";
+		expect(outcomeNotice({ stopReason: "error", errorMessage: "x".repeat(80) }).body).toBe(
+			prefix + "x".repeat(80),
+		);
+		expect(outcomeNotice({ stopReason: "error", errorMessage: "x".repeat(81) }).body).toBe(
+			prefix + "x".repeat(80),
+		);
 	});
 });

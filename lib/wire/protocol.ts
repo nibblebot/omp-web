@@ -1602,6 +1602,15 @@ export type ServerFrame =
 			workspaceId: string;
 			streaming: boolean;
 			blocked: boolean;
+			/**
+			 * Additive: the outcome of the turn whose end flipped `streaming` to
+			 * false, from the session's last yielded `agent_end` (`lastAssistant`;
+			 * an empty object when the run produced no assistant message). Present
+			 * only on that live broadcast; never primed, so a newly opened stream
+			 * never re-reports an old turn. Absent on older edges and on flips not
+			 * caused by an observed turn end (runtime gone, pair-up resync).
+			 */
+			endedTurn?: WireTurnOutcome;
 	  }
 	// Global broadcast: first-class registered projects. Sent when the
 	// registry's project set changes (same trigger as the roster broadcast)

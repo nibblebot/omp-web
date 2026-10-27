@@ -43,13 +43,6 @@ import { flushBtwEphemeral } from "./slices/btw";
 import { applyGoalUpdated } from "./slices/goals";
 import { settingValue } from "./settings";
 import { requestDangerConfirm } from "../prompt/danger-confirm";
-import {
-	NOTIFY_SETTING_PATH,
-	notifyKindEnabled,
-	turnCompleted,
-	turnFailure,
-	type NotifyKind,
-} from "./notify";
 
 /**
  * Chat/streaming domain (Phase 3 store facade split). Everything that mutates
@@ -60,7 +53,7 @@ import {
  * drained by the single flushDeltas rAF loop and called into by the mux.
  */
 
-/** localStorage key for the Phase 11 desktop-notifications toggle. */
+/** localStorage key for the browser-notifications toggle. */
 const NOTIFY_KEY = "omp.notifyEnabled";
 
 let nextId = 1;
@@ -154,42 +147,12 @@ export function truncateHead(s: string, max = 80): string {
 	return s.slice(0, i);
 }
 
-/** Last settled assistant message's visible text (thinking excluded). */
-function lastAssistantText(): string {
-	for (let i = state.items.length - 1; i >= 0; i--) {
-		const it = state.items[i];
-		if (it.kind === "assistant") {
-			const visible = it.blocks.filter((b) => b.kind !== "thinking");
-			return (visible.length > 0 ? visible : it.blocks).map((b) => b.text).join("\n\n");
-		}
-	}
-	return "";
-}
-
-/**
- * Desktop notification for one event kind. The SDK setting for that kind
- * (`completion.notify`, `error.notify`, `ask.notify`) decides whether it
- * notifies; the local toggle is the browser-permission grant. Fires only while
- * the tab is hidden. Non-secure contexts (typeof Notification === "undefined")
- * and denied/revoked permission are silent no-ops.
- */
-export function notifyDesktop(kind: NotifyKind, title: string, body: string): void {
-	if (!state.notifyEnabled || !document.hidden) return;
-	if (!notifyKindEnabled(kind, settingValue(NOTIFY_SETTING_PATH[kind]))) return;
-	if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-	try {
-		new Notification(title, body ? { body } : undefined);
-	} catch {
-		// Permission revoked between checks: silent no-op.
-	}
-}
-
 /** Ctrl+O: expand or collapse every tool card at once. */
 export function toggleToolsExpanded(): void {
 	setState("toolsExpanded", (v) => !v);
 }
 
-/** Persisted desktop-notifications toggle; requests permission on first enable. */
+/** Persisted browser-notifications toggle; requests permission on first enable. */
 export function setNotifyEnabled(enabled: boolean): void {
 	if (typeof localStorage !== "undefined") localStorage.setItem(NOTIFY_KEY, String(enabled));
 	setState("notifyEnabled", enabled);
@@ -643,18 +606,6 @@ export function applyEvent(e: WireSessionEvent): void {
 			if (!state.chatPinned) setState("answerUnviewed", true);
 			// finding #P1: turn ended (streamed text itself is never announced).
 			announceIfReady("agent finished");
-			// Phase 11: desktop notification while the tab is hidden (OSC parity).
-			if (turnCompleted(e.lastAssistant))
-				notifyDesktop("completion", "Turn complete", truncateHead(lastAssistantText(), 80));
-			// Error notification mirrors SDK sendErrorNotification: fired at agent_end, not from the error notice.
-			{
-				const failure = turnFailure(e.lastAssistant, {
-					terminal: e.isTerminal !== false,
-					retryPending: state.retryInfo !== null,
-				});
-				if (failure !== undefined)
-					notifyDesktop("error", "Turn stopped with error", truncateHead(failure, 80));
-			}
 			break;
 		case "message_start": {
 			const msg = e.message;
