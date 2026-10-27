@@ -24,7 +24,7 @@
  *   POST /ctl/plugins/:name/enabled {enabled}         -> detail after enable/disable
  *   POST /ctl/plugins/:name/features {features|null}  -> detail after feature selection
  *   POST /ctl/plugins/:name/setting {key, value|null} -> detail after setting write (null clears)
- *   POST /ctl/projects/:id/worktrees {name, baseRef?, existingBranch?, start?} -> 201 { entry }
+ *   POST /ctl/projects/:id/worktrees {name, baseRef?, existingBranch?, start?} -> 201 { entry } | 400 { error } (non-git project: "project is not a git repository")
  *   POST /ctl/clones/:workspaceId/fetch-into-project -> CloneFetchResult | 400/409/503 { error } (local-source clones on a fleet-visible volume only; fast-forward or create, never overwrite)
  *   DELETE /ctl/worktrees/:workspaceId {deleteBranch?: string} -> worktree: stop -> remove entry -> git worktree remove
  *                    (clone workspace: verify-at-deletion gate)
@@ -1454,12 +1454,14 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * POST /ctl/projects { path, start?, template? }: register the
-	 * main checkout behind `path`. resolveProjectRoot accepts a main checkout,
-	 * a linked worktree or a subdirectory; bare and non-git paths answer 400
-	 * with the reason. A checkout that is already registered answers
+	 * POST /ctl/projects { path, start?, template? }: register the project
+	 * behind `path`. resolveProjectRoot accepts a main checkout, a linked
+	 * worktree or a subdirectory of a git repo (all resolve to the main
+	 * checkout), or a plain directory with no git repo above it (registered
+	 * as a non-git project); a missing directory or a bare repo answers 400
+	 * with the reason. A project that is already registered answers
 	 * 200 { project, existing: true } and changes nothing. A new project
-	 * answers 201 { project, entry? }: its main-checkout roster entry comes
+	 * answers 201 { project, entry? }: its default roster entry comes
 	 * from registerProjectMainEntry, spawned only when start is true
 	 * (template passthrough, returned as `entry`) and asleep otherwise.
 	 * Staged: registration happens first, so a failed spawn reports 500
@@ -1507,13 +1509,15 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * A poll-detected, on-disk worktree removal: the session's cwd vanished
-	 * between git-state poll ticks (git worktree remove run outside the
-	 * fleet). Mirror #handleRemove's eviction: prune/drop + registry.remove
-	 * (the roster broadcast rides registry.onChange automatically), then
-	 * announce ONE worktree_removed toast when the row had a session. Never fired
-	 * for UI-initiated
-	 * delete_worktree/remove paths, which evict directly and must not toast.
+	 * A sync-detected worktree removal: the session's cwd vanished between
+	 * git-state poll ticks (git worktree remove run outside the fleet), or its
+	 * project lost `.git`, leaving the asleep linked worktree row stale. Mirror
+	 * #handleRemove's eviction: prune/drop + registry.remove (the roster
+	 * broadcast rides registry.onChange automatically), then announce ONE
+	 * worktree_removed toast when the row had a session and its folder is
+	 * gone (a `.git`-loss eviction leaves the folder, so it stays silent). Never fired for
+	 * UI-initiated delete_worktree/remove paths, which evict directly and must
+	 * not toast.
 	 */
 	async #onWorktreeVanished(entry: RegistryEntry): Promise<void> {
 		// A clone workspace's compute is provider-owned and its
@@ -1528,11 +1532,16 @@ class FleetServerImpl implements FleetServer {
 		if (!this.registry.get(entry.workspaceId)) return;
 		this.#evictingWorktrees.add(entry.workspaceId);
 		try {
+			// The folder is still there when the row was evicted because its
+			// project lost `.git`; "removed on disk" would be false then.
+			const vanished = !existsSync(entry.cwd);
 			await this.#evictRow(entry.workspaceId, async () => {});
 			this.eventLog.add(
 				"info",
 				"server",
-				`worktree vanished on disk: ${entry.cwd}`,
+				vanished
+					? `worktree vanished on disk: ${entry.cwd}`
+					: `worktree of a project without .git removed: ${entry.cwd}`,
 				entry.workspaceId,
 			);
 			// `this.edge` is assigned AFTER the sync in the constructor,
@@ -1540,8 +1549,8 @@ class FleetServerImpl implements FleetServer {
 			// starts after the edge assignment, so optional chaining guards any
 			// earlier synchronous trigger regardless.
 			// A row that never ran has no transcript to lose, so its eviction
-			// stays silent; only a row with a session gets the toast.
-			if (entry.lastSessionFile !== undefined) {
+			// stays silent; only a vanished row with a session gets the toast.
+			if (vanished && entry.lastSessionFile !== undefined) {
 				this.edge?.announceWorktreeRemoved({
 					workspaceId: entry.workspaceId,
 					name: entry.name,

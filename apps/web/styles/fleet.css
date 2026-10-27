@@ -689,8 +689,8 @@
 .workspace-profile-select {
 	margin-bottom: var(--space-3);
 }
-/* --- Roster group headers: per-project collapsible containers (caret rotates
-   when collapsed), plus rows nested under them --- */
+/* --- Roster group headers: per-project collapsible containers, plus rows
+   nested under them --- */
 
 .sidebar-group {
 	background: none;
@@ -712,13 +712,9 @@
 .sidebar-group:hover {
 	background: var(--hover);
 }
-.sidebar-caret {
+.project-group-icon {
 	flex: none;
 	color: var(--muted-2);
-	transition: transform var(--dur-move-fast) var(--ease-out);
-}
-button.sidebar-group[data-open="false"] .sidebar-caret {
-	transform: rotate(-90deg);
 }
 .sidebar-group-label {
 	flex: 1;
@@ -923,6 +919,11 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .session-git-dirty[data-kind="deleted"] {
 	color: var(--error);
 }
+/* Asleep rows are frozen (never probed), so their diffstat reads as muted:
+   the file, added and deleted colors give way to one gray. */
+.roster-row--asleep .session-git-dirty[data-kind] {
+	color: var(--muted-2);
+}
 /* Top line: kind icon + branch (+ lock) on the left, the session chevron and
    "+" and the corner slot on the right. Asleep rows dim the title. */
 .roster-row-title {
@@ -968,6 +969,11 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 }
 .roster-session-title--two-line {
 	-webkit-line-clamp: 2;
+}
+/* Placeholder titles ("New session", "Untitled session") read as muted, under
+   or on the top line. */
+.roster-title--placeholder {
+	color: var(--muted-2);
 }
 /* Chevron and "+" (clickable rows) overlay the right end of the top line,
    just left of the corner slot, so the branch keeps the full width at rest. A
@@ -1609,7 +1615,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	align-items: center;
 }
 /* --- Sidebar: project-first groups (FleetSidebar.tsx) --- */
-/* Left padding lives entirely on the toggle so the caret lands on the
+/* Left padding lives entirely on the toggle so the folder icon lands on the
    --gutter scan line (list padding + toggle padding). Right padding puts the tail's
    corner column where a row's corner sits (rows bleed over the list padding,
    the header does not). The gap above a header is 4x the --space-1 gap between
@@ -1637,9 +1643,6 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	text-align: left;
 	padding: var(--space-2) var(--space-2) var(--space-2) calc(var(--gutter) - var(--space-3));
 	cursor: pointer;
-}
-button.project-group-toggle[data-open="false"] .sidebar-caret {
-	transform: rotate(-90deg);
 }
 .project-group-toggle:hover {
 	background: var(--hover);

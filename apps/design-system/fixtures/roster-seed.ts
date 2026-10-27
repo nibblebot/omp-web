@@ -9,8 +9,9 @@ import { rosterFsBrowse } from "./roster-routes";
 
 /**
  * Project commands the sidebar and the Add project dialog send. A registered
- * path answers `existing`; a path the fixture browser can list registers a new
- * project; any other path is refused. remove_project and sync_projects change
+ * path answers `existing`; any directory the fixture browser can list registers a new
+ * project, git or not (a plain folder registers as non-git); any other path is refused as
+ * not a directory. remove_project and sync_projects change
  * nothing, so the seeded roster stays as it is.
  */
 const projectCommands: CommandHandlers = {
@@ -22,7 +23,7 @@ const projectCommands: CommandHandlers = {
 			return;
 		}
 		if (rosterFsBrowse(cmd.path) instanceof Response) {
-			settleAddProject({ id: cmd.id, ok: false, error: `${cmd.path} is not a git repository` });
+			settleAddProject({ id: cmd.id, ok: false, error: `not a directory: ${cmd.path}` });
 			return;
 		}
 		const name = cmd.path.split("/").pop() ?? cmd.path;

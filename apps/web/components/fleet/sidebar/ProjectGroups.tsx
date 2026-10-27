@@ -27,7 +27,7 @@ import {
 	syncProjects,
 } from "../../../store/projects";
 import { KebabMenu } from "../../ui/KebabMenu";
-import { ChevronDownIcon, PlusIcon, TrashIcon } from "../../ui/icons";
+import { FolderClosedIcon, FolderOpenIcon, PlusIcon, TrashIcon } from "../../ui/icons";
 import { NewWorkspacePopover } from "./NewWorkspacePopover";
 import { RowMotion } from "./RowMotion";
 import { RowSignal } from "./RowSignal";
@@ -42,7 +42,8 @@ import { WorkspaceRow, menuOpenId, setMenuOpenId } from "./WorkspaceRow";
 // ---------------------------------------------------------------------------
 // Project-grouped roster rendering: one collapsible group per registered
 // project, then an "Add project" row at the bottom of the list (opens the
-// Add project dialog). The header carries the caret and the name, then a
+// Add project dialog). The header carries the folder icon (open while the
+// group is expanded, closed while collapsed) and the name, then a
 // tail laid out like a row's right edge: while the group is collapsed, a
 // muted summary (rail mark + live/total, or "N asleep") with the most urgent
 // row signal in the corner column (fleet-ui/workspace-status.ts projectRollup,
@@ -134,10 +135,11 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 		if (expanding) syncProjects();
 	};
 
-	/** One registered-project group: collapsible header (caret, name, and a
+	/** One registered-project group: collapsible header (folder icon, name, and a
 	 *  right tail: roll-up summary and signal while collapsed, the "+" New
-	 *  workspace trigger and the "⋯" menu carrying Remove project on header
-	 *  hover), then one row per checkout in sessionsByProject order. */
+	 *  workspace trigger (git projects only) and the "⋯" menu carrying Remove
+	 *  project on header hover), then one row per checkout in sessionsByProject
+	 *  order. */
 	const ProjectGroup: Component<{ project: RegisteredProject; sessions: RosterEntry[] }> = (
 		props,
 	) => {
@@ -250,7 +252,9 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 						data-open={open() ? "true" : "false"}
 						onClick={() => toggleGroup(gkey)}
 					>
-						<ChevronDownIcon class="sidebar-caret" />
+						<Show when={open()} fallback={<FolderClosedIcon class="project-group-icon" />}>
+							<FolderOpenIcon class="project-group-icon" />
+						</Show>
 						<span class="sidebar-group-label" title={props.project.path}>
 							{props.project.name}
 						</span>
@@ -280,22 +284,25 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 									{rollupSummary(rollup())}
 								</span>
 							</Show>
-							<button
-								ref={setPlusEl}
-								type="button"
-								class="sidebar-icon-btn project-new-btn"
-								aria-label={`New workspace in ${props.project.name}`}
-								aria-expanded={popoverOpen()}
-								title={
-									missing()
-										? "Project folder is missing; no workspace can start"
-										: `New workspace in ${props.project.name}`
-								}
-								disabled={missing()}
-								onClick={onPlus}
-							>
-								<PlusIcon />
-							</button>
+							{/* A plain folder (no .git) has no worktrees or clones to create. */}
+							<Show when={props.project.git !== false}>
+								<button
+									ref={setPlusEl}
+									type="button"
+									class="sidebar-icon-btn project-new-btn"
+									aria-label={`New workspace in ${props.project.name}`}
+									aria-expanded={popoverOpen()}
+									title={
+										missing()
+											? "Project folder is missing; no workspace can start"
+											: `New workspace in ${props.project.name}`
+									}
+									disabled={missing()}
+									onClick={onPlus}
+								>
+									<PlusIcon />
+								</button>
+							</Show>
 						</span>
 						<span class="roster-row-corner project-group-corner">
 							<Show when={!open() ? rollup().signal : null}>
@@ -353,7 +360,12 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 										setSlots((prev) => finishRowExit(prev, done));
 									}}
 								>
-									<WorkspaceRow session={slot().item} inProjectGroup projectMissing={missing()} />
+									<WorkspaceRow
+										session={slot().item}
+										inProjectGroup
+										projectMissing={missing()}
+										projectGit={props.project.git !== false}
+									/>
 								</RowMotion>
 							);
 						}}

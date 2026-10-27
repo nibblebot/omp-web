@@ -1,21 +1,37 @@
 /**
- * ProjectSync: keeps the registry in step with git. Runtime ownership (spawn,
- * stop, respawn, exit and restart policy, credentials) lives in
- * workspace-lifecycle.ts; this module only observes.
+ * ProjectSync: keeps the registry in step with the filesystem and git. Runtime
+ * ownership (spawn, stop, respawn, exit and restart policy, credentials)
+ * lives in workspace-lifecycle.ts; this module only observes.
  *
- * Sync (startGitStatePolling, syncNow) registers, per project, missing rows
- * (main checkout and linked worktrees, asleep), reconciles project.missing and
- * each worktree's lock flag. Per row it keeps branch, dirty counts, the
- * detached short sha, and the last-session-file title fresh for the roster.
- * Running rows are probed every tick; asleep rows every 60s.
+ * Projects are git repos' main checkouts or plain directories. Whether a
+ * project is a git repo (its directory has a `.git`) is in-memory state in the
+ * registry (`isProjectGit`, reported as `RegisteredProject.git === false`):
+ * computed at boot, then kept by per-project watchers (non-recursive fs.watch
+ * on the project directory reacting only to `.git`, and for git projects on
+ * `.git/worktrees` and `.git` entries named `worktrees`). Events debounce per
+ * project, then one project sync runs: a `.git` that appeared or vanished
+ * flips the project's git state (a vanished `.git` is NOT missing), a
+ * vanished directory marks the project missing, and a git project runs one
+ * `git worktree list` to register the rows of worktrees created outside
+ * omp-web and reconcile each worktree's lock flag. A project whose watcher
+ * cannot start or errors falls back to a 60s poll of the same sync.
+ * Non-git projects never run git: they only need their directory and a main
+ * row. Their linked worktree rows (left over from a `.git` that was deleted)
+ * are evicted once asleep; a running one stays until it stops.
  *
- * close() stops the poll; it never touches sessions.
+ * Per row (startGitStatePolling) it keeps branch, dirty counts, the detached
+ * short sha, and the last-session-file title fresh for the roster. Rows that
+ * are not asleep are probed every tick (10s); an asleep row is probed once
+ * (when first seen) and never again. A non-clone row of a non-git project
+ * skips the git probe, but still reads its session title on the row's cadence.
+ *
+ * close() stops the poll and every watcher; it never touches sessions.
  */
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, statSync, watch, type FSWatcher } from "node:fs";
+import { basename, join } from "node:path";
 import type { RegisteredProject } from "#lib/wire/protocol";
-import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
+import { hasGitEntry, probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
 import type { GitRunner, GitState } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
 import { readSessionInfo } from "./session-title";
@@ -30,9 +46,30 @@ import {
 import type { FleetLogLevel } from "./events";
 
 const DEFAULT_SYNC_INTERVAL_MS = 10_000;
-const ASLEEP_SYNC_INTERVAL_MS = 60_000;
+/** Quiet time after the last watcher event of a project before its sync runs. */
+const WATCH_DEBOUNCE_MS = 250;
+/** Poll period of a project whose watchers cannot run (or whose directory is gone). */
+const FALLBACK_POLL_MS = 60_000;
 /** Max git probes in flight during one sync pass (rows probe in parallel). */
 const SYNC_PROBE_CONCURRENCY = 4;
+
+/** Per-project watcher state (all handles are null while the project is not watched). */
+interface ProjectWatch {
+	/** Directory watch: reacts to `.git` and to the directory itself disappearing. */
+	dir: FSWatcher | null;
+	/** `.git` watch (git projects): reacts to the `worktrees` entry only. */
+	gitDir: FSWatcher | null;
+	/** `.git/worktrees` watch (git projects, while that directory exists): any entry. */
+	worktrees: FSWatcher | null;
+	/** Pending debounce timer. */
+	debounce: ReturnType<typeof setTimeout> | null;
+	/** Fallback poll (watchers failed or the directory is gone). */
+	poll: ReturnType<typeof setInterval> | null;
+	/** A `.git` event arrived since the last sync: the git watchers may sit on a dead inode. */
+	gitEvent: boolean;
+	/** The failure reason was already logged. */
+	logged: boolean;
+}
 
 /**
  * Run `fn` over `items` with at most `limit` in flight. Resolves only after
@@ -92,6 +129,9 @@ function sameGitState(
 	);
 }
 
+/** `#probeGitOf` answer for a row whose project is not a git repo: no git ran, nothing to reconcile. */
+const GIT_SKIPPED = Symbol("git-skipped");
+
 export class ProjectSync {
 	#registry: Registry;
 	#host: HostSessions;
@@ -103,7 +143,17 @@ export class ProjectSync {
 	#syncing: Promise<void> | null = null;
 	/** A sync request arrived mid-pass: exactly one follow-up pass runs. */
 	#syncQueued = false;
-	/** Last probe time per workspaceId; asleep rows wait ASLEEP_SYNC_INTERVAL_MS. */
+	/** syncNow() was called: the next pass syncs every project, not just the signaled ones. */
+	#fullRequested = false;
+	/** Projects whose watcher (or fallback poll) signaled: the next pass syncs them. */
+	#pending = new Set<string>();
+	/** Watchers run (startGitStatePolling was called and close() was not). */
+	#watching = false;
+	#debounceMs = WATCH_DEBOUNCE_MS;
+	#fallbackPollMs = FALLBACK_POLL_MS;
+	/** Watcher state per projectId. */
+	#watches = new Map<string, ProjectWatch>();
+	/** Rows probed at least once: an asleep row is probed only until it has been. */
 	#lastProbeAt = new Map<string, number>();
 	/** In-flight probe per workspaceId: a sync pass and a spawn-time probe share one run. */
 	#probing = new Map<string, Promise<void>>();
@@ -149,31 +199,45 @@ export class ProjectSync {
 	}
 
 	/**
-	 * Start the sync timer: one immediate pass, then one per `intervalMs`
-	 * (default 10s). Each tick calls syncNow(); rows whose cadence has not
-	 * elapsed are skipped (asleep rows every 60s). Idempotent: a second call
-	 * while the timer runs is ignored so passes never stack. `close()` stops
-	 * the timer. The injected `exec` keeps tests hermetic.
+	 * Start sync: compute every project's git state (one `.git` existence
+	 * check each), start the per-project watchers, run one full pass, then one
+	 * probe pass per `intervalMs` (default 10s). Each tick probes the rows
+	 * that are due (not asleep, or never probed); it does not list worktrees,
+	 * which is watcher-driven. Idempotent: a second call while the timer runs
+	 * is ignored so passes never stack. `close()` stops the timer and the
+	 * watchers. The injected `exec` keeps tests hermetic; `watchDebounceMs`
+	 * and `fallbackPollMs` shorten the watcher debounce and the fallback poll.
 	 */
-	startGitStatePolling(opts?: { intervalMs?: number; exec?: GitRunner }): void {
+	startGitStatePolling(opts?: {
+		intervalMs?: number;
+		exec?: GitRunner;
+		watchDebounceMs?: number;
+		fallbackPollMs?: number;
+	}): void {
 		if (this.#gitStateTimer) return;
 		this.#gitExec = opts?.exec;
+		this.#debounceMs = opts?.watchDebounceMs ?? WATCH_DEBOUNCE_MS;
+		this.#fallbackPollMs = opts?.fallbackPollMs ?? FALLBACK_POLL_MS;
 		const intervalMs = opts?.intervalMs ?? DEFAULT_SYNC_INTERVAL_MS;
+		for (const project of this.#registry.projects()) {
+			// A directory that is gone has no git state to read: keep what it was.
+			if (existsSync(project.path)) {
+				this.#registry.setProjectGit(project.projectId, hasGitEntry(project.path));
+			}
+		}
+		this.#watching = true;
 		this.syncNow();
-		this.#gitStateTimer = setInterval(() => this.syncNow(), intervalMs);
+		this.#gitStateTimer = setInterval(() => this.#kick(), intervalMs);
 	}
 
 	/**
-	 * Run one sync pass now (sync_projects calls this). Requests that arrive
-	 * while a pass runs coalesce into exactly one follow-up pass: passes never
-	 * overlap.
+	 * Run one full sync pass now (sync_projects calls this): every project is
+	 * reconciled. Requests that arrive while a pass runs coalesce into exactly
+	 * one follow-up pass: passes never overlap.
 	 */
 	syncNow(): void {
-		if (this.#syncing) {
-			this.#syncQueued = true;
-			return;
-		}
-		this.#syncing = this.#runSyncPasses();
+		this.#fullRequested = true;
+		this.#kick();
 	}
 
 	/**
@@ -186,6 +250,15 @@ export class ProjectSync {
 		const entry = this.#registry.get(workspaceId);
 		if (!entry) return;
 		void this.#probeEntry(entry);
+	}
+
+	/** Run a pass now, or queue exactly one follow-up when one is running. */
+	#kick(): void {
+		if (this.#syncing) {
+			this.#syncQueued = true;
+			return;
+		}
+		this.#syncing = this.#runSyncPasses();
 	}
 
 	/**
@@ -206,37 +279,79 @@ export class ProjectSync {
 	}
 
 	/**
-	 * One pass: reconcile every project (its rows and project.missing), then
-	 * probe every row whose cadence is due. Forgets probe times of removed rows.
+	 * One pass: reconcile the watcher set with the registered projects, sync
+	 * the projects that need it (all of them after syncNow, the signaled ones
+	 * after a watcher event, new ones always), then probe every row that is
+	 * due. Forgets probe times of removed rows.
 	 */
 	async #syncPass(): Promise<void> {
+		const full = this.#fullRequested;
+		this.#fullRequested = false;
+		const due = new Set(this.#pending);
+		this.#pending.clear();
+		for (const projectId of this.#reconcileWatchers()) due.add(projectId);
 		// One realpath memo for the whole pass: projects and rows resolve each
 		// distinct path once instead of once per row per project.
 		const realpaths = new Map<string, string>();
 		for (const project of this.#registry.projects()) {
-			await this.#syncProject(project, realpaths);
+			if (full || due.has(project.projectId)) await this.#syncProject(project, realpaths);
 		}
+		this.#evictOrphanedWorktrees();
 		const now = Date.now();
-		const due = this.#registry.list().filter((entry) => this.#probeDue(entry, now));
-		for (const entry of due) this.#lastProbeAt.set(entry.workspaceId, now);
-		await forEachLimit(due, SYNC_PROBE_CONCURRENCY, (entry) => this.#probeEntry(entry));
+		const probes = this.#registry.list().filter((entry) => this.#probeDue(entry));
+		for (const entry of probes) this.#lastProbeAt.set(entry.workspaceId, now);
+		await forEachLimit(probes, SYNC_PROBE_CONCURRENCY, (entry) => this.#probeEntry(entry));
 		for (const workspaceId of this.#lastProbeAt.keys()) {
 			if (!this.#registry.get(workspaceId)) this.#lastProbeAt.delete(workspaceId);
 		}
 	}
 
 	/**
-	 * Reconcile one project against its main checkout's worktree list. A
-	 * missing, bare, or unreadable main checkout marks the project missing and
-	 * is never removed. Otherwise the main row is ensured and every linked
-	 * worktree without a row is registered asleep (prunable checkouts are
-	 * skipped). Each linked row mirrors git's lock flag.
+	 * Reconcile one project with the filesystem.
+	 *
+	 * - Directory gone: the project is `missing` (its git state is kept, its
+	 *   watchers are closed, a fallback poll waits for it to return).
+	 * - `.git` appeared or vanished: the registry's git state flips, the
+	 *   watchers are rearmed for the new state, and a flip to git re-opens the
+	 *   rows for one probe (an asleep row is probed only when never probed).
+	 * - Non-git: never runs git. Stale branch/git/detachedAt on its rows are
+	 *   cleared and the main row is ensured.
+	 * - Git: a missing, bare, or unreadable main checkout (a failed worktree
+	 *   list with `.git` present) marks the project missing and is never
+	 *   removed. Otherwise the main row is ensured and every linked worktree
+	 *   without a row is registered asleep (prunable checkouts are skipped).
+	 *   Each linked row mirrors git's lock flag.
 	 */
 	async #syncProject(project: RegisteredProject, realpaths: Map<string, string>): Promise<void> {
+		const { projectId } = project;
+		const watched = this.#watches.get(projectId);
+		if (!existsSync(project.path)) {
+			this.#registry.setProjectMissing(projectId, true);
+			if (watched) {
+				this.#closeWatchers(watched);
+				this.#ensurePoll(project, watched);
+			}
+			return;
+		}
+		const git = hasGitEntry(project.path);
+		const flipped = git !== this.#registry.isProjectGit(projectId);
+		if (flipped) this.#registry.setProjectGit(projectId, git);
+		if (watched && (flipped || watched.gitEvent || watched.dir === null)) {
+			watched.gitEvent = false;
+			this.#rearmWatchers(project, watched);
+		}
+		if (!git) {
+			this.#registry.setProjectMissing(projectId, false);
+			this.#clearGitFields(projectId);
+			await registerProjectMainEntry(this.#registry, this.#host, project, { realpaths });
+			return;
+		}
+		if (flipped) this.#forgetProbes(projectId);
+		if (watched) this.#refreshWorktreesWatch(project, watched);
 		const blocks = await listWorktreeBlocks(project.path);
 		const main = blocks?.[0];
 		const missing = main === undefined || main.bare === true;
-		this.#registry.setProjectMissing(project.projectId, missing);
+		this.#registry.setProjectMissing(projectId, missing);
 		if (blocks === undefined || missing) return;
 		await registerProjectMainEntry(this.#registry, this.#host, project, { realpaths });
 		for (const block of blocks.slice(1)) {
@@ -257,14 +372,203 @@ export class ProjectSync {
 		}
 	}
 
+	/** Clear branch/git/detachedAt on the non-clone rows of a project that is not a git repo (only when set). */
+	#clearGitFields(projectId: string): void {
+		for (const entry of this.#registry.list()) {
+			if (entry.projectId !== projectId || entry.workspace?.kind === "clone") continue;
+			if (entry.branch === undefined && entry.git === undefined && entry.detachedAt === undefined) {
+				continue;
+			}
+			this.#registry.update(entry.workspaceId, {
+				branch: undefined,
+				git: undefined,
+				detachedAt: undefined,
+			});
+		}
+	}
+
 	/**
-	 * A row is due when it has never been probed, when it is not asleep (live
-	 * rows are probed on every pass), or when its asleep interval has elapsed.
+	 * Linked worktree rows of a project that lost its `.git` are stale: their git
+	 * metadata went with it, so they never come back. Asleep ones are evicted
+	 * through onWorktreeRemoved (transcripts kept); a running one stays until it
+	 * stops, and the next pass evicts it. In-memory only, no filesystem access.
 	 */
-	#probeDue(entry: RegistryEntry, now: number): boolean {
-		const last = this.#lastProbeAt.get(entry.workspaceId);
-		if (last === undefined || entry.status !== "asleep") return true;
-		return now - last >= ASLEEP_SYNC_INTERVAL_MS;
+	#evictOrphanedWorktrees(): void {
+		if (!this.#onWorktreeRemoved) return;
+		for (const entry of this.#registry.list()) {
+			if (entry.worktreeOf === undefined || entry.workspace?.kind === "clone") continue;
+			if (entry.status !== "asleep" || entry.projectId === undefined) continue;
+			if (this.#registry.isProjectGit(entry.projectId)) continue;
+			this.#onWorktreeRemoved(entry);
+		}
+	}
+
+	/** Treat every row of a project as never probed (an asleep row then gets one fresh probe). */
+	#forgetProbes(projectId: string): void {
+		for (const entry of this.#registry.list()) {
+			if (entry.projectId === projectId) this.#lastProbeAt.delete(entry.workspaceId);
+		}
+	}
+
+	/**
+	 * Start watchers for projects that have none and close those of removed
+	 * projects. Returns the ids of the projects just started (they need one
+	 * sync). A no-op until startGitStatePolling ran.
+	 */
+	#reconcileWatchers(): string[] {
+		if (!this.#watching) return [];
+		const projects = this.#registry.projects();
+		const live = new Set(projects.map((project) => project.projectId));
+		for (const projectId of [...this.#watches.keys()]) {
+			if (live.has(projectId)) continue;
+			this.#disposeWatch(this.#watches.get(projectId)!);
+			this.#watches.delete(projectId);
+			this.#pending.delete(projectId);
+		}
+		const started: string[] = [];
+		for (const project of projects) {
+			if (this.#watches.has(project.projectId)) continue;
+			const watchState: ProjectWatch = {
+				dir: null,
+				gitDir: null,
+				worktrees: null,
+				debounce: null,
+				poll: null,
+				gitEvent: false,
+				logged: false,
+			};
+			this.#watches.set(project.projectId, watchState);
+			this.#armWatchers(project, watchState);
+			started.push(project.projectId);
+		}
+		return started;
+	}
+
+	/**
+	 * Arm the project's watchers for its current git state: the directory
+	 * watch always, the `.git` and `.git/worktrees` watches for a git project.
+	 * Any failure (inotify limit, network fs, `.git` not a directory, directory
+	 * gone) leaves the project on the fallback poll; the reason is logged once.
+	 */
+	#armWatchers(project: RegisteredProject, state: ProjectWatch): void {
+		const { projectId, path } = project;
+		const dirName = basename(path);
+		try {
+			state.dir = watch(path, { persistent: false }, (_event, filename) => {
+				const name = filename?.toString();
+				if (name === ".git") state.gitEvent = true;
+				if (name === undefined || name === ".git" || name === dirName) this.#signal(projectId);
+			});
+			state.dir.on("error", (err) => this.#watchFailed(project, state, err));
+			if (this.#registry.isProjectGit(projectId)) {
+				if (!statSync(join(path, ".git")).isDirectory()) {
+					throw new Error(".git is not a directory (separate git dir?)");
+				}
+				state.gitDir = watch(join(path, ".git"), { persistent: false }, (_event, filename) => {
+					const name = filename?.toString();
+					if (name === undefined || name === "worktrees") this.#signal(projectId);
+				});
+				state.gitDir.on("error", (err) => this.#watchFailed(project, state, err));
+				this.#openWorktreesWatch(project, state);
+			}
+		} catch (err) {
+			this.#watchFailed(project, state, err);
+			return;
+		}
+		if (state.poll) {
+			clearInterval(state.poll);
+			state.poll = null;
+		}
+	}
+
+	/** Close and re-open every watcher of a project (a stale `.git` inode, or a git-state flip). */
+	#rearmWatchers(project: RegisteredProject, state: ProjectWatch): void {
+		this.#closeWatchers(state);
+		this.#armWatchers(project, state);
+	}
+
+	/** Re-open the `.git/worktrees` watch (the directory may have been deleted and recreated since). */
+	#refreshWorktreesWatch(project: RegisteredProject, state: ProjectWatch): void {
+		if (state.gitDir === null) return;
+		state.worktrees?.close();
+		state.worktrees = null;
+		try {
+			this.#openWorktreesWatch(project, state);
+		} catch (err) {
+			this.#watchFailed(project, state, err);
+		}
+	}
+
+	/** Watch `.git/worktrees` (any entry) while it exists; git removes it with its last worktree. */
+	#openWorktreesWatch(project: RegisteredProject, state: ProjectWatch): void {
+		const dir = join(project.path, ".git", "worktrees");
+		if (!existsSync(dir)) return;
+		state.worktrees = watch(dir, { persistent: false }, () => this.#signal(project.projectId));
+		state.worktrees.on("error", (err) => this.#watchFailed(project, state, err));
+	}
+
+	/**
+	 * A watcher failed to start or errored: close them all, log the reason once (unless the directory is simply gone),
+	 * and poll the project instead. Each poll tick retries the watchers.
+	 */
+	#watchFailed(project: RegisteredProject, state: ProjectWatch, err: unknown): void {
+		this.#closeWatchers(state);
+		// A directory that is gone is the `missing` state, not a watcher failure.
+		if (!state.logged && existsSync(project.path)) {
+			state.logged = true;
+			const reason = err instanceof Error ? err.message : String(err);
+			console.error(
+				`fleet: cannot watch project ${project.path} (${reason}); polling every ${Math.round(this.#fallbackPollMs / 1000)}s`,
+			);
+		}
+		this.#ensurePoll(project, state);
+	}
+
+	/** Start the fallback poll (idempotent). Each tick retries the watchers, then syncs the project. */
+	#ensurePoll(project: RegisteredProject, state: ProjectWatch): void {
+		if (state.poll || !this.#watching) return;
+		state.poll = setInterval(() => this.#signal(project.projectId, 0), this.#fallbackPollMs);
+	}
+
+	/** Debounced request to sync one project. */
+	#signal(projectId: string, delayMs = this.#debounceMs): void {
+		const state = this.#watches.get(projectId);
+		if (!state || !this.#watching) return;
+		if (state.debounce) clearTimeout(state.debounce);
+		state.debounce = setTimeout(() => {
+			state.debounce = null;
+			if (!this.#watching) return;
+			this.#pending.add(projectId);
+			this.#kick();
+		}, delayMs);
+	}
+
+	/** Close the project's fs watchers (the poll and debounce timers stay). */
+	#closeWatchers(state: ProjectWatch): void {
+		state.dir?.close();
+		state.gitDir?.close();
+		state.worktrees?.close();
+		state.dir = null;
+		state.gitDir = null;
+		state.worktrees = null;
+	}
+
+	/** Close everything a project holds: watchers, debounce, poll. */
+	#disposeWatch(state: ProjectWatch): void {
+		this.#closeWatchers(state);
+		if (state.debounce) clearTimeout(state.debounce);
+		if (state.poll) clearInterval(state.poll);
+		state.debounce = null;
+		state.poll = null;
+	}
+
+	/**
+	 * A row is due when it has never been probed or when it is not asleep. An
+	 * asleep row that has been probed once stays frozen until it wakes (or its
+	 * project flips to git, which forgets its probe).
+	 */
+	#probeDue(entry: RegistryEntry): boolean {
+		return !this.#lastProbeAt.has(entry.workspaceId) || entry.status !== "asleep";
 	}
 
 	/**
@@ -284,13 +588,16 @@ export class ProjectSync {
 	/**
 	 * The entry is re-read after the probe so a removal mid-probe is skipped;
 	 * an update happens only on an actual branch/git change. The title probe
-	 * runs whatever the git result: a git failure must not hide a title change.
+	 * runs whatever the git result: a git failure must not hide a title change,
+	 * and a row of a non-git project (no git probe at all) still reads its title.
 	 */
 	async #probeRow(entry: RegistryEntry): Promise<void> {
 		const result = await this.#probeGitOf(entry);
 		const current = this.#registry.get(entry.workspaceId);
 		if (!current) return; // removed while probing
-		if (result === undefined) {
+		if (result === GIT_SKIPPED) {
+			// Not a git row: nothing to reconcile (the sync clears stale fields).
+		} else if (result === undefined) {
 			// Probe failure (spawn error / nonzero exit / unparseable). The repo
 			// may be gone: a TAGGED worktree whose cwd no longer exists on disk
 			// is being evicted (e.g. `git worktree remove` outside the fleet), so
@@ -329,16 +636,21 @@ export class ProjectSync {
 	}
 
 	/**
-	 * Git state of one row's repo, or undefined (probe failed, or no repo yet).
+	 * Git state of one row's repo, or undefined (probe failed, or no repo yet),
+	 * or GIT_SKIPPED for a non-clone row of a non-git project (no git runs, even
+	 * for a running linked worktree orphaned by its project losing `.git`).
 	 * A clone row's cwd is its volume root, which is not a repo: its repo is the
 	 * checkout under it. A clone whose checkout has no `.git` yet spawns nothing.
 	 */
-	async #probeGitOf(entry: RegistryEntry): Promise<GitState | undefined> {
+	async #probeGitOf(entry: RegistryEntry): Promise<GitState | undefined | typeof GIT_SKIPPED> {
 		if (entry.workspace?.kind !== "clone") {
+			if (entry.projectId !== undefined && !this.#registry.isProjectGit(entry.projectId)) {
+				return GIT_SKIPPED;
+			}
 			return probeGit(entry.cwd, { exec: this.#gitExec });
 		}
 		const checkout = cloneCheckoutDir(entry.cwd);
-		if (!existsSync(join(checkout, ".git"))) return undefined;
+		if (!hasGitEntry(checkout)) return undefined;
 		return probeGit(checkout, { exec: this.#gitExec });
 	}
 
@@ -367,11 +679,15 @@ export class ProjectSync {
 		}
 	}
 
-	/** Stop the git-state poll. Sessions are untouched: they outlive the control plane. */
+	/** Stop the sync timer and every watcher. Sessions are untouched: they outlive the control plane. */
 	close(): void {
 		if (this.#gitStateTimer) {
 			clearInterval(this.#gitStateTimer);
 			this.#gitStateTimer = null;
 		}
+		this.#watching = false;
+		for (const state of this.#watches.values()) this.#disposeWatch(state);
+		this.#watches.clear();
+		this.#pending.clear();
 	}
 }

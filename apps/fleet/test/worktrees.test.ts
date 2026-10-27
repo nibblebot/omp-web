@@ -1,5 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	realpathSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { basename, join } from "node:path";
 import type { RegisteredProject } from "#lib/wire/protocol";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
@@ -312,9 +319,20 @@ describe("resolveProjectRoot", () => {
 		expect(await resolveProjectRoot(join(repo, "nested"))).toBe(repo);
 	});
 
-	test("refuses non-git, missing, and bare paths with a user-facing reason", async () => {
+	test("a directory with no git repo above it resolves to its own realpath", async () => {
 		const plain = tempDir("omp-web-worktrees-");
-		await expect(resolveProjectRoot(plain)).rejects.toThrow(`not a git repository: ${plain}`);
+		mkdirSync(join(plain, "nested"));
+		expect(await resolveProjectRoot(plain)).toBe(realpathSync(plain));
+		expect(await resolveProjectRoot(join(plain, "nested"))).toBe(
+			realpathSync(join(plain, "nested")),
+		);
+	});
+
+	test("refuses a `.git` git cannot read, missing, and bare paths with a user-facing reason", async () => {
+		const plain = tempDir("omp-web-worktrees-");
+		const broken = join(plain, "broken");
+		mkdirSync(join(broken, ".git"), { recursive: true });
+		await expect(resolveProjectRoot(broken)).rejects.toThrow(`not a git repository: ${broken}`);
 		const missing = join(plain, "ghost");
 		await expect(resolveProjectRoot(missing)).rejects.toThrow(`not a directory: ${missing}`);
 		const bareParent = tempDir("omp-web-worktrees-");

@@ -17,12 +17,15 @@ const Row = (props: {
 	session: RosterEntry;
 	inProjectGroup?: boolean;
 	projectMissing?: boolean;
+	/** false for a row of a plain-directory project (no `.git`): no branch, diffstat, or worktree controls. */
+	projectGit?: boolean;
 }) => (
 	<Column>
 		<WorkspaceRow
 			session={props.session}
 			inProjectGroup={props.inProjectGroup}
 			projectMissing={props.projectMissing}
+			projectGit={props.projectGit}
 		/>
 	</Column>
 );
@@ -56,7 +59,8 @@ export default defineStory({
 		},
 		{
 			name: "Pre-existing linked worktree",
-			description: "Asleep and no session yet: one line, a dimmed branch, no rail.",
+			description:
+				"Asleep and no session file yet: the dimmed branch, then a muted `New session` title line, no rail.",
 			render: () => <Row session={rosterEntry.registeredWorktree} />,
 		},
 		{
@@ -66,6 +70,12 @@ export default defineStory({
 		{
 			name: "Asleep worktree (dimmed)",
 			render: () => <Row session={rosterEntry.asleep} />,
+		},
+		{
+			name: "Asleep worktree with diffstat (muted)",
+			description:
+				"An asleep row keeps the diffstat it had when it went to sleep, drawn muted: asleep rows are never re-probed, so it stays frozen until the row wakes.",
+			render: () => <Row session={rosterEntry.asleepDirty} />,
 		},
 		{
 			name: "Starting (spinner)",
@@ -106,8 +116,9 @@ export default defineStory({
 			render: () => <Row session={rosterEntry.blocked} />,
 		},
 		{
-			name: "No session title (one line)",
-			description: "A ready, idle worktree with no last-session title and no git changes.",
+			name: "Untitled session (placeholder)",
+			description:
+				"A ready, idle worktree whose session has messages but no title yet, with no git changes: a muted `Untitled session` line.",
 			render: () => (
 				<Row
 					session={{
@@ -116,6 +127,38 @@ export default defineStory({
 					}}
 				/>
 			),
+		},
+		{
+			name: "New session, empty session (placeholder)",
+			description:
+				"A worktree whose session file has no messages (`sessionEmpty`): a muted `New session` line, the same as a row with no session file at all.",
+			render: () => (
+				<Row
+					session={{
+						...withTitle(undefined),
+						sessionEmpty: true,
+						git: { added: 0, modified: 0, deleted: 0, untracked: 0 },
+					}}
+				/>
+			),
+		},
+		{
+			name: "Plain directory row (no git)",
+			description:
+				"A row of a project with no `.git` (`projectGit` false): no worktree icon, branch, or diffstat; the title leads the single line, and every session action stays.",
+			render: () => <Row session={rosterEntry.notesMain} inProjectGroup projectGit={false} />,
+		},
+		{
+			name: "Plain directory row, Untitled session",
+			description:
+				"Messages but no title: the muted `Untitled session` placeholder is the top line.",
+			render: () => <Row session={rosterEntry.journalMain} inProjectGroup projectGit={false} />,
+		},
+		{
+			name: "Plain directory row, New session",
+			description:
+				"An orphaned worktree row of a project that lost its `.git`, still running with an empty session (the fleet removes it once it stops): it renders as a plain row with a muted `New session`, and offers no Delete worktree.",
+			render: () => <Row session={rosterEntry.notesOrphan} projectGit={false} />,
 		},
 		{
 			name: "Long title, one line (default)",
@@ -177,6 +220,13 @@ export default defineStory({
 			description: "A row without a session title keeps the branch on the top line.",
 			seed: { sidebarTitleFirst: true },
 			render: () => <Row session={withTitle(undefined)} />,
+		},
+		{
+			name: "Title first, plain directory row (setting on)",
+			description:
+				"A plain-directory row has no branch, so its title is the top line with the setting on or off.",
+			seed: { sidebarTitleFirst: true },
+			render: () => <Row session={rosterEntry.journalMain} inProjectGroup projectGit={false} />,
 		},
 		{
 			name: "Long branch name",

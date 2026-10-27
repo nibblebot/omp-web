@@ -16,8 +16,9 @@
  * repo's dirty state for worktree-delete evidence and session git polling.
  */
 
+import { existsSync } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { expandTilde } from "./config";
 
@@ -146,6 +147,30 @@ export function parseWorktreeList(stdout: string): WorktreeBlock[] {
 	}
 	if (block) blocks.push(block);
 	return blocks;
+}
+
+/** Refusal text for git-only operations (worktrees, branch listing, clones) on a non-git project. */
+export const NOT_GIT_PROJECT_MESSAGE = "project is not a git repository";
+
+/**
+ * The one `.git` existence check: true when `<dir>/.git` exists (a directory
+ * for a main checkout, a file for a linked worktree or a separate git dir).
+ * Registration, git-state watching, and the directory picker all ask this
+ * instead of repeating the join.
+ */
+export function hasGitEntry(dir: string): boolean {
+	return existsSync(join(dir, ".git"));
+}
+
+/** Nearest ancestor-or-self of `dir` holding a `.git` entry, or null when none does. */
+export function findGitRoot(dir: string): string | null {
+	let cur = dir;
+	for (;;) {
+		if (hasGitEntry(cur)) return cur;
+		const parent = dirname(cur);
+		if (parent === cur) return null;
+		cur = parent;
+	}
 }
 
 /** Realpath of `p` (`~`/`~/` expanded), or null unless it is an existing directory. */

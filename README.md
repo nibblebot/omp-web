@@ -14,7 +14,7 @@ Because it drives the agent through the SDK instead of the RPC, omp-web has full
 - **Multiple Repos and Worktrees, one UI.** Start, monitor, and chat with one agent session per worktree across every repo.
 - **A full web UI, not a terminal wrapper.** Live-streamed responses, rendered markdown and diffs, tool output, slash commands, prompt history and autocomplete, per-session context/usage meters, and a transcripts/stats view.
 - **Custom wire protocol for full SDK control.** One WebSocket per browser tab (`GET /ws`) carries the full SDK surface, including session and subagent control the RPC doesn't expose.
-- **Manage repos and worktrees from the UI.** Register projects (deduped by realpath); create worktrees. Deletion removes a local linked worktree only when its tree is clean, with `git branch -d` and no `--force`. As with `git worktree remove`, it also deletes the worktree's Git-ignored files (for example `.env` and `node_modules`). Removing a local session preserves its files.
+- **Manage projects and worktrees from the UI.** Register any directory as a project (deduped by realpath; plain directories get a single row, repositories also get worktrees and branch stats); create worktrees. Deletion removes a local linked worktree only when its tree is clean, with `git branch -d` and no `--force`. As with `git worktree remove`, it also deletes the worktree's Git-ignored files (for example `.env` and `node_modules`). Removing a local session preserves its files.
 - **CLI for automation.** Spawn, stop, remove, inspect, and fan a prompt out to many sessions from the terminal, the same fleet the browser talks to.
 - **Self-updating.** `omp-web update` checks GitHub Releases and installs a newer release when available.
 - **Self-healing.** Sessions dial out to the control plane and redial it after a restart or a dropped connection; a session with no control plane for 10 minutes shuts itself down. Idle sessions exit after 30 minutes by default and are respawned on demand; crashed sessions restart with bounded backoff; browsers re-attach automatically.
@@ -167,6 +167,10 @@ Interactive first run can choose a data home and write `config.json` there. If y
 
 `omp-web remove` stops and unregisters the session without deleting files or the Git worktree. Linked worktrees of a registered project offer disk deletion, with clean-tree checks, no force, and removal of their Git-ignored files. Provider-managed clones retain their separate verified-deletion lifecycle.
 
+A project is any directory, not only a Git repository. A plain directory gets one row for its folder, with the session title and the usual session controls, and no worktrees, clones, branch, or diffstat; `omp-web add-worktree` against it fails with "project is not a git repository". Adding a `.git` later is detected automatically and the project becomes a repository, and removing it reverts the project to a plain directory: its main row stays, shown without Git details, and its linked worktree rows are removed from the sidebar (transcripts kept), a running one once it stops. A directory inside a repository, or a linked worktree, still registers as that repository's main checkout; bare repositories are refused. `git init` in a parent directory of a plain project is not detected.
+
+Worktree discovery is watcher-driven: the fleet watches each project's directory and, for repositories, `.git/worktrees`, so a worktree added from a terminal appears in the sidebar within about a second. When the filesystem gives no events (for example some network mounts), the fleet logs the reason once and polls that project every 60 s instead. Asleep rows are not re-probed: their branch, diffstat, and title stay as they were until the row wakes.
+
 Clones cut from the project's local path on a fleet-readable volume (bwrap or host) have a **Fetch into project** row action, also `POST /ctl/clones/<workspaceId>/fetch-into-project`. It fetches the clone's own branch (the branch named after the workspace) from its checkout into the project's main repo: a missing branch is created and an existing one is fast-forwarded, never overwritten. The fleet refuses, and leaves the project untouched, when the project's branch has commits the clone's lacks (not a fast-forward) or is checked out in any worktree of the project (switch that checkout away first). Only committed work travels; uncommitted changes stay in the clone. Remote-source and Kubernetes clones push upstream from inside their runtime and do not offer the action.
 
 Provider-managed clones run on a provider profile from the config file's `providerProfiles` map, offered as the **Run on** choice of the New workspace popover. The profile `provider` is one of `bwrap` (a bubblewrap sandbox on the fleet host), `kubernetes` (a pod with a persistent volume claim), or `host`. A `host` profile has no `executable` and no limits, only an optional `secretRefs`:
@@ -221,7 +225,7 @@ omp-web session [options]            # run a single-session agent process
 omp-web sessions                    # roster
 omp-web projects                    # registered projects
 omp-web spawn <path>                 # start a session on a directory
-omp-web add-repo <path> [--start]    # register a project (deduped on realpath)
+omp-web add-project <path> [--start]    # register a project: any directory, git or not (deduped on realpath)
 omp-web add-worktree <project> <name> [--no-start]      # create a worktree
 omp-web stop <selector>
 omp-web remove <selector>

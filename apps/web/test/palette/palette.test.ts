@@ -4,12 +4,13 @@ import {
 	flattenPalette,
 	modelItems,
 	openItems,
+	rosterSessionItems,
 	searchPalette,
 	settingItems,
 	type PaletteItem,
 	type PaletteSources,
 } from "../../palette/palette";
-import type { ModelBrowserEntry } from "#lib/wire/protocol";
+import type { ModelBrowserEntry, RosterEntry } from "#lib/wire/protocol";
 
 const sourcesWith = (open: PaletteItem[]): PaletteSources => ({
 	commands: null,
@@ -71,6 +72,48 @@ describe("openItems", () => {
 		expect(workspaces.map((item) => item.label)).toEqual([
 			"New workspace: alpha",
 			"New workspace: beta",
+		]);
+	});
+
+	test("a plain-folder project has no new-workspace item and does not count toward the label", () => {
+		const items = openItems({
+			debugEnabled: false,
+			pluginsEnabled: true,
+			projects: [
+				{ projectId: "p1", name: "alpha" },
+				{ projectId: "p2", name: "notes", git: false },
+			],
+		});
+		const workspaces = items.filter((item) => item.action.kind === "new-workspace");
+		expect(workspaces.map((item) => item.label)).toEqual(["New workspace"]);
+	});
+});
+
+describe("rosterSessionItems", () => {
+	const entry = (over: Partial<RosterEntry>): RosterEntry => ({
+		workspaceId: "w1",
+		name: "feature-x",
+		project: "alpha",
+		cwd: "/p/alpha",
+		status: "ready",
+		...over,
+	});
+
+	test("titles follow the row rule: real title, New session, Untitled session (never the worktree name)", () => {
+		const items = rosterSessionItems(
+			[
+				entry({ workspaceId: "a", sessionTitle: "Fix the parser", lastSessionFile: "/s/a.jsonl" }),
+				entry({ workspaceId: "b", lastSessionFile: "/s/b.jsonl", sessionEmpty: true }),
+				entry({ workspaceId: "c" }),
+				entry({ workspaceId: "d", lastSessionFile: "/s/d.jsonl" }),
+			],
+			"",
+		);
+		expect(items.map((item) => item.label)).toEqual([
+			"Fix the parser",
+			"New session",
+			"New session",
+			"Untitled session",
 		]);
 	});
 });

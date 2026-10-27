@@ -13,7 +13,7 @@ export default defineStory({
 	seed: () => seedRosterFleet({ modal: "add-project" }),
 	variants: [
 		{
-			name: "Browse repos",
+			name: "Browse folders",
 			render: (ctx) => <AddProjectDialog onClose={ctx.close} />,
 		},
 		{
@@ -26,6 +26,17 @@ export default defineStory({
 			name: "Empty folder",
 			seed: () =>
 				seedRosterFleet({ modal: "add-project", addProjectPath: "/home/joshua/Repos/empty" }),
+			render: (ctx) => <AddProjectDialog onClose={ctx.close} />,
+		},
+		{
+			name: "Plain folder (no git)",
+			description:
+				"A folder with no `.git` is addable like any other: no warning, and the Add project button is enabled. The fixture fleet registers it as a plain-directory project.",
+			seed: () =>
+				seedRosterFleet({
+					modal: "add-project",
+					addProjectPath: "/home/joshua/Documents/recipes",
+				}),
 			render: (ctx) => <AddProjectDialog onClose={ctx.close} />,
 		},
 		{

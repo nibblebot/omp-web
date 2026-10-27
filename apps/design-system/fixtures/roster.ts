@@ -21,6 +21,9 @@ const LOCALACTION_WORKTREES = "/home/joshua/Repos/localaction-worktrees";
 const NIXOS_CONFIG = "/home/joshua/Repos/nixos-config";
 const NIXOS_CONFIG_WORKTREES = "/home/joshua/Repos/nixos-config-worktrees";
 const WORKTREES = "/home/joshua/Repos/omp-web-worktrees";
+const NOTES = "/home/joshua/Documents/notes";
+const NOTES_WORKTREES = "/home/joshua/Documents/notes-worktrees";
+const JOURNAL = "/home/joshua/Documents/journal";
 
 const ompWeb: RegisteredProject = {
 	projectId: "proj_omp_web",
@@ -44,8 +47,32 @@ const nixosConfig: RegisteredProject = {
 	addedAt: T0 - 2 * DAY,
 };
 
+/** A plain directory (no `.git`): the fleet sets `git: false`, so the group has no worktrees, clones, or branch stats and its header has no "+". */
+const notes: RegisteredProject = {
+	projectId: "proj_notes",
+	path: NOTES,
+	name: "notes",
+	addedAt: T0 - 5 * DAY,
+	git: false,
+};
+
+/** A second plain directory, whose only row has messages but no title ("Untitled session"). */
+const journal: RegisteredProject = {
+	projectId: "proj_journal",
+	path: JOURNAL,
+	name: "journal",
+	addedAt: T0 - 1 * DAY,
+	git: false,
+};
+
 /** RegisteredProject list: FleetSidebar project sections and AddProjectDialog duplicate checks. */
-export const rosterProjects: RegisteredProject[] = [ompWeb, localaction, nixosConfig];
+export const rosterProjects: RegisteredProject[] = [
+	ompWeb,
+	localaction,
+	nixosConfig,
+	notes,
+	journal,
+];
 
 /** ProjectBranch list: branch rows in the New workspace popover's picker. */
 export const rosterProjectBranches: ProjectBranch[] = [
@@ -122,6 +149,18 @@ const sessionRegisteredWorktree: RosterEntry = {
 	branch: "review/external",
 	lastSessionFile: undefined,
 	sessionTitle: undefined,
+};
+
+/** RosterEntry: asleep worktree with uncommitted changes; the diffstat stays, frozen and muted, because asleep rows are not re-probed. */
+const sessionAsleepDirty: RosterEntry = {
+	...sessionAsleep,
+	workspaceId: "dmn_a008",
+	name: "stale-spike",
+	cwd: `${WORKTREES}/stale-spike`,
+	branch: "spike/stale-cache",
+	git: { added: 1, modified: 2, deleted: 0, untracked: 1, linesAdded: 87, linesDeleted: 12 },
+	lastSessionFile: "/home/joshua/.omp/sessions/omp-web/2026-10-06T13-20-45.jsonl",
+	sessionTitle: "Spike: cache the roster frame",
 };
 
 /** RosterEntry: worktree whose session process is still connecting (transitional status). */
@@ -253,11 +292,61 @@ const sessionBlocked: RosterEntry = {
 	uptime: 8 * 60,
 };
 
+/** RosterEntry: main row of the plain-directory project `notes`: a real title, no branch, no diffstat. */
+const sessionNotesMain: RosterEntry = {
+	workspaceId: "dmn_e001",
+	name: "notes",
+	cwd: NOTES,
+	project: "notes",
+	projectId: "proj_notes",
+	status: "ready",
+	lastSessionFile: "/home/joshua/.omp/sessions/notes/2026-10-09T09-05-31.jsonl",
+	sessionTitle: "Outline the Q4 planning doc",
+	readyAt: T0 - 35 * MIN,
+	uptime: 35 * 60,
+	pid: 44502,
+	workspaceKind: "direct",
+	desiredState: "running",
+};
+
+/** RosterEntry: linked worktree left behind when `notes` lost its `.git`; still running (an asleep one is removed from the roster), session has no messages ("New session"), rendered as a plain row. */
+const sessionNotesOrphan: RosterEntry = {
+	workspaceId: "dmn_e002",
+	name: "old-experiment",
+	cwd: `${NOTES_WORKTREES}/old-experiment`,
+	project: "notes",
+	projectId: "proj_notes",
+	worktreeOf: NOTES,
+	status: "ready",
+	lastSessionFile: "/home/joshua/.omp/sessions/notes/2026-10-05T17-40-02.jsonl",
+	sessionEmpty: true,
+	workspaceKind: "worktree",
+	desiredState: "running",
+};
+
+/** RosterEntry: main row of the plain-directory project `journal`: it has messages but no title yet ("Untitled session"). */
+const sessionJournalMain: RosterEntry = {
+	workspaceId: "dmn_e003",
+	name: "journal",
+	cwd: JOURNAL,
+	project: "journal",
+	projectId: "proj_journal",
+	status: "ready",
+	lastSessionFile: "/home/joshua/.omp/sessions/journal/2026-10-09T09-50-11.jsonl",
+	sessionEmpty: false,
+	readyAt: T0 - 12 * MIN,
+	uptime: 12 * 60,
+	pid: 45117,
+	workspaceKind: "direct",
+	desiredState: "running",
+};
+
 /** RosterEntry list: everything the roster renders, across statuses and workspace kinds. */
 export const rosterEntries: RosterEntry[] = [
 	sessionMain,
 	sessionFixtures,
 	sessionAsleep,
+	sessionAsleepDirty,
 	sessionRegisteredWorktree,
 	sessionStarting,
 	sessionClonePreparing,
@@ -267,6 +356,9 @@ export const rosterEntries: RosterEntry[] = [
 	sessionReconnecting,
 	sessionErrorEntry,
 	sessionBlocked,
+	sessionNotesMain,
+	sessionNotesOrphan,
+	sessionJournalMain,
 ];
 
 /** Individual entries, for stories that show one row or one detail view. */
@@ -274,6 +366,7 @@ export const rosterEntry = {
 	main: sessionMain,
 	worktree: sessionFixtures,
 	asleep: sessionAsleep,
+	asleepDirty: sessionAsleepDirty,
 	registeredWorktree: sessionRegisteredWorktree,
 	starting: sessionStarting,
 	clonePreparing: sessionClonePreparing,
@@ -283,6 +376,9 @@ export const rosterEntry = {
 	reconnecting: sessionReconnecting,
 	sessionError: sessionErrorEntry,
 	blocked: sessionBlocked,
+	notesMain: sessionNotesMain,
+	notesOrphan: sessionNotesOrphan,
+	journalMain: sessionJournalMain,
 } satisfies Record<string, RosterEntry>;
 
 /** RosterEntry: localaction linked worktree, ready and idle; the App view's healthy counterpart of `sessionReconnecting`. */
@@ -370,7 +466,7 @@ export const rosterAppEntries: RosterEntry[] = [
 	sessionFlakeUpdate,
 ];
 
-/** ProjectGroupsData: grouped sessions per project for ProjectGroups; main checkouts first, then worktrees and clones. */
+/** ProjectGroupsData: grouped sessions per project for ProjectGroups; main checkouts first, then worktrees and clones. The last two groups are plain directories (`git: false`). */
 export const rosterSidebarGroups: ProjectGroupsData = [
 	{
 		project: ompWeb,
@@ -381,11 +477,14 @@ export const rosterSidebarGroups: ProjectGroupsData = [
 			sessionCloneLocal,
 			sessionFixtures,
 			sessionAsleep,
+			sessionAsleepDirty,
 			sessionStarting,
 		],
 	},
 	{ project: localaction, sessions: [sessionLocalactionMain, sessionReconnecting] },
 	{ project: nixosConfig, sessions: [sessionErrorEntry, sessionBlocked] },
+	{ project: notes, sessions: [sessionNotesMain, sessionNotesOrphan] },
+	{ project: journal, sessions: [sessionJournalMain] },
 ];
 
 /** Supervised process rows for the Daemons section, anchored to `now` since a row renders `Date.now() - startedAt`.

@@ -19,7 +19,7 @@
  *   omp-web projects [--port n]
  *   omp-web profiles [--port n]
  *   omp-web spawn <path> [--template t] [--name n]
- *   omp-web add-repo <path> [--start] [--template t]
+ *   omp-web add-project <path> [--start] [--template t]
  *   omp-web add-clone <project> <name> --profile <id>
  *                        [--local path | --remote url] [--revision rev]
  *                        [--branch b] [--no-start]
@@ -485,14 +485,14 @@ async function spawnCmd(
 	return 0;
 }
 
-async function addRepoCmd(
+async function addProjectCmd(
 	positionals: string[],
 	flags: Map<string, FlagValue>,
 	port: number,
 ): Promise<number> {
 	const path = positionals[0];
 	if (path === undefined) {
-		throw new CliError("usage: omp-web add-repo <path> [--start] [--template t]");
+		throw new CliError("usage: omp-web add-project <path> [--start] [--template t]");
 	}
 	const body = (await ctl(port, "/ctl/projects", {
 		method: "POST",
@@ -840,7 +840,8 @@ commands:
   projects                     list registered projects (id, name, path, worktrees, missing)
   profiles                     list provider profiles (secret-free catalog)
   spawn <path> [--template t] [--name n]
-  add-repo <path> [--start] [--template t]
+  add-project <path> [--start] [--template t]
+                               register a git repo or a plain folder as a project
   add-clone <project> <name> --profile <id> [--local path | --remote url]
                                [--revision rev] [--branch b] [--no-start]
   start <selector>             ensure a clone workspace is running (wake)
@@ -922,8 +923,8 @@ export async function main(argv: string[]): Promise<number> {
 				return await profilesCmd(port);
 			case "spawn":
 				return await spawnCmd(rest, flags, port);
-			case "add-repo":
-				return await addRepoCmd(rest, flags, port);
+			case "add-project":
+				return await addProjectCmd(rest, flags, port);
 			case "add-clone":
 				return await addCloneCmd(rest, flags, port);
 			case "start":

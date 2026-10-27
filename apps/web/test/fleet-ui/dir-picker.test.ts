@@ -41,8 +41,6 @@ describe("createDirPicker navigate", () => {
 		expect(st.truncated).toBe(true);
 		expect(st.loading).toBe(false);
 		expect(st.error).toBeNull();
-		// Not reached via a listing row: the current dir's git bit is unknown.
-		expect(st.hasGit).toBeNull();
 	});
 
 	test("~ and ~/rel pass through verbatim (expanded edge-side)", async () => {
@@ -54,17 +52,6 @@ describe("createDirPicker navigate", () => {
 		await picker.navigate("~/proj");
 		expect(calls).toEqual(["~", "~/proj"]);
 		expect(picker.state().currentPath).toBe("/home/u/proj");
-	});
-
-	test("row navigation records hasGit; plain navigation resets it to unknown", async () => {
-		const { browse } = stubBrowse((path) =>
-			Promise.resolve(listing({ path: path ?? "/home/u", parent: "/home" })),
-		);
-		const picker = createDirPicker(browse);
-		await picker.navigate("/home/u/proj", { hasGit: true });
-		expect(picker.state().hasGit).toBe(true);
-		await picker.navigate("/home/u/other");
-		expect(picker.state().hasGit).toBeNull();
 	});
 
 	test("error surfaces and keeps the previous listing", async () => {
@@ -113,16 +100,15 @@ describe("createDirPicker navigate", () => {
 });
 
 describe("createDirPicker up/refresh", () => {
-	test("up() browses the parent (hasGit back to unknown)", async () => {
+	test("up() browses the parent", async () => {
 		const { browse, calls } = stubBrowse((path) =>
 			Promise.resolve(listing({ path: path ?? "", parent: path === "/home/u" ? "/home" : null })),
 		);
 		const picker = createDirPicker(browse);
-		await picker.navigate("/home/u", { hasGit: true });
+		await picker.navigate("/home/u");
 		await picker.up();
 		expect(calls).toEqual(["/home/u", "/home"]);
 		expect(picker.state().currentPath).toBe("/home");
-		expect(picker.state().hasGit).toBeNull();
 	});
 
 	test("up() at the filesystem root is a no-op", async () => {
@@ -143,15 +129,15 @@ describe("createDirPicker up/refresh", () => {
 		expect(calls).toEqual([]);
 	});
 
-	test("refresh() re-lists the current path and preserves a known hasGit", async () => {
+	test("refresh() re-lists the current path", async () => {
 		const { browse, calls } = stubBrowse((path) =>
 			Promise.resolve(listing({ path: path ?? "", parent: "/" })),
 		);
 		const picker = createDirPicker(browse);
-		await picker.navigate("/home/u/proj", { hasGit: false });
+		await picker.navigate("/home/u/proj");
 		await picker.refresh();
 		expect(calls).toEqual(["/home/u/proj", "/home/u/proj"]);
-		expect(picker.state().hasGit).toBe(false);
+		expect(picker.state().currentPath).toBe("/home/u/proj");
 	});
 
 	test("refresh() before the first load is a no-op", async () => {
@@ -198,7 +184,7 @@ describe("createDirPicker select", () => {
 		picker.select(null);
 		expect(picker.state().selected).toBeNull();
 		picker.select("/home/u/proj");
-		await picker.navigate("/home/u/proj", { hasGit: true });
+		await picker.navigate("/home/u/proj");
 		expect(picker.state().selected).toBeNull();
 	});
 });
@@ -210,25 +196,16 @@ describe("addTarget", () => {
 		expect(addTarget(unused.state())).toBeNull();
 	});
 
-	test("the current directory, with its known hasGit, when nothing is selected", async () => {
+	test("the current directory when nothing is selected", async () => {
 		const { browse } = stubBrowse((path) =>
 			Promise.resolve(listing({ path: path ?? "", parent: "/home" })),
 		);
 		const picker = createDirPicker(browse);
-		await picker.navigate("/home/u/proj", { hasGit: true });
-		expect(addTarget(picker.state())).toEqual({ path: "/home/u/proj", hasGit: true });
+		await picker.navigate("/home/u/proj");
+		expect(addTarget(picker.state())).toEqual({ path: "/home/u/proj" });
 	});
 
-	test("the current directory's hasGit is unknown when reached without a listing row", async () => {
-		const { browse } = stubBrowse((path) =>
-			Promise.resolve(listing({ path: path ?? "", parent: "/home" })),
-		);
-		const picker = createDirPicker(browse);
-		await picker.navigate("/home/u");
-		expect(addTarget(picker.state())).toEqual({ path: "/home/u", hasGit: null });
-	});
-
-	test("the selected child wins, carrying its own hasGit", async () => {
+	test("a selected child wins, git checkout or plain folder alike", async () => {
 		const { browse } = stubBrowse((path) =>
 			Promise.resolve(
 				listing({
@@ -244,7 +221,9 @@ describe("addTarget", () => {
 		const picker = createDirPicker(browse);
 		await picker.navigate("/home/u");
 		picker.select("/home/u/tmp");
-		expect(addTarget(picker.state())).toEqual({ path: "/home/u/tmp", hasGit: false });
+		expect(addTarget(picker.state())).toEqual({ path: "/home/u/tmp" });
+		picker.select("/home/u/proj");
+		expect(addTarget(picker.state())).toEqual({ path: "/home/u/proj" });
 	});
 });
 

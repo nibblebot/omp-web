@@ -27,7 +27,13 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 
 import type { ProjectBranch, RegisteredProject } from "#lib/wire/protocol";
 import { slugifyWorktreeName, worktreeBranchName } from "#lib/wire/worktree-name";
-import { parseWorktreeList, probeGitState, runGit, validateProjectPath } from "./discovery";
+import {
+	findGitRoot,
+	parseWorktreeList,
+	probeGitState,
+	runGit,
+	validateProjectPath,
+} from "./discovery";
 import type { GitRunner, WorktreeBlock } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
 import type { WorkspaceLifecycle } from "./workspace-lifecycle";
@@ -315,17 +321,23 @@ export async function listWorktreeBlocks(path: string): Promise<WorktreeBlock[] 
 }
 
 /**
- * Resolve any path inside a project checkout (its main checkout, a linked
- * worktree, or a subdirectory of either) to the MAIN checkout's realpath:
- * the project identity registry.addProject stores. Throws a user-facing
- * Error for a missing path, a non-git path, or a bare repository (it has no
- * main working tree to register).
+ * Resolve any path inside a project to the directory registry.addProject
+ * stores. A path inside a git repo (its main checkout, a linked worktree, or
+ * a subdirectory of either) resolves to the MAIN checkout's realpath. A path
+ * with no `.git` at or above it is a non-git project and resolves to its own
+ * realpath. Throws a user-facing Error for a missing path, an unreadable
+ * repository (`.git` present but git cannot read it), or a bare repository (it has no main working tree to register).
  */
 export async function resolveProjectRoot(path: string): Promise<string> {
 	const resolved = await validateProjectPath(path);
 	if (resolved === null) throw new Error(`not a directory: ${path}`);
 	const main = (await listWorktreeBlocks(resolved))?.[0];
-	if (main === undefined) throw new Error(`not a git repository: ${path}`);
+	if (main === undefined) {
+		// git cannot tell: a plain directory when no `.git` exists at or above it
+		// (a bare repo is answered by git above, so it never lands here).
+		if (findGitRoot(resolved) === null) return resolved;
+		throw new Error(`not a git repository: ${path}`);
+	}
 	if (main.bare || main.path === undefined) {
 		throw new Error(`bare repository has no main checkout to register: ${path}`);
 	}

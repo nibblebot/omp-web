@@ -1,5 +1,6 @@
 import type { RosterEntry, ModelBrowserEntry, SettingsModel } from "#lib/wire/protocol";
 import { fuzzyRank } from "../prompt/autocomplete";
+import { rowTitle } from "../fleet-ui/row-title";
 import {
 	commandLiveState,
 	findCommand,
@@ -223,7 +224,7 @@ export interface PaletteContext {
 	debugEnabled: boolean;
 	/** The `plugins` feature is on: Plugins opens the Extensions dialog on its Plugins tab. */
 	pluginsEnabled: boolean;
-	projects: readonly { projectId: string; name: string }[];
+	projects: readonly { projectId: string; name: string; git?: false }[];
 }
 
 function openItem(
@@ -309,11 +310,13 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 			"repo",
 		]),
 	);
-	for (const project of context.projects)
+	// A plain folder (no .git) has no worktrees or clones: its group has no "+".
+	const gitProjects = context.projects.filter((project) => project.git !== false);
+	for (const project of gitProjects)
 		items.push({
 			id: `new-workspace:${project.projectId}`,
 			group: "Open",
-			label: context.projects.length === 1 ? "New workspace" : `New workspace: ${project.name}`,
+			label: gitProjects.length === 1 ? "New workspace" : `New workspace: ${project.name}`,
 			detail: `Worktree, clone, or checkout in ${project.name}`,
 			action: { kind: "new-workspace", projectId: project.projectId },
 			keywords: ["worktree", "clone", "branch", "session", project.name],
@@ -337,7 +340,7 @@ export function rosterSessionItems(
 	const rows: PaletteItem[] = [];
 	for (const d of roster) {
 		if (d.status !== "ready" && d.status !== "asleep") continue;
-		const title = d.sessionTitle?.trim() || (d.sessionEmpty === true ? "New session" : d.name);
+		const title = rowTitle(d).text;
 		const where = d.branch ? `${d.project} · ${d.branch}` : d.project;
 		const current = d.workspaceId === currentWorkspaceId;
 		rows.push({

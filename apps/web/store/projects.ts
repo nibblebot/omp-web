@@ -285,9 +285,10 @@ function sendKeyed<T>(pending: Map<string, Waiter<T>>, id: string, cmd: ClientCo
 	return promise;
 }
 
-/** Register a project. `path` may be the main checkout, a linked worktree, or a
- *  subdirectory; the fleet resolves the main checkout. Never spawns. Rejects with the
- *  fleet's refusal message (bare repo, not a git repo, ...). */
+/** Register a project. `path` may be the main checkout, a linked worktree, a
+ *  subdirectory (the fleet resolves the main checkout), or a plain folder with no
+ *  git repo above it. Never spawns. Rejects with the fleet's refusal message
+ *  (bare repo, ...). */
 export function addProject(path: string): Promise<{ projectId: string; existing: boolean }> {
 	const id = crypto.randomUUID();
 	return sendKeyed(pendingAddProject, id, { type: "add_project", id, path });

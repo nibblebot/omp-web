@@ -739,20 +739,23 @@ export interface ProjectBranch {
 /**
  * One first-class project registered with the fleet (registered_projects
  * frame). Projects are realpath-keyed, deduped on registration, and persist
- * in the fleet state file; `path` is always the realpath of the main
- * checkout and `name` its basename. Local sessions carry the matching
- * `projectId` on the roster.
+ * in the fleet state file. A project is a git repo's main checkout (a picked
+ * subdirectory or linked worktree resolves to it) or a plain directory with no
+ * git repo above it; `path` is its realpath and `name` its basename. Local
+ * sessions carry the matching `projectId` on the roster.
  */
 export interface RegisteredProject {
 	projectId: string;
-	/** Realpath of the main checkout. */
+	/** Realpath of the project directory (a git repo's main checkout, or a plain directory). */
 	path: string;
 	/** Basename of the realpath (display name). */
 	name: string;
 	/** Epoch ms of registration. */
 	addedAt: number;
-	/** True when the main checkout no longer exists or is no longer a git repo (fleet sync). Its rows cannot start. */
+	/** True when the project directory is gone, or a git project's main checkout is bare or unreadable (fleet sync). Its rows cannot start. */
 	missing?: boolean;
+	/** `false` when the directory has no `.git` (fleet watcher, never persisted): no branch, stats, worktrees, or clones. Absent means a git repo. */
+	git?: false;
 }
 
 /**

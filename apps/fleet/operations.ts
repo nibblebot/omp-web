@@ -20,7 +20,7 @@
 
 import type { CloneCreateInput } from "./workspace-lifecycle";
 import type { FleetConfig } from "./config";
-import { validateProjectPath } from "./discovery";
+import { NOT_GIT_PROJECT_MESSAGE, validateProjectPath } from "./discovery";
 import type { FleetEventLog } from "./events";
 import type { Registry, RegistryEntry } from "./registry";
 import type { CloneFetchResult, RegisteredProject } from "#lib/wire/protocol";
@@ -224,10 +224,11 @@ export class FleetOperations {
 	}
 
 	/**
-	 * Register the main checkout behind `path` (a main checkout, a linked
-	 * worktree, or a subdirectory; bare and non-git paths are refused). A
-	 * checkout that is already registered changes nothing (`existing`). A new
-	 * project gets its main-checkout row (spawned only with `start`, asleep
+	 * Register the project behind `path`: a git repo's main checkout (reached
+	 * from a main checkout, a linked worktree, or a subdirectory; bare repos
+	 * are refused) or, with no git repo above it, the plain directory itself
+	 * (a non-git project). A project that is already registered changes
+	 * nothing (`existing`). A new project gets its default row (spawned only with `start`, asleep
 	 * otherwise). Staged: registration happens first, so a failed spawn reports
 	 * 500 naming the stage while the project stays registered.
 	 */
@@ -305,6 +306,7 @@ export class FleetOperations {
 	): Promise<RegistryEntry> {
 		const project = this.#registry.projects().find((p) => p.projectId === projectId);
 		if (!project) throw new OperationError(404, `unknown project: ${projectId}`);
+		if (project.git === false) throw new OperationError(400, NOT_GIT_PROJECT_MESSAGE);
 		let created: CreateWorktreeResult;
 		try {
 			created = await createWorktree(project, input.name, {

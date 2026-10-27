@@ -4,15 +4,17 @@
  * resolves template names for rows the sync registers asleep, plus the one
  * spawn-time probe through onSpawned), and a fake git runner injected through
  * startGitStatePolling. Covers probe cadence (change-only registry updates,
- * asleep rows once per 60s, bounded concurrency, single-flight), probe
+ * asleep rows once when first seen, bounded concurrency, single-flight), probe
  * failure isolation, session title/empty probing, the worktree-vanished hook,
  * registration of missing main/linked rows (asleep, templated, lock flag,
- * project.missing), and backfillWorktrees. Runtime behavior (spawn, respawn,
+ * project.missing), the per-project watchers (git-state flips, worktree
+ * discovery without the timer, directory removal, the fallback poll), and
+ * backfillWorktrees. Runtime behavior (spawn, respawn,
  * stop, exit policy) is covered by host-lifecycle.test.ts.
  */
 
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
@@ -797,21 +799,331 @@ describe("project sync", () => {
 		expect(calls).toHaveLength(2);
 	});
 
-	test("asleep rows are probed at most once per 60s; live rows on every pass", async () => {
+	test("an asleep row is probed once when first seen and never again; live rows on every tick", async () => {
 		const asleepDir = tempDir("omp-session-sync-asleep-");
 		const liveDir = tempDir("omp-session-sync-live-");
 		const { registry, sync } = await makeIdleHarness();
 		registry.create({ name: "a", cwd: asleepDir, project: "a", status: "asleep" });
 		registry.create({ name: "l", cwd: liveDir, project: "l", status: "ready" });
 		const { exec, calls } = fakeGitPhases([[okStatus, noDiff]]);
-		sync.startGitStatePolling({ exec, intervalMs: 60_000 });
-		await waitFor(() => (calls.length === 2 ? true : null), 5000, "first pass");
-
+		sync.startGitStatePolling({ exec, intervalMs: 30 });
+		await waitFor(
+			() => (calls.filter((c) => c.cwd === liveDir).length >= 4 ? true : null),
+			5000,
+			"several live ticks",
+		);
 		sync.syncNow();
-		await waitFor(() => (calls.length >= 3 ? true : null), 5000, "second pass");
 		await sleep(100);
 		expect(calls.filter((c) => c.cwd === asleepDir)).toHaveLength(1);
-		expect(calls.filter((c) => c.cwd === liveDir)).toHaveLength(2);
+	});
+});
+
+describe("project git state and watchers", () => {
+	const okStatus: GitResult = { exitCode: 0, stderr: "", stdout: "## main\n" };
+	const noDiff: GitResult = { exitCode: 0, stderr: "", stdout: "" };
+	const FAST = { intervalMs: 60_000, watchDebounceMs: 30, fallbackPollMs: 150 } as const;
+
+	function gitInit(dir: string): void {
+		gitSync(["init", "-b", "main"], dir);
+		writeFileSync(join(dir, "README.md"), "# r\n");
+		gitSync(["add", "."], dir);
+		gitSync(
+			["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+			dir,
+		);
+	}
+
+	test("a plain directory is a non-git project: main row registered, no git probe, not missing", async () => {
+		const dir = join(tempDir("omp-session-sync-plain-"), "folder");
+		mkdirSync(dir);
+		const { registry, sync } = await makeIdleHarness();
+		const { project } = registry.addProject(dir);
+		expect(project.git).toBe(false);
+		const { exec, calls } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST });
+
+		await waitFor(() => (registry.list().length === 1 ? true : null), 5000, "main row");
+		await sleep(150);
+		expect(registry.list()[0]).toMatchObject({
+			projectId: project.projectId,
+			status: "asleep",
+			cwd: project.path,
+		});
+		expect(registry.list()[0]!.branch).toBeUndefined();
+		expect(registry.projects()[0]).toMatchObject({ git: false });
+		expect(registry.projects()[0]!.missing).toBeUndefined();
+		expect(calls).toHaveLength(0);
+	});
+
+	test("boot recomputes git state from the filesystem", async () => {
+		const dir = join(tempDir("omp-session-sync-boot-"), "folder");
+		mkdirSync(dir);
+		const { registry, sync } = await makeIdleHarness();
+		const { project } = registry.addProject(dir);
+		expect(registry.isProjectGit(project.projectId)).toBe(false);
+		gitInit(dir);
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST });
+		expect(registry.isProjectGit(project.projectId)).toBe(true);
+		expect(registry.projects()[0]!.git).toBeUndefined();
+	});
+
+	test("a .git that appears flips the project to git, broadcasts, and probes its rows once", async () => {
+		const dir = join(tempDir("omp-session-sync-appear-"), "folder");
+		mkdirSync(dir);
+		const { registry, sync } = await makeIdleHarness();
+		const { project } = registry.addProject(dir);
+		let broadcasts = 0;
+		registry.onProjectsChange = () => {
+			broadcasts += 1;
+		};
+		const { exec, calls } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST });
+		await waitFor(() => (registry.list().length === 1 ? true : null), 5000, "main row");
+		expect(calls).toHaveLength(0);
+
+		gitInit(dir);
+		await waitFor(
+			() => (registry.isProjectGit(project.projectId) ? true : null),
+			5000,
+			"flip to git",
+		);
+		expect(broadcasts).toBe(1);
+		expect(registry.projects()[0]!.git).toBeUndefined();
+		// The asleep main row was probed once while non-git (no git ran); the
+		// flip forgets that, so it gets one real probe now.
+		await waitFor(
+			() => (calls.some((c) => c.cwd === realpathSync(dir)) ? true : null),
+			5000,
+			"post-flip probe",
+		);
+	});
+
+	test("a .git that disappears flips to non-git (not missing), stops git probes, and clears the rows", async () => {
+		const { main, wt } = makeWorktreeRepo(tempDir("omp-session-sync-vanish-"));
+		const { registry, sync } = await makeIdleHarness();
+		const { project } = registry.addProject(main);
+		let broadcasts = 0;
+		registry.onProjectsChange = () => {
+			broadcasts += 1;
+		};
+		const { exec, calls } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST, intervalMs: 40 });
+		await waitFor(() => (registry.list().length === 2 ? true : null), 5000, "rows registered");
+		// Make the linked worktree a RUNNING row so it is probed on every tick.
+		const linked = registry.list().find((e) => e.cwd === wt)!;
+		registry.setStatus(linked.workspaceId, "ready");
+		await waitFor(
+			() => (registry.get(linked.workspaceId)?.branch === "main" ? true : null),
+			5000,
+			"branch probed",
+		);
+
+		rmSync(join(main, ".git"), { recursive: true, force: true });
+		await waitFor(
+			() => (!registry.isProjectGit(project.projectId) ? true : null),
+			5000,
+			"flip to non-git",
+		);
+		expect(broadcasts).toBe(1);
+		expect(registry.projects()[0]).toMatchObject({ git: false });
+		expect(registry.projects()[0]!.missing).toBeUndefined();
+		for (const row of registry.list()) {
+			expect(row.branch).toBeUndefined();
+			expect(row.git).toBeUndefined();
+			expect(row.detachedAt).toBeUndefined();
+		}
+		// The running linked worktree makes no git exec after the flip, though
+		// the probe timer keeps ticking.
+		const before = calls.length;
+		await sleep(300);
+		expect(calls).toHaveLength(before);
+	});
+
+	test("a project that loses .git evicts its linked worktree rows once asleep, never the main row", async () => {
+		const { main, wt } = makeWorktreeRepo(tempDir("omp-session-sync-orphan-"));
+		const evicted: string[] = [];
+		const { registry, sync } = await makeIdleHarness({
+			// Mirror the server: evict the row from the registry.
+			onWorktreeRemoved: (entry) => {
+				evicted.push(entry.cwd);
+				registry.remove(entry.workspaceId);
+			},
+		});
+		const { project } = registry.addProject(main);
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST, intervalMs: 40 });
+		await waitFor(() => (registry.list().length === 2 ? true : null), 5000, "rows registered");
+		const linked = registry.list().find((e) => e.cwd === wt)!;
+		registry.setStatus(linked.workspaceId, "ready");
+
+		rmSync(join(main, ".git"), { recursive: true, force: true });
+		await waitFor(
+			() => (!registry.isProjectGit(project.projectId) ? true : null),
+			5000,
+			"flip to non-git",
+		);
+		// A running orphan stays until it stops.
+		await sleep(200);
+		expect(evicted).toEqual([]);
+		expect(registry.get(linked.workspaceId)).toBeDefined();
+
+		registry.setStatus(linked.workspaceId, "asleep");
+		await waitFor(() => (evicted.length === 1 ? true : null), 5000, "orphan evicted");
+		expect(evicted).toEqual([wt]);
+		expect(registry.list().map((e) => e.cwd)).toEqual([realpathSync(main)]);
+	});
+
+	test("a worktree created with git worktree add appears via the watcher, without the timer", async () => {
+		const dir = tempDir("omp-session-sync-watch-add-");
+		const { main } = makeWorktreeRepo(dir);
+		const { registry, sync } = await makeIdleHarness();
+		registry.addProject(main);
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST });
+		await waitFor(() => (registry.list().length === 2 ? true : null), 5000, "initial rows");
+
+		const second = join(dir, "wt-second");
+		gitSync(["worktree", "add", second, "-b", "feature/second"], main);
+		await waitFor(
+			() => (registry.list().some((e) => e.cwd === realpathSync(second)) ? true : null),
+			5000,
+			"watcher-registered worktree",
+		);
+	});
+
+	test("the first linked worktree of a repo with no .git/worktrees yet is discovered too", async () => {
+		const dir = tempDir("omp-session-sync-watch-first-");
+		const main = join(dir, "solo");
+		mkdirSync(main);
+		gitInit(main);
+		const { registry, sync } = await makeIdleHarness();
+		registry.addProject(main);
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST });
+		await waitFor(() => (registry.list().length === 1 ? true : null), 5000, "main row");
+
+		const first = join(dir, "wt-first");
+		gitSync(["worktree", "add", first, "-b", "feature/first"], main);
+		await waitFor(
+			() => (registry.list().some((e) => e.cwd === realpathSync(first)) ? true : null),
+			5000,
+			"first worktree",
+		);
+		// The worktrees watcher now exists: a second add is found as well.
+		const second = join(dir, "wt-second");
+		gitSync(["worktree", "add", second, "-b", "feature/second"], main);
+		await waitFor(
+			() => (registry.list().some((e) => e.cwd === realpathSync(second)) ? true : null),
+			5000,
+			"second worktree",
+		);
+	});
+
+	test("a project directory that is removed becomes missing and stays registered", async () => {
+		const { main } = makeWorktreeRepo(tempDir("omp-session-sync-watch-gone-"));
+		const { registry, sync } = await makeIdleHarness();
+		const { project } = registry.addProject(main);
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST });
+		await waitFor(() => (registry.list().length === 2 ? true : null), 5000, "initial rows");
+
+		rmSync(main, { recursive: true, force: true });
+		await waitFor(
+			() => (registry.projects()[0]?.missing === true ? true : null),
+			5000,
+			"missing flag",
+		);
+		expect(registry.projects()).toHaveLength(1);
+		// The directory vanishing is `missing`, not a flip to non-git.
+		expect(registry.isProjectGit(project.projectId)).toBe(true);
+	});
+
+	test("a non-git project whose directory is removed becomes missing, and clears again when it returns", async () => {
+		const dir = join(tempDir("omp-session-sync-plain-gone-"), "folder");
+		mkdirSync(dir);
+		const { registry, sync } = await makeIdleHarness();
+		registry.addProject(dir);
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST });
+		await waitFor(() => (registry.list().length === 1 ? true : null), 5000, "main row");
+
+		rmSync(dir, { recursive: true, force: true });
+		await waitFor(
+			() => (registry.projects()[0]?.missing === true ? true : null),
+			5000,
+			"missing flag",
+		);
+		mkdirSync(dir);
+		await waitFor(
+			() => (registry.projects()[0]?.missing === undefined ? true : null),
+			5000,
+			"missing cleared by the fallback poll",
+		);
+	});
+
+	test("a project whose .git is a file (no watcher) falls back to a poll and logs once", async () => {
+		const dir = tempDir("omp-session-sync-fallback-");
+		const main = join(dir, "sep");
+		mkdirSync(main);
+		gitSync(["init", "-b", "main", "--separate-git-dir", join(dir, "sep.git"), main], dir);
+		writeFileSync(join(main, "README.md"), "# s\n");
+		gitSync(["add", "."], main);
+		gitSync(
+			["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+			main,
+		);
+		const { registry, sync } = await makeIdleHarness();
+		registry.addProject(main);
+		const logged = spyOn(console, "error").mockImplementation(() => {});
+		cleanups.push(() => logged.mockRestore());
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST });
+		await waitFor(() => (registry.list().length === 1 ? true : null), 5000, "main row");
+
+		const added = join(dir, "wt-added");
+		gitSync(["worktree", "add", added, "-b", "feature/added"], main);
+		await waitFor(
+			() => (registry.list().some((e) => e.cwd === realpathSync(added)) ? true : null),
+			5000,
+			"poll-registered worktree",
+		);
+		await sleep(400); // several more poll ticks
+		const reasons = logged.mock.calls.filter((c) => String(c[0]).includes("cannot watch project"));
+		expect(reasons).toHaveLength(1);
+	});
+
+	test("close() stops the watchers: a later .git is not noticed", async () => {
+		const dir = join(tempDir("omp-session-sync-close-"), "folder");
+		mkdirSync(dir);
+		const { registry, sync } = await makeIdleHarness();
+		const { project } = registry.addProject(dir);
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST });
+		await waitFor(() => (registry.list().length === 1 ? true : null), 5000, "main row");
+		sync.close();
+
+		gitInit(dir);
+		await sleep(400);
+		expect(registry.isProjectGit(project.projectId)).toBe(false);
+	});
+
+	test("a removed project's watchers are closed: its later .git is never synced", async () => {
+		const dir = join(tempDir("omp-session-sync-remove-"), "folder");
+		mkdirSync(dir);
+		const { registry, sync } = await makeIdleHarness();
+		const { project } = registry.addProject(dir);
+		const { exec } = fakeGitPhases([[okStatus, noDiff]]);
+		sync.startGitStatePolling({ exec, ...FAST });
+		await waitFor(() => (registry.list().length === 1 ? true : null), 5000, "main row");
+		registry.removeProject(project.projectId);
+		sync.syncNow();
+		await sleep(100);
+
+		gitInit(dir);
+		await sleep(300);
+		expect(registry.projects()).toHaveLength(0);
+		expect(registry.list()).toHaveLength(0);
 	});
 });
 

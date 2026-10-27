@@ -8,7 +8,7 @@ import { rosterEntry, rosterSidebarGroups } from "../../../fixtures/roster";
 import { seedRosterFleet } from "../../../fixtures/roster-seed";
 import { defineStory } from "../../../registry";
 
-const [ompWebGroup, localactionGroup, nixosGroup] = rosterSidebarGroups;
+const [ompWebGroup, localactionGroup, nixosGroup, notesGroup, journalGroup] = rosterSidebarGroups;
 const project = ompWebGroup!.project;
 
 /** Further asleep worktrees, so a group can hold several of them (rows are keyed by workspaceId). */
@@ -74,8 +74,14 @@ export default defineStory({
 		{
 			name: "Projects with worktrees and clones",
 			description:
-				"Every group expanded. The list ends with the Add project row; hover a header for its + and ⋯.",
+				"Every group expanded: the header shows an open folder, and the last two groups are plain directories, which have no + on hover and rows without branches or diffstats. The list ends with the Add project row; hover a header for its + and ⋯.",
 			render: () => inList(rosterSidebarGroups),
+		},
+		{
+			name: "Plain directory projects",
+			description:
+				"Projects with no `.git` (`git: false`): no badge, no + on hover (only ⋯), no worktrees or clones. `notes` shows a titled row and a still-running orphaned worktree row left from when it was a repository (the fleet removes it once it stops); `journal` shows the `Untitled session` placeholder.",
+			render: () => inList([notesGroup!, journalGroup!]),
 		},
 		{
 			name: "Collapsed, all asleep",
@@ -101,12 +107,14 @@ export default defineStory({
 		{
 			name: "All groups collapsed",
 			description:
-				"The three seeded projects: an error row beats working in the first, reconnecting beats unread in the second, blocked shows in the third.",
+				"The five seeded projects, each with the closed folder icon: an error row beats working in the first, reconnecting beats unread in the second, blocked shows in the third, and the two plain directories show their live count.",
 			seed: () =>
 				collapse(
 					ompWebGroup!.project.projectId,
 					localactionGroup!.project.projectId,
 					nixosGroup!.project.projectId,
+					notesGroup!.project.projectId,
+					journalGroup!.project.projectId,
 				),
 			render: () => inList(rosterSidebarGroups),
 		},

@@ -20,6 +20,7 @@ import {
 	pinSettingsInMemory,
 	postJson,
 	startTestFleet,
+	waitFor,
 } from "./server.testkit";
 
 // bun 1.3.14 attributes afterAll hooks registered in imported modules to the
@@ -622,6 +623,56 @@ describe("worktree lifecycle routes", () => {
 				15_000,
 			);
 			expect(server.registry.get(entry.workspaceId)).toBeUndefined();
+			expect(browser.frames.filter((f) => f.type === "worktree_removed")).toHaveLength(0);
+			browser.close();
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a linked worktree of a project that loses .git is evicted without a worktree_removed frame",
+		async () => {
+			const repo2 = join(tmp, "repo2");
+			mkdirSync(repo2, { recursive: true });
+			await gitInit(repo2, "-b", "main");
+			await gitIn(repo2, [
+				"-c",
+				"user.name=T",
+				"-c",
+				"user.email=t@t",
+				"commit",
+				"-q",
+				"--allow-empty",
+				"-m",
+				"init",
+			]);
+			const wtDir = join(tmp, "repo2-wt");
+			expect((await gitIn(repo2, ["worktree", "add", "-q", wtDir, "-b", "feat"])).exitCode).toBe(0);
+			server.registry.addProject(repo2);
+			server.sync.syncNow();
+			const isLinked = (e: RegistryEntry) =>
+				e.worktreeOf !== undefined && e.cwd.endsWith("repo2-wt");
+			await waitFor(() => server.registry.list().some(isLinked), 10_000, "linked worktree row");
+			const linked = server.registry.list().find(isLinked)!;
+			expect(linked.status).toBe("asleep");
+			// A row with a session: a vanished-folder eviction would toast it.
+			const sessionFile = join(tmp, "repo2-wt-session.jsonl");
+			writeFileSync(
+				sessionFile,
+				`${JSON.stringify({ type: "session", id: "s2", cwd: linked.cwd })}\n`,
+			);
+			server.registry.update(linked.workspaceId, { lastSessionFile: sessionFile });
+			const browser = await openBrowser(server.port);
+
+			rmSync(join(repo2, ".git"), { recursive: true, force: true });
+			await browser.waitForFrame(
+				(f) =>
+					(f.type === "roster_delta" && f.removed.includes(linked.workspaceId)) ||
+					(f.type === "roster" && !f.entries.some((d) => d.workspaceId === linked.workspaceId)),
+				"roster without the orphaned worktree",
+				15_000,
+			);
+			expect(existsSync(wtDir)).toBe(true);
 			expect(browser.frames.filter((f) => f.type === "worktree_removed")).toHaveLength(0);
 			browser.close();
 		},

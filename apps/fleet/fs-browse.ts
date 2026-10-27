@@ -11,12 +11,12 @@
  * which the edge route maps to 400.
  */
 
-import { existsSync } from "node:fs";
 import { readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { expandTilde } from "./config";
+import { hasGitEntry } from "./discovery";
 
 /** One subdirectory row of a browse result. */
 export interface BrowseDirEntry {
@@ -81,7 +81,7 @@ export async function browseDirectories(
 			truncated = true;
 			break;
 		}
-		dirs.push({ name, path, hasGit: existsSync(join(path, ".git")) });
+		dirs.push({ name, path, hasGit: hasGitEntry(path) });
 	}
 	const parent = dirname(canonical);
 	return { path: canonical, parent: parent === canonical ? null : parent, dirs, truncated };

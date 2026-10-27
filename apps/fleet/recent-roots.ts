@@ -10,7 +10,9 @@
 
 import { existsSync } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+
+import { findGitRoot } from "./discovery";
 
 /** One autocomplete candidate. */
 export interface RecentRoot {
@@ -32,17 +34,6 @@ export interface RecentRootsOptions {
 const MAX_PROJECT_DIRS = 300;
 /** A session header is the first or second line; never read more than this. */
 const HEADER_BYTES = 8192;
-
-/** Nearest ancestor-or-self of `dir` holding a `.git` entry (dir or linked-worktree file). */
-export function findGitRoot(dir: string): string | null {
-	let cur = dir;
-	for (;;) {
-		if (existsSync(join(cur, ".git"))) return cur;
-		const parent = dirname(cur);
-		if (parent === cur) return null;
-		cur = parent;
-	}
-}
 
 /** `cwd` from a session log's header line, or null when absent or unreadable. */
 async function readSessionCwd(file: string): Promise<string | null> {

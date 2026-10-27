@@ -156,6 +156,7 @@ import { EDGE_COMMAND_FIELDS, readEdgeArgs, type EdgeArgs } from "./edge-command
 import { FleetOperations, OperationError } from "./operations";
 import type { CloneCreateInput, LifecycleApi } from "./workspace-lifecycle";
 import type { FleetEventLog, FleetFacts } from "./events";
+import { NOT_GIT_PROJECT_MESSAGE } from "./discovery";
 import { listProjectBranches, realpathOf } from "./worktrees";
 
 /** Reclaim grace for a disconnected browser's ring (`after` resume window). */
@@ -1271,6 +1272,10 @@ export class FleetEdge {
 			this.#sendError(stream, `unknown project: ${projectId}`);
 			return;
 		}
+		if (project.git === false) {
+			this.#sendError(stream, NOT_GIT_PROJECT_MESSAGE);
+			return;
+		}
 		try {
 			const listed = await listProjectBranches(
 				project.path,
@@ -1313,9 +1318,10 @@ export class FleetEdge {
 	}
 
 	/**
-	 * add_project: register the main checkout behind `path` through the shared
-	 * operation (never spawns). Answered by add_project_result: the projectId,
-	 * with `existing: true` when that checkout was already registered.
+	 * add_project: register the project behind `path` (a git repo's main
+	 * checkout, or a plain directory with no git repo above it) through the
+	 * shared operation (never spawns). Answered by add_project_result: the
+	 * projectId, with `existing: true` when that project was already registered.
 	 */
 	async #handleAddProject(stream: BrowserStream, id: string, path: string): Promise<void> {
 		try {

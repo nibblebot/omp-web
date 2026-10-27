@@ -25,7 +25,7 @@ import { isUserStopped } from "../../../store/user-stopped";
 import { ConfirmButton } from "../../ui/ConfirmButton";
 import { KebabMenu } from "../../ui/KebabMenu";
 import { useClickableRow } from "../../ui/PickerRow";
-import { displayTitle } from "../../ui/title-icons";
+import { rowTitle } from "../../../fleet-ui/row-title";
 import { RowSignal } from "./RowSignal";
 import { activatingIds, beginActivating, endActivating } from "../../../store/worktree-sessions";
 import {
@@ -51,14 +51,18 @@ import {
 // (details, Start/Restart, two-click stop, delete worktree; its tooltip names
 // the state). Under the top line, aligned with the branch text: the last
 // session's title (clamped to one line, or two with the sidebarSessionTitleLines
-// setting; absent when the session has no title), the clone profile chip, clone lifecycle
-// progress, and the git diffstat when there is one. A ready row carries a rail
-// on its right edge instead of a dot. Ready rows attach on click, asleep rows
-// wake-then-attach. The group header names the project; the full path lives in
-// the hover tooltip. Touch keeps the chevron, "+" and "⋯" visible at 44px. With
-// the title-first setting (sidebarTitleFirst) a titled row swaps the two: the
-// session title leads the top line, flush left, and the kind icon + branch move
-// in small gray text to the head of the diffstat line.
+// setting; a muted "New session" / "Untitled session" stands in when it has no
+// title: fleet-ui/row-title.ts), the clone profile chip, clone lifecycle
+// progress, and the git diffstat when there is one (muted on an asleep row). A
+// ready row carries a rail on its right edge instead of a dot. Ready rows attach
+// on click, asleep rows wake-then-attach. The group header names the project; the
+// full path lives in the hover tooltip. Touch keeps the chevron, "+" and "⋯"
+// visible at 44px. With the title-first setting (sidebarTitleFirst) a row with a
+// real title swaps the two: the session title leads the top line, flush left,
+// and the kind icon + branch move in small gray text to the head of the diffstat
+// line. A row of a non-git project (a plain folder) has no branch, kind icon or
+// diffstat and always leads with the title; it offers every action but "Delete
+// worktree".
 // ---------------------------------------------------------------------------
 
 /** Roster entries may carry a template name, the last-session title, and
@@ -132,6 +136,9 @@ export const WorkspaceRow: Component<{
 	inProjectGroup?: boolean;
 	/** The project's main checkout is missing on disk: rows cannot start. */
 	projectMissing?: boolean;
+	/** The project is a git repository. `false` marks a plain folder project
+	 *  (RegisteredProject.git === false); absent reads as git. */
+	projectGit?: boolean;
 }> = (props) => {
 	const d = () => props.session as DetailedRosterEntry;
 	// Row actions go to the fleet, not to the attached session: only a dropped
@@ -148,11 +155,14 @@ export const WorkspaceRow: Component<{
 	/** The delete was submitted; the row dims now and collapses when the roster drops it. */
 	const deleting = createMemo(() => deletePendingIds().has(d().workspaceId));
 	const menuOpen = createMemo(() => menuOpenId() === d().workspaceId);
-	/** The session-title line text: the last session's title, absent when it has none. */
-	const sessionTitleText = createMemo(() => displayTitle(d().sessionTitle));
-	/** Title-first layout (setting): the session title leads the top line and the
-	 *  branch moves to the diffstat line. A row without a title keeps the branch first. */
-	const titleFirst = () => state.sidebarTitleFirst && sessionTitleText() !== undefined;
+	/** The session-title text, or its "New session" / "Untitled session" placeholder. */
+	const title = createMemo(() => rowTitle(d()), undefined, {
+		equals: (a, b) => a.text === b.text && a.placeholder === b.placeholder,
+	});
+	/** The title leads the top line (the branch moves to the diffstat line) for a
+	 *  non-git row, and for a git row with the title-first setting once it has a
+	 *  real title; a placeholder never counts as a title for that. */
+	const titleOnTop = () => nonGit() || (state.sidebarTitleFirst && !title().placeholder);
 
 	// Worktree sessions belong to a main checkout and read as branches, not
 	// dirs. The branch (or name fallback) becomes the title and the project
@@ -174,6 +184,10 @@ export const WorkspaceRow: Component<{
 	const isRoot = () => props.inProjectGroup === true && !isWorktree() && !isClone();
 	/** Project folder missing on disk: the group shows it, rows cannot start. */
 	const blocked = () => props.projectMissing === true;
+	/** The project is a plain folder (no .git): its rows have no worktree,
+	 *  branch or diffstat, and lead with the session title. A clone is never
+	 *  one, whatever its project. */
+	const nonGit = () => props.projectGit === false && !isClone();
 	/** Kind text for the left icon's aria-label and tooltip. */
 	const kindLabel = (): string => {
 		if (!isClone()) return isWorktree() ? "worktree" : "main checkout";
@@ -374,7 +388,7 @@ export const WorkspaceRow: Component<{
 					"roster-row--worktree": isWorktree(),
 					"roster-row--root": isRoot(),
 					"roster-row--clone": isClone(),
-					"roster-row--title-first": titleFirst(),
+					"roster-row--title-first": titleOnTop(),
 					// Ready rows wear the right-edge rail; asleep ones dim their title
 					// (until a wake is in flight).
 					"roster-row--ready": d().status === "ready",
@@ -392,18 +406,17 @@ export const WorkspaceRow: Component<{
 				<div class="sidebar-row-main">
 					<div class="sidebar-row-top">
 						<span class="sidebar-row-title roster-row-title" title={d().cwd}>
-							<Show when={titleFirst() ? sessionTitleText() : undefined} fallback={branchLabel()}>
-								{(title) => (
-									<span
-										class="roster-row-session"
-										classList={{
-											"roster-session-title--two-line": state.sidebarSessionTitleLines === 2,
-										}}
-										title={title()}
-									>
-										{title()}
-									</span>
-								)}
+							<Show when={titleOnTop()} fallback={branchLabel()}>
+								<span
+									class="roster-row-session"
+									classList={{
+										"roster-session-title--two-line": state.sidebarSessionTitleLines === 2,
+										"roster-title--placeholder": title().placeholder,
+									}}
+									title={title().text}
+								>
+									{title().text}
+								</span>
 							</Show>
 						</span>
 						{/* Session chevron and "+" (clickable rows only), beside the
@@ -431,8 +444,10 @@ export const WorkspaceRow: Component<{
 								<button
 									type="button"
 									class="roster-session-new"
-									aria-label="New session in this worktree"
-									title="New session in this worktree"
+									aria-label={
+										nonGit() ? "New session in this folder" : "New session in this worktree"
+									}
+									title={nonGit() ? "New session in this folder" : "New session in this worktree"}
 									onClick={(e) => {
 										// The card's resume must NOT fire as well.
 										e.stopPropagation();
@@ -556,7 +571,7 @@ export const WorkspaceRow: Component<{
 									<InfoIcon />
 									Process details
 								</button>
-								<Show when={isWorktree() && !isClone()}>
+								<Show when={isWorktree() && !isClone() && !nonGit()}>
 									<button
 										type="button"
 										role="menuitem"
@@ -618,25 +633,25 @@ export const WorkspaceRow: Component<{
 							</KebabMenu>
 						</span>
 					</div>
-					{/* The last session's title (probed by the fleet edge from the
-					    session file's JSONL title slot), under the top line and
-					    aligned with the branch text. Part of the card (click
-					    resumes). Absent for an untitled session, so the row stays one
-					    line. Clamped to one line, or two with the setting on, taking
-					    only the lines it needs; the tooltip carries the full string.
-					    The title-first layout puts it on the top line instead. */}
-					<Show when={titleFirst() ? undefined : sessionTitleText()}>
-						{(title) => (
-							<div
-								class="roster-session-title"
-								classList={{
-									"roster-session-title--two-line": state.sidebarSessionTitleLines === 2,
-								}}
-								title={title()}
-							>
-								{title()}
-							</div>
-						)}
+					{/* The last session's title (the real title probed by the fleet
+					    edge from the session file's JSONL title slot, or the "New
+					    session" / "Untitled session" placeholder, muted), under the
+					    top line and aligned with the branch text. Part of the card
+					    (click resumes). Clamped to one line, or two with the setting
+					    on, taking only the lines it needs; the tooltip carries the
+					    full string. The title-first layout and non-git rows put it on
+					    the top line instead. */}
+					<Show when={!titleOnTop()}>
+						<div
+							class="roster-session-title"
+							classList={{
+								"roster-session-title--two-line": state.sidebarSessionTitleLines === 2,
+								"roster-title--placeholder": title().placeholder,
+							}}
+							title={title().text}
+						>
+							{title().text}
+						</div>
 					</Show>
 					<Show when={cloneProfile()}>
 						{(p) => (
@@ -696,10 +711,10 @@ export const WorkspaceRow: Component<{
 					    numstat +/- line counts when probed), led by the small gray
 					    branch in the title-first layout. Row actions live in the
 					    "⋯" menu on the top row. Rendered only when there is
-					    something to show. */}
-					<Show when={titleFirst() || hasGitStats()}>
+					    something to show; a non-git row has no branch and no diffstat. */}
+					<Show when={!nonGit() && (titleOnTop() || hasGitStats())}>
 						<div class="session-git">
-							<Show when={titleFirst()}>
+							<Show when={titleOnTop()}>
 								<span class="session-git-branch">{branchLabel()}</span>
 							</Show>
 							<Show when={filesChanged()}>

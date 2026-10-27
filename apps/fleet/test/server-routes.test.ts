@@ -162,13 +162,37 @@ describe("fleet control plane", () => {
 		}
 	});
 
-	test("POST /ctl/projects 400s when the path is not a git repo", async () => {
-		const plainDir = join(tmp, "ctl-not-a-repo");
+	test("POST /ctl/projects registers a plain directory as a non-git project", async () => {
+		const plainDir = join(tmp, "ctl-plain-dir");
 		mkdirSync(plainDir, { recursive: true });
 		const res = await postJson(server.port, "/ctl/projects", { path: plainDir });
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as {
+			project: { projectId: string; path: string; git?: false };
+		};
+		expect(body.project.path).toBe(realpathSync(plainDir));
+		expect(body.project.git).toBe(false);
+		try {
+			// Git-only operations refuse it with a clear reason.
+			const wt = await postJson(server.port, `/ctl/projects/${body.project.projectId}/worktrees`, {
+				name: "feature",
+			});
+			expect(wt.status).toBe(400);
+			expect(((await wt.json()) as { error?: string }).error).toContain(
+				"project is not a git repository",
+			);
+		} finally {
+			server.registry.removeProject(body.project.projectId);
+		}
+	});
+
+	test("POST /ctl/projects 400s when the path is not a directory", async () => {
+		const res = await postJson(server.port, "/ctl/projects", {
+			path: join(tmp, "ctl-no-such-dir"),
+		});
 		expect(res.status).toBe(400);
 		const body = (await res.json()) as { error?: string };
-		expect(body.error).toContain("not a git repository");
+		expect(body.error).toContain("not a directory");
 	});
 
 	test("DELETE /ctl/projects/:id removes the project and its non-clone rows", async () => {

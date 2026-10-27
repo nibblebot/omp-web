@@ -117,7 +117,10 @@ export const screenSessionSeed: Partial<typeof state> = {
 	...screenSessionView,
 	availableCommands: screenSlashCommands,
 	sessionRoster: rosterAppEntries,
-	registeredProjects: rosterProjects,
+	// Only projects with a row in the App roster: the plain-directory projects have none here.
+	registeredProjects: rosterProjects.filter((project) =>
+		rosterAppEntries.some((entry) => entry.projectId === project.projectId),
+	),
 	authStatus: "disabled",
 };
 

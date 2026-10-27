@@ -37,7 +37,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname } from "node:path";
 import type {
 	RosterEntry,
 	SessionStatus,
@@ -47,6 +47,7 @@ import type {
 } from "#lib/wire/protocol";
 import type { CallbackErrorCode } from "#lib/wire/callback-protocol";
 import { expandTilde } from "./config";
+import { hasGitEntry } from "./discovery";
 
 /**
  * How long an enrolled session may stay unpaired after a control-plane boot
@@ -325,6 +326,12 @@ export class Registry {
 	/** Registered projects in insertion order (public API: projects()). */
 	private projectList: RegisteredProject[] = [];
 	private nextProjectId = 1;
+	/**
+	 * Ids of projects whose directory has no `.git` (in memory only: derived
+	 * from the filesystem by addProject and ProjectSync, never persisted).
+	 * projects() reports them as `git: false`.
+	 */
+	private readonly nonGitProjects = new Set<string>();
 	/** Deleted-without-verification markers keyed by workspaceId. */
 	private storeOrphanList: Record<string, StoreOrphanMarker> = {};
 	/** Pending coalesced write, armed by #schedule and cleared by flush(). */
@@ -629,29 +636,53 @@ export class Registry {
 		return true;
 	}
 
-	/** Registered projects in insertion order (defensive copy). */
+	/**
+	 * Registered projects in insertion order (defensive copy). A project whose
+	 * directory has no `.git` carries `git: false`; the flag is in-memory
+	 * state, so the persisted project records never hold it.
+	 */
 	projects(): RegisteredProject[] {
-		return [...this.projectList];
+		return this.projectList.map((project) => this.#projectView(project));
+	}
+
+	/** One project record as projects() reports it (copy, plus the in-memory `git: false`). */
+	#projectView(project: RegisteredProject): RegisteredProject {
+		return this.nonGitProjects.has(project.projectId) ? { ...project, git: false } : { ...project };
+	}
+
+	/** False when the project's directory is known to have no `.git`; true otherwise (unknown ids too). */
+	isProjectGit(projectId: string): boolean {
+		return !this.nonGitProjects.has(projectId);
 	}
 
 	/**
-	 * Register a project by its MAIN checkout path (callers resolve a linked
-	 * worktree/subdirectory through `resolveProjectRoot` first). Validates
-	 * that `mainPath` is an existing directory with a `.git` entry
-	 * (realpath-normalized; symlinked paths alias the same project). A path
+	 * Record whether a project's directory has a `.git` entry. In-memory only
+	 * (no persist). A change fires onProjectsChange so the registered_projects
+	 * frame is rebroadcast; an unchanged value or unknown id is a no-op.
+	 */
+	setProjectGit(projectId: string, git: boolean): void {
+		if (!this.projectList.some((p) => p.projectId === projectId)) return;
+		if (this.nonGitProjects.has(projectId) === !git) return;
+		if (git) this.nonGitProjects.delete(projectId);
+		else this.nonGitProjects.add(projectId);
+		this.onProjectsChange?.();
+	}
+
+	/**
+	 * Register a project by its directory path (callers resolve a linked
+	 * worktree/subdirectory of a git repo to the repo's main checkout through
+	 * `resolveProjectRoot` first). Validates that `mainPath` is an existing
+	 * directory (realpath-normalized; symlinked paths alias the same project);
+	 * a directory without a `.git` entry registers as a non-git project. A path
 	 * already registered returns the EXISTING project with `existing: true`
 	 * and changes nothing. Otherwise persists atomically and fires onChange +
-	 * onProjectsChange. Throws on invalid input (not a directory / not a git
-	 * repository).
+	 * onProjectsChange. Throws on invalid input (not a directory).
 	 */
 	addProject(mainPath: string): { project: RegisteredProject; existing: boolean } {
 		const resolved = realpathIfDirectory(mainPath);
 		if (resolved === null) throw new Error(`not a directory: ${mainPath}`);
-		if (!existsSync(join(resolved, ".git"))) {
-			throw new Error(`not a git repository: ${mainPath}`);
-		}
 		const existing = this.projectList.find((project) => project.path === resolved);
-		if (existing !== undefined) return { project: existing, existing: true };
+		if (existing !== undefined) return { project: this.#projectView(existing), existing: true };
 		const project: RegisteredProject = {
 			projectId: `p${this.nextProjectId++}`,
 			path: resolved,
@@ -659,9 +690,10 @@ export class Registry {
 			addedAt: Date.now(),
 		};
 		this.projectList.push(project);
+		if (!hasGitEntry(resolved)) this.nonGitProjects.add(project.projectId);
 		this.#mutated({ upserted: [], removed: [] }, true);
 		this.onProjectsChange?.();
-		return { project, existing: false };
+		return { project: this.#projectView(project), existing: false };
 	}
 
 	/**
@@ -689,14 +721,15 @@ export class Registry {
 		const removed = owned.map((entry) => entry.workspaceId);
 		this.entries = this.entries.filter((entry) => entry.projectId !== projectId);
 		this.projectList.splice(index, 1);
+		this.nonGitProjects.delete(projectId);
 		this.#mutated({ upserted: [], removed }, true);
 		this.onProjectsChange?.();
 		return removed;
 	}
 
 	/**
-	 * Set or clear `RegisteredProject.missing` (the sync pass found the main
-	 * checkout gone or no longer a repo). The flag is persisted with the
+	 * Set or clear `RegisteredProject.missing` (the sync pass found the project
+	 * directory gone, or a git project's main checkout bare or unreadable). The flag is persisted with the
 	 * project so a restart does not flash a missing project as healthy until
 	 * the first pass. No-op (no persist, no broadcast) when unchanged or the
 	 * project is unknown.

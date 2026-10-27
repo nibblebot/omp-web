@@ -125,7 +125,7 @@ import {
 	prepareWorkspace,
 	resolveWorkspacePin,
 } from "#lib/runtime/prepare-workspace";
-import { resolveWorktreeOf, runGit } from "./discovery";
+import { NOT_GIT_PROJECT_MESSAGE, resolveWorktreeOf, runGit } from "./discovery";
 import { sha256OfFile } from "#lib/session-files/file-sha256";
 import { verifyWorkspaceLogs } from "./verify-store";
 import { MAX_EXPORT_BYTES, MAX_EXPORT_FILES } from "#lib/session-files/export-sessions";
@@ -678,6 +678,9 @@ export class WorkspaceLifecycle {
 		const project = registry.projects().find((p) => p.projectId === projectId);
 		if (project === undefined) {
 			throw new CloneLifecycleError("invalid_request", `unknown project: ${projectId}`);
+		}
+		if (project.git === false) {
+			throw new CloneLifecycleError("invalid_request", NOT_GIT_PROJECT_MESSAGE);
 		}
 		const profile = config.providerProfiles?.[profileId];
 		if (profile === undefined) {

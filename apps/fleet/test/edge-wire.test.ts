@@ -1885,22 +1885,29 @@ describe("fleet edge", () => {
 		expect(main!.status).toBe("asleep");
 		expect(main!.worktreeOf).toBeUndefined();
 		expect(main!.lastSessionFile).toBeUndefined();
-		// A path that is not a git checkout answers ok:false with the reason and
-		// registers nothing.
+		// A plain directory registers as a non-git project: the registered_projects
+		// frame carries `git: false`, and its default row is created.
 		const plainDir = join(tmp, "edge-add-project-plain");
 		mkdirSync(plainDir, { recursive: true });
 		await browser.send({ type: "add_project", id: "ap-plain", path: plainDir });
-		const failed = await awaitAddProjectResult(browser, "ap-plain");
+		const plain = await awaitAddProjectResult(browser, "ap-plain");
+		expect(plain.ok).toBe(true);
+		const plainProject = server.registry.projects().find((p) => p.projectId === plain.projectId);
+		expect(plainProject).toMatchObject({ path: realpathSync(plainDir), git: false });
+		expect(server.registry.list().filter((e) => e.cwd === realpathSync(plainDir))).toHaveLength(1);
+		// A path that is not a directory answers ok:false with the reason and
+		// registers nothing.
+		const missingDir = join(tmp, "edge-add-project-missing");
+		await browser.send({ type: "add_project", id: "ap-missing", path: missingDir });
+		const failed = await awaitAddProjectResult(browser, "ap-missing");
 		expect(failed.ok).toBe(false);
-		expect(typeof failed.error).toBe("string");
+		expect(failed.error).toContain("not a directory");
 		expect(failed.projectId).toBeUndefined();
 		expect(server.registry.projects().filter((p) => p.path === realpathSync(repoDir))).toHaveLength(
 			1,
 		);
-		expect(server.registry.projects().some((p) => p.path === realpathSync(plainDir))).toBe(false);
-		// The refusal registered nothing: the roster still holds exactly the
-		// first add_project's default workspace.
-		expect(server.registry.list().filter((e) => e.cwd === realpathSync(repoDir))).toHaveLength(1);
+		expect(server.registry.projects().some((p) => p.path === missingDir)).toBe(false);
+		server.registry.removeProject(plain.projectId!);
 		try {
 			server.registry.removeProject(project.projectId);
 		} catch {

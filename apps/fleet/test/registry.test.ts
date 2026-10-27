@@ -1,5 +1,12 @@
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	realpathSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
@@ -572,9 +579,6 @@ describe("registered projects (Phase 2)", () => {
 	test("addProject validates the path and allocates p1, p2, …", async () => {
 		const registry = await loadedRegistry(tmpStatePath());
 		expect(() => registry.addProject(join(tmpdir(), "does-not-exist"))).toThrow("not a directory");
-		const plainDir = tempDir("omp-web-plain-");
-		expect(() => registry.addProject(plainDir)).toThrow("not a git repository");
-
 		const repoA = await makeRepo();
 		const a = registry.addProject(repoA);
 		expect(a.existing).toBe(false);
@@ -583,6 +587,52 @@ describe("registered projects (Phase 2)", () => {
 		const repoB = await makeRepo();
 		expect(registry.addProject(repoB).project.projectId).toBe("p2");
 		expect(registry.projects().map((p) => p.projectId)).toEqual(["p1", "p2"]);
+	});
+
+	test("addProject registers a plain directory as a non-git project that never persists the flag", async () => {
+		const statePath = tmpStatePath();
+		const registry = await loadedRegistry(statePath);
+		const plainDir = tempDir("omp-web-plain-");
+		const added = registry.addProject(plainDir);
+		expect(added.existing).toBe(false);
+		expect(added.project).toMatchObject({ path: realpathSync(plainDir), git: false });
+		expect(registry.isProjectGit(added.project.projectId)).toBe(false);
+		expect(registry.projects()[0]).toMatchObject({
+			projectId: added.project.projectId,
+			git: false,
+		});
+		// A repeat add reports the same non-git project.
+		expect(registry.addProject(plainDir)).toMatchObject({
+			existing: true,
+			project: { git: false },
+		});
+		// A git project carries no `git` key at all.
+		const repo = await makeRepo();
+		expect("git" in registry.addProject(repo).project).toBe(false);
+		registry.flush();
+		const persisted = JSON.parse(readFileSync(statePath, "utf8")) as {
+			projects: Array<Record<string, unknown>>;
+		};
+		expect(persisted.projects).toHaveLength(2);
+		expect(persisted.projects.some((p) => "git" in p)).toBe(false);
+	});
+
+	test("setProjectGit flips the in-memory flag and fires onProjectsChange only on a change", async () => {
+		const registry = await loadedRegistry(tmpStatePath());
+		const { project } = registry.addProject(tempDir("omp-web-plain-"));
+		let fired = 0;
+		registry.onProjectsChange = () => {
+			fired += 1;
+		};
+		registry.setProjectGit(project.projectId, false);
+		expect(fired).toBe(0);
+		registry.setProjectGit(project.projectId, true);
+		expect(fired).toBe(1);
+		expect(registry.projects()[0]!.git).toBeUndefined();
+		registry.setProjectGit(project.projectId, true);
+		expect(fired).toBe(1);
+		registry.setProjectGit("p999", false);
+		expect(fired).toBe(1);
 	});
 
 	test("dedup on realpath: a symlinked path aliases the same project", async () => {
@@ -736,7 +786,7 @@ describe("registered projects (Phase 2)", () => {
 		const snapshot = registry.projects();
 		snapshot.pop();
 		expect(registry.projects()).toHaveLength(1);
-		expect(registry.projects()[0]).toBe(again.project);
+		expect(registry.projects()[0]).toEqual(again.project);
 	});
 
 	test("nextProjectId is floored above the highest project id on disk (no reuse after hand-edit)", async () => {

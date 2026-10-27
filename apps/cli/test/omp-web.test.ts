@@ -12,7 +12,7 @@ describe("classifyCommand", () => {
 		[["projects"], "fleet"],
 		[["profiles"], "fleet"],
 		[["spawn"], "fleet"],
-		[["add-repo"], "fleet"],
+		[["add-project"], "fleet"],
 		[["add-clone"], "fleet"],
 		[["start"], "fleet"],
 		[["stop"], "fleet"],

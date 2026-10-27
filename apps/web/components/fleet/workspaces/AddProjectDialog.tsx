@@ -44,10 +44,7 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 
 	const crumbs = createMemo(() => pathCrumbs(snap().currentPath));
 	const target = () => addTarget(snap());
-	const canSubmit = () => {
-		const t = target();
-		return t !== null && t.hasGit !== false && !snap().loading && !busy();
-	};
+	const canSubmit = () => target() !== null && !snap().loading && !busy();
 
 	const close = () => {
 		setState("modal", null);
@@ -102,7 +99,7 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 		const row = e.target instanceof HTMLElement ? e.target : null;
 		if (e.key === "Enter" && row?.dataset.path) {
 			e.preventDefault();
-			void picker.navigate(row.dataset.path, { hasGit: row.dataset.git === "true" });
+			void picker.navigate(row.dataset.path);
 			return;
 		}
 		const rows = Array.from(listEl.querySelectorAll<HTMLElement>(".add-project-row"));
@@ -178,7 +175,7 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 							class="picker-filter add-project-path-input"
 							data-inline-escape
 							aria-label="Folder path"
-							placeholder="/path/to/repo or ~/repo"
+							placeholder="/path/to/folder or ~/folder"
 							value={draft()}
 							onInput={(e) => setDraft(e.currentTarget.value)}
 							onKeyDown={(e) => {
@@ -212,7 +209,7 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 									type="button"
 									class="picker-row add-project-shortcut"
 									title={p}
-									onClick={() => void picker.navigate(p, { hasGit: true })}
+									onClick={() => void picker.navigate(p)}
 								>
 									<FolderIcon class="add-project-folder" />
 									<span>{basename(p)}</span>
@@ -259,10 +256,9 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 									classList={{ selected: d.path === snap().selected }}
 									aria-pressed={d.path === snap().selected ? "true" : "false"}
 									data-path={d.path}
-									data-git={String(d.hasGit)}
 									title={d.path}
 									onClick={() => picker.select(d.path)}
-									onDblClick={() => void picker.navigate(d.path, { hasGit: d.hasGit })}
+									onDblClick={() => void picker.navigate(d.path)}
 								>
 									<FolderIcon class="add-project-folder" />
 									<span class="add-project-name">{d.name}</span>
@@ -295,14 +291,9 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 						fallback={<span class="add-project-status">No folder selected</span>}
 					>
 						{(t) => (
-							<>
-								<span class="add-project-target-path" title={t().path}>
-									{t().path}
-								</span>
-								<Show when={t().hasGit === false}>
-									<span class="msg-notice add-project-error">Not a git repository</span>
-								</Show>
-							</>
+							<span class="add-project-target-path" title={t().path}>
+								{t().path}
+							</span>
 						)}
 					</Show>
 					<Show when={submitError()}>

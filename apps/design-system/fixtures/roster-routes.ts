@@ -27,7 +27,14 @@ const fsTree: Record<string, FsBrowseDir[]> = {
 		{ name: "docs", path: `${OMP_WEB}/docs`, hasGit: false },
 	],
 	[`${HOME}/Repos/empty`]: [],
-	[`${HOME}/Documents`]: [],
+	[`${HOME}/Documents`]: [
+		{ name: "notes", path: `${HOME}/Documents/notes`, hasGit: false },
+		{ name: "journal", path: `${HOME}/Documents/journal`, hasGit: false },
+		{ name: "recipes", path: `${HOME}/Documents/recipes`, hasGit: false },
+	],
+	[`${HOME}/Documents/notes`]: [],
+	[`${HOME}/Documents/journal`]: [],
+	[`${HOME}/Documents/recipes`]: [],
 };
 
 /** Answer for GET /ctl/fs/browse: a canned listing, or the edge's 400 reason for an unknown path. */

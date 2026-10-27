@@ -7,11 +7,9 @@ import { fetchFsBrowse, type FsBrowseDir, type FsBrowseResult } from "../store/p
  * fetchFsBrowse (GET /ctl/fs/browse on the fleet edge); `~`/`~/…` are passed
  * through verbatim and expanded server-side.
  *
- * hasGit of the CURRENT directory is not part of the browse answer (only
- * listed children carry it), so it is known only when the current path was
- * reached by opening a listing row: navigate(path, { hasGit }) records it;
- * up()/manual/initial navigation leaves it null (unknown, since the server stays
- * authoritative on submit either way).
+ * Any existing directory can be added as a project (a plain folder or a git
+ * checkout alike): the listing's per-row `hasGit` only feeds the "git" chip,
+ * and the fleet stays authoritative on submit.
  */
 
 export type BrowseFn = (path?: string) => Promise<FsBrowseResult>;
@@ -24,8 +22,6 @@ export interface DirPickerState {
 	loading: boolean;
 	error: string | null;
 	truncated: boolean;
-	/** hasGit of currentPath when known (reached via a listing row), else null. */
-	hasGit: boolean | null;
 	/** Path of the listed child picked by single click; null when none. Cleared by every navigation. */
 	selected: string | null;
 }
@@ -33,8 +29,6 @@ export interface DirPickerState {
 /** The folder Add project would register: the selected child, else the current directory. */
 export interface AddTarget {
 	path: string;
-	/** null when the git bit is unknown (current directory reached without a listing row). */
-	hasGit: boolean | null;
 }
 
 export interface PathCrumb {
@@ -47,15 +41,14 @@ export interface DirPicker {
 	/** Re-render hook for the Solid component; returns the unsubscribe. */
 	subscribe(listener: () => void): () => void;
 	/** Browse `path` (absolute, "~", "~/rel"; omitted → the fleet host's home
-	 *  dir). `opts.hasGit` records the target's git bit when the caller knows
-	 *  it (listing-row open). Clears the selection. */
-	navigate(path?: string, opts?: { hasGit?: boolean }): Promise<void>;
+	 *  dir). Clears the selection. */
+	navigate(path?: string): Promise<void>;
 	/** Pick a listed child (single click), or clear the pick with null. */
 	select(path: string | null): void;
 	/** Browse the parent of the current listing; no-op at the filesystem root
 	 *  or before the first load. */
 	up(): Promise<void>;
-	/** Re-list the current directory, preserving its known hasGit bit. */
+	/** Re-list the current directory. */
 	refresh(): Promise<void>;
 }
 
@@ -63,10 +56,10 @@ export interface DirPicker {
 export function addTarget(st: DirPickerState): AddTarget | null {
 	if (st.selected !== null) {
 		const dir = st.dirs.find((d) => d.path === st.selected);
-		if (dir) return { path: dir.path, hasGit: dir.hasGit };
+		if (dir) return { path: dir.path };
 	}
 	if (st.currentPath === "") return null;
-	return { path: st.currentPath, hasGit: st.hasGit };
+	return { path: st.currentPath };
 }
 
 /** Breadcrumb segments for a canonical absolute path: "/" then each ancestor. */
@@ -89,7 +82,6 @@ export function createDirPicker(browse: BrowseFn = fetchFsBrowse): DirPicker {
 		loading: false,
 		error: null,
 		truncated: false,
-		hasGit: null,
 		selected: null,
 	};
 	// Latest-wins: only the most recent navigate applies its result (or error);
@@ -101,7 +93,7 @@ export function createDirPicker(browse: BrowseFn = fetchFsBrowse): DirPicker {
 		for (const l of listeners) l();
 	};
 
-	const navigate = async (path?: string, opts?: { hasGit?: boolean }): Promise<void> => {
+	const navigate = async (path?: string): Promise<void> => {
 		const ticket = ++seq;
 		set({ loading: true, error: null });
 		try {
@@ -112,7 +104,6 @@ export function createDirPicker(browse: BrowseFn = fetchFsBrowse): DirPicker {
 				parent: res.parent,
 				dirs: res.dirs,
 				truncated: res.truncated,
-				hasGit: opts?.hasGit ?? null,
 				selected: null,
 				loading: false,
 			});
@@ -133,9 +124,6 @@ export function createDirPicker(browse: BrowseFn = fetchFsBrowse): DirPicker {
 		select: (path) => set({ selected: path }),
 		up: () =>
 			st.parent === null || st.currentPath === "" ? Promise.resolve() : navigate(st.parent),
-		refresh: () =>
-			st.currentPath === ""
-				? Promise.resolve()
-				: navigate(st.currentPath, { hasGit: st.hasGit ?? undefined }),
+		refresh: () => (st.currentPath === "" ? Promise.resolve() : navigate(st.currentPath)),
 	};
 }
