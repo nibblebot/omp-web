@@ -292,7 +292,7 @@
 /* Edge gutter for the column's fixed rows. The transcript scroller pads
    itself (chat.css) so its scrollbar stays on the column edge. */
 .app-main > :is(.queue-bar, .activity-bar, .session-bar, .prompt-box) {
-	padding-inline: var(--space-5);
+	padding-inline: var(--gutter);
 }
 /* No live attached session (session stopped/removed or never
    picked): the chat column is replaced by a quiet centered hint. */

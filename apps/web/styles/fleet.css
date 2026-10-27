@@ -140,13 +140,14 @@
 }
 /* The sidebar header row (SidebarHeader.tsx) lives in shell.css. */
 .sidebar-list {
-	/* Row geometry shared with the group headers (ProjectGroups). The indent is
-	   where a row's branch text starts, measured from the sidebar's left edge: list
-	   padding + group toggle padding + caret (1em) + toggle gap, i.e. the x of the
-	   project-name text in the header above, so branch and project names align.
-	   The edge is how far a row's corner slot sits from the right edge. */
-	--sidebar-row-indent: calc(var(--space-3) * 2 + var(--fs-sm) + var(--space-2));
-	--sidebar-row-edge: calc(var(--space-3) * 2);
+	/* Row geometry shared with the group headers (ProjectGroups). The caret and
+	   the add-project plus sit on the scan line, --gutter from the sidebar's left
+	   edge (list padding + their own left padding). The indent is where a row's
+	   branch text starts: the scan line + caret (1em) + toggle gap, i.e. the x of
+	   the project-name text in the header above, so branch and project names
+	   align. The edge is how far a row's corner slot sits from the right edge. */
+	--sidebar-row-indent: calc(var(--gutter) + var(--fs-sm) + var(--space-2));
+	--sidebar-row-edge: var(--gutter);
 	/* Right-edge rail of a ready row (and the matching mark in a collapsed
 	   group's summary): thin, rounded, a quiet green. No glow. */
 	--ready-rail-width: 2px;
@@ -172,7 +173,7 @@
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
-	padding: var(--space-2) var(--space-3);
+	padding: var(--space-4) var(--gutter);
 	border-top: 1px solid var(--border);
 	max-height: 40%;
 	overflow-y: auto;
@@ -1608,8 +1609,8 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	align-items: center;
 }
 /* --- Sidebar: project-first groups (FleetSidebar.tsx) --- */
-/* Left padding lives entirely on the toggle so the caret lands on the 12px
-   scan line (list padding 6 + toggle padding 6). Right padding puts the tail's
+/* Left padding lives entirely on the toggle so the caret lands on the
+   --gutter scan line (list padding + toggle padding). Right padding puts the tail's
    corner column where a row's corner sits (rows bleed over the list padding,
    the header does not). The gap above a header is 4x the --space-1 gap between
    rows, so groups read as separate; the first group needs none. */
@@ -1634,7 +1635,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	color: var(--text);
 	font: inherit;
 	text-align: left;
-	padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+	padding: var(--space-2) var(--space-2) var(--space-2) calc(var(--gutter) - var(--space-3));
 	cursor: pointer;
 }
 button.project-group-toggle[data-open="false"] .sidebar-caret {
@@ -1769,7 +1770,7 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 	align-items: center;
 	gap: var(--space-2);
 	margin-top: var(--space-4);
-	padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+	padding: var(--space-2) var(--space-2) var(--space-2) calc(var(--gutter) - var(--space-3));
 	background: none;
 	border: none;
 	border-radius: var(--r-md);

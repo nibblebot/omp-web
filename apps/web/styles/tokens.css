@@ -93,6 +93,11 @@
 	--space-5: 12px;
 	--space-6: 16px;
 	--space-7: 24px;
+	/* Edge gutter: the inset between a shell region's side borders and its
+	   content, shared by the sidebar (header, roster scan line, usage) and the
+	   main pane (header, transcript, bars, composer). Compact viewports narrow
+	   the headers on their own (shell.css). */
+	--gutter: var(--space-6);
 	/* Docked sidebar width; the narrow-viewport drawer and touch screens widen
 	   it (below) so the 44px header controls fit beside the wordmark. */
 	--sidebar-w: 240px;
