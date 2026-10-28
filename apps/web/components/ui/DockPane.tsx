@@ -9,6 +9,7 @@ export interface DockPaneProps {
 	width: number;
 	minWidth: number;
 	maxWidth: number;
+	/** The width to keep: once when a drag ends (the pane follows the pointer itself meanwhile), and per keyboard step. */
 	onWidth: (px: number) => void;
 	onClose: () => void;
 	/** Back button and Esc; defaults to `onClose`. The close button always calls `onClose`. */
@@ -71,10 +72,35 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 	const clamp = (px: number): number =>
 		Math.min(props.maxWidth, Math.max(props.minWidth, Math.round(px)));
 
+	// A drag moves the pane's own width, once per frame, and hands the final width to `onWidth` when it ends:
+	// a write that went through the store would restyle the whole document (the width custom property lives
+	// on the root) and write storage on every pointermove.
+	let dragHandle: HTMLElement | undefined;
+	let dragWidth: number | undefined;
+	let dragFrame = 0;
+	const paintDrag = () => {
+		dragFrame = 0;
+		if (dragWidth === undefined) return;
+		pane.style.width = `${dragWidth}px`;
+		dragHandle?.setAttribute("aria-valuenow", String(dragWidth));
+	};
+	const endDrag = () => {
+		cancelAnimationFrame(dragFrame);
+		dragFrame = 0;
+		const width = dragWidth;
+		dragWidth = undefined;
+		dragHandle = undefined;
+		if (width === undefined) return;
+		props.onWidth(width);
+		pane.style.removeProperty("width");
+	};
+	onCleanup(() => cancelAnimationFrame(dragFrame));
+
 	const onPointerDown = (event: PointerEvent) => {
 		const handle = event.currentTarget as HTMLElement;
 		dragStartX = event.clientX;
 		dragStartWidth = props.width;
+		dragHandle = handle;
 		handle.setPointerCapture(event.pointerId);
 	};
 
@@ -82,7 +108,8 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 		const handle = event.currentTarget as HTMLElement;
 		if (!handle.hasPointerCapture(event.pointerId)) return;
 		// The separator sits on the dock's left edge: dragging left widens the dock.
-		props.onWidth(clamp(dragStartWidth - (event.clientX - dragStartX)));
+		dragWidth = clamp(dragStartWidth - (event.clientX - dragStartX));
+		dragFrame ||= requestAnimationFrame(paintDrag);
 	};
 
 	const onSeparatorKey = (event: KeyboardEvent) => {
@@ -128,6 +155,7 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 				tabIndex={0}
 				onPointerDown={onPointerDown}
 				onPointerMove={onPointerMove}
+				onLostPointerCapture={endDrag}
 				onKeyDown={onSeparatorKey}
 			/>
 			<header class="dock-header">
