@@ -26,6 +26,7 @@ import {
 	stopBtwTurn,
 	type BtwRecordView,
 } from "../../store/btw-history";
+import { StreamingBlock } from "../chat/transcript/StreamingBlock";
 import { Markdown } from "../ui/Markdown";
 import { Modal } from "../ui/Modal";
 
@@ -181,7 +182,14 @@ export const BtwSheet: Component<{ onClose: () => void }> = (props) => {
 									<div class="btw-meta">{live().streaming ? "answering…" : "error"}</div>
 									<Show when={live().reply || live().streaming}>
 										<div class="btw-reply">
-											<Markdown src={live().reply} />
+											{/* Frozen blocks render once; only the open block re-renders per flush. */}
+											<StreamingBlock
+												block={{
+													get text() {
+														return live().reply;
+													},
+												}}
+											/>
 											<Show when={live().streaming}>
 												<span class="btw-cursor" aria-hidden="true" />
 											</Show>

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type {
 	highlightCode as HighlightCode,
+	highlightCodeRaw as HighlightCodeRaw,
 	highlightLines as HighlightLines,
 	languageForPath as LanguageForPath,
 	loadHighlighter as LoadHighlighter,
@@ -8,7 +9,7 @@ import type {
 import type {
 	getMarkdownSanitizer as GetMarkdownSanitizer,
 	renderMarkdown as RenderMarkdown,
-	splitForStreaming as SplitForStreaming,
+	createStreamSplitter as CreateStreamSplitter,
 } from "../../text/markdown";
 
 // ---------------------------------------------------------------------------
@@ -562,9 +563,10 @@ function installMinimalDom(): () => void {
 
 let restoreMinimalDom: (() => void) | undefined;
 let renderMarkdown: typeof RenderMarkdown;
-let splitForStreaming: typeof SplitForStreaming;
+let createStreamSplitter: typeof CreateStreamSplitter;
 let getMarkdownSanitizer: typeof GetMarkdownSanitizer;
 let highlightCode: typeof HighlightCode;
+let highlightCodeRaw: typeof HighlightCodeRaw;
 let highlightLines: typeof HighlightLines;
 let languageForPath: typeof LanguageForPath;
 let loadHighlighter: typeof LoadHighlighter;
@@ -573,9 +575,9 @@ let loadHighlighter: typeof LoadHighlighter;
 // creation sees this window, without mutating globals while collecting tests.
 beforeAll(async () => {
 	restoreMinimalDom = installMinimalDom();
-	({ renderMarkdown, splitForStreaming, getMarkdownSanitizer } =
+	({ renderMarkdown, createStreamSplitter, getMarkdownSanitizer } =
 		await import("../../text/markdown"));
-	({ highlightCode, highlightLines, languageForPath, loadHighlighter } =
+	({ highlightCode, highlightCodeRaw, highlightLines, languageForPath, loadHighlighter } =
 		await import("../../text/highlight"));
 });
 afterAll(() => {
@@ -625,29 +627,131 @@ describe("renderMarkdown", () => {
 	});
 });
 
-describe("splitForStreaming", () => {
-	test("splits on blank lines outside fences", () => {
-		expect(splitForStreaming("a\n\nb", false)).toEqual({ complete: ["a"], tail: "b" });
+describe("createStreamSplitter", () => {
+	test("freezes a block once the next one has started", () => {
+		const split = createStreamSplitter();
+		expect(split("a")).toEqual({ frozen: [], tail: "a" });
+		expect(split("a\n\nb")).toEqual({ frozen: ["a\n\n"], tail: "b" });
+		expect(split("a\n\nb\n\nc")).toEqual({ frozen: ["a\n\n", "b\n\n"], tail: "c" });
+	});
+
+	test("blank lines after the open block do not freeze it", () => {
+		const split = createStreamSplitter();
+		expect(split("a\n\n")).toEqual({ frozen: [], tail: "a\n\n" });
 	});
 
 	test("does not split on blank lines inside a fenced code block", () => {
+		const split = createStreamSplitter();
 		const src = "```js\nconst a = 1;\n\nconst b = 2;\n```\n\nafter";
-		expect(splitForStreaming(src, false)).toEqual({
-			complete: ["```js\nconst a = 1;\n\nconst b = 2;\n```"],
+		expect(split(src)).toEqual({
+			frozen: ["```js\nconst a = 1;\n\nconst b = 2;\n```\n\n"],
 			tail: "after",
 		});
 	});
 
-	test("final: everything complete, tail empty", () => {
-		expect(splitForStreaming("a\n\nb", true)).toEqual({ complete: ["a\n\nb"], tail: "" });
+	test("unclosed fence keeps everything after the last frozen block in the tail", () => {
+		const split = createStreamSplitter();
+		const src = "intro\n\n```\nopen block\n\nstill open";
+		expect(split(src)).toEqual({ frozen: ["intro\n\n"], tail: "```\nopen block\n\nstill open" });
 	});
 
-	test("unclosed fence keeps everything in the tail", () => {
-		const src = "intro\n\n```\nopen block\n\nstill open";
-		expect(splitForStreaming(src, false)).toEqual({
-			complete: ["intro"],
-			tail: "```\nopen block\n\nstill open",
+	test("a list with a blank line between items stays one open block", () => {
+		const split = createStreamSplitter();
+		expect(split("intro\n\n- a\n\n- b")).toEqual({ frozen: ["intro\n\n"], tail: "- a\n\n- b" });
+		// An indented continuation after a blank line still belongs to the last item.
+		expect(split("intro\n\n- a\n\n  more").tail).toBe("- a\n\n  more");
+		// Unindented text after the blank line ends the list.
+		expect(split("intro\n\n- a\n\nafter")).toEqual({
+			frozen: ["intro\n\n", "- a\n\n"],
+			tail: "after",
 		});
+	});
+
+	test("frozen blocks plus the tail always rebuild the source, however it grows", () => {
+		const doc = [
+			"# Title\ntext under it\n\n",
+			"1. one\n\n2. two\n\n",
+			"| a | b |\n|---|---|\n| 1 | 2 |\n\n",
+			"```ts\nlet x = 1;\n\nlet y = 2;\n```\n\n",
+			"> quote\n> more\n\n",
+			"para\r\nwith crlf\n\n",
+			"- x\n  - nested\n\n",
+			"end",
+		].join("");
+		const split = createStreamSplitter();
+		let frozenAtEnd: readonly string[] = [];
+		for (let i = 1; i <= doc.length; i++) {
+			const src = doc.slice(0, i);
+			const { frozen, tail } = split(src);
+			expect(frozen.join("") + tail).toBe(src.replace(/\r\n?/g, "\n"));
+			expect(frozen.every((segment) => segment.trim() !== "")).toBe(true);
+			frozenAtEnd = frozen;
+		}
+		expect(frozenAtEnd).toHaveLength(8);
+	});
+
+	test("a block is never frozen before the text that could still join it has arrived", () => {
+		// A bare "2" of "2. two" reads as a paragraph for a moment: it must not freeze the list above it.
+		const docs = [
+			"intro\n\n1. one\n\n2. two\n\n10. ten\n\n- bullet\n\n- more\n\n  indented\n\nend",
+			"1. x\n\n   ```\n   code\n\n   more\n   ```\n\n2. y\n\n3. z\n\ntail text\n\n",
+			"> a\nlazy\n\n> b\n\ntext\n\n",
+			"<div>\nhi\n\n</div>\n\nafter\n\n",
+			"- a\n  - b\n\n    c\n\n  - d\n- e\n\nend\n\n",
+			"Setext\n======\n\nPara\n---\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nend\n\n",
+			"text\n\n    indented code\n\n    more code\n\nafter\n\n",
+			"- [ ] task\n- [x] done\n\n* star\n\n* star2\n\n+ plus\n\nend",
+			"10. ten\n\n11. eleven\n\n100. hundred\n\nend",
+			"1) paren\n\n2) two\n\nend",
+		];
+		for (const doc of docs) {
+			// What a growing source froze must be what the finished source froze, block for block.
+			const settled = createStreamSplitter()(doc).frozen;
+			const split = createStreamSplitter();
+			for (let i = 1; i <= doc.length; i++) {
+				const { frozen, tail } = split(doc.slice(0, i));
+				expect(frozen.join("") + tail).toBe(doc.slice(0, i));
+				expect(frozen).toEqual(settled.slice(0, frozen.length));
+			}
+		}
+	});
+
+	test("the frozen list keeps its identity until a block freezes", () => {
+		const split = createStreamSplitter();
+		const first = split("a\n\nb").frozen;
+		expect(split("a\n\nbc").frozen).toBe(first);
+		expect(split("a\n\nbc\n\nd").frozen).not.toBe(first);
+	});
+
+	test("a source that no longer extends the frozen blocks starts over", () => {
+		const split = createStreamSplitter();
+		split("one\n\ntwo");
+		expect(split("other\n\ntext")).toEqual({ frozen: ["other\n\n"], tail: "text" });
+	});
+});
+
+describe("renderMarkdown cache", () => {
+	test("a repeated source renders to the same sanitized string", () => {
+		const src = "text <script>alert(1)</script> and *emphasis*";
+		const first = renderMarkdown(src);
+		expect(first).not.toContain("<script");
+		expect(renderMarkdown(src)).toBe(first);
+		expect(renderMarkdown(src, { cache: false })).toBe(first);
+	});
+
+	test("a long message renders to the HTML of its blocks rendered one by one", () => {
+		const blocks = Array.from(
+			{ length: 40 },
+			(_, i) => `Paragraph ${i} with *emphasis* and some filler words to give it weight.\n\n`,
+		);
+		blocks.push("```ts\nconst answer = 42;\n```\n\n", "- one\n\n- two\n\n", "the end");
+		// Render each block alone first, as the live stream does.
+		const parts = blocks.map((block) => renderMarkdown(block));
+		const whole = blocks.join("");
+		expect(whole.length).toBeGreaterThan(1500);
+		expect(renderMarkdown(whole)).toBe(parts.join(""));
+		// The whole-source render takes the single sanitizer pass; both agree.
+		expect(renderMarkdown(whole, { cache: false })).toBe(parts.join(""));
 	});
 });
 
@@ -655,9 +759,17 @@ describe("highlightCode", () => {
 	test("returns null until the library has loaded, then highlights", async () => {
 		// First call triggers the lazy load and renders plain.
 		expect(highlightCode("const a = 1;", "ts")).toBeNull();
+		// A markdown render cached before the load must not outlive it.
+		const fenced = 'before the load\n\n```json\n{"a": 1}\n```\n';
+		const plain = renderMarkdown(fenced);
+		expect(plain).not.toContain("hljs-");
+		expect(renderMarkdown(fenced)).toBe(plain);
 		await loadHighlighter();
 		const html = highlightCode("const a = 1;", "ts");
 		expect(html).toContain('<span class="hljs-keyword">const</span>');
+		const highlighted = renderMarkdown(fenced);
+		expect(highlighted).toContain("hljs-");
+		expect(renderMarkdown(fenced)).toBe(highlighted);
 	});
 
 	test("resolves aliases and returns null for unknown or missing languages", async () => {
@@ -690,6 +802,16 @@ describe("highlightCode", () => {
 		expect(html).not.toBeNull();
 		expect(html).not.toContain("<img");
 		expect(html).toContain("&lt;");
+	});
+
+	test("the raw variant is hljs output as is, and the safe one matches it for plain markup", async () => {
+		await loadHighlighter();
+		const raw = highlightCodeRaw('<img src=x onerror="alert(1)">', "html");
+		expect(raw).not.toBeNull();
+		// hljs escapes the code, so the raw HTML carries no element of its own.
+		expect(raw).not.toContain("<img");
+		expect(highlightCode('<img src=x onerror="alert(1)">', "html")).toBe(raw);
+		expect(highlightCodeRaw("x", "klingon")).toBeNull();
 	});
 
 	test("repeat calls hit the cache and return an identical string", async () => {

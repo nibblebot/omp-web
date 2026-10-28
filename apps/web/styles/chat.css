@@ -76,6 +76,14 @@
 .chat-transcript-content > * summary:focus-visible {
 	outline-offset: -2px;
 }
+/* The live reply's frozen blocks never change again, but the tail keeps growing under
+   them. A stacking context per frozen segment keeps the tail's frames from re-painting
+   and re-compositing the whole reply, so a frame's cost stops growing with its length.
+   Not paint containment: that makes the segment a formatting context, and margins stop
+   collapsing between segments. */
+.msg-assistant.live .md-frozen {
+	isolation: isolate;
+}
 
 /* The transcript view: the body (message list or empty state) with the switch
    states layered over it. When a switch starts the body holds its hidden start pose

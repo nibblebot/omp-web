@@ -28,8 +28,9 @@ function decorateCodeBlocks(root: HTMLElement): void {
 	}
 }
 
-// Parses only when `src` changes; frozen paragraphs parse exactly once.
-export const Markdown: Component<{ src: string }> = (props) => {
+// Parses only when `src` changes, and `renderMarkdown` caches by source, so a
+// remounted block with the same text does not parse again. `class` adds to `md`.
+export const Markdown: Component<{ src: string; class?: string }> = (props) => {
 	const html = createMemo(() => renderMarkdown(props.src));
 	let el!: HTMLDivElement;
 	// Set innerHTML inside the same effect as decoration: ordering is
@@ -39,5 +40,5 @@ export const Markdown: Component<{ src: string }> = (props) => {
 		el.innerHTML = html();
 		decorateCodeBlocks(el);
 	});
-	return <div class="md" ref={el} />;
+	return <div class={props.class ? `md ${props.class}` : "md"} ref={el} />;
 };
