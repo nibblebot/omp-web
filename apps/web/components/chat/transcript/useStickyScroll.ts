@@ -199,46 +199,43 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	// At the scroller's boundary the event falls through to native scroll
 	// chaining, which moves the session anyway. Wheel-up unpins synchronously
 	// in every path; wheel-down schedules the band re-pin check.
-	const onWheelRedirect = (e: WheelEvent) => {
+	//
+	// Only the redirect has to cancel a wheel event, and a non-passive wheel
+	// listener makes the browser wait for the main thread before it scrolls
+	// anything under it. So the container listens passively (pin bookkeeping
+	// only, never blocks) and the non-passive redirect sits on the one inner
+	// scroller the pointer is over, from the moment it enters.
+	const wheelUnpin = (e: WheelEvent) => {
+		if (e.deltaY < 0) unpin();
+	};
+	// Wheel events the inner scroller's redirect already did the pin bookkeeping for.
+	const redirected = new WeakSet<Event>();
+	const onInnerWheel = (e: WheelEvent) => {
+		redirected.add(e);
 		// Alt+wheel is the explicit "scroll this inner area" gesture; the other
 		// modifiers are unrelated gestures (Ctrl zoom, Shift horizontal).
 		if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
 		if (e.deltaY === 0) return; // horizontal-only wheel passes through
 		// Wheel-up that will move the SESSION unpins synchronously (see the
 		// pin comment above); wheel-down re-pins once it lands in the band.
-		const unpinOnUp = () => {
-			if (e.deltaY < 0) unpin();
-		};
 		if (e.deltaY > 0) scheduleRePinCheck();
-		let el = e.target as HTMLElement | null;
-		let scroller: HTMLElement | null = null;
-		while (el && el !== container) {
-			const overflowY = getComputedStyle(el).overflowY;
-			if (
-				(overflowY === "auto" || overflowY === "scroll") &&
-				el.scrollHeight > el.clientHeight + 1
-			) {
-				scroller = el;
-				break;
-			}
-			el = el.parentElement;
-		}
-		if (!scroller) {
-			unpinOnUp();
-			return; // nothing captures the wheel → native session scroll
+		const scroller = e.currentTarget as HTMLElement;
+		if (scroller.scrollHeight <= scroller.clientHeight + 1) {
+			wheelUnpin(e);
+			return; // nothing left to capture the wheel → native session scroll
 		}
 		const atBoundary =
 			e.deltaY > 0
 				? scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1
 				: scroller.scrollTop <= 0;
 		if (atBoundary) {
-			unpinOnUp();
+			wheelUnpin(e);
 			return; // native chaining moves the session
 		}
 		const rect = scroller.getBoundingClientRect();
 		if (e.clientX >= rect.right - INNER_SCROLLBAR_PX) return; // over its scrollbar
 		e.preventDefault();
-		unpinOnUp();
+		wheelUnpin(e);
 		const delta =
 			e.deltaMode === WheelEvent.DOM_DELTA_LINE
 				? e.deltaY * 16
@@ -250,8 +247,46 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 			container.scrollHeight - container.clientHeight,
 		);
 	};
+	// The innermost scroller of the stream's cards at or above `target` that has
+	// something to scroll, if any.
+	const innerScrollerOf = (target: EventTarget | null): HTMLElement | null => {
+		let el = target instanceof HTMLElement ? target : null;
+		while (el && el !== container) {
+			const overflowY = getComputedStyle(el).overflowY;
+			if (
+				(overflowY === "auto" || overflowY === "scroll") &&
+				el.scrollHeight > el.clientHeight + 1
+			) {
+				return el;
+			}
+			el = el.parentElement;
+		}
+		return null;
+	};
+	let hoveredScroller: HTMLElement | null = null;
+	let hoveredTarget: EventTarget | null = null;
+	const redirectWheelOver = (target: EventTarget | null) => {
+		if (target === hoveredTarget) return;
+		hoveredTarget = target;
+		const next = innerScrollerOf(target);
+		if (next === hoveredScroller) return;
+		hoveredScroller?.removeEventListener("wheel", onInnerWheel);
+		hoveredScroller = next;
+		next?.addEventListener("wheel", onInnerWheel, { passive: false });
+	};
+	const onPointerOver = (e: PointerEvent) => redirectWheelOver(e.target);
+	const onPointerLeave = () => redirectWheelOver(null);
+	const onWheel = (e: WheelEvent) => {
+		// A scroller that appeared under a resting pointer gets its redirect from the next tick on.
+		redirectWheelOver(e.target);
+		if (redirected.has(e)) return;
+		if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+		if (e.deltaY === 0) return; // horizontal-only wheel passes through
+		if (e.deltaY > 0) scheduleRePinCheck();
+		wheelUnpin(e); // nothing captures the wheel → native session scroll
+	};
 	// Scrollbar drags, scroll keys, and touch drags are the other pin
-	// gestures (wheel is handled in onWheelRedirect). All unpin/re-pin
+	// gestures (wheel is handled in onWheel and onInnerWheel). All unpin/re-pin
 	// SYNCHRONOUSLY, since waiting for a scroll event races the streaming snaps.
 	let scrollbarGrab = false;
 	const onScrollbarMouseDown = (e: MouseEvent) => {
@@ -350,7 +385,9 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 		});
 		ro.observe(container);
 		ro.observe(content);
-		container.addEventListener("wheel", onWheelRedirect, { passive: false });
+		container.addEventListener("wheel", onWheel, { passive: true });
+		container.addEventListener("pointerover", onPointerOver, { passive: true });
+		container.addEventListener("pointerleave", onPointerLeave, { passive: true });
 		container.addEventListener("mousedown", onScrollbarMouseDown);
 		container.addEventListener("keydown", onScrollKeyDown);
 		container.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -359,7 +396,10 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 		document.addEventListener("mouseup", onMouseUp);
 		onCleanup(() => {
 			ro.disconnect();
-			container.removeEventListener("wheel", onWheelRedirect);
+			container.removeEventListener("wheel", onWheel);
+			container.removeEventListener("pointerover", onPointerOver);
+			container.removeEventListener("pointerleave", onPointerLeave);
+			hoveredScroller?.removeEventListener("wheel", onInnerWheel);
 			container.removeEventListener("mousedown", onScrollbarMouseDown);
 			container.removeEventListener("keydown", onScrollKeyDown);
 			container.removeEventListener("touchstart", onTouchStart);
@@ -377,6 +417,6 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 		},
 		jumpVisible,
 		jumpToBottom,
+		release: escapeBottom,
 	};
 }
-		release: escapeBottom,
