@@ -180,7 +180,7 @@ export async function setNotifyEnabled(enabled: boolean): Promise<void> {
 }
 
 export function pushItem(item: ChatItem): void {
-	setState("items", (items) => [...items, item]);
+	setState("items", state.items.length, item);
 }
 
 export function pushNotice(level: string, message: string): void {
