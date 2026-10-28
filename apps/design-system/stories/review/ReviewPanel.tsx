@@ -4,6 +4,7 @@ import {
 	gitCalls,
 	reviewGitDiff,
 	reviewGitDiffBinary,
+	reviewGitStatusLarge,
 	reviewGitStatusUnavailable,
 } from "../../fixtures/review";
 import { answerCalls } from "../../session";
@@ -46,6 +47,17 @@ export default defineStory({
 				answerCalls(gitCalls());
 				setState("review", "fileDiff", reviewGitDiffBinary);
 			},
+			render: () => (
+				<div class="ds-frame-tall">
+					<ReviewPanel />
+				</div>
+			),
+		},
+		{
+			name: "Large worktree",
+			description:
+				"2000 untracked build-output paths and 100 staged ones. Only the rows near each list's viewport are mounted.",
+			seed: () => answerCalls(gitCalls({ status: reviewGitStatusLarge })),
 			render: () => (
 				<div class="ds-frame-tall">
 					<ReviewPanel />

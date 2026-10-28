@@ -43,6 +43,21 @@ export const reviewGitStatus: GitStatusDto = {
 	},
 };
 
+/** GitStatusDto variant: a worktree with build output and vendored paths, 2000 untracked rows and 100 staged ones, for ReviewPanel list windowing. */
+export const reviewGitStatusLarge: GitStatusDto = {
+	...reviewGitStatus,
+	indexFingerprint: "idx_large",
+	worktreeFingerprint: "wt_large",
+	unstaged: Array.from({ length: 2000 }, (_, index): GitPathEntry => {
+		const name = String(index).padStart(4, "0");
+		return { path: `vendor/generated/chunk-${name}.js`, kind: "untracked" };
+	}),
+	staged: Array.from({ length: 100 }, (_, index): GitPathEntry => {
+		const name = String(index).padStart(3, "0");
+		return { path: `apps/web/generated/schema-${name}.ts`, kind: "added" };
+	}),
+};
+
 /** GitStatusDto variant: no repository available, so ReviewPanel shows the reason row. */
 export const reviewGitStatusUnavailable: GitStatusDto = {
 	available: false,
