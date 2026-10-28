@@ -48,16 +48,20 @@ const VIEW_KEY = "omp.view";
 let pendingSessions: { id: string; resolve: (sessions: SessionListEntry[]) => void } | null = null;
 let pendingFiles: { id: string; resolve: (files: string[]) => void } | null = null;
 
-/** Settle the list_sessions waiter that sent `id` (mux "sessions" frame); other ids are stale. */
-export function settleSessions(id: string, sessions: SessionListEntry[]): void {
-	if (pendingSessions?.id !== id) return;
+/**
+ * Settle the list_sessions waiter that sent `id` (mux "sessions" frame); other ids are stale.
+ * A session started before the frame carried an id answers without one: that answer settles
+ * the latest pending request (the old latest-wins behavior).
+ */
+export function settleSessions(id: string | undefined, sessions: SessionListEntry[]): void {
+	if (pendingSessions === null || (id !== undefined && pendingSessions.id !== id)) return;
 	pendingSessions.resolve(sessions);
 	pendingSessions = null;
 }
 
-/** Settle the list_files waiter that sent `id` (mux "files" frame); other ids are stale. */
-export function settleFiles(id: string, files: string[]): void {
-	if (pendingFiles?.id !== id) return;
+/** Settle the list_files waiter that sent `id` (mux "files" frame); an id-less answer settles the latest (see settleSessions). */
+export function settleFiles(id: string | undefined, files: string[]): void {
+	if (pendingFiles === null || (id !== undefined && pendingFiles.id !== id)) return;
 	pendingFiles.resolve(files);
 	pendingFiles = null;
 }

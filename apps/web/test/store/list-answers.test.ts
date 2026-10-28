@@ -94,3 +94,27 @@ describe("list_sessions answers", () => {
 		expect((await newer).map((s) => s.id)).toEqual(["new"]);
 	});
 });
+
+describe("answers from a session that predates the echoed id", () => {
+	test("an id-less files answer settles the latest pending request", async () => {
+		void listFiles("old");
+		const latest = listFiles("new");
+		dispatch({ type: "files", files: ["new.ts"] });
+		expect(await latest).toEqual(["new.ts"]);
+	});
+
+	test("an id-less sessions answer settles the latest pending request", async () => {
+		const request = listSessions();
+		dispatch({ type: "sessions", sessions: [sessionEntry("legacy")] });
+		expect((await request).map((s) => s.id)).toEqual(["legacy"]);
+	});
+
+	test("an id-less answer with nothing pending is ignored", async () => {
+		dispatch({ type: "files", files: ["stray.ts"] });
+		const request = listFiles("x");
+		let settled = false;
+		void request.then(() => (settled = true));
+		await flushMicrotasks();
+		expect(settled).toBe(false);
+	});
+});
