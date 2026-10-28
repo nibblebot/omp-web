@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { BUILTIN_THEMES } from "../builtin";
 import { themeVariantCss, themeVariantSelector, themesCss } from "../css";
 import { parseThemeFile } from "../parse";
-import { THEME_TOKENS } from "../types";
+import { THEME_SCHEMES, THEME_TOKENS } from "../types";
 import type { ThemeEntry } from "../types";
 import { themeDoc } from "./fixtures.testkit";
 
@@ -62,9 +62,12 @@ describe("themesCss", () => {
 
 	test("covers every built-in variant and an empty list is empty", () => {
 		const css = themesCss(BUILTIN_THEMES);
-		for (const id of ["catppuccin", "gruvbox", "everforest"]) {
-			expect(css).toContain(`[data-theme-variant="${id}/dark"]`);
-			expect(css).toContain(`[data-theme-variant="${id}/light"]`);
+		for (const theme of BUILTIN_THEMES) {
+			for (const scheme of THEME_SCHEMES) {
+				const selector = `[data-theme-variant="${theme.id}/${scheme}"]`;
+				if (theme.variants[scheme]) expect(css).toContain(selector);
+				else expect(css).not.toContain(selector);
+			}
 		}
 		expect(themesCss([])).toBe("");
 	});

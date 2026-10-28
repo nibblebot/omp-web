@@ -168,7 +168,7 @@ export interface ThemeLoadFailure {
 export interface ThemesPayload {
 	/** Absolute path of `<config dir>/themes/` (may not exist yet). */
 	dir: string;
-	/** Built-ins first in their fixed order (catppuccin, gruvbox, everforest), then custom by name. */
+	/** Built-ins first in their fixed `BUILTIN_THEMES` order, then custom by name. */
 	themes: ThemeEntry[];
 	failures: ThemeLoadFailure[];
 }

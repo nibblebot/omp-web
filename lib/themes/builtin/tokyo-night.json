@@ -1,0 +1,53 @@
+{
+	"$schema": "../../../docs/theme-schema.json",
+	"schemaVersion": 1,
+	"name": "Tokyo Night",
+	"variants": {
+		"dark": {
+			"bg": "#1a1b26",
+			"panel": "#16161e",
+			"text": "#c0caf5",
+			"muted": "#737aa2",
+			"border": "#292e42",
+			"accent": "#7aa2f7",
+			"success": "#9ece6a",
+			"warning": "#e0af68",
+			"error": "#db4b4b",
+			"hover": "#283457",
+			"accent-dim": "#283457",
+			"purple": "#9d7cd8",
+			"diff-add-bg": "#243e4a",
+			"diff-del-bg": "#4a272f",
+			"syn-keyword": "#bb9af7",
+			"syn-string": "#9ece6a",
+			"syn-number": "#ff9e64",
+			"syn-comment": "#565f89",
+			"syn-title": "#7aa2f7",
+			"syn-attr": "#2ac3de",
+			"syn-meta": "#7dcfff"
+		},
+		"light": {
+			"bg": "#e1e2e7",
+			"panel": "#d0d5e3",
+			"text": "#3760bf",
+			"muted": "#68709a",
+			"border": "#c4c8da",
+			"accent": "#2e7de9",
+			"success": "#587539",
+			"warning": "#8c6c3e",
+			"error": "#c64343",
+			"hover": "#b7c1e3",
+			"accent-dim": "#b7c1e3",
+			"purple": "#7847bd",
+			"diff-add-bg": "#b7ced5",
+			"diff-del-bg": "#dababe",
+			"syn-keyword": "#9854f1",
+			"syn-string": "#587539",
+			"syn-number": "#b15c00",
+			"syn-comment": "#848cb5",
+			"syn-title": "#2e7de9",
+			"syn-attr": "#188092",
+			"syn-meta": "#007197"
+		}
+	}
+}

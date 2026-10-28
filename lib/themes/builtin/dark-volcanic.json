@@ -1,0 +1,29 @@
+{
+	"$schema": "../../../docs/theme-schema.json",
+	"schemaVersion": 1,
+	"name": "Dark Volcanic",
+	"variants": {
+		"dark": {
+			"bg": "#100908",
+			"panel": "#1a100e",
+			"text": "#ebdfd8",
+			"muted": "#8f7d74",
+			"border": "#3a201c",
+			"accent": "#ff7a3d",
+			"success": "#4fc48a",
+			"warning": "#f3c24f",
+			"error": "#ff5c5c",
+			"bg-deep": "#0b0706",
+			"hover": "#261513",
+			"purple": "#c97bb6",
+			"diff-add-text": "#4fc48a",
+			"diff-del-text": "#ff5c5c",
+			"syn-comment": "#66574f",
+			"syn-keyword": "#ff7a3d",
+			"syn-string": "#f3c24f",
+			"syn-number": "#4fc48a",
+			"syn-title": "#f2a53a",
+			"syn-attr": "#6a8ca0"
+		}
+	}
+}

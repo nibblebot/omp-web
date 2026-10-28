@@ -190,7 +190,7 @@ Collect the visible palette (the scheme's own documentation, screenshots describ
 ## 4. Choose the stem and name
 
 - `stem`: lowercase the scheme name, replace each run of characters outside `[a-z0-9]` with `-`, trim leading and trailing `-`. It must match `[a-z0-9-]+`. Example: `Tokyo Night Storm` becomes `tokyo-night-storm`.
-- Built-in stems are `catppuccin`, `gruvbox`, `everforest`. A custom file with one of those stems overrides the built-in (the picker shows "modified"). Use such a stem only when the user wants an override; otherwise pick a different one.
+- Built-in stems are `catppuccin`, `gruvbox`, `everforest`, `tokyo-night`, `nord`, `kanagawa`, `rose-pine`, `poimandres`, `dark-volcanic`. A custom file with one of those stems overrides the built-in (the picker shows "modified"). Use such a stem only when the user wants an override; otherwise pick a different one.
 - `name`: the scheme's display name, a non-empty string. When the file holds both variants of a family, use the family name without "Dark"/"Light".
 
 ## 5. Write the file

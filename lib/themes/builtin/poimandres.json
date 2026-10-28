@@ -1,0 +1,32 @@
+{
+	"$schema": "../../../docs/theme-schema.json",
+	"schemaVersion": 1,
+	"name": "Poimandres",
+	"variants": {
+		"dark": {
+			"bg": "#1b1e28",
+			"panel": "#202430",
+			"text": "#a6accd",
+			"muted": "#7d829c",
+			"border": "#161820",
+			"accent": "#add7ff",
+			"success": "#5de4c7",
+			"warning": "#fffac2",
+			"error": "#d0679d",
+			"hover": "#262934",
+			"border-strong": "#292c35",
+			"accent-dim": "#30334080",
+			"diff-add-bg": "#50647715",
+			"diff-add-text": "#5fb3a1",
+			"diff-del-bg": "#d0679d20",
+			"diff-del-text": "#d0679d",
+			"syn-keyword": "#91b4d5",
+			"syn-string": "#5de4c7",
+			"syn-number": "#5de4c7",
+			"syn-comment": "#5a5f79",
+			"syn-title": "#add7ff",
+			"syn-attr": "#8489a4",
+			"syn-meta": "#5de4c7"
+		}
+	}
+}

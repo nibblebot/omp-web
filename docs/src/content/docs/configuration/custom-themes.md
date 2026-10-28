@@ -3,7 +3,7 @@ title: Custom themes
 description: Write a JSON theme file, drop it in the themes directory, and pick it in the Appearance popover. Covers the file format, derived tokens, contrast warnings, the picker, and the omp-web theme check command.
 ---
 
-omp-web ships three built-in themes, each with a dark and a light variant: **Catppuccin** (the default), **Gruvbox**, and **Everforest**. You can add your own, or override a built-in, by putting a JSON file in the themes directory. The fleet only reads the directory; it never writes there.
+omp-web ships nine built-in themes. **Catppuccin** (the default), **Gruvbox**, **Everforest**, **Tokyo Night**, **Kanagawa**, and **Rosé Pine** each have a dark and a light variant; **Nord**, **Poimandres**, and **Dark Volcanic** are dark-only, because their sources publish no light variant. You can add your own, or override a built-in, by putting a JSON file in the themes directory. The fleet only reads the directory; it never writes there.
 
 ## Where theme files go
 
@@ -15,7 +15,7 @@ Theme files live in `themes/` next to the fleet config file: `<config dir>/theme
 
 ### Overriding a built-in
 
-A custom file whose stem equals a built-in id (`catppuccin`, `gruvbox`, `everforest`) replaces that built-in. The picker shows a **modified** badge on it. Delete the file to restore the built-in. If the override fails validation it is listed as a failure and the built-in stays in place.
+A custom file whose stem equals a built-in id (`catppuccin`, `gruvbox`, `everforest`, `tokyo-night`, `nord`, `kanagawa`, `rose-pine`, `poimandres`, `dark-volcanic`) replaces that built-in. The picker shows a **modified** badge on it. Delete the file to restore the built-in. If the override fails validation it is listed as a failure and the built-in stays in place.
 
 ## File format
 

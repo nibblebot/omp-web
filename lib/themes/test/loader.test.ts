@@ -46,12 +46,12 @@ describe("loadThemes", () => {
 		const { themes, failures } = await loadThemes(dir);
 		expect(failures).toEqual([]);
 		expect(themes.map((t) => t.id)).toEqual([...BUILTIN_IDS, "zebra", "mid", "alpha"]);
-		expect(themes.slice(3).map((t) => [t.name, t.source])).toEqual([
+		expect(themes.slice(BUILTIN_IDS.length).map((t) => [t.name, t.source])).toEqual([
 			["Aardvark", "custom"],
 			["Mango", "custom"],
 			["Zulu", "custom"],
 		]);
-		expect(Object.keys(themes[5]!.variants)).toEqual(["dark"]);
+		expect(Object.keys(themes[BUILTIN_IDS.length + 2]!.variants)).toEqual(["dark"]);
 	});
 
 	test("a valid file with a built-in stem replaces it in place as modified", async () => {
@@ -108,7 +108,7 @@ describe("loadThemes", () => {
 
 	test("reads the directory on every call", async () => {
 		const dir = themesDir({});
-		expect((await loadThemes(dir)).themes).toHaveLength(3);
+		expect((await loadThemes(dir)).themes).toHaveLength(BUILTIN_IDS.length);
 		writeFileSync(join(dir, "late.json"), JSON.stringify(themeDoc("Late")));
 		expect((await loadThemes(dir)).themes.map((t) => t.id)).toContain("late");
 	});
