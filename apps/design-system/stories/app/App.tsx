@@ -37,7 +37,7 @@ export default defineStory({
 				answerCalls({ getQueuedMessages: () => screenQueuedMessages });
 				setState({
 					items: screenStreamingItems,
-					live: { active: true, blocks: screenLiveBlocks, rev: 1 },
+					live: { active: true, blocks: screenLiveBlocks },
 					streaming: true,
 					workingIntent: screenWorkingIntent,
 					queuedMessageCount: queuedCount,

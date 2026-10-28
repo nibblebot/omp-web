@@ -425,7 +425,6 @@ function flushDeltas(): void {
 		budget = Math.max(1, Math.round(rate * dt));
 	}
 	lastFlushTime = now;
-	let wroteLiveText = false;
 	for (const [index, d] of pendingDeltas) {
 		if (budget <= 0) break;
 		const cut = budget >= d.text.length ? d.text.length : codePointCut(d.text, budget);
@@ -433,20 +432,11 @@ function flushDeltas(): void {
 		// In-place path mutation keeps block identity stable, so <For> does not
 		// recreate StreamingBlock components on every frame.
 		setState("live", "blocks", index, "text", (text) => text + tabsToSpaces(d.text.slice(0, cut)));
-		wroteLiveText = true;
 		if (cut >= d.text.length) pendingDeltas.delete(index);
 		else d.text = d.text.slice(cut);
 		budget -= cut;
 	}
-	if (wroteLiveText) bumpLiveRev();
 	if (pendingDeltas.size > 0) scheduleFlush();
-}
-
-/** Monotonic content version of live.blocks: bumped on every live-block
- *  mutation so scroll/pin effects subscribe to "content changed" without
- *  scanning block text lengths on every flush. */
-function bumpLiveRev(): void {
-	setState("live", "rev", (rev) => rev + 1);
 }
 
 function sameImages(a: ImageArg[] | undefined, b: ImageArg[]): boolean {
@@ -555,13 +545,12 @@ function ensureLiveBlock(contentIndex: number, kind: Block["kind"]): void {
 	setState("live", "blocks", (blocks) => {
 		if (blocks[contentIndex]?.kind === kind) return blocks;
 		const next = blocks.slice();
+		// Content that never shows (a tool call) can sit before this index; fill its
+		// slot so the array stays dense for the live render.
+		for (let i = next.length; i < contentIndex; i++) next[i] = emptyLiveBlock();
 		next[contentIndex] = { kind, text: next[contentIndex]?.text ?? "" };
 		return next;
 	});
-	// A block appeared or changed kind at contentIndex (text preserved):
-	// scroll/pin trackers hear about it even though no text was written
-	// (text_start/thinking_start frames).
-	bumpLiveRev();
 }
 
 /**
@@ -589,14 +578,14 @@ export function assistantBlocks(content: AssistantContent): Block[] {
 	return blocks;
 }
 
-/** Live blocks for a message seeded mid-stream, keyed by contentIndex (deltas address blocks by index). */
+/** The slot of live content that shows nothing, such as a tool call between text blocks. */
+function emptyLiveBlock(): Block {
+	return { kind: "text", text: "" };
+}
+
+/** Live blocks for a message seeded mid-stream, keyed by contentIndex (deltas address blocks by index); dense, with an empty block where the content shows nothing. */
 function liveBlocks(content: AssistantContent): Block[] {
-	const blocks: Block[] = [];
-	content.forEach((c, index) => {
-		const block = displayBlock(c);
-		if (block !== undefined) blocks[index] = block;
-	});
-	return blocks;
+	return content.map((c) => displayBlock(c) ?? emptyLiveBlock());
 }
 
 /** Working-label intent from a tool_execution_start event, TUI priority:
@@ -661,9 +650,6 @@ export function applyEvent(e: WireSessionEvent): void {
 				});
 			} else if (msg.role === "assistant") {
 				setState("live", { active: true, blocks: liveBlocks(msg.content) });
-				// blocks was replaced wholesale (identity change): bump rev so
-				// scroll/pin trackers re-check even though no text was written.
-				bumpLiveRev();
 			}
 			break;
 		}

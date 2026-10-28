@@ -9,7 +9,7 @@ import {
 } from "../../../fixtures/screen";
 import { defineStory } from "../../../registry";
 
-const idleLive = { active: false, blocks: [], rev: 0 };
+const idleLive = { active: false, blocks: [] };
 
 /** The settled turn repeated, with ids and tool call ids kept unique. */
 const longItems = Array.from({ length: 12 }, (_, copy) =>
@@ -49,7 +49,7 @@ export default defineStory({
 			description: "A running type check and an assistant reply still arriving.",
 			seed: {
 				items: screenStreamingItems,
-				live: { active: true, blocks: screenLiveBlocks, rev: 1 },
+				live: { active: true, blocks: screenLiveBlocks },
 				streaming: true,
 				workingIntent: screenWorkingIntent,
 			},

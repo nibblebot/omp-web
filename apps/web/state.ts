@@ -371,11 +371,7 @@ export const [state, setState] = createStore({
 	workers: createWorkersState(),
 	browserUi: createBrowserUiState(),
 	items: [] as ChatItem[],
-	// rev: monotonic content version of live.blocks, bumped on every live
-	// mutation so scroll/pin effects subscribe to "content changed" without
-	// scanning block text lengths on every flush (see Transcript's pinning
-	// effect; it used to allocate a lengths array per flush).
-	live: { active: false, blocks: [] as Block[], rev: 0 },
+	live: { active: false, blocks: [] as Block[] },
 	// --- WebSessionState mirror (verbatim; see protocol state frames) ---
 	streaming: false,
 	// Transcript scroll pin, mirrored from useStickyScroll: true while the
@@ -769,7 +765,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 	const items = shown.length === 0 ? built.items : keepUnchangedPrefix(shown, built.items);
 	setState({
 		items,
-		live: { active: false, blocks: [], rev: 0 },
+		live: { active: false, blocks: [] },
 		retryInfo: null,
 		workingIntent: undefined,
 		modelSynced: false,
@@ -1265,7 +1261,7 @@ function resetSessionView(): void {
 	setState({
 		modelSynced: false,
 		items: [],
-		live: { active: false, blocks: [], rev: 0 },
+		live: { active: false, blocks: [] },
 		subagents: new ReactiveMap<string, SubagentInfo>() as Map<string, SubagentInfo>,
 		jobWidgets: createJobWidgetsState(),
 		stats: null,

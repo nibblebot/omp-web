@@ -21,6 +21,12 @@ function delta(
 	};
 }
 
+/** The live render maps every slot, so a hole in the array throws there. */
+function expectDenseLiveBlocks(length: number): void {
+	expect(state.live.blocks.length).toBe(length);
+	for (let i = 0; i < length; i++) expect(state.live.blocks[i]).toBeDefined();
+}
+
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {
@@ -100,6 +106,36 @@ describe("streamed deltas (slim message_update frames)", () => {
 		applyEvent(delta(0, ", world"));
 		await tick();
 		expect(state.live.blocks[0]?.text).toBe("Hello, world");
+	});
+
+	test("a tool call between text blocks leaves no hole in the live blocks", async () => {
+		setState("settingsModel", {
+			tabs: [
+				{ id: "display", groups: [{ items: [{ path: "display.smoothStreaming", value: false }] }] },
+			],
+		} as never);
+		// A late joiner primed past a tool call: the call has no block of its own.
+		applyEvent({
+			type: "message_start",
+			message: {
+				role: "assistant",
+				content: [
+					{ type: "text", text: "before" },
+					{ type: "toolCall", id: "call-1", name: "read", arguments: {} },
+					{ type: "text", text: "after" },
+				],
+			},
+		} as unknown as WireSessionEvent);
+		await tick();
+		expectDenseLiveBlocks(3);
+		expect(state.live.blocks[2]).toMatchObject({ kind: "text", text: "after" });
+
+		// A delta for an index past the end skips the call's slot the same way.
+		setState("live", { active: true, blocks: [] });
+		applyEvent(delta(2, "later text"));
+		await tick();
+		expectDenseLiveBlocks(3);
+		expect(state.live.blocks[2]).toMatchObject({ kind: "text", text: "later text" });
 	});
 
 	test("an unknown sub-event type is ignored and leaves the live blocks untouched", async () => {

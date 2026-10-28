@@ -39,7 +39,7 @@ const seedEmpty = (sessions: () => SessionListEntry[] | null, synced = true) => 
 	setState({
 		...screenSessionSeed,
 		items: [],
-		live: { active: false, blocks: [], rev: 0 },
+		live: { active: false, blocks: [] },
 		streaming: false,
 		messageCount: 0,
 		modelSynced: synced,

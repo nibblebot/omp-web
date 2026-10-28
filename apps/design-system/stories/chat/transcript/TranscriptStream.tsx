@@ -22,7 +22,7 @@ import { defineStory } from "../../../registry";
 import { closeDock } from "../../../../web/store/dock";
 import { openActivities } from "../../../../web/store/activities";
 
-const idleLive = { active: false, blocks: [], rev: 0 };
+const idleLive = { active: false, blocks: [] };
 
 /** Built through the store's mapping so the story exercises it: one reasoning block, one narration block. */
 const narrationItems: ChatItem[] = [
