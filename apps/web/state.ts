@@ -993,14 +993,23 @@ export function fleetSettingsActive(): boolean {
 // ---------------------------------------------------------------------------
 
 /** The roster after one row-level delta: removed rows dropped, upserted rows replacing their id's row or appended in arrival order. */
-function mergeRosterDelta(delta: { upserted: RosterEntry[]; removed: string[] }): RosterEntry[] {
+function mergeRosterDelta(
+	current: readonly RosterEntry[],
+	delta: { upserted: RosterEntry[]; removed: string[] },
+): RosterEntry[] {
 	const removed = new Set(delta.removed);
-	const next = unwrap(state.sessionRoster).filter((d) => !removed.has(d.workspaceId));
-	for (const row of delta.upserted) {
-		const at = next.findIndex((d) => d.workspaceId === row.workspaceId);
-		if (at === -1) next.push(row);
-		else next[at] = row;
+	const upserted = new Map(delta.upserted.map((row) => [row.workspaceId, row]));
+	const next: RosterEntry[] = [];
+	for (const d of current) {
+		if (removed.has(d.workspaceId)) continue;
+		const row = upserted.get(d.workspaceId);
+		if (row === undefined) next.push(d);
+		else {
+			next.push(row);
+			upserted.delete(d.workspaceId);
+		}
 	}
+	for (const row of upserted.values()) next.push(row);
 	return next;
 }
 
@@ -1036,17 +1045,19 @@ function rosterRowPatch(prev: RosterEntry, row: RosterEntry): Partial<RosterEntr
  * run on implements `reconcile` as an index-wise merge (no keying, holes on
  * shrink), so identity could neither be guaranteed nor tested there.
  */
-function applyRoster(next: readonly RosterEntry[]): void {
-	const current = unwrap(state.sessionRoster);
-	const before = new Map(current.map((d) => [d.workspaceId, d]));
+function applyRoster(
+	next: readonly RosterEntry[],
+	current: readonly RosterEntry[],
+	indexById: ReadonlyMap<string, number>,
+): void {
 	batch(() => {
 		const rows = next.map((row) => {
-			const prev = before.get(row.workspaceId);
-			if (prev === undefined || prev === row) return row;
+			const at = indexById.get(row.workspaceId);
+			if (at === undefined) return row;
+			const prev = current[at]!;
+			if (prev === row) return row;
 			const patch = rosterRowPatch(prev, row);
-			if (patch !== undefined) {
-				setState("sessionRoster", (d) => d.workspaceId === row.workspaceId, patch);
-			}
+			if (patch !== undefined) setState("sessionRoster", at, patch);
 			return prev;
 		});
 		if (rows.length !== current.length || rows.some((r, i) => r !== current[i])) {
@@ -1113,7 +1124,8 @@ let reconnectGraceTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** Track the attached session's "reconnecting" status through the grace window. */
 function syncAttachedReconnecting(): void {
-	const current = state.sessionRoster.find((d) => d.workspaceId === state.currentWorkspaceId);
+	const id = state.currentWorkspaceId;
+	const current = state.sessionRoster.find((d) => d.workspaceId === id);
 	if (current?.status !== "reconnecting") {
 		clearTimeout(reconnectGraceTimer);
 		reconnectGraceTimer = undefined;
@@ -1154,17 +1166,15 @@ export function applyRosterFrame(
 	// A delta patches the current roster; the reconciliation below runs on
 	// the full list either way, so both frames settle identically. The
 	// store applies it with a keyed reconcile (below), so rows keep identity.
-	const sessions = frame.type === "roster" ? frame.entries : mergeRosterDelta(frame);
+	const before = unwrap(state.sessionRoster);
+	const indexById = new Map(before.map((d, i) => [d.workspaceId, i]));
+	const sessions = frame.type === "roster" ? frame.entries : mergeRosterDelta(before, frame);
 	// finding #P1: diff the replacement roster against what we had.
 	// First sighting is boot priming (silent); later transitions to
 	// ready/error announce.
-	const rosterBefore = state.sessionRoster;
 	for (const entry of sessions) {
-		announceSessionStatus(
-			rosterBefore.find((d) => d.workspaceId === entry.workspaceId),
-			entry.name,
-			entry.status,
-		);
+		const at = indexById.get(entry.workspaceId);
+		announceSessionStatus(at === undefined ? undefined : before[at], entry.name, entry.status);
 	}
 	// The fleet edge's session roster (sidebar swaps to the session
 	// list).
@@ -1174,8 +1184,9 @@ export function applyRosterFrame(
 	// Surviving workspaceIds keep their store object (fields patched, absent
 	// ones deleted), so keyed rows stay mounted across roster frames.
 	switchAwayFromRemoved(sessions);
-	idleBeforeSessionDies(sessions.find((d) => d.workspaceId === state.currentWorkspaceId));
-	applyRoster(sessions);
+	const attachedId = state.currentWorkspaceId;
+	idleBeforeSessionDies(sessions.find((d) => d.workspaceId === attachedId));
+	applyRoster(sessions, before, indexById);
 	if (!state.rosterLoaded) setState("rosterLoaded", true);
 	settleProjectWakes();
 	resumeRestartedSessions(sessions);

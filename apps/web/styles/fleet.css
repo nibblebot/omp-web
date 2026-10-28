@@ -448,6 +448,16 @@
 	overflow: visible;
 	transition: overflow 0s var(--dur-move-base) allow-discrete;
 }
+/* A settled row far off-screen skips layout and paint (auto size remembers the last measured height), so a
+   status change or relayout in a large fleet touches the visible rows only. Paint containment clips the
+   row to its box, which would cut an open kebab dropdown, so a row with its menu open is not contained;
+   an entering or exiting row is not either (its grid track animates). The clip margin leaves room for the
+   focus ring of controls at the row's edge. */
+.row-motion[data-motion="open"]:not(:has(.sidebar-menu)) {
+	content-visibility: auto;
+	contain-intrinsic-size: auto 64px;
+	overflow-clip-margin: 4px;
+}
 /* Reduced motion: no height or slide, only the short fade. */
 @media (prefers-reduced-motion: reduce) {
 	.row-motion[data-motion="enter"],
