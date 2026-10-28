@@ -46,7 +46,7 @@ describe("ImageThumb", () => {
 		const html = render({ type: "image", data: "aGVsbG8=", mimeType: "image/png" });
 		expect(html).toContain("img-thumb");
 		expect(html).toContain("<img");
-		expect(html).toContain("data:image/png;base64,aGVsbG8=");
+		expect(html).toMatch(/<img src="blob:[^"]+"/);
 		expect(html).not.toContain("[image]");
 	});
 });
