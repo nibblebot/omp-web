@@ -1,6 +1,7 @@
 import { createMemo, onMount, Show, type Component } from "solid-js";
 import { createPresence } from "../../../motion/presence";
 import { state, switchToSession } from "../../../state";
+import { ShimmerText } from "../../ui/ShimmerText";
 
 /** The roster entry the switch in flight (or failed) is aimed at. */
 function useTarget() {
@@ -25,8 +26,8 @@ export const TranscriptSkeleton: Component<{ open: boolean }> = (props) => {
 	return (
 		<Show when={presence.mounted()}>
 			<div class="chat-transcript-skeleton" data-motion={presence.phase()} ref={presence.ref}>
-				<p class="chat-transcript-skeleton-status shimmer-text" role="status">
-					{status()}
+				<p class="chat-transcript-skeleton-status" role="status">
+					<ShimmerText text={status()} />
 				</p>
 				<div class="chat-transcript-skeleton-column" aria-hidden="true">
 					<div class="chat-skeleton-block chat-skeleton-block--user">

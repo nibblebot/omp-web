@@ -10,6 +10,7 @@ import { shimmerMode } from "../../chat/display-prefs";
 import { createPresence } from "../../motion/presence";
 import { isActivitiesOpen, type ActivitySectionId } from "../../store/activities";
 import { BotIcon, LayersIcon, ListChecksIcon, ServerIcon } from "../ui/icons";
+import { ShimmerText } from "../ui/ShimmerText";
 import { DaemonsPopover } from "./DaemonsPopover";
 import { JobsPopover } from "./JobsPopover";
 import { SubagentsPopover } from "./SubagentsPopover";
@@ -79,7 +80,7 @@ export const ActivityBar: Component = () => {
 							role={shown().status.kind === "compacting" ? "status" : undefined}
 							aria-hidden={shown().status.kind === "working" ? "true" : undefined}
 						>
-							<span class="shimmer-text">{shown().status.text}</span>
+							<ShimmerText text={shown().status.text} />
 						</span>
 						<div class="activity-bar-buttons">
 							<For each={SECTIONS}>

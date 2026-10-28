@@ -210,9 +210,9 @@
 .sidebar-usage-ring-track {
 	stroke: var(--border);
 }
+/* No transition: the offset moves about a pixel every few seconds, and an animated one restyles the sidebar for each step. */
 .sidebar-usage-ring-fill {
 	stroke: var(--accent);
-	transition: stroke-dashoffset var(--dur-move-base) var(--ease-out);
 }
 .sidebar-usage-refresh .sidebar-usage-refresh-icon {
 	width: 10px;
@@ -536,7 +536,13 @@
 .session-status-dot[data-status="waking"] {
 	background: var(--accent);
 	box-shadow: 0 0 6px var(--accent);
-	animation: session-dot-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+}
+@media (prefers-reduced-motion: no-preference) {
+	.session-status-dot[data-status="spawning"],
+	.session-status-dot[data-status="connecting"],
+	.session-status-dot[data-status="waking"] {
+		animation: session-dot-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+	}
 }
 /* Activity cases repaint the status dot (single dot, no separate badge):
    presence of any colored dot means alive. These override the green
@@ -567,7 +573,11 @@
 	mask: radial-gradient(farthest-side, transparent calc(100% - 2.2px), #000 calc(100% - 2px));
 	box-shadow: none;
 	filter: drop-shadow(0 0 2px var(--spinner-color));
-	animation: session-activity-spin var(--dur-spin) linear infinite;
+}
+@media (prefers-reduced-motion: no-preference) {
+	.session-status-dot[data-activity="in_progress"] {
+		animation: session-activity-spin var(--dur-spin) linear infinite;
+	}
 }
 .session-status-dot[data-activity="in_progress"]:not([data-status="ready"]) {
 	--spinner-color: var(--accent);
@@ -588,13 +598,9 @@
 		transform: scale(1);
 	}
 }
-/* Reduced motion: the loops hold still. The comet becomes a full ring. */
+/* Reduced motion: the loops hold still (they sit in no-preference blocks). The comet becomes a full ring. */
 @media (prefers-reduced-motion: reduce) {
-	.session-status-dot[data-status] {
-		animation: none;
-	}
 	.session-status-dot[data-activity="in_progress"] {
-		animation: none;
 		background: var(--spinner-color);
 	}
 }
@@ -636,8 +642,10 @@
 	color: var(--muted-2);
 	padding: var(--space-2) 0 0;
 }
-.session-stage-label {
-	animation: session-dot-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+@media (prefers-reduced-motion: no-preference) {
+	.session-stage-label {
+		animation: session-dot-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+	}
 }
 .session-stage--failed {
 	color: var(--error-text);

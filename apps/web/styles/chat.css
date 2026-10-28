@@ -161,13 +161,12 @@
 	border-radius: var(--r-lg);
 }
 .chat-skeleton-line {
+	position: relative;
 	display: block;
+	overflow: hidden;
 	height: var(--space-4);
 	border-radius: var(--r-sm);
-	background: linear-gradient(100deg, var(--btn) 40%, var(--hover) 50%, var(--btn) 60%);
-	background-size: 250% 100%;
-	background-position: 100% 0;
-	animation: shimmer-sweep var(--dur-shimmer) linear infinite;
+	background: var(--btn);
 }
 .chat-skeleton-line--medium {
 	width: 72%;
@@ -175,10 +174,22 @@
 .chat-skeleton-line--short {
 	width: 38%;
 }
-@media (prefers-reduced-motion: reduce) {
-	.chat-skeleton-line {
-		animation: none;
-		background: var(--btn);
+/* The highlight is a band-shaped gradient slid by transform (compositor only, no per-frame paint). */
+@media (prefers-reduced-motion: no-preference) {
+	.chat-skeleton-line::after {
+		content: "";
+		position: absolute;
+		inset: 0;
+		background: linear-gradient(100deg, transparent 40%, var(--hover) 50%, transparent 60%);
+		animation: skeleton-sweep var(--dur-shimmer) linear infinite;
+	}
+}
+@keyframes skeleton-sweep {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(100%);
 	}
 }
 /* Failed switch: why, and Retry; top aligned like the empty state. */
@@ -328,7 +339,11 @@
 	height: 6px;
 	border-radius: 50%;
 	background: var(--accent);
-	animation: run-row-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+}
+@media (prefers-reduced-motion: no-preference) {
+	.run-row-dot {
+		animation: run-row-pulse var(--dur-pulse) var(--ease-in-out) infinite;
+	}
 }
 @keyframes run-row-pulse {
 	50% {
@@ -362,61 +377,101 @@
 .msg-assistant.live {
 	opacity: 0.95;
 }
-/* Shimmer text (the activity bar's progress label, activity-bar-status): a highlight band sweeping
-   across the label via a moving background gradient clipped to the glyphs. The band is
-   --shimmer-band, which each palette keeps legible against --muted-2. */
+/* Shimmer text (ShimmerText: the activity bar's progress label, the transcript skeleton's status):
+   the label in --muted-2, and over it a highlight copy in --shimmer-band (which each palette keeps
+   legible against --muted-2). The copy sits in a narrow window that slides across the label while
+   the copy slides the other way inside it, so the band stays put on the glyphs it lights up.
+   Both slide by transform with the same timing, so the loop runs on the compositor (an animated
+   background-position on clipped text repaints on the main thread every frame). The window is a
+   fraction of the label's width and the copy inside it is as wide as the whole label (window 40%,
+   copy 250% of the window). Reduced motion and display.shimmer "disabled" leave the plain label. */
 .shimmer-text {
-	background: linear-gradient(
-		100deg,
-		var(--muted-2) 40%,
-		var(--shimmer-band) 50%,
-		var(--muted-2) 60%
-	);
-	background-size: 250% 100%;
-	background-position: 100% 0;
-	-webkit-background-clip: text;
-	background-clip: text;
-	color: transparent;
-	animation: shimmer-sweep var(--dur-shimmer) linear infinite;
-}
-@keyframes shimmer-sweep {
-	to {
-		background-position: -150% 0;
-	}
-}
-@media (prefers-reduced-motion: reduce) {
-	.shimmer-text {
-		animation: none;
-		color: var(--muted-2);
-	}
-}
-/* display.shimmer: "kitt" sweeps a narrow scanner band back and forth; "disabled"
-   shows the label static. Reduced motion stops both (the kitt rule has higher
-   specificity than the reduced-motion block above, so it repeats the override). */
-[data-shimmer="kitt"] .shimmer-text {
-	background-size: 300% 100%;
-	animation: shimmer-scan calc(var(--dur-shimmer) * 2 / 3) var(--ease-in-out) infinite alternate;
-}
-@media (prefers-reduced-motion: reduce) {
-	[data-shimmer="kitt"] .shimmer-text {
-		animation: none;
-		color: var(--muted-2);
-	}
-}
-@keyframes shimmer-scan {
-	from {
-		background-position: 100% 0;
-	}
-	to {
-		background-position: 0 0;
-	}
-}
-[data-shimmer="disabled"] .shimmer-text {
-	background: none;
-	-webkit-background-clip: border-box;
-	background-clip: border-box;
+	position: relative;
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	vertical-align: bottom;
 	color: var(--muted-2);
-	animation: none;
+}
+.shimmer-band {
+	display: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+	.shimmer-band {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: 0;
+		display: block;
+		width: 40%;
+		overflow: hidden;
+		pointer-events: none;
+		user-select: none;
+		mask-image: linear-gradient(90deg, transparent, #000 50%, transparent);
+		animation: shimmer-window var(--dur-shimmer) linear infinite;
+	}
+	.shimmer-copy {
+		position: absolute;
+		top: 0;
+		left: 0;
+		width: 250%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--shimmer-band);
+		animation: shimmer-copy var(--dur-shimmer) linear infinite;
+	}
+	/* display.shimmer "kitt": a narrower scanner band travelling back and forth inside the label. */
+	[data-shimmer="kitt"] .shimmer-band {
+		width: 25%;
+		animation: shimmer-scan-window calc(var(--dur-shimmer) * 2 / 3) var(--ease-in-out) infinite
+			alternate;
+	}
+	[data-shimmer="kitt"] .shimmer-copy {
+		width: 400%;
+		animation: shimmer-scan-copy calc(var(--dur-shimmer) * 2 / 3) var(--ease-in-out) infinite
+			alternate;
+	}
+	[data-shimmer="disabled"] .shimmer-band {
+		display: none;
+	}
+}
+/* The window travels from before the label (-100% of its width) to past it (250% = 1.4 label widths
+   from its start); the copy's offset is the opposite, scaled by window width / label width (0.4). */
+@keyframes shimmer-window {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(250%);
+	}
+}
+@keyframes shimmer-copy {
+	from {
+		transform: translateX(40%);
+	}
+	to {
+		transform: translateX(-100%);
+	}
+}
+/* Kitt: window 25% wide travels 300% of itself (0.75 label widths) end to end; the copy opposes it. */
+@keyframes shimmer-scan-window {
+	from {
+		transform: translateX(0);
+	}
+	to {
+		transform: translateX(300%);
+	}
+}
+@keyframes shimmer-scan-copy {
+	from {
+		transform: translateX(0);
+	}
+	to {
+		transform: translateX(-75%);
+	}
 }
 /* Cache-miss divider under an assistant turn (display.cacheMissMarker). */
 .cache-miss-marker {

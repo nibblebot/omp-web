@@ -1406,7 +1406,11 @@ button.picker-row.kbd-active {
 	vertical-align: -0.15em;
 	margin-left: var(--space-1);
 	background: var(--accent);
-	animation: btw-blink var(--dur-pulse) steps(2, start) infinite;
+}
+@media (prefers-reduced-motion: no-preference) {
+	.btw-cursor {
+		animation: btw-blink var(--dur-pulse) steps(2, start) infinite;
+	}
 }
 @keyframes btw-blink {
 	to {

@@ -593,8 +593,12 @@
   border: 2px solid var(--tx-border);
   border-top-color: var(--tx-accent);
   border-radius: 50%;
-  animation: spin var(--dur-spin) linear infinite;
   vertical-align: -1px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .spin {
+    animation: spin var(--dur-spin) linear infinite;
+  }
 }
 @keyframes spin {
   to {
