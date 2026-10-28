@@ -4,6 +4,7 @@ import {
 	buildUsageRow,
 	formatAmount,
 	formatDurationMs,
+	formatTurnStamp,
 	formatTokensPerSec,
 	formatUnitAmount,
 	formatUsageRow,
@@ -187,5 +188,23 @@ describe("resolveElapsedFraction", () => {
 				now,
 			),
 		).toBeCloseTo(0.8);
+	});
+});
+
+describe("formatTurnStamp", () => {
+	const fields = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" } as const;
+	const now = new Date(2026, 9, 28, 12, 0).getTime();
+
+	test("the same year omits it", () => {
+		const at = new Date(2026, 9, 20, 14, 32).getTime();
+		expect(formatTurnStamp(at, now)).toBe(new Date(at).toLocaleString(undefined, fields));
+	});
+
+	test("another year adds it", () => {
+		const at = new Date(2025, 11, 31, 23, 59).getTime();
+		expect(formatTurnStamp(at, now)).toBe(
+			new Date(at).toLocaleString(undefined, { year: "numeric", ...fields }),
+		);
+		expect(formatTurnStamp(at, now)).toContain("2025");
 	});
 });

@@ -31,9 +31,10 @@ import type {
 	QueuedCommandRef,
 	QueuedMessageRef,
 	QueuedMessagesSnapshot,
+	ToolBriefInfo,
 	WebMethodName,
 } from "#lib/wire/protocol";
-import { READ_ONLY_METHODS } from "#lib/wire/protocol";
+import { READ_ONLY_METHODS, TOOL_BRIEF_DESCRIPTION_CHARS } from "#lib/wire/protocol";
 import { oversizedImageNotice } from "#lib/wire/image-limits";
 import type { CollabSession, Images } from "./collab-session";
 import { removeQueuedCommand } from "./command-queue";
@@ -757,13 +758,22 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		},
 		// Read-only rows (READ_ONLY_METHODS): context breakdown and tool schemas (skip the state broadcast).
 		getContextBreakdown: async (entry) => entry.session.getContextBreakdown(),
-		getToolSchemas: async (entry) =>
-			entry.session.agent.state.tools.map((tool) => ({
+		// `[{ brief: true }]` answers name and a short description only: the stats dialog lists tools
+		// and never reads the parameter schemas, which dominate the full answer.
+		getToolSchemas: async (entry, a) => {
+			const { tools } = entry.session.agent.state;
+			if ((a[0] as { brief?: unknown } | undefined)?.brief === true)
+				return tools.map((tool): ToolBriefInfo => ({
+					name: tool.name,
+					description: tool.description.slice(0, TOOL_BRIEF_DESCRIPTION_CHARS),
+				}));
+			return tools.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
 				parameters: toolWireSchema(tool),
 				examples: tool.examples,
-			})),
+			}));
+		},
 		// Phase 10: onChunk relays live output as session-scoped chunk frames
 		// (streamId = the client's bash-item id). `!!`/`$$` dimmed variants are
 		// excluded from the agent's context, matching the TUI semantic.

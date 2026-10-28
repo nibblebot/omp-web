@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
 import { cfgModelRoleStorage, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { ENVELOPE_MAX_BYTES } from "#lib/wire/callback-protocol";
+import { TOOL_BRIEF_DESCRIPTION_CHARS } from "#lib/wire/protocol";
 import type { DownloadManifestResult } from "../download-manifest";
 import { createWebMethods } from "../methods";
 import type { SessionEntry } from "../session-entry";
@@ -856,5 +857,21 @@ describe("READ_ONLY classification", () => {
 			description: string;
 		}>;
 		expect(result.map((t) => [t.name, t.description])).toEqual([["read", "Read a file"]]);
+	});
+
+	test("getToolSchemas with brief answers names and cut descriptions, no schemas", async () => {
+		const tools = [
+			{
+				name: "read",
+				description: "r".repeat(500),
+				parameters: { type: "object", properties: { path: { type: "string" } } },
+				examples: [{ title: "x" }],
+			},
+		];
+		const entry = { session: { agent: { state: { tools } } } } as unknown as SessionEntry;
+		const result = await methodsTable().getToolSchemas!(entry, [{ brief: true }]);
+		expect(result).toEqual([
+			{ name: "read", description: "r".repeat(TOOL_BRIEF_DESCRIPTION_CHARS) },
+		]);
 	});
 });

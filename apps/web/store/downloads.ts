@@ -159,6 +159,11 @@ function failureMessage(code: string, fallback: string): string {
 	}
 }
 
+/** The progress line is rewritten at most this often, not once per network chunk. */
+const PROGRESS_INTERVAL_MS = 100;
+/** Received chunks are folded into the Blob each time this many bytes pile up, so the chunk array never holds the whole file. */
+const BLOB_FOLD_BYTES = 4 * 1024 * 1024;
+
 /** Stream one fleet-proxied download to an anchor save. Never buffers whole-archive twice. */
 async function streamToAnchor(res: Response, filename: string): Promise<number> {
 	const reader = res.body?.getReader();
@@ -167,20 +172,32 @@ async function streamToAnchor(res: Response, filename: string): Promise<number> 
 		triggerAnchor(URL.createObjectURL(blob), filename);
 		return blob.size;
 	}
-	const chunks: BlobPart[] = [];
+	// `parts` is the Blob holding the bytes folded so far (a Blob built from Blobs shares, it does not
+	// copy) followed by the chunks received since the last fold.
+	let parts: BlobPart[] = [];
+	let pendingBytes = 0;
 	let received = 0;
+	let lastProgressAt = 0;
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) break;
 		if (value) {
-			chunks.push(value);
+			parts.push(value);
+			pendingBytes += value.byteLength;
 			received += value.byteLength;
-			const current = progress();
-			if (current?.phase === "fetching")
-				setProgress({ phase: "fetching", receivedBytes: received });
+			if (pendingBytes >= BLOB_FOLD_BYTES) {
+				parts = [new Blob(parts)];
+				pendingBytes = 0;
+			}
+			const now = performance.now();
+			if (now - lastProgressAt >= PROGRESS_INTERVAL_MS) {
+				lastProgressAt = now;
+				if (progress()?.phase === "fetching")
+					setProgress({ phase: "fetching", receivedBytes: received });
+			}
 		}
 	}
-	const blob = new Blob(chunks);
+	const blob = new Blob(parts);
 	triggerAnchor(URL.createObjectURL(blob), filename);
 	return blob.size;
 }

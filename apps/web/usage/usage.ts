@@ -143,19 +143,31 @@ export function usageBrand(provider: string): UsageBrand | undefined {
 	return undefined;
 }
 
+const TURN_STAMP_FIELDS: Intl.DateTimeFormatOptions = {
+	month: "short",
+	day: "numeric",
+	hour: "2-digit",
+	minute: "2-digit",
+};
+// Built on first use, once: constructing a formatter per call costs far more than formatting with one.
+let turnStampSameYear: Intl.DateTimeFormat | undefined;
+let turnStampOtherYear: Intl.DateTimeFormat | undefined;
+
 /**
  * Wall-clock stamp for a turn on the usage row: local "Oct 20, 14:32", with
  * the year when it differs from `nowMs`'s.
  */
 export function formatTurnStamp(ms: number, nowMs: number): string {
 	const at = new Date(ms);
-	return at.toLocaleString(undefined, {
-		...(at.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
-		month: "short",
-		day: "numeric",
-		hour: "2-digit",
-		minute: "2-digit",
+	if (at.getFullYear() === new Date(nowMs).getFullYear()) {
+		turnStampSameYear ??= new Intl.DateTimeFormat(undefined, TURN_STAMP_FIELDS);
+		return turnStampSameYear.format(at);
+	}
+	turnStampOtherYear ??= new Intl.DateTimeFormat(undefined, {
+		year: "numeric",
+		...TURN_STAMP_FIELDS,
 	});
+	return turnStampOtherYear.format(at);
 }
 
 const MINUTE_MS = 60_000;

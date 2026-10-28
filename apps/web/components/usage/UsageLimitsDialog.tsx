@@ -43,35 +43,43 @@ const LimitRow: Component<{ limit: UsageLimit }> = (props) => {
 	);
 };
 
+/** Reports fetched within this window are not fetched again when the dialog opens. */
+const USAGE_FRESH_MS = 60_000;
+
 /**
  * Phase 9: /usage parity, per-provider limits with 5h/7d windows, utilization
  * bars, status and notes. Data comes from the fleet GET /ctl/usage (via the
  * usage store slice); providers without reporting resolve to the empty state.
  */
 export const UsageLimitsDialog: Component<{ onClose: () => void }> = (props) => {
-	onMount(() => refreshUsageReports());
+	// The sidebar widget keeps the mirror fresh: reports fetched moments ago are shown as they are.
+	onMount(() => {
+		const at = state.usageRefreshedAt;
+		const fresh =
+			at !== null &&
+			state.usageReports !== null &&
+			state.usageError === null &&
+			Date.now() - at < USAGE_FRESH_MS;
+		if (!fresh) refreshUsageReports();
+	});
+	// Only the first load replaces the list with a placeholder; a refresh keeps the old reports on screen.
+	const firstLoad = () => state.usageLoading && state.usageReports === null;
 
 	return (
 		<Modal title="Usage reports" onClose={props.onClose}>
-			<Show when={state.usageLoading}>
+			<Show when={firstLoad()}>
 				<span class="usage-empty">Loading usage reports…</span>
 			</Show>
-			<Show when={!state.usageLoading && state.usageError !== null}>
+			<Show when={!firstLoad() && state.usageError !== null}>
 				<div class="usage-empty">Failed to load usage: {state.usageError}</div>
 			</Show>
 			<Show
-				when={
-					!state.usageLoading &&
-					state.usageError === null &&
-					(state.usageReports?.length ?? 0) === 0
-				}
+				when={!firstLoad() && state.usageError === null && (state.usageReports?.length ?? 0) === 0}
 			>
 				<div class="usage-empty">No usage reporting for the active provider.</div>
 			</Show>
 			<Show
-				when={
-					!state.usageLoading && state.usageError === null && (state.usageReports?.length ?? 0) > 0
-				}
+				when={!firstLoad() && state.usageError === null && (state.usageReports?.length ?? 0) > 0}
 			>
 				<div class="usage-list">
 					<For each={state.usageReports}>

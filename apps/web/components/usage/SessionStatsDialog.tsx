@@ -1,7 +1,7 @@
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { ContextUsageBreakdown } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
-import type { ToolSchemaInfo } from "#lib/wire/protocol";
+import { TOOL_BRIEF_DESCRIPTION_CHARS, type ToolBriefInfo } from "#lib/wire/protocol";
 import { formatTokens } from "../../usage/context";
 import { call, setState, state } from "../../state";
 import { runManualCompact } from "../../store/compaction";
@@ -36,7 +36,7 @@ const ContextBreakdownSegment: Component<{
 /** Session stats, opened by `/usage`, `/context`, `/tools`, and the session status bar. */
 export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) => {
 	const [breakdown, setBreakdown] = createSignal<ContextUsageBreakdown | null>(null);
-	const [tools, setTools] = createSignal<ToolSchemaInfo[]>([]);
+	const [tools, setTools] = createSignal<ToolBriefInfo[]>([]);
 	const [tab, setTab] = createSignal<StatsTab>("overview");
 
 	onMount(() => {
@@ -47,9 +47,10 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 		void call("getContextBreakdown")
 			.then((b) => setBreakdown((b as ContextUsageBreakdown | null) ?? null))
 			.catch(() => setBreakdown(null));
-		// The tool list is not part of the broadcast state; fetch it when the dialog opens.
-		void call("getToolSchemas")
-			.then((t) => setTools(t as ToolSchemaInfo[]))
+		// The tool list is not part of the broadcast state; fetch it when the dialog opens. The brief
+		// answer is all the Tools tab shows: names and short descriptions, no parameter schemas.
+		void call("getToolSchemas", [{ brief: true }])
+			.then((t) => setTools(t as ToolBriefInfo[]))
 			.catch(() => setTools([]));
 	});
 
@@ -252,7 +253,9 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 								{(t) => (
 									<div class="stats-tool">
 										<span class="picker-label">{t.name}</span>
-										<span class="picker-detail">{t.description.slice(0, 120)}</span>
+										<span class="picker-detail">
+											{t.description.slice(0, TOOL_BRIEF_DESCRIPTION_CHARS)}
+										</span>
 									</div>
 								)}
 							</For>

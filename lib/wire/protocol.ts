@@ -154,6 +154,12 @@ export interface ToolSchemaInfo {
 	examples?: readonly ToolExample[];
 }
 
+/** Description characters `getToolSchemas` keeps per tool when asked for a brief list. */
+export const TOOL_BRIEF_DESCRIPTION_CHARS = 120;
+
+/** One tool as `getToolSchemas` answers `[{ brief: true }]`: name and a description cut to `TOOL_BRIEF_DESCRIPTION_CHARS`. */
+export type ToolBriefInfo = Pick<ToolSchemaInfo, "name" | "description">;
+
 export interface AvailableSlashCommand {
 	name: string;
 	aliases?: string[];
