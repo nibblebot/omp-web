@@ -1,6 +1,6 @@
-import { commandMessage } from "#lib/wire/browser-socket";
+import { commandMessage, commandMessageBytes } from "#lib/wire/browser-socket";
 import { COMMAND_DEDUP_WINDOW_MS } from "#lib/wire/protocol";
-import { commandBytes, commandTooLargeMessage, MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
+import { commandTooLargeMessage, MAX_COMMAND_BYTES } from "#lib/wire/command-limits";
 import type {
 	ClientCommand,
 	DaemonInfo,
@@ -154,16 +154,18 @@ export function rejectOutbound(err: Error): void {
  * waits for the next open.
  */
 export function sendCommand(cmd: ClientCommand): Promise<void> {
-	const bytes = commandBytes(cmd);
-	if (bytes > MAX_COMMAND_BYTES) {
-		return Promise.reject(new Error(commandTooLargeMessage(bytes, MAX_COMMAND_BYTES)));
-	}
-	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	let entry = outbox.get(cmd.id);
 	if (entry === undefined) {
-		entry = { cmd, text: commandMessage(cmd), firstAt: Date.now(), sentGen: 0, waiters: [] };
+		// One encoding serves the size check, every send and every re-send.
+		const text = commandMessage(cmd);
+		const bytes = commandMessageBytes(text);
+		if (bytes > MAX_COMMAND_BYTES) {
+			return Promise.reject(new Error(commandTooLargeMessage(bytes, MAX_COMMAND_BYTES)));
+		}
+		entry = { cmd, text, firstAt: Date.now(), sentGen: 0, waiters: [] };
 		outbox.set(cmd.id, entry);
 	}
+	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	entry.waiters.push({ resolve, reject });
 	transmit(entry);
 	return promise;
@@ -554,9 +556,19 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 	return promise;
 }
 
-/** Attach this tab to a session in the roster; resolves with its handle. */
-export function attachSession(workspaceId: string): Promise<string> {
-	return requestAttach({ type: "attach", id: crypto.randomUUID(), workspaceId });
+/**
+ * Attach this tab to a session in the roster; resolves with its handle.
+ * `resume` marks the reconnect's re-attach to the session already on screen:
+ * the edge may then continue that attachment from its replay ring instead of
+ * priming again (the attach_result says which).
+ */
+export function attachSession(workspaceId: string, resume?: true): Promise<string> {
+	return requestAttach({
+		type: "attach",
+		id: crypto.randomUUID(),
+		workspaceId,
+		...(resume === true ? { resume } : {}),
+	});
 }
 
 /** The roster workspaceId of the in-flight attach, or null when idle. Used as
@@ -653,20 +665,28 @@ export function settleAttachmentState(): void {
 /**
  * Settle the id-keyed attach_result unicast (connect()'s mux routes the
  * frame here; finding #28). Unrelated global error frames never settle the
- * waiter. Unknown id = superseded/timed out: ignore.
+ * waiter. Unknown id = superseded/timed out: ignore. True when this frame
+ * settled the pending attach.
  */
-export function settleAttachResult(frame: Extract<ServerFrame, { type: "attach_result" }>): void {
-	if (!pendingAttach || pendingAttach.id !== frame.id) return;
+export function settleAttachResult(
+	frame: Extract<ServerFrame, { type: "attach_result" }>,
+): boolean {
+	if (!pendingAttach || pendingAttach.id !== frame.id) return false;
 	clearTimeout(pendingAttach.timer);
 	const pending = pendingAttach;
 	pendingAttach = null;
 	if (frame.ok && frame.workspaceId !== undefined) {
 		pending.resolve(frame.workspaceId);
-		pushDebug("info", "transport", `attach ok: ${frame.workspaceId}`);
+		pushDebug(
+			"info",
+			"transport",
+			`attach ${frame.resumed === true ? "resumed" : "ok"}: ${frame.workspaceId}`,
+		);
 	} else {
 		pending.reject(new Error(frame.error ?? "attach failed"));
 		pushDebug("warn", "transport", `attach failed: ${frame.error ?? "unknown error"}`);
 	}
+	return true;
 }
 
 // ---------------------------------------------------------------------------

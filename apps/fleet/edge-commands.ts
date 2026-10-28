@@ -85,7 +85,7 @@ export const EDGE_COMMAND_FIELDS: Record<string, Record<string, FieldRule>> = {
 	},
 	delete_worktree: { workspaceId: required, deleteBranch },
 	worktree_delete_info: { workspaceId: required },
-	attach: { workspaceId: required },
+	attach: { workspaceId: required, resume: flag },
 };
 
 /**

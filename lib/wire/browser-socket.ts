@@ -1,6 +1,6 @@
 import { RECONNECT_BACKOFF_MAX_MS, RECONNECT_BACKOFF_MIN_MS } from "./callback-protocol";
 import { parseClientCommand } from "./client-command";
-import { commandTooLargeMessage, MAX_COMMAND_BYTES } from "./command-limits";
+import { commandTooLargeMessage, MAX_COMMAND_BYTES, utf8ByteLength } from "./command-limits";
 import type { ClientCommand, ServerFrame } from "./protocol";
 
 /**
@@ -35,6 +35,20 @@ import type { ClientCommand, ServerFrame } from "./protocol";
  * Client to server: `{"cmd":<ClientCommand>}`. Every command carries an id;
  * a re-send with the same id inside COMMAND_DEDUP_WINDOW_MS is acked again
  * and replays the recorded answer, never re-dispatches.
+ *
+ * Resume (fleet edge, additive under OMP_PROTO 6): a dropped named client
+ * (`client` query) keeps its session channel parked for the reclaim grace;
+ * the channel keeps feeding the client's replay ring. A returning socket
+ * dials with `after`, and the client's re-attach is `{"type":"attach",
+ * "workspaceId":W,"resume":true}`. If the ring still holds everything after
+ * `after`, the session pair is unchanged and no re-prime frame (hello_ok,
+ * attached, history, available_commands, stream_reset) went by that the
+ * client missed, the answer is `attach_result` with `resumed:true`: the ring
+ * replay (sent at open, before the answer) is the whole catch-up, and no
+ * priming, `history` or `state` follows. Otherwise the attach is an ordinary
+ * one that primes; an older server ignores `resume`, an older client never
+ * sends it. A standalone session's own listener has no attach command and
+ * always primes on open.
  *
  * Close codes: 4000 + an HTTP-like status, reason `<kind>: <message>`
  * (the callbackCloseFor scheme). 1000/1001 are ordinary closes.
@@ -209,6 +223,16 @@ export function commandMessage(command: ClientCommand): string {
 
 /** UTF-8 bytes of `{"cmd":` plus the closing `}` around a command. */
 const COMMAND_ENVELOPE_BYTES = 8;
+
+/**
+ * UTF-8 bytes of the command JSON inside a {@link commandMessage} text (the
+ * message minus its envelope), counted without a payload-sized copy. This is
+ * the size the server judges against MAX_COMMAND_BYTES, so the client encodes
+ * a command once and reuses the text for both the check and the send.
+ */
+export function commandMessageBytes(message: string): number {
+	return utf8ByteLength(message) - COMMAND_ENVELOPE_BYTES;
+}
 
 export type ClientMessage =
 	| {

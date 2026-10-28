@@ -1027,7 +1027,11 @@ export type ClientCommand =
 	| { type: "list_files"; id: string; query: string; limit?: number }
 	// Fleet edge only: attach this stream to the session with this id
 	// (the edge proxies it through; a bare omp-session never receives attach).
-	| { type: "attach"; id: string; workspaceId: string }
+	// `resume` (additive): the reconnect's re-attach to the session this client
+	// was viewing. When the edge still holds the dropped socket's session channel
+	// and its replay ring covers the dial's `after`, it answers `resumed` and
+	// sends no priming; otherwise the attach is an ordinary one.
+	| { type: "attach"; id: string; workspaceId: string; resume?: true }
 	// Collab: start/stop the collab room for the stream's ATTACHED session.
 	// relayUrl overrides collab.relayUrl for this room only (ShareSheet's explicit relay choice).
 	| { type: "collab_start"; id: string; relayUrl?: string; access?: "view" | "control" }
@@ -1514,6 +1518,45 @@ export function isSessionScopedFrameType(type: string): boolean {
 	return SESSION_SCOPED_FRAME_TYPES[type] === true;
 }
 
+/**
+ * Frame types the replay rings keep (the session's per-stream ring and the
+ * fleet edge's per-client ring): deltas a resume must re-deliver. Everything
+ * else is priming (hello_ok, attached, history, available_commands), a
+ * unicast answer (call_result) or per-stream lifecycle (stream_reset): it
+ * consumes a seq but is re-derivable by re-attach priming or a re-sent
+ * command, so a ring replay has deliberate gaps there. One table for both
+ * rings, so they cannot drift; the web client records dedup seqs only for
+ * these types, since only they are ever replayed.
+ */
+const RINGED_FRAME_TYPES: Record<string, true> = {
+	state: true,
+	event: true,
+	bash_chunk: true,
+	python_chunk: true,
+	ephemeral_delta: true,
+	command_echo: true,
+	settings_changed: true,
+	skills_changed: true,
+	subagent_lifecycle: true,
+	subagent_progress: true,
+	ui_request: true,
+	// Finding #16: a settled dialog must invalidate the ringed ui_request it
+	// answers, so a resume replays request → end (dismissed), never a stale
+	// dialog whose ui_response would silently no-op.
+	ui_request_end: true,
+	collab_status: true,
+	// Absolute snapshot of the running jobs' widget glances: a resumed or late client gets the latest one.
+	job_widgets: true,
+	ready: true,
+	daemons: true,
+	error: true,
+};
+
+/** Whether a frame `type` is a ringed delta (see RINGED_FRAME_TYPES). */
+export function isRingedFrameType(type: string): boolean {
+	return RINGED_FRAME_TYPES[type] === true;
+}
+
 // Server → browser. Session-scoped frames on a bare omp-session carry NO
 // `scope` (one live session; connect = attached). The fleet edge STAMPS
 // `scope` (the roster workspace id) on them when proxying
@@ -1563,8 +1606,18 @@ export type ServerFrame =
 	// attach by command id. Success carries the workspaceId;
 	// failure carries the error. Added additively; an older edge
 	// that ignores the attach id never sends this frame, and the client's
-	// pending-map timeout backstops it.
-	| { type: "attach_result"; id: string; ok: boolean; workspaceId?: string; error?: string }
+	// pending-map timeout backstops it. `resumed` (additive, only on ok): the
+	// attach continued the client's previous attachment from the ring replay of
+	// the dial's `after`: no hello_ok, attached, history or state follow, and the
+	// client keeps its transcript, scope and readiness. Older edges never set it.
+	| {
+			type: "attach_result";
+			id: string;
+			ok: boolean;
+			workspaceId?: string;
+			resumed?: true;
+			error?: string;
+	  }
 	// --- omp-session readiness (R8) ---
 	// Broadcast once the SDK session is live AND provider/model/auth has
 	// resolved. Before it, prompt-family calls fail with a not_ready error.

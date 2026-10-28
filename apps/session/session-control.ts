@@ -10,7 +10,7 @@ import {
 } from "#lib/wire/callback-protocol";
 import type { CallbackEnvelope, CallbackKind } from "#lib/wire/callback-protocol";
 import type { StreamResyncControl } from "#lib/wire/callback-protocol";
-import { isRingedDeltaType } from "./client-delivery";
+import { isRingedFrameType } from "#lib/wire/protocol";
 
 /**
  * Session control broker: virtual streams over the callback pair
@@ -233,7 +233,7 @@ export function createSessionControl(deps: SessionControlDeps): SessionControl {
 			kind === "frame" &&
 			isObject(payload) &&
 			typeof payload.type === "string" &&
-			isRingedDeltaType(payload.type);
+			isRingedFrameType(payload.type);
 		const ringFrame = isBrowser && stream !== undefined && record && isDelta;
 		// A ringed frame needs its JSON and byte size for the ring: serialize it
 		// here once and hand the same encoding to the transport, so the send

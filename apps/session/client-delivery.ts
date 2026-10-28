@@ -11,6 +11,7 @@ import {
 	CLIENT_BACKPRESSURE_BYTES,
 	CLIENT_STALL_MS,
 	DELTA_SEQ_START,
+	isRingedFrameType,
 	CLIENT_KEEPALIVE_MS,
 	CLIENT_RING_CAP,
 	CLIENT_RING_BYTES,
@@ -130,37 +131,6 @@ const MESSAGE_REPLICATION_CEILING_BYTES = ENVELOPE_MAX_BYTES - HISTORY_ENVELOPE_
  * delta (which still use the terminating sendTo) must not close the socket.
  */
 const PRIMING_QUEUE_MARGIN = 256 * 1024;
-
-/** Frames that are deltas (ringed + streamed); everything else is priming-only or a unicast answer. */
-const RING_DELTAS: Record<string, true> = {
-	state: true,
-	event: true,
-	bash_chunk: true,
-	python_chunk: true,
-	ephemeral_delta: true,
-	command_echo: true,
-	settings_changed: true,
-	skills_changed: true,
-	subagent_lifecycle: true,
-	subagent_progress: true,
-	ui_request: true,
-	// Finding #16: a settled dialog must invalidate the ringed ui_request it
-	// answers, so a resume replays request → end (dismissed), never a stale
-	// dialog whose ui_response would silently no-op.
-	ui_request_end: true,
-	collab_status: true,
-	// Absolute snapshot of the running jobs' widget glances: a resumed or late client gets the latest one.
-	job_widgets: true,
-	ready: true,
-	daemons: true,
-	error: true,
-};
-
-/** True when `type` names a ringed delta frame (the callback virtual-stream
- *  replay ring mirrors the direct /ws ring semantics exactly). */
-export function isRingedDeltaType(type: string): boolean {
-	return RING_DELTAS[type] === true;
-}
 
 /** Bytes the socket holds unsent (0 for a consumer whose socket is gone). */
 function bufferedBytes(consumer: ClientConsumer): number {
@@ -629,7 +599,7 @@ export function toWireEvent(handle: string, event: AgentSessionEvent): WireSessi
 export function broadcastTo(handle: string, frame: SessionScopedFrame): void {
 	const seq = nextDeltaSeq++;
 	const message = seqFrameMessage(seq, JSON.stringify(frame));
-	if (RING_DELTAS[frame.type]) ring.push(seq, message);
+	if (isRingedFrameType(frame.type)) ring.push(seq, message);
 	for (const consumer of streams) {
 		if (consumer.attached === handle) sendTo(consumer, message);
 	}

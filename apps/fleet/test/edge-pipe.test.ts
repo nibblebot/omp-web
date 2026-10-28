@@ -69,7 +69,12 @@ interface Remote {
 
 /** One edge on loopback with the callback routes mounted, plus its registry and transport. */
 async function startRig(
-	opts: { backpressureBytes?: number; ringBytes?: number; keepaliveMs?: number } = {},
+	opts: {
+		backpressureBytes?: number;
+		ringBytes?: number;
+		keepaliveMs?: number;
+		reclaimMs?: number;
+	} = {},
 ): Promise<Rig> {
 	const dir = tempDir("omp-web-edge-pipe-");
 	const statePath = join(dir, "state.json");
@@ -506,8 +511,8 @@ describe("edge pipe backpressure and replay", () => {
 });
 
 describe("edge pipe attach and answers over the callback pair", () => {
-	test("attach primes over the pair; the browser stream rides browser/<conn> and detach sends stream_close", async () => {
-		const rig = await startRig();
+	test("attach primes over the pair; the browser stream rides browser/<conn> and a dropped browser's stream closes once the reclaim grace ends", async () => {
+		const rig = await startRig({ reclaimMs: 150 });
 		try {
 			const remote = await connectRemote(rig, "primed");
 			const browser = await openBrowser(rig.port);
@@ -1267,6 +1272,209 @@ describe("edge pipe relays the session's own frame text", () => {
 			expect(browser.rawText).toContain('"type":"daemons","daemons":[],"type":"history"');
 			expect(browser.rawText).not.toContain("HOSTILE-ONE");
 			expect(browser.rawText).not.toContain("HOSTILE-FOUR");
+		} finally {
+			await rig.close();
+		}
+	});
+});
+
+describe("edge resume of a dropped browser's session channel", () => {
+	const notice = (message: string) => ({
+		type: "event",
+		event: { type: "notice", level: "info", message },
+	});
+	const noticeSeen = (message: string) => (f: ServerFrame) =>
+		f.type === "event" && eventMessage(f) === message;
+
+	/** Attach a browser and deliver a complete priming plus one live delta, so its `after` is past every re-prime frame. */
+	async function attachedBrowser(
+		rig: Rig,
+		remote: Remote,
+	): Promise<{ browser: BrowserSocket; stream: string }> {
+		const browser = await openBrowser(rig.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		await attach(browser, remote.workspaceId, "a1");
+		const [stream] = await awaitStreams(remote.session, 1);
+		remote.session.send(stream!, "frame", { type: "attached", scope: "boot" });
+		remote.session.send(stream!, "frame", { type: "history", messages: [], final: true });
+		remote.session.send(stream!, "frame", notice("before-drop"));
+		await browser.waitForFrame(noticeSeen("before-drop"), "delta before the drop");
+		return { browser, stream: stream! };
+	}
+
+	/** Drop a browser's socket and redial it as the same client; resolves once the new socket's priming landed. */
+	async function redial(browser: BrowserSocket): Promise<void> {
+		browser.close();
+		await browser.end();
+		await browser.reopen();
+		await browser.waitForFrame(
+			(f) => f.type === "registered_projects",
+			"priming on the new socket",
+		);
+	}
+
+	const attachResults = (browser: BrowserSocket, id: string) =>
+		browser.frames.filter((f) => f.type === "attach_result" && f.id === id);
+
+	test("a resume attach continues the session channel: the ring replays what the drop missed and no priming follows", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "resume");
+			const { browser, stream } = await attachedBrowser(rig, remote);
+			browser.close();
+			await browser.end();
+			// A delta that lands while the browser is away rides the parked channel into the ring.
+			remote.session.send(stream, "frame", notice("while-away"));
+			await sleep(100);
+			await browser.reopen();
+			await browser.waitForFrame(noticeSeen("while-away"), "ring replay of the missed delta");
+			await browser.send({
+				type: "attach",
+				id: "a2",
+				workspaceId: remote.workspaceId,
+				resume: true,
+			});
+			await browser.waitForFrame(
+				(f) => f.type === "attach_result" && f.id === "a2",
+				"attach_result a2",
+			);
+			expect(attachResults(browser, "a2")).toEqual([
+				{
+					type: "attach_result",
+					id: "a2",
+					ok: true,
+					workspaceId: remote.workspaceId,
+					resumed: true,
+				},
+			]);
+			// The same session stream keeps serving this socket: no second open, no close.
+			expect(controlFrames(remote.session, "stream_open")).toHaveLength(1);
+			expect(controlFrames(remote.session, "stream_close")).toHaveLength(0);
+			remote.session.send(stream, "frame", notice("after-resume"));
+			await browser.waitForFrame(noticeSeen("after-resume"), "live delta after the resume");
+			// Each missed delta arrived once, and no priming frame was sent again.
+			const primed = browser.frames.filter((f) => f.type === "history" || f.type === "attached");
+			expect(primed).toHaveLength(2);
+			expect(browser.frames.filter(noticeSeen("while-away"))).toHaveLength(1);
+		} finally {
+			await rig.close();
+		}
+	});
+
+	test("a resume is refused, and the attach primes afresh, when a re-prime frame reached the parked channel", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "reprime");
+			const { browser, stream } = await attachedBrowser(rig, remote);
+			browser.close();
+			await browser.end();
+			// A history resync while the browser is away: a ring cannot replay it.
+			remote.session.send(stream, "frame", { type: "history", messages: [], final: true });
+			await waitFor(
+				() =>
+					controlFrames(remote.session, "stream_close").find((env) => env.streamId === stream) ??
+					null,
+				3000,
+				"parked channel released",
+			);
+			await browser.reopen();
+			await browser.waitForFrame((f) => f.type === "registered_projects", "priming");
+			await browser.send({
+				type: "attach",
+				id: "a2",
+				workspaceId: remote.workspaceId,
+				resume: true,
+			});
+			await browser.waitForFrame(
+				(f) => f.type === "attach_result" && f.id === "a2",
+				"attach_result a2",
+			);
+			expect(attachResults(browser, "a2")).toEqual([
+				{ type: "attach_result", id: "a2", ok: true, workspaceId: remote.workspaceId },
+			]);
+			await awaitStreams(remote.session, 2);
+		} finally {
+			await rig.close();
+		}
+	});
+
+	test("a resume is refused when the ring evicted what the browser missed", async () => {
+		const rig = await startRig({ ringBytes: 1500 });
+		try {
+			const remote = await connectRemote(rig, "evicted");
+			const { browser, stream } = await attachedBrowser(rig, remote);
+			browser.close();
+			await browser.end();
+			for (let i = 0; i < 12; i++) {
+				remote.session.send(stream, "frame", notice(`missed-${i}:${"x".repeat(300)}`));
+			}
+			await sleep(150);
+			await browser.reopen();
+			await browser.waitForFrame((f) => f.type === "registered_projects", "priming");
+			await browser.send({
+				type: "attach",
+				id: "a2",
+				workspaceId: remote.workspaceId,
+				resume: true,
+			});
+			await browser.waitForFrame(
+				(f) => f.type === "attach_result" && f.id === "a2",
+				"attach_result a2",
+			);
+			expect(attachResults(browser, "a2")).toEqual([
+				{ type: "attach_result", id: "a2", ok: true, workspaceId: remote.workspaceId },
+			]);
+			await awaitStreams(remote.session, 2);
+			expect(
+				controlFrames(remote.session, "stream_close").some((env) => env.streamId === stream),
+			).toBe(true);
+		} finally {
+			await rig.close();
+		}
+	});
+
+	test("an attach without resume (an older client) closes the adopted channel and primes", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "legacy");
+			const { browser, stream } = await attachedBrowser(rig, remote);
+			await redial(browser);
+			await browser.send({ type: "attach", id: "a2", workspaceId: remote.workspaceId });
+			await browser.waitForFrame(
+				(f) => f.type === "attach_result" && f.id === "a2",
+				"attach_result a2",
+			);
+			expect(attachResults(browser, "a2")).toEqual([
+				{ type: "attach_result", id: "a2", ok: true, workspaceId: remote.workspaceId },
+			]);
+			await awaitStreams(remote.session, 2);
+			expect(
+				controlFrames(remote.session, "stream_close").some((env) => env.streamId === stream),
+			).toBe(true);
+		} finally {
+			await rig.close();
+		}
+	});
+});
+
+describe("edge session channel of a page that is going away", () => {
+	test("a 1001 close (page unload) closes the session channel at once; nothing is parked", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "unload");
+			const browser = await openBrowser(rig.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await attach(browser, remote.workspaceId, "a1");
+			const [stream] = await awaitStreams(remote.session, 1);
+			browser.close(1001);
+			const closed = await waitFor(
+				() =>
+					controlFrames(remote.session, "stream_close").find((env) => env.streamId === stream) ??
+					null,
+				3000,
+				"stream_close for the unloaded page",
+			);
+			expect(closed.streamId).toBe(stream);
 		} finally {
 			await rig.close();
 		}

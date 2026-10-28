@@ -21,6 +21,7 @@ export class ReplayRing<T = unknown> {
 	readonly #maxBytes: number;
 	#entries: Array<{ seq: number; value: T; bytes: number }> = [];
 	#bytes = 0;
+	#evictedThrough = 0;
 
 	constructor(cap: number, maxBytes?: number) {
 		this.#cap = cap;
@@ -34,6 +35,15 @@ export class ReplayRing<T = unknown> {
 	/** Total UTF-8 byte size of the ringed string values (0 for non-strings). */
 	get bytes(): number {
 		return this.#bytes;
+	}
+
+	/**
+	 * The highest seq ever evicted (0 while nothing was). A consumer whose
+	 * resume point is below it missed ringed entries the ring no longer holds;
+	 * at or above it `after()` returns every ringed entry the consumer lacks.
+	 */
+	get evictedThrough(): number {
+		return this.#evictedThrough;
 	}
 
 	push(seq: number, value: T): void {
@@ -55,7 +65,10 @@ export class ReplayRing<T = unknown> {
 			for (let i = 0; i < capDrop; i++) this.#bytes -= this.#entries[drop + i].bytes;
 			drop += capDrop;
 		}
-		if (drop > 0) this.#entries.splice(0, drop);
+		if (drop > 0) {
+			this.#evictedThrough = this.#entries[drop - 1].seq;
+			this.#entries.splice(0, drop);
+		}
 	}
 
 	/** Entries with seq > `after`, oldest first. */

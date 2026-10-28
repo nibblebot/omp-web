@@ -76,7 +76,7 @@ export function fleetWebSocket(
 			else pair?.drain?.(ws as ServerWebSocket<CallbackSocketData>);
 		},
 		close: (ws, code, reason) => {
-			if (isBrowserSocket(ws)) edge.onBrowserClose(ws);
+			if (isBrowserSocket(ws)) edge.onBrowserClose(ws, code);
 			else pair?.close?.(ws as ServerWebSocket<CallbackSocketData>, code, reason);
 		},
 	};

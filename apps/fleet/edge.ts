@@ -14,8 +14,8 @@
  *     per-client ReplayRing (cap CLIENT_RING_CAP, byte budget CLIENT_RING_BYTES) for
  *     `after` resume: N ≥ DELTA_SEQ_START replays ring.after(N)
  *     after priming, anything below skips replay (priming already carries
- *     full current state). Only session DELTA types are ringed (mirror of the
- *     session's RING_DELTAS, finding #5): priming frames (history,
+ *     full current state). Only session DELTA types are ringed (isRingedFrameType,
+ *     the session's own table, finding #5): priming frames (history,
  *     available_commands) and unicast answers (call_result) ride the live
  *     socket with a seq but no ring entry, re-derivable by re-attach
  *     priming / a re-sent command, exactly like the session. The session
@@ -55,6 +55,21 @@
  *     Attach is answered with an id-keyed attach_result frame (finding #28)
  *     so unrelated global error frames never settle a browser's in-flight
  *     attach.
+ *   - RESUME: a named client's socket drop (anything but a 1001 close, which
+ *     is a page unloading) does not close its session
+ *     channel. The channel is parked on the client for CLIENT_RECLAIM_MS and
+ *     keeps feeding the client's ring (every ringed delta, exactly as for a
+ *     fleet broadcast). A returning socket (same `client`, `after` ≥
+ *     DELTA_SEQ_START) adopts the channel before the ring replay when the
+ *     ring still holds everything after `after` (ReplayRing.evictedThrough),
+ *     no re-prime frame (EDGE_REPRIME_FRAMES: hello_ok, attached, history,
+ *     available_commands, stream_reset) went by since, and the session pair
+ *     is the one the channel was opened on. The browser's re-attach carrying
+ *     `resume` then answers attach_result `resumed: true` and nothing is
+ *     primed: the ring replay is the whole catch-up and no history crosses the
+ *     wire. Any other case (pair replaced, a re-prime frame meeting the parked
+ *     channel, ring eviction, an older client without `resume`) closes the
+ *     channel and the attach is an ordinary priming one.
  *   - Backpressure: a browser socket whose send buffer exceeds the cap (default
  *     CLIENT_BACKPRESSURE_BYTES) before a send, whose send is refused, or
  *     that buffers bytes with no drain for CLIENT_STALL_MS (a browser that
@@ -114,6 +129,7 @@ import {
 	type PublicProviderProfile,
 	type ServerFrame,
 	type WireTurnOutcome,
+	isRingedFrameType,
 	isSessionScopedFrameType,
 } from "#lib/wire/protocol";
 import {
@@ -168,6 +184,8 @@ import { listProjectBranches, realpathOf } from "./worktrees";
 const CLIENT_RECLAIM_MS = 60_000;
 /** Drain checkpoints merge until they span this many queued bytes (bounds the checkpoint list). */
 const CREDIT_GRAIN_BYTES = 32 * 1024;
+/** Close code a browser sends when its page unloads (RFC 6455 "going away"). */
+const CLOSE_GOING_AWAY = 1001;
 
 /** Picked-session membership: the whole worktree listing, never the dropdown page. */
 const RESUME_MEMBERSHIP_LIMIT = Number.POSITIVE_INFINITY;
@@ -308,38 +326,20 @@ function relayJson(payloadJson: string, scope: string | undefined): string | und
 }
 
 /**
- * Session frame types the edge RINGS per client (finding #5). MUST mirror
- * server/index.ts RING_DELTAS: a frame the session does not ring (priming:
- * hello_ok/attached/history/available_commands; unicast answers:
- * call_result; per-stream lifecycle: stream_reset) is forwarded live but
- * never ringed; it is re-derivable by re-attach priming or a re-sent
- * command. Ringed deltas are the frames an `after` resume actually
- * needs; everything else merely consumes a seq, exactly like the session's
- * delta counter, so ring replay has the same deliberate gaps and a
- * resuming consumer tolerates them (after() returns only ringed entries
- * newer than the id).
+ * Session frames a ring replay cannot re-deliver and whose loss leaves the
+ * browser showing the wrong session state: the attach priming (hello_ok,
+ * attached, history, available_commands) and a stream reset. The edge rings
+ * only isRingedFrameType deltas (finding #5; the same table as the session's
+ * rings), so these are forwarded live and never ringed: re-attach priming
+ * re-derives them. A browser that dropped before one of them reached it must
+ * not resume (see #adoptParked); it re-attaches and is primed again.
  */
-const EDGE_RING_DELTAS: Record<string, true> = {
-	state: true,
-	event: true,
-	bash_chunk: true,
-	python_chunk: true,
-	ephemeral_delta: true,
-	command_echo: true,
-	settings_changed: true,
-	skills_changed: true,
-	subagent_lifecycle: true,
-	subagent_progress: true,
-	ui_request: true,
-	// Finding #16: the dialog's settle marker is ringed like the request, so
-	// a resume replays request → end (dismissed), never a stale dialog.
-	ui_request_end: true,
-	collab_status: true,
-	// Forwarded as the session's own wire text, never parsed beyond the type: an absolute snapshot, ringed like state.
-	job_widgets: true,
-	ready: true,
-	daemons: true,
-	error: true,
+const EDGE_REPRIME_FRAMES: Record<string, true> = {
+	hello_ok: true,
+	attached: true,
+	history: true,
+	available_commands: true,
+	stream_reset: true,
 };
 
 /**
@@ -477,8 +477,21 @@ interface BrowserClient {
 	ring: ReplayRing<string>;
 	/** Next edge-local delta seq for this browser (≥ DELTA_SEQ_START). */
 	nextSeq: number;
+	/**
+	 * Edge seq of the last frame forwarded to this browser that a ring replay
+	 * cannot re-deliver and that changes what the browser shows of its session
+	 * (EDGE_REPRIME_FRAMES). A resume point below it may have missed one.
+	 */
+	resetSeq: number;
 	/** Live socket, or null while disconnected (the ring is kept for resume). */
 	stream: BrowserStream | null;
+	/**
+	 * The dropped socket whose session channel is parked for this client: the
+	 * channel keeps running (frames feed the ring) until a returning socket
+	 * adopts it, a re-prime frame or a pair change makes it stale, or the
+	 * reclaim grace ends.
+	 */
+	parked: BrowserStream | null;
 	/** Reclaim timer: drops the client state when no socket rebinds in time. */
 	gcTimer: ReturnType<typeof setTimeout> | null;
 }
@@ -503,6 +516,8 @@ export interface BrowserStream {
 	progressAt: number;
 	/** Last time the edge wrote anything (the keepalive's idle clock). */
 	lastSendAt: number;
+	/** The channel adopted at open from the client's previous socket (see #adoptParked); the next attach with `resume` confirms it. Cleared by any attach. */
+	resumable: boolean;
 }
 
 /**
@@ -515,6 +530,8 @@ export interface BrowserStream {
  */
 interface CallbackPipeState {
 	workspaceId: string;
+	/** The socket this channel serves: its frames are forwarded there. A parked channel's owner is the dropped (closed) socket, until a returning socket adopts it. */
+	owner: BrowserStream;
 	/** Edge-chosen browser connection id, the "browser/<connId>" stream's suffix. */
 	connId: string;
 	/** Intentional teardown (browser close / re-attach / clone stopped/removed). */
@@ -545,7 +562,9 @@ function newClient(clientId: string | null, ringBytes: number): BrowserClient {
 		clientId,
 		ring: new ReplayRing<string>(CLIENT_RING_CAP, ringBytes),
 		nextSeq: DELTA_SEQ_START,
+		resetSeq: 0,
 		stream: null,
+		parked: null,
 		gcTimer: null,
 	};
 }
@@ -716,7 +735,8 @@ export class FleetEdge {
 				const info = await this.#ops.worktreeDeleteInfo(workspaceId);
 				this.#sendAnswer(stream, { type: "worktree_delete_info", workspaceId, ...info });
 			}),
-		attach: (stream, id, a) => void this.#handleAttach(stream, a.workspaceId as string, id),
+		attach: (stream, id, a) =>
+			void this.#handleAttach(stream, a.workspaceId as string, id, a.resume === true),
 	};
 	/** Boot-static secret-free provider catalog, published on registered_projects. */
 	readonly #providerProfiles: PublicProviderProfile[] | undefined;
@@ -727,6 +747,8 @@ export class FleetEdge {
 	readonly #stallMs: number;
 	/** Keepalive/stall sweep cadence (default CLIENT_KEEPALIVE_MS). */
 	readonly #keepaliveMs: number;
+	/** Reclaim grace after a socket drop (default CLIENT_RECLAIM_MS). */
+	readonly #reclaimMs: number;
 	/** Per-client ring byte budget (default CLIENT_RING_BYTES; finding #5). */
 	readonly #ringBytes: number;
 	/** Live browser streams (broadcasts + backpressure). */
@@ -799,6 +821,8 @@ export class FleetEdge {
 			stallMs?: number;
 			/** Keepalive and stall-sweep interval (default CLIENT_KEEPALIVE_MS). */
 			keepaliveMs?: number;
+			/** Grace a disconnected client's ring and parked session channel are kept for resume (default CLIENT_RECLAIM_MS). */
+			reclaimMs?: number;
 		},
 	) {
 		this.#registry = deps.registry;
@@ -823,6 +847,9 @@ export class FleetEdge {
 			for (const s of this.#browsers) {
 				if (s.pipe?.workspaceId === workspaceId) this.#closePipe(s);
 			}
+			for (const client of this.#clients.values()) {
+				if (client.parked?.pipe?.workspaceId === workspaceId) this.#dropParked(client);
+			}
 		});
 		this.#providerProfiles = deps.providerProfiles;
 		this.#logStore = deps.logStore;
@@ -830,6 +857,7 @@ export class FleetEdge {
 		this.#ringBytes = opts?.ringBytes ?? CLIENT_RING_BYTES;
 		this.#stallMs = opts?.stallMs ?? CLIENT_STALL_MS;
 		this.#keepaliveMs = opts?.keepaliveMs ?? CLIENT_KEEPALIVE_MS;
+		this.#reclaimMs = opts?.reclaimMs ?? CLIENT_RECLAIM_MS;
 		this.#serveUi = deps.serveUi ?? true;
 		this.#sessionsDir = deps.sessionsDir;
 		deps.registry.onChange = this.#onRegistryChange;
@@ -930,6 +958,7 @@ export class FleetEdge {
 		this.#stopKeepalive();
 		for (const client of this.#clients.values()) {
 			if (client.gcTimer) clearTimeout(client.gcTimer);
+			this.#dropParked(client);
 		}
 		this.#clients.clear();
 		for (const stream of [...this.#browsers]) {
@@ -1026,11 +1055,15 @@ export class FleetEdge {
 			client,
 			pipe: null,
 			attachSeq: 0,
+			resumable: false,
 		};
 		ws.data.stream = stream;
 		client.stream = stream;
 		this.#browsers.add(stream);
 		this.#startKeepalive();
+		// A returning socket of a client with a parked session channel resumes it
+		// (before the priming and the ring replay below; see #adoptParked).
+		this.#adoptParked(client, stream, after);
 		// Priming: roster + merged daemons + registered projects
 		// (seqs 1..k, k < DELTA_SEQ_START).
 		let seq = 1;
@@ -1103,10 +1136,15 @@ export class FleetEdge {
 		}
 	}
 
-	/** Bun `websocket.close`: the browser went away; close its pipe + release, keep the ring for resume. */
-	onBrowserClose(ws: ServerWebSocket<BrowserSocketData>): void {
+	/**
+	 * Bun `websocket.close`: the browser went away; release it and keep the ring
+	 * for resume. Its session channel stays parked for the resume too, unless the
+	 * close is 1001 (going away: the page unloaded, a reload or a closed tab, which
+	 * browsers announce this way and which no resume follows), when it closes with it.
+	 */
+	onBrowserClose(ws: ServerWebSocket<BrowserSocketData>, code?: number): void {
 		const stream = ws.data.stream;
-		if (stream !== null) this.#releaseBrowser(stream);
+		if (stream !== null) this.#releaseBrowser(stream, code !== CLOSE_GOING_AWAY);
 	}
 
 	/**
@@ -1502,10 +1540,27 @@ export class FleetEdge {
 		stream: BrowserStream,
 		workspaceId: string,
 		commandId: string,
+		resume: boolean,
 	): Promise<void> {
 		const seq = ++stream.attachSeq;
+		// The channel adopted at open serves one confirming attach only.
+		const adopted = stream.resumable;
+		stream.resumable = false;
 		if (!this.#registry.get(workspaceId)) {
 			this.#sendAttachOutcome(stream, commandId, { error: `unknown session: ${workspaceId}` });
+			return;
+		}
+		// Resume: this socket already carries the browser's session channel for
+		// this session (#adoptParked judged the ring and the pair), and the ring
+		// replay at open delivered everything it missed. Nothing is primed.
+		if (
+			resume &&
+			adopted &&
+			stream.pipe !== null &&
+			!stream.pipe.closed &&
+			stream.pipe.workspaceId === workspaceId
+		) {
+			this.#sendAttachOutcome(stream, commandId, { workspaceId, resumed: true });
 			return;
 		}
 		// Re-attach (same or another session) closes the previous pipe first.
@@ -1596,6 +1651,7 @@ export class FleetEdge {
 		const connId = randomUUID();
 		const streamId = `${CALLBACK_BROWSER_STREAM_PREFIX}${connId}`;
 		const pipe: CallbackPipeState = {
+			owner: stream,
 			workspaceId,
 			connId,
 			closed: false,
@@ -1609,8 +1665,12 @@ export class FleetEdge {
 			unsubscribePair: () => {},
 		};
 		const unsubscribePair = transport.onPairChange(workspaceId, () => {
-			if (stream.pipe !== pipe || pipe.closed) return;
-			this.#sendStreamOpen(stream, pipe);
+			const owner = pipe.owner;
+			if (owner.pipe !== pipe || pipe.closed) return;
+			// A parked channel's browser is away: the new pair's priming would go to
+			// a dead socket, so let it go; the browser's next attach primes afresh.
+			if (owner.closed) this.#dropParked(owner.client);
+			else this.#sendStreamOpen(owner, pipe);
 		});
 		pipe.unsubscribePair = unsubscribePair;
 		pipe.detach = () => transport.detachVirtualStream(workspaceId, streamId);
@@ -1622,10 +1682,11 @@ export class FleetEdge {
 		this.#sendAttachOutcome(stream, commandId, { workspaceId });
 		const sink: VirtualStreamSink = {
 			deliver: (envelope, payloadJson) => {
-				if (stream.pipe !== pipe || pipe.closed) return;
-				const before = stream.enqueuedBytes;
-				this.#onCallbackEnvelope(stream, pipe, envelope, payloadJson);
-				this.#recordCredit(stream, pipe, before, envelope.seq);
+				const owner = pipe.owner;
+				if (owner.pipe !== pipe || pipe.closed) return;
+				const before = owner.enqueuedBytes;
+				this.#onCallbackEnvelope(owner, pipe, envelope, payloadJson);
+				this.#recordCredit(owner, pipe, before, envelope.seq);
 			},
 		};
 		transport.attachVirtualStream(workspaceId, streamId, sink);
@@ -2063,22 +2124,31 @@ export class FleetEdge {
 
 	/**
 	 * One live session-pipe frame as an edge-local delta: RINGED only when the
-	 * session would ring it (mirror of its RING_DELTAS, finding #5); priming
+	 * session would ring it (isRingedFrameType, finding #5); priming
 	 * frames (hello_ok, attached, history, available_commands), unicast
 	 * answers (call_result) and per-stream lifecycle (stream_reset) are
 	 * re-derivable (re-attach priming / re-sent command) and consume a seq but
 	 * no ring entry, exactly like the session's delta counter. A resuming
 	 * browser's ring replay therefore has the same deliberate gaps and is
-	 * still correct: after() returns only ringed entries newer than `after`,
-	 * and the client re-attaches on every reconnect open, re-deriving
-	 * anything the ring never held.
+	 * still correct: after() returns only ringed entries newer than `after`.
+	 * The gaps that matter are the re-prime frames (EDGE_REPRIME_FRAMES): the
+	 * seq of the last one is `client.resetSeq`, and a browser whose `after` is
+	 * below it may have missed one, so it cannot resume (#adoptParked) and
+	 * re-attaches with a priming instead. A parked channel (no socket) meeting
+	 * one is released at once for the same reason.
 	 */
 	#sendDelta(stream: BrowserStream, frame: unknown, json?: string): void {
 		const client = stream.client;
+		const type = (frame as { type?: unknown } | null)?.type;
+		const reprime = typeof type === "string" && EDGE_REPRIME_FRAMES[type] === true;
+		if (reprime && stream.closed) {
+			this.#dropParked(client);
+			return;
+		}
 		const seq = client.nextSeq++;
 		const message = seqFrameMessage(seq, json ?? JSON.stringify(frame));
-		const type = (frame as { type?: unknown } | null)?.type;
-		if (typeof type === "string" && EDGE_RING_DELTAS[type]) client.ring.push(seq, message);
+		if (typeof type === "string" && isRingedFrameType(type)) client.ring.push(seq, message);
+		else if (reprime) client.resetSeq = seq;
 		this.#send(stream, message);
 	}
 
@@ -2107,18 +2177,25 @@ export class FleetEdge {
 
 	/**
 	 * Answer an attach command (finding #28): the id-keyed attach_result
-	 * unicast the client settles its pending attach from.
+	 * unicast the client settles its pending attach from. `resumed` says the
+	 * browser's previous attachment continues (no priming follows).
 	 */
 	#sendAttachOutcome(
 		stream: BrowserStream,
 		commandId: string,
-		outcome: { workspaceId: string } | { error: string },
+		outcome: { workspaceId: string; resumed?: true } | { error: string },
 	): void {
 		this.#sendAnswer(
 			stream,
 			"error" in outcome
 				? { type: "attach_result", id: commandId, ok: false, error: outcome.error }
-				: { type: "attach_result", id: commandId, ok: true, workspaceId: outcome.workspaceId },
+				: {
+						type: "attach_result",
+						id: commandId,
+						ok: true,
+						workspaceId: outcome.workspaceId,
+						...(outcome.resumed === true ? { resumed: true } : {}),
+					},
 		);
 	}
 
@@ -2191,7 +2268,7 @@ export class FleetEdge {
 		message: string,
 		discard = false,
 	): void {
-		this.#releaseBrowser(stream);
+		this.#releaseBrowser(stream, !discard);
 		if (discard) this.#discardClient(stream.client);
 		const { code, reason } = browserCloseFor(kind, message);
 		try {
@@ -2202,24 +2279,42 @@ export class FleetEdge {
 	}
 
 	/**
-	 * The socket is gone (closed by either side, dropped, replaced): close the
-	 * pipe, forget the stream, keep the ring for resume. Idempotent.
+	 * The socket is gone (closed by either side, dropped, replaced): forget the
+	 * stream, keep the ring for resume. A named client's session channel stays
+	 * open, parked on the client, for the reclaim grace (`retain`): it keeps
+	 * feeding the ring, so the returning socket resumes from `after` without a
+	 * re-prime (see #adoptParked). Any other release closes the channel.
+	 * Idempotent.
 	 */
-	#releaseBrowser(stream: BrowserStream): void {
+	#releaseBrowser(stream: BrowserStream, retain = true): void {
 		stream.closed = true;
 		this.#browsers.delete(stream);
-		this.#closePipe(stream);
+		const client = stream.client;
 		// Identity guard (finding #25): the close of a socket already
 		// superseded by a rebind must not null the client's NEW stream.
-		if (stream.client.stream === stream) {
-			stream.client.stream = null;
-			this.#armClientReclaim(stream.client);
+		const current = client.stream === stream;
+		if (
+			retain &&
+			current &&
+			client.clientId !== null &&
+			stream.pipe !== null &&
+			!stream.pipe.closed
+		) {
+			this.#dropParked(client);
+			client.parked = stream;
+		} else {
+			this.#closePipe(stream);
+		}
+		if (current) {
+			client.stream = null;
+			this.#armClientReclaim(client);
 		}
 		if (this.#browsers.size === 0) this.#stopKeepalive();
 	}
 
 	/** Forget a client's ring at once (sign-out): its replay state belongs to the ended session. */
 	#discardClient(client: BrowserClient): void {
+		this.#dropParked(client);
 		if (client.gcTimer) {
 			clearTimeout(client.gcTimer);
 			client.gcTimer = null;
@@ -2227,6 +2322,59 @@ export class FleetEdge {
 		if (client.clientId !== null && this.#clients.get(client.clientId) === client) {
 			this.#clients.delete(client.clientId);
 		}
+	}
+
+	/** Let go of the session channel a dropped socket left parked (idempotent): the session closes the stream, and the browser's next attach primes afresh. */
+	#dropParked(client: BrowserClient): void {
+		const parked = client.parked;
+		if (parked === null) return;
+		client.parked = null;
+		this.#closePipe(parked);
+	}
+
+	/**
+	 * A returning socket for a client with a parked session channel (open, before
+	 * the ring replay): hand the channel to the new socket when the browser can
+	 * continue from it, else close it. It can when the pair is the one the channel
+	 * was opened on (same session process and generation), the ring still holds
+	 * everything after the browser's `after`, and no frame a ring cannot replay
+	 * (priming, a history resync, a stream reset) went by since that point. The
+	 * browser's re-attach (`resume`) then confirms the adoption; any other attach
+	 * closes the channel like it always did.
+	 */
+	#adoptParked(client: BrowserClient, stream: BrowserStream, after: number | null): void {
+		const parked = client.parked;
+		if (parked === null) return;
+		client.parked = null;
+		const pipe = parked.pipe;
+		const pair = pipe === null ? null : this.#transport?.pairStatus(pipe.workspaceId);
+		if (
+			pipe === null ||
+			pipe.closed ||
+			pair === null ||
+			pair === undefined ||
+			!pair.paired ||
+			pair.connectionId !== pipe.pairConnectionId ||
+			after === null ||
+			after < DELTA_SEQ_START ||
+			after < client.resetSeq ||
+			after < client.ring.evictedThrough
+		) {
+			this.#closePipe(parked);
+			return;
+		}
+		parked.pipe = null;
+		pipe.owner = stream;
+		stream.pipe = pipe;
+		stream.resumable = true;
+		// The parked socket's drain accounting died with it: whatever the session
+		// sent was consumed into the ring, so acknowledge it all and count afresh.
+		const tail = pipe.credits.at(-1);
+		if (tail !== undefined) pipe.drainedSeq = Math.max(pipe.drainedSeq, tail.seq);
+		pipe.credits = [];
+		pipe.creditHead = 0;
+		pipe.ackedDrained = 0;
+		this.#noteDrain(stream, true);
 	}
 
 	/** After a disconnect the client's ring is kept for a grace period, then reclaimed. */
@@ -2238,8 +2386,10 @@ export class FleetEdge {
 		}
 		client.gcTimer = setTimeout(() => {
 			client.gcTimer = null;
-			if (client.stream === null) this.#clients.delete(client.clientId!);
-		}, CLIENT_RECLAIM_MS);
+			if (client.stream !== null) return;
+			this.#dropParked(client);
+			this.#clients.delete(client.clientId!);
+		}, this.#reclaimMs);
 	}
 
 	/**

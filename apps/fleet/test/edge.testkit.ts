@@ -301,9 +301,9 @@ export class BrowserSocket {
 		}
 	}
 
-	/** Close the socket, like a browser tab closing. */
-	close(): void {
-		this.#ws?.close(1000, "test done");
+	/** Close the socket, like a dropped connection; `code` 1001 is a page unloading. */
+	close(code = 1000): void {
+		this.#ws?.close(code, "test done");
 	}
 
 	/** Reconnect after a drop: the highest received seq rides the new dial as `after`. */

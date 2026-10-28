@@ -875,16 +875,13 @@ describe("fleet edge", () => {
 		expect(browserB.frames.some((f) => f.type === "call_result" && f.id === "a2")).toBe(false);
 	});
 
-	test("browser close closes its pipe and leaves the other browser's pipe working", async () => {
-		// Browser close is the teardown path: the edge closes the pipe itself.
+	test("a browser close parks its pipe for a resume and leaves the other browser's pipe working", async () => {
+		// The drop keeps the session channel (the client's ring keeps feeding from
+		// it, a returning socket may adopt it); the other browser is unaffected.
 		browserA.close();
-		await waitFor(
-			() =>
-				controlsOf(remoteSession, "stream_close").some((e) => e.streamId === streamA)
-					? "closed"
-					: null,
-			5000,
-			"stream_close for closed browser",
+		await sleep(300);
+		expect(controlsOf(remoteSession, "stream_close").some((e) => e.streamId === streamA)).toBe(
+			false,
 		);
 		expect(
 			browserA.frames.some((f) => f.type === "error" && f.error === "session connection lost"),
@@ -2149,12 +2146,10 @@ describe("fleet edge", () => {
 		// stream it has open) answers B's pipe: B must not see A's answer.
 		a.close();
 		await a.end();
-		await waitFor(
-			() =>
-				controlsOf(session, "stream_close").some((e) => e.streamId === streamA) ? "closed" : null,
-			5000,
-			"A's pipe closed",
-		);
+		// The drop parks A's session channel (a returning socket may resume it);
+		// it is not closed here.
+		await sleep(150);
+		expect(controlsOf(session, "stream_close").some((e) => e.streamId === streamA)).toBe(false);
 		session.send(streamB, "frame", { type: "call_result", id: "route-1", ok: true });
 
 		// A redials as the same client with its resume point, re-attaches, and
@@ -2166,6 +2161,13 @@ describe("fleet edge", () => {
 		await a2.waitForFrame((f) => f.type === "registered_projects", "priming on the new socket");
 		const streamA2 = await attachBrowser(a2, session, row.workspaceId);
 		expect(streamA2).not.toBe(streamA);
+		// A plain attach (no `resume`) closes the channel the drop left parked.
+		await waitFor(
+			() =>
+				controlsOf(session, "stream_close").some((e) => e.streamId === streamA) ? "closed" : null,
+			5000,
+			"A's old pipe closed by the re-attach",
+		);
 		await a2.send(call);
 		expect(a2.acks).toContain("route-1");
 		await waitFor(

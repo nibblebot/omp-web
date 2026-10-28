@@ -16,8 +16,10 @@ import { batch } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import {
 	OMP_PROTO,
+	CLIENT_RING_CAP,
 	CLIENT_SILENCE_DEADLINE_MS,
 	daemonsKey,
+	isRingedFrameType,
 	isSessionScopedFrameType,
 } from "#lib/wire/protocol";
 import type {
@@ -45,6 +47,8 @@ import { featurePreferences } from "./features/preferences";
 import { clearUnread, markUnread, pruneUnread } from "./fleet-ui/unread";
 import type { UsageLike } from "./usage/usage";
 import { createHistoryBuilder } from "./chat/history-items";
+import { keepUnchangedPrefix } from "./chat/history-reconcile";
+import { SeqWindow } from "./store/seq-window";
 import { COLLAB_OFF } from "./store/slices/collab";
 import {
 	announce,
@@ -736,8 +740,10 @@ let pendingHistory: AgentMessage[] | null = null;
  * the final history chunk). Cleared on every attach and every loadHistory:
  * a frame wiped by the rebuild is legitimately re-applied by the replay, and
  * seqs restart per connection, so only the overlap within one prime is tracked.
+ * Only ringed frames are recorded (only they are ever replayed), in a window of
+ * the ring's own size: constant memory however long the connection lives.
  */
-const seenFrameSeqs = new Set<number>();
+const seenFrameSeqs = new SeqWindow(CLIENT_RING_CAP);
 
 export function loadHistory(messages: AgentMessage[]): void {
 	clearPendingDeltas();
@@ -753,7 +759,11 @@ export function loadHistory(messages: AgentMessage[]): void {
 	// store re-walk every prior item on each push: quadratic, ~400ms of main
 	// thread on a 2 MB transcript before the chat could paint.
 	const built = createHistoryBuilder(nextChatId).append(messages);
-	const items = built.items;
+	// A re-attach of the session on screen (every reconnect that cannot resume,
+	// a history resync) sends the transcript again: items that did not change
+	// keep their objects, so their cards stay mounted (a switch emptied `items` first).
+	const shown = unwrap(state.items);
+	const items = shown.length === 0 ? built.items : keepUnchangedPrefix(shown, built.items);
 	setState({
 		items,
 		live: { active: false, blocks: [], rev: 0 },
@@ -879,6 +889,13 @@ function clearSilenceTimer(): void {
 	}
 }
 
+/**
+ * The readiness the boot session held when the last socket dropped, kept for a
+ * resumed attachment (see resumeAttachment): readiness is cleared per
+ * connection, and a resume delivers no new `ready` frame.
+ */
+let readyAtBeforeDrop: number | undefined;
+
 /** Open the socket, or schedule the retry when the browser refuses the dial outright (bad URL, mixed content). */
 function dialSocket(url: string): WebSocket | null {
 	try {
@@ -925,6 +942,7 @@ function teardownSocket(ws: WebSocket, plan: ReconnectPlan, code?: number, reaso
 	setState("connected", false);
 	// Readiness is per-connection: the reconnecting socket's boot session
 	// must clear its own gate before the composer un-gates again.
+	if (state.readyAt !== undefined) readyAtBeforeDrop = state.readyAt;
 	setState("readyAt", undefined);
 	if (plan === "never") {
 		rejectPendingCalls(new Error("Disconnected"));
@@ -971,6 +989,7 @@ export function resetBrowserSocket(): void {
 	resetUplink();
 	setConnected(false);
 	lastSeq = null;
+	readyAtBeforeDrop = undefined;
 	reconnectAttempt = 0;
 	socketMessages = 0;
 	awaitingSignIn = false;
@@ -1398,6 +1417,24 @@ function armStartupGrace(): void {
 	);
 }
 
+/**
+ * The edge continued the attachment this tab had before the socket dropped
+ * (attach_result `resumed`): its ring replay delivered what was missed, and
+ * no `attached`, `history`, `state` or `ready` frame follows. The transcript,
+ * scope and session view are all still valid; only what the drop cleared
+ * per-connection is restored: the boot session's readiness, and the calls
+ * and mutations parked while no attachment was live.
+ */
+function resumeAttachment(workspaceId: string | undefined): void {
+	if (workspaceId !== state.currentWorkspaceId) return;
+	if (state.readyAt === undefined) setState("readyAt", readyAtBeforeDrop);
+	retryNotAttachedCalls();
+	resumeParkedMutations(state.sessionScope);
+	// Watchers of this attachment need no frame that will not come: it is usable now.
+	settleAttachedFrame(workspaceId);
+	settleAttachmentState();
+}
+
 export function connect(): void {
 	// Browser-only transport: without WebSocket and location there is nothing
 	// to dial. (A bun test worker has no location; a timer armed by an earlier
@@ -1450,6 +1487,8 @@ export function connect(): void {
 			// A fresh priming series starts; the replay-dedup window resets
 			// (seqs restart per connection, see seenFrameSeqs).
 			seenFrameSeqs.clear();
+			// A priming attach delivers its own `ready`; nothing to restore (see resumeAttachment).
+			readyAtBeforeDrop = undefined;
 			// Every attach starts a new attachment generation on the session side,
 			// even a re-attach of the SAME session (wake after a UI stop keeps the
 			// view, so it is not a switch). The scope of the previous generation
@@ -1582,7 +1621,9 @@ export function connect(): void {
 				// Finding #28: the edge answers attach with this id-keyed
 				// unicast; unrelated global error frames never settle the
 				// waiter. Unknown id = superseded/timed out: ignore.
-				settleAttachResult(frame);
+				if (settleAttachResult(frame) && frame.resumed === true) {
+					resumeAttachment(frame.workspaceId);
+				}
 				break;
 			case "available_commands":
 				setState("availableCommands", frame.commands);
@@ -1824,7 +1865,9 @@ export function connect(): void {
 				console.debug(`[omp-session] ignoring ${frame.type} frame`);
 				break;
 		}
-		if (frameSeq !== null && frameSeq > 0) seenFrameSeqs.add(frameSeq);
+		if (frameSeq !== null && frameSeq > 0 && isRingedFrameType(frame.type)) {
+			seenFrameSeqs.add(frameSeq);
+		}
 	};
 	ws.onopen = () => {
 		if (socket !== ws) return;
@@ -1839,9 +1882,11 @@ export function connect(): void {
 		pushDebug("info", "transport", "stream open");
 		// No boot-time calls: the fleet edge answers every call with "not
 		// attached" until the browser picks a session. The attached handler
-		// pulls getSubagents. On a RECONNECT the edge has no attach
-		// memory, so re-attach to the session we were viewing.
-		if (state.currentWorkspaceId) void attachSession(state.currentWorkspaceId).catch(() => {});
+		// pulls getSubagents. On a RECONNECT the edge has no attach memory, so
+		// re-attach to the session we were viewing; `resume` lets the edge
+		// continue the previous attachment from its ring replay when it still can.
+		if (state.currentWorkspaceId)
+			void attachSession(state.currentWorkspaceId, true).catch(() => {});
 		else refreshSettings(); // boot with no session: the fleet /ctl model backs the panel
 		// After the re-attach request, so a re-sent command that needs the
 		// attachment follows it on the wire.

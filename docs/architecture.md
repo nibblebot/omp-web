@@ -110,7 +110,7 @@ sequenceDiagram
   rect rgba(128,128,128,0.08)
   Note over B,S: Idle, drops and recovery
   S->>T: heartbeat every 15 s while idle (both directions, 30 s silence deadline)
-  Note over B,E: Socket drop: browser reconnects with<br/>after=last seq, edge replays its ring. The browser re-sends<br/>unacked commands with the same id.
+  Note over B,E: Socket drop: the edge parks the browser's session channel (60 s)<br/>and keeps ringing its deltas. The browser reconnects with after=last seq,<br/>the edge replays its ring and answers the re-attach "resumed":<br/>no history re-sent, no remount. Otherwise it primes as for a new attach.<br/>Unacked commands are re-sent with the same id.
   Note over T,S: Pair drop: session redials (backoff 1 s to 30 s).<br/>Roster shows reconnecting after 5 s. Browser streams<br/>end with "session connection lost" and re-attach.
   Note over T,S: Crash: lifecycle revokes the generation, backs off,<br/>restarts with generation + 1 and --resume
   end
