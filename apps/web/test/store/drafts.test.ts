@@ -185,3 +185,93 @@ describe("drafts (per-session partitions)", () => {
 		expect(loadDraft(a)?.text).toBe("alpha");
 	});
 });
+
+describe("drafts (incremental persistence)", () => {
+	const png = (n: number): { type: "image"; data: string; mimeType: string } => ({
+		type: "image",
+		data: `${n}`.repeat(1000),
+		mimeType: "image/png",
+	});
+	let stored: Map<string, string>;
+	let writes: string[];
+	let bytesWritten: number;
+
+	beforeEach(() => {
+		stored = new Map();
+		writes = [];
+		bytesWritten = 0;
+		setBrowserGlobal("localStorage", {
+			get length() {
+				return stored.size;
+			},
+			key: (i: number) => [...stored.keys()][i] ?? null,
+			getItem: (k: string) => stored.get(k) ?? null,
+			setItem: (k: string, v: string) => {
+				writes.push(k);
+				bytesWritten += v.length;
+				stored.set(k, v);
+			},
+			removeItem: (k: string) => void stored.delete(k),
+		} as unknown as Storage);
+	});
+
+	test("images and chips survive save and restore", () => {
+		const key = freshKey("att-roundtrip");
+		const chip: TextAttachment = { id: "a", name: "a.ts", size: 1, text: "A" };
+		const images = [png(1), png(2)];
+		saveDraft(key, { text: "look", images, files: [chip], updatedAt: 1 });
+		const restored = loadDraft(key);
+		expect(restored?.text).toBe("look");
+		expect(restored?.images).toEqual(images);
+		expect(restored?.files).toEqual([chip]);
+	});
+
+	test("typing next to attached images rewrites the text, not the attachments", () => {
+		const key = freshKey("att-typing");
+		const images = [png(1)];
+		saveDraft(key, { text: "a", images, updatedAt: 1 });
+		bytesWritten = 0;
+		for (const text of ["ab", "abc", "abcd"]) saveDraft(key, { text, images, updatedAt: 2 });
+		// The 1000-character image is not part of what typing writes.
+		expect(bytesWritten).toBeLessThan(500);
+		expect(loadDraft(key)).toMatchObject({ text: "abcd", images });
+	});
+
+	test("a save that changes nothing writes nothing", () => {
+		const key = freshKey("att-unchanged");
+		const images = [png(1)];
+		saveDraft(key, { text: "same", images, updatedAt: 1 });
+		writes.length = 0;
+		saveDraft(key, { text: "same", images: [...images], updatedAt: 2 });
+		expect(writes).toEqual([]);
+	});
+
+	test("removing the last image drops the stored attachments", () => {
+		const key = freshKey("att-removed");
+		saveDraft(key, { text: "t", images: [png(1)], updatedAt: 1 });
+		saveDraft(key, { text: "t", images: [], updatedAt: 2 });
+		expect(loadDraft(key)?.images).toEqual([]);
+		expect([...stored.keys()].filter((k) => k.endsWith("#attachments"))).toEqual([]);
+	});
+
+	test("removeDraft clears text and attachments", () => {
+		const key = freshKey("att-remove");
+		saveDraft(key, { text: "t", images: [png(1)], updatedAt: 1 });
+		removeDraft(key);
+		expect(loadDraft(key)).toBeNull();
+		expect(stored.size).toBe(0);
+		// The save memo is gone too: the same draft is written in full again.
+		saveDraft(key, { text: "t", images: [png(1)], updatedAt: 3 });
+		expect(loadDraft(key)?.images).toEqual([png(1)]);
+	});
+
+	test("a draft stored with its images inline still loads", () => {
+		const key = freshKey("att-legacy");
+		const images = [png(3)];
+		stored.set(
+			"omp-web:draft:v2:test¦att-legacy¦main¦main",
+			JSON.stringify({ text: "old", images, updatedAt: 5 }),
+		);
+		expect(loadDraft(key)).toMatchObject({ text: "old", images });
+	});
+});

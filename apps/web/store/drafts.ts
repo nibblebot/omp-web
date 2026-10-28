@@ -169,13 +169,9 @@ function sanitizeFiles(raw: unknown): TextAttachment[] {
 	});
 }
 
-function sanitizeBody(raw: unknown): DraftBody | null {
-	if (!raw || typeof raw !== "object") return null;
-	const o = raw as Record<string, unknown>;
-	if (typeof o.text !== "string") return null;
-	// Never persist credentials-looking blobs or audio payloads.
-	if (SECRET_RE.test(o.text)) return null;
-	const images = Array.isArray(o.images) ? o.images.filter(isImageArg).slice(0, 8) : [];
+/** Stored form of the images: valid ones, at most 8, within a ~2.5MB payload budget. */
+function sanitizeImages(raw: unknown): ImageArg[] {
+	const images = Array.isArray(raw) ? raw.filter(isImageArg).slice(0, 8) : [];
 	// Bound image payload (~2.5MB total) so one screenshot storm can't evict everything.
 	let bytes = 0;
 	const kept: ImageArg[] = [];
@@ -184,10 +180,26 @@ function sanitizeBody(raw: unknown): DraftBody | null {
 		if (bytes > 2_500_000) break;
 		kept.push({ type: "image", data: img.data, mimeType: img.mimeType });
 	}
+	return kept;
+}
+
+/** The draft text as stored, or null when it must never be persisted (credential-looking). */
+function sanitizeText(raw: unknown): string | null {
+	if (typeof raw !== "string") return null;
+	// Never persist credentials-looking blobs or audio payloads.
+	if (SECRET_RE.test(raw)) return null;
+	return raw.slice(0, 200_000);
+}
+
+function sanitizeBody(raw: unknown): DraftBody | null {
+	if (!raw || typeof raw !== "object") return null;
+	const o = raw as Record<string, unknown>;
+	const text = sanitizeText(o.text);
+	if (text === null) return null;
 	const files = sanitizeFiles(o.files);
 	return {
-		text: o.text.slice(0, 200_000),
-		images: kept,
+		text,
+		images: sanitizeImages(o.images),
 		...(files.length > 0 ? { files } : {}),
 		...(typeof o.selectionStart === "number" ? { selectionStart: o.selectionStart } : {}),
 		...(typeof o.selectionEnd === "number" ? { selectionEnd: o.selectionEnd } : {}),
@@ -195,28 +207,121 @@ function sanitizeBody(raw: unknown): DraftBody | null {
 	};
 }
 
+/**
+ * Storage layout of one draft: the text and selection under `draftKey`, the images and file chips (the
+ * heavy part, up to ~2.9MB) under `attachmentsKey`. Typing rewrites only the text; the attachments are
+ * written when they change. Drafts stored before the split keep their images and chips inside the main
+ * entry; `loadDraft` still reads them and the next save moves them.
+ */
+function attachmentsKey(slot: string): string {
+	return `${slot}#attachments`;
+}
+
+/** What the last successful save left in storage, so an unchanged part is not written again. One slot:
+ *  typing happens in one partition at a time, and holding more would pin old drafts' images. */
+interface SavedDraft {
+	slot: string;
+	text: string;
+	selectionStart: number | undefined;
+	selectionEnd: number | undefined;
+	/** The attachments as the composer handed them over (compared, never stored). */
+	images: readonly ImageArg[];
+	files: readonly TextAttachment[];
+	/** Images plus chips the stored attachments hold. */
+	attachmentCount: number;
+}
+
+let saved: SavedDraft | null = null;
+
+function sameImages(a: readonly ImageArg[], b: readonly ImageArg[]): boolean {
+	if (a === b) return true;
+	if (a.length !== b.length) return false;
+	return a.every((img, i) => img.data === b[i]!.data && img.mimeType === b[i]!.mimeType);
+}
+
+function sameFiles(a: readonly TextAttachment[], b: readonly TextAttachment[]): boolean {
+	if (a === b) return true;
+	if (a.length !== b.length) return false;
+	return a.every((f, i) => {
+		const o = b[i]!;
+		return (
+			f.id === o.id &&
+			f.name === o.name &&
+			f.size === o.size &&
+			f.text === o.text &&
+			f.error === o.error
+		);
+	});
+}
+
 let quotaWarned = false;
 
+function warnQuota(): void {
+	if (quotaWarned) return;
+	quotaWarned = true;
+	try {
+		storage()?.setItem(QUOTA_WARN_KEY, String(Date.now()));
+	} catch {
+		// Best-effort.
+	}
+}
+
 /** Persist the current unsent draft for its partition (called debounced by
- *  the composer). Warns once per session on quota failure. */
+ *  the composer). Writes only what changed since the last save of that
+ *  partition. Warns once per session on quota failure. */
 export function saveDraft(key: DraftKey, body: DraftBody): boolean {
-	const clean = sanitizeBody(body);
-	if (!clean) return false;
-	if (!clean.text.trim() && clean.images.length === 0 && !clean.files?.length) {
-		removeRaw(draftKey(key));
+	const slot = draftKey(key);
+	const text = sanitizeText(body.text);
+	if (text === null) return false;
+	const files = body.files ?? [];
+	const prev = saved?.slot === slot ? saved : null;
+	const attachmentsChanged =
+		prev === null || !sameImages(prev.images, body.images) || !sameFiles(prev.files, files);
+	const stored = attachmentsChanged
+		? { images: sanitizeImages(body.images), files: sanitizeFiles(files) }
+		: null;
+	const attachmentCount = stored
+		? stored.images.length + stored.files.length
+		: prev!.attachmentCount;
+	if (!text.trim() && attachmentCount === 0) {
+		removeDraft(key);
 		return true;
 	}
-	if (!writeRaw(draftKey(key), JSON.stringify(clean))) {
-		if (!quotaWarned) {
-			quotaWarned = true;
-			try {
-				storage()?.setItem(QUOTA_WARN_KEY, String(Date.now()));
-			} catch {
-				// Best-effort.
-			}
-		}
+	let ok = true;
+	if (stored) {
+		if (attachmentCount === 0) removeRaw(attachmentsKey(slot));
+		else ok = writeRaw(attachmentsKey(slot), JSON.stringify(stored));
+	}
+	if (
+		ok &&
+		(prev === null ||
+			prev.text !== text ||
+			prev.selectionStart !== body.selectionStart ||
+			prev.selectionEnd !== body.selectionEnd)
+	) {
+		const main = {
+			text,
+			...(typeof body.selectionStart === "number" ? { selectionStart: body.selectionStart } : {}),
+			...(typeof body.selectionEnd === "number" ? { selectionEnd: body.selectionEnd } : {}),
+			updatedAt: body.updatedAt,
+		};
+		ok = writeRaw(slot, JSON.stringify(main));
+	}
+	if (!ok) {
+		// Unknown what landed: the next save writes everything again.
+		saved = null;
+		warnQuota();
 		return false;
 	}
+	saved = {
+		slot,
+		text,
+		selectionStart: body.selectionStart,
+		selectionEnd: body.selectionEnd,
+		images: body.images,
+		files,
+		attachmentCount,
+	};
 	return true;
 }
 
@@ -225,10 +330,18 @@ export function saveDraft(key: DraftKey, body: DraftBody): boolean {
  *  otherwise keep eating the quota live drafts need. */
 export function loadDraft(key: DraftKey): DraftBody | null {
 	dropLegacyClearedRings();
-	const raw = readRaw(draftKey(key));
+	const slot = draftKey(key);
+	const raw = readRaw(slot);
 	if (!raw) return null;
 	try {
-		return sanitizeBody(JSON.parse(raw));
+		const main = JSON.parse(raw) as Record<string, unknown>;
+		const attachments = readRaw(attachmentsKey(slot));
+		if (attachments && main && typeof main === "object") {
+			const parsed = JSON.parse(attachments) as { images?: unknown; files?: unknown };
+			main.images ??= parsed.images;
+			main.files ??= parsed.files;
+		}
+		return sanitizeBody(main);
 	} catch {
 		return null;
 	}
@@ -268,7 +381,10 @@ export function cancelScheduledDraftSave(key: DraftKey): void {
 /** Delete the live slot (sent: nothing is kept). Pair with
  *  `cancelScheduledDraftSave` on the submit path. */
 export function removeDraft(key: DraftKey): void {
-	removeRaw(draftKey(key));
+	const slot = draftKey(key);
+	removeRaw(slot);
+	removeRaw(attachmentsKey(slot));
+	if (saved?.slot === slot) saved = null;
 }
 
 /** Partition changed (session/branch/agent/focus switch): stash the leaving

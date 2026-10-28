@@ -9,6 +9,26 @@ const WORD_TIMEOUT_MS = 5_000;
 /** Mirrors the session-side prediction deadline (15 s) plus transport slack. */
 const NEXT_TIMEOUT_MS = 20_000;
 
+/**
+ * Longest stretch of the draft's end sent with a word-prediction call. The engine reads only the last
+ * ~2 000 characters before the word; shipping a large pasted draft whole on every pause (and again as
+ * feedback) put the full text on the socket twice per pause. Drafts at or under this go whole.
+ */
+export const WORD_CONTEXT_CHARS = 32_000;
+/** How far past the cut a line start may be and still replace it, so the window never collapses to a last line. */
+const WORD_CONTEXT_LINE_SLACK = 2_000;
+
+/** The `[text, cursor]` of a word-prediction call for a caret at the end of `draft`: its tail, starting at a line start when one is near the cut. */
+export function wordQueryArgs(draft: string): [string, number] {
+	if (draft.length <= WORD_CONTEXT_CHARS) return [draft, draft.length];
+	let start = draft.length - WORD_CONTEXT_CHARS;
+	const lineStart = draft.indexOf("\n", start);
+	if (lineStart >= 0 && lineStart - start < WORD_CONTEXT_LINE_SLACK) start = lineStart + 1;
+	else if (draft.charCodeAt(start) >= 0xdc00 && draft.charCodeAt(start) <= 0xdfff) start++;
+	const tail = draft.slice(start);
+	return [tail, tail.length];
+}
+
 /** A `spelling.autocomplete` suffix for the draft `at`, shown at the caret end. */
 interface WordGhost {
 	at: string;
@@ -26,7 +46,7 @@ export interface GhostText {
 
 /** Best-effort feedback to the session's word predictor; no UI depends on it. */
 function sendWordFeedback(ghost: WordGhost, accepted: boolean): void {
-	void call("predictWordFeedback", [ghost.at, ghost.at.length, ghost.suffix, accepted]).catch(
+	void call("predictWordFeedback", [...wordQueryArgs(ghost.at), ghost.suffix, accepted]).catch(
 		() => {
 			// Feedback is advisory: losing one sample only skews future ranking.
 		},
@@ -94,7 +114,7 @@ export function useGhostText(
 		setNextMessage(null);
 		if (!end || draft === "" || mode === "off" || state.streaming) return;
 		wordTimer = window.setTimeout(() => {
-			void call("predictWord", [draft, draft.length], WORD_TIMEOUT_MS)
+			void call("predictWord", wordQueryArgs(draft), WORD_TIMEOUT_MS)
 				.then((reply) => {
 					const suffix = suffixOf(reply);
 					if (seq !== wordSeq || suffix === "") return;
