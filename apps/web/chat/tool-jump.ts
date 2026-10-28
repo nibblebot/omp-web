@@ -23,6 +23,25 @@ function findCard(toolCallId: string): HTMLElement | null {
 	return document.querySelector<HTMLElement>(`[data-tool-call-id="${CSS.escape(toolCallId)}"]`);
 }
 
+/** Frames a freshly mounted card gets to settle before the jump stops following it. */
+const SETTLE_FRAMES = 12;
+
+/**
+ * Cards a reveal just mounted lay out at estimated heights until they render, so the
+ * card can drift off screen after the first scroll: bring it back while it does.
+ */
+function keepInView(card: HTMLElement): void {
+	let frames = 0;
+	const step = () => {
+		if (!card.isConnected || ++frames > SETTLE_FRAMES) return;
+		const rect = card.getBoundingClientRect();
+		if (rect.bottom <= 0 || rect.top >= window.innerHeight)
+			card.scrollIntoView({ block: "center" });
+		requestAnimationFrame(step);
+	};
+	requestAnimationFrame(step);
+}
+
 /** Scroll the card of `toolCallId` into view and flash it. False when no stream holds such a card. */
 export function jumpToToolCard(toolCallId: string): boolean {
 	let card = findCard(toolCallId);
@@ -30,7 +49,10 @@ export function jumpToToolCard(toolCallId: string): boolean {
 		for (const reveal of revealers) {
 			if (!reveal(toolCallId)) continue;
 			card = findCard(toolCallId);
-			if (card) break;
+			if (card) {
+				keepInView(card);
+				break;
+			}
 		}
 	}
 	if (!card) return false;

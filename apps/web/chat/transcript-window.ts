@@ -19,9 +19,9 @@ import { unwrap } from "solid-js/store";
 import type { ChatItem } from "../state";
 
 /** Items mounted when a transcript opens, and kept while the stream follows its tail. */
-export const WINDOW_INITIAL = 60;
+export const WINDOW_INITIAL = 30;
 /** Items one `showEarlier` adds. */
-export const WINDOW_CHUNK = 40;
+export const WINDOW_CHUNK = 30;
 
 export interface TranscriptWindow {
 	/** The mounted items, oldest first. The same array every time, rewritten in place. */
@@ -30,7 +30,7 @@ export interface TranscriptWindow {
 	hiddenBefore: Accessor<number>;
 	/** Mount `count` more items above the first; false when none are left. */
 	showEarlier(count?: number): boolean;
-	/** Mount the first item `match` finds, newest first; false when there is none. */
+	/** Mount the newest item `match` accepts, with a chunk of older ones above it; false when there is none. */
 	reveal(match: (item: ChatItem) => boolean): boolean;
 }
 
@@ -139,7 +139,8 @@ export function createTranscriptWindow(
 			if (index < 0) return false;
 			if (index >= first) return true;
 			held = true;
-			first = startFor(raw, index);
+			// With a chunk above it, so the card can be scrolled to the middle of the screen.
+			first = startFor(raw, index - WINDOW_CHUNK);
 			touch((n) => n + 1);
 			return true;
 		},
