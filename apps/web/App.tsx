@@ -108,15 +108,25 @@ const AnalysisMode: Component = () => {
 	);
 };
 
-export const App: Component = () => {
+/**
+ * Everything the page asks of the fleet at boot: dial the browser socket,
+ * mirror auth snapshots into state (the sign-in modal opens on signedOut) and
+ * probe the session (404 means disabled), and fetch the fleet theme list
+ * (built-ins plus custom files; installing its stylesheet re-applies the
+ * stored selection). None of it needs a component, so index.tsx starts it
+ * before the first render and mounts `<App booted />`; any other host mounts
+ * `<App />` and App starts it on mount.
+ */
+export function startBoot(): void {
+	connect();
+	initAuth();
+	bootAuth();
+	void reloadThemes();
+}
+
+export const App: Component<{ booted?: boolean }> = (props) => {
 	onMount(() => {
-		connect();
-		// Browser-auth: mirror auth snapshots into state + open the sign-in
-		// modal on signedOut; then probe the session (404 → disabled).
-		initAuth();
-		bootAuth();
-		// Fleet theme list (built-ins plus custom files); installing its stylesheet re-applies the stored selection.
-		void reloadThemes();
+		if (!props.booted) startBoot();
 		// Back/Forward and pasted hash links reattach the session the hash names.
 		window.addEventListener("hashchange", onHashChange);
 		onCleanup(() => window.removeEventListener("hashchange", onHashChange));

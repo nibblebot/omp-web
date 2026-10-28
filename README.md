@@ -65,6 +65,7 @@ Kubernetes ingress-nginx passes the upgrade by itself; raise its timeouts and bo
 - **Pass the WebSocket upgrade** on `/ws`: forward the `Upgrade: websocket` and `Connection: Upgrade` request headers, speak HTTP/1.1 to the upstream, and forward the `Cookie`, `Origin` and `X-Forwarded-For` request headers (the session cookie and the Origin check authenticate the upgrade). A proxy that strips `Upgrade` answers with a plain HTTP response and the page never connects; its network tab shows a failed WebSocket handshake on `/ws`.
 - **Tolerate idle time.** The server sends a keepalive message every 15 s (`CLIENT_KEEPALIVE_MS`) and the page closes the socket after 30 s without any message (`CLIENT_SILENCE_DEADLINE_MS`), so the socket is never silent for more than about 15 s. Set the proxy's read, send and idle timeouts for this route above 30 s (60 s or more is a safe margin); a shorter idle timeout drops the socket on every quiet period and the page reconnects with backoff.
 - **Pass messages up to about 32 MiB** from the browser (`BROWSER_SOCKET_MAX_PAYLOAD_BYTES`: the largest command plus its envelope) without a lower frame or message size cap, and **not buffer the upstream's messages**: the control plane drops a browser that stops reading for 30 s (close 4503), and a proxy that buffers its upstream hides a stalled browser from that rule.
+- **Pass the UI's caching and compression headers through.** The fleet serves hashed `/assets/*` as `Cache-Control: public, max-age=31536000, immutable`, `index.html` and the other unhashed files as `no-cache` with an `ETag` (a reload revalidates and gets `304`), and picks a build-time Brotli or gzip copy of each file by `Accept-Encoding` (`Vary: Accept-Encoding`). `/ctl` JSON over 1 KiB is gzipped for clients that accept it. A proxy that rewrites or drops `Cache-Control`, `ETag`, `Vary` or `Content-Encoding`, or that sends the upstream no `Accept-Encoding`, makes every load download the whole bundle uncompressed (about 1.2 MB instead of about 270 KB).
 
 nginx, in front of the control plane or the UI listener:
 
@@ -193,7 +194,7 @@ A **host clone** gets the same private volume, checkout, home, callback handoff,
 
 ## Optional features
 
-The web UI's optional features can be turned on or off per browser in **Settings > Features**. A feature that is off is never downloaded: its code loads only when it is enabled.
+The web UI's optional features can be turned on or off per browser in **Settings > Features**. A feature that is off is never downloaded: its code loads only when it is enabled. Features that default to on (Plugins, Debug Sheet) load in the background after the page has rendered, and their chunks are fetched alongside the app entry unless this browser turned them off.
 
 - Choices are stored in this browser's local storage (`omp.features`), not in `config.json`. A change loads or unloads its feature at once, without a reload; the attached session, draft, and open sheets are kept.
 - The panel shows each feature's size (gzip and raw) and the total you load: the core plus the enabled features. Sizes come from the production build's `feature-sizes.json`; development builds do not produce it and show no sizes.

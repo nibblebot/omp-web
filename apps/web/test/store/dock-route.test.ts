@@ -7,7 +7,7 @@
  * workspace's saved dock without the route sync clobbering it.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import type { ClientCommand, RosterEntry } from "#lib/wire/protocol";
+import type { ClientCommand, RosterEntry, WebSessionState } from "#lib/wire/protocol";
 import { connect, setState, state } from "../../state";
 import { onHashChange, restoreInitialRoute, syncRouteToAttached } from "../../store/deep-link";
 import { defaultActivitiesLayout, persistDockLayout } from "../../prefs/dock-layout";
@@ -185,10 +185,18 @@ describe("switching to another workspace", () => {
 	test("a route that carries an item overrides the saved dock and opens it in the target's saved mode", async () => {
 		seedLayout("d2", { kind: "review" }, "detail");
 		await navigate("#/w/d2/s/s2/activities/subagent/a1");
+		await settleAttach("d2");
+		// The process is on another session than the route names, so the sessions are listed.
+		dispatch({
+			type: "state",
+			state: {
+				sessionId: "s-other",
+				sessionScope: { workspaceId: "d2", sessionId: "s-other", generation: "1" },
+			} as WebSessionState,
+		});
 		const list = await untilPosted((c) => c.type === "list_workspace_sessions");
 		expect(list).toMatchObject({ workspaceId: "d2" });
 		settleWorkspaceSessions("d2", [{ id: "s2", path: "/sessions/s2.jsonl" } as never]);
-		await settleAttach("d2");
 		const sw = await untilPosted((c) => c.type === "call" && c.method === "switchSession");
 		if (sw.type !== "call") throw new Error("switchSession was not a call");
 		dispatch(callResult(sw.id, undefined));

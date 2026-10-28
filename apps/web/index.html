@@ -58,9 +58,59 @@
 					if (bg && rule.indexOf("--bg:" + bg + ";") === -1) bg = null;
 				}
 				root.style.background = bg || FALLBACK_BG[scheme];
+				// The boot shell below shows the docked sidebar unless the user collapsed it (state.ts, SIDEBAR_KEY).
+				try {
+					if (localStorage.getItem("omp.sidebarVisible") === "false") root.dataset.bootSidebar = "closed";
+				} catch (e) {
+					// storage unavailable: shell shows the sidebar
+				}
 			})();
 		</script>
-		<div id="root"></div>
+		<!-- Boot shell: painted as soon as the stylesheet arrives, before the entry
+		     chunk runs. index.tsx clears #root right before the app renders, so
+		     nothing here needs cleanup. Classes come from the global stylesheet;
+		     mirrors the docked sidebar and the main header (app.css, .boot-shell). -->
+		<div id="root">
+			<div class="app boot-shell" role="status" aria-label="Loading omp web">
+				<div class="app-body">
+					<aside class="sidebar open">
+						<div class="sidebar-panel">
+							<div class="sidebar-header">
+								<span class="sidebar-wordmark">
+									<svg class="icon" width="18" height="18" viewBox="0 0 64 64" aria-hidden="true">
+										<defs>
+											<clipPath id="omp-boot-logo-clip"><rect width="64" height="64" rx="14" /></clipPath>
+										</defs>
+										<rect class="omp-web-logo-tile" width="64" height="64" rx="14" />
+										<g clip-path="url(#omp-boot-logo-clip)">
+											<circle cx="14" cy="16" r="7.5" fill="#f2b84b" />
+											<path class="omp-web-logo-base" transform="translate(-8 21)" d="M-4 44C12 44 20 33 24 25C30 11 44 4 54 12C63 20 58 35 42 38C52 33 54 27 49 23C43 18 36 23 33 32C29 43 20 53 -4 59Z" />
+											<path transform="translate(-4 10.5)" fill="#ec8a2f" d="M-4 44C12 44 20 33 24 25C30 11 44 4 54 12C63 20 58 35 42 38C52 33 54 27 49 23C43 18 36 23 33 32C29 43 20 53 -4 59Z" />
+											<path fill="#c4552d" d="M-4 44C12 44 20 33 24 25C30 11 44 4 54 12C63 20 58 35 42 38C52 33 54 27 49 23C43 18 36 23 33 32C29 43 20 53 -4 59Z" />
+										</g>
+									</svg>
+									<span class="sidebar-wordmark-text">omp-web</span>
+								</span>
+							</div>
+							<div class="sidebar-list boot-shell-rows">
+								<span class="chat-skeleton-line"></span>
+								<span class="chat-skeleton-line chat-skeleton-line--medium"></span>
+								<span class="chat-skeleton-line"></span>
+								<span class="chat-skeleton-line chat-skeleton-line--short"></span>
+							</div>
+						</div>
+					</aside>
+					<div class="main-pane">
+						<header class="main-header"></header>
+						<main class="app-main boot-shell-rows">
+							<span class="chat-skeleton-line chat-skeleton-line--medium"></span>
+							<span class="chat-skeleton-line"></span>
+							<span class="chat-skeleton-line chat-skeleton-line--short"></span>
+						</main>
+					</div>
+				</div>
+			</div>
+		</div>
 		<script type="module" src="/index.tsx"></script>
 	</body>
 </html>

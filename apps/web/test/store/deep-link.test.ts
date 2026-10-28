@@ -5,12 +5,13 @@
  * session" and forced a re-pick from the resume list after a reload).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { ClientCommand, RosterEntry } from "#lib/wire/protocol";
+import type { ClientCommand, RosterEntry, WebSessionState } from "#lib/wire/protocol";
 import { connect, setState } from "../../state";
-import { restoreInitialRoute } from "../../store/deep-link";
+import type * as DeepLink from "../../store/deep-link";
 import { settleWorkspaceSessions } from "../../store/roster";
 import {
 	FakeWebSocket,
+	attached,
 	callResult,
 	dispatch,
 	flushMicrotasks,
@@ -25,6 +26,10 @@ type AttachCommand = Extract<ClientCommand, { type: "attach" }>;
 
 const written: string[] = [];
 
+// The initial restore runs once per module load, so each test loads a fresh copy.
+let restoreInitialRoute: typeof DeepLink.restoreInitialRoute;
+let loads = 0;
+
 /** Yield microtasks until a matching command is posted. Bounded; no timers. */
 async function untilPosted(
 	match: (c: (typeof posted)[number]) => boolean,
@@ -37,7 +42,9 @@ async function untilPosted(
 	throw new Error("expected command was not posted");
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+	const path: string = `../../store/deep-link.ts?fresh=${++loads}`;
+	({ restoreInitialRoute } = (await import(path)) as typeof DeepLink);
 	installTransportStubs();
 	installLocalStorageShim();
 	written.length = 0;
@@ -66,26 +73,42 @@ afterEach(() => {
 	restoreBrowserGlobals();
 });
 
+/** Answer the attach the restore posts and deliver the frames a live session process sends for it. */
+async function answerAttach(sessionId: string): Promise<void> {
+	const attach = await untilPosted((c): c is AttachCommand => c.type === "attach");
+	if (attach.type !== "attach") throw new Error("no attach command was posted");
+	expect(attach.workspaceId).toBe("d1");
+	dispatch({ type: "attach_result", id: attach.id, ok: true, workspaceId: "d1" });
+	dispatch(attached("d1"));
+	dispatch({
+		type: "state",
+		state: {
+			sessionId,
+			sessionScope: { workspaceId: "d1", sessionId, generation: "1" },
+		} as WebSessionState,
+	});
+	await flushMicrotasks();
+}
+
 describe("reload on a session hash", () => {
-	test("reattaches the hashed session and keeps the session route", async () => {
+	test("attaches the live process without listing its sessions when it is on the hashed session", async () => {
 		restoreInitialRoute();
-		await flushMicrotasks();
-		const list = posted.find((c) => c.type === "list_workspace_sessions");
+		await answerAttach("s1");
+		// Drain the restore chain before afterEach restores location.
+		for (let i = 0; i < 10; i++) await flushMicrotasks();
+
+		expect(posted.some((c) => c.type === "list_workspace_sessions")).toBe(false);
+		expect(posted.some((c) => c.type === "call" && c.method === "switchSession")).toBe(false);
+		expect(written.filter((url) => url.endsWith("#/w/d1"))).toEqual([]);
+	});
+
+	test("lists the sessions and switches when the live process is on another session", async () => {
+		restoreInitialRoute();
+		await answerAttach("other");
+		const list = await untilPosted((c) => c.type === "list_workspace_sessions");
 		expect(list).toMatchObject({ workspaceId: "d1" });
 
 		settleWorkspaceSessions("d1", [{ id: "s1", path: "/sessions/app/s1.jsonl" } as never]);
-		await flushMicrotasks();
-		await flushMicrotasks();
-
-		const attach = posted.find((c): c is AttachCommand => c.type === "attach");
-		expect(attach?.workspaceId).toBe("d1");
-		if (attach === undefined) throw new Error("no attach command was posted");
-		dispatch({ type: "attach_result", id: attach.id, ok: true, workspaceId: "d1" });
-		await flushMicrotasks();
-		// Attaching the session file re-attaches the session: answer that second attach too.
-		const second = await untilPosted((c) => c.type === "attach" && c.id !== attach.id);
-		if (second.type !== "attach") throw new Error("second attach was not an attach");
-		dispatch({ type: "attach_result", id: second.id, ok: true, workspaceId: "d1" });
 		const sw = await untilPosted((c) => c.type === "call" && c.method === "switchSession");
 		if (sw.type !== "call") throw new Error("switchSession was not a call");
 		dispatch(callResult(sw.id, undefined));

@@ -14,6 +14,7 @@ import { applyActivitiesRoute } from "./activities";
 import { applyRouteDock, closeDock } from "./dock";
 import { requestWorkspaceSessions, resumeSession, setView, switchToSession } from "./roster";
 import { pushToast } from "./toasts";
+import { watchAttachment } from "./transport";
 import { isUserStopped } from "./user-stopped";
 
 /** Route restores in flight. While any runs, the attached session does not write the hash: the restore owns it. */
@@ -70,6 +71,18 @@ async function attachWorkspace(workspaceId: string): Promise<void> {
 
 async function attachSessionRoute(workspaceId: string, sessionId: string): Promise<void> {
 	if (state.currentWorkspaceId === workspaceId && state.sessionId === sessionId) return;
+	// A live session process is nearly always still on the route's session (a reload),
+	// so attach first and let its own state frame answer. The session list (a cold
+	// directory scan in the fleet) is asked only when the route names another session.
+	if (
+		state.sessionRoster.find((d) => d.workspaceId === workspaceId)?.status !== "asleep" &&
+		state.currentWorkspaceId !== workspaceId &&
+		!isUserStopped(workspaceId)
+	) {
+		const attachment = watchAttachment(workspaceId);
+		await attachWorkspace(workspaceId);
+		if ((await attachment.done()) && state.sessionId === sessionId) return;
+	}
 	const match = (await requestWorkspaceSessions(workspaceId)).find((s) => s.id === sessionId);
 	if (match === undefined) {
 		pushToast("That session is no longer available in this session process.");

@@ -25,12 +25,15 @@ export interface FeatureSizeManifest {
 	features: Partial<Record<FeatureId, string[]>>;
 }
 
-const DEFAULT_FEATURES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "features");
+export const DEFAULT_FEATURES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "features");
 
 const FEATURE_ENTRY = /^(?<id>[^./\\]+)\.tsx?$/;
 
 /** The feature whose entry module (`<featuresDir>/<id>.ts|tsx`) is `moduleId`, if any. */
-function featureOfEntry(moduleId: string | null, featuresDir: string): FeatureId | undefined {
+export function featureOfEntry(
+	moduleId: string | null,
+	featuresDir: string,
+): FeatureId | undefined {
 	if (moduleId === null) return undefined;
 	const path = moduleId.split("?")[0]?.split("\\").join("/") ?? "";
 	if (dirname(path) !== featuresDir.split("\\").join("/")) return undefined;
@@ -39,7 +42,7 @@ function featureOfEntry(moduleId: string | null, featuresDir: string): FeatureId
 }
 
 /** Walk the chunk graph from `roots` over static imports, imported CSS, and (optionally) dynamic imports, never entering `stop`. */
-function reach(
+export function reach(
 	bundle: Rollup.OutputBundle,
 	roots: readonly string[],
 	stop: ReadonlySet<string>,
