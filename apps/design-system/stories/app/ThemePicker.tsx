@@ -19,7 +19,7 @@ export default defineStory({
 		{
 			name: "Linked",
 			description:
-				"One row per theme, split into a dark and a light half that each paint in their own colors. Gruvbox is a modified built-in; Dusk Terminal has only a dark variant (picking it unlinks). The selected row has the accent outline and a check; the half in use says so.",
+				"One row per theme, split into a dark and a light half that each paint in their own colors. Gruvbox is a modified built-in; Dusk Terminal has only a dark variant (picking it unlinks). The selected row has the accent outline and a check.",
 			seed: () => seedThemes(),
 			render: () => (
 				<Panel>

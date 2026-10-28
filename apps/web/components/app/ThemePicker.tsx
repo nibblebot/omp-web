@@ -58,15 +58,11 @@ const OptionHalf: Component<{
 	entry: ThemeEntry;
 	scheme: ThemeScheme;
 	showModified: boolean;
-	inUse: boolean;
 }> = (props) => (
 	<span class="theme-half" data-theme-variant={themeVariantKey(props.entry.id, props.scheme)}>
 		<span class="theme-half-name">{props.entry.name}</span>
 		<span class="theme-half-meta">
-			<span class="theme-half-scheme">
-				{SCHEME_LABEL[props.scheme]}
-				<Show when={props.inUse}> · in use</Show>
-			</span>
+			<span class="theme-half-scheme">{SCHEME_LABEL[props.scheme]}</span>
 			<span class="theme-half-strip">
 				<span class="theme-chip theme-chip-accent" />
 				<span class="theme-chip theme-chip-success" />
@@ -306,7 +302,6 @@ export const ThemePicker: Component<{
 													entry={option.entry}
 													scheme={scheme}
 													showModified={half() === 0}
-													inUse={rowScheme() === scheme}
 												/>
 											)}
 										</For>
