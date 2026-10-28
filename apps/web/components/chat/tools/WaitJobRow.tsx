@@ -1,14 +1,17 @@
-import { createResource, Show, type Component } from "solid-js";
+import { createMemo, createResource, Show, type Component } from "solid-js";
 import type { WireJobWidgetView, WireWaitJob } from "#lib/wire/protocol";
+import { completionTitle } from "../../../activities/completion";
 import { jobWidgetGlance } from "../../../chat/job-widget";
 import { jobTitle } from "../../../chat/wait-details";
 import { jobElapsedMs, type RunJob } from "../../../chat/wait-runs";
 import { jobWidgetView } from "../../../store/job-widgets";
 import { openActivities } from "../../../store/activities";
 import { fetchJobDetail } from "../../../store/jobs";
+import { subagentEstimate } from "../../../store/subagents";
 import { formatDuration } from "../../../subagents/format";
 import { JobTypeIcon } from "../../jobs/JobTypeIcon";
 import { JobWidget, JobWidgetGlance } from "../../jobs/JobWidget";
+import { CompletionRing } from "../../ui/CompletionRing";
 import { ArrowUpIcon, ChevronRightIcon } from "../../ui/icons";
 
 /** Lines of a job's output the expanded row keeps (the tail). */
@@ -19,36 +22,6 @@ const STATUS_GLYPH: Record<WireWaitJob["status"], string> = {
 	completed: "\u2713",
 	failed: "\u2715",
 	cancelled: "\u25a0",
-};
-
-/** Ring fill bands (0 to 4): the ring shifts from the accent toward the success color as the estimate grows. */
-const ringBand = (percent: number): number => Math.min(4, Math.floor(percent / 25));
-
-const RING_RADIUS = 8;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-
-/** A subagent's own completion estimate, as a ring. */
-const CompletionRing: Component<{ percent: number }> = (props) => {
-	const percent = () => Math.max(0, Math.min(100, Math.round(props.percent)));
-	return (
-		<svg
-			class="wait-job-ring"
-			viewBox="0 0 20 20"
-			role="img"
-			aria-label={`Completion estimate ${percent()}%`}
-			data-band={ringBand(percent())}
-		>
-			<title>{`The agent's own completion estimate: ${percent()}%`}</title>
-			<circle class="wait-job-ring-track" cx="10" cy="10" r={RING_RADIUS} />
-			<circle
-				class="wait-job-ring-fill"
-				cx="10"
-				cy="10"
-				r={RING_RADIUS}
-				stroke-dasharray={`${(RING_CIRCUMFERENCE * percent()) / 100} ${RING_CIRCUMFERENCE}`}
-			/>
-		</svg>
-	);
 };
 
 /** The job's kind as a small icon, with its name for screen readers and a tooltip. */
@@ -153,9 +126,17 @@ export const WaitJobRow: Component<{
 		if (job().status === "running") return view;
 		return view?.state === "live" && jobWidgetGlance(view) !== undefined ? view : undefined;
 	};
+	// A running task job's estimate: the wait tool's own when the SDK probes it (an
+	// interactive host), else the one the session lays on the agent's live progress
+	// (a task job is registered under its agent's id).
+	const estimate = createMemo(() =>
+		job().type === "task" && job().status === "running" ? subagentEstimate(job().id) : undefined,
+	);
+	const completion = () => job().completionPercent ?? estimate()?.percent;
+	const stage = () => job().stage ?? estimate()?.stage;
 	const note = () => {
 		const label = job().type === "task" ? (job().label.split(/\r?\n/, 1)[0]?.trim() ?? "") : "";
-		return job().stage ?? label;
+		return stage() ?? label;
 	};
 	const failure = () =>
 		job().exitCode !== undefined && job().exitCode !== 0 ? `exit ${job().exitCode}` : undefined;
@@ -189,8 +170,11 @@ export const WaitJobRow: Component<{
 							</span>
 						)}
 					</Show>
-					<Show when={job().completionPercent !== undefined}>
-						<CompletionRing percent={job().completionPercent ?? 0} />
+					<Show when={completion() !== undefined}>
+						<CompletionRing
+							percent={completion() ?? 0}
+							title={completionTitle(completion() ?? 0, stage())}
+						/>
 					</Show>
 					<Show when={failure()}>
 						<span class="wait-job-failure">{failure()}</span>

@@ -104,9 +104,8 @@ import { createJobMethods } from "./job-methods";
 import { createMcpMethods } from "./mcp-methods";
 import { createSkillMethods } from "./skill-methods";
 import { broadcast, broadcastHistory, broadcastTo } from "./client-delivery";
-import { clearSubagents, readSubagentTranscript } from "./subagent-mirror";
+import { clearSubagents, readSubagentTranscript, subagentProgressFields } from "./subagent-mirror";
 import { readSubagentImage } from "./subagent-image";
-import { projectProgress } from "./subagent-progress";
 import {
 	createGraphModelHandlers,
 	type GraphNavigateOptions,
@@ -830,7 +829,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 					status: snap.status ?? ref?.status,
 					lastUpdate: snap.lastUpdate,
 					sessionFile: snap.sessionFile ?? ref?.sessionFile,
-					progress: snap.progress === undefined ? undefined : projectProgress(snap.progress),
+					progress:
+						snap.progress === undefined ? undefined : subagentProgressFields(entry, snap.progress),
 				};
 			});
 		},

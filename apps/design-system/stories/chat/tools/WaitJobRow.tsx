@@ -81,7 +81,7 @@ export default defineStory({
 		{
 			name: "Running subagent",
 			description:
-				"Status dot (pulsing: its call is live), type icon, title, the agent's stage, completion ring and clock. Click the row to open it.",
+				"Status dot (pulsing: its call is live), type icon, title, the agent's stage, completion ring and clock. Hover the ring for the stage and estimate. Click the row to open it.",
 			seed: () => answerCalls({ getJobDetail: () => structuredClone(waitJobDetail) }),
 			render: () => (
 				<div class="ds-frame">

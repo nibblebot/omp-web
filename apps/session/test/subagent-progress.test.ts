@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentProgress, SubagentProgressPayload } from "@oh-my-pi/pi-coding-agent/task";
-import type { SubagentProgressFrame } from "#lib/wire/protocol";
+import type { SubagentProgressFields, SubagentProgressFrame } from "#lib/wire/protocol";
 import {
 	createProgressCoalescer,
 	projectProgress,
@@ -31,7 +31,7 @@ function update(
  */
 type FakeTimer = { at: number; run: () => void };
 
-function harness() {
+function harness(project?: (p: AgentProgress) => SubagentProgressFields) {
 	let clock = 0;
 	const frames: SubagentProgressFrame[] = [];
 	const pending: FakeTimer[] = [];
@@ -48,6 +48,7 @@ function harness() {
 			if (handle === undefined) return;
 			inert.add(handle as unknown as FakeTimer);
 		},
+		project,
 	});
 	return {
 		frames,
@@ -93,6 +94,28 @@ describe("createProgressCoalescer", () => {
 			currentTool: "bash",
 			tokens: 10,
 		});
+		coalescer.dropAll();
+	});
+
+	test("reproject re-sends the last progress when only its projection changed", () => {
+		let percent: number | undefined;
+		const { frames, coalescer, advance } = harness((p) => ({
+			...projectProgress(p),
+			...(percent !== undefined ? { completionPercent: percent } : {}),
+		}));
+		coalescer.offer(update({ tokens: 10 }));
+		percent = 40;
+		coalescer.reproject("Owl");
+		expect(frames).toHaveLength(1);
+		advance(SUBAGENT_PROGRESS_INTERVAL_MS);
+		expect(frames).toHaveLength(2);
+		expect(frames[1]).toMatchObject({
+			delta: true,
+			progress: { id: "Owl", completionPercent: 40 },
+		});
+		coalescer.reproject("Owl");
+		advance(SUBAGENT_PROGRESS_INTERVAL_MS);
+		expect(frames).toHaveLength(2);
 		coalescer.dropAll();
 	});
 

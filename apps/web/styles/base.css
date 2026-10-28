@@ -133,6 +133,40 @@ button:not(:disabled):not(.active):hover {
 summary.card-header {
 	cursor: pointer;
 }
+
+/* CompletionRing primitive (components/ui/CompletionRing.tsx): an agent's own
+   completion estimate. The fill is a 100-unit dash (pathLength) so the offset is
+   the unfilled share; it shifts from the accent to the success color by band. */
+.completion-ring {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	transform: rotate(-90deg);
+}
+.completion-ring-track,
+.completion-ring-fill {
+	fill: none;
+	stroke-width: 3;
+}
+.completion-ring-track {
+	stroke: var(--border-strong);
+}
+.completion-ring-fill {
+	stroke: var(--accent);
+	transition: stroke-dashoffset var(--dur-move-base) var(--ease-out);
+}
+.completion-ring[data-band="1"] .completion-ring-fill {
+	stroke: color-mix(in srgb, var(--success) 25%, var(--accent));
+}
+.completion-ring[data-band="2"] .completion-ring-fill {
+	stroke: color-mix(in srgb, var(--success) 50%, var(--accent));
+}
+.completion-ring[data-band="3"] .completion-ring-fill {
+	stroke: color-mix(in srgb, var(--success) 75%, var(--accent));
+}
+.completion-ring[data-band="4"] .completion-ring-fill {
+	stroke: var(--success);
+}
 @media (max-width: 767px) {
 	details > summary {
 		min-height: 44px;

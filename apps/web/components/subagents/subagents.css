@@ -326,6 +326,15 @@
 	text-overflow: ellipsis;
 }
 
+/* A running agent's self-estimated completion: ring then percent, in the accent like the live line. */
+.subagent-completion-segment,
+.subagent-tree-completion {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	color: var(--accent);
+}
+
 /* Composer area: the steer box is the main composer in `.prompt-box`; the other states are one quiet row. */
 .subagent-composer {
 	padding-inline: var(--space-5);

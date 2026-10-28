@@ -15,7 +15,17 @@ import type {
 	SubagentProgressFields,
 	SubagentUsageFields,
 } from "#lib/wire/protocol";
-import { createProgressCoalescer, type ProgressCoalescer } from "./subagent-progress";
+import {
+	createProgressCoalescer,
+	projectProgress,
+	type ProgressCoalescer,
+} from "./subagent-progress";
+import {
+	startSubagentCompletion,
+	stopAllSubagentCompletion,
+	stopSubagentCompletion,
+	withSubagentCompletion,
+} from "./subagent-completion";
 import type { SessionEntry } from "./session-entry";
 import { broadcastTo } from "./client-delivery";
 
@@ -116,6 +126,7 @@ export function clearSubagents(entry: SessionEntry): void {
 	entry.subagentSnapshots.clear();
 	entry.transcriptSessionFilesBySubagentId.clear();
 	progressOf(entry).dropAll();
+	stopAllSubagentCompletion(entry);
 	entry.onSubagentsChange?.();
 }
 
@@ -146,6 +157,7 @@ export function handleSubagentLifecycle(
 		finishedMeta.get(entry)?.delete(payload.id);
 	} else {
 		progressOf(entry).flush(payload.id);
+		stopSubagentCompletion(entry, payload.id);
 		retainFinishedUsage(entry, payload.id, existing?.progress);
 		retainFinishedMeta(entry, payload.id, existing, payload);
 	}
@@ -167,6 +179,7 @@ export function handleSubagentLifecycle(
 	rememberTranscriptSession(entry, payload.id, sessionFile);
 	if (payload.status === "started") {
 		entry.subagentSnapshots.set(payload.id, snapshot);
+		startSubagentCompletion(entry, payload.id, () => progressOf(entry).reproject(payload.id));
 	} else {
 		entry.subagentSnapshots.delete(payload.id);
 	}
@@ -284,12 +297,21 @@ export function finishedSubagentMeta(
 	return finishedMeta.get(entry)?.get(id);
 }
 
+/** An agent's wire progress, with the completion estimate the host's probe keeps for it. */
+export function subagentProgressFields(
+	entry: SessionEntry,
+	progress: AgentProgress,
+): SubagentProgressFields {
+	return withSubagentCompletion(entry, progress, projectProgress(progress));
+}
+
 /** The entry's progress coalescer; its frames are broadcast on the entry's session handle. */
 function progressOf(entry: SessionEntry): ProgressCoalescer {
 	let coalescer = coalescers.get(entry);
 	if (coalescer === undefined) {
 		coalescer = createProgressCoalescer({
 			emit: (frame) => broadcastSubagentFrame(entry, "subagent_progress", frame),
+			project: (progress) => subagentProgressFields(entry, progress),
 		});
 		coalescers.set(entry, coalescer);
 	}

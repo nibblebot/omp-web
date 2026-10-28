@@ -17,6 +17,8 @@ export interface SubagentProgressView {
 	lastIntent?: string;
 	/** The agent's current step in its own words, from its periodic completion probe; preferred over `lastIntent` while running. */
 	stage?: string;
+	/** The agent's self-estimated completion, 0-100, from the same probe (the SDK pins 99 after yield). */
+	completionPercent?: number;
 	/** `<provider>/<id>`, suffixed with `:<level>` when the level was set explicitly. */
 	resolvedModel?: string;
 	/** Provider/id including routing, with no thinking suffix. */
@@ -49,6 +51,10 @@ export function pickProgress(raw: unknown): SubagentProgressView | undefined {
 		lastTool,
 		lastIntent: str(p.lastIntent),
 		stage: str(p.stage),
+		completionPercent:
+			typeof p.completionPercent === "number" && Number.isFinite(p.completionPercent)
+				? p.completionPercent
+				: undefined,
 		resolvedModel: str(p.resolvedModel),
 		resolvedModelIdentity: str(p.resolvedModelIdentity),
 		resolvedThinkingLevel: str(p.resolvedThinkingLevel),

@@ -1465,7 +1465,7 @@ const stageSub = (
 	progress: { status: "running", ...progress },
 });
 
-/** state.subagents patch for the stage variant: a stage with a tool in flight, and a stage alone. */
+/** state.subagents patch for the stage variant: a stage with a tool in flight, and a stage alone, each with its completion estimate. */
 export const taskStageSubagentMap: typeof state.subagents = new Map(
 	[
 		stageSub(0, "TraceRetry", "Trace the retry path", {
@@ -1473,10 +1473,12 @@ export const taskStageSubagentMap: typeof state.subagents = new Map(
 			currentTool: "grep",
 			currentToolIntent: "Find callers of resend",
 			durationMs: 94_000,
+			completionPercent: 62,
 		}),
 		stageSub(1, "SweepCss", "Audit CSS for unused selectors", {
 			stage: "Cross-checking selectors against the stories",
 			durationMs: 61_000,
+			completionPercent: 12,
 		}),
 	].map((info) => [info.id, info]),
 );

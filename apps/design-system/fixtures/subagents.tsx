@@ -928,7 +928,7 @@ const OPUS_ID = "anthropic/claude-opus-4-1";
  */
 const agentSpecs: AgentSpec[] = [
 	{
-		// Live line from the in-flight tool and its intent.
+		// Live line from the stage and the in-flight tool; its self-estimate draws the ring.
 		id: "FixtureBuilder",
 		agent: "task",
 		description: "Retry badge on tool cards",
@@ -942,6 +942,8 @@ const agentSpecs: AgentSpec[] = [
 			contextTokens: 82_400,
 			contextWindow: 200_000,
 			durationMs: 548_000,
+			completionPercent: 40,
+			stage: "Wiring the badge into the card header",
 			currentTool: "edit",
 			currentToolIntent: "Render the retried badge in the card header",
 			resolvedModelIdentity: SONNET_ID,
@@ -981,6 +983,7 @@ const agentSpecs: AgentSpec[] = [
 			contextTokens: 31_000,
 			contextWindow: 200_000,
 			durationMs: 420_000,
+			completionPercent: 12,
 			lastTool: { tool: "read", intent: "Open the card header styles", isError: true },
 			resolvedModelIdentity: OPUS_ID,
 			resolvedThinkingLevel: "medium",

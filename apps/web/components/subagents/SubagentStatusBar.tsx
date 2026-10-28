@@ -1,9 +1,11 @@
 import { Show, type Component, type JSX } from "solid-js";
 import type { SubagentNode } from "../../store/subagents";
+import { completionTitle } from "../../activities/completion";
 import { formatCost, formatDuration, formatTokens } from "../../subagents/format";
 import { createLiveElapsed } from "../../subagents/elapsed";
 import { getContextUsageLevel } from "../../usage/context";
 import { StatusSegment } from "../chat/status/StatusSegment";
+import { CompletionRing } from "../ui/CompletionRing";
 
 /** Read-only status row under an agent's transcript, styled like the main session bar. Unknown values are omitted; `actions` ends the row. */
 export const SubagentStatusBar: Component<{ node: SubagentNode; actions?: JSX.Element }> = (
@@ -32,6 +34,16 @@ export const SubagentStatusBar: Component<{ node: SubagentNode; actions?: JSX.El
 				)}
 			</Show>
 			<span class="status-spacer" />
+			<Show when={props.node.completionPercent !== undefined}>
+				<StatusSegment
+					readOnly
+					class="subagent-completion-segment"
+					title={completionTitle(props.node.completionPercent ?? 0, props.node.live?.stage)}
+				>
+					<CompletionRing percent={props.node.completionPercent ?? 0} />
+					{Math.round(props.node.completionPercent ?? 0)}%
+				</StatusSegment>
+			</Show>
 			<Show when={props.node.metrics.contextPercent !== undefined}>
 				<StatusSegment
 					readOnly

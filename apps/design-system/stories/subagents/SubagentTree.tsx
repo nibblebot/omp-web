@@ -64,7 +64,7 @@ export default defineStory({
 		{
 			name: "Multi-level forest",
 			description:
-				"Roots, children, and a grandchild with a repeated name, with a pending and a parked agent. Arrow keys move through the tree.",
+				"Roots, children, and a grandchild with a repeated name, with a pending and a parked agent. Running agents show their completion ring and percent. Arrow keys move through the tree.",
 			seed: () => seedAgentTree({ display: true }),
 			render: () => (
 				<div class="ds-frame">

@@ -34,14 +34,14 @@ export default defineStory({
 		{
 			name: "Running with in-flight tool",
 			description:
-				"Three rows in two columns: short name and agent type beside the status; the description beside the model with its thinking level; and the live line, here the tool in flight with its intent, beside the metrics.",
+				"Three rows in two columns: short name and agent type beside the status; the description beside the model with its thinking level; and the live line (the agent's stage, then the tool in flight) beside the metrics. A running agent that has estimated its progress leads the metrics with a completion ring and its percent in the accent; hover for the stage.",
 			seed: () => seedAgentTree({ display: true }),
 			render: () => row("FixtureBuilder", 0),
 		},
 		{
 			name: "Live line after a failed tool",
 			description:
-				"With no tool in flight the live line shows the last finished tool and its intent, in the error color when that call failed.",
+				"With no tool in flight the live line shows the last finished tool and its intent, in the error color when that call failed. This agent has no stage yet, but its early estimate (12%) already shows.",
 			seed: () => seedAgentTree({ display: true }),
 			render: () => row("FixtureBuilder.AdvisorA", 1),
 		},
@@ -101,7 +101,7 @@ export default defineStory({
 		{
 			name: "Live preview off",
 			description:
-				"With `display.subagentLivePreview` off a running row has no live line; the metrics row keeps its place.",
+				"With `display.subagentLivePreview` off a running row has no live line; the completion ring and percent stay, because they are not part of the preview.",
 			seed: () => seedAgentTree(),
 			render: () => row("FixtureBuilder", 0),
 		},

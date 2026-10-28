@@ -799,6 +799,30 @@
 	white-space: nowrap;
 }
 
+/* A running subagent's stage (secondary, shrinks first) and its completion ring with percent. */
+.activity-popover-stage {
+	flex: 0 1 auto;
+	max-width: 40%;
+	min-width: 0;
+	color: var(--muted-2);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.activity-popover-completion {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: var(--space-2);
+	color: var(--accent);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	font-variant-numeric: tabular-nums;
+}
+
 .activity-popover-state {
 	flex: none;
 	color: var(--muted-2);

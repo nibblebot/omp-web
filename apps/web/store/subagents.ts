@@ -404,6 +404,8 @@ export interface SubagentNode {
 	model?: SubagentModelView;
 	/** The running agent's live tool line; undefined unless running. */
 	live?: SubagentLiveLine;
+	/** The running agent's self-estimated completion, 0-100; undefined unless running and estimated. Its stage rides in `live.stage`. */
+	completionPercent?: number;
 	children: SubagentNode[];
 }
 
@@ -522,6 +524,7 @@ function buildForest(): SubagentNode[] {
 			subtree: {},
 			model: modelView(progress),
 			live: status === "running" ? liveLineOf(progress) : undefined,
+			completionPercent: status === "running" ? progress?.completionPercent : undefined,
 			children: [],
 		});
 	}
@@ -584,6 +587,18 @@ export function runningSubagentCount(): number {
 
 export function subagentById(id: string): SubagentNode | undefined {
 	return flatten(buildForest()).find((node) => node.id === id);
+}
+
+/**
+ * A running agent's completion estimate and stage, read from its live progress
+ * alone: rows that need only the estimate (wait card task jobs) skip the forest build.
+ */
+export function subagentEstimate(id: string): { percent: number; stage?: string } | undefined {
+	const info = state.subagents.get(id);
+	if (info === undefined || normalizeStatus(info.status) !== "running") return undefined;
+	const progress = pickProgress(info.progress);
+	if (progress?.completionPercent === undefined) return undefined;
+	return { percent: progress.completionPercent, stage: progress.stage };
 }
 
 /** Hidden (false) when the action does not apply to the agent's current status. */

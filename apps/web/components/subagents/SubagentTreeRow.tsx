@@ -1,4 +1,5 @@
 import { Show, type Component } from "solid-js";
+import { completionTitle } from "../../activities/completion";
 import { jobWidgetView } from "../../store/job-widgets";
 import { settingValue } from "../../store/settings";
 import type { SubagentNode } from "../../store/subagents";
@@ -7,6 +8,7 @@ import { createLiveElapsed } from "../../subagents/elapsed";
 import { formatLiveLine } from "../../subagents/progress";
 import { subagentRowDomId } from "../../subagents/tree";
 import { JobWidgetGlance } from "../jobs/JobWidget";
+import { CompletionRing } from "../ui/CompletionRing";
 import { ChevronDownIcon, ChevronRightIcon } from "../ui/icons";
 import { SubagentActionsMenu } from "./SubagentActionsMenu";
 import { SubagentStatusChip } from "./SubagentStatusChip";
@@ -82,6 +84,15 @@ export const SubagentTreeRow: Component<{
 					)}
 				</Show>
 				<span class="subagent-tree-metrics">
+					<Show when={props.node.completionPercent !== undefined}>
+						<span
+							class="subagent-tree-completion"
+							title={completionTitle(props.node.completionPercent ?? 0, props.node.live?.stage)}
+						>
+							<CompletionRing percent={props.node.completionPercent ?? 0} />
+							{Math.round(props.node.completionPercent ?? 0)}%
+						</span>
+					</Show>
 					<Show when={elapsedMs() !== undefined}>
 						<span>{formatDuration(elapsedMs() ?? 0)}</span>
 					</Show>

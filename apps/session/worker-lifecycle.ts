@@ -24,8 +24,8 @@ import {
 	finishedSubagentMeta,
 	finishedSubagentUsage,
 	resolveSubagentSessionFile,
+	subagentProgressFields,
 } from "./subagent-mirror";
-import { projectProgress } from "./subagent-progress";
 import { persistedTaskMeta } from "./subagent-task-meta";
 import { transcriptUsage } from "./subagent-transcript-usage";
 
@@ -323,7 +323,8 @@ export async function listWorkers(entry: SessionEntry): Promise<WorkerRecord[]> 
 				task: snap?.task ?? meta?.task,
 				assignment: snap?.assignment ?? meta?.assignment,
 				description: snap?.description ?? meta?.description,
-				progress: snap?.progress === undefined ? undefined : projectProgress(snap.progress),
+				progress:
+					snap?.progress === undefined ? undefined : subagentProgressFields(entry, snap.progress),
 				usage:
 					snap?.progress !== undefined
 						? undefined

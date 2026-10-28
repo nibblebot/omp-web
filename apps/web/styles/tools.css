@@ -705,35 +705,6 @@ pre.terminal.tool-code {
 	color: var(--muted-2);
 	transform: translateY(-50%);
 }
-.wait-job-ring {
-	flex: none;
-	width: 16px;
-	height: 16px;
-	transform: rotate(-90deg);
-}
-.wait-job-ring-track,
-.wait-job-ring-fill {
-	fill: none;
-	stroke-width: 3;
-}
-.wait-job-ring-track {
-	stroke: var(--border-strong);
-}
-.wait-job-ring-fill {
-	stroke: var(--accent);
-}
-.wait-job-ring[data-band="1"] .wait-job-ring-fill {
-	stroke: color-mix(in srgb, var(--success) 25%, var(--accent));
-}
-.wait-job-ring[data-band="2"] .wait-job-ring-fill {
-	stroke: color-mix(in srgb, var(--success) 50%, var(--accent));
-}
-.wait-job-ring[data-band="3"] .wait-job-ring-fill {
-	stroke: color-mix(in srgb, var(--success) 75%, var(--accent));
-}
-.wait-job-ring[data-band="4"] .wait-job-ring-fill {
-	stroke: var(--success);
-}
 /* The expanded row: widget, output tail and actions under the line. */
 .wait-job-detail {
 	display: grid;

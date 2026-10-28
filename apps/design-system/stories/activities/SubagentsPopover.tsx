@@ -14,7 +14,7 @@ export default defineStory({
 		{
 			name: "Running and finished",
 			description:
-				"One condensed row per agent: status icon, name, one-line task. Running agents come first. A row opens that agent in the Activities panel; the popout icon opens the panel at the Subagents section.",
+				"One condensed row per agent: status icon, name, one-line task. A running agent with an estimate adds its stage (secondary text) and a completion ring with its percent; hover for the full estimate. Running agents come first. A row opens that agent in the Activities panel; the popout icon opens the panel at the Subagents section.",
 			seed: () => seedActivityBar({ subagents: "running" }),
 			render: () => <PopoverAnchor label="Subagents" popover={SubagentsPopover} />,
 		},

@@ -1,9 +1,11 @@
-import { createMemo, For, type Component } from "solid-js";
+import { createMemo, For, Show, type Component } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { activeFirst, capRows } from "../../activities/bar";
+import { completionTitle } from "../../activities/completion";
 import { openActivities } from "../../store/activities";
 import { subagentForest } from "../../store/subagents";
 import { flattenSubagentTree, isActiveSubagent } from "../../subagents/tree";
+import { CompletionRing } from "../ui/CompletionRing";
 import { ActivityPopover } from "./ActivityPopover";
 import { createKeyedRows } from "../../activities/keyed-rows";
 import { SUBAGENT_STATUS_ICON } from "./subagent-icons";
@@ -53,6 +55,22 @@ export const SubagentsPopover: Component<{ anchor: HTMLElement; onClose: () => v
 									<span class="activity-popover-detail" title={node().title}>
 										{node().title}
 									</span>
+									<Show when={node().live?.stage}>
+										{(stage) => (
+											<span class="activity-popover-stage" title={stage()}>
+												{stage()}
+											</span>
+										)}
+									</Show>
+									<Show when={node().completionPercent !== undefined}>
+										<span
+											class="activity-popover-completion"
+											title={completionTitle(node().completionPercent ?? 0, node().live?.stage)}
+										>
+											<CompletionRing percent={node().completionPercent ?? 0} />
+											{Math.round(node().completionPercent ?? 0)}%
+										</span>
+									</Show>
 								</button>
 							</li>
 						);

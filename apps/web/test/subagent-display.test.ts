@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SettingsModel } from "#lib/wire/protocol";
+import { completionTitle } from "../activities/completion";
 import { displayTitle } from "../components/ui/title-icons";
 import { setState } from "../state";
 import { formatLiveLine, liveLineOf, modelView, pickProgress } from "../subagents/progress";
@@ -72,6 +73,26 @@ describe("pickProgress", () => {
 			recentTools: [{ tool: "read", args: "a.ts" }],
 		});
 		expect(view?.lastTool).toBeUndefined();
+	});
+
+	test("keeps a finite completionPercent and drops anything else", () => {
+		expect(pickProgress({ completionPercent: 40 })?.completionPercent).toBe(40);
+		expect(pickProgress({ completionPercent: 0 })?.completionPercent).toBe(0);
+		expect(pickProgress({ completionPercent: Number.NaN })?.completionPercent).toBeUndefined();
+		expect(pickProgress({ completionPercent: "40" })?.completionPercent).toBeUndefined();
+		expect(pickProgress({ status: "running" })?.completionPercent).toBeUndefined();
+	});
+});
+
+describe("completionTitle", () => {
+	test("leads with the clamped percent and adds the stage when known", () => {
+		expect(completionTitle(40)).toBe("Estimated 40% complete");
+		expect(completionTitle(140.4)).toBe("Estimated 100% complete");
+		expect(completionTitle(-3)).toBe("Estimated 0% complete");
+		expect(completionTitle(40, "writing tests")).toBe(
+			"Estimated 40% complete \u00b7 writing tests",
+		);
+		expect(completionTitle(40, "")).toBe("Estimated 40% complete");
 	});
 });
 

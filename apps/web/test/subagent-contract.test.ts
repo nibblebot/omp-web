@@ -8,6 +8,7 @@ import {
 	fanoutTotals,
 	runningSubagentCount,
 	subagentById,
+	subagentEstimate,
 	subagentCapabilities,
 	subagentForest,
 	subagentTree,
@@ -196,6 +197,36 @@ describe("node display fields", () => {
 		expect(subagentById("intent")?.live).toEqual({ intent: "Thinking" });
 		expect(subagentById("none")?.live).toBeUndefined();
 		expect(subagentById("done")?.live).toBeUndefined();
+	});
+
+	test("completion estimate exists only while running, and keeps a zero", () => {
+		seed([
+			{
+				id: "mid",
+				status: "running",
+				startedAt: 1,
+				extra: { completionPercent: 40, stage: "Writing tests" },
+			},
+			{ id: "zero", status: "running", startedAt: 2, extra: { completionPercent: 0 } },
+			{ id: "silent", status: "running", startedAt: 3 },
+			{
+				id: "done",
+				status: "completed",
+				startedAt: 4,
+				endedAt: 5,
+				extra: { completionPercent: 99 },
+			},
+		]);
+		expect(subagentById("mid")?.completionPercent).toBe(40);
+		expect(subagentById("mid")?.live?.stage).toBe("Writing tests");
+		expect(subagentById("zero")?.completionPercent).toBe(0);
+		expect(subagentById("silent")?.completionPercent).toBeUndefined();
+		expect(subagentById("done")?.completionPercent).toBeUndefined();
+		expect(subagentEstimate("mid")).toEqual({ percent: 40, stage: "Writing tests" });
+		expect(subagentEstimate("zero")).toEqual({ percent: 0, stage: undefined });
+		expect(subagentEstimate("silent")).toBeUndefined();
+		expect(subagentEstimate("done")).toBeUndefined();
+		expect(subagentEstimate("missing")).toBeUndefined();
 	});
 });
 

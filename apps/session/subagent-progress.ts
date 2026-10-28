@@ -88,6 +88,8 @@ export interface ProgressCoalescerOptions {
 	schedule?: (run: () => void, ms: number) => Timer;
 	/** Timer cancellation; injected by tests. */
 	cancel?: (timer: Timer | undefined) => void;
+	/** Wire projection of an agent's progress; defaults to {@link projectProgress}. */
+	project?: (progress: AgentProgress) => SubagentProgressFields;
 }
 
 export interface ProgressCoalescer {
@@ -95,6 +97,8 @@ export interface ProgressCoalescer {
 	offer(payload: SubagentProgressPayload): void;
 	/** Send the pending progress for an agent immediately, if any. */
 	flush(id: string): void;
+	/** Re-project an agent's last offered progress (its projection changed without new progress); paced like `offer`. */
+	reproject(id: string): void;
 	/** Flush nothing further for an agent: cancels its trailing timer and forgets its last frame. */
 	drop(id: string): void;
 	/** Drop every agent (session change). */
@@ -108,6 +112,8 @@ interface ProgressChannel {
 	meta: Record<string, unknown>;
 	sentAt: number;
 	pending: SubagentProgressPayload | undefined;
+	/** The payload last offered, kept for `reproject`. */
+	last: SubagentProgressPayload | undefined;
 	timer: Timer | undefined;
 }
 
@@ -120,6 +126,7 @@ export function createProgressCoalescer(options: ProgressCoalescerOptions): Prog
 	const now = options.now ?? Date.now;
 	const schedule = options.schedule ?? ((run, ms) => setTimeout(run, ms));
 	const cancel = options.cancel ?? clearTimeout;
+	const project = options.project ?? projectProgress;
 	const channels = new Map<string, ProgressChannel>();
 
 	function flush(id: string): void {
@@ -127,7 +134,7 @@ export function createProgressCoalescer(options: ProgressCoalescerOptions): Prog
 		const payload = channel?.pending;
 		if (channel === undefined || payload === undefined) return;
 		channel.pending = undefined;
-		const fields = projectProgress(payload.progress) as unknown as Record<string, unknown>;
+		const fields = project(payload.progress) as unknown as Record<string, unknown>;
 		const meta = compact({
 			task: payload.task,
 			assignment: payload.assignment,
@@ -161,31 +168,38 @@ export function createProgressCoalescer(options: ProgressCoalescerOptions): Prog
 		channels.delete(id);
 	}
 
+	function offer(payload: SubagentProgressPayload): void {
+		const id = payload.progress.id;
+		const channel: ProgressChannel = channels.get(id) ?? {
+			sent: null,
+			meta: {},
+			sentAt: 0,
+			pending: undefined,
+			last: undefined,
+			timer: undefined,
+		};
+		channels.set(id, channel);
+		channel.pending = payload;
+		channel.last = payload;
+		if (channel.timer !== undefined) return;
+		const wait = channel.sent === null ? 0 : channel.sentAt + SUBAGENT_PROGRESS_INTERVAL_MS - now();
+		if (wait <= 0) {
+			flush(id);
+			return;
+		}
+		channel.timer = schedule(() => {
+			channel.timer = undefined;
+			flush(id);
+		}, wait);
+	}
+
 	return {
-		offer(payload) {
-			const id = payload.progress.id;
-			const channel: ProgressChannel = channels.get(id) ?? {
-				sent: null,
-				meta: {},
-				sentAt: 0,
-				pending: undefined,
-				timer: undefined,
-			};
-			channels.set(id, channel);
-			channel.pending = payload;
-			if (channel.timer !== undefined) return;
-			const wait =
-				channel.sent === null ? 0 : channel.sentAt + SUBAGENT_PROGRESS_INTERVAL_MS - now();
-			if (wait <= 0) {
-				flush(id);
-				return;
-			}
-			channel.timer = schedule(() => {
-				channel.timer = undefined;
-				flush(id);
-			}, wait);
-		},
+		offer,
 		flush,
+		reproject(id) {
+			const last = channels.get(id)?.last;
+			if (last !== undefined) offer(last);
+		},
 		drop,
 		dropAll() {
 			for (const id of channels.keys()) drop(id);

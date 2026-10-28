@@ -13,7 +13,7 @@ export default defineStory({
 		{
 			name: "Running with children",
 			description:
-				"Model, thinking level, context, tokens, cost and a ticking elapsed time, plus the subtree total because this agent spawned others.",
+				"Model, thinking level, the agent's completion ring and percent (hover for its stage), context, tokens, cost and a ticking elapsed time, plus the subtree total because this agent spawned others.",
 			seed: () => seedAgentTree({ display: true }),
 			render: () => <SubagentStatusBar node={agentNode("FixtureBuilder")} />,
 		},
