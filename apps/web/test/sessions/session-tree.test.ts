@@ -35,6 +35,21 @@ describe("depthIndex", () => {
 		expect(depth.get("b")).toBe(0);
 	});
 
+	test("numbers a long chain and its late fork in one pass", () => {
+		const chain = Array.from({ length: 20_000 }, (_, i) =>
+			node(`n${i}`, i === 0 ? null : `n${i - 1}`),
+		);
+		const depth = depthIndex([...chain, node("fork", "n9", "assistant")]);
+		expect(depth.get("n0")).toBe(0);
+		expect(depth.get("n19999")).toBe(19_999);
+		expect(depth.get("fork")).toBe(10);
+	});
+
+	test("numbers children listed before their parents", () => {
+		const depth = depthIndex([node("c", "b"), node("b", "a"), node("a", null)]);
+		expect([depth.get("a"), depth.get("b"), depth.get("c")]).toEqual([0, 1, 2]);
+	});
+
 	test("terminates on a malformed parent cycle", () => {
 		const depth = depthIndex([node("x", "y"), node("y", "x")]);
 		expect(depth.has("x")).toBe(true);

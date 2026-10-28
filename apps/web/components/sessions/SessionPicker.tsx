@@ -1,7 +1,8 @@
-import { createMemo, onMount, Show, type Component } from "solid-js";
+import { createMemo, onCleanup, onMount, Show, type Component } from "solid-js";
 import { setState, state } from "../../state";
 import { openAddProject } from "../../store/projects";
 import {
+	cancelTypedResumeSearch,
 	chooseResumeTarget,
 	closeResumePicker,
 	deleteResumeSession,
@@ -19,6 +20,7 @@ import {
 	searchResume,
 	setResumeAllProjects,
 	sessionRowsFromResume,
+	typeResumeQuery,
 } from "../../store/resume";
 import type { SessionRow } from "../../store/session-list";
 import { Modal } from "../ui/Modal";
@@ -43,6 +45,7 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 		refreshResumeCapabilities();
 		if (resumeAmbiguous() === null) void searchResume(resumeQuery());
 	});
+	onCleanup(cancelTypedResumeSearch);
 
 	const close = () => {
 		closeResumePicker();
@@ -80,7 +83,7 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 				rows={rows()}
 				total={resumeTotal()}
 				query={resumeQuery()}
-				onQuery={(query) => void searchResume(query)}
+				onQuery={typeResumeQuery}
 				loading={resumeLoading()}
 				allProjects={resumeAllProjects()}
 				onAllProjects={(on) => void setResumeAllProjects(on)}

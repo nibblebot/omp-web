@@ -84,6 +84,7 @@ interface NavigateTreeResult {
  *  made against an older page refuse instead of landing on a stale node. */
 let generation = 0;
 let cachedPage: GraphPage | null = null;
+let loadIssue = 0;
 const askProbes = new Map<string, { revision: string; generation: number }>();
 
 /** Filter text seeded into the session tree pane when a card has no stable
@@ -119,6 +120,7 @@ export function graphGeneration(): number {
 /** Load an authoritative page with server-side filtering and paging. */
 export async function loadGraph(query: GraphQuery = {}): Promise<GraphPage> {
 	const gen = generation;
+	const issue = ++loadIssue;
 	const data = (await call("getSessionGraph", [
 		{
 			cursor: query.cursor,
@@ -128,7 +130,9 @@ export async function loadGraph(query: GraphQuery = {}): Promise<GraphPage> {
 		},
 	])) as GraphPage;
 	if (gen !== generation) throw new Error("graph changed while loading; re-pick");
-	cachedPage = data;
+	// Only the latest-issued load is the mirror a pick validates against; an older
+	// answer that arrives late is still returned to its caller, never cached.
+	if (issue === loadIssue) cachedPage = data;
 	return data;
 }
 

@@ -1,4 +1,5 @@
 import type { SessionListEntry } from "#lib/wire/protocol";
+import { createDebouncer } from "./search-debounce";
 import { call, state, setState } from "../state";
 import { requestWorkspaceSessions, resumeSession, spawnProjectSession } from "./roster";
 import {
@@ -222,16 +223,16 @@ export function refreshResumeCapabilities(): void {
 }
 
 /**
- * Open the resume picker (bare /resume). Loads capabilities + candidates;
- * failures are explicit; never emulate capabilities or unverified lineage.
+ * Open the resume picker (bare /resume). The mounted SessionPicker loads the
+ * capabilities and candidates (one list request per open); failures are
+ * explicit; never emulate capabilities or unverified lineage.
  */
 export function openResumePicker(): void {
 	setState("modal", "sessions");
 	setResumeAmbiguous(null);
 	setResumeNotice(null);
 	setResumeError(null);
-	refreshResumeCapabilities();
-	void searchResume("");
+	setResumeQuery("");
 }
 
 /**
@@ -239,7 +240,9 @@ export function openResumePicker(): void {
  * is server-owned); this mirror only renders what the server returns.
  */
 let resumeSearchSequence = 0;
+const typedQuery = createDebouncer();
 export function searchResume(query: string): Promise<void> {
+	typedQuery.cancel();
 	const sequence = ++resumeSearchSequence;
 	setResumeQuery(query);
 	setResumeAmbiguous(null);
@@ -264,11 +267,29 @@ export function searchResume(query: string): Promise<void> {
 }
 
 /**
- * Sessions across every project, for the command palette. Unlike `searchResume`
- * it leaves the picker's query, list and scope alone.
+ * The picker's search box: the query shows at once, the server search follows
+ * the typing pause (each one scans every transcript in the session process).
  */
-export async function searchAllProjectSessions(query: string): Promise<ResumeCandidate[]> {
-	const data = await call("resumeList", [{ query, limit: 200, allProjects: true }]);
+export function typeResumeQuery(query: string): void {
+	setResumeQuery(query);
+	typedQuery.schedule(() => void searchResume(query));
+}
+
+/** Drop a typed query's pending search (the picker closed before the pause ended). */
+export function cancelTypedResumeSearch(): void {
+	typedQuery.cancel();
+}
+
+/**
+ * Sessions across every project, for the command palette. Unlike `searchResume`
+ * it leaves the picker's query, list and scope alone. The palette shows a
+ * handful, so `limit` keeps the answer palette-sized.
+ */
+export async function searchAllProjectSessions(
+	query: string,
+	limit: number,
+): Promise<ResumeCandidate[]> {
+	const data = await call("resumeList", [{ query, limit, allProjects: true }]);
 	const root = asRecord(data);
 	const pinned = new Set(asIdList(root !== null ? root.pinnedIds : undefined));
 	return normalizeCandidates(data, pinned);

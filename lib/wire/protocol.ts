@@ -1585,15 +1585,16 @@ export function isRingedFrameType(type: string): boolean {
 // unicast answers (noted per variant).
 export type ServerFrame =
 	| (SessionScopedFrame & { scope?: string })
-	// Unicast answer to list_sessions.
-	| { type: "sessions"; sessions: SessionListEntry[] }
+	// Unicast answer to list_sessions; `id` echoes the command's, so a late answer
+	// to a superseded request never settles the newer one.
+	| { type: "sessions"; id: string; sessions: SessionListEntry[] }
 	// Unicast answer to list_workspace_sessions (the fleet edge answers it directly;
 	// NOT ringed; lost answers are re-sent like projects). `limit` echoes the
 	// effective (clamped) row count so the client can route the answer to the
 	// request that asked for that size.
 	| { type: "workspace_sessions"; workspaceId: string; limit: number; sessions: SessionListEntry[] }
-	// Unicast answer to list_files.
-	| { type: "files"; files: string[] }
+	// Unicast answer to list_files; `id` echoes the command's (see "sessions").
+	| { type: "files"; id: string; files: string[] }
 	// Unicast: OAuth URL to open (during a login call).
 	| { type: "login_url"; url: string; launchUrl?: string; instructions?: string }
 	// Unicast: provider needs a pasted code to finish login.

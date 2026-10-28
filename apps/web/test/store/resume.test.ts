@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ClientCommand, RosterEntry, RegisteredProject } from "#lib/wire/protocol";
 import { connect, setState, state } from "../../state";
 import {
+	cancelTypedResumeSearch,
 	chooseResumeTarget,
 	type ResumeCandidate,
 	createResumeState,
@@ -23,10 +24,12 @@ import {
 	resumeCandidates,
 	resumeError,
 	resumePinnedIds,
+	resumeQuery,
 	resumeTotal,
 	searchResume,
 	sessionRowsFromResume,
 	setResumeAllProjects,
+	typeResumeQuery,
 } from "../../store/resume";
 import { openAddProject } from "../../store/projects";
 import {
@@ -484,5 +487,42 @@ describe("owner resolution when resuming", () => {
 		expect(state.addProjectPath).toBe("/work/gone");
 		openAddProject();
 		expect(state.addProjectPath).toBeNull();
+	});
+});
+
+describe("typed query", () => {
+	const PAUSE_MS = 260; // past SEARCH_DEBOUNCE_MS
+
+	test("a query typed at speed sends one list request after the pause, with every keystroke shown at once", async () => {
+		for (const typed of ["r", "re", "ref", "refa", "refac", "refact", "refacto", "refactor"]) {
+			typeResumeQuery(typed);
+			expect(resumeQuery()).toBe(typed);
+		}
+		expect(calls("resumeList")).toHaveLength(0);
+
+		await Bun.sleep(PAUSE_MS);
+		expect(calls("resumeList")).toHaveLength(1);
+		expect(calls("resumeList")[0]?.args).toEqual([
+			{ query: "refactor", limit: 200, allProjects: false },
+		]);
+		await answer("resumeList", { candidates: [candidate("a")], total: 1 });
+		expect(resumeCandidates().map((c) => c.id)).toEqual(["a"]);
+	});
+
+	test("a search issued meanwhile (scope toggle) supersedes the pending typed search", async () => {
+		typeResumeQuery("auth");
+		const toggled = setResumeAllProjects(true);
+		expect(calls("resumeList")).toHaveLength(1);
+		await Bun.sleep(PAUSE_MS);
+		expect(calls("resumeList")).toHaveLength(1);
+		await answer("resumeList", { candidates: [], total: 0 });
+		await toggled;
+	});
+
+	test("closing the picker drops the pending typed search", async () => {
+		typeResumeQuery("auth");
+		cancelTypedResumeSearch();
+		await Bun.sleep(PAUSE_MS);
+		expect(calls("resumeList")).toHaveLength(0);
 	});
 });

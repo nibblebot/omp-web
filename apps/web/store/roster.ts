@@ -42,28 +42,31 @@ import { displayTitle } from "../components/ui/title-icons";
 /** localStorage key for the persisted Chat/Analysis top-level view. */
 const VIEW_KEY = "omp.view";
 
-// list_sessions / list_files carry no id on the wire; with a single user,
-// latest-wins correlation is sufficient (a superseded request resolves empty.
-let pendingSessions: ((sessions: SessionListEntry[]) => void) | null = null;
-let pendingFiles: ((files: string[]) => void) | null = null;
+// list_sessions / list_files are latest-wins: a newer request resolves the older one
+// empty. The answer frame echoes the command id, and only the waiter that owns that
+// id settles, so a late answer to a superseded request never lands on the newer one.
+let pendingSessions: { id: string; resolve: (sessions: SessionListEntry[]) => void } | null = null;
+let pendingFiles: { id: string; resolve: (files: string[]) => void } | null = null;
 
-/** Settle the latest-wins list_sessions waiter (mux "sessions" frame). */
-export function settleSessions(sessions: SessionListEntry[]): void {
-	pendingSessions?.(sessions);
+/** Settle the list_sessions waiter that sent `id` (mux "sessions" frame); other ids are stale. */
+export function settleSessions(id: string, sessions: SessionListEntry[]): void {
+	if (pendingSessions?.id !== id) return;
+	pendingSessions.resolve(sessions);
 	pendingSessions = null;
 }
 
-/** Settle the latest-wins list_files waiter (mux "files" frame). */
-export function settleFiles(files: string[]): void {
-	pendingFiles?.(files);
+/** Settle the list_files waiter that sent `id` (mux "files" frame); other ids are stale. */
+export function settleFiles(id: string, files: string[]): void {
+	if (pendingFiles?.id !== id) return;
+	pendingFiles.resolve(files);
 	pendingFiles = null;
 }
 
 /** Resolve both waiters empty (stream teardown in state.ts). */
 export function resetPendingSessionsFiles(): void {
-	pendingSessions?.([]);
+	pendingSessions?.resolve([]);
 	pendingSessions = null;
-	pendingFiles?.([]);
+	pendingFiles?.resolve([]);
 	pendingFiles = null;
 	for (const resolve of pendingWorkspaceSessions.values()) resolve([]);
 	pendingWorkspaceSessions.clear();
@@ -420,15 +423,14 @@ export function listSessions(): Promise<SessionListEntry[]> {
 		reject(new Error("Not connected"));
 		return promise;
 	}
-	pendingSessions?.([]);
-	pendingSessions = resolve;
-	sendCommand({ type: "list_sessions", id: crypto.randomUUID() } satisfies ClientCommand).catch(
-		(err) => {
-			// Latest-wins: only clear the slot if a newer request hasn't claimed it.
-			if (pendingSessions === resolve) pendingSessions = null;
-			reject(err instanceof Error ? err : new Error(String(err)));
-		},
-	);
+	const id = crypto.randomUUID();
+	pendingSessions?.resolve([]);
+	pendingSessions = { id, resolve };
+	sendCommand({ type: "list_sessions", id } satisfies ClientCommand).catch((err) => {
+		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
+		if (pendingSessions?.id === id) pendingSessions = null;
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
 	return promise;
 }
 
@@ -438,16 +440,17 @@ export function listFiles(query: string, limit?: number): Promise<string[]> {
 		reject(new Error("Not connected"));
 		return promise;
 	}
-	pendingFiles?.([]);
-	pendingFiles = resolve;
+	const id = crypto.randomUUID();
+	pendingFiles?.resolve([]);
+	pendingFiles = { id, resolve };
 	sendCommand({
 		type: "list_files",
-		id: crypto.randomUUID(),
+		id,
 		query,
 		limit,
 	} satisfies ClientCommand).catch((err) => {
 		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
-		if (pendingFiles === resolve) pendingFiles = null;
+		if (pendingFiles?.id === id) pendingFiles = null;
 		reject(err instanceof Error ? err : new Error(String(err)));
 	});
 	return promise;

@@ -4,6 +4,7 @@ import {
 	createSignal,
 	For,
 	on,
+	onCleanup,
 	onMount,
 	Show,
 	type Component,
@@ -22,6 +23,7 @@ import {
 	type GraphPage,
 } from "../../store/graph";
 import { stashUnsent } from "../../store/drafts";
+import { createDebouncer } from "../../store/search-debounce";
 import type { AskQuestion } from "../../prompt/ask-types";
 
 /**
@@ -79,14 +81,21 @@ function relTime(iso: string): string {
 export function depthIndex(nodes: GraphNode[]): Map<string, number> {
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const depth = new Map<string, number>();
+	const chain: GraphNode[] = [];
+	const climbing = new Set<string>();
 	for (const n of nodes) {
-		let d = 0;
-		let cur = n.parentId ? byId.get(n.parentId) : undefined;
-		while (cur && d < nodes.length) {
-			d++;
-			cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+		// Climb to the first ancestor whose depth is known (or off the page), then number the
+		// climbed chain on the way down, so every node is visited once. A malformed parent
+		// cycle ends where it re-enters itself.
+		let above: GraphNode | undefined = n;
+		while (above && !depth.has(above.id) && !climbing.has(above.id)) {
+			climbing.add(above.id);
+			chain.push(above);
+			above = above.parentId ? byId.get(above.parentId) : undefined;
 		}
-		depth.set(n.id, d);
+		let d = above === undefined || climbing.has(above.id) ? 0 : (depth.get(above.id) ?? 0) + 1;
+		while (chain.length > 0) depth.set(chain.pop()!.id, d++);
+		climbing.clear();
 	}
 	return depth;
 }
@@ -124,9 +133,24 @@ export const SessionTreePanel: Component = () => {
 	const revision = createMemo(() => page()?.revision);
 	const nodes = createMemo(() => page()?.nodes ?? []);
 	const depths = createMemo(() => depthIndex(nodes()));
+	/** Loaded children per parent id: a row's children and siblings are counts off one pass. */
+	const childCounts = createMemo(() => {
+		const counts = new Map<string, number>();
+		for (const n of nodes()) {
+			if (n.parentId !== null) counts.set(n.parentId, (counts.get(n.parentId) ?? 0) + 1);
+		}
+		return counts;
+	});
 	const onPath = createMemo(() => activePath(nodes(), page()?.leafId ?? null));
 
+	/** Typing in the node search refreshes once per pause, not per keystroke. */
+	const typingPause = createDebouncer();
+	onCleanup(typingPause.cancel);
+	/** Issue number of the latest fresh load: an older answer, or an append for an older page, is dropped. */
+	let refreshIssue = 0;
 	const refresh = (opts: { cursor?: string; append?: boolean; keepError?: boolean } = {}): void => {
+		typingPause.cancel();
+		const issue = opts.append ? refreshIssue : ++refreshIssue;
 		void loadGraph({
 			filter: kind(),
 			text: filter().trim(),
@@ -134,6 +158,7 @@ export const SessionTreePanel: Component = () => {
 			limit: 100,
 		})
 			.then((p) => {
+				if (issue !== refreshIssue) return;
 				if (opts.append && page()) {
 					const prev = page()!;
 					setPage({ ...p, nodes: [...prev.nodes, ...p.nodes] });
@@ -142,7 +167,9 @@ export const SessionTreePanel: Component = () => {
 				}
 				if (!opts.keepError) setError(null);
 			})
-			.catch((err) => setError(String(err instanceof Error ? err.message : err)));
+			.catch((err) => {
+				if (issue === refreshIssue) setError(String(err instanceof Error ? err.message : err));
+			});
 	};
 
 	onMount(() => {
@@ -180,9 +207,7 @@ export const SessionTreePanel: Component = () => {
 
 	const onFilterInput = (value: string): void => {
 		setFilter(value);
-		// One server refresh per input pause would ride here; the 100-node page
-		// contract keeps each refresh bounded.
-		refresh();
+		typingPause.schedule(refresh);
 	};
 
 	/** Select a row and move DOM focus to it so Enter acts on the same node. */
@@ -408,12 +433,9 @@ export const SessionTreePanel: Component = () => {
 					<For each={nodes()}>
 						{(n) => {
 							const selected = () => selectedId() === n.id;
-							const kids = createMemo(() => nodes().filter((x) => x.parentId === n.id));
-							const sibs = createMemo(() =>
-								n.parentId === null
-									? []
-									: nodes().filter((x) => x.parentId === n.parentId && x.id !== n.id),
-							);
+							const kids = () => childCounts().get(n.id) ?? 0;
+							const sibs = () =>
+								n.parentId === null ? 0 : (childCounts().get(n.parentId) ?? 1) - 1;
 							const isLeaf = () => n.id === page()?.leafId;
 							return (
 								<div
@@ -445,15 +467,14 @@ export const SessionTreePanel: Component = () => {
 									</PickerRow>
 									<Show when={selected()}>
 										<div class="graph-detail">
-											<Show when={sibs().length > 0}>
+											<Show when={sibs() > 0}>
 												<div class="tool-collapsed-note">
-													{sibs().length} sibling{sibs().length === 1 ? "" : "s"} on this fork (same
-													page)
+													{sibs()} sibling{sibs() === 1 ? "" : "s"} on this fork (same page)
 												</div>
 											</Show>
-											<Show when={kids().length > 0}>
+											<Show when={kids() > 0}>
 												<div class="tool-collapsed-note">
-													{kids().length} child{kids().length === 1 ? "" : "ren"} below
+													{kids()} child{kids() === 1 ? "" : "ren"} below
 												</div>
 											</Show>
 											<label class="graph-opt">

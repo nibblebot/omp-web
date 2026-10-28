@@ -77,9 +77,15 @@ export function paletteSources(query: string, stored: readonly PaletteItem[]): P
 	};
 }
 
+/** Shortest query that searches stored sessions: one character matches nearly every transcript. */
+export const STORED_SESSIONS_MIN_QUERY = 2;
+
+/** Stored sessions asked of the server: the palette shows at most a few, and covered or unowned rows drop out. */
+const STORED_SESSIONS_LIMIT = 30;
+
 /** Stored sessions in every project matching `query`, as palette items. */
 export async function searchStoredSessions(query: string): Promise<PaletteItem[]> {
-	const candidates = await searchAllProjectSessions(query);
+	const candidates = await searchAllProjectSessions(query, STORED_SESSIONS_LIMIT);
 	const covered = new Set(
 		state.sessionRoster.flatMap((d) => (d.lastSessionFile ? [d.lastSessionFile] : [])),
 	);

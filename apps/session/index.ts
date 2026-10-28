@@ -761,11 +761,15 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 					}))
 					.sort((x, y) => y.modifiedAt - x.modifiedAt)
 					.slice(0, 200);
-				broadcastAnswer({ type: "sessions", sessions: sessionsList });
+				broadcastAnswer({ type: "sessions", id: cmd.id, sessions: sessionsList });
 				break;
 			}
 			case "list_files": {
-				broadcastAnswer({ type: "files", files: await listFiles(cmd.query, cmd.limit ?? 50) });
+				broadcastAnswer({
+					type: "files",
+					id: cmd.id,
+					files: await listFiles(cmd.query, cmd.limit ?? 50),
+				});
 				break;
 			}
 			case "spawn":

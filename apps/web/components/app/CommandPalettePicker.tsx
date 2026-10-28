@@ -1,7 +1,21 @@
-import { createMemo, createResource, createSignal, For, Show, type Component } from "solid-js";
+import {
+	createMemo,
+	createResource,
+	createSignal,
+	For,
+	onCleanup,
+	Show,
+	type Component,
+} from "solid-js";
 import { flattenPalette, searchPalette, type PaletteItem } from "../../palette/palette";
-import { paletteSources, runPaletteItem, searchStoredSessions } from "../../store/palette";
+import {
+	paletteSources,
+	runPaletteItem,
+	searchStoredSessions,
+	STORED_SESSIONS_MIN_QUERY,
+} from "../../store/palette";
 import { ensureSettingsModel } from "../../store/settings";
+import { createDebouncer } from "../../store/search-debounce";
 import { reportError } from "../../store/toasts";
 import { Modal } from "../ui/Modal";
 import { PickerRow } from "../ui/PickerRow";
@@ -9,25 +23,33 @@ import { PickerRow } from "../ui/PickerRow";
 /**
  * Ctrl+K command palette: one search over commands, open targets, sessions in
  * every project, settings rows and models. Ranking is `searchPalette`; the
- * stored-session search is a server round trip, so it runs per query.
+ * stored-session search is a server round trip that scans every transcript, so it
+ * runs once per typing pause (not per keystroke) and only for a query long enough
+ * to mean something. Everything else filters as you type.
  */
 export const CommandPalettePicker: Component<{ onClose: () => void }> = (props) => {
 	// The settings rows come from the model, which loads on first use rather than at attach.
 	ensureSettingsModel();
 	const [query, setQuery] = createSignal("");
 	const [active, setActive] = createSignal(0);
-	const [stored] = createResource(query, async (q) => {
-		if (q.trim() === "") return [];
-		try {
-			return await searchStoredSessions(q);
-		} catch (err) {
-			reportError(err);
-			return [];
-		}
-	});
-	const sections = createMemo(() =>
-		searchPalette(query(), paletteSources(query(), stored() ?? [])),
+	const [settled, setSettled] = createSignal("");
+	const pause = createDebouncer();
+	onCleanup(pause.cancel);
+	const [stored] = createResource(
+		() => (settled().trim().length >= STORED_SESSIONS_MIN_QUERY ? settled() : false),
+		async (q) => {
+			try {
+				return await searchStoredSessions(q);
+			} catch (err) {
+				reportError(err);
+				return [];
+			}
+		},
 	);
+	/** The previous answer stays up while a newer search runs; a query too short to search shows none. */
+	const storedRows = () =>
+		query().trim().length >= STORED_SESSIONS_MIN_QUERY ? (stored() ?? []) : [];
+	const sections = createMemo(() => searchPalette(query(), paletteSources(query(), storedRows())));
 	const items = createMemo(() => flattenPalette(sections()));
 
 	const run = (item: PaletteItem) => runPaletteItem(item);
@@ -56,7 +78,9 @@ export const CommandPalettePicker: Component<{ onClose: () => void }> = (props) 
 				aria-label="Search the command palette"
 				value={query()}
 				onInput={(e) => {
-					setQuery(e.currentTarget.value);
+					const value = e.currentTarget.value;
+					setQuery(value);
+					pause.schedule(() => setSettled(value));
 					setActive(0);
 				}}
 				onKeyDown={onKeyDown}

@@ -1632,7 +1632,7 @@ export function connect(): void {
 				setState("availableCommands", frame.commands);
 				break;
 			case "sessions":
-				settleSessions(frame.sessions);
+				settleSessions(frame.id, frame.sessions);
 				break;
 			case "workspace_sessions":
 				// Unicast answer to list_workspace_sessions (fleet-scoped: settle keyed
@@ -1770,7 +1770,7 @@ export function connect(): void {
 				settleDaemonControl(frame);
 				break;
 			case "files":
-				settleFiles(frame.files);
+				settleFiles(frame.id, frame.files);
 				break;
 			case "subagent_lifecycle": {
 				applySubagentLifecycle(frame.payload);

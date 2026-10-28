@@ -345,8 +345,8 @@ const EDGE_REPRIME_FRAMES: Record<string, true> = {
 /**
  * Forwarded commands whose answer is id-keyed (ANSWER_FRAME_TYPES) and so
  * routable back to the browser that asked. `login_code`/`ui_response` carry
- * an id too but are answered by no frame, and `list_sessions`/`list_files`
- * answer with unkeyed frames (sessions/files), so neither is routable.
+ * an id too but are answered by no frame, and the `sessions`/`files` frames that
+ * answer `list_sessions`/`list_files` are not routed by id here, so neither is routable.
  */
 const ANSWERED_FORWARD_TYPES: Record<string, true> = {
 	call: true,
