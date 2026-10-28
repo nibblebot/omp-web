@@ -18,7 +18,8 @@ let focusOrigin: () => unknown;
 beforeAll(async () => {
 	globals["document"] = fakeDocument;
 	globals["HTMLElement"] = FakeElement;
-	({ focusOrigin } = await import("../components/ui/focus.ts?fresh=origin"));
+	const path: string = "../components/ui/focus.ts?fresh=origin";
+	({ focusOrigin } = await import(path));
 });
 
 afterAll(() => {
