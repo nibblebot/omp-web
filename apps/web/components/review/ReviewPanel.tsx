@@ -1,7 +1,17 @@
-import { createEffect, createMemo, createSignal, For, on, Show, type Component } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	on,
+	onCleanup,
+	Show,
+	type Component,
+} from "solid-js";
 import type { GitPathEntry } from "#lib/wire/protocol";
 import type { GitReviewDiff } from "../../store/slices/review";
 import { sha256Hex } from "../../text/sha256";
+import { virtualWindow } from "../../usage/model-query";
 import {
 	createAnnotation,
 	fileDiff,
@@ -30,6 +40,129 @@ import {
 const hunksStageable = (diff: GitReviewDiff): boolean =>
 	diff.area === "unstaged" && !diff.binary && !diff.tooLarge;
 
+const canStage = (): boolean => gitStatus()?.eligible.stage === true;
+
+/** Whether any of `rows` is selected; the common empty selection costs nothing. */
+const anySelected = (rows: GitPathEntry[]): boolean => {
+	const picked = gitSelection();
+	return picked.size > 0 && rows.some((row) => picked.has(row.path));
+};
+
+/** Row pitch (height plus gap) and viewport height used until the first rows mount and get measured. */
+const ROW_PITCH_ESTIMATE = 32;
+const VIEWPORT_ESTIMATE = 400;
+
+/**
+ * One changed-file list. Rows are one line at a fixed pitch and only those near the
+ * list's viewport are mounted (spacer padding stands in for the rest), so thousands
+ * of paths stay cheap to mount and scroll. Selection is a Set, so a row's checkbox
+ * is an O(1) lookup. Tab walks the mounted rows; the overscan keeps the next stop
+ * mounted, and the browser scrolling a focused row into view moves the window on.
+ */
+const PathList: Component<{ area: "unstaged" | "staged"; rows: GitPathEntry[] }> = (props) => {
+	const [scrollTop, setScrollTop] = createSignal(0);
+	const [viewportHeight, setViewportHeight] = createSignal(VIEWPORT_ESTIMATE);
+	const [rowPitch, setRowPitch] = createSignal(ROW_PITCH_ESTIMATE);
+	let listEl: HTMLDivElement | undefined;
+	const span = createMemo(() =>
+		virtualWindow(scrollTop(), viewportHeight(), rowPitch(), props.rows.length),
+	);
+	const visible = createMemo(() => props.rows.slice(span().start, span().end));
+	// The pitch is measured once per size (fractional geometry, as ModelSearchList does), never
+	// per window move: re-deriving it on each move can alternate between two values forever.
+	let pitchMeasured = false;
+	const measure = (): void => {
+		if (!listEl) return;
+		setViewportHeight(listEl.clientHeight);
+		if (pitchMeasured) return;
+		const mounted = listEl.querySelectorAll<HTMLElement>(".review-path-row");
+		if (mounted.length < 2) return;
+		const pitch = mounted[1].getBoundingClientRect().top - mounted[0].getBoundingClientRect().top;
+		if (pitch <= 0) return;
+		pitchMeasured = true;
+		setRowPitch(pitch);
+	};
+	const resizes = new ResizeObserver(() => {
+		pitchMeasured = false;
+		measure();
+	});
+	onCleanup(() => resizes.disconnect());
+	return (
+		<section class="review-paths">
+			<h3>
+				{props.area === "unstaged" ? "Worktree" : "Staged"} ({props.rows.length})
+			</h3>
+			<Show when={props.rows.length > 0} fallback={<p>No changes</p>}>
+				<div
+					class="review-path-list"
+					ref={(el) => {
+						listEl = el;
+						resizes.observe(el);
+					}}
+					onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+				>
+					<div
+						class="review-path-window"
+						style={{
+							"padding-top": `${span().start * rowPitch()}px`,
+							"padding-bottom": `${(props.rows.length - span().end) * rowPitch()}px`,
+						}}
+					>
+						<For each={visible()}>
+							{(row) => {
+								const label = (): string =>
+									row.origPath ? `${row.origPath} → ${row.path}` : row.path;
+								return (
+									<div class="review-path-row">
+										<label>
+											<input
+												type="checkbox"
+												checked={gitSelection().has(row.path)}
+												disabled={gitLoading()}
+												onChange={() => toggleGitPath(row.path)}
+											/>
+											<span title={label()}>{label()}</span>
+										</label>
+										<div class="review-path-actions">
+											<span class="review-badge">{row.kind}</span>
+											<Show when={row.kind === "conflicted"}>
+												<span class="review-path-hint">Resolve conflict before staging/commit</span>
+											</Show>
+											<button type="button" onClick={() => void loadFileDiff(row.path, props.area)}>
+												View diff
+											</button>
+											<Show
+												when={props.area === "unstaged"}
+												fallback={
+													<button
+														type="button"
+														disabled={gitLoading()}
+														onClick={() => void unstagePaths([row.path])}
+													>
+														Unstage
+													</button>
+												}
+											>
+												<button
+													type="button"
+													disabled={gitLoading() || !canStage() || row.kind === "conflicted"}
+													onClick={() => void stagePaths([row.path])}
+												>
+													Stage
+												</button>
+											</Show>
+										</div>
+									</div>
+								);
+							}}
+						</For>
+					</div>
+				</div>
+			</Show>
+		</section>
+	);
+};
+
 /**
  * Git review as a dock body (U18). Left: worktree and staged files with
  * per-file stage/unstage. Right: the selected file's hunks, each with stage,
@@ -51,9 +184,10 @@ export const ReviewPanel: Component = () => {
 			if (available) void refreshGit();
 		}),
 	);
-	const selected = (rows: GitPathEntry[]) =>
-		rows.filter((row) => gitSelection().includes(row.path)).map((row) => row.path);
-	const canStage = () => gitStatus()?.eligible.stage === true;
+	const selected = (rows: GitPathEntry[]) => {
+		const picked = gitSelection();
+		return rows.filter((row) => picked.has(row.path)).map((row) => row.path);
+	};
 	// The anchor is the hunk's own text, so a later re-diff that changes it is caught as stale.
 	const saveNote = async (hunkText: string) => {
 		const note = noteDraft().trim();
@@ -66,55 +200,6 @@ export const ReviewPanel: Component = () => {
 		setNoteIndex(null);
 		setNoteDraft("");
 	};
-	const pathList = (area: "unstaged" | "staged", rows: GitPathEntry[]) => (
-		<section class="review-paths">
-			<h3>
-				{area === "unstaged" ? "Worktree" : "Staged"} ({rows.length})
-			</h3>
-			<For each={rows} fallback={<p>No changes</p>}>
-				{(row) => (
-					<div class="review-path-row">
-						<label>
-							<input
-								type="checkbox"
-								checked={gitSelection().includes(row.path)}
-								disabled={gitLoading()}
-								onChange={() => toggleGitPath(row.path)}
-							/>
-							<span>{row.origPath ? `${row.origPath} → ${row.path}` : row.path}</span>
-						</label>
-						<span class="review-badge">{row.kind}</span>
-						<Show when={row.kind === "conflicted"}>
-							<span>Resolve conflict before staging/commit</span>
-						</Show>
-						<button type="button" onClick={() => void loadFileDiff(row.path, area)}>
-							View diff
-						</button>
-						<Show
-							when={area === "unstaged"}
-							fallback={
-								<button
-									type="button"
-									disabled={gitLoading()}
-									onClick={() => void unstagePaths([row.path])}
-								>
-									Unstage
-								</button>
-							}
-						>
-							<button
-								type="button"
-								disabled={gitLoading() || !canStage() || row.kind === "conflicted"}
-								onClick={() => void stagePaths([row.path])}
-							>
-								Stage
-							</button>
-						</Show>
-					</div>
-				)}
-			</For>
-		</section>
-	);
 	return (
 		<section class="review-panel" aria-label="Git review">
 			<Show when={gitReviewAvailable()} fallback={<p>{gitReviewUnavailableReason()}</p>}>
@@ -146,7 +231,7 @@ export const ReviewPanel: Component = () => {
 							<p>{status().cwd}</p>
 							<div class="review-split">
 								<div class="review-files">
-									{pathList("unstaged", status().unstaged)}
+									<PathList area="unstaged" rows={status().unstaged} />
 									<div class="review-actions">
 										<label>
 											<input
@@ -161,7 +246,7 @@ export const ReviewPanel: Component = () => {
 											disabled={
 												gitLoading() ||
 												!canStage() ||
-												(all() ? !status().unstaged.length : !selected(status().unstaged).length)
+												(all() ? !status().unstaged.length : !anySelected(status().unstaged))
 											}
 											onClick={() =>
 												all() ? requestStageAll() : void stagePaths(selected(status().unstaged))
@@ -170,10 +255,10 @@ export const ReviewPanel: Component = () => {
 											Stage {all() ? "all" : "selected paths"}
 										</button>
 									</div>
-									{pathList("staged", status().staged)}
+									<PathList area="staged" rows={status().staged} />
 									<button
 										type="button"
-										disabled={gitLoading() || !selected(status().staged).length}
+										disabled={gitLoading() || !anySelected(status().staged)}
 										onClick={() => void unstagePaths(selected(status().staged))}
 									>
 										Unstage selected paths

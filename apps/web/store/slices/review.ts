@@ -8,8 +8,6 @@ import type {
 export interface GitReviewDiff {
 	path: string;
 	area: "unstaged" | "staged" | "commit";
-	oldText?: string;
-	newText?: string;
 	binary: boolean;
 	tooLarge: boolean;
 	fingerprint: string;
@@ -31,7 +29,8 @@ export interface ReviewState {
 	gitStatus: GitStatusDto | null;
 	gitLoading: boolean;
 	gitError: string | null;
-	gitSelection: string[];
+	/** Selected paths; replaced (never mutated) on each toggle so row reads stay O(1). */
+	gitSelection: ReadonlySet<string>;
 	selectedHunks: number[];
 	fileDiff: GitReviewDiff | null;
 	planReview: PlanReviewDto | null;
@@ -53,7 +52,7 @@ export function createReviewState(): ReviewState {
 		gitStatus: null,
 		gitLoading: false,
 		gitError: null,
-		gitSelection: [],
+		gitSelection: new Set(),
 		selectedHunks: [],
 		fileDiff: null,
 		planReview: null,

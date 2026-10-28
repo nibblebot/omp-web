@@ -77,22 +77,10 @@ export const reviewGitStatusUnavailable: GitStatusDto = {
 export const reviewGitDiff: GitReviewDiff = {
 	path: "apps/web/components/ui/CopyButton.tsx",
 	area: "unstaged",
-	oldText:
-		'export const CopyButton = (props) => {\n\tconst label = copied() ? "copied" : "copy";\n',
-	newText:
-		'export const CopyButton = (props) => {\n\tconst label = copied() ? "copied" : failed() ? "failed" : "copy";\n',
 	binary: false,
 	tooLarge: false,
 	fingerprint: "idx_3a91",
 	truncated: false,
-	patch: [
-		"--- a/apps/web/components/ui/CopyButton.tsx",
-		"+++ b/apps/web/components/ui/CopyButton.tsx",
-		"@@ -5,2 +5,2 @@",
-		" export const CopyButton = (props) => {",
-		'-\tconst label = copied() ? "copied" : "copy";',
-		'+\tconst label = copied() ? "copied" : failed() ? "failed" : "copy";',
-	].join("\n"),
 	hunks: [
 		{
 			index: 0,
@@ -100,6 +88,26 @@ export const reviewGitDiff: GitReviewDiff = {
 			text: '-\tconst label = copied() ? "copied" : "copy";\n+\tconst label = copied() ? "copied" : failed() ? "failed" : "copy";',
 		},
 	],
+};
+
+/** GitReviewDiff variant: a staged diff, which the server answers with `patch` text and no stageable hunks. */
+export const reviewGitDiffStaged: GitReviewDiff = {
+	path: "apps/web/store/review.ts",
+	area: "staged",
+	binary: false,
+	tooLarge: false,
+	fingerprint: "idx_3a91",
+	truncated: false,
+	hunks: [],
+	patch: [
+		"diff --git a/apps/web/store/review.ts b/apps/web/store/review.ts",
+		"--- a/apps/web/store/review.ts",
+		"+++ b/apps/web/store/review.ts",
+		"@@ -91,5 +91,5 @@",
+		" export function toggleGitPath(path: string): void {",
+		'-\tsetState("review", "gitSelection", (values) =>',
+		"+\tconst next = new Set(state.review.gitSelection);",
+	].join("\n"),
 };
 
 /** GitReviewDiff variant: binary asset in the staged area, so the viewer shows the binary placeholder. */
@@ -302,7 +310,9 @@ export function gitCalls(options: GitCallOptions = {}): CallHandlers {
 		},
 		gitFileDiff: (args) => {
 			const { path } = argsOf(args);
-			const diff = [reviewGitDiff, reviewGitDiffBinary].find((item) => item.path === path);
+			const diff = [reviewGitDiff, reviewGitDiffStaged, reviewGitDiffBinary].find(
+				(item) => item.path === path,
+			);
 			if (!diff) throw new Error(`no diff fixture for ${String(path)}`);
 			return structuredClone(diff);
 		},

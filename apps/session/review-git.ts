@@ -535,8 +535,11 @@ export class RepoAdapter {
 	}
 
 	/**
-	 * Render one file's old/new text for review. Binary/oversize sides are
-	 * reported, never inlined: `{ binary: true }` / `{ tooLarge: true }`.
+	 * Review one file's diff. Binary/oversize sides are reported, never inlined:
+	 * `{ binary: true }` / `{ tooLarge: true }`. The full old/new file text is not
+	 * returned (the review UI renders hunks or the patch only). Only an unstaged
+	 * diff is split into stageable `hunks`; for a staged or commit diff `patch`
+	 * carries the unified diff text instead, bounded by `maxBytes`.
 	 * `area: "commit"` compares the file at HEAD^ vs HEAD.
 	 */
 	async fileDiff(
@@ -544,13 +547,12 @@ export class RepoAdapter {
 		area: "unstaged" | "staged" | "commit",
 		maxBytes = 256 * 1024,
 	): Promise<{
-		oldText?: string;
-		newText?: string;
 		binary: boolean;
 		tooLarge: boolean;
 		fingerprint: string;
 		hunks: { index: number; header: string; text: string }[];
 		truncated: boolean;
+		patch?: string;
 	}> {
 		RepoAdapter.checkPath(path);
 		const snap = await this.snapshot();
@@ -632,18 +634,13 @@ export class RepoAdapter {
 					else if (hunks.length) hunks[hunks.length - 1].text += `\n${line}`;
 				}
 			}
-			const decode = (side: typeof oldSide) =>
-				side && !binary && !tooLarge
-					? new TextDecoder("utf-8").decode(Buffer.from(side.data))
-					: undefined;
 			return {
-				oldText: decode(oldSide),
-				newText: decode(newSide),
 				binary,
 				tooLarge,
 				fingerprint: snap.indexFingerprint,
 				hunks,
 				truncated,
+				...(!hunks.length && !binary && !tooLarge && !truncated && patch ? { patch } : {}),
 			};
 		} catch (error) {
 			if (error instanceof RepoStaleError || error instanceof RepoNotEligibleError) throw error;

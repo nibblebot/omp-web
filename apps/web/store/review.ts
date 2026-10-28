@@ -81,7 +81,10 @@ async function getGit(): Promise<void> {
 	if (epoch !== state.review.generation) return;
 	setState("review", "gitStatus", snapshot);
 	const paths = new Set([...snapshot.staged, ...snapshot.unstaged].map((row) => row.path));
-	setState("review", "gitSelection", (previous) => previous.filter((path) => paths.has(path)));
+	const kept = [...state.review.gitSelection].filter((path) => paths.has(path));
+	// Replaced only when something was dropped, so a refresh that keeps every selected path wakes no row.
+	if (kept.length !== state.review.gitSelection.size)
+		setState("review", "gitSelection", new Set(kept));
 	if (fileDiff()?.fingerprint !== snapshot.indexFingerprint) {
 		setState("review", "fileDiff", null);
 		setState("review", "selectedHunks", []);
@@ -89,9 +92,9 @@ async function getGit(): Promise<void> {
 }
 export const refreshGit = () => run("git", getGit);
 export function toggleGitPath(path: string): void {
-	setState("review", "gitSelection", (values) =>
-		values.includes(path) ? values.filter((value) => value !== path) : [...values, path],
-	);
+	const next = new Set(state.review.gitSelection);
+	if (!next.delete(path)) next.add(path);
+	setState("review", "gitSelection", next);
 }
 export function toggleHunk(index: number): void {
 	setState("review", "selectedHunks", (values) =>
@@ -126,9 +129,9 @@ async function mutateGit(
 		getGit,
 	);
 }
-export const stagePaths = (paths: string[] = gitSelection(), all = false) =>
+export const stagePaths = (paths: string[] = [...gitSelection()], all = false) =>
 	paths.length || all ? mutateGit("gitStage", { paths, all }) : Promise.resolve(undefined);
-export const unstagePaths = (paths: string[] = gitSelection(), all = false) =>
+export const unstagePaths = (paths: string[] = [...gitSelection()], all = false) =>
 	paths.length || all ? mutateGit("gitUnstage", { paths, all }) : Promise.resolve(undefined);
 export const stageHunks = (path = fileDiff()?.path, hunkIndices = selectedHunks()) =>
 	path && hunkIndices.length && fileDiff() && !fileDiff()?.truncated

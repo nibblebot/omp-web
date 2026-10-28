@@ -80,8 +80,38 @@ describe("repository review mutations", () => {
 		expect(staged.staged.map((file) => file.path)).toContain("tracked.txt");
 		expect(staged.unstaged.map((file) => file.path)).toContain("tracked.txt");
 		const diff = await adapter.fileDiff("tracked.txt", "staged");
-		expect(diff.newText).toContain("first edit");
-		expect(diff.newText).not.toContain("last edit");
+		expect(diff.patch).toContain("+first edit");
+		expect(diff.patch).not.toContain("last edit");
+	});
+
+	test("file diffs carry hunks (unstaged) or patch text (staged, commit), never whole file text", async () => {
+		const { repo, write, adapter } = await fixture();
+		await write("tracked.txt", "committed change\n");
+		await repo.stageFiles(["tracked.txt"], null);
+		await repo.commitCreate("change tracked", {}, null);
+		await write("tracked.txt", "staged change\n");
+		await repo.stageFiles(["tracked.txt"], null);
+		await write("tracked.txt", "worktree change\n");
+
+		const unstaged = await adapter.fileDiff("tracked.txt", "unstaged");
+		expect(unstaged.hunks).toHaveLength(1);
+		expect(unstaged.hunks[0].text).toContain("+worktree change");
+		expect(unstaged.patch).toBeUndefined();
+
+		const staged = await adapter.fileDiff("tracked.txt", "staged");
+		expect(staged.hunks).toEqual([]);
+		expect(staged.patch).toContain("-committed change");
+		expect(staged.patch).toContain("+staged change");
+
+		const commit = await adapter.fileDiff("tracked.txt", "commit");
+		expect(commit.hunks).toEqual([]);
+		expect(commit.patch).toContain("-original");
+		expect(commit.patch).toContain("+committed change");
+
+		for (const answer of [unstaged, staged, commit]) {
+			expect(answer).not.toHaveProperty("oldText");
+			expect(answer).not.toHaveProperty("newText");
+		}
 	});
 
 	test("same porcelain status with a concurrent content edit refuses stage", async () => {

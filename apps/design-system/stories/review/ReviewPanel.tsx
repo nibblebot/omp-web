@@ -4,6 +4,7 @@ import {
 	gitCalls,
 	reviewGitDiff,
 	reviewGitDiffBinary,
+	reviewGitDiffStaged,
 	reviewGitStatusLarge,
 	reviewGitStatusUnavailable,
 } from "../../fixtures/review";
@@ -33,6 +34,20 @@ export default defineStory({
 			seed: () => {
 				answerCalls(gitCalls());
 				setState("review", "fileDiff", reviewGitDiff);
+			},
+			render: () => (
+				<div class="ds-frame-tall">
+					<ReviewPanel />
+				</div>
+			),
+		},
+		{
+			name: "Staged diff",
+			description:
+				"A staged file's diff: staged diffs have no stageable hunks, so the panel shows the server's patch text.",
+			seed: () => {
+				answerCalls(gitCalls());
+				setState("review", "fileDiff", reviewGitDiffStaged);
 			},
 			render: () => (
 				<div class="ds-frame-tall">

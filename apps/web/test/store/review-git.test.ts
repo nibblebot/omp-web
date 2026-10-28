@@ -71,6 +71,38 @@ describe("git mutations (REV-14)", () => {
 	});
 });
 
+describe("git path selection", () => {
+	afterEach(() => setState("review", "gitSelection", new Set()));
+
+	test("toggling adds a path, toggling again removes only that path", () => {
+		review.toggleGitPath("a.ts");
+		review.toggleGitPath("b.ts");
+		expect([...review.gitSelection()].sort()).toEqual(["a.ts", "b.ts"]);
+		review.toggleGitPath("a.ts");
+		expect([...review.gitSelection()]).toEqual(["b.ts"]);
+	});
+
+	test("staging without paths stages exactly the selection", async () => {
+		const calls: Array<{ method: string; args: unknown }> = [];
+		handler = async (method, args) => {
+			calls.push({ method, args });
+			return method === "gitStatus" ? snapshot : undefined;
+		};
+		review.toggleGitPath("a.ts");
+		review.toggleGitPath("b.ts");
+		expect(await review.stagePaths()).toBe(true);
+		expect(calls[0]).toMatchObject({ method: "gitStage", args: [{ paths: ["a.ts", "b.ts"] }] });
+	});
+
+	test("a refresh drops selected paths that left the status and keeps the rest", async () => {
+		handler = async () => snapshot;
+		review.toggleGitPath("a.ts");
+		review.toggleGitPath("gone.ts");
+		await review.refreshGit();
+		expect([...review.gitSelection()]).toEqual(["a.ts"]);
+	});
+});
+
 describe("review confirm requests", () => {
 	const calls: Array<{ method: string; args: unknown }> = [];
 	// The store's mutation chain runs entirely on microtasks; no timers needed.

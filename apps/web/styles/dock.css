@@ -146,19 +146,53 @@
 	gap: var(--space-3);
 	min-width: 0;
 }
+/* PathList mounts only the rows near its viewport (padding stands in for the rest), so every
+ * row is two lines at the same height: the path on the first (truncated, its title holds it
+ * whole) and badge and buttons on the second. Spacer padding changes as the window moves;
+ * browser scroll anchoring would answer each change by shifting scrollTop, which moves the
+ * window again. */
+.review-path-list {
+	max-height: 24rem;
+	overflow-y: auto;
+	overflow-anchor: none;
+}
+.review-path-window {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
 .review-path-row {
 	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: var(--space-2);
+	flex-direction: column;
+	gap: var(--space-1);
 	min-width: 0;
+	white-space: nowrap;
 }
 .review-path-row label {
 	display: flex;
 	align-items: center;
 	gap: var(--space-2);
 	min-width: 0;
-	overflow-wrap: anywhere;
+}
+.review-path-row label span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.review-path-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-width: 0;
+}
+.review-path-actions > * {
+	flex: none;
+}
+.review-path-actions > .review-path-hint {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 .review-diff h3 {
 	margin: 0;
