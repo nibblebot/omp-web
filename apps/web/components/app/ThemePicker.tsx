@@ -87,14 +87,13 @@ function optionDescription(option: ThemeOption, selectedScheme: ThemeScheme | nu
 
 /**
  * Custom listbox of themes (never a native select), disclosed inline under its trigger so
- * it lives inside the Appearance popover without a second portal (a portaled layer would
- * count as an outside press and close the popover). `kind="linked"` lists every theme as
- * one row split into its dark and light halves; `kind="light"` / `"dark"` is the unlinked
- * picker of that scheme, full-width rows of the themes that have it. Each half paints
+ * it lives inside the Appearance sheet without a second portal. `kind="linked"` lists every
+ * theme as one row split into its dark and light halves; `kind="light"` / `"dark"` is the
+ * unlinked picker of that scheme, full-width rows of the themes that have it. Each half paints
  * itself with its variant's own colors. Choosing a theme (click, Enter or Space) applies it
  * and keeps the list open so several themes can be tried in turn. Keyboard follows the APG
  * listbox: Arrow keys, Home, End and type-ahead move focus, Escape closes and returns focus
- * to the trigger (without closing a surrounding popover), Tab leaves. `floating` lets the
+ * to the trigger (without closing the surrounding sheet), Tab leaves. `floating` lets the
  * list overlay the page (top bar) instead of pushing the content below it, and
  * `defaultOpen` mounts it with the list showing (stories).
  */
@@ -162,7 +161,7 @@ export const ThemePicker: Component<{
 
 	const onListKeyDown = (e: KeyboardEvent) => {
 		if (e.key === "Escape") {
-			// Native listener (on:keydown): stopping here keeps the surrounding Popover's document handler from closing it too.
+			// The list carries data-inline-escape, so the surrounding Modal leaves this Escape to it.
 			e.preventDefault();
 			e.stopPropagation();
 			close(true);
@@ -268,6 +267,7 @@ export const ThemePicker: Component<{
 					role="listbox"
 					id={listId}
 					ref={list}
+					data-inline-escape
 					aria-labelledby={labelId}
 					on:keydown={onListKeyDown}
 				>

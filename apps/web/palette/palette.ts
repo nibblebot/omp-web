@@ -42,7 +42,7 @@ export const PALETTE_GROUP_ORDER: readonly PaletteGroup[] = [
 /** Overlays that have no slash command of their own. */
 export type PaletteOpenTarget =
 	| "settings"
-	/** The header's Appearance popover (theme, text, transcript, status, motion, sidebar). */
+	/** AppearanceSheet (theme, text, transcript, status, motion, sidebar). */
 	| "appearance"
 	| "activities"
 	/** ShareSheet: start, stop or copy links for the attached session's room. */
@@ -410,18 +410,18 @@ export function settingItems(
 		const tabLabel = tabs.find((meta) => meta.id === tab.id)?.label ?? tab.label;
 		for (const group of tab.groups) {
 			for (const row of group.items) {
-				// A row the Appearance popover owns opens the popover, not its old tab.
-				const popoverGroup = appearanceSettingGroup(row.path);
+				// A row the Appearance sheet owns opens that sheet, not its old tab.
+				const appearanceGroup = appearanceSettingGroup(row.path);
 				items.push({
 					id: `setting:row:${row.path}`,
 					group: "Settings",
 					label: settingLabel(row),
 					detail:
-						popoverGroup === undefined
+						appearanceGroup === undefined
 							? `${tabLabel}${group.name ? ` · ${group.name}` : ""}`
-							: `Appearance menu · ${popoverGroup}`,
+							: `Appearance · ${appearanceGroup}`,
 					action:
-						popoverGroup === undefined
+						appearanceGroup === undefined
 							? { kind: "setting", tabId: tab.id, query: settingLabel(row) }
 							: { kind: "open", target: "appearance" },
 					keywords: [row.label, settingDescription(row), row.path, group.name],
@@ -430,15 +430,13 @@ export function settingItems(
 		}
 	}
 	for (const { label, tabId } of webRows) {
-		const inPopover = tabId === APPEARANCE_MENU_TAB;
+		const inAppearance = tabId === APPEARANCE_MENU_TAB;
 		items.push({
 			id: `setting:web:${label}`,
 			group: "Settings",
 			label,
-			detail: inPopover
-				? "Appearance menu"
-				: (tabs.find((tab) => tab.id === tabId)?.label ?? tabId),
-			action: inPopover
+			detail: inAppearance ? "Appearance" : (tabs.find((tab) => tab.id === tabId)?.label ?? tabId),
+			action: inAppearance
 				? { kind: "open", target: "appearance" }
 				: { kind: "setting", tabId, query: label },
 			keywords: [],

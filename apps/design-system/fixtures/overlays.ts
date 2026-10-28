@@ -256,7 +256,7 @@ export const settingsModel: SettingsModel = {
 			id: "appearance",
 			label: "Appearance",
 			groups: [
-				// The Appearance popover owns these rows: the sheet filters them out of its Display tab.
+				// The Appearance sheet owns these rows: the settings sheet filters them out of its Display tab.
 				...appearanceSettingsModel().tabs.flatMap((tab) => tab.groups),
 				{
 					name: "Images",

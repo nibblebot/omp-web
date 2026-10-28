@@ -59,9 +59,9 @@ export function filterSettings(model: SettingsModel, query: string): SettingsMat
 }
 
 /**
- * SDK display settings that live in the header's Appearance popover instead of the settings
- * sheet, by popover group, in the order the popover shows them. The sheet's Display tab,
- * its search and the palette route these paths to the popover.
+ * SDK display settings that live in the header's Appearance sheet instead of the settings
+ * sheet, by Appearance sheet group, in the order that sheet shows them. The settings sheet's Display tab,
+ * its search and the palette route these paths to the Appearance sheet.
  */
 export const APPEARANCE_SDK_SETTINGS = {
 	Transcript: [
@@ -79,7 +79,7 @@ const APPEARANCE_SDK_PATHS: ReadonlySet<string> = new Set(
 	Object.values(APPEARANCE_SDK_SETTINGS).flat(),
 );
 
-/** A model tab's groups as the sheet renders them: popover-owned rows removed, groups left empty dropped. */
+/** A model tab's groups as the settings sheet renders them: Appearance-owned rows removed, groups left empty dropped. */
 export function sheetGroups(tab: SettingsTab): SettingsGroup[] {
 	return tab.groups.flatMap((group) => {
 		const items = group.items.filter((item) => !isAppearanceSetting(item.path));
@@ -87,12 +87,12 @@ export function sheetGroups(tab: SettingsTab): SettingsGroup[] {
 	});
 }
 
-/** Whether a settings path is rendered by the Appearance popover, not the settings sheet. */
+/** Whether a settings path is rendered by the Appearance sheet, not the settings sheet. */
 export function isAppearanceSetting(path: string): boolean {
 	return APPEARANCE_SDK_PATHS.has(path);
 }
 
-/** The popover group an SDK setting appears under, or undefined for a path the sheet owns. */
+/** The Appearance sheet group an SDK setting appears under, or undefined for a path the settings sheet owns. */
 export function appearanceSettingGroup(path: string): string | undefined {
 	return Object.entries(APPEARANCE_SDK_SETTINGS).find(([, paths]) =>
 		(paths as readonly string[]).includes(path),
@@ -100,8 +100,8 @@ export function appearanceSettingGroup(path: string): string | undefined {
 }
 
 /**
- * Pseudo tab id of a search row that lives in the Appearance popover: settings search and the
- * palette open the popover for it instead of scrolling the sheet to a tab.
+ * Pseudo tab id of a search row that lives in the Appearance sheet: settings search and the
+ * palette open the Appearance sheet for it instead of scrolling the settings sheet to a tab.
  */
 export const APPEARANCE_MENU_TAB = "appearance-menu";
 
@@ -173,8 +173,8 @@ export function effectNote(effect: SettingView["effect"] | undefined): string | 
 
 /**
  * Browser-local and session-scoped rows outside the SDK model, so settings search reaches them here.
- * Each names the tab that renders it (`APPEARANCE_MENU_TAB` for a row in the Appearance popover; a new
- * popover row adds one here) and its label matches the row's label. `session` rows render only
+ * Each names the tab that renders it (`APPEARANCE_MENU_TAB` for a row in the Appearance sheet; a new
+ * Appearance sheet row adds one here) and its label matches the row's label. `session` rows render only
  * with a session attached; `signedIn` rows only after sign-in.
  */
 const WEB_UI_SEARCH_ROWS: {
@@ -295,13 +295,13 @@ export function filterWebUiSettings(query: string, context: WebUiContext): WebUi
 	).map(({ label, tabId }) => ({ label, tabId }));
 }
 
-/** Settings sheet search hits: the SDK rows the sheet renders, and the rows it only points to (a tab, or the Appearance popover). */
+/** Settings sheet search hits: the SDK rows the sheet renders, and the rows it only points to (a tab, or the Appearance sheet). */
 export interface SheetSearchHits {
 	sdk: SettingsMatch[];
 	pointers: WebUiSearchRow[];
 }
 
-/** Global search for the sheet. SDK rows owned by the Appearance popover become pointers into it, never rendered rows. */
+/** Global search for the settings sheet. SDK rows owned by the Appearance sheet become pointers into it, never rendered rows. */
 export function searchSheetSettings(
 	model: SettingsModel | null,
 	query: string,

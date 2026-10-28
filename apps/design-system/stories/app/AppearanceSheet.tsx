@@ -1,53 +1,25 @@
-import { createSignal, Show } from "solid-js";
-import { AppearancePopover } from "../../../web/components/app/AppearancePopover";
-import { PaletteIcon } from "../../../web/components/ui/icons";
+import { AppearanceSheet } from "../../../web/components/app/AppearanceSheet";
 import { setState } from "../../../web/state";
 import { seedAppearanceSettings } from "../../fixtures/appearance";
 import { seedThemes } from "../../fixtures/themes";
 import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
-/** The header's Appearance button owning its popover, as MainHeader does. */
-function HeaderAnchored() {
-	const [anchor, setAnchor] = createSignal<HTMLElement>();
-	const [open, setOpen] = createSignal(true);
-	return (
-		<header class="main-header">
-			<div class="main-header-title">omp-web</div>
-			<button
-				type="button"
-				class="main-header-btn"
-				ref={setAnchor}
-				title="Appearance"
-				aria-label="Appearance"
-				aria-haspopup="dialog"
-				aria-expanded={open()}
-				onClick={() => setOpen(!open())}
-			>
-				<PaletteIcon />
-			</button>
-			<Show when={open() ? anchor() : undefined}>
-				{(el) => <AppearancePopover anchor={el()} onClose={() => setOpen(false)} />}
-			</Show>
-		</header>
-	);
-}
-
 export default defineStory({
-	id: "app-appearance-popover",
-	title: "AppearancePopover",
-	component: { file: "apps/web/components/app/AppearancePopover.tsx", export: "AppearancePopover" },
+	id: "app-appearance-sheet",
+	title: "AppearanceSheet",
+	component: { file: "apps/web/components/app/AppearanceSheet.tsx", export: "AppearanceSheet" },
 	tabs: true,
 	variants: [
 		{
 			name: "Defaults",
 			description:
-				"Groups in order: Theme & text, Transcript, Status, Motion, Sidebar. Theme & text holds the Mode control, the theme picker with its link toggle, the themes footer (folder, Reload themes, failed files) and Font Size. Toggles apply live; the SDK rows write like the Settings sheet did, the browser rows persist under omp.display.* and omp.sidebar*. Show Turn Time stays blocked until Show Token Usage is on.",
+				"Right side sheet, separate from Settings. Groups in order: Theme & text, Transcript, Status, Motion, Sidebar. Theme & text holds the Mode control, the theme picker with its link toggle, the themes footer (folder, Reload themes, failed files) and Font Size. Toggles apply live; the SDK rows write like the Settings sheet did, the browser rows persist under omp.display.* and omp.sidebar*. Show Turn Time stays blocked until Show Token Usage is on.",
 			seed: () => {
 				seedAppearanceSettings();
 				seedThemes();
 			},
-			render: () => <HeaderAnchored />,
+			render: (ctx) => <AppearanceSheet onClose={ctx.close} />,
 		},
 		{
 			name: "Unlinked themes",
@@ -57,7 +29,7 @@ export default defineStory({
 				seedAppearanceSettings();
 				seedThemes({ mode: "light", linked: false, light: "gruvbox", dark: "everforest" });
 			},
-			render: () => <HeaderAnchored />,
+			render: (ctx) => <AppearanceSheet onClose={ctx.close} />,
 		},
 		{
 			name: "Selected theme unavailable",
@@ -67,7 +39,7 @@ export default defineStory({
 				seedAppearanceSettings();
 				seedThemes({ linked: false, dark: "removed-theme" });
 			},
-			render: () => <HeaderAnchored />,
+			render: (ctx) => <AppearanceSheet onClose={ctx.close} />,
 		},
 		{
 			name: "Preferences on",
@@ -78,7 +50,7 @@ export default defineStory({
 				setState("display", "softFade", true);
 				setState({ sidebarSessionTitleLines: 2, sidebarTitleFirst: true, sidebarUsage: false });
 			},
-			render: () => <HeaderAnchored />,
+			render: (ctx) => <AppearanceSheet onClose={ctx.close} />,
 		},
 		{
 			name: "Settings loading",
@@ -89,7 +61,7 @@ export default defineStory({
 				setState("currentWorkspaceId", "sess_09a41c");
 				answerCalls({ getSettings: () => Promise.withResolvers<unknown>().promise });
 			},
-			render: () => <HeaderAnchored />,
+			render: (ctx) => <AppearanceSheet onClose={ctx.close} />,
 		},
 	],
 });

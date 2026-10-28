@@ -3,8 +3,8 @@ import { setState, state } from "../../web/state";
 import { answerCalls, type CallHandlers } from "../session";
 
 /**
- * The SDK display settings the Appearance popover owns (APPEARANCE_SDK_SETTINGS), with the
- * labels, descriptions and defaults the SDK ships, so the popover renders real rows.
+ * The SDK display settings the Appearance sheet owns (APPEARANCE_SDK_SETTINGS), with the
+ * labels, descriptions and defaults the SDK ships, so the sheet renders real rows.
  */
 const flag = (path: string, label: string, description: string, value: boolean): SettingsItem => ({
 	path,
@@ -91,7 +91,7 @@ const sdkItems: SettingsItem[] = [
 ];
 for (const item of sdkItems) DEFAULTS[item.path] = item.value;
 
-/** A fresh settings model holding every Appearance popover SDK row at its default. */
+/** A fresh settings model holding every Appearance sheet SDK row at its default. */
 export function appearanceSettingsModel(): SettingsModel {
 	return {
 		revision: 1,
@@ -107,7 +107,7 @@ export function appearanceSettingsModel(): SettingsModel {
 }
 
 /**
- * `getSettings` and the write calls over one in-memory model, so toggling a popover row
+ * `getSettings` and the write calls over one in-memory model, so toggling an Appearance sheet row
  * sticks the way a live session's does (the write acks a newer revision; the refetch returns it).
  */
 export function appearanceCalls(initial: SettingsModel = appearanceSettingsModel()): CallHandlers {
@@ -129,7 +129,7 @@ export function appearanceCalls(initial: SettingsModel = appearanceSettingsModel
 	};
 }
 
-/** Attach a session (unless the story already has one) whose settings model carries the popover's SDK rows; writes stick. */
+/** Attach a session (unless the story already has one) whose settings model carries the Appearance sheet's SDK rows; writes stick. */
 export function seedAppearanceSettings(): void {
 	const model = appearanceSettingsModel();
 	if (state.currentWorkspaceId === "") setState("currentWorkspaceId", "sess_09a41c");

@@ -10,7 +10,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
  * inline like the TUI's `createAdvisorMessageCard`. Header `Advisor · N notes
  * [· K blockers]`, one severity-tinted rail per note with badge, advisor
  * attribution (non-default advisors only) and `T-n` age. Collapsed shows the
- * header alone; expanded adds every note. The Appearance menu's Advisor
+ * header alone; expanded adds every note. The Appearance sheet's Advisor
  * preference (`state.display.advisor`) picks the mode, independent of the
  * Ctrl+O tool-output toggle; clicking the header flips this card until the
  * preference changes again.

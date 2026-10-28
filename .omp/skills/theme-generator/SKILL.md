@@ -239,4 +239,4 @@ In a source checkout without the installed command, run `bun apps/cli/omp-web.ts
 
 ## 7. Report
 
-Tell the user: the file path, which variants were written, the source URL, any best-effort or substituted mappings, the remaining warnings with their causes, and: press **Reload themes** in the Appearance popover (Theme & text) to see it, then pick it in the theme picker. Mention that the stem `<stem>` is the theme id and that deleting the file removes it.
+Tell the user: the file path, which variants were written, the source URL, any best-effort or substituted mappings, the remaining warnings with their causes, and: press **Reload themes** in the Appearance sheet (Theme & text) to see it, then pick it in the theme picker. Mention that the stem `<stem>` is the theme id and that deleting the file removes it.

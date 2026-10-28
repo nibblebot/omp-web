@@ -16,17 +16,14 @@ import { SettingsRow, SettingsRowLayout } from "../settings/SettingsRow";
 import { SettingSegmented } from "../settings/controls/SettingSegmented";
 import { SettingToggle } from "../settings/controls/SettingToggle";
 import { MinusIcon, PlusIcon } from "../ui/icons";
-import { Popover } from "../ui/Popover";
+import { Modal } from "../ui/Modal";
 import { ThemeFilesFooter } from "./ThemeFilesFooter";
 import { ThemeLinkButton } from "./ThemeLinkButton";
 import { ThemeModeControl } from "./ThemeModeControl";
 import { ThemePicker } from "./ThemePicker";
 
-/** Surface width in px; the popover shrinks to fit a narrower viewport. */
-const WIDTH = 360;
-
 /**
- * The SDK display settings of one popover group (APPEARANCE_SDK_SETTINGS), rendered
+ * The SDK display settings of one sheet group (APPEARANCE_SDK_SETTINGS), rendered
  * as compact settings rows that write through `updateSetting` exactly as the settings
  * sheet did. Rows appear as the settings model loads; before then a note stands in,
  * since each row's control comes from the model.
@@ -34,7 +31,7 @@ const WIDTH = 360;
 const SdkRows: Component<{ group: keyof typeof APPEARANCE_SDK_SETTINGS }> = (props) => (
 	<>
 		<Show when={state.settingsModel === null}>
-			<p class="appearance-popover-note">
+			<p class="appearance-sheet-note">
 				{state.settingsLoading ? "Loading session settings…" : "Session settings unavailable."}
 			</p>
 		</Show>
@@ -47,10 +44,10 @@ const SdkRows: Component<{ group: keyof typeof APPEARANCE_SDK_SETTINGS }> = (pro
 );
 
 /**
- * The Appearance popover: the single home for web display settings, anchored to the
- * header's Appearance button (which owns and mounts it; never a ModalHost overlay, so
- * the transcript behind it stays visible for live preview). Groups, in order:
- * Theme & text, Transcript, Status, Motion, Sidebar. Scrolls when the viewport is short.
+ * The Appearance sheet: the single home for web display settings, a right side sheet
+ * (`state.modal === "appearance"`, ModalHost mounts it) opened by the header's Appearance
+ * button, the palette and settings search. Separate from the Settings sheet. Groups, in
+ * order: Theme & text, Transcript, Status, Motion, Sidebar; the body scrolls.
  *
  * Three kinds of row share the surface:
  * - SDK display settings (`SdkRows`): session settings, written with `updateSetting`.
@@ -64,11 +61,7 @@ const SdkRows: Component<{ group: keyof typeof APPEARANCE_SDK_SETTINGS }> = (pro
  *   come from the fleet (`state.themes`). Linked, one picker sets a theme for both schemes;
  *   unlinked, a Light theme and a Dark theme picker each set one.
  */
-export const AppearancePopover: Component<{
-	/** The Appearance button that owns this popover; presses on it are not "outside". */
-	anchor: HTMLElement;
-	onClose: () => void;
-}> = (props) => {
+export const AppearanceSheet: Component<{ onClose: () => void }> = (props) => {
 	// Font size is localStorage-only (prefs/theme.ts), so this signal mirrors it.
 	const [fontSize, setFontSize] = createSignal(currentFontSize());
 	// The SDK rows need the model; like the settings sheet, refresh it on open.
@@ -90,17 +83,8 @@ export const AppearancePopover: Component<{
 	);
 
 	return (
-		<Popover
-			anchor={props.anchor}
-			onClose={props.onClose}
-			label="Appearance"
-			class="appearance-popover"
-			width={WIDTH}
-			side="below"
-			align="end"
-		>
-			<h2 class="appearance-popover-title">Appearance</h2>
-			<div class="appearance-popover-body">
+		<Modal variant="sheet" class="appearance-sheet" title="Appearance" onClose={props.onClose}>
+			<div class="appearance-sheet-body">
 				<SettingsGroup title="Theme & text">
 					<SettingsRowLayout label="Mode" compact stacked>
 						<ThemeModeControl />
@@ -270,6 +254,6 @@ export const AppearancePopover: Component<{
 					</SettingsRowLayout>
 				</SettingsGroup>
 			</div>
-		</Popover>
+		</Modal>
 	);
 };

@@ -2,7 +2,7 @@ import { saveDisplayPref, type DisplayPrefName, type DisplayPrefs } from "../pre
 import { setState, state } from "../state";
 
 /**
- * Display preferences and the Appearance popover's open state. The values are
+ * Display preferences and opening the Appearance sheet. The values are
  * `state.display` (loaded from localStorage at startup, see prefs/display.ts);
  * `setDisplayPref` is their only writer: it applies the value to the store and
  * persists it.
@@ -26,14 +26,10 @@ export function setDisplayPref<N extends DisplayPrefName>(name: N, value: Displa
 }
 
 /**
- * The Appearance popover is owned by the header's Appearance button (like the
- * New workspace popover and its "+"): MainHeader mounts it from this flag, so
- * the palette and settings search open it without holding the button.
+ * Open the Appearance sheet (`state.modal`, ModalHost mounts it), from the
+ * header's Appearance button, the palette and settings search. It replaces any
+ * open modal, Settings included; closing goes through ModalHost.
  */
 export function openAppearance(): void {
-	setState("appearanceOpen", true);
-}
-
-export function closeAppearance(): void {
-	setState("appearanceOpen", false);
+	setState("modal", "appearance");
 }

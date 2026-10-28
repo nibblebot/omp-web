@@ -37,7 +37,7 @@ export function SettingsRowLayout(props: {
 	note?: string;
 	/** Text, secret, JSON and ordered-list rows: the control drops below the help text. */
 	stacked?: boolean;
-	/** For a row in a popover (the Appearance menu): tighter spacing and smaller type, and the description moves to a tooltip so the row stays one line. */
+	/** For a row in the Appearance sheet: tighter spacing and smaller type, and the description moves to a tooltip so the row stays one line. */
 	compact?: boolean;
 	/** Why the row's control is disabled (an unmet dependency): dims the row, shown as its tooltip. */
 	disabled?: string;
@@ -97,7 +97,7 @@ export function SettingsRowLayout(props: {
 /**
  * One settings row: the control is chosen by `controlKind`, and every write goes
  * through the store, which resolves the revision when it dispatches the write.
- * `compact` tightens the layout for a popover; the write target is the same.
+ * `compact` tightens the layout for the Appearance sheet; the write target is the same.
  */
 export function SettingsRow(props: { item: SettingsItem; compact?: boolean }) {
 	const item = () => props.item;

@@ -222,7 +222,7 @@ describe("inverted hide flags", () => {
 	});
 });
 
-describe("Appearance popover ownership", () => {
+describe("Appearance sheet ownership", () => {
 	const attached = { sessionAttached: true, signedIn: true };
 	const tab: SettingsTab = {
 		id: "appearance",
@@ -243,7 +243,7 @@ describe("Appearance popover ownership", () => {
 	};
 	const model: SettingsModel = { tabs: [tab] };
 
-	test("names every popover SDK path once, with its group", () => {
+	test("names every Appearance sheet SDK path once, with its group", () => {
 		const paths = Object.values(APPEARANCE_SDK_SETTINGS).flat();
 		expect(new Set(paths).size).toBe(paths.length);
 		expect(isAppearanceSetting("hideThinkingBlock")).toBe(true);
@@ -254,13 +254,13 @@ describe("Appearance popover ownership", () => {
 		expect(appearanceSettingGroup("images.autoResize")).toBeUndefined();
 	});
 
-	test("the sheet's groups drop popover rows and groups left empty", () => {
+	test("the settings sheet's groups drop Appearance sheet rows and groups left empty", () => {
 		const groups = sheetGroups(tab);
 		expect(groups.map((group) => group.name)).toEqual(["Display"]);
 		expect(groups[0]?.items.map((row) => row.path)).toEqual(["display.compactTools"]);
 	});
 
-	test("moved web rows point at the popover, not a tab", () => {
+	test("moved web rows point at the Appearance sheet, not a tab", () => {
 		for (const label of ["Theme", "Font Size", "Soft Fade", "Usage in Sidebar"]) {
 			expect(filterWebUiSettings(label, attached)).toContainEqual({
 				label,
@@ -272,7 +272,7 @@ describe("Appearance popover ownership", () => {
 		]);
 	});
 
-	test("sheet search renders only sheet-owned SDK rows and points at the popover for the rest", () => {
+	test("sheet search renders only sheet-owned SDK rows and points at the Appearance sheet for the rest", () => {
 		const hits = searchSheetSettings(model, "show", attached);
 		expect(hits.sdk.map((match) => match.item.path)).toEqual([]);
 		expect(hits.pointers).toEqual([

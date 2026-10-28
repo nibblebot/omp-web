@@ -264,6 +264,8 @@ export type ModalName =
 	| "model"
 	| "stats"
 	| "settings"
+	// Appearance sheet (display settings), separate from Settings.
+	| "appearance"
 	| "sessions"
 	| "advisor"
 	| "login"
@@ -579,8 +581,6 @@ export const [state, setState] = createStore({
 	// owns the table, setDisplayPref writes). Paced reveal is display.smoothStreaming,
 	// read via chat/display-prefs.
 	display: loadDisplayPrefs(),
-	// The header's Appearance popover is open (openAppearance/closeAppearance; MainHeader mounts it).
-	appearanceOpen: false,
 	error: null as string | null,
 	collabStatus: COLLAB_OFF,
 	// Client-side debug ring (Debug panel): one entry per transport lifecycle
@@ -1955,12 +1955,7 @@ export {
 	sendWorktreeDeleteInfo,
 	fetchCloneIntoProject,
 } from "./store/projects";
-export {
-	applyDisplayAttributes,
-	closeAppearance,
-	openAppearance,
-	setDisplayPref,
-} from "./store/display";
+export { applyDisplayAttributes, openAppearance, setDisplayPref } from "./store/display";
 export {
 	closeSessionDetails,
 	closeWorktreeSessions,

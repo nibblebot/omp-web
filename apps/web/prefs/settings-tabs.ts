@@ -221,7 +221,7 @@ export function scrollSpyIndex(
 
 /**
  * Changed-setting count per model tab id (`item.changed`, every group,
- * including Advanced; rows owned by the Appearance popover are not counted). Tabs absent from the model are absent from the map;
+ * including Advanced; rows owned by the Appearance sheet are not counted). Tabs absent from the model are absent from the map;
  * read it with tabBadgeCount, which defaults to 0.
  */
 export function changedCountsByTab(model: SettingsModel | null): Map<string, number> {

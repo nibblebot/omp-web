@@ -5,7 +5,7 @@ import { setState } from "../../../web/state";
 import { seedThemes } from "../../fixtures/themes";
 import { defineStory } from "../../registry";
 
-/** The panel width the Appearance popover gives a picker. */
+/** The panel width the Appearance sheet gives a picker. */
 const Panel = (props: { children: JSX.Element }) => (
 	<div class="ds-frame-panel ds-frame-narrow">{props.children}</div>
 );

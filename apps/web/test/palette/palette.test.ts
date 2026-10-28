@@ -185,15 +185,15 @@ describe("settingItems", () => {
 	const byLabel = (items: PaletteItem[], label: string) =>
 		items.find((item) => item.label === label);
 
-	test("rows the Appearance popover owns open it instead of a settings tab", () => {
+	test("rows the Appearance sheet owns open it instead of a settings tab", () => {
 		const items = settingItems(model, [], [{ label: "Soft Fade", tabId: APPEARANCE_MENU_TAB }]);
 		expect(byLabel(items, "Show Token Usage")?.action).toEqual({
 			kind: "open",
 			target: "appearance",
 		});
-		expect(byLabel(items, "Show Token Usage")?.detail).toBe("Appearance menu · Status");
+		expect(byLabel(items, "Show Token Usage")?.detail).toBe("Appearance · Status");
 		expect(byLabel(items, "Soft Fade")?.action).toEqual({ kind: "open", target: "appearance" });
-		expect(byLabel(items, "Soft Fade")?.detail).toBe("Appearance menu");
+		expect(byLabel(items, "Soft Fade")?.detail).toBe("Appearance");
 		expect(byLabel(items, "Auto-resize images")?.action).toEqual({
 			kind: "setting",
 			tabId: "appearance",

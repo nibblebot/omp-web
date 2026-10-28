@@ -134,7 +134,7 @@ const toolRunItems: ChatItem[] = [
 	{ ...bashRunningTool, id: 9409, toolCallId: "call_tr_bash_run" },
 ];
 
-/** The session seed over the tool call turn, with the Appearance menu's tool card choices applied. */
+/** The session seed over the tool call turn, with the Appearance sheet's tool card choices applied. */
 function seedToolRuns(display: Partial<DisplayPrefs>): void {
 	setState({ ...screenSessionSeed, items: toolRunItems, live: idleLive, streaming: false });
 	setState("display", display);

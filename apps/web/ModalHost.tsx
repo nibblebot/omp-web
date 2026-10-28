@@ -8,6 +8,7 @@ import {
 	type Component,
 	type JSX,
 } from "solid-js";
+import { AppearanceSheet } from "./components/app/AppearanceSheet";
 import { ShortcutsDialog } from "./components/app/ShortcutsDialog";
 import { CommandPalettePicker } from "./components/app/CommandPalettePicker";
 import { FleetSignInDialog } from "./components/app/FleetSignInDialog";
@@ -91,6 +92,7 @@ export const ModalHost: Component = () => {
 		palette: () => <CommandPalettePicker onClose={close} />,
 		stats: () => <SessionStatsDialog onClose={close} />,
 		settings: () => <SettingsSheet onClose={close} />,
+		appearance: () => <AppearanceSheet onClose={close} />,
 		sessions: () => <SessionPicker onClose={close} />,
 		advisor: () => <AdvisorSheet onClose={close} />,
 		// Login opens from Settings > Providers: closing returns there.

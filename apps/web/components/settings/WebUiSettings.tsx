@@ -26,7 +26,7 @@ function notifyWarning(): string | undefined {
  * notification permission, a localStorage-backed store toggle) and, while
  * signed in, the Account group. Display preferences (theme, font size, soft
  * fade, sidebar rows and the transcript display settings) live in the
- * header's Appearance popover; session-scoped toggles live on the This Session
+ * header's Appearance sheet; session-scoped toggles live on the This Session
  * tab.
  */
 export function WebUiSettings() {

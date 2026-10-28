@@ -39,7 +39,7 @@ import {
 	type IconProps,
 } from "../../ui/icons";
 
-/** Rows of tool output a card shows before its "hidden lines" note (the Appearance menu's Rows choice); Ctrl+O (toolsExpanded) reveals the rest. */
+/** Rows of tool output a card shows before its "hidden lines" note (the Appearance sheet's Rows choice); Ctrl+O (toolsExpanded) reveals the rest. */
 export const toolRowCap = (): number => toolRowLimit(state.display.toolRows);
 
 /** Cards stay expanded while running (a call parked on a background job counts) or when the user toggles Ctrl+O. */

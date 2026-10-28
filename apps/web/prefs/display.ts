@@ -11,13 +11,13 @@
  * display settings (`hideThinkingBlock`, `display.shimmer`, ...), which are
  * session settings written through `updateSetting`.
  *
- * Adding a preference (extension point for the Appearance menu):
+ * Adding a preference (extension point for the Appearance sheet):
  *  1. Add one entry to `DISPLAY_PREFS` below. `booleanPref(name, fallback)` for
  *     an on/off flag, `choicePref(name, ["a", "b"], "a")` for a fixed set of
  *     string choices (a number of rows is a choice of "10" | "20" | "all").
  *     The key is `omp.display.<name>`; the value type is inferred, so
  *     `state.display.<name>` and `setDisplayPref("<name>", value)` are typed.
- *  2. Add its row to the matching group of `components/app/AppearancePopover.tsx`
+ *  2. Add its row to the matching group of `components/app/AppearanceSheet.tsx`
  *     (Transcript for transcript prefs): a `SettingsRowLayout` holding a
  *     `SettingToggle` (boolean), `SettingSegmented` or `SettingSelect` (choice)
  *     bound to `state.display.<name>` and `setDisplayPref`.

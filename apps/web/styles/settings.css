@@ -818,7 +818,7 @@ button.settings-toggle:not(:disabled):hover {
 	}
 }
 
-/* --- Compact rows (SettingsRow compact), used in the Appearance popover --- */
+/* --- Compact rows (SettingsRow compact), used in the Appearance sheet --- */
 .settings-item.compact {
 	gap: var(--space-4);
 	padding: var(--space-3) var(--settings-row-x);
@@ -834,35 +834,35 @@ button.settings-toggle:not(:disabled):hover {
 	top: calc(var(--space-3) + 0.45em);
 }
 
-/* --- Appearance popover (app/AppearancePopover.tsx), anchored to the header's Appearance button; the surface is ui/Popover --- */
-.appearance-popover {
-	/* Wider gutters than the sheet: the changed dot sits in the left one. */
+/* --- Appearance sheet (app/AppearanceSheet.tsx): a right side sheet like Settings, narrower for its one column --- */
+.modal.sheet.appearance-sheet {
+	width: min(440px, 100vw);
+	background: var(--bg);
+	/* Wider gutters than the Settings sheet: the changed dot sits in the left one. */
 	--settings-row-x: var(--space-6);
+	/* Rows own their gutters; keep the notch inset on the anchored edge. */
+	padding-left: 0;
+	padding-right: env(safe-area-inset-right);
 }
-/* The menu's title, above the scrolling groups: a step larger and bolder than a group heading. */
-.appearance-popover-title {
-	flex: none;
-	margin: 0;
-	padding: var(--space-5) var(--settings-row-x) var(--space-4);
-	border-bottom: 1px solid var(--settings-line);
-	color: var(--settings-title);
-	font-size: var(--fs-2xl);
-	font-weight: 700;
-	line-height: 1.2;
+/* The title row (Modal's .modal-head) above the scrolling groups, ruled off like the Settings sheet's. */
+.appearance-sheet > .modal-head {
+	margin-bottom: 0;
+	padding: 0 var(--settings-row-x) calc(var(--space-4) + var(--space-1));
+	border-bottom: 1px solid var(--border);
 }
-.appearance-popover-body {
+.appearance-sheet-body {
 	flex: 1 1 auto;
 	min-height: 0;
 	overflow-y: auto;
 	overscroll-behavior: contain;
 	padding: var(--space-2) 0 var(--space-4);
 }
-.appearance-popover .settings-block {
+.appearance-sheet .settings-block {
 	gap: 0;
 	margin-bottom: 0;
 }
 /* Group headings lead their rows: sentence case, larger and bolder than a row label, set apart by space above. */
-.appearance-popover .settings-group-title {
+.appearance-sheet .settings-group-title {
 	padding-top: var(--space-6);
 	padding-bottom: var(--space-3);
 	color: var(--settings-title);
@@ -871,27 +871,27 @@ button.settings-toggle:not(:disabled):hover {
 	letter-spacing: 0;
 	text-transform: none;
 }
-.appearance-popover .settings-block:first-child .settings-group-title {
+.appearance-sheet .settings-block:first-child .settings-group-title {
 	padding-top: var(--space-4);
 }
 /* Row labels sit a step below the headings: halfway to muted, still readable on every palette. */
-.appearance-popover .settings-item-label {
+.appearance-sheet .settings-item-label {
 	white-space: nowrap;
 	color: color-mix(in srgb, var(--text) 50%, var(--muted));
 }
 /* Segmented rows put the control on its own line, spanning the row in equal segments. */
-.appearance-popover .settings-item.stacked {
+.appearance-sheet .settings-item.stacked {
 	gap: var(--space-3);
 }
-.appearance-popover .settings-item.stacked .settings-segmented {
+.appearance-sheet .settings-item.stacked .settings-segmented {
 	display: flex;
 	width: 100%;
 }
-.appearance-popover .settings-item.stacked .settings-segment {
+.appearance-sheet .settings-item.stacked .settings-segment {
 	flex: 1 1 0;
 	padding-inline: var(--space-2);
 }
-.appearance-popover-note {
+.appearance-sheet-note {
 	margin: 0;
 	padding: var(--space-3) var(--settings-row-x);
 	color: var(--muted);
@@ -902,7 +902,7 @@ button.settings-toggle:not(:disabled):hover {
    A listbox disclosed inline under its trigger. Each row half sets its own
    data-theme-variant, so its --bg, --text, --accent and status tokens are that variant's
    and the half previews the theme regardless of the theme the app wears. */
-/* Wrapper of the theme rows (link toggle and pickers) so AppearancePopover can find the first picker; it adds no box. */
+/* Wrapper of the theme rows (link toggle and pickers) so AppearanceSheet can find the first picker; it adds no box. */
 .theme-rows {
 	display: contents;
 }

@@ -205,7 +205,7 @@ const stories: Story[] = [
 			},
 			{
 				name: "Rows: 10",
-				description: "The Appearance menu's Rows choice sets how many lines show before the note.",
+				description: "The Appearance sheet's Rows choice sets how many lines show before the note.",
 				seed: () => setState("display", { toolRows: "10" }),
 				render: () => <CollapsibleOutput item={bashLongTool} output={bashLongTool.output} />,
 			},

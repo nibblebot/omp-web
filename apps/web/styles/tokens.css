@@ -111,7 +111,7 @@
 	   @media): drawer sidebar below 1024px, docked at 1024px and up; compact
 	   chat column below 768px. */
 	/* Chat column cap (.app-main: transcript and composer). Default is today's
-	   820px at the 18px root; the Appearance popover's Width preference sets
+	   820px at the 18px root; the Appearance sheet's Width preference sets
 	   data-width on the root (store/display.ts), which picks the cap below.
 	   Rem-based so it scales with the font size. Below 768px the column is
 	   full width whatever the preset (app.css). */

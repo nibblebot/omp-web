@@ -137,7 +137,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	};
 
 	const searching = () => query().trim() !== "";
-	// SDK rows the sheet renders, and the rows it only points to: a tab, or the Appearance popover.
+	// SDK rows the sheet renders, and the rows it only points to: a tab, or the Appearance sheet.
 	const hits = createMemo(() =>
 		searching()
 			? searchSheetSettings(model(), query(), {
@@ -168,27 +168,21 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		}
 		return [...byTitle.entries()];
 	};
-	// Non-model hits grouped by the tab (or the Appearance popover) that renders them.
+	// Non-model hits grouped by the tab (or the Appearance sheet) that renders them.
 	const webGroups = () => {
 		const byTab = new Map<string, string[]>();
 		for (const row of webHits()) byTab.set(row.tabId, [...(byTab.get(row.tabId) ?? []), row.label]);
 		return [...byTab.entries()].map(([tabId, labels]) => ({
 			tabId,
 			title:
-				tabId === APPEARANCE_MENU_TAB
-					? "Appearance menu"
-					: (settingsTabMeta(tabId)?.label ?? tabId),
+				tabId === APPEARANCE_MENU_TAB ? "Appearance" : (settingsTabMeta(tabId)?.label ?? tabId),
 			labels,
 		}));
 	};
-	// A pointer row's Open: the popover (the sheet closes first, it would cover the popover), or the tab.
+	// A pointer row's Open: the Appearance sheet (it replaces this one), or the tab.
 	const openHit = (tabId: string) => {
-		if (tabId !== APPEARANCE_MENU_TAB) {
-			selectTab(tabId);
-			return;
-		}
-		props.onClose();
-		openAppearance();
+		if (tabId === APPEARANCE_MENU_TAB) openAppearance();
+		else selectTab(tabId);
 	};
 
 	// The tab the stream is scrolled to; a position that is no longer visible

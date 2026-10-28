@@ -1,6 +1,6 @@
 ---
 title: Custom themes
-description: Write a JSON theme file, drop it in the themes directory, and pick it in the Appearance popover. Covers the file format, derived tokens, contrast warnings, the picker, and the omp-web theme check command.
+description: Write a JSON theme file, drop it in the themes directory, and pick it in the Appearance sheet. Covers the file format, derived tokens, contrast warnings, the picker, and the omp-web theme check command.
 ---
 
 omp-web ships nine built-in themes. **Catppuccin** (the default), **Gruvbox**, **Everforest**, **Tokyo Night**, **Kanagawa**, and **Rosé Pine** each have a dark and a light variant; **Nord**, **Poimandres**, and **Dark Volcanic** are dark-only, because their sources publish no light variant. You can add your own, or override a built-in, by putting a JSON file in the themes directory. The fleet only reads the directory; it never writes there.
@@ -162,7 +162,7 @@ omp-web checks the text and status pairs that matter, and the contrast-solved to
 
 ## Choosing a theme
 
-Open the **Appearance** popover and use the **Theme & text** group.
+Open the **Appearance** sheet and use the **Theme & text** group.
 
 - **Mode** is a segmented control: **System** (default), **Light**, or **Dark**. System follows the operating system's color scheme and switches live when it changes.
 - The theme picker chooses a **light theme** and a **dark theme** together. By default the two are **linked**: each row is split into a dark half and a light half, each painted in its own colors, and picking a row sets both schemes. Picking a theme applies it at once and leaves the list open, so you can click through several themes; Escape or the trigger closes it. Themes with only one variant also appear, as half rows. Picking one unlinks the pair and sets only that scheme.
@@ -189,4 +189,4 @@ The exit code is non-zero only for schema errors, an unreadable file, or a stem 
 
 ## Generate a theme from an existing palette
 
-The repository includes an agent skill, `.omp/skills/theme-generator/SKILL.md`. Give it a URL or the name of a theme (a base16 or base24 scheme, a terminal color scheme, a Vim or Neovim colorscheme, a VS Code theme) and it fetches the palette, maps it to the tokens above, writes `<config dir>/themes/<stem>.json`, and runs `omp-web theme check` until the file has no schema errors. It asks before replacing an existing file. Afterwards press **Reload themes** in the Appearance popover.
+The repository includes an agent skill, `.omp/skills/theme-generator/SKILL.md`. Give it a URL or the name of a theme (a base16 or base24 scheme, a terminal color scheme, a Vim or Neovim colorscheme, a VS Code theme) and it fetches the palette, maps it to the tokens above, writes `<config dir>/themes/<stem>.json`, and runs `omp-web theme check` until the file has no schema errors. It asks before replacing an existing file. Afterwards press **Reload themes** in the Appearance sheet.

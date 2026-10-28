@@ -56,7 +56,7 @@ describe("SETTINGS_TABS", () => {
 		expect(client.every((tab) => tab.section === "omp-web")).toBe(true);
 	});
 
-	test("the client tab labelled Browser holds what is left after display settings moved to the popover", () => {
+	test("the client tab labelled Browser holds what is left after display settings moved to the Appearance sheet", () => {
 		expect(settingsTabMeta("web-ui")?.label).toBe("Browser");
 	});
 
@@ -158,7 +158,7 @@ describe("changedCountsByTab and tabBadgeCount", () => {
 		expect(counts.get("context")).toBe(0);
 	});
 
-	test("rows owned by the Appearance popover are not counted", () => {
+	test("rows owned by the Appearance sheet are not counted", () => {
 		const moved: SettingsModel = {
 			tabs: [
 				{

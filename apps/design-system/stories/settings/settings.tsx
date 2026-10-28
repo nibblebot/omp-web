@@ -43,7 +43,7 @@ export default [
 			{
 				name: "Session attached",
 				description:
-					"Current-session target, every section populated, This Session tab first. The Display tab omits the rows the Appearance popover owns.",
+					"Current-session target, every section populated, This Session tab first. The Display tab omits the rows the Appearance sheet owns.",
 				seed: () => {
 					answerCalls({
 						getSettings: () => settingsModelCurrentSession,
@@ -244,9 +244,9 @@ export default [
 				render: () => <SettingsRow item={settingSkillPaths} />,
 			},
 			{
-				name: "Compact (Appearance popover)",
+				name: "Compact (Appearance sheet)",
 				description:
-					"The popover's row: tighter spacing and smaller type, the description in a tooltip, the effect note kept.",
+					"The sheet's row: tighter spacing and smaller type, the description in a tooltip, the effect note kept.",
 				render: () => <SettingsRow item={settingThinkingLevelGlobal} compact />,
 			},
 		],
@@ -315,7 +315,7 @@ export default [
 			},
 			{
 				name: "Compact",
-				description: "Popover rows: one line each; the description moves to a tooltip.",
+				description: "Appearance sheet rows: one line each; the description moves to a tooltip.",
 				render: () => (
 					<SettingsRowLayout label="Soft Fade" description="Fades in new text." compact>
 						<SettingToggle label="Soft Fade" checked onChange={() => undefined} />
@@ -340,7 +340,7 @@ export default [
 			{
 				name: "Notifications only",
 				description:
-					"Signed out or auth disabled: no Account group. Display preferences live in the header's Appearance popover.",
+					"Signed out or auth disabled: no Account group. Display preferences live in the header's Appearance sheet.",
 				render: () => <WebUiSettings />,
 			},
 			{

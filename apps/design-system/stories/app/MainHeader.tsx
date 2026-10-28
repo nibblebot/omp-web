@@ -1,10 +1,8 @@
 import { MainHeader } from "../../../web/components/app/MainHeader";
 import { SessionTitle } from "../../../web/components/chat";
-import { seedAppearanceSettings } from "../../fixtures/appearance";
 import { screenSessionSeed } from "../../fixtures/screen";
 import { liveCollabStatus } from "../../fixtures/collab";
 import { goalActive } from "../../fixtures/subagents";
-import { setState } from "../../../web/state";
 import { defineStory } from "../../registry";
 
 export default defineStory({
@@ -51,16 +49,6 @@ export default defineStory({
 				"No-session pane: toggle, Appearance and settings only; the connection bar sits below.",
 			seed: { connected: false, view: "chat", sidebarVisible: false },
 			render: () => <MainHeader />,
-		},
-		{
-			name: "Appearance popover open",
-			description:
-				"The Appearance button owns its popover (state.appearanceOpen, which the palette and settings search also set); it opens below the header, right-aligned to the button.",
-			seed: () => {
-				seedAppearanceSettings();
-				setState({ connected: true, view: "chat", sidebarVisible: true, appearanceOpen: true });
-			},
-			render: () => <MainHeader title={<SessionTitle />} session />,
 		},
 	],
 });
