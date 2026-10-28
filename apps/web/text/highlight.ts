@@ -23,7 +23,7 @@ export const highlightReady = ready;
 let hljs: HLJSApi | undefined;
 let loading: Promise<void> | undefined;
 let sanitizer: typeof DOMPurify | undefined;
-const cache = new Map<string, string>();
+const cache = new Map<string, Highlighted>();
 
 async function loadGrammars(): Promise<HLJSApi> {
 	const [
@@ -100,11 +100,22 @@ export function loadHighlighter(): Promise<void> {
 }
 
 /**
- * Highlight `code` as sanitized hljs HTML, or null when the library is not
- * loaded yet, `lang` is missing/unregistered, or the input is too large.
- * Never auto-detects the language. The first call triggers the lazy load.
+ * hljs output is `<span class="…">` wrappers around entity-escaped text and
+ * nothing else. A string that matches this grammar parses to inert text and
+ * spans whatever the browser's parser does, so it needs no DOMPurify pass;
+ * anything else (a grammar emitting another tag, a future hljs change) takes
+ * the sanitizer. The two classes never overlap, so the match is linear.
  */
-export function highlightCode(code: string, lang: string | undefined): string | null {
+const INERT_HLJS =
+	/^[^<>&]*(?:(?:<span class="[\w -]*">|<\/span>|&(?:amp|lt|gt|quot|#x27);)[^<>&]*)*$/;
+
+/** One highlighted input: the raw hljs HTML, and its `innerHTML`-safe form once asked for. */
+interface Highlighted {
+	raw: string;
+	safe?: string;
+}
+
+function highlightEntry(code: string, lang: string | undefined): Highlighted | null {
 	const isReady = ready();
 	if (!isReady) {
 		void loadHighlighter();
@@ -121,14 +132,51 @@ export function highlightCode(code: string, lang: string | undefined): string | 
 		cache.set(key, hit);
 		return hit;
 	}
-	const raw = hljs.highlight(code, { language: name, ignoreIllegals: true }).value;
-	const html = (sanitizer ??= DOMPurify()).sanitize(raw);
+	const entry: Highlighted = {
+		raw: hljs.highlight(code, { language: name, ignoreIllegals: true }).value,
+	};
 	if (cache.size >= CACHE_MAX_ENTRIES) {
 		const oldest = cache.keys().next().value;
 		if (oldest !== undefined) cache.delete(oldest);
 	}
-	cache.set(key, html);
-	return html;
+	cache.set(key, entry);
+	return entry;
+}
+
+/**
+ * Raw hljs HTML for `code`, cached, or null in the cases {@link highlightCode}
+ * returns null. NOT SAFE to assign to `innerHTML`: it is for the markdown
+ * renderer, which embeds it in a string that goes through `DOMPurify.sanitize`
+ * as a whole. Everything else uses {@link highlightCode}.
+ */
+export function highlightCodeRaw(code: string, lang: string | undefined): string | null {
+	return highlightEntry(code, lang)?.raw ?? null;
+}
+
+/** True when `raw` is plain hljs markup that needs no sanitizer pass. */
+function isInertHljs(raw: string): boolean {
+	try {
+		return INERT_HLJS.test(raw);
+	} catch {
+		// A regex stack overflow on a pathological input: let DOMPurify decide.
+		return false;
+	}
+}
+
+/**
+ * Highlight `code` as sanitized hljs HTML safe for `innerHTML`, or null when
+ * the library is not loaded yet, `lang` is missing/unregistered, or the input
+ * is too large. Never auto-detects the language. The first call triggers the
+ * lazy load. Checked or sanitized once per distinct input: plain hljs markup
+ * ({@link INERT_HLJS}) is returned as is, anything else goes through DOMPurify.
+ */
+export function highlightCode(code: string, lang: string | undefined): string | null {
+	const entry = highlightEntry(code, lang);
+	if (entry === null) return null;
+	entry.safe ??= isInertHljs(entry.raw)
+		? entry.raw
+		: (sanitizer ??= DOMPurify()).sanitize(entry.raw);
+	return entry.safe;
 }
 
 const linesCache = new Map<string, string[]>();

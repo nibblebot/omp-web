@@ -5,6 +5,7 @@ import { activateFeatures } from "./features/registry";
 import { preferredFeatureIds } from "./features/preferences";
 import "./styles.css";
 import { initTheme } from "./prefs/theme";
+import { loadHighlighter } from "./text/highlight";
 
 // Apply the persisted theme/font-size before first render to avoid a flash. After
 // the styles import on purpose: in dev Vite injects CSS from JS, and the theme
@@ -24,6 +25,10 @@ void activateFeatures(preferredFeatureIds());
 const root = document.getElementById("root")!;
 root.replaceChildren();
 render(() => <App booted />, root);
+// Warm the syntax highlighter once the first paint is out, so it is loaded by the
+// time a session's history renders; otherwise every code block of the first
+// attach renders plain, then again highlighted.
+setTimeout(() => void loadHighlighter(), 0);
 
 // The dialogs behind Ctrl+K and Ctrl+, load once the page is idle, not with the entry chunk.
 const whenIdle = (): void => {
