@@ -113,6 +113,7 @@
 	margin: 0;
 	padding: var(--space-3);
 	border-radius: var(--r-sm);
+	/* Fixed black on white in every theme: QR scanners need that contrast. */
 	background: #fff;
 	color: #000;
 	font-family: var(--font-mono);

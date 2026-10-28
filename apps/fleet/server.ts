@@ -11,6 +11,7 @@
  *   POST /ctl/projects {path, start?, template?}   → 201 { project, entry? } | 200 { project, existing: true }
  *   DELETE /ctl/projects/:projectId                → 200 { removed } | 409 { error }
  *   GET  /ctl/settings                             -> SettingsModel
+ *   GET  /ctl/themes                              -> ThemesPayload (built-ins + <config dir>/themes/*.json; re-read per request, never writes)
  *   GET  /ctl/usage                               -> UsageReport[] (502 { error } on failure)
  *   GET  /ctl/worktrees/:workspaceId/delete-info      -> worktree_delete_info payload
  *   POST /ctl/spawn    {cwd, template?, name?} -> RosterEntry
@@ -63,6 +64,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { SessionStatus, PublicProviderProfile } from "#lib/wire/protocol";
 import type { FleetConfig } from "./config";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
+import { loadThemes, themesDirFor } from "#lib/themes/loader";
 import { checkOmpSetup } from "./omp-check";
 import { toPublicProfile } from "./provider-profile";
 import { isLoopbackHost } from "#lib/platform/hosts";
@@ -403,6 +405,8 @@ class FleetServerImpl implements FleetServer {
 	readonly #expectedTokenHash: string;
 	/** Configured browser origin (config.browserOrigin), admitted by the loopback browser guard. */
 	readonly #browserOrigin: string | undefined;
+	/** Custom themes directory (`<config dir>/themes`), read on every GET /ctl/themes. */
+	readonly #themesDir: string;
 
 	/**
 	 * workspaceIds mid-eviction for a poll-detected, vanished worktree. The
@@ -415,7 +419,7 @@ class FleetServerImpl implements FleetServer {
 		registry: Registry,
 		config: FleetConfig,
 		port: number,
-		facts: { statePath: string; configPath: string | null },
+		facts: { statePath: string; configPath: string | null; themesDir: string },
 		lock: FileLock,
 		settingsOptions?: FleetSettingsOptions,
 		resourceDeleter?: WorkspaceResourceDeleter,
@@ -428,6 +432,7 @@ class FleetServerImpl implements FleetServer {
 		cloneRuntime?: Partial<CloneRuntimePolicy>,
 	) {
 		this.registry = registry;
+		this.#themesDir = facts.themesDir;
 		this.#redialGraceMs = redialGraceMs;
 		this.#pairLossGraceMs = pairLossGraceMs;
 		this.config = config;
@@ -1243,6 +1248,9 @@ class FleetServerImpl implements FleetServer {
 						// initializes the process-global Settings singleton +
 						// ModelRegistry, no session.
 						return json(await this.fleetSettings.getModel());
+					case "/ctl/themes":
+						// Built-ins plus custom theme files, read fresh each request (no cache, no watcher, never writes).
+						return json(await loadThemes(this.#themesDir));
 					case "/ctl/usage":
 						// Provider account usage: unattached fleet, auth-storage backed, no session.
 						try {
@@ -1883,6 +1891,7 @@ export async function startFleet(
 				statePath,
 				// Null when no config file exists at the resolved location (defaults apply).
 				configPath: existsSync(configPath) ? configPath : null,
+				themesDir: themesDirFor(configPath),
 			},
 			lock,
 			opts.settings,

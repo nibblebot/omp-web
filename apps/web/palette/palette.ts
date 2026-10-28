@@ -261,7 +261,7 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 			"appearance",
 			"Appearance",
 			"Theme, text size, transcript, status, motion and sidebar display",
-			["theme", "font", "display", "width", "colors"],
+			["theme", "mode", "dark", "light", "font", "display", "width", "colors"],
 		),
 		openItem(
 			"activities",

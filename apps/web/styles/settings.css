@@ -897,3 +897,283 @@ button.settings-toggle:not(:disabled):hover {
 	color: var(--muted);
 	font-size: var(--fs-sm);
 }
+
+/* --- Theme picker (app/ThemePicker.tsx, ThemeLinkButton.tsx, ThemeFilesFooter.tsx) ---
+   A listbox disclosed inline under its trigger. Each row half sets its own
+   data-theme-variant, so its --bg, --text, --accent and status tokens are that variant's
+   and the half previews the theme regardless of the theme the app wears. */
+/* Wrapper of the theme rows (link toggle and pickers) so AppearancePopover can find the first picker; it adds no box. */
+.theme-rows {
+	display: contents;
+}
+.theme-controls {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--space-3);
+	width: 100%;
+}
+.theme-controls > .theme-picker {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+.theme-picker {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	width: 100%;
+	min-width: 0;
+}
+.theme-picker-trigger {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	width: 100%;
+	min-height: 1.75rem;
+	padding: var(--space-2) var(--space-4);
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-md);
+	text-align: left;
+	cursor: pointer;
+}
+.theme-picker-trigger:hover:not(:disabled) {
+	background: var(--hover);
+}
+.theme-picker-trigger[aria-expanded="true"] {
+	border-color: var(--accent-border);
+}
+.theme-picker-trigger:disabled {
+	color: var(--muted);
+	cursor: default;
+}
+.theme-picker-value {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.theme-picker-flag {
+	flex: none;
+	color: var(--settings-warning);
+	font-size: var(--fs-sm);
+}
+.theme-picker-chevron {
+	flex: none;
+	color: var(--muted);
+}
+.theme-picker-notice {
+	margin: 0;
+	color: var(--settings-warning);
+	font-size: var(--fs-sm);
+	line-height: 1.45;
+}
+/* The trigger's preview: one small swatch per shown variant, each in its own colors. */
+.theme-swatches {
+	display: inline-flex;
+	flex: none;
+	overflow: hidden;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-xs);
+}
+.theme-swatch {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: var(--space-1);
+	width: 18px;
+	height: 16px;
+	padding: 0 var(--space-2);
+	background: var(--bg);
+}
+.theme-swatch-text,
+.theme-swatch-accent {
+	height: 2px;
+	border-radius: 1px;
+}
+.theme-swatch-text {
+	background: var(--text);
+}
+.theme-swatch-accent {
+	width: 60%;
+	background: var(--accent);
+}
+.theme-picker-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	max-height: 20rem;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: var(--space-2);
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+}
+/* Top bar: the list overlays the page below the trigger instead of pushing it down. */
+.theme-picker.floating .theme-picker-list {
+	position: absolute;
+	top: calc(100% + var(--space-2));
+	left: 0;
+	z-index: var(--z-autocomplete);
+	min-width: 24rem;
+	box-shadow: var(--shadow-2);
+}
+.theme-option {
+	display: flex;
+	align-items: stretch;
+	gap: var(--space-3);
+	padding: var(--space-1);
+	border: 1px solid transparent;
+	border-radius: var(--r-md);
+	cursor: pointer;
+}
+.theme-option:hover {
+	background: var(--hover);
+}
+.theme-option.selected {
+	border-color: var(--accent);
+}
+.theme-option-halves {
+	display: flex;
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-sm);
+}
+.theme-option-check {
+	display: flex;
+	flex: none;
+	align-items: center;
+	width: 16px;
+	color: var(--accent);
+}
+.theme-half {
+	display: flex;
+	flex: 1 1 0;
+	flex-direction: column;
+	gap: var(--space-2);
+	min-width: 0;
+	padding: var(--space-3) var(--space-4);
+	background: var(--bg);
+	color: var(--text);
+}
+.theme-half + .theme-half {
+	border-left: 1px solid var(--border);
+}
+.theme-half-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--fs-md);
+	font-weight: 600;
+}
+.theme-half-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2) var(--space-3);
+	min-width: 0;
+	color: var(--muted);
+	font-size: var(--fs-sm);
+}
+.theme-half-scheme {
+	white-space: nowrap;
+}
+.theme-half-strip {
+	display: inline-flex;
+	gap: var(--space-1);
+}
+.theme-chip {
+	width: 10px;
+	height: 6px;
+	border-radius: 1px;
+}
+.theme-chip-accent {
+	background: var(--accent);
+}
+.theme-chip-success {
+	background: var(--success);
+}
+.theme-chip-warning {
+	background: var(--warning);
+}
+.theme-chip-error {
+	background: var(--error);
+}
+.theme-badge {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: var(--space-1);
+	padding: 0 var(--space-3);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-pill);
+	color: var(--muted);
+	font-size: var(--fs-micro);
+	line-height: 1.4;
+}
+.theme-link-btn {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	width: 1.75rem;
+	height: 1.75rem;
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	color: var(--muted);
+	cursor: pointer;
+}
+.theme-link-btn:hover {
+	color: var(--text);
+}
+.theme-link-btn[aria-pressed="true"] {
+	background: var(--settings-fill);
+	color: var(--text);
+}
+/* Footer: where custom theme files live, Reload themes, and the files that failed. */
+.theme-files {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	padding: var(--space-3) var(--settings-row-x) var(--space-4);
+	border-bottom: 1px solid var(--settings-divider);
+	color: var(--muted);
+	font-size: var(--fs-sm);
+	line-height: 1.45;
+}
+.theme-files p {
+	margin: 0;
+}
+.theme-files code {
+	color: var(--muted-3);
+	font-family: var(--font-mono);
+	overflow-wrap: anywhere;
+}
+.theme-files-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+}
+.theme-files .settings-control-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.theme-files-error {
+	color: var(--error-text);
+}
+.theme-files-failures summary {
+	color: var(--settings-warning);
+	cursor: pointer;
+}
+.theme-files-failures ul {
+	margin: var(--space-2) 0 0;
+	padding-left: var(--space-5);
+}

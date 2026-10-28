@@ -112,15 +112,17 @@ body {
 	text-decoration: none;
 	padding-bottom: var(--space-3);
 }
+/* The app's own theme controls in the top bar: Mode, picker(s), link toggle. */
 .ds-theme {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
 	gap: var(--space-4);
 	color: var(--muted-3);
 	font-size: var(--fs-sm, 0.85em);
 }
-.ds-theme select,
+.ds-theme .theme-picker {
+	width: 12rem;
+}
 .ds-search {
 	background: var(--btn);
 	color: var(--text);

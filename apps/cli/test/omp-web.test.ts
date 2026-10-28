@@ -53,6 +53,10 @@ describe("classifyCommand", () => {
 		expect(classifyCommand(["update", "--version", "0.2.0"])).toBe("update");
 	});
 
+	test("routes theme to its own target", () => {
+		expect(classifyCommand(["theme", "check", "x.json"])).toBe("theme");
+	});
+
 	test("bare invocations and leading flags route to fleet (omp-web = serve)", () => {
 		expect(classifyCommand([])).toBe("fleet");
 		expect(classifyCommand([""])).toBe("fleet");

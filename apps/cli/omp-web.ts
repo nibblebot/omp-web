@@ -18,6 +18,7 @@
  *   omp-web relay --port <n>          → standalone collab relay (apps/cli/relay.ts)
  *   omp-web update [options]          → self-update from the release channel
  *                                       (apps/cli/update.ts)
+ *   omp-web theme check <file>        → validate a theme file (apps/cli/theme.ts)
  *   omp-web <unknown>                 → usage on stderr, exit 1
  *
  * stdout contract: nothing is printed to stdout before delegating. Bare
@@ -56,6 +57,7 @@ export type DispatchTarget =
 	| "relay"
 	| "log-relay"
 	| "update"
+	| "theme"
 	| "version"
 	| "help"
 	| "usage";
@@ -71,6 +73,7 @@ export function classifyCommand(argv: string[]): DispatchTarget {
 	if (cmd === "relay") return "relay";
 	if (cmd === "log-relay") return "log-relay";
 	if (cmd === "update") return "update";
+	if (cmd === "theme") return "theme";
 	if (cmd === undefined || cmd === "" || cmd.startsWith("-") || FLEET_SUBCOMMANDS[cmd])
 		return "fleet";
 	return "usage";
@@ -93,6 +96,8 @@ const USAGE = `usage: omp-web [options] | omp-web <command> [options]
   relay --port <n> [options]   run the collab relay that sessions publish rooms to
   update [--check] [--force] [--version x.y.z]
                                self-update from the release channel
+  theme check <file>           validate a theme file: schema errors, contrast
+                               warnings, resolved tokens (exit 1 on errors)
   --version | version          print version
 
 options (bare, control, ui):
@@ -117,6 +122,12 @@ if (import.meta.main) {
 			// Kept out of the load path of --version/session like fleet: the
 			// update graph only runs when selected.
 			const { main } = await import("./update");
+			process.exit(await main(argv.slice(1)));
+			break;
+		}
+		case "theme": {
+			// Dynamic like update: the theme parser graph loads only when selected.
+			const { main } = await import("./theme");
 			process.exit(await main(argv.slice(1)));
 			break;
 		}

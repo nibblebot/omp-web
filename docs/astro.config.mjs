@@ -40,7 +40,12 @@ export default defineConfig({
 					href: "https://github.com/nibblebot/omp-web",
 				},
 			],
-			sidebar: [],
+			sidebar: [
+				{
+					label: "Configuration",
+					items: [{ label: "Custom themes", slug: "configuration/custom-themes" }],
+				},
+			],
 		}),
 	],
 });

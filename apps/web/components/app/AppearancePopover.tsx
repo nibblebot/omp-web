@@ -1,14 +1,7 @@
-import { createSignal, For, onMount, Show, type Component } from "solid-js";
+import { createEffect, createSignal, For, on, onMount, Show, type Component } from "solid-js";
 import { TOOL_CARD_MODES, TOOL_ROW_CHOICES, TRANSCRIPT_WIDTHS } from "../../prefs/display";
 import { APPEARANCE_SDK_SETTINGS } from "../../prefs/settings";
-import {
-	currentFontSize,
-	currentThemePreference,
-	setTheme,
-	stepFontSize,
-	THEME_OPTIONS,
-	type ThemePreference,
-} from "../../prefs/theme";
+import { currentFontSize, stepFontSize } from "../../prefs/theme";
 import {
 	refreshSettings,
 	setDisplayPref,
@@ -21,10 +14,13 @@ import { settingItem } from "../../store/settings";
 import { SettingsGroup } from "../settings/SettingsGroup";
 import { SettingsRow, SettingsRowLayout } from "../settings/SettingsRow";
 import { SettingSegmented } from "../settings/controls/SettingSegmented";
-import { SettingSelect } from "../settings/controls/SettingSelect";
 import { SettingToggle } from "../settings/controls/SettingToggle";
 import { MinusIcon, PlusIcon } from "../ui/icons";
 import { Popover } from "../ui/Popover";
+import { ThemeFilesFooter } from "./ThemeFilesFooter";
+import { ThemeLinkButton } from "./ThemeLinkButton";
+import { ThemeModeControl } from "./ThemeModeControl";
+import { ThemePicker } from "./ThemePicker";
 
 /** Surface width in px; the popover shrinks to fit a narrower viewport. */
 const WIDTH = 360;
@@ -62,18 +58,36 @@ const SdkRows: Component<{ group: keyof typeof APPEARANCE_SDK_SETTINGS }> = (pro
  *   `setDisplayPref`. A new one adds its row to the matching group here (see the
  *   header of prefs/display.ts) and its label to `WEB_UI_SEARCH_ROWS` (prefs/settings.ts)
  *   with `APPEARANCE_MENU_TAB`, so settings search and the palette reach it.
- * - Theme, font size and the sidebar toggles, which keep their own storage keys.
+ * - Theme (Mode, the theme picker with its link toggle, and the themes footer with Reload
+ *   themes), font size and the sidebar toggles. Mode and theme selection are browser-only
+ *   (prefs/theme.ts), written through the store's theme actions; the themes themselves
+ *   come from the fleet (`state.themes`). Linked, one picker sets a theme for both schemes;
+ *   unlinked, a Light theme and a Dark theme picker each set one.
  */
 export const AppearancePopover: Component<{
 	/** The Appearance button that owns this popover; presses on it are not "outside". */
 	anchor: HTMLElement;
 	onClose: () => void;
 }> = (props) => {
-	// Theme and font size are localStorage-only (prefs/theme.ts), so these signals mirror them.
-	const [theme, setThemeSignal] = createSignal<ThemePreference>(currentThemePreference());
+	// Font size is localStorage-only (prefs/theme.ts), so this signal mirrors it.
 	const [fontSize, setFontSize] = createSignal(currentFontSize());
 	// The SDK rows need the model; like the settings sheet, refresh it on open.
 	onMount(refreshSettings);
+	// Choosing a single-variant theme in the linked picker unlinks, which replaces that picker
+	// with two and drops the focus it held: land on the first picker instead of the page.
+	let themeRows: HTMLDivElement | undefined;
+	createEffect(
+		on(
+			() => state.themeSelection.linked,
+			() =>
+				queueMicrotask(() => {
+					const active = document.activeElement;
+					if (active && active !== document.body) return;
+					themeRows?.querySelector<HTMLElement>(".theme-picker-trigger")?.focus();
+				}),
+			{ defer: true },
+		),
+	);
 
 	return (
 		<Popover
@@ -88,14 +102,36 @@ export const AppearancePopover: Component<{
 			<h2 class="appearance-popover-title">Appearance</h2>
 			<div class="appearance-popover-body">
 				<SettingsGroup title="Theme & text">
-					<SettingsRowLayout label="Theme" compact>
-						<SettingSelect
-							label="Theme"
-							options={THEME_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
-							value={theme()}
-							onChange={(value) => setThemeSignal(setTheme(value as ThemePreference))}
-						/>
+					<SettingsRowLayout label="Mode" compact stacked>
+						<ThemeModeControl />
 					</SettingsRowLayout>
+					<div class="theme-rows" ref={themeRows}>
+						<SettingsRowLayout
+							label="Theme"
+							description="Linked: one theme for light and dark. Unlinked: pick each."
+							compact
+						>
+							<ThemeLinkButton />
+						</SettingsRowLayout>
+						<Show
+							when={state.themeSelection.linked}
+							fallback={
+								<>
+									<SettingsRowLayout label="Light theme" compact stacked>
+										<ThemePicker kind="light" label="Light theme" />
+									</SettingsRowLayout>
+									<SettingsRowLayout label="Dark theme" compact stacked>
+										<ThemePicker kind="dark" label="Dark theme" />
+									</SettingsRowLayout>
+								</>
+							}
+						>
+							<SettingsRowLayout label="Light & dark theme" compact stacked>
+								<ThemePicker kind="linked" label="Theme" />
+							</SettingsRowLayout>
+						</Show>
+					</div>
+					<ThemeFilesFooter />
 					<SettingsRowLayout label="Font Size" compact>
 						<div class="settings-font">
 							<button

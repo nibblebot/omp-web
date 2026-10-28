@@ -3,7 +3,10 @@ import { reconcileBackgroundCards } from "./store/background-cards";
 import { type ActivitiesSlice, createActivitiesState } from "./store/slices/activities";
 import { restoreDockLayout } from "./store/dock";
 import { readDockWidth } from "./prefs/dock";
+import { reloadThemes } from "./store/themes";
 import { loadDisplayPrefs } from "./prefs/display";
+import { currentThemeSelection, type ThemeSelection } from "./prefs/theme";
+import type { ThemesPayload } from "#lib/themes/types";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AdvisorItem } from "./store/slices/advisor";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
@@ -635,6 +638,13 @@ export const [state, setState] = createStore({
 	// Epoch ms the last /ctl/usage fetch settled (success or failure); null
 	// before the first. Anchors the sidebar widget's auto-refresh countdown.
 	usageRefreshedAt: null as number | null,
+	// Fleet-scoped theme list (GET /ctl/themes via reloadThemes); null until it first answers.
+	// A failed reload keeps the previous list and sets themesError. themeSelection mirrors
+	// the stored mode/theme selection (prefs/theme.ts) so pickers stay reactive.
+	themes: null as ThemesPayload | null,
+	themesError: null as string | null,
+	themesLoading: false as boolean,
+	themeSelection: currentThemeSelection() as ThemeSelection,
 	// Phase 11: /btw side-panel session. streamId routes ephemeral_delta
 	// frames to this panel; the panel never appears in the transcript.
 	btw: createBtwState(),
@@ -1288,6 +1298,8 @@ export function initAuth(): () => void {
 		if (snap.status === "signedOut") setState("modal", "sign-in");
 		// A 4401 close held the reconnect: the sign-in that just succeeded releases it.
 		if (snap.status === "signedIn" && awaitingSignIn) connect();
+		// The first /ctl/themes fetch may have been refused 401 before sign-in.
+		if (snap.status === "signedIn" && state.themesError !== null) void reloadThemes();
 	});
 	return unsubscribe;
 }
@@ -1963,6 +1975,14 @@ export { checkSession, signIn, signOut } from "./store/auth";
 export { isUserStopped } from "./store/user-stopped";
 export { refreshSettings, updateSetting } from "./store/settings";
 export { refreshUsageReports, setSidebarUsage, USAGE_AUTO_REFRESH_MS } from "./store/usage";
+export {
+	changeThemeLinked,
+	changeThemeMode,
+	chooseLinkedTheme,
+	chooseSchemeTheme,
+	reloadThemes,
+	resyncTheme,
+} from "./store/themes";
 export {
 	DEBUG_RING_CAP,
 	fetchCtlDebug,

@@ -5,9 +5,11 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { UsageReport } from "@oh-my-pi/pi-ai";
+import { themeDoc } from "#lib/themes/test/fixtures.testkit";
+import type { ThemesPayload } from "#lib/themes/types";
 import type { RegistryEntry } from "../registry";
 import type { FleetServer } from "../server";
 import {
@@ -584,5 +586,62 @@ describe("GET /ctl/usage", () => {
 		const body = await res.text();
 		expect(body).not.toContain("sk-secret");
 		expect(JSON.parse(body)).toEqual({ error: "Usage unavailable (see the fleet log)" });
+	});
+});
+
+describe("GET /ctl/themes", () => {
+	let themeServer: FleetServer;
+	let themesDir: string;
+
+	beforeAll(async () => {
+		const { tmp, statePath, configPath } = fleetPaths();
+		themesDir = join(tmp, "themes");
+		mkdirSync(themesDir);
+		writeFileSync(join(themesDir, "mine.json"), JSON.stringify(themeDoc("Mine")));
+		writeFileSync(join(themesDir, "catppuccin.json"), JSON.stringify(themeDoc("My Catppuccin")));
+		writeFileSync(join(themesDir, "broken.json"), JSON.stringify({ name: "Broken" }));
+		themeServer = await startTestFleet({ statePath, configPath }, {});
+	});
+
+	afterAll(async () => {
+		if (themeServer !== undefined) await themeServer.close();
+	});
+
+	async function fetchThemes(port: number): Promise<ThemesPayload> {
+		const res = await fetch(`http://127.0.0.1:${port}/ctl/themes`);
+		expect(res.status).toBe(200);
+		return (await res.json()) as ThemesPayload;
+	}
+
+	test("serves built-ins, custom themes, a modified built-in, and load failures", async () => {
+		const body = await fetchThemes(themeServer.port);
+		expect(body.dir).toBe(themesDir);
+		const byId = new Map(body.themes.map((t) => [t.id, t]));
+		for (const id of ["catppuccin", "gruvbox", "everforest"]) expect(byId.has(id)).toBe(true);
+		expect(byId.get("gruvbox")?.source).toBe("builtin");
+		expect(byId.get("catppuccin")).toMatchObject({ name: "My Catppuccin", source: "modified" });
+		expect(byId.get("mine")).toMatchObject({ name: "Mine", source: "custom" });
+		expect(Object.keys(byId.get("mine")?.variants ?? {}).sort()).toEqual(["dark", "light"]);
+		expect(body.failures.map((f) => f.file)).toEqual(["broken.json"]);
+		expect(body.failures[0].errors.length).toBeGreaterThan(0);
+	});
+
+	test("re-reads the directory on every request", async () => {
+		writeFileSync(join(themesDir, "later.json"), JSON.stringify(themeDoc("Later")));
+		const body = await fetchThemes(themeServer.port);
+		expect(body.themes.some((t) => t.id === "later")).toBe(true);
+	});
+
+	test("a missing themes directory is built-ins only and is not created", async () => {
+		const { tmp, statePath, configPath } = fleetPaths();
+		const bare = await startTestFleet({ statePath, configPath }, {});
+		try {
+			const body = await fetchThemes(bare.port);
+			expect(body.failures).toEqual([]);
+			expect(body.themes.every((t) => t.source === "builtin")).toBe(true);
+			expect(existsSync(join(tmp, "themes"))).toBe(false);
+		} finally {
+			await bare.close();
+		}
 	});
 });

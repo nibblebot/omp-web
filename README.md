@@ -153,6 +153,16 @@ omp-web update --force --version x.y.z  # reinstall or downgrade to a specific r
 
 `--version` selects a release for this invocation, not a durable pin; a future bare update still checks the latest release. After updating, stop the running control plane (Ctrl+C) and start it again. Running sessions survive that restart on the code they started with; `omp-web stop all` ends them so the next attach or prompt starts them on the new release.
 
+## Custom themes
+
+Theme files live in `<config dir>/themes/<stem>.json` (`~/.omp-web/themes/` by default; the stem is the theme id and must match `[a-z0-9-]+`). The control plane reads the directory on every `GET /ctl/themes` and never writes to it; a file named after a built-in replaces that built-in. Validate a file before dropping it in:
+
+```sh
+omp-web theme check ~/.omp-web/themes/my-theme.json
+```
+
+It prints schema errors, contrast warnings and the resolved tokens per variant. Exit status is 1 on schema errors (including invalid JSON, a bad stem or a non-`.json` name), 2 for a usage error or unreadable file, and 0 otherwise (warnings are informational).
+
 ## Configuration and State
 
 - Default data directory: `~/.omp-web/`

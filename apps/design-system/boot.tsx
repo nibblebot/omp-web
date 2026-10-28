@@ -3,6 +3,7 @@ import { render } from "solid-js/web";
 import { initTheme } from "../web/prefs/theme";
 import { ENABLEABLE_FEATURE_IDS } from "../web/features/manifest";
 import { activateFeatures } from "../web/features/registry";
+import { reloadThemes } from "../web/state";
 // Same global stylesheet production loads (index.tsx), then the showcase chrome.
 import "../web/styles.css";
 import "./showcase.css";
@@ -21,6 +22,8 @@ import { installSession } from "./session";
 export function boot(title: string, page: () => JSX.Element): void {
 	document.title = title;
 	initTheme();
+	// The stories' topbar and the demo App read the theme list from the fixture /ctl/themes.
+	void reloadThemes();
 	installSession();
 	// Only what the app can enable: an in-development feature (Analysis) is never active here.
 	void activateFeatures(ENABLEABLE_FEATURE_IDS).then(() =>

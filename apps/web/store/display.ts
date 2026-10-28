@@ -10,7 +10,7 @@ import { setState, state } from "../state";
 
 /**
  * Mirror the preferences that styles key on onto the root element: `data-width`
- * (tokens.css picks the chat column cap from it, like `data-theme`). Called at
+ * (tokens.css picks the chat column cap from it, like `data-scheme`). Called at
  * startup and by `setDisplayPref`; a no-op without a document.
  */
 export function applyDisplayAttributes(): void {

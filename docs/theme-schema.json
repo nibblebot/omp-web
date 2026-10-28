@@ -1,0 +1,303 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://raw.githubusercontent.com/nibblebot/omp-web/main/docs/theme-schema.json",
+	"title": "omp-web theme file",
+	"description": "A custom omp-web theme: <config dir>/themes/<stem>.json (default ~/.omp-web/themes/). The file stem is the theme id and must match [a-z0-9-]+.",
+	"type": "object",
+	"required": [
+		"schemaVersion",
+		"name",
+		"variants"
+	],
+	"additionalProperties": false,
+	"properties": {
+		"$schema": {
+			"type": "string",
+			"description": "Optional schema URL for editor completion and validation."
+		},
+		"schemaVersion": {
+			"const": 1,
+			"description": "Theme file schema version. Newer versions than the running omp-web understands are rejected; older ones are migrated."
+		},
+		"name": {
+			"type": "string",
+			"minLength": 1,
+			"description": "Display name shown in the theme picker."
+		},
+		"variants": {
+			"type": "object",
+			"description": "Palettes per color scheme. Provide dark, light, or both. A theme with only one variant is offered only for that scheme.",
+			"minProperties": 1,
+			"additionalProperties": false,
+			"properties": {
+				"dark": {
+					"$ref": "#/$defs/variant"
+				},
+				"light": {
+					"$ref": "#/$defs/variant"
+				}
+			}
+		}
+	},
+	"$defs": {
+		"color": {
+			"type": "string",
+			"description": "#rgb, #rrggbb, #rrggbbaa, oklch(L% C h) or oklch(L% C h / a). No other color syntax is accepted.",
+			"pattern": "^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|#[0-9a-fA-F]{8}|[Oo][Kk][Ll][Cc][Hh]\\(\\s*[0-9]*\\.?[0-9]+%\\s+[0-9]*\\.?[0-9]+\\s+[0-9]*\\.?[0-9]+(?:[Dd][Ee][Gg])?(?:\\s*/\\s*[0-9]*\\.?[0-9]+%?)?\\s*\\))$"
+		},
+		"variant": {
+			"type": "object",
+			"description": "One palette. The nine core tokens are required; omitted optional tokens are derived from them.",
+			"required": [
+				"bg",
+				"panel",
+				"text",
+				"muted",
+				"border",
+				"accent",
+				"success",
+				"warning",
+				"error"
+			],
+			"additionalProperties": false,
+			"properties": {
+				"bg": {
+					"$ref": "#/$defs/color",
+					"description": "Page background behind everything."
+				},
+				"panel": {
+					"$ref": "#/$defs/color",
+					"description": "Raised surfaces: cards, dialogs, popovers, the sidebar."
+				},
+				"text": {
+					"$ref": "#/$defs/color",
+					"description": "Primary text color."
+				},
+				"muted": {
+					"$ref": "#/$defs/color",
+					"description": "Secondary text: labels, timestamps, hints."
+				},
+				"border": {
+					"$ref": "#/$defs/color",
+					"description": "Default hairline borders and dividers."
+				},
+				"accent": {
+					"$ref": "#/$defs/color",
+					"description": "Interactive accent: links, focus rings, selected state, primary actions."
+				},
+				"success": {
+					"$ref": "#/$defs/color",
+					"description": "Success status: ok badges, added lines, running indicators."
+				},
+				"warning": {
+					"$ref": "#/$defs/color",
+					"description": "Warning status: caution badges and notices."
+				},
+				"error": {
+					"$ref": "#/$defs/color",
+					"description": "Error status: failures, destructive actions, removed lines."
+				},
+				"bg-deep": {
+					"$ref": "#/$defs/color",
+					"description": "Recessed surfaces darker (or further from the viewer) than bg: code wells, the composer field."
+				},
+				"panel-2": {
+					"$ref": "#/$defs/color",
+					"description": "A second panel level nested on panel."
+				},
+				"btn": {
+					"$ref": "#/$defs/color",
+					"description": "Default button fill."
+				},
+				"hover": {
+					"$ref": "#/$defs/color",
+					"description": "Hover and pressed fill for rows and buttons."
+				},
+				"border-strong": {
+					"$ref": "#/$defs/color",
+					"description": "Emphasized borders: inputs, focused containers."
+				},
+				"backdrop": {
+					"$ref": "#/$defs/color",
+					"description": "Scrim behind modals. Usually carries alpha."
+				},
+				"shadow-color": {
+					"$ref": "#/$defs/color",
+					"description": "Color of drop shadows. Usually carries alpha."
+				},
+				"muted-2": {
+					"$ref": "#/$defs/color",
+					"description": "Mid-emphasis text between muted and text."
+				},
+				"muted-3": {
+					"$ref": "#/$defs/color",
+					"description": "Higher-emphasis secondary text, closest to text."
+				},
+				"shimmer-band": {
+					"$ref": "#/$defs/color",
+					"description": "Highlight band of the loading shimmer sweep."
+				},
+				"error-text": {
+					"$ref": "#/$defs/color",
+					"description": "Text color for error messages on error-bg."
+				},
+				"accent-dim": {
+					"$ref": "#/$defs/color",
+					"description": "Subtle accent fill: selected rows, chips."
+				},
+				"accent-border": {
+					"$ref": "#/$defs/color",
+					"description": "Border paired with accent-dim."
+				},
+				"purple": {
+					"$ref": "#/$defs/color",
+					"description": "Secondary accent used for special features and the default settings accent."
+				},
+				"success-bg": {
+					"$ref": "#/$defs/color",
+					"description": "Background of success notices and badges."
+				},
+				"success-border": {
+					"$ref": "#/$defs/color",
+					"description": "Border of success notices and badges."
+				},
+				"warning-bg": {
+					"$ref": "#/$defs/color",
+					"description": "Background of warning notices and badges."
+				},
+				"warning-border": {
+					"$ref": "#/$defs/color",
+					"description": "Border of warning notices and badges."
+				},
+				"error-bg": {
+					"$ref": "#/$defs/color",
+					"description": "Background of error notices and badges."
+				},
+				"error-border": {
+					"$ref": "#/$defs/color",
+					"description": "Border of error notices and badges."
+				},
+				"stop-bg": {
+					"$ref": "#/$defs/color",
+					"description": "Background of the stop/abort control."
+				},
+				"diff-add-bg": {
+					"$ref": "#/$defs/color",
+					"description": "Background of added lines in diffs. Usually carries alpha."
+				},
+				"diff-add-text": {
+					"$ref": "#/$defs/color",
+					"description": "Text color of added lines in diffs."
+				},
+				"diff-del-bg": {
+					"$ref": "#/$defs/color",
+					"description": "Background of removed lines in diffs. Usually carries alpha."
+				},
+				"diff-del-text": {
+					"$ref": "#/$defs/color",
+					"description": "Text color of removed lines in diffs."
+				},
+				"tool-shell": {
+					"$ref": "#/$defs/color",
+					"description": "Tool category color: shell and command tools. Derived tool hues avoid red and green."
+				},
+				"tool-read": {
+					"$ref": "#/$defs/color",
+					"description": "Tool category color: read and fetch tools."
+				},
+				"tool-write": {
+					"$ref": "#/$defs/color",
+					"description": "Tool category color: write and edit tools."
+				},
+				"tool-search": {
+					"$ref": "#/$defs/color",
+					"description": "Tool category color: search and find tools."
+				},
+				"tool-agents": {
+					"$ref": "#/$defs/color",
+					"description": "Tool category color: subagent and task tools."
+				},
+				"tool-other": {
+					"$ref": "#/$defs/color",
+					"description": "Tool category color: all other tools."
+				},
+				"syn-keyword": {
+					"$ref": "#/$defs/color",
+					"description": "Syntax highlighting: keywords."
+				},
+				"syn-string": {
+					"$ref": "#/$defs/color",
+					"description": "Syntax highlighting: strings."
+				},
+				"syn-number": {
+					"$ref": "#/$defs/color",
+					"description": "Syntax highlighting: numbers and constants."
+				},
+				"syn-comment": {
+					"$ref": "#/$defs/color",
+					"description": "Syntax highlighting: comments."
+				},
+				"syn-title": {
+					"$ref": "#/$defs/color",
+					"description": "Syntax highlighting: function and heading names."
+				},
+				"syn-attr": {
+					"$ref": "#/$defs/color",
+					"description": "Syntax highlighting: types, attributes and properties."
+				},
+				"syn-meta": {
+					"$ref": "#/$defs/color",
+					"description": "Syntax highlighting: preprocessor and meta tokens."
+				},
+				"settings-accent": {
+					"$ref": "#/$defs/color",
+					"description": "Accent inside the Settings surfaces (toggles, group marks)."
+				},
+				"settings-title": {
+					"$ref": "#/$defs/color",
+					"description": "Row titles in Settings."
+				},
+				"settings-desc": {
+					"$ref": "#/$defs/color",
+					"description": "Row descriptions in Settings."
+				},
+				"settings-warning": {
+					"$ref": "#/$defs/color",
+					"description": "Warning text and marks in Settings."
+				},
+				"settings-line": {
+					"$ref": "#/$defs/color",
+					"description": "Outlines of Settings groups."
+				},
+				"settings-divider": {
+					"$ref": "#/$defs/color",
+					"description": "Dividers between Settings rows."
+				},
+				"settings-fill": {
+					"$ref": "#/$defs/color",
+					"description": "Fill of Settings groups."
+				},
+				"settings-track-off": {
+					"$ref": "#/$defs/color",
+					"description": "Track of a switched-off toggle."
+				},
+				"settings-mark-bg": {
+					"$ref": "#/$defs/color",
+					"description": "Background of the search-match mark in Settings."
+				},
+				"settings-mark-fg": {
+					"$ref": "#/$defs/color",
+					"description": "Text color of the search-match mark in Settings."
+				},
+				"logo-tile": {
+					"$ref": "#/$defs/color",
+					"description": "Tile color of the omp-web logo mark."
+				},
+				"logo-base": {
+					"$ref": "#/$defs/color",
+					"description": "Base band color of the omp-web logo mark."
+				}
+			}
+		}
+	}
+}

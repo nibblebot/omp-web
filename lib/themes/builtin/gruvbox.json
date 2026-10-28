@@ -1,0 +1,53 @@
+{
+	"$schema": "../../../docs/theme-schema.json",
+	"schemaVersion": 1,
+	"name": "Gruvbox",
+	"variants": {
+		"dark": {
+			"bg": "#282828",
+			"panel": "#3c3836",
+			"text": "#ebdbb2",
+			"muted": "#a89984",
+			"border": "#504945",
+			"accent": "#83a598",
+			"success": "#b8bb26",
+			"warning": "#fabd2f",
+			"error": "#fb4934",
+			"bg-deep": "#1d2021",
+			"border-strong": "#665c54",
+			"purple": "#d3869b",
+			"diff-add-text": "#b8bb26",
+			"diff-del-text": "#fb4934",
+			"syn-keyword": "#fb4934",
+			"syn-string": "#b8bb26",
+			"syn-number": "#d3869b",
+			"syn-comment": "#928374",
+			"syn-title": "#b8bb26",
+			"syn-attr": "#fabd2f",
+			"syn-meta": "#8ec07c"
+		},
+		"light": {
+			"bg": "#fbf1c7",
+			"panel": "#f9f5d7",
+			"text": "#3c3836",
+			"muted": "#7c6f64",
+			"border": "#d5c4a1",
+			"accent": "#076678",
+			"success": "#79740e",
+			"warning": "#b57614",
+			"error": "#9d0006",
+			"bg-deep": "#ebdbb2",
+			"border-strong": "#bdae93",
+			"purple": "#8f3f71",
+			"diff-add-text": "#79740e",
+			"diff-del-text": "#9d0006",
+			"syn-keyword": "#9d0006",
+			"syn-string": "#79740e",
+			"syn-number": "#8f3f71",
+			"syn-comment": "#928374",
+			"syn-title": "#79740e",
+			"syn-attr": "#b57614",
+			"syn-meta": "#427b58"
+		}
+	}
+}

@@ -14,6 +14,7 @@ import { isActivitiesShortcut, pruneDockLayoutsToRoster } from "./store/dock";
 import {
 	applyDisplayAttributes,
 	bootAuth,
+	reloadThemes,
 	closeDrawers,
 	connect,
 	hasLiveSession,
@@ -27,7 +28,6 @@ import {
 	toggleToolsExpanded,
 } from "./state";
 import { openModelDialog } from "./store/models";
-import { initTheme } from "./prefs/theme";
 import { trackViewportHeight } from "./prefs/viewport";
 import { featureView } from "./features/registry";
 import { featurePreferences } from "./features/preferences";
@@ -35,8 +35,6 @@ import { displayTitle } from "./components/ui/title-icons";
 import { onHashChange, restoreInitialRoute, syncRouteToAttached } from "./store/deep-link";
 import { transcriptExiting } from "./components/chat/transcript/useTranscriptTransition";
 import { installWindowFileDrop } from "./prompt/file-drop";
-// Apply persisted theme/font-size before first render to avoid a dark flash.
-initTheme();
 applyDisplayAttributes();
 
 /**
@@ -115,6 +113,8 @@ export const App: Component = () => {
 		// modal on signedOut; then probe the session (404 → disabled).
 		initAuth();
 		bootAuth();
+		// Fleet theme list (built-ins plus custom files); installing its stylesheet re-applies the stored selection.
+		void reloadThemes();
 		// Back/Forward and pasted hash links reattach the session the hash names.
 		window.addEventListener("hashchange", onHashChange);
 		onCleanup(() => window.removeEventListener("hashchange", onHashChange));

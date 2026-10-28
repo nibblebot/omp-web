@@ -17,6 +17,7 @@ import {
 import { FIXTURE_NOW } from "./session";
 import { rosterFsBrowse, rosterRecentRoots } from "./roster-routes";
 import { rosterUsageReports } from "./roster";
+import { fixtureThemes } from "./themes";
 
 /**
  * Fixture HTTP routes. Components fetch fleet endpoints at runtime (store/fleet-api.ts,
@@ -153,6 +154,9 @@ const featureSizes: FeatureSizeManifest = {
 export const featureSizesFixture = { available: true };
 
 export const fixtureRoutes: FixtureRoute[] = [
+	// --- store/themes.ts: /ctl/themes (built-ins, custom files, failures) ---
+	{ method: "GET", path: "/ctl/themes", respond: () => fixtureThemes() },
+
 	// --- store/fleet-api.ts: /ctl/stats ---
 	{ method: "GET", path: "/ctl/stats/health", respond: () => health },
 	{

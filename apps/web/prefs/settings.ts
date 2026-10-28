@@ -186,7 +186,7 @@ const WEB_UI_SEARCH_ROWS: {
 }[] = [
 	{
 		label: "Theme",
-		keywords: "theme dark light color appearance",
+		keywords: "theme mode system dark light color palette appearance custom",
 		tabId: APPEARANCE_MENU_TAB,
 	},
 	{

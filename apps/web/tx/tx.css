@@ -40,11 +40,9 @@
   --tx-mono: "Noto Sans Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   --tx-sans: "Noto Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
-/* Light palettes (fleet's light theme selectors): tokens with no fleet
-   equivalent that were theme-dependent keep a light-tuned literal. */
-:root[data-theme="light"] .tx-app,
-:root[data-theme="catppuccin-latte"] .tx-app,
-:root[data-theme="omp-light"] .tx-app {
+/* Light schemes: tokens with no fleet equivalent that were theme-dependent
+   keep a light-tuned literal. */
+:root[data-scheme="light"] .tx-app {
   --tx-banner-code-bg: rgba(255, 255, 255, 0.35);
 }
 .tx-app code,
