@@ -77,13 +77,13 @@ const JsonContainer: Component<{ value: object; depth: number; openDepth: number
 	const size = createMemo(() => sizeOf(props.value));
 	const label = () => sizeLabel(size(), Array.isArray(props.value));
 	const startsOpen = props.depth < props.openDepth;
-	const { opened, onToggle } = createLazyOpen(startsOpen);
+	const { opened, onToggle, onClick } = createLazyOpen(startsOpen);
 	return (
 		<Show
 			when={props.depth < MAX_DEPTH && size() > 0}
 			fallback={<span class="json-size">{label()}</span>}
 		>
-			<details class="json-node" open={startsOpen} onToggle={onToggle}>
+			<details class="json-node" open={startsOpen} onToggle={onToggle} onClick={onClick}>
 				<summary class="json-summary">
 					<span class="json-size">{label()}</span>
 				</summary>

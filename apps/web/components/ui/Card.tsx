@@ -9,6 +9,8 @@ interface CardProps {
 	open?: boolean;
 	/** `<details>` toggle (collapsible only); check `e.isTrusted` to tell user toggles apart. */
 	onToggle?: JSX.EventHandler<HTMLDetailsElement, Event>;
+	/** `<details>` click (collapsible only); a click on the summary arrives before the element opens. */
+	onClick?: JSX.EventHandler<HTMLDetailsElement, MouseEvent>;
 	class?: string;
 	classList?: Record<string, boolean | undefined>;
 	/** Reflected as `data-status` on the card root for status-driven styling. */
@@ -49,6 +51,7 @@ export const Card: Component<CardProps> = (props) => {
 				{...dataAttrs()}
 				open={props.open}
 				onToggle={(e) => props.onToggle?.(e)}
+				onClick={(e) => props.onClick?.(e)}
 			>
 				<summary class="card-header">{props.header}</summary>
 				{props.children}

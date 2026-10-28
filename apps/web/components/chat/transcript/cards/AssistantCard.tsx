@@ -52,12 +52,13 @@ export const AssistantCard: Component<{
 							<Show when={thinkingView(block.text)} keyed>
 								{(formatted) => {
 									// A collapsed thinking block renders its text on first open.
-									const { opened, onToggle } = createLazyOpen(expandThinkingBlocks());
+									const { opened, onToggle, onClick } = createLazyOpen(expandThinkingBlocks());
 									return (
 										<details
 											class="thinking-block"
 											open={expandThinkingBlocks()}
 											onToggle={onToggle}
+											onClick={onClick}
 										>
 											<summary>thinking</summary>
 											<Show when={opened()}>

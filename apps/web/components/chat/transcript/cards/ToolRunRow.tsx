@@ -132,9 +132,14 @@ export const ToolRunRow: Component<{
 					<Show when={open()}>
 						<For each={thinking()}>
 							{(view) => {
-								const { opened, onToggle } = createLazyOpen(expandThinkingBlocks());
+								const { opened, onToggle, onClick } = createLazyOpen(expandThinkingBlocks());
 								return (
-									<details class="thinking-block" open={expandThinkingBlocks()} onToggle={onToggle}>
+									<details
+										class="thinking-block"
+										open={expandThinkingBlocks()}
+										onToggle={onToggle}
+										onClick={onClick}
+									>
 										<summary>thinking</summary>
 										<Show when={opened()}>
 											<Markdown src={view} />

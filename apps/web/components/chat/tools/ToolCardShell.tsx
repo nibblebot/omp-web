@@ -18,6 +18,7 @@ import { toolKind, type ToolIconKey } from "../../../chat/tool-kinds";
 import { capRows, toolRowLimit } from "../../../chat/tool-rows";
 import { state, type ToolItem } from "../../../state";
 import { Card } from "../../ui/Card";
+import { createLazyOpen } from "../../ui/lazy-open";
 import { BackgroundBadge } from "./BackgroundBadge";
 import {
 	BotIcon,
@@ -114,7 +115,11 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 	// A <details> card that has never been open has no body in the DOM: it mounts on
 	// the first open (click, Ctrl+O, running) and stays mounted after a close. Most
 	// cards of a long session are never opened.
-	const bodyMounted = createMemo((was: boolean) => was || !collapsible() || isOpen(), false);
+	const lazy = createLazyOpen(false);
+	const bodyMounted = createMemo(
+		(was: boolean) => was || !collapsible() || isOpen() || lazy.opened(),
+		false,
+	);
 	return (
 		<Card
 			class={cardClass()}
@@ -122,7 +127,9 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 			data={{ "tool-call-id": toolCallId }}
 			collapsible={collapsible()}
 			open={isOpen()}
+			onClick={lazy.onClick}
 			onToggle={(e) => {
+				lazy.onToggle(e);
 				if (
 					e.isTrusted &&
 					e.currentTarget.open !== (state.toolsExpanded || props.status === "running")
