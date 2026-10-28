@@ -38,6 +38,7 @@ import type {
 	WireToolLive,
 } from "#lib/wire/protocol";
 import {
+	BROWSER_REDIAL_CLOSE,
 	browserCloseFromCode,
 	browserSocketUrl,
 	parseServerMessage,
@@ -877,7 +878,7 @@ function armSilenceTimer(): void {
 		// Reconnect immediately (no backoff delay): the server may be
 		// perfectly healthy behind a hung middlebox. If the reconnect itself
 		// fails, the backoff ladder takes over.
-		teardownSocket(socket, "now", 1000, "silence deadline");
+		teardownSocket(socket, "now", BROWSER_REDIAL_CLOSE, "silence deadline");
 	}, CLIENT_SILENCE_DEADLINE_MS);
 }
 
@@ -1443,7 +1444,7 @@ export function connect(): void {
 	reconnectTimer = undefined;
 	awaitingSignIn = false;
 	// A new connect() supersedes any live socket.
-	if (socket !== null) teardownSocket(socket, "hold", 1000, "superseded");
+	if (socket !== null) teardownSocket(socket, "hold", BROWSER_REDIAL_CLOSE, "superseded");
 	pushDebug("info", "transport", "connecting /ws");
 	clearSilenceTimer(); // a new connect() supersedes any prior socket's deadline
 	// One WebSocket per tab, same origin. It cannot carry headers, so the

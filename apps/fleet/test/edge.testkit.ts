@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { DELTA_SEQ_START, OMP_PROTO } from "#lib/wire/protocol";
 import type { DaemonInfo, RosterEntry, ServerFrame } from "#lib/wire/protocol";
 import {
+	BROWSER_REDIAL_CLOSE,
 	BROWSER_SOCKET_PATH,
 	browserSocketUrl,
 	parseServerMessage,
@@ -301,8 +302,8 @@ export class BrowserSocket {
 		}
 	}
 
-	/** Close the socket, like a dropped connection; `code` 1001 is a page unloading. */
-	close(code = 1000): void {
+	/** Close the socket like a client redialing (BROWSER_REDIAL_CLOSE); `code` 1000 is a client that is done, 1001 a page unloading. */
+	close(code = BROWSER_REDIAL_CLOSE): void {
 		this.#ws?.close(code, "test done");
 	}
 

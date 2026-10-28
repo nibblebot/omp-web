@@ -817,3 +817,81 @@ describe("session-control control mirror carries only what the fleet reads", () 
 		control.stop();
 	});
 });
+
+describe("session-control stream_pause / stream_resume (a parked browser stream)", () => {
+	const control$ = (control: SessionControl, type: "stream_pause" | "stream_resume"): void =>
+		control.handleEnvelope({
+			version: 2,
+			workspaceId: "w1",
+			generation: 1,
+			connectionId: "conn",
+			streamId: STREAM,
+			seq: 0,
+			kind: "control",
+			payload: { type },
+			at: Date.now(),
+		} satisfies CallbackEnvelope);
+	const settle = async (): Promise<void> => {
+		for (let i = 0; i < 8; i++) await Promise.resolve();
+	};
+	const framesTo = (sent: Sent[], from: number) =>
+		sent.slice(from).filter((s) => s.streamId === STREAM && s.kind === "frame");
+
+	test("a paused stream sends nothing; the resume sends the held deltas in order without a re-prime", async () => {
+		const { control, sent, primes } = makeHarness();
+		openStream(control);
+		await settle();
+		control$(control, "stream_pause");
+		const before = sent.length;
+		for (let i = 0; i < 3; i++) control.mirror({ type: "state", state: { n: i } });
+		expect(framesTo(sent, before)).toHaveLength(0);
+		control$(control, "stream_resume");
+		const resumed = framesTo(sent, before);
+		expect(resumed.map((s) => (s.payload as { state: { n: number } }).state.n)).toEqual([0, 1, 2]);
+		expect(primes).toHaveLength(1);
+		// Live again: a later delta goes out at once.
+		control.mirror({ type: "state", state: { n: 3 } });
+		expect(framesTo(sent, before)).toHaveLength(4);
+		control.stop();
+	});
+
+	test("a history resync while paused makes the resume re-prime the stream", async () => {
+		const { control, sent, primes } = makeHarness();
+		openStream(control);
+		await settle();
+		control$(control, "stream_pause");
+		const before = sent.length;
+		control.mirror({ type: "history", messages: [] });
+		control.mirror({ type: "state", state: { n: 1 } });
+		control$(control, "stream_resume");
+		expect(resyncSent(sent, before)).toBe(true);
+		expect(primes).toHaveLength(2);
+		control.stop();
+	});
+
+	test("a hold past the ring budget gives up: the resume re-primes instead of replaying a partial tail", async () => {
+		const { control, sent, primes } = makeHarness();
+		openStream(control);
+		await settle();
+		control$(control, "stream_pause");
+		const before = sent.length;
+		const big = { type: "state", state: { blob: "x".repeat(3 * 1024 * 1024) } };
+		control.mirror(big);
+		control.mirror(big);
+		control$(control, "stream_resume");
+		expect(resyncSent(sent, before)).toBe(true);
+		expect(primes).toHaveLength(2);
+		control.stop();
+	});
+
+	test("a resume without a pause changes nothing", async () => {
+		const { control, sent, primes } = makeHarness();
+		openStream(control);
+		await settle();
+		const before = sent.length;
+		control$(control, "stream_resume");
+		expect(sent.length).toBe(before);
+		expect(primes).toHaveLength(1);
+		control.stop();
+	});
+});

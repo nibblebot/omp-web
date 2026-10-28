@@ -143,6 +143,18 @@ interface BrowserStream {
 	inflightBytes: number;
 	/** Paced senders asleep on credit or drain; woken by an ack, a re-prime, or the stream ending. */
 	roomWaiters: Set<() => void>;
+	/**
+	 * Set from stream_pause to stream_resume: the fleet parked this stream (its
+	 * browser dropped). Nothing is sent meanwhile; the ringed deltas that follow
+	 * are held here in order. `dirty`: a replay cannot restore the stream (a hold
+	 * past the ring budget, or a priming/history frame passed), so resume re-primes.
+	 */
+	paused: { frames: HeldFrame[]; bytes: number; dirty: boolean } | null;
+}
+
+interface HeldFrame {
+	frame: Record<string, unknown>;
+	encoded: PreEncodedPayload | undefined;
 }
 
 export interface SessionControlStatus {
@@ -353,6 +365,42 @@ export function createSessionControl(deps: SessionControlDeps): SessionControl {
 	};
 
 	/**
+	 * A paused stream's frame: ringed deltas are held for the resume (past the
+	 * ring budget the hold gives up and the resume re-primes); a frame a replay
+	 * cannot repeat (priming, a history resync, a reset) makes the stream dirty;
+	 * the rest (answers to commands nobody is waiting on) is dropped.
+	 */
+	const holdWhilePaused = (
+		stream: BrowserStream,
+		frame: Record<string, unknown>,
+		encoded: PreEncodedPayload | undefined,
+	): void => {
+		const held = stream.paused!;
+		if (held.dirty) return;
+		const type = typeof frame.type === "string" ? frame.type : "";
+		if (!isRingedFrameType(type)) {
+			if (
+				type === "hello_ok" ||
+				type === "attached" ||
+				type === "history" ||
+				type === "available_commands"
+			) {
+				held.dirty = true;
+				held.frames = [];
+				held.bytes = 0;
+			}
+			return;
+		}
+		held.frames.push({ frame, encoded });
+		held.bytes += encoded?.bytes ?? 0;
+		if (held.bytes > RING_MAX_BYTES) {
+			held.dirty = true;
+			held.frames = [];
+			held.bytes = 0;
+		}
+	};
+
+	/**
 	 * Deliver one live frame to a browser stream, or hold it while that
 	 * stream's prime is in flight. A held backlog past the ring budget restarts
 	 * the prime in place, which supersedes the held frames (bounded memory).
@@ -363,6 +411,10 @@ export function createSessionControl(deps: SessionControlDeps): SessionControl {
 		frame: Record<string, unknown>,
 		encoded: PreEncodedPayload | undefined = tryEncode(frame),
 	): void => {
+		if (stream.paused !== null) {
+			holdWhilePaused(stream, frame, encoded);
+			return;
+		}
 		if (stream.deferred === null) {
 			emit(stream.streamId, "frame", frame, true, encoded);
 			return;
@@ -436,12 +488,14 @@ export function createSessionControl(deps: SessionControlDeps): SessionControl {
 				inflightHead: 0,
 				inflightBytes: 0,
 				roomWaiters: new Set(),
+				paused: null,
 			};
 			streams.set(streamId, stream);
 			deps.onBrowserStreamsChange?.(streams.size);
 		}
 		// Every stream_open restarts the credit ledger: the fleet resets its side
 		// when it sends one, so frames sent before it will never be acknowledged.
+		stream!.paused = null; // a re-open supersedes a park (the pair changed, or the fleet re-primes)
 		stream!.inflight = [];
 		stream!.inflightHead = 0;
 		stream!.inflightBytes = 0;
@@ -502,6 +556,32 @@ export function createSessionControl(deps: SessionControlDeps): SessionControl {
 			case "stream_open":
 				openStream(envelope.streamId, lastSeq);
 				break;
+			case "stream_pause": {
+				const stream = streams.get(envelope.streamId);
+				// A stream mid-prime keeps going: its priming frames reach the parked
+				// fleet side, which then lets the stream go (the browser re-attaches).
+				if (stream !== undefined && stream.deferred === null && stream.paused === null) {
+					stream.paused = { frames: [], bytes: 0, dirty: false };
+				}
+				break;
+			}
+			case "stream_resume": {
+				const stream = streams.get(envelope.streamId);
+				const held = stream?.paused;
+				if (stream === undefined || held === null || held === undefined) break;
+				stream.paused = null;
+				if (held.dirty) {
+					emit(stream.streamId, "control", { type: "stream_resync" } satisfies StreamResyncControl);
+					stream.entries = [];
+					stream.head = 0;
+					stream.bytes = 0;
+					stream.evictedSeq = 0;
+					prime(stream);
+				} else {
+					for (const { frame, encoded } of held.frames) deliver(stream, frame, encoded);
+				}
+				break;
+			}
 			case "stream_ack": {
 				const stream = streams.get(envelope.streamId);
 				if (stream !== undefined && typeof payload.seq === "number") {
@@ -571,6 +651,10 @@ export function createSessionControl(deps: SessionControlDeps): SessionControl {
 		if (stopped || !deps.pairLive()) return;
 		await Promise.all(
 			[...streams.values()].map(async (stream) => {
+				if (stream.paused !== null) {
+					for (const frame of frames) holdWhilePaused(stream, frame, undefined);
+					return;
+				}
 				if (stream.deferred !== null) {
 					for (const frame of frames) deliver(stream, frame);
 					return;

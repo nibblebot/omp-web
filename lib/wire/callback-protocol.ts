@@ -110,6 +110,28 @@ export interface StreamOpenControl {
 }
 
 /**
+ * fleet→session, kind "control", on a `browser/<connId>` stream: the browser's
+ * socket dropped and the fleet parks the stream for a resume. The session
+ * stops sending frames on it and holds the ringed deltas that follow (bounded
+ * by the stream's ring budget) until `stream_resume`; a parked stream would
+ * otherwise carry the whole session stream to a browser that is gone. An
+ * older session ignores it (logged) and keeps sending.
+ */
+export interface StreamPauseControl {
+	type: "stream_pause";
+}
+
+/**
+ * fleet→session, kind "control": the browser is back on a paused stream. The
+ * session sends the held deltas in order, or, when it could not hold them (the
+ * hold overflowed, or a frame a replay cannot repeat passed: priming, a history
+ * resync), resyncs and primes the stream afresh like a ring miss.
+ */
+export interface StreamResumeControl {
+	type: "stream_resume";
+}
+
+/**
  * fleet→session, kind "control", on a `browser/<connId>` stream: every frame the
  * session sent on this stream with wire seq at or below `seq` has left the
  * fleet's memory for the browser's socket (the fleet's per-browser queue

@@ -1457,8 +1457,8 @@ describe("edge resume of a dropped browser's session channel", () => {
 	});
 });
 
-describe("edge session channel of a page that is going away", () => {
-	test("a 1001 close (page unload) closes the session channel at once; nothing is parked", async () => {
+describe("edge session channel of a client that is done", () => {
+	test("a 1000 or 1001 close (a finished client, a page unloading) closes the session channel at once; nothing is parked", async () => {
 		const rig = await startRig();
 		try {
 			const remote = await connectRemote(rig, "unload");
@@ -1466,7 +1466,7 @@ describe("edge session channel of a page that is going away", () => {
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
 			await attach(browser, remote.workspaceId, "a1");
 			const [stream] = await awaitStreams(remote.session, 1);
-			browser.close(1001);
+			browser.close(1000);
 			const closed = await waitFor(
 				() =>
 					controlFrames(remote.session, "stream_close").find((env) => env.streamId === stream) ??
@@ -1475,6 +1475,55 @@ describe("edge session channel of a page that is going away", () => {
 				"stream_close for the unloaded page",
 			);
 			expect(closed.streamId).toBe(stream);
+		} finally {
+			await rig.close();
+		}
+	});
+});
+
+describe("edge pause of a parked session channel", () => {
+	test("a drop pauses the session stream; the adopting socket resumes it", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "pause");
+			const browser = await openBrowser(rig.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await attach(browser, remote.workspaceId, "a1");
+			const [stream] = await awaitStreams(remote.session, 1);
+			remote.session.send(stream!, "frame", { type: "attached", scope: "boot" });
+			remote.session.send(stream!, "frame", {
+				type: "event",
+				event: { type: "notice", level: "info", message: "before" },
+			});
+			await browser.waitForFrame((f) => f.type === "event", "delta before the drop");
+			browser.close();
+			await browser.end();
+			const paused = await waitFor(
+				() =>
+					controlFrames(remote.session, "stream_pause").find((e) => e.streamId === stream) ?? null,
+				3000,
+				"stream_pause",
+			);
+			expect(paused.streamId).toBe(stream);
+			expect(controlFrames(remote.session, "stream_resume")).toHaveLength(0);
+			await browser.reopen();
+			await browser.send({
+				type: "attach",
+				id: "a2",
+				workspaceId: remote.workspaceId,
+				resume: true,
+			});
+			await browser.waitForFrame(
+				(f) => f.type === "attach_result" && f.id === "a2",
+				"attach_result",
+			);
+			const resumed = await waitFor(
+				() =>
+					controlFrames(remote.session, "stream_resume").find((e) => e.streamId === stream) ?? null,
+				3000,
+				"stream_resume",
+			);
+			expect(resumed.streamId).toBe(stream);
 		} finally {
 			await rig.close();
 		}

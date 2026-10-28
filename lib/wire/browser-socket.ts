@@ -37,8 +37,10 @@ import type { ClientCommand, ServerFrame } from "./protocol";
  * and replays the recorded answer, never re-dispatches.
  *
  * Resume (fleet edge, additive under OMP_PROTO 6): a dropped named client
- * (`client` query) keeps its session channel parked for the reclaim grace;
- * the channel keeps feeding the client's replay ring. A returning socket
+ * (`client` query) keeps its session channel parked for the reclaim grace
+ * (not after a 1000/1001 close; the web's own redial closes BROWSER_REDIAL_CLOSE);
+ * the session holds the ringed deltas meanwhile (stream_pause) and the edge's
+ * replay ring holds what arrived before. A returning socket
  * dials with `after`, and the client's re-attach is `{"type":"attach",
  * "workspaceId":W,"resume":true}`. If the ring still holds everything after
  * `after`, the session pair is unchanged and no re-prime frame (hello_ok,
@@ -53,6 +55,15 @@ import type { ClientCommand, ServerFrame } from "./protocol";
  * Close codes: 4000 + an HTTP-like status, reason `<kind>: <message>`
  * (the callbackCloseFor scheme). 1000/1001 are ordinary closes.
  */
+
+/**
+ * Close code a client sends when it closes its own socket to dial again at
+ * once (silence deadline, a newer dial superseding it). A server that keeps
+ * per-client resume state keeps it for this close, like for a dropped
+ * connection (1006) or its own 4503; a plain 1000 or 1001 (page unloading) is a
+ * client that is done, so the server releases what it held for it.
+ */
+export const BROWSER_REDIAL_CLOSE = 4408;
 
 /** Upgrade route of the browser socket on the fleet, the forwarder and a standalone session. */
 export const BROWSER_SOCKET_PATH = "/ws";

@@ -55,11 +55,13 @@
  *     Attach is answered with an id-keyed attach_result frame (finding #28)
  *     so unrelated global error frames never settle a browser's in-flight
  *     attach.
- *   - RESUME: a named client's socket drop (anything but a 1001 close, which
- *     is a page unloading) does not close its session
+ *   - RESUME: a named client's socket drop (anything but a 1000 or 1001 close:
+ *     a finished client, a page unloading) does not close its session
  *     channel. The channel is parked on the client for CLIENT_RECLAIM_MS and
- *     keeps feeding the client's ring (every ringed delta, exactly as for a
- *     fleet broadcast). A returning socket (same `client`, `after` ≥
+ *     paused on the session (stream_pause: it holds the ringed deltas and sends
+ *     nothing, so a browser that never returns costs no pair traffic); frames
+ *     already in flight feed the client's ring like a fleet broadcast, and
+ *     stream_resume on adoption sends the held ones. A returning socket (same `client`, `after` ≥
  *     DELTA_SEQ_START) adopts the channel before the ring replay when the
  *     ring still holds everything after `after` (ReplayRing.evictedThrough),
  *     no re-prime frame (EDGE_REPRIME_FRAMES: hello_ok, attached, history,
@@ -154,6 +156,8 @@ import type {
 	CallbackEnvelope,
 	StreamAckControl,
 	StreamOpenControl,
+	StreamPauseControl,
+	StreamResumeControl,
 } from "#lib/wire/callback-protocol";
 import type { FleetConfig } from "./config";
 import { serveStaticUi } from "./static-ui";
@@ -184,7 +188,8 @@ import { listProjectBranches, realpathOf } from "./worktrees";
 const CLIENT_RECLAIM_MS = 60_000;
 /** Drain checkpoints merge until they span this many queued bytes (bounds the checkpoint list). */
 const CREDIT_GRAIN_BYTES = 32 * 1024;
-/** Close code a browser sends when its page unloads (RFC 6455 "going away"). */
+/** Close codes of a client that is done (RFC 6455 "normal closure"; "going away" is what a page unloading sends). */
+const CLOSE_NORMAL = 1000;
 const CLOSE_GOING_AWAY = 1001;
 
 /** Picked-session membership: the whole worktree listing, never the dropdown page. */
@@ -1139,12 +1144,19 @@ export class FleetEdge {
 	/**
 	 * Bun `websocket.close`: the browser went away; release it and keep the ring
 	 * for resume. Its session channel stays parked for the resume too, unless the
-	 * close is 1001 (going away: the page unloaded, a reload or a closed tab, which
-	 * browsers announce this way and which no resume follows), when it closes with it.
+	 * client is done: a 1000 (a clean close, e.g. an API client finishing) or 1001
+	 * (going away: the page unloaded, a reload or a closed tab, which browsers
+	 * announce this way) closes the channel with it. A parked channel keeps every
+	 * session frame flowing through the edge (parse, ring, one more envelope per
+	 * frame from the session), so only a close that expects a resume pays for it:
+	 * a dropped connection (1005/1006), the edge's own 4503, or the web client's
+	 * own redial (BROWSER_REDIAL_CLOSE).
 	 */
 	onBrowserClose(ws: ServerWebSocket<BrowserSocketData>, code?: number): void {
 		const stream = ws.data.stream;
-		if (stream !== null) this.#releaseBrowser(stream, code !== CLOSE_GOING_AWAY);
+		if (stream !== null) {
+			this.#releaseBrowser(stream, code !== CLOSE_NORMAL && code !== CLOSE_GOING_AWAY);
+		}
 	}
 
 	/**
@@ -1866,6 +1878,20 @@ export class FleetEdge {
 		pipe.unsubscribePair();
 	}
 
+	/** Best-effort control to the session on this pipe's stream (no live pair: nothing to pause or resume). */
+	#sendPipeControl(
+		pipe: CallbackPipeState,
+		payload: StreamPauseControl | StreamResumeControl,
+	): void {
+		this.#transport
+			?.sendToSession(pipe.workspaceId, {
+				streamId: `${CALLBACK_BROWSER_STREAM_PREFIX}${pipe.connId}`,
+				kind: "control",
+				payload,
+			})
+			.catch(() => {});
+	}
+
 	/**
 	 * Forward a non-edge command to the attached session as a kind:"command"
 	 * envelope on this browser's callback stream (same payload as the
@@ -2302,6 +2328,7 @@ export class FleetEdge {
 		) {
 			this.#dropParked(client);
 			client.parked = stream;
+			this.#sendPipeControl(stream.pipe, { type: "stream_pause" });
 		} else {
 			this.#closePipe(stream);
 		}
@@ -2375,6 +2402,7 @@ export class FleetEdge {
 		pipe.creditHead = 0;
 		pipe.ackedDrained = 0;
 		this.#noteDrain(stream, true);
+		this.#sendPipeControl(pipe, { type: "stream_resume" });
 	}
 
 	/** After a disconnect the client's ring is kept for a grace period, then reclaimed. */
