@@ -118,6 +118,20 @@ describe("ui server proxy", () => {
 		expect(await via.json()).toEqual(await direct.json());
 	});
 
+	test("passes the control plane's gzip through, and sends plain JSON to a client that refuses it", async () => {
+		const url = `http://127.0.0.1:${ui.port}/ctl/settings`;
+		const plain = await fetch(url, { headers: { "accept-encoding": "identity" } });
+		expect(plain.status).toBe(200);
+		expect(plain.headers.get("content-encoding")).toBeNull();
+		const body = await plain.text();
+		expect(body.length).toBeGreaterThan(1024);
+		const gzipped = await fetch(url, { headers: { "accept-encoding": "gzip" } });
+		expect(gzipped.headers.get("content-encoding")).toBe("gzip");
+		expect(await gzipped.text()).toBe(body);
+		// fetch's default Accept-Encoding (gzip, br) reaches the control plane too.
+		expect(await (await fetch(url)).text()).toBe(body);
+	});
+
 	test("a plain GET /ws is refused with 426, not served as the UI shell", async () => {
 		const res = await fetch(`http://127.0.0.1:${ui.port}/ws`);
 		expect(res.status).toBe(426);

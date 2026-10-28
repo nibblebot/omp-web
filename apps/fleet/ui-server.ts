@@ -479,7 +479,7 @@ async function route(
 	browserOrigin: string | undefined,
 ): Promise<Response> {
 	const path = new URL(req.url).pathname;
-	if (!PROXIED_PATH.test(path)) return serveStaticUi(path);
+	if (!PROXIED_PATH.test(path)) return serveStaticUi(path, req);
 	if (!browserRequestAllowed(req, browserOrigin)) {
 		return Response.json({ error: "forbidden" }, { status: 403 });
 	}
@@ -510,6 +510,8 @@ async function proxy(
 ): Promise<Response> {
 	const url = new URL(req.url);
 	const headers = forwardedHeaders(req, peer);
+	// fetch adds its own Accept-Encoding when the header is absent, and the answer is passed through undecoded.
+	if (!headers.has("accept-encoding")) headers.set("accept-encoding", "identity");
 	const hasBody = req.method !== "GET" && req.method !== "HEAD";
 	try {
 		const upstream = await fetch(`http://${LOOPBACK}:${controlPort}${url.pathname}${url.search}`, {
@@ -518,16 +520,12 @@ async function proxy(
 			body: hasBody ? req.body : undefined,
 			redirect: "manual",
 			signal: req.signal,
+			// Pass the control plane's gzip through untouched; its answers are compressed only for clients that accept it.
+			decompress: false,
 		});
 		const responseHeaders = new Headers();
 		for (const [name, value] of upstream.headers) {
-			// fetch may have decoded the body, so the upstream length and coding no longer describe it.
-			if (
-				Object.hasOwn(HOP_BY_HOP, name) ||
-				name === "content-encoding" ||
-				name === "content-length"
-			)
-				continue;
+			if (Object.hasOwn(HOP_BY_HOP, name) || name === "content-length") continue;
 			responseHeaders.append(name, value);
 		}
 		const contentType = upstream.headers.get("content-type") ?? "";

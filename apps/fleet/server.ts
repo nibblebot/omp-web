@@ -117,6 +117,7 @@ import type {
 import { CloneLifecycleError, WorkspaceLifecycle } from "./workspace-lifecycle";
 import type { CloneRuntimePolicy } from "./workspace-lifecycle";
 import { CloneControlApi, lifecycleStatus } from "./clone-control";
+import { compressJson } from "./http-compress";
 import { FleetOperations, OperationError, parseCloneSource } from "./operations";
 
 export const DEFAULT_PORT = 4722;
@@ -652,12 +653,14 @@ class FleetServerImpl implements FleetServer {
 			// and the browser socket, lives in `websocket`.)
 			idleTimeout: 0,
 			websocket: fleetWebSocket(this.transport, this.edge),
-			fetch: (req, srv) => {
+			fetch: async (req, srv) => {
 				// Pre-auth routes read a small body and get a bounded idle window
 				// (FEDGE-11); the other routes stay on idleTimeout 0.
 				if (new URL(req.url).pathname.startsWith("/auth/"))
 					srv.timeout(req, PRE_AUTH_IDLE_TIMEOUT_S);
-				return this.#fetch(req, srv, srv.requestIP(req)?.address);
+				const res = await this.#fetch(req, srv, srv.requestIP(req)?.address);
+				// undefined = a WebSocket upgrade, which has no response to encode.
+				return res === undefined ? res : compressJson(req, res);
 			},
 		});
 		this.port = this.#server.port!;

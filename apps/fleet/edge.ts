@@ -883,7 +883,7 @@ export class FleetEdge {
 			if (!this.#serveUi) {
 				return json({ error: "this omp-web control plane serves no UI; run: omp-web ui" }, 404);
 			}
-			return await serveStaticUi(path);
+			return await serveStaticUi(path, req);
 		} catch (err) {
 			return json({ error: err instanceof Error ? err.message : String(err) }, 500);
 		}

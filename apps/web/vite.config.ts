@@ -5,6 +5,7 @@ import type { ProxyOptions } from "vite";
 import solidPlugin from "vite-plugin-solid";
 import { buildInfoDefines } from "./build/build-info.ts";
 import { featureSizes } from "./build/feature-sizes.ts";
+import { precompress } from "./build/precompress.ts";
 import { fleetOrigin } from "./dev-proxy.ts";
 
 // Web root: this config lives at apps/web/vite.config.ts. Root is set
@@ -57,7 +58,7 @@ function fleetProxy(): ProxyOptions {
 
 export default defineConfig({
 	root: webRoot,
-	plugins: [solidPlugin(), featureSizes()],
+	plugins: [solidPlugin(), featureSizes(), precompress()],
 	// Sidebar footer build identity (omp-web version, git hash, omp version).
 	define: buildInfoDefines(join(webRoot, "..", "..")),
 	server: {
