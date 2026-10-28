@@ -19,22 +19,30 @@ export function trackAnchor(anchor: HTMLElement, onMove: () => void): () => void
 		seen = now;
 		onMove();
 	};
-	const resize = new ResizeObserver(check);
+	// The anchor resizing or the viewport resizing leaves the shift observer's rect stale: rebuild it.
+	const rebase = () => {
+		check();
+		shift.rewatch();
+	};
+	const resize = new ResizeObserver(rebase);
 	resize.observe(anchor);
-	window.addEventListener("resize", check);
+	window.addEventListener("resize", rebase);
 	// Capture: scroll does not bubble, and any scrollable ancestor can move the anchor.
 	window.addEventListener("scroll", check, { capture: true, passive: true });
-	const stopShift = observeShift(anchor, check);
+	const shift = observeShift(anchor, check);
 	return () => {
 		resize.disconnect();
-		window.removeEventListener("resize", check);
+		window.removeEventListener("resize", rebase);
 		window.removeEventListener("scroll", check, { capture: true });
-		stopShift();
+		shift.stop();
 	};
 }
 
 /** The IntersectionObserver half of {@link trackAnchor}: `onShift` fires when the anchor leaves the rect it had. */
-function observeShift(anchor: HTMLElement, onShift: () => void): () => void {
+function observeShift(
+	anchor: HTMLElement,
+	onShift: () => void,
+): { stop: () => void; rewatch: () => void } {
 	const root = anchor.ownerDocument.documentElement;
 	let io: IntersectionObserver | undefined;
 	let retry: ReturnType<typeof setTimeout> | undefined;
@@ -77,5 +85,5 @@ function observeShift(anchor: HTMLElement, onShift: () => void): () => void {
 		io.observe(anchor);
 	};
 	watch(1);
-	return stop;
+	return { stop, rewatch: () => watch(1) };
 }

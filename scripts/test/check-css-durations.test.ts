@@ -29,10 +29,11 @@ describe("checkCssLoops", () => {
 			"styles/a.css": `.dot {\n\tanimation: pulse var(--dur-pulse) ease infinite;\n}\n`,
 			"styles/b.css": `@media (prefers-reduced-motion: reduce) {\n\t.dot {\n\t\tanimation: pulse var(--dur-pulse) infinite;\n\t}\n}\n`,
 		});
-		expect(checkCssLoops(root).map((f) => `${f.file}:${f.line}`)).toEqual([
-			"apps/web/styles/a.css:2",
-			"apps/web/styles/b.css:3",
-		]);
+		expect(
+			checkCssLoops(root)
+				.map((f) => `${f.file}:${f.line}`)
+				.sort(),
+		).toEqual(["apps/web/styles/a.css:2", "apps/web/styles/b.css:3"]);
 	});
 
 	test("accepts a no-preference block, a finite animation and a comment", () => {

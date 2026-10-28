@@ -1,6 +1,8 @@
 /* Dock pane (components/ui/DockPane.tsx): a right-hand column beside the chat.
    Settled, it is a flex sibling of .main-pane in .app-body, `--dock-w` wide
-   (set from prefs/dock.ts; the 480px fallback matches DOCK_DEFAULT_WIDTH).
+   (set from prefs/dock.ts; the 480px fallback matches DOCK_DEFAULT_WIDTH;
+   while the separator is dragged, DockPane sets an inline width on the pane
+   itself and hands the final width to prefs/dock.ts on release).
    While DockHost slides it in or out it is an overlay at the right edge of
    .app-body instead (data-overlay), so the main pane reflows once, not per
    frame. data-motion holds the off-screen state for "enter" and "exit".
