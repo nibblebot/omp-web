@@ -146,3 +146,67 @@ describe("api.sync", () => {
 		}
 	});
 });
+
+describe("api.storedRaw", () => {
+	afterEach(() => {
+		restoreBrowserGlobals();
+	});
+
+	/** A body that arrives in `chunks` and records whether the reader cancelled it. */
+	function chunked(chunks: Uint8Array[]): { res: Response; cancelled: () => boolean } {
+		let cancelled = false;
+		let i = 0;
+		const body = new ReadableStream<Uint8Array>(
+			{
+				pull(c) {
+					if (i < chunks.length) c.enqueue(chunks[i++]!);
+					else c.close();
+				},
+				cancel() {
+					cancelled = true;
+				},
+			},
+			{ highWaterMark: 0 },
+		);
+		return { res: new Response(body), cancelled: () => cancelled };
+	}
+
+	test("asks the server for one byte past the cap and returns a file under it whole", async () => {
+		let url = "";
+		setBrowserGlobal("fetch", (async (u: string) => {
+			url = u;
+			return new Response("a\nb\n");
+		}) as typeof fetch);
+		const out = await api.storedRaw("ws", "s1", "main.jsonl", 100);
+		expect(out).toEqual({ text: "a\nb\n", truncated: false });
+		expect(new URL(url, "http://x").searchParams.get("maxBytes")).toBe("101");
+	});
+
+	test("stops reading at the cap, cancels the stream, and flags truncation", async () => {
+		const enc = new TextEncoder();
+		const { res, cancelled } = chunked([
+			enc.encode("aaaa"),
+			enc.encode("bbbb"),
+			enc.encode("cccc"),
+		]);
+		setBrowserGlobal("fetch", (async (_url: string) => res) as typeof fetch);
+		const out = await api.storedRaw("ws", "s1", "main.jsonl", 6);
+		expect(out).toEqual({ text: "aaaabb", truncated: true });
+		expect(cancelled()).toBe(true);
+	});
+
+	test("a cut inside a multi-byte character drops the partial character", async () => {
+		const bytes = new TextEncoder().encode("ab\u00e9\u00e9"); // "é" is two bytes: cut after its first
+		setBrowserGlobal("fetch", (async (_url: string) => new Response(bytes)) as typeof fetch);
+		const out = await api.storedRaw("ws", "s1", "main.jsonl", 3);
+		expect(out).toEqual({ text: "ab", truncated: true });
+	});
+
+	test("a file of exactly the cap is not truncated", async () => {
+		setBrowserGlobal("fetch", (async (_url: string) => new Response("abcd")) as typeof fetch);
+		expect(await api.storedRaw("ws", "s1", "main.jsonl", 4)).toEqual({
+			text: "abcd",
+			truncated: false,
+		});
+	});
+});

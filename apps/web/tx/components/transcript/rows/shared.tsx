@@ -2,7 +2,7 @@
  * Shared transcript row building blocks: raw-JSON fallback, card containers,
  * collapsible <details> wiring, and scalar formatting helpers.
  */
-import { Show, useContext } from "solid-js";
+import { Show, createMemo, createSignal, useContext } from "solid-js";
 import type { JSX } from "solid-js";
 import type { RawEntry } from "../../../../store/fleet-api";
 import {
@@ -32,7 +32,8 @@ export function rowAriaLabel(entry: RawEntry): string {
 /**
  * A transcript <details> with reactive open state: manual toggles are tracked
  * by stable key, so page-appends and virtual-row remounts never clobber what
- * the user set by hand.
+ * the user set by hand. The body is built the first time the details opens
+ * (and kept after), so a closed one costs no Markdown parse or JSON.stringify.
  */
 export function ToggleDetails(props: {
 	entry: RawEntry;
@@ -43,14 +44,23 @@ export function ToggleDetails(props: {
 }) {
 	const ctx = useContext(RowStateCtx);
 	const key = () => detailsKey(props.entry, props.purpose);
+	const [localOpen, setLocalOpen] = createSignal(false);
+	const open = () => (ctx ? ctx.detailsOpen(key()) : localOpen());
+	const built = createMemo((was: boolean) => was || open(), false);
 	return (
 		<details
 			class={props.class}
-			open={ctx ? ctx.detailsOpen(key()) : false}
-			onToggle={(ev) => ctx?.setDetailsOpen(key(), ev.currentTarget.open)}
+			open={open()}
+			onToggle={(ev) => {
+				// Only a user toggle is manual; the one that follows a programmatic open is not.
+				const now = ev.currentTarget.open;
+				if (now === open()) return;
+				if (ctx) ctx.setDetailsOpen(key(), now);
+				else setLocalOpen(now);
+			}}
 		>
 			<summary>{props.summary}</summary>
-			{props.children}
+			<Show when={built()}>{props.children}</Show>
 		</details>
 	);
 }

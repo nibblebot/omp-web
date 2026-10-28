@@ -1,17 +1,21 @@
 import {
 	For,
 	Show,
+	createComputed,
 	createEffect,
 	createMemo,
 	createResource,
 	createSignal,
 	on,
 	onCleanup,
+	onMount,
 } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import { api, ApiError, type Health, type SessionSummary } from "../../store/fleet-api";
 import { basename, formatBytes, formatCompact, formatCost, timeAgo } from "../util/format";
 import { shouldFallbackMissingFile } from "../util/missing-file";
 import { groupSessionsByProject } from "../util/project-groups";
+import { groupSpans } from "../util/session-window";
 import { displayTitle } from "../../components/ui/title-icons";
 import { moveRovingFocus } from "../../components/ui/roving";
 
@@ -51,7 +55,15 @@ export function TranscriptList(props: TranscriptListProps) {
 	// Render from .latest (the last SUCCESSFUL response). A refetch, sync
 	// tick or search, keeps the previous list on screen and updates it in
 	// place when the new data lands, instead of wiping to a loading state.
-	const sessions = () => sessionsRes.latest?.sessions ?? [];
+	// Every response carries fresh objects, so it is reconciled into a store by
+	// `file`: a session that is still listed keeps its object (and its row), and
+	// only the fields that changed notify.
+	const [sessionStore, setSessionStore] = createStore<{ list: SessionSummary[] }>({ list: [] });
+	createComputed(() => {
+		const latest = sessionsRes.latest;
+		if (latest !== undefined) setSessionStore("list", reconcile(latest.sessions, { key: "file" }));
+	});
+	const sessions = () => sessionStore.list;
 
 	const [syncing, setSyncing] = createSignal(false);
 	const [syncError, setSyncError] = createSignal<string | null>(null);
@@ -70,8 +82,65 @@ export function TranscriptList(props: TranscriptListProps) {
 	const narrowed = () => q() !== "" || project() !== "";
 	/** Count badge mirrors the rendered rows (group totals after the filter). */
 	const visibleTotal = () => visibleGroups().reduce((n, g) => n + g.sessions.length, 0);
-	/** The one row reachable with Tab: the selected session, else the first visible one. */
-	const tabStopFile = () => props.selectedFile ?? visibleGroups()[0]?.sessions[0]?.file ?? null;
+	/** Group keys; a re-grouped list with the same groups keeps their DOM. */
+	const groupKeys = createMemo(() => visibleGroups().map((g) => g.key), [], {
+		equals: (a, b) => a.length === b.length && a.every((k, i) => k === b[i]),
+	});
+	const groupByKey = createMemo(() => new Map(visibleGroups().map((g) => [g.key, g] as const)));
+
+	// Windowing: rows have a fixed height (tx.css), so only the rows near the viewport mount.
+	let listEl: HTMLDivElement | undefined;
+	const [scrollTop, setScrollTop] = createSignal(0);
+	const [viewportHeight, setViewportHeight] = createSignal(600);
+	const [rowPitch, setRowPitch] = createSignal(144);
+	const [headHeight, setHeadHeight] = createSignal(32);
+	const readSize = () => {
+		if (!listEl) return;
+		setViewportHeight(listEl.clientHeight);
+		const style = getComputedStyle(listEl);
+		const row = Number.parseFloat(style.getPropertyValue("--tx-session-row-h"));
+		const head = Number.parseFloat(style.getPropertyValue("--tx-session-head-h"));
+		if (row > 0) setRowPitch(row);
+		if (head > 0) setHeadHeight(head);
+	};
+	onMount(() => {
+		readSize();
+		if (typeof ResizeObserver !== "function" || !listEl) return;
+		const ro = new ResizeObserver(readSize);
+		ro.observe(listEl);
+		onCleanup(() => ro.disconnect());
+	});
+	const spans = createMemo(() => {
+		const groups = visibleGroups();
+		const laid = groupSpans(
+			groups.map((g) => g.sessions.length),
+			scrollTop(),
+			viewportHeight(),
+			rowPitch(),
+			headHeight(),
+		);
+		return new Map(groups.map((g, i) => [g.key, laid[i]!] as const));
+	});
+	/** Where each listed session sits, to tell whether it is currently mounted. */
+	const locate = createMemo(() => {
+		const at = new Map<string, { key: string; index: number }>();
+		for (const g of visibleGroups())
+			g.sessions.forEach((s, index) => at.set(s.file, { key: g.key, index }));
+		return at;
+	});
+	/** The one row reachable with Tab: the selected session while mounted, else the first mounted one. */
+	const tabStopFile = createMemo(() => {
+		const sel = props.selectedFile;
+		const at = sel === null ? undefined : locate().get(sel);
+		const span = at === undefined ? undefined : spans().get(at.key);
+		if (sel !== null && span !== undefined && at!.index >= span.start && at!.index < span.end)
+			return sel;
+		for (const g of visibleGroups()) {
+			const s = spans().get(g.key);
+			if (s !== undefined && s.end > s.start) return g.sessions[s.start]?.file ?? null;
+		}
+		return null;
+	});
 
 	// Deep-link fallback: when the loaded, untruncated, unfiltered sessions
 	// response proves the selected file is missing, route back to the list.
@@ -151,7 +220,12 @@ export function TranscriptList(props: TranscriptListProps) {
 				/>
 			</div>
 
-			<div class="session-list" onKeyDown={onRowKeys}>
+			<div
+				class="session-list"
+				ref={listEl}
+				onKeyDown={onRowKeys}
+				onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+			>
 				<Show
 					when={sessions().length === 0 ? sessionsRes.error : undefined}
 					keyed
@@ -169,26 +243,49 @@ export function TranscriptList(props: TranscriptListProps) {
 										</div>
 									}
 								>
-									<For each={visibleGroups()}>
-										{(group) => (
-											<div class="session-group">
-												{/* Per-group sticky header: sticks while this group
-												    scrolls, releases at its own bottom edge. Rendered
-												    even for a single group (uniform look). */}
-												<div class="session-group-head">{group.label}</div>
-												<For each={group.sessions}>
-													{(s) => (
-														<TranscriptRow
-															session={s}
-															selected={s.file === props.selectedFile}
-															tabStop={s.file === tabStopFile()}
-															onOpen={props.onOpen}
-															onOpenStored={props.onOpenStored}
-														/>
-													)}
-												</For>
-											</div>
-										)}
+									<For each={groupKeys()}>
+										{(key) => {
+											const group = () => groupByKey().get(key);
+											const range = createMemo(
+												() => {
+													const s = spans().get(key);
+													return { start: s?.start ?? 0, end: s?.end ?? 0 };
+												},
+												undefined,
+												{ equals: (a, b) => a.start === b.start && a.end === b.end },
+											);
+											const count = () => group()?.sessions.length ?? 0;
+											const mounted = createMemo(
+												() => group()?.sessions.slice(range().start, range().end) ?? [],
+											);
+											return (
+												<div class="session-group">
+													{/* Per-group sticky header: sticks while this group
+													    scrolls, releases at its own bottom edge. Rendered
+													    even for a single group (uniform look). */}
+													<div class="session-group-head">{group()?.label}</div>
+													{/* Rows outside the window are spacers of the same total height. */}
+													<div
+														style={{
+															"padding-top": `${range().start * rowPitch()}px`,
+															"padding-bottom": `${(count() - range().end) * rowPitch()}px`,
+														}}
+													>
+														<For each={mounted()}>
+															{(s) => (
+																<TranscriptRow
+																	session={s}
+																	selected={s.file === props.selectedFile}
+																	tabStop={s.file === tabStopFile()}
+																	onOpen={props.onOpen}
+																	onOpenStored={props.onOpenStored}
+																/>
+															)}
+														</For>
+													</div>
+												</div>
+											);
+										}}
 									</For>
 								</Show>
 							}
@@ -297,6 +394,7 @@ function TranscriptRow(props: {
 			type="button"
 			classList={{
 				"session-row": true,
+				"session-row-fixed": true,
 				selected: props.selected,
 				missing: !s().onDisk && !isStore(),
 			}}

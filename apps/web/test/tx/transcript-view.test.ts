@@ -14,11 +14,8 @@ import type { RawEntry } from "../../store/fleet-api";
 import { entryTypeLabel, sessionInitOf, shortSummary } from "../../tx/util/entries";
 import { createCollapseStore } from "../../tx/components/transcript/collapse";
 import { pairToolCalls, createPairingMaps } from "../../tx/components/transcript/pairing";
-import {
-	buildDayRows,
-	filterTranscriptEntries,
-	progressTotal,
-} from "../../tx/components/transcript/index";
+import { buildDayRows } from "../../tx/components/transcript/day-rows";
+import { filterTranscriptEntries, progressTotal } from "../../tx/components/transcript/index";
 
 // ---------------------------------------------------------------------------
 // Synthetic entry builders (mirror the fixture's JSONL shapes)
@@ -202,7 +199,7 @@ describe("collapse store", () => {
 		s.reset();
 		expect(s.ctx.detailsOpen("e1:raw")).toBe(false);
 		expect(s.ctx.collapsed("e1")).toBe(false);
-		expect(s.details().expandAll).toBeNull();
+		expect(s.ctx.detailsOpen("e1")).toBe(false);
 	});
 });
 

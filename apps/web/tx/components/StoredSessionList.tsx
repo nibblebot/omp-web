@@ -9,7 +9,8 @@
  * workspace is additionally labeled "deleted workspace: view only". These
  * rows are read-only browsing, NEVER an inline Resume / wake affordance.
  */
-import { Show, For, createResource, createSignal } from "solid-js";
+import { Show, For, createComputed, createMemo, createResource, createSignal } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import {
 	api,
 	ApiError,
@@ -28,12 +29,24 @@ interface StoredListProps {
 	syncTick: () => number;
 }
 
+const NO_SESSIONS: StoredSessionSummary[] = [];
+
 export function StoredSessionList(props: StoredListProps) {
 	const [workspacesRes, { refetch: refetchWorkspaces }] = createResource(
 		() => `stored\u0000${props.syncTick()}`,
 		() => api.storedWorkspaces(),
 	);
-	const workspaces = () => workspacesRes.latest?.workspaces ?? [];
+	// Each response carries fresh objects; reconciling by id keeps a still-listed workspace's row
+	// (and its expanded sessions) mounted across a sync tick.
+	const [workspaceStore, setWorkspaceStore] = createStore<{ list: StoredWorkspaceSummary[] }>({
+		list: [],
+	});
+	createComputed(() => {
+		const latest = workspacesRes.latest;
+		if (latest !== undefined)
+			setWorkspaceStore("list", reconcile(latest.workspaces, { key: "workspaceId" }));
+	});
+	const workspaces = () => workspaceStore.list;
 
 	// One expanded workspace at a time (accordion).
 	const [expanded, setExpanded] = createSignal<string | null>(null);
@@ -44,11 +57,27 @@ export function StoredSessionList(props: StoredListProps) {
 		() => (expanded() !== null ? `stored-sessions\u0000${expanded()}` : null),
 		(key) => (key !== null ? api.storedSessions(expanded() ?? undefined) : null),
 	);
-	/** Reactive per-workspace sessions read (createResource's .latest is
-	 *  non-tracking; the accordion rows must re-render when the resource
-	 *  resolves, so read the resource value through a memo). */
+	const [sessionStore, setSessionStore] = createStore<{ list: StoredSessionSummary[] }>({
+		list: [],
+	});
+	createComputed(() => {
+		// createResource's .latest is non-tracking here; read the resource value itself.
+		const loaded = sessionsRes.error ? undefined : sessionsRes();
+		setSessionStore("list", reconcile(loaded?.sessions ?? [], { key: "sessionId" }));
+	});
+	const sessionsByWorkspace = createMemo(() => {
+		const by = new Map<string, StoredSessionSummary[]>();
+		for (const s of sessionStore.list) {
+			const own = by.get(s.workspaceId);
+			if (own === undefined) by.set(s.workspaceId, [s]);
+			else own.push(s);
+		}
+		return by;
+	});
+	/** Per-workspace sessions; rows filter by workspace id so a stale previous
+	 *  response can never render under the wrong workspace while loading. */
 	const workspaceSessions = (workspaceId: string): StoredSessionSummary[] =>
-		(sessionsRes()?.sessions ?? []).filter((s) => s.workspaceId === workspaceId);
+		sessionsByWorkspace().get(workspaceId) ?? NO_SESSIONS;
 
 	const toggle = (id: string) => setExpanded((prev) => (prev === id ? null : id));
 

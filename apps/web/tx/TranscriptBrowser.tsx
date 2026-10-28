@@ -1,4 +1,12 @@
-import { Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
+import {
+	Show,
+	createEffect,
+	createMemo,
+	createResource,
+	createSignal,
+	on,
+	onCleanup,
+} from "solid-js";
 import { api, ApiError, type Health } from "../store/fleet-api";
 import { MainHeader } from "../components/app/MainHeader";
 import { SidebarHeader } from "../components/app/SidebarHeader";
@@ -21,6 +29,11 @@ const LIVE_TAIL_INTERVAL_MS = 4_000;
 /**
  * Historical transcripts/stats browser, mounted as the "transcripts" top-level
  * view (src/App.tsx). Keeps its internal hash routing + syncTick pattern.
+ *
+ * App keeps the view mounted while Chat shows, so everything that polls or
+ * syncs (stats auto-sync, the live tail) runs only while Analysis is the visible
+ * view of a visible tab. Work that falls due meanwhile is remembered and runs
+ * once on return.
  */
 export function TranscriptBrowser() {
 	const [route, setRoute] = createSignal<TxRoute>(parseTxHash(window.location.hash));
@@ -32,6 +45,18 @@ export function TranscriptBrowser() {
 	});
 	// Opening a transcript changes the detail pane: a drawer sidebar closes.
 	createEffect(on(route, () => closeDrawers(), { defer: true }));
+
+	/** Analysis is on screen: it is the current view and the browser tab is visible. */
+	const [tabVisible, setTabVisible] = createSignal(document.visibilityState !== "hidden");
+	createEffect(() => {
+		const onVisibility = () => setTabVisible(document.visibilityState !== "hidden");
+		document.addEventListener("visibilitychange", onVisibility);
+		onCleanup(() => document.removeEventListener("visibilitychange", onVisibility));
+	});
+	const active = createMemo(() => state.view === "analysis" && tabVisible());
+	/** Work that fell due while inactive; one catch-up runs on return. */
+	let missedSync = false;
+	let missedTail = false;
 
 	/** Bumped after a successful stats sync; keyed resources refetch on change. */
 	const [syncTick, setSyncTick] = createSignal(0);
@@ -59,6 +84,10 @@ export function TranscriptBrowser() {
 	/** Stats auto-sync: opening a session or the overview, or ending a turn, refreshes stats.db (debounced). */
 	let autoSyncTimer: number | undefined;
 	const scheduleAutoSync = () => {
+		if (!active()) {
+			missedSync = true;
+			return;
+		}
 		clearTimeout(autoSyncTimer);
 		autoSyncTimer = window.setTimeout(() => {
 			api.sync().then(bumpSync, (e: unknown) => {
@@ -115,9 +144,31 @@ export function TranscriptBrowser() {
 	const [liveTick, setLiveTick] = createSignal(0);
 	createEffect(() => {
 		if (!state.streaming) return;
+		if (!active()) {
+			missedTail = true;
+			return;
+		}
 		const id = window.setInterval(() => setLiveTick((t) => t + 1), LIVE_TAIL_INTERVAL_MS);
 		onCleanup(() => clearInterval(id));
 	});
+
+	createEffect(
+		on(
+			active,
+			(now) => {
+				if (!now) return;
+				if (missedSync) {
+					missedSync = false;
+					scheduleAutoSync();
+				}
+				if (missedTail) {
+					missedTail = false;
+					setLiveTick((t) => t + 1);
+				}
+			},
+			{ defer: true },
+		),
+	);
 
 	return (
 		<div class="tx-app">

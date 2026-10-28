@@ -2,6 +2,7 @@
  * Row dispatch: entry type → renderer. Keeps all original row types working,
  * now fed by the shared pairing maps from transcript/pairing.ts.
  */
+import { Show, createMemo } from "solid-js";
 import type { RawEntry } from "../../../../store/fleet-api";
 import {
 	labelOf,
@@ -42,8 +43,12 @@ export function TranscriptEntryRow(props: { entry: RawEntry; pairing: PairingMap
 		if (role === "toolResult") {
 			// Paired results render inside their call card; only unpaired ones stay standalone.
 			const id = toolCallIdOf(e);
-			if (id !== null && props.pairing.calls.get(id)?.hasCall === true) return null;
-			return <ToolResultRow entry={e} calls={props.pairing.calls} />;
+			const paired = createMemo(() => id !== null && props.pairing.calls.get(id)?.hasCall === true);
+			return (
+				<Show when={!paired()}>
+					<ToolResultRow entry={e} calls={props.pairing.calls} />
+				</Show>
+			);
 		}
 		if (role === "developer") return <DeveloperMessageRow entry={e} />;
 		if (role === "fileMention") return <FileMentionRow entry={e} />;

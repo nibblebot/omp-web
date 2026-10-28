@@ -88,7 +88,9 @@ const ChatMode: Component = () => (
  * analysis feature's `view` slot. Keep-alive: the first entry into Analysis
  * mounts the view; later Chat/Analysis swaps only toggle its host's display,
  * so the sidebar list, scroll, search, project filter, and selected transcript
- * all survive view switches. Renders nothing while analysis is disabled.
+ * all survive view switches. While hidden the view does no work: it reads
+ * `state.view` itself and pauses its stats sync and live tail (tx/TranscriptBrowser.tsx).
+ * Renders nothing while analysis is disabled.
  */
 const AnalysisMode: Component = () => {
 	const [opened, setOpened] = createSignal(false);

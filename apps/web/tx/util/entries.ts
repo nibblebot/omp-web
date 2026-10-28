@@ -215,6 +215,45 @@ export function rawJson(e: RawEntry): string {
 	}
 }
 
+const searchTexts = new WeakMap<RawEntry, string>();
+
+/** Lowercased full-entry JSON the find box matches against; built once per entry, on first search. */
+export function searchTextOf(e: RawEntry): string {
+	let text = searchTexts.get(e);
+	if (text === undefined) {
+		try {
+			text = JSON.stringify(e).toLowerCase();
+		} catch {
+			text = String(e).toLowerCase();
+		}
+		searchTexts.set(e, text);
+	}
+	return text;
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+	if (a === b) return true;
+	if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+	if (Array.isArray(a) !== Array.isArray(b)) return false;
+	const ka = Object.keys(a);
+	if (ka.length !== Object.keys(b).length) return false;
+	for (const k of ka) {
+		if (!sameJson((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+			return false;
+	}
+	return true;
+}
+
+/**
+ * `fresh` with every entry that is unchanged from `old[i]` replaced by that very object, so
+ * rows keyed by entry identity survive a re-fetch of the same lines.
+ */
+export function reuseEqualEntries(old: readonly RawEntry[], fresh: RawEntry[]): RawEntry[] {
+	const n = Math.min(old.length, fresh.length);
+	for (let i = 0; i < n; i++) if (sameJson(old[i], fresh[i])) fresh[i] = old[i]!;
+	return fresh;
+}
+
 export interface SessionHeaderInfo {
 	cwd: string;
 	id: string;

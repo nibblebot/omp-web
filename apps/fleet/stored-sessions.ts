@@ -13,7 +13,7 @@
  *   GET /ctl/stored/sessions?workspaceId=<id>        (omit for all)
  *   GET /ctl/stored/sessions/:workspaceId/:sessionId
  *   GET /ctl/stored/sessions/:workspaceId/:sessionId/transcript
- *         ?file=<relpath>&format=parsed|raw&offset=&limit=
+ *         ?file=<relpath>&format=parsed|raw&offset=&limit=&maxBytes=   (maxBytes: raw only)
  *
  * Error body: { error: { code, message, detail? } } with the frozen typed
  * vocabulary: invalid_request (400) for unsafe ids/relpaths/params,
@@ -268,7 +268,13 @@ function transcriptRoute(deps: StoredAppDeps): Route {
 				// Stream the exact stored bytes without whole-file buffering.
 				const file = store.storedFilePath(workspaceId, sessionId, relpath);
 				if (file === null) return unavailableFile(relpath);
-				const fileStream = Bun.file(file).stream();
+				// `maxBytes` (optional) sends only the first bytes of the file.
+				const rawMax = url.searchParams.get("maxBytes");
+				const maxBytes = rawMax === null ? Number.NaN : Number.parseInt(rawMax, 10);
+				const stored = Bun.file(file);
+				const fileStream = (
+					Number.isInteger(maxBytes) && maxBytes >= 0 ? stored.slice(0, maxBytes) : stored
+				).stream();
 				return new Response(fileStream, {
 					status: 200,
 					headers: { "content-type": "application/x-ndjson; charset=utf-8" },

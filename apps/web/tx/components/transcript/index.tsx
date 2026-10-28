@@ -5,8 +5,10 @@
  * - Paging: pages of PAGE_SIZE are fetched automatically as the user scrolls
  *   near the end of the loaded window (no load-more button); the viewport is
  *   topped up after each successful load.
- * - Rendering: every loaded row is plain flow content (no virtualizer). Long
- *   transcripts stay cheap because .transcript-list rows use content-visibility.
+ * - Rendering: every loaded row is plain flow content (no virtualizer; rows
+ *   have variable height). Long transcripts stay cheap because .transcript-list
+ *   rows use content-visibility, and rows are keyed by entry identity so a page
+ *   append, filter change or live reload never rebuilds a row that is still shown.
  * - Pairing: tool-call pairing maps are computed once per entries change over
  *   ALL loaded entries (pairing.ts); toolResults pair with their call's
  *   execution start across page boundaries; calls with a start but no result
@@ -31,18 +33,23 @@ import { api, type TranscriptPage } from "../../../store/fleet-api";
 import { basename } from "../../util/format";
 import {
 	contentBlocks,
-	entryTs,
 	isMessage,
 	messageRole,
+	reuseEqualEntries,
+	searchTextOf,
 	str,
 	toolCallIdOf,
 } from "../../util/entries";
 import { createCollapseStore, RowStateCtx } from "./collapse";
+import { buildDayRows, createRowCache } from "./day-rows";
 import { createPairingMaps } from "./pairing";
 import { TranscriptEntryRow } from "./rows/entry-row";
 import { ArrowLeftIcon } from "../../../components/ui/icons";
 
 const PAGE_SIZE = 200;
+
+/** Pause after the last keystroke before the find box filters the transcript. */
+const FIND_DEBOUNCE_MS = 150;
 
 export interface TranscriptProps {
 	file: string;
@@ -53,7 +60,7 @@ export interface TranscriptProps {
 	tools: () => string[];
 	toolFilter: string | null;
 	onToolFilter: (name: string | null) => void;
-	/** Live tick (session running in Chat): refetch the loaded pages. */
+	/** Live tick (session running in Chat): re-read the last loaded page. */
 	liveTick?: () => number;
 }
 
@@ -94,43 +101,20 @@ export function progressTotal(p: LastPageMeta | null, loaded: number): number {
 	return p.totalLines;
 }
 
-export type TranscriptRow =
-	| { kind: "day"; ts: number; label: string }
-	| { kind: "entry"; entry: RawEntry };
-
-/**
- * Maps filtered entries to the virtualized row list, inserting a day
- * separator whenever the local calendar day changes between consecutive
- * entries. Separators are ROWS, not entries; the "N of M entries" progress line keeps
- * counting entries only. Entries without a usable timestamp never emit a
- * separator and never advance the running day.
- */
-export function buildDayRows(entries: readonly RawEntry[]): TranscriptRow[] {
-	const out: TranscriptRow[] = [];
-	let prevDay: string | null = null;
-	for (const e of entries) {
-		const ts = entryTs(e);
-		if (ts !== null) {
-			const day = new Date(ts).toDateString();
-			// Separate only when a previous DATED row exists; undated leading rows
-			// (e.g. the title slot) never produce a spurious separator.
-			if (prevDay !== null && day !== prevDay) {
-				out.push({ kind: "day", ts, label: new Date(ts).toLocaleDateString() });
-			}
-			prevDay = day;
-		}
-		out.push({ kind: "entry", entry: e });
-	}
-	return out;
-}
-
 export function TranscriptView(props: TranscriptProps) {
 	const [entries, setEntries] = createSignal<RawEntry[]>([]);
 	const [nextOffset, setNextOffset] = createSignal<number | null>(null);
 	const [loading, setLoading] = createSignal(false);
 	const [loadErr, setLoadErr] = createSignal<string | null>(null);
 	const [hideSystem, setHideSystem] = createSignal(true);
+	/** The find text the transcript is filtered by; follows the input after FIND_DEBOUNCE_MS. */
 	const [find, setFind] = createSignal("");
+	let findTimer: ReturnType<typeof setTimeout> | undefined;
+	onCleanup(() => clearTimeout(findTimer));
+	const onFindInput = (value: string) => {
+		clearTimeout(findTimer);
+		findTimer = setTimeout(() => setFind(value), FIND_DEBOUNCE_MS);
+	};
 	const [lastPage, setLastPage] = createSignal<LastPageMeta | null>(null);
 	const [failedOffset, setFailedOffset] = createSignal<number | null>(null);
 
@@ -139,6 +123,10 @@ export function TranscriptView(props: TranscriptProps) {
 
 	let seq = 0;
 	let listRef: HTMLDivElement | undefined;
+	/** The last page fetched (its offset and entry count): the only lines a live tail can still change. */
+	let tail: { offset: number; count: number } | null = null;
+	/** A tail refresh is in flight. */
+	let refreshing = false;
 
 	const loadPage = async (offset: number | null) => {
 		const my = ++seq;
@@ -147,6 +135,7 @@ export function TranscriptView(props: TranscriptProps) {
 		try {
 			const page = await api.transcript(props.file, offset, PAGE_SIZE);
 			if (my !== seq) return; // stale response after a file switch
+			tail = { offset: page.offset, count: page.entries.length };
 			setEntries((prev) => (offset === null ? page.entries : [...prev, ...page.entries]));
 			setNextOffset(page.nextOffset);
 			setLastPage({ totalLines: page.totalLines });
@@ -167,6 +156,7 @@ export function TranscriptView(props: TranscriptProps) {
 	createEffect(() => {
 		props.file; // reactive trigger
 		seq += 1;
+		tail = null;
 		setEntries([]);
 		setNextOffset(null);
 		setLoadErr(null);
@@ -180,37 +170,40 @@ export function TranscriptView(props: TranscriptProps) {
 		void loadPage(null);
 	});
 
-	/** Re-fetch every page in order and swap the list in one update (live tail). */
-	const reloadLoaded = async () => {
-		const my = ++seq;
-		setLoading(true);
-		const next: RawEntry[] = [];
-		let offset: number | null = null;
-		let meta: LastPageMeta | null = null;
+	/**
+	 * Live tail: re-read the last loaded page and splice it in. Lines before it are
+	 * immutable, so nothing earlier is fetched; when the loaded window does not reach
+	 * EOF the new lines arrive through normal paging.
+	 */
+	const reloadTail = async () => {
+		const at = tail;
+		if (at === null || nextOffset() !== null || refreshing) return;
+		const gen = seq;
+		refreshing = true;
 		try {
-			do {
-				const page = await api.transcript(props.file, offset, PAGE_SIZE);
-				if (my !== seq) return;
-				next.push(...page.entries);
-				offset = page.nextOffset;
-				meta = { totalLines: page.totalLines };
-			} while (offset !== null);
+			const page = await api.transcript(props.file, at.offset, PAGE_SIZE);
+			if (gen !== seq) return;
+			const prev = entries();
+			const keep = prev.length - at.count;
+			const old = prev.slice(keep);
+			const fresh = reuseEqualEntries(old, page.entries);
+			tail = { offset: page.offset, count: fresh.length };
+			setNextOffset(page.nextOffset);
+			setLastPage({ totalLines: page.totalLines });
+			if (fresh.length !== old.length || fresh.some((e, i) => e !== old[i])) {
+				setEntries([...prev.slice(0, keep), ...fresh]);
+			} else if (page.nextOffset !== null) queueMicrotask(maybeLoadMore);
 		} catch {
 			// Keep the last good render; the next tick retries.
-			if (my === seq) setLoading(false);
-			return;
+		} finally {
+			refreshing = false;
 		}
-		if (my !== seq) return;
-		setEntries(next);
-		setNextOffset(null);
-		setLastPage(meta);
-		setLoading(false);
 	};
 	createEffect(
 		on(
 			() => props.liveTick?.() ?? 0,
 			() => {
-				if (!props.isSub && !loading()) void reloadLoaded();
+				if (!props.isSub && !loading()) void reloadTail();
 			},
 			{ defer: true },
 		),
@@ -225,16 +218,16 @@ export function TranscriptView(props: TranscriptProps) {
 		if (props.isSub && props.toolFilter !== null) props.onToolFilter(null);
 	});
 
-	/** Main-view ?tool= and hide-system filters, then the find box (both views). */
+	/** Main-view ?tool= and hide-system filters. */
+	const filtered = createMemo(() =>
+		filterTranscriptEntries(entries(), props.isSub ? null : props.toolFilter, hideSystem()),
+	);
+	/** The find box narrows the filtered entries (both views); each entry's search text is built once. */
 	const visible = createMemo(() => {
-		const base = filterTranscriptEntries(
-			entries(),
-			props.isSub ? null : props.toolFilter,
-			hideSystem(),
-		);
+		const base = filtered();
 		const needle = find().trim().toLowerCase();
 		if (needle === "") return base;
-		return base.filter((e) => JSON.stringify(e).toLowerCase().includes(needle));
+		return base.filter((e) => searchTextOf(e).includes(needle));
 	});
 	/** System entries the hide-system default conceals in the main view. */
 	const hiddenCount = createMemo(() =>
@@ -242,7 +235,8 @@ export function TranscriptView(props: TranscriptProps) {
 	);
 
 	/** Rows: filtered entries plus day-group separators. */
-	const rows = createMemo(() => buildDayRows(visible()));
+	const rowCache = createRowCache();
+	const rows = createMemo(() => buildDayRows(visible(), rowCache));
 
 	/** The transcript may sit in a CSS-hidden tab (TranscriptDetail keeps tabs mounted). */
 	const transcriptVisible = () => {
@@ -251,7 +245,7 @@ export function TranscriptView(props: TranscriptProps) {
 	};
 
 	const maybeLoadMore = () => {
-		if (loading() || loadErr() !== null || !transcriptVisible()) return;
+		if (loading() || refreshing || loadErr() !== null || !transcriptVisible()) return;
 		const n = nextOffset();
 		if (n === null) return;
 		const el = listRef?.closest(".tx-main");
@@ -316,8 +310,7 @@ export function TranscriptView(props: TranscriptProps) {
 						class="tx-find"
 						aria-label="Find in transcript"
 						placeholder="Find in transcript"
-						value={find()}
-						onInput={(e) => setFind(e.currentTarget.value)}
+						onInput={(e) => onFindInput(e.currentTarget.value)}
 					/>
 					<button class="btn btn-small" onClick={store.expandEverything}>
 						expand all

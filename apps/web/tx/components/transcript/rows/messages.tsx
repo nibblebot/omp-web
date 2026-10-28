@@ -2,7 +2,7 @@
  * Message row renderers (assistant/user/toolResult/developer/fileMention),
  * including the tool-call card with its paired result subsection.
  */
-import { For, Show } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import type { RawEntry } from "../../../../store/fleet-api";
 import type { ContentBlock } from "../../../util/entries";
 import {
@@ -199,8 +199,16 @@ function ToolCallCard(props: {
 	const name = str(props.block.name);
 	const id = str(props.block.id);
 	const args = prettyArgs(props.block.arguments);
-	const call: ToolCallInfo | undefined = id !== "" ? props.pairing.calls.get(id) : undefined;
-	const resultEntries = id !== "" ? (props.pairing.results.get(id) ?? []) : [];
+	// Rows survive page appends, so the call's result arriving later reaches the card through the pairing maps.
+	const call = createMemo((): ToolCallInfo | undefined =>
+		id !== "" ? props.pairing.calls.get(id) : undefined,
+	);
+	const pending = createMemo(() => {
+		const info = call();
+		return info !== undefined && !info.hasResult;
+	});
+	const startedAt = createMemo(() => call()?.startedAt ?? null);
+	const resultEntries = createMemo(() => (id !== "" ? (props.pairing.results.get(id) ?? []) : []));
 	return (
 		<div class="tool-call">
 			<div class="tc-head">
@@ -208,7 +216,7 @@ function ToolCallCard(props: {
 				<Show when={id !== ""}>
 					<span class="tc-id">{id}</span>
 				</Show>
-				<Show when={call !== undefined && !call.hasResult}>
+				<Show when={pending()}>
 					<span class="tx-badge tx-badge-warn">pending…</span>
 				</Show>
 			</div>
@@ -220,8 +228,8 @@ function ToolCallCard(props: {
 			>
 				<pre>{args}</pre>
 			</ToggleDetails>
-			<For each={resultEntries}>
-				{(r) => <ToolResultSection entry={r} startedAt={call?.startedAt ?? null} />}
+			<For each={resultEntries()}>
+				{(r) => <ToolResultSection entry={r} startedAt={startedAt()} />}
 			</For>
 		</div>
 	);
@@ -234,7 +242,7 @@ function ToolResultSection(props: { entry: RawEntry; startedAt: number | null })
 	const meta = toolResultMetaOf(e);
 	const text = toolResultText(e);
 	const ts = entryTimestamp(e);
-	const dur = props.startedAt != null && ts != null ? ts - props.startedAt : null;
+	const dur = () => (props.startedAt != null && ts != null ? ts - props.startedAt : null);
 	const shown =
 		text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}… (truncated)` : text;
 	const details = meta?.details ?? null;
@@ -247,8 +255,8 @@ function ToolResultSection(props: { entry: RawEntry; startedAt: number | null })
 				<Show when={isErr}>
 					<span class="tx-badge tx-badge-err">error</span>
 				</Show>
-				<Show when={dur !== null}>
-					<span class="meta-dur">{formatMs(dur)}</span>
+				<Show when={dur() !== null}>
+					<span class="meta-dur">{formatMs(dur())}</span>
 				</Show>
 				<Show when={meta?.useless === true}>
 					<span class="tx-badge tx-badge-faint">useless</span>

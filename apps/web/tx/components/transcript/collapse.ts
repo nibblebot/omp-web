@@ -2,21 +2,17 @@
  * Per-card collapse + <details> toggle state for the transcript view.
  *
  * Card collapse is keyed by entry id; individual <details> elements are
- * keyed by `${entryId}:${purpose}`. Manual <details> toggles live in a
- * manual map that page-appends NEVER touch; only an explicit
- * expand/collapse-all click clears it, so loading the next page cannot
- * clobber a toggle the user set by hand (audit Phase 3 finding).
+ * keyed by `${entryId}:${purpose}`. Manual <details> toggles live apart from
+ * the expand/collapse-all default and page-appends NEVER touch them; only an
+ * explicit expand/collapse-all click clears them, so loading the next page
+ * cannot clobber a toggle the user set by hand (audit Phase 3 finding).
+ *
+ * Every id/key owns its own signal, created on first read: toggling one card or
+ * one <details> wakes only that row, not every row loaded.
  */
-import { createContext, createSignal, useContext } from "solid-js";
+import { batch, createContext, createSignal, useContext, type Signal } from "solid-js";
 import type { RawEntry } from "../../../store/fleet-api";
 import { str } from "../../util/entries";
-
-export interface DetailsState {
-	/** Manual toggles by stable details key (`${entryId}:${purpose}`). */
-	manual: Readonly<Record<string, boolean>>;
-	/** null = untouched (per-details defaults); true/false = force every <details>. */
-	expandAll: boolean | null;
-}
 
 /** What rows need from the collapse store (provided via context by TranscriptView). */
 export interface RowState {
@@ -47,51 +43,80 @@ export interface CollapseStore {
 	collapseEverything: (ids: string[]) => void;
 	/** Full state reset (file switch). */
 	reset: () => void;
-	/** Signals, exposed for remeasure effects and unit tests. */
-	collapsedIds: () => ReadonlySet<string>;
-	details: () => DetailsState;
+}
+
+/** A value with a lazily created signal per key; `set` wakes only that key's readers. */
+function createKeyedSignals<V>(initial: V) {
+	const values = new Map<string, V>();
+	const signals = new Map<string, Signal<V>>();
+	return {
+		get(key: string): V {
+			let sig = signals.get(key);
+			if (sig === undefined) {
+				sig = createSignal<V>(values.get(key) ?? initial, { equals: false });
+				signals.set(key, sig);
+			}
+			return sig[0]();
+		},
+		set(key: string, value: V): void {
+			if (value === initial) values.delete(key);
+			else values.set(key, value);
+			const sig = signals.get(key);
+			if (sig !== undefined) sig[1](() => value);
+		},
+		/** Back to `initial` everywhere; wakes only keys that held something else. */
+		clear(except?: ReadonlySet<string>): void {
+			batch(() => {
+				for (const key of [...values.keys()]) if (!except?.has(key)) this.set(key, initial);
+			});
+		},
+		has: (key: string) => values.has(key),
+	};
 }
 
 export function createCollapseStore(): CollapseStore {
-	const [collapsedIds, setCollapsedIds] = createSignal<ReadonlySet<string>>(new Set<string>());
-	const [details, setDetails] = createSignal<DetailsState>({ manual: {}, expandAll: null });
+	const collapsedIds = createKeyedSignals<boolean>(false);
+	/** Manual <details> toggles; undefined = follow expandAll. */
+	const manual = createKeyedSignals<boolean | undefined>(undefined);
+	/** null = untouched (per-details defaults); true/false = force every <details> not toggled by hand. */
+	const [expandAll, setExpandAll] = createSignal<boolean | null>(null);
 
 	const ctx: RowState = {
-		collapsed: (id) => collapsedIds().has(id),
-		toggle: (id) =>
-			setCollapsedIds((prev) => {
-				const next = new Set(prev);
-				if (next.has(id)) next.delete(id);
-				else next.add(id);
-				return next;
-			}),
+		collapsed: (id) => collapsedIds.get(id),
+		toggle: (id) => collapsedIds.set(id, !collapsedIds.has(id)),
 		detailsOpen: (key) => {
-			const st = details();
-			const manual = st.manual[key];
-			if (manual !== undefined) return manual;
+			const m = manual.get(key);
+			if (m !== undefined) return m;
 			// RAW JSON is opt-in per entry; expand-all opens the formatted content only.
 			if (key.endsWith(":raw")) return false;
-			return st.expandAll ?? false;
+			return expandAll() ?? false;
 		},
-		setDetailsOpen: (key, open) =>
-			setDetails((prev) => ({
-				expandAll: prev.expandAll,
-				manual: { ...prev.manual, [key]: open },
-			})),
+		setDetailsOpen: (key, open) => manual.set(key, open),
 	};
 
 	const expandEverything = () => {
-		setCollapsedIds(new Set<string>());
-		setDetails({ manual: {}, expandAll: true });
+		batch(() => {
+			collapsedIds.clear();
+			manual.clear();
+			setExpandAll(true);
+		});
 	};
 	const collapseEverything = (ids: string[]) => {
-		setCollapsedIds(new Set(ids.filter((id) => id !== "")));
-		setDetails({ manual: {}, expandAll: false });
+		batch(() => {
+			const keep = new Set(ids.filter((id) => id !== ""));
+			collapsedIds.clear(keep);
+			for (const id of keep) if (!collapsedIds.has(id)) collapsedIds.set(id, true);
+			manual.clear();
+			setExpandAll(false);
+		});
 	};
 	const reset = () => {
-		setCollapsedIds(new Set<string>());
-		setDetails({ manual: {}, expandAll: null });
+		batch(() => {
+			collapsedIds.clear();
+			manual.clear();
+			setExpandAll(null);
+		});
 	};
 
-	return { ctx, expandEverything, collapseEverything, reset, collapsedIds, details };
+	return { ctx, expandEverything, collapseEverything, reset };
 }

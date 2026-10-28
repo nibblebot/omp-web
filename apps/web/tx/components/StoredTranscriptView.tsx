@@ -18,7 +18,8 @@ import { api, ApiError } from "../../store/fleet-api";
 import { createCollapseStore, RowStateCtx } from "./transcript/collapse";
 import { createPairingMaps } from "./transcript/pairing";
 import { TranscriptEntryRow } from "./transcript/rows/entry-row";
-import { buildDayRows, type LastPageMeta, progressTotal } from "./transcript";
+import { type LastPageMeta, progressTotal } from "./transcript";
+import { buildDayRows, createRowCache } from "./transcript/day-rows";
 import { str } from "../util/entries";
 import { basename } from "../util/format";
 
@@ -105,7 +106,8 @@ function StoredTranscriptController(props: StoredTranscriptControllerProps) {
 		return hideSystem() ? loaded.filter((e) => e.type === "message") : loaded;
 	});
 
-	const rows = createMemo(() => buildDayRows(visible()));
+	const rowCache = createRowCache();
+	const rows = createMemo(() => buildDayRows(visible(), rowCache));
 
 	const transcriptVisible = () => {
 		const el = listRef;
@@ -248,14 +250,14 @@ export function StoredTranscriptPane(props: StoredTranscriptPaneProps) {
 		setRawLoading(true);
 		setRawErr(null);
 		try {
-			const text = await api.storedRaw(props.workspaceId, props.sessionId, props.relpath);
-			if (text.length > RAW_CAP_BYTES) {
-				setRaw(text.slice(0, RAW_CAP_BYTES));
-				setRawTruncated(true);
-			} else {
-				setRaw(text);
-				setRawTruncated(false);
-			}
+			const { text, truncated } = await api.storedRaw(
+				props.workspaceId,
+				props.sessionId,
+				props.relpath,
+				RAW_CAP_BYTES,
+			);
+			setRaw(text);
+			setRawTruncated(truncated);
 			setShowRaw(true);
 		} catch (e) {
 			setRawErr(e instanceof Error ? e.message : String(e));

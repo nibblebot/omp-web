@@ -212,9 +212,18 @@ export const api = {
 	 * `file` defaults to the main relpath on the server when omitted; a
 	 * missing (derived) file answers 404 { error: { code: "unavailable" } };
 	 * the caller renders it as unavailable, never as a download.
+	 * Asks the server for only the first bytes (`maxBytes`) and reads at most that
+	 * many, so a multi-MB file is never fully downloaded; `truncated` is true when
+	 * the file had more.
 	 */
-	storedRaw: async (workspaceId: string, sessionId: string, file: string): Promise<string> => {
-		const params = new URLSearchParams({ file, format: "raw" });
+	storedRaw: async (
+		workspaceId: string,
+		sessionId: string,
+		file: string,
+		maxBytes: number,
+	): Promise<{ text: string; truncated: boolean }> => {
+		// One byte past the cap tells a truncated file from one that is exactly the cap.
+		const params = new URLSearchParams({ file, format: "raw", maxBytes: String(maxBytes + 1) });
 		const res = await fetch(
 			`/ctl/stored/sessions/${encodePathSegments(workspaceId)}/${encodePathSegments(
 				sessionId,
@@ -236,6 +245,44 @@ export const api = {
 			}
 			throw new ApiError(message, res.status, code);
 		}
-		return res.text();
+		return readCapped(res, maxBytes);
 	},
 };
+
+/** Body text up to `maxBytes` (UTF-8); the stream is cancelled once past the cap. */
+async function readCapped(
+	res: Response,
+	maxBytes: number,
+): Promise<{ text: string; truncated: boolean }> {
+	if (res.body === null) {
+		const text = await res.text();
+		return text.length > maxBytes
+			? { text: text.slice(0, maxBytes), truncated: true }
+			: { text, truncated: false };
+	}
+	const reader = res.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	let truncated = false;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		chunks.push(value);
+		total += value.length;
+		if (total > maxBytes) {
+			truncated = true;
+			await reader.cancel();
+			break;
+		}
+	}
+	const bytes = new Uint8Array(total);
+	let at = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, at);
+		at += chunk.length;
+	}
+	let text = new TextDecoder().decode(truncated ? bytes.subarray(0, maxBytes) : bytes);
+	// The cut may land inside a multi-byte character.
+	if (truncated && text.endsWith("\uFFFD")) text = text.slice(0, -1);
+	return { text, truncated };
+}

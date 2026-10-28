@@ -622,6 +622,15 @@ describe("stored transcript route (raw)", () => {
 		expect(await sub!.text()).toBe(SUB_ONE);
 	});
 
+	test("maxBytes sends only the first bytes of the stored file", async () => {
+		const raw = `/ctl/stored/sessions/${WS_LIVE}/${SESS_ALPHA}/transcript?format=raw`;
+		expect(await (await get(`${raw}&maxBytes=10`))!.text()).toBe(ALPHA_MAIN.slice(0, 10));
+		expect(await (await get(`${raw}&maxBytes=0`))!.text()).toBe("");
+		// Larger than the file, or not a number: the whole file.
+		expect(await (await get(`${raw}&maxBytes=999999`))!.text()).toBe(ALPHA_MAIN);
+		expect(await (await get(`${raw}&maxBytes=abc`))!.text()).toBe(ALPHA_MAIN);
+	});
+
 	test("unknown formats and missing files are typed refusals", async () => {
 		const transcript = `/ctl/stored/sessions/${WS_LIVE}/${SESS_ALPHA}/transcript`;
 		const badFormat = await get(`${transcript}?format=xml`);

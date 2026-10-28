@@ -19,6 +19,9 @@
   --tx-text-faint: var(--muted-2);
   --tx-accent: var(--accent);
   --tx-accent-dim: var(--accent-dim);
+  /* Session list rows and group heads have a fixed height: the list mounts only the rows near the viewport (util/session-window.ts), which needs a constant pitch. */
+  --tx-session-row-h: 144px;
+  --tx-session-head-h: 32px;
   --tx-danger: var(--error);
   --tx-err: var(--error);
   --tx-err-bg: var(--error-bg);
@@ -253,6 +256,8 @@
   min-height: 0;
 }
 .session-group-head {
+  box-sizing: border-box;
+  height: var(--tx-session-head-h);
   position: sticky;
   top: 0;
   z-index: 1;
@@ -310,6 +315,11 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+.session-row.session-row-fixed {
+  box-sizing: border-box;
+  height: var(--tx-session-row-h);
+  overflow: hidden;
 }
 .session-row:hover {
   background: var(--tx-bg-hover);
