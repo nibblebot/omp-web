@@ -434,6 +434,14 @@ function bumpLiveRev(): void {
 	setState("live", "rev", (rev) => rev + 1);
 }
 
+function sameImages(a: ImageArg[] | undefined, b: ImageArg[]): boolean {
+	return (
+		a !== undefined &&
+		a.length === b.length &&
+		a.every((img, i) => img.data === b[i]!.data && img.mimeType === b[i]!.mimeType)
+	);
+}
+
 /** A buffered tool partial: what the card shows next. */
 interface PendingToolUpdate {
 	output: string;
@@ -450,7 +458,10 @@ interface PendingToolUpdate {
  */
 function applyToolUpdate(item: ToolItem, update: PendingToolUpdate): void {
 	item.output = capTail(update.append ? item.output + update.output : update.output, 8000);
-	if (update.images !== undefined) item.images = update.images;
+	// Every frame carries its images as fresh objects: an unchanged set keeps the card's own, so its
+	// thumbnails neither re-render nor re-resolve their URLs on each flush.
+	if (update.images !== undefined && !sameImages(item.images, update.images))
+		item.images = update.images;
 	if (update.live !== undefined) item.live = { ...update.live, at: Date.now() };
 	const job = update.job;
 	if (job !== undefined && job.state !== "running" && item.background !== undefined) {
