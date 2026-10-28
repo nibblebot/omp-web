@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
 import type { JobTreeDto, JobTreeRowDto } from "#lib/wire/protocol";
+import { isPageVisible } from "../page-visibility";
 import { connectionState, state } from "../state";
 import { call } from "./transport";
 
@@ -111,8 +112,7 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
 /** A workspace is attached and its connection is up. */
 const attached = (): boolean =>
 	state.currentWorkspaceId !== "" && connectionState() === "connected";
-const visible = (): boolean =>
-	typeof document === "undefined" || document.visibilityState === "visible";
+const visible = isPageVisible;
 const interval = (): number => (holders > 0 ? JOB_POLL_FOCUSED_MS : JOB_POLL_IDLE_MS);
 
 /**
@@ -146,12 +146,23 @@ function poll(fresh = false): Promise<void> {
 	return mine.done;
 }
 
-/** One `getJobTree` request of a flight: keep its answer (or failure) unless the workspace changed or it went stale. */
+/** Whether two answers carry the same tree. Rows are small plain data, so a JSON compare is exact. */
+function sameTree(a: JobTreeDto | null, b: JobTreeDto | null): boolean {
+	return a === b || (a !== null && b !== null && JSON.stringify(a) === JSON.stringify(b));
+}
+
+/**
+ * One `getJobTree` request of a flight: keep its answer (or failure) unless the workspace changed or it went stale.
+ * An answer equal to the one shown is not set again (`at` stays the time the tree last changed): every
+ * consumer would recompute for nothing, and a session with no jobs answers the same tree every period.
+ */
 async function request(workspaceId: string, mine: Flight): Promise<void> {
 	try {
 		const tree = (await call("getJobTree", [])) as JobTreeDto | null;
 		if (workspaceId !== state.currentWorkspaceId || mine.stale) return;
-		setAnswer({ workspaceId, tree, at: Date.now() });
+		const shown = answer();
+		if (shown?.workspaceId !== workspaceId || !sameTree(shown.tree, tree))
+			setAnswer({ workspaceId, tree, at: Date.now() });
 		setFailure(undefined);
 		await Promise.all([...listeners].map((listener) => listener()));
 	} catch (err) {

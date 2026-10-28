@@ -1,5 +1,6 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show, type JSX } from "solid-js";
+import { createEffect, createMemo, createSignal, Show, type JSX } from "solid-js";
 import { filterStderr } from "../../../fleet-ui/session-log";
+import { createVisibleInterval } from "../../../page-visibility";
 import { fetchSessionStderr, state } from "../../../state";
 
 /** Refresh cadence while the log is open for a live session process. */
@@ -72,8 +73,8 @@ export function SessionLog(props: {
 		load();
 	});
 
-	const timer = setInterval(poll, LIVE_POLL_MS);
-	onCleanup(() => clearInterval(timer));
+	// A hidden tab polls nothing; the poll runs once when it returns.
+	createVisibleInterval(poll, LIVE_POLL_MS);
 
 	// Tail-follow: stick to the newest line while following. Any new text, a
 	// filter change, or "jump to latest" re-runs this and scrolls to the bottom.

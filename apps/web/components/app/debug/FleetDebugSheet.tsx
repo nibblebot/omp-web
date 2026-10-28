@@ -1,5 +1,6 @@
-import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
+import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import { buildInfo } from "../../../build-info";
+import { createVisibleInterval } from "../../../page-visibility";
 import { clientId, state } from "../../../state";
 import { fetchFleetDebug, fmtPair, fmtTime, type FleetDebug } from "../../../fleet-ui/fleet-debug";
 import { formatUptime } from "../../../text/uptime";
@@ -50,8 +51,7 @@ export const FleetDebugSheet: Component<{ onClose: () => void }> = (props) => {
 	// the "last frame" readout.
 	onMount(() => {
 		void loadFleet();
-		const poll = setInterval(() => void loadFleet(), 2000);
-		onCleanup(() => clearInterval(poll));
+		createVisibleInterval(() => void loadFleet(), 2000);
 	});
 
 	return (

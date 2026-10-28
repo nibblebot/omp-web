@@ -1,17 +1,36 @@
-import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createRoot,
+	createSignal,
+	onCleanup,
+	type Accessor,
+} from "solid-js";
+import { createVisibleInterval } from "../page-visibility";
 import type { SubagentNode } from "../store/subagents";
 
-/** One shared 1 s ticker for every running row: it runs only while some row is mounted and running. */
+/**
+ * One shared 1 s ticker for every running row: it runs only while some row is mounted and running,
+ * and only while the tab is visible (it ticks once on return).
+ */
 const [tick, setTick] = createSignal(0);
 let holders = 0;
-let timer: ReturnType<typeof setInterval> | undefined;
+let disposeTicker: (() => void) | undefined;
 
 function holdTicker(): void {
-	if (holders === 0) timer = setInterval(() => setTick((n) => n + 1), 1000);
+	if (holders === 0) {
+		disposeTicker = createRoot((dispose) => {
+			createVisibleInterval(() => setTick((n) => n + 1), 1000);
+			return dispose;
+		});
+	}
 	holders += 1;
 	onCleanup(() => {
 		holders -= 1;
-		if (holders === 0) clearInterval(timer);
+		if (holders === 0) {
+			disposeTicker?.();
+			disposeTicker = undefined;
+		}
 	});
 }
 

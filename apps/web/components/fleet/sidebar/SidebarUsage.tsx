@@ -1,14 +1,7 @@
-import {
-	createEffect,
-	createSignal,
-	For,
-	onCleanup,
-	onMount,
-	Show,
-	untrack,
-	type Component,
-} from "solid-js";
+import { createEffect, For, onMount, Show, untrack, type Component } from "solid-js";
 import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
+import { createNow } from "../../../activities/clock";
+import { isPageVisible } from "../../../page-visibility";
 import { refreshUsageReports, state, USAGE_AUTO_REFRESH_MS } from "../../../state";
 import {
 	formatTimeRemaining,
@@ -27,8 +20,12 @@ import {
 	type IconProps,
 } from "../../ui/icons";
 
-/** Clock tick for the refresh countdown ring and the remaining-time labels. */
-const CLOCK_TICK_MS = 1_000;
+/**
+ * Clock tick for the refresh countdown ring and the remaining-time labels. The labels move by the minute and
+ * the ring by about a pixel per tick; a faster clock only restyles the sidebar for nothing. The clock stops
+ * while the tab is hidden and ticks once when it returns.
+ */
+const CLOCK_TICK_MS = 5_000;
 
 const BRAND_LOGOS: Record<UsageBrand, Component<IconProps>> = {
 	anthropic: AnthropicLogoIcon,
@@ -83,17 +80,22 @@ const UsageBar: Component<{ limit: UsageLimit; now: number }> = (props) => {
  * in flight. A refresh over existing data keeps the bars on screen.
  */
 export const SidebarUsage: Component = () => {
-	const [now, setNow] = createSignal(Date.now());
-	const tick = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
-	onCleanup(() => clearInterval(tick));
+	const now = createNow(CLOCK_TICK_MS);
 	onMount(() => {
 		// Fire on mount only when no fetch has landed, failed, or is already in flight.
 		if (state.usageReports === null && !state.usageLoading && !state.usageError)
 			refreshUsageReports();
 	});
+	// Auto-refresh only for a tab someone looks at; the clock's first tick after the tab returns finds a stale
+	// fetch and refreshes it.
 	createEffect(() => {
 		const at = state.usageRefreshedAt;
-		if (at !== null && !state.usageLoading && now() >= at + USAGE_AUTO_REFRESH_MS)
+		if (
+			at !== null &&
+			!state.usageLoading &&
+			now() >= at + USAGE_AUTO_REFRESH_MS &&
+			isPageVisible()
+		)
 			untrack(refreshUsageReports);
 	});
 	/** Fraction of the countdown left: 1 just after a fetch settles, 0 while one is in flight. */

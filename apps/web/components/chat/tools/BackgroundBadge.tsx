@@ -1,5 +1,6 @@
-import { createEffect, createSignal, onCleanup, Show, type Component } from "solid-js";
+import { createEffect, createSignal, Show, type Component } from "solid-js";
 import type { BackgroundJob } from "../../../chat/background-job";
+import { createVisibleInterval } from "../../../page-visibility";
 import { formatDuration } from "../../../subagents/format";
 
 /**
@@ -12,8 +13,7 @@ export const BackgroundBadge: Component<{ job: BackgroundJob }> = (props) => {
 	createEffect(() => {
 		if (props.job.state !== "running") return;
 		setNow(Date.now());
-		const timer = setInterval(() => setNow(Date.now()), 1000);
-		onCleanup(() => clearInterval(timer));
+		createVisibleInterval(() => setNow(Date.now()), 1000);
 	});
 	const elapsed = () =>
 		props.job.state === "running" ? Math.max(0, now() - props.job.startedAt) : props.job.durationMs;

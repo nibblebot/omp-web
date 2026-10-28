@@ -1,4 +1,5 @@
-import { createMemo, createSignal, For, onCleanup, onMount, type Component } from "solid-js";
+import { createMemo, For, onCleanup, onMount, type Component } from "solid-js";
+import { createNow } from "../../activities/clock";
 import { activeFirst, capRows } from "../../activities/bar";
 import { activityJobRows } from "../../activities/summary";
 import { openActivities } from "../../store/activities";
@@ -14,14 +15,9 @@ import { createKeyedRows } from "../../activities/keyed-rows";
  * opens that job in the panel. While open it marks the shared job poll focused (2 s cadence).
  */
 export const JobsPopover: Component<{ anchor: HTMLElement; onClose: () => void }> = (props) => {
-	const [now, setNow] = createSignal(Date.now());
+	const now = createNow();
 	onMount(() => {
-		const release = acquireJobPollFocus();
-		const timer = setInterval(() => setNow(Date.now()), 1000);
-		onCleanup(() => {
-			release();
-			clearInterval(timer);
-		});
+		onCleanup(acquireJobPollFocus());
 	});
 	const rows = createMemo(() =>
 		capRows(activeFirst(activityJobRows(), (row) => row.job.status === "running")),

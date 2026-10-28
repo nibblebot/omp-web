@@ -1,17 +1,10 @@
-import {
-	createEffect,
-	createMemo,
-	createSignal,
-	For,
-	onCleanup,
-	Show,
-	type Component,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show, type Component } from "solid-js";
 import type { WireWaitJob } from "#lib/wire/protocol";
 import { originCardOf } from "../../../chat/background-job";
 import { jumpToToolCard } from "../../../chat/tool-jump";
 import { waitCounts, type WaitAgent } from "../../../chat/wait-details";
 import { mergeWaitRun, waitMarksText, waitSummary } from "../../../chat/wait-runs";
+import { createVisibleInterval } from "../../../page-visibility";
 import type { ChatItem, ToolItem } from "../../../state";
 import { openActivities } from "../../../store/activities";
 import { formatDuration } from "../../../subagents/format";
@@ -89,8 +82,7 @@ function createRowClock(ticking: () => boolean): () => number {
 	createEffect(() => {
 		if (!ticking()) return;
 		setNow(Date.now());
-		const timer = setInterval(() => setNow(Date.now()), 1000);
-		onCleanup(() => clearInterval(timer));
+		createVisibleInterval(() => setNow(Date.now()), 1000);
 	});
 	return now;
 }

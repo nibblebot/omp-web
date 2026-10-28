@@ -1,4 +1,5 @@
-import { createSignal, onCleanup, onMount, type Component } from "solid-js";
+import type { Component } from "solid-js";
+import { createNow } from "../../../activities/clock";
 import { state } from "../../../state";
 
 /** "last frame" readout with its own 1s tick. Isolated so the per-second
@@ -6,13 +7,7 @@ import { state } from "../../../state";
  *  the ticking clock text reads `now()` locally; everything else consumes
  *  static data (fleet payload, transport ring, lastFrameAt). */
 export const LastFrameClock: Component = () => {
-	const [now, setNow] = createSignal(Date.now());
-
-	onMount(() => {
-		setNow(Date.now());
-		const tick = setInterval(() => setNow(Date.now()), 1000);
-		onCleanup(() => clearInterval(tick));
-	});
+	const now = createNow();
 
 	const secondsSinceLastFrame = () => {
 		if (state.lastFrameAt <= 0) return null;

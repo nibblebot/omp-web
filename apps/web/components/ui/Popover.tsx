@@ -1,6 +1,7 @@
 import { createSignal, onCleanup, onMount, type Component, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
 import { placePopover, type PopoverPlacement } from "./popover-placement";
+import { trackAnchor } from "./track-anchor";
 
 export interface PopoverProps {
 	/** The trigger that owns this popover; pointer presses on it are not "outside" (its own click toggles). */
@@ -90,31 +91,14 @@ export const Popover: Component<PopoverProps> = (props) => {
 		};
 		document.addEventListener("pointerdown", onPointerDown);
 		document.addEventListener("keydown", onKey);
-		window.addEventListener("resize", reposition);
-		// The anchor can move without a scroll or resize (the composer grows, a strip above it
-		// collapses): follow it, touching the placement only when its rect changed.
-		let frame = 0;
 		reposition();
-		let seen = props.anchor.getBoundingClientRect();
-		const follow = () => {
-			const r = props.anchor.getBoundingClientRect();
-			if (
-				r.left !== seen.left ||
-				r.top !== seen.top ||
-				r.right !== seen.right ||
-				r.bottom !== seen.bottom
-			) {
-				seen = r;
-				reposition();
-			}
-			frame = requestAnimationFrame(follow);
-		};
-		frame = requestAnimationFrame(follow);
+		// The anchor can move without anything telling the popover (the composer grows, a strip above
+		// it collapses, a scroller scrolls, the viewport resizes): trackAnchor reports each of those.
+		const stopTracking = trackAnchor(props.anchor, reposition);
 		onCleanup(() => {
 			document.removeEventListener("pointerdown", onPointerDown);
 			document.removeEventListener("keydown", onKey);
-			window.removeEventListener("resize", reposition);
-			cancelAnimationFrame(frame);
+			stopTracking();
 		});
 	});
 

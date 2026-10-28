@@ -374,3 +374,28 @@ describe("answers and workspaces", () => {
 		expect(calls).toBe(2);
 	});
 });
+
+describe("an answer equal to the one shown", () => {
+	test("leaves the snapshot as it was; a changed answer replaces it", async () => {
+		handler = async () => {
+			calls++;
+			return structuredClone(tree);
+		};
+		await attach("sess-a");
+		const first = poll.jobPollView();
+		if (first.phase !== "ready") throw new Error("expected a ready view");
+		await elapse(poll.JOB_POLL_IDLE_MS);
+		expect(calls).toBe(2);
+		const second = poll.jobPollView();
+		// The same tree, still stamped with the time it was first seen.
+		expect(second).toEqual(first);
+
+		answerWith(treeOf(job("a"), job("b")));
+		await elapse(poll.JOB_POLL_IDLE_MS);
+		expect(calls).toBe(3);
+		const third = poll.jobPollView();
+		expect(poll.jobTreeRows()).toHaveLength(2);
+		if (third.phase !== "ready") throw new Error("expected a ready view");
+		expect(third.at).toBeGreaterThan(first.at);
+	});
+});

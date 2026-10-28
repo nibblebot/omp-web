@@ -7,6 +7,7 @@ import { daemonsKey, type DaemonInfo } from "#lib/wire/protocol";
 import { requestDaemonLogs, restartDaemon, setState, stopDaemon } from "../state";
 import { reportError } from "../store/toasts";
 import { formatUptime } from "../text/uptime";
+import { createNow } from "./clock";
 
 /** The ready endpoint as `host:port`, when the daemon declared one. */
 export function daemonEndpoint(daemon: DaemonInfo): string | undefined {
@@ -17,11 +18,7 @@ export function daemonEndpoint(daemon: DaemonInfo): string | undefined {
 
 /** Time since the daemon started, re-read every second while the owner lives. */
 export function createDaemonUptime(daemon: Accessor<DaemonInfo>): Accessor<string> {
-	const [now, setNow] = createSignal(Date.now());
-	onMount(() => {
-		const timer = setInterval(() => setNow(Date.now()), 1000);
-		onCleanup(() => clearInterval(timer));
-	});
+	const now = createNow();
 	return () => formatUptime(now() - daemon().startedAt);
 }
 
