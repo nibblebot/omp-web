@@ -82,7 +82,7 @@ The schema file carries a one-line description for every token.
 
 ### Derivation
 
-Omitted optional tokens are computed from the core tokens into concrete color values, once, when the theme loads. Nothing is blended in the browser at runtime. The `tool-*` and `syn-*` tokens are contrast-solved: each starts from a fixed hue (tool hues avoid red and green so they never read as diff or status colors) and its lightness is adjusted in OKLCH until it reaches at least 4.5:1 against `panel`, `bg-deep`, and the diff backgrounds composited over `panel`. If you set a `tool-*` or `syn-*` value yourself, it is used as written, whatever its contrast.
+Omitted optional tokens are computed from the core tokens into concrete color values, once, when the theme loads. Nothing is blended in the browser at runtime. The `tool-*` and `syn-*` tokens are contrast-solved: each starts from a fixed hue (tool hues avoid red and green so they never read as diff or status colors) and its lightness is adjusted in OKLCH until it reaches at least 4.5:1 against `panel`, `bg-deep`, and the diff backgrounds composited over `panel`. `muted-2` and `muted-3` are derived from `muted`, then moved to the nearest lightness that reaches 4.5:1 against both `bg` and `panel`, so secondary text stays readable even when `muted` is dim. If you set a `tool-*`, `syn-*`, `muted-2` or `muted-3` value yourself, it is used as written, whatever its contrast.
 
 ### Color formats
 
@@ -158,7 +158,7 @@ A single-variant theme, with a few optional tokens set explicitly. It appears on
 
 ## Contrast warnings
 
-omp-web checks the text and status pairs that matter, and the contrast-solved tokens, on every resolved variant, built-ins included. Findings are warnings only. They never stop a theme from loading and never change a color. Schema errors are the only thing that rejects a file. Warnings are reported only by `omp-web theme check`; the picker does not show them.
+omp-web checks the text and status pairs that matter, and the contrast-solved tokens, on every resolved variant, built-ins included. Checked at 4.5:1 on both `bg` and `panel`: `text`, `muted`, `muted-2`, `muted-3`, `accent`, `success`, `warning` and `error` (the interface sets all of them as running text). The `tool-*` and `syn-*` tokens are checked on `panel` and `bg-deep`, and `syn-*` and `text` on the diff rows. Every built-in theme passes. Findings are warnings only. They never stop a theme from loading and never change a color. Schema errors are the only thing that rejects a file. Warnings are reported only by `omp-web theme check`; the picker does not show them.
 
 ## Choosing a theme
 

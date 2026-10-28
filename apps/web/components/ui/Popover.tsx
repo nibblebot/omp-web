@@ -1,5 +1,6 @@
 import { createSignal, onCleanup, onMount, type Component, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
+import { openOverlayLayer } from "../../store/overlay-history";
 import { placePopover, type PopoverPlacement } from "./popover-placement";
 import { trackAnchor } from "./track-anchor";
 
@@ -32,7 +33,8 @@ const MIN_ROOM = 240;
  * Anchored popover surface: portaled, `position: fixed` beside its trigger (above by
  * default), flipped when the preferred side is short of room and clamped inside the
  * viewport. Closes on an outside pointer press or Escape; Escape with focus inside
- * returns focus to the trigger. Owned by its trigger, never a ModalHost overlay (AGENTS.md).
+ * returns focus to the trigger; Back (store/overlay-history.ts) closes it too. Owned by its
+ * trigger, never a ModalHost overlay (AGENTS.md).
  * The caller mounts and unmounts it; `onClose` asks the caller to unmount.
  */
 export const Popover: Component<PopoverProps> = (props) => {
@@ -89,6 +91,7 @@ export const Popover: Component<PopoverProps> = (props) => {
 			props.onClose();
 			if (wasInside) anchor.focus();
 		};
+		const dismissLayer = openOverlayLayer(() => props.onClose());
 		document.addEventListener("pointerdown", onPointerDown);
 		document.addEventListener("keydown", onKey);
 		reposition();
@@ -96,6 +99,7 @@ export const Popover: Component<PopoverProps> = (props) => {
 		// it collapses, a scroller scrolls, the viewport resizes): trackAnchor reports each of those.
 		const stopTracking = trackAnchor(props.anchor, reposition);
 		onCleanup(() => {
+			dismissLayer();
 			document.removeEventListener("pointerdown", onPointerDown);
 			document.removeEventListener("keydown", onKey);
 			stopTracking();

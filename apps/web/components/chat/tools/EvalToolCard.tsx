@@ -15,7 +15,7 @@ import { JsonTree } from "../../ui/JsonTree";
 import { Markdown } from "../../ui/Markdown";
 import { EvalTable } from "./EvalTable";
 import { HighlightedText } from "./HighlightedText";
-import { CollapsibleOutput, ToolCardShell, toolExpanded } from "./ToolCardShell";
+import { CollapsibleOutput, createRowExpansion, ToolCardShell } from "./ToolCardShell";
 
 /** One piece of a settled cell's output: printed text, or the view standing in place of the text it matched. */
 function renderPart(item: ToolItem, part: EvalOutputPart): JSX.Element {
@@ -65,11 +65,16 @@ export const EvalToolCard: Component<{ item: ToolItem }> = (props) => {
 	});
 	const status = createMemo(() => evalStatusOf(props.item));
 	const notes = createMemo(() => evalNotes(props.item.details));
-	// The folded card keeps the newest events behind an "N earlier" line; Ctrl+O lists the whole kept log.
+	// The folded card keeps the newest events behind an "N earlier" button that lists the whole kept log
+	// for this card (Ctrl+O does it for every card).
+	const expansion = createRowExpansion(() => props.item);
 	const shownStatus = () => {
 		const events = status()?.status ?? [];
-		return toolExpanded(props.item) ? events : events.slice(-EVAL_STATUS_COLLAPSED);
+		return expansion.expanded() ? events : events.slice(-EVAL_STATUS_COLLAPSED);
 	};
+	const foldable = () => (status()?.status.length ?? 0) > EVAL_STATUS_COLLAPSED;
+	// With Ctrl+O or a running call the log is already open and only the card's own choice can fold it back.
+	const toggleable = () => foldable() && (!expansion.expanded() || expansion.userExpanded());
 	const earlier = () => {
 		const log = status();
 		if (log === undefined) return 0;
@@ -96,8 +101,21 @@ export const EvalToolCard: Component<{ item: ToolItem }> = (props) => {
 			</Show>
 			<Show when={status()}>
 				<ul class="eval-status" aria-label="Status events">
-					<Show when={earlier() > 0}>
-						<li class="eval-status-earlier">{earlier()} earlier</li>
+					<Show when={earlier() > 0 || expansion.userExpanded()}>
+						<li class="eval-status-earlier">
+							<Show when={toggleable()} fallback={<>{earlier()} earlier</>}>
+								<button
+									type="button"
+									class="eval-status-earlier-btn"
+									aria-expanded={expansion.userExpanded()}
+									onClick={expansion.toggle}
+								>
+									{expansion.userExpanded()
+										? "Show fewer events"
+										: `${earlier()} earlier, show all`}
+								</button>
+							</Show>
+						</li>
 					</Show>
 					<For each={shownStatus()}>
 						{(event) => {

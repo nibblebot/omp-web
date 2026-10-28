@@ -85,7 +85,11 @@ export async function serveStaticUi(
 	if (plainPath !== undefined && plainStat !== null) {
 		const pathOf = (suffix: string): string | undefined =>
 			onDisk ? `${diskPath}${suffix}` : embedded[`${embeddedKey}${suffix}`];
-		const type = Bun.file(plainPath).type;
+		// The web app manifest gets its registered type explicitly instead of
+		// relying on the runtime's extension table.
+		const type = pathname.endsWith(".webmanifest")
+			? "application/manifest+json"
+			: Bun.file(plainPath).type;
 		let path = plainPath;
 		let stat = plainStat;
 		let coding: string | null = null;
@@ -121,7 +125,7 @@ export async function serveStaticUi(
 	if (/\.[A-Za-z0-9]+$/.test(pathname)) {
 		return new Response("not found", {
 			status: 404,
-			headers: { "content-type": "text/plain; charset=utf-8" },
+			headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
 		});
 	}
 	return new Response(PLACEHOLDER_HTML, {

@@ -1,6 +1,8 @@
 import { createEffect, createSignal, onCleanup, Show, type JSX } from "solid-js";
+import { openOverlayLayer } from "../../store/overlay-history";
 import { registerFocusReturn } from "./focus";
 import { DotsIcon } from "./icons";
+import { kebabSide, visibleBand } from "./kebab-placement";
 import { moveRovingFocus } from "./roving";
 
 let kebabMenuSeq = 0;
@@ -9,7 +11,7 @@ let kebabMenuSeq = 0;
  *  WorkspaceRow and ProjectGroup). Open state is internal by default; pass
  *  `open`/`onOpenChange` to share it module-level (FleetSidebar survives
  *  roster-broadcast remounts by keeping one open-menu id in a module
- *  signal). Dismisses on outside pointerdown or Escape.
+ *  signal). Dismisses on outside pointerdown, Escape or the Back gesture.
  *
  *  Keyboard follows the WAI-ARIA APG menu button: Enter/Space (native click)
  *  and Down open with the first item focused, Up opens on the last. Arrow
@@ -52,15 +54,17 @@ export function KebabMenu(props: {
 			close();
 			if (focusWasInMenu) trigger.focus();
 		};
+		const dismissLayer = openOverlayLayer(close);
 		document.addEventListener("pointerdown", onPointerDown);
 		document.addEventListener("keydown", onKeyDown);
 		onCleanup(() => {
+			dismissLayer();
 			document.removeEventListener("pointerdown", onPointerDown);
 			document.removeEventListener("keydown", onKeyDown);
 		});
 	});
 	return (
-		<div class="sidebar-menu-wrap" ref={wrap}>
+		<div class={props.class ? `sidebar-menu-wrap ${props.class}` : "sidebar-menu-wrap"} ref={wrap}>
 			<button
 				type="button"
 				class="session-icon-btn sidebar-menu-btn"
@@ -92,6 +96,13 @@ export function KebabMenu(props: {
 						menu = el;
 						registerFocusReturn(el, () => trigger);
 						queueMicrotask(() => {
+							// Flip upward before focusing (focus scrolls into view) when the rows
+							// below the trigger are too short for the whole menu.
+							el.dataset.side = kebabSide(
+								trigger.getBoundingClientRect(),
+								visibleBand(trigger),
+								el.offsetHeight,
+							);
 							const list = items();
 							(focusLast ? list.at(-1) : list[0])?.focus();
 							focusLast = false;

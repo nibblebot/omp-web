@@ -68,7 +68,12 @@ export function focusOrigin(): HTMLElement | null {
 	return lastFocused?.deref() ?? null;
 }
 
-/** Page-wide fallback target: the element marked `data-focus-fallback` (the composer). */
+/**
+ * Page-wide fallback target: the element marked `data-focus-fallback` (the composer).
+ * None on a touch screen: moving focus into the composer there raises the soft
+ * keyboard over a dialog the user just closed.
+ */
 export function pageFocusFallback(): HTMLElement | null {
+	if (typeof matchMedia === "function" && !matchMedia("(pointer: fine)").matches) return null;
 	return document.querySelector<HTMLElement>("[data-focus-fallback]");
 }

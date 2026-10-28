@@ -70,8 +70,10 @@
 	cursor: pointer;
 }
 
-.activity-section-toggle:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.activity-section-toggle:hover {
+		background: var(--hover);
+	}
 }
 
 .activity-section-toggle:focus-visible {
@@ -204,9 +206,11 @@
 	cursor: pointer;
 }
 
-.activity-detail-back:hover {
-	background: var(--hover);
-	color: var(--text);
+@media (hover: hover) {
+	.activity-detail-back:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
 }
 
 .activity-detail-back:focus-visible {
@@ -253,7 +257,7 @@
 
 .subagent-detail-name {
 	margin: 0;
-	font-size: 16px;
+	font-size: var(--fs-xl);
 	overflow-wrap: anywhere;
 }
 
@@ -327,8 +331,10 @@
 	padding-right: var(--space-3);
 }
 
-.daemon-row:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.daemon-row:hover {
+		background: var(--hover);
+	}
 }
 
 .daemon-row--open {
@@ -454,9 +460,11 @@
 	cursor: pointer;
 }
 
-.daemon-btn:hover {
-	border-color: var(--accent);
-	color: var(--text);
+@media (hover: hover) {
+	.daemon-btn:hover {
+		border-color: var(--accent);
+		color: var(--text);
+	}
 }
 
 .daemon-btn:focus-visible {
@@ -469,9 +477,11 @@
 	cursor: default;
 }
 
-.daemon-btn--kill:hover {
-	border-color: var(--error);
-	color: var(--error);
+@media (hover: hover) {
+	.daemon-btn--kill:hover {
+		border-color: var(--error);
+		color: var(--error);
+	}
 }
 
 .daemon-log-bar {
@@ -543,7 +553,7 @@
 }
 
 /* Narrow or touch: section toggles, the Back strip and the search box reach 44px. */
-@media (max-width: 768px), (pointer: coarse) {
+@media (max-width: 767px), (pointer: coarse) {
 	.activity-section-toggle,
 	.activity-detail-back,
 	.daemon-summary,
@@ -563,6 +573,9 @@
 .activity-bar {
 	display: grid;
 	grid-template-rows: 1fr;
+	/* One column the bar's width: an implicit auto column grows to the nowrap status
+	   text once the settled clip is overflow:visible (see .row-motion in fleet.css). */
+	grid-template-columns: minmax(0, 1fr);
 	min-width: 0;
 	opacity: 1;
 	transform: none;
@@ -646,7 +659,11 @@
 	cursor: pointer;
 }
 
-.activity-bar-button:hover,
+@media (hover: hover) {
+	.activity-bar-button:hover {
+		background: var(--hover);
+	}
+}
 .activity-bar-button[data-open] {
 	background: var(--hover);
 }
@@ -697,9 +714,11 @@
 	cursor: pointer;
 }
 
-.activity-popover-popout:hover {
-	background: var(--hover);
-	color: var(--text);
+@media (hover: hover) {
+	.activity-popover-popout:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
 }
 
 .activity-popover-popout:focus-visible,
@@ -744,8 +763,10 @@
 	cursor: pointer;
 }
 
-.activity-popover-row:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.activity-popover-row:hover {
+		background: var(--hover);
+	}
 }
 
 .activity-popover-glyph {
@@ -842,16 +863,21 @@
 	cursor: pointer;
 }
 
-.activity-popover-more:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.activity-popover-more:hover {
+		background: var(--hover);
+	}
 }
 
-@media (max-width: 768px), (pointer: coarse) {
+@media (max-width: 767px), (pointer: coarse) {
 	.activity-bar-button,
 	.activity-popover-popout,
 	.activity-popover-row,
 	.activity-popover-more {
 		min-height: 44px;
+	}
+	.activity-popover-popout {
+		min-width: 44px;
 	}
 }
 

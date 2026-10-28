@@ -4,9 +4,23 @@ import { highlightCodeRaw, highlightReady } from "./highlight";
 
 let sanitizer: typeof DOMPurify | undefined;
 
-/** Return the sanitizer shared by rendering and removal diagnostics. */
+/**
+ * Return the sanitizer shared by rendering and removal diagnostics. Links open
+ * outside the app (`target=_blank`): navigating the page itself would drop
+ * the live socket, and an installed window has no URL bar to come back from.
+ * The hook runs after sanitization, so the attributes it adds are not stripped.
+ */
 export function getMarkdownSanitizer(): typeof DOMPurify {
-	return (sanitizer ??= DOMPurify());
+	if (sanitizer === undefined) {
+		sanitizer = DOMPurify();
+		sanitizer.addHook("afterSanitizeAttributes", (node) => {
+			const href = node.nodeName.toLowerCase() === "a" ? node.getAttribute("href") : null;
+			if (href === null || href.startsWith("#")) return;
+			node.setAttribute("target", "_blank");
+			node.setAttribute("rel", "noopener noreferrer");
+		});
+	}
+	return sanitizer;
 }
 
 const OPEN_FENCE = /^ {0,3}(`{3,}|~{3,})/;

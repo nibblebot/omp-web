@@ -37,6 +37,12 @@ export const ConnectionBar: Component = () => (
 						? STRIP_COPY.offline
 						: STRIP_COPY.reconnecting}
 			</span>
+			<Show when={state.protoMismatch}>
+				{/* A standalone (installed) window has no reload control of its own. */}
+				<button class="connection-bar-reload" onClick={() => location.reload()}>
+					Reload
+				</button>
+			</Show>
 		</div>
 	</Show>
 );

@@ -46,8 +46,10 @@
 	padding: var(--space-1) var(--space-3);
 	cursor: pointer;
 }
-.debug-refresh:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.debug-refresh:hover {
+		background: var(--hover);
+	}
 }
 .debug-refresh:disabled {
 	opacity: 0.5;

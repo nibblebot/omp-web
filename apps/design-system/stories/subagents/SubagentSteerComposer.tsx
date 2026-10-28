@@ -16,7 +16,7 @@ export default defineStory({
 		{
 			name: "Empty",
 			description:
-				"Text only: Enter sends, Shift+Enter adds a line. Send is disabled until there is text; Stop asks for a second click to confirm.",
+				"Text only: Enter sends and Shift+Enter adds a line (on a touch screen Enter adds the line and Send sends; the Enter Key preference in Appearance overrides). Send is disabled until there is text; Stop asks for a second click to confirm.",
 			render: () => (
 				<SubagentSteerComposer
 					id="FixtureBuilder"

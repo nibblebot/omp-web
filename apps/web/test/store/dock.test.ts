@@ -147,6 +147,26 @@ describe("per-workspace dock layout (v2)", () => {
 		expect(readDockLayout("d1").activities.expanded.subagents).toEqual(["a1"]);
 	});
 
+	test("a viewport where the dock covers the screen restores the layout but not the open panel", () => {
+		attachWorkspace("d1");
+		openActivities();
+		toggleSectionCollapsed("jobs");
+		const wasDrawer = state.drawerViewport;
+		setState("drawerViewport", true);
+		try {
+			restoreDockLayout("d1");
+			expect(state.dock).toBeNull();
+			expect(state.activities.collapsedSections.has("jobs")).toBe(true);
+			// The record keeps the panel for a wide viewport.
+			expect(readDockLayout("d1").dock).toEqual({ kind: "activities" });
+			setState("drawerViewport", false);
+			restoreDockLayout("d1");
+			expect(state.dock?.kind).toBe("activities");
+		} finally {
+			setState("drawerViewport", wasDrawer);
+		}
+	});
+
 	test("the open detail is not saved; the URL carries it", () => {
 		attachWorkspace("d1");
 		openActivities();

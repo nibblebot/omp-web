@@ -1,7 +1,19 @@
-import { createEffect, createMemo, createSignal, For, on, Show, type Component } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	on,
+	onCleanup,
+	onMount,
+	Show,
+	type Component,
+} from "solid-js";
 import { fuzzyRank } from "../../../prompt/autocomplete";
 import { PromptHistory } from "../../../prompt/history";
 import { setPromptInsert } from "../../../state";
+import { isImeKey } from "../../../prompt/key-input";
+import { searchAutofocus } from "../../../store/integrations";
 import type { PresencePhase } from "../../../motion/presence";
 
 /** A picker row: one prompt history string. */
@@ -63,7 +75,7 @@ export const PromptHistoryPicker: Component<{
 	};
 
 	const onKeyDown = (e: KeyboardEvent) => {
-		if (e.isComposing) return;
+		if (isImeKey(e)) return;
 		const list = filtered();
 		if (e.key === "ArrowUp") {
 			e.preventDefault();
@@ -90,13 +102,26 @@ export const PromptHistoryPicker: Component<{
 	};
 
 	// Focus on mount and again when a reopen reverses an exit in place (presence
-	// keeps the popover mounted, so focus is still in the textarea).
+	// keeps the popover mounted, so focus is still in the textarea). A touch screen
+	// keeps focus in the composer: a keyboard raised here would cover the list.
 	createEffect(
 		on(
 			() => props.phase,
-			(phase) => phase !== "exit" && input.focus(),
+			(phase) => phase !== "exit" && searchAutofocus() && input.focus(),
 		),
 	);
+
+	// With focus left in the composer (touch) no focusout ever fires, so a tap outside closes
+	// the popover. The composer's history button toggles it, so it is not "outside".
+	onMount(() => {
+		const onOutside = (e: PointerEvent) => {
+			const target = e.target as Element | null;
+			if (!target || root.contains(target) || target.closest("[data-history-toggle]")) return;
+			props.onClose(false);
+		};
+		document.addEventListener("pointerdown", onOutside, true);
+		onCleanup(() => document.removeEventListener("pointerdown", onOutside, true));
+	});
 
 	return (
 		<div
@@ -152,6 +177,10 @@ export const PromptHistoryPicker: Component<{
 				aria-controls={listId}
 				aria-activedescendant={filtered().length > 0 ? `${listId}-opt-${selected()}` : undefined}
 				placeholder="Search prompt history…"
+				autocomplete="off"
+				autocapitalize="off"
+				spellcheck={false}
+				enterkeyhint="search"
 				value={query()}
 				onInput={(e) => setQuery(e.currentTarget.value)}
 				onKeyDown={onKeyDown}

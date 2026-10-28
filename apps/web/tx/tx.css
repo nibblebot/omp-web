@@ -53,16 +53,20 @@
 .tx-app .mono {
   font-family: var(--tx-mono);
 }
-.tx-app ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-.tx-app ::-webkit-scrollbar-thumb {
-  background: var(--tx-border);
-  border-radius: 5px;
-}
-.tx-app ::-webkit-scrollbar-track {
-  background: transparent;
+/* Custom classic scrollbars only with a fine pointer: on touch they would replace the
+   overlay scrollbar and take a permanent 10px of width. */
+@media (pointer: fine) {
+  .tx-app ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .tx-app ::-webkit-scrollbar-thumb {
+    background: var(--tx-border);
+    border-radius: 5px;
+  }
+  .tx-app ::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 .muted {
   color: var(--tx-text-dim);
@@ -92,9 +96,11 @@
   font-size: var(--tx-fs-base);
   cursor: pointer;
 }
-.btn:hover {
-  background: var(--tx-bg-hover);
-  border-color: var(--tx-accent-dim);
+@media (hover: hover) {
+  .btn:hover {
+    background: var(--tx-bg-hover);
+    border-color: var(--tx-accent-dim);
+  }
 }
 .btn:disabled {
   opacity: 0.5;
@@ -321,8 +327,10 @@
   height: var(--tx-session-row-h);
   overflow: hidden;
 }
-.session-row:hover {
-  background: var(--tx-bg-hover);
+@media (hover: hover) {
+  .session-row:hover {
+    background: var(--tx-bg-hover);
+  }
 }
 .session-row.selected {
   background: var(--tx-bg-selected);
@@ -568,8 +576,10 @@
   font-size: var(--tx-fs-base);
   font-family: var(--tx-sans);
 }
-.tab:hover {
-  color: var(--tx-text);
+@media (hover: hover) {
+  .tab:hover {
+    color: var(--tx-text);
+  }
 }
 .tab.active {
   color: var(--tx-text);
@@ -702,8 +712,10 @@
 .tool-row {
   cursor: pointer;
 }
-.tool-row:hover {
-  background: var(--tx-bg-hover);
+@media (hover: hover) {
+  .tool-row:hover {
+    background: var(--tx-bg-hover);
+  }
 }
 .tool-row:focus-visible {
   outline: 2px solid var(--tx-accent);
@@ -1404,8 +1416,10 @@
   color: var(--tx-accent);
   text-decoration: none;
 }
-.tx-md a:hover {
-  text-decoration: underline;
+@media (hover: hover) {
+  .tx-md a:hover {
+    text-decoration: underline;
+  }
 }
 .tx-md code {
   background: var(--tx-bg-raised);
@@ -1458,9 +1472,11 @@
   text-align: left;
   cursor: pointer;
 }
-.tx-subagent-row:hover {
-  background: var(--tx-bg-hover);
-  border-color: var(--tx-accent-dim);
+@media (hover: hover) {
+  .tx-subagent-row:hover {
+    background: var(--tx-bg-hover);
+    border-color: var(--tx-accent-dim);
+  }
 }
 .tx-subagent-row:focus-visible {
   outline: 2px solid var(--tx-accent);
@@ -1586,9 +1602,11 @@
 .sys-toggle[aria-expanded="false"] .tx-caret {
   transform: rotate(-90deg);
 }
-.tx-msg-toggle:hover,
-.sys-toggle:hover {
-  background: var(--tx-bg-raised);
+@media (hover: hover) {
+  .tx-msg-toggle:hover,
+  .sys-toggle:hover {
+    background: var(--tx-bg-raised);
+  }
 }
 .tx-msg-toggle:active,
 .sys-toggle:active {
@@ -1721,8 +1739,10 @@ button.stored-file-row.unavailable {
   text-align: left;
   cursor: pointer;
 }
-.stored-file-row:hover {
-  background: var(--tx-bg-hover);
+@media (hover: hover) {
+  .stored-file-row:hover {
+    background: var(--tx-bg-hover);
+  }
 }
 .stored-file-row.selected {
   background: var(--tx-bg-selected);
@@ -1787,7 +1807,7 @@ button.stored-file-row.unavailable {
   border: 1px solid var(--tx-border);
   border-radius: 6px;
   background: var(--tx-bg);
-  max-height: 70vh;
+  max-height: 70dvh;
   overflow: auto;
 }
 .stored-raw-pre {
@@ -1960,4 +1980,47 @@ button.stored-file-row.unavailable {
   margin-top: 12px;
   color: var(--tx-text-faint);
   font-size: var(--tx-fs-sm);
+}
+/* Tables scroll inside their panel instead of widening the page. */
+.tx-table-scroll,
+.spend-tables > div {
+  min-width: 0;
+  overflow-x: auto;
+}
+/* Touch or phone: 44px targets for the Analysis controls and 16px text in the
+   filters (no focus zoom). Last in the file so it wins the equal-specificity
+   rules above. */
+@media (pointer: coarse), (max-width: 767px) {
+  .btn,
+  .btn-small,
+  .tab,
+  .session-row,
+  .stored-file-row,
+  .tx-subagent-row {
+    min-height: 44px;
+  }
+  .tx-msg-toggle,
+  .sys-toggle {
+    align-items: center;
+    min-height: 44px;
+  }
+  .tool-row td {
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
+  .project-filter,
+  .search,
+  .tool-filter select {
+    min-height: 44px;
+    font-size: max(1rem, 16px);
+  }
+}
+/* A phone leaves about 150px beside the 170px timestamp column: stack the error rows. */
+@media (max-width: 767px) {
+  .error-turn {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .error-turn-msg {
+    grid-column: 1;
+  }
 }

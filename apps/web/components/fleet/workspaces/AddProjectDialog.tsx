@@ -13,7 +13,7 @@ import { addTarget, createDirPicker, pathCrumbs } from "../../../fleet-ui/dir-pi
 import { setState, state } from "../../../state";
 import { addProject, fetchRecentRoots, highlightProject } from "../../../store/projects";
 import { DialogActions } from "../../ui/DialogActions";
-import { ArrowUpIcon, FolderIcon, HomeIcon } from "../../ui/icons";
+import { ArrowUpIcon, ChevronRightIcon, FolderIcon, HomeIcon } from "../../ui/icons";
 import { Modal } from "../../ui/Modal";
 import { moveRovingFocus, setRovingTabStop } from "../../ui/roving";
 
@@ -250,22 +250,35 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 						</Show>
 						<For each={snap().dirs}>
 							{(d) => (
-								<button
-									type="button"
-									class="picker-row add-project-row"
-									classList={{ selected: d.path === snap().selected }}
-									aria-pressed={d.path === snap().selected ? "true" : "false"}
-									data-path={d.path}
-									title={d.path}
-									onClick={() => picker.select(d.path)}
-									onDblClick={() => void picker.navigate(d.path)}
-								>
-									<FolderIcon class="add-project-folder" />
-									<span class="add-project-name">{d.name}</span>
-									<Show when={d.hasGit}>
-										<span class="picker-chip add-project-git">git</span>
-									</Show>
-								</button>
+								<div class="add-project-entry">
+									<button
+										type="button"
+										class="picker-row add-project-row"
+										classList={{ selected: d.path === snap().selected }}
+										aria-pressed={d.path === snap().selected ? "true" : "false"}
+										data-path={d.path}
+										title={d.path}
+										onClick={() => picker.select(d.path)}
+										onDblClick={() => void picker.navigate(d.path)}
+									>
+										<FolderIcon class="add-project-folder" />
+										<span class="add-project-name">{d.name}</span>
+										<Show when={d.hasGit}>
+											<span class="picker-chip add-project-git">git</span>
+										</Show>
+									</button>
+									{/* Double-click and Enter are not available on touch: this opens the folder with one tap. */}
+									<button
+										type="button"
+										class="add-project-open"
+										tabIndex={-1}
+										aria-label={`Open ${d.name}`}
+										title={`Open ${d.name}`}
+										onClick={() => void picker.navigate(d.path)}
+									>
+										<ChevronRightIcon />
+									</button>
+								</div>
 							)}
 						</For>
 					</div>

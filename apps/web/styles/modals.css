@@ -14,9 +14,11 @@
 	border: 1px solid var(--border-strong);
 	border-radius: var(--r-xl);
 	box-shadow: var(--shadow-2);
-	padding: calc(var(--space-6) + env(safe-area-inset-top)) calc(var(--space-6) + env(safe-area-inset-right)) calc(var(--space-6) + env(safe-area-inset-bottom)) calc(var(--space-6) + env(safe-area-inset-left));
+	padding: var(--space-6);
 	min-width: min(320px, 92vw);
-	max-width: 640px;
+	/* A gutter to the screen edge on every side: wide content wraps or scrolls
+	   inside the dialog instead of running it to the edge of a 360px phone. */
+	max-width: min(640px, calc(100vw - 2 * var(--space-5) - env(safe-area-inset-left) - env(safe-area-inset-right)));
 	max-height: 80dvh;
 	overflow-y: auto;
 }
@@ -56,6 +58,8 @@
 	z-index: var(--z-confirm);
 }
 .modal.sheet {
+	/* Full-bleed against the screen edges: pad past the cutout and gesture insets. */
+	padding: calc(var(--space-6) + env(safe-area-inset-top)) calc(var(--space-6) + env(safe-area-inset-right)) calc(var(--space-6) + env(safe-area-inset-bottom)) calc(var(--space-6) + env(safe-area-inset-left));
 	width: min(880px, 100vw);
 	height: 100%;
 	min-width: 0;
@@ -134,8 +138,10 @@
 	color: var(--muted);
 	font-size: var(--fs-lg);
 }
-.modal-close:hover {
-	color: var(--text);
+@media (hover: hover) {
+	.modal-close:hover {
+		color: var(--text);
+	}
 }
 /* Lightbox has no title row: the close button floats in the viewport corner,
    inset by the safe area, over the image. */
@@ -161,8 +167,10 @@ button.danger-confirm-btn:not(:disabled) {
 	color: var(--error-text);
 	transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
-button.danger-confirm-btn:not(:disabled):hover {
-	background: color-mix(in srgb, var(--error-bg), var(--error) 15%);
+@media (hover: hover) {
+	button.danger-confirm-btn:not(:disabled):hover {
+		background: color-mix(in srgb, var(--error-bg), var(--error) 15%);
+	}
 }
 .shortcuts {
 	border-collapse: collapse;
@@ -213,8 +221,10 @@ button.danger-confirm-btn:not(:disabled):hover {
 	align-items: baseline;
 	transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
-.picker-row:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.picker-row:hover {
+		background: var(--hover);
+	}
 }
 .picker-row.active {
 	background: var(--accent-dim);
@@ -233,8 +243,10 @@ button.picker-row:disabled {
 	opacity: 0.5;
 	cursor: not-allowed;
 }
-button.picker-row:disabled:hover {
-	background: none;
+@media (hover: hover) {
+	button.picker-row:disabled:hover {
+		background: none;
+	}
 }
 /* Roving keyboard highlight over model rows (the search input keeps focus). */
 button.picker-row.kbd-active {
@@ -292,8 +304,10 @@ button.picker-row.kbd-active {
 	border: none;
 	color: var(--muted-2);
 }
-.picker-row-close:hover {
-	color: var(--error);
+@media (hover: hover) {
+	.picker-row-close:hover {
+		color: var(--error);
+	}
 }
 /* Compact text action on role rows (clear/hide/unhide). */
 .picker-row-action {
@@ -304,8 +318,10 @@ button.picker-row.kbd-active {
 	color: var(--muted-2);
 	font-size: var(--fs-sm);
 }
-.picker-row-action:hover {
-	color: var(--text);
+@media (hover: hover) {
+	.picker-row-action:hover {
+		color: var(--text);
+	}
 }
 /* Collapsed "hidden roles (N)" section toggle (step 1 footer). */
 .picker-hidden-toggle {
@@ -320,8 +336,10 @@ button.picker-row.kbd-active {
 	letter-spacing: var(--ls-micro);
 	cursor: pointer;
 }
-.picker-hidden-toggle:hover {
-	color: var(--muted-3);
+@media (hover: hover) {
+	.picker-hidden-toggle:hover {
+		color: var(--muted-3);
+	}
 }
 /* Wizard back navigation (step 2/3 header). */
 .picker-back {
@@ -332,8 +350,10 @@ button.picker-row.kbd-active {
 	font-size: var(--fs-sm);
 	cursor: pointer;
 }
-.picker-back:hover {
-	color: var(--text);
+@media (hover: hover) {
+	.picker-back:hover {
+		color: var(--text);
+	}
 }
 /* Footer hint / empty-state note (roles step). */
 .picker-note {
@@ -660,6 +680,19 @@ button.picker-row.kbd-active {
 .ask-option.cursor {
 	outline: 1px solid var(--accent-border);
 }
+/* A touch screen has no digit or Esc key to press: the keycaps are noise there. */
+@media (pointer: coarse) {
+	.ask-bar kbd,
+	.ask-key {
+		display: none;
+	}
+}
+/* Short viewport (landscape, open keyboard): the ask bar, textarea and bars share the screen. */
+@media (max-height: 599px) {
+	.ask-bar {
+		max-height: 35dvh;
+	}
+}
 .ask-bar .ask-actions {
 	margin-top: 0;
 }
@@ -785,7 +818,7 @@ button.picker-row.kbd-active {
 }
 .session-list-rows {
 	min-width: 0;
-	max-height: min(60vh, 520px);
+	max-height: min(60dvh, 520px);
 	overflow-y: auto;
 }
 .session-list-group-title {
@@ -847,8 +880,10 @@ button.picker-row.kbd-active {
 .session-pick.active {
 	background: var(--hover);
 }
-.session-pick:hover:not(.active, .current, .blocked) {
-	background: var(--hover);
+@media (hover: hover) {
+	.session-pick:hover:not(.active, .current, .blocked) {
+		background: var(--hover);
+	}
 }
 .session-pick-line {
 	display: flex;
@@ -1006,12 +1041,14 @@ button.picker-row.kbd-active {
 	border-color: transparent;
 	color: var(--muted-3);
 }
-.session-action.quiet:not(:disabled):hover {
-	background: var(--panel);
-	color: var(--text);
-}
-.session-action.quiet.danger:not(:disabled):hover {
-	color: var(--error);
+@media (hover: hover) {
+	.session-action.quiet:not(:disabled):hover {
+		background: var(--panel);
+		color: var(--text);
+	}
+	.session-action.quiet.danger:not(:disabled):hover {
+		color: var(--error);
+	}
 }
 .session-action.primary,
 .session-action.danger:not(.quiet),
@@ -1024,9 +1061,11 @@ button.picker-row.kbd-active {
 	color: var(--bg);
 	font-weight: 600;
 }
-.session-action.primary:not(:disabled):hover {
-	background: color-mix(in srgb, var(--accent), var(--bg) 12%);
-	border-color: color-mix(in srgb, var(--accent), var(--bg) 12%);
+@media (hover: hover) {
+	.session-action.primary:not(:disabled):hover {
+		background: color-mix(in srgb, var(--accent), var(--bg) 12%);
+		border-color: color-mix(in srgb, var(--accent), var(--bg) 12%);
+	}
 }
 .session-action.danger:not(.quiet) {
 	background: var(--error);
@@ -1034,8 +1073,10 @@ button.picker-row.kbd-active {
 	color: var(--bg);
 	font-weight: 600;
 }
-.session-action.danger:not(.quiet):not(:disabled):hover {
-	background: color-mix(in srgb, var(--error), var(--bg) 12%);
+@media (hover: hover) {
+	.session-action.danger:not(.quiet):not(:disabled):hover {
+		background: color-mix(in srgb, var(--error), var(--bg) 12%);
+	}
 }
 .session-expand-note {
 	color: var(--muted-2);
@@ -1080,10 +1121,21 @@ button.picker-row.kbd-active {
 	z-index: var(--z-toast);
 	max-width: min(420px, calc(100vw - 2 * var(--space-5)));
 }
+/* Phones: full-width and compact, so a sticky error covers as little of the first
+   transcript row (or the dock's filter chips) as possible. It stays at the top:
+   the transcript is pinned to the bottom, and the bottom edge is the composer,
+   whose height varies, so a bottom stack would sit on the typing path. */
 @media (max-width: 767px) {
 	.toast-list {
 		left: calc(env(safe-area-inset-left) + var(--space-5));
 		max-width: none;
+		gap: var(--space-2);
+	}
+	.toast {
+		align-items: center;
+		gap: var(--space-3);
+		padding: var(--space-1) var(--space-1) var(--space-1) var(--space-4);
+		font-size: var(--fs-sm);
 	}
 }
 .toast {
@@ -1123,8 +1175,10 @@ button.picker-row.kbd-active {
 	font-weight: 600;
 	cursor: pointer;
 }
-.toast-action:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.toast-action:hover {
+		background: var(--hover);
+	}
 }
 .toast-dismiss,
 .prompt-error-dismiss {
@@ -1141,10 +1195,12 @@ button.picker-row.kbd-active {
 	color: var(--muted);
 	cursor: pointer;
 }
-.toast-dismiss:hover,
-.prompt-error-dismiss:hover {
-	background: var(--hover);
-	color: var(--text);
+@media (hover: hover) {
+	.toast-dismiss:hover,
+	.prompt-error-dismiss:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
 }
 
 /* Touch: 44px hit targets and 16px text inputs. Lives at the end of the file
@@ -1183,8 +1239,10 @@ button.picker-row.kbd-active {
 	/* Every control in a dialog or dock pane reaches 44px on touch widths. */
 	.modal button,
 	.modal input:not([type="checkbox"], [type="radio"]),
+	.modal select,
 	.modal summary,
-	.dock-pane button {
+	.dock-pane button,
+	.dock-pane select {
 		min-height: 44px;
 	}
 	/* Switches keep their 22px track; the 44px target comes from an invisible hit area. */
@@ -1194,7 +1252,7 @@ button.picker-row.kbd-active {
 	.modal .settings-toggle::before {
 		content: "";
 		position: absolute;
-		inset: -9px 0;
+		inset: -9px -2px;
 	}
 	.modal summary {
 		display: flex;
@@ -1287,9 +1345,9 @@ button.picker-row.kbd-active {
 	margin-top: var(--space-3);
 }
 
-/* Narrow (390/360px): AskBar actions and custom answer reach 44px; the crumb
-   separator keeps a 44px-wide target. */
-@media (max-width: 767px) {
+/* Narrow window or any coarse pointer: AskBar actions and custom answer reach
+   44px; the crumb separator keeps a 44px-wide target. */
+@media (pointer: coarse), (max-width: 767px) {
 	.ask-bar-cancel,
 	.ask-bar-nav,
 	.ask-bar-next,
@@ -1357,8 +1415,10 @@ button.picker-row.kbd-active {
 	padding: var(--space-2) var(--space-3);
 	cursor: pointer;
 }
-.btw-row:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.btw-row:hover {
+		background: var(--hover);
+	}
 }
 .btw-row[aria-selected="true"] {
 	border-color: var(--accent);
@@ -1433,8 +1493,10 @@ button.picker-row.kbd-active {
 	padding: var(--space-2) var(--space-4);
 	cursor: pointer;
 }
-.btw-action:hover:not(:disabled) {
-	background: var(--hover);
+@media (hover: hover) {
+	.btw-action:hover:not(:disabled) {
+		background: var(--hover);
+	}
 }
 .btw-action:disabled {
 	opacity: 0.5;
@@ -1492,4 +1554,23 @@ button.picker-row.kbd-active {
 }
 .popover:focus {
 	outline: none;
+}
+
+/* Short viewports (landscape phone, soft keyboard up): a dialog may use almost the
+   whole height, and its nested list caps rise with it so the list stays usable. */
+@media (max-height: 599px) {
+	.modal {
+		max-height: calc(100dvh - 2 * var(--space-3));
+	}
+	.picker-list,
+	.graph-list,
+	.ask-questions {
+		max-height: 70dvh;
+	}
+	.stats-tools {
+		max-height: 50dvh;
+	}
+	.session-list-rows {
+		max-height: min(70dvh, 520px);
+	}
 }

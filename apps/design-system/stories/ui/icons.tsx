@@ -75,6 +75,9 @@ import {
 	MessagesSquareIcon,
 	PlugIcon,
 	WrenchIcon,
+	HistoryIcon,
+	CameraIcon,
+	ListPlusIcon,
 } from "../../../web/components/ui/icons";
 import { defineStory } from "../../registry";
 
@@ -148,6 +151,9 @@ const ICONS: Record<string, Component<IconProps>> = {
 	ExternalLinkIcon,
 	PlugIcon,
 	WrenchIcon,
+	HistoryIcon,
+	CameraIcon,
+	ListPlusIcon,
 	OmpLogoIcon,
 	AnthropicLogoIcon,
 	OpenAILogoIcon,

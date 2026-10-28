@@ -225,6 +225,11 @@ const WEB_UI_SEARCH_ROWS: {
 		tabId: APPEARANCE_MENU_TAB,
 	},
 	{
+		label: "Enter Key",
+		keywords: "enter return send newline new line keyboard composer message touch",
+		tabId: APPEARANCE_MENU_TAB,
+	},
+	{
 		label: "Usage in Sidebar",
 		keywords: "usage sidebar tokens cost",
 		tabId: APPEARANCE_MENU_TAB,

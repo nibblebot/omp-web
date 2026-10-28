@@ -70,8 +70,10 @@
 	text-align: left;
 	cursor: pointer;
 }
-.job-row-main:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.job-row-main:hover {
+		background: var(--hover);
+	}
 }
 .job-row[data-selected] > .job-row-main {
 	border-color: var(--accent-border);
@@ -148,8 +150,10 @@
 	padding: var(--space-1) var(--space-3);
 	cursor: pointer;
 }
-.job-cancel:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.job-cancel:hover {
+		background: var(--hover);
+	}
 }
 .job-cancel.armed {
 	background: var(--error-bg);
@@ -264,6 +268,14 @@
 	font-size: var(--fs-sm);
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+/* Touch has no hover tooltip (the full value lives in title=): wrap the whole value instead. */
+@media (pointer: coarse), (max-width: 767px) {
+	.job-fact dd {
+		overflow: visible;
+		overflow-wrap: anywhere;
+		white-space: normal;
+	}
 }
 .job-command,
 .job-output {

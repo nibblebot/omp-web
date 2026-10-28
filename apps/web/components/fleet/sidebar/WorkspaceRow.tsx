@@ -481,6 +481,11 @@ export const WorkspaceRow: Component<{
 								open={menuOpen()}
 								onOpenChange={(v) => setMenuOpenId(v ? d().workspaceId : null)}
 							>
+								{/* The row's state in words: on touch the signal is a colour-only badge
+								    on this trigger and there is no tooltip, so the menu leads with it. */}
+								<div class="sidebar-menu-state" role="presentation">
+									{statusLabel()}
+								</div>
 								{/* Lifecycle first (start, stop), then details, destructive
 								    last. Stop keeps the two-click confirm inside the menu.
 								    Asleep clones start through "Start workspace" below. */}

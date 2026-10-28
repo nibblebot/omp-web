@@ -17,7 +17,9 @@ import {
 	type WorkspaceSourceChoice,
 } from "../../../prefs/workspace-creation";
 import { state } from "../../../state";
+import { isImeKey } from "../../../prompt/key-input";
 import { startWorkspaceNewSession } from "../../../store/roster";
+import { searchAutofocus } from "../../../store/integrations";
 import {
 	createClone,
 	createWorktree,
@@ -305,6 +307,7 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 		Array.from(listEl?.querySelectorAll<HTMLElement>(".new-workspace-row:not(:disabled)") ?? []);
 
 	const onSearchKey = (e: KeyboardEvent) => {
+		if (isImeKey(e)) return;
 		if (e.key === "ArrowDown") {
 			const items = rowItems();
 			if (items.length === 0) return;
@@ -340,7 +343,7 @@ export const NewWorkspacePopover: Component<NewWorkspacePopoverProps> = (props) 
 			class="new-workspace"
 			side="below"
 			label={`New workspace in ${project()?.name ?? "project"}`}
-			initialFocus={() => inputEl}
+			initialFocus={() => (searchAutofocus() ? inputEl : undefined)}
 		>
 			<header class="new-workspace-head">
 				<span class="new-workspace-title">New workspace</span>

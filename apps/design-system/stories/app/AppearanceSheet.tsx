@@ -14,7 +14,7 @@ export default defineStory({
 		{
 			name: "Defaults",
 			description:
-				"Right side sheet, separate from Settings. Groups in order: Theme & text, Transcript, Status, Motion, Sidebar. Theme & text holds the Mode control, the theme picker with its link toggle, the themes footer (folder, Reload themes, failed files) and Font Size. Toggles apply live; the SDK rows write like the Settings sheet did, the browser rows persist under omp.display.* and omp.sidebar*. Show Turn Time stays blocked until Show Token Usage is on.",
+				"Right side sheet, separate from Settings. Groups in order: Theme & text, Transcript, Status, Composer, Motion, Sidebar. Composer holds the Enter Key choice (Auto sends with a mouse and inserts a newline on touch). Theme & text holds the Mode control, the theme picker with its link toggle, the themes footer (folder, Reload themes, failed files) and Font Size. Toggles apply live; the SDK rows write like the Settings sheet did, the browser rows persist under omp.display.* and omp.sidebar*. Show Turn Time stays blocked until Show Token Usage is on.",
 			seed: () => {
 				seedAppearanceSettings();
 				seedThemes();

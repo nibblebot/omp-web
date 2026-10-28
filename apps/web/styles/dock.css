@@ -6,13 +6,18 @@
    While DockHost slides it in or out it is an overlay at the right edge of
    .app-body instead (data-overlay), so the main pane reflows once, not per
    frame. data-motion holds the off-screen state for "enter" and "exit".
-   Below 768px it covers the whole app and only slides. */
+   Below 1024px (where the sidebar becomes a drawer) it covers the whole app and
+   only slides, inside the safe-area insets; a side-by-side dock there left a
+   phone in landscape or a portrait tablet a 260-435px chat column. */
 .dock-pane {
 	position: relative;
 	display: flex;
 	flex: none;
 	flex-direction: column;
 	width: var(--dock-w, 480px);
+	/* A saved or dragged width never starves the chat: keep 360px beside the
+	   docked sidebar (prefs/dock.ts maxDockWidthFor mirrors this reserve). */
+	max-width: max(320px, calc(100vw - var(--sidebar-w) - 360px));
 	min-width: 0;
 	min-height: 0;
 	background: var(--panel);
@@ -52,6 +57,14 @@
 .dock-resizer:hover,
 .dock-resizer:focus-visible {
 	background: var(--accent-dim);
+}
+/* Touch: the 8px strip is too thin for a finger; an invisible 32px hit area extends it. */
+@media (pointer: coarse) {
+	.dock-resizer::before {
+		content: "";
+		position: absolute;
+		inset: 0 -12px;
+	}
 }
 .dock-header {
 	display: flex;
@@ -97,14 +110,17 @@
 	min-height: 0;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
 	.dock-pane,
 	.dock-pane[data-overlay] {
 		position: fixed;
 		inset: 0;
 		z-index: var(--z-overlay);
 		width: auto;
+		max-width: none;
 		border-left: 0;
+		padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+			env(safe-area-inset-left);
 	}
 	.dock-resizer {
 		display: none;
@@ -235,7 +251,7 @@
 	border-top: 1px solid var(--border);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
 	.review-split {
 		grid-template-columns: minmax(0, 1fr);
 	}

@@ -18,6 +18,7 @@ import {
 	OMP_PROTO,
 	DELTA_SEQ_START,
 	CLIENT_RING_CAP,
+	CLIENT_KEEPALIVE_MS,
 	CLIENT_SILENCE_DEADLINE_MS,
 	daemonsKey,
 	isRingedFrameType,
@@ -845,6 +846,15 @@ let lastSeq: number | null = null;
 /** Consecutive failed dials, the reconnectDelayMs attempt; a socket's first message resets it. */
 let reconnectAttempt = 0;
 
+/** When the current socket last delivered anything (its open counts), the resume staleness clock. */
+let lastDownlinkAt = 0;
+
+/** A refused or incompatible server ends dialling for good: a page resume must not retry it. */
+let dialHalted = false;
+
+/** A socket silent for longer than this on resume is presumed dead (the server pings every CLIENT_KEEPALIVE_MS). */
+const STALE_LINK_MS = 2 * CLIENT_KEEPALIVE_MS;
+
 /** Messages the current socket has delivered (0 until its first). */
 let socketMessages = 0;
 
@@ -890,6 +900,45 @@ function clearSilenceTimer(): void {
  * connection, and a resume delivers no new `ready` frame.
  */
 let readyAtBeforeDrop: number | undefined;
+
+/**
+ * The page came back (visible again, restored from the bfcache) or the network
+ * returned: reconnect now instead of waiting on the backoff ladder or the
+ * silence timer, neither of which a frozen or backgrounded tab runs on time.
+ * A dead dial restarts at once with the ladder reset; an open socket that has
+ * delivered nothing for more than twice the keepalive is torn down and
+ * re-dialled with `after`. Commands re-send under their own ids on the next
+ * open. A no-op while the browser reports offline (the `online` event dials),
+ * on the sign-in hold, and after a terminal refusal.
+ */
+export function resumeConnection(): void {
+	if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+	if (dialHalted || awaitingSignIn || state.protoMismatch) return;
+	if (socket === null || !state.connected) {
+		pushDebug("info", "transport", "page resumed, dialling now");
+		reconnectAttempt = 0;
+		setState("reconnectDelay", 0);
+		connect();
+		return;
+	}
+	if (Date.now() - lastDownlinkAt > STALE_LINK_MS) {
+		pushDebug("warn", "transport", "page resumed on a silent socket, reconnecting");
+		reconnectAttempt = 0;
+		teardownSocket(socket, "now", BROWSER_REDIAL_CLOSE, "stale after resume");
+	}
+}
+
+/**
+ * The browser went offline: drop the socket and cancel any pending retry so no
+ * dial is attempted without a network. The header strip shows the disconnected
+ * state; the `online` event resumes through resumeConnection.
+ */
+export function suspendConnection(): void {
+	if (dialHalted || awaitingSignIn) return;
+	clearTimeout(reconnectTimer);
+	reconnectTimer = undefined;
+	if (socket !== null) teardownSocket(socket, "hold", BROWSER_REDIAL_CLOSE, "offline");
+}
 
 /** Open the socket, or schedule the retry when the browser refuses the dial outright (bad URL, mixed content). */
 function dialSocket(url: string): WebSocket | null {
@@ -940,6 +989,7 @@ function teardownSocket(ws: WebSocket, plan: ReconnectPlan, code?: number, reaso
 	if (state.readyAt !== undefined) readyAtBeforeDrop = state.readyAt;
 	setState("readyAt", undefined);
 	if (plan === "never") {
+		dialHalted = true;
 		rejectPendingCalls(new Error("Disconnected"));
 		rejectOutbound(new Error("Disconnected"));
 	}
@@ -986,6 +1036,8 @@ export function resetBrowserSocket(): void {
 	lastSeq = null;
 	readyAtBeforeDrop = undefined;
 	reconnectAttempt = 0;
+	lastDownlinkAt = 0;
+	dialHalted = false;
 	socketMessages = 0;
 	awaitingSignIn = false;
 	setState("protoMismatch", false);
@@ -1438,6 +1490,7 @@ export function connect(): void {
 	clearTimeout(reconnectTimer);
 	reconnectTimer = undefined;
 	awaitingSignIn = false;
+	dialHalted = false;
 	// A new connect() supersedes any live socket.
 	if (socket !== null) teardownSocket(socket, "hold", BROWSER_REDIAL_CLOSE, "superseded");
 	pushDebug("info", "transport", "connecting /ws");
@@ -1870,6 +1923,7 @@ export function connect(): void {
 		// one connection is deduped (see seenFrameSeqs).
 		seenFrameSeqs.clear();
 		socketMessages = 0;
+		lastDownlinkAt = Date.now();
 		setConnected(true);
 		setUplink(ws);
 		setState({ connected: true, transportStartup: false });
@@ -1896,6 +1950,7 @@ export function connect(): void {
 			return;
 		}
 		if (socketMessages++ === 0) reconnectAttempt = 0; // the socket proved itself
+		lastDownlinkAt = Date.now();
 		armSilenceTimer(); // any downlink activity (frame, ping, ack) means the peer is alive
 		setState("lastFrameAt", Date.now());
 		switch (message.kind) {

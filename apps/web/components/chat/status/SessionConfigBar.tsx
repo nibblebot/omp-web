@@ -45,6 +45,7 @@ const ThinkingSegment: Component = () => {
 				popover={{ expanded: open() }}
 				onClick={() => setOpen(!open())}
 				title="Thinking level"
+				ariaLabel={`Thinking level: ${currentThinkingSelector(state.autoThinking, state.thinkingLevel)}`}
 			>
 				{currentThinkingSelector(state.autoThinking, state.thinkingLevel)}
 			</StatusSegment>
@@ -93,20 +94,22 @@ export const SessionConfigBar: Component = () => (
 		{/* Boot readiness gate pill (the connection strip covers disconnects):
 		    show the attached session's status instead of a generic phrase. */}
 		<Show when={state.connected && !isReady()}>
-			<span
-				class="segment badge ready-pill"
+			<StatusSegment
+				readOnly
+				class="badge ready-pill"
 				title="The attached session is still starting (or reconnecting)…"
 			>
 				{rosterHint()}
-			</span>
+			</StatusSegment>
 		</Show>
 		<Show when={state.connected && isReady() && isSessionChanging()}>
-			<span
-				class="segment badge ready-pill"
+			<StatusSegment
+				readOnly
+				class="badge ready-pill"
 				title="The session process is replacing the session; sending resumes once the new session is shown."
 			>
 				starting new session…
-			</span>
+			</StatusSegment>
 		</Show>
 		{/* Plan mode can be on from the terminal while the Plan Mode feature is off: the badge then
 		    only reports it. The toggle comes from the feature registry, never from core. */}

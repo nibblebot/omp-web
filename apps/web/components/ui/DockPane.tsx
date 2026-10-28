@@ -37,7 +37,8 @@ const KEY_STEP = 16;
 
 /**
  * Shell-hosted right dock. Domain-free: the caller supplies title, width, and
- * body. Below 768px it covers the whole viewport and offers a Back button.
+ * body. Below 1024px (the sidebar's drawer breakpoint) it covers the whole viewport
+ * inside the safe-area insets and offers a Back button.
  */
 export const DockPane: Component<DockPaneProps> = (props) => {
 	let pane!: HTMLElement;
@@ -101,7 +102,8 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 	const onPointerDown = (event: PointerEvent) => {
 		const handle = event.currentTarget as HTMLElement;
 		dragStartX = event.clientX;
-		dragStartWidth = props.width;
+		// The rendered width: dock.css caps a saved width to the viewport.
+		dragStartWidth = pane.offsetWidth;
 		dragHandle = handle;
 		handle.setPointerCapture(event.pointerId);
 	};
@@ -117,10 +119,10 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 	const onSeparatorKey = (event: KeyboardEvent) => {
 		if (event.key === "ArrowLeft") {
 			event.preventDefault();
-			props.onWidth(clamp(props.width + KEY_STEP));
+			props.onWidth(clamp(pane.offsetWidth + KEY_STEP));
 		} else if (event.key === "ArrowRight") {
 			event.preventDefault();
-			props.onWidth(clamp(props.width - KEY_STEP));
+			props.onWidth(clamp(pane.offsetWidth - KEY_STEP));
 		}
 	};
 

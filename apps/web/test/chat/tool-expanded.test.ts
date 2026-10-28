@@ -3,7 +3,7 @@
  * runs as long as the job does, though the call itself returned.
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { toolExpanded } from "../../components/chat/tools/ToolCardShell";
+import { createRowExpansion, toolExpanded } from "../../components/chat/tools/ToolCardShell";
 import { setState, state, type ToolItem } from "../../state";
 
 const originalExpanded = state.toolsExpanded;
@@ -48,5 +48,36 @@ describe("toolExpanded", () => {
 	test("the expand toggle opens every card", () => {
 		setState("toolsExpanded", true);
 		expect(toolExpanded(bash())).toBe(true);
+	});
+});
+
+describe("createRowExpansion", () => {
+	// Under bun's SSR build of solid the Ctrl+O reset effect never runs; the per-card choice,
+	// the expanded flag and the note label are plain signal reads and are what these cover.
+	test("a card with hidden rows offers a note, and tapping it opens only that card", () => {
+		const item = bash();
+		const rows = createRowExpansion(() => item);
+		const folded = rows.noteLabel(24);
+		expect(folded).toBeDefined();
+		expect(rows.expanded()).toBe(false);
+
+		rows.toggle();
+		expect(rows.expanded()).toBe(true);
+		// The note stays so the card can fold again, with a different action.
+		expect(rows.noteLabel(24)).toBeDefined();
+		expect(rows.noteLabel(24)).not.toBe(folded);
+
+		rows.toggle();
+		expect(rows.expanded()).toBe(false);
+		expect(createRowExpansion(() => item).expanded()).toBe(false);
+	});
+
+	test("no note without hidden rows, and none when Ctrl+O or a running call already shows all", () => {
+		expect(createRowExpansion(() => bash()).noteLabel(0)).toBeUndefined();
+		expect(createRowExpansion(() => bash({ status: "running" })).noteLabel(24)).toBeUndefined();
+		setState("toolsExpanded", true);
+		const rows = createRowExpansion(() => bash());
+		expect(rows.expanded()).toBe(true);
+		expect(rows.noteLabel(24)).toBeUndefined();
 	});
 });

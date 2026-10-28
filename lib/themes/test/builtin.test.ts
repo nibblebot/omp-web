@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { BUILTIN_THEMES } from "../builtin";
 import { isColor } from "../color";
+import { contrastWarnings } from "../contrast";
 import { DEFAULT_THEME_ID, THEME_SCHEMES, THEME_TOKENS } from "../types";
 
 describe("BUILTIN_THEMES", () => {
@@ -62,5 +63,17 @@ describe("BUILTIN_THEMES", () => {
 		expect(BUILTIN_THEMES[1]!.variants.light!.tokens.bg).toBe("#fbf1c7");
 		expect(BUILTIN_THEMES[2]!.variants.dark!.tokens.bg).toBe("#2d353b");
 		expect(BUILTIN_THEMES[2]!.variants.light!.tokens.panel).toBe("#fdf6e3");
+	});
+});
+
+describe("BUILTIN_THEMES readability", () => {
+	test("every variant of every built-in theme passes the contrast report", () => {
+		for (const theme of BUILTIN_THEMES) {
+			for (const scheme of THEME_SCHEMES) {
+				const variant = theme.variants[scheme];
+				if (!variant) continue;
+				expect(contrastWarnings(variant.tokens, scheme), `${theme.id}/${scheme}`).toEqual([]);
+			}
+		}
 	});
 });

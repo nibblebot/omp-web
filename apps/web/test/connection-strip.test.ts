@@ -108,6 +108,7 @@ describe("transport strip", () => {
 		// After the first open (or the startup grace), a down stream is a real reconnect.
 		setState({ transportStartup: false });
 		expect(renderChrome().strip).toContain('data-state="reconnecting"');
+		expect(renderChrome().strip).not.toContain("<button");
 	});
 
 	test("a proto mismatch close asks for a reload instead of showing a reconnect that never comes", () => {
@@ -116,6 +117,7 @@ describe("transport strip", () => {
 		const { strip } = renderChrome();
 		expect(strip).toContain("Reload to reconnect");
 		expect(strip).not.toContain("Reconnecting");
+		expect(strip).toContain("<button");
 	});
 });
 

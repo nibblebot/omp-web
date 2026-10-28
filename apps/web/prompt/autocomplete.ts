@@ -11,6 +11,12 @@ export type AcToken = {
 	end: number;
 };
 
+/** Whether two completion tokens are the same span and query, so a repeated caret read changes nothing. */
+export function sameToken(a: AcToken | null, b: AcToken | null): boolean {
+	if (a === null || b === null) return a === b;
+	return a.mode === b.mode && a.query === b.query && a.start === b.start && a.end === b.end;
+}
+
 /** Odd count of ``` fences before the caret = inside a code block. */
 export function fenceOpen(text: string): boolean {
 	return (text.match(/^```/gm)?.length ?? 0) % 2 === 1;

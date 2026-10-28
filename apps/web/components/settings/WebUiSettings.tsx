@@ -2,6 +2,7 @@ import { onCleanup, onMount, Show } from "solid-js";
 import { settingsSectionId } from "../../prefs/settings-tabs";
 import { signOut } from "../../store/auth";
 import { refreshNotifyPermission } from "../../store/chat";
+import { onForeground } from "../../store/lifecycle";
 import { setNotifyEnabled, state } from "../../state";
 import { SettingsRowLayout } from "./SettingsRow";
 import { SettingsGroup } from "./SettingsGroup";
@@ -33,8 +34,7 @@ export function WebUiSettings() {
 	// Permission changes in the browser's site settings, outside the page: re-read it on mount and on refocus.
 	onMount(() => {
 		refreshNotifyPermission();
-		window.addEventListener("focus", refreshNotifyPermission);
-		onCleanup(() => window.removeEventListener("focus", refreshNotifyPermission));
+		onCleanup(onForeground(refreshNotifyPermission));
 	});
 	return (
 		<>

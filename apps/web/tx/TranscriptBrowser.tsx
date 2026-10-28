@@ -18,6 +18,7 @@ import { StoredSessionPage } from "./components/StoredSessionPage";
 import { SpendPanel } from "./components/SpendPanel";
 import { formatBytes } from "./util/format";
 import { parseTxHash, storedHash, type TxRoute } from "./util/route";
+import { openOverlayLayer } from "../store/overlay-history";
 import { sessionHash } from "../store/slices/analysis";
 import { createVisibleInterval, pageVisible } from "../page-visibility";
 
@@ -43,6 +44,11 @@ export function TranscriptBrowser() {
 		const onChange = () => setRoute(parseTxHash(window.location.hash));
 		window.addEventListener("hashchange", onChange);
 		onCleanup(() => window.removeEventListener("hashchange", onChange));
+	});
+	// An open transcripts drawer (below 1024px) is a Back-gesture layer: Back closes it.
+	createEffect(() => {
+		if (!state.drawerViewport || !state.txSidebarVisible) return;
+		onCleanup(openOverlayLayer(() => setTxSidebarVisible(false)));
 	});
 	// Opening a transcript changes the detail pane: a drawer sidebar closes.
 	createEffect(on(route, () => closeDrawers(), { defer: true }));

@@ -1,5 +1,6 @@
 import { createSignal, Show, type Component } from "solid-js";
 import { signIn } from "../../store/auth";
+import { isImeKey } from "../../prompt/key-input";
 import { Modal } from "../ui/Modal";
 import { DialogActions } from "../ui/DialogActions";
 
@@ -46,11 +47,14 @@ export const FleetSignInDialog: Component<{
 					autocomplete="current-password"
 					aria-label="Access token"
 					placeholder="Paste access token"
+					autocapitalize="off"
+					spellcheck={false}
+					enterkeyhint="go"
 					value={token()}
 					disabled={inFlight()}
 					onInput={(e) => setToken(e.currentTarget.value)}
 					onKeyDown={(e) => {
-						if (e.key === "Enter") submit();
+						if (e.key === "Enter" && !isImeKey(e)) submit();
 					}}
 				/>
 			</div>

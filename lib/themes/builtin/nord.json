@@ -12,18 +12,18 @@
 			"accent": "#88c0d0",
 			"success": "#a3be8c",
 			"warning": "#ebcb8b",
-			"error": "#bf616a",
+			"error": "#f7939b",
 			"hover": "#434c5e",
 			"purple": "#b48ead",
 			"diff-add-text": "#a3be8c",
 			"diff-del-text": "#bf616a",
-			"syn-keyword": "#81a1c1",
-			"syn-string": "#a3be8c",
-			"syn-number": "#b48ead",
-			"syn-comment": "#616e88",
-			"syn-title": "#88c0d0",
-			"syn-attr": "#8fbcbb",
-			"syn-meta": "#81a1c1"
+			"syn-keyword": "#a4c5e6",
+			"syn-string": "#aeca97",
+			"syn-number": "#ddb6d6",
+			"syn-comment": "#b3c1de",
+			"syn-title": "#91cada",
+			"syn-attr": "#9cc9c8",
+			"syn-meta": "#a4c5e6"
 		}
 	}
 }

@@ -40,9 +40,18 @@ const KEY_BG = "omp-web:theme-bg";
 /** CSS of the selected light and dark variants, for the boot script's first paint. */
 const KEY_CSS = "omp-web:theme-css";
 const FONT_KEY = "omp-web:font-size";
-const FONT_MIN = 12;
-const FONT_MAX = 18;
-const FONT_DEFAULT = 18;
+/**
+ * The in-app size is a "px at the browser's default 16px" number, so the stored
+ * values older builds wrote (12..18) keep their meaning. `applyFontSize` turns it
+ * into a percentage of the browser's default root size, which lets the browser or
+ * OS text-scaling setting (Android Chrome "Font size") scale the whole UI too.
+ * The floor keeps `--fs-micro` (0.688rem) at 11px; the ceiling serves low vision.
+ */
+export const FONT_MIN = 16;
+export const FONT_MAX = 24;
+export const FONT_DEFAULT = 18;
+/** The root size a browser starts from; the divisor that makes the percentage relative. */
+const BROWSER_DEFAULT_PX = 16;
 
 /** The generated stylesheet's element; index.html's boot script installs the cached copy under the same id. */
 const STYLE_ID = "omp-themes";
@@ -125,9 +134,25 @@ function renderedId(selection: ThemeSelection, scheme: ThemeScheme): string {
 		: DEFAULT_THEME_ID;
 }
 
+/**
+ * The effective in-app size for a stored string: unset or non-numeric gives the
+ * default, anything else is clamped to `[FONT_MIN, FONT_MAX]` (this migrates the
+ * 12..15 values older builds allowed up to the new floor).
+ */
+export function parseFontSize(raw: string | null): number {
+	if (raw === null || raw.trim() === "") return FONT_DEFAULT;
+	const n = Number(raw);
+	if (!Number.isFinite(n)) return FONT_DEFAULT;
+	return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(n)));
+}
+
+/** The root `font-size` for an in-app size: a percentage of the browser default, never px. */
+export function rootFontSizeCss(size: number): string {
+	return `${(size / BROWSER_DEFAULT_PX) * 100}%`;
+}
+
 export function currentFontSize(): number {
-	const n = Number(readStored(FONT_KEY));
-	return Number.isFinite(n) && n >= FONT_MIN && n <= FONT_MAX ? n : FONT_DEFAULT;
+	return parseFontSize(readStored(FONT_KEY));
 }
 
 /** Cache what the boot script needs: the applied variant's `bg` and the CSS of both selected variants. */
@@ -146,18 +171,39 @@ function refreshBootCaches(selection: ThemeSelection, applied: ThemeScheme): voi
 	if (bg !== undefined) writeStored(KEY_BG, bg);
 }
 
+/**
+ * Point the browser chrome (Android status bar, tab strip, standalone title
+ * bar) at the applied variant's `bg` token, the same value the boot script
+ * caches. Uses one un-media `theme-color` meta placed first in <head>, which
+ * wins over index.html's media-qualified fallbacks; the boot script creates
+ * the same element for the first paint. Before `/ctl/themes` answers there is
+ * no variant data, and the boot script's value stands.
+ */
+function syncThemeColor(selection: ThemeSelection, scheme: ThemeScheme): void {
+	const bg = findTheme(payload, renderedId(selection, scheme))?.variants[scheme]?.tokens.bg;
+	if (bg === undefined) return;
+	let meta = document.head.querySelector<HTMLMetaElement>('meta[name="theme-color"]:not([media])');
+	if (meta === null) {
+		meta = document.createElement("meta");
+		meta.name = "theme-color";
+		document.head.prepend(meta);
+	}
+	meta.content = bg;
+}
+
 function apply(): void {
 	const selection = currentThemeSelection();
 	const scheme = effectiveScheme(selection);
 	const root = document.documentElement;
 	root.dataset.scheme = scheme;
 	root.dataset.themeVariant = `${renderedId(selection, scheme)}/${scheme}`;
-	root.style.fontSize = `${currentFontSize()}px`;
+	root.style.fontSize = rootFontSizeCss(currentFontSize());
 	// index.html pre-paints the boot background inline; once the theme is set,
 	// the CSS --bg token is authoritative, so drop the stale inline value
 	// (identical to the token on first paint, correct after runtime switches).
 	root.style.background = "";
 	refreshBootCaches(selection, scheme);
+	syncThemeColor(selection, scheme);
 }
 
 /** Install (or replace) the theme stylesheet as the LAST element of <head>, so it follows the global CSS and wins equal-specificity ties. */

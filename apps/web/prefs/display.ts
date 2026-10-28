@@ -73,6 +73,13 @@ export type ToolCardMode = (typeof TOOL_CARD_MODES)[number];
 export const TOOL_ROW_CHOICES = ["10", "20", "40", "all"] as const;
 export type ToolRowChoice = (typeof TOOL_ROW_CHOICES)[number];
 
+/**
+ * What a plain Enter does in the composer. `auto` sends where the primary pointer is fine and inserts
+ * a newline where it is coarse (a soft keyboard has no Shift+Enter); the Send button always sends.
+ */
+export const ENTER_KEY_CHOICES = ["auto", "send", "newline"] as const;
+export type EnterKeyPref = (typeof ENTER_KEY_CHOICES)[number];
+
 /** Every display preference. See the header comment for how to add one. */
 export const DISPLAY_PREFS = {
 	/** Chat column width (transcript and composer); applied as `data-width` on the root by `setDisplayPref`. */
@@ -85,6 +92,8 @@ export const DISPLAY_PREFS = {
 	softFade: booleanPref("softFade", false),
 	/** How advisor note cards render in the transcript; independent of the Ctrl+O tool-output toggle. */
 	advisor: choicePref("advisor", ["collapsed", "expanded"], "expanded"),
+	/** What a plain Enter does in the composer (prompt/key-input.ts resolves it against the pointer type). */
+	enterKey: choicePref("enterKey", ENTER_KEY_CHOICES, "auto"),
 };
 
 export type DisplayPrefName = keyof typeof DISPLAY_PREFS;

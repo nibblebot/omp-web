@@ -9,6 +9,7 @@ import {
 	type Component,
 } from "solid-js";
 import { call, sendLoginCode, setState, state } from "../../state";
+import { isImeKey } from "../../prompt/key-input";
 import { Modal } from "../ui/Modal";
 import { groupProviders, type LoginProvider } from "./provider-login";
 
@@ -54,7 +55,12 @@ export const ProviderLoginDialog: Component<{ onClose: () => void }> = (props) =
 	createEffect(() => {
 		const loginUrl = state.loginUrl;
 		if (loginUrl && loginTab && !loginTab.closed) {
-			loginTab.location.href = loginUrl.launchUrl ?? loginUrl.url;
+			try {
+				loginTab.location.href = loginUrl.launchUrl ?? loginUrl.url;
+			} catch {
+				// An installed (standalone) window can hand window.open to a browser
+				// surface it cannot script; the "Open login page" link below remains.
+			}
 		}
 	});
 
@@ -137,7 +143,9 @@ export const ProviderLoginDialog: Component<{ onClose: () => void }> = (props) =
 			</Show>
 			<Show when={inFlight() !== null}>
 				<div class="msg-notice">
-					Login in progress. Closing this panel will not cancel the server-side flow.
+					Login in progress. Closing this panel will not cancel the server-side flow. If the sign-in
+					page opens elsewhere or cannot return here, use "Open login page" and paste the code it
+					shows into the field that appears.
 				</div>
 			</Show>
 			<Show when={state.loginCodeRequest}>
@@ -148,10 +156,14 @@ export const ProviderLoginDialog: Component<{ onClose: () => void }> = (props) =
 							class="picker-filter"
 							aria-label={req().title}
 							placeholder={req().placeholder ?? ""}
+							autocomplete="off"
+							autocapitalize="off"
+							spellcheck={false}
+							enterkeyhint="send"
 							value={code()}
 							onInput={(e) => setCode(e.currentTarget.value)}
 							onKeyDown={(e) => {
-								if (e.key === "Enter") submitCode();
+								if (e.key === "Enter" && !isImeKey(e)) submitCode();
 							}}
 						/>
 						<button disabled={code().trim() === ""} onClick={submitCode}>

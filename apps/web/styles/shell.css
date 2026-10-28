@@ -115,9 +115,38 @@
 	cursor: pointer;
 	font: inherit;
 }
-.main-header-btn:not(:disabled):hover {
-	background: var(--hover);
-	color: var(--text);
+@media (hover: hover) {
+	.main-header-btn:not(:disabled):hover {
+		background: var(--hover);
+		color: var(--text);
+	}
+}
+/* The palette, Appearance and Settings buttons; on phones they fold into the
+   "More actions" menu (below) so the session title keeps the room. */
+.main-header-actions {
+	display: contents;
+}
+.main-header-more {
+	display: none;
+	margin-left: 0;
+}
+/* KebabMenu's trigger is hover-revealed in the sidebar (fleet.css); here it is
+   always shown and sized like the other header buttons. */
+.main-header-more .sidebar-menu-btn {
+	opacity: 1;
+	pointer-events: auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 44px;
+	height: 44px;
+	padding: 0;
+	border-radius: var(--r-md);
+	color: var(--muted);
+}
+.main-header-more .sidebar-menu-item {
+	min-height: 44px;
+	font-size: var(--fs-md);
 }
 /* Thin strip under the main header: transport state while not connected.
    Replaces the old header pill; the sticky error toast collapses into it. */
@@ -130,6 +159,15 @@
 	background: var(--error-bg);
 	border-bottom: 1px solid var(--error-border);
 	color: var(--error-text);
+}
+.connection-bar-reload {
+	margin-left: auto;
+}
+@media (pointer: coarse) {
+	.connection-bar-reload {
+		min-height: 44px;
+		min-width: 44px;
+	}
 }
 .main-header .goal-badge {
 	flex: 0 100 auto;
@@ -160,6 +198,42 @@
 		min-width: 44px;
 		min-height: 44px;
 	}
+	/* Project and workspace crumbs have no room here (they ellipsised to "o… / feat/…")
+	   and no tooltip on touch; the sidebar carries them. The session name takes the slot. */
+	.session-crumbs {
+		display: none;
+	}
+}
+/* Phones: header controls (toggle, title, "+", Appearance, Settings) keep the first row;
+   the goal and Live badges wrap onto a row of their own below it instead of squeezing the
+   session name to a sliver. The empty ::before forces that break and is a zero-height line
+   when there are no badges (align-content centers the first row in the 56px header). */
+@media (max-width: 479px) {
+	.main-header {
+		flex-wrap: wrap;
+		align-content: center;
+		/* No line gap: the break line below is empty when there are no badges. */
+		row-gap: 0;
+	}
+	.main-header-title {
+		flex: 1 1 0;
+	}
+	.main-header-end::before {
+		content: "";
+		order: 1;
+		flex: 0 0 100%;
+		height: 0;
+	}
+	.main-header-end > :is(.goal-badge, .live-share-badge) {
+		order: 2;
+		margin-bottom: var(--space-2);
+	}
+	.main-header-actions {
+		display: none;
+	}
+	.main-header-more {
+		display: block;
+	}
 }
 @media (max-width: 359px) {
 	.main-header .goal-badge {
@@ -168,6 +242,13 @@
 }
 
 /* Touch: 44px targets for every header control. */
+@media (pointer: coarse), (max-width: 767px) {
+	/* The 44px title is a block: center its single line instead of top-aligning it. */
+	.main-header .session-name {
+		padding-block: 0;
+		line-height: 44px;
+	}
+}
 @media (pointer: coarse) {
 	.sidebar-header .sidebar-icon-btn,
 	.main-header-btn,

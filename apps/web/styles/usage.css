@@ -54,9 +54,11 @@
 button.plan-badge {
 	cursor: pointer;
 }
-button.plan-badge:hover {
-	background: var(--warning-bg);
-	border-color: var(--warning-border);
+@media (hover: hover) {
+	button.plan-badge:hover {
+		background: var(--warning-bg);
+		border-color: var(--warning-border);
+	}
 }
 /* Auto-retry countdown badge (monospace like the rest of the session bar). */
 .retry-badge {
@@ -234,9 +236,11 @@ button.plan-badge:hover {
 	min-width: 0;
 	max-width: min(28rem, 100%);
 }
-.goal-badge:hover {
-	background: var(--warning-bg);
-	border-color: var(--warning-border);
+@media (hover: hover) {
+	.goal-badge:hover {
+		background: var(--warning-bg);
+		border-color: var(--warning-border);
+	}
 }
 .goal-badge-label {
 	flex: none;
@@ -261,9 +265,11 @@ button.plan-badge:hover {
 	font-variant-numeric: tabular-nums;
 	color: var(--success);
 }
-.live-share-badge:hover {
-	background: var(--success-bg);
-	border-color: var(--success-border);
+@media (hover: hover) {
+	.live-share-badge:hover {
+		background: var(--success-bg);
+		border-color: var(--success-border);
+	}
 }
 /* Goal dialog tabs. */
 .goal-tabs {

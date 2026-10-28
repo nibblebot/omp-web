@@ -93,61 +93,65 @@ function TranscriptOverviewBody(props: {
 						when={s().tools.length > 0}
 						fallback={<div class="muted">No tool calls in this session.</div>}
 					>
-						<table class="tool-table">
-							<thead>
-								<tr>
-									<th>tool</th>
-									<th class="num">calls</th>
-									<th class="num">errors</th>
-									<th class="num">avg ms</th>
-									<th class="num">total ms</th>
-									<th class="num">args</th>
-								</tr>
-							</thead>
-							<tbody>
-								<For each={s().tools}>
-									{(t) => (
-										<>
-											<tr
-												class="tool-row"
-												tabIndex={0}
-												role="button"
-												onClick={() => props.onPickTool(t.name)}
-												onKeyDown={(e) => {
-													if (e.key === "Enter" || e.key === " ") {
-														e.preventDefault();
-														props.onPickTool(t.name);
-													}
-												}}
-												title="Click to filter transcript"
-											>
-												<td class="tx-tool-name">{t.name}</td>
-												<td class="num">{t.calls}</td>
-												<td classList={{ num: true, "num-err": t.errors > 0 }}>
-													{t.errors > 0 ? t.errors : ""}
-												</td>
-												<td class="num">{formatMs(t.avgMs)}</td>
-												<td class="num">{formatMs(t.totalMs)}</td>
-												<td class="num">{formatCompact(t.argsChars)}</td>
-											</tr>
-											<tr class="bar-row">
-												<td colspan={6}>
-													<div
-														class="bar"
-														title={`total ${formatMs(t.totalMs)} · avg ${formatMs(t.avgMs)} · max ${formatMs(t.maxMs)} · ${t.pending} pending`}
-													>
+						<div class="tx-table-scroll">
+							<table class="tool-table">
+								<thead>
+									<tr>
+										<th>tool</th>
+										<th class="num">calls</th>
+										<th class="num">errors</th>
+										<th class="num">avg ms</th>
+										<th class="num">total ms</th>
+										<th class="num">args</th>
+									</tr>
+								</thead>
+								<tbody>
+									<For each={s().tools}>
+										{(t) => (
+											<>
+												<tr
+													class="tool-row"
+													tabIndex={0}
+													role="button"
+													onClick={() => props.onPickTool(t.name)}
+													onKeyDown={(e) => {
+														if (e.key === "Enter" || e.key === " ") {
+															e.preventDefault();
+															props.onPickTool(t.name);
+														}
+													}}
+													title="Click to filter transcript"
+												>
+													<td class="tx-tool-name">{t.name}</td>
+													<td class="num">{t.calls}</td>
+													<td classList={{ num: true, "num-err": t.errors > 0 }}>
+														{t.errors > 0 ? t.errors : ""}
+													</td>
+													<td class="num">{formatMs(t.avgMs)}</td>
+													<td class="num">{formatMs(t.totalMs)}</td>
+													<td class="num">{formatCompact(t.argsChars)}</td>
+												</tr>
+												<tr class="bar-row">
+													<td colspan={6}>
 														<div
-															class="bar-fill"
-															style={{ width: `${Math.max(1, (t.totalMs / maxTotalMs()) * 100)}%` }}
-														/>
-													</div>
-												</td>
-											</tr>
-										</>
-									)}
-								</For>
-							</tbody>
-						</table>
+															class="bar"
+															title={`total ${formatMs(t.totalMs)} · avg ${formatMs(t.avgMs)} · max ${formatMs(t.maxMs)} · ${t.pending} pending`}
+														>
+															<div
+																class="bar-fill"
+																style={{
+																	width: `${Math.max(1, (t.totalMs / maxTotalMs()) * 100)}%`,
+																}}
+															/>
+														</div>
+													</td>
+												</tr>
+											</>
+										)}
+									</For>
+								</tbody>
+							</table>
+						</div>
 					</Show>
 				</section>
 

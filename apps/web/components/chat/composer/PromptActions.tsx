@@ -11,7 +11,7 @@ import {
 	state,
 	stopTurn,
 } from "../../../state";
-import { ArrowUpIcon, CornerDownRightIcon, StopIcon } from "../../ui/icons";
+import { ArrowUpIcon, CornerDownRightIcon, ListPlusIcon, StopIcon } from "../../ui/icons";
 
 interface PromptActionsProps {
 	message: () => string;
@@ -20,10 +20,25 @@ interface PromptActionsProps {
 	submit: (mode: InputMode) => void;
 }
 
-/** Icon buttons beside the composer textarea: Stop (only while streaming) and
- *  Send/Steer. Passed to PromptComposer's `actions` slot. */
+/**
+ * Keeps focus in the textarea when a composer button is pressed. A focus move to
+ * the button would close the soft keyboard on every Send and Stop.
+ */
+export const keepComposerFocus = (e: MouseEvent): void => e.preventDefault();
+
+/** Icon buttons beside the composer textarea: Stop and Queue (only while streaming) and
+ *  Send/Steer. Queue is the touch route to the Ctrl+Enter follow-up. Passed to
+ *  PromptComposer's `actions` slot. */
 export const PromptActions: Component<PromptActionsProps> = (props) => {
 	const paused = () => connectionState() !== "connected";
+	const cannotSend = () =>
+		paused() ||
+		isSwitching() ||
+		!isReady() ||
+		isSessionChanging() ||
+		(!props.message().trim() &&
+			props.images().length === 0 &&
+			!props.files().some((f) => f.text !== undefined));
 
 	return (
 		<div class="prompt-actions">
@@ -34,25 +49,30 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 					aria-label="Stop"
 					disabled={paused() || isSwitching()}
 					title={paused() ? PAUSED_TOOLTIP[connectionState()] : "Stop the turn and its subagents"}
+					onMouseDown={keepComposerFocus}
 					onClick={() => void stopTurn()}
 				>
 					<StopIcon />
+				</button>
+				<button
+					type="button"
+					class="queue-followup prompt-touch-only"
+					aria-label="Queue as follow-up"
+					title="Queue as follow-up (Ctrl+Enter)"
+					disabled={cannotSend()}
+					onMouseDown={keepComposerFocus}
+					onClick={() => props.submit("followup")}
+				>
+					<ListPlusIcon />
 				</button>
 			</Show>
 			<button
 				type="button"
 				class="send"
 				aria-label={state.streaming ? "Steer" : "Send"}
+				onMouseDown={keepComposerFocus}
 				onClick={() => props.submit("enter")}
-				disabled={
-					paused() ||
-					isSwitching() ||
-					!isReady() ||
-					isSessionChanging() ||
-					(!props.message().trim() &&
-						props.images().length === 0 &&
-						!props.files().some((f) => f.text !== undefined))
-				}
+				disabled={cannotSend()}
 				title={
 					paused()
 						? PAUSED_TOOLTIP[connectionState()]

@@ -14,6 +14,10 @@
 				visibility: hidden;
 			}
 		</style>
+		<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+		<!-- Fallbacks equal to the boot script's FALLBACK_BG; the boot script and prefs/theme.ts keep one un-media theme-color meta in step with the applied theme. -->
+		<meta name="theme-color" content="#1e1e2e" media="(prefers-color-scheme: dark)" />
+		<meta name="theme-color" content="#eff1f5" media="(prefers-color-scheme: light)" />
 	</head>
 	<body>
 		<script>
@@ -65,7 +69,13 @@
 					var rule = at === -1 ? "" : css.slice(at, css.indexOf("}", at));
 					if (bg && rule.indexOf("--bg:" + bg + ";") === -1) bg = null;
 				}
-				root.style.background = bg || FALLBACK_BG[scheme];
+				bg = bg || FALLBACK_BG[scheme];
+				root.style.background = bg;
+				// Browser chrome follows the page background (see syncThemeColor in prefs/theme.ts).
+				var themeColor = document.createElement("meta");
+				themeColor.name = "theme-color";
+				themeColor.content = bg;
+				document.head.insertBefore(themeColor, document.head.firstChild);
 				// The boot shell below shows the docked sidebar unless the user collapsed it (state.ts, SIDEBAR_KEY).
 				try {
 					if (localStorage.getItem("omp.sidebarVisible") === "false") root.dataset.bootSidebar = "closed";

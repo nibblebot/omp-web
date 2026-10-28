@@ -6,7 +6,7 @@ import { highlightLines, languageForPath } from "../../../text/highlight";
 import { Markdown } from "../../ui/Markdown";
 import { HighlightedLine } from "./HighlightedLine";
 import { isMarkitDocument, parseReadOutput } from "./read-view";
-import { toolExpanded, toolRowCap, ToolCardShell } from "./ToolCardShell";
+import { createRowExpansion, toolRowCap, ToolCardShell } from "./ToolCardShell";
 
 /**
  * Read tool: path header and body. Settings gate the view:
@@ -37,9 +37,9 @@ export const ReadToolCard: Component<{ item: ToolItem }> = (props) => {
 		let k = 0;
 		return all.map((row) => ({ ...row, html: row.code ? (html?.[k++] ?? null) : null }));
 	});
-	const expanded = () => toolExpanded(props.item);
+	const expansion = createRowExpansion(() => props.item);
 	const capped = () => capRows(rows(), toolRowCap(), "head");
-	const shown = () => (expanded() ? rows() : capped().shown);
+	const shown = () => (expansion.expanded() ? rows() : capped().shown);
 	const hidden = () => capped().hidden;
 
 	const ReadRows: Component = () => {
@@ -69,8 +69,18 @@ export const ReadToolCard: Component<{ item: ToolItem }> = (props) => {
 						)}
 					</For>
 				</Show>
-				<Show when={!expanded() && hidden() > 0}>
-					<div class="tool-collapsed-note">{hidden()} hidden lines (Ctrl+O to expand)</div>
+				<Show when={expansion.noteLabel(hidden())}>
+					{(label) => (
+						<button
+							type="button"
+							class="tool-collapsed-note"
+							title="Ctrl+O expands every tool output"
+							aria-expanded={expansion.userExpanded()}
+							onClick={expansion.toggle}
+						>
+							{label()}
+						</button>
+					)}
 				</Show>
 			</Show>
 		);

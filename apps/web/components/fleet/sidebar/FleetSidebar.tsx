@@ -1,6 +1,8 @@
 import { createEffect, onCleanup, Show, type Component } from "solid-js";
 import { sessionsByProject, setSidebarRunningOnly, setSidebarVisible, state } from "../../../state";
+import { openOverlayLayer } from "../../../store/overlay-history";
 import { syncProjects } from "../../../store/projects";
+import { onForeground } from "../../../store/lifecycle";
 import { SidebarHeader } from "../../app/SidebarHeader";
 import { ListFilterIcon } from "../../ui/icons";
 import { moveRovingFocus, setRovingTabStop } from "../../ui/roving";
@@ -57,9 +59,14 @@ export const FleetSidebar: Component = () => {
 		if (target !== null) rosterActive = target;
 	};
 
-	// Re-sync the project registry when the window regains focus (the store throttles).
-	window.addEventListener("focus", syncProjects);
-	onCleanup(() => window.removeEventListener("focus", syncProjects));
+	// An open drawer (below 1024px) is a Back-gesture layer: Back closes it.
+	createEffect(() => {
+		if (!state.drawerViewport || !state.sidebarVisible) return;
+		onCleanup(openOverlayLayer(() => setSidebarVisible(false)));
+	});
+
+	// Re-sync the project registry when the page returns to the foreground (the store throttles).
+	onCleanup(onForeground(syncProjects));
 
 	return (
 		<>

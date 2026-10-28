@@ -15,7 +15,7 @@ import { ActivitiesPanel } from "../activities/ActivitiesPanel";
 import { SessionTreePanel } from "../sessions/SessionTreePanel";
 import { afterMotion, createPresence } from "../../motion/presence";
 import { applyDockWidth, DOCK_MAX_WIDTH, DOCK_MIN_WIDTH } from "../../prefs/dock";
-import { backFromDock, closeDock, setDockWidth } from "../../store/dock";
+import { backFromDock, dismissDock, setDockWidth } from "../../store/dock";
 import { state } from "../../state";
 
 /** Core dock panel kinds, keyed by the route's `<kind>` segment; features add theirs through the registry (`featureDock`). */
@@ -116,7 +116,7 @@ export const DockHost: Component = () => {
 						<Show when={kind().actions}>{(actions) => <Dynamic component={actions()} />}</Show>
 					}
 					onBack={backFromDock}
-					onClose={closeDock}
+					onClose={dismissDock}
 					phase={presence.phase()}
 					overlay={!docked()}
 					swapping={swapping()}

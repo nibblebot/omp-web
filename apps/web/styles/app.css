@@ -98,8 +98,10 @@
 	border-radius: var(--r-sm);
 	transition: background-color var(--dur-fast) var(--ease-out);
 }
-.segment-button:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.segment-button:hover {
+		background: var(--hover);
+	}
 }
 .thinking-segment {
 	color: var(--muted);
@@ -130,8 +132,10 @@
 	cursor: pointer;
 	transition: background-color var(--dur-fast) var(--ease-out);
 }
-.status-menu-item:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.status-menu-item:hover {
+		background: var(--hover);
+	}
 }
 .status-menu-item:focus-visible {
 	outline: 2px solid var(--accent);
@@ -167,7 +171,7 @@
 	padding: var(--space-3) var(--space-4);
 	color: var(--muted-2);
 }
-@media (max-width: 768px), (pointer: coarse) {
+@media (max-width: 767px), (pointer: coarse) {
 	.status-menu-item {
 		min-height: 44px;
 	}
@@ -284,7 +288,7 @@
 	min-width: 0;
 }
 /* Compact viewports: every width preset is full width. */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
 	.app-main {
 		max-width: none;
 	}

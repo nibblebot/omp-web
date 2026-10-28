@@ -110,13 +110,61 @@ export function clipboardImageCandidates<T extends { type: string }>(
 	return attach.length > 0 ? { attach, convert: [] } : { attach, convert: [...items] };
 }
 
+/** Raster types an oversize image is re-encoded from: GIF would lose its animation and SVG is not pixels. */
+const DOWNSCALE_MIME_RE = /^image\/(png|jpeg|webp)$/;
+/** Re-encodes tried before giving up; each shrinks the sides a further 30%. */
+const DOWNSCALE_ATTEMPTS = 4;
+
+/**
+ * Per-side scale that brings an image of `bytes` under `limit`: encoded size follows pixel
+ * count, so each side scales by the square root of the size ratio, with 20% headroom for
+ * the JPEG re-encode not being exactly proportional. 1 when it already fits.
+ */
+export function downscaleFactor(bytes: number, limit: number = MAX_IMAGE_BYTES): number {
+	return bytes <= limit ? 1 : Math.sqrt((limit * 0.8) / bytes);
+}
+
+/** Re-encode a photo-sized raster as JPEG, shrinking it until it fits the per-image limit. */
+async function downscaleImage(file: Blob): Promise<Blob> {
+	const bitmap = await createImageBitmap(file);
+	try {
+		let scale = downscaleFactor(file.size);
+		for (let attempt = 0; attempt < DOWNSCALE_ATTEMPTS; attempt++) {
+			const width = Math.max(1, Math.round(bitmap.width * scale));
+			const height = Math.max(1, Math.round(bitmap.height * scale));
+			const canvas = new OffscreenCanvas(width, height);
+			const context = canvas.getContext("2d");
+			if (!context) throw new Error("2d canvas unavailable");
+			// JPEG has no alpha: a transparent PNG would turn black.
+			context.fillStyle = "#fff";
+			context.fillRect(0, 0, width, height);
+			context.drawImage(bitmap, 0, 0, width, height);
+			const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.85 });
+			if (blob.size <= MAX_IMAGE_BYTES) return blob;
+			scale *= 0.7;
+		}
+		throw new Error("image could not be shrunk under the size limit");
+	} finally {
+		bitmap.close();
+	}
+}
+
 /**
  * Base64 payload of an image the model accepts: a supported type is read as is, anything else the
- * browser decodes (TIFF in Safari, ICO, type aliases like image/x-png) is re-encoded as PNG.
+ * browser decodes (TIFF in Safari, ICO, type aliases like image/x-png) is re-encoded as PNG. A
+ * PNG, JPEG or WebP over the per-image limit (a phone camera photo) is downscaled to a JPEG
+ * instead of refused; when that fails the original is read and `validateImage` refuses it.
  * Rejects when the browser cannot decode it.
  */
 export async function readImagePayload(file: Blob): Promise<{ data: string; mimeType: string }> {
 	if (IMAGE_MIME_RE.test(file.type)) {
+		if (file.size > MAX_IMAGE_BYTES && DOWNSCALE_MIME_RE.test(file.type)) {
+			try {
+				file = await downscaleImage(file);
+			} catch {
+				// Undecodable or still too large: read as is and let validation refuse it.
+			}
+		}
 		const url = await readFileAsDataUrl(file);
 		return { data: url.slice(url.indexOf(",") + 1), mimeType: file.type };
 	}

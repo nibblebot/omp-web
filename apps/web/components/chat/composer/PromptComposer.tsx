@@ -43,7 +43,10 @@ import {
 import { importTextAttachment, type TextAttachment } from "../../../prompt/attachments";
 import { droppedFiles, fileDragDepth, setDroppedFiles } from "../../../prompt/file-drop";
 import { settingValue } from "../../../store/settings";
-import { PaperclipIcon, XIcon } from "../../ui/icons";
+import { ArrowRightIcon, CameraIcon, HistoryIcon, PaperclipIcon, XIcon } from "../../ui/icons";
+import { enterKeyHint } from "../../../prompt/key-input";
+import { enterSends } from "../../../prompt/enter-key";
+import { keepComposerFocus } from "./PromptActions";
 import { AttachmentChip } from "./AttachmentChip";
 import { AutocompletePopup } from "./AutocompletePopup";
 import { PromptHistoryPicker } from "./PromptHistoryPicker";
@@ -78,6 +81,8 @@ interface PromptComposerProps {
 	/** Prompt history popover open state; PromptBox opens it on top-row Up. */
 	historyOpen?: () => boolean;
 	closeHistory?: () => void;
+	/** Open the prompt history popover (the touch route; Up on the top row is the keyboard one). */
+	openHistory?: () => void;
 }
 
 /**
@@ -91,6 +96,7 @@ interface PromptComposerProps {
 export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	let textarea!: HTMLTextAreaElement;
 	let fileInput!: HTMLInputElement;
+	let cameraInput!: HTMLInputElement;
 	// Stable id for the combobox/listbox wiring (aria-controls/activedescendant).
 	const listId = `prompt-ac-${Math.random().toString(36).slice(2, 8)}`;
 	const historyPresence = createPresence(() => props.historyOpen?.() ?? false);
@@ -124,6 +130,36 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const onCaretMove = () => {
 		props.ac?.refreshToken();
 		props.ghost?.refreshCaret();
+	};
+	// A touch caret drag fires neither click nor keyup: selectionchange is the one signal
+	// that follows every caret move, so the completion token and ghost caret read it too.
+	const onSelectionChange = () => {
+		if (document.activeElement === textarea) onCaretMove();
+	};
+	document.addEventListener("selectionchange", onSelectionChange);
+	onCleanup(() => document.removeEventListener("selectionchange", onSelectionChange));
+	// The inline height is measured, so a width change (rotation, split view, the dock
+	// resizing) re-wraps the text and needs a re-measure without a keystroke.
+	let observedWidth = 0;
+	const resizeObserver =
+		typeof ResizeObserver === "function"
+			? new ResizeObserver((entries) => {
+					const width = entries[0]?.contentRect.width ?? 0;
+					if (width === observedWidth) return;
+					observedWidth = width;
+					props.ac?.autoGrow();
+				})
+			: undefined;
+	onCleanup(() => resizeObserver?.disconnect());
+	// A tapped suggestion chip is the touch route to Tab / ArrowRight.
+	const acceptGhost = () => {
+		if (!props.ghost?.accept()) return;
+		requestAnimationFrame(() => {
+			textarea.focus();
+			textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+			props.ac?.autoGrow();
+			persist(props.message(), images(), files());
+		});
 	};
 
 	// QueueBar dequeue / PromptHistoryPicker picks / graph editorText land here.
@@ -310,7 +346,8 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const onTextareaInput = (e: Event): void => {
 		const el = e.currentTarget as HTMLTextAreaElement;
 		props.setMessage(el.value);
-		props.ac?.inlineEmoji(); // `:smile:` -> emoji before the draft is persisted
+		// Rewriting the value mid-composition drops or duplicates IME characters; compositionend runs it.
+		if (!(e as InputEvent).isComposing) props.ac?.inlineEmoji(); // `:smile:` -> emoji before the draft is persisted
 		props.ac?.setDismissed(false);
 		props.ac?.setSelected(0);
 		props.ac?.autoGrow();
@@ -324,6 +361,26 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 				setChipError(String(err instanceof Error ? err.message : err)),
 			);
 		}
+	};
+
+	const onCompositionEnd = (e: CompositionEvent): void => {
+		const el = e.currentTarget as HTMLTextAreaElement;
+		if (!props.ac?.inlineEmoji()) return;
+		props.ac.autoGrow();
+		persist(el.value, images(), files());
+	};
+
+	// Focus leaving the textarea ends the completion: nothing else dismisses the popup on touch.
+	// Popup rows keep focus here (mousedown preventDefault), so a pick never lands on this.
+	const onTextareaBlur = (): void => {
+		props.ac?.setDismissed(true);
+		props.ac?.setToken(null);
+	};
+
+	const chooseFiles = (e: Event & { currentTarget: HTMLInputElement }): void => {
+		setPasteError(null);
+		for (const f of [...(e.currentTarget.files ?? [])]) void importFile(f);
+		e.currentTarget.value = "";
 	};
 
 	const pasteThreshold = () =>
@@ -455,6 +512,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							ref={(el) => {
 								textarea = el;
 								props.setTextareaRef(el);
+								resizeObserver?.observe(el);
 							}}
 							role={props.textOnly ? undefined : "combobox"}
 							aria-label={props.ariaLabel ?? "Message the agent"}
@@ -465,7 +523,13 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							}
 							aria-autocomplete={props.textOnly ? undefined : "list"}
 							value={props.message()}
+							enterkeyhint={enterKeyHint(enterSends())}
+							autocapitalize="sentences"
+							autocomplete="off"
+							spellcheck={false}
 							onInput={onTextareaInput}
+							onCompositionEnd={onCompositionEnd}
+							onBlur={onTextareaBlur}
 							onKeyDown={(e) => props.onKeyDown(e)}
 							onKeyUp={onCaretMove}
 							onClick={onCaretMove}
@@ -476,6 +540,18 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							placeholder={props.placeholder ?? "Message the Agent"}
 							rows={props.textOnly ? 2 : 3}
 						/>
+						<Show when={!props.textOnly && (props.ghost?.text() ?? "") !== ""}>
+							<button
+								type="button"
+								class="prompt-ghost-accept prompt-touch-only"
+								aria-label="Accept suggestion"
+								onMouseDown={keepComposerFocus}
+								onClick={acceptGhost}
+							>
+								<ArrowRightIcon />
+								<span class="prompt-ghost-accept-text">{props.ghost?.text()}</span>
+							</button>
+						</Show>
 					</div>
 					<Show when={!props.textOnly}>
 						<input
@@ -486,20 +562,51 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							hidden
 							aria-hidden="true"
 							tabIndex={-1}
-							onChange={(e) => {
-								setPasteError(null);
-								for (const f of [...(e.currentTarget.files ?? [])]) void importFile(f);
-								e.currentTarget.value = "";
-							}}
+							onChange={chooseFiles}
+						/>
+						<input
+							ref={cameraInput}
+							type="file"
+							accept="image/*"
+							capture="environment"
+							hidden
+							aria-hidden="true"
+							tabIndex={-1}
+							onChange={chooseFiles}
 						/>
 						<button
 							type="button"
 							class="prompt-attach"
 							title="Attach files (images + text, validated)"
 							aria-label="Attach files"
+							onMouseDown={keepComposerFocus}
 							onClick={() => fileInput.click()}
 						>
 							<PaperclipIcon />
+						</button>
+						<button
+							type="button"
+							class="prompt-attach prompt-touch-only"
+							title="Take a photo"
+							aria-label="Take a photo"
+							onMouseDown={keepComposerFocus}
+							onClick={() => cameraInput.click()}
+						>
+							<CameraIcon />
+						</button>
+						<button
+							type="button"
+							class="prompt-attach prompt-touch-only"
+							data-history-toggle
+							title="Prompt history"
+							aria-label="Prompt history"
+							aria-expanded={props.historyOpen?.() ?? false}
+							onMouseDown={keepComposerFocus}
+							onClick={() =>
+								props.historyOpen?.() ? props.closeHistory?.() : props.openHistory?.()
+							}
+						>
+							<HistoryIcon />
 						</button>
 					</Show>
 					{props.actions}

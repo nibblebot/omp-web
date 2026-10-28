@@ -1,6 +1,7 @@
 import { createSignal, type Component } from "solid-js";
 import { dispatchInput, parseInput, type InputMode } from "../../../prompt/commands";
 import { caretOnFirstRow } from "../../../prompt/caret-row";
+import { isImeKey, resolveEnterAction } from "../../../prompt/key-input";
 import { PromptHistory } from "../../../prompt/history";
 import type { ImageArg } from "#lib/wire/protocol";
 import { composeTextAttachments, type TextAttachment } from "../../../prompt/attachments";
@@ -23,6 +24,7 @@ import { PromptActions } from "./PromptActions";
 import { PromptComposer, expandChipsForSubmit } from "./PromptComposer";
 import { usePromptAutocomplete } from "./usePromptAutocomplete";
 import { useGhostText } from "./useGhostText";
+import { enterSends } from "../../../prompt/enter-key";
 
 const history = new PromptHistory();
 
@@ -96,6 +98,8 @@ export const PromptBox: Component = () => {
 	};
 
 	const onKeyDown = (e: KeyboardEvent) => {
+		// An IME owns Enter, Tab, arrows and Escape while composing (Gboard reports keyCode 229).
+		if (isImeKey(e)) return;
 		// Alt+↑ pops the last queued message back into the textarea.
 		if (e.key === "ArrowUp" && e.altKey) {
 			e.preventDefault();
@@ -171,9 +175,10 @@ export const PromptBox: Component = () => {
 			return;
 		}
 		if (e.key === "Enter") {
-			if (e.shiftKey) return; // newline
+			const action = resolveEnterAction(e, enterSends());
+			if (action === "newline") return; // the textarea inserts it
 			e.preventDefault();
-			submit(e.ctrlKey || e.metaKey ? "followup" : "enter");
+			submit(action === "followup" ? "followup" : "enter");
 			return;
 		}
 		const el = e.currentTarget as HTMLTextAreaElement;
@@ -182,7 +187,6 @@ export const PromptBox: Component = () => {
 		// win; with no history, Up goes to the browser. Cheap checks first, so
 		// the layout-based row check only runs when it could matter.
 		if (e.key === "ArrowUp" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-			if (e.isComposing || e.keyCode === 229) return;
 			if (new PromptHistory().size === 0) return;
 			if (!caretOnFirstRow(el)) return;
 			e.preventDefault();
@@ -210,6 +214,7 @@ export const PromptBox: Component = () => {
 				}}
 				historyOpen={historyOpen}
 				closeHistory={() => setHistoryOpen(false)}
+				openHistory={() => setHistoryOpen(true)}
 				actions={<PromptActions message={message} images={images} files={files} submit={submit} />}
 			/>
 			<ExtensionUi placement="belowEditor" />

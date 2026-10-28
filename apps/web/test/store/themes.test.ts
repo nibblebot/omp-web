@@ -48,10 +48,14 @@ beforeEach(() => {
 	storage.clear();
 	requests = [];
 	root = { dataset: {}, style: {} };
-	const head: Array<{ id: string; textContent: string }> = [];
+	const head: Array<{ id: string; textContent: string; name?: string }> = [];
 	installGlobal("document", {
 		documentElement: root,
-		head: { append: (el: { id: string; textContent: string }) => void head.push(el) },
+		head: {
+			append: (el: { id: string; textContent: string }) => void head.push(el),
+			prepend: (el: { id: string; textContent: string }) => void head.unshift(el),
+			querySelector: () => head.find((el) => el.name === "theme-color") ?? null,
+		},
 		createElement: () => ({ id: "", textContent: "" }),
 		getElementById: (id: string) => head.find((el) => el.id === id) ?? null,
 	});

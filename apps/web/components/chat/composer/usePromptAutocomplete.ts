@@ -1,5 +1,11 @@
 import { createEffect, createMemo, createSignal, type Accessor, type Setter } from "solid-js";
-import { currentToken, fenceOpen, fuzzyRank, type AcToken } from "../../../prompt/autocomplete";
+import {
+	currentToken,
+	fenceOpen,
+	fuzzyRank,
+	sameToken,
+	type AcToken,
+} from "../../../prompt/autocomplete";
 import { commandUsage, currentCommandRegistry } from "../../../prompt/commands";
 import {
 	emojiInlineReplace,
@@ -36,8 +42,8 @@ export interface PromptAutocomplete {
 	autoGrow: () => void;
 	/** Popup row cap (`autocompleteMaxVisible`, clamped 3..20). */
 	maxVisible: () => number;
-	/** Rewrites a just-typed `:name:` shortcode or emoticon in the textarea. */
-	inlineEmoji: () => void;
+	/** Rewrites a just-typed `:name:` shortcode or emoticon in the textarea; true when it did. */
+	inlineEmoji: () => boolean;
 }
 
 /**
@@ -52,7 +58,7 @@ export function usePromptAutocomplete(
 	message: () => string,
 	setMessage: Setter<string>,
 ): PromptAutocomplete {
-	const [token, setToken] = createSignal<AcToken | null>(null);
+	const [token, setToken] = createSignal<AcToken | null>(null, { equals: sameToken });
 	const [dismissed, setDismissed] = createSignal(false);
 	const [selected, setSelected] = createSignal(0);
 	const [files, setFiles] = createSignal<string[]>([]);
@@ -151,22 +157,23 @@ export function usePromptAutocomplete(
 		});
 	};
 
-	const inlineEmoji = (): void => {
-		if (!emojiOn()) return;
+	const inlineEmoji = (): boolean => {
+		if (!emojiOn()) return false;
 		const ta = getTextarea();
-		if (!ta) return;
+		if (!ta) return false;
 		const caret = ta.selectionStart;
 		const before = ta.value.slice(0, caret);
 		// Shortcodes need the table; load it on a closing colon, not every keystroke.
 		if (before.endsWith(":")) void ensureEmojiTable().then(() => setEmojiReady(true));
 		const r = emojiInlineReplace(before);
-		if (!r) return;
+		if (!r) return false;
 		const start = caret - r.replaceLen;
 		const next = ta.value.slice(0, start) + r.insert + ta.value.slice(caret);
 		const pos = start + r.insert.length;
 		ta.value = next;
 		ta.setSelectionRange(pos, pos);
 		setMessage(next);
+		return true;
 	};
 
 	return {

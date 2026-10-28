@@ -18,6 +18,8 @@ function installGlobal(key: string, value: unknown): void {
 interface StubElement {
 	id: string;
 	textContent: string;
+	name?: string;
+	content?: string;
 }
 
 const storage = new Map<string, string>();
@@ -65,6 +67,9 @@ beforeEach(async () => {
 				headChildren = headChildren.filter((child) => child !== el);
 				headChildren.push(el);
 			},
+			prepend: (el: StubElement) => void headChildren.unshift(el),
+			querySelector: (): StubElement | null =>
+				headChildren.find((el) => el.name === "theme-color") ?? null,
 		},
 		createElement: (): StubElement => ({ id: "", textContent: "" }),
 		getElementById: (id: string) => headChildren.find((el) => el.id === id) ?? null,
@@ -279,5 +284,17 @@ describe("themes payload", () => {
 		expect(storage.get("omp-web:theme-bg")).toBe(CORE.light.bg);
 		m.setThemeMode("dark");
 		expect(storage.get("omp-web:theme-bg")).toBe(CORE.dark.bg);
+	});
+
+	test("the theme-color meta follows the applied variant's background, one element for the page's life", () => {
+		m.setThemeMode("dark");
+		m.applyThemesPayload(PAYLOAD);
+		const metas = () => headChildren.filter((el) => el.name === "theme-color");
+		expect(metas()).toHaveLength(1);
+		expect(metas()[0]!.content).toBe(CORE.dark.bg);
+		expect(headChildren[0]).toBe(metas()[0]!);
+		m.setThemeMode("light");
+		expect(metas()).toHaveLength(1);
+		expect(metas()[0]!.content).toBe(CORE.light.bg);
 	});
 });

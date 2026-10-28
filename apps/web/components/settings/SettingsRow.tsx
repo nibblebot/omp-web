@@ -37,9 +37,9 @@ export function SettingsRowLayout(props: {
 	note?: string;
 	/** Text, secret, JSON and ordered-list rows: the control drops below the help text. */
 	stacked?: boolean;
-	/** For a row in the Appearance sheet: tighter spacing and smaller type, and the description moves to a tooltip so the row stays one line. */
+	/** For a row in the Appearance sheet: tighter spacing and smaller type, and the description moves to a tooltip on fine pointers (printed under the label on touch) so the row stays one line. */
 	compact?: boolean;
-	/** Why the row's control is disabled (an unmet dependency): dims the row, shown as its tooltip. */
+	/** Why the row's control is disabled (an unmet dependency): dims the row, shown as its tooltip (and printed under the label on touch). */
 	disabled?: string;
 	children: JSX.Element;
 	reset?: JSX.Element;
@@ -79,6 +79,17 @@ export function SettingsRowLayout(props: {
 						<Show when={props.note}>
 							{props.description && !props.compact ? " · " : null}
 							<span class="settings-item-note">{props.note}</span>
+						</Show>
+					</p>
+				</Show>
+				<Show when={props.compact ? props.description || props.disabled : props.disabled}>
+					{/* Touch has no tooltips: the compact row's description and the unmet-dependency
+					    reason print under the label (hidden on fine pointers, where the title shows them). */}
+					<p class="settings-item-desc settings-item-touch-note">
+						{props.compact ? props.description : null}
+						<Show when={props.disabled}>
+							{props.compact && props.description ? " " : null}
+							<span class="settings-item-disabled-reason">{props.disabled}</span>
 						</Show>
 					</p>
 				</Show>

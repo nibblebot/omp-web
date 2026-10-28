@@ -39,6 +39,9 @@ beforeAll(() => {
 	writeAsset(dist, "assets/app-abc123.js", SCRIPT, true);
 	writeAsset(dist, "index.html", HTML, false);
 	writeAsset(dist, "favicon.svg", "<svg/>", false);
+	writeAsset(dist, "manifest.webmanifest", "{}", false);
+	writeAsset(dist, "sw.js", "self.skipWaiting();", false);
+	writeAsset(dist, "icons/icon-192.png", "png", false);
 	sources = { distDir: dist, embedded: {} };
 });
 
@@ -75,6 +78,27 @@ describe("serveStaticUi caching", () => {
 		const res = await get("/assets/missing-0f3c9a.js");
 		expect(res.status).toBe(404);
 		expect(res.headers.get("content-type")).toContain("text/plain");
+	});
+});
+
+describe("serveStaticUi installable app", () => {
+	test("the manifest, service worker and icons revalidate on every use", async () => {
+		for (const path of ["/manifest.webmanifest", "/sw.js", "/icons/icon-192.png"]) {
+			const res = await get(path);
+			expect(res.status).toBe(200);
+			expect(res.headers.get("cache-control")).toBe("no-cache");
+		}
+	});
+
+	test("the manifest is served as application/manifest+json", async () => {
+		const res = await get("/manifest.webmanifest");
+		expect(res.headers.get("content-type")).toBe("application/manifest+json");
+		expect(await res.text()).toBe("{}");
+	});
+
+	test("the service worker is JavaScript the browser will execute", async () => {
+		const res = await get("/sw.js");
+		expect(res.headers.get("content-type") ?? "").toMatch(/javascript/);
 	});
 });
 

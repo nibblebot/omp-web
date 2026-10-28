@@ -127,11 +127,11 @@
 				},
 				"muted-2": {
 					"$ref": "#/$defs/color",
-					"description": "Mid-emphasis text between muted and text."
+					"description": "Mid-emphasis text between muted and text. Derived values are lifted to 4.5:1 on bg and panel."
 				},
 				"muted-3": {
 					"$ref": "#/$defs/color",
-					"description": "Higher-emphasis secondary text, closest to text."
+					"description": "Higher-emphasis secondary text, closest to text. Derived values are lifted to 4.5:1 on bg and panel."
 				},
 				"shimmer-band": {
 					"$ref": "#/$defs/color",

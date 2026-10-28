@@ -1,5 +1,6 @@
 import { createSignal, For, Show, type Component } from "solid-js";
 import { currentCommandRegistry } from "../../prompt/commands";
+import { enterSends } from "../../prompt/enter-key";
 import { COMMAND_GROUP_ORDER, isAvailable } from "../../prompt/command-registry";
 import { Modal } from "../ui/Modal";
 import { Tabs, tabButtonId, tabPanelId, type TabItem } from "../ui/Tabs";
@@ -12,10 +13,21 @@ const TABS: TabItem<HelpTab>[] = [
 	{ id: "shortcuts", label: "Shortcuts" },
 ];
 
-const SHORTCUTS: Array<[string, string]> = [
-	["Enter", "Send (steers while the agent is streaming)"],
-	["Ctrl+Enter", "Queue as follow-up"],
-	["Shift+Enter", "Newline"],
+/** What Enter does depends on the Enter Key preference and the pointer type (Appearance > Composer). */
+const enterShortcuts = (): Array<[string, string]> =>
+	enterSends()
+		? [
+				["Enter", "Send (steers while the agent is streaming)"],
+				["Ctrl+Enter", "Queue as follow-up"],
+				["Shift+Enter", "Newline"],
+			]
+		: [
+				["Enter", "Newline"],
+				["Ctrl+Enter", "Send (queues as follow-up while the agent is streaming)"],
+				["Send button", "Send (steers while the agent is streaming)"],
+			];
+
+const OTHER_SHORTCUTS: Array<[string, string]> = [
 	["Esc", "Abort the running turn"],
 	["Esc Esc", "Branch picker (empty prompt)"],
 	["Ctrl+O", "Expand all tool outputs"],
@@ -90,7 +102,7 @@ export const ShortcutsDialog: Component<{ initialTab: HelpTab; onClose: () => vo
 				>
 					<table class="shortcuts">
 						<tbody>
-							<For each={SHORTCUTS}>
+							<For each={[...enterShortcuts(), ...OTHER_SHORTCUTS]}>
 								{([key, desc]) => (
 									<tr>
 										<td class="shortcut-key">{key}</td>

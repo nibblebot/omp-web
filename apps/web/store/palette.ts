@@ -30,6 +30,11 @@ import { reportError } from "./toasts";
 const RECENTS_KEY = "omp-web:palette-recents";
 const RECENTS_MAX = 8;
 
+/** Open the command palette (`state.modal`; ModalHost mounts it): Ctrl+K and the header's Search button. */
+export function openCommandPalette(): void {
+	setState("modal", "palette");
+}
+
 /** Ids of the items the user picked, newest first. */
 export function paletteRecents(): string[] {
 	if (typeof localStorage === "undefined") return [];

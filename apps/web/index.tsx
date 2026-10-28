@@ -5,6 +5,8 @@ import { activateFeatures } from "./features/registry";
 import { preferredFeatureIds } from "./features/preferences";
 import "./styles.css";
 import { initTheme } from "./prefs/theme";
+import { switchToSession } from "./store/roster";
+import { registerServiceWorker } from "./store/service-worker";
 import { loadHighlighter } from "./text/highlight";
 
 // Apply the persisted theme/font-size before first render to avoid a flash. After
@@ -15,6 +17,10 @@ initTheme();
 // Dial the fleet before the first render: roster and history frames land in the
 // store while the app mounts, and the data requests leave one round trip sooner.
 startBoot();
+
+// Notifications on Android Chrome go through the worker; a tapped one asks
+// this window to attach to its session.
+registerServiceWorker((workspaceId) => void switchToSession(workspaceId));
 
 // Feature entries load in the background (disabled ones are never imported).
 // Every slot accessor is reactive on the active set, so overlays, commands and

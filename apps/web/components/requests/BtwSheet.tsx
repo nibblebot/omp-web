@@ -1,6 +1,7 @@
 import { For, Show, createSignal, onCleanup, onMount, type Component } from "solid-js";
 import { state } from "../../state";
 import { askBtw, dismissBtw, followUpBtw } from "../../store/btw";
+import { searchAutofocus } from "../../store/integrations";
 import {
 	btwHistoryError,
 	btwHistoryLoading,
@@ -87,7 +88,8 @@ export const BtwSheet: Component<{ onClose: () => void }> = (props) => {
 
 	onMount(() => {
 		rediscoverBtwHistory();
-		input?.focus();
+		// A soft keyboard would cover the history list the sheet opens on.
+		if (searchAutofocus()) input?.focus();
 	});
 	onCleanup(() => {
 		if (searchDebounce !== 0) window.clearTimeout(searchDebounce);
@@ -317,6 +319,7 @@ export const BtwSheet: Component<{ onClose: () => void }> = (props) => {
 						value={draft()}
 						disabled={busy()}
 						onInput={(event) => setDraft(event.currentTarget.value)}
+						autocomplete="off"
 						onKeyDown={(event) => {
 							if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) submit();
 						}}

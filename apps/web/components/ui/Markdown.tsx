@@ -24,7 +24,9 @@ function decorateCodeBlocks(root: HTMLElement): void {
 				}, COPY_FEEDBACK_MS);
 			});
 		});
-		pre.appendChild(btn);
+		// First child: a floated, sticky button then sits at the block's top-right and stays
+		// there while a long line scrolls sideways (chat.css `.code-copy-btn`).
+		pre.prepend(btn);
 	}
 }
 

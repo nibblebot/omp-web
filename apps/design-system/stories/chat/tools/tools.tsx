@@ -195,7 +195,7 @@ const stories: Story[] = [
 			{
 				name: "Collapsed, first 20 lines",
 				description:
-					"Settled card with 44 lines of output; the Ctrl+O note appears under the body.",
+					"Settled card with 44 lines of output; a Show hidden lines button appears under the body (Ctrl+O also shows everything).",
 				render: () => <CollapsibleOutput item={bashLongTool} output={bashLongTool.output} />,
 			},
 			{

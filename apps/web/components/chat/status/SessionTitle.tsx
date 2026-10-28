@@ -2,6 +2,7 @@ import { createSignal, Show, type Component } from "solid-js";
 import { call, connectionState, state } from "../../../state";
 import { activeWorkspace } from "../../../fleet-ui/workspace-status";
 import { dispatchInput } from "../../../prompt/commands";
+import { isImeKey } from "../../../prompt/key-input";
 import { reportError } from "../../../store/toasts";
 import { PAUSED_TOOLTIP } from "../../app/ConnectionBar";
 import { PlusIcon } from "../../ui/icons";
@@ -20,6 +21,10 @@ export const SessionTitle: Component = () => {
 			void call("setSessionName", [title]).catch(reportError);
 		}
 	};
+
+	const shownName = () =>
+		displayTitle(state.sessionName) ??
+		(state.messageCount === 0 ? "New session" : "Untitled session");
 
 	return (
 		<div class="session-header">
@@ -49,7 +54,7 @@ export const SessionTitle: Component = () => {
 				fallback={
 					<h1
 						class="segment segment-button session-name"
-						title="Rename session"
+						title={`${shownName()} (click to rename)`}
 						tabindex="0"
 						onClick={() => setEditingName(true)}
 						onKeyDown={(e) => {
@@ -59,8 +64,7 @@ export const SessionTitle: Component = () => {
 							}
 						}}
 					>
-						{displayTitle(state.sessionName) ??
-							(state.messageCount === 0 ? "New session" : "Untitled session")}
+						{shownName()}
 					</h1>
 				}
 			>
@@ -75,6 +79,7 @@ export const SessionTitle: Component = () => {
 					aria-label="Session name"
 					value={state.sessionName ?? ""}
 					onKeyDown={(e) => {
+						if (isImeKey(e)) return;
 						if (e.key === "Enter") commitName(e.currentTarget);
 						else if (e.key === "Escape") setEditingName(false);
 					}}

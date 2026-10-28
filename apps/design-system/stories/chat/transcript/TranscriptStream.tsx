@@ -260,7 +260,7 @@ export default defineStory({
 		{
 			name: "Session: tool cards expanded, 10 rows",
 			description:
-				"Tool cards Expanded with the Rows choice at 10: output past 10 rows hides behind the Ctrl+O note (the tail for bash and eval, the head for read).",
+				"Tool cards Expanded with the Rows choice at 10: output past 10 rows hides behind a Show hidden lines button (the tail for bash and eval, the head for read; Ctrl+O shows all).",
 			seed: () => seedToolRuns({ toolCards: "expanded", toolRows: "10" }),
 			render: () => (
 				<div class="ds-frame ds-frame-tall ds-frame-column">

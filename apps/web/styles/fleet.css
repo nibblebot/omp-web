@@ -92,19 +92,11 @@
 		cursor: default;
 	}
 }
-/* Phones: sidebar labels at body size and 44px tap targets for its controls. */
+/* Phones: sidebar labels at body size. */
 @media (max-width: 767px) {
 	.sidebar .sidebar-row,
 	.sidebar .roster-session-title {
 		font-size: var(--fs-md);
-	}
-	.sidebar .project-group-toggle,
-	.sidebar .roster-row-btn {
-		min-height: 44px;
-	}
-	.sidebar .sidebar-icon-btn {
-		width: 44px;
-		height: 44px;
 	}
 	.sidebar .sidebar-group-label,
 	.sidebar .picker-group-name,
@@ -113,8 +105,17 @@
 		font-size: var(--fs-md);
 	}
 }
-/* Phones: New workspace popover segments and rows reach 44px. */
-@media (max-width: 767px) {
+/* Phones and any coarse pointer: 44px tap targets for the sidebar controls and
+   the New workspace popover segments and rows. */
+@media (pointer: coarse), (max-width: 767px) {
+	.sidebar .project-group-toggle,
+	.sidebar .roster-row-btn {
+		min-height: 44px;
+	}
+	.sidebar .sidebar-icon-btn {
+		width: 44px;
+		height: 44px;
+	}
 	.new-workspace-segment,
 	.workspace-source-mode,
 	.new-workspace-row,
@@ -134,9 +135,11 @@
 	font: inherit;
 	border-radius: var(--r-sm);
 }
-.sidebar-icon-btn:hover {
-	background: var(--btn);
-	color: var(--text);
+@media (hover: hover) {
+	.sidebar-icon-btn:hover {
+		background: var(--btn);
+		color: var(--text);
+	}
 }
 /* The sidebar header row (SidebarHeader.tsx) lives in shell.css. */
 .sidebar-list {
@@ -162,6 +165,8 @@
 	--row-control-glyph: calc(0.75 * 1.2rem);
 	flex: 1;
 	overflow-y: auto;
+	/* The list scrolls vertically only; a row can never pan it sideways. */
+	overflow-x: hidden;
 	padding: var(--space-3);
 	display: flex;
 	flex-direction: column;
@@ -178,6 +183,13 @@
 	border-top: 1px solid var(--border);
 	max-height: 40%;
 	overflow-y: auto;
+}
+/* Landscape phones (about 400px tall): the roster is the sidebar's job; the usage
+   block left the list a 190px strip. */
+@media (max-height: 500px) {
+	.sidebar-usage {
+		display: none;
+	}
 }
 .sidebar-usage-head {
 	display: flex;
@@ -313,8 +325,10 @@
 	margin-top: 1px;
 	border-radius: var(--r-xs);
 }
-.sidebar-row:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.sidebar-row:hover {
+		background: var(--hover);
+	}
 }
 .sidebar-row.active {
 	background: var(--accent-dim);
@@ -379,8 +393,10 @@
 	border-radius: 0;
 	padding-inline: calc(var(--sidebar-row-indent) - var(--row-text-inset)) var(--sidebar-row-edge);
 }
-.roster-row:hover {
-	--row-bg: var(--hover);
+@media (hover: hover) {
+	.roster-row:hover {
+		--row-bg: var(--hover);
+	}
 }
 .roster-row.active {
 	--row-bg: var(--accent-dim);
@@ -414,6 +430,11 @@
 .row-motion {
 	display: grid;
 	grid-template-rows: 1fr;
+	/* One column the row's width. An implicit auto column grows to the row's
+	   min-content (its nowrap title and the 44px controls) once the settled clip
+	   is overflow:visible, which pushed long rows past the sidebar and put their
+	   action buttons off-screen behind a sideways scroll. */
+	grid-template-columns: minmax(0, 1fr);
 	/* The full-sidebar-width bleed of .roster-row lives here: the clip below
 	   would cut a row that bleeds on its own. */
 	margin-inline: calc(-1 * var(--space-3));
@@ -677,9 +698,11 @@
 	padding: var(--space-1) var(--space-3);
 	cursor: pointer;
 }
-.session-stage-retry:hover {
-	border-color: var(--accent);
-	color: var(--accent);
+@media (hover: hover) {
+	.session-stage-retry:hover {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
 }
 /* P8.1: the Clone tab's segmented source-mode selector (default project
    checkout / local path / remote URL). */
@@ -728,8 +751,10 @@
 	text-align: left;
 	border-radius: var(--r-md);
 }
-.sidebar-group:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.sidebar-group:hover {
+		background: var(--hover);
+	}
 }
 .project-group-icon {
 	flex: none;
@@ -815,6 +840,11 @@
 	display: flex;
 	flex-direction: column;
 }
+/* KebabMenu flips upward when the rows below the trigger cannot hold the menu. */
+.sidebar-menu[data-side="above"] {
+	top: auto;
+	bottom: 100%;
+}
 .sidebar-menu-item {
 	display: flex;
 	align-items: center;
@@ -829,23 +859,43 @@
 	cursor: pointer;
 	border-radius: var(--r-sm);
 }
-.sidebar-menu-item:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.sidebar-menu-item:hover {
+		background: var(--hover);
+	}
+}
+/* Touch: menu items are 44px tap targets. */
+@media (pointer: coarse), (max-width: 767px) {
+	.sidebar-menu-item {
+		min-height: 44px;
+	}
+}
+/* Row state in words, first line of the row actions menu (not a menu item). */
+.sidebar-menu-state {
+	padding: var(--space-2) var(--space-3);
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+	white-space: nowrap;
+	border-bottom: 1px solid var(--border);
 }
 /* Armed (first click of the two-click confirm) turns danger-colored until
    the second click. */
 .sidebar-menu-item.armed {
 	color: var(--error);
 }
-.sidebar-menu-item.armed:hover {
-	color: var(--error-text);
+@media (hover: hover) {
+	.sidebar-menu-item.armed:hover {
+		color: var(--error-text);
+	}
 }
 /* Destructive close-out action: always danger-colored, not just on hover. */
 .sidebar-menu-item--danger {
 	color: var(--error);
 }
-.sidebar-menu-item--danger:hover {
-	color: var(--error-text);
+@media (hover: hover) {
+	.sidebar-menu-item--danger:hover {
+		color: var(--error-text);
+	}
 }
 /* Bare icon actions: no button chrome, just the glyph. */
 .session-icon-btn {
@@ -861,8 +911,10 @@
 	flex: none;
 	border-radius: var(--r-sm);
 }
-.session-icon-btn:hover {
-	color: var(--text);
+@media (hover: hover) {
+	.session-icon-btn:hover {
+		color: var(--text);
+	}
 }
 /* Diffstat line (changed-file count, numstat +/- line counts) in compact mono,
    under the branch text; rendered only when git stats exist. Row actions live
@@ -951,10 +1003,12 @@
 	flex: 1;
 	min-width: 0;
 }
-/* Asleep rows dim the title by opacity: a muted color is nearly the text
-   color in some light palettes, so it would not read as dimmed. */
+/* Asleep rows quiet the title with the contrast-checked `muted` color, not opacity
+   (which would drop it below 4.5:1). Italic keeps the cue in light palettes where
+   muted sits close to the text color. */
 .roster-row--asleep .roster-row-title {
-	opacity: 0.65;
+	color: var(--muted);
+	font-style: italic;
 }
 /* The icon sits in a fixed-width box so every row's icon and branch text line up. */
 .session-kind-icon {
@@ -1100,9 +1154,11 @@
 	cursor: pointer;
 	flex: none;
 }
-.roster-row-btn:hover {
-	color: var(--text);
-	border-color: var(--accent);
+@media (hover: hover) {
+	.roster-row-btn:hover {
+		color: var(--text);
+		border-color: var(--accent);
+	}
 }
 .roster-row-btn:disabled {
 	opacity: 0.5;
@@ -1141,9 +1197,11 @@
 	padding: 0 var(--space-2);
 	border-radius: var(--r-sm);
 }
-.session-detail-close:hover {
-	background: var(--btn);
-	color: var(--text);
+@media (hover: hover) {
+	.session-detail-close:hover {
+		background: var(--btn);
+		color: var(--text);
+	}
 }
 .session-detail-facts {
 	display: flex;
@@ -1174,6 +1232,14 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+/* Touch has no hover tooltip (the full path lives in title=): wrap the whole value instead. */
+@media (pointer: coarse), (max-width: 767px) {
+	.session-detail-value {
+		overflow: visible;
+		overflow-wrap: anywhere;
+		white-space: normal;
+	}
 }
 .session-detail-fact--error .session-detail-value {
 	color: var(--error-text);
@@ -1242,9 +1308,11 @@
 	padding: var(--space-1) var(--space-3);
 	cursor: pointer;
 }
-.add-project-icon-btn:hover:not(:disabled),
-.add-project-type-btn:hover:not(:disabled) {
-	background: var(--hover);
+@media (hover: hover) {
+	.add-project-icon-btn:hover:not(:disabled),
+	.add-project-type-btn:hover:not(:disabled) {
+		background: var(--hover);
+	}
 }
 .add-project-icon-btn:disabled,
 .add-project-type-btn:disabled {
@@ -1277,9 +1345,11 @@
 	padding: 0 var(--space-1);
 	cursor: pointer;
 }
-.add-project-crumb:hover:not(:disabled) {
-	background: var(--hover);
-	color: var(--text);
+@media (hover: hover) {
+	.add-project-crumb:hover:not(:disabled) {
+		background: var(--hover);
+		color: var(--text);
+	}
 }
 .add-project-crumb.current {
 	color: var(--text);
@@ -1301,7 +1371,7 @@
 	display: grid;
 	grid-template-columns: 170px minmax(0, 1fr);
 	gap: var(--space-4);
-	height: 42vh;
+	height: 42dvh;
 	min-height: 220px;
 }
 .add-project-shortcuts {
@@ -1371,6 +1441,35 @@
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* A folder row: the select button plus a one-tap "open" chevron (double-click and Enter are
+   not reachable on touch). */
+.add-project-entry {
+	display: flex;
+	align-items: stretch;
+	gap: var(--space-1);
+}
+.add-project-entry > .add-project-row {
+	flex: 1;
+	width: auto;
+	min-width: 0;
+}
+.add-project-open {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 32px;
+	padding: 0 var(--space-3);
+	background: none;
+	border-color: transparent;
+	color: var(--muted);
+}
+@media (pointer: coarse), (max-width: 767px) {
+	.add-project-open {
+		min-width: 44px;
+		min-height: 44px;
+	}
+}
 .add-project-git {
 	flex: none;
 	font-size: var(--fs-micro);
@@ -1410,10 +1509,17 @@
 	font-family: var(--font-mono);
 	color: var(--text);
 }
+@media (pointer: coarse), (max-width: 767px) {
+	.add-project-target-path {
+		overflow: visible;
+		overflow-wrap: anywhere;
+		white-space: normal;
+	}
+}
 @media (max-width: 600px) {
 	.add-project-body {
 		grid-template-columns: minmax(0, 1fr);
-		height: 50vh;
+		height: 50dvh;
 	}
 	.add-project-shortcuts {
 		flex-direction: row;
@@ -1468,9 +1574,11 @@
 	padding: var(--space-1) var(--space-3);
 	cursor: pointer;
 }
-.new-workspace-segment:hover:not(:disabled) {
-	background: var(--hover);
-	color: var(--text);
+@media (hover: hover) {
+	.new-workspace-segment:hover:not(:disabled) {
+		background: var(--hover);
+		color: var(--text);
+	}
 }
 .new-workspace-segment[aria-pressed="true"] {
 	background: var(--accent-dim);
@@ -1523,7 +1631,11 @@
 	text-align: left;
 	cursor: pointer;
 }
-.new-workspace-row:hover:not(:disabled),
+@media (hover: hover) {
+	.new-workspace-row:hover:not(:disabled) {
+		background: var(--hover);
+	}
+}
 .new-workspace-row:focus-visible {
 	background: var(--hover);
 }
@@ -1663,8 +1775,10 @@
 	padding: var(--space-2) var(--space-2) var(--space-2) calc(var(--gutter) - var(--space-3));
 	cursor: pointer;
 }
-.project-group-toggle:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.project-group-toggle:hover {
+		background: var(--hover);
+	}
 }
 .project-new-btn[aria-expanded="true"] {
 	background: var(--btn);
@@ -1813,9 +1927,11 @@
 	text-align: left;
 	cursor: pointer;
 }
-.sidebar-add-project:hover {
-	background: var(--hover);
-	color: var(--text);
+@media (hover: hover) {
+	.sidebar-add-project:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
 }
 .project-missing-chip {
 	flex: none;
@@ -1826,7 +1942,8 @@
 	padding: 0 var(--space-2);
 }
 .project-group--missing > .project-group-toggle .sidebar-group-label {
-	opacity: 0.55;
+	color: var(--muted);
+	font-style: italic;
 }
 /* ProjectGroups releases the highlight flag when this animation ends, so the
    flash length lives here only. */

@@ -1,14 +1,18 @@
 import { createEffect, createSignal, on, Show, untrack, type Component } from "solid-js";
 import { getFocusDraft, setFocusDraft } from "../../subagents/worker-scope";
+import { isImeKey, resolveEnterAction } from "../../prompt/key-input";
 import { PromptComposer } from "../chat/composer/PromptComposer";
+import { enterSends } from "../../prompt/enter-key";
 import { ConfirmButton } from "../ui/ConfirmButton";
 import { CornerDownRightIcon, StopIcon } from "../ui/icons";
 
 /**
  * Text-only steer box for a running agent: the main PromptComposer without
- * attachments, slash commands, autocomplete or history. Enter sends, Shift+Enter
- * adds a newline, and the draft survives switching agents. Stop aborts the agent
- * after an inline confirm (unlike the main composer's Stop).
+ * attachments, slash commands, autocomplete or history. Enter sends and
+ * Shift+Enter adds a newline, unless the Enter key preference (or a touch
+ * screen under `auto`) makes Enter the newline; the draft survives switching
+ * agents. Stop aborts the agent after an inline confirm (unlike the main
+ * composer's Stop).
  */
 export const SubagentSteerComposer: Component<{
 	id: string;
@@ -50,7 +54,8 @@ export const SubagentSteerComposer: Component<{
 					textarea = el;
 				}}
 				onKeyDown={(e) => {
-					if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+					if (e.key !== "Enter" || isImeKey(e)) return;
+					if (resolveEnterAction(e, enterSends()) === "newline") return;
 					e.preventDefault();
 					void send();
 				}}

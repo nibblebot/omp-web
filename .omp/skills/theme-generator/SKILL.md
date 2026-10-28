@@ -9,7 +9,7 @@ Turns an existing color scheme into an omp-web theme file. The file format, toke
 
 ## Rules
 
-- **Core only by default.** A variant must set the nine core tokens: `bg`, `panel`, `text`, `muted`, `border`, `accent`, `success`, `warning`, `error`. Everything else is derived, with `tool-*` and `syn-*` contrast-solved. Set an optional token only when the reference pins that role (a `Comment` color, a diff background) or the derived value is visibly wrong. Never invent values for roles the reference does not pin.
+- **Core only by default.** A variant must set the nine core tokens: `bg`, `panel`, `text`, `muted`, `border`, `accent`, `success`, `warning`, `error`. Everything else is derived, with `tool-*` and `syn-*` contrast-solved and `muted-2`/`muted-3` lifted to 4.5:1 on `bg` and `panel`. Set an optional token only when the reference pins that role (a `Comment` color, a diff background) or the derived value is visibly wrong. Never invent values for roles the reference does not pin.
 - **Colors are hex or oklch only.** Write `#rrggbb` or `#rrggbbaa`. Convert `rgb()`/`rgba()`, `hsl()`, named colors, floats from plists, `0xrrggbb`, and `#aarrggbb` before writing. Anything else is a schema error.
 - **Dark and light are separate variants.** Produce `variants.dark` and `variants.light` when the reference has both; otherwise produce the one it has. Never fabricate the missing variant by inverting colors unless the user asks.
 - **Ask before replacing** an existing file at the target path. Ask with the existing file's `name`, and offer a different stem.

@@ -18,12 +18,12 @@
 			"purple": "#c97bb6",
 			"diff-add-text": "#4fc48a",
 			"diff-del-text": "#ff5c5c",
-			"syn-comment": "#66574f",
+			"syn-comment": "#97877e",
 			"syn-keyword": "#ff7a3d",
 			"syn-string": "#f3c24f",
 			"syn-number": "#4fc48a",
 			"syn-title": "#f2a53a",
-			"syn-attr": "#6a8ca0"
+			"syn-attr": "#6c8ea3"
 		}
 	}
 }

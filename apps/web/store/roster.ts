@@ -29,6 +29,7 @@ import {
 import { NOTIFY_SETTING_PATH, notifyKindEnabled, type NotifyKind } from "./notify";
 import { settingValue } from "./settings";
 import { reportError } from "./toasts";
+import { showWorkerNotification } from "./service-worker";
 import { displayTitle } from "../components/ui/title-icons";
 
 /**
@@ -228,9 +229,12 @@ export async function switchToSession(workspaceId: string): Promise<void> {
  * SDK setting for `kind`. Not gated on tab visibility: the user is looking at
  * a different session. The title is what the sidebar row shows: the session
  * title, else the branch, else the roster name; `tag` makes a
- * session's repeats replace each other. Clicking focuses the window, switches
- * to the session and closes the notification. Non-secure contexts
- * (`Notification` undefined) and revoked permission are silent no-ops.
+ * session's repeats replace each other. Delivery prefers the service worker
+ * registration (the only path Android Chrome supports; a tap there is
+ * routed back through registerServiceWorker's handler) and falls back to the
+ * page-level Notification, whose click focuses the window, switches to the
+ * session and closes the notification. Non-secure contexts (`Notification`
+ * undefined) and revoked permission are silent no-ops.
  */
 export function notifySession(workspaceId: string, kind: NotifyKind, body: string): void {
 	if (!state.notifyEnabled) return;
@@ -238,15 +242,29 @@ export function notifySession(workspaceId: string, kind: NotifyKind, body: strin
 	if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
 	const entry = state.sessionRoster.find((d) => d.workspaceId === workspaceId);
 	const title = displayTitle(entry?.sessionTitle) ?? entry?.branch ?? entry?.name ?? workspaceId;
+	const options = { body, tag: `omp-session-${workspaceId}` };
+	const viaWorker = showWorkerNotification(workspaceId, title, options);
+	if (viaWorker !== null) {
+		viaWorker.catch(() => showPageNotification(workspaceId, title, options));
+		return;
+	}
+	showPageNotification(workspaceId, title, options);
+}
+
+function showPageNotification(
+	workspaceId: string,
+	title: string,
+	options: NotificationOptions,
+): void {
 	try {
-		const notification = new Notification(title, { body, tag: `omp-session-${workspaceId}` });
+		const notification = new Notification(title, options);
 		notification.onclick = () => {
 			window.focus();
 			void switchToSession(workspaceId);
 			notification.close();
 		};
 	} catch {
-		// Permission revoked between checks: silent no-op.
+		// Permission revoked between checks, or a browser without the constructor (Android Chrome): silent no-op.
 	}
 }
 

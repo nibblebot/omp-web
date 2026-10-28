@@ -49,9 +49,11 @@
 	border-radius: var(--r-2xl);
 	cursor: pointer;
 }
-.integrations-tab-button:hover {
-	color: var(--text);
-	background: var(--hover);
+@media (hover: hover) {
+	.integrations-tab-button:hover {
+		color: var(--text);
+		background: var(--hover);
+	}
 }
 .integrations-tab-button-active {
 	color: var(--text);
@@ -202,9 +204,9 @@
 	gap: var(--space-2);
 }
 
-/* Phones and narrow windows: 44px targets and 16px form text (no iOS zoom),
-   with field labels and buttons no smaller than the rest of the dialog. */
-@media (max-width: 767px) {
+/* Phones, narrow windows and any coarse pointer: 44px targets and 16px form text
+   (no iOS zoom), with field labels and buttons no smaller than the rest of the dialog. */
+@media (pointer: coarse), (max-width: 767px) {
 	.integrations-field {
 		font-size: var(--fs-md);
 	}
@@ -300,8 +302,10 @@
 	border: 1px solid transparent;
 	border-radius: var(--r-xl);
 }
-.extension-row:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.extension-row:hover {
+		background: var(--hover);
+	}
 }
 .extension-row-selected,
 .extension-row-selected:hover {

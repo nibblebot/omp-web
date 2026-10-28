@@ -18,6 +18,9 @@
    keeps flex:1 inside it. */
 .chat-transcript-wrap {
 	position: relative;
+	/* Own stacking context: the jump button's z-index stays inside the column, below
+	   the sidebar drawer, its scrim and the composer popovers. */
+	isolation: isolate;
 	flex: 1;
 	min-height: 0;
 	display: flex;
@@ -247,8 +250,10 @@
 	padding: var(--space-2) var(--space-5);
 	cursor: pointer;
 }
-.chat-transcript-failed-retry:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.chat-transcript-failed-retry:hover {
+		background: var(--hover);
+	}
 }
 /* Floating re-pin affordance: appears when the user scrolls up mid-stream.
    Sits above the stream cards (--z-toolbar owns the in-card toolbars) with a
@@ -257,7 +262,7 @@
 	position: absolute;
 	bottom: var(--space-5);
 	right: var(--space-5);
-	z-index: var(--z-overlay);
+	z-index: calc(var(--z-toolbar) + 1);
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -272,9 +277,23 @@
 	cursor: pointer;
 	box-shadow: var(--shadow-1);
 }
-.jump-to-bottom:hover {
-	background: var(--hover);
-	box-shadow: var(--shadow-2);
+/* Touch: while the transcript is moving the button fades out of the way (and ignores
+   taps meant to stop a fling), so it never hides a card's right-hand column mid-scroll.
+   useStickyScroll sets data-scrolling on the scroller while scroll events arrive. */
+@media (pointer: coarse) {
+	.jump-to-bottom {
+		transition: opacity var(--dur-fast) var(--ease-out);
+	}
+	.chat-transcript[data-scrolling] ~ .jump-to-bottom {
+		opacity: 0;
+		pointer-events: none;
+	}
+}
+@media (hover: hover) {
+	.jump-to-bottom:hover {
+		background: var(--hover);
+		box-shadow: var(--shadow-2);
+	}
 }
 /* Short viewports (phone landscape, open keyboard): the composer never
    shrinks and the transcript keeps a readable minimum; the queue bar
@@ -286,6 +305,20 @@
 	.chat-transcript {
 		padding-top: var(--space-4);
 	}
+}
+/* Landscape phone: the 56px touch header drops to 44px (its 44px buttons still fit). */
+@media (max-height: 499px) and (pointer: coarse) {
+	:root {
+		--main-header-h: 44px;
+	}
+}
+/* On-screen keyboard open (prefs/viewport.ts sets data-keyboard): the status rows give their
+   height to the transcript and the composer; the model and context chips are back once it closes. */
+:root[data-keyboard="open"] {
+	--main-header-h: 44px;
+}
+:root[data-keyboard="open"] .app-main > :is(.session-bar, .activity-bar) {
+	display: none;
 }
 
 .run-row {
@@ -381,6 +414,8 @@
 	padding: var(--space-4) var(--space-5);
 	max-width: 80%;
 	white-space: pre-wrap;
+	/* A pasted URL, path or hash has no break opportunity; the scroller clips x. */
+	overflow-wrap: anywhere;
 	/* Anchors the per-message hover toolbar above the bubble. */
 	position: relative;
 }
@@ -510,6 +545,7 @@
 }
 .msg-notice {
 	text-align: center;
+	overflow-wrap: anywhere;
 	color: var(--muted-2);
 	font-size: var(--fs-md);
 }
@@ -553,9 +589,31 @@ pre {
 	border-radius: var(--r-md);
 	white-space: pre;
 }
+/* Top-right "copy" overlay: floated and sticky so it stays in the visible corner while a
+   long line scrolls sideways (Markdown.tsx prepends it). */
+.code-copy-btn {
+	position: sticky;
+	top: 0;
+	right: var(--space-2);
+	float: right;
+	margin: 0 0 0 var(--space-3);
+	padding: var(--space-1) var(--space-3);
+	background: var(--panel-2);
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-micro);
+}
 .md code {
 	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
+}
+/* Phones fit ~37 monospace columns: wrap code blocks instead of hiding the rest behind a
+   sideways drag (touch scrollbars are overlays, so nothing hints more is there). */
+@media (max-width: 767px) {
+	.md pre {
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
 }
 /* In-stream markdown headings ride the same ramp as the rest of the UI
    (fs-2xl 18 / fs-xl 16 / fs-lg 14 bold), never browser UA defaults, which
@@ -733,9 +791,11 @@ pre {
 	cursor: pointer;
 	transition: color var(--dur-fast) var(--ease-out);
 }
-.chat-transcript-empty-recent-all:hover {
-	color: var(--text);
-	text-decoration: underline;
+@media (hover: hover) {
+	.chat-transcript-empty-recent-all:hover {
+		color: var(--text);
+		text-decoration: underline;
+	}
 }
 .chat-transcript-empty-recent-all:focus-visible {
 	outline: var(--focus-ring);
@@ -786,9 +846,11 @@ pre {
 	font-size: var(--fs-sm);
 	cursor: pointer;
 }
-.msg-user-fold-toggle:hover {
-	color: var(--text);
-	text-decoration: underline;
+@media (hover: hover) {
+	.msg-user-fold-toggle:hover {
+		color: var(--text);
+		text-decoration: underline;
+	}
 }
 .msg-user-images {
 	display: flex;
@@ -800,13 +862,25 @@ pre {
 	max-width: 140px;
 	max-height: 110px;
 }
-@media (max-width: 767px) {
+/* Touch (any coarse pointer, or a narrow window): 44px hit areas. The tool-run
+   summary keeps its visual row height by cancelling the row's vertical padding. */
+@media (pointer: coarse), (max-width: 767px) {
 	.img-thumb,
 	.advisor-open,
 	.advisor-summary,
 	.code-copy-btn {
 		min-width: 44px;
 		min-height: 44px;
+	}
+	.run-row-summary {
+		min-height: 44px;
+		margin-block: calc(var(--space-2) * -1);
+	}
+	.msg-user-fold-toggle {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
+		margin-top: 0;
 	}
 }
 /* Per-message hover/focus toolbar (user: branch + copy; assistant: copy). It sits
@@ -841,10 +915,12 @@ pre {
 	min-height: 24px;
 	cursor: pointer;
 }
-.msg-copy-btn:hover,
-.msg-branch-btn:hover {
-	background: var(--hover);
-	color: var(--text);
+@media (hover: hover) {
+	.msg-copy-btn:hover,
+	.msg-branch-btn:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
 }
 /* Assistant cards keep their copy action in an in-flow footer under the text,
    right-aligned beside the usage summary, so it never covers the message and

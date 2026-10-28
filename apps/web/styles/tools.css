@@ -4,14 +4,16 @@
 	color: var(--warning);
 }
 
-.user-command-card.dimmed {
-	opacity: 0.55;
-}
-/* Shared dimming for subagent transcript blocks (thinking + toolResult
-   panels); same treatment as .user-command-card.dimmed so dimmed content reads
-   consistently across the UI. */
+/* Shared dimming for excluded `!!`/`$$` command cards and subagent transcript blocks
+   (thinking + toolResult panels). Not opacity: that composites any text, muted
+   included, below 4.5:1. The dimmed scope re-points the text tokens at `muted`
+   (contrast-checked on bg and panel), so it reads quieter yet stays readable. */
+.user-command-card.dimmed,
 .dim-block {
-	opacity: 0.6;
+	--text: var(--muted);
+	--muted-2: var(--muted);
+	--muted-3: var(--muted);
+	color: var(--muted);
 }
 /* Command header (ShellCommand: bash tool, user `!`/`$` commands): prompt glyph
    plus command, wrapped to as many rows as it needs, clamped to its first 30
@@ -49,9 +51,11 @@
 	font-size: var(--fs-sm);
 	cursor: pointer;
 }
-.shell-command-toggle:hover {
-	color: var(--text);
-	text-decoration: underline;
+@media (hover: hover) {
+	.shell-command-toggle:hover {
+		color: var(--text);
+		text-decoration: underline;
+	}
 }
 
 .exit-badge {
@@ -211,6 +215,17 @@
 	font-size: var(--fs-sm);
 	padding: var(--space-1) var(--space-5) var(--space-4);
 }
+/* The note is a button (tap to show the hidden rows); strip the global button chrome. */
+button.tool-collapsed-note {
+	display: block;
+	width: 100%;
+	background: none;
+	border: 0;
+	border-radius: 0;
+	font: inherit;
+	font-size: var(--fs-sm);
+	text-align: left;
+}
 pre.terminal {
 	background: var(--bg-deep);
 	white-space: pre;
@@ -220,6 +235,10 @@ pre.terminal {
 	font-size: var(--fs-sm);
 	padding: var(--space-2) 0;
 	overflow-x: auto;
+	/* One column as wide as the longest line (never narrower than the card), so every
+	   add/delete row background spans the full scroll width instead of stopping at the viewport. */
+	display: grid;
+	grid-template-columns: minmax(100%, max-content);
 }
 .diff-line {
 	white-space: pre;
@@ -328,8 +347,10 @@ pre.terminal {
 	font: inherit;
 	cursor: pointer;
 }
-.search-path:hover {
-	text-decoration: underline;
+@media (hover: hover) {
+	.search-path:hover {
+		text-decoration: underline;
+	}
 }
 .search-file {
 	margin-top: var(--space-3);
@@ -356,8 +377,10 @@ pre.terminal {
 button.search-no {
 	cursor: pointer;
 }
-button.search-no:hover {
-	text-decoration: underline;
+@media (hover: hover) {
+	button.search-no:hover {
+		text-decoration: underline;
+	}
 }
 .search-hit[data-match="true"] .search-no {
 	color: var(--accent);
@@ -480,6 +503,14 @@ pre.terminal.tool-code {
 }
 .eval-status-earlier {
 	color: var(--muted-3);
+}
+.eval-status-earlier-btn {
+	padding: 0;
+	background: none;
+	border: 0;
+	color: inherit;
+	font: inherit;
+	text-decoration: underline;
 }
 .eval-status-op {
 	color: var(--accent);
@@ -869,7 +900,7 @@ pre.terminal.wait-job-output {
 }
 
 /* Touch: 44px targets for the subagent controls and the command toggle. */
-@media (pointer: coarse) {
+@media (pointer: coarse), (max-width: 767px) {
 	.subagent-controls button {
 		min-width: 44px;
 		min-height: 44px;
@@ -877,10 +908,55 @@ pre.terminal.wait-job-output {
 	.shell-command-toggle {
 		min-height: 44px;
 	}
+	/* Transcript list controls: whole-row toggles and the line-number copy
+	   buttons, which sit about 21px apart in a dense grep result. */
+	.wait-job-line {
+		padding-right: 44px;
+	}
+	.wait-job-toggle {
+		height: auto;
+		min-height: 44px;
+	}
+	.wait-job-jump {
+		align-items: center;
+		justify-content: center;
+		min-width: 44px;
+		min-height: 44px;
+	}
+	button.search-no {
+		min-width: 44px;
+		min-height: 44px;
+	}
+	button.tool-collapsed-note {
+		display: flex;
+		align-items: center;
+		min-height: 44px;
+	}
+	.eval-status-earlier-btn {
+		min-height: 44px;
+	}
+	summary.card-header {
+		min-height: 44px;
+		align-items: center;
+	}
+	.search-path,
+	.websearch-link {
+		min-height: 44px;
+		display: inline-flex;
+		align-items: center;
+	}
+}
+/* Touch drag inside a nested scroller keeps scrolling it for the whole gesture;
+   an outline makes the scroll area visible so a swipe can start outside it. */
+@media (pointer: coarse) {
+	.search-body,
+	pre.terminal.wait-job-output {
+		box-shadow: inset 0 0 0 1px var(--border);
+	}
 }
 
-/* Narrow (390/360px): tool headers wrap instead of pushing past the page,
-   terminal output scrolls inside its card, and disclosure headers reach 44px. */
+/* Narrow (390/360px): tool headers wrap instead of pushing past the page and
+   terminal output scrolls inside its card. */
 @media (max-width: 767px) {
 	.tool-card .tool-arg,
 	.tool-card .tool-name {
@@ -898,15 +974,16 @@ pre.terminal.wait-job-output {
 		max-width: 100%;
 		overflow-x: auto;
 	}
-	summary.card-header {
-		min-height: 44px;
-		align-items: center;
+	/* ~37 monospace columns fit: wrap code and diff lines rather than hide the rest
+	   behind a sideways drag with no scrollbar cue. */
+	pre.terminal,
+	.diff-line,
+	.write-line {
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
 	}
 	.search-path,
 	.websearch-link {
-		min-height: 44px;
 		max-width: 100%;
-		display: inline-flex;
-		align-items: center;
 	}
 }

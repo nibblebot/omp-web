@@ -10,7 +10,9 @@ import {
 	type Component,
 } from "solid-js";
 import { state } from "../../state";
+import { isImeKey } from "../../prompt/key-input";
 import { recentModels } from "../../store/models";
+import { searchAutofocus } from "../../store/integrations";
 import { formatCtx } from "../../usage/model-options";
 import { filterByKinds, virtualWindow } from "../../usage/model-query";
 import { lockMessage, rankModels, type RankedModel } from "../../usage/model-search";
@@ -120,6 +122,7 @@ export const ModelSearchList: Component<{
 	};
 
 	const onKeyDown = (e: KeyboardEvent): void => {
+		if (isImeKey(e)) return;
 		if (e.key === "Escape" && props.onEscape) {
 			e.preventDefault();
 			e.stopPropagation();
@@ -139,8 +142,9 @@ export const ModelSearchList: Component<{
 		}
 	};
 
+	// Not on a touch screen: the keyboard would cover the list the picker opens on.
 	onMount(() => {
-		inputEl?.focus();
+		if (searchAutofocus()) inputEl?.focus();
 	});
 
 	createEffect(
@@ -158,6 +162,9 @@ export const ModelSearchList: Component<{
 				class="picker-filter"
 				type="search"
 				placeholder={props.placeholder}
+				autocomplete="off"
+				autocapitalize="off"
+				spellcheck={false}
 				aria-label={props.label}
 				onInput={(e) => applyQuery(e.currentTarget.value)}
 			/>

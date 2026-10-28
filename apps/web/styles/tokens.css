@@ -108,8 +108,12 @@
 	   below it so they never cover the header controls. */
 	--main-header-h: 44px;
 	/* Breakpoints (documentation only; CSS custom properties cannot drive
-	   @media): drawer sidebar below 1024px, docked at 1024px and up; compact
-	   chat column below 768px. */
+	   @media). Width: drawer sidebar and full-screen dock below 1024px
+	   (max-width: 1023px), docked at 1024px and up; compact layout below 768px
+	   (max-width: 767px, never 768px). Touch sizing is not a width concern:
+	   every 44px rule keys on (pointer: coarse), (max-width: 767px) so tablets
+	   and landscape phones get it too, and hover-only effects sit in
+	   (hover: hover). The 640px, 600px and 359px queries are component one-offs. */
 	/* Chat column cap (.app-main: transcript and composer). Default is today's
 	   820px at the 18px root; the Appearance sheet's Width preference sets
 	   data-width on the root (store/display.ts), which picks the cap below.
@@ -141,8 +145,9 @@
 	--focus-ring: 2px solid var(--accent);
 	/* Type scale: stepped sizes for a real hierarchy (micro < sm < md < lg <
 	   xl < 2xl) while staying dense enough for the power-user layout. The root
-	   size is user-settable (12-18px), so every step is rem-based. The floor
-	   is 9.6px (fs-micro); nothing functional sits below it. */
+	   size is user-settable (16-24px, as a percentage of the browser default so
+	   browser and OS text scaling apply), so every step is rem-based. The floor
+	   is 11px (fs-micro at the 16px minimum); nothing functional sits below it. */
 	--fs-micro: 0.688rem;
 	--fs-sm: 0.75rem;
 	--fs-md: 0.813rem;

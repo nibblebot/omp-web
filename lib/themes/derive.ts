@@ -81,6 +81,11 @@ function solved(token: string): Rule {
 	};
 }
 
+/** `rule`'s color, moved to the nearest lightness that reads on `bg` and `panel` (secondary text is real text). */
+function readable(rule: Rule): Rule {
+	return (c) => adjustLightness(rule(c), [c.solid("bg"), c.solid("panel")]);
+}
+
 /** Diff text: the status color (darkened on light), kept readable on its row. */
 function diffText(status: ThemeToken, bg: ThemeToken): Rule {
 	return (c) => {
@@ -103,9 +108,10 @@ const RULES: Readonly<Record<ThemeOptionalToken, Rule>> = {
 		c.dark ? withAlpha(c.solid("bg-deep"), 0.65) : withAlpha(c.solid("text"), 0.35),
 	"shadow-color": (c) => (c.dark ? { r: 0, g: 0, b: 0, a: 0.4 } : withAlpha(c.solid("text"), 0.2)),
 	// text
-	"muted-2": (c) =>
+	"muted-2": readable((c) =>
 		c.dark ? mix(c.solid("muted"), c.solid("bg"), 90) : mix(c.solid("muted"), c.solid("text"), 80),
-	"muted-3": blend("muted", "text", 50),
+	),
+	"muted-3": readable(blend("muted", "text", 50)),
 	"shimmer-band": (c) => (c.dark ? c.solid("muted-3") : mix(c.solid("muted-2"), c.solid("bg"), 40)),
 	"error-text": (c) => {
 		const base = c.dark ? mix(c.solid("error"), WHITE, 60) : mix(c.solid("error"), BLACK, 80);

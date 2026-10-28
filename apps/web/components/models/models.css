@@ -57,15 +57,21 @@
 	border-radius: var(--r-md);
 	transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
-.model-dialog-row:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.model-dialog-row:hover {
+		background: var(--hover);
+	}
 }
 .model-dialog-row.selected {
 	background: var(--accent-dim);
 	border-color: var(--accent-border);
 }
+/* Hidden roles: muted text (contrast-checked) instead of an opacity that would dim it below 4.5:1. */
 .model-dialog-row.hidden {
-	opacity: 0.6;
+	--text: var(--muted);
+	--muted-2: var(--muted);
+	color: var(--muted);
+	font-style: italic;
 }
 .model-dialog-row-main {
 	display: flex;
@@ -142,8 +148,10 @@
 	color: var(--muted-2);
 	cursor: pointer;
 }
-.model-dialog-icon-btn:hover:not(:disabled) {
-	color: var(--error);
+@media (hover: hover) {
+	.model-dialog-icon-btn:hover:not(:disabled) {
+		color: var(--error);
+	}
 }
 .model-dialog-icon-btn:disabled {
 	opacity: 0.4;
@@ -151,6 +159,15 @@
 }
 .model-dialog-tip {
 	display: inline-flex;
+}
+/* Lock reasons printed under the actions: tooltips cover a fine pointer, so only touch shows them. */
+.model-dialog-touch-reason {
+	display: none;
+}
+@media (hover: none), (pointer: coarse) {
+	.model-dialog-touch-reason {
+		display: block;
+	}
 }
 
 /* Inline confirm (delete a preset, overwrite a preset): replaces the control, never a stacked modal. */
@@ -377,6 +394,8 @@
 		max-height: none;
 		border-radius: 0;
 		border: none;
+		/* Full-bleed: pad past the cutout and gesture insets (a plain .modal sits inside them). */
+		padding: calc(var(--space-6) + env(safe-area-inset-top)) calc(var(--space-6) + env(safe-area-inset-right)) calc(var(--space-6) + env(safe-area-inset-bottom)) calc(var(--space-6) + env(safe-area-inset-left));
 	}
 	.model-dialog-split {
 		grid-template-columns: minmax(0, 1fr);

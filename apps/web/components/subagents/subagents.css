@@ -41,8 +41,10 @@
 	border-left: 1px solid var(--border);
 }
 
-.subagent-tree-row:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.subagent-tree-row:hover {
+		background: var(--hover);
+	}
 }
 
 .subagent-tree-toggle {
@@ -60,9 +62,11 @@
 	cursor: pointer;
 }
 
-.subagent-tree-toggle:hover {
-	background: var(--hover);
-	color: var(--text);
+@media (hover: hover) {
+	.subagent-tree-toggle:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
 }
 
 /* Two columns: name line, title and live line on the left; status chip, model and
@@ -123,7 +127,7 @@
 .subagent-tree-type {
 	flex: none;
 	font-family: var(--font-mono);
-	font-size: 11px;
+	font-size: var(--fs-micro);
 	color: var(--muted);
 	white-space: nowrap;
 }
@@ -137,7 +141,7 @@
 	grid-area: title;
 	overflow: hidden;
 	color: var(--muted-3);
-	font-size: 12px;
+	font-size: var(--fs-sm);
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
@@ -147,7 +151,7 @@
 	min-width: 0;
 	overflow: hidden;
 	font-family: var(--font-mono);
-	font-size: 11px;
+	font-size: var(--fs-micro);
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
@@ -176,7 +180,7 @@
 	align-items: center;
 	gap: 10px;
 	color: var(--muted);
-	font-size: 12px;
+	font-size: var(--fs-sm);
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
 }
@@ -195,7 +199,7 @@
 	border: 1px solid var(--border-strong);
 	border-radius: 999px;
 	color: var(--muted-3);
-	font-size: 11px;
+	font-size: var(--fs-micro);
 	text-transform: lowercase;
 }
 
@@ -231,7 +235,7 @@
 	flex-wrap: wrap;
 	gap: 12px;
 	color: var(--muted);
-	font-size: 12px;
+	font-size: var(--fs-sm);
 	font-weight: 400;
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
@@ -271,13 +275,13 @@
 .subagent-transcript-status {
 	margin: 0;
 	color: var(--muted);
-	font-size: 12px;
+	font-size: var(--fs-sm);
 }
 
 .subagent-transcript-error {
 	margin: 0;
 	color: var(--error);
-	font-size: 12px;
+	font-size: var(--fs-sm);
 }
 
 /* One agent's transcript, status bar and composer area: fills the agent pane below its header
@@ -368,7 +372,7 @@
 }
 
 /* Narrow or touch: tree rows reach 44px. */
-@media (max-width: 768px), (pointer: coarse) {
+@media (max-width: 767px), (pointer: coarse) {
 	.subagent-tree-toggle {
 		width: 44px;
 		height: 44px;

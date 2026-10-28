@@ -364,35 +364,58 @@ export function loadDraft(key: DraftKey): DraftBody | null {
 	}
 }
 
+/** A debounced save not yet written: its timer and what it will store. */
+interface PendingSave {
+	timer: number;
+	key: DraftKey;
+	body: DraftBody;
+}
+
 /** Pending debounced saves, keyed by the `draftKey(key)` slot string. Owned
  *  here (not in the composer) so the submit path can cancel a save that
  *  closed over pre-send text before it refills the live slot. */
-const pendingTimers = new Map<string, number>();
+const pendingSaves = new Map<string, PendingSave>();
 
 /** Debounced `saveDraft`: cancels any prior pending save for the same slot,
  *  then persists `body` after `delayMs` (default 400ms). Fire-and-forget:
  *  quota failure is recorded once per session by `saveDraft` itself. */
 export function scheduleDraftSave(key: DraftKey, body: DraftBody, delayMs = 400): void {
 	const slot = draftKey(key);
-	const prior = pendingTimers.get(slot);
-	if (prior !== undefined) window.clearTimeout(prior);
-	pendingTimers.set(
-		slot,
-		window.setTimeout(() => {
-			pendingTimers.delete(slot);
-			saveDraft(key, body);
-		}, delayMs),
-	);
+	const prior = pendingSaves.get(slot);
+	if (prior !== undefined) window.clearTimeout(prior.timer);
+	const timer = window.setTimeout(() => {
+		pendingSaves.delete(slot);
+		saveDraft(key, body);
+	}, delayMs);
+	pendingSaves.set(slot, { timer, key, body });
 }
 
 /** Cancel a pending scheduled save for the slot; storage untouched. */
 export function cancelScheduledDraftSave(key: DraftKey): void {
 	const slot = draftKey(key);
-	const pending = pendingTimers.get(slot);
+	const pending = pendingSaves.get(slot);
 	if (pending !== undefined) {
-		window.clearTimeout(pending);
-		pendingTimers.delete(slot);
+		window.clearTimeout(pending.timer);
+		pendingSaves.delete(slot);
 	}
+}
+
+/** Write every pending debounced save now. The page may be killed without another
+ *  event once it is backgrounded (Android discards tabs), so an edit made inside the
+ *  debounce window must not wait for its timer. */
+export function flushPendingDraftSaves(): void {
+	for (const [slot, pending] of [...pendingSaves]) {
+		window.clearTimeout(pending.timer);
+		pendingSaves.delete(slot);
+		saveDraft(pending.key, pending.body);
+	}
+}
+
+if (typeof document !== "undefined") {
+	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "hidden") flushPendingDraftSaves();
+	});
+	window.addEventListener("pagehide", flushPendingDraftSaves);
 }
 
 /** Delete the live slot (sent: nothing is kept). Pair with

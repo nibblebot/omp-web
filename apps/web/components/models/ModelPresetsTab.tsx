@@ -401,6 +401,17 @@ export const ModelPresetsTab: Component<{
 										</div>
 									</Show>
 								</div>
+								{/* Disabled buttons never fire touch events, so the lock reasons that
+								    otherwise live in the Tip tooltips print here on touch. */}
+								<For
+									each={[
+										activateReason(),
+										updateReason(),
+										presetLockReason(preset(), "delete"),
+									].filter((reason) => reason !== undefined)}
+								>
+									{(reason) => <p class="picker-detail model-dialog-touch-reason">{reason}</p>}
+								</For>
 								<Show
 									when={preset().invalid}
 									fallback={

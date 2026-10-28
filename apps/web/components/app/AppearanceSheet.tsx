@@ -1,5 +1,10 @@
 import { createEffect, createSignal, For, on, onCleanup, Show, type Component } from "solid-js";
-import { TOOL_CARD_MODES, TOOL_ROW_CHOICES, TRANSCRIPT_WIDTHS } from "../../prefs/display";
+import {
+	ENTER_KEY_CHOICES,
+	TOOL_CARD_MODES,
+	TOOL_ROW_CHOICES,
+	TRANSCRIPT_WIDTHS,
+} from "../../prefs/display";
 import { APPEARANCE_SDK_SETTINGS } from "../../prefs/settings";
 import { currentFontSize, stepFontSize } from "../../prefs/theme";
 import {
@@ -46,7 +51,7 @@ const SdkRows: Component<{ group: keyof typeof APPEARANCE_SDK_SETTINGS }> = (pro
  * The Appearance sheet: the single home for web display settings, a right side sheet
  * (`state.modal === "appearance"`, ModalHost mounts it) opened by the header's Appearance
  * button, the palette and settings search. Separate from the Settings sheet. Groups, in
- * order: Theme & text, Transcript, Status, Motion, Sidebar; the body scrolls.
+ * order: Theme & text, Transcript, Status, Composer, Motion, Sidebar; the body scrolls.
  *
  * Three kinds of row share the surface:
  * - SDK display settings (`SdkRows`): session settings, written with `updateSetting`.
@@ -155,7 +160,7 @@ export const AppearanceSheet: Component<{ onClose: () => void }> = (props) => {
 					</SettingsRowLayout>
 					<SettingsRowLayout
 						label="Tool Cards"
-						description="Collapsed shows header-only cards, Consolidated one row per run of tool calls, Expanded the full cards. Ctrl+O shows everything for now."
+						description="Collapsed shows header-only cards, Consolidated one row per run of tool calls, Expanded the full cards. Tap a card's hidden-lines button to show all of its output; Ctrl+O on a keyboard shows everything."
 						compact
 						stacked
 					>
@@ -210,6 +215,27 @@ export const AppearanceSheet: Component<{ onClose: () => void }> = (props) => {
 				</SettingsGroup>
 				<SettingsGroup title="Status">
 					<SdkRows group="Status" />
+				</SettingsGroup>
+				<SettingsGroup title="Composer">
+					<SettingsRowLayout
+						label="Enter Key"
+						description="What Enter does in the message box. Auto sends with a mouse and inserts a newline on a touch screen, where the Send button sends. Shift+Enter is always a newline; Ctrl+Enter always sends."
+						compact
+						stacked
+					>
+						<SettingSegmented
+							label="Enter Key"
+							options={ENTER_KEY_CHOICES.map((value) => ({
+								value,
+								label: value === "newline" ? "New line" : value[0]!.toUpperCase() + value.slice(1),
+							}))}
+							value={state.display.enterKey}
+							onChange={(value) => {
+								const choice = ENTER_KEY_CHOICES.find((c) => c === value);
+								if (choice) setDisplayPref("enterKey", choice);
+							}}
+						/>
+					</SettingsRowLayout>
 				</SettingsGroup>
 				<SettingsGroup title="Motion">
 					<SdkRows group="Motion" />

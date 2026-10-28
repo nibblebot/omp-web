@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import { Portal } from "solid-js/web";
 import { createPresence } from "../../motion/presence";
+import { openOverlayLayer } from "../../store/overlay-history";
 import { XIcon } from "./icons";
 import { focusOrigin, pageFocusFallback, resolveFocusReturn } from "./focus";
 
@@ -56,7 +57,8 @@ let modalTitleSeq = 0;
  * Generic overlay: backdrop click, Esc, and a visible close button (the title
  * row's right edge; a viewport-corner button for the lightbox) close it, Tab
  * cycles within the dialog. Every picker (model, thinking, stats, sessions,
- * branch) reuses it.
+ * branch) reuses it. While mounted it is a Back-gesture layer
+ * (store/overlay-history.ts): Back calls `onClose`.
  */
 export const Modal: Component<{
 	title?: string;
@@ -111,9 +113,11 @@ export const Modal: Component<{
 	// on purpose is left alone. Runs once, when the close starts: a sheet's exit
 	// motion is still on screen then, and must not keep the trap or the focus.
 	let released = false;
+	let dismissLayer: (() => void) | undefined;
 	const releaseFocus = () => {
 		if (released) return;
 		released = true;
+		dismissLayer?.();
 		document.removeEventListener("keydown", onKeyDown, true);
 		// Drop the opener either way: a closed dialog must not pin it (or what it links to).
 		const origin = previousFocus;
@@ -127,6 +131,7 @@ export const Modal: Component<{
 		document.addEventListener("keydown", onKeyDown, true);
 		previousFocus = focusOrigin();
 		box.focus();
+		dismissLayer = openOverlayLayer(() => props.onClose());
 	});
 	onCleanup(releaseFocus);
 	if (layer && presence) {

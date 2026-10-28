@@ -3,6 +3,22 @@
 * {
 	box-sizing: border-box;
 }
+/* The page itself never scrolls (.app is a fixed-height shell), so a downward drag that
+ * chains out of any inner scroller, the header or a scrim would trigger Chrome's
+ * pull-to-refresh and reload the app. Contain it at the root. */
+html,
+body {
+	overscroll-behavior-y: none;
+}
+/* Root size as a percentage of the browser default (not px), so browser and OS text
+ * scaling reach every rem. 112.5% is the app's 18px default at a 16px browser default;
+ * prefs/theme.ts overrides it inline with the user's size. text-size-adjust keeps
+ * Chrome's own text autosizing out of our fixed-layout shell. */
+html {
+	font-size: 112.5%;
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+}
 body {
 	margin: 0;
 	background: var(--bg);
@@ -61,8 +77,10 @@ button:disabled {
 button:not(:disabled) {
 	transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
-button:not(:disabled):not(.active):hover {
-	background-color: var(--hover);
+@media (hover: hover) {
+	button:not(:disabled):not(.active):hover {
+		background-color: var(--hover);
+	}
 }
 :focus-visible {
 	outline: var(--focus-ring);
@@ -167,8 +185,33 @@ summary.card-header {
 .completion-ring[data-band="4"] .completion-ring-fill {
 	stroke: var(--success);
 }
-@media (max-width: 767px) {
+@media (pointer: coarse), (max-width: 767px) {
 	details > summary {
 		min-height: 44px;
+	}
+}
+
+/* Touch input policy. Pressed feedback replaces the hover tint (hover rules are
+   gated on (hover: hover) so a tap cannot leave them stuck), the browser's grey
+   tap flash is off, and chrome (buttons, rows, summaries) is not text-selectable
+   so a long-press does not start a selection. */
+button:not(:disabled):not(.active):active,
+[role="button"]:not([aria-disabled="true"]):active,
+summary:active {
+	background-color: var(--hover);
+}
+button,
+[role="button"],
+summary,
+a,
+label {
+	-webkit-tap-highlight-color: transparent;
+}
+@media (pointer: coarse) {
+	button,
+	[role="button"],
+	summary {
+		-webkit-user-select: none;
+		user-select: none;
 	}
 }

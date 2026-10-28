@@ -14,7 +14,7 @@ export default defineStory({
 		{
 			name: "Live session",
 			description:
-				"Session title on the left, then the Appearance button and the settings gear, always rightmost; the sidebar is open.",
+				"Session title on the left, then the command palette (search) button, the Appearance button and the settings gear, always rightmost; the sidebar is open. Below 480px the three buttons fold into one More actions menu.",
 			seed: { connected: true, view: "chat", sidebarVisible: true },
 			render: () => <MainHeader title={<SessionTitle />} session />,
 		},

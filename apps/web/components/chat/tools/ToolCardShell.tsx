@@ -47,6 +47,35 @@ export const toolRowCap = (): number => toolRowLimit(state.display.toolRows);
 export const toolExpanded = (item: ToolItem): boolean =>
 	state.toolsExpanded || effectiveStatus(item) === "running";
 
+/**
+ * Per-card row expansion. The "N hidden lines" button lifts the row cap for one card, the
+ * touch route to what Ctrl+O (`toolsExpanded`, every card at once) shows. Ctrl+O resets the
+ * per-card choice, as it does for card headers.
+ */
+export function createRowExpansion(item: () => ToolItem) {
+	const [userExpanded, setUserExpanded] = createSignal(false);
+	createEffect(
+		on(
+			() => state.toolsExpanded,
+			() => setUserExpanded(false),
+			{ defer: true },
+		),
+	);
+	return {
+		/** Every row shows: Ctrl+O, a running call or this card's own choice. */
+		expanded: () => toolExpanded(item()) || userExpanded(),
+		/** This card's own choice is on, so its note offers to fold the rows again. */
+		userExpanded,
+		toggle: () => setUserExpanded((v) => !v),
+		/** The note button's label, or undefined when no note shows (nothing hidden, or Ctrl+O/running opened it). */
+		noteLabel: (hidden: number): string | undefined => {
+			if (hidden <= 0) return undefined;
+			if (userExpanded()) return "Show fewer lines";
+			return toolExpanded(item()) ? undefined : `Show ${hidden} hidden lines`;
+		},
+	};
+}
+
 /** The tool call a card renders; `ToolCardShell` stamps it on the card root as `data-tool-call-id` so a jump from elsewhere in the transcript finds the card (`chat/tool-jump.ts`). */
 export const ToolCallIdContext = createContext<string>();
 
@@ -194,13 +223,13 @@ interface CollapsiblePreProps {
 	startNo?: number;
 }
 
-/** Terminal output body with the shared "N hidden lines (Ctrl+O to expand)" tail. */
+/** Terminal output body with the shared "Show N hidden lines" button under it. */
 export const CollapsibleOutput: Component<CollapsiblePreProps> = (props) => {
 	const limit = () => props.maxLines ?? toolRowCap();
-	const expanded = () => toolExpanded(props.item);
+	const rows = createRowExpansion(() => props.item);
 	const lines = createMemo(() => props.output.split("\n"));
 	const capped = () => capRows(lines(), limit(), props.tail ? "tail" : "head");
-	const shown = () => (expanded() ? lines() : capped().shown);
+	const shown = () => (rows.expanded() ? lines() : capped().shown);
 	const hidden = () => capped().hidden;
 	return (
 		<Show when={props.output}>
@@ -214,8 +243,18 @@ export const CollapsibleOutput: Component<CollapsiblePreProps> = (props) => {
 					)}
 				</For>
 			</Show>
-			<Show when={!expanded() && hidden() > 0}>
-				<div class="tool-collapsed-note">{hidden()} hidden lines (Ctrl+O to expand)</div>
+			<Show when={rows.noteLabel(hidden())}>
+				{(label) => (
+					<button
+						type="button"
+						class="tool-collapsed-note"
+						title="Ctrl+O expands every tool output"
+						aria-expanded={rows.userExpanded()}
+						onClick={rows.toggle}
+					>
+						{label()}
+					</button>
+				)}
 			</Show>
 		</Show>
 	);

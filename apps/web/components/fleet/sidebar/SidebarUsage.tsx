@@ -19,6 +19,7 @@ import {
 	RefreshIcon,
 	type IconProps,
 } from "../../ui/icons";
+import { showTouchHint } from "../../../store/touch-hint";
 
 /**
  * Clock tick for the refresh countdown ring and the remaining-time labels. The labels move by the minute and
@@ -50,6 +51,10 @@ const UsageBar: Component<{ limit: UsageLimit; now: number }> = (props) => {
 				class="sidebar-usage-bar"
 				data-status={props.limit.status}
 				title={usageLimitTitle(props.limit)}
+				onClick={(e) => {
+					e.stopPropagation();
+					showTouchHint(usageLimitTitle(props.limit));
+				}}
 			>
 				<div class="sidebar-usage-bar-fill" style={{ width: `${pct()}%` }} />
 				<Show when={elapsed() !== undefined}>
@@ -71,7 +76,8 @@ const UsageBar: Component<{ limit: UsageLimit; now: number }> = (props) => {
  * setting is on. Each provider account (one UsageReport) is a provider logo,
  * one size for every account (a three-bar stack tall), beside its stack of
  * limit bars, each bar followed by the time left in its window. Limit labels,
- * percentages, and reset timestamps are hover text only;
+ * percentages, and reset timestamps are hover text, shown as a toast on a tap
+ * (bar: that limit; logo or account: the account);
  * warning and exhausted limits tint their bar. Shares the modal's GET
  * /ctl/usage fetch through the usage store slice. While mounted it refreshes
  * USAGE_AUTO_REFRESH_MS after the last fetch settled (any caller's), on a
@@ -147,7 +153,11 @@ export const SidebarUsage: Component = () => {
 					>
 						<For each={state.usageReports}>
 							{(report: UsageReport) => (
-								<div class="sidebar-usage-account" title={usageAccountTitle(report)}>
+								<div
+									class="sidebar-usage-account"
+									title={usageAccountTitle(report)}
+									onClick={() => showTouchHint(usageAccountTitle(report))}
+								>
 									{/* Brand logo, one size for every account; unknown providers get their initial. */}
 									<Show
 										when={usageBrand(report.provider)}

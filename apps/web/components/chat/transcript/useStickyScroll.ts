@@ -10,6 +10,43 @@ const INNER_SCROLLBAR_PX = 14;
 // bottom hit; small enough that a mid-stream scroll-up escapes cleanly.
 const RE_PIN_DISTANCE_PX = 80;
 
+// Quiet time after the last scroll event that counts as "momentum finished"
+// on browsers without `scrollend` (Chrome before 114).
+const MOMENTUM_SETTLE_MS = 120;
+
+// The scroller carries data-scrolling until this long after its last scroll event
+// (chat.css fades the jump button while it is set).
+const SCROLL_IDLE_MS = 200;
+
+export type TouchScrollDirection = "up" | "down";
+
+/**
+ * Direction of a touch drag/fling, judged from scrollTop deltas across touch
+ * events. The browser applies a touchmove's scroll on the NEXT frame, so the
+ * first move event of a drag still reads the unchanged scrollTop; an unchanged
+ * reading carries no direction and must neither unpin nor re-pin (treating it
+ * as "down" re-pinned an unpinned viewport that was within the band, which the
+ * next event unpinned again, flickering the jump button). `end` reports the
+ * direction the finger left the content moving: a downward one hands the
+ * remaining momentum to a settle check that re-pins if it lands in the band.
+ */
+export class TouchScrollTracker {
+	private lastTop = 0;
+	private direction: TouchScrollDirection | null = null;
+	start(top: number): void {
+		this.lastTop = top;
+		this.direction = null;
+	}
+	move(top: number): TouchScrollDirection | null {
+		if (top < this.lastTop) this.direction = "up";
+		else if (top > this.lastTop) this.direction = "down";
+		this.lastTop = top;
+		return this.direction;
+	}
+	end(): TouchScrollDirection | null {
+		return this.direction;
+	}
+}
 /**
  * Imperative pin/unpin/gesture machinery for the message stream. Hands back
  * the container + content refs, the jump-to-bottom visibility signal, and the
@@ -19,7 +56,9 @@ const RE_PIN_DISTANCE_PX = 80;
  * scroll events never touch it. Up-gestures (wheel-up, scrollbar grab, upward
  * touch drag, up-keys) unpin, `release` unpins for a programmatic jump the
  * stream itself makes (jump to a tool card); down-gestures that land inside
- * the re-pin band, plus the jump button and session switches, re-pin. A scroll
+ * the re-pin band (a touch fling is judged where its momentum settles:
+ * `scrollend`, or a quiet period without it), plus the jump button and session
+ * switches, re-pin. A scroll
  * event cannot tell the reader leaving from the browser moving scrollTop under
  * a pinned stream (a clamp when content above it shrinks, scroll
  * anchoring while cards resolve their size, content growing before the
@@ -60,6 +99,8 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	let content!: HTMLDivElement;
 	let pinned = true;
 	let rePinRaf = 0;
+	// A downward touch lift whose momentum glide has not settled yet.
+	let momentumDown = false;
 	const [jumpVisible, setJumpVisible] = createSignal(false);
 	// Mirror pin state into the store: agent_end (apps/web/store/chat.ts) reads
 	// chatPinned to decide whether the finished answer was viewed (unviewed →
@@ -81,6 +122,7 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	// until the wheel-up lands, so it would re-pin and snap back: the "can't
 	// unstick" race at rAF granularity).
 	const escapeBottom = () => {
+		momentumDown = false;
 		if (rePinRaf !== 0) {
 			cancelAnimationFrame(rePinRaf);
 			rePinRaf = 0;
@@ -105,6 +147,18 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	};
 	const snapToBottom = () => {
 		container.scrollTop = container.scrollHeight;
+	};
+	let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined;
+	const markScrolling = () => {
+		if (container.dataset.scrolling === undefined) container.dataset.scrolling = "";
+		clearTimeout(scrollIdleTimer);
+		scrollIdleTimer = setTimeout(() => delete container.dataset.scrolling, SCROLL_IDLE_MS);
+	};
+	// Scroll events never touch pin state (see the module comment): they mark the
+	// scroller as scrolling and, without `scrollend`, time a touch fling's settle.
+	const onScroll = () => {
+		markScrolling();
+		if (momentumDown && !hasScrollEnd) armSettleTimer();
 	};
 	// Wheel-down is a continuous gesture: re-check the band on the frame
 	// AFTER the browser applies each tick, so a single tick that jumps from
@@ -308,15 +362,44 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 				break;
 		}
 	};
-	let lastTouchTop = 0;
+	// Touch: a drag is judged per move event; a fling's momentum glide emits no
+	// touch events, so a downward lift waits for the glide to settle and re-pins
+	// if it ended in the band (a fling to the bottom otherwise leaves the stream
+	// unpinned with the jump button up).
+	const touch = new TouchScrollTracker();
+	const hasScrollEnd = "onscrollend" in globalThis;
+	let settleTimer: ReturnType<typeof setTimeout> | undefined;
+	const clearSettle = () => {
+		clearTimeout(settleTimer);
+		settleTimer = undefined;
+		momentumDown = false;
+	};
+	const settleMomentum = () => {
+		if (!momentumDown) return;
+		clearSettle();
+		rePinIfNear();
+	};
+	// Without `scrollend`, "settled" is a quiet period after the last scroll event.
+	const armSettleTimer = () => {
+		clearTimeout(settleTimer);
+		settleTimer = setTimeout(settleMomentum, MOMENTUM_SETTLE_MS);
+	};
 	const onTouchStart = () => {
-		lastTouchTop = container.scrollTop;
+		clearSettle();
+		touch.start(container.scrollTop);
 	};
 	const onTouchMove = () => {
-		if (container.scrollTop < lastTouchTop)
+		const dir = touch.move(container.scrollTop);
+		if (dir === "up")
 			unpin(); // finger dragged down: content moves up
-		else rePinIfNear(); // finger dragged up: re-pin once inside the band
-		lastTouchTop = container.scrollTop;
+		else if (dir === "down") rePinIfNear(); // finger dragged up: re-pin once inside the band
+	};
+	const onTouchEnd = () => {
+		if (touch.end() !== "down") return;
+		rePinIfNear(); // lifted inside the band: no momentum needed
+		if (pinned) return;
+		momentumDown = true;
+		if (!hasScrollEnd) armSettleTimer();
 	};
 	onMount(() => {
 		// The single re-snap mechanism (see the module comment): content
@@ -338,6 +421,10 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 		container.addEventListener("keydown", onScrollKeyDown);
 		container.addEventListener("touchstart", onTouchStart, { passive: true });
 		container.addEventListener("touchmove", onTouchMove, { passive: true });
+		container.addEventListener("touchend", onTouchEnd, { passive: true });
+		container.addEventListener("touchcancel", onTouchEnd, { passive: true });
+		container.addEventListener("scroll", onScroll, { passive: true });
+		container.addEventListener("scrollend", settleMomentum, { passive: true });
 		document.addEventListener("mouseup", onMouseUp);
 		onCleanup(() => {
 			ro.disconnect();
@@ -349,6 +436,12 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 			container.removeEventListener("keydown", onScrollKeyDown);
 			container.removeEventListener("touchstart", onTouchStart);
 			container.removeEventListener("touchmove", onTouchMove);
+			container.removeEventListener("touchend", onTouchEnd);
+			container.removeEventListener("touchcancel", onTouchEnd);
+			container.removeEventListener("scroll", onScroll);
+			container.removeEventListener("scrollend", settleMomentum);
+			clearSettle();
+			clearTimeout(scrollIdleTimer);
 			document.removeEventListener("mouseup", onMouseUp);
 		});
 	});

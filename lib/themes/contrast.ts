@@ -28,6 +28,21 @@ export const SYNTAX_TOKENS = [
 	"syn-meta",
 ] as const satisfies readonly ThemeToken[];
 
+/**
+ * Tokens the UI sets as running text on the page and panel surfaces: body and secondary
+ * text, plus the accent and status colors (links, badges, notices, usage numbers).
+ */
+export const TEXT_TOKENS = [
+	"text",
+	"muted",
+	"muted-2",
+	"muted-3",
+	"accent",
+	"success",
+	"warning",
+	"error",
+] as const satisfies readonly ThemeToken[];
+
 const SCAN_STEPS = 200;
 
 function worstContrast(color: Rgb, backgrounds: readonly Rgb[]): number {
@@ -139,7 +154,7 @@ export function contrastWarnings(
 			});
 		}
 	};
-	for (const fg of ["text", "muted"] as const) {
+	for (const fg of TEXT_TOKENS) {
 		check(fg, "bg", s.bg);
 		check(fg, "panel", s.panel);
 	}

@@ -120,8 +120,10 @@
 	cursor: pointer;
 	white-space: nowrap;
 }
-.settings-section:hover {
-	color: var(--text);
+@media (hover: hover) {
+	.settings-section:hover {
+		color: var(--text);
+	}
 }
 .settings-section.active {
 	background: var(--btn);
@@ -347,6 +349,18 @@
 .settings-item-note {
 	color: var(--muted);
 }
+/* Compact-row description and disabled reason: tooltips on a fine pointer, printed text on touch. */
+.settings-item-touch-note {
+	display: none;
+}
+@media (hover: none), (pointer: coarse) {
+	.settings-item-touch-note {
+		display: block;
+	}
+}
+.settings-item-disabled-reason {
+	color: var(--settings-warning);
+}
 .settings-item-warning-icon {
 	display: block;
 	width: 14px;
@@ -388,9 +402,11 @@
 	cursor: pointer;
 	transition: color var(--dur-fast) var(--ease-out);
 }
-.settings-reset:hover:not(:disabled) {
-	color: var(--text);
-	background: var(--hover);
+@media (hover: hover) {
+	.settings-reset:hover:not(:disabled) {
+		color: var(--text);
+		background: var(--hover);
+	}
 }
 .settings-reset:disabled {
 	opacity: 0.5;
@@ -414,8 +430,10 @@
 	--toggle-track: var(--settings-accent);
 }
 /* base.css paints every hovered button with --hover; a switch keeps its track color. */
-button.settings-toggle:not(:disabled):hover {
-	background-color: var(--toggle-track);
+@media (hover: hover) {
+	button.settings-toggle:not(:disabled):hover {
+		background-color: var(--toggle-track);
+	}
 }
 .settings-toggle-knob {
 	position: absolute;
@@ -510,8 +528,10 @@ button.settings-toggle:not(:disabled):hover {
 	color: var(--text);
 	cursor: pointer;
 }
-.settings-stepper-btn:hover:not(:disabled) {
-	color: var(--text);
+@media (hover: hover) {
+	.settings-stepper-btn:hover:not(:disabled) {
+		color: var(--text);
+	}
 }
 .settings-stepper-btn:disabled {
 	opacity: 0.4;
@@ -651,6 +671,38 @@ button.settings-toggle:not(:disabled):hover {
 	width: 14px;
 	height: 14px;
 }
+.settings-ordered-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+/* Up/Down buttons: the touch alternative to the drag grip and Alt+Arrow keys. */
+.settings-ordered-move {
+	display: none;
+}
+.settings-ordered-move button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 44px;
+	min-height: 44px;
+	padding: 0;
+	background: none;
+	border: none;
+	color: var(--muted);
+}
+@media (pointer: coarse), (max-width: 767px) {
+	.settings-ordered-move {
+		display: inline-flex;
+	}
+	.settings-ordered-row {
+		grid-template-columns: 24px 16px minmax(0, 1fr) auto;
+	}
+	.settings-ordered-grip {
+		align-self: stretch;
+		min-height: 44px;
+	}
+}
 .settings-ordered-rank {
 	color: var(--muted);
 	font-family: var(--font-mono);
@@ -761,8 +813,10 @@ button.settings-toggle:not(:disabled):hover {
 	cursor: pointer;
 	white-space: nowrap;
 }
-.settings-control-btn:hover {
-	color: var(--text);
+@media (hover: hover) {
+	.settings-control-btn:hover {
+		color: var(--text);
+	}
 }
 
 .settings-row {
@@ -819,6 +873,20 @@ button.settings-toggle:not(:disabled):hover {
 @media (pointer: coarse) {
 	.settings-search {
 		font-size: max(1rem, 16px);
+	}
+}
+/* Touch and phones: the compact Settings/Appearance controls reach 44px in both
+   axes (the dialog rule in modals.css only raises heights). */
+@media (pointer: coarse), (max-width: 767px) {
+	.settings-select select {
+		min-height: 44px;
+	}
+	.settings-stepper-btn,
+	.settings-reset,
+	.settings-control-btn,
+	.theme-link-btn {
+		min-width: 44px;
+		min-height: 44px;
 	}
 }
 
@@ -944,8 +1012,10 @@ button.settings-toggle:not(:disabled):hover {
 	text-align: left;
 	cursor: pointer;
 }
-.theme-picker-trigger:hover:not(:disabled) {
-	background: var(--hover);
+@media (hover: hover) {
+	.theme-picker-trigger:hover:not(:disabled) {
+		background: var(--hover);
+	}
 }
 .theme-picker-trigger[aria-expanded="true"] {
 	border-color: var(--accent-border);
@@ -1036,8 +1106,10 @@ button.settings-toggle:not(:disabled):hover {
 	border-radius: var(--r-md);
 	cursor: pointer;
 }
-.theme-option:hover {
-	background: var(--hover);
+@media (hover: hover) {
+	.theme-option:hover {
+		background: var(--hover);
+	}
 }
 .theme-option.selected {
 	border-color: var(--accent);
@@ -1135,8 +1207,10 @@ button.settings-toggle:not(:disabled):hover {
 	color: var(--muted);
 	cursor: pointer;
 }
-.theme-link-btn:hover {
-	color: var(--text);
+@media (hover: hover) {
+	.theme-link-btn:hover {
+		color: var(--text);
+	}
 }
 .theme-link-btn[aria-pressed="true"] {
 	background: var(--settings-fill);

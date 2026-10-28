@@ -1,5 +1,7 @@
 import { createMemo, For, Match, Show, Switch, type Component } from "solid-js";
 import type { ToolItem } from "../../../state";
+import { pushToast } from "../../../store/toasts";
+import { copyText } from "../../../text/clipboard";
 import { highlightLines, languageForPath } from "../../../text/highlight";
 import { HighlightedLine } from "./HighlightedLine";
 import { parseGrepOutput, type SearchRow } from "./search-view";
@@ -8,7 +10,11 @@ import { ToolCardShell } from "./ToolCardShell";
 type HitRow = Extract<SearchRow, { kind: "line" }>;
 type ShownRow = SearchRow & { html?: string | null };
 
-const copy = (text: string) => void navigator.clipboard.writeText(text).catch(() => {});
+/** Copy a path (or path:line) and confirm it: the result lines show no copy affordance, so a tap needs visible feedback. */
+const copy = (text: string) =>
+	void copyText(text).then((ok) =>
+		pushToast(ok ? `Copied ${text}` : "Could not copy to the clipboard", { durationMs: 2_000 }),
+	);
 
 /**
  * Highlight each run of adjacent hit lines of one file together (so a block

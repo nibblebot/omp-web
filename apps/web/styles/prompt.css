@@ -52,8 +52,10 @@
 	font-size: var(--fs-2xl);
 	cursor: pointer;
 }
-.prompt-attach:hover {
-	color: var(--text);
+@media (hover: hover) {
+	.prompt-attach:hover {
+		color: var(--text);
+	}
 }
 .prompt-mirror {
 	position: absolute;
@@ -91,6 +93,8 @@
 	gap: var(--space-3);
 	padding: var(--space-4) 0 0;
 	border-top: 1px solid var(--border);
+	max-height: 25dvh;
+	overflow-y: auto;
 }
 .queue-chip {
 	display: inline-flex;
@@ -140,8 +144,10 @@
 	min-height: 24px;
 	font-size: var(--fs-md);
 }
-.queue-pop:hover {
-	color: var(--error);
+@media (hover: hover) {
+	.queue-pop:hover {
+		color: var(--error);
+	}
 }
 .queue-clear {
 	background: none;
@@ -155,8 +161,10 @@
 	min-width: 24px;
 	min-height: 24px;
 }
-.queue-clear:hover {
-	color: var(--error);
+@media (hover: hover) {
+	.queue-clear:hover {
+		color: var(--error);
+	}
 }
 .queue-action,
 .queue-resume {
@@ -168,12 +176,14 @@
 	padding: 0 var(--space-2);
 	min-height: 24px;
 }
-.queue-action:hover,
-.queue-resume:hover {
-	text-decoration: underline;
+@media (hover: hover) {
+	.queue-action:hover,
+	.queue-resume:hover {
+		text-decoration: underline;
+	}
 }
 .queue-chip.paused {
-	opacity: 0.75;
+	color: var(--muted);
 }
 /* Chips flow inline in the bar; the summary toggle only shows on short
    viewports (below), where the chips fold behind it until tapped. */
@@ -184,6 +194,11 @@
 	display: none;
 }
 @media (max-height: 599px) {
+	/* The ask bar, the textarea and the bars around them share a short viewport: the
+	   composer text box keeps room for a few rows, not 40% of the screen. */
+	.prompt-box textarea {
+		max-height: 25dvh;
+	}
 	.queue-summary {
 		display: inline-flex;
 		align-items: center;
@@ -295,8 +310,10 @@
 	color: inherit;
 	cursor: pointer;
 }
-.attachment-chip-remove:hover {
-	background: var(--btn);
+@media (hover: hover) {
+	.attachment-chip-remove:hover {
+		background: var(--btn);
+	}
 }
 .attachment-chip-remove:focus-visible {
 	outline: var(--focus-ring);
@@ -358,9 +375,11 @@ button.send {
 	border-color: var(--accent);
 	color: var(--bg);
 }
-button.send:not(:disabled):hover {
-	background: color-mix(in srgb, var(--accent), var(--bg) 12%);
-	border-color: color-mix(in srgb, var(--accent), var(--bg) 12%);
+@media (hover: hover) {
+	button.send:not(:disabled):hover {
+		background: color-mix(in srgb, var(--accent), var(--bg) 12%);
+		border-color: color-mix(in srgb, var(--accent), var(--bg) 12%);
+	}
 }
 button.stop {
 	padding: 0;
@@ -369,8 +388,10 @@ button.stop {
 	border-color: var(--error-border);
 	color: var(--error);
 }
-button.stop:not(:disabled):hover {
-	background: color-mix(in srgb, var(--stop-bg), var(--error) 15%);
+@media (hover: hover) {
+	button.stop:not(:disabled):hover {
+		background: color-mix(in srgb, var(--stop-bg), var(--error) 15%);
+	}
 }
 
 /* --- Autocomplete, modal dialogs, bang-shell cards --- */
@@ -383,8 +404,11 @@ button.stop:not(:disabled):hover {
 	bottom: calc(100% + 4px);
 	left: 0;
 	right: 0;
-	max-height: min(300px, 45dvh);
+	/* The row cap (AutocompletePopup measures --ac-rows-h) never exceeds 45% of the visible
+	   viewport: on a phone with the keyboard open ten 44px rows would run off the top. */
+	max-height: min(var(--ac-rows-h, 300px), calc(var(--app-h, 100dvh) * 0.45));
 	overflow-y: auto;
+	overscroll-behavior: contain;
 	background: var(--panel-2);
 	border: 1px solid var(--border-strong);
 	border-radius: var(--r-lg);
@@ -458,6 +482,7 @@ button.stop:not(:disabled):hover {
 	flex-direction: column-reverse;
 	max-height: min(320px, 40dvh);
 	overflow-y: auto;
+	overscroll-behavior: contain;
 	padding: var(--space-2) 0;
 }
 .history-popover-row {
@@ -557,8 +582,8 @@ button.stop:not(:disabled):hover {
 	}
 }
 
-/* Narrow (390/360px): composer textarea and buttons reach 44px whatever the pointer. */
-@media (max-width: 767px) {
+/* Narrow window or any coarse pointer: composer textarea and buttons reach 44px. */
+@media (pointer: coarse), (max-width: 767px) {
 	.prompt-box textarea {
 		min-height: 44px;
 	}
@@ -566,5 +591,57 @@ button.stop:not(:disabled):hover {
 	.prompt-actions button {
 		min-width: 44px;
 		min-height: 44px;
+	}
+}
+
+/* Touch-only composer controls (history, camera, queue as follow-up, accept suggestion): the
+   keyboard has these on Up, Ctrl+Enter and Tab; a finger needs a button. */
+.prompt-box .prompt-touch-only {
+	display: none;
+}
+@media (pointer: coarse) {
+	.prompt-box .prompt-touch-only {
+		display: inline-flex;
+	}
+}
+/* The ghost suggestion chip floats above the field's top-right corner so it never shifts the layout. */
+.prompt-ghost-accept {
+	position: absolute;
+	right: 0;
+	bottom: calc(100% + var(--space-2));
+	align-items: center;
+	gap: var(--space-2);
+	max-width: 100%;
+	min-height: 44px;
+	padding: 0 var(--space-4);
+	background: var(--panel-2);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-pill);
+	color: var(--muted);
+	font-size: var(--fs-sm);
+	z-index: var(--z-autocomplete);
+}
+.prompt-ghost-accept-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+button.queue-followup {
+	padding: 0;
+	font-size: var(--fs-2xl);
+}
+
+/* Phone width: attach, camera and history drop to a row under the textarea, beside Stop, Queue
+   and Send, so the field keeps the full row (about 150px of text beside four 44px buttons). */
+@media (max-width: 480px) {
+	.prompt-editor-row {
+		flex-wrap: wrap;
+	}
+	.prompt-editor-row > .prompt-field {
+		flex: 1 0 100%;
+	}
+	.prompt-editor-row > .prompt-actions {
+		margin-left: auto;
 	}
 }

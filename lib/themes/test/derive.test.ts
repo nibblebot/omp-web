@@ -3,6 +3,7 @@ import { composite, contrastRatio, hslHue, parseColor } from "../color";
 import type { Rgb } from "../color";
 import { contrastWarnings, SYNTAX_TOKENS, TOOL_TOKENS } from "../contrast";
 import { parseThemeFile } from "../parse";
+import { THEME_CORE_TOKENS } from "../types";
 import type { ThemeContrastWarning, ThemeScheme, ThemeToken, ThemeVariant } from "../types";
 import { DARK_CORE, LIGHT_CORE, MURKY_DARK_CORE, MURKY_LIGHT_CORE } from "./fixtures.testkit";
 
@@ -66,8 +67,28 @@ describe("derived tool and syntax colors", () => {
 				}
 			});
 
-			test("produce no contrast warnings", () => {
-				expect(warnings(variant)).toEqual([]);
+			test("derive no contrast warning (only explicit core colors can be flagged)", () => {
+				const derived = warnings(variant).filter(
+					(w) => w.kind !== "contrast" || !THEME_CORE_TOKENS.some((token) => token === w.fg),
+				);
+				expect(derived).toEqual([]);
+			});
+
+			test("derived secondary text reads on the page and the panel", () => {
+				const [bg, panel] = [color(variant, "bg"), solvedBackgrounds(variant)[0]!];
+				for (const token of ["muted-2", "muted-3"] as const) {
+					expect(contrastRatio(color(variant, token), bg), token).toBeGreaterThanOrEqual(4.5);
+					expect(contrastRatio(color(variant, token), panel), token).toBeGreaterThanOrEqual(4.5);
+				}
+			});
+
+			test("an unreadable explicit core text color is reported", () => {
+				const dim = resolve(scheme, core, { muted: core.bg });
+				expect(
+					warnings(dim).some((w) => w.kind === "contrast" && w.fg === "muted" && w.bg === "bg"),
+				).toBe(true);
+				// muted-2 / muted-3 still derive to something readable from the failing muted.
+				expect(contrastRatio(color(dim, "muted-2"), color(dim, "bg"))).toBeGreaterThanOrEqual(4.5);
 			});
 		});
 	}

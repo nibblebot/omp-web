@@ -65,11 +65,13 @@
 	padding: var(--space-2) var(--space-4);
 	font-size: var(--fs-micro);
 }
-.share-btn:hover,
-.share-copy-btn:hover {
-	background: var(--btn);
-	color: var(--text);
-	border-color: var(--accent-border);
+@media (hover: hover) {
+	.share-btn:hover,
+	.share-copy-btn:hover {
+		background: var(--btn);
+		color: var(--text);
+		border-color: var(--accent-border);
+	}
 }
 .share-stop {
 	align-self: flex-start;
@@ -117,7 +119,7 @@
 	background: #fff;
 	color: #000;
 	font-family: var(--font-mono);
-	font-size: 10px;
+	font-size: var(--fs-micro);
 	line-height: 1;
 }
 .share-roster {

@@ -1,9 +1,11 @@
 import type { Component, JSX } from "solid-js";
+import { showTouchHint } from "../../../store/touch-hint";
 
 // Declarative segment button (session config bar, main header): unifies the repeated
 // `segment segment-button` + active/hover/title boilerplate. `class` adds
 // variant classes (e.g. "badge goal-badge", "session-name"). `readOnly` renders
-// a plain `segment` span for display-only values (no tab stop, no hover state).
+// a plain `segment` span for display-only values (no tab stop, no hover state);
+// a tap on one shows its `title` as a toast on touch, where tooltips do not exist.
 export const StatusSegment: Component<{
 	class?: string;
 	title?: string;
@@ -25,6 +27,7 @@ export const StatusSegment: Component<{
 			data-level={props.dataLevel}
 			title={props.title}
 			aria-label={props.ariaLabel}
+			onClick={() => showTouchHint(props.title)}
 		>
 			{props.children}
 		</span>

@@ -14,6 +14,8 @@ import {
 	searchStoredSessions,
 	STORED_SESSIONS_MIN_QUERY,
 } from "../../store/palette";
+import { isImeKey } from "../../prompt/key-input";
+import { searchAutofocus } from "../../store/integrations";
 import { ensureSettingsModel } from "../../store/settings";
 import { createDebouncer } from "../../store/search-debounce";
 import { reportError } from "../../store/toasts";
@@ -54,6 +56,7 @@ export const CommandPalettePicker: Component<{ onClose: () => void }> = (props) 
 
 	const run = (item: PaletteItem) => runPaletteItem(item);
 	const onKeyDown = (e: KeyboardEvent) => {
+		if (isImeKey(e)) return;
 		const count = items().length;
 		if (e.key === "ArrowDown") {
 			e.preventDefault();
@@ -75,6 +78,9 @@ export const CommandPalettePicker: Component<{ onClose: () => void }> = (props) 
 				class="picker-filter"
 				type="search"
 				placeholder="Search commands, sessions, settings, models"
+				autocomplete="off"
+				autocapitalize="off"
+				spellcheck={false}
 				aria-label="Search the command palette"
 				value={query()}
 				onInput={(e) => {
@@ -84,7 +90,7 @@ export const CommandPalettePicker: Component<{ onClose: () => void }> = (props) 
 					setActive(0);
 				}}
 				onKeyDown={onKeyDown}
-				autofocus
+				autofocus={searchAutofocus()}
 			/>
 			<div class="picker-list" role="listbox" aria-label="Palette results">
 				<For each={sections()}>

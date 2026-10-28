@@ -30,15 +30,16 @@ export const AutocompletePopup: Component<{
 		if (sel !== pointerPick) listEl?.children[sel]?.scrollIntoView({ block: "nearest" });
 		pointerPick = -1;
 	});
-	// Row height is measured from the first row so the cap follows the font and
-	// padding; the CSS max-height stays the fallback while no rows are mounted.
+	// Row height is measured from the first row so the row cap follows the font and
+	// padding. It is only a custom property: `.autocomplete` (prompt.css) clamps it to the
+	// viewport, so ten 44px touch rows never push the best matches above the screen.
 	createEffect(() => {
 		void props.items;
 		void props.maxVisible;
 		const row = listEl?.children[0] as HTMLElement | undefined;
 		if (!listEl || !row) return;
 		// +2: the 1px top and bottom borders.
-		listEl.style.maxHeight = `${row.offsetHeight * props.maxVisible + 2}px`;
+		listEl.style.setProperty("--ac-rows-h", `${row.offsetHeight * props.maxVisible + 2}px`);
 	});
 	return (
 		<div class="autocomplete" role="listbox" id={props.listId} ref={listEl}>

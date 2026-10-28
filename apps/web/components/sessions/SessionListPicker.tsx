@@ -15,6 +15,8 @@ import {
 	sessionExpandText,
 	type SessionRow,
 } from "../../store/session-list";
+import { isImeKey } from "../../prompt/key-input";
+import { searchAutofocus } from "../../store/integrations";
 import { SessionPickerRow } from "./SessionPickerRow";
 
 /**
@@ -71,8 +73,9 @@ export const SessionListPicker: Component<SessionListPickerProps> = (props) => {
 	let searchEl!: HTMLInputElement;
 	let rowsEl!: HTMLDivElement;
 
+	// Not on a touch screen: the keyboard would cover the list the picker opens on.
 	onMount(() => {
-		if (props.autoFocus) searchEl.focus();
+		if (props.autoFocus && searchAutofocus()) searchEl.focus();
 	});
 
 	const resumeOnly = () => props.actions === "resume";
@@ -146,6 +149,7 @@ export const SessionListPicker: Component<SessionListPickerProps> = (props) => {
 	};
 
 	const onKeyDown = (event: KeyboardEvent) => {
+		if (isImeKey(event)) return;
 		if (pending()) {
 			// The root carries data-inline-escape while a rename or delete is open, so the
 			// Modal leaves Esc to us: cancel the strip first, close on the next Esc.

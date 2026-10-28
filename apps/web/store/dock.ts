@@ -23,6 +23,7 @@ import {
 } from "../prefs/dock-layout";
 import { setState, state } from "../state";
 import { closeItemDetail } from "./activities";
+import { unwindDockEntries } from "./overlay-history";
 import type { DockRoute } from "./route";
 import type { ActivitiesSlice } from "./slices/activities";
 
@@ -86,10 +87,23 @@ export function closeDock(): void {
 	persistDockState();
 }
 
+/**
+ * The user closes the dock from its UI (close button, Back from the panel).
+ * Unlike `closeDock` (programmatic and route-driven closes) this also unwinds
+ * the history entries the open dock pushed, so the browser's Back does not
+ * reopen it. The unwinding starts before the state change: the route sync then
+ * waits for it and finds the URL already dock-less.
+ */
+export function dismissDock(): void {
+	if (state.dock === null) return;
+	unwindDockEntries();
+	closeDock();
+}
+
 /** Back or Esc on the open dock: the Activities detail steps back to its list; anything else closes. */
 export function backFromDock(): void {
 	if (state.dock?.kind === "activities" && state.activities.detail !== undefined) closeItemDetail();
-	else closeDock();
+	else dismissDock();
 }
 
 /** Open the generic dock panel the URL names; item routes belong to the panel's own store (store/activities.ts). */
@@ -103,11 +117,16 @@ export function applyRouteDock(route: DockRoute): void {
  * attached workspace changes (the `attached` frame, inside the same batch that
  * writes `currentWorkspaceId`), so the route sync never sees the previous
  * workspace's dock under the new id. Never writes the record: it is the source.
+ *
+ * Where the dock covers the whole viewport (the sidebar-drawer breakpoint) the
+ * saved open panel is not reopened, like drawers always start closed: a reload
+ * or PWA restore must land on the chat, not on a full-screen Activities list.
+ * Its Activities layout (mode, folds, filters) is still restored.
  */
 export function restoreDockLayout(workspaceId: string): void {
 	const saved: DockLayout = readDockLayout(workspaceId);
 	batch(() => {
-		showDock(saved.dock);
+		showDock(state.drawerViewport ? null : saved.dock);
 		setState("activities", sliceOf(saved.activities));
 	});
 }
@@ -118,9 +137,9 @@ export function pruneDockLayoutsToRoster(): void {
 	pruneDockLayouts(new Set(state.sessionRoster.map((d) => d.workspaceId)));
 }
 
-/** Set and persist the dock width (clamped to the allowed range). */
+/** Set and persist the dock width (clamped to the allowed range and the viewport). */
 export function setDockWidth(px: number): void {
-	const width = clampDockWidth(px);
+	const width = clampDockWidth(px, globalThis.innerWidth);
 	setState("dockWidth", width);
 	persistDockWidth(width);
 }

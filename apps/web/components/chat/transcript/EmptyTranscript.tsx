@@ -13,6 +13,7 @@ import { requestWorkspaceSessions, resumeSession, state } from "../../../state";
 import { openResumePicker } from "../../../store/resume";
 import { sessionRowFromListEntry } from "../../../store/session-list";
 import { reportError } from "../../../store/toasts";
+import { coarsePointer, enterSends } from "../../../prompt/enter-key";
 import { SessionPickerRow } from "../../sessions/SessionPickerRow";
 import { PackageIcon, WorktreeIcon } from "../../ui/icons";
 
@@ -102,12 +103,35 @@ export const EmptyTranscript: Component = () => {
 					<span>
 						<kbd>@</kbd> files
 					</span>
-					<span>
-						<kbd>Enter</kbd> send
-					</span>
-					<span>
-						<kbd>Shift</kbd>+<kbd>Enter</kbd> new line
-					</span>
+					<Show
+						when={enterSends()}
+						fallback={
+							<>
+								<span>
+									<kbd>Enter</kbd> new line
+								</span>
+								<span>
+									<Show
+										when={coarsePointer()}
+										fallback={
+											<>
+												<kbd>Ctrl</kbd>+<kbd>Enter</kbd> send
+											</>
+										}
+									>
+										Send button sends
+									</Show>
+								</span>
+							</>
+						}
+					>
+						<span>
+							<kbd>Enter</kbd> send
+						</span>
+						<span>
+							<kbd>Shift</kbd>+<kbd>Enter</kbd> new line
+						</span>
+					</Show>
 				</p>
 				<Show when={recent().length > 0}>
 					<section class="chat-transcript-empty-recent" aria-labelledby="chat-empty-recent-title">

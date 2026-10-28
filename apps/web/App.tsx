@@ -28,11 +28,14 @@ import {
 	toggleToolsExpanded,
 } from "./state";
 import { openModelDialog } from "./store/models";
+import { openCommandPalette } from "./store/palette";
 import { trackViewportHeight } from "./prefs/viewport";
 import { featureView } from "./features/registry";
 import { featurePreferences } from "./features/preferences";
 import { displayTitle } from "./components/ui/title-icons";
 import { onHashChange, restoreInitialRoute, syncRouteToAttached } from "./store/deep-link";
+import { installLifecycle } from "./store/lifecycle";
+import { installOverlayHistory } from "./store/overlay-history";
 import { transcriptExiting } from "./components/chat/transcript/useTranscriptTransition";
 import { installWindowFileDrop } from "./prompt/file-drop";
 applyDisplayAttributes();
@@ -130,6 +133,10 @@ export const App: Component<{ booted?: boolean }> = (props) => {
 		// Back/Forward and pasted hash links reattach the session the hash names.
 		window.addEventListener("hashchange", onHashChange);
 		onCleanup(() => window.removeEventListener("hashchange", onHashChange));
+		// Android Back closes the topmost popover, dialog or drawer before it navigates (popstate runs before hashchange).
+		onCleanup(installOverlayHistory());
+		// Resume (foreground, bfcache, network back) redials the socket at once; offline holds the dials.
+		onCleanup(installLifecycle());
 		onCleanup(trackViewportHeight());
 		onCleanup(installWindowFileDrop());
 		// Ctrl+O toggles all tool cards open/closed, even while the composer has focus.
@@ -142,7 +149,7 @@ export const App: Component<{ booted?: boolean }> = (props) => {
 		window.addEventListener("keydown", (e) => {
 			if (e.key.toLowerCase() !== "k" || !e.ctrlKey || e.shiftKey || e.altKey) return;
 			e.preventDefault();
-			setState("modal", "palette");
+			openCommandPalette();
 		});
 		// Ctrl+, opens Settings; Alt+A opens the Activities panel from anywhere, composer included.
 		// Option+A on mac types "å", so the exact "a" key match already excludes it.

@@ -641,10 +641,10 @@ describe("renderMarkdown", () => {
 		expect(removedBySanitizer()).toEqual(["attribute:href"]);
 	});
 
-	test("benign markdown (emphasis, code, links) survives intact", () => {
-		const src = "*a* and `code <x>` and [link](https://example.com)";
+	test("benign markdown (emphasis, code) survives intact, and links open in a new tab", () => {
+		const src = "*a* and `code <x>` and [link](https://example.com) and [top](#top)";
 		expect(renderMarkdown(src)).toBe(
-			'<p><em>a</em> and <code>code &lt;x&gt;</code> and <a href="https://example.com">link</a></p>\n',
+			'<p><em>a</em> and <code>code &lt;x&gt;</code> and <a href="https://example.com" target="_blank" rel="noopener noreferrer">link</a> and <a href="#top">top</a></p>\n',
 		);
 		expect(removedBySanitizer()).toEqual([]);
 	});
@@ -797,7 +797,9 @@ describe("renderMarkdown cache", () => {
 			...filler,
 			"[d]: https://example.com\n",
 		]);
-		expect(whole).toContain('<a href="https://example.com">the docs</a>');
+		expect(whole).toContain(
+			'<a href="https://example.com" target="_blank" rel="noopener noreferrer">the docs</a>',
+		);
 		expect(cached).toBe(whole);
 	});
 

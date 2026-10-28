@@ -23,6 +23,8 @@ import {
 import { approvalChoices, splitApprovalPrompt } from "../../prompt/approval";
 import type { AskOption, AskQuestion, UiRequest } from "../../prompt/ask-types";
 import type { UiApprovalParams } from "#lib/wire/protocol";
+import { isImeKey } from "../../prompt/key-input";
+import { mayAutoFocusComposer } from "../../store/chat";
 import { PickerRow } from "../ui/PickerRow";
 
 /**
@@ -52,11 +54,13 @@ const AskRequest: Component<{ req: UiRequest }> = (props) => {
 	// Trusted boundary: ui_request params follow the SDK dialog shape for the method.
 	const params = props.req.params as AskParams;
 	// The main composer regains focus when the dialog settles, however it settled (never an agent pane's steer box).
-	onCleanup(() =>
+	// Not on a touch screen: a programmatic focus there raises the soft keyboard the user did not ask for.
+	onCleanup(() => {
+		if (!mayAutoFocusComposer()) return;
 		document
 			.querySelector<HTMLTextAreaElement>(".prompt-box:not(.subagent-composer) textarea")
-			?.focus(),
-	);
+			?.focus();
+	});
 	return (
 		<Switch fallback={null}>
 			<Match when={props.req.method === "askDialog"}>
@@ -103,6 +107,7 @@ interface Keys {
  */
 function rowKeys(k: Keys) {
 	return (e: KeyboardEvent) => {
+		if (isImeKey(e)) return;
 		if (e.key === "Escape") {
 			e.preventDefault();
 			k.cancel();
@@ -359,10 +364,12 @@ const AskQuestions: Component<{ id: string; questions: AskQuestion[] }> = (props
 								class="picker-filter ask-custom"
 								aria-label="Custom answer"
 								placeholder="Type your own answer"
+								autocomplete="off"
+								enterkeyhint="done"
 								value={answers()[qi].custom}
 								onInput={(e) => setAnswer(qi, (a) => ({ ...a, custom: e.currentTarget.value }))}
 								onKeyDown={(e) => {
-									if (e.key !== "Enter") return;
+									if (e.key !== "Enter" || isImeKey(e)) return;
 									e.preventDefault();
 									advance();
 								}}
@@ -597,7 +604,7 @@ const AskText: Component<{
 	let field!: HTMLInputElement | HTMLTextAreaElement;
 	onMount(() => field.focus());
 	const onFieldKey = (e: KeyboardEvent) => {
-		if (e.key !== "Enter") return;
+		if (e.key !== "Enter" || isImeKey(e)) return;
 		if (props.multiline && !(e.ctrlKey || e.metaKey)) return;
 		e.preventDefault();
 		sendUiResponse(props.id, value());
@@ -608,7 +615,7 @@ const AskText: Component<{
 			role="dialog"
 			aria-label={props.title}
 			onKeyDown={(e) => {
-				if (e.key === "Escape") cancelUiRequest(props.id);
+				if (e.key === "Escape" && !isImeKey(e)) cancelUiRequest(props.id);
 			}}
 		>
 			<AskHeader id={props.id} title={props.title} />
@@ -620,6 +627,8 @@ const AskText: Component<{
 						class="picker-filter"
 						aria-label={props.title}
 						placeholder={props.placeholder}
+						autocomplete="off"
+						enterkeyhint="send"
 						value={value()}
 						onInput={(e) => setValue(e.currentTarget.value)}
 						onKeyDown={onFieldKey}

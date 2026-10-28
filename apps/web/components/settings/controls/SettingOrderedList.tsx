@@ -6,7 +6,7 @@ import {
 	toggleSelected,
 } from "../../../prefs/setting-controls";
 import type { SettingsOption } from "#lib/wire/protocol";
-import { GripVerticalIcon } from "../../ui/icons";
+import { ArrowDownIcon, ArrowUpIcon, GripVerticalIcon } from "../../ui/icons";
 import { SettingToggle } from "./SettingToggle";
 
 /** A pointer drag in progress: the dragged value, its rank, and the drop slot (an index into the enabled order). */
@@ -57,19 +57,38 @@ export const SettingOrderedList: Component<{
 		if (next !== props.selected) props.onChange(next);
 	};
 
+	/** Swap an enabled entry with its neighbour; false when it is already at that end. */
+	const applyMove = (value: string, direction: -1 | 1): boolean => {
+		const next = moveSelected(props.selected, value, direction);
+		if (next === props.selected) return false;
+		props.onChange(next);
+		return true;
+	};
+
 	/** Alt+↑/↓ moves the focused enabled row; focus follows it to its new rank once the list re-renders. */
 	const onRowKey = (e: KeyboardEvent, value: string, rank: number) => {
 		if (!e.altKey || props.disabled) return;
 		const direction = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
 		if (direction === 0) return;
 		e.preventDefault();
-		const next = moveSelected(props.selected, value, direction);
-		if (next === props.selected) return;
-		props.onChange(next);
+		if (!applyMove(value, direction)) return;
 		const target = rank + direction;
 		requestAnimationFrame(() =>
 			list?.querySelector<HTMLElement>(`li[data-rank="${target}"]`)?.focus(),
 		);
+	};
+
+	/** The Up/Down buttons (visible on touch): move one rank, then keep focus on a move button of the row's new slot. */
+	const onMoveClick = (value: string, rank: number, direction: -1 | 1) => {
+		if (!applyMove(value, direction)) return;
+		const target = rank + direction;
+		requestAnimationFrame(() => {
+			const buttons = list?.querySelectorAll<HTMLButtonElement>(
+				`li[data-rank="${target}"] button[data-move]:not(:disabled)`,
+			);
+			const same = Array.from(buttons ?? []).find((b) => b.dataset.move === String(direction));
+			(same ?? buttons?.[0])?.focus();
+		});
 	};
 
 	return (
@@ -112,7 +131,7 @@ export const SettingOrderedList: Component<{
 									onPointerDown={(e) => rank !== undefined && onGripDown(e, value, rank)}
 									onPointerMove={onGripMove}
 									onPointerUp={onGripUp}
-									onPointerCancel={onGripUp}
+									onPointerCancel={() => setDrag(null)}
 								>
 									<GripVerticalIcon />
 								</span>
@@ -124,12 +143,36 @@ export const SettingOrderedList: Component<{
 									<span class="settings-ordered-desc">{row.option.description}</span>
 								</Show>
 							</span>
-							<SettingToggle
-								label={row.option.label}
-								checked={enabled}
-								disabled={props.disabled}
-								onChange={() => props.onChange(toggleSelected(props.selected, value))}
-							/>
+							<span class="settings-ordered-actions">
+								<Show when={enabled && !props.disabled}>
+									<span class="settings-ordered-move">
+										<button
+											type="button"
+											data-move="-1"
+											aria-label={`Move ${row.option.label} up`}
+											disabled={rank === 0}
+											onClick={() => rank !== undefined && onMoveClick(value, rank, -1)}
+										>
+											<ArrowUpIcon />
+										</button>
+										<button
+											type="button"
+											data-move="1"
+											aria-label={`Move ${row.option.label} down`}
+											disabled={rank === props.selected.length - 1}
+											onClick={() => rank !== undefined && onMoveClick(value, rank, 1)}
+										>
+											<ArrowDownIcon />
+										</button>
+									</span>
+								</Show>
+								<SettingToggle
+									label={row.option.label}
+									checked={enabled}
+									disabled={props.disabled}
+									onChange={() => props.onChange(toggleSelected(props.selected, value))}
+								/>
+							</span>
 						</li>
 					);
 				}}
