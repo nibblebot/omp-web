@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { editPreview, highlightDiffRows } from "../../text/edit-diff";
+import {
+	capDiffSections,
+	cheapEditStats,
+	editPreview,
+	highlightDiffRows,
+} from "../../text/edit-diff";
 
 describe("editPreview", () => {
 	test("reads SDK replace args (old_string/new_string)", () => {
@@ -113,6 +118,76 @@ function fakeHighlight(code: string): string[] {
 		return `<${tag}>${line}</${tag}>`;
 	});
 }
+
+describe("cheapEditStats", () => {
+	const details = {
+		diff: "+1|a\n-2|b\n 3|c\n+4|d",
+		perFileResults: [
+			{ path: "a.ts", diff: "+1|a\n-2|b" },
+			{ path: "b.ts", diff: " 3|c\n+4|d" },
+		],
+	};
+
+	test("a write counts its lines the way the diff rows do", () => {
+		for (const content of [
+			"",
+			"x",
+			"x\n",
+			"a\nb",
+			"a\nb\n",
+			"\n",
+			"a\n\nb\n\n",
+			"one\ntwo\nthree",
+		]) {
+			const args = { path: "n.txt", content };
+			const full = editPreview("write", args);
+			const cheap = cheapEditStats("write", args);
+			expect(cheap).toEqual({
+				path: full?.path ?? null,
+				files: full?.files ?? 0,
+				added: full?.added ?? 0,
+				removed: full?.removed ?? 0,
+			});
+		}
+	});
+
+	test("a compact diff result counts the way the parsed rows do", () => {
+		const full = editPreview("apply_patch", { input: "" }, details);
+		expect(cheapEditStats("apply_patch", { input: "" }, details)).toEqual({
+			path: full?.path ?? null,
+			files: full?.files ?? 0,
+			added: full?.added ?? 0,
+			removed: full?.removed ?? 0,
+		});
+	});
+
+	test("declines replacements and calls with nothing to count", () => {
+		expect(
+			cheapEditStats("edit", { path: "a.ts", old_string: "x", new_string: "y" }),
+		).toBeUndefined();
+		expect(cheapEditStats("write", { path: "x" })).toBeUndefined();
+		expect(cheapEditStats("hashline", { input: "@@" })).toBeUndefined();
+	});
+});
+
+describe("capDiffSections", () => {
+	const row = (text: string) => ({ type: "add" as const, text });
+	const files = [
+		{ path: "a.ts", rows: [row("a1"), row("a2"), row("a3")] },
+		{ path: "b.ts", rows: [row("b1"), row("b2")] },
+	];
+
+	test("keeps whole sections within the cap and cuts the one it lands in", () => {
+		expect(capDiffSections(files, 99)).toEqual(files);
+		expect(capDiffSections(files, 4)).toEqual([files[0], { path: "b.ts", rows: [row("b1")] }]);
+		expect(capDiffSections(files, 2)).toEqual([{ path: "a.ts", rows: [row("a1"), row("a2")] }]);
+		expect(capDiffSections(files, 0)).toEqual([]);
+	});
+
+	test("an uncapped section keeps its identity", () => {
+		expect(capDiffSections(files, 3)[0]).toBe(files[0]);
+	});
+});
 
 describe("highlightDiffRows", () => {
 	test("del rows take the old side, add rows the new side, context the new side", () => {

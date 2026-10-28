@@ -1,4 +1,5 @@
-import { For, Show, type Component } from "solid-js";
+import { createMemo, For, Show, type Component } from "solid-js";
+import { createLazyOpen } from "./lazy-open";
 
 /** Entries of one object or array shown before the rest fold into a count. */
 const MAX_ENTRIES = 100;
@@ -14,17 +15,25 @@ interface JsonNodeProps {
 	openDepth: number;
 }
 
-function entriesOf(value: object): [string, unknown][] {
-	return Array.isArray(value)
-		? value.map((item, i) => [String(i), item])
-		: Object.entries(value as Record<string, unknown>);
+function sizeOf(value: object): number {
+	return Array.isArray(value) ? value.length : Object.keys(value).length;
 }
 
-function sizeLabel(value: object): string {
-	const size = Array.isArray(value) ? value.length : Object.keys(value).length;
-	return Array.isArray(value)
+function sizeLabel(size: number, isArray: boolean): string {
+	return isArray
 		? `[${size} item${size === 1 ? "" : "s"}]`
 		: `{${size} key${size === 1 ? "" : "s"}}`;
+}
+
+/** The first `limit` entries of an object or array, without copying the rest. */
+function firstEntries(value: object, limit: number): [string, unknown][] {
+	if (Array.isArray(value)) return value.slice(0, limit).map((item, i) => [String(i), item]);
+	const out: [string, unknown][] = [];
+	for (const key of Object.keys(value)) {
+		if (out.length >= limit) break;
+		out.push([key, (value as Record<string, unknown>)[key]]);
+	}
+	return out;
 }
 
 /** Class, display text and (for a clipped string) full text of a scalar value. */
@@ -57,30 +66,43 @@ const JsonNode: Component<JsonNodeProps> = (props) => {
 	return (
 		<Show when={container()} fallback={<Scalar value={props.value} />}>
 			{(object) => (
-				<Show
-					when={props.depth < MAX_DEPTH && entriesOf(object()).length > 0}
-					fallback={<span class="json-size">{sizeLabel(object())}</span>}
-				>
-					<details class="json-node" open={props.depth < props.openDepth}>
-						<summary class="json-summary">
-							<span class="json-size">{sizeLabel(object())}</span>
-						</summary>
-						<ul class="json-entries">
-							<For each={entriesOf(object()).slice(0, MAX_ENTRIES)}>
-								{([key, child]) => (
-									<li class="json-entry">
-										<span class="json-key">{key}</span>
-										<JsonNode value={child} depth={props.depth + 1} openDepth={props.openDepth} />
-									</li>
-								)}
-							</For>
-							<Show when={entriesOf(object()).length > MAX_ENTRIES}>
-								<li class="json-more">{entriesOf(object()).length - MAX_ENTRIES} more</li>
-							</Show>
-						</ul>
-					</details>
-				</Show>
+				<JsonContainer value={object()} depth={props.depth} openDepth={props.openDepth} />
 			)}
+		</Show>
+	);
+};
+
+/** An object or array row: the entries mount when the row first opens, so a closed subtree costs one <details>. */
+const JsonContainer: Component<{ value: object; depth: number; openDepth: number }> = (props) => {
+	const size = createMemo(() => sizeOf(props.value));
+	const label = () => sizeLabel(size(), Array.isArray(props.value));
+	const startsOpen = props.depth < props.openDepth;
+	const { opened, onToggle } = createLazyOpen(startsOpen);
+	return (
+		<Show
+			when={props.depth < MAX_DEPTH && size() > 0}
+			fallback={<span class="json-size">{label()}</span>}
+		>
+			<details class="json-node" open={startsOpen} onToggle={onToggle}>
+				<summary class="json-summary">
+					<span class="json-size">{label()}</span>
+				</summary>
+				<Show when={opened()}>
+					<ul class="json-entries">
+						<For each={firstEntries(props.value, MAX_ENTRIES)}>
+							{([key, child]) => (
+								<li class="json-entry">
+									<span class="json-key">{key}</span>
+									<JsonNode value={child} depth={props.depth + 1} openDepth={props.openDepth} />
+								</li>
+							)}
+						</For>
+						<Show when={size() > MAX_ENTRIES}>
+							<li class="json-more">{size() - MAX_ENTRIES} more</li>
+						</Show>
+					</ul>
+				</Show>
+			</details>
 		</Show>
 	);
 };

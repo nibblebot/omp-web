@@ -1,6 +1,8 @@
 import { createMemo, For, Match, Show, Switch, type Component } from "solid-js";
 import type { DiffRow } from "../../../text/diff";
 import {
+	capDiffSections,
+	cheapEditStats,
 	editPreview,
 	highlightDiffRows,
 	type DiffFile,
@@ -8,7 +10,7 @@ import {
 } from "../../../text/edit-diff";
 import { highlightLines, languageForPath } from "../../../text/highlight";
 import type { ToolItem } from "../../../state";
-import { CollapsibleOutput, ToolCardShell } from "./ToolCardShell";
+import { CollapsibleOutput, toolExpanded, toolRowCap, ToolCardShell } from "./ToolCardShell";
 import { HighlightedLine } from "./HighlightedLine";
 
 /** One diff line, or a collapsed-run marker. `html` is its highlighted code, null for plain text. */
@@ -43,13 +45,26 @@ const DiffFileRows: Component<{ file: DiffFile }> = (props) => {
 	);
 };
 
-const DiffBody: Component<{ preview: EditPreview }> = (props) => (
-	<Show when={props.preview.rows.length > 0} fallback={<div class="diff-pending">no changes</div>}>
-		<div class="diff-view">
-			<For each={props.preview.sections}>{(file) => <DiffFileRows file={file} />}</For>
-		</div>
-	</Show>
-);
+/** The diff, capped like every other tool body: `toolRowCap()` rows (across files) until Ctrl+O. */
+const DiffBody: Component<{ item: ToolItem; preview: EditPreview }> = (props) => {
+	const limit = () => (toolExpanded(props.item) ? Number.POSITIVE_INFINITY : toolRowCap());
+	const sections = createMemo(() => capDiffSections(props.preview.sections, limit()));
+	const hidden = () =>
+		props.preview.rows.length - sections().reduce((n, file) => n + file.rows.length, 0);
+	return (
+		<Show
+			when={props.preview.rows.length > 0}
+			fallback={<div class="diff-pending">no changes</div>}
+		>
+			<div class="diff-view">
+				<For each={sections()}>{(file) => <DiffFileRows file={file} />}</For>
+			</div>
+			<Show when={hidden() > 0}>
+				<div class="tool-collapsed-note">{hidden()} hidden lines (Ctrl+O to expand)</div>
+			</Show>
+		</Show>
+	);
+};
 
 /**
  * edit, write, apply_patch, patch, hashline: a `+n −m path` summary that
@@ -57,11 +72,16 @@ const DiffBody: Component<{ preview: EditPreview }> = (props) => (
  * neutral placeholder (streaming) or the tool's text output (settled, errors).
  */
 export const DiffToolCard: Component<{ item: ToolItem }> = (props) => {
+	// The full preview (the line diff and its rows) is read by the body, which a
+	// closed card never mounts, so the header gets its numbers without it when it can.
 	const preview = createMemo(() =>
 		editPreview(props.item.name, props.item.args, props.item.details),
 	);
+	const stats = createMemo(
+		() => cheapEditStats(props.item.name, props.item.args, props.item.details) ?? preview(),
+	);
 	const target = () => {
-		const p = preview();
+		const p = stats();
 		return p && p.files > 1 ? `${p.files} files` : p?.path;
 	};
 	return (
@@ -72,7 +92,7 @@ export const DiffToolCard: Component<{ item: ToolItem }> = (props) => {
 			class="diff-tool"
 			collapsible
 			meta={
-				<Show when={preview()}>
+				<Show when={stats()}>
 					{(p) => (
 						<span class="diff-stats">
 							<span class="diff-add">+{p().added}</span>{" "}
@@ -86,7 +106,7 @@ export const DiffToolCard: Component<{ item: ToolItem }> = (props) => {
 				<Match when={props.item.status === "error"}>
 					<CollapsibleOutput item={props.item} output={props.item.output} />
 				</Match>
-				<Match when={preview()}>{(p) => <DiffBody preview={p()} />}</Match>
+				<Match when={preview()}>{(p) => <DiffBody item={props.item} preview={p()} />}</Match>
 				<Match when={props.item.status === "running"}>
 					<div class="diff-pending">preparing…</div>
 				</Match>

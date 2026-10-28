@@ -44,5 +44,21 @@ export default defineStory({
 				</div>
 			),
 		},
+		{
+			name: "Large frame, first rows with a show-more row",
+			description:
+				"The first 100 rows draw; the last row reveals 500 more per click, so a huge frame stays a small DOM.",
+			render: () => (
+				<div class="ds-frame">
+					<EvalTable
+						columns={[
+							{ head: "id", numeric: true },
+							{ head: "label", numeric: false },
+						]}
+						rows={Array.from({ length: 1500 }, (_, i) => [String(i), `row ${i}`])}
+					/>
+				</div>
+			),
+		},
 	],
 });

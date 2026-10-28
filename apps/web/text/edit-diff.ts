@@ -83,6 +83,64 @@ function preview(
 	};
 }
 
+/** The first `limit` rows across `sections`, in order; sections the cap cuts keep a new, shorter `rows`. */
+export function capDiffSections(sections: readonly DiffFile[], limit: number): DiffFile[] {
+	let left = limit;
+	const out: DiffFile[] = [];
+	for (const file of sections) {
+		if (left <= 0) break;
+		const rows = file.rows.length <= left ? file.rows : file.rows.slice(0, left);
+		left -= rows.length;
+		out.push(rows === file.rows ? file : { path: file.path, rows });
+	}
+	return out;
+}
+
+/** The header numbers of a change: what {@link EditPreview} carries without its rows. */
+export type EditStats = Pick<EditPreview, "path" | "files" | "added" | "removed">;
+
+/** Count of lines (text ending without a newline still counts) in `text`. */
+function lineCount(text: string): number {
+	if (text === "") return 0;
+	let n = 1;
+	for (let i = text.indexOf("\n"); i !== -1 && i < text.length - 1; i = text.indexOf("\n", i + 1))
+		n++;
+	return n;
+}
+
+/**
+ * The stats {@link editPreview} would report, for the calls whose rows are not
+ * needed to know them: a `write` (every line is added) and a result that carries
+ * the compact diff. Undefined for replacements, which need the line diff, and
+ * for anything not renderable yet; the caller then asks {@link editPreview}.
+ */
+export function cheapEditStats(
+	name: string,
+	args: unknown,
+	details?: unknown,
+): EditStats | undefined {
+	const r = asRecord(args);
+	const d = asRecord(details);
+	const argPath = typeof r?.path === "string" ? r.path : undefined;
+	const detailPath = typeof d?.path === "string" ? d.path : undefined;
+	const path = argPath ?? detailPath ?? null;
+	if (name === "write") {
+		if (!r || typeof r.content !== "string") return undefined;
+		return { path, files: 1, added: lineCount(r.content), removed: 0 };
+	}
+	if (r && argPath !== undefined && replacePairs(r).length > 0) return undefined;
+	if (typeof d?.diff !== "string") return undefined;
+	let added = 0;
+	let removed = 0;
+	for (const line of d.diff.split("\n")) {
+		const m = COMPACT_LINE.exec(line);
+		if (m?.[1] === "+") added++;
+		else if (m?.[1] === "-") removed++;
+	}
+	const files = Array.isArray(d.perFileResults) ? d.perFileResults.length : 1;
+	return { path, files: Math.max(files, 1), added, removed };
+}
+
 /**
  * Per-file sections from `details.perFileResults` (each `{ path, diff }`), only
  * when they cover exactly the combined `rows`; otherwise undefined (one section).

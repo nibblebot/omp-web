@@ -17,6 +17,7 @@ import {
 	formatUsageRow,
 } from "../../../../usage/usage";
 import { CopyButton } from "../../../ui/CopyButton";
+import { createLazyOpen } from "../../../ui/lazy-open";
 import { Markdown } from "../../../ui/Markdown";
 
 /** Thinking text as displayed, or null when nothing displayable remains. */
@@ -49,12 +50,22 @@ export const AssistantCard: Component<{
 					{(block) =>
 						block.kind === "thinking" ? (
 							<Show when={thinkingView(block.text)} keyed>
-								{(formatted) => (
-									<details class="thinking-block" open={expandThinkingBlocks()}>
-										<summary>thinking</summary>
-										<Markdown src={formatted} />
-									</details>
-								)}
+								{(formatted) => {
+									// A collapsed thinking block renders its text on first open.
+									const { opened, onToggle } = createLazyOpen(expandThinkingBlocks());
+									return (
+										<details
+											class="thinking-block"
+											open={expandThinkingBlocks()}
+											onToggle={onToggle}
+										>
+											<summary>thinking</summary>
+											<Show when={opened()}>
+												<Markdown src={formatted} />
+											</Show>
+										</details>
+									);
+								}}
 							</Show>
 						) : (
 							<Markdown src={block.text} />

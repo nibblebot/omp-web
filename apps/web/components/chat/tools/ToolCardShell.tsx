@@ -109,13 +109,19 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 	// <details> closed until clicked (or running, or Ctrl+O), whatever the card's body.
 	const inRun = useContext(RunMemberContext);
 	const headerOnly = () => inRun || state.display.toolCards === "collapsed";
+	const collapsible = () => props.collapsible || headerOnly();
+	const isOpen = () => userOpen() ?? (state.toolsExpanded || props.status === "running");
+	// A <details> card that has never been open has no body in the DOM: it mounts on
+	// the first open (click, Ctrl+O, running) and stays mounted after a close. Most
+	// cards of a long session are never opened.
+	const bodyMounted = createMemo((was: boolean) => was || !collapsible() || isOpen(), false);
 	return (
 		<Card
 			class={cardClass()}
 			status={props.status}
 			data={{ "tool-call-id": toolCallId }}
-			collapsible={props.collapsible || headerOnly()}
-			open={userOpen() ?? (state.toolsExpanded || props.status === "running")}
+			collapsible={collapsible()}
+			open={isOpen()}
 			onToggle={(e) => {
 				if (
 					e.isTrusted &&
@@ -162,7 +168,7 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 				</>
 			}
 		>
-			{props.children}
+			<Show when={bodyMounted()}>{props.children}</Show>
 		</Card>
 	);
 };

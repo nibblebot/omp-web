@@ -12,6 +12,7 @@ import { expandThinkingBlocks, hideThinkingBlock } from "../../../../chat/displa
 import { callRunning, type Run, type WaitRunLookup } from "../../../../chat/tool-runs";
 import { state, type ToolItem } from "../../../../state";
 import { formatDurationMs } from "../../../../usage/usage";
+import { createLazyOpen } from "../../../ui/lazy-open";
 import { Markdown } from "../../../ui/Markdown";
 import { ToolCard } from "../../tools/ToolCard";
 import { RunMemberContext } from "../../tools/ToolCardShell";
@@ -130,12 +131,17 @@ export const ToolRunRow: Component<{
 					{/* Folded thinking first: consumed assistant messages always precede the run's calls. */}
 					<Show when={open()}>
 						<For each={thinking()}>
-							{(view) => (
-								<details class="thinking-block" open={expandThinkingBlocks()}>
-									<summary>thinking</summary>
-									<Markdown src={view} />
-								</details>
-							)}
+							{(view) => {
+								const { opened, onToggle } = createLazyOpen(expandThinkingBlocks());
+								return (
+									<details class="thinking-block" open={expandThinkingBlocks()} onToggle={onToggle}>
+										<summary>thinking</summary>
+										<Show when={opened()}>
+											<Markdown src={view} />
+										</Show>
+									</details>
+								);
+							}}
 						</For>
 					</Show>
 					<RunMemberContext.Provider value={true}>
