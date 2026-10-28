@@ -15,7 +15,8 @@ import { DEFAULT_FEATURES_DIR, featureOfEntry, reach } from "./feature-sizes.ts"
  * skips every feature whose stored choice (`omp.features`, preferences.ts) is
  * `false`. A feature that is in development, or off by default, is never hinted.
  */
-export function featurePreload(): Plugin {
+export function featurePreload(options: { featuresDir?: string } = {}): Plugin {
+	const featuresDir = options.featuresDir ?? DEFAULT_FEATURES_DIR;
 	return {
 		name: "omp-feature-preload",
 		apply: "build",
@@ -36,7 +37,7 @@ export function featurePreload(): Plugin {
 				const chunks: Record<string, { js: string[]; css: string[] }> = {};
 				for (const output of Object.values(bundle)) {
 					if (output.type !== "chunk") continue;
-					const id = featureOfEntry(output.facadeModuleId, DEFAULT_FEATURES_DIR);
+					const id = featureOfEntry(output.facadeModuleId, featuresDir);
 					if (id === undefined || !hinted.has(id)) continue;
 					const owned = [...reach(bundle, [output.fileName], entryStatic, false)];
 					chunks[id] = {

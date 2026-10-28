@@ -46,6 +46,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync } from "node:fs";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { basename, join } from "node:path";
 import type { Subprocess } from "bun";
 
@@ -622,6 +623,47 @@ try {
 		"embedded UI served from arbitrary cwd",
 		ui.ok && uiHtml.includes("<!doctype html>"),
 		uiHtml.slice(0, 80),
+	);
+	// Caching and precompressed siblings survive the embed: hashed assets are
+	// immutable, index.html revalidates (304), and Brotli/gzip copies decode to
+	// the identity bytes.
+	const entryPath = /\/assets\/index-[^"]+\.js/.exec(uiHtml)?.[0] ?? "";
+	const rawBytes = new Uint8Array(
+		await (
+			await fetch(`http://127.0.0.1:${OMP_PORT}${entryPath}`, {
+				headers: { "accept-encoding": "identity" },
+			})
+		).arrayBuffer(),
+	);
+	for (const [coding, decode] of [
+		["br", (b: Uint8Array) => brotliDecompressSync(b)],
+		["gzip", (b: Uint8Array) => gunzipSync(b)],
+	] as const) {
+		const res = await fetch(`http://127.0.0.1:${OMP_PORT}${entryPath}`, {
+			headers: { "accept-encoding": coding },
+			decompress: false,
+		});
+		const wire = new Uint8Array(await res.arrayBuffer());
+		check(
+			`embedded entry chunk served ${coding}-compressed and immutable`,
+			entryPath !== "" &&
+				res.headers.get("content-encoding") === coding &&
+				(res.headers.get("cache-control") ?? "").includes("immutable") &&
+				wire.byteLength < rawBytes.byteLength / 2 &&
+				Buffer.from(decode(wire)).equals(Buffer.from(rawBytes)),
+			`${res.status} ${res.headers.get("content-encoding")} ${wire.byteLength}/${rawBytes.byteLength}`,
+		);
+	}
+	const indexEtag = ui.headers.get("etag") ?? "";
+	const revalidated = await fetch(`http://127.0.0.1:${OMP_PORT}/`, {
+		headers: { "if-none-match": indexEtag },
+	});
+	check(
+		"embedded index.html carries an ETag and revalidates with 304",
+		indexEtag !== "" &&
+			ui.headers.get("cache-control") === "no-cache" &&
+			revalidated.status === 304,
+		`${indexEtag} -> ${revalidated.status}`,
 	);
 	// Register the first repo (start:false; the E2E spawns explicitly later).
 	const addRes = await fetch(`http://127.0.0.1:${OMP_PORT}/ctl/projects`, {
