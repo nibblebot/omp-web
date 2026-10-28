@@ -48,10 +48,30 @@
    stream's end and stays uncontained. The clip margin leaves room for the global
    focus ring (2px + 1px offset) of controls near the edge, where the browser
    supports it; summaries flush with the edge also draw their ring inside. */
-.chat-transcript-content > :not(.live) {
+.chat-transcript-content > :not(.live, .chat-transcript-earlier) {
 	content-visibility: auto;
 	contain-intrinsic-size: auto 130px;
 	overflow-clip-margin: 4px;
+}
+/* Older items are mounted on demand (chat/transcript-window.ts); this row stands
+   in for the ones above the first mounted card. */
+.chat-transcript-earlier {
+	display: flex;
+	justify-content: center;
+}
+.chat-transcript-earlier-btn {
+	padding: var(--space-1) var(--space-4);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	background: transparent;
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+.chat-transcript-earlier-btn:hover {
+	background: var(--hover);
+	color: var(--text);
 }
 .chat-transcript-content > * summary:focus-visible {
 	outline-offset: -2px;

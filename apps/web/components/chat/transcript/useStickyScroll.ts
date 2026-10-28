@@ -92,6 +92,8 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	contentRef: (el: HTMLDivElement) => void;
 	jumpVisible: () => boolean;
 	jumpToBottom: () => void;
+	/** Leave the live edge: a programmatic jump elsewhere (the stream mounts older cards first, which would otherwise re-snap a pinned viewport). */
+	release: () => void;
 } {
 	let container!: HTMLDivElement;
 	let content!: HTMLDivElement;
@@ -377,3 +379,4 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 		jumpToBottom,
 	};
 }
+		release: escapeBottom,

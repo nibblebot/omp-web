@@ -4,6 +4,8 @@ import {
 	For,
 	Match,
 	on,
+	onCleanup,
+	onMount,
 	Show,
 	Switch,
 	type Component,
@@ -29,6 +31,8 @@ import {
 } from "../../../chat/transcript-index";
 import type { Run } from "../../../chat/tool-runs";
 import type { WaitRun } from "../../../chat/wait-runs";
+import { createTranscriptWindow } from "../../../chat/transcript-window";
+import { registerToolReveal } from "../../../chat/tool-jump";
 import {
 	captureScrollAnchors,
 	restoreScrollAnchor,
@@ -47,6 +51,9 @@ import {
 	UserCard,
 	UserCommandCard,
 } from "./cards";
+
+/** How many viewports of mounted content the reader keeps above the top of the screen before older items mount. */
+const LOAD_AHEAD_SCREENS = 2;
 
 /** The run a slot holds, or undefined for a member: a run draws at its first call. */
 const toolRunOf = (slot: ToolSlot): Run | undefined => (isRunMember(slot) ? undefined : slot);
@@ -72,7 +79,7 @@ export const TranscriptStream: Component<{
 	children?: JSX.Element;
 }> = (props) => {
 	const session = () => props.variant === "session";
-	const { containerRef, contentRef, jumpVisible, jumpToBottom } = useStickyScroll({
+	const { containerRef, contentRef, jumpVisible, jumpToBottom, release } = useStickyScroll({
 		mirrorSession: session(),
 	});
 	// What the rows ask of the whole list (tool runs, wait runs, turn metadata,
@@ -93,8 +100,57 @@ export const TranscriptStream: Component<{
 			cacheMiss: cacheMissMarker(),
 		}),
 	);
+	// Only the tail of a long transcript is mounted; older items mount as the
+	// reader scrolls up.
+	const win = createTranscriptWindow(() => props.items, {
+		pinned: () => !jumpVisible(),
+		leadOf: index.leadOf,
+	});
 	let scroller!: HTMLDivElement;
 	let content!: HTMLDivElement;
+	// The cards an unpinned viewport can be anchored to: the Show earlier row stays at the top as cards mount below it.
+	const anchorRows = (): ArrayLike<Element> =>
+		win.hiddenBefore() > 0 ? Array.prototype.slice.call(content.children, 1) : content.children;
+	// Items mounted above the viewport keep the on-screen content where it is.
+	const showEarlier = () => {
+		const anchors = captureScrollAnchors(scroller, anchorRows());
+		win.showEarlier();
+		restoreScrollAnchor(scroller, anchors);
+	};
+	// Older items mount before the reader runs out of mounted content: when the
+	// top of the screen is within LOAD_AHEAD_SCREENS viewports of the oldest card
+	// (a pinned viewport, which is about to sit at the live edge, counts the
+	// height above that edge).
+	const loadEarlier = () => {
+		if (win.hiddenBefore() === 0 || scroller.clientHeight === 0) return;
+		const reserve = scroller.clientHeight * LOAD_AHEAD_SCREENS;
+		const above = jumpVisible()
+			? scroller.scrollTop
+			: scroller.scrollHeight - scroller.clientHeight;
+		if (above < reserve) showEarlier();
+	};
+	// A pinned viewport scrolls on every snap; only the reader's own scrolling can near the top.
+	const onScroll = () => {
+		if (jumpVisible()) loadEarlier();
+	};
+	onMount(() => {
+		scroller.addEventListener("scroll", onScroll, { passive: true });
+		onCleanup(() => scroller.removeEventListener("scroll", onScroll));
+		onCleanup(
+			registerToolReveal((toolCallId) => {
+				const found = win.reveal((item) => item.kind === "tool" && item.toolCallId === toolCallId);
+				// The jump leaves the live edge: without the release, the content the mount adds re-snaps a pinned viewport to it.
+				if (found) release();
+				return found;
+			}),
+		);
+	});
+	createEffect(
+		on(win.hiddenBefore, () => {
+			const frame = requestAnimationFrame(loadEarlier);
+			onCleanup(() => cancelAnimationFrame(frame));
+		}),
+	);
 	// An unpinned viewport keeps its on-screen content where it is while cards
 	// above it hide or return: capture before the list's DOM changes (a computed
 	// runs before render effects), restore once it has (a user effect runs after).
@@ -104,7 +160,7 @@ export const TranscriptStream: Component<{
 		on(
 			index.hiddenRev,
 			() => {
-				anchors = jumpVisible() ? captureScrollAnchors(scroller, content.children) : [];
+				anchors = jumpVisible() ? captureScrollAnchors(scroller, anchorRows()) : [];
 			},
 			{ defer: true },
 		),
@@ -139,7 +195,14 @@ export const TranscriptStream: Component<{
 						contentRef(el);
 					}}
 				>
-					<For each={props.items}>
+					<Show when={win.hiddenBefore() > 0}>
+						<div class="chat-transcript-earlier">
+							<button type="button" class="chat-transcript-earlier-btn" onClick={showEarlier}>
+								Show earlier messages
+							</button>
+						</div>
+					</Show>
+					<For each={win.items()}>
 						{(item) => (
 							<Switch>
 								<Match when={item.kind === "tool" && index.hidden(item.id)}>{null}</Match>
