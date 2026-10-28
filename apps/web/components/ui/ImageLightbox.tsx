@@ -1,6 +1,6 @@
 import type { Component } from "solid-js";
 import type { ImageArg } from "#lib/wire/protocol";
-import { imageDataUrl } from "../../text/images";
+import { imageObjectUrl } from "../../text/images";
 import { Modal } from "./Modal";
 
 /** Full-size image on Modal's lightbox variant. Esc or a backdrop click
@@ -9,7 +9,7 @@ import { Modal } from "./Modal";
 export const ImageLightbox: Component<{ image: ImageArg; onClose: () => void }> = (props) => (
 	<Modal variant="lightbox" ariaLabel="Screenshot preview" onClose={props.onClose}>
 		<img
-			src={imageDataUrl(props.image)}
+			src={imageObjectUrl(props.image)}
 			alt={`full-size image (${props.image.mimeType})`}
 			decoding="async"
 		/>

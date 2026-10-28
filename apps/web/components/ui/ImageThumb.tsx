@@ -1,6 +1,6 @@
 import { Show, type Component } from "solid-js";
 import type { ImageArg } from "#lib/wire/protocol";
-import { imageDataUrl, isUnresolvedImage } from "../../text/images";
+import { imageObjectUrl, isUnresolvedImage } from "../../text/images";
 
 /**
  * One image thumbnail; click zooms. An image whose data is still a `blob:sha256:` reference (a subagent
@@ -21,7 +21,7 @@ export const ImageThumb: Component<{
 		}
 	>
 		<button class="img-thumb" type="button" onClick={() => props.onZoom(props.image)}>
-			<img src={imageDataUrl(props.image)} alt={props.alt} decoding="async" />
+			<img src={imageObjectUrl(props.image)} alt={props.alt} decoding="async" />
 		</button>
 	</Show>
 );

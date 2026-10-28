@@ -122,8 +122,13 @@ export function argsSummary(args: unknown): string {
 	return s.length > 500 ? s.slice(0, 500) : s;
 }
 
+/**
+ * The last `max` characters of `s`. A cut tail is copied into its own flat string: `slice` returns a view
+ * that keeps its whole parent alive, so a bare slice would pin the full multi-MB tool output the cap exists
+ * to drop. The concatenation forces a fresh flat buffer; the final `slice(1)` is a view over that small copy.
+ */
 export function capTail(s: string, max: number): string {
-	return s.length > max ? s.slice(-max) : s;
+	return s.length > max ? (" " + s.slice(-max)).slice(1) : s;
 }
 
 type UserContent = Extract<AgentMessage, { role: "user" }>["content"];
@@ -230,9 +235,12 @@ export function appendBashChunk(id: number, text: string): void {
 	// Buffered into the rAF flush and coalesced by item id: N chunks between
 	// flushes = 1 store write (≤60/s cap preserved). resolveBashItem drains
 	// this key first so the authoritative result never interleaves with
-	// streamed text.
+	// streamed text. rAF does not fire in a hidden tab while chunks keep
+	// arriving, so the buffer is trimmed here (amortized: only once it holds
+	// twice what the flush keeps) instead of growing until the tab is shown.
 	const pending = pendingBashChunks.get(id);
-	pendingBashChunks.set(id, pending === undefined ? text : pending + text);
+	const buffered = pending === undefined ? text : pending + text;
+	pendingBashChunks.set(id, buffered.length > 16000 ? capTail(buffered, 8000) : buffered);
 	scheduleFlush();
 }
 
