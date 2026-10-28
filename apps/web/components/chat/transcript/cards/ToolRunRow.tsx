@@ -9,9 +9,8 @@ import {
 	type Component,
 } from "solid-js";
 import { expandThinkingBlocks, hideThinkingBlock } from "../../../../chat/display-prefs";
-import { callRunning, type Run } from "../../../../chat/tool-runs";
-import type { WaitRun } from "../../../../chat/wait-runs";
-import { state, type ChatItem, type ToolItem } from "../../../../state";
+import { callRunning, type Run, type WaitRunLookup } from "../../../../chat/tool-runs";
+import { state, type ToolItem } from "../../../../state";
 import { formatDurationMs } from "../../../../usage/usage";
 import { Markdown } from "../../../ui/Markdown";
 import { ToolCard } from "../../tools/ToolCard";
@@ -22,11 +21,11 @@ import { thinkingView } from "./AssistantCard";
 /** One call of a run: a folded wait run is one card at its first call. */
 const RunCall: Component<{
 	item: ToolItem;
-	waitRuns: ReadonlyMap<number, WaitRun>;
-	transcript: readonly ChatItem[];
+	waitRuns: WaitRunLookup;
+	originOf?: (jobId: string) => ToolItem | undefined;
 }> = (props) => (
 	<Show when={props.waitRuns.get(props.item.id)} fallback={<ToolCard item={props.item} />}>
-		{(run) => <WaitToolCard calls={run().items} transcript={props.transcript} />}
+		{(run) => <WaitToolCard calls={run().items} originOf={props.originOf} />}
 	</Show>
 );
 
@@ -41,9 +40,9 @@ const RunCall: Component<{
  */
 export const ToolRunRow: Component<{
 	run: Run;
-	waitRuns: ReadonlyMap<number, WaitRun>;
-	/** The items the stream draws: wait cards find the card a job row points back to in them. */
-	transcript: readonly ChatItem[];
+	waitRuns: WaitRunLookup;
+	/** The tool item that started a job: wait cards point their job rows back at it. */
+	originOf?: (jobId: string) => ToolItem | undefined;
 }> = (props) => {
 	const [userOpen, setUserOpen] = createSignal<boolean | null>(null);
 	createEffect(
@@ -142,7 +141,7 @@ export const ToolRunRow: Component<{
 					<RunMemberContext.Provider value={true}>
 						<For each={shownCalls()}>
 							{(item) => (
-								<RunCall item={item} waitRuns={props.waitRuns} transcript={props.transcript} />
+								<RunCall item={item} waitRuns={props.waitRuns} originOf={props.originOf} />
 							)}
 						</For>
 					</RunMemberContext.Provider>

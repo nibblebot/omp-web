@@ -1,10 +1,7 @@
-/**
- * The cards the main transcript hides while the Activities panel is open
- * (`transcriptItemsFor`), and that closing the panel restores them.
- */
+/** The cards the main transcript hides while the Activities panel is open (`hiddenWhileActivitiesOpen`). */
 import { describe, expect, test } from "bun:test";
 import type { ChatItem, ToolItem } from "../../state";
-import { hiddenWhileActivitiesOpen, transcriptItemsFor } from "../../chat/activity-cards";
+import { hiddenWhileActivitiesOpen } from "../../chat/activity-cards";
 import { buildWaitRuns, type WaitFoldOptions } from "../../chat/wait-runs";
 
 const SHOWN: WaitFoldOptions = {
@@ -40,12 +37,10 @@ const background = {
 const user = (): ChatItem => ({ kind: "user", id: nextId++, text: "go" });
 const assistant = (): ChatItem => ({ kind: "assistant", id: nextId++, blocks: [] });
 
-describe("transcriptItemsFor", () => {
-	test("closed panel keeps every item, as the same list", () => {
-		const items = [user(), tool("task"), tool("todo"), tool("wait"), tool("bash", { background })];
-		expect(transcriptItemsFor(items, false)).toBe(items);
-	});
+const drawn = (items: readonly ChatItem[]) =>
+	items.filter((item) => !hiddenWhileActivitiesOpen(item));
 
+describe("hiddenWhileActivitiesOpen", () => {
 	test("open panel drops task, todo, wait and backgrounded tool cards", () => {
 		const keep = [
 			user(),
@@ -73,15 +68,9 @@ describe("transcriptItemsFor", () => {
 			hide[4]!,
 			keep[4]!,
 		];
-		expect(transcriptItemsFor(items, true)).toEqual(keep);
+		expect(drawn(items)).toEqual(keep);
 		for (const item of hide) expect(hiddenWhileActivitiesOpen(item)).toBe(true);
 		for (const item of keep) expect(hiddenWhileActivitiesOpen(item)).toBe(false);
-	});
-
-	test("closing restores the hidden cards in their original places", () => {
-		const items = [user(), tool("task"), assistant(), tool("todo"), tool("bash")];
-		expect(transcriptItemsFor(items, true)).toHaveLength(3);
-		expect(transcriptItemsFor(items, false)).toEqual(items);
 	});
 
 	test("a card flips as its job settles into or out of the background", () => {
@@ -101,6 +90,6 @@ describe("transcriptItemsFor", () => {
 		const run = runs.get(w1.id)!;
 		expect(run.items).toEqual([w1, w2]);
 		expect(runs.get(w2.id)).toBe(run);
-		expect(transcriptItemsFor(items, true).some((i) => i.kind === "tool")).toBe(false);
+		expect(drawn(items).some((i) => i.kind === "tool")).toBe(false);
 	});
 });

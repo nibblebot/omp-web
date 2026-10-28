@@ -1,7 +1,6 @@
 import {
 	createComputed,
 	createEffect,
-	createMemo,
 	For,
 	Match,
 	on,
@@ -22,10 +21,14 @@ import {
 	showTokenUsage,
 	showTurnTime,
 } from "../../../chat/display-prefs";
-import { buildTurnMeta } from "../../../chat/turn-usage";
-import { indexToolRuns } from "../../../chat/tool-runs";
-import { buildWaitRuns, type WaitRun } from "../../../chat/wait-runs";
-import { transcriptItemsFor } from "../../../chat/activity-cards";
+import {
+	createTranscriptIndex,
+	isRunMember,
+	type ToolSlot,
+	type WaitSlot,
+} from "../../../chat/transcript-index";
+import type { Run } from "../../../chat/tool-runs";
+import type { WaitRun } from "../../../chat/wait-runs";
 import {
 	captureScrollAnchors,
 	restoreScrollAnchor,
@@ -45,8 +48,9 @@ import {
 	UserCommandCard,
 } from "./cards";
 
-/** The runs of a stream with tool activity hidden: none, so the hidden waits stay hidden. */
-const NO_WAIT_RUNS: ReadonlyMap<number, WaitRun> = new Map();
+/** The run a slot holds, or undefined for a member: a run draws at its first call. */
+const toolRunOf = (slot: ToolSlot): Run | undefined => (isRunMember(slot) ? undefined : slot);
+const waitRunOf = (slot: WaitSlot): WaitRun | undefined => (isRunMember(slot) ? undefined : slot);
 
 /**
  * The sticky-scrolling message stream over one list of chat items: the same
@@ -71,54 +75,34 @@ export const TranscriptStream: Component<{
 	const { containerRef, contentRef, jumpVisible, jumpToBottom } = useStickyScroll({
 		mirrorSession: session(),
 	});
-	// Per-assistant turn metadata (turn time, cache miss). Computed only for the
-	// toggles that are on, so the items scan is skipped when both are off.
-	const turnMeta = createMemo(() =>
-		buildTurnMeta(props.items, {
+	// What the rows ask of the whole list (tool runs, wait runs, turn metadata,
+	// the cards the open Activities panel shows instead), answered per item id so
+	// a row re-renders only when its own answer changes. Runs and turn metadata
+	// stay computed on the full list; a subagent's own stream (inside the panel's
+	// detail) keeps all its cards.
+	const index = createTranscriptIndex(
+		() => props.items,
+		() => ({
+			consolidated: state.display.toolCards === "consolidated",
+			hideToolActivity: hideToolActivity(),
+			hideActivityCards: session() && isActivitiesOpen(),
+			hideThinking: hideThinkingBlock(),
+			proseOnlyThinking: proseOnlyThinking(),
+			showTokenUsage: showTokenUsage(),
 			turnTime: showTokenUsage() && showTurnTime(),
 			cacheMiss: cacheMissMarker(),
 		}),
 	);
-	// Consecutive wait calls with nothing visible between them fold into one
-	// card, drawn at the run's first call. Derived from the items alone (never
-	// from a live-only field), so a history reload folds as the stream did.
-	const waitRuns = createMemo<ReadonlyMap<number, WaitRun>>(() =>
-		hideToolActivity()
-			? NO_WAIT_RUNS
-			: buildWaitRuns(props.items, {
-					hideThinking: hideThinkingBlock(),
-					proseOnlyThinking: proseOnlyThinking(),
-					showTokenUsage: showTokenUsage(),
-					turnMeta: turnMeta(),
-				}),
-	);
-	// The main transcript drops the cards the open Activities panel shows
-	// instead. Runs and turn metadata above stay computed on the full list.
-	// A subagent's own stream (inside the panel's detail) keeps all its cards.
-	const shownItems = createMemo(() =>
-		transcriptItemsFor(props.items, session() && isActivitiesOpen()),
-	);
-	// Consolidated tool cards: each run of consecutive calls draws as one row at
-	// its first call, and the thinking it folded leaves its assistant card. Built
-	// on the drawn items so a run never leads with a card the panel hides. The
-	// other modes get an empty index without scanning the items.
-	const toolRuns = createMemo(() =>
-		indexToolRuns(shownItems(), {
-			consolidated: state.display.toolCards === "consolidated",
-			hideToolActivity: hideToolActivity(),
-			waitRuns: waitRuns(),
-		}),
-	);
+	let scroller!: HTMLDivElement;
+	let content!: HTMLDivElement;
 	// An unpinned viewport keeps its on-screen content where it is while cards
 	// above it hide or return: capture before the list's DOM changes (a computed
 	// runs before render effects), restore once it has (a user effect runs after).
 	// A pinned viewport needs nothing: the sticky-scroll observer re-snaps it.
-	let scroller!: HTMLDivElement;
-	let content!: HTMLDivElement;
 	let anchors: ScrollAnchor[] = [];
 	createComputed(
 		on(
-			shownItems,
+			index.hiddenRev,
 			() => {
 				anchors = jumpVisible() ? captureScrollAnchors(scroller, content.children) : [];
 			},
@@ -127,7 +111,7 @@ export const TranscriptStream: Component<{
 	);
 	createEffect(
 		on(
-			shownItems,
+			index.hiddenRev,
 			() => {
 				restoreScrollAnchor(scroller, anchors);
 				anchors = [];
@@ -155,16 +139,17 @@ export const TranscriptStream: Component<{
 						contentRef(el);
 					}}
 				>
-					<For each={shownItems()}>
-						{(item, index) => (
+					<For each={props.items}>
+						{(item) => (
 							<Switch>
+								<Match when={item.kind === "tool" && index.hidden(item.id)}>{null}</Match>
 								<Match when={item.kind === "user" && item}>
 									{(user) => (
 										<UserCard
 											user={user()}
 											onZoom={openLightbox}
 											branchable={session()}
-											fold={!session() && index() === 0}
+											fold={!session() && props.items[0]?.id === user().id}
 										/>
 									)}
 								</Match>
@@ -172,24 +157,30 @@ export const TranscriptStream: Component<{
 									{(assistant) => (
 										<AssistantCard
 											assistant={assistant()}
-											thinking={!toolRuns().consumedAssistantIds.has(assistant().id)}
-											meta={turnMeta().get(assistant().id)}
+											thinking={!index.consumed(assistant().id)}
+											meta={index.turnMeta(assistant().id)}
 										/>
 									)}
 								</Match>
-								<Match when={item.kind === "tool" && toolRuns().runOf.get(item.id)}>
-									{(run) => (
-										<Show when={run().key === item.id}>
-											<ToolRunRow run={run()} waitRuns={waitRuns()} transcript={props.items} />
+								<Match when={item.kind === "tool" && index.toolSlot(item.id)}>
+									{(slot) => (
+										<Show when={toolRunOf(slot())}>
+											{(run) => (
+												<ToolRunRow
+													run={run()}
+													waitRuns={{ get: index.waitRunLed }}
+													originOf={index.originOf}
+												/>
+											)}
 										</Show>
 									)}
 								</Match>
 								<Match
-									when={item.kind === "tool" && item.name === "wait" && waitRuns().get(item.id)}
+									when={item.kind === "tool" && item.name === "wait" && index.waitSlot(item.id)}
 								>
-									{(run) => (
-										<Show when={run().items[0]?.id === item.id}>
-											<WaitToolCard calls={run().items} transcript={props.items} />
+									{(slot) => (
+										<Show when={waitRunOf(slot())}>
+											{(run) => <WaitToolCard calls={run().items} originOf={index.originOf} />}
 										</Show>
 									)}
 								</Match>

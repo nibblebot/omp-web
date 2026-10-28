@@ -77,16 +77,15 @@ function progressIds(details: unknown, openOnly: boolean): string[] {
 }
 
 /**
- * The origin card of a job: the tool item whose result's `details.async.jobId` is
- * `jobId`. A task job also matches by the id of the subagent it runs.
+ * The jobs a tool item is the origin card of: the one its result's
+ * `details.async.jobId` names, and, for a task call, each subagent its progress lists.
  */
-export function originCardOf(items: readonly ChatItem[], jobId: string): ToolItem | undefined {
-	for (const item of items) {
-		if (item.kind !== "tool") continue;
-		if (asyncJobOf(item.details)?.jobId === jobId) return item;
-		if (item.name === "task" && progressIds(item.details, false).includes(jobId)) return item;
-	}
-	return undefined;
+export function originJobIds(item: ToolItem): string[] {
+	const ids: string[] = [];
+	const job = asyncJobOf(item.details);
+	if (job !== undefined) ids.push(job.jobId);
+	if (item.name === "task") ids.push(...progressIds(item.details, false));
+	return ids;
 }
 
 /**

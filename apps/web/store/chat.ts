@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { produce } from "solid-js/store";
+import { produce, unwrap } from "solid-js/store";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type {
@@ -179,6 +179,11 @@ export async function setNotifyEnabled(enabled: boolean): Promise<void> {
 	setState("notifyEnabled", on);
 }
 
+/**
+ * Append in place: the list keeps its identity, so only the new item is wrapped and the
+ * `<For>` over it keeps its mapper closures (a copied array per push is O(n) work and,
+ * through those closures, O(n^2) retained heap).
+ */
 export function pushItem(item: ChatItem): void {
 	setState("items", state.items.length, item);
 }
@@ -227,10 +232,25 @@ export function addBashItem(
 	return id;
 }
 
+/**
+ * Index of the first item `match` accepts, -1 for none. Scans the raw list: the same
+ * walk through the store's proxy wraps every item it passes and costs an order of
+ * magnitude more per streamed frame on a long transcript.
+ */
+function indexWhere(match: (item: ChatItem) => boolean): number {
+	return unwrap(state.items).findIndex(match);
+}
+
+export function findToolIndex(toolCallId: string): number {
+	return indexWhere((it) => it.kind === "tool" && it.toolCallId === toolCallId);
+}
+
+const bashIndex = (id: number): number => indexWhere((it) => it.kind === "bash" && it.id === id);
+
 /** Live chunk from the server relay: append to the in-flight item's output. */
 export function appendBashChunk(id: number, text: string): void {
 	if (!text) return;
-	const index = state.items.findIndex((it) => it.kind === "bash" && it.id === id);
+	const index = bashIndex(id);
 	if (index < 0) return;
 	// Buffered into the rAF flush and coalesced by item id: N chunks between
 	// flushes = 1 store write (≤60/s cap preserved). resolveBashItem drains
@@ -245,7 +265,7 @@ export function appendBashChunk(id: number, text: string): void {
 }
 
 export function resolveBashItem(id: number, result: BashResultLike | { error: string }): void {
-	const index = state.items.findIndex((it) => it.kind === "bash" && it.id === id);
+	const index = bashIndex(id);
 	if (index < 0) return;
 	// Synchronous transition: any buffered stream chunks land first so the
 	// error marker appends to (and the success result replaces) ALL streamed
@@ -272,10 +292,6 @@ export function resolveBashItem(id: number, result: BashResultLike | { error: st
 			}
 		}),
 	);
-}
-
-export function findToolIndex(toolCallId: string): number {
-	return state.items.findIndex((it) => it.kind === "tool" && it.toolCallId === toolCallId);
 }
 
 // Token deltas are buffered and applied at most once per animation frame,
@@ -366,8 +382,7 @@ function flushDeltas(): void {
 			"items",
 			produce((items) => {
 				for (const [toolCallId, update] of pendingToolUpdates) {
-					const item =
-						items[items.findIndex((it) => it.kind === "tool" && it.toolCallId === toolCallId)];
+					const item = items[findToolIndex(toolCallId)];
 					if (item?.kind !== "tool" || !(item.status === "running" || isBackgroundRunning(item)))
 						continue;
 					applyToolUpdate(item, update);
@@ -381,7 +396,7 @@ function flushDeltas(): void {
 			"items",
 			produce((items) => {
 				for (const [id, text] of pendingBashChunks) {
-					const item = items[items.findIndex((it) => it.kind === "bash" && it.id === id)];
+					const item = items[bashIndex(id)];
 					// Chunks only stream while running; the completion result is
 					// authoritative and replaces the buffered output wholesale.
 					if (item?.kind !== "bash" || item.status !== "running") continue;

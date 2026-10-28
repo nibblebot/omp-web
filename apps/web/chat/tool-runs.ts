@@ -33,8 +33,11 @@ type Folded = Pick<Run, "thinking" | "consumedAssistantIds" | "turnCount" | "dur
 
 const NO_WAIT_RUNS: ReadonlyMap<number, WaitRun> = new Map();
 
+/** A lookup of the wait run a call leads. */
+export type WaitRunLookup = Pick<ReadonlyMap<number, WaitRun>, "get">;
+
 /** Whether a call is still running; a wait run runs while any of its calls does. */
-export function callRunning(item: ToolItem, waitRuns: ReadonlyMap<number, WaitRun>): boolean {
+export function callRunning(item: ToolItem, waitRuns: WaitRunLookup): boolean {
 	return (waitRuns.get(item.id)?.items ?? [item]).some(
 		(call) => effectiveStatus(call) === "running",
 	);

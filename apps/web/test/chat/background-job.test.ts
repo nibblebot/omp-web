@@ -7,7 +7,7 @@ import {
 	asyncResultJobsOf,
 	backgroundOf,
 	effectiveStatus,
-	originCardOf,
+	originJobIds,
 	reconcileBackgroundJobs,
 	settleBackground,
 	type ListedJob,
@@ -91,18 +91,15 @@ describe("backgroundOf", () => {
 	});
 });
 
-describe("originCardOf", () => {
-	test("finds the call by its job id, and a task by the id of one of its subagents", () => {
+describe("originJobIds", () => {
+	test("names the job a call started, and the subagents a task lists", () => {
 		const bash = card("bash", running("bg_1"));
 		const task = card("task", running("a", "task", { progress: [{ id: "a" }, { id: "b" }] }), {
 			id: 2,
 		});
-		const items: ChatItem[] = [bash, task];
-		expect(originCardOf(items, "bg_1")).toBe(bash);
-		expect(originCardOf(items, "a")).toBe(task);
-		expect(originCardOf(items, "b")).toBe(task);
-		expect(originCardOf(items, "nope")).toBeUndefined();
-		expect(originCardOf([], "bg_1")).toBeUndefined();
+		expect(originJobIds(bash)).toEqual(["bg_1"]);
+		expect(originJobIds(task)).toEqual(["a", "a", "b"]);
+		expect(originJobIds(card("read", undefined))).toEqual([]);
 	});
 });
 

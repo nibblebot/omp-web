@@ -312,20 +312,20 @@ const stories: Story[] = [
 				name: "Closed",
 				description:
 					"Consolidated tool cards: one row per run, counted by tool, with the thinking folded from the message before it and the err/req/duration/turns meta.",
-				render: () => <ToolRunRow run={settledRun} waitRuns={noWaitRuns} transcript={[]} />,
+				render: () => <ToolRunRow run={settledRun} waitRuns={noWaitRuns} />,
 			},
 			{
 				name: "Running call under a closed run",
 				description:
 					"A call that is still running shows open under its row, and folds back in when it finishes.",
-				render: () => <ToolRunRow run={runningRun} waitRuns={noWaitRuns} transcript={[]} />,
+				render: () => <ToolRunRow run={runningRun} waitRuns={noWaitRuns} />,
 			},
 			{
 				name: "Open (Ctrl+O)",
 				description:
 					"Show-everything opens the run (a click on the row does too): the folded thinking, then the run's calls as header-only cards that each open on their own click. Ctrl+O opens those as well.",
 				seed: { toolsExpanded: true },
-				render: () => <ToolRunRow run={settledRun} waitRuns={noWaitRuns} transcript={[]} />,
+				render: () => <ToolRunRow run={settledRun} waitRuns={noWaitRuns} />,
 			},
 		],
 	}),

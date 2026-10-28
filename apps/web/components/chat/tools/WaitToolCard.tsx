@@ -1,11 +1,10 @@
 import { createEffect, createMemo, createSignal, For, Show, type Component } from "solid-js";
 import type { WireWaitJob } from "#lib/wire/protocol";
-import { originCardOf } from "../../../chat/background-job";
 import { jumpToToolCard } from "../../../chat/tool-jump";
 import { waitCounts, type WaitAgent } from "../../../chat/wait-details";
 import { mergeWaitRun, waitMarksText, waitSummary } from "../../../chat/wait-runs";
 import { createVisibleInterval } from "../../../page-visibility";
-import type { ChatItem, ToolItem } from "../../../state";
+import type { ToolItem } from "../../../state";
 import { openActivities } from "../../../store/activities";
 import { formatDuration } from "../../../subagents/format";
 import { CollapsibleOutput, ToolCallIdContext, ToolCardShell } from "./ToolCardShell";
@@ -94,12 +93,12 @@ function createRowClock(ticking: () => boolean): () => number {
  * place to its widget, output tail and actions. The calls of a run are folded
  * by `chat/wait-runs.ts`; the card renders at the first and stays mounted as
  * the run grows. A wait that returned a peer message, or found nothing to
- * wait for, shows its result text. `transcript` lets a row find the card that
+ * wait for, shows its result text. `originOf` lets a row find the card that
  * started its job.
  */
 export const WaitToolCard: Component<{
 	calls: readonly ToolItem[];
-	transcript?: readonly ChatItem[];
+	originOf?: (jobId: string) => ToolItem | undefined;
 }> = (props) => {
 	const view = createMemo(() => mergeWaitRun(props.calls));
 	const counts = createMemo(() => waitCounts(view().jobs.map((entry) => entry.job)));
@@ -123,7 +122,7 @@ export const WaitToolCard: Component<{
 	const origins = createMemo(() => {
 		const found = new Map<string, string>();
 		for (const id of shown()) {
-			const card = originCardOf(props.transcript ?? [], id);
+			const card = props.originOf?.(id);
 			if (card) found.set(id, card.toolCallId);
 		}
 		return found;

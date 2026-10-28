@@ -51,7 +51,9 @@ export function assistantShowsContent(
 
 /** A call that can join a run: it is running or settled, and did not return a peer message (`details.waited`, its own card). */
 function foldable(item: ToolItem): boolean {
-	return (item.status === "running" || item.status === "done") && !waitCallOf(item).message;
+	// A running call has no result yet, so no message: its live frames never change the fold.
+	if (item.status === "running") return true;
+	return item.status === "done" && !waitCallOf(item).message;
 }
 
 /**
