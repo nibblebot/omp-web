@@ -1,5 +1,9 @@
-import { createEffect, Show, type Component } from "solid-js";
-import { subagentTranscript, syncSubagentTranscript } from "../../store/subagents";
+import { createEffect, onCleanup, Show, type Component } from "solid-js";
+import {
+	holdSubagentTranscript,
+	subagentTranscript,
+	syncSubagentTranscript,
+} from "../../store/subagents";
 import { TranscriptStream } from "../chat/transcript/TranscriptStream";
 
 /**
@@ -8,6 +12,8 @@ import { TranscriptStream } from "../chat/transcript/TranscriptStream";
  * jump-to-live control once the user scrolls away.
  */
 export const SubagentTranscript: Component<{ id: string }> = (props) => {
+	// While mounted the store keeps this agent's transcript; once closed it is among the few retained.
+	createEffect(() => onCleanup(holdSubagentTranscript(props.id)));
 	createEffect(() => syncSubagentTranscript(props.id));
 	const transcript = () => subagentTranscript(props.id);
 	return (

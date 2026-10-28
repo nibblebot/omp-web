@@ -54,6 +54,7 @@ import { clearAllDeletePending, resetPendingProjects } from "../store/projects";
 import { COLLAB_OFF } from "../store/slices/collab";
 import { activatingIds, resumeWorktreeSession } from "../store/worktree-sessions";
 import { settingValue } from "../store/settings";
+import { subagentTranscript, syncSubagentTranscript } from "../store/subagents";
 import { reportError } from "../store/toasts";
 import {
 	FakeWebSocket,
@@ -266,6 +267,43 @@ describe("attached-frame handling", () => {
 		await flushMicrotasks();
 		expect(state.subagents.get("s1")?.status).toBe("running");
 		expect(state.currentWorkspaceId).toBe("session-b");
+	});
+
+	test("a session switch drops the transcripts the previous session's panes loaded", async () => {
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		dispatch(attached("session-a"));
+		setState(
+			"subagents",
+			new Map([
+				["owl", { id: "owl", index: 0, agent: "task", status: "completed", lastUpdate: 1 }],
+			]),
+		);
+		syncSubagentTranscript("owl");
+		const read = posted.find(
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method === "getSubagentMessages",
+		);
+		expect(read).toBeDefined();
+		const message = { role: "user", content: "go", timestamp: 1 };
+		dispatch(
+			callResult(read!.id, {
+				sessionFile: "/s/a.jsonl",
+				fromByte: 0,
+				nextByte: 10,
+				reset: false,
+				hasMore: false,
+				entries: [{ type: "message", id: "m1", parentId: null, timestamp: "t", message }],
+				messages: [message],
+			}),
+		);
+		await flushMicrotasks();
+		expect(subagentTranscript("owl").items).toHaveLength(1);
+
+		dispatch(attached("session-b"));
+		// Transcripts are keyed by session: look at session-a's key again.
+		setState("currentWorkspaceId", "session-a");
+		expect(subagentTranscript("owl").items).toHaveLength(0);
 	});
 
 	test("a re-attach of the same session drops the previous generation's scope before the on-attach calls", () => {

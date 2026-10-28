@@ -70,12 +70,17 @@ export function filterActiveSubagentTree(
  * top in the order they settled. The input's `startedAt` order is not stable (live
  * frames, the roster and a mirror reload stamp it from different clocks), so agents that
  * started close together would swap on updates. A revived agent returns to its first-seen
- * place. Applies at every level and returns new arrays; one instance per card.
+ * place. Applies at every level and returns new arrays, but an agent that did not change keeps its
+ * ordered copy, so rows keyed on node identity see only what moved; one instance per card.
  */
 export function createStableSubagentOrder(): (nodes: readonly SubagentNode[]) => SubagentNode[] {
 	const seen = new Map<string, number>();
 	const settled = new Map<string, number>();
+	// The ordered copy of a node, reused while the node and its ordered children are the same objects.
+	const copies = new WeakMap<SubagentNode, SubagentNode>();
 	let settleCount = 0;
+	const sameNodes = (a: readonly SubagentNode[], b: readonly SubagentNode[]) =>
+		a.length === b.length && a.every((node, i) => node === b[i]);
 	const order = (nodes: readonly SubagentNode[]): SubagentNode[] => {
 		for (const node of nodes) {
 			if (!seen.has(node.id)) seen.set(node.id, seen.size);
@@ -86,7 +91,14 @@ export function createStableSubagentOrder(): (nodes: readonly SubagentNode[]) =>
 			.sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0));
 		for (const node of newlySettled) settled.set(node.id, settleCount++);
 		return nodes
-			.map((node) => ({ ...node, children: order(node.children) }))
+			.map((node) => {
+				const children = order(node.children);
+				const copy = copies.get(node);
+				if (copy !== undefined && sameNodes(copy.children, children)) return copy;
+				const next = { ...node, children };
+				copies.set(node, next);
+				return next;
+			})
 			.sort((a, b) => {
 				const aSettled = settled.get(a.id);
 				const bSettled = settled.get(b.id);

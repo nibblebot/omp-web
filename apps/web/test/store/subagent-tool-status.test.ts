@@ -66,10 +66,10 @@ beforeEach(() => {
 	setState("currentWorkspaceId", `session-${counter}`);
 });
 
-function setAgent(status: string, lastUpdate: number): void {
+function setAgent(status: string, lastUpdate: number, progress?: Record<string, unknown>): void {
 	setState(
 		"subagents",
-		new Map([[agent, { id: agent, index: 0, agent: "task", status, lastUpdate }]]),
+		new Map([[agent, { id: agent, index: 0, agent: "task", status, lastUpdate, progress }]]),
 	);
 	syncSubagentTranscript(agent);
 }
@@ -97,7 +97,8 @@ describe("subagent transcript tool status", () => {
 		await settle();
 		expect(statuses()).toEqual(["error"]);
 
-		setAgent("running", 2);
+		// A finished request is what tells the pane the transcript grew.
+		setAgent("running", 2, { requests: 1 });
 		await settle();
 		expect(statuses()).toEqual(["interrupted"]);
 	});

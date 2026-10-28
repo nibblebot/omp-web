@@ -1,7 +1,8 @@
 /**
- * Pure reducers for the live subagent mirror (`state.subagents`). No Solid store
- * and no transport: state.ts applies these to the map, and tests drive them
- * directly. Frames are untrusted, so every reader tolerates wrong shapes.
+ * Reducers for the live subagent mirror (`state.subagents`). No Solid store and
+ * no transport: they write into the map they are given, in place, and state.ts
+ * hands them its `ReactiveMap`; tests drive them with a plain Map. Frames are untrusted, so every
+ * reader tolerates wrong shapes.
  *
  * Progress frames carry the SDK `AgentProgress` record. A `delta: true` frame
  * (U02 coalescing) patches the previous record: an absent key is unchanged and
@@ -94,13 +95,16 @@ function findByIndex(
 	return undefined;
 }
 
-/** Applies a `subagent_lifecycle` frame. Returns a new map; the input is never mutated. */
+/**
+ * Applies a `subagent_lifecycle` frame to `next` in place and returns it. The entries are immutable
+ * snapshots (a frame replaces the agent's info object); with a `ReactiveMap` only the readers of the
+ * keys it touches rerun.
+ */
 export function applyLifecycleFrame(
-	previous: SubagentMap,
+	next: Map<string, SubagentInfo>,
 	payload: unknown,
 	now: number,
 ): Map<string, SubagentInfo> {
-	const next = new Map(previous);
 	const p = rec(payload);
 	const id = str(p?.id);
 	if (!p || !id) return next;
@@ -131,13 +135,12 @@ export function applyLifecycleFrame(
 	return next;
 }
 
-/** Applies a `subagent_progress` frame, full or delta. Keys by `progress.id`; `index` is the id-less fallback. */
+/** Applies a `subagent_progress` frame, full or delta, to `next` in place (see `applyLifecycleFrame`). Keys by `progress.id`; `index` is the id-less fallback. */
 export function applyProgressFrame(
-	previous: SubagentMap,
+	next: Map<string, SubagentInfo>,
 	payload: unknown,
 	now: number,
 ): Map<string, SubagentInfo> {
-	const next = new Map(previous);
 	const p = rec(payload);
 	const progress = rec(p?.progress);
 	if (!p || !progress) return next;
@@ -145,7 +148,7 @@ export function applyProgressFrame(
 	const parentToolCallId = str(p.parentToolCallId);
 	const key =
 		str(progress.id) ??
-		findByIndex(previous, index, parentToolCallId) ??
+		findByIndex(next, index, parentToolCallId) ??
 		(index !== undefined ? `progress-${index}` : undefined);
 	if (key === undefined) return next;
 	const existing = next.get(key);
@@ -166,6 +169,15 @@ export function applyProgressFrame(
 		endedAt: isTerminalRaw(status) ? (existing?.endedAt ?? now) : undefined,
 	});
 	return next;
+}
+
+/** True when `metricsOf` reads the clock: a running agent with no reported duration counts up from `startedAt`. */
+export function metricsUseClock(info: SubagentInfo): boolean {
+	return (
+		info.endedAt === undefined &&
+		info.startedAt !== undefined &&
+		num(info.progress?.durationMs) === undefined
+	);
 }
 
 /** Metrics for one agent. Live progress wins; the roster usage is the fallback when no live record exists. */

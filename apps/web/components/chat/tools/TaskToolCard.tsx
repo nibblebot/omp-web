@@ -16,7 +16,10 @@ export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 		return args?.description ?? args?.task ?? args?.prompt ?? "";
 	};
 	const order = createStableSubagentOrder();
+	// One evaluation per forest build, shared by every read below; a card whose agents did not change gets
+	// the same arrays back and updates nothing.
 	const forest = createMemo(() => order(subagentTree(props.item.toolCallId)));
+	const totals = createMemo(() => fanoutTotals(props.item.toolCallId));
 	return (
 		<ToolCardShell
 			name="task"
@@ -26,7 +29,7 @@ export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 			class="task-tool"
 			meta={
 				<Show when={forest().length > 0}>
-					<SubagentFanoutTotals totals={fanoutTotals(props.item.toolCallId)} placement="header" />
+					<SubagentFanoutTotals totals={totals()} placement="header" />
 				</Show>
 			}
 		>

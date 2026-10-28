@@ -119,8 +119,14 @@ import { createGoalState } from "./store/slices/goals";
 import { createIntegrationState, skillsPatch } from "./store/slices/integrations";
 import { createResumeState } from "./store/resume";
 import { createCompactionState } from "./store/compaction";
-import { createWorkersState, requestRosterRefresh } from "./store/subagents";
-import { applyLifecycleFrame, applyProgressFrame } from "./store/subagent-frames";
+import {
+	applySubagentLifecycle,
+	applySubagentProgress,
+	clearSubagentTranscripts,
+	createWorkersState,
+	requestRosterRefresh,
+} from "./store/subagents";
+import { ReactiveMap } from "./subagents/reactive-map";
 import { applyJobWidgets, clearJobWidgets } from "./store/job-widgets";
 import { createJobWidgetsState } from "./store/slices/job-widgets";
 import {
@@ -457,7 +463,7 @@ export const [state, setState] = createStore({
 	// --- Server-pushed extras ---
 	availableCommands: [] as AvailableSlashCommand[],
 	stats: null as SessionStats | null,
-	subagents: new Map<string, SubagentInfo>(),
+	subagents: new ReactiveMap<string, SubagentInfo>() as Map<string, SubagentInfo>,
 	// The attached session's running background jobs and their widget glances (`job_widgets` frames); see store/job-widgets.ts.
 	jobWidgets: createJobWidgetsState(),
 	connected: false,
@@ -1219,6 +1225,7 @@ function resetSessionView(): void {
 		workers: createWorkersState(),
 		browserUi: createBrowserUiState(),
 	});
+	clearSubagentTranscripts();
 	clearPendingDeltas();
 	// Same rationale as loadHistory: ids must not collide across transcripts.
 	resetChatIds();
@@ -1226,7 +1233,7 @@ function resetSessionView(): void {
 		modelSynced: false,
 		items: [],
 		live: { active: false, blocks: [], rev: 0 },
-		subagents: new Map<string, SubagentInfo>(),
+		subagents: new ReactiveMap<string, SubagentInfo>() as Map<string, SubagentInfo>,
 		jobWidgets: createJobWidgetsState(),
 		stats: null,
 		...createGoalState(),
@@ -1464,7 +1471,7 @@ export function connect(): void {
 			retryNotAttachedCalls();
 			void call("getSubagents")
 				.then((subs) => {
-					const next = new Map<string, SubagentInfo>();
+					const next = new ReactiveMap<string, SubagentInfo>();
 					for (const s of subs as SubagentInfo[]) if (s.id) next.set(s.id, s);
 					batch(() => {
 						setState("subagents", next);
@@ -1711,15 +1718,13 @@ export function connect(): void {
 				settleFiles(frame.files);
 				break;
 			case "subagent_lifecycle": {
-				const payload = frame.payload;
-				setState("subagents", (prev) => applyLifecycleFrame(prev, payload, Date.now()));
+				applySubagentLifecycle(frame.payload);
 				// Parked and revivable state lives in the session roster: refetch it on lifecycle edges (SUB-10).
 				requestRosterRefresh();
 				break;
 			}
 			case "subagent_progress": {
-				const payload = frame.payload;
-				setState("subagents", (prev) => applyProgressFrame(prev, payload, Date.now()));
+				applySubagentProgress(frame.payload);
 				break;
 			}
 			case "login_url":
