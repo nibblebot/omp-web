@@ -1,4 +1,5 @@
 import { AnnotationsPanel } from "../components/review/AnnotationsPanel";
+import { ReviewPanel } from "../components/review/ReviewPanel";
 import { Modal } from "../components/ui/Modal";
 import { pushNotice, setState } from "../state";
 import { openDock } from "../store/dock";
@@ -39,5 +40,6 @@ export default {
 			</Modal>
 		),
 	},
+	docks: { review: { title: "Git review", body: ReviewPanel } },
 	commands: { git, annotations },
 } satisfies FeatureModule;

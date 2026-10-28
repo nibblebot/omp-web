@@ -37,7 +37,6 @@ import { openDock } from "../store/dock";
 import { openIntegrations } from "../store/integrations";
 import { askBtw, btwDispatch } from "../store/btw";
 import { downloadArchive, downloadHtml, downloadRequest, downloadText } from "../store/downloads";
-import { queuedAnnotationIds, withQueuedAnnotations } from "../store/review";
 import { MAINTENANCE_CALL_TIMEOUT_MS } from "../store/transport";
 
 export type InputMode = "enter" | "followup";
@@ -628,8 +627,10 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			// steer on an idle session errors server-side; Enter falls back to prompt.
 			const method = mode === "followup" ? "followUp" : state.streaming ? "steer" : "prompt";
 			const payload = images && images.length > 0 ? images : undefined;
-			if (queuedAnnotationIds().length)
-				void withQueuedAnnotations(trimmed)
+			// Annotations queue only while the Git Review feature is on; its store loads with the first queued send.
+			if (state.review.queuedAnnotationIds.length)
+				void import("../store/review")
+					.then(({ withQueuedAnnotations }) => withQueuedAnnotations(trimmed))
 					.then((prompt) => call(method, [prompt, payload]))
 					.catch(showError);
 			else void call(method, [trimmed, payload]).catch(showError);

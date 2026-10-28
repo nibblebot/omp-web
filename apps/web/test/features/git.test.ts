@@ -1,6 +1,11 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { FEATURE_IDS } from "../../features/manifest";
-import { activateFeatures, featureCommand, isFeatureEnabled } from "../../features/registry";
+import {
+	activateFeatures,
+	featureCommand,
+	featureDock,
+	isFeatureEnabled,
+} from "../../features/registry";
 import { setState, state } from "../../state";
 
 // The git feature is in development, so only activateFeatures can load it. The baseline
@@ -33,5 +38,11 @@ describe("git feature", () => {
 		expect(state.modal).toBeNull();
 		featureCommand("annotations")!.command.run("");
 		expect(state.modal).toBe("annotations");
+	});
+
+	test("fills the review dock slot only while the feature is active", async () => {
+		expect(featureDock("review")?.title).toBe("Git review");
+		await activateFeatures([]);
+		expect(featureDock("review")).toBeUndefined();
 	});
 });

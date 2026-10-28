@@ -1,41 +1,27 @@
 import {
+	ErrorBoundary,
 	For,
 	Show,
 	createComputed,
 	createEffect,
 	createSignal,
 	on,
+	onMount,
 	type Component,
 	type JSX,
 } from "solid-js";
-import { AppearanceSheet } from "./components/app/AppearanceSheet";
-import { ShortcutsDialog } from "./components/app/ShortcutsDialog";
-import { CommandPalettePicker } from "./components/app/CommandPalettePicker";
 import { FleetSignInDialog } from "./components/app/FleetSignInDialog";
 import { Toasts } from "./components/app/Toasts";
-import { CompactionDialog } from "./components/chat/controls/CompactionDialog";
-import { GoalDialog } from "./components/chat/controls/GoalDialog";
-import { AddProjectDialog } from "./components/fleet/workspaces/AddProjectDialog";
 import { DeleteWorkspaceDialog } from "./components/fleet/workspaces/DeleteWorkspaceDialog";
 import { RemoveProjectDialog } from "./components/fleet/workspaces/RemoveProjectDialog";
-import { SessionDetailsDialog } from "./components/fleet/session/SessionDetailsDialog";
-import { WorktreeSessionsDialog } from "./components/fleet/sidebar/WorktreeSessionsDialog";
-import { ProviderLoginDialog } from "./components/models/ProviderLoginDialog";
-import { ModelDialog } from "./components/models/ModelDialog";
 import { ExtensionUi } from "./components/requests/ExtensionUi";
 import { DangerConfirmDialog } from "./components/requests/DangerConfirmDialog";
 import { DownloadDialog } from "./components/requests/DownloadDialog";
-import { BtwSheet } from "./components/requests/BtwSheet";
-import { SessionPicker } from "./components/sessions/SessionPicker";
-import { SettingsSheet } from "./components/settings/SettingsSheet";
-import { IntegrationsDialog } from "./components/settings/integrations/IntegrationsDialog";
-import { ShareSheet } from "./components/collab/ShareSheet";
-import { SessionStatsDialog } from "./components/usage/SessionStatsDialog";
-import { AdvisorSheet } from "./components/subagents/AdvisorSheet";
-import { UsageLimitsDialog } from "./components/usage/UsageLimitsDialog";
 import { ImageLightbox } from "./components/ui/ImageLightbox";
 import { createModalLayer, ModalLayerContext, type ModalLayer } from "./components/ui/Modal";
+import { lazyComponent } from "./components/ui/lazy";
 import { featureModal, featureOverlays } from "./features/registry";
+import { pushToast } from "./store/toasts";
 import {
 	closeSessionDetails,
 	closeLightbox,
@@ -44,6 +30,82 @@ import {
 	state,
 	type ModalName,
 } from "./state";
+
+/** Dialogs and sheets load on first open, not with the entry chunk. */
+const ShortcutsDialog = lazyComponent(() =>
+	import("./components/app/ShortcutsDialog").then((m) => m.ShortcutsDialog),
+);
+const CommandPalettePicker = lazyComponent(() =>
+	import("./components/app/CommandPalettePicker").then((m) => m.CommandPalettePicker),
+);
+const AppearanceSheet = lazyComponent(() =>
+	import("./components/app/AppearanceSheet").then((m) => m.AppearanceSheet),
+);
+const CompactionDialog = lazyComponent(() =>
+	import("./components/chat/controls/CompactionDialog").then((m) => m.CompactionDialog),
+);
+const GoalDialog = lazyComponent(() =>
+	import("./components/chat/controls/GoalDialog").then((m) => m.GoalDialog),
+);
+const AddProjectDialog = lazyComponent(() =>
+	import("./components/fleet/workspaces/AddProjectDialog").then((m) => m.AddProjectDialog),
+);
+const SessionDetailsDialog = lazyComponent(() =>
+	import("./components/fleet/session/SessionDetailsDialog").then((m) => m.SessionDetailsDialog),
+);
+const WorktreeSessionsDialog = lazyComponent(() =>
+	import("./components/fleet/sidebar/WorktreeSessionsDialog").then((m) => m.WorktreeSessionsDialog),
+);
+const ProviderLoginDialog = lazyComponent(() =>
+	import("./components/models/ProviderLoginDialog").then((m) => m.ProviderLoginDialog),
+);
+const ModelDialog = lazyComponent(() =>
+	import("./components/models/ModelDialog").then((m) => m.ModelDialog),
+);
+const BtwSheet = lazyComponent(() =>
+	import("./components/requests/BtwSheet").then((m) => m.BtwSheet),
+);
+const SessionPicker = lazyComponent(() =>
+	import("./components/sessions/SessionPicker").then((m) => m.SessionPicker),
+);
+const SettingsSheet = lazyComponent(() =>
+	import("./components/settings/SettingsSheet").then((m) => m.SettingsSheet),
+);
+const IntegrationsDialog = lazyComponent(() =>
+	import("./components/settings/integrations/IntegrationsDialog").then((m) => m.IntegrationsDialog),
+);
+const ShareSheet = lazyComponent(() =>
+	import("./components/collab/ShareSheet").then((m) => m.ShareSheet),
+);
+const SessionStatsDialog = lazyComponent(() =>
+	import("./components/usage/SessionStatsDialog").then((m) => m.SessionStatsDialog),
+);
+const AdvisorSheet = lazyComponent(() =>
+	import("./components/subagents/AdvisorSheet").then((m) => m.AdvisorSheet),
+);
+const UsageLimitsDialog = lazyComponent(() =>
+	import("./components/usage/UsageLimitsDialog").then((m) => m.UsageLimitsDialog),
+);
+
+/**
+ * Fetch the chunks of the dialogs behind the global shortcuts (Ctrl+K, Ctrl+,)
+ * so their first open does not wait on the network. index.tsx runs this once
+ * the page is idle; failures are ignored, the open retries the load.
+ */
+export function preloadShortcutModals(): void {
+	for (const modal of [CommandPalettePicker, SettingsSheet]) modal.preload().catch(() => undefined);
+}
+
+/** What a modal shows when its module fails to load (or render): a toast, and the modal closes so a retry can reopen it. */
+const ModalFailure: Component<{ error: unknown; onClose: () => void }> = (props) => {
+	onMount(() => {
+		pushToast(
+			`That dialog could not open: ${props.error instanceof Error ? props.error.message : String(props.error)}`,
+		);
+		props.onClose();
+	});
+	return null;
+};
 
 /**
  * Every overlay App mounts: the active `state.modal`, plus the dialogs that
@@ -153,7 +215,18 @@ export const ModalHost: Component = () => {
 			<For each={layers()}>
 				{(layer) => (
 					<ModalLayerContext.Provider value={layer}>
-						{modals[layer.name]()}
+						<ErrorBoundary
+							fallback={(error) => (
+								<ModalFailure
+									error={error}
+									onClose={() => {
+										if (state.modal === layer.name) close();
+									}}
+								/>
+							)}
+						>
+							{modals[layer.name]()}
+						</ErrorBoundary>
 					</ModalLayerContext.Provider>
 				)}
 			</For>
@@ -161,7 +234,13 @@ export const ModalHost: Component = () => {
 				{(img) => <ImageLightbox image={img} onClose={closeLightbox} />}
 			</Show>
 			<Show when={sessionDetails()}>
-				{(session) => <SessionDetailsDialog session={session()} onClose={closeSessionDetails} />}
+				{(session) => (
+					<ErrorBoundary
+						fallback={(error) => <ModalFailure error={error} onClose={closeSessionDetails} />}
+					>
+						<SessionDetailsDialog session={session()} onClose={closeSessionDetails} />
+					</ErrorBoundary>
+				)}
 			</Show>
 			<For each={featureOverlays()}>{(Overlay) => <Overlay />}</For>
 			<ExtensionUi placement="modal" />

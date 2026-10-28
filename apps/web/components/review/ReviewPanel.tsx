@@ -17,8 +17,6 @@ import {
 	fileDiff,
 	gitError,
 	gitLoading,
-	gitReviewAvailable,
-	gitReviewUnavailableReason,
 	gitSelection,
 	gitStatus,
 	guardDraftEscape,
@@ -35,6 +33,7 @@ import {
 	toggleHunk,
 	unstagePaths,
 } from "../../store/review";
+import { gitReviewAvailable, gitReviewUnavailableReason } from "../../store/git-capability";
 
 /** Hunks can be staged and annotated only for an unstaged, textual, complete diff. */
 const hunksStageable = (diff: GitReviewDiff): boolean =>

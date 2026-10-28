@@ -9,29 +9,17 @@ import {
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { DockPane } from "../ui/DockPane";
-import { FEATURES } from "../../features/manifest";
-import { isFeatureEnabled } from "../../features/registry";
+import { featureDock, type DockPanel } from "../../features/registry";
 import { ActivitiesModeToggle } from "../activities/ActivitiesModeToggle";
 import { ActivitiesPanel } from "../activities/ActivitiesPanel";
-import { ReviewPanel } from "../review/ReviewPanel";
 import { SessionTreePanel } from "../sessions/SessionTreePanel";
 import { afterMotion, createPresence } from "../../motion/presence";
 import { applyDockWidth, DOCK_MAX_WIDTH, DOCK_MIN_WIDTH } from "../../prefs/dock";
 import { backFromDock, closeDock, setDockWidth } from "../../store/dock";
 import { state } from "../../state";
 
-interface DockKind {
-	title: string;
-	body: Component;
-	/** The body scrolls and pads itself (see DockPane `flush`). */
-	flush?: boolean;
-	/** Header controls beside the close button (DockPane `actions`). */
-	actions?: Component;
-}
-
-/** Dock panel kinds, keyed by the route's `<kind>` segment. */
-const DOCK_KINDS: Record<string, DockKind> = {
-	review: { title: "Git review", body: ReviewPanel },
+/** Core dock panel kinds, keyed by the route's `<kind>` segment; features add theirs through the registry (`featureDock`). */
+const DOCK_KINDS: Record<string, DockPanel> = {
 	tree: { title: "Session tree", body: SessionTreePanel },
 	activities: {
 		title: "Activities",
@@ -57,18 +45,17 @@ export const DockHost: Component = () => {
 	onMount(() => applyDockWidth(state.dockWidth));
 	const entry = () => {
 		const dock = state.dock;
+		if (dock === null) return undefined;
 		// hasOwn: a kind such as `constructor` must not match an inherited key.
-		if (dock === null || !Object.hasOwn(DOCK_KINDS, dock.kind)) return undefined;
+		if (Object.hasOwn(DOCK_KINDS, dock.kind)) return DOCK_KINDS[dock.kind];
 		// A saved layout or route can name a panel whose feature is off; it stays closed.
-		const kind = dock.kind;
-		if (FEATURES.some((f) => f.docks.includes(kind) && !isFeatureEnabled(f.id))) return undefined;
-		return DOCK_KINDS[kind];
+		return featureDock(dock.kind);
 	};
 	const presence = createPresence(() => entry() !== undefined);
 
 	// Content: the last open panel stays through the slide-out, and a kind
 	// switch lags the store by the fade-out. `swapId` drops stale async swaps.
-	const [shown, setShown] = createSignal<DockKind | undefined>();
+	const [shown, setShown] = createSignal<DockPanel | undefined>();
 	const [swapping, setSwapping] = createSignal(false);
 	let swapId = 0;
 	let body: HTMLElement | undefined;

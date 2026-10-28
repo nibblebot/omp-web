@@ -9,11 +9,9 @@ import type {
 import type { GitReviewDiff, TodoReviewOp } from "./slices/review";
 import { setPromptInsert, setState, state } from "../state";
 import { requestDangerConfirm } from "../prompt/danger-confirm";
+import { gitReviewAvailable } from "./git-capability";
 import { call } from "./transport";
 
-export const gitReviewAvailable = (): boolean => state.capabilities?.git?.available === true;
-export const gitReviewUnavailableReason = (): string =>
-	state.capabilities?.git?.reason ?? "This server does not advertise git review.";
 export const gitStatus = () => state.review.gitStatus;
 export const gitLoading = () => state.review.gitLoading;
 export const gitError = () => state.review.gitError;

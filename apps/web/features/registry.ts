@@ -26,6 +26,16 @@ export interface FeatureCommand {
 	run(args: string): void;
 }
 
+/** A right-dock panel shown by DockHost under the route's `<kind>` segment; features contribute theirs through `docks`. */
+export interface DockPanel {
+	title: string;
+	body: Component;
+	/** The body scrolls and pads itself (see DockPane `flush`). */
+	flush?: boolean;
+	/** Header controls beside the close button (DockPane `actions`). */
+	actions?: Component;
+}
+
 /**
  * Typed extension slots a feature may fill. Core code reads slots only through
  * the accessors below, and only while the feature is active; a feature never
@@ -37,6 +47,8 @@ export interface FeatureModule {
 	modals?: Partial<Record<ModalName, Component<{ onClose: () => void }>>>;
 	/** Always-mounted overlays that render from their own store state. */
 	overlays?: readonly Component[];
+	/** Right-dock panels by kind. Kinds are declared in `manifest.ts` (`docks`). */
+	docks?: Readonly<Record<string, DockPanel>>;
 	/** Slash commands handled locally. Names are declared in `manifest.ts`. */
 	commands?: Readonly<Record<string, FeatureCommand>>;
 	/** Analysis main view, mounted by App next to Chat. */
@@ -151,6 +163,14 @@ export function featureModal(name: ModalName): Component<{ onClose: () => void }
 	for (const owner of featuresForModal(name)) {
 		const renderer = activeModule(owner.id)?.modals?.[name];
 		if (renderer) return renderer;
+	}
+	return undefined;
+}
+
+/** The dock panel for a kind owned by an active feature, or undefined when it is not a feature kind or every owner is off. */
+export function featureDock(kind: string): DockPanel | undefined {
+	for (const mod of allActiveModules()) {
+		if (mod.docks !== undefined && Object.hasOwn(mod.docks, kind)) return mod.docks[kind];
 	}
 	return undefined;
 }

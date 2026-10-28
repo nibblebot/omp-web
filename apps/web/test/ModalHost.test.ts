@@ -91,6 +91,7 @@ beforeAll(async () => {
 	mock.module("../features/registry", () => isolatedRegistry);
 	flow.add(solid.Show);
 	flow.add(solid.For);
+	flow.add(solid.ErrorBoundary);
 	// Static imports cannot bind the host to the suite-scoped client runtime.
 	({ ModalHost } = await import("../ModalHost"));
 	({ ModalLayerContext } = await import("../components/ui/Modal"));
@@ -142,6 +143,25 @@ function renderHost(): unknown[] {
 	return [...created];
 }
 
+/**
+ * The dialogs the current host created, lazy ones resolved to the component
+ * their module exports (dialogs load on first open, so the host creates a
+ * lazy wrapper). Other element types pass through.
+ */
+async function renderedDialogs(): Promise<unknown[]> {
+	return Promise.all(
+		created.map((type) => {
+			const preload = (type as { preload?: () => Promise<unknown> }).preload;
+			return preload === undefined ? type : preload();
+		}),
+	);
+}
+
+/** Props the host passed to the created element whose resolved type is `component`. */
+async function propsOf(component: unknown): Promise<Record<string, unknown> | undefined> {
+	return createdProps[(await renderedDialogs()).indexOf(component)];
+}
+
 beforeEach(async () => {
 	installJsxShim({
 		onElement(type, props) {
@@ -164,24 +184,27 @@ afterEach(() => {
 });
 
 describe("ModalHost", () => {
-	test("renders the renderer registered for state.modal", () => {
-		expect(renderHost()).not.toContain(ShortcutsDialog);
+	test("renders the renderer registered for state.modal", async () => {
+		renderHost();
+		expect(await renderedDialogs()).not.toContain(ShortcutsDialog);
 		setState("modal", "help");
-		expect(renderHost()).toContain(ShortcutsDialog);
+		renderHost();
+		expect(await renderedDialogs()).toContain(ShortcutsDialog);
 	});
 
-	test("/help opens Commands and /hotkeys opens Shortcuts", () => {
+	test("/help opens Commands and /hotkeys opens Shortcuts", async () => {
 		setState("modal", "help");
 		renderHost();
-		expect(createdProps[created.indexOf(ShortcutsDialog)]?.initialTab).toBe("commands");
+		expect((await propsOf(ShortcutsDialog))?.initialTab).toBe("commands");
 		setState("modal", "hotkeys");
 		renderHost();
-		expect(createdProps[created.indexOf(ShortcutsDialog)]?.initialTab).toBe("shortcuts");
+		expect((await propsOf(ShortcutsDialog))?.initialTab).toBe("shortcuts");
 	});
 
 	test("renders nothing for a modal owned by a feature that is off", () => {
-		// The layer's context provider is structure, not a dialog.
-		const dialogs = (types: unknown[]) => types.filter((t) => t !== ModalLayerContext.Provider);
+		// The layer's context provider and error boundary are structure, not dialogs.
+		const dialogs = (types: unknown[]) =>
+			types.filter((t) => t !== ModalLayerContext.Provider && t !== solid.ErrorBoundary);
 		const withoutModal = dialogs(renderHost());
 		// "plan-review" belongs to the plan feature, which is not active on this page.
 		setState("modal", "plan-review");
@@ -196,29 +219,33 @@ describe("ModalHost", () => {
 		expect(renderHost()).toContain(registered);
 	});
 
-	test("renders the Extensions dialog with no features active", () => {
+	test("renders the Extensions dialog with no features active", async () => {
 		setState("modal", "integrations");
-		expect(renderHost()).toContain(IntegrationsDialog);
+		renderHost();
+		expect(await renderedDialogs()).toContain(IntegrationsDialog);
 	});
 
 	test("renders nothing for the todos sheet with no features active", () => {
-		const dialogs = (types: unknown[]) => types.filter((t) => t !== ModalLayerContext.Provider);
+		const dialogs = (types: unknown[]) =>
+			types.filter((t) => t !== ModalLayerContext.Provider && t !== solid.ErrorBoundary);
 		const withoutModal = dialogs(renderHost());
 		setState("modal", "todos");
 		expect(dialogs(renderHost())).toEqual(withoutModal);
 	});
 
-	test("renders the session details dialog while its session is in the roster", () => {
+	test("renders the session details dialog while its session is in the roster", async () => {
 		setState("sessionRoster", [session("d1")]);
 		openSessionDetails("d1");
-		expect(renderHost()).toContain(SessionDetailsDialog);
+		renderHost();
+		expect(await renderedDialogs()).toContain(SessionDetailsDialog);
 		expect(state.sessionDetailsId).toBe("d1");
 	});
 
-	test("clears the session details slot when its session leaves the roster", () => {
+	test("clears the session details slot when its session leaves the roster", async () => {
 		setState("sessionRoster", [session("d1"), session("d2")]);
 		openSessionDetails("d2");
-		expect(renderHost()).toContain(SessionDetailsDialog);
+		renderHost();
+		expect(await renderedDialogs()).toContain(SessionDetailsDialog);
 		// An unrelated session leaving changes nothing.
 		setState("sessionRoster", [session("d2")]);
 		expect(state.sessionDetailsId).toBe("d2");
@@ -226,19 +253,22 @@ describe("ModalHost", () => {
 		// the next mount renders nothing for the stale id.
 		setState("sessionRoster", []);
 		expect(state.sessionDetailsId).toBeNull();
-		expect(renderHost()).not.toContain(SessionDetailsDialog);
+		renderHost();
+		expect(await renderedDialogs()).not.toContain(SessionDetailsDialog);
 	});
 
-	test("a stale session details id is cleared instead of mounting the dialog", () => {
+	test("a stale session details id is cleared instead of mounting the dialog", async () => {
 		openSessionDetails("d1");
-		expect(renderHost()).not.toContain(SessionDetailsDialog);
+		renderHost();
+		expect(await renderedDialogs()).not.toContain(SessionDetailsDialog);
 		expect(state.sessionDetailsId).toBeNull();
 	});
 
-	test("renders the worktree session dialog while its session is in the roster", () => {
+	test("renders the worktree session dialog while its session is in the roster", async () => {
 		setState("sessionRoster", [session("d1")]);
 		openWorktreeSessions("d1");
-		expect(renderHost()).toContain(WorktreeSessionsDialog);
+		renderHost();
+		expect(await renderedDialogs()).toContain(WorktreeSessionsDialog);
 		expect(state.modal).toBe("worktree-sessions");
 		expect(state.worktreeSessionsId).toBe("d1");
 	});
@@ -255,9 +285,10 @@ describe("ModalHost", () => {
 		expect(state.worktreeSessionsId).toBeNull();
 	});
 
-	test("a stale worktree session id is cleared instead of mounting the dialog", () => {
+	test("a stale worktree session id is cleared instead of mounting the dialog", async () => {
 		openWorktreeSessions("d1");
-		expect(renderHost()).not.toContain(WorktreeSessionsDialog);
+		renderHost();
+		expect(await renderedDialogs()).not.toContain(WorktreeSessionsDialog);
 		expect(state.modal).toBeNull();
 		expect(state.worktreeSessionsId).toBeNull();
 	});

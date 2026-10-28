@@ -3,7 +3,7 @@ import { createEffect, createSignal, For, Show, type Component } from "solid-js"
 import { sendDeleteWorktree, setState, state } from "../../../state";
 import { isFeatureEnabled } from "../../../features/registry";
 import { Modal } from "../../ui/Modal";
-import { gitReviewAvailable, gitReviewUnavailableReason } from "../../../store/review";
+import { gitReviewAvailable, gitReviewUnavailableReason } from "../../../store/git-capability";
 import { attachForPanel } from "../../../store/roster";
 import { openDock } from "../../../store/dock";
 

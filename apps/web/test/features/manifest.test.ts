@@ -67,4 +67,13 @@ describe("FEATURES manifest", () => {
 			expect({ feature: feature.id, undeclared }).toEqual({ feature: feature.id, undeclared: [] });
 		}
 	});
+
+	test("every dock panel a feature module exports is declared in its manifest entry", async () => {
+		for (const feature of FEATURES) {
+			const { default: mod } = await LOADERS[feature.id]();
+			const declared: readonly string[] = feature.docks;
+			const undeclared = Object.keys(mod.docks ?? {}).filter((kind) => !declared.includes(kind));
+			expect({ feature: feature.id, undeclared }).toEqual({ feature: feature.id, undeclared: [] });
+		}
+	});
 });
