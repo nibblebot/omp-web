@@ -22,6 +22,19 @@ function itemsOf(tabId: string, tabs: SettingsModel["tabs"]) {
 }
 
 describe("createFleetSettings", () => {
+	test("getValues answers the named values for future sessions without building the model", async () => {
+		const settings = createFleetSettings({ registry: emptyRegistry });
+		const model = await settings.getModel();
+		const answer = await settings.getValues(["emojiAutocomplete", "no.such.setting"]);
+		expect(answer.target).toBe("future-sessions");
+		expect(answer.revision).toBe(model.revision!);
+		expect(answer.values).toEqual({
+			emojiAutocomplete: itemsOf("interaction", model.tabs).find(
+				(item) => item.path === "emojiAutocomplete",
+			)?.value,
+		});
+	});
+
 	test("getModel builds every schema tab in schema order", async () => {
 		const settings = createFleetSettings({ registry: emptyRegistry });
 		const model = await settings.getModel();

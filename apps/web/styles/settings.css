@@ -208,6 +208,10 @@
 	line-height: 1.3;
 	color: var(--text);
 }
+/* End of the mounted tabs: the next tab mounts when this nears the viewport (SettingsSheet). */
+.settings-stream-more {
+	height: 1px;
+}
 .settings-note {
 	color: var(--muted);
 	text-align: center;

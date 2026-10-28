@@ -32,7 +32,9 @@ import {
 } from "../../prefs/settings-tabs";
 import { searchAutofocus } from "../../store/integrations";
 import { consumeSettingsTab, openModelDialog } from "../../store/models";
-import { fleetSettingsActive, openAppearance, refreshSettings, setState, state } from "../../state";
+import { fleetSettingsActive, openAppearance, setState, state } from "../../state";
+import { holdSettingsModel } from "../../store/settings";
+import { createGrowingCount } from "./createGrowingCount";
 import { SearchIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
 import { FeaturesSettings, searchFeatures } from "./FeaturesSettings";
@@ -68,10 +70,13 @@ interface ScrollTarget {
 /**
  * Full-screen settings panel (TUI /settings parity): a header with search, a
  * vertical sidebar on wide screens (a section picker on narrow), and one
- * continuous scroll stream of every tab body under a small heading each: This
+ * continuous scroll stream of the tab bodies under a small heading each: This
  * Session while a session is attached, then the SDK tabs (`omp`), then
- * Browser and Features (`omp-web`). Server calls go through
- * refreshSettings / updateSetting; the returned model is authoritative and
+ * Browser and Features (`omp-web`). Only the tabs near the viewport are
+ * mounted (`createGrowingCount`): the stream grows as it is scrolled, and a
+ * nav click or deep link mounts every tab up to its target first. The model
+ * loads when the sheet opens (`holdSettingsModel`, a current one is only
+ * revalidated); updateSetting's returned model is authoritative and
  * settings_changed frames keep every tab in sync.
  *
  * Scroll-spy: the active tab is the last heading whose top has crossed the
@@ -85,9 +90,9 @@ interface ScrollTarget {
  * next user scroll, since a heading near the end of the stream may never
  * reach the line.
  *
- * Search spans every tab and replaces the stream with grouped results; the
- * stream stays mounted (hidden), and clearing the search restores its scroll
- * position.
+ * Search spans every tab and replaces the stream with grouped results, mounted
+ * a screenful at a time; the stream stays mounted (hidden), and clearing the
+ * search restores its scroll position.
  */
 export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	// `/settings <query>` opens with the search pre-filled (state.settingsQuery).
@@ -148,6 +153,26 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	);
 	const results = () => hits().sdk;
 	const webHits = () => hits().pointers;
+	// The stream is one continuous scroll, but only the tabs near the viewport are mounted: the first
+	// tab with the sheet, one more each time the end marker comes within a body height of the
+	// viewport, and every tab up to a scroll target before it is scrolled to (`reachTab`). Search
+	// results mount the same way, so a one-letter query renders a screenful, not every match.
+	const streamTabs = createGrowingCount(
+		() => tabs().length,
+		1,
+		1,
+		() => bodyRef,
+	);
+	const resultRows = createGrowingCount(
+		() => results().length,
+		30,
+		30,
+		() => bodyRef,
+	);
+	const reachTab = (tabId: string | null) => {
+		const index = tabs().findIndex((t) => t.id === tabId);
+		if (index >= 0) streamTabs.reach(index + 1);
+	};
 	const featureHits = () => (searching() ? searchFeatures(query()) : []);
 	const noMatches = () =>
 		searching() &&
@@ -168,6 +193,18 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		}
 		return [...byTitle.entries()];
 	};
+	// The groups cut to the rows rendered so far (`resultRows`); a new query starts over at the first slice.
+	const visibleResultGroups = createMemo(() => {
+		let budget = resultRows.count();
+		const shown: [string, SettingsMatch[]][] = [];
+		for (const [title, matches] of resultGroups()) {
+			if (budget <= 0) break;
+			shown.push([title, matches.slice(0, budget)]);
+			budget -= matches.length;
+		}
+		return shown;
+	});
+	createEffect(on(query, resultRows.reset, { defer: true }));
 	// Non-model hits grouped by the tab (or the Appearance sheet) that renders them.
 	const webGroups = () => {
 		const byTab = new Map<string, string[]>();
@@ -219,7 +256,9 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		const edge =
 			bodyRef.scrollTop <= EDGE_SLACK_PX
 				? "top"
-				: bodyRef.scrollHeight - bodyRef.scrollTop - bodyRef.clientHeight <= EDGE_SLACK_PX
+				: // The bottom of the mounted tabs is not the bottom of the stream.
+					streamTabs.count() >= tabs().length &&
+					  bodyRef.scrollHeight - bodyRef.scrollTop - bodyRef.clientHeight <= EDGE_SLACK_PX
 					? "bottom"
 					: null;
 		const topOf = (id: string) =>
@@ -247,7 +286,10 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	const updatePosition = () => {
 		const next = measure();
 		const prev = position();
-		if (next.tabId !== prev.tabId || next.sectionId !== prev.sectionId) setPosition(next);
+		if (next.tabId !== prev.tabId || next.sectionId !== prev.sectionId) {
+			reachTab(next.tabId);
+			setPosition(next);
+		}
 	};
 
 	// Programmatic scroll: a short eased glide over `--dur-move-base` (0 under
@@ -314,6 +356,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	};
 	const go = (target: ScrollTarget, instant: boolean) => {
 		pending = target;
+		reachTab(target.tabId);
 		setPosition({ tabId: target.tabId, sectionId: target.sectionId });
 		scrollToTarget(instant);
 	};
@@ -413,7 +456,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		// Any user scroll input hands the body back mid-glide.
 		for (const type of USER_SCROLL_EVENTS)
 			bodyRef.addEventListener(type, stopGlide, { passive: true });
-		void refreshSettings();
+		onCleanup(holdSettingsModel());
 		// Search takes focus on open where no soft keyboard would pop up. The
 		// microtask runs after Modal's own mount focus on its box.
 		if (searchAutofocus()) queueMicrotask(() => searchRef.focus());
@@ -476,7 +519,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 					<Show when={searching()}>
 						<FeaturesSettings query={query()} />
 						<Show when={model()}>
-							<Index each={resultGroups()}>
+							<Index each={visibleResultGroups()}>
 								{(group) => (
 									<SettingsGroup title={group()[0]}>
 										<Index each={group()[1]}>
@@ -485,26 +528,30 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 									</SettingsGroup>
 								)}
 							</Index>
+							<div class="settings-stream-more" ref={resultRows.marker} aria-hidden="true" />
 						</Show>
-						<Index each={webGroups()}>
-							{(group) => (
-								<SettingsGroup title={group().title}>
-									<Index each={group().labels}>
-										{(label) => (
-											<SettingsRowLayout label={label()}>
-												<button
-													type="button"
-													class="settings-control-btn"
-													onClick={() => openHit(group().tabId)}
-												>
-													Open
-												</button>
-											</SettingsRowLayout>
-										)}
-									</Index>
-								</SettingsGroup>
-							)}
-						</Index>
+						{/* The rows the sheet only points to follow the last model row, so they wait for it. */}
+						<Show when={resultRows.count() >= results().length}>
+							<Index each={webGroups()}>
+								{(group) => (
+									<SettingsGroup title={group().title}>
+										<Index each={group().labels}>
+											{(label) => (
+												<SettingsRowLayout label={label()}>
+													<button
+														type="button"
+														class="settings-control-btn"
+														onClick={() => openHit(group().tabId)}
+													>
+														Open
+													</button>
+												</SettingsRowLayout>
+											)}
+										</Index>
+									</SettingsGroup>
+								)}
+							</Index>
+						</Show>
 						<Show when={noMatches()}>
 							<div class="settings-note">
 								No settings match "{query().trim()}".{" "}
@@ -521,7 +568,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 								{state.settingsLoading ? "Loading settings…" : "Settings unavailable."}
 							</div>
 						</Show>
-						<For each={tabs()}>
+						<For each={tabs().slice(0, streamTabs.count())}>
 							{(tab) => (
 								<section class="settings-tab" aria-labelledby={settingsTabHeadingId(tab.id)}>
 									<h2 class="settings-tab-heading" id={settingsTabHeadingId(tab.id)}>
@@ -531,6 +578,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 								</section>
 							)}
 						</For>
+						<div class="settings-stream-more" ref={streamTabs.marker} aria-hidden="true" />
 					</div>
 				</div>
 			</div>

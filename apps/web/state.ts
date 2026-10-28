@@ -79,7 +79,7 @@ import {
 	type AuthStatus,
 	type AuthSnapshot,
 } from "./store/auth";
-import { applySettingsModel, refreshSettings } from "./store/settings";
+import { applySettingsModel, refreshSettings, settingsAttached } from "./store/settings";
 import {
 	resetPendingSessionsFiles,
 	settleWorkspaceSessions,
@@ -532,6 +532,9 @@ export const [state, setState] = createStore({
 	daemonsLoaded: false,
 	// Settings model (getSettings/setSetting + settings_changed frames).
 	settingsModel: null as SettingsModel | null,
+	// Effective values of the boot paths (store/settings.ts BOOT_SETTING_PATHS), fetched on every
+	// attach without the model; `settingValue` reads them before the model has loaded.
+	settingValues: {} as Record<string, unknown>,
 	settingsLoading: false,
 	// Settings tab the next settings sheet opens on (set by "Configure providers");
 	// the sheet clears it on mount. Null = the default tab.
@@ -1532,7 +1535,7 @@ export function connect(): void {
 			// The worker roster is a separate read model: pull it on attach too, so
 			// parked and idle workers reappear without waiting for a lifecycle frame.
 			requestRosterRefresh();
-			refreshSettings();
+			settingsAttached();
 			// Watchers for this attachment (watchAttachment) wait for its first `state` frame.
 			settleAttachedFrame(frame.scope);
 			return;
@@ -1887,7 +1890,7 @@ export function connect(): void {
 		// continue the previous attachment from its ring replay when it still can.
 		if (state.currentWorkspaceId)
 			void attachSession(state.currentWorkspaceId, true).catch(() => {});
-		else refreshSettings(); // boot with no session: the fleet /ctl model backs the panel
+		else settingsAttached(); // boot with no session: the fleet /ctl values back the display prefs
 		// After the re-attach request, so a re-sent command that needs the
 		// attachment follows it on the wire.
 		resendUnsettled();

@@ -4,11 +4,14 @@ import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { SETTING_TABS } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import {
 	buildSettingsModel,
+	buildSettingValues,
 	coerceSettingValue,
 	plainDescription,
 	settingChanged,
+	settingValuePaths,
 	type SettingsSession,
 } from "#lib/sdk-settings/settings-model";
+import { MAX_SETTING_VALUE_PATHS } from "#lib/wire/protocol";
 
 // The module reads/writes the shared Settings singleton (values, changed
 // flags, condition gates). Initialize it in-memory so tests touch no disk.
@@ -335,5 +338,35 @@ describe("buildSettingsModel", () => {
 		expect(external?.warning).toContain("At your own risk");
 		const plain = itemsOf("model", model).find((item) => item.path === "thinkingLevel");
 		expect(plain?.warning).toBeUndefined();
+	});
+});
+
+describe("getSettings paths option", () => {
+	test("buildSettingValues answers each named row's model value and skips unknown paths", () => {
+		lookup("compaction.thresholdPercent")!.set(Settings.instance, 40);
+		const model = buildSettingsModel(fakeSession, []);
+		const paths = ["compaction.thresholdPercent", "emojiAutocomplete", "no.such.setting"];
+		const answer = buildSettingValues(paths);
+		expect(Object.keys(answer.values)).toEqual([
+			"compaction.thresholdPercent",
+			"emojiAutocomplete",
+		]);
+		const rows = model.tabs.flatMap((tab) => tab.groups.flatMap((group) => group.items));
+		for (const [path, value] of Object.entries(answer.values))
+			expect(value).toEqual(rows.find((row) => row.path === path)?.value);
+		expect(answer.revision).toBe(model.revision!);
+		expect(answer.target).toBe("current-session");
+	});
+
+	test("settingValuePaths tells a values read from a full-model read and refuses a malformed one", () => {
+		expect(settingValuePaths(undefined)).toBeNull();
+		expect(settingValuePaths("revision")).toBeNull();
+		expect(settingValuePaths({})).toBeNull();
+		expect(settingValuePaths({ paths: ["a", "b"] })).toEqual(["a", "b"]);
+		expect(() => settingValuePaths({ paths: "a" })).toThrow("paths");
+		expect(() => settingValuePaths({ paths: [1] })).toThrow("paths");
+		expect(() =>
+			settingValuePaths({ paths: Array.from({ length: MAX_SETTING_VALUE_PATHS + 1 }, () => "a") }),
+		).toThrow("paths");
 	});
 });

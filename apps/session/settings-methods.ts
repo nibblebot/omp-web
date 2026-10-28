@@ -2,11 +2,13 @@ import type { Settings } from "@oh-my-pi/pi-coding-agent";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import {
 	buildSettingsModel,
+	buildSettingValues,
 	coerceSettingValue,
 	settingsRevision,
+	settingValuePaths,
 	type SettingsSession,
 } from "#lib/sdk-settings/settings-model";
-import type { SettingsModel, SettingsRevisionAck } from "#lib/wire/protocol";
+import type { SettingsModel, SettingsRevisionAck, SettingValues } from "#lib/wire/protocol";
 import { applySettingSideEffects, type AgentSessionLike } from "./settings-effects";
 
 export interface SettingsEntry {
@@ -24,7 +26,8 @@ export interface SettingsMethodsDeps {
 }
 
 export interface SettingsMethods {
-	getSettings(entry: SettingsEntry, args: unknown[]): Promise<SettingsModel>;
+	/** The full model, or just the named values when args[0] is `{ paths }` (see SettingValues). */
+	getSettings(entry: SettingsEntry, args: unknown[]): Promise<SettingsModel | SettingValues>;
 	setSetting(entry: SettingsEntry, args: unknown[]): Promise<SettingsModel | SettingsRevisionAck>;
 	unsetSetting(entry: SettingsEntry, args: unknown[]): Promise<SettingsModel | SettingsRevisionAck>;
 }
@@ -89,7 +92,12 @@ export function createSettingsMethods(deps: SettingsMethodsDeps): SettingsMethod
 	};
 	return {
 		methods: {
-			getSettings,
+			getSettings: async (entry, args) => {
+				const paths = settingValuePaths(args[0]);
+				return paths === null
+					? getSettings(entry)
+					: buildSettingValues(paths, { settings: deps.settings });
+			},
 			setSetting: (entry, args) => mutate(entry, args, false),
 			unsetSetting: (entry, args) => mutate(entry, args, true),
 		},

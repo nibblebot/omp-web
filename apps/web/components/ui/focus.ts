@@ -44,7 +44,8 @@ export function resolveFocusReturn<T extends FocusNode>(
 	return last?.isConnected ? last : null;
 }
 
-let lastFocused: HTMLElement | null = null;
+// Weak: a closed dialog's focused element must not keep the whole detached dialog alive.
+let lastFocused: WeakRef<HTMLElement> | null = null;
 
 if (typeof document !== "undefined") {
 	// Remembers the last focused element so a dialog opened right after its
@@ -53,7 +54,8 @@ if (typeof document !== "undefined") {
 	document.addEventListener(
 		"focusin",
 		(e) => {
-			if (e.target instanceof HTMLElement) lastFocused = e.target;
+			if (e.target instanceof HTMLElement && e.target !== lastFocused?.deref())
+				lastFocused = new WeakRef(e.target);
 		},
 		true,
 	);
@@ -63,7 +65,7 @@ if (typeof document !== "undefined") {
 export function focusOrigin(): HTMLElement | null {
 	const active = document.activeElement;
 	if (active instanceof HTMLElement && active !== document.body) return active;
-	return lastFocused;
+	return lastFocused?.deref() ?? null;
 }
 
 /** Page-wide fallback target: the element marked `data-focus-fallback` (the composer). */

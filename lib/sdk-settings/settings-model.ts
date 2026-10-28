@@ -16,12 +16,14 @@ import {
 	TAB_SECTION_ORDER,
 	WEB_TRUE_CONDITIONS,
 } from "#lib/sdk-settings/settings-layout";
+import { MAX_SETTING_VALUE_PATHS } from "#lib/wire/protocol";
 import type {
 	SettingsGroup,
 	SettingsItem,
 	SettingsModel,
 	SettingsOption,
 	SettingsTab,
+	SettingValues,
 	SettingView,
 } from "#lib/wire/protocol";
 
@@ -490,4 +492,44 @@ export function buildSettingsModel(
 		groups: buildGroups(tab, session, themes, providers, options, global, project),
 	}));
 	return { tabs, revision: settingsRevision(scope), target: options.target ?? "current-session" };
+}
+
+/**
+ * The effective value of each named setting, read the way a model row reads
+ * its `value` (`layered`, never the credential-bearing `get`). A path the
+ * registry does not know is omitted. This is `getSettings({ paths })`: a page
+ * that needs a handful of settings at attach does not pay for the whole model.
+ */
+export function buildSettingValues(
+	paths: readonly string[],
+	options: SettingsModelOptions = {},
+): SettingValues {
+	const scope = options.settings ?? Settings.instance;
+	const values: Record<string, unknown> = {};
+	for (const path of paths) {
+		const setting = lookup(path);
+		if (setting) values[path] = setting.layered(scope);
+	}
+	return {
+		revision: settingsRevision(scope),
+		target: options.target ?? "current-session",
+		values,
+	};
+}
+
+/**
+ * The `{ paths }` option of getSettings, or null when the caller asked for the
+ * full model. A malformed option throws rather than silently answering the
+ * 160 KB model to a caller that wanted a few values.
+ */
+export function settingValuePaths(option: unknown): string[] | null {
+	if (option === null || typeof option !== "object" || !("paths" in option)) return null;
+	const { paths } = option;
+	if (
+		!Array.isArray(paths) ||
+		paths.length > MAX_SETTING_VALUE_PATHS ||
+		!paths.every((path) => typeof path === "string")
+	)
+		throw new Error(`getSettings paths must be at most ${MAX_SETTING_VALUE_PATHS} strings.`);
+	return paths;
 }

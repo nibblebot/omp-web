@@ -1,16 +1,15 @@
-import { createEffect, createSignal, For, on, onMount, Show, type Component } from "solid-js";
+import { createEffect, createSignal, For, on, onCleanup, Show, type Component } from "solid-js";
 import { TOOL_CARD_MODES, TOOL_ROW_CHOICES, TRANSCRIPT_WIDTHS } from "../../prefs/display";
 import { APPEARANCE_SDK_SETTINGS } from "../../prefs/settings";
 import { currentFontSize, stepFontSize } from "../../prefs/theme";
 import {
-	refreshSettings,
 	setDisplayPref,
 	setSidebarSessionTitleLines,
 	setSidebarTitleFirst,
 	setSidebarUsage,
 	state,
 } from "../../state";
-import { settingItem } from "../../store/settings";
+import { holdSettingsModel, settingItem } from "../../store/settings";
 import { SettingsGroup } from "../settings/SettingsGroup";
 import { SettingsRow, SettingsRowLayout } from "../settings/SettingsRow";
 import { SettingSegmented } from "../settings/controls/SettingSegmented";
@@ -64,8 +63,8 @@ const SdkRows: Component<{ group: keyof typeof APPEARANCE_SDK_SETTINGS }> = (pro
 export const AppearanceSheet: Component<{ onClose: () => void }> = (props) => {
 	// Font size is localStorage-only (prefs/theme.ts), so this signal mirrors it.
 	const [fontSize, setFontSize] = createSignal(currentFontSize());
-	// The SDK rows need the model; like the settings sheet, refresh it on open.
-	onMount(refreshSettings);
+	// The SDK rows need the model: load it on open (a current one is only revalidated) and keep it current while open.
+	onCleanup(holdSettingsModel());
 	// Choosing a single-variant theme in the linked picker unlinks, which replaces that picker
 	// with two and drops the focus it held: land on the first picker instead of the page.
 	let themeRows: HTMLDivElement | undefined;

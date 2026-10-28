@@ -1,6 +1,7 @@
 import { createMemo, createResource, createSignal, For, Show, type Component } from "solid-js";
 import { flattenPalette, searchPalette, type PaletteItem } from "../../palette/palette";
 import { paletteSources, runPaletteItem, searchStoredSessions } from "../../store/palette";
+import { ensureSettingsModel } from "../../store/settings";
 import { reportError } from "../../store/toasts";
 import { Modal } from "../ui/Modal";
 import { PickerRow } from "../ui/PickerRow";
@@ -11,6 +12,8 @@ import { PickerRow } from "../ui/PickerRow";
  * stored-session search is a server round trip, so it runs per query.
  */
 export const CommandPalettePicker: Component<{ onClose: () => void }> = (props) => {
+	// The settings rows come from the model, which loads on first use rather than at attach.
+	ensureSettingsModel();
 	const [query, setQuery] = createSignal("");
 	const [active, setActive] = createSignal(0);
 	const [stored] = createResource(query, async (q) => {

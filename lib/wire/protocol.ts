@@ -310,6 +310,23 @@ export interface SettingsRevisionAck {
 	revision: number;
 }
 
+/**
+ * getSettings answers this instead of the full model when the caller passes
+ * `{ paths }` as its first argument (and `GET /ctl/settings?paths=a,b` does
+ * the same on the fleet): just the effective value of each known path, so a
+ * page can read the few settings it needs at attach without the whole model.
+ * Unknown paths are omitted. An older session or control plane ignores the
+ * option and answers the full SettingsModel, which carries the same values.
+ */
+export interface SettingValues {
+	revision: number;
+	target: "current-session" | "future-sessions";
+	values: Record<string, unknown>;
+}
+
+/** Most paths one `getSettings({ paths })` call may name. */
+export const MAX_SETTING_VALUE_PATHS = 128;
+
 // ---------------------------------------------------------------------------
 // Installed plugins (Integrations > Plugins). Backed by the SDK plugin manager
 // (~/.omp/plugins/omp-plugins.lock.json): session RPCs when a session is

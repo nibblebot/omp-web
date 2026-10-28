@@ -56,9 +56,11 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 	const returnFocus = () => {
 		if (focusReturned) return;
 		focusReturned = true;
+		const origin = previousFocus;
+		previousFocus = null;
 		const active = document.activeElement;
 		if (active && active !== document.body && !pane.contains(active)) return;
-		resolveFocusReturn(previousFocus, pageFocusFallback)?.focus();
+		resolveFocusReturn(origin, pageFocusFallback)?.focus();
 	};
 	onCleanup(returnFocus);
 	createEffect(

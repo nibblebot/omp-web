@@ -53,7 +53,7 @@ import {
 import { clearAllDeletePending, resetPendingProjects } from "../store/projects";
 import { COLLAB_OFF } from "../store/slices/collab";
 import { activatingIds, resumeWorktreeSession } from "../store/worktree-sessions";
-import { settingValue } from "../store/settings";
+import { BOOT_SETTING_PATHS, holdSettingsModel, settingValue } from "../store/settings";
 import { subagentTranscript, syncSubagentTranscript } from "../store/subagents";
 import { reportError } from "../store/toasts";
 import {
@@ -230,7 +230,7 @@ describe("attached-frame handling", () => {
 		).toEqual([
 			"getSettings",
 			"getSubagents",
-			"getSettings", // attach re-pulls the settings model (refreshSettings)
+			"getSettings", // attach reads the boot settings values (settingsAttached)
 		]);
 
 		// The switch lands: the old session's calls are rejected and readiness
@@ -1080,6 +1080,123 @@ describe("fleet settings fallback (no session attached)", () => {
 		dispatch(callResult(read!.id, { tabs: [], revision: 13 }));
 		await settle();
 		expect(state.settingsModel?.revision).toBe(13);
+	});
+
+	/** The getSettings calls posted so far, in order. */
+	function settingsReads(): Array<Extract<ClientCommand, { type: "call" }>> {
+		return posted.filter(
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method === "getSettings",
+		);
+	}
+
+	test("an attach reads only the boot paths' values; the full model waits for a surface that shows it", async () => {
+		setState({
+			currentWorkspaceId: "",
+			settingsModel: null,
+			settingValues: {},
+			settingsLoading: false,
+			error: null,
+		});
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		setState({ currentWorkspaceId: "workspace-a" });
+		posted.length = 0;
+		dispatch(attached("workspace-a"));
+
+		const [read, ...rest] = settingsReads();
+		expect(rest).toEqual([]);
+		expect(read!.args).toEqual([{ paths: BOOT_SETTING_PATHS }]);
+		dispatch(
+			callResult(read!.id, {
+				revision: 3,
+				target: "current-session",
+				values: { emojiAutocomplete: false },
+			}),
+		);
+		await settle();
+		expect(settingValue<boolean>("emojiAutocomplete")).toBe(false);
+		expect(state.settingsModel).toBeNull();
+		expect(state.settingsLoading).toBe(false);
+	});
+
+	test("an older session that answers a paths read with the full model still fills the boot values", async () => {
+		setState({
+			currentWorkspaceId: "workspace-a",
+			settingsModel: null,
+			settingValues: {},
+			settingsLoading: false,
+			error: null,
+		});
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		setState({ currentWorkspaceId: "workspace-a" });
+		posted.length = 0;
+		dispatch(attached("workspace-a"));
+		const full: SettingsModel = {
+			revision: 4,
+			target: "current-session",
+			tabs: [
+				{
+					id: "tools",
+					label: "Tools",
+					groups: [
+						{
+							name: "",
+							items: [
+								{
+									path: "emojiAutocomplete",
+									label: "Emoji",
+									description: "",
+									type: "boolean",
+									value: false,
+									changed: true,
+								},
+							],
+						},
+					],
+				},
+			],
+		};
+		dispatch(callResult(settingsReads()[0]!.id, full));
+		await settle();
+		expect(settingValue<boolean>("emojiAutocomplete")).toBe(false);
+		expect(state.settingsModel?.revision).toBe(4);
+	});
+
+	test("a surface holding the model loads it once per attachment and only revalidates a current one", async () => {
+		setState({
+			currentWorkspaceId: "workspace-a",
+			settingsModel: null,
+			settingValues: {},
+			settingsLoading: false,
+			error: null,
+		});
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		setState({ currentWorkspaceId: "workspace-a" });
+		dispatch(attached("workspace-a"));
+		posted.length = 0;
+
+		const release = holdSettingsModel();
+		expect(settingsReads().map((c) => c.args)).toEqual([[]]);
+		dispatch(
+			callResult(settingsReads()[0]!.id, { tabs: [], revision: 5, target: "current-session" }),
+		);
+		await settle();
+		release();
+
+		// Reopened in the same attachment: a revision check, not a second 160 KB model.
+		posted.length = 0;
+		const again = holdSettingsModel();
+		expect(settingsReads().map((c) => c.args)).toEqual([[{ paths: BOOT_SETTING_PATHS }]]);
+		// Another writer moved the revision: the held model is refetched while the surface is open.
+		dispatch(
+			callResult(settingsReads()[0]!.id, { revision: 6, target: "current-session", values: {} }),
+		);
+		await settle();
+		expect(settingsReads().map((c) => c.args)).toEqual([[{ paths: BOOT_SETTING_PATHS }], []]);
+		again();
 	});
 
 	test("queued writes run one at a time, each sending the revision the previous response produced", async () => {

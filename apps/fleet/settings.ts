@@ -12,7 +12,7 @@
  */
 
 import { ensureModelRegistry, ensureSettings } from "./sdk-singletons";
-import type { SettingsModel } from "#lib/wire/protocol";
+import type { SettingsModel, SettingValues } from "#lib/wire/protocol";
 import type { SettingsSession } from "#lib/sdk-settings/settings-model";
 
 export type SettingsLayer = "global" | "project";
@@ -32,6 +32,8 @@ let mutationQueue: Promise<unknown> = Promise.resolve();
 /** The unattached settings surface the fleet control plane exposes. */
 export interface FleetSettings {
 	getModel(): Promise<SettingsModel>;
+	/** The effective value of each named path, without the model (see SettingValues). */
+	getValues(paths: readonly string[]): Promise<SettingValues>;
 	set(
 		path: string,
 		value: unknown,
@@ -182,5 +184,12 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 		return mutate(path, undefined, expectedRevision, layer, true);
 	}
 
-	return { getModel, set, unset };
+	async function getValues(paths: readonly string[]): Promise<SettingValues> {
+		const settings = await ensureSettings();
+		// Lazy like getModel: static fleet loading stays SDK-free.
+		const { buildSettingValues } = await import("#lib/sdk-settings/settings-model");
+		return buildSettingValues(paths, { settings, target: "future-sessions" });
+	}
+
+	return { getModel, getValues, set, unset };
 }

@@ -10,7 +10,7 @@
  *   GET  /ctl/projects {…}                         → { projects: RegisteredProject[] }
  *   POST /ctl/projects {path, start?, template?}   → 201 { project, entry? } | 200 { project, existing: true }
  *   DELETE /ctl/projects/:projectId                → 200 { removed } | 409 { error }
- *   GET  /ctl/settings                             -> SettingsModel
+ *   GET  /ctl/settings[?paths=a,b]                 -> SettingsModel (SettingValues with ?paths)
  *   GET  /ctl/themes                              -> ThemesPayload (built-ins + <config dir>/themes/*.json; re-read per request, never writes)
  *   GET  /ctl/usage                               -> UsageReport[] (502 { error } on failure)
  *   GET  /ctl/worktrees/:workspaceId/delete-info      -> worktree_delete_info payload
@@ -61,7 +61,11 @@
 import type { Server } from "bun";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { SessionStatus, PublicProviderProfile } from "#lib/wire/protocol";
+import {
+	MAX_SETTING_VALUE_PATHS,
+	type SessionStatus,
+	type PublicProviderProfile,
+} from "#lib/wire/protocol";
 import type { FleetConfig } from "./config";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { loadThemes, themesDirFor } from "#lib/themes/loader";
@@ -1246,11 +1250,20 @@ class FleetServerImpl implements FleetServer {
 					case "/ctl/plugins":
 						// Installed-plugin list: unattached fleet, lock-file backed.
 						return await this.#pluginRoute(() => this.fleetPlugins.list());
-					case "/ctl/settings":
+					case "/ctl/settings": {
 						// Unattached settings model: the fleet service lazily
 						// initializes the process-global Settings singleton +
-						// ModelRegistry, no session.
-						return json(await this.fleetSettings.getModel());
+						// ModelRegistry, no session. `?paths=a,b` answers just those values.
+						const requested = url.searchParams.get("paths");
+						if (requested === null) return json(await this.fleetSettings.getModel());
+						const paths = requested === "" ? [] : requested.split(",");
+						if (paths.length > MAX_SETTING_VALUE_PATHS)
+							throw new HttpError(
+								400,
+								`paths must name at most ${MAX_SETTING_VALUE_PATHS} settings`,
+							);
+						return json(await this.fleetSettings.getValues(paths));
+					}
 					case "/ctl/themes":
 						// Built-ins plus custom theme files, read fresh each request (no cache, no watcher, never writes).
 						return json(await loadThemes(this.#themesDir));

@@ -22,6 +22,26 @@ const entry: SettingsEntry = {
 };
 
 describe("settings publish", () => {
+	test("getSettings with paths answers just those values; without the option it answers the model", async () => {
+		const bundle = createSettingsMethods({
+			settings: Settings.instance,
+			getThemes: async () => ["dark", "light"],
+			broadcast: () => {},
+		});
+		lookup("compaction.thresholdPercent")!.set(Settings.instance, 70);
+		const values = await bundle.methods.getSettings(entry, [
+			{ paths: ["compaction.thresholdPercent", "no.such.setting"] },
+		]);
+		expect(values).toEqual({
+			revision: settingsRevision(Settings.instance),
+			target: "current-session",
+			values: { "compaction.thresholdPercent": 70 },
+		});
+		const model = await bundle.methods.getSettings(entry, []);
+		expect("tabs" in model).toBe(true);
+		await expect(bundle.methods.getSettings(entry, [{ paths: "all" }])).rejects.toThrow("paths");
+	});
+
 	test("a session toggle rebroadcasts the model at the revision the session now holds", async () => {
 		const sent: SettingsModel[] = [];
 		const bundle = createSettingsMethods({

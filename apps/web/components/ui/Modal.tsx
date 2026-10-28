@@ -115,9 +115,12 @@ export const Modal: Component<{
 		if (released) return;
 		released = true;
 		document.removeEventListener("keydown", onKeyDown, true);
+		// Drop the opener either way: a closed dialog must not pin it (or what it links to).
+		const origin = previousFocus;
+		previousFocus = null;
 		const active = document.activeElement;
 		if (active && active !== document.body && !box.contains(active)) return;
-		resolveFocusReturn(previousFocus, pageFocusFallback)?.focus();
+		resolveFocusReturn(origin, pageFocusFallback)?.focus();
 	};
 
 	onMount(() => {
