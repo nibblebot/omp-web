@@ -19,6 +19,7 @@ import {
 	type ResumeCandidate,
 	createResumeState,
 	deleteResumeSession,
+	openResumePicker,
 	renameResumeSession,
 	resumeAllProjects,
 	resumeCandidates,
@@ -487,6 +488,18 @@ describe("owner resolution when resuming", () => {
 		expect(state.addProjectPath).toBe("/work/gone");
 		openAddProject();
 		expect(state.addProjectPath).toBeNull();
+	});
+});
+
+describe("opening the picker", () => {
+	test("sets the modal and clears the query; the mounted picker owns the one list request", () => {
+		typeResumeQuery("old");
+		cancelTypedResumeSearch();
+		openResumePicker();
+		expect(state.modal).toBe("sessions");
+		expect(resumeQuery()).toBe("");
+		expect(calls("resumeList")).toHaveLength(0);
+		expect(calls("getResumeCapabilities")).toHaveLength(0);
 	});
 });
 
