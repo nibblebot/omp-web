@@ -8,6 +8,12 @@ import type { ModalName } from "../state.ts";
  */
 export type FeatureId = "analysis" | "plan" | "git" | "todos" | "plugins" | "debug";
 
+/**
+ * localStorage key: JSON object of explicit per-feature choices ({ [id]: boolean }). Lives here, not in
+ * `preferences.ts`, so the build's feature-preload plugin reads it without loading Solid.
+ */
+export const FEATURES_KEY = "omp.features";
+
 export type FeatureStatus = "stable" | "in-development";
 
 export interface FeatureInfo {

@@ -1,6 +1,5 @@
 import type { Plugin } from "vite";
-import { FEATURES_KEY } from "../features/preferences.ts";
-import { FEATURES } from "../features/manifest.ts";
+import { FEATURES, FEATURES_KEY } from "../features/manifest.ts";
 import { DEFAULT_FEATURES_DIR, featureOfEntry, reach } from "./feature-sizes.ts";
 
 /**

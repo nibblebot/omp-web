@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { FEATURES_KEY } from "../../features/manifest";
 import {
-	FEATURES_KEY,
 	featurePreferences,
 	resolveFeaturePreferences,
 	setFeaturePreference,

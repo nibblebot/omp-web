@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build } from "vite";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { FEATURES_KEY } from "../features/preferences";
+import { FEATURES_KEY } from "../features/manifest";
 import { featurePreload } from "../build/feature-preload";
 import { precompress } from "../build/precompress";
 

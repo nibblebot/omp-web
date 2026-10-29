@@ -1,8 +1,5 @@
 import { createSignal } from "solid-js";
-import { FEATURE_BY_ID, FEATURES, isFeatureId, type FeatureId } from "./manifest";
-
-/** localStorage key: JSON object of explicit per-feature choices ({ [id]: boolean }). */
-export const FEATURES_KEY = "omp.features";
+import { FEATURE_BY_ID, FEATURES, FEATURES_KEY, isFeatureId, type FeatureId } from "./manifest";
 
 export type FeaturePreferences = Record<FeatureId, boolean>;
 

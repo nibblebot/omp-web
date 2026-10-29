@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Component } from "solid-js";
-import { FEATURE_BY_ID, FEATURE_IDS } from "../../features/manifest";
+import { FEATURE_BY_ID, FEATURE_IDS, FEATURES_KEY } from "../../features/manifest";
 import type { FeatureId } from "../../features/manifest";
 import * as analysisEntry from "../../features/analysis";
 import * as gitEntry from "../../features/git";
@@ -16,7 +16,6 @@ import {
 } from "../../features/registry";
 import {
 	activeFeatureIds,
-	FEATURES_KEY,
 	type FeaturePreferences,
 	featurePreferences,
 	markFeaturesActive,
