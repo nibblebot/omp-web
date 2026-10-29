@@ -233,6 +233,22 @@ interface SavedDraft {
 
 let saved: SavedDraft | null = null;
 
+let watchedWindow: object | null = null;
+
+/** Another tab writing or removing this slot makes the memo wrong: it may no longer describe what storage
+ *  holds, and a skipped write would leave text without its images, or attachments without a main entry.
+ *  `key === null` is a `clear()`. Installed on the first save, once per window. */
+function watchOtherTabs(): void {
+	if (typeof window === "undefined" || typeof window.addEventListener !== "function") return;
+	if (watchedWindow === window) return;
+	watchedWindow = window;
+	window.addEventListener("storage", (e) => {
+		if (!saved) return;
+		if (e.key === null || e.key === saved.slot || e.key === attachmentsKey(saved.slot))
+			saved = null;
+	});
+}
+
 function sameImages(a: readonly ImageArg[], b: readonly ImageArg[]): boolean {
 	if (a === b) return true;
 	if (a.length !== b.length) return false;
@@ -270,6 +286,7 @@ function warnQuota(): void {
  *  the composer). Writes only what changed since the last save of that
  *  partition. Warns once per session on quota failure. */
 export function saveDraft(key: DraftKey, body: DraftBody): boolean {
+	watchOtherTabs();
 	const slot = draftKey(key);
 	const text = sanitizeText(body.text);
 	if (text === null) return false;

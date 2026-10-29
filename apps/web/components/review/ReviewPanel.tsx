@@ -96,6 +96,8 @@ const PathList: Component<{ area: "unstaged" | "staged"; rows: GitPathEntry[] }>
 					class="review-path-list"
 					ref={(el) => {
 						listEl = el;
+						// A list that emptied and refilled is a new element, scrolled to the top.
+						setScrollTop(el.scrollTop);
 						resizes.observe(el);
 					}}
 					onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}

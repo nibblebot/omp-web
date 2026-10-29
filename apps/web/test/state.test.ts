@@ -1199,6 +1199,42 @@ describe("fleet settings fallback (no session attached)", () => {
 		again();
 	});
 
+	test("an attach drops the previous session's model, so no sheet edits it and no write sends its revision", async () => {
+		setState({
+			currentWorkspaceId: "workspace-a",
+			settingsModel: null,
+			settingValues: {},
+			settingsLoading: false,
+			error: null,
+		});
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		setState({ currentWorkspaceId: "workspace-a" });
+		dispatch(attached("workspace-a"));
+		posted.length = 0;
+		const release = holdSettingsModel();
+		dispatch(
+			callResult(settingsReads()[0]!.id, { tabs: [], revision: 5, target: "current-session" }),
+		);
+		await settle();
+		release();
+		expect(state.settingsModel?.revision).toBe(5);
+
+		// Another session attaches; its model has not been read yet.
+		dispatch(attached("workspace-a"));
+		expect(state.settingsModel).toBeNull();
+		posted.length = 0;
+		void updateSetting("agent.model", "a");
+		await settle();
+		const set = posted.find(
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method === "setSetting",
+		);
+		expect(set).toBeDefined();
+		// No revision rides along (the wire turns the omitted one into null): the held 5 belonged to the old session.
+		expect(set?.args?.[2] ?? null).toBeNull();
+	});
+
 	test("queued writes run one at a time, each sending the revision the previous response produced", async () => {
 		setState({
 			currentWorkspaceId: "",

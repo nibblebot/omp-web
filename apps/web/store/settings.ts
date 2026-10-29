@@ -71,9 +71,10 @@ export const BOOT_SETTING_PATHS: readonly string[] = [
 ];
 
 // What the full model reflects. It loads on first use (the sheets and the palette), not at attach,
-// and stays current by the `settings_changed` push after that. An attach marks the held model stale
-// (another session has its own revisions and option lists): it stops guarding against older
-// revisions and is fetched again by whoever shows it next.
+// and stays current by the `settings_changed` push after that. An attach drops it (another session
+// has its own revisions and option lists); whoever shows it next fetches it again. `modelStale`
+// marks a held model whose revision the server has moved past (an edit from another page): it
+// stops guarding against older revisions and is fetched again.
 let modelStale = false;
 // Mounted surfaces that render the model (the sheets); an attach or a revision move while any is
 // open refetches it at once.
@@ -214,12 +215,14 @@ function refreshSettingValues(): void {
 }
 
 /**
- * A session attached (or the page booted with none): its settings are unknown. Fetch the boot
- * values, or the whole model when a sheet is open across the attach; the model otherwise loads
- * when something first shows it.
+ * A session attached (or the page booted with none): its settings are unknown. The held model
+ * belongs to the previous attachment (its rows, option lists and revision), so it is dropped:
+ * a sheet shows the loading note instead of editing it, and a write sends no stale revision.
+ * Fetch the boot values, or the whole model when a sheet is open across the attach; the model
+ * otherwise loads when something first shows it.
  */
 export function settingsAttached(): void {
-	modelStale = true;
+	setState("settingsModel", null);
 	if (modelHolders > 0) refreshSettings();
 	else refreshSettingValues();
 }

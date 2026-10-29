@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	cancelScheduledDraftSave,
 	currentDraftKey,
+	draftKey,
 	loadDraft,
 	removeDraft,
 	saveDraft,
@@ -273,5 +274,73 @@ describe("drafts (incremental persistence)", () => {
 			JSON.stringify({ text: "old", images, updatedAt: 5 }),
 		);
 		expect(loadDraft(key)).toMatchObject({ text: "old", images });
+	});
+});
+
+describe("drafts (another tab writes the same slot)", () => {
+	const png = (n: number): { type: "image"; data: string; mimeType: string } => ({
+		type: "image",
+		data: `${n}`.repeat(1000),
+		mimeType: "image/png",
+	});
+	let stored: Map<string, string>;
+	let listeners: ((e: { key: string | null }) => void)[];
+
+	beforeEach(() => {
+		stored = new Map();
+		listeners = [];
+		setBrowserGlobal("localStorage", {
+			get length() {
+				return stored.size;
+			},
+			key: (i: number) => [...stored.keys()][i] ?? null,
+			getItem: (k: string) => stored.get(k) ?? null,
+			setItem: (k: string, v: string) => void stored.set(k, v),
+			removeItem: (k: string) => void stored.delete(k),
+		} as unknown as Storage);
+		setBrowserGlobal("window", {
+			setTimeout: (fn: (...args: unknown[]) => void, ms?: number) =>
+				setTimeout(fn, ms) as unknown as number,
+			clearTimeout: (id: number) => clearTimeout(id),
+			addEventListener: (type: string, fn: (e: { key: string | null }) => void) => {
+				if (type === "storage") listeners.push(fn);
+			},
+		} as unknown as Window & typeof globalThis);
+	});
+
+	/** The other tab sent: it removed both entries of the slot; this tab hears one event per key. */
+	function otherTabRemoves(key: DraftKey): void {
+		const slot = draftKey(key);
+		for (const k of [slot, `${slot}#attachments`]) {
+			stored.delete(k);
+			for (const fn of listeners) fn({ key: k });
+		}
+	}
+
+	test("typing after the other tab removed the draft still stores the images", () => {
+		const key = freshKey("tab-typing");
+		const images = [png(1)];
+		saveDraft(key, { text: "hello", images, updatedAt: 1 });
+		otherTabRemoves(key);
+		saveDraft(key, { text: "hello world", images, updatedAt: 2 });
+		expect(loadDraft(key)).toMatchObject({ text: "hello world", images });
+	});
+
+	test("adding an image after the other tab removed the draft keeps the text", () => {
+		const key = freshKey("tab-image");
+		saveDraft(key, { text: "hello", images: [], updatedAt: 1 });
+		otherTabRemoves(key);
+		saveDraft(key, { text: "hello", images: [png(2)], updatedAt: 2 });
+		expect(loadDraft(key)).toMatchObject({ text: "hello", images: [png(2)] });
+	});
+
+	test("a storage clear drops the memo too", () => {
+		const key = freshKey("tab-clear");
+		const images = [png(3)];
+		saveDraft(key, { text: "abc", images, updatedAt: 1 });
+		stored.clear();
+		for (const fn of listeners) fn({ key: null });
+		saveDraft(key, { text: "abc", images, updatedAt: 2 });
+		expect(loadDraft(key)).toMatchObject({ text: "abc", images });
 	});
 });

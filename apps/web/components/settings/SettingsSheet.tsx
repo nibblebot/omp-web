@@ -358,7 +358,9 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		pending = target;
 		reachTab(target.tabId);
 		setPosition({ tabId: target.tabId, sectionId: target.sectionId });
-		scrollToTarget(instant);
+		// `reachTab` mounts the tab; from inside an effect (the deep link) Solid applies that write only
+		// when the effect ends, so the heading exists one microtask later.
+		queueMicrotask(() => scrollToTarget(instant));
 	};
 	// Nav and picker clicks clear a search first, then scroll once the stream is visible again.
 	const navigate = (target: ScrollTarget) => {
@@ -435,6 +437,18 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 			() => state.settingsLoading,
 			(loading) => {
 				if (!loading && pending && !searching()) scrollToTarget(true);
+			},
+			{ defer: true },
+		),
+	);
+	// A target near the end of the mounted tabs cannot reach the top yet: the scroll is clamped to
+	// the stream's height, and the tabs after it mount over the next frames. Aim again as they do,
+	// until the reader scrolls (which drops the target).
+	createEffect(
+		on(
+			() => streamTabs.count(),
+			() => {
+				if (pending && !searching()) scrollToTarget(!navigating);
 			},
 			{ defer: true },
 		),
