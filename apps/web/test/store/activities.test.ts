@@ -82,8 +82,10 @@ function pollReady(...ids: string[]): void {
 
 let saved: Pick<
 	typeof state,
-	"currentWorkspaceId" | "subagents" | "subagentsLoaded" | "workers" | "daemons" | "daemonsLoaded"
+	"currentWorkspaceId" | "subagents" | "subagentsLoaded" | "daemons" | "daemonsLoaded"
 >;
+// `state.workers` is merged in place by `setState("workers", ...)`, so the object itself is no snapshot: keep its parts.
+let savedWorkers: typeof state.workers;
 
 beforeEach(() => {
 	installLocalStorageShim();
@@ -91,10 +93,10 @@ beforeEach(() => {
 		currentWorkspaceId: state.currentWorkspaceId,
 		subagents: state.subagents,
 		subagentsLoaded: state.subagentsLoaded,
-		workers: state.workers,
 		daemons: state.daemons,
 		daemonsLoaded: state.daemonsLoaded,
 	};
+	savedWorkers = { records: state.workers.records, order: state.workers.order };
 	restoreDockLayout("__no-such-workspace__");
 	setState({ currentWorkspaceId: "d1", subagentsLoaded: { mirror: false, roster: false } });
 	pollView = { phase: "idle" };
@@ -103,6 +105,7 @@ beforeEach(() => {
 afterEach(() => {
 	restoreDockLayout("__no-such-workspace__");
 	setState(saved);
+	setState("workers", savedWorkers);
 	restoreBrowserGlobals();
 });
 

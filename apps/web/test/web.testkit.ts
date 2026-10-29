@@ -21,8 +21,9 @@ import {
 } from "#lib/wire/browser-socket";
 import type { ClientCommand, ServerFrame } from "#lib/wire/protocol";
 import { type Component, createComponent } from "solid-js";
+import { unwrap } from "solid-js/store";
 import { ssrElement } from "solid-js/web";
-import { resetBrowserSocket, state } from "../state";
+import { resetBrowserSocket, setState, state } from "../state";
 import { pendingCalls } from "../store/transport";
 
 /** Commands the client sent over the fake socket, in order (re-sends included). */
@@ -151,6 +152,7 @@ export async function flushMicrotasks(): Promise<void> {
  * from beforeEach.
  */
 export function installTransportStubs(): void {
+	rememberStoreKeys();
 	resetBrowserSocket();
 	dropPendingCalls(); // a fresh page has no calls in flight, even after a sibling file that left some
 	posted.length = 0;
@@ -222,6 +224,31 @@ export function restoreBrowserGlobals(): void {
 	resetBrowserSocket();
 	restoreGlobals(browserGlobals);
 	dropPendingCalls();
+	restoreStoreKeys();
+}
+
+/** Top-level store values as they stood before this file's first transport stub; null once handed back. */
+let storeKeys: Record<string, unknown> | null = null;
+
+function rememberStoreKeys(): void {
+	storeKeys ??= { ...unwrap(state) };
+}
+
+/**
+ * A sparse `state` frame (a test delivers only the fields it cares about) sets the rest to
+ * undefined, and a Solid store drops a key set to undefined. Hand back each such key with the
+ * value it had before the file ran, so a later file in the same process finds the store shape
+ * it expects (every field the store declares).
+ */
+function restoreStoreKeys(): void {
+	if (storeKeys === null) return;
+	const present = unwrap(state) as Record<string, unknown>;
+	const dropped: Record<string, unknown> = {};
+	for (const key of Object.keys(storeKeys)) {
+		if (!(key in present)) dropped[key] = storeKeys[key];
+	}
+	storeKeys = null;
+	if (Object.keys(dropped).length > 0) setState(dropped);
 }
 
 /**

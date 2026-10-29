@@ -1,0 +1,12 @@
+# Test-only JSX mode. The web tests render components through the classic
+# transform (`React.createElement` / `Fragment`) backed by the shim in
+# apps/web/test/web.testkit.ts (installJsxShim). tsconfig.json says
+# `jsx: preserve` + `jsxImportSource: solid-js` for the Vite/Solid build and
+# tsgo; bun 1.4 reads that as the automatic dev runtime and fails to load any
+# .tsx test import (`Export named 'jsxDEV' not found in solid-js`). bunfig takes
+# effect in every `bun test` mode (parallel workers, --isolated, direct runs)
+# without touching tsconfig. Production builds (Vite, the design-system Babel
+# plugin) do not read it.
+jsx = "react"
+jsxFactory = "React.createElement"
+jsxFragment = "Fragment"

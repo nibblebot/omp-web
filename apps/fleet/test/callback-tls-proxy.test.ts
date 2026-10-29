@@ -216,6 +216,9 @@ describe("wss through an HTTP CONNECT proxy with certificate verification on", (
 
 		await waitFor(() => eventOf(session, "ready") !== undefined, 15_000, "session ready over wss");
 		await waitFor(() => plane.volume.frames === VOLUME_FRAMES, 30_000, "every volume frame");
+		// One pair through the whole volume: it never dropped. Read before the down command, because the
+		// session exits on it and its clean close is the one expected `paired: false` afterwards.
+		expect(plane.pairs).toEqual([true]);
 		const command = await sendDownCommand(plane);
 		expect(command.streamId).toBe(VOLUME_STREAM);
 		const exitCode = await session.exited;
@@ -234,8 +237,10 @@ describe("wss through an HTTP CONNECT proxy with certificate verification on", (
 			badMessages: 0,
 		});
 		expect(session.events.filter((event) => event.event === "error")).toEqual([]);
-		// One pair, one CONNECT through the proxy, and the pair never dropped.
-		expect(plane.pairs).toEqual([true]);
+		// The session's exit closes the one pair cleanly; nothing else changed it.
+		await waitFor(() => plane.pairs.length === 2, 5_000, "the pair closing with the session");
+		expect(plane.pairs).toEqual([true, false]);
+		// One CONNECT through the proxy.
 		expect(proxy.connects).toEqual([`localhost:${plane.port}`]);
 	}, 60_000);
 
