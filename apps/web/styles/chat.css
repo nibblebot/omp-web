@@ -35,6 +35,11 @@
 	   or disappears. */
 	scrollbar-gutter: stable;
 }
+/* A pinned stream (data-pinned, set by useStickyScroll) snaps itself to the live edge; the
+   browser's scroll anchoring would only shift scrollTop under it first and read as a scroll. */
+.chat-transcript[data-pinned] {
+	overflow-anchor: none;
+}
 /* Observed by useStickyScroll's content ResizeObserver: owns the row layout
    so its border-box tracks every growth/shrink source in the stream. */
 .chat-transcript-content {

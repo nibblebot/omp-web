@@ -10,10 +10,10 @@
 const JUMP_CLASS = "tool-card--jump";
 const JUMP_ANIMATION = "tool-card-jump";
 
-/** Streams that mount their items on demand: each mounts the card of a tool call it holds and returns whether it did. */
+/** Streams: each mounts the card of a tool call it holds, leaves the live edge, and returns whether it holds it. */
 const revealers = new Set<(toolCallId: string) => boolean>();
 
-/** Let jumps reach cards a stream has not mounted yet; the returned function removes it. */
+/** Let jumps reach the cards of a stream; the returned function removes it. */
 export function registerToolReveal(reveal: (toolCallId: string) => boolean): () => void {
 	revealers.add(reveal);
 	return () => revealers.delete(reveal);
@@ -44,18 +44,13 @@ function keepInView(card: HTMLElement): void {
 
 /** Scroll the card of `toolCallId` into view and flash it. False when no stream holds such a card. */
 export function jumpToToolCard(toolCallId: string): boolean {
-	let card = findCard(toolCallId);
-	if (!card) {
-		for (const reveal of revealers) {
-			if (!reveal(toolCallId)) continue;
-			card = findCard(toolCallId);
-			if (card) {
-				keepInView(card);
-				break;
-			}
-		}
-	}
+	const wasMounted = findCard(toolCallId) !== null;
+	// Every stream that holds the card mounts it if needed and leaves the live edge: a scroll event
+	// cannot say that the jump is not the reader's own scrolling, so the stream is told.
+	for (const reveal of revealers) reveal(toolCallId);
+	const card = findCard(toolCallId);
 	if (!card) return false;
+	if (!wasMounted) keepInView(card);
 	card.scrollIntoView({ block: "center" });
 	// Restart the flash when the card is jumped to again mid-flash.
 	card.classList.remove(JUMP_CLASS);

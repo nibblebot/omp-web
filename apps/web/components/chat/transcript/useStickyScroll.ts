@@ -10,64 +10,25 @@ const INNER_SCROLLBAR_PX = 14;
 // bottom hit; small enough that a mid-stream scroll-up escapes cleanly.
 const RE_PIN_DISTANCE_PX = 80;
 
-/** Geometry + bookkeeping the scroll-event unpin rule reads. */
-export interface ScrollUnpinInput {
-	pinned: boolean;
-	scrollHeight: number;
-	scrollTop: number;
-	clientHeight: number;
-	/** scrollTop right after our own last snapToBottom write (null before any). */
-	snapTop: number | null;
-}
-
-/**
- * The ONLY thing a scroll event may decide: whether a pinned viewport was
- * moved away from the live edge by something other than a gesture (a
- * programmatic jump: scrollIntoView, find-in-page, an anchor link). True when
- * the view is pinned, sits more than one viewport above the bottom, and the
- * event is not the echo of our own snap (scrollTop still equals what the snap
- * left; content that grew after the snap, before the event, must not read as
- * the user leaving). A browser clamp or a shrink moves scrollTop toward the
- * bottom by far less than a viewport, so it can never qualify. Never yields
- * a re-pin.
- */
-export function shouldUnpinOnScroll(m: ScrollUnpinInput): boolean {
-	if (!m.pinned) return false;
-	if (m.snapTop !== null && m.scrollTop === m.snapTop) return false;
-	return m.scrollHeight - m.scrollTop - m.clientHeight > m.clientHeight;
-}
-
 /**
  * Imperative pin/unpin/gesture machinery for the message stream. Hands back
  * the container + content refs, the jump-to-bottom visibility signal, and the
  * jump button's click.
  *
- * Pin state is owned by synchronous gesture handlers; scroll events never
- * RE-PIN (and never touch pin state except for the single unpin-only rule
- * below). Up-gestures (wheel-up, scrollbar grab, upward touch drag,
- * up-keys) unpin; down-gestures that land inside the re-pin band, plus the
- * jump button and session switches, re-pin. This closes the two failure
- * classes of distance-threshold scroll-event reconciliation:
- *
- * 1. A scroll event can't re-pin, since it can't distinguish a user scrolling
- *    down from a browser clamp (StreamingTail's soften re-parse or a shrink
- *    shifting scrollTop). A small scroll-up during streaming can never be
- *    yanked back by the next event. Escape is irrevocable until the user
- *    gestures down into the band.
- * 2. Content growth can't move an unpinned viewport; snaps run only while
- *    pinned, so a pinned stream follows the live edge and an escaped one
- *    stays exactly where the user left it.
- *
- * The one exception: while pinned, a scroll event that leaves the bottom by
- * MORE than one viewport unpins (shouldUnpinOnScroll). Gestures can't see
- * programmatic jumps (scrollIntoView, find-in-page) into content-visibility
- * placeholders; without this, the jump changes the content size as items
- * render and the pinned ResizeObserver snaps straight back to the bottom.
- * It preserves class 1 because it can only unpin, never re-pin, and a clamp
- * or shrink moves the view by less than a viewport. It preserves class 2
- * because it only ever stops snaps. Our own snaps land at the bottom (and
- * their scroll echo is recognised by scrollTop === the post-snap value), so
- * they can't trip it.
+ * Pin state is owned by synchronous gesture handlers and explicit calls;
+ * scroll events never touch it. Up-gestures (wheel-up, scrollbar grab, upward
+ * touch drag, up-keys) unpin, `release` unpins for a programmatic jump the
+ * stream itself makes (jump to a tool card); down-gestures that land inside
+ * the re-pin band, plus the jump button and session switches, re-pin. A scroll
+ * event cannot tell the reader leaving from the browser moving scrollTop under
+ * a pinned stream (a clamp when the window trims cards above it, scroll
+ * anchoring while cards resolve their size, content growing before the
+ * observers re-snap), and inferring one from the other made a pinned stream
+ * lose its pin at random and stop following the bottom. So the pinned stream
+ * turns the browser's scroll anchoring off (`data-pinned`, chat.css) and
+ * decides from intent only. Escape is irrevocable until the reader gestures
+ * down into the band, and content growth can't move an unpinned viewport:
+ * snaps run only while pinned.
  *
  * While pinned, a ResizeObserver pair re-snaps the viewport to the live edge.
  * Observing the CONTENT element catches every growth source with one
@@ -94,7 +55,7 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	jumpToBottom: () => void;
 	/** Leave the live edge: a programmatic jump elsewhere (the stream mounts older cards first, which would otherwise re-snap a pinned viewport). */
 	release: () => void;
-	/** Re-snap a pinned viewport to the live edge now: after the stream changed what sits above it (the window trimmed the oldest cards), the browser's clamp would otherwise read as the reader leaving. */
+	/** Re-snap a pinned viewport to the live edge now: after the stream changed what sits above it (the window trimmed the oldest cards). */
 	snapIfPinned: () => void;
 } {
 	let container!: HTMLDivElement;
@@ -108,6 +69,9 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	// The local var stays for the synchronous reads inside the handlers.
 	const setPinned = (p: boolean) => {
 		pinned = p;
+		// A pinned viewport re-snaps itself, and the browser's scroll anchoring would only move scrollTop
+		// under it before the snap (see chat.css); an unpinned one keeps the anchoring.
+		container?.toggleAttribute("data-pinned", p);
 		if (options.mirrorSession === false) return;
 		setState("chatPinned", p);
 		if (p) setState("answerUnviewed", false);
@@ -141,41 +105,13 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 			setJumpVisible(false);
 		}
 	};
-	let snapTop: number | null = null;
 	const snapToBottom = () => {
 		container.scrollTop = container.scrollHeight;
-		// Read back the clamped result: the scroll event this write queues is
-		// recognised by scrollTop still equaling it (see shouldUnpinOnScroll).
-		snapTop = container.scrollTop;
 	};
-	// The stream removed cards above a pinned viewport: the browser moves scrollTop (clamp, scroll
-	// anchoring) and fires a scroll event before the observers re-snap, which the unpin rule below
-	// would read as the reader leaving. Snap now, and let the observers' snaps settle the next frames.
-	let settling = false;
+	// The stream removed cards above a pinned viewport: snap now, in the same task, rather than
+	// leave the clamp the removal causes standing until the observers run.
 	const snapIfPinned = () => {
-		if (!pinned) return;
-		snapToBottom();
-		settling = true;
-		requestAnimationFrame(() =>
-			requestAnimationFrame(() => {
-				settling = false;
-			}),
-		);
-	};
-	// The single scroll-event rule: unpin-only (see the module comment).
-	const onScroll = () => {
-		if (settling) return;
-		if (
-			!shouldUnpinOnScroll({
-				pinned,
-				scrollHeight: container.scrollHeight,
-				scrollTop: container.scrollTop,
-				clientHeight: container.clientHeight,
-				snapTop,
-			})
-		)
-			return;
-		escapeBottom();
+		if (pinned) snapToBottom();
 	};
 	// Wheel-down is a continuous gesture: re-check the band on the frame
 	// AFTER the browser applies each tick, so a single tick that jumps from
@@ -409,7 +345,6 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 		container.addEventListener("keydown", onScrollKeyDown);
 		container.addEventListener("touchstart", onTouchStart, { passive: true });
 		container.addEventListener("touchmove", onTouchMove, { passive: true });
-		container.addEventListener("scroll", onScroll, { passive: true });
 		document.addEventListener("mouseup", onMouseUp);
 		onCleanup(() => {
 			ro.disconnect();
@@ -421,13 +356,13 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 			container.removeEventListener("keydown", onScrollKeyDown);
 			container.removeEventListener("touchstart", onTouchStart);
 			container.removeEventListener("touchmove", onTouchMove);
-			container.removeEventListener("scroll", onScroll);
 			document.removeEventListener("mouseup", onMouseUp);
 		});
 	});
 	return {
 		containerRef: (el: HTMLDivElement) => {
 			container = el;
+			el.toggleAttribute("data-pinned", pinned);
 		},
 		contentRef: (el: HTMLDivElement) => {
 			content = el;
