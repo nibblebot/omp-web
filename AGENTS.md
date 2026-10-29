@@ -24,7 +24,7 @@ Open dev's printed `ui` URL, not fleet's potentially stale `dist/` UI. Dev-spawn
 ### Checks
 
 ```sh
-bun run check                       # types + lint + format:check + full suite
+bun run check                       # types + lint + format:check + build:web + full suite
 bun run check:types                 # tsgo, not tsc
 bun run lint                        # library boundaries + oxlint
 bun run format:check
@@ -41,7 +41,7 @@ bun run profile --quick --compare .profile-out/baselines/<name>.json   # deltas 
 ### Build & install
 
 ```sh
-bun run build:web
+bun run build:web                   # fails on any build warning (apps/web/build/fail-on-warnings.ts)
 bun run build                       # installable bundle
 bun run build:docs                  # static docs site (docs/dist)
 bun run install:omp-web             # build, pack, install into ~/.omp-web/install/

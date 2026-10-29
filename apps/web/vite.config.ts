@@ -4,6 +4,7 @@ import { defineConfig } from "vite";
 import type { ProxyOptions } from "vite";
 import solidPlugin from "vite-plugin-solid";
 import { buildInfoDefines } from "./build/build-info.ts";
+import { failOnWarningsLogger } from "./build/fail-on-warnings.ts";
 import { featurePreload } from "./build/feature-preload.ts";
 import { featureSizes } from "./build/feature-sizes.ts";
 import { precompress } from "./build/precompress.ts";
@@ -57,9 +58,11 @@ function fleetProxy(): ProxyOptions {
 	};
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
 	root: webRoot,
 	plugins: [solidPlugin(), featurePreload(), featureSizes(), precompress()],
+	// A production build allows no warnings; dev keeps vite's default logger.
+	customLogger: command === "build" ? failOnWarningsLogger() : undefined,
 	// Sidebar footer build identity (omp-web version, git hash, omp version).
 	define: buildInfoDefines(join(webRoot, "..", "..")),
 	server: {
@@ -85,4 +88,4 @@ export default defineConfig({
 		outDir: join(webRoot, "..", "..", "dist"),
 		emptyOutDir: true,
 	},
-});
+}));
