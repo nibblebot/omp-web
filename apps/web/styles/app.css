@@ -322,7 +322,12 @@
    chunk runs; index.tsx clears it right before the app renders. It reuses the
    sidebar, header and skeleton-line rules, so only the row layout is new. The
    sidebar shows only where it docks (1024px and up) and only while the user
-   has not collapsed it (the pre-paint script sets data-boot-sidebar). */
+   has not collapsed it (the pre-paint script sets data-boot-sidebar).
+   index.html hides the shell until this rule shows it, so it never paints
+   before its styles (the dev server injects this stylesheet from JS). */
+.app.boot-shell {
+	visibility: visible;
+}
 .boot-shell .boot-shell-rows {
 	display: flex;
 	flex-direction: column;

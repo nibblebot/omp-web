@@ -6,6 +6,14 @@
 		<title>omp web</title>
 		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+		<!-- The boot shell stays hidden until the global stylesheet shows it (app.css, .app.boot-shell).
+		     A build links that stylesheet in <head>, so the shell paints styled at once; the dev server
+		     injects it from the entry chunk, so without this the shell would paint unstyled first. -->
+		<style>
+			.boot-shell {
+				visibility: hidden;
+			}
+		</style>
 	</head>
 	<body>
 		<script>
