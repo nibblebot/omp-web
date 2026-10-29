@@ -632,16 +632,25 @@ button.queue-followup {
 	font-size: var(--fs-2xl);
 }
 
-/* Phone width: attach, camera and history drop to a row under the textarea, beside Stop, Queue
-   and Send, so the field keeps the full row (about 150px of text beside four 44px buttons). */
-@media (max-width: 480px) {
-	.prompt-editor-row {
-		flex-wrap: wrap;
+/* Phone width (prompt/compact-composer.ts, the header's fold point in shell.css): one row,
+   the text box (one line, growing with its content) beside Send, or while a turn runs
+   Stop, plus Steer once there is text (holding Steer queues; PromptActions). Attach moves
+   into the header's More actions menu (MainHeader); camera and history are dropped (the
+   attach picker offers the camera, history stays on Up). Wider touch screens keep all
+   three beside the field. */
+@media (max-width: 479px) {
+	.prompt-editor-row > .prompt-attach {
+		display: none;
 	}
-	.prompt-editor-row > .prompt-field {
-		flex: 1 0 100%;
+	/* The empty box stays one line however narrow the field gets: Chrome clips the
+	   placeholder rather than ellipsizing, so PromptComposer uses a short one here. */
+	.prompt-box textarea::placeholder {
+		white-space: nowrap;
+		overflow: hidden;
 	}
-	.prompt-editor-row > .prompt-actions {
-		margin-left: auto;
+	/* Holding Steer queues the message: no callout or selection on the long press. */
+	.prompt-actions .send {
+		-webkit-touch-callout: none;
+		user-select: none;
 	}
 }

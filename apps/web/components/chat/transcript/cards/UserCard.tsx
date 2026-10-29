@@ -1,9 +1,21 @@
-import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
+import {
+	createEffect,
+	createSignal,
+	For,
+	onCleanup,
+	onMount,
+	Show,
+	type Component,
+} from "solid-js";
 import { pushNotice, type ChatItem } from "../../../../state";
 import type { ImageArg } from "#lib/wire/protocol";
 import { ImageThumb } from "../../../ui/ImageThumb";
 import { branchFromCard } from "../../../../store/graph";
 import { CopyButton } from "../../../ui/CopyButton";
+import { BranchIcon } from "../../../ui/icons";
+
+/** How long a finger rests on a user message before its actions show (touch). */
+const LONG_PRESS_MS = 500;
 
 /**
  * User message card: branch-from-here action (by stable entryId when the
@@ -11,6 +23,10 @@ import { CopyButton } from "../../../ui/CopyButton";
  * text, image thumbs. `branchable` false hides branch-from-here (a subagent's
  * transcript is not a branchable session). `fold` opts into clamping long
  * text (chat.css `.msg-user-text-folded`) behind a Show all toggle.
+ *
+ * The actions show on hover or focus with a mouse. Touch has no hover, so they
+ * stay hidden until a long press on the message (`data-actions`, chat.css) and
+ * hide again on a press outside it.
  */
 export const UserCard: Component<{
 	user: Extract<ChatItem, { kind: "user" }>;
@@ -18,7 +34,26 @@ export const UserCard: Component<{
 	branchable?: boolean;
 	fold?: boolean;
 }> = (props) => {
+	let root!: HTMLDivElement;
 	let textRef: HTMLDivElement | undefined;
+	const [actionsShown, setActionsShown] = createSignal(false);
+	let pressTimer: ReturnType<typeof setTimeout> | undefined;
+	const cancelPress = () => clearTimeout(pressTimer);
+	const showActions = () => {
+		cancelPress();
+		if (actionsShown()) return;
+		setActionsShown(true);
+		navigator.vibrate?.(10);
+	};
+	onCleanup(cancelPress);
+	createEffect(() => {
+		if (!actionsShown()) return;
+		const onOutside = (e: PointerEvent) => {
+			if (!root.contains(e.target as Node | null)) setActionsShown(false);
+		};
+		document.addEventListener("pointerdown", onOutside, true);
+		onCleanup(() => document.removeEventListener("pointerdown", onOutside, true));
+	});
 	const [expanded, setExpanded] = createSignal(false);
 	const [overflowing, setOverflowing] = createSignal(false);
 	onMount(() => {
@@ -41,19 +76,44 @@ export const UserCard: Component<{
 		}).catch((err) => pushNotice("error", String(err instanceof Error ? err.message : err)));
 	};
 	return (
-		<div class="msg-user">
+		<div
+			class="msg-user"
+			ref={root}
+			data-actions={actionsShown() ? "" : undefined}
+			onPointerDown={(e) => {
+				if (e.pointerType !== "touch") return;
+				cancelPress();
+				pressTimer = setTimeout(showActions, LONG_PRESS_MS);
+			}}
+			onPointerUp={cancelPress}
+			onPointerCancel={cancelPress}
+			// Android raises the long-press menu (and TalkBack's double-tap-and-hold) as
+			// contextmenu: show the actions instead of the browser's menu.
+			onContextMenu={(e) => {
+				if (!matchMedia("(pointer: coarse)").matches) return;
+				e.preventDefault();
+				showActions();
+			}}
+		>
 			<div class="msg-toolbar">
 				<Show when={props.branchable !== false}>
 					<button
+						type="button"
 						class="msg-branch-btn"
 						title={entryId() ? "Branch from here (new session file)" : "Branch from here"}
+						aria-label="Branch from here"
 						disabled={!props.user.text && images().length === 0}
 						onClick={branchFromHere}
 					>
-						branch
+						<BranchIcon />
 					</button>
 				</Show>
-				<CopyButton class="msg-copy-btn" title="Copy message text" text={() => props.user.text} />
+				<CopyButton
+					class="msg-copy-btn"
+					title="Copy message text"
+					icon
+					text={() => props.user.text}
+				/>
 			</div>
 			{props.user.text && (
 				<div

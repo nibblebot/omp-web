@@ -8,30 +8,10 @@ import {
 } from "../../activities/bar";
 import { shimmerMode } from "../../chat/display-prefs";
 import { createPresence } from "../../motion/presence";
+import { compactComposer } from "../../prompt/compact-composer";
 import { isActivitiesOpen, type ActivitySectionId } from "../../store/activities";
-import { BotIcon, LayersIcon, ListChecksIcon, ServerIcon } from "../ui/icons";
 import { ShimmerText } from "../ui/ShimmerText";
-import { DaemonsPopover } from "./DaemonsPopover";
-import { JobsPopover } from "./JobsPopover";
-import { SubagentsPopover } from "./SubagentsPopover";
-import { TodosPopover } from "./TodosPopover";
-
-/** Buttons left to right; each shows only while its section has items. */
-const SECTIONS: readonly ActivitySectionId[] = ["subagents", "jobs", "daemons", "todos"];
-
-const ICON = {
-	subagents: BotIcon,
-	jobs: LayersIcon,
-	daemons: ServerIcon,
-	todos: ListChecksIcon,
-} as const;
-
-const POPOVER = {
-	subagents: SubagentsPopover,
-	jobs: JobsPopover,
-	daemons: DaemonsPopover,
-	todos: TodosPopover,
-} as const;
+import { ACTIVITY_ICON, ACTIVITY_POPOVER, ACTIVITY_SECTIONS } from "./activity-sections";
 
 /**
  * The status line above the composer. Left: the turn's progress text (the working intent while
@@ -40,12 +20,14 @@ const POPOVER = {
  * Daemons, Todo) with the active count (Todo: done/total), muted once everything is settled. A
  * button opens that section's popover above it; while the Activities panel is open it scrolls the
  * panel to the section instead. The line collapses to zero height when it has no text and no buttons.
+ * On phones (compact composer) the buttons live in the header's More actions menu (MainHeader)
+ * instead, so the line shows only while there is progress text.
  * The popovers belong to their buttons (anchored popovers, never ModalHost overlays).
  */
 export const ActivityBar: Component = () => {
 	const current = createMemo(() => ({
 		status: activityStatusText(),
-		buttons: activityButtons(currentSummaries()),
+		buttons: compactComposer() ? [] : activityButtons(currentSummaries()),
 	}));
 	const occupied = () => current().status.text !== "" || current().buttons.length > 0;
 	// The last occupied content stays drawn through the collapse motion.
@@ -83,7 +65,7 @@ export const ActivityBar: Component = () => {
 							<ShimmerText text={shown().status.text} />
 						</span>
 						<div class="activity-bar-buttons">
-							<For each={SECTIONS}>
+							<For each={ACTIVITY_SECTIONS}>
 								{(section) => (
 									<Show when={shown().buttons.find((b) => b.section === section)}>
 										{(model) => (
@@ -103,7 +85,7 @@ export const ActivityBar: Component = () => {
 													else setOpen(open() === section ? undefined : section);
 												}}
 											>
-												<Dynamic component={ICON[section]} class="activity-bar-icon" />
+												<Dynamic component={ACTIVITY_ICON[section]} class="activity-bar-icon" />
 												<Show when={model().badge !== ""}>
 													<span class="activity-bar-badge">{model().badge}</span>
 												</Show>
@@ -118,7 +100,7 @@ export const ActivityBar: Component = () => {
 				<Show when={open()} keyed>
 					{(section) => (
 						<Dynamic
-							component={POPOVER[section]}
+							component={ACTIVITY_POPOVER[section]}
 							anchor={anchors.get(section)!}
 							onClose={() => setOpen(undefined)}
 						/>

@@ -148,6 +148,40 @@
 	min-height: 44px;
 	font-size: var(--fs-md);
 }
+/* Phone layout on a live session: Attach files and the activity items follow the app
+   actions under a rule (MainHeader). */
+.main-header-more .sidebar-menu-sep {
+	height: 1px;
+	margin: var(--space-1) var(--space-2);
+	background: var(--border);
+}
+.main-header-more .sidebar-menu-badge {
+	margin-left: auto;
+	padding-left: var(--space-3);
+	font-size: var(--fs-sm);
+	font-variant-numeric: tabular-nums;
+	color: var(--muted);
+}
+.main-header-more .sidebar-menu-item[data-muted] {
+	color: var(--muted);
+}
+.main-header-more .sidebar-menu-item[data-muted] .activity-bar-icon {
+	color: var(--muted-2);
+}
+/* Running activity while the menu is closed: a dot on the trigger. */
+.main-header-more--running .sidebar-menu-btn {
+	position: relative;
+}
+.main-header-more--running .sidebar-menu-btn[aria-expanded="false"]::after {
+	content: "";
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--accent);
+}
 /* Thin strip under the main header: transport state while not connected.
    Replaces the old header pill; the sticky error toast collapses into it. */
 .connection-bar {

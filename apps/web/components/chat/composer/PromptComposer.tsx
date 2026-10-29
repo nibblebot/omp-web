@@ -4,6 +4,7 @@ import {
 	createSignal,
 	For,
 	onCleanup,
+	onMount,
 	on,
 	Show,
 	type Component,
@@ -46,6 +47,7 @@ import { settingValue } from "../../../store/settings";
 import { ArrowRightIcon, CameraIcon, HistoryIcon, PaperclipIcon, XIcon } from "../../ui/icons";
 import { enterKeyHint } from "../../../prompt/key-input";
 import { enterSends } from "../../../prompt/enter-key";
+import { compactComposer, registerAttachPicker } from "../../../prompt/compact-composer";
 import { keepComposerFocus } from "./PromptActions";
 import { AttachmentChip } from "./AttachmentChip";
 import { AutocompletePopup } from "./AutocompletePopup";
@@ -151,6 +153,14 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 				})
 			: undefined;
 	onCleanup(() => resizeObserver?.disconnect());
+	// The phone layout is one row: a crossing changes `rows`, so re-measure the height.
+	createEffect(
+		on(compactComposer, () => requestAnimationFrame(() => props.ac?.autoGrow()), { defer: true }),
+	);
+	// The header's Attach files item (phone layout) opens this picker.
+	onMount(() => {
+		if (!props.textOnly) onCleanup(registerAttachPicker(() => fileInput.click()));
+	});
 	// A tapped suggestion chip is the touch route to Tab / ArrowRight.
 	const acceptGhost = () => {
 		if (!props.ghost?.accept()) return;
@@ -537,8 +547,10 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							onPaste={(e) => {
 								if (!props.textOnly) onPaste(e);
 							}}
-							placeholder={props.placeholder ?? "Message the Agent"}
-							rows={props.textOnly ? 2 : 3}
+							placeholder={
+								props.placeholder ?? (compactComposer() ? "Message" : "Message the Agent")
+							}
+							rows={props.textOnly ? 2 : compactComposer() ? 1 : 3}
 						/>
 						<Show when={!props.textOnly && (props.ghost?.text() ?? "") !== ""}>
 							<button

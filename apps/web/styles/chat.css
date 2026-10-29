@@ -277,18 +277,6 @@
 	cursor: pointer;
 	box-shadow: var(--shadow-1);
 }
-/* Touch: while the transcript is moving the button fades out of the way (and ignores
-   taps meant to stop a fling), so it never hides a card's right-hand column mid-scroll.
-   useStickyScroll sets data-scrolling on the scroller while scroll events arrive. */
-@media (pointer: coarse) {
-	.jump-to-bottom {
-		transition: opacity var(--dur-fast) var(--ease-out);
-	}
-	.chat-transcript[data-scrolling] ~ .jump-to-bottom {
-		opacity: 0;
-		pointer-events: none;
-	}
-}
 @media (hover: hover) {
 	.jump-to-bottom:hover {
 		background: var(--hover);
@@ -915,6 +903,14 @@ pre {
 	min-height: 24px;
 	cursor: pointer;
 }
+/* A user message's branch and copy are icon buttons (assistant copy is styled by
+   .msg-copy-btn--icon in its footer). */
+.msg-user .msg-toolbar :is(.msg-copy-btn, .msg-branch-btn) {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: var(--space-1);
+}
 @media (hover: hover) {
 	.msg-copy-btn:hover,
 	.msg-branch-btn:hover {
@@ -996,6 +992,25 @@ pre {
 	.jump-to-bottom {
 		min-width: 44px;
 		min-height: 44px;
+	}
+	/* A user message's branch and copy show only after a long press on it (UserCard),
+	   floating over the bubble's top-right corner as on hover, so nothing shifts. The
+	   press must not start a text selection or the browser's callout instead. */
+	.msg-user {
+		-webkit-touch-callout: none;
+		user-select: none;
+	}
+	.msg-user .msg-toolbar {
+		position: absolute;
+		top: var(--space-2);
+		right: var(--space-4);
+		margin-top: 0;
+	}
+	.msg-user .msg-toolbar :is(.msg-copy-btn, .msg-branch-btn) {
+		box-shadow: var(--shadow-1);
+	}
+	.msg-user:not([data-actions]) .msg-toolbar {
+		display: none;
 	}
 }
 /* --- Advisor notes (TUI advisor card parity) --- */

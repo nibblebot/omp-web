@@ -28,6 +28,8 @@ export function KebabMenu(props: {
 	open?: boolean;
 	onOpenChange?: (open: boolean) => void;
 	class?: string;
+	/** Receives the trigger button, e.g. to anchor a popover a menu item opens. */
+	triggerRef?: (el: HTMLButtonElement) => void;
 }): JSX.Element {
 	let wrap!: HTMLDivElement;
 	let trigger!: HTMLButtonElement;
@@ -73,7 +75,10 @@ export function KebabMenu(props: {
 				aria-haspopup="menu"
 				aria-expanded={open()}
 				aria-controls={open() ? menuId : undefined}
-				ref={trigger}
+				ref={(el) => {
+					trigger = el;
+					props.triggerRef?.(el);
+				}}
 				onClick={(e) => {
 					e.stopPropagation();
 					setOpen(!open());

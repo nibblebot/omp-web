@@ -25,6 +25,7 @@ const enterShortcuts = (): Array<[string, string]> =>
 				["Enter", "Newline"],
 				["Ctrl+Enter", "Send (queues as follow-up while the agent is streaming)"],
 				["Send button", "Send (steers while the agent is streaming)"],
+				["Hold Steer", "Queue as follow-up (phone layout, while the agent is streaming)"],
 			];
 
 const OTHER_SHORTCUTS: Array<[string, string]> = [

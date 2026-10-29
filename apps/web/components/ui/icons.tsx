@@ -341,6 +341,17 @@ export const WorktreeIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
+/** Branch the conversation from a message (a new session file), drawn with Lucide's git-fork. */
+export const BranchIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<circle cx="12" cy="18" r="3" />
+		<circle cx="6" cy="6" r="3" />
+		<circle cx="18" cy="6" r="3" />
+		<path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9" />
+		<path d="M12 12v3" />
+	</Svg>
+);
+
 /** Destructive delete affordance (⌫), drawn with Lucide's trash-2. */
 export const TrashIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>

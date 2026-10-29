@@ -14,10 +14,6 @@ const RE_PIN_DISTANCE_PX = 80;
 // on browsers without `scrollend` (Chrome before 114).
 const MOMENTUM_SETTLE_MS = 120;
 
-// The scroller carries data-scrolling until this long after its last scroll event
-// (chat.css fades the jump button while it is set).
-const SCROLL_IDLE_MS = 200;
-
 export type TouchScrollDirection = "up" | "down";
 
 /**
@@ -148,16 +144,9 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	const snapToBottom = () => {
 		container.scrollTop = container.scrollHeight;
 	};
-	let scrollIdleTimer: ReturnType<typeof setTimeout> | undefined;
-	const markScrolling = () => {
-		if (container.dataset.scrolling === undefined) container.dataset.scrolling = "";
-		clearTimeout(scrollIdleTimer);
-		scrollIdleTimer = setTimeout(() => delete container.dataset.scrolling, SCROLL_IDLE_MS);
-	};
-	// Scroll events never touch pin state (see the module comment): they mark the
-	// scroller as scrolling and, without `scrollend`, time a touch fling's settle.
+	// Scroll events never touch pin state (see the module comment): without
+	// `scrollend`, they time a touch fling's settle.
 	const onScroll = () => {
-		markScrolling();
 		if (momentumDown && !hasScrollEnd) armSettleTimer();
 	};
 	// Wheel-down is a continuous gesture: re-check the band on the frame
@@ -441,7 +430,6 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 			container.removeEventListener("scroll", onScroll);
 			container.removeEventListener("scrollend", settleMomentum);
 			clearSettle();
-			clearTimeout(scrollIdleTimer);
 			document.removeEventListener("mouseup", onMouseUp);
 		});
 	});
