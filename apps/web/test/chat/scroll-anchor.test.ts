@@ -56,6 +56,26 @@ function makeStream(heights: number[], viewportHeight: number) {
 }
 
 describe("scroll anchors", () => {
+	test("capture finds the on-screen items of a long stream without measuring every one above", () => {
+		const stream = makeStream(
+			Array.from({ length: 2000 }, () => 100),
+			250,
+		);
+		stream.scrollTop = 100_050; // items 1000..1002 on screen
+		let measured = 0;
+		const children = stream.live().map((item) => ({
+			isConnected: true,
+			getBoundingClientRect: () => {
+				measured++;
+				return item.getBoundingClientRect();
+			},
+		}));
+		const anchors = captureScrollAnchors(stream.scroller, children);
+		expect(anchors).toHaveLength(3);
+		expect(anchors[0]!.el).toBe(children[1000]!);
+		expect(measured).toBeLessThan(40);
+	});
+
 	test("hiding items above the viewport keeps the visible content in place", () => {
 		const stream = makeStream([100, 100, 100, 100, 100, 100], 200);
 		stream.scrollTop = 300; // items 3 and 4 on screen

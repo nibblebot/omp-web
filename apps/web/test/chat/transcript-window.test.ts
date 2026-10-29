@@ -1,6 +1,6 @@
 /**
- * Which tail of the transcript is mounted: opening at the tail, following it while
- * pinned, growing upward on demand, and never starting inside a run that draws at
+ * Which suffix of the transcript is mounted: opening at the tail, growing upward
+ * (backfill, reveal), keeping pushed items mounted, and never starting inside a run that draws at
  * its first call.
  */
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
@@ -73,21 +73,19 @@ const OPTIONS: IndexModule.TranscriptIndexOptions = {
 };
 
 describe("createTranscriptWindow", () => {
-	function mount(count: number, pinned = true) {
+	function mount(count: number) {
 		const items: ChatItem[] = [];
 		for (let i = 0; i < count; i++) items.push(i % 2 === 0 ? user() : prose());
 		const [state, setState] = clientStore.createStore<{ items: ChatItem[] }>({ items });
-		const [isPinned, setPinned] = clientSolid.createSignal(pinned);
 		const index = createTranscriptIndex(
 			() => state.items,
 			() => OPTIONS,
 		);
 		const win = createTranscriptWindow(() => state.items, {
-			pinned: isPinned,
 			leadOf: index.leadOf,
 		});
 		const push = (item: ChatItem) => setState("items", state.items.length, item);
-		return { state, setState, win, setPinned, push };
+		return { state, setState, win, push };
 	}
 
 	test("opens at the tail and counts what it leaves out", () => {
@@ -124,28 +122,42 @@ describe("createTranscriptWindow", () => {
 		});
 	});
 
-	test("a pinned window follows the tail without growing past a chunk over its size", () => {
+	test("items pushed to a live transcript stay mounted, however many", () => {
 		clientSolid.createRoot((dispose) => {
 			const { state, win, push } = mount(300);
+			const first = win.items()[0]!.id;
 			for (let i = 0; i < 300; i++) {
 				push(prose());
 				expect(win.items().at(-1)?.id).toBe(state.items.at(-1)?.id);
-				expect(win.items().length).toBeLessThanOrEqual(WINDOW_INITIAL + WINDOW_CHUNK + 1);
 			}
+			expect(win.items()[0]!.id).toBe(first);
+			expect(win.items()).toHaveLength(WINDOW_INITIAL + 300);
 			dispose();
 		});
 	});
 
-	test("an unpinned window keeps its first item while the transcript grows, and trims on re-pin", () => {
+	test("backfilling to the start mounts every item, in order", () => {
 		clientSolid.createRoot((dispose) => {
-			const { win, push, setPinned } = mount(300);
-			setPinned(false);
-			const first = win.items()[0]!.id;
-			for (let i = 0; i < 200; i++) push(prose());
-			expect(win.items()[0]!.id).toBe(first);
-			expect(win.items().length).toBe(WINDOW_INITIAL + 200);
-			setPinned(true);
-			expect(win.items().length).toBe(WINDOW_INITIAL);
+			const { state, win } = mount(500);
+			let steps = 0;
+			while (win.showEarlier(7)) steps++;
+			expect(steps).toBeGreaterThan(10);
+			expect(win.hiddenBefore()).toBe(0);
+			expect(win.items().map((it) => it.id)).toEqual(state.items.map((it) => it.id));
+			dispose();
+		});
+	});
+
+	test("a new transcript bumps the epoch, so the backfill of the old one is stale", () => {
+		clientSolid.createRoot((dispose) => {
+			const { setState, win } = mount(300);
+			win.items();
+			const before = win.epoch();
+			win.showEarlier();
+			expect(win.epoch()).toBe(before);
+			setState("items", [prose(), prose()]);
+			win.items();
+			expect(win.epoch()).toBe(before + 1);
 			dispose();
 		});
 	});
@@ -177,7 +189,6 @@ describe("createTranscriptWindow", () => {
 				() => OPTIONS,
 			);
 			const win = createTranscriptWindow(() => state.items, {
-				pinned: () => true,
 				leadOf: index.leadOf,
 			});
 			// The default start would fall in the middle of the 100-call run.
@@ -186,14 +197,15 @@ describe("createTranscriptWindow", () => {
 		});
 	});
 
-	test("reveal mounts an older item and reports a missing one", () => {
+	test("revealStart gives where the window has to reach, and nothing for a missing item", () => {
 		clientSolid.createRoot((dispose) => {
 			const { state, win } = mount(300);
-			const old = state.items[10]!;
-			expect(win.items().some((it) => it.id === old.id)).toBe(false);
-			expect(win.reveal((it) => it.id === old.id)).toBe(true);
+			const old = state.items[100]!;
+			const target = win.revealStart((it) => it.id === old.id)!;
+			expect(target).toBe(100 - WINDOW_CHUNK);
+			while (win.hiddenBefore() > target) win.showEarlier(7);
 			expect(win.items().some((it) => it.id === old.id)).toBe(true);
-			expect(win.reveal((it) => it.id === -1)).toBe(false);
+			expect(win.revealStart((it) => it.id === -1)).toBeUndefined();
 			dispose();
 		});
 	});

@@ -1,8 +1,8 @@
 /**
  * Jump from one place in the transcript to a tool card: scroll the card to the
  * middle of the viewport and flash it. Cards carry `data-tool-call-id`
- * (`ToolCardShell`); a stream that mounts its items on demand registers a
- * reveal, which mounts a card the jump cannot find. The flash is the
+ * (`ToolCardShell`); a stream that mounts its items in chunks registers a
+ * reveal, which mounts a card the jump cannot find, in slices. The flash is the
  * `tool-card--jump` class, which the stylesheet animates (`tool-card-jump`); it
  * is released when that animation ends, so its length lives in CSS only.
  */
@@ -10,11 +10,12 @@
 const JUMP_CLASS = "tool-card--jump";
 const JUMP_ANIMATION = "tool-card-jump";
 
-/** Streams: each mounts the card of a tool call it holds, leaves the live edge, and returns whether it holds it. */
-const revealers = new Set<(toolCallId: string) => boolean>();
+/** Streams: each mounts the card of a tool call it holds, leaves the live edge, and settles with whether it holds it. */
+type Reveal = (toolCallId: string) => Promise<boolean>;
+const revealers = new Set<Reveal>();
 
 /** Let jumps reach the cards of a stream; the returned function removes it. */
-export function registerToolReveal(reveal: (toolCallId: string) => boolean): () => void {
+export function registerToolReveal(reveal: Reveal): () => void {
 	revealers.add(reveal);
 	return () => revealers.delete(reveal);
 }
@@ -43,11 +44,11 @@ function keepInView(card: HTMLElement): void {
 }
 
 /** Scroll the card of `toolCallId` into view and flash it. False when no stream holds such a card. */
-export function jumpToToolCard(toolCallId: string): boolean {
+export async function jumpToToolCard(toolCallId: string): Promise<boolean> {
 	const wasMounted = findCard(toolCallId) !== null;
 	// Every stream that holds the card mounts it if needed and leaves the live edge: a scroll event
 	// cannot say that the jump is not the reader's own scrolling, so the stream is told.
-	for (const reveal of revealers) reveal(toolCallId);
+	await Promise.all([...revealers].map((reveal) => reveal(toolCallId)));
 	const card = findCard(toolCallId);
 	if (!card) return false;
 	if (!wasMounted) keepInView(card);

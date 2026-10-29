@@ -55,6 +55,24 @@ import {
 /** How many viewports of mounted content the reader keeps above the top of the screen before older items mount. */
 const LOAD_AHEAD_SCREENS = 2;
 
+/** Work one backfill chunk aims at, so it is never a long task. */
+const BACKFILL_SLICE_MS = 16;
+/** Longest an idle callback waits before it runs anyway: a page that never goes idle still backfills. */
+const BACKFILL_IDLE_TIMEOUT_MS = 40;
+/** Items in the first backfill chunk, and the most one chunk takes. */
+const BACKFILL_FIRST_CHUNK = 4;
+const BACKFILL_MAX_CHUNK = 120;
+
+/** Run `task` when the browser is idle (at the latest after a timeout); a timer where idle callbacks do not exist. */
+const scheduleIdle = (task: (idle: { timeRemaining(): number }) => void): number =>
+	typeof requestIdleCallback === "function"
+		? requestIdleCallback(task, { timeout: BACKFILL_IDLE_TIMEOUT_MS })
+		: window.setTimeout(() => task({ timeRemaining: () => 0 }), 16);
+const cancelIdle = (handle: number): void => {
+	if (typeof cancelIdleCallback === "function") cancelIdleCallback(handle);
+	else clearTimeout(handle);
+};
+
 /** The run a slot holds, or undefined for a member: a run draws at its first call. */
 const toolRunOf = (slot: ToolSlot): Run | undefined => (isRunMember(slot) ? undefined : slot);
 const waitRunOf = (slot: WaitSlot): WaitRun | undefined => (isRunMember(slot) ? undefined : slot);
@@ -79,10 +97,9 @@ export const TranscriptStream: Component<{
 	children?: JSX.Element;
 }> = (props) => {
 	const session = () => props.variant === "session";
-	const { containerRef, contentRef, jumpVisible, jumpToBottom, release, snapIfPinned } =
-		useStickyScroll({
-			mirrorSession: session(),
-		});
+	const { containerRef, contentRef, jumpVisible, jumpToBottom, release } = useStickyScroll({
+		mirrorSession: session(),
+	});
 	// What the rows ask of the whole list (tool runs, wait runs, turn metadata,
 	// the cards the open Activities panel shows instead), answered per item id so
 	// a row re-renders only when its own answer changes. Runs and turn metadata
@@ -101,34 +118,42 @@ export const TranscriptStream: Component<{
 			cacheMiss: cacheMissMarker(),
 		}),
 	);
-	// Only the tail of a long transcript is mounted; older items mount as the
-	// reader scrolls up.
-	const win = createTranscriptWindow(() => props.items, {
-		pinned: () => !jumpVisible(),
-		leadOf: index.leadOf,
-	});
+	// A long transcript opens at its tail and mounts the rest in time-sliced chunks
+	// (see chat/transcript-window.ts).
+	const win = createTranscriptWindow(() => props.items, { leadOf: index.leadOf });
 	let scroller!: HTMLDivElement;
 	let content!: HTMLDivElement;
-	// The cards an unpinned viewport can be anchored to: the Show earlier row stays at the top as cards mount below it.
-	const anchorRows = (): ArrayLike<Element> =>
-		win.hiddenBefore() > 0 ? Array.prototype.slice.call(content.children, 1) : content.children;
-	// Items mounted above the viewport keep the on-screen content where it is.
-	const showEarlier = () => {
-		const anchors = captureScrollAnchors(scroller, anchorRows());
-		win.showEarlier();
+	// Mount older items above the viewport without moving what the reader sees: a
+	// pinned viewport re-snaps to the live edge, an unpinned one is anchored to the
+	// card on screen. Returns whether anything was mounted.
+	const mountEarlier = (count?: number): boolean => {
+		// A pinned viewport needs nothing: the sticky-scroll observer re-snaps it after layout.
+		if (!jumpVisible()) return win.showEarlier(count);
+		const anchors = captureScrollAnchors(scroller, content.children);
+		const mounted = win.showEarlier(count);
 		restoreScrollAnchor(scroller, anchors);
+		return mounted;
+	};
+	// Chunk size, steered to the slice: a mount has a cost per item plus one that grows with the
+	// mounted list, so a measured per-item price would shrink the chunks as the list grows and
+	// never recover. One controller serves the backfill, the near-top loader and jumps.
+	let chunk = BACKFILL_FIRST_CHUNK;
+	const mountSlice = (limit = Number.POSITIVE_INFINITY): boolean => {
+		const count = Math.min(chunk, limit);
+		const t0 = performance.now();
+		const mounted = mountEarlier(count);
+		if (count === chunk) {
+			const took = Math.max(0.5, performance.now() - t0);
+			const steer = Math.min(2, Math.max(0.5, BACKFILL_SLICE_MS / took));
+			chunk = Math.max(1, Math.min(BACKFILL_MAX_CHUNK, Math.round(chunk * steer)));
+		}
+		return mounted;
 	};
 	// Older items mount before the reader runs out of mounted content: when the
-	// top of the screen is within LOAD_AHEAD_SCREENS viewports of the oldest card
-	// (a pinned viewport, which is about to sit at the live edge, counts the
-	// height above that edge).
+	// top of the screen is within LOAD_AHEAD_SCREENS viewports of the oldest card.
 	const loadEarlier = () => {
 		if (win.hiddenBefore() === 0 || scroller.clientHeight === 0) return;
-		const reserve = scroller.clientHeight * LOAD_AHEAD_SCREENS;
-		const above = jumpVisible()
-			? scroller.scrollTop
-			: scroller.scrollHeight - scroller.clientHeight;
-		if (above < reserve) showEarlier();
+		if (scroller.scrollTop < scroller.clientHeight * LOAD_AHEAD_SCREENS) mountSlice();
 	};
 	// A pinned viewport scrolls on every snap; only the reader's own scrolling can near the top.
 	const onScroll = () => {
@@ -138,21 +163,47 @@ export const TranscriptStream: Component<{
 		scroller.addEventListener("scroll", onScroll, { passive: true });
 		onCleanup(() => scroller.removeEventListener("scroll", onScroll));
 		onCleanup(
-			registerToolReveal((toolCallId) => {
-				const found = win.reveal((item) => item.kind === "tool" && item.toolCallId === toolCallId);
+			registerToolReveal(async (toolCallId) => {
+				const target = win.revealStart(
+					(item) => item.kind === "tool" && item.toolCallId === toolCallId,
+				);
+				if (target === undefined) return false;
 				// The jump leaves the live edge: without the release, the content the mount adds re-snaps a pinned viewport to it.
-				if (found) release();
-				return found;
+				release();
+				// Mount down to the card in slices, yielding between them so the page stays responsive;
+				// another transcript opening meanwhile makes the card moot.
+				const epoch = win.epoch();
+				while (win.hiddenBefore() > target) {
+					mountSlice(win.hiddenBefore() - target);
+					await new Promise<void>((resolve) => setTimeout(resolve, 0));
+					if (win.epoch() !== epoch) return false;
+				}
+				return true;
 			}),
 		);
 	});
-	// Cards removed above a pinned viewport shrink the scroller; snap before the browser's clamp
-	// scroll event reaches the unpin rule (it would read as the reader leaving the live edge).
-	createEffect(on(win.hiddenBefore, snapIfPinned, { defer: true }));
+	// Backfill: in idle time, mount older items in time-sliced chunks until the first item is
+	// mounted. A new transcript (a session switch) cancels the old backfill.
 	createEffect(
-		on(win.hiddenBefore, () => {
-			const frame = requestAnimationFrame(loadEarlier);
-			onCleanup(() => cancelAnimationFrame(frame));
+		on(win.epoch, () => {
+			let cancelled = false;
+			let handle: number | undefined;
+			const next = () => {
+				handle = scheduleIdle((idle) => {
+					handle = undefined;
+					// One chunk, and more while this idle period has room for them.
+					do {
+						if (cancelled || win.hiddenBefore() === 0) return;
+						mountSlice();
+					} while (idle.timeRemaining() > BACKFILL_SLICE_MS);
+					next();
+				});
+			};
+			next();
+			onCleanup(() => {
+				cancelled = true;
+				if (handle !== undefined) cancelIdle(handle);
+			});
 		}),
 	);
 	// An unpinned viewport keeps its on-screen content where it is while cards
@@ -164,7 +215,7 @@ export const TranscriptStream: Component<{
 		on(
 			index.hiddenRev,
 			() => {
-				anchors = jumpVisible() ? captureScrollAnchors(scroller, anchorRows()) : [];
+				anchors = jumpVisible() ? captureScrollAnchors(scroller, content.children) : [];
 			},
 			{ defer: true },
 		),
@@ -199,13 +250,6 @@ export const TranscriptStream: Component<{
 						contentRef(el);
 					}}
 				>
-					<Show when={win.hiddenBefore() > 0}>
-						<div class="chat-transcript-earlier">
-							<button type="button" class="chat-transcript-earlier-btn" onClick={showEarlier}>
-								Show earlier messages
-							</button>
-						</div>
-					</Show>
 					<For each={win.items()}>
 						{(item) => (
 							<Switch>

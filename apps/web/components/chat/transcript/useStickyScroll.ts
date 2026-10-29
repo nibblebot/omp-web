@@ -21,7 +21,7 @@ const RE_PIN_DISTANCE_PX = 80;
  * stream itself makes (jump to a tool card); down-gestures that land inside
  * the re-pin band, plus the jump button and session switches, re-pin. A scroll
  * event cannot tell the reader leaving from the browser moving scrollTop under
- * a pinned stream (a clamp when the window trims cards above it, scroll
+ * a pinned stream (a clamp when content above it shrinks, scroll
  * anchoring while cards resolve their size, content growing before the
  * observers re-snap), and inferring one from the other made a pinned stream
  * lose its pin at random and stop following the bottom. So the pinned stream
@@ -55,8 +55,6 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	jumpToBottom: () => void;
 	/** Leave the live edge: a programmatic jump elsewhere (the stream mounts older cards first, which would otherwise re-snap a pinned viewport). */
 	release: () => void;
-	/** Re-snap a pinned viewport to the live edge now: after the stream changed what sits above it (the window trimmed the oldest cards). */
-	snapIfPinned: () => void;
 } {
 	let container!: HTMLDivElement;
 	let content!: HTMLDivElement;
@@ -107,11 +105,6 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	};
 	const snapToBottom = () => {
 		container.scrollTop = container.scrollHeight;
-	};
-	// The stream removed cards above a pinned viewport: snap now, in the same task, rather than
-	// leave the clamp the removal causes standing until the observers run.
-	const snapIfPinned = () => {
-		if (pinned) snapToBottom();
 	};
 	// Wheel-down is a continuous gesture: re-check the band on the frame
 	// AFTER the browser applies each tick, so a single tick that jumps from
@@ -370,6 +363,5 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 		jumpVisible,
 		jumpToBottom,
 		release: escapeBottom,
-		snapIfPinned,
 	};
 }

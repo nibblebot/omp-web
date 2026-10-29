@@ -37,10 +37,18 @@ export function captureScrollAnchors(
 ): ScrollAnchor[] {
 	const view = scroller.getBoundingClientRect();
 	const anchors: ScrollAnchor[] = [];
-	for (let i = 0; i < children.length; i++) {
+	// Items are in document order, so their bottoms ascend: find the first one that
+	// ends below the viewport's top by bisection instead of measuring every item above it.
+	let lo = 0;
+	let hi = children.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (children[mid]!.getBoundingClientRect().bottom <= view.top) lo = mid + 1;
+		else hi = mid;
+	}
+	for (let i = lo; i < children.length; i++) {
 		const el = children[i]!;
 		const rect = el.getBoundingClientRect();
-		if (rect.bottom <= view.top) continue;
 		if (rect.top >= view.bottom) break;
 		anchors.push({ el, offset: rect.top - view.top });
 	}
