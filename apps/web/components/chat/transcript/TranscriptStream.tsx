@@ -31,7 +31,7 @@ import {
 } from "../../../chat/transcript-index";
 import type { Run } from "../../../chat/tool-runs";
 import type { WaitRun } from "../../../chat/wait-runs";
-import { createTranscriptWindow } from "../../../chat/transcript-window";
+import { createTranscriptWindow, revealDownTo } from "../../../chat/transcript-window";
 import { registerToolReveal } from "../../../chat/tool-jump";
 import {
 	captureScrollAnchors,
@@ -160,6 +160,12 @@ export const TranscriptStream: Component<{
 		if (jumpVisible()) loadEarlier();
 	};
 	onMount(() => {
+		// A reveal in flight when this stream unmounts has nothing left to mount into: the
+		// window stops moving `hiddenBefore` once its owner is disposed.
+		let disposed = false;
+		onCleanup(() => {
+			disposed = true;
+		});
 		scroller.addEventListener("scroll", onScroll, { passive: true });
 		onCleanup(() => scroller.removeEventListener("scroll", onScroll));
 		onCleanup(
@@ -171,14 +177,8 @@ export const TranscriptStream: Component<{
 				// The jump leaves the live edge: without the release, the content the mount adds re-snaps a pinned viewport to it.
 				release();
 				// Mount down to the card in slices, yielding between them so the page stays responsive;
-				// another transcript opening meanwhile makes the card moot.
-				const epoch = win.epoch();
-				while (win.hiddenBefore() > target) {
-					mountSlice(win.hiddenBefore() - target);
-					await new Promise<void>((resolve) => setTimeout(resolve, 0));
-					if (win.epoch() !== epoch) return false;
-				}
-				return true;
+				// another transcript opening meanwhile, or this stream unmounting, makes the card moot.
+				return revealDownTo(win, target, { mountSlice, disposed: () => disposed });
 			}),
 		);
 	});

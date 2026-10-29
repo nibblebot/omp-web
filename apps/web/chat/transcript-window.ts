@@ -60,6 +60,40 @@ export function windowStartFor(
 	return from;
 }
 
+/**
+ * Whether `next` is the transcript `prev` already was, rebuilt as a new array: a history
+ * resync keeps the unchanged prefix's objects (see `keepUnchangedPrefix` in state.ts), so
+ * both lists begin with the same first item. Another session's list never does.
+ */
+export function sameTranscript(
+	prev: readonly ChatItem[] | undefined,
+	next: readonly ChatItem[],
+): boolean {
+	return prev === next || (prev !== undefined && next.length > 0 && prev[0] === next[0]);
+}
+
+/**
+ * Mount older items down to index `target` in slices, yielding a timer tick between them so
+ * the page stays responsive. Settles false when the reveal is moot: another transcript opened
+ * (`epoch` moved), the owner was disposed (its window no longer moves `hiddenBefore`), or a
+ * slice mounted nothing.
+ */
+export async function revealDownTo(
+	win: Pick<TranscriptWindow, "hiddenBefore" | "epoch">,
+	target: number,
+	options: { mountSlice(limit: number): boolean; disposed(): boolean },
+): Promise<boolean> {
+	const epoch = win.epoch();
+	while (win.hiddenBefore() > target) {
+		if (options.disposed() || !options.mountSlice(win.hiddenBefore() - target)) return false;
+		const tick = Promise.withResolvers<void>();
+		setTimeout(tick.resolve, 0);
+		await tick.promise;
+		if (options.disposed() || win.epoch() !== epoch) return false;
+	}
+	return true;
+}
+
 export function createTranscriptWindow(
 	items: () => readonly ChatItem[],
 	options: {
@@ -92,13 +126,15 @@ export function createTranscriptWindow(
 		() => {
 			rev();
 			const { list, raw } = read();
-			if (raw !== source) {
+			if (!sameTranscript(source, raw)) {
 				// Another transcript (a switch, a rebuild): open at its tail.
 				source = raw;
 				first = startFor(raw, raw.length - WINDOW_INITIAL);
 				setEpoch((n) => n + 1);
-			} else if (first > raw.length) {
-				first = startFor(raw, raw.length - WINDOW_INITIAL);
+			} else {
+				// The same transcript, possibly resynced into a new array: keep the reader's place.
+				source = raw;
+				if (first > raw.length) first = startFor(raw, raw.length - WINDOW_INITIAL);
 			}
 			if (untrack(start) !== first) setStart(first);
 			view.length = 0;

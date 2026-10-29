@@ -35,6 +35,7 @@ import type { ChatItem, ToolItem } from "../state";
 import { hiddenWhileActivitiesOpen } from "./activity-cards";
 import { originJobIds } from "./background-job";
 import { indexToolRuns, type Run } from "./tool-runs";
+import { sameTranscript } from "./transcript-window";
 import { buildTurnMeta, type TurnMeta } from "./turn-usage";
 import { buildWaitRuns, type WaitFoldOptions, type WaitRun } from "./wait-runs";
 
@@ -259,16 +260,17 @@ export function createTranscriptIndex(
 		const raw = unwrap(list) as readonly ChatItem[];
 		rawItems = raw;
 
-		if (raw !== watchedList) {
+		if (!sameTranscript(watchedList, raw)) {
 			// Another transcript: its items are watched afresh.
 			watchers?.dispose();
-			watchedList = raw;
 			watchers = createRoot((dispose) => ({
 				watched: new WeakSet(),
 				owner: getOwner()!,
 				dispose,
 			}));
 		}
+		// A resync into a new array keeps the watchers of the items it kept.
+		watchedList = raw;
 		for (let i = 0; i < raw.length; i++) {
 			const item = raw[i]!;
 			if (item.kind === "tool" && !watchers!.watched.has(item)) {

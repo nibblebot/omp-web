@@ -21,6 +21,7 @@ let clientSolid: typeof solid;
 let clientStore: typeof solidStore;
 let createTranscriptIndex: typeof IndexModule.createTranscriptIndex;
 let createTranscriptWindow: typeof WindowModule.createTranscriptWindow;
+let revealDownTo: typeof WindowModule.revealDownTo;
 let WINDOW_INITIAL: number;
 let WINDOW_CHUNK: number;
 
@@ -32,7 +33,9 @@ beforeAll(async () => {
 	const indexPath: string = "../../chat/transcript-index.ts?fresh=transcript-window-test";
 	const windowPath: string = "../../chat/transcript-window.ts?fresh=transcript-window-test";
 	({ createTranscriptIndex } = await import(indexPath));
-	({ createTranscriptWindow, WINDOW_INITIAL, WINDOW_CHUNK } = await import(windowPath));
+	({ createTranscriptWindow, revealDownTo, WINDOW_INITIAL, WINDOW_CHUNK } = await import(
+		windowPath
+	));
 });
 
 afterAll(() => {
@@ -175,6 +178,50 @@ describe("createTranscriptWindow", () => {
 		});
 	});
 
+	test("a history resync of the same transcript keeps the mounted window and its epoch", () => {
+		clientSolid.createRoot((dispose) => {
+			const { state, setState, win } = mount(300);
+			win.items();
+			while (win.showEarlier()) {
+				// backfill to the start
+			}
+			const epoch = win.epoch();
+			const before = [...state.items];
+			// loadHistory's keepUnchangedPrefix: a new array carrying the unchanged prefix's objects.
+			setState("items", [...before, prose(), prose()]);
+			expect(win.hiddenBefore()).toBe(0);
+			expect(win.items()).toHaveLength(302);
+			expect(win.items()[0]).toBe(before[0]!);
+			expect(
+				win
+					.items()
+					.slice(0, 300)
+					.map((it) => it.id),
+			).toEqual(before.map((it) => it.id));
+			expect(win.epoch()).toBe(epoch);
+			// A resync that shortens the list clamps the start instead of leaving it past the end.
+			setState("items", before.slice(0, 10));
+			expect(win.items()).toHaveLength(10);
+			expect(win.hiddenBefore()).toBe(0);
+			expect(win.epoch()).toBe(epoch);
+			dispose();
+		});
+	});
+
+	test("a list with another first item is another transcript even at the same length", () => {
+		clientSolid.createRoot((dispose) => {
+			const { state, setState, win } = mount(300);
+			win.items();
+			const epoch = win.epoch();
+			const next: ChatItem[] = [];
+			for (let i = 0; i < state.items.length; i++) next.push(prose());
+			setState("items", next);
+			expect(win.epoch()).toBe(epoch + 1);
+			expect(win.hiddenBefore()).toBe(300 - WINDOW_INITIAL);
+			dispose();
+		});
+	});
+
 	test("never begins inside a run that draws at its first call", () => {
 		clientSolid.createRoot((dispose) => {
 			const items: ChatItem[] = [user()];
@@ -206,6 +253,93 @@ describe("createTranscriptWindow", () => {
 			while (win.hiddenBefore() > target) win.showEarlier(7);
 			expect(win.items().some((it) => it.id === old.id)).toBe(true);
 			expect(win.revealStart((it) => it.id === -1)).toBeUndefined();
+			dispose();
+		});
+	});
+
+	describe("revealDownTo", () => {
+		// A window whose owner is gone: it still lowers its start, but no reader sees `hiddenBefore` move.
+		function mountOwned(count: number) {
+			let dispose!: () => void;
+			let win!: WindowModule.TranscriptWindow;
+			let setItems!: (items: ChatItem[]) => void;
+			clientSolid.createRoot((d) => {
+				dispose = d;
+				const mounted = mount(count);
+				win = mounted.win;
+				setItems = (items) => mounted.setState("items", items);
+				win.items();
+			});
+			return { win, setItems, dispose };
+		}
+
+		test("mounts down to the target, a slice per tick", async () => {
+			const { win, dispose } = mountOwned(300);
+			let slices = 0;
+			const reached = await revealDownTo(win, 60, {
+				mountSlice: (limit) => {
+					slices++;
+					return win.showEarlier(Math.min(limit, 7));
+				},
+				disposed: () => false,
+			});
+			expect(reached).toBe(true);
+			expect(win.hiddenBefore()).toBeLessThanOrEqual(60);
+			expect(slices).toBeGreaterThan(10);
+			dispose();
+		});
+
+		test("settles false once its stream is disposed mid-jump", async () => {
+			const { win, dispose } = mountOwned(300);
+			let disposed = false;
+			let slices = 0;
+			const reached = await revealDownTo(win, 0, {
+				mountSlice: (limit) => {
+					slices++;
+					// The stream unmounts while the first slice lands: the window's memo never runs again.
+					dispose();
+					disposed = true;
+					return win.showEarlier(limit);
+				},
+				disposed: () => disposed,
+			});
+			expect(reached).toBe(false);
+			expect(slices).toBe(1);
+		});
+
+		test("settles false when a slice mounts nothing, a disposed window included", async () => {
+			const { win, dispose } = mountOwned(300);
+			dispose();
+			let slices = 0;
+			const reached = await revealDownTo(win, 0, {
+				mountSlice: (limit) => {
+					slices++;
+					return win.showEarlier(limit);
+				},
+				disposed: () => false,
+			});
+			expect(reached).toBe(false);
+			// The window's own start runs out after (300 - 30) / 30 slices; the stuck signal never says so.
+			expect(slices).toBeLessThanOrEqual(10);
+		});
+
+		test("settles false when another transcript opens meanwhile", async () => {
+			const { win, setItems, dispose } = mountOwned(300);
+			let slices = 0;
+			const reached = await revealDownTo(win, 0, {
+				mountSlice: (limit) => {
+					slices++;
+					const mounted = win.showEarlier(Math.min(limit, 7));
+					const other: ChatItem[] = [];
+					for (let i = 0; i < 100; i++) other.push(prose());
+					setItems(other);
+					win.items();
+					return mounted;
+				},
+				disposed: () => false,
+			});
+			expect(reached).toBe(false);
+			expect(slices).toBe(1);
 			dispose();
 		});
 	});
