@@ -207,7 +207,10 @@ function endBridge(bridge: BridgeData, code: number, reason: string): void {
 		bridge.sendTimer = null;
 	}
 	try {
-		if (code === 1000 || (code >= 3000 && code <= 4999)) bridge.upstream?.close(code, reason);
+		// 1001 (a page unloading) rides as 1000: a no-code close reaches the edge as
+		// 1005, which it reads as a dropped connection and parks the channel for.
+		if (code === 1000 || code === 1001) bridge.upstream?.close(1000, reason);
+		else if (code >= 3000 && code <= 4999) bridge.upstream?.close(code, reason);
 		else bridge.upstream?.close();
 	} catch {
 		// The upstream is already closing.

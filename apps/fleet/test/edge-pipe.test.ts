@@ -174,6 +174,13 @@ async function attach(browser: BrowserSocket, workspaceId: string, id: string): 
 	);
 }
 
+/** Deliver the session's whole priming on one stream (the edge parks a channel for a resume only once `ready` went through). */
+function completePriming(session: CallbackSession, stream: string): void {
+	session.send(stream, "frame", { type: "attached", scope: "boot" });
+	session.send(stream, "frame", { type: "history", messages: [], final: true });
+	session.send(stream, "frame", { type: "ready", readyAt: Date.now() });
+}
+
 function controlType(env: CallbackEnvelope): string | undefined {
 	const payload = env.payload;
 	if (typeof payload !== "object" || payload === null || !("type" in payload)) return undefined;
@@ -275,9 +282,11 @@ describe("edge pipe backpressure and replay", () => {
 				(f) => f.type === "attach_result" && f.id === "a1" && f.ok,
 				"attach_result",
 			);
-			// The attached session stream is the test's drop detector: the edge
-			// sends stream_close the moment it drops the socket.
-			await awaitStreams(remote.session, 1);
+			// The primed session stream is the test's drop detector: the edge
+			// sends stream_pause the moment it drops the socket (the channel parks for the resume).
+			const [primedStream] = await awaitStreams(remote.session, 1);
+			completePriming(remote.session, primedStream!);
+			await slow.waitForFrame((f) => f.type === "ready", "end of priming");
 			const row = rig.registry.create({
 				name: "x1",
 				cwd: "/x1",
@@ -290,7 +299,7 @@ describe("edge pipe backpressure and replay", () => {
 			// plus the edge's queue) passes the cap and the edge drops it.
 			const pad = "p".repeat(64 * 1024);
 			const emittedTags = ["create"];
-			while (controlFrames(remote.session, "stream_close").length === 0) {
+			while (controlFrames(remote.session, "stream_pause").length === 0) {
 				if (emittedTags.length > 1500) throw new Error("the edge never dropped the slow client");
 				const tag = `v${emittedTags.length}`;
 				emittedTags.push(tag);
@@ -420,6 +429,7 @@ describe("edge pipe backpressure and replay", () => {
 			slow.pause();
 			slow.send({ type: "attach", id: "s1", workspaceId: remote.workspaceId });
 			const [, slowStream] = await awaitStreams(remote.session, 2);
+			completePriming(remote.session, slowStream!);
 			// 24 MiB per stream: far past the 4 MiB cap plus every kernel buffer.
 			// The session honors the healthy stream's credit window (as a session
 			// does) and ignores the slow one's (the burst that must hit the cap).
@@ -429,8 +439,8 @@ describe("edge pipe backpressure and replay", () => {
 				type: "event",
 				event: { type: "notice", level: "info", message: `${tag}${i}:${pad}` },
 			});
-			const slowClosed = (): boolean =>
-				controlFrames(remote.session, "stream_close").some((env) => env.streamId === slowStream);
+			const slowDropped = (): boolean =>
+				controlFrames(remote.session, "stream_pause").some((env) => env.streamId === slowStream);
 			const healthySeqs: number[] = [];
 			for (let i = 0; i < BURST; i++) {
 				await waitFor(
@@ -445,7 +455,7 @@ describe("edge pipe backpressure and replay", () => {
 					"healthy stream credit",
 				);
 				healthySeqs.push(remote.session.send(healthyStream!, "frame", notice("h", i)));
-				if (!slowClosed()) remote.session.send(slowStream!, "frame", notice("s", i));
+				if (!slowDropped()) remote.session.send(slowStream!, "frame", notice("s", i));
 				await sleep(1);
 			}
 			// The healthy client has every frame, in order, while the slow one is
@@ -461,7 +471,11 @@ describe("edge pipe backpressure and replay", () => {
 				.filter(isEventFrame)
 				.map((f) => eventMessage(f)!.split(":")[0]);
 			expect(healthyTags).toEqual(Array.from({ length: BURST }, (_, i) => `h${i}`));
-			await waitFor(() => (slowClosed() ? true : null), 10_000, "stream_close for the slow client");
+			await waitFor(
+				() => (slowDropped() ? true : null),
+				10_000,
+				"stream_pause for the slow client",
+			);
 			// The session's pair is untouched and the healthy stream was never cut;
 			// its credit kept flowing right through to the last frame.
 			expect(remote.session.connected()).toBe(true);
@@ -1295,8 +1309,7 @@ describe("edge resume of a dropped browser's session channel", () => {
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		await attach(browser, remote.workspaceId, "a1");
 		const [stream] = await awaitStreams(remote.session, 1);
-		remote.session.send(stream!, "frame", { type: "attached", scope: "boot" });
-		remote.session.send(stream!, "frame", { type: "history", messages: [], final: true });
+		completePriming(remote.session, stream!);
 		remote.session.send(stream!, "frame", notice("before-drop"));
 		await browser.waitForFrame(noticeSeen("before-drop"), "delta before the drop");
 		return { browser, stream: stream! };
@@ -1433,6 +1446,47 @@ describe("edge resume of a dropped browser's session channel", () => {
 		}
 	});
 
+	test("a 4400 drop during priming closes the session channel at once: nothing is paused or parked, and the resume attach primes afresh", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "mid-prime");
+			const browser = await openBrowser(rig.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await attach(browser, remote.workspaceId, "a1");
+			const [stream] = await awaitStreams(remote.session, 1);
+			// The session has started priming (hello_ok .. history) but not finished it.
+			remote.session.send(stream!, "frame", { type: "attached", scope: "boot" });
+			remote.session.send(stream!, "frame", { type: "history", messages: [], final: false });
+			await browser.waitForFrame((f) => f.type === "history", "history");
+			await browser.sendRaw("this is not json");
+			expect((await browser.end()).code).toBe(4400);
+			await waitFor(
+				() =>
+					controlFrames(remote.session, "stream_close").find((e) => e.streamId === stream) ?? null,
+				3000,
+				"stream_close",
+			);
+			expect(controlFrames(remote.session, "stream_pause")).toHaveLength(0);
+			await browser.reopen();
+			await browser.send({
+				type: "attach",
+				id: "a2",
+				workspaceId: remote.workspaceId,
+				resume: true,
+			});
+			await browser.waitForFrame(
+				(f) => f.type === "attach_result" && f.id === "a2",
+				"attach_result a2",
+			);
+			expect(attachResults(browser, "a2")).toEqual([
+				{ type: "attach_result", id: "a2", ok: true, workspaceId: remote.workspaceId },
+			]);
+			await awaitStreams(remote.session, 2);
+		} finally {
+			await rig.close();
+		}
+	});
+
 	test("an attach without resume (an older client) closes the adopted channel and primes", async () => {
 		const rig = await startRig();
 		try {
@@ -1451,6 +1505,92 @@ describe("edge resume of a dropped browser's session channel", () => {
 			expect(
 				controlFrames(remote.session, "stream_close").some((env) => env.streamId === stream),
 			).toBe(true);
+		} finally {
+			await rig.close();
+		}
+	});
+
+	test("an edge-initiated close (4400) parks the channel: a resume attach continues it and no stream_close was sent", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "edge-close");
+			const { browser, stream } = await attachedBrowser(rig, remote);
+			await browser.sendRaw("this is not json");
+			expect((await browser.end()).code).toBe(4400);
+			await waitFor(
+				() =>
+					controlFrames(remote.session, "stream_pause").find((e) => e.streamId === stream) ?? null,
+				3000,
+				"stream_pause",
+			);
+			await sleep(100);
+			expect(controlFrames(remote.session, "stream_close")).toHaveLength(0);
+			await browser.reopen();
+			await browser.send({
+				type: "attach",
+				id: "a2",
+				workspaceId: remote.workspaceId,
+				resume: true,
+			});
+			await browser.waitForFrame(
+				(f) => f.type === "attach_result" && f.id === "a2",
+				"attach_result a2",
+			);
+			expect(attachResults(browser, "a2")).toEqual([
+				{
+					type: "attach_result",
+					id: "a2",
+					ok: true,
+					workspaceId: remote.workspaceId,
+					resumed: true,
+				},
+			]);
+			expect(controlFrames(remote.session, "stream_open")).toHaveLength(1);
+			expect(controlFrames(remote.session, "stream_close")).toHaveLength(0);
+		} finally {
+			await rig.close();
+		}
+	});
+
+	test("a second socket for the same client while the first is still open parks the channel and resumes it", async () => {
+		const rig = await startRig();
+		try {
+			const remote = await connectRemote(rig, "overlap");
+			const { browser, stream } = await attachedBrowser(rig, remote);
+			// The old page's close has not reached the edge: the new socket opens over it.
+			const next = new BrowserSocket(rig.port, browser.clientId, { after: browser.lastSeq });
+			allBrowsers.push(next);
+			await next.open();
+			await next.waitForFrame((f) => f.type === "registered_projects", "priming");
+			await waitFor(
+				() =>
+					controlFrames(remote.session, "stream_pause").find((e) => e.streamId === stream) ?? null,
+				3000,
+				"stream_pause",
+			);
+			await sleep(100);
+			expect(controlFrames(remote.session, "stream_close")).toHaveLength(0);
+			await next.send({
+				type: "attach",
+				id: "a2",
+				workspaceId: remote.workspaceId,
+				resume: true,
+			});
+			await next.waitForFrame(
+				(f) => f.type === "attach_result" && f.id === "a2",
+				"attach_result a2",
+			);
+			expect(attachResults(next, "a2")).toEqual([
+				{
+					type: "attach_result",
+					id: "a2",
+					ok: true,
+					workspaceId: remote.workspaceId,
+					resumed: true,
+				},
+			]);
+			expect(controlFrames(remote.session, "stream_open")).toHaveLength(1);
+			expect(controlFrames(remote.session, "stream_close")).toHaveLength(0);
 		} finally {
 			await rig.close();
 		}
@@ -1490,7 +1630,7 @@ describe("edge pause of a parked session channel", () => {
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
 			await attach(browser, remote.workspaceId, "a1");
 			const [stream] = await awaitStreams(remote.session, 1);
-			remote.session.send(stream!, "frame", { type: "attached", scope: "boot" });
+			completePriming(remote.session, stream!);
 			remote.session.send(stream!, "frame", {
 				type: "event",
 				event: { type: "notice", level: "info", message: "before" },

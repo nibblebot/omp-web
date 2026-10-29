@@ -57,7 +57,9 @@
  *     attach.
  *   - RESUME: a named client's socket drop (anything but a 1000 or 1001 close:
  *     a finished client, a page unloading) does not close its session
- *     channel. The channel is parked on the client for CLIENT_RECLAIM_MS and
+ *     channel once its priming went through (the session's `ready` frame was
+ *     forwarded; a drop mid-priming leaves nothing a browser could resume, so
+ *     that channel closes at once). The channel is parked on the client for CLIENT_RECLAIM_MS and
  *     paused on the session (stream_pause: it holds the ringed deltas and sends
  *     nothing, so a browser that never returns costs no pair traffic); frames
  *     already in flight feed the client's ring like a fleet broadcast, and
@@ -560,6 +562,13 @@ interface CallbackPipeState {
 	ackedSeq: number;
 	/** Socket-taken bytes at the last stream_ack. */
 	ackedDrained: number;
+	/**
+	 * The session's priming reached the socket (its `ready` frame was forwarded
+	 * after the last `hello_ok`). Only a primed channel is worth parking: a drop
+	 * before that leaves the browser with `after` below the re-prime frames, so
+	 * it could never resume and would hold the session's burst until the reclaim.
+	 */
+	primed: boolean;
 }
 
 function newClient(clientId: string | null, ringBytes: number): BrowserClient {
@@ -1673,6 +1682,7 @@ export class FleetEdge {
 			drainedSeq: 0,
 			ackedSeq: 0,
 			ackedDrained: 0,
+			primed: false,
 			detach: () => {},
 			unsubscribePair: () => {},
 		};
@@ -1763,6 +1773,7 @@ export class FleetEdge {
 					// The session dropped frames on ITS outbound buffer and pushes a
 					// fresh snapshot after this marker; mirror the callback pipe's
 					// stream_reset so the client re-primes (never a silent gap).
+					pipe.primed = false;
 					this.#sendDelta(stream, { type: "stream_reset", reason: "session_resync" });
 				}
 			}
@@ -1816,6 +1827,9 @@ export class FleetEdge {
 			// edge's priming is roster + daemons only). Falls through to the
 			// stamping + #sendDelta below like any other global frame.
 		}
+		// Priming runs hello_ok → … → ready; the channel is resumable once `ready` went.
+		if (frame.type === "hello_ok") pipe.primed = false;
+		else if (frame.type === "ready") pipe.primed = true;
 		if (frame.type === "daemons") {
 			// Broker rosters are tapped here (like the control socket) but
 			// NEVER forwarded: browsers only ever see the edge's single
@@ -2324,12 +2338,15 @@ export class FleetEdge {
 			current &&
 			client.clientId !== null &&
 			stream.pipe !== null &&
+			stream.pipe.primed &&
 			!stream.pipe.closed
 		) {
 			this.#dropParked(client);
 			client.parked = stream;
 			this.#sendPipeControl(stream.pipe, { type: "stream_pause" });
-		} else {
+		} else if (client.parked !== stream) {
+			// A parked stream's late socket close (the edge's own close runs the
+			// close handler synchronously) must not kill the parked channel.
 			this.#closePipe(stream);
 		}
 		if (current) {

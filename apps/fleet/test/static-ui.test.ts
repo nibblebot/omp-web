@@ -98,6 +98,8 @@ describe("serveStaticUi compression", () => {
 		expect(brotliDecompressSync(new Uint8Array(await both.arrayBuffer())).toString()).toBe(SCRIPT);
 		const refused = await get("/assets/app-abc123.js", { "accept-encoding": "br;q=0, gzip" });
 		expect(refused.headers.get("content-encoding")).toBe("gzip");
+		const spaced = await get("/assets/app-abc123.js", { "accept-encoding": "br ;q=0, gzip ;q=1" });
+		expect(spaced.headers.get("content-encoding")).toBe("gzip");
 	});
 
 	test("each encoding has its own ETag", async () => {

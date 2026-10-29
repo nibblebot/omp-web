@@ -44,9 +44,15 @@ import {
 } from "../ui-server";
 import { cleanupTempDirs, serveEdge, testEviction, testWaker } from "./edge.testkit";
 import { makeHostLifecycle } from "./host-lifecycle.testkit";
-import { fleetPaths, startTestFleet, waitFor } from "./server.testkit";
+import { fleetPaths, pinSettingsInMemory, startTestFleet, waitFor } from "./server.testkit";
 
 afterAll(cleanupTempDirs);
+
+// The proxied /ctl/settings route lazily boots the process-global Settings
+// singleton on first use. Pin it in-memory (at this file's top level; see the
+// testkit) so the singleton is never a real one over the checkout's cwd and
+// the user's agent dir, which later files in a one-process run would inherit.
+await pinSettingsInMemory();
 
 const SERVES_NO_UI = "this omp-web control plane serves no UI; run: omp-web ui";
 
@@ -759,6 +765,16 @@ describe("ui server browser WebSocket bridge", () => {
 		await client.closed;
 		await waitFor(() => socket.closes.length === 1, 5000, "upstream close");
 		expect(socket.closes[0]).toEqual({ code: 1000, reason: "done" });
+	});
+
+	test("a browser 1001 (page unload) reaches the upstream as a 1000, not a code-less close", async () => {
+		const client = dialBrowser(ui.port, { clientId: "tab-unload", after: null });
+		await waitFor(() => client.messages.length === 1, 5000, "first upstream message");
+		const socket = sockets.at(-1)!;
+		client.ws.close(1001, "going away");
+		await client.closed;
+		await waitFor(() => socket.closes.length === 1, 5000, "upstream close");
+		expect(socket.closes[0]?.code).toBe(1000);
 	});
 
 	test("typed closes pass through both ways with their code and reason", async () => {

@@ -8,7 +8,8 @@ export function acceptedCodings(header: string | null): Set<string> {
 	const accepted = new Set<string>();
 	if (header === null) return accepted;
 	for (const part of header.split(",")) {
-		const [coding, ...params] = part.trim().toLowerCase().split(";");
+		const [rawCoding, ...params] = part.trim().toLowerCase().split(";");
+		const coding = rawCoding?.trim();
 		const q = params.map((p) => p.trim()).find((p) => p.startsWith("q="));
 		if (coding && !(q !== undefined && Number(q.slice(2)) === 0)) accepted.add(coding);
 	}
