@@ -146,6 +146,48 @@ describe("resuming the attachment after a drop", () => {
 		expect(next.url).toContain("after=1030");
 	});
 
+	test("priming seqs on a resumed socket do not replace the delta resume point", () => {
+		vi.useFakeTimers();
+		const ws = onSession();
+		dispatchSeq(
+			{ type: "event", event: { type: "message_start", message: userMsg("while-live") } },
+			1030,
+		);
+		posted.length = 0;
+		const second = dropAndRedial(ws);
+		// The resumed attach sends no priming of its own, so the socket's open-time
+		// priming seqs (1..k, below DELTA_SEQ_START) are the only frames that follow.
+		dispatchSeq({ type: "ready", readyAt: 77 }, 1);
+		dispatchSeq({ type: "ready", readyAt: 77 }, 2);
+		dispatch({
+			type: "attach_result",
+			id: attachCommands()[0]!.id,
+			ok: true,
+			workspaceId: "d1",
+			resumed: true,
+		});
+		expect(second.url).toContain("after=1030");
+		const third = dropAndRedial(second);
+		// The edge adopts a parked attachment only for a delta-era `after`; k would force a full re-prime.
+		expect(third.url).toContain("after=1030");
+	});
+
+	test("a restarted server's fresh seq space replaces the old resume point", () => {
+		vi.useFakeTimers();
+		const ws = onSession();
+		dispatchSeq(
+			{ type: "event", event: { type: "message_start", message: userMsg("while-live") } },
+			1030,
+		);
+		const second = dropAndRedial(ws);
+		// A restarted server numbers from DELTA_SEQ_START again; its first delta wins.
+		dispatchSeq(
+			{ type: "event", event: { type: "message_start", message: userMsg("after-restart") } },
+			1024,
+		);
+		expect(dropAndRedial(second).url).toContain("after=1024");
+	});
+
 	test("a call parked as not attached while the socket was down goes out again on a resume", () => {
 		vi.useFakeTimers();
 		const ws = onSession();

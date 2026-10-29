@@ -6,9 +6,9 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ClientCommand, RosterEntry, WebSessionState } from "#lib/wire/protocol";
-import { connect, setState } from "../../state";
+import { connect, setState, state } from "../../state";
 import type * as DeepLink from "../../store/deep-link";
-import { settleWorkspaceSessions } from "../../store/roster";
+import { settleWorkspaceSessions, switchToSession } from "../../store/roster";
 import {
 	FakeWebSocket,
 	attached,
@@ -28,6 +28,7 @@ const written: string[] = [];
 
 // The initial restore runs once per module load, so each test loads a fresh copy.
 let restoreInitialRoute: typeof DeepLink.restoreInitialRoute;
+let syncRouteToAttached: typeof DeepLink.syncRouteToAttached;
 let loads = 0;
 
 /** Yield microtasks until a matching command is posted. Bounded; no timers. */
@@ -44,7 +45,7 @@ async function untilPosted(
 
 beforeEach(async () => {
 	const path: string = `../../store/deep-link.ts?fresh=${++loads}`;
-	({ restoreInitialRoute } = (await import(path)) as typeof DeepLink);
+	({ restoreInitialRoute, syncRouteToAttached } = (await import(path)) as typeof DeepLink);
 	installTransportStubs();
 	installLocalStorageShim();
 	written.length = 0;
@@ -116,5 +117,51 @@ describe("reload on a session hash", () => {
 		for (let i = 0; i < 10; i++) await flushMicrotasks();
 
 		expect(written.filter((url) => url.endsWith("#/w/d1"))).toEqual([]);
+	});
+});
+
+describe("a refused attach on the hash's session", () => {
+	const refuse = async (): Promise<void> => {
+		const attach = await untilPosted((c): c is AttachCommand => c.type === "attach");
+		dispatch({
+			type: "attach_result",
+			id: attach.id,
+			ok: false,
+			workspaceId: "d1",
+			error: "refused",
+		});
+		for (let i = 0; i < 10; i++) await flushMicrotasks();
+	};
+
+	test("ends the restore at once, so the attached session mirrors into the hash again", async () => {
+		restoreInitialRoute();
+		await refuse();
+		expect(state.transcriptPhase).toBe("failed");
+		// A restore still waiting on its attachment watch (30 s) owns the hash.
+		setState({ currentWorkspaceId: "d1", sessionId: "s2" });
+		syncRouteToAttached();
+		expect(written).toEqual(["push /#/w/d1/s/s2"]);
+	});
+
+	test("does not pull the user back from the session they picked meanwhile", async () => {
+		setState("sessionRoster", [
+			{ workspaceId: "d1", status: "ready" } as unknown as RosterEntry,
+			{ workspaceId: "d2", status: "ready" } as unknown as RosterEntry,
+		]);
+		restoreInitialRoute();
+		await refuse();
+		void switchToSession("d2");
+		const second = await untilPosted(
+			(c): c is AttachCommand => c.type === "attach" && c.workspaceId === "d2",
+		);
+		dispatch({ type: "attach_result", id: second.id, ok: true, workspaceId: "d2" });
+		dispatch(attached("d2"));
+		for (let i = 0; i < 10; i++) await flushMicrotasks();
+		expect(posted.some((c) => c.type === "list_workspace_sessions")).toBe(false);
+		expect(posted.filter((c) => c.type === "attach").map((c) => c.workspaceId)).toEqual([
+			"d1",
+			"d2",
+		]);
+		expect(state.currentWorkspaceId).toBe("d2");
 	});
 });

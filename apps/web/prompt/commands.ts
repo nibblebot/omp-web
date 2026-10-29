@@ -2,7 +2,13 @@ import type { ImageArg } from "#lib/wire/protocol";
 import { slashBusyPolicy, type SlashCommandSource } from "#lib/wire/slash-busy";
 import { requestDangerConfirm } from "./danger-confirm";
 import { goalRouteArgs } from "./goal-dispatch";
-import { featureCommand, featureCommandDetails, isFeatureEnabled } from "../features/registry";
+import {
+	activateFeatures,
+	featureCommand,
+	featureCommandDetails,
+	isFeatureEnabled,
+} from "../features/registry";
+import { featurePreferences, preferredFeatureIds } from "../features/preferences";
 import { featureForCommand } from "../features/manifest";
 import {
 	buildCommandRegistry,
@@ -581,6 +587,17 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			}
 			const off = featureForCommand(parsed.name);
 			if (off) {
+				// Preferred on but its chunk has not landed (activation never gates first
+				// render): wait for it, then run the command, so a feature that is on never
+				// gets the "disabled" notice. A feature that fails to load stays off and
+				// has already toasted why; it gets the notice like any disabled one.
+				if (featurePreferences()[off.id] && !isFeatureEnabled(off.id)) {
+					void activateFeatures(preferredFeatureIds()).then(() => {
+						if (isFeatureEnabled(off.id)) dispatchInput(text, images, mode);
+						else pushNotice("info", disabledFeatureNotice(parsed.name, off));
+					});
+					return;
+				}
 				pushNotice("info", disabledFeatureNotice(parsed.name, off));
 				return;
 			}

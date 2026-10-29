@@ -16,6 +16,7 @@ import { batch } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import {
 	OMP_PROTO,
+	DELTA_SEQ_START,
 	CLIENT_RING_CAP,
 	CLIENT_SILENCE_DEADLINE_MS,
 	daemonsKey,
@@ -73,14 +74,8 @@ import {
 	settleWorkspaceCreate,
 } from "./store/projects";
 import { clearUserStopped, isUserStopped, reconcileUserStopped } from "./store/user-stopped";
-import {
-	checkSession,
-	expireSession,
-	subscribeAuth,
-	type AuthStatus,
-	type AuthSnapshot,
-} from "./store/auth";
-import { applySettingsModel, refreshSettings, settingsAttached } from "./store/settings";
+import { checkSession, expireSession, subscribeAuth, type AuthSnapshot } from "./store/auth";
+import { applySettingsModel, settingsAttached } from "./store/settings";
 import {
 	resetPendingSessionsFiles,
 	settleWorkspaceSessions,
@@ -91,7 +86,7 @@ import {
 	switchToSession,
 } from "./store/roster";
 import { currentNotifyPermission, outcomeNotice } from "./store/notify";
-import { dismissToast, pushToast, type ToastAction } from "./store/toasts";
+import { pushToast, type ToastAction } from "./store/toasts";
 import { parseRoute } from "./store/route";
 import {
 	attachSession,
@@ -1914,7 +1909,15 @@ export function connect(): void {
 				refuseCommand(message.id, message.status, message.error);
 				break;
 			case "frame":
-				if (message.seq !== null) lastSeq = message.seq;
+				// A priming seq (1..k, below DELTA_SEQ_START) never replaces a delta-era
+				// resume point: a resumed attach sends no priming after the socket's open
+				// frames, and `after=k` would make the edge refuse the parked attachment
+				// and skip the ring replay. A restarted server's first delta still wins.
+				if (
+					message.seq !== null &&
+					(message.seq >= DELTA_SEQ_START || lastSeq === null || lastSeq < DELTA_SEQ_START)
+				)
+					lastSeq = message.seq;
 				handleFrame(message.frame, message.seq);
 				break;
 		}

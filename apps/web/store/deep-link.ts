@@ -81,7 +81,18 @@ async function attachSessionRoute(workspaceId: string, sessionId: string): Promi
 	) {
 		const attachment = watchAttachment(workspaceId);
 		await attachWorkspace(workspaceId);
-		if ((await attachment.done()) && state.sessionId === sessionId) return;
+		// A refused attach (phase failed) never lands an `attached` frame, and a newer
+		// switch owns the pane once the user picks another session: either way the
+		// restore ends here instead of waiting out the watch and pulling the user back.
+		const refused = state.transcriptPhase === "failed" && state.transcriptTarget === workspaceId;
+		const superseded = state.transcriptTarget !== null && state.transcriptTarget !== workspaceId;
+		if (refused || superseded) {
+			attachment.cancel();
+			return;
+		}
+		const ready = await attachment.done();
+		if (state.currentWorkspaceId !== "" && state.currentWorkspaceId !== workspaceId) return;
+		if (ready && state.sessionId === sessionId) return;
 	}
 	const match = (await requestWorkspaceSessions(workspaceId)).find((s) => s.id === sessionId);
 	if (match === undefined) {
