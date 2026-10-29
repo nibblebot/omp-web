@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import type {
 	highlightCode as HighlightCode,
 	highlightCodeRaw as HighlightCodeRaw,
@@ -573,16 +573,39 @@ let loadHighlighter: typeof LoadHighlighter;
 
 // Import in the hook after installing the DOM double so the first sanitizer
 // creation sees this window, without mutating globals while collecting tests.
+//
+// The highlighter keeps its load state and caches per module instance, and any file that
+// rendered a code card earlier in a shared process has already loaded it. This file needs the
+// unloaded state, so it runs against private instances of both modules: markdown.ts reaches
+// highlight.ts by its plain specifier, so that specifier is mocked to the private highlighter
+// for the file and handed back to the shared instance afterwards.
+type HighlightModule = typeof import("../../text/highlight");
+type MarkdownModule = typeof import("../../text/markdown");
+let sharedHighlight: HighlightModule | undefined;
+let fileHighlight: HighlightModule | undefined;
 beforeAll(async () => {
 	restoreMinimalDom = installMinimalDom();
-	({ renderMarkdown, createStreamSplitter, getMarkdownSanitizer } =
-		await import("../../text/markdown"));
+	sharedHighlight = await import("../../text/highlight");
+	const highlightPath: string = "../../text/highlight.ts?fresh=markdown-test";
+	const markdownPath: string = "../../text/markdown.ts?fresh=markdown-test";
+	const privateHighlight: HighlightModule = await import(highlightPath);
+	fileHighlight = privateHighlight;
+	mock.module("../../text/highlight", () => privateHighlight);
+	({ renderMarkdown, createStreamSplitter, getMarkdownSanitizer } = (await import(
+		markdownPath
+	)) as MarkdownModule);
 	({ highlightCode, highlightCodeRaw, highlightLines, languageForPath, loadHighlighter } =
-		await import("../../text/highlight"));
+		privateHighlight);
 });
 afterAll(() => {
 	restoreMinimalDom?.();
 	restoreMinimalDom = undefined;
+	if (sharedHighlight !== undefined) {
+		const shared = sharedHighlight;
+		mock.module("../../text/highlight", () => shared);
+		sharedHighlight = undefined;
+		fileHighlight = undefined;
+	}
 });
 
 /**
@@ -753,23 +776,70 @@ describe("renderMarkdown cache", () => {
 		// The whole-source render takes the single sanitizer pass; both agree.
 		expect(renderMarkdown(whole, { cache: false })).toBe(parts.join(""));
 	});
+
+	// The live stream renders each frozen block alone, so a settled long message finds its blocks cached.
+	// Blocks that only make sense together must still render as the whole source does.
+	const filler = Array.from(
+		{ length: 30 },
+		(_, i) => `Paragraph ${i} with *emphasis* and some filler words to give it weight.\n\n`,
+	);
+	const renderedAfterBlocks = (blocks: string[]): { whole: string; cached: string } => {
+		const whole = blocks.join("");
+		expect(whole.length).toBeGreaterThan(1500);
+		const uncached = renderMarkdown(whole, { cache: false });
+		for (const block of blocks) renderMarkdown(block);
+		return { whole: uncached, cached: renderMarkdown(whole) };
+	};
+
+	test("a link reference defined in another block still resolves in a long message", () => {
+		const { whole, cached } = renderedAfterBlocks([
+			"See [the docs][d] for more.\n\n",
+			...filler,
+			"[d]: https://example.com\n",
+		]);
+		expect(whole).toContain('<a href="https://example.com">the docs</a>');
+		expect(cached).toBe(whole);
+	});
+
+	test("an HTML block that spans blank lines stays in one piece in a long message", () => {
+		const { whole, cached } = renderedAfterBlocks([
+			"<details>\n<summary>Logs</summary>\n\nThe **body** text.\n\n</details>\n\n",
+			...filler,
+			"the end",
+		]);
+		expect(whole).toContain("<details>");
+		expect(cached).toBe(whole);
+	});
 });
 
 describe("highlightCode", () => {
 	test("returns null until the library has loaded, then highlights", async () => {
-		// First call triggers the lazy load and renders plain.
-		expect(highlightCode("const a = 1;", "ts")).toBeNull();
-		// A markdown render cached before the load must not outlive it.
-		const fenced = 'before the load\n\n```json\n{"a": 1}\n```\n';
-		const plain = renderMarkdown(fenced);
-		expect(plain).not.toContain("hljs-");
-		expect(renderMarkdown(fenced)).toBe(plain);
-		await loadHighlighter();
-		const html = highlightCode("const a = 1;", "ts");
-		expect(html).toContain('<span class="hljs-keyword">const</span>');
-		const highlighted = renderMarkdown(fenced);
-		expect(highlighted).toContain("hljs-");
-		expect(renderMarkdown(fenced)).toBe(highlighted);
+		// Earlier tests in this file already started the file's highlighter loading, and the grammars
+		// are cached once any file has loaded them, so the unloaded state only exists in a pair of
+		// modules nothing else has touched: a private highlighter and a markdown renderer bound to it.
+		const unloadedHighlightPath: string = "../../text/highlight.ts?fresh=unloaded-test";
+		const unloadedMarkdownPath: string = "../../text/markdown.ts?fresh=unloaded-test";
+		const unloaded: HighlightModule = await import(unloadedHighlightPath);
+		mock.module("../../text/highlight", () => unloaded);
+		try {
+			const markdown: MarkdownModule = await import(unloadedMarkdownPath);
+			// First call triggers the lazy load and renders plain.
+			expect(unloaded.highlightCode("const a = 1;", "ts")).toBeNull();
+			// A markdown render cached before the load must not outlive it.
+			const fenced = 'before the load\n\n```json\n{"a": 1}\n```\n';
+			const plain = markdown.renderMarkdown(fenced);
+			expect(plain).not.toContain("hljs-");
+			expect(markdown.renderMarkdown(fenced)).toBe(plain);
+			await unloaded.loadHighlighter();
+			const html = unloaded.highlightCode("const a = 1;", "ts");
+			expect(html).toContain('<span class="hljs-keyword">const</span>');
+			const highlighted = markdown.renderMarkdown(fenced);
+			expect(highlighted).toContain("hljs-");
+			expect(markdown.renderMarkdown(fenced)).toBe(highlighted);
+		} finally {
+			const own = fileHighlight;
+			if (own !== undefined) mock.module("../../text/highlight", () => own);
+		}
 	});
 
 	test("resolves aliases and returns null for unknown or missing languages", async () => {

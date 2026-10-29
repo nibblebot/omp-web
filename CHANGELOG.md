@@ -26,7 +26,7 @@ Fixes from the frontend performance audit (`90nc`, items FP01-FP28). Wire change
 
 #### Memory
 - A live transcript no longer keeps every earlier copy of its item list: memory now grows linearly with session length instead of quadratically (`ykq0`).
-- The browser-socket replay dedup set is a fixed window instead of one entry per frame (`mtwr`). Capped tool output no longer pins the full original string. The bash chunk buffer is capped while the tab is hidden. Image thumbnails are `blob:` URLs from a cache bounded by decoded bytes instead of 200 data URLs (`macn`). A reverse proxy that sets a `Content-Security-Policy` with `img-src` must allow `blob:`.
+- The browser-socket replay dedup set is a fixed window instead of one entry per frame (`mtwr`). Capped tool output no longer pins the full original string. The bash chunk buffer is capped while the tab is hidden. Raster image thumbnails (PNG, JPEG, GIF, WebP, AVIF, BMP) are `blob:` URLs from a cache bounded by decoded bytes instead of 200 data URLs; any other image type, including SVG, stays a `data:` URL, so a tool image can never open as a same-origin document (`macn`). A reverse proxy that sets a `Content-Security-Policy` with `img-src` must allow `blob:`.
 - Subagent transcripts are kept only while a pane shows them, plus the three most recently closed, and are dropped on a session switch (`188s`). A closed dialog or sheet is no longer kept alive by focus restore (`427z`).
 
 #### Transcript

@@ -84,4 +84,26 @@ describe("image object URL cache", () => {
 		const bad: ImageArg = { type: "image", data: "***not base64***", mimeType: "image/png" };
 		expect(urlFor(bad)).toBe("data:image/png;base64,***not base64***");
 	});
+
+	test("only raster types become blob: URLs; svg and html stay opaque-origin data: URLs", () => {
+		const urlFor = createImageUrlCache(1_000_000, 0);
+		const svg = image(
+			"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>",
+			"image/svg+xml",
+		);
+		expect(urlFor(svg)).toBe(`data:image/svg+xml;base64,${svg.data}`);
+		const html = image("<script>alert(1)</script>", "text/html");
+		expect(urlFor(html)).toBe(`data:text/html;base64,${html.data}`);
+		for (const mimeType of [
+			"image/png",
+			"image/jpeg",
+			"image/gif",
+			"image/webp",
+			"image/avif",
+			"image/bmp",
+		]) {
+			expect(urlFor(image("pixels", mimeType))).toStartWith("blob:");
+		}
+		expect(urlFor(image("pixels", "IMAGE/PNG; charset=binary"))).toStartWith("blob:");
+	});
 });

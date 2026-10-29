@@ -67,19 +67,51 @@ const DiffBody: Component<{ item: ToolItem; preview: EditPreview }> = (props) =>
 };
 
 /**
+ * The card's body, mounted only once the card opens, so a closed card never runs the line diff.
+ * `headerPreview` is the preview the header already computed when it could not use cheap stats
+ * (undefined when it did not), so the diff is never computed twice.
+ */
+const DiffCardBody: Component<{
+	item: ToolItem;
+	headerPreview: () => EditPreview | null | undefined;
+}> = (props) => {
+	const preview = createMemo(() => {
+		const shared = props.headerPreview();
+		return shared !== undefined
+			? shared
+			: editPreview(props.item.name, props.item.args, props.item.details);
+	});
+	return (
+		<Switch fallback={<CollapsibleOutput item={props.item} output={props.item.output} />}>
+			<Match when={props.item.status === "error"}>
+				<CollapsibleOutput item={props.item} output={props.item.output} />
+			</Match>
+			<Match when={preview()}>{(p) => <DiffBody item={props.item} preview={p()} />}</Match>
+			<Match when={props.item.status === "running"}>
+				<div class="diff-pending">preparing…</div>
+			</Match>
+		</Switch>
+	);
+};
+
+/**
  * edit, write, apply_patch, patch, hashline: a `+n −m path` summary that
  * expands to the diff. Never raw args: with no renderable diff yet it shows a
  * neutral placeholder (streaming) or the tool's text output (settled, errors).
  */
 export const DiffToolCard: Component<{ item: ToolItem }> = (props) => {
-	// The full preview (the line diff and its rows) is read by the body, which a
-	// closed card never mounts, so the header gets its numbers without it when it can.
-	const preview = createMemo(() =>
-		editPreview(props.item.name, props.item.args, props.item.details),
+	// The header gets its numbers from `cheapEditStats` and falls back to the full
+	// preview only for a call that needs the line diff. Memos run when created, so
+	// the full preview otherwise lives in the body, which a closed card never mounts.
+	const cheap = createMemo(() =>
+		cheapEditStats(props.item.name, props.item.args, props.item.details),
 	);
-	const stats = createMemo(
-		() => cheapEditStats(props.item.name, props.item.args, props.item.details) ?? preview(),
+	const headerPreview = createMemo(() =>
+		cheap() === undefined
+			? editPreview(props.item.name, props.item.args, props.item.details)
+			: undefined,
 	);
+	const stats = () => cheap() ?? headerPreview();
 	const target = () => {
 		const p = stats();
 		return p && p.files > 1 ? `${p.files} files` : p?.path;
@@ -102,15 +134,7 @@ export const DiffToolCard: Component<{ item: ToolItem }> = (props) => {
 				</Show>
 			}
 		>
-			<Switch fallback={<CollapsibleOutput item={props.item} output={props.item.output} />}>
-				<Match when={props.item.status === "error"}>
-					<CollapsibleOutput item={props.item} output={props.item.output} />
-				</Match>
-				<Match when={preview()}>{(p) => <DiffBody item={props.item} preview={p()} />}</Match>
-				<Match when={props.item.status === "running"}>
-					<div class="diff-pending">preparing…</div>
-				</Match>
-			</Switch>
+			<DiffCardBody item={props.item} headerPreview={headerPreview} />
 		</ToolCardShell>
 	);
 };

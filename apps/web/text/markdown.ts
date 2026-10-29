@@ -1,5 +1,5 @@
 import DOMPurify from "dompurify";
-import { Marked, type Token, type Tokens } from "marked";
+import { Marked, type Token, type Tokens, type TokensList } from "marked";
 import { highlightCodeRaw, highlightReady } from "./highlight";
 
 let sanitizer: typeof DOMPurify | undefined;
@@ -135,9 +135,14 @@ const SEGMENTED_MIN_CHARS = 1500;
 /**
  * Renders a long source from the cached HTML of its top-level blocks when most
  * of it is cached (a message that just finished streaming), rendering and
- * caching the misses; undefined when the cache would not help.
+ * caching the misses; undefined when the cache would not help or when a block
+ * is not self-contained. Link reference definitions resolve across blocks and
+ * a raw HTML block can span blank lines, so a source with either renders whole.
  */
-function renderFromSegments(src: string, tokens: Token[]): Rendered | undefined {
+function renderFromSegments(src: string, tokens: TokensList): Rendered | undefined {
+	if (Object.keys(tokens.links).length > 0 || tokens.some((token) => token.type === "html")) {
+		return undefined;
+	}
 	const segments = segmentsOf(tokens, 0, tokens.length);
 	if (segments.join("") !== normalizeNewlines(src)) return undefined;
 	let cached = 0;

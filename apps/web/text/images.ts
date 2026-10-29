@@ -53,6 +53,22 @@ function hashPayload(data: string): string {
 	return (h2 >>> 0).toString(36) + (h1 >>> 0).toString(36);
 }
 
+/** Mime types an object URL may carry. Never svg or html: a `blob:` URL is same-origin, so those would execute as a top-level document. */
+const RASTER_MIME_TYPES: Record<string, true> = {
+	"image/png": true,
+	"image/jpeg": true,
+	"image/gif": true,
+	"image/webp": true,
+	"image/avif": true,
+	"image/bmp": true,
+};
+
+/** The raster mime type of `mimeType` with case and parameters dropped; undefined for any other type. */
+function rasterBlobType(mimeType: string): string | undefined {
+	const essence = mimeType.split(";", 1)[0]!.trim().toLowerCase();
+	return Object.hasOwn(RASTER_MIME_TYPES, essence) ? essence : undefined;
+}
+
 /** Decoded image bytes the default cache keeps registered as blobs before it evicts the least recently used. */
 const IMAGE_URL_CACHE_MAX_BYTES = 96 * 1024 * 1024;
 /** An evicted URL stays valid this long: an <img> mounted in the same turn may not have started its fetch yet. */
@@ -65,7 +81,8 @@ const REVOKE_GRACE_MS = 5_000;
  * objects on every flush, so equal content must map to the same URL (the <img> src never changes between
  * renders and the browser never re-decodes the screenshot); an object already seen is answered from a
  * WeakMap without touching its payload, and only a new object pays the one hash. The cache is LRU and
- * bounded by decoded bytes; eviction revokes the URL, freeing the blob.
+ * bounded by decoded bytes; eviction revokes the URL, freeing the blob. Only raster types become blobs; any
+ * other mime type is answered with a data: URL (see `rasterBlobType`).
  */
 export function createImageUrlCache(
 	maxBytes: number,
@@ -82,6 +99,10 @@ export function createImageUrlCache(
 
 	return (img) => {
 		const { data, mimeType } = img;
+		const blobType = rasterBlobType(mimeType);
+		// A blob: URL carries this app's origin, so a script-capable type (svg, html) opened in its own tab would run here.
+		// Those get an opaque-origin data: URL instead; it holds no registered blob, so there is nothing to cache or revoke.
+		if (blobType === undefined) return `data:${mimeType};base64,${data}`;
 		const seen = byObject.get(img);
 		// An ImageArg is mutated in place when a subagent image resolves; length and type guard that.
 		if (seen?.live && seen.length === data.length && seen.mimeType === mimeType) {
@@ -100,7 +121,7 @@ export function createImageUrlCache(
 		try {
 			const decoded = decodeBase64(data);
 			size = decoded.byteLength;
-			url = URL.createObjectURL(new Blob([decoded], { type: mimeType }));
+			url = URL.createObjectURL(new Blob([decoded], { type: blobType }));
 		} catch {
 			// Not decodable: the browser shows its broken-image state, as it did for a bad data: URL.
 			return `data:${mimeType};base64,${data}`;
@@ -127,5 +148,5 @@ export function createImageUrlCache(
 	};
 }
 
-/** Stable `blob:` URL for an image payload, for an <img> src. */
+/** Stable `blob:` URL for a raster image payload (a `data:` URL for any other type), for an <img> src. */
 export const imageObjectUrl = createImageUrlCache(IMAGE_URL_CACHE_MAX_BYTES, REVOKE_GRACE_MS);
