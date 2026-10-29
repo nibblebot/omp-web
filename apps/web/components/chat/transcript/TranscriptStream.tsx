@@ -79,9 +79,10 @@ export const TranscriptStream: Component<{
 	children?: JSX.Element;
 }> = (props) => {
 	const session = () => props.variant === "session";
-	const { containerRef, contentRef, jumpVisible, jumpToBottom, release } = useStickyScroll({
-		mirrorSession: session(),
-	});
+	const { containerRef, contentRef, jumpVisible, jumpToBottom, release, snapIfPinned } =
+		useStickyScroll({
+			mirrorSession: session(),
+		});
 	// What the rows ask of the whole list (tool runs, wait runs, turn metadata,
 	// the cards the open Activities panel shows instead), answered per item id so
 	// a row re-renders only when its own answer changes. Runs and turn metadata
@@ -145,6 +146,9 @@ export const TranscriptStream: Component<{
 			}),
 		);
 	});
+	// Cards removed above a pinned viewport shrink the scroller; snap before the browser's clamp
+	// scroll event reaches the unpin rule (it would read as the reader leaving the live edge).
+	createEffect(on(win.hiddenBefore, snapIfPinned, { defer: true }));
 	createEffect(
 		on(win.hiddenBefore, () => {
 			const frame = requestAnimationFrame(loadEarlier);

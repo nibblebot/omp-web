@@ -94,6 +94,8 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	jumpToBottom: () => void;
 	/** Leave the live edge: a programmatic jump elsewhere (the stream mounts older cards first, which would otherwise re-snap a pinned viewport). */
 	release: () => void;
+	/** Re-snap a pinned viewport to the live edge now: after the stream changed what sits above it (the window trimmed the oldest cards), the browser's clamp would otherwise read as the reader leaving. */
+	snapIfPinned: () => void;
 } {
 	let container!: HTMLDivElement;
 	let content!: HTMLDivElement;
@@ -146,8 +148,23 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 		// recognised by scrollTop still equaling it (see shouldUnpinOnScroll).
 		snapTop = container.scrollTop;
 	};
+	// The stream removed cards above a pinned viewport: the browser moves scrollTop (clamp, scroll
+	// anchoring) and fires a scroll event before the observers re-snap, which the unpin rule below
+	// would read as the reader leaving. Snap now, and let the observers' snaps settle the next frames.
+	let settling = false;
+	const snapIfPinned = () => {
+		if (!pinned) return;
+		snapToBottom();
+		settling = true;
+		requestAnimationFrame(() =>
+			requestAnimationFrame(() => {
+				settling = false;
+			}),
+		);
+	};
 	// The single scroll-event rule: unpin-only (see the module comment).
 	const onScroll = () => {
+		if (settling) return;
 		if (
 			!shouldUnpinOnScroll({
 				pinned,
@@ -418,5 +435,6 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 		jumpVisible,
 		jumpToBottom,
 		release: escapeBottom,
+		snapIfPinned,
 	};
 }
