@@ -276,6 +276,24 @@ export function assertAllowedSource(source: string, roots: DenyRoots): void {
 }
 
 /**
+ * Assert the runtime binary is bindable. Unlike {@link assertAllowedSource} the
+ * operator home itself is permitted (bun installs to `$HOME/.bun/bin`), but the
+ * binary must not alias the ssh dir, fleet/provider state, or a socket: only
+ * the single file is ever bound, never its directory.
+ */
+function assertRuntimeBin(realBin: string, roots: DenyRoots): void {
+	assertNotInside(realBin, roots.sshDir, "operator ssh dir");
+	assertNotInside(realBin, roots.fleetState, "fleet state");
+	assertNotInside(realBin, roots.providerState, "provider state");
+	if (roots.sshAuthSock !== null && realBin === roots.sshAuthSock) {
+		throw new DeniedBindError(realBin, roots.sshAuthSock, "ssh-agent socket");
+	}
+	for (const sock of CONTAINER_SOCKET_PATTERNS) {
+		assertNotInside(realBin, sock, "container socket");
+	}
+}
+
+/**
  * Deny roots that exist and are directories. These are masked with an
  * empty tmpfs (a mount needs a directory destination, so socket FILE
  * paths belong in {@link existingDenyFiles}).
@@ -496,11 +514,13 @@ export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 	// Allowlist system roots: existence-checked, realpath-deduped. The
 	// realpath is mounted at the requested path.
 	const mountedReal = new Set<string>();
+	const mounts: { real: string; dest: string }[] = [];
 	const mountRoot = (requested: string): void => {
 		if (!existsSync(requested)) return;
 		const real = rootSuffix(realOrResolve(requested));
 		if (mountedReal.has(real)) return;
 		mountedReal.add(real);
+		mounts.push({ real, dest: rootSuffix(requested) });
 		bind(["--ro-bind"], real, requested);
 	};
 	for (const root of SYSTEM_ALLOW_ROOTS) mountRoot(root);
@@ -551,6 +571,24 @@ export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 		// preflight reports it; the sandbox fails to exec otherwise).
 		if (existsSync(runtimeRoot))
 			bind(["--ro-bind"], rootSuffix(realOrResolve(runtimeRoot)), runtimeRoot);
+	}
+	// The runtime binary (bun) must exec inside the sandbox. It lives under a
+	// system root or the runtime root on most hosts, but the standard bun install
+	// is `$HOME/.bun/bin/bun`: the home is never mounted (or is masked), so the
+	// binary is bound read-only by itself, never its parent directory. Bound after
+	// the deny masks so the mask cannot hide it; only the file is exposed.
+	if (isAbsolute(input.runtimeBin) && existsSync(input.runtimeBin)) {
+		const realBin = realOrResolve(input.runtimeBin);
+		const dest = resolve(input.runtimeBin);
+		const reachable = mounts.some(
+			(m) =>
+				(dest === m.dest || dest.startsWith(m.dest + sep)) &&
+				(realBin === m.real || realBin.startsWith(m.real + sep)),
+		);
+		if (!reachable) {
+			assertRuntimeBin(realBin, roots);
+			bind(["--ro-bind"], realBin, dest);
+		}
 	}
 	// Workspace volumes and profile tools are the sanctioned content; bind
 	// them last so nothing below can hide them.

@@ -10,7 +10,7 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { BwrapProfile } from "#lib/runtime/provider-protocol";
 import {
@@ -284,6 +284,53 @@ describe("buildBwrapArgv", () => {
 		// Runtime entry with identity token as the final argument.
 		expect(argv[argv.length - 1]).toBe("--omp-workspace-token=tok-abc");
 		expect(argv[argv.length - 2]).toBe("/usr/bin/bun");
+	});
+
+	test("a runtime binary outside every mounted root is bound read-only as a single file", () => {
+		// bun's standard install is $HOME/.bun/bin/bun: neither a system root nor
+		// the runtime root, so without its own bind the sandbox cannot exec it.
+		const roots = syntheticDenyRoots();
+		const binDir = join(roots.operatorHome, ".bun", "bin");
+		mkdirSync(binDir, { recursive: true });
+		const bin = join(binDir, "bun");
+		writeFileSync(bin, "#!/bin/sh\n");
+		const { argv } = buildBwrapArgv({
+			workspaceDir: tempDir("bwrap-ws-"),
+			homeDir: tempDir("bwrap-home-"),
+			profile: baseProfile([]),
+			workspaceToken: "tok-bin",
+			runtimeBin: bin,
+			runtimeEntry: "/usr/bin/bun",
+			denyRoots: roots,
+			env: {},
+		});
+		const binds = argv.flatMap((v, i, a) => (v === "--ro-bind" ? [[a[i + 1], a[i + 2]]] : []));
+		expect(binds).toContainEqual([realpathSync(bin), bin]);
+		// Only the file: the operator home is masked, never bound, and the bun
+		// install directory is never bound.
+		const rw = argv.flatMap((v, i, a) => (v === "--bind" ? [a[i + 1]] : []));
+		expect(binds.map(([source]) => source)).not.toContain(roots.operatorHome);
+		expect(binds.map(([source]) => source)).not.toContain(binDir);
+		expect(rw).not.toContain(roots.operatorHome);
+		expect(argv).not.toContain(binDir);
+	});
+
+	test("a runtime binary aliasing fleet state is rejected", () => {
+		const roots = syntheticDenyRoots();
+		const bin = join(roots.fleetState, "bun");
+		writeFileSync(bin, "");
+		expect(() =>
+			buildBwrapArgv({
+				workspaceDir: tempDir("bwrap-ws-"),
+				homeDir: tempDir("bwrap-home-"),
+				profile: baseProfile([]),
+				workspaceToken: "tok-bin",
+				runtimeBin: bin,
+				runtimeEntry: "/usr/bin/bun",
+				denyRoots: roots,
+				env: {},
+			}),
+		).toThrow(DeniedBindError);
 	});
 
 	test('network knob: absent and "isolated" keep the frozen argv (no --share-net)', () => {

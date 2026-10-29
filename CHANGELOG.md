@@ -52,6 +52,9 @@ Fixes from the frontend performance audit (`90nc`, items FP01-FP28). Wire change
 - Subagents: one shared forest per progress change instead of one per consumer, an in-place subagent map, one shared elapsed ticker, and a paced single-flight worker roster refresh (`pxfv`).
 - Analysis (in development): the hidden view no longer polls or syncs stats during chat, rows keep their DOM across page loads, find is debounced over cached search text, and the session list is windowed; the stored raw view asks the fleet for at most 256 KiB (`?maxBytes=`) (`5tft`). Git Review (in development): selection is a set, file lists are windowed, and file diffs no longer carry unused full file text (`2yac`); the staged and commit diff views show their patch again (`m4jy`).
 
+### Fixes
+- A bwrap clone starts when `bun` is installed under the operator's home (the default `~/.bun/bin/bun`). The sandbox masks the home directory and bound only system roots and the runtime package, so the runtime binary was missing inside it (`execvp ... No such file or directory`). The runtime binary is now bound read-only as a single file when no other mount covers it; one inside the ssh directory, fleet or provider state, or an agent or container socket is refused (`qr30`).
+
 ### Infra remediation (kfg5)
 Fleet, session, and wire fixes from the infra audit (`kfg5`). Wire is OMP_PROTO 4. OMP_PROTO 4 removes uncalled session methods and state fields as well as adding frames (see the protocol note in `lib/wire/protocol.ts`). A fleet behind a trusted proxy requires the proxy to append the client to `X-Forwarded-For`; see the README.
 
