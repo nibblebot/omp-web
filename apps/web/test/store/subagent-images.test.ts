@@ -2,7 +2,7 @@
  * 40dg: the agent pane reads a subagent transcript raw, so its images arrive as `blob:sha256:` refs. The
  * transcript store resolves them lazily by hash and patches the built items in place.
  */
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { SubagentImageResult } from "#lib/wire/protocol";
 import * as transport from "../../store/transport";
 
@@ -13,13 +13,19 @@ interface Call {
 const calls: Call[] = [];
 let handler: (method: string, args: unknown) => Promise<unknown> = async () => undefined;
 const originalTransport = { ...transport };
-mock.module("../../store/transport", () => ({
-	...originalTransport,
-	call: (method: string, args: unknown) => {
-		calls.push({ method, args });
-		return handler(method, args);
-	},
-}));
+// Installed from a hook: a top-level mock would be replaced by an earlier file's afterAll restore.
+beforeAll(async () => {
+	mock.module("../../store/transport", () => ({
+		...originalTransport,
+		call: (method: string, args: unknown) => {
+			calls.push({ method, args });
+			return handler(method, args);
+		},
+	}));
+	// Fresh copy: the store binds the transport mock above, whichever file loaded the cached one first.
+	const storePath: string = "../../store/subagents.ts?fresh=images";
+	({ subagentTranscript, syncSubagentTranscript } = (await import(storePath)) as SubagentsStore);
+});
 
 afterAll(() => {
 	// mock.restore() leaves module mocks installed; reinstall the real exports for later files.
@@ -27,7 +33,9 @@ afterAll(() => {
 });
 
 // Dynamic imports: the transport mock must be registered before the store module binds to it.
-const { subagentTranscript, syncSubagentTranscript } = await import("../../store/subagents");
+type SubagentsStore = typeof import("../../store/subagents");
+let subagentTranscript: SubagentsStore["subagentTranscript"];
+let syncSubagentTranscript: SubagentsStore["syncSubagentTranscript"];
 const { setState } = await import("../../state");
 
 // Hashes are content addresses shared across transcripts; each test gets its own so the resolved-image cache never carries over.

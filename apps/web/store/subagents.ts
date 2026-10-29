@@ -970,15 +970,6 @@ function settleRunningTranscriptTools(key: string): void {
 	);
 }
 
-/** True while some tool call of the transcript has no result yet. */
-function hasRunningTranscriptTool(key: string): boolean {
-	return (
-		transcripts[key]?.items.some(
-			(item) => item.kind === "tool" && (item.status === "running" || isBackgroundRunning(item)),
-		) ?? false
-	);
-}
-
 /** Append one page: new items are pushed, results for earlier items patch those items in place. */
 function applyTranscriptPage(key: string, agentId: string, res: SubagentMessagesResult): void {
 	const messages = res.entries
@@ -1019,11 +1010,13 @@ function applyTranscriptPage(key: string, agentId: string, res: SubagentMessages
 		setTranscripts(key, "nextByte", res.nextByte);
 	});
 	if (agentSettled(agentId)) {
-		const unresolved = hasRunningTranscriptTool(key);
 		settleRunningTranscriptTools(key);
 		// A settled agent writes no more pages, and with every call answered nothing is left to pair:
 		// the builder's call map (every ToolItem of the transcript) can go. A revive starts a new one.
-		if (!unresolved && res.hasMore !== true) builders.delete(key);
+		// The builder decides, not the store: settling above relabels only the store's copies, so a
+		// call still unanswered here keeps its builder and a late result patches the original item.
+		const builder = builders.get(key);
+		if (builder && !builder.hasPendingCalls() && res.hasMore !== true) builders.delete(key);
 	}
 	if (built) resolveTranscriptImages(key, agentId, built);
 }

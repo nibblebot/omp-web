@@ -1,4 +1,9 @@
-import { applyAsyncResults, asyncResultJobsOf, backgroundOf } from "./background-job";
+import {
+	applyAsyncResults,
+	asyncResultJobsOf,
+	backgroundOf,
+	isBackgroundRunning,
+} from "./background-job";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ChatItem, ToolItem } from "../state";
 import { advisorNotesOf } from "../store/slices/advisor";
@@ -35,6 +40,8 @@ export interface HistoryAppend {
  */
 export interface HistoryBuilder {
 	append(messages: readonly AgentMessage[]): HistoryAppend;
+	/** True while a tool item this builder made has no result yet, or is parked on a running background job. */
+	hasPendingCalls(): boolean;
 }
 
 /**
@@ -188,6 +195,12 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 				}
 			}
 			return { items, patched: [...patched] };
+		},
+		hasPendingCalls() {
+			for (const item of tools.values()) {
+				if (item.status === "running" || isBackgroundRunning(item)) return true;
+			}
+			return false;
 		},
 	};
 }

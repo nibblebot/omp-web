@@ -1,5 +1,5 @@
 /** Subagent transcripts are retained only while shown (plus a few closed ones) and per attached session. */
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as transport from "../../store/transport";
 
 interface Page {
@@ -11,36 +11,46 @@ let reads: Array<{ id: string; fromByte: number }> = [];
 let hold: Promise<void> | undefined;
 
 const originalTransport = { ...transport };
-mock.module("../../store/transport", () => ({
-	...originalTransport,
-	call: async (method: string, args: Array<{ subagentId: string; fromByte: number }>) => {
-		if (method !== "getSubagentMessages") return undefined;
-		const { subagentId, fromByte } = args[0];
-		reads.push({ id: subagentId, fromByte });
-		if (hold) await hold;
-		const page = (pages[subagentId] ?? []).find((p) => p.nextByte > fromByte);
-		return {
-			sessionFile: "/s/a.jsonl",
-			fromByte,
-			nextByte: page?.nextByte ?? fromByte,
-			reset: false,
-			hasMore: false,
-			entries: page?.entries ?? [],
-			messages: [],
-		};
-	},
-}));
+// Installed from a hook: a top-level mock would be replaced by an earlier file's afterAll restore.
+beforeAll(async () => {
+	mock.module("../../store/transport", () => ({
+		...originalTransport,
+		call: async (method: string, args: Array<{ subagentId: string; fromByte: number }>) => {
+			if (method !== "getSubagentMessages") return undefined;
+			const { subagentId, fromByte } = args[0];
+			reads.push({ id: subagentId, fromByte });
+			if (hold) await hold;
+			const page = (pages[subagentId] ?? []).find((p) => p.nextByte > fromByte);
+			return {
+				sessionFile: "/s/a.jsonl",
+				fromByte,
+				nextByte: page?.nextByte ?? fromByte,
+				reset: false,
+				hasMore: false,
+				entries: page?.entries ?? [],
+				messages: [],
+			};
+		},
+	}));
+	// Fresh copy: the store binds the transport mock above, whichever file loaded the cached one first.
+	const storePath: string = "../../store/subagents.ts?fresh=transcript-retention";
+	({
+		clearSubagentTranscripts,
+		holdSubagentTranscript,
+		subagentTranscript,
+		syncSubagentTranscript,
+	} = (await import(storePath)) as SubagentsStore);
+});
 
 afterAll(() => {
 	mock.module("../../store/transport", () => originalTransport);
 });
 
-const {
-	clearSubagentTranscripts,
-	holdSubagentTranscript,
-	subagentTranscript,
-	syncSubagentTranscript,
-} = await import("../../store/subagents");
+type SubagentsStore = typeof import("../../store/subagents");
+let clearSubagentTranscripts: SubagentsStore["clearSubagentTranscripts"];
+let holdSubagentTranscript: SubagentsStore["holdSubagentTranscript"];
+let subagentTranscript: SubagentsStore["subagentTranscript"];
+let syncSubagentTranscript: SubagentsStore["syncSubagentTranscript"];
 const { setState } = await import("../../state");
 
 const settle = async () => {

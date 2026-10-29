@@ -1,15 +1,21 @@
 /** Subagent transcript tool status: idle settle and the abort relabel across pages read interrupted. */
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as transport from "../../store/transport";
 
 let pages: unknown[] = [];
 let next = 0;
 const originalTransport = { ...transport };
-mock.module("../../store/transport", () => ({
-	...originalTransport,
-	call: async (method: string) =>
-		method === "getSubagentMessages" ? pages[Math.min(next++, pages.length - 1)] : undefined,
-}));
+// Installed from a hook: a top-level mock would be replaced by an earlier file's afterAll restore.
+beforeAll(async () => {
+	mock.module("../../store/transport", () => ({
+		...originalTransport,
+		call: async (method: string) =>
+			method === "getSubagentMessages" ? pages[Math.min(next++, pages.length - 1)] : undefined,
+	}));
+	// Fresh copy: the store binds the transport mock above, whichever file loaded the cached one first.
+	const storePath: string = "../../store/subagents.ts?fresh=tool-status";
+	({ subagentTranscript, syncSubagentTranscript } = (await import(storePath)) as SubagentsStore);
+});
 
 afterAll(() => {
 	// mock.restore() leaves module mocks installed; reinstall the real exports for later files.
@@ -17,7 +23,9 @@ afterAll(() => {
 });
 
 // Dynamic imports: the transport mock must be registered before the store module binds to it.
-const { subagentTranscript, syncSubagentTranscript } = await import("../../store/subagents");
+type SubagentsStore = typeof import("../../store/subagents");
+let subagentTranscript: SubagentsStore["subagentTranscript"];
+let syncSubagentTranscript: SubagentsStore["syncSubagentTranscript"];
 const { setState } = await import("../../state");
 
 const settle = async () => {
@@ -102,6 +110,27 @@ describe("subagent transcript tool status", () => {
 		await settle();
 		expect(statuses()).toEqual(["interrupted"]);
 	});
+	test("a result that lands after the agent settled patches the original card instead of adding a second", async () => {
+		const doneResult = {
+			role: "toolResult",
+			toolCallId: "a",
+			toolName: "bash",
+			content: [{ type: "text", text: "built" }],
+			isError: false,
+			details: {},
+		};
+		pages = [pageOf([assistantCalling("a")], 100), pageOf([], 100), pageOf([doneResult], 200)];
+		setAgent("running", 1);
+		await settle();
+		setAgent("completed", 2);
+		await settle();
+		expect(statuses()).toEqual(["interrupted"]);
+
+		setAgent("completed", 3, { requests: 1 });
+		await settle();
+		expect(statuses()).toEqual(["done"]);
+	});
+
 	test("a call parked on a background job stays a plain done card once the agent settled", async () => {
 		const parkedResult = {
 			role: "toolResult",
