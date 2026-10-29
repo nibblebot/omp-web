@@ -67,7 +67,7 @@ function createKeyedSignals<V>(initial: V) {
 		/** Back to `initial` everywhere; wakes only keys that held something else. */
 		clear(except?: ReadonlySet<string>): void {
 			batch(() => {
-				for (const key of [...values.keys()]) if (!except?.has(key)) this.set(key, initial);
+				for (const key of values.keys()) if (!except?.has(key)) this.set(key, initial);
 			});
 		},
 		has: (key: string) => values.has(key),

@@ -5,6 +5,7 @@
 import { Show, createMemo, createSignal, useContext } from "solid-js";
 import type { JSX } from "solid-js";
 import type { RawEntry } from "../../../../store/fleet-api";
+import { createLazyOpen } from "../../../../components/ui/lazy-open";
 import {
 	entryTimestamp,
 	entryTypeLabel,
@@ -46,12 +47,17 @@ export function ToggleDetails(props: {
 	const key = () => detailsKey(props.entry, props.purpose);
 	const [localOpen, setLocalOpen] = createSignal(false);
 	const open = () => (ctx ? ctx.detailsOpen(key()) : localOpen());
-	const built = createMemo((was: boolean) => was || open(), false);
+	// A summary click mounts the body before the browser opens the element (`toggle` fires a task
+	// later); a programmatic open (expand all) has no click and is picked up through `open()`.
+	const lazy = createLazyOpen(false);
+	const built = createMemo((was: boolean) => was || open() || lazy.opened(), false);
 	return (
 		<details
 			class={props.class}
 			open={open()}
+			onClick={lazy.onClick}
 			onToggle={(ev) => {
+				lazy.onToggle(ev);
 				// Only a user toggle is manual; the one that follows a programmatic open is not.
 				const now = ev.currentTarget.open;
 				if (now === open()) return;

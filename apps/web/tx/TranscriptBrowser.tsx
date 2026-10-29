@@ -19,6 +19,7 @@ import { SpendPanel } from "./components/SpendPanel";
 import { formatBytes } from "./util/format";
 import { parseTxHash, storedHash, type TxRoute } from "./util/route";
 import { sessionHash } from "../store/slices/analysis";
+import { createVisibleInterval, pageVisible } from "../page-visibility";
 
 /** Debounce for stats auto-sync: coalesces bursts of turn ends and session opens. */
 const AUTO_SYNC_DEBOUNCE_MS = 1_500;
@@ -47,13 +48,7 @@ export function TranscriptBrowser() {
 	createEffect(on(route, () => closeDrawers(), { defer: true }));
 
 	/** Analysis is on screen: it is the current view and the browser tab is visible. */
-	const [tabVisible, setTabVisible] = createSignal(document.visibilityState !== "hidden");
-	createEffect(() => {
-		const onVisibility = () => setTabVisible(document.visibilityState !== "hidden");
-		document.addEventListener("visibilitychange", onVisibility);
-		onCleanup(() => document.removeEventListener("visibilitychange", onVisibility));
-	});
-	const active = createMemo(() => state.view === "analysis" && tabVisible());
+	const active = createMemo(() => state.view === "analysis" && pageVisible());
 	/** Work that fell due while inactive; one catch-up runs on return. */
 	let missedSync = false;
 	let missedTail = false;
@@ -148,8 +143,7 @@ export function TranscriptBrowser() {
 			missedTail = true;
 			return;
 		}
-		const id = window.setInterval(() => setLiveTick((t) => t + 1), LIVE_TAIL_INTERVAL_MS);
-		onCleanup(() => clearInterval(id));
+		createVisibleInterval(() => setLiveTick((t) => t + 1), LIVE_TAIL_INTERVAL_MS);
 	});
 
 	createEffect(

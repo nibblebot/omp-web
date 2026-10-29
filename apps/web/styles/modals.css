@@ -1414,7 +1414,7 @@ button.picker-row.kbd-active {
 }
 @keyframes btw-blink {
 	to {
-		visibility: hidden;
+		opacity: 0;
 	}
 }
 .btw-actions {

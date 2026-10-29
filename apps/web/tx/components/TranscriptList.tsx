@@ -175,14 +175,32 @@ export function TranscriptList(props: TranscriptListProps) {
 		}
 	};
 
-	/** Arrow keys move focus between session rows; only the tab-stop row is in the Tab order. */
+	/**
+	 * Arrow keys move focus between session rows; only the tab-stop row is in the Tab order. Only
+	 * the rows near the viewport are mounted, so Home/End first move the window to the list's
+	 * ends and then focus the first/last mounted row. The list itself takes focus when the
+	 * focused row scrolls out of the window (see `onListScroll`); a key there acts like no row
+	 * being focused.
+	 */
 	const onRowKeys = (e: KeyboardEvent) => {
-		const items = Array.from(
-			(e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(".session-row"),
-		);
+		const list = e.currentTarget as HTMLElement;
+		if (e.key === "Home" || e.key === "End") {
+			const onRow = (e.target as HTMLElement).classList.contains("session-row");
+			if (!onRow && e.target !== list) return;
+			list.scrollTop = e.key === "Home" ? 0 : list.scrollHeight;
+			setScrollTop(list.scrollTop);
+		}
+		const items = Array.from(list.querySelectorAll<HTMLElement>(".session-row"));
 		const current = items.indexOf(e.target as HTMLElement);
-		if (current === -1) return;
+		if (current === -1 && e.target !== list) return;
 		moveRovingFocus(e, items, current, "vertical");
+	};
+	/** Scrolling moves the window; a focused row that leaves it unmounts, so keep focus in the list. */
+	const onListScroll = (e: Event & { currentTarget: HTMLDivElement }) => {
+		const list = e.currentTarget;
+		const hadFocus = list.contains(document.activeElement);
+		setScrollTop(list.scrollTop);
+		if (hadFocus && !list.contains(document.activeElement)) list.focus({ preventScroll: true });
 	};
 
 	const health = () => props.health();
@@ -223,8 +241,9 @@ export function TranscriptList(props: TranscriptListProps) {
 			<div
 				class="session-list"
 				ref={listEl}
+				tabIndex={-1}
 				onKeyDown={onRowKeys}
-				onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+				onScroll={onListScroll}
 			>
 				<Show
 					when={sessions().length === 0 ? sessionsRes.error : undefined}

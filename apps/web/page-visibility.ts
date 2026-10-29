@@ -1,8 +1,24 @@
-import { onCleanup } from "solid-js";
+import { createSignal, onCleanup, type Accessor } from "solid-js";
 
 /** Whether the tab is in front. True where there is no document (a test worker): nothing there is hidden. */
 export function isPageVisible(): boolean {
 	return typeof document === "undefined" || document.visibilityState === "visible";
+}
+
+let visibleSignal: Accessor<boolean> | undefined;
+
+/**
+ * Reactive `isPageVisible()`: a tracked scope that reads it re-runs when the tab is shown or hidden.
+ * One document listener, installed on first read, for the page's lifetime.
+ */
+export function pageVisible(): boolean {
+	if (visibleSignal === undefined) {
+		const [visible, setVisible] = createSignal(isPageVisible());
+		if (typeof document !== "undefined")
+			document.addEventListener("visibilitychange", () => setVisible(isPageVisible()));
+		visibleSignal = visible;
+	}
+	return visibleSignal();
 }
 
 /**
