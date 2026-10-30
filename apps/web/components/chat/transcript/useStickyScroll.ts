@@ -379,8 +379,7 @@ export function useStickyScroll(options: { mirrorSession?: boolean } = {}): {
 	};
 	const onTouchMove = () => {
 		const dir = touch.move(container.scrollTop);
-		if (dir === "up")
-			unpin(); // finger dragged down: content moves up
+		if (dir === "up") unpin(); // finger dragged down: content moves up
 		else if (dir === "down") rePinIfNear(); // finger dragged up: re-pin once inside the band
 	};
 	const onTouchEnd = () => {
