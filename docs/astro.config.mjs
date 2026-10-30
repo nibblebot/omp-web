@@ -46,7 +46,7 @@ export default defineConfig({
 			logo: { src: "./src/assets/logo.svg" },
 			favicon: "/favicon.svg",
 			editLink: {
-				baseUrl: "https://github.com/nibblebot/omp-web/edit/docs/docs/",
+				baseUrl: "https://github.com/nibblebot/omp-web/edit/main/docs/",
 			},
 			social: [
 				{
