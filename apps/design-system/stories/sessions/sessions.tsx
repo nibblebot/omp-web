@@ -42,33 +42,41 @@ const storyRow = (overrides: Partial<SessionRow> & { id: string }): SessionRow =
 
 const NORMAL = storyRow({
 	id: "story_normal",
-	title: "Rework the session list rows",
+	title: "DEMO: Rework session list rows",
 	firstMessage:
 		"The resume list renders gray centered buttons; make it one clean line per session.",
 });
-const PINNED = storyRow({ id: "story_pinned", title: "Fleet edge limit field", pinned: true });
+const PINNED = storyRow({
+	id: "story_pinned",
+	title: "DEMO: Add fleet edge limit field",
+	pinned: true,
+});
 const EMPTY = storyRow({
 	id: "story_empty",
 	messageCount: 0,
 	firstMessage: "(no messages)",
 	modifiedMs: T0 - 40 * MIN,
 });
-const CURRENT = storyRow({ id: "story_current", title: "Attached session", current: true });
+const CURRENT = storyRow({
+	id: "story_current",
+	title: "DEMO: Fix attached row highlight",
+	current: true,
+});
 const ERRORED = storyRow({
 	id: "story_error",
-	title: "Migration that ended with an error",
+	title: "DEMO: Retry failed schema migration",
 	status: "error",
 	modifiedMs: T0 - 3 * 60 * MIN,
 });
 const INTERRUPTED = storyRow({
 	id: "story_interrupted",
-	title: "Interrupted refactor",
+	title: "DEMO: Finish interrupted refactor",
 	status: "interrupted",
 	modifiedMs: T0 - 26 * 60 * MIN,
 });
 const BLOCKED = storyRow({
 	id: "story_blocked",
-	title: "Scratch experiment",
+	title: "DEMO: Try scratch experiment",
 	cwd: "/home/you/scratch",
 	projectLabel: "scratch",
 	blocked: {
@@ -79,7 +87,7 @@ const BLOCKED = storyRow({
 const LONG = storyRow({
 	id: "story_long",
 	title:
-		"A very long session title that has to truncate with an ellipsis instead of wrapping the row",
+		"DEMO: A very long session title that has to truncate with an ellipsis instead of wrapping the row",
 	cwd: "/home/joshua/Repos/another-project",
 	projectLabel: "another-project",
 	modifiedMs: T0 - 9 * 24 * 60 * MIN,

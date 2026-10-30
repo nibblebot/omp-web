@@ -6,6 +6,8 @@
  * and is load-bearing: when adding a rule, put it in the domain file (and
  * position within it) that preserves the cascade it would have had here.
  */
+@import "@fontsource-variable/noto-sans/wght.css";
+@import "@fontsource-variable/fira-code/wght.css";
 @import "./styles/tokens.css";
 @import "./styles/base.css";
 @import "./styles/app.css";

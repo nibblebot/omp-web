@@ -3,6 +3,7 @@ import {
 	markdownAnswer,
 	markdownCodeFences,
 	markdownLong,
+	markdownTableAnswer,
 	markdownUntrusted,
 } from "../../fixtures/shared";
 import { defineStory } from "../../registry";
@@ -17,6 +18,12 @@ export default defineStory({
 			description:
 				"Headings, inline code, a fenced block, a list, and a link, as in a typical agent reply.",
 			render: () => <Markdown src={markdownAnswer} />,
+		},
+		{
+			name: "Answer with a table",
+			description:
+				"A heading, a table with centered and left aligned columns, inline code and a fenced block.",
+			render: () => <Markdown src={markdownTableAnswer} />,
 		},
 		{
 			name: "Code fences",

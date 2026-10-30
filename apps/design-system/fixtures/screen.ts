@@ -83,17 +83,36 @@ export const screenStats: SessionStats = {
 	cost: 3.42,
 };
 
+/** The live todo board of the screen session: the change, its test and the checks (the transcript's todo call carries the same plan). */
+export const screenTodoPhases: typeof state.todoPhases = [
+	{
+		name: "Copy button",
+		tasks: [
+			{ content: "Give CopyButton a title prop", status: "completed" },
+			{ content: "Wrap fences and mount the button", status: "in_progress" },
+		],
+	},
+	{
+		name: "Checks",
+		tasks: [
+			{ content: "Tests for the copied feedback and fence text", status: "pending" },
+			{ content: "Types check", status: "pending" },
+		],
+	},
+];
+
 /** Per-session store fields of the screen session: restored when the App view attaches to `dmn_a002`. */
 export const screenSessionView: AppSessionView = {
 	readyAt: FIXTURE_NOW - 22 * MIN,
 	sessionId: "sess_09a41c",
-	sessionName: "Copy button for code fences",
+	sessionName: "DEMO: Add copy button to code fences",
 	sessionFile: screenStats.sessionFile,
 	model: claude,
 	thinkingLevel: "high" as Effort,
 	contextUsage: { tokens: 118_400, contextWindow: 200_000, percent: 59.2 },
 	stats: screenStats,
 	messageCount: 39,
+	todoPhases: screenTodoPhases,
 };
 
 /** Store patch describing a ready, attached session with model, context and stats. */
@@ -247,24 +266,7 @@ const todoPlan: ToolItem = {
 	...todoArgsTool,
 	id: 7,
 	toolCallId: "call_todo_7",
-	args: {
-		phases: [
-			{
-				name: "Copy button",
-				tasks: [
-					{ content: "Give CopyButton a title prop", status: "completed" },
-					{ content: "Wrap fences and mount the button", status: "in_progress" },
-				],
-			},
-			{
-				name: "Checks",
-				tasks: [
-					{ content: "Tests for the copied feedback and fence text", status: "pending" },
-					{ content: "Types check", status: "pending" },
-				],
-			},
-		],
-	},
+	args: { phases: screenTodoPhases },
 	output: "Updated 2 phases.",
 };
 

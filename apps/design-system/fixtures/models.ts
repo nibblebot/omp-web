@@ -21,7 +21,7 @@ export const heavy: ModelPresetDetail = {
 	name: "heavy",
 	source: "global",
 	modelRoles: {
-		default: "anthropic/claude-opus-4-1:high",
+		default: "anthropic/claude-opus-5-5:high",
 		smol: "anthropic/claude-haiku-5-5",
 		plan: "openai/gpt-5.2:medium",
 	},
@@ -32,7 +32,7 @@ export const fast: ModelPresetDetail = {
 	name: "fast",
 	source: "global",
 	modelRoles: {
-		default: "anthropic/claude-sonnet-4",
+		default: "anthropic/claude-sonnet-5-5",
 		smol: "anthropic/claude-haiku-5-5",
 		plan: "openai/gpt-5.2:low",
 		slow: "google/gemini-3-pro:high",
@@ -43,7 +43,7 @@ export const shared: ModelPresetDetail = {
 	name: "shared",
 	source: "project",
 	modelRoles: {
-		default: "anthropic/claude-sonnet-4",
+		default: "anthropic/claude-sonnet-5-5",
 		smol: "anthropic/claude-haiku-5-5",
 	},
 };

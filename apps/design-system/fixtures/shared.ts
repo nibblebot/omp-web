@@ -70,6 +70,29 @@ Run \`bun run check:types\` once the edit lands. The component lives in \`apps/w
 - background notes: [tool-card notes](https://example.dev/notes/tool-card)
 `;
 
+/** Assistant answer built around a table, as the agent summarises a comparison. */
+export const markdownTableAnswer = `## Which refresh paths still write after unmount
+
+Three store actions start a request in \`onMount\` and write the answer into a shared signal, whether or not the panel is still open. Only the composer insert is guarded today:
+
+| Action | Writes after unmount | Guarded | Fix |
+| --- | :---: | :---: | --- |
+| \`refreshGit\` | yes | no | add the generation check |
+| \`refreshPlan\` | yes | no | add the generation check |
+| \`refreshTodos\` | yes | no | add the generation check |
+| \`composeForComposer\` | no | yes | none needed |
+
+The guard is three lines per action:
+
+\`\`\`ts
+const generation = ++refreshGeneration;
+const result = await call("getGit");
+if (generation === refreshGeneration) setState("git", result);
+\`\`\`
+
+Run \`bun run test\` after the change; a test that unmounts before the answer lands covers all three.
+`;
+
 /** Closed fences in several languages, an unlabelled fence, an unknown language, and one still streaming (no closing fence). */
 export const markdownCodeFences = `Closed fences are highlighted once the closing fence arrives.
 
@@ -185,15 +208,15 @@ export interface PickerEntry {
 /** Model picker rows: a default, a fast model, a long-context model, and a gateway model. */
 export const pickerModels: PickerEntry[] = [
 	{
-		id: "anthropic/claude-opus-4-1",
-		label: "claude-opus-4-1",
+		id: "anthropic/claude-opus-5-5",
+		label: "claude-opus-5-5",
 		meta: "anthropic, 200k ctx",
 		chip: "default",
 		detail: "Deep planning and review",
 	},
 	{
-		id: "anthropic/claude-sonnet-4-5",
-		label: "claude-sonnet-4-5",
+		id: "anthropic/claude-sonnet-5-5",
+		label: "claude-sonnet-5-5",
 		meta: "anthropic, 200k ctx",
 		chip: "smart",
 	},

@@ -4,6 +4,7 @@ import { rememberWorkspaceCreationPrefs } from "../../../../web/prefs/workspace-
 import { answerNewWorkspaceCommands } from "../../../fixtures/new-workspace";
 import { rosterProjects } from "../../../fixtures/roster";
 import { seedRosterFleet } from "../../../fixtures/roster-seed";
+import { setState } from "../../../../web/state";
 import { defineStory } from "../../../registry";
 
 const PROJECT_ID = "proj_omp_web";
@@ -63,6 +64,16 @@ export default defineStory({
 		{
 			name: "This machine: local branches",
 			seed: () => answerNewWorkspaceCommands(),
+			render: () => <Anchored />,
+		},
+		{
+			name: "No provider profiles: branches only",
+			description:
+				"A fleet with no clone profiles configured: no Run on row, just the branch search and list.",
+			seed: () => {
+				answerNewWorkspaceCommands();
+				setState("providerProfiles", []);
+			},
 			render: () => <Anchored />,
 		},
 		{

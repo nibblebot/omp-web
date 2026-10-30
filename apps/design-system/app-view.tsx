@@ -35,6 +35,7 @@ function captureSession(): AppSession {
 			contextUsage: s.contextUsage,
 			stats: s.stats,
 			messageCount: s.messageCount,
+			todoPhases: s.todoPhases,
 		},
 		items: s.items,
 	});
@@ -151,6 +152,7 @@ export const AppView: Component = () => {
 							sessionName: undefined,
 							sessionFile: undefined,
 							items: [],
+							todoPhases: [],
 							messageCount: 0,
 							stats: null,
 							contextUsage: {

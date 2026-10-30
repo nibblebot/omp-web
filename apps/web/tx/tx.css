@@ -40,8 +40,8 @@
 	/* The old 22px hero was the one size above the ramp; fold it onto 2xl
 	   (18px) so the whole surface rides the same dial. */
 	--tx-fs-3xl: var(--fs-2xl);
-  --tx-mono: "Noto Sans Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
-  --tx-sans: "Noto Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+	--tx-mono: var(--font-mono);
+	--tx-sans: var(--font-sans);
 }
 /* Light schemes: tokens with no fleet equivalent that were theme-dependent
    keep a light-tuned literal. */

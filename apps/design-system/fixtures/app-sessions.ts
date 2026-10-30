@@ -18,6 +18,7 @@ export type AppSessionView = Pick<
 	| "contextUsage"
 	| "stats"
 	| "messageCount"
+	| "todoPhases"
 >;
 
 /** One roster session: the store fields it restores on attach and the transcript it shows. */
@@ -118,6 +119,7 @@ function sessionView(workspaceId: string, sessionId: string, items: ChatItem[]):
 		},
 		stats,
 		messageCount: totalMessages,
+		todoPhases: [],
 	};
 }
 

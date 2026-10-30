@@ -27,11 +27,14 @@
 		"test": "bun scripts/test.ts",
 		"test:isolated": "bun scripts/test.ts --isolated",
 		"profile": "bun scripts/profile/index.ts",
+		"screenshots": "bun scripts/screenshots/index.ts",
 		"design": "bun apps/design-system/server.ts stories",
 		"demo": "bun apps/design-system/server.ts demo",
 		"build:demo": "bun apps/design-system/build.ts"
 	},
 	"dependencies": {
+		"@fontsource-variable/fira-code": "5.3.0",
+		"@fontsource-variable/noto-sans": "5.3.0",
 		"@oh-my-pi/pi-agent-core": "18.14.0",
 		"@oh-my-pi/pi-ai": "18.14.0",
 		"@oh-my-pi/pi-catalog": "18.14.0",
@@ -59,6 +62,7 @@
 		"babel-preset-solid": "^1.9.16",
 		"enhanced-resolve": "^5.26.0",
 		"eslint-plugin-solid": "^0.18.1",
+		"mermaid": "12.2.0",
 		"oxfmt": "^0.75.0",
 		"oxlint": "^1.90.0",
 		"playwright-core": "1.64.1",

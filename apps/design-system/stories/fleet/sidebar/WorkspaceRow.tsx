@@ -31,7 +31,7 @@ const Row = (props: {
 );
 
 const LONG_TITLE =
-	"Migrate the roster sidebar rows to content height and move the session controls onto the top line";
+	"DEMO: Migrate the roster sidebar rows to content height and move the session controls onto the top line";
 
 /** The attached worktree (ready, idle) with a different last-session title. */
 const withTitle = (sessionTitle: string | undefined): RosterEntry => ({

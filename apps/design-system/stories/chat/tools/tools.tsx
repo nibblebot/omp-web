@@ -38,6 +38,7 @@ import {
 	evalDoneTool,
 	evalErrorTool,
 	evalImageTool,
+	evalJsDoneTool,
 	evalRunningTool,
 	evalStatusDoneTool,
 	evalStatusRunningTool,
@@ -52,14 +53,17 @@ import {
 	globDoneTool,
 	grepDoneTool,
 	grepSingleFileTool,
+	grepSymbolTool,
 	grepErrorTool,
 	grepLongTool,
 	grepRunningTool,
 	lspDefinitionTool,
 	lspDiagnosticsTool,
+	lspReferencesShortTool,
 	lspReferencesTool,
 	lspRunningTool,
 	readDoneTool,
+	readExcerptTool,
 	readPlainTool,
 	readPythonTool,
 	readErrorTool,
@@ -72,6 +76,8 @@ import {
 	taskRunningTool,
 	taskStageSubagentMap,
 	taskStageTool,
+	taskStatsSubagentMap,
+	taskStatsTool,
 	taskSubagentMap,
 	todoArgsTool,
 	todoEmptyTool,
@@ -329,6 +335,12 @@ const stories: Story[] = [
 			{ name: "Done (python)", render: () => <EvalToolCard item={evalDoneTool} /> },
 			{ name: "Error (js)", render: () => <EvalToolCard item={evalErrorTool} /> },
 			{
+				name: "Done (js), table and helper status log",
+				description:
+					"A JavaScript cell read files through the helpers and printed a table: the table stands in place of its text and the helpers' status log lists below.",
+				render: () => <EvalToolCard item={evalJsDoneTool} />,
+			},
+			{
 				name: "With display image",
 				description: "Click the chart thumbnail to open the full-size overlay.",
 				render: () => <EvalToolCard item={evalImageTool} />,
@@ -422,6 +434,10 @@ const stories: Story[] = [
 			{ name: "Definition", render: () => <LspToolCard item={lspDefinitionTool} /> },
 			{ name: "Running", render: () => <LspToolCard item={lspRunningTool} /> },
 			{
+				name: "References, a handful",
+				render: () => <LspToolCard item={lspReferencesShortTool} />,
+			},
+			{
 				name: "References (capped list)",
 				render: () => <LspToolCard item={lspReferencesTool} />,
 			},
@@ -438,6 +454,11 @@ const stories: Story[] = [
 				description:
 					"Hashline output: the [path#TAG] header is dropped, content is highlighted by file extension.",
 				render: () => <ReadToolCard item={readDoneTool} />,
+			},
+			{
+				name: "Excerpt, short file",
+				description: "A 13-line excerpt with the SDK's continuation note below it.",
+				render: () => <ReadToolCard item={readExcerptTool} />,
 			},
 			{
 				name: "Python, multi-line docstring",
@@ -484,6 +505,11 @@ const stories: Story[] = [
 				render: () => <SearchToolCard item={grepDoneTool} />,
 			},
 			{
+				name: "grep, a symbol across files",
+				description: "Matches nested under their directories, with a gap between distant hits.",
+				render: () => <SearchToolCard item={grepSymbolTool} />,
+			},
+			{
 				name: "grep, single file (plain mode)",
 				description: "No file header; rows use the search path from the call's arguments.",
 				render: () => <SearchToolCard item={grepSingleFileTool} />,
@@ -527,6 +553,13 @@ const stories: Story[] = [
 					"Each running row leads with the agent's own current step (from its periodic completion probe), then the tool in flight; needs the live preview display setting.",
 				seed: { subagents: taskStageSubagentMap, settingsModel: agentSettingsModel },
 				render: () => <TaskToolCard item={taskStageTool} />,
+			},
+			{
+				name: "Three agents with tokens, cost and run time",
+				description:
+					"Every row carries its agent's run time, tokens and cost; the header totals the fan-out.",
+				seed: { subagents: taskStatsSubagentMap },
+				render: () => <TaskToolCard item={taskStatsTool} />,
 			},
 			{
 				name: "Background, running",

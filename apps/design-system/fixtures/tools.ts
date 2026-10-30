@@ -467,6 +467,74 @@ export const evalImageTool: ToolItem = tool(
 	[chartImage],
 );
 
+const evalJsCode = lines(
+	"const dir = 'apps/web/components/chat/tools';",
+	"const files = (await ls(dir)).filter((f) => f.endsWith('ToolCard.tsx'));",
+	"const rows = [];",
+	"for (const f of files) {",
+	"  const text = await read(`${dir}/${f}`);",
+	"  rows.push({ card: f.replace('.tsx', ''), lines: text.split('\\n').length });",
+	"}",
+	"rows.sort((a, b) => b.lines - a.lines);",
+	"console.table(rows.slice(0, 4));",
+);
+const evalJsTableText = lines(
+	"┌───┬──────────────┬───────┐",
+	"│   │ card         │ lines │",
+	"├───┼──────────────┼───────┤",
+	"│ 0 │ EvalToolCard │   212 │",
+	"│ 1 │ BashToolCard │   168 │",
+	"│ 2 │ TaskToolCard │   131 │",
+	"│ 3 │ ReadToolCard │    96 │",
+	"└───┴──────────────┴───────┘",
+);
+/** EvalToolCard: settled JavaScript cell that read files through helpers and printed a table; the helpers' status log lists below. */
+export const evalJsDoneTool: ToolItem = {
+	...tool(
+		"eval",
+		"done",
+		{ language: "js", code: evalJsCode },
+		lines(evalJsTableText, "4 of 9 cards shown"),
+	),
+	details: {
+		language: "js",
+		languages: ["js"],
+		cells: [
+			{
+				index: 0,
+				code: evalJsCode,
+				language: "js",
+				status: "complete",
+				output: lines(evalJsTableText, "4 of 9 cards shown"),
+				views: [
+					{
+						text: evalJsTableText,
+						view: {
+							kind: "table",
+							columns: [
+								{ head: "", numeric: false },
+								{ head: "card", numeric: false },
+								{ head: "lines", numeric: true },
+							],
+							rows: [
+								["0", "EvalToolCard", "212"],
+								["1", "BashToolCard", "168"],
+								["2", "TaskToolCard", "131"],
+								["3", "ReadToolCard", "96"],
+							],
+						},
+					},
+				],
+			},
+		],
+		statusEvents: [
+			{ op: "ls", path: "apps/web/components/chat/tools", count: 24 },
+			{ op: "read", path: "apps/web/components/chat/tools/EvalToolCard.tsx", chars: 8120 },
+			{ op: "read", path: "apps/web/components/chat/tools/BashToolCard.tsx", chars: 6432 },
+		],
+	},
+};
+
 // generic (no dedicated renderer)
 const issueArgs = { team: "OMP", state: "In Progress", limit: 3 };
 /** GenericToolCard: finished MCP tool call with JSON output. */
@@ -969,6 +1037,20 @@ export const lspReferencesTool: ToolItem = tool(
 		}),
 	),
 );
+/** LspToolCard: a handful of reference hits, all shown. */
+export const lspReferencesShortTool: ToolItem = tool(
+	"lsp",
+	"done",
+	{ action: "references", file: "apps/web/state.ts", symbol: "pushNotice" },
+	lines(
+		"apps/web/store/toasts.ts:41:17",
+		"apps/web/store/roster.ts:212:9",
+		"apps/web/store/transport.ts:88:5",
+		"apps/web/components/fleet/sidebar/WorkspaceRow.tsx:57:13",
+		"apps/web/components/chat/composer/Composer.tsx:164:7",
+		"apps/web/prompt/commands.ts:93:11",
+	),
+);
 /** LspToolCard: diagnostics with errors. */
 export const lspDiagnosticsTool: ToolItem = tool(
 	"lsp",
@@ -1020,6 +1102,28 @@ export const readDoneTool: ToolItem = tool(
 	"done",
 	{ path: copyButtonPath, offset: 1, limit: 12 },
 	`${numbered(copyButtonPath, copyButtonSource.slice(0, 12), 1)}\n\n[14 more lines in file. Use ${copyButtonPath}:13 to continue]`,
+);
+const retrySource = [
+	'import { sleep } from "./sleep";',
+	"",
+	"export interface RetryOptions {",
+	"  attempts: number;",
+	"  baseMs: number;",
+	"}",
+	"",
+	"/** Run `fn`, retrying with exponential backoff. */",
+	"export async function retry<T>(",
+	"  fn: () => Promise<T>,",
+	"  opts: RetryOptions,",
+	"): Promise<T> {",
+	"  let delay = opts.baseMs;",
+];
+/** ReadToolCard: a 13-line excerpt whose continuation note fits a narrow card. */
+export const readExcerptTool: ToolItem = tool(
+	"read",
+	"done",
+	{ path: "lib/retry.ts", offset: 1, limit: 13 },
+	`${numbered("lib/retry.ts", retrySource, 1)}\n\n[9 more lines in file. Use lib/retry.ts:14 to continue]`,
 );
 /** ReadToolCard: read still in flight, so no body yet. */
 export const readRunningTool: ToolItem = tool(
@@ -1118,6 +1222,30 @@ export const grepDoneTool: ToolItem = tool(
 		" 18:    setCopied(true);",
 		"*19:    setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);",
 		" 20:  };",
+	),
+);
+/** SearchToolCard: a symbol's hits across three files, short rows that fit a narrow card. */
+export const grepSymbolTool: ToolItem = tool(
+	"grep",
+	"done",
+	{ pattern: "pushNotice", path: "apps/web" },
+	lines(
+		"# apps/web/",
+		"## store/",
+		"### toasts.ts#b7c1",
+		"*41:export function pushNotice(text: string) {",
+		" 42:  pushToast(text, { durationMs: 4_000 });",
+		" 43:}",
+		"",
+		"## prompt/",
+		"### commands.ts#d902",
+		'*93:    pushNotice("Unknown command");',
+		"...",
+		'*118:    pushNotice("Command not available");',
+		"",
+		"## components/chat/composer/",
+		"### Composer.tsx#4e5f",
+		'*164:  pushNotice("Message queued");',
 	),
 );
 /** SearchToolCard: single-file grep in plain mode (`*N|text`, no header; the card falls back to args.path). */
@@ -1514,6 +1642,57 @@ export const taskStageSubagentMap: typeof state.subagents = new Map(
 			stage: "Cross-checking selectors against the stories",
 			durationMs: 61_000,
 			completionPercent: 12,
+		}),
+	].map((info) => [info.id, info]),
+);
+
+/** TaskToolCard: one call that fanned out to three agents, all finished; every agent carries tokens, cost and run time. */
+export const taskStatsTool: ToolItem = tool(
+	"task",
+	"done",
+	{ description: "Map the chat transcript rendering path" },
+	"3 agents finished.",
+);
+
+const statsSub = (
+	index: number,
+	id: string,
+	agent: string,
+	description: string,
+	progress: { tokens: number; cost: number; durationMs: number },
+): SubagentInfo => {
+	const startedAt = FIXTURE_NOW - 6 * 60_000;
+	return {
+		id,
+		index,
+		agent,
+		description,
+		status: "completed",
+		lastUpdate: startedAt + progress.durationMs,
+		parentToolCallId: taskStatsTool.toolCallId,
+		startedAt,
+		endedAt: startedAt + progress.durationMs,
+		progress: { status: "completed", ...progress },
+	};
+};
+
+/** state.subagents patch for the stats variant. */
+export const taskStatsSubagentMap: typeof state.subagents = new Map(
+	[
+		statsSub(0, "FindCallers", "scout", "Find Transcript call sites", {
+			tokens: 4_100,
+			cost: 0.019,
+			durationMs: 64_000,
+		}),
+		statsSub(1, "ReadStore", "scout", "Read the chat store", {
+			tokens: 3_800,
+			cost: 0.016,
+			durationMs: 122_000,
+		}),
+		statsSub(2, "TraceRender", "task", "Trace the render path", {
+			tokens: 9_400,
+			cost: 0.052,
+			durationMs: 94_000,
 		}),
 	].map((info) => [info.id, info]),
 );

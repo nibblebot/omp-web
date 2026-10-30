@@ -229,7 +229,7 @@
 }
 /* No transition: the offset moves about a pixel every few seconds, and an animated one restyles the sidebar for each step. */
 .sidebar-usage-ring-fill {
-	stroke: var(--accent);
+	stroke: var(--muted);
 }
 .sidebar-usage-refresh .sidebar-usage-refresh-icon {
 	width: 10px;
@@ -276,32 +276,35 @@
 	column-gap: var(--space-4);
 	row-gap: var(--usage-gap);
 }
+/* Muted on purpose: the meters sit beside every session, so they read as
+   ambient status. Normal fills use --muted; warning and exhausted keep their
+   hue, softened, so they still stand out from the rest. */
 .sidebar-usage-bar {
 	position: relative; /* anchors the elapsed tick, which overhangs by 1px */
 	height: 100%;
 	border-radius: var(--r-xs);
-	background: var(--border);
+	background: color-mix(in srgb, var(--border) 60%, transparent);
 }
 .sidebar-usage-bar-fill {
 	height: 100%;
-	background: var(--accent);
+	background: color-mix(in srgb, var(--muted) 70%, transparent);
 	border-radius: var(--r-xs);
 }
 .sidebar-usage-bar[data-status="warning"] .sidebar-usage-bar-fill {
-	background: var(--warning);
+	background: color-mix(in srgb, var(--warning) 65%, transparent);
 }
 .sidebar-usage-bar[data-status="exhausted"] .sidebar-usage-bar-fill {
-	background: var(--error);
+	background: color-mix(in srgb, var(--error) 65%, transparent);
 }
-/* How far through the window we are: a muted red 1px tick over the fill,
+/* How far through the window we are: a faint 1px tick over the fill,
    1px taller than the bar at each edge. */
 .sidebar-usage-bar-elapsed {
 	position: absolute;
 	top: -1px;
 	bottom: -1px;
 	width: 1px;
-	background: var(--error);
-	opacity: 0.7;
+	background: var(--text);
+	opacity: 0.35;
 }
 .sidebar-usage-reset {
 	color: var(--muted);

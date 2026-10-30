@@ -60,8 +60,8 @@ const manyRoles: ModelRoleCatalogEntry[] = [
 		tag: "SEARCH",
 		hidden: false,
 		provider: "anthropic",
-		id: "claude-sonnet-4",
-		value: "anthropic/claude-sonnet-4",
+		id: "claude-sonnet-5-5",
+		value: "anthropic/claude-sonnet-5-5",
 		source: "global",
 	},
 ];

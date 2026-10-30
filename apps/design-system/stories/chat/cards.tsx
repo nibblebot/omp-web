@@ -351,7 +351,7 @@ const stories: Story[] = [
 		variants: [
 			{
 				name: "Plain segment",
-				render: () => <StatusSegment title="Switch model">claude-opus-4.1</StatusSegment>,
+				render: () => <StatusSegment title="Switch model">claude-opus-5.5</StatusSegment>,
 			},
 			{
 				name: "Active segment",

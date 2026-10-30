@@ -35,7 +35,7 @@ export default defineStory({
 			name: "Stacked notices",
 			description: "Several toasts queued by different actions.",
 			seed: () => {
-				pushToast("Model switched to claude-sonnet-4");
+				pushToast("Model switched to claude-sonnet-5-5");
 				pushToast("Context compacted: 84k to 31k tokens");
 				pushToast("Skill refresh finished: 14 skills loaded");
 			},
@@ -70,7 +70,7 @@ export default defineStory({
 		{
 			name: "Error with notices",
 			seed: () => {
-				pushToast("Model switched to claude-sonnet-4");
+				pushToast("Model switched to claude-sonnet-5-5");
 				setState("error", "Provider returned 429: rate limit reached.");
 			},
 			render: () => (

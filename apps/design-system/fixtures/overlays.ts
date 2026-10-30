@@ -352,8 +352,8 @@ const firstPartyCompat: ResolvedAnthropicCompat = {
 
 /** Model: the session's active model (state.model), as the SDK catalog describes it. */
 export const sessionModel: Model = {
-	id: "claude-opus-4-1",
-	name: "Claude Opus 4.1",
+	id: "claude-opus-5-5",
+	name: "Claude Opus 5.5",
 	api: "anthropic-messages",
 	provider: "anthropic",
 	baseUrl: "https://api.anthropic.com",
@@ -376,9 +376,9 @@ export const modelRoleCatalog: ModelRoleCatalogEntry[] = [
 		tag: "DEFAULT",
 		hidden: false,
 		provider: "anthropic",
-		id: "claude-opus-4-1",
+		id: "claude-opus-5-5",
 		thinkingLevel: "high",
-		value: "anthropic/claude-opus-4-1:high",
+		value: "anthropic/claude-opus-5-5:high",
 		source: "project",
 	},
 	{
@@ -431,7 +431,7 @@ type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" |
 export const modelInfos: ModelInfo[] = [
 	{
 		provider: "anthropic",
-		id: "claude-opus-4-1",
+		id: "claude-opus-5-5",
 		kind: "chat",
 		contextWindow: 200_000,
 		reasoning: true,
@@ -442,7 +442,7 @@ export const modelInfos: ModelInfo[] = [
 	},
 	{
 		provider: "anthropic",
-		id: "claude-sonnet-4",
+		id: "claude-sonnet-5-5",
 		kind: "chat",
 		contextWindow: 200_000,
 		reasoning: false,
@@ -491,7 +491,7 @@ export const resumeCandidates: ResumeCandidate[] = [
 		id: "sess_9d2c",
 		sessionFile: "/home/joshua/.omp/sessions/omp-web/2026-10-09T09-40-12.jsonl",
 		cwd: "/home/joshua/Repos/omp-web",
-		title: "Design-system fixture modules",
+		title: "DEMO: Write fixture modules",
 		createdMs: T0 - 80 * MIN,
 		modifiedMs: T0 - 2 * MIN,
 		messageCount: 64,

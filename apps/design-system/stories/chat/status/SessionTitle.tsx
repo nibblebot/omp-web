@@ -24,7 +24,7 @@ export default defineStory({
 			description: "A long title that must truncate instead of pushing the header apart.",
 			seed: {
 				sessionName:
-					"Refactor the design-system fixtures so every story owns its own data and renders the real components",
+					"DEMO: Refactor the design-system fixtures so every story owns its own data and renders the real components",
 			},
 			render: () => <SessionTitle />,
 		},

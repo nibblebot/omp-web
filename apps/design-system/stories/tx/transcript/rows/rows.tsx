@@ -156,7 +156,7 @@ export default [
 					<RowHost initialExpanded>
 						<SystemCard entry={sessionInitEntry} label="session_init">
 							<div>
-								<KeyValue k="model" v="anthropic/claude-sonnet-4" />
+								<KeyValue k="model" v="anthropic/claude-sonnet-5-5" />
 								<KeyValue k="thinking" v="medium" />
 								<KeyValue k="cwd" v="/home/joshua/Repos/omp-web" />
 							</div>

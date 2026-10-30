@@ -23,7 +23,7 @@ const T0 = Date.parse("2026-10-09T10:00:00Z");
 const at = (minute: number): number => T0 + minute * 60_000;
 
 export const SESSION_ID = "sess_9d2c";
-const SONNET = "claude-sonnet-4-5";
+const SONNET = "claude-sonnet-5-5";
 const GPT = "gpt-5";
 
 const SESSIONS_ROOT = "/home/joshua/.omp/agent/sessions";
@@ -1082,8 +1082,8 @@ interface AgentSpec {
 	progress?: Record<string, unknown>;
 }
 
-const SONNET_ID = "anthropic/claude-sonnet-4-5";
-const OPUS_ID = "anthropic/claude-opus-4-1";
+const SONNET_ID = "anthropic/claude-sonnet-5-5";
+const OPUS_ID = "anthropic/claude-opus-5-5";
 
 /**
  * Ids follow the SDK form: the requested name, nested children dotted onto their parent, and a

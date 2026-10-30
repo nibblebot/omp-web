@@ -8,7 +8,10 @@ import { virtualModulesPlugin } from "./virtual-modules";
  * server (`server.ts`, in memory, rebuilt per page load) and the static demo
  * build (`build.ts`, written to disk for GitHub Pages). Both produce
  * `main.js` and `main.css` next to `index.html`, which loads them by relative
- * URL so the page works under any path.
+ * URL so the page works under any path. The bundled web fonts (fontsource, via
+ * apps/web/styles.css) ride along: Bun inlines every font file under 128 KB as a
+ * data URL in `main.css` and emits only the larger ones (Noto Sans Latin
+ * Extended) under `assets/`, which both the dev server and the static build serve.
  */
 export const root = import.meta.dir;
 const repoRoot = join(root, "..", "..");

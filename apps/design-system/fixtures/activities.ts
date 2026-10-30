@@ -1,7 +1,7 @@
 import { daemonsKey } from "#lib/wire/protocol";
 import { setState, state } from "../../web/state";
 import { settleDaemonControl, settleDaemonLogs } from "../../web/store/transport";
-import { answerCommands } from "../session";
+import { answerCommands, type CommandHandlers } from "../session";
 import { rosterDaemonInfos } from "./roster";
 
 /** Daemons and todos of the Activities panel, for the workspace the roster fixtures select (`dmn_a002`). */
@@ -29,18 +29,13 @@ function logText(name: string): string {
 }
 
 /**
- * Seed the selected workspace's daemons (the roster's `bench-runner` belongs to another workspace and `docs-watch` has exited, so the section lists three) and answer what the section sends: the log tail of a
- * row, restart (a fresh run of the same process) and kill (the process exits and leaves the list).
+ * What the Daemons section sends, answered like the fleet answers it: the log tail of a row,
+ * restart (a fresh run of the same process) and kill (the process exits and leaves the list).
  * `logs` overrides the answer for a daemon name: a string is its tail, `Error` fails the fetch.
  */
-export function seedDaemons(logs: Record<string, string | Error> = {}): void {
-	const now = Date.now();
-	setState({
-		currentWorkspaceId: WORKSPACE_ID,
-		daemons: new Map(rosterDaemonInfos(now).map((info) => [daemonsKey(info), info])),
-	});
+export function daemonCommands(logs: Record<string, string | Error> = {}): CommandHandlers {
 	const find = (name: string) => [...state.daemons.values()].find((d) => d.name === name);
-	answerCommands({
+	return {
 		daemon_logs: (cmd) => {
 			if (cmd.type !== "daemon_logs") return;
 			const override = logs[cmd.name];
@@ -87,7 +82,22 @@ export function seedDaemons(logs: Record<string, string | Error> = {}): void {
 				daemon: { ...daemon, state: "exited", exitedAt: Date.now(), exitCode: 0 },
 			});
 		},
-	});
+	};
+}
+
+/** The selected workspace's daemons (the roster's `bench-runner` belongs to another workspace and `docs-watch` has exited, so the section lists three), answered like the fleet answers them. */
+export function seedDaemons(logs: Record<string, string | Error> = {}): void {
+	setState({ currentWorkspaceId: WORKSPACE_ID, ...daemonsPatch() });
+	answerCommands(daemonCommands(logs));
+}
+
+/** The store patch that lists the fixture daemons as a `daemons` frame would. */
+export function daemonsPatch(): Pick<typeof state, "daemons" | "daemonsLoaded"> {
+	const now = Date.now();
+	return {
+		daemons: new Map(rosterDaemonInfos(now).map((info) => [daemonsKey(info), info])),
+		daemonsLoaded: true,
+	};
 }
 
 /** A board mid-run: one phase finished, one underway, one waiting; every status the checklist shows. */

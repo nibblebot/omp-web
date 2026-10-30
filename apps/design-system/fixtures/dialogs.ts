@@ -124,8 +124,8 @@ export const confirmParams = {
 export const selectParams = {
 	title: "Reviewer model",
 	options: [
-		"claude-sonnet-4.5",
-		"claude-opus-4.1",
+		"claude-sonnet-5.5",
+		"claude-opus-5.5",
 		{
 			label: "gpt-5-codex",
 			description: "OpenAI, slower but stricter on diffs",

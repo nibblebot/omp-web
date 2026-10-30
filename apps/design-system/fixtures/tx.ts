@@ -45,7 +45,7 @@ export const sessionSummaries: SessionSummary[] = [
 	{
 		file: SESSION_FILE_MAIN,
 		folder: FOLDER_WEB,
-		title: "Design system showcase",
+		title: "DEMO: Build design system showcase",
 		id: "a1b2c3d4",
 		cwd: "/home/joshua/Repos/omp-web",
 		firstTs: START,
@@ -73,7 +73,7 @@ export const sessionSummaries: SessionSummary[] = [
 	{
 		file: SESSION_FILE_SECOND,
 		folder: FOLDER_WEB,
-		title: "Retry policy for provider errors",
+		title: "DEMO: Add retry policy for provider errors",
 		id: "e5f6a7b8",
 		cwd: "/home/joshua/Repos/omp-web",
 		firstTs: START - 20 * HOUR,
@@ -115,7 +115,7 @@ export const sessionSummaries: SessionSummary[] = [
 	{
 		file: SESSION_FILE_STORE_ONLY,
 		folder: FOLDER_BENCH,
-		title: "Migrate fleet registry to atomic writes",
+		title: "DEMO: Migrate fleet registry to atomic writes",
 		id: "0a1b2c3d",
 		cwd: null,
 		firstTs: START - 9 * 24 * HOUR,
@@ -149,7 +149,7 @@ export const sessionSummaries: SessionSummary[] = [
 
 export const sessionStats: SessionStats = {
 	file: SESSION_FILE_MAIN,
-	title: "Design system showcase",
+	title: "DEMO: Build design system showcase",
 	synced: true,
 	spanMs: 52 * MIN,
 	turns: 14,
@@ -265,7 +265,7 @@ export const unsyncedSessionStats: SessionStats = {
 /** Stats for a session with no tool calls and no error turns. */
 export const quietSessionStats: SessionStats = {
 	file: SESSION_FILE_SECOND,
-	title: "Retry policy for provider errors",
+	title: "DEMO: Add retry policy for provider errors",
 	synced: true,
 	spanMs: 64 * MIN,
 	turns: 6,
@@ -458,7 +458,7 @@ export const sessionHeaderEntry: RawEntry = {
 	version: 3,
 	timestamp: iso(T(0)),
 	cwd: "/home/joshua/Repos/omp-web",
-	title: "Design system showcase",
+	title: "DEMO: Build design system showcase",
 	titleSource: "auto",
 };
 
@@ -783,7 +783,7 @@ export const titleChangeEntry: RawEntry = {
 	parentId: "e0000025",
 	timestamp: iso(T(1_905)),
 	previousTitle: "Add stories for the shared components",
-	title: "Design system showcase",
+	title: "DEMO: Build design system showcase",
 	source: "auto",
 	trigger: "compaction",
 };
@@ -1172,7 +1172,7 @@ export const storedSessions: StoredSessionSummary[] = [
 	{
 		workspaceId: "ws-omp-web",
 		sessionId: "a1b2c3d4",
-		title: "Design system showcase",
+		title: "DEMO: Build design system showcase",
 		cwd: "/home/joshua/Repos/omp-web",
 		firstTs: START,
 		lastTs: START + 52 * MIN,
@@ -1188,7 +1188,7 @@ export const storedSessions: StoredSessionSummary[] = [
 	{
 		workspaceId: "ws-omp-web",
 		sessionId: "e5f6a7b8",
-		title: "Retry policy for provider errors",
+		title: "DEMO: Add retry policy for provider errors",
 		cwd: "/home/joshua/Repos/omp-web",
 		firstTs: START - 20 * HOUR,
 		lastTs: START - 19 * HOUR,
@@ -1204,7 +1204,7 @@ export const storedSessions: StoredSessionSummary[] = [
 	{
 		workspaceId: "ws-orphaned",
 		sessionId: "0a1b2c3d",
-		title: "Migrate fleet registry to atomic writes",
+		title: "DEMO: Migrate fleet registry to atomic writes",
 		cwd: null,
 		firstTs: START - 9 * 24 * HOUR,
 		lastTs: START - 9 * 24 * HOUR + HOUR,

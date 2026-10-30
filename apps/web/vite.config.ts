@@ -7,6 +7,7 @@ import { buildInfoDefines } from "./build/build-info.ts";
 import { failOnWarningsLogger } from "./build/fail-on-warnings.ts";
 import { featurePreload } from "./build/feature-preload.ts";
 import { featureSizes } from "./build/feature-sizes.ts";
+import { fontPreload } from "./build/font-preload.ts";
 import { precompress } from "./build/precompress.ts";
 import { fleetOrigin } from "./dev-proxy.ts";
 
@@ -60,7 +61,15 @@ function fleetProxy(): ProxyOptions {
 
 export default defineConfig(({ command }) => ({
 	root: webRoot,
-	plugins: [solidPlugin(), featurePreload(), featureSizes(), precompress()],
+	plugins: [
+		solidPlugin(),
+		featurePreload(),
+		fontPreload({
+			files: ["noto-sans-latin-wght-normal.woff2", "fira-code-latin-wght-normal.woff2"],
+		}),
+		featureSizes(),
+		precompress(),
+	],
 	// A production build allows no warnings; dev keeps vite's default logger.
 	customLogger: command === "build" ? failOnWarningsLogger() : undefined,
 	// Sidebar footer build identity (omp-web version, git hash, omp version).

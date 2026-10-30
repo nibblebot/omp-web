@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { isInteractiveDesktop, openBrowser } from "#lib/platform/open-browser";
 import { bundleConfig, root, type ViewName, VIEWS } from "./bundle";
 
@@ -10,7 +10,8 @@ import { bundleConfig, root, type ViewName, VIEWS } from "./bundle";
  * straight from apps/web; only the page chrome lives here. The bundle is rebuilt
  * on every top-level page load so a refresh shows current sources. Inspector
  * frames (`?embed=`) reuse the current bundle instead. The server answers no
- * fetches beyond the page and its two assets: fixture routes and the fake
+ * fetches beyond the page, its two bundle files and the font files the
+ * stylesheet references (`/assets/`): fixture routes and the fake
  * session run in the page (session.ts), exactly as in the static demo build
  * (`build.ts`). Startup opens the page in the default browser only from an
  * interactive local terminal with a display and no agent/CI marker
@@ -28,6 +29,8 @@ const port = Number(process.env[view.portEnv] ?? view.port);
 interface Bundle {
 	js: Blob;
 	css: Blob | null;
+	/** Emitted assets (fonts too large for Bun to inline in the CSS), by URL path. */
+	assets: Map<string, Blob>;
 }
 
 async function build(): Promise<Bundle> {
@@ -38,7 +41,11 @@ async function build(): Promise<Bundle> {
 	const js = result.outputs.find((o) => o.kind === "entry-point");
 	if (!js) throw new Error("bundle has no entry point output");
 	const css = result.outputs.find((o) => o.path.endsWith(".css")) ?? null;
-	return { js, css };
+	const assets = new Map<string, Blob>();
+	for (const o of result.outputs) {
+		if (o.kind === "asset") assets.set(`/assets/${basename(o.path)}`, o);
+	}
+	return { js, css, assets };
 }
 
 let bundle: Promise<Bundle> | null = null;
@@ -80,6 +87,14 @@ const server = Bun.serve({
 				console.error(message);
 				return new Response(message, { status: 500 });
 			}
+		}
+		if (pathname.startsWith("/assets/")) {
+			const blob =
+				bundle === null ? undefined : (await bundle.catch(() => undefined))?.assets.get(pathname);
+			if (!blob) return new Response("not found", { status: 404 });
+			return new Response(blob, {
+				headers: { "content-type": blob.type, "cache-control": "no-store" },
+			});
 		}
 		return new Response("not found", { status: 404 });
 	},

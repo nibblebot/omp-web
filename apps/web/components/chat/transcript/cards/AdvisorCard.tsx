@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, on, Show, type Component } from "solid-js";
 import type { AdvisorItem } from "../../../../store/slices/advisor";
-import { setState, state } from "../../../../state";
+import { state } from "../../../../state";
 import { Card } from "../../../ui/Card";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -41,9 +41,6 @@ export const AdvisorCard: Component<{ item: AdvisorItem }> = (props) => {
 					<Show when={blockers() > 0}>
 						<span class="advisor-blockers"> · {plural(blockers(), "blocker")}</span>
 					</Show>
-				</button>
-				<button class="advisor-open" onClick={() => setState("modal", "advisor")}>
-					Open advisor
 				</button>
 			</div>
 			<For each={expanded() ? notes() : []}>

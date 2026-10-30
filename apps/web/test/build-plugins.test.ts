@@ -13,6 +13,7 @@ import { build } from "vite";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { FEATURES_KEY } from "../features/manifest";
 import { featurePreload } from "../build/feature-preload";
+import { fontPreload } from "../build/font-preload";
 import { precompress } from "../build/precompress";
 
 afterAll(cleanupTempDirs);
@@ -132,4 +133,49 @@ describe("build plugins (real vite build)", () => {
 			expect(hintsFor("not json")).toHaveLength(3);
 		});
 	});
+});
+
+describe("fontPreload (real vite build)", () => {
+	// Above vite's 4 KiB asset inline limit, so the font is emitted, not a data URL.
+	const FONT = Buffer.alloc(8192, 7);
+
+	async function buildWith(files: string[]): Promise<string> {
+		const root = realpathSync(tempDir("font-preload-"));
+		mkdirSync(join(root, "files"), { recursive: true });
+		writeFileSync(join(root, "files", "demo-latin-wght-normal.woff2"), FONT);
+		writeFileSync(
+			join(root, "index.html"),
+			'<!doctype html><html><head></head><body><script type="module" src="/main.ts"></script></body></html>\n',
+		);
+		writeFileSync(join(root, "main.ts"), 'import "./fonts.css";\n');
+		writeFileSync(
+			join(root, "fonts.css"),
+			"@font-face { font-family: Demo; src: url(./files/demo-latin-wght-normal.woff2) format('woff2'); }\n",
+		);
+		const outDir = join(root, "dist");
+		await build({
+			root,
+			configFile: false,
+			logLevel: "silent",
+			plugins: [fontPreload({ files })],
+			build: { outDir, emptyOutDir: true },
+		});
+		return readFileSync(join(outDir, "index.html"), "utf8");
+	}
+
+	test("links the hashed emitted font as a crossorigin font preload", async () => {
+		const html = await buildWith(["demo-latin-wght-normal.woff2"]);
+		const link =
+			/<link rel="preload" as="font" type="font\/woff2" crossorigin="" href="(\/assets\/demo-latin-wght-normal-[^"]+\.woff2)">/.exec(
+				html,
+			);
+		expect(link).not.toBeNull();
+		expect(html).toContain(`href="${link![1]}"`);
+	}, 60_000);
+
+	test("fails the build when a listed font is not emitted", async () => {
+		await expect(buildWith(["missing-latin-wght-normal.woff2"])).rejects.toThrow(
+			"no emitted asset came from missing-latin-wght-normal.woff2",
+		);
+	}, 60_000);
 });

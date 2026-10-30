@@ -44,6 +44,8 @@ export type PaletteOpenTarget =
 	| "settings"
 	/** AppearanceSheet (theme, text, transcript, status, motion, sidebar). */
 	| "appearance"
+	/** AdvisorSheet: advisor status, enable/disable and transcript dump. */
+	| "advisor"
 	| "activities"
 	/** ShareSheet: start, stop or copy links for the attached session's room. */
 	| "share"
@@ -274,6 +276,11 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 				hint: "Alt+A",
 			},
 		),
+		openItem("advisor", "Advisor", "Advisor status, enable or disable, and transcript", [
+			"advisories",
+			"notes",
+			"review",
+		]),
 		openItem("share", "Share session", "Invite guests to watch or drive this session", [
 			"collab",
 			"invite",

@@ -854,7 +854,6 @@ pre {
    summary keeps its visual row height by cancelling the row's vertical padding. */
 @media (pointer: coarse), (max-width: 767px) {
 	.img-thumb,
-	.advisor-open,
 	.advisor-summary,
 	.code-copy-btn {
 		min-width: 44px;

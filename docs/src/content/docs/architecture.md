@@ -1,4 +1,7 @@
-# Architecture: browser, fleet, session
+---
+title: "Architecture: browser, fleet, session"
+description: "How the browser, the fleet control plane and a session process fit together: the two protocol hops, components, one session's life over time, and flow control."
+---
 
 omp-web has three tiers. The **browser** runs the Solid UI. The **fleet** (`omp-web`, or `omp-web control`) is the control plane: roster, workspace lifecycle, and the browser edge. Each **session** (`omp-web session`) is one session process that runs one in-process SDK agent against one project directory. The durable record of what an agent did is the session's `.jsonl` transcript; the fleet holds no agent state.
 
@@ -135,3 +138,4 @@ Four bounds keep any slow party from holding unbounded memory elsewhere:
 - `apps/fleet/session-transport.ts` and `apps/session/fleet-callback.ts`: the two halves of the pair.
 - `docs/provider-protocol.md`: how runtime providers launch clones that dial this pair.
 - `scripts/profile/results/`: measurements behind the transport choices.
+- [`AGENTS.md`](https://github.com/nibblebot/omp-web/blob/main/AGENTS.md): the engineering map, wire contract, and import, state, and security boundaries.

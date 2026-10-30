@@ -20,7 +20,23 @@ export default defineConfig({
 		// own Markdown plugins on this same processor.
 		processor: satteri({ hastPlugins: [baseLinks(base)] }),
 	},
+	vite: {
+		build: {
+			// Mermaid's lazily loaded diagram chunks (see `src/mermaid.ts`) are
+			// large by nature; they only load on pages with a diagram.
+			chunkSizeWarningLimit: 1500,
+		},
+	},
 	integrations: [
+		{
+			name: "omp-web-mermaid",
+			hooks: {
+				// Bundled with the page scripts, so `mermaid` resolves from node_modules.
+				"astro:config:setup": ({ injectScript }) => {
+					injectScript("page", 'import "/src/mermaid.ts";');
+				},
+			},
+		},
 		starlight({
 			title: "omp-web",
 			description: "Web sessions and fleet management for Oh My Pi.",
@@ -41,8 +57,31 @@ export default defineConfig({
 			],
 			sidebar: [
 				{
+					label: "Getting started",
+					items: [
+						{ label: "Installation", slug: "installation" },
+						{ label: "Running omp-web", slug: "running" },
+						{ label: "Install as an app", slug: "install-as-an-app" },
+					],
+				},
+				{
+					label: "Operations",
+					items: [
+						{ label: "Reverse proxies and ingress", slug: "reverse-proxies" },
+						{ label: "CLI reference", slug: "cli-reference" },
+					],
+				},
+				{
 					label: "Configuration",
-					items: [{ label: "Custom themes", slug: "configuration/custom-themes" }],
+					items: [
+						{ label: "Configuration", slug: "configuration" },
+						{ label: "Custom themes", slug: "configuration/custom-themes" },
+						{ label: "Optional features", slug: "configuration/features" },
+					],
+				},
+				{
+					label: "Reference",
+					items: [{ label: "Architecture", slug: "architecture" }],
 				},
 			],
 		}),

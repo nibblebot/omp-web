@@ -282,7 +282,7 @@ export const fixtureRoutes: FixtureRoute[] = [
 		respond: () => ({
 			ompInstalled: true,
 			providers: ["anthropic"],
-			defaultModel: "anthropic/claude-sonnet-4",
+			defaultModel: "anthropic/claude-sonnet-5-5",
 			error: null,
 		}),
 	},

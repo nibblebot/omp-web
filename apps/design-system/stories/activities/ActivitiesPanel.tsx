@@ -7,6 +7,7 @@ import {
 	toggleItemExpanded,
 	toggleSectionCollapsed,
 } from "../../../web/store/activities";
+import { seedDaemons, seedTodos } from "../../fixtures/activities";
 import { agentEntry, benchEntry, seedJobWidgets } from "../../fixtures/job-widget-entries";
 import { JOB_IDS, seedJobs } from "../../fixtures/jobs";
 import { DockFrame, seedActivities, seedAgentTree } from "../../fixtures/subagents";
@@ -151,6 +152,18 @@ export default defineStory({
 			seed: () => {
 				seedActivities("accordion");
 				seedJobs();
+			},
+			render: () => dock(520),
+		},
+		{
+			name: "Accordion, all four sections",
+			description:
+				"Subagents, Jobs, Daemons and Todos each under their own header, count and (where it filters) All/Running toggle, in the one scroller.",
+			seed: () => {
+				seedActivities("accordion");
+				seedJobs();
+				seedDaemons();
+				seedTodos();
 			},
 			render: () => dock(520),
 		},

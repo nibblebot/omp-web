@@ -33,7 +33,7 @@ export function worktreeSessions(now: number): SessionListEntry[] {
 		{
 			path: `${DIR}/2026-10-05T14-21-50.jsonl`,
 			id: "sess_5e8a77c1",
-			name: "Wake pulse timing",
+			name: "DEMO: Trace wake pulse timing",
 			cwd: CWD,
 			modifiedAt: now - 4 * 24 * 60 * MIN,
 			messageCount: 27,
@@ -49,6 +49,18 @@ export function worktreeSessions(now: number): SessionListEntry[] {
 		},
 	];
 }
+
+/** The generated titles of the capped list's sessions, in the same order as TOPICS (their first messages). */
+const TITLES = [
+	"DEMO: Migrate roster rows to content height",
+	"DEMO: Settle session list waiters per limit",
+	"DEMO: Add resume picker keyboard navigation",
+	"DEMO: Migrate stale annotation anchors",
+	"DEMO: Fix sidebar scroll jump on wake",
+	"DEMO: Trim session file loader",
+	"DEMO: Review clone lifecycle states",
+	"DEMO: Port empty screen to compact rows",
+];
 
 const TOPICS = [
 	"Migrate roster rows to content height",
@@ -66,7 +78,7 @@ export function worktreeSessionsMax(now: number): SessionListEntry[] {
 	return Array.from({ length: 200 }, (_, i) => ({
 		path: `${DIR}/max-${String(i).padStart(3, "0")}.jsonl`,
 		id: `sess_${i.toString(16).padStart(8, "0")}`,
-		name: `${TOPICS[i % TOPICS.length]} (${200 - i})`,
+		name: `${TITLES[i % TITLES.length]} (${200 - i})`,
 		cwd: CWD,
 		modifiedAt: now - i * 97 * MIN,
 		messageCount: 3 + (i % 41),

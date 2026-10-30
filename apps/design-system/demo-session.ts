@@ -11,6 +11,7 @@ import { settleFiles, settleSessions, settleWorkspaceSessions } from "../web/sto
 import { addCalls, answerCommands, type CallHandlers } from "./session";
 import { upsertRosterEntry } from "./fixtures/command-bus";
 import { appSessions, appWorkspaceSessions } from "./fixtures/app-sessions";
+import { daemonCommands, daemonsPatch } from "./fixtures/activities";
 import { repoFiles } from "./fixtures/composer";
 import { extensionStateCalls } from "./fixtures/extensions";
 import { jobCalls, screenJobDetails, screenJobTree } from "./fixtures/jobs";
@@ -34,7 +35,9 @@ import {
  * The demo's fake session (`bun run demo`): every call and command the App sends while a visitor
  * looks around is answered with fixture data, as a healthy session and fleet would answer it.
  * Answers follow the attached session: the screen session (`dmn_a002`) has the task call's two
- * scouts, their jobs and the dev server it left running; the other sessions ran no subagents.
+ * scouts, their jobs, the dev server it left running and a todo board; the other sessions ran no
+ * subagents. The fleet's daemons are listed, and their logs, restart and kill answered, as a
+ * `daemons` frame would.
  * Writes the UI offers (model, thinking level, presets, roles, settings, extensions, the session
  * name) succeed and show in the store the way a session's state frame would show them.
  */
@@ -62,7 +65,7 @@ const demoRoleCatalog: ModelRoleCatalogEntry[] = modelRoleCatalog.map((entry) =>
 
 /** The presets, `heavy` matching the demo's role catalog (its level comes from `defaultThinkingLevel`). */
 const demoPresets: ModelPresetDetail[] = [
-	{ ...heavy, modelRoles: { ...heavy.modelRoles, default: "anthropic/claude-opus-4-1" } },
+	{ ...heavy, modelRoles: { ...heavy.modelRoles, default: "anthropic/claude-opus-5-5" } },
 	fast,
 	shared,
 ];
@@ -279,6 +282,7 @@ function sessionCalls(): CallHandlers {
 				sessionName: undefined,
 				sessionFile: dir === undefined ? undefined : `${dir}/${stamp}.jsonl`,
 				items: [],
+				todoPhases: [],
 				messageCount: 0,
 				stats: null,
 				contextUsage: {
@@ -373,6 +377,7 @@ export function answerDemoSession(): void {
 	});
 	answerCommands({
 		...projectCommands,
+		...daemonCommands(),
 		...newWorkspaceCommands({ start: true }),
 		list_workspace_sessions: (cmd) => {
 			if (cmd.type === "list_workspace_sessions")
@@ -388,5 +393,5 @@ export function answerDemoSession(): void {
 			settleFiles(cmd.id, hits.slice(0, cmd.limit ?? 50));
 		},
 	});
-	setState(structuredClone(demoSessionState));
+	setState({ ...structuredClone(demoSessionState), ...daemonsPatch() });
 }

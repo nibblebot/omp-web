@@ -498,7 +498,7 @@ export interface SkillDetail extends SkillSummary {
 }
 
 // ---------------------------------------------------------------------------
-// omp-session / omp-fleet contract (README.md). OMP_PROTO gates
+// omp-session / omp-fleet contract (docs/src/content/docs/running.md). OMP_PROTO gates
 // fleet↔omp-session drift (the collab COLLAB_PROTO pattern); bump on any
 // breaking change to the transport or frame shapes.
 //

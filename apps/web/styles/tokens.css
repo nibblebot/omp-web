@@ -2,16 +2,18 @@
 
 :root {
 	color-scheme: dark;
-	/* Fonts: a deliberate system stack. omp-web is a self-hosted, offline-first
-	   tool and ships zero font assets, so the platform's native UI / UI-monospace
-	   faces are used as-is instead of downloading a webfont. The Linux faces are
-	   named FIRST because Chromium resolves system-ui to DejaVu Sans (its own
-	   fallback list) while Firefox goes through fontconfig (Noto Sans here);
-	   the same CSS then renders two different faces. Naming the fontconfig
-	   default explicitly makes both engines pick the same family on Linux;
-	   macOS/Windows skip the absent Noto faces and keep their native UI fonts. */
-	--font-sans: "Noto Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-	--font-mono: "Noto Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+	/* Fonts: Noto Sans and Fira Code ship with the app (fontsource variable
+	   builds, @font-face from the @import lines in styles.css), so every platform
+	   renders the same faces and Fira Code's ligatures; fonts are served from the
+	   same origin, nothing comes from a CDN. The rest of each stack is the
+	   fallback while a font loads (font-display: swap) and for scripts no bundled
+	   subset covers. Its first entry is the installed Noto face, named before
+	   system-ui because Chromium resolves system-ui to DejaVu Sans on Linux while
+	   Firefox goes through fontconfig (Noto Sans there), so the same CSS would
+	   otherwise render two different faces; macOS/Windows skip the absent Noto
+	   faces and keep their native UI fonts. */
+	--font-sans: "Noto Sans Variable", "Noto Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	--font-mono: "Fira Code Variable", "Noto Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 	/* Fallback palette: Catppuccin Mocha (the default theme, dark variant), exactly the
 	   tokens lib/themes derives from builtin/catppuccin.json (a test pins the equality).
 	   Themes are data: the generated stylesheet (lib/themes/css.ts), installed last in
