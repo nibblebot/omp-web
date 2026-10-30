@@ -22,6 +22,7 @@ import {
 	nextVersion,
 	parseGitLog,
 	parseReleaseArgs,
+	foldUnreleased,
 	prependChangelog,
 	releasePlan,
 	releaseTreeProblem,
@@ -398,6 +399,44 @@ describe("prependChangelog", () => {
 	test("empty existing returns the section unchanged", () => {
 		const section = "## v0.2.0, 2026-08-19\n\n### Features\n- b1\n";
 		expect(prependChangelog("", section)).toBe(section);
+	});
+});
+
+describe("foldUnreleased", () => {
+	const older = "## v0.2.1, 2026-09-25\n\nOld notes.\n";
+
+	test("without an Unreleased heading the changelog is untouched and the section is generated", () => {
+		expect(foldUnreleased(older, "0.3.0", "2026-10-30")).toEqual({ section: null, rest: older });
+	});
+
+	test("a curated Unreleased body becomes the release section and the heading is gone", () => {
+		const existing = `## Unreleased\n\nIntro.\n\n### Breaking changes\n- one\n\n${older}`;
+		const { section, rest } = foldUnreleased(existing, "0.3.0", "2026-10-30");
+		expect(section).toBe("## v0.3.0, 2026-10-30\n\nIntro.\n\n### Breaking changes\n- one\n");
+		expect(prependChangelog(rest, section as string)).toBe(
+			`## v0.3.0, 2026-10-30\n\nIntro.\n\n### Breaking changes\n- one\n\n${older}`,
+		);
+	});
+
+	test("a blank Unreleased body falls back to the generated section and drops the heading", () => {
+		const { section, rest } = foldUnreleased(`## Unreleased\n\n\n${older}`, "0.3.0", "2026-10-30");
+		expect(section).toBeNull();
+		expect(rest).not.toContain("Unreleased");
+		expect(rest).toContain(older);
+	});
+
+	test("a ## line inside a fenced code block does not end the section", () => {
+		const body = "Config:\n\n```md\n## not a heading\n```\n\nAfter the fence.";
+		const { section, rest } = foldUnreleased(`## Unreleased\n\n${body}\n\n${older}`, "0.3.0", "d");
+		expect(section).toBe(`## v0.3.0, d\n\n${body}\n`);
+		expect(rest.trim()).toBe(older.trim());
+	});
+
+	test("an Unreleased section with no earlier release runs to the end", () => {
+		expect(foldUnreleased("## Unreleased\n\n- first\n", "0.1.0", "d")).toEqual({
+			section: "## v0.1.0, d\n\n- first\n",
+			rest: "",
+		});
 	});
 });
 

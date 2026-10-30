@@ -355,6 +355,46 @@ export function prependChangelog(existing: string, section: string): string {
 	return `${section.trimEnd()}\n\n${trimmed}\n`;
 }
 
+/**
+ * Fold a hand-maintained `## Unreleased` section into the release. The section
+ * runs from the first `## Unreleased` heading to the next `## ` heading outside
+ * a fenced code block, or to the end. `rest` is the changelog without it, so the
+ * heading never survives a release. `section` is the curated body under
+ * `## v<version>, <date>`, or null when there is no such heading or its body is
+ * blank (the caller then generates the section from the commits).
+ */
+export function foldUnreleased(
+	existing: string,
+	version: string,
+	date: string,
+): { section: string | null; rest: string } {
+	const lines = existing.split("\n");
+	const start = lines.findIndex((line) => /^## Unreleased\s*$/.test(line));
+	if (start === -1) return { section: null, rest: existing };
+	let end = lines.length;
+	let fence: { char: string; length: number } | null = null;
+	for (let i = start + 1; i < lines.length; i++) {
+		const line = lines[i] as string;
+		const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+		if (marker !== undefined) {
+			const char = marker[0] as string;
+			if (fence === null) fence = { char, length: marker.length };
+			else if (char === fence.char && marker.length >= fence.length) fence = null;
+			continue;
+		}
+		if (fence === null && line.startsWith("## ")) {
+			end = i;
+			break;
+		}
+	}
+	const body = lines
+		.slice(start + 1, end)
+		.join("\n")
+		.trim();
+	const rest = [...lines.slice(0, start), ...lines.slice(end)].join("\n");
+	return { section: body.length > 0 ? `## v${version}, ${date}\n\n${body}\n` : null, rest };
+}
+
 /** Tab-indented release manifest (same shape the update channel parses). */
 export function makeManifest(version: string, tarball: string, sha256: string): string {
 	return JSON.stringify({ version, tarball, sha256 }, null, "\t") + "\n";
@@ -973,25 +1013,35 @@ async function release(argv: string[]): Promise<void> {
 	// runs last: the offline end-to-end walk of pack + pinned install.
 	await runGate(dryRun);
 
-	// 5. Changelog (LLM-assisted, deterministic fallback).
+	// 5. Changelog: a curated `## Unreleased` section becomes the release
+	// section as written; otherwise LLM-assisted with a deterministic fallback.
 	const date = todayLocal();
-	let draft: ChangelogDraft | null = null;
-	let llmUsed = false;
-	if (!noLlm) {
-		try {
-			const result = await summarizeChangelog({ version, groups }, {});
-			draft = normalizeDraft(result);
-			llmUsed = draft !== null;
-		} catch (err) {
-			console.error(
-				`release: warning: LLM changelog unavailable (${err instanceof Error ? err.message : String(err)}); falling back`,
-			);
+	const changelogPath = "CHANGELOG.md";
+	const existingChangelog = existsSync(changelogPath) ? readFileSync(changelogPath, "utf8") : "";
+	const folded = foldUnreleased(existingChangelog, version, date);
+	let section: string;
+	if (folded.section !== null) {
+		console.log("release: changelog: curated ## Unreleased section");
+		section = folded.section;
+	} else {
+		let draft: ChangelogDraft | null = null;
+		let llmUsed = false;
+		if (!noLlm) {
+			try {
+				const result = await summarizeChangelog({ version, groups }, {});
+				draft = normalizeDraft(result);
+				llmUsed = draft !== null;
+			} catch (err) {
+				console.error(
+					`release: warning: LLM changelog unavailable (${err instanceof Error ? err.message : String(err)}); falling back`,
+				);
+			}
 		}
+		if (noLlm) console.log("release: changelog: deterministic fallback (--no-llm)");
+		else if (llmUsed) console.log("release: changelog: LLM prose");
+		else console.log("release: changelog: deterministic fallback");
+		section = buildChangelog(draft, groups, version, date);
 	}
-	if (noLlm) console.log("release: changelog: deterministic fallback (--no-llm)");
-	else if (llmUsed) console.log("release: changelog: LLM prose");
-	else console.log("release: changelog: deterministic fallback");
-	const section = buildChangelog(draft, groups, version, date);
 
 	// 6. Dry run: print the full plan, touch nothing.
 	if (dryRun) {
@@ -1049,9 +1099,7 @@ async function release(argv: string[]): Promise<void> {
 	pkgObj.version = version;
 	writeFileSync(pkgPath, JSON.stringify(pkgObj, null, "\t") + "\n");
 	console.log(`release: wrote version ${version} to package.json`);
-	const changelogPath = "CHANGELOG.md";
-	const existingChangelog = existsSync(changelogPath) ? readFileSync(changelogPath, "utf8") : "";
-	writeFileSync(changelogPath, prependChangelog(existingChangelog, section));
+	writeFileSync(changelogPath, prependChangelog(folded.rest, section));
 	console.log(`release: wrote ${changelogPath}`);
 
 	// 9. Build + pack, artifacts into dist-release/.
