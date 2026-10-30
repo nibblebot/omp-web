@@ -45,7 +45,7 @@ body:
       description: Include your OS, Bun version, how you installed omp-web, and whether the affected session process runs locally or on a remote host.
       placeholder: |
         OS: NixOS 26.11
-        Bun: 1.3.14
+        Bun: 1.4.4
         Install: release installer
         Session process: local
     validations:

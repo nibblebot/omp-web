@@ -315,6 +315,7 @@ describe("session replacement drops the held queue", () => {
 				setPlanModeState: () => {},
 				getEnabledToolNames: () => [],
 				getMountedXdevToolNames: () => [],
+				getAllToolNames: () => [],
 				setPlanProposalHandler: () => {},
 				subscribe: () => () => undefined,
 				markPlanInternalAbortPending: () => undefined,

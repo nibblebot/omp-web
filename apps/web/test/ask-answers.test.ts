@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { answersOf, askDetails, questionViews } from "../chat/ask-answers";
+import { answersOf, askDetails, noteLabel, questionViews } from "../chat/ask-answers";
 
 const opts = (...labels: string[]) => labels.map((label) => ({ label }));
 
@@ -104,5 +104,26 @@ describe("ask answer merge", () => {
 		expect(answersOf(details)).toEqual([]);
 		const [view] = questionViews([{ question: "Pick", options: opts("A") }], answersOf(details));
 		expect(view?.answer).toBeUndefined();
+	});
+});
+
+describe("ask note on an option", () => {
+	test("the answer carries the option the note was attached to", () => {
+		const details = askDetails({
+			results: [
+				{ selectedOptions: ["Wide"], note: "only for the docs", noteOption: "Wide" },
+				{ selectedOptions: ["A"], note: "general remark" },
+			],
+		});
+		const views = questionViews([], answersOf(details));
+		expect(views.map((v) => [v.answer?.note, v.answer?.noteOption])).toEqual([
+			["only for the docs", "Wide"],
+			["general remark", undefined],
+		]);
+	});
+
+	test("the label names the option, else stays Note", () => {
+		expect(noteLabel("Wide")).toBe("Note on Wide");
+		expect(noteLabel(undefined)).toBe("Note");
 	});
 });

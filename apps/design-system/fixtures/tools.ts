@@ -231,6 +231,23 @@ export const askCustomTool: ToolItem = {
 		note: "keep it subtle",
 	},
 };
+/** AskToolCard: an option picked with a note attached to that option. */
+export const askNoteOptionTool: ToolItem = {
+	...tool(
+		"ask",
+		"done",
+		askArgs,
+		"User selected: Active turn and queue\nUser added note on Active turn and queue: only after the queue drains",
+	),
+	details: {
+		question: askArgs.questions[0]?.question,
+		options: ["Only the active turn", "Active turn and queue"],
+		multi: false,
+		selectedOptions: ["Active turn and queue"],
+		note: "only after the queue drains",
+		noteOption: "Active turn and queue",
+	},
+};
 const askMultiArgs = {
 	questions: [
 		{
@@ -1202,6 +1219,13 @@ export const taskPendingTool: ToolItem = tool(
 	{ description: "Audit CSS for unused selectors" },
 	"",
 );
+/** TaskToolCard: `task.file` call, labelled by its `taskFile` path (no `task`/`description`). */
+export const taskFileTool: ToolItem = tool(
+	"task",
+	"running",
+	{ taskFile: "local://tasks/audit-css.md" },
+	"",
+);
 
 const sub = (
 	parent: ToolItem,
@@ -1322,6 +1346,17 @@ export const webSearchDoneTool: ToolItem = tool(
 		"Fine-grained reactivity in stores: https://docs.solidjs.com/concepts/stores",
 		"Keyed lists and For: https://docs.solidjs.com/reference/components/for",
 		"Duplicate of the first hit: https://docs.solidjs.com/reference/store-utilities/reconcile",
+	),
+);
+/** WebSearchToolCard: a fallback provider answered; the note's failure reason quotes a URL that is not a result. */
+export const webSearchFallbackNoteTool: ToolItem = tool(
+	"web_search",
+	"done",
+	searchArgs,
+	lines(
+		"Note: answered by Exa after Brave failed (Brave search request failed: 429 https://api.search.brave.com/res/v1/web/search)",
+		"Solid store reconcile: https://docs.solidjs.com/reference/store-utilities/reconcile",
+		"Keyed lists and For: https://docs.solidjs.com/reference/components/for",
 	),
 );
 /** WebSearchToolCard: finished with no URLs, so the generic card takes over. */

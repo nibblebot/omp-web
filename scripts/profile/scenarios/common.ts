@@ -15,9 +15,6 @@ export async function streamMetrics(
 		`stream latency: ${joined.ns.length} deltas matched, ${joined.unmatched} received without a send line, ` +
 			`${joined.sendOnly} sent but not received as their own frame (coalesced chunks, tool or subagent output)`,
 	);
-	notes.push(
-		"stream latency has a ~20 ms tail by construction: the SDK agent loop sleeps 20 ms (yieldIfDue in pi-agent-core, at most once per 50 ms of streaming) and every delta that arrives meanwhile is released together, so p95/p99 sit near 20 ms regardless of transport; p50 and the share of deltas under 1 ms are what the transport can move",
-	);
 	const out = percentileMetrics("stream.latency", nsToMsList(joined.ns));
 	out["stream.unmatched"] = metric(joined.unmatched, "count", "info");
 	return out;

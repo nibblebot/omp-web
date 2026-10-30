@@ -8,7 +8,7 @@ set -e
 #   -r <ref>       Shorthand for --ref
 #
 # omp-web is distributed as a tarball on GitHub Releases and installed with
-# bun. A pinned npm/binary mode does not exist: bun (>= 1.3.14) is the only
+# bun. A pinned npm/binary mode does not exist: bun (>= 1.4.4) is the only
 # supported method, and this script installs it when missing. The bin lands
 # at $BUN_INSTALL/bin/omp-web (default ~/.bun/bin); upgrades and `omp-web
 # update` are handled by the pinned install dir under ~/.omp-web (see
@@ -22,7 +22,7 @@ set -e
 
 REPO="nibblebot/omp-web"
 PACKAGE="omp-web"
-MIN_BUN_VERSION="1.3.14"
+MIN_BUN_VERSION="1.4.4"
 
 # Parse arguments
 REF=""

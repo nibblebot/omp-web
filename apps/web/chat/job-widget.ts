@@ -29,11 +29,25 @@ export const SPARK_WIDTH = 100;
 export const SPARK_HEIGHT = 32;
 const SPARK_PAD = 2;
 
-/** The headline, else the latest figure of the first spark or meter that has data. */
+/** The meter's `140/190` when the headline only restates its numerator (`140`). */
+function meterWhole(headlineText: string, view: WireJobWidgetView): string | undefined {
+	const meter = view.blocks.find((block) => block.kind === "meter");
+	const whole = meter?.kind === "meter" ? meter.text : "";
+	const head = headlineText.trim();
+	return head !== "" && whole.startsWith(head) && /^\s*\/\s*\S/.test(whole.slice(head.length))
+		? whole
+		: undefined;
+}
+
+/** The headline (widened to the meter's `n/total` when it restates the numerator), else the latest figure of the first spark or meter that has data. */
 export function jobWidgetGlance(view: WireJobWidgetView): JobWidgetGlanceFigure | undefined {
 	if (view.headline && view.headline.text !== "") {
 		const { text, label, trend } = view.headline;
-		return { text, ...(label ? { label } : {}), ...(trend ? { trend } : {}) };
+		return {
+			text: meterWhole(text, view) ?? text,
+			...(label ? { label } : {}),
+			...(trend ? { trend } : {}),
+		};
 	}
 	for (const block of view.blocks) {
 		if (block.kind === "spark" && block.values.length > 0 && block.last !== "") {

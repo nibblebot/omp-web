@@ -12,6 +12,7 @@ import {
 	confirmParams,
 	editorParams,
 	inputParams,
+	secretInputParams,
 	selectParams,
 } from "../../fixtures/dialogs";
 import { defineStory } from "../../registry";
@@ -90,6 +91,14 @@ export default [
 			{
 				name: "Input",
 				seed: () => setState("uiRequest", { id: "input_5", method: "input", params: inputParams }),
+				render: () => <AskBar />,
+			},
+			{
+				name: "Input (secret)",
+				description:
+					"The SDK's secret option masks the typed characters; collab guests are never offered it.",
+				seed: () =>
+					setState("uiRequest", { id: "input_6", method: "input", params: secretInputParams }),
 				render: () => <AskBar />,
 			},
 			{

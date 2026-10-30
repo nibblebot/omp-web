@@ -135,13 +135,13 @@ See [`docs/architecture.md`](docs/architecture.md) for how the browser, fleet an
 
 ## Requirements
 
-- [Bun](https://bun.sh) **1.3.14 or newer** (the runtime and installer). The one-line installer installs Bun when absent; upgrade an existing older installation first.
+- [Bun](https://bun.sh) **1.4.4 or newer** (the runtime and installer). The one-line installer installs Bun when absent; upgrade an existing older installation first.
 - The **`omp` CLI** with usable provider credentials and a default model configured: run `omp` to configure it, or `omp login` for an OAuth provider. An interactive first run with no fleet config checks this setup; missing setup warns but does not prevent the fleet from starting. Prompts need a usable model and credentials.
 
 ## Install
 
 ```sh
-# One-liner (bun-only; installs bun >= 1.3.14 if missing):
+# One-liner (bun-only; installs bun >= 1.4.4 if missing):
 curl -fsSL https://raw.githubusercontent.com/nibblebot/omp-web/main/scripts/install.sh | sh
 ```
 

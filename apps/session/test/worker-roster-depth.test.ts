@@ -79,6 +79,7 @@ describe("worker roster depth", () => {
 					subscribe: () => () => {},
 					getEnabledToolNames: () => [],
 					getMountedXdevToolNames: () => [],
+					getAllToolNames: () => [],
 					setPlanProposalHandler: () => {},
 					sessionManager: {
 						getSessionId: () => "root-session",

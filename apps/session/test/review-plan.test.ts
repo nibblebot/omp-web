@@ -50,6 +50,7 @@ async function fixture() {
 		},
 		getEnabledToolNames: () => ["read"],
 		getMountedXdevToolNames: () => [],
+		getAllToolNames: () => ["read"],
 		setPlanProposalHandler: (handler: Proposal | null) => {
 			runtime.proposal = handler;
 		},

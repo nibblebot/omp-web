@@ -134,8 +134,9 @@ export async function loadModelBrowser(): Promise<void> {
 	}
 }
 
-/** Session-only switch to a fuzzy selector (`:level` suffix allowed). Roles
- * and persisted settings are untouched. */
+/** Session-only switch to a model selector (`:level` suffix allowed): a bare id matches
+ * fuzzily, a `provider/id` selector must name an exact id or alias. Roles and persisted
+ * settings are untouched. */
 export async function switchSessionModel(selector: string): Promise<boolean> {
 	try {
 		const data = (await call("switchModel", [selector])) as {

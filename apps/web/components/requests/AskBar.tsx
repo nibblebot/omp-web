@@ -46,6 +46,8 @@ interface AskParams {
 	message?: string;
 	placeholder?: string;
 	prefill?: string;
+	/** `input` only: mask the typed characters (the SDK's `secret` dialog option). */
+	secret?: boolean;
 	options?: (string | AskOption)[];
 	questions?: AskQuestion[];
 }
@@ -79,6 +81,7 @@ const AskRequest: Component<{ req: UiRequest }> = (props) => {
 					title={params.title ?? ""}
 					placeholder={params.placeholder}
 					prefill={params.prefill}
+					secret={params.secret === true}
 				/>
 			</Match>
 			<Match when={props.req.method === "approve"}>
@@ -593,12 +596,13 @@ const AskApproval: Component<{ id: string; prompt: UiApprovalParams }> = (props)
 };
 
 /** input / editor fallbacks: a text field submitted with Enter (input) or Ctrl+Enter (editor). */
-const AskText: Component<{
+export const AskText: Component<{
 	id: string;
 	multiline: boolean;
 	title: string;
 	placeholder?: string;
 	prefill?: string;
+	secret?: boolean;
 }> = (props) => {
 	const [value, setValue] = createSignal(props.prefill ?? "");
 	let field!: HTMLInputElement | HTMLTextAreaElement;
@@ -625,9 +629,10 @@ const AskText: Component<{
 					<input
 						ref={(el) => (field = el)}
 						class="picker-filter"
+						type={props.secret && !props.multiline ? "password" : "text"}
 						aria-label={props.title}
 						placeholder={props.placeholder}
-						autocomplete="off"
+						autocomplete={props.secret ? "new-password" : "off"}
 						enterkeyhint="send"
 						value={value()}
 						onInput={(e) => setValue(e.currentTarget.value)}

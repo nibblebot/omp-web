@@ -1,6 +1,6 @@
 /**
  * Settings sheet layout manifest: checked-in data. Generated once from the web
- * inventory against @oh-my-pi/pi-coding-agent 18.12.6 (419 settings host rows).
+ * inventory against @oh-my-pi/pi-coding-agent 18.14.0 (431 settings host rows).
  * buildSettingsModel applies it over the SDK's own metadata; nothing here is read
  * from disk at runtime. Rows in HIDDEN_SETTING_PATHS never appear on the web; rows in
  * ADVANCED_SETTING_PATHS go to the Advanced group; every other host row shows in its SDK
@@ -45,7 +45,7 @@ export const TAB_SECTION_ORDER: Readonly<Record<string, readonly string[]>> = {
 /** Name of the group that holds a tab's Advanced rows; always the last group of its tab. */
 export const ADVANCED_GROUP = "Advanced";
 
-/** Terminal-only rows that never appear on the web (57). */
+/** Terminal-only rows that never appear on the web (63). */
 export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"theme.dark": true,
 	"theme.light": true,
@@ -104,9 +104,15 @@ export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"spelling.typoDetection": true,
 	"spelling.autocorrect": true,
 	"stream.redactPatterns": true,
+	"display.advisorCollapsedLines": true,
+	"session.worktreeScope": true,
+	"async.printWake": true,
+	"extensionRenderers.assistantText": true,
+	"out.enabled": true,
+	"extensionHandlers.modeControl": true,
 };
 
-/** Rows absent from the inventory, shown in the Advanced group of their tab (66). Gated rows keep their condition. */
+/** Rows absent from the inventory, shown in the Advanced group of their tab (67). Gated rows keep their condition. */
 export const ADVANCED_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"model.toolCallLoopGuard.threshold": true,
 	"model.toolCallLoopGuard.exemptTools": true,
@@ -174,6 +180,7 @@ export const ADVANCED_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"plan.defaultOnStartup": true,
 	"plan.autosave": true,
 	"plan.autosaveDir": true,
+	"retry.rateLimitWalksChain": true,
 };
 
 /**

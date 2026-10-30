@@ -226,13 +226,22 @@ export class CollabHostAdapter {
 	#uiReqSeq = 0;
 	#pendingUi = new Map<
 		number,
-		{ request: CollabUiRequest; settle(result: CollabGuestUiResult): void }
+		{
+			request: CollabUiRequest;
+			settle(result: CollabGuestUiResult): void;
+			/** Survives a relay reconnect: the local dialog behind it is still open. */
+			retainOnReconnect?: boolean;
+		}
 	>();
 	#lastStateJson = "";
 	#stateDebounce: Timer | null = null;
 	#streamingInterval: Timer | null = null;
 	#agentsDebounce: Timer | null = null;
 	#stopped = false;
+	/** Set when stop() begins; guest traffic is refused from then on, before teardown finishes. */
+	#stopping = false;
+	/** Bumped on every `message_start`; keys a streaming message's superseding updates. */
+	#messageSeq = 0;
 
 	constructor(port: CollabSessionPort, opts: CollabHostAdapterOptions) {
 		this.#port = port;
@@ -296,11 +305,20 @@ export class CollabHostAdapter {
 		return list;
 	}
 
+	/**
+	 * Mirror a host-side question to writable guests. Set `retainOnReconnect`
+	 * only for a request backed by a local dialog whose lifetime still owns the
+	 * signal: the relay recreating the room (a transport reconnect) then keeps
+	 * the request, and a writer that rejoins is handed it again. Without it the
+	 * request settles `unavailable` on a recreate. Stop and session replacement
+	 * always discard it.
+	 */
 	requestGuestUi(
 		request: CollabUiRequestDraft,
 		signal?: AbortSignal,
+		options?: { retainOnReconnect?: boolean },
 	): Promise<CollabGuestUiResult> | null {
-		if (!this.#socket || !this.#hasWritablePeers()) return null;
+		if (!this.#admitGuestTraffic() || !this.#hasWritablePeers()) return null;
 		const reqId = ++this.#uiReqSeq;
 		const fullRequest: CollabUiRequest = { ...request, reqId };
 		const { promise, resolve } = Promise.withResolvers<CollabGuestUiResult>();
@@ -316,7 +334,11 @@ export class CollabHostAdapter {
 		const onAbort = (): void => settle({ kind: "unavailable" });
 		if (signal?.aborted) return Promise.resolve({ kind: "unavailable" });
 		signal?.addEventListener("abort", onAbort, { once: true });
-		this.#pendingUi.set(reqId, { request: fullRequest, settle });
+		this.#pendingUi.set(reqId, {
+			request: fullRequest,
+			settle,
+			retainOnReconnect: options?.retainOnReconnect,
+		});
 		this.#sendWritablePeers({ t: "ui-request", request: fullRequest });
 		return promise;
 	}
@@ -387,6 +409,7 @@ export class CollabHostAdapter {
 				firstOpen.resolve();
 			}
 		};
+		socket.onRoomRecreated = () => this.#handleRoomRecreated();
 		socket.onFrame = (frame, fromPeer) => this.#handleFrame(frame, fromPeer);
 		socket.onControl = (msg) => {
 			if (msg.t === "peer-left") this.#handlePeerLeft(msg.peer);
@@ -424,8 +447,16 @@ export class CollabHostAdapter {
 		}
 
 		this.#unsubscribe = this.#port.subscribe((event) => {
-			if (isWireAgentEvent(event))
-				this.#broadcast({ t: "event", event: serializeReplicatedEvent(event).value });
+			if (event.type === "message_start") this.#messageSeq++;
+			if (isWireAgentEvent(event)) {
+				// Each update carries the whole message so far, so a newer one supersedes
+				// any still queued for the same message; keyed per message so one message's
+				// last update is never superseded by the next one's.
+				this.#broadcast(
+					{ t: "event", event: serializeReplicatedEvent(event).value },
+					event.type === "message_update" ? `message_update:${this.#messageSeq}` : undefined,
+				);
+			}
 			this.#onEventForState(event);
 		});
 		// Port contract: one subscribeBus call covers BOTH task channels
@@ -448,7 +479,8 @@ export class CollabHostAdapter {
 
 	/** Sends {t:"bye",reason} then tears down (unsubscribe, clear taps/timers, settle pending ui, close socket, status → null). */
 	async stop(reason: string): Promise<void> {
-		if (this.#stopped) return;
+		if (this.#stopped || this.#stopping) return;
+		this.#stopping = true;
 		const socket = this.#socket;
 		socket?.send({ t: "bye", reason });
 		// teardown's socket.close() drops seals still pending on the async chain,
@@ -497,17 +529,31 @@ export class CollabHostAdapter {
 		(this.#port as CollabSessionPort & { onEntryAppended(cb: null): void }).onEntryAppended(null);
 	}
 
-	#broadcast(frame: CollabFrame): void {
-		if (this.#stopped || !this.#socket) return;
-		if (this.#port.getSessionId() !== this.#sessionId) {
-			void this.stop("session switched");
-			this.#port.emitNotice("warning", "Collab ended: session switched", "collab");
-			return;
-		}
-		this.#socket.send(frame);
+	/**
+	 * Whether this room may still serve guests: it is not ending and the session
+	 * it mirrors is still the active one. A session that moved on ends the room,
+	 * once, so no guest frame or broadcast ever reaches a session this room never
+	 * shared.
+	 */
+	#admitGuestTraffic(): boolean {
+		if (this.#stopped || this.#stopping || !this.#socket) return false;
+		if (this.#port.getSessionId() === this.#sessionId) return true;
+		void this.stop("session switched");
+		this.#port.emitNotice("warning", "Collab ended: session switched", "collab");
+		return false;
+	}
+
+	/** `latestKey` queues the frame as the newest state under that key, replacing any still-queued older one. */
+	#broadcast(frame: CollabFrame, latestKey?: string): void {
+		if (!this.#admitGuestTraffic()) return;
+		if (latestKey === undefined) this.#socket?.send(frame);
+		else this.#socket?.sendLatest(latestKey, frame);
 	}
 
 	#handleFrame(frame: CollabFrame, fromPeer: number): void {
+		// Inbound frames act on the mirrored session (join snapshots, prompts,
+		// aborts, agent control); none may reach a session this room never shared.
+		if (!this.#admitGuestTraffic()) return;
 		switch (frame.t) {
 			case "hello":
 				this.#handleHello(frame.name, frame.proto, frame.writeToken, fromPeer);
@@ -675,7 +721,15 @@ export class CollabHostAdapter {
 			this.#rejectReadOnly("responding to ask", fromPeer);
 			return;
 		}
-		this.#pendingUi.get(reqId)?.settle({ kind: "answered", value, by: peer.name, peer: fromPeer });
+		const pending = this.#pendingUi.get(reqId);
+		if (pending) {
+			pending.settle({ kind: "answered", value, by: peer.name, peer: fromPeer });
+			return;
+		}
+		// Already settled (or never existed): a writer that rejoined after the
+		// broadcast `ui-request-end` resends its answer and would otherwise wait
+		// forever, so end its dialog directly.
+		this.#socket?.send({ t: "ui-request-end", reqId }, fromPeer);
 	}
 
 	#handlePrompt(text: string, images: ImageContent[] | undefined, fromPeer: number): void {
@@ -703,14 +757,39 @@ export class CollabHostAdapter {
 			.catch((err) => console.warn("collab guest abort failed", { error: String(err) }));
 	}
 
+	/**
+	 * The relay recreated the room and reissues peer ids from 1, so every id in
+	 * {@link #peers} is meaningless, and `#peers` is the permission registry: left
+	 * populated, whoever takes a reissued id would inherit the `canWrite` of the
+	 * guest that held it. Runs before the socket reports the open. Requests marked
+	 * `retainOnReconnect` stay pending and are replayed to a writer that says
+	 * hello again; the rest settle unavailable.
+	 */
+	#handleRoomRecreated(): void {
+		if (this.#stopped) return;
+		if (this.#peers.size === 0 && this.#pendingUi.size === 0) return;
+		// Identities first: settle() fans `ui-request-end` out over #peers, and those
+		// ids belong to the room that just went away.
+		this.#peers.clear();
+		for (const pending of [...this.#pendingUi.values()]) {
+			if (!pending.retainOnReconnect) pending.settle({ kind: "unavailable" });
+		}
+		this.#opts.onStatusChange?.(this.status);
+		this.#scheduleStateBroadcast();
+	}
+
 	#handlePeerLeft(peer: number): void {
-		const name = this.#peers.get(peer)?.name;
+		const left = this.#peers.get(peer);
 		this.#peers.delete(peer);
-		if (name) this.#port.emitNotice("info", `${name} left the collab session`, "collab");
+		// Relay controls arrive outside the normal frame handler.
+		if (!this.#admitGuestTraffic()) return;
+		if (left) this.#port.emitNotice("info", `${left.name} left the collab session`, "collab");
 		// Dialogs are broadcast to every writable guest, so the remaining
-		// answerers already hold them. With none left, settle them unavailable
-		// so the caller re-routes to the web dialog or ends it.
-		if (!this.#hasWritablePeers()) {
+		// answerers already hold them. With the last writer gone, settle them
+		// unavailable so the caller re-routes to the web dialog or ends it. A
+		// reader leaving changes nothing: it never held a dialog, and a request
+		// retained across a reconnect waits for its writer to come back.
+		if (left?.canWrite && !this.#hasWritablePeers()) {
 			for (const pending of [...this.#pendingUi.values()]) pending.settle({ kind: "unavailable" });
 		}
 		this.#opts.onStatusChange?.(this.status);

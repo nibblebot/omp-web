@@ -144,7 +144,7 @@ export const SDK_BUILTINS: readonly SdkBuiltin[] = [
 	{
 		name: "prewalk",
 		description: "Arm, restart, or cancel prewalk",
-		hint: "[restart|off]",
+		hint: "[into] | restart [from] [into] | off",
 		subcommands: ["restart", "off"],
 		sdkHandled: true,
 	},
@@ -292,7 +292,18 @@ export const SDK_BUILTINS: readonly SdkBuiltin[] = [
 		hint: "[revision]",
 		sdkHandled: false,
 	},
-	{ name: "hub", description: "Use the Activities panel (Alt+A)", sdkHandled: false },
+	{
+		name: "local",
+		description: "Open a session local:// file in $EDITOR (picker when no name given)",
+		hint: "[name]",
+		sdkHandled: false,
+	},
+	{
+		name: "hub",
+		aliases: ["subagents"],
+		description: "Use the Activities panel (Alt+A)",
+		sdkHandled: false,
+	},
 	{
 		name: "branch",
 		aliases: ["rewind"],

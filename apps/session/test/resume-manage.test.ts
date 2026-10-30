@@ -224,6 +224,31 @@ describe("resume-manage rename", () => {
 		expect(listed?.title).toBe("Picker title");
 	});
 
+	test("a session leased by another writer is refused and keeps its title", async () => {
+		const root = tempDir("omp-manage-rename-owned-");
+		const id = crypto.randomUUID();
+		const file = journal(root, id);
+		const before = readFileSync(file, "utf8");
+		const held = tryAcquireSessionLease(id);
+		try {
+			await expect(
+				renameResumeSession(
+					{ sessionFile: file, title: "Blocked" },
+					{ sessionsRoot: root, unpin: async () => {} },
+				),
+			).rejects.toThrow(/owned by another writer/);
+		} finally {
+			held?.release();
+		}
+		expect(readFileSync(file, "utf8")).toBe(before);
+		// The refusal must not leave a lease behind: the same rename succeeds once released.
+		const result = await renameResumeSession(
+			{ sessionFile: file, title: "Allowed" },
+			{ sessionsRoot: root, unpin: async () => {} },
+		);
+		expect(result.title).toBe("Allowed");
+	});
+
 	test("a journal outside the one-level project layout is refused and kept", async () => {
 		const root = tempDir("omp-manage-layout-");
 		const id = crypto.randomUUID();

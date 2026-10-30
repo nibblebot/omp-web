@@ -185,6 +185,13 @@ export const inputParams = {
 	placeholder: "feature/overlay-stories",
 };
 
+/** An `input` request with the SDK's `secret` option: the field is masked. */
+export const secretInputParams = {
+	title: "API token for the staging registry",
+	placeholder: "paste the token",
+	secret: true,
+};
+
 export const editorParams = {
 	title: "Edit the handoff note",
 	prefill:

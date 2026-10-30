@@ -12,8 +12,14 @@ import { ToolCardShell } from "./ToolCardShell";
  *  remembered order (createStableSubagentOrder). Rows open the agent pane; the header totals the whole fan-out. */
 export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 	const description = () => {
-		const args = props.item.args as { description?: string; task?: string; prompt?: string } | null;
-		return args?.description ?? args?.task ?? args?.prompt ?? "";
+		const args = props.item.args as {
+			description?: string;
+			task?: string;
+			taskFile?: string;
+			prompt?: string;
+		} | null;
+		// `task.file` replaces `task` with `taskFile` (a path) on a call.
+		return args?.description ?? args?.task ?? args?.taskFile ?? args?.prompt ?? "";
 	};
 	const order = createStableSubagentOrder();
 	// One evaluation per forest build, shared by every read below; a card whose agents did not change gets

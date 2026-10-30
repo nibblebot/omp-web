@@ -2,6 +2,7 @@ import { For, Show, type Component } from "solid-js";
 import {
 	answersOf,
 	askDetails,
+	noteLabel,
 	questionViews,
 	type AskArgsQuestion,
 } from "../../../chat/ask-answers";
@@ -74,7 +75,7 @@ export const AskToolCard: Component<{ item: ToolItem }> = (props) => {
 						</Show>
 						<Show when={q.answer?.note}>
 							<div class="ask-tool-answer">
-								<span class="ask-tool-answer-label">Note</span>
+								<span class="ask-tool-answer-label">{noteLabel(q.answer?.noteOption)}</span>
 								<span class="ask-tool-answer-text">{q.answer?.note}</span>
 							</div>
 						</Show>

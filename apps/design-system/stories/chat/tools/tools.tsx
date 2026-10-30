@@ -22,6 +22,7 @@ import { ShellCommand } from "../../../../web/components/chat/tools/ShellCommand
 import {
 	editToolItem,
 	askCustomTool,
+	askNoteOptionTool,
 	askDoneTool,
 	askErrorTool,
 	askMultiTool,
@@ -66,6 +67,7 @@ import {
 	readRunningTool,
 	taskDoneTool,
 	taskErrorTool,
+	taskFileTool,
 	taskPendingTool,
 	taskRunningTool,
 	taskStageSubagentMap,
@@ -78,6 +80,7 @@ import {
 	waitSettledTool,
 	webSearchDoneTool,
 	webSearchErrorTool,
+	webSearchFallbackNoteTool,
 	webSearchNoLinksTool,
 	webSearchRunningTool,
 } from "../../../fixtures/tools";
@@ -306,6 +309,11 @@ const stories: Story[] = [
 				render: () => <AskToolCard item={askCustomTool} />,
 			},
 			{
+				name: "Answered with a note on an option",
+				description: 'The note label names the option it was attached to ("Note on <option>").',
+				render: () => <AskToolCard item={askNoteOptionTool} />,
+			},
+			{
 				name: "Two questions, multi-select",
 				render: () => <AskToolCard item={askMultiTool} />,
 			},
@@ -508,6 +516,12 @@ const stories: Story[] = [
 				render: () => <TaskToolCard item={taskPendingTool} />,
 			},
 			{
+				name: "Task file call",
+				description:
+					"`task.file` call: no `task` text, so the card is labelled by the `taskFile` path.",
+				render: () => <TaskToolCard item={taskFileTool} />,
+			},
+			{
 				name: "Running, agents report their stage",
 				description:
 					"Each running row leads with the agent's own current step (from its periodic completion probe), then the tool in flight; needs the live preview display setting.",
@@ -556,6 +570,12 @@ const stories: Story[] = [
 		variants: [
 			{ name: "Running", render: () => <WebSearchToolCard item={webSearchRunningTool} /> },
 			{ name: "Result with links", render: () => <WebSearchToolCard item={webSearchDoneTool} /> },
+			{
+				name: "Fallback provider note",
+				description:
+					"The leading `Note:` line renders as muted text; URLs inside it are not result links.",
+				render: () => <WebSearchToolCard item={webSearchFallbackNoteTool} />,
+			},
 			{
 				name: "No links (generic fallback)",
 				render: () => <WebSearchToolCard item={webSearchNoLinksTool} />,

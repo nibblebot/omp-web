@@ -53,6 +53,28 @@ describe("jobWidgetGlance", () => {
 		).toEqual({ text: "186 tok/s", label: "decode", trend: { text: "▲ 15%", tone: "success" } });
 	});
 
+	test("widens a headline that restates the meter's numerator to the meter's whole", () => {
+		const meter = { kind: "meter" as const, label: "trials", value: 140 / 190, text: "140/190" };
+		expect(
+			jobWidgetGlance(view({ headline: { text: "140", label: "done" }, blocks: [meter] })),
+		).toEqual({
+			text: "140/190",
+			label: "done",
+		});
+		// A headline that is not the meter's numerator, or a meter with no `/ total`, stays as written.
+		expect(jobWidgetGlance(view({ headline: { text: "14" }, blocks: [meter] }))).toEqual({
+			text: "14",
+		});
+		expect(jobWidgetGlance(view({ headline: { text: "186 tok/s" }, blocks: [meter] }))).toEqual({
+			text: "186 tok/s",
+		});
+		expect(
+			jobWidgetGlance(
+				view({ headline: { text: "140" }, blocks: [{ ...meter, text: "140 of 190" }] }),
+			),
+		).toEqual({ text: "140" });
+	});
+
 	test("falls back to the latest figure of the first spark with data or the first meter", () => {
 		expect(jobWidgetGlance(view({ blocks: [spark([]), spark([1, 4])] }))).toEqual({
 			text: "4 tok/s",

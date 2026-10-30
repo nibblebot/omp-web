@@ -80,6 +80,7 @@ function stubEntry(sessionId: string): { entry: SessionEntry; state: { id: strin
 		clearQueue: () => ({ steering: [], followUp: [] }),
 		getEnabledToolNames: () => [],
 		getMountedXdevToolNames: () => [],
+		getAllToolNames: () => [],
 		setPlanProposalHandler: () => {},
 		abort: async () => {
 			log.push("abort");

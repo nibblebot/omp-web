@@ -264,6 +264,8 @@ interface ConfirmDialogParams {
 interface InputDialogParams {
 	title: string;
 	placeholder?: string;
+	/** The SDK's `secret` dialog option: the typed value is masked and never shown to guests. */
+	secret?: true;
 }
 interface EditorDialogParams {
 	title: string;
@@ -309,6 +311,8 @@ function mapUiMethodToCollab(method: string, params: unknown): CollabUiRequestDr
 		case "input": {
 			// Shape fixed by buildUiContext's input call site.
 			const p = params as InputDialogParams;
+			// Guests answer through a plaintext editor; a secret input is the host's alone.
+			if (p.secret) return null;
 			return { kind: "editor", title: p.title, prefill: p.placeholder };
 		}
 		case "editor": {
@@ -517,9 +521,12 @@ export function buildUiContext(entry: SessionEntry): ExtensionUIContext {
 		confirm: async (title, message, dialogOptions) =>
 			Boolean(await uiRequest(entry, "confirm", { title, message }, dialogOptions)),
 		input: (title, placeholder, dialogOptions) =>
-			uiRequest(entry, "input", { title, placeholder }, dialogOptions) as Promise<
-				string | undefined
-			>,
+			uiRequest(
+				entry,
+				"input",
+				{ title, placeholder, ...(dialogOptions?.secret ? { secret: true } : {}) },
+				dialogOptions,
+			) as Promise<string | undefined>,
 		editor: (title, prefill, dialogOptions) =>
 			uiRequest(entry, "editor", { title, prefill }, dialogOptions) as Promise<string | undefined>,
 		askDialog: (questions, dialogOptions) =>

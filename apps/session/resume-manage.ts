@@ -72,18 +72,12 @@ export async function renameResumeSession(
 		return { renamed: true, sessionId: target.sessionId, title };
 	}
 	await assertListed(deps.sessionsRoot, target.sessionFile);
-	// Probe the lease only: the SDK writer claims ownership itself while the journal is open.
-	const probe = tryAcquireSessionLease(target.sessionId);
-	if (!probe) throw new Error("Session is owned by another writer");
-	probe.release();
-	const manager = await SessionManager.open(target.sessionFile);
-	try {
-		await manager.setSessionName(title, "user");
-		await manager.flush();
-	} finally {
-		await manager.close();
-	}
-	return { renamed: true, sessionId: target.sessionId, title };
+	// The SDK holds the session lease from before the load until the write, so a concurrent
+	// appender cannot leave the title entry parented to a stale leaf. Null means no rename
+	// happened: leased by another process, or the journal could not take the name.
+	const stored = await SessionManager.renameSessionTitle(target.sessionFile, title);
+	if (stored === null) throw new Error("Session is owned by another writer");
+	return { renamed: true, sessionId: target.sessionId, title: stored };
 }
 
 export async function deleteResumeSession(

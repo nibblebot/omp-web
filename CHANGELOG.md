@@ -11,6 +11,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - `omp-web ui` bridges `/ws` beside `/callback/ws`, pauses the upstream while more than 1 MiB sits unsent to the browser, passes the control plane's typed closes through, and closes 4503 when the control plane is unreachable.
 - Workspace labels are removed, within unreleased OMP_PROTO 5 with no version bump. Gone: the CLI `omp-web spawn --label` and `omp-web add-repo --labels` flags, the `labels` column of the `omp-web sessions` table, the `labels` field of `POST /ctl/spawn`, `POST /ctl/projects` and the browser `spawn` command (an old client that still sends it has the field ignored), the `labels` field on roster entries, the `label:k=v` and `tag:k=v` selectors (such a selector is now an ordinary name glob), and the label chips in the sidebar and the Process details dialog. The `{labels}` spawn-template placeholder is removed too: delete it from a custom template in `config.json` or `OMP_FLEET_LOCAL_TEMPLATE`, where it would now be passed through as the literal text `{labels}`. A `labels` key in an existing fleet state file is dropped on load and is gone after the next write. Reload open browser tabs after upgrading between pre-release builds.
 - `omp-web add-repo` is renamed `omp-web add-project`, with no alias, because a project no longer has to be a git repository (`kxnj`).
+- Bun 1.4.4 or newer is required (the SDK's engine floor since 18.13.3); the installer refuses an older Bun.
 
 ### Android and installable web app (`017t`)
 - Installable web app (`dfja`): a web app manifest (standalone, start URL `/`), 192, 512 and maskable icons, and a `theme-color` that follows the active theme. A notification-only service worker (no fetch handler, no offline cache) shows session alerts on Android Chrome, where `new Notification()` is unavailable; tapping one opens or focuses the app on that session. Links in rendered messages open in a new tab, so following one never leaves the installed app. The fleet serves the shell, manifest and worker `Cache-Control: no-cache` and hashed assets for a year, and the connection strip offers Reload when the page is older than the server. Install needs a secure context: README, "Android and installing as an app".
@@ -62,6 +63,16 @@ Fixes from the frontend performance audit (`90nc`, items FP01-FP28). Wire change
 
 ### Fixes
 - A bwrap clone starts when `bun` is installed under the operator's home (the default `~/.bun/bin/bun`). The sandbox masks the home directory and bound only system roots and the runtime package, so the runtime binary was missing inside it (`execvp ... No such file or directory`). The runtime binary is now bound read-only as a single file when no other mount covers it; one inside the ssh directory, fleet or provider state, or an agent or container socket is refused (`qr30`).
+- Collab: a long streamed answer no longer ends the room for every guest with "collab send backlog exceeded its limit" (only the latest state of a streaming message is queued); guest frames that arrive after the session switched are refused and end the room once; a relay room recreate drops stale peer ids, so they lose write access.
+- Extension input dialogs that ask for a secret (`ctx.ui.input(..., { secret: true })`) render a masked field and are never offered to collab guests, whose answer path would carry the value in plain text.
+- The ask card names the option a note is on ("Note on X").
+- BTW: a follow-up on a topic saved by the terminal UI with images sends those images again, as the TUI does, and BTW lists no longer carry image payloads to the browser.
+- Approving a plan from the review panel keeps tools that extensions registered after plan mode started.
+- Renaming a non-attached session from the resume list holds its lease through the write, so a session another process opens meanwhile is refused instead of forked.
+- A session whose configured default model is unavailable shows a warning naming the fallback model.
+- Web search cards show a fallback provider's note as text instead of listing URLs from its failure reasons as results; task cards label a task-file call by its file; a job glance shows `140/190` instead of a bare `140` beside its meter.
+- The HTML export consent says the file loads its viewer from the network.
+- Settings: the SDK's new Prewalk from/into, Restricted Folders, xd:// mount notices and Task file rows show in their tabs, rate-limit chain walking is under Advanced, and terminal-only rows (advisor collapsed lines, resume worktree scope, print wake, extension assistant-text renderers, extension mode control, `out://` replies) stay hidden.
 
 ### Infra remediation (kfg5)
 Fleet, session, and wire fixes from the infra audit (`kfg5`). Wire is OMP_PROTO 4. OMP_PROTO 4 removes uncalled session methods and state fields as well as adding frames (see the protocol note in `lib/wire/protocol.ts`). A fleet behind a trusted proxy requires the proxy to append the client to `X-Forwarded-For`; see the README.
@@ -306,7 +317,7 @@ Fleet, session, and wire fixes from the infra audit (`kfg5`). Wire is OMP_PROTO 
 - Remove the optional benchmark harness, its `bench` command, and local benchmark outputs; ordinary test execution is unchanged.
 - Use direct repository-basename worktree paths without `.omp-web-repo` markers or basename collision detection; existing targets remain rejected.
 - Make development auth broker management opt-in via `bun run dev --auth-broker`; default dev starts only the fleet and Vite and preserves explicitly configured broker environment variables and provider-profile secret references.
-- Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.12.6.
+- Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.14.0.
 - Fleet lifecycle output: a wake prints two lines (`respawn --resume template=…`, then `ready <endpoint> pid <n>`) instead of seven; the event ring drops the sub-second spawning/connecting/session/resolving ladder steps and the separate endpoint line, a stop is one `stop (exit …)` line, and `bun run dev` no longer doubles the `fleet:` prefix.
 - Migrate live settings to SDK registry handles and provider authentication to the namespaced OAuth login and effective credential-source APIs, preserving settings scope and browser login dialogs.
 - Overlay taxonomy: `Modal` names only the `ui/Modal.tsx` primitive; components carry role suffixes (`*Dialog` centered, `*Sheet` side sheet, `*Lightbox`, `*Picker`, shell-less `*Panel`), with matching CSS class renames. The narrow-viewport sidebar scrim moved from `App.tsx` into `FleetSidebar`. See AGENTS.md.

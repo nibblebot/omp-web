@@ -15,6 +15,8 @@ type Review = PlanReviewDto & {
 type Runtime = {
 	enabled: string[];
 	mounted: string[];
+	/** Every tool name at install, so the restore keeps tools an extension registered later. */
+	registered: string[];
 	stopPending: boolean;
 	tail: Promise<unknown>;
 };
@@ -97,6 +99,7 @@ export function installPlanReviewHandler(entry: SessionEntry): () => void {
 	const state: Runtime = {
 		enabled: session.getEnabledToolNames().filter((name) => !name.startsWith("mcp__")),
 		mounted: session.getMountedXdevToolNames().filter((name) => !name.startsWith("mcp__")),
+		registered: session.getAllToolNames(),
 		stopPending: false,
 		tail: Promise.resolve(),
 	};
@@ -238,7 +241,11 @@ export function createPlanReviewMethods(): Record<
 						fail("not_eligible", "Execution role is not configured");
 					await session.runModeExitTeardown(async () => {
 						const state = runtime(entry);
-						await session.restoreNonMCPToolPresentation(state.enabled, state.mounted);
+						await session.restoreNonMCPToolPresentation(
+							state.enabled,
+							state.mounted,
+							state.registered,
+						);
 						session.setPlanModeState(undefined);
 						if (role) await session.applyRoleModel(role);
 						if (next.context === "reset") await session.resetSessionContext();

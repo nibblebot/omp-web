@@ -22,7 +22,7 @@
 // Secrets/tokens never appear in DTOs/logs here. stdout stays reserved for
 // OMP_SESSION| lines; log via stderr only.
 
-import type { AssistantMessage, Message, Model } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import {
 	BtwHistoryStore,
@@ -32,29 +32,34 @@ import {
 	type BtwHistoryRecord,
 	type BtwHistoryTurn,
 } from "@oh-my-pi/pi-coding-agent/session/btw-history";
+import {
+	beginBtwTurn,
+	patchLatestBtwTurn,
+	runBtwTurn,
+} from "@oh-my-pi/pi-coding-agent/session/btw-turn";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake, prompt, toError } from "@oh-my-pi/pi-utils";
+import { toError } from "@oh-my-pi/pi-utils";
 
-// The SDK's btw-user prompt body (mirrors the file the BtwController
-// renders): the packaged SDK ships no dist prompt text module, so the body
-// is inlined here and revalidated against the installed SDK source in the
-// C01 ledger. Any render failure falls back to the raw question; both paths
-// stay ephemeral side context, never transcript.
-const BTW_USER_PROMPT = `<btw>
-Ephemeral side question for current interactive session.
-Answer briefly, directly; use conversation context already provided.
-NEVER use tools.
-NEVER ask follow-up questions.
-Question:
-{{question}}
-</btw>`;
+/** Wire shape of one saved turn. Attached images (base64 payloads) never ride
+ * the wire; `imageCount` says how many the turn carries. */
+export type BtwTurnDto = Omit<BtwHistoryTurn, "images"> & { imageCount?: number };
 
-function renderBtwPrompt(question: string): string {
-	try {
-		return prompt.render(BTW_USER_PROMPT, { question });
-	} catch {
-		return question;
-	}
+/** Wire shape of one saved record (see {@link BtwTurnDto}). */
+export type BtwRecordDto = Omit<BtwHistoryRecord, "images" | "followUps"> & {
+	imageCount?: number;
+	followUps?: BtwTurnDto[];
+};
+
+function toBtwTurnDto<T extends BtwHistoryTurn>(
+	turn: T,
+): Omit<T, "images"> & { imageCount?: number } {
+	const { images, ...rest } = turn;
+	return images?.length ? { ...rest, imageCount: images.length } : rest;
+}
+
+function toBtwRecordDto(record: BtwHistoryRecord): BtwRecordDto {
+	const { followUps, ...rest } = toBtwTurnDto(record);
+	return followUps ? { ...rest, followUps: followUps.map(toBtwTurnDto) } : rest;
 }
 
 /** Stable cursor for record-list paging (stable ids, never list indexes). */
@@ -64,7 +69,7 @@ export interface BtwPageCursor {
 }
 
 export interface BtwRecordPage {
-	records: BtwHistoryRecord[];
+	records: BtwRecordDto[];
 	total: number;
 	nextAfter?: string;
 }
@@ -120,7 +125,7 @@ function pageRecords(records: readonly BtwHistoryRecord[], cursor?: BtwPageCurso
 		start = at === -1 ? total : at + 1;
 	}
 	const slice = records.slice(start, start + limit);
-	const page: BtwRecordPage = { records: [...slice], total };
+	const page: BtwRecordPage = { records: slice.map(toBtwRecordDto), total };
 	if (start + slice.length < total && slice.length > 0) {
 		page.nextAfter = slice[slice.length - 1]!.id;
 	}
@@ -158,40 +163,6 @@ function assistantMessageWithReplyText(
 	}
 	if (!replacedText) content.push({ type: "text", text: replyText });
 	return { ...assistantMessage, content, providerPayload: undefined };
-}
-
-/** Zero-usage side context for a follow-up turn (mirrors BtwController's
- * history build): saved BTW text re-enters as context messages, never as new
- * billed turns, and never touches the transcript. */
-function buildFollowUpHistory(turns: readonly BtwHistoryTurn[], model: Model): Message[] {
-	const history: Message[] = [];
-	for (const turn of turns) {
-		history.push({
-			role: "user",
-			content: [{ type: "text", text: renderBtwPrompt(turn.question) }],
-			attribution: "agent",
-			timestamp: turn.createdAt,
-		});
-		if (!turn.answer) continue;
-		history.push({
-			role: "assistant",
-			content: [{ type: "text", text: turn.answer }],
-			api: model.api,
-			provider: model.provider,
-			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			stopReason: "stop",
-			timestamp: turn.updatedAt,
-		});
-	}
-	return history;
 }
 
 interface ActiveTurn {
@@ -298,7 +269,7 @@ export class BtwHistoryService {
 		session: AgentSession,
 		question: string,
 		options: BtwTurnOptions & { recordId?: string } = {},
-	): Promise<BtwHistoryRecord> {
+	): Promise<BtwRecordDto> {
 		const trimmed = question.trim();
 		if (!trimmed) throw new Error("BTW question must not be empty.");
 		if (options.signal?.aborted) throw new Error("BTW turn aborted before it started.");
@@ -316,8 +287,7 @@ export class BtwHistoryService {
 				throw new Error("This side conversation is still running.");
 			}
 		}
-		const model = session.model;
-		if (!model) throw new Error("No active model available for /btw.");
+		if (!session.model) throw new Error("No active model available for /btw.");
 		const initialLeafId = manager.getLeafId();
 		this.#starting = true;
 		try {
@@ -329,27 +299,7 @@ export class BtwHistoryService {
 			this.#starting = false;
 		}
 		const leafId = manager.getLeafId();
-		const now = Date.now();
-		const turn: BtwHistoryTurn = {
-			question: trimmed,
-			answer: "",
-			status: "running",
-			createdAt: now,
-			updatedAt: now,
-		};
-		const record: BtwHistoryRecord = previous
-			? { ...previous, followUps: [...(previous.followUps ?? []), turn] }
-			: { ...turn, id: Snowflake.next(), leafId };
-		const history = previous ? getBtwTurns(previous) : undefined;
-		// A cancelled/failed transport may still be unwinding. Start a fresh
-		// lineage after that boundary, while successful follow-ups share one.
-		let lastNonComplete = -1;
-		if (history) {
-			for (let index = 0; index < history.length; index++) {
-				if (history[index]!.status !== "complete") lastNonComplete = index;
-			}
-		}
-		const conversationKey = `btw:${record.id}:${lastNonComplete + 1}`;
+		const { record, history, conversationKey } = beginBtwTurn(trimmed, leafId, previous);
 		const abort = new AbortController();
 		const onExternalAbort = (): void => {
 			abort.abort(options.signal?.reason);
@@ -365,13 +315,10 @@ export class BtwHistoryService {
 				await this.#settleRunning(record.id, { status: "cancelled", updatedAt: Date.now() });
 				throw new Error("BTW turn aborted before it started.");
 			}
-			const { replyText, assistantMessage } = await session.runEphemeralTurn({
-				promptText: renderBtwPrompt(trimmed),
-				history: history ? buildFollowUpHistory(history, model) : undefined,
+			const { replyText, assistantMessage } = await runBtwTurn(session, {
+				question: trimmed,
+				history,
 				conversationKey,
-				// Answers are read in full and saved: keep the repeated-line
-				// collapse, not the 4 KiB cap meant for one-liners.
-				replyMaxBytes: Number.POSITIVE_INFINITY,
 				onTextDelta: (delta) => {
 					partialAnswer += delta;
 					options.onDelta?.(delta);
@@ -389,7 +336,7 @@ export class BtwHistoryService {
 					assistantMessageWithReplyText(assistantMessage, replyText),
 				);
 			}
-			return settled ?? this.findRecord(record.id)!;
+			return toBtwRecordDto(settled ?? this.findRecord(record.id)!);
 		} catch (error) {
 			const cancelled = abort.signal.aborted || options.signal?.aborted;
 			await this.#settleRunning(record.id, {
@@ -410,15 +357,15 @@ export class BtwHistoryService {
 	 * checkpoint `cancelled`. Saved turns are preserved; resolving a stopped
 	 * turn is a no-op for the already-terminal record (never a conflict).
 	 */
-	async cancelBtwTurn(recordId: string): Promise<BtwHistoryRecord | undefined> {
+	async cancelBtwTurn(recordId: string): Promise<BtwRecordDto | undefined> {
 		const record = this.findRecord(recordId);
 		if (!record) throw new Error(`BTW record not found: ${recordId}`);
-		if (getBtwLatestTurn(record).status !== "running") return record;
+		if (getBtwLatestTurn(record).status !== "running") return toBtwRecordDto(record);
 		const active = this.#active.get(recordId);
 		if (!active) throw new Error("This BTW turn belongs to another writer; reopen history.");
 		active.abort.abort();
 		// The owning request checkpoints partial text after its transport settles.
-		return record;
+		return toBtwRecordDto(record);
 	}
 
 	/**
@@ -495,8 +442,8 @@ export class BtwHistoryService {
 	 * with the server-held ephemeral assistant message, after verifying
 	 * persisted (store.flush ok), idle (not streaming), unchanged
 	 * identity/leaf pre AND post hooks, and the eligible single-turn shape.
-	 * BTW records carry text only, so there are no attachments to carry (the
-	 * branch holds the Q/A pair verbatim). The Main leaf is unchanged until
+	 * The record's own images (saved by the TUI) ride along so the branch
+	 * holds the Q/A pair verbatim. The Main leaf is unchanged until
 	 * success; the new sessionFile arrives in the result for the caller to
 	 * adopt through the normal switch flow.
 	 */
@@ -532,6 +479,7 @@ export class BtwHistoryService {
 				assistantMessage,
 				record.leafId,
 				this.#sessionId,
+				record.images?.length ? [...record.images] : undefined,
 			);
 			// branchFromBtw performs pre/post-hook identity and idle gates itself.
 			// A successful promotion intentionally rotates the session identity;
@@ -554,14 +502,7 @@ export class BtwHistoryService {
 	): Promise<BtwHistoryRecord | undefined> {
 		const current = this.findRecord(recordId);
 		if (!current || getBtwLatestTurn(current).status !== "running") return current;
-		const followUps = current.followUps;
-		const next: BtwHistoryRecord = followUps?.length
-			? {
-					...current,
-					followUps: [...followUps.slice(0, -1), { ...followUps[followUps.length - 1]!, ...patch }],
-				}
-			: { ...current, ...patch };
-		await this.#store.upsert(next);
+		await this.#store.upsert(patchLatestBtwTurn(current, patch));
 		return this.findRecord(recordId);
 	}
 }

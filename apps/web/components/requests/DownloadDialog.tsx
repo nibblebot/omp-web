@@ -22,6 +22,9 @@ const PLAINTEXT_NOTE =
 	"Downloads contain full prompts, tool calls, and tool output and may include secrets. " +
 	"Review before sharing. No redaction is applied.";
 
+const HTML_VIEWER_NOTE =
+	"The HTML file loads its viewer from the network (integrity-pinned), so it needs an internet connection to open.";
+
 function fileSizeLabel(bytes?: number): string {
 	if (bytes === undefined) return "";
 	if (bytes < 1024) return `${bytes} B`;
@@ -44,6 +47,9 @@ const ConsentBody: Component<{ consent: DownloadConsent }> = (props) => {
 	return (
 		<div class="download-dialog">
 			<p class="download-warning">{PLAINTEXT_NOTE}</p>
+			<Show when={props.consent.kind === "html" || props.consent.kind === "html-themed"}>
+				<p class="download-note">{HTML_VIEWER_NOTE}</p>
+			</Show>
 			<Show when={props.consent.warnings.length > 0}>
 				<ul class="download-warnings">
 					<For each={props.consent.warnings}>{(w) => <li>{w}</li>}</For>

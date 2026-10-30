@@ -343,6 +343,7 @@ const firstPartyCompat: ResolvedAnthropicCompat = {
 	allowAnthropicHeaderOverrides: false,
 	replayUnsignedThinking: false,
 	requiresThinkingEnabled: false,
+	requiresThinkingPresence: false,
 	escapeBuiltinToolNames: false,
 	signingEndpoint: false,
 	injectClaudeCodeInstruction: false,

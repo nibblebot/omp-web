@@ -214,3 +214,42 @@ describe("approve over the session's browser UI context", () => {
 		}
 	});
 });
+
+describe("secret input", () => {
+	test("is masked for the browser and never offered to collab guests", async () => {
+		const ui = buildUiContext(entry);
+		const requests: unknown[] = [];
+		entry.collab.adapter = {
+			isLive: true,
+			writableGuestCount: 1,
+			hostName: "host",
+			announceDialogAnswered: () => {},
+			requestGuestUi: (draft: unknown) => {
+				requests.push(draft);
+				return Promise.resolve({ kind: "answered", value: "guest", by: "guest", peer: 2 });
+			},
+		} as unknown as CollabHostAdapter;
+		try {
+			const secret = await withBrowser(
+				() => "hunter2",
+				() => ui.input!("Token", "paste it", { secret: true }),
+			);
+			expect(secret).toBe("hunter2");
+			expect(seen[0]).toEqual({
+				method: "input",
+				params: { title: "Token", placeholder: "paste it", secret: true },
+			});
+			expect(requests).toEqual([]);
+
+			// A plain input still reaches the guest as an editor prefill and carries no flag.
+			await withBrowser(
+				() => "web",
+				() => ui.input!("Branch", "feature/x"),
+			);
+			expect(seen[0]?.params).toEqual({ title: "Branch", placeholder: "feature/x" });
+			expect(requests).toEqual([{ kind: "editor", title: "Branch", prefill: "feature/x" }]);
+		} finally {
+			entry.collab.adapter = null;
+		}
+	});
+});

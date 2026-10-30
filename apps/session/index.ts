@@ -340,6 +340,8 @@ function primingFrames(
 		...pendingUiRequestFrames(entry),
 		// The running background jobs' widget glances (nothing while none runs).
 		...jobWidgetPrimeFrames(entry),
+		// The SDK's start-up model-fallback warning, once, to the first client that attaches.
+		...collabSession.takeStartupNoticeFrames(),
 		// Current collab status, so a client attaching to a live room sees it immediately.
 		{
 			type: "collab_status",

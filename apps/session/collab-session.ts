@@ -25,7 +25,7 @@ import {
 	type SubagentProgressPayload,
 } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
-import type { CollabWireStatus } from "#lib/wire/protocol";
+import type { CollabWireStatus, ServerFrame } from "#lib/wire/protocol";
 import { oversizedImageNotice } from "#lib/wire/image-limits";
 import type { CollabAgentRef, CollabHostStatus, CollabSessionPort } from "./collab-host";
 import { type QueuedCommand, drainQueuedCommands } from "./command-queue";
@@ -95,6 +95,11 @@ export interface CollabSession {
 	runCommandNow(entry: SessionEntry, command: QueuedCommand): Promise<void>;
 	/** Test seam: wire a session's event stream to its broadcast/state-resync. */
 	wireSession(entry: SessionEntry): void;
+	/**
+	 * The SDK's model-fallback warning (default model unavailable) as a notice frame for the
+	 * first client priming; empty afterwards and when the session started on the requested model.
+	 */
+	takeStartupNoticeFrames(): ServerFrame[];
 }
 
 export function createCollabSession(deps: CollabSessionDeps): CollabSession {
@@ -325,6 +330,16 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		wireJobWidgets(entry);
 	}
 
+	/** The SDK's start-up model fallback diagnostic, held until a client first attaches. */
+	let startupNotice: string | null = null;
+
+	function takeStartupNoticeFrames(): ServerFrame[] {
+		if (startupNotice === null) return [];
+		const message = startupNotice;
+		startupNotice = null;
+		return [{ type: "event", event: { type: "notice", level: "warning", message } }];
+	}
+
 	async function createSession(sessionCwd: string): Promise<SessionEntry> {
 		const agentRegistry = new AgentRegistry();
 		const eventBus = new EventBus();
@@ -381,6 +396,9 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 				broadcastTo(target.handle, { type: "skills_changed", state }),
 		});
 		installPlanReviewHandler(entry);
+		// Boot has no client yet and a broadcast is never replayed to a fresh stream, so hold
+		// the SDK's model diagnostic until the first priming (takeStartupNoticeFrames).
+		startupNotice = result.modelFallbackMessage ?? null;
 		return entry;
 	}
 
@@ -558,5 +576,6 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		drainCommands,
 		runCommandNow,
 		wireSession,
+		takeStartupNoticeFrames,
 	};
 }

@@ -58,6 +58,8 @@ interface StubRoom {
 
 interface StubRelay {
 	server: Server<StubSocketData>;
+	/** Close every room's host socket (guests stay connected), as a dropped relay connection would. */
+	dropHosts(): void;
 	dispose(): void;
 }
 
@@ -176,6 +178,9 @@ function createStubRelay(options: { maxGuests?: number; orphanTtlMs?: number } =
 
 	return {
 		server,
+		dropHosts() {
+			for (const room of rooms.values()) room.host?.close(1000, "test drop");
+		},
 		dispose() {
 			// clearTimeout is a no-op for undefined handles.
 			for (const room of rooms.values()) clearTimeout(room.ttl ?? undefined);
@@ -907,6 +912,143 @@ describe("CollabHostAdapter", () => {
 		if (err.t !== "error") throw new Error("expected error frame");
 		expect(err.message).toBe("agent control is disabled on a read-only link");
 		expect(port.agentCmds).toHaveLength(2);
+	});
+
+	/** Assistant message carrying `text` so far, in the shape the host replicates for a streaming update. */
+	function assistantMessage(text: string) {
+		return { role: "assistant", content: [{ type: "text", text }], timestamp: 0 };
+	}
+
+	function streamEvent(type: "message_start" | "message_update" | "message_end", text: string) {
+		return { type, message: assistantMessage(text) } as unknown as AgentSessionEvent;
+	}
+
+	function streamedTexts(frames: CollabFrame[]): string[] {
+		const texts: string[] = [];
+		for (const frame of frames) {
+			if (frame.t !== "event" || frame.event.type !== "message_update") continue;
+			const message = frame.event.message as unknown as { content: { text: string }[] };
+			texts.push(message.content[0]!.text);
+		}
+		return texts;
+	}
+
+	test("a long streamed answer coalesces message_update frames instead of overflowing the send backlog", async () => {
+		const guest = await connectGuest(adapter.status!.link, "Eve");
+		guestSockets.push(guest.socket);
+		await waitForWelcome(guest);
+
+		// Emitted synchronously, faster than the socket can seal and write: without
+		// coalescing the queue passes its cap and the room ends for every guest.
+		port.emitEvent(streamEvent("message_start", ""));
+		for (let i = 0; i < 400; i++) port.emitEvent(streamEvent("message_update", `A ${i}`));
+		port.emitEvent(streamEvent("message_start", ""));
+		for (let i = 0; i < 400; i++) port.emitEvent(streamEvent("message_update", `B ${i}`));
+		port.emitEvent(streamEvent("message_end", "B 399"));
+
+		// message_end is never coalesced, so it arrives after every surviving update.
+		await waitFor(() =>
+			guest.frames.find((f) => f.t === "event" && f.event.type === "message_end"),
+		);
+		expect(adapter.isLive).toBe(true);
+		expect(port.notices.filter((n) => n.level === "warning")).toEqual([]);
+		const texts = streamedTexts(guest.frames);
+		expect(texts.length).toBeLessThan(800);
+		// The newest state of each message survives; one message's last update is
+		// never superseded by the next message's.
+		expect(texts).toContain("A 399");
+		expect(texts.at(-1)).toBe("B 399");
+	});
+
+	test("a frame from a guest after the session moved on ends the room instead of acting on the new session", async () => {
+		const guest = await connectGuest(adapter.status!.link, "Eve");
+		guestSockets.push(guest.socket);
+		await waitForWelcome(guest);
+
+		port.sessionId = "session-2";
+		guest.socket.send({ t: "prompt", text: "meant for the old session" });
+		await waitFor(() => (adapter.status === null ? true : undefined));
+		expect(port.prompts).toHaveLength(0);
+		expect(
+			port.notices.some(
+				(n) => n.message === "Collab ended: session switched" && n.level === "warning",
+			),
+		).toBe(true);
+	});
+
+	test("a retained dialog survives a relay reconnect; the writer rejoins, answers, and a late answer is acknowledged", async () => {
+		const guest = await connectGuest(adapter.status!.link, "Uli");
+		guestSockets.push(guest.socket);
+		await waitForWelcome(guest);
+
+		const promise = adapter.requestGuestUi(
+			{ kind: "select", title: "Pick", options: ["A", "B"] },
+			undefined,
+			{ retainOnReconnect: true },
+		);
+		if (!promise) throw new Error("expected a pending dialog");
+		let settled: unknown;
+		void promise.then((result) => {
+			settled = result;
+		});
+		const req = await waitFor(() => guest.frames.find((f) => f.t === "ui-request"));
+		if (req.t !== "ui-request") throw new Error("expected ui-request frame");
+
+		relay.dropHosts();
+		// The reconnect lands in a new room: every old peer id is forgotten.
+		await waitFor(() => (adapter.participantCount === 1 ? true : undefined), 10_000);
+		expect(settled).toBeUndefined();
+
+		// The writer comes back, is welcomed, and is handed the still-open dialog.
+		const writeToken = parseLink(adapter.status!.link).writeToken;
+		guest.frames.length = 0;
+		guest.socket.send({
+			t: "hello",
+			proto: COLLAB_PROTO,
+			name: "Uli",
+			writeToken: writeToken ? Buffer.from(writeToken).toString("base64url") : undefined,
+		});
+		const replayed = await waitFor(() => guest.frames.find((f) => f.t === "ui-request"));
+		if (replayed.t !== "ui-request") throw new Error("expected replayed ui-request frame");
+		expect(replayed.request.reqId).toBe(req.request.reqId);
+
+		guest.socket.send({ t: "ui-response", reqId: req.request.reqId, value: "B" });
+		expect(await promise).toEqual({
+			kind: "answered",
+			value: "B",
+			by: "Uli",
+			peer: expect.any(Number),
+		});
+		await waitFor(() =>
+			guest.frames.find((f) => f.t === "ui-request-end" && f.reqId === req.request.reqId),
+		);
+
+		// A writer that reconnected after the end resends its answer; it must not wait forever.
+		guest.frames.length = 0;
+		guest.socket.send({ t: "ui-response", reqId: req.request.reqId, value: "A" });
+		await waitFor(() =>
+			guest.frames.find((f) => f.t === "ui-request-end" && f.reqId === req.request.reqId),
+		);
+	});
+
+	test("a dialog that does not opt in settles unavailable on a relay reconnect, and old peer ids lose their permissions", async () => {
+		const guest = await connectGuest(adapter.status!.link, "Uli");
+		guestSockets.push(guest.socket);
+		await waitForWelcome(guest);
+
+		const promise = adapter.requestGuestUi({ kind: "select", title: "Pick", options: ["A", "B"] });
+		if (!promise) throw new Error("expected a pending dialog");
+		await waitFor(() => guest.frames.find((f) => f.t === "ui-request"));
+
+		relay.dropHosts();
+		expect(await promise).toEqual({ kind: "unavailable" });
+
+		// The relay reissues peer ids; the guest's old id must not keep its write permission.
+		guest.socket.send({ t: "prompt", text: "from a stale identity" });
+		const err = await waitFor(() => guest.frames.find((f) => f.t === "error"));
+		if (err.t !== "error") throw new Error("expected error frame");
+		expect(err.message).toBe("prompting is disabled on a read-only link");
+		expect(port.prompts).toHaveLength(0);
 	});
 });
 

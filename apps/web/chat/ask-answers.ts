@@ -14,6 +14,8 @@ export type AskAnswer = {
 	selectedOptions?: string[];
 	customInput?: string;
 	note?: string;
+	/** The option the note was attached to (SDK 18.13.1+); absent for a note on the question as a whole. */
+	noteOption?: string;
 	timedOut?: boolean;
 };
 
@@ -26,8 +28,19 @@ export type AskQuestionView = {
 	multi: boolean;
 	options: AskOptionView[];
 	/** Present once the user answered; absent while waiting or after a dismissal. */
-	answer?: { customInput?: string; note?: string; timedOut?: boolean; empty: boolean };
+	answer?: {
+		customInput?: string;
+		note?: string;
+		noteOption?: string;
+		timedOut?: boolean;
+		empty: boolean;
+	};
 };
+
+/** The transcript label for an answer's note: names the option when the note was attached to one. */
+export function noteLabel(noteOption: string | undefined): string {
+	return noteOption === undefined ? "Note" : `Note on ${noteOption}`;
+}
 
 export function askDetails(details: unknown): AskDetails | undefined {
 	return details && typeof details === "object" ? (details as AskDetails) : undefined;
@@ -69,6 +82,7 @@ export function questionViews(args: AskArgsQuestion[], answers: AskAnswer[]): As
 				? {
 						customInput: a.customInput,
 						note: a.note,
+						noteOption: a.noteOption,
 						timedOut: a.timedOut,
 						empty: selected.length === 0 && a.customInput === undefined,
 					}
