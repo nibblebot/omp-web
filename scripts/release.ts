@@ -296,9 +296,57 @@ export function parseGitLog(raw: string): CommitInfo[] {
 		});
 }
 
-/** Deterministic changelog bullets: `- <subject> ([<hash>](<COMMIT_URL><hash>))`. */
+/** Abbreviated commit hash shown in changelog bullets (the link target uses the same prefix). */
+const SHORT_HASH = 8;
+
+/** Deterministic changelog bullets: `- <subject> ([<short hash>](<COMMIT_URL><short hash>))`. */
 export function fallbackBullets(commits: { hash: string; subject: string }[]): string[] {
-	return commits.map((c) => `- ${c.subject} ([${c.hash}](${COMMIT_URL}${c.hash}))`);
+	return commits.map((c) => {
+		const short = c.hash.slice(0, SHORT_HASH);
+		return `- ${c.subject} ([${short}](${COMMIT_URL}${short}))`;
+	});
+}
+
+/** GitHub caps a release body at 125,000 characters; `gh release create` fails above it. */
+export const RELEASE_NOTES_MAX_CHARS = 125_000;
+
+/** Why `notes` cannot be a GitHub release body, or null when it fits. */
+export function notesProblem(notes: string): string | null {
+	return notes.length > RELEASE_NOTES_MAX_CHARS
+		? `release notes are ${notes.length} chars, over GitHub's ${RELEASE_NOTES_MAX_CHARS} limit`
+		: null;
+}
+
+/** GitHub's heading anchor: lowercase, punctuation other than `-`/`_` dropped, spaces to `-`. */
+function headingAnchor(heading: string): string {
+	return heading
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}\s_-]/gu, "")
+		.replace(/\s/g, "-");
+}
+
+/**
+ * GitHub release notes for a curated release. Curated text can outgrow a
+ * release body, so the notes link to its CHANGELOG.md section at the tag (and
+ * the compare view from the previous tag) instead of repeating it, followed by
+ * the commit log.
+ */
+export function curatedNotes(
+	version: string,
+	date: string,
+	prevTag: string | null,
+	log: string,
+): string {
+	const tag = `v${version}`;
+	const changelogUrl = `https://github.com/${GITHUB_REPO}/blob/${tag}/CHANGELOG.md#${headingAnchor(`${tag}, ${date}`)}`;
+	const links = [`The full ${tag} release notes are in [CHANGELOG.md](${changelogUrl}).`];
+	if (prevTag !== null) {
+		links.push(
+			`[Compare ${prevTag}...${tag}](https://github.com/${GITHUB_REPO}/compare/${prevTag}...${tag})`,
+		);
+	}
+	const head = links.join(" ");
+	return log.length > 0 ? `${head}\n\n${log}` : `${head}\n`;
 }
 
 /**
@@ -365,20 +413,27 @@ export function prependChangelog(existing: string, section: string): string {
  * Fold a hand-maintained `## Unreleased` section into the release. The section
  * runs from the first `## Unreleased` heading to the next `## ` heading outside
  * a fenced code block, or to the end. `rest` is the changelog without it, so the
- * heading never survives a release. `section` is the curated body under
- * `## v<version>, <date>`, followed by the commit log (`### Commits`, one
- * `#### <heading>` per non-empty group), or null when there is no such heading
- * or its body is blank (the caller then generates the section from the commits).
+ * heading never survives a release. `log` is the commit log block (`### Commits`,
+ * one `#### <heading>` per non-empty group; empty when no group has a bullet).
+ * `section` is the curated body under `## v<version>, <date>` followed by `log`,
+ * or null when there is no such heading or its body is blank (the caller then
+ * generates the section from the commits).
  */
 export function foldUnreleased(
 	existing: string,
 	version: string,
 	date: string,
 	commitLog: { heading: string; bullets: string[] }[],
-): { section: string | null; rest: string } {
+): { section: string | null; log: string; rest: string } {
+	const logParts: string[] = [];
+	for (const group of commitLog) {
+		const items = bulletLines(group.bullets);
+		if (items.length > 0) logParts.push("", `#### ${group.heading}`, ...items);
+	}
+	const log = logParts.length > 0 ? ["### Commits", ...logParts].join("\n") + "\n" : "";
 	const lines = existing.split("\n");
 	const start = lines.findIndex((line) => /^## Unreleased\s*$/.test(line));
-	if (start === -1) return { section: null, rest: existing };
+	if (start === -1) return { section: null, log, rest: existing };
 	let end = lines.length;
 	let fence: { char: string; length: number } | null = null;
 	for (let i = start + 1; i < lines.length; i++) {
@@ -400,14 +455,9 @@ export function foldUnreleased(
 		.join("\n")
 		.trim();
 	const rest = [...lines.slice(0, start), ...lines.slice(end)].join("\n");
-	if (body.length === 0) return { section: null, rest };
-	const parts = [`## v${version}, ${date}`, "", body];
-	const logGroups = commitLog
-		.map((group) => ({ heading: group.heading, items: bulletLines(group.bullets) }))
-		.filter((group) => group.items.length > 0);
-	if (logGroups.length > 0) parts.push("", "### Commits");
-	for (const group of logGroups) parts.push("", `#### ${group.heading}`, ...group.items);
-	return { section: parts.join("\n") + "\n", rest };
+	if (body.length === 0) return { section: null, log, rest };
+	const head = `## v${version}, ${date}\n\n${body}\n`;
+	return { section: log.length > 0 ? `${head}\n${log}` : head, log, rest };
 }
 
 /** Tab-indented release manifest (same shape the update channel parses). */
@@ -722,6 +772,10 @@ export async function stagedProblems(
 	const notesPath = join(dir, "notes.md");
 	if (!existsSync(manifestPath)) problems.push(`staged manifest missing: ${manifestPath}`);
 	if (!existsSync(notesPath)) problems.push(`staged notes missing: ${notesPath}`);
+	else {
+		const notesTooLong = notesProblem(readFileSync(notesPath, "utf8"));
+		if (notesTooLong !== null) problems.push(`${notesPath}: ${notesTooLong}`);
+	}
 	if (existsSync(manifestPath)) {
 		let manifest: { version?: unknown; tarball?: unknown; sha256?: unknown };
 		try {
@@ -1063,6 +1117,16 @@ async function release(argv: string[]): Promise<void> {
 		section = buildChangelog(draft, groups, version, date);
 	}
 
+	// GitHub release body: a curated section links to CHANGELOG.md and carries
+	// the commit log; --notes-file wins over both. Checked before anything is
+	// written or pushed: an oversize body fails `gh release create` only after
+	// the tag is already on origin.
+	const notes =
+		manualNotes ??
+		(folded.section !== null ? curatedNotes(version, date, prevTag, folded.log) : section);
+	const notesTooLong = notesProblem(notes);
+	if (notesTooLong !== null) fail(`${notesTooLong}; shorten them or pass --notes-file`);
+
 	// 6. Dry run: print the full plan, touch nothing.
 	if (dryRun) {
 		const artifactNames = [
@@ -1081,7 +1145,9 @@ async function release(argv: string[]): Promise<void> {
 		console.log(
 			manualNotes !== null
 				? `release: release notes: manual (${notesFile}, ${manualNotes.length} chars)`
-				: "release: release notes: changelog section",
+				: folded.section !== null
+					? `release: release notes: CHANGELOG.md link + commit log (${notes.length} chars)`
+					: `release: release notes: changelog section (${notes.length} chars)`,
 		);
 		console.log("release: changelog:");
 		console.log(section.replace(/^/gm, "  "));
@@ -1158,7 +1224,7 @@ async function release(argv: string[]): Promise<void> {
 
 	// 11b. Stage mode: write the notes artifact and stop before publishing.
 	if (stage) {
-		writeFileSync(`${ARTIFACT_DIR}notes.md`, manualNotes ?? section);
+		writeFileSync(`${ARTIFACT_DIR}notes.md`, notes);
 		console.log("release: ---- staged (nothing published) ----");
 		console.log(`release: tag ${tag} ready; artifacts in ${ARTIFACT_DIR}`);
 		console.log(
@@ -1170,7 +1236,7 @@ async function release(argv: string[]): Promise<void> {
 
 	// 12-14. Commit/tag/push, gh release, verify the live channel.
 	await commitTagPush(tag);
-	await createRelease(tag, version, manualNotes ?? section);
+	await createRelease(tag, version, notes);
 	await verifyChannel(version);
 
 	console.log("release: done");

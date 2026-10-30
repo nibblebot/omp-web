@@ -22,7 +22,10 @@ import {
 	nextVersion,
 	parseGitLog,
 	parseReleaseArgs,
+	curatedNotes,
 	foldUnreleased,
+	notesProblem,
+	RELEASE_NOTES_MAX_CHARS,
 	prependChangelog,
 	releasePlan,
 	releaseTreeProblem,
@@ -341,9 +344,9 @@ describe("changelogSection", () => {
 });
 
 describe("fallbackBullets + validateCoverage", () => {
-	test("fallbackBullets format", () => {
-		expect(fallbackBullets([commit("abc1234", "feat: add x")])).toEqual([
-			"- feat: add x ([abc1234](https://github.com/nibblebot/omp-web/commit/abc1234))",
+	test("fallbackBullets show and link an 8-character hash", () => {
+		expect(fallbackBullets([commit("abc1234def5678", "feat: add x")])).toEqual([
+			"- feat: add x ([abc1234d](https://github.com/nibblebot/omp-web/commit/abc1234d))",
 		]);
 	});
 
@@ -408,6 +411,7 @@ describe("foldUnreleased", () => {
 	test("without an Unreleased heading the changelog is untouched and the section is generated", () => {
 		expect(foldUnreleased(older, "0.3.0", "2026-10-30", [])).toEqual({
 			section: null,
+			log: "",
 			rest: older,
 		});
 	});
@@ -419,11 +423,13 @@ describe("foldUnreleased", () => {
 			{ heading: "Features", bullets: [] },
 			{ heading: "Bug fixes", bullets: ["- fix: y ([def](u/def))", "  "] },
 		];
-		const { section, rest } = foldUnreleased(existing, "0.3.0", "2026-10-30", log);
-		const expected =
-			"## v0.3.0, 2026-10-30\n\nIntro.\n\n### Breaking changes\n- one\n\n### Commits\n\n" +
+		const { section, log: block, rest } = foldUnreleased(existing, "0.3.0", "2026-10-30", log);
+		const expectedLog =
+			"### Commits\n\n" +
 			"#### Breaking changes\n- refactor!: drop x ([abc](u/abc))\n\n#### Bug fixes\n- fix: y ([def](u/def))\n";
+		const expected = `## v0.3.0, 2026-10-30\n\nIntro.\n\n### Breaking changes\n- one\n\n${expectedLog}`;
 		expect(section).toBe(expected);
+		expect(block).toBe(expectedLog);
 		expect(prependChangelog(rest, section as string)).toBe(`${expected}\n${older}`);
 	});
 
@@ -455,8 +461,36 @@ describe("foldUnreleased", () => {
 	test("an Unreleased section with no earlier release runs to the end; no commits, no log heading", () => {
 		expect(foldUnreleased("## Unreleased\n\n- first\n", "0.1.0", "d", [])).toEqual({
 			section: "## v0.1.0, d\n\n- first\n",
+			log: "",
 			rest: "",
 		});
+	});
+});
+
+describe("curatedNotes", () => {
+	test("link the version's CHANGELOG.md section at the tag and the compare view, then the commit log", () => {
+		expect(curatedNotes("0.3.0", "2026-10-30", "v0.2.1", "### Commits\n\n- a\n")).toBe(
+			"The full v0.3.0 release notes are in " +
+				"[CHANGELOG.md](https://github.com/nibblebot/omp-web/blob/v0.3.0/CHANGELOG.md#v030-2026-10-30). " +
+				"[Compare v0.2.1...v0.3.0](https://github.com/nibblebot/omp-web/compare/v0.2.1...v0.3.0)" +
+				"\n\n### Commits\n\n- a\n",
+		);
+	});
+
+	test("a first release has no compare link, and no commits leave only the link line", () => {
+		expect(curatedNotes("0.1.0", "d", null, "")).toBe(
+			"The full v0.1.0 release notes are in " +
+				"[CHANGELOG.md](https://github.com/nibblebot/omp-web/blob/v0.1.0/CHANGELOG.md#v010-d).\n",
+		);
+	});
+});
+
+describe("notesProblem", () => {
+	test("accepts a body at GitHub's limit and refuses one character over", () => {
+		expect(notesProblem("x".repeat(RELEASE_NOTES_MAX_CHARS))).toBeNull();
+		expect(notesProblem("x".repeat(RELEASE_NOTES_MAX_CHARS + 1))).toBe(
+			"release notes are 125001 chars, over GitHub's 125000 limit",
+		);
 	});
 });
 
@@ -666,6 +700,13 @@ describe("stagedProblems", () => {
 		rmSync(join(dir, "notes.md"));
 		const problems = await stagedProblems(dir, "0.1.0", CHANGELOG);
 		expect(problems.some((p) => p.includes("staged notes missing"))).toBe(true);
+	});
+
+	test("reports staged notes GitHub would refuse as a release body", async () => {
+		const dir = await makeStagedDir();
+		writeFileSync(join(dir, "notes.md"), "x".repeat(RELEASE_NOTES_MAX_CHARS + 1));
+		const problems = await stagedProblems(dir, "0.1.0", CHANGELOG);
+		expect(problems.some((p) => p.includes("over GitHub's 125000 limit"))).toBe(true);
 	});
 
 	test("reports a missing manifest", async () => {
