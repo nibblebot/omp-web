@@ -6,7 +6,7 @@ import type { ModalName } from "../state.ts";
  * feature's JS/CSS chunk is never fetched. Everything here must stay
  * import-free of feature modules (type-only imports are fine).
  */
-export type FeatureId = "analysis" | "plan" | "git" | "todos" | "plugins" | "debug";
+export type FeatureId = "analysis" | "plan" | "git" | "todos" | "providers" | "plugins" | "debug";
 
 /**
  * localStorage key: JSON object of explicit per-feature choices ({ [id]: boolean }). Lives here, not in
@@ -77,6 +77,17 @@ export const FEATURES: readonly FeatureInfo[] = [
 		defaultEnabled: false,
 		commands: ["todo"],
 		modals: ["todos"],
+		docks: [],
+	},
+	{
+		id: "providers",
+		label: "Provider Login",
+		description:
+			"Log in to model providers from the browser (/login, Settings > Providers > Login Providers). Use the omp terminal UI to log in meanwhile.",
+		status: "in-development",
+		defaultEnabled: false,
+		commands: ["login"],
+		modals: ["login"],
 		docks: [],
 	},
 	{

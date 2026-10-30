@@ -138,7 +138,7 @@ describe("filterSettings", () => {
 });
 
 describe("filterWebUiSettings", () => {
-	const attached = { sessionAttached: true, signedIn: true };
+	const attached = { sessionAttached: true, signedIn: true, providerLoginEnabled: true };
 	test("finds non-model rows by label or keyword, each with its home tab", () => {
 		expect(filterWebUiSettings("retry", attached)).toEqual([
 			{ label: "Auto-Retry", tabId: "session" },
@@ -152,14 +152,15 @@ describe("filterWebUiSettings", () => {
 		expect(filterWebUiSettings("   ", attached)).toEqual([]);
 		expect(filterWebUiSettings("nothing matches this", attached)).toEqual([]);
 	});
-	test("offers session and sign-in rows only when the stream renders them", () => {
-		const none = { sessionAttached: false, signedIn: false };
+	test("offers session, sign-in and Provider Login rows only when the stream renders them", () => {
+		const none = { sessionAttached: false, signedIn: false, providerLoginEnabled: false };
 		expect(filterWebUiSettings("retry", none)).toEqual([]);
 		expect(filterWebUiSettings("fast", none)).toEqual([]);
 		expect(filterWebUiSettings("compact", none)).toEqual([]);
 		expect(filterWebUiSettings("login", none)).toEqual([]);
 		expect(filterWebUiSettings("sign out", none)).toEqual([]);
-		const signedInOnly = { sessionAttached: false, signedIn: true };
+		expect(filterWebUiSettings("oauth", { ...attached, providerLoginEnabled: false })).toEqual([]);
+		const signedInOnly = { sessionAttached: false, signedIn: true, providerLoginEnabled: false };
 		expect(filterWebUiSettings("sign out", signedInOnly)).toEqual([
 			{ label: "Sign Out", tabId: "web-ui" },
 		]);
@@ -223,7 +224,7 @@ describe("inverted hide flags", () => {
 });
 
 describe("Appearance sheet ownership", () => {
-	const attached = { sessionAttached: true, signedIn: true };
+	const attached = { sessionAttached: true, signedIn: true, providerLoginEnabled: true };
 	const tab: SettingsTab = {
 		id: "appearance",
 		label: "Appearance",

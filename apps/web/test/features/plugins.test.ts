@@ -85,7 +85,12 @@ describe("IntegrationsDialog with the plugins feature off", () => {
 
 describe("the palette's Extensions entries", () => {
 	test("Skills and MCP servers open the dialog on that group with no feature active", () => {
-		const items = openItems({ debugEnabled: false, pluginsEnabled: false, projects: [] });
+		const items = openItems({
+			debugEnabled: false,
+			pluginsEnabled: false,
+			providerLoginEnabled: false,
+			projects: [],
+		});
 		setState("modal", null);
 		runPaletteItem(items.find((item) => item.label === "MCP servers")!);
 		expect(state.modal).toBe("integrations");
@@ -96,7 +101,12 @@ describe("the palette's Extensions entries", () => {
 	});
 
 	test("Plugins opens the dialog on the Plugins tab", () => {
-		const items = openItems({ debugEnabled: false, pluginsEnabled: true, projects: [] });
+		const items = openItems({
+			debugEnabled: false,
+			pluginsEnabled: true,
+			providerLoginEnabled: false,
+			projects: [],
+		});
 		setState("integrations", "tab", "extensions");
 		runPaletteItem(items.find((item) => item.label === "Plugins")!);
 		expect(state.modal).toBe("integrations");

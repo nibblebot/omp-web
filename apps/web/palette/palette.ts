@@ -224,6 +224,8 @@ export interface PaletteContext {
 	debugEnabled: boolean;
 	/** The `plugins` feature is on: Plugins opens the Extensions dialog on its Plugins tab. */
 	pluginsEnabled: boolean;
+	/** The `providers` feature is on: Provider login opens its dialog. */
+	providerLoginEnabled: boolean;
 	projects: readonly { projectId: string; name: string; git?: false }[];
 }
 
@@ -322,13 +324,14 @@ export function openItems(context: PaletteContext): PaletteItem[] {
 			keywords: ["worktree", "clone", "branch", "session", project.name],
 		});
 	items.push(openItem("sign-in", "Sign in", "Sign in to this fleet", ["auth", "token", "login"]));
-	items.push(
-		openItem("login", "Provider login", "Log in to a model provider", [
-			"credentials",
-			"oauth",
-			"api key",
-		]),
-	);
+	if (context.providerLoginEnabled)
+		items.push(
+			openItem("login", "Provider login", "Log in to a model provider", [
+				"credentials",
+				"oauth",
+				"api key",
+			]),
+		);
 	return items;
 }
 

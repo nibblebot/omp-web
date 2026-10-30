@@ -30,6 +30,7 @@ import {
 	visibleSettingsTabs,
 	type SettingsTabMeta,
 } from "../../prefs/settings-tabs";
+import { isFeatureEnabled } from "../../features/registry";
 import { searchAutofocus } from "../../store/integrations";
 import { consumeSettingsTab, openModelDialog } from "../../store/models";
 import { fleetSettingsActive, openAppearance, setState, state } from "../../state";
@@ -51,7 +52,7 @@ const EDGE_SLACK_PX = 2;
 /** User input that takes the body back from a running nav glide. */
 const USER_SCROLL_EVENTS = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
 
-/** Section of the Providers tab holding the login row; it follows the SDK groups. */
+/** Section of the Providers tab holding the login row (Provider Login feature); it follows the SDK groups. */
 const LOGIN_SECTION = "Login";
 
 /** Where the stream is scrolled to: the tab, and the section within it once its heading has reached the spy line. */
@@ -120,7 +121,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	const signedIn = () => state.authStatus === "signedIn";
 
 	// Sections listed under a tab: named SDK groups (plus the login group on
-	// Providers while a session is attached), and for Browser the
+	// Providers while a session is attached and Provider Login is on), and for Browser the
 	// Notifications group plus Account while signed in.
 	const sectionsOf = (tab: SettingsTabMeta): SettingsSection[] => {
 		if (tab.kind === "sdk") {
@@ -128,7 +129,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 			const named = (schema ? sheetGroups(schema) : [])
 				.filter((g) => g.name)
 				.map((g) => ({ id: settingsSectionId(tab.id, g.name), label: g.name }));
-			return tab.id === "providers" && sessionAttached()
+			return tab.id === "providers" && sessionAttached() && isFeatureEnabled("providers")
 				? [...named, { id: settingsSectionId(tab.id, LOGIN_SECTION), label: LOGIN_SECTION }]
 				: named;
 		}
@@ -148,6 +149,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 			? searchSheetSettings(model(), query(), {
 					sessionAttached: sessionAttached(),
 					signedIn: signedIn(),
+					providerLoginEnabled: isFeatureEnabled("providers"),
 				})
 			: { sdk: [], pointers: [] },
 	);
@@ -645,7 +647,11 @@ const SettingsTabBody: Component<{
 				)}
 			</Show>
 			{/* Login lives with the provider settings; it needs a live session to talk to. */}
-			<Show when={props.tab.id === "providers" && !fleetSettingsActive()}>
+			<Show
+				when={
+					props.tab.id === "providers" && !fleetSettingsActive() && isFeatureEnabled("providers")
+				}
+			>
 				<SettingsGroup title={LOGIN_SECTION} id={settingsSectionId("providers", LOGIN_SECTION)}>
 					<SettingsRowLayout label="Login Providers">
 						<button

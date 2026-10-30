@@ -54,7 +54,13 @@ afterAll(() => {
 });
 
 describe("palette Share session", () => {
-	const items = () => openItems({ debugEnabled: false, pluginsEnabled: false, projects: [] });
+	const items = () =>
+		openItems({
+			debugEnabled: false,
+			pluginsEnabled: false,
+			providerLoginEnabled: false,
+			projects: [],
+		});
 
 	test("is listed in the Open group", () => {
 		const item = items().find((i) => i.label === "Share session");

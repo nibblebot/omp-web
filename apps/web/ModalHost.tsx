@@ -56,9 +56,6 @@ const SessionDetailsDialog = lazyComponent(() =>
 const WorktreeSessionsDialog = lazyComponent(() =>
 	import("./components/fleet/sidebar/WorktreeSessionsDialog").then((m) => m.WorktreeSessionsDialog),
 );
-const ProviderLoginDialog = lazyComponent(() =>
-	import("./components/models/ProviderLoginDialog").then((m) => m.ProviderLoginDialog),
-);
 const ModelDialog = lazyComponent(() =>
 	import("./components/models/ModelDialog").then((m) => m.ModelDialog),
 );
@@ -157,12 +154,7 @@ export const ModalHost: Component = () => {
 		appearance: () => <AppearanceSheet onClose={close} />,
 		sessions: () => <SessionPicker onClose={close} />,
 		advisor: () => <AdvisorSheet onClose={close} />,
-		// Login opens from Settings > Providers: closing returns there.
-		login: () => (
-			<ProviderLoginDialog
-				onClose={() => setState({ modal: "settings", settingsTab: "providers" })}
-			/>
-		),
+		login: () => featureModalHost("login"),
 		goal: () => <GoalDialog onClose={close} />,
 		usage: () => <UsageLimitsDialog onClose={close} />,
 		debug: () => featureModalHost("debug"),

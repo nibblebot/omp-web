@@ -29,11 +29,13 @@ describe("openItems", () => {
 		const off = openItems({
 			debugEnabled: false,
 			pluginsEnabled: true,
+			providerLoginEnabled: false,
 			projects: [],
 		}).map((item) => item.label);
 		const on = openItems({
 			debugEnabled: true,
 			pluginsEnabled: true,
+			providerLoginEnabled: false,
 			projects: [],
 		}).map((item) => item.label);
 		expect(off).not.toContain("Debug");
@@ -41,7 +43,7 @@ describe("openItems", () => {
 	});
 
 	test("Skills and MCP servers are always listed, and Plugins only when the plugins feature is enabled", () => {
-		const context = { debugEnabled: false, projects: [] };
+		const context = { debugEnabled: false, providerLoginEnabled: false, projects: [] };
 		const on = openItems({ ...context, pluginsEnabled: true }).map((item) => item.label);
 		const off = openItems({ ...context, pluginsEnabled: false }).map((item) => item.label);
 		expect(on).toEqual(expect.arrayContaining(["Skills", "MCP servers", "Plugins"]));
@@ -49,20 +51,20 @@ describe("openItems", () => {
 		expect(off).not.toContain("Plugins");
 	});
 
-	test("sign-in and provider login are offered without a live session or signed-in state", () => {
-		const labelsOut = openItems({
-			debugEnabled: false,
-			pluginsEnabled: true,
-			projects: [],
-		}).map((item) => item.label);
-		expect(labelsOut).toContain("Sign in");
-		expect(labelsOut).toContain("Provider login");
+	test("Sign in is offered without a live session, and Provider login only when its feature is enabled", () => {
+		const context = { debugEnabled: false, pluginsEnabled: true, projects: [] };
+		const on = openItems({ ...context, providerLoginEnabled: true }).map((item) => item.label);
+		const off = openItems({ ...context, providerLoginEnabled: false }).map((item) => item.label);
+		expect(off).toContain("Sign in");
+		expect(on).toContain("Provider login");
+		expect(off).not.toContain("Provider login");
 	});
 
 	test("one new-workspace item per registered project", () => {
 		const items = openItems({
 			debugEnabled: false,
 			pluginsEnabled: true,
+			providerLoginEnabled: false,
 			projects: [
 				{ projectId: "p1", name: "alpha" },
 				{ projectId: "p2", name: "beta" },
@@ -79,6 +81,7 @@ describe("openItems", () => {
 		const items = openItems({
 			debugEnabled: false,
 			pluginsEnabled: true,
+			providerLoginEnabled: false,
 			projects: [
 				{ projectId: "p1", name: "alpha" },
 				{ projectId: "p2", name: "notes", git: false },
@@ -125,6 +128,7 @@ describe("searchPalette", () => {
 				openItems({
 					debugEnabled: false,
 					pluginsEnabled: true,
+					providerLoginEnabled: false,
 					projects: [],
 				}),
 			),
@@ -140,6 +144,7 @@ describe("searchPalette", () => {
 				openItems({
 					debugEnabled: false,
 					pluginsEnabled: true,
+					providerLoginEnabled: false,
 					projects: [],
 				}),
 			),
@@ -202,7 +207,12 @@ describe("settingItems", () => {
 	});
 
 	test("Appearance is an Open entry that a query finds", () => {
-		const open = openItems({ debugEnabled: false, pluginsEnabled: false, projects: [] });
+		const open = openItems({
+			debugEnabled: false,
+			pluginsEnabled: false,
+			providerLoginEnabled: false,
+			projects: [],
+		});
 		expect(labels(sourcesWith(open), "theme")).toContain("Appearance");
 	});
 });

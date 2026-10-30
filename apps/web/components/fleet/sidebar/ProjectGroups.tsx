@@ -16,6 +16,7 @@ import {
 	shownWhenRunningOnly,
 } from "../../../fleet-ui/workspace-status";
 import { rowActivity } from "../../../fleet-ui/row-activity";
+import { isFeatureEnabled } from "../../../features/registry";
 import { afterMotion } from "../../../motion/presence";
 import { setState, state } from "../../../state";
 import {
@@ -82,8 +83,9 @@ export type ProjectGroupsData = {
 	sessions: RosterEntry[];
 }[];
 
-/** Empty roster: the add hint, plus a sign-in prompt when no model provider
- *  is configured. A failed omp-setup probe shows only the add hint. */
+/** Empty roster: the add hint, plus a no-provider notice when no model provider
+ *  is configured (with a sign-in button while Provider Login is on). A failed
+ *  omp-setup probe shows only the add hint. */
 const EmptyProjects: Component = () => {
 	const [noProvider, setNoProvider] = createSignal(false);
 	onMount(() => {
@@ -96,13 +98,15 @@ const EmptyProjects: Component = () => {
 			<p>No projects yet. Add one below.</p>
 			<Show when={noProvider()}>
 				<p>No model provider signed in.</p>
-				<button
-					type="button"
-					class="sidebar-empty-action"
-					onClick={() => setState("modal", "login")}
-				>
-					Sign in
-				</button>
+				<Show when={isFeatureEnabled("providers")}>
+					<button
+						type="button"
+						class="sidebar-empty-action"
+						onClick={() => setState("modal", "login")}
+					>
+						Sign in
+					</button>
+				</Show>
 			</Show>
 		</div>
 	);

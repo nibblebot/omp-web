@@ -175,7 +175,8 @@ export function effectNote(effect: SettingView["effect"] | undefined): string | 
  * Browser-local and session-scoped rows outside the SDK model, so settings search reaches them here.
  * Each names the tab that renders it (`APPEARANCE_MENU_TAB` for a row in the Appearance sheet; a new
  * Appearance sheet row adds one here) and its label matches the row's label. `session` rows render only
- * with a session attached; `signedIn` rows only after sign-in.
+ * with a session attached; `signedIn` rows only after sign-in; `providerLogin` rows only while the
+ * Provider Login feature is on.
  */
 const WEB_UI_SEARCH_ROWS: {
 	label: string;
@@ -183,6 +184,7 @@ const WEB_UI_SEARCH_ROWS: {
 	tabId: string;
 	session?: boolean;
 	signedIn?: boolean;
+	providerLogin?: boolean;
 }[] = [
 	{
 		label: "Theme",
@@ -273,6 +275,7 @@ const WEB_UI_SEARCH_ROWS: {
 		keywords: "login provider auth sign in oauth api key",
 		tabId: "providers",
 		session: true,
+		providerLogin: true,
 	},
 ];
 
@@ -280,6 +283,8 @@ const WEB_UI_SEARCH_ROWS: {
 export interface WebUiContext {
 	sessionAttached: boolean;
 	signedIn: boolean;
+	/** The Provider Login feature is on (Settings > Providers shows Login Providers). */
+	providerLoginEnabled: boolean;
 }
 
 /** A matching non-model row: its label and the tab that renders it. */
@@ -296,6 +301,7 @@ export function filterWebUiSettings(query: string, context: WebUiContext): WebUi
 		(row) =>
 			(row.session !== true || context.sessionAttached) &&
 			(row.signedIn !== true || context.signedIn) &&
+			(row.providerLogin !== true || context.providerLoginEnabled) &&
 			`${row.label} ${row.keywords}`.toLowerCase().includes(q),
 	).map(({ label, tabId }) => ({ label, tabId }));
 }

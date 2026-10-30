@@ -58,12 +58,14 @@ export function paletteSources(query: string, stored: readonly PaletteItem[]): P
 	const webRows = filterWebUiSettings(query, {
 		sessionAttached: hasLiveSession(),
 		signedIn: state.authStatus === "signedIn",
+		providerLoginEnabled: isFeatureEnabled("providers"),
 	});
 	return {
 		commands: { registry: currentCommandRegistry(), usage: commandUsage(), live: state },
 		open: openItems({
 			debugEnabled: isFeatureEnabled("debug"),
 			pluginsEnabled: isFeatureEnabled("plugins"),
+			providerLoginEnabled: isFeatureEnabled("providers"),
 			projects: state.registeredProjects,
 		}),
 		sessions: [...rosterSessionItems(state.sessionRoster, state.currentWorkspaceId), ...stored],
