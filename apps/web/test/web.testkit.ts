@@ -24,7 +24,7 @@ import { type Component, createComponent } from "solid-js";
 import { unwrap } from "solid-js/store";
 import { ssrElement } from "solid-js/web";
 import { resetBrowserSocket, setState, state } from "../state";
-import { pendingCalls } from "../store/transport";
+import { rejectPendingCalls } from "../store/transport";
 
 /** Commands the client sent over the fake socket, in order (re-sends included). */
 export const posted: ClientCommand[] = [];
@@ -252,15 +252,13 @@ function restoreStoreKeys(): void {
 }
 
 /**
- * Forget calls a test left unanswered. Their replay and deadline timers would
- * otherwise fire inside a sibling test file; the promises stay pending, unsettled.
+ * Fail the calls a test left unanswered, as a dropped page does. Their replay and deadline
+ * timers would otherwise fire inside a sibling test file, and a call that never settles keeps
+ * its caller's module-global bookkeeping (the shared job poll's flight) stuck for every later
+ * file in the same process.
  */
 function dropPendingCalls(): void {
-	for (const pending of pendingCalls.values()) {
-		clearTimeout(pending.timer);
-		clearTimeout(pending.replayTimer);
-	}
-	pendingCalls.clear();
+	rejectPendingCalls(new Error("test page dropped"));
 }
 
 type JsxOptions = {

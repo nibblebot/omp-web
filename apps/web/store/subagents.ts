@@ -494,6 +494,8 @@ let rosterInFlight = false;
 let rosterWanted = false;
 let rosterStartedAt = Number.NEGATIVE_INFINITY;
 let rosterFailures = 0;
+/** Bumped by resetRosterRefresh: a read started before a reset no longer owns the scheduler. */
+let rosterEpoch = 0;
 
 function armRoster(delayMs: number): void {
 	rosterTimer = setTimeout(() => {
@@ -507,21 +509,37 @@ function paceDelay(): number {
 }
 
 async function runRoster(): Promise<void> {
+	const epoch = rosterEpoch;
 	rosterWanted = false;
 	rosterInFlight = true;
 	rosterStartedAt = Date.now();
 	let retryMs: number | undefined;
 	try {
 		await listWorkers();
-		rosterFailures = 0;
+		if (epoch === rosterEpoch) rosterFailures = 0;
 	} catch {
-		retryMs = ROSTER_RETRY_MS[rosterFailures];
-		rosterFailures += 1;
+		if (epoch === rosterEpoch) {
+			retryMs = ROSTER_RETRY_MS[rosterFailures];
+			rosterFailures += 1;
+		}
 	} finally {
-		rosterInFlight = false;
+		if (epoch === rosterEpoch) rosterInFlight = false;
 	}
+	// A reset while this read was in flight orphaned it: it must not arm the new scheduler.
+	if (epoch !== rosterEpoch) return;
 	if (retryMs !== undefined) armRoster(retryMs);
 	else if (rosterWanted) armRoster(paceDelay());
+}
+
+/** Test seam: a page whose roster scheduler has never run (no timer, no read in flight, no pacing). */
+export function resetRosterRefresh(): void {
+	rosterEpoch += 1;
+	clearTimeout(rosterTimer);
+	rosterTimer = undefined;
+	rosterInFlight = false;
+	rosterWanted = false;
+	rosterStartedAt = Number.NEGATIVE_INFINITY;
+	rosterFailures = 0;
 }
 
 /**

@@ -1,6 +1,7 @@
 /** Roster refreshes on lifecycle edges are single-flight and paced: a fan-out's edges share one trailing read. */
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as transport from "../../store/transport";
+import { requestRosterRefresh, resetRosterRefresh } from "../../store/subagents";
 
 let reads = 0;
 let release: (() => void) | undefined;
@@ -8,7 +9,7 @@ let hold = false;
 
 const originalTransport = { ...transport };
 // Installed from a hook: a top-level mock would be replaced by an earlier file's afterAll restore.
-beforeAll(async () => {
+beforeAll(() => {
 	mock.module("../../store/transport", () => ({
 		...originalTransport,
 		call: async (method: string) => {
@@ -18,23 +19,27 @@ beforeAll(async () => {
 			return { workers: [] };
 		},
 	}));
-	// Fresh copy: the roster pacing state (in flight, timer, failures) is module-level, and other
-	// files' lifecycle frames already advanced it on the cached module.
-	const storePath: string = "../../store/subagents.ts?fresh=roster-refresh";
-	({ requestRosterRefresh } = (await import(storePath)) as SubagentsStore);
 });
 
 afterAll(() => {
+	// Settle a read the last test may have left held, and leave no timer behind this file's mock.
+	hold = false;
+	release?.();
+	resetRosterRefresh();
 	mock.module("../../store/transport", () => originalTransport);
+	setState("currentWorkspaceId", previousWorkspaceId);
 });
 
-type SubagentsStore = typeof import("../../store/subagents");
-let requestRosterRefresh: SubagentsStore["requestRosterRefresh"];
-const { setState } = await import("../../state");
+const { state, setState } = await import("../../state");
+const previousWorkspaceId = state.currentWorkspaceId;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 beforeEach(() => {
+	// The scheduler is module-level (timer, in-flight read, pacing, backoff), and earlier files'
+	// lifecycle frames already advanced it: a retry or paced read they left pending would land here
+	// and add a read this file never asked for.
+	resetRosterRefresh();
 	setState("currentWorkspaceId", "roster-refresh");
 	reads = 0;
 	hold = false;

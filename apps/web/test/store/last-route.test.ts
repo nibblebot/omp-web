@@ -119,6 +119,12 @@ describe("no-hash launch", () => {
 		expect(localStorage.getItem(LAST_ROUTE_KEY)).toBe(
 			JSON.stringify({ workspaceId: "d1", sessionId: "s1" }),
 		);
+		// The hash restore is still waiting on its attach: answer it so it ends inside this test, not in a later file.
+		const attach = posted.find((c) => c.type === "attach");
+		if (attach?.type !== "attach") throw new Error("no attach was posted");
+		dispatch(attached("d1"));
+		dispatch({ type: "attach_result", id: attach.id, ok: true, workspaceId: "d1" });
+		for (let i = 0; i < 10; i++) await flushMicrotasks();
 	});
 });
 

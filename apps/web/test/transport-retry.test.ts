@@ -53,8 +53,13 @@ function installClock(): void {
 			return timers.length; // 1-based: the id clearTimeout maps back to timers[id - 1]
 		},
 	} as unknown as Window & typeof globalThis);
+	// Only this file's fake handles are cancelled here; a real timer (the store's roster pacing timer
+	// is armed on the global setTimeout) must still be cleared, or it fires after this file and leaves
+	// the store's timer bookkeeping out of step with its real timers for every later file.
+	const realClearTimeout = globalThis.clearTimeout;
 	spyOn(globalThis, "clearTimeout").mockImplementation((id) => {
-		const t = timers[Number(id) - 1];
+		if (typeof id !== "number") return realClearTimeout(id as Parameters<typeof clearTimeout>[0]);
+		const t = timers[id - 1];
 		if (t) t.live = false;
 	});
 	spyOn(Date, "now").mockImplementation(() => START + elapsed);

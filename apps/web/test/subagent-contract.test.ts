@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, test } from "bun:test";
-import { setState } from "../state";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { unwrap } from "solid-js/store";
+import { setState, state } from "../state";
 import { applyProgressFrame } from "../store/subagent-frames";
 import type { SubagentInfo } from "../state";
 import {
@@ -87,6 +88,25 @@ function seed(agents: Seed[]): void {
 	setState("subagents", live);
 	setState("workers", { ...createWorkersState(), records, order });
 }
+
+// The attached session, live subagents and workers as they stood before this file seeded them.
+let before: {
+	currentWorkspaceId: string;
+	subagents: typeof state.subagents;
+	workers: typeof state.workers;
+};
+
+beforeAll(() => {
+	const raw = unwrap(state);
+	before = {
+		currentWorkspaceId: raw.currentWorkspaceId,
+		subagents: raw.subagents,
+		workers: { ...raw.workers },
+	};
+});
+
+// A session left attached makes the next file's connect() re-attach on open.
+afterAll(() => setState({ ...before }));
 
 beforeEach(() => {
 	setState("currentWorkspaceId", SESSION);
