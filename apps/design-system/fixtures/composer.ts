@@ -30,3 +30,27 @@ export const fileMentionItems: AcItem[] = [
 	"apps/web/state.ts",
 	"apps/design-system/fixtures/screen.ts",
 ].map((path) => ({ label: `@${path}`, apply: `@${path} ` }));
+
+/** Files of the omp-web checkout as the session's `list_files` lists them (the demo's @-file completer). */
+export const repoFiles: string[] = [
+	"AGENTS.md",
+	"README.md",
+	"package.json",
+	"apps/web/App.tsx",
+	"apps/web/state.ts",
+	"apps/web/components/ui/CopyButton.tsx",
+	"apps/web/components/ui/Markdown.tsx",
+	"apps/web/components/chat/composer/PromptComposer.tsx",
+	"apps/web/components/chat/composer/AutocompletePopup.tsx",
+	"apps/web/components/chat/composer/usePromptAutocomplete.ts",
+	"apps/web/components/chat/transcript/ThinkingBlock.tsx",
+	"apps/web/components/chat/tools/ToolCard.tsx",
+	"apps/web/components/chat/tools/ToolMarkdown.tsx",
+	"apps/web/styles/chat.css",
+	"apps/web/styles/tokens.css",
+	"apps/web/test/copy-button.test.ts",
+	"apps/design-system/fixtures/screen.ts",
+	"apps/design-system/stories/ui/CopyButton.tsx",
+	"lib/wire/protocol.ts",
+	"lib/wire/browser-socket.ts",
+];

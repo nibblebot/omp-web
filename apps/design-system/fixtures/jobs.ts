@@ -271,8 +271,191 @@ export const jobDetails: Readonly<Record<string, JobDetailDto>> = {
 	},
 };
 
+/** Job ids of the App view's attached session (`screenJobTree`). */
+export const SCREEN_JOB_IDS = {
+	fenceCallers: "job_fence_callers",
+	fenceCallersSearch: "job_fence_callers_rg",
+	preRules: "job_pre_rules",
+	devServer: "job_screen_dev",
+	testWatch: "job_screen_tests",
+} as const;
+
+const SCREEN_CWD = "/home/joshua/Repos/omp-web-worktrees/design-fixtures";
+
+/** The dev server's live widget: Vite's hot reloads of the files the session edits. */
+const screenDevWidget: WireJobWidgetView = {
+	title: "bun run dev",
+	stage: "[vite] hmr update /components/ui/CopyButton.tsx",
+	blocks: [
+		{
+			kind: "stat",
+			items: [
+				{ label: "reloads", text: "14" },
+				{ label: "last", text: "38 ms", tone: "success" },
+			],
+		},
+	],
+	state: "live",
+	updatedAt: Date.parse("2026-10-09T12:00:00Z"),
+};
+
+/** The test watcher's live widget: the copy-button suite passing. */
+const screenTestWidget: WireJobWidgetView = {
+	title: "bun test --watch",
+	headline: { text: "3 pass" },
+	stage: "Watching for file changes",
+	blocks: [{ kind: "text", text: "(pass) restores the label after the timeout [1.1ms]" }],
+	state: "live",
+	updatedAt: Date.parse("2026-10-09T12:00:00Z"),
+};
+
+/**
+ * The background jobs of the App view's attached session (fixtures/screen.ts): the two scouts of
+ * its task call (their agent ids are the subagent ids `getSubagents` answers) and the dev server
+ * and test watcher it left running.
+ */
+export function screenJobTree(now = Date.now()): JobTreeDto {
+	const callers: JobAgentDto = { id: "FenceCallers", parentId: ROOT };
+	const preRules: JobAgentDto = { id: "PreStyles", parentId: ROOT };
+	const opts = { now };
+	const rows = flatten([
+		{
+			row: {
+				kind: "job",
+				agent: callers,
+				job: job(
+					SCREEN_JOB_IDS.fenceCallers,
+					"task",
+					"Find every caller of renderMarkdown",
+					"completed",
+					15 * MINUTE,
+					{ ...opts, agentId: callers.id, ranFor: 64 * SECOND },
+				),
+			},
+			children: [
+				{
+					row: {
+						kind: "job",
+						job: job(
+							SCREEN_JOB_IDS.fenceCallersSearch,
+							"bash",
+							"rg -n renderMarkdown apps/web",
+							"completed",
+							15 * MINUTE - 20 * SECOND,
+							{ ...opts, ownerId: callers.id, ranFor: 900 },
+						),
+					},
+				},
+			],
+		},
+		{
+			row: {
+				kind: "job",
+				agent: preRules,
+				job: job(
+					SCREEN_JOB_IDS.preRules,
+					"task",
+					"List CSS rules that style pre blocks",
+					"completed",
+					15 * MINUTE,
+					{ ...opts, agentId: preRules.id, ranFor: 118 * SECOND },
+				),
+			},
+		},
+		{
+			row: {
+				kind: "job",
+				job: job(SCREEN_JOB_IDS.devServer, "bash", "bun run dev", "running", 21 * MINUTE, opts),
+			},
+		},
+		{
+			row: {
+				kind: "job",
+				job: job(
+					SCREEN_JOB_IDS.testWatch,
+					"bash",
+					"bun test --watch apps/web/test/copy-button.test.ts",
+					"running",
+					9 * MINUTE,
+					opts,
+				),
+			},
+		},
+	]);
+	const widgets: Record<string, WireJobWidgetView> = {
+		[SCREEN_JOB_IDS.devServer]: screenDevWidget,
+		[SCREEN_JOB_IDS.testWatch]: screenTestWidget,
+	};
+	return {
+		rootId: ROOT,
+		rows: rows.map((row) => {
+			const view = row.kind === "job" ? widgets[row.job.id] : undefined;
+			return row.kind === "job" && view ? { ...row, widget: glanceJobWidgetView(view) } : row;
+		}),
+	};
+}
+
+/** The inspection of each job of `screenJobTree`. */
+export const screenJobDetails: Readonly<Record<string, JobDetailDto>> = {
+	[SCREEN_JOB_IDS.fenceCallers]: {
+		pids: [],
+		output:
+			"renderMarkdown has three callers: Markdown.tsx (assistant text), ThinkingBlock.tsx (reasoning) and ToolMarkdown.tsx (markdown tool results). All three go through the same sanitize pass.\n",
+	},
+	[SCREEN_JOB_IDS.fenceCallersSearch]: {
+		command: "rg -n renderMarkdown apps/web",
+		cwd: SCREEN_CWD,
+		pids: [],
+		exitCode: 0,
+		output: [
+			"apps/web/components/ui/Markdown.tsx:38:  const html = renderMarkdown(props.text);",
+			"apps/web/components/chat/transcript/ThinkingBlock.tsx:52:  renderMarkdown(text())",
+			"apps/web/components/chat/tools/ToolMarkdown.tsx:21:  innerHTML={renderMarkdown(props.source)}",
+			"",
+		].join("\n"),
+	},
+	[SCREEN_JOB_IDS.preRules]: {
+		pids: [],
+		output:
+			"Two rules style fences: `.md pre` in styles/chat.css (padding, radius, overflow) and `.md pre code` (font size). Neither sets `position`, so the wrapper can own it.\n",
+	},
+	[SCREEN_JOB_IDS.devServer]: {
+		widget: screenDevWidget,
+		command: "bun run dev",
+		cwd: SCREEN_CWD,
+		pids: [51204, 51231],
+		output: [
+			"$ vite --host",
+			"  VITE v7.1.2  ready in 398 ms",
+			"  Local:   http://localhost:5173/",
+			"[vite] hmr update /components/ui/Markdown.tsx",
+			"[vite] hmr update /components/ui/CopyButton.tsx",
+			"",
+		].join("\n"),
+	},
+	[SCREEN_JOB_IDS.testWatch]: {
+		widget: screenTestWidget,
+		command: "bun test --watch apps/web/test/copy-button.test.ts",
+		cwd: SCREEN_CWD,
+		pids: [51388],
+		output: [
+			"apps/web/test/copy-button.test.ts:",
+			"(pass) shows copied feedback for 1200ms [2.4ms]",
+			"(pass) copies the fence text [1.6ms]",
+			"(pass) restores the label after the timeout [1.1ms]",
+			"",
+			" 3 pass",
+			" 0 fail",
+			"Watching for file changes...",
+			"",
+		].join("\n"),
+	},
+};
+
 export interface JobCallOptions {
 	tree?: JobTreeDto;
+	/** The inspection `getJobDetail` answers per job id; `jobDetails` when absent. */
+	details?: Readonly<Record<string, JobDetailDto>>;
 	/** The session runs no async jobs: `getJobTree` answers null. */
 	unavailable?: boolean;
 	loadError?: string;
@@ -294,7 +477,8 @@ export function jobCalls(options: JobCallOptions = {}): CallHandlers {
 		},
 		getJobDetail: (args) => {
 			const found = find(args[0]);
-			return found === undefined ? null : structuredClone(jobDetails[found.id] ?? { pids: [] });
+			const details = options.details ?? jobDetails;
+			return found === undefined ? null : structuredClone(details[found.id] ?? { pids: [] });
 		},
 		cancelJob: (args) => {
 			if (options.cancelError !== undefined) throw new Error(options.cancelError);

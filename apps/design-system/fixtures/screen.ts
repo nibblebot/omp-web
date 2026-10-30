@@ -16,6 +16,7 @@ import type { AdvisorItem } from "../../web/store/slices/advisor";
 import { FIXTURE_NOW } from "./session";
 import { rosterAppEntries, rosterProjects } from "./roster";
 import { sessionModel } from "./overlays";
+import { fenceListScreenshot } from "./screenshot";
 import type { AppSessionView } from "./app-sessions";
 import {
 	editToolItem,
@@ -26,6 +27,7 @@ import {
 	readDoneTool,
 	todoArgsTool,
 	webSearchDoneTool,
+	writeToolItem,
 } from "./tools";
 
 /** Screen fixtures: one coherent coding-agent session on this repo (the CopyButton work). */
@@ -39,27 +41,11 @@ export const SCREEN_WORKSPACE_ID = "dmn_a002";
 
 const MIN = 60_000;
 
-const opusThinking: NonNullable<Model["thinking"]> = {
-	mode: "anthropic-adaptive",
-	efforts: ["low", "medium", "high", "xhigh"] as Effort[],
-};
-
-/** The Claude model the screen session runs on; reused by the other App view sessions. */
-export const claude: Model = {
-	id: "claude-opus-4",
-	name: "Claude Opus 4",
-	api: "anthropic-messages",
-	provider: "anthropic",
-	baseUrl: "https://api.anthropic.com",
-	reasoning: true,
-	input: ["text", "image"],
-	cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-	contextWindow: 200_000,
-	maxTokens: 32_000,
-	identity: { class: "claude", family: "opus" },
-	thinking: opusThinking,
-	compat: sessionModel.compat,
-};
+/**
+ * The Claude model the screen session runs on; reused by the other App view sessions. It is the
+ * catalog's default-role model (overlays.ts), so the model picker, roles and status bar agree.
+ */
+export const claude: Model = sessionModel;
 
 /** AvailableSlashCommand list: remote commands that join the web-local ones in autocomplete. */
 export const screenSlashCommands: AvailableSlashCommand[] = [
@@ -128,11 +114,6 @@ export const screenSessionSeed: Partial<typeof state> = {
 // Helpers for the transcript.
 // ---------------------------------------------------------------------------
 
-const PIXEL_PNG =
-	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
-
-const screenshot: ImageArg = { type: "image", data: PIXEL_PNG, mimeType: "image/png" };
-
 /** Re-identifies a shared tool fixture so every transcript id and call id stays unique. */
 const reid = (item: ToolItem, id: number): ToolItem => ({
 	...item,
@@ -186,21 +167,25 @@ const taskTool: ToolItem = {
 /** SubagentInfo list for the task tool card, keyed to the task item's toolCallId. */
 export const screenSubagents: SubagentInfo[] = [
 	{
-		id: "sub-fences-1",
+		id: "FenceCallers",
 		index: 0,
 		agent: "scout",
 		description: "Find every caller of renderMarkdown",
 		status: "done",
 		lastUpdate: FIXTURE_NOW - 14 * MIN,
+		startedAt: FIXTURE_NOW - 16 * MIN,
+		endedAt: FIXTURE_NOW - 14 * MIN - 56_000,
 		parentToolCallId: taskTool.toolCallId,
 	},
 	{
-		id: "sub-fences-2",
+		id: "PreStyles",
 		index: 1,
 		agent: "scout",
 		description: "List CSS rules that style pre blocks",
 		status: "done",
 		lastUpdate: FIXTURE_NOW - 13 * MIN,
+		startedAt: FIXTURE_NOW - 16 * MIN,
+		endedAt: FIXTURE_NOW - 14 * MIN + 2_000,
 		parentToolCallId: taskTool.toolCallId,
 	},
 ];
@@ -246,9 +231,9 @@ const findingsNote: ChatItem = {
 				"",
 				"- the button owns its own 1200 ms feedback timer (`COPY_FEEDBACK_MS`)",
 				"- fences are rendered as bare `<pre><code>` by the markdown pipeline, so nothing wraps them",
-				"- there is **no failed state** when the clipboard write is rejected",
+				"- `CopyButton` copies whatever its `text` prop holds, so each fence only has to pass its own text",
 				"",
-				"Plan: wrap each fence in a positioned container, mount `CopyButton` there, and add a `failed` label.",
+				"Plan: wrap each fence in a positioned container (fences nested in lists too), mount `CopyButton` there with the fence text, and give it a `title`.",
 			].join("\n"),
 		},
 	],
@@ -257,31 +242,128 @@ const findingsNote: ChatItem = {
 	duration: 3_180,
 };
 
-const typeCheckFailed = bashTool(
-	10,
-	"error",
-	"bun run check:types",
-	[
-		"$ tsgo --noEmit -p tsconfig.json",
-		"apps/web/components/ui/CopyButton.tsx(21,9): error TS2304: Cannot find name 'failed'.",
-		"apps/web/components/ui/CopyButton.tsx(21,35): error TS2304: Cannot find name 'setFailed'.",
-		"Found 2 errors in 1 file.",
-		"exit code 2",
-	].join("\n"),
-);
+/** The plan as a todo board: the change, its test and the checks. */
+const todoPlan: ToolItem = {
+	...todoArgsTool,
+	id: 7,
+	toolCallId: "call_todo_7",
+	args: {
+		phases: [
+			{
+				name: "Copy button",
+				tasks: [
+					{ content: "Give CopyButton a title prop", status: "completed" },
+					{ content: "Wrap fences and mount the button", status: "in_progress" },
+				],
+			},
+			{
+				name: "Checks",
+				tasks: [
+					{ content: "Tests for the copied feedback and fence text", status: "pending" },
+					{ content: "Types check", status: "pending" },
+				],
+			},
+		],
+	},
+	output: "Updated 2 phases.",
+};
 
-const fixNote: ChatItem = {
-	kind: "assistant",
+/** CopyButton gains a `title` and a shared label helper for the fences. */
+const copyButtonEdit: ToolItem = {
+	...editToolItem,
+	id: 8,
+	toolCallId: "call_edit_8",
+	args: {
+		path: "apps/web/components/ui/CopyButton.tsx",
+		old_string: [
+			"export const COPY_FEEDBACK_MS = 1200;",
+			"",
+			"export const CopyButton = (props) => {",
+			'\tconst label = copied() ? "copied" : "copy";',
+			"\treturn <button>{label}</button>;",
+			"};",
+		].join("\n"),
+		new_string: [
+			"export const COPY_FEEDBACK_MS = 1200;",
+			"",
+			'export const copyLabel = (copied: boolean): string => (copied ? "copied" : "copy");',
+			"",
+			"export const CopyButton = (props) => {",
+			"\tconst label = copyLabel(copied());",
+			"\treturn <button title={props.title}>{label}</button>;",
+			"};",
+		].join("\n"),
+	},
+	output: "Applied 1 edit to apps/web/components/ui/CopyButton.tsx",
+};
+
+/** Who else renders `CopyButton` before its props change. */
+const copyButtonRefs: ToolItem = {
+	...lspReferencesTool,
+	id: 9,
+	toolCallId: "call_lsp_9",
+	args: {
+		action: "references",
+		file: "apps/web/components/ui/CopyButton.tsx",
+		symbol: "CopyButton",
+	},
+	output: [
+		"apps/web/components/chat/transcript/AssistantCard.tsx:41:6",
+		"apps/web/components/chat/transcript/UserCard.tsx:58:7",
+		"apps/web/components/chat/tools/ToolCardShell.tsx:112:9",
+		"apps/web/components/review/DiffHunk.tsx:77:8",
+		"apps/web/components/ui/Markdown.tsx:14:10",
+	].join("\n"),
+};
+
+const fenceEdit: ToolItem = {
+	...editToolItem,
+	id: 10,
+	toolCallId: "call_edit_10",
+	args: {
+		path: "apps/web/components/ui/Markdown.tsx",
+		old_string: [
+			"\tconst html = renderMarkdown(props.text);",
+			'\treturn <div class="md" innerHTML={html} />;',
+		].join("\n"),
+		new_string: [
+			"\tconst html = renderMarkdown(props.text);",
+			"\tlet host!: HTMLDivElement;",
+			'\tcreateEffect(() => host.querySelectorAll("pre").forEach(wrapFence));',
+			'\treturn <div ref={host} class="md" innerHTML={html} />;',
+		].join("\n"),
+	},
+	output: "Applied 1 edit to apps/web/components/ui/Markdown.tsx",
+};
+
+const testWrite: ToolItem = {
+	...writeToolItem,
 	id: 11,
-	blocks: [
-		{
-			kind: "text",
-			text: "Two missing declarations: I referenced the `failed` signal before creating it. Adding it next to `copied`.",
-		},
-	],
-	usage: turnUsage(13_042, 214, 12_800),
-	ttft: 590,
-	duration: 2_240,
+	toolCallId: "call_write_11",
+	args: {
+		path: "apps/web/test/copy-button.test.ts",
+		content: [
+			'import { describe, expect, test } from "bun:test";',
+			'import { COPY_FEEDBACK_MS, copyLabel } from "../components/ui/CopyButton";',
+			'import { fenceText } from "../components/ui/Markdown";',
+			"",
+			'describe("CopyButton", () => {',
+			'\ttest("shows copied feedback for 1200ms", () => {',
+			"\t\texpect(COPY_FEEDBACK_MS).toBe(1200);",
+			'\t\texpect(copyLabel(true)).toBe("copied");',
+			"\t});",
+			'\ttest("copies the fence text", () => {',
+			'\t\tconst pre = document.createElement("pre");',
+			'\t\tpre.textContent = "bun run check:types";',
+			'\t\texpect(fenceText(pre)).toBe("bun run check:types");',
+			"\t});",
+			'\ttest("restores the label after the timeout", () => {',
+			'\t\texpect(copyLabel(false)).toBe("copy");',
+			"\t});",
+			"});",
+		].join("\n"),
+	},
+	output: "Wrote 19 lines to apps/web/test/copy-button.test.ts",
 };
 
 const typeCheckPassed = bashTool(
@@ -298,7 +380,7 @@ const testRun = bashTool(
 	[
 		"apps/web/test/copy-button.test.ts:",
 		"(pass) shows copied feedback for 1200ms",
-		"(pass) shows failed when the clipboard rejects",
+		"(pass) copies the fence text",
 		"(pass) restores the label after the timeout",
 		"",
 		" 3 pass",
@@ -306,6 +388,62 @@ const testRun = bashTool(
 		"Ran 3 tests across 1 file. [164.00ms]",
 	].join("\n"),
 );
+
+/** Where the copy button sits in a fence whose code scrolls sideways. */
+const fenceCornerSearch: ToolItem = {
+	...webSearchDoneTool,
+	id: 16,
+	toolCallId: "call_web_search_16",
+	args: { query: "css pin button to corner of horizontally scrolling pre element" },
+	output: [
+		"position - CSS: https://developer.mozilla.org/en-US/docs/Web/CSS/position",
+		"overflow - CSS: https://developer.mozilla.org/en-US/docs/Web/CSS/overflow",
+		"Clipboard: writeText() method: https://developer.mozilla.org/en-US/docs/Web/API/Clipboard/writeText",
+	].join("\n"),
+};
+
+/** Bar chart the eval cell prints: where code fences sit in this repo's recorded sessions. */
+const fenceParentsChart: ImageArg = {
+	type: "image",
+	mimeType: "image/svg+xml",
+	data: btoa(
+		[
+			'<svg xmlns="http://www.w3.org/2000/svg" width="420" height="240" viewBox="0 0 420 240">',
+			'<rect width="420" height="240" fill="#ffffff"/>',
+			'<g font-family="sans-serif" font-size="12" fill="#222">',
+			'<text x="122" y="26" font-size="14">Code fences by parent element</text>',
+			'<rect x="90" y="56" width="280" height="26" fill="#4c78a8"/><text x="10" y="74">top level</text><text x="376" y="74">412</text>',
+			'<rect x="90" y="100" width="65" height="26" fill="#4c78a8"/><text x="10" y="118">list item</text><text x="161" y="118">96</text>',
+			'<rect x="90" y="144" width="12" height="26" fill="#4c78a8"/><text x="10" y="162">blockquote</text><text x="108" y="162">18</text>',
+			'<rect x="90" y="188" width="3" height="26" fill="#4c78a8"/><text x="10" y="206">table cell</text><text x="99" y="206">4</text>',
+			"</g></svg>",
+		].join(""),
+	),
+};
+
+/** Counts where fences nest in past sessions, so the wrapper covers more than top-level `<pre>`. */
+const fenceParents: ToolItem = {
+	...evalImageTool,
+	id: 18,
+	toolCallId: "call_eval_18",
+	args: {
+		language: "python",
+		code: [
+			"import matplotlib.pyplot as plt",
+			"from fence_scan import fence_parents  # walks assistant markdown in session logs",
+			"counts = fence_parents('~/.omp/sessions/omp-web')",
+			"print(counts)",
+			"plt.barh(list(counts), list(counts.values()))",
+			"plt.title('Code fences by parent element')",
+			"plt.show()",
+		].join("\n"),
+	},
+	output: [
+		"{'top level': 412, 'list item': 96, 'blockquote': 18, 'table cell': 4}",
+		"<Figure size 420x240 with 1 Axes>",
+	].join("\n"),
+	images: [fenceParentsChart],
+};
 
 const summaryNote: ChatItem = {
 	kind: "assistant",
@@ -316,23 +454,25 @@ const summaryNote: ChatItem = {
 			text: [
 				"## Summary",
 				"",
-				"Code fences now carry a copy button, and `CopyButton` reports a failed write.",
+				"Code fences now carry a copy button, fences nested in list items included, and each copy confirms with `copied`.",
 				"",
 				"| File | Change |",
 				"| --- | --- |",
-				"| `components/ui/CopyButton.tsx` | `failed` state, `title` prop |",
+				"| `components/ui/CopyButton.tsx` | `copyLabel` helper, `title` prop |",
 				"| `components/ui/Markdown.tsx` | wraps each fence in `.code-fence` and mounts the button |",
-				"| `styles/chat.css` | positions the button in the fence corner |",
+				"| `styles/chat.css` | pins the button to the fence corner while the code scrolls |",
 				"",
 				"The wrapper is applied after `DOMPurify.sanitize`, so model HTML stays untrusted:",
 				"",
 				"```tsx",
+				'const fenceText = (pre: HTMLElement): string => pre.textContent ?? "";',
+				"",
 				"const wrapFence = (pre: HTMLElement): void => {",
 				'\tconst host = document.createElement("div");',
 				'\thost.className = "code-fence";',
 				"\tpre.replaceWith(host);",
 				"\thost.append(pre);",
-				'\trender(() => <CopyButton text={pre.textContent ?? ""} />, host);',
+				'\trender(() => <CopyButton text={fenceText(pre)} title="Copy code" />, host);',
 				"};",
 				"```",
 				"",
@@ -378,7 +518,7 @@ const followUp: ChatItem = {
 	kind: "user",
 	id: 25,
 	text: "Nice. Does the button show up for fences inside list items too? Here is how it looks for me right now:",
-	images: [screenshot],
+	images: [fenceListScreenshot],
 };
 
 const advisor: AdvisorItem = {
@@ -388,6 +528,7 @@ const advisor: AdvisorItem = {
 		{
 			note: "The wrapper re-renders on every markdown update; key it by the fence's text to avoid remounting the copy button mid-stream.",
 			severity: "concern",
+			advisor: "architect",
 			turn: 6,
 			turnsAgo: 1,
 		},
@@ -414,7 +555,7 @@ const answerNote: ChatItem = {
 	duration: 1_980,
 };
 
-/** A full settled conversation: prompts, markdown, thinking, every common tool kind, compaction, notice, bash, advisor. */
+/** A full settled conversation: prompts, markdown, thinking, every common tool kind, a todo board, subagents, compaction, a notice, bash, advisor. */
 export const screenItems: ChatItem[] = [
 	userAsk,
 	planNote,
@@ -422,12 +563,11 @@ export const screenItems: ChatItem[] = [
 	reid(grepDoneTool, 4),
 	reid(readDoneTool, 5),
 	findingsNote,
-	reid(todoArgsTool, 7),
-	reid(editToolItem, 8),
-	reid(lspReferencesTool, 9),
-	typeCheckFailed,
-	fixNote,
-	reid(editToolItem, 12),
+	todoPlan,
+	copyButtonEdit,
+	copyButtonRefs,
+	fenceEdit,
+	testWrite,
 	typeCheckPassed,
 	testRun,
 	{
@@ -436,11 +576,9 @@ export const screenItems: ChatItem[] = [
 		level: "info",
 		message: "Auto-compaction scheduled at 85% of context window.",
 	},
-	reid(webSearchDoneTool, 16),
+	fenceCornerSearch,
 	taskTool,
-	reid(evalImageTool, 18),
-	{ kind: "notice", id: 19, level: "warning", message: "Context is at 59% of the 200k window." },
-	{ kind: "notice", id: 20, level: "error", message: "MCP server 'linear' disconnected." },
+	fenceParents,
 	summaryNote,
 	userBash,
 	compaction,
@@ -479,7 +617,7 @@ export const screenStreamingItems: ChatItem[] = [
 		ttft: 598,
 		duration: 2_410,
 	},
-	reid(editToolItem, 8),
+	copyButtonEdit,
 	streamingTypeCheck,
 ];
 
@@ -487,11 +625,11 @@ export const screenStreamingItems: ChatItem[] = [
 export const screenLiveBlocks: Block[] = [
 	{
 		kind: "thinking",
-		text: "The check is still running. While it finishes I can draft the test: render CopyButton with a rejecting clipboard stub and assert the `failed` label appears.",
+		text: "The check is still running. While it finishes I can draft the test: render a numbered list with two fences and assert each one gets its own copy button that shows `copied` after a click.",
 	},
 	{
 		kind: "text",
-		text: "While the type check runs, I'll prepare the regression test for the **failed** state. It stubs `navigator.clipboard.writeText` to reject, clicks the button, and expects the label to read `fai",
+		text: "While the type check runs, I'll prepare the test for fences nested in list items. It renders a numbered list with two fences, clicks each button, and expects the label to read `cop",
 	},
 ];
 
@@ -545,7 +683,7 @@ export const screenLongPaste = Array.from(
 
 /** Draft shown in a composer with a pending multi-line message. */
 export const screenDraft =
-	"Add a regression test for fences nested in list items.\nIt should assert one CopyButton per <pre>, and that a rejected clipboard write shows the failed label.";
+	"Add a regression test for fences nested in list items.\nIt should assert one CopyButton per <pre>, and that each one shows copied after a click.";
 
 /** The pasted screenshot used for the composer's image chip. */
-export const screenImage: ImageArg = screenshot;
+export const screenImage: ImageArg = fenceListScreenshot;

@@ -1,4 +1,4 @@
-import type { UsageReport } from "@oh-my-pi/pi-ai";
+import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import {
 	type RosterEntry,
 	type DaemonInfo,
@@ -696,6 +696,22 @@ export const rosterUsageReports: UsageReport[] = [
 		],
 	},
 ];
+
+/**
+ * The fleet's default `/ctl/usage` answer (fixtures/routes.ts, the App demo): the same accounts with
+ * no exhausted window and every percent read out ("63%"), as a healthy provider reports them.
+ */
+export const appUsageReports: UsageReport[] = rosterUsageReports.map((report) => ({
+	...report,
+	limits: report.limits.map((limit): UsageLimit => {
+		if (limit.status === "exhausted")
+			return { ...limit, amount: { unit: "requests", used: 96, limit: 150 }, status: "ok" };
+		const fraction = limit.amount.usedFraction;
+		return limit.amount.unit === "percent" && fraction !== undefined
+			? { ...limit, amount: { ...limit.amount, used: Math.round(fraction * 100) } }
+			: limit;
+	}),
+}));
 
 /** WorktreeDeleteInfo: clean, merged, linked worktree; the dialog offers branch deletion. */
 export const worktreeInfoClean: WorktreeDeleteInfo = {

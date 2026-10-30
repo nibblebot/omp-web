@@ -1,6 +1,7 @@
 import type { SettingsItem, SettingsModel } from "#lib/wire/protocol";
 import { setState, state } from "../../web/state";
-import { answerCalls, type CallHandlers } from "../session";
+import { answerCalls } from "../session";
+import { settingsCalls } from "./settings";
 
 /**
  * The SDK display settings the Appearance sheet owns (APPEARANCE_SDK_SETTINGS), with the
@@ -14,8 +15,6 @@ const flag = (path: string, label: string, description: string, value: boolean):
 	value,
 	changed: false,
 });
-
-const DEFAULTS: Record<string, unknown> = {};
 
 const sdkItems: SettingsItem[] = [
 	flag(
@@ -89,7 +88,6 @@ const sdkItems: SettingsItem[] = [
 		],
 	},
 ];
-for (const item of sdkItems) DEFAULTS[item.path] = item.value;
 
 /** A fresh settings model holding every Appearance sheet SDK row at its default. */
 export function appearanceSettingsModel(): SettingsModel {
@@ -107,32 +105,12 @@ export function appearanceSettingsModel(): SettingsModel {
 }
 
 /**
- * `getSettings` and the write calls over one in-memory model, so toggling an Appearance sheet row
- * sticks the way a live session's does (the write acks a newer revision; the refetch returns it).
+ * Attach a session (unless the story already has one) whose settings model carries the Appearance
+ * sheet's SDK rows; writes stick (`settingsCalls`).
  */
-export function appearanceCalls(initial: SettingsModel = appearanceSettingsModel()): CallHandlers {
-	let model = initial;
-	const write = (path: string, value: unknown) => {
-		const next = structuredClone(model);
-		for (const item of next.tabs.flatMap((tab) => tab.groups.flatMap((group) => group.items))) {
-			if (item.path !== path) continue;
-			item.value = value;
-			item.changed = value !== DEFAULTS[path];
-		}
-		model = { ...next, revision: (model.revision ?? 0) + 1 };
-		return { revision: model.revision };
-	};
-	return {
-		getSettings: () => model,
-		setSetting: (args) => write(String(args[0]), args[1]),
-		unsetSetting: (args) => write(String(args[0]), DEFAULTS[String(args[0])]),
-	};
-}
-
-/** Attach a session (unless the story already has one) whose settings model carries the Appearance sheet's SDK rows; writes stick. */
 export function seedAppearanceSettings(): void {
 	const model = appearanceSettingsModel();
 	if (state.currentWorkspaceId === "") setState("currentWorkspaceId", "sess_09a41c");
 	setState("settingsModel", model);
-	answerCalls(appearanceCalls(model));
+	answerCalls(settingsCalls(model));
 }

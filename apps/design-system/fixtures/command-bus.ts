@@ -44,6 +44,15 @@ function wake(workspaceId: string): void {
 	publish({ type: "roster", entries: roster });
 }
 
+/** Add or replace a roster row (a workspace the fleet created or brought up) and broadcast the delta. */
+export function upsertRosterEntry(row: RosterEntry): void {
+	const known = roster.some((d) => d.workspaceId === row.workspaceId);
+	roster = known
+		? roster.map((d) => (d.workspaceId === row.workspaceId ? row : d))
+		: [...roster, row];
+	publish({ type: "roster_delta", upserted: [row], removed: [] });
+}
+
 /** The entry after its session process stops: asleep, with no live process fields. */
 function asleep(entry: RosterEntry): RosterEntry {
 	const { readyAt: _readyAt, uptime: _uptime, pid: _pid, ...rest } = entry;

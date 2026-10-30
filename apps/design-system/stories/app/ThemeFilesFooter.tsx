@@ -1,7 +1,8 @@
 import { ThemeFilesFooter } from "../../../web/components/app/ThemeFilesFooter";
 import { setState } from "../../../web/state";
-import { seedThemes } from "../../fixtures/themes";
+import { fixtureThemes, seedThemes } from "../../fixtures/themes";
 import { defineStory } from "../../registry";
+import { answerRoutes } from "../../session";
 
 const render = () => (
 	<div class="ds-frame-panel ds-frame-narrow">
@@ -19,7 +20,10 @@ export default defineStory({
 			name: "Failures",
 			description:
 				"The themes folder, Reload themes (it re-reads the folder through the fixture route), and the expandable list of files that failed with each reason.",
-			seed: () => seedThemes(),
+			seed: () => {
+				seedThemes();
+				answerRoutes({ "GET /ctl/themes": () => fixtureThemes({ failures: true }) });
+			},
 			render,
 		},
 		{

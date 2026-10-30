@@ -3,12 +3,13 @@ import starlight from "@astrojs/starlight";
 import { satteri } from "@astrojs/markdown-satteri";
 import { baseLinks } from "./src/base-links.mjs";
 
-// GitHub Pages serves this site from the repository path, so the canonical
-// origin is the user site and every internal URL lives under `base`. Astro
-// prefixes the URLs it generates; `baseLinks` does the same for links authored
-// in Markdown (see `src/base-links.mjs`).
+// GitHub Pages serves this site from `docs/` under the repository path (see
+// .github/workflows/pages.yml), so the canonical origin is the user site and
+// every internal URL lives under `base`. Astro prefixes the URLs it generates;
+// `baseLinks` does the same for links authored in Markdown (see
+// `src/base-links.mjs`).
 const site = "https://nibblebot.github.io";
-const base = "/omp-web/";
+const base = "/omp-web/docs/";
 
 export default defineConfig({
 	site,

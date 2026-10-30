@@ -2,7 +2,6 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { WireSessionEvent } from "#lib/wire/protocol";
 import { applyEvent, setState, state } from "../web/state";
-import { jobCalls } from "./fixtures/jobs";
 import { answerCalls } from "./session";
 import { type CannedStep, cannedTurn } from "./fixtures/canned-turn";
 
@@ -12,12 +11,17 @@ import { type CannedStep, cannedTurn } from "./fixtures/canned-turn";
  * accepted prompt replays the turn through the real `applyEvent` action, the
  * same path the socket mux uses for `event` frames. Prompts sent while a turn
  * runs wait their turn. A state-frame-like stats update follows every
- * settled message, so the cost, token and context readouts move.
+ * settled message, so the cost, token and context readouts move. Stop ends a
+ * turn as an abort (`abortCannedTurn`); leaving its session fast-forwards it
+ * to its end (`finishCannedTurn`), as a real session keeps working unwatched.
  */
 
 interface Run {
 	workspaceId: string;
 	timers: number[];
+	/** The turn's steps in order; `played` counts the ones applied so far. */
+	steps: CannedStep[];
+	played: number;
 	/** Tool calls started and not yet ended, for abort. */
 	openTools: Map<string, string>;
 	/** The assistant message being streamed, rebuilt from its deltas, for abort. */
@@ -37,7 +41,6 @@ export function answerCannedTurns(): void {
 		return undefined;
 	};
 	answerCalls({
-		...jobCalls(),
 		prompt: accept,
 		steer: accept,
 		followUp: accept,
@@ -75,31 +78,54 @@ export function abortCannedTurn(): void {
 	applyEvent({ type: "agent_end", yielded: true });
 }
 
+/**
+ * Fast-forward the running turn to its end, the way a real session keeps
+ * working while the user looks at another one: queued prompts are dropped and
+ * the remaining steps play at once, in order. Synchronous, so a session switch
+ * can settle the transcript before saving it.
+ */
+export function finishCannedTurn(): void {
+	const run = active;
+	if (run === null) return;
+	queued.length = 0;
+	for (const timer of run.timers) clearTimeout(timer);
+	run.timers = [];
+	while (active === run && run.played < run.steps.length) apply(run, run.steps[run.played]!);
+	active = null;
+}
+
 function start(prompt: string): void {
+	const steps = cannedTurn(prompt, ++runCount, Date.now());
 	const run: Run = {
 		workspaceId: state.currentWorkspaceId,
 		timers: [],
+		steps,
+		played: 0,
 		openTools: new Map(),
 		streaming: null,
 	};
 	active = run;
-	runCount += 1;
-	const steps = cannedTurn(prompt, runCount, Date.now());
-	run.timers = steps.map((step) => window.setTimeout(() => play(run, step), step.at));
+	run.timers = steps.map((step, index) => window.setTimeout(() => play(run, index), step.at));
 }
 
-function play(run: Run, step: CannedStep): void {
-	// A session switch aborts the run synchronously (app-view.tsx), so a stale
-	// timer only ever finds a superseded run here.
+/** Play the run up to step `index` (its timer fired). */
+function play(run: Run, index: number): void {
+	// A session switch finishes the run synchronously (app-view.tsx) and an
+	// abort ends it, so a stale timer only ever finds a superseded run here.
 	if (active !== run) return;
+	while (active === run && run.played <= index) apply(run, run.steps[run.played]!);
+	if (active !== null) return;
+	const next = queued.shift();
+	if (next !== undefined) start(next);
+}
+
+/** Apply one step; `agent_end` ends the run. */
+function apply(run: Run, step: CannedStep): void {
+	run.played += 1;
 	track(run, step.event);
 	applyEvent(step.event);
 	if (step.event.type === "message_end") settleStats(step.event.message);
-	if (step.event.type === "agent_end") {
-		active = null;
-		const next = queued.shift();
-		if (next !== undefined) start(next);
-	}
+	if (step.event.type === "agent_end") active = null;
 }
 
 /** Keep what abort needs: open tools and the streamed assistant content so far. */

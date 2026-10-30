@@ -441,6 +441,144 @@ export function subagentTranscriptItems(id: string): ChatItem[] {
 	return createHistoryBuilder().append(file.messages).items;
 }
 
+// ---------------------------------------------------------------------------
+// The App view's task call (fixtures/screen.ts `screenSubagents`): two scouts that
+// finished about 14 minutes before FIXTURE_NOW (minute 106 here).
+// ---------------------------------------------------------------------------
+
+const screenSubFile = (id: string): string =>
+	`${SESSIONS_ROOT}/omp-web/2026-10-09T11-38-02/${id}.jsonl`;
+
+/** Transcripts of the App view's two scouts, by subagent id (`getSubagentMessages`). */
+export const screenSubagentTranscripts: Record<string, SubagentTranscriptFile> = {
+	FenceCallers: transcript(screenSubFile("FenceCallers"), "f", [
+		user(
+			"Find every caller of renderMarkdown in apps/web and say which of them render code fences.",
+			104,
+		),
+		assistant({
+			model: SONNET,
+			minute: 104,
+			stopReason: "toolUse",
+			input: 1620,
+			output: 118,
+			content: [
+				{
+					type: "toolCall",
+					id: "toolu_f1",
+					name: "grep",
+					arguments: { pattern: "renderMarkdown", path: "apps/web" },
+				},
+			],
+		}),
+		toolResult(
+			"toolu_f1",
+			"grep",
+			[
+				"apps/web/components/ui/Markdown.tsx:38: const html = renderMarkdown(props.text);",
+				"apps/web/components/chat/transcript/ThinkingBlock.tsx:52: renderMarkdown(text())",
+				"apps/web/components/chat/tools/ToolMarkdown.tsx:21: innerHTML={renderMarkdown(props.source)}",
+			].join("\n"),
+			104,
+		),
+		assistant({
+			model: SONNET,
+			minute: 105,
+			stopReason: "stop",
+			input: 2104,
+			output: 296,
+			content: [
+				{
+					type: "text",
+					text: [
+						"Three callers, all through the same sanitize pass:",
+						"",
+						"- `components/ui/Markdown.tsx`: assistant text, renders fences",
+						"- `chat/transcript/ThinkingBlock.tsx`: reasoning, renders fences",
+						"- `chat/tools/ToolMarkdown.tsx`: markdown tool results, renders fences",
+						"",
+						"Wrapping fences inside `Markdown.tsx` covers the first; the other two pass their HTML through it too.",
+					].join("\n"),
+				},
+			],
+		}),
+	]),
+	PreStyles: transcript(screenSubFile("PreStyles"), "p", [
+		user("List the CSS rules that style pre blocks in the transcript.", 104),
+		assistant({
+			model: SONNET,
+			minute: 105,
+			stopReason: "toolUse",
+			input: 1580,
+			output: 104,
+			content: [
+				{
+					type: "toolCall",
+					id: "toolu_p1",
+					name: "grep",
+					arguments: { pattern: "\\bpre\\b", path: "apps/web/styles" },
+				},
+			],
+		}),
+		toolResult(
+			"toolu_p1",
+			"grep",
+			[
+				"apps/web/styles/chat.css:412: .md pre {",
+				"apps/web/styles/chat.css:421: .md pre code {",
+			].join("\n"),
+			105,
+		),
+		assistant({
+			model: SONNET,
+			minute: 106,
+			stopReason: "stop",
+			input: 1932,
+			output: 214,
+			content: [
+				{
+					type: "text",
+					text: "Two rules: `.md pre` (padding, radius, horizontal overflow) and `.md pre code` (font size). Neither sets `position`, so a wrapper can position the copy button without fighting them.",
+				},
+			],
+		}),
+	]),
+};
+
+/** The scouts' worker rows as the session's `workerList` answers them: finished, history on disk. */
+export const screenSubagentWorkerRows = [
+	{
+		id: "FenceCallers",
+		status: "completed",
+		displayName: "Find every caller of renderMarkdown",
+		kind: "scout",
+		task: "Find every caller of renderMarkdown in apps/web and say which of them render code fences.",
+		description: "Find every caller of renderMarkdown",
+		parentToolCallId: "call_task_17",
+		model: SONNET,
+		usage: { tokens: 4_138, requests: 2, cost: 0.019 },
+		sessionFile: screenSubFile("FenceCallers"),
+		hasHistory: true,
+		lastActivity: at(105),
+		createdAt: at(104),
+	},
+	{
+		id: "PreStyles",
+		status: "completed",
+		displayName: "List CSS rules that style pre blocks",
+		kind: "scout",
+		task: "List the CSS rules that style pre blocks in the transcript.",
+		description: "List CSS rules that style pre blocks",
+		parentToolCallId: "call_task_17",
+		model: SONNET,
+		usage: { tokens: 3_830, requests: 2, cost: 0.016 },
+		sessionFile: screenSubFile("PreStyles"),
+		hasHistory: true,
+		lastActivity: at(106),
+		createdAt: at(104),
+	},
+];
+
 export const subagentInfos: SubagentFixture[] = [
 	{
 		id: "FixtureBuilder.ChatMap",
@@ -692,6 +830,34 @@ export const advisorHistoryPage = {
 		"[reviewer-gpt5] Agreed. Put it beside the duration chip in the expanded header and cover the retried path in ToolCard.test.tsx.",
 	].join("\n\n"),
 	nextCursor: "c2",
+};
+
+/**
+ * The advisors of the App view's attached session (fixtures/screen.ts): `architect` and `reviewer`,
+ * who wrote the transcript's advisor notes, both watching with nothing to warn about.
+ */
+export const screenAdvisorOverview: { overview: AdvisorOverview; stats: typeof advisorStats } = {
+	overview: {
+		configured: true,
+		roleResolvable: true,
+		active: true,
+		advisors: [
+			{ name: "architect", status: "watching", yielded: false },
+			{ name: "reviewer", status: "idle", yielded: true },
+		],
+	},
+	stats: { cost: 0.142, tokens: { total: 38_410 }, messages: { total: 6 } },
+};
+
+/** The App view advisors' history (`advisorTranscript`), ending in the transcript's two notes. */
+export const screenAdvisorHistory = {
+	available: true,
+	text: [
+		"[architect] Reusing CopyButton keeps one clipboard path; good call. Watch the fence wrapper's lifetime during streaming.",
+		"[reviewer] Plan looks right. Cover fences nested in list items in the test too.",
+		"[architect] The wrapper re-renders on every markdown update; key it by the fence's text to avoid remounting the copy button mid-stream.",
+		"[reviewer] `title` falls back to the label when unset; consider an aria-label for icon-only layouts.",
+	].join("\n\n"),
 };
 
 interface LoopPolicyFixture {

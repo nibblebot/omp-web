@@ -12,9 +12,9 @@ import {
 } from "../../web/state";
 
 /**
- * Fixture answer of `GET /ctl/themes`: the built-ins plus a custom single-variant theme, a
- * built-in replaced by a custom file (`modified`), and two files that failed to load, so the
- * picker shows a half row, the "modified" badge and the footer's failure list.
+ * Fixture answer of `GET /ctl/themes`: the built-ins plus a custom single-variant theme and a
+ * built-in replaced by a custom file (`modified`), so the picker shows a half row and the
+ * "modified" badge. `failures` adds two files that failed to load (the footer's failure list).
  */
 
 /** A custom dark-only theme, so the linked picker shows a single-half row. */
@@ -44,31 +44,34 @@ function customEntry(): ThemeEntry {
 	return result.entry;
 }
 
-/** The themes payload the design server and the stories answer with. */
-export function fixtureThemes(): ThemesPayload {
+/** Two theme files the folder holds that fail validation, each with its reasons. */
+const THEME_FAILURES: ThemesPayload["failures"] = [
+	{
+		file: "neon-night.json",
+		errors: [
+			'variants.dark.accent: not a color (expected #rgb, #rrggbb, #rrggbbaa or oklch(L% C h [/ a]), got "neon")',
+			"variants.dark.panel: missing required token",
+		],
+	},
+	{
+		file: "My Theme.json",
+		errors: [
+			'file name: "My Theme" must match ^[a-z0-9-]+$ (lowercase letters, digits and dashes)',
+		],
+	},
+];
+
+/** The themes payload: the fleet's default answer (the App demo) loads every file; stories add `failures`. */
+export function fixtureThemes(options: { failures?: boolean } = {}): ThemesPayload {
 	return {
-		dir: "/home/demo/.omp-web/themes",
+		dir: "/home/joshua/.omp-web/themes",
 		themes: [
 			...BUILTIN_THEMES.map((theme) =>
 				theme.id === "gruvbox" ? { ...theme, source: "modified" as const } : theme,
 			),
 			customEntry(),
 		],
-		failures: [
-			{
-				file: "neon-night.json",
-				errors: [
-					'variants.dark.accent: not a color (expected #rgb, #rrggbb, #rrggbbaa or oklch(L% C h [/ a]), got "neon")',
-					"variants.dark.panel: missing required token",
-				],
-			},
-			{
-				file: "My Theme.json",
-				errors: [
-					'file name: "My Theme" must match ^[a-z0-9-]+$ (lowercase letters, digits and dashes)',
-				],
-			},
-		],
+		failures: options.failures ? structuredClone(THEME_FAILURES) : [],
 	};
 }
 
@@ -81,7 +84,7 @@ export function fixtureThemes(): ThemesPayload {
 export function seedThemes(
 	selection: { mode?: ThemeMode; linked?: boolean; light?: string; dark?: string } = {},
 ): void {
-	setState({ themes: fixtureThemes(), themesError: null });
+	setState({ themes: fixtureThemes({ failures: true }), themesError: null });
 	changeThemeMode(selection.mode ?? "dark");
 	changeThemeLinked(true);
 	chooseLinkedTheme(DEFAULT_THEME_ID);

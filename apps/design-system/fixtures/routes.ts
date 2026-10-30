@@ -16,13 +16,14 @@ import {
 } from "./tx";
 import { FIXTURE_NOW } from "./session";
 import { rosterFsBrowse, rosterRecentRoots } from "./roster-routes";
-import { rosterUsageReports } from "./roster";
+import { appUsageReports } from "./roster";
 import { fixtureThemes } from "./themes";
 
 /**
  * Fixture HTTP routes. Components fetch fleet endpoints at runtime (store/fleet-api.ts,
- * store/settings.ts, store/transport.ts, store/auth.ts); the design server
- * answers them from here, before its 404 stub. Add a route by appending to
+ * store/settings.ts, store/transport.ts, store/auth.ts); the in-page fetch hook
+ * (session.ts `installSession`) answers them from here, after story routes and
+ * before its /ctl and /auth 404 stub. Add a route by appending to
  * `fixtureRoutes`:
  *
  *   { method: "GET", path: "/ctl/things/:id", respond: ({ params }) => thing(params.id) }
@@ -267,7 +268,12 @@ export const fixtureRoutes: FixtureRoute[] = [
 		method: "GET",
 		path: "/ctl/sessions/:workspaceId/stderr",
 		respond: ({ params }) => ({
-			text: `[${params.workspaceId}] warn: provider rate limit near, backing off 2s\n[${params.workspaceId}] info: resumed\n`,
+			text: [
+				`[${params.workspaceId}] info: callback pair ready (generation 3)`,
+				`[${params.workspaceId}] info: browser client attached`,
+				`[${params.workspaceId}] info: turn finished in 18.4s`,
+				"",
+			].join("\n"),
 		}),
 	},
 	{
@@ -302,7 +308,7 @@ export const fixtureRoutes: FixtureRoute[] = [
 			featureSizesFixture.available ? featureSizes : unavailable("No feature sizes in this build."),
 	},
 	// --- store/usage.ts: fleet usage reports (stories vary it with answerRoutes) ---
-	{ method: "GET", path: "/ctl/usage", respond: () => rosterUsageReports },
+	{ method: "GET", path: "/ctl/usage", respond: () => appUsageReports },
 	// --- store/projects.ts: fetch a local-source clone's branch into its project ---
 	{
 		method: "POST",

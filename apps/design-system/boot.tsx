@@ -22,9 +22,10 @@ import { installSession } from "./session";
 export function boot(title: string, page: () => JSX.Element): void {
 	document.title = title;
 	initTheme();
-	// The stories' topbar and the demo App read the theme list from the fixture /ctl/themes.
-	void reloadThemes();
+	// Before the first fetch: the in-page hook answers fixture routes (session.ts).
 	installSession();
+	// The stories' top bar and the demo App read the theme list from the fixture /ctl/themes.
+	void reloadThemes();
 	// Only what the app can enable: an in-development feature (Analysis) is never active here.
 	void activateFeatures(ENABLEABLE_FEATURE_IDS).then(() =>
 		render(page, document.getElementById("root")!),

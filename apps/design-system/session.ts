@@ -20,6 +20,7 @@ import {
 	setDialOutcome,
 } from "./fake-socket";
 import { answerBusCommand, primingFrames } from "./fixtures/command-bus";
+import { handleFixtureRoute } from "./fixtures/routes";
 
 /**
  * Fake session process for stories. Components reach the session process through the browser
@@ -33,8 +34,10 @@ import { answerBusCommand, primingFrames } from "./fixtures/command-bus";
  * stays as seeded) that carries commands out and acks/answers back, and
  * `resetSession` closes it. Anything without a handler falls through to the
  * App fleet's own commands (fixtures/command-bus.ts), else a nack 404.
- * Control-plane fetches are answered by the design server from
- * fixtures/routes.ts unless a story overrides the route (`answerRoutes`).
+ * Control-plane fetches are answered in the page too: a story's own route
+ * (`answerRoutes`) first, then fixtures/routes.ts, then a 404 for any other
+ * `/ctl` or `/auth` path, so the dev server and the static demo build (served
+ * from any path, e.g. GitHub Pages) behave the same.
  *
  * `applySeeds` calls `resetSession()` before every story/variant seed, so
  * handlers, the socket and the connected flag never leak from one story into
@@ -51,6 +54,9 @@ export type RouteHandlers = Record<string, RouteHandler>;
 export type { DialOutcome };
 
 const ANSWER_DELAY_MS = 120;
+/** Control-plane paths no fixture answers get this 404, never the page's host (there is no fleet). */
+const NO_FLEET_PATH = /^\/(ctl|auth)(\/|$)/;
+const NO_FLEET = { error: "design system: no fleet behind this server" };
 let calls: CallHandlers = {};
 let commands: CommandHandlers = {};
 let routes: RouteHandlers = {};
@@ -121,7 +127,7 @@ export function answerCommands(next: CommandHandlers): void {
 	ensureStoryLink();
 }
 
-/** Answer these control-plane fetches in the page instead of the design server's fixture routes. */
+/** Answer these control-plane fetches ahead of the fixture routes (fixtures/routes.ts). */
 export function answerRoutes(next: RouteHandlers): void {
 	routes = next;
 }
@@ -145,10 +151,15 @@ export function dialClient(outcome: DialOutcome): void {
 		});
 }
 
-async function answerRoute(handler: RouteHandler): Promise<Response> {
+/** Wait as long as an answer takes to arrive: page code never sees a fetch settle within the same tick. */
+function answerDelay(): Promise<void> {
 	const delay = Promise.withResolvers<void>();
 	setTimeout(delay.resolve, ANSWER_DELAY_MS);
-	await delay.promise;
+	return delay.promise;
+}
+
+async function answerRoute(handler: RouteHandler): Promise<Response> {
+	await answerDelay();
 	try {
 		const data = await handler();
 		return data instanceof Response ? data : Response.json(data);
@@ -204,7 +215,7 @@ const fleet: Fleet = {
 	},
 };
 
-/** Install the route hook and the fake browser socket once, at boot (boot.tsx). */
+/** Install the in-page fetch hook (story routes, fixture routes, the no-fleet 404) and the fake browser socket once, at boot (boot.tsx). */
 export function installSession(): void {
 	const nativeFetch = window.fetch.bind(window);
 	const answering = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -214,6 +225,18 @@ export function installSession(): void {
 		).toUpperCase();
 		const routeHandler = routes[`${method} ${url.pathname}`];
 		if (routeHandler) return answerRoute(routeHandler);
+		if (url.origin !== location.origin) return nativeFetch(input, init);
+		const fixture = await handleFixtureRoute(
+			new Request(input instanceof Request ? input.clone() : url, init),
+		);
+		if (fixture) {
+			await answerDelay();
+			return fixture;
+		}
+		if (NO_FLEET_PATH.test(url.pathname)) {
+			await answerDelay();
+			return Response.json(NO_FLEET, { status: 404 });
+		}
 		return nativeFetch(input, init);
 	};
 	Object.defineProperty(window, "fetch", { value: answering, configurable: true, writable: true });

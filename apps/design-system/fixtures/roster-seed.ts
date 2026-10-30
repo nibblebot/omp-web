@@ -1,23 +1,27 @@
-import { workspaceSessionsLimit, type SessionListEntry } from "#lib/wire/protocol";
+import {
+	workspaceSessionsLimit,
+	type RegisteredProject,
+	type SessionListEntry,
+} from "#lib/wire/protocol";
 import { markUnread, pruneUnread } from "../../web/fleet-ui/unread";
-import { setState, type state } from "../../web/state";
+import { setState, state } from "../../web/state";
 import { settleAddProject } from "../../web/store/projects";
 import { settleWorkspaceSessions } from "../../web/store/roster";
 import { type CommandHandlers, answerCommands } from "../session";
-import { rosterFleetState, rosterProjects } from "./roster";
+import { rosterFleetState } from "./roster";
 import { rosterFsBrowse } from "./roster-routes";
 
 /**
  * Project commands the sidebar and the Add project dialog send. A registered
  * path answers `existing`; any directory the fixture browser can list registers a new
- * project, git or not; any other path is refused as
- * not a directory. remove_project and sync_projects change
- * nothing, so the seeded roster stays as it is.
+ * project, git or not, and shows up in the sidebar as the fleet's registered_projects
+ * frame would show it; any other path is refused as not a directory. remove_project
+ * and sync_projects change nothing, so the seeded roster stays as it is.
  */
-const projectCommands: CommandHandlers = {
+export const projectCommands: CommandHandlers = {
 	add_project: (cmd) => {
 		if (cmd.type !== "add_project") return;
-		const registered = rosterProjects.find((project) => project.path === cmd.path);
+		const registered = state.registeredProjects.find((project) => project.path === cmd.path);
 		if (registered) {
 			settleAddProject({ id: cmd.id, ok: true, projectId: registered.projectId, existing: true });
 			return;
@@ -26,8 +30,19 @@ const projectCommands: CommandHandlers = {
 			settleAddProject({ id: cmd.id, ok: false, error: `not a directory: ${cmd.path}` });
 			return;
 		}
+		const parent = rosterFsBrowse(cmd.path.slice(0, cmd.path.lastIndexOf("/")));
+		const listed = parent instanceof Response ? undefined : parent.dirs;
+		const git = listed?.find((dir) => dir.path === cmd.path)?.hasGit === true;
 		const name = cmd.path.split("/").pop() ?? cmd.path;
-		settleAddProject({ id: cmd.id, ok: true, projectId: `proj_${name}`, existing: false });
+		const project: RegisteredProject = {
+			projectId: `proj_${name}`,
+			path: cmd.path,
+			name,
+			addedAt: Date.now(),
+			...(git ? {} : { git: false }),
+		};
+		setState("registeredProjects", (projects) => [...projects, project]);
+		settleAddProject({ id: cmd.id, ok: true, projectId: project.projectId, existing: false });
 	},
 	remove_project: () => {},
 	sync_projects: () => {},

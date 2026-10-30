@@ -40,7 +40,7 @@ interface Group {
 /** Off; Shift: the component under the pointer and its ancestors; Ctrl+Shift: every component. */
 type Mode = "off" | "hover" | "all";
 
-/** The held label mode. Module-level so the top bar can light up the shortcut being held. */
+/** The held label mode. Module-level so the demo's sidebar note can light up the shortcut being held. */
 const [mode, setMode] = createSignal<Mode>("off");
 export const labelMode = mode;
 
@@ -225,7 +225,7 @@ export const Labels: Component<{
 		window.addEventListener("pointermove", move, { capture: true, passive: true });
 		onCleanup(() => {
 			// The mode outlives this component; a key still held when the App
-			// view unmounts must not leave labels or the top bar chip lit.
+			// view unmounts must not leave labels or the sidebar note's chip lit.
 			setMode("off");
 			window.removeEventListener("keydown", down);
 			window.removeEventListener("keyup", up);

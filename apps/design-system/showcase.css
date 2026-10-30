@@ -1,15 +1,18 @@
 /* Showcase chrome. Loaded after apps/web/styles.css so it can use the shared
  * design tokens (tokens.css) and follow the active theme palette. Every class
  * is ds- prefixed so it can never collide with production selectors. */
-/* Page: the shared top bar above the page body (demo App view or stories), filling the window.
- * The bar height lives on body so portaled modal backdrops can clear it. */
+/* Page: a window-filling column. The stories page puts the shared top bar above its body; the
+ * demo page is the App alone. The bar height lives on body so portaled modal backdrops can clear it. */
 body {
 	--ds-topbar-h: 2.75rem;
 }
 .ds-page {
 	display: flex;
 	flex-direction: column;
+	/* The App's own shell height (app.css): --app-h follows the visual viewport, so a mobile
+	 * browser toolbar or on-screen keyboard never pushes the composer below the fold. */
 	height: 100vh;
+	height: var(--app-h, 100dvh);
 	overflow: hidden;
 }
 .ds-topbar {
@@ -24,36 +27,70 @@ body {
 	border-bottom: 1px solid var(--border);
 	font-size: var(--fs-md);
 }
-.ds-topbar .ds-brand {
-	padding: 0 var(--space-4) 0 0;
-}
-/* Brand, badge, tabs and theme keep their size; the shortcut chips take what is left. */
+/* Brand and theme keep their size; the end group (the Theme button) sits at the far end and
+ * takes what is left. The brand gives way last, on the narrowest phones. */
 .ds-topbar > * {
 	flex: none;
 }
-/* Fixed "Demo" badge beside the brand: the whole page runs on fixtures. */
+.ds-topbar > .ds-topbar-end {
+	display: flex;
+	flex: 0 1 auto;
+	align-items: center;
+	gap: var(--space-4);
+	min-width: 0;
+	margin-left: auto;
+}
+.ds-topbar .ds-brand {
+	flex: 0 1 auto;
+	min-width: 0;
+	padding: 0 var(--space-4) 0 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Demo page: the DEMO badge and the label shortcuts, docked in the App's own sidebar just above
+ * its Usage panel (demo.tsx SidebarDemoNote), framed like that panel. */
+.ds-demo-note-host {
+	flex: none;
+}
+.ds-demo-note {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--space-3);
+	padding: var(--space-4) var(--gutter);
+	border-top: 1px solid var(--border);
+	font-size: var(--fs-sm);
+}
 .ds-demo-badge {
-	padding: var(--space-1) var(--space-5);
+	padding: var(--space-1) var(--space-4);
 	border: 1px solid var(--warning-border);
 	border-radius: var(--r-pill);
 	background: var(--warning-bg);
 	color: var(--warning);
-	font-size: var(--fs-lg);
+	font-size: var(--fs-md);
 	font-weight: 800;
 	letter-spacing: 0.14em;
 	text-transform: uppercase;
 }
-/* App view label shortcuts: keycap chips; the held one fills with the accent. */
+/* Label shortcuts: keycap chips; the held one fills with the accent. */
 .ds-shortcuts {
 	display: flex;
-	gap: var(--space-4);
-	margin-left: auto;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--space-2);
+	max-width: 100%;
+}
+.ds-shortcuts-title {
+	color: var(--muted);
 }
 .ds-shortcut {
 	display: inline-flex;
 	align-items: center;
 	gap: var(--space-2);
-	padding: var(--space-2) var(--space-5);
+	max-width: 100%;
+	box-sizing: border-box;
+	padding: var(--space-1) var(--space-4);
 	border: 1px solid var(--accent-border);
 	border-radius: var(--r-pill);
 	background: var(--accent-dim);
@@ -61,10 +98,14 @@ body {
 	font-weight: 500;
 	white-space: nowrap;
 }
+/* Keys never break; on a sidebar too narrow for the line (large text), the description wraps. */
 .ds-shortcut > span {
+	min-width: 0;
 	margin-left: var(--space-2);
+	white-space: normal;
 }
 .ds-shortcut kbd {
+	flex: none;
 	padding: 0 var(--space-3);
 	border: 1px solid var(--border-strong);
 	border-bottom-width: 2px;
@@ -80,11 +121,11 @@ body {
 	background: var(--accent);
 	color: var(--bg);
 }
-/* Follow-on instruction after the key chips: no keycap, dashed so it reads as a step. */
-.ds-shortcut--note {
-	border-style: dashed;
-	background: transparent;
-	color: var(--accent);
+/* The label shortcuts need a keyboard and a hovering pointer: hidden on touch. */
+@media (hover: none), (pointer: coarse) {
+	.ds-shortcuts {
+		display: none;
+	}
 }
 .ds-shell {
 	display: grid;
@@ -112,16 +153,94 @@ body {
 	text-decoration: none;
 	padding-bottom: var(--space-3);
 }
-/* The app's own theme controls in the top bar: Mode, picker(s), link toggle. */
+/* The app's own theme controls in the top bar: Mode, picker(s), link toggle. The group is a
+ * native popover (topbar.tsx); inline it drops the UA popover box and always shows. */
 .ds-theme {
+	position: static;
+	inset: auto;
 	display: flex;
 	align-items: center;
 	gap: var(--space-4);
+	width: auto;
+	height: auto;
+	margin: 0;
+	padding: 0;
+	overflow: visible;
+	border: 0;
+	background: transparent;
 	color: var(--muted-3);
 	font-size: var(--fs-sm, 0.85em);
 }
 .ds-theme .theme-picker {
 	width: 12rem;
+}
+/* Shown only where the theme controls collapse (below). */
+.ds-theme-toggle {
+	display: none;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	width: 2rem;
+	height: 2rem;
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	background: transparent;
+	color: var(--muted);
+	cursor: pointer;
+}
+@media (hover: hover) {
+	.ds-theme-toggle:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
+}
+.ds-topbar:has(.ds-theme:popover-open) .ds-theme-toggle {
+	border-color: var(--accent-border);
+	background: var(--accent-dim);
+	color: var(--accent);
+}
+/* Too narrow for the inline controls (any phone): the Theme button at the bar's end opens
+ * them as a panel. */
+@media (max-width: 779px) {
+	.ds-theme-toggle {
+		display: inline-flex;
+	}
+	.ds-theme:not(:popover-open) {
+		display: none;
+	}
+}
+.ds-theme:popover-open {
+	position: fixed;
+	inset: calc(var(--ds-topbar-h) + var(--space-2)) var(--space-3) auto auto;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	box-sizing: border-box;
+	width: min(22rem, calc(100vw - 2 * var(--space-3)));
+	max-height: calc(var(--app-h, 100dvh) - var(--ds-topbar-h) - 2 * var(--space-3));
+	padding: var(--space-5);
+	overflow-y: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	background: var(--panel);
+	box-shadow: var(--shadow-2);
+}
+.ds-theme:popover-open > .settings-segmented {
+	display: flex;
+	flex-basis: 100%;
+}
+.ds-theme:popover-open .settings-segment {
+	flex: 1 1 0;
+}
+.ds-theme:popover-open .theme-picker {
+	flex: 1 1 0;
+	width: auto;
+}
+/* In the panel the list pushes the panel taller instead of floating past its edge. */
+.ds-theme:popover-open .theme-picker.floating .theme-picker-list {
+	position: static;
+	min-width: 0;
+	box-shadow: none;
 }
 .ds-search {
 	background: var(--btn);
@@ -306,17 +425,19 @@ body {
 	font-size: 0.9em;
 }
 /* Modal (including the lightbox variant) portals to <body> with position: fixed, exactly
- * as in production. Start them below the top bar, past the showcase nav in the stories
- * view, and past the App view's inspector while it is open, so the page stays usable. */
-body[data-ds-view="stories"] > div:not(#root) > .modal-backdrop,
-body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
-	top: var(--ds-topbar-h);
-}
+ * as in production. In the stories view start them below the top bar and past the showcase
+ * nav, and in the App view stop them at the inspector while it is open, so the page stays usable. */
 body[data-ds-view="stories"] > div:not(#root) > .modal-backdrop {
+	top: var(--ds-topbar-h);
 	left: var(--sidebar-w);
 }
 body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 	right: var(--ds-inspector-w, 0px);
+}
+/* A modal never outgrows that backdrop: the phone layout's full-height dialogs (100dvh in
+ * production) would otherwise run under the top bar and past the window's foot. */
+body[data-ds-view="stories"] > div:not(#root) > .modal-backdrop > .modal {
+	max-height: 100%;
 }
 /* Frame for full-screen and fixed-position components (screens, sidebars,
  * toasts): `transform` makes it the containing block for fixed descendants,
@@ -504,7 +625,7 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 .ds-missing {
 	color: var(--warning);
 }
-/* App view (demo page): the real App fills the space below the top bar. */
+/* App view (demo page): the real App fills the window. */
 .ds-app-view {
 	display: flex;
 	flex: 1;
@@ -603,6 +724,15 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 	box-shadow: var(--shadow-1);
 	white-space: nowrap;
 }
+@media (max-width: 767px) {
+	.ds-labels-hint {
+		box-sizing: border-box;
+		max-width: calc(100vw - 2 * var(--space-5));
+		border-radius: var(--r-lg);
+		text-align: center;
+		white-space: normal;
+	}
+}
 
 /* Inspector: right-hand sidebar with a story iframe for the picked component. */
 .ds-inspector {
@@ -613,6 +743,7 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 	min-height: 0;
 	background: var(--panel);
 	border-left: 1px solid var(--border);
+	container: ds-inspector / inline-size;
 }
 .ds-inspector-handle {
 	position: absolute;
@@ -659,8 +790,21 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 	display: grid;
 	gap: var(--space-2);
 	margin: 0;
-	max-height: 30%;
+	/* A share of the window, not of the head: a percentage of the auto-height head
+	 * would size the head for the uncapped list and leave the cut-off part as a gap. */
+	max-height: calc(var(--app-h, 100dvh) * 0.3);
 	overflow-y: auto;
+}
+/* The links keep the inspector's width; a narrow inspector stacks each label over its chips. */
+.ds-inspector-links dd {
+	min-width: 0;
+	margin: 0;
+}
+@container ds-inspector (max-width: 420px) {
+	.ds-inspector-links .ds-meta-row {
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--space-1);
+	}
 }
 .ds-inspector-body {
 	display: flex;
@@ -680,6 +824,23 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 	padding: var(--space-5);
 	color: var(--muted);
 	font-size: var(--fs-md);
+}
+/* Phones: no room beside the App, so the inspector covers it (over the App's own dialogs too)
+ * until Close; the dialogs it covers keep the full width. */
+@media (max-width: 767px) {
+	.ds-inspector {
+		position: fixed;
+		inset: 0;
+		z-index: calc(var(--z-lightbox) + 1);
+		min-width: 100%;
+		border-left: 0;
+	}
+	.ds-inspector-handle {
+		display: none;
+	}
+	body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
+		right: 0;
+	}
 }
 
 /* Embed (`/?embed=<storyId>`): the story alone, filling the iframe. */

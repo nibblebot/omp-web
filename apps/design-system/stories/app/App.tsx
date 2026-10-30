@@ -1,6 +1,7 @@
 import { App } from "../../../web/App";
 import { setState } from "../../../web/state";
-import { answerCalls } from "../../session";
+import { answerDemoSession, demoSessionState } from "../../demo-session";
+import { addCalls } from "../../session";
 import { belowEditorRequest } from "../../fixtures/dialogs";
 import { askUiRequest } from "../../fixtures/overlays";
 import {
@@ -19,7 +20,12 @@ export default defineStory({
 	id: "app",
 	title: "App",
 	component: { file: "apps/web/App.tsx", export: "App" },
-	seed: { ...screenSessionSeed, items: screenItems, streaming: false },
+	// The whole App boots here, so it gets the demo's session answers (settings, subagents,
+	// workers, models...): no unanswered call toasts, in the stories page or the demo's inspector.
+	seed: () => {
+		setState({ ...screenSessionSeed, ...demoSessionState, items: screenItems, streaming: false });
+		answerDemoSession();
+	},
 	variants: [
 		{
 			name: "Active conversation",
@@ -34,7 +40,7 @@ export default defineStory({
 			name: "Streaming with queue",
 			description: "A turn is running, with a steering message and follow-ups waiting.",
 			seed: () => {
-				answerCalls({ getQueuedMessages: () => screenQueuedMessages });
+				addCalls({ getQueuedMessages: () => screenQueuedMessages });
 				setState({
 					items: screenStreamingItems,
 					live: { active: true, blocks: screenLiveBlocks },

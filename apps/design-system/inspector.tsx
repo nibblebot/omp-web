@@ -16,7 +16,7 @@ export function clampInspectorWidth(px: number): number {
 /**
  * Right-hand sidebar for one component. Shows its graph facts, links to its
  * neighbours (picking one retargets the inspector), and renders its story in an
- * isolated `/?embed=<storyId>` iframe with its own store and fake session.
+ * isolated `?embed=<storyId>` iframe with its own store and fake session.
  */
 export const Inspector: Component<{
 	id: string;
@@ -118,7 +118,7 @@ export const Inspector: Component<{
 								<iframe
 									class="ds-inspector-frame"
 									title={`${nodeLabel(node)} story`}
-									src={`/?embed=${encodeURIComponent(e.story.id)}`}
+									src={`?embed=${encodeURIComponent(e.story.id)}`}
 								/>
 							)}
 						</Show>

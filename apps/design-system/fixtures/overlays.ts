@@ -22,6 +22,7 @@ import type {
 	SettingsModel,
 	SkillDetail,
 	SkillSummary,
+	ToolBriefInfo,
 } from "#lib/wire/protocol";
 
 export const T0 = Date.parse("2026-10-09T10:00:00Z");
@@ -540,7 +541,7 @@ export const mcpServers: McpServerSummary[] = [
 		envKeys: [],
 		auth: "none",
 		toolCount: 14,
-		toggleFile: "/repo/.omp/mcp.json",
+		toggleFile: "/home/joshua/Repos/omp-web/.omp/mcp.json",
 	},
 	{
 		name: "linear",
@@ -553,7 +554,7 @@ export const mcpServers: McpServerSummary[] = [
 		headerNames: [],
 		auth: "oauth",
 		error: "401 Unauthorized: token expired",
-		toggleFile: "/home/dev/.config/omp/mcp.json",
+		toggleFile: "/home/joshua/.config/omp/mcp.json",
 	},
 	{
 		name: "postgres",
@@ -566,7 +567,7 @@ export const mcpServers: McpServerSummary[] = [
 		args: ["mcp-server-postgres"],
 		envKeys: ["DATABASE_URL"],
 		auth: "none",
-		toggleFile: "/repo/.omp/mcp.json",
+		toggleFile: "/home/joshua/Repos/omp-web/.omp/mcp.json",
 	},
 	{
 		name: "github",
@@ -580,7 +581,7 @@ export const mcpServers: McpServerSummary[] = [
 		headerNames: ["Authorization"],
 		auth: "token",
 		toolCount: 3,
-		toggleFile: "/home/dev/.config/omp/mcp.json",
+		toggleFile: "/home/joshua/.config/omp/mcp.json",
 	},
 ];
 
@@ -590,7 +591,7 @@ export const skillEntries: SkillSummary[] = [
 		name: "pdf-extract",
 		description: "Extract text and tables from PDF attachments.",
 		source: "OMP (project)",
-		path: "/repo/.omp/skills/pdf-extract/SKILL.md",
+		path: "/home/joshua/Repos/omp-web/.omp/skills/pdf-extract/SKILL.md",
 		enabled: true,
 		hidden: false,
 	},
@@ -598,11 +599,15 @@ export const skillEntries: SkillSummary[] = [
 		name: "changelog",
 		description: "Draft CHANGELOG entries from commits.",
 		source: "Agents (user)",
-		path: "/home/dev/.agents/skills/changelog/SKILL.md",
+		path: "/home/joshua/.agents/skills/changelog/SKILL.md",
 		enabled: false,
 		hidden: true,
 	},
 ];
+
+/** A SKILL.md line with markup the detail pane must sanitize (the Extensions stories show it inert). */
+export const UNTRUSTED_SKILL_LINE =
+	"Untrusted content check: <script>alert(1)</script> never runs here.";
 
 /** getSkillDetail answers keyed by skill name: the summary plus its SKILL.md body, alwaysApply, and globs. */
 export const skillDetails: Record<string, SkillDetail> = {
@@ -625,7 +630,7 @@ export const skillDetails: Record<string, SkillDetail> = {
 			"pdftotext -layout report.pdf - | head -n 40",
 			"```",
 			"",
-			"Untrusted content check: <script>alert(1)</script> never runs here.",
+			UNTRUSTED_SKILL_LINE,
 		].join("\n"),
 	},
 	changelog: {
@@ -764,6 +769,20 @@ export const contextBreakdown: ContextUsageBreakdown = {
 	messagesTokens: 61_910,
 };
 
+/** The brief tool list `getToolSchemas([{ brief: true }])` answers: SessionStatsDialog's Tools tab. */
+export const sessionTools: ToolBriefInfo[] = [
+	{ name: "read", description: "Read a file or directory listing, with optional line ranges." },
+	{ name: "edit", description: "Patch an existing file with anchored line edits." },
+	{ name: "write", description: "Create a file or replace its whole content." },
+	{ name: "bash", description: "Run a shell command in the project directory." },
+	{ name: "grep", description: "Search file contents with a regular expression." },
+	{ name: "find", description: "Locate the files that implement a described behavior." },
+	{ name: "eval", description: "Run Python or JavaScript in a persistent kernel." },
+	{ name: "task", description: "Run subagents on independent slices of work in parallel." },
+	{ name: "todo_write", description: "Keep the session's todo list current." },
+	{ name: "web_search", description: "Search the web and return cited results." },
+];
+
 /** MCP test result: a successful connection check for the filesystem server. */
 export const mcpTestPassed: { server: string; result: McpTestResult } = {
 	server: "filesystem",
@@ -814,20 +833,22 @@ const filesystemTools: McpInspection["tools"] = [
 			{ name: "excludePatterns", type: "array", required: false },
 		],
 	},
-	...[
-		"edit_file",
-		"create_directory",
-		"move_file",
-		"get_file_info",
-		"directory_tree",
-		"read_multiple_files",
-		"list_allowed_directories",
-		"read_media_file",
-		"delete_file",
-		"copy_file",
-	].map((name) => ({
+	...(
+		[
+			["edit_file", "Apply line-based edits to a text file."],
+			["create_directory", "Create a directory, parents included."],
+			["move_file", "Move or rename a file or directory."],
+			["get_file_info", "Size, times and permissions of a file."],
+			["directory_tree", "Recursive tree of a directory as JSON."],
+			["read_multiple_files", "Read several files at once."],
+			["list_allowed_directories", "Directories this server may access."],
+			["read_media_file", "Read an image or audio file as base64."],
+			["delete_file", "Delete a file."],
+			["copy_file", "Copy a file to a new path."],
+		] as const
+	).map(([name, description]) => ({
 		name,
-		description: `The ${name.replaceAll("_", " ")} tool.`,
+		description,
 		parameters: [{ name: "path", type: "string", required: true }],
 	})),
 ];
@@ -840,7 +861,7 @@ export const mcpInspectionTools: { server: string; inspection: McpInspection } =
 		tools: filesystemTools,
 		resources: [
 			{
-				uri: "file:///repo/README.md",
+				uri: "file:///home/joshua/Repos/omp-web/README.md",
 				name: "README",
 				description: "Project readme exposed as a resource.",
 			},
@@ -854,7 +875,83 @@ export const mcpInspectionFewTools: { server: string; inspection: McpInspection 
 	server: "github",
 	inspection: {
 		server: { name: "github-mcp-server" },
-		tools: filesystemTools.slice(0, 3),
+		tools: [
+			{
+				name: "search_issues",
+				title: "Search issues",
+				description: "Search issues and pull requests with GitHub search syntax.",
+				parameters: [{ name: "q", type: "string", required: true, description: "Search query." }],
+			},
+			{
+				name: "get_pull_request",
+				title: "Get pull request",
+				description: "Read a pull request with its review state.",
+				parameters: [
+					{ name: "owner", type: "string", required: true },
+					{ name: "repo", type: "string", required: true },
+					{ name: "pull_number", type: "number", required: true },
+				],
+			},
+			{
+				name: "create_issue",
+				title: "Create issue",
+				description: "Open an issue in a repository.",
+				parameters: [
+					{ name: "owner", type: "string", required: true },
+					{ name: "repo", type: "string", required: true },
+					{ name: "title", type: "string", required: true },
+					{ name: "body", type: "string", required: false },
+				],
+			},
+		],
+		resources: [],
+		prompts: [],
+	},
+};
+
+/** MCP inspection of the linear server once signed in: issue and project tools. */
+export const mcpInspectionLinear: { server: string; inspection: McpInspection } = {
+	server: "linear",
+	inspection: {
+		server: { name: "linear-mcp", version: "1.4.0" },
+		tools: [
+			{
+				name: "list_issues",
+				description: "List issues, filtered by team, state or assignee.",
+				parameters: [{ name: "team", type: "string", required: false }],
+			},
+			{
+				name: "get_issue",
+				description: "Read one issue with its comments.",
+				parameters: [{ name: "id", type: "string", required: true }],
+			},
+			{
+				name: "create_issue",
+				description: "Create an issue in a team.",
+				parameters: [
+					{ name: "team", type: "string", required: true },
+					{ name: "title", type: "string", required: true },
+				],
+			},
+			{
+				name: "update_issue",
+				description: "Change an issue's state, assignee or labels.",
+				parameters: [{ name: "id", type: "string", required: true }],
+			},
+			{
+				name: "list_projects",
+				description: "List the workspace's projects.",
+				parameters: [],
+			},
+			{
+				name: "create_comment",
+				description: "Comment on an issue.",
+				parameters: [
+					{ name: "issueId", type: "string", required: true },
+					{ name: "body", type: "string", required: true },
+				],
+			},
+		],
 		resources: [],
 		prompts: [],
 	},

@@ -6,9 +6,9 @@
  * Astro and Starlight prefix the URLs they generate (routes, sidebar,
  * pagination, bundled assets) with `base`, but links authored in Markdown are
  * emitted verbatim: a Starlight content collection runs no remark/rehype
- * pipeline to hook into. This site is served from `/omp-web/` on GitHub Pages,
- * so authored links such as `/cli/session-process/` would escape the
- * project path.
+ * pipeline to hook into. This site is served from `/omp-web/docs/` on GitHub
+ * Pages, so authored links such as `/cli/session-process/` would escape the
+ * site's path.
  *
  * The fix is a Sätteri HAST plugin (Sätteri is Astro's default Markdown
  * processor) registered once through `markdown.processor` in
@@ -42,7 +42,7 @@ const TAGS = Object.keys(URL_ATTRIBUTES);
  * Prefix one root-relative URL with `base`.
  *
  * @param {string} value URL attribute value.
- * @param {string} base Base path from the Astro config, e.g. `/omp-web/`.
+ * @param {string} base Base path from the Astro config, e.g. `/omp-web/docs/`.
  * @returns {string} The prefixed URL, or `value` unchanged.
  */
 function prefixRootRelative(value, base) {
@@ -55,7 +55,7 @@ function prefixRootRelative(value, base) {
 /**
  * Sätteri HAST plugin that keeps authored root-relative URLs under `base`.
  *
- * @param {string} base Base path from the Astro config, e.g. `/omp-web/`.
+ * @param {string} base Base path from the Astro config, e.g. `/omp-web/docs/`.
  * @returns {NonNullable<import("@astrojs/markdown-satteri").SatteriProcessorOptions["hastPlugins"]>[number]}
  */
 export function baseLinks(base) {
