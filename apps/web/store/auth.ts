@@ -21,8 +21,9 @@
  * 	});
  */
 
-/** Session lifecycle as the client sees it. `unknown` = not yet probed. */
-export type AuthStatus = "unknown" | "signedOut" | "signedIn";
+/** Session lifecycle as the client sees it. `unknown` = not yet probed;
+ *  `disabled` = the server has no browser auth (its probe answered `{ enabled: false }`). */
+export type AuthStatus = "unknown" | "signedOut" | "signedIn" | "disabled";
 
 /** Auth state exposed to the UI. `expiresAt` is epoch ms of the server
  *  session's absolute (non-sliding) expiry, when the server reported it. */
@@ -200,15 +201,20 @@ export function expireSession(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Probe the current session: GET /auth/session. 200 → signedIn (caches the
- * answer's CSRF token + expiry); 401 → signedOut (authedFetch performs the
- * transition); any other failure throws AuthError.
+ * Probe the current session: GET /auth/session. 200 `{ enabled: false }` →
+ * disabled (the server has no browser auth); any other 200 → signedIn
+ * (caches the answer's CSRF token + expiry); 401 → signedOut (authedFetch
+ * performs the transition); any other failure throws AuthError.
  */
 export async function checkSession(): Promise<AuthSnapshot> {
 	const res = await authedFetch("/auth/session");
 	if (res.status === 401) return snapshot();
 	if (!res.ok) throw await readAuthError(res, "session check");
 	const body = await readJsonObject(res);
+	if (body.enabled === false) {
+		csrf = null;
+		return transition("disabled");
+	}
 	csrf = typeof body.csrfToken === "string" ? body.csrfToken : res.headers.get(CSRF_HEADER);
 	transition("signedIn", readExpiresAt(body));
 	return snapshot();

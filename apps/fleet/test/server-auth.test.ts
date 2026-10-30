@@ -145,7 +145,7 @@ describe("fleet browser auth", () => {
 		}
 	}, 20_000);
 
-	test("without a browser token: /auth/session 404 and everything admitted as before", async () => {
+	test("without a browser token: /auth/session says disabled and everything admitted as before", async () => {
 		await pinSettingsInMemory();
 		const paths = fleetPaths("omp-web-server-noauth-");
 		const server = await startFleet({
@@ -156,7 +156,9 @@ describe("fleet browser auth", () => {
 		});
 		try {
 			const port = server.port;
-			expect((await fetch(`http://127.0.0.1:${port}/auth/session`)).status).toBe(404);
+			const probe = await fetch(`http://127.0.0.1:${port}/auth/session`);
+			expect(probe.status).toBe(200);
+			expect(await probe.json()).toEqual({ enabled: false });
 			expect((await postJson(port, "/auth/login", { accessToken: "x" })).status).toBe(404);
 			expect((await fetch(`http://127.0.0.1:${port}/ctl/sessions`)).status).toBe(200);
 			expect((await postJson(port, "/ctl/spawn", {})).status).toBe(400); // handler ran, not gated

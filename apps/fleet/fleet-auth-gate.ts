@@ -6,8 +6,9 @@
  *
  * Gate policy:
  *   - Browser auth DISABLED (no operator access token configured): every
- *     request is admitted; /auth/session still answers 404 so clients probe
- *     the disabled state and behave exactly as before this integration.
+ *     request is admitted; /auth/session answers { enabled: false } so
+ *     clients learn the disabled state and behave exactly as before this
+ *     integration.
  *   - Client-address resolution (trusted proxies): the direct socket
  *     peer is the default client. X-Forwarded-For is honored ONLY when the
  *     direct peer matches the configured trustedProxies list (IP/CIDR

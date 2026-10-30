@@ -75,7 +75,13 @@ import {
 	settleWorkspaceCreate,
 } from "./store/projects";
 import { clearUserStopped, isUserStopped, reconcileUserStopped } from "./store/user-stopped";
-import { checkSession, expireSession, subscribeAuth, type AuthSnapshot } from "./store/auth";
+import {
+	checkSession,
+	expireSession,
+	subscribeAuth,
+	type AuthSnapshot,
+	type AuthStatus,
+} from "./store/auth";
 import { applySettingsModel, settingsAttached } from "./store/settings";
 import {
 	resetPendingSessionsFiles,
@@ -475,7 +481,7 @@ export const [state, setState] = createStore({
 	// subscribeAuth. "unknown" until the first session probe; "disabled"
 	// (fleet/session without browser auth) behaves exactly as before this
 	// integration. signedOut opens the sign-in modal.
-	authStatus: "unknown" as "unknown" | "signedOut" | "signedIn" | "disabled",
+	authStatus: "unknown" as AuthStatus,
 	authExpiresAt: undefined as number | undefined,
 	modal: null as ModalName | null,
 	// Right-hand dock (U18): which panel is open, null when closed. Written only
@@ -1371,10 +1377,9 @@ function reconcileAttachedSession(): void {
 }
 
 /** Wire the browser-auth module into the store: mirror snapshots into the
- *  state fields and open the sign-in modal on signedOut. The module's own
- *  statuses ('unknown' | 'signedOut' | 'signedIn') map 1:1; the 'disabled'
- *  state is the STATE layer's addition (the auth module has no server-side
- *  auth to probe when /auth/session answers 404; see bootAuth). */
+ *  state fields and open the sign-in modal on signedOut. The module's
+ *  statuses map 1:1, 'disabled' included (the server answered the probe
+ *  `{ enabled: false }`; see bootAuth). */
 export function initAuth(): () => void {
 	const unsubscribe = subscribeAuth((snap: AuthSnapshot) => {
 		setState("authStatus", snap.status);
@@ -1389,21 +1394,15 @@ export function initAuth(): () => void {
 }
 
 /** Boot-time probe. checkSession() answers 401 → the server HAS auth and the
- *  module moves to signedOut (modal opens); a 404 (no /auth/session route on
- *  the server) → auth is disabled: the state layer marks 'disabled' and every
- *  existing path keeps behaving exactly as before. */
+ *  module moves to signedOut (modal opens); `{ enabled: false }` → auth is
+ *  disabled and every existing path keeps behaving exactly as before. */
 export function bootAuth(): void {
 	void checkSession().catch((err: unknown) => {
-		const status = (err as { status?: number })?.status ?? 0;
-		if (status === 404) {
-			setState("authStatus", "disabled");
-		} else {
-			pushDebug(
-				"error",
-				"transport",
-				`auth session probe failed: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
+		pushDebug(
+			"error",
+			"transport",
+			`auth session probe failed: ${err instanceof Error ? err.message : String(err)}`,
+		);
 	});
 }
 /** The roster frame `next` is about to remove the attached session: open the nearest

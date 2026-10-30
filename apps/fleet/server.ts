@@ -38,7 +38,8 @@
  *
  *   POST /auth/login    {accessToken}  → Set-Cookie omp_session + {csrfToken, expiresAt}
  *   POST /auth/logout                  → revoke the session cookie
- *   GET  /auth/session                 → { sessionIdHash, csrfToken, expiresAt } | 401
+ *   GET  /auth/session                 → { sessionIdHash, csrfToken, expiresAt } | 401;
+ *                                        { enabled: false } when browser auth is off
  *
  * Non-loopback peers must then hold a live browser session for /ctl/* and the
  * browser socket (GET /ws, whose upgrade must also pass the Origin allowlist:
@@ -1172,8 +1173,8 @@ class FleetServerImpl implements FleetServer {
 		}
 		// Browser auth: /auth/* is public (the login/session/logout surface),
 		// mounted BEFORE the browser-session gate so the client can always
-		// probe. Disabled (no token configured) → the session route still
-		// answers 404 and everything below behaves exactly as before.
+		// probe. Disabled (no token configured) → the session route answers
+		// { enabled: false } and everything below behaves exactly as before.
 		if (path0.startsWith("/auth/")) return await this.#handleAuth(req, remoteAddress);
 		// Everything remaining is protected when browser auth is enabled:
 		// the edge's browser routes (/ctl/*, static) AND
@@ -1191,8 +1192,8 @@ class FleetServerImpl implements FleetServer {
 			// Data routes (/ctl/*) and every mutation are
 			// gated. The static UI shell stays public: it carries no data, and
 			// the client must boot to reach /auth/login at all. A fresh browser
-			// loads the shell, probes /auth/session (404 disabled / 401
-			// signed-out), and signs in from there.
+			// loads the shell, probes /auth/session ({ enabled: false } when
+			// disabled, 401 signed-out), and signs in from there.
 			const isDataRoute = path0.startsWith("/ctl");
 			const isMutation = req.method !== "GET" && req.method !== "HEAD";
 			if (isDataRoute || isMutation) {
@@ -1362,9 +1363,15 @@ class FleetServerImpl implements FleetServer {
 
 	async #handleAuth(req: Request, remoteAddress: string | null | undefined): Promise<Response> {
 		// /auth/* is PUBLIC by design (it IS the login surface); mounted
-		// before the browser-session gate. With auth disabled every /auth/*
-		// route answers 404 so clients probe the disabled state.
-		if (this.authGate === null) return json({ error: "not found" }, 404);
+		// before the browser-session gate. With auth disabled the session
+		// probe answers { enabled: false } (a 200, so the page's boot probe
+		// logs no failed request) and every other /auth/* route answers 404.
+		if (this.authGate === null) {
+			if (req.method === "GET" && new URL(req.url).pathname === "/auth/session") {
+				return json({ enabled: false });
+			}
+			return json({ error: "not found" }, 404);
+		}
 		const url = new URL(req.url);
 		const path = url.pathname;
 		const gate = this.authGate;
