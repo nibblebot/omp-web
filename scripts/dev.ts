@@ -79,9 +79,12 @@
  * coordinate at path level (existing-target refusal and git's own
  * no-double-checkout). Each fleet owns only worktrees it created;
  * clones are private under its state directory. A second `bun run dev` in the
- * SAME worktree still correctly fails on the lock (exit 77). Orphaned
- * dev-fleets dirs from deleted worktrees are inert and safe to remove by
- * hand once their dev stack is stopped (no auto-GC).
+ * SAME worktree still correctly fails on the lock (exit 77). Each dev fleet
+ * dir records its worktree's realpath in `worktree`; every boot removes the
+ * dirs whose recorded worktree no longer exists (under a parent that still
+ * does) and whose fleet lock no live process holds
+ * (`pruneRemovedWorktreeFleets`). Dirs without the marker are left for
+ * removal by hand.
  */
 
 import type { Subprocess } from "bun";
@@ -91,10 +94,12 @@ import {
 	copyFileSync,
 	existsSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
 	statSync,
+	writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join } from "node:path";
@@ -103,6 +108,7 @@ import { offerFirstRunSetup } from "../apps/fleet/first-run";
 import { resolveOmpBinary } from "../apps/fleet/omp-check";
 import { slugifyWorktreeName } from "../lib/wire/worktree-name";
 import { isInteractiveDesktop } from "../lib/platform/open-browser";
+import { inspectFileLock } from "../lib/platform/file-lock";
 
 const ROOT = join(import.meta.dir, "..");
 const WORKTREE_REAL = realpathSync(ROOT);
@@ -447,6 +453,40 @@ const DEV_FLEET_DIR = join(
 	`${slugifyWorktreeName(basename(WORKTREE_REAL)) || "worktree"}-${WORKTREE_HASH}`,
 );
 
+/** File in each dev fleet dir holding its worktree's realpath. */
+const WORKTREE_MARKER = "worktree";
+
+/**
+ * Remove the dev fleet dirs of worktrees that no longer exist. The marker,
+ * not `git worktree list`, decides, so dirs of other clones of the repo are
+ * judged by their own worktree path. A dir whose fleet lock a live process
+ * holds is kept; dirs without a marker are never touched.
+ */
+function pruneRemovedWorktreeFleets(): void {
+	const root = dirname(DEV_FLEET_DIR);
+	let names: string[];
+	try {
+		names = readdirSync(root);
+	} catch {
+		return; // no dev-fleets dir yet
+	}
+	for (const name of names) {
+		const dir = join(root, name);
+		if (dir === DEV_FLEET_DIR) continue;
+		let worktree: string;
+		try {
+			worktree = readFileSync(join(dir, WORKTREE_MARKER), "utf8").trim();
+		} catch {
+			continue;
+		}
+		// A missing parent too (an unmounted volume) is not proof of removal.
+		if (worktree === "" || existsSync(worktree) || !existsSync(dirname(worktree))) continue;
+		if (inspectFileLock(join(dir, "fleet-state.json.lock")).state === "held") continue;
+		rmSync(dir, { recursive: true, force: true });
+		log(`removed dev fleet state of deleted worktree ${worktree}`);
+	}
+}
+
 let shuttingDown = false;
 
 // ---------------------------------------------------------------------------
@@ -472,6 +512,10 @@ function bold(s: string): string {
 function log(message: string): void {
 	process.stdout.write(`${prefix("dev")} ${message}\n`);
 }
+
+pruneRemovedWorktreeFleets();
+mkdirSync(DEV_FLEET_DIR, { recursive: true });
+writeFileSync(join(DEV_FLEET_DIR, WORKTREE_MARKER), `${WORKTREE_REAL}\n`);
 
 // Seed before ANY child launches: a --state-from copy (or the default
 // main-worktree fork) happens at most once, and a bogus source must fail
