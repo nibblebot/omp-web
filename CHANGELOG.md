@@ -73,6 +73,7 @@ Fixes from the frontend performance audit (`90nc`, items FP01-FP28). Wire change
 - Web search cards show a fallback provider's note as text instead of listing URLs from its failure reasons as results; task cards label a task-file call by its file; a job glance shows `140/190` instead of a bare `140` beside its meter.
 - The HTML export consent says the file loads its viewer from the network.
 - Settings: the SDK's new Prewalk from/into, Restricted Folders, xd:// mount notices and Task file rows show in their tabs, rate-limit chain walking is under Advanced, and terminal-only rows (advisor collapsed lines, resume worktree scope, print wake, extension assistant-text renderers, extension mode control, `out://` replies) stay hidden.
+- `/skill:<name>` from the composer runs the skill: the session expands it into the skill prompt, as the terminal does, with attached images, instead of sending the literal command text to the model. Unknown skills, or skill commands turned off, still go through as plain text.
 
 ### Infra remediation (kfg5)
 Fleet, session, and wire fixes from the infra audit (`kfg5`). Wire is OMP_PROTO 4. OMP_PROTO 4 removes uncalled session methods and state fields as well as adding frames (see the protocol note in `lib/wire/protocol.ts`). A fleet behind a trusted proxy requires the proxy to append the client to `X-Forwarded-For`; see the README.

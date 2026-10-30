@@ -6,13 +6,17 @@ import {
 	COLLAB_PROMPT_MESSAGE_TYPE,
 	type CollabPromptDetails,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
+import { parseSkillInvocation } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { copyForReplication } from "@oh-my-pi/pi-coding-agent/collab/replication-shrink";
 import { reconnectMcpManagerServer } from "@oh-my-pi/pi-coding-agent/mcp/oauth-reauth";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
+import {
+	SKILL_PROMPT_MESSAGE_TYPE,
+	USER_INTERRUPT_LABEL,
+} from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { SessionEntry as SdkSessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
@@ -402,6 +406,40 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		return entry;
 	}
 
+	/**
+	 * AgentSession.prompt does not expand `/skill:<name>`; the SDK's RPC and ACP modes do ahead of
+	 * it (resolveRpcSkillInvocation / runRpcSkillCommand). Mirrors that: gated on the skill-commands
+	 * setting and a known skill, the built skill prompt goes in as a user custom message with the
+	 * images attached. No streamingBehavior, so a busy turn refuses with AgentBusyError and the
+	 * caller queues the original text like any prompt. Returns false (nothing sent) for anything
+	 * else so the literal prompt path runs unchanged.
+	 */
+	async function promptSkillCommand(
+		session: AgentSession,
+		text: string,
+		images: Images,
+	): Promise<boolean> {
+		if (!session.skillsSettings?.enableSkillCommands) return false;
+		const parsed = parseSkillInvocation(text);
+		if (!parsed) return false;
+		const skill = session.skills.find((candidate) => candidate.name === parsed.name);
+		if (!skill) return false;
+		const built = await session.buildUserSkillPrompt(skill, parsed);
+		await session.promptCustomMessage(
+			{
+				customType: SKILL_PROMPT_MESSAGE_TYPE,
+				content: images?.length
+					? [{ type: "text", text: built.message }, ...images]
+					: built.message,
+				display: true,
+				details: built.details,
+				attribution: "user",
+			},
+			{ queueChipText: text },
+		);
+		return true;
+	}
+
 	// Fire-and-forget: prompt resolves at turn end, so awaiting it would block
 	// the relay. Failures surface as an error frame; a busy refusal queues instead.
 	// A queue-origin prompt resolves once admitted (agent_start) or settled, so the
@@ -423,7 +461,8 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 				: undefined;
 		const turn = (async () => {
 			try {
-				await entry.session.prompt(text, { images });
+				if (!(await promptSkillCommand(entry.session, text, images)))
+					await entry.session.prompt(text, { images });
 			} catch (err) {
 				if (!queueBusyText(entry, text, images, err, origin))
 					broadcast({ type: "error", error: String(err) });
