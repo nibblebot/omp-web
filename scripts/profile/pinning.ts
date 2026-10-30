@@ -189,6 +189,10 @@ export function ensureHarnessPinned(plan: PinPlan): Promise<never> | undefined {
 	process.on("SIGTERM", forward("SIGTERM"));
 	return child.exited.then((code) => {
 		const signal = child.signalCode;
-		return process.exit(signal === null ? code : 128 + (constants.signals[signal] ?? 1));
+		return process.exit(
+			signal === null
+				? code
+				: 128 + (typeof signal === "number" ? signal : (constants.signals[signal] ?? 1)),
+		);
 	});
 }

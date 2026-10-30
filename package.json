@@ -40,29 +40,29 @@
 		"@oh-my-pi/pi-utils": "18.12.6",
 		"@oh-my-pi/pi-wire": "18.12.6",
 		"diff": "^9.0.0",
-		"dompurify": "^3.4.16",
+		"dompurify": "^3.4.17",
 		"highlight.js": "^11.12.0",
-		"marked": "^18.1.0",
-		"solid-js": "^1.9.17"
+		"marked": "^18.1.2",
+		"solid-js": "^1.9.18"
 	},
 	"devDependencies": {
-		"@astrojs/markdown-satteri": "^0.4.3",
-		"@astrojs/starlight": "^0.42.6",
+		"@astrojs/markdown-satteri": "^0.4.6",
+		"@astrojs/starlight": "^0.42.8",
 		"@babel/core": "^7.29.7",
-		"@babel/parser": "^7.29.9",
+		"@babel/parser": "^7.29.12",
 		"@babel/preset-typescript": "^7",
-		"@babel/types": "^7.29.8",
-		"@types/bun": "^1.4.2",
+		"@babel/types": "^7.29.11",
+		"@types/bun": "^1.4.4",
 		"@types/diff": "^8.0.0",
 		"@typescript/native-preview": "7.0.0-dev.20260707.2",
-		"astro": "^7.3.8",
-		"babel-preset-solid": "^1.9.15",
+		"astro": "^7.4.4",
+		"babel-preset-solid": "^1.9.16",
 		"enhanced-resolve": "^5.26.0",
 		"eslint-plugin-solid": "^0.15.0",
 		"oxfmt": "^0.63.0",
-		"oxlint": "^1.87.0",
+		"oxlint": "^1.90.0",
 		"playwright-core": "1.64.1",
-		"vite": "^8.3.4",
-		"vite-plugin-solid": "^2.11.14"
+		"vite": "^8.3.5",
+		"vite-plugin-solid": "^2.11.15"
 	}
 }

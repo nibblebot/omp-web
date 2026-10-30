@@ -66,7 +66,7 @@ export interface HostExit {
 	workspaceId: string;
 	generation: number;
 	exitCode: number;
-	signalCode: string | null;
+	signalCode: string | number | null;
 }
 
 interface Hosted {
@@ -190,7 +190,7 @@ function inheritedChildEnv(base: Record<string, string | undefined>): Record<str
 	return env;
 }
 
-export function describeExit(exitCode: number, signalCode: string | null): string {
+export function describeExit(exitCode: number, signalCode: string | number | null): string {
 	return `exit code=${exitCode}${signalCode !== null ? ` signal=${signalCode}` : ""}`;
 }
 
