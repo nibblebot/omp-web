@@ -108,10 +108,6 @@ describe("derived surfaces", () => {
 	test("are scheme aware", () => {
 		const dark = resolve("dark", DARK_CORE);
 		const light = resolve("light", LIGHT_CORE);
-		expect(dark.tokens["logo-tile"]).toBe("#2a1f1a");
-		expect(light.tokens["logo-tile"]).toBe("#fbf3e6");
-		expect(dark.tokens["logo-base"]).toBe("#f3e6d2");
-		expect(light.tokens["logo-base"]).toBe("#4a3226");
 		// bg-deep is darker than bg in both schemes
 		for (const variant of [dark, light]) {
 			const deep = color(variant, "bg-deep");

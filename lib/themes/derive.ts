@@ -169,8 +169,8 @@ const RULES: Readonly<Record<ThemeOptionalToken, Rule>> = {
 		return adjustLightness(best, [markBg]);
 	},
 	// brand mark
-	"logo-tile": (c) => parseColor(c.dark ? "#2a1f1a" : "#fbf3e6")!,
-	"logo-base": (c) => parseColor(c.dark ? "#f3e6d2" : "#4a3226")!,
+	"logo-tile": () => parseColor("#ffc233")!,
+	"logo-base": () => parseColor("#1b1033")!,
 };
 
 /** Resolve every token of a validated variant. */

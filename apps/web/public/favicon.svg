@@ -1,21 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-	<style>
-		.tile { fill: #fbf3e6; }
-		.base { fill: #4a3226; }
-		@media (prefers-color-scheme: dark) {
-			.tile { fill: #2a1f1a; }
-			.base { fill: #f3e6d2; }
-		}
-	</style>
-	<defs>
-		<clipPath id="omp-web-tile"><rect width="64" height="64" rx="14" /></clipPath>
-		<path id="omp-web-crest" d="M-4 44C12 44 20 33 24 25C30 11 44 4 54 12C63 20 58 35 42 38C52 33 54 27 49 23C43 18 36 23 33 32C29 43 20 53 -4 59Z" />
-	</defs>
-	<rect class="tile" width="64" height="64" rx="14" />
-	<g clip-path="url(#omp-web-tile)">
-		<circle cx="14" cy="16" r="7.5" fill="#f2b84b" />
-		<use href="#omp-web-crest" x="-8" y="21" class="base" />
-		<use href="#omp-web-crest" x="-4" y="10.5" fill="#ec8a2f" />
-		<use href="#omp-web-crest" fill="#c4552d" />
-	</g>
+	<rect width="64" height="64" rx="14" fill="#ffc233" />
+	<path d="M28 14C30 28 36 34 50 36C36 38 30 44 28 58C26 44 20 38 6 36C20 34 26 28 28 14Z" fill="#1b1033" />
+	<path d="M49 7C50 13 52 15 58 16C52 17 50 19 49 25C48 19 46 17 40 16C46 15 48 13 49 7Z" fill="#e8267f" />
 </svg>

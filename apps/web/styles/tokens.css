@@ -75,8 +75,8 @@
 	--settings-track-off: #393b4d;
 	--settings-mark-bg: #a6adc8;
 	--settings-mark-fg: #11111b;
-	--logo-tile: #2a1f1a;
-	--logo-base: #f3e6d2;
+	--logo-tile: #ffc233;
+	--logo-base: #1b1033;
 	--settings-row-x: 12px;
 	--settings-row-y: 10px;
 
@@ -251,8 +251,8 @@
 	--settings-track-off: #d7dae2;
 	--settings-mark-bg: #575a6e;
 	--settings-mark-fg: #dce0e8;
-	--logo-tile: #fbf3e6;
-	--logo-base: #4a3226;
+	--logo-tile: #ffc233;
+	--logo-base: #1b1033;
 }
 
 /* Reduced motion: movement and size changes become instant, fades stay short.

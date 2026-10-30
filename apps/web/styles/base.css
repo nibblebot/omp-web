@@ -52,8 +52,8 @@ body {
 	flex: none;
 	vertical-align: -0.125em;
 }
-/* omp-web brand mark (OmpWebLogoIcon): tile and base band follow the active
- * theme's logo tokens. */
+/* omp-web brand mark (OmpWebLogoIcon): the tile and the big sparkle follow the
+ * active theme's logo tokens. */
 .omp-web-logo-tile {
 	fill: var(--logo-tile);
 }

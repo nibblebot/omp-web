@@ -295,7 +295,7 @@
 				},
 				"logo-base": {
 					"$ref": "#/$defs/color",
-					"description": "Base band color of the omp-web logo mark."
+					"description": "Sparkle color of the omp-web logo mark."
 				}
 			}
 		}

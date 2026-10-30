@@ -94,7 +94,7 @@ export const THEME_OPTIONAL_TOKENS = [
 	"settings-track-off",
 	"settings-mark-bg",
 	"settings-mark-fg",
-	// brand mark (OmpWebLogoIcon tile and base band)
+	// brand mark (OmpWebLogoIcon tile and sparkle)
 	"logo-tile",
 	"logo-base",
 ] as const;
