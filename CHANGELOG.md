@@ -75,6 +75,7 @@ Fixes from the frontend performance audit (`90nc`, items FP01-FP28). Wire change
 - Settings: the SDK's new Prewalk from/into, Restricted Folders, xd:// mount notices and Task file rows show in their tabs, rate-limit chain walking is under Advanced, and terminal-only rows (advisor collapsed lines, resume worktree scope, print wake, extension assistant-text renderers, extension mode control, `out://` replies) stay hidden.
 - `/skill:<name>` from the composer runs the skill: the session expands it into the skill prompt, as the terminal does, with attached images, instead of sending the literal command text to the model. Unknown skills, or skill commands turned off, still go through as plain text.
 - A fleet without browser auth answers the page's `GET /auth/session` probe with 200 `{ "enabled": false }` instead of 404, so loading the UI no longer logs a failed request in the browser console (`0pam`).
+- Below 1024px, hovering the chat area while the sidebar drawer is open keeps the dimming scrim translucent; the button hover color painted it opaque over the whole chat.
 
 ### Infra remediation (kfg5)
 Fleet, session, and wire fixes from the infra audit (`kfg5`). Wire is OMP_PROTO 4. OMP_PROTO 4 removes uncalled session methods and state fields as well as adding frames (see the protocol note in `lib/wire/protocol.ts`). A fleet behind a trusted proxy requires the proxy to append the client to `X-Forwarded-For`; see the README.

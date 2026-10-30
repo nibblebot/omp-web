@@ -91,6 +91,11 @@
 		padding: 0;
 		cursor: default;
 	}
+	/* The scrim is a <button>: outrank base.css's button :hover rule, which
+	   would otherwise paint it with the opaque --hover color. */
+	.sidebar-scrim:not(:disabled):not(.active):hover {
+		background-color: var(--backdrop);
+	}
 }
 /* Phones: sidebar labels at body size. */
 @media (max-width: 767px) {
