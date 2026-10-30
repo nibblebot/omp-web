@@ -339,13 +339,19 @@ export function changelogSection(
 	const parts: string[] = [`## v${version}, ${date}`];
 	if (overview !== null) parts.push("", overview);
 	for (const group of groups) {
-		parts.push("", `### ${group.heading}`);
-		for (const bullet of group.bullets) {
-			const line = bullet.trim().replace(/^[-*+]\s+/, "");
-			if (line.length > 0) parts.push(`- ${line}`);
-		}
+		parts.push("", `### ${group.heading}`, ...bulletLines(group.bullets));
 	}
 	return parts.join("\n") + "\n";
+}
+
+/** Markdown list items: stray leading markers stripped, empty bullets dropped. */
+function bulletLines(bullets: string[]): string[] {
+	const lines: string[] = [];
+	for (const bullet of bullets) {
+		const line = bullet.trim().replace(/^[-*+]\s+/, "");
+		if (line.length > 0) lines.push(`- ${line}`);
+	}
+	return lines;
 }
 
 /** Prepend `section` above `existing`, trimming stray blank lines; empty existing -> section. */
@@ -360,13 +366,15 @@ export function prependChangelog(existing: string, section: string): string {
  * runs from the first `## Unreleased` heading to the next `## ` heading outside
  * a fenced code block, or to the end. `rest` is the changelog without it, so the
  * heading never survives a release. `section` is the curated body under
- * `## v<version>, <date>`, or null when there is no such heading or its body is
- * blank (the caller then generates the section from the commits).
+ * `## v<version>, <date>`, followed by the commit log (`### Commits`, one
+ * `#### <heading>` per non-empty group), or null when there is no such heading
+ * or its body is blank (the caller then generates the section from the commits).
  */
 export function foldUnreleased(
 	existing: string,
 	version: string,
 	date: string,
+	commitLog: { heading: string; bullets: string[] }[],
 ): { section: string | null; rest: string } {
 	const lines = existing.split("\n");
 	const start = lines.findIndex((line) => /^## Unreleased\s*$/.test(line));
@@ -392,7 +400,14 @@ export function foldUnreleased(
 		.join("\n")
 		.trim();
 	const rest = [...lines.slice(0, start), ...lines.slice(end)].join("\n");
-	return { section: body.length > 0 ? `## v${version}, ${date}\n\n${body}\n` : null, rest };
+	if (body.length === 0) return { section: null, rest };
+	const parts = [`## v${version}, ${date}`, "", body];
+	const logGroups = commitLog
+		.map((group) => ({ heading: group.heading, items: bulletLines(group.bullets) }))
+		.filter((group) => group.items.length > 0);
+	if (logGroups.length > 0) parts.push("", "### Commits");
+	for (const group of logGroups) parts.push("", `#### ${group.heading}`, ...group.items);
+	return { section: parts.join("\n") + "\n", rest };
 }
 
 /** Tab-indented release manifest (same shape the update channel parses). */
@@ -1018,10 +1033,15 @@ async function release(argv: string[]): Promise<void> {
 	const date = todayLocal();
 	const changelogPath = "CHANGELOG.md";
 	const existingChangelog = existsSync(changelogPath) ? readFileSync(changelogPath, "utf8") : "";
-	const folded = foldUnreleased(existingChangelog, version, date);
+	const folded = foldUnreleased(
+		existingChangelog,
+		version,
+		date,
+		groups.map((g) => ({ heading: g.heading, bullets: fallbackBullets(g.commits) })),
+	);
 	let section: string;
 	if (folded.section !== null) {
-		console.log("release: changelog: curated ## Unreleased section");
+		console.log("release: changelog: curated ## Unreleased section + commit log");
 		section = folded.section;
 	} else {
 		let draft: ChangelogDraft | null = null;
