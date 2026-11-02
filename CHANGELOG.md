@@ -2,6 +2,7 @@
 
 ### Features
 - Jobs (SDK 18.15.0): a background job is named by the purpose the model gave its call instead of its raw command, in the Activities panel and the Jobs popover, and the job detail shows that purpose and a one-line caption of what the command does above the command. The caption appears once the job has run 15 s with background-job widgets on.
+- Compaction (SDK 18.14.1 queueable compaction): `/compact` sent with the follow-up key (Ctrl+Enter) while the agent works queues as a chip and runs when the turn yields, instead of interrupting it. Follow-ups sent after it run after it; removing the chip cancels it, Stop pauses it with the rest of the queue, and plain Enter still compacts at once.
 
 ### Maintenance & other
 - Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.15.0.

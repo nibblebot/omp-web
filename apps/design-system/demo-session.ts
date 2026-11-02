@@ -258,6 +258,8 @@ function sessionCalls(): CallHandlers {
 		},
 		getToolSchemas: () => sessionTools,
 		getQueuedMessages: () => ({ steering: [], followUp: [] }),
+		// A `/compact` sent with the follow-up key mid-turn: the demo has no compaction to run, so it is accepted and nothing queues.
+		queueCompaction: () => undefined,
 		setSessionName: (args) => {
 			setState("sessionName", String(args[0]));
 			return undefined;

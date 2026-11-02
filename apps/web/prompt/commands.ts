@@ -38,7 +38,7 @@ import {
 	type ModelPresetAction,
 } from "../store/models";
 import { humanizeCompactionError } from "../store/compaction-view";
-import { runManualCompact } from "../store/compaction";
+import { queueManualCompact, runManualCompact } from "../store/compaction";
 import { openDock } from "../store/dock";
 import { openIntegrations } from "../store/integrations";
 import { askBtw, btwDispatch } from "../store/btw";
@@ -261,14 +261,24 @@ export function compactDispatch(
 	return { kind: "run", mode: first, instructions: rest || undefined };
 }
 
-function compactRoute(args: string): void {
+/**
+ * `/compact` runs now by default, interrupting a running turn. Sent with the follow-up key
+ * (Ctrl+Enter) while a turn streams it queues instead and runs when the turn yields, as the
+ * terminal UI's queued compaction does; plain Enter keeps interrupting, as it does there.
+ */
+export function compactDelivery(mode: InputMode, streaming: boolean): "now" | "at-yield" {
+	return mode === "followup" && streaming ? "at-yield" : "now";
+}
+
+function compactRoute(args: string, delivery: "now" | "at-yield" = "now"): void {
 	const d = compactDispatch(args);
 	if (d.kind === "usage") {
 		pushNotice("error", d.message);
 		return;
 	}
+	const input = { mode: d.mode, instructions: d.instructions };
 	// The marker comes with the transcript resync that compaction triggers (HISTORY_RELOAD).
-	void runManualCompact({ mode: d.mode, instructions: d.instructions });
+	void (delivery === "at-yield" ? queueManualCompact(input) : runManualCompact(input));
 }
 
 /** `/export [--themes] [path]`: `--themes` carries the web theme; a path is parsed so exportRoute can refuse it. */
@@ -576,7 +586,9 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			const handler = LOCAL_COMMANDS[parsed.name];
 			if (handler) {
 				recordCommandUse(parsed.name);
-				handler(parsed.args);
+				if (parsed.name === "compact")
+					compactRoute(parsed.args, compactDelivery(mode, state.streaming));
+				else handler(parsed.args);
 				return;
 			}
 			const owned = featureCommand(parsed.name);

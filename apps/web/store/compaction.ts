@@ -275,6 +275,23 @@ export async function runManualCompact(input: {
 	}
 }
 
+/**
+ * `/compact` sent with the follow-up key while a turn runs: the session queues it as a chip and
+ * runs it (same mode and focus as `runManualCompact`) once the turn yields; follow-ups sent after it
+ * run after it. Removing the chip cancels it. A refusal surfaces as the session error.
+ */
+export async function queueManualCompact(input: {
+	mode?: string;
+	instructions?: string;
+}): Promise<void> {
+	try {
+		await call("queueCompaction", [{ mode: input.mode, instructions: input.instructions }]);
+	} catch (error) {
+		if (isSessionSwitchSupersession(error)) return;
+		setState("error", humanizeCompactionError(error));
+	}
+}
+
 /** Abort acknowledgement is not completion: only the run's real outcome settles its phase. */
 export async function cancelCompaction(): Promise<void> {
 	if (progress().phase !== "running" || progress().cancelRequested) return;

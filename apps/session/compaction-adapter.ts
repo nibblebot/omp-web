@@ -244,6 +244,22 @@ export interface ShapedCompactionResult {
 }
 
 /**
+ * Why a request can never run, whatever the session's state: an unknown mode, or focus text on a
+ * mode that takes none. Absent when the request is well formed; the state-dependent gates
+ * (model, route, maintenance) are `eligibilityFor`'s.
+ */
+export function compactionRequestRefusal(
+	args: Pick<ExecuteCompactionArgs, "mode" | "instructions">,
+): string | undefined {
+	const def = args.mode === undefined ? undefined : findCompactMode(args.mode);
+	if (args.mode !== undefined && !def) return `unsupported compaction mode "${args.mode}"`;
+	if (def?.rejectsFocus && args.instructions?.trim()) {
+		return `/compact ${def.name} does not take focus instructions (it archives history without an LLM summary).`;
+	}
+	return undefined;
+}
+
+/**
  * Run one compaction: an explicit mode maps to CompactOptions{mode}; no mode
  * leaves method selection to the SDK's configured order. Focus text passes
  * through as customInstructions where the grammar allows it. Model-context
@@ -254,22 +270,10 @@ export async function executeCompaction(
 	session: AgentSession,
 	args: ExecuteCompactionArgs,
 ): Promise<CompactionOutcome<ShapedCompactionResult>> {
+	const invalid = compactionRequestRefusal(args);
+	if (invalid) return { ok: false, error: invalid, failureKind: "invalid_request" };
 	const def = args.mode === undefined ? undefined : findCompactMode(args.mode);
-	if (args.mode !== undefined && !def) {
-		return {
-			ok: false,
-			error: `unsupported compaction mode "${args.mode}"`,
-			failureKind: "invalid_request",
-		};
-	}
 	const instructions = args.instructions?.trim() || undefined;
-	if (def?.rejectsFocus && instructions) {
-		return {
-			ok: false,
-			error: `/compact ${def.name} does not take focus instructions (it archives history without an LLM summary).`,
-			failureKind: "invalid_request",
-		};
-	}
 	const ctx = sessionEligibilityContext(session);
 	const gate = def ? eligibilityFor(def.name, ctx) : configuredOrderEligibility(ctx);
 	if (!gate.eligible) return { ok: false, error: gate.reason, failureKind: "unavailable" };

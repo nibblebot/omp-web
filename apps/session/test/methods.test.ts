@@ -786,6 +786,7 @@ describe("READ_ONLY classification", () => {
 		prompt: true,
 		python: true,
 		queueCommand: true,
+		queueCompaction: true,
 		reloadIntegrations: true,
 		resumeDelete: true,
 		resumeQueue: true,

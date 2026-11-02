@@ -96,7 +96,8 @@ export const QueueBar: Component = () => {
 				ref: { kind: "follow-up" as const, text: raw },
 			})),
 			...(q.commands ?? []).map((text, index) => ({
-				kind: "command" as const,
+				// Plain text in the command queue is a follow-up held behind a queued /compact.
+				kind: text.startsWith("/") ? ("command" as const) : ("follow-up" as const),
 				text,
 				files: [] as string[],
 				imageCount: q.commandImageCounts?.[index] ?? 0,

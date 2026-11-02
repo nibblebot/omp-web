@@ -8,6 +8,8 @@ import { describe, expect, test } from "bun:test";
 import {
 	type CommandQueueHost,
 	drainQueuedCommands,
+	hasQueuedCompaction,
+	type QueuedCommand,
 	type QueuedCommandState,
 	removeQueuedCommand,
 } from "../command-queue";
@@ -146,5 +148,114 @@ describe("queued command behind follow-up turns (U10b)", () => {
 		await drainQueuedCommands(s, host);
 		expect(log).toEqual(["/add-dir a", "/remove-dir b"]);
 		expect(s.commands).toEqual([]);
+	});
+});
+
+describe("a queued compaction at the head (queueable compaction)", () => {
+	const compact: QueuedCommand = {
+		text: "/compact soft",
+		compaction: { mode: "soft", origin: { sessionId: "s", leafId: null } },
+	};
+	const queue = (...commands: QueuedCommand[]): QueuedCommandState => ({
+		commands,
+		paused: false,
+		draining: false,
+	});
+
+	test("hasQueuedCompaction sees a compaction anywhere in the queue", () => {
+		expect(hasQueuedCompaction(queue({ text: "/add-dir a" }))).toBe(false);
+		expect(hasQueuedCompaction(queue({ text: "/add-dir a" }, compact))).toBe(true);
+	});
+
+	test("the drain waits in settle while the turn runs, then runs it and the commands behind it in order", async () => {
+		const s = queue(compact, { text: "after" });
+		const log: string[] = [];
+		const turn = Promise.withResolvers<void>();
+		let streaming = true;
+		const host: CommandQueueHost = {
+			isStreaming: () => streaming,
+			settle: async () => {
+				log.push("settle");
+				await turn.promise;
+			},
+			run: async (command) => {
+				log.push(command.text);
+			},
+		};
+		const drain = drainQueuedCommands(s, host);
+		// Mid-turn: the compaction holds the drain instead of ending it.
+		await Promise.resolve();
+		expect(log).toEqual(["settle"]);
+		expect(s.draining).toBe(true);
+		streaming = false;
+		turn.resolve();
+		await drain;
+		expect(log).toEqual(["settle", "/compact soft", "after"]);
+		expect(s.commands).toEqual([]);
+	});
+
+	test("a compaction removed while it waits never runs; the drain moves on", async () => {
+		const s = queue(compact, { text: "after" });
+		const log: string[] = [];
+		const host: CommandQueueHost = {
+			isStreaming: () => false,
+			settle: async () => {
+				s.commands.shift();
+			},
+			run: async (command) => {
+				log.push(command.text);
+			},
+		};
+		await drainQueuedCommands(s, host);
+		expect(log).toEqual(["after"]);
+	});
+
+	test("Stop while it waits leaves it queued", async () => {
+		const s = queue(compact);
+		const log: string[] = [];
+		const host: CommandQueueHost = {
+			isStreaming: () => false,
+			settle: async () => {
+				s.paused = true;
+			},
+			run: async (command) => {
+				log.push(command.text);
+			},
+		};
+		await drainQueuedCommands(s, host);
+		expect(log).toEqual([]);
+		expect(s.commands).toEqual([compact]);
+		expect(s.draining).toBe(false);
+	});
+
+	test("a turn that starts again after the wait defers it to the next agent_end", async () => {
+		const s = queue(compact);
+		const log: string[] = [];
+		const host: CommandQueueHost = {
+			isStreaming: () => true,
+			settle: async () => {},
+			run: async (command) => {
+				log.push(command.text);
+			},
+		};
+		await drainQueuedCommands(s, host);
+		expect(log).toEqual([]);
+		expect(s.commands).toEqual([compact]);
+	});
+
+	test("a plain command never waits in settle", async () => {
+		const s = queue({ text: "/add-dir a" });
+		const log: string[] = [];
+		const host: CommandQueueHost = {
+			isStreaming: () => false,
+			settle: async () => {
+				log.push("settle");
+			},
+			run: async (command) => {
+				log.push(command.text);
+			},
+		};
+		await drainQueuedCommands(s, host);
+		expect(log).toEqual(["/add-dir a"]);
 	});
 });

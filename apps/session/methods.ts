@@ -31,13 +31,15 @@ import type {
 	QueuedCommandRef,
 	QueuedMessageRef,
 	QueuedMessagesSnapshot,
+	QueueCompactionArgs,
 	ToolBriefInfo,
 	WebMethodName,
 } from "#lib/wire/protocol";
 import { READ_ONLY_METHODS, TOOL_BRIEF_DESCRIPTION_CHARS } from "#lib/wire/protocol";
 import { oversizedImageNotice } from "#lib/wire/image-limits";
 import type { CollabSession, Images } from "./collab-session";
-import { removeQueuedCommand } from "./command-queue";
+import { hasQueuedCompaction, removeQueuedCommand } from "./command-queue";
+import { holdsFollowUps, queuedCompactionCommand } from "./queued-compaction";
 import type { DaemonBroker } from "./daemon-broker";
 import { repinModelRole, retakeModelRolePin } from "./model-role-pin";
 import type { SessionEntry } from "./session-entry";
@@ -88,6 +90,7 @@ import {
 import { serviceFor } from "./btw-history-adapter";
 import {
 	abortCompactionRun,
+	compactionRequestRefusal,
 	compactionSnapshot,
 	executeCompaction,
 	executeDropImages,
@@ -202,6 +205,15 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		void deps.broker.broadcastState(entry).catch(() => {});
 	};
 
+	/**
+	 * Drains the command queue for a call that answers once it has. A queue holding a `/compact` drains in
+	 * the background: the call must not wait out the turn the compaction queues behind, nor the compaction itself.
+	 */
+	const drainQueued = async (entry: SessionEntry): Promise<void> => {
+		const drain = deps.collab.drainCommands(entry);
+		if (!hasQueuedCompaction(entry.queuedCommands)) await drain;
+	};
+
 	// Calls whose only state change is the session name. The SDK name listener
 	// (collab-session.ts wireSession) already broadcasts that change, so these
 	// skip the post-mutation state broadcast and a rename yields one state frame.
@@ -220,6 +232,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		resumeQueue: true,
 		runQueuedNow: true,
 		queueCommand: true,
+		queueCompaction: true,
 		runQueuedCommandNow: true,
 		predictNextMessage: true,
 	};
@@ -371,7 +384,18 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			return undefined;
 		},
 		steer: (entry, a) => entry.session.steer(a[0] as string, a[1] as Images),
-		followUp: (entry, a) => entry.session.followUp(a[0] as string, a[1] as Images),
+		followUp: async (entry, a) => {
+			const images = a[1] as Images;
+			// A `/compact` queued for turn end holds later follow-ups behind it (as interactive mode does):
+			// they join the command queue and run after it, not into the turn that is about to yield.
+			if (holdsFollowUps(entry)) {
+				const notice = oversizedImageNotice(images);
+				if (notice) throw new Error(notice);
+				entry.queuedCommands.commands.push({ text: a[0] as string, images });
+				return;
+			}
+			return entry.session.followUp(a[0] as string, images);
+		},
 		getQueuedMessages: async (entry): Promise<QueuedMessagesSnapshot> => {
 			const live = entry.session.getQueuedMessages();
 			const { agent } = entry.session;
@@ -425,7 +449,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		resumeQueue: async (entry) => {
 			entry.queuedCommands.paused = false;
 			const result = await resumeHeldQueue(entry.session, entry.pausedQueue);
-			await deps.collab.drainCommands(entry);
+			await drainQueued(entry);
 			return result;
 		},
 		takeQueued: async (entry, a) =>
@@ -435,7 +459,22 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			const notice = oversizedImageNotice(images);
 			if (notice) throw new Error(notice);
 			entry.queuedCommands.commands.push({ text: a[0] as string, images });
-			await deps.collab.drainCommands(entry);
+			await drainQueued(entry);
+		},
+		// `/compact` sent with the follow-up key: runs once the turn yields (or at once when idle). Validated
+		// here so a malformed request is refused now; the run-time gates (model, route) judge it at the yield.
+		queueCompaction: async (entry, a) => {
+			const input = (a[0] ?? {}) as { mode?: unknown; instructions?: unknown };
+			const request: QueueCompactionArgs = {
+				...(typeof input.mode === "string" && input.mode ? { mode: input.mode } : {}),
+				...(typeof input.instructions === "string" && input.instructions.trim()
+					? { instructions: input.instructions }
+					: {}),
+			};
+			const refusal = compactionRequestRefusal(request);
+			if (refusal) throw new Error(refusal);
+			entry.queuedCommands.commands.push(queuedCompactionCommand(entry, request));
+			await drainQueued(entry);
 		},
 		takeQueuedCommand: async (entry, a) => {
 			const ref = a[0] as QueuedCommandRef;
@@ -450,12 +489,20 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 				// Front of the queue: a running turn's agent_end drains it first.
 				entry.queuedCommands.commands.unshift(command);
 				if (entry.session.isStreaming) await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
-				await deps.collab.drainCommands(entry);
+				await drainQueued(entry);
 				return;
 			}
 			// Stop paused the queue: run this one now and leave the rest for Resume queue.
 			if (entry.session.isStreaming) await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
-			await deps.collab.runCommandNow(entry, command);
+			const run = deps.collab.runCommandNow(entry, command);
+			if (command.compaction) {
+				// The call answers now; the compaction settles later and its resync reaches every tab.
+				void run
+					.catch((err) => broadcast({ type: "error", error: String(err) }))
+					.finally(() => publishState(entry));
+				return;
+			}
+			await run;
 			void deps.broker.broadcastState(entry).catch(() => {});
 		},
 		runQueuedNow: async (entry, a) => {

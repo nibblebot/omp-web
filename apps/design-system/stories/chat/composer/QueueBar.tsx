@@ -56,6 +56,25 @@ export default defineStory({
 			),
 		},
 		{
+			name: "Compaction queued for turn end",
+			description:
+				"/compact sent with the follow-up key mid-turn waits as a command chip and runs when the turn yields; a follow-up sent after it is held behind it and labelled as a follow-up.",
+			seed: () => {
+				answerCalls({
+					getQueuedMessages: () => ({
+						...screenQueuedMessages,
+						commands: ["/compact soft keep the auth refactor", "Then update the changelog"],
+					}),
+				});
+				setState({ streaming: true, queuedMessageCount: queuedCount + 2 });
+			},
+			render: () => (
+				<div class="ds-frame">
+					<QueueBar />
+				</div>
+			),
+		},
+		{
 			name: "Paused after Stop",
 			description:
 				"Stop held the queue: chips are paused, with Resume queue to send them in order.",

@@ -219,7 +219,7 @@ export interface QueuedMessagesSnapshot {
 	steeringImageCounts?: number[];
 	/** Image count for each live follow-up, index-aligned with `followUp`. */
 	followUpImageCounts?: number[];
-	/** Slash commands the SDK rejects while a turn runs; they run in this order at turn end, after the follow-ups. */
+	/** Slash commands waiting for turn end, in run order: commands the SDK rejects while a turn runs, a `/compact` queued with the follow-up key, and the follow-ups held behind it (plain text). */
 	commands?: string[];
 	/** Image count for each queued command, index-aligned with `commands`. */
 	commandImageCounts?: number[];
@@ -236,6 +236,11 @@ export interface QueuedMessageRef {
 export interface QueuedCommandRef {
 	index: number;
 	text: string;
+}
+/** Args of `queueCompaction`: the parsed `/compact [soft|remote|snapcompact] [focus]`, as `compactEx` takes it. */
+export interface QueueCompactionArgs {
+	mode?: string;
+	instructions?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -794,6 +799,7 @@ export type WebMethodName =
 	| "takeQueued"
 	| "runQueuedNow"
 	| "queueCommand"
+	| "queueCompaction"
 	| "takeQueuedCommand"
 	| "runQueuedCommandNow"
 	| "popLastQueuedMessage"

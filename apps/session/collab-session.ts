@@ -36,9 +36,13 @@ import { type QueuedCommand, drainQueuedCommands } from "./command-queue";
 import type { SessionConfig } from "./config";
 import type { DaemonBroker } from "./daemon-broker";
 import { installPlanReviewHandler } from "./review-plan";
+import { executeCompaction } from "./compaction-adapter";
+import { awaitYield, compactionStillApplies } from "./queued-compaction";
 import { BOOT_HANDLE, type SessionEntry } from "./session-entry";
+import { transcriptHistoryFrames } from "./transcript-history";
 import {
 	broadcast,
+	broadcastHistory,
 	broadcastTo,
 	notifyEvent,
 	toWireEvent,
@@ -521,8 +525,41 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		return true;
 	}
 
+	/**
+	 * Runs a `/compact` queued for the next yield exactly as an idle `/compact` runs (`compactEx`):
+	 * the same adapter, mode and focus text, then the transcript resync every tab gets after one.
+	 * A position the conversation has left (switch, tree move) never compacts; a failure surfaces as an error frame.
+	 */
+	async function runQueuedCompaction(entry: SessionEntry, command: QueuedCommand): Promise<void> {
+		const request = command.compaction;
+		if (!request) return;
+		if (!compactionStillApplies(entry, command)) {
+			broadcastTo(entry.handle, {
+				type: "event",
+				event: {
+					type: "notice",
+					level: "warning",
+					message: `Queued ${command.text} dropped: the conversation changed before it ran.`,
+				},
+			});
+			return;
+		}
+		const outcome = await executeCompaction(entry.session, {
+			...(request.mode ? { mode: request.mode } : {}),
+			...(request.instructions ? { instructions: request.instructions } : {}),
+			onStarted: () => void deps.broker.broadcastState(entry).catch(() => {}),
+		});
+		if (!outcome.ok) {
+			if (outcome.failureKind !== "cancelled")
+				broadcast({ type: "error", error: outcome.error ?? "Queued compaction failed." });
+			return;
+		}
+		await broadcastHistory(entry.handle, transcriptHistoryFrames(entry.session));
+	}
+
 	/** Echoes a queued command as it starts, then runs it like a typed prompt with its images; resolves once it is admitted or refused. */
 	async function runCommandNow(entry: SessionEntry, command: QueuedCommand): Promise<void> {
+		if (command.compaction) return runQueuedCompaction(entry, command);
 		broadcastTo(entry.handle, { type: "command_echo", text: command.text });
 		if (!(await runBuiltinSlashCommand(entry, command.text, command.images, "queue")))
 			await fireAndForgetPrompt(entry, command.text, command.images, "queue");
@@ -533,6 +570,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		let ran = false;
 		return drainQueuedCommands(entry.queuedCommands, {
 			isStreaming: () => entry.session.isStreaming,
+			settle: (command) => awaitYield(entry, command),
 			run: (command) => {
 				ran = true;
 				return runCommandNow(entry, command);
