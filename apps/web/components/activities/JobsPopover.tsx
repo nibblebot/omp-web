@@ -4,7 +4,7 @@ import { activeFirst, capRows } from "../../activities/bar";
 import { activityJobRows } from "../../activities/summary";
 import { openActivities } from "../../store/activities";
 import { acquireJobPollFocus } from "../../store/job-poll";
-import { JOB_STATUS_LABEL, jobElapsedMs } from "../../store/jobs";
+import { JOB_STATUS_LABEL, jobElapsedMs, jobTitle } from "../../store/jobs";
 import { formatDuration } from "../../subagents/format";
 import { JobTypeIcon } from "../jobs/JobTypeIcon";
 import { ActivityPopover } from "./ActivityPopover";
@@ -56,8 +56,8 @@ export const JobsPopover: Component<{ anchor: HTMLElement; onClose: () => void }
 									<span class="activity-popover-glyph" data-status={row().job.status}>
 										<JobTypeIcon type={row().job.type} />
 									</span>
-									<span class="activity-popover-name" title={row().job.label}>
-										{row().job.label}
+									<span class="activity-popover-name" title={jobTitle(row().job)}>
+										{jobTitle(row().job)}
 									</span>
 									<span class="activity-popover-detail">{elapsed()}</span>
 									<span class="activity-popover-state">{JOB_STATUS_LABEL[row().job.status]}</span>

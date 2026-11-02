@@ -52,6 +52,9 @@ export const JOB_STATUS_LABEL: Record<JobStatus, string> = {
 	cancelled: "cancelled",
 };
 
+/** What a job is called: the purpose the model gave it, else its label (the command or task description). */
+export const jobTitle = (job: JobDto): string => job.intent ?? job.label;
+
 /** Run time of a job: counting up while it runs, frozen once it settled, unknown for a cancelled job whose run has not ended yet. */
 export function jobElapsedMs(job: JobDto, now: number): number | undefined {
 	if (job.status === "running") return Math.max(0, now - job.startTime);

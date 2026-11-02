@@ -300,3 +300,81 @@ describe("job widgets", () => {
 		await plain.finish();
 	});
 });
+
+describe("job intent and caption", () => {
+	let enabled = true;
+	let captions = 0;
+	beforeEach(() => {
+		enabled = true;
+		captions = 0;
+		jobs.widgets = new JobWidgets({
+			enabled: () => enabled,
+			authorAfterMs: 0,
+			captioner: async () => {
+				captions += 1;
+				return "Serves the app and logs its output; it ends only when stopped.";
+			},
+		});
+	});
+
+	/** A long bash job the registry may caption, with the intent its call gave (or none). */
+	const serving = (options: RegisterOptions = {}) =>
+		hold("bash", "bun run dev 2>&1 | tee dev.log", {
+			widgetInputs: {
+				sources: () => [],
+				brief: () => ({ kind: "bash", command: "bun run dev 2>&1 | tee dev.log" }),
+			},
+			...options,
+		});
+
+	test("a row carries the intent of its call, and none for a job without one", async () => {
+		const withIntent = hold("bash", "make build", { intent: "Build before the browser check" });
+		const plain = hold("bash", "make test");
+		const { rows } = await tree();
+		expect(jobRow(rows, withIntent.id)).toMatchObject({ intent: "Build before the browser check" });
+		expect(jobRow(rows, plain.id)).not.toHaveProperty("intent");
+		expect(jobRow(rows, plain.id)).not.toHaveProperty("caption");
+		await withIntent.finish();
+		await plain.finish();
+	});
+
+	test("listing the jobs makes the registry write a caption, which the next listing carries", async () => {
+		const job = serving({ intent: "Serve the app for a browser check" });
+		expect(jobRow((await tree()).rows, job.id)).not.toHaveProperty("caption");
+		await Bun.sleep(0);
+		expect(captions).toBe(1);
+		expect(jobRow((await tree()).rows, job.id)).toMatchObject({
+			intent: "Serve the app for a browser check",
+			caption: "Serves the app and logs its output; it ends only when stopped",
+		});
+		expect(captions).toBe(1);
+		await job.finish();
+	});
+
+	test("a command that needs no explaining gets no caption", async () => {
+		const job = hold("bash", "ls", {
+			widgetInputs: { sources: () => [], brief: () => ({ kind: "bash", command: "ls" }) },
+		});
+		await tree();
+		await Bun.sleep(0);
+		expect(captions).toBe(0);
+		expect(jobRow((await tree()).rows, job.id)).not.toHaveProperty("caption");
+		await job.finish();
+	});
+
+	test("no caption is asked for or carried while async.widgets is off", async () => {
+		const job = serving();
+		await tree();
+		await Bun.sleep(0);
+		expect(captions).toBe(1);
+		enabled = false;
+		expect(jobRow((await tree()).rows, job.id)).not.toHaveProperty("caption");
+		const off = serving();
+		await tree();
+		await Bun.sleep(0);
+		expect(captions).toBe(1);
+		expect(jobRow((await tree()).rows, off.id)).not.toHaveProperty("caption");
+		await job.finish();
+		await off.finish();
+	});
+});

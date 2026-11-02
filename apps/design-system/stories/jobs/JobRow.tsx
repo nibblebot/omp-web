@@ -36,6 +36,19 @@ export default defineStory({
 			),
 		},
 		{
+			name: "Named by its purpose",
+			description:
+				"A job whose call gave a purpose is titled by it (the command is in the detail); the failed build and the tail below have none and keep their command as the title.",
+			render: () => (
+				<>
+					<JobRow row={rowOf(JOB_IDS.devServer)} now={NOW} />
+					<JobRow row={rowOf(JOB_IDS.tests)} now={NOW} />
+					<JobRow row={rowOf(JOB_IDS.build)} now={NOW} />
+					<JobRow row={rowOf(JOB_IDS.tail)} now={NOW} />
+				</>
+			),
+		},
+		{
 			name: "Task job heading a subagent",
 			description: "A task job names the subagent it runs; its nested jobs hang off its rails.",
 			render: () => (

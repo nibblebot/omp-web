@@ -59,6 +59,8 @@ function jobDto(item: AsyncJobSnapshotItem, rootId: string | undefined): JobDto 
 		type: item.type,
 		status: item.status,
 		label: item.label,
+		...(item.intent ? { intent: item.intent } : {}),
+		...(item.caption ? { caption: item.caption } : {}),
 		startTime: item.startTime,
 		...(item.endTime === undefined ? {} : { endTime: item.endTime }),
 		...(item.agentId === undefined ? {} : { agentId: item.agentId }),
@@ -70,7 +72,10 @@ function jobDto(item: AsyncJobSnapshotItem, rootId: string | undefined): JobDto 
 /**
  * A running job's widget view as the wire carries it, cut to a glance for a row.
  * Reading it marks the widget shown, which lets the `widget` model role write its
- * spec. Absent when `async.widgets` is off (the registry's `enabled()` is read per
+ * spec and, for a command that needs explaining, its caption (the tree's `caption`
+ * carries it from the next poll on). The listing therefore never calls the SDK's
+ * `requestJobCaptions`: this read asks the same jobs, once they are old enough.
+ * Absent when `async.widgets` is off (the registry's `enabled()` is read per
  * call), the job has no widget inputs, or the job is gone.
  */
 function rowWidget(session: AgentSession, id: string): WireJobWidgetView | undefined {

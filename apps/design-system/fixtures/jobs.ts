@@ -47,7 +47,16 @@ function job(
 	label: string,
 	status: JobStatus,
 	startedAgo: number,
-	options: { ranFor?: number; ownerId?: string; agentId?: string; now: number },
+	options: {
+		ranFor?: number;
+		ownerId?: string;
+		agentId?: string;
+		/** What the model said the job is for; the Jobs surfaces name the job by it. */
+		intent?: string;
+		/** What the `widget` role wrote about a running command, while `async.widgets` is on. */
+		caption?: string;
+		now: number;
+	},
 ): JobDto {
 	const ownerId = options.ownerId ?? ROOT;
 	return {
@@ -55,6 +64,8 @@ function job(
 		type,
 		status,
 		label,
+		...(options.intent === undefined ? {} : { intent: options.intent }),
+		...(options.caption === undefined ? {} : { caption: options.caption }),
 		startTime: options.now - startedAgo,
 		...(status === "running"
 			? {}
@@ -183,10 +194,15 @@ export function jobTreeFixture(now = Date.now()): JobTreeDto {
 						job: job(
 							JOB_IDS.devServer,
 							"bash",
-							"bun run dev",
+							"bun run dev 2>&1 | tee .dev.log",
 							"running",
 							14 * MINUTE + 2 * SECOND,
-							opts,
+							{
+								...opts,
+								intent: "Serve the web app for a browser check",
+								caption:
+									"Runs the Vite dev server in the foreground and logs its output; it ends only when stopped",
+							},
 						),
 					},
 				},
@@ -205,6 +221,7 @@ export function jobTreeFixture(now = Date.now()): JobTreeDto {
 						job: job(JOB_IDS.tests, "bash", "bun test", "completed", 6 * MINUTE, {
 							...opts,
 							ranFor: 73 * SECOND,
+							intent: "Run the whole suite before committing",
 						}),
 					},
 				},
@@ -239,7 +256,7 @@ export const jobDetails: Readonly<Record<string, JobDetailDto>> = {
 	},
 	[JOB_IDS.devServer]: {
 		widget: benchWidget,
-		command: "bun run dev",
+		command: "bun run dev 2>&1 | tee .dev.log",
 		cwd: "/home/joshua/Repos/omp-web",
 		pids: [47902],
 		output:
@@ -365,7 +382,19 @@ export function screenJobTree(now = Date.now()): JobTreeDto {
 		{
 			row: {
 				kind: "job",
-				job: job(SCREEN_JOB_IDS.devServer, "bash", "bun run dev", "running", 21 * MINUTE, opts),
+				job: job(
+					SCREEN_JOB_IDS.devServer,
+					"bash",
+					"bun run dev 2>&1 | tee .dev.log",
+					"running",
+					21 * MINUTE,
+					{
+						...opts,
+						intent: "Serve the app so the copy button can be tried",
+						caption:
+							"Runs the Vite dev server in the foreground and logs its output; it ends only when stopped",
+					},
+				),
 			},
 		},
 		{
@@ -421,7 +450,7 @@ export const screenJobDetails: Readonly<Record<string, JobDetailDto>> = {
 	},
 	[SCREEN_JOB_IDS.devServer]: {
 		widget: screenDevWidget,
-		command: "bun run dev",
+		command: "bun run dev 2>&1 | tee .dev.log",
 		cwd: SCREEN_CWD,
 		pids: [51204, 51231],
 		output: [

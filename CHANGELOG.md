@@ -1,5 +1,8 @@
 ## Unreleased
 
+### Features
+- Jobs (SDK 18.15.0): a background job is named by the purpose the model gave its call instead of its raw command, in the Activities panel and the Jobs popover, and the job detail shows that purpose and a one-line caption of what the command does above the command. The caption appears once the job has run 15 s with background-job widgets on.
+
 ### Maintenance & other
 - Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.15.0.
 - Settings: the new SDK rows `task.perCallModel` and `task.perCallModelAllow` (Tasks, Subagents), `title.refreshAfterPrompts` (Tasks, Modes) and `providers.openai-codex.daybreak` (Providers, Protocol) show in their tabs and apply to the running session.

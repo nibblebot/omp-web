@@ -19,13 +19,21 @@ export default defineStory({
 		{
 			name: "Running command",
 			description:
-				"The job's whole widget (every block of a spec-driven benchmark), then facts, the full command, live pids and the output so far.",
+				"The job's whole widget (every block of a spec-driven benchmark), facts, the purpose the call gave with the widget role's muted caption of what the command does, the full command, live pids and the output so far. The header names the job by its purpose.",
 			render: () => (
 				<JobDetail
 					job={jobOf(JOB_IDS.devServer)}
 					detail={jobDetails[JOB_IDS.devServer]}
 					now={NOW}
 				/>
+			),
+		},
+		{
+			name: "Purpose without a caption",
+			description:
+				"Only the purpose, above the command: a short command needs no caption, and a job that settled before one was written has none. The header names the job by its purpose.",
+			render: () => (
+				<JobDetail job={jobOf(JOB_IDS.tests)} detail={jobDetails[JOB_IDS.tests]} now={NOW} />
 			),
 		},
 		{

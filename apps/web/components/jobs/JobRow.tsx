@@ -1,6 +1,6 @@
 import { For, Show, type Component } from "solid-js";
 import type { JobDto, JobTreePlaceDto, JobTreeRowDto } from "#lib/wire/protocol";
-import { JOB_STATUS_LABEL, jobElapsedMs } from "../../store/jobs";
+import { JOB_STATUS_LABEL, jobElapsedMs, jobTitle } from "../../store/jobs";
 import { formatDuration } from "../../subagents/format";
 import { ConfirmButton } from "../ui/ConfirmButton";
 import { BotIcon } from "../ui/icons";
@@ -96,9 +96,9 @@ export const JobRow: Component<{
 							<span class="job-status" data-status={current().status}>
 								{JOB_STATUS_LABEL[current().status]}
 							</span>
-							<span class="job-label" title={current().label}>
+							<span class="job-label" title={jobTitle(current())}>
 								<JobTypeIcon type={current().type} class="job-type-icon" />
-								{current().label}
+								{jobTitle(current())}
 							</span>
 							<Show when={elapsed() !== undefined}>
 								<span class="job-duration">{formatDuration(elapsed() ?? 0)}</span>
@@ -117,7 +117,7 @@ export const JobRow: Component<{
 								class="job-cancel"
 								label="Cancel"
 								confirmLabel="Confirm"
-								title={`Cancel ${current().label}`}
+								title={`Cancel ${jobTitle(current())}`}
 								disabled={props.cancelling === true}
 								onConfirm={() => props.onCancel?.(current().id)}
 							/>

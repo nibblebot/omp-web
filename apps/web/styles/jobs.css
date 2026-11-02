@@ -232,6 +232,23 @@
 	letter-spacing: var(--ls-micro);
 	color: var(--muted-2);
 }
+/* The purpose the model gave the job, then what the command does (muted), above the command. */
+.job-detail-purpose {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-width: 0;
+}
+.job-detail-intent,
+.job-detail-caption {
+	margin: 0;
+	min-width: 0;
+	font-size: var(--fs-sm);
+	overflow-wrap: anywhere;
+}
+.job-detail-caption {
+	color: var(--muted);
+}
 .job-detail-widget {
 	min-width: 0;
 	padding: var(--space-3) var(--space-4);

@@ -1,6 +1,6 @@
 import { Index, Show, type Component } from "solid-js";
 import type { JobDetailDto, JobDto } from "#lib/wire/protocol";
-import { JOB_STATUS_LABEL, jobElapsedMs } from "../../store/jobs";
+import { JOB_STATUS_LABEL, jobElapsedMs, jobTitle } from "../../store/jobs";
 import { formatDuration } from "../../subagents/format";
 import { ConfirmButton } from "../ui/ConfirmButton";
 import { JobWidget } from "./JobWidget";
@@ -39,20 +39,20 @@ export const JobDetail: Component<{
 		return rows.filter((row): row is [string, string] => row[1] !== undefined);
 	};
 	return (
-		<section class="job-detail" aria-label={`Details of ${props.job.label}`}>
+		<section class="job-detail" aria-label={`Details of ${jobTitle(props.job)}`}>
 			<header class="job-detail-head">
 				<span class="job-status" data-status={props.job.status}>
 					{JOB_STATUS_LABEL[props.job.status]}
 				</span>
-				<h3 class="job-detail-title" title={props.job.label}>
-					{props.job.label}
+				<h3 class="job-detail-title" title={jobTitle(props.job)}>
+					{jobTitle(props.job)}
 				</h3>
 				<Show when={props.onCancel && props.job.own && props.job.status === "running"}>
 					<ConfirmButton
 						class="job-cancel"
 						label="Cancel"
 						confirmLabel="Confirm"
-						title={`Cancel ${props.job.label}`}
+						title={`Cancel ${jobTitle(props.job)}`}
 						disabled={props.cancelling === true}
 						onConfirm={() => props.onCancel?.(props.job.id)}
 					/>
@@ -86,6 +86,16 @@ export const JobDetail: Component<{
 									)}
 								</Index>
 							</dl>
+							<Show when={props.job.intent || props.job.caption}>
+								<div class="job-detail-purpose">
+									<Show when={props.job.intent}>
+										{(intent) => <p class="job-detail-intent">{intent()}</p>}
+									</Show>
+									<Show when={props.job.caption}>
+										{(caption) => <p class="job-detail-caption">{caption()}</p>}
+									</Show>
+								</div>
+							</Show>
 							<Show when={detail().command}>
 								{(command) => (
 									<>

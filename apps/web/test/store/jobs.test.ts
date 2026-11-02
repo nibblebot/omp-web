@@ -101,6 +101,13 @@ describe("jobs tree", () => {
 		).toBe(2000);
 		expect(jobs.jobElapsedMs(job("a", { status: "cancelled" }), 60_000)).toBeUndefined();
 	});
+
+	test("a job is named by the purpose its call gave, else its label", () => {
+		expect(jobs.jobTitle(job("a", { label: "make build" }))).toBe("make build");
+		expect(jobs.jobTitle(job("a", { label: "make build", intent: "Build before the check" }))).toBe(
+			"Build before the check",
+		);
+	});
 });
 
 describe("a watched job's detail", () => {

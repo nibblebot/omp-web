@@ -2139,6 +2139,10 @@ export interface JobDto {
 	status: JobStatus;
 	/** Short description, cut to 120 characters by the SDK. */
 	label: string;
+	/** Why the model started the job (a bash or eval call's purpose); the Jobs surfaces name the job by it when present. */
+	intent?: string;
+	/** One line on what a long command does and when it ends, written by the `widget` model role; present only while `async.widgets` is on. */
+	caption?: string;
 	/** Epoch ms. */
 	startTime: number;
 	/** Epoch ms; set once the job settled. */
