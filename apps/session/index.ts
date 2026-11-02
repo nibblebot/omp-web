@@ -14,7 +14,10 @@ import { daemonClientForProject } from "@oh-my-pi/pi-coding-agent/launch/client"
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
-import { cleanup as postmortemCleanup } from "@oh-my-pi/pi-utils/postmortem";
+import {
+	cleanup as postmortemCleanup,
+	installProcessHandlers,
+} from "@oh-my-pi/pi-utils/postmortem";
 import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import type {
 	AvailableSlashCommand,
@@ -120,6 +123,11 @@ import { settingWriteReloadsHistory, transcriptHistoryFrames } from "./transcrip
 import { initSdkTuiGlobals } from "./sdk-tui-globals";
 import { initSettings } from "./settings-boot";
 import { pinModelRoles } from "./model-role-pin";
+
+// omp-session owns its process, like the omp CLI: since pi-utils 18.15.0 an embedding host
+// gets the SDK's fatal handlers (cleanup before a fatal exit; benign worker IPC EPIPE and
+// ERR_SOCKET_CLOSED contained) only by opting in. Its signal handlers are replaced at bind below.
+installProcessHandlers();
 
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
@@ -1164,14 +1172,14 @@ if (server !== null) {
 	console.error(`omp-session listening on http://localhost:${server.port}`);
 }
 
-// pi-utils' postmortem installs its own SIGINT/SIGTERM/SIGHUP handlers at
-// import time (run SDK cleanup, then exitProcess(130/143/129)); they preempt
-// omp-session's graceful shutdown with the default-disposition exit code. omp-session owns
-// these signals from bind onward (BEFORE the boot-session await below, so a
-// kill during session creation cannot skip disposal): drop the import-time
-// handlers, run the same SDK cleanup callbacks inside our shutdown
-// (postmortemCleanup never exits), and exit 0. The shutdown function is
-// hoisted and every binding it touches is already initialized.
+// installProcessHandlers adds SIGINT/SIGTERM/SIGHUP handlers (run SDK cleanup,
+// then exitProcess(130/143/129)); they would preempt omp-session's graceful
+// shutdown with the default-disposition exit code. omp-session owns these
+// signals from bind onward (BEFORE the boot-session await below, so a kill
+// during session creation cannot skip disposal): drop those handlers, run the
+// same SDK cleanup callbacks inside our shutdown (postmortemCleanup never
+// exits), and exit 0. The shutdown function is hoisted and every binding it
+// touches is already initialized.
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
 	for (const listener of process.listeners(sig)) process.removeListener(sig, listener);
 }

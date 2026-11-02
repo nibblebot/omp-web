@@ -222,25 +222,25 @@ function layerValue(layer: unknown, path: string): unknown {
  * `live`: a running session picks the edit up through a settings listener, a tool-gate
  * reconcile, or a read at use time (lib/sdk-settings/test/live-setting-trace.ts holds the
  * per-row evidence; the exhaustiveness test keeps both lists complete). Evidence paths
- * are relative to @oh-my-pi/pi-coding-agent 18.14.0 `src/`.
+ * are relative to @oh-my-pi/pi-coding-agent 18.15.0 `src/`.
  */
 export const NEXT_SESSION_PATHS: Readonly<Record<string, true>> = {
-	// Seeds a new session's level (sdk.ts:2158 pickInitialThinkingLevel, agent-session.ts:13201
-	// on session switch); agent-session.ts:2997-3000 states it is deliberately not listened to.
+	// Seeds a new session's level (sdk.ts:2302 pickInitialThinkingLevel, agent-session.ts:13329
+	// on session switch); agent-session.ts:3028-3031 states it is deliberately not listened to.
 	defaultThinkingLevel: true,
-	// Read once into mcpDiscoverOptions (sdk.ts:2676) at construction; no listener, and
+	// Read once into mcpDiscoverOptions (sdk.ts:2826) at construction; no listener, and
 	// MCP reconnects reuse that captured option (mcp/manager.ts:670,732).
 	"mcp.startupTimeoutMs": true,
 	// Read by startup/new-session discovery only (discovery/custom-context-files.ts:36); the
 	// SDK's own description says "Start a new session to load them" (session/context-settings.ts:58).
 	"contextFiles.extra": true,
 	// Entering plan mode on startup is decided at launch and after /new
-	// (modes/interactive-mode.ts:662, main.ts:2538); no listener.
+	// (modes/interactive-mode.ts:664, main.ts:2534); no listener.
 	"plan.defaultOnStartup": true,
 	// Auto-start of a collab room runs at startup and on session change or guest restore
-	// (collab/controller.ts:121,365; modes/interactive-mode.ts:2715).
+	// (collab/controller.ts:121,365; modes/interactive-mode.ts:2730).
 	"collab.autoStart": true,
-	// Telemetry export is initialised once at process startup (main.ts:2390); no listener.
+	// Telemetry export is initialised once at process startup (main.ts:2386); no listener.
 	"telemetry.otlpExportEnabled": true,
 };
 

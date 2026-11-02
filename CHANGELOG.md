@@ -1,3 +1,10 @@
+## Unreleased
+
+### Maintenance & other
+- Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.15.0.
+- Settings: the new SDK rows `task.perCallModel` and `task.perCallModelAllow` (Tasks, Subagents), `title.refreshAfterPrompts` (Tasks, Modes) and `providers.openai-codex.daybreak` (Providers, Protocol) show in their tabs and apply to the running session.
+- Session process: the SDK no longer installs its process-wide fatal and signal handlers on import (18.15.0), so `omp-session` installs them explicitly and keeps its own graceful SIGINT/SIGTERM/SIGHUP shutdown. A fatal error still runs SDK cleanup before exiting, and benign worker IPC and closed-socket errors still do not end the session.
+
 ## v0.3.0, 2026-10-30
 
 omp-web reconciles the single-session browser UX: equivalent browser capability through existing SDK/fleet/transport reuse. Wire is OMP_PROTO 6: a mismatched web, fleet, and session refuse each other.

@@ -275,8 +275,8 @@ function trackRawSpawn(child: Subprocess<"ignore", "pipe", "pipe">, tmp: string)
 }
 
 test("SIGTERM runs the graceful shutdown path (exit 0, not 143)", async () => {
-	// Regression: pi-utils' postmortem installs import-time SIGINT/SIGTERM/
-	// SIGHUP handlers that exit 130/143/129, preempting omp-session's shutdown().
+	// Regression: pi-utils' installProcessHandlers adds SIGINT/SIGTERM/SIGHUP
+	// handlers that exit 130/143/129, preempting omp-session's shutdown().
 	const proc = await spawnSession();
 	running.push(proc);
 	proc.child.kill("SIGTERM");
