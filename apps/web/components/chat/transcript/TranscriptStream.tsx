@@ -14,6 +14,7 @@ import {
 import { openLightbox, state, type ChatItem } from "../../../state";
 import { ArrowDownIcon } from "../../ui/icons";
 import { ToolCard } from "../tools/ToolCard";
+import { ReplyWrite, ToolReplies } from "../tools/ToolReplies";
 import { WaitToolCard } from "../tools/WaitToolCard";
 import {
 	cacheMissMarker,
@@ -33,6 +34,7 @@ import type { Run } from "../../../chat/tool-runs";
 import type { WaitRun } from "../../../chat/wait-runs";
 import { createTranscriptWindow, revealDownTo } from "../../../chat/transcript-window";
 import { registerToolReveal } from "../../../chat/tool-jump";
+import { isReplyWrite } from "../../../chat/tool-replies";
 import {
 	captureScrollAnchors,
 	restoreScrollAnchor,
@@ -273,6 +275,10 @@ export const TranscriptStream: Component<{
 										/>
 									)}
 								</Match>
+								{/* A reply write is prose to the user: it draws even with tool activity hidden. */}
+								<Match when={item.kind === "tool" && isReplyWrite(item) && item}>
+									{(reply) => <ReplyWrite item={reply()} />}
+								</Match>
 								<Match when={item.kind === "tool" && index.toolSlot(item.id)}>
 									{(slot) => (
 										<Show when={toolRunOf(slot())}>
@@ -297,6 +303,10 @@ export const TranscriptStream: Component<{
 								</Match>
 								<Match when={item.kind === "tool" && !hideToolActivity() && item}>
 									{(tool) => <ToolCard item={tool()} />}
+								</Match>
+								{/* With tool activity hidden no card draws, but a call's out:// replies still do. */}
+								<Match when={item.kind === "tool" && hideToolActivity() && item}>
+									{(tool) => <ToolReplies item={tool()} />}
 								</Match>
 								<Match when={item.kind === "bash" && item}>
 									{(bash) => <UserCommandCard item={bash()} />}

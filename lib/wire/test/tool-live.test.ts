@@ -8,11 +8,13 @@ import {
 	EVAL_LIVE_EVENTS,
 	LIVE_TEXT_CHARS,
 	sameAsyncFrame,
+	sameReplies,
 	sameToolLive,
 	slimAsyncFrame,
 	slimEvalStatus,
 	slimWaitJobs,
 	toolLiveOf,
+	toolReplies,
 } from "../tool-live";
 
 describe("slimEvalStatus", () => {
@@ -170,5 +172,31 @@ describe("slimAsyncFrame", () => {
 		);
 		expect(sameAsyncFrame(undefined, { state: "running" })).toBe(false);
 		expect(sameAsyncFrame(undefined, undefined)).toBe(true);
+	});
+});
+
+describe("toolReplies and sameReplies", () => {
+	test("lists the text a call wrote to out://, oldest first", () => {
+		expect(toolReplies({ replies: ["first", "second"] })).toEqual(["first", "second"]);
+	});
+
+	test("skips blank and non-string entries", () => {
+		expect(toolReplies({ replies: ["", "  ", 3, null, "kept"] })).toEqual(["kept"]);
+	});
+
+	test("is undefined when the call wrote nothing", () => {
+		expect(toolReplies(undefined)).toBeUndefined();
+		expect(toolReplies({})).toBeUndefined();
+		expect(toolReplies({ replies: [] })).toBeUndefined();
+		expect(toolReplies({ replies: "one" })).toBeUndefined();
+		expect(toolReplies({ replies: ["  "] })).toBeUndefined();
+	});
+
+	test("two lists are the same when every reply matches in order", () => {
+		expect(sameReplies(["a", "b"], ["a", "b"])).toBe(true);
+		expect(sameReplies(["a"], ["a", "b"])).toBe(false);
+		expect(sameReplies(["a", "b"], ["b", "a"])).toBe(false);
+		expect(sameReplies(undefined, ["a"])).toBe(false);
+		expect(sameReplies(undefined, undefined)).toBe(true);
 	});
 });

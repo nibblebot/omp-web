@@ -15,6 +15,7 @@ import { formatDurationMs } from "../../../../usage/usage";
 import { createLazyOpen } from "../../../ui/lazy-open";
 import { Markdown } from "../../../ui/Markdown";
 import { ToolCard } from "../../tools/ToolCard";
+import { ToolReplies } from "../../tools/ToolReplies";
 import { RunMemberContext } from "../../tools/ToolCardShell";
 import { WaitToolCard } from "../../tools/WaitToolCard";
 import { thinkingView } from "./AssistantCard";
@@ -86,78 +87,82 @@ export const ToolRunRow: Component<{
 		[...props.run.tools.map((tool) => tool.name), ...thinking().map(() => "thinking")].join(" · ");
 	const hasContent = () => open() || shownCalls().length > 0;
 	return (
-		<div class="run-row" classList={{ open: hasContent() }} data-running={props.run.running}>
-			<button
-				type="button"
-				class="run-row-summary"
-				aria-expanded={open()}
-				title={names()}
-				onClick={() => setUserOpen(!open())}
-			>
-				<Show when={props.run.running}>
-					<span class="run-row-dot" aria-hidden="true" />
-				</Show>
-				{/* Index, not For: the segments are rebuilt as the run grows and update in place. */}
-				<Index each={segments()}>
-					{(seg, i) => (
-						<>
-							<Show when={i > 0}>
+		<>
+			<div class="run-row" classList={{ open: hasContent() }} data-running={props.run.running}>
+				<button
+					type="button"
+					class="run-row-summary"
+					aria-expanded={open()}
+					title={names()}
+					onClick={() => setUserOpen(!open())}
+				>
+					<Show when={props.run.running}>
+						<span class="run-row-dot" aria-hidden="true" />
+					</Show>
+					{/* Index, not For: the segments are rebuilt as the run grows and update in place. */}
+					<Index each={segments()}>
+						{(seg, i) => (
+							<>
+								<Show when={i > 0}>
+									<span class="run-row-sep" aria-hidden="true">
+										•
+									</span>
+								</Show>
+								<span class="run-row-item">
+									<span class="run-row-count">{seg().count}</span>
+									<span class="run-row-name">{seg().name}</span>
+								</span>
+							</>
+						)}
+					</Index>
+					<Index each={meta()}>
+						{(seg) => (
+							<>
 								<span class="run-row-sep" aria-hidden="true">
 									•
 								</span>
-							</Show>
-							<span class="run-row-item">
-								<span class="run-row-count">{seg().count}</span>
-								<span class="run-row-name">{seg().name}</span>
-							</span>
-						</>
-					)}
-				</Index>
-				<Index each={meta()}>
-					{(seg) => (
-						<>
-							<span class="run-row-sep" aria-hidden="true">
-								•
-							</span>
-							<span class="run-row-meta" data-tone={seg().tone}>
-								{seg().text}
-							</span>
-						</>
-					)}
-				</Index>
-			</button>
-			<Show when={hasContent()}>
-				<div class="run-row-content">
-					{/* Folded thinking first: consumed assistant messages always precede the run's calls. */}
-					<Show when={open()}>
-						<For each={thinking()}>
-							{(view) => {
-								const { opened, onToggle, onClick } = createLazyOpen(expandThinkingBlocks());
-								return (
-									<details
-										class="thinking-block"
-										open={expandThinkingBlocks()}
-										onToggle={onToggle}
-										onClick={onClick}
-									>
-										<summary>thinking</summary>
-										<Show when={opened()}>
-											<Markdown src={view} />
-										</Show>
-									</details>
-								);
-							}}
-						</For>
-					</Show>
-					<RunMemberContext.Provider value={true}>
-						<For each={shownCalls()}>
-							{(item) => (
-								<RunCall item={item} waitRuns={props.waitRuns} originOf={props.originOf} />
-							)}
-						</For>
-					</RunMemberContext.Provider>
-				</div>
-			</Show>
-		</div>
+								<span class="run-row-meta" data-tone={seg().tone}>
+									{seg().text}
+								</span>
+							</>
+						)}
+					</Index>
+				</button>
+				<Show when={hasContent()}>
+					<div class="run-row-content">
+						{/* Folded thinking first: consumed assistant messages always precede the run's calls. */}
+						<Show when={open()}>
+							<For each={thinking()}>
+								{(view) => {
+									const { opened, onToggle, onClick } = createLazyOpen(expandThinkingBlocks());
+									return (
+										<details
+											class="thinking-block"
+											open={expandThinkingBlocks()}
+											onToggle={onToggle}
+											onClick={onClick}
+										>
+											<summary>thinking</summary>
+											<Show when={opened()}>
+												<Markdown src={view} />
+											</Show>
+										</details>
+									);
+								}}
+							</For>
+						</Show>
+						<RunMemberContext.Provider value={true}>
+							<For each={shownCalls()}>
+								{(item) => (
+									<RunCall item={item} waitRuns={props.waitRuns} originOf={props.originOf} />
+								)}
+							</For>
+						</RunMemberContext.Provider>
+					</div>
+				</Show>
+			</div>
+			{/* The calls' out:// replies are the model's words to the user: they stay on screen, closed run or not. */}
+			<For each={props.run.tools}>{(tool) => <ToolReplies item={tool} />}</For>
+		</>
 	);
 };

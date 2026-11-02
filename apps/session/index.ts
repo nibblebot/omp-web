@@ -123,6 +123,7 @@ import { settingWriteReloadsHistory, transcriptHistoryFrames } from "./transcrip
 import { initSdkTuiGlobals } from "./sdk-tui-globals";
 import { initSettings } from "./settings-boot";
 import { pinModelRoles } from "./model-role-pin";
+import { pinOutRepliesDefault } from "./out-replies-default";
 
 // omp-session owns its process, like the omp CLI: since pi-utils 18.15.0 an embedding host
 // gets the SDK's fatal handlers (cleanup before a fatal exit; benign worker IPC EPIPE and
@@ -168,6 +169,8 @@ const modelRegistry = new ModelRegistry(authStorage);
 const settings = await initSettings({ cwd: config.cwd, agentDir });
 // This session keeps the model roles it starts with when another session writes config.yml.
 pinModelRoles(settings);
+// The web draws out:// replies, so they are on until config.yml says otherwise.
+pinOutRepliesDefault(settings);
 
 /** Set once the boot session's provider/model/auth resolution completes (R8). */
 let readyAt: number | null = null;

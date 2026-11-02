@@ -392,6 +392,101 @@ describe("live eval and wait status on the wire", () => {
 	});
 });
 
+describe("out:// replies on the wire", () => {
+	const partial = (toolName: string, text: string, details: unknown): AgentSessionEvent =>
+		({
+			type: "tool_execution_update",
+			toolCallId: CALL,
+			toolName,
+			args: {},
+			partialResult: { content: [{ type: "text", text }], details },
+		}) as unknown as AgentSessionEvent;
+	const settle = (toolName: string, text: string, details: unknown): AgentSessionEvent =>
+		({
+			type: "tool_execution_end",
+			toolCallId: CALL,
+			toolName,
+			result: { content: [{ type: "text", text }], details },
+		}) as unknown as AgentSessionEvent;
+	function toolCard() {
+		const card = state.items.find((item) => item.kind === "tool");
+		if (card?.kind !== "tool") throw new Error("no tool card");
+		return card;
+	}
+
+	test("each reply list rides its frame once, whole, and the settled details keep it", async () => {
+		const entry = freshEntry();
+		attachMidTool();
+		deliver(entry, start);
+		const first = deliver(entry, partial("bash", "tests\n", { replies: ["one"] }));
+		await tick();
+		expect(first).toMatchObject({ output: "tests\n", replies: ["one"] });
+		expect(toolCard().replies).toEqual(["one"]);
+
+		// Same output, same replies: nothing to send.
+		expect(deliver(entry, partial("bash", "tests\n", { replies: ["one"] }))).toBeNull();
+
+		// More output with the same replies: the replies do not ride again.
+		const grown = deliver(entry, partial("bash", "tests\nmore\n", { replies: ["one"] }));
+		expect(grown).toEqual({
+			type: "tool_execution_update",
+			toolCallId: CALL,
+			toolName: "bash",
+			output: "more\n",
+			append: true,
+		});
+
+		// A new reply alone is an empty append carrying the whole list.
+		const next = deliver(entry, partial("bash", "tests\nmore\n", { replies: ["one", "two"] }));
+		expect(next).toMatchObject({ output: "", append: true, replies: ["one", "two"] });
+		await tick();
+		expect(cardOutput()).toBe("tests\nmore\n");
+		expect(toolCard().replies).toEqual(["one", "two"]);
+
+		// A frame without replies keeps the card's.
+		deliver(entry, partial("bash", "tests\nmore\nend\n", {}));
+		await tick();
+		expect(toolCard().replies).toEqual(["one", "two"]);
+
+		const settled = { replies: ["one", "two"] };
+		const done = deliver(entry, settle("bash", "tests\nmore\nend\n", settled));
+		expect(done).toMatchObject({ type: "tool_execution_end", result: { details: settled } });
+		expect(toolCard()).toMatchObject({ status: "done", details: settled });
+	});
+
+	test("an eval cell's replies take the same path", async () => {
+		const entry = freshEntry();
+		attachMidTool();
+		deliver(entry, start);
+		const wire = deliver(entry, partial("eval", "", { cells: [], replies: ["from a cell"] }));
+		await tick();
+		expect(wire).toMatchObject({ output: "", append: true, replies: ["from a cell"] });
+		expect(toolCard().replies).toEqual(["from a cell"]);
+	});
+
+	test("a browser that attaches mid-call is primed with the replies, and a resync resends them", async () => {
+		const entry = freshEntry();
+		attachMidTool();
+		deliver(entry, start);
+		deliver(entry, partial("bash", "", { replies: ["early"] }));
+		await tick();
+
+		attachMidTool();
+		expect(toolCard().replies).toBeUndefined();
+		for (const frame of streamingPrimeFrames(entry)) {
+			applyEvent(JSON.parse(JSON.stringify(frame.event)) as WireSessionEvent);
+		}
+		await tick();
+		expect(toolCard().replies).toEqual(["early"]);
+
+		// The browsers rebuilt their cards from history: the next partial carries the replies again.
+		await broadcastHistory(entry.handle, []);
+		attachMidTool();
+		const after = deliver(entry, partial("bash", "", { replies: ["early"] }));
+		expect(after).toMatchObject({ replies: ["early"] });
+	});
+});
+
 describe("wire cost of one tool call", () => {
 	const OUTPUT = "x".repeat(39_999) + "\n";
 

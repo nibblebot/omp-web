@@ -247,6 +247,11 @@ export const LIVE_SETTING_TRACE: Readonly<Record<string, string>> = {
 	"python.interpreter":
 		"eval/py/index.ts:23 (+executor.ts:447-449 kernel key includes interpreter); session/eval-runner.ts:75",
 	// tools
+	// Each out:// write reads it (internal-urls/out-protocol.ts:53), and a change rebuilds the prompt
+	// through cfgSystemPromptInputs.outEnabled (system-prompt.ts:86, listener sdk.ts:5197). Unset it follows
+	// the session's tuiTranscript (out-protocol.ts:45), which the web leaves off: omp-session pins the
+	// registry default instead (apps/session/out-replies-default.ts), so it reads ON until a layer sets it.
+	"out.enabled": "internal-urls/out-protocol.ts:53; sdk.ts:5197",
 	"tools.artifactSpillThreshold": "tools/output-meta.ts:484,561",
 	"tools.artifactTailBytes": "tools/output-meta.ts:485,561",
 	"tools.artifactHeadBytes": "tools/output-meta.ts:487,496",

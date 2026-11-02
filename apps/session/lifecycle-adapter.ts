@@ -6,6 +6,7 @@ import { dropHeldQueue } from "./queue-hold";
 import { exitPlanMode } from "./review-plan";
 import type { SessionEntry } from "./session-entry";
 import { retakeModelRolePin } from "./model-role-pin";
+import { holdOutRepliesDefault } from "./out-replies-default";
 import { clearSubagents } from "./subagent-mirror";
 
 export interface LifecycleDeletionTarget {
@@ -218,6 +219,7 @@ export function createLifecycleMethods(deps: LifecycleDeps) {
 					throw new Error("Invalid parent session");
 				await stop(entry, true);
 				await exitPlanMode(entry);
+				holdOutRepliesDefault(entry.session);
 				const ok = await bracketTranscript(entry, true, () =>
 					entry.session.newSession(parent ? { parentSession: parent } : undefined),
 				);
@@ -249,6 +251,7 @@ export function createLifecycleMethods(deps: LifecycleDeps) {
 				);
 				// SDK hooks may cancel only inside newSession(). Never delete first, and never
 				// use drop:true: that path catches deletion failure and logs-and-continues.
+				holdOutRepliesDefault(entry.session);
 				const ok = await bracketTranscript(entry, true, () => entry.session.newSession());
 				if (!ok) return { cancelled: true, deleted: false, sessionId: target.sessionId };
 				retakeModelRolePin(entry.session.settings);

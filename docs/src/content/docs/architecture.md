@@ -102,7 +102,7 @@ sequenceDiagram
   E->>S: command on browser/connId
   S->>M: prompt
   M-->>S: streamed tokens, tool calls
-  S->>E: event frames (message_update deltas, tool_execution_update appends, live eval/wait status and background-job state), job_widgets snapshots (at most 1/s while a job runs)
+  S->>E: event frames (message_update deltas, tool_execution_update appends, live eval/wait status, `out://` replies and background-job state), job_widgets snapshots (at most 1/s while a job runs)
   E-->>B: seq-numbered frames (ringed for after resume)
   S->>E: call_result (id)
   E-->>B: call_result, to the originating browser only

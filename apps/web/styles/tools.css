@@ -987,3 +987,12 @@ pre.terminal.wait-job-output {
 		max-width: 100%;
 	}
 }
+
+/* The error line under a failed write to out://, which otherwise draws as assistant prose (`.msg-assistant.tool-reply`). */
+.tool-reply-error {
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--error);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}

@@ -8,7 +8,12 @@ import { describe, expect, test } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { SessionEntry } from "../session-entry";
-import { streamingPrimeFrames, toWireEvent, trackStreamingAssistant } from "../client-delivery";
+import {
+	broadcastHistory,
+	streamingPrimeFrames,
+	toWireEvent,
+	trackStreamingAssistant,
+} from "../client-delivery";
 
 function assistant(text: string): AssistantMessage {
 	return {
@@ -260,5 +265,121 @@ describe("backgrounded tool calls", () => {
 			toolName: "bash",
 			output: "x",
 		});
+	});
+});
+
+/** A bash or eval call whose commands wrote to out://: every frame of its card repeats the replies so far. */
+describe("out:// replies", () => {
+	const frame = (toolName: string, text: string, details: unknown) =>
+		({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName,
+			args: {},
+			partialResult: { content: [{ type: "text", text }], details },
+		}) as unknown as AgentSessionEvent;
+
+	test("an update carries the whole list when it changed, and nothing while it did not", () => {
+		const handle = "replies-forward";
+		expect(toWireEvent(handle, frame("bash", "tests\n", { replies: ["one"] }))).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			output: "tests\n",
+			replies: ["one"],
+		});
+		// More output, same replies: the list does not ride again.
+		expect(toWireEvent(handle, frame("bash", "tests\nmore\n", { replies: ["one"] }))).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			output: "more\n",
+			append: true,
+		});
+		// A new reply alone is an empty append with the whole list.
+		expect(
+			toWireEvent(handle, frame("bash", "tests\nmore\n", { replies: ["one", "two"] })),
+		).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			output: "",
+			append: true,
+			replies: ["one", "two"],
+		});
+		expect(
+			toWireEvent(handle, frame("bash", "tests\nmore\n", { replies: ["one", "two"] })),
+		).toBeNull();
+		// A partial without replies keeps what the browsers hold.
+		expect(toWireEvent(handle, frame("bash", "tests\nmore\n", {}))).toBeNull();
+	});
+
+	test("an eval cell's replies ride the same way, and blank ones are not replies", () => {
+		const handle = "replies-eval";
+		expect(
+			toWireEvent(handle, frame("eval", "", { cells: [], replies: ["", "from a cell"] })),
+		).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "eval",
+			output: "",
+			append: true,
+			replies: ["from a cell"],
+		});
+		expect(toWireEvent("replies-blank", frame("bash", "", { replies: ["  "] }))).toBeNull();
+	});
+
+	test("the settled result keeps its details, replies included", () => {
+		const handle = "replies-end";
+		const ended = {
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName: "bash",
+			result: { content: [{ type: "text", text: "ok" }], details: { replies: ["one"] } },
+		} as unknown as AgentSessionEvent;
+		expect(toWireEvent(handle, ended) as unknown).toBe(ended);
+	});
+
+	test("a late joiner is primed with the replies, and a resync resends them", async () => {
+		const entry = { handle: "replies-prime" } as SessionEntry;
+		toWireEvent(entry.handle, frame("bash", "so far", { replies: ["one"] }));
+		expect(streamingPrimeFrames(entry)).toEqual([
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_update",
+					toolCallId: "c1",
+					toolName: "bash",
+					output: "so far",
+					replies: ["one"],
+				},
+			},
+		]);
+		await broadcastHistory(entry.handle, []);
+		expect(toWireEvent(entry.handle, frame("bash", "so far", { replies: ["one"] }))).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			output: "so far",
+			replies: ["one"],
+		});
+	});
+
+	test("a call that only replied is primed as an empty append", () => {
+		const entry = { handle: "replies-prime-empty" } as SessionEntry;
+		toWireEvent(entry.handle, frame("eval", "", { replies: ["early"] }));
+		expect(streamingPrimeFrames(entry)).toEqual([
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_update",
+					toolCallId: "c1",
+					toolName: "eval",
+					output: "",
+					append: true,
+					replies: ["early"],
+				},
+			},
+		]);
 	});
 });

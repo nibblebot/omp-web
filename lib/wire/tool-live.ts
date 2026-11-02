@@ -173,3 +173,25 @@ export function sameAsyncFrame(
 	if (a === undefined || b === undefined) return a === b;
 	return a.state === b.state && a.exitCode === b.exitCode;
 }
+
+/**
+ * What a bash or eval call's `details.replies` hold: the text the call wrote to `out://`
+ * (a reply the user sees as prose after the card), oldest first. Each partial and the
+ * settled result repeat the replies so far. Undefined when there are none.
+ */
+export function toolReplies(details: unknown): string[] | undefined {
+	if (!isRecord(details) || !Array.isArray(details.replies)) return undefined;
+	const replies = details.replies.filter(
+		(reply): reply is string => typeof reply === "string" && reply.trim() !== "",
+	);
+	return replies.length > 0 ? replies : undefined;
+}
+
+/** Whether two reply lists say the same thing. */
+export function sameReplies(
+	a: readonly string[] | undefined,
+	b: readonly string[] | undefined,
+): boolean {
+	if (a === undefined || b === undefined) return a === b;
+	return a.length === b.length && a.every((reply, i) => reply === b[i]);
+}

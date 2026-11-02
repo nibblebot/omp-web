@@ -244,6 +244,15 @@ export const NEXT_SESSION_PATHS: Readonly<Record<string, true>> = {
 	"telemetry.otlpExportEnabled": true,
 };
 
+/**
+ * Rows a session process holds at their default as a soft runtime pin (apps/session/out-replies-default.ts).
+ * The pin is the default, not an override: a global edit replaces it, so the row reports the
+ * `default` source instead of a `runtime` layer that "overrides global edits".
+ */
+export const DEFAULT_PINNED_PATHS: Readonly<Record<string, true>> = {
+	"out.enabled": true,
+};
+
 /** When an edit to a setting reaches a running session; see NEXT_SESSION_PATHS. */
 export function settingEffect(path: string): SettingView["effect"] {
 	return Object.hasOwn(NEXT_SESSION_PATHS, path) ? "next-session" : "live";
@@ -261,7 +270,12 @@ export function settingView(
 	// Deliberately do not call setting.get()/envValue(): credential values stay outside DTOs.
 	const effective = setting.layered(scope);
 	const provenance = scope.getProvenance(setting);
-	const source = provenance === "overlay" ? "cli" : provenance;
+	const source =
+		provenance === "overlay"
+			? "cli"
+			: provenance === "runtime" && Object.hasOwn(DEFAULT_PINNED_PATHS, path)
+				? "default"
+				: provenance;
 	const owned = layerValue(global, path);
 	const projectValue = layerValue(project, path);
 	const explicit =

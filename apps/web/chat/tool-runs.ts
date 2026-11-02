@@ -1,5 +1,6 @@
 import type { Block, ChatItem, ToolItem } from "../state";
 import { effectiveStatus } from "./background-job";
+import { isReplyWrite } from "./tool-replies";
 import type { WaitRun } from "./wait-runs";
 
 /** An assistant item that draws no prose: no non-whitespace text block and no
@@ -57,7 +58,8 @@ export function callRunning(item: ToolItem, waitRuns: WaitRunLookup): boolean {
  * eligible: when it contains at least one thinking block the whole suffix is
  * consumed (a prose-bearing item then only loses its thinking); otherwise only
  * its trailing prose-less items are. Any other item (user, bash, compaction,
- * notice) breaks the current run and clears the pending suffix. Assistant
+ * notice) breaks the current run and clears the pending suffix, and so does a
+ * reply write (a `write` to `out://`: prose to the user, never a card). Assistant
  * items never become run members. Empty input yields no runs.
  *
  * `waitRuns` (chat/wait-runs.ts) folds consecutive `wait` calls into one card
@@ -117,7 +119,7 @@ export function groupToolRuns(
 	};
 
 	for (const item of items) {
-		if (item.kind === "tool") {
+		if (item.kind === "tool" && !isReplyWrite(item)) {
 			const lead = waitRuns.get(item.id)?.items[0];
 			if (lead && lead.id !== item.id && tools.at(-1)?.id === lead.id) {
 				// A later call of a folded wait run: the run's first call already stands for it.

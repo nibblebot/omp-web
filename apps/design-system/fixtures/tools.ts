@@ -403,6 +403,44 @@ export const bashLongTool: ToolItem = tool(
 	),
 );
 
+/** The reply a bash call wrote to `out://`: the model's words to the user while the command keeps running. */
+const bashReplyArgs = {
+	command: [
+		"bun scripts/test.ts apps/web/test/review.test.ts",
+		"printf '%s\\n' 'Review tests **pass**. Now checking the anchor resolver against stale pins.' > out://progress.md",
+	].join("\n"),
+};
+/** ToolCard: a running bash call whose command already wrote one `out://` reply; it draws as prose after the card. */
+export const bashRepliesRunningTool: ToolItem = {
+	...tool(
+		"bash",
+		"running",
+		bashReplyArgs,
+		lines("$ bun scripts/test.ts apps/web/test/review.test.ts", "14 pass"),
+	),
+	replies: ["Review tests **pass**. Now checking the anchor resolver against stale pins."],
+};
+/** ToolCard: a settled bash call with two `out://` replies (`details.replies`), the second Markdown with a list and code. */
+export const bashRepliesDoneTool: ToolItem = {
+	...tool(
+		"bash",
+		"done",
+		bashReplyArgs,
+		lines("$ bun scripts/test.ts apps/web/test/review.test.ts", "14 pass", "0 fail"),
+	),
+	details: {
+		replies: [
+			"Review tests **pass**. Now checking the anchor resolver against stale pins.",
+			lines(
+				"Two things to know before I go on:",
+				"",
+				"- `resolveAnchor` falls back to the last known line when the text is gone.",
+				"- Old sessions keep their line pins, so nothing there needs migrating.",
+			),
+		],
+	},
+};
+
 // eval
 /** EvalToolCard: python cell running with partial output. */
 export const evalRunningTool: ToolItem = tool(
@@ -534,6 +572,60 @@ export const evalJsDoneTool: ToolItem = {
 		],
 	},
 };
+
+const evalReplyCode = lines(
+	"import json",
+	"report = json.load(open('build/size-report.json'))",
+	"tool.write('out://size.md', f\"Bundle is **{report['total_kb']} KB**, {report['over_budget']} chunks over budget.\")",
+	"print(len(report['chunks']), 'chunks')",
+);
+/** ToolCard: a running eval cell whose `tool.write` to `out://` already reached the user. */
+export const evalRepliesRunningTool: ToolItem = {
+	...tool("eval", "running", { language: "python", code: evalReplyCode }, ""),
+	replies: ["Bundle is **812 KB**, 2 chunks over budget."],
+};
+/** ToolCard: a settled eval cell that replied through `tool.write('out://...')`; the reply follows the card as prose. */
+export const evalRepliesDoneTool: ToolItem = {
+	...tool("eval", "done", { language: "python", code: evalReplyCode }, "37 chunks"),
+	details: {
+		language: "python",
+		languages: ["python"],
+		cells: [
+			{
+				index: 0,
+				code: evalReplyCode,
+				language: "python",
+				status: "complete",
+				output: "37 chunks",
+			},
+		],
+		replies: ["Bundle is **812 KB**, 2 chunks over budget."],
+	},
+};
+
+// write to out:// (a reply, not a file)
+const replyWriteContent = lines(
+	"## Where the retry badge stands",
+	"",
+	"The badge now shows on the **active turn** only. Queued follow-ups stay unbadged, as you asked.",
+	"",
+	"- `RetryBadge` reads `retryInfo.attempt` and `maxAttempts`.",
+	"- The countdown comes from `retryInfo.until`.",
+);
+/** ToolCard: a `write` to `out://` draws as assistant prose, not a Write card with line numbers. */
+export const replyWriteTool: ToolItem = tool(
+	"write",
+	"done",
+	{ path: "out://status.md", content: replyWriteContent },
+	"Wrote 6 lines to out://status.md",
+);
+/** ToolCard: a `write` to `out://` in a session where replies are off; the refusal shows under the text. */
+export const replyWriteErrorTool: ToolItem = tool(
+	"write",
+	"error",
+	{ path: "out://status.md", content: "The retry badge shows on the active turn only." },
+	"out:// is off in this session (`out.enabled`); reply in your final message instead.",
+);
 
 // generic (no dedicated renderer)
 const issueArgs = { team: "OMP", state: "In Progress", limit: 3 };

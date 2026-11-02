@@ -455,6 +455,8 @@ interface PendingToolUpdate {
 	live: WireToolLive | undefined;
 	/** The job frame of a call that returned while its job runs; the newest one wins. */
 	job: WireAsyncFrame | undefined;
+	/** The call's `out://` replies so far; the newest list wins. */
+	replies: string[] | undefined;
 }
 
 /**
@@ -468,6 +470,7 @@ function applyToolUpdate(item: ToolItem, update: PendingToolUpdate): void {
 	if (update.images !== undefined && !sameImages(item.images, update.images))
 		item.images = update.images;
 	if (update.live !== undefined) item.live = { ...update.live, at: Date.now() };
+	if (update.replies !== undefined) item.replies = update.replies;
 	const job = update.job;
 	if (job !== undefined && job.state !== "running" && item.background !== undefined) {
 		settleBackground(item, {
@@ -750,19 +753,23 @@ export function applyEvent(e: WireSessionEvent): void {
 				if (e.async?.state === "cancelled") {
 					// A cancelled job's last frame is the cancellation text, not output: the card keeps
 					// the output it got to, buffered chunks included.
-					if (pending !== undefined) pending.job = job;
-					else
+					if (pending !== undefined) {
+						pending.job = job;
+						if (e.replies !== undefined) pending.replies = e.replies;
+					} else
 						pendingToolUpdates.set(e.toolCallId, {
 							output: "",
 							append: true,
 							images: undefined,
 							live: e.live,
 							job,
+							replies: e.replies,
 						});
 				} else if (e.append === true && pending !== undefined) {
 					pending.output = capTail(pending.output + output, 8000);
 					if (images !== undefined) pending.images = images;
 					if (e.live !== undefined) pending.live = e.live;
+					if (e.replies !== undefined) pending.replies = e.replies;
 					pending.job = job;
 				} else {
 					pendingToolUpdates.set(e.toolCallId, {
@@ -771,6 +778,7 @@ export function applyEvent(e: WireSessionEvent): void {
 						images: images ?? pending?.images,
 						live: e.live ?? pending?.live,
 						job,
+						replies: e.replies ?? pending?.replies,
 					});
 				}
 				const card = state.items[index];

@@ -8,11 +8,14 @@ import { subagentTranscriptItems } from "../../../fixtures/subagents";
 import {
 	bashDoneTool,
 	bashErrorTool,
+	bashRepliesDoneTool,
 	bashRunningTool,
 	editToolItem,
 	globDoneTool,
 	grepDoneTool,
 	readDoneTool,
+	evalRepliesDoneTool,
+	replyWriteTool,
 	taskDoneTool,
 	todoArgsTool,
 	waitJobDetail,
@@ -134,9 +137,37 @@ const toolRunItems: ChatItem[] = [
 	{ ...bashRunningTool, id: 9409, toolCallId: "call_tr_bash_run" },
 ];
 
+/**
+ * One turn where the model talks to the user through out://: a bash call and an eval cell whose
+ * scripts wrote replies, a `write` to out://, and the closing message. Replies draw as prose right
+ * after their card (after the run row, in Consolidated mode); the reply write is prose, not a card.
+ */
+const replyItems: ChatItem[] = [
+	{ kind: "user", id: 9500, text: "Run the review tests and keep me posted as you go." },
+	{
+		kind: "assistant",
+		id: 9501,
+		blocks: [{ kind: "text", text: "Running the review tests first." }],
+	},
+	{ ...bashRepliesDoneTool, id: 9502, toolCallId: "call_rp_bash" },
+	{ ...evalRepliesDoneTool, id: 9503, toolCallId: "call_rp_eval" },
+	{ ...replyWriteTool, id: 9504, toolCallId: "call_rp_write" },
+	{
+		kind: "assistant",
+		id: 9505,
+		blocks: [{ kind: "text", text: "All green; the badge change is ready for review." }],
+	},
+];
+
 /** The session seed over the tool call turn, with the Appearance sheet's tool card choices applied. */
 function seedToolRuns(display: Partial<DisplayPrefs>): void {
 	setState({ ...screenSessionSeed, items: toolRunItems, live: idleLive, streaming: false });
+	setState("display", display);
+}
+
+/** The session seed over the out:// reply turn, with the Appearance sheet's tool card choice applied. */
+function seedReplies(display: Partial<DisplayPrefs>): void {
+	setState({ ...screenSessionSeed, items: replyItems, live: idleLive, streaming: false });
 	setState("display", display);
 }
 
@@ -251,6 +282,28 @@ export default defineStory({
 			description:
 				"Tool cards Consolidated: each run of consecutive calls is one summary row. The first run folds the reasoning of the message before it (its text stays); the second run's running call shows under its row until it finishes. A click opens a run to header-only cards.",
 			seed: () => seedToolRuns({ toolCards: "consolidated" }),
+			render: () => (
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<TranscriptStream items={state.items} variant="session" />
+				</div>
+			),
+		},
+		{
+			name: "Session: out:// replies",
+			description:
+				"A bash call and an eval cell whose scripts wrote to out://, then a write to out://: each reply draws as prose right after its card (live as it arrives, and after a reload), and the write is prose with no card.",
+			seed: () => seedReplies({ toolCards: "expanded" }),
+			render: () => (
+				<div class="ds-frame ds-frame-tall ds-frame-column">
+					<TranscriptStream items={state.items} variant="session" />
+				</div>
+			),
+		},
+		{
+			name: "Session: out:// replies, consolidated",
+			description:
+				"Tool cards Consolidated: the run's calls fold into one summary row, and the replies of its calls stay on screen after it, closed or open. The reply write is not a run member.",
+			seed: () => seedReplies({ toolCards: "consolidated" }),
 			render: () => (
 				<div class="ds-frame ds-frame-tall ds-frame-column">
 					<TranscriptStream items={state.items} variant="session" />

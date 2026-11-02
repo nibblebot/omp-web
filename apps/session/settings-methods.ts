@@ -9,6 +9,7 @@ import {
 	type SettingsSession,
 } from "#lib/sdk-settings/settings-model";
 import type { SettingsModel, SettingsRevisionAck, SettingValues } from "#lib/wire/protocol";
+import { pinOutRepliesDefault } from "./out-replies-default";
 import { applySettingSideEffects, type AgentSessionLike } from "./settings-effects";
 
 export interface SettingsEntry {
@@ -74,8 +75,11 @@ export function createSettingsMethods(deps: SettingsMethodsDeps): SettingsMethod
 					"Project-layer settings are read-only in this session: the SDK exposes no per-setting project write surface (only model-role project values persist); edit the project config file directly.",
 				);
 			} else {
-				if (unset) setting.unset(deps.settings);
-				else setting.set(deps.settings, coerceSettingValue(path, args[1], deps.settings));
+				if (unset) {
+					setting.unset(deps.settings);
+					// Unsetting drops the pin that keeps out:// replies on by default.
+					if (path === "out.enabled") pinOutRepliesDefault(deps.settings);
+				} else setting.set(deps.settings, coerceSettingValue(path, args[1], deps.settings));
 				await deps.settings.flush();
 			}
 			await applySettingSideEffects(entry.session, path);

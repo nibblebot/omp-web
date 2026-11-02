@@ -45,7 +45,7 @@ export const TAB_SECTION_ORDER: Readonly<Record<string, readonly string[]>> = {
 /** Name of the group that holds a tab's Advanced rows; always the last group of its tab. */
 export const ADVANCED_GROUP = "Advanced";
 
-/** Terminal-only rows that never appear on the web (63). */
+/** Terminal-only rows that never appear on the web (62). */
 export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"theme.dark": true,
 	"theme.light": true,
@@ -108,7 +108,6 @@ export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"session.worktreeScope": true,
 	"async.printWake": true,
 	"extensionRenderers.assistantText": true,
-	"out.enabled": true,
 	"extensionHandlers.modeControl": true,
 };
 

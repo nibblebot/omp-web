@@ -1373,6 +1373,13 @@ export interface WireToolExecutionUpdate {
 	 * the job's state carries `output: ""` with `append`. A late joiner is primed with the last one sent.
 	 */
 	async?: WireAsyncFrame;
+	/**
+	 * The `out://` replies of a bash or eval call so far (`details.replies`, oldest first):
+	 * text the call wrote to the user, shown as prose after its card. Always the whole list,
+	 * replacing the card's; omitted while unchanged. An update whose only news is a new reply
+	 * carries `output: ""` with `append`. A late joiner is primed with the last one sent.
+	 */
+	replies?: string[];
 }
 
 /** `turn_end` as it crosses the wire: a bare marker (the assistant message and tool results already went out as their own events). */

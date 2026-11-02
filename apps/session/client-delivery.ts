@@ -22,7 +22,14 @@ import {
 	type WireToolLive,
 } from "#lib/wire/protocol";
 import { ReplayRing } from "#lib/wire/replay-ring";
-import { sameAsyncFrame, sameToolLive, slimAsyncFrame, toolLiveOf } from "#lib/wire/tool-live";
+import {
+	sameAsyncFrame,
+	sameReplies,
+	sameToolLive,
+	slimAsyncFrame,
+	toolLiveOf,
+	toolReplies,
+} from "#lib/wire/tool-live";
 import { extractText, scanImages } from "#lib/wire/tool-result";
 import type { SessionEntry } from "./session-entry";
 
@@ -409,6 +416,8 @@ interface ToolProgress {
 	live: WireToolLive | undefined;
 	/** Last job frame sent (a backgrounded call's `details.async`); a partial without one keeps it. */
 	async: WireAsyncFrame | undefined;
+	/** Last `out://` reply list sent (bash and eval calls); a partial without one keeps it. */
+	replies: string[] | undefined;
 }
 
 /** Running tool calls per session handle, keyed by toolCallId; cleared at tool end (a backgrounded call's, at its job's last frame) and agent end. */
@@ -427,7 +436,8 @@ export function streamingPrimeFrames(
 			progress.output === "" &&
 			progress.images.length === 0 &&
 			progress.live === undefined &&
-			progress.async === undefined
+			progress.async === undefined &&
+			progress.replies === undefined
 		)
 			continue;
 		frames.push({
@@ -441,6 +451,7 @@ export function streamingPrimeFrames(
 				...(progress.images.length > 0 ? { images: progress.images } : {}),
 				...(progress.live !== undefined ? { live: progress.live } : {}),
 				...(progress.async !== undefined ? { async: progress.async } : {}),
+				...(progress.replies !== undefined ? { replies: progress.replies } : {}),
 			},
 		});
 	}
@@ -459,7 +470,8 @@ function sameImages(a: readonly ImageArg[], b: readonly ImageArg[]): boolean {
  * previous update when the output grew, the whole text when it changed any
  * other way, nothing (null) when it changes nothing the card shows. An eval or
  * wait partial's live status (see `toolLiveOf`) rides along when it changed,
- * and so does the job frame of a backgrounded call (see `slimAsyncFrame`);
+ * and so does the job frame of a backgrounded call (see `slimAsyncFrame`) and
+ * the `out://` replies of a bash or eval call (see `toolReplies`);
  * an update with no other news then carries an empty append. A call returns
  * while its background job keeps reporting, so these updates arrive after
  * `tool_execution_end`; a job's terminal frame is its last, and ends its entry.
@@ -482,6 +494,10 @@ function toolUpdateFrame(
 	const job = slimAsyncFrame(event.partialResult?.details);
 	const asyncChanged =
 		job !== undefined && (sent?.resync === true || !sameAsyncFrame(job, sent?.async));
+	const partialReplies = toolReplies(event.partialResult?.details);
+	const repliesChanged =
+		partialReplies !== undefined &&
+		(sent?.resync === true || !sameReplies(partialReplies, sent?.replies));
 	// A task call mixing blocking and background spawns can report a settled job before its
 	// tool_execution_end; its later updates then go out as snapshots and it is not primed until the end.
 	// Harmless: the web handles an early terminal frame.
@@ -494,8 +510,16 @@ function toolUpdateFrame(
 			resync: false,
 			live: live ?? sent?.live,
 			async: job ?? sent?.async,
+			replies: partialReplies ?? sent?.replies,
 		});
-	if (output === previous && images === undefined && !liveChanged && !asyncChanged) return null;
+	if (
+		output === previous &&
+		images === undefined &&
+		!liveChanged &&
+		!asyncChanged &&
+		!repliesChanged
+	)
+		return null;
 	const metaOnly = output === previous && images === undefined;
 	const appended =
 		previous !== undefined &&
@@ -513,6 +537,7 @@ function toolUpdateFrame(
 		...(images !== undefined ? { images } : {}),
 		...(liveChanged ? { live } : {}),
 		...(asyncChanged ? { async: job } : {}),
+		...(repliesChanged ? { replies: partialReplies } : {}),
 	};
 }
 
@@ -529,7 +554,8 @@ function toolUpdateFrame(
  * - `tool_execution_update` is the appended output (WireToolExecutionUpdate);
  *   the SDK repeats the whole output and args in each. An eval or wait partial's
  *   `details` never ship whole: only their slim `live` status (lib/wire/tool-live.ts),
- *   and only when it changed. A backgrounded bash, eval or task call keeps sending
+ *   and only when it changed; a bash or eval call's `details.replies` ride along whole when they
+ *   changed. A backgrounded bash, eval or task call keeps sending
  *   updates after `tool_execution_end`; each carries the job's `async` frame
  *   (state, exit code) when that changed, the last one ending the call's entry.
  * - Tool-result `message_start`/`message_end` are dropped: `tool_execution_end`

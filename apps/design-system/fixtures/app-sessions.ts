@@ -313,16 +313,26 @@ const ompWebReview: ChatItem[] = [
 			"47→}",
 		),
 	),
-	tool(
-		5,
-		"bash",
-		{ command: "git status --short && git log --oneline -3" },
-		lines(
-			"3f9a2c1 review: resolve anchor annotations by their text",
-			"b7d04e8 review: add anchor kind to Annotation",
-			"1c5e0aa review: keep stale line pins for old sessions",
+	{
+		...tool(
+			5,
+			"bash",
+			{
+				command: [
+					"git status --short && git log --oneline -3",
+					"echo 'Anchors are in. Checking who still reads `a.line` before I summarise.' > out://progress.md",
+				].join("\n"),
+			},
+			lines(
+				"3f9a2c1 review: resolve anchor annotations by their text",
+				"b7d04e8 review: add anchor kind to Annotation",
+				"1c5e0aa review: keep stale line pins for old sessions",
+			),
 		),
-	),
+		details: {
+			replies: ["Anchors are in. Checking who still reads `a.line` before I summarise."],
+		},
+	},
 	{
 		kind: "assistant",
 		id: 6,

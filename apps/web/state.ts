@@ -207,6 +207,8 @@ export type ChatItem =
 			details?: unknown;
 			/** Live status of a running eval/wait call (frame `live`), with the arrival time so clocks can advance; dropped once the call settles. */
 			live?: WireToolLive & { at: number };
+			/** `out://` replies a running bash/eval call has written so far (frame `replies`), oldest first; a settled call's come from `details.replies` (chat/tool-replies.ts). */
+			replies?: string[];
 			/** The background job a returned bash/eval/task call stays parked on (chat/background-job.ts); absent for every other call. */
 			background?: BackgroundJob;
 	  }

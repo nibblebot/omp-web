@@ -42,6 +42,7 @@ import { hasQueuedCompaction, removeQueuedCommand } from "./command-queue";
 import { holdsFollowUps, queuedCompactionCommand } from "./queued-compaction";
 import type { DaemonBroker } from "./daemon-broker";
 import { repinModelRole, retakeModelRolePin } from "./model-role-pin";
+import { holdOutRepliesDefault } from "./out-replies-default";
 import type { SessionEntry } from "./session-entry";
 import {
 	dropHeldQueue,
@@ -278,6 +279,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		arg: string | undefined,
 	): Promise<unknown> {
 		const { session } = entry;
+		holdOutRepliesDefault(session);
 		if (kind === "newSession") {
 			const ok = await session.newSession(arg ? { parentSession: arg } : undefined);
 			if (ok) {
