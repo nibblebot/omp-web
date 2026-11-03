@@ -1,10 +1,15 @@
-import type { Component } from "solid-js";
+import { Show, type Component } from "solid-js";
 import { effectiveStatus } from "../../../chat/background-job";
+import { minimizedSummary } from "../../../chat/bash-minimized";
 import type { ToolItem } from "../../../state";
 import { ShellCommand } from "./ShellCommand";
 import { CollapsibleOutput, ToolCardShell } from "./ToolCardShell";
 
-/** Bash tool: the `$ command` header wraps to show the whole command (row-capped), output below. */
+/**
+ * Bash tool: the `$ command` header wraps to show the whole command (row-capped), output below.
+ * When the SDK's output minimizer rewrote the result, a Minimized fact names the filter and the
+ * bytes before and after.
+ */
 export const BashToolCard: Component<{ item: ToolItem }> = (props) => (
 	<ToolCardShell
 		name="bash"
@@ -20,5 +25,8 @@ export const BashToolCard: Component<{ item: ToolItem }> = (props) => (
 		class="bash-tool"
 	>
 		<CollapsibleOutput item={props.item} output={props.item.output} tail />
+		<Show when={minimizedSummary(props.item.details)}>
+			{(summary) => <div class="tool-meta">Minimized: {summary()}</div>}
+		</Show>
 	</ToolCardShell>
 );

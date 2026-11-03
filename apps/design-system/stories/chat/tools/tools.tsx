@@ -33,6 +33,7 @@ import {
 	bashInterruptedTool,
 	bashLongCommandTool,
 	bashLongTool,
+	bashMinimizedTool,
 	bashMultilineTool,
 	bashRunningTool,
 	evalDoneTool,
@@ -261,6 +262,12 @@ const stories: Story[] = [
 				name: "Long output, collapsed tail",
 				description: "Settled card past the 20-line cap; toggle Ctrl+O from the header to expand.",
 				render: () => <BashToolCard item={bashLongTool} />,
+			},
+			{
+				name: "Minimized output",
+				description:
+					"The output minimizer rewrote the result: a Minimized fact names the filter and the bytes before and after.",
+				render: () => <BashToolCard item={bashMinimizedTool} />,
 			},
 			{
 				name: "Multi-line command",

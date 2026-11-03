@@ -387,6 +387,25 @@ export const bashHeredocTool: ToolItem = tool(
 	},
 	lines("62 /tmp/tool-cards.md"),
 );
+/** BashToolCard: the output minimizer rewrote a git log; the card names the filter and the bytes before and after. */
+export const bashMinimizedTool: ToolItem = {
+	...tool(
+		"bash",
+		"done",
+		{ command: "git log --stat -n 40" },
+		lines(
+			"commit 87016421 chore(sdk): upgrade to 18.16.0",
+			"commit b4b02c23 feat(sdk): out:// replies on bash, eval and write cards",
+			"commit 01e07c16 feat(sdk): queued compaction",
+			"... 37 more commits (minimized)",
+		),
+	),
+	details: {
+		meta: {
+			minimized: { filter: "git", inputBytes: 123_300, outputBytes: 3_277, artifactId: "7" },
+		},
+	},
+};
 /** BashToolCard: 46 lines of lint output, so the tail collapse note shows. */
 export const bashLongTool: ToolItem = tool(
 	"bash",

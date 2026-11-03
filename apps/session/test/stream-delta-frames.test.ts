@@ -10,6 +10,7 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-
 import type { SessionEntry } from "../session-entry";
 import {
 	broadcastHistory,
+	historyFrames,
 	streamingPrimeFrames,
 	toWireEvent,
 	trackStreamingAssistant,
@@ -338,6 +339,32 @@ describe("out:// replies", () => {
 			result: { content: [{ type: "text", text: "ok" }], details: { replies: ["one"] } },
 		} as unknown as AgentSessionEvent;
 		expect(toWireEvent(handle, ended) as unknown).toBe(ended);
+	});
+
+	test("the settled result keeps the minimizer meta, in a live frame and in a shrunk history frame", () => {
+		const minimized = { filter: "git", inputBytes: 123_300, outputBytes: 3_277, artifactId: "7" };
+		const ended = {
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName: "bash",
+			result: { content: [{ type: "text", text: "ok" }], details: { meta: { minimized } } },
+		} as unknown as AgentSessionEvent;
+		expect(toWireEvent("minimized-end", ended) as unknown).toBe(ended);
+
+		// A result past the history frame ceiling is clipped in place; the meta is numbers and a short label.
+		const message = {
+			role: "toolResult",
+			toolCallId: "c1",
+			toolName: "bash",
+			content: [{ type: "text", text: "x".repeat(2 * 1024 * 1024) }],
+			details: { meta: { minimized } },
+			isError: false,
+			timestamp: 0,
+		};
+		const frames = historyFrames([message] as never);
+		const sent = frames.flatMap((f) => f.messages)[0] as unknown as typeof message;
+		expect(JSON.stringify(sent).length).toBeLessThan(1024 * 1024);
+		expect(sent.details).toEqual({ meta: { minimized } });
 	});
 
 	test("a late joiner is primed with the replies, and a resync resends them", async () => {
