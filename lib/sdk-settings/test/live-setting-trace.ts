@@ -101,6 +101,8 @@ export const LIVE_SETTING_TRACE: Readonly<Record<string, string>> = {
 	steeringMode: "session/agent-session.ts:3037",
 	followUpMode: "session/agent-session.ts:3038",
 	interruptMode: "session/agent-session.ts:3039",
+	// Read at each /btw question (BtwController.#injectEnabled); the web adapter reads it per question too.
+	"btw.inject": "modes/controllers/btw-controller.ts:286",
 	"loop.mode": "modes/interactive-mode.ts:3216",
 	"loop.conditionTimeoutMs": "modes/interactive-mode.ts:3434",
 	"input.bareSlashCommands": "modes/controllers/input-controller.ts:1528",

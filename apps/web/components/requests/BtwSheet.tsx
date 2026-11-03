@@ -1,13 +1,36 @@
-import { For, Show, createSignal, onCleanup, onMount, type Component } from "solid-js";
+import {
+	For,
+	Show,
+	createMemo,
+	createSignal,
+	onCleanup,
+	onMount,
+	type Component,
+	type JSX,
+} from "solid-js";
 import { state } from "../../state";
 import { askBtw, dismissBtw, followUpBtw } from "../../store/btw";
 import { searchAutofocus } from "../../store/integrations";
+import { settingValue } from "../../store/settings";
+import {
+	BTW_INJECTED_LABEL,
+	BTW_INJECT_LABEL,
+	btwInjectDisplay,
+	formatBtwInjectText,
+	splitBtwInject,
+	type BtwInjectDisplay,
+	type BtwInjectParts,
+	type BtwInjectState,
+} from "../../text/btw-inject";
 import {
 	btwHistoryError,
 	btwHistoryLoading,
 	btwHistoryNotice,
 	btwHistoryRecords,
 	btwHistoryTotal,
+	btwInjectFailure,
+	btwInjectKey,
+	btwInjecting,
 	btwPreview,
 	btwPreviewLoading,
 	btwPromoting,
@@ -17,6 +40,7 @@ import {
 	closeBtwHistory,
 	copyBtw,
 	dismissBtwHistoryStatus,
+	injectBtw,
 	latestBtwTurn,
 	pageBtwTranscript,
 	promoteBtw,
@@ -59,27 +83,125 @@ function statusLabel(status: string): string {
 	}
 }
 
+/** What a block's footer says and the action it offers, by state. */
+const INJECT_FOOT: Record<BtwInjectDisplay, { label: string; action?: string }> = {
+	pending: { label: BTW_INJECT_LABEL, action: "Send" },
+	sending: { label: "Sending…" },
+	sent: { label: BTW_INJECTED_LABEL },
+	failed: { label: BTW_INJECT_LABEL, action: "Retry" },
+};
+
+/**
+ * The `<inject>` block of an answer: the steering prompt the main session receives, behind a
+ * rail that is pink while it can still be sent and green once sent (`➤` on each line). Both
+ * states take the same rows and text column, so sending recolours the block in place.
+ */
+const BtwInjectBlock: Component<{
+	text: string;
+	display: BtwInjectDisplay;
+	failure?: string;
+	/** Present while the block can be sent. */
+	onSend?: () => void;
+}> = (props) => {
+	const foot = () => INJECT_FOOT[props.display];
+	return (
+		<div class="btw-inject" data-state={props.display}>
+			<div class="btw-inject-body">
+				<For each={props.text.split("\n")}>
+					{(line) => (
+						<div class="btw-inject-line">
+							<span class="btw-inject-mark" aria-hidden="true">
+								{props.display === "sent" ? "➤" : ""}
+							</span>
+							<span class="btw-inject-text">{line}</span>
+						</div>
+					)}
+				</For>
+			</div>
+			<div class="btw-inject-foot">
+				<span class="btw-inject-label">{foot().label}</span>
+				<Show when={foot().action && props.onSend}>
+					<button
+						type="button"
+						class="btw-action btw-inject-send"
+						title="Send to the main session (Alt+I)"
+						onClick={() => props.onSend?.()}
+					>
+						{foot().action}
+					</button>
+				</Show>
+			</div>
+			<Show when={props.display === "failed" && props.failure}>
+				{(reason) => (
+					<div class="msg-notice" role="alert">
+						Not sent: {reason()}
+					</div>
+				)}
+			</Show>
+		</div>
+	);
+};
+
+/** An answer around its `<inject>` block: prose, the railed block, prose. */
+const BtwInjectAnswer: Component<{
+	parts: BtwInjectParts;
+	display: BtwInjectDisplay;
+	failure?: string;
+	onSend?: () => void;
+}> = (props) => (
+	<>
+		<Show when={props.parts.before.trim()}>{(prose) => <Markdown src={prose()} />}</Show>
+		<BtwInjectBlock
+			text={formatBtwInjectText(props.parts.inject)}
+			display={props.display}
+			failure={props.failure}
+			onSend={props.onSend}
+		/>
+		<Show when={props.parts.after.trim()}>{(prose) => <Markdown src={prose()} />}</Show>
+	</>
+);
+
 const BtwTurn: Component<{
 	question: string;
 	answer: string;
 	status: string;
 	error?: string;
 	streaming?: boolean;
-}> = (props) => (
-	<article class="btw-turn">
-		<div class="btw-question">{props.question || "(empty question)"}</div>
-		<div class="btw-meta">{statusLabel(props.status)}</div>
-		<Show when={props.answer || props.streaming}>
-			<div class="btw-reply">
-				<Markdown src={props.answer} />
-				<Show when={props.streaming}>
-					<span class="btw-cursor" aria-hidden="true" />
-				</Show>
-			</div>
-		</Show>
-		<Show when={props.error}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
-	</article>
-);
+	/** The turn's steering prompt state; absent for a turn with none (its answer is plain prose). */
+	inject?: BtwInjectDisplay;
+	failure?: string;
+	onSend?: () => void;
+}> = (props) => {
+	// An unclosed block is prose in a finished answer.
+	const parts = createMemo(() => {
+		const split = props.inject ? splitBtwInject(props.answer) : undefined;
+		return split && (split.closed || props.streaming) ? split : undefined;
+	});
+	return (
+		<article class="btw-turn">
+			<div class="btw-question">{props.question || "(empty question)"}</div>
+			<div class="btw-meta">{statusLabel(props.status)}</div>
+			<Show when={props.answer || props.streaming}>
+				<div class="btw-reply">
+					<Show when={parts()} fallback={<Markdown src={props.answer} />}>
+						{(split) => (
+							<BtwInjectAnswer
+								parts={split()}
+								display={props.inject!}
+								failure={props.failure}
+								onSend={props.onSend}
+							/>
+						)}
+					</Show>
+					<Show when={props.streaming}>
+						<span class="btw-cursor" aria-hidden="true" />
+					</Show>
+				</div>
+			</Show>
+			<Show when={props.error}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
+		</article>
+	);
+};
 
 export const BtwSheet: Component<{ onClose: () => void }> = (props) => {
 	const [draft, setDraft] = createSignal("");
@@ -99,6 +221,46 @@ export const BtwSheet: Component<{ onClose: () => void }> = (props) => {
 	const selected = (): BtwRecordView | undefined =>
 		btwHistoryRecords().find((record) => record.id === btwSelectedId());
 	const busy = (): boolean => state.btw?.streaming === true;
+	// The block follows `btw.inject` while an answer streams (the session read it when the question
+	// was asked); a saved turn shows one only when the session offered it for sending.
+	const liveInject = (): boolean => settingValue<boolean>("btw.inject") === true;
+	const liveParts = (live: { reply: string; streaming: boolean }): BtwInjectParts | undefined => {
+		const split = liveInject() ? splitBtwInject(live.reply) : undefined;
+		return split && (split.closed || live.streaming) ? split : undefined;
+	};
+	const injectDisplay = (
+		recordId: string,
+		turnIndex: number,
+		server: BtwInjectState | undefined,
+	): BtwInjectDisplay | undefined => {
+		const key = btwInjectKey(recordId, turnIndex);
+		return btwInjectDisplay(server, {
+			sending: btwInjecting().has(key),
+			failed: btwInjectFailure()?.key === key,
+		});
+	};
+	const failureOf = (recordId: string, turnIndex: number): string | undefined => {
+		const failure = btwInjectFailure();
+		return failure?.key === btwInjectKey(recordId, turnIndex) ? failure.message : undefined;
+	};
+	/** The selected record's latest block when it can be sent now (the Alt+I target). */
+	const sendableRecord = (): string | undefined => {
+		const record = selected();
+		if (!record) return undefined;
+		const display = injectDisplay(
+			record.id,
+			record.followUps?.length ?? 0,
+			latestBtwTurn(record).inject,
+		);
+		return display === "pending" || display === "failed" ? record.id : undefined;
+	};
+	const onSheetKeyDown: JSX.EventHandler<HTMLDivElement, KeyboardEvent> = (event) => {
+		if (!event.altKey || event.ctrlKey || event.metaKey || event.code !== "KeyI") return;
+		const id = sendableRecord();
+		if (id === undefined) return;
+		event.preventDefault();
+		void injectBtw(id);
+	};
 	const canFollowUp = (record: BtwRecordView): boolean =>
 		latestBtwTurn(record).status !== "running";
 	const composeLabel = (): string => {
@@ -138,7 +300,7 @@ export const BtwSheet: Component<{ onClose: () => void }> = (props) => {
 
 	return (
 		<Modal title="Side questions" variant="sheet" onClose={props.onClose}>
-			<div class="btw-sheet">
+			<div class="btw-sheet" onKeyDown={onSheetKeyDown}>
 				<div class="btw-body">
 					<aside class="btw-list" aria-label="Saved side questions">
 						<div class="btw-list-head">
@@ -184,14 +346,21 @@ export const BtwSheet: Component<{ onClose: () => void }> = (props) => {
 									<div class="btw-meta">{live().streaming ? "answering…" : "error"}</div>
 									<Show when={live().reply || live().streaming}>
 										<div class="btw-reply">
-											{/* Frozen blocks render once; only the open block re-renders per flush. */}
-											<StreamingBlock
-												block={{
-													get text() {
-														return live().reply;
-													},
-												}}
-											/>
+											<Show
+												when={liveParts(live())}
+												fallback={
+													/* Frozen blocks render once; only the open block re-renders per flush. */
+													<StreamingBlock
+														block={{
+															get text() {
+																return live().reply;
+															},
+														}}
+													/>
+												}
+											>
+												{(split) => <BtwInjectAnswer parts={split()} display="pending" />}
+											</Show>
 											<Show when={live().streaming}>
 												<span class="btw-cursor" aria-hidden="true" />
 											</Show>
@@ -230,6 +399,9 @@ export const BtwSheet: Component<{ onClose: () => void }> = (props) => {
 													answer={turn.answer}
 													status={turn.status}
 													error={turn.error}
+													inject={injectDisplay(record().id, turn.index, turn.inject)}
+													failure={failureOf(record().id, turn.index)}
+													onSend={() => void injectBtw(record().id)}
 												/>
 											)}
 										</For>

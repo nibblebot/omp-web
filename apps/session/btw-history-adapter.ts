@@ -28,10 +28,13 @@ import {
 	BtwHistoryStore,
 	getBtwCopyText,
 	getBtwLatestTurn,
+	getBtwRecordInject,
+	getBtwTurnKey,
 	getBtwTurns,
 	type BtwHistoryRecord,
 	type BtwHistoryTurn,
 } from "@oh-my-pi/pi-coding-agent/session/btw-history";
+import { cfgBtwInject } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import {
 	beginBtwTurn,
 	patchLatestBtwTurn,
@@ -40,26 +43,66 @@ import {
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { toError } from "@oh-my-pi/pi-utils";
 
-/** Wire shape of one saved turn. Attached images (base64 payloads) never ride
- * the wire; `imageCount` says how many the turn carries. */
-export type BtwTurnDto = Omit<BtwHistoryTurn, "images"> & { imageCount?: number };
+/** Where a turn's steering prompt (its closed `<inject>` block) stands. A turn without a state
+ * has no sendable block: asked while `btw.inject` was off, answered in an earlier run, or an
+ * answer with no closed block. `pending` is sendable; `sent` was admitted by the main session. */
+export type BtwInjectState = "pending" | "sending" | "sent";
 
-/** Wire shape of one saved record (see {@link BtwTurnDto}). */
+/**
+ * Inject state per answer turn (`getBtwTurnKey`), the SDK controller's `#injects`
+ * (modes/controllers/btw-controller.ts). Only a turn answered in this process with the inject
+ * instruction and a closed block gets an entry, so history from an earlier run, or an answer
+ * asked while injecting was off, never sends. Record ids are unique, so the map is shared by
+ * every session's service and outlives a session change, as the SDK's does.
+ */
+const injects = new Map<string, "ready" | "sending" | "sent">();
+
+/** How a turn's block shows: sent, pending on the latest turn (sendable or in flight), else plain text. */
+function injectStateOf(record: BtwHistoryRecord, turnIndex: number): BtwInjectState | undefined {
+	const state = injects.get(getBtwTurnKey(record, turnIndex));
+	if (state === "sent") return "sent";
+	if (state === undefined || turnIndex !== getBtwTurns(record).length - 1) return undefined;
+	return state === "sending" ? "sending" : "pending";
+}
+
+/** Wire shape of one saved turn. Attached images (base64 payloads) never ride
+ * the wire; `imageCount` says how many the turn carries. `inject` is the turn's steering
+ * prompt state (see {@link BtwInjectState}), absent when the turn has none. */
+export type BtwTurnDto = Omit<BtwHistoryTurn, "images"> & {
+	imageCount?: number;
+	inject?: BtwInjectState;
+};
+
+/** Wire shape of one saved record (see {@link BtwTurnDto}). The record's own fields are its
+ * first turn; `followUps[i]` is turn `i + 1`. */
 export type BtwRecordDto = Omit<BtwHistoryRecord, "images" | "followUps"> & {
 	imageCount?: number;
+	inject?: BtwInjectState;
 	followUps?: BtwTurnDto[];
 };
 
 function toBtwTurnDto<T extends BtwHistoryTurn>(
 	turn: T,
-): Omit<T, "images"> & { imageCount?: number } {
+	inject: BtwInjectState | undefined,
+): Omit<T, "images"> & { imageCount?: number; inject?: BtwInjectState } {
 	const { images, ...rest } = turn;
-	return images?.length ? { ...rest, imageCount: images.length } : rest;
+	return {
+		...rest,
+		...(images?.length ? { imageCount: images.length } : {}),
+		...(inject !== undefined ? { inject } : {}),
+	};
 }
 
 function toBtwRecordDto(record: BtwHistoryRecord): BtwRecordDto {
-	const { followUps, ...rest } = toBtwTurnDto(record);
-	return followUps ? { ...rest, followUps: followUps.map(toBtwTurnDto) } : rest;
+	const { followUps, ...rest } = toBtwTurnDto(record, injectStateOf(record, 0));
+	return followUps
+		? {
+				...rest,
+				followUps: followUps.map((turn, index) =>
+					toBtwTurnDto(turn, injectStateOf(record, index + 1)),
+				),
+			}
+		: rest;
 }
 
 /** Stable cursor for record-list paging (stable ids, never list indexes). */
@@ -84,6 +127,7 @@ export interface BtwTranscriptTurn {
 	createdAt: number;
 	updatedAt: number;
 	error?: string;
+	inject?: BtwInjectState;
 }
 
 export interface BtwTranscriptPage {
@@ -234,6 +278,8 @@ export class BtwHistoryService {
 				updatedAt: turn.updatedAt,
 			};
 			if (turn.error !== undefined) view.error = turn.error;
+			const inject = injectStateOf(record, index);
+			if (inject !== undefined) view.inject = inject;
 			return view;
 		});
 		const capped = clampLimit(limit);
@@ -298,6 +344,10 @@ export class BtwHistoryService {
 		} finally {
 			this.#starting = false;
 		}
+		// The SDK's `#injectEnabled`, read once per question so the prompt instruction and the
+		// block's sendability agree. The web asks only about the attached main session (there is
+		// no focused-subagent composer), and a session process hosts its own turns (never a collab guest).
+		const inject = cfgBtwInject.get(session.settings);
 		const leafId = manager.getLeafId();
 		const { record, history, conversationKey } = beginBtwTurn(trimmed, leafId, previous);
 		const abort = new AbortController();
@@ -318,6 +368,7 @@ export class BtwHistoryService {
 			const { replyText, assistantMessage } = await runBtwTurn(session, {
 				question: trimmed,
 				history,
+				inject,
 				conversationKey,
 				onTextDelta: (delta) => {
 					partialAnswer += delta;
@@ -335,6 +386,10 @@ export class BtwHistoryService {
 					record.id,
 					assistantMessageWithReplyText(assistantMessage, replyText),
 				);
+				// Only an answer asked with the inject instruction can be sent, even if the setting is turned on later.
+				if (inject && getBtwRecordInject(settled) !== undefined) {
+					injects.set(getBtwTurnKey(settled), "ready");
+				}
 			}
 			return toBtwRecordDto(settled ?? this.findRecord(record.id)!);
 		} catch (error) {
@@ -389,6 +444,7 @@ export class BtwHistoryService {
 		if (!record) return { ...base, eligible: false, reason: `BTW record not found: ${recordId}` };
 		const fail = (reason: string): BtwPromotePreview => ({ ...base, eligible: false, reason });
 		if (this.#branchInFlight) return fail("a branch is already in progress");
+		if ([...injects.values()].includes("sending")) return fail("a /btw prompt is still sending");
 		if (this.#starting || this.#active.size > 0) {
 			return fail("a BTW action is still in progress");
 		}
@@ -488,6 +544,104 @@ export class BtwHistoryService {
 		} finally {
 			this.#branchInFlight = false;
 		}
+	}
+
+	/**
+	 * Send a record's steering prompt (its latest turn's closed `<inject>` block) to the main
+	 * session as a user message: a steer while the agent runs, else a new turn. Mirrors the SDK
+	 * controller's `#inject`. Slash commands and templates are not expanded, so model-written
+	 * text never runs as a command. The turn counts as sent once the session admits it; a
+	 * send dropped or refused before it reached the transcript or the steer queue throws and
+	 * leaves the turn pending, so the same call is its one retry path. A failure after admission
+	 * goes to `onLateError` and keeps the turn sent, so it is never sent twice. Only a turn
+	 * answered in this process with the inject instruction can send, and only once.
+	 */
+	async injectBtw(
+		session: AgentSession,
+		recordId: string,
+		options: { onLateError?: (error: unknown) => void } = {},
+	): Promise<BtwRecordDto> {
+		const record = this.findRecord(recordId);
+		if (!record) throw new Error(`BTW record not found: ${recordId}`);
+		const text = getBtwRecordInject(record);
+		const key = getBtwTurnKey(record);
+		const state = injects.get(key);
+		if (text === undefined || state === undefined) {
+			throw new Error("This answer has no steering prompt to send.");
+		}
+		if (state === "sent")
+			throw new Error("This steering prompt was already sent to the main session.");
+		if (state === "sending") throw new Error("This steering prompt is still sending.");
+		if (this.#starting || this.#branchInFlight) {
+			throw new Error("A /btw action is in progress. Please wait.");
+		}
+		injects.set(key, "sending");
+		try {
+			// `prompt()` would wait for startup-deferred extensions before its own session-switch
+			// checks run, so a `/new` in that wait could land this prompt in the new session. Wait
+			// here instead and drop the send if the session moved.
+			if (session.hasPendingDeferredExtensions) {
+				await session.loadDeferredExtensions();
+				if (session.sessionManager.getSessionId() !== this.#sessionId) {
+					throw new Error("The session changed before the prompt was sent.");
+				}
+			}
+			await this.#sendInject(session, key, text, options.onLateError);
+		} catch (error) {
+			// Nothing reached the transcript or the steer queue: back to pending for a retry.
+			if (injects.get(key) === "sending") injects.set(key, "ready");
+			throw toError(error);
+		}
+		return toBtwRecordDto(this.findRecord(recordId) ?? record);
+	}
+
+	/** Resolves once the session admits `text`; rejects when it was dropped or refused before admission. */
+	#sendInject(
+		session: AgentSession,
+		key: string,
+		text: string,
+		onLateError: ((error: unknown) => void) | undefined,
+	): Promise<void> {
+		const lastUserMessage = () => session.messages.findLast((message) => message.role === "user");
+		const userBefore = lastUserMessage();
+		const outcome = Promise.withResolvers<void>();
+		let admitted = false;
+		let queued = false;
+		session
+			.prompt(text, {
+				expandPromptTemplates: false,
+				streamingBehavior: "steer",
+				throwOnDrop: true,
+				onPromptQueued: () => {
+					queued = true;
+				},
+				onPromptAdmitted: () => {
+					admitted = true;
+					injects.set(key, "sent");
+					outcome.resolve();
+				},
+			})
+			.then(
+				() => {
+					// A drop while queueing resolves without admission: nothing was sent.
+					if (!admitted) outcome.reject(new Error("The steering prompt was not sent."));
+				},
+				(error: unknown) => {
+					if (admitted) {
+						onLateError?.(error);
+						return;
+					}
+					// Already in the steer queue or the transcript: it was sent, so keep the mark.
+					if (queued || lastUserMessage() !== userBefore) {
+						injects.set(key, "sent");
+						onLateError?.(error);
+						outcome.resolve();
+						return;
+					}
+					outcome.reject(toError(error));
+				},
+			);
+		return outcome.promise;
 	}
 
 	/**

@@ -68,6 +68,7 @@ export const BOOT_SETTING_PATHS: readonly string[] = [
 	"completion.notify",
 	"error.notify",
 	"ask.notify",
+	"btw.inject",
 ];
 
 // What the full model reflects. It loads on first use (the sheets and the palette), not at attach,

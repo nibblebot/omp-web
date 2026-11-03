@@ -45,7 +45,7 @@ export const TAB_SECTION_ORDER: Readonly<Record<string, readonly string[]>> = {
 /** Name of the group that holds a tab's Advanced rows; always the last group of its tab. */
 export const ADVANCED_GROUP = "Advanced";
 
-/** Terminal-only rows that never appear on the web (64). */
+/** Terminal-only rows that never appear on the web (62). */
 export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"theme.dark": true,
 	"theme.light": true,
@@ -103,8 +103,6 @@ export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"tui.vimModeDisplay": true,
 	"spelling.typoDetection": true,
 	"spelling.autocorrect": true,
-	// The web /btw has no inject send (Alt+I in the TUI) and its side turns never ask for one.
-	"btw.inject": true,
 	"stream.redactPatterns": true,
 	"display.advisorCollapsedLines": true,
 	"session.worktreeScope": true,

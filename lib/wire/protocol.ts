@@ -933,6 +933,7 @@ export type WebMethodName =
 	| "btwStart"
 	| "btwFollowUp"
 	| "btwCancel"
+	| "btwInject"
 	| "btwCopy"
 	| "btwPromotePreview"
 	| "btwPromote"

@@ -14,6 +14,7 @@ import { upsertRosterEntry } from "./fixtures/command-bus";
 import { appSessions, appWorkspaceSessions } from "./fixtures/app-sessions";
 import { daemonCommands, daemonsPatch } from "./fixtures/activities";
 import { repoFiles, screenPredictions } from "./fixtures/composer";
+import { btwCalls } from "./fixtures/dialogs";
 import { extensionStateCalls } from "./fixtures/extensions";
 import { jobCalls, screenJobDetails, screenJobTree } from "./fixtures/jobs";
 import { browserEntries, fast, heavy, shared } from "./fixtures/models";
@@ -378,6 +379,7 @@ function resumeCalls(): CallHandlers {
 export function answerDemoSession(): void {
 	addCalls({
 		...activityCalls(),
+		...btwCalls(),
 		...settingsCalls(sessionSettingsModel()),
 		...modelCalls(),
 		...extensionStateCalls(),

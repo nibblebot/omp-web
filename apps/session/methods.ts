@@ -236,6 +236,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		queueCompaction: true,
 		runQueuedCommandNow: true,
 		predictNextMessage: true,
+		// Sends the side answer's steering prompt as a user message (steer or new turn).
+		btwInject: true,
 	};
 
 	// Calls that replace the transcript; every tab resyncs, not just the requester.
@@ -1022,6 +1024,13 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		},
 		btwCancel: async (entry, a) => ({
 			record: await (await serviceFor(entry.session)).cancelBtwTurn(String(a[0])),
+		}),
+		btwInject: async (entry, a) => ({
+			record: await (
+				await serviceFor(entry.session)
+			).injectBtw(entry.session, String(a[0]), {
+				onLateError: (err) => broadcast({ type: "error", error: String(err) }),
+			}),
 		}),
 		btwCopy: async (entry, a) => ({
 			text: (await serviceFor(entry.session)).copyBtwText(String(a[0])) ?? null,

@@ -1505,6 +1505,54 @@ button.picker-row.kbd-active {
 .btw-promote {
 	border-color: var(--accent);
 }
+/* The `<inject>` block of a side answer: the steering prompt the main session receives.
+   A rail in the purple (pending) or success (sent) token; both states share rows and the
+   text column, so sending recolours the block in place. */
+.btw-inject {
+	--btw-inject-tone: var(--purple);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: var(--space-3) 0;
+	padding: var(--space-3) var(--space-4);
+	border-left: 3px solid var(--btw-inject-tone);
+	border-radius: var(--r-md);
+	background: color-mix(in srgb, var(--btw-inject-tone) 10%, transparent);
+	transition:
+		border-color var(--dur-base),
+		background-color var(--dur-base);
+}
+.btw-inject[data-state="sent"] {
+	--btw-inject-tone: var(--success);
+}
+.btw-inject-line {
+	display: grid;
+	grid-template-columns: 1.5em minmax(0, 1fr);
+	min-height: 1lh;
+}
+.btw-inject-mark {
+	color: var(--btw-inject-tone);
+	font-weight: 600;
+}
+.btw-inject-text {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.btw-inject-foot {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+	padding-left: 1.5em;
+}
+.btw-inject-label {
+	color: var(--btw-inject-tone);
+	font-size: var(--fs-sm);
+}
+.btw-inject-send {
+	border-color: var(--btw-inject-tone);
+}
 .btw-hint {
 	color: var(--text-muted);
 	font-size: var(--fs-sm);

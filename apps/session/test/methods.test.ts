@@ -747,6 +747,7 @@ describe("READ_ONLY classification", () => {
 		bash: true,
 		btwCancel: true,
 		btwFollowUp: true,
+		btwInject: true,
 		btwStart: true,
 		cancelJob: true,
 		clearModelRole: true,
@@ -846,6 +847,12 @@ describe("READ_ONLY classification", () => {
 		expect(Object.keys(web.readOnly).filter((name) => !(name in web.methods))).toEqual([]);
 		expect(Object.keys(MUTATING).filter((name) => !(name in web.methods))).toEqual([]);
 		expect(Object.keys(MUTATING).filter((name) => name in web.readOnly)).toEqual([]);
+	});
+
+	test("btwInject sends a user message, so it is a readiness-gated mutation", () => {
+		const web = webMethods();
+		expect(web.notReadyGated).toHaveProperty("btwInject");
+		expect(web.readOnly).not.toHaveProperty("btwInject");
 	});
 
 	test("getToolSchemas answers the live tool list on demand", async () => {

@@ -7,6 +7,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { Settings } from "@oh-my-pi/pi-coding-agent";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import {
 	BtwHistoryStore,
@@ -56,6 +57,7 @@ async function openFixture(): Promise<{ session: AgentSession; calls: EphemeralA
 	const calls: EphemeralArgs[] = [];
 	const session = {
 		model: { api: "test-api", provider: "test", id: "test-model" },
+		settings: Settings.isolated(),
 		sessionManager: {
 			getSessionId: () => SESSION_ID,
 			getLeafId: () => "leaf-1",

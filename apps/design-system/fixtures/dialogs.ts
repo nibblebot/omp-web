@@ -6,7 +6,7 @@ import {
 	type CompactionSnapshot,
 	type CompactionState,
 } from "../../web/store/compaction";
-import { answerCalls } from "../session";
+import { answerCalls, type CallHandlers } from "../session";
 import type { GraphNode, GraphPage } from "../../web/store/graph";
 import type { UiApprovalParams, WebSessionState } from "#lib/wire/protocol";
 import type { DebugEntry, state } from "../../web/state";
@@ -256,6 +256,15 @@ export const btwFailed: BtwSheetState = {
 	error: "Provider returned 429: rate limit reached. Retry in 20 s.",
 };
 
+/** A steering prompt mid-draft (`btw.inject` on): the unclosed block already shows behind its rail. */
+export const btwInjectStreaming: BtwSheetState = {
+	question: "Write a prompt that tells the agent to stop adding retries",
+	reply:
+		"Here is a message you can send:\n\n<inject>Stop adding retry loops around the transport calls. Surface the failure to the caller and let the existing backoff",
+	streaming: true,
+	streamId: 10,
+};
+
 // ---------------------------------------------------------------------------
 // /btw history: session answers for btwList and btwPage.
 // ---------------------------------------------------------------------------
@@ -307,11 +316,69 @@ export const btwHistoryRecords: BtwRecordView[] = [
 		updatedAt: at(8),
 		error: "connection lost mid-answer",
 	},
+	{
+		id: "btw_45",
+		leafId: "leaf_131",
+		question: "Draft a steering prompt that gets the agent to fix the build first",
+		answer:
+			"Here is a message you can send to the main session:\n\n<inject>Pause the refactor and fix the failing build first, then rerun the tests before continuing.</inject>\n\nIt keeps the refactor intact and unblocks CI before any more files change.",
+		status: "complete",
+		createdAt: at(5),
+		updatedAt: at(4),
+		inject: "pending",
+	},
+	{
+		id: "btw_46",
+		leafId: "leaf_127",
+		question: "Write the instruction that tells the agent to stop touching the lockfile",
+		answer:
+			"<inject>Stop editing bun.lock by hand. Regenerate it with bun install, and commit it only when package.json changed.</inject>",
+		status: "complete",
+		createdAt: at(26),
+		updatedAt: at(25),
+		inject: "sent",
+	},
 ];
+
+/** Records whose steering prompt a story or the demo sent through `btwInject` (reset by each seed). */
+const injectedIds = new Set<string>();
+
+/** Side questions asked through `btwStart` (and follow-ups added to them) since the last seed, newest first. */
+let askedRecords: BtwRecordView[] = [];
+let nextAskedId = 1;
+
+const BTW_CANNED_ANSWER =
+	"The session answers side questions on its own model without touching the main transcript; promote one when it belongs there.";
+
+/** The saved records as the session reports them now: a sent prompt reads as sent. */
+function currentBtwRecords(): BtwRecordView[] {
+	return [...askedRecords, ...btwHistoryRecords].map((record) =>
+		record.inject === "pending" && injectedIds.has(record.id)
+			? { ...record, inject: "sent" }
+			: record,
+	);
+}
+
+/** A follow-up turn on a saved record: asked records gain it; seeded ones answer as they are. */
+function followUpRecord(recordId: string, question: string): BtwRecordView | undefined {
+	const index = askedRecords.findIndex((r) => r.id === recordId);
+	if (index < 0) return currentBtwRecords().find((r) => r.id === recordId);
+	const record = askedRecords[index]!;
+	const turn = {
+		question,
+		answer: BTW_CANNED_ANSWER,
+		status: "complete" as const,
+		createdAt: at(0),
+		updatedAt: at(0),
+	};
+	const updated = { ...record, followUps: [...(record.followUps ?? []), turn], updatedAt: at(0) };
+	askedRecords[index] = updated;
+	return updated;
+}
 
 /** Transcript turns for one record (btwPage answer): the question, then each follow-up. */
 export function btwTranscriptFor(recordId: string): BtwTranscriptTurnView[] {
-	const record = btwHistoryRecords.find((r) => r.id === recordId);
+	const record = currentBtwRecords().find((r) => r.id === recordId);
 	if (!record) return [];
 	const first: BtwTranscriptTurnView = {
 		key: `${record.id}:0`,
@@ -322,6 +389,7 @@ export function btwTranscriptFor(recordId: string): BtwTranscriptTurnView[] {
 		createdAt: record.createdAt,
 		updatedAt: record.updatedAt,
 		...(record.error ? { error: record.error } : {}),
+		...(record.inject ? { inject: record.inject } : {}),
 	};
 	const followUps = (record.followUps ?? []).map((turn, i): BtwTranscriptTurnView => ({
 		key: `${record.id}:${i + 1}`,
@@ -332,26 +400,47 @@ export function btwTranscriptFor(recordId: string): BtwTranscriptTurnView[] {
 		createdAt: turn.createdAt,
 		updatedAt: turn.updatedAt,
 		...(turn.error ? { error: turn.error } : {}),
+		...(turn.inject ? { inject: turn.inject } : {}),
 	}));
 	return [first, ...followUps];
 }
 
 /**
- * Answers the session calls the /btw sheet makes on open and on selection:
- * the saved list, search, a thread page, and the promote preview (eligible
- * only for a single complete turn, as the server decides).
+ * The session calls the /btw sheet makes: the saved list, search, a thread page, asking and
+ * following up (answered at once with a canned reply), cancel, copy, the promote preview (eligible
+ * only for a single complete turn, as the server decides), promote and `btwInject`, which marks a
+ * pending steering prompt sent. `injectRefusal` makes the send fail with that reason instead, as a
+ * session that dropped the prompt would.
  */
-export function answerBtwHistory(): void {
-	answerCalls({
-		btwList: () => ({ records: btwHistoryRecords, total: btwHistoryRecords.length }),
-		btwSearch: () => ({ records: btwHistoryRecords, total: btwHistoryRecords.length }),
+export function btwCalls(injectRefusal?: string): CallHandlers {
+	const find = (recordId: unknown) => currentBtwRecords().find((r) => r.id === String(recordId));
+	return {
+		btwList: () => ({ records: currentBtwRecords(), total: currentBtwRecords().length }),
+		btwSearch: () => ({ records: currentBtwRecords(), total: currentBtwRecords().length }),
 		btwPage: (args) => {
 			const turns = btwTranscriptFor(String(args[0]));
 			return { turns, total: turns.length };
 		},
+		btwStart: (args) => {
+			const record: BtwRecordView = {
+				id: `btw_demo_${nextAskedId++}`,
+				leafId: "leaf_131",
+				question: String(args[0] ?? ""),
+				answer: BTW_CANNED_ANSWER,
+				status: "complete",
+				createdAt: at(0),
+				updatedAt: at(0),
+			};
+			askedRecords = [record, ...askedRecords];
+			return { record };
+		},
+		btwFollowUp: (args) => ({ record: followUpRecord(String(args[0]), String(args[1] ?? "")) }),
+		btwCancel: (args) => ({ record: find(args[0]) }),
+		btwCopy: (args) => ({ text: find(args[0])?.answer ?? null }),
+		btwPromote: () => ({}),
 		btwPromotePreview: (args) => {
 			const recordId = String(args[0]);
-			const record = btwHistoryRecords.find((r) => r.id === recordId);
+			const record = find(recordId);
 			const turns = 1 + (record?.followUps?.length ?? 0);
 			const eligible = turns === 1 && record?.status === "complete";
 			return {
@@ -368,7 +457,20 @@ export function answerBtwHistory(): void {
 				turns,
 			};
 		},
-	});
+		btwInject: (args) => {
+			if (injectRefusal !== undefined) throw new Error(injectRefusal);
+			const recordId = String(args[0]);
+			injectedIds.add(recordId);
+			return { record: currentBtwRecords().find((r) => r.id === recordId) };
+		},
+	};
+}
+
+/** Answer the /btw sheet's calls (see {@link btwCalls}) and forget what earlier seeds asked or sent. */
+export function answerBtwHistory(injectRefusal?: string): void {
+	injectedIds.clear();
+	askedRecords = [];
+	answerCalls(btwCalls(injectRefusal));
 }
 
 // ---------------------------------------------------------------------------

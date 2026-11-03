@@ -1,8 +1,14 @@
 import { BtwSheet } from "../../../web/components/requests/BtwSheet";
 import { setState } from "../../../web/state";
-import { selectBtwRecord } from "../../../web/store/btw-history";
+import { injectBtw, selectBtwRecord } from "../../../web/store/btw-history";
 import { answerCalls } from "../../session";
-import { answerBtwHistory, btwAnswered, btwFailed, btwStreaming } from "../../fixtures/dialogs";
+import {
+	answerBtwHistory,
+	btwAnswered,
+	btwFailed,
+	btwInjectStreaming,
+	btwStreaming,
+} from "../../fixtures/dialogs";
 import { defineStory } from "../../registry";
 
 /**
@@ -61,6 +67,48 @@ export default defineStory({
 			seed: () => {
 				answerBtwHistory();
 				selectBtwRecord("btw_42");
+			},
+			render: () => <BtwSheet onClose={() => setState("modal", null)} />,
+		},
+		{
+			name: "Steering prompt drafting",
+			description:
+				"With /btw Steering Inject on, the `<inject>` block shows behind its pink rail while it streams; it cannot be sent until the answer completes.",
+			seed: () => {
+				answerBtwHistory();
+				setState("settingValues", "btw.inject", true);
+				setState("btw", btwInjectStreaming);
+			},
+			render: () => <BtwSheet onClose={() => setState("modal", null)} />,
+		},
+		{
+			name: "Steering prompt pending",
+			description:
+				"A finished answer with a steering prompt: the block shows behind a pink rail with Send (Alt+I). Sending recolours it green with ➤ on each line and Injected into main session below.",
+			seed: () => {
+				answerBtwHistory();
+				selectBtwRecord("btw_45");
+			},
+			render: () => <BtwSheet onClose={() => setState("modal", null)} />,
+		},
+		{
+			name: "Steering prompt sent",
+			description:
+				"The prompt was admitted by the main session: green rail, ➤ on each line, no Send.",
+			seed: () => {
+				answerBtwHistory();
+				selectBtwRecord("btw_46");
+			},
+			render: () => <BtwSheet onClose={() => setState("modal", null)} />,
+		},
+		{
+			name: "Steering prompt refused",
+			description:
+				"The session dropped the send: the block is pending again with the reason and Retry.",
+			seed: () => {
+				answerBtwHistory("Prompt dropped before provider dispatch.");
+				selectBtwRecord("btw_45");
+				void injectBtw("btw_45");
 			},
 			render: () => <BtwSheet onClose={() => setState("modal", null)} />,
 		},

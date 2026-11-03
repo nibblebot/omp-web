@@ -10,12 +10,13 @@
 //
 // Wire args are positional, as apps/session/methods.ts reads them: btwList
 // [{limit}], btwSearch [query, {limit}], btwPage [recordId, afterKey, limit],
-// btwCancel / btwCopy / btwPromotePreview / btwPromote [recordId].
+// btwCancel / btwCopy / btwPromotePreview / btwPromote / btwInject [recordId].
 
 import { createSignal } from "solid-js";
 import { state } from "../state";
 import { copyText } from "../text/clipboard";
 import { call, isSessionSwitchSupersession } from "./transport";
+import type { BtwInjectState } from "../text/btw-inject";
 
 // ---------------------------------------------------------------------------
 // View shapes (normalized from untrusted server payloads; never thrown).
@@ -30,6 +31,7 @@ export interface BtwTurnView {
 	createdAt: number;
 	updatedAt: number;
 	error?: string;
+	inject?: BtwInjectState;
 }
 
 export interface BtwRecordView extends BtwTurnView {
@@ -61,6 +63,8 @@ const TURN_STATUSES: ReadonlyArray<BtwTurnStatus> = [
 	"interrupted",
 ];
 
+const INJECT_STATES: ReadonlyArray<BtwInjectState> = ["pending", "sending", "sent"];
+
 function errText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
@@ -87,6 +91,9 @@ function normalizeTurn(value: unknown): BtwTurnView | null {
 		updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : 0,
 	};
 	if (typeof record.error === "string" && record.error) turn.error = record.error;
+	if ((INJECT_STATES as ReadonlyArray<unknown>).includes(record.inject)) {
+		turn.inject = record.inject as BtwInjectState;
+	}
 	return turn;
 }
 
@@ -196,6 +203,13 @@ const [btwTranscript, setBtwTranscript] = createSignal<{
 const [btwPreview, setBtwPreview] = createSignal<BtwPromotePreviewView | null>(null);
 const [btwPreviewLoading, setBtwPreviewLoading] = createSignal(false);
 const [btwPromoting, setBtwPromoting] = createSignal(false);
+/** Turns (`btwInjectKey`) with a send in flight from this page; the session's own `sending` covers other pages. */
+const [btwInjecting, setBtwInjecting] = createSignal<ReadonlySet<string>>(new Set());
+/** The last send the session refused: the turn is pending again, and the same action retries. */
+const [btwInjectFailure, setBtwInjectFailure] = createSignal<{
+	key: string;
+	message: string;
+} | null>(null);
 
 export {
 	btwHistoryRecords,
@@ -209,6 +223,8 @@ export {
 	btwPreview,
 	btwPreviewLoading,
 	btwPromoting,
+	btwInjecting,
+	btwInjectFailure,
 };
 
 /** True while the /btw sheet is open: only then does a running turn get polled. */
@@ -232,6 +248,8 @@ function stopBtwPoll(): void {
 function applyRecords(records: BtwRecordView[], total: number, scope: string): void {
 	setBtwHistoryRecords(records);
 	setBtwHistoryTotal(total);
+	const open = records.find((record) => record.id === btwTranscript().recordId);
+	if (open) setBtwTranscript((current) => syncTranscriptInject(current, open));
 	const selected = btwSelectedId();
 	if (selected !== null && !records.some((record) => record.id === selected)) {
 		setBtwSelectedId(null);
@@ -440,9 +458,76 @@ export async function promoteBtw(recordId: string): Promise<boolean> {
 	}
 }
 
+/** Identifies one turn of a topic for the inject bookkeeping: the record id and the turn's index (0 = the question itself). */
+export function btwInjectKey(recordId: string, turnIndex: number): string {
+	return `${recordId}:${turnIndex}`;
+}
+
+/**
+ * The open thread's turns carrying the session's current inject states, read off a record (the
+ * fresher read of the same turns: its own fields are turn 0, `followUps[i]` is turn `i + 1`).
+ * The same object comes back when nothing moved.
+ */
+export function syncTranscriptInject<
+	T extends { recordId: string; turns: BtwTranscriptTurnView[] },
+>(transcript: T, record: BtwRecordView): T {
+	if (transcript.recordId !== record.id) return transcript;
+	let changed = false;
+	const turns = transcript.turns.map((turn) => {
+		const inject = turn.index === 0 ? record.inject : record.followUps?.[turn.index - 1]?.inject;
+		if (inject === turn.inject) return turn;
+		changed = true;
+		const next: BtwTranscriptTurnView = { ...turn };
+		if (inject === undefined) delete next.inject;
+		else next.inject = inject;
+		return next;
+	});
+	return changed ? { ...transcript, turns } : transcript;
+}
+
+/**
+ * Send a record's steering prompt (its latest turn's `<inject>` block) to the main session: a
+ * steer while the agent runs, else a new turn. The session sends it once per answer from its
+ * current run. A refusal leaves the turn pending with the reason on `btwInjectFailure`, and
+ * calling this again retries. Resolves true once the session admitted the prompt.
+ */
+export async function injectBtw(recordId: string): Promise<boolean> {
+	const record = btwHistoryRecords().find((candidate) => candidate.id === recordId);
+	const key = btwInjectKey(recordId, record?.followUps?.length ?? 0);
+	if (btwInjecting().has(key)) return false;
+	const scope = state.sessionId;
+	setBtwInjecting((current) => new Set(current).add(key));
+	setBtwInjectFailure(null);
+	try {
+		const data = await call("btwInject", [recordId], 60_000);
+		if (state.sessionId !== scope) return true;
+		const sent = normalizeRecord(asRecord(data)?.record);
+		if (sent) {
+			setBtwHistoryRecords((records) =>
+				records.map((candidate) => (candidate.id === sent.id ? sent : candidate)),
+			);
+			setBtwTranscript((current) => syncTranscriptInject(current, sent));
+		}
+		return true;
+	} catch (err) {
+		if (isSessionSwitchSupersession(err)) return false;
+		if (state.sessionId === scope) setBtwInjectFailure({ key, message: errText(err) });
+		return false;
+	} finally {
+		setBtwInjecting((current) => {
+			const next = new Set(current);
+			next.delete(key);
+			return next;
+		});
+		// The session's own view settles what another page may have sent meanwhile.
+		if (state.sessionId === scope) refreshBtwHistory();
+	}
+}
+
 /** Close the sheet (presentation only): selection and polling stop, saved turns stay. */
 export function closeBtwHistory(): void {
 	viewOpen = false;
+	setBtwInjectFailure(null);
 	stopBtwPoll();
 	runningIds = new Set();
 	setBtwSelectedId(null);
