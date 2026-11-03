@@ -83,4 +83,18 @@ describe("listResumeCandidates scope", () => {
 		expect(searched.candidates.map((c) => c.id)).toEqual([idB]);
 		expect(searched.candidates[0]?.scope).toBe("global");
 	});
+
+	test("an empty session is left out unless it is pinned", async () => {
+		const root = tempDir("omp-scope-empty-");
+		const local = join(root, "projA");
+		const used = crypto.randomUUID();
+		const empty = crypto.randomUUID();
+		journal(root, "projA", used, ["alpha prompt"]);
+		journal(root, "projA", empty, []);
+		const list = (pinned: string[]) =>
+			listResumeCandidates({ cwd: local, sessionDir: local, pinnedIds: new Set(pinned) });
+
+		expect((await list([])).candidates.map((c) => c.id)).toEqual([used]);
+		expect((await list([empty])).candidates.map((c) => c.id).sort()).toEqual([used, empty].sort());
+	});
 });

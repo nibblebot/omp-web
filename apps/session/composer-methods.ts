@@ -89,8 +89,10 @@ function startNextMessagePrediction(
 		viewSession: session,
 		focusedAgentId: undefined,
 		editor: { getText: () => "" },
-		// Fires when a prediction is ready and on cancel; `text` is then the ready prediction or undefined.
-		ui: { requestRender: () => settle(controller?.text ?? null) },
+		// Fires when a prediction is ready and on cancel; `choices` then holds the ready
+		// alternatives, most likely first (one unless `composer.predictionAlternatives`), or is
+		// undefined. The web composer shows one prediction: the most likely.
+		ui: { requestRender: () => settle(controller?.choices?.[0] ?? null) },
 	};
 	controller = new ComposerPredictionController(host as never, {
 		deadlineMs: PREDICTION_DEADLINE_MS,

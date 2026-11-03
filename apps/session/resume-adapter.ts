@@ -6,9 +6,13 @@
  * calls {@link createResumeHandlers}; the fleet edge, protocol, state and web
  * prompt command table are NEVER touched here.
  *
- * SDK reuse (installed @oh-my-pi/pi-coding-agent 18.15.0; revalidate on bump):
+ * SDK reuse (installed @oh-my-pi/pi-coding-agent 18.16.0; revalidate on bump):
  * - session/session-listing.ts: `listSessions`, `listAllSessions`,
- *   `filterSessionsForPicker` (empties dropped, pins kept). The matcher
+ *   `isEmptySession`. The picker filter (empties dropped, pins kept) is
+ *   module-PRIVATE since 18.16.0 (`filterSessionsForPicker`, folded into the
+ *   two-pass `listSessionsForPicker`, whose history.db title pass the browser
+ *   listing does not use), so {@link listResumeCandidates} applies the same
+ *   one-line rule over `isEmptySession`. The matcher
  *   `sessionMatchesResumeArg` and `sessionIdFromSessionPath` are
  *   module-PRIVATE in the SDK, so {@link matchesResumeArg} below mirrors
  *   their exact grammar (case-insensitive ID-prefix, filename-prefix,
@@ -31,7 +35,7 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
-	filterSessionsForPicker,
+	isEmptySession,
 	listAllSessions,
 	listSessions,
 	type SessionInfo,
@@ -287,7 +291,7 @@ export interface ResumeListResult {
 }
 
 /**
- * Picker listing: empties dropped (pins kept) via `filterSessionsForPicker`,
+ * Picker listing: empties dropped (pins kept) by the SDK's `isEmptySession`,
  * pinned-first via `sortPinnedFirst`, optional search over id/prefix, title,
  * cwd, first prompt, and full conversation text. Without `allProjects` only
  * this project's directory is listed (`scope: "local"`); with it every project
@@ -322,7 +326,7 @@ export async function listResumeCandidates(
 						s.firstMessage.toLowerCase().includes(q) ||
 						s.allMessagesText.toLowerCase().includes(q),
 				);
-	const picked = filterSessionsForPicker(searched, pinned);
+	const picked = searched.filter((s) => pinned.has(s.id) || !isEmptySession(s));
 	const ordered = sortPinnedFirst(picked, pinned);
 	const limit = Math.min(
 		Math.max(options.limit ?? RESUME_LIST_DEFAULT_LIMIT, 1),

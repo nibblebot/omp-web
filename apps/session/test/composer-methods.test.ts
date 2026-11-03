@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
 import {
+	cfgComposerPredictionAlternatives,
 	cfgComposerPredictions,
 	cfgSpellingAutocomplete,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
@@ -63,5 +64,51 @@ describe("composer ghost-text RPC gating", () => {
 		expect(await methods.predictNextMessage!(entry as unknown as SessionEntry, [])).toEqual({
 			text: null,
 		});
+	});
+});
+
+describe("composer next-message prediction", () => {
+	/** A session whose ephemeral side turn replies `reply`, as the SDK prediction controller sees it. */
+	function predictingEntry(settings: Settings, reply: string): SessionEntry {
+		const session = {
+			settings,
+			model: { provider: "test", id: "model" },
+			isStreaming: false,
+			isCompacting: false,
+			messages: [{ role: "assistant", content: [] }],
+			sessionManager: {
+				getSessionId: () => "sess",
+				getLeafId: () => "leaf",
+				appendModelUsage: () => {},
+			},
+			ephemeralMaxTokensPreservesRequest: () => true,
+			runEphemeralTurn: async () => ({
+				replyText: reply,
+				assistantMessage: { api: "test", provider: "test", model: "model", usage: {} },
+			}),
+		};
+		return { session } as unknown as SessionEntry;
+	}
+
+	test("answers the ready prediction", async () => {
+		const settings = Settings.isolated();
+		cfgComposerPredictions.set(settings, true);
+		const methods = createComposerMethods();
+		expect(
+			await methods.predictNextMessage!(predictingEntry(settings, "Run the tests"), []),
+		).toEqual({ text: "Run the tests" });
+	});
+
+	test("with alternatives on, answers the most likely one", async () => {
+		const settings = Settings.isolated();
+		cfgComposerPredictions.set(settings, true);
+		cfgComposerPredictionAlternatives.set(settings, true);
+		const methods = createComposerMethods();
+		expect(
+			await methods.predictNextMessage!(
+				predictingEntry(settings, "Run the tests\nCommit the change\nOpen a PR"),
+				[],
+			),
+		).toEqual({ text: "Run the tests" });
 	});
 });
