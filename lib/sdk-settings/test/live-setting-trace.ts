@@ -107,6 +107,7 @@ export const LIVE_SETTING_TRACE: Readonly<Record<string, string>> = {
 	autocompleteMaxVisible: "modes/interactive-mode.ts:4149",
 	"spelling.autocomplete": "modes/interactive-mode.ts:4151",
 	"composer.predictions": "modes/controllers/composer-prediction-controller.ts:145",
+	"composer.predictionAlternatives": "modes/controllers/composer-prediction-controller.ts:165",
 	emojiAutocomplete: "modes/settings.ts:1106",
 	"paste.largeMenuThreshold": "modes/controllers/input-controller.ts:2855",
 	"magicKeywords.enabled": "session/agent-session.ts:8082",

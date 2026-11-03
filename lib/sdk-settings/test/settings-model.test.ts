@@ -332,6 +332,26 @@ describe("buildSettingsModel", () => {
 		lookup("memory.backend")!.unset(Settings.instance);
 	});
 
+	test("Prediction Alternatives lists under Interaction, Input only while Composer Predictions is on", () => {
+		const inputGroup = () =>
+			buildSettingsModel(fakeSession, ["dark", "light"])
+				.tabs.find((tab) => tab.id === "interaction")
+				?.groups.find((group) => group.name === "Input");
+		lookup("composer.predictions")!.unset(Settings.instance);
+		expect(inputGroup()?.items.map((item) => item.path)).not.toContain(
+			"composer.predictionAlternatives",
+		);
+		lookup("composer.predictions")!.set(Settings.instance, true);
+		const row = inputGroup()?.items.find((item) => item.path === "composer.predictionAlternatives");
+		expect(row).toMatchObject({
+			label: "Prediction Alternatives",
+			type: "boolean",
+			value: false,
+			view: { effect: "live" },
+		});
+		lookup("composer.predictions")!.unset(Settings.instance);
+	});
+
 	test("the SDK risk note reaches the row as warning", () => {
 		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
 		const external = itemsOf("model", model).find((item) => item.path === "externalThinking");

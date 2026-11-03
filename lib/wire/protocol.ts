@@ -754,6 +754,17 @@ export interface CloneFetchResult {
 	previousCommit?: string;
 }
 
+/** `predictNextMessage` answer: the predicted next messages of one billed request. */
+export interface PredictNextMessageReply {
+	/** The most likely message; null when none is ready (off, no model, streaming, compacting, skipped, superseded, timed out). */
+	text: string | null;
+	/**
+	 * Every alternative, most likely first (`text` is the first). Present only when the request
+	 * returned two or more, i.e. with `composer.predictionAlternatives` on; older clients read `text`.
+	 */
+	choices?: string[];
+}
+
 /** One local branch of a registered project, or one branch of a project remote (project_branches frame). */
 export interface ProjectBranch {
 	/** Short branch name (refs/heads/ stripped, or the remote's head name). */
@@ -833,7 +844,8 @@ export type WebMethodName =
 	| "python"
 	| "abortEval"
 	// Composer ghost text: spelling.autocomplete word suffix and its feedback,
-	// composer.predictions next-message prediction (SDK controller, same gates).
+	// composer.predictions next-message prediction (SDK controller, same gates); answers a
+	// PredictNextMessageReply.
 	| "predictWord"
 	| "predictWordFeedback"
 	| "predictNextMessage"

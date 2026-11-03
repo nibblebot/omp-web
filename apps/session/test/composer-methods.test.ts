@@ -99,7 +99,7 @@ describe("composer next-message prediction", () => {
 		).toEqual({ text: "Run the tests" });
 	});
 
-	test("with alternatives on, answers the most likely one", async () => {
+	test("with alternatives on, answers every alternative in order and text is the first", async () => {
 		const settings = Settings.isolated();
 		cfgComposerPredictions.set(settings, true);
 		cfgComposerPredictionAlternatives.set(settings, true);
@@ -109,6 +109,44 @@ describe("composer next-message prediction", () => {
 				predictingEntry(settings, "Run the tests\nCommit the change\nOpen a PR"),
 				[],
 			),
+		).toEqual({
+			text: "Run the tests",
+			choices: ["Run the tests", "Commit the change", "Open a PR"],
+		});
+	});
+
+	test("with alternatives on, at most four distinct alternatives are answered", async () => {
+		const settings = Settings.isolated();
+		cfgComposerPredictions.set(settings, true);
+		cfgComposerPredictionAlternatives.set(settings, true);
+		const methods = createComposerMethods();
+		expect(
+			await methods.predictNextMessage!(
+				predictingEntry(settings, "a one\nA ONE!\nb two\nc three\nd four\ne five"),
+				[],
+			),
+		).toEqual({ text: "a one", choices: ["a one", "b two", "c three", "d four"] });
+	});
+
+	test("with alternatives on but one usable line, answers no choices", async () => {
+		const settings = Settings.isolated();
+		cfgComposerPredictions.set(settings, true);
+		cfgComposerPredictionAlternatives.set(settings, true);
+		const methods = createComposerMethods();
+		expect(
+			await methods.predictNextMessage!(predictingEntry(settings, "Run the tests"), []),
 		).toEqual({ text: "Run the tests" });
+	});
+
+	test("with alternatives off, the reply is one prediction and carries no choices", async () => {
+		const settings = Settings.isolated();
+		cfgComposerPredictions.set(settings, true);
+		const methods = createComposerMethods();
+		const reply = await methods.predictNextMessage!(
+			predictingEntry(settings, "Run the tests\nCommit the change"),
+			[],
+		);
+		expect(reply).toEqual({ text: "Run the tests Commit the change" });
+		expect(reply).not.toHaveProperty("choices");
 	});
 });

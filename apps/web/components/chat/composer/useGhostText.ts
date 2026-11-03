@@ -1,6 +1,21 @@
-import { createEffect, createSignal, on, type Accessor, type Setter } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	on,
+	untrack,
+	type Accessor,
+	type Setter,
+} from "solid-js";
+import {
+	alternativesKey,
+	moreHint,
+	predictionChoicesOf,
+	shownPrediction,
+} from "../../../prompt/prediction-choices";
 import { call, state } from "../../../state";
 import { settingValue } from "../../../store/settings";
+import type { AcItem } from "./AutocompletePopup";
 
 /** Pause after the last keystroke before asking for a word completion. */
 const WORD_DEBOUNCE_MS = 150;
@@ -35,13 +50,35 @@ interface WordGhost {
 	suffix: string;
 }
 
+/** The Tab list of every next-message prediction, shown over a draft that equals one of them. */
+export interface PredictionAlternatives {
+	open: Accessor<boolean>;
+	/** One row per prediction, most likely first. */
+	items: Accessor<AcItem[]>;
+	selected: Accessor<number>;
+	setSelected: (index: number) => void;
+	/** Swaps the whole line for prediction `index` and closes the list; never submits. */
+	choose: (index: number) => void;
+	/** Closes the list and keeps the line. */
+	close: () => void;
+	/** Handles a key while the list is open; true when the list consumed it. */
+	onKeyDown: (e: KeyboardEvent) => boolean;
+}
+
 export interface GhostText {
 	/** Ghost text drawn after the caret; empty when none applies. */
 	text: Accessor<string>;
+	/** The dim `⇥ N more` hint drawn after a draft that equals one of several predictions; empty when none applies. */
+	hint: Accessor<string>;
 	/** Re-read whether the caret sits at the end; call on input, keyup, and click. */
 	refreshCaret: () => void;
 	/** Accept the ghost into the draft. Returns false when no ghost is showing. */
 	accept: () => boolean;
+	/** Open the alternatives list (Tab over a draft that equals one of several predictions). Returns false when it does not apply. */
+	openAlternatives: () => boolean;
+	alternatives: PredictionAlternatives;
+	/** Drop the predictions: the draft was sent, so they no longer follow the conversation. */
+	retire: () => void;
 }
 
 /** Best-effort feedback to the session's word predictor; no UI depends on it. */
@@ -59,18 +96,14 @@ function suffixOf(reply: unknown): string {
 	return typeof suffix === "string" ? suffix : "";
 }
 
-/** Reads `{text}` from an RPC reply without trusting its shape. */
-function predictedTextOf(reply: unknown): string | null {
-	const text = (reply as { text?: unknown } | null)?.text;
-	return typeof text === "string" && text !== "" ? text : null;
-}
-
 /**
  * Ghost text for the composer. Two sources share one overlay:
  * - `spelling.autocomplete`: word suffix at the end of the draft (`predictWord`).
- * - `composer.predictions`: a predicted next message, offered on an empty draft
- *   once a streamed turn ends (`predictNextMessage`).
- * Both are gated by their settings at the point of use, so changes apply live.
+ * - `composer.predictions`: ranked predictions of the next message, requested once a streamed turn
+ *   ends (`predictNextMessage`; several with `composer.predictionAlternatives`). The ghost follows the
+ *   first prediction the draft is a prefix of, like the TUI editor; see `prompt/prediction-choices.ts`.
+ * Both are gated by their settings at the point of use, so changes apply live. A prediction wins over
+ * a word suffix.
  */
 export function useGhostText(
 	getTextarea: () => HTMLTextAreaElement | undefined,
@@ -79,11 +112,17 @@ export function useGhostText(
 ): GhostText {
 	const [caretEnd, setCaretEnd] = createSignal(true);
 	const [word, setWord] = createSignal<WordGhost | null>(null);
-	const [nextMessage, setNextMessage] = createSignal<string | null>(null);
+	const [choices, setChoices] = createSignal<string[]>([]);
+	// The line the last prediction insert (Tab, Right, or the list) left; any later edit clears it.
+	const [inserted, setInserted] = createSignal<string | null>(null);
+	const [listOpen, setListOpen] = createSignal(false);
+	const [selected, setSelected] = createSignal(0);
 	// Last word suggestion the user could have seen; unresolved ones get rejected feedback.
 	let shown: WordGhost | null = null;
 	let wordTimer: number | undefined;
 	let wordSeq = 0;
+	// Bumped whenever an in-flight `predictNextMessage` answer stops being wanted.
+	let predictSeq = 0;
 
 	const refreshCaret = (): void => {
 		const ta = getTextarea();
@@ -91,12 +130,23 @@ export function useGhostText(
 		setCaretEnd(ta.selectionStart === ta.value.length && ta.selectionEnd === ta.value.length);
 	};
 
+	const open = (): boolean => listOpen() && choices().length > 1;
+	const prediction = createMemo(
+		() => (caretEnd() && !listOpen() ? shownPrediction(choices(), message(), inserted()) : null),
+		null,
+		{ equals: (a, b) => a?.index === b?.index && a?.suffix === b?.suffix },
+	);
+	const hint = createMemo(() =>
+		caretEnd() && !listOpen() ? moreHint(choices(), message(), inserted()) : "",
+	);
+	// A prediction, its hint or its open list owns the overlay: no word suggestion is asked for or drawn.
+	const predicting = createMemo(() => prediction() !== null || hint() !== "" || open());
+
 	const text = (): string => {
-		if (!caretEnd()) return "";
+		if (!caretEnd() || predicting()) return prediction()?.suffix ?? "";
 		const draft = message();
-		if (draft === "") return nextMessage() ?? "";
 		const w = word();
-		return w && w.at === draft ? w.suffix : "";
+		return draft !== "" && w && w.at === draft ? w.suffix : "";
 	};
 
 	// Spelling: one debounced request per settled draft; stale replies are dropped.
@@ -104,6 +154,7 @@ export function useGhostText(
 		const draft = message();
 		const end = caretEnd();
 		const mode = settingValue<string>("spelling.autocomplete") ?? "auto";
+		const busy = predicting();
 		window.clearTimeout(wordTimer);
 		const seq = ++wordSeq;
 		if (shown) {
@@ -111,8 +162,7 @@ export function useGhostText(
 			shown = null;
 		}
 		setWord(null);
-		setNextMessage(null);
-		if (!end || draft === "" || mode === "off" || state.streaming) return;
+		if (!end || draft === "" || mode === "off" || state.streaming || busy) return;
 		wordTimer = window.setTimeout(() => {
 			void call("predictWord", wordQueryArgs(draft), WORD_TIMEOUT_MS)
 				.then((reply) => {
@@ -127,17 +177,27 @@ export function useGhostText(
 		}, WORD_DEBOUNCE_MS);
 	});
 
-	// Next message: when a streamed turn ends and the draft is still empty.
+	const retire = (): void => {
+		predictSeq++;
+		setChoices([]);
+		setInserted(null);
+		setListOpen(false);
+	};
+
+	// Next message: requested when a streamed turn ends and the draft is still empty; a new turn or a
+	// session switch retires it.
 	createEffect(
 		on(
 			() => state.streaming,
 			(streaming, wasStreaming) => {
+				retire();
 				if (streaming || wasStreaming !== true) return;
 				if (settingValue<boolean>("composer.predictions") !== true || message() !== "") return;
+				const seq = predictSeq;
 				void call("predictNextMessage", [], NEXT_TIMEOUT_MS)
 					.then((reply) => {
-						const predicted = predictedTextOf(reply);
-						if (predicted !== null && message() === "") setNextMessage(predicted);
+						const predicted = predictionChoicesOf(reply);
+						if (seq === predictSeq && predicted.length > 0) setChoices(predicted);
 					})
 					.catch(() => {
 						// Advisory: a failed prediction shows no ghost text.
@@ -145,17 +205,41 @@ export function useGhostText(
 			},
 		),
 	);
+	createEffect(
+		on(
+			() => `${state.currentWorkspaceId}:${state.sessionId}`,
+			() => retire(),
+			{ defer: true },
+		),
+	);
+
+	// Any edit drops the "inserted by a prediction" mark (unless it is the insert itself) and the list.
+	createEffect(
+		on(
+			message,
+			(draft) => {
+				if (untrack(inserted) !== draft) setInserted(null);
+				setListOpen(false);
+			},
+			{ defer: true },
+		),
+	);
+	createEffect(() => {
+		if (!caretEnd()) setListOpen(false);
+	});
 
 	const accept = (): boolean => {
-		if (!caretEnd()) return false;
-		const suffix = text();
-		if (suffix === "") return false;
+		if (!caretEnd() || open()) return false;
 		const draft = message();
-		if (draft === "") {
-			setNextMessage(null);
-			setMessage(suffix);
+		const next = prediction();
+		if (next) {
+			const line = draft + next.suffix;
+			setInserted(line);
+			setMessage(line);
 			return true;
 		}
+		const suffix = text();
+		if (suffix === "") return false;
 		if (shown) sendWordFeedback(shown, true);
 		shown = null;
 		setWord(null);
@@ -163,5 +247,54 @@ export function useGhostText(
 		return true;
 	};
 
-	return { text, refreshCaret, accept };
+	const openAlternatives = (): boolean => {
+		if (!caretEnd() || open()) return false;
+		const index = choices().indexOf(message());
+		if (choices().length < 2 || index < 0 || prediction() !== null) return false;
+		setSelected(index);
+		setListOpen(true);
+		return true;
+	};
+
+	const close = (): void => {
+		setListOpen(false);
+	};
+
+	const choose = (index: number): void => {
+		const line = choices()[index];
+		close();
+		// Picking the line already in the buffer changes nothing.
+		if (line === undefined || line === message()) return;
+		setInserted(line);
+		setMessage(line);
+		requestAnimationFrame(() => {
+			const ta = getTextarea();
+			ta?.focus();
+			ta?.setSelectionRange(line.length, line.length);
+			refreshCaret();
+		});
+	};
+
+	const onKeyDown = (e: KeyboardEvent): boolean => {
+		if (!open()) return false;
+		const action = alternativesKey(e, selected(), choices().length);
+		if (!action) return false;
+		e.preventDefault();
+		if (action.kind === "move") setSelected(action.selected);
+		else if (action.kind === "pick") choose(action.index);
+		else close();
+		return true;
+	};
+
+	const items = createMemo(() => choices().map((line) => ({ label: line, apply: line })));
+
+	return {
+		text,
+		hint,
+		refreshCaret,
+		accept,
+		openAlternatives,
+		retire,
+		alternatives: { open, items, selected, setSelected, choose, close, onKeyDown },
+	};
 }

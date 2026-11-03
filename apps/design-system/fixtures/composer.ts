@@ -54,3 +54,11 @@ export const repoFiles: string[] = [
 	"lib/wire/protocol.ts",
 	"lib/wire/browser-socket.ts",
 ];
+
+/** The next-message predictions `predictNextMessage` answers with `composer.predictionAlternatives` on, most likely first. */
+export const screenPredictions: string[] = [
+	"Run the tests",
+	"Run the tests again after the fix",
+	"Commit the change",
+	"Open a PR",
+];

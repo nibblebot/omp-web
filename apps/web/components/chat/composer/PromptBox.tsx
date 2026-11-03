@@ -86,6 +86,7 @@ export const PromptBox: Component = () => {
 		});
 		if (text) history.push(text);
 		setMessage("");
+		ghost.retire();
 		setImages([]);
 		setFiles([]);
 		ac.setToken(null);
@@ -104,6 +105,11 @@ export const PromptBox: Component = () => {
 		if (e.key === "ArrowUp" && e.altKey) {
 			e.preventDefault();
 			dequeueLastQueued();
+			return;
+		}
+		// The predictions list owns navigation, swap and dismissal while it is open.
+		if (ghost.alternatives.onKeyDown(e)) {
+			lastEsc = 0;
 			return;
 		}
 		// AutocompletePopup owns navigation while the popup is open.
@@ -149,12 +155,17 @@ export const PromptBox: Component = () => {
 				}
 			}
 		}
-		// Tab (popup closed) or ArrowRight accepts a ghost suggestion at the caret end.
+		// Tab (popup closed) or ArrowRight accepts a ghost suggestion at the caret end; Tab over a
+		// draft that equals one of several predictions opens their list instead.
 		if ((e.key === "Tab" && !e.shiftKey) || e.key === "ArrowRight") {
 			if (ghost.accept()) {
 				e.preventDefault();
 				return;
 			}
+		}
+		if (e.key === "Tab" && !e.shiftKey && ghost.openAlternatives()) {
+			e.preventDefault();
+			return;
 		}
 		if (e.key === "Escape" && state.streaming) {
 			e.preventDefault();

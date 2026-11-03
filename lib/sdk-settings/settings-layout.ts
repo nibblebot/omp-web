@@ -105,8 +105,6 @@ export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"spelling.autocorrect": true,
 	// The web /btw has no inject send (Alt+I in the TUI) and its side turns never ask for one.
 	"btw.inject": true,
-	// The web composer shows one prediction; the TUI's Tab list of alternatives has no web counterpart.
-	"composer.predictionAlternatives": true,
 	"stream.redactPatterns": true,
 	"display.advisorCollapsedLines": true,
 	"session.worktreeScope": true,

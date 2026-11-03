@@ -15,6 +15,8 @@ export interface MirrorSegment {
 export const PromptMirror: Component<{
 	segments: MirrorSegment[];
 	ghost: string;
+	/** The dim `⇥ N more` hint after a draft that equals one of several predictions. */
+	hint?: string;
 	ref: (el: HTMLDivElement) => void;
 }> = (props) => (
 	<div class="prompt-mirror" aria-hidden="true" ref={props.ref}>
@@ -31,6 +33,9 @@ export const PromptMirror: Component<{
 		</For>
 		<Show when={props.ghost !== ""}>
 			<span class="prompt-ghost">{props.ghost}</span>
+		</Show>
+		<Show when={(props.hint ?? "") !== ""}>
+			<span class="prompt-ghost prompt-ghost-hint">{` ${props.hint}`}</span>
 		</Show>
 		{/* Keeps a trailing newline's caret line; pre-wrap drops an empty last line. */}{" "}
 	</div>

@@ -58,6 +58,9 @@ import type { GhostText } from "./useGhostText";
 import { magicKeywordSegments } from "../../../prompt/magic-keywords";
 import { createPresence } from "../../../motion/presence";
 
+/** Rows of the predictions list: the SDK offers at most four alternatives. */
+const PREDICTION_LIST_ROWS = 4;
+
 interface PromptComposerProps {
 	message: () => string;
 	setMessage: Setter<string>;
@@ -101,6 +104,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	let cameraInput!: HTMLInputElement;
 	// Stable id for the combobox/listbox wiring (aria-controls/activedescendant).
 	const listId = `prompt-ac-${Math.random().toString(36).slice(2, 8)}`;
+	const predictionsListId = `${listId}-predictions`;
 	const historyPresence = createPresence(() => props.historyOpen?.() ?? false);
 	const [folded, setFolded] = createSignal(true);
 	const [pasteNote, setPasteNote] = createSignal<string | null>(null);
@@ -125,7 +129,9 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	);
 	const mirrored = () =>
 		!props.textOnly &&
-		((props.ghost?.text() ?? "") !== "" || segments().some((seg) => seg.id !== undefined));
+		((props.ghost?.text() ?? "") !== "" ||
+			(props.ghost?.hint() ?? "") !== "" ||
+			segments().some((seg) => seg.id !== undefined));
 	const syncMirror = () => {
 		if (mirrorEl) mirrorEl.scrollTop = textarea.scrollTop;
 	};
@@ -385,6 +391,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const onTextareaBlur = (): void => {
 		props.ac?.setDismissed(true);
 		props.ac?.setToken(null);
+		props.ghost?.alternatives.close();
 	};
 
 	const chooseFiles = (e: Event & { currentTarget: HTMLInputElement }): void => {
@@ -482,6 +489,18 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 						/>
 					)}
 				</Show>
+				<Show when={props.ghost?.alternatives.open() ? props.ghost.alternatives : undefined}>
+					{(alternatives) => (
+						<AutocompletePopup
+							items={alternatives().items()}
+							selected={alternatives().selected()}
+							maxVisible={PREDICTION_LIST_ROWS}
+							onHover={alternatives().setSelected}
+							onApply={(item) => alternatives().choose(alternatives().items().indexOf(item))}
+							listId={predictionsListId}
+						/>
+					)}
+				</Show>
 				<Show when={historyPresence.mounted()}>
 					<PromptHistoryPicker
 						phase={historyPresence.phase()}
@@ -511,6 +530,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							<PromptMirror
 								segments={segments()}
 								ghost={props.ghost?.text() ?? ""}
+								hint={props.ghost?.hint() ?? ""}
 								ref={(el) => {
 									mirrorEl = el;
 								}}
@@ -526,10 +546,20 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							}}
 							role={props.textOnly ? undefined : "combobox"}
 							aria-label={props.ariaLabel ?? "Message the agent"}
-							aria-expanded={props.ac?.open()}
-							aria-controls={props.ac?.open() ? listId : undefined}
+							aria-expanded={props.ac?.open() || props.ghost?.alternatives.open()}
+							aria-controls={
+								props.ac?.open()
+									? listId
+									: props.ghost?.alternatives.open()
+										? predictionsListId
+										: undefined
+							}
 							aria-activedescendant={
-								props.ac?.open() ? `${listId}-opt-${props.ac.selected()}` : undefined
+								props.ac?.open()
+									? `${listId}-opt-${props.ac.selected()}`
+									: props.ghost?.alternatives.open()
+										? `${predictionsListId}-opt-${props.ghost.alternatives.selected()}`
+										: undefined
 							}
 							aria-autocomplete={props.textOnly ? undefined : "list"}
 							value={props.message()}
@@ -547,8 +577,11 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							onPaste={(e) => {
 								if (!props.textOnly) onPaste(e);
 							}}
+							// A shown prediction replaces the placeholder, as in the TUI.
 							placeholder={
-								props.placeholder ?? (compactComposer() ? "Message" : "Message the Agent")
+								props.message() === "" && (props.ghost?.text() ?? "") !== ""
+									? ""
+									: (props.placeholder ?? (compactComposer() ? "Message" : "Message the Agent"))
 							}
 							rows={props.textOnly ? 2 : compactComposer() ? 1 : 3}
 						/>
@@ -562,6 +595,17 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							>
 								<ArrowRightIcon />
 								<span class="prompt-ghost-accept-text">{props.ghost?.text()}</span>
+							</button>
+						</Show>
+						<Show when={!props.textOnly && (props.ghost?.hint() ?? "") !== ""}>
+							<button
+								type="button"
+								class="prompt-ghost-accept prompt-touch-only"
+								aria-label="Show the other predictions"
+								onMouseDown={keepComposerFocus}
+								onClick={() => props.ghost?.openAlternatives()}
+							>
+								<span class="prompt-ghost-accept-text">{props.ghost?.hint()}</span>
 							</button>
 						</Show>
 					</div>

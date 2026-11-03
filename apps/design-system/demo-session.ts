@@ -3,6 +3,7 @@ import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type {
 	ModelPresetDetail,
 	ModelRoleCatalogEntry,
+	PredictNextMessageReply,
 	SessionListEntry,
 } from "#lib/wire/protocol";
 import type { ResumeCandidate } from "../web/store/resume";
@@ -12,7 +13,7 @@ import { addCalls, answerCommands, type CallHandlers } from "./session";
 import { upsertRosterEntry } from "./fixtures/command-bus";
 import { appSessions, appWorkspaceSessions } from "./fixtures/app-sessions";
 import { daemonCommands, daemonsPatch } from "./fixtures/activities";
-import { repoFiles } from "./fixtures/composer";
+import { repoFiles, screenPredictions } from "./fixtures/composer";
 import { extensionStateCalls } from "./fixtures/extensions";
 import { jobCalls, screenJobDetails, screenJobTree } from "./fixtures/jobs";
 import { browserEntries, fast, heavy, shared } from "./fixtures/models";
@@ -308,7 +309,10 @@ function sessionCalls(): CallHandlers {
 		},
 		predictWord: () => null,
 		predictWordFeedback: () => undefined,
-		predictNextMessage: () => null,
+		predictNextMessage: (): PredictNextMessageReply => ({
+			text: screenPredictions[0]!,
+			choices: [...screenPredictions],
+		}),
 	};
 }
 

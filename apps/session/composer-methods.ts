@@ -8,6 +8,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { textPredictionBackend } from "@oh-my-pi/pi-coding-agent/predict/client";
 import { wordCompletionQuery } from "@oh-my-pi/pi-tui/prompt/word-completion";
+import type { PredictNextMessageReply } from "#lib/wire/protocol";
 import type { SessionEntry } from "./session-entry";
 
 /** Mirrors the SDK prediction deadline; the controller aborts its own side turn at this point. */
@@ -66,23 +67,23 @@ function wordQueryAt(text: string, cursor: number) {
 
 /**
  * Start the SDK's next-message prediction for a session. Resolves with the
- * ready prediction, or null when it was skipped, superseded, cancelled, or
- * timed out. The controller signals only a ready prediction, so an empty
- * answer resolves at the settle fallback.
+ * ready alternatives, most likely first (one unless `composer.predictionAlternatives`),
+ * or null when it was skipped, superseded, cancelled, or timed out. The controller
+ * signals only a ready prediction, so an empty answer resolves at the settle fallback.
  */
 function startNextMessagePrediction(
 	session: AgentSession,
 	onSettled: (cancel: () => void) => void,
-): Promise<string | null> {
-	const { promise, resolve } = Promise.withResolvers<string | null>();
+): Promise<string[] | null> {
+	const { promise, resolve } = Promise.withResolvers<string[] | null>();
 	let controller: ComposerPredictionController | undefined;
 	let settled = false;
 	let timer: NodeJS.Timeout | undefined;
-	const settle = (text: string | null): void => {
+	const settle = (choices: string[] | null): void => {
 		if (settled) return;
 		settled = true;
 		clearTimeout(timer);
-		resolve(text);
+		resolve(choices);
 	};
 	const host: PredictionHost = {
 		settings: session.settings,
@@ -90,9 +91,8 @@ function startNextMessagePrediction(
 		focusedAgentId: undefined,
 		editor: { getText: () => "" },
 		// Fires when a prediction is ready and on cancel; `choices` then holds the ready
-		// alternatives, most likely first (one unless `composer.predictionAlternatives`), or is
-		// undefined. The web composer shows one prediction: the most likely.
-		ui: { requestRender: () => settle(controller?.choices?.[0] ?? null) },
+		// alternatives, most likely first, or is undefined.
+		ui: { requestRender: () => settle(controller?.choices ? [...controller.choices] : null) },
 	};
 	controller = new ComposerPredictionController(host as never, {
 		deadlineMs: PREDICTION_DEADLINE_MS,
@@ -154,15 +154,17 @@ export function createComposerMethods(): Record<string, ComposerMethod> {
 		// context, run by the SDK's own controller so prompt, effort, usage ledger and
 		// staleness rules match the TUI. A newer call supersedes the one in flight,
 		// which answers null.
-		predictNextMessage: async (entry) => {
+		predictNextMessage: async (entry): Promise<PredictNextMessageReply> => {
 			pendingPredictions.get(entry)?.cancel();
 			const session = entry.session;
 			if (!cfgComposerPredictions.get(session.settings)) return { text: null };
 			if (!session.model || session.isStreaming || session.isCompacting) return { text: null };
-			const text = await startNextMessagePrediction(session, (cancel) =>
+			const choices = await startNextMessagePrediction(session, (cancel) =>
 				pendingPredictions.set(entry, { cancel }),
 			);
-			return { text };
+			if (!choices?.length) return { text: null };
+			// `choices` rides only when there are alternatives; `text` stays the first for older clients.
+			return choices.length > 1 ? { text: choices[0]!, choices } : { text: choices[0]! };
 		},
 	};
 }
