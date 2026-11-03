@@ -97,7 +97,7 @@ describe("All projects toggle", () => {
 
 		const first = searchResume("auth");
 		expect(calls("resumeList").at(-1)?.args).toEqual([
-			{ query: "auth", limit: 200, allProjects: false },
+			{ query: "auth", limit: 200, allProjects: false, phase: "preliminary" },
 		]);
 		await answer("resumeList", { candidates: [candidate("a")], total: 1 });
 		await first;
@@ -105,7 +105,7 @@ describe("All projects toggle", () => {
 		const toggled = setResumeAllProjects(true);
 		expect(resumeAllProjects()).toBe(true);
 		expect(calls("resumeList").at(-1)?.args).toEqual([
-			{ query: "auth", limit: 200, allProjects: true },
+			{ query: "auth", limit: 200, allProjects: true, phase: "preliminary" },
 		]);
 		await answer("resumeList", {
 			candidates: [
@@ -143,7 +143,7 @@ describe("All projects toggle", () => {
 
 		const off = setResumeAllProjects(false);
 		expect(calls("resumeList").at(-1)?.args).toEqual([
-			{ query: "", limit: 200, allProjects: false },
+			{ query: "", limit: 200, allProjects: false, phase: "preliminary" },
 		]);
 		await answer("resumeList", { candidates: [candidate("a")], total: 1 });
 		await off;
@@ -516,7 +516,7 @@ describe("typed query", () => {
 		await Bun.sleep(PAUSE_MS);
 		expect(calls("resumeList")).toHaveLength(1);
 		expect(calls("resumeList")[0]?.args).toEqual([
-			{ query: "refactor", limit: 200, allProjects: false },
+			{ query: "refactor", limit: 200, allProjects: false, phase: "preliminary" },
 		]);
 		await answer("resumeList", { candidates: [candidate("a")], total: 1 });
 		expect(resumeCandidates().map((c) => c.id)).toEqual(["a"]);
@@ -537,5 +537,133 @@ describe("typed query", () => {
 		cancelTypedResumeSearch();
 		await Bun.sleep(PAUSE_MS);
 		expect(calls("resumeList")).toHaveLength(0);
+	});
+});
+
+describe("two-phase list", () => {
+	/** Answer one posted call by its command, then let the store settle. */
+	async function answerCall(cmd: CallCommand, data: unknown, ok = true, error?: string) {
+		dispatch(callResult(cmd.id, data, ok, error));
+		await flushMicrotasks();
+		await flushMicrotasks();
+	}
+
+	function titled(id: string): Record<string, unknown> {
+		return {
+			id,
+			sessionFile: `/sessions/app/${id}.jsonl`,
+			title: `Title ${id}`,
+			modifiedMs: 1_000,
+			size: 10,
+			scope: "local",
+			partial: true,
+		};
+	}
+
+	test("titled rows show at once, then the full list replaces them", async () => {
+		const search = searchResume("");
+		expect(state.resume.loading).toBe(true);
+		const [preliminary] = calls("resumeList");
+		if (!preliminary) throw new Error("missing preliminary call");
+		await answerCall(preliminary, { candidates: [titled("a")], total: 1, complete: false });
+
+		// The list is up and says it is still filling in; the full call follows with no phase.
+		expect(state.resume.loading).toBe(false);
+		expect(state.resume.partial).toBe(true);
+		expect(resumeCandidates().map((c) => c.id)).toEqual(["a"]);
+		const rows = sessionRowsFromResume(resumeCandidates(), undefined);
+		expect(rows[0]).toMatchObject({ id: "a", title: "Title a", cwd: "", partial: true });
+		expect(calls("resumeList")).toHaveLength(2);
+		const full = calls("resumeList")[1];
+		if (!full) throw new Error("missing complete call");
+		expect(full.args).toEqual([{ query: "", limit: 200, allProjects: false }]);
+
+		await answerCall(full, {
+			candidates: [candidate("a", { title: "Title a" }), candidate("b")],
+			total: 2,
+			complete: true,
+		});
+		await search;
+		expect(state.resume.partial).toBe(false);
+		expect(resumeCandidates().map((c) => [c.id, c.cwd])).toEqual([
+			["a", "/work/app"],
+			["b", "/work/app"],
+		]);
+		expect(sessionRowsFromResume(resumeCandidates(), undefined).some((r) => r.partial)).toBe(false);
+		expect(resumeTotal()).toBe(2);
+	});
+
+	test("an answer already complete ends the search without a second call", async () => {
+		const search = searchResume("");
+		await answer("resumeList", { candidates: [candidate("a")], total: 1, complete: true });
+		await search;
+		expect(calls("resumeList")).toHaveLength(1);
+		expect(state.resume.partial).toBe(false);
+		expect(state.resume.loading).toBe(false);
+	});
+
+	test("a newer search supersedes both phases of the older one", async () => {
+		const older = searchResume("old");
+		const [olderPreliminary] = calls("resumeList");
+		if (!olderPreliminary) throw new Error("missing preliminary call");
+		await answerCall(olderPreliminary, {
+			candidates: [titled("old1")],
+			total: 1,
+			complete: false,
+		});
+		const olderFull = calls("resumeList")[1];
+		if (!olderFull) throw new Error("missing complete call");
+
+		const newer = searchResume("new");
+		const newerPreliminary = calls("resumeList")[2];
+		if (!newerPreliminary) throw new Error("missing newer preliminary call");
+		expect(newerPreliminary.args).toEqual([
+			{ query: "new", limit: 200, allProjects: false, phase: "preliminary" },
+		]);
+		// The older full answer lands after the newer search began: it is dropped.
+		await answerCall(olderFull, { candidates: [candidate("old1"), candidate("old2")], total: 2 });
+		expect(resumeCandidates().map((c) => c.id)).toEqual(["old1"]);
+		expect(state.resume.loading).toBe(true);
+		expect(state.resume.partial).toBe(false);
+
+		await answerCall(newerPreliminary, { candidates: [titled("new1")], total: 1, complete: false });
+		const newerFull = calls("resumeList")[3];
+		if (!newerFull) throw new Error("missing newer complete call");
+		await answerCall(newerFull, { candidates: [candidate("new1")], total: 1 });
+		await Promise.all([older, newer]);
+		expect(resumeCandidates().map((c) => c.id)).toEqual(["new1"]);
+		expect(state.resume.partial).toBe(false);
+		expect(state.resume.query).toBe("new");
+	});
+
+	test("a superseded preliminary answer neither applies nor asks for the full list", async () => {
+		const older = searchResume("old");
+		const [olderPreliminary] = calls("resumeList");
+		if (!olderPreliminary) throw new Error("missing preliminary call");
+		const newer = searchResume("new");
+		await answerCall(olderPreliminary, {
+			candidates: [titled("old1")],
+			total: 1,
+			complete: false,
+		});
+		expect(resumeCandidates()).toEqual([]);
+		expect(calls("resumeList")).toHaveLength(2);
+		await answer("resumeList", { candidates: [candidate("new1")], total: 1 });
+		await Promise.all([older, newer]);
+		expect(resumeCandidates().map((c) => c.id)).toEqual(["new1"]);
+	});
+
+	test("a failed full scan keeps the titled rows and shows the error", async () => {
+		const search = searchResume("");
+		const [preliminary] = calls("resumeList");
+		if (!preliminary) throw new Error("missing preliminary call");
+		await answerCall(preliminary, { candidates: [titled("a")], total: 1, complete: false });
+		const full = calls("resumeList")[1];
+		if (!full) throw new Error("missing complete call");
+		await answerCall(full, undefined, false, "scan failed");
+		await search;
+		expect(resumeError()).toBe("scan failed");
+		expect(state.resume.partial).toBe(false);
+		expect(resumeCandidates().map((c) => c.id)).toEqual(["a"]);
 	});
 });

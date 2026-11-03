@@ -7,16 +7,19 @@
  * prompt command table are NEVER touched here.
  *
  * SDK reuse (installed @oh-my-pi/pi-coding-agent 18.16.0; revalidate on bump):
- * - session/session-listing.ts: `listSessions`, `listAllSessions`,
- *   `isEmptySession`. The picker filter (empties dropped, pins kept) is
- *   module-PRIVATE since 18.16.0 (`filterSessionsForPicker`, folded into the
- *   two-pass `listSessionsForPicker`, whose history.db title pass the browser
- *   listing does not use), so {@link listResumeCandidates} applies the same
- *   one-line rule over `isEmptySession`. The matcher
+ * - session/session-listing.ts: `listSessionsForPicker` and
+ *   `listAllSessionsForPicker` (the picker's two-pass listing: history.db-
+ *   titled rows at once, then the full scan with empties dropped and pins
+ *   kept, which also writes the scanned titles back to history.db; the
+ *   `filterSessionsForPicker` they apply is module-private), `PickerListing`,
+ *   and `listSessions` / `listAllSessions` (the full scans that
+ *   {@link resolveResumeTarget} matches against). The matcher
  *   `sessionMatchesResumeArg` and `sessionIdFromSessionPath` are
  *   module-PRIVATE in the SDK, so {@link matchesResumeArg} below mirrors
  *   their exact grammar (case-insensitive ID-prefix, filename-prefix,
  *   fileSessionId-after-last-underscore) instead of inventing a second one.
+ * - session/session-storage.ts: `FileSessionStorage` (the only storage that
+ *   reads and writes history.db).
  * - session/session-pins.ts: `loadPinnedSessionIds` / `toggleSessionPin`
  *   (cross-process file lock, atomic replace; server-owned file, durable
  *   across restart) + `sortPinnedFirst` (stable pinned-first; unknown ids
@@ -35,9 +38,11 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
-	isEmptySession,
 	listAllSessions,
+	listAllSessionsForPicker,
 	listSessions,
+	listSessionsForPicker,
+	type PickerListing,
 	type SessionInfo,
 	type SessionStatus,
 } from "@oh-my-pi/pi-coding-agent/session/session-listing";
@@ -270,6 +275,8 @@ export async function resolveResumeTarget(
 // Resume listing + durable pins
 // ---------------------------------------------------------------------------
 
+export type ResumeListPhase = "preliminary" | "complete";
+
 export interface ListResumeCandidatesOptions {
 	cwd: string;
 	sessionDir?: string;
@@ -280,37 +287,116 @@ export interface ListResumeCandidatesOptions {
 	query?: string;
 	limit?: number;
 	allProjects?: boolean;
+	/** `preliminary` answers with the rows history.db titles at once; `complete` (default) waits for the full scan. */
+	phase?: ResumeListPhase;
+	/** Scans a `preliminary` call started, for the `complete` call that follows it to take over. */
+	heldListings?: HeldListings;
 }
 
+/** A picker row built from history.db's indexed title, file name and stat alone. */
+export type ResumePartialCandidate = Pick<
+	ResumeCandidate,
+	"id" | "sessionFile" | "title" | "createdMs" | "modifiedMs" | "size" | "pinned" | "scope"
+> & { partial: true };
+
 export interface ResumeListResult {
-	candidates: ResumeCandidate[];
+	candidates: Array<ResumeCandidate | ResumePartialCandidate>;
 	pinnedIds: string[];
 	sessionDir: string;
 	total: number;
 	allProjects: boolean;
+	/** False only for a `preliminary` answer whose full scan is still running. */
+	complete: boolean;
+}
+
+/** One picker scan the SDK started, kept for the `complete` call that follows the `preliminary` one. */
+interface HeldListing {
+	at: number;
+	listing: PickerListing;
+	pinned: ReadonlySet<string>;
+}
+
+/** Held scans by scope: at most one per (this project | every project) key. */
+export type HeldListings = Map<string, HeldListing>;
+
+/** A held scan is the same request's only briefly; later it may be stale (a rename, a delete). */
+const HELD_LISTING_MS = 30_000;
+
+function toPartialCandidate(
+	info: SessionInfo,
+	scope: "local" | "global",
+	pinned: ReadonlySet<string>,
+): ResumePartialCandidate {
+	return {
+		id: info.id,
+		sessionFile: info.path,
+		...(info.title !== undefined ? { title: info.title } : {}),
+		createdMs: info.created.getTime(),
+		modifiedMs: info.modified.getTime(),
+		size: info.size,
+		pinned: pinned.has(info.id),
+		scope,
+		partial: true,
+	};
 }
 
 /**
- * Picker listing: empties dropped (pins kept) by the SDK's `isEmptySession`,
- * pinned-first via `sortPinnedFirst`, optional search over id/prefix, title,
- * cwd, first prompt, and full conversation text. Without `allProjects` only
- * this project's directory is listed (`scope: "local"`); with it every project
- * under the sessions root is listed and other projects' rows are `"global"`.
+ * Picker listing through the SDK's two-pass `listSessionsForPicker` /
+ * `listAllSessionsForPicker`: empties are dropped (pins kept) by the SDK, the
+ * rows are pinned-first via `sortPinnedFirst`, with an optional search over
+ * id/prefix, title, cwd, first prompt, and full conversation text. Without
+ * `allProjects` only this project's directory is listed (`scope: "local"`);
+ * with it every project under the sessions root is listed and other projects'
+ * rows are `"global"`.
+ *
+ * `phase: "preliminary"` answers with the rows history.db indexes a title for
+ * (`partial: true`: file name, stat and title only, no cwd, first prompt,
+ * message count or status; the search covers only what they carry) and
+ * `complete: false`, while the SDK's full scan keeps running. The `complete`
+ * call that follows takes that scan over (and the scan has already written the
+ * titles it read back to history.db). A preliminary answer is already
+ * `complete: true` when the SDK had nothing indexed to show first.
  */
 export async function listResumeCandidates(
 	options: ListResumeCandidatesOptions,
 ): Promise<ResumeListResult> {
 	const sessionDir = options.sessionDir ?? resolveSessionDir({ cwd: options.cwd });
 	const allProjects = options.allProjects === true;
-	const storage = new FileSessionStorage();
-	const [sessions, pinned] = await Promise.all([
-		allProjects
-			? listAllSessions(storage, options.sessionsRoot)
-			: listSessions(sessionDir, storage),
-		options.pinnedIds !== undefined
-			? Promise.resolve(options.pinnedIds)
-			: loadPinnedSessionIds(options.agentDir),
-	]);
+	const phase = options.phase ?? "complete";
+	const held = options.heldListings;
+	const key = `${allProjects ? "all" : "dir"}\0${path.resolve(sessionDir)}\0${options.sessionsRoot ?? ""}`;
+	let scan = phase === "complete" ? held?.get(key) : undefined;
+	held?.delete(key);
+	if (scan !== undefined && Date.now() - scan.at > HELD_LISTING_MS) scan = undefined;
+	if (scan === undefined) {
+		const storage = new FileSessionStorage();
+		const pinned =
+			options.pinnedIds !== undefined
+				? options.pinnedIds
+				: await loadPinnedSessionIds(options.agentDir);
+		const listing = allProjects
+			? await listAllSessionsForPicker(storage, pinned, options.sessionsRoot)
+			: await listSessionsForPicker(sessionDir, storage, pinned);
+		scan = { at: Date.now(), listing, pinned };
+	}
+	const { listing, pinned } = scan;
+	let sessions: SessionInfo[];
+	let complete = true;
+	if (phase === "complete") {
+		sessions = await listing.complete;
+	} else {
+		// Nothing awaits the scan here, so a failed one must not surface as an unhandled rejection.
+		listing.complete.catch(() => {});
+		// An already-settled scan wins this race (its reaction is queued first); a running one never does.
+		const settled = await Promise.race([listing.complete, Promise.resolve(undefined)]);
+		if (settled !== undefined) {
+			sessions = settled;
+		} else {
+			sessions = listing.sessions;
+			complete = false;
+			held?.set(key, scan);
+		}
+	}
 	const localDir = path.resolve(sessionDir);
 	const scopeOf = (s: SessionInfo): "local" | "global" =>
 		allProjects && path.dirname(path.resolve(s.path)) !== localDir ? "global" : "local";
@@ -326,18 +412,22 @@ export async function listResumeCandidates(
 						s.firstMessage.toLowerCase().includes(q) ||
 						s.allMessagesText.toLowerCase().includes(q),
 				);
-	const picked = searched.filter((s) => pinned.has(s.id) || !isEmptySession(s));
-	const ordered = sortPinnedFirst(picked, pinned);
+	const ordered = sortPinnedFirst(searched, pinned);
 	const limit = Math.min(
 		Math.max(options.limit ?? RESUME_LIST_DEFAULT_LIMIT, 1),
 		RESUME_LIST_MAX_LIMIT,
 	);
 	return {
-		candidates: ordered.slice(0, limit).map((s) => toCandidate(s, scopeOf(s), pinned)),
+		candidates: ordered
+			.slice(0, limit)
+			.map((s) =>
+				complete ? toCandidate(s, scopeOf(s), pinned) : toPartialCandidate(s, scopeOf(s), pinned),
+			),
 		pinnedIds: [...pinned],
 		sessionDir,
 		total: ordered.length,
 		allProjects,
+		complete,
 	};
 }
 
@@ -399,6 +489,7 @@ export type ResumeHandlers = Record<
  * transport here).
  */
 export function createResumeHandlers(ctx: ResumeContext): ResumeHandlers {
+	const heldListings: HeldListings = new Map();
 	function manageDeps(entry?: SessionEntry): ResumeManageDeps {
 		if (ctx.sessionsRoot === undefined) {
 			throw new Error("Session management requires the agent sessions root");
@@ -439,6 +530,8 @@ export function createResumeHandlers(ctx: ResumeContext): ResumeHandlers {
 				sessionsRoot: ctx.sessionsRoot,
 				agentDir: ctx.agentDir,
 				allProjects: obj.allProjects === true,
+				phase: obj.phase === "preliminary" ? "preliminary" : "complete",
+				heldListings,
 				...(query !== undefined ? { query } : {}),
 				...(limit !== undefined ? { limit } : {}),
 			});

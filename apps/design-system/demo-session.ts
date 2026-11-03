@@ -321,7 +321,8 @@ function allSessions(): SessionListEntry[] {
 
 /**
  * `resumeList` over every App view session (the palette and the resume picker): a title, file or
- * first-prompt match on the query; sessions of the attached session's project are local.
+ * first-prompt match on the query; sessions of the attached session's project are local. The
+ * `phase` argument (preliminary or complete) is answered alike, with the whole list.
  */
 function resumeCalls(): CallHandlers {
 	return {
@@ -362,6 +363,8 @@ function resumeCalls(): CallHandlers {
 				sessionDir: "/home/joshua/.omp/sessions",
 				total: hits.length,
 				allProjects: allProjects === true,
+				// Every phase answers the whole list: the demo has no scan to wait for.
+				complete: true,
 			};
 		},
 	};

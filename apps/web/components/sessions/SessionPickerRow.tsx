@@ -22,7 +22,8 @@ const ABNORMAL_STATUS: Readonly<Partial<Record<SessionStatus, true>>> = {
  * project action. A click resumes, so both are disabled, unless `selects` makes the
  * click a selection (full lists, where resume is a separate action). `compact` is the
  * tight density for the sidebar and empty screen (callers filter empty sessions out
- * there). Props only; no store imports.
+ * there). A `partial` row (only its indexed title and age are known) hides the `empty` tag and
+ * the project label, and shows no folder. Props only; no store imports.
  */
 export const SessionPickerRow: Component<{
 	row: SessionRow;
@@ -67,7 +68,13 @@ export const SessionPickerRow: Component<{
 						(props.row.current === true || props.row.blocked !== undefined)
 					}
 					aria-expanded={props.selects === true ? props.active === true : undefined}
-					title={`${title()}\n${props.row.cwd || "(no directory)"}\n${props.row.id}`}
+					title={[
+						title(),
+						props.row.partial === true ? "" : props.row.cwd || "(no directory)",
+						props.row.id,
+					]
+						.filter((line) => line !== "")
+						.join("\n")}
 				>
 					<Show when={dotStatus()}>
 						{(status) => (
@@ -86,13 +93,17 @@ export const SessionPickerRow: Component<{
 							★
 						</span>
 					</Show>
-					<Show when={props.size === "full" && props.row.messageCount === 0}>
+					<Show
+						when={
+							props.size === "full" && props.row.messageCount === 0 && props.row.partial !== true
+						}
+					>
 						<span class="session-pick-tag">empty</span>
 					</Show>
 					<Show when={props.row.current}>
 						<span class="session-pick-current">current</span>
 					</Show>
-					<Show when={props.showProject}>
+					<Show when={props.showProject && props.row.partial !== true}>
 						<span class="session-pick-project">{props.row.projectLabel}</span>
 					</Show>
 					<span class="session-pick-age">

@@ -999,6 +999,12 @@ export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> =
 	getJobTree: true,
 	getJobDetail: true,
 	resumeResolve: true,
+	// Args `{ query?, limit?, allProjects?, phase?: "preliminary" | "complete" }` (additive `phase`; absent =
+	// "complete", the full scan). "preliminary" answers at once with the rows history.db titles
+	// (candidates with `partial: true`: id, sessionFile, title, createdMs, modifiedMs, size, pinned,
+	// scope; no cwd, firstMessage, messageCount or status) and `complete: false`, while the scan keeps
+	// running; the "complete" call that follows takes it over. Answers add `complete: boolean`
+	// (absent from a session started before the field existed: the list is complete).
 	resumeList: true,
 	gitStatus: true,
 	gitFileDiff: true,

@@ -4,13 +4,23 @@
  * under the sessions root is listed, other projects' rows are "global", and the
  * search also matches conversation text beyond the first prompt.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { listResumeCandidates } from "../resume-adapter";
 
-afterAll(cleanupTempDirs);
+// The listing reads and writes the agent dir's history.db; keep it off the real one.
+const previousEnv = process.env.PI_CODING_AGENT_DIR;
+const previousDir = getAgentDir();
+beforeAll(() => setAgentDir(tempDir("omp-scope-agent-")));
+afterAll(() => {
+	setAgentDir(previousDir);
+	if (previousEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = previousEnv;
+	cleanupTempDirs();
+});
 
 /** A listable journal (header + user turns) under `<root>/<project>/`. */
 function journal(root: string, project: string, id: string, userTexts: string[]): void {

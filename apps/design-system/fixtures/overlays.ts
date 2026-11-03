@@ -524,6 +524,40 @@ export const resumeListReply = {
 	allProjects: false,
 };
 
+/**
+ * resumeList reply of the preliminary phase: the sessions history.db titles, built from the file
+ * name, stat and title alone (`partial`: no cwd, first prompt, message count or status).
+ */
+export const resumePartialListReply = {
+	candidates: [
+		{
+			id: "sess_9d2c",
+			sessionFile: resumeCandidates[0].sessionFile,
+			title: "DEMO: Write fixture modules",
+			createdMs: T0 - 80 * MIN,
+			modifiedMs: T0 - 2 * MIN,
+			pinned: true,
+			partial: true,
+			scope: "local",
+		},
+		{
+			id: "sess_77ab",
+			sessionFile: "/home/joshua/.omp/sessions/omp-web/2026-10-05T11-02-31.jsonl",
+			title: "DEMO: Tune the transcript backfill",
+			createdMs: T0 - 4 * 24 * 60 * MIN,
+			modifiedMs: T0 - 4 * 24 * 60 * MIN,
+			pinned: false,
+			partial: true,
+			scope: "local",
+		},
+	],
+	pinnedIds: ["sess_9d2c"],
+	sessionDir: "/home/joshua/.omp/sessions/omp-web",
+	total: 2,
+	allProjects: false,
+	complete: false,
+};
+
 // ---------------------------------------------------------------------------
 // Integrations: MCP servers, skills, and plugins.
 // ---------------------------------------------------------------------------

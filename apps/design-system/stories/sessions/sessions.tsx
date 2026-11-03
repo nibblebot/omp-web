@@ -13,7 +13,12 @@ import {
 } from "../../../web/store/session-list";
 import { pushToast } from "../../../web/store/toasts";
 import { setState } from "../../../web/state";
-import { resumeCandidates, resumeListReply, T0 } from "../../fixtures/overlays";
+import {
+	resumeCandidates,
+	resumeListReply,
+	resumePartialListReply,
+	T0,
+} from "../../fixtures/overlays";
 import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
@@ -91,6 +96,17 @@ const LONG = storyRow({
 	cwd: "/home/joshua/Repos/another-project",
 	projectLabel: "another-project",
 	modifiedMs: T0 - 9 * 24 * 60 * MIN,
+});
+
+/** A row from the indexed title alone: no folder, prompt, message count or status until the full scan lands. */
+const TITLE_ONLY = storyRow({
+	id: "story_title_only",
+	title: "DEMO: Tune the transcript backfill",
+	cwd: "",
+	projectLabel: "",
+	messageCount: 0,
+	status: undefined,
+	partial: true,
 });
 
 const chooseToast = (row: SessionRow) => pushToast(`Resume ${sessionDisplayTitle(row)}`);
@@ -185,6 +201,22 @@ export default [
 					"The /resume dialog: no footer (the close button and Esc dismiss it), the import link beside the search box, the attached session shown but not choosable.",
 				seed: () => {
 					answerCalls({ resumeList: () => resumeListReply });
+					setState("sessionFile", ATTACHED_FILE);
+					void searchResume("");
+				},
+				render: (ctx) => <SessionPicker onClose={ctx.close} />,
+			},
+			{
+				name: "Titled sessions first",
+				description:
+					"The session answered with the sessions its index titles (no folder, prompt, message count or status) while its full scan still runs: the rows show their title and age, and a note says the rest is coming.",
+				seed: () => {
+					answerCalls({
+						resumeList: (args) =>
+							(args[0] as { phase?: string } | undefined)?.phase === "preliminary"
+								? resumePartialListReply
+								: pending(),
+					});
 					setState("sessionFile", ATTACHED_FILE);
 					void searchResume("");
 				},
@@ -295,6 +327,22 @@ export default [
 				),
 			},
 			{
+				name: "Titled sessions only",
+				description:
+					"Rows built from the indexed title alone sit beside a scanned one; only the scanned row shows its project and message count, and the note says the scan is running.",
+				render: () => (
+					<div class="ds-frame ds-frame-panel">
+						<SessionListStory
+							rows={[NORMAL, TITLE_ONLY]}
+							note="Reading the rest of your sessions…"
+							canManage
+							scope
+							currentCwd={PROJECT_CWD}
+						/>
+					</div>
+				),
+			},
+			{
 				name: "Loading",
 				render: () => (
 					<div class="ds-frame ds-frame-panel">
@@ -353,6 +401,12 @@ export default [
 						/>
 					</div>
 				),
+			},
+			{
+				name: "Full: title only",
+				description:
+					"A row from the indexed title alone: no `empty` tag and no project label, because the message count and folder are not known yet.",
+				render: () => <FullRow row={TITLE_ONLY} showProject />,
 			},
 			{
 				name: "Full: blocked",

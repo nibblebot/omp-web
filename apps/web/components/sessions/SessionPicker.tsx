@@ -15,6 +15,7 @@ import {
 	resumeError,
 	resumeLoading,
 	resumeNotice,
+	resumePartial,
 	resumeQuery,
 	resumeTotal,
 	searchResume,
@@ -90,10 +91,13 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 				currentCwd={currentCwd()}
 				canManage={resumeCapabilities()?.manage === true}
 				emptyText={
-					resumeQuery()
-						? "No sessions match this search."
-						: "No resumable sessions in this project."
+					resumePartial()
+						? "No titled session matches yet; still reading the rest."
+						: resumeQuery()
+							? "No sessions match this search."
+							: "No resumable sessions in this project."
 				}
+				note={resumePartial() ? "Reading the rest of your sessions…" : undefined}
 				onChoose={choose}
 				onAddProject={addProject}
 				onRename={renameResumeSession}

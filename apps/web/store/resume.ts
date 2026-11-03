@@ -32,6 +32,8 @@ export interface ResumeCandidate {
 	firstMessage?: string;
 	recentText?: string;
 	pinned: boolean;
+	/** From the session's indexed title alone: no cwd, first prompt, message count or status yet. */
+	partial?: true;
 	scope: "local" | "global";
 }
 
@@ -93,6 +95,7 @@ function normalizeCandidate(
 		...(sessionStatus(r.status) !== undefined ? { status: sessionStatus(r.status) } : {}),
 		...(asString(r.firstMessage) !== undefined ? { firstMessage: asString(r.firstMessage) } : {}),
 		...(asString(r.recentText) !== undefined ? { recentText: asString(r.recentText) } : {}),
+		...(r.partial === true ? { partial: true as const } : {}),
 		pinned: asBoolean(r.pinned) ?? pinnedIds.has(id),
 		scope: r.scope === "global" ? "global" : "local",
 	};
@@ -126,6 +129,8 @@ export interface ResumeState {
 	notice: string | null;
 	capabilities: Record<string, boolean> | null;
 	unavailable: string | null;
+	/** The list shows only rows from the titles the session indexes; its full scan has not answered. */
+	partial: boolean;
 }
 
 export function createResumeState(): ResumeState {
@@ -141,6 +146,7 @@ export function createResumeState(): ResumeState {
 		notice: null as string | null,
 		capabilities: null as Record<string, boolean> | null,
 		unavailable: null as string | null,
+		partial: false,
 	};
 }
 
@@ -179,6 +185,7 @@ const [resumeError, setResumeError] = resumeField("error");
 const [resumeNotice, setResumeNotice] = resumeField("notice");
 const [resumeCapabilities, setResumeCapabilities] = resumeField("capabilities");
 const [resumeUnavailable, setResumeUnavailable] = resumeField("unavailable");
+const [resumePartial, setResumePartial] = resumeField("partial");
 export const [resumeAllProjects, setAllProjectsFlag] = resumeField("allProjects");
 export const [resumeTotal, setResumeTotal] = resumeField("total");
 
@@ -192,6 +199,7 @@ export {
 	resumeNotice,
 	resumeCapabilities,
 	resumeUnavailable,
+	resumePartial,
 };
 
 // ---------------------------------------------------------------------------
@@ -247,22 +255,38 @@ export function searchResume(query: string): Promise<void> {
 	setResumeQuery(query);
 	setResumeAmbiguous(null);
 	setResumeLoading(true);
+	setResumePartial(false);
 	setResumeError(null);
 	const allProjects = resumeAllProjects();
-	return call("resumeList", [{ query, limit: 200, allProjects }])
+	const request = { query, limit: 200, allProjects };
+	const apply = (data: unknown) => {
+		const root = asRecord(data);
+		const pinned = new Set(asIdList(root !== null ? root.pinnedIds : undefined));
+		setResumePinnedIds([...pinned]);
+		setResumeCandidates(normalizeCandidates(data, pinned));
+		setResumeTotal(asNumber(root?.total) ?? 0);
+	};
+	// Two phases: the session answers the first from the titles it already indexes, the second
+	// when its full scan ends. A newer search supersedes both: neither answer is applied.
+	return call("resumeList", [{ ...request, phase: "preliminary" }])
 		.then((data) => {
 			if (sequence !== resumeSearchSequence) return;
-			const root = asRecord(data);
-			const pinned = new Set(asIdList(root !== null ? root.pinnedIds : undefined));
-			setResumePinnedIds([...pinned]);
-			setResumeCandidates(normalizeCandidates(data, pinned));
-			setResumeTotal(asNumber(root?.total) ?? 0);
+			apply(data);
+			// A session started before the phases existed answers its whole list, without the field.
+			if (asBoolean(asRecord(data)?.complete) !== false) return;
+			setResumePartial(true);
+			setResumeLoading(false);
+			return call("resumeList", [request]).then((full) => {
+				if (sequence === resumeSearchSequence) apply(full);
+			});
 		})
 		.catch((err) => {
 			if (sequence === resumeSearchSequence) setResumeError(errText(err));
 		})
 		.finally(() => {
-			if (sequence === resumeSearchSequence) setResumeLoading(false);
+			if (sequence !== resumeSearchSequence) return;
+			setResumeLoading(false);
+			setResumePartial(false);
 		});
 }
 
@@ -498,6 +522,7 @@ export function sessionRowsFromResume(
 			...(c.status !== undefined ? { status: c.status } : {}),
 			...(c.firstMessage !== undefined ? { firstMessage: c.firstMessage } : {}),
 			...(c.recentText !== undefined ? { recentText: c.recentText } : {}),
+			...(c.partial === true ? { partial: true } : {}),
 			pinned: c.pinned,
 			scope: c.scope,
 			current: c.sessionFile === attachedFile,

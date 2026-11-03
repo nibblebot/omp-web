@@ -64,6 +64,8 @@ export interface SessionRow {
 	firstMessage?: string;
 	/** Tail of the conversation text, shown in the preview pane. */
 	recentText?: string;
+	/** Built from the session's indexed title alone (no cwd, first prompt, message count or status), until its full scan lands. */
+	partial?: boolean;
 	pinned: boolean;
 	scope: "local" | "global";
 	/** The session attached to this browser right now. */
