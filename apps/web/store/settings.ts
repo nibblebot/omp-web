@@ -62,6 +62,7 @@ export const BOOT_SETTING_PATHS: readonly string[] = [
 	"emojiAutocomplete",
 	"autocompleteMaxVisible",
 	"display.subagentLivePreview",
+	"display.shellVisualization",
 	"title.icons",
 	"tools.intentTracing",
 	"collab.relayUrl",

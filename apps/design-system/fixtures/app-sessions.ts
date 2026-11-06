@@ -39,7 +39,7 @@ function rosterEntry(workspaceId: string): RosterAppEntry {
 /** Joins lines the way a tool result carries them. */
 const lines = (...rows: string[]): string => rows.join("\n");
 
-/** Finished tool call; ids are unique within one transcript. */
+/** Finished tool call; ids are unique within one transcript. A bash result carries the `details.shellTrace` marker the session leaves in place of the trace (SDK 18.17.0), so its card offers Visualize. */
 const tool = (id: number, name: string, args: unknown, output: string): ToolItem => ({
 	kind: "tool",
 	id,
@@ -48,6 +48,7 @@ const tool = (id: number, name: string, args: unknown, output: string): ToolItem
 	args,
 	status: "done",
 	output,
+	...(name === "bash" ? { details: { shellTrace: true } } : {}),
 });
 
 /** Context window used for the usage bar; matches the screen transcript. */

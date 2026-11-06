@@ -208,6 +208,11 @@ const fleet: Fleet = {
 				answerCall(cmd, () => ({ status: null }), answer);
 				return null;
 			}
+			// A bash card's Visualize asks on open; a story with no shell-viz fixture has no trace to show.
+			if (cmd.method === "getShellVisualization") {
+				answerCall(cmd, () => ({ available: false, reason: "no_trace" }), answer);
+				return null;
+			}
 		} else {
 			const handler = commands[cmd.type];
 			if (handler !== undefined) {

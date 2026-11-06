@@ -45,7 +45,7 @@ export const TAB_SECTION_ORDER: Readonly<Record<string, readonly string[]>> = {
 /** Name of the group that holds a tab's Advanced rows; always the last group of its tab. */
 export const ADVANCED_GROUP = "Advanced";
 
-/** Terminal-only rows that never appear on the web (70). */
+/** Terminal-only rows that never appear on the web (69). */
 export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"theme.dark": true,
 	"theme.light": true,
@@ -113,8 +113,6 @@ export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"tui.spinnerInterval": true,
 	"tui.maxFps": true,
 	"tui.motion": true,
-	// Bash results carry the trace, but the web has no execution visualization (session wire drops it).
-	"display.shellVisualization": true,
 	"update.auto": true,
 	"extensionRenderers.transcriptPresenters": true,
 	// omp-session declares no worker host entry, so the SDK never moves subagents to worker threads.

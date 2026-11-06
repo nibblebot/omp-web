@@ -21,6 +21,7 @@ import { browserEntries, fast, heavy, shared } from "./fixtures/models";
 import { contextBreakdown, modelInfos, modelRoleCatalog, sessionTools } from "./fixtures/overlays";
 import { projectCommands } from "./fixtures/roster-seed";
 import { promptCacheFixture } from "./fixtures/prompt-cache";
+import { shellVizOfCommand, shellVizReplayAt, shellVizRetry } from "./fixtures/shell-viz";
 import { newWorkspaceCommands } from "./fixtures/new-workspace";
 import { SCREEN_WORKSPACE_ID, screenSubagents } from "./fixtures/screen";
 import { sessionSettingsModel, settingsCalls } from "./fixtures/settings";
@@ -243,6 +244,17 @@ function activityCalls(): CallHandlers {
 /** Session-level calls: stats, the session name, toggles and a fresh session. */
 function sessionCalls(): CallHandlers {
 	return {
+		// A bash card's Visualize: the command's own script, replayable; a subagent's call (not in the store) gets the sample run.
+		getShellVisualization: (args) => {
+			const { toolCallId, cursor } = argRecord(args);
+			const item = state.items.find(
+				(entry) => entry.kind === "tool" && entry.toolCallId === toolCallId,
+			);
+			const command = item?.kind === "tool" ? argRecord([item.args]).command : undefined;
+			const view =
+				typeof command === "string" ? shellVizOfCommand(command) : structuredClone(shellVizRetry);
+			return typeof cursor === "number" ? shellVizReplayAt(view, cursor) : view;
+		},
 		getSessionStats: () => state.stats && { ...state.stats, contextUsage: state.contextUsage },
 		getContextBreakdown: () => {
 			const usage = state.contextUsage;

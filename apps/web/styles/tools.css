@@ -1169,3 +1169,133 @@ pre.terminal.wait-job-output {
 		white-space: normal;
 	}
 }
+/* Shell visualization of a bash card (ShellVisualizer, ShellVisualization): the SDK's Pseudo/Raw rendering of the call's shell trace. */
+.shell-viz {
+	margin: var(--space-2) var(--space-4) var(--space-3);
+	font-size: var(--fs-sm);
+}
+.shell-viz-summary {
+	width: fit-content;
+	cursor: pointer;
+	color: var(--muted-2);
+	transition: color var(--dur-fast);
+}
+.shell-viz-summary:hover {
+	color: var(--text);
+}
+.shell-viz[open] > .shell-viz-summary {
+	margin-bottom: var(--space-3);
+}
+.shell-viz-rows {
+	border: 1px solid var(--border);
+	padding: var(--space-3) var(--space-4);
+	font-family: var(--font-mono);
+	overflow-x: auto;
+}
+.shell-viz-row {
+	display: flex;
+	gap: var(--space-2);
+}
+.shell-viz-gutter {
+	flex: none;
+	width: 1.5ch;
+	text-align: center;
+	color: var(--accent);
+}
+.shell-viz-row[data-gutter="fail"] > .shell-viz-gutter,
+.shell-viz-fail-mark {
+	color: var(--error);
+}
+.shell-viz-line {
+	min-width: 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.shell-viz-row[data-dim],
+.shell-viz-seg[data-dim] {
+	opacity: 0.55;
+}
+.shell-viz-seg[data-tone="comment"] {
+	color: var(--syn-comment);
+}
+.shell-viz-seg[data-tone="keyword"] {
+	color: var(--syn-keyword);
+}
+.shell-viz-seg[data-tone="variable"] {
+	color: var(--syn-attr);
+}
+.shell-viz-seg[data-tone="string"] {
+	color: var(--syn-string);
+}
+.shell-viz-seg[data-tone="number"] {
+	color: var(--syn-number);
+}
+.shell-viz-seg[data-tone="operator"] {
+	color: var(--muted-2);
+}
+.shell-viz-seg[data-tone="command"] {
+	color: var(--syn-title);
+}
+.shell-viz-seg[data-tone="accent"],
+.shell-viz-effects {
+	color: var(--accent);
+}
+.shell-viz-meta {
+	color: var(--muted-3);
+}
+.shell-viz-meta[data-failed] {
+	color: var(--error);
+}
+.shell-viz-annotation {
+	color: var(--muted-2);
+}
+.shell-viz-var + .shell-viz-var::before {
+	content: " · ";
+}
+.shell-viz-var-name {
+	color: var(--syn-attr);
+}
+.shell-viz-var-value {
+	color: var(--syn-string);
+}
+.shell-viz-replay {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+	margin-bottom: var(--space-3);
+}
+.shell-viz-scrubber {
+	flex: 1 1 12rem;
+	min-width: 8rem;
+	accent-color: var(--accent);
+}
+.shell-viz-replay-label {
+	color: var(--muted-2);
+	font-family: var(--font-mono);
+}
+.shell-viz-live {
+	background: none;
+	border: 0;
+	padding: 0;
+	color: var(--accent);
+	cursor: pointer;
+}
+.shell-viz-note {
+	margin: var(--space-3) 0 0;
+	color: var(--muted-2);
+}
+.shell-viz-error {
+	color: var(--error);
+}
+.shell-viz-body[aria-busy="true"] > .shell-viz-rows {
+	cursor: progress;
+}
+@media (pointer: coarse) {
+	.shell-viz-summary,
+	.shell-viz-live {
+		min-height: 44px;
+		display: inline-flex;
+		align-items: center;
+	}
+}

@@ -27,6 +27,8 @@ export const showTokenUsage = (): boolean => flag("display.showTokenUsage", fals
 export const showTurnTime = (): boolean => flag("display.showTurnTime", false);
 /** display.cacheMissMarker: divider after a turn that lost the prompt cache. */
 export const cacheMissMarker = (): boolean => flag("display.cacheMissMarker", false);
+/** display.shellVisualization: offer the execution visualization on bash cards (the TUI draws bash calls as it by default). */
+export const shellVisualization = (): boolean => flag("display.shellVisualization", true);
 /** terminal.showImages: render tool-result images inline. */
 export const showImages = (): boolean => flag("terminal.showImages", true);
 /** display.smoothStreaming: paced reveal of streamed assistant text. */

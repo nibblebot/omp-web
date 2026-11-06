@@ -221,29 +221,39 @@ export function wakeDrainWaiter(consumer: ClientConsumer): void {
 }
 
 /**
- * `result` without `details.trace`, or `result` itself when it carries none.
+ * `result` with `details.trace` replaced by the marker `details.shellTrace: true`, or
+ * `result` itself when it carries no trace (no marker then).
  * Since SDK 18.17.0 every bash tool result carries a pi-wire `ShellTrace` (the
  * TUI's shell visualization input; 1 KB for a trivial command, MBs for a loop)
- * that the web never renders. The copy is shallow: only the live session's
- * `details` object must stay untouched.
+ * that no browser frame carries: the web reads it on demand through
+ * `getShellVisualization`, and the marker is how a settled card knows there is
+ * one to ask for. The copy is shallow: only the live session's `details`
+ * object must stay untouched.
  */
 function withoutShellTrace<T extends { details?: unknown }>(result: T): T {
 	const details = result.details;
 	if (details === null || typeof details !== "object" || !("trace" in details)) return result;
-	const rest: Record<string, unknown> = { ...details };
+	const rest: Record<string, unknown> = { ...details, shellTrace: true };
 	delete rest.trace;
 	return { ...result, details: rest };
 }
 
 /**
- * `message` with a bash tool result's `details.trace` dropped (see
- * {@link withoutShellTrace}); any other message comes back as is. Shared by
+ * `message` with a bash tool result's `details.trace` replaced by the
+ * `details.shellTrace` marker (see {@link withoutShellTrace}); any other message comes back as is. Shared by
  * history frames and the subagent transcript pages, the two readers of
  * persisted results that never render the trace.
  */
 export function messageWithoutShellTrace(message: AgentMessage): AgentMessage {
 	if (message.role !== "toolResult" || message.toolName !== "bash") return message;
 	return withoutShellTrace(message);
+}
+
+/** A bash partial's `details.trace` as the SDK built it, or undefined when the partial carries none. */
+function partialTrace(details: unknown): unknown {
+	if (details === null || typeof details !== "object" || !("trace" in details)) return undefined;
+	const trace = details.trace;
+	return trace !== null && typeof trace === "object" ? trace : undefined;
 }
 
 /**
@@ -448,10 +458,20 @@ interface ToolProgress {
 	async: WireAsyncFrame | undefined;
 	/** Last `out://` reply list sent (bash and eval calls); a partial without one keeps it. */
 	replies: string[] | undefined;
+	/** Latest `details.trace` of a bash partial (the SDK's own snapshot object, never sent): the source of the shell visualization of a call still running. */
+	trace: unknown;
 }
 
 /** Running tool calls per session handle, keyed by toolCallId; cleared at tool end (a backgrounded call's, at its job's last frame) and agent end. */
 const runningTools = new Map<string, Map<string, ToolProgress>>();
+
+/**
+ * The latest shell trace a running bash call reported (the unvalidated SDK snapshot), or undefined
+ * once the call ended (its settled result carries the trace) or when it reported none.
+ */
+export function runningShellTrace(handle: string, toolCallId: string): unknown {
+	return runningTools.get(handle)?.get(toolCallId)?.trace;
+}
 
 /** Priming for a late joiner: the in-progress assistant message and every running tool's output so far. */
 export function streamingPrimeFrames(
@@ -541,6 +561,10 @@ function toolUpdateFrame(
 			live: live ?? sent?.live,
 			async: job ?? sent?.async,
 			replies: partialReplies ?? sent?.replies,
+			trace:
+				event.toolName === "bash"
+					? (partialTrace(event.partialResult?.details) ?? sent?.trace)
+					: undefined,
 		});
 	if (
 		output === previous &&
@@ -591,8 +615,11 @@ function toolUpdateFrame(
  * - Tool-result `message_start`/`message_end` are dropped: `tool_execution_end`
  *   carries the same result and no consumer reads the message events.
  * - `tool_execution_end` of a bash call loses `result.details.trace`, the SDK's
- *   shell execution trace (up to MBs, only the TUI renders it); the other
- *   details (exit code, replies, async frame) stay.
+ *   shell execution trace (up to MBs, read on demand through `getShellVisualization`),
+ *   and gains the marker `details.shellTrace: true` in its place (only when a trace
+ *   was there; history frames and subagent pages carry it the same way); the other
+ *   details (exit code, replies, async frame) stay. A running call's updates carry no
+ *   `details` at all, so a card tells a running call from the marker alone.
  * - `turn_end` and `agent_end` lose the messages and tool results they repeat.
  *
  * Every other event is forwarded untouched. Stateful: tool updates are

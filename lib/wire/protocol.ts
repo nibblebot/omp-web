@@ -969,7 +969,8 @@ export type WebMethodName =
 	| "getJobTree"
 	| "getJobDetail"
 	| "getPromptCacheStatus"
-	| "cancelJob";
+	| "cancelJob"
+	| "getShellVisualization";
 
 /**
  * Methods that change no session state. The session skips the post-mutation
@@ -1017,6 +1018,8 @@ export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> =
 	getJobTree: true,
 	getJobDetail: true,
 	getPromptCacheStatus: true,
+	// Args `[{ toolCallId, subagentId?, cursor? }]`; answers `ShellVizDto` (an explicit `available: false` for an unknown call or one with no trace, never an error).
+	getShellVisualization: true,
 	resumeResolve: true,
 	// Args `{ query?, limit?, allProjects?, phase?: "preliminary" | "complete" }` (additive `phase`; absent =
 	// "complete", the full scan). "preliminary" answers at once with the rows history.db titles
@@ -2316,6 +2319,91 @@ export interface PromptCacheStatusReply {
 	brief?: [string, string];
 	details?: PromptCacheDetailRowDto[];
 }
+
+/** Tone of a visualized shell token (the SDK's shell-viz style tokens mapped onto the TUI renderer's palette); a token with no tone is plain text. */
+export type ShellVizTone =
+	| "comment"
+	| "keyword"
+	| "variable"
+	| "string"
+	| "number"
+	| "operator"
+	| "command"
+	| "accent";
+
+/** One styled run of a visualized row. */
+export interface ShellVizSegmentDto {
+	text: string;
+	tone?: ShellVizTone;
+	/** The run is the first of its failed command in the row: a failure mark precedes it. */
+	failed?: true;
+	/** Not executing, or skipped: drawn faint. */
+	dim?: true;
+}
+
+/** The latest value of a variable the row's statement last set. */
+export interface ShellVizVariableDto {
+	name: string;
+	value: string;
+	/** `value` is shorter than the variable's real value. */
+	cut?: true;
+}
+
+/** One physical row of the Pseudo or Raw rendering (SDK `ShellVizRow`, without ANSI or node identity). */
+export interface ShellVizRowDto {
+	depth: number;
+	segments: ShellVizSegmentDto[];
+	/** `fail`: a failed statement the segments carry no mark for; `active`: the row is executing now. */
+	gutter?: "fail" | "active";
+	/** The row is not executing while the run is live: draw it faint. */
+	dim?: true;
+	/** The row's command failed: its `meta` reads as an error. */
+	failed?: true;
+	/** Effect glyphs (network, write, destructive, ...). */
+	effects?: string;
+	/** Runtime note, e.g. "exit 1 · 23ms". */
+	meta?: string;
+	variables?: ShellVizVariableDto[];
+}
+
+/** `getShellVisualization` answer reasons when no visualization is available. */
+export type ShellVizUnavailableReason =
+	/** No bash call with that id in the session or the named subagent's transcript. */
+	| "unknown_call"
+	/** The call carries no shell trace (a session from before SDK 18.17.0, or a run that did not use the embedded shell). */
+	| "no_trace"
+	/** The trace failed validation or the SDK's presentation engine could not render it. */
+	| "invalid_trace";
+
+/**
+ * `getShellVisualization`: the SDK's own presentation of one bash call's shell trace, computed in the session
+ * and cut to an answer that fits the callback envelope; the browser never receives the raw trace. A settled bash
+ * result's `details.shellTrace === true` (in `tool_execution_end`, history frames and subagent transcript pages) says
+ * the call has one to ask for; a running call's updates carry no `details`, so a running bash call may always be asked.
+ * Args `[{ toolCallId, subagentId?, cursor? }]`: `subagentId` names a subagent (absent: this session's own call),
+ * `cursor` replays the first N retained history records (0..`timeline.length`; absent: the end).
+ */
+export type ShellVizDto =
+	| { available: false; reason: ShellVizUnavailableReason }
+	| {
+			available: true;
+			/** The call is still running: the answer is its latest snapshot. */
+			running: boolean;
+			/** Exit status of the run; absent while it runs. */
+			status?: number;
+			/** Python-like rendering. */
+			pseudo: ShellVizRowDto[];
+			/** The script as written, with the same marks. */
+			raw: ShellVizRowDto[];
+			/** Replay clock: retained history records, the cursor applied, and run time in ns. */
+			timeline: { length: number; cursor: number; elapsedNs: number; durationNs: number };
+			/** The SDK dropped replay history or output beyond its retention limits. */
+			historyTrimmed?: true;
+			/** The SDK's note on the presentation, when it has one. */
+			message?: string;
+			/** Rows left out to fit the answer, per rendering; present only when some were. */
+			omittedRows?: { pseudo: number; raw: number };
+	  };
 
 /** omp CLI, provider-auth, and default-model probe (GET /ctl/omp-setup). */
 export interface OmpSetupStatus {

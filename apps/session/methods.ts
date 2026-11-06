@@ -106,6 +106,7 @@ import { createGitReviewMethods } from "./review-git";
 import { createPlanReviewMethods, exitPlanMode } from "./review-plan";
 import { createTodoMethods } from "./review-todos";
 import { createJobMethods } from "./job-methods";
+import { createShellVizMethods } from "./shell-viz-methods";
 import { createPromptCacheMethods } from "./prompt-cache-methods";
 import { createMcpMethods } from "./mcp-methods";
 import { createSkillMethods } from "./skill-methods";
@@ -955,6 +956,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		...createPlanReviewMethods(),
 		...createTodoMethods(),
 		...createJobMethods(),
+		...createShellVizMethods({ resolveTranscriptFile }),
 		...createPromptCacheMethods(),
 		...createComposerMethods(),
 		...createMcpMethods({

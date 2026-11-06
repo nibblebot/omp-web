@@ -127,19 +127,26 @@ describe("bounded worker transcript pages", () => {
 		expect(second.fromByte).toBe(first.nextByte);
 		expect(second.nextByte).toBeGreaterThan(first.nextByte + 1024 * 1024);
 		expect(second.hasMore).toBe(true);
-		expect(second.messages.map(detailsOf)).toEqual([{ exitCode: 0, replies: ["out://1"] }]);
+		expect(second.messages.map(detailsOf)).toEqual([
+			{ exitCode: 0, replies: ["out://1"], shellTrace: true },
+		]);
 		expect(JSON.stringify(second.entries)).not.toContain("tttt");
 		const third = await readSubagentTranscript(path, second.nextByte, 256 * 1024);
 		expect(third.entries.map((entry) => entry.id)).toEqual(["last"]);
 		expect(third.hasMore).toBe(false);
-		// A trace inside a small page is dropped too; non-bash results keep their details.
+		// A trace inside a small page is swapped for the marker too; a bash result with none gets no marker; non-bash results keep their details.
 		const small = await transcript([
 			bashResult("bash", "small", { exitCode: 1, trace: { id: "run" } }),
+			bashResult("bash", "plain", { exitCode: 0 }),
 			bashResult("read", "other", { trace: { id: "keep" } }),
 			"",
 		]);
 		const page = await readSubagentTranscript(small);
-		expect(page.messages.map(detailsOf)).toEqual([{ exitCode: 1 }, { trace: { id: "keep" } }]);
+		expect(page.messages.map(detailsOf)).toEqual([
+			{ exitCode: 1, shellTrace: true },
+			{ exitCode: 0 },
+			{ trace: { id: "keep" } },
+		]);
 	});
 
 	test("a record still over the page after its trace is stripped, or past the read cap, keeps the error", async () => {

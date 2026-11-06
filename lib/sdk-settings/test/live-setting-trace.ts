@@ -29,6 +29,7 @@ export const LIVE_SETTING_TRACE: Readonly<Record<string, string>> = {
 	"display.showTurnTime": "modes/interactive-mode.ts:4339-4346",
 	"display.cacheMissMarker": "modes/interactive-mode.ts:4339-4346",
 	"display.collapseCompacted": "modes/interactive-mode.ts:4339-4346",
+	"display.shellVisualization": "modes/interactive-mode.ts:4339-4346",
 	"task.showResolvedModelBadge": "task/settings.ts:690",
 	"title.icons": "session/agent-session.ts:11335",
 	// model

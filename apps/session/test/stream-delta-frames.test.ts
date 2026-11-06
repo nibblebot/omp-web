@@ -431,7 +431,7 @@ describe("bash shell trace", () => {
 		timestamp: 0,
 	});
 
-	test("tool_execution_end of a bash call drops the trace and keeps the other details", () => {
+	test("tool_execution_end of a bash call swaps the trace for the shellTrace marker and keeps the other details", () => {
 		const details = { exitCode: 3, replies: ["one"], async: { state: "completed" }, trace };
 		const event = ended("bash", details);
 		const wire = toWireEvent("trace-end", event);
@@ -441,17 +441,19 @@ describe("bash shell trace", () => {
 			toolName: "bash",
 			result: {
 				content: [{ type: "text", text: "ok" }],
-				details: { exitCode: 3, replies: ["one"], async: { state: "completed" } },
+				details: { exitCode: 3, replies: ["one"], async: { state: "completed" }, shellTrace: true },
 			},
 		});
 		// The session's live objects are never mutated.
 		expect(details.trace).toBe(trace);
+		expect(JSON.stringify(wire)).not.toContain('"trace"');
 		expect(JSON.stringify(wire)).not.toContain("tttt");
 	});
 
-	test("a bash result without a trace, and other tools' results, ship unchanged", () => {
+	test("a bash result without a trace ships unchanged, without a marker, and other tools' results too", () => {
 		const plain = ended("bash", { exitCode: 0 });
 		expect(toWireEvent("trace-plain", plain) as unknown).toBe(plain);
+		expect(JSON.stringify(plain)).not.toContain("shellTrace");
 		const other = ended("read", { trace });
 		expect(toWireEvent("trace-other", other) as unknown).toBe(other);
 	});
@@ -475,10 +477,12 @@ describe("bash shell trace", () => {
 		expect(JSON.stringify(streamingPrimeFrames(entry))).not.toContain("tttt");
 	});
 
-	test("history drops a bash result's trace, in the single-frame and the chunked shape", () => {
+	test("history swaps a bash result's trace for the marker, in the single-frame and the chunked shape", () => {
 		const message = toolResult("bash", "out", { exitCode: 0, trace });
 		const [single] = historyFrames([message] as never);
-		expect(single.messages[0]).toEqual(toolResult("bash", "out", { exitCode: 0 }) as never);
+		expect(single.messages[0]).toEqual(
+			toolResult("bash", "out", { exitCode: 0, shellTrace: true }) as never,
+		);
 		expect(message.details.trace).toBe(trace);
 
 		const filler = {
@@ -490,7 +494,7 @@ describe("bash shell trace", () => {
 		expect(frames.length).toBeGreaterThan(1);
 		expect(JSON.stringify(frames)).not.toContain("tttt");
 		const sent = frames.flatMap((f) => f.messages)[1];
-		expect(sent).toEqual(toolResult("bash", "out", { exitCode: 0 }) as never);
+		expect(sent).toEqual(toolResult("bash", "out", { exitCode: 0, shellTrace: true }) as never);
 	});
 
 	test("a message over the ceiling only because of its trace ships its output unclipped", () => {
@@ -504,7 +508,7 @@ describe("bash shell trace", () => {
 		};
 		const frames = historyFrames([filler, message] as never);
 		const sent = frames.flatMap((f) => f.messages)[1];
-		expect(sent).toEqual(toolResult("bash", output, { exitCode: 0 }) as never);
+		expect(sent).toEqual(toolResult("bash", output, { exitCode: 0, shellTrace: true }) as never);
 	});
 
 	test("history keeps another tool's details", () => {

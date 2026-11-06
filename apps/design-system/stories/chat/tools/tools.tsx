@@ -106,7 +106,16 @@ import {
 	taskBackgroundRunningTool,
 } from "../../../fixtures/background-tools";
 import { agentSettingsModel } from "../../../fixtures/subagents";
+import {
+	shellVizAnswers,
+	shellVizCalls,
+	shellVizDoneTool,
+	shellVizFailedTool,
+	shellVizRunning,
+} from "../../../fixtures/shell-viz";
 import { defineStory } from "../../../registry";
+import { answerCalls } from "../../../session";
+import { forgetShellVizUnavailable } from "../../../../web/store/shell-viz";
 import type { Story } from "../../../registry";
 
 /** One tool card per status, side by side: running, done, error, interrupted. */
@@ -256,10 +265,31 @@ const stories: Story[] = [
 		id: "chat-tools-bash-tool-card",
 		title: "BashToolCard",
 		component: { file: "apps/web/components/chat/tools/BashToolCard.tsx", export: "BashToolCard" },
+		// Visualize asks the session for the call's visualization: answered for the marked cards and the running one.
+		seed: () => {
+			forgetShellVizUnavailable();
+			answerCalls(
+				shellVizCalls({
+					...shellVizAnswers,
+					[bashRunningTool.toolCallId]: shellVizRunning,
+				}),
+			);
+		},
 		variants: [
 			{ name: "Running (streaming)", render: () => <BashToolCard item={bashRunningTool} /> },
 			{ name: "Done, short output", render: () => <BashToolCard item={bashDoneTool} /> },
 			{ name: "Error, failing test run", render: () => <BashToolCard item={bashErrorTool} /> },
+			{
+				name: "Done, with Visualize",
+				description:
+					"A settled result carrying the session's `details.shellTrace` marker offers Visualize (the cards without the marker, from before SDK 18.17.0, do not). Open it for the Pseudo and Raw renderings and the replay scrubber.",
+				render: () => <BashToolCard item={shellVizDoneTool} />,
+			},
+			{
+				name: "Error, with Visualize",
+				description: "Failed commands carry a × mark and their exit status in the visualization.",
+				render: () => <BashToolCard item={shellVizFailedTool} />,
+			},
 			{
 				name: "Long output, collapsed tail",
 				description: "Settled card past the 20-line cap; toggle Ctrl+O from the header to expand.",

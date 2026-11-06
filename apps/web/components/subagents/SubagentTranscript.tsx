@@ -4,6 +4,7 @@ import {
 	subagentTranscript,
 	syncSubagentTranscript,
 } from "../../store/subagents";
+import { ShellVizSubagentContext } from "../chat/tools/ShellVisualizer";
 import { TranscriptStream } from "../chat/transcript/TranscriptStream";
 
 /**
@@ -17,17 +18,19 @@ export const SubagentTranscript: Component<{ id: string }> = (props) => {
 	createEffect(() => syncSubagentTranscript(props.id));
 	const transcript = () => subagentTranscript(props.id);
 	return (
-		<TranscriptStream items={transcript().items} variant="agent" class="subagent-transcript">
-			<Show when={transcript().loading}>
-				<p class="subagent-transcript-status">Loading transcript…</p>
-			</Show>
-			<Show when={transcript().error}>
-				{(error) => (
-					<p class="subagent-transcript-error" role="alert">
-						{error()}
-					</p>
-				)}
-			</Show>
-		</TranscriptStream>
+		<ShellVizSubagentContext.Provider value={props.id}>
+			<TranscriptStream items={transcript().items} variant="agent" class="subagent-transcript">
+				<Show when={transcript().loading}>
+					<p class="subagent-transcript-status">Loading transcript…</p>
+				</Show>
+				<Show when={transcript().error}>
+					{(error) => (
+						<p class="subagent-transcript-error" role="alert">
+							{error()}
+						</p>
+					)}
+				</Show>
+			</TranscriptStream>
+		</ShellVizSubagentContext.Provider>
 	);
 };
