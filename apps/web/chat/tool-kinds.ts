@@ -34,6 +34,7 @@ const KINDS: Record<string, ToolKind> = {
 	hashline: { category: "write", icon: "pencil" },
 	grep: { category: "search", icon: "search" },
 	glob: { category: "search", icon: "search" },
+	find: { category: "search", icon: "search" },
 	web_search: { category: "search", icon: "globe" },
 	lsp: { category: "search", icon: "braces" },
 	task: { category: "agents", icon: "bot" },

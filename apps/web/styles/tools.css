@@ -1040,3 +1040,132 @@ pre.terminal.wait-job-output {
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
+
+/* find tool card (FindToolCard): ranked semantic-search hits; a `timed out` marker when the SDK's deadline cut verification short. */
+.find-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	padding: var(--space-2) var(--space-5) var(--space-4);
+	max-height: 320px;
+	overflow-y: auto;
+}
+.find-meta {
+	flex-shrink: 0;
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--muted);
+	white-space: nowrap;
+}
+.find-timeout {
+	flex-shrink: 0;
+	padding: 0 var(--space-3);
+	border: 1px solid var(--warning-border);
+	border-radius: var(--r-pill);
+	background: var(--warning-bg);
+	font-size: var(--fs-sm);
+	color: var(--warning);
+	white-space: nowrap;
+}
+.find-timeout-note {
+	padding: var(--space-2) var(--space-3);
+	border-left: 2px solid var(--warning);
+	color: var(--warning);
+	font-family: var(--font-sans);
+}
+.find-hit {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+.find-hit-head {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: var(--space-3);
+}
+.find-gauge {
+	display: inline-flex;
+	align-self: center;
+	gap: 1px;
+	flex-shrink: 0;
+}
+.find-gauge-cell {
+	width: 5px;
+	height: 10px;
+	border-radius: 1px;
+	background: var(--border);
+}
+.find-gauge[data-tone="strong"] .find-gauge-cell[data-filled="true"] {
+	background: var(--success);
+}
+.find-gauge[data-tone="plausible"] .find-gauge-cell[data-filled="true"] {
+	background: var(--warning);
+}
+.find-gauge[data-tone="weak"] .find-gauge-cell[data-filled="true"] {
+	background: var(--muted-2);
+}
+.find-score[data-tone="strong"] {
+	color: var(--success);
+}
+.find-score[data-tone="plausible"] {
+	color: var(--warning);
+}
+.find-score[data-tone="weak"] {
+	color: var(--muted);
+}
+.find-path {
+	text-align: left;
+	word-break: break-all;
+}
+.find-judged,
+.find-range-p {
+	color: var(--muted-2);
+}
+.find-range {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-3);
+	padding-left: var(--space-5);
+}
+.find-range-ref {
+	flex-shrink: 0;
+	color: var(--muted);
+}
+.find-snippet {
+	min-width: 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.find-progress,
+.find-empty {
+	color: var(--muted);
+}
+.find-failures {
+	color: var(--warning);
+}
+.find-foot {
+	display: flex;
+	flex-direction: column;
+	color: var(--muted-2);
+	overflow-wrap: anywhere;
+}
+@media (pointer: coarse) {
+	.find-body {
+		box-shadow: inset 0 0 0 1px var(--border);
+	}
+	.find-path,
+	.find-range-ref {
+		min-height: 44px;
+		display: inline-flex;
+		align-items: center;
+	}
+}
+@media (max-width: 767px) {
+	.find-timeout,
+	.find-meta {
+		white-space: normal;
+	}
+}

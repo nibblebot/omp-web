@@ -4,6 +4,7 @@ import { AskToolCard } from "./AskToolCard";
 import { BashToolCard } from "./BashToolCard";
 import { DiffToolCard } from "./DiffToolCard";
 import { EvalToolCard } from "./EvalToolCard";
+import { LazyFindToolCard } from "./LazyFindToolCard";
 import { LspToolCard } from "./LspToolCard";
 import { ReadToolCard } from "./ReadToolCard";
 import { SearchToolCard } from "./SearchToolCard";
@@ -21,6 +22,7 @@ export const RENDERERS: Record<string, Component<{ item: ToolItem }>> = {
 	todo: TodoToolCard,
 	grep: SearchToolCard,
 	glob: SearchToolCard,
+	find: LazyFindToolCard,
 	web_search: WebSearchToolCard,
 	task: TaskToolCard,
 	eval: EvalToolCard,
