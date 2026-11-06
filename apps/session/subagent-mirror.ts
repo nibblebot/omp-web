@@ -27,7 +27,7 @@ import {
 	withSubagentCompletion,
 } from "./subagent-completion";
 import type { SessionEntry } from "./session-entry";
-import { broadcastTo } from "./client-delivery";
+import { broadcastTo, messageWithoutShellTrace } from "./client-delivery";
 
 // ---------------------------------------------------------------------------
 // Subagent mirror: a port of the RPC mode's subagent registry semantics at a
@@ -338,7 +338,32 @@ export function resolveSubagentSessionFile(
 	throw new Error("getSubagentMessages requires subagentId or sessionFile");
 }
 
-/** Read bounded complete JSONL records; entry IDs remain durable transcript anchors. */
+/**
+ * Hard cap on how far {@link readSubagentTranscript} reads forward to finish a
+ * first record that does not end inside the requested page. A record that
+ * large is a bash result whose `details.trace` (SDK 18.17.0 shell execution
+ * trace, up to ~3.5 MB) dwarfs the output the web renders; the trace is
+ * stripped and the record ships when it then fits the page. A record that does
+ * not end within the cap stays an error, so the read is always bounded.
+ */
+const MAX_OVERSIZED_RECORD_BYTES = 8 * 1024 * 1024;
+
+const RECORD_EXCEEDS_PAGE =
+	"Worker transcript record exceeds page size; request a larger bounded page";
+
+/** `entry` with a bash tool result's `details.trace` dropped; any other entry comes back as is. */
+function entryWithoutShellTrace(entry: FileEntry): FileEntry {
+	if (!isSessionMessageEntry(entry)) return entry;
+	const message = messageWithoutShellTrace(entry.message);
+	return message === entry.message ? entry : { ...entry, message };
+}
+
+/**
+ * Read bounded complete JSONL records; entry IDs remain durable transcript anchors.
+ * A bash result's `details.trace` is never returned (see
+ * {@link MAX_OVERSIZED_RECORD_BYTES}); a lone first record larger than the page
+ * comes back as a one-record page when the stripped record fits `maxBytes`.
+ */
 export async function readSubagentTranscript(
 	sessionFile: string,
 	fromByte = 0,
@@ -367,12 +392,22 @@ export async function readSubagentTranscript(
 			? Buffer.alloc(0)
 			: Buffer.from(await file.slice(startByte, endByte).arrayBuffer());
 	const lastNewline = bytes.lastIndexOf(10);
-	if (lastNewline < 0 && endByte < size) {
-		throw new Error("Worker transcript record exceeds page size; request a larger bounded page");
+	let completeBytes = lastNewline >= 0 ? bytes.subarray(0, lastNewline + 1) : Buffer.alloc(0);
+	const oversized = lastNewline < 0 && endByte < size;
+	if (oversized) {
+		// The first record does not end inside the page: finish it, within the cap.
+		const capEnd = Math.min(size, startByte + MAX_OVERSIZED_RECORD_BYTES);
+		const tail = Buffer.from(await file.slice(endByte, capEnd).arrayBuffer());
+		const tailNewline = tail.indexOf(10);
+		if (tailNewline < 0) throw new Error(RECORD_EXCEEDS_PAGE);
+		completeBytes = Buffer.concat([bytes, tail.subarray(0, tailNewline + 1)]);
 	}
-	const completeBytes = lastNewline >= 0 ? bytes.subarray(0, lastNewline + 1) : Buffer.alloc(0);
-	const entries =
-		completeBytes.length > 0 ? parseSessionEntries(completeBytes.toString("utf8")) : [];
+	const entries = (
+		completeBytes.length > 0 ? parseSessionEntries(completeBytes.toString("utf8")) : []
+	).map(entryWithoutShellTrace);
+	if (oversized && Buffer.byteLength(JSON.stringify(entries), "utf8") > maxBytes) {
+		throw new Error(RECORD_EXCEEDS_PAGE);
+	}
 	const nextByte = startByte + completeBytes.length;
 	return {
 		sessionFile,

@@ -32,6 +32,7 @@ const QUEUED = [
 	"ssh",
 	"shake",
 	"pin",
+	"unpin",
 	"memory",
 	"add-dir",
 	"remove-dir",

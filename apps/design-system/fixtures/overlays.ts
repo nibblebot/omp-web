@@ -339,6 +339,7 @@ const firstPartyCompat: ResolvedAnthropicCompat = {
 	supportsBetweenToolsThinking: true,
 	supportsForcedToolChoice: true,
 	supportsSamplingParams: true,
+	supportsMessageThreads: true,
 	requiresToolResultId: false,
 	allowAnthropicHeaderOverrides: false,
 	replayUnsignedThinking: false,

@@ -410,3 +410,106 @@ describe("out:// replies", () => {
 		]);
 	});
 });
+
+/** SDK 18.17.0 puts a shell execution trace (MBs for a loop) on every bash result and partial; the web never renders it. */
+describe("bash shell trace", () => {
+	const trace = { id: "run", events: "t".repeat(64 * 1024) };
+	const ended = (toolName: string, details: Record<string, unknown>) =>
+		({
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName,
+			result: { content: [{ type: "text", text: "ok" }], details },
+		}) as unknown as AgentSessionEvent;
+	const toolResult = (toolName: string, text: string, details: Record<string, unknown>) => ({
+		role: "toolResult",
+		toolCallId: "c1",
+		toolName,
+		content: [{ type: "text", text }],
+		details,
+		isError: false,
+		timestamp: 0,
+	});
+
+	test("tool_execution_end of a bash call drops the trace and keeps the other details", () => {
+		const details = { exitCode: 3, replies: ["one"], async: { state: "completed" }, trace };
+		const event = ended("bash", details);
+		const wire = toWireEvent("trace-end", event);
+		expect(wire).toEqual({
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName: "bash",
+			result: {
+				content: [{ type: "text", text: "ok" }],
+				details: { exitCode: 3, replies: ["one"], async: { state: "completed" } },
+			},
+		});
+		// The session's live objects are never mutated.
+		expect(details.trace).toBe(trace);
+		expect(JSON.stringify(wire)).not.toContain("tttt");
+	});
+
+	test("a bash result without a trace, and other tools' results, ship unchanged", () => {
+		const plain = ended("bash", { exitCode: 0 });
+		expect(toWireEvent("trace-plain", plain) as unknown).toBe(plain);
+		const other = ended("read", { trace });
+		expect(toWireEvent("trace-other", other) as unknown).toBe(other);
+	});
+
+	test("a partial's trace never ships, nor does it prime a late joiner", () => {
+		const entry = { handle: "trace-update" } as SessionEntry;
+		const update = {
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			args: {},
+			partialResult: { content: [{ type: "text", text: "so far" }], details: { trace } },
+		} as unknown as AgentSessionEvent;
+		const wire = toWireEvent(entry.handle, update);
+		expect(wire).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "bash",
+			output: "so far",
+		});
+		expect(JSON.stringify(streamingPrimeFrames(entry))).not.toContain("tttt");
+	});
+
+	test("history drops a bash result's trace, in the single-frame and the chunked shape", () => {
+		const message = toolResult("bash", "out", { exitCode: 0, trace });
+		const [single] = historyFrames([message] as never);
+		expect(single.messages[0]).toEqual(toolResult("bash", "out", { exitCode: 0 }) as never);
+		expect(message.details.trace).toBe(trace);
+
+		const filler = {
+			role: "user",
+			content: [{ type: "text", text: "y".repeat(600 * 1024) }],
+			timestamp: 0,
+		};
+		const frames = historyFrames([filler, message, filler] as never);
+		expect(frames.length).toBeGreaterThan(1);
+		expect(JSON.stringify(frames)).not.toContain("tttt");
+		const sent = frames.flatMap((f) => f.messages)[1];
+		expect(sent).toEqual(toolResult("bash", "out", { exitCode: 0 }) as never);
+	});
+
+	test("a message over the ceiling only because of its trace ships its output unclipped", () => {
+		const output = "o".repeat(200 * 1024);
+		const bulky = { ...trace, events: "t".repeat(2 * 1024 * 1024) };
+		const message = toolResult("bash", output, { exitCode: 0, trace: bulky });
+		const filler = {
+			role: "user",
+			content: [{ type: "text", text: "y".repeat(600 * 1024) }],
+			timestamp: 0,
+		};
+		const frames = historyFrames([filler, message] as never);
+		const sent = frames.flatMap((f) => f.messages)[1];
+		expect(sent).toEqual(toolResult("bash", output, { exitCode: 0 }) as never);
+	});
+
+	test("history keeps another tool's details", () => {
+		const message = toolResult("read", "out", { trace });
+		const [single] = historyFrames([message] as never);
+		expect(single.messages[0]).toBe(message as never);
+	});
+});

@@ -10,7 +10,7 @@
  */
 import { maskNonProse } from "./prose-mask";
 
-export type MagicKeywordId = "ultrathink" | "orchestrate" | "workflow" | "jevify";
+export type MagicKeywordId = "ultrathink" | "chillax" | "orchestrate" | "workflow" | "jevify";
 
 export interface MagicKeywordSpec {
 	readonly id: MagicKeywordId;
@@ -22,6 +22,7 @@ export interface MagicKeywordSpec {
 
 export const MAGIC_KEYWORDS: readonly MagicKeywordSpec[] = [
 	{ id: "ultrathink", word: "ultrathink", hue: [0, 330] },
+	{ id: "chillax", word: "chillax", hue: [180, 235] },
 	{ id: "orchestrate", word: "orchestrate", hue: [150, 280] },
 	{ id: "workflow", word: "workflowz", hue: [30, 150] },
 	{ id: "jevify", word: "jevify", hue: [300, 420] },

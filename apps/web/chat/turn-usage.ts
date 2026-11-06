@@ -15,16 +15,19 @@ export interface TurnMeta {
 /**
  * Reprocessed prompt tokens when `current` lost a warm cache that `prev` was
  * reading, else undefined. Same rules as the SDK's detectCacheInvalidation:
- * the previous turn must have read a meaningful prefix, this turn read none
- * but re-created it (explicit caches report cacheWrite > 0; implicit
- * best-effort caches do not, so they never flag).
+ * the previous turn must have read a meaningful prefix, this turn read back
+ * less than half of it (a shared system/tool block can stay warm after an idle
+ * gap while the history expires) but re-created the prompt past the break
+ * (explicit caches report cacheWrite > 0; implicit best-effort caches do not,
+ * so they never flag).
  */
 export function detectCacheInvalidation(
 	prev: UsageLike | undefined,
 	current: UsageLike,
 ): number | undefined {
 	if (!prev || prev.cacheRead < MIN_CACHE_FOOTPRINT) return undefined;
-	if (current.cacheRead > 0 || current.cacheWrite <= 0) return undefined;
+	if (current.cacheRead * 2 >= prev.cacheRead) return undefined;
+	if (current.cacheWrite <= 0) return undefined;
 	const reprocessed = current.cacheWrite + current.input;
 	return reprocessed < MIN_CACHE_FOOTPRINT ? undefined : reprocessed;
 }

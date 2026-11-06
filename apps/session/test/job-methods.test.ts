@@ -5,7 +5,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createAgentSession, Settings } from "@oh-my-pi/pi-coding-agent";
-import type { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
+import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { JobWidgets } from "@oh-my-pi/pi-coding-agent/job-widgets/registry";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -52,7 +52,10 @@ beforeEach(async () => {
 		enableLsp: false,
 	});
 	session = result.session;
-	jobs = session.asyncJobManager!;
+	// A root session owns the concrete manager; the tests below swap its widget registry.
+	const manager = session.asyncJobManager;
+	if (!(manager instanceof AsyncJobManager)) throw new Error("expected the root's AsyncJobManager");
+	jobs = manager;
 	entry = { session } as unknown as SessionEntry;
 });
 

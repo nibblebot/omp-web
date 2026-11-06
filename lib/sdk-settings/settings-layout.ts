@@ -1,6 +1,6 @@
 /**
  * Settings sheet layout manifest: checked-in data. Generated once from the web
- * inventory against @oh-my-pi/pi-coding-agent 18.16.0 (438 settings host rows).
+ * inventory against @oh-my-pi/pi-coding-agent 18.17.0 (450 settings host rows).
  * buildSettingsModel applies it over the SDK's own metadata; nothing here is read
  * from disk at runtime. Rows in HIDDEN_SETTING_PATHS never appear on the web; rows in
  * ADVANCED_SETTING_PATHS go to the Advanced group; every other host row shows in its SDK
@@ -45,7 +45,7 @@ export const TAB_SECTION_ORDER: Readonly<Record<string, readonly string[]>> = {
 /** Name of the group that holds a tab's Advanced rows; always the last group of its tab. */
 export const ADVANCED_GROUP = "Advanced";
 
-/** Terminal-only rows that never appear on the web (62). */
+/** Terminal-only rows that never appear on the web (70). */
 export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"theme.dark": true,
 	"theme.light": true,
@@ -109,9 +109,19 @@ export const HIDDEN_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"async.printWake": true,
 	"extensionRenderers.assistantText": true,
 	"extensionHandlers.modeControl": true,
+	"tui.colorfulMarkdown": true,
+	"tui.spinnerInterval": true,
+	"tui.maxFps": true,
+	"tui.motion": true,
+	// Bash results carry the trace, but the web has no execution visualization (session wire drops it).
+	"display.shellVisualization": true,
+	"update.auto": true,
+	"extensionRenderers.transcriptPresenters": true,
+	// omp-session declares no worker host entry, so the SDK never moves subagents to worker threads.
+	"task.workerThreads": true,
 };
 
-/** Rows absent from the inventory, shown in the Advanced group of their tab (68). Gated rows keep their condition. */
+/** Rows absent from the inventory, shown in the Advanced group of their tab (70). Gated rows keep their condition. */
 export const ADVANCED_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"model.toolCallLoopGuard.threshold": true,
 	"model.toolCallLoopGuard.exemptTools": true,
@@ -181,6 +191,8 @@ export const ADVANCED_SETTING_PATHS: Readonly<Record<string, true>> = {
 	"plan.autosave": true,
 	"plan.autosaveDir": true,
 	"retry.rateLimitWalksChain": true,
+	"spotlight.experiment.enabled": true,
+	"ovnfs.path": true,
 };
 
 /**

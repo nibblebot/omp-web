@@ -416,6 +416,12 @@ export const SDK_BUILTINS: readonly SdkBuiltin[] = [
 		sdkHandled: true,
 	},
 	{
+		name: "unpin",
+		description: "Unpin a session from the top of the resume list",
+		hint: "[session id]",
+		sdkHandled: true,
+	},
+	{
 		name: "btw",
 		description: "Ask a side question, or browse this session's BTW history",
 		hint: "[question]",

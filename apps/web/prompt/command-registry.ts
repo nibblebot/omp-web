@@ -148,6 +148,7 @@ const GROUPS: Readonly<Record<CommandGroup, readonly string[]>> = {
 		"tree",
 		"branch",
 		"pin",
+		"unpin",
 		"session",
 		"export",
 		"dump",

@@ -37,6 +37,36 @@ function message(id: string, text: string): string {
 	});
 }
 
+/** The `details` of a transcript message, undefined when it has none. */
+function detailsOf(message: unknown): unknown {
+	return typeof message === "object" && message !== null && "details" in message
+		? message.details
+		: undefined;
+}
+
+function bashResult(
+	toolName: string,
+	id: string,
+	details: Record<string, unknown>,
+	text = "output",
+): string {
+	return JSON.stringify({
+		type: "message",
+		id,
+		parentId: null,
+		timestamp: "2026-10-05T00:00:00.000Z",
+		message: {
+			role: "toolResult",
+			toolCallId: `call-${id}`,
+			toolName,
+			content: [{ type: "text", text }],
+			details,
+			isError: false,
+			timestamp: 0,
+		},
+	});
+}
+
 describe("bounded worker transcript pages", () => {
 	test("complete UTF-8 records retain IDs across pages and do not duplicate anchors", async () => {
 		const lines = [
@@ -79,6 +109,57 @@ describe("bounded worker transcript pages", () => {
 		await expect(readSubagentTranscript(path, 0, 1024)).rejects.toThrow("record exceeds page size");
 		await expect(readSubagentTranscript(`${path}.missing`)).rejects.toThrow("artifact unavailable");
 		await expect(readSubagentTranscript(path, 0, 0)).rejects.toThrow("page size");
+	});
+
+	test("a bash result's shell trace is dropped, and a record only its trace made oversized still loads", async () => {
+		const trace = { id: "run", events: "t".repeat(1024 * 1024) };
+		const path = await transcript([
+			message("first", "before"),
+			bashResult("bash", "huge", { exitCode: 0, replies: ["out://1"], trace }),
+			message("last", "after"),
+			"",
+		]);
+		const first = await readSubagentTranscript(path, 0, 256 * 1024);
+		expect(first.entries.map((entry) => entry.id)).toEqual(["first"]);
+		expect(first.hasMore).toBe(true);
+		const second = await readSubagentTranscript(path, first.nextByte, 256 * 1024);
+		expect(second.entries.map((entry) => entry.id)).toEqual(["huge"]);
+		expect(second.fromByte).toBe(first.nextByte);
+		expect(second.nextByte).toBeGreaterThan(first.nextByte + 1024 * 1024);
+		expect(second.hasMore).toBe(true);
+		expect(second.messages.map(detailsOf)).toEqual([{ exitCode: 0, replies: ["out://1"] }]);
+		expect(JSON.stringify(second.entries)).not.toContain("tttt");
+		const third = await readSubagentTranscript(path, second.nextByte, 256 * 1024);
+		expect(third.entries.map((entry) => entry.id)).toEqual(["last"]);
+		expect(third.hasMore).toBe(false);
+		// A trace inside a small page is dropped too; non-bash results keep their details.
+		const small = await transcript([
+			bashResult("bash", "small", { exitCode: 1, trace: { id: "run" } }),
+			bashResult("read", "other", { trace: { id: "keep" } }),
+			"",
+		]);
+		const page = await readSubagentTranscript(small);
+		expect(page.messages.map(detailsOf)).toEqual([{ exitCode: 1 }, { trace: { id: "keep" } }]);
+	});
+
+	test("a record still over the page after its trace is stripped, or past the read cap, keeps the error", async () => {
+		const path = await transcript([
+			bashResult(
+				"bash",
+				"big",
+				{ exitCode: 0, trace: { events: "t".repeat(5000) } },
+				"x".repeat(2000),
+			),
+			"",
+		]);
+		await expect(readSubagentTranscript(path, 0, 1024)).rejects.toThrow("record exceeds page size");
+		const beyondCap = await transcript([
+			bashResult("bash", "cap", { exitCode: 0, trace: { events: "t".repeat(9 * 1024 * 1024) } }),
+			"",
+		]);
+		await expect(readSubagentTranscript(beyondCap, 0, 1024)).rejects.toThrow(
+			"record exceeds page size",
+		);
 	});
 });
 

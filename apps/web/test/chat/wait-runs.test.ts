@@ -388,6 +388,8 @@ describe("one call", () => {
 		expect(running.jobs.map((entry) => entry.id)).toEqual(["a"]);
 		expect(running.widgets.size).toBe(0);
 		expect(waitCallOf(wait([], { waited: { from: "P" } })).message).toBe(true);
+		expect(waitCallOf(wait([], { waited: [{ from: "P" }, { from: "Q" }] })).message).toBe(true);
+		expect(waitCallOf(wait([], { waited: [] })).message).toBe(false);
 	});
 
 	test("counts and summary say what is left", () => {

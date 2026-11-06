@@ -16,6 +16,7 @@ import {
 	type AgentRef,
 } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import type { AgentProgress } from "@oh-my-pi/pi-coding-agent/task";
 import { startCompletionProbe } from "@oh-my-pi/pi-coding-agent/task/completion-probe";
 import { cfgTaskCompletionProbe } from "@oh-my-pi/pi-coding-agent/task/settings";
@@ -77,6 +78,9 @@ export function setSubagentCompletionDeps(
 function probedSession(deps: SubagentCompletionDeps, id: string): AgentSession | null {
 	const ref = deps.refOf(id);
 	if (ref?.kind !== "sub" || ref.session === null) return null;
+	// The SDK's probe needs the concrete session. A registry ref may hold a cross-thread
+	// handle, but this host declares no worker host entry, so subagents always run in-process.
+	if (!isLocalAgentSession(ref.session)) return null;
 	if (ref.parentId !== undefined && ref.parentId !== MAIN_AGENT_ID) return null;
 	return cfgTaskCompletionProbe.get(ref.session.settings) ? ref.session : null;
 }

@@ -13,6 +13,7 @@ import {
 	listSessionTitles,
 	recordSessionTitles,
 } from "@oh-my-pi/pi-coding-agent/session/session-index";
+import { loadPinnedSessionIds } from "@oh-my-pi/pi-coding-agent/session/session-pins";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import {
@@ -230,5 +231,29 @@ describe("complete phase", () => {
 		await toggleResumePin(empty, agentDir);
 		await list({ phase: "preliminary" });
 		expect(ids(await list({})).sort()).toEqual([used, empty].sort());
+	});
+});
+
+describe("delete", () => {
+	test("drops the deleted session's pin and leaves other pins", async () => {
+		const { root, local } = scratch();
+		const doomed = crypto.randomUUID();
+		const kept = crypto.randomUUID();
+		const file = journal({ root, project: "projA", id: doomed, userTexts: ["bye"] });
+		journal({ root, project: "projA", id: kept, userTexts: ["stay"] });
+		await toggleResumePin(doomed, agentDir);
+		await toggleResumePin(kept, agentDir);
+
+		const handlers = createResumeHandlers({
+			cwd: local,
+			sessionDir: local,
+			sessionsRoot: root,
+			agentDir,
+		});
+		await handlers.resumeDelete?.([{ sessionFile: file, sessionId: doomed }]);
+
+		const pins = await loadPinnedSessionIds(agentDir);
+		expect(pins.has(doomed)).toBe(false);
+		expect(pins.has(kept)).toBe(true);
 	});
 });

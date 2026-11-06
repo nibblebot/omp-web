@@ -221,6 +221,32 @@ export function wakeDrainWaiter(consumer: ClientConsumer): void {
 }
 
 /**
+ * `result` without `details.trace`, or `result` itself when it carries none.
+ * Since SDK 18.17.0 every bash tool result carries a pi-wire `ShellTrace` (the
+ * TUI's shell visualization input; 1 KB for a trivial command, MBs for a loop)
+ * that the web never renders. The copy is shallow: only the live session's
+ * `details` object must stay untouched.
+ */
+function withoutShellTrace<T extends { details?: unknown }>(result: T): T {
+	const details = result.details;
+	if (details === null || typeof details !== "object" || !("trace" in details)) return result;
+	const rest: Record<string, unknown> = { ...details };
+	delete rest.trace;
+	return { ...result, details: rest };
+}
+
+/**
+ * `message` with a bash tool result's `details.trace` dropped (see
+ * {@link withoutShellTrace}); any other message comes back as is. Shared by
+ * history frames and the subagent transcript pages, the two readers of
+ * persisted results that never render the trace.
+ */
+export function messageWithoutShellTrace(message: AgentMessage): AgentMessage {
+	if (message.role !== "toolResult" || message.toolName !== "bash") return message;
+	return withoutShellTrace(message);
+}
+
+/**
  * Return a copy of `message` with image content blocks dropped. The collab
  * welcome degrades oversized entries the same way (stripImagesFromMessage),
  * but that helper mutates in place, and the session's live transcript must
@@ -319,7 +345,11 @@ export type HistoryFrame = Extract<SessionScopedFrame, { type: "history" }>;
  * tails are clipped, so the stream survives regardless. A message between the
  * frame budget and that ceiling stays verbatim in a paced frame of its own.
  */
-export function historyFrames(messages: AgentMessage[]): HistoryFrame[] {
+export function historyFrames(sessionMessages: AgentMessage[]): HistoryFrame[] {
+	// Strip first: a trace can be most of a message's bytes, and the size checks
+	// below must see what ships (a message over the ceiling only because of its
+	// trace would otherwise be clipped, output text included).
+	const messages = sessionMessages.map(messageWithoutShellTrace);
 	const whole = JSON.stringify({ type: "history", messages });
 	if (utf8Bytes(whole) <= HISTORY_CHUNK_BYTES) return [{ type: "history", messages }];
 	const frames: HistoryFrame[] = [];
@@ -560,6 +590,9 @@ function toolUpdateFrame(
  *   (state, exit code) when that changed, the last one ending the call's entry.
  * - Tool-result `message_start`/`message_end` are dropped: `tool_execution_end`
  *   carries the same result and no consumer reads the message events.
+ * - `tool_execution_end` of a bash call loses `result.details.trace`, the SDK's
+ *   shell execution trace (up to MBs, only the TUI renders it); the other
+ *   details (exit code, replies, async frame) stay.
  * - `turn_end` and `agent_end` lose the messages and tool results they repeat.
  *
  * Every other event is forwarded untouched. Stateful: tool updates are
@@ -592,9 +625,12 @@ export function toWireEvent(handle: string, event: AgentSessionEvent): WireSessi
 			return event.message.role === "toolResult" ? null : event;
 		case "tool_execution_update":
 			return toolUpdateFrame(handle, event);
-		case "tool_execution_end":
+		case "tool_execution_end": {
 			runningTools.get(handle)?.delete(event.toolCallId);
-			return event;
+			if (event.toolName !== "bash") return event;
+			const result = withoutShellTrace(event.result);
+			return result === event.result ? event : { ...event, result };
+		}
 		case "turn_end":
 			return { type: "turn_end" };
 		case "agent_end": {

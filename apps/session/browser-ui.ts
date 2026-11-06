@@ -228,8 +228,10 @@ export function wrapTerminalHooks(
 				"the browser has no raw keystroke channel (composer covers submitted text, not keystrokes)",
 			);
 		},
-		// The SDK contract outside the interactive terminal: no reply to redraw, no pickable links.
+		// The SDK contract outside the interactive terminal: no reply or transcript block to
+		// redraw, no pickable links.
 		rerenderMessage: () => {},
+		refreshTranscript: () => {},
 		getLinkClicksAvailable: () => false,
 		setStatus: (key, text) => {
 			if (text === undefined) {

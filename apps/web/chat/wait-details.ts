@@ -73,6 +73,11 @@ function parseWidgets(details: unknown): Map<string, WireJobWidgetView> {
 	return widgets;
 }
 
+/** Whether `details.waited` holds a peer message: a non-empty list (SDK 18.17.0 returns every queued message, oldest first) or the single message object an older session recorded. */
+function consumedMessage(waited: unknown): boolean {
+	return Array.isArray(waited) ? waited.length > 0 : Boolean(waited);
+}
+
 /** One wait call's jobs, widgets and agents, from its live frame while it runs and from its settled details after. */
 export function waitCallOf(item: ToolItem): WaitCall {
 	const running = item.status === "running";
@@ -86,7 +91,7 @@ export function waitCallOf(item: ToolItem): WaitCall {
 		live: live !== undefined,
 		...(live ? { at: live.at } : {}),
 		interrupted: details?.interrupted === true,
-		message: Boolean(details?.waited),
+		message: consumedMessage(details?.waited),
 	};
 }
 

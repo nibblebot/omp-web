@@ -50,13 +50,28 @@ describe("detectCacheInvalidation", () => {
 		).toBeUndefined();
 	});
 
-	test("ignores a current turn that still read from cache", () => {
+	test("ignores a current turn that read back at least half of the previous prefix", () => {
 		expect(
 			detectCacheInvalidation(
 				usage({ cacheRead: 9000 }),
-				usage({ cacheRead: 10, cacheWrite: 9000 }),
+				usage({ cacheRead: 4500, cacheWrite: 9000 }),
 			),
 		).toBeUndefined();
+	});
+
+	test("flags an idle gap where only the shared system block stayed cached", () => {
+		const prev = usage({ cacheRead: 200_000 });
+		const cur = usage({ cacheRead: 15_000, cacheWrite: 190_000, input: 50 });
+		expect(detectCacheInvalidation(prev, cur)).toBe(190_050);
+	});
+
+	test("flags a turn that read just under half of the previous prefix", () => {
+		expect(
+			detectCacheInvalidation(
+				usage({ cacheRead: 9000 }),
+				usage({ cacheRead: 4499, cacheWrite: 9000 }),
+			),
+		).toBe(9000);
 	});
 
 	test("no previous turn means no invalidation", () => {

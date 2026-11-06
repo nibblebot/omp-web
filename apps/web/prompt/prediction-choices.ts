@@ -1,7 +1,7 @@
 /**
  * Next-message prediction rules shared by the composer's ghost text: which of the ranked
  * predictions the draft follows, when the `⇥ N more` hint shows, and the alternatives list's
- * keys. Mirrors pi-tui's `Editor.predictions` (SDK 18.16.0) so the web and the TUI agree.
+ * keys. Mirrors pi-tui's `Editor.predictions` (SDK 18.17.0) so the web and the TUI agree.
  * Everything here is pure; the caret-at-end gate is the caller's. Predictions are single lines,
  * so a draft with a line break never matches one.
  */

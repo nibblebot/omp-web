@@ -12,6 +12,7 @@ import { reconnectMcpManagerServer } from "@oh-my-pi/pi-coding-agent/mcp/oauth-r
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { AgentSessionHandle } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
 	SKILL_PROMPT_MESSAGE_TYPE,
@@ -81,7 +82,11 @@ export interface CollabSession {
 	buildCollabPort(entry: SessionEntry): CollabSessionPort;
 	buildSlashRuntime(entry: SessionEntry): SlashCommandRuntime;
 	toWireStatus(status: CollabHostStatus | null): CollabWireStatus;
-	liveSubagentSession(entry: SessionEntry, agentId: string, op: "steer" | "abort"): AgentSession;
+	liveSubagentSession(
+		entry: SessionEntry,
+		agentId: string,
+		op: "steer" | "abort",
+	): AgentSessionHandle;
 	abortSubagent(entry: SessionEntry, agentId: string): Promise<void>;
 	fireAndForgetPrompt(
 		entry: SessionEntry,
@@ -593,7 +598,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		entry: SessionEntry,
 		agentId: string,
 		op: "steer" | "abort",
-	): AgentSession {
+	): AgentSessionHandle {
 		if (!entry.subagentSnapshots.has(agentId))
 			throw new Error(`Cannot ${op} agent ${agentId}: no such agent`);
 		const ref = AgentRegistry.global().get(agentId);

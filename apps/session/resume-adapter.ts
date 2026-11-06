@@ -6,7 +6,7 @@
  * calls {@link createResumeHandlers}; the fleet edge, protocol, state and web
  * prompt command table are NEVER touched here.
  *
- * SDK reuse (installed @oh-my-pi/pi-coding-agent 18.16.0; revalidate on bump):
+ * SDK reuse (installed @oh-my-pi/pi-coding-agent 18.17.0; revalidate on bump):
  * - session/session-listing.ts: `listSessionsForPicker` and
  *   `listAllSessionsForPicker` (the picker's two-pass listing: history.db-
  *   titled rows at once, then the full scan with empties dropped and pins
@@ -20,8 +20,9 @@
  *   fileSessionId-after-last-underscore) instead of inventing a second one.
  * - session/session-storage.ts: `FileSessionStorage` (the only storage that
  *   reads and writes history.db).
- * - session/session-pins.ts: `loadPinnedSessionIds` / `toggleSessionPin`
- *   (cross-process file lock, atomic replace; server-owned file, durable
+ * - session/session-pins.ts: `loadPinnedSessionIds` / `toggleSessionPin` /
+ *   `unpinSession` (the atomic, idempotent unpin used on session delete;
+ *   cross-process file lock, atomic replace; server-owned file, durable
  *   across restart) + `sortPinnedFirst` (stable pinned-first; unknown ids
  *   no-op).
  * - session/session-paths.ts: `computeDefaultSessionDir` (canonical
@@ -50,6 +51,7 @@ import {
 	loadPinnedSessionIds,
 	sortPinnedFirst,
 	toggleSessionPin,
+	unpinSession,
 } from "@oh-my-pi/pi-coding-agent/session/session-pins";
 import { computeDefaultSessionDir } from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
@@ -499,9 +501,7 @@ export function createResumeHandlers(ctx: ResumeContext): ResumeHandlers {
 			...(entry !== undefined ? { attached: entry } : {}),
 			...(ctx.lifecycleMirror !== undefined ? { mirror: ctx.lifecycleMirror } : {}),
 			unpin: async (sessionId) => {
-				if ((await loadPinnedSessionIds(ctx.agentDir)).has(sessionId)) {
-					await toggleResumePin(sessionId, ctx.agentDir);
-				}
+				await unpinSession(sessionId, ctx.agentDir);
 			},
 		};
 	}

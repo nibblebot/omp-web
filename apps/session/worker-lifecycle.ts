@@ -1,6 +1,7 @@
 // Same-ID lifecycle operations; the SDK owns adoption and coalesced transitions.
 import { stat } from "node:fs/promises";
 import {
+	type AgentLifecycleApi,
 	AgentLifecycleManager,
 	type PersistedSubagentReviverFactory,
 } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
@@ -73,7 +74,7 @@ export interface WorkerLifecycleResult {
 }
 const revivers = new WeakMap<SessionEntry, PersistedSubagentReviverFactory>();
 const owners = new Set<SessionEntry>();
-let installedManager: AgentLifecycleManager | undefined;
+let installedManager: AgentLifecycleApi | undefined;
 
 /**
  * Task subagents register in AgentRegistry.global(); the session's private registry holds only Main.

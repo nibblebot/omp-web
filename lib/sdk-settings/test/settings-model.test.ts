@@ -9,6 +9,7 @@ import {
 	plainDescription,
 	settingChanged,
 	settingValuePaths,
+	settingView,
 	type SettingsSession,
 } from "#lib/sdk-settings/settings-model";
 import { MAX_SETTING_VALUE_PATHS } from "#lib/wire/protocol";
@@ -388,5 +389,39 @@ describe("getSettings paths option", () => {
 		expect(() =>
 			settingValuePaths({ paths: Array.from({ length: MAX_SETTING_VALUE_PATHS + 1 }, () => "a") }),
 		).toThrow("paths");
+	});
+});
+
+describe("settingView env var precedence", () => {
+	// SDK 18.17.0 ranks a runtime override over a setting's env var, and the env var over settings
+	// files. The web panel reads the layered value (it never consults the env var), so the layer
+	// that wins among files and overrides is what it reports, with or without an env var.
+	const motion = "tui.motion";
+	const envName = "PI_MOTION";
+	const saved = Bun.env[envName];
+	afterEach(() => {
+		if (saved === undefined) delete Bun.env[envName];
+		else Bun.env[envName] = saved;
+	});
+
+	test("a runtime override reports as the winner while the env var is set", () => {
+		Bun.env[envName] = "none";
+		const scope = Settings.isolated({ [motion]: "full" });
+		const view = settingView(motion, scope);
+		expect(lookup(motion)!.get(scope)).toBe("full");
+		expect(view.effective).toBe("full");
+		expect(view.source).toBe("runtime");
+	});
+
+	test("an env var does not change the reported value or layer of a file-level setting", () => {
+		Bun.env[envName] = "none";
+		const scope = Settings.isolated();
+		expect(settingView(motion, scope).source).toBe("default");
+		expect(settingView(motion, scope).effective).toBe("full");
+		lookup(motion)!.set(scope, "reduced");
+		const view = settingView(motion, scope);
+		expect(view.source).toBe("global");
+		expect(view.effective).toBe("reduced");
+		expect(lookup(motion)!.get(scope)).toBe("none");
 	});
 });
