@@ -85,8 +85,10 @@ import {
 	todoItemsTool,
 	todoSnapshotTool,
 	waitSettledTool,
+	webSearchAllFailedTool,
 	webSearchDoneTool,
 	webSearchErrorTool,
+	webSearchFailuresTool,
 	webSearchFallbackNoteTool,
 	webSearchNoLinksTool,
 	webSearchRunningTool,
@@ -623,6 +625,18 @@ const stories: Story[] = [
 			{
 				name: "Provider rate limit",
 				render: () => <WebSearchToolCard item={webSearchErrorTool} />,
+			},
+			{
+				name: "Failed providers",
+				description:
+					"`details.failures` list each provider that failed: a count in the header, a warning row per provider with its HTTP status when it had one.",
+				render: () => <WebSearchToolCard item={webSearchFailuresTool} />,
+			},
+			{
+				name: "All providers failed",
+				description:
+					"With failures recorded, an error result keeps its own card: the error text plus the failed providers.",
+				render: () => <WebSearchToolCard item={webSearchAllFailedTool} />,
 			},
 		],
 	}),

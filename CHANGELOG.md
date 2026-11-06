@@ -8,6 +8,7 @@
 - Compaction (SDK 18.14.1 queueable compaction): `/compact` sent with the follow-up key (Ctrl+Enter) while the agent works queues as a chip and runs when the turn yields, instead of interrupting it. Follow-ups sent after it run after it; removing the chip cancels it, Stop pauses it with the rest of the queue, and plain Enter still compacts at once.
 - Replies (SDK 18.14.2 `out://` replies): text the model sends through `out://` shows as prose, on by default as in the TUI. A bash or eval call's replies follow its card, live and after a reload, and a write to `out://` draws as a reply instead of a Write card. The `out.enabled` setting now appears under Tools, Available Tools; any value you set wins over the web default.
 - Bash cards (SDK 18.16.0): a bash result the output minimizer rewrote shows a `Minimized: git 120.4KB → 3.2KB` line under its output, naming the filter that ran and the bytes before and after, live and after a reload.
+- Web search cards (SDK 18.17.0): when search providers failed before one answered, the card header shows `N failed` and the open card lists each failed provider with its HTTP status (when known) and reason in a warning box. A search where every provider failed keeps its own card with the error text and the same list.
 
 ### Maintenance & other
 - Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.17.0.

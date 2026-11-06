@@ -1612,6 +1612,53 @@ export const webSearchErrorTool: ToolItem = tool(
 	searchArgs,
 	"Search provider returned 429 Too Many Requests.",
 );
+/** WebSearchToolCard: two providers failed (one with an HTTP status, one without) before a third answered. */
+export const webSearchFailuresTool: ToolItem = {
+	...tool(
+		"web_search",
+		"done",
+		searchArgs,
+		lines(
+			"Note: answered by Exa after Brave failed (Brave search request failed: 429) and Tavily failed (request timed out after 60s)",
+			"Solid store reconcile: https://docs.solidjs.com/reference/store-utilities/reconcile",
+			"Keyed lists and For: https://docs.solidjs.com/reference/components/for",
+		),
+	),
+	details: {
+		response: { provider: "exa", sources: [] },
+		failures: [
+			{
+				provider: "brave",
+				label: "Brave",
+				reason: "Brave search request failed: 429",
+				status: 429,
+			},
+			{ provider: "tavily", label: "Tavily", reason: "request timed out after 60s" },
+		],
+	},
+};
+/** WebSearchToolCard: every provider failed; the card keeps the error text and lists each failure. */
+export const webSearchAllFailedTool: ToolItem = {
+	...tool(
+		"web_search",
+		"error",
+		searchArgs,
+		"Error: All web search providers failed: brave: Brave search request failed: 401; tavily: no API key configured",
+	),
+	details: {
+		response: { provider: "brave", sources: [] },
+		error: "All web search providers failed",
+		failures: [
+			{
+				provider: "brave",
+				label: "Brave",
+				reason: "Brave search request failed: 401",
+				status: 401,
+			},
+			{ provider: "tavily", label: "Tavily", reason: "no API key configured" },
+		],
+	},
+};
 
 // diff extras
 /** DiffToolCard: edit with two hunks in one call. */

@@ -3,7 +3,11 @@
  * card must not list those as results.
  */
 import { describe, expect, test } from "bun:test";
-import { searchResultUrls, splitSearchNotes } from "../../components/chat/tools/WebSearchToolCard";
+import {
+	searchFailures,
+	searchResultUrls,
+	splitSearchNotes,
+} from "../../components/chat/tools/WebSearchToolCard";
 
 const OUTPUT = [
 	"Note: answered by Exa after Brave failed (request to https://api.brave.example/search returned 429)",
@@ -40,5 +44,50 @@ describe("searchResultUrls", () => {
 		expect(
 			searchResultUrls("Note: answered by Exa after Brave failed (https://x.example)"),
 		).toEqual([]);
+	});
+});
+
+describe("searchFailures", () => {
+	test("reads each failed provider with its reason and optional status", () => {
+		expect(
+			searchFailures({
+				response: { provider: "exa", sources: [] },
+				failures: [
+					{ provider: "brave", label: "Brave", reason: "request failed: 429", status: 429 },
+					{ provider: "tavily", label: "Tavily", reason: "timed out" },
+				],
+			}),
+		).toEqual([
+			{ label: "Brave", reason: "request failed: 429", status: 429 },
+			{ label: "Tavily", reason: "timed out" },
+		]);
+	});
+
+	test("a result without failures yields none", () => {
+		expect(searchFailures(undefined)).toEqual([]);
+		expect(searchFailures({ response: {} })).toEqual([]);
+		expect(searchFailures({ failures: [] })).toEqual([]);
+	});
+
+	test("malformed details are ignored", () => {
+		expect(searchFailures(null)).toEqual([]);
+		expect(searchFailures("failures")).toEqual([]);
+		expect(searchFailures({ failures: "brave" })).toEqual([]);
+		expect(searchFailures({ failures: { provider: "brave" } })).toEqual([]);
+		expect(
+			searchFailures({
+				failures: [
+					null,
+					7,
+					{ reason: "no provider name" },
+					{ provider: "", label: " ", reason: "blank" },
+					{ provider: "brave", reason: 5, status: "429" },
+					{ provider: "exa", label: "Exa", reason: " down ", status: 1.5 },
+				],
+			}),
+		).toEqual([
+			{ label: "brave", reason: "" },
+			{ label: "Exa", reason: "down" },
+		]);
 	});
 });
