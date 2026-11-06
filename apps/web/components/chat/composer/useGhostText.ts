@@ -90,6 +90,13 @@ function sendWordFeedback(ghost: WordGhost, accepted: boolean): void {
 	);
 }
 
+/** Best-effort report to the session's prediction metrics; no UI depends on it. */
+function reportPrediction(method: "predictionShown" | "predictionAccepted", args: number[]): void {
+	void call(method, args).catch(() => {
+		// Metrics are advisory: a lost report only undercounts.
+	});
+}
+
 /** Reads `{suffix}` from an RPC reply without trusting its shape. */
 function suffixOf(reply: unknown): string {
 	const suffix = (reply as { suffix?: unknown } | null)?.suffix;
@@ -123,6 +130,8 @@ export function useGhostText(
 	let wordSeq = 0;
 	// Bumped whenever an in-flight `predictNextMessage` answer stops being wanted.
 	let predictSeq = 0;
+	// Whether the current predictions have been reported as shown; once per `predictNextMessage` answer.
+	let shownReported = false;
 
 	const refreshCaret = (): void => {
 		const ta = getTextarea();
@@ -141,6 +150,14 @@ export function useGhostText(
 	);
 	// A prediction, its hint or its open list owns the overlay: no word suggestion is asked for or drawn.
 	const predicting = createMemo(() => prediction() !== null || hint() !== "" || open());
+
+	// The first time the ghost or the `⇥ N more` hint is on screen, the session's metrics count the
+	// prediction as shown.
+	createEffect(() => {
+		if ((prediction() === null && hint() === "") || shownReported) return;
+		shownReported = true;
+		reportPrediction("predictionShown", []);
+	});
 
 	const text = (): string => {
 		if (!caretEnd() || predicting()) return prediction()?.suffix ?? "";
@@ -179,6 +196,7 @@ export function useGhostText(
 
 	const retire = (): void => {
 		predictSeq++;
+		shownReported = false;
 		setChoices([]);
 		setInserted(null);
 		setListOpen(false);
@@ -197,7 +215,10 @@ export function useGhostText(
 				void call("predictNextMessage", [], NEXT_TIMEOUT_MS)
 					.then((reply) => {
 						const predicted = predictionChoicesOf(reply);
-						if (seq === predictSeq && predicted.length > 0) setChoices(predicted);
+						if (seq === predictSeq && predicted.length > 0) {
+							shownReported = false;
+							setChoices(predicted);
+						}
 					})
 					.catch(() => {
 						// Advisory: a failed prediction shows no ghost text.
@@ -235,6 +256,7 @@ export function useGhostText(
 		if (next) {
 			const line = draft + next.suffix;
 			setInserted(line);
+			reportPrediction("predictionAccepted", [next.index]);
 			setMessage(line);
 			return true;
 		}
@@ -266,6 +288,7 @@ export function useGhostText(
 		// Picking the line already in the buffer changes nothing.
 		if (line === undefined || line === message()) return;
 		setInserted(line);
+		reportPrediction("predictionAccepted", [index]);
 		setMessage(line);
 		requestAnimationFrame(() => {
 			const ta = getTextarea();

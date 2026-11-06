@@ -108,6 +108,8 @@ function predictionsSeed(): void {
 	answerCalls({
 		predictWord: () => ({ suffix: "" }),
 		predictNextMessage: () => ({ text: screenPredictions[0], choices: screenPredictions }),
+		predictionShown: () => ({}),
+		predictionAccepted: () => ({}),
 	});
 }
 

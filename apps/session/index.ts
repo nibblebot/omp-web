@@ -34,6 +34,7 @@ import {
 	OMP_SESSION_EXIT_RESUME_FAILED,
 	OMP_SESSION_EXIT_SESSION_LOCKED,
 	OMP_SESSION_PREFIX,
+	SESSION_REPLACING_METHODS,
 	CLIENT_BACKPRESSURE_BYTES,
 	DELTA_SEQ_START,
 	type StdoutContractLine,
@@ -78,6 +79,7 @@ import { chooseRelayUrl, decideAutoStart } from "./collab-policy";
 import { createCollabSession } from "./collab-session";
 import { createDaemonBroker } from "./daemon-broker";
 import { gitCapability } from "./capabilities";
+import { retireComposerPrediction } from "./composer-methods";
 import { createWebMethods } from "./methods";
 import { BOOT_HANDLE, type SessionEntry } from "./session-entry";
 import { createSessionChangeGate } from "./session-change-gate";
@@ -691,6 +693,9 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				// Own-property lookup: an inherited name (`constructor`, `toString`) is not a method.
 				const method = Object.hasOwn(METHODS, cmd.method) ? METHODS[cmd.method] : undefined;
 				if (!method) throw new Error(`Unknown method: ${cmd.method}`);
+				// A replaced session ends the composer prediction made for the old one, as in the TUI.
+				if (SESSION_REPLACING_METHODS.some((replacing) => replacing === cmd.method))
+					retireComposerPrediction(entry);
 				await sessionChangeGate.track(cmd.method, async () => {
 					const result =
 						cmd.method === "login"

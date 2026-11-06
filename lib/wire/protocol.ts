@@ -849,6 +849,8 @@ export type WebMethodName =
 	| "predictWord"
 	| "predictWordFeedback"
 	| "predictNextMessage"
+	| "predictionShown"
+	| "predictionAccepted"
 	| "getSessionStats"
 	// Settings panel (TUI /settings parity)
 	| "getSettings"
@@ -1024,6 +1026,14 @@ export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> =
 	getToolSchemas: true,
 	predictWord: true,
 	predictWordFeedback: true,
+	// Prediction metrics feedback for the live `predictNextMessage` prediction; neither changes session
+	// state, so neither broadcasts one. `predictionShown` takes no args (the composer painted the ghost or
+	// the `⇥ N more` hint for the first time); `predictionAccepted` takes `[rank]`, a non-negative integer,
+	// the alternative Tab, Right or the list inserted. Both answer `{}` and do nothing without a live
+	// prediction; the prediction retires when the next turn or compaction starts, the session changes,
+	// or a new `predictNextMessage` asks.
+	predictionShown: true,
+	predictionAccepted: true,
 };
 
 /**

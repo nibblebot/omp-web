@@ -314,6 +314,8 @@ function sessionCalls(): CallHandlers {
 			text: screenPredictions[0]!,
 			choices: [...screenPredictions],
 		}),
+		predictionShown: () => ({}),
+		predictionAccepted: () => ({}),
 	};
 }
 
