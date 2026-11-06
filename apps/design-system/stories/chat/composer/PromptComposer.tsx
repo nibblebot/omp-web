@@ -6,6 +6,7 @@ import { useGhostText } from "../../../../web/components/chat/composer/useGhostT
 import { usePromptAutocomplete } from "../../../../web/components/chat/composer/usePromptAutocomplete";
 import { setState } from "../../../../web/state";
 import { screenPredictions } from "../../../fixtures/composer";
+import { browserEntries } from "../../../fixtures/models";
 import {
 	screenDraft,
 	screenImage,
@@ -113,6 +114,21 @@ function predictionsSeed(): void {
 	});
 }
 
+/** The session answers `getModelBrowser`, which the `^` completion loads when a model token opens. */
+function modelCatalogSeed(): void {
+	answerCalls({ getModelBrowser: () => browserEntries });
+}
+
+/** Same catalog with a model scope set: only anthropic rows carry the `scoped` marker. */
+function scopedModelCatalogSeed(): void {
+	answerCalls({
+		getModelBrowser: () =>
+			browserEntries.map((entry) =>
+				entry.provider === "anthropic" ? { ...entry, scoped: true as const } : entry,
+			),
+	});
+}
+
 export default defineStory({
 	id: "chat-composer-prompt-composer",
 	title: "PromptComposer",
@@ -131,6 +147,29 @@ export default defineStory({
 			name: "Slash command picker",
 			description: "Typing /mo opens the command completions above the textarea.",
 			render: () => <ComposerHarness initialText="/mo" lift />,
+		},
+		{
+			name: "Model mention picker",
+			description:
+				"Typing ^ lists the session's usable chat models, ranked like the model picker; locked and non-chat models are left out. Accepting a row inserts ^provider/model.",
+			seed: modelCatalogSeed,
+			render: () => <ComposerHarness initialText="Review this with ^" lift />,
+		},
+		{
+			name: "Model mention effort levels",
+			description:
+				"After ^provider/model: the popup lists the efforts that model supports (here claude-opus-5-5: low to xhigh). Accepting a row inserts ^provider/model:level, which sets the tagged subagent's effort.",
+			seed: modelCatalogSeed,
+			render: () => (
+				<ComposerHarness initialText="Review this with ^anthropic/claude-opus-5-5:" lift />
+			),
+		},
+		{
+			name: "Model mention in a model scope",
+			description:
+				"The session was started with a model scope (enabledModels or --models), so ^ lists only the scoped models (here the anthropic ones), as the terminal does.",
+			seed: scopedModelCatalogSeed,
+			render: () => <ComposerHarness initialText="Review this with ^" lift />,
 		},
 		{
 			name: "Folded large paste",

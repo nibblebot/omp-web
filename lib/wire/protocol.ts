@@ -32,6 +32,8 @@ export type ModelBrowserEntry = Pick<Model, "provider" | "id" | "contextWindow" 
 	locked?: ModelLockReason;
 	/** Concrete thinking efforts the model supports, SDK order; absent when the model does not reason. */
 	thinkingEfforts?: string[];
+	/** Present (true) only when the session has a model scope and this row is in it; the `^` completion follows the scope. */
+	scoped?: true;
 };
 
 /** Settings layer that owns a model preset's effective definition. */

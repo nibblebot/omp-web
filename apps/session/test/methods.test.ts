@@ -236,6 +236,7 @@ describe("getModelBrowser", () => {
 		const entry = {
 			session: {
 				settings: Settings.isolated(),
+				scopedModels: [],
 				modelRegistry: {
 					awaitBackgroundRefresh: async () => {},
 					getAll: () => [usable, locked],
@@ -248,6 +249,33 @@ describe("getModelBrowser", () => {
 		>;
 		expect(rows[0]).not.toHaveProperty("locked");
 		expect(rows[1]!.locked).toBe("credentials");
+	});
+
+	test("marks only in-scope rows when the session has a model scope", async () => {
+		const inScope = { provider: "anthropic", id: "opus", contextWindow: 1, reasoning: true };
+		const outOfScope = { provider: "openai", id: "gpt", contextWindow: 1, reasoning: false };
+		const registry = {
+			awaitBackgroundRefresh: async () => {},
+			getAll: () => [inScope, outOfScope],
+			getAvailable: () => [inScope, outOfScope],
+		};
+		const entryWith = (scopedModels: unknown[]) =>
+			({
+				session: { settings: Settings.isolated(), scopedModels, modelRegistry: registry },
+			}) as unknown as SessionEntry;
+
+		const scoped = (await methodsTable().getModelBrowser!(
+			entryWith([{ model: inScope }]),
+			[],
+		)) as Array<Record<string, unknown>>;
+		expect(scoped[0]!.scoped).toBe(true);
+		expect(scoped[1]).not.toHaveProperty("scoped");
+
+		const unscoped = (await methodsTable().getModelBrowser!(entryWith([]), [])) as Array<
+			Record<string, unknown>
+		>;
+		expect(unscoped[0]).not.toHaveProperty("scoped");
+		expect(unscoped[1]).not.toHaveProperty("scoped");
 	});
 
 	test("carries each row's kind and marks a keyed non-chat model usable", async () => {
@@ -263,6 +291,7 @@ describe("getModelBrowser", () => {
 		const entry = {
 			session: {
 				settings: Settings.isolated(),
+				scopedModels: [],
 				modelRegistry: {
 					awaitBackgroundRefresh: async () => {},
 					getAll: () => [chat, search],
@@ -297,6 +326,7 @@ describe("getModelBrowser", () => {
 		const entry = {
 			session: {
 				settings: Settings.isolated(),
+				scopedModels: [],
 				modelRegistry: {
 					awaitBackgroundRefresh: async () => {},
 					getAll: () => registry,
@@ -331,6 +361,7 @@ describe("getModelBrowser thinkingEfforts", () => {
 		const entry = {
 			session: {
 				settings: Settings.isolated(),
+				scopedModels: [],
 				modelRegistry: {
 					awaitBackgroundRefresh: async () => {},
 					getAll: () => [reasoning, plain, stale],
@@ -359,6 +390,7 @@ describe("getModelBrowser thinkingEfforts", () => {
 		const entry = {
 			session: {
 				settings,
+				scopedModels: [],
 				getAvailableModels: () => [model],
 				setModel: async () => ({ switched: true }),
 				setThinkingLevel: () => {},

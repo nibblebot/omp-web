@@ -3,9 +3,9 @@
  * suppression, and fuzzy ranking (exact > startsWith > subsequence).
  */
 
-/** `emoji` is the `:name` shortcode token (emoji.ts), completed outside `/` and `@` tokens. */
+/** `emoji` is the `:name` shortcode token (emoji.ts), completed outside `/`, `@` and `^` tokens. `model` is a `^provider/model[:effort]` subagent tag (model-mention.ts). */
 export type AcToken = {
-	mode: "slash" | "file" | "emoji";
+	mode: "slash" | "file" | "emoji" | "model";
 	query: string;
 	start: number;
 	end: number;
@@ -24,13 +24,14 @@ export function fenceOpen(text: string): boolean {
 
 /**
  * The completable token at the caret: `/…` only at position 0 (slash
- * commands), `@…` after start/whitespace (file mentions). Null when the
- * caret is mid-word on an ordinary token or inside a fenced code block.
+ * commands), `@…` and `^…` after start/whitespace (file and model
+ * mentions). Null when the caret is mid-word on an ordinary token or inside
+ * a fenced code block.
  */
 export function currentToken(text: string, caret: number): AcToken | null {
 	const before = text.slice(0, caret);
 	if (fenceOpen(before)) return null;
-	const m = /(?:^|\s)([/@]\S*)$/.exec(before);
+	const m = /(?:^|\s)([/@^]\S*)$/.exec(before);
 	if (!m) return null;
 	const token = m[1];
 	const start = caret - token.length;
@@ -38,6 +39,7 @@ export function currentToken(text: string, caret: number): AcToken | null {
 		if (start !== 0) return null;
 		return { mode: "slash", query: token.slice(1), start, end: caret };
 	}
+	if (token.startsWith("^")) return { mode: "model", query: token.slice(1), start, end: caret };
 	return { mode: "file", query: token.slice(1), start, end: caret };
 }
 

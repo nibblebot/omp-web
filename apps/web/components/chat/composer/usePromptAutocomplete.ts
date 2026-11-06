@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, type Accessor, type Setter } from "solid-js";
+import { createEffect, createMemo, createSignal, on, type Accessor, type Setter } from "solid-js";
 import {
 	currentToken,
 	fenceOpen,
@@ -16,6 +16,8 @@ import {
 import { listFiles, state } from "../../../state";
 import { settingValue } from "../../../store/settings";
 import { commandLiveState, rankCommands } from "../../../prompt/command-registry";
+import { modelMentionRows } from "../../../prompt/model-mention";
+import { loadModelBrowser, recentModels } from "../../../store/models";
 import type { AcItem } from "./AutocompletePopup";
 
 /** SDK default for `autocompleteMaxVisible`; the TUI editor clamps to 3..20. */
@@ -107,6 +109,18 @@ export function usePromptAutocomplete(
 		}, 150);
 	});
 
+	// `^` model completions read the browser catalog, which only the Models dialog
+	// loads: fetch it once when a model token opens. Keyed on the mode flip, not the
+	// catalog, so a failed load (which leaves it empty) is not retried every keystroke.
+	createEffect(
+		on(
+			() => token()?.mode === "model",
+			(modelToken) => {
+				if (modelToken && (state.modelBrowser ?? []).length === 0) void loadModelBrowser();
+			},
+		),
+	);
+
 	// Ranked completion list, memoized on its real inputs (completion token /
 	// query signal, file results, emoji table readiness, and the remote command
 	// list) so the fuzzyRank pass over every command runs once per change, not
@@ -124,6 +138,13 @@ export function usePromptAutocomplete(
 			return files().map((f) => ({
 				label: `@${f}`,
 				apply: f.includes(" ") ? `@"${f}" ` : `@${f} `,
+			}));
+		}
+		if (t.mode === "model") {
+			return modelMentionRows(t.query, state.modelBrowser ?? [], recentModels()).map((row) => ({
+				label: `^${row.value}`,
+				detail: row.detail,
+				apply: `^${row.value} `,
 			}));
 		}
 		return rankCommands(currentCommandRegistry(), t.query, commandUsage(), fuzzyRank).map(

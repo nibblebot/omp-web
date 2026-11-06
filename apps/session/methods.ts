@@ -762,6 +762,10 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 				session.modelRegistry.getAvailable("all").map((model) => `${model.provider}/${model.id}`),
 			);
 			const disabled = disabledProviderIds(session.settings);
+			// Same scope `switchModel` and the SDK's `^` mention resolution use; empty = unscoped, no row is marked.
+			const scope = new Set(
+				session.scopedModels.map(({ model }) => `${model.provider}/${model.id}`),
+			);
 			return session.modelRegistry.getAll().map((model) => {
 				const { provider, id, contextWindow, reasoning } = model;
 				const locked: ModelLockReason | undefined = disabled.has(provider)
@@ -779,6 +783,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 					kind: modelKind(model),
 					...(thinkingEfforts.length > 0 ? { thinkingEfforts: [...thinkingEfforts] } : {}),
 					...(locked ? { locked } : {}),
+					...(scope.has(`${provider}/${id}`) ? { scoped: true as const } : {}),
 				};
 			});
 		},

@@ -142,7 +142,13 @@ export const PromptBox: Component = () => {
 				const t = ac.token();
 				// Exact match typed out: Enter submits. A partial command that takes no
 				// arguments runs in one press (CMD-16); the rest complete first.
-				if (sel && t && sel.label !== `/${t.query}` && sel.label !== `@${t.query}`) {
+				if (
+					sel &&
+					t &&
+					sel.label !== `/${t.query}` &&
+					sel.label !== `@${t.query}` &&
+					sel.label !== `^${t.query}`
+				) {
 					e.preventDefault();
 					if (sel.label.startsWith("/") && !sel.hint) {
 						setMessage(sel.apply.trimEnd());
