@@ -329,6 +329,8 @@ function primingFrames(
 	entry: SessionEntry,
 	commands: AvailableSlashCommand[] | null,
 ): Array<ServerFrame> {
+	// Read once: the stats compute the context figure the state frame carries too.
+	const stats = entry.session.getSessionStats();
 	return [
 		{
 			type: "hello_ok",
@@ -344,8 +346,8 @@ function primingFrames(
 		...streamingPrimeFrames(entry),
 		{
 			type: "state",
-			state: daemonBroker.buildStateSnapshot(entry),
-			stats: entry.session.getSessionStats(),
+			state: daemonBroker.buildStateSnapshot(entry, stats),
+			stats,
 		},
 		// A dialog still open must reach a client that attaches after it was sent.
 		...pendingUiRequestFrames(entry),
@@ -1459,10 +1461,11 @@ if (config.callbackUrl !== undefined) {
 					// the fleet's recorded lastSessionFile.
 					const entry = bootEntry;
 					if (sessionControl !== null && entry !== null) {
+						const stats = entry.session.getSessionStats();
 						sessionControl.publish("control", {
 							type: "state",
-							state: daemonBroker.buildStateSnapshot(entry),
-							stats: entry.session.getSessionStats(),
+							state: daemonBroker.buildStateSnapshot(entry, stats),
+							stats,
 						});
 					}
 				} else if (status.state !== "stopped") armControlGrace();

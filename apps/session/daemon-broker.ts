@@ -14,6 +14,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/launch/client";
 import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import { cfgTaskAgentModelOverrides } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
@@ -66,7 +67,11 @@ export interface DaemonBrokerDeps {
 }
 
 export interface DaemonBroker {
-	buildStateSnapshot(entry: SessionEntry): WebSessionState;
+	/**
+	 * `stats`, when the caller already read `getSessionStats()` for the same frame, supplies the
+	 * context figure: that call computes it, so reading it again would recount the history.
+	 */
+	buildStateSnapshot(entry: SessionEntry, stats?: SessionStats): WebSessionState;
 	broadcastState(entry: SessionEntry, withStats?: boolean): Promise<void>;
 	broadcastAvailableCommands(entry: SessionEntry): Promise<void>;
 	daemonInfoWithEndpoint(
@@ -174,7 +179,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 		}));
 	}
 
-	function buildStateSnapshot(entry: SessionEntry): WebSessionState {
+	function buildStateSnapshot(entry: SessionEntry, stats?: SessionStats): WebSessionState {
 		const session = entry.session;
 		const presetNames = getModelPresetNames(session.settings);
 		const taskOverride = cfgTaskAgentModelOverrides.get(session.settings).task;
@@ -213,7 +218,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 				entry.pausedQueue.length +
 				(entry.queuedCommands.paused ? entry.queuedCommands.commands.length : 0),
 			todoPhases: session.getTodoPhases(),
-			contextUsage: session.getContextUsage(),
+			contextUsage: stats ? stats.contextUsage : session.getContextUsage(),
 			// Phase 9: cheap sync getters, refreshed on every state broadcast.
 			goalModeState: session.getGoalModeState(),
 			planModeEnabled: session.getPlanModeState()?.enabled ?? false,
@@ -228,7 +233,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 
 	async function broadcastState(entry: SessionEntry, withStats = false): Promise<void> {
 		const stats = withStats ? entry.session.getSessionStats() : undefined;
-		broadcastTo(entry.handle, { type: "state", state: buildStateSnapshot(entry), stats });
+		broadcastTo(entry.handle, { type: "state", state: buildStateSnapshot(entry, stats), stats });
 	}
 
 	async function broadcastAvailableCommands(entry: SessionEntry): Promise<void> {
