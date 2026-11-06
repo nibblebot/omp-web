@@ -1,6 +1,6 @@
 /**
  * What one `wait` tool call's `details` give its card: the watched jobs (id,
- * type, status, label, run time, a subagent's stage and completion estimate),
+ * type, status, label, the intent the model gave it, run time, a subagent's stage and completion estimate),
  * each job's widget, running agents with no job row, and whether the call was
  * cut short or consumed a peer message. The SDK's `CoordinationDetails`
  * (pi-tui tools/wait.ts) also carries each job's result text, which is not
@@ -102,8 +102,23 @@ export function waitCounts(jobs: readonly WireWaitJob[]): Record<WireWaitJob["st
 	return counts;
 }
 
-/** A row's title: a subagent goes by its id, any other job by the first line of what it runs. */
+/** The first line of a job's text, trimmed. */
+function firstLine(text: string | undefined): string {
+	return text?.split(/\r?\n/, 1)[0]?.trim() ?? "";
+}
+
+/** A row's raw label: the first line of the command or task description the job runs. */
+export function jobLabel(job: WireWaitJob): string {
+	return firstLine(job.label);
+}
+
+/**
+ * A row's title: the purpose the model gave the job (SDK 18.17.0 `intent`), else a
+ * subagent's id, else the first line of what the job runs.
+ */
 export function jobTitle(job: WireWaitJob): string {
+	const intent = firstLine(job.intent);
+	if (intent !== "") return intent;
 	if (job.type === "task") return job.id;
-	return job.label.split(/\r?\n/, 1)[0]?.trim() || job.id;
+	return jobLabel(job) || job.id;
 }

@@ -120,6 +120,16 @@ describe("slimWaitJobs", () => {
 		]);
 	});
 
+	test("keeps the intent trimmed and bounded; a blank or non-string intent is dropped", () => {
+		const intentOf = (intent: unknown) => slimWaitJobs({ jobs: [{ ...job, intent }] })?.jobs[0];
+		expect(intentOf("  Watch the build  ")?.intent).toBe("Watch the build");
+		const long = intentOf("x".repeat(LIVE_TEXT_CHARS + 50))?.intent;
+		expect(long?.length).toBe(LIVE_TEXT_CHARS);
+		expect(intentOf("   ")).not.toHaveProperty("intent");
+		expect(intentOf(7)).not.toHaveProperty("intent");
+		expect(slimWaitJobs({ jobs: [job] })?.jobs[0]).not.toHaveProperty("intent");
+	});
+
 	test("is undefined without a usable job", () => {
 		expect(slimWaitJobs({ jobs: [] })).toBeUndefined();
 		expect(slimWaitJobs({ op: "wait" })).toBeUndefined();
@@ -140,6 +150,11 @@ describe("toolLiveOf and sameToolLive", () => {
 		expect(sameToolLive(at(1_000, "x"), at(2_500, "x"))).toBe(true);
 		expect(sameToolLive(at(1_000, "x"), at(1_000, "y"))).toBe(false);
 		expect(sameToolLive(undefined, at(0, "x"))).toBe(false);
+		const intent = (text: string) =>
+			slimWaitJobs({
+				jobs: [{ id: "a", type: "bash", status: "running", label: "l", intent: text }],
+			});
+		expect(sameToolLive(intent("a"), intent("b"))).toBe(false);
 		expect(sameToolLive(undefined, undefined)).toBe(true);
 	});
 });

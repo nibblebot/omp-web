@@ -1,3 +1,4 @@
+import type { ToolItem } from "../../../../web/state";
 import { WaitToolCard } from "../../../../web/components/chat/tools/WaitToolCard";
 import { answerCalls } from "../../../session";
 import { seedJobWidgets, benchEntry } from "../../../fixtures/job-widget-entries";
@@ -13,6 +14,23 @@ import {
 	waitSettledTool,
 } from "../../../fixtures/tools";
 import { defineStory } from "../../../registry";
+
+/** The settled wait with SDK 18.17.0 intents: the first three jobs say what they are for, the cancelled subagent has none. */
+const INTENTS: Record<string, string> = {
+	bg_3: "Build the web bundle before the benchmark",
+	bg_4: "Run the store tests after the outbox change",
+	TraceRetry: "Find where a failed send is retried",
+};
+const waitIntentTool: ToolItem = {
+	...waitSettledTool,
+	details: {
+		...(waitSettledTool.details as Record<string, unknown>),
+		jobs: (waitSettledTool.details as { jobs: { id: string }[] }).jobs.map((job) => ({
+			...job,
+			...(INTENTS[job.id] ? { intent: INTENTS[job.id] } : {}),
+		})),
+	},
+};
 
 /** Opening a row asks the session for the job's output tail; the story answers it. */
 function answerJobDetail(): void {
@@ -53,6 +71,13 @@ export default defineStory({
 			description:
 				"One wait: done, failed (with its exit code) and cancelled jobs sort after the running ones; subagents with no job row list below the rows.",
 			render: () => <WaitToolCard calls={[waitSettledTool]} />,
+		},
+		{
+			name: "Settled, with intents",
+			description:
+				"The same wait when the model gave its jobs a purpose: the row is named by it, with the command (or a subagent's task) as muted secondary text. A job with no intent keeps its label as before.",
+			seed: answerJobDetail,
+			render: () => <WaitToolCard calls={[waitIntentTool]} />,
 		},
 		{
 			name: "Settled, with job widgets",

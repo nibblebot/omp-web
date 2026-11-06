@@ -1336,6 +1336,8 @@ export interface WireWaitJob {
 	type: "bash" | "task" | "eval";
 	status: "running" | "completed" | "failed" | "cancelled";
 	label: string;
+	/** What the model said the job is for (SDK 18.17.0 `JobSnapshot.intent`); rows show it in place of the label. */
+	intent?: string;
 	/** Run time when this frame was cut; a running job's clock is advanced by the receiver. */
 	durationMs: number;
 	exitCode?: number;

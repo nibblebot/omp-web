@@ -9,6 +9,7 @@
 - Replies (SDK 18.14.2 `out://` replies): text the model sends through `out://` shows as prose, on by default as in the TUI. A bash or eval call's replies follow its card, live and after a reload, and a write to `out://` draws as a reply instead of a Write card. The `out.enabled` setting now appears under Tools, Available Tools; any value you set wins over the web default.
 - Bash cards (SDK 18.16.0): a bash result the output minimizer rewrote shows a `Minimized: git 120.4KB → 3.2KB` line under its output, naming the filter that ran and the bytes before and after, live and after a reload.
 - Web search cards (SDK 18.17.0): when search providers failed before one answered, the card header shows `N failed` and the open card lists each failed provider with its HTTP status (when known) and reason in a warning box. A search where every provider failed keeps its own card with the error text and the same list.
+- Wait cards (SDK 18.17.0): a watched job is named by the purpose the model gave its call, as in the Jobs panel, with its command as secondary text; jobs without a purpose show their command as before. The wait call's live status carries the additive optional `intent` field.
 
 ### Maintenance & other
 - Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.17.0.

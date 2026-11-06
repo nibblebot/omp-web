@@ -2,7 +2,7 @@ import { createMemo, createResource, Show, type Component } from "solid-js";
 import type { WireJobWidgetView, WireWaitJob } from "#lib/wire/protocol";
 import { completionTitle } from "../../../activities/completion";
 import { jobWidgetGlance } from "../../../chat/job-widget";
-import { jobTitle } from "../../../chat/wait-details";
+import { jobLabel, jobTitle } from "../../../chat/wait-details";
 import { jobElapsedMs, type RunJob } from "../../../chat/wait-runs";
 import { jobWidgetView } from "../../../store/job-widgets";
 import { openActivities } from "../../../store/activities";
@@ -134,9 +134,10 @@ export const WaitJobRow: Component<{
 	);
 	const completion = () => job().completionPercent ?? estimate()?.percent;
 	const stage = () => job().stage ?? estimate()?.stage;
+	// The raw label (a command or a subagent's task) is secondary when the title is not already it.
 	const note = () => {
-		const label = job().type === "task" ? (job().label.split(/\r?\n/, 1)[0]?.trim() ?? "") : "";
-		return stage() ?? label;
+		const label = jobLabel(job());
+		return stage() ?? (job().type === "task" || label !== title() ? label : "");
 	};
 	const failure = () =>
 		job().exitCode !== undefined && job().exitCode !== 0 ? `exit ${job().exitCode}` : undefined;

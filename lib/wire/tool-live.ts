@@ -91,12 +91,14 @@ function slimJob(raw: unknown): WireWaitJob | undefined {
 	const exitCode = finite(raw.exitCode);
 	const completionPercent = finite(raw.completionPercent);
 	const stage = typeof raw.stage === "string" ? raw.stage.trim() : "";
+	const intent = typeof raw.intent === "string" ? raw.intent.trim() : "";
 	return {
 		id: clip(raw.id, LIVE_TEXT_CHARS),
 		type,
 		status,
 		label: typeof raw.label === "string" ? clip(raw.label, LIVE_TEXT_CHARS) : "",
 		durationMs: Math.max(0, finite(raw.durationMs) ?? 0),
+		...(intent !== "" ? { intent: clip(intent, LIVE_TEXT_CHARS) } : {}),
 		...(exitCode !== undefined ? { exitCode } : {}),
 		...(stage !== "" ? { stage: clip(stage, LIVE_TEXT_CHARS) } : {}),
 		...(completionPercent !== undefined && status === "running" ? { completionPercent } : {}),

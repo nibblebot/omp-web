@@ -45,6 +45,18 @@ const failed: RunJob = {
 	settledAt: 2,
 };
 
+const withIntent: RunJob = {
+	job: {
+		id: "bg_serve",
+		type: "bash",
+		status: "running",
+		label: "bun run test --watch apps/web",
+		intent: "Watch the web tests while I fix the outbox",
+		durationMs: 41_000,
+	},
+	at: NOW,
+};
+
 const done: RunJob = {
 	job: {
 		id: "bg_bench",
@@ -86,6 +98,18 @@ export default defineStory({
 			render: () => (
 				<div class="ds-frame">
 					<Interactive entry={subagent} />
+				</div>
+			),
+		},
+		{
+			name: "With intent",
+			description:
+				"The purpose the model gave the job names the row; the command it runs is secondary text after the id. Compare Failed, opened below: no intent, so the label stands alone.",
+			seed: () => answerCalls({ getJobDetail: () => structuredClone(waitJobDetail) }),
+			render: () => (
+				<div class="ds-frame">
+					<Interactive entry={withIntent} />
+					<Interactive entry={failed} />
 				</div>
 			),
 		},

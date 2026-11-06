@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import type { WireWaitJob } from "#lib/wire/protocol";
 import type { ChatItem, ToolItem } from "../../state";
-import { jobTitle, waitCallOf, waitCounts } from "../../chat/wait-details";
+import { jobLabel, jobTitle, waitCallOf, waitCounts } from "../../chat/wait-details";
 import {
 	assistantShowsContent,
 	buildWaitRuns,
@@ -372,6 +372,31 @@ describe("one call", () => {
 		expect(jobTitle(byId("bg_done"))).toBe("build");
 		expect(jobTitle(byId("Trace"))).toBe("Trace");
 		expect(jobTitle(byId("bg_fail"))).toBe("test");
+	});
+
+	test("a job's intent names its row; the label stays as the raw secondary text", () => {
+		const call = waitCallOf(
+			wait([
+				{ ...jobs[0], intent: "Build before the benchmark" },
+				{ ...jobs[1], intent: "Find the retry path\nmore" },
+				{ ...jobs[2], intent: "   " },
+			]),
+		);
+		const [bash, task, blank] = call.jobs;
+		expect(bash?.intent).toBe("Build before the benchmark");
+		expect(jobTitle(bash!)).toBe("Build before the benchmark");
+		expect(jobLabel(bash!)).toBe("build");
+		expect(jobTitle(task!)).toBe("Find the retry path");
+		expect(jobLabel(task!)).toBe("Trace it");
+		// A blank intent is no intent: the label (first line) names the row.
+		expect(blank).not.toHaveProperty("intent");
+		expect(jobTitle(blank!)).toBe("test");
+	});
+
+	test("an old session's job without intent parses as before", () => {
+		const [plain] = waitCallOf(wait(jobs)).jobs;
+		expect(plain).not.toHaveProperty("intent");
+		expect(jobTitle(plain!)).toBe("build");
 	});
 
 	test("a settled call reads details; a running call reads its live frame and carries no widgets", () => {
