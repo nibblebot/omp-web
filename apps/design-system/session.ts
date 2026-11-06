@@ -203,6 +203,11 @@ const fleet: Fleet = {
 				answerCall(cmd, () => null, answer);
 				return null;
 			}
+			// The composer's cache indicator asks on attach; a session a story gave no cache fixture has nothing to report.
+			if (cmd.method === "getPromptCacheStatus") {
+				answerCall(cmd, () => ({ status: null }), answer);
+				return null;
+			}
 		} else {
 			const handler = commands[cmd.type];
 			if (handler !== undefined) {

@@ -20,6 +20,7 @@ import { jobCalls, screenJobDetails, screenJobTree } from "./fixtures/jobs";
 import { browserEntries, fast, heavy, shared } from "./fixtures/models";
 import { contextBreakdown, modelInfos, modelRoleCatalog, sessionTools } from "./fixtures/overlays";
 import { projectCommands } from "./fixtures/roster-seed";
+import { promptCacheFixture } from "./fixtures/prompt-cache";
 import { newWorkspaceCommands } from "./fixtures/new-workspace";
 import { SCREEN_WORKSPACE_ID, screenSubagents } from "./fixtures/screen";
 import { sessionSettingsModel, settingsCalls } from "./fixtures/settings";
@@ -259,6 +260,7 @@ function sessionCalls(): CallHandlers {
 			};
 		},
 		getToolSchemas: () => sessionTools,
+		getPromptCacheStatus: () => promptCacheFixture("warm"),
 		getQueuedMessages: () => ({ steering: [], followUp: [] }),
 		// A `/compact` sent with the follow-up key mid-turn: the demo has no compaction to run, so it is accepted and nothing queues.
 		queueCompaction: () => undefined,

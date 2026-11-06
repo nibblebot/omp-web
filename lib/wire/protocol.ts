@@ -968,6 +968,7 @@ export type WebMethodName =
 	| "exportDownload"
 	| "getJobTree"
 	| "getJobDetail"
+	| "getPromptCacheStatus"
 	| "cancelJob";
 
 /**
@@ -1015,6 +1016,7 @@ export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> =
 	getResumeCapabilities: true,
 	getJobTree: true,
 	getJobDetail: true,
+	getPromptCacheStatus: true,
 	resumeResolve: true,
 	// Args `{ query?, limit?, allProjects?, phase?: "preliminary" | "complete" }` (additive `phase`; absent =
 	// "complete", the full scan). "preliminary" answers at once with the rows history.db titles
@@ -2257,6 +2259,62 @@ export interface JobDetailDto {
 /** `cancelJob` answer: false when the job settled before the cancel landed. */
 export interface JobCancelResultDto {
 	cancelled: boolean;
+}
+
+/** Why a cold prompt cache will be rewritten (SDK `PromptCacheColdReason`). */
+export type PromptCacheColdReasonDto =
+	| { kind: "expired"; at: number }
+	| { kind: "refresh-missed" }
+	| { kind: "model"; from: string; to: string }
+	| { kind: "thinking"; from: string; to: string }
+	| { kind: "tools" }
+	| { kind: "system-prompt" }
+	| { kind: "retention" }
+	| { kind: "compaction" };
+
+/** omp's cache warmer as it concerns the entry (SDK `PromptCacheWarming`). */
+export interface PromptCacheWarmingDto {
+	state: "scheduled" | "refreshing" | "inactive";
+	/** Epoch ms the armed refresh decides. */
+	nextWarmAt?: number;
+	/** Epoch ms warming gives up. */
+	stopsAt?: number;
+	reason?: string;
+}
+
+/** What the next request finds in the prompt cache (SDK `PromptCacheStatus`, JSON-safe: absent fields are omitted). */
+export interface PromptCacheStatusDto {
+	state: "warm" | "cold";
+	reason?: PromptCacheColdReasonDto;
+	/** Read off a reopened session's transcript, not a response the process saw. */
+	inferred: boolean;
+	tier: "short" | "long";
+	/** Epoch ms of the last request that read or wrote the entry. */
+	touchedAt: number;
+	/** Lifetime after the last touch; absent when the provider never expires the entry. */
+	ttlMs?: number;
+	cachedTokens: number;
+	nextTokens: number;
+	warming?: PromptCacheWarmingDto;
+}
+
+/** One `label: value` row of the SDK's prompt-cache details; `warning` marks a cold state or its reason. */
+export interface PromptCacheDetailRowDto {
+	label: string;
+	value: string;
+	tone?: "warning";
+}
+
+/**
+ * `getPromptCacheStatus` (read-only, no args): the attached session's prompt-cache state. `status` is null when
+ * the session has nothing to report (no cache warmer, or no cached reply). `brief` (the hover card's two lines)
+ * and `details` (the `/session` Prompt Cache rows) are the SDK helpers' text computed at answer time, so the
+ * browser carries no copy of their wording; both are absent when `status` is null.
+ */
+export interface PromptCacheStatusReply {
+	status: PromptCacheStatusDto | null;
+	brief?: [string, string];
+	details?: PromptCacheDetailRowDto[];
 }
 
 /** omp CLI, provider-auth, and default-model probe (GET /ctl/omp-setup). */

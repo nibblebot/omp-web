@@ -106,6 +106,7 @@ import { createGitReviewMethods } from "./review-git";
 import { createPlanReviewMethods, exitPlanMode } from "./review-plan";
 import { createTodoMethods } from "./review-todos";
 import { createJobMethods } from "./job-methods";
+import { createPromptCacheMethods } from "./prompt-cache-methods";
 import { createMcpMethods } from "./mcp-methods";
 import { createSkillMethods } from "./skill-methods";
 import { broadcast, broadcastHistory, broadcastTo } from "./client-delivery";
@@ -954,6 +955,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		...createPlanReviewMethods(),
 		...createTodoMethods(),
 		...createJobMethods(),
+		...createPromptCacheMethods(),
 		...createComposerMethods(),
 		...createMcpMethods({
 			broadcastAvailableCommands: (entry) => deps.broker.broadcastAvailableCommands(entry),

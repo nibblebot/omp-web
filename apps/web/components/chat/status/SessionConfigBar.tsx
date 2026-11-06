@@ -7,6 +7,7 @@ import { currentThinkingSelector } from "../../../usage/model-search";
 import { isReady, isSessionChanging, setState, state } from "../../../state";
 import { ArrowDownIcon, ArrowUpIcon } from "../../ui/icons";
 import { ModelPresetPopover } from "./ModelPresetPopover";
+import { PromptCacheSegment } from "./PromptCacheSegment";
 import { RetryBadge } from "./RetryBadge";
 import { StatusSegment } from "./StatusSegment";
 import { ThinkingLevelPopover } from "./ThinkingLevelPopover";
@@ -148,6 +149,7 @@ export const SessionConfigBar: Component = () => (
 		<PresetSegment />
 		<ThinkingSegment />
 		<span class="status-spacer" />
+		<PromptCacheSegment />
 		<ContextSegment />
 		<Show when={state.stats}>
 			{(s) => (

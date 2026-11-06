@@ -201,6 +201,73 @@
 .context-segment[data-level="error"] {
 	color: var(--error);
 }
+/* --- Prompt cache indicator (PromptCacheSegment, PromptCachePopover) --- */
+.cache-segment {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.cache-segment[data-level="warm"] {
+	color: var(--success);
+}
+.cache-segment[data-level="likely"] {
+	color: var(--muted-2);
+}
+.cache-segment[data-level="cold"] {
+	color: var(--warning);
+}
+/* Narrow column: the icon carries the state (its aria-label names it); the word drops with "ctx". */
+@media (max-width: 767px) {
+	.session-bar .cache-label {
+		display: none;
+	}
+}
+.cache-popover-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	padding: var(--space-5);
+	overflow-y: auto;
+}
+.cache-popover-head,
+.cache-popover-next {
+	margin: 0;
+}
+.cache-popover-head {
+	color: var(--text);
+	font-weight: 600;
+}
+.cache-popover-head.is-cold {
+	color: var(--warning);
+}
+.cache-popover-next {
+	color: var(--muted-2);
+}
+.cache-popover-rows {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: 0;
+	padding-top: var(--space-3);
+	border-top: 1px solid var(--border);
+}
+.cache-popover-row {
+	display: grid;
+	grid-template-columns: minmax(6em, max-content) 1fr;
+	gap: var(--space-4);
+}
+.cache-popover-row dt {
+	color: var(--muted-2);
+}
+.cache-popover-row dd {
+	margin: 0;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.cache-popover-row dd[data-tone="warning"] {
+	color: var(--warning);
+}
+/* --- end prompt cache indicator --- */
 .status-spacer {
 	flex: 1;
 }
