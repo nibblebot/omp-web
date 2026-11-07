@@ -234,21 +234,18 @@ Docs changes ride in the commit of the tier or item they describe (amend the unp
 
 ## Report
 
-End every run with this, and nothing after it:
+End every run with this report as rendered Markdown (headings, bullets, tables, inline code), never inside a fenced code block, and nothing after it. Keep every section, in this order; write `none` for an empty one. Use one bullet per item rather than packing a section into one line, and tables where rows compare (gate commands, settings placement, commits).
 
-```
-SDK reconcile: <current | reconciled | blocked | already reconciled | skipped>
-From → To:     <FROM> → <TARGET>
-Branch/WT:     <BRANCH> at <WT> (<commit SHAs with subjects | uncommitted>); other unmerged maint/sdk-* branches: <list | none>
-Upstream:      <counts per category>; breaking sections one line each, marked relevant/not
-Ledger:        <$OUT/ledger.md>; compat/removal/deprecation/fix-cleanup rows handled, n/a rows with one-word reasons
-Changes:       <files/areas adapted and why>
-Settings:      <new rows → visible/advanced/hidden; removed rows; other manifest edits>
-Surface:       <adopted items with commits; new in-development features>
-Decisions:     <each question asked → answer; each headless default taken>
-Gate:          <each command → pass/fail; pre-existing failures named>
-Smoke:         <smoke-session JSON ok/sdkModel/frames>
-Docs:          <AGENTS.md / CHANGELOG / docs pages touched>
-Follow-ups:    <tracked kata issues; deferred capabilities with value/size; blockers with evidence>
-Next:          git -C <invoking checkout> merge <BRANCH>   |   git worktree remove <WT> && git branch -D <BRANCH>
-```
+- `# SDK reconcile: <current | reconciled | blocked | already reconciled | skipped>`, then one line: `<FROM>` → `<TARGET>`.
+- `## Branch`: `<BRANCH>` at `<WT>`; a table of commits (SHA, subject), or `uncommitted`; other unmerged `maint/sdk-*` branches (list or none).
+- `## Upstream`: entry counts per category; each breaking section on its own bullet, marked relevant or not relevant with the reason.
+- `## Ledger`: the `$OUT/ledger.md` path; counts of compat/removal/deprecation/fix-cleanup rows handled and of n/a rows, with the one-word reasons grouped.
+- `## Changes`: one bullet per area adapted and why.
+- `## Settings`: a table of new rows (path, placement visible/advanced/hidden, live or next-session); removed rows; other manifest edits; changed defaults.
+- `## Surface`: adopted items with their commits; new in-development features; new wire methods or fields (additive, no protocol bump).
+- `## Decisions`: each question asked → answer; each headless default taken (`default: <choice> (would have asked: <question>)`); judgment calls made inside a slice.
+- `## Gate`: a table of each command → pass/fail with counts; pre-existing failures named; the profile comparison when transport files changed.
+- `## Smoke`: smoke-session `ok`, `sdkModel`, frames; any live exercise of new surface.
+- `## Docs`: AGENTS.md, CHANGELOG, and docs pages touched.
+- `## Follow-ups`: tracked kata issues; deferred capabilities with value and size; untested paths; blockers with evidence; process incidents (writes outside the worktree, recovered how).
+- `## Next`: the two commands as inline code, merge (`git -C <invoking checkout> merge <BRANCH>`) or discard (`git worktree remove <WT> && git branch -D <BRANCH>`).
