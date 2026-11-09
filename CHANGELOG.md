@@ -26,6 +26,7 @@
 - Session process: the SDK no longer installs its process-wide fatal and signal handlers on import (18.15.0), so `omp-session` installs them explicitly and keeps its own graceful SIGINT/SIGTERM/SIGHUP shutdown. A fatal error still runs SDK cleanup before exiting, and benign worker IPC and closed-socket errors still do not end the session.
 - Settings (SDK 18.16.0): the new row `hindsight.globalScope` shows under Memory, Advanced, with the other Hindsight rows, and applies to the running session.
 - Session process (SDK 18.16.0): the attach priming counted the context usage twice, once for the `state` frame and again inside the session stats beside it, and the post-turn and fleet-pair `state` frames did the same. The SDK now counts a model with no declared tokenizer family (Gemini, Grok, custom) natively, where it estimated at bytes/4 before, so each count walks a history whose turns record no usage. The frame now reuses the figure the stats already computed: a history attach on such a model reaches its first frame about 38% sooner and is primed about 31% sooner, and a 23 MiB history about 41% and 36% (one count per attach remains, in the SDK; sessions whose turns record provider usage are anchored and were never affected). Measurements in `scripts/profile/results/2026-11-03-sdk-18.16.0-tokenizer.md`.
+- Sidebar: project names are bold and worktree and session titles use the regular weight, so each project heads its rows.
 
 ## v0.3.0, 2026-10-30
 
