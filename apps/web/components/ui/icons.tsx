@@ -509,6 +509,13 @@ export const FolderClosedIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
+/** Lucide `moon`: the asleep count on a collapsed project header in the sidebar. */
+export const MoonIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+	</Svg>
+);
+
 /** Lucide `house`: the home shortcut in the Add project chooser. */
 export const HomeIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>

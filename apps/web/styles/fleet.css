@@ -778,13 +778,16 @@
 	flex: none;
 	color: var(--muted-2);
 }
+/* A long project name fades out at its end like a session title (title-fade,
+   only while cut), so the text runs to the header's tail. */
 .sidebar-group-label {
 	flex: 1;
 	font-weight: 600;
 	min-width: 0;
 	overflow: hidden;
-	text-overflow: ellipsis;
 	white-space: nowrap;
+	animation: title-fade linear both;
+	animation-timeline: scroll(self inline);
 }
 .sidebar-group-count {
 	flex: none;
@@ -1798,6 +1801,9 @@
    the header does not). The gap above a header is 4x the --space-1 gap between
    rows, so groups read as separate; the first group needs none. */
 .project-group {
+	/* What the header paints over: the fade behind the revealed controls matches it. */
+	--group-bg: var(--bg-deep);
+	position: relative;
 	display: flex;
 	align-items: center;
 	padding-left: 0;
@@ -1822,6 +1828,9 @@
 	cursor: pointer;
 }
 @media (hover: hover) {
+	.project-group:hover {
+		--group-bg: var(--hover);
+	}
 	.project-group-toggle:hover {
 		background: var(--hover);
 	}
@@ -1842,6 +1851,70 @@
 	display: flex;
 	align-items: center;
 	gap: var(--space-2);
+}
+/* At rest the header keeps room only for what shows: the "+" and "⋯" float
+   over the name's end on hover, behind a fade (the header's own background),
+   as on rows. A tail with nothing at rest (an open group or an empty project)
+   floats over the header's right end; a collapsed group without a signal gives
+   the empty corner column to its summary, which slides left on hover to make
+   room for the "⋯". A signal keeps the corner. Not on touch, where both always
+   show. */
+@media not ((pointer: coarse) or (max-width: 767px)) {
+	.project-group-tail:not(:has(.roster-row-status)) {
+		position: relative;
+		--tail-shift: calc(var(--row-control-size) + var(--space-2));
+	}
+	.project-group-tail:not(:has(.project-group-summary, .roster-row-status)) {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		right: calc(var(--sidebar-row-edge) - var(--space-3));
+		/* Clicks reach the name; the revealed buttons and the open menu take them back. */
+		pointer-events: none;
+	}
+	.project-group-tail:not(:has(.roster-row-status)) > * {
+		position: relative;
+	}
+	.project-group-tail .sidebar-menu {
+		pointer-events: auto;
+	}
+	.project-group-tail:has(.project-group-summary):not(:has(.roster-row-status)) > .roster-row-corner {
+		margin-left: calc(-1 * var(--tail-shift));
+	}
+	.project-group-tail:has(.project-group-summary):not(:has(.roster-row-status)) > .project-group-slot {
+		transition: translate var(--dur-move-fast) var(--ease-out);
+	}
+	.project-group-tail:not(:has(.roster-row-status))::before {
+		content: "";
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		right: 0;
+		left: calc(-1 * var(--space-5));
+		background: linear-gradient(to right, transparent, var(--group-bg) var(--space-5));
+		opacity: 0;
+		transition: opacity var(--dur-fast) var(--ease-out);
+	}
+	.project-group-tail:has(.project-group-summary):not(:has(.roster-row-status))::before {
+		left: calc(-1 * (var(--space-5) + var(--tail-shift)));
+	}
+	.project-group:is(
+			:hover,
+			:has(:focus-visible),
+			:has(.project-new-btn[aria-expanded="true"], .sidebar-menu-btn[aria-expanded="true"])
+		)
+		.project-group-tail::before {
+		opacity: 1;
+	}
+	.project-group:is(
+			:hover,
+			:has(:focus-visible),
+			:has(.project-new-btn[aria-expanded="true"], .sidebar-menu-btn[aria-expanded="true"])
+		)
+		.project-group-tail:has(.project-group-summary):not(:has(.roster-row-status))
+		> .project-group-slot {
+		translate: calc(-1 * var(--tail-shift)) 0;
+	}
 }
 /* One grid cell: the summary (at rest) and the "+" (on header hover) stack, so
    the slot is as wide as the wider of the two and swapping them never shifts
@@ -1872,6 +1945,10 @@
 	height: 1em;
 	border-radius: var(--ready-rail-width);
 	background: var(--ready-rail-color);
+}
+/* The asleep count's moon, muted like the count beside it. */
+.project-group-moon {
+	flex: none;
 }
 /* Header hover/focus (or an open popover/menu) swaps summary and signal for
    "+" and "⋯". Open state is read from the two triggers, not the group toggle,

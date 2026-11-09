@@ -85,7 +85,7 @@ export default defineStory({
 		{
 			name: "Collapsed groups",
 			description:
-				"Each collapsed project shows its live/total summary (or `N asleep`) and the most urgent row signal in the corner column.",
+				"Each collapsed project shows its live/total summary (or a moon and its asleep count) and the most urgent row signal in the corner column.",
 			seed: () =>
 				localStorage.setItem(
 					GROUPS_KEY,

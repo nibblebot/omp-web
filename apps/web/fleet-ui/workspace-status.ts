@@ -128,7 +128,7 @@ export interface ProjectRollup {
 	live: number;
 	/** Every workspace of the project. */
 	total: number;
-	/** Asleep workspaces (the "N asleep" summary when nothing is live). */
+	/** Asleep workspaces (the moon count when nothing is live). */
 	asleep: number;
 	/** Most urgent row signal across the project, or null when every row is
 	 *  ready+idle or asleep. */
@@ -220,16 +220,27 @@ export function projectRollup(rows: ReadonlyArray<RollupRow>): ProjectRollup {
 	};
 }
 
+/** What a collapsed project shows beside its mark: `live` with the rail mark,
+ *  `asleep` with the moon, `idle` with none. */
+export interface RollupSummary {
+	kind: "live" | "asleep" | "idle";
+	text: string;
+}
+
 /**
- * The muted text a collapsed project shows beside its rail mark: "live/total"
- * when something is live ("2/5"); "N asleep" when nothing is live but some
- * workspaces sleep; "0/total" when nothing is live and nothing sleeps (all
- * starting, reconnecting or crashed); "" for an empty project.
+ * The muted summary a collapsed project shows: "live/total" when something is
+ * live ("2/5"); the asleep count when nothing is live but some workspaces
+ * sleep; "0/total" when nothing is live and nothing sleeps (all starting,
+ * reconnecting or crashed); null for an empty project.
  */
-export function rollupSummary(r: Pick<ProjectRollup, "live" | "total" | "asleep">): string {
-	if (r.total === 0) return "";
-	if (r.live > 0) return `${r.live}/${r.total}`;
-	return r.asleep > 0 ? `${r.asleep} asleep` : `0/${r.total}`;
+export function rollupSummary(
+	r: Pick<ProjectRollup, "live" | "total" | "asleep">,
+): RollupSummary | null {
+	if (r.total === 0) return null;
+	if (r.live > 0) return { kind: "live", text: `${r.live}/${r.total}` };
+	return r.asleep > 0
+		? { kind: "asleep", text: String(r.asleep) }
+		: { kind: "idle", text: `0/${r.total}` };
 }
 
 export interface ActiveWorkspace {

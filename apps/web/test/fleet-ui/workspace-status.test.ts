@@ -156,25 +156,30 @@ describe("projectRollup", () => {
 
 describe("rollupSummary", () => {
 	test("empty project shows nothing", () => {
-		expect(rollupSummary(projectRollup([]))).toBe("");
+		expect(rollupSummary(projectRollup([]))).toBeNull();
 	});
 
 	test("live workspaces read live/total", () => {
 		const rows = [{ status: "ready" }, { status: "asleep" }, { status: "asleep" }] as const;
-		expect(rollupSummary(projectRollup(rows))).toBe("1/3");
+		expect(rollupSummary(projectRollup(rows))).toEqual({ kind: "live", text: "1/3" });
 	});
 
-	test("nothing live reads N asleep", () => {
-		expect(rollupSummary(projectRollup([{ status: "asleep" }, { status: "asleep" }]))).toBe(
-			"2 asleep",
-		);
-		expect(rollupSummary(projectRollup([{ status: "error" }, { status: "asleep" }]))).toBe(
-			"1 asleep",
-		);
+	test("nothing live reads the asleep count", () => {
+		expect(rollupSummary(projectRollup([{ status: "asleep" }, { status: "asleep" }]))).toEqual({
+			kind: "asleep",
+			text: "2",
+		});
+		expect(rollupSummary(projectRollup([{ status: "error" }, { status: "asleep" }]))).toEqual({
+			kind: "asleep",
+			text: "1",
+		});
 	});
 
 	test("nothing live and nothing asleep reads 0/total", () => {
-		expect(rollupSummary(projectRollup([{ status: "spawning" }, { status: "error" }]))).toBe("0/2");
+		expect(rollupSummary(projectRollup([{ status: "spawning" }, { status: "error" }]))).toEqual({
+			kind: "idle",
+			text: "0/2",
+		});
 	});
 });
 

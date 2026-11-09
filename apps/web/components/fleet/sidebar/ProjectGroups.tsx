@@ -28,7 +28,7 @@ import {
 	syncProjects,
 } from "../../../store/projects";
 import { KebabMenu } from "../../ui/KebabMenu";
-import { FolderClosedIcon, FolderOpenIcon, PlusIcon, TrashIcon } from "../../ui/icons";
+import { FolderClosedIcon, FolderOpenIcon, MoonIcon, PlusIcon, TrashIcon } from "../../ui/icons";
 import { NewWorkspacePopover } from "./NewWorkspacePopover";
 import { RowMotion } from "./RowMotion";
 import { RowSignal } from "./RowSignal";
@@ -46,7 +46,7 @@ import { WorkspaceRow, menuOpenId, setMenuOpenId } from "./WorkspaceRow";
 // Add project dialog). The header carries the folder icon (open while the
 // group is expanded, closed while collapsed) and the name, then a
 // tail laid out like a row's right edge: while the group is collapsed, a
-// muted summary (rail mark + live/total, or "N asleep") with the most urgent
+// muted summary (rail mark + live/total, or moon + asleep count) with the most urgent
 // row signal in the corner column (fleet-ui/workspace-status.ts projectRollup,
 // RowSignal); on header hover the summary gives way to the "+" that opens
 // the New workspace popover (anchored to the "+") and the signal to the "⋯"
@@ -281,18 +281,23 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 					    menu on hover, as a row's corner does. */}
 					<span class="project-group-tail">
 						<span class="project-group-slot">
-							<Show when={rollup().total > 0 && (!open() || visibleSessions().length === 0)}>
-								<span
-									class="project-group-summary"
-									role="img"
-									title={rollup().breakdown}
-									aria-label={rollup().breakdown}
-								>
-									<Show when={rollup().live > 0}>
-										<span class="project-group-rail" />
-									</Show>
-									{rollupSummary(rollup())}
-								</span>
+							<Show when={(!open() || visibleSessions().length === 0) && rollupSummary(rollup())}>
+								{(summary) => (
+									<span
+										class="project-group-summary"
+										role="img"
+										title={rollup().breakdown}
+										aria-label={rollup().breakdown}
+									>
+										<Show when={summary().kind === "live"}>
+											<span class="project-group-rail" />
+										</Show>
+										<Show when={summary().kind === "asleep"}>
+											<MoonIcon class="project-group-moon" />
+										</Show>
+										{summary().text}
+									</span>
+								)}
 							</Show>
 							{/* A plain folder (no .git) has no worktrees or clones to create. */}
 							<Show when={props.project.git !== false}>
