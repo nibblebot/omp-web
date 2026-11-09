@@ -511,8 +511,10 @@
 /* Corner slot: the state signal and the "⋯" row-actions trigger stack in one
    grid cell. At rest the signal shows; row hover/focus or an open menu
    crossfades it to the trigger (rules after .sidebar-menu-btn below). Touch
-   keeps both, the signal as a badge on the trigger (trailing touch block). */
+   keeps both, the signal as a badge on the trigger (trailing touch block).
+   Positioned so it paints above the revealed controls' fade. */
 .roster-row-corner {
+	position: relative;
 	flex: none;
 	display: grid;
 	/* One track the slot's size; a wider hit area overflows it evenly. */
@@ -521,6 +523,15 @@
 	width: var(--row-control-size);
 	height: var(--row-control-size);
 	margin-left: auto;
+}
+/* An empty corner at rest (no signal) gives its column to the title, which runs
+   to the row's edge; on hover the fade behind the chevron and "+" also covers
+   the corner, so the "⋯" never sits on text. Only on rows with that fade, and
+   not on touch, where the controls always show in their own room. */
+@media not ((pointer: coarse) or (max-width: 767px)) {
+	.sidebar-row-top:has(> .roster-row-actions):has(.roster-row-status:empty) > .roster-row-corner {
+		margin-left: calc(-1 * (var(--row-control-size) + var(--space-3)));
+	}
 }
 .roster-row-corner > * {
 	grid-area: 1 / 1;
@@ -969,16 +980,16 @@
 	padding-left: 0;
 }
 /* The session title as the top line: prose in the sans face at the row title
-   size, clamped like the under-line title (one line, or two with the setting). */
+   size, one line that fades out at its end (or two with the setting), like the
+   under-line title. */
 .roster-row-session {
 	font-family: var(--font-sans);
-	white-space: normal;
-	display: -webkit-box;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 1;
-	overflow: hidden;
-	overflow-wrap: anywhere;
+	flex: 1;
 	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	animation: title-fade linear both;
+	animation-timeline: scroll(self inline);
 }
 .session-git-dirty {
 	flex: none;
@@ -1034,22 +1045,48 @@
 }
 /* Last-session title under the top line, aligned with the branch text (probed
    by the fleet edge from the session file's JSONL title slot): prose in the
-   sans face, muted. One line by default; with the "two-line session titles"
-   setting it takes up to two but only the lines it needs. The full string is on
-   the tooltip. */
+   sans face, muted. One line by default, cut by a fade instead of an ellipsis
+   so the text runs to the edge; with the "two-line session titles" setting it
+   takes up to two but only the lines it needs, the second fading when cut. The
+   full string is on the tooltip. */
 .roster-session-title {
 	font-family: var(--font-sans);
 	font-size: var(--fs-micro);
 	line-height: 1.5;
 	color: var(--muted);
-	display: -webkit-box;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 1;
+	white-space: nowrap;
 	overflow: hidden;
-	overflow-wrap: anywhere;
+	animation: title-fade linear both;
+	animation-timeline: scroll(self inline);
 }
 .roster-session-title--two-line {
-	-webkit-line-clamp: 2;
+	max-height: 2lh;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	animation-name: title-fade-two-line;
+	animation-timeline: scroll(self block);
+}
+/* Title fades: a scroll timeline on the title's own overflow is inactive while
+   the text fits, so only a cut title fades. Browsers without scroll timelines
+   fill the keyframe at once and fade every title's end. */
+@keyframes title-fade {
+	from,
+	to {
+		mask-image: linear-gradient(to right, #000 calc(100% - var(--space-7)), transparent);
+	}
+}
+/* Two lines: the first stays whole, the second fades over a wider span, since
+   it breaks at a word and can end short of the edge. */
+@keyframes title-fade-two-line {
+	from,
+	to {
+		mask-image:
+			linear-gradient(#000, #000),
+			linear-gradient(to right, #000 calc(100% - 2 * var(--space-7)), transparent);
+		mask-size: 100% 1lh;
+		mask-position: top, bottom;
+		mask-repeat: no-repeat;
+	}
 }
 /* Placeholder titles ("New session", "Untitled session") read as muted, under
    or on the top line. */
@@ -1075,7 +1112,8 @@
 	position: absolute;
 	top: 0;
 	bottom: 0;
-	right: 0;
+	/* Through the corner column, so a title running under it stays covered. */
+	right: calc(-1 * (var(--row-control-size) + var(--row-control-hit)) / 2);
 	left: calc(-1 * var(--space-5));
 	background: linear-gradient(to right, transparent, var(--row-bg) var(--space-5));
 	opacity: 0;

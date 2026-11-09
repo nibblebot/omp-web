@@ -27,6 +27,7 @@
 - Settings (SDK 18.16.0): the new row `hindsight.globalScope` shows under Memory, Advanced, with the other Hindsight rows, and applies to the running session.
 - Session process (SDK 18.16.0): the attach priming counted the context usage twice, once for the `state` frame and again inside the session stats beside it, and the post-turn and fleet-pair `state` frames did the same. The SDK now counts a model with no declared tokenizer family (Gemini, Grok, custom) natively, where it estimated at bytes/4 before, so each count walks a history whose turns record no usage. The frame now reuses the figure the stats already computed: a history attach on such a model reaches its first frame about 38% sooner and is primed about 31% sooner, and a 23 MiB history about 41% and 36% (one count per attach remains, in the SDK; sessions whose turns record provider usage are anchored and were never affected). Measurements in `scripts/profile/results/2026-11-03-sdk-18.16.0-tokenizer.md`.
 - Sidebar: project names are bold and worktree and session titles use the regular weight, so each project heads its rows.
+- Sidebar: a session title that does not fit fades out at its end instead of ending in an ellipsis; with two-line titles the second line fades. On a row with no state signal the title (or branch) runs on under the empty corner to the row's edge; hovering covers it behind the row controls.
 
 ## v0.3.0, 2026-10-30
 
