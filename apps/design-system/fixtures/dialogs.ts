@@ -12,6 +12,17 @@ import type { UiApprovalParams, WebSessionState } from "#lib/wire/protocol";
 import type { DebugEntry, state } from "../../web/state";
 import type { FleetDebug } from "../../web/fleet-ui/fleet-debug";
 import type { AskOption, AskQuestion, UiRequest } from "../../web/prompt/ask-types";
+import type {
+	UiFormBlock,
+	UiFormChoiceField,
+	UiFormField,
+	UiFormOption,
+	UiFormParams,
+	UiFormSection,
+	UiFormSpan,
+	UiFormSpanStyle,
+	UiFormTextField,
+} from "#lib/wire/ask-form";
 import { FIXTURE_NOW } from "./session";
 
 const MIN = 60_000;
@@ -110,9 +121,267 @@ export const askLongQuestions: AskQuestion[] = [
 	},
 ];
 
-/** Ask tool request, as the session pushes it: method "askDialog" carries the question list. */
+/** An extension's `ui.askDialog` request, as the session pushes it: method "askDialog" carries the question list. */
 export function askDialogRequest(id: string, questions: AskQuestion[]): UiRequest {
 	return { id, method: "askDialog", params: { questions } };
+}
+
+// The ask tool's HTML form (method "formDialog"): the session sends the parsed form with its
+// pictures already resolved to data: URIs.
+
+const span = (text: string, style?: UiFormSpanStyle): UiFormSpan =>
+	style ? { text, style } : { text };
+const plain = (text: string): UiFormSpan[] => [span(text)];
+
+function formOption(
+	value: string,
+	label: string,
+	state: Partial<Pick<UiFormOption, "checked" | "disabled">> = {},
+): UiFormOption {
+	return { value, label: plain(label), checked: false, disabled: false, ...state };
+}
+
+function choiceField(
+	index: number,
+	name: string,
+	question: string,
+	options: UiFormOption[],
+	extra: Partial<UiFormChoiceField> = {},
+): UiFormChoiceField {
+	return {
+		kind: "choice",
+		index,
+		question,
+		name,
+		label: [],
+		required: false,
+		multi: false,
+		select: false,
+		other: false,
+		options,
+		...extra,
+	};
+}
+
+function textField(
+	index: number,
+	name: string,
+	question: string,
+	extra: Partial<UiFormTextField> = {},
+): UiFormTextField {
+	return {
+		kind: "text",
+		index,
+		question,
+		name,
+		label: plain(question),
+		required: false,
+		type: "text",
+		multiline: false,
+		value: "",
+		placeholder: "",
+		rows: 1,
+		...extra,
+	};
+}
+
+const field = (f: UiFormField): UiFormBlock => ({ kind: "field", field: f });
+const text = (spans: UiFormSpan[]): UiFormBlock => ({ kind: "text", spans, heading: false });
+
+/** A small architecture sketch, as the session sends a picture: a data: URI. */
+const sketchSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="90" viewBox="0 0 360 90">
+<rect x="4" y="20" width="90" height="50" rx="6" fill="#313244" stroke="#89b4fa"/>
+<text x="49" y="50" font-size="13" fill="#cdd6f4" text-anchor="middle" font-family="sans-serif">browser</text>
+<rect x="135" y="20" width="90" height="50" rx="6" fill="#313244" stroke="#89b4fa"/>
+<text x="180" y="50" font-size="13" fill="#cdd6f4" text-anchor="middle" font-family="sans-serif">session</text>
+<rect x="266" y="20" width="90" height="50" rx="6" fill="#313244" stroke="#a6e3a1"/>
+<text x="311" y="50" font-size="13" fill="#cdd6f4" text-anchor="middle" font-family="sans-serif">store</text>
+<path d="M94 45H135M225 45H266" stroke="#a6adc8" stroke-width="2"/>
+</svg>`;
+const sketchSrc = `data:image/svg+xml;base64,${btoa(sketchSvg)}`;
+
+/** A realistic agent form: context, a recommended radio, a checkbox group, a select, a number and a textarea. */
+export const askFormParams: UiFormParams = {
+	sections: [
+		{
+			title: [],
+			blocks: [
+				text([
+					span("Sessions live in memory and are lost on restart. A store keeps them across "),
+					span("omp-session", "code"),
+					span(" restarts."),
+				]),
+				{ kind: "image", src: sketchSrc, alt: "browser, session and store in a row" },
+				{
+					kind: "table",
+					headerRows: 1,
+					rows: [
+						[plain("Store"), plain("Ops cost"), plain("Shared")],
+						[plain("SQLite"), plain("none"), plain("no")],
+						[plain("Redis"), plain("a service"), plain("yes")],
+					],
+				},
+			],
+		},
+		{
+			title: plain("Session store"),
+			blocks: [
+				field(
+					choiceField(
+						0,
+						"store",
+						"Session store",
+						[
+							formOption("sqlite", "SQLite: one file, no new service", { checked: true }),
+							formOption("redis", "Redis: shared across instances, needs ops"),
+							formOption("postgres", "Postgres: already deployed", { disabled: true }),
+						],
+						{ required: true, other: true },
+					),
+				),
+			],
+		},
+		{
+			title: plain("Checks before the commit"),
+			blocks: [
+				text([span("Pick everything that should pass first.", "em")]),
+				field(
+					choiceField(
+						1,
+						"checks",
+						"Checks before the commit",
+						[
+							formOption("types", "bun run check:types", { checked: true }),
+							formOption("lint", "bun run lint"),
+							formOption("test", "bun test apps/session"),
+						],
+						{ multi: true, other: true },
+					),
+				),
+			],
+		},
+		{
+			title: plain("Details"),
+			blocks: [
+				field(
+					choiceField(
+						2,
+						"region",
+						"Region",
+						[
+							formOption("eu", "Europe", { checked: true }),
+							formOption("us", "United States"),
+							formOption("ap", "Asia Pacific"),
+						],
+						{ select: true, label: plain("Region") },
+					),
+				),
+				field(
+					textField(3, "ttl_days", "Session lifetime (days)", {
+						type: "number",
+						value: "30",
+						min: 1,
+						max: 365,
+						required: true,
+					}),
+				),
+				field(
+					textField(4, "notes", "Notes for the migration", {
+						type: "textarea",
+						multiline: true,
+						rows: 3,
+						placeholder: "Anything the agent should know",
+					}),
+				),
+			],
+		},
+	],
+	hidden: [["source", "ask-form-story"]],
+};
+
+/** A form with a countdown: the session submits its defaults at the deadline. */
+export function askFormWithDeadline(deadline: number): UiFormParams {
+	return { ...askFormParams, deadline };
+}
+
+/** Required and bounded fields left empty or out of range: Submit lists what to fix and focuses the first. */
+export const askRequiredFormParams: UiFormParams = {
+	sections: [
+		{
+			title: plain("Release"),
+			blocks: [
+				field(
+					textField(0, "version", "Version", {
+						required: true,
+						placeholder: "1.4.0",
+						pattern: "\\d+\\.\\d+\\.\\d+",
+					}),
+				),
+				field(
+					choiceField(
+						1,
+						"channels",
+						"Channels to publish to",
+						[
+							formOption("stable", "stable"),
+							formOption("beta", "beta"),
+							formOption("nightly", "nightly"),
+						],
+						{ multi: true, required: true },
+					),
+				),
+				field(
+					textField(2, "rollout", "Rollout percent", {
+						type: "number",
+						value: "250",
+						min: 1,
+						max: 100,
+					}),
+				),
+			],
+		},
+	],
+	hidden: [],
+};
+
+/** Many sections and fields: the form body scrolls while the title and Submit stay in view. */
+export const askLongFormParams: UiFormParams = (() => {
+	const topics = [
+		"Logging",
+		"Metrics",
+		"Tracing",
+		"Alerting",
+		"Backups",
+		"Rate limits",
+		"Feature flags",
+		"Release channel",
+	];
+	const sections: UiFormSection[] = topics.map((topic, i) => ({
+		title: plain(topic),
+		blocks: [
+			text([span(`How should ${topic.toLowerCase()} be handled for the new service?`)]),
+			field(
+				choiceField(
+					i * 2,
+					`topic_${i}`,
+					topic,
+					[
+						formOption("default", "Keep the current setup", { checked: true }),
+						formOption("minimal", "Minimal: the cheapest thing that works"),
+						formOption("full", "Full: everything the platform offers"),
+					],
+					{ other: true },
+				),
+			),
+			field(textField(i * 2 + 1, `topic_${i}_note`, `${topic} notes`, { placeholder: "Optional" })),
+		],
+	}));
+	return { sections, hidden: [] };
+})();
+
+/** A form request, as the session pushes it: method "formDialog" carries the structured form. */
+export function askFormRequest(id: string, params: UiFormParams): UiRequest {
+	return { id, method: "formDialog", params };
 }
 
 export const confirmParams = {

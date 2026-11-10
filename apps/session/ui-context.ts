@@ -4,6 +4,7 @@ import type {
 	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
 	ExtensionAskDialogResultItem,
+	ExtensionFormDialogResult,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 } from "@oh-my-pi/pi-coding-agent";
@@ -16,6 +17,24 @@ import type {
 	CollabUiSelectItem,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import type { CollabHostAdapter } from "./collab-host";
+import { buildFormParams, formDataFromSubmit } from "./ui-form";
+import { formFields } from "#lib/wire/ask-form";
+import { defaultFormData, fieldError, textValue } from "@oh-my-pi/pi-tui/html-form/data";
+import { parseHtmlForm, spansText } from "@oh-my-pi/pi-tui/html-form/parse";
+import {
+	disambiguateDisplayLabels,
+	sanitizeCarriageReturns,
+} from "@oh-my-pi/pi-tui/render/render-utils";
+import type {
+	UiFormChoiceAnswer,
+	UiFormChoiceField,
+	UiFormField,
+	UiFormFieldAnswer,
+	UiFormParams,
+	UiFormSubmit,
+	UiFormTextAnswer,
+	UiFormTextField,
+} from "#lib/wire/ask-form";
 import type { ServerFrame, UiApprovalAnswer, UiApprovalParams } from "#lib/wire/protocol";
 import { BROWSER_UI_METHOD } from "#lib/wire/browser-ui-contract";
 import type { SessionEntry } from "./session-entry";
@@ -58,6 +77,29 @@ export function cancelEntryUiRequests(entry: SessionEntry): void {
 }
 
 /**
+ * Run `run` as one cancellable dialog of the session: its signal aborts when the SDK's
+ * `outer` signal does or {@link cancelEntryUiRequests} runs, so Stop reaches work done
+ * before the dialog opens (a form's pictures loading) as well as the dialog itself.
+ */
+function withDialogSignal<T>(
+	entry: SessionEntry,
+	outer: AbortSignal | undefined,
+	run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+	const controller = new AbortController();
+	const controllers = dialogControllers.get(entry) ?? new Set<AbortController>();
+	dialogControllers.set(entry, controllers);
+	controllers.add(controller);
+	const onOuterAbort = (): void => controller.abort();
+	if (outer?.aborted) controller.abort();
+	else outer?.addEventListener("abort", onOuterAbort, { once: true });
+	return run(controller.signal).finally(() => {
+		controllers.delete(controller);
+		outer?.removeEventListener("abort", onOuterAbort);
+	});
+}
+
+/**
  * The ExtensionUIContext dialog subset. With a writable collab guest attached
  * the dialog goes to the web host AND every writable guest; the first answer
  * wins and the losers' dialogs close ("answered by <name>"). A dialog also
@@ -69,18 +111,9 @@ function uiRequest(
 	params: unknown,
 	dialogOptions?: ExtensionUIDialogOptions,
 ): Promise<unknown> {
-	const controller = new AbortController();
-	const controllers = dialogControllers.get(entry) ?? new Set<AbortController>();
-	dialogControllers.set(entry, controllers);
-	controllers.add(controller);
-	const outer = dialogOptions?.signal;
-	const onOuterAbort = (): void => controller.abort();
-	if (outer?.aborted) controller.abort();
-	else outer?.addEventListener("abort", onOuterAbort, { once: true });
-	return runDialog(entry, method, params, controller.signal).finally(() => {
-		controllers.delete(controller);
-		outer?.removeEventListener("abort", onOuterAbort);
-	});
+	return withDialogSignal(entry, dialogOptions?.signal, (signal) =>
+		runDialog(entry, method, params, signal),
+	);
 }
 
 interface DialogOutcome {
@@ -456,6 +489,165 @@ async function askDialogViaCollab(
 	return { kind: "submit", results };
 }
 
+const FORM_OTHER_OPTION = "Other (type your own)";
+const FORM_NEXT_OPTION = "Next →";
+
+/** A guest's free-text Other answer to a choice group, on one line; undefined = cancelled. */
+async function formOtherViaCollab(
+	adapter: CollabHostAdapter,
+	question: string,
+	route: GuestRoute,
+): Promise<string | undefined | typeof COLLAB_UI_FALLTHROUGH> {
+	const input = await collabAsk(adapter, { kind: "editor", title: question, prefill: "" }, route);
+	if (input === COLLAB_UI_FALLTHROUGH || input === undefined) return input;
+	return (input as string).replace(/[\r\n]+/g, " ");
+}
+
+/**
+ * One choice group as the TUI's #runGuestFormChoice walks it: a select with the defaults
+ * preselected (a radio group or single select picks once; a checkbox group or multi select
+ * toggles rows until Next) and a free-text Other row where the field offers one.
+ */
+async function formChoiceViaCollab(
+	adapter: CollabHostAdapter,
+	field: UiFormChoiceField,
+	route: GuestRoute,
+): Promise<UiFormChoiceAnswer | undefined | typeof COLLAB_UI_FALLTHROUGH> {
+	const enabled = field.options.flatMap((option, i) => (option.disabled ? [] : [i]));
+	// Nothing a guest could pick: the group contributes nothing, as in the local form.
+	if (enabled.length === 0 && !field.other)
+		return { kind: "choice", index: field.index, checked: [] };
+	const question = sanitizeCarriageReturns(field.question);
+	const checked = new Set(enabled.filter((i) => field.options[i]!.checked));
+	const labels = disambiguateDisplayLabels(
+		enabled.map((i) => {
+			const option = field.options[i]!;
+			return sanitizeCarriageReturns(spansText(option.label).trim() || option.value);
+		}),
+		[FORM_OTHER_OPTION, FORM_NEXT_OPTION],
+	);
+	const rows = field.other ? [...labels, FORM_OTHER_OPTION] : labels;
+	if (!field.multi) {
+		// Several checked radios: the last wins, as in the local form.
+		const preselected = enabled.findLastIndex((i) => checked.has(i));
+		while (true) {
+			const choice = await collabAsk(
+				adapter,
+				{
+					kind: "select",
+					title: question,
+					options: rows,
+					initialIndex: Math.max(0, preselected),
+					selectionMarker: "radio",
+				},
+				route,
+			);
+			if (choice === COLLAB_UI_FALLTHROUGH || choice === undefined) return choice;
+			if (field.other && choice === FORM_OTHER_OPTION) {
+				const typed = await formOtherViaCollab(adapter, question, route);
+				if (typed === COLLAB_UI_FALLTHROUGH) return typed;
+				// A cancelled or blank Other answer re-shows the options.
+				if (typed === undefined || !typed.trim()) continue;
+				return { kind: "choice", index: field.index, checked: [], other: typed };
+			}
+			const picked = enabled[labels.indexOf(choice as string)];
+			return {
+				kind: "choice",
+				index: field.index,
+				checked: picked === undefined ? [] : [picked],
+			};
+		}
+	}
+	let other: string | undefined;
+	while (true) {
+		// Mirror the local form's required check: Next appears once something is checked.
+		const canSubmit = !field.required || checked.size > 0 || other !== undefined;
+		const checkedIndices = enabled.flatMap((i, row) => (checked.has(i) ? [row] : []));
+		if (other !== undefined) checkedIndices.push(labels.length);
+		const choice = await collabAsk(
+			adapter,
+			{
+				kind: "select",
+				title: question,
+				options: canSubmit ? [...rows, FORM_NEXT_OPTION] : rows,
+				selectionMarker: "checkbox",
+				checkedIndices,
+				markableCount: rows.length,
+			},
+			route,
+		);
+		if (choice === COLLAB_UI_FALLTHROUGH || choice === undefined) return choice;
+		if (choice === FORM_NEXT_OPTION) {
+			return {
+				kind: "choice",
+				index: field.index,
+				checked: [...checked].sort((a, b) => a - b),
+				...(other === undefined ? {} : { other }),
+			};
+		}
+		if (field.other && choice === FORM_OTHER_OPTION) {
+			if (other !== undefined) {
+				other = undefined;
+				continue;
+			}
+			const typed = await formOtherViaCollab(adapter, question, route);
+			if (typed === COLLAB_UI_FALLTHROUGH) return typed;
+			// A cancelled or blank Other answer leaves Other unchecked.
+			if (typed?.trim()) other = typed;
+			continue;
+		}
+		const toggled = enabled[labels.indexOf(choice as string)];
+		if (toggled === undefined) continue;
+		if (!checked.delete(toggled)) checked.add(toggled);
+	}
+}
+
+/** One text field as the TUI's #runGuestFormText walks it: an editor prefilled with the value, re-asked until it passes the field's rules. */
+async function formTextViaCollab(
+	adapter: CollabHostAdapter,
+	field: UiFormTextField,
+	route: GuestRoute,
+): Promise<UiFormTextAnswer | undefined | typeof COLLAB_UI_FALLTHROUGH> {
+	const question = sanitizeCarriageReturns(field.question);
+	let text = field.value;
+	let error: string | undefined;
+	while (true) {
+		const input = await collabAsk(
+			adapter,
+			{ kind: "editor", title: error ? `${question} (${error})` : question, prefill: text },
+			route,
+		);
+		if (input === COLLAB_UI_FALLTHROUGH || input === undefined) return input;
+		// A single-line input cannot hold line breaks.
+		text = field.multiline ? (input as string) : (input as string).replace(/[\r\n]+/g, " ");
+		error = fieldError(field, textValue(field, text));
+		if (!error) return { kind: "text", index: field.index, text };
+	}
+}
+
+/**
+ * A guest's run through the form, answering as the browser would: every named field in
+ * order, a select per choice group and an editor per text field. `undefined` is a guest
+ * cancel; COLLAB_UI_FALLTHROUGH routes back to the web dialog.
+ */
+async function formDialogViaCollab(
+	adapter: CollabHostAdapter,
+	form: UiFormParams,
+	route: GuestRoute,
+): Promise<UiFormSubmit | undefined | typeof COLLAB_UI_FALLTHROUGH> {
+	const answers: UiFormFieldAnswer[] = [];
+	for (const field of formFields(form)) {
+		if (!field.name) continue;
+		const answer =
+			field.kind === "choice"
+				? await formChoiceViaCollab(adapter, field, route)
+				: await formTextViaCollab(adapter, field, route);
+		if (answer === COLLAB_UI_FALLTHROUGH || answer === undefined) return answer;
+		answers.push(answer);
+	}
+	return { kind: "submit", answers };
+}
+
 /** Dialog dispatch to the writable guests; COLLAB_UI_FALLTHROUGH when they cannot answer it. */
 async function uiRequestViaCollab(
 	adapter: CollabHostAdapter,
@@ -463,6 +655,10 @@ async function uiRequestViaCollab(
 	params: unknown,
 	route: GuestRoute,
 ): Promise<unknown> {
+	if (method === "formDialog") {
+		// Shape fixed by buildUiContext's formDialog call site.
+		return formDialogViaCollab(adapter, params as UiFormParams, route);
+	}
 	if (method === "askDialog") {
 		// Shape fixed by buildUiContext's askDialog call site.
 		const p = params as AskDialogParams;
@@ -513,6 +709,52 @@ export function rejectStreamUiRequests(
 	}
 }
 
+/**
+ * The ask tool's HTML form, whole. The session parses it (the SDK's `parseHtmlForm`) and
+ * sends the structured form with its pictures resolved to `data:` URIs; the browser (or a
+ * collab guest walking it field by field) answers with {@link UiFormSubmit}, which becomes
+ * the SDK's form data. Cancel is `undefined`. An invalid answer rejects (see
+ * {@link formDataFromSubmit}). `dialogOptions.timeout` is a fixed deadline from the moment
+ * the form is shown: at it the form's defaults submit with `timedOut`, `onTimeout` fires
+ * and the web dialog ends (typing does not postpone it, unlike the TUI's inactivity reset).
+ */
+function formDialog(
+	entry: SessionEntry,
+	html: string,
+	dialogOptions?: ExtensionUIDialogOptions,
+): Promise<ExtensionFormDialogResult | undefined> {
+	const form = parseHtmlForm(html);
+	return withDialogSignal(entry, dialogOptions?.signal, async (signal) => {
+		const params = await buildFormParams(form, { cwd: entry.cwd, signal });
+		if (signal.aborted) return undefined;
+		const timeout = dialogOptions?.timeout;
+		const timer = new AbortController();
+		let timedOut = false;
+		let timeoutId: NodeJS.Timeout | undefined;
+		if (timeout !== undefined && timeout > 0) {
+			params.deadline = Date.now() + timeout;
+			timeoutId = setTimeout(() => {
+				if (signal.aborted) return;
+				timedOut = true;
+				dialogOptions?.onTimeout?.();
+				timer.abort();
+			}, timeout);
+		}
+		try {
+			const answer = await runDialog(
+				entry,
+				"formDialog",
+				params,
+				AbortSignal.any([signal, timer.signal]),
+			);
+			if (answer !== undefined) return { data: formDataFromSubmit(form, answer) };
+			return timedOut ? { data: defaultFormData(form), timedOut: true } : undefined;
+		} finally {
+			clearTimeout(timeoutId);
+		}
+	});
+}
+
 /** One context per session: dialog requests and notices route to that session's streams. */
 export function buildUiContext(entry: SessionEntry): ExtensionUIContext {
 	return wrapTerminalHooks(entry, {
@@ -533,6 +775,7 @@ export function buildUiContext(entry: SessionEntry): ExtensionUIContext {
 			uiRequest(entry, "askDialog", { questions }, dialogOptions) as Promise<
 				ExtensionAskDialogResult | undefined
 			>,
+		formDialog: (html, dialogOptions) => formDialog(entry, html, dialogOptions),
 		// The wire carries the prompt minus `compact`, which no web surface shows.
 		approve: async (prompt, dialogOptions) => {
 			const params: UiApprovalParams = {

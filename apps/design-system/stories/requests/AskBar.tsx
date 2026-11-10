@@ -6,6 +6,10 @@ import {
 	approvalSessionParams,
 	askChecksQuestion,
 	askDialogRequest,
+	askFormParams,
+	askFormRequest,
+	askFormWithDeadline,
+	askLongFormParams,
 	askLongQuestions,
 	askScopeQuestion,
 	askTabbedQuestions,
@@ -44,6 +48,31 @@ export default [
 			{
 				name: "Long questions with previews",
 				seed: () => setState("uiRequest", askDialogRequest("ask_43", askLongQuestions)),
+				render: () => <AskBar />,
+			},
+			{
+				name: "Agent form",
+				description:
+					"The ask tool's HTML form in one dock: context with a picture and table, a recommended radio group preselected (with Other), a checkbox group, a select, a number and a textarea. Enter submits from a field.",
+				seed: () => setState("uiRequest", askFormRequest("form_61", askFormParams)),
+				render: () => <AskBar />,
+			},
+			{
+				name: "Agent form with a deadline",
+				description:
+					"A timeout from the session: the header counts down and the session submits the form's defaults at the deadline.",
+				seed: () =>
+					setState(
+						"uiRequest",
+						askFormRequest("form_62", askFormWithDeadline(Date.now() + 45_000)),
+					),
+				render: () => <AskBar />,
+			},
+			{
+				name: "Long agent form",
+				description:
+					"Many sections: the body scrolls while the title, Cancel and Submit stay in view.",
+				seed: () => setState("uiRequest", askFormRequest("form_63", askLongFormParams)),
 				render: () => <AskBar />,
 			},
 			{

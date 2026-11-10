@@ -1,0 +1,208 @@
+/* AskForm: the ask tool's HTML form (formDialog ui_request) inside the AskBar dock. The
+   dock frame (.ask-bar, .ask-bar-head, .ask-actions) lives in modals.css; this file adds the
+   form body: it scrolls on its own so Submit stays in view however long the form is. Part of
+   the global stylesheet; cascade order is set by the @import manifest in styles.css. */
+.ask-bar.ask-form {
+	overflow: hidden;
+}
+.ask-form-countdown {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.ask-form-main {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: var(--space-4);
+	min-height: 0;
+}
+.ask-form-body {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: var(--space-5);
+	min-height: 0;
+	overflow-y: auto;
+}
+.ask-form-section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+fieldset.ask-form-section {
+	padding: var(--space-4) var(--space-5);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+}
+.ask-form-legend {
+	padding: 0 var(--space-3);
+	color: var(--muted-3);
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+}
+
+/* Context blocks. */
+.ask-form-text,
+.ask-form-heading {
+	margin: 0;
+	color: var(--text);
+	overflow-wrap: anywhere;
+	/* A hard line break (<br>) arrives as "\n" in the span text. */
+	white-space: pre-line;
+}
+.ask-form-heading {
+	font-size: var(--fs-lg);
+	font-weight: 600;
+}
+.ask-form-text code,
+.ask-form-heading code,
+.ask-form-list code,
+.ask-form-table code,
+.ask-form-option-text code {
+	padding: 0 var(--space-2);
+	border-radius: var(--r-xs);
+	background: var(--panel);
+	font-family: var(--font-mono);
+	font-size: 0.92em;
+}
+.ask-form-list {
+	margin: 0;
+	padding-left: var(--space-7);
+	color: var(--text);
+}
+.ask-form-pre {
+	margin: 0;
+	padding: var(--space-3) var(--space-4);
+	max-height: 30dvh;
+	overflow: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	background: var(--panel);
+	color: var(--text);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+}
+.ask-form-table-wrap {
+	overflow-x: auto;
+}
+.ask-form-table {
+	border-collapse: collapse;
+	font-size: var(--fs-md);
+}
+.ask-form-table th,
+.ask-form-table td {
+	padding: var(--space-2) var(--space-4);
+	border: 1px solid var(--border);
+	text-align: left;
+	vertical-align: top;
+}
+.ask-form-table th {
+	background: var(--panel);
+	font-weight: 600;
+}
+.ask-form-image {
+	max-width: 100%;
+	max-height: 30dvh;
+	object-fit: contain;
+	align-self: flex-start;
+	border-radius: var(--r-sm);
+}
+
+/* Fields. */
+.ask-form-field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	min-width: 0;
+}
+.ask-form-label {
+	color: var(--text);
+	font-size: var(--fs-md);
+}
+.ask-form-required {
+	margin-left: var(--space-2);
+	color: var(--error);
+}
+.ask-form-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+.ask-form-option {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-3);
+	padding: var(--space-1) var(--space-2);
+	border-radius: var(--r-sm);
+	color: var(--text);
+	cursor: pointer;
+	accent-color: var(--accent);
+}
+.ask-form-option.disabled {
+	color: var(--muted-2);
+	cursor: default;
+}
+.ask-form-option-text {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.ask-form-other {
+	align-items: center;
+	cursor: default;
+}
+.ask-form-input {
+	box-sizing: border-box;
+	width: 100%;
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	background: var(--bg-deep);
+	color: var(--text);
+	font: inherit;
+}
+.ask-form-input:focus {
+	border-color: var(--accent-border);
+	outline: none;
+}
+.ask-form-textarea {
+	min-height: 0;
+	resize: vertical;
+}
+.ask-form-field.invalid .ask-form-input {
+	border-color: var(--error-border);
+}
+.ask-form-error {
+	color: var(--error-text);
+	font-size: var(--fs-sm);
+}
+
+/* Short viewport: the form scrolls inside the same shorter dock as the other ask surfaces. */
+@media (max-height: 599px) {
+	.ask-form-pre,
+	.ask-form-image {
+		max-height: 20dvh;
+	}
+}
+
+/* Touch or narrow window: 44px targets and 16px text so a focused field never zooms the page. */
+@media (pointer: coarse), (max-width: 767px) {
+	.ask-form-input {
+		min-height: 44px;
+		font-size: max(1rem, 16px);
+	}
+	.ask-form-textarea {
+		min-height: 88px;
+	}
+	.ask-form-option {
+		min-height: 44px;
+		align-items: center;
+	}
+}

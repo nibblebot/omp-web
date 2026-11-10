@@ -174,14 +174,15 @@ function hookRejected(
  * browser equivalent become browser_ui contributions (fire-and-forget:
  * sync hooks cannot await answers; transport failures log to stderr, never
  * stdout); hooks without one throw/reject explicit unsupported errors.
- * Non-presentation hooks (select/confirm/input/editor/askDialog/approve/notify)
- * pass through untouched from `base`.
+ * Non-presentation hooks (select/confirm/input/editor/askDialog/formDialog/approve/notify)
+ * pass through untouched from `base`; a base without `formDialog` leaves the ask tool on
+ * its field-by-field fallback.
  */
 export function wrapTerminalHooks(
 	entry: SessionEntry,
 	base: Pick<
 		ExtensionUIContext,
-		"select" | "confirm" | "input" | "editor" | "askDialog" | "approve" | "notify"
+		"select" | "confirm" | "input" | "editor" | "askDialog" | "formDialog" | "approve" | "notify"
 	>,
 	owner: string = TERMINAL_HOOKS_OWNER,
 ): ExtensionUIContext {
@@ -216,6 +217,7 @@ export function wrapTerminalHooks(
 		input: base.input,
 		editor: base.editor,
 		askDialog: base.askDialog,
+		formDialog: base.formDialog,
 		approve: base.approve,
 		notify: base.notify,
 		get theme(): never {

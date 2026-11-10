@@ -3,7 +3,7 @@ import { setState } from "../../../web/state";
 import { answerDemoSession, demoSessionState } from "../../demo-session";
 import { addCalls } from "../../session";
 import { belowEditorRequest } from "../../fixtures/dialogs";
-import { askUiRequest } from "../../fixtures/overlays";
+import { askFormUiRequest } from "../../fixtures/overlays";
 import {
 	screenItems,
 	screenLiveBlocks,
@@ -58,7 +58,7 @@ export default defineStory({
 		{
 			name: "Agent asks a question",
 			description: "A pending ask from the agent: AskBar docks above the composer.",
-			seed: { uiRequest: askUiRequest },
+			seed: { uiRequest: askFormUiRequest },
 			render: () => (
 				<div class="ds-frame ds-frame-tall">
 					<App />

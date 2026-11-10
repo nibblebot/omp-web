@@ -1,11 +1,12 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { ModelKind, ResolvedAnthropicCompat } from "@oh-my-pi/pi-catalog/types";
-import type { AskQuestion, UiRequest } from "../../web/prompt/ask-types";
+import type { UiRequest } from "../../web/prompt/ask-types";
 import type { SettingsSection } from "../../web/components/settings/SettingsNav";
 import { settingsSectionId } from "../../web/prefs/settings-tabs";
 import type { BrowserUiRequest } from "../../web/store/browser-ui";
 import { appearanceSettingsModel } from "./appearance";
+import { askFormParams } from "./dialogs";
 import type { DownloadConsent, WebDownloadManifest } from "../../web/store/downloads";
 import type { ResumeCandidate } from "../../web/store/resume";
 import type { BrowserUiContribution } from "#lib/wire/browser-ui-contract";
@@ -29,48 +30,14 @@ export const T0 = Date.parse("2026-10-09T10:00:00Z");
 const MIN = 60_000;
 
 // ---------------------------------------------------------------------------
-// Ask dialog: the questions a model asks the operator.
+// Ask: the form a model asks the operator to fill in.
 // ---------------------------------------------------------------------------
 
-/** AskBar: single-choice question with a recommended option and per-option previews. */
-const askScope: AskQuestion = {
-	id: "q_scope",
-	question: "Which surface should the copy button cover?",
-	header: "Scope",
-	options: [
-		{
-			label: "Fenced blocks only",
-			description: "Markdown fences in assistant and user messages.",
-			preview: "```ts\nconst x = 1;\n```",
-		},
-		{ label: "Inline code too", description: "Adds single-backtick spans; more hit-testing work." },
-		{ label: "Whole message", description: "Copies the rendered plain text of the message." },
-	],
-	recommended: 0,
-};
-
-/** AskBar: multi-select question for which checks to run before the commit. */
-const askChecks: AskQuestion = {
-	id: "q_checks",
-	question: "Which checks should run before committing?",
-	header: "Checks",
-	options: [
-		{ label: "bun run check:types" },
-		{ label: "bun run lint" },
-		{ label: "bun test apps/web" },
-		{ label: "bun run format:check" },
-	],
-	multi: true,
-};
-
-/** AskQuestion list: questions in the order AskBar steps through them. */
-export const askQuestions: AskQuestion[] = [askScope, askChecks];
-
-/** UiRequest: the agent's ask tool (method "askDialog"), carrying the two questions above. */
-export const askUiRequest: UiRequest = {
-	id: "ask_4c1",
-	method: "askDialog",
-	params: { questions: askQuestions },
+/** UiRequest: the agent's ask tool as one HTML form (method "formDialog"). */
+export const askFormUiRequest: UiRequest = {
+	id: "ask_4f2",
+	method: "formDialog",
+	params: askFormParams,
 };
 
 // ---------------------------------------------------------------------------

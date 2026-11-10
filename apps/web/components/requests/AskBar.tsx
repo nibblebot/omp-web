@@ -23,16 +23,19 @@ import {
 import { approvalChoices, splitApprovalPrompt } from "../../prompt/approval";
 import type { AskOption, AskQuestion, UiRequest } from "../../prompt/ask-types";
 import type { UiApprovalParams } from "#lib/wire/protocol";
+import type { UiFormParams } from "#lib/wire/ask-form";
 import { isImeKey } from "../../prompt/key-input";
 import { mayAutoFocusComposer } from "../../store/chat";
 import { PickerRow } from "../ui/PickerRow";
+import { AskForm } from "./AskForm";
 
 /**
  * Agent-to-user dialogs (ExtensionUIContext): docked above the prompt in the
  * composer slot, not an overlay. Keys: 1-9 pick an option, Up/Down move the
  * cursor, Enter activates it, Esc cancels. Typing in the "Other" field or the
  * input/editor fields keeps its own keys. The pending request is state.uiRequest;
- * answers go back as ui_response and cancels resolve undefined.
+ * answers go back as ui_response and cancels resolve undefined. The ask tool's
+ * HTML form (`formDialog`) is one form in the same dock: see AskForm.
  */
 export const AskBar: Component = () => (
 	<Show when={state.uiRequest} keyed>
@@ -65,6 +68,9 @@ const AskRequest: Component<{ req: UiRequest }> = (props) => {
 	});
 	return (
 		<Switch fallback={null}>
+			<Match when={props.req.method === "formDialog"}>
+				<AskForm id={props.req.id} params={props.req.params as UiFormParams} />
+			</Match>
 			<Match when={props.req.method === "askDialog"}>
 				<AskQuestions id={props.req.id} questions={params.questions ?? []} />
 			</Match>
