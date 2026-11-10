@@ -188,6 +188,24 @@ export function pushItem(item: ChatItem): void {
 	setState("items", state.items.length, item);
 }
 
+/**
+ * A tool call's start on the session's clock, as a history load stamps it: the
+ * `completedAt` of the assistant message that made the call, the nearest one
+ * before it (only the turn's other tool items sit between). Never the browser's
+ * clock, which a remote session's `settledAtMs` cannot be compared with.
+ */
+function callStartedAt(): { startedAt?: number } {
+	const items = state.items;
+	for (let i = items.length - 1; i >= 0; i--) {
+		const item = items[i];
+		if (item.kind === "tool") continue;
+		return item.kind === "assistant" && item.completedAt !== undefined
+			? { startedAt: item.completedAt }
+			: {};
+	}
+	return {};
+}
+
 export function pushNotice(level: string, message: string): void {
 	pushItem({ kind: "notice", id: nextId++, level, message });
 	// finding #P1: error-level notices are status messages; announce them so
@@ -729,6 +747,7 @@ export function applyEvent(e: WireSessionEvent): void {
 				name: e.toolName,
 				args: e.args ?? null,
 				status: "running",
+				...callStartedAt(),
 				output: "",
 			});
 			// TUI parity (event-controller #updateWorkingMessageFromIntent): the

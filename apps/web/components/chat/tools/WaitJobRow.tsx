@@ -3,7 +3,12 @@ import type { WireJobWidgetView, WireWaitJob } from "#lib/wire/protocol";
 import { completionTitle } from "../../../activities/completion";
 import { jobWidgetGlance } from "../../../chat/job-widget";
 import { jobLabel, jobTitle } from "../../../chat/wait-details";
-import { jobElapsedMs, type RunJob } from "../../../chat/wait-runs";
+import {
+	jobElapsedMs,
+	settledTiming,
+	settledTimingText,
+	type RunJob,
+} from "../../../chat/wait-runs";
 import { jobWidgetView } from "../../../store/job-widgets";
 import { openActivities } from "../../../store/activities";
 import { fetchJobDetail } from "../../../store/jobs";
@@ -106,9 +111,12 @@ const WaitJobDetail: Component<{ entry: RunJob; onJump?: () => void }> = (props)
  * One watched job as one line: status glyph (pulsing while its call is live),
  * what kind it is, its title, its id when that differs, what it is doing (a
  * widget's glance, else a subagent's stage), a subagent's completion ring, a
- * failure's exit code and the clock. The line is a button: it opens the job's
- * widget, output tail and actions under it. `onJump`, when the transcript still
- * holds the card that started the job, adds an icon button that scrolls to it.
+ * failure's exit code, how long before its wait a job had already finished,
+ * and the clock. The line is a button: it opens the job's widget, output tail
+ * and actions under it. `onJump`, when the transcript still holds the card that
+ * started the job, adds an icon button that scrolls to it. A settled job's
+ * clock says, on hover and to screen readers, whether it finished during its
+ * wait or how long before it (SDK 18.18.6 `settledAtMs`).
  */
 export const WaitJobRow: Component<{
 	entry: RunJob;
@@ -141,6 +149,11 @@ export const WaitJobRow: Component<{
 	};
 	const failure = () =>
 		job().exitCode !== undefined && job().exitCode !== 0 ? `exit ${job().exitCode}` : undefined;
+	const timing = createMemo(() => settledTiming(props.entry));
+	const timingText = () => {
+		const value = timing();
+		return value === undefined ? undefined : settledTimingText(value);
+	};
 	return (
 		<li class="wait-job" data-status={job().status} data-expanded={props.expanded ? "" : undefined}>
 			<div class="wait-job-line">
@@ -180,9 +193,20 @@ export const WaitJobRow: Component<{
 					<Show when={failure()}>
 						<span class="wait-job-failure">{failure()}</span>
 					</Show>
-					<span class="wait-job-clock">{formatDuration(jobElapsedMs(props.entry, props.now))}</span>
+					<Show when={timing()?.during === false && timingText()}>
+						{(text) => (
+							<span class="wait-job-settled" aria-hidden="true">
+								{text()}
+							</span>
+						)}
+					</Show>
+					<span class="wait-job-clock" title={timingText()}>
+						{formatDuration(jobElapsedMs(props.entry, props.now))}
+					</span>
 					<ChevronRightIcon class="wait-job-chevron" />
-					<span class="visually-hidden">{job().status}</span>
+					<span class="visually-hidden">
+						{timingText() === undefined ? job().status : `${job().status}, ${timingText()}`}
+					</span>
 				</button>
 				<Show when={props.onJump}>
 					{(jump) => (

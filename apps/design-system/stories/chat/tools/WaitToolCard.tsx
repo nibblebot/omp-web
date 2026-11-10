@@ -12,6 +12,7 @@ import {
 	waitRunTools,
 	waitRunningTool,
 	waitSettledTool,
+	waitTimingTool,
 } from "../../../fixtures/tools";
 import { defineStory } from "../../../registry";
 
@@ -78,6 +79,13 @@ export default defineStory({
 				"The same wait when the model gave its jobs a purpose: the row is named by it, with the command (or a subagent's task) as muted secondary text. A job with no intent keeps its label as before.",
 			seed: answerJobDetail,
 			render: () => <WaitToolCard calls={[waitIntentTool]} />,
+		},
+		{
+			name: "Settled, during and before the call",
+			description:
+				"SDK 18.18.6 stamps when each job settled. The build finished while the wait ran (its clock says so on hover); the lint had already finished before the call, which the row notes in muted text by the clock. Older sessions without the stamp show neither.",
+			seed: answerJobDetail,
+			render: () => <WaitToolCard calls={[waitTimingTool]} />,
 		},
 		{
 			name: "Settled, with job widgets",

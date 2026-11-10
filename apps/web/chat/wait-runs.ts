@@ -8,6 +8,7 @@
  */
 import type { WireJobWidgetView, WireWaitJob } from "#lib/wire/protocol";
 import type { ChatItem, ToolItem } from "../state";
+import { formatDuration } from "../subagents/format";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "./thinking";
 import type { TurnMeta } from "./turn-usage";
 import { waitCallOf, type WaitAgent } from "./wait-details";
@@ -96,6 +97,8 @@ export interface RunJob {
 	widget?: WireJobWidgetView;
 	/** Index (0 is the first wait of the run) of the wait that first listed the job as settled; absent while it runs. */
 	settledAt?: number;
+	/** Epoch ms that wait started (its `ToolItem.startedAt`); absent while the job runs or when the call has no start time. */
+	waitStartedAt?: number;
 	/** Epoch ms of the live frame the job's state comes from; its clock advances from it while it runs. */
 	at?: number;
 }
@@ -152,10 +155,17 @@ export function mergeWaitRun(items: readonly ToolItem[]): WaitRunView {
 			const prev = merged.get(job.id);
 			const widget = call.widgets.get(job.id) ?? prev?.widget;
 			const settledAt = job.status === "running" ? undefined : (prev?.settledAt ?? index);
+			const waitStartedAt =
+				settledAt === undefined
+					? undefined
+					: prev?.settledAt !== undefined
+						? prev.waitStartedAt
+						: item.startedAt;
 			merged.set(job.id, {
 				job,
 				...(widget ? { widget } : {}),
 				...(settledAt !== undefined ? { settledAt } : {}),
+				...(waitStartedAt !== undefined ? { waitStartedAt } : {}),
 				...(call.live && job.status === "running" && call.at !== undefined ? { at: call.at } : {}),
 			});
 		}
@@ -174,6 +184,41 @@ export function jobElapsedMs(entry: Pick<RunJob, "job" | "at">, now: number): nu
 	return entry.job.status === "running" && entry.at !== undefined
 		? entry.job.durationMs + Math.max(0, now - entry.at)
 		: entry.job.durationMs;
+}
+
+/**
+ * Gap under which a settled job's timing says nothing: the wait's start is its
+ * turn's `completedAt` and the settle time the job's end, both on the session's
+ * clock but taken at different points of the call's dispatch.
+ */
+const SETTLED_TIMING_SLACK_MS = 1000;
+
+/** When a settled job finished relative to the wait that first listed it settled. */
+export type SettledTiming = { during: true } | { during: false; beforeMs: number };
+
+/**
+ * Whether a settled job finished while its wait ran or had already finished
+ * before the call (and how long before). Undefined for a running job, when the
+ * job has no `settledAtMs` (before SDK 18.18.6) or the wait no start time, and
+ * when the gap is within clock skew.
+ */
+export function settledTiming(
+	entry: Pick<RunJob, "job" | "waitStartedAt">,
+): SettledTiming | undefined {
+	const settled = entry.job.settledAtMs;
+	const started = entry.waitStartedAt;
+	if (entry.job.status === "running" || settled === undefined || started === undefined)
+		return undefined;
+	const gap = started - settled;
+	if (Math.abs(gap) < SETTLED_TIMING_SLACK_MS) return undefined;
+	return gap > 0 ? { during: false, beforeMs: gap } : { during: true };
+}
+
+/** A settled job's timing as row text: `finished during this wait` or `finished 2m05s before this wait`. */
+export function settledTimingText(timing: SettledTiming): string {
+	return timing.during
+		? "finished during this wait"
+		: `finished ${formatDuration(timing.beforeMs)} before this wait`;
 }
 
 /** The header summary the SDK shows: `waiting on 2 of 3 jobs`, `3 jobs settled`, or the agents when no job. */

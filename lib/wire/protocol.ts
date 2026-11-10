@@ -1348,6 +1348,12 @@ export interface WireWaitJob {
 	intent?: string;
 	/** Run time when this frame was cut; a running job's clock is advanced by the receiver. */
 	durationMs: number;
+	/**
+	 * Epoch ms the job settled (SDK 18.18.6 `JobSnapshot.settledAtMs`); absent while it runs
+	 * and on sessions before 18.18.6. Compared with the wait call's start, it tells a job that
+	 * finished during the wait from one that had already finished before it.
+	 */
+	settledAtMs?: number;
 	exitCode?: number;
 	/** A task agent's current step in its own words. */
 	stage?: string;

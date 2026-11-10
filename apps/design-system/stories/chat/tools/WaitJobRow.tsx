@@ -69,6 +69,33 @@ const done: RunJob = {
 	settledAt: 0,
 };
 
+/** Rows of a wait that started at NOW: one job finished during it, one 2m05s before it (SDK 18.18.6 `settledAtMs`). */
+const settledDuring: RunJob = {
+	job: {
+		id: "bg_build",
+		type: "bash",
+		status: "completed",
+		label: "bun run build:web",
+		durationMs: 38_000,
+		settledAtMs: NOW + 12_000,
+	},
+	settledAt: 0,
+	waitStartedAt: NOW,
+};
+
+const settledBefore: RunJob = {
+	job: {
+		id: "bg_lint",
+		type: "bash",
+		status: "completed",
+		label: "bunx oxlint apps/web",
+		durationMs: 9_000,
+		settledAtMs: NOW - 125_000,
+	},
+	settledAt: 0,
+	waitStartedAt: NOW,
+};
+
 /** A row that toggles itself, as the card drives it. */
 function Interactive(props: { entry: RunJob; onJump?: () => void; open?: boolean }) {
 	const [open, setOpen] = createSignal(props.open === true);
@@ -146,6 +173,18 @@ export default defineStory({
 			render: () => (
 				<div class="ds-frame">
 					<Interactive entry={done} open />
+				</div>
+			),
+		},
+		{
+			name: "Settled during or before its wait",
+			description:
+				"With SDK 18.18.6 settle times: the build finished while its wait ran (hover the clock); the lint had already finished before the call, so muted text by the clock says how long before.",
+			seed: () => answerCalls({ getJobDetail: () => null }),
+			render: () => (
+				<div class="ds-frame">
+					<Interactive entry={settledDuring} />
+					<Interactive entry={settledBefore} />
 				</div>
 			),
 		},

@@ -130,6 +130,16 @@ describe("slimWaitJobs", () => {
 		expect(slimWaitJobs({ jobs: [job] })?.jobs[0]).not.toHaveProperty("intent");
 	});
 
+	test("keeps a settled job's settle time (SDK 18.18.6); a non-finite or non-number one is dropped", () => {
+		const settledOf = (settledAtMs: unknown) =>
+			slimWaitJobs({ jobs: [{ ...job, status: "completed", settledAtMs }] })?.jobs[0];
+		expect(settledOf(1_780_000_000_000)?.settledAtMs).toBe(1_780_000_000_000);
+		expect(settledOf(Number.NaN)).not.toHaveProperty("settledAtMs");
+		expect(settledOf(Number.POSITIVE_INFINITY)).not.toHaveProperty("settledAtMs");
+		expect(settledOf("1780000000000")).not.toHaveProperty("settledAtMs");
+		expect(slimWaitJobs({ jobs: [job] })?.jobs[0]).not.toHaveProperty("settledAtMs");
+	});
+
 	test("is undefined without a usable job", () => {
 		expect(slimWaitJobs({ jobs: [] })).toBeUndefined();
 		expect(slimWaitJobs({ op: "wait" })).toBeUndefined();

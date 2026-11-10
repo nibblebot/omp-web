@@ -109,6 +109,7 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 							// No result yet means the call is still in flight (a pending ask, say);
 							// the matching toolResult settles it, now or in a later append.
 							status: "running",
+							...(meta.completedAt !== undefined ? { startedAt: meta.completedAt } : {}),
 							output: "",
 						};
 						if (!tools.has(c.id)) tools.set(c.id, item);

@@ -133,6 +133,19 @@ describe("createHistoryBuilder", () => {
 		const second = builder.append([user("b")]);
 		expect([...first.items, ...second.items].map((item) => item.id)).toEqual([100, 101, 102, 103]);
 	});
+
+	test("a call starts when its assistant message completed; an older message without the stamp leaves it unset", () => {
+		const stamped = msg({
+			...(assistantCalling({ id: "c1", name: "wait" }) as object),
+			completedAt: 5_000,
+		});
+		const [call] = tools(createHistoryBuilder().append([stamped]).items);
+		expect(call?.startedAt).toBe(5_000);
+		const [old] = tools(
+			createHistoryBuilder().append([assistantCalling({ id: "c2", name: "wait" })]).items,
+		);
+		expect(old).not.toHaveProperty("startedAt");
+	});
 });
 
 function aborted(content: unknown[] = []): AgentMessage {

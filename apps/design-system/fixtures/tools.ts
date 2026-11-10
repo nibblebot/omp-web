@@ -1046,6 +1046,38 @@ export const waitAgentsTool: ToolItem = {
 		],
 	},
 };
+/** A fixed wait start, so the timing text of the fixture below never drifts. */
+const WAIT_STARTED_AT = 1_780_000_000_000;
+/**
+ * WaitToolCard: a settled wait on SDK 18.18.6, whose jobs carry `settledAtMs`. The build finished
+ * while the wait ran; the lint had already finished 2m05s before the call (a result the wait
+ * recovered rather than waited for).
+ */
+export const waitTimingTool: ToolItem = {
+	...tool("wait", "done", {}, ""),
+	startedAt: WAIT_STARTED_AT,
+	details: {
+		op: "wait",
+		jobs: [
+			{
+				id: "bg_build",
+				type: "bash",
+				status: "completed",
+				label: "bun run build:web",
+				durationMs: 38_000,
+				settledAtMs: WAIT_STARTED_AT + 12_000,
+			},
+			{
+				id: "bg_lint",
+				type: "bash",
+				status: "completed",
+				label: "bunx oxlint apps/web",
+				durationMs: 9_000,
+				settledAtMs: WAIT_STARTED_AT - 125_000,
+			},
+		],
+	},
+};
 const runJob = (
 	id: string,
 	type: WireWaitJob["type"],

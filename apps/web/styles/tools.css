@@ -773,6 +773,13 @@ pre.terminal.tool-code {
 	font-size: var(--fs-sm);
 	color: var(--error);
 }
+/* A job that had already finished before its wait: quiet, beside the clock. */
+.wait-job-settled {
+	flex: none;
+	font-size: var(--fs-sm);
+	color: var(--muted-3);
+	white-space: nowrap;
+}
 .wait-job-chevron {
 	flex: none;
 	color: var(--muted-2);

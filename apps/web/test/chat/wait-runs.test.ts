@@ -12,6 +12,8 @@ import {
 	buildWaitRuns,
 	jobElapsedMs,
 	mergeWaitRun,
+	settledTiming,
+	settledTimingText,
 	waitMarksText,
 	waitSummary,
 	type WaitFoldOptions,
@@ -349,6 +351,80 @@ describe("merging a run", () => {
 			updatedAt: 5,
 		});
 		expect(byId.get("bad")?.widget).toBeUndefined();
+	});
+});
+
+describe("when a settled job finished (SDK 18.18.6 settledAtMs)", () => {
+	const START = 1_780_000_000_000;
+
+	test("a job settled after its wait started finished during it; one settled earlier, before it by the gap", () => {
+		const during = settledTiming({
+			job: job("build", "completed", { settledAtMs: START + 12_000 }),
+			waitStartedAt: START,
+		});
+		expect(during).toEqual({ during: true });
+		expect(settledTimingText(during!)).toBe("finished during this wait");
+		const before = settledTiming({
+			job: job("lint", "completed", { settledAtMs: START - 125_000 }),
+			waitStartedAt: START,
+		});
+		expect(before).toEqual({ during: false, beforeMs: 125_000 });
+		expect(settledTimingText(before!)).toBe("finished 2m05s before this wait");
+	});
+
+	test("says nothing without a settle time or a wait start, for a running job, or within clock skew", () => {
+		expect(settledTiming({ job: job("old", "completed"), waitStartedAt: START })).toBeUndefined();
+		expect(
+			settledTiming({ job: job("noStart", "completed", { settledAtMs: START - 60_000 }) }),
+		).toBeUndefined();
+		expect(
+			settledTiming({
+				job: job("run", "running", { settledAtMs: START - 60_000 }),
+				waitStartedAt: START,
+			}),
+		).toBeUndefined();
+		expect(
+			settledTiming({
+				job: job("edge", "completed", { settledAtMs: START - 400 }),
+				waitStartedAt: START,
+			}),
+		).toBeUndefined();
+	});
+
+	test("a merged job is timed against the wait that first listed it settled", () => {
+		const view = mergeWaitRun([
+			tool("wait", {
+				startedAt: START,
+				details: {
+					op: "wait",
+					jobs: [
+						job("early", "completed", { settledAtMs: START - 30_000 }),
+						job("late", "running"),
+					],
+				},
+			}),
+			tool("wait", {
+				startedAt: START + 60_000,
+				details: {
+					op: "wait",
+					jobs: [
+						job("early", "completed", { settledAtMs: START - 30_000 }),
+						job("late", "completed", { settledAtMs: START + 90_000 }),
+					],
+				},
+			}),
+		]);
+		const byId = new Map(view.jobs.map((entry) => [entry.job.id, entry]));
+		expect(byId.get("early")?.waitStartedAt).toBe(START);
+		expect(settledTiming(byId.get("early")!)).toEqual({ during: false, beforeMs: 30_000 });
+		expect(byId.get("late")?.waitStartedAt).toBe(START + 60_000);
+		expect(settledTiming(byId.get("late")!)).toEqual({ during: true });
+	});
+
+	test("a wait without a start time (an older transcript) leaves its jobs untimed", () => {
+		const view = mergeWaitRun([wait([job("build", "completed", { settledAtMs: START - 30_000 })])]);
+		expect(view.jobs[0]).not.toHaveProperty("waitStartedAt");
+		expect(settledTiming(view.jobs[0]!)).toBeUndefined();
 	});
 });
 

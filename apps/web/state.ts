@@ -201,6 +201,8 @@ export type ChatItem =
 			name: string;
 			args: unknown;
 			status: ToolStatus;
+			/** Epoch ms the call started, on the session's clock: the `completedAt` of the assistant message that made the call, live and on a history load (absent before the SDK stamped it). */
+			startedAt?: number;
 			output: string;
 			images?: ImageArg[];
 			/** Settled result details (edit diff, todo phase snapshot, file counts), so the card shows the call as it was; absent until settled. */
