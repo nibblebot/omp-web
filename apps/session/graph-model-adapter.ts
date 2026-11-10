@@ -1,13 +1,15 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import type { ExtensionUIContext } from "@oh-my-pi/pi-coding-agent";
+import { isUserRequestEntry } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { AskTool } from "@oh-my-pi/pi-coding-agent/tools/ask";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { createHash } from "node:crypto";
-import type {
-	AgentSession,
-	NavigateTreeResult,
+import {
+	type AgentSession,
+	type NavigateTreeResult,
+	SessionBusyError,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionEntry as SdkEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import {
@@ -98,6 +100,43 @@ export interface GraphNavigateAnswer {
 	reopenAsk?: NavigateTreeResult["reopenAsk"];
 	askReanswerCommitted?: boolean;
 	revision: string;
+}
+
+/**
+ * A transcript message a turn action names: its role and its `timestamp` (ms), the SDK's
+ * `TurnMessage`. The session resolves it to the entry on the current branch.
+ */
+export interface TurnRef {
+	role: "user" | "assistant";
+	at: number;
+}
+
+/** What `rewindTurn` answers: the navigation's answer plus what an Undo needs. */
+export interface TurnRewindAnswer extends GraphNavigateAnswer {
+	/** The prompt entry the rewind went past. */
+	entryId: string;
+	/** Where the leaf was before the rewind; an Undo navigates back to it. */
+	previousLeafId: string | null;
+	/** User turns the rewind dropped from the active branch, the prompt's own included. */
+	rewoundTurns: number;
+}
+
+/**
+ * The entry `turn` names on the current branch, found as the SDK's `runTurnAction` finds it:
+ * the last message entry of that role and timestamp.
+ */
+function turnOnBranch(
+	session: AgentSession,
+	turn: TurnRef,
+): { branch: readonly SdkEntry[]; index: number } {
+	if ((turn?.role !== "user" && turn?.role !== "assistant") || !Number.isFinite(turn.at))
+		throw new Error("Invalid turn: expected { role: 'user' | 'assistant', at: number }");
+	const branch = session.sessionManager.getBranch();
+	const index = branch.findLastIndex(
+		(e) => e.type === "message" && e.message.role === turn.role && e.message.timestamp === turn.at,
+	);
+	if (index < 0) throw new Error("That message is no longer on this branch");
+	return { branch, index };
 }
 
 /**
@@ -364,6 +403,40 @@ export function createGraphModelHandlers(deps: {
 			committedAnswers.delete(session);
 			session.resumeAfterAskReanswer();
 			return { resumed: true };
+		},
+		/** The entry id of a transcript turn on the current branch (the rewind picker selects it). */
+		findTurnEntry(entry: SessionEntry, turn: TurnRef): { entryId: string } {
+			const { branch, index } = turnOnBranch(entry.session, turn);
+			return { entryId: branch[index]!.id };
+		},
+		/**
+		 * A turn's Edit & resend and Retry (the SDK's `runTurnAction`): a same-file rewind past the
+		 * turn's prompt (the user message itself, or the last prompt before an answer) without a
+		 * summary. The answer carries the prompt's draft (`editorText`, `editorImages`) and what an
+		 * Undo needs: the leaf before the rewind and how many user turns it dropped. Refused while
+		 * the session is busy, as the SDK's RPC tree navigation is.
+		 */
+		async rewindTurn(entry: SessionEntry, turn: TurnRef): Promise<TurnRewindAnswer> {
+			const { session } = entry;
+			if (session.isBusyForSnapshot) throw new SessionBusyError("rewind the turn");
+			const { branch, index } = turnOnBranch(session, turn);
+			const at =
+				turn.role === "user"
+					? index
+					: branch.slice(0, index).findLastIndex((e) => isUserRequestEntry(e));
+			if (at < 0) throw new Error("No prompt to resend before this answer");
+			const prompt = branch[at]!;
+			const previousLeafId = session.sessionManager.getLeafId();
+			const rewoundTurns = branch.slice(at).filter((e) => isUserRequestEntry(e)).length;
+			committedAnswers.delete(session);
+			pendingAnswers.delete(session);
+			const result = await session.navigateTree(prompt.id, { summarize: false, requireIdle: true });
+			return {
+				...(await settleNavigation(entry, result)),
+				entryId: prompt.id,
+				previousLeafId,
+				rewoundTurns,
+			};
 		},
 		getModelPresets(entry: SessionEntry): ModelPresetsAnswer {
 			const { settings } = entry.session;

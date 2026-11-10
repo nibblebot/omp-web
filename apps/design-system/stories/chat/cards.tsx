@@ -30,13 +30,39 @@ import {
 	chatStreamingBlock,
 	chatThinking,
 	chatUserImagesItem,
+	chatUserFollowUpItem,
 	chatUserItem,
 	chatUserLongItem,
 	chatTokenUsageSettingsModel,
 } from "../../fixtures/chat";
+import { sessionGraphPage } from "../../fixtures/dialogs";
 import { genericDoneTool } from "../../fixtures/tools";
 import { defineStory } from "../../registry";
 import type { Story } from "../../registry";
+import { answerCalls } from "../../session";
+
+/**
+ * The session behind a card's turn actions: a ready, connected session that rewinds past the
+ * prompt (one turn, so the toast offers Undo), undoes it, resolves the turn for Rewind to here…
+ * and Branch from here, and accepts the resent prompt of a Retry.
+ */
+const answerTurnActions = () => {
+	setState({ connected: true, readyAt: Date.now() });
+	answerCalls({
+		rewindTurn: () => ({
+			revision: sessionGraphPage.revision,
+			editorText: chatUserItem.text,
+			entryId: "n06",
+			previousLeafId: "n07",
+			rewoundTurns: 1,
+		}),
+		findTurnEntry: () => ({ entryId: "n06" }),
+		getSessionGraph: () => sessionGraphPage,
+		navigateTree: () => ({ revision: sessionGraphPage.revision }),
+		branch: () => ({ cancelled: false, text: chatUserItem.text }),
+		prompt: () => undefined,
+	});
+};
 
 /**
  * Host for UserCard: the real card reports thumbnail clicks through onZoom, so
@@ -80,23 +106,34 @@ const stories: Story[] = [
 			file: "apps/web/components/chat/transcript/cards/UserCard.tsx",
 			export: "UserCard",
 		},
+		seed: answerTurnActions,
 		variants: [
-			{ name: "Text prompt", render: () => <UserWithZoom user={chatUserItem} /> },
+			{
+				name: "Text prompt",
+				description:
+					"Hover (or long press on touch) shows Copy, Edit & resend, Retry turn, Rewind to here… and Branch from here: the prompt's message timestamp names its turn.",
+				render: () => <UserWithZoom user={chatUserItem} />,
+			},
 			{
 				name: "Prompt with two images",
 				description: "Click a thumbnail to see the zoom request the host receives.",
 				render: () => <UserWithZoom user={chatUserImagesItem} />,
 			},
 			{
+				name: "Agent follow-up, no turn",
+				description:
+					"An agent-attributed follow-up carries no turn stamp: only Copy and Branch from here (which opens the session tree filtered by the text) show.",
+				render: () => <UserWithZoom user={chatUserFollowUpItem} />,
+			},
+			{
 				name: "Long brief, folded",
 				description:
-					"The agent view's assignment: `fold` clamps the text to about eight lines behind a Show all toggle. Branch-from-here is hidden (`branchable` false), since a subagent transcript is not a branchable session.",
+					"The agent view's assignment: `fold` clamps the text to about eight lines behind a Show all toggle. The session actions are hidden (`branchable` false), since a subagent transcript is not a branchable session.",
 				render: () => <UserWithZoom user={chatUserLongItem} fold branchable={false} />,
 			},
 			{
 				name: "Long brief, not folded",
-				description:
-					"The main session's card: the same text in full, with branch-from-here on hover.",
+				description: "The main session's card: the same text in full, with its actions on hover.",
 				render: () => <UserWithZoom user={chatUserLongItem} />,
 			},
 		],
@@ -108,10 +145,23 @@ const stories: Story[] = [
 			file: "apps/web/components/chat/transcript/cards/AssistantCard.tsx",
 			export: "AssistantCard",
 		},
+		seed: answerTurnActions,
 		variants: [
 			{
 				name: "Settled answer with markdown",
 				render: () => <AssistantCard assistant={chatAssistantItem} thinking={false} />,
+			},
+			{
+				name: "Turn actions",
+				description:
+					"In the session's own transcript (`turnActions`), an answer with a message timestamp offers Retry turn (resends the last prompt before it) and Rewind to here… beside Copy.",
+				render: () => (
+					<AssistantCard
+						assistant={{ ...chatAssistantItem, timestamp: Date.parse("2026-10-09T09:41:30Z") }}
+						thinking={false}
+						turnActions
+					/>
+				),
 			},
 			{
 				name: "Thinking folded in",

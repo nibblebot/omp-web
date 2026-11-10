@@ -16,7 +16,9 @@ import {
 	loadGraph,
 	navigateToEntry,
 	reanswerAsk,
+	takeTreeFocus,
 	takeTreeSeed,
+	treeFocus,
 	treeSeed,
 	type GraphFilter,
 	type GraphNode,
@@ -142,6 +144,8 @@ export const SessionTreePanel: Component = () => {
 	onCleanup(typingPause.cancel);
 	/** Issue number of the latest fresh load: an older answer, or an append for an older page, is dropped. */
 	let refreshIssue = 0;
+	/** Node to select once a load shows it (a card's Rewind to here…); a miss searches for its id. */
+	let pendingFocus: string | null = null;
 	const refresh = (opts: { cursor?: string; append?: boolean; keepError?: boolean } = {}): void => {
 		typingPause.cancel();
 		const issue = opts.append ? refreshIssue : ++refreshIssue;
@@ -160,6 +164,17 @@ export const SessionTreePanel: Component = () => {
 					setPage(p);
 				}
 				if (!opts.keepError) setError(null);
+				if (pendingFocus !== null && !opts.append) {
+					const id = pendingFocus;
+					if (p.nodes.some((n) => n.id === id)) {
+						pendingFocus = null;
+						select(id);
+					} else if (filter() !== id) {
+						// Older than the first page: the node search matches entry ids too.
+						setFilter(id);
+						refresh();
+					} else pendingFocus = null;
+				}
 			})
 			.catch((err) => {
 				if (issue === refreshIssue) setError(String(err instanceof Error ? err.message : err));
@@ -172,6 +187,8 @@ export const SessionTreePanel: Component = () => {
 		stashUnsent();
 		const pre = takeTreeSeed();
 		if (pre) setFilter(pre);
+		const focus = takeTreeFocus();
+		if (focus) focusOn(focus);
 		refresh();
 	});
 	// A card branch re-seeds the filter even when the pane is already open.
@@ -182,6 +199,19 @@ export const SessionTreePanel: Component = () => {
 				if (seed === null) return;
 				takeTreeSeed();
 				setFilter(seed);
+				refresh();
+			},
+			{ defer: true },
+		),
+	);
+	// A card's Rewind to here… selects its node even when the pane is already open.
+	createEffect(
+		on(
+			treeFocus,
+			(focus) => {
+				if (focus === null) return;
+				takeTreeFocus();
+				focusOn(focus);
 				refresh();
 			},
 			{ defer: true },
@@ -198,6 +228,13 @@ export const SessionTreePanel: Component = () => {
 			{ defer: true },
 		),
 	);
+
+	/** Show every node unfiltered so the next load can select `id`. */
+	const focusOn = (id: string): void => {
+		pendingFocus = id;
+		setKind("all");
+		setFilter("");
+	};
 
 	const onFilterInput = (value: string): void => {
 		setFilter(value);

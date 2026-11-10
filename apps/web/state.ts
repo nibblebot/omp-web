@@ -191,6 +191,8 @@ export type ChatItem =
 			duration?: number;
 			/** Epoch ms the session stamped at message_end; the usage row's turn stamp and display.showTurnTime anchor. */
 			completedAt?: number;
+			/** The message's own `timestamp` (epoch ms): with the role, it names the turn a turn action acts on. */
+			timestamp?: number;
 			/** Stop aborted this turn; the card shows an Interrupted footer. */
 			interrupted?: boolean;
 	  }
@@ -689,6 +691,8 @@ export interface PromptInsert {
 	images?: ImageArg[];
 	files?: TextAttachment[];
 	selection?: { start: number; end: number };
+	/** Replace the composer's text, images and file chips instead of adding to them (a rewound turn's draft, its Undo). */
+	replace?: boolean;
 }
 
 /** Result of requestDaemonLogs: tail/head text plus the broker log cursor. */

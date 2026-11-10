@@ -272,6 +272,7 @@ export const TranscriptStream: Component<{
 											assistant={assistant()}
 											thinking={!index.consumed(assistant().id)}
 											meta={index.turnMeta(assistant().id)}
+											turnActions={session()}
 										/>
 									)}
 								</Match>

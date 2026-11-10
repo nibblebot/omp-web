@@ -876,6 +876,8 @@ export type WebMethodName =
 	| "navigateTree"
 	| "reanswerAsk"
 	| "resumeAfterAskReanswer"
+	| "rewindTurn"
+	| "findTurnEntry"
 	| "getMcpState"
 	| "mcpAdd"
 	| "mcpUpdate"
@@ -1002,6 +1004,7 @@ export const READ_ONLY_METHODS: Readonly<Partial<Record<WebMethodName, true>>> =
 	todoGet: true,
 	todoExport: true,
 	getSessionGraph: true,
+	findTurnEntry: true,
 	getModelMentions: true,
 	compactionSnapshot: true,
 	btwList: true,

@@ -99,6 +99,7 @@ button:not(:disabled) {
 	.queue-pop.queue-pop,
 	.queue-clear.queue-clear,
 	.msg-copy-btn.msg-copy-btn,
+	.msg-action-btn.msg-action-btn,
 	.msg-branch-btn.msg-branch-btn,
 	.sidebar-icon-btn.sidebar-icon-btn,
 	.sidebar-menu-btn.sidebar-menu-btn {

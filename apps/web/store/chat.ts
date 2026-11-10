@@ -724,6 +724,7 @@ export function applyEvent(e: WireSessionEvent): void {
 					ttft: meta.ttft,
 					duration: meta.duration,
 					...(meta.completedAt !== undefined ? { completedAt: meta.completedAt } : {}),
+					...(typeof msg.timestamp === "number" ? { timestamp: msg.timestamp } : {}),
 					...(meta.stopReason === "aborted" ? { interrupted: true } : {}),
 				});
 				setState("live", "active", false);

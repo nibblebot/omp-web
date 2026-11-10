@@ -7,7 +7,8 @@ import type {
 	SessionListEntry,
 } from "#lib/wire/protocol";
 import type { ResumeCandidate } from "../web/store/resume";
-import { setState, state } from "../web/state";
+import type { GraphNode, GraphPage } from "../web/store/graph";
+import { type ChatItem, setState, state } from "../web/state";
 import { settleFiles, settleSessions, settleWorkspaceSessions } from "../web/store/roster";
 import { addCalls, answerCommands, type CallHandlers } from "./session";
 import { upsertRosterEntry } from "./fixtures/command-bus";
@@ -391,6 +392,122 @@ function resumeCalls(): CallHandlers {
 	};
 }
 
+/** A user prompt or an answer: the transcript cards the demo's session tree holds. */
+type TurnItem = Extract<ChatItem, { kind: "user" | "assistant" }>;
+
+const turnItem = (item: ChatItem): item is TurnItem =>
+	item.kind === "user" || item.kind === "assistant";
+
+/** The demo's id for a transcript card's entry. */
+const entryIdOf = (item: TurnItem): string => `demo-${item.id}`;
+
+/**
+ * The session tree and the turn actions over the attached transcript: its prompts and answers
+ * are the tree's one branch, and a rewind or an Undo swaps the transcript the way the session's
+ * history resync would. A canned turn's cards carry message timestamps, so a visitor's own
+ * prompts and answers offer Edit & resend, Retry turn, Rewind to here… and Branch from here.
+ */
+function turnCalls(): CallHandlers {
+	/** Transcripts the visitor rewound away from, by the leaf they ended on: an Undo restores one. */
+	const leftBehind = new Map<string, ChatItem[]>();
+	const turns = () => state.items.filter(turnItem);
+	const leafId = () => {
+		const last = turns().at(-1);
+		return last ? entryIdOf(last) : null;
+	};
+	const indexOfTurn = (args: unknown[]): number => {
+		const { role, at } = argRecord(args);
+		const index = state.items.findIndex(
+			(item) => turnItem(item) && item.kind === role && item.timestamp === at,
+		);
+		if (index < 0) throw new Error("That message is no longer on this branch");
+		return index;
+	};
+	/** Rewind past the prompt at `index`: the transcript ends before it, its text goes to the composer. */
+	const rewindPast = (index: number) => {
+		const prompt = state.items[index];
+		if (prompt?.kind !== "user") throw new Error("No prompt to resend before this answer");
+		const previousLeafId = leafId();
+		if (previousLeafId !== null) leftBehind.set(previousLeafId, [...state.items]);
+		const rewoundTurns = state.items.slice(index).filter((item) => item.kind === "user").length;
+		setState("items", state.items.slice(0, index));
+		return {
+			revision: `demo-${state.items.length}`,
+			editorText: prompt.text,
+			...(prompt.images ? { editorImages: prompt.images } : {}),
+			entryId: entryIdOf(prompt),
+			previousLeafId,
+			rewoundTurns,
+		};
+	};
+	return {
+		getSessionGraph: (): GraphPage => {
+			const shown = turns();
+			const nodes: GraphNode[] = shown.map((item, i) => ({
+				id: entryIdOf(item),
+				parentId: i === 0 ? null : entryIdOf(shown[i - 1]!),
+				type: item.kind,
+				timestamp: new Date(item.timestamp ?? Date.now()).toISOString(),
+				preview:
+					item.kind === "user"
+						? item.text
+						: item.blocks
+								.filter((block) => block.kind === "text")
+								.map((block) => block.text)
+								.join("\n"),
+				hasImages: item.kind === "user" && (item.images?.length ?? 0) > 0,
+				childCount: i < shown.length - 1 ? 1 : 0,
+			}));
+			return {
+				sessionId: state.sessionId,
+				revision: `demo-${state.items.length}`,
+				leafId: leafId(),
+				nodes: nodes.reverse(),
+				hasMore: false,
+				nextCursor: null,
+			};
+		},
+		findTurnEntry: (args) => ({ entryId: entryIdOf(state.items[indexOfTurn(args)] as TurnItem) }),
+		rewindTurn: (args) => {
+			const index = indexOfTurn(args);
+			const prompt =
+				state.items[index]?.kind === "user"
+					? index
+					: state.items.slice(0, index).findLastIndex((item) => item.kind === "user");
+			return rewindPast(prompt);
+		},
+		navigateTree: (args) => {
+			const target = String(args[0]);
+			const restored = leftBehind.get(target);
+			if (restored !== undefined) {
+				leftBehind.delete(target);
+				setState("items", restored);
+				return { revision: `demo-${state.items.length}` };
+			}
+			const index = state.items.findIndex((item) => turnItem(item) && entryIdOf(item) === target);
+			if (index < 0) throw new Error("Graph entry no longer exists");
+			if (state.items[index]?.kind === "user") return rewindPast(index);
+			const previousLeafId = leafId();
+			if (previousLeafId !== null) leftBehind.set(previousLeafId, [...state.items]);
+			setState("items", state.items.slice(0, index + 1));
+			return { revision: `demo-${state.items.length}` };
+		},
+		// Branch from here: the session moves onto a new file holding the conversation before the prompt.
+		branch: (args) => {
+			const index = state.items.findIndex(
+				(item) => turnItem(item) && entryIdOf(item) === String(args[0]),
+			);
+			const prompt = state.items[index];
+			if (prompt === undefined) throw new Error("Graph entry no longer exists");
+			setState({
+				sessionId: `sess_${crypto.randomUUID().slice(0, 6)}`,
+				items: state.items.slice(0, index),
+			});
+			return { cancelled: false, text: prompt.kind === "user" ? prompt.text : "" };
+		},
+	};
+}
+
 /** Install the demo's answers; call after `answerCannedTurns` (its `answerCalls` replaces the set). */
 export function answerDemoSession(): void {
 	addCalls({
@@ -401,6 +518,7 @@ export function answerDemoSession(): void {
 		...extensionStateCalls(),
 		...sessionCalls(),
 		...resumeCalls(),
+		...turnCalls(),
 	});
 	answerCommands({
 		...projectCommands,

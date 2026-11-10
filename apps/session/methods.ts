@@ -117,6 +117,7 @@ import {
 	createGraphModelHandlers,
 	type GraphNavigateOptions,
 	type GraphQuery,
+	type TurnRef,
 } from "./graph-model-adapter";
 import { transcriptHistoryFrames } from "./transcript-history";
 
@@ -256,6 +257,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		clearSession: true,
 		deleteSession: true,
 		navigateTree: true,
+		rewindTurn: true,
 		reanswerAsk: true,
 		resumeAfterAskReanswer: true,
 		btwPromote: true,
@@ -538,6 +540,10 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		reanswerAsk: async (entry, a) =>
 			graph.reanswerAsk(entry, a[0] as string, (a[1] ?? {}) as { revision?: string }),
 		resumeAfterAskReanswer: async (entry) => graph.resumeAfterAskReanswer(entry),
+		// A transcript turn's Edit & resend / Retry (args `[{ role, at }]`): a same-file rewind past its prompt.
+		rewindTurn: async (entry, a) => graph.rewindTurn(entry, a[0] as TurnRef),
+		// Read-only (READ_ONLY_METHODS): the entry id a transcript turn (args `[{ role, at }]`) names on the branch.
+		findTurnEntry: async (entry, a) => graph.findTurnEntry(entry, a[0] as TurnRef),
 		retry: (entry) => entry.session.retry(),
 		fork: (entry) => entry.session.fork(),
 		handoff: (entry, a) => {

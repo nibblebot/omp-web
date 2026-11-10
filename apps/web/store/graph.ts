@@ -1,9 +1,13 @@
 import type { ImageArg } from "#lib/wire/protocol";
 import { createSignal } from "solid-js";
-import { call, pushNotice, setPromptInsert } from "../state";
-import { stashUnsent } from "./drafts";
+import { call, connectionState, isSwitching, pushNotice, setPromptInsert, state } from "../state";
+import { splitTextAttachments } from "../prompt/attachments";
+import { dispatchInput } from "../prompt/commands";
+import { composerContent, stashUnsent, type ComposerContent } from "./drafts";
 import { openDock } from "./dock";
 import { invalidateMentions } from "./models";
+import { isReady, isSessionChanging } from "./session";
+import { pushToast } from "./toasts";
 
 /** Authoritative session tree, keyed by stable entry IDs. */
 
@@ -78,6 +82,25 @@ interface NavigateTreeResult {
 	askReanswerCommitted?: boolean;
 }
 
+/**
+ * A transcript turn as a turn action names it (the SDK's `TurnMessage`): the message's role
+ * and its `timestamp`. The session resolves it to the entry on the current branch.
+ */
+export interface TurnRef {
+	role: "user" | "assistant";
+	at: number;
+}
+
+/** `rewindTurn`'s answer: the navigation's, plus what an Undo needs. */
+interface TurnRewindResult extends NavigateTreeResult {
+	entryId: string;
+	previousLeafId: string | null;
+	rewoundTurns: number;
+}
+
+/** How long a rewind's toast, and so its Undo, stays. */
+const REWIND_UNDO_MS = 10_000;
+
 /** Generation of the cached graph. Bumped whenever the transcript is
  *  replaced (compact/handoff/branch/clear/fork/reconnect resync), so picks
  *  made against an older page refuse instead of landing on a stale node. */
@@ -100,6 +123,18 @@ export function seedTreeFilter(text: string): void {
 export function takeTreeSeed(): string | null {
 	const v = treeSeed();
 	if (v !== null) setTreeSeed(null);
+	return v;
+}
+
+/** Entry id the session tree pane selects once it loads (Rewind to here…). */
+const [treeFocus, setTreeFocus] = createSignal<string | null>(null);
+
+export { treeFocus };
+
+/** Take and clear the pending focus; the tree pane selects that node. */
+export function takeTreeFocus(): string | null {
+	const v = treeFocus();
+	if (v !== null) setTreeFocus(null);
 	return v;
 }
 
@@ -242,19 +277,140 @@ export async function reanswerAsk(targetId: string): Promise<boolean> {
 	return true;
 }
 
-/** Cards without a stable entry ID may open the picker, never infer an
- * identity from display text (even when exactly one preview matches). */
+/** A card whose turn the session can resolve branches at that entry; one without (an
+ * agent-attributed follow-up) opens the picker, never inferring an identity from display text
+ * (even when exactly one preview matches). */
 export async function branchFromCard(opts: {
-	entryId?: string;
+	turn?: TurnRef;
 	text: string;
 	imageCount: number;
 }): Promise<void> {
-	if (opts.entryId) {
-		await branchFromEntry(opts.entryId);
+	if (opts.turn) {
+		await branchFromEntry(await turnEntryId(opts.turn));
 		return;
 	}
 	seedTreeFilter(opts.text.slice(0, 80));
 	stashUnsent();
 	openDock("tree");
 	pushNotice("info", "This message has no entry ID — pick the exact node to branch from.");
+}
+
+/** The attached session a rewind belongs to: its Undo acts only there. */
+function attachedSession(): string {
+	return `${state.currentWorkspaceId}:${state.sessionId}`;
+}
+
+/** Why a turn action (or its Undo) cannot run now, or null. */
+function turnActionRefusal(): string | null {
+	if (isSwitching()) return "The session is still loading; try again once it has.";
+	if (connectionState() !== "connected") return "Not connected; try again once it reconnects.";
+	if (isSessionChanging()) return "The session is still changing; try again in a moment.";
+	if (state.streaming) return "Wait for the current response to finish or stop it first.";
+	return null;
+}
+
+/**
+ * A transcript turn's Edit & resend (`edit`) or Retry turn (`retry`), the SDK's `runTurnAction`:
+ * a same-file rewind past the turn's prompt (the user message itself, or the last prompt before
+ * an answer) without a summary; the previous path stays in the tree. Edit puts the prompt in the
+ * composer in place of what it held and toasts the rewind with an Undo; Retry sends the prompt
+ * again at once and is refused while the composer holds an unsent draft.
+ */
+export async function runTurnAction(act: "edit" | "retry", turn: TurnRef): Promise<void> {
+	const draft = composerContent();
+	const refusal =
+		turnActionRefusal() ??
+		(act === "retry" && !isReady() ? "The attached session is not ready yet." : null) ??
+		(act === "retry" && (draft.text.trim() || draft.images.length > 0 || draft.files.length > 0)
+			? "Send or clear the draft to retry this turn"
+			: null);
+	if (refusal) {
+		pushToast(refusal);
+		return;
+	}
+	const owner = attachedSession();
+	const result = (await call("rewindTurn", [turn])) as TurnRewindResult;
+	if (result.cancelled || result.aborted) {
+		pushToast("Navigation cancelled");
+		return;
+	}
+	noteTranscriptReplaced();
+	// A switch while the call ran: the answer belongs to the session the page left.
+	if (owner !== attachedSession()) return;
+	const text = result.editorText ?? "";
+	const images = result.editorImages ?? [];
+	if (act === "retry") {
+		if (text.trim() || images.length > 0) dispatchInput(text, images, "enter");
+		pushToast("Retrying the turn");
+		return;
+	}
+	if (result.editorText !== undefined || images.length > 0) {
+		// Attached files went out inlined in the prompt; they come back as chips.
+		const { text: body, files } = splitTextAttachments(text);
+		setPromptInsert({
+			text: body,
+			...(images.length > 0 ? { images } : {}),
+			...(files.length > 0 ? { files } : {}),
+			replace: true,
+		});
+	}
+	const turns = result.rewoundTurns;
+	pushToast(
+		turns > 0 ? `Rewound ${turns} turn${turns === 1 ? "" : "s"}` : "Rewound to selected point",
+		{
+			durationMs: REWIND_UNDO_MS,
+			action: {
+				label: "Undo",
+				run: () => {
+					undoRewind(owner, result.previousLeafId, draft).catch((err) =>
+						pushNotice("error", err instanceof Error ? err.message : String(err)),
+					);
+				},
+			},
+		},
+	);
+}
+
+/**
+ * Undo of a turn's rewind: the leaf goes back to `leafId`, where it was (the rewind kept that
+ * path in the tree, same file, no summary), and `draft`, what the composer held before the
+ * rewind put the prompt there, comes back.
+ */
+async function undoRewind(owner: string, leafId: string | null, draft: ComposerContent) {
+	if (owner !== attachedSession()) {
+		pushToast("That rewind belongs to another session.");
+		return;
+	}
+	if (!leafId) return;
+	const refusal = turnActionRefusal();
+	if (refusal) {
+		pushToast(refusal);
+		return;
+	}
+	const page = await loadGraph({ limit: 1 });
+	const data = (await call("navigateTree", [
+		leafId,
+		{ revision: page.revision },
+	])) as NavigateTreeResult;
+	if (data.cancelled || data.aborted) {
+		pushToast("Navigation cancelled");
+		return;
+	}
+	noteTranscriptReplaced();
+	if (owner !== attachedSession()) return;
+	setPromptInsert({ ...draft, replace: true });
+	pushToast("Rewind undone");
+}
+
+/** Rewind to here…: the session tree pane opens with the turn's entry selected (the web's rewind picker). */
+export async function openRewindPicker(turn: TurnRef): Promise<void> {
+	setTreeFocus(await turnEntryId(turn));
+	openDock("tree");
+}
+
+/** The entry id `turn` names on the session's current branch; refused when it is not there. */
+async function turnEntryId(turn: TurnRef): Promise<string> {
+	// Answer shape of `findTurnEntry` (apps/session/graph-model-adapter.ts).
+	const answer = (await call("findTurnEntry", [turn])) as { entryId: string };
+	return answer.entryId;
 }

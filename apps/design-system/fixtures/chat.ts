@@ -364,17 +364,26 @@ export const chatStreamingItems: ChatItem[] = [
 // Standalone cards: user prompts, assistant answers, advisor blockers.
 // ---------------------------------------------------------------------------
 
-/** UserCard: plain prompt typed in the composer. */
+/** UserCard: plain prompt typed in the composer; its message timestamp names the turn, so the turn actions show. */
 export const chatUserItem: Extract<ChatItem, { kind: "user" }> = {
 	kind: "user",
 	id: 501,
 	text: "The queued follow-up never shows the retry badge. Check the queue bar and the review store, then fix it.",
+	timestamp: Date.parse("2026-10-09T09:41:12Z"),
+};
+
+/** UserCard: an agent-attributed follow-up carries no turn stamp, so only copy and branch-from-here show. */
+export const chatUserFollowUpItem: Extract<ChatItem, { kind: "user" }> = {
+	kind: "user",
+	id: 504,
+	text: "Also run the queue bar tests once the badge renders.",
 };
 
 /** UserCard: long task brief, so `fold` clamps it behind Show all. */
 export const chatUserLongItem: Extract<ChatItem, { kind: "user" }> = {
 	kind: "user",
 	id: 503,
+	timestamp: Date.parse("2026-10-09T09:12:40Z"),
 	text: [
 		"## Goal",
 		"Add a retry badge to tool cards that failed once and then succeeded. Keep the header layout unchanged.",
@@ -397,6 +406,7 @@ export const chatUserImagesItem: Extract<ChatItem, { kind: "user" }> = {
 	id: 502,
 	text: "Here is the type error from the review store. Fix the anchor type and keep the public API unchanged.",
 	images: [terminalScreenshot, screenshot],
+	timestamp: Date.parse("2026-10-09T09:44:05Z"),
 };
 
 /** AssistantCard: settled answer with markdown, a code fence and a table. */

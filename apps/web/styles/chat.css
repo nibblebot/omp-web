@@ -870,7 +870,7 @@ pre {
 		margin-top: 0;
 	}
 }
-/* Per-message hover/focus toolbar (user: branch + copy; assistant: copy). It sits
+/* Per-message hover/focus toolbar (user: copy, turn actions, branch; assistant: copy, turn actions). It sits
    inside its item's box: transcript items are paint-contained (content-visibility),
    which clips anything poking out. It also reveals without an opacity transition:
    under content-visibility:auto, Chromium leaves a hover-driven opacity transition
@@ -891,6 +891,7 @@ pre {
 	opacity: 1;
 }
 .msg-copy-btn,
+.msg-action-btn,
 .msg-branch-btn {
 	background: var(--panel);
 	border: 1px solid var(--border);
@@ -902,16 +903,29 @@ pre {
 	min-height: 24px;
 	cursor: pointer;
 }
-/* A user message's branch and copy are icon buttons (assistant copy is styled by
+/* A user message's actions are icon buttons (an assistant's are styled as
    .msg-copy-btn--icon in its footer). */
-.msg-user .msg-toolbar :is(.msg-copy-btn, .msg-branch-btn) {
+.msg-user .msg-toolbar :is(.msg-copy-btn, .msg-action-btn, .msg-branch-btn) {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
 	padding: var(--space-1);
 }
+/* Copy, the turn actions and branch are wider than a short prompt's bubble, and the item's
+   paint containment clips whatever pokes out of it: such a bubble is at least as wide as
+   its toolbar. */
+.msg-user:has(.msg-action-btn) {
+	min-width: min(100%, 10rem);
+}
+/* Narrow windows give the toolbar 44px targets (base.css). */
+@media (max-width: 767px) {
+	.msg-user:has(.msg-action-btn) {
+		min-width: min(100%, 16.5rem);
+	}
+}
 @media (hover: hover) {
 	.msg-copy-btn:hover,
+	.msg-action-btn:hover,
 	.msg-branch-btn:hover {
 		background: var(--hover);
 		color: var(--text);
@@ -949,7 +963,8 @@ pre {
 .msg-footer .usage-row {
 	margin-top: 0;
 }
-.msg-copy-btn--icon {
+.msg-copy-btn--icon,
+.msg-footer .msg-action-btn {
 	position: relative;
 	display: inline-flex;
 	align-items: center;
@@ -987,14 +1002,16 @@ pre {
 		opacity: 1;
 	}
 	.msg-copy-btn,
+	.msg-action-btn,
 	.msg-branch-btn,
 	.jump-to-bottom {
 		min-width: 44px;
 		min-height: 44px;
 	}
-	/* A user message's branch and copy show only after a long press on it (UserCard),
-	   floating over the bubble's top-right corner as on hover, so nothing shifts. The
-	   press must not start a text selection or the browser's callout instead. */
+	/* A user message's actions show only after a long press on it (UserCard), floating
+	   over the bubble's top-right corner as on hover, so nothing moves but a short bubble
+	   widening to fit them. The press must not start a text selection or the browser's
+	   callout instead. */
 	.msg-user {
 		-webkit-touch-callout: none;
 		user-select: none;
@@ -1005,11 +1022,18 @@ pre {
 		right: var(--space-4);
 		margin-top: 0;
 	}
-	.msg-user .msg-toolbar :is(.msg-copy-btn, .msg-branch-btn) {
+	.msg-user .msg-toolbar :is(.msg-copy-btn, .msg-action-btn, .msg-branch-btn) {
 		box-shadow: var(--shadow-1);
 	}
 	.msg-user:not([data-actions]) .msg-toolbar {
 		display: none;
+	}
+	/* The bubble widens to the 44px toolbar only while it shows. */
+	.msg-user:has(.msg-action-btn) {
+		min-width: auto;
+	}
+	.msg-user[data-actions]:has(.msg-action-btn) {
+		min-width: min(100%, 16.5rem);
 	}
 }
 /* --- Advisor notes (TUI advisor card parity) --- */

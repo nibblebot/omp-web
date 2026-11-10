@@ -434,6 +434,31 @@ export function stashUnsent(text = "", images: ImageArg[] = []): void {
 	setPromptInsert({ text, ...(images.length > 0 ? { images } : {}) });
 }
 
+/** What the main composer holds right now: its text, images and file chips. */
+export interface ComposerContent {
+	text: string;
+	images: ImageArg[];
+	files: TextAttachment[];
+}
+
+let composerReader: (() => ComposerContent) | null = null;
+
+/**
+ * The main composer registers how to read what it holds, so a turn action can refuse over an
+ * unsent draft and an Undo can put that draft back. Returns the unregister function.
+ */
+export function registerComposerContent(read: () => ComposerContent): () => void {
+	composerReader = read;
+	return () => {
+		if (composerReader === read) composerReader = null;
+	};
+}
+
+/** What the main composer holds; empty while no composer is mounted. */
+export function composerContent(): ComposerContent {
+	return composerReader?.() ?? { text: "", images: [], files: [] };
+}
+
 /** Partition of the attached session: one slot per session process and agent
  *  session id, so switching sessions never carries the composer along. Main
  *  is always `agentId: "main"` so worker focus never overwrites it (G04 focus

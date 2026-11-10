@@ -95,6 +95,7 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 						ttft: meta.ttft,
 						duration: meta.duration,
 						...(meta.completedAt !== undefined ? { completedAt: meta.completedAt } : {}),
+						...(typeof msg.timestamp === "number" ? { timestamp: msg.timestamp } : {}),
 						...(meta.stopReason === "aborted" ? { interrupted: true } : {}),
 					});
 					const calls: ToolItem[] = [];

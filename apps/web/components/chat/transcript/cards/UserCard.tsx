@@ -10,23 +10,33 @@ import {
 import { pushNotice, type ChatItem } from "../../../../state";
 import type { ImageArg } from "#lib/wire/protocol";
 import { ImageThumb } from "../../../ui/ImageThumb";
-import { branchFromCard } from "../../../../store/graph";
+import {
+	branchFromCard,
+	openRewindPicker,
+	runTurnAction,
+	type TurnRef,
+} from "../../../../store/graph";
 import { CopyButton } from "../../../ui/CopyButton";
-import { BranchIcon } from "../../../ui/icons";
+import { BranchIcon, PencilIcon, RefreshIcon, ResetIcon } from "../../../ui/icons";
 
 /** How long a finger rests on a user message before its actions show (touch). */
 const LONG_PRESS_MS = 500;
 
 /**
- * User message card: branch-from-here action (by stable entryId when the
- * history frame carries entryIds, never by text equality), copy button,
- * text, image thumbs. `branchable` false hides branch-from-here (a subagent's
- * transcript is not a branchable session). `fold` opts into clamping long
- * text (chat.css `.msg-user-text-folded`) behind a Show all toggle.
+ * User message card: copy button, the turn actions, branch-from-here, text,
+ * image thumbs. A prompt with a message timestamp names its turn (the SDK's
+ * `TurnMessage`; the session resolves it on the current branch, never by text
+ * equality): Edit & resend and Retry turn rewind past it in the same file,
+ * Rewind to here… opens the session tree on it, and branch-from-here forks a
+ * new session file at it. Without one (an agent-attributed follow-up),
+ * branch-from-here opens the tree picker filtered by the text. `branchable`
+ * false hides every session action (a subagent's transcript is not a
+ * branchable session). `fold` opts into clamping long text (chat.css
+ * `.msg-user-text-folded`) behind a Show all toggle.
  *
  * The actions show on hover or focus with a mouse. Touch has no hover, so they
  * stay hidden until a long press on the message (`data-actions`, chat.css) and
- * hide again on a press outside it.
+ * hide again on a press outside it or once one runs.
  */
 export const UserCard: Component<{
 	user: Extract<ChatItem, { kind: "user" }>;
@@ -67,14 +77,26 @@ export const UserCard: Component<{
 		onCleanup(() => observer.disconnect());
 	});
 	const images = () => props.user.images ?? [];
-	const entryId = () => (props.user as { entryId?: string }).entryId;
-	const branchFromHere = () => {
-		void branchFromCard({
-			...(entryId() ? { entryId: entryId() as string } : {}),
-			text: props.user.text,
-			imageCount: images().length,
-		}).catch((err) => pushNotice("error", String(err instanceof Error ? err.message : err)));
+	const turn = (): TurnRef | undefined =>
+		props.user.timestamp === undefined ? undefined : { role: "user", at: props.user.timestamp };
+	const [busy, setBusy] = createSignal(false);
+	/** Run one session action at a time; failures land as an error notice. */
+	const run = (action: () => Promise<void>) => {
+		if (busy()) return;
+		setBusy(true);
+		setActionsShown(false);
+		void action()
+			.catch((err) => pushNotice("error", String(err instanceof Error ? err.message : err)))
+			.finally(() => setBusy(false));
 	};
+	const branchFromHere = () =>
+		run(() =>
+			branchFromCard({
+				...(turn() ? { turn: turn() } : {}),
+				text: props.user.text,
+				imageCount: images().length,
+			}),
+		);
 	return (
 		<div
 			class="msg-user"
@@ -96,24 +118,60 @@ export const UserCard: Component<{
 			}}
 		>
 			<div class="msg-toolbar">
-				<Show when={props.branchable !== false}>
-					<button
-						type="button"
-						class="msg-branch-btn"
-						title={entryId() ? "Branch from here (new session file)" : "Branch from here"}
-						aria-label="Branch from here"
-						disabled={!props.user.text && images().length === 0}
-						onClick={branchFromHere}
-					>
-						<BranchIcon />
-					</button>
-				</Show>
 				<CopyButton
 					class="msg-copy-btn"
 					title="Copy message text"
 					icon
 					text={() => props.user.text}
 				/>
+				<Show when={props.branchable !== false && turn()}>
+					{(t) => (
+						<>
+							<button
+								type="button"
+								class="msg-action-btn"
+								title="Edit & resend: rewind past this prompt and put it in the composer"
+								aria-label="Edit & resend"
+								disabled={busy()}
+								onClick={() => run(() => runTurnAction("edit", t()))}
+							>
+								<PencilIcon />
+							</button>
+							<button
+								type="button"
+								class="msg-action-btn"
+								title="Retry turn: rewind past this prompt and send it again"
+								aria-label="Retry turn"
+								disabled={busy()}
+								onClick={() => run(() => runTurnAction("retry", t()))}
+							>
+								<RefreshIcon />
+							</button>
+							<button
+								type="button"
+								class="msg-action-btn"
+								title="Rewind to here…: pick the point in the session tree"
+								aria-label="Rewind to here…"
+								disabled={busy()}
+								onClick={() => run(() => openRewindPicker(t()))}
+							>
+								<ResetIcon />
+							</button>
+						</>
+					)}
+				</Show>
+				<Show when={props.branchable !== false}>
+					<button
+						type="button"
+						class="msg-branch-btn"
+						title={turn() ? "Branch from here (new session file)" : "Branch from here"}
+						aria-label="Branch from here"
+						disabled={busy() || (!props.user.text && images().length === 0)}
+						onClick={branchFromHere}
+					>
+						<BranchIcon />
+					</button>
+				</Show>
 			</div>
 			{props.user.text && (
 				<div

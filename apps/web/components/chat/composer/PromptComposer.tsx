@@ -25,6 +25,7 @@ import {
 	currentDraftKey,
 	draftKey,
 	unsavedFileIds,
+	registerComposerContent,
 	scheduleDraftSave,
 	swapDraft,
 	type DraftBody,
@@ -163,9 +164,13 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	createEffect(
 		on(compactComposer, () => requestAnimationFrame(() => props.ac?.autoGrow()), { defer: true }),
 	);
-	// The header's Attach files item (phone layout) opens this picker.
+	// The header's Attach files item (phone layout) opens this picker; turn actions read the draft.
 	onMount(() => {
-		if (!props.textOnly) onCleanup(registerAttachPicker(() => fileInput.click()));
+		if (props.textOnly) return;
+		onCleanup(registerAttachPicker(() => fileInput.click()));
+		onCleanup(
+			registerComposerContent(() => ({ text: props.message(), images: images(), files: files() })),
+		);
 	});
 	// A tapped suggestion chip is the touch route to Tab / ArrowRight.
 	const acceptGhost = () => {
@@ -178,17 +183,24 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		});
 	};
 
-	// QueueBar dequeue / PromptHistoryPicker picks / graph editorText land here.
+	// QueueBar dequeue / PromptHistoryPicker picks / graph editorText land here; a `replace`
+	// insert (a rewound turn's draft, its Undo) takes the composer's place instead.
 	createEffect(() => {
 		if (props.textOnly) return;
 		const insert = promptInsert();
 		if (!insert) return;
 		setPromptInsert(null);
 		const pristine = !props.message();
-		if (insert.text)
-			props.setMessage((prev) => (prev.trim() ? `${prev}\n${insert.text}` : insert.text));
-		if (insert.images?.length) props.setImages?.((prev) => [...prev, ...insert.images!]);
-		if (insert.files?.length) props.setFiles?.((prev) => [...prev, ...insert.files!]);
+		if (insert.replace) {
+			props.setMessage(insert.text);
+			props.setImages?.(insert.images ?? []);
+			props.setFiles?.(insert.files ?? []);
+		} else {
+			if (insert.text)
+				props.setMessage((prev) => (prev.trim() ? `${prev}\n${insert.text}` : insert.text));
+			if (insert.images?.length) props.setImages?.((prev) => [...prev, ...insert.images!]);
+			if (insert.files?.length) props.setFiles?.((prev) => [...prev, ...insert.files!]);
+		}
 		requestAnimationFrame(() => {
 			textarea.focus();
 			// A history pick into an empty composer restores the saved caret.
