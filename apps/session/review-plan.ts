@@ -250,7 +250,10 @@ export function createPlanReviewMethods(): Record<
 						if (role) await session.applyRoleModel(role);
 						if (next.context === "reset") await session.resetSessionContext();
 						session.setPlanReferencePath(next.planFilePath);
-						session.sessionManager.appendModeChange("none");
+						// The SDK restores the plan reference on reload only from a recorded approval.
+						session.sessionManager.appendModeChange("none", {
+							approvedPlanFilePath: next.planFilePath,
+						});
 						await persist(entry, next);
 					});
 					void session

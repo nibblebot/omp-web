@@ -45,7 +45,10 @@ async function fixture() {
 				});
 				return `e${branch.length}`;
 			},
-			appendModeChange: () => undefined,
+			appendModeChange(mode: string, data?: Record<string, unknown>) {
+				branch.push({ type: "mode_change", id: `e${branch.length}`, mode, data });
+				return `e${branch.length}`;
+			},
 			flush: async () => undefined,
 		},
 		getEnabledToolNames: () => ["read"],
@@ -107,7 +110,7 @@ describe("plan review lifecycle", () => {
 		expect(planReviewWaiting(entry)).toBe(false);
 	});
 
-	test("approve executes the reviewed plan and leaves plan mode", async () => {
+	test("approve executes the reviewed plan, leaves plan mode and records the approval", async () => {
 		const { runtime, entry, methods, propose, current } = await fixture();
 		runtime.planState = { enabled: true, planFilePath: "" };
 		await propose();
@@ -118,6 +121,12 @@ describe("plan review lifecycle", () => {
 		expect(runtime.prompts[0]).toContain("# Plan");
 		expect(runtime.planState).toBeUndefined();
 		expect(planReviewWaiting(entry)).toBe(false);
+		// SDK 18.18.6+ restores the plan reference on reload only from this record.
+		const branch = entry.session.sessionManager.getBranch();
+		expect(branch.findLast((item) => item.type === "mode_change")).toMatchObject({
+			mode: "none",
+			data: { approvedPlanFilePath: join(entry.cwd, "PLAN.md") },
+		});
 	});
 
 	test("leaving plan mode dismisses a waiting review so nothing is stranded", async () => {

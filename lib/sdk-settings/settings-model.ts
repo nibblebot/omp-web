@@ -222,27 +222,27 @@ function layerValue(layer: unknown, path: string): unknown {
  * `live`: a running session picks the edit up through a settings listener, a tool-gate
  * reconcile, or a read at use time (lib/sdk-settings/test/live-setting-trace.ts holds the
  * per-row evidence; the exhaustiveness test keeps both lists complete). Evidence paths
- * are relative to @oh-my-pi/pi-coding-agent 18.18.4 `src/`.
+ * are relative to @oh-my-pi/pi-coding-agent 18.18.6 `src/`.
  */
 export const NEXT_SESSION_PATHS: Readonly<Record<string, true>> = {
-	// Seeds a new session's level (sdk.ts:2335 pickInitialThinkingLevel, agent-session.ts:14203
-	// on session switch); agent-session.ts:3232-3235 states it is deliberately not listened to.
+	// Seeds a new session's level (sdk.ts:2336 pickInitialThinkingLevel, agent-session.ts:14223
+	// on session switch); agent-session.ts:3243-3246 states it is deliberately not listened to.
 	defaultThinkingLevel: true,
-	// Read once into mcpDiscoverOptions (sdk.ts:2860) at construction; no listener, and
-	// MCP reconnects reuse that captured option (mcp/manager.ts:774,836).
+	// Read once into mcpDiscoverOptions (sdk.ts:2861) at construction; no listener, and
+	// MCP reconnects reuse that captured option (mcp/manager.ts:807,869).
 	"mcp.startupTimeoutMs": true,
 	// Read by startup/new-session discovery only (discovery/custom-context-files.ts:36); the
 	// SDK's own description says "Start a new session to load them" (session/context-settings.ts:58).
 	"contextFiles.extra": true,
 	// Entering plan mode on startup is decided at launch and after /new
-	// (modes/interactive-mode.ts:705, main.ts:2569); no listener.
+	// (modes/interactive-mode.ts:706, main.ts:2569); no listener.
 	"plan.defaultOnStartup": true,
 	// Auto-start of a collab room runs at startup and on session change or guest restore
-	// (collab/controller.ts:121,365; modes/interactive-mode.ts:2805).
+	// (collab/controller.ts:121,365; modes/interactive-mode.ts:2820).
 	"collab.autoStart": true,
 	// Telemetry export is initialised once at process startup (main.ts:2421); no listener.
 	"telemetry.otlpExportEnabled": true,
-	// The Spotlight experiment starts once while the session is built (sdk.ts:2756-2758,
+	// The Spotlight experiment starts once while the session is built (sdk.ts:2757-2759,
 	// spotlight/session.ts:197); no listener.
 	"spotlight.experiment.enabled": true,
 };

@@ -702,7 +702,7 @@ const sessionSettingsTabs: SettingsTab[] = [
 						path: "lsp.enabled",
 						label: "LSP",
 						description:
-							"Enable the lsp tool for code intelligence (definitions, references, diagnostics, rename)",
+							"Language-server integration: the lsp tool, diagnostics on write/edit, and format on write (--no-lsp disables for the run)",
 						value: true,
 						type: "boolean",
 					}),
