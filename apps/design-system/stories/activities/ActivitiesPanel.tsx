@@ -73,7 +73,7 @@ export default defineStory({
 			render: () => dock(420),
 		},
 		{
-			name: "Running filter",
+			name: "Running scope",
 			description:
 				"Only running and pending agents, plus the ancestors that keep them in context (shown with their own status). The section count and the totals keep the whole forest.",
 			seed: () => {
@@ -83,7 +83,7 @@ export default defineStory({
 			render: () => dock(520),
 		},
 		{
-			name: "Running filter, finished agent expanded",
+			name: "Running scope, finished agent expanded",
 			description:
 				"An expanded agent that has finished stays in the filtered list, so it does not vanish from under the reader.",
 			seed: () => {
@@ -93,7 +93,7 @@ export default defineStory({
 			render: () => dock(520),
 		},
 		{
-			name: "Running filter, nothing running",
+			name: "Running scope, nothing running",
 			description: "Every agent is finished or parked: the section says no subagents are running.",
 			seed: () => {
 				seedActivities("accordion");
@@ -158,7 +158,7 @@ export default defineStory({
 		{
 			name: "Accordion, all four sections",
 			description:
-				"Subagents, Jobs, Daemons and Todos each under their own header, count and (where it filters) All/Running toggle, in the one scroller.",
+				"Subagents, Jobs, Daemons and Todos each under their own header and count, in the one scroller. Subagents lists its All / Running / Done / Parked scopes above the tree; Jobs has its All / Running toggle in the header.",
 			seed: () => {
 				seedActivities("accordion");
 				seedJobs();

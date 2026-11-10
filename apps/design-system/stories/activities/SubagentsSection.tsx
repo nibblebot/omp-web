@@ -24,7 +24,7 @@ export default defineStory({
 		{
 			name: "Accordion, forest present",
 			description:
-				"The session's agent forest under the Subagents header, with the All / Running filter and the totals below. A row click expands it inline.",
+				"The session's agent forest under the Subagents header, with the All / Running / Done / Parked scopes and their counts above it and the totals below. A row click expands it inline.",
 			seed: () => seedActivities("accordion"),
 			render: () => section(),
 		},
@@ -52,7 +52,7 @@ export default defineStory({
 			render: () => section(),
 		},
 		{
-			name: "Running filter",
+			name: "Running scope",
 			description: "Running and pending agents with the ancestors that hold them.",
 			seed: () => {
 				seedActivities("accordion");
@@ -61,8 +61,28 @@ export default defineStory({
 			render: () => section(),
 		},
 		{
-			name: "Running filter, nothing running",
-			description: "Every agent is finished or parked: the section says no subagents are running.",
+			name: "Done scope, mixed statuses",
+			description:
+				"Done is pressed: finished and failed agents stay, the aborted typecheck shows only under All. The running builder stays as the ancestor that holds its finished children, so every row sits under its real parent.",
+			seed: () => {
+				seedActivities("accordion");
+				setActivityFilter("subagents", "done");
+			},
+			render: () => section(),
+		},
+		{
+			name: "Parked scope",
+			description: "Only the parked docs sweep is listed; the other scopes keep their live counts.",
+			seed: () => {
+				seedActivities("accordion");
+				setActivityFilter("subagents", "parked");
+			},
+			render: () => section(),
+		},
+		{
+			name: "Running scope, nothing running",
+			description:
+				"Every agent is finished or parked: Running counts 0 and the section says no subagents are running.",
 			seed: () => {
 				seedActivities("accordion");
 				seedAgentTree({ display: true, settled: true });

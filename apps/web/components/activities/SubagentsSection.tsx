@@ -3,36 +3,41 @@ import { subagentsSummary } from "../../activities/summary";
 import { state } from "../../state";
 import { openItemDetail, toggleItemExpanded, toggleSubagentTreeRow } from "../../store/activities";
 import { subagentForest } from "../../store/subagents";
-import {
-	filterActiveSubagentTree,
-	filterSubagentTree,
-	summarizeSubagentTree,
-} from "../../subagents/tree";
+import { filterSubagentTreeByScope, type SubagentScope } from "../../subagents/scope";
+import { filterSubagentTree, summarizeSubagentTree } from "../../subagents/tree";
 import { SubagentConversation } from "../subagents/SubagentConversation";
 import { SubagentFanoutTotals } from "../subagents/SubagentFanoutTotals";
 import { SubagentTree } from "../subagents/SubagentTree";
-import { ActivityFilterToggle } from "./ActivityFilterToggle";
 import { ActivitySection } from "./ActivitySection";
+import { SubagentScopeToggle } from "./SubagentScopeToggle";
 
 /** Search appears only once the forest is large enough to need it. */
 const SEARCH_THRESHOLD = 8;
 
+const EMPTY_SCOPE: Record<SubagentScope, string> = {
+	all: "No subagents are running.",
+	running: "No subagents are running.",
+	done: "No subagents are done.",
+	parked: "No subagents are parked.",
+};
+
 /**
- * The Subagents section: the session's whole agent forest as one tree, the Running / All
- * filter in its header, totals below. Accordion mode expands a row inline (any number at
- * once); detail mode opens it in the panel.
+ * The Subagents section: the session's whole agent forest as one tree, the status scopes
+ * (All / Running / Done / Parked) above it, totals below. A scope keeps the ancestors of its
+ * agents so every row sits under its real parent. Accordion mode expands a row inline (any
+ * number at once); detail mode opens it in the panel.
  */
 export const SubagentsSection: Component = () => {
 	const [query, setQuery] = createSignal("");
 	const summary = createMemo(subagentsSummary);
 	const expanded = () => state.activities.expanded.subagents;
 	const inline = () => state.activities.mode === "accordion";
-	// The running filter comes first, so search narrows what it leaves. Expanded agents stay once they finish.
-	const shown = () =>
-		state.activities.filters.subagents === "running"
-			? filterActiveSubagentTree(subagentForest(), inline() ? expanded() : undefined)
-			: subagentForest();
-	const visible = () => filterSubagentTree(shown(), query());
+	const scope = () => state.activities.filters.subagents;
+	// The scope comes first, so search narrows what it leaves. Expanded agents stay once they change status.
+	const shown = createMemo(() =>
+		filterSubagentTreeByScope(subagentForest(), scope(), inline() ? expanded() : undefined),
+	);
+	const visible = createMemo(() => filterSubagentTree(shown(), query()));
 	const accordion = createMemo(() =>
 		inline()
 			? {
@@ -54,8 +59,8 @@ export const SubagentsSection: Component = () => {
 			id="subagents"
 			title="Subagents"
 			count={{ active: summary().active, total: summary().total }}
-			actions={<ActivityFilterToggle section="subagents" label="Show subagents" />}
 		>
+			<SubagentScopeToggle />
 			<Show when={summary().total > SEARCH_THRESHOLD}>
 				<input
 					type="search"
@@ -68,7 +73,7 @@ export const SubagentsSection: Component = () => {
 			</Show>
 			<Show
 				when={shown().length > 0}
-				fallback={<p class="activity-empty">No subagents are running.</p>}
+				fallback={<p class="activity-empty">{EMPTY_SCOPE[scope()]}</p>}
 			>
 				<Show
 					when={visible().length > 0}

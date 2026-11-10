@@ -8,12 +8,11 @@ const FILTERS: readonly { filter: ActivityFilter; label: string }[] = [
 ];
 
 /**
- * Segmented control in a section header (Subagents, Jobs): only the items that are running, or
- * every item. Words, no icons. `label` names the group for assistive tech ("Show subagents").
+ * Segmented control in the Jobs section header: only the jobs that are running, or every job.
+ * Words, no icons. `label` names the group for assistive tech ("Show jobs"). The Subagents
+ * section filters by status scope instead (`SubagentScopeToggle`).
  */
-export const ActivityFilterToggle: Component<{ section: "subagents" | "jobs"; label: string }> = (
-	props,
-) => {
+export const ActivityFilterToggle: Component<{ section: "jobs"; label: string }> = (props) => {
 	const current = () => state.activities.filters[props.section];
 	return (
 		<div class="activity-filter-toggle" role="group" aria-label={props.label}>

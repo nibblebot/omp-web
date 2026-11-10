@@ -7,8 +7,13 @@ import {
 	shortAgentName,
 } from "../subagents/format";
 import {
+	emptySubagentScopeCounts,
+	filterSubagentTreeByScope,
+	subagentScopeOf,
+	tallySubagentScope,
+} from "../subagents/scope";
+import {
 	createStableSubagentOrder,
-	filterActiveSubagentTree,
 	filterSubagentTree,
 	flattenSubagentTree,
 	summarizeSubagentTree,
@@ -84,7 +89,36 @@ describe("filterSubagentTree", () => {
 	});
 });
 
-describe("filterActiveSubagentTree", () => {
+describe("subagent status scopes", () => {
+	test("map statuses onto the agent hub's Running / Done / Parked", () => {
+		expect(subagentScopeOf("running")).toBe("running");
+		expect(subagentScopeOf("pending")).toBe("running");
+		expect(subagentScopeOf("done")).toBe("done");
+		// A failed task ends idle in the SDK registry, which the hub lists as Done.
+		expect(subagentScopeOf("failed")).toBe("done");
+		expect(subagentScopeOf("parked")).toBe("parked");
+		// Aborted agents are listed only under All, as in the hub.
+		expect(subagentScopeOf("aborted")).toBeUndefined();
+	});
+
+	test("count every agent under All and each in its own scope", () => {
+		const counts = emptySubagentScopeCounts();
+		for (const status of [
+			"running",
+			"pending",
+			"done",
+			"failed",
+			"parked",
+			"parked",
+			"aborted",
+		] as const) {
+			tallySubagentScope(counts, status);
+		}
+		expect(counts).toEqual({ all: 7, running: 2, done: 2, parked: 2 });
+	});
+});
+
+describe("filterSubagentTreeByScope", () => {
 	const forest = () => [
 		node("builder", {
 			status: "done",
@@ -96,12 +130,17 @@ describe("filterActiveSubagentTree", () => {
 			],
 		}),
 		node("docs", { status: "parked" }),
-		node("solo", { status: "running" }),
+		node("solo", { status: "running", children: [node("nap", { status: "parked" })] }),
 	];
+	const ids = (nodes: readonly SubagentNode[]) => flattenSubagentTree(nodes).map((n) => n.id);
 
-	test("keeps running and pending agents and drops finished leaves", () => {
-		const kept = filterActiveSubagentTree(forest());
-		expect(flattenSubagentTree(kept).map((n) => n.id)).toEqual([
+	test("All returns the forest itself", () => {
+		const input = forest();
+		expect(filterSubagentTreeByScope(input, "all")).toBe(input);
+	});
+
+	test("Running keeps running and pending agents and drops finished leaves", () => {
+		expect(ids(filterSubagentTreeByScope(forest(), "running"))).toEqual([
 			"builder",
 			"advisor",
 			"lint",
@@ -109,34 +148,37 @@ describe("filterActiveSubagentTree", () => {
 		]);
 	});
 
-	test("keeps a finished ancestor of a running child with only its kept children", () => {
-		const [builder] = filterActiveSubagentTree(forest());
-		expect(builder?.id).toBe("builder");
-		expect(builder?.status).toBe("done");
-		expect(builder?.children.map((n) => n.id)).toEqual(["advisor", "lint"]);
-	});
-
-	test("keeps every expanded agent even when finished, and their ancestors", () => {
-		const kept = filterActiveSubagentTree(forest(), new Set(["types", "mapper"]));
-		expect(flattenSubagentTree(kept).map((n) => n.id)).toEqual([
+	test("Done keeps finished and failed agents, never aborted ones", () => {
+		expect(ids(filterSubagentTreeByScope(forest(), "done"))).toEqual([
 			"builder",
 			"mapper",
-			"advisor",
-			"lint",
 			"review",
-			"types",
-			"solo",
 		]);
 	});
 
-	test("returns nothing when no agent is active and none is kept", () => {
-		expect(filterActiveSubagentTree([node("a"), node("b", { status: "failed" })])).toEqual([]);
+	test("Parked keeps a non-matching ancestor of a parked agent, with only its kept children", () => {
+		const kept = filterSubagentTreeByScope(forest(), "parked");
+		expect(ids(kept)).toEqual(["docs", "solo", "nap"]);
+		const solo = kept.find((n) => n.id === "solo");
+		expect(solo?.status).toBe("running");
+		expect(solo?.children.map((n) => n.id)).toEqual(["nap"]);
+	});
+
+	test("keeps every expanded agent outside the scope, and their ancestors", () => {
+		const kept = filterSubagentTreeByScope(forest(), "running", new Set(["types", "mapper"]));
+		expect(ids(kept)).toEqual(["builder", "mapper", "advisor", "lint", "review", "types", "solo"]);
+	});
+
+	test("returns nothing when no agent is in scope and none is kept", () => {
+		expect(
+			filterSubagentTreeByScope([node("a"), node("b", { status: "failed" })], "parked"),
+		).toEqual([]);
 	});
 
 	test("does not mutate the input", () => {
 		const input = forest();
 		const before = structuredClone(input);
-		filterActiveSubagentTree(input, new Set(["types"]));
+		filterSubagentTreeByScope(input, "parked", new Set(["types"]));
 		expect(input).toEqual(before);
 	});
 });

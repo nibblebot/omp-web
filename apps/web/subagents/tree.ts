@@ -44,24 +44,9 @@ export function filterSubagentTree(nodes: readonly SubagentNode[], query: string
 	});
 }
 
-/** Active = running or pending: what every "running" count and the Running filter mean. */
+/** Active = running or pending: what every "running" count and the Running scope mean. */
 export function isActiveSubagent(node: Pick<SubagentNode, "status">): boolean {
 	return node.status === "running" || node.status === "pending";
-}
-
-/**
- * Running filter: active nodes, nodes in `keepIds` (the expanded agents), and ancestors of anything
- * kept. Returns new arrays; never mutates input nodes' children arrays.
- */
-export function filterActiveSubagentTree(
-	nodes: readonly SubagentNode[],
-	keepIds?: ReadonlySet<string>,
-): SubagentNode[] {
-	return nodes.flatMap((node) => {
-		const children = filterActiveSubagentTree(node.children, keepIds);
-		const kept = children.length > 0 || isActiveSubagent(node) || keepIds?.has(node.id) === true;
-		return kept ? [{ ...node, children }] : [];
-	});
 }
 
 /**

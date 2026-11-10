@@ -9,11 +9,12 @@
  * corrupt shapes degrade to the default layout, never throw. The v1 record is
  * deleted on load and never migrated.
  */
+import { SUBAGENT_SCOPES } from "../subagents/scope";
 import {
 	ACTIVITY_SECTIONS,
 	type ActivitiesMode,
 	type ActivityDetailRef,
-	type ActivityFilter,
+	type ActivityFilters,
 	type ActivitySectionId,
 } from "../store/slices/activities";
 
@@ -29,7 +30,7 @@ export interface ActivitiesLayout {
 	collapsedSections: ActivitySectionId[];
 	expanded: { subagents: string[]; jobs: string[]; daemons: string[] };
 	treeCollapsed: string[];
-	filters: { subagents: ActivityFilter; jobs: ActivityFilter };
+	filters: ActivityFilters;
 	lastFocused?: ActivityDetailRef;
 }
 
@@ -98,7 +99,8 @@ function parseActivities(value: unknown): ActivitiesLayout {
 	const filters = (
 		typeof raw.filters === "object" && raw.filters !== null ? raw.filters : {}
 	) as Record<string, unknown>;
-	if (filters.subagents === "running") layout.filters.subagents = "running";
+	const scope = SUBAGENT_SCOPES.find((entry) => entry.id === filters.subagents);
+	if (scope !== undefined) layout.filters.subagents = scope.id;
 	if (filters.jobs === "running") layout.filters.jobs = "running";
 	const lastFocused = parseFocus(raw.lastFocused);
 	if (lastFocused !== undefined) layout.lastFocused = lastFocused;

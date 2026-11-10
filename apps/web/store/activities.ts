@@ -24,7 +24,7 @@ import { jobPollView } from "./job-poll";
 import type { DockRoute } from "./route";
 import {
 	type ActivityDetailRef,
-	type ActivityFilter,
+	type ActivityFilters,
 	type ActivityItemRef,
 	type ActivitySectionId,
 	type ActivitiesMode,
@@ -35,6 +35,7 @@ export type {
 	ActivitiesMode,
 	ActivitiesSlice,
 	ActivityFilter,
+	ActivityFilters,
 	ActivityItemRef,
 	ActivityItemSection,
 	ActivitySectionId,
@@ -243,7 +244,11 @@ export function closeItemDetail(): void {
 	commit(() => setState("activities", "detail", undefined));
 }
 
-export function setActivityFilter(section: "subagents" | "jobs", filter: ActivityFilter): void {
+/** Sets one section's filter: a status scope for Subagents, All / Running for Jobs. */
+export function setActivityFilter<S extends keyof ActivityFilters>(
+	section: S,
+	filter: ActivityFilters[S],
+): void {
 	if (state.activities.filters[section] === filter) return;
 	commit(() => setState("activities", "filters", section, filter));
 }

@@ -13,29 +13,18 @@ export default defineStory({
 		{
 			name: "All",
 			description:
-				"The default: All is pressed and every item is listed. Each button is a toggle with aria-pressed and calls setActivityFilter; the labels are words, no icons.",
+				"The default: All is pressed and every job is listed. Each button is a toggle with aria-pressed and calls setActivityFilter; the labels are words, no icons.",
 			render: () => (
 				<div class="ds-frame">
-					<ActivityFilterToggle section="subagents" label="Show subagents" />
+					<ActivityFilterToggle section="jobs" label="Show jobs" />
 				</div>
 			),
 		},
 		{
 			name: "Running",
 			description:
-				"Running is pressed and accented: the list keeps running and pending items, the expanded ones and the ancestors of those.",
-			seed: () => setActivityFilter("subagents", "running"),
-			render: () => (
-				<div class="ds-frame">
-					<ActivityFilterToggle section="subagents" label="Show subagents" />
-				</div>
-			),
-		},
-		{
-			name: "Jobs section",
-			description:
-				"The same control for the Jobs section: each section keeps its own filter, so Jobs stays on All while Subagents shows Running.",
-			seed: () => setActivityFilter("subagents", "running"),
+				"Running is pressed and accented: the list keeps running jobs and the expanded ones.",
+			seed: () => setActivityFilter("jobs", "running"),
 			render: () => (
 				<div class="ds-frame">
 					<ActivityFilterToggle section="jobs" label="Show jobs" />

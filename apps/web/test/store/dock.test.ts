@@ -307,12 +307,17 @@ describe("corrupt storage", () => {
 						collapsedSections: ["jobs", "bogus", 3],
 						expanded: { subagents: ["a1", "", 5, "a1"], jobs: "j1" },
 						treeCollapsed: ["a2", 3, ""],
-						filters: { subagents: "running", jobs: "bogus" },
+						filters: { subagents: "parked", jobs: "bogus" },
 						lastFocused: { section: "subagents", id: "a1" },
 					},
 				},
 				d3: "nope",
-				d4: { activities: { lastFocused: { section: "daemons", id: "x" } } },
+				d4: {
+					activities: {
+						lastFocused: { section: "daemons", id: "x" },
+						filters: { subagents: "bogus", jobs: "done" },
+					},
+				},
 			}),
 		);
 		expect(readDockLayout("d1")).toEqual(defaults);
@@ -323,12 +328,13 @@ describe("corrupt storage", () => {
 				collapsedSections: ["jobs"],
 				expanded: { subagents: ["a1"], jobs: [], daemons: [] },
 				treeCollapsed: ["a2"],
-				filters: { subagents: "running", jobs: "all" },
+				filters: { subagents: "parked", jobs: "all" },
 				lastFocused: { section: "subagents", id: "a1" },
 			},
 		});
 		expect(readDockLayout("d3")).toEqual(defaults);
 		expect(readDockLayout("d4").activities.lastFocused).toBeUndefined();
+		expect(readDockLayout("d4").activities.filters).toEqual({ subagents: "all", jobs: "all" });
 	});
 
 	test("storage that is not an object reads as no layouts", () => {

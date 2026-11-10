@@ -4,6 +4,8 @@
  * persistence in prefs/dock-layout.ts.
  */
 
+import type { SubagentScope } from "../../subagents/scope";
+
 /** The panel's sections, in their fixed on-screen order. */
 export const ACTIVITY_SECTIONS = ["subagents", "jobs", "daemons", "todos"] as const;
 export type ActivitySectionId = (typeof ACTIVITY_SECTIONS)[number];
@@ -11,8 +13,14 @@ export type ActivitySectionId = (typeof ACTIVITY_SECTIONS)[number];
 /** `accordion` expands items inline; `detail` fills the panel body with one item. */
 export type ActivitiesMode = "accordion" | "detail";
 
-/** Which Subagents / Jobs rows a section lists: all of them or only the active ones. */
+/** Which Jobs rows the section lists: all of them or only the active ones. */
 export type ActivityFilter = "all" | "running";
+
+/** Each filtering section's choice: Subagents by status scope, Jobs by All / Running. */
+export interface ActivityFilters {
+	subagents: SubagentScope;
+	jobs: ActivityFilter;
+}
 
 /** Sections whose rows expand into a body. */
 export type ActivityItemSection = "subagents" | "jobs" | "daemons";
@@ -39,7 +47,7 @@ export interface ActivitiesSlice {
 	};
 	/** Subagent-tree rows whose children are collapsed. */
 	treeCollapsed: ReadonlySet<string>;
-	filters: { subagents: ActivityFilter; jobs: ActivityFilter };
+	filters: ActivityFilters;
 	/** The subagent/job last expanded or opened in detail; cleared when it collapses. */
 	lastFocused?: ActivityDetailRef;
 	/** The item filling the body in detail mode. Not persisted; the URL carries it. */

@@ -12,6 +12,7 @@ import {
 	subagentEstimate,
 	subagentCapabilities,
 	subagentForest,
+	subagentScopeCounts,
 	subagentTree,
 	type WorkerRecord,
 	workerKey,
@@ -429,7 +430,7 @@ describe("subagentTree and fanoutTotals", () => {
 	});
 });
 
-describe("runningSubagentCount and subagentById", () => {
+describe("runningSubagentCount, subagentScopeCounts and subagentById", () => {
 	test("counts running and pending agents at every depth", () => {
 		seed([
 			{ id: "p", status: "running", startedAt: 1 },
@@ -438,6 +439,19 @@ describe("runningSubagentCount and subagentById", () => {
 			{ id: "d", status: "done", startedAt: 3, endedAt: 4 },
 		]);
 		expect(runningSubagentCount()).toBe(3);
+	});
+
+	test("scope counts cover every depth, a roster park included", () => {
+		seed([
+			{ id: "p", status: "running", startedAt: 1 },
+			{ id: "c", status: "failed", parent: "p", startedAt: 2, endedAt: 3 },
+			{ id: "q", status: "pending", parent: "c" },
+			{ id: "d", status: "done", startedAt: 3, endedAt: 4 },
+			{ id: "z", status: "done", lastUpdate: 100, rosterStatus: "parked", rosterActivity: 200 },
+			{ id: "x", status: "aborted", parent: "d" },
+		]);
+		expect(subagentScopeCounts()).toEqual({ all: 6, running: 2, done: 2, parked: 1 });
+		expect(runningSubagentCount()).toBe(subagentScopeCounts().running);
 	});
 
 	test("finds nested agents by id and returns undefined for unknown ids", () => {

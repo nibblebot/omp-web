@@ -23,6 +23,11 @@ import { api } from "./fleet-api";
 import { subagentAnalysisHash } from "./slices/analysis";
 import { agentTitle, shortAgentName, sumKnown } from "../subagents/format";
 import { ReactiveMap } from "../subagents/reactive-map";
+import {
+	emptySubagentScopeCounts,
+	tallySubagentScope,
+	type SubagentScopeCounts,
+} from "../subagents/scope";
 import { isActiveSubagent, type SubagentTotals } from "../subagents/tree";
 import { imageBlobHash } from "../text/images";
 import {
@@ -591,8 +596,8 @@ interface Forest {
 	readonly byId: ReadonlyMap<string, SubagentNode>;
 	/** Root agents per Task call. An unchanged group keeps its array. */
 	readonly byToolCall: ReadonlyMap<string, readonly SubagentNode[]>;
-	/** Running or pending agents at every depth. */
-	readonly active: number;
+	/** Agents per status scope at every depth; `running` is the running or pending agents. */
+	readonly scopes: SubagentScopeCounts;
 }
 
 const NO_NODES: readonly SubagentNode[] = [];
@@ -692,7 +697,7 @@ function buildForest(): Forest {
 	const previous = forestEntries;
 	const entries = new Map<string, ForestEntry>();
 	const byId = new Map<string, SubagentNode>();
-	let active = 0;
+	const scopes = emptySubagentScopeCounts();
 	const resolve = (id: string): SubagentNode => {
 		const { live, record } = sources.get(id) ?? { live: undefined, record: undefined };
 		const status = resolveStatus(live, record);
@@ -721,7 +726,7 @@ function buildForest(): Forest {
 		}
 		entries.set(id, entry);
 		byId.set(id, entry.node);
-		if (isActiveSubagent(entry.node)) active += 1;
+		tallySubagentScope(scopes, entry.status);
 		return entry.node;
 	};
 	const roots = rootIds.map(resolve).sort(byStart);
@@ -741,7 +746,7 @@ function buildForest(): Forest {
 	for (const toolCallId of totalsCache.keys()) {
 		if (!byToolCall.has(toolCallId)) totalsCache.delete(toolCallId);
 	}
-	lastForest = { build: forestBuilds, roots, byId, byToolCall, active };
+	lastForest = { build: forestBuilds, roots, byId, byToolCall, scopes };
 	return lastForest;
 }
 
@@ -835,9 +840,14 @@ export function fanoutTotals(toolCallId: string): SubagentTotals {
 	return totals;
 }
 
-/** Running or pending agents at every depth (the composer button's count; matches the dock's Running filter). */
+/** Running or pending agents at every depth (the composer button's count; matches the dock's Running scope). */
 export function runningSubagentCount(): number {
-	return currentForest().active;
+	return currentForest().scopes.running;
+}
+
+/** Agents per status scope over the whole forest, counted once per forest build. Shared: never mutate it. */
+export function subagentScopeCounts(): Readonly<SubagentScopeCounts> {
+	return currentForest().scopes;
 }
 
 export function subagentById(id: string): SubagentNode | undefined {

@@ -281,7 +281,7 @@
 }
 
 /* Dock header and section header segmented controls: accordion / detail view (icons) and the
-   All / Running filter (words). */
+   All / Running filter (words); the Subagents status scopes share the button look. */
 .activities-mode-toggle,
 .activity-filter-toggle {
 	display: inline-flex;
@@ -297,8 +297,36 @@
 }
 
 .activities-mode-toggle .segment-button.active,
-.activity-filter-toggle .segment-button.active {
+.activity-filter-toggle .segment-button.active,
+.subagent-scope-toggle .segment-button.active {
 	color: var(--accent);
+}
+
+/* Subagents section: the status scopes (All / Running / Done / Parked) above the tree, each with
+   its count. Wraps instead of overflowing a narrow dock. */
+.subagent-scope-toggle {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-1);
+	min-width: 0;
+}
+
+.subagent-scope-toggle .segment-button {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	cursor: pointer;
+}
+
+.subagent-scope-count {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	font-variant-numeric: tabular-nums;
+}
+
+.subagent-scope-toggle .segment-button.active .subagent-scope-count {
+	color: inherit;
 }
 
 /* Daemons section: one outlined list like the subagent tree; a row is the summary (toggle) and its
