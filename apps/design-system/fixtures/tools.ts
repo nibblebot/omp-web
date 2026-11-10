@@ -189,7 +189,8 @@ function tool(
 /** Joins lines the way a tool result carries them. */
 const lines = (...rows: string[]): string => rows.join("\n");
 
-// ask: `details` mirror the SDK's AskToolDetails for each answer shape.
+// ask, question shape: calls logged before SDK 18.18.3 (args `questions`); `details` mirror that
+// SDK's AskToolDetails for each answer shape. The form-shape fixtures follow the dismissed one.
 const askArgs = {
 	questions: [
 		{
@@ -295,6 +296,81 @@ export const askErrorTool: ToolItem = tool(
 	"ask",
 	"error",
 	askArgs,
+	"Ask tool was cancelled by the user",
+);
+
+/** The form a current (SDK 18.18.3+) `ask` call carries as its `html` arg. */
+const askFormArgs = {
+	html: `<form>
+  <fieldset>
+    <legend>Which database should the outbox use?</legend>
+    <label><input type="radio" name="db" value="sqlite" checked> SQLite</label>
+    <label><input type="radio" name="db" value="postgres"> PostgreSQL</label>
+  </fieldset>
+  <fieldset>
+    <legend>Which checks should run before the commit?</legend>
+    <label><input type="checkbox" name="checks" value="types" checked> Type check</label>
+    <label><input type="checkbox" name="checks" value="lint"> Lint</label>
+    <label><input type="checkbox" name="checks" value="tests" checked> Unit tests</label>
+  </fieldset>
+  <label>Retry limit <input type="number" name="retries" min="0" max="10" value="3"></label>
+  <label>Notes for the reviewer <textarea name="notes"></textarea></label>
+</form>`,
+};
+/** AskToolCard: a form posed, waiting for the user's answers (the questions are read from its HTML). */
+export const askFormRunningTool: ToolItem = tool("ask", "running", askFormArgs, "");
+/** AskToolCard: form answered: a radio, a checkbox group (answer text lists the labels), a number and free text. */
+export const askFormDoneTool: ToolItem = {
+	...tool(
+		"ask",
+		"done",
+		askFormArgs,
+		'User answers:\n{"db":"postgres","checks":["types","tests"],"retries":5,"notes":"Bench the outbox before merging."}',
+	),
+	details: {
+		answers: [
+			{ name: "db", question: "Which database should the outbox use?", answer: "PostgreSQL" },
+			{
+				name: "checks",
+				question: "Which checks should run before the commit?",
+				answer: "Type check, Unit tests",
+			},
+			{ name: "retries", question: "Retry limit", answer: "5" },
+			{
+				name: "notes",
+				question: "Notes for the reviewer",
+				answer: "Bench the outbox before merging.\nSkip the lint pass for now.",
+			},
+		],
+	},
+};
+/** AskToolCard: the deadline passed, so the form's preselected values were submitted. */
+export const askFormTimedOutTool: ToolItem = {
+	...tool(
+		"ask",
+		"done",
+		askFormArgs,
+		'No answer before the timeout; submitted the form\'s current values:\n{"db":"sqlite","checks":["types","tests"],"retries":3,"notes":""}',
+	),
+	details: {
+		timedOut: true,
+		answers: [
+			{ name: "db", question: "Which database should the outbox use?", answer: "SQLite" },
+			{
+				name: "checks",
+				question: "Which checks should run before the commit?",
+				answer: "Type check, Unit tests",
+			},
+			{ name: "retries", question: "Retry limit", answer: "3" },
+			{ name: "notes", question: "Notes for the reviewer", answer: "" },
+		],
+	},
+};
+/** AskToolCard: form dismissed: no answers, so the questions are read from the call's HTML. */
+export const askFormErrorTool: ToolItem = tool(
+	"ask",
+	"error",
+	askFormArgs,
 	"Ask tool was cancelled by the user",
 );
 

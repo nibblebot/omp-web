@@ -874,6 +874,7 @@ export type WebMethodName =
 	| "unsetSetting"
 	| "getSessionGraph"
 	| "navigateTree"
+	| "reanswerAsk"
 	| "resumeAfterAskReanswer"
 	| "getMcpState"
 	| "mcpAdd"

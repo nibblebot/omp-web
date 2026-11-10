@@ -1,7 +1,10 @@
-import { For, Show, type Component } from "solid-js";
+import { createMemo, For, Show, type Component } from "solid-js";
 import {
 	answersOf,
 	askDetails,
+	askFormPrompts,
+	askHtml,
+	formAnswerViews,
 	noteLabel,
 	questionViews,
 	type AskArgsQuestion,
@@ -26,18 +29,55 @@ const OptionMarker: Component<{ multi: boolean; selected: boolean }> = (props) =
 	</Show>
 );
 
-/** ask tool: every question with the options it offered; once answered, the
- *  chosen options are marked and any custom response or note is shown. */
+/** ask tool, in both shapes of the call.
+ *  Form (`{ html }`): once answered, each field's question with its answer, a
+ *  timed-out submission marked; before that (waiting, cancelled) what the form
+ *  asks, read as text from its HTML.
+ *  Questions (transcripts from before SDK 18.18.3): every question with the
+ *  options it offered; once answered, the chosen options are marked and any
+ *  custom response or note is shown. */
 export const AskToolCard: Component<{ item: ToolItem }> = (props) => {
 	const args = () => (props.item.args as { questions?: AskArgsQuestion[] } | null)?.questions ?? [];
 	const details = () => (props.item.status === "done" ? askDetails(props.item.details) : undefined);
 	const answers = () => answersOf(details());
 	const views = () => questionViews(args(), answers());
+	const formAnswers = () => formAnswerViews(details());
+	const prompts = createMemo(() => {
+		const html = askHtml(props.item.args);
+		return html === undefined || formAnswers().length > 0 ? [] : askFormPrompts(html);
+	});
 	// Structured details replace the model-facing result text; without them
 	// (waiting, dismissed, or an error) the raw output is the only record.
-	const structured = () => answers().length > 0 || details()?.chatRedirect === true;
+	const structured = () =>
+		answers().length > 0 || formAnswers().length > 0 || details()?.chatRedirect === true;
 	return (
 		<ToolCardShell name="ask" status={props.item.status} class="ask-tool">
+			<For each={prompts()}>
+				{(prompt) => (
+					<section class="ask-tool-item">
+						<div class="ask-tool-question">{prompt}</div>
+					</section>
+				)}
+			</For>
+			<For each={formAnswers()}>
+				{(a) => (
+					<section class="ask-tool-item">
+						<Show when={a.question}>
+							<div class="ask-tool-question">{a.question}</div>
+						</Show>
+						<Show when={a.answer !== ""} fallback={<div class="ask-tool-status">No answer</div>}>
+							<div class="ask-tool-answer">
+								<span class="ask-tool-answer-text">{a.answer}</span>
+							</div>
+						</Show>
+					</section>
+				)}
+			</For>
+			<Show when={formAnswers().length > 0 && details()?.timedOut}>
+				<div class="ask-tool-item ask-tool-status">
+					Timed out: the form's current values were submitted
+				</div>
+			</Show>
 			<For each={views()}>
 				{(q) => (
 					<section class="ask-tool-item">

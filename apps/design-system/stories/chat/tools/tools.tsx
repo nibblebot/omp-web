@@ -22,6 +22,10 @@ import { ShellCommand } from "../../../../web/components/chat/tools/ShellCommand
 import {
 	editToolItem,
 	askCustomTool,
+	askFormDoneTool,
+	askFormErrorTool,
+	askFormRunningTool,
+	askFormTimedOutTool,
 	askNoteOptionTool,
 	askDoneTool,
 	askErrorTool,
@@ -345,24 +349,57 @@ const stories: Story[] = [
 		title: "AskToolCard",
 		component: { file: "apps/web/components/chat/tools/AskToolCard.tsx", export: "AskToolCard" },
 		variants: [
-			{ name: "Waiting for an answer", render: () => <AskToolCard item={askRunningTool} /> },
-			{ name: "Answered with an option", render: () => <AskToolCard item={askDoneTool} /> },
 			{
-				name: "Answered with a custom response",
+				name: "Form, waiting for an answer",
+				description:
+					"The call carries an HTML form; until it is answered the card lists the questions read from that HTML as plain text.",
+				render: () => <AskToolCard item={askFormRunningTool} />,
+			},
+			{
+				name: "Form, answered",
+				description:
+					"Each field's question with the answer: a radio, a checkbox group, a number and a multi-line text.",
+				render: () => <AskToolCard item={askFormDoneTool} />,
+			},
+			{
+				name: "Form, timed out",
+				description: "The deadline submitted the form's preselected values; the card says so.",
+				render: () => <AskToolCard item={askFormTimedOutTool} />,
+			},
+			{
+				name: "Form, dismissed",
+				description: "No answers: the questions still show, with the cancellation below.",
+				render: () => <AskToolCard item={askFormErrorTool} />,
+			},
+			{
+				name: "Before SDK 18.18.3: waiting for an answer",
+				description:
+					"Transcript from before the ask tool took an HTML form: its call lists questions.",
+				render: () => <AskToolCard item={askRunningTool} />,
+			},
+			{
+				name: "Before SDK 18.18.3: answered with an option",
+				render: () => <AskToolCard item={askDoneTool} />,
+			},
+			{
+				name: "Before SDK 18.18.3: answered with a custom response",
 				description:
 					"No option picked: every offered option stays unmarked and the typed response and note show below.",
 				render: () => <AskToolCard item={askCustomTool} />,
 			},
 			{
-				name: "Answered with a note on an option",
+				name: "Before SDK 18.18.3: note on an option",
 				description: 'The note label names the option it was attached to ("Note on <option>").',
 				render: () => <AskToolCard item={askNoteOptionTool} />,
 			},
 			{
-				name: "Two questions, multi-select",
+				name: "Before SDK 18.18.3: two questions, multi-select",
 				render: () => <AskToolCard item={askMultiTool} />,
 			},
-			{ name: "Dismissed", render: () => <AskToolCard item={askErrorTool} /> },
+			{
+				name: "Before SDK 18.18.3: dismissed",
+				render: () => <AskToolCard item={askErrorTool} />,
+			},
 		],
 	}),
 	defineStory({

@@ -15,7 +15,9 @@
  * over a local stream, over the callback pair alone, and with nothing attached
  * (a reject, never a hang). This file runs the real pinned AskTool against the
  * session's browser UI context with a frame tap playing the browser: it answers
- * the askDialog ui_request exactly like index.ts's ui_response dispatch.
+ * the ui_request exactly like index.ts's ui_response dispatch. The UI context
+ * has no formDialog yet, so the tool walks the form's fields one prompt at a
+ * time through `select`/`input` and the browser answers each of those.
  *
  * initSdkTuiGlobals is idempotent and pi-tui's theme singleton has no reset, so
  * each test calls it in its own setup; only the process globals this file owns
@@ -45,9 +47,10 @@ const originalNotifications = process.env.PI_NOTIFICATIONS;
 // session's settings layer the tool call reads.
 const settings = await Settings.init({ inMemory: true });
 
-/** Only the SessionEntry fields buildUiContext reaches (handle/collab/pending map). */
+/** Only the SessionEntry fields buildUiContext reaches (handle/cwd/collab/pending map). */
 const entry = {
 	handle: "s1",
+	cwd: process.cwd(),
 	collab: { adapter: null },
 	pendingUiRequests: new Map(),
 } as unknown as SessionEntry;
@@ -62,30 +65,37 @@ const consumer = {
 
 const originalStdoutWrite = process.stdout.write;
 
-/** The askDialog ui_request params the tool puts on the wire (the card's contract). */
-interface CapturedAskDialogParams {
-	questions: Array<{ question: string; options: Array<{ label: string }> }>;
+/** The `select` ui_request params the tool puts on the wire for the form's radio group. */
+interface CapturedSelectParams {
+	title: string;
+	options: string[];
 }
 
-let capturedAskDialog: CapturedAskDialogParams | undefined;
+let capturedSelect: CapturedSelectParams | undefined;
+
+/** One radio group: the SDK's field-by-field walk asks it as a `select` (plus an Other row). */
+const ASK_FORM_HTML = `<form>
+  <fieldset>
+    <legend>Pick one?</legend>
+    <label><input type="radio" name="pick" value="alpha"> alpha</label>
+    <label><input type="radio" name="pick" value="beta"> beta</label>
+  </fieldset>
+</form>`;
 
 /**
- * Play the browser: answer an askDialog ui_request the way index.ts's
+ * Play the browser: answer a `select` ui_request the way index.ts's
  * ui_response dispatch does (drop the pending entry, resolve its promise) with
- * the selection the web ask card would submit. broadcastTo taps every frame
+ * the row the web select bar would submit. broadcastTo taps every frame
  * whether or not local streams are attached, the same seam index.ts uses to
  * mirror frames to the callback pair's browsers.
  */
-const answerAskDialogAsBrowser: NonNullable<Parameters<typeof setOnFrameTap>[0]> = (frame) => {
-	if (frame.type !== "ui_request" || frame.method !== "askDialog") return;
-	capturedAskDialog = frame.params as CapturedAskDialogParams;
+const answerSelectAsBrowser: NonNullable<Parameters<typeof setOnFrameTap>[0]> = (frame) => {
+	if (frame.type !== "ui_request" || frame.method !== "select") return;
+	capturedSelect = frame.params as CapturedSelectParams;
 	const pending = entry.pendingUiRequests.get(frame.id);
 	if (!pending) return;
 	entry.pendingUiRequests.delete(frame.id);
-	pending.resolve({
-		kind: "submit",
-		results: [{ id: "q1", selectedOptions: ["alpha"], timedOut: false }],
-	});
+	pending.resolve("alpha");
 };
 
 /**
@@ -98,7 +108,7 @@ async function withBrowserPresence(
 	presence: { localStream: boolean; callbackBrowsers: number },
 	run: () => Promise<void>,
 ): Promise<void> {
-	capturedAskDialog = undefined;
+	capturedSelect = undefined;
 	streams.delete(consumer);
 	if (presence.localStream) {
 		// An earlier test's detach nulls `attached`; re-bind it to this file's session.
@@ -106,7 +116,7 @@ async function withBrowserPresence(
 		streams.add(consumer);
 	}
 	setCallbackBrowserStreamCount(() => presence.callbackBrowsers);
-	setOnFrameTap(answerAskDialogAsBrowser);
+	setOnFrameTap(answerSelectAsBrowser);
 	try {
 		await run();
 	} finally {
@@ -145,21 +155,11 @@ async function runAskTool(): Promise<{ texts: string[]; stdoutChunks: string[] }
 		);
 	}) as unknown as typeof process.stdout.write;
 	try {
-		const result = await tool.execute(
-			"call-1",
-			{
-				questions: [
-					{
-						id: "q1",
-						question: "Pick one?",
-						options: [{ label: "alpha" }, { label: "beta" }],
-					},
-				],
-			},
-			undefined,
-			undefined,
-			{ hasUI: true, abort: () => {}, ui } as unknown as Parameters<AskTool["execute"]>[4],
-		);
+		const result = await tool.execute("call-1", { html: ASK_FORM_HTML }, undefined, undefined, {
+			hasUI: true,
+			abort: () => {},
+			ui,
+		} as unknown as Parameters<AskTool["execute"]>[4]);
 		return {
 			texts: result.content.flatMap((block) => (block.type === "text" ? [block.text] : [])),
 			stdoutChunks,
@@ -184,13 +184,12 @@ describe("ask tool over the session's browser UI context", () => {
 			const { texts, stdoutChunks } = await runAskTool();
 
 			// The browser contract: the ask card renders this question and these labels.
-			expect(capturedAskDialog).toBeDefined();
-			const question = capturedAskDialog!.questions[0];
-			expect(question.question).toBe("Pick one?");
-			expect(question.options.map((option) => option.label)).toEqual(["alpha", "beta"]);
+			expect(capturedSelect).toBeDefined();
+			expect(capturedSelect!.title).toBe("Pick one?");
+			expect(capturedSelect!.options.slice(0, 2)).toEqual(["alpha", "beta"]);
 
 			// The session-shaped answer reached the real tool.
-			expect(texts).toContain("User selected: alpha");
+			expect(texts.join("\n")).toContain('"pick": "alpha"');
 			expect(entry.pendingUiRequests.size).toBe(0);
 
 			// Terminal notifications must never land on this session's stdout
@@ -208,12 +207,11 @@ describe("ask tool over the session's browser UI context", () => {
 			const { texts } = await runAskTool();
 
 			// The frame rode the mirror tap to the browser and the browser
-			// answered: the card's params plus the tool's selection row.
-			expect(capturedAskDialog).toBeDefined();
-			const question = capturedAskDialog!.questions[0];
-			expect(question.question).toBe("Pick one?");
-			expect(question.options.map((option) => option.label)).toEqual(["alpha", "beta"]);
-			expect(texts).toContain("User selected: alpha");
+			// answered: the prompt's params plus the tool's answer JSON.
+			expect(capturedSelect).toBeDefined();
+			expect(capturedSelect!.title).toBe("Pick one?");
+			expect(capturedSelect!.options.slice(0, 2)).toEqual(["alpha", "beta"]);
+			expect(texts.join("\n")).toContain('"pick": "alpha"');
 			expect(entry.pendingUiRequests.size).toBe(0);
 		});
 	});
@@ -230,7 +228,7 @@ describe("ask tool over the session's browser UI context", () => {
 			const opened: string[] = [];
 			const ended: string[] = [];
 			setOnFrameTap((frame) => {
-				if (frame.type === "ui_request" && frame.method === "askDialog") {
+				if (frame.type === "ui_request" && frame.method === "select") {
 					opened.push(frame.id);
 					// Stop lands while the browser is still deciding; defer past the broadcast.
 					queueMicrotask(() => cancelEntryUiRequests(entry));
@@ -249,8 +247,8 @@ describe("ask tool over the session's browser UI context", () => {
 		promise.catch(() => {});
 		entry.pendingUiRequests.set("ui900", {
 			streams: new Set<ClientConsumer>(),
-			method: "askDialog",
-			params: { questions: [] },
+			method: "select",
+			params: { title: "Pick one?", options: ["alpha", "beta"] },
 			resolve,
 			reject,
 		});
@@ -263,7 +261,12 @@ describe("ask tool over the session's browser UI context", () => {
 		});
 		try {
 			expect(pendingUiRequestFrames(entry)).toEqual([
-				{ type: "ui_request", id: "ui900", method: "askDialog", params: { questions: [] } },
+				{
+					type: "ui_request",
+					id: "ui900",
+					method: "select",
+					params: { title: "Pick one?", options: ["alpha", "beta"] },
+				},
 			]);
 		} finally {
 			entry.pendingUiRequests.clear();

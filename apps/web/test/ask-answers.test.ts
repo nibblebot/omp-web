@@ -1,11 +1,23 @@
 /**
- * The ask transcript card merges the offered options (call args) with the
- * user's answer (SDK AskToolDetails): chosen options are marked, extra and
- * custom answers stay visible, and a chat redirect carries no answers.
+ * The ask transcript card reads two shapes of the tool. Question shape (before
+ * SDK 18.18.3): the offered options (call args) merge with the user's answer
+ * (details): chosen options are marked, extra and custom answers stay visible,
+ * and a chat redirect carries no answers. Form shape: details list each field's
+ * answer, and a call without an answer still shows what its HTML form asks.
  */
 
 import { describe, expect, test } from "bun:test";
-import { answersOf, askDetails, noteLabel, questionViews } from "../chat/ask-answers";
+import { parseHTML } from "@oh-my-pi/pi-utils/dom";
+import {
+	answersOf,
+	askDetails,
+	askFormPrompts,
+	askHtml,
+	formAnswerViews,
+	noteLabel,
+	questionViews,
+	type FormHtmlParser,
+} from "../chat/ask-answers";
 
 const opts = (...labels: string[]) => labels.map((label) => ({ label }));
 
@@ -125,5 +137,96 @@ describe("ask note on an option", () => {
 	test("the label names the option, else stays Note", () => {
 		expect(noteLabel("Wide")).toBe("Note on Wide");
 		expect(noteLabel(undefined)).toBe("Note");
+	});
+});
+
+describe("ask form answers", () => {
+	test("each answered field lists its question and value in form order", () => {
+		const details = askDetails({
+			answers: [
+				{ name: "db", question: "Which database?", answer: "PostgreSQL" },
+				{ name: "notes", question: "Anything else?", answer: "keep migrations small" },
+			],
+		});
+		expect(formAnswerViews(details)).toEqual([
+			{ name: "db", question: "Which database?", answer: "PostgreSQL" },
+			{ name: "notes", question: "Anything else?", answer: "keep migrations small" },
+		]);
+	});
+
+	test("a blank answer is empty and a missing question falls back to the name", () => {
+		const details = askDetails({ answers: [{ name: "notes", question: "  ", answer: "" }] });
+		expect(formAnswerViews(details)).toEqual([{ name: "notes", question: "notes", answer: "" }]);
+	});
+
+	test("a timed-out submission still lists its answers and keeps the flag", () => {
+		const details = askDetails({
+			timedOut: true,
+			answers: [{ name: "db", question: "Which database?", answer: "SQLite" }],
+		});
+		expect(formAnswerViews(details)).toHaveLength(1);
+		expect(details?.timedOut).toBe(true);
+	});
+
+	test("question-shape details yield no form answers, and form details no question answers", () => {
+		expect(formAnswerViews(askDetails({ selectedOptions: ["A"] }))).toEqual([]);
+		expect(formAnswerViews(undefined)).toEqual([]);
+		expect(answersOf(askDetails({ answers: [{ name: "db", answer: "x" }] }))).toEqual([]);
+	});
+
+	test("askHtml reads only a string html arg", () => {
+		expect(askHtml({ html: "<form></form>" })).toBe("<form></form>");
+		expect(askHtml({ questions: [] })).toBeUndefined();
+		expect(askHtml({ html: 3 })).toBeUndefined();
+		expect(askHtml(null)).toBeUndefined();
+	});
+});
+
+describe("ask form prompts", () => {
+	// A real DOM implementation stands in for the browser's inert DOMParser; the wrapper
+	// gives it the html/body document a browser parse of a fragment yields.
+	const parse: FormHtmlParser = (html) =>
+		parseHTML(`<!doctype html><html><body>${html}</body></html>`).document;
+
+	test("legends, paragraphs and text-control labels are the questions; option labels are not", () => {
+		const html = `<form>
+			<fieldset><legend>Which database?</legend>
+				<label><input type="radio" name="db" value="sqlite"> SQLite</label>
+				<label><input type="radio" name="db" value="pg"> Postgres</label>
+			</fieldset>
+			<p>Pick the <code>checks</code> to run</p>
+			<label>Branch name <input type="text" name="branch"></label>
+			<label for="n">Notes</label><textarea id="n" name="notes">draft text</textarea>
+		</form>`;
+		expect(askFormPrompts(html, parse)).toEqual([
+			"Which database?",
+			"Pick the checks to run",
+			"Branch name",
+			"Notes",
+		]);
+	});
+
+	test("markup is read as text: scripts and styles contribute nothing", () => {
+		const html = `<form><p>Ship it?<script>alert(1)</script><style>p{}</style></p></form>`;
+		expect(askFormPrompts(html, parse)).toEqual(["Ship it?"]);
+	});
+
+	test("a form without question markup falls back to its plain text", () => {
+		expect(
+			askFormPrompts("<form>Continue with the upgrade? <input name=go></form>", parse),
+		).toEqual(["Continue with the upgrade?"]);
+		expect(askFormPrompts("", parse)).toEqual([]);
+	});
+
+	test("the list is bounded in count and length", () => {
+		const many = Array.from({ length: 30 }, (_, i) => `<p>Question ${i}</p>`).join("");
+		expect(askFormPrompts(`<form>${many}</form>`, parse)).toHaveLength(12);
+		const [long] = askFormPrompts(`<form><p>${"x".repeat(500)}</p></form>`, parse);
+		expect(long).toHaveLength(160);
+		expect(long?.endsWith("…")).toBe(true);
+	});
+
+	test("repeated text is listed once", () => {
+		expect(askFormPrompts("<form><p>Same?</p><p>Same?</p></form>", parse)).toEqual(["Same?"]);
 	});
 });

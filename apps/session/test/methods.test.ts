@@ -566,6 +566,14 @@ describe("session graph rows", () => {
 			methods.navigateTree!(entry, ["u1", { revision: "not-the-current-revision" }]),
 		).rejects.toThrow("Graph selection is stale; reload and re-pick");
 	});
+
+	test("reanswerAsk is a mutating transcript reload, like navigateTree", () => {
+		const web = webMethods();
+		expect(web.methods.reanswerAsk).toBeFunction();
+		expect(web.readOnly.reanswerAsk).toBeUndefined();
+		expect(web.historyReload.reanswerAsk).toBe(true);
+		expect(web.notReadyGated.reanswerAsk).toBeUndefined();
+	});
 });
 
 describe("transcript-rewriting rows", () => {

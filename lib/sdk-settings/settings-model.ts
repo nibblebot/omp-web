@@ -222,11 +222,11 @@ function layerValue(layer: unknown, path: string): unknown {
  * `live`: a running session picks the edit up through a settings listener, a tool-gate
  * reconcile, or a read at use time (lib/sdk-settings/test/live-setting-trace.ts holds the
  * per-row evidence; the exhaustiveness test keeps both lists complete). Evidence paths
- * are relative to @oh-my-pi/pi-coding-agent 18.17.0 `src/`.
+ * are relative to @oh-my-pi/pi-coding-agent 18.18.4 `src/`.
  */
 export const NEXT_SESSION_PATHS: Readonly<Record<string, true>> = {
-	// Seeds a new session's level (sdk.ts:2335 pickInitialThinkingLevel, agent-session.ts:13719
-	// on session switch); agent-session.ts:3193-3196 states it is deliberately not listened to.
+	// Seeds a new session's level (sdk.ts:2335 pickInitialThinkingLevel, agent-session.ts:14203
+	// on session switch); agent-session.ts:3232-3235 states it is deliberately not listened to.
 	defaultThinkingLevel: true,
 	// Read once into mcpDiscoverOptions (sdk.ts:2860) at construction; no listener, and
 	// MCP reconnects reuse that captured option (mcp/manager.ts:774,836).
@@ -235,12 +235,12 @@ export const NEXT_SESSION_PATHS: Readonly<Record<string, true>> = {
 	// SDK's own description says "Start a new session to load them" (session/context-settings.ts:58).
 	"contextFiles.extra": true,
 	// Entering plan mode on startup is decided at launch and after /new
-	// (modes/interactive-mode.ts:702, main.ts:2555); no listener.
+	// (modes/interactive-mode.ts:705, main.ts:2569); no listener.
 	"plan.defaultOnStartup": true,
 	// Auto-start of a collab room runs at startup and on session change or guest restore
-	// (collab/controller.ts:121,365; modes/interactive-mode.ts:2801).
+	// (collab/controller.ts:121,365; modes/interactive-mode.ts:2805).
 	"collab.autoStart": true,
-	// Telemetry export is initialised once at process startup (main.ts:2407); no listener.
+	// Telemetry export is initialised once at process startup (main.ts:2421); no listener.
 	"telemetry.otlpExportEnabled": true,
 	// The Spotlight experiment starts once while the session is built (sdk.ts:2756-2758,
 	// spotlight/session.ts:197); no listener.

@@ -1,5 +1,10 @@
 import { SessionTreePanel } from "../../../web/components/sessions/SessionTreePanel";
-import { sessionGraphPage, sessionGraphPageMore } from "../../fixtures/dialogs";
+import {
+	sessionGraphAskProbe,
+	sessionGraphPage,
+	sessionGraphPageAsk,
+	sessionGraphPageMore,
+} from "../../fixtures/dialogs";
 import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
@@ -23,6 +28,26 @@ export default defineStory({
 			name: "Paged tree",
 			seed: () => {
 				answerCalls({ getSessionGraph: () => sessionGraphPageMore });
+			},
+			render: () => <SessionTreePanel />,
+		},
+		{
+			name: "Re-answering an ask",
+			description:
+				"Select the ask answer and choose Navigate here: the session probes, then asks in the composer, so the panel shows a pending note. The demo cancels the question after a few seconds.",
+			seed: () => {
+				answerCalls({
+					getSessionGraph: () => sessionGraphPageAsk,
+					navigateTree: () => sessionGraphAskProbe,
+					reanswerAsk: () => {
+						const { promise, resolve } = Promise.withResolvers<unknown>();
+						setTimeout(
+							() => resolve({ cancelled: true, revision: sessionGraphAskProbe.revision }),
+							6000,
+						);
+						return promise;
+					},
+				});
 			},
 			render: () => <SessionTreePanel />,
 		},

@@ -1,7 +1,6 @@
 import type { ImageArg } from "#lib/wire/protocol";
 import { createSignal } from "solid-js";
 import { call, pushNotice, setPromptInsert } from "../state";
-import type { AskOption, AskQuestion } from "../prompt/ask-types";
 import { stashUnsent } from "./drafts";
 import { openDock } from "./dock";
 import { invalidateMentions } from "./models";
@@ -59,7 +58,7 @@ export interface GraphQuery {
 
 export interface AskReopen {
 	toolCallId: string;
-	questions: AskQuestion[];
+	html: string;
 }
 
 export type NavigateOutcome =
@@ -75,7 +74,7 @@ interface NavigateTreeResult {
 	cancelled?: boolean;
 	aborted?: boolean;
 	summaryEntry?: { id: string };
-	reopenAsk?: { toolCallId: string; questions: AskQuestion[] };
+	reopenAsk?: AskReopen;
 	askReanswerCommitted?: boolean;
 }
 
@@ -216,53 +215,31 @@ export async function branchFromEntry(entryId: string): Promise<NavigateOutcome>
 	return { kind: "branched", text: result.text ?? "" };
 }
 
-/** Ask re-answer, second pass: hand the fresh browser answer back so the
- *  server branches a new sibling toolResult, rebuilds, then resume. */
-export async function completeAskReanswer(
-	targetId: string,
-	questions: AskQuestion[],
-	answers: Array<{ selected: string[]; custom: string }>,
-): Promise<void> {
+/**
+ * Ask re-answer, second pass: the session runs the SDK's ask tool against the
+ * probed form (the composer shows it), then branches a new sibling toolResult
+ * and rebuilds; resume follows. No call deadline: the user may take long.
+ * Resolves `false` when the user cancelled the question (nothing changed).
+ */
+export async function reanswerAsk(targetId: string): Promise<boolean> {
 	const probe = askProbes.get(targetId);
 	if (!probe || probe.generation !== generation) {
 		throw new Error("Ask re-answer is stale; reopen the question from the session graph.");
 	}
-	const results = questions.map((q, i) => {
-		const a = answers[i] ?? { selected: [], custom: "" };
-		const custom = a.custom.trim();
-		return {
-			id: q.id,
-			question: q.question,
-			options: q.options.map((o: AskOption) => ({
-				label: o.label,
-				...(o.description !== undefined ? { description: o.description } : {}),
-			})),
-			multi: q.multi ?? false,
-			selectedOptions: a.selected,
-			...(custom ? { customInput: custom } : {}),
-		};
-	});
-	const lines = questions.map((q, i) => {
-		const a = answers[i] ?? { selected: [], custom: "" };
-		const extra = a.custom.trim() ? [`Other: ${a.custom.trim()}`] : [];
-		const picked = [...a.selected, ...extra].join(", ");
-		return `Q: ${q.question}\nA: ${picked || "(no answer)"}`;
-	});
-	const reanswerAskResult = {
-		content: [{ type: "text" as const, text: `User answers:\n${lines.join("\n")}` }],
-		details: { results },
-	};
-	const data = (await call("navigateTree", [
-		targetId,
-		{ revision: probe.revision, allowAskReopen: true, reanswerAskResult },
-	])) as NavigateTreeResult;
-	if (data.cancelled || data.aborted) throw new Error("Ask re-answer was cancelled.");
+	askProbes.delete(targetId);
+	const data = (await call(
+		"reanswerAsk",
+		[targetId, { revision: probe.revision }],
+		0,
+	)) as NavigateTreeResult;
+	if (data.cancelled || data.aborted) return false;
 	if (!data.askReanswerCommitted)
 		throw new Error("Server did not commit the re-answer; nothing changed.");
 	noteTranscriptReplaced();
 	// Resume only AFTER the transcript rebuild, never before: scheduling the
 	// continue here would render the resumed turn against stale UI.
 	await call("resumeAfterAskReanswer", []);
+	return true;
 }
 
 /** Cards without a stable entry ID may open the picker, never infer an

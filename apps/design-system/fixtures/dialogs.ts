@@ -529,6 +529,35 @@ export const sessionGraphPageMore: GraphPage = {
 	nextCursor: "cur_6",
 };
 
+/** A tree with a past `ask` answer (n03): picking it probes, then re-asks in the composer. */
+export const sessionGraphPageAsk: GraphPage = {
+	...sessionGraphPage,
+	revision: "rev_19",
+	leafId: "n05",
+	nodes: [
+		node("n01", null, "user", "Pick a store for the sessions", 40, 1),
+		node("n02", "n01", "assistant", "[ask]", 39, 1),
+		node("n03", "n02", "ask", "User answers: store = sqlite", 38, 1),
+		node("n04", "n03", "assistant", "Using SQLite for the session store", 37, 1),
+		node("n05", "n04", "user", "Thanks, go ahead", 36, 0),
+	],
+};
+
+/** The probe answer for `sessionGraphPageAsk`'s ask node: the form the session re-asks. */
+export const sessionGraphAskProbe = {
+	reopenAsk: {
+		toolCallId: "call_ask_store",
+		html: `<form>
+  <fieldset>
+    <legend>Which store should hold sessions?</legend>
+    <label><input type="radio" name="store" value="sqlite" checked> SQLite</label>
+    <label><input type="radio" name="store" value="redis"> Redis</label>
+  </fieldset>
+</form>`,
+	},
+	revision: "rev_19",
+};
+
 // ---------------------------------------------------------------------------
 // Compaction: session answer for compactionSnapshot, plus store slice builders.
 // ---------------------------------------------------------------------------

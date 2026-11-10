@@ -420,12 +420,6 @@ button.picker-row.kbd-active {
 	flex-wrap: wrap;
 	gap: var(--space-3);
 }
-.graph-ask-actions {
-	display: flex;
-	justify-content: flex-end;
-	gap: var(--space-4);
-	margin-top: var(--space-4);
-}
 .stats-table {
 	border-collapse: collapse;
 	font-size: var(--fs-lg);

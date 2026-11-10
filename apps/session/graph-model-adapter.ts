@@ -1,5 +1,14 @@
+import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
+import type { ExtensionUIContext } from "@oh-my-pi/pi-coding-agent";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { AskTool } from "@oh-my-pi/pi-coding-agent/tools/ask";
+import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { createHash } from "node:crypto";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type {
+	AgentSession,
+	NavigateTreeResult,
+} from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionEntry as SdkEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import {
 	deleteModelPreset,
@@ -72,9 +81,24 @@ export interface GraphPage {
 	nextCursor: string | null;
 	hasMore: boolean;
 }
-export type GraphNavigateOptions = NonNullable<Parameters<AgentSession["navigateTree"]>[1]> & {
+export type GraphNavigateOptions = Omit<
+	NonNullable<Parameters<AgentSession["navigateTree"]>[1]>,
+	"reanswerAskResult"
+> & {
 	revision?: string;
 };
+
+/** What `navigateTree` and `reanswerAsk` answer (wire shape of the SDK's NavigateTreeResult). */
+export interface GraphNavigateAnswer {
+	editorText?: string;
+	editorImages?: NavigateTreeResult["editorImages"];
+	cancelled?: boolean;
+	aborted?: boolean;
+	summaryEntry?: { id: string };
+	reopenAsk?: NavigateTreeResult["reopenAsk"];
+	askReanswerCommitted?: boolean;
+	revision: string;
+}
 
 /**
  * Revision includes content and labels, not only append count or current leaf.
@@ -96,8 +120,14 @@ export function graphRevision(
 export function createGraphModelHandlers(deps: {
 	/** Publish rebuilt history and await delivery scheduling before permitting ask resume. */
 	rebuildTranscript(entry: SessionEntry): Promise<void>;
+	/** The session's browser UI context: where the re-asked form is shown. */
+	uiContext(entry: SessionEntry): ExtensionUIContext;
 }) {
-	const pendingAnswers = new WeakMap<AgentSession, { targetId: string; revision: string }>();
+	/** The ask probe a re-answer may consume: the form's HTML is the session's, never the client's. */
+	const pendingAnswers = new WeakMap<
+		AgentSession,
+		{ targetId: string; revision: string; html: string }
+	>();
 	const committedAnswers = new WeakMap<AgentSession, string>();
 	const revisionOf = (session: AgentSession) =>
 		graphRevision(
@@ -105,6 +135,27 @@ export function createGraphModelHandlers(deps: {
 			session.sessionManager.getLeafId(),
 			session.sessionManager.getEntries(),
 		);
+	/** Rebuild the transcript after a landed navigation and answer in the wire shape. */
+	const settleNavigation = async (
+		entry: SessionEntry,
+		result: NavigateTreeResult,
+	): Promise<GraphNavigateAnswer> => {
+		const { session } = entry;
+		if (!result.reopenAsk && !result.cancelled && !result.aborted) {
+			await deps.rebuildTranscript(entry);
+			if (result.askReanswerCommitted) committedAnswers.set(session, revisionOf(session));
+		}
+		return {
+			editorText: result.editorText,
+			editorImages: result.editorImages,
+			cancelled: result.cancelled,
+			aborted: result.aborted,
+			summaryEntry: result.summaryEntry ? { id: result.summaryEntry.id } : undefined,
+			reopenAsk: result.reopenAsk,
+			askReanswerCommitted: result.askReanswerCommitted,
+			revision: revisionOf(session),
+		};
+	};
 	return {
 		getSessionGraph(entry: SessionEntry, query: GraphQuery = {}): GraphPage {
 			const { session } = entry;
@@ -235,38 +286,76 @@ export function createGraphModelHandlers(deps: {
 					: null,
 			};
 		},
-		async navigateTree(entry: SessionEntry, targetId: string, options: GraphNavigateOptions = {}) {
+		async navigateTree(
+			entry: SessionEntry,
+			targetId: string,
+			options: GraphNavigateOptions = {},
+		): Promise<GraphNavigateAnswer> {
 			const { session } = entry;
 			const revision = revisionOf(session);
 			if (options.revision !== revision)
 				throw new Error("Graph selection is stale; reload and re-pick");
 			if (!session.sessionManager.getEntry(targetId))
 				throw new Error("Graph entry no longer exists");
-			if (options.reanswerAskResult) {
-				const pending = pendingAnswers.get(session);
-				if (!pending || pending.targetId !== targetId || pending.revision !== revision)
-					throw new Error("Ask re-answer has no current probe; reopen the question");
-			}
+			if ("reanswerAskResult" in options)
+				throw new Error("Ask re-answers run in the session; use reanswerAsk");
 			committedAnswers.delete(session);
 			const result = await session.navigateTree(targetId, options);
-			if (result.reopenAsk) pendingAnswers.set(session, { targetId, revision });
-			else {
-				pendingAnswers.delete(session);
-				if (!result.cancelled && !result.aborted) {
-					await deps.rebuildTranscript(entry);
-					if (result.askReanswerCommitted) committedAnswers.set(session, revisionOf(session));
-				}
-			}
-			return {
-				editorText: result.editorText,
-				editorImages: result.editorImages,
-				cancelled: result.cancelled,
-				aborted: result.aborted,
-				summaryEntry: result.summaryEntry ? { id: result.summaryEntry.id } : undefined,
-				reopenAsk: result.reopenAsk,
-				askReanswerCommitted: result.askReanswerCommitted,
-				revision: revisionOf(session),
+			if (result.reopenAsk)
+				pendingAnswers.set(session, { targetId, revision, html: result.reopenAsk.html });
+			else pendingAnswers.delete(session);
+			return settleNavigation(entry, result);
+		},
+		/**
+		 * Second pass of an ask re-answer, after a `navigateTree` probe answered `reopenAsk`: runs the
+		 * SDK's AskTool against the probe's form through the session's browser UI context (the
+		 * composer shows it), then navigates with the tool's own result. A cancelled ask navigates
+		 * nowhere. Any outcome spends the probe.
+		 */
+		async reanswerAsk(
+			entry: SessionEntry,
+			targetId: string,
+			options: { revision?: string } = {},
+		): Promise<GraphNavigateAnswer> {
+			const { session } = entry;
+			const revision = revisionOf(session);
+			if (options.revision !== revision)
+				throw new Error("Graph selection is stale; reload and re-pick");
+			const pending = pendingAnswers.get(session);
+			if (!pending || pending.targetId !== targetId || pending.revision !== revision)
+				throw new Error("Ask re-answer has no current probe; reopen the question");
+			pendingAnswers.delete(session);
+			const toolSession: ToolSession = {
+				cwd: session.sessionManager.getCwd(),
+				hasUI: true,
+				settings: session.settings,
+				getSessionFile: () => session.sessionManager.getSessionFile() ?? null,
+				getSessionSpawns: () => null,
+				getPlanModeState: () => session.getPlanModeState(),
 			};
+			let reanswerAskResult: AgentToolResult<AskToolDetails>;
+			try {
+				reanswerAskResult = await new AskTool(toolSession).execute(
+					"tree-reanswer",
+					{ html: pending.html },
+					undefined,
+					undefined,
+					session.buildAskReanswerContext(deps.uiContext(entry)),
+				);
+			} catch (error) {
+				if (error instanceof ToolAbortError)
+					return { cancelled: true, revision: revisionOf(session) };
+				throw error;
+			}
+			// The form can stay open a long time; the tree it was probed against must not have moved.
+			if (revisionOf(session) !== revision)
+				throw new Error("Session changed while the question was open; reopen the question");
+			committedAnswers.delete(session);
+			const result = await session.navigateTree(targetId, {
+				allowAskReopen: true,
+				reanswerAskResult,
+			});
+			return settleNavigation(entry, result);
 		},
 		resumeAfterAskReanswer(entry: SessionEntry) {
 			const { session } = entry;

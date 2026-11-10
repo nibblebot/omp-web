@@ -173,6 +173,8 @@ export function shellVizDto(trace: ShellTrace, cursor?: number): ShellVizDto {
 	const at =
 		cursor === undefined || length === 0 ? undefined : Math.min(length, Math.max(0, cursor));
 	const source = shellVisualization(trace);
+	// The engine rejected the snapshot (e.g. a `tool_result` hook rewrote `script`).
+	if (!source) throw new Error("the native engine cannot restore this trace");
 	const render = (view: "pseudo" | "raw"): ShellVizPresentation =>
 		readShellPresentation(
 			source,

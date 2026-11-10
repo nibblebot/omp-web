@@ -13,9 +13,9 @@ import { pushNotice, state } from "../../state";
 import { PickerRow } from "../ui/PickerRow";
 import {
 	branchFromEntry,
-	completeAskReanswer,
 	loadGraph,
 	navigateToEntry,
+	reanswerAsk,
 	takeTreeSeed,
 	treeSeed,
 	type GraphFilter,
@@ -24,7 +24,6 @@ import {
 } from "../../store/graph";
 import { stashUnsent } from "../../store/drafts";
 import { createDebouncer } from "../../store/search-debounce";
-import type { AskQuestion } from "../../prompt/ask-types";
 
 /**
  * Session tree pane body, hosted by the dock (DockHost). Mirrors the
@@ -121,12 +120,7 @@ export const SessionTreePanel: Component = () => {
 	const [summarize, setSummarize] = createSignal(false);
 	const [instructions, setInstructions] = createSignal("");
 	const [busyId, setBusyId] = createSignal<string | null>(null);
-	const [askReopen, setAskReopen] = createSignal<{
-		targetId: string;
-		toolCallId: string;
-		questions: AskQuestion[];
-	} | null>(null);
-	const [askDraft, setAskDraft] = createSignal<Array<{ selected: string[]; custom: string }>>([]);
+	const [askPending, setAskPending] = createSignal(false);
 	const [foldNote, setFoldNote] = createSignal<string | null>(null);
 	let listEl: HTMLDivElement | undefined;
 
@@ -256,16 +250,12 @@ export const SessionTreePanel: Component = () => {
 			revision(),
 		)
 			.then((out) => {
-				setBusyId(null);
 				if (out.kind === "askReopen") {
-					setAskReopen({
-						targetId: node.id,
-						toolCallId: out.reopen.toolCallId,
-						questions: out.reopen.questions,
-					});
-					setAskDraft(out.reopen.questions.map(() => ({ selected: [], custom: "" })));
+					// busyId stays set until the re-answer settles.
+					runAskReanswer(node.id);
 					return;
 				}
+				setBusyId(null);
 				if (out.kind === "cancelled") return;
 				if (out.kind === "branched") return;
 				pushNotice(
@@ -300,241 +290,165 @@ export const SessionTreePanel: Component = () => {
 			});
 	};
 
-	const submitAskReanswer = (): void => {
-		const ar = askReopen();
-		if (!ar) return;
-		setBusyId(ar.targetId);
-		void completeAskReanswer(ar.targetId, ar.questions, askDraft())
-			.then(() => {
-				setBusyId(null);
-				setAskReopen(null);
-				refresh();
+	/** Probe answered: the session now asks in the composer; wait for the answer, then resume. */
+	const runAskReanswer = (targetId: string): void => {
+		setAskPending(true);
+		void reanswerAsk(targetId)
+			.then((committed) => {
+				if (committed) refresh();
+				else pushNotice("info", "Re-answer cancelled.");
 			})
 			.catch((err) => {
+				const text = String(err instanceof Error ? err.message : err);
+				setError(text);
+				if (/stale|changed/i.test(text)) refresh({ keepError: true });
+			})
+			.finally(() => {
+				setAskPending(false);
 				setBusyId(null);
-				setError(String(err instanceof Error ? err.message : err));
 			});
-	};
-
-	const toggleAskOption = (qi: number, label: string, multi: boolean): void => {
-		setAskDraft((prev) => {
-			const next = [...prev];
-			const cur = next[qi] ?? { selected: [], custom: "" };
-			const has = cur.selected.includes(label);
-			const selected = multi
-				? has
-					? cur.selected.filter((l) => l !== label)
-					: [...cur.selected, label]
-				: has
-					? []
-					: [label];
-			next[qi] = { ...cur, selected };
-			return next;
-		});
 	};
 
 	return (
 		<>
-			<Show when={askReopen()} keyed>
-				{(ar) => (
-					<div class="graph-ask">
-						<div class="picker-group-name">
-							Re-answer ask (new sibling answer — old answer kept)
-						</div>
-						<For each={ar.questions}>
-							{(q, qi) => (
-								<div class="ask-question">
-									{q.header && <div class="ask-header">{q.header}</div>}
-									<div class="ask-label">{q.question}</div>
-									<div class="picker-list ask-options">
-										<For each={q.options}>
-											{(opt) => {
-												const sel = () => (askDraft()[qi()]?.selected ?? []).includes(opt.label);
-												return (
-													<PickerRow
-														class="picker-row ask-option"
-														classList={{ active: sel() }}
-														aria-pressed={sel()}
-														onClick={() => toggleAskOption(qi(), opt.label, q.multi ?? false)}
-													>
-														<span class="picker-label">{opt.label}</span>
-														{opt.description && (
-															<span class="picker-detail">{opt.description}</span>
-														)}
-													</PickerRow>
-												);
-											}}
-										</For>
-									</div>
-									<input
-										class="picker-filter ask-custom"
-										aria-label="Custom answer"
-										placeholder="Other…"
-										value={askDraft()[qi()]?.custom ?? ""}
-										onInput={(e) => {
-											const v = e.currentTarget.value;
-											setAskDraft((prev) => {
-												const next = [...prev];
-												next[qi()] = { ...(next[qi()] ?? { selected: [] }), custom: v };
-												return next;
-											});
-										}}
-									/>
-								</div>
-							)}
-						</For>
-						<div class="graph-ask-actions">
-							<button type="button" onClick={() => setAskReopen(null)}>
-								Back to tree
-							</button>
-							<button
-								type="button"
-								class="send"
-								disabled={busyId() !== null}
-								onClick={submitAskReanswer}
-							>
-								Re-answer + resume
-							</button>
-						</div>
-					</div>
-				)}
+			<div class="picker-group-name">
+				Navigate stays in this file (previous branch preserved). Branch copies to a NEW file.
+			</div>
+			<Show when={askPending()}>
+				<div class="tool-collapsed-note" role="status">
+					Answer the question in the composer (the old answer is kept).
+				</div>
 			</Show>
-			<Show when={!askReopen()}>
-				<div class="picker-group-name">
-					Navigate stays in this file (previous branch preserved). Branch copies to a NEW file.
-				</div>
-				<div class="graph-filters" role="group" aria-label="Node kind filter">
-					<For each={FILTERS}>
-						{(f) => (
-							<button
-								type="button"
-								class="graph-filter"
-								aria-pressed={kind() === f.value}
-								onClick={() => {
-									setKind(f.value);
-									refresh();
-								}}
-							>
-								{f.label}
-							</button>
-						)}
-					</For>
-				</div>
-				<input
-					class="picker-filter"
-					aria-label="Search nodes"
-					placeholder="Search text or label…"
-					value={filter()}
-					onInput={(e) => onFilterInput(e.currentTarget.value)}
-				/>
-				<Show when={error()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
-				<Show when={foldNote()}>{(n) => <div class="tool-collapsed-note">{n()}</div>}</Show>
-				<div class="picker-list graph-list" ref={(el) => (listEl = el)} onKeyDown={onListKeyDown}>
-					<For each={nodes()}>
-						{(n) => {
-							const selected = () => selectedId() === n.id;
-							const kids = () => childCounts().get(n.id) ?? 0;
-							const sibs = () =>
-								n.parentId === null ? 0 : (childCounts().get(n.parentId) ?? 1) - 1;
-							const isLeaf = () => n.id === page()?.leafId;
-							return (
-								<div
-									class="graph-node"
-									classList={{ active: selected(), "on-path": onPath().has(n.id) }}
-									data-node-id={n.id}
-								>
-									<PickerRow
-										class="picker-row graph-row"
-										aria-selected={selected()}
-										onClick={() => select(n.id)}
-									>
-										<span
-											class="graph-indent"
-											style={{ width: `${(depths().get(n.id) ?? 0) * 14}px` }}
-											aria-hidden="true"
-										/>
-										<span class="graph-marker" aria-hidden="true">
-											{isLeaf() ? "●" : onPath().has(n.id) ? "│" : " "}
-										</span>
-										<span class="picker-chip">{kindLabel(n)}</span>
-										<span class="picker-label">{n.preview || "(no text)"}</span>
-										<span class="picker-meta">
-											{n.label ? `🏷 ${n.label} · ` : ""}
-											{relTime(n.timestamp)}
-											{n.hasImages ? " · 🖼" : ""}
-											{isLeaf() ? " · leaf" : ""}
-										</span>
-									</PickerRow>
-									<Show when={selected()}>
-										<div class="graph-detail">
-											<Show when={sibs() > 0}>
-												<div class="tool-collapsed-note">
-													{sibs()} sibling{sibs() === 1 ? "" : "s"} on this fork (same page)
-												</div>
-											</Show>
-											<Show when={kids() > 0}>
-												<div class="tool-collapsed-note">
-													{kids()} child{kids() === 1 ? "" : "ren"} below
-												</div>
-											</Show>
-											<label class="graph-opt">
-												<input
-													type="checkbox"
-													checked={summarize()}
-													onChange={(e) => setSummarize(e.currentTarget.checked)}
-												/>
-												summarize abandoned branch at target (Shift+Enter)
-											</label>
-											<Show when={summarize()}>
-												<input
-													class="picker-filter"
-													aria-label="Summary instructions"
-													placeholder="Summary focus (optional)…"
-													value={instructions()}
-													onInput={(e) => setInstructions(e.currentTarget.value)}
-												/>
-											</Show>
-											<div class="graph-actions">
-												<button
-													type="button"
-													title="Same-file navigation — previous branch preserved (Enter)"
-													disabled={busyId() !== null}
-													onClick={() => runNavigate(n)}
-												>
-													{busyId() === n.id ? "Navigating…" : "Navigate here"}
-												</button>
-												<button
-													type="button"
-													title="New-file branch — copies history to another session file"
-													disabled={busyId() !== null}
-													onClick={() => runBranch(n)}
-												>
-													{busyId() === n.id ? "Branching…" : "Branch to new file"}
-												</button>
-											</div>
-										</div>
-									</Show>
-								</div>
-							);
-						}}
-					</For>
-					{nodes().length === 0 && !error() && (
-						<div class="tool-collapsed-note">no matching nodes</div>
+			<div class="graph-filters" role="group" aria-label="Node kind filter">
+				<For each={FILTERS}>
+					{(f) => (
+						<button
+							type="button"
+							class="graph-filter"
+							aria-pressed={kind() === f.value}
+							onClick={() => {
+								setKind(f.value);
+								refresh();
+							}}
+						>
+							{f.label}
+						</button>
 					)}
-				</div>
-				<Show when={page()?.hasMore}>
-					<button
-						type="button"
-						class="picker-row"
-						onClick={() => {
-							const c = page()?.nextCursor;
-							if (c) refresh({ cursor: c, append: true });
-							else setFoldNote("Older history is available server-side; paging continues on next.");
-						}}
-					>
-						Load older history…
-					</button>
-				</Show>
+				</For>
+			</div>
+			<input
+				class="picker-filter"
+				aria-label="Search nodes"
+				placeholder="Search text or label…"
+				value={filter()}
+				onInput={(e) => onFilterInput(e.currentTarget.value)}
+			/>
+			<Show when={error()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
+			<Show when={foldNote()}>{(n) => <div class="tool-collapsed-note">{n()}</div>}</Show>
+			<div class="picker-list graph-list" ref={(el) => (listEl = el)} onKeyDown={onListKeyDown}>
+				<For each={nodes()}>
+					{(n) => {
+						const selected = () => selectedId() === n.id;
+						const kids = () => childCounts().get(n.id) ?? 0;
+						const sibs = () => (n.parentId === null ? 0 : (childCounts().get(n.parentId) ?? 1) - 1);
+						const isLeaf = () => n.id === page()?.leafId;
+						return (
+							<div
+								class="graph-node"
+								classList={{ active: selected(), "on-path": onPath().has(n.id) }}
+								data-node-id={n.id}
+							>
+								<PickerRow
+									class="picker-row graph-row"
+									aria-selected={selected()}
+									onClick={() => select(n.id)}
+								>
+									<span
+										class="graph-indent"
+										style={{ width: `${(depths().get(n.id) ?? 0) * 14}px` }}
+										aria-hidden="true"
+									/>
+									<span class="graph-marker" aria-hidden="true">
+										{isLeaf() ? "●" : onPath().has(n.id) ? "│" : " "}
+									</span>
+									<span class="picker-chip">{kindLabel(n)}</span>
+									<span class="picker-label">{n.preview || "(no text)"}</span>
+									<span class="picker-meta">
+										{n.label ? `🏷 ${n.label} · ` : ""}
+										{relTime(n.timestamp)}
+										{n.hasImages ? " · 🖼" : ""}
+										{isLeaf() ? " · leaf" : ""}
+									</span>
+								</PickerRow>
+								<Show when={selected()}>
+									<div class="graph-detail">
+										<Show when={sibs() > 0}>
+											<div class="tool-collapsed-note">
+												{sibs()} sibling{sibs() === 1 ? "" : "s"} on this fork (same page)
+											</div>
+										</Show>
+										<Show when={kids() > 0}>
+											<div class="tool-collapsed-note">
+												{kids()} child{kids() === 1 ? "" : "ren"} below
+											</div>
+										</Show>
+										<label class="graph-opt">
+											<input
+												type="checkbox"
+												checked={summarize()}
+												onChange={(e) => setSummarize(e.currentTarget.checked)}
+											/>
+											summarize abandoned branch at target (Shift+Enter)
+										</label>
+										<Show when={summarize()}>
+											<input
+												class="picker-filter"
+												aria-label="Summary instructions"
+												placeholder="Summary focus (optional)…"
+												value={instructions()}
+												onInput={(e) => setInstructions(e.currentTarget.value)}
+											/>
+										</Show>
+										<div class="graph-actions">
+											<button
+												type="button"
+												title="Same-file navigation — previous branch preserved (Enter)"
+												disabled={busyId() !== null}
+												onClick={() => runNavigate(n)}
+											>
+												{busyId() === n.id ? "Navigating…" : "Navigate here"}
+											</button>
+											<button
+												type="button"
+												title="New-file branch — copies history to another session file"
+												disabled={busyId() !== null}
+												onClick={() => runBranch(n)}
+											>
+												{busyId() === n.id ? "Branching…" : "Branch to new file"}
+											</button>
+										</div>
+									</div>
+								</Show>
+							</div>
+						);
+					}}
+				</For>
+				{nodes().length === 0 && !error() && (
+					<div class="tool-collapsed-note">no matching nodes</div>
+				)}
+			</div>
+			<Show when={page()?.hasMore}>
+				<button
+					type="button"
+					class="picker-row"
+					onClick={() => {
+						const c = page()?.nextCursor;
+						if (c) refresh({ cursor: c, append: true });
+						else setFoldNote("Older history is available server-side; paging continues on next.");
+					}}
+				>
+					Load older history…
+				</button>
 			</Show>
 		</>
 	);

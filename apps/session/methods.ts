@@ -100,7 +100,7 @@ import {
 import { createLifecycleMethods, type LifecycleMirror } from "./lifecycle-adapter";
 import { createComposerMethods } from "./composer-methods";
 import { createSettingsMethods } from "./settings-methods";
-import { cancelEntryUiRequests, rejectEntryUiRequests } from "./ui-context";
+import { buildUiContext, cancelEntryUiRequests, rejectEntryUiRequests } from "./ui-context";
 import { createAnnotationMethods } from "./review-annotations";
 import { createGitReviewMethods } from "./review-git";
 import { createPlanReviewMethods, exitPlanMode } from "./review-plan";
@@ -256,6 +256,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		clearSession: true,
 		deleteSession: true,
 		navigateTree: true,
+		reanswerAsk: true,
 		resumeAfterAskReanswer: true,
 		btwPromote: true,
 	};
@@ -370,6 +371,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	const graph = createGraphModelHandlers({
 		rebuildTranscript: (entry) =>
 			broadcastHistory(entry.handle, transcriptHistoryFrames(entry.session)),
+		uiContext: buildUiContext,
 	});
 	const settingsMethods = createSettingsMethods({
 		settings: deps.settings,
@@ -533,6 +535,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		getSessionGraph: async (entry, a) => graph.getSessionGraph(entry, (a[0] ?? {}) as GraphQuery),
 		navigateTree: async (entry, a) =>
 			graph.navigateTree(entry, a[0] as string, (a[1] ?? {}) as GraphNavigateOptions),
+		reanswerAsk: async (entry, a) =>
+			graph.reanswerAsk(entry, a[0] as string, (a[1] ?? {}) as { revision?: string }),
 		resumeAfterAskReanswer: async (entry) => graph.resumeAfterAskReanswer(entry),
 		retry: (entry) => entry.session.retry(),
 		fork: (entry) => entry.session.fork(),
