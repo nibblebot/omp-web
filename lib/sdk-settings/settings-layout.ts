@@ -1,6 +1,6 @@
 /**
  * Settings sheet layout manifest: checked-in data. Generated once from the web
- * inventory against @oh-my-pi/pi-coding-agent 18.18.6 (450 settings host rows).
+ * inventory against @oh-my-pi/pi-coding-agent 18.18.9 (453 settings host rows).
  * buildSettingsModel applies it over the SDK's own metadata; nothing here is read
  * from disk at runtime. Rows in HIDDEN_SETTING_PATHS never appear on the web; rows in
  * ADVANCED_SETTING_PATHS go to the Advanced group; every other host row shows in its SDK

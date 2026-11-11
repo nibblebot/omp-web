@@ -167,8 +167,9 @@ initSdkTuiGlobals();
 const agentDir = getAgentDir();
 const sessionsDir = path.join(agentDir, "sessions");
 const authStorage = await discoverAuthStorage(agentDir);
-const modelRegistry = new ModelRegistry(authStorage);
+// Settings come first: the registry reads `disabledProviders` while it loads.
 const settings = await initSettings({ cwd: config.cwd, agentDir });
+const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
 // This session keeps the model roles it starts with when another session writes config.yml.
 pinModelRoles(settings);
 // The web draws out:// replies, so they are on until config.yml says otherwise.

@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { join } from "node:path";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
 import {
+	loginRiskWarning,
 	registerOAuthProvider,
 	unregisterOAuthProvider,
 	type OAuthProviderInterface,
@@ -211,6 +212,34 @@ describe("namespaced OAuth login through production browser-socket dialogs", () 
 			).rejects.toThrow("not supported in the web UI");
 			expect(pendingCodeInputs.size).toBe(0);
 			expect(auth.credentials.has(CREDENTIAL_PROVIDER)).toBe(false);
+		},
+	);
+
+	test.each(["no", "y"])(
+		"a login-warning provider warns before any sign-in URL; answering %p cancels without credentials",
+		async (answer) => {
+			const RISKY = "google-antigravity";
+			const warning = loginRiskWarning(RISKY);
+			expect(warning).toBeDefined();
+			const result = loginWithCallbacks(entry, RISKY, auth, async () => {
+				throw new Error("must not refresh");
+			});
+			const rejected = result.catch((error: unknown) => error);
+			expect(received.map((frame) => frame.type)).toEqual(["login_code_request"]);
+			const request = received[0];
+			if (request?.type !== "login_code_request") throw new Error("missing risk prompt");
+			expect(request.title).toContain(warning!);
+			expect(request.placeholder).toBe("yes");
+			const pending = pendingCodeInputs.get(request.requestId)!;
+			pendingCodeInputs.delete(request.requestId);
+			pending.resolve(answer);
+			expect(await rejected).toMatchObject({
+				name: "LoginCancelledError",
+				message: "Login cancelled",
+			});
+			expect(received.some((frame) => frame.type === "login_url")).toBe(false);
+			expect(pendingCodeInputs.size).toBe(0);
+			expect(auth.credentials.has(RISKY)).toBe(false);
 		},
 	);
 

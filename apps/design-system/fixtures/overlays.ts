@@ -765,9 +765,10 @@ export const contextBreakdown: ContextUsageBreakdown = {
 	contextWindow: 200_000,
 	anchored: true,
 	usedTokens: 84_310,
-	systemPromptTokens: 6_120,
+	systemPromptTokens: 4_700,
 	systemToolsTokens: 11_480,
 	systemContextTokens: 2_940,
+	instructionFilesTokens: 1_420,
 	skillsTokens: 1_860,
 	messagesTokens: 61_910,
 };

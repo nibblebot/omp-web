@@ -997,6 +997,14 @@ export const loginCodePrompt: NonNullable<AppState["loginCodeRequest"]> = {
 	placeholder: "XXXX-XXXX",
 };
 
+/** The SDK's account-risk prompt for a `login-warning` provider, asked before the sign-in URL. */
+export const loginRiskPrompt: NonNullable<AppState["loginCodeRequest"]> = {
+	requestId: "login_4",
+	title:
+		'⚠ Google Antigravity (Gemini, Claude, GPT-OSS): use at your own risk\n\nGoogle\'s Antigravity terms do not allow signing in from third-party tools like omp, and Google has suspended accounts that did. If you depend on this Google account, use GEMINI_API_KEY (AI Studio) or google-vertex instead.\n\nType "yes" to accept the risk and continue',
+	placeholder: "yes",
+};
+
 // ---------------------------------------------------------------------------
 // Goal modal: store goalModeState variants.
 // ---------------------------------------------------------------------------

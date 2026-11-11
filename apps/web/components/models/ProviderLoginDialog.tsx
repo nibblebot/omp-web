@@ -73,7 +73,12 @@ export const ProviderLoginDialog: Component<{ onClose: () => void }> = (props) =
 		setInFlight(p.id);
 		void call("login", [p.id], 0)
 			.then(() => fetchProviders())
-			.catch((err) => setError(String(err)))
+			.catch((err) => {
+				// A login that ends before any sign-in URL (a declined risk warning, an
+				// unknown provider) never navigated the blank tab; do not leave it open.
+				if (!state.loginUrl) loginTab?.close();
+				setError(String(err));
+			})
 			.finally(() => {
 				setState("loginUrl", null);
 				setState("loginCodeRequest", null);
@@ -150,7 +155,7 @@ export const ProviderLoginDialog: Component<{ onClose: () => void }> = (props) =
 			</Show>
 			<Show when={state.loginCodeRequest}>
 				{(req) => (
-					<div class="settings-row">
+					<div class="settings-row login-code-request">
 						<span class="picker-label">{req().title}</span>
 						<input
 							class="picker-filter"

@@ -264,6 +264,7 @@ function sessionCalls(): CallHandlers {
 				contextBreakdown.systemPromptTokens +
 				contextBreakdown.systemToolsTokens +
 				contextBreakdown.systemContextTokens +
+				contextBreakdown.instructionFilesTokens +
 				contextBreakdown.skillsTokens;
 			return {
 				...contextBreakdown,

@@ -180,6 +180,13 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 											contextWindow={b().contextWindow}
 											label="system context"
 										/>
+										{/* A session process on an SDK before 18.18.9 sends no instruction files count. */}
+										<ContextBreakdownSegment
+											variant="instructions"
+											tokens={b().instructionFilesTokens ?? 0}
+											contextWindow={b().contextWindow}
+											label="instruction files"
+										/>
 										<ContextBreakdownSegment
 											variant="skills"
 											tokens={b().skillsTokens}
@@ -213,6 +220,16 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 											system context
 											<span class="breakdown-legend-count">
 												{formatTokens(b().systemContextTokens)}
+											</span>
+										</span>
+										<span class="breakdown-legend-item">
+											<i
+												class="breakdown-swatch breakdown-swatch--instructions"
+												aria-hidden="true"
+											/>
+											instruction files
+											<span class="breakdown-legend-count">
+												{formatTokens(b().instructionFilesTokens ?? 0)}
 											</span>
 										</span>
 										<span class="breakdown-legend-item">

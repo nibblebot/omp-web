@@ -21,6 +21,15 @@ describe("SDK builtin mirror", () => {
 		}
 	});
 
+	test("subcommands match the SDK", () => {
+		for (const [name, spec] of sdk) {
+			expect({ name, subcommands: [...(mirror.get(name)?.subcommands ?? [])] }).toEqual({
+				name,
+				subcommands: (spec.subcommands ?? []).map((sub) => sub.name),
+			});
+		}
+	});
+
 	test("sdkHandled matches whether the SDK ships a headless handler", () => {
 		for (const [name, spec] of sdk) {
 			expect({ name, sdkHandled: mirror.get(name)?.sdkHandled }).toEqual({

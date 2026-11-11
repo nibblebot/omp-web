@@ -262,6 +262,15 @@ button.picker-row.kbd-active {
 	color: var(--text);
 	font-size: var(--fs-lg);
 }
+/* Login code prompt: the title spans the row above its input and keeps the line
+   breaks of multi-paragraph prompts (a provider's account-risk warning). */
+.login-code-request {
+	flex-wrap: wrap;
+}
+.login-code-request > .picker-label {
+	flex-basis: 100%;
+	white-space: pre-wrap;
+}
 /* Pixel-art character for the role's assigned model (model-role wizard rows).
    The row is baseline-aligned for text, so the canvas must center itself. */
 .picker-avatar {

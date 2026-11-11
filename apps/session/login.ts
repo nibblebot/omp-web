@@ -1,4 +1,4 @@
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { getOAuthProviders, loginRiskWarning } from "@oh-my-pi/pi-ai/oauth";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { SessionEntry } from "./session-entry";
 import { broadcastAnswer, notifyEvent, pendingCodeInputs, streams } from "./client-delivery";
@@ -16,6 +16,9 @@ export async function loginWithCallbacks(
 	const provider = getOAuthProviders().find((candidate) => candidate.id === providerId);
 	if (!provider) throw new Error(`Unknown OAuth provider: ${providerId}`);
 	let authEmitted = false;
+	// A provider with an account-risk `login-warning` asks the user to accept it before its
+	// login starts, so that one prompt arrives ahead of onAuth and must reach the browser.
+	let riskPromptPending = loginRiskWarning(provider.id) !== undefined;
 	const promptStreams = new Set(streams);
 	try {
 		const identity = await authStorage.oauth.login(provider.id, {
@@ -30,7 +33,9 @@ export async function loginWithCallbacks(
 			},
 			onProgress: (message) => notifyEvent(entry, message),
 			onPrompt: (prompt) => {
-				if (!authEmitted || prompt.secret) {
+				const riskPrompt = riskPromptPending && !authEmitted && !prompt.secret;
+				if (!authEmitted) riskPromptPending = false;
+				if (!riskPrompt && (!authEmitted || prompt.secret)) {
 					return Promise.reject(
 						new Error(
 							`Provider '${providerId}' requires interactive prompts ` +

@@ -55,12 +55,12 @@ export function ensureSettings(): Promise<Settings> {
 export function ensureModelRegistry(): Promise<SdkModelRegistry> {
 	if (modelRegistryInit === null) {
 		const init = (async (): Promise<SdkModelRegistry> => {
-			const [{ discoverAuthStorage, ModelRegistry }, { getAgentDir }] = await Promise.all([
-				import("@oh-my-pi/pi-coding-agent"),
-				import("@oh-my-pi/pi-utils"),
-			]);
+			// Settings come first: the registry reads `disabledProviders` while it loads, when it registers LiteLLM usage providers (SDK 18.18.7).
+			const [{ discoverAuthStorage, ModelRegistry }, { getAgentDir }, settings] = await Promise.all(
+				[import("@oh-my-pi/pi-coding-agent"), import("@oh-my-pi/pi-utils"), ensureSettings()],
+			);
 			const authStorage = await discoverAuthStorage(getAgentDir());
-			return { authStorage, registry: new ModelRegistry(authStorage) };
+			return { authStorage, registry: new ModelRegistry(authStorage, undefined, { settings }) };
 		})();
 		modelRegistryInit = init;
 		init.catch(() => {

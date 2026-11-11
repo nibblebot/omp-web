@@ -44,9 +44,9 @@ export async function checkOmpSetup(agentDir?: string): Promise<OmpSetupStatus> 
 			]);
 		const dir = agentDir ?? getAgentDir();
 		const authStorage = await discoverAuthStorage(dir);
-		const registry = new ModelRegistry(authStorage);
-		await registry.awaitBackgroundRefresh();
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		const registry = new ModelRegistry(authStorage, undefined, { settings });
+		await registry.awaitBackgroundRefresh();
 		// Providers that could actually authenticate a prompt today. The SDK's
 		// getApiKeyForProvider resolves asynchronously. A resolved key (or the
 		// kNoAuth sentinel for keyless providers) counts as usable; undefined

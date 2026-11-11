@@ -226,6 +226,7 @@ class FakePort implements CollabSessionPort {
 	agentCmds: { cmd: "chat" | "kill" | "revive"; agentId: string; text: string | undefined }[] = [];
 	aborts = 0;
 	transcriptFiles = new Map<string, string>();
+	snapshotEntries: SessionEntry[] = [fakeEntry("e1", "medium"), fakeEntry("e2", "high")];
 	entryAppendedCb: ((entry: SessionEntry) => void) | null = null;
 	#eventCbs = new Set<(event: AgentSessionEvent) => void>();
 	#busCbs = new Set<(channel: BusChannel, data: unknown) => void>();
@@ -267,7 +268,7 @@ class FakePort implements CollabSessionPort {
 	}
 
 	snapshot(): { header: SessionHeader; entries: SessionEntry[] } {
-		return { header: FAKE_HEADER, entries: [fakeEntry("e1", "medium"), fakeEntry("e2", "high")] };
+		return { header: FAKE_HEADER, entries: this.snapshotEntries };
 	}
 
 	subscribe(cb: (event: AgentSessionEvent) => void): () => void {
@@ -401,6 +402,17 @@ function parseLink(link: string) {
 	return parsed;
 }
 
+/** Say hello as a guest of `link`, with its write token when the link carries one. */
+function sendHello(socket: CollabSocket, link: string, name: string): void {
+	const writeToken = parseLink(link).writeToken;
+	socket.send({
+		t: "hello",
+		proto: COLLAB_PROTO,
+		name,
+		writeToken: writeToken ? Buffer.from(writeToken).toString("base64url") : undefined,
+	});
+}
+
 async function connectGuest(
 	link: string,
 	name: string,
@@ -412,18 +424,29 @@ async function connectGuest(
 	socket.onFrame = (frame) => {
 		frames.push(frame);
 	};
-	socket.onOpen = () => {
-		socket.send({
-			t: "hello",
-			proto: COLLAB_PROTO,
-			name,
-			writeToken: parsed.writeToken
-				? Buffer.from(parsed.writeToken).toString("base64url")
-				: undefined,
-		});
-	};
+	socket.onOpen = () => sendHello(socket, link, name);
 	socket.connect();
 	return { frames, socket };
+}
+
+/** The error a guest gets when the host no longer counts it as joined. */
+const RESYNC_ERROR = {
+	t: "error",
+	message: "the host discarded your backlog; rejoin to resync",
+	resync: true,
+} as const;
+
+function resyncError(guest: { frames: CollabFrame[] }) {
+	return waitFor(() => guest.frames.find((f) => f.t === "error" && f.resync === true));
+}
+
+/**
+ * Queue more targeted frames for every writable guest except `spare` than one
+ * guest's share of the host's send queue holds, all in one task, so the socket
+ * sheds those guests instead of ending the room.
+ */
+function overloadWriters(adapter: CollabHostAdapter, spare?: number): void {
+	for (let i = 0; i < 64; i++) adapter.announceDialogAnswered("Flood", spare);
 }
 
 async function waitForWelcome(guest: { frames: CollabFrame[] }) {
@@ -518,26 +541,170 @@ describe("CollabHostAdapter", () => {
 		]);
 	});
 
-	test("repeated hello from a joined peer is rejected: no second snapshot, welcome or join notice", async () => {
-		const guest = await connectGuest(adapter.status!.link, "Alice");
+	test("a repeated hello from a joined peer is a rejoin: a fresh welcome and snapshot, same participant", async () => {
+		const link = adapter.status!.link;
+		const guest = await connectGuest(link, "Alice");
 		guestSockets.push(guest.socket);
 		await waitForWelcome(guest);
 		await waitFor(() => guest.frames.some((f) => f.t === "snapshot-chunk" && f.final));
 		const joinsBefore = port.notices.filter((n) =>
-			n.message.includes("joined the collab session"),
+			n.message.includes("Alice joined the collab session"),
 		).length;
 
-		guest.socket.send({ t: "hello", proto: COLLAB_PROTO, name: "Alice" });
+		sendHello(guest.socket, link, "Alice");
 		await waitFor(() =>
-			guest.frames.find((f) => f.t === "error" && f.message.includes("already joined")),
+			guest.frames.filter((f) => f.t === "snapshot-chunk" && f.final).length === 2
+				? true
+				: undefined,
 		);
 
-		expect(guest.frames.filter((f) => f.t === "welcome")).toHaveLength(1);
-		expect(guest.frames.filter((f) => f.t === "snapshot-chunk" && f.final)).toHaveLength(1);
+		const welcomes = guest.frames.filter((f) => f.t === "welcome");
+		expect(welcomes).toHaveLength(2);
+		const rejoin = welcomes[1];
+		if (rejoin?.t !== "welcome") throw new Error("expected a second welcome");
+		expect(rejoin.entryCount).toBe(2);
+		expect(rejoin.readOnly).toBeUndefined();
+		expect(guest.frames.some((f) => f.t === "error")).toBe(false);
 		expect(
-			port.notices.filter((n) => n.message.includes("joined the collab session")),
-		).toHaveLength(joinsBefore);
-		expect(adapter.participantCount).toBe(2);
+			port.notices.filter((n) => n.message.includes("Alice joined the collab session")),
+		).toHaveLength(joinsBefore + 1);
+		expect(adapter.participants).toEqual([
+			{ name: "TestHost", role: "host" },
+			{ name: "Alice", role: "guest" },
+		]);
+		expect(adapter.writableGuestCount).toBe(1);
+	});
+
+	test("a snapshot needing more frames than one guest's share of the send queue still joins", async () => {
+		// 300 KB entries: two never fit one 512 KB chunk, so 40 entries need 40
+		// chunks plus the welcome, past the 32 entries one guest may hold.
+		const content = "x".repeat(300 * 1024);
+		port.snapshotEntries = Array.from({ length: 40 }, (_, i) => ({
+			type: "custom_message" as const,
+			id: `big-${i}`,
+			parentId: null,
+			timestamp: FAKE_HEADER.timestamp,
+			customType: "test",
+			content,
+			display: true,
+		}));
+		const guest = await connectGuest(adapter.status!.link, "Big");
+		guestSockets.push(guest.socket);
+
+		const welcome = await waitForWelcome(guest);
+		expect(welcome.entryCount).toBe(40);
+		const chunks = await waitFor(() => {
+			const all = guest.frames.filter((f) => f.t === "snapshot-chunk");
+			return all.at(-1)?.final ? all : undefined;
+		}, 20_000);
+		expect(chunks.length).toBeGreaterThan(32);
+		const ids = chunks.flatMap((c) => (c.t === "snapshot-chunk" ? c.entries.map((e) => e.id) : []));
+		expect(ids).toEqual(port.snapshotEntries.map((e) => e.id));
+		expect(guest.frames.some((f) => f.t === "error")).toBe(false);
+		expect(port.notices.filter((n) => n.level === "warning")).toEqual([]);
+		expect(adapter.participants.map((p) => p.name)).toEqual(["TestHost", "Big"]);
+	}, 30_000);
+
+	test("a shed guest leaves the participants, is told to resync and rejoins while the room and other guests keep working", async () => {
+		const link = adapter.status!.link;
+		const writer = await connectGuest(link, "Writer");
+		const viewer = await connectGuest(adapter.status!.viewLink, "Viewer");
+		guestSockets.push(writer.socket, viewer.socket);
+		await waitForWelcome(writer);
+		await waitForWelcome(viewer);
+		await waitFor(() => (adapter.participantCount === 3 ? true : undefined));
+
+		overloadWriters(adapter);
+		expect(await resyncError(writer)).toEqual(RESYNC_ERROR);
+		await waitFor(() => (adapter.participantCount === 2 ? true : undefined));
+		expect(adapter.participants).toEqual([
+			{ name: "TestHost", role: "host" },
+			{ name: "Viewer", role: "guest", readOnly: true },
+		]);
+		expect(
+			port.notices.filter((n) => n.message.includes("fell too far behind")).map((n) => n.level),
+		).toEqual(["warning"]);
+		expect(port.notices.find((n) => n.message.includes("fell too far behind"))?.message).toBe(
+			"Writer fell too far behind and was dropped; they can rejoin",
+		);
+
+		// The room and the other guest carry on.
+		expect(adapter.isLive).toBe(true);
+		port.emitEvent({ type: "notice", level: "info", message: "still here" });
+		await waitFor(() =>
+			viewer.frames.find(
+				(f) => f.t === "event" && f.event.type === "notice" && f.event.message === "still here",
+			),
+		);
+
+		// Until it rejoins, the shed guest's frames are answered with another resync.
+		writer.frames.length = 0;
+		writer.socket.send({ t: "prompt", text: "before rejoining" });
+		expect(await resyncError(writer)).toEqual(RESYNC_ERROR);
+		expect(port.prompts).toHaveLength(0);
+
+		writer.frames.length = 0;
+		sendHello(writer.socket, link, "Writer");
+		const welcome = await waitForWelcome(writer);
+		expect(welcome.readOnly).toBeUndefined();
+		await waitFor(() => writer.frames.find((f) => f.t === "snapshot-chunk" && f.final));
+		await waitFor(() => (adapter.participantCount === 3 ? true : undefined));
+		expect(adapter.writableGuestCount).toBe(1);
+		writer.socket.send({ t: "prompt", text: "after rejoining" });
+		await waitFor(() => port.prompts[0]);
+		expect(port.prompts[0]).toMatchObject({ text: "after rejoining", fromName: "Writer" });
+	});
+
+	test("a question no writer was admitted for settles unavailable at once", async () => {
+		const guest = await connectGuest(adapter.status!.link, "Uli");
+		guestSockets.push(guest.socket);
+		await waitForWelcome(guest);
+
+		// The writer is still listed but its share of the queue is gone, so the
+		// question cannot reach it and nobody could ever answer it.
+		overloadWriters(adapter);
+		const promise = adapter.requestGuestUi({ kind: "select", title: "Pick", options: ["A"] });
+		if (!promise) throw new Error("expected the question to be posted");
+		expect(await promise).toEqual({ kind: "unavailable" });
+		expect(await resyncError(guest)).toEqual(RESYNC_ERROR);
+		expect(guest.frames.some((f) => f.t === "ui-request")).toBe(false);
+	});
+
+	test("a question survives one of its two recipients being shed", async () => {
+		const shed = await connectGuest(adapter.status!.link, "Shed");
+		const stayer = await connectGuest(adapter.status!.link, "Stayer");
+		guestSockets.push(shed.socket, stayer.socket);
+		await waitForWelcome(shed);
+		await waitForWelcome(stayer);
+		await waitFor(() => (adapter.writableGuestCount === 2 ? true : undefined));
+
+		// Learn the stayer's peer id from an answer it gives.
+		const probe = adapter.requestGuestUi({ kind: "select", title: "Probe", options: ["A"] });
+		const probeReq = await waitFor(() => stayer.frames.find((f) => f.t === "ui-request"));
+		if (probeReq.t !== "ui-request") throw new Error("expected ui-request frame");
+		stayer.socket.send({ t: "ui-response", reqId: probeReq.request.reqId, value: "A" });
+		const probed = await probe!;
+		if (probed.kind !== "answered") throw new Error("expected an answer");
+
+		const promise = adapter.requestGuestUi({ kind: "select", title: "Pick", options: ["A", "B"] });
+		if (!promise) throw new Error("expected a pending question");
+		let settled: unknown;
+		void promise.then((result) => {
+			settled = result;
+		});
+		const req = await waitFor(() =>
+			stayer.frames.find((f) => f.t === "ui-request" && f.request.title === "Pick"),
+		);
+		if (req.t !== "ui-request") throw new Error("expected ui-request frame");
+
+		overloadWriters(adapter, probed.peer);
+		await resyncError(shed);
+		await waitFor(() => (adapter.writableGuestCount === 1 ? true : undefined));
+		expect(settled).toBeUndefined();
+		expect(stayer.frames.some((f) => f.t === "error" && f.resync === true)).toBe(false);
+
+		stayer.socket.send({ t: "ui-response", reqId: req.request.reqId, value: "B" });
+		expect(await promise).toMatchObject({ kind: "answered", value: "B", by: "Stayer" });
 	});
 
 	test("guest prompt routes to port.promptFromGuest with (text, images, name)", async () => {
@@ -1043,11 +1210,10 @@ describe("CollabHostAdapter", () => {
 		relay.dropHosts();
 		expect(await promise).toEqual({ kind: "unavailable" });
 
-		// The relay reissues peer ids; the guest's old id must not keep its write permission.
+		// The relay reissues peer ids; the guest's old id must not keep its write
+		// permission. The host no longer counts it as joined, so it is told to rejoin.
 		guest.socket.send({ t: "prompt", text: "from a stale identity" });
-		const err = await waitFor(() => guest.frames.find((f) => f.t === "error"));
-		if (err.t !== "error") throw new Error("expected error frame");
-		expect(err.message).toBe("prompting is disabled on a read-only link");
+		expect(await resyncError(guest)).toEqual(RESYNC_ERROR);
 		expect(port.prompts).toHaveLength(0);
 	});
 });

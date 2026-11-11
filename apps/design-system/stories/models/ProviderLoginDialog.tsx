@@ -1,6 +1,11 @@
 import { ProviderLoginDialog } from "../../../web/components/models/ProviderLoginDialog";
 import { setState } from "../../../web/state";
-import { loginBrowserUrl, loginCodePrompt, loginProviders } from "../../fixtures/dialogs";
+import {
+	loginBrowserUrl,
+	loginCodePrompt,
+	loginProviders,
+	loginRiskPrompt,
+} from "../../fixtures/dialogs";
 import { answerCalls } from "../../session";
 import { defineStory } from "../../registry";
 
@@ -33,6 +38,14 @@ export default defineStory({
 			seed: () => {
 				answerProviders();
 				setState("loginCodeRequest", loginCodePrompt);
+			},
+			render: (ctx) => <ProviderLoginDialog onClose={ctx.close} />,
+		},
+		{
+			name: "Account-risk warning",
+			seed: () => {
+				answerProviders();
+				setState("loginCodeRequest", loginRiskPrompt);
 			},
 			render: (ctx) => <ProviderLoginDialog onClose={ctx.close} />,
 		},

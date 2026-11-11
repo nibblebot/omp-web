@@ -173,6 +173,9 @@ button.plan-badge {
 .breakdown-seg--context {
 	background: var(--breakdown-3);
 }
+.breakdown-seg--instructions {
+	background: var(--breakdown-6);
+}
 .breakdown-seg--skills {
 	background: var(--breakdown-4);
 }
@@ -216,6 +219,9 @@ button.plan-badge {
 }
 .breakdown-swatch--context {
 	background: var(--breakdown-3);
+}
+.breakdown-swatch--instructions {
+	background: var(--breakdown-6);
 }
 .breakdown-swatch--skills {
 	background: var(--breakdown-4);
