@@ -24,6 +24,7 @@ import {
 	askCustomTool,
 	askFormDoneTool,
 	askFormErrorTool,
+	askFormNotesTool,
 	askFormRunningTool,
 	askFormTimedOutTool,
 	askNoteOptionTool,
@@ -360,6 +361,12 @@ const stories: Story[] = [
 				description:
 					"Each field's question with the answer: a radio, a checkbox group, a number and a multi-line text.",
 				render: () => <AskToolCard item={askFormDoneTool} />,
+			},
+			{
+				name: "Form, answered with option notes",
+				description:
+					'Notes the user left on chosen options (in the web form or the terminal) list under the answer they belong to, each labelled "Note on <option>".',
+				render: () => <AskToolCard item={askFormNotesTool} />,
 			},
 			{
 				name: "Form, timed out",

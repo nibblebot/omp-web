@@ -30,9 +30,9 @@ const OptionMarker: Component<{ multi: boolean; selected: boolean }> = (props) =
 );
 
 /** ask tool, in both shapes of the call.
- *  Form (`{ html }`): once answered, each field's question with its answer, a
- *  timed-out submission marked; before that (waiting, cancelled) what the form
- *  asks, read as text from its HTML.
+ *  Form (`{ html }`): once answered, each field's question with its answer and
+ *  any notes on its chosen options, a timed-out submission marked; before that
+ *  (waiting, cancelled) what the form asks, read as text from its HTML.
  *  Questions (transcripts from before SDK 18.18.3): every question with the
  *  options it offered; once answered, the chosen options are marked and any
  *  custom response or note is shown. */
@@ -70,6 +70,14 @@ export const AskToolCard: Component<{ item: ToolItem }> = (props) => {
 								<span class="ask-tool-answer-text">{a.answer}</span>
 							</div>
 						</Show>
+						<For each={a.notes}>
+							{(note) => (
+								<div class="ask-tool-answer">
+									<span class="ask-tool-answer-label">{noteLabel(note.option)}</span>
+									<span class="ask-tool-answer-text">{note.text}</span>
+								</div>
+							)}
+						</For>
 					</section>
 				)}
 			</For>

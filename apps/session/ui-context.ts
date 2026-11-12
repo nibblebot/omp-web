@@ -17,7 +17,7 @@ import type {
 	CollabUiSelectItem,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import type { CollabHostAdapter } from "./collab-host";
-import { buildFormParams, formDataFromSubmit } from "./ui-form";
+import { buildFormParams, formResultFromSubmit } from "./ui-form";
 import { formFields } from "#lib/wire/ask-form";
 import { defaultFormData, fieldError, textValue } from "@oh-my-pi/pi-tui/html-form/data";
 import { parseHtmlForm, spansText } from "@oh-my-pi/pi-tui/html-form/parse";
@@ -713,10 +713,13 @@ export function rejectStreamUiRequests(
  * The ask tool's HTML form, whole. The session parses it (the SDK's `parseHtmlForm`) and
  * sends the structured form with its pictures resolved to `data:` URIs; the browser (or a
  * collab guest walking it field by field) answers with {@link UiFormSubmit}, which becomes
- * the SDK's form data. Cancel is `undefined`. An invalid answer rejects (see
- * {@link formDataFromSubmit}). `dialogOptions.timeout` is a fixed deadline from the moment
- * the form is shown: at it the form's defaults submit with `timedOut`, `onTimeout` fires
- * and the web dialog ends (typing does not postpone it, unlike the TUI's inactivity reset).
+ * the SDK's form data plus the browser's notes on chosen options (a guest's walk has none,
+ * like the SDK's field-by-field hosts). Cancel is `undefined`. An invalid answer rejects
+ * (see {@link formResultFromSubmit}). `dialogOptions.timeout` is a fixed deadline from the
+ * moment the form is shown: at it the form's defaults submit with `timedOut`, `onTimeout`
+ * fires and the web dialog ends (typing does not postpone it, unlike the TUI's inactivity
+ * reset). That submission has no notes: the TUI's timeout sends its working values and
+ * notes, but the browser's never reach the session before Submit.
  */
 function formDialog(
 	entry: SessionEntry,
@@ -747,7 +750,7 @@ function formDialog(
 				params,
 				AbortSignal.any([signal, timer.signal]),
 			);
-			if (answer !== undefined) return { data: formDataFromSubmit(form, answer) };
+			if (answer !== undefined) return formResultFromSubmit(form, answer);
 			return timedOut ? { data: defaultFormData(form), timedOut: true } : undefined;
 		} finally {
 			clearTimeout(timeoutId);

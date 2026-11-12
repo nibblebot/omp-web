@@ -6,21 +6,29 @@
  * `choiceValue`, `textValue`, `fieldError`), which the session applies again to
  * the submitted answer, so what the browser accepts is what the session accepts.
  * Redefined here because the web client must not import the server package;
- * `test/ask-form.test.ts` holds the two to the same answers.
+ * `test/ask-form.test.ts` holds the two to the same answers. Notes on options
+ * follow the SDK's TUI dialog: one per option, sent only for options in the answer.
  */
 
-import type {
-	UiFormChoiceField,
-	UiFormField,
-	UiFormSpan,
-	UiFormSubmit,
-	UiFormTextField,
+import {
+	UI_FORM_NOTES_MAX,
+	type UiFormChoiceField,
+	type UiFormField,
+	type UiFormOptionNote,
+	type UiFormSpan,
+	type UiFormSubmit,
+	type UiFormTextField,
 } from "#lib/wire/ask-form";
 
-/** A choice field's working answer: its checked option indices and the free-text Other. */
+/** A choice field's working answer: its checked option indices, the free-text Other and option notes. */
 export interface ChoiceState {
 	checked: number[];
 	other: string;
+	/**
+	 * Note text by option index, untrimmed as typed. A note on an option that is not chosen
+	 * is a draft: kept while the form is open, never sent.
+	 */
+	notes: Record<number, string>;
 }
 
 /** A text field's working text. */
@@ -54,7 +62,7 @@ function isPickable(field: UiFormChoiceField, option: number): boolean {
 export function initialFieldState(field: UiFormField): ChoiceState | TextState {
 	if (field.kind === "text") return { text: field.value };
 	const checked = field.options.flatMap((option, i) => (option.checked ? [i] : []));
-	return { checked: field.multi ? checked : checked.slice(-1), other: "" };
+	return { checked: field.multi ? checked : checked.slice(-1), other: "", notes: {} };
 }
 
 export function initialFormState(fields: UiFormField[]): FormState {
@@ -97,13 +105,41 @@ export function setChecked(
 
 /** Type into Other; for a single-choice group, typed text drops the picked option. */
 export function setOther(field: UiFormChoiceField, state: ChoiceState, other: string): ChoiceState {
-	if (!field.multi && other.trim() !== "") return { checked: [], other };
+	if (!field.multi && other.trim() !== "") return { ...state, checked: [], other };
 	return { ...state, other };
 }
 
 /** Switch a multi group's Other off: its text goes with it. */
 export function clearOther(state: ChoiceState): ChoiceState {
 	return { ...state, other: "" };
+}
+
+/**
+ * Whether an option is part of the field's answer: checked, enabled, and not set aside by
+ * Other text (which replaces a single-choice value). Only such an option's note is sent.
+ */
+export function isOptionChosen(
+	field: UiFormChoiceField,
+	state: ChoiceState,
+	option: number,
+): boolean {
+	if (!state.checked.includes(option) || !isPickable(field, option)) return false;
+	return isArrayChoice(field) || !isOtherActive(field, state);
+}
+
+/** Write an option's note; empty text removes it. */
+export function setNote(state: ChoiceState, option: number, text: string): ChoiceState {
+	const { [option]: _previous, ...rest } = state.notes;
+	return { ...state, notes: text === "" ? rest : { ...rest, [option]: text } };
+}
+
+/** The notes a submit sends for a named field: chosen options with non-blank text, trimmed, by option. */
+export function chosenNotes(field: UiFormChoiceField, state: ChoiceState): UiFormOptionNote[] {
+	if (!field.name) return [];
+	return field.options.flatMap((_option, i) => {
+		const text = state.notes[i]?.trim();
+		return text && isOptionChosen(field, state, i) ? [{ option: i, text }] : [];
+	});
 }
 
 /** The value a field contributes (the SDK's `choiceValue`/`textValue`); undefined for none. */
@@ -170,12 +206,22 @@ export function fieldError(field: UiFormField, value: FieldValue | undefined): s
 	return undefined;
 }
 
-/** Every failing field's error by `index`; empty when the form can be submitted. */
+/**
+ * Every failing field's error by `index`; empty when the form can be submitted. Past
+ * {@link UI_FORM_NOTES_MAX} sent notes, the field whose notes cross it fails too.
+ */
 export function validateForm(fields: UiFormField[], state: FormState): Record<number, string> {
 	const errors: Record<number, string> = {};
+	let notes = 0;
 	for (const field of fields) {
-		const error = fieldError(field, fieldValue(field, state[field.index]!));
+		const entry = state[field.index]!;
+		const error = fieldError(field, fieldValue(field, entry));
 		if (error) errors[field.index] = error;
+		if (field.kind !== "choice") continue;
+		notes += chosenNotes(field, entry as ChoiceState).length;
+		if (notes > UI_FORM_NOTES_MAX && !error) {
+			errors[field.index] = `At most ${UI_FORM_NOTES_MAX} notes in one form`;
+		}
 	}
 	return errors;
 }
@@ -195,11 +241,13 @@ export function buildSubmit(fields: UiFormField[], state: FormState): UiFormSubm
 			}
 			const choice = entry as ChoiceState;
 			const other = isOtherActive(field, choice);
+			const notes = chosenNotes(field, choice);
 			return {
 				kind: "choice" as const,
 				index: field.index,
 				checked: other && !field.multi ? [] : choice.checked,
 				...(other ? { other: choice.other.trim() } : {}),
+				...(notes.length > 0 ? { notes } : {}),
 			};
 		}),
 	};

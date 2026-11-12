@@ -184,6 +184,67 @@ fieldset.ask-form-section {
 	font-size: var(--fs-sm);
 }
 
+/* Option notes: a Note button at the end of a chosen option's row, its text box below. */
+.ask-form-option-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-width: 0;
+}
+.ask-form-option-row > .ask-form-option {
+	flex: 1;
+	min-width: 0;
+}
+.ask-form-note-option {
+	flex: 1;
+	min-width: 0;
+	padding: var(--space-1) var(--space-2);
+	color: var(--muted-3);
+	font-size: var(--fs-sm);
+	overflow-wrap: anywhere;
+}
+.ask-form-note-toggle {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-3);
+	border: 1px solid transparent;
+	border-radius: var(--r-sm);
+	background: transparent;
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+	transition:
+		color var(--dur-fast) var(--ease-out),
+		border-color var(--dur-fast) var(--ease-out);
+}
+.ask-form-note-toggle:hover,
+.ask-form-note-toggle:focus-visible,
+.ask-form-note-toggle[aria-expanded="true"] {
+	border-color: var(--border);
+	color: var(--text);
+}
+.ask-form-note-toggle.noted {
+	color: var(--accent);
+}
+.ask-form-note {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	padding-left: var(--space-7);
+}
+.ask-form-note-input {
+	resize: vertical;
+	font-size: var(--fs-sm);
+}
+.ask-form-note-draft {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	font-style: italic;
+}
+
 /* Short viewport: the form scrolls inside the same shorter dock as the other ask surfaces. */
 @media (max-height: 599px) {
 	.ask-form-pre,
@@ -200,6 +261,10 @@ fieldset.ask-form-section {
 	}
 	.ask-form-textarea {
 		min-height: 88px;
+	}
+	.ask-form-note-toggle {
+		min-width: 44px;
+		min-height: 44px;
 	}
 	.ask-form-option {
 		min-height: 44px;

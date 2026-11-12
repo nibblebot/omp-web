@@ -6,8 +6,10 @@ import {
 	initialFormState,
 	inputType,
 	isImageDataUri,
+	isOptionChosen,
 	isOtherActive,
 	setChecked,
+	setNote,
 	setOther,
 	spansText,
 	toggleOption,
@@ -19,6 +21,7 @@ import {
 import { isImeKey } from "../../prompt/key-input";
 import {
 	formFields,
+	UI_FORM_NOTE_MAX_LENGTH,
 	type UiFormBlock,
 	type UiFormChoiceField,
 	type UiFormField,
@@ -26,6 +29,7 @@ import {
 	type UiFormSpan,
 	type UiFormTextField,
 } from "#lib/wire/ask-form";
+import { PencilIcon } from "../ui/icons";
 
 /** Longest textarea the form draws (rows); a taller `rows` scrolls. */
 const MAX_TEXTAREA_ROWS = 12;
@@ -74,6 +78,94 @@ const FieldLabel: Component<{ field: UiFormField }> = (props) => (
 const optionLabel = (spans: UiFormSpan[], value: string): string =>
 	spansText(spans).trim() || value;
 
+/**
+ * One option's note, kept the way the SDK's TUI dialog keeps them: a Note button on a
+ * chosen option of a named field opens a text box under the option row, and the note
+ * goes with the answer while the option stays chosen. A note left on an option that is
+ * no longer chosen stays visible as a draft and is not sent. Esc in the box returns to
+ * the button without cancelling the form; an empty box closes. `standalone` rows (under
+ * a select) exist only while there is a note to offer; option rows always draw their
+ * `children`.
+ */
+const OptionNote: Component<{
+	ctx: FormContext;
+	field: UiFormChoiceField;
+	option: number;
+	label: string;
+	standalone?: boolean;
+	children: JSX.Element;
+}> = (props) => {
+	const choice = () => props.ctx.state()[props.field.index] as ChoiceState;
+	const text = () => choice().notes[props.option] ?? "";
+	const chosen = () => isOptionChosen(props.field, choice(), props.option);
+	const offered = () => props.field.name !== "" && (chosen() || text() !== "");
+	const [open, setOpen] = createSignal(false);
+	const editing = () => offered() && (open() || text() !== "");
+	const editorId = `ask-form-${props.ctx.id}-${props.field.index}-note-${props.option}`;
+	let toggle: HTMLButtonElement | undefined;
+	let editor: HTMLTextAreaElement | undefined;
+	return (
+		<Show when={!props.standalone || offered()}>
+			<div class="ask-form-option-row">
+				{props.children}
+				<Show when={offered()}>
+					<button
+						ref={toggle}
+						type="button"
+						class="ask-form-note-toggle"
+						classList={{ noted: text().trim() !== "" }}
+						aria-label={`${text() === "" ? "Add" : "Edit"} note on ${props.label}`}
+						aria-expanded={editing()}
+						aria-controls={editorId}
+						onClick={() => {
+							if (editing() && text() === "") {
+								setOpen(false);
+								return;
+							}
+							setOpen(true);
+							editor?.focus();
+						}}
+					>
+						<PencilIcon />
+						Note
+					</button>
+				</Show>
+			</div>
+			<Show when={editing()}>
+				<div class="ask-form-note">
+					<textarea
+						ref={editor}
+						id={editorId}
+						class="ask-form-input ask-form-note-input"
+						aria-label={`Note on ${props.label}`}
+						aria-describedby={chosen() ? undefined : `${editorId}-draft`}
+						placeholder="A note for the agent on this choice"
+						maxLength={UI_FORM_NOTE_MAX_LENGTH}
+						rows={2}
+						value={text()}
+						onInput={(e) =>
+							props.ctx.update(props.field, setNote(choice(), props.option, e.currentTarget.value))
+						}
+						onKeyDown={(e) => {
+							if (e.key !== "Escape" || isImeKey(e)) return;
+							// Esc leaves the note, never the whole form.
+							e.preventDefault();
+							e.stopPropagation();
+							setOpen(false);
+							toggle?.focus();
+						}}
+					/>
+					<Show when={!chosen()}>
+						<span id={`${editorId}-draft`} class="ask-form-note-draft">
+							Draft: sent only if this option is chosen
+						</span>
+					</Show>
+				</div>
+			</Show>
+		</Show>
+	);
+};
+
 const ChoiceControls: Component<{ ctx: FormContext; field: UiFormChoiceField }> = (props) => {
 	const choice = () => props.ctx.state()[props.field.index] as ChoiceState;
 	const name = () => `ask-form-${props.ctx.id}-${props.field.index}`;
@@ -82,36 +174,51 @@ const ChoiceControls: Component<{ ctx: FormContext; field: UiFormChoiceField }> 
 		<Show
 			when={!props.field.select}
 			fallback={
-				<select
-					class="ask-form-input ask-form-select"
-					multiple={props.field.multi}
-					size={props.field.multi ? Math.min(props.field.options.length, 6) : undefined}
-					aria-label={props.field.question}
-					aria-required={props.field.required}
-					onChange={(e) => {
-						const picked = Array.from(e.currentTarget.selectedOptions, (o) =>
-							Number(o.value),
-						).filter((n) => Number.isInteger(n));
-						props.ctx.update(props.field, setChecked(props.field, choice(), picked));
-					}}
-				>
-					<Show when={!props.field.multi}>
-						<option value="" selected={choice().checked.length === 0}>
-							Select…
-						</option>
-					</Show>
+				<>
+					<select
+						class="ask-form-input ask-form-select"
+						multiple={props.field.multi}
+						size={props.field.multi ? Math.min(props.field.options.length, 6) : undefined}
+						aria-label={props.field.question}
+						aria-required={props.field.required}
+						onChange={(e) => {
+							const picked = Array.from(e.currentTarget.selectedOptions, (o) =>
+								Number(o.value),
+							).filter((n) => Number.isInteger(n));
+							props.ctx.update(props.field, setChecked(props.field, choice(), picked));
+						}}
+					>
+						<Show when={!props.field.multi}>
+							<option value="" selected={choice().checked.length === 0}>
+								Select…
+							</option>
+						</Show>
+						<For each={props.field.options}>
+							{(option, i) => (
+								<option
+									value={i()}
+									selected={choice().checked.includes(i())}
+									disabled={option.disabled}
+								>
+									{optionLabel(option.label, option.value)}
+								</option>
+							)}
+						</For>
+					</select>
 					<For each={props.field.options}>
 						{(option, i) => (
-							<option
-								value={i()}
-								selected={choice().checked.includes(i())}
-								disabled={option.disabled}
+							<OptionNote
+								ctx={props.ctx}
+								field={props.field}
+								option={i()}
+								label={optionLabel(option.label, option.value)}
+								standalone
 							>
-								{optionLabel(option.label, option.value)}
-							</option>
+								<span class="ask-form-note-option">{optionLabel(option.label, option.value)}</span>
+							</OptionNote>
 						)}
 					</For>
-				</select>
+				</>
 			}
 		>
 			<div
@@ -122,18 +229,25 @@ const ChoiceControls: Component<{ ctx: FormContext; field: UiFormChoiceField }> 
 			>
 				<For each={props.field.options}>
 					{(option, i) => (
-						<label class="ask-form-option" classList={{ disabled: option.disabled }}>
-							<input
-								type={props.field.multi ? "checkbox" : "radio"}
-								name={name()}
-								checked={choice().checked.includes(i())}
-								disabled={option.disabled}
-								onChange={() =>
-									props.ctx.update(props.field, toggleOption(props.field, choice(), i()))
-								}
-							/>
-							<span class="ask-form-option-text">{optionLabel(option.label, option.value)}</span>
-						</label>
+						<OptionNote
+							ctx={props.ctx}
+							field={props.field}
+							option={i()}
+							label={optionLabel(option.label, option.value)}
+						>
+							<label class="ask-form-option" classList={{ disabled: option.disabled }}>
+								<input
+									type={props.field.multi ? "checkbox" : "radio"}
+									name={name()}
+									checked={choice().checked.includes(i())}
+									disabled={option.disabled}
+									onChange={() =>
+										props.ctx.update(props.field, toggleOption(props.field, choice(), i()))
+									}
+								/>
+								<span class="ask-form-option-text">{optionLabel(option.label, option.value)}</span>
+							</label>
+						</OptionNote>
 					)}
 				</For>
 				<Show when={props.field.other}>
@@ -310,10 +424,11 @@ function renderBlock(block: UiFormBlock, ctx: FormContext): JSX.Element {
 
 /**
  * The ask tool's HTML form (`formDialog` ui_request), whole: titled sections, context
- * blocks and fields. Enter in a field (Ctrl+Enter in a textarea) or Submit validates
- * with the SDK's field rules and sends one answer per field; Esc or Cancel resolves
- * undefined. A deadline from the session counts down in the header; the session submits
- * the form's defaults when it passes.
+ * blocks and fields. A chosen option can carry a note for the agent (see OptionNote).
+ * Enter in a field (Ctrl+Enter in a textarea) or Submit validates with the SDK's field
+ * rules and sends one answer per field with its notes; Esc or Cancel resolves undefined.
+ * A deadline from the session counts down in the header; the session submits the form's
+ * defaults, without notes, when it passes.
  */
 export const AskForm: Component<{ id: string; params: UiFormParams }> = (props) => {
 	let root!: HTMLDivElement;

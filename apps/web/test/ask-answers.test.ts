@@ -149,14 +149,16 @@ describe("ask form answers", () => {
 			],
 		});
 		expect(formAnswerViews(details)).toEqual([
-			{ name: "db", question: "Which database?", answer: "PostgreSQL" },
-			{ name: "notes", question: "Anything else?", answer: "keep migrations small" },
+			{ name: "db", question: "Which database?", answer: "PostgreSQL", notes: [] },
+			{ name: "notes", question: "Anything else?", answer: "keep migrations small", notes: [] },
 		]);
 	});
 
 	test("a blank answer is empty and a missing question falls back to the name", () => {
 		const details = askDetails({ answers: [{ name: "notes", question: "  ", answer: "" }] });
-		expect(formAnswerViews(details)).toEqual([{ name: "notes", question: "notes", answer: "" }]);
+		expect(formAnswerViews(details)).toEqual([
+			{ name: "notes", question: "notes", answer: "", notes: [] },
+		]);
 	});
 
 	test("a timed-out submission still lists its answers and keeps the flag", () => {
@@ -172,6 +174,71 @@ describe("ask form answers", () => {
 		expect(formAnswerViews(askDetails({ selectedOptions: ["A"] }))).toEqual([]);
 		expect(formAnswerViews(undefined)).toEqual([]);
 		expect(answersOf(askDetails({ answers: [{ name: "db", answer: "x" }] }))).toEqual([]);
+	});
+
+	test("option notes list under the answer with their field's name and question", () => {
+		const note = (name: string, question: string, option: string, text: string) => ({
+			name,
+			question,
+			option,
+			value: option.toLowerCase(),
+			text,
+		});
+		const details = askDetails({
+			answers: [
+				{ name: "db", question: "Which database?", answer: "PostgreSQL" },
+				{ name: "checks", question: "Which checks?", answer: "Types, Lint" },
+				{ name: "db", question: "Which replica?", answer: "Primary" },
+			],
+			notes: [
+				note("checks", "Which checks?", "Lint", "only the fast rules"),
+				note("db", "Which database?", "Postgre\n  SQL", " already deployed \n"),
+				note("checks", "Which checks?", "Types", "strict mode\nno any"),
+				// Same name, other question: belongs to the second db field only.
+				note("db", "Which replica?", "Primary", "closest region"),
+				// No answer claims it: not shown.
+				note("gone", "Which database?", "x", "orphan"),
+			],
+		});
+		expect(formAnswerViews(details).map((a) => a.notes)).toEqual([
+			[{ option: "Postgre SQL", text: "already deployed" }],
+			[
+				{ option: "Lint", text: "only the fast rules" },
+				{ option: "Types", text: "strict mode\nno any" },
+			],
+			[{ option: "Primary", text: "closest region" }],
+		]);
+	});
+
+	test("malformed notes are ignored and never break the answers", () => {
+		const answers = [{ name: "db", question: "Which database?", answer: "SQLite" }];
+		const valid = { name: "db", question: "Which database?", option: "SQLite", value: "sqlite" };
+		for (const notes of ["note", 7, { 0: valid }, null]) {
+			expect(formAnswerViews(askDetails({ answers, notes }))[0]?.notes).toEqual([]);
+		}
+		const views = formAnswerViews(
+			askDetails({
+				answers,
+				notes: [
+					null,
+					"text",
+					{ ...valid },
+					{ ...valid, text: 3 },
+					{ ...valid, value: ["sqlite"], text: "x" },
+					{ ...valid, option: undefined, text: "x" },
+					{ ...valid, text: "   " },
+					{ ...valid, text: "kept" },
+				],
+			}),
+		);
+		expect(views).toEqual([
+			{
+				name: "db",
+				question: "Which database?",
+				answer: "SQLite",
+				notes: [{ option: "SQLite", text: "kept" }],
+			},
+		]);
 	});
 
 	test("askHtml reads only a string html arg", () => {

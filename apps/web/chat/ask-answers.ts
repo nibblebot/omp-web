@@ -3,10 +3,11 @@
  * the durable logs hold.
  *
  * - Form shape (SDK 18.18.3+): args `{ html }` (one HTML `<form>`), details
- *   `AskToolDetails = { answers: { name, question, answer }[]; timedOut? }`.
- *   {@link formAnswerViews} lists the answers; {@link askFormPrompts} recovers what a
- *   call without a result (pending, cancelled) asked, by an inert text-only parse of the
- *   model's untrusted HTML.
+ *   `AskToolDetails = { answers: { name, question, answer }[]; notes?; timedOut? }`,
+ *   where `notes` (SDK 18.18.8+) are `{ name, question, option, value, text }` notes on
+ *   chosen options. {@link formAnswerViews} lists the answers, each with its notes;
+ *   {@link askFormPrompts} recovers what a call without a result (pending, cancelled)
+ *   asked, by an inert text-only parse of the model's untrusted HTML.
  * - Question shape (older transcripts): args `{ questions: [{ question, options,
  *   multi }] }`, details either a single answer's fields or `{ results }`, plus `note`,
  *   `noteOption` (SDK 18.13.1+) and `chatRedirect`. {@link questionViews} merges the
@@ -40,6 +41,8 @@ export type AskDetails = AskAnswer & {
 	chatRedirect?: boolean;
 	/** Form shape: each named field's question and answer. */
 	answers?: AskFormAnswer[];
+	/** Form shape: notes on chosen options; unvalidated, read only through {@link formAnswerViews}. */
+	notes?: unknown;
 };
 
 export type AskOptionView = { label: string; description?: string; selected: boolean };
@@ -122,18 +125,59 @@ export function askHtml(args: unknown): string | undefined {
 	return typeof args.html === "string" ? args.html : undefined;
 }
 
-/** One form field's answer as the card lists it: empty when the field was left blank. */
-export type AskFormAnswerView = { name: string; question: string; answer: string };
+/** A note on a chosen option, listed under its field's answer. */
+export type AskFormNoteView = { option: string; text: string };
 
-/** The answered fields of a form-shape result, in form order; empty for any other details. */
+/** One form field's answer as the card lists it: empty when the field was left blank. */
+export type AskFormAnswerView = {
+	name: string;
+	question: string;
+	answer: string;
+	notes: AskFormNoteView[];
+};
+
+type AskFormNote = { name: string; question: string; option: string; text: string };
+
+/** The well-formed notes of persisted details (the SDK's `OptionNote`); anything else is skipped. */
+function formNotes(raw: unknown): AskFormNote[] {
+	if (!Array.isArray(raw)) return [];
+	return raw.flatMap((entry: unknown) => {
+		if (!entry || typeof entry !== "object") return [];
+		const { name, question, option, value, text } = entry as Record<string, unknown>;
+		if (
+			typeof name !== "string" ||
+			typeof question !== "string" ||
+			typeof option !== "string" ||
+			typeof value !== "string" ||
+			typeof text !== "string" ||
+			text.trim() === ""
+		) {
+			return [];
+		}
+		return [{ name, question, option, text }];
+	});
+}
+
+/**
+ * The answered fields of a form-shape result, in form order; empty for any other details.
+ * A note lists under the answer with its field's `name` and `question`, as the SDK's TUI
+ * matches them; a note no answer claims is not shown.
+ */
 export function formAnswerViews(details: AskDetails | undefined): AskFormAnswerView[] {
 	if (!details || !Array.isArray(details.answers)) return [];
+	const notes = formNotes(details.notes);
 	return details.answers.map((row) => {
 		const name = row?.name ?? "";
 		return {
 			name,
 			question: row?.question?.trim() || name,
 			answer: row?.answer?.trim() ?? "",
+			notes: notes
+				.filter((note) => note.name === name && note.question === row?.question)
+				.map((note) => ({
+					option: note.option.replace(/\s+/g, " ").trim(),
+					text: note.text.trim(),
+				})),
 		};
 	});
 }

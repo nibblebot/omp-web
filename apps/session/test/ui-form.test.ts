@@ -1,19 +1,28 @@
 /**
  * The `formDialog` ui_request's session half: the SDK's parsed HTML form as the JSON-safe
  * params the browser draws (pictures resolved here, bounded, never fetched by the browser) and
- * the browser's raw answers turned back into the SDK's form data through its own helpers.
+ * the browser's raw answers turned back into the SDK's form data and option notes through its
+ * own helpers.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { defaultFormData } from "@oh-my-pi/pi-tui/html-form/data";
-import { parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
+import { type HtmlForm, parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import type { UiFormBlock, UiFormParams } from "#lib/wire/ask-form";
+import {
+	UI_FORM_NOTE_MAX_LENGTH,
+	UI_FORM_NOTES_MAX,
+	type UiFormBlock,
+	type UiFormParams,
+} from "#lib/wire/ask-form";
 import {
 	buildFormParams,
 	FORM_IMAGE_MAX_BYTES,
-	formDataFromSubmit,
+	formResultFromSubmit,
 	InvalidFormAnswerError,
 } from "../ui-form";
+
+/** The submitted form data alone. */
+const dataOf = (form: HtmlForm, raw: unknown) => formResultFromSubmit(form, raw).data;
 
 afterAll(cleanupTempDirs);
 
@@ -135,11 +144,11 @@ function spansTitle(spans: Array<{ text: string }>): string {
 	return spans.map((s) => s.text).join("");
 }
 
-describe("formDataFromSubmit", () => {
+describe("formResultFromSubmit: data", () => {
 	const form = parseHtmlForm(FORM);
 
 	test("no answers submit the SDK's defaults", () => {
-		expect(formDataFromSubmit(form, submit())).toEqual(defaultFormData(form));
+		expect(dataOf(form, submit())).toEqual(defaultFormData(form));
 		expect(defaultFormData(form)).toEqual({
 			source: "ui",
 			store: "sqlite",
@@ -150,7 +159,7 @@ describe("formDataFromSubmit", () => {
 	});
 
 	test("answers map to the values the TUI would submit", () => {
-		const data = formDataFromSubmit(
+		const data = dataOf(
 			form,
 			submit(
 				{ kind: "choice", index: 0, checked: [1] },
@@ -169,7 +178,7 @@ describe("formDataFromSubmit", () => {
 	});
 
 	test("Other text stands in for a radio value and joins a checkbox group; blank Other counts for nothing", () => {
-		const other = formDataFromSubmit(
+		const other = dataOf(
 			form,
 			submit(
 				{ kind: "choice", index: 0, checked: [], other: "  mysql " },
@@ -179,15 +188,12 @@ describe("formDataFromSubmit", () => {
 		expect(other.store).toBe("mysql");
 		expect(other.checks).toEqual(["lint", "custom"]);
 
-		const blank = formDataFromSubmit(
-			form,
-			submit({ kind: "choice", index: 0, checked: [1], other: "   " }),
-		);
+		const blank = dataOf(form, submit({ kind: "choice", index: 0, checked: [1], other: "   " }));
 		expect(blank.store).toBe("redis");
 	});
 
 	test("a radio group keeps the last of several checked; an emptied checkbox group reports an empty array", () => {
-		const data = formDataFromSubmit(
+		const data = dataOf(
 			form,
 			submit(
 				{ kind: "choice", index: 0, checked: [0, 1] },
@@ -203,15 +209,15 @@ describe("formDataFromSubmit", () => {
   <label><input type="radio" name="p" value="a" checked> a</label>
   <label><input type="radio" name="p" value="b" disabled> b</label>
 </form>`);
-		const data = formDataFromSubmit(disabled, submit({ kind: "choice", index: 0, checked: [1] }));
+		const data = dataOf(disabled, submit({ kind: "choice", index: 0, checked: [1] }));
 		expect(data).not.toHaveProperty("p");
 	});
 
 	test("fields fail the SDK's rules: number bounds, required groups, patterns", () => {
-		expect(() => formDataFromSubmit(form, submit({ kind: "text", index: 2, text: "500" }))).toThrow(
+		expect(() => dataOf(form, submit({ kind: "text", index: 2, text: "500" }))).toThrow(
 			/Days.*at most 90/,
 		);
-		expect(() => formDataFromSubmit(form, submit({ kind: "text", index: 2, text: "abc" }))).toThrow(
+		expect(() => dataOf(form, submit({ kind: "text", index: 2, text: "abc" }))).toThrow(
 			/Enter a number/,
 		);
 		const required = parseHtmlForm(`<form>
@@ -219,11 +225,11 @@ describe("formDataFromSubmit", () => {
   <label><input type="checkbox" name="c" value="b"> b</label>
   <input name="code" pattern="[A-Z]{3}" value="ABC">
 </form>`);
+		expect(() => dataOf(required, submit({ kind: "choice", index: 0, checked: [] }))).toThrow(
+			/Select at least one/,
+		);
 		expect(() =>
-			formDataFromSubmit(required, submit({ kind: "choice", index: 0, checked: [] })),
-		).toThrow(/Select at least one/);
-		expect(() =>
-			formDataFromSubmit(
+			dataOf(
 				required,
 				submit(
 					{ kind: "choice", index: 0, checked: [1] },
@@ -231,14 +237,12 @@ describe("formDataFromSubmit", () => {
 				),
 			),
 		).toThrow(/Must match/);
-		expect(
-			formDataFromSubmit(required, submit({ kind: "choice", index: 0, checked: [1] })).c,
-		).toEqual(["b"]);
+		expect(dataOf(required, submit({ kind: "choice", index: 0, checked: [1] })).c).toEqual(["b"]);
 	});
 
 	test("an unnamed unanswered control submits nothing and is not checked", () => {
 		const unnamed = parseHtmlForm(`<form><input required><input name="a" value="1"></form>`);
-		expect(formDataFromSubmit(unnamed, submit())).toEqual({ a: "1" });
+		expect(dataOf(unnamed, submit())).toEqual({ a: "1" });
 	});
 
 	test("a malformed answer is rejected with InvalidFormAnswerError", () => {
@@ -255,7 +259,137 @@ describe("formDataFromSubmit", () => {
 			submit(null),
 		];
 		for (const answer of bad) {
-			expect(() => formDataFromSubmit(form, answer)).toThrow(InvalidFormAnswerError);
+			expect(() => dataOf(form, answer)).toThrow(InvalidFormAnswerError);
 		}
+	});
+});
+
+describe("formResultFromSubmit: option notes", () => {
+	const form = parseHtmlForm(FORM);
+	const note = (option: number, text: string) => ({ option, text });
+
+	test("notes on chosen options become the SDK's notes, trimmed, in form and option order", () => {
+		const result = formResultFromSubmit(
+			form,
+			submit(
+				{ kind: "choice", index: 0, checked: [1], notes: [note(1, "  needs a\nservice  ")] },
+				{
+					kind: "choice",
+					index: 1,
+					checked: [0, 2],
+					notes: [note(2, "only the fast suite"), note(0, "strict")],
+				},
+			),
+		);
+		expect(result.data).toMatchObject({ store: "redis", checks: ["types", "test"] });
+		expect(result.notes).toEqual([
+			{
+				name: "store",
+				question: "Which store?",
+				option: "Redis",
+				value: "redis",
+				text: "needs a\nservice",
+			},
+			{ name: "checks", question: "Checks", option: "types", value: "types", text: "strict" },
+			{
+				name: "checks",
+				question: "Checks",
+				option: "test",
+				value: "test",
+				text: "only the fast suite",
+			},
+		]);
+	});
+
+	test("an answer without notes, or with only blank ones, is exactly { data }", () => {
+		const plain = submit({ kind: "choice", index: 0, checked: [1] });
+		expect(formResultFromSubmit(form, plain)).toEqual({ data: dataOf(form, plain) });
+		for (const notes of [[], [note(1, "   ")]]) {
+			const result = formResultFromSubmit(
+				form,
+				submit({ kind: "choice", index: 0, checked: [1], notes }),
+			);
+			expect(result).not.toHaveProperty("notes");
+		}
+	});
+
+	test("notes on options that are not chosen are drafts and are dropped", () => {
+		const extra = parseHtmlForm(`<form>
+  <label><input type="radio" name="p" value="a" checked> a</label>
+  <label><input type="radio" name="p" value="b" disabled> b</label>
+  <label><input type="radio" value="x" checked> unnamed</label>
+</form>`);
+		const cases: Array<[HtmlForm, unknown]> = [
+			// An unchecked radio and an unchecked checkbox.
+			[form, submit({ kind: "choice", index: 0, checked: [0], notes: [note(1, "draft")] })],
+			[form, submit({ kind: "choice", index: 1, checked: [0], notes: [note(2, "draft")] })],
+			// A radio's Other text stands in for its value, so the checked option is set aside.
+			[
+				form,
+				submit({ kind: "choice", index: 0, checked: [1], other: "mysql", notes: [note(1, "x")] }),
+			],
+			// A disabled option is never chosen; an unnamed group submits nothing.
+			[extra, submit({ kind: "choice", index: 0, checked: [1], notes: [note(1, "x")] })],
+			[extra, submit({ kind: "choice", index: 1, checked: [0], notes: [note(0, "x")] })],
+		];
+		for (const [target, answer] of cases) {
+			expect(formResultFromSubmit(target, answer)).not.toHaveProperty("notes");
+		}
+	});
+
+	test("an option's label reads as the TUI shows it, else its value", () => {
+		const labelled = parseHtmlForm(`<form>
+  <label><input type="radio" name="speed" value="fast" checked> <b>Fast</b>	path</label>
+  <select name="pick"><option value="v1"></option><option value="v2">Two</option></select>
+</form>`);
+		const result = formResultFromSubmit(
+			labelled,
+			submit(
+				{ kind: "choice", index: 0, checked: [0], notes: [note(0, "a")] },
+				{ kind: "choice", index: 1, checked: [0], notes: [note(0, "b")] },
+			),
+		);
+		expect(result.notes?.map((n) => [n.option, n.value])).toEqual([
+			["Fast path", "fast"],
+			["v1", "v1"],
+		]);
+	});
+
+	test("malformed, repeated, oversize or too many notes reject the answer", () => {
+		const choice = (notes: unknown) => submit({ kind: "choice", index: 1, checked: [0], notes });
+		const bad: unknown[] = [
+			choice("note"),
+			choice([null]),
+			choice([note(3, "no such option")]),
+			choice([{ option: 0 }]),
+			choice([{ option: "0", text: "x" }]),
+			choice([note(0, "a"), note(0, "b")]),
+			choice([note(0, "x".repeat(UI_FORM_NOTE_MAX_LENGTH + 1))]),
+		];
+		for (const answer of bad) {
+			expect(() => formResultFromSubmit(form, answer)).toThrow(InvalidFormAnswerError);
+		}
+		const longest = "x".repeat(UI_FORM_NOTE_MAX_LENGTH);
+		expect(formResultFromSubmit(form, choice([note(0, longest)])).notes?.[0]?.text).toBe(longest);
+
+		const count = UI_FORM_NOTES_MAX + 1;
+		const many = parseHtmlForm(
+			`<form>${Array.from(
+				{ length: count },
+				(_, i) => `<label><input type="checkbox" name="c" value="v${i}"> v${i}</label>`,
+			).join("")}</form>`,
+		);
+		const all = Array.from({ length: count }, (_, i) => i);
+		const answer = (notes: number) =>
+			submit({
+				kind: "choice",
+				index: 0,
+				checked: all,
+				notes: all.slice(0, notes).map((i) => note(i, "n")),
+			});
+		expect(formResultFromSubmit(many, answer(UI_FORM_NOTES_MAX)).notes).toHaveLength(
+			UI_FORM_NOTES_MAX,
+		);
+		expect(() => formResultFromSubmit(many, answer(count))).toThrow(InvalidFormAnswerError);
 	});
 });

@@ -344,6 +344,49 @@ export const askFormDoneTool: ToolItem = {
 		],
 	},
 };
+/** AskToolCard: form answered with notes on chosen options (SDK 18.18.8+), each under its answer. */
+export const askFormNotesTool: ToolItem = {
+	...tool(
+		"ask",
+		"done",
+		askFormArgs,
+		[
+			"User answers:",
+			'{"db":"postgres","checks":["types","tests"],"retries":3,"notes":""}',
+			"Option notes:",
+			'- Which database should the outbox use?: PostgreSQL [db="postgres"] — Use the existing cluster, not a new one.',
+			'- Which checks should run before the commit?: Unit tests [checks="tests"] — Only the outbox package.',
+		].join("\n"),
+	),
+	details: {
+		answers: [
+			{ name: "db", question: "Which database should the outbox use?", answer: "PostgreSQL" },
+			{
+				name: "checks",
+				question: "Which checks should run before the commit?",
+				answer: "Type check, Unit tests",
+			},
+			{ name: "retries", question: "Retry limit", answer: "3" },
+			{ name: "notes", question: "Notes for the reviewer", answer: "" },
+		],
+		notes: [
+			{
+				name: "db",
+				question: "Which database should the outbox use?",
+				option: "PostgreSQL",
+				value: "postgres",
+				text: "Use the existing cluster, not a new one.",
+			},
+			{
+				name: "checks",
+				question: "Which checks should run before the commit?",
+				option: "Unit tests",
+				value: "tests",
+				text: "Only the outbox package.",
+			},
+		],
+	},
+};
 /** AskToolCard: the deadline passed, so the form's preselected values were submitted. */
 export const askFormTimedOutTool: ToolItem = {
 	...tool(

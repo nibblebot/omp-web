@@ -17,22 +17,26 @@ import {
 import { parseHtmlForm, type FormField } from "@oh-my-pi/pi-tui/html-form/parse";
 import {
 	formFields,
+	UI_FORM_NOTES_MAX,
 	type UiFormChoiceField,
 	type UiFormField,
 	type UiFormParams,
 } from "#lib/wire/ask-form";
-import { buildFormParams, formDataFromSubmit } from "../../session/ui-form";
+import { buildFormParams, formResultFromSubmit } from "../../session/ui-form";
 import { AskForm } from "../components/requests/AskForm";
 import {
 	buildSubmit,
+	chosenNotes,
 	clearOther,
 	fieldError,
 	fieldValue,
 	initialFormState,
 	inputType,
 	isImageDataUri,
+	isOptionChosen,
 	isOtherActive,
 	setChecked,
+	setNote,
 	setOther,
 	toggleOption,
 	validateForm,
@@ -84,8 +88,8 @@ describe("initial state", () => {
 	test("preselected options and prefilled text; the last of several checked radios wins", async () => {
 		const { fields } = await load(STORE_FORM);
 		const state = initialFormState(fields);
-		expect(choice(state, STORE)).toEqual({ checked: [0], other: "" });
-		expect(choice(state, CHECKS)).toEqual({ checked: [], other: "" });
+		expect(choice(state, STORE)).toEqual({ checked: [0], other: "", notes: {} });
+		expect(choice(state, CHECKS)).toEqual({ checked: [], other: "", notes: {} });
 		expect(state[DAYS]).toEqual({ text: "30" });
 		expect(state[NOTES]).toEqual({ text: "hello" });
 
@@ -123,8 +127,9 @@ describe("choosing", () => {
 		const many = fields[1] as UiFormChoiceField;
 		expect(one.select && !one.multi).toBe(true);
 		expect(choice(initialFormState(fields), 0).checked).toEqual([1]);
-		expect(setChecked(one, { checked: [], other: "" }, [0, 1]).checked).toEqual([1]);
-		expect(setChecked(many, { checked: [], other: "" }, [0, 1, 2]).checked).toEqual([0, 1]);
+		const blank = { checked: [], other: "", notes: {} };
+		expect(setChecked(one, blank, [0, 1]).checked).toEqual([1]);
+		expect(setChecked(many, blank, [0, 1, 2]).checked).toEqual([0, 1]);
 	});
 });
 
@@ -136,7 +141,7 @@ describe("Other", () => {
 
 		let state = initialFormState(fields)[STORE] as ChoiceState;
 		state = setOther(store, state, "mysql");
-		expect(state).toEqual({ checked: [], other: "mysql" });
+		expect(state).toEqual({ checked: [], other: "mysql", notes: {} });
 		expect(isOtherActive(store, state)).toBe(true);
 		expect(fieldValue(store, state)).toBe("mysql");
 
@@ -172,7 +177,7 @@ describe("Other", () => {
 </form>`);
 		const solo = fields[0] as UiFormChoiceField;
 		expect(solo.other).toBe(false);
-		expect(isOtherActive(solo, { checked: [], other: "text" })).toBe(false);
+		expect(isOtherActive(solo, { checked: [], other: "text", notes: {} })).toBe(false);
 	});
 
 	test("buildSubmit sends the Other text and no checked option for a radio group", async () => {
@@ -277,7 +282,7 @@ describe("validation", () => {
 			if (sdkField.kind !== "choice") throw new Error("not a choice field");
 			for (const checked of sets) {
 				for (const other of ["", "  ", " typed "]) {
-					const web = fieldValue(field, { checked, other });
+					const web = fieldValue(field, { checked, other, notes: {} });
 					const expected = choiceValue(
 						sdkField,
 						new Set(checked),
@@ -305,12 +310,14 @@ describe("the submitted answer", () => {
 		state[VERSION] = { text: "2.0" };
 		expect(validateForm(fields, state)).toEqual({});
 
-		expect(formDataFromSubmit(form, buildSubmit(fields, state))).toEqual({
-			store: "mysql",
-			checks: ["lint", "extra"],
-			days: 45,
-			version: "2.0",
-			notes: "hello",
+		expect(formResultFromSubmit(form, buildSubmit(fields, state))).toEqual({
+			data: {
+				store: "mysql",
+				checks: ["lint", "extra"],
+				days: 45,
+				version: "2.0",
+				notes: "hello",
+			},
 		});
 	});
 
@@ -327,11 +334,93 @@ describe("the submitted answer", () => {
   <input type="hidden" name="h" value="v">
   <input name="t" value="prefilled">
 </form>`);
-		expect(formDataFromSubmit(form, buildSubmit(fields, initialFormState(fields)))).toEqual({
-			h: "v",
-			a: "1",
-			t: "prefilled",
+		expect(formResultFromSubmit(form, buildSubmit(fields, initialFormState(fields)))).toEqual({
+			data: { h: "v", a: "1", t: "prefilled" },
 		});
+	});
+});
+
+describe("option notes", () => {
+	test("a note goes only with a chosen option; drafts and options set aside by Other stay behind", async () => {
+		const { fields } = await load(STORE_FORM);
+		const store = fields[STORE] as UiFormChoiceField;
+		const checks = fields[CHECKS] as UiFormChoiceField;
+		const state = initialFormState(fields);
+		const sent = () => {
+			const answers = buildSubmit(fields, state).answers;
+			return [answers[STORE], answers[CHECKS]].map((a) => (a?.kind === "choice" ? a.notes : []));
+		};
+
+		// A note on Redis while SQLite is picked is a draft.
+		state[STORE] = setNote(choice(state, STORE), 1, " needs ops ");
+		expect(sent()[0]).toBeUndefined();
+		state[STORE] = toggleOption(store, choice(state, STORE), 1);
+		expect(sent()[0]).toEqual([{ option: 1, text: "needs ops" }]);
+		// Other text replaces the radio's value: the note is kept but not sent.
+		state[STORE] = setOther(store, choice(state, STORE), "mysql");
+		expect(sent()[0]).toBeUndefined();
+		expect(choice(state, STORE).notes).toEqual({ 1: " needs ops " });
+
+		state[CHECKS] = toggleOption(checks, choice(state, CHECKS), 0);
+		state[CHECKS] = setNote(choice(state, CHECKS), 0, "strict");
+		state[CHECKS] = setNote(choice(state, CHECKS), 1, "draft");
+		expect(sent()[1]).toEqual([{ option: 0, text: "strict" }]);
+		// A blank note is no note, and emptying one removes it.
+		state[CHECKS] = setNote(choice(state, CHECKS), 0, "   ");
+		expect(sent()[1]).toBeUndefined();
+		state[CHECKS] = setNote(choice(state, CHECKS), 1, "");
+		expect(choice(state, CHECKS).notes).toEqual({ 0: "   " });
+
+		// A disabled option is never chosen.
+		expect(isOptionChosen(store, { checked: [2], other: "", notes: {} }, 2)).toBe(false);
+	});
+
+	test("an unnamed group sends no notes", async () => {
+		const { fields } = await load(`<form>
+  <label><input type="radio" value="a" checked> a</label>
+</form>`);
+		const unnamed = fields[0] as UiFormChoiceField;
+		const state = setNote(choice(initialFormState(fields), 0), 0, "x");
+		expect(isOptionChosen(unnamed, state, 0)).toBe(true);
+		expect(chosenNotes(unnamed, state)).toEqual([]);
+	});
+
+	test("the submitted notes become the SDK's notes through the session", async () => {
+		const form = parseHtmlForm(STORE_FORM);
+		const { fields } = await load(STORE_FORM);
+		const state = initialFormState(fields);
+		const checks = fields[CHECKS] as UiFormChoiceField;
+		state[STORE] = setNote(choice(state, STORE), 0, "local only");
+		state[CHECKS] = setNote(toggleOption(checks, choice(state, CHECKS), 1), 1, "fast rules");
+		expect(validateForm(fields, state)).toEqual({});
+
+		expect(formResultFromSubmit(form, buildSubmit(fields, state)).notes).toEqual([
+			{
+				name: "store",
+				question: "Which store?",
+				option: "SQLite",
+				value: "sqlite",
+				text: "local only",
+			},
+			{ name: "checks", question: "Checks", option: "lint", value: "lint", text: "fast rules" },
+		]);
+	});
+
+	test("past the most notes one form sends, the field that crosses it fails", async () => {
+		const count = UI_FORM_NOTES_MAX + 1;
+		const { fields } = await load(
+			`<form>${Array.from(
+				{ length: count },
+				(_, i) => `<label><input type="checkbox" name="c" value="v${i}" checked> v${i}</label>`,
+			).join("")}</form>`,
+		);
+		const group = fields[0] as UiFormChoiceField;
+		const state = initialFormState(fields);
+		for (let i = 0; i < UI_FORM_NOTES_MAX; i++) state[0] = setNote(choice(state, 0), i, "n");
+		expect(validateForm(fields, state)).toEqual({});
+		state[0] = setNote(choice(state, 0), UI_FORM_NOTES_MAX, "n");
+		expect(chosenNotes(group, choice(state, 0))).toHaveLength(count);
+		expect(validateForm(fields, state)[0]).toBe(`At most ${UI_FORM_NOTES_MAX} notes in one form`);
 	});
 });
 
@@ -397,6 +486,9 @@ describe("AskForm markup", () => {
 		expect(html).toContain('rows="4"');
 		expect(html).toContain("Submit");
 		expect(html).toContain("novalidate");
+		// Only the chosen option offers a note.
+		expect(html).toContain('aria-label="Add note on SQLite"');
+		expect(html).not.toContain("note on Redis");
 	});
 
 	test("a picture that is not a data: URI is never given to an <img>", async () => {

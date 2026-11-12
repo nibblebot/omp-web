@@ -100,6 +100,23 @@ export interface UiFormParams {
 	deadline?: number;
 }
 
+/** Longest option note (UTF-16 code units, as a textarea's `maxlength` counts them). */
+export const UI_FORM_NOTE_MAX_LENGTH = 2000;
+/** Most option notes one form answer carries, over all its fields. */
+export const UI_FORM_NOTES_MAX = 64;
+
+/**
+ * A note on one chosen option (SDK 18.18.8+), kept apart from the submitted values: the
+ * agent reads it next to the answer. A note on an option that is not chosen at submit
+ * is a draft and is not sent.
+ */
+export interface UiFormOptionNote {
+	/** Index into the field's `options`. */
+	option: number;
+	/** At most {@link UI_FORM_NOTE_MAX_LENGTH} long. */
+	text: string;
+}
+
 /** A choice field's answer: the checked option indices plus the free-text Other answer. */
 export interface UiFormChoiceAnswer {
 	kind: "choice";
@@ -108,6 +125,12 @@ export interface UiFormChoiceAnswer {
 	checked: number[];
 	/** The Other text; blank counts as no answer. */
 	other?: string;
+	/**
+	 * Notes on chosen options, one per option at most; absent without any. Additive: a
+	 * session that predates it ignores the field, and a browser that predates it never
+	 * sends one.
+	 */
+	notes?: UiFormOptionNote[];
 }
 
 /** A text field's raw text (the session coerces numbers). */

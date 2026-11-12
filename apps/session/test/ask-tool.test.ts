@@ -18,8 +18,9 @@
  * the `formDialog` ui_request exactly like index.ts's ui_response dispatch.
  *
  * The same tool call then covers the form dialog's contract: the structured form on the
- * wire, the SDK's answer text and details, cancel, the timeout submitting the defaults,
- * an invalid answer, Stop, priming a late client, and a collab guest walking the form.
+ * wire, the SDK's answer text and details, notes on chosen options, cancel, the timeout
+ * submitting the defaults, an invalid answer, Stop, priming a late client, and a collab
+ * guest walking the form.
  *
  * initSdkTuiGlobals is idempotent and pi-tui's theme singleton has no reset, so
  * each test calls it in its own setup; only the process globals this file owns
@@ -370,6 +371,54 @@ describe("ask tool over the session's browser UI context", () => {
 			expect(result).toEqual({ data: REDIS_DATA });
 			// An answer before the deadline never reaches onTimeout.
 			expect(timeouts).toBe(0);
+		});
+	});
+
+	test("notes on chosen options reach the model as the SDK's Option notes block", async () => {
+		await withBrowserPresence({ localStream: true, callbackBrowsers: 0 }, async () => {
+			const answers = SUBMIT_REDIS.answers;
+			respond = () => ({
+				kind: "submit",
+				answers: [
+					{ ...answers[0], notes: [{ option: 1, text: "needs a\nservice" }] },
+					{
+						...answers[1],
+						// A note on lint, which is not checked, is a draft: never sent on.
+						notes: [
+							{ option: 0, text: "strict" },
+							{ option: 1, text: "draft" },
+						],
+					},
+					answers[2],
+					answers[3],
+				],
+			});
+			const { texts, details } = await runAskTool();
+
+			const notes = [
+				{
+					name: "store",
+					question: "Pick a store?",
+					option: "Redis",
+					value: "redis",
+					text: "needs a\nservice",
+				},
+				{ name: "checks", question: "Checks", option: "types", value: "types", text: "strict" },
+			];
+			expect(details).toEqual({ answers: formAnswers(form, REDIS_DATA), notes });
+			expect(texts).toEqual([
+				[
+					"User answers:",
+					JSON.stringify(REDIS_DATA, null, 2),
+					"Option notes:",
+					'- Pick a store?: Redis [store="redis"] — needs a service',
+					'- Checks: types [checks="types"] — strict',
+				].join("\n"),
+			]);
+
+			// formDialog itself: the data plus the notes, the shape the SDK's TUI dialog returns.
+			const result = await buildUiContext(entry).formDialog!(ASK_FORM_HTML);
+			expect(result).toEqual({ data: REDIS_DATA, notes });
 		});
 	});
 
