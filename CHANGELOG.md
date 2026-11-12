@@ -1,3 +1,57 @@
+## v0.4.0, 2026-11-12
+
+### Features
+- feat(web): running-only sidebar filter hides projects with no running session ([de2f1dca](https://github.com/nibblebot/omp-web/commit/de2f1dca))
+- feat(web): GitHub run watch card with job steps; task card lists ordered steps ([accb6ca0](https://github.com/nibblebot/omp-web/commit/accb6ca0))
+- feat(web): title-first sidebar rows lead with placeholder titles; asleep rows drop italics ([ad862b2a](https://github.com/nibblebot/omp-web/commit/ad862b2a))
+- feat(web): Skills, Plugins and MCP tabs in the Extensions dialog; /plugins opens it; palette focuses its search ([6300d235](https://github.com/nibblebot/omp-web/commit/6300d235))
+- feat(web): hide plugin status bars from the Plugins tab ([166ee6db](https://github.com/nibblebot/omp-web/commit/166ee6db))
+- feat(sdk): prompt UI for the extension runner in web sessions (SDK 18.18.9) ([88e825ee](https://github.com/nibblebot/omp-web/commit/88e825ee))
+- feat(sdk): ask form option notes (SDK 18.18.9) ([0b62a883](https://github.com/nibblebot/omp-web/commit/0b62a883))
+- feat(sdk): transcript card for agent-to-agent messages (SDK 18.18.9) ([609def9c](https://github.com/nibblebot/omp-web/commit/609def9c))
+- feat(sdk): LiteLLM budgets as dollars in usage (SDK 18.18.9) ([9321be0b](https://github.com/nibblebot/omp-web/commit/9321be0b))
+- feat(sdk): turn actions on transcript messages (SDK 18.18.6) ([e3a38fab](https://github.com/nibblebot/omp-web/commit/e3a38fab))
+- feat(sdk): subagent status scopes in the Activities panel (SDK 18.18.6) ([b683abd7](https://github.com/nibblebot/omp-web/commit/b683abd7))
+- feat(sdk): wait jobs tell when they settled (SDK 18.18.6) ([395bba5a](https://github.com/nibblebot/omp-web/commit/395bba5a))
+- feat(sdk): ask HTML forms in the composer (SDK 18.18.4) ([d99f6a6c](https://github.com/nibblebot/omp-web/commit/d99f6a6c))
+- feat(sdk): shell execution visualization on bash cards (SDK 18.17.0) ([d41a8884](https://github.com/nibblebot/omp-web/commit/d41a8884))
+- feat(sdk): prompt cache status in the session bar (SDK 18.17.0) ([be50a1fa](https://github.com/nibblebot/omp-web/commit/be50a1fa))
+- feat(sdk): ^model mention completion with effort levels (SDK 18.17.0) ([35c426d0](https://github.com/nibblebot/omp-web/commit/35c426d0))
+- feat(sdk): find tool card with timed-out partial results (SDK 18.17.0) ([0901012c](https://github.com/nibblebot/omp-web/commit/0901012c))
+- feat(sdk): wait job rows named by intent (SDK 18.17.0) ([ca0ba8a9](https://github.com/nibblebot/omp-web/commit/ca0ba8a9))
+- feat(sdk): web_search failed providers on the search card (SDK 18.17.0) ([b5a38f40](https://github.com/nibblebot/omp-web/commit/b5a38f40))
+- feat(sdk): /btw steering inject (SDK 18.16.0) ([b68a871d](https://github.com/nibblebot/omp-web/commit/b68a871d))
+- feat(sdk): composer prediction alternatives (SDK 18.16.0) ([e602beb3](https://github.com/nibblebot/omp-web/commit/e602beb3))
+- feat(sdk): fast /resume listing (SDK 18.16.0) ([0bc8498c](https://github.com/nibblebot/omp-web/commit/0bc8498c))
+- feat(sdk): bash minimizer meta on cards (SDK 18.16.0) ([85655484](https://github.com/nibblebot/omp-web/commit/85655484))
+- feat(sdk): out:// replies on bash, eval and write cards (SDK 18.15.0) ([b4b02c23](https://github.com/nibblebot/omp-web/commit/b4b02c23))
+- feat(sdk): queued compaction (SDK 18.15.0) ([01e07c16](https://github.com/nibblebot/omp-web/commit/01e07c16))
+- feat(sdk): name jobs by their purpose and show their caption (SDK 18.15.0) ([4ccfea9f](https://github.com/nibblebot/omp-web/commit/4ccfea9f))
+
+### Fixes
+- fix(sdk): skipped predictions clear at once, prediction metrics see shown and accepted (SDK 18.16.0) ([861f2a76](https://github.com/nibblebot/omp-web/commit/861f2a76))
+
+### Performance
+- perf(sdk): read the context usage once per state frame (SDK 18.16.0) ([ea9d9e40](https://github.com/nibblebot/omp-web/commit/ea9d9e40))
+
+### Docs
+- docs(agents): drop the managed kata block from AGENTS.md ([13de8406](https://github.com/nibblebot/omp-web/commit/13de8406))
+- docs(skills): sdk-reconcile ends with a Markdown report ([f5cb1443](https://github.com/nibblebot/omp-web/commit/f5cb1443))
+
+### Chores
+- chore(release): commits-only changelog grouped by type ([df050a71](https://github.com/nibblebot/omp-web/commit/df050a71))
+- chore(release): run bun install --frozen-lockfile as the first gate command ([5c2dd782](https://github.com/nibblebot/omp-web/commit/5c2dd782))
+- chore(sdk): upgrade to 18.19.0 ([c8fbf66f](https://github.com/nibblebot/omp-web/commit/c8fbf66f))
+- chore(sdk): upgrade to 18.18.9 ([2ca7a7dd](https://github.com/nibblebot/omp-web/commit/2ca7a7dd))
+- chore(sdk): upgrade to 18.18.6 ([7cfbbd2b](https://github.com/nibblebot/omp-web/commit/7cfbbd2b))
+- chore(sdk): upgrade to 18.18.4 ([138b0910](https://github.com/nibblebot/omp-web/commit/138b0910))
+- style(sidebar): fade long project names, moon asleep count, header controls overlay on hover ([ab145b75](https://github.com/nibblebot/omp-web/commit/ab145b75))
+- style(sidebar): fade cut session titles and reclaim the empty corner column ([6504848a](https://github.com/nibblebot/omp-web/commit/6504848a))
+- style(sidebar): bold project names, regular-weight worktree and session titles ([25c88ced](https://github.com/nibblebot/omp-web/commit/25c88ced))
+- chore(sdk): upgrade to 18.17.0 ([bd92ccdb](https://github.com/nibblebot/omp-web/commit/bd92ccdb))
+- chore(sdk): upgrade to 18.16.0 ([9e80a288](https://github.com/nibblebot/omp-web/commit/9e80a288))
+- chore(sdk): upgrade to 18.15.0 ([3a18dd48](https://github.com/nibblebot/omp-web/commit/3a18dd48))
+
 ## v0.3.0, 2026-10-30
 
 omp-web reconciles the single-session browser UX: equivalent browser capability through existing SDK/fleet/transport reuse. Wire is OMP_PROTO 6: a mismatched web, fleet, and session refuse each other.
